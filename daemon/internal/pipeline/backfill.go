@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -52,7 +53,7 @@ func (b *Backfiller) Run(ctx context.Context) (string, error) {
 		case <-ctx.Done():
 			return fmt.Sprintf("stopped; %d backfills this run", done), nil
 		case s := <-b.queue:
-			if err := b.backfill(ctx, s); err != nil {
+			if err := b.backfillAndPrime(ctx, s); err != nil {
 				// Surface the failure as a DQ event AND fail the run record;
 				// the runner restarts us and the queue keeps its remaining work.
 				sid := s.ID
@@ -65,6 +66,34 @@ func (b *Backfiller) Run(ctx context.Context) (string, error) {
 			done++
 		}
 	}
+}
+
+// backfillAndPrime pulls history, then immediately primes the derived layers
+// (1m→1h rollup + expectancy tables) so a fresh symbol is fully usable within
+// seconds instead of waiting for the next scheduled downsampler/expectancy
+// tick (5m/1h).
+func (b *Backfiller) backfillAndPrime(ctx context.Context, s md.Symbol) error {
+	if err := b.backfill(ctx, s); err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	if err := b.St.Rollup(ctx, s.ID, md.TF1m, md.TF1h, 3600, 0, now); err != nil {
+		return fmt.Errorf("prime rollup: %w", err)
+	}
+	daily, err := b.St.LastBars(ctx, s.ID, md.TF1d, dailyLookback)
+	if err != nil {
+		return err
+	}
+	minute, err := b.St.LastBars(ctx, s.ID, md.TF1m, minuteLookback)
+	if err != nil {
+		return err
+	}
+	for h, rows := range expectancy.Build(daily, minute) {
+		if err := b.St.ReplaceExpectancy(ctx, s.ID, h, rows); err != nil {
+			return fmt.Errorf("prime expectancy: %w", err)
+		}
+	}
+	return nil
 }
 
 func (b *Backfiller) backfill(ctx context.Context, s md.Symbol) error {

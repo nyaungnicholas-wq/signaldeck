@@ -1,0 +1,122 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { api, HORIZONS, pollMs, type Honesty, type Horizon } from "@/lib/api";
+import { ago } from "@/lib/format";
+import HeroStats from "@/components/honesty/HeroStats";
+import QuintileTable from "@/components/honesty/QuintileTable";
+import ScatterPlot from "@/components/honesty/ScatterPlot";
+import Explainer from "@/components/honesty/Explainer";
+
+/** HONESTY — grades persisted scores against what the market actually did. */
+export default function HonestyPage() {
+  const [horizon, setHorizon] = useState<Horizon>("1d");
+  const [data, setData] = useState<Honesty | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [fetchedAt, setFetchedAt] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .honesty(horizon)
+        .then((d) => {
+          if (!alive) return;
+          setData(d);
+          setErr(null);
+          setFetchedAt(Math.floor(Date.now() / 1000));
+        })
+        .catch((e: unknown) => {
+          if (!alive) return;
+          setErr(e instanceof Error ? e.message : String(e));
+        });
+    load();
+    const t = setInterval(load, pollMs());
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [horizon]);
+
+  // Only trust data that belongs to the selected horizon (payload is tagged),
+  // so switching chips never shows a stale mix.
+  const current = data && data.horizon === horizon ? data : null;
+  const loading = !current && !err;
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* header row */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <h1 className="text-sm font-extrabold tracking-[0.18em]">HONESTY</h1>
+        <span className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          were the scores any good?
+        </span>
+        <div role="group" aria-label="Outcome horizon" className="flex items-center gap-1">
+          {HORIZONS.map((h) => {
+            const active = h === horizon;
+            return (
+              <button
+                key={h}
+                type="button"
+                onClick={() => setHorizon(h)}
+                aria-pressed={active}
+                className="chip cursor-pointer transition-colors duration-150 hover:text-[var(--text)]"
+                style={
+                  active
+                    ? { color: "var(--accent)", borderColor: "var(--accent)" }
+                    : undefined
+                }
+              >
+                {h}
+              </button>
+            );
+          })}
+        </div>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {current && (
+            <span className="chip tnum">{(current.n ?? 0).toLocaleString("en-US")} resolved</span>
+          )}
+          <span className="chip tnum">
+            {loading ? (
+              <span style={{ color: "var(--faint)" }}>loading…</span>
+            ) : fetchedAt ? (
+              `updated ${ago(fetchedAt)}`
+            ) : (
+              "—"
+            )}
+          </span>
+        </div>
+      </div>
+
+      {/* error state */}
+      {err && (
+        <div className="panel px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--bad)" }}>
+          {err}
+          <span style={{ color: "var(--faint)" }}>
+            {" "}
+            — is the daemon running? start signaldeckd and this page will pick it up.
+          </span>
+        </div>
+      )}
+
+      {/* loading state (no data for this horizon yet) */}
+      {loading && (
+        <div className="panel px-4 py-6 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+          loading…
+        </div>
+      )}
+
+      {current && (
+        <>
+          <HeroStats data={current} horizon={horizon} />
+          <div className="grid gap-4 lg:grid-cols-2">
+            <QuintileTable buckets={current.buckets ?? []} />
+            <ScatterPlot points={current.points ?? []} />
+          </div>
+        </>
+      )}
+
+      <Explainer horizon={horizon} />
+    </div>
+  );
+}

@@ -1,0 +1,241 @@
+"use client";
+
+// /quality — data-quality coverage + incident log. Polls api.quality().
+// Honest framing: if it's not on this page, we didn't measure it.
+
+import { Fragment, useEffect, useState } from "react";
+import { api, pollMs, type Quality, type DQEvent } from "@/lib/api";
+import { ago, fmtDate } from "@/lib/format";
+
+const TFS = ["1m", "1h", "1d"] as const;
+
+// Freshness thresholds (seconds) per timeframe: fresher than this = --ok.
+const FRESH_S: Record<string, number> = {
+  "1m": 30 * 60, // 30m for minute bars
+  "1h": 2 * 3600,
+  "1d": 2 * 3600, // 2h for daily bars
+};
+
+function freshColor(tf: string, to: number): string {
+  if (!to) return "var(--faint)";
+  const age = Date.now() / 1000 - to;
+  return age < (FRESH_S[tf] ?? 2 * 3600) ? "var(--ok)" : "var(--warn)";
+}
+
+function kindStyle(kind: string): { color: string; border: string } {
+  const k = (kind || "").toLowerCase();
+  if (k.includes("gap")) return { color: "var(--bad)", border: "rgba(248,113,113,.35)" };
+  if (k.includes("stale")) return { color: "var(--warn)", border: "rgba(251,191,36,.35)" };
+  if (k.includes("resync")) return { color: "var(--dim)", border: "var(--border)" };
+  return { color: "var(--dim)", border: "var(--border)" };
+}
+
+function IncidentRow({ ev }: { ev: DQEvent }) {
+  const s = kindStyle(ev.kind);
+  return (
+    <li className="border-b px-4 py-2.5 last:border-b-0" style={{ borderColor: "var(--border)" }}>
+      <div className="flex items-center gap-2 text-[0.72rem]">
+        <span
+          className="chip"
+          style={{ color: s.color, borderColor: s.border, padding: "1px 8px" }}
+        >
+          {ev.kind || "event"}
+        </span>
+        {ev.symbol && (
+          <span className="font-semibold" style={{ color: "var(--text)" }}>
+            {ev.symbol}
+          </span>
+        )}
+        <span className="ml-auto tnum shrink-0" style={{ color: "var(--faint)" }}>
+          {ago(ev.ts)}
+        </span>
+      </div>
+      {ev.detail && (
+        <div className="mt-1 text-[0.7rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+          {ev.detail}
+        </div>
+      )}
+    </li>
+  );
+}
+
+export default function QualityPage() {
+  const [data, setData] = useState<Quality | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .quality()
+        .then((d) => {
+          if (!alive) return;
+          setData(d);
+          setErr(null);
+        })
+        .catch((e: unknown) => {
+          if (!alive) return;
+          setErr(e instanceof Error ? e.message : String(e));
+        });
+    load();
+    const t = setInterval(load, pollMs());
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  const symbols = data?.symbols ?? [];
+  const events = [...(data?.events ?? [])].sort((a, b) => b.ts - a.ts);
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Header row */}
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-sm font-bold tracking-[0.16em]">DATA QUALITY</h1>
+        <span className="chip tnum">{symbols.length} symbols</span>
+        <span
+          className="chip tnum"
+          style={events.length ? { color: "var(--warn)" } : undefined}
+        >
+          {events.length} incidents
+        </span>
+        <span className="text-[0.68rem] italic" style={{ color: "var(--faint)" }}>
+          If it&apos;s not on this page, we didn&apos;t measure it.
+        </span>
+      </div>
+
+      {err && !data && (
+        <div className="panel px-5 py-4 text-[0.78rem]" style={{ color: "var(--bad)" }}>
+          {err}
+          <div className="mt-1 text-[0.7rem]" style={{ color: "var(--dim)" }}>
+            Is the daemon running? Start signaldeckd and this page will pick it up.
+          </div>
+        </div>
+      )}
+      {!err && !data && (
+        <div className="px-1 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          loading…
+        </div>
+      )}
+      {err && data && (
+        <div className="px-1 text-[0.7rem]" style={{ color: "var(--bad)" }}>
+          connection lost — showing last known data · {err}
+        </div>
+      )}
+
+      {data && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[3fr_2fr]">
+          {/* Coverage table */}
+          <section className="panel">
+            <div className="panel-h">BAR COVERAGE — WHAT WE ACTUALLY HAVE</div>
+            {symbols.length === 0 ? (
+              <div className="px-5 py-6 text-[0.74rem]" style={{ color: "var(--faint)" }}>
+                No symbols tracked yet — subscribe to a symbol from the watchlist and
+                coverage will appear here as bars land.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[0.8rem]">
+                  <thead>
+                    <tr
+                      className="text-left text-[0.64rem] tracking-wide"
+                      style={{ color: "var(--faint)" }}
+                    >
+                      <th className="px-4 py-2 font-medium">SYMBOL</th>
+                      <th className="px-2 py-2 font-medium">TF</th>
+                      <th className="px-2 py-2 text-right font-medium">BARS</th>
+                      <th className="px-2 py-2 font-medium">SPAN</th>
+                      <th className="px-4 py-2 text-right font-medium">FRESHNESS</th>
+                    </tr>
+                  </thead>
+                  <tbody className="tnum">
+                    {symbols.map((s) => (
+                      <Fragment key={`${s.market}:${s.symbol}`}>
+                        {TFS.map((tf, i) => {
+                          const c = s.coverage?.[tf];
+                          const has = !!c && c.bars > 0;
+                          return (
+                            <tr
+                              key={tf}
+                              style={
+                                i === 0
+                                  ? { borderTop: "1px solid var(--border)" }
+                                  : undefined
+                              }
+                            >
+                              <td className="px-4 py-1.5 align-top whitespace-nowrap">
+                                {i === 0 && (
+                                  <span className="flex items-baseline gap-2">
+                                    <span className="font-semibold" style={{ color: "var(--text)" }}>
+                                      {s.symbol}
+                                    </span>
+                                    <span className="text-[0.62rem]" style={{ color: "var(--faint)" }}>
+                                      {s.market}
+                                      {s.market === "crypto" ? " · 24/7" : ""}
+                                      {!s.active ? " · inactive" : ""}
+                                    </span>
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-2 py-1.5" style={{ color: "var(--dim)" }}>
+                                {tf}
+                              </td>
+                              <td className="px-2 py-1.5 text-right">
+                                {has ? (
+                                  c.bars.toLocaleString("en-US")
+                                ) : (
+                                  <span style={{ color: "var(--faint)" }}>—</span>
+                                )}
+                              </td>
+                              <td className="px-2 py-1.5 whitespace-nowrap" style={{ color: "var(--dim)" }}>
+                                {has ? `${fmtDate(c.from)} → ${fmtDate(c.to)}` : "—"}
+                              </td>
+                              <td
+                                className="px-4 py-1.5 text-right whitespace-nowrap"
+                                title={
+                                  has
+                                    ? `fresh = updated within ${tf === "1m" ? "30m" : "2h"}`
+                                    : undefined
+                                }
+                                style={{ color: has ? freshColor(tf, c.to) : "var(--faint)" }}
+                              >
+                                {has ? ago(c.to) : "no data"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Incidents */}
+          <section className="panel h-fit">
+            <div className="panel-h">
+              INCIDENTS
+              <span className="ml-auto text-[0.64rem] normal-case tracking-normal" style={{ color: "var(--faint)" }}>
+                stale · gap · resync
+              </span>
+            </div>
+            {events.length === 0 ? (
+              <div className="px-5 py-6 text-[0.74rem]" style={{ color: "var(--faint)" }}>
+                No incidents recorded. The dq-auditor logs every stale feed, gap and
+                resync here — an empty list means nothing tripped it yet.
+              </div>
+            ) : (
+              <ul className="max-h-[560px] overflow-y-auto">
+                {events.map((ev) => (
+                  <IncidentRow key={ev.id} ev={ev} />
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
