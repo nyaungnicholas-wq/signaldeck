@@ -16,9 +16,10 @@ type Config struct {
 	HTTPAddr     string
 	AlpacaKey    string
 	AlpacaSecret string
-	HudURL       string // trader-hud summary endpoint
-	GeminiKey    string // optional: LLM polish for insights ("" = rule-based only)
-	CryptoSymbol string // TickStream consolidated symbol label
+	HudURL        string // trader-hud summary endpoint
+	TickstreamURL string // tickstream dashboard snapshot endpoint
+	GeminiKey     string // optional: LLM polish for insights ("" = rule-based only)
+	CryptoSymbol  string // TickStream consolidated symbol label
 }
 
 // Load builds the config. Precedence: environment > stock-trader/.env > default.
@@ -27,9 +28,10 @@ func Load() Config {
 	cfg := Config{
 		DBPath:       envOr("SIGNALDECK_DB", filepath.Join(home, "claude code", "signaldeck", "data", "signaldeck.db")),
 		HTTPAddr:     envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"),
-		HudURL:       envOr("SIGNALDECK_HUD_URL", "http://127.0.0.1:8787/api/summary"),
-		GeminiKey:    os.Getenv("SIGNALDECK_GEMINI_KEY"),
-		CryptoSymbol: "BTC/USD",
+		HudURL:        envOr("SIGNALDECK_HUD_URL", "http://127.0.0.1:8787/api/summary"),
+		TickstreamURL: envOr("SIGNALDECK_TICKSTREAM_URL", "http://127.0.0.1:8321/api/snapshot"),
+		GeminiKey:     os.Getenv("SIGNALDECK_GEMINI_KEY"),
+		CryptoSymbol:  "BTC/USD",
 	}
 	cfg.AlpacaKey = os.Getenv("ALPACA_KEY")
 	cfg.AlpacaSecret = os.Getenv("ALPACA_SECRET")

@@ -218,6 +218,20 @@ func (s *Store) BarAtOrAfter(ctx context.Context, symbolID int64, tf md.Timefram
 	return b, err == nil, err
 }
 
+// BarAtOrBefore returns the last bar with ts <= t (base price for outcome
+// resolution).
+func (s *Store) BarAtOrBefore(ctx context.Context, symbolID int64, tf md.Timeframe, t int64) (md.Bar, bool, error) {
+	b := md.Bar{SymbolID: symbolID, TF: tf}
+	err := s.db.QueryRowContext(ctx, `
+		SELECT ts, open, high, low, close, volume FROM bars
+		WHERE symbol_id=? AND tf=? AND ts<=? ORDER BY ts DESC LIMIT 1`,
+		symbolID, string(tf), t).Scan(&b.Ts, &b.Open, &b.High, &b.Low, &b.Close, &b.Volume)
+	if err == sql.ErrNoRows {
+		return b, false, nil
+	}
+	return b, err == nil, err
+}
+
 // Rollup aggregates a finer timeframe into a coarser one over [from, to).
 // bucket is the coarse bar length in seconds (3600 for 1h, 86400 for 1d).
 func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
@@ -396,6 +410,16 @@ func (s *Store) ResolveOutcome(ctx context.Context, symbolID int64, h md.Horizon
 		UPDATE score_outcomes SET fwd_return=?, resolved_at=?
 		WHERE symbol_id=? AND horizon=? AND ts=?`,
 		fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
+	return err
+}
+
+// ResolveOutcomeVoid marks an outcome permanently unresolvable (no forward
+// data ever arrived — delisted symbol, dead feed) so it stops clogging the
+// unresolved queue. fwd_return stays NULL; the honesty page excludes it.
+func (s *Store) ResolveOutcomeVoid(ctx context.Context, symbolID int64, h md.Horizon, ts int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE score_outcomes SET resolved_at=? WHERE symbol_id=? AND horizon=? AND ts=?`,
+		time.Now().Unix(), symbolID, string(h), ts)
 	return err
 }
 

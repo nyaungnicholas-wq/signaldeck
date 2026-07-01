@@ -2,7 +2,10 @@ module github.com/nyaungnicholas-wq/signaldeck
 
 go 1.25.0
 
-require modernc.org/sqlite v1.53.0
+require (
+	github.com/coder/websocket v1.8.15
+	modernc.org/sqlite v1.53.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -15,5 +18,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/nyaungnicholas-wq/tickstream => ../../tickstream
