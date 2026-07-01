@@ -12,6 +12,7 @@ const KNOWN_AGENTS: { name: string; role: string }[] = [
   { name: "stock-streamer", role: "Alpaca IEX live minute bars" },
   { name: "backfiller", role: "pulls 2y history for new symbols" },
   { name: "crypto-bars", role: "refreshes Kraken OHLC" },
+  { name: "stock-bars", role: "tops up official daily stock bars" },
   { name: "downsampler", role: "1m→1h rollups + retention" },
   { name: "signal-runner", role: "recomputes pressure scores" },
   { name: "expectancy-runner", role: "rebuilds tendency tables" },
