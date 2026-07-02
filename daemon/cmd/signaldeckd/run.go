@@ -86,6 +86,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		cryptolive.New(st, cfg.TickstreamURL, cryptoSym.ID),
 		&pipeline.CryptoBars{St: st, Kraken: krakenClient},
 		backfiller,
+		&pipeline.BackfillReconciler{St: st, BF: backfiller},
 		&pipeline.SignalRunner{St: st},
 		&pipeline.ExpectancyRunner{St: st},
 		&pipeline.InsightWriter{St: st},

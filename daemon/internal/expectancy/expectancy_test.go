@@ -11,13 +11,15 @@ import (
 
 // ── synthetic series builders ───────────────────────────────────────────
 
-// mkBars zips parallel close/volume series into bars (Ts spacing is
-// irrelevant to the package logic; it never reads timestamps).
+// mkBars zips parallel close/volume series into bars, spaced 60s apart. The
+// daily walk ignores timestamps, but the 1h walk now skips 60-bar-ahead
+// samples that span a session/data gap (>3h), so minute fixtures must carry
+// realistic contiguous 1-minute spacing.
 func mkBars(closes, vols []float64) []marketdata.Bar {
 	bars := make([]marketdata.Bar, len(closes))
 	for i := range closes {
 		bars[i] = marketdata.Bar{
-			Ts:     int64(i) * 86400,
+			Ts:     int64(i) * 60,
 			Open:   closes[i],
 			High:   closes[i],
 			Low:    closes[i],

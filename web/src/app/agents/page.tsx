@@ -11,6 +11,7 @@ const KNOWN_AGENTS: { name: string; role: string }[] = [
   { name: "crypto-live", role: "streams TickStream's consolidated book at 1Hz" },
   { name: "stock-streamer", role: "Alpaca IEX live minute bars" },
   { name: "backfiller", role: "pulls 2y history for new symbols" },
+  { name: "backfill-reconciler", role: "re-enqueues under-covered symbols (self-healing)" },
   { name: "crypto-bars", role: "refreshes Kraken OHLC" },
   { name: "stock-bars", role: "tops up official daily stock bars" },
   { name: "downsampler", role: "1m→1h rollups + retention" },

@@ -45,23 +45,26 @@ func (b *Backfiller) Name() string { return "backfiller" }
 // Interval implements workers.Worker: 0 = long-running.
 func (b *Backfiller) Interval() time.Duration { return 0 }
 
-// Run drains the queue until ctx ends.
+// Run drains the queue until ctx ends. A single symbol's failure is recorded
+// and skipped — never fatal to the drain loop (which would strand every other
+// queued symbol). The BackfillReconciler re-enqueues anything left
+// under-covered (transient failure, or a queue lost across a daemon restart —
+// the channel is in-memory), so no symbol is permanently dropped.
 func (b *Backfiller) Run(ctx context.Context) (string, error) {
-	done := 0
+	done, failed := 0, 0
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Sprintf("stopped; %d backfills this run", done), nil
+			return fmt.Sprintf("stopped; %d ok, %d failed this run", done, failed), nil
 		case s := <-b.queue:
 			if err := b.backfillAndPrime(ctx, s); err != nil {
-				// Surface the failure as a DQ event AND fail the run record;
-				// the runner restarts us and the queue keeps its remaining work.
 				sid := s.ID
 				_ = b.St.InsertDQ(ctx, md.DQEvent{
 					SymbolID: &sid, Ts: time.Now().Unix(),
 					Kind: "error", Detail: "backfill: " + err.Error(),
 				})
-				return fmt.Sprintf("%d backfills, then %s failed", done, s.Symbol), err
+				failed++
+				continue // keep draining; the reconciler will retry this one
 			}
 			done++
 		}
@@ -94,6 +97,57 @@ func (b *Backfiller) backfillAndPrime(ctx context.Context, s md.Symbol) error {
 		}
 	}
 	return nil
+}
+
+// BackfillReconciler is the self-healing backstop: it re-enqueues any active
+// symbol whose stored history is missing or thin. This covers both transient
+// backfill failures and — crucially — symbols whose enqueue was lost when the
+// daemon restarted mid-seed (the queue is in-memory, and seeded_v1 is set at
+// enqueue time, so those symbols would otherwise sit empty forever).
+type BackfillReconciler struct {
+	St *store.Store
+	BF *Backfiller
+}
+
+// Name implements workers.Worker.
+func (r *BackfillReconciler) Name() string { return "backfill-reconciler" }
+
+// Interval implements workers.Worker.
+func (r *BackfillReconciler) Interval() time.Duration { return 20 * time.Minute }
+
+// minCoverage is the "clearly backfilled" floor; a brand-new symbol has ~500
+// daily bars, so anything under 100 means history never landed.
+const minCoverage = 100
+
+// Run re-enqueues under-covered active symbols. A persistently unbackfillable
+// symbol (delisted, bad pair) keeps surfacing here and on the quality page —
+// which is the honest outcome, not a hidden one.
+func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
+	syms, err := r.St.ListSymbols(ctx, true)
+	if err != nil {
+		return "", err
+	}
+	requeued := 0
+	for _, s := range syms {
+		nDaily, _, _, err := r.St.BarCount(ctx, s.ID, md.TF1d)
+		if err != nil {
+			return "", err
+		}
+		need := nDaily < minCoverage
+		if s.Market == md.Stocks {
+			nMin, _, _, err := r.St.BarCount(ctx, s.ID, md.TF1m)
+			if err != nil {
+				return "", err
+			}
+			need = need || nMin < minCoverage
+		}
+		if need {
+			if err := r.BF.Enqueue(s); err == nil {
+				requeued++
+			}
+		}
+	}
+	return fmt.Sprintf("checked %d active symbols, re-enqueued %d under-covered", len(syms), requeued), nil
 }
 
 func (b *Backfiller) backfill(ctx context.Context, s md.Symbol) error {

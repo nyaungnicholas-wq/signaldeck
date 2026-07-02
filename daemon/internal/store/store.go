@@ -381,12 +381,16 @@ func (s *Store) ScoreHistory(ctx context.Context, symbolID int64, h md.Horizon, 
 	return out, rows.Err()
 }
 
-// UnresolvedOutcomes returns pending outcomes whose ts is at or before cutoff
-// (i.e. enough time has passed that the forward window may have closed).
-func (s *Store) UnresolvedOutcomes(ctx context.Context, cutoff int64, limit int) ([]md.ScoreOutcome, error) {
+// UnresolvedOutcomesByHorizon returns pending outcomes for ONE horizon whose
+// ts is at or before cutoff. Querying per-horizon (rather than one ts-ordered
+// queue across all horizons) is essential: at steady state each symbol carries
+// ~10k immature 1w rows spanning a week, which would otherwise sit ahead of
+// every freshly-mature 1h/1d row in ts order and starve them indefinitely.
+func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, cutoff int64, limit int) ([]md.ScoreOutcome, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT symbol_id, horizon, ts, score FROM score_outcomes
-		WHERE resolved_at IS NULL AND ts<=? ORDER BY ts LIMIT ?`, cutoff, limit)
+		WHERE resolved_at IS NULL AND horizon=? AND ts<=? ORDER BY ts LIMIT ?`,
+		string(h), cutoff, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -394,11 +398,11 @@ func (s *Store) UnresolvedOutcomes(ctx context.Context, cutoff int64, limit int)
 	var out []md.ScoreOutcome
 	for rows.Next() {
 		var o md.ScoreOutcome
-		var h string
-		if err := rows.Scan(&o.SymbolID, &h, &o.Ts, &o.Score); err != nil {
+		var hz string
+		if err := rows.Scan(&o.SymbolID, &hz, &o.Ts, &o.Score); err != nil {
 			return nil, err
 		}
-		o.Horizon = md.Horizon(h)
+		o.Horizon = md.Horizon(hz)
 		out = append(out, o)
 	}
 	return out, rows.Err()

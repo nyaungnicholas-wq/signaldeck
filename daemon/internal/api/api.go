@@ -388,7 +388,9 @@ func (d Deps) honesty(w http.ResponseWriter, r *http.Request) {
 		"n":       len(pts),
 		"ic":      pearson(pts),
 		"buckets": buckets,
-		"points":  tail(pts, 2000),
+		// pts is newest-first (ResolvedOutcomes orders ts DESC); take the
+		// NEWEST 2000 for the scatter, not the oldest, so it tracks fresh data.
+		"points": head(pts, 2000),
 	})
 }
 
@@ -419,11 +421,11 @@ func pearson(pts []honestyPt) float64 {
 	return (n*sxy - sx*sy) / math.Sqrt(den)
 }
 
-func tail[T any](s []T, n int) []T {
+func head[T any](s []T, n int) []T {
 	if len(s) <= n {
 		return s
 	}
-	return s[len(s)-n:]
+	return s[:n]
 }
 
 func (d Deps) quality(w http.ResponseWriter, r *http.Request) {

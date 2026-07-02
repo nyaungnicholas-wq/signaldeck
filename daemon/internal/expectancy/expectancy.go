@@ -100,6 +100,15 @@ func Build(daily, minute []marketdata.Bar) map[marketdata.Horizon][]marketdata.E
 		closes, vols := extract(minute)
 		rsi := rsiSeries(closes, rsiPeriod)
 		for i := walkStart; i+60 < len(minute); i += minuteStep {
+			// A 60-bar-ahead move is only an honest "1h" return when those 60
+			// bars span roughly one contiguous hour. Stock sessions are ~390
+			// bars, so near a session's end minute[i+60] is the NEXT session's
+			// bar and closes[i+60]/closes[i] would fold in the overnight/
+			// weekend gap (same for any crypto coverage hole). Skip those —
+			// mirroring the outcome resolver's own gap guard.
+			if minute[i+60].Ts-minute[i].Ts > 3*3600 {
+				continue
+			}
 			key, ok := stateAt(closes, vols, rsi, i, minuteROCBars, false)
 			if !ok || closes[i] == 0 {
 				continue

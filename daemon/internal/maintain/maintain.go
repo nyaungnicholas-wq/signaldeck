@@ -39,7 +39,14 @@ func (d *Downsampler) Run(ctx context.Context) (string, error) {
 		return "", err
 	}
 	now := time.Now()
-	from := now.Add(-72 * time.Hour).Unix()
+	// Align the window's leading edge DOWN to an hour boundary. Rollup's
+	// open/close subqueries are not ts-bounded, so a bucket only partially
+	// covered by [from,to) gets full-bucket open/close but tail-only
+	// high/low/volume — and INSERT OR REPLACE would overwrite the previously
+	// correct 1h bar with corrupt aggregates. A boundary-aligned `from` means
+	// every historical bucket is fully covered; only the current in-progress
+	// hour is partial, which is correct (it is re-rolled every pass).
+	from := (now.Add(-72*time.Hour).Unix() / 3600) * 3600
 	for _, s := range syms {
 		if err := d.St.Rollup(ctx, s.ID, md.TF1m, md.TF1h, 3600, from, now.Unix()); err != nil {
 			return "", fmt.Errorf("rollup %s: %w", s.Symbol, err)
@@ -70,9 +77,11 @@ func (d *Downsampler) Run(ctx context.Context) (string, error) {
 // ── OutcomeResolver ─────────────────────────────────────────────────────
 
 // OutcomeResolver fills score_outcomes with realized forward returns once a
-// score's horizon window has closed. Weekends/holidays are handled naturally:
-// the forward price is the first bar AT OR AFTER the target time, so a Friday
-// 1d score resolves against Monday's bar.
+// score's horizon window has closed. The forward window is anchored to the
+// ACTUAL bar the score was made against (base = bar at-or-before the score),
+// so it is correct whether daily bars open at 00:00 UTC (crypto) or ~04:00/
+// 05:00 UTC (US equities = midnight ET). Weekends/holidays are handled by
+// taking the first bar at-or-after base+horizon.
 type OutcomeResolver struct {
 	St *store.Store
 }
@@ -101,63 +110,69 @@ func horizonTF(h md.Horizon) md.Timeframe {
 	return md.TF1d
 }
 
-// Run resolves up to 500 pending outcomes per pass.
+// Run resolves matured outcomes, per horizon so short windows never starve
+// behind the large immature 1w backlog.
 func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
-	// 2000/pass at 10m cadence = 12k/hour capacity; score generation is
-	// symbols × 3 horizons per minute, so this stays ahead up to ~65 symbols.
-	pending, err := o.St.UnresolvedOutcomes(ctx, now-3600, 2000) // 1h is the shortest window
-	if err != nil {
-		return "", err
-	}
 	resolved, voided, waiting := 0, 0, 0
-	for _, p := range pending {
-		tf := horizonTF(p.Horizon)
-		target := p.Ts + horizonSeconds(p.Horizon)
-		if tf == md.TF1d {
-			// Daily bars open at 00:00 UTC. A mid-day score's "+1 day"
-			// target must align to the bar grid, or "first bar at-or-after
-			// target" lands TWO days out and a ~2-day return gets recorded
-			// as a 1-day outcome — silently corrupting the honesty page.
-			target = (p.Ts/86400)*86400 + horizonSeconds(p.Horizon)
-		}
-		if now < target {
-			waiting++
-			continue
-		}
-		base, okBase, err := o.St.BarAtOrBefore(ctx, p.SymbolID, tf, p.Ts)
+	for _, h := range md.Horizons {
+		tf := horizonTF(h)
+		// Only fetch rows old enough that the window COULD have closed.
+		pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), 1500)
 		if err != nil {
 			return "", err
 		}
-		fwd, okFwd, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, target)
-		if err != nil {
-			return "", err
-		}
-		switch {
-		case okBase && okFwd && base.Close > 0:
-			// Guard: if the "forward" bar is absurdly late (>3x the window),
-			// the data has a hole — resolving would attribute a multi-week
-			// move to a 1d score. Void it instead.
-			if fwd.Ts-target > 3*horizonSeconds(p.Horizon) {
-				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, p.Horizon, p.Ts); err != nil {
+		for _, p := range pending {
+			base, okBase, err := o.St.BarAtOrBefore(ctx, p.SymbolID, tf, p.Ts)
+			if err != nil {
+				return "", err
+			}
+			if !okBase {
+				// No base bar: unusual (score implies data). Void if very old.
+				if now-p.Ts > 30*24*3600 {
+					if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
+						return "", err
+					}
+					voided++
+				} else {
+					waiting++
+				}
+				continue
+			}
+			// Anchor the window to the base bar, not to a UTC-midnight guess.
+			target := base.Ts + horizonSeconds(h)
+			if now < target {
+				waiting++
+				continue
+			}
+			fwd, okFwd, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, target)
+			if err != nil {
+				return "", err
+			}
+			switch {
+			case okFwd && base.Close > 0:
+				// A forward bar far past the target means a data/session hole;
+				// resolving would mislabel a multi-period move as one horizon.
+				if fwd.Ts-target > 3*horizonSeconds(h) {
+					if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
+						return "", err
+					}
+					voided++
+					continue
+				}
+				ret := fwd.Close/base.Close - 1
+				if err := o.St.ResolveOutcome(ctx, p.SymbolID, h, p.Ts, ret); err != nil {
+					return "", err
+				}
+				resolved++
+			case now-p.Ts > 30*24*3600:
+				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
 					return "", err
 				}
 				voided++
-				continue
+			default:
+				waiting++ // forward data not in yet; next pass
 			}
-			ret := fwd.Close/base.Close - 1
-			if err := o.St.ResolveOutcome(ctx, p.SymbolID, p.Horizon, p.Ts, ret); err != nil {
-				return "", err
-			}
-			resolved++
-		case now-p.Ts > 30*24*3600:
-			// A month with no forward data: permanently unresolvable.
-			if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, p.Horizon, p.Ts); err != nil {
-				return "", err
-			}
-			voided++
-		default:
-			waiting++ // data not in yet; try next pass
 		}
 	}
 	return fmt.Sprintf("resolved %d, voided %d, waiting %d", resolved, voided, waiting), nil
