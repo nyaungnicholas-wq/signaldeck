@@ -58,7 +58,7 @@ func Serve(ctx context.Context, d Deps) error {
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,
-		Handler:           cors(mux),
+		Handler:           d.secure(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
@@ -72,20 +72,6 @@ func Serve(ctx context.Context, d Deps) error {
 		return err
 	}
 	return nil
-}
-
-// cors allows the local Next.js dev origin. The daemon binds localhost only.
-func cors(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

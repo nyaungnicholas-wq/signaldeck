@@ -20,6 +20,11 @@ type Config struct {
 	TickstreamURL string // tickstream dashboard snapshot endpoint
 	GeminiKey     string // optional: LLM polish for insights ("" = rule-based only)
 	CryptoSymbol  string // TickStream consolidated symbol label
+
+	// HTTP security (see internal/api/security.go).
+	WebOrigins   []string // CORS-allowlisted browser origins for the web app
+	AllowedHosts []string // Host-header allowlist (blocks DNS rebinding)
+	APIToken     string   // optional bearer token; when set, every request must present it (enables safe remote exposure)
 }
 
 // Load builds the config. Precedence: environment > stock-trader/.env > default.
@@ -32,6 +37,9 @@ func Load() Config {
 		TickstreamURL: envOr("SIGNALDECK_TICKSTREAM_URL", "http://127.0.0.1:8321/api/snapshot"),
 		GeminiKey:     os.Getenv("SIGNALDECK_GEMINI_KEY"),
 		CryptoSymbol:  "BTC/USD",
+		WebOrigins:    splitEnv("SIGNALDECK_WEB_ORIGINS", "http://localhost:8323,http://127.0.0.1:8323,http://localhost:3000,http://127.0.0.1:3000"),
+		AllowedHosts:  splitEnv("SIGNALDECK_ALLOWED_HOSTS", "127.0.0.1:8322,localhost:8322"),
+		APIToken:      os.Getenv("SIGNALDECK_API_TOKEN"),
 	}
 	cfg.AlpacaKey = os.Getenv("ALPACA_KEY")
 	cfg.AlpacaSecret = os.Getenv("ALPACA_SECRET")
@@ -50,6 +58,21 @@ func Load() Config {
 
 // HasAlpaca reports whether stock ingestion can run.
 func (c Config) HasAlpaca() bool { return c.AlpacaKey != "" && c.AlpacaSecret != "" }
+
+// splitEnv reads a comma-separated env var (or def), trimming blanks.
+func splitEnv(k, def string) []string {
+	v := def
+	if e := os.Getenv(k); e != "" {
+		v = e
+	}
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {

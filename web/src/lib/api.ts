@@ -159,8 +159,24 @@ export interface Hud {
   summary?: Record<string, unknown>;
 }
 
+// Optional bearer token for remote-exposed deployments (unset for localhost).
+const API_TOKEN = process.env.NEXT_PUBLIC_SIGNALDECK_TOKEN;
+
+// The daemon requires this custom header on every call: its presence is what
+// defeats CSRF (a cross-origin attacker page can't send it without a preflight
+// that only an allowlisted origin passes). See daemon/internal/api/security.go.
+function authHeaders(json: boolean): Record<string, string> {
+  const h: Record<string, string> = { "X-Signaldeck": "1" };
+  if (json) h["Content-Type"] = "application/json";
+  if (API_TOKEN) h["Authorization"] = `Bearer ${API_TOKEN}`;
+  return h;
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}${path}`, {
+    cache: "no-store",
+    headers: authHeaders(false),
+  });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`API ${res.status}: ${body || path}`);
@@ -171,7 +187,7 @@ async function get<T>(path: string): Promise<T> {
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders(true),
     body: JSON.stringify(body),
   });
   if (!res.ok) {

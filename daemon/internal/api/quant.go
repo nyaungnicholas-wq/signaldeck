@@ -68,6 +68,10 @@ func (d Deps) backtestRun(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, "unknown symbol")
 		return
 	}
+	if len(body.Text) > 500 {
+		httpErr(w, 400, "strategy text too long")
+		return
+	}
 	strat, err := backtest.Parse(body.Text)
 	if err != nil {
 		httpErr(w, 422, err.Error()) // helpful "supported forms" message
@@ -117,6 +121,10 @@ func (d Deps) risk(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.Holdings) == 0 {
 		httpErr(w, 400, "need at least one holding")
+		return
+	}
+	if len(body.Holdings) > 100 {
+		httpErr(w, 400, "too many holdings (max 100)")
 		return
 	}
 	if body.NotionalUSD <= 0 {
