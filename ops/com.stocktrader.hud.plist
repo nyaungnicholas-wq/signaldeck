@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  trader-hud LaunchAgent — the stock-trader PUSH-20 dashboard server (:8787)
+  that SignalDeck's hud-sync agent polls. Complements the existing
+  com.stocktrader.{rotation,checkup} agents.
+  Install:
+    cp ops/com.stocktrader.hud.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.stocktrader.hud.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stocktrader.hud</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/natalienyaung/claude code/stock-trader/.venv/bin/python</string>
+    <string>dashboard/server.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/natalienyaung/claude code/stock-trader</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/hud.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/hud.err.log</string>
+</dict>
+</plist>

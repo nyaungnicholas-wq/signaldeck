@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SignalDeck web app LaunchAgent — production Next.js server on :8323.
+  Requires a build first: cd web && npm run build (rerun after UI changes).
+  Install:
+    cp ops/com.signaldeck.web.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.signaldeck.web.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.signaldeck.web</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/natalienyaung/claude code/signaldeck/web/node_modules/.bin/next</string>
+    <string>start</string>
+    <string>-p</string>
+    <string>8323</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/web</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/natalienyaung/.nvm/versions/node/v25.8.1/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/web.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/web.err.log</string>
+</dict>
+</plist>

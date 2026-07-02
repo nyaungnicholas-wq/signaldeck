@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TickStream daemon LaunchAgent — the live consolidated crypto book that
+  feeds SignalDeck's crypto-live agent (SignalDeck polls :8321/api/snapshot).
+  Install:
+    cp ops/com.tickstream.daemon.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.tickstream.daemon.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tickstream.daemon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/natalienyaung/claude code/tickstream/bin/tickstreamd</string>
+    <string>-http</string>
+    <string>127.0.0.1:8321</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/natalienyaung/claude code/tickstream</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/tickstream.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/tickstream.err.log</string>
+</dict>
+</plist>
