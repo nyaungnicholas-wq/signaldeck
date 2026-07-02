@@ -105,3 +105,35 @@ CREATE TABLE IF NOT EXISTS meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
 );
+
+-- Latest backtested directional forecast per symbol+horizon. A forecast is
+-- ONLY shown with its out-of-sample grade (lift <= 0 means "no edge").
+CREATE TABLE IF NOT EXISTS forecasts (
+  symbol_id INTEGER NOT NULL,
+  horizon   TEXT NOT NULL,
+  ts        INTEGER NOT NULL,
+  prob      REAL NOT NULL,
+  accuracy  REAL NOT NULL,
+  brier     REAL NOT NULL,
+  auc       REAL NOT NULL,
+  base_rate REAL NOT NULL,
+  lift      REAL NOT NULL,
+  n_train   INTEGER NOT NULL,
+  n_eval    INTEGER NOT NULL,
+  PRIMARY KEY (symbol_id, horizon)
+);
+
+-- Paper positions: logged discretionary "reads" the portfolio page grades.
+CREATE TABLE IF NOT EXISTS positions (
+  id             INTEGER PRIMARY KEY,
+  symbol_id      INTEGER NOT NULL,
+  qty            REAL NOT NULL,
+  entry_price    REAL NOT NULL,
+  entry_ts       INTEGER NOT NULL,
+  note           TEXT NOT NULL DEFAULT '',
+  score_at_entry REAL NOT NULL DEFAULT 0,
+  open           INTEGER NOT NULL DEFAULT 1,
+  exit_price     REAL,
+  exit_ts        INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_positions_open ON positions (open);

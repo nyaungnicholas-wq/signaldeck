@@ -51,6 +51,7 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/snaps", d.snaps)
 	mux.HandleFunc("POST /api/subscribe", d.subscribe)
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
+	d.registerQuant(mux) // forecast, backtest, risk, correlation, portfolio
 	mux.HandleFunc("GET /api/export/bars.csv", d.exportBars)
 	mux.HandleFunc("GET /api/export/scores.csv", d.exportScores)
 	mux.HandleFunc("GET /api/export/outcomes.csv", d.exportOutcomes)

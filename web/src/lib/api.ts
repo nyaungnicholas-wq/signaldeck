@@ -207,7 +207,123 @@ export const api = {
     post<SymbolInfo>("/api/unsubscribe", { symbol, market }),
   exportUrl: (kind: "bars" | "scores" | "outcomes", params: string) =>
     `${API_BASE}/api/export/${kind}.csv?${params}`,
+
+  // ── Wave 2: quant capabilities ──
+  forecast: (symbol: string, market: Market) =>
+    get<Forecast[]>(`/api/forecast?${q(symbol, market)}`),
+  backtest: (symbol: string, market: Market, text: string) =>
+    post<BacktestResponse>("/api/backtest", { symbol, market, text }),
+  risk: (holdings: RiskHolding[], notionalUSD = 100000) =>
+    post<RiskResponse>("/api/risk", { holdings, notionalUSD }),
+  correlation: () => get<CorrelationResponse>("/api/correlation"),
+  portfolio: () => get<PortfolioResponse>("/api/portfolio"),
+  portfolioAdd: (symbol: string, market: Market, qty: number, note = "") =>
+    post<{ id: number; entryPrice: number; scoreAtEntry: number }>("/api/portfolio/add", {
+      symbol, market, qty, note,
+    }),
+  portfolioClose: (id: number, symbol: string, market: Market) =>
+    post<{ closed: number; exitPrice: number }>("/api/portfolio/close", { id, symbol, market }),
 };
+
+export interface Forecast {
+  horizon: Horizon;
+  ts: number;
+  prob: number;
+  accuracy: number;
+  brier: number;
+  auc: number;
+  baseRate: number;
+  lift: number;
+  nTrain: number;
+  nEval: number;
+}
+
+export interface BacktestResult {
+  TotalReturn: number;
+  CAGR: number;
+  MaxDrawdown: number;
+  Sharpe: number;
+  NumTrades: number;
+  WinRate: number;
+  ExposurePct: number;
+  Equity: number[];
+  VsBuyHold: number;
+}
+export interface BacktestResponse {
+  strategy: { Name: string };
+  result: BacktestResult;
+  explain: string;
+  ts: number[];
+}
+
+export interface RiskHolding {
+  symbol: string;
+  market: Market;
+  weight: number;
+}
+export interface RiskContribution {
+  Symbol: string;
+  PctOfRisk: number;
+  Weight: number;
+  Vol: number;
+}
+export interface RiskScenario {
+  Name: string;
+  PnLPct: number;
+  Detail: string;
+}
+export interface RiskReport {
+  Confidence: number;
+  NotionalUSD: number;
+  HistVaRPct: number;
+  HistCVaRPct: number;
+  ParamVaRPct: number;
+  Contributions: RiskContribution[];
+  Scenarios: RiskScenario[];
+}
+export interface RiskResponse {
+  report: RiskReport;
+  summary: string;
+}
+
+export interface CorrelationResponse {
+  symbols: string[];
+  matrix: number[][];
+  mostPair: [string, string];
+  mostR: number;
+  leastPair: [string, string];
+  leastR: number;
+  diversification: number;
+}
+
+export interface PositionRow {
+  id: number;
+  symbol: string;
+  market: Market;
+  qty: number;
+  entryPrice: number;
+  entryTs: number;
+  note: string;
+  scoreAtEntry: number;
+  open: boolean;
+  exitPrice: number | null;
+  exitTs: number | null;
+  lastPrice: number;
+  pnlAbs: number;
+  pnlPct: number;
+}
+export interface PortfolioResponse {
+  positions: PositionRow[] | null;
+  stat: {
+    GrossValue: number;
+    TotalPnLAbs: number;
+    TotalPnLPct: number;
+    Winners: number;
+    Losers: number;
+    Best: string;
+    Worst: string;
+  };
+}
 
 // usePoll-style helper for client components (simple interval fetcher).
 export function pollMs(): number {

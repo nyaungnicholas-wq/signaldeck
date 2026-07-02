@@ -89,6 +89,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		&pipeline.BackfillReconciler{St: st, BF: backfiller},
 		&pipeline.SignalRunner{St: st},
 		&pipeline.ExpectancyRunner{St: st},
+		&pipeline.ForecastTrainer{St: st},
 		&pipeline.InsightWriter{St: st},
 		&maintain.Downsampler{St: st},
 		&maintain.OutcomeResolver{St: st},
