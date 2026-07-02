@@ -104,18 +104,27 @@ func horizonTF(h md.Horizon) md.Timeframe {
 // Run resolves up to 500 pending outcomes per pass.
 func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
-	pending, err := o.St.UnresolvedOutcomes(ctx, now-3600, 500) // 1h is the shortest window
+	// 2000/pass at 10m cadence = 12k/hour capacity; score generation is
+	// symbols × 3 horizons per minute, so this stays ahead up to ~65 symbols.
+	pending, err := o.St.UnresolvedOutcomes(ctx, now-3600, 2000) // 1h is the shortest window
 	if err != nil {
 		return "", err
 	}
 	resolved, voided, waiting := 0, 0, 0
 	for _, p := range pending {
+		tf := horizonTF(p.Horizon)
 		target := p.Ts + horizonSeconds(p.Horizon)
+		if tf == md.TF1d {
+			// Daily bars open at 00:00 UTC. A mid-day score's "+1 day"
+			// target must align to the bar grid, or "first bar at-or-after
+			// target" lands TWO days out and a ~2-day return gets recorded
+			// as a 1-day outcome — silently corrupting the honesty page.
+			target = (p.Ts/86400)*86400 + horizonSeconds(p.Horizon)
+		}
 		if now < target {
 			waiting++
 			continue
 		}
-		tf := horizonTF(p.Horizon)
 		base, okBase, err := o.St.BarAtOrBefore(ctx, p.SymbolID, tf, p.Ts)
 		if err != nil {
 			return "", err
