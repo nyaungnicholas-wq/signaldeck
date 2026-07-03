@@ -11,6 +11,8 @@ const NAV: { href: string; label: string }[] = [
   { href: "/trends", label: "TRENDS" },
   { href: "/predict", label: "PREDICT" },
   { href: "/regime", label: "REGIME" },
+  { href: "/news", label: "NEWS" },
+  { href: "/macro", label: "MACRO" },
   { href: "/forecast", label: "FORECAST" },
   { href: "/backtest", label: "BACKTEST" },
   { href: "/risk", label: "RISK" },

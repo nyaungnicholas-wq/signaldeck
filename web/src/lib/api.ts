@@ -253,7 +253,55 @@ export const api = {
   regime: () => get<RegimeResponse>("/api/regime"),
   ranking: () => get<RankedRow[]>("/api/ranking"),
   breakouts: () => get<BreakoutRow[]>("/api/breakouts"),
+
+  // ── news / sectors / macro ──
+  news: (symbol?: string, market?: Market) =>
+    get<NewsItem[]>(symbol ? `/api/news?${q(symbol, market!)}` : "/api/news"),
+  sectors: () => get<SectorAgg[]>("/api/sectors"),
+  macro: () => get<Macro>("/api/macro"),
+  regimeConditioned: (symbol: string, market: Market) =>
+    get<RegimeConditioned>(`/api/regime-conditioned?${q(symbol, market)}`),
 };
+
+export interface NewsItem {
+  id: string;
+  symbol?: string;
+  ts: number;
+  headline: string;
+  url: string;
+  source: string;
+  sentiment: string;
+  score: number;
+  rationale: string;
+}
+export interface SectorAgg {
+  Sector: string;
+  MeanScore: number;
+  MeanRet1M: number;
+  N: number;
+  Symbols: string[];
+}
+export interface Macro {
+  breadthPct: number;
+  positive: number;
+  scored: number;
+  volPct: number;
+  volLabel: string;
+  push20Macro?: unknown;
+  note: string;
+  asOf: number;
+}
+export interface RegimeCond {
+  regime: string;
+  n: number;
+  meanFwd: number;
+  medianFwd: number;
+  hitRate: number;
+}
+export interface RegimeConditioned {
+  current: string;
+  byHorizon: Record<string, Record<string, RegimeCond>>;
+}
 
 export interface Prediction {
   horizon: Horizon;
