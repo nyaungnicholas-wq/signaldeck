@@ -12,10 +12,10 @@ import (
 
 // Config is the daemon configuration.
 type Config struct {
-	DBPath       string
-	HTTPAddr     string
-	AlpacaKey    string
-	AlpacaSecret string
+	DBPath        string
+	HTTPAddr      string
+	AlpacaKey     string
+	AlpacaSecret  string
 	HudURL        string // trader-hud summary endpoint
 	TickstreamURL string // tickstream dashboard snapshot endpoint
 	GeminiKey     string // optional: LLM polish for insights ("" = rule-based only)
@@ -25,14 +25,40 @@ type Config struct {
 	WebOrigins   []string // CORS-allowlisted browser origins for the web app
 	AllowedHosts []string // Host-header allowlist (blocks DNS rebinding)
 	APIToken     string   // optional bearer token; when set, every request must present it (enables safe remote exposure)
+
+	// LLM layer (OpenAI-compatible; NVIDIA by default). Empty key = the AI
+	// agents stay in safe no-op mode.
+	LLMKey      string
+	LLMBaseURL  string // e.g. https://integrate.api.nvidia.com/v1
+	LLMModel    string // e.g. meta/llama-3.3-70b-instruct
+	LLMDailyCap int    // hard cap on LLM calls per day (spend guard); 0 = default
 }
 
-// Load builds the config. Precedence: environment > stock-trader/.env > default.
+// LLMEnabled reports whether the AI agents can run (a key is configured).
+func (c Config) LLMEnabled() bool { return c.LLMKey != "" }
+
+// Load builds the config. Precedence: environment > project .env files > default.
 func Load() Config {
 	home, _ := os.UserHomeDir()
+	// The daemon runs under launchd, which does NOT auto-load a .env, so we
+	// read the daemon's own .env here (owner-only file holding the LLM key).
+	dotenv := parseDotEnv(filepath.Join(home, "claude code", "signaldeck", "daemon", ".env"))
+	pick := func(env, def string) string {
+		if v := os.Getenv(env); v != "" {
+			return v
+		}
+		if v := dotenv[env]; v != "" {
+			return v
+		}
+		return def
+	}
 	cfg := Config{
-		DBPath:       envOr("SIGNALDECK_DB", filepath.Join(home, "claude code", "signaldeck", "data", "signaldeck.db")),
-		HTTPAddr:     envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"),
+		LLMKey:        pick("SIGNALDECK_NVIDIA_KEY", pick("SIGNALDECK_LLM_KEY", "")),
+		LLMBaseURL:    pick("SIGNALDECK_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+		LLMModel:      pick("SIGNALDECK_LLM_MODEL", "meta/llama-3.3-70b-instruct"),
+		LLMDailyCap:   atoiOr(pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
+		DBPath:        envOr("SIGNALDECK_DB", filepath.Join(home, "claude code", "signaldeck", "data", "signaldeck.db")),
+		HTTPAddr:      envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"),
 		HudURL:        envOr("SIGNALDECK_HUD_URL", "http://127.0.0.1:8787/api/summary"),
 		TickstreamURL: envOr("SIGNALDECK_TICKSTREAM_URL", "http://127.0.0.1:8321/api/snapshot"),
 		GeminiKey:     os.Getenv("SIGNALDECK_GEMINI_KEY"),
@@ -72,6 +98,21 @@ func splitEnv(k, def string) []string {
 		}
 	}
 	return out
+}
+
+// atoiOr parses s as an int, returning def on empty/invalid input.
+func atoiOr(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return def
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 func envOr(k, def string) string {
