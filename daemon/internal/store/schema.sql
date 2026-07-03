@@ -201,3 +201,18 @@ CREATE TABLE IF NOT EXISTS breakouts (
   strength  REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_breakouts_ts ON breakouts (ts DESC);
+
+-- News headlines (from Alpaca) + LLM-tagged sentiment.
+CREATE TABLE IF NOT EXISTS news (
+  id         TEXT PRIMARY KEY,       -- provider article id (dedup)
+  symbol_id  INTEGER NOT NULL,
+  ts         INTEGER NOT NULL,       -- article time (unix s)
+  headline   TEXT NOT NULL,
+  url        TEXT NOT NULL DEFAULT '',
+  source     TEXT NOT NULL DEFAULT '',
+  sentiment  TEXT NOT NULL DEFAULT 'unrated',  -- bullish|bearish|neutral|unrated
+  score      REAL NOT NULL DEFAULT 0,          -- -1..+1
+  rationale  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_news_symbol_ts ON news (symbol_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_news_unrated ON news (sentiment) WHERE sentiment='unrated';

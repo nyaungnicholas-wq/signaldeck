@@ -56,6 +56,7 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerQuant(mux) // forecast, backtest, risk, correlation, portfolio
 	d.registerAI(mux)      // analyst, chat, filingmind, status
 	d.registerPredict(mux) // predictions, calibration, regime, ranking, breakouts
+	d.registerData(mux)    // news, sectors, regime-conditioned, macro
 	mux.HandleFunc("GET /api/export/bars.csv", d.exportBars)
 	mux.HandleFunc("GET /api/export/scores.csv", d.exportScores)
 	mux.HandleFunc("GET /api/export/outcomes.csv", d.exportOutcomes)

@@ -679,6 +679,20 @@ func (s *Store) SetMeta(ctx context.Context, k, v string) error {
 	return err
 }
 
+// SetJSON stores a JSON-marshaled value under a meta key (small blobs only).
+func (s *Store) SetJSON(ctx context.Context, k string, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return s.SetMeta(ctx, k, string(b))
+}
+
+// GetJSONRaw returns the raw JSON string stored under a meta key ("" if absent).
+func (s *Store) GetJSONRaw(ctx context.Context, k string) (string, error) {
+	return s.GetMeta(ctx, k)
+}
+
 // GetMeta returns "" when the key is absent.
 func (s *Store) GetMeta(ctx context.Context, k string) (string, error) {
 	var v string

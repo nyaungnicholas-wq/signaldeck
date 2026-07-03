@@ -13,6 +13,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptolive"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/news"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -111,6 +112,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		&pipeline.RegimeRunner{St: st},
 		&pipeline.RankingRunner{St: st},
 		&pipeline.BreakoutRunner{St: st},
+		&pipeline.SentimentTagger{St: st, LLM: llmClient},
+		&pipeline.SectorRotator{St: st},
+	}
+	if alpacaClient != nil {
+		fleet = append(fleet, &pipeline.NewsFetcher{St: st, Client: news.New(cfg.AlpacaKey, cfg.AlpacaSecret)})
 	}
 	if streamer != nil {
 		fleet = append(fleet, streamWorker{streamer}, &pipeline.StockBars{St: st, Alpaca: alpacaClient})
