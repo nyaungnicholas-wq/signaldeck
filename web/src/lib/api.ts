@@ -239,7 +239,52 @@ export const api = {
     }),
   portfolioClose: (id: number, symbol: string, market: Market) =>
     post<{ closed: number; exitPrice: number }>("/api/portfolio/close", { id, symbol, market }),
+
+  // ── AI agents ──
+  aiStatus: () => get<AIStatus>("/api/ai/status"),
+  aiAnalyst: () => get<AnalystBrief>("/api/ai/analyst"),
+  aiChat: (question: string) => post<ChatAnswer>("/api/ai/chat", { question }),
+  aiFiling: (text: string) => post<FilingResult>("/api/ai/filing", { text }),
 };
+
+export interface AIStats {
+  day: string;
+  calls: number;
+  dailyCap: number;
+  promptTokens: number;
+  outputTokens: number;
+  lastCallTs: number;
+  lastError: string;
+}
+export interface AIStatus {
+  enabled: boolean;
+  model?: string;
+  stats?: AIStats;
+  charters?: Record<string, string>;
+}
+export interface AnalystBrief {
+  market?: string;
+  perSymbol?: Record<string, string>;
+  model?: string;
+  disabled?: boolean;
+  error?: string;
+}
+export interface ChatAnswer {
+  text?: string;
+  model?: string;
+  disabled?: boolean;
+  error?: string;
+}
+export interface FilingResult {
+  Bull?: string;
+  Bear?: string;
+  RedFlags?: string;
+  Raw?: string;
+  Model?: string;
+  Disabled?: boolean;
+  Truncated?: boolean;
+  error?: string;
+}
 
 export interface Forecast {
   horizon: Horizon;
