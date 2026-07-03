@@ -85,3 +85,19 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+func TestTrimToBudget(t *testing.T) {
+	big := make([]byte, 40000)
+	for i := range big {
+		big[i] = 'x'
+	}
+	msgs := []Message{{Role: "system", Content: "charter"}, {Role: "user", Content: string(big)}}
+	trimToBudget(msgs, maxPromptChars)
+	if msgs[0].Content != "charter" {
+		t.Fatal("system charter must be preserved")
+	}
+	total := len(msgs[0].Content) + len(msgs[1].Content)
+	if total > maxPromptChars+64 {
+		t.Fatalf("total %d exceeds budget %d", total, maxPromptChars)
+	}
+}

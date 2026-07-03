@@ -151,6 +151,16 @@ func (c *httpClient) Complete(ctx context.Context, sys string, msgs []Message, m
 	}
 	all = append(all, msgs...)
 
+	// Bound the prompt so the free-tier model stays fast + reliable no matter
+	// how much the watchlist grows — the single most important thing for a
+	// public deployment. Agents put their (large) data in the last message,
+	// so we trim that one, preserving the system charter intact.
+	trimToBudget(all, maxPromptChars)
+
+	if maxTokens > maxOutputTokens {
+		maxTokens = maxOutputTokens
+	}
+
 	body, err := json.Marshal(chatReq{Model: c.model, Messages: all, MaxTokens: maxTokens, Temperature: 0.2})
 	if err != nil {
 		return "", err
@@ -190,6 +200,37 @@ func (c *httpClient) Complete(ctx context.Context, sys string, msgs []Message, m
 		return "", fmt.Errorf("llm: empty response")
 	}
 	return strings.TrimSpace(cr.Choices[0].Message.Content), nil
+}
+
+// Prompt/output budgets keep every call small enough for the free-tier model
+// to answer reliably. ~24k input chars ≈ 6k tokens; a filing gets most of it,
+// a watchlist digest uses a fraction. Output is capped so replies stay tight.
+const (
+	maxPromptChars  = 24000
+	maxOutputTokens = 900
+)
+
+// trimToBudget shrinks the message list to at most `budget` total content
+// chars by truncating the LAST message (where agents place their data),
+// leaving the system charter and earlier turns intact.
+func trimToBudget(msgs []Message, budget int) {
+	if len(msgs) == 0 {
+		return
+	}
+	last := len(msgs) - 1
+	other := 0
+	for i, m := range msgs {
+		if i != last {
+			other += len(m.Content)
+		}
+	}
+	room := budget - other
+	if room < 500 {
+		room = 500 // always leave a little room for the final message
+	}
+	if len(msgs[last].Content) > room {
+		msgs[last].Content = msgs[last].Content[:room] + "\n…[truncated to fit model budget]"
+	}
 }
 
 // sanitize strips anything key-shaped from an error string before it can be
