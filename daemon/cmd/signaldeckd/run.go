@@ -13,6 +13,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptolive"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
@@ -45,6 +46,14 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	}
 	krakenClient := cryptohist.New()
 	backfiller := pipeline.NewBackfiller(st, alpacaClient, krakenClient)
+
+	// LLM provider (NVIDIA by default). Disabled/no-op until a key is set.
+	llmClient := llm.New(cfg.LLMKey, cfg.LLMBaseURL, cfg.LLMModel, cfg.LLMDailyCap)
+	if llmClient.Enabled() {
+		slog.Info("AI layer enabled", "model", cfg.LLMModel, "dailyCap", cfg.LLMDailyCap)
+	} else {
+		slog.Warn("AI layer disabled — no LLM key (set SIGNALDECK_NVIDIA_KEY in daemon/.env)")
+	}
 
 	// ── symbols: consolidated crypto always; seed stocks on first boot ──
 	cryptoSym, err := st.UpsertSymbol(ctx, cfg.CryptoSymbol, md.Crypto,
@@ -95,6 +104,8 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		&maintain.OutcomeResolver{St: st},
 		&maintain.DQAuditor{St: st},
 		hud.New(st, cfg.HudURL),
+		&pipeline.AnalystWorker{St: st, LLM: llmClient},
+		&pipeline.WatcherWorker{St: st, LLM: llmClient},
 	}
 	if streamer != nil {
 		fleet = append(fleet, streamWorker{streamer}, &pipeline.StockBars{St: st, Alpaca: alpacaClient})
@@ -106,6 +117,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		Cfg:     cfg,
 		Version: version,
 		Started: time.Now(),
+		LLM:     llmClient,
 		CurrentState: func(ctx context.Context, symbolID int64) (map[md.Horizon]string, error) {
 			return pipeline.CurrentState(ctx, st, symbolID)
 		},

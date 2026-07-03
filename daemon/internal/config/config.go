@@ -55,7 +55,7 @@ func Load() Config {
 	cfg := Config{
 		LLMKey:        pick("SIGNALDECK_NVIDIA_KEY", pick("SIGNALDECK_LLM_KEY", "")),
 		LLMBaseURL:    pick("SIGNALDECK_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-		LLMModel:      pick("SIGNALDECK_LLM_MODEL", "meta/llama-3.3-70b-instruct"),
+		LLMModel:      pick("SIGNALDECK_LLM_MODEL", "meta/llama-3.1-8b-instruct"), // 8B is fast+reliable on NVIDIA free tier (70B times out); override via SIGNALDECK_LLM_MODEL
 		LLMDailyCap:   atoiOr(pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
 		DBPath:        envOr("SIGNALDECK_DB", filepath.Join(home, "claude code", "signaldeck", "data", "signaldeck.db")),
 		HTTPAddr:      envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"),

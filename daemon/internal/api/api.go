@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -26,6 +27,7 @@ type Deps struct {
 	Cfg     config.Config
 	Version string
 	Started time.Time
+	LLM     llm.Client // AI provider (may be disabled when no key is set)
 	// Subscribe validates a new symbol, upserts it, and kicks off backfill
 	// (async). Wired in cmd/signaldeckd.
 	Subscribe func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error)
@@ -52,6 +54,7 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("POST /api/subscribe", d.subscribe)
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
 	d.registerQuant(mux) // forecast, backtest, risk, correlation, portfolio
+	d.registerAI(mux)    // analyst, chat, filingmind, status
 	mux.HandleFunc("GET /api/export/bars.csv", d.exportBars)
 	mux.HandleFunc("GET /api/export/scores.csv", d.exportScores)
 	mux.HandleFunc("GET /api/export/outcomes.csv", d.exportOutcomes)
