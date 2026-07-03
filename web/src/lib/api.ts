@@ -228,7 +228,8 @@ export const api = {
   quality: () => get<Quality>("/api/quality"),
   agents: () => get<WorkerRun[]>("/api/agents"),
   hud: () => get<Hud>("/api/hud"),
-  insights: (limit = 50) => get<Insight[]>(`/api/insights?limit=${limit}`),
+  insights: (limit = 50, kind?: string) =>
+    get<Insight[]>(`/api/insights?limit=${limit}${kind ? `&kind=${encodeURIComponent(kind)}` : ""}`),
   subscribe: (symbol: string, market: Market) =>
     post<SymbolInfo>("/api/subscribe", { symbol, market }),
   unsubscribe: (symbol: string, market: Market) =>
@@ -273,7 +274,27 @@ export const api = {
   macro: () => get<Macro>("/api/macro"),
   regimeConditioned: (symbol: string, market: Market) =>
     get<RegimeConditioned>(`/api/regime-conditioned?${q(symbol, market)}`),
+
+  // ── storage-permanence wave: dataset accounting (/quality panel) ──
+  dataStats: () => get<DataStats>("/api/datastats"),
+
+  // ── alerts wave (session-scoped; the API returns 401 when logged out) ──
+  alerts: (unseenOnly = false, limit = 100) =>
+    get<AlertRow[]>(`/api/alerts?limit=${limit}${unseenOnly ? "&unseen=1" : ""}`),
+  markAlertsSeen: () => post<{ ok: boolean; marked: number }>("/api/alerts/seen", {}),
 };
+
+// One per-user alert row (alerts wave).
+export interface AlertRow {
+  id: number;
+  symbol?: string;
+  market?: Market;
+  horizon?: string;
+  kind: "breakout" | "regime_change" | "prediction_high" | "prediction_low" | string;
+  detail: string;
+  ts: number;
+  seen: boolean;
+}
 
 export interface Me {
   id: number;
@@ -516,7 +537,89 @@ export interface PortfolioResponse {
   };
 }
 
+// ── storage-permanence wave: dataset accounting ──
+export interface TableStat {
+  table: string;
+  rows: number;
+  minTs?: number;
+  maxTs?: number;
+}
+export interface DataStats {
+  tables: TableStat[];
+  dbBytes: number;
+  walBytes: number;
+  generatedAt: number;
+}
+
 // usePoll-style helper for client components (simple interval fetcher).
 export function pollMs(): number {
   return 5000;
+}
+
+// ── universe-discovery wave (appended block — keep new client functions at
+// the END of this file so parallel edits by other agents never collide) ──
+
+// One discovered candidate symbol (universe-discovery worker).
+export interface Candidate {
+  symbol: string;
+  market: Market;
+  firstSeenTs: number;
+  lastSeenTs: number;
+  seenCount: number;
+  dollarVol: number;
+  pctChange: number;
+  status: "new" | "added" | "dismissed" | string;
+}
+
+export interface CandidatesResponse {
+  candidates: Candidate[];
+  active: number; // currently active symbols
+  cap: number; // SIGNALDECK_SYMBOL_CAP budget
+  autoAddsToday: number;
+  autoAddDailyLimit: number;
+}
+
+/** Discovered candidates + symbol-budget numbers (status defaults to "new"). */
+export function candidates(status: "new" | "added" | "dismissed" | "all" = "new") {
+  return get<CandidatesResponse>(`/api/candidates?status=${status}`);
+}
+
+/** Promote a candidate: subscribe + this user's watchlist (409 at cap). CSRF header via post(). */
+export function addCandidate(symbol: string, market: Market) {
+  return post<SymbolInfo>("/api/candidates/add", { symbol, market });
+}
+
+/** Dismiss a candidate (sticks across future discovery sweeps). CSRF header via post(). */
+export function dismissCandidate(symbol: string, market: Market) {
+  return post<{ ok: boolean }>("/api/candidates/dismiss", { symbol, market });
+}
+
+// ── learning-flywheel wave (appended block — keep new client functions at
+// the END of this file so parallel edits by other agents never collide) ──
+
+// One regime cell of the model's learned self-knowledge: sample counts,
+// per-leg evidence (hit-rate + IC), and the derived weights — absent when the
+// honesty gate withheld them (n < minSamples, or no leg beat the coin flip).
+export interface AdaptiveCell {
+  n: number;
+  weights?: Record<string, number>;
+  hitRates?: Record<string, number>;
+  ic?: Record<string, number>;
+  legN?: Record<string, number>;
+  gated: boolean;
+}
+export interface AdaptiveWeightsPayload {
+  computedTs: number;
+  cells: Record<string, AdaptiveCell>;
+}
+export interface AdaptiveResponse {
+  available: boolean;
+  minSamples: number;
+  fallback: string;
+  weights?: AdaptiveWeightsPayload;
+}
+
+/** Learned per-regime ensemble weights (the MODEL SELF-KNOWLEDGE panel). */
+export function adaptive() {
+  return get<AdaptiveResponse>("/api/adaptive");
 }

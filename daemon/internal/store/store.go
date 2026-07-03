@@ -26,8 +26,9 @@ var schemaSQL string
 // go through w, a single-connection handle, so concurrent writers queue in Go
 // instead of racing for the SQLite write lock (no SQLITE_BUSY under load).
 type Store struct {
-	db *sql.DB // read pool
-	w  *sql.DB // dedicated single-connection write path
+	db   *sql.DB // read pool
+	w    *sql.DB // dedicated single-connection write path
+	path string  // database file path (for size accounting in DataStats)
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
@@ -56,7 +57,7 @@ func Open(path string) (*Store, error) {
 		w.Close()  //nolint:errcheck
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	return &Store{db: db, w: w}, nil
+	return &Store{db: db, w: w, path: path}, nil
 }
 
 // migrate applies in-place column additions that CREATE TABLE IF NOT EXISTS
@@ -290,8 +291,36 @@ func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timefram
 	return err
 }
 
+// RollupMissing is Rollup with INSERT OR IGNORE: it fills coarse buckets that
+// do not exist yet and never overwrites ones that do. Used by retention
+// compaction, where an already-present 1h bar (e.g. backfilled directly from
+// the source) is authoritative and must not be replaced by an aggregate of
+// possibly-partial finer bars.
+func (s *Store) RollupMissing(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
+	_, err := s.w.ExecContext(ctx, `
+		INSERT OR IGNORE INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
+		SELECT symbol_id, ?, (ts/?)*? AS bts,
+		  (SELECT open FROM bars b2 WHERE b2.symbol_id=b.symbol_id AND b2.tf=b.tf
+		     AND b2.ts/? = b.ts/? ORDER BY b2.ts LIMIT 1),
+		  MAX(high), MIN(low),
+		  (SELECT close FROM bars b3 WHERE b3.symbol_id=b.symbol_id AND b3.tf=b.tf
+		     AND b3.ts/? = b.ts/? ORDER BY b3.ts DESC LIMIT 1),
+		  SUM(volume)
+		FROM bars b
+		WHERE symbol_id=? AND tf=? AND ts>=? AND ts<?
+		GROUP BY bts`,
+		string(dst), bucket, bucket, bucket, bucket, bucket, bucket,
+		symbolID, string(src), from, to)
+	return err
+}
+
 // PruneBars deletes bars of a timeframe older than cutoff (retention).
+// Daily bars are the permanent record and are NEVER pruned — enforced here in
+// code (not just by caller convention) so no future caller can violate it.
 func (s *Store) PruneBars(ctx context.Context, tf md.Timeframe, cutoff int64) (int64, error) {
+	if tf == md.TF1d {
+		return 0, fmt.Errorf("store: daily bars are never pruned (permanence guarantee)")
+	}
 	res, err := s.w.ExecContext(ctx, `DELETE FROM bars WHERE tf=? AND ts<?`, string(tf), cutoff)
 	if err != nil {
 		return 0, err

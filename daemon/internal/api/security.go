@@ -119,8 +119,12 @@ func (d Deps) requiresAuth(path string) bool {
 		path == "/api/subscribe",
 		path == "/api/unsubscribe",
 		strings.HasPrefix(path, "/api/portfolio"),
+		strings.HasPrefix(path, "/api/alerts"),
 		path == "/api/ai/chat",
-		path == "/api/ai/filing":
+		path == "/api/ai/filing",
+		// discovery wave (appended): candidate mutations are session-scoped.
+		path == "/api/candidates/add",
+		path == "/api/candidates/dismiss":
 		return true
 	}
 	return !d.Cfg.PublicReads

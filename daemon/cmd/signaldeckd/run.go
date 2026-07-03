@@ -13,10 +13,13 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/alerts"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/api"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/backup"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/briefing"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/discovery"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/hud"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
@@ -147,6 +150,15 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	fleet = append(fleet, &backup.Worker{
 		St: st, Dir: backupDir, Keep: 7, FirstRunDelay: 5 * time.Minute,
 	})
+	// Alerts + daily-briefing wave (constructor appended at the END of this
+	// file) — must join the fleet BEFORE the watchdog snapshots its specs.
+	fleet = append(fleet, alertBriefingWorkers(st, llmClient)...)
+	// Universe-discovery wave (constructor appended at the END of this file) —
+	// also BEFORE the watchdog spec snapshot so it's health-audited.
+	fleet = append(fleet, discoveryWorkers(cfg, st, alpacaClient, backfiller, streamer)...)
+	// Learning-flywheel wave (constructor appended at the END of this file) —
+	// also BEFORE the watchdog spec snapshot so it's health-audited.
+	fleet = append(fleet, learningWorkers(st)...)
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -265,4 +277,58 @@ func refreshStreamerSymbols(ctx context.Context, st *store.Store, streamer *alpa
 		}
 	}
 	streamer.SetSymbols(stocks)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ALERTS + DAILY-BRIEFING WAVE (appended block).
+// alertBriefingWorkers returns the wave's workers:
+//   - alert-runner (5m): watchlist-scoped alerts from breakouts, regime
+//     changes, and calibrated predictions crossing SIGNALDECK_ALERT_HI/LO,
+//     with a batched macOS notification;
+//   - daily-briefing (10m tick, fires once per day at ~7:00am ET): one
+//     honest market insight composed from stored data only (LLM-polished
+//     when a key is configured, deterministic template otherwise).
+func alertBriefingWorkers(st *store.Store, llmClient llm.Client) []workers.Worker {
+	return []workers.Worker{
+		&alerts.Runner{St: st},
+		&briefing.Worker{St: st, LLM: llmClient},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// UNIVERSE-DISCOVERY WAVE (appended block).
+// discoveryWorkers returns the wave's worker: universe-discovery (6h) sweeps
+// Alpaca's most-actives + movers screeners into the candidates table and,
+// while under the SIGNALDECK_SYMBOL_CAP budget, auto-adds persistent
+// high-dollar-volume candidates through the SAME subscribe path the API
+// uses (validate + upsert + activate + backfill), onto the admin watchlist.
+// Degrades to a skip when no Alpaca keys are configured (like NewsFetcher).
+func discoveryWorkers(cfg config.Config, st *store.Store, ac *alpaca.Client,
+	bf *pipeline.Backfiller, streamer *alpaca.Streamer,
+) []workers.Worker {
+	w := &discovery.Worker{St: st}
+	if cfg.HasAlpaca() {
+		w.Client = discovery.NewClient(cfg.AlpacaKey, cfg.AlpacaSecret)
+		w.Subscribe = func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
+			return subscribe(ctx, st, ac, bf, streamer, symbol, market)
+		}
+	}
+	return []workers.Worker{w}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// LEARNING-FLYWHEEL WAVE (appended block).
+// learningWorkers returns the wave's workers:
+//   - sentiment-aggregator (30m): rolls rated headlines up into the permanent
+//     sentiment_daily archive (today + yesterday, idempotent recompute) — the
+//     4th ensemble component's feature source;
+//   - adaptive-weights (6h): re-attributes resolved outcomes to component
+//     legs per regime cell (hit-rate + IC), derives honesty-gated blend
+//     weights (n>=30 per cell; sentiment needs its own n>=30), persists them
+//     versioned in meta, and writes an insight when weights move materially.
+func learningWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.SentimentAggregator{St: st},
+		&pipeline.AdaptiveWeightsWorker{St: st},
+	}
 }

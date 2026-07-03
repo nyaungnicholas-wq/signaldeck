@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/adaptive"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/breakout"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
@@ -26,11 +28,66 @@ func horizonSecs(h md.Horizon) int64 {
 	return 86400
 }
 
+// featureVersion stamps every persisted feature vector so the layout can
+// evolve without corrupting the historical training set: bump it whenever a
+// field is added/removed/rescaled, and train per version.
+// v2: + sentiment_score / sentiment_n (learning-flywheel wave).
+const featureVersion = 2
+
+// Sentiment feature gates: the daily aggregate joins the blend only when it
+// rests on at least sentimentMinHeadlines rated headlines and is at most
+// sentimentMaxAgeDays old. Thin or stale sentiment is ABSENT, not zero.
+const (
+	sentimentMinHeadlines = 3
+	sentimentMaxAgeDays   = 3
+)
+
+// buildFeatureVector assembles the EXACT inputs used for one prediction into
+// a flat name->value map (the feature store's row payload). Optional signals
+// are simply absent — absence is information, not zero. The regime label is
+// one-hot encoded ("regime_<label>"=1) and the prediction's own raw +
+// calibrated probabilities are included so the labeled set can grade the
+// calibration layer itself.
+func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, nUsed int, regimeLbl string, rankPct *float64, sentN int) map[string]float64 {
+	vec := map[string]float64{
+		"pressure_score": c.PressureScore,
+		"pred_raw":       raw,
+		"pred_cal":       cal,
+		"n_used":         float64(nUsed),
+	}
+	for _, comp := range sc.Components {
+		vec["comp_"+comp.Name] = comp.Contrib
+	}
+	if c.ExpectancyHitRate != nil {
+		vec["expectancy_hit_rate"] = *c.ExpectancyHitRate
+	}
+	if c.ForecastProb != nil {
+		vec["forecast_prob"] = *c.ForecastProb
+	}
+	if c.ForecastLift != nil {
+		vec["forecast_lift"] = *c.ForecastLift
+	}
+	if c.SentimentScore != nil {
+		vec["sentiment_score"] = *c.SentimentScore
+		vec["sentiment_n"] = float64(sentN)
+	}
+	if regimeLbl != "" {
+		vec["regime_"+regimeLbl] = 1
+	}
+	if rankPct != nil {
+		vec["rank_pct"] = *rankPct
+	}
+	return vec
+}
+
 // ── PredictionRunner: the calibrated ensemble ───────────────────────────
 
-// PredictionRunner fuses the pressure score, expectancy tendency, and the
-// backtested forecast into ONE probability, then CALIBRATES it against the
-// symbol's own realized history — the flagship honest prediction.
+// PredictionRunner fuses the pressure score, expectancy tendency, the
+// backtested forecast, and (when fresh and deep enough) the daily sentiment
+// aggregate into ONE probability — blended with per-regime weights LEARNED
+// from resolved outcomes when the honesty gate allows, static equal prior
+// otherwise — then CALIBRATES it against the symbol's own realized history.
+// The flagship honest prediction.
 type PredictionRunner struct {
 	St *store.Store
 }
@@ -44,7 +101,27 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		return "", err
 	}
 	ts := time.Now().Truncate(time.Minute).Unix()
-	n := 0
+	// One-query-per-fleet context for the feature vectors (regime label +
+	// cross-sectional ranking percentile). Best-effort: an error only means
+	// those features are absent from this pass's vectors.
+	regimeLbls, err := w.St.RegimeLabels(ctx)
+	if err != nil {
+		regimeLbls = map[int64]string{}
+	}
+	rankPcts, err := w.St.RankingPercentiles(ctx)
+	if err != nil {
+		rankPcts = map[int64]float64{}
+	}
+	// Adaptive per-regime weights, loaded ONCE per run. Absent/invalid data
+	// simply means adaptive.Pick falls through to the static equal prior —
+	// the exact pre-flywheel behavior.
+	var learned adaptive.Weights
+	if raw, err := w.St.GetMeta(ctx, adaptive.MetaKey); err == nil && raw != "" {
+		if err := json.Unmarshal([]byte(raw), &learned); err != nil {
+			learned = adaptive.Weights{}
+		}
+	}
+	n, featErrs := 0, 0
 	for _, s := range syms {
 		daily, minute, err := loadBars(ctx, w.St, s.ID)
 		if err != nil {
@@ -55,6 +132,16 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		// Sentiment feature (per symbol, shared across horizons): the latest
+		// daily aggregate, only when fresh (<=3 days) AND resting on enough
+		// headlines (n>=3). Best-effort — a read error means "absent".
+		var sentScore *float64
+		sentN := 0
+		if mean, sn, ok, err := w.St.LatestSentiment(ctx, s.ID, sentimentMaxAgeDays); err == nil && ok && sn >= sentimentMinHeadlines {
+			sentScore, sentN = &mean, sn
+		}
+		// Learned weights for THIS symbol's regime cell (nil = static prior).
+		wts, _ := adaptive.Pick(learned, regimeLbls[s.ID])
 		for _, h := range predHorizons {
 			sc, ok, err := w.St.LatestScore(ctx, s.ID, h)
 			if err != nil {
@@ -63,7 +150,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if !ok {
 				continue
 			}
-			c := ensemble.Components{PressureScore: sc.Score}
+			c := ensemble.Components{PressureScore: sc.Score, SentimentScore: sentScore}
 			// Expectancy hit rate for the current state.
 			if rows, err := w.St.Expectancy(ctx, s.ID, h); err == nil {
 				if row, ok := expectancy.Lookup(rows, states[h]); ok {
@@ -78,7 +165,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					c.ForecastProb, c.ForecastLift = &p, &l
 				}
 			}
-			raw, nUsed := ensemble.RawProbability(c)
+			raw, nUsed := ensemble.WeightedProbability(c, wts)
 			cal := raw
 			if probs, ups, err := w.St.ResolvedPredictionPairs(ctx, h, 3000); err == nil && len(probs) > 0 {
 				pairs := make([]ensemble.Pair, len(probs))
@@ -97,9 +184,29 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				return "", err
 			}
 			n++
+			// Feature store: persist the full input vector this prediction
+			// used. Failure must NOT fail the prediction — log + dq metric.
+			var rankPct *float64
+			if pct, ok := rankPcts[s.ID]; ok {
+				rankPct = &pct
+			}
+			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN)
+			if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
+				featErrs++
+				slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)
+				sid := s.ID
+				_ = w.St.InsertDQ(ctx, md.DQEvent{
+					SymbolID: &sid, Ts: time.Now().Unix(),
+					Kind: "feature_store_error", Detail: fmt.Sprintf("horizon %s: %v", h, err),
+				})
+			}
 		}
 	}
-	return fmt.Sprintf("wrote %d predictions over %d symbols", n, len(syms)), nil
+	detail := fmt.Sprintf("wrote %d predictions over %d symbols", n, len(syms))
+	if featErrs > 0 {
+		detail += fmt.Sprintf(" (%d feature-vector write(s) failed — see dq)", featErrs)
+	}
+	return detail, nil
 }
 
 // PredictionResolver grades past predictions (feeds the calibration curve).

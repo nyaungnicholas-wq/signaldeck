@@ -5,7 +5,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { api, pollMs, type Horizon, type Market, type WatchRow } from "@/lib/api";
+import { api, pollMs, type Horizon, type Insight, type Market, type WatchRow } from "@/lib/api";
 import { ago, fmtPct, fmtPrice, fmtScore, scoreColor, verdict } from "@/lib/format";
 import ScoreGauge from "@/components/ScoreGauge";
 import Spark from "@/components/Spark";
@@ -22,6 +22,75 @@ const SORTS: { k: SortKey; label: string }[] = [
 ];
 
 const keyOf = (symbol: string, market: Market) => `${market}:${symbol.toUpperCase()}`;
+
+/** Today's date key in America/New_York (the daily-briefing worker's clock). */
+function nyToday(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+}
+
+/** Pinned "Daily briefing" card — shown only when TODAY's briefing insight
+ *  exists (kind=daily_briefing, matched on the NY day key in its data blob). */
+function DailyBriefingCard() {
+  const [briefing, setBriefing] = useState<Insight | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .insights(1, "daily_briefing")
+        .then((ins) => {
+          if (!alive) return;
+          const today = nyToday();
+          const hit = ins.find((i) => {
+            try {
+              return (JSON.parse(i.data) as { day?: string }).day === today;
+            } catch {
+              return false;
+            }
+          });
+          setBriefing(hit ?? null);
+        })
+        .catch(() => alive && setBriefing(null)); // silent: card simply hides
+    load();
+    const t = setInterval(load, 60000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  if (!briefing) return null;
+  return (
+    <section
+      aria-label="daily briefing"
+      className="panel px-4 py-3 sm:px-5"
+      style={{ borderColor: "var(--accent)" }}
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span
+          className="chip px-2 py-[2px] text-[0.72rem] tracking-wider"
+          style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
+        >
+          DAILY BRIEFING
+        </span>
+        <span className="text-[0.85rem] font-bold tracking-wide">{briefing.headline}</span>
+        <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
+          {ago(briefing.ts)}
+        </span>
+      </div>
+      <p className="mt-2 text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+        {briefing.body}
+      </p>
+      <Link
+        href="/insights"
+        className="mt-2 inline-flex min-h-[40px] cursor-pointer items-center text-[0.75rem] tracking-wider transition-colors duration-150 hover:text-[var(--accent)]"
+        style={{ color: "var(--faint)" }}
+      >
+        all insights →
+      </Link>
+    </section>
+  );
+}
 
 function scoreFor(r: WatchRow, h: Horizon): number | null {
   const s = r.scores?.[h]?.score;
@@ -172,6 +241,9 @@ export default function WatchlistPage() {
         .wl-add:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
         .wl-add:disabled { color: var(--faint); cursor: default; }
       `}</style>
+
+      {/* pinned daily briefing (renders only when today's briefing exists) */}
+      <DailyBriefingCard />
 
       {/* header row: title + contextual chips + add-symbol box */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">

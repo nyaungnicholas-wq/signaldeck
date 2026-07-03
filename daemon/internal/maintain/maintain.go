@@ -15,10 +15,18 @@ import (
 
 // ── Downsampler ─────────────────────────────────────────────────────────
 
-// Downsampler rolls 1m bars into 1h and enforces retention. It NEVER builds
-// daily bars from intraday rollups — official daily bars come from the
-// sources (Alpaca 1Day, Kraken interval=1440), so a partial trading day can
-// never masquerade as a real daily bar.
+// Downsampler rolls 1m bars into 1h and enforces retention with COMPACTION,
+// not deletion: every 1m bar past retention is rolled into its 1h bucket
+// BEFORE it is pruned, so information is compacted, never lost. Daily bars
+// are never pruned (enforced in store.PruneBars, not just here). It NEVER
+// builds daily bars from intraday rollups — official daily bars come from
+// the sources (Alpaca 1Day, Kraken interval=1440), so a partial trading day
+// can never masquerade as a real daily bar.
+//
+// snapshots_1s keep plain pruning: they are bid/ask quote midpoints, not
+// trades, so "rolling them up" into 1m OHLCV would fabricate bars that
+// collide with the real exchange 1m bars already ingested. High volume, low
+// value — deleted after KeepSnaps by design.
 type Downsampler struct {
 	St *store.Store
 	// retention
@@ -60,7 +68,31 @@ func (d *Downsampler) Run(ctx context.Context) (string, error) {
 	if keepSnaps == 0 {
 		keepSnaps = 7 * 24 * time.Hour
 	}
-	prunedBars, err := d.St.PruneBars(ctx, md.TF1m, now.Add(-keep1m).Unix())
+	// COMPACTION, NOT DELETION: before pruning 1m bars past retention, roll
+	// every one of them into its 1h bucket so the information survives in
+	// compact form. The prune cutoff is aligned DOWN to an hour boundary so
+	// (a) every pruned minute sits inside a bucket the rollup fully covered,
+	// and (b) no partially-covered bucket is ever written (same invariant as
+	// the recent-window rollup above). Only symbols that actually hold 1m
+	// bars older than the cutoff pay the rollup cost — after the first pass
+	// their history is compacted and this is a no-op.
+	cutoff1m := (now.Add(-keep1m).Unix() / 3600) * 3600
+	for _, s := range syms {
+		n, minTs, _, err := d.St.BarCount(ctx, s.ID, md.TF1m)
+		if err != nil {
+			return "", err
+		}
+		if n == 0 || minTs >= cutoff1m {
+			continue // nothing older than retention; nothing to compact
+		}
+		fromOld := (minTs / 3600) * 3600
+		// OR IGNORE: an already-present 1h bar (backfilled from the source)
+		// is authoritative; only fill buckets that would otherwise be lost.
+		if err := d.St.RollupMissing(ctx, s.ID, md.TF1m, md.TF1h, 3600, fromOld, cutoff1m); err != nil {
+			return "", fmt.Errorf("compaction rollup %s: %w", s.Symbol, err)
+		}
+	}
+	prunedBars, err := d.St.PruneBars(ctx, md.TF1m, cutoff1m)
 	if err != nil {
 		return "", err
 	}

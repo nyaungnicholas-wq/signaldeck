@@ -4,11 +4,24 @@
 // Honest framing: if it's not on this page, we didn't measure it.
 
 import { Fragment, useEffect, useState } from "react";
-import { api, pollMs, type Quality, type DQEvent } from "@/lib/api";
+import { api, pollMs, type Quality, type DQEvent, type DataStats } from "@/lib/api";
 import { ago, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+
+// fmtBytes renders a byte count in the tightest sensible unit.
+function fmtBytes(n: number): string {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
 
 const TFS = ["1m", "1h", "1d"] as const;
 
@@ -65,11 +78,13 @@ function IncidentRow({ ev }: { ev: DQEvent }) {
 export default function QualityPage() {
   const [data, setData] = useState<Quality | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [stats, setStats] = useState<DataStats | null>(null);
+  const [statsErr, setStatsErr] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    const load = () =>
+    const load = () => {
       api
         .quality()
         .then((d) => {
@@ -81,6 +96,18 @@ export default function QualityPage() {
           if (!alive) return;
           setErr(e instanceof Error ? e.message : String(e));
         });
+      api
+        .dataStats()
+        .then((d) => {
+          if (!alive) return;
+          setStats(d);
+          setStatsErr(null);
+        })
+        .catch((e: unknown) => {
+          if (!alive) return;
+          setStatsErr(e instanceof Error ? e.message : String(e));
+        });
+    };
     load();
     const t = setInterval(load, pollMs());
     return () => {
@@ -246,6 +273,75 @@ export default function QualityPage() {
           </section>
         </div>
       )}
+
+      {/* Data growth — dataset accounting (storage-permanence wave). */}
+      <section className="panel">
+        <div className="panel-h">
+          DATA GROWTH — NOTHING IS THROWN AWAY
+          {stats && (
+            <span
+              className="ml-auto flex items-center gap-2 text-[0.75rem] normal-case tracking-normal tnum"
+              style={{ color: "var(--faint)" }}
+            >
+              <span className="chip tnum">db {fmtBytes(stats.dbBytes)}</span>
+              <span className="chip tnum">wal {fmtBytes(stats.walBytes)}</span>
+            </span>
+          )}
+        </div>
+        {statsErr && !stats && (
+          <div className="px-4 py-3 text-[0.78rem]" style={{ color: "var(--bad)" }}>
+            data stats unavailable · {statsErr}
+          </div>
+        )}
+        {!statsErr && !stats && <Skeleton lines={3} label="loading data stats" />}
+        {stats && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[0.8rem]">
+              <thead>
+                <tr
+                  className="text-left text-[0.75rem] tracking-wide"
+                  style={{ color: "var(--faint)" }}
+                >
+                  <th className="px-4 py-2 font-medium">TABLE</th>
+                  <th className="px-2 py-2 text-right font-medium" title="Row count">
+                    ROWS
+                  </th>
+                  <th className="px-2 py-2 font-medium" title="Oldest record">
+                    OLDEST
+                  </th>
+                  <th className="px-4 py-2 font-medium" title="Newest record">
+                    NEWEST
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="tnum">
+                {[...stats.tables]
+                  .sort((a, b) => b.rows - a.rows)
+                  .map((t) => (
+                    <tr key={t.table} style={{ borderTop: "1px solid var(--border)" }}>
+                      <td className="px-4 py-1.5 font-semibold" style={{ color: "var(--text)" }}>
+                        {t.table}
+                      </td>
+                      <td className="px-2 py-1.5 text-right">
+                        {t.rows > 0 ? (
+                          t.rows.toLocaleString("en-US")
+                        ) : (
+                          <span style={{ color: "var(--faint)" }}>0</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5 whitespace-nowrap" style={{ color: "var(--dim)" }}>
+                        {t.minTs ? fmtDate(t.minTs) : "—"}
+                      </td>
+                      <td className="px-4 py-1.5 whitespace-nowrap" style={{ color: "var(--dim)" }}>
+                        {t.maxTs ? fmtDate(t.maxTs) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

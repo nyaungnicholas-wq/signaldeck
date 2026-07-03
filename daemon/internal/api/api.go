@@ -61,6 +61,12 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/export/bars.csv", d.exportBars)
 	mux.HandleFunc("GET /api/export/scores.csv", d.exportScores)
 	mux.HandleFunc("GET /api/export/outcomes.csv", d.exportOutcomes)
+	// ── storage-permanence wave (appended — keep new routes at the END of
+	// this block so parallel route edits by other agents never collide) ──
+	mux.HandleFunc("GET /api/datastats", d.datastats)      // dataset accounting (read, gated like other reads)
+	d.registerAlerts(mux)                                  // alerts wave: per-user alerts list + mark-seen
+	d.registerDiscovery(mux)                               // discovery wave: candidates list/add/dismiss
+	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights) // learning-flywheel wave: learned per-regime ensemble weights
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,
@@ -508,6 +514,16 @@ func (d Deps) insights(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 200 {
 		limit = 50
+	}
+	// ?kind= filters on the evidence blob's data.kind (e.g. daily_briefing).
+	if kind := r.URL.Query().Get("kind"); kind != "" {
+		ins, err := d.St.InsightsByKind(r.Context(), kind, limit)
+		if err != nil {
+			httpErr(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, ins)
+		return
 	}
 	ins, err := d.St.RecentInsights(r.Context(), symbolID, limit)
 	if err != nil {

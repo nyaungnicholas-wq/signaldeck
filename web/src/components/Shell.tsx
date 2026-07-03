@@ -59,6 +59,62 @@ function ReadingModeToggle() {
   );
 }
 
+/** Header bell: unread-alert count, polled every 30s. Hidden while logged
+ *  out (the alerts endpoint is session-scoped and returns 401). Links to
+ *  the /alerts page. */
+function AlertsBell() {
+  const [count, setCount] = useState<number | null>(null); // null = hide
+
+  useEffect(() => {
+    let alive = true;
+    let paused = false; // after a 401/offline, stop the 30s cadence…
+    const load = () =>
+      api
+        .alerts(true, 100)
+        .then((rows) => {
+          if (!alive) return;
+          paused = false;
+          setCount(rows.length);
+        })
+        .catch(() => {
+          if (!alive) return;
+          paused = true; // …and only re-probe on focus/seen events
+          setCount(null); // 401 / offline → hide
+        });
+    load();
+    const t = setInterval(() => {
+      if (!paused) load();
+    }, 30000);
+    const onSeen = () => load(); // refresh immediately after "mark all read"
+    const onFocus = () => {
+      if (paused) load(); // cheap re-probe after logging in on another page
+    };
+    window.addEventListener("sd-alerts-seen", onSeen);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      alive = false;
+      clearInterval(t);
+      window.removeEventListener("sd-alerts-seen", onSeen);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
+  if (count === null) return null;
+  return (
+    <Link
+      href="/alerts"
+      aria-label={`alerts — ${count} unread`}
+      title={`${count} unread alert(s)`}
+      className="chip flex min-h-[40px] cursor-pointer items-center gap-1.5 px-3 transition-colors duration-150 hover:text-[var(--text)]"
+      style={count > 0 ? { color: "var(--accent)", borderColor: "var(--accent)" } : undefined}
+    >
+      <span aria-hidden="true">◉</span>
+      <span className="tnum">{count}</span>
+      <span className="hidden sm:inline">alerts</span>
+    </Link>
+  );
+}
+
 /** App chrome: brand bar + nav + daemon connectivity dot. */
 export default function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -127,6 +183,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             {navLinks}
           </nav>
           <div className="ml-auto flex items-center gap-2 text-[0.75rem]" style={{ color: "var(--dim)" }}>
+            <AlertsBell />
             <ReadingModeToggle />
             <span className="flex items-center gap-2">
               <span

@@ -75,6 +75,51 @@ type Components struct {
 	// <= 0 (or nil) means the forecast has no demonstrated edge, so
 	// ForecastProb is dropped from the blend regardless of its value.
 	ForecastLift *float64
+	// SentimentScore is the mean daily news-sentiment score in [-1, +1]
+	// (bearish..bullish), nil when no fresh aggregate exists. Converted via
+	// 0.5 + score*SentimentScale — a deliberately conservative mapping: even
+	// maximal sentiment only moves this leg SentimentScale away from coin-
+	// flip, because headline tone is a weak, noisy signal until the adaptive
+	// layer measures otherwise.
+	SentimentScore *float64
+}
+
+// SentimentScale converts a sentiment score in [-1,1] to a probability leg:
+// p = 0.5 + score*SentimentScale. Kept small on purpose (honesty doctrine:
+// an unproven signal must not be able to dominate the blend on its own).
+const SentimentScale = 0.15
+
+// Canonical component (leg) names used by LegProbabilities and
+// WeightedProbability. Exported so the adaptive-weights layer and this
+// package can never drift apart on naming.
+const (
+	LegPressure   = "pressure"
+	LegExpectancy = "expectancy"
+	LegForecast   = "forecast"
+	LegSentiment  = "sentiment"
+)
+
+// LegNames lists every possible component leg in canonical order.
+var LegNames = []string{LegPressure, LegExpectancy, LegForecast, LegSentiment}
+
+// LegProbabilities converts each AVAILABLE component to its 0..1
+// up-probability leg, keyed by canonical leg name. Exactly the legs that
+// RawProbability would blend are returned (pressure always; expectancy when
+// present; forecast only with demonstrated edge; sentiment when present).
+func LegProbabilities(c Components) map[string]float64 {
+	legs := map[string]float64{
+		LegPressure: clamp01((c.PressureScore + 1) / 2),
+	}
+	if c.ExpectancyHitRate != nil {
+		legs[LegExpectancy] = clamp01(*c.ExpectancyHitRate)
+	}
+	if c.ForecastProb != nil && c.ForecastLift != nil && *c.ForecastLift > 0 {
+		legs[LegForecast] = clamp01(*c.ForecastProb)
+	}
+	if c.SentimentScore != nil {
+		legs[LegSentiment] = clamp01(0.5 + *c.SentimentScore*SentimentScale)
+	}
+	return legs
 }
 
 // RawProbability converts each available component to a 0..1 up-probability and
@@ -87,33 +132,57 @@ type Components struct {
 //   - ForecastProb in [0,1] -> used as-is, but ONLY when ForecastLift is
 //     non-nil AND *ForecastLift > 0. An edgeless or absent forecast is dropped
 //     so it cannot pollute the blend.
+//   - SentimentScore in [-1,1] -> 0.5 + score*SentimentScale (contributes when
+//     non-nil). Absent sentiment leaves the blend exactly as before.
 //
 // The returned probability is clamped to [0,1]. If no component contributes
 // (which cannot happen while PressureScore is always counted, but is handled
 // defensively), prob=0.5 and nUsed=0 — a neutral, information-free prior.
 func RawProbability(c Components) (prob float64, nUsed int) {
-	var sum float64
-	var n int
-
-	// Pressure score is always present.
-	sum += clamp01((c.PressureScore + 1) / 2)
-	n++
-
-	if c.ExpectancyHitRate != nil {
-		sum += clamp01(*c.ExpectancyHitRate)
-		n++
-	}
-
-	// Forecast contributes only with demonstrated edge.
-	if c.ForecastProb != nil && c.ForecastLift != nil && *c.ForecastLift > 0 {
-		sum += clamp01(*c.ForecastProb)
-		n++
-	}
-
-	if n == 0 {
+	legs := LegProbabilities(c)
+	if len(legs) == 0 {
 		return 0.5, 0
 	}
-	return clamp01(sum / float64(n)), n
+	var sum float64
+	for _, p := range legs {
+		sum += p
+	}
+	return clamp01(sum / float64(len(legs))), len(legs)
+}
+
+// WeightedProbability blends the available component legs using the given
+// per-leg weights (keyed by canonical leg name; see LegNames) and returns the
+// weighted mean plus how many legs contributed.
+//
+// Fallback semantics (the honesty gates live UPSTREAM in the adaptive layer —
+// this function only refuses to invent weight where none applies):
+//   - weights nil or empty -> identical to RawProbability (equal-weight mean).
+//   - the weights carry no positive mass over the AVAILABLE legs -> identical
+//     to RawProbability (learned weights for absent legs say nothing about the
+//     legs that are actually present).
+//
+// A leg with weight <= 0 (or missing from the map) contributes nothing and is
+// not counted in nUsed. Pure function; the result is clamped to [0,1].
+func WeightedProbability(c Components, weights map[string]float64) (prob float64, nUsed int) {
+	if len(weights) == 0 {
+		return RawProbability(c)
+	}
+	legs := LegProbabilities(c)
+	var sum, wsum float64
+	var n int
+	for name, p := range legs {
+		w := weights[name]
+		if w <= 0 {
+			continue
+		}
+		sum += w * p
+		wsum += w
+		n++
+	}
+	if wsum <= 0 {
+		return RawProbability(c)
+	}
+	return clamp01(sum / wsum), n
 }
 
 // Pair is one graded prediction: a raw predicted up-probability (Pred, in

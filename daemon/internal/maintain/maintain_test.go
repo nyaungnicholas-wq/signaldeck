@@ -36,7 +36,7 @@ func TestOutcomeResolverBaseAlignedNotUTCMidnight(t *testing.T) {
 
 	// Three consecutive daily bars, each opening at 05:00 UTC, 5+ days ago so
 	// the 1d window is fully mature relative to time.Now().
-	base := time.Now().UTC().Truncate(24*time.Hour).Add(-6*24*time.Hour).Add(5*time.Hour).Unix()
+	base := time.Now().UTC().Truncate(24 * time.Hour).Add(-6 * 24 * time.Hour).Add(5 * time.Hour).Unix()
 	bars := []md.Bar{
 		{SymbolID: sym.ID, TF: md.TF1d, Ts: base, Open: 100, High: 100, Low: 100, Close: 100},
 		{SymbolID: sym.ID, TF: md.TF1d, Ts: base + 86400, Open: 110, High: 110, Low: 110, Close: 110},
@@ -98,7 +98,7 @@ func TestOutcomeResolverPerHorizonNoStarve(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 50; i++ {
-		ts := now.Add(-time.Duration(i)*time.Minute).Unix() // recent → immature for 1w
+		ts := now.Add(-time.Duration(i) * time.Minute).Unix() // recent → immature for 1w
 		if err := st.InsertScore(ctx, md.Score{SymbolID: sym.ID, Horizon: md.H1w, Ts: ts, Score: 0.1}); err != nil {
 			t.Fatal(err)
 		}
@@ -113,5 +113,104 @@ func TestOutcomeResolverPerHorizonNoStarve(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("mature 1d outcome should resolve despite the 1w backlog; got %d", len(got))
+	}
+}
+
+// ── storage-permanence wave: compaction, not deletion ───────────────────
+
+// Minute bars past retention must be rolled into hourly bars BEFORE they are
+// pruned — pruning without a surviving rollup would be data loss.
+func TestDownsamplerCompactsMinutesBeforePruning(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Two full hours of 1m bars ~100 days old (well past the 90d default),
+	// aligned to hour boundaries so expectations are exact.
+	old := ((time.Now().Add(-100 * 24 * time.Hour).Unix()) / 3600) * 3600
+	var bars []md.Bar
+	for m := int64(0); m < 120; m++ {
+		ts := old + m*60
+		bars = append(bars, md.Bar{
+			SymbolID: sym.ID, TF: md.TF1m, Ts: ts,
+			Open: float64(100 + m), High: float64(105 + m), Low: float64(95 + m),
+			Close: float64(101 + m), Volume: 2,
+		})
+	}
+	// A daily bar in the same ancient range: must survive no matter what.
+	bars = append(bars, md.Bar{SymbolID: sym.ID, TF: md.TF1d, Ts: old, Open: 1, High: 1, Low: 1, Close: 1})
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := (&Downsampler{St: st}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1m bars past retention are gone…
+	mins, err := st.Bars(ctx, sym.ID, md.TF1m, 0, old+7200, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mins) != 0 {
+		t.Fatalf("old 1m bars must be pruned, %d remain", len(mins))
+	}
+	// …but ONLY because their hourly rollup now exists (compaction).
+	hours, err := st.Bars(ctx, sym.ID, md.TF1h, old, old+7200, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hours) != 2 {
+		t.Fatalf("want 2 hourly rollup bars covering the pruned minutes, got %d", len(hours))
+	}
+	// OHLCV of hour 0: first open, max high, min low, last close, sum volume.
+	h0 := hours[0]
+	if h0.Open != 100 || h0.High != 105+59 || h0.Low != 95 || h0.Close != 101+59 || h0.Volume != 120 {
+		t.Fatalf("hour-0 rollup wrong: %+v", h0)
+	}
+	// Daily bars are NEVER pruned.
+	daily, err := st.Bars(ctx, sym.ID, md.TF1d, 0, old+86400, 0)
+	if err != nil || len(daily) != 1 {
+		t.Fatalf("daily bar must survive retention: err=%v n=%d", err, len(daily))
+	}
+}
+
+// A pre-existing (source-backfilled) hourly bar in the compacted range is
+// authoritative: compaction must fill only the MISSING hours, not overwrite.
+func TestDownsamplerCompactionKeepsAuthoritativeHourlyBars(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	sym, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := ((time.Now().Add(-100 * 24 * time.Hour).Unix()) / 3600) * 3600
+	if err := st.UpsertBars(ctx, []md.Bar{
+		// Source 1h bar for the hour…
+		{SymbolID: sym.ID, TF: md.TF1h, Ts: old, Open: 500, High: 500, Low: 500, Close: 500, Volume: 999},
+		// …plus a lone 1m bar inside it (a partial-coverage trap: aggregating
+		// it would produce a WRONG hourly bar).
+		{SymbolID: sym.ID, TF: md.TF1m, Ts: old + 60, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := (&Downsampler{St: st}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	hours, err := st.Bars(ctx, sym.ID, md.TF1h, old, old+3600, 0)
+	if err != nil || len(hours) != 1 {
+		t.Fatalf("want the 1 hourly bar: err=%v n=%d", err, len(hours))
+	}
+	if hours[0].Close != 500 || hours[0].Volume != 999 {
+		t.Fatalf("compaction overwrote an authoritative source 1h bar: %+v", hours[0])
+	}
+	mins, err := st.Bars(ctx, sym.ID, md.TF1m, 0, old+3600, 0)
+	if err != nil || len(mins) != 0 {
+		t.Fatalf("old 1m bar should still be pruned: err=%v n=%d", err, len(mins))
 	}
 }

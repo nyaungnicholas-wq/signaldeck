@@ -240,3 +240,81 @@ CREATE TABLE IF NOT EXISTS user_symbols (
   added_ts  INTEGER,
   PRIMARY KEY (user_id, symbol_id)
 );
+
+-- ── storage-permanence wave (appended block — keep at END of file so ──────
+-- ── parallel schema edits by other agents never collide) ─────────────────
+
+-- Feature store: the EXACT input vector the ensemble used for a prediction,
+-- persisted at prediction time. Joined to prediction_outcomes it becomes an
+-- ever-growing labeled training set (no lookahead, no recompute drift).
+-- NEVER pruned.
+CREATE TABLE IF NOT EXISTS features (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  horizon   TEXT NOT NULL,
+  ts        INTEGER NOT NULL,
+  version   INTEGER NOT NULL DEFAULT 1,
+  vec       TEXT NOT NULL,           -- JSON object of name -> float64
+  UNIQUE (symbol_id, horizon, ts, version)
+);
+CREATE INDEX IF NOT EXISTS idx_features_sym_h_ts ON features (symbol_id, horizon, ts);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- ALERTS WAVE (appended block — do not merge into the sections above).
+-- Per-user actionable alerts derived from breakout events, regime changes,
+-- and calibrated predictions crossing conviction thresholds. seen=0 rows
+-- drive the web bell badge; POST /api/alerts/seen flips them.
+CREATE TABLE IF NOT EXISTS alerts (
+  id        INTEGER PRIMARY KEY,
+  user_id   INTEGER NOT NULL,
+  symbol_id INTEGER,
+  horizon   TEXT,
+  kind      TEXT NOT NULL,  -- breakout | regime_change | prediction_high | prediction_low
+  detail    TEXT NOT NULL DEFAULT '',
+  ts        INTEGER NOT NULL,
+  seen      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_user ON alerts (user_id, seen, ts DESC);
+-- Idempotency: a partially-failed sweep re-reads events from the unadvanced
+-- cursor, so re-inserting the same event must be a no-op (INSERT OR IGNORE
+-- against this key). COALESCE because symbol_id/horizon are nullable and
+-- SQLite treats NULLs as distinct in unique indexes.
+-- detail is part of the key: two breakout KINDS on the same bar (donchian +
+-- volume_spike) share (user,kind,ts,symbol) and differ only in detail.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_dedup
+  ON alerts (user_id, kind, ts, COALESCE(symbol_id, 0), COALESCE(horizon, ''), detail);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- LEARNING-FLYWHEEL WAVE (appended block — do not merge into sections above).
+-- Daily per-symbol sentiment aggregates: rated news rows rolled up into a
+-- permanent time series (day = YYYY-MM-DD UTC of the article timestamp).
+-- This is the sentiment FEATURE the ensemble consumes — never pruned, so the
+-- archive only grows. Recomputed idempotently by the sentiment-aggregator.
+CREATE TABLE IF NOT EXISTS sentiment_daily (
+  symbol_id  INTEGER NOT NULL,
+  day        TEXT NOT NULL,               -- YYYY-MM-DD (UTC)
+  n          INTEGER NOT NULL,            -- rated headlines that day
+  mean_score REAL NOT NULL,               -- mean sentiment score, [-1,+1]
+  pos        INTEGER NOT NULL DEFAULT 0,  -- bullish count
+  neg        INTEGER NOT NULL DEFAULT 0,  -- bearish count
+  neu        INTEGER NOT NULL DEFAULT 0,  -- neutral count
+  PRIMARY KEY (symbol_id, day)
+) WITHOUT ROWID;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- UNIVERSE-DISCOVERY WAVE (appended block — do not merge into sections above).
+-- Candidate symbols surfaced by the universe-discovery worker (Alpaca
+-- most-actives / movers screeners). status: new (awaiting review/auto-add),
+-- added (promoted into `symbols`), dismissed (operator said no).
+CREATE TABLE IF NOT EXISTS candidates (
+  symbol        TEXT NOT NULL,
+  market        TEXT NOT NULL DEFAULT 'stocks',
+  first_seen_ts INTEGER NOT NULL,
+  last_seen_ts  INTEGER NOT NULL,
+  seen_count    INTEGER NOT NULL DEFAULT 1,
+  dollar_vol    REAL NOT NULL DEFAULT 0,
+  pct_change    REAL NOT NULL DEFAULT 0,
+  status        TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','added','dismissed')),
+  PRIMARY KEY (symbol, market)
+);
+CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates (status, dollar_vol DESC);
