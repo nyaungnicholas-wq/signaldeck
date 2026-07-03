@@ -9,6 +9,8 @@ const NAV: { href: string; label: string }[] = [
   { href: "/", label: "WATCHLIST" },
   { href: "/screener", label: "SCREENER" },
   { href: "/trends", label: "TRENDS" },
+  { href: "/predict", label: "PREDICT" },
+  { href: "/regime", label: "REGIME" },
   { href: "/forecast", label: "FORECAST" },
   { href: "/backtest", label: "BACKTEST" },
   { href: "/risk", label: "RISK" },

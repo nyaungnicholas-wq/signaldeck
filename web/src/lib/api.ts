@@ -245,7 +245,71 @@ export const api = {
   aiAnalyst: () => get<AnalystBrief>("/api/ai/analyst"),
   aiChat: (question: string) => post<ChatAnswer>("/api/ai/chat", { question }),
   aiFiling: (text: string) => post<FilingResult>("/api/ai/filing", { text }),
+
+  // ── prediction + trends ──
+  predictions: (symbol: string, market: Market) =>
+    get<Record<string, Prediction>>(`/api/predictions?${q(symbol, market)}`),
+  calibration: (horizon: "1d" | "1w") => get<Calibration>(`/api/calibration?horizon=${horizon}`),
+  regime: () => get<RegimeResponse>("/api/regime"),
+  ranking: () => get<RankedRow[]>("/api/ranking"),
+  breakouts: () => get<BreakoutRow[]>("/api/breakouts"),
 };
+
+export interface Prediction {
+  horizon: Horizon;
+  ts: number;
+  rawProb: number;
+  calProb: number;
+  nUsed: number;
+  components: string;
+}
+export interface CalBin {
+  Lo: number;
+  Hi: number;
+  MeanPred: number;
+  MeanActual: number;
+  N: number;
+}
+export interface Calibration {
+  horizon: Horizon;
+  n: number;
+  bins: CalBin[];
+  brier: number;
+  reliability: number;
+}
+export interface RegimeState {
+  symbol: string;
+  market: Market;
+  ts: number;
+  label: string;
+  strength: number;
+  note: string;
+}
+export interface RegimeChange {
+  symbol: string;
+  ts: number;
+  from: string;
+  to: string;
+}
+export interface RegimeResponse {
+  states: RegimeState[] | null;
+  changes: RegimeChange[] | null;
+}
+export interface RankedRow {
+  symbol: string;
+  market: Market;
+  score: number;
+  rank: number;
+  ret1m: number;
+  ret3m: number;
+}
+export interface BreakoutRow {
+  symbol: string;
+  ts: number;
+  kind: string;
+  detail: string;
+  strength: number;
+}
 
 export interface AIStats {
   day: string;
