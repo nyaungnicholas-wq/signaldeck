@@ -1,8 +1,9 @@
-// Typed client for the SignalDeck daemon API (:8322). Every page goes
-// through this module — it is the single source of truth for shapes.
-
-export const API_BASE =
-  process.env.NEXT_PUBLIC_SIGNALDECK_API ?? "http://127.0.0.1:8322";
+// Typed client for the SignalDeck API. Every page goes through this module.
+// Default is same-origin ("") — the Next.js app proxies /api/* to the daemon
+// (see next.config.ts), so the browser only ever talks to one host (:8323)
+// and the daemon port stays internal. Override with NEXT_PUBLIC_SIGNALDECK_API
+// only if you want the browser to hit the daemon directly.
+export const API_BASE = process.env.NEXT_PUBLIC_SIGNALDECK_API ?? "";
 
 export type Market = "crypto" | "stocks";
 export type Horizon = "1h" | "1d" | "1w";
