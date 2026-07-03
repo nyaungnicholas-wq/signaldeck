@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -224,18 +225,6 @@ func (a *DQAuditor) Name() string { return "dq-auditor" }
 // Interval implements workers.Worker.
 func (a *DQAuditor) Interval() time.Duration { return 5 * time.Minute }
 
-// usMarketLikelyOpen is a deliberately loose Mon–Fri 13:00–21:30 UTC window
-// (covers EST/EDT regular hours). Staleness of stock bars outside it is
-// normal, not an incident. Documented imprecision beats a tz dependency.
-func usMarketLikelyOpen(t time.Time) bool {
-	u := t.UTC()
-	if wd := u.Weekday(); wd == time.Saturday || wd == time.Sunday {
-		return false
-	}
-	mins := u.Hour()*60 + u.Minute()
-	return mins >= 13*60 && mins <= 21*60+30
-}
-
 // Run checks freshness for every active symbol.
 func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 	syms, err := a.St.ListSymbols(ctx, true)
@@ -257,8 +246,12 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 			stale = latest > 0 && age > 45*60 // Kraken minute refresh cadence + slack
 			detail = fmt.Sprintf("last 1m bar %dm old (crypto trades 24/7)", age/60)
 		case md.Stocks:
-			stale = latest > 0 && age > 20*60 && usMarketLikelyOpen(now)
-			detail = fmt.Sprintf("last 1m bar %dm old during likely market hours", age/60)
+			// Only an incident when the NYSE is actually open for bars:
+			// marketcal excludes weekends, holidays, and post-close hours,
+			// and closes half-days at 1:00pm ET — so a market holiday like
+			// July 4th no longer false-flags every symbol.
+			stale = latest > 0 && age > 20*60 && marketcal.OpenForBars(now)
+			detail = fmt.Sprintf("last 1m bar %dm old during market hours", age/60)
 		}
 		if !stale {
 			continue
