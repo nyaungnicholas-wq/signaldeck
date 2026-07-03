@@ -50,7 +50,7 @@ func TestCorrelationBreaks_DecouplingPair(t *testing.T) {
 		t.Fatalf("want exactly 1 break, got %d: %+v", len(got), got)
 	}
 	brk := got[0]
-	if !((brk.A == "A" && brk.B == "B") || (brk.A == "B" && brk.B == "A")) {
+	if (brk.A != "A" || brk.B != "B") && (brk.A != "B" || brk.B != "A") {
 		t.Fatalf("unexpected pair: %+v", brk)
 	}
 	if brk.Delta >= -CorrBreakThreshold {
@@ -256,4 +256,60 @@ func abs(f float64) float64 {
 		return -f
 	}
 	return f
+}
+
+// TestAlignByTs_GapAlignment: a symbol missing a bar in the middle must be
+// aligned on shared timestamps, not by index — the exact bug min-length
+// truncation had.
+func TestAlignByTs_GapAlignment(t *testing.T) {
+	a := Series{
+		Symbol: "A",
+		Ts:     []int64{1, 2, 3, 4, 5},
+		Closes: []float64{10, 11, 12, 13, 14},
+	}
+	b := Series{ // missing ts=3 (halt day)
+		Symbol: "B",
+		Ts:     []int64{1, 2, 4, 5},
+		Closes: []float64{20, 21, 23, 24},
+	}
+	got := AlignByTs([]Series{a, b})
+	wantA := []float64{10, 11, 13, 14} // ts 1,2,4,5
+	wantB := []float64{20, 21, 23, 24}
+	if len(got[0]) != 4 || len(got[1]) != 4 {
+		t.Fatalf("want len 4, got %d/%d", len(got[0]), len(got[1]))
+	}
+	for i := range wantA {
+		if got[0][i] != wantA[i] || got[1][i] != wantB[i] {
+			t.Fatalf("misaligned at %d: got %v/%v want %v/%v",
+				i, got[0][i], got[1][i], wantA[i], wantB[i])
+		}
+	}
+}
+
+// TestAlignByTs_FallbackWithoutTs: series without timestamps keep the old
+// tail-truncation behavior.
+func TestAlignByTs_FallbackWithoutTs(t *testing.T) {
+	a := Series{Symbol: "A", Closes: []float64{1, 2, 3, 4, 5}}
+	b := Series{Symbol: "B", Closes: []float64{7, 8, 9}}
+	got := AlignByTs([]Series{a, b})
+	if len(got[0]) != 3 || len(got[1]) != 3 {
+		t.Fatalf("want len 3, got %d/%d", len(got[0]), len(got[1]))
+	}
+	if got[0][0] != 3 { // tail of A
+		t.Fatalf("fallback must keep the most recent bars, got %v", got[0])
+	}
+}
+
+// TestAlignByTs_NoSharedTimestamps: disjoint histories align to empty, and
+// CorrelationBreaks then reports nothing rather than fabricating pairs.
+func TestAlignByTs_NoSharedTimestamps(t *testing.T) {
+	a := Series{Symbol: "A", Ts: []int64{1, 2}, Closes: []float64{1, 2}}
+	b := Series{Symbol: "B", Ts: []int64{3, 4}, Closes: []float64{3, 4}}
+	got := AlignByTs([]Series{a, b})
+	if len(got[0]) != 0 || len(got[1]) != 0 {
+		t.Fatalf("want empty alignment, got %d/%d", len(got[0]), len(got[1]))
+	}
+	if brks := CorrelationBreaks([]Series{a, b}, 2, 3); len(brks) != 0 {
+		t.Fatalf("want no breaks on disjoint histories, got %+v", brks)
+	}
 }

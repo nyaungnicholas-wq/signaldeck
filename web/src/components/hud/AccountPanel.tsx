@@ -7,7 +7,7 @@ import { pnlColor, usd } from "./util";
 function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <div>
-      <div className="text-[0.64rem] tracking-wide" style={{ color: "var(--faint)" }}>
+      <div className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
         {label}
       </div>
       <div className="tnum text-[0.9rem]" style={{ color: color ?? "var(--text)" }}>
@@ -25,7 +25,7 @@ export default function AccountPanel({ account }: { account?: HudAccount }) {
       <div className="p-4">
         {account ? (
           <>
-            <div className="text-[0.64rem] tracking-wide" style={{ color: "var(--faint)" }}>
+            <div className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
               EQUITY
             </div>
             <div className="tnum text-2xl font-bold" style={{ color: "var(--text)" }}>
@@ -57,7 +57,7 @@ export default function AccountPanel({ account }: { account?: HudAccount }) {
             </div>
           </>
         ) : (
-          <div className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          <div className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
             no account data in the last sync
           </div>
         )}

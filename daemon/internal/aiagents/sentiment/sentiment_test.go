@@ -231,7 +231,7 @@ func TestRunOnceRatesSeededRow(t *testing.T) {
 	id := seedUnrated(t, st, "ACME lands record cloud contract")
 
 	fc := &fakeClient{enabled: true, reply: `{"sentiment":"bullish","score":0.7,"rationale":"record contract"}`}
-	n, err := RunOnce(ctx, fc, st, 10)
+	n, err := RunOnce(ctx, fc, st, 10, 0)
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestRunOnceStopsOnCap(t *testing.T) {
 	}
 
 	cc := &capClient{capAfter: 2}
-	n, err := RunOnce(ctx, cc, st, 10)
+	n, err := RunOnce(ctx, cc, st, 10, 0)
 	if err != nil {
 		t.Fatalf("RunOnce should not error on cap, got %v", err)
 	}
@@ -314,7 +314,7 @@ func TestRunOnceRespectsContext(t *testing.T) {
 	cancel()
 
 	fc := &fakeClient{enabled: true, reply: `{"sentiment":"neutral","score":0,"rationale":"x"}`}
-	n, err := RunOnce(ctx, fc, st, 10)
+	n, err := RunOnce(ctx, fc, st, 10, 0)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled, got %v", err)
 	}
@@ -330,7 +330,7 @@ func TestRunOnceRespectsContext(t *testing.T) {
 func TestRunOnceEmptyQueue(t *testing.T) {
 	st := openStore(t)
 	fc := &fakeClient{enabled: true, reply: `{"sentiment":"neutral","score":0,"rationale":"x"}`}
-	n, err := RunOnce(context.Background(), fc, st, 10)
+	n, err := RunOnce(context.Background(), fc, st, 10, 0)
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}

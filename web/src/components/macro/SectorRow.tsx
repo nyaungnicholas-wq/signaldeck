@@ -32,8 +32,11 @@ export default function SectorRow({ s }: { s: SectorAgg }) {
       className="px-4 py-3 transition-colors duration-150 hover:bg-[var(--panel2)]"
       style={{ borderBottom: "1px solid var(--border)" }}
     >
-      <div className="flex items-center gap-3">
-        <span className="w-36 shrink-0 truncate text-[0.82rem] font-bold" title={s.Sector}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:flex-nowrap">
+        <span
+          className="w-full truncate text-[0.82rem] font-bold sm:w-36 sm:shrink-0"
+          title={s.Sector}
+        >
           {s.Sector || "(unlabeled)"}
         </span>
         <div className="min-w-0 flex-1">
@@ -46,6 +49,7 @@ export default function SectorRow({ s }: { s: SectorAgg }) {
         <span
           className="tnum w-14 shrink-0 text-right text-[0.8rem]"
           style={{ color: scoreColor(score) }}
+          title="Mean pressure score (0–100)"
           aria-label={`mean score ${score.toFixed(0)}`}
         >
           {score.toFixed(0)}
@@ -53,13 +57,15 @@ export default function SectorRow({ s }: { s: SectorAgg }) {
         <span
           className="tnum w-16 shrink-0 text-right text-[0.8rem]"
           style={{ color: retColor(s.MeanRet1M) }}
+          title="Mean 1-month return"
           aria-label={`mean 1-month return ${fmtPct(s.MeanRet1M)}`}
         >
           {fmtPct(s.MeanRet1M)}
         </span>
         <span
-          className="tnum w-16 shrink-0 text-right text-[0.72rem]"
+          className="tnum w-16 shrink-0 text-right text-[0.78rem]"
           style={{ color: "var(--faint)" }}
+          title="Number of symbols in this sector"
           aria-label={`${s.N} symbols`}
         >
           {s.N} sym
@@ -67,7 +73,7 @@ export default function SectorRow({ s }: { s: SectorAgg }) {
       </div>
 
       {s.Symbols && s.Symbols.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5 pl-[9.75rem]">
+        <div className="mt-2 flex flex-wrap gap-1.5 pl-0 sm:pl-[9.75rem]">
           {s.Symbols.map((sym) =>
             isLinkable(sym) ? (
               <Link

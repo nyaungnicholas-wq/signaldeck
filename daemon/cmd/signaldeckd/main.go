@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/logrotate"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -28,6 +30,26 @@ func main() {
 	}
 
 	cfg := config.Load()
+
+	// Log slog to BOTH stderr and a size-capped rotating file (20 MB x 3).
+	// SIGNALDECK_LOG_FILE overrides the path; set it to "" to disable file
+	// logging entirely (stderr only, e.g. when launchd redirection is enough).
+	logPath, hasLogEnv := os.LookupEnv("SIGNALDECK_LOG_FILE")
+	if !hasLogEnv {
+		logPath = filepath.Join(filepath.Dir(filepath.Dir(cfg.DBPath)), "logs", "signaldeckd.log")
+	}
+	if logPath != "" {
+		if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+			slog.Warn("create log dir failed — logging to stderr only", "dir", filepath.Dir(logPath), "err", err)
+		} else if lw, err := logrotate.New(logPath, logrotate.DefaultMaxMB, logrotate.DefaultKeep); err != nil {
+			slog.Warn("open rotating log failed — logging to stderr only", "path", logPath, "err", err)
+		} else {
+			defer lw.Close() //nolint:errcheck
+			slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, lw), nil)))
+			slog.Info("file logging enabled", "path", logPath, "maxMB", logrotate.DefaultMaxMB, "keep", logrotate.DefaultKeep)
+		}
+	}
+
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o755); err != nil {
 		slog.Error("create data dir", "err", err)
 		os.Exit(1)

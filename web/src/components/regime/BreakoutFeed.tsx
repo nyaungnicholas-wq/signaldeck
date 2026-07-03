@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 import type { BreakoutRow, Market } from "@/lib/api";
 import { ago } from "@/lib/format";
+import EmptyState from "@/components/EmptyState";
 import { breakoutColor, humanizeKind, strengthPct } from "./regime";
 
 /** Fallback market inference from symbol shape (BTC/USD → crypto, AAPL → stocks). */
@@ -41,7 +42,7 @@ function BreakoutRowItem({
           {b.symbol}
         </Link>
       ) : (
-        <span className="shrink-0 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+        <span className="shrink-0 text-[0.78rem]" style={{ color: "var(--faint)" }}>
           market-wide
         </span>
       )}
@@ -50,14 +51,14 @@ function BreakoutRowItem({
       </span>
       {Number.isFinite(b.strength) && b.strength > 0 && (
         <span
-          className="tnum shrink-0 text-[0.68rem]"
+          className="tnum shrink-0 text-[0.75rem]"
           style={{ color: "var(--faint)" }}
           title="event strength"
         >
           {pct.toFixed(0)}%
         </span>
       )}
-      <span className="tnum shrink-0 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+      <span className="tnum shrink-0 text-[0.78rem]" style={{ color: "var(--faint)" }}>
         {ago(b.ts)}
       </span>
     </li>
@@ -88,9 +89,11 @@ export default function BreakoutFeed({
         </span>
       </div>
       {sorted.length === 0 ? (
-        <div className="px-4 py-6 text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          no breakouts or correlation breaks recorded yet — they log as bars stream in.
-        </div>
+        <EmptyState
+          className="border-0"
+          message="No breakouts or correlation breaks recorded yet"
+          detail="Events log here as bars stream in."
+        />
       ) : (
         <ul>
           {sorted.map((b, i) => (
@@ -99,7 +102,7 @@ export default function BreakoutFeed({
         </ul>
       )}
       <div
-        className="border-t px-4 py-2 text-[0.68rem] leading-relaxed"
+        className="border-t px-4 py-2 text-[0.75rem] leading-relaxed"
         style={{ borderColor: "var(--border)", color: "var(--faint)" }}
       >
         trend-creation events + pairs that just decoupled.

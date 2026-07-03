@@ -22,9 +22,12 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-// Store wraps the database.
+// Store wraps the database. Reads go through the pooled db handle; ALL writes
+// go through w, a single-connection handle, so concurrent writers queue in Go
+// instead of racing for the SQLite write lock (no SQLITE_BUSY under load).
 type Store struct {
-	db *sql.DB
+	db *sql.DB // read pool
+	w  *sql.DB // dedicated single-connection write path
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
@@ -34,17 +37,52 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	// SQLite allows one writer; a small pool avoids lock churn.
+	// Read pool: WAL readers don't block each other.
 	db.SetMaxOpenConns(4)
-	if _, err := db.Exec(schemaSQL); err != nil {
+	w, err := sql.Open("sqlite", dsn)
+	if err != nil {
 		db.Close() //nolint:errcheck
+		return nil, err
+	}
+	// SQLite allows exactly one writer — serialize writes on one connection.
+	w.SetMaxOpenConns(1)
+	if _, err := w.Exec(schemaSQL); err != nil {
+		db.Close() //nolint:errcheck
+		w.Close()  //nolint:errcheck
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	return &Store{db: db}, nil
+	if err := migrate(w); err != nil {
+		db.Close() //nolint:errcheck
+		w.Close()  //nolint:errcheck
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	return &Store{db: db, w: w}, nil
+}
+
+// migrate applies in-place column additions that CREATE TABLE IF NOT EXISTS
+// can't express (idempotent against an existing database).
+func migrate(w *sql.DB) error {
+	// positions.user_id (multi-user scoping); NULL = legacy/unowned.
+	var n int
+	if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('positions') WHERE name='user_id'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := w.Exec(`ALTER TABLE positions ADD COLUMN user_id INTEGER`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Close closes the database.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	err := s.db.Close()
+	if werr := s.w.Close(); err == nil {
+		err = werr
+	}
+	return err
+}
 
 // DB exposes the raw handle for read-only ad-hoc queries (export endpoints).
 func (s *Store) DB() *sql.DB { return s.db }
@@ -54,7 +92,7 @@ func (s *Store) DB() *sql.DB { return s.db }
 // UpsertSymbol inserts or reactivates a symbol and returns its row.
 func (s *Store) UpsertSymbol(ctx context.Context, symbol string, market md.Market, name string) (md.Symbol, error) {
 	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO symbols (symbol, market, name, active, added_at) VALUES (?,?,?,1,?)
 		ON CONFLICT(symbol, market) DO UPDATE SET active=1, name=CASE WHEN excluded.name != '' THEN excluded.name ELSE symbols.name END`,
 		symbol, string(market), name, now)
@@ -120,7 +158,7 @@ func (s *Store) SetSymbolActive(ctx context.Context, id int64, active bool) erro
 	if active {
 		v = 1
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE symbols SET active=? WHERE id=?`, v, id)
+	_, err := s.w.ExecContext(ctx, `UPDATE symbols SET active=? WHERE id=?`, v, id)
 	return err
 }
 
@@ -131,7 +169,7 @@ func (s *Store) UpsertBars(ctx context.Context, bars []md.Bar) error {
 	if len(bars) == 0 {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -235,7 +273,7 @@ func (s *Store) BarAtOrBefore(ctx context.Context, symbolID int64, tf md.Timefra
 // Rollup aggregates a finer timeframe into a coarser one over [from, to).
 // bucket is the coarse bar length in seconds (3600 for 1h, 86400 for 1d).
 func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		INSERT OR REPLACE INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
 		SELECT symbol_id, ?, (ts/?)*? AS bts,
 		  (SELECT open FROM bars b2 WHERE b2.symbol_id=b.symbol_id AND b2.tf=b.tf
@@ -254,7 +292,7 @@ func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timefram
 
 // PruneBars deletes bars of a timeframe older than cutoff (retention).
 func (s *Store) PruneBars(ctx context.Context, tf md.Timeframe, cutoff int64) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM bars WHERE tf=? AND ts<?`, string(tf), cutoff)
+	res, err := s.w.ExecContext(ctx, `DELETE FROM bars WHERE tf=? AND ts<?`, string(tf), cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -265,7 +303,7 @@ func (s *Store) PruneBars(ctx context.Context, tf md.Timeframe, cutoff int64) (i
 
 // InsertSnap1s writes one microstructure snapshot (idempotent per second).
 func (s *Store) InsertSnap1s(ctx context.Context, sn md.Snap1s) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		INSERT OR REPLACE INTO snapshots_1s
 		  (symbol_id, ts, bid, ask, mid, wmid, imb_signed, spread, apply_lat_ns)
 		VALUES (?,?,?,?,?,?,?,?,?)`,
@@ -300,7 +338,7 @@ func (s *Store) Snaps(ctx context.Context, symbolID int64, from, to int64, limit
 
 // PruneSnaps enforces the snapshot ring retention.
 func (s *Store) PruneSnaps(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM snapshots_1s WHERE ts<?`, cutoff)
+	res, err := s.w.ExecContext(ctx, `DELETE FROM snapshots_1s WHERE ts<?`, cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -316,7 +354,7 @@ func (s *Store) InsertScore(ctx context.Context, sc md.Score) error {
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -410,7 +448,7 @@ func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, c
 
 // ResolveOutcome records the realized forward return for one score.
 func (s *Store) ResolveOutcome(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		UPDATE score_outcomes SET fwd_return=?, resolved_at=?
 		WHERE symbol_id=? AND horizon=? AND ts=?`,
 		fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
@@ -421,7 +459,7 @@ func (s *Store) ResolveOutcome(ctx context.Context, symbolID int64, h md.Horizon
 // data ever arrived — delisted symbol, dead feed) so it stops clogging the
 // unresolved queue. fwd_return stays NULL; the honesty page excludes it.
 func (s *Store) ResolveOutcomeVoid(ctx context.Context, symbolID int64, h md.Horizon, ts int64) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		UPDATE score_outcomes SET resolved_at=? WHERE symbol_id=? AND horizon=? AND ts=?`,
 		time.Now().Unix(), symbolID, string(h), ts)
 	return err
@@ -469,7 +507,7 @@ func (s *Store) ResolvedOutcomes(ctx context.Context, symbolID int64, h md.Horiz
 
 // ReplaceExpectancy swaps in the freshly-computed table for one symbol+horizon.
 func (s *Store) ReplaceExpectancy(ctx context.Context, symbolID int64, h md.Horizon, rows []md.Expectancy) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -515,7 +553,7 @@ func (s *Store) Expectancy(ctx context.Context, symbolID int64, h md.Horizon) ([
 
 // InsertInsight stores one readable insight.
 func (s *Store) InsertInsight(ctx context.Context, in md.Insight) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO insights (scope, symbol_id, ts, headline, body, data)
 		VALUES (?,?,?,?,?,?)`,
 		in.Scope, in.SymbolID, in.Ts, in.Headline, in.Body, in.Data)
@@ -558,7 +596,7 @@ func (s *Store) RecentInsights(ctx context.Context, symbolID int64, limit int) (
 
 // StartWorkerRun opens a run record and returns its id.
 func (s *Store) StartWorkerRun(ctx context.Context, worker string) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.w.ExecContext(ctx,
 		`INSERT INTO worker_runs (worker, started_at, status) VALUES (?,?,'running')`,
 		worker, time.Now().Unix())
 	if err != nil {
@@ -569,7 +607,7 @@ func (s *Store) StartWorkerRun(ctx context.Context, worker string) (int64, error
 
 // FinishWorkerRun closes a run record.
 func (s *Store) FinishWorkerRun(ctx context.Context, id int64, status, detail string) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.w.ExecContext(ctx,
 		`UPDATE worker_runs SET finished_at=?, status=?, detail=? WHERE id=?`,
 		time.Now().Unix(), status, detail, id)
 	return err
@@ -601,7 +639,7 @@ func (s *Store) RecentWorkerRuns(ctx context.Context, limit int) ([]md.WorkerRun
 
 // PruneWorkerRuns keeps the run log bounded.
 func (s *Store) PruneWorkerRuns(ctx context.Context, keep int) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		DELETE FROM worker_runs WHERE id NOT IN
 		  (SELECT id FROM worker_runs ORDER BY started_at DESC, id DESC LIMIT ?)`, keep)
 	return err
@@ -611,7 +649,7 @@ func (s *Store) PruneWorkerRuns(ctx context.Context, keep int) error {
 
 // InsertDQ records a data-quality incident.
 func (s *Store) InsertDQ(ctx context.Context, ev md.DQEvent) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.w.ExecContext(ctx,
 		`INSERT INTO dq_events (symbol_id, ts, kind, detail) VALUES (?,?,?,?)`,
 		ev.SymbolID, ev.Ts, ev.Kind, ev.Detail)
 	return err
@@ -655,7 +693,7 @@ func (s *Store) BarCount(ctx context.Context, symbolID int64, tf md.Timeframe) (
 
 // SetHud stores the latest trader-hud summary payload.
 func (s *Store) SetHud(ctx context.Context, payload string) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO hud_summary (id, fetched_at, payload) VALUES (1,?,?)
 		ON CONFLICT(id) DO UPDATE SET fetched_at=excluded.fetched_at, payload=excluded.payload`,
 		time.Now().Unix(), payload)
@@ -674,7 +712,7 @@ func (s *Store) GetHud(ctx context.Context) (payload string, fetchedAt int64, ok
 
 // SetMeta / GetMeta are small key-value helpers (schema version, cursors…).
 func (s *Store) SetMeta(ctx context.Context, k, v string) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.w.ExecContext(ctx,
 		`INSERT INTO meta (k, v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, k, v)
 	return err
 }
@@ -691,6 +729,26 @@ func (s *Store) SetJSON(ctx context.Context, k string, v any) error {
 // GetJSONRaw returns the raw JSON string stored under a meta key ("" if absent).
 func (s *Store) GetJSONRaw(ctx context.Context, k string) (string, error) {
 	return s.GetMeta(ctx, k)
+}
+
+// IncrAndGetSpend implements llm.SpendStore: it atomically increments and
+// returns the persisted daily LLM call counter (meta key "llm_spend:<day>"),
+// so a daemon restart cannot reset the spend cap. Old day keys are pruned
+// opportunistically on the first call of a new day.
+func (s *Store) IncrAndGetSpend(ctx context.Context, day string) (int, error) {
+	key := "llm_spend:" + day
+	var n int
+	err := s.w.QueryRowContext(ctx, `
+		INSERT INTO meta (k, v) VALUES (?, '1')
+		ON CONFLICT(k) DO UPDATE SET v=CAST(CAST(v AS INTEGER)+1 AS TEXT)
+		RETURNING CAST(v AS INTEGER)`, key).Scan(&n)
+	if err != nil {
+		return 0, err
+	}
+	if n == 1 { // first call today: sweep stale day counters
+		_, _ = s.w.ExecContext(ctx, `DELETE FROM meta WHERE k LIKE 'llm_spend:%' AND k < ?`, key)
+	}
+	return n, nil
 }
 
 // GetMeta returns "" when the key is absent.

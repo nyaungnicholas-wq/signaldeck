@@ -6,6 +6,9 @@
 import { useEffect, useState } from "react";
 import { api, pollMs, type WorkerRun } from "@/lib/api";
 import { ago } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 const KNOWN_AGENTS: { name: string; role: string }[] = [
   { name: "crypto-live", role: "streams TickStream's consolidated book at 1Hz" },
@@ -76,18 +79,18 @@ function AgentCard({
         <span className="text-[0.82rem] font-bold tracking-wide" style={{ color: "var(--text)" }}>
           {name}
         </span>
-        <span className="ml-auto tnum text-[0.68rem]" style={{ color: "var(--faint)" }}>
+        <span className="ml-auto tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
           {last ? ago(last.startedAt) : ""}
         </span>
       </div>
 
-      <div className="text-[0.68rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+      <div className="text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
         {role}
       </div>
 
       {last ? (
         <>
-          <div className="flex items-center gap-2 text-[0.7rem]">
+          <div className="flex items-center gap-2 text-[0.78rem]">
             <span
               className="chip"
               style={{ color: statusColor(last.status), padding: "1px 8px" }}
@@ -100,7 +103,7 @@ function AgentCard({
           </div>
           {last.detail && (
             <div
-              className="truncate text-[0.68rem]"
+              className="truncate text-[0.75rem]"
               title={last.detail}
               style={{ color: "var(--faint)" }}
             >
@@ -109,7 +112,7 @@ function AgentCard({
           )}
         </>
       ) : (
-        <div className="text-[0.7rem] italic" style={{ color: "var(--faint)" }}>
+        <div className="text-[0.78rem] italic" style={{ color: "var(--faint)" }}>
           no runs yet
         </div>
       )}
@@ -146,6 +149,7 @@ function AgentCard({
 export default function AgentsPage() {
   const [runs, setRuns] = useState<WorkerRun[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -167,7 +171,7 @@ export default function AgentsPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   // Group runs by worker, newest first inside each group.
   const byWorker = new Map<string, WorkerRun[]>();
@@ -213,27 +217,25 @@ export default function AgentsPage() {
           {nError} error{nError === 1 ? "" : "s"}
         </span>
         {lastTs > 0 && (
-          <span className="text-[0.68rem] tnum" style={{ color: "var(--faint)" }}>
+          <span className="text-[0.75rem] tnum" style={{ color: "var(--faint)" }}>
             last activity {ago(lastTs)}
           </span>
         )}
       </div>
 
       {err && !runs && (
-        <div className="panel px-5 py-4 text-[0.78rem]" style={{ color: "var(--bad)" }}>
-          {err}
-          <div className="mt-1 text-[0.7rem]" style={{ color: "var(--dim)" }}>
-            Is the daemon running? Start signaldeckd and the worker fleet will report in.
-          </div>
-        </div>
+        <ErrorState
+          message={err}
+          hint="Is the daemon running? Start signaldeckd and the worker fleet will report in."
+          retry={() => {
+            setErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
-      {!err && !runs && (
-        <div className="px-1 text-[0.72rem]" style={{ color: "var(--faint)" }}>
-          loading…
-        </div>
-      )}
+      {!err && !runs && <Skeleton lines={4} label="loading worker fleet" />}
       {err && runs && (
-        <div className="px-1 text-[0.7rem]" style={{ color: "var(--bad)" }}>
+        <div className="px-1 text-[0.78rem]" style={{ color: "var(--bad)" }}>
           connection lost — showing last known data · {err}
         </div>
       )}
@@ -241,10 +243,10 @@ export default function AgentsPage() {
       {runs && (
         <>
           {runs.length === 0 && (
-            <div className="px-1 text-[0.72rem]" style={{ color: "var(--faint)" }}>
-              No worker runs recorded yet — the daemon is up but its workers haven&apos;t
-              ticked. Cards below show the full fleet and will light up as runs land.
-            </div>
+            <EmptyState
+              message="No worker runs recorded yet"
+              detail="The daemon is up but its workers haven't ticked. Cards below show the full fleet and will light up as runs land."
+            />
           )}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
             {cards.map((c) => (

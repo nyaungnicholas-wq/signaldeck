@@ -4,6 +4,7 @@
 
 import { api, type Market } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
+import EmptyState from "@/components/EmptyState";
 
 const TF_ORDER = ["1m", "1h", "1d"];
 
@@ -30,9 +31,11 @@ export default function CoveragePanel({
       </div>
       <div className="flex flex-wrap items-center gap-2 p-4">
         {tfs.length === 0 ? (
-          <p className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
-            no bars stored yet — backfill runs shortly after subscribing.
-          </p>
+          <EmptyState
+            message="No bars stored yet"
+            detail="Backfill runs shortly after subscribing."
+            className="w-full"
+          />
         ) : (
           tfs.map((tf) => {
             const c = coverage[tf];
@@ -53,8 +56,9 @@ export default function CoveragePanel({
               key={tf}
               href={api.exportUrl("bars", `${q}&tf=${tf}`)}
               download
-              className="chip cursor-pointer transition-colors duration-150 hover:border-[var(--accent)]"
+              className="chip inline-flex min-h-[40px] cursor-pointer items-center transition-colors duration-150 hover:border-[var(--accent)]"
               style={{ color: "var(--accent)" }}
+              title={`Download stored ${tf} bars as CSV`}
             >
               bars {tf} .csv
             </a>
@@ -62,8 +66,9 @@ export default function CoveragePanel({
           <a
             href={api.exportUrl("scores", q)}
             download
-            className="chip cursor-pointer transition-colors duration-150 hover:border-[var(--accent)]"
+            className="chip inline-flex min-h-[40px] cursor-pointer items-center transition-colors duration-150 hover:border-[var(--accent)]"
             style={{ color: "var(--accent)" }}
+            title="Download score history as CSV"
           >
             scores .csv
           </a>

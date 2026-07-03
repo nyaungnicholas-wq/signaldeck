@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/backtest"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/breakout"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/portfolio"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/risklens"
@@ -24,6 +25,25 @@ func (d Deps) dailyCloses(r *http.Request, symbolID int64, n int) ([]float64, er
 		out[i] = b.Close
 	}
 	return out, nil
+}
+
+// dailySeries returns a symbol's daily closes WITH bar timestamps, so callers
+// can align multiple symbols on real shared dates (breakout.AlignByTs) instead
+// of approximating by index/min-length.
+func (d Deps) dailySeries(r *http.Request, symbol string, symbolID int64, n int) (breakout.Series, error) {
+	bars, err := d.St.LastBars(r.Context(), symbolID, md.TF1d, n)
+	if err != nil {
+		return breakout.Series{}, err
+	}
+	s := breakout.Series{Symbol: symbol, Closes: make([]float64, len(bars)), Ts: make([]int64, len(bars))}
+	for i, b := range bars {
+		s.Closes[i] = b.Close
+		// Normalize to the UTC calendar day: stock and crypto daily bars can
+		// stamp different open times (and crypto trades weekends), so the
+		// cross-market intersection must be by day, not by exact open ts.
+		s.Ts[i] = b.Ts - b.Ts%86400
+	}
+	return s, nil
 }
 
 // lastClose returns the most recent daily close for a symbol.
@@ -132,34 +152,34 @@ func (d Deps) risk(w http.ResponseWriter, r *http.Request) {
 	}
 	var holdings []risklens.Holding
 	var series []risklens.Series
-	minLen := 1 << 30
-	raw := make([][]float64, 0, len(body.Holdings))
+	raw := make([]breakout.Series, 0, len(body.Holdings))
 	for _, h := range body.Holdings {
 		s, err := d.St.GetSymbol(r.Context(), strings.ToUpper(strings.TrimSpace(h.Symbol)), h.Market)
 		if err != nil {
 			httpErr(w, 404, "unknown symbol: "+h.Symbol)
 			return
 		}
-		closes, err := d.dailyCloses(r, s.ID, 400)
+		bs, err := d.dailySeries(r, s.Symbol, s.ID, 400)
 		if err != nil {
 			httpErr(w, 500, err.Error())
 			return
 		}
-		if len(closes) < 60 {
+		if len(bs.Closes) < 60 {
 			httpErr(w, 422, "not enough history for "+h.Symbol)
 			return
 		}
-		if len(closes) < minLen {
-			minLen = len(closes)
-		}
-		raw = append(raw, closes)
+		raw = append(raw, bs)
 		holdings = append(holdings, risklens.Holding{Symbol: s.Symbol, Weight: h.Weight})
 	}
-	// Align every series to the most-recent minLen window (approximate
-	// date-alignment over recent liquid daily bars).
+	// Align every series on shared bar timestamps (real date alignment; a
+	// symbol with gaps lines up on actual shared dates).
+	aligned := breakout.AlignByTs(raw)
 	for i, h := range holdings {
-		c := raw[i]
-		series = append(series, risklens.Series{Symbol: h.Symbol, Closes: c[len(c)-minLen:]})
+		if len(aligned[i]) < 60 {
+			httpErr(w, 422, "not enough overlapping history across holdings")
+			return
+		}
+		series = append(series, risklens.Series{Symbol: h.Symbol, Closes: aligned[i]})
 	}
 	report, err := risklens.Analyze(holdings, series, 0.95, body.NotionalUSD)
 	if err != nil {
@@ -178,31 +198,30 @@ func (d Deps) correlation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var series []portfolio.Series
-	minLen := 1 << 30
-	raw := map[string][]float64{}
+	var raw []breakout.Series // deterministic order: syms order
 	for _, s := range syms {
-		closes, err := d.dailyCloses(r, s.ID, 250)
+		bs, err := d.dailySeries(r, s.Symbol, s.ID, 250)
 		if err != nil {
 			httpErr(w, 500, err.Error())
 			return
 		}
-		if len(closes) < 30 {
+		if len(bs.Closes) < 30 {
 			continue
 		}
-		if len(closes) < minLen {
-			minLen = len(closes)
-		}
-		raw[s.Symbol] = closes
+		raw = append(raw, bs)
 	}
 	if len(raw) < 2 {
 		writeJSON(w, map[string]any{"symbols": []string{}, "matrix": [][]float64{}})
 		return
 	}
-	// Deterministic order by symbol.
-	for _, s := range syms {
-		if c, ok := raw[s.Symbol]; ok {
-			series = append(series, portfolio.Series{Symbol: s.Symbol, Closes: c[len(c)-minLen:]})
-		}
+	// Align on shared bar timestamps (real date alignment across markets).
+	aligned := breakout.AlignByTs(raw)
+	if len(aligned[0]) < 30 {
+		writeJSON(w, map[string]any{"symbols": []string{}, "matrix": [][]float64{}})
+		return
+	}
+	for i, bs := range raw {
+		series = append(series, portfolio.Series{Symbol: bs.Symbol, Closes: aligned[i]})
 	}
 	symbols, matrix, err := portfolio.CorrelationMatrix(series)
 	if err != nil {
@@ -224,7 +243,7 @@ func (d Deps) correlation(w http.ResponseWriter, r *http.Request) {
 // ── portfolio (paper positions) ─────────────────────────────────────────
 
 func (d Deps) portfolioGet(w http.ResponseWriter, r *http.Request) {
-	positions, err := d.St.Positions(r.Context(), false)
+	positions, err := d.St.Positions(r.Context(), userID(r), false)
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
@@ -293,7 +312,7 @@ func (d Deps) portfolioAdd(w http.ResponseWriter, r *http.Request) {
 		scoreAtEntry = sc.Score
 	}
 	id, err := d.St.InsertPosition(r.Context(), store.Position{
-		SymbolID: s.ID, Qty: body.Qty, EntryPrice: entry,
+		SymbolID: s.ID, UserID: userID(r), Qty: body.Qty, EntryPrice: entry,
 		EntryTs: time.Now().Unix(), Note: body.Note, ScoreAtEntry: scoreAtEntry,
 	})
 	if err != nil {
@@ -305,9 +324,9 @@ func (d Deps) portfolioAdd(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) portfolioClose(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ID       int64     `json:"id"`
-		Symbol   string    `json:"symbol"`
-		Market   md.Market `json:"market"`
+		ID     int64     `json:"id"`
+		Symbol string    `json:"symbol"`
+		Market md.Market `json:"market"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpErr(w, 400, "bad json: "+err.Error())
@@ -323,8 +342,13 @@ func (d Deps) portfolioClose(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 422, "no price to close at")
 		return
 	}
-	if err := d.St.ClosePosition(r.Context(), body.ID, price); err != nil {
+	ok, err := d.St.ClosePosition(r.Context(), body.ID, userID(r), price)
+	if err != nil {
 		httpErr(w, 500, err.Error())
+		return
+	}
+	if !ok {
+		httpErr(w, 404, "position not found")
 		return
 	}
 	writeJSON(w, map[string]any{"closed": body.ID, "exitPrice": price})

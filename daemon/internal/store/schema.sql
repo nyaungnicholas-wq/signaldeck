@@ -216,3 +216,27 @@ CREATE TABLE IF NOT EXISTS news (
 );
 CREATE INDEX IF NOT EXISTS idx_news_symbol_ts ON news (symbol_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_news_unrated ON news (sentiment) WHERE sentiment='unrated';
+
+-- Multi-user: accounts, browser sessions, per-user watchlists.
+CREATE TABLE IF NOT EXISTS users (
+  id         INTEGER PRIMARY KEY,
+  username   TEXT UNIQUE NOT NULL,
+  pass_hash  TEXT NOT NULL,
+  created_ts INTEGER,
+  is_admin   INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token      TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  created_ts INTEGER,
+  expires_ts INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_ts);
+
+CREATE TABLE IF NOT EXISTS user_symbols (
+  user_id   INTEGER NOT NULL REFERENCES users(id),
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  added_ts  INTEGER,
+  PRIMARY KEY (user_id, symbol_id)
+);

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 import type { RegimeState } from "@/lib/api";
 import { ago } from "@/lib/format";
+import EmptyState from "@/components/EmptyState";
 import { regimeColor, regimeKind, regimeSortRank, strengthPct } from "./regime";
 
 function RegimeTile({ s }: { s: RegimeState }) {
@@ -21,7 +22,7 @@ function RegimeTile({ s }: { s: RegimeState }) {
           className="cursor-pointer text-[0.82rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
         >
           {s.symbol}
-          <span className="ml-1.5 text-[0.6rem] font-normal" style={{ color: "var(--faint)" }}>
+          <span className="ml-1.5 text-[0.75rem] font-normal" style={{ color: "var(--faint)" }}>
             {s.market}
           </span>
         </Link>
@@ -51,7 +52,7 @@ function RegimeTile({ s }: { s: RegimeState }) {
         />
       </div>
 
-      <div className="flex items-center justify-between gap-2 text-[0.68rem]">
+      <div className="flex items-center justify-between gap-2 text-[0.75rem]">
         <span className="min-w-0 flex-1 truncate" style={{ color: "var(--dim)" }} title={s.note}>
           {s.note || "no note"}
         </span>
@@ -85,9 +86,11 @@ export default function RegimeMap({ states }: { states: RegimeState[] }) {
         </span>
       </div>
       {sorted.length === 0 ? (
-        <div className="px-4 py-6 text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          no regimes classified yet — states appear once enough bars are stored per symbol.
-        </div>
+        <EmptyState
+          className="border-0"
+          message="No regimes classified yet"
+          detail="States appear once enough bars are stored per symbol."
+        />
       ) : (
         <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2 lg:grid-cols-3">
           {sorted.map((s) => (

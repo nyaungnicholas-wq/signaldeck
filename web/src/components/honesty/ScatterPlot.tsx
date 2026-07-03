@@ -111,7 +111,7 @@ export default function ScatterPlot({ points }: { points: Honesty["points"] }) {
             fwd return
           </text>
         </svg>
-        <div className="mt-1 text-[0.66rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+        <div className="mt-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
           each dot = one persisted score and what the market did next.
           {clamped > 0 && (
             <>

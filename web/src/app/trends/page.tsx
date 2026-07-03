@@ -5,6 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 import { api, pollMs, type Trends, type TrendsMover } from "@/lib/api";
 import { ago, fmtPct, fmtScore, scoreColor } from "@/lib/format";
 import ScoreGauge from "@/components/ScoreGauge";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 function MoverRow({ m }: { m: TrendsMover }) {
   return (
@@ -17,7 +20,7 @@ function MoverRow({ m }: { m: TrendsMover }) {
         className="w-24 shrink-0 cursor-pointer text-[0.8rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
       >
         {m.symbol}
-        <span className="ml-1.5 text-[0.62rem] font-normal" style={{ color: "var(--faint)" }}>
+        <span className="ml-1.5 text-[0.75rem] font-normal" style={{ color: "var(--faint)" }}>
           {m.market}
         </span>
       </Link>
@@ -45,9 +48,10 @@ function MoversPanel({ title, movers }: { title: string; movers: TrendsMover[] }
     <section className="panel">
       <div className="panel-h">{title}</div>
       {movers.length === 0 ? (
-        <div className="px-4 py-6 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          no scored symbols yet — scores appear once enough bars are recorded.
-        </div>
+        <EmptyState
+          message="No scored symbols yet"
+          detail="Scores appear once enough bars are recorded."
+        />
       ) : (
         <ul>
           {movers.map((m) => (
@@ -62,6 +66,7 @@ function MoversPanel({ title, movers }: { title: string; movers: TrendsMover[] }
 export default function TrendsPage() {
   const [trends, setTrends] = useState<Trends | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -83,7 +88,7 @@ export default function TrendsPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   const { top, bottom } = useMemo(() => {
     const movers = trends?.movers ?? [];
@@ -128,19 +133,17 @@ export default function TrendsPage() {
         )}
       </div>
 
-      {loading && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          loading…
-        </div>
-      )}
+      {loading && <Skeleton lines={4} label="loading trends" />}
 
       {hardError && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]">
-          <div style={{ color: "var(--bad)" }}>{err}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start it with <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-          </div>
-        </div>
+        <ErrorState
+          message={err ?? "request failed"}
+          hint="Is the daemon running? Start it with signaldeckd and this page will recover."
+          retry={() => {
+            setErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
 
       {trends !== null && (
@@ -178,7 +181,7 @@ export default function TrendsPage() {
                       style={{ width: `${100 - posPct}%`, background: "var(--ask)" }}
                     />
                   </div>
-                  <div className="tnum mt-2 flex justify-between text-[0.7rem]">
+                  <div className="tnum mt-2 flex justify-between text-[0.78rem]">
                     <span style={{ color: "var(--bid)" }}>
                       {positive} positive ({posPct.toFixed(0)}%)
                     </span>
@@ -220,12 +223,10 @@ export default function TrendsPage() {
                 </p>
               </div>
             ) : (
-              <div
-                className="px-4 py-6 text-center text-[0.75rem]"
-                style={{ color: "var(--faint)" }}
-              >
-                no market brief yet — the insight-writer agent produces one every 15 minutes.
-              </div>
+              <EmptyState
+                message="No market brief yet"
+                detail="The insight-writer agent produces one every 15 minutes."
+              />
             )}
           </section>
         </>

@@ -20,6 +20,8 @@ import ExpectancyPanel from "@/components/symbol/ExpectancyPanel";
 import MicroPanel from "@/components/symbol/MicroPanel";
 import InsightsPanel from "@/components/symbol/InsightsPanel";
 import CoveragePanel from "@/components/symbol/CoveragePanel";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
 
 const TF_LIMIT: Record<Tf, number> = { "1d": 365, "1h": 168, "1m": 390 };
 const TFS: Tf[] = ["1d", "1h", "1m"];
@@ -40,6 +42,7 @@ export default function SymbolPage({
 
   const [detail, setDetail] = useState<SymbolDetail | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
   const [updatedAt, setUpdatedAt] = useState<number>(0);
   const [tf, setTf] = useState<Tf>("1d");
   // Bars are keyed by "symbol|tf" so switching timeframes shows a loading
@@ -74,7 +77,7 @@ export default function SymbolPage({
       alive = false;
       clearInterval(t);
     };
-  }, [symbol, market, marketOk]);
+  }, [symbol, market, marketOk, retryTick]);
 
   // Bars: refetch on timeframe change + a slow 60s background refresh.
   useEffect(() => {
@@ -154,7 +157,7 @@ export default function SymbolPage({
           </span>
         )}
         {detail && (
-          <span className="ml-auto flex items-center gap-2 text-[0.66rem] tnum" style={{ color: "var(--faint)" }}>
+          <span className="ml-auto flex items-center gap-2 text-[0.75rem] tnum" style={{ color: "var(--faint)" }}>
             {detailErr && <span style={{ color: "var(--bad)" }}>reconnecting…</span>}
             updated {ago(updatedAt)}
           </span>
@@ -162,19 +165,15 @@ export default function SymbolPage({
       </div>
 
       {detailErr && !detail && (
-        <section className="panel p-6 text-[0.8rem]">
-          <p style={{ color: "var(--bad)" }}>{detailErr}</p>
-          <p className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start signaldeckd, then this page will pick it up
-            automatically.
-          </p>
-        </section>
+        <ErrorState
+          message={detailErr}
+          retry={() => {
+            setDetailErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
-      {!detailErr && !detail && (
-        <section className="panel p-6 text-[0.72rem]" style={{ color: "var(--faint)" }}>
-          loading…
-        </section>
-      )}
+      {!detailErr && !detail && <Skeleton lines={5} label={`loading ${symbol}`} />}
 
       {/* Chart */}
       <section className="panel">
@@ -188,7 +187,8 @@ export default function SymbolPage({
                 role="tab"
                 aria-selected={t === tf}
                 onClick={() => setTf(t)}
-                className="chip cursor-pointer transition-colors duration-150"
+                className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150"
+                title={`Show ${t} bars`}
                 style={{
                   color: t === tf ? "var(--accent)" : "var(--dim)",
                   borderColor: t === tf ? "var(--accent)" : "var(--border)",
@@ -205,11 +205,11 @@ export default function SymbolPage({
               {barsErr} — is the daemon running?
             </div>
           ) : bars === null ? (
-            <div className="flex h-[420px] items-center justify-center text-[0.72rem]" style={{ color: "var(--faint)" }}>
+            <div className="flex h-[420px] items-center justify-center text-[0.78rem]" style={{ color: "var(--faint)" }}>
               loading…
             </div>
           ) : bars.length === 0 ? (
-            <div className="flex h-[420px] items-center justify-center text-[0.72rem]" style={{ color: "var(--faint)" }}>
+            <div className="flex h-[420px] items-center justify-center text-[0.78rem]" style={{ color: "var(--faint)" }}>
               no {tf} bars stored yet — backfill runs shortly after subscribing.
             </div>
           ) : (

@@ -7,6 +7,7 @@ import type { Horizon, Score } from "@/lib/api";
 import { fmtScore, fmtTs } from "@/lib/format";
 import ScoreGauge from "@/components/ScoreGauge";
 import HorizonChips from "./HorizonChips";
+import EmptyState from "@/components/EmptyState";
 
 function fmtVal(v: number): string {
   if (!isFinite(v)) return "—";
@@ -39,9 +40,10 @@ export default function PressurePanel({
       </div>
       <div className="flex flex-col gap-4 p-4">
         {present.length === 0 ? (
-          <p className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
-            no scores yet — the scorer needs a few bars of history first.
-          </p>
+          <EmptyState
+            message="No scores yet"
+            detail="The scorer needs a few bars of history first."
+          />
         ) : (
           <>
             <div className="flex flex-col gap-3">
@@ -52,24 +54,34 @@ export default function PressurePanel({
 
             {sel ? (
               <div>
-                <div className="mb-1 flex items-baseline justify-between text-[0.64rem] tracking-wide" style={{ color: "var(--faint)" }}>
+                <div className="mb-1 flex items-baseline justify-between text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
                   <span>COMPONENT DECOMPOSITION · {horizon}</span>
                   <span className="tnum">as of {fmtTs(sel.ts)}</span>
                 </div>
                 {sel.components.length === 0 ? (
-                  <p className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+                  <p className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
                     no component breakdown stored for this score.
                   </p>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-[0.8rem] tnum">
                       <thead>
-                        <tr className="text-left text-[0.64rem] tracking-wide" style={{ color: "var(--faint)" }}>
-                          <th className="py-1.5 pr-3 font-medium">COMPONENT</th>
-                          <th className="py-1.5 pr-3 text-right font-medium">VALUE</th>
-                          <th className="py-1.5 pr-3 text-right font-medium">NORM</th>
-                          <th className="py-1.5 pr-3 text-right font-medium">WEIGHT</th>
-                          <th className="py-1.5 pr-3 text-right font-medium">CONTRIB</th>
+                        <tr className="text-left text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
+                          <th className="py-1.5 pr-3 font-medium" title="Signal component (e.g. momentum, imbalance)">
+                            COMPONENT
+                          </th>
+                          <th className="py-1.5 pr-3 text-right font-medium" title="Raw measured value">
+                            VALUE
+                          </th>
+                          <th className="py-1.5 pr-3 text-right font-medium" title="Normalized value, scaled to −1…+1">
+                            NORM
+                          </th>
+                          <th className="py-1.5 pr-3 text-right font-medium" title="Weight of this component in the total score">
+                            WEIGHT
+                          </th>
+                          <th className="py-1.5 pr-3 text-right font-medium" title="Contribution to the total score (norm × weight)">
+                            CONTRIB
+                          </th>
                           <th className="py-1.5 font-medium">NOTE</th>
                         </tr>
                       </thead>
@@ -86,11 +98,11 @@ export default function PressurePanel({
                             >
                               {fmtScore(c.contrib)}
                             </td>
-                            <td className="py-1.5 text-[0.7rem]" style={{ color: "var(--faint)" }}>{c.note || "—"}</td>
+                            <td className="py-1.5 text-[0.78rem]" style={{ color: "var(--faint)" }}>{c.note || "—"}</td>
                           </tr>
                         ))}
                         <tr className="border-t" style={{ borderColor: "var(--border)" }}>
-                          <td className="py-1.5 pr-3 text-[0.7rem] tracking-wide" style={{ color: "var(--faint)" }}>
+                          <td className="py-1.5 pr-3 text-[0.78rem] tracking-wide" style={{ color: "var(--faint)" }}>
                             TOTAL
                           </td>
                           <td colSpan={3} />
@@ -108,7 +120,7 @@ export default function PressurePanel({
                 )}
               </div>
             ) : (
-              <p className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+              <p className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
                 no {horizon} score yet — pick another horizon above.
               </p>
             )}

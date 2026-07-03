@@ -3,6 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type Macro, type SectorAgg } from "@/lib/api";
 import { ago } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 import Bar from "@/components/macro/Bar";
 import Push20Macro from "@/components/macro/Push20Macro";
 import SectorRow from "@/components/macro/SectorRow";
@@ -35,6 +38,7 @@ export default function MacroPage() {
   const [macro, setMacro] = useState<Macro | null>(null);
   const [sectors, setSectors] = useState<SectorAgg[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -56,7 +60,7 @@ export default function MacroPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   // Strongest sector first, by mean pressure score.
   const sortedSectors = useMemo(
@@ -90,20 +94,17 @@ export default function MacroPage() {
         )}
       </div>
 
-      {loading && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          loading…
-        </div>
-      )}
+      {loading && <Skeleton lines={4} label="loading market context" />}
 
       {hardError && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]">
-          <div style={{ color: "var(--bad)" }}>{err}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start it with{" "}
-            <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-          </div>
-        </div>
+        <ErrorState
+          message={err ?? "macro data unavailable"}
+          hint="Is the daemon running? Start it with signaldeckd."
+          retry={() => {
+            setErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
 
       {/* MARKET CONTEXT */}
@@ -120,7 +121,7 @@ export default function MacroPage() {
             {/* BREADTH */}
             <div>
               <div className="mb-1.5 flex items-baseline justify-between">
-                <span className="text-[0.72rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+                <span className="text-[0.78rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
                   BREADTH
                 </span>
                 <span
@@ -138,7 +139,7 @@ export default function MacroPage() {
                     color={breadthColor(breadth)}
                     label={`market breadth ${breadth.toFixed(0)} percent of scored symbols positive`}
                   />
-                  <div className="tnum mt-1 text-right text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                  <div className="tnum mt-1 text-right text-[0.78rem]" style={{ color: "var(--faint)" }}>
                     {breadth.toFixed(0)}%
                   </div>
                 </>
@@ -151,7 +152,7 @@ export default function MacroPage() {
 
             {/* VOLATILITY */}
             <div>
-              <div className="mb-1.5 text-[0.72rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+              <div className="mb-1.5 text-[0.78rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
                 VOLATILITY
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -173,7 +174,7 @@ export default function MacroPage() {
 
             {/* PUSH-20 MACRO */}
             <div>
-              <div className="mb-1.5 text-[0.72rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+              <div className="mb-1.5 text-[0.78rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
                 PUSH-20 MACRO
               </div>
               <div
@@ -186,7 +187,7 @@ export default function MacroPage() {
 
             {/* honest note, verbatim */}
             {macro.note && (
-              <p className="text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+              <p className="text-[0.78rem] leading-relaxed" style={{ color: "var(--faint)" }}>
                 {macro.note}
               </p>
             )}
@@ -209,9 +210,11 @@ export default function MacroPage() {
           </p>
 
           {sortedSectors.length === 0 ? (
-            <div className="px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-              sector aggregation runs hourly once ranking data exists.
-            </div>
+            <EmptyState
+              className="m-4"
+              message="No sector data yet"
+              detail="Sector aggregation runs hourly once ranking data exists."
+            />
           ) : (
             <ul style={{ borderTop: "1px solid var(--border)" }}>
               {sortedSectors.map((s) => (

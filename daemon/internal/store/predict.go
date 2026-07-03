@@ -22,7 +22,7 @@ type Prediction struct {
 
 // UpsertPrediction stores a prediction and seeds its outcome row.
 func (s *Store) UpsertPrediction(ctx context.Context, p Prediction) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func (s *Store) ResolvePrediction(ctx context.Context, symbolID int64, h md.Hori
 	if fwdReturn > 0 {
 		up = 1
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		UPDATE prediction_outcomes SET up=?, fwd_return=?, resolved_at=?
 		WHERE symbol_id=? AND horizon=? AND ts=?`,
 		up, fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
@@ -133,7 +133,7 @@ func (s *Store) UpsertRegime(ctx context.Context, symbolID, ts int64, label stri
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -228,12 +228,12 @@ type Ranked struct {
 
 // ReplaceRanking swaps in a full ranking snapshot for timestamp ts.
 func (s *Store) ReplaceRanking(ctx context.Context, ts int64, rows []struct {
-	SymbolID           int64
-	Score              float64
-	Rank               int
-	Ret1M, Ret3M       float64
+	SymbolID     int64
+	Score        float64
+	Rank         int
+	Ret1M, Ret3M float64
 }) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -276,7 +276,7 @@ func (s *Store) LatestRanking(ctx context.Context) ([]Ranked, error) {
 
 // InsertBreakout records a detected event (dedup handled by the caller).
 func (s *Store) InsertBreakout(ctx context.Context, symbolID *int64, ts int64, kind, detail string, strength float64) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.w.ExecContext(ctx,
 		`INSERT INTO breakouts (symbol_id, ts, kind, detail, strength) VALUES (?,?,?,?,?)`,
 		symbolID, ts, kind, detail, strength)
 	return err

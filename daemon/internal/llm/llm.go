@@ -53,6 +53,13 @@ var (
 	ErrCapReached = fmt.Errorf("llm: daily call cap reached")
 )
 
+// SpendStore persists the daily call counter so a daemon restart can't reset
+// the spend cap. IncrAndGetSpend atomically increments and returns the count
+// for the given UTC day (YYYY-MM-DD).
+type SpendStore interface {
+	IncrAndGetSpend(ctx context.Context, day string) (int, error)
+}
+
 // httpClient is the concrete OpenAI-compatible client.
 type httpClient struct {
 	key, baseURL, model string
@@ -61,6 +68,15 @@ type httpClient struct {
 
 	mu    sync.Mutex
 	stats Stats
+	spend SpendStore // nil = in-memory counter only (tests)
+}
+
+// SetSpendStore wires a persistent daily-call counter into a client built by
+// New. Safe to call once at startup, before any Complete call.
+func SetSpendStore(c Client, s SpendStore) {
+	if h, ok := c.(*httpClient); ok {
+		h.spend = s
+	}
 }
 
 // New builds a client. key=="" yields a disabled client that no-ops safely.
@@ -89,13 +105,31 @@ func (c *httpClient) Stats() Stats {
 }
 
 // reserve enforces the daily cap under lock and rolls the counter over at UTC
-// midnight. It returns false when the cap is exhausted for today.
-func (c *httpClient) reserve(now time.Time) bool {
+// midnight. When a SpendStore is wired, the counter is persisted in SQLite so
+// restarts can't reset it; otherwise (tests) it falls back to in-memory.
+// It returns false when the cap is exhausted for today.
+func (c *httpClient) reserve(ctx context.Context, now time.Time) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	day := now.UTC().Format("2006-01-02")
 	if c.stats.Day != day {
 		c.stats = Stats{Day: day, DailyCap: c.dailyCap}
+	}
+	if c.spend != nil {
+		if n, err := c.spend.IncrAndGetSpend(ctx, day); err == nil {
+			// Never let the DB counter move the in-memory count DOWN: calls
+			// served through the in-memory fallback during a DB outage were
+			// never persisted, so after recovery the store lags reality. Max
+			// keeps the cap honest across outage/recovery cycles (a slight
+			// over-count beats silently reopening already-spent headroom).
+			if n < c.stats.Calls+1 {
+				n = c.stats.Calls + 1
+			}
+			c.stats.Calls = n
+			return n <= c.dailyCap
+		}
+		// Persistence failure: fall through to the in-memory counter so a
+		// transient DB error can't disable (or unbound) the AI layer.
 	}
 	if c.stats.Calls >= c.dailyCap {
 		return false
@@ -139,7 +173,7 @@ func (c *httpClient) Complete(ctx context.Context, sys string, msgs []Message, m
 		return "", ErrDisabled
 	}
 	now := time.Now()
-	if !c.reserve(now) {
+	if !c.reserve(ctx, now) {
 		return "", ErrCapReached
 	}
 	if maxTokens <= 0 {

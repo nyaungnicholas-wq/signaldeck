@@ -10,6 +10,9 @@ import {
   type WatchRow,
 } from "@/lib/api";
 import { ago } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 import PredictionGauge from "@/components/predict/PredictionGauge";
 import CalibrationPanel from "@/components/predict/CalibrationPanel";
 import FusionExplainer from "@/components/predict/FusionExplainer";
@@ -34,6 +37,8 @@ export default function PredictPage() {
   const [watch, setWatch] = useState<WatchRow[] | null>(null);
   const [watchErr, setWatchErr] = useState<string | null>(null);
   const [picked, setPicked] = useState<Picked | null>(null);
+  // Incremented by ErrorState retry buttons to re-kick the polling effects.
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -61,7 +66,7 @@ export default function PredictPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   // ── predictions for the picked symbol ──
   const [preds, setPreds] = useState<Record<string, Prediction> | null>(null);
@@ -93,7 +98,7 @@ export default function PredictPage() {
       alive = false;
       clearInterval(t);
     };
-  }, [picked]);
+  }, [picked, retryTick]);
 
   // ── calibration (independent horizon state: 1d / 1w) ──
   const [calHorizon, setCalHorizon] = useState<CalHorizon>("1d");
@@ -120,7 +125,7 @@ export default function PredictPage() {
       alive = false;
       clearInterval(t);
     };
-  }, [calHorizon]);
+  }, [calHorizon, retryTick]);
 
   // Only trust calibration payload tagged with the selected horizon.
   const calCurrent = cal && cal.horizon === calHorizon ? cal : null;
@@ -140,7 +145,7 @@ export default function PredictPage() {
       {/* header row */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-1">
         <h1 className="text-sm font-extrabold tracking-[0.18em]">PREDICT</h1>
-        <span className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
           calibrated probability of an up move — graded against itself
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -164,13 +169,14 @@ export default function PredictPage() {
 
       {/* watchlist hard error */}
       {watchHardError && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]">
-          <div style={{ color: "var(--bad)" }}>{watchErr}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start it with{" "}
-            <span style={{ color: "var(--dim)" }}>signaldeckd</span> and the picker will populate.
-          </div>
-        </div>
+        <ErrorState
+          message={watchErr ?? "could not load the watchlist"}
+          hint="is the daemon running? start it with signaldeckd and the picker will populate."
+          retry={() => {
+            setWatchErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
 
       {/* symbol picker */}
@@ -185,13 +191,13 @@ export default function PredictPage() {
         </div>
         <div className="px-4 py-3">
           {watchLoading ? (
-            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-              loading…
-            </span>
+            <Skeleton lines={2} label="loading symbols" className="border-0 p-0" />
           ) : watch && watch.length === 0 ? (
-            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-              no symbols tracked yet — subscribe to a symbol and it will appear here.
-            </span>
+            <EmptyState
+              message="No symbols tracked yet"
+              detail="Subscribe to a symbol and it will appear here as a pickable chip."
+              className="border-0 p-0"
+            />
           ) : (
             <div role="group" aria-label="Pick a symbol" className="flex flex-wrap gap-1.5">
               {(watch ?? []).map((r) => {
@@ -210,7 +216,7 @@ export default function PredictPage() {
                     }
                   >
                     {r.symbol}
-                    <span className="ml-1.5 text-[0.6rem]" style={{ color: "var(--faint)" }}>
+                    <span className="ml-1.5 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                       {r.market}
                     </span>
                   </button>
@@ -223,13 +229,15 @@ export default function PredictPage() {
 
       {/* prediction error (daemon down or symbol not scored) */}
       {predErr && (
-        <div className="panel px-4 py-6 text-[0.75rem] leading-relaxed" style={{ color: "var(--bad)" }}>
-          {predErr}
-          <span style={{ color: "var(--faint)" }}>
-            {" "}
-            — is the daemon running? start signaldeckd and predictions will stream in.
-          </span>
-        </div>
+        <ErrorState
+          message={predErr}
+          hint="is the daemon running? start signaldeckd and predictions will stream in."
+          retry={() => {
+            setPredErr(null);
+            setPreds(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
 
       {/* per-horizon P(up) gauges */}
@@ -241,11 +249,7 @@ export default function PredictPage() {
         </div>
       )}
 
-      {predLoading && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          loading predictions…
-        </div>
-      )}
+      {predLoading && <Skeleton lines={4} label="loading predictions" />}
 
       {/* calibration / reliability — the differentiator */}
       <CalibrationPanel
@@ -254,6 +258,10 @@ export default function PredictPage() {
         data={calCurrent}
         loading={cal === null && calErr === null}
         err={cal === null && calErr !== null ? calErr : null}
+        retry={() => {
+          setCalErr(null);
+          setRetryTick((t) => t + 1);
+        }}
       />
 
       {/* plain-English explainer */}

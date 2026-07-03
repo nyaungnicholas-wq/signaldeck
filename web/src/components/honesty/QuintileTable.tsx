@@ -45,13 +45,34 @@ export default function QuintileTable({ buckets }: { buckets: HonestyBucket[] })
           no resolved outcomes yet — scores resolve after their horizon elapses.
         </div>
       ) : (
+        <div className="table-wrap">
         <table className="w-full text-[0.8rem]">
           <thead>
-            <tr className="text-[0.64rem] tracking-wide" style={{ color: "var(--faint)" }}>
-              <th className="px-4 py-2 text-left font-medium">BUCKET</th>
-              <th className="px-4 py-2 text-right font-medium">N</th>
-              <th className="px-4 py-2 text-right font-medium">MEAN FWD</th>
-              <th className="px-4 py-2 text-right font-medium">HIT RATE</th>
+            <tr className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
+              <th
+                className="px-4 py-2 text-left font-medium"
+                title="Score quintile (strong sell = lowest scores, strong buy = highest)"
+              >
+                BUCKET
+              </th>
+              <th
+                className="px-4 py-2 text-right font-medium"
+                title="Sample size — resolved outcomes in this bucket"
+              >
+                N
+              </th>
+              <th
+                className="px-4 py-2 text-right font-medium"
+                title="Mean forward return — average of what the market did after these scores"
+              >
+                MEAN FWD
+              </th>
+              <th
+                className="px-4 py-2 text-right font-medium"
+                title="Share of scores that predicted the right direction"
+              >
+                HIT RATE
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -83,9 +104,10 @@ export default function QuintileTable({ buckets }: { buckets: HonestyBucket[] })
             })}
           </tbody>
         </table>
+        </div>
       )}
       <div
-        className="border-t px-4 py-2 text-[0.68rem] leading-relaxed"
+        className="border-t px-4 py-2 text-[0.75rem] leading-relaxed"
         style={{ borderColor: "var(--border)", color: monotone && filled.length >= 2 ? "var(--bid)" : "var(--faint)" }}
       >
         {caption}

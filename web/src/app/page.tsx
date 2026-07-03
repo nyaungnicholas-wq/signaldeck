@@ -9,6 +9,9 @@ import { api, pollMs, type Horizon, type Market, type WatchRow } from "@/lib/api
 import { ago, fmtPct, fmtPrice, fmtScore, scoreColor, verdict } from "@/lib/format";
 import ScoreGauge from "@/components/ScoreGauge";
 import Spark from "@/components/Spark";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 type SortKey = "score" | "change" | "symbol";
 
@@ -160,6 +163,7 @@ export default function WatchlistPage() {
           border: 1px solid var(--border);
           border-radius: 6px;
           padding: 6px 10px;
+          min-height: 40px;
           font-size: .72rem;
           color: var(--text);
           font-family: inherit;
@@ -219,13 +223,13 @@ export default function WatchlistPage() {
       </div>
 
       {(addError || actionError) && (
-        <div role="alert" className="text-[0.72rem]" style={{ color: "var(--bad)" }}>
+        <div role="alert" className="text-[0.78rem]" style={{ color: "var(--bad)" }}>
           {addError ?? actionError}
         </div>
       )}
 
       {/* sort control */}
-      <div className="flex flex-wrap items-center gap-2 text-[0.7rem]">
+      <div className="flex flex-wrap items-center gap-2 text-[0.78rem]">
         <span style={{ color: "var(--faint)", letterSpacing: "0.12em" }}>SORT</span>
         {SORTS.map((s) => (
           <button
@@ -233,7 +237,7 @@ export default function WatchlistPage() {
             type="button"
             aria-pressed={sort === s.k}
             onClick={() => setSort(s.k)}
-            className="chip cursor-pointer transition-colors duration-150"
+            className="chip min-h-[40px] cursor-pointer transition-colors duration-150"
             style={
               sort === s.k ? { color: "var(--text)", borderColor: "var(--accent)" } : undefined
             }
@@ -244,33 +248,24 @@ export default function WatchlistPage() {
       </div>
 
       {/* body states */}
-      {rows === null && !error && (
-        <div
-          className="panel px-5 py-10 text-center text-[0.75rem]"
-          style={{ color: "var(--faint)" }}
-        >
-          loading…
-        </div>
-      )}
+      {rows === null && !error && <Skeleton lines={4} label="loading watchlist" />}
 
       {rows === null && error && (
-        <div className="panel px-5 py-8 text-[0.78rem]">
-          <div style={{ color: "var(--bad)" }}>{error}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            The SignalDeck daemon looks offline — start signaldeckd (:8322) and this page will
-            recover on its own.
-          </div>
-        </div>
+        <ErrorState
+          message={error}
+          hint="The SignalDeck daemon looks offline — start signaldeckd (:8322) and this page will recover on its own."
+          retry={() => {
+            setError(null);
+            setTick((t) => t + 1);
+          }}
+        />
       )}
 
       {rows !== null && rows.length === 0 && (
-        <div className="panel px-5 py-12 text-center text-[0.78rem]" style={{ color: "var(--dim)" }}>
-          <div>no symbols tracked yet</div>
-          <div className="mt-2 text-[0.7rem]" style={{ color: "var(--faint)" }}>
-            add one above — e.g. AAPL (stocks) or BTC/USD (crypto). The daemon backfills history
-            and scores automatically.
-          </div>
-        </div>
+        <EmptyState
+          message="No symbols tracked yet"
+          detail="Add one above — e.g. AAPL (stocks) or BTC/USD (crypto). The daemon backfills history and scores automatically."
+        />
       )}
 
       {rows !== null && rows.length > 0 && (
@@ -288,10 +283,10 @@ export default function WatchlistPage() {
                 {/* symbol row */}
                 <div className="flex items-center gap-2 px-4 pt-3">
                   <span className="text-[0.92rem] font-bold tracking-wide">{r.symbol}</span>
-                  <span className="chip px-2 py-[2px] text-[0.62rem]">{r.market}</span>
+                  <span className="chip px-2 py-[2px] text-[0.75rem]">{r.market}</span>
                   {backfilling && (
                     <span
-                      className="chip px-2 py-[2px] text-[0.62rem]"
+                      className="chip px-2 py-[2px] text-[0.75rem]"
                       style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
                     >
                       backfilling…
@@ -301,7 +296,7 @@ export default function WatchlistPage() {
                     type="button"
                     onClick={(e) => onUnwatch(e, r)}
                     aria-label={`stop watching ${r.symbol}`}
-                    className="wl-unwatch ml-auto cursor-pointer text-[0.62rem] tracking-wider transition-colors duration-150"
+                    className="wl-unwatch ml-auto cursor-pointer text-[0.75rem] tracking-wider transition-colors duration-150"
                     style={{ color: "var(--faint)" }}
                   >
                     unwatch
@@ -313,7 +308,7 @@ export default function WatchlistPage() {
                   <div>
                     <div className="tnum text-[1.05rem] font-bold">{fmtPrice(r.lastClose)}</div>
                     <div
-                      className="tnum text-[0.72rem]"
+                      className="tnum text-[0.78rem]"
                       style={{ color: changeColor(r.dayChangePct) }}
                     >
                       {fmtPct(r.dayChangePct)} today
@@ -327,7 +322,7 @@ export default function WatchlistPage() {
                   {s1d !== null ? (
                     <>
                       <ScoreGauge score={s1d} label={`${r.symbol} 1d pressure`} compact />
-                      <div className="mt-1.5 flex items-baseline justify-between gap-2 text-[0.7rem]">
+                      <div className="mt-1.5 flex items-baseline justify-between gap-2 text-[0.78rem]">
                         <span style={{ color: "var(--faint)" }}>1d</span>
                         <span className="tnum" style={{ color: scoreColor(s1d) }}>
                           {fmtScore(s1d)} · {verdict(s1d)}
@@ -335,15 +330,15 @@ export default function WatchlistPage() {
                       </div>
                     </>
                   ) : (
-                    <div className="py-1 text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                    <div className="py-1 text-[0.78rem]" style={{ color: "var(--faint)" }}>
                       1d score pending — needs more history
                     </div>
                   )}
-                  <div className="mt-2 flex items-center gap-1.5 text-[0.66rem]">
+                  <div className="mt-2 flex items-center gap-1.5 text-[0.75rem]">
                     {(["1h", "1w"] as const).map((h) => {
                       const s = scoreFor(r, h);
                       return (
-                        <span key={h} className="chip tnum px-2 py-[2px] text-[0.62rem]">
+                        <span key={h} className="chip tnum px-2 py-[2px] text-[0.75rem]">
                           {h}{" "}
                           <span style={s !== null ? { color: scoreColor(s) } : undefined}>
                             {s !== null ? fmtScore(s) : "—"}

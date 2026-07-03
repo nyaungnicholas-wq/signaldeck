@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -103,15 +104,29 @@ func Tag(ctx context.Context, client llm.Client, headline string) (Rating, error
 // yields "unrated" tags, which are still written back (leaving the headline in
 // the unrated state), so RunOnce is a harmless no-op-shaped pass when no key is
 // configured.
-func RunOnce(ctx context.Context, client llm.Client, st *store.Store, batch int) (int, error) {
+//
+// pace is the delay inserted BETWEEN consecutive LLM calls. The provider's
+// practical limit is burst-shaped (rapid-fire calls trip HTTP 429 around ~35
+// in a row), so a paced larger batch drains a backlog far faster than a small
+// burst without touching the burst limit. pace <= 0 means no delay.
+func RunOnce(ctx context.Context, client llm.Client, st *store.Store, batch int, pace time.Duration) (int, error) {
 	items, err := st.UnratedNews(ctx, batch)
 	if err != nil {
 		return 0, err
 	}
 	rated := 0
-	for _, it := range items {
+	for i, it := range items {
 		if err := ctx.Err(); err != nil {
 			return rated, err
+		}
+		if pace > 0 && i > 0 {
+			t := time.NewTimer(pace)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return rated, ctx.Err()
+			case <-t.C:
+			}
 		}
 		r, err := Tag(ctx, client, it.Headline)
 		if err != nil {

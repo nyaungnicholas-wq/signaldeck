@@ -9,6 +9,9 @@ import {
   type WatchRow,
 } from "@/lib/api";
 import { fmtPct, fmtDate } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 const EXAMPLES = [
   "50/200 moving-average crossover",
@@ -125,7 +128,7 @@ function EquityCurve({ equity, ts }: { equity: number[]; ts: number[] }) {
         </svg>
       </div>
       <div
-        className="tnum mt-2 flex justify-between text-[0.66rem]"
+        className="tnum mt-2 flex justify-between text-[0.75rem]"
         style={{ color: "var(--faint)" }}
       >
         <span>{first ? fmtDate(first) : "start"}</span>
@@ -145,11 +148,13 @@ function Metric({
   value,
   color,
   hint,
+  title,
 }: {
   label: string;
   value: string;
   color?: string;
   hint?: string;
+  title?: string;
 }) {
   return (
     <div
@@ -157,8 +162,9 @@ function Metric({
       style={{ borderBottom: "1px solid var(--border)" }}
     >
       <span
-        className="text-[0.62rem] tracking-wide"
+        className="text-[0.75rem] tracking-wide"
         style={{ color: "var(--faint)" }}
+        title={title}
       >
         {label}
       </span>
@@ -169,7 +175,7 @@ function Metric({
         {value}
       </span>
       {hint && (
-        <span className="text-[0.62rem]" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
           {hint}
         </span>
       )}
@@ -195,6 +201,7 @@ export default function BacktestPage() {
   );
   const [softErr, setSoftErr] = useState<string | null>(null);
   const [hardErr, setHardErr] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   // Load the watchlist once for the symbol picker; poll so newly-subscribed
   // symbols appear. The picker never mutates the running result.
@@ -228,7 +235,7 @@ export default function BacktestPage() {
       clearInterval(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [retryTick]);
 
   const selectedRow = useMemo(
     () => watch?.find((r) => r.symbol === symbol && r.market === market) ?? null,
@@ -297,7 +304,7 @@ export default function BacktestPage() {
         <div className="flex flex-col gap-4 px-4 py-4">
           <label className="flex flex-col gap-1.5">
             <span
-              className="text-[0.66rem] tracking-wide"
+              className="text-[0.75rem] tracking-wide"
               style={{ color: "var(--faint)" }}
             >
               describe the rules
@@ -323,7 +330,7 @@ export default function BacktestPage() {
           {/* example fillers */}
           <div className="flex flex-wrap items-center gap-1.5">
             <span
-              className="text-[0.64rem]"
+              className="text-[0.75rem]"
               style={{ color: "var(--faint)" }}
             >
               try
@@ -344,26 +351,31 @@ export default function BacktestPage() {
           {/* symbol picker */}
           <div className="flex flex-col gap-1.5">
             <span
-              className="text-[0.66rem] tracking-wide"
+              className="text-[0.75rem] tracking-wide"
               style={{ color: "var(--faint)" }}
             >
               symbol
             </span>
             {watch === null && watchErr === null && (
-              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                loading…
-              </span>
+              <Skeleton lines={2} label="loading symbols" className="border-0 p-0" />
             )}
             {watch !== null && watch.length === 0 && (
-              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                watchlist is empty — subscribe to symbols first, then a backtest
-                has bars to run on.
-              </span>
+              <EmptyState
+                className="border-0 p-0"
+                message="Your watchlist is empty"
+                detail="Subscribe to symbols first, then a backtest has bars to run on."
+              />
             )}
             {watchErr !== null && watch === null && (
-              <span className="text-[0.75rem]" style={{ color: "var(--bad)" }}>
-                could not load symbols — start the daemon (signaldeckd).
-              </span>
+              <ErrorState
+                className="border-0 p-0"
+                message="could not load symbols"
+                hint="is the daemon running? start it with signaldeckd."
+                retry={() => {
+                  setWatchErr(null);
+                  setRetryTick((t) => t + 1);
+                }}
+              />
             )}
             {watch !== null && watch.length > 0 && (
               <div
@@ -394,7 +406,7 @@ export default function BacktestPage() {
                     >
                       {row.symbol}
                       <span
-                        className="ml-1.5 text-[0.6rem]"
+                        className="ml-1.5 text-[0.75rem]"
                         style={{ color: "var(--faint)" }}
                       >
                         {row.market}
@@ -412,7 +424,7 @@ export default function BacktestPage() {
               type="button"
               onClick={run}
               disabled={!canRun}
-              className="cursor-pointer rounded border px-5 py-2 text-[0.78rem] font-bold tracking-wide transition-colors duration-150 disabled:cursor-not-allowed"
+              className="min-h-[40px] cursor-pointer rounded border px-5 py-2 text-[0.78rem] font-bold tracking-wide transition-colors duration-150 disabled:cursor-not-allowed"
               style={{
                 borderColor: canRun ? "var(--accent)" : "var(--border)",
                 background: canRun ? "rgba(251,191,36,.10)" : "var(--panel2)",
@@ -422,7 +434,7 @@ export default function BacktestPage() {
               {running ? "running…" : "Run backtest"}
             </button>
             <span
-              className="text-[0.64rem]"
+              className="text-[0.75rem]"
               style={{ color: "var(--faint)" }}
             >
               ⌘/Ctrl+Enter to run
@@ -439,7 +451,7 @@ export default function BacktestPage() {
           {/* soft (parse / history) feedback — the API's helpful message */}
           {softErr && (
             <div
-              className="rounded border px-3 py-2.5 text-[0.74rem] leading-relaxed whitespace-pre-wrap"
+              className="rounded border px-3 py-2.5 text-[0.78rem] leading-relaxed whitespace-pre-wrap"
               style={{
                 color: "var(--warn)",
                 borderColor: "var(--warn)",
@@ -452,13 +464,12 @@ export default function BacktestPage() {
 
           {/* hard (daemon down) error */}
           {hardErr && (
-            <div className="text-[0.74rem]">
-              <div style={{ color: "var(--bad)" }}>{hardErr}</div>
-              <div className="mt-1" style={{ color: "var(--faint)" }}>
-                is the daemon running? start it with{" "}
-                <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-              </div>
-            </div>
+            <ErrorState
+              className="border-0 p-0"
+              message={hardErr}
+              hint="is the daemon running? start it with signaldeckd, then retry."
+              retry={run}
+            />
           )}
         </div>
       </section>
@@ -548,7 +559,7 @@ export default function BacktestPage() {
                 returns as fractions of starting equity (1.00)
               </span>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4">
               <Metric
                 label="VS BUY & HOLD"
                 value={fmtPct(result.VsBuyHold * 100)}
@@ -568,18 +579,21 @@ export default function BacktestPage() {
               />
               <Metric
                 label="CAGR"
+                title="Compound annual growth rate"
                 value={fmtPct(result.CAGR * 100)}
                 color={result.CAGR >= 0 ? "var(--bid)" : "var(--ask)"}
                 hint="assumes ~252 bars/yr"
               />
               <Metric
                 label="MAX DRAWDOWN"
+                title="Largest peak-to-trough decline in equity"
                 value={fmtPct(-result.MaxDrawdown * 100)}
                 color="var(--ask)"
                 hint="worst peak-to-trough"
               />
               <Metric
                 label="SHARPE"
+                title="Sharpe ratio (risk-adjusted return)"
                 value={
                   isFinite(result.Sharpe) ? result.Sharpe.toFixed(2) : "—"
                 }

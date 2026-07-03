@@ -20,17 +20,19 @@ const csrfHeader = "X-Signaldeck"
 
 // secure wraps the mux with the daemon's HTTP defenses:
 //   - Host allowlist (blocks DNS-rebinding: a remote page rebinding its domain
-//     to 127.0.0.1 still sends its own Host, which is rejected);
+//     to 127.0.0.1 still sends its own Host, which is rejected). An EMPTY
+//     allowlist denies everything — only explicitly listed hosts are served;
 //   - Origin allowlist with echo-back (no wildcard — only the real web app can
 //     read responses cross-origin);
+//   - identity resolution (session cookie first, else bearer APIToken → admin);
+//   - per-client token-bucket rate limiting (429 + Retry-After);
 //   - CSRF guard on non-GET (custom header required);
-//   - optional bearer-token auth (enabled by setting SIGNALDECK_API_TOKEN;
-//     off by default for localhost, on for remote exposure);
+//   - per-endpoint auth enforcement (see requiresAuth);
 //   - a body-size cap on every request.
 func (d Deps) secure(next http.Handler) http.Handler {
 	allowedOrigins := d.Cfg.WebOrigins
 	allowedHosts := d.Cfg.AllowedHosts
-	token := d.Cfg.APIToken
+	limiter := newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Host allowlist — the request's Host must be one we serve.
@@ -45,6 +47,7 @@ func (d Deps) secure(next http.Handler) http.Handler {
 		if origin != "" && originAllowed(origin, allowedOrigins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, "+csrfHeader+", Authorization")
 			w.Header().Set("Access-Control-Max-Age", "600")
@@ -60,16 +63,21 @@ func (d Deps) secure(next http.Handler) http.Handler {
 			return
 		}
 
-		// 3. Optional bearer token (remote-exposure guard; off when unset).
-		if token != "" {
-			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if got != token {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
+		// 3. Identity: session cookie first; bearer APIToken (when set) is an
+		// equivalent alternative for scripts, mapped to the admin user.
+		uid := d.resolveUser(r)
+		r = withUser(r, uid)
+
+		// 4. Rate limit per client key (user id / token / IP), two tiers.
+		writeTier := (r.Method != http.MethodGet && r.Method != http.MethodHead) ||
+			strings.HasPrefix(r.URL.Path, "/api/ai/")
+		if !limiter.allow(d.clientKey(r, uid), writeTier) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
 		}
 
-		// 4. CSRF: state-changing methods must carry the custom header AND,
+		// 5. CSRF: state-changing methods must carry the custom header AND,
 		// when an Origin is present, it must be allowlisted.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			if r.Header.Get(csrfHeader) == "" {
@@ -82,11 +90,40 @@ func (d Deps) secure(next http.Handler) http.Handler {
 			}
 		}
 
-		// 5. Body-size cap on every request.
+		// 6. Auth enforcement per endpoint.
+		if uid == 0 && d.requiresAuth(r.URL.Path) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"authentication required"}` + "\n"))
+			return
+		}
+
+		// 7. Body-size cap on every request.
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// requiresAuth reports whether an anonymous request to path must be rejected.
+//   - /api/health and /api/auth/* are always open (you must be able to log in);
+//   - user-scoped and spend-incurring endpoints always need identity;
+//   - the remaining read-only endpoints (shared market data) are public when
+//     SIGNALDECK_PUBLIC_READS=true (the localhost-friendly default).
+func (d Deps) requiresAuth(path string) bool {
+	if path == "/api/health" || strings.HasPrefix(path, "/api/auth/") {
+		return false
+	}
+	switch {
+	case path == "/api/watchlist",
+		path == "/api/subscribe",
+		path == "/api/unsubscribe",
+		strings.HasPrefix(path, "/api/portfolio"),
+		path == "/api/ai/chat",
+		path == "/api/ai/filing":
+		return true
+	}
+	return !d.Cfg.PublicReads
 }
 
 func hostAllowed(host string, allowed []string) bool {

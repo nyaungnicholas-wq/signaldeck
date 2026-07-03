@@ -6,6 +6,9 @@
 import { Fragment, useEffect, useState } from "react";
 import { api, pollMs, type Quality, type DQEvent } from "@/lib/api";
 import { ago, fmtDate } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 const TFS = ["1m", "1h", "1d"] as const;
 
@@ -34,7 +37,7 @@ function IncidentRow({ ev }: { ev: DQEvent }) {
   const s = kindStyle(ev.kind);
   return (
     <li className="border-b px-4 py-2.5 last:border-b-0" style={{ borderColor: "var(--border)" }}>
-      <div className="flex items-center gap-2 text-[0.72rem]">
+      <div className="flex items-center gap-2 text-[0.78rem]">
         <span
           className="chip"
           style={{ color: s.color, borderColor: s.border, padding: "1px 8px" }}
@@ -51,7 +54,7 @@ function IncidentRow({ ev }: { ev: DQEvent }) {
         </span>
       </div>
       {ev.detail && (
-        <div className="mt-1 text-[0.7rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+        <div className="mt-1 text-[0.78rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           {ev.detail}
         </div>
       )}
@@ -62,6 +65,7 @@ function IncidentRow({ ev }: { ev: DQEvent }) {
 export default function QualityPage() {
   const [data, setData] = useState<Quality | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -83,7 +87,7 @@ export default function QualityPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   const symbols = data?.symbols ?? [];
   const events = [...(data?.events ?? [])].sort((a, b) => b.ts - a.ts);
@@ -100,26 +104,24 @@ export default function QualityPage() {
         >
           {events.length} incidents
         </span>
-        <span className="text-[0.68rem] italic" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem] italic" style={{ color: "var(--faint)" }}>
           If it&apos;s not on this page, we didn&apos;t measure it.
         </span>
       </div>
 
       {err && !data && (
-        <div className="panel px-5 py-4 text-[0.78rem]" style={{ color: "var(--bad)" }}>
-          {err}
-          <div className="mt-1 text-[0.7rem]" style={{ color: "var(--dim)" }}>
-            Is the daemon running? Start signaldeckd and this page will pick it up.
-          </div>
-        </div>
+        <ErrorState
+          message={err}
+          hint="Is the daemon running? Start signaldeckd and this page will pick it up."
+          retry={() => {
+            setErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
-      {!err && !data && (
-        <div className="px-1 text-[0.72rem]" style={{ color: "var(--faint)" }}>
-          loading…
-        </div>
-      )}
+      {!err && !data && <Skeleton lines={4} label="loading data quality" />}
       {err && data && (
-        <div className="px-1 text-[0.7rem]" style={{ color: "var(--bad)" }}>
+        <div className="px-1 text-[0.78rem]" style={{ color: "var(--bad)" }}>
           connection lost — showing last known data · {err}
         </div>
       )}
@@ -130,23 +132,31 @@ export default function QualityPage() {
           <section className="panel">
             <div className="panel-h">BAR COVERAGE — WHAT WE ACTUALLY HAVE</div>
             {symbols.length === 0 ? (
-              <div className="px-5 py-6 text-[0.74rem]" style={{ color: "var(--faint)" }}>
-                No symbols tracked yet — subscribe to a symbol from the watchlist and
-                coverage will appear here as bars land.
-              </div>
+              <EmptyState
+                message="No symbols tracked yet"
+                detail="Subscribe to a symbol from the watchlist and coverage will appear here as bars land."
+              />
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-[0.8rem]">
                   <thead>
                     <tr
-                      className="text-left text-[0.64rem] tracking-wide"
+                      className="text-left text-[0.75rem] tracking-wide"
                       style={{ color: "var(--faint)" }}
                     >
                       <th className="px-4 py-2 font-medium">SYMBOL</th>
-                      <th className="px-2 py-2 font-medium">TF</th>
-                      <th className="px-2 py-2 text-right font-medium">BARS</th>
-                      <th className="px-2 py-2 font-medium">SPAN</th>
-                      <th className="px-4 py-2 text-right font-medium">FRESHNESS</th>
+                      <th className="px-2 py-2 font-medium" title="Bar timeframe (1 minute / 1 hour / 1 day)">
+                        TF
+                      </th>
+                      <th className="px-2 py-2 text-right font-medium" title="Number of bars stored">
+                        BARS
+                      </th>
+                      <th className="px-2 py-2 font-medium" title="Date range covered by stored bars">
+                        SPAN
+                      </th>
+                      <th className="px-4 py-2 text-right font-medium" title="Time since the newest stored bar">
+                        FRESHNESS
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="tnum">
@@ -170,7 +180,7 @@ export default function QualityPage() {
                                     <span className="font-semibold" style={{ color: "var(--text)" }}>
                                       {s.symbol}
                                     </span>
-                                    <span className="text-[0.62rem]" style={{ color: "var(--faint)" }}>
+                                    <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                                       {s.market}
                                       {s.market === "crypto" ? " · 24/7" : ""}
                                       {!s.active ? " · inactive" : ""}
@@ -217,15 +227,15 @@ export default function QualityPage() {
           <section className="panel h-fit">
             <div className="panel-h">
               INCIDENTS
-              <span className="ml-auto text-[0.64rem] normal-case tracking-normal" style={{ color: "var(--faint)" }}>
+              <span className="ml-auto text-[0.75rem] normal-case tracking-normal" style={{ color: "var(--faint)" }}>
                 stale · gap · resync
               </span>
             </div>
             {events.length === 0 ? (
-              <div className="px-5 py-6 text-[0.74rem]" style={{ color: "var(--faint)" }}>
-                No incidents recorded. The dq-auditor logs every stale feed, gap and
-                resync here — an empty list means nothing tripped it yet.
-              </div>
+              <EmptyState
+                message="No incidents recorded"
+                detail="The dq-auditor logs every stale feed, gap and resync here — an empty list means nothing tripped it yet."
+              />
             ) : (
               <ul className="max-h-[560px] overflow-y-auto">
                 {events.map((ev) => (

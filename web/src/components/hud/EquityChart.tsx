@@ -32,7 +32,7 @@ export default function EquityChart({ history }: { history?: HudHistory | null }
   let body: React.ReactNode;
   if (empty) {
     body = (
-      <div className="p-4 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+      <div className="p-4 text-[0.78rem]" style={{ color: "var(--faint)" }}>
         no equity history yet — this fills in after the first synced trading days
       </div>
     );
@@ -65,7 +65,7 @@ export default function EquityChart({ history }: { history?: HudHistory | null }
 
     body = (
       <div className="p-4">
-        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.7rem]" style={{ color: "var(--dim)" }}>
+        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.78rem]" style={{ color: "var(--dim)" }}>
           <span className="flex items-center gap-1.5">
             <span aria-hidden="true" className="inline-block h-[2px] w-4" style={{ background: "var(--accent)" }} />
             PUSH-20{" "}
@@ -121,7 +121,7 @@ export default function EquityChart({ history }: { history?: HudHistory | null }
             <polyline key={`a${i}`} points={pts} fill="none" stroke="var(--accent)" strokeWidth="2" />
           ))}
         </svg>
-        <div className="mt-1 flex justify-between text-[0.64rem] tnum" style={{ color: "var(--faint)" }}>
+        <div className="mt-1 flex justify-between text-[0.75rem] tnum" style={{ color: "var(--faint)" }}>
           <span>{dates[0] ?? ""}</span>
           <span>{dates[dates.length - 1] ?? ""}</span>
         </div>

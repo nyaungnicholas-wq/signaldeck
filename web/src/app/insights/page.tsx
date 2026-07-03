@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { api, pollMs, type Insight } from "@/lib/api";
 import { ago } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 type Filter = "all" | "market" | "symbol";
 
@@ -48,7 +51,7 @@ function InsightCard({ ins }: { ins: Insight }) {
             )}
           </>
         )}
-        <span className="tnum ml-auto text-[0.68rem]" style={{ color: "var(--faint)" }}>
+        <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
           {ago(ins.ts)}
         </span>
       </div>
@@ -71,6 +74,7 @@ export default function InsightsPage() {
   const [insights, setInsights] = useState<Insight[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -92,7 +96,7 @@ export default function InsightsPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   const sorted = useMemo(
     () => [...(insights ?? [])].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0)),
@@ -146,26 +150,24 @@ export default function InsightsPage() {
         </p>
       </section>
 
-      {loading && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          loading…
-        </div>
-      )}
+      {loading && <Skeleton lines={4} label="loading insights" />}
 
       {hardError && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]">
-          <div style={{ color: "var(--bad)" }}>{err}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start it with <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-          </div>
-        </div>
+        <ErrorState
+          message={err ?? "insights unavailable"}
+          hint="Is the daemon running? Start it with signaldeckd."
+          retry={() => {
+            setErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
 
       {insights !== null && (
         <section className="panel">
           <div className="panel-h">
             FEED
-            <div className="ml-auto flex items-center gap-1.5" role="group" aria-label="Filter insights">
+            <div className="ml-auto flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter insights">
               {FILTERS.map((f) => {
                 const active = filter === f.key;
                 return (
@@ -174,7 +176,7 @@ export default function InsightsPage() {
                     type="button"
                     aria-pressed={active}
                     onClick={() => setFilter(f.key)}
-                    className="chip cursor-pointer transition-colors duration-150 hover:text-[var(--text)]"
+                    className="chip min-h-[40px] cursor-pointer transition-colors duration-150 hover:text-[var(--text)]"
                     style={{
                       color: active ? "var(--text)" : undefined,
                       borderColor: active ? "var(--accent)" : undefined,
@@ -188,11 +190,19 @@ export default function InsightsPage() {
           </div>
 
           {visible.length === 0 ? (
-            <div className="px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-              {sorted.length === 0
-                ? "No insights yet — the insight-writer runs every 15 minutes once data flows."
-                : "nothing matches this filter."}
-            </div>
+            sorted.length === 0 ? (
+              <EmptyState
+                className="m-4"
+                message="No insights yet"
+                detail="The insight-writer runs every 15 minutes once data flows — check back shortly."
+              />
+            ) : (
+              <EmptyState
+                className="m-4"
+                message="Nothing matches this filter"
+                detail="Try the “all” filter to see every stored insight."
+              />
+            )
           ) : (
             <div>
               {visible.map((ins) => (

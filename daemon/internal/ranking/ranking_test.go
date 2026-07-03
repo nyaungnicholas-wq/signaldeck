@@ -317,8 +317,10 @@ func TestSpreadEdgeCases(t *testing.T) {
 	}
 }
 
-// TestSpreadWholeSetOverlap documents behavior when pct=1.0: both cohorts are
-// the whole set, so the spread is zero by construction.
+// TestSpreadWholeSetOverlap documents behavior when pct=1.0: cohorts are
+// shrunk until DISJOINT (overlap would double-count outcomes in both means),
+// so a whole-set request degrades to the largest clean top-vs-bottom split
+// rather than the old both-cohorts-equal-the-set answer.
 func TestSpreadWholeSetOverlap(t *testing.T) {
 	outcomes := []RankOutcome{
 		{Score: 100, FwdReturn: 0.10},
@@ -326,12 +328,15 @@ func TestSpreadWholeSetOverlap(t *testing.T) {
 		{Score: 0, FwdReturn: -0.08},
 	}
 	top, bottom, spread := Spread(outcomes, 1.0, 1.0)
-	mean := (0.10 + 0.02 - 0.08) / 3.0
-	if !approx(top, mean) || !approx(bottom, mean) {
-		t.Errorf("cohort means = (%v,%v), want both %v", top, bottom, mean)
+	// Shrink order: top 3->2->1, bottom 3->2 => top {0.10}, bottom {-0.08,0.02}.
+	if !approx(top, 0.10) {
+		t.Errorf("topMeanFwd = %v, want 0.10", top)
 	}
-	if math.Abs(spread) > eps {
-		t.Errorf("spread = %v, want 0 when both cohorts are the whole set", spread)
+	if !approx(bottom, (-0.08+0.02)/2) {
+		t.Errorf("bottomMeanFwd = %v, want %v", bottom, (-0.08+0.02)/2)
+	}
+	if !approx(spread, 0.10-(-0.08+0.02)/2) {
+		t.Errorf("spread = %v, want %v", spread, 0.10-(-0.08+0.02)/2)
 	}
 }
 
@@ -358,5 +363,32 @@ func TestEndToEnd(t *testing.T) {
 	}
 	if ranked[len(ranked)-1].Symbol != "LOSER" {
 		t.Errorf("bottom = %q, want LOSER", ranked[len(ranked)-1].Symbol)
+	}
+}
+
+// TestSpreadDisjointCohorts: overlapping percentiles on a small N must not
+// double-count the middle outcome in both cohorts (regression: n=3 with 60/60
+// used to include index 1 in both means).
+func TestSpreadDisjointCohorts(t *testing.T) {
+	outcomes := []RankOutcome{
+		{Score: 0, FwdReturn: -0.10},
+		{Score: 50, FwdReturn: 100.0}, // poisoned middle: double-count is obvious
+		{Score: 100, FwdReturn: 0.10},
+	}
+	top, bottom, spread := Spread(outcomes, 0.6, 0.6)
+	// round(0.6*3)=2 each -> must shrink to disjoint: top gets sorted[2],
+	// bottom gets sorted[0..1] (or the symmetric split); either way the middle
+	// outcome may appear in AT MOST one cohort.
+	inTop := approx(top, 0.10) || approx(top, (100.0+0.10)/2)
+	inBottom := approx(bottom, -0.10) || approx(bottom, (100.0-0.10)/2)
+	if !inTop || !inBottom {
+		t.Fatalf("unexpected cohort means top=%v bottom=%v", top, bottom)
+	}
+	if approx(top, (100.0+0.10)/2) && approx(bottom, (100.0-0.10)/2) {
+		t.Fatalf("middle outcome counted in BOTH cohorts: top=%v bottom=%v spread=%v", top, bottom, spread)
+	}
+	// n == 1 needs two disjoint cohorts; must report zeros, not NaN.
+	if a, b, s := Spread(outcomes[:1], 0.5, 0.5); a != 0 || b != 0 || s != 0 {
+		t.Fatalf("n=1 want zeros, got %v %v %v", a, b, s)
 	}
 }

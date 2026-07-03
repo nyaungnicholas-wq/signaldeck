@@ -20,21 +20,21 @@ export default function PositionsPanel({ positions }: { positions?: HudPosition[
         )}
       </div>
       {list.length === 0 ? (
-        <div className="p-4 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+        <div className="p-4 text-[0.78rem]" style={{ color: "var(--faint)" }}>
           no open positions in the last sync — flat (cash / defensive)
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-[0.8rem] tnum">
             <thead>
-              <tr className="text-[0.64rem] tracking-wide" style={{ color: "var(--faint)" }}>
+              <tr className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
                 <th className="px-4 py-2 text-left font-medium">SYMBOL</th>
-                <th className={TH}>QTY</th>
-                <th className={TH}>AVG ENTRY</th>
-                <th className={TH}>LAST</th>
-                <th className={TH}>VALUE</th>
-                <th className={TH}>UNRL P&L</th>
-                <th className={`${TH} pr-4`}>UNRL %</th>
+                <th className={TH} title="Quantity — shares held">QTY</th>
+                <th className={TH} title="Average entry price">AVG ENTRY</th>
+                <th className={TH} title="Last traded price">LAST</th>
+                <th className={TH} title="Market value of the position">VALUE</th>
+                <th className={TH} title="Unrealized profit and loss">UNRL P&L</th>
+                <th className={`${TH} pr-4`} title="Unrealized profit and loss, percent of cost">UNRL %</th>
               </tr>
             </thead>
             <tbody>

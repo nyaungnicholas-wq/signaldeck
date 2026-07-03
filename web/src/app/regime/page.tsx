@@ -10,6 +10,8 @@ import {
   type RegimeState,
 } from "@/lib/api";
 import { ago } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
 import RegimeMap from "@/components/regime/RegimeMap";
 import RegimeChanges from "@/components/regime/RegimeChanges";
 import RankingTable from "@/components/regime/RankingTable";
@@ -31,6 +33,7 @@ export default function RegimePage() {
   const [data, setData] = useState<RegimeData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState(0);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -57,7 +60,7 @@ export default function RegimePage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   const loading = data === null && err === null;
   const hardError = data === null && err !== null;
@@ -85,7 +88,7 @@ export default function RegimePage() {
       {/* header row */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-1">
         <h1 className="text-sm font-extrabold tracking-[0.18em]">REGIME</h1>
-        <span className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
           creating &amp; detecting trends
         </span>
         {data !== null && (
@@ -115,21 +118,18 @@ export default function RegimePage() {
 
       {/* hard error (nothing to show) */}
       {hardError && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]">
-          <div style={{ color: "var(--bad)" }}>{err}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start it with{" "}
-            <span style={{ color: "var(--dim)" }}>signaldeckd</span> and this page will pick it up.
-          </div>
-        </div>
+        <ErrorState
+          message={err ?? "could not load regime data"}
+          hint="is the daemon running? start it with signaldeckd and this page will pick it up."
+          retry={() => {
+            setErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
 
       {/* loading */}
-      {loading && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          loading…
-        </div>
-      )}
+      {loading && <Skeleton lines={4} label="loading regimes" />}
 
       {data !== null && (
         <>
@@ -144,7 +144,7 @@ export default function RegimePage() {
 
           {/* honesty note */}
           <div
-            className="panel px-4 py-3 text-[0.7rem] leading-relaxed"
+            className="panel px-4 py-3 text-[0.78rem] leading-relaxed"
             style={{ color: "var(--faint)" }}
           >
             Regimes and rankings are computed from stored bars with no lookahead; they describe

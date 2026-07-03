@@ -39,11 +39,12 @@ type Deps struct {
 func Serve(ctx context.Context, d Deps) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", d.health)
+	d.registerAuth(mux) // register, login, logout, me
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
 	mux.HandleFunc("GET /api/symbol", d.symbolDetail)
 	mux.HandleFunc("GET /api/bars", d.bars)
 	mux.HandleFunc("GET /api/scores/history", d.scoreHistory)
-	mux.HandleFunc("GET /api/screener", d.watchlist) // same rows; UI filters
+	mux.HandleFunc("GET /api/screener", d.screener) // all symbols; UI filters
 	mux.HandleFunc("GET /api/trends", d.trends)
 	mux.HandleFunc("GET /api/honesty", d.honesty)
 	mux.HandleFunc("GET /api/quality", d.quality)
@@ -53,7 +54,7 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/snaps", d.snaps)
 	mux.HandleFunc("POST /api/subscribe", d.subscribe)
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
-	d.registerQuant(mux) // forecast, backtest, risk, correlation, portfolio
+	d.registerQuant(mux)   // forecast, backtest, risk, correlation, portfolio
 	d.registerAI(mux)      // analyst, chat, filingmind, status
 	d.registerPredict(mux) // predictions, calibration, regime, ranking, breakouts
 	d.registerData(mux)    // news, sectors, regime-conditioned, macro
@@ -107,10 +108,10 @@ func (d Deps) symbolFromQuery(r *http.Request) (md.Symbol, error) {
 
 func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
-		"version":  d.Version,
-		"uptimeS":  int(time.Since(d.Started).Seconds()),
-		"alpaca":   d.Cfg.HasAlpaca(),
-		"time":     time.Now().Unix(),
+		"version": d.Version,
+		"uptimeS": int(time.Since(d.Started).Seconds()),
+		"alpaca":  d.Cfg.HasAlpaca(),
+		"time":    time.Now().Unix(),
 	})
 }
 
@@ -124,13 +125,29 @@ type watchRow struct {
 	LatestBarTs  int64                   `json:"latestBarTs"`
 }
 
+// watchlist returns the session user's watchlist rows (auth enforced by the
+// middleware, so userID is always non-zero here).
 func (d Deps) watchlist(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	syms, err := d.St.ListSymbols(ctx, false)
+	syms, err := d.St.ListUserSymbols(r.Context(), userID(r))
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
 	}
+	d.writeWatchRows(w, r, syms)
+}
+
+// screener returns rows for every tracked symbol (global market data).
+func (d Deps) screener(w http.ResponseWriter, r *http.Request) {
+	syms, err := d.St.ListSymbols(r.Context(), false)
+	if err != nil {
+		httpErr(w, 500, err.Error())
+		return
+	}
+	d.writeWatchRows(w, r, syms)
+}
+
+func (d Deps) writeWatchRows(w http.ResponseWriter, r *http.Request, syms []md.Symbol) {
+	ctx := r.Context()
 	rows := make([]watchRow, 0, len(syms))
 	for _, s := range syms {
 		row := watchRow{Symbol: s, Scores: map[md.Horizon]md.Score{}}
@@ -525,6 +542,11 @@ func (d Deps) subscribe(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 422, err.Error())
 		return
 	}
+	// Put it on the caller's watchlist (ingestion itself is global).
+	if err := d.St.AddUserSymbol(r.Context(), userID(r), sym.ID); err != nil {
+		httpErr(w, 500, err.Error())
+		return
+	}
 	writeJSON(w, sym)
 }
 
@@ -542,11 +564,24 @@ func (d Deps) unsubscribe(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, "unknown symbol")
 		return
 	}
-	if err := d.St.SetSymbolActive(r.Context(), s.ID, false); err != nil {
+	// Remove from the caller's watchlist; ingestion stays on while ANY other
+	// user still watches the symbol.
+	if err := d.St.RemoveUserSymbol(r.Context(), userID(r), s.ID); err != nil {
 		httpErr(w, 500, err.Error())
 		return
 	}
-	s.Active = false
+	watchers, err := d.St.SymbolWatcherCount(r.Context(), s.ID)
+	if err != nil {
+		httpErr(w, 500, err.Error())
+		return
+	}
+	if watchers == 0 {
+		if err := d.St.SetSymbolActive(r.Context(), s.ID, false); err != nil {
+			httpErr(w, 500, err.Error())
+			return
+		}
+		s.Active = false
+	}
 	writeJSON(w, s) // history is kept by design; only the live feed stops
 }
 

@@ -130,7 +130,7 @@ func Scan(ctx context.Context, st *store.Store) (Findings, error) {
 	var f Findings
 
 	// ── open positions: PnL + opposing score ────────────────────────────
-	positions, err := st.Positions(ctx, true)
+	positions, err := st.Positions(ctx, 0, true)
 	if err != nil {
 		return f, fmt.Errorf("watcher: positions: %w", err)
 	}

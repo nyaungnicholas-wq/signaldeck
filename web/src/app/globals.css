@@ -25,11 +25,36 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+  line-height: 1.55;
   background-image: radial-gradient(
     1200px 500px at 50% -200px,
     rgba(251, 191, 36, 0.04),
     transparent
   );
+}
+
+/* READING MODE — toggled from the header, persisted in localStorage.
+   Scales every rem-based size site-wide, relaxes leading, brightens the
+   dim/faint tiers for contrast. The terminal look stays; it just breathes. */
+html[data-reading-mode="on"] {
+  font-size: 17.5px;
+}
+html[data-reading-mode="on"] {
+  --dim: #a5b2c2;
+  --faint: #7d8899;
+}
+html[data-reading-mode="on"] body {
+  line-height: 1.7;
+}
+html[data-reading-mode="on"] .panel-h {
+  padding: 12px 18px;
+  letter-spacing: 0.12em;
+}
+html[data-reading-mode="on"] td,
+html[data-reading-mode="on"] th {
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 .panel {
@@ -40,7 +65,7 @@ body {
 }
 
 .panel-h {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   letter-spacing: 0.16em;
   color: var(--dim);
   font-weight: 500;
@@ -55,9 +80,47 @@ body {
   border: 1px solid var(--border);
   background: var(--panel2);
   border-radius: 6px;
-  padding: 4px 10px;
-  font-size: 0.7rem;
+  padding: 5px 10px;
+  font-size: 0.75rem;
   color: var(--dim);
+}
+
+/* Anything with a title tooltip advertises itself with a subtle underline. */
+[title] {
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--faint);
+  text-underline-offset: 3px;
+}
+a[title],
+img[title],
+button[title],
+[title=""] {
+  text-decoration-line: none;
+}
+
+/* Shared skeleton shimmer (see components/Skeleton.tsx). */
+.skeleton-bar {
+  background: linear-gradient(90deg, var(--panel2) 25%, var(--border) 50%, var(--panel2) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Dense data tables never break the page — they scroll inside their panel. */
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+table {
+  min-width: max-content;
 }
 
 .tnum {

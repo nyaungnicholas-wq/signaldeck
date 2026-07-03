@@ -76,7 +76,7 @@ export default function PredictionGauge({
             <div className="tnum text-4xl font-extrabold leading-none" style={{ color }}>
               {fmtProbPct(cal)}
             </div>
-            <div className="mt-1.5 text-[0.68rem]" style={{ color: "var(--dim)" }}>
+            <div className="mt-1.5 text-[0.75rem]" style={{ color: "var(--dim)" }}>
               calibrated · probability the price is higher {label}
             </div>
           </div>
@@ -84,7 +84,7 @@ export default function PredictionGauge({
             <div className="tnum text-lg font-bold" style={{ color: "var(--dim)" }}>
               {fmtProbPct(raw)}
             </div>
-            <div className="text-[0.62rem]" style={{ color: "var(--faint)" }}>
+            <div className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
               raw
             </div>
           </div>
@@ -111,7 +111,7 @@ export default function PredictionGauge({
             aria-hidden="true"
           />
         </div>
-        <div className="tnum mt-1 flex justify-between text-[0.6rem]" style={{ color: "var(--faint)" }}>
+        <div className="tnum mt-1 flex justify-between text-[0.75rem]" style={{ color: "var(--faint)" }}>
           <span>0%</span>
           <span>50% coin-flip</span>
           <span>100%</span>
@@ -136,7 +136,7 @@ export default function PredictionGauge({
           )}
         </div>
         {thin && (
-          <div className="mt-2 text-[0.68rem] leading-relaxed" style={{ color: "var(--warn)" }}>
+          <div className="mt-2 text-[0.75rem] leading-relaxed" style={{ color: "var(--warn)" }}>
             thin blend — only {nUsed} underlying signal{nUsed === 1 ? "" : "s"} agreed to weigh in,
             so this probability is less reliable than a full blend. Treat it as tentative.
           </div>

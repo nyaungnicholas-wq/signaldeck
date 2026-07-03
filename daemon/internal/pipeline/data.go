@@ -3,6 +3,8 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/aiagents/sentiment"
@@ -12,6 +14,17 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/sectors"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
+
+// envInt reads an integer env override, falling back to def when unset or
+// malformed. Used for operator tunables that don't warrant config plumbing.
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
 
 // NewsFetcher pulls per-symbol headlines from Alpaca into the DB (stocks only;
 // Alpaca news doesn't cover crypto pairs).
@@ -59,9 +72,14 @@ func (w *SentimentTagger) Run(ctx context.Context) (string, error) {
 	if !w.LLM.Enabled() {
 		return "skipped: no LLM key", nil
 	}
-	// Small batch every 10 min: gentle on the free-tier rate limit (bursts
-	// past ~35 rapid calls get HTTP 429), and it steadily drains the backlog.
-	n, err := sentiment.RunOnce(ctx, w.LLM, w.St, 12)
+	// The provider limit is burst-shaped (past ~35 rapid calls → HTTP 429),
+	// not throughput-shaped, so pace the calls and take a bigger batch:
+	// 60 headlines at one call per 5s stays far below the burst limit while
+	// draining a backlog ~6x faster than the old 12-per-pass burst. The LLM
+	// daily cap still bounds total spend. Tunable via env for other providers.
+	batch := envInt("SIGNALDECK_SENTIMENT_BATCH", 60)
+	pace := time.Duration(envInt("SIGNALDECK_SENTIMENT_PACE_MS", 5000)) * time.Millisecond
+	n, err := sentiment.RunOnce(ctx, w.LLM, w.St, batch, pace)
 	if err != nil {
 		return "", err
 	}

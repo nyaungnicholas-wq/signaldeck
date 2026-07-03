@@ -9,6 +9,8 @@ import {
   type WatchRow,
 } from "@/lib/api";
 import { fmtPct } from "@/lib/format";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 // A holding row as edited in the builder. weight is a raw percent (need not
 // sum to 100 — the backend normalizes). A stable id keeps React keys sane
@@ -43,12 +45,14 @@ function fmtUSD(v: number): string {
 /** One VaR figure: percent + dollar translation, framed as a loss. */
 function VaRCell({
   label,
+  labelTitle,
   pct,
   notional,
   hint,
   faded = false,
 }: {
   label: string;
+  labelTitle?: string;
   pct: number;
   notional: number;
   hint: string;
@@ -60,7 +64,7 @@ function VaRCell({
       className="flex flex-col gap-1 px-4 py-4"
       style={{ borderRight: "1px solid var(--border)" }}
     >
-      <div className="text-[0.64rem] tracking-wide" style={{ color: "var(--faint)" }}>
+      <div className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }} title={labelTitle}>
         {label}
       </div>
       <div
@@ -72,7 +76,7 @@ function VaRCell({
       <div className="tnum text-[0.78rem]" style={{ color: "var(--dim)" }}>
         {has ? `−$${fmtUSD(lossUSD(pct, notional))}` : "—"}
       </div>
-      <div className="mt-1 text-[0.64rem] leading-snug" style={{ color: "var(--faint)" }}>
+      <div className="mt-1 text-[0.75rem] leading-snug" style={{ color: "var(--faint)" }}>
         {hint}
       </div>
     </div>
@@ -241,7 +245,7 @@ export default function RiskPage() {
                   value={r.market}
                   onChange={(e) => setRow(r.id, { market: e.target.value as Market })}
                   aria-label={`holding ${i + 1} market`}
-                  className="cursor-pointer rounded border px-2 py-1.5 text-[0.72rem]"
+                  className="cursor-pointer rounded border px-2 py-1.5 text-[0.78rem]"
                   style={{
                     background: "var(--panel2)",
                     borderColor: "var(--border)",
@@ -268,7 +272,7 @@ export default function RiskPage() {
                       color: "var(--text)",
                     }}
                   />
-                  <span className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+                  <span className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
                     %
                   </span>
                 </div>
@@ -276,7 +280,7 @@ export default function RiskPage() {
                   type="button"
                   onClick={() => removeRow(r.id)}
                   aria-label={`remove holding ${i + 1}`}
-                  className="cursor-pointer rounded border px-2 py-1.5 text-[0.72rem] transition-colors duration-150 hover:brightness-125"
+                  className="cursor-pointer rounded border px-2 py-1.5 text-[0.78rem] transition-colors duration-150 hover:brightness-125"
                   style={{
                     background: "var(--panel2)",
                     borderColor: "var(--border)",
@@ -300,7 +304,7 @@ export default function RiskPage() {
           {/* quick-pick chips from the watchlist */}
           {picker.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[0.68rem]" style={{ color: "var(--faint)" }}>
+              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 add from watchlist
               </span>
               {picker.map((p) => (
@@ -329,7 +333,7 @@ export default function RiskPage() {
             </div>
           )}
           {watchErr !== null && watch === null && (
-            <div className="text-[0.68rem]" style={{ color: "var(--faint)" }}>
+            <div className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
               watchlist unavailable — type symbols manually.
             </div>
           )}
@@ -342,7 +346,7 @@ export default function RiskPage() {
             <button
               type="button"
               onClick={addRow}
-              className="cursor-pointer rounded border px-3 py-1.5 text-[0.72rem] transition-colors duration-150 hover:brightness-125"
+              className="min-h-[40px] cursor-pointer rounded border px-3 py-1.5 text-[0.78rem] transition-colors duration-150 hover:brightness-125"
               style={{
                 background: "var(--panel2)",
                 borderColor: "var(--border)",
@@ -355,7 +359,7 @@ export default function RiskPage() {
               type="button"
               onClick={equalWeightWatchlist}
               disabled={picker.length === 0}
-              className="cursor-pointer rounded border px-3 py-1.5 text-[0.72rem] transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-[40px] cursor-pointer rounded border px-3 py-1.5 text-[0.78rem] transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
               style={{
                 background: "var(--panel2)",
                 borderColor: "var(--border)",
@@ -366,7 +370,7 @@ export default function RiskPage() {
               equal-weight my watchlist
             </button>
 
-            <label className="flex items-center gap-2 text-[0.72rem]">
+            <label className="flex items-center gap-2 text-[0.78rem]">
               <span style={{ color: "var(--faint)" }}>notional $</span>
               <input
                 type="number"
@@ -389,7 +393,7 @@ export default function RiskPage() {
               type="button"
               onClick={run}
               disabled={!canRun}
-              className="cursor-pointer rounded border px-4 py-1.5 text-[0.72rem] font-bold tracking-wide transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-[40px] cursor-pointer rounded border px-4 py-1.5 text-[0.78rem] font-bold tracking-wide transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
               style={{
                 background: "rgba(251,191,36,.10)",
                 borderColor: "var(--accent)",
@@ -404,13 +408,11 @@ export default function RiskPage() {
 
       {/* run error */}
       {runErr !== null && (
-        <div className="panel px-4 py-6 text-center text-[0.75rem]">
-          <div style={{ color: "var(--bad)" }}>{runErr}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start it with{" "}
-            <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-          </div>
-        </div>
+        <ErrorState
+          message={runErr}
+          hint="is the daemon running? start it with signaldeckd, then retry."
+          retry={run}
+        />
       )}
 
       {/* initial / empty state */}
@@ -449,7 +451,7 @@ export default function RiskPage() {
                 >
                   {summary}
                 </p>
-                <p className="mt-2 text-[0.7rem] tnum" style={{ color: "var(--faint)" }}>
+                <p className="mt-2 text-[0.78rem] tnum" style={{ color: "var(--faint)" }}>
                   priced against ${fmtUSD(ranNotional)} notional ·{" "}
                   {(report.Confidence * 100).toFixed(0)}% confidence · 1-day horizon
                 </p>
@@ -469,18 +471,21 @@ export default function RiskPage() {
             <div className="grid grid-cols-1 md:grid-cols-3">
               <VaRCell
                 label="HISTORICAL VaR (95%)"
+                labelTitle="Value at risk — the worst plausible 1-day loss at 95% confidence, from actual return history"
                 pct={report.HistVaRPct}
                 notional={ranNotional}
                 hint="1 day in 20, losses have been at least this bad — measured from actual return history."
               />
               <VaRCell
                 label="HISTORICAL CVaR (95%)"
+                labelTitle="Conditional value at risk — the average loss on the worst 1-in-20 days"
                 pct={report.HistCVaRPct}
                 notional={ranNotional}
                 hint="the average loss on those worst 1-in-20 days — how deep the tail actually runs."
               />
               <VaRCell
                 label="PARAMETRIC VaR (95%)"
+                labelTitle="Value at risk estimated from a normal distribution of returns"
                 pct={report.ParamVaRPct}
                 notional={ranNotional}
                 hint="the normal-curve estimate — cleaner, but blind to fat tails."
@@ -488,7 +493,7 @@ export default function RiskPage() {
               />
             </div>
             <div
-              className="px-4 py-3 text-[0.68rem] leading-relaxed"
+              className="px-4 py-3 text-[0.75rem] leading-relaxed"
               style={{ borderTop: "1px solid var(--border)", color: "var(--faint)" }}
             >
               <span style={{ color: "var(--warn)" }}>note:</span> parametric VaR assumes normal
@@ -506,10 +511,11 @@ export default function RiskPage() {
               </span>
             </div>
             {drivers.length === 0 ? (
-              <div className="px-4 py-6 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                no risk contributions returned — the daemon may lack return history for these
-                symbols.
-              </div>
+              <EmptyState
+                className="border-0"
+                message="No risk contributions returned"
+                detail="The daemon may lack return history for these symbols — let bars accrue and run again."
+              />
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-[0.8rem]">
@@ -517,29 +523,30 @@ export default function RiskPage() {
                     <tr style={{ borderBottom: "1px solid var(--border)" }}>
                       <th
                         scope="col"
-                        className="px-3 py-2 text-left text-[0.64rem] font-medium tracking-wide"
+                        className="px-3 py-2 text-left text-[0.75rem] font-medium tracking-wide"
                         style={{ color: "var(--faint)" }}
                       >
                         SYMBOL
                       </th>
                       <th
                         scope="col"
-                        className="px-3 py-2 text-left text-[0.64rem] font-medium tracking-wide"
+                        className="px-3 py-2 text-left text-[0.75rem] font-medium tracking-wide"
                         style={{ color: "var(--faint)" }}
                       >
                         SHARE OF RISK
                       </th>
                       <th
                         scope="col"
-                        className="px-3 py-2 text-right text-[0.64rem] font-medium tracking-wide"
+                        className="px-3 py-2 text-right text-[0.75rem] font-medium tracking-wide"
                         style={{ color: "var(--faint)" }}
                       >
                         WEIGHT
                       </th>
                       <th
                         scope="col"
-                        className="px-3 py-2 text-right text-[0.64rem] font-medium tracking-wide"
+                        className="px-3 py-2 text-right text-[0.75rem] font-medium tracking-wide"
                         style={{ color: "var(--faint)" }}
+                        title="Annualized volatility — how much this symbol swings in a typical year"
                       >
                         ANNUAL VOL
                       </th>
@@ -606,9 +613,11 @@ export default function RiskPage() {
               </span>
             </div>
             {(report.Scenarios ?? []).length === 0 ? (
-              <div className="px-4 py-6 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                no stress scenarios returned for this portfolio.
-              </div>
+              <EmptyState
+                className="border-0"
+                message="No stress scenarios returned for this portfolio"
+                detail="Scenario replays need enough shared history across the holdings."
+              />
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-[0.8rem]">
@@ -616,28 +625,29 @@ export default function RiskPage() {
                     <tr style={{ borderBottom: "1px solid var(--border)" }}>
                       <th
                         scope="col"
-                        className="px-3 py-2 text-left text-[0.64rem] font-medium tracking-wide"
+                        className="px-3 py-2 text-left text-[0.75rem] font-medium tracking-wide"
                         style={{ color: "var(--faint)" }}
                       >
                         SCENARIO
                       </th>
                       <th
                         scope="col"
-                        className="px-3 py-2 text-right text-[0.64rem] font-medium tracking-wide"
+                        className="px-3 py-2 text-right text-[0.75rem] font-medium tracking-wide"
                         style={{ color: "var(--faint)" }}
+                        title="Profit and loss"
                       >
                         P&amp;L
                       </th>
                       <th
                         scope="col"
-                        className="px-3 py-2 text-right text-[0.64rem] font-medium tracking-wide"
+                        className="px-3 py-2 text-right text-[0.75rem] font-medium tracking-wide"
                         style={{ color: "var(--faint)" }}
                       >
                         ON ${fmtUSD(ranNotional)}
                       </th>
                       <th
                         scope="col"
-                        className="px-3 py-2 text-left text-[0.64rem] font-medium tracking-wide"
+                        className="px-3 py-2 text-left text-[0.75rem] font-medium tracking-wide"
                         style={{ color: "var(--faint)" }}
                       >
                         DETAIL
@@ -672,7 +682,7 @@ export default function RiskPage() {
                               ? `${usd >= 0 ? "+" : "−"}$${fmtUSD(Math.abs(usd))}`
                               : "—"}
                           </td>
-                          <td className="px-3 py-2 text-[0.74rem]" style={{ color: "var(--dim)" }}>
+                          <td className="px-3 py-2 text-[0.78rem]" style={{ color: "var(--dim)" }}>
                             {s.Detail || "—"}
                           </td>
                         </tr>

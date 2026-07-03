@@ -1,0 +1,207 @@
+// Package health is the daemon's watchdog: it inspects worker_runs for every
+// registered periodic worker, flags workers whose last successful run is
+// suspiciously old, records dq_events, writes a machine-readable
+// data/health.json for outside tooling (launchd, cron, dashboards), and fires
+// a macOS notification when the fleet transitions to unhealthy.
+package health
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"time"
+
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+)
+
+// minThreshold is the floor on staleness: fast workers (1m cadence) shouldn't
+// alarm on a brief hiccup.
+const minThreshold = 30 * time.Minute
+
+// notifyCooldown limits macOS notifications to at most one per 6h.
+const notifyCooldown = 6 * time.Hour
+
+// WorkerSpec describes one registered worker for staleness checks.
+type WorkerSpec struct {
+	Name     string
+	Interval time.Duration
+}
+
+// StaleWorkers is the pure staleness rule: a worker is stale when its last
+// successful run is older than 3x its interval (floored at 30 minutes).
+// Long-running workers (Interval <= 0, e.g. stream ingestors) are skipped —
+// their runs block for days by design. Workers missing from lastOK are
+// compared against `fallback` (typically daemon boot time), so a freshly
+// booted daemon doesn't page before workers had a chance to succeed.
+// The result is sorted by name.
+func StaleWorkers(specs []WorkerSpec, lastOK map[string]time.Time, fallback, now time.Time) []string {
+	var stale []string
+	for _, s := range specs {
+		if s.Interval <= 0 {
+			continue
+		}
+		threshold := 3 * s.Interval
+		if threshold < minThreshold {
+			threshold = minThreshold
+		}
+		last, ok := lastOK[s.Name]
+		if !ok {
+			last = fallback
+		}
+		if now.Sub(last) > threshold {
+			stale = append(stale, s.Name)
+		}
+	}
+	sort.Strings(stale)
+	return stale
+}
+
+// Status is the shape of data/health.json.
+type Status struct {
+	OK           bool     `json:"ok"`
+	StaleWorkers []string `json:"staleWorkers"`
+	Ts           int64    `json:"ts"`
+}
+
+// Watchdog is the periodic health worker (implements workers.Worker).
+type Watchdog struct {
+	St         *store.Store
+	Specs      []WorkerSpec
+	StatusPath string // where health.json goes (required)
+	// Notify shows a user-facing alert; nil = osascript display notification.
+	Notify func(msg string) error
+
+	started    time.Time
+	lastNotify time.Time
+	wasOK      bool
+	inited     bool
+}
+
+// Name implements workers.Worker.
+func (w *Watchdog) Name() string { return "watchdog" }
+
+// Interval implements workers.Worker.
+func (w *Watchdog) Interval() time.Duration { return 10 * time.Minute }
+
+// Run performs one health sweep.
+func (w *Watchdog) Run(ctx context.Context) (string, error) {
+	now := time.Now()
+	if !w.inited {
+		w.started, w.wasOK, w.inited = now, true, true
+	}
+
+	lastOK, err := w.lastSuccess(ctx)
+	if err != nil {
+		return "", fmt.Errorf("query worker_runs: %w", err)
+	}
+	stale := StaleWorkers(w.Specs, lastOK, w.started, now)
+	ok := len(stale) == 0
+
+	if err := w.writeStatus(Status{OK: ok, StaleWorkers: append([]string{}, stale...), Ts: now.Unix()}); err != nil {
+		slog.Warn("watchdog: write health.json", "err", err)
+	}
+
+	for _, name := range stale {
+		if err := w.recordDQ(ctx, name, lastOK[name], now); err != nil {
+			slog.Warn("watchdog: record dq", "worker", name, "err", err)
+		}
+	}
+
+	// Notify only on the healthy→unhealthy transition, at most once per 6h.
+	if !ok && w.wasOK && now.Sub(w.lastNotify) > notifyCooldown {
+		w.lastNotify = now
+		notify := w.Notify
+		if notify == nil {
+			notify = osascriptNotify
+		}
+		if err := notify(fmt.Sprintf("SignalDeck: %d stale worker(s): %v", len(stale), stale)); err != nil {
+			slog.Warn("watchdog: notification failed", "err", err) // never fatal
+		}
+	}
+	w.wasOK = ok
+
+	if ok {
+		return fmt.Sprintf("healthy: %d workers checked", len(w.Specs)), nil
+	}
+	return fmt.Sprintf("UNHEALTHY: stale %v", stale), nil
+}
+
+// lastSuccess maps worker → time of most recent successful run (read pool).
+func (w *Watchdog) lastSuccess(ctx context.Context) (map[string]time.Time, error) {
+	rows, err := w.St.DB().QueryContext(ctx,
+		`SELECT worker, MAX(started_at) FROM worker_runs WHERE status='ok' GROUP BY worker`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var name string
+		var ts int64
+		if err := rows.Scan(&name, &ts); err != nil {
+			return nil, err
+		}
+		out[name] = time.Unix(ts, 0)
+	}
+	return out, rows.Err()
+}
+
+// recordDQ inserts a "worker_stale" dq_event unless one for the same worker
+// already exists within the last hour (dedup — the watchdog runs every 10m).
+func (w *Watchdog) recordDQ(ctx context.Context, worker string, last time.Time, now time.Time) error {
+	prefix := "worker=" + worker + " "
+	var n int
+	err := w.St.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM dq_events WHERE kind='worker_stale' AND ts > ? AND detail LIKE ?`,
+		now.Add(-time.Hour).Unix(), prefix+"%").Scan(&n)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	lastStr := "never"
+	if !last.IsZero() {
+		lastStr = last.Format(time.RFC3339)
+	}
+	return w.St.InsertDQ(ctx, md.DQEvent{
+		Ts:     now.Unix(),
+		Kind:   "worker_stale",
+		Detail: fmt.Sprintf("%slast successful run %s", prefix, lastStr),
+	})
+}
+
+// writeStatus atomically replaces health.json (write temp + rename), so
+// pollers never read a torn file.
+func (w *Watchdog) writeStatus(s Status) error {
+	if w.StatusPath == "" {
+		return fmt.Errorf("status path not configured")
+	}
+	if err := os.MkdirAll(filepath.Dir(w.StatusPath), 0o755); err != nil {
+		return err
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	tmp := w.StatusPath + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, w.StatusPath)
+}
+
+// osascriptNotify pops a macOS notification. Best-effort: any failure (no
+// osascript, headless session) is returned for logging but never fatal.
+func osascriptNotify(msg string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	script := fmt.Sprintf("display notification %q with title %q", msg, "SignalDeck watchdog")
+	return exec.CommandContext(ctx, "osascript", "-e", script).Run()
+}

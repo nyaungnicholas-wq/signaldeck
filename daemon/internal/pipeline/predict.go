@@ -258,10 +258,12 @@ func (w *BreakoutRunner) Run(ctx context.Context) (string, error) {
 			return "", err
 		}
 		closes := make([]float64, len(daily))
+		tss := make([]int64, len(daily))
 		for i, b := range daily {
 			closes[i] = b.Close
+			tss[i] = b.Ts
 		}
-		series = append(series, breakout.Series{Symbol: s.Symbol, Closes: closes})
+		series = append(series, breakout.Series{Symbol: s.Symbol, Closes: closes, Ts: tss})
 		for _, sig := range breakout.Detect(daily) {
 			// Dedup: skip if we already logged this kind at/after this ts.
 			last, err := w.St.LastBreakoutTs(ctx, s.ID, sig.Kind)

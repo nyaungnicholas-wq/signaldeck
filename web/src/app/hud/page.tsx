@@ -6,6 +6,9 @@
 import { useEffect, useState } from "react";
 import { api, pollMs, type Hud } from "@/lib/api";
 import { ago } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 import type { HudSummary } from "@/components/hud/types";
 import AccountPanel from "@/components/hud/AccountPanel";
 import EquityChart from "@/components/hud/EquityChart";
@@ -16,6 +19,7 @@ import TradesPanel from "@/components/hud/TradesPanel";
 export default function HudPage() {
   const [hud, setHud] = useState<Hud | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -37,7 +41,7 @@ export default function HudPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   const summary = (hud?.summary ?? undefined) as HudSummary | undefined;
   const macro = summary?.macro;
@@ -55,7 +59,7 @@ export default function HudPage() {
         {hud?.fetchedAt ? (
           <span className="chip tnum">fetched {ago(hud.fetchedAt)} via hud-sync</span>
         ) : null}
-        {summary?.asof ? <span className="chip tnum">trader asof {summary.asof}</span> : null}
+        {summary?.asof ? <span className="chip tnum">trader as of {summary.asof}</span> : null}
         {summary && summary.connected === false ? (
           <span className="chip" style={{ color: "var(--warn)" }}>
             alpaca unreachable at last sync
@@ -82,29 +86,26 @@ export default function HudPage() {
 
       {/* Daemon unreachable and nothing to show yet */}
       {err && !hud ? (
-        <div className="panel p-6 text-[0.8rem]" style={{ color: "var(--bad)" }}>
-          {err}
-          <div className="mt-2 text-[0.72rem]" style={{ color: "var(--dim)" }}>
-            Is the SignalDeck daemon running? Start signaldeckd (:8322) — this page recovers on
-            its own once it is up.
-          </div>
-        </div>
+        <ErrorState
+          message={err}
+          hint="Is the SignalDeck daemon running? Start signaldeckd (:8322) — this page recovers on its own once it is up."
+          retry={() => {
+            setErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       ) : !hud ? (
-        <div className="p-2 text-[0.72rem]" style={{ color: "var(--faint)" }}>
-          loading…
-        </div>
+        <Skeleton lines={4} label="loading trader HUD" />
       ) : !hud.available ? (
-        <div className="panel p-6 text-[0.8rem]" style={{ color: "var(--dim)" }}>
-          trader-hud not synced yet — start it (
-          <span className="tnum" style={{ color: "var(--text)" }}>
-            stock-trader dashboard/server.py :8787
-          </span>
-          ); SignalDeck shows the last known state once synced.
-        </div>
+        <EmptyState
+          message="trader-hud not synced yet"
+          detail="Start it (stock-trader dashboard/server.py :8787); SignalDeck shows the last known state once synced."
+        />
       ) : !summary ? (
-        <div className="panel p-6 text-[0.72rem]" style={{ color: "var(--faint)" }}>
-          synced, but the last trader-hud payload was empty — waiting for the next sync
-        </div>
+        <EmptyState
+          message="synced, but the last trader-hud payload was empty"
+          detail="Waiting for the next sync."
+        />
       ) : (
         <>
           {alerts.length > 0 && (

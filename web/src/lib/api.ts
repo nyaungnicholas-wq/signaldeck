@@ -176,6 +176,7 @@ function authHeaders(json: boolean): Record<string, string> {
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     cache: "no-store",
+    credentials: "include",
     headers: authHeaders(false),
   });
   if (!res.ok) {
@@ -188,6 +189,7 @@ async function get<T>(path: string): Promise<T> {
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
+    credentials: "include",
     headers: authHeaders(true),
     body: JSON.stringify(body),
   });
@@ -203,6 +205,15 @@ const q = (symbol: string, market: Market) =>
 
 export const api = {
   health: () => get<{ version: string; uptimeS: number; alpaca: boolean }>("/api/health"),
+
+  // ── auth (session cookie; all calls send credentials: "include") ──
+  register: (username: string, password: string) =>
+    post<Me>("/api/auth/register", { username, password }),
+  login: (username: string, password: string) =>
+    post<Me>("/api/auth/login", { username, password }),
+  logout: () => post<{ ok: boolean }>("/api/auth/logout", {}),
+  me: () => get<Me>("/api/auth/me"),
+
   watchlist: () => get<WatchRow[]>("/api/watchlist"),
   symbol: (symbol: string, market: Market) =>
     get<SymbolDetail>(`/api/symbol?${q(symbol, market)}`),
@@ -263,6 +274,12 @@ export const api = {
   regimeConditioned: (symbol: string, market: Market) =>
     get<RegimeConditioned>(`/api/regime-conditioned?${q(symbol, market)}`),
 };
+
+export interface Me {
+  id: number;
+  username: string;
+  isAdmin: boolean;
+}
 
 export interface NewsItem {
   id: string;

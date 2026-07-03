@@ -18,19 +18,19 @@ export default function TradesPanel({ trades }: { trades?: HudTrade[] }) {
         )}
       </div>
       {list.length === 0 ? (
-        <div className="p-4 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+        <div className="p-4 text-[0.78rem]" style={{ color: "var(--faint)" }}>
           no recent fills in the last sync
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-[0.8rem] tnum">
             <thead>
-              <tr className="text-[0.64rem] tracking-wide" style={{ color: "var(--faint)" }}>
-                <th className="px-4 py-2 text-left font-medium">FILLED</th>
-                <th className="px-3 py-2 text-left font-medium">SIDE</th>
+              <tr className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
+                <th className="px-4 py-2 text-left font-medium" title="When the order filled">FILLED</th>
+                <th className="px-3 py-2 text-left font-medium" title="Buy or sell">SIDE</th>
                 <th className="px-3 py-2 text-left font-medium">SYMBOL</th>
-                <th className="px-3 py-2 text-right font-medium">QTY</th>
-                <th className="px-3 py-2 pr-4 text-right font-medium">PRICE</th>
+                <th className="px-3 py-2 text-right font-medium" title="Quantity — shares filled">QTY</th>
+                <th className="px-3 py-2 pr-4 text-right font-medium" title="Fill price">PRICE</th>
               </tr>
             </thead>
             <tbody>

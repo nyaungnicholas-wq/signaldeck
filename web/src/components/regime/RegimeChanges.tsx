@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 import type { Market, RegimeChange } from "@/lib/api";
 import { ago } from "@/lib/format";
+import EmptyState from "@/components/EmptyState";
 import { regimeColor } from "./regime";
 
 /** Fallback market inference from symbol shape (BTC/USD → crypto, AAPL → stocks),
@@ -35,7 +36,7 @@ function ChangeRow({ c, marketFor }: { c: RegimeChange; marketFor: (sym: string)
       <span className="tnum text-[0.78rem] font-bold" style={{ color: toColor }}>
         {c.to || "—"}
       </span>
-      <span className="tnum ml-auto shrink-0 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+      <span className="tnum ml-auto shrink-0 text-[0.78rem]" style={{ color: "var(--faint)" }}>
         {ago(c.ts)}
       </span>
     </li>
@@ -68,9 +69,11 @@ export default function RegimeChanges({
         </span>
       </div>
       {sorted.length === 0 ? (
-        <div className="px-4 py-6 text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          no regime changes recorded yet (they log as the data grows).
-        </div>
+        <EmptyState
+          className="border-0"
+          message="No regime changes recorded yet"
+          detail="Transitions log here as the data grows."
+        />
       ) : (
         <ul>
           {sorted.map((c, i) => (
@@ -79,7 +82,7 @@ export default function RegimeChanges({
         </ul>
       )}
       <div
-        className="border-t px-4 py-2 text-[0.68rem] leading-relaxed"
+        className="border-t px-4 py-2 text-[0.75rem] leading-relaxed"
         style={{ borderColor: "var(--border)", color: "var(--faint)" }}
       >
         The transition is the signal — a regime change often precedes the move.

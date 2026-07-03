@@ -1,6 +1,8 @@
 "use client";
 
 import type { Calibration } from "@/lib/api";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
 import ReliabilityDiagram from "./ReliabilityDiagram";
 
 type CalHorizon = "1d" | "1w";
@@ -20,13 +22,13 @@ function Stat({
 }) {
   return (
     <div className="min-w-0">
-      <div className="text-[0.62rem] uppercase tracking-wider" style={{ color: "var(--faint)" }}>
+      <div className="text-[0.75rem] uppercase tracking-wider" style={{ color: "var(--faint)" }}>
         {label}
       </div>
       <div className="tnum mt-0.5 text-xl font-bold" style={{ color: valueColor ?? "var(--text)" }}>
         {value}
       </div>
-      <div className="mt-0.5 text-[0.62rem] leading-snug" style={{ color: "var(--dim)" }}>
+      <div className="mt-0.5 text-[0.75rem] leading-snug" style={{ color: "var(--dim)" }}>
         {sub}
       </div>
     </div>
@@ -52,12 +54,14 @@ export default function CalibrationPanel({
   data,
   loading,
   err,
+  retry,
 }: {
   horizon: CalHorizon;
   onHorizon: (h: CalHorizon) => void;
   data: Calibration | null;
   loading: boolean;
   err: string | null;
+  retry?: () => void;
 }) {
   const n = data?.n ?? 0;
   const bins = data?.bins ?? [];
@@ -89,23 +93,22 @@ export default function CalibrationPanel({
       </div>
 
       {err ? (
-        <div className="px-4 py-6 text-[0.75rem] leading-relaxed" style={{ color: "var(--bad)" }}>
-          {err}
-          <span style={{ color: "var(--faint)" }}>
-            {" "}
-            — is the daemon running? start signaldeckd and the diagram will populate.
-          </span>
-        </div>
+        <ErrorState
+          message={err}
+          hint="is the daemon running? start signaldeckd and the diagram will populate."
+          retry={retry}
+          className="border-0"
+        />
       ) : loading && !data ? (
-        <div className="px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          loading…
+        <div className="px-4 py-4">
+          <Skeleton lines={4} label="loading calibration" className="border-0 p-0" />
         </div>
       ) : (
         <div className="px-4 py-4">
           {/* honest caveat when the calibrator hasn't kicked in yet */}
           {thin && (
             <div
-              className="mb-3 rounded-md border px-3 py-2.5 text-[0.7rem] leading-relaxed"
+              className="mb-3 rounded-md border px-3 py-2.5 text-[0.78rem] leading-relaxed"
               style={{ borderColor: "var(--warn)", background: "var(--panel2)", color: "var(--warn)" }}
             >
               calibration is still the identity map — only {n.toLocaleString("en-US")} resolved
@@ -140,7 +143,7 @@ export default function CalibrationPanel({
           </div>
 
           {/* legend */}
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.64rem]" style={{ color: "var(--faint)" }}>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
             <span className="inline-flex items-center gap-1.5">
               <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: "var(--bid)", opacity: 0.7 }} />
               above the line — underconfident (reality beat the forecast)

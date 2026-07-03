@@ -20,6 +20,9 @@ import {
   type WatchRow,
 } from "@/lib/api";
 import { ago, fmtPct, fmtPrice, fmtScore, fmtTs, scoreColor } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 // ── correlation cell color ──────────────────────────────────────────────
 // +correlation (move together) → red (--ask); −correlation (diversifying) →
@@ -48,7 +51,7 @@ function SummaryBar({ stat }: { stat: PortfolioResponse["stat"] }) {
       value: (
         <span className="tnum" style={{ color: scoreColor(stat.TotalPnLPct) }}>
           {fmtPct(stat.TotalPnLPct)}
-          <span className="ml-1.5 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          <span className="ml-1.5 text-[0.78rem]" style={{ color: "var(--faint)" }}>
             {stat.TotalPnLAbs >= 0 ? "+" : "−"}
             {fmtPrice(Math.abs(stat.TotalPnLAbs))}
           </span>
@@ -88,7 +91,11 @@ function SummaryBar({ stat }: { stat: PortfolioResponse["stat"] }) {
       <div className="grid grid-cols-2 gap-px sm:grid-cols-3 lg:grid-cols-5" style={{ background: "var(--border)" }}>
         {cells.map((c) => (
           <div key={c.label} className="px-4 py-3" style={{ background: "var(--panel)" }}>
-            <div className="text-[0.62rem] tracking-wide" style={{ color: "var(--faint)" }}>
+            <div
+              className="text-[0.75rem] tracking-wide"
+              style={{ color: "var(--faint)" }}
+              title={c.label === "total P&L" ? "total profit and loss across logged positions" : undefined}
+            >
               {c.label}
             </div>
             <div className="mt-1 text-[0.9rem] font-semibold">{c.value}</div>
@@ -163,7 +170,7 @@ function LogForm({
           entry price + pressure score captured server-side at latest close
         </span>
       </div>
-      <form onSubmit={submit} className="flex flex-wrap items-end gap-x-4 gap-y-3 px-4 py-4 text-[0.72rem]">
+      <form onSubmit={submit} className="flex flex-wrap items-end gap-x-4 gap-y-3 px-4 py-4 text-[0.78rem]">
         <label className="flex flex-col gap-1">
           <span style={{ color: "var(--faint)" }}>symbol</span>
           <select
@@ -171,7 +178,7 @@ function LogForm({
             onChange={(e) => setPick(e.target.value)}
             aria-label="symbol to log"
             disabled={options.length === 0}
-            className="min-w-44 cursor-pointer rounded border px-2 py-1.5 text-[0.72rem] disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-[40px] min-w-44 cursor-pointer rounded border px-2 py-1.5 text-[0.78rem] disabled:cursor-not-allowed disabled:opacity-50"
             style={fieldStyle}
           >
             <option value="">
@@ -196,7 +203,7 @@ function LogForm({
             onChange={(e) => setQty(e.target.value)}
             placeholder="0"
             aria-label="quantity"
-            className="tnum w-28 rounded border px-2.5 py-1.5 text-[0.72rem]"
+            className="tnum min-h-[40px] w-28 rounded border px-2.5 py-1.5 text-[0.78rem]"
             style={fieldStyle}
           />
         </label>
@@ -210,7 +217,7 @@ function LogForm({
             placeholder="why you took this — e.g. oversold bounce"
             aria-label="note"
             maxLength={280}
-            className="w-full rounded border px-2.5 py-1.5 text-[0.72rem]"
+            className="min-h-[40px] w-full rounded border px-2.5 py-1.5 text-[0.78rem]"
             style={fieldStyle}
           />
         </label>
@@ -218,7 +225,7 @@ function LogForm({
         <button
           type="submit"
           disabled={!valid || busy}
-          className="cursor-pointer rounded border px-4 py-1.5 text-[0.72rem] font-semibold tracking-wide transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
+          className="min-h-[40px] cursor-pointer rounded border px-4 py-1.5 text-[0.78rem] font-semibold tracking-wide transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
           style={{
             borderColor: valid ? "var(--accent)" : "var(--border)",
             background: valid ? "rgba(251,191,36,.1)" : "var(--panel2)",
@@ -230,7 +237,7 @@ function LogForm({
       </form>
       {(err || ok) && (
         <div
-          className="border-t px-4 py-2 text-[0.7rem]"
+          className="border-t px-4 py-2 text-[0.78rem]"
           style={{ borderColor: "var(--border)", color: err ? "var(--bad)" : "var(--ok)" }}
         >
           {err ?? ok}
@@ -270,14 +277,14 @@ function PositionsTable({
       <table className="w-full text-[0.8rem]">
         <thead>
           <tr
-            className="text-left text-[0.62rem] tracking-wide"
+            className="text-left text-[0.75rem] tracking-wide"
             style={{ color: "var(--faint)", borderBottom: "1px solid var(--border)" }}
           >
             <th className="px-3 py-2 font-medium">SYMBOL</th>
-            <th className="px-2 py-2 text-right font-medium">QTY</th>
-            <th className="px-2 py-2 text-right font-medium">ENTRY</th>
-            <th className="px-2 py-2 text-right font-medium">LAST</th>
-            <th className="px-2 py-2 text-right font-medium">P&L %</th>
+            <th className="px-2 py-2 text-right font-medium" title="quantity">QTY</th>
+            <th className="px-2 py-2 text-right font-medium" title="entry price">ENTRY</th>
+            <th className="px-2 py-2 text-right font-medium" title="latest price (or exit price if closed)">LAST</th>
+            <th className="px-2 py-2 text-right font-medium" title="profit and loss, percent">P&L %</th>
             <th className="px-2 py-2 text-right font-medium" title="pressure score captured when you logged it">
               SCORE@ENTRY
             </th>
@@ -304,7 +311,7 @@ function PositionsTable({
                   >
                     {p.symbol}
                   </Link>
-                  <span className="ml-1.5 text-[0.6rem] font-normal" style={{ color: "var(--faint)" }}>
+                  <span className="ml-1.5 text-[0.75rem] font-normal" style={{ color: "var(--faint)" }}>
                     {p.market}
                   </span>
                 </td>
@@ -355,7 +362,7 @@ function PositionsTable({
                     {p.open ? "open" : "closed"}
                   </span>
                   {!p.open && p.exitTs ? (
-                    <span className="ml-2 text-[0.6rem]" style={{ color: "var(--faint)" }} title={fmtTs(p.exitTs)}>
+                    <span className="ml-2 text-[0.75rem]" style={{ color: "var(--faint)" }} title={fmtTs(p.exitTs)}>
                       {ago(p.exitTs)}
                     </span>
                   ) : null}
@@ -367,14 +374,14 @@ function PositionsTable({
                       onClick={() => close(p)}
                       disabled={closing}
                       aria-label={`close ${p.symbol} position`}
-                      className="cursor-pointer rounded border px-2.5 py-1 text-[0.66rem] transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="cursor-pointer rounded border px-2.5 py-1 text-[0.75rem] transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
                       style={{ borderColor: "var(--border)", color: "var(--dim)", background: "var(--panel2)" }}
                     >
                       {closing ? "closing…" : "close"}
                     </button>
                   ) : null}
                   {rowErr && rowErr.id === p.id && (
-                    <div className="mt-1 text-[0.6rem]" style={{ color: "var(--bad)" }}>
+                    <div className="mt-1 text-[0.75rem]" style={{ color: "var(--bad)" }}>
                       {rowErr.msg}
                     </div>
                   )}
@@ -436,7 +443,7 @@ function CorrelationPanel({
           type="button"
           onClick={onRefresh}
           disabled={refreshing}
-          className="ml-auto cursor-pointer rounded border px-2.5 py-1 text-[0.62rem] tracking-wide transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
+          className="ml-auto min-h-[36px] cursor-pointer rounded border px-3 py-1 text-[0.75rem] tracking-wide transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
           style={{ borderColor: "var(--border)", color: "var(--dim)", background: "var(--panel2)" }}
         >
           {refreshing ? "refreshing…" : "refresh"}
@@ -444,25 +451,21 @@ function CorrelationPanel({
       </div>
 
       {loading && (
-        <div className="px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          loading…
+        <div className="p-4">
+          <Skeleton lines={4} label="loading correlation matrix" className="border-0 p-0" />
         </div>
       )}
 
       {err && !data && (
-        <div className="px-4 py-8 text-center text-[0.75rem]">
-          <div style={{ color: "var(--bad)" }}>{err}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start it with <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-          </div>
-        </div>
+        <ErrorState className="m-4" message={err} retry={onRefresh} />
       )}
 
       {data && !enough && (
-        <div className="px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          not enough symbols with overlapping history to correlate — subscribe to at least two
-          symbols and let daily bars accrue, then refresh.
-        </div>
+        <EmptyState
+          className="m-4"
+          message="Not enough symbols with overlapping history to correlate."
+          detail="Subscribe to at least two symbols, let daily bars accrue, then refresh."
+        />
       )}
 
       {data && enough && (
@@ -476,7 +479,7 @@ function CorrelationPanel({
                     <th
                       key={s}
                       scope="col"
-                      className="px-1.5 py-1 text-[0.6rem] font-medium"
+                      className="px-1.5 py-1 text-[0.75rem] font-medium"
                       style={{ color: "var(--faint)" }}
                     >
                       {s}
@@ -489,7 +492,7 @@ function CorrelationPanel({
                   <tr key={rowSym}>
                     <th
                       scope="row"
-                      className="pr-2 text-right text-[0.6rem] font-medium whitespace-nowrap"
+                      className="pr-2 text-right text-[0.75rem] font-medium whitespace-nowrap"
                       style={{ color: "var(--faint)" }}
                     >
                       {rowSym}
@@ -502,7 +505,7 @@ function CorrelationPanel({
                         <td
                           key={colSym}
                           title={`${rowSym} × ${colSym}: ${fmtR(r)}`}
-                          className="h-9 w-11 rounded text-center text-[0.62rem]"
+                          className="h-9 w-11 rounded text-center text-[0.75rem]"
                           style={{ background: c.bg, color: c.fg }}
                         >
                           {diag ? "—" : fmtR(r)}
@@ -516,7 +519,7 @@ function CorrelationPanel({
           </div>
 
           <div
-            className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t px-4 py-2.5 text-[0.62rem]"
+            className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t px-4 py-2.5 text-[0.75rem]"
             style={{ borderColor: "var(--border)", color: "var(--faint)" }}
           >
             <span className="flex items-center gap-1.5">
@@ -544,6 +547,7 @@ export default function PortfolioPage() {
   const [pf, setPf] = useState<PortfolioResponse | null>(null);
   const [pfErr, setPfErr] = useState<string | null>(null);
   const [watch, setWatch] = useState<WatchRow[] | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   const [corr, setCorr] = useState<CorrelationResponse | null>(null);
   const [corrErr, setCorrErr] = useState<string | null>(null);
@@ -577,7 +581,7 @@ export default function PortfolioPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   // Correlation: load once, refresh on demand (heavier query, not polled).
   const loadCorr = useMemo(
@@ -639,25 +643,22 @@ export default function PortfolioPage() {
       </div>
 
       {/* honesty note — the reason this page exists */}
-      <p className="px-1 text-[0.72rem] italic leading-relaxed" style={{ color: "var(--faint)" }}>
+      <p className="px-1 text-[0.78rem] italic leading-relaxed" style={{ color: "var(--faint)" }}>
         This grades YOUR discretionary reads against what actually happened — the same honesty
         loop as the model, applied to you. The score beside each entry is the pressure reading at
         the moment you logged it; watch whether it was right.
       </p>
 
-      {loading && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          loading…
-        </div>
-      )}
+      {loading && <Skeleton lines={5} label="loading portfolio" />}
 
       {hardError && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]">
-          <div style={{ color: "var(--bad)" }}>{pfErr}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start it with <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-          </div>
-        </div>
+        <ErrorState
+          message={pfErr ?? "could not load portfolio"}
+          retry={() => {
+            setPfErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
 
       {pf !== null && (
@@ -674,11 +675,11 @@ export default function PortfolioPage() {
               </span>
             </div>
             {positions.length === 0 ? (
-              <div className="px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                no positions logged yet — pick a symbol above and log a read. Entry price and the
-                pressure score are captured for you at the latest close, so you can grade the call
-                later.
-              </div>
+              <EmptyState
+                className="m-4"
+                message="No positions logged yet."
+                detail="Pick a symbol above and log a read — entry price and the pressure score are captured at the latest close, so you can grade the call later."
+              />
             ) : (
               <PositionsTable positions={positions} onClosed={forcePoll} />
             )}

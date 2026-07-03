@@ -2,12 +2,20 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/nyaungnicholas-wq/signaldeck/internal/api"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/backup"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/hud"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
@@ -49,11 +57,20 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	backfiller := pipeline.NewBackfiller(st, alpacaClient, krakenClient)
 
 	// LLM provider (NVIDIA by default). Disabled/no-op until a key is set.
+	// The daily call counter is persisted in SQLite so restarts can't reset
+	// the spend cap.
 	llmClient := llm.New(cfg.LLMKey, cfg.LLMBaseURL, cfg.LLMModel, cfg.LLMDailyCap)
+	llm.SetSpendStore(llmClient, st)
 	if llmClient.Enabled() {
 		slog.Info("AI layer enabled", "model", cfg.LLMModel, "dailyCap", cfg.LLMDailyCap)
 	} else {
 		slog.Warn("AI layer disabled — no LLM key (set SIGNALDECK_NVIDIA_KEY in daemon/.env)")
+	}
+
+	// ── multi-user bootstrap: seed the "local" account on first boot ────
+	if err := bootstrapUsers(ctx, st); err != nil {
+		slog.Error("bootstrap users", "err", err)
+		return
 	}
 
 	// ── symbols: consolidated crypto always; seed stocks on first boot ──
@@ -122,6 +139,26 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		fleet = append(fleet, streamWorker{streamer}, &pipeline.StockBars{St: st, Alpaca: alpacaClient})
 	}
 
+	// ── ops reliability: nightly backup + watchdog ──────────────────
+	backupDir := os.Getenv("SIGNALDECK_BACKUP_DIR")
+	if backupDir == "" {
+		backupDir = filepath.Join(filepath.Dir(cfg.DBPath), "backups")
+	}
+	fleet = append(fleet, &backup.Worker{
+		St: st, Dir: backupDir, Keep: 7, FirstRunDelay: 5 * time.Minute,
+	})
+	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
+	// audits itself; its own health shows on the Agents page like any worker.
+	specs := make([]health.WorkerSpec, 0, len(fleet))
+	for _, w := range fleet {
+		specs = append(specs, health.WorkerSpec{Name: w.Name(), Interval: w.Interval()})
+	}
+	fleet = append(fleet, &health.Watchdog{
+		St:         st,
+		Specs:      specs,
+		StatusPath: filepath.Join(filepath.Dir(cfg.DBPath), "health.json"),
+	})
+
 	// ── API ─────────────────────────────────────────────────────────
 	deps := api.Deps{
 		St:      st,
@@ -143,6 +180,36 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	}()
 
 	workers.NewRunner(st, fleet...).Start(ctx)
+}
+
+// bootstrapUsers migrates a pre-multi-user database: when no accounts exist
+// yet, it creates an admin user "local" with a random password (printed ONCE
+// to stderr — change it or register your own account), adopts every currently
+// active symbol into that user's watchlist, and assigns any unowned paper
+// positions to it, so existing single-user behavior continues unchanged.
+func bootstrapUsers(ctx context.Context, st *store.Store) error {
+	n, err := st.CountUsers(ctx)
+	if err != nil || n > 0 {
+		return err
+	}
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return err
+	}
+	password := hex.EncodeToString(raw)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	uid, err := st.CreateUser(ctx, "local", string(hash), true)
+	if err != nil {
+		return err
+	}
+	if err := st.AdoptActiveSymbols(ctx, uid); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "signaldeck: created initial admin user %q with password %q — log in and keep it safe (this is printed only once)\n", "local", password)
+	return nil
 }
 
 // subscribe validates + registers a symbol and kicks off its backfill.

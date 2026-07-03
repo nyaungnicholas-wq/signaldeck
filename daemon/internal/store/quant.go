@@ -25,7 +25,7 @@ type Forecast struct {
 
 // UpsertForecast stores the latest forecast for a symbol+horizon.
 func (s *Store) UpsertForecast(ctx context.Context, f Forecast) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		INSERT OR REPLACE INTO forecasts
 		  (symbol_id, horizon, ts, prob, accuracy, brier, auc, base_rate, lift, n_train, n_eval)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
@@ -61,6 +61,7 @@ func (s *Store) Forecasts(ctx context.Context, symbolID int64) ([]Forecast, erro
 type Position struct {
 	ID           int64    `json:"id"`
 	SymbolID     int64    `json:"-"`
+	UserID       int64    `json:"-"` // owning user (0 = unowned legacy row)
 	Symbol       string   `json:"symbol"`
 	Market       string   `json:"market"`
 	Qty          float64  `json:"qty"`
@@ -75,34 +76,46 @@ type Position struct {
 
 // InsertPosition logs a new open paper position.
 func (s *Store) InsertPosition(ctx context.Context, p Position) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO positions (symbol_id, qty, entry_price, entry_ts, note, score_at_entry, open)
-		VALUES (?,?,?,?,?,?,1)`,
-		p.SymbolID, p.Qty, p.EntryPrice, p.EntryTs, p.Note, p.ScoreAtEntry)
+	var uid any
+	if p.UserID != 0 {
+		uid = p.UserID
+	}
+	res, err := s.w.ExecContext(ctx, `
+		INSERT INTO positions (symbol_id, user_id, qty, entry_price, entry_ts, note, score_at_entry, open)
+		VALUES (?,?,?,?,?,?,?,1)`,
+		p.SymbolID, uid, p.Qty, p.EntryPrice, p.EntryTs, p.Note, p.ScoreAtEntry)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
 }
 
-// ClosePosition marks a position closed at the given price/time.
-func (s *Store) ClosePosition(ctx context.Context, id int64, exitPrice float64) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE positions SET open=0, exit_price=?, exit_ts=? WHERE id=?`,
-		exitPrice, time.Now().Unix(), id)
-	return err
+// ClosePosition marks a position closed at the given price/time. userID != 0
+// restricts the close to that user's positions; ok=false when no row matched.
+func (s *Store) ClosePosition(ctx context.Context, id, userID int64, exitPrice float64) (bool, error) {
+	res, err := s.w.ExecContext(ctx,
+		`UPDATE positions SET open=0, exit_price=?, exit_ts=?
+		 WHERE id=? AND (?=0 OR user_id=?)`,
+		exitPrice, time.Now().Unix(), id, userID, userID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
-// Positions returns positions joined to their symbol (openOnly filters).
-func (s *Store) Positions(ctx context.Context, openOnly bool) ([]Position, error) {
+// Positions returns positions joined to their symbol (openOnly filters;
+// userID != 0 scopes to one user's positions).
+func (s *Store) Positions(ctx context.Context, userID int64, openOnly bool) ([]Position, error) {
 	q := `SELECT p.id, p.symbol_id, sym.symbol, sym.market, p.qty, p.entry_price,
 	             p.entry_ts, p.note, p.score_at_entry, p.open, p.exit_price, p.exit_ts
-	      FROM positions p JOIN symbols sym ON sym.id = p.symbol_id`
+	      FROM positions p JOIN symbols sym ON sym.id = p.symbol_id
+	      WHERE (?=0 OR p.user_id=?)`
 	if openOnly {
-		q += ` WHERE p.open=1`
+		q += ` AND p.open=1`
 	}
 	q += ` ORDER BY p.entry_ts DESC`
-	rows, err := s.db.QueryContext(ctx, q)
+	rows, err := s.db.QueryContext(ctx, q, userID, userID)
 	if err != nil {
 		return nil, err
 	}

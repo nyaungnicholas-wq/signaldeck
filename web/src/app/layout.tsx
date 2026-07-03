@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Shell from "@/components/Shell";
+import AuthGate from "@/components/AuthGate";
 
 const mono = JetBrains_Mono({
   variable: "--font-mono",
@@ -23,6 +24,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${mono.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col">
+        <AuthGate />
         <Shell>{children}</Shell>
       </body>
     </html>

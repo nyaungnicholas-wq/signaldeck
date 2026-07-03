@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { api, type NewsItem, type WatchRow, type Market } from "@/lib/api";
 import { ago, fmtScore } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 const POLL_MS = 10000;
 
@@ -72,12 +75,12 @@ function NewsRow({ item }: { item: NewsItem }) {
         )}
 
         {item.source && (
-          <span className="text-[0.68rem]" style={{ color: "var(--faint)" }}>
+          <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
             {item.source}
           </span>
         )}
 
-        <span className="tnum ml-auto shrink-0 text-[0.68rem]" style={{ color: "var(--faint)" }}>
+        <span className="tnum ml-auto shrink-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           {ago(item.ts)}
         </span>
       </div>
@@ -113,6 +116,7 @@ export default function NewsPage() {
   const [err, setErr] = useState<string | null>(null);
   const [tone, setTone] = useState<Tone>("all");
   const [sym, setSym] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -134,7 +138,7 @@ export default function NewsPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   const sorted = useMemo(
     () => [...(news ?? [])].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0)),
@@ -213,19 +217,17 @@ export default function NewsPage() {
         </p>
       </section>
 
-      {loading && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          loading…
-        </div>
-      )}
+      {loading && <Skeleton lines={4} label="loading news" />}
 
       {hardError && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]">
-          <div style={{ color: "var(--bad)" }}>{err}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start it with <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-          </div>
-        </div>
+        <ErrorState
+          message={err ?? "news unavailable"}
+          hint="Is the daemon running? Start it with signaldeckd."
+          retry={() => {
+            setErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
 
       {news !== null && (
@@ -241,7 +243,7 @@ export default function NewsPage() {
                     type="button"
                     aria-pressed={active}
                     onClick={() => setTone(t.key)}
-                    className="chip cursor-pointer transition-colors duration-150 hover:text-[var(--text)]"
+                    className="chip min-h-[40px] cursor-pointer transition-colors duration-150 hover:text-[var(--text)]"
                     style={{
                       color: active ? "var(--text)" : undefined,
                       borderColor: active ? "var(--accent)" : undefined,
@@ -262,14 +264,14 @@ export default function NewsPage() {
               role="group"
               aria-label="Filter by symbol"
             >
-              <span className="text-[0.68rem]" style={{ color: "var(--faint)" }}>
+              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 symbol
               </span>
               <button
                 type="button"
                 aria-pressed={sym === null}
                 onClick={() => setSym(null)}
-                className="chip cursor-pointer transition-colors duration-150 hover:text-[var(--text)]"
+                className="chip min-h-[40px] cursor-pointer transition-colors duration-150 hover:text-[var(--text)]"
                 style={{
                   color: sym === null ? "var(--text)" : undefined,
                   borderColor: sym === null ? "var(--accent)" : undefined,
@@ -285,7 +287,7 @@ export default function NewsPage() {
                     type="button"
                     aria-pressed={active}
                     onClick={() => setSym(active ? null : s)}
-                    className="chip cursor-pointer font-bold transition-colors duration-150 hover:text-[var(--text)]"
+                    className="chip min-h-[40px] cursor-pointer font-bold transition-colors duration-150 hover:text-[var(--text)]"
                     style={{
                       color: active ? "var(--text)" : undefined,
                       borderColor: active ? "var(--accent)" : undefined,
@@ -299,11 +301,19 @@ export default function NewsPage() {
           )}
 
           {visible.length === 0 ? (
-            <div className="px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-              {sorted.length === 0
-                ? "No news yet — the news-fetcher pulls headlines every 20 min (stocks only; Alpaca doesn't cover crypto)."
-                : "nothing matches this filter."}
-            </div>
+            sorted.length === 0 ? (
+              <EmptyState
+                className="m-4"
+                message="No news yet"
+                detail="The news-fetcher pulls headlines every 20 min (stocks only; Alpaca doesn't cover crypto)."
+              />
+            ) : (
+              <EmptyState
+                className="m-4"
+                message="Nothing matches this filter"
+                detail="Try the “all” tone or clear the symbol filter."
+              />
+            )
           ) : (
             <div>
               {visible.map((item) => (

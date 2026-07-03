@@ -262,7 +262,8 @@ type RankOutcome struct {
 //
 // topPct and bottomPct are fractions in (0,1] (e.g. 0.2 for the top/bottom
 // 20%). Each cohort takes at least one outcome. With N outcomes the cohort size
-// is max(1, round(pct*N)). Cohorts are selected by sorting a copy on Score
+// is max(1, round(pct*N)), then cohorts are shrunk until DISJOINT so no outcome
+// is ever counted in both means (with N==1 no disjoint split exists: zeros). Cohorts are selected by sorting a copy on Score
 // (input is not modified); ties fall wherever the stable sort places them,
 // which does not affect the reported means for well-separated sets. If
 // outcomes is empty, or either pct is <= 0, all three results are 0.
@@ -281,6 +282,19 @@ func Spread(outcomes []RankOutcome, topPct, bottomPct float64) (topMeanFwd, bott
 
 	topN := cohortSize(topPct, n)
 	bottomN := cohortSize(bottomPct, n)
+	// Cohorts must be DISJOINT: with small N or generous percentiles the two
+	// can overlap in the middle, double-counting outcomes in both means and
+	// corrupting the spread. Shrink until they fit, keeping >=1 each.
+	for topN+bottomN > n {
+		if topN >= bottomN && topN > 1 {
+			topN--
+		} else if bottomN > 1 {
+			bottomN--
+		} else {
+			// n == 1: a spread needs two disjoint cohorts; report zeros.
+			return 0, 0, 0
+		}
+	}
 
 	// Bottom cohort: the lowest-score outcomes (front of ascending slice).
 	bottomSum := 0.0

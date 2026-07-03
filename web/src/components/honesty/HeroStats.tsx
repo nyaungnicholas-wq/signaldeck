@@ -26,20 +26,22 @@ function Stat({
   value,
   valueColor,
   sub,
+  title,
 }: {
   label: string;
   value: string;
   valueColor?: string;
   sub: string;
+  title?: string;
 }) {
   return (
     <section className="panel">
-      <div className="panel-h">{label}</div>
+      <div className="panel-h" title={title}>{label}</div>
       <div className="px-4 py-3">
         <div className="tnum text-2xl font-bold" style={{ color: valueColor ?? "var(--text)" }}>
           {value}
         </div>
-        <div className="mt-1 text-[0.7rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+        <div className="mt-1 text-[0.78rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           {sub}
         </div>
       </div>
@@ -73,6 +75,7 @@ export default function HeroStats({ data, horizon }: { data: Honesty; horizon: H
       />
       <Stat
         label="IC · SCORE ↔ FWD RETURN"
+        title="Information coefficient — correlation between score and forward return (+1 perfect, 0 no information)"
         value={n && Number.isFinite(ic) ? ic.toFixed(3) : "—"}
         valueColor={icColor(ic, n)}
         sub={icLine(ic, n)}

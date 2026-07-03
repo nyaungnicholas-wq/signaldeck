@@ -15,6 +15,9 @@ import {
   type WatchRow,
 } from "@/lib/api";
 import { ago, fmtTs } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 interface Selected {
   symbol: string;
@@ -54,7 +57,7 @@ function Stat({
 }) {
   return (
     <div className="flex flex-col gap-0.5" title={title}>
-      <span className="text-[0.6rem] tracking-wide" style={{ color: "var(--faint)" }}>
+      <span className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
         {label}
       </span>
       <span className="tnum text-[0.82rem]" style={{ color: color ?? "var(--text)" }}>
@@ -91,7 +94,7 @@ function ForecastCard({ f, symbol }: { f: Forecast; symbol: string }) {
       <div className="grid grid-cols-1 gap-4 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
         {/* ── LEFT: the probability, prominent, with its bar ── */}
         <div className="flex flex-col gap-2">
-          <span className="text-[0.62rem] tracking-wide" style={{ color: "var(--faint)" }}>
+          <span className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
             P(up over {f.horizon})
           </span>
           <div className="flex items-baseline gap-2">
@@ -102,7 +105,7 @@ function ForecastCard({ f, symbol }: { f: Forecast; symbol: string }) {
               {probPct}
             </span>
             {!beatsBaseRate && (
-              <span className="text-[0.62rem]" style={{ color: "var(--faint)" }}>
+              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 (ungraded)
               </span>
             )}
@@ -126,7 +129,7 @@ function ForecastCard({ f, symbol }: { f: Forecast; symbol: string }) {
               }}
             />
           </div>
-          <div className="tnum flex justify-between text-[0.62rem]" style={{ color: "var(--faint)" }}>
+          <div className="tnum flex justify-between text-[0.75rem]" style={{ color: "var(--faint)" }}>
             <span>0%</span>
             <span>base rate {pctText(f.baseRate, 0)}</span>
             <span>100%</span>
@@ -135,7 +138,7 @@ function ForecastCard({ f, symbol }: { f: Forecast; symbol: string }) {
           {/* honesty verdict — the whole point of the page */}
           {beatsBaseRate ? (
             <div
-              className="mt-1 rounded border px-2.5 py-1.5 text-[0.7rem] leading-snug"
+              className="mt-1 rounded border px-2.5 py-1.5 text-[0.78rem] leading-snug"
               style={{
                 borderColor: "var(--ok)",
                 background: "var(--bid-dim)",
@@ -149,7 +152,7 @@ function ForecastCard({ f, symbol }: { f: Forecast; symbol: string }) {
             </div>
           ) : (
             <div
-              className="mt-1 rounded border px-2.5 py-1.5 text-[0.7rem] leading-snug"
+              className="mt-1 rounded border px-2.5 py-1.5 text-[0.78rem] leading-snug"
               style={{
                 borderColor: "var(--border)",
                 background: "var(--panel2)",
@@ -164,10 +167,10 @@ function ForecastCard({ f, symbol }: { f: Forecast; symbol: string }) {
 
         {/* ── RIGHT: the out-of-sample grade, right next to the probability ── */}
         <div className="flex flex-col gap-3">
-          <span className="text-[0.6rem] tracking-wide" style={{ color: "var(--faint)" }}>
+          <span className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
             OUT-OF-SAMPLE GRADE
           </span>
-          <div className="grid grid-cols-3 gap-x-4 gap-y-3">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
             <Stat
               label="ACCURACY"
               value={pctText(f.accuracy, 1)}
@@ -206,7 +209,7 @@ function ForecastCard({ f, symbol }: { f: Forecast; symbol: string }) {
             />
           </div>
 
-          <p className="text-[0.7rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+          <p className="text-[0.78rem] leading-relaxed" style={{ color: "var(--dim)" }}>
             Trained on {isFinite(f.nTrain) ? f.nTrain.toLocaleString("en-US") : "—"} bars; graded on{" "}
             {isFinite(f.nEval) ? f.nEval.toLocaleString("en-US") : "—"} out-of-sample predictions via
             walk-forward.
@@ -221,6 +224,7 @@ export default function ForecastPage() {
   const [rows, setRows] = useState<WatchRow[] | null>(null);
   const [rowsErr, setRowsErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   // Forecasts are keyed by "symbol|market" so switching symbols shows a clean
   // loading state instead of stale cards.
@@ -255,7 +259,7 @@ export default function ForecastPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   const selKey = selected ? `${selected.symbol}|${selected.market}` : "";
 
@@ -282,7 +286,7 @@ export default function ForecastPage() {
       alive = false;
       clearInterval(t);
     };
-  }, [selected]);
+  }, [selected, retryTick]);
 
   const forecasts = fcState && fcState.key === selKey ? fcState.list : null;
   const fcErr = fcErrState && fcErrState.key === selKey ? fcErrState.msg : null;
@@ -351,27 +355,26 @@ export default function ForecastPage() {
           </span>
         </div>
 
-        {rowsLoading && (
-          <div className="px-4 py-6 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-            loading…
-          </div>
-        )}
+        {rowsLoading && <Skeleton lines={2} label="loading watchlist" className="m-4" />}
 
         {rowsHardError && (
-          <div className="px-4 py-6 text-center text-[0.75rem]">
-            <div style={{ color: "var(--bad)" }}>{rowsErr}</div>
-            <div className="mt-2" style={{ color: "var(--faint)" }}>
-              is the daemon running? start it with{" "}
-              <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-            </div>
-          </div>
+          <ErrorState
+            className="m-4"
+            message={rowsErr ?? "watchlist unavailable"}
+            hint="Is the daemon running? Start it with signaldeckd."
+            retry={() => {
+              setRowsErr(null);
+              setRetryTick((t) => t + 1);
+            }}
+          />
         )}
 
         {rows !== null && activeRows.length === 0 && (
-          <div className="px-4 py-6 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-            no active symbols — subscribe to symbols on the watchlist page and the forecast-trainer
-            will pick them up.
-          </div>
+          <EmptyState
+            className="m-4"
+            message="No active symbols yet"
+            detail="Subscribe to symbols on the watchlist page and the forecast-trainer will pick them up."
+          />
         )}
 
         {activeRows.length > 0 && (
@@ -389,7 +392,7 @@ export default function ForecastPage() {
                   type="button"
                   onClick={() => setSelected({ symbol: r.symbol, market: r.market })}
                   aria-pressed={active}
-                  className="chip cursor-pointer transition-colors duration-150 hover:brightness-125"
+                  className="chip min-h-[40px] cursor-pointer transition-colors duration-150 hover:brightness-125"
                   style={{
                     color: active ? "var(--text)" : "var(--dim)",
                     borderColor: active ? "var(--accent)" : "var(--border)",
@@ -397,7 +400,7 @@ export default function ForecastPage() {
                   }}
                 >
                   {r.symbol}
-                  <span className="ml-1.5 text-[0.62rem]" style={{ color: "var(--faint)" }}>
+                  <span className="ml-1.5 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                     {r.market}
                   </span>
                 </button>
@@ -411,32 +414,25 @@ export default function ForecastPage() {
       {selected && (
         <>
           {fcLoading && (
-            <div
-              className="panel px-4 py-8 text-center text-[0.75rem]"
-              style={{ color: "var(--faint)" }}
-            >
-              loading…
-            </div>
+            <Skeleton lines={4} label={`loading forecast for ${selected.symbol}`} />
           )}
 
           {fcHardError && (
-            <div className="panel px-4 py-8 text-center text-[0.75rem]">
-              <div style={{ color: "var(--bad)" }}>{fcErr}</div>
-              <div className="mt-2" style={{ color: "var(--faint)" }}>
-                is the daemon running? start it with{" "}
-                <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-              </div>
-            </div>
+            <ErrorState
+              message={fcErr ?? "forecast unavailable"}
+              hint="Is the daemon running? Start it with signaldeckd."
+              retry={() => {
+                setFcErrState(null);
+                setRetryTick((t) => t + 1);
+              }}
+            />
           )}
 
           {forecasts !== null && forecasts.length === 0 && (
-            <div
-              className="panel px-4 py-8 text-center text-[0.75rem]"
-              style={{ color: "var(--faint)" }}
-            >
-              No forecast yet for {selected.symbol} — the forecast-trainer runs hourly and needs
-              ~150 daily bars.
-            </div>
+            <EmptyState
+              message={`No forecast yet for ${selected.symbol}`}
+              detail="The forecast-trainer runs hourly and needs ~150 daily bars before it can grade a model."
+            />
           )}
 
           {forecasts !== null && forecasts.length > 0 && (
@@ -444,7 +440,7 @@ export default function ForecastPage() {
               {forecasts.map((f) => (
                 <ForecastCard key={`${selKey}:${f.horizon}`} f={f} symbol={selected.symbol} />
               ))}
-              <div className="px-1 text-[0.68rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+              <div className="px-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
                 Want the mechanical baseline instead? See{" "}
                 <Link
                   href={`/s/${selected.market}/${encodeURIComponent(selected.symbol)}`}

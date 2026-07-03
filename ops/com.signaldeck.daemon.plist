@@ -30,6 +30,17 @@
     <false/>
   </dict>
 
+  <!--
+    Log growth: the daemon now rotates its own log in-process — slog goes to
+    BOTH stderr and logs/signaldeckd.log (20 MB x 3 generations; override the
+    path with SIGNALDECK_LOG_FILE, or set it to "" to disable file logging).
+    The launchd redirects below are kept ON PURPOSE as a crash net: they
+    capture panics, runtime faults, and anything printed before logging is
+    initialized — output the in-process writer can miss. Trade-off:
+    daemon.err.log duplicates slog output and still grows unbounded; if that
+    ever matters, point StandardErrorPath at /dev/null — signaldeckd.log
+    carries the same stream, rotated.
+  -->
   <key>StandardOutPath</key>
   <string>/Users/natalienyaung/claude code/signaldeck/logs/daemon.out.log</string>
   <key>StandardErrorPath</key>

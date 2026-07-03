@@ -10,12 +10,15 @@ import (
 // recentR - baseR, both Pearson correlations of daily returns.
 const CorrBreakThreshold = 0.5
 
-// Series is one symbol's close-price history, ASCENDING by time and aligned in
-// index with every other Series passed alongside it (index i is the same bar
-// for all symbols). Only Closes are needed; returns are derived internally.
+// Series is one symbol's close-price history, ASCENDING by time. When Ts is
+// provided (same length as Closes, bar timestamps), series are aligned by
+// intersecting timestamps, so symbols with gaps (halts, listings, holidays)
+// line up on real shared dates. When any series lacks Ts, alignment falls back
+// to index-based truncation to the shortest series (the old approximation).
 type Series struct {
 	Symbol string
 	Closes []float64
+	Ts     []int64
 }
 
 // Break is a pair of symbols whose return correlation changed materially
@@ -46,11 +49,11 @@ type Break struct {
 // forward. Grading whether a flagged decoupling persists is the caller's job;
 // this function only measures the change that has already happened.
 //
-// Alignment: all series are truncated to the shortest length before returns are
-// taken, so mismatched histories cannot silently misalign. A pair is skipped
-// (no Break emitted, not an error) when there are too few aligned returns for
-// either window, or when a window has zero variance in either series (Pearson
-// undefined).
+// Alignment: series are aligned on the intersection of their timestamps when
+// every Series carries Ts (see AlignByTs); otherwise truncated to the shortest
+// length. A pair is skipped (no Break emitted, not an error) when there are too
+// few aligned returns for either window, or when a window has zero variance in
+// either series (Pearson undefined).
 func CorrelationBreaks(series []Series, recent, base int) []Break {
 	out := []Break{}
 	if recent <= 1 || base <= 1 || recent > base {
@@ -60,22 +63,17 @@ func CorrelationBreaks(series []Series, recent, base int) []Break {
 		return out
 	}
 
-	// Align to the shortest close history.
-	minLen := len(series[0].Closes)
-	for _, s := range series {
-		if len(s.Closes) < minLen {
-			minLen = len(s.Closes)
-		}
-	}
-	// returns has length minLen-1; need at least `base` of them.
-	if minLen-1 < base {
+	aligned := AlignByTs(series)
+
+	// Every aligned series has the same length; need at least base+1 closes.
+	if len(aligned) < 2 || len(aligned[0]) < base+1 {
 		return out
 	}
 
 	// Precompute each series' aligned return vector once.
 	rets := make([][]float64, len(series))
-	for i, s := range series {
-		rets[i] = simpleReturns(s.Closes[:minLen])
+	for i := range aligned {
+		rets[i] = simpleReturns(aligned[i])
 	}
 
 	for i := 0; i < len(series); i++ {
@@ -112,6 +110,76 @@ func CorrelationBreaks(series []Series, recent, base int) []Break {
 		}
 		return out[a].B < out[b].B
 	})
+	return out
+}
+
+// AlignByTs returns one close slice per input series, all the same length and
+// index-aligned on real shared bars. If every series carries timestamps (Ts
+// non-nil and len(Ts)==len(Closes)), the result keeps exactly the timestamps
+// present in ALL series, in ascending order — symbols with gaps line up on
+// actual shared dates instead of drifting by index. Otherwise it falls back to
+// truncating every series to the shortest length, keeping the most recent bars
+// (the tail), which preserves the old behavior for callers without timestamps.
+func AlignByTs(series []Series) [][]float64 {
+	out := make([][]float64, len(series))
+	if len(series) == 0 {
+		return out
+	}
+	hasTs := true
+	for _, s := range series {
+		if len(s.Ts) != len(s.Closes) || len(s.Ts) == 0 {
+			hasTs = false
+			break
+		}
+	}
+	if !hasTs {
+		minLen := len(series[0].Closes)
+		for _, s := range series {
+			if len(s.Closes) < minLen {
+				minLen = len(s.Closes)
+			}
+		}
+		for i, s := range series {
+			out[i] = s.Closes[len(s.Closes)-minLen:]
+		}
+		return out
+	}
+	// Count how many series contain each timestamp; keep those present in all.
+	// Duplicate timestamps within one series are collapsed (last close wins).
+	type entry struct {
+		count  int
+		closes []float64 // close per series index, filled as encountered
+	}
+	seen := map[int64]*entry{}
+	for si, s := range series {
+		for bi, ts := range s.Ts {
+			e := seen[ts]
+			if e == nil {
+				e = &entry{closes: make([]float64, len(series))}
+				seen[ts] = e
+			}
+			// Series iterate in order 0..n-1, so count==si means every prior
+			// series (and not yet this one) contained ts — increment once per
+			// series, and only while the run from series 0 is unbroken.
+			if e.count == si {
+				e.count++
+			}
+			e.closes[si] = s.Closes[bi]
+		}
+	}
+	shared := make([]int64, 0, len(seen))
+	for ts, e := range seen {
+		if e.count == len(series) {
+			shared = append(shared, ts)
+		}
+	}
+	sort.Slice(shared, func(a, b int) bool { return shared[a] < shared[b] })
+	for i := range series {
+		out[i] = make([]float64, len(shared))
+		for k, ts := range shared {
+			out[i][k] = seen[ts].closes[i]
+		}
+	}
 	return out
 }
 

@@ -101,3 +101,33 @@ SIP-consolidated). Crypto bars come from Kraken only. Expectancy tables are
 per-symbol tendencies, not cross-sectional models. The insight writer is
 deterministic templates (no LLM). Execution stays in stock-trader — this is
 the instrument panel, not the pilot.
+
+## Exposing SignalDeck remotely
+
+The daemon is safe to keep on localhost by default. To expose it to the internet:
+
+1. **Set a bearer token** (for scripts / non-browser clients; maps to the admin user):
+   `SIGNALDECK_API_TOKEN=<long random string>`
+2. **Put it behind an HTTPS reverse proxy** (Caddy or nginx). Never expose :8322 directly.
+   Example Caddyfile:
+   ```
+   signaldeck.example.com {
+     reverse_proxy 127.0.0.1:8322
+   }
+   ```
+3. **Allowlist your public host and origin** (empty/missing host allowlist = deny):
+   - `SIGNALDECK_ALLOWED_HOSTS=signaldeck.example.com` (Host header allowlist; include the port if non-standard)
+   - `SIGNALDECK_WEB_ORIGINS=https://signaldeck.example.com` (CORS + CSRF origin allowlist)
+4. **Trust the proxy's client-IP headers** so rate limiting keys on real client IPs and
+   session cookies are marked `Secure`:
+   - `SIGNALDECK_TRUST_PROXY=true` (honors `X-Forwarded-For` / `X-Forwarded-Proto`)
+5. **Decide the access policy:**
+   - `SIGNALDECK_OPEN_SIGNUP=false` to close registration after your users have accounts.
+   - `SIGNALDECK_PUBLIC_READS=false` to require login for ALL endpoints (except `/api/health` and `/api/auth/*`).
+   - `SIGNALDECK_RATE_RPS` / `SIGNALDECK_RATE_BURST` to tune rate limits (defaults: reads 10 req/s burst 30; writes + AI 2 req/s burst 5, per client).
+
+Auth model: browser sessions use the `signaldeck_session` HttpOnly cookie (30-day expiry,
+bcrypt-hashed passwords; the first registered user is admin). On first boot with an existing
+database, a `local` admin user is created and its random password printed once to stderr,
+and the current watchlist/positions are migrated to it. The daily AI spend cap is persisted
+in SQLite, so restarts cannot reset it.

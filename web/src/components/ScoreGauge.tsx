@@ -16,7 +16,7 @@ export default function ScoreGauge({
   return (
     <div>
       {!compact && (
-        <div className="mb-1 flex items-baseline justify-between text-[0.7rem]">
+        <div className="mb-1 flex items-baseline justify-between text-[0.78rem]">
           <span style={{ color: "var(--dim)" }}>{label ?? "pressure"}</span>
           <span className="tnum" style={{ color: "var(--text)" }}>
             {fmtScore(score)} · {verdict(score)}

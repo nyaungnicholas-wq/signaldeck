@@ -12,6 +12,9 @@ import {
   type WatchRow,
 } from "@/lib/api";
 import { ago, fmtPct, fmtPrice, fmtScore, scoreColor, verdict } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 type Direction = "all" | "buy" | "sell";
 type MarketFilter = "all" | Market;
@@ -26,15 +29,15 @@ type SortKey =
   | "latestBarTs";
 type SortDir = "asc" | "desc";
 
-const COLUMNS: { key: SortKey; label: string; numeric: boolean }[] = [
+const COLUMNS: { key: SortKey; label: string; numeric: boolean; title?: string }[] = [
   { key: "symbol", label: "SYMBOL", numeric: false },
   { key: "market", label: "MARKET", numeric: false },
-  { key: "lastClose", label: "LAST", numeric: true },
-  { key: "dayChangePct", label: "DAY %", numeric: true },
-  { key: "score", label: "SCORE", numeric: true },
+  { key: "lastClose", label: "LAST", numeric: true, title: "Last close price" },
+  { key: "dayChangePct", label: "DAY %", numeric: true, title: "Change since previous close" },
+  { key: "score", label: "SCORE", numeric: true, title: "Pressure score, −1 (sell) to +1 (buy)" },
   { key: "verdict", label: "VERDICT", numeric: false },
-  { key: "driver", label: "TOP DRIVER", numeric: false },
-  { key: "latestBarTs", label: "LAST BAR", numeric: true },
+  { key: "driver", label: "TOP DRIVER", numeric: false, title: "Component contributing most to the score" },
+  { key: "latestBarTs", label: "LAST BAR", numeric: true, title: "Time of the most recent price bar" },
 ];
 
 interface Derived {
@@ -88,7 +91,7 @@ function FilterChip({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className="chip cursor-pointer transition-colors duration-150 hover:brightness-125"
+      className="chip min-h-[40px] cursor-pointer transition-colors duration-150 hover:brightness-125"
       style={{
         color: active ? "var(--text)" : "var(--dim)",
         borderColor: active ? "var(--accent)" : "var(--border)",
@@ -114,6 +117,7 @@ export default function ScreenerPage() {
   // sorting
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -135,7 +139,7 @@ export default function ScreenerPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   const derived = useMemo<Derived[]>(() => {
     if (!rows) return [];
@@ -209,13 +213,13 @@ export default function ScreenerPage() {
       {/* filter bar */}
       <section className="panel">
         <div className="panel-h">FILTERS</div>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3 text-[0.72rem]">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3 text-[0.78rem]">
           <label className="flex items-center gap-2">
             <span style={{ color: "var(--faint)" }}>horizon</span>
             <select
               value={horizon}
               onChange={(e) => setHorizon(e.target.value as Horizon)}
-              className="cursor-pointer rounded border px-2 py-1 text-[0.72rem]"
+              className="cursor-pointer rounded border px-2 py-1 text-[0.78rem]"
               style={{
                 background: "var(--panel2)",
                 borderColor: "var(--border)",
@@ -272,7 +276,7 @@ export default function ScreenerPage() {
             onChange={(e) => setSearch(e.target.value)}
             placeholder="search symbol or name…"
             aria-label="search symbols"
-            className="min-w-40 flex-1 rounded border px-2.5 py-1.5 text-[0.72rem]"
+            className="min-w-40 flex-1 rounded border px-2.5 py-1.5 text-[0.78rem]"
             style={{
               background: "var(--panel2)",
               borderColor: "var(--border)",
@@ -291,33 +295,32 @@ export default function ScreenerPage() {
           </span>
         </div>
 
-        {loading && (
-          <div className="px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-            loading…
-          </div>
-        )}
+        {loading && <Skeleton lines={4} label="loading screener" className="m-4" />}
 
         {hardError && (
-          <div className="px-4 py-8 text-center text-[0.75rem]">
-            <div style={{ color: "var(--bad)" }}>{err}</div>
-            <div className="mt-2" style={{ color: "var(--faint)" }}>
-              is the daemon running? start it with <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-            </div>
-          </div>
+          <ErrorState
+            message={err ?? "request failed"}
+            hint="Is the daemon running? Start it with signaldeckd and this page will recover."
+            retry={() => {
+              setErr(null);
+              setRetryTick((t) => t + 1);
+            }}
+            className="m-4"
+          />
         )}
 
         {rows !== null && rows.length === 0 && (
-          <div className="px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-            watchlist is empty — subscribe to symbols from the watchlist page and the screener
-            will fill in as bars and scores arrive.
-          </div>
+          <EmptyState
+            message="Your watchlist is empty"
+            detail="Subscribe to symbols from the watchlist page and the screener will fill in as bars and scores arrive."
+          />
         )}
 
         {rows !== null && rows.length > 0 && filtered.length === 0 && (
-          <div className="px-4 py-8 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-            no symbols match the current filters — lower the min score, widen direction/market,
-            or clear the search.
-          </div>
+          <EmptyState
+            message="No symbols match the current filters"
+            detail="Lower the min score, widen direction/market, or clear the search."
+          />
         )}
 
         {filtered.length > 0 && (
@@ -336,13 +339,14 @@ export default function ScreenerPage() {
                             : "descending"
                           : "none"
                       }
-                      className={`px-3 py-2 text-[0.64rem] font-medium tracking-wide ${
+                      className={`px-3 py-2 text-[0.75rem] font-medium tracking-wide ${
                         c.numeric ? "text-right" : "text-left"
                       }`}
                       style={{ color: "var(--faint)" }}
                     >
                       <button
                         type="button"
+                        title={c.title}
                         onClick={() => onSort(c.key, c.numeric)}
                         className={`cursor-pointer tracking-wide transition-colors duration-150 hover:text-[var(--dim)] ${
                           c.numeric ? "text-right" : "text-left"
@@ -398,7 +402,7 @@ export default function ScreenerPage() {
                           <span className="flex items-baseline gap-1.5">
                             <span style={{ color: "var(--text)" }}>{d.driver.name}</span>
                             <span
-                              className="truncate text-[0.7rem]"
+                              className="truncate text-[0.78rem]"
                               style={{ color: "var(--faint)" }}
                               title={d.driver.note}
                             >

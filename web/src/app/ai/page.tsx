@@ -9,6 +9,9 @@ import {
   type FilingResult,
 } from "@/lib/api";
 import { ago } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import ErrorState from "@/components/ErrorState";
+import EmptyState from "@/components/EmptyState";
 
 const AMBER = "var(--accent)";
 const AMBER_BG = "rgba(251,191,36,.10)";
@@ -36,7 +39,7 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      className="cursor-pointer rounded border px-5 py-2 text-[0.78rem] font-bold tracking-wide transition-colors duration-150 disabled:cursor-not-allowed"
+      className="min-h-[40px] cursor-pointer rounded border px-5 py-2 text-[0.78rem] font-bold tracking-wide transition-colors duration-150 disabled:cursor-not-allowed"
       style={{
         borderColor: disabled ? "var(--border)" : AMBER,
         background: disabled ? "var(--panel2)" : AMBER_BG,
@@ -71,7 +74,7 @@ function Thinking({ note }: { note?: string }) {
 function InlineError({ msg }: { msg: string }) {
   return (
     <div
-      className="rounded border px-3 py-2.5 text-[0.74rem] leading-relaxed whitespace-pre-wrap"
+      className="rounded border px-3 py-2.5 text-[0.78rem] leading-relaxed whitespace-pre-wrap"
       style={{
         color: "var(--bad)",
         borderColor: "var(--bad)",
@@ -195,7 +198,7 @@ function AnalystPanel({ enabled }: { enabled: boolean }) {
           </ActionButton>
           {running && <Thinking note="the analyst is reading the tape…" />}
           {!enabled && (
-            <span className="text-[0.7rem]" style={{ color: "var(--faint)" }}>
+            <span className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
               AI is off — enable it to generate a brief.
             </span>
           )}
@@ -212,7 +215,7 @@ function AnalystPanel({ enabled }: { enabled: boolean }) {
             {brief.market && (
               <div className="flex flex-col gap-1.5">
                 <span
-                  className="text-[0.62rem] tracking-wide"
+                  className="text-[0.75rem] tracking-wide"
                   style={{ color: "var(--faint)" }}
                 >
                   MARKET
@@ -229,7 +232,7 @@ function AnalystPanel({ enabled }: { enabled: boolean }) {
             {perSymbol.length > 0 && (
               <div className="flex flex-col gap-1.5">
                 <span
-                  className="text-[0.62rem] tracking-wide"
+                  className="text-[0.75rem] tracking-wide"
                   style={{ color: "var(--faint)" }}
                 >
                   PER SYMBOL
@@ -251,7 +254,7 @@ function AnalystPanel({ enabled }: { enabled: boolean }) {
             )}
 
             {brief.model && (
-              <span className="tnum text-[0.64rem]" style={{ color: "var(--faint)" }}>
+              <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 model: {brief.model}
               </span>
             )}
@@ -371,7 +374,7 @@ function ChatPanel({ enabled }: { enabled: boolean }) {
                       </p>
                       {t.model && (
                         <span
-                          className="tnum text-[0.6rem]"
+                          className="tnum text-[0.75rem]"
                           style={{ color: "var(--faint)" }}
                         >
                           {t.model}
@@ -392,7 +395,7 @@ function ChatPanel({ enabled }: { enabled: boolean }) {
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-1 flex-col gap-1.5" style={{ minWidth: 220 }}>
             <span
-              className="text-[0.66rem] tracking-wide"
+              className="text-[0.75rem] tracking-wide"
               style={{ color: "var(--faint)" }}
             >
               your question
@@ -422,7 +425,7 @@ function ChatPanel({ enabled }: { enabled: boolean }) {
             {awaiting ? "asking…" : "Ask"}
           </ActionButton>
         </div>
-        <span className="text-[0.64rem]" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
           Enter to send{!enabled && " · AI is off"}
         </span>
       </div>
@@ -447,7 +450,7 @@ function FilingSubPanel({
       style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}
     >
       <div
-        className="px-3 py-2 text-[0.66rem] font-bold tracking-[0.14em]"
+        className="px-3 py-2 text-[0.75rem] font-bold tracking-[0.14em]"
         style={{ color, borderBottom: "1px solid var(--border)", background: "var(--panel2)" }}
       >
         {label}
@@ -498,7 +501,7 @@ function FilingPanel({ enabled }: { enabled: boolean }) {
       <div className="flex flex-col gap-4 px-4 py-4">
         <label className="flex flex-col gap-1.5">
           <span
-            className="text-[0.66rem] tracking-wide"
+            className="text-[0.75rem] tracking-wide"
             style={{ color: "var(--faint)" }}
           >
             filing text
@@ -527,7 +530,7 @@ function FilingPanel({ enabled }: { enabled: boolean }) {
             {running ? "analyzing…" : "Analyze"}
           </ActionButton>
           {running && <Thinking note="reading the filing…" />}
-          <span className="text-[0.64rem]" style={{ color: "var(--faint)" }}>
+          <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
             ⌘/Ctrl+Enter to analyze
             {!enabled && " · AI is off"}
           </span>
@@ -559,7 +562,7 @@ function FilingPanel({ enabled }: { enabled: boolean }) {
               />
             </div>
             {result.Model && (
-              <span className="tnum text-[0.64rem]" style={{ color: "var(--faint)" }}>
+              <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 model: {result.Model}
               </span>
             )}
@@ -584,11 +587,15 @@ function ChartersPanel({ charters }: { charters: Record<string, string> | undefi
       </div>
       <div className="px-4 py-4">
         {entries.length === 0 ? (
-          <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-            {charters === undefined
-              ? "loading charters…"
-              : "no charters published by the daemon."}
-          </p>
+          charters === undefined ? (
+            <Skeleton lines={2} label="loading charters" className="border-0 p-0" />
+          ) : (
+            <EmptyState
+              className="border-0 p-0"
+              message="No charters published by the daemon"
+              detail="Each agent's operating rules will appear here once the daemon exposes them."
+            />
+          )
         ) : (
           <div className="flex flex-col gap-2">
             {entries.map(([name, rule]) => (
@@ -623,6 +630,7 @@ function ChartersPanel({ charters }: { charters: Record<string, string> | undefi
 export default function AIPage() {
   const [status, setStatus] = useState<AIStatus | null>(null);
   const [statusErr, setStatusErr] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -644,7 +652,7 @@ export default function AIPage() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [retryTick]);
 
   const enabled = status?.enabled === true;
 
@@ -663,15 +671,20 @@ export default function AIPage() {
         </p>
       </section>
 
+      {/* status loading */}
+      {status === null && statusErr === null && (
+        <Skeleton lines={3} label="loading AI status" />
+      )}
+
       {/* hard error — daemon unreachable */}
       {status === null && statusErr !== null && (
-        <div className="panel px-4 py-8 text-center text-[0.75rem]">
-          <div style={{ color: "var(--bad)" }}>{statusErr}</div>
-          <div className="mt-2" style={{ color: "var(--faint)" }}>
-            is the daemon running? start it with{" "}
-            <span style={{ color: "var(--dim)" }}>signaldeckd</span>
-          </div>
-        </div>
+        <ErrorState
+          message={statusErr}
+          retry={() => {
+            setStatusErr(null);
+            setRetryTick((t) => t + 1);
+          }}
+        />
       )}
 
       {/* AI off — prominent, but sections still render (disabled) */}

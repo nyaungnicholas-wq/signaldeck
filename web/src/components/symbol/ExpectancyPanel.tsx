@@ -7,6 +7,7 @@
 import type { Expectancy, Horizon } from "@/lib/api";
 import { fmtPct, humanizeState } from "@/lib/format";
 import HorizonChips from "./HorizonChips";
+import EmptyState from "@/components/EmptyState";
 
 export default function ExpectancyPanel({
   expectancy,
@@ -40,20 +41,30 @@ export default function ExpectancyPanel({
         </p>
 
         {rows.length === 0 ? (
-          <p className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
-            no {horizon} expectancy yet — tendencies appear once enough
-            history has been observed for each state.
-          </p>
+          <EmptyState
+            message={`No ${horizon} tendencies yet`}
+            detail="Tendencies appear once enough history has been observed for each market state."
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-[0.8rem] tnum">
               <thead>
-                <tr className="text-left text-[0.64rem] tracking-wide" style={{ color: "var(--faint)" }}>
-                  <th className="py-1.5 pr-3 font-medium">STATE</th>
-                  <th className="py-1.5 pr-3 text-right font-medium">N</th>
-                  <th className="py-1.5 pr-3 text-right font-medium">HIT RATE</th>
-                  <th className="py-1.5 pr-3 text-right font-medium">MEAN FWD</th>
-                  <th className="py-1.5 text-right font-medium">MEDIAN FWD</th>
+                <tr className="text-left text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
+                  <th className="py-1.5 pr-3 font-medium" title="Market state (bucketed by score and trend)">
+                    STATE
+                  </th>
+                  <th className="py-1.5 pr-3 text-right font-medium" title="Sample size: number of past occurrences">
+                    N
+                  </th>
+                  <th className="py-1.5 pr-3 text-right font-medium" title="Share of occurrences with a positive forward return">
+                    HIT RATE
+                  </th>
+                  <th className="py-1.5 pr-3 text-right font-medium" title="Mean forward return over the selected horizon">
+                    MEAN FWD
+                  </th>
+                  <th className="py-1.5 text-right font-medium" title="Median forward return over the selected horizon">
+                    MEDIAN FWD
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -72,7 +83,7 @@ export default function ExpectancyPanel({
                         {humanizeState(r.stateKey)}
                         {isNow && (
                           <span
-                            className="ml-2 rounded border px-1.5 py-0.5 text-[0.6rem] tracking-wider"
+                            className="ml-2 rounded border px-1.5 py-0.5 text-[0.75rem] tracking-wider"
                             style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
                           >
                             NOW
@@ -103,7 +114,7 @@ export default function ExpectancyPanel({
           </div>
         )}
 
-        <p className="text-[0.66rem]" style={{ color: "var(--faint)" }}>
+        <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
           Measured historical tendencies with sample sizes — not forecasts.
         </p>
       </div>

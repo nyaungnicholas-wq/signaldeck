@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 import type { RankedRow } from "@/lib/api";
 import { fmtPct } from "@/lib/format";
+import EmptyState from "@/components/EmptyState";
 
 function retColor(v: number): string {
   if (!Number.isFinite(v) || v === 0) return "var(--dim)";
@@ -29,7 +30,7 @@ function RankRow({ r }: { r: RankedRow }) {
           className="cursor-pointer text-[0.8rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
         >
           {r.symbol}
-          <span className="ml-1.5 text-[0.6rem] font-normal" style={{ color: "var(--faint)" }}>
+          <span className="ml-1.5 text-[0.75rem] font-normal" style={{ color: "var(--faint)" }}>
             {r.market}
           </span>
         </Link>
@@ -50,7 +51,7 @@ function RankRow({ r }: { r: RankedRow }) {
               style={{ width: `${pct}%`, background: "var(--accent)" }}
             />
           </div>
-          <span className="tnum w-9 shrink-0 text-right text-[0.74rem]" style={{ color: "var(--dim)" }}>
+          <span className="tnum w-9 shrink-0 text-right text-[0.78rem]" style={{ color: "var(--dim)" }}>
             {Number.isFinite(r.score) ? r.score.toFixed(0) : "—"}
           </span>
         </div>
@@ -85,19 +86,21 @@ export default function RankingTable({ rows }: { rows: RankedRow[] }) {
         </span>
       </div>
       {sorted.length === 0 ? (
-        <div className="px-4 py-6 text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          no ranking yet — it fills in once symbols have enough return history to rank.
-        </div>
+        <EmptyState
+          className="border-0"
+          message="No ranking yet"
+          detail="It fills in once symbols have enough return history to rank."
+        />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[380px] text-[0.8rem]">
             <thead>
-              <tr className="text-[0.62rem] tracking-wide" style={{ color: "var(--faint)" }}>
-                <th className="px-3 py-2 text-right font-medium">#</th>
+              <tr className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
+                <th className="px-3 py-2 text-right font-medium" title="rank within the field">#</th>
                 <th className="px-3 py-2 text-left font-medium">SYMBOL</th>
-                <th className="px-3 py-2 text-left font-medium">SCORE · 0–100</th>
-                <th className="px-3 py-2 text-right font-medium">1M</th>
-                <th className="px-3 py-2 text-right font-medium">3M</th>
+                <th className="px-3 py-2 text-left font-medium" title="relative strength score, 0–100">SCORE · 0–100</th>
+                <th className="px-3 py-2 text-right font-medium" title="return over the last month">1M</th>
+                <th className="px-3 py-2 text-right font-medium" title="return over the last three months">3M</th>
               </tr>
             </thead>
             <tbody>

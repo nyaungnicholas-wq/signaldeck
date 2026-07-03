@@ -5,7 +5,7 @@ import type { HudSlippage, HudStrategy } from "./types";
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-1.5 text-[0.64rem] tracking-wide" style={{ color: "var(--faint)" }}>
+    <div className="mb-1.5 text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
       {children}
     </div>
   );
@@ -27,7 +27,7 @@ export default function StrategyPanel({
       <div className="panel-h">STRATEGY</div>
       <div className="flex flex-col gap-4 p-4 text-[0.8rem]">
         {!s ? (
-          <div className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          <div className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
             no strategy block in the last sync
           </div>
         ) : (
@@ -45,13 +45,21 @@ export default function StrategyPanel({
             <div>
               <Label>BACKTEST EXPECTATIONS</Label>
               <div className="flex flex-wrap gap-2">
-                <span className="chip tnum" style={{ color: "var(--bid)" }}>
+                <span
+                  className="chip tnum"
+                  style={{ color: "var(--bid)" }}
+                  title="Compound annual growth rate (backtested)"
+                >
                   CAGR {s.cagr != null && isFinite(s.cagr) ? fmtPct(s.cagr * 100) : "—"}
                 </span>
-                <span className="chip tnum" style={{ color: "var(--ask)" }}>
-                  MDD {s.mdd != null && isFinite(s.mdd) ? fmtPct(s.mdd * 100) : "—"}
+                <span
+                  className="chip tnum"
+                  style={{ color: "var(--ask)" }}
+                  title="Maximum drawdown — worst peak-to-trough loss (backtested)"
+                >
+                  max drawdown {s.mdd != null && isFinite(s.mdd) ? fmtPct(s.mdd * 100) : "—"}
                 </span>
-                <span className="chip tnum">
+                <span className="chip tnum" title="Share of months that ended positive (backtested)">
                   monthly win{" "}
                   {s.monthly_win != null && isFinite(s.monthly_win)
                     ? fmtPct(s.monthly_win * 100, false)
@@ -85,7 +93,7 @@ export default function StrategyPanel({
                 <Label>LIVE FLAGS</Label>
                 <div className="flex flex-wrap gap-1.5">
                   {flags.map(([k, v]) => (
-                    <span key={k} className="chip tnum text-[0.64rem]">
+                    <span key={k} className="chip tnum text-[0.75rem]">
                       {k}={v}
                     </span>
                   ))}
@@ -93,7 +101,11 @@ export default function StrategyPanel({
               </div>
             )}
 
-            <div className="text-[0.7rem] tnum" style={{ color: "var(--dim)" }}>
+            <div
+              className="text-[0.78rem] tnum"
+              style={{ color: "var(--dim)" }}
+              title="Slippage — price paid vs expected, in basis points (1 bp = 0.01%)"
+            >
               {slippage && (slippage.n ?? 0) > 0
                 ? `slippage · ${slippage.n} fills · avg ${slippage.avg_bps ?? "—"} bps · worst ${
                     slippage.worst_bps ?? "—"

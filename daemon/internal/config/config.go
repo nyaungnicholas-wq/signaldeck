@@ -23,8 +23,15 @@ type Config struct {
 
 	// HTTP security (see internal/api/security.go).
 	WebOrigins   []string // CORS-allowlisted browser origins for the web app
-	AllowedHosts []string // Host-header allowlist (blocks DNS rebinding)
-	APIToken     string   // optional bearer token; when set, every request must present it (enables safe remote exposure)
+	AllowedHosts []string // Host-header allowlist (blocks DNS rebinding); empty = deny all
+	APIToken     string   // optional bearer token; alternative to a session cookie, maps to the admin user (scripts)
+
+	// Multi-user + exposure controls.
+	OpenSignup  bool // SIGNALDECK_OPEN_SIGNUP (default true): allow POST /api/auth/register
+	PublicReads bool // SIGNALDECK_PUBLIC_READS (default true): read-only endpoints work without auth (localhost compatibility)
+	TrustProxy  bool // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
+	RateRPS     int  // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
+	RateBurst   int  // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
 
 	// LLM layer (OpenAI-compatible; NVIDIA by default). Empty key = the AI
 	// agents stay in safe no-op mode.
@@ -66,6 +73,11 @@ func Load() Config {
 		WebOrigins:    splitEnv("SIGNALDECK_WEB_ORIGINS", "http://localhost:8323,http://127.0.0.1:8323,http://localhost:3000,http://127.0.0.1:3000"),
 		AllowedHosts:  splitEnv("SIGNALDECK_ALLOWED_HOSTS", "127.0.0.1:8322,localhost:8322"),
 		APIToken:      os.Getenv("SIGNALDECK_API_TOKEN"),
+		OpenSignup:    boolEnv("SIGNALDECK_OPEN_SIGNUP", true),
+		PublicReads:   boolEnv("SIGNALDECK_PUBLIC_READS", true),
+		TrustProxy:    boolEnv("SIGNALDECK_TRUST_PROXY", false),
+		RateRPS:       atoiOr(os.Getenv("SIGNALDECK_RATE_RPS"), 0),
+		RateBurst:     atoiOr(os.Getenv("SIGNALDECK_RATE_BURST"), 0),
 	}
 	cfg.AlpacaKey = os.Getenv("ALPACA_KEY")
 	cfg.AlpacaSecret = os.Getenv("ALPACA_SECRET")
@@ -113,6 +125,18 @@ func atoiOr(s string, def int) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// boolEnv reads a boolean env var ("false"/"0"/"no" = false, "true"/"1"/"yes" = true).
+func boolEnv(k string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(k))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
 }
 
 func envOr(k, def string) string {

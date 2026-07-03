@@ -3,9 +3,11 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestDisabledClientNoOps(t *testing.T) {
@@ -99,5 +101,59 @@ func TestTrimToBudget(t *testing.T) {
 	total := len(msgs[0].Content) + len(msgs[1].Content)
 	if total > maxPromptChars+64 {
 		t.Fatalf("total %d exceeds budget %d", total, maxPromptChars)
+	}
+}
+
+// flakySpend is a SpendStore whose backing counter can be frozen (simulating a
+// DB outage where increments are lost) and later recovered.
+type flakySpend struct {
+	n    int
+	fail bool
+}
+
+func (f *flakySpend) IncrAndGetSpend(ctx context.Context, day string) (int, error) {
+	if f.fail {
+		return 0, fmt.Errorf("db down")
+	}
+	f.n++
+	return f.n, nil
+}
+
+// TestReserveOutageRecoveryKeepsCap: calls served via the in-memory fallback
+// during a store outage must not be forgotten when the store recovers
+// (regression: the DB counter used to overwrite the in-memory count downward,
+// reopening already-spent headroom).
+func TestReserveOutageRecoveryKeepsCap(t *testing.T) {
+	c := New("k", "https://x/v1", "m", 10).(*httpClient)
+	fs := &flakySpend{}
+	SetSpendStore(c, fs)
+	now := time.Now()
+
+	// 3 persisted calls.
+	for i := 0; i < 3; i++ {
+		if !c.reserve(context.Background(), now) {
+			t.Fatalf("call %d should be allowed", i)
+		}
+	}
+	// Outage: 5 calls served in-memory (store frozen at 3).
+	fs.fail = true
+	for i := 0; i < 5; i++ {
+		if !c.reserve(context.Background(), now) {
+			t.Fatalf("outage call %d should be allowed (8 <= cap 10)", i)
+		}
+	}
+	// Recovery: store would return 4; in-memory truth is 8, so next call is 9.
+	fs.fail = false
+	if !c.reserve(context.Background(), now) {
+		t.Fatal("call 9 should be allowed")
+	}
+	if !c.reserve(context.Background(), now) {
+		t.Fatal("call 10 should be allowed")
+	}
+	if c.reserve(context.Background(), now) {
+		t.Fatalf("call 11 must be denied (cap 10); stats=%+v", c.Stats())
+	}
+	if got := c.Stats().Calls; got < 10 {
+		t.Fatalf("Stats().Calls = %d, want >= 10 (must not under-report after recovery)", got)
 	}
 }

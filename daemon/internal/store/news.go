@@ -21,7 +21,7 @@ type NewsItem struct {
 
 // InsertNews stores a headline (ignored if the provider id already exists).
 func (s *Store) InsertNews(ctx context.Context, n NewsItem) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		INSERT OR IGNORE INTO news (id, symbol_id, ts, headline, url, source)
 		VALUES (?,?,?,?,?,?)`,
 		n.ID, n.SymbolID, n.Ts, n.Headline, n.URL, n.Source)
@@ -51,7 +51,7 @@ func (s *Store) UnratedNews(ctx context.Context, limit int) ([]NewsItem, error) 
 
 // RateNews records a sentiment tag for one article.
 func (s *Store) RateNews(ctx context.Context, id, sentiment string, score float64, rationale string) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.w.ExecContext(ctx,
 		`UPDATE news SET sentiment=?, score=?, rationale=? WHERE id=?`,
 		sentiment, score, rationale, id)
 	return err
