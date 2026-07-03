@@ -106,6 +106,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		hud.New(st, cfg.HudURL),
 		&pipeline.AnalystWorker{St: st, LLM: llmClient},
 		&pipeline.WatcherWorker{St: st, LLM: llmClient},
+		&pipeline.PredictionRunner{St: st},
+		&pipeline.PredictionResolver{St: st},
+		&pipeline.RegimeRunner{St: st},
+		&pipeline.RankingRunner{St: st},
+		&pipeline.BreakoutRunner{St: st},
 	}
 	if streamer != nil {
 		fleet = append(fleet, streamWorker{streamer}, &pipeline.StockBars{St: st, Alpaca: alpacaClient})

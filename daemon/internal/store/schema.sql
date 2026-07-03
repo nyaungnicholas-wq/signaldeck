@@ -137,3 +137,67 @@ CREATE TABLE IF NOT EXISTS positions (
   exit_ts        INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_positions_open ON positions (open);
+
+-- Calibrated ensemble prediction (fuses score+expectancy+forecast) + its
+-- outcome, so the reliability/calibration curve is fed at write time.
+CREATE TABLE IF NOT EXISTS predictions (
+  symbol_id  INTEGER NOT NULL,
+  horizon    TEXT NOT NULL,
+  ts         INTEGER NOT NULL,
+  raw_prob   REAL NOT NULL,
+  cal_prob   REAL NOT NULL,
+  n_used     INTEGER NOT NULL,
+  components TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (symbol_id, horizon, ts)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS prediction_outcomes (
+  symbol_id   INTEGER NOT NULL,
+  horizon     TEXT NOT NULL,
+  ts          INTEGER NOT NULL,
+  prob        REAL NOT NULL,   -- calibrated prob at prediction time
+  up          INTEGER,         -- realized 1/0, NULL until resolved
+  fwd_return  REAL,
+  resolved_at INTEGER,
+  PRIMARY KEY (symbol_id, horizon, ts)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_predoutcomes_unresolved
+  ON prediction_outcomes (resolved_at) WHERE resolved_at IS NULL;
+
+-- Latest regime per symbol + a log of regime CHANGES (the transition signal).
+CREATE TABLE IF NOT EXISTS regime_state (
+  symbol_id INTEGER PRIMARY KEY,
+  ts        INTEGER NOT NULL,
+  label     TEXT NOT NULL,
+  strength  REAL NOT NULL,
+  note      TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS regime_changes (
+  id        INTEGER PRIMARY KEY,
+  symbol_id INTEGER NOT NULL,
+  ts        INTEGER NOT NULL,
+  from_lbl  TEXT NOT NULL,
+  to_lbl    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_regime_changes ON regime_changes (ts DESC);
+
+-- Daily cross-sectional relative-strength ranking snapshot.
+CREATE TABLE IF NOT EXISTS rankings (
+  ts        INTEGER NOT NULL,
+  symbol_id INTEGER NOT NULL,
+  score     REAL NOT NULL,   -- 0..100 percentile
+  rank      INTEGER NOT NULL,
+  ret1m     REAL NOT NULL DEFAULT 0,
+  ret3m     REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (ts, symbol_id)
+) WITHOUT ROWID;
+
+-- Detected breakout / squeeze / correlation-break events.
+CREATE TABLE IF NOT EXISTS breakouts (
+  id        INTEGER PRIMARY KEY,
+  symbol_id INTEGER,
+  ts        INTEGER NOT NULL,
+  kind      TEXT NOT NULL,
+  detail    TEXT NOT NULL DEFAULT '',
+  strength  REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_breakouts_ts ON breakouts (ts DESC);

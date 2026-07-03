@@ -54,7 +54,8 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("POST /api/subscribe", d.subscribe)
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
 	d.registerQuant(mux) // forecast, backtest, risk, correlation, portfolio
-	d.registerAI(mux)    // analyst, chat, filingmind, status
+	d.registerAI(mux)      // analyst, chat, filingmind, status
+	d.registerPredict(mux) // predictions, calibration, regime, ranking, breakouts
 	mux.HandleFunc("GET /api/export/bars.csv", d.exportBars)
 	mux.HandleFunc("GET /api/export/scores.csv", d.exportScores)
 	mux.HandleFunc("GET /api/export/outcomes.csv", d.exportOutcomes)
