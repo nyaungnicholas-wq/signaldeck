@@ -177,11 +177,31 @@ type TableStat struct {
 }
 
 // DataStatsResult is the dataset-accounting snapshot for /api/datastats.
+//
+// The tiered-storage fields (ArchiveBytes + Retention) are populated by the API
+// handler, which owns the archive path and retention policy — store.DataStats
+// leaves them zero-valued so this package stays free of env/policy knowledge.
 type DataStatsResult struct {
 	Tables      []TableStat `json:"tables"`
 	DBBytes     int64       `json:"dbBytes"`
 	WALBytes    int64       `json:"walBytes"`
 	GeneratedAt int64       `json:"generatedAt"`
+
+	// Cold-archive size on disk (walked from the archive dir). Makes the
+	// "nothing is thrown away, and it's bounded" claim visible + provable.
+	ArchiveBytes int64 `json:"archiveBytes"`
+	// Active tiered-retention windows (human-readable), so the growth panel
+	// shows exactly how long each tier stays hot before archive+prune.
+	Retention *RetentionWindows `json:"retention,omitempty"`
+}
+
+// RetentionWindows describes the active hot-store retention per tier, in the
+// units the operator tunes them in. Daily bars are permanent (never pruned).
+type RetentionWindows struct {
+	SnapshotsHours int  `json:"snapshotsHours"` // snapshots_1s hot window (hours)
+	Bars1mDays     int  `json:"bars1mDays"`     // 1m bars hot window (days) → then compact to 1h + archive
+	Bars1hDays     int  `json:"bars1hDays"`     // 1h bars hot window (days) → then compact to 1d + archive
+	DailyForever   bool `json:"dailyForever"`   // always true — daily is the permanent record
 }
 
 // statTables is the static (table, time-column) inventory DataStats reports

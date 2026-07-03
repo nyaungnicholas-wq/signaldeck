@@ -214,8 +214,14 @@ func (w *CryptoBars) Run(ctx context.Context) (string, error) {
 	return fmt.Sprintf("refreshed %d crypto symbols (%s)", refreshed, strings.Join(counts, ", ")), nil
 }
 
-// StockBars tops up stock daily bars every 6h (heals gaps; the live minute
-// stream doesn't produce official daily bars).
+// StockBars tops up daily bars for the STREAMED hot set every 6h (heals gaps;
+// the live minute stream doesn't produce official daily bars).
+//
+// Broad-universe wave: it deliberately covers ONLY the streamed hot stocks
+// (stream=1). The hundreds of broad DAILY-ONLY universe symbols get their daily
+// bars from the universe-poller, which uses Alpaca's efficient multi-symbol
+// endpoint (≤100 symbols/request) — re-fetching them here one symbol at a time
+// would be redundant and could pressure the free 200/min rate budget.
 type StockBars struct {
 	St     *store.Store
 	Alpaca *alpaca.Client
@@ -227,24 +233,22 @@ func (w *StockBars) Name() string { return "stock-bars" }
 // Interval implements workers.Worker.
 func (w *StockBars) Interval() time.Duration { return 6 * time.Hour }
 
-// Run refreshes daily bars for every active stock.
+// Run refreshes daily bars for every streamed (hot-set) stock.
 func (w *StockBars) Run(ctx context.Context) (string, error) {
 	if w.Alpaca == nil {
 		return "skipped: no Alpaca keys", nil
 	}
-	syms, err := w.St.ListSymbols(ctx, true)
+	streamed := true
+	syms, err := w.St.ActiveStockSymbols(ctx, &streamed)
 	if err != nil {
 		return "", err
 	}
 	n := 0
 	for _, s := range syms {
-		if s.Market != md.Stocks {
-			continue
-		}
 		if _, err := w.Alpaca.BackfillDaily(ctx, w.St, s.ID, s.Symbol); err != nil {
 			return "", fmt.Errorf("%s: %w", s.Symbol, err)
 		}
 		n++
 	}
-	return fmt.Sprintf("topped up daily bars for %d stocks", n), nil
+	return fmt.Sprintf("topped up daily bars for %d streamed stocks", n), nil
 }

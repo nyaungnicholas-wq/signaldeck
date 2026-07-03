@@ -153,9 +153,15 @@ func TestCandidateAddHappyPathAndDismiss(t *testing.T) {
 func TestCandidateAdd409AtCap(t *testing.T) {
 	url, st, c := newDiscoveryServer(t)
 	ctx := context.Background()
-	t.Setenv("SIGNALDECK_SYMBOL_CAP", "1")
-	if _, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, ""); err != nil {
+	// Broad-universe wave: the cap now governs the STREAMED hot set, so the
+	// seeded symbol must be streamed to be "at cap".
+	t.Setenv("SIGNALDECK_STREAM_CAP", "1")
+	spy, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
+	if err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	if err := st.SetSymbolStream(ctx, spy.ID, true); err != nil {
+		t.Fatalf("seed stream flag: %v", err)
 	}
 	_ = st.UpsertCandidate(ctx, store.Candidate{Symbol: "COIN", Market: md.Stocks, LastSeenTs: 1, DollarVol: 1e9})
 
@@ -163,7 +169,7 @@ func TestCandidateAdd409AtCap(t *testing.T) {
 	if resp.StatusCode != 409 {
 		t.Fatalf("add at cap: %d want 409 (%s)", resp.StatusCode, drain(t, resp))
 	}
-	if body := drain(t, resp); !strings.Contains(body, "symbol cap reached (1/1 active)") {
+	if body := drain(t, resp); !strings.Contains(body, "stream cap reached (1/1 streamed)") {
 		t.Fatalf("409 message unclear: %s", body)
 	}
 	// Nothing was added.
@@ -171,10 +177,10 @@ func TestCandidateAdd409AtCap(t *testing.T) {
 		t.Fatalf("COIN created despite cap")
 	}
 
-	// Adding an ALREADY-ACTIVE symbol is allowed at cap (watchlist-only op).
+	// Adding an ALREADY-STREAMED symbol is allowed at cap (watchlist-only op).
 	resp = postJSON(t, c, url+"/api/candidates/add", map[string]string{"symbol": "SPY", "market": "stocks"})
 	if resp.StatusCode != 200 {
-		t.Fatalf("re-add active symbol at cap: %d %s", resp.StatusCode, drain(t, resp))
+		t.Fatalf("re-add streamed symbol at cap: %d %s", resp.StatusCode, drain(t, resp))
 	}
 	drain(t, resp)
 }

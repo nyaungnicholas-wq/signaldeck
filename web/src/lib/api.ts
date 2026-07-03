@@ -544,11 +544,20 @@ export interface TableStat {
   minTs?: number;
   maxTs?: number;
 }
+export interface RetentionWindows {
+  snapshotsHours: number;
+  bars1mDays: number;
+  bars1hDays: number;
+  dailyForever: boolean;
+}
 export interface DataStats {
   tables: TableStat[];
   dbBytes: number;
   walBytes: number;
   generatedAt: number;
+  // tiered-storage wave: cold-archive size on disk + active retention windows.
+  archiveBytes?: number;
+  retention?: RetentionWindows;
 }
 
 // usePoll-style helper for client components (simple interval fetcher).
@@ -622,4 +631,66 @@ export interface AdaptiveResponse {
 /** Learned per-regime ensemble weights (the MODEL SELF-KNOWLEDGE panel). */
 export function adaptive() {
   return get<AdaptiveResponse>("/api/adaptive");
+}
+
+// ── broad-universe wave (appended block — keep new client functions at the
+// END of this file so parallel edits by other agents never collide) ──
+
+/**
+ * The HOT/BROAD split: how many symbols are in the live STREAMED hot set
+ * (real-time ws + full 1m pipeline, bounded by the free ws cap) vs the broad
+ * DAILY-ONLY universe (REST daily bars only, hundreds of names), plus the caps
+ * governing each. Makes the "wide coverage, still free" story visible.
+ */
+export interface UniverseSplit {
+  streamed: number; // live ws + full 1m pipeline
+  streamCap: number; // SIGNALDECK_STREAM_CAP
+  dailyOnly: number; // REST daily bars only (broad universe)
+  universeCap: number; // SIGNALDECK_UNIVERSE_CAP
+  universeSeed: number; // curated seed-list size
+}
+
+/** Streamed-count vs daily-universe-count + their caps. */
+export function universe() {
+  return get<UniverseSplit>("/api/universe");
+}
+
+// ── per-symbol agents wave (appended block — keep new client functions at the
+// END of this file so parallel edits by other agents never collide) ──
+
+/** One component's measured predictive edge for a symbol (a skill bar). */
+export interface SymbolAgentSkill {
+  component: string; // pressure | expectancy | forecast | sentiment
+  hitRate: number; // directional hit-rate, [0,1]
+  hasHR: boolean; // hit-rate was measured (component made directional calls)
+  ic: number; // Pearson corr(leg prob, realized fwd return), [-1,1]
+  hasIC: boolean; // IC was measured
+  n: number; // examples where this component was present
+}
+
+/**
+ * THIS SYMBOL'S AGENT: the model learned from THIS symbol's own resolved
+ * outcomes. tier reports which evidence tier is actually driving the blend
+ * (personal | regime | global | static); when it isn't "personal" the symbol
+ * is still learning (nSamples/threshold) and the GLOBAL model is in force —
+ * activeWeights is then empty, and the UI must say so honestly.
+ */
+export interface SymbolAgent {
+  symbol: string;
+  market: Market;
+  horizon: Horizon;
+  available: boolean; // a model row exists yet
+  tier: "personal" | "regime" | "global" | "static";
+  personal: boolean; // tier === personal (own model in use)
+  nSamples: number; // this symbol's own resolved outcomes for the horizon
+  threshold: number; // MinPersonal — samples needed to graduate to personal
+  personality: string; // deterministic plain-English read of the skill
+  skill: SymbolAgentSkill[]; // per-component measured edge
+  activeWeights: Record<string, number>; // blend weights in force (empty unless personal)
+  updatedTs: number;
+}
+
+/** One symbol+horizon's own agent (tier + personality + skill + weights). */
+export function symbolAgent(symbol: string, market: Market, horizon: Horizon) {
+  return get<SymbolAgent>(`/api/symbol-agent?${q(symbol, market)}&horizon=${horizon}`);
 }

@@ -1,11 +1,17 @@
 package maintain
 
 import (
+	"compress/gzip"
 	"context"
+	"encoding/csv"
+	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/archive"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -146,7 +152,7 @@ func TestDownsamplerCompactsMinutesBeforePruning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := (&Downsampler{St: st}).Run(ctx); err != nil {
+	if _, err := (&Downsampler{St: st, Arc: archive.New(t.TempDir())}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -198,7 +204,7 @@ func TestDownsamplerCompactionKeepsAuthoritativeHourlyBars(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := (&Downsampler{St: st}).Run(ctx); err != nil {
+	if _, err := (&Downsampler{St: st, Arc: archive.New(t.TempDir())}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,3 +220,333 @@ func TestDownsamplerCompactionKeepsAuthoritativeHourlyBars(t *testing.T) {
 		t.Fatalf("old 1m bar should still be pruned: err=%v n=%d", err, len(mins))
 	}
 }
+
+// ── tiered-storage wave: archive-before-prune + fail-safe + daily-forever ──
+
+// countArchiveFiles counts *.csv.gz files under an archive root's subdir.
+func countArchiveFiles(t *testing.T, root, sub string) int {
+	t.Helper()
+	dir := filepath.Join(root, sub)
+	n := 0
+	_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && filepath.Ext(p) == ".gz" {
+			n++
+		}
+		return nil
+	})
+	return n
+}
+
+// Snapshots pass a SHORT hot window (6h default), so old ones must be archived
+// to gzip-CSV and then pruned; recent ones stay. The pruned rows must be
+// readable back from the archive (round-trip through the retention path).
+func TestDownsamplerTieredSnapshotArchiveThenPrune(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	root := t.TempDir()
+	sym, err := st.UpsertSymbol(ctx, "BTC/USD", md.Crypto, "Bitcoin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	oldTs := now.Add(-10 * time.Hour).Unix() // past the 6h default → archive+prune
+	newTs := now.Add(-1 * time.Hour).Unix()  // inside window → keep
+	if err := st.InsertSnap1s(ctx, md.Snap1s{SymbolID: sym.ID, Ts: oldTs, Bid: 1, Ask: 2, Mid: 1.5}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertSnap1s(ctx, md.Snap1s{SymbolID: sym.ID, Ts: newTs, Bid: 3, Ask: 4, Mid: 3.5}); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &Downsampler{St: st, Arc: archive.New(root)}
+	if _, err := d.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Old snap pruned, new snap retained.
+	kept, err := st.Snaps(ctx, sym.ID, 0, now.Unix()+1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 || kept[0].Ts != newTs {
+		t.Fatalf("want only the in-window snap kept, got %+v", kept)
+	}
+	// The old snap survives in cold storage.
+	if got := countArchiveFiles(t, root, "snapshots_1s"); got != 1 {
+		t.Fatalf("want 1 snapshot archive file, got %d", got)
+	}
+	// Verify the archived row's value round-trips.
+	var found bool
+	_ = filepath.Walk(filepath.Join(root, "snapshots_1s"), func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(p) != ".gz" {
+			return nil
+		}
+		fp, _ := os.Open(p)
+		defer fp.Close()
+		gz, _ := gzip.NewReader(fp)
+		defer gz.Close()
+		recs, _ := csv.NewReader(gz).ReadAll()
+		for _, r := range recs[1:] { // skip header
+			if r[2] == itoa(oldTs) {
+				found = true
+			}
+		}
+		return nil
+	})
+	if !found {
+		t.Fatalf("archived old snap ts=%d not found in cold storage", oldTs)
+	}
+}
+
+// Explicit cutoff selection: with an explicit KeepSnaps window, a snap exactly
+// inside it stays and one just outside is archived+pruned — the cutoff is
+// picked correctly.
+func TestDownsamplerRetentionPicksRightCutoff(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	root := t.TempDir()
+	sym, err := st.UpsertSymbol(ctx, "BTC/USD", md.Crypto, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	inside := now.Add(-30 * time.Minute).Unix()
+	outside := now.Add(-90 * time.Minute).Unix()
+	for _, ts := range []int64{inside, outside} {
+		if err := st.InsertSnap1s(ctx, md.Snap1s{SymbolID: sym.ID, Ts: ts, Mid: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Keep only the last hour.
+	d := &Downsampler{St: st, Arc: archive.New(root), KeepSnaps: time.Hour,
+		Keep1m: 60 * 24 * time.Hour, Keep1h: 3 * 365 * 24 * time.Hour}
+	if _, err := d.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := st.Snaps(ctx, sym.ID, 0, now.Unix()+1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 || kept[0].Ts != inside {
+		t.Fatalf("cutoff wrong: want only ts=%d kept, got %+v", inside, kept)
+	}
+}
+
+// Daily bars are NEVER archived and NEVER pruned, no matter how old.
+func TestDownsamplerDailyNeverArchivedOrPruned(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	root := t.TempDir()
+	sym, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A 10-year-old daily bar — well past any tier window.
+	ancient := time.Now().Add(-10 * 365 * 24 * time.Hour).Unix()
+	if err := st.UpsertBars(ctx, []md.Bar{
+		{SymbolID: sym.ID, TF: md.TF1d, Ts: ancient, Open: 1, High: 1, Low: 1, Close: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Downsampler{St: st, Arc: archive.New(root)}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	daily, err := st.Bars(ctx, sym.ID, md.TF1d, 0, time.Now().Unix(), 0)
+	if err != nil || len(daily) != 1 {
+		t.Fatalf("daily bar must survive forever: err=%v n=%d", err, len(daily))
+	}
+	// No bars_1d archive directory should ever be created.
+	if _, err := os.Stat(filepath.Join(root, "bars_1d")); !os.IsNotExist(err) {
+		t.Fatalf("daily bars must never be archived (no bars_1d dir), stat err=%v", err)
+	}
+}
+
+// FAIL-SAFE: when the archive write fails, the matching prune is SKIPPED — the
+// rows stay in the hot store (never lost silently) and a dq event records it.
+func TestDownsamplerFailSafeSkipsPruneOnArchiveError(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	sym, err := st.UpsertSymbol(ctx, "BTC/USD", md.Crypto, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Hour).Unix()
+	if err := st.InsertSnap1s(ctx, md.Snap1s{SymbolID: sym.ID, Ts: old, Mid: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the archive root un-creatable: a regular FILE where the root dir
+	// (and its subdirs) would need to be — MkdirAll then fails, so ArchiveX
+	// errors and the prune must be skipped.
+	badRootParent := filepath.Join(t.TempDir(), "block")
+	if err := os.WriteFile(badRootParent, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	badRoot := filepath.Join(badRootParent, "archive") // parent is a file
+
+	d := &Downsampler{St: st, Arc: archive.New(badRoot)}
+	msg, err := d.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run must not hard-error on archive failure (fail-safe): %v", err)
+	}
+
+	// Data must still be present (NOT pruned).
+	kept, err := st.Snaps(ctx, sym.ID, 0, time.Now().Unix()+1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 {
+		t.Fatalf("fail-safe violated: old snap was pruned despite archive failure (kept=%d)", len(kept))
+	}
+	// A dq event must record the skip.
+	dq, err := st.RecentDQ(ctx, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawSkip bool
+	for _, e := range dq {
+		if e.Kind == "archive_skip" {
+			sawSkip = true
+		}
+	}
+	if !sawSkip {
+		t.Fatalf("expected an archive_skip dq event; run msg=%q dq=%+v", msg, dq)
+	}
+}
+
+// Multi-batch boundary: with a tiny batch size and rows spanning MANY
+// timestamps, every pruned minute must appear in the cold archive — no row is
+// deleted before it is archived at a batch edge. The archived-row count must
+// equal the pruned-row count exactly (conservation of data).
+func TestDownsamplerArchiveConservesRowsAcrossBatches(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	root := t.TempDir()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 250 one-minute bars, all ~100 days old (past the 60d default), each a
+	// distinct ts. With batch=7 this forces ~36 batches with real edges.
+	old := ((time.Now().Add(-100 * 24 * time.Hour).Unix()) / 3600) * 3600
+	var bars []md.Bar
+	for m := int64(0); m < 250; m++ {
+		bars = append(bars, md.Bar{SymbolID: sym.ID, TF: md.TF1m, Ts: old + m*60, Open: 1, High: 1, Low: 1, Close: float64(m), Volume: 1})
+	}
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := archiveBatch
+	archiveBatch = 7
+	defer func() { archiveBatch = orig }()
+
+	if _, err := (&Downsampler{St: st, Arc: archive.New(root)}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// All 250 1m bars pruned from the hot store.
+	remaining, err := st.Bars(ctx, sym.ID, md.TF1m, 0, old+250*60, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("all old 1m bars should be pruned, %d remain", len(remaining))
+	}
+
+	// Count archived rows across ALL bars_1m files; must equal 250 (no loss,
+	// no duplication at batch edges).
+	total := 0
+	seen := map[string]bool{}
+	_ = filepath.Walk(filepath.Join(root, "bars_1m"), func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(p) != ".gz" {
+			return nil
+		}
+		fp, _ := os.Open(p)
+		defer fp.Close()
+		gz, _ := gzip.NewReader(fp)
+		defer gz.Close()
+		recs, _ := csv.NewReader(gz).ReadAll()
+		for _, r := range recs[1:] { // skip header
+			total++
+			seen[r[3]] = true // ts column
+		}
+		return nil
+	})
+	if total != 250 {
+		t.Fatalf("archived row count = %d, want 250 (conservation across batches)", total)
+	}
+	if len(seen) != 250 {
+		t.Fatalf("distinct archived timestamps = %d, want 250 (no dup/loss at edges)", len(seen))
+	}
+}
+
+// A nil archive sink must also fail safe: prune nothing, flag a dq event.
+func TestDownsamplerNilArchiveFailsSafe(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	sym, err := st.UpsertSymbol(ctx, "BTC/USD", md.Crypto, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Hour).Unix()
+	if err := st.InsertSnap1s(ctx, md.Snap1s{SymbolID: sym.ID, Ts: old, Mid: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Downsampler{St: st /* Arc nil */}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	kept, _ := st.Snaps(ctx, sym.ID, 0, time.Now().Unix()+1, 0)
+	if len(kept) != 1 {
+		t.Fatalf("nil archive must not prune (kept=%d)", len(kept))
+	}
+}
+
+// StorageGovernor checkpoints the WAL without error on a live temp DB and
+// reports sizes; VACUUM stays gated off under the (huge) default threshold.
+func TestStorageGovernorCheckpoints(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	// Write something so there's a WAL to checkpoint.
+	sym, _ := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
+	_ = st.UpsertBars(ctx, []md.Bar{{SymbolID: sym.ID, TF: md.TF1m, Ts: 60, Close: 1}})
+
+	g := &StorageGovernor{St: st}
+	msg, err := g.Run(ctx)
+	if err != nil {
+		t.Fatalf("governor run: %v", err)
+	}
+	if msg == "" {
+		t.Fatalf("governor should report status")
+	}
+}
+
+// StorageGovernor VACUUMs when the DB exceeds the threshold, then records the
+// meta cursor so it won't re-vacuum within MinVacuumInterval.
+func TestStorageGovernorVacuumsAboveThreshold(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	g := &StorageGovernor{St: st, VacuumThreshold: 1, MinVacuumInterval: time.Hour} // 1 byte → always over
+	msg, err := g.Run(ctx)
+	if err != nil {
+		t.Fatalf("governor run: %v", err)
+	}
+	if !contains(msg, "vacuumed=true") {
+		t.Fatalf("expected a vacuum above threshold, msg=%q", msg)
+	}
+	if v, _ := st.GetMeta(ctx, "storage_last_vacuum"); v == "" {
+		t.Fatalf("vacuum cursor should be recorded")
+	}
+	// Second run within the interval must NOT vacuum again.
+	msg2, err := g.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(msg2, "vacuumed=false") {
+		t.Fatalf("second run within interval should skip vacuum, msg=%q", msg2)
+	}
+}
+
+func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+func itoa(v int64) string { return strconv.FormatInt(v, 10) }

@@ -12,6 +12,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -73,6 +74,31 @@ func migrate(w *sql.DB) error {
 			return err
 		}
 	}
+	// broad-universe wave: symbols.stream distinguishes the STREAMED HOT SET
+	// (stream=1: live ws + full 1m pipeline, bounded by the free ws cap) from
+	// the BROAD DAILY-ONLY universe (stream=0: REST daily bars only, hundreds
+	// of names). Least-invasive design: the daily universe still lives in the
+	// one `symbols` table (so bars/rankings/correlation/regime/per-symbol daily
+	// models all key on symbol_id) — a bool column, not a second table. Legacy
+	// rows default to 0; the seeded hot set is promoted to 1 on boot.
+	if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('symbols') WHERE name='stream'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := w.Exec(`ALTER TABLE symbols ADD COLUMN stream INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+		// One-time transition: every STOCK that was ALREADY active before the
+		// hot/broad split existed WAS being streamed, so promote them to
+		// stream=1. This runs exactly once (only when the column is first
+		// added), before any daily-only universe symbol exists — so it can
+		// never accidentally stream a broad-universe name. Scoped to stocks
+		// because the stream cap models Alpaca's stock ws (crypto streams via
+		// TickStream). New daily-only symbols afterwards default to stream=0.
+		if _, err := w.Exec(`UPDATE symbols SET stream=1 WHERE active=1 AND market='stocks'`); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -106,30 +132,30 @@ func (s *Store) UpsertSymbol(ctx context.Context, symbol string, market md.Marke
 // GetSymbol fetches one symbol by (symbol, market).
 func (s *Store) GetSymbol(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
 	var sym md.Symbol
-	var active int
+	var active, stream int
 	var mkt string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, symbol, market, name, active, added_at FROM symbols WHERE symbol=? AND market=?`,
-		symbol, string(market)).Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt)
-	sym.Market, sym.Active = md.Market(mkt), active == 1
+		`SELECT id, symbol, market, name, active, added_at, stream FROM symbols WHERE symbol=? AND market=?`,
+		symbol, string(market)).Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt, &stream)
+	sym.Market, sym.Active, sym.Stream = md.Market(mkt), active == 1, stream == 1
 	return sym, err
 }
 
 // GetSymbolByID fetches one symbol by id.
 func (s *Store) GetSymbolByID(ctx context.Context, id int64) (md.Symbol, error) {
 	var sym md.Symbol
-	var active int
+	var active, stream int
 	var mkt string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, symbol, market, name, active, added_at FROM symbols WHERE id=?`,
-		id).Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt)
-	sym.Market, sym.Active = md.Market(mkt), active == 1
+		`SELECT id, symbol, market, name, active, added_at, stream FROM symbols WHERE id=?`,
+		id).Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt, &stream)
+	sym.Market, sym.Active, sym.Stream = md.Market(mkt), active == 1, stream == 1
 	return sym, err
 }
 
 // ListSymbols returns all symbols (activeOnly filters to live subscriptions).
 func (s *Store) ListSymbols(ctx context.Context, activeOnly bool) ([]md.Symbol, error) {
-	q := `SELECT id, symbol, market, name, active, added_at FROM symbols`
+	q := `SELECT id, symbol, market, name, active, added_at, stream FROM symbols`
 	if activeOnly {
 		q += ` WHERE active=1`
 	}
@@ -142,12 +168,12 @@ func (s *Store) ListSymbols(ctx context.Context, activeOnly bool) ([]md.Symbol, 
 	var out []md.Symbol
 	for rows.Next() {
 		var sym md.Symbol
-		var active int
+		var active, stream int
 		var mkt string
-		if err := rows.Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt); err != nil {
+		if err := rows.Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt, &stream); err != nil {
 			return nil, err
 		}
-		sym.Market, sym.Active = md.Market(mkt), active == 1
+		sym.Market, sym.Active, sym.Stream = md.Market(mkt), active == 1, stream == 1
 		out = append(out, sym)
 	}
 	return out, rows.Err()
@@ -788,4 +814,119 @@ func (s *Store) GetMeta(ctx context.Context, k string) (string, error) {
 		return "", nil
 	}
 	return v, err
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// TIERED-STORAGE WAVE (appended block — keep at END of store.go so parallel
+// edits by other agents never collide). Read helpers that feed the cold
+// archive before a retention prune, a symbol-name map for archive filenames,
+// and storage-governor primitives (WAL checkpoint + VACUUM + size probes).
+// ─────────────────────────────────────────────────────────────────────────
+
+// SymbolNameMap returns id → symbol for every symbol (active or not). Used to
+// name cold-archive files by their human symbol rather than a raw id.
+func (s *Store) SymbolNameMap(ctx context.Context) (map[int64]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, symbol FROM symbols`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var sym string
+		if err := rows.Scan(&id, &sym); err != nil {
+			return nil, err
+		}
+		out[id] = sym
+	}
+	return out, rows.Err()
+}
+
+// BarsBelow returns up to limit bars of timeframe tf with ts < cutoff, ordered
+// by ts ascending (oldest first). This is the archive-before-prune read: the
+// caller archives the returned rows, then prunes the SAME [<cutoff) predicate.
+// A positive limit lets the caller archive+prune in bounded batches so a huge
+// backlog never buffers the whole table in memory.
+func (s *Store) BarsBelow(ctx context.Context, tf md.Timeframe, cutoff int64, limit int) ([]md.Bar, error) {
+	q := `SELECT symbol_id, ts, open, high, low, close, volume FROM bars
+	      WHERE tf=? AND ts<? ORDER BY ts LIMIT ?`
+	if limit <= 0 {
+		limit = 1 << 30 // effectively unbounded, but keeps the LIMIT clause
+	}
+	rows, err := s.db.QueryContext(ctx, q, string(tf), cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []md.Bar
+	for rows.Next() {
+		b := md.Bar{TF: tf}
+		if err := rows.Scan(&b.SymbolID, &b.Ts, &b.Open, &b.High, &b.Low, &b.Close, &b.Volume); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// SnapsBelow returns up to limit snapshots_1s rows with ts < cutoff, ts asc.
+// Same archive-before-prune contract as BarsBelow.
+func (s *Store) SnapsBelow(ctx context.Context, cutoff int64, limit int) ([]md.Snap1s, error) {
+	if limit <= 0 {
+		limit = 1 << 30
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol_id, ts, bid, ask, mid, wmid, imb_signed, spread, apply_lat_ns
+		FROM snapshots_1s WHERE ts<? ORDER BY ts LIMIT ?`, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []md.Snap1s
+	for rows.Next() {
+		var sn md.Snap1s
+		if err := rows.Scan(&sn.SymbolID, &sn.Ts, &sn.Bid, &sn.Ask, &sn.Mid, &sn.WMid, &sn.ImbSigned, &sn.Spread, &sn.ApplyLatNs); err != nil {
+			return nil, err
+		}
+		out = append(out, sn)
+	}
+	return out, rows.Err()
+}
+
+// FileSizes returns the current on-disk sizes of the database file and its WAL
+// sidecar. Missing files count as 0 (not an error) — a checkpoint can legally
+// leave a 0-byte WAL.
+func (s *Store) FileSizes() (dbBytes, walBytes int64) {
+	if fi, err := os.Stat(s.path); err == nil {
+		dbBytes = fi.Size()
+	}
+	if fi, err := os.Stat(s.path + "-wal"); err == nil {
+		walBytes = fi.Size()
+	}
+	return
+}
+
+// WALCheckpointTruncate runs PRAGMA wal_checkpoint(TRUNCATE): it flushes the
+// WAL into the main database and then truncates the WAL file to zero, bounding
+// the single biggest source of unbounded disk growth in a busy WAL database.
+// Run on the WRITE connection so it can't race a concurrent writer.
+func (s *Store) WALCheckpointTruncate(ctx context.Context) error {
+	// The pragma returns (busy, log, checkpointed); we only care about errors.
+	var busy, logFrames, ckpt int
+	err := s.w.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &ckpt)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	return err
+}
+
+// Vacuum runs a full VACUUM to reclaim free pages left behind by retention
+// deletes (the DB is auto_vacuum=NONE, so freed pages are otherwise only
+// reused, never returned to the filesystem). VACUUM briefly takes a write lock
+// and rewrites the file, so the governor gates it behind a size threshold and
+// runs it rarely. On the write connection.
+func (s *Store) Vacuum(ctx context.Context) error {
+	_, err := s.w.ExecContext(ctx, `VACUUM`)
+	return err
 }

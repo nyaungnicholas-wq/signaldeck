@@ -15,7 +15,34 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ranking"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/regime"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
 )
+
+// decodeWeights parses a stored symbol_models.weights blob (component->weight).
+// A malformed/empty blob yields nil, so the caller falls back to global weights.
+func decodeWeights(blob string) map[string]float64 {
+	if blob == "" {
+		return nil
+	}
+	var w map[string]float64
+	if err := json.Unmarshal([]byte(blob), &w); err != nil {
+		return nil
+	}
+	return w
+}
+
+// decodeCalibration parses a stored symbol_models.calibration blob. ok=false on
+// a malformed blob, so the caller falls back to the global calibration.
+func decodeCalibration(blob string) (symbolagent.Calibration, bool) {
+	if blob == "" {
+		return symbolagent.Calibration{}, false
+	}
+	var c symbolagent.Calibration
+	if err := json.Unmarshal([]byte(blob), &c); err != nil {
+		return symbolagent.Calibration{}, false
+	}
+	return c, true
+}
 
 // predHorizons are the horizons the ensemble predicts (forecast + expectancy
 // both cover these).
@@ -121,8 +148,18 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			learned = adaptive.Weights{}
 		}
 	}
+	// CADENCE SPLIT (free-scale): predict the streamed hot set + crypto every
+	// run; the broad daily-only universe (~500 names, daily bars only) once per
+	// UTC day, so predictions/prediction_outcomes/features don't explode.
+	today := time.Now().UTC().Format("2006-01-02")
+	lastDay, _ := w.St.GetMeta(ctx, "predict_universe_day")
+	doUniverse := lastDay != today
 	n, featErrs := 0, 0
 	for _, s := range syms {
+		hot := s.Market == md.Crypto || s.Stream
+		if !hot && !doUniverse {
+			continue // daily-only universe symbol already predicted today
+		}
 		daily, minute, err := loadBars(ctx, w.St, s.ID)
 		if err != nil {
 			return "", err
@@ -140,8 +177,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		if mean, sn, ok, err := w.St.LatestSentiment(ctx, s.ID, sentimentMaxAgeDays); err == nil && ok && sn >= sentimentMinHeadlines {
 			sentScore, sentN = &mean, sn
 		}
-		// Learned weights for THIS symbol's regime cell (nil = static prior).
-		wts, _ := adaptive.Pick(learned, regimeLbls[s.ID])
+		// Global learned weights for THIS symbol's regime cell (the fallback
+		// when the symbol has no personal model of its own).
+		regimeWts, _ := adaptive.Pick(learned, regimeLbls[s.ID])
 		for _, h := range predHorizons {
 			sc, ok, err := w.St.LatestScore(ctx, s.ID, h)
 			if err != nil {
@@ -165,9 +203,37 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					c.ForecastProb, c.ForecastLift = &p, &l
 				}
 			}
+			// PER-SYMBOL AGENTS: pick weights + calibration by tier order
+			//   personal(symbol) -> global-regime -> global -> static.
+			// When this symbol has EARNED a personal model (tier=personal), use
+			// ITS weights AND its own prequential calibration; otherwise fall
+			// back to the global per-regime weights and the global calibration
+			// (the exact pre-per-symbol behavior). No feature capture changes;
+			// no leakage introduced (the personal calibration was fit only on
+			// this symbol's already-resolved pairs, never on the live point).
+			wts := regimeWts
+			usePersonalCal := false
+			var personalCal func(float64) float64
+			if pm, ok, err := w.St.SymbolModel(ctx, s.ID, h); err == nil && ok && pm.Tier == symbolagent.TierPersonal {
+				if pw := decodeWeights(pm.Weights); len(pw) > 0 {
+					wts = pw
+				}
+				// Only take the personal calibration when it actually FITTED
+				// (>=MinCalibrationPairs, real spread). An unfitted personal
+				// map is the identity, so without this guard a just-graduated
+				// symbol would emit an UNcalibrated prob while a still-learning
+				// one gets the global calibration — a quality regression. When
+				// unfitted, fall through to the global-calibration branch.
+				if cal, ok := decodeCalibration(pm.Calibration); ok && cal.Fitted {
+					personalCal, usePersonalCal = cal.Map(), true
+				}
+			}
 			raw, nUsed := ensemble.WeightedProbability(c, wts)
 			cal := raw
-			if probs, ups, err := w.St.ResolvedPredictionPairs(ctx, h, 3000); err == nil && len(probs) > 0 {
+			if usePersonalCal {
+				// Personal tier: recalibrate with the symbol's OWN isotonic map.
+				cal = personalCal(raw)
+			} else if probs, ups, err := w.St.ResolvedPredictionPairs(ctx, h, 3000); err == nil && len(probs) > 0 {
 				pairs := make([]ensemble.Pair, len(probs))
 				for i := range probs {
 					pairs[i] = ensemble.Pair{Pred: probs[i], Actual: ups[i]}
@@ -202,7 +268,11 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	detail := fmt.Sprintf("wrote %d predictions over %d symbols", n, len(syms))
+	if doUniverse {
+		// Only after a clean full pass, so a mid-run error retries next minute.
+		_ = w.St.SetMeta(ctx, "predict_universe_day", today)
+	}
+	detail := fmt.Sprintf("wrote %d predictions", n)
 	if featErrs > 0 {
 		detail += fmt.Sprintf(" (%d feature-vector write(s) failed — see dq)", featErrs)
 	}

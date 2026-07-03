@@ -228,3 +228,81 @@ func TestDataStats(t *testing.T) {
 		t.Fatal("generatedAt missing")
 	}
 }
+
+// ── tiered-storage wave: archive-before-prune read helpers + governor ──────
+
+// BarsBelow returns exactly the rows below the cutoff, ts-ascending, and honors
+// the batch limit — the archive path relies on both.
+func TestBarsBelowAndSnapsBelow(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertBars(ctx, []md.Bar{
+		{SymbolID: sym.ID, TF: md.TF1m, Ts: 100, Close: 1},
+		{SymbolID: sym.ID, TF: md.TF1m, Ts: 200, Close: 2},
+		{SymbolID: sym.ID, TF: md.TF1m, Ts: 300, Close: 3}, // at/above cutoff
+	}); err != nil {
+		t.Fatal(err)
+	}
+	below, err := st.BarsBelow(ctx, md.TF1m, 300, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(below) != 2 || below[0].Ts != 100 || below[1].Ts != 200 {
+		t.Fatalf("BarsBelow(300) = %+v, want ts 100,200 ascending", below)
+	}
+	// Batch limit respected.
+	one, err := st.BarsBelow(ctx, md.TF1m, 300, 1)
+	if err != nil || len(one) != 1 || one[0].Ts != 100 {
+		t.Fatalf("BarsBelow limit=1 = %+v", one)
+	}
+	// Snaps mirror.
+	for _, ts := range []int64{10, 20, 30} {
+		if err := st.InsertSnap1s(ctx, md.Snap1s{SymbolID: sym.ID, Ts: ts, Mid: float64(ts)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sb, err := st.SnapsBelow(ctx, 30, 0)
+	if err != nil || len(sb) != 2 || sb[0].Ts != 10 {
+		t.Fatalf("SnapsBelow(30) = %+v", sb)
+	}
+}
+
+// The governor primitives run without error and shrink the WAL.
+func TestGovernorPrimitives(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
+	// Generate WAL by writing.
+	for i := int64(0); i < 100; i++ {
+		_ = st.UpsertBars(ctx, []md.Bar{{SymbolID: sym.ID, TF: md.TF1m, Ts: i * 60, Close: float64(i)}})
+	}
+	if err := st.WALCheckpointTruncate(ctx); err != nil {
+		t.Fatalf("wal checkpoint truncate: %v", err)
+	}
+	if err := st.Vacuum(ctx); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	db, _ := st.FileSizes()
+	if db <= 0 {
+		t.Fatalf("db size must be positive after vacuum, got %d", db)
+	}
+}
+
+// SymbolNameMap returns id→symbol for archive filenames.
+func TestSymbolNameMap(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	a, _ := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
+	b, _ := st.UpsertSymbol(ctx, "BTC/USD", md.Crypto, "")
+	m, err := st.SymbolNameMap(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m[a.ID] != "AAA" || m[b.ID] != "BTC/USD" {
+		t.Fatalf("SymbolNameMap = %+v", m)
+	}
+}

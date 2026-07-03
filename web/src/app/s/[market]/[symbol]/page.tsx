@@ -19,6 +19,7 @@ import PressurePanel from "@/components/symbol/PressurePanel";
 import ExpectancyPanel from "@/components/symbol/ExpectancyPanel";
 import MicroPanel from "@/components/symbol/MicroPanel";
 import InsightsPanel from "@/components/symbol/InsightsPanel";
+import SymbolAgentPanel from "@/components/symbol/SymbolAgentPanel";
 import CoveragePanel from "@/components/symbol/CoveragePanel";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -229,6 +230,10 @@ export default function SymbolPage({
               onHorizon={setHorizon}
             />
           </div>
+
+          {/* THIS SYMBOL'S AGENT — the model learned from THIS symbol's own
+              resolved outcomes (personality + per-signal skill + honest tier). */}
+          <SymbolAgentPanel symbol={symbol} market={market} />
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {market === "crypto" && detail.latestSnap && (

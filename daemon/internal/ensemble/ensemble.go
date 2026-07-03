@@ -474,3 +474,52 @@ func interpolate(kx, ky []float64, x float64) float64 {
 	t := (x - kx[lo]) / span
 	return ky[lo] + t*(ky[hi]-ky[lo])
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// PER-SYMBOL AGENTS WAVE (appended block — keep at END of ensemble.go so
+// parallel edits never collide). A calibration map that can be PERSISTED:
+// CalibrateKnots exposes the same isotonic fit Calibrate performs, but returns
+// the raw (kx, ky) interpolation knots instead of a closure, so a per-symbol
+// calibration can be stored as JSON and rebuilt later with MapFromKnots — the
+// SAME interpolation used live, so a persisted per-symbol calibration behaves
+// identically to a freshly-fit one (no reimplementation drift).
+// ─────────────────────────────────────────────────────────────────────────
+
+// CalibrateKnots fits the identical monotone isotonic recalibration as
+// Calibrate but returns the fitted knots (kx strictly increasing, ky the
+// non-decreasing calibrated frequencies) instead of a closure. Same honesty
+// guard: with fewer than MinCalibrationPairs pairs, or no spread in the
+// predictions, it returns nil knots and calibrated=false (the caller should
+// then use the identity map). The returned knots are safe to JSON-persist and
+// reconstruct with MapFromKnots.
+func CalibrateKnots(pairs []Pair) (kx, ky []float64, calibrated bool) {
+	if len(pairs) < MinCalibrationPairs {
+		return nil, nil, false
+	}
+	sorted := make([]Pair, len(pairs))
+	copy(sorted, pairs)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Pred < sorted[j].Pred
+	})
+	if clamp01(sorted[0].Pred) == clamp01(sorted[len(sorted)-1].Pred) {
+		return nil, nil, false
+	}
+	kx, ky = poolAdjacentViolators(aggregateByPred(sorted))
+	return kx, ky, true
+}
+
+// MapFromKnots rebuilds a recalibration map from persisted knots. With empty or
+// mismatched knots it returns the identity map, so a symbol without a fitted
+// calibration transparently falls back to "no correction". The rebuilt map is
+// the SAME clamped linear interpolation Calibrate returns.
+func MapFromKnots(kx, ky []float64) func(float64) float64 {
+	if len(kx) == 0 || len(kx) != len(ky) {
+		return identity
+	}
+	// Defensive copy so a caller mutating the slices can't change the closure.
+	xs := append([]float64(nil), kx...)
+	ys := append([]float64(nil), ky...)
+	return func(v float64) float64 {
+		return clamp01(interpolate(xs, ys, clamp01(v)))
+	}
+}

@@ -145,6 +145,8 @@ func testStore(t *testing.T) *store.Store {
 
 // newWorker wires a Worker at the fake server with a Subscribe that upserts
 // straight into the store (the real subscribe path minus Alpaca validation).
+// Like the real subscribe, promotion puts a stock in the STREAMED hot set
+// (stream=1), which is what the stream-cap budget counts.
 func newWorker(t *testing.T, st *store.Store, f *fakeAlpaca) *Worker {
 	t.Helper()
 	srv := f.server(t)
@@ -153,7 +155,12 @@ func newWorker(t *testing.T, st *store.Store, f *fakeAlpaca) *Worker {
 		St:     st,
 		Client: &Client{Key: "k", Secret: "s", Base: srv.URL, HTTP: srv.Client()},
 		Subscribe: func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
-			return st.UpsertSymbol(ctx, symbol, market, "")
+			sym, err := st.UpsertSymbol(ctx, symbol, market, "")
+			if err == nil && market == md.Stocks {
+				_ = st.SetSymbolStream(ctx, sym.ID, true)
+				sym.Stream = true
+			}
+			return sym, err
 		},
 		NowFn: func() time.Time { return now },
 	}
@@ -265,16 +272,21 @@ func TestTwoSweepsPromoteACandidate(t *testing.T) {
 func TestAutoAddRespectsSymbolCap(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
-	// Fill the universe to one below a tiny cap.
-	if _, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, ""); err != nil {
+	// Fill the STREAMED hot set to one below a tiny cap (the cap governs the
+	// streamed set, so the seed must be stream=1).
+	spy, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
+	if err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	if err := st.SetSymbolStream(ctx, spy.ID, true); err != nil {
+		t.Fatalf("seed stream flag: %v", err)
 	}
 	f := &fakeAlpaca{
 		actives: []ActiveRow{{Symbol: "AAA", Volume: 1e6}, {Symbol: "BBB", Volume: 2e6}},
 		prices:  map[string]float64{"AAA": 10, "BBB": 10},
 	}
 	w := newWorker(t, st, f)
-	w.Cap = 2 // 1 active → room for exactly one more
+	w.Cap = 2 // 1 streamed → room for exactly one more
 
 	if _, err := w.Run(ctx); err != nil {
 		t.Fatalf("run 1: %v", err)
@@ -293,8 +305,8 @@ func TestAutoAddRespectsSymbolCap(t *testing.T) {
 	if s, err := st.GetSymbol(ctx, "AAA", md.Stocks); err == nil && s.Active {
 		t.Fatalf("AAA added past the cap")
 	}
-	if n, _ := st.ActiveSymbolCount(ctx); n != 2 {
-		t.Fatalf("active count: %d want 2 (== cap)", n)
+	if n, _ := st.StreamedSymbolCount(ctx); n != 2 {
+		t.Fatalf("streamed count: %d want 2 (== cap)", n)
 	}
 }
 

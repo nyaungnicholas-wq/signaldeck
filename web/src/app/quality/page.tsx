@@ -285,9 +285,38 @@ export default function QualityPage() {
             >
               <span className="chip tnum">db {fmtBytes(stats.dbBytes)}</span>
               <span className="chip tnum">wal {fmtBytes(stats.walBytes)}</span>
+              {stats.archiveBytes !== undefined && (
+                <span
+                  className="chip tnum"
+                  title="Cold gzip-CSV archive on disk — every row pruned from the hot store is exported here first (DuckDB/pandas readable). Nothing is truly deleted."
+                >
+                  archive {fmtBytes(stats.archiveBytes)}
+                </span>
+              )}
             </span>
           )}
         </div>
+        {stats?.retention && (
+          <div
+            className="px-4 py-2 text-[0.72rem] normal-case tracking-normal"
+            style={{ color: "var(--dim)", borderBottom: "1px solid var(--border)" }}
+          >
+            Tiered retention (hot store, then archive + prune):{" "}
+            <span className="tnum" style={{ color: "var(--text)" }}>
+              snapshots {stats.retention.snapshotsHours}h
+            </span>{" "}
+            ·{" "}
+            <span className="tnum" style={{ color: "var(--text)" }}>
+              1m bars {stats.retention.bars1mDays}d
+            </span>{" "}
+            → 1h ·{" "}
+            <span className="tnum" style={{ color: "var(--text)" }}>
+              1h bars {stats.retention.bars1hDays}d
+            </span>{" "}
+            → 1d ·{" "}
+            <span style={{ color: "var(--good)" }}>daily kept forever</span>
+          </div>
+        )}
         {statsErr && !stats && (
           <div className="px-4 py-3 text-[0.78rem]" style={{ color: "var(--bad)" }}>
             data stats unavailable · {statsErr}

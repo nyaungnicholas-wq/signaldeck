@@ -31,9 +31,14 @@ import (
 
 // Budget rules.
 const (
-	// DefaultSymbolCap is the default max ACTIVE symbols (env-tunable via
-	// SIGNALDECK_SYMBOL_CAP).
-	DefaultSymbolCap = 30
+	// DefaultSymbolCap is the default max STREAMED (hot-set) symbols — the
+	// live-websocket set bounded by Alpaca's free ws cap. Env-tunable via
+	// SIGNALDECK_STREAM_CAP (preferred) or the legacy SIGNALDECK_SYMBOL_CAP.
+	//
+	// Broad-universe wave: this cap governs ONLY the streamed hot set. The
+	// hundreds of REST daily-only universe symbols are governed separately by
+	// SIGNALDECK_UNIVERSE_CAP (see internal/universe) and are NOT counted here.
+	DefaultSymbolCap = 25
 	// MinSweeps is how many separate sweeps must have seen a candidate
 	// before it qualifies for auto-add.
 	MinSweeps = 2
@@ -48,12 +53,16 @@ const (
 // is sufficient: all writes already funnel through this one daemon.
 var BudgetMu sync.Mutex
 
-// SymbolCap returns the active-symbol budget: SIGNALDECK_SYMBOL_CAP when set
-// to a positive integer, else DefaultSymbolCap.
+// SymbolCap returns the STREAMED hot-set budget. Precedence:
+// SIGNALDECK_STREAM_CAP (the broad-universe-wave name) > SIGNALDECK_SYMBOL_CAP
+// (legacy alias, kept so existing deployments don't change behavior) >
+// DefaultSymbolCap. Only positive integers are honored.
 func SymbolCap() int {
-	if v := os.Getenv("SIGNALDECK_SYMBOL_CAP"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
+	for _, k := range []string{"SIGNALDECK_STREAM_CAP", "SIGNALDECK_SYMBOL_CAP"} {
+		if v := os.Getenv(k); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				return n
+			}
 		}
 	}
 	return DefaultSymbolCap
@@ -423,7 +432,10 @@ func (w *Worker) autoAdd(ctx context.Context) (int, error) {
 	BudgetMu.Lock()
 	defer BudgetMu.Unlock()
 	now := w.now()
-	active, err := w.St.ActiveSymbolCount(ctx)
+	// Broad-universe wave: the cap bounds the STREAMED hot set. Count streamed
+	// symbols (promotion adds to the hot set) — NOT every active symbol, which
+	// now also includes the hundreds of daily-only universe names.
+	active, err := w.St.StreamedSymbolCount(ctx)
 	if err != nil {
 		return 0, err
 	}

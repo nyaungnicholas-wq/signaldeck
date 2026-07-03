@@ -67,6 +67,8 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerAlerts(mux)                                  // alerts wave: per-user alerts list + mark-seen
 	d.registerDiscovery(mux)                               // discovery wave: candidates list/add/dismiss
 	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights) // learning-flywheel wave: learned per-regime ensemble weights
+	mux.HandleFunc("GET /api/universe", d.universe)        // broad-universe wave: streamed-count vs daily-universe-count + caps
+	mux.HandleFunc("GET /api/symbol-agent", d.symbolAgent) // per-symbol agents wave: one symbol's own model (tier + personality + skill + active weights)
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,

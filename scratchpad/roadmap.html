@@ -1,0 +1,579 @@
+<title>SignalDeck — Architect's Roadmap</title>
+<style>
+  :root{
+    --ground:#0E1116; --ground-2:#0B0E12; --panel:#161B22; --panel-2:#1B2129;
+    --ink:#C9D1D9; --ink-strong:#E8EDF3; --muted:#7D8792; --faint:#5A636E;
+    --hair:#232A33; --hair-2:#2C343E;
+    --edge:#4CC38A;         /* signal-green: "edge confirmed" accent */
+    --edge-dim:#2F7F5B;
+    --crit:#E5534B; --warn:#D9A441; --info:#539BF5; --violet:#A371F7;
+    --mono: ui-monospace,"SF Mono","SFMono-Regular",Menlo,"Cascadia Mono","Roboto Mono",monospace;
+    --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0}
+  .doc{
+    background:
+      radial-gradient(1200px 600px at 78% -8%, rgba(76,195,138,.06), transparent 60%),
+      radial-gradient(900px 500px at 10% 4%, rgba(83,155,245,.045), transparent 55%),
+      var(--ground);
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:0 28px}
+
+  /* ---------- masthead ---------- */
+  header.mast{
+    border-bottom:1px solid var(--hair);
+    background:linear-gradient(180deg, rgba(22,27,34,.55), transparent);
+  }
+  .mast-inner{padding:34px 0 26px; display:flex; flex-wrap:wrap; gap:26px; align-items:flex-end; justify-content:space-between}
+  .brandline{display:flex; align-items:center; gap:14px; font-family:var(--mono); font-size:12.5px; letter-spacing:.14em; color:var(--muted); text-transform:uppercase}
+  .tick{width:9px;height:9px;border-radius:50%;background:var(--edge);box-shadow:0 0 0 3px rgba(76,195,138,.16); flex:none}
+  h1{
+    font-family:var(--sans); font-weight:650; color:var(--ink-strong);
+    font-size:clamp(30px,4.4vw,48px); line-height:1.04; margin:14px 0 0;
+    letter-spacing:-.02em; text-wrap:balance; max-width:16ch;
+  }
+  .sub{margin:14px 0 0; max-width:60ch; color:var(--muted); font-size:15.5px}
+  .mast-meta{font-family:var(--mono); font-size:12px; color:var(--faint); text-align:right; line-height:1.9; white-space:nowrap}
+  .mast-meta b{color:var(--ink); font-weight:500}
+  .mast-meta .g{color:var(--edge)}
+
+  /* ---------- legend bar ---------- */
+  .legend{
+    display:flex; flex-wrap:wrap; gap:10px 22px; align-items:center;
+    padding:14px 0; border-bottom:1px solid var(--hair);
+    font-family:var(--mono); font-size:11.5px; color:var(--muted); letter-spacing:.02em;
+  }
+  .legend .grp{display:flex; align-items:center; gap:8px}
+  .legend .lbl{color:var(--faint); text-transform:uppercase; letter-spacing:.12em}
+  .chip{
+    display:inline-flex; align-items:center; gap:6px; font-family:var(--mono);
+    font-size:11px; padding:2px 8px; border-radius:2px; border:1px solid var(--hair-2);
+    color:var(--ink); letter-spacing:.03em; white-space:nowrap;
+  }
+  .chip.eff{color:var(--info); border-color:rgba(83,155,245,.35)}
+  .chip.free{color:var(--edge); border-color:rgba(76,195,138,.35)}
+  .chip.cheap{color:var(--warn); border-color:rgba(217,164,65,.35)}
+  .chip.serious{color:var(--crit); border-color:rgba(229,83,75,.35)}
+  .sev{display:inline-block;width:10px;height:10px;border-radius:2px}
+  .sev.critical{background:var(--crit)} .sev.high{background:var(--warn)}
+  .sev.medium{background:var(--info)} .sev.low{background:var(--faint)}
+
+  /* ---------- the one thing ---------- */
+  .keystone{
+    margin:34px 0 8px; border:1px solid var(--edge-dim);
+    border-radius:6px; overflow:hidden;
+    background:linear-gradient(180deg, rgba(76,195,138,.08), rgba(76,195,138,.02));
+  }
+  .keystone .kh{
+    display:flex; align-items:center; gap:12px; padding:12px 20px;
+    border-bottom:1px solid rgba(76,195,138,.22); font-family:var(--mono);
+    font-size:11.5px; letter-spacing:.22em; text-transform:uppercase; color:var(--edge);
+  }
+  .keystone .kbody{padding:20px 22px 22px; display:grid; grid-template-columns:1fr; gap:12px}
+  .keystone h2{margin:0; font-size:clamp(20px,2.6vw,27px); font-weight:600; color:var(--ink-strong); letter-spacing:-.01em; line-height:1.15; text-wrap:balance}
+  .keystone p{margin:0; color:var(--ink); font-size:15px; max-width:78ch}
+  .keystone .defend{color:var(--muted); font-size:14px; border-left:2px solid var(--edge-dim); padding-left:14px; max-width:78ch}
+  .keystone .kchips{display:flex; flex-wrap:wrap; gap:8px; margin-top:2px}
+  .keystone code, .doc code{font-family:var(--mono); font-size:.88em; color:var(--edge); background:rgba(76,195,138,.08); padding:1px 5px; border-radius:3px}
+
+  /* ---------- horizon bands ---------- */
+  .band{margin-top:40px}
+  .band-head{display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; padding-bottom:12px; border-bottom:1px solid var(--hair-2)}
+  .band-tag{font-family:var(--mono); font-size:12px; letter-spacing:.2em; padding:4px 10px; border-radius:2px; font-weight:600}
+  .band-now .band-tag{color:var(--edge); background:rgba(76,195,138,.1); border:1px solid rgba(76,195,138,.3)}
+  .band-next .band-tag{color:var(--info); background:rgba(83,155,245,.1); border:1px solid rgba(83,155,245,.3)}
+  .band-later .band-tag{color:var(--violet); background:rgba(163,113,247,.1); border:1px solid rgba(163,113,247,.3)}
+  .band-head h3{margin:0; font-size:20px; font-weight:600; color:var(--ink-strong); letter-spacing:-.01em}
+  .band-head .when{font-family:var(--mono); font-size:12px; color:var(--faint); margin-left:auto; letter-spacing:.04em}
+
+  /* ---------- item rows ---------- */
+  .items{display:flex; flex-direction:column; gap:0; margin-top:6px}
+  .item{
+    display:grid; grid-template-columns:56px 1fr; gap:18px;
+    padding:20px 4px 20px 0; border-bottom:1px solid var(--hair);
+  }
+  .item:hover{background:linear-gradient(90deg, rgba(255,255,255,.014), transparent 70%)}
+  .rank{
+    font-family:var(--mono); font-size:12px; color:var(--faint);
+    display:flex; flex-direction:column; align-items:flex-start; gap:9px; padding-top:2px;
+  }
+  .rank .id{color:var(--muted); font-weight:500; letter-spacing:.02em}
+  .rank .sev{margin-top:1px}
+  .body h4{margin:0; font-size:17.5px; font-weight:600; color:var(--ink-strong); letter-spacing:-.005em; line-height:1.3; text-wrap:balance}
+  .body .why{margin:7px 0 0; color:var(--muted); font-size:14.5px; max-width:82ch}
+  .body .why b{color:var(--ink); font-weight:600}
+  .meta{display:flex; flex-wrap:wrap; gap:7px 8px; margin-top:12px; align-items:center}
+  .touches{
+    font-family:var(--mono); font-size:11.5px; color:var(--faint);
+    letter-spacing:.01em; margin-top:11px; line-height:1.7;
+    border-top:1px dashed var(--hair-2); padding-top:9px; max-width:92ch;
+  }
+  .touches b{color:var(--muted); font-weight:500}
+  .merged{
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--faint); border:1px solid var(--hair-2); border-radius:2px; padding:2px 7px;
+  }
+
+  /* ---------- doctrine + decisions ---------- */
+  .split{display:grid; grid-template-columns:1fr 1fr; gap:22px; margin-top:44px}
+  .card{background:var(--panel); border:1px solid var(--hair); border-radius:6px; overflow:hidden}
+  .card .ch{padding:14px 18px; border-bottom:1px solid var(--hair); font-family:var(--mono); font-size:11.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--muted); display:flex; align-items:center; gap:10px}
+  .card .cbody{padding:18px}
+  .card h5{margin:0 0 8px; font-size:16px; color:var(--ink-strong); font-weight:600}
+  .card p{margin:0 0 12px; font-size:14px; color:var(--ink)}
+  .card p:last-child{margin-bottom:0}
+  .verdict-yn{font-family:var(--mono); font-size:13px; font-weight:600; color:var(--crit); letter-spacing:.04em}
+  .doctrine ul{margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:13px}
+  .doctrine li{padding-left:20px; position:relative; font-size:14px; color:var(--ink)}
+  .doctrine li::before{content:"›"; position:absolute; left:2px; top:-1px; color:var(--edge); font-family:var(--mono); font-size:16px}
+  .doctrine li b{color:var(--warn); font-weight:600}
+
+  /* ---------- vendor table ---------- */
+  .vendor{margin-top:22px; background:var(--panel); border:1px solid var(--hair); border-radius:6px; overflow:hidden}
+  .vendor .ch{padding:14px 18px; border-bottom:1px solid var(--hair); font-family:var(--mono); font-size:11.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--muted)}
+  .tscroll{overflow-x:auto}
+  table{border-collapse:collapse; width:100%; min-width:760px; font-size:13.5px}
+  th,td{text-align:left; padding:13px 16px; border-bottom:1px solid var(--hair); vertical-align:top}
+  th{font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); font-weight:500; background:var(--panel-2)}
+  td{color:var(--ink)}
+  td .price{font-family:var(--mono); color:var(--ink-strong); font-weight:600; font-variant-numeric:tabular-nums}
+  tr.pick td{background:rgba(76,195,138,.05)}
+  tr.pick td:first-child{box-shadow:inset 3px 0 0 var(--edge)}
+  .tag-pick{font-family:var(--mono); font-size:10px; color:var(--edge); letter-spacing:.1em; text-transform:uppercase; margin-left:8px; border:1px solid rgba(76,195,138,.4); padding:1px 6px; border-radius:2px}
+  .tag-skip{font-family:var(--mono); font-size:10px; color:var(--crit); letter-spacing:.1em; text-transform:uppercase; margin-left:8px; border:1px solid rgba(229,83,75,.35); padding:1px 6px; border-radius:2px}
+  .tier{font-family:var(--mono); font-size:12px; color:var(--muted)}
+
+  footer{margin:52px 0 40px; padding-top:22px; border-top:1px solid var(--hair); font-family:var(--mono); font-size:11.5px; color:var(--faint); letter-spacing:.03em; line-height:1.9}
+  footer b{color:var(--muted); font-weight:500}
+
+  a{color:var(--info); text-decoration:none}
+  a:hover{text-decoration:underline}
+  :focus-visible{outline:2px solid var(--edge); outline-offset:2px}
+
+  @media (max-width:820px){
+    .wrap{padding:0 18px}
+    .split{grid-template-columns:1fr}
+    .mast-meta{text-align:left}
+    .item{grid-template-columns:44px 1fr; gap:14px}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="doc">
+  <header class="mast">
+    <div class="wrap">
+      <div class="mast-inner">
+        <div>
+          <div class="brandline"><span class="tick" aria-hidden="true"></span>SignalDeck · Chief Architect's Merge</div>
+          <h1>One roadmap to the best honest market platform a solo builder can run.</h1>
+          <p class="sub">Seven grounded analyses reconciled into one decisive plan. Deduped, ordered by impact-per-effort, and gated by a single rule: no claim gets weight without measured evidence.</p>
+        </div>
+        <div class="mast-meta">
+          <div><b>2026-07-03</b> · live-verified</div>
+          <div>DB <b>250MB</b> · <span class="g">691</span> tests / 40 pkg</div>
+          <div>10 symbols · <b>2,024</b> predictions</div>
+          <div><b>0</b> resolved — first labels Mon</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <!-- legend -->
+    <div class="legend" role="note" aria-label="Legend">
+      <div class="grp"><span class="lbl">Effort</span><span class="chip eff">S</span><span class="chip eff">M</span><span class="chip eff">L</span><span class="chip eff">XL</span></div>
+      <div class="grp"><span class="lbl">Cost</span><span class="chip free">free</span><span class="chip cheap">paid-cheap</span><span class="chip serious">paid-serious</span></div>
+      <div class="grp"><span class="lbl">Severity</span><span class="sev critical"></span>critical<span class="sev high"></span>high<span class="sev medium"></span>med<span class="sev low"></span>low</div>
+      <div class="grp"><span class="merged">merged</span><span style="color:var(--faint)">= flagged by 2+ analysts</span></div>
+    </div>
+
+    <!-- KEYSTONE -->
+    <section class="keystone" aria-label="Highest-leverage move">
+      <div class="kh"><span aria-hidden="true">◆</span> If you do one thing</div>
+      <div class="kbody">
+        <h2>Kill the calibration self-grading leak before Monday's first labels land.</h2>
+        <p>Today the isotonic map is fit on <em>all</em> resolved pairs and then the flagship reliability curve grades the <em>already-calibrated</em> probability against outcomes it was fit on — a curve scored on its own training data. Your headline claim, <em>"are our 70% calls actually 70%?"</em>, is optimistically biased <b>by construction</b>. Fix in <code>pipeline/predict.go</code> + <code>api/predict.go</code>: persist and grade <code>RawProb</code> (column already exists), and make the isotonic fit walk-forward with a strict <code>ts</code> cutoff on <code>ResolvedPredictionPairs</code> — mirroring the fold discipline <code>forecast.Evaluate()</code> already has.</p>
+        <p class="defend"><b>Why this and not the SIP feed or the scores-table bloat:</b> both of those are real and queued below, but they make a working system <em>better</em>. This one is the only place in the codebase where the honesty doctrine — the entire brand — is <em>actually breached in code</em>. The very first resolved outcomes arrive Monday and immediately flow into this biased loop; every day it ships uncaught, the platform's one differentiating promise is quietly false. It is M-effort, free, and uses machinery you already built. Fix the thing that makes you a liar first.</p>
+        <div class="kchips">
+          <span class="chip eff">effort · M</span><span class="chip free">cost · free</span>
+          <span class="chip" style="color:var(--crit);border-color:rgba(229,83,75,.35)">honesty breach</span>
+          <span class="merged">merged · ML-Quality + Research-Eval</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= NOW ================= -->
+    <section class="band band-now">
+      <div class="band-head">
+        <span class="band-tag">NOW</span>
+        <h3>This week — free, high-impact, mostly small</h3>
+        <span class="when">// stop the bleeding: correctness, durability, honesty</span>
+      </div>
+      <div class="items">
+
+        <div class="item">
+          <div class="rank"><span class="id">N1</span><span class="sev critical" title="critical"></span></div>
+          <div class="body">
+            <h4>Fix the calibration self-grading leak <span class="merged">merged</span></h4>
+            <p class="why"><b>What:</b> grade RAW prob and make isotonic calibration walk-forward (ts-cutoff folds). <b>Why:</b> the one place the honesty doctrine is breached in code; the flagship reliability number is fit-on-its-own-data. This is the keystone above — it leads NOW because Monday's resolutions feed straight into it.</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> pipeline/predict.go · api/predict.go · store ResolvedPredictionPairs (+ts cutoff) · briefing.go · /honesty</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">N2</span><span class="sev critical" title="critical"></span></div>
+          <div class="body">
+            <h4>Get backups off the data volume + verify integrity</h4>
+            <p class="why"><b>What:</b> after <code>VACUUM INTO</code>, run <code>PRAGMA quick_check</code> on the copy, gzip it, and rsync the newest to a second disk or a B2/R2 bucket; move <code>backupDir</code> off <code>data/</code> (env already supports it). <b>Why:</b> all backups sit in <code>data/backups/</code> beside the live DB — one disk failure or stray <code>rm -rf data</code> loses the DB <em>and</em> all 7 backups, including the never-lose-it reproducible training set. Verify catches silent corruption the night it happens, not on restore day.</p>
+            <div class="meta"><span class="chip eff">S</span><span class="chip cheap">paid-cheap</span></div>
+            <div class="touches"><b>touches:</b> internal/backup/backup.go (RemoteSync hook + quick_check + gzip) · run.go · env SIGNALDECK_BACKUP_DIR / _REMOTE · rclone</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">N3</span><span class="sev critical" title="critical"></span></div>
+          <div class="body">
+            <h4>Off-machine alerting the daemon can't fake</h4>
+            <p class="why"><b>What:</b> replace the macOS-only <code>osascriptNotify</code> path with a webhook/Telegram/Pushover channel (env-selected), and add an external Healthchecks.io / UptimeRobot ping against <code>/api/health</code> every 5m. <b>Why:</b> today a dead box or wedged daemon is invisible until you walk back to the Mac. Two S-effort changes are what actually make "run unattended for months" true.</p>
+            <div class="meta"><span class="chip eff">S</span><span class="chip cheap">paid-cheap</span></div>
+            <div class="touches"><b>touches:</b> internal/health/health.go · internal/alerts/alerts.go · cron/launchd ping job</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">N4</span><span class="sev critical" title="critical"></span></div>
+          <div class="body">
+            <h4>Switch stock ingest to <code>adjustment=all</code> — total-return, not price-return <span class="merged">merged</span></h4>
+            <p class="why"><b>What:</b> change <code>q.Set("adjustment","split")</code> → <code>"all"</code> at <code>client.go:157</code>; fix the doc comments that falsely imply correctness. <b>Why:</b> flagged by <em>three</em> analysts (Integrity, Research-Eval, Data-Vendor). Every realized return silently drops dividends, understating dividend-payers ~2–4%/yr and firing fake ex-div down-gaps into momentum/breakout/regime signals — and poisoning the very labels the whole flywheel learns from. One-line change, systemic payoff.</p>
+            <div class="meta"><span class="chip eff">S</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> ingest/alpaca/client.go:157 (+comments :97,:104) · every fwd-return path (maintain.go, predict.go, expectancy, ranking)</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">N5</span><span class="sev critical" title="critical"></span></div>
+          <div class="body">
+            <h4>Shrink the scores table — it is 95% of the database</h4>
+            <p class="why"><b>What:</b> store components as compact numeric JSON (drop the prose <em>note</em>, regenerate at render), gzip the blob, and/or split it into a sibling ROWID table so the score B-tree stays tiny. <b>Why:</b> measured <code>dbstat</code> shows scores = 229MB from 64k rows because a ~1KB human-readable rationale blob lives inline in a <code>WITHOUT ROWID</code> B-tree (~3.5KB/row on disk). Reclaims ~180MB after VACUUM and removes the single dominant DB-growth term before the 30-symbol cap turns it into ~1GB.</p>
+            <div class="meta"><span class="chip eff">S</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> store/schema.sql:38 · store.go InsertScore/LatestScore/ScoreHistory (381–449) · compress/gzip</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">N6</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Adaptive weights: shrink + blend IC before the first turn <span class="merged">merged</span></h4>
+            <p class="why"><b>What:</b> replace bare <code>weight ∝ max(0, hitRate−0.5)</code> with empirical-Bayes shrinkage toward the equal prior (<code>w = n/(n+k)·w_learned + k/(n+k)·w_prior</code>, k≈50) and fold in the <code>IC</code> the code already computes but discards. <b>Why:</b> at exactly n=30 a hit-rate's SE is ~9% — a leg at 0.56 gets full weight the instant the gate opens. Ship this <em>before</em> Monday so the flywheel's first learned weights don't chase noise then reverse — the most embarrassing failure mode for an honesty brand.</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> adaptive/adaptive.go:141,159 · pipeline/adaptiveweights.go</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">N7</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Stop scoring &amp; resolving against the in-progress daily bar</h4>
+            <p class="why"><b>What:</b> exclude today's still-forming daily bar from scoring and outcome resolution — resolve settled-close to settled-close only (require <code>base</code> to be a sealed prior session and <code>ts + 86400 ≤ now</code> for the forward bar). <b>Why:</b> a "1d forward return" is currently measured between two mutating partial closes, biasing the calibration curve and the adaptive flywheel that N1/N6 depend on. Fix before the first labels resolve Monday.</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> pipeline/pipeline.go:74,94 · signals/score.go · maintain.go BarAtOrBefore/After · predict.go:229</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">N8</span><span class="sev medium" title="medium"></span></div>
+          <div class="body">
+            <h4>Cheap ops hardening: throttle, readiness, restore drill</h4>
+            <p class="why"><b>What:</b> add <code>ThrottleInterval</code>+<code>ProcessType=Background</code> to both plists (stop boot-crash hot-spin); make <code>/api/health</code> a real readiness check (<code>SELECT 1</code> + newest-bar age + watchdog flag, 503 when broken); write <code>ops/restore.sh</code> and run one timed fire-drill. <b>Why:</b> small free changes that make N3's external ping meaningful and turn "we have backups" into "we can recover in N minutes."</p>
+            <div class="meta"><span class="chip eff">S</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> ops/*.plist · api/api.go health() · ops/restore.sh + README</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ================= NEXT ================= -->
+    <section class="band band-next">
+      <div class="band-head">
+        <span class="band-tag">NEXT</span>
+        <h3>This month — the platform-grade jump</h3>
+        <span class="when">// make the signal falsifiable, pipeable, and richer</span>
+      </div>
+      <div class="items">
+
+        <div class="item">
+          <div class="rank"><span class="id">X1</span><span class="sev critical" title="critical"></span></div>
+          <div class="body">
+            <h4>Backtest the platform's OWN signal <span class="merged">merged</span></h4>
+            <p class="why"><b>What:</b> add a <code>signal_gt/signal_lt</code> rule kind so <code>backtest.Backtest</code> can consume the stored pressure score / calibrated <code>P(up)</code> as entry-exit ("long when calProb &gt; 0.6"), plus a param-sweep endpoint and &gt;1000-bar ranges. <b>Why:</b> flagged by Product <em>and</em> Research-Eval. The one honest, no-lookahead engine you built can currently only grade a 4-indicator SMA-cross toy — not the alpha you actually ship. This is what makes the whole analytics stack falsifiable ("does YOUR signal beat buy-hold after costs?").</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> internal/backtest/backtest.go (Rule kinds) · backtest/parse.go · api/quant.go backtestRun · web backtest/page.tsx</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">X2</span><span class="sev critical" title="critical"></span></div>
+          <div class="body">
+            <h4>Turn the candle chart into the product's centerpiece</h4>
+            <p class="why"><b>What:</b> extend <code>CandleChart.tsx</code> to use lightweight-charts at full capacity — SMA/EMA/RSI(pane)/BB/VWAP indicators, and overlay the platform's own outputs as markers+panes: score-threshold buy/sell markers, regime-change and breakout markers, a score line synced to price. <b>Why:</b> the single clearest "a serious trader prefers this over a generic dashboard" — no free tool overlays a <em>calibrated</em> pressure score on candles. Uses the charting lib you already ship; free.</p>
+            <div class="meta"><span class="chip eff">L</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> web/src/components/symbol/CandleChart.tsx · /api/scores/history, /api/regime, /api/breakouts</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">X3</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Upgrade to Alpaca SIP + add Tiingo fundamentals <span class="merged">merged</span></h4>
+            <p class="why"><b>What:</b> flip <code>feed=iex</code> → <code>feed=sip</code> (client.go:158 + streamer) and drop the 300ms throttle — Algo Trader Plus $99/mo, ~one line, backfills ~10× faster; add an <code>ingest/tiingo/</code> package ($30/mo) for split-AND-dividend-adjusted EOD + fundamentals. <b>Why:</b> every model is currently learning from the IEX feed = ~2–3% of consolidated volume. This takes the whole stack to 100% SIP and fills the two data classes the doctrine flags as entirely absent. Biggest data-quality jump per dollar (~$129/mo total).</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip cheap">paid-cheap</span></div>
+            <div class="touches"><b>touches:</b> ingest/alpaca/client.go:158 + streamer · new ingest/tiingo/ · feature store (fundamental block, bump featureVersion)</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">X4</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Real gap detection + a shared market calendar <span class="merged">merged</span></h4>
+            <p class="why"><b>What:</b> emit the <code>gap</code> DQ event that is declared but never fired — walk the expected bar grid per active symbol and flag holes; vendor an NYSE calendar (<code>github.com/rickar/cal</code>, MIT) behind a shared <code>IsMarketOpen(t)</code>. <b>Why:</b> coverage is currently a binary row-count — "500 daily bars" can be swiss cheese, silently skewing every windowed indicator. The calendar also kills false-stale holiday flags (the separately-tracked bug) and half-day errors, and is a shared dependency for N7's "bar sealed" checks.</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> maintain.go DQAuditor (gap scanner + calendar) · types.go:158 · BackfillReconciler · rickar/cal</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">X5</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Alerts + live data escape the Mac: webhook channel + SSE stream</h4>
+            <p class="why"><b>What:</b> add a per-user outbound webhook channel (<code>user_channels</code> table, ~40 lines → Discord/Slack/Telegram/n8n) alongside a read-only <code>GET /api/stream</code> SSE feed of scores, alerts, predictions, and L2 snaps. <b>Why:</b> alerts you never see have zero value; polling <code>/api/bars</code> every 5s is not how quants work. Together they turn SignalDeck from an app you must keep open into a signal source others can build on. Reuses N3's channel abstraction.</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> internal/alerts/alerts.go · new user_channels + /api/channels · new SSE handler + broadcast hub · web /settings</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">X6</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Feed microstructure &amp; cross-asset features to the model</h4>
+            <p class="why"><b>What:</b> bump <code>featureVersion</code> to 3 and add features you already collect but discard before the model sees them — signed book imbalance / weighted-mid (crypto L2), beta+20d correlation vs SPY/BTC, day-of-week &amp; month one-hots, ret21/ret63, vol-state×momentum interaction. Gate each on walk-forward Lift &gt; 0. <b>Why:</b> the logistic forecast sees only 8 single-symbol daily features while richer signals reach the ensemble second-hand as a scalar. Biggest lever on genuine forecast skill — with the honesty gate preserved.</p>
+            <div class="meta"><span class="chip eff">L</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> forecast/forecast.go features() · signals/score.go (already computes imbalance) · pipeline/predict.go buildFeatureVector · breakout pearson</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">X7</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Per-user scoped API keys + OpenAPI spec</h4>
+            <p class="why"><b>What:</b> add an <code>api_keys</code> table (hash, label, scopes, last_used, revoked) resolved in <code>security.go</code> alongside the session cookie; echo rate-limit headers; serve a hand-written <code>openapi.yaml</code> at <code>/api/openapi.json</code>. <b>Why:</b> today the "personal API" is a single global admin token — sharing access means sharing admin, a non-starter beyond one person and the prerequisite for X5's streams/webhooks being usable by anyone else.</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> new api_keys table · api/security.go resolveUser · ratelimit.go · web /settings/api-keys · openapi.yaml</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">X8</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Experiment/run ledger — turn a dashboard into a research platform</h4>
+            <p class="why"><b>What:</b> one <code>experiments</code> table (run_id, git_sha, kind, params, dataset_version=featureVersion, metrics) written by ForecastTrainer, AdaptiveWeightsWorker, and the new ensemble evaluator; a <code>/experiments</code> page. <b>Why:</b> hyperparameters are frozen consts <em>specifically</em> so grades are reproducible — but that's wasted without a ledger to answer "which config produced this number, on which data, at which commit." ~1 table, ~40 lines. No MLflow.</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> new experiments table + store runs() · pipeline/forecast.go · pipeline/adaptiveweights.go · web /experiments</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">X9</span><span class="sev medium" title="medium"></span></div>
+          <div class="body">
+            <h4>Ship the error bar: uncertainty on every probability</h4>
+            <p class="why"><b>What:</b> attach a Wilson/bootstrap interval to the ensemble prob from <code>nUsed</code> + calibration-set size, and visibly flag predictions whose regime cell is still on the static prior vs learned. <b>Why:</b> every layer emits a naked point estimate; honesty means showing how much evidence sits behind a 0.62. Pure presentation + closed-form math, no new data — the most on-brand missing feature.</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> ensemble/ensemble.go · pipeline/predict.go · web prediction UI (nUsed already shown)</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ================= LATER ================= -->
+    <section class="band band-later">
+      <div class="band-head">
+        <span class="band-tag">LATER</span>
+        <h3>Bigger bets — after the correctness &amp; coverage floor is solid</h3>
+        <span class="when">// depth, not breadth; each gated on evidence</span>
+      </div>
+      <div class="items">
+
+        <div class="item">
+          <div class="rank"><span class="id">L1</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Raw-everywhere + split-factor: end the two-price-scale splice</h4>
+            <p class="why"><b>What:</b> store raw prices everywhere plus a separate split-factor series, adjust at read time; detect a split (backfilled close jumps) and emit a <code>corporate_action</code> DQ event instead of letting the 6-hourly re-backfill silently rewrite the "permanent" daily record. <b>Why:</b> live stream bars are raw but backfill is adjusted — after any split the two are on different scales, an N× discontinuity with no flag, and daily history mutates in place violating the permanence guarantee. The correct long-term design; larger than N4's one-liner, so it lands here.</p>
+            <div class="meta"><span class="chip eff">L</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> streamer.go · backfill.go StockBars · store.go UpsertBars + split-factor table · DQ events</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">L2</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Offline walk-forward evaluator for the flagship ENSEMBLE</h4>
+            <p class="why"><b>What:</b> mirror <code>forecast.Evaluate</code> over <code>LabeledFeatures</code> — replay stored vectors through <code>ensemble.WeightedProbability</code> + train-slice isotonic, expanding-window, report Brier/AUC/Lift/reliability strictly OOS. <b>Why:</b> the forecast leg is walk-forward-graded but the fused product a user actually sees is not — its only grade is slow live resolution. Lets you compare candidate weightings offline in minutes instead of waiting weeks. Reuses <code>adaptive.FromVector</code> (no drift). Depends on N1 being correct.</p>
+            <div class="meta"><span class="chip eff">L</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> new eval pkg over store.LabeledFeatures · ensemble/ensemble.go · new ensemble_grade table · /honesty</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">L3</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>A second, non-linear model — pure-Go GBM, gated on Lift</h4>
+            <p class="why"><b>What:</b> add a hand-rolled shallow gradient-boosted tree ensemble (depth 2–3, ~50–100 trees, no CGO) and let walk-forward Lift/Brier pick the winner per horizon; keep the logit unless the GBM measurably beats it OOS. <b>Why:</b> one linear logit can't see the momentum×vol / RSI-threshold interactions a tree captures. <b>Guardrail:</b> no neural net until &gt;5k resolved outcomes — at 150–2k samples a NN overfits and violates the doctrine. Skip XGBoost/LightGBM (CGO breaks the single-binary reproducibility contract).</p>
+            <div class="meta"><span class="chip eff">L</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> new forecast model class · reuse forecast.Evaluate fold harness · ensemble leg selection</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">L4</span><span class="sev high" title="high"></span></div>
+          <div class="body">
+            <h4>Persist the forecast model — realize the feature store's purpose</h4>
+            <p class="why"><b>What:</b> train the logit offline from <code>LabeledFeatures</code> (not recompute from raw bars), walk-forward grade it, and <em>persist</em> the fitted weights/bias/mean/std (currently thrown away — only Prob+Grade are stored) so PredictionRunner scores from a deployed versioned model. <b>Why:</b> "reproducible retraining, no recompute drift" is the feature store's stated reason to exist — today it's true only for 4 blend scalars, not the model itself.</p>
+            <div class="meta"><span class="chip eff">L</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> new offline forecast trainer over LabeledFeatures · store model weights (versioned) · pipeline/forecast.go · predict.go:118</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">L5</span><span class="sev medium" title="medium"></span></div>
+          <div class="body">
+            <h4>Automated paper-trading harness — the missing paper→live bridge</h4>
+            <p class="why"><b>What:</b> a <code>PaperStrategyRunner</code> that enters on a fixed rule (cal_prob crosses threshold), records simulated fills + realized outcome to <code>paper_trades</code>, and tracks a running OOS equity curve vs SPY — distinct from the existing manual discretionary <code>portfolio.go</code>. Gate any "promote to live" language on this clearing a min sample + positive net-of-cost edge. <b>Why:</b> a calibrated P(up) is explicitly NOT a tradeable edge (your own docstrings say so); this is what would demonstrate one, honestly, before any capital.</p>
+            <div class="meta"><span class="chip eff">L</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> new PaperStrategyRunner worker · new paper_trades table · backtest cost model · not portfolio.go</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">L6</span><span class="sev medium" title="medium"></span></div>
+          <div class="body">
+            <h4>DuckDB analytical read lane + Parquet cold tier</h4>
+            <p class="why"><b>What:</b> embed <code>go-duckdb</code> as a read-only handle that ATTACHes the live SQLite and reads Parquet; route heavy cross-symbol reads (correlation matrix, feature sweeps, GROUP BYs) through it. Weekly-export resolved history to partitioned Parquet under <code>data/cold/</code>. <b>Why:</b> correlation loops all symbols × 250 bars uncached every page hit; feature training JSON-parses every row. Stays single-binary/single-machine/honest. Parquet also upgrades reproducibility from a mutable table to immutable content-addressable snapshots. <b>Do NOT</b> reach for ClickHouse/Timescale/Postgres — servers that break the single-binary deploy for zero benefit at this scale.</p>
+            <div class="meta"><span class="chip eff">L</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> new read-only DuckDB handle · api/quant.go correlation/backtest · features.go LabeledFeatures · data/cold/ Parquet exporter</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">L7</span><span class="sev medium" title="medium"></span></div>
+          <div class="body">
+            <h4>Containerize → move off the single-Mac failure domain</h4>
+            <p class="why"><b>What:</b> a ~15-line Dockerfile (pure-Go, no cgo → distroless/static) + docker-compose (daemon+web+named volume); CI builds/pushes on tag. <b>Why:</b> deploy is currently manual <code>cp</code>+<code>launchctl</code> and the whole system is one Intel Mac. The container is the reproducible-build artifact <em>and</em> the migration path onto a cheap always-on Linux VPS ($5–6/mo) that escapes the total single-machine failure domain.</p>
+            <div class="meta"><span class="chip eff">M</span><span class="chip cheap">paid-cheap</span></div>
+            <div class="touches"><b>touches:</b> daemon/Dockerfile · docker-compose.yml · .github/workflows/ci.yml</div>
+          </div>
+        </div>
+
+        <div class="item">
+          <div class="rank"><span class="id">L8</span><span class="sev low" title="low"></span></div>
+          <div class="body">
+            <h4>Research-grade evaluation depth + point-in-time membership</h4>
+            <p class="why"><b>What:</b> IC-decay, turnover, and regime-conditioned Lift/Brier on a <code>/eval</code> page; block-bootstrap CIs on VsBuyHold/Sharpe; vol-scaled slippage in the backtest cost model; record first/last-tradable per symbol to fix survivorship bias. <b>Why:</b> moves evaluation from "did we beat base rate overall" to "where and for how long do we have skill," and stops the flywheel quietly overstating edge by only remembering survivors. All pure Go over data you already persist; honest labeling more than large numeric impact at ≤30 symbols.</p>
+            <div class="meta"><span class="chip eff">L</span><span class="chip free">free</span></div>
+            <div class="touches"><b>touches:</b> new eval pkg · backtest.go cost model · store first/last_tradable · web /eval</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- DOCTRINE + TRADINGVIEW -->
+    <div class="split">
+      <div class="card doctrine">
+        <div class="ch"><span class="tick" aria-hidden="true"></span> Honesty guardrails — what would tempt a lie, and the rule that stops it</div>
+        <div class="cbody">
+          <ul>
+            <li><b>Look-ahead:</b> never score or resolve against an in-progress bar (N7); calibration and every model must be walk-forward with a strict ts-cutoff (N1, L2). If it grades on data it was fit on, it's a lie.</li>
+            <li><b>Overfitting:</b> no model, weight, or feature enters the ensemble without positive out-of-sample Lift (X6, L3). Shrink toward the prior until evidence earns the tilt (N6). No neural net under ~5k resolved outcomes.</li>
+            <li><b>Fake / thin data:</b> IEX = ~2–3% of volume — label it as such until SIP (X3). Prices are price-return until <code>adjustment=all</code> (N4). A proxy is always flagged as a proxy; never fabricated.</li>
+            <li><b>Silent corruption:</b> a split must raise a DQ event, not rewrite permanent history (L1); a gap must be detected, not hidden by a passing row-count (X4).</li>
+            <li><b>Show the error bar:</b> every shipped probability carries its uncertainty and its gate state (X9). Adaptive weights stay <code>available:false</code> until n≥30 — never imply edge before resolved outcomes exist.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="ch"><span aria-hidden="true">▲</span> TradingView — can you pull data from it?</div>
+        <div class="cbody">
+          <p><span class="verdict-yn">NO — verified on TradingView's own support page.</span> "We don't have an API that gives access to data… our REST API is meant for brokers." TradingView sells <em>charting front-ends</em> (the OSS lightweight-charts you already use correctly) and <em>broker order-routing</em> — neither emits redistributable market data.</p>
+          <p>The reseller <code>tradingviewapi.com</code> and libs <code>tvdatafeed</code> / <code>tradingview-ta</code> reverse-engineer TV's private websocket via a logged-in session: ToS-violating, ban-prone, unmaintained (tvdatafeed: no commits since Sep 2022), and — for <code>tradingview-ta</code> — an un-auditable Buy/Sell gauge that breaks the honesty doctrine outright.</p>
+          <p style="color:var(--muted)"><b>Verdict:</b> keep lightweight-charts as your renderer (licensed, correct — see X2). Get <em>data</em> from a real vendor below. TradingView is a charting/social layer, not a data source.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- VENDOR TABLE -->
+    <div class="vendor">
+      <div class="ch">Data-vendor decision — mapped onto the existing Alpaca-shaped ingest</div>
+      <div class="tscroll">
+        <table>
+          <thead>
+            <tr><th>Tier</th><th>Vendor / change</th><th>Price</th><th>What it buys you</th><th>Effort into this codebase</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="tier">Free</td>
+              <td>Stay on Alpaca IEX <span class="tag-skip">honest-label</span><br><span style="color:var(--muted);font-size:12.5px">+ Finnhub free news/earnings</span></td>
+              <td class="price">$0</td>
+              <td>Keep shipping, but label stock data as ~2–3% IEX-only. Finnhub free tier adds a real (non-proxy) earnings calendar + news augmenter.</td>
+              <td>None for Alpaca; small <code>ingest/finnhub/</code> for news.</td>
+            </tr>
+            <tr class="pick">
+              <td class="tier">~$30–130/mo</td>
+              <td>Alpaca Algo Trader Plus + Tiingo <span class="tag-pick">recommended</span></td>
+              <td class="price">$99 + $30</td>
+              <td>Flip <code>feed=iex→sip</code> = 100% consolidated volume + unlimited calls (~10× faster backfill). Tiingo adds split-AND-dividend-adjusted EOD + fundamentals — the two classes the doctrine flags absent. Closes the biggest data-quality ceiling in the system.</td>
+              <td>One line at client.go:158 + drop throttle; new <code>ingest/tiingo/</code> mirroring the Alpaca client shape. <b>= X3.</b></td>
+            </tr>
+            <tr>
+              <td class="tier">Serious</td>
+              <td>Polygon / Massive Advanced</td>
+              <td class="price">$199/mo</td>
+              <td>One vendor for real-time SIP + fundamentals + options + 20yr history + flat files. <b>Note:</b> the $29/$79 tiers are 15-min DELAYED — unusable for live scoring. Only worth it to collapse to a single provider.</td>
+              <td>New <code>ingest/polygon/</code>; wire shape differs from Alpaca — more than a one-liner.</td>
+            </tr>
+            <tr>
+              <td class="tier">Serious</td>
+              <td>Databento (history buy)</td>
+              <td class="price">$125 credit</td>
+              <td>Institutional full order book — odd lots (~50% of volume the SIP omits), full depth, queue position. Realistically a targeted historical-backfill purchase against the free credit, not a live backbone for one Intel i5.</td>
+              <td>New <code>ingest/databento/</code> over their historical HTTP API; binary DBN schemas.</td>
+            </tr>
+            <tr>
+              <td class="tier">Dead ends</td>
+              <td>IEX Cloud · Nasdaq WIKI · Finnhub SIP</td>
+              <td class="price">—</td>
+              <td>IEX Cloud shut down Aug 2024. Nasdaq WIKI EOD is frozen/stale. Finnhub's full data jumps straight to $3,500/mo enterprise — fine as free secondary, never a SIP path. Struck off to save integration effort.</td>
+              <td>Do not wire.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <footer>
+      <div><b>Sequencing logic:</b> NOW protects correctness, durability, and the honesty doctrine before Monday's first resolutions turn biased loops into biased learning. NEXT makes the signal falsifiable (backtest own signal), visible (chart overlays), richer (SIP + features), and pipeable (API keys, SSE, webhooks). LATER is depth — each bet gated on out-of-sample evidence.</div>
+      <div style="margin-top:10px"><b>Cost envelope:</b> the entire plan is free except backups (~$6/mo B2), alerting ($0–5), and the data upgrade (~$129/mo) — the one spend that most improves honesty per dollar. Everything stays pure-Go, no-CGO, single-binary, single-machine, reproducible.</div>
+      <div style="margin-top:10px; color:var(--edge-dim)">SignalDeck · chief-architect merge of 6 internal + 1 external analysis · 2026-07-03</div>
+    </footer>
+
+  </div>
+</div>

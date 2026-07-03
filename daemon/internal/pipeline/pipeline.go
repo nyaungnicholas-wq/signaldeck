@@ -62,15 +62,33 @@ func (w *SignalRunner) Name() string { return "signal-runner" }
 // Interval implements workers.Worker.
 func (w *SignalRunner) Interval() time.Duration { return time.Minute }
 
-// Run scores all active symbols.
+// Run scores the streamed hot set (+ crypto) every minute, and the broad
+// daily-only universe at most once per UTC day.
+//
+// CADENCE SPLIT (free-scale): hot-set symbols have live minute bars, so they
+// are scored every run. The broad daily-only universe (~500 stock names,
+// stream=0) only gets fresh DAILY bars once a day — scoring it every minute
+// would write ~1440 identical rows per symbol per day and explode the derived
+// tables (scores/score_outcomes), defeating the tiered-storage goal. So
+// daily-only symbols are scored once per UTC day, gated by a meta cursor.
 func (w *SignalRunner) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {
 		return "", err
 	}
+	today := time.Now().UTC().Format("2006-01-02")
+	last, _ := w.St.GetMeta(ctx, "signal_universe_day")
+	doUniverse := last != today
 	ts := time.Now().Truncate(time.Minute).Unix()
-	scored := 0
+	scored, hotCount := 0, 0
 	for _, s := range syms {
+		hot := s.Market == md.Crypto || s.Stream
+		if !hot && !doUniverse {
+			continue // daily-only universe symbol already scored today
+		}
+		if hot {
+			hotCount++
+		}
 		daily, minute, err := loadBars(ctx, w.St, s.ID)
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", s.Symbol, err)
@@ -99,7 +117,13 @@ func (w *SignalRunner) Run(ctx context.Context) (string, error) {
 			scored++
 		}
 	}
-	return fmt.Sprintf("scored %d symbol-horizons across %d symbols", scored, len(syms)), nil
+	if doUniverse {
+		// Mark the daily universe pass done for today only after it succeeded,
+		// so a mid-run error simply retries next minute.
+		_ = w.St.SetMeta(ctx, "signal_universe_day", today)
+	}
+	return fmt.Sprintf("scored %d symbol-horizons (%d hot symbols%s)", scored, hotCount,
+		map[bool]string{true: " + daily universe", false: ""}[doUniverse]), nil
 }
 
 // ── ExpectancyRunner ────────────────────────────────────────────────────

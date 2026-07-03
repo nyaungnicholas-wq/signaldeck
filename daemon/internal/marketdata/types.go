@@ -52,6 +52,10 @@ type Symbol struct {
 	Name    string `json:"name"`
 	Active  bool   `json:"active"` // live subscription on
 	AddedAt int64  `json:"addedAt"`
+	// Stream marks the STREAMED HOT SET (live websocket + full 1m pipeline),
+	// as opposed to the BROAD DAILY-ONLY universe (REST daily bars only).
+	// Broad-universe wave; legacy/daily-only symbols are false.
+	Stream bool `json:"stream"`
 }
 
 // Bar is one OHLCV bar. Ts is the bar OPEN time, unix seconds UTC.

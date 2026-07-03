@@ -36,7 +36,10 @@ func (d Deps) candidatesList(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, err.Error())
 		return
 	}
-	active, err := d.St.ActiveSymbolCount(r.Context())
+	// Broad-universe wave: the cap governs the STREAMED hot set only, so the
+	// budget check counts streamed symbols (not every active symbol, which now
+	// includes the broad daily-only universe).
+	active, err := d.St.StreamedSymbolCount(r.Context())
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
@@ -92,18 +95,22 @@ func (d Deps) candidateAdd(w http.ResponseWriter, r *http.Request) {
 	discovery.BudgetMu.Lock()
 	defer discovery.BudgetMu.Unlock()
 	symbolCap := discovery.SymbolCap()
-	active, err := d.St.ActiveSymbolCount(r.Context())
+	// Cap the STREAMED hot set (not every active symbol): promotion adds to the
+	// live-websocket set, which is what the free ws cap bounds.
+	active, err := d.St.StreamedSymbolCount(r.Context())
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
 	}
-	// Adding an already-active symbol doesn't grow the universe, so it is
-	// always allowed (it only touches this user's watchlist).
+	// Adding an already-streamed symbol doesn't grow the hot set, so it is
+	// always allowed (it only touches this user's watchlist). A daily-only
+	// universe symbol being promoted DOES grow the hot set, so it still counts
+	// against the cap.
 	existing, exErr := d.St.GetSymbol(r.Context(), body.Symbol, body.Market)
-	alreadyActive := exErr == nil && existing.Active
-	if !alreadyActive && active >= symbolCap {
+	alreadyStreamed := exErr == nil && existing.Active && existing.Stream
+	if !alreadyStreamed && active >= symbolCap {
 		httpErr(w, http.StatusConflict, fmt.Sprintf(
-			"symbol cap reached (%d/%d active) — dismiss candidates, unsubscribe a symbol, or raise SIGNALDECK_SYMBOL_CAP",
+			"stream cap reached (%d/%d streamed) — dismiss candidates, unsubscribe a symbol, or raise SIGNALDECK_STREAM_CAP",
 			active, symbolCap))
 		return
 	}

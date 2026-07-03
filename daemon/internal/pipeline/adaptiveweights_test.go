@@ -154,6 +154,12 @@ func TestPredictionRunner_UsesLearnedWeightsForRegimeCell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Streamed hot-set symbol: predicted every run (the cadence split scores
+	// daily-only universe symbols just once per UTC day, which this two-run
+	// test would otherwise trip on).
+	if err := st.SetSymbolStream(ctx, sym.ID, true); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().Unix()
 	var bars []md.Bar
 	for i := int64(0); i < 30; i++ {

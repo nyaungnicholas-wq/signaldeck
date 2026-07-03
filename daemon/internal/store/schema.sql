@@ -318,3 +318,33 @@ CREATE TABLE IF NOT EXISTS candidates (
   PRIMARY KEY (symbol, market)
 );
 CREATE INDEX IF NOT EXISTS idx_candidates_status ON candidates (status, dollar_vol DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- PER-SYMBOL AGENTS WAVE (appended block — do not merge into sections above).
+-- Each symbol behaves differently, so each gets its OWN learned model: blend
+-- weights, calibration map, per-component skill, and a plain-English
+-- "personality", all derived ONLY from that symbol's own resolved outcomes
+-- (prequential, no leakage — see internal/symbolagent). ONE worker computes
+-- every symbol's row on a cheap upsert; nothing here is per-process/goroutine.
+--
+-- HONESTY: tier records which evidence tier actually produced the active model:
+--   personal  — the symbol has >= MinPersonal of ITS OWN resolved outcomes for
+--               this horizon, so its own weights + calibration are trusted;
+--   regime    — too few personal samples; falls back to the global per-regime
+--               learned weights (adaptive_weights:v1);
+--   global    — falls back to the pooled "all" learned weights;
+--   static    — no learned evidence anywhere yet: equal-weight prior.
+-- A row is NEVER pruned (permanent self-knowledge record).
+CREATE TABLE IF NOT EXISTS symbol_models (
+  symbol_id   INTEGER NOT NULL REFERENCES symbols(id),
+  horizon     TEXT    NOT NULL,
+  weights     TEXT    NOT NULL DEFAULT '{}', -- JSON: component -> weight
+  calibration TEXT    NOT NULL DEFAULT '{}', -- JSON: isotonic knots {kx:[],ky:[],fitted:bool}
+  skill       TEXT    NOT NULL DEFAULT '{}', -- JSON: component -> {hitRate, ic, n}
+  personality TEXT    NOT NULL DEFAULT '',   -- deterministic plain-English read of the skill
+  n_samples   INTEGER NOT NULL DEFAULT 0,    -- this symbol+horizon's own resolved outcomes
+  tier        TEXT    NOT NULL DEFAULT 'static' CHECK (tier IN ('personal','regime','global','static')),
+  updated_ts  INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (symbol_id, horizon)
+);
+CREATE INDEX IF NOT EXISTS idx_symbol_models_sym ON symbol_models (symbol_id, horizon);
