@@ -56,6 +56,9 @@ func TestSymbolAgentEndpoint_Shape(t *testing.T) {
 	if body.ActiveWeights == nil {
 		t.Error("activeWeights must be a (possibly empty) object, not null")
 	}
+	if body.Skill == nil {
+		t.Error("skill must be a (possibly empty) array, not null — the panel does data.skill.length")
+	}
 
 	// Store a PERSONAL model → the payload must reflect its own weights + skill.
 	if err := st.UpsertSymbolModel(ctx, store.SymbolModelRow{

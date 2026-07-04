@@ -187,12 +187,12 @@ export default function SymbolAgentPanel({
           )}
 
           {/* Per-signal skill bars — the measured edge, whatever the tier. */}
-          {data.skill.length > 0 ? (
+          {(data.skill ?? []).length > 0 ? (
             <div className="flex flex-col gap-3">
               <div className="text-[0.75rem] uppercase tracking-wider" style={{ color: "var(--faint)" }}>
                 per-signal skill (this symbol&rsquo;s own history)
               </div>
-              {data.skill.map((s) => (
+              {(data.skill ?? []).map((s) => (
                 <SkillBar
                   key={s.component}
                   label={LEG_LABEL[s.component] ?? s.component}

@@ -715,7 +715,7 @@ export interface SymbolAgent {
   nSamples: number; // this symbol's own resolved outcomes for the horizon
   threshold: number; // MinPersonal — samples needed to graduate to personal
   personality: string; // deterministic plain-English read of the skill
-  skill: SymbolAgentSkill[]; // per-component measured edge
+  skill: SymbolAgentSkill[] | null; // per-component measured edge (older daemons serialize null when no model row exists)
   activeWeights: Record<string, number>; // blend weights in force (empty unless personal)
   updatedTs: number;
 }
