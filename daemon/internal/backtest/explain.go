@@ -29,14 +29,27 @@ func Explain(s Strategy, r Result) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s returned %s (CAGR %s) vs %s buy-and-hold, ",
-		name, pct(r.TotalReturn), pct(r.CAGR), pct(bh))
-	fmt.Fprintf(&b, "with %d trade%s (win rate %s, %s of bars in the market), ",
-		r.NumTrades, plural(r.NumTrades), pct(r.WinRate), pct(r.ExposurePct))
+	// Only quote CAGR when the window is long/thick enough for annualizing to be
+	// honest (Result.CAGRReported); otherwise report total return over the span.
+	if r.CAGRReported {
+		fmt.Fprintf(&b, "%s returned %s (CAGR %s) vs %s buy-and-hold, ",
+			name, pct(r.TotalReturn), pct(r.CAGR), pct(bh))
+	} else {
+		fmt.Fprintf(&b, "%s returned %s over %s vs %s buy-and-hold (span too short to annualize), ",
+			name, pct(r.TotalReturn), spanStr(r.SpanYears), pct(bh))
+	}
+	// Only quote win rate when >=2 closed trades make it a real fraction.
+	if r.WinRateMeaningful {
+		fmt.Fprintf(&b, "with %d trade%s (win rate %s, %s of bars in the market), ",
+			r.NumTrades, plural(r.NumTrades), pct(r.WinRate), pct(r.ExposurePct))
+	} else {
+		fmt.Fprintf(&b, "with %d trade%s (too few to quote a win rate, %s of bars in the market), ",
+			r.NumTrades, plural(r.NumTrades), pct(r.ExposurePct))
+	}
 	fmt.Fprintf(&b, "and a worst drawdown of %s. ", pct(r.MaxDrawdown))
 	fmt.Fprintf(&b, "After %s costs it %s holding (%s vs buy-and-hold). ",
 		bpsStr(s.CostBps), verdict, signedPct(r.VsBuyHold))
-	fmt.Fprintf(&b, "Sharpe was %.2f (rf=0, annualized). ", r.Sharpe)
+	fmt.Fprintf(&b, "Sharpe was %.2f (rf=0, annualized ~%.0f bars/yr). ", r.Sharpe, r.BarsPerYear)
 
 	// Honesty tail: flag low-N and note that this is in-sample.
 	b.WriteString(confidenceNote(r.NumTrades))
@@ -58,6 +71,25 @@ func confidenceNote(numTrades int) string {
 		return fmt.Sprintf("With %d trades this is MODERATE CONFIDENCE at best. %s", numTrades, base)
 	default:
 		return base
+	}
+}
+
+// spanStr renders a span in years as a human phrase, e.g. 0.04 -> "~2 weeks",
+// 0.5 -> "~6 months", 1.5 -> "~1.5 years". Used only when CAGR is suppressed.
+func spanStr(years float64) string {
+	switch {
+	case years <= 0:
+		return "the tested span"
+	case years < 0.16: // < ~2 months
+		w := years * 52.18
+		if w < 1.5 {
+			return "~1 week"
+		}
+		return fmt.Sprintf("~%.0f weeks", w)
+	case years < 1:
+		return fmt.Sprintf("~%.0f months", years*12)
+	default:
+		return fmt.Sprintf("~%.1f years", years)
 	}
 }
 

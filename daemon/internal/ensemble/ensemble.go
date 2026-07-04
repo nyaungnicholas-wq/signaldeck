@@ -82,6 +82,20 @@ type Components struct {
 	// flip, because headline tone is a weak, noisy signal until the adaptive
 	// layer measures otherwise.
 	SentimentScore *float64
+
+	// STAGE 6 gated model legs. Each is a P(up) in [0,1] paired with the
+	// out-of-sample lift that earned it a place in the blend — used ONLY when
+	// its *Lift > 0, the identical honesty gate the forecast leg passes through.
+	// nil (or edgeless lift) means the leg is absent and contributes nothing.
+
+	// GBMProb is the gradient-boosted-tree model's P(up); GBMLift is its
+	// walk-forward out-of-sample lift over base rate.
+	GBMProb *float64
+	GBMLift *float64
+	// MeanRevProb is the gated mean-reversion leg's P(up); MeanRevLift is its
+	// walk-forward, COST-NET out-of-sample lift. Dropped unless *MeanRevLift > 0.
+	MeanRevProb *float64
+	MeanRevLift *float64
 }
 
 // SentimentScale converts a sentiment score in [-1,1] to a probability leg:
@@ -97,10 +111,16 @@ const (
 	LegExpectancy = "expectancy"
 	LegForecast   = "forecast"
 	LegSentiment  = "sentiment"
+	// STAGE 6 gated model legs.
+	LegGBM     = "gbm"     // gradient-boosted-tree directional model
+	LegMeanRev = "meanrev" // gated mean-reversion (inverted-momentum) leg
 )
 
-// LegNames lists every possible component leg in canonical order.
-var LegNames = []string{LegPressure, LegExpectancy, LegForecast, LegSentiment}
+// LegNames lists every possible component leg in canonical order. The two
+// Stage-6 model legs are appended so existing weight maps (keyed by leg name)
+// remain valid — a leg absent from a stored map simply gets no learned weight
+// and falls back to equal-weight, exactly as before.
+var LegNames = []string{LegPressure, LegExpectancy, LegForecast, LegSentiment, LegGBM, LegMeanRev}
 
 // LegProbabilities converts each AVAILABLE component to its 0..1
 // up-probability leg, keyed by canonical leg name. Exactly the legs that
@@ -118,6 +138,15 @@ func LegProbabilities(c Components) map[string]float64 {
 	}
 	if c.SentimentScore != nil {
 		legs[LegSentiment] = clamp01(0.5 + *c.SentimentScore*SentimentScale)
+	}
+	// STAGE 6 gated model legs: included ONLY with demonstrated out-of-sample
+	// edge (*Lift > 0), the same rule the forecast leg obeys. An edgeless or
+	// absent model leg is dropped, never down-weighted — honesty doctrine.
+	if c.GBMProb != nil && c.GBMLift != nil && *c.GBMLift > 0 {
+		legs[LegGBM] = clamp01(*c.GBMProb)
+	}
+	if c.MeanRevProb != nil && c.MeanRevLift != nil && *c.MeanRevLift > 0 {
+		legs[LegMeanRev] = clamp01(*c.MeanRevProb)
 	}
 	return legs
 }

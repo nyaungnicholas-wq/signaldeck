@@ -543,9 +543,11 @@ export default function BacktestPage() {
                 )}
                 <span
                   className="chip"
-                  style={{ color: "var(--faint)" }}
+                  style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
+                  title="This is a backtest over historical bars, not a live forward track record."
                 >
-                  in-sample — hypothesis, not proof
+                  backtested / in-sample — not a live track record (n=
+                  {result.NumTrades})
                 </span>
               </div>
             </div>
@@ -579,10 +581,28 @@ export default function BacktestPage() {
               />
               <Metric
                 label="CAGR"
-                title="Compound annual growth rate"
-                value={fmtPct(result.CAGR * 100)}
-                color={result.CAGR >= 0 ? "var(--bid)" : "var(--ask)"}
-                hint="assumes ~252 bars/yr"
+                title="Compound annual growth rate — only shown when the tested span is ~1yr+ and there are enough trades to annualize honestly."
+                value={
+                  result.CAGRReported === false
+                    ? "n/a"
+                    : fmtPct(result.CAGR * 100)
+                }
+                color={
+                  result.CAGRReported === false
+                    ? "var(--dim)"
+                    : result.CAGR >= 0
+                      ? "var(--bid)"
+                      : "var(--ask)"
+                }
+                hint={
+                  result.CAGRReported === false
+                    ? `span too short/thin to annualize${
+                        result.SpanYears !== undefined
+                          ? ` (~${result.SpanYears.toFixed(2)}yr, ${result.NumTrades} trades)`
+                          : ""
+                      }`
+                    : "compound annual growth rate"
+                }
               />
               <Metric
                 label="MAX DRAWDOWN"
@@ -593,11 +613,15 @@ export default function BacktestPage() {
               />
               <Metric
                 label="SHARPE"
-                title="Sharpe ratio (risk-adjusted return)"
+                title="Sharpe ratio (risk-adjusted return). Annualized by the bar interval inferred from the data, not a hardcoded 252."
                 value={
                   isFinite(result.Sharpe) ? result.Sharpe.toFixed(2) : "—"
                 }
-                hint="rf=0, annualized; read as relative"
+                hint={
+                  result.BarsPerYear !== undefined
+                    ? `rf=0, annualized ~${Math.round(result.BarsPerYear)} bars/yr`
+                    : "rf=0, annualized; read as relative"
+                }
               />
               <Metric
                 label="NUM TRADES"
@@ -613,8 +637,20 @@ export default function BacktestPage() {
               />
               <Metric
                 label="WIN RATE"
-                value={fmtPct(result.WinRate * 100, false)}
-                hint="of closed trades"
+                title="Share of closed trades that were net-positive. Suppressed with fewer than 2 closed trades — one trade is not a win rate."
+                value={
+                  result.WinRateMeaningful === false
+                    ? "n/a"
+                    : fmtPct(result.WinRate * 100, false)
+                }
+                color={
+                  result.WinRateMeaningful === false ? "var(--dim)" : undefined
+                }
+                hint={
+                  result.WinRateMeaningful === false
+                    ? `too few closed trades (${result.ClosedTrades ?? 0})`
+                    : "of closed trades"
+                }
               />
               <Metric
                 label="EXPOSURE"

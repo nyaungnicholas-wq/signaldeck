@@ -348,3 +348,172 @@ CREATE TABLE IF NOT EXISTS symbol_models (
   UNIQUE (symbol_id, horizon)
 );
 CREATE INDEX IF NOT EXISTS idx_symbol_models_sym ON symbol_models (symbol_id, horizon);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- FREE-DATA WAVE (Stage 2) (appended block — do not merge into sections above).
+-- Two zero-cost, no-vendor macro/fundamental sources so the platform has real
+-- cross-asset and company context WITHOUT a paid feed. Both degrade gracefully
+-- when the upstream is unavailable; neither ever exposes redistribution-limited
+-- Alpaca market data.
+--
+-- (1) FRED macro series (St. Louis Fed, keyless CSV endpoint). A long, thin
+-- time series keyed by (series, ts): VIXCLS (VIX close), DGS10 (10y yield),
+-- T10Y2Y (10y-2y spread, recession proxy), DFF (effective fed funds). ts is a
+-- UTC-midnight day epoch (FRED observations are daily). value is the observed
+-- level; missing observations (FRED emits "." on holidays) are skipped, so a
+-- present row always carries a real number. Never pruned - macro history is
+-- tiny and permanently useful as a Stage-6 cross-asset feature.
+CREATE TABLE IF NOT EXISTS macro_series (
+  series TEXT    NOT NULL,   -- FRED series id, e.g. VIXCLS / DGS10 / T10Y2Y / DFF
+  ts     INTEGER NOT NULL,   -- observation day, UTC-midnight epoch seconds
+  value  REAL    NOT NULL,   -- observed level
+  PRIMARY KEY (series, ts)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_macro_series_ts ON macro_series (series, ts DESC);
+
+-- (2) SEC EDGAR company fundamentals (free, no key; SEC requires a descriptive
+-- User-Agent and <=10 req/s). Per universe stock, a handful of company-facts
+-- (Revenues, EPS, shares outstanding) plus the latest filing date, each stamped
+-- with the fact's as_of (the period end the value reports) and fetched_at (when
+-- we pulled it). Keyed by (symbol_id, metric, as_of) so re-fetches are
+-- idempotent and a metric's history accumulates. Slowly refreshed (~24h).
+CREATE TABLE IF NOT EXISTS fundamentals (
+  symbol_id  INTEGER NOT NULL REFERENCES symbols(id),
+  metric     TEXT    NOT NULL,   -- Revenues | EPS | SharesOutstanding | LatestFilingDate | CIK
+  value      REAL    NOT NULL,   -- numeric fact value (dates stored as epoch seconds)
+  as_of      INTEGER NOT NULL,   -- period-end / effective date, epoch seconds
+  fetched_at INTEGER NOT NULL,   -- when this row was fetched, epoch seconds
+  PRIMARY KEY (symbol_id, metric, as_of)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_fundamentals_sym ON fundamentals (symbol_id, metric, as_of DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- PREDICTION LEDGER (Stage 3) (appended block — do not merge into the sections
+-- above). An APPEND-ONLY, HASH-CHAINED audit log of every prediction the
+-- flagship PredictionRunner emits — the tamper-evidence buyers/allocators
+-- require. Each row commits the prediction's exact identity (symbol, horizon,
+-- bar, probabilities, feature-vector hash, model version) at the instant it was
+-- made, BEFORE any outcome can exist, and is cryptographically chained to the
+-- previous row: entry_hash = sha256(prev_hash ‖ canonical-json(entry fields)).
+-- Recomputing the chain reproduces every head; any silent UPDATE/DELETE of a
+-- historical row breaks it and is detected at the exact seq. This table is
+-- WRITE-ONCE per row: never UPDATE, never REPLACE, never DELETE — append only.
+-- It is deliberately a SEPARATE record from predictions/prediction_outcomes:
+-- those are the mutable working state (outcomes get resolved later); this is the
+-- immutable proof of WHAT WAS CLAIMED, WHEN — the point being that it cannot be
+-- back-dated after the outcome is known.
+CREATE TABLE IF NOT EXISTS prediction_ledger (
+  seq           INTEGER PRIMARY KEY AUTOINCREMENT, -- monotonic append order (chain index)
+  predicted_at  INTEGER NOT NULL,   -- wall-clock unix seconds when the entry was appended
+  symbol_id     INTEGER,            -- the predicted symbol (NULL-safe, but always set in practice)
+  horizon       TEXT,               -- 1d | 1w
+  bar_ts        INTEGER,            -- the prediction's bar timestamp (predictions.ts)
+  raw_prob      REAL,               -- uncalibrated ensemble probability
+  cal_prob      REAL,               -- calibrated probability (== prediction_outcomes.prob seed)
+  feature_hash  TEXT,               -- sha256 of the persisted feature-vector JSON
+  model_version INTEGER,            -- ledgerModelVersion const at emit time
+  prev_hash     TEXT,               -- entry_hash of seq-1 ("" for the genesis row)
+  entry_hash    TEXT    NOT NULL    -- sha256(prev_hash ‖ canonical-json of this entry) — the chain link
+);
+CREATE INDEX IF NOT EXISTS idx_prediction_ledger_sym
+  ON prediction_ledger (symbol_id, horizon, seq DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- PAPER TRADING (Stage 4) (appended block — do not merge into the sections
+-- above). An INTERNAL, SELF-CONTAINED, SIMULATED paper-trading book driven by
+-- the platform's OWN live calibrated predictions. This is NOT connected to any
+-- broker: no order is ever sent anywhere; every fill is computed from the
+-- daemon's own stored bar data. It exists to accumulate an HONEST, out-of-sample
+-- track record of "if you had traded the flagship signal, next-bar-open, with
+-- realistic costs, what would the P&L have been?".
+--
+-- A "strategy" here is a simulated portfolio identity (e.g. "flagship-1d") that
+-- starts flat with a notional book and trades one symbol-target at a time per
+-- symbol. The RULE: when a symbol's latest CALIBRATED prediction crosses the
+-- long threshold we target a long; when it crosses the flat threshold we exit;
+-- entries/exits fill at the NEXT bar's OPEN after the prediction (never same-bar
+-- — no lookahead) and pay a realistic per-side cost. These tables are the track
+-- record and are NEVER pruned.
+
+-- paper_positions: the CURRENT open position per (strategy, symbol). qty is in
+-- shares/units (fractional allowed); avg_px is the cost basis; opened_ts is when
+-- the position was entered. A flat symbol has NO row (positions are deleted on
+-- exit), so the presence of a row means "currently long".
+CREATE TABLE IF NOT EXISTS paper_positions (
+  strategy  TEXT    NOT NULL,   -- simulated portfolio id, e.g. "flagship-1d"
+  symbol_id INTEGER NOT NULL,
+  qty       REAL    NOT NULL,   -- units held (>0 = long; we are long/flat only)
+  avg_px    REAL    NOT NULL,   -- average entry price (cost basis)
+  opened_ts INTEGER NOT NULL,   -- bar ts (open time) at which the position was entered
+  PRIMARY KEY (strategy, symbol_id)
+) WITHOUT ROWID;
+
+-- paper_trades: the append-only trade log. One row per simulated fill (a buy to
+-- open or a sell to close). px is the fill price (the next bar's OPEN); cost is
+-- the dollar cost charged on THIS fill (per-side spread+slippage proxy); reason
+-- records why the fill happened (the crossing + the prediction that drove it).
+-- Never pruned — it is the audit trail behind the equity curve.
+CREATE TABLE IF NOT EXISTS paper_trades (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy  TEXT    NOT NULL,
+  symbol_id INTEGER NOT NULL,
+  side      TEXT    NOT NULL,   -- "buy" (open long) | "sell" (close long)
+  qty       REAL    NOT NULL,   -- units transacted
+  px        REAL    NOT NULL,   -- fill price = next bar OPEN after the signal
+  cost      REAL    NOT NULL,   -- dollar cost charged on this fill (>=0)
+  ts        INTEGER NOT NULL,   -- fill bar ts (open time), unix seconds
+  reason    TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_paper_trades_strat
+  ON paper_trades (strategy, ts);
+
+-- paper_equity: the equity curve, one row per (strategy, ts) mark. cash is
+-- uninvested notional; positions_value is the marked-to-market value of open
+-- positions at that ts; equity = cash + positions_value. Marked forward as new
+-- bars arrive; never pruned (the curve IS the track record).
+CREATE TABLE IF NOT EXISTS paper_equity (
+  strategy        TEXT    NOT NULL,
+  ts              INTEGER NOT NULL,   -- mark time (bar open ts), unix seconds
+  cash            REAL    NOT NULL,
+  positions_value REAL    NOT NULL,
+  equity          REAL    NOT NULL,
+  PRIMARY KEY (strategy, ts)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_paper_equity_strat
+  ON paper_equity (strategy, ts);
+
+-- paper_cursor: per-strategy idempotency + book state. last_bar_ts is the newest
+-- bar ts the paper-trader has already ACTED on for this strategy; a re-run on a
+-- bar at/behind it is a no-op (no double-trade). cash carries the simulated
+-- book's uninvested notional between runs; started_ts is when the book was
+-- initialized (first run). Book notional at t0 = STARTING_CASH const.
+CREATE TABLE IF NOT EXISTS paper_cursor (
+  strategy    TEXT    NOT NULL PRIMARY KEY,
+  last_bar_ts INTEGER NOT NULL DEFAULT 0,
+  cash        REAL    NOT NULL,
+  started_ts  INTEGER NOT NULL
+) WITHOUT ROWID;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STAGE 6 — GATED MODEL FORECAST LEGS (append-only block).
+-- model_forecasts stores each NAMED model leg (currently 'gbm' and 'meanrev')
+-- per symbol+horizon with its LATEST out-of-sample grade, exactly parallel to
+-- the `forecasts` table (which holds only the linear logit). The ensemble reads
+-- prob + lift and includes the leg ONLY when lift > 0 — the identical honesty
+-- gate the logit forecast passes. One row per (symbol, horizon, model); the
+-- trainer upserts it in place.
+CREATE TABLE IF NOT EXISTS model_forecasts (
+  symbol_id INTEGER NOT NULL,
+  horizon   TEXT    NOT NULL,
+  model     TEXT    NOT NULL,        -- 'gbm' | 'meanrev'
+  ts        INTEGER NOT NULL,        -- when trained/graded, unix seconds
+  prob      REAL    NOT NULL,        -- latest P(up) for the most recent bar
+  accuracy  REAL    NOT NULL,
+  brier     REAL    NOT NULL,
+  auc       REAL    NOT NULL,
+  base_rate REAL    NOT NULL,
+  lift      REAL    NOT NULL,        -- OOS lift; leg is used by ensemble iff >0
+  n_train   INTEGER NOT NULL,
+  n_eval    INTEGER NOT NULL,
+  PRIMARY KEY (symbol_id, horizon, model)
+) WITHOUT ROWID;

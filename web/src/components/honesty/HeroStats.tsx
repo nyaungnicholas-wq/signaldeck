@@ -51,8 +51,14 @@ function Stat({
 
 /** Hero row: resolved sample size, IC with plain-English verdict, bucket spread. */
 export default function HeroStats({ data, horizon }: { data: Honesty; horizon: Horizon }) {
-  const n = data.n ?? 0;
-  const ic = data.ic;
+  // Independent (symbol, UTC-day) count is the REAL sample size; raw minute
+  // rows over-count. Fall back to n for older payloads.
+  const n = data.independentN ?? data.n ?? 0;
+  const rawN = data.rawN ?? n;
+  const minN = data.minIndependentN ?? 30;
+  // IC is withheld (null) below the independence gate — don't invent a number.
+  const gated = data.icGated === true || data.ic === null || data.ic === undefined;
+  const ic = typeof data.ic === "number" ? data.ic : NaN;
   const buckets = data.buckets ?? [];
   const first = buckets[0];
   const last = buckets[buckets.length - 1];
@@ -69,16 +75,25 @@ export default function HeroStats({ data, horizon }: { data: Honesty; horizon: H
   return (
     <div className="grid gap-4 sm:grid-cols-3">
       <Stat
-        label="RESOLVED OUTCOMES"
+        label="INDEPENDENT RESOLUTIONS"
+        title="One observation per (symbol, UTC-day). Minute-cadence rows that all resolve against the same daily move are collapsed, so this is the effective independent sample."
         value={n.toLocaleString("en-US")}
-        sub={`score → outcome pairs resolved at the ${horizon} horizon`}
+        sub={
+          rawN > n
+            ? `${rawN.toLocaleString("en-US")} raw rows → ${n.toLocaleString("en-US")} independent (symbol, UTC-day) at ${horizon}`
+            : `independent score → outcome pairs at the ${horizon} horizon`
+        }
       />
       <Stat
         label="IC · SCORE ↔ FWD RETURN"
-        title="Information coefficient — correlation between score and forward return (+1 perfect, 0 no information)"
-        value={n && Number.isFinite(ic) ? ic.toFixed(3) : "—"}
-        valueColor={icColor(ic, n)}
-        sub={icLine(ic, n)}
+        title="Information coefficient — correlation between score and forward return over the INDEPENDENT set (+1 perfect, 0 no information). Withheld below the minimum independent sample."
+        value={gated ? "—" : n && Number.isFinite(ic) ? ic.toFixed(3) : "—"}
+        valueColor={gated ? "var(--dim)" : icColor(ic, n)}
+        sub={
+          gated
+            ? `insufficient independent resolutions (${n}/${minN}) — no IC until the sample is large enough`
+            : icLine(ic, n)
+        }
       />
       <Stat
         label="TOP − BOTTOM BUCKET"

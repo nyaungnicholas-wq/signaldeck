@@ -83,8 +83,31 @@ export default function HonestyPage() {
               poll failed — showing last data
             </span>
           )}
+          {/* Phase 0 labeling: not a live track record until the gate clears. */}
+          {current && current.live !== true && (
+            <span
+              className="chip"
+              style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
+              title={
+                current.trackLabel ??
+                "These figures are graded on backtested / in-sample resolutions, not a live forward track record."
+              }
+            >
+              backtested — not live
+            </span>
+          )}
           {current && (
-            <span className="chip tnum">{(current.n ?? 0).toLocaleString("en-US")} resolved</span>
+            <span
+              className="chip tnum"
+              title={
+                (current.rawN ?? current.independentN ?? current.n) !==
+                (current.independentN ?? current.n)
+                  ? `${(current.rawN ?? 0).toLocaleString("en-US")} raw minute-cadence rows collapse to ${(current.independentN ?? current.n).toLocaleString("en-US")} independent symbol-days`
+                  : "independent (symbol, UTC-day) resolutions"
+              }
+            >
+              {(current.independentN ?? current.n ?? 0).toLocaleString("en-US")} independent
+            </span>
           )}
           <span className="chip tnum">
             {loading ? (

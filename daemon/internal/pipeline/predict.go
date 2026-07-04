@@ -11,7 +11,9 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/breakout"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/macrofeat"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/micro"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ranking"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/regime"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -59,7 +61,18 @@ func horizonSecs(h md.Horizon) int64 {
 // evolve without corrupting the historical training set: bump it whenever a
 // field is added/removed/rescaled, and train per version.
 // v2: + sentiment_score / sentiment_n (learning-flywheel wave).
-const featureVersion = 2
+// v3 (Stage 6): + crypto microstructure (micro_*) for crypto symbols; + FRED VIX
+// cross-asset features (vix_*) for all symbols; + gated model-leg probs
+// (gbm_prob / meanrev_prob) recorded when they cleared their OOS gate.
+const featureVersion = 3
+
+// ledgerModelVersion stamps each hash-chained ledger entry with the version of
+// the prediction MODEL/pipeline that produced it (Stage 3 tamper-evident
+// ledger). Bump when the ensemble/calibration/feature pipeline changes in a way
+// that changes emitted probabilities, so an auditor can see which model era a
+// committed prediction belongs to. Independent of featureVersion (that stamps
+// the training-set layout; this stamps the committed prediction).
+const ledgerModelVersion = 1
 
 // Sentiment feature gates: the daily aggregate joins the blend only when it
 // rests on at least sentimentMinHeadlines rated headlines and is at most
@@ -75,7 +88,11 @@ const (
 // one-hot encoded ("regime_<label>"=1) and the prediction's own raw +
 // calibrated probabilities are included so the labeled set can grade the
 // calibration layer itself.
-func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, nUsed int, regimeLbl string, rankPct *float64, sentN int) map[string]float64 {
+// extra carries cross-cutting feature maps (Stage 6): crypto microstructure
+// (micro_*) for crypto symbols and FRED VIX (vix_*) for all symbols. Each is
+// merged verbatim; absence of a map means those features are simply not present
+// for this row (absence is information, not zero).
+func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, nUsed int, regimeLbl string, rankPct *float64, sentN int, extra ...map[string]float64) map[string]float64 {
 	vec := map[string]float64{
 		"pressure_score": c.PressureScore,
 		"pred_raw":       raw,
@@ -98,11 +115,26 @@ func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, nU
 		vec["sentiment_score"] = *c.SentimentScore
 		vec["sentiment_n"] = float64(sentN)
 	}
+	// STAGE 6 gated model legs: recorded ONLY when they cleared their OOS gate
+	// (LegProbabilities semantics), so the labeled training set (and the adaptive
+	// attribution reading it back) sees exactly the leg the live blend used.
+	if c.GBMProb != nil && c.GBMLift != nil && *c.GBMLift > 0 {
+		vec["gbm_prob"] = *c.GBMProb
+	}
+	if c.MeanRevProb != nil && c.MeanRevLift != nil && *c.MeanRevLift > 0 {
+		vec["meanrev_prob"] = *c.MeanRevProb
+	}
 	if regimeLbl != "" {
 		vec["regime_"+regimeLbl] = 1
 	}
 	if rankPct != nil {
 		vec["rank_pct"] = *rankPct
+	}
+	// Merge cross-cutting Stage-6 feature maps (micro_* / vix_*).
+	for _, m := range extra {
+		for k, v := range m {
+			vec[k] = v
+		}
 	}
 	return vec
 }
@@ -148,6 +180,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			learned = adaptive.Weights{}
 		}
 	}
+	// STAGE 6 — FRED VIX cross-asset feature, loaded ONCE per pass (the VIX level
+	// is market-wide, identical for every symbol at this ts). Present for ALL
+	// symbols when a VIX observation exists; absent (nil) otherwise. Best-effort:
+	// a read error or no data simply means the vix_* features are omitted.
+	var vixMap map[string]float64
+	if vix, ok, err := w.St.LatestVIX(ctx); err == nil && ok && vix > 0 {
+		vixMap = macrofeat.FromVIX(vix).Map()
+	}
 	// CADENCE SPLIT (free-scale): predict the streamed hot set + crypto every
 	// run; the broad daily-only universe (~500 names, daily bars only) once per
 	// UTC day, so predictions/prediction_outcomes/features don't explode.
@@ -168,6 +208,25 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		forecasts, err := w.St.Forecasts(ctx, s.ID)
 		if err != nil {
 			return "", err
+		}
+		// STAGE 6 — the symbol's gated model legs (GBM + mean-reversion), trained
+		// by the gbm-trainer worker. Loaded once per symbol; the leg is fed into
+		// the blend below ONLY when its stored lift > 0 (LegProbabilities gate).
+		modelFcs, err := w.St.ModelForecasts(ctx, s.ID)
+		if err != nil {
+			return "", err
+		}
+		// STAGE 6 — crypto MICROSTRUCTURE features (per crypto symbol, shared
+		// across horizons): derived from the last ~2 minutes of 1s snapshots at
+		// or before now. Absent for non-crypto or when the book window is thin.
+		var microMap map[string]float64
+		if s.Market == md.Crypto {
+			now := time.Now().Unix()
+			if snaps, err := w.St.Snaps(ctx, s.ID, now-120, now+1, 121); err == nil {
+				if mf, ok := micro.Extract(snaps); ok {
+					microMap = mf.Map()
+				}
+			}
 		}
 		// Sentiment feature (per symbol, shared across horizons): the latest
 		// daily aggregate, only when fresh (<=3 days) AND resting on enough
@@ -202,6 +261,16 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					p, l := f.Prob, f.Lift
 					c.ForecastProb, c.ForecastLift = &p, &l
 				}
+			}
+			// STAGE 6 gated model legs. Each carries its stored OOS lift; the
+			// ensemble includes the leg ONLY when lift > 0 (LegProbabilities). An
+			// absent leg (never trained, or too little history) contributes
+			// nothing — the blend is exactly the pre-Stage-6 blend.
+			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelGBM); ok {
+				c.GBMProb, c.GBMLift = &p, &l
+			}
+			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelMeanRev); ok {
+				c.MeanRevProb, c.MeanRevLift = &p, &l
 			}
 			// PER-SYMBOL AGENTS: pick weights + calibration by tier order
 			//   personal(symbol) -> global-regime -> global -> static.
@@ -256,7 +325,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if pct, ok := rankPcts[s.ID]; ok {
 				rankPct = &pct
 			}
-			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN)
+			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap)
 			if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
 				featErrs++
 				slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)
@@ -264,6 +333,31 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				_ = w.St.InsertDQ(ctx, md.DQEvent{
 					SymbolID: &sid, Ts: time.Now().Unix(),
 					Kind: "feature_store_error", Detail: fmt.Sprintf("horizon %s: %v", h, err),
+				})
+			}
+			// STAGE 3 — append-only, hash-chained prediction ledger. Commit the
+			// prediction's identity to the tamper-evident chain AFTER the
+			// prediction + feature vector are persisted, and BEFORE any outcome
+			// can exist (the resolver runs on its own cadence). feature_hash is
+			// the sha256 of the SAME vector we just wrote, so the committed hash
+			// is reproducible from the persisted row. Best-effort: a ledger
+			// failure logs + records a dq event but MUST NOT fail the prediction
+			// (the prediction is already durably written above).
+			if _, lerr := w.St.AppendLedger(ctx, store.LedgerEntry{
+				PredictedAt:  time.Now().Unix(),
+				SymbolID:     s.ID,
+				Horizon:      h,
+				BarTs:        ts,
+				RawProb:      raw,
+				CalProb:      cal,
+				FeatureHash:  store.HashFeatureVector(vec),
+				ModelVersion: ledgerModelVersion,
+			}); lerr != nil {
+				slog.Warn("prediction ledger: append failed", "symbol", s.Symbol, "horizon", h, "err", lerr)
+				sid := s.ID
+				_ = w.St.InsertDQ(ctx, md.DQEvent{
+					SymbolID: &sid, Ts: time.Now().Unix(),
+					Kind: "ledger_append_error", Detail: fmt.Sprintf("horizon %s: %v", h, lerr),
 				})
 			}
 		}

@@ -25,6 +25,8 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptolive"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/fred"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/news"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
@@ -202,10 +204,26 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// BEFORE the watchdog spec snapshot so it's health-audited like every other
 	// worker.
 	fleet = append(fleet, perSymbolWorkers(st)...)
+	// Stage-6 edge-modeling wave (constructor appended at the END of this file) —
+	// the gbm-trainer (1h) that trains the non-linear GBM + gated mean-reversion
+	// model legs from the feature store, walk-forward + OOS-graded, and stores
+	// each leg's prob+lift so the PredictionRunner blends it only when lift>0.
+	// BEFORE the watchdog spec snapshot so it's health-audited like every worker.
+	fleet = append(fleet, edgeModelWorkers(st)...)
 	// Tiered-storage wave (constructor appended at the END of this file) — the
 	// storage governor (WAL checkpoint + threshold VACUUM); BEFORE the watchdog
 	// spec snapshot so it's health-audited like every other worker.
 	fleet = append(fleet, storageWorkers(st)...)
+	// Free-data wave / Stage 2 (constructor appended at the END of this file) —
+	// fred-poller (6h, keyless FRED macro) + edgar-fetcher (24h, SEC EDGAR
+	// fundamentals, gated on Alpaca keys only so the equity universe exists);
+	// BEFORE the watchdog spec snapshot so both are health-audited.
+	fleet = append(fleet, freeDataWorkers(cfg, st)...)
+	// Paper-trading wave / Stage 4 (constructor appended at the END of this file)
+	// — paper-trader (1h): the INTERNAL SIMULATED book driven by the flagship
+	// calibrated predictions. It NEVER contacts a broker; every fill is computed
+	// from stored bars. BEFORE the watchdog spec snapshot so it's health-audited.
+	fleet = append(fleet, paperWorkers(st)...)
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -437,5 +455,66 @@ func universeWorkers(cfg config.Config, st *store.Store, ac *alpaca.Client) []wo
 func perSymbolWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.PerSymbolLearner{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// FREE-DATA WAVE / STAGE 2 (appended block).
+// freeDataWorkers returns the wave's two zero-cost, no-vendor context workers:
+//   - fred-poller (6h): pulls the FRED macro set (VIXCLS/DGS10/T10Y2Y/DFF) via
+//     the KEYLESS CSV endpoint so it always runs; an optional
+//     SIGNALDECK_FRED_KEY switches the client to the JSON API. Feeds
+//     macro_series (LatestMacro / LatestVIX) for the Stage-6 feature layer.
+//   - edgar-fetcher (24h): pulls SEC EDGAR company-facts (Revenues/EPS/shares/
+//     latest-filing) for the equity universe, rate-limited (<=10 req/s) with a
+//     descriptive User-Agent and 429/503 backoff, sweeping the universe over
+//     successive daily runs via a persisted cursor. Gated on Alpaca keys only
+//     because that's what populates the stock universe to fetch fundamentals
+//     for; EDGAR itself needs no key. Degrades to a no-op with no key/universe.
+func freeDataWorkers(cfg config.Config, st *store.Store) []workers.Worker {
+	fp := &pipeline.FredPoller{St: st, Client: fred.New(os.Getenv("SIGNALDECK_FRED_KEY"))}
+	ef := &pipeline.EdgarFetcher{St: st}
+	if cfg.HasAlpaca() {
+		// Only fetch fundamentals when there's a stock universe to fetch for.
+		ef.Client = edgar.New()
+	}
+	return []workers.Worker{fp, ef}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PAPER-TRADING WAVE / STAGE 4 (appended block).
+// paperWorkers returns the wave's worker: paper-trader (1h) that runs the
+// INTERNAL, SELF-CONTAINED, SIMULATED paper-trading book(s) — one per
+// prediction horizon (flagship-1d, flagship-1w) — driven by the platform's OWN
+// latest calibrated predictions. When a symbol's cal_prob crosses the long
+// threshold the book targets a long; when it crosses the flat threshold it
+// exits; entries/exits fill at the NEXT bar's OPEN (no lookahead) and pay a
+// realistic per-side cost. It tracks realized + unrealized P&L, an equity curve,
+// and a trade log — an honest, costed, out-of-sample track record of the signal.
+// CRITICAL: it NEVER places a real order or contacts any broker/trading API;
+// every fill is pure arithmetic over stored bar data. Acts only on genuinely new
+// bars and is idempotent per bar (a re-run double-trades nothing).
+func paperWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.PaperTrader{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 6 — EDGE-MODELING WAVE (appended block).
+// edgeModelWorkers returns the wave's worker: gbm-trainer (1h) that, for every
+// active symbol+horizon, trains two additional directional model legs from the
+// FEATURE STORE — a from-scratch pure-Go gradient-boosted decision tree (the
+// non-linear sibling of the linear logit) and a gated mean-reversion leg (the
+// inverted-momentum counterweight) — each graded strictly WALK-FORWARD and
+// OUT-OF-SAMPLE (the mean-reversion leg additionally NET OF COST). It stores
+// each leg's latest prob + OOS grade in model_forecasts; the PredictionRunner
+// then folds a leg into the calibrated blend ONLY when its stored lift > 0, the
+// identical honesty gate the logit forecast passes. A leg with no measured edge
+// is dropped, never down-weighted — an honest "no edge yet" is the correct
+// output on the current (tiny) resolved-outcome history.
+func edgeModelWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.GBMTrainer{St: st},
 	}
 }

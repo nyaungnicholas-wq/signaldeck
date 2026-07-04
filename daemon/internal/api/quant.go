@@ -363,4 +363,25 @@ func (d Deps) registerQuant(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/portfolio", d.portfolioGet)
 	mux.HandleFunc("POST /api/portfolio/add", d.portfolioAdd)
 	mux.HandleFunc("POST /api/portfolio/close", d.portfolioClose)
+	// STAGE 6 — the gated model legs (GBM + mean-reversion) with their OOS grade.
+	mux.HandleFunc("GET /api/model-forecasts", d.modelForecasts)
+}
+
+// modelForecasts serves the Stage-6 gated model legs (GBM + mean-reversion) for
+// one symbol: each leg's latest P(up) and its out-of-sample grade (lift gates
+// whether the ensemble actually uses it). Empty when the trainer hasn't yet
+// produced a leg for the symbol (too little resolved history) — an honest "no
+// model yet" rather than a fabricated number.
+func (d Deps) modelForecasts(w http.ResponseWriter, r *http.Request) {
+	s, err := d.symbolFromQuery(r)
+	if err != nil {
+		httpErr(w, 404, err.Error())
+		return
+	}
+	fs, err := d.St.ModelForecasts(r.Context(), s.ID)
+	if err != nil {
+		httpErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, fs)
 }

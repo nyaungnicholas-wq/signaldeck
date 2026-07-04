@@ -7,6 +7,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // ── storage-permanence wave: feature capture at prediction time ─────────
@@ -146,5 +147,106 @@ func TestPredictionRunnerPersistsFeatures(t *testing.T) {
 		if f.Vec["rank_pct"] != 91 {
 			t.Fatalf("%s: rank_pct = %v, want 91", h, f.Vec["rank_pct"])
 		}
+	}
+}
+
+// STAGE 3: the PredictionRunner must also commit each prediction to the
+// append-only hash-chained ledger — one entry per (symbol,horizon) prediction,
+// whose feature_hash reproduces the sha256 of the SAME persisted feature
+// vector, and the whole chain must verify intact.
+func TestPredictionRunnerAppendsLedger(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Promote to the STREAMED hot set so the predictor runs it EVERY pass (the
+	// broad daily-only universe is predicted once per UTC day, which would make
+	// the "grows on re-run" assertion below flaky).
+	if err := st.SetSymbolStream(ctx, sym.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().Unix()
+	var bars []md.Bar
+	for i := int64(0); i < 30; i++ {
+		bars = append(bars, md.Bar{
+			SymbolID: sym.ID, TF: md.TF1d, Ts: now - (30-i)*86400,
+			Open: 100, High: 101, Low: 99, Close: 100 + float64(i), Volume: 1,
+		})
+	}
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range predHorizons {
+		if err := st.InsertScore(ctx, md.Score{
+			SymbolID: sym.ID, Horizon: h, Ts: now - 60, Score: 0.3,
+			Components: []md.ScoreComponent{{Name: "rsi", Contrib: 0.3}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := (&PredictionRunner{St: st}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ledger has exactly one entry per predicted horizon for this symbol, each
+	// linked to the persisted feature vector by hash.
+	for _, h := range predHorizons {
+		entries, err := st.LedgerFor(ctx, sym.ID, h, 100)
+		if err != nil {
+			t.Fatalf("%s: ledger: %v", h, err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("%s: want 1 ledger entry, got %d", h, len(entries))
+		}
+		e := entries[0]
+		if e.ModelVersion != ledgerModelVersion {
+			t.Errorf("%s: model_version = %d, want %d", h, e.ModelVersion, ledgerModelVersion)
+		}
+		// The committed feature_hash must equal the hash of the persisted vector.
+		feats, err := st.FeaturesSince(ctx, sym.ID, h, 0, 0)
+		if err != nil || len(feats) != 1 {
+			t.Fatalf("%s: features: n=%d err=%v", h, len(feats), err)
+		}
+		if want := store.HashFeatureVector(feats[0].Vec); e.FeatureHash != want {
+			t.Errorf("%s: ledger feature_hash %q != hash of persisted vector %q", h, e.FeatureHash, want)
+		}
+		// The committed probabilities match the prediction.
+		p, ok, err := st.LatestPrediction(ctx, sym.ID, h)
+		if err != nil || !ok {
+			t.Fatalf("%s: prediction missing", h)
+		}
+		if e.RawProb != p.RawProb || e.CalProb != p.CalProb || e.BarTs != p.Ts {
+			t.Errorf("%s: ledger (%v,%v,bar %d) != prediction (%v,%v,ts %d)",
+				h, e.RawProb, e.CalProb, e.BarTs, p.RawProb, p.CalProb, p.Ts)
+		}
+	}
+
+	// The full chain (both horizons) verifies intact.
+	v, err := st.VerifyLedger(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Intact || v.Count != int64(len(predHorizons)) {
+		t.Errorf("verify: intact=%v count=%d, want true/%d", v.Intact, v.Count, len(predHorizons))
+	}
+
+	// Running the predictor AGAIN appends new entries (append-only) without
+	// breaking the chain — the ledger grows, never rewrites.
+	if _, err := (&PredictionRunner{St: st}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	v2, err := st.VerifyLedger(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v2.Intact {
+		t.Error("chain broke after a second predictor pass")
+	}
+	if v2.Count <= v.Count {
+		t.Errorf("ledger did not grow on re-run: %d then %d", v.Count, v2.Count)
 	}
 }

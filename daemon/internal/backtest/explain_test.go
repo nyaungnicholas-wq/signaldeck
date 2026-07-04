@@ -19,6 +19,12 @@ func TestExplainContent(t *testing.T) {
 		WinRate:     0.6,
 		ExposurePct: 0.55,
 		VsBuyHold:   0.05, // beat buy&hold by 5% => bh = 20%
+		// A full-window, many-trade result: CAGR + win rate are honest to quote.
+		SpanYears:         3,
+		ClosedTrades:      30,
+		CAGRReported:      true,
+		WinRateMeaningful: true,
+		BarsPerYear:       252,
 	}
 	got := Explain(s, r)
 

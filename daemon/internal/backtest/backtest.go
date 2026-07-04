@@ -25,9 +25,19 @@
 //     Real fills can be worse, especially in illiquid names or gaps.
 //   - CostBps is a single round-trip-style proxy for commission+spread+slippage.
 //     It is charged per side; it does not model market impact or partial fills.
-//   - Sharpe uses rf=0 and annualizes bar-to-bar returns by sqrt(252). That
-//     constant assumes ~252 daily bars/year; on 1h or 1m bars it is wrong and
-//     the Sharpe should be read as relative, not absolute.
+//   - Sharpe uses rf=0 and annualizes bar-to-bar returns by sqrt(barsPerYear),
+//     where barsPerYear is INFERRED from the median spacing of the supplied bar
+//     timestamps (daily≈252, hourly≈1638, minute≈98280). It is no longer a
+//     hardcoded 252, so the annualization is correct for whatever bar interval
+//     the caller supplies. When the timestamps are unusable it falls back to 252
+//     and BarsPerYear reports that fallback.
+//   - CAGR is only REPORTED when the tested span is at least ~1 year AND there
+//     are at least ~20 trades (CAGRReported == true). Below either threshold,
+//     annualizing a short or thin window produces a meaningless number, so the
+//     UI should show TotalReturn + NumTrades instead. The CAGR field is still
+//     populated for completeness but must be gated on CAGRReported.
+//   - WinRate is only MEANINGFUL when ClosedTrades >= 2 (WinRateMeaningful).
+//     With 0 or 1 closed trades a "win rate" of 0% or 100% is not a statistic.
 //   - No survivorship or corporate-action handling — that is the caller's job
 //     when assembling the bar series.
 //   - This is IN-SAMPLE by construction: Backtest fits nothing, but a strategy
@@ -38,6 +48,7 @@ package backtest
 import (
 	"fmt"
 	"math"
+	"sort"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
@@ -79,14 +90,22 @@ type Strategy struct {
 // (0.10 == +10%). Equity starts at 1.0.
 type Result struct {
 	TotalReturn float64   // final equity / 1.0 - 1
-	CAGR        float64   // compound annual growth rate (see assumptions on bar spacing)
+	CAGR        float64   // compound annual growth rate — ONLY valid to show when CAGRReported (see below)
 	MaxDrawdown float64   // worst peak-to-trough decline of the equity curve, as a positive fraction
-	Sharpe      float64   // mean/stdev of per-bar returns * sqrt(252); rf=0
+	Sharpe      float64   // mean/stdev of per-bar returns * sqrt(BarsPerYear); rf=0
 	NumTrades   int       // completed + open entries (each entry counts once)
-	WinRate     float64   // fraction of CLOSED trades with net-positive return
+	WinRate     float64   // fraction of CLOSED trades with net-positive return — only meaningful when WinRateMeaningful
 	ExposurePct float64   // fraction of bars spent long, in [0,1]
 	Equity      []float64 // equity curve aligned to bars; len == len(bars)
 	VsBuyHold   float64   // TotalReturn minus buy-and-hold total return
+
+	// Annualization guards (Phase 0 honesty). These let the UI refuse to show a
+	// number that would misrepresent skill on a short or thin window.
+	BarsPerYear       float64 // inferred bars/year used for Sharpe scaling (fallback 252)
+	SpanYears         float64 // calendar span of the bars in years (from first→last Ts)
+	ClosedTrades      int     // trades that both opened AND closed (WinRate denominator)
+	CAGRReported      bool    // true only when SpanYears>=~1 AND NumTrades>=20 — else show TotalReturn
+	WinRateMeaningful bool    // true only when ClosedTrades>=2
 }
 
 // Backtest runs Strategy s over bars (ascending by Ts) with strict next-bar
@@ -184,18 +203,41 @@ func Backtest(bars []marketdata.Bar, s Strategy) (Result, error) {
 	res := Result{Equity: equity}
 	res.TotalReturn = equity[n-1] - 1
 	res.NumTrades = numTrades
+	res.ClosedTrades = closedTrades
 	if closedTrades > 0 {
 		res.WinRate = float64(wins) / float64(closedTrades)
 	}
+	// A win rate over 0 or 1 closed trades is not a statistic — flag it so the
+	// UI can suppress it rather than showing "100%" off a single trade.
+	res.WinRateMeaningful = closedTrades >= 2
 	res.ExposurePct = float64(longBars) / float64(n-1)
 	res.MaxDrawdown = maxDrawdown(equity)
-	res.Sharpe = sharpe(perBarRet)
-	res.CAGR = cagr(equity[n-1], n-1)
+
+	// Auto-detect bars/year from the timestamps instead of hardcoding 252, so
+	// Sharpe annualization is correct for daily / hourly / minute bars alike.
+	bpy := barsPerYear(bars)
+	res.BarsPerYear = bpy
+	res.Sharpe = sharpe(perBarRet, bpy)
+
+	// Span in years from the first→last bar timestamp (real calendar time, not a
+	// bar-count proxy). CAGR is populated but only REPORTED when the window is
+	// long enough AND has enough trades to make annualizing honest.
+	res.SpanYears = spanYears(bars)
+	res.CAGR = cagr(equity[n-1], res.SpanYears)
+	res.CAGRReported = res.SpanYears >= minCAGRYears && numTrades >= minCAGRTrades
 
 	bh := buyHoldReturn(bars)
 	res.VsBuyHold = res.TotalReturn - bh
 	return res, nil
 }
+
+// Annualization-guard thresholds. Below EITHER, CAGR is not reported and the UI
+// should show total return + trade count instead (annualizing a sub-year or
+// low-trade window fabricates precision that the sample can't support).
+const (
+	minCAGRYears  = 0.9 // ~1 calendar year of bars
+	minCAGRTrades = 20  // enough completed trades for an annual figure to mean anything
+)
 
 // decide returns whether we want to be long for the NEXT bar, given history
 // bars[0..i] (i == len(hist)-1) and whether we are currently long. While flat
@@ -349,12 +391,17 @@ func maxDrawdown(eq []float64) float64 {
 	return worst
 }
 
-// sharpe is mean(rets)/stdev(rets) annualized by sqrt(252). rf=0. A
+// sharpe is mean(rets)/stdev(rets) annualized by sqrt(barsPerYear). rf=0. A
 // constant-return or empty series returns 0 (undefined risk-adjusted return).
-// The sample stdev uses an n-1 denominator.
-func sharpe(rets []float64) float64 {
+// The sample stdev uses an n-1 denominator. barsPerYear is inferred by the
+// caller from the bar spacing (see barsPerYear); a non-positive value falls
+// back to the daily 252 so the function is always well-defined.
+func sharpe(rets []float64, barsPerYear float64) float64 {
 	if len(rets) < 2 {
 		return 0
+	}
+	if barsPerYear <= 0 {
+		barsPerYear = 252
 	}
 	var sum float64
 	for _, r := range rets {
@@ -370,19 +417,73 @@ func sharpe(rets []float64) float64 {
 	if variance <= 0 {
 		return 0
 	}
-	return mean / math.Sqrt(variance) * math.Sqrt(252)
+	return mean / math.Sqrt(variance) * math.Sqrt(barsPerYear)
 }
 
-// cagr is the compound annual growth rate implied by finalEquity over
-// `periods` bars, assuming 252 bars per year (see package assumptions). With
-// non-positive equity or zero periods it returns 0.
-func cagr(finalEquity float64, periods int) float64 {
-	if periods <= 0 || finalEquity <= 0 {
-		return 0
-	}
-	years := float64(periods) / 252.0
-	if years <= 0 {
+// cagr is the compound annual growth rate implied by finalEquity over the given
+// calendar span in years (real time from the bar timestamps, not a bar-count
+// proxy). With a non-positive span or non-positive equity it returns 0. The
+// caller decides whether to SHOW it (Result.CAGRReported) — a valid CAGR over a
+// two-week window is still a number no one should trust.
+func cagr(finalEquity, years float64) float64 {
+	if years <= 0 || finalEquity <= 0 {
 		return 0
 	}
 	return math.Pow(finalEquity, 1/years) - 1
+}
+
+const secondsPerYear = 365.25 * 24 * 3600
+
+// spanYears returns the calendar span covered by bars, in years, from the first
+// to the last timestamp. Non-monotonic or single-bar input returns 0.
+func spanYears(bars []marketdata.Bar) float64 {
+	if len(bars) < 2 {
+		return 0
+	}
+	span := bars[len(bars)-1].Ts - bars[0].Ts
+	if span <= 0 {
+		return 0
+	}
+	return float64(span) / secondsPerYear
+}
+
+// barsPerYear infers how many bars fit in a year from the MEDIAN spacing of the
+// supplied timestamps (median, not mean, so weekend/holiday gaps and the
+// occasional missing bar don't distort it). Daily bars → ~252, hourly → ~1638,
+// minute → ~98280. If fewer than two usable gaps exist it falls back to 252.
+//
+// The median gap is a per-bar wall-clock interval; converting it to "trading
+// bars per year" would need a session-length assumption, so instead we scale by
+// the fraction of the year that regular sessions actually occupy for the two
+// common cases (sub-daily = ~6.5h/day × 252 days; daily+ = 252/365.25 of the
+// calendar). This keeps daily≈252 and intraday close to their true bar counts
+// without hardcoding one interval.
+func barsPerYear(bars []marketdata.Bar) float64 {
+	const fallback = 252.0
+	if len(bars) < 2 {
+		return fallback
+	}
+	gaps := make([]int64, 0, len(bars)-1)
+	for i := 1; i < len(bars); i++ {
+		g := bars[i].Ts - bars[i-1].Ts
+		if g > 0 {
+			gaps = append(gaps, g)
+		}
+	}
+	if len(gaps) == 0 {
+		return fallback
+	}
+	sort.Slice(gaps, func(i, j int) bool { return gaps[i] < gaps[j] })
+	med := gaps[len(gaps)/2]
+	if med <= 0 {
+		return fallback
+	}
+	const day = int64(86400)
+	if med >= day {
+		// Daily or coarser: ~252 trading days per 365.25 calendar days.
+		return 252.0 * (float64(day) / float64(med))
+	}
+	// Sub-daily (intraday) bars: assume a ~6.5h regular session over 252 days.
+	const sessionSecs = 6.5 * 3600
+	return (sessionSecs / float64(med)) * 252.0
 }

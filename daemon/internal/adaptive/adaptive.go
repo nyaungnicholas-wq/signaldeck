@@ -216,6 +216,20 @@ func FromVector(vec map[string]float64) (legs map[string]float64, regime string)
 	if v, ok := vec["sentiment_score"]; ok {
 		c.SentimentScore = &v
 	}
+	// STAGE 6 gated model legs. Their stored prob is present in the vector only
+	// when the leg passed its OOS gate at prediction time (buildFeatureVector
+	// writes them gated), so a positive lift sentinel here reconstructs exactly
+	// the leg the live blend used — no reimplementation drift. We pass a
+	// positive lift so LegProbabilities re-derives the same leg it did live.
+	posLift := 1.0
+	if v, ok := vec["gbm_prob"]; ok {
+		c.GBMProb = &v
+		c.GBMLift = &posLift
+	}
+	if v, ok := vec["meanrev_prob"]; ok {
+		c.MeanRevProb = &v
+		c.MeanRevLift = &posLift
+	}
 	for k, v := range vec {
 		if v == 1 && len(k) > len("regime_") && k[:len("regime_")] == "regime_" {
 			regime = k[len("regime_"):]

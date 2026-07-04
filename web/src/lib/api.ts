@@ -104,9 +104,18 @@ export interface HonestyBucket {
 export interface Honesty {
   horizon: Horizon;
   n: number;
-  ic: number;
+  // ic is null when withheld below the independent-N gate (see icGated/icNote).
+  ic: number | null;
   buckets: HonestyBucket[];
   points: { score: number; fwd: number; ts: number }[];
+  // Phase 0 honesty fields (present since the IC pseudo-replication fix).
+  rawN?: number; // raw resolved score_outcomes rows (minute-cadence, inflated)
+  independentN?: number; // distinct (symbol, UTC-day) observations — the real N
+  minIndependentN?: number; // gate floor for reporting an IC
+  icGated?: boolean; // true when the IC is withheld for too few independent obs
+  icNote?: string; // "insufficient independent resolutions (k/min)" when gated
+  live?: boolean; // false until a live track record clears the gate
+  trackLabel?: string; // human label, e.g. "backtested / in-sample …"
 }
 
 export interface TrendsMover {
@@ -282,6 +291,17 @@ export const api = {
   alerts: (unseenOnly = false, limit = 100) =>
     get<AlertRow[]>(`/api/alerts?limit=${limit}${unseenOnly ? "&unseen=1" : ""}`),
   markAlertsSeen: () => post<{ ok: boolean; marked: number }>("/api/alerts/seen", {}),
+
+  // ── Stage 5: own-signal backtester (replay the feature store through the
+  // ensemble blend; OOS IC/quintiles/turnover/costed equity vs SPY, gated on
+  // independent-N). horizon 1d|1w. ──
+  signalBacktest: (horizon: "1d" | "1w") =>
+    get<SignalBacktestResponse>(`/api/signal-backtest?horizon=${horizon}`),
+
+  // ── Stage 6: gated model legs (GBM + mean-reversion) with OOS grade. Each
+  // leg is used by the ensemble ONLY when its lift > 0. ──
+  modelForecasts: (symbol: string, market: Market) =>
+    get<ModelForecast[]>(`/api/model-forecasts?${q(symbol, market)}`),
 };
 
 // One per-user alert row (alerts wave).
@@ -363,6 +383,9 @@ export interface Calibration {
   bins: CalBin[];
   brier: number;
   reliability: number;
+  // Phase 0 labeling: calibration is backtested / in-sample until live.
+  live?: boolean;
+  trackLabel?: string;
 }
 export interface RegimeState {
   symbol: string;
@@ -460,6 +483,13 @@ export interface BacktestResult {
   ExposurePct: number;
   Equity: number[];
   VsBuyHold: number;
+  // Phase 0 annualization guards. CAGR is only honest to show when CAGRReported;
+  // WinRate only when WinRateMeaningful. BarsPerYear/SpanYears drive the copy.
+  BarsPerYear?: number;
+  SpanYears?: number;
+  ClosedTrades?: number;
+  CAGRReported?: boolean;
+  WinRateMeaningful?: boolean;
 }
 export interface BacktestResponse {
   strategy: { Name: string };
@@ -693,4 +723,396 @@ export interface SymbolAgent {
 /** One symbol+horizon's own agent (tier + personality + skill + weights). */
 export function symbolAgent(symbol: string, market: Market, horizon: Horizon) {
   return get<SymbolAgent>(`/api/symbol-agent?${q(symbol, market)}&horizon=${horizon}`);
+}
+
+// ── free-data wave / Stage 2 (appended block — keep new client functions at the
+// END of this file so parallel edits by other agents never collide) ──
+
+/** One FRED observation (day epoch + level). */
+export interface MacroPoint {
+  series: string;
+  ts: number; // observation day, UTC-midnight epoch seconds
+  value: number;
+}
+
+/** Overview response (no ?series=): latest of every tracked series. */
+export interface MacroOverview {
+  latest: Record<string, MacroPoint>;
+  tracked: string[]; // series ids we poll (VIXCLS/DGS10/T10Y2Y/DFF)
+  note: string;
+}
+
+/** One series' chart-ready history (oldest-first) + its latest point. */
+export interface MacroSeriesResponse {
+  series: string;
+  points: MacroPoint[];
+  latest: MacroPoint | null;
+  count: number;
+}
+
+/**
+ * FREE MACRO from FRED (St. Louis Fed, keyless CSV endpoint): VIXCLS=VIX,
+ * DGS10=10y yield, T10Y2Y=10y-2y spread, DFF=fed funds. Call with no series for
+ * an overview (latest of each); with a series for its history.
+ */
+export function macroSeries(): Promise<MacroOverview>;
+export function macroSeries(series: string, limit?: number): Promise<MacroSeriesResponse>;
+export function macroSeries(series?: string, limit?: number) {
+  if (!series) return get<MacroOverview>("/api/macro-series");
+  const l = limit ? `&limit=${limit}` : "";
+  return get<MacroSeriesResponse>(`/api/macro-series?series=${encodeURIComponent(series)}${l}`);
+}
+
+/** One SEC EDGAR company-fact for a symbol (latest of a metric, or a history point). */
+export interface FundamentalRow {
+  symbolId: number;
+  symbol?: string;
+  metric: string; // Revenues | EPS | SharesOutstanding | LatestFilingDate | CIK
+  value: number; // dates/CIK are epoch/int values
+  asOf: number; // period-end / effective date, epoch seconds
+  fetchedAt: number;
+}
+
+/**
+ * FREE FUNDAMENTALS from SEC EDGAR (companyfacts XBRL). metrics is the latest
+ * value of each metric; pass history=<metric> to also get that metric's series.
+ * A symbol with no rows hasn't been swept yet or doesn't file with the SEC.
+ */
+export interface FundamentalsResponse {
+  symbol: string;
+  metrics: FundamentalRow[];
+  note: string;
+  history?: FundamentalRow[];
+  historyMetric?: string;
+}
+
+/** SEC EDGAR fundamentals for one US stock (optionally one metric's history). */
+export function fundamentals(symbol: string, historyMetric?: string) {
+  const h = historyMetric ? `&history=${encodeURIComponent(historyMetric)}` : "";
+  return get<FundamentalsResponse>(`/api/fundamentals?symbol=${encodeURIComponent(symbol)}${h}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PREDICTION LEDGER (Stage 3) (appended block — do not merge into the sections
+// above). The append-only, hash-chained audit log of every flagship
+// prediction. entry_hash = sha256(prev_hash ‖ canonical-json(entry fields)),
+// so recomputing the chain reproduces every head and any silent edit/delete of
+// a historical row breaks it — the tamper-evidence buyers/allocators require.
+
+/** One committed ledger entry (chain fields are server-assigned). */
+export interface LedgerEntry {
+  seq: number; // monotonic append order (chain index)
+  predictedAt: number; // wall-clock unix seconds when appended
+  symbolId: number;
+  horizon: Horizon; // 1d | 1w
+  barTs: number; // the prediction's bar timestamp
+  rawProb: number; // uncalibrated ensemble probability
+  calProb: number; // calibrated probability
+  featureHash: string; // sha256 of the persisted feature-vector JSON
+  modelVersion: number;
+  prevHash: string; // entry_hash of seq-1 ("" for genesis)
+  entryHash: string; // the chain link
+}
+
+/** Chain-integrity result: intact iff every recomputed hash matches. */
+export interface LedgerVerifyResponse {
+  intact: boolean;
+  count: number; // rows examined
+  head: string; // entry_hash of the last row ("" if empty)
+  brokenAtSeq?: number; // first seq whose hash/linkage disagrees (tamper)
+}
+
+/** The committed ledger entries for one symbol+horizon (newest first). */
+export interface LedgerResponse {
+  symbol: string;
+  horizon: Horizon;
+  count: number;
+  entries: LedgerEntry[];
+}
+
+/** Recompute + verify the whole prediction-ledger hash chain. */
+export function ledgerVerify() {
+  return get<LedgerVerifyResponse>("/api/ledger/verify");
+}
+
+/** The committed ledger entries for one symbol+horizon. */
+export function ledger(symbol: string, market: Market, horizon: Horizon = "1d", limit = 100) {
+  return get<LedgerResponse>(`/api/ledger?${q(symbol, market)}&horizon=${horizon}&limit=${limit}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 4 — INTERNAL SIMULATED PAPER TRADING (appended block; keep at END).
+// GET /api/paper returns a self-contained SIMULATED book driven by the
+// platform's own calibrated predictions. It is NOT a live account: no broker,
+// no real money. The payload carries live:false + a label so the UI can never
+// misrepresent it. Long/flat only; entries/exits fill at the NEXT bar's open
+// with realistic per-side costs.
+
+/** One mark on the simulated equity curve. */
+export interface PaperEquityPoint {
+  ts: number;
+  cash: number;
+  positionsValue: number;
+  equity: number;
+}
+
+/** An open simulated position (present => currently long). */
+export interface PaperPosition {
+  strategy: string;
+  symbol?: string;
+  qty: number;
+  avgPx: number;
+  openedTs: number;
+}
+
+/** One simulated fill in the append-only trade log. */
+export interface PaperTrade {
+  id: number;
+  strategy: string;
+  symbol?: string;
+  side: "buy" | "sell";
+  qty: number;
+  px: number; // fill price = next bar OPEN after the signal
+  cost: number; // dollar cost charged on this fill
+  ts: number;
+  reason: string;
+}
+
+/** Costed track-record summary. Stats the sample can't support are gated off. */
+export interface PaperSummary {
+  startEquity: number;
+  lastEquity: number;
+  totalReturn: number;
+  maxDrawdown: number;
+  sharpe: number;
+  sharpeValid: boolean;
+  winRate: number;
+  winRateValid: boolean;
+  closedTrades: number;
+  turnover: number;
+  numFills: number;
+  spanYears: number;
+}
+
+/** The full /api/paper payload for one simulated strategy. */
+export interface PaperResponse {
+  strategy: string;
+  strategies: string[];
+  live: false; // ALWAYS false — this is a simulation
+  label: string; // "simulated paper trading — not live money, not advice"
+  startCash: number;
+  longThresh: number;
+  flatThresh: number;
+  equity: PaperEquityPoint[];
+  positions: PaperPosition[];
+  trades: PaperTrade[];
+  summary: PaperSummary;
+}
+
+/** Fetch the simulated paper-trading book for a strategy (default flagship-1d). */
+export function paper(strategy = "flagship-1d", trades = 100) {
+  return get<PaperResponse>(
+    `/api/paper?strategy=${encodeURIComponent(strategy)}&trades=${trades}`,
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STAGE 5 — OWN-SIGNAL BACKTESTER (appended block). Types for
+// /api/signal-backtest: the OUT-OF-SAMPLE grade of the platform's OWN calibrated
+// ensemble signal, replayed from the feature store. Every headline number is
+// GATED behind `gated` (min independent-N); with ~0 resolved live outcomes today
+// the honest state is gated=true + a note, which the panel renders as
+// "insufficient data". Never presented as live (`live` is always false).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** IC (rank correlation of signal vs forward return) at one forward lag. */
+export interface SignalICPoint {
+  lagDays: number;
+  ic: number;
+  n: number;
+}
+
+/** One signal-quintile's realized forward-return profile (Q1 low .. Q5 high). */
+export interface SignalQuintile {
+  quintile: number;
+  n: number;
+  meanSignal: number;
+  meanFwd: number;
+  hitRate: number;
+}
+
+/** One mark of the costed equity curve + SPY buy-and-hold benchmark. */
+export interface SignalEquityPoint {
+  ts: number;
+  strategy: number; // net-of-cost signal-driven equity
+  benchmark: number; // SPY buy-and-hold equity (0/flat when SPY untracked)
+}
+
+/** The graded result of replaying the platform's own signal out of sample. */
+export interface SignalBacktestResult {
+  horizon: string;
+  rawN: number;
+  independentN: number;
+  minIndependentN: number;
+  gated: boolean; // true => insufficient independent-N; hide headline numbers
+
+  ic: number;
+  icDecay: SignalICPoint[];
+  quintiles: SignalQuintile[];
+  quintileSpread: number; // Q5.meanFwd - Q1.meanFwd
+  hitRate: number;
+  meanFwd: number;
+
+  turnover: number;
+  costBps: number;
+  equity: SignalEquityPoint[];
+  strategyReturn: number;
+  benchmarkReturn: number;
+  excessReturn: number;
+
+  live: false; // ALWAYS false — this is a replay, not a live track record
+  trackLabel: string;
+  note: string;
+}
+
+/** Full /api/signal-backtest payload. */
+export interface SignalBacktestResponse {
+  result: SignalBacktestResult;
+  horizons: ("1d" | "1w")[];
+  benchmarkSymbol: string; // "SPY"
+  hasBenchmark: boolean;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 6 — GATED MODEL LEGS (appended block; keep at END). One row per model
+// leg (GBM + mean-reversion) per horizon, with its LATEST P(up) and its strictly
+// out-of-sample grade. The ensemble folds a leg into the blend ONLY when its
+// `lift` > 0 — the same honesty gate the linear forecast passes. Empty array =
+// the trainer hasn't produced a leg yet (too little resolved history) — an
+// honest "no model yet", not a fabricated number.
+export interface ModelForecast {
+  horizon: Horizon;
+  model: "gbm" | "meanrev";
+  ts: number; // when trained/graded, unix seconds
+  prob: number; // latest P(up) for the most recent bar
+  accuracy: number;
+  brier: number;
+  auc: number;
+  baseRate: number;
+  lift: number; // OOS lift; leg is USED by the ensemble iff > 0
+  nTrain: number;
+  nEval: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 7 — LIVE OUT-OF-SAMPLE TRACK RECORD (appended block; keep at END).
+// GET /api/track-record grades the platform's OWN calibrated predictions
+// (prob frozen at prediction time, graded against realized bars) — winrate,
+// Brier, reliability curve, IC — each with a confidence interval and an EXPLICIT
+// independent-N gate. Below the gate every headline number is null and `gated`
+// is true with a `note`, so the page renders honest and mostly-empty (which is
+// the truth today). The payload also embeds the ledger integrity result
+// (self-verifying, Stage 3) and a costed paper-equity summary w/ turnover +
+// capacity inputs (Stage 4) so the record links to its own evidence.
+
+/** One bin of the reliability (calibration) curve. */
+export interface ReliabilityBin {
+  lo: number;
+  hi: number;
+  meanPred: number;
+  meanActual: number;
+  n: number;
+}
+
+/** Descriptive per-market breakdown of the independent record (not a skill claim). */
+export interface TrackByMarket {
+  market: Market;
+  n: number;
+  upRate: number; // realized fraction of up moves in this market
+  meanFwd: number; // mean realized forward return
+  dirHitRate: number; // fraction of directional bets (prob>0.5 == up) that were right
+}
+
+/** Compact costed summary of the linked simulated paper book (turnover/capacity). */
+export interface TrackPaperSummary {
+  available: boolean;
+  strategy?: string;
+  totalReturn?: number;
+  maxDrawdown?: number;
+  turnover?: number; // total traded notional / starting equity
+  numFills?: number;
+  spanYears?: number;
+}
+
+/** Linked prediction-ledger integrity (Stage 3) shown on the track record. */
+export interface TrackLedger {
+  intact: boolean;
+  count: number;
+  head: string;
+}
+
+/** The /api/track-record payload. Skill numbers are null when `gated`. */
+export interface TrackRecord {
+  horizon: Horizon;
+  rawN: number; // raw resolved prediction_outcomes rows (minute-cadence inflated)
+  independentN: number; // distinct (symbol, UTC-day) resolutions — the real N
+  minIndependentN: number; // gate floor
+  gated: boolean; // true => headline numbers withheld (too few independent obs)
+  live: true; // this IS a live forward record (prob frozen at prediction time)
+  trackLabel: string;
+  note?: string; // "not yet significant — k/threshold" when gated
+
+  winRate: number | null;
+  winRateCI?: [number, number];
+  baseRate?: number;
+  brier: number | null;
+  brierSkill?: number; // 1 - Brier/Brier_baserate; >0 beats the base-rate constant
+  ic: number | null;
+  icCI?: [number, number];
+  reliabilityScore?: number;
+
+  reliability: ReliabilityBin[];
+  byMarket: TrackByMarket[] | null;
+  byRegime: unknown[] | null; // null: regime-at-prediction-time not persisted (honest)
+
+  // per-horizon resolved/total counts so the page shows how thin the record is
+  coverage?: Record<string, { resolved: number; total: number }>;
+  ledger?: TrackLedger;
+  paper: TrackPaperSummary;
+}
+
+/** Fetch the live out-of-sample track record for a horizon (default 1d). */
+export function trackRecord(horizon: Horizon = "1d") {
+  return get<TrackRecord>(`/api/track-record?horizon=${horizon}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 7 — CHART OVERLAY MARKERS (appended block; keep at END).
+// GET /api/chart-overlays returns markers to overlay on the candlestick chart:
+// score extremes (pressure score crossing into strong-buy/sell), regime changes
+// (the transition is the signal), and breakouts. Score markers are emitted only
+// on the crossing bar (not every extreme bar) to stay legible. Data already
+// exists in the DB from the scoring/regime/breakout workers.
+
+/** One annotation placed on the price chart. */
+export interface ChartOverlayMarker {
+  ts: number; // bar timestamp (unix seconds)
+  type: "score" | "regime" | "breakout";
+  label: string; // short badge text
+  text: string; // longer tooltip
+  value: number; // score / breakout strength (0 when N/A)
+  up: boolean; // bullish (green, below bar) vs bearish (red, above bar)
+}
+
+/** The /api/chart-overlays payload for one symbol. */
+export interface ChartOverlays {
+  symbol: string;
+  market: Market;
+  count: number;
+  markers: ChartOverlayMarker[];
+}
+
+/** Fetch the score/regime/breakout overlay markers for one symbol's chart. */
+export function chartOverlays(symbol: string, market: Market, days = 365) {
+  return get<ChartOverlays>(`/api/chart-overlays?${q(symbol, market)}&days=${days}`);
 }

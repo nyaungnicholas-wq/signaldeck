@@ -22,15 +22,36 @@ import (
 // down to the per-symbol level (a feature row is a training example only AFTER
 // its own outcome has been realized).
 func (s *Store) LabeledFeaturesBySymbol(ctx context.Context, symbolID int64, h md.Horizon, limit int) ([]LabeledFeature, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	return s.labeledFeaturesBySymbol(ctx, symbolID, h, 0, limit)
+}
+
+// LabeledFeaturesBySymbolVersion is LabeledFeaturesBySymbol restricted to ONE
+// feature-schema version. Trainers that flatten the key union across rows (the
+// GBM) must use this: mixing v2 rows (no micro_*/vix_* keys) with v3 rows makes
+// "feature absent because older schema" indistinguishable from a real 0-valued
+// signal, diluting the training set (fails safe toward "no edge", but cleaner
+// to avoid entirely).
+func (s *Store) LabeledFeaturesBySymbolVersion(ctx context.Context, symbolID int64, h md.Horizon, version, limit int) ([]LabeledFeature, error) {
+	return s.labeledFeaturesBySymbol(ctx, symbolID, h, version, limit)
+}
+
+// labeledFeaturesBySymbol implements both variants; version 0 = all versions.
+func (s *Store) labeledFeaturesBySymbol(ctx context.Context, symbolID int64, h md.Horizon, version, limit int) ([]LabeledFeature, error) {
+	q := `
 		SELECT f.ts, f.version, f.vec, o.up, o.fwd_return
 		FROM features f
 		JOIN prediction_outcomes o
 		  ON o.symbol_id=f.symbol_id AND o.horizon=f.horizon AND o.ts=f.ts
 		WHERE f.symbol_id=? AND f.horizon=? AND o.resolved_at IS NOT NULL
-		  AND o.up IS NOT NULL AND o.fwd_return IS NOT NULL
-		ORDER BY f.ts DESC LIMIT ?`,
-		symbolID, string(h), limit)
+		  AND o.up IS NOT NULL AND o.fwd_return IS NOT NULL`
+	args := []any{symbolID, string(h)}
+	if version > 0 {
+		q += ` AND f.version=?`
+		args = append(args, version)
+	}
+	q += ` ORDER BY f.ts DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

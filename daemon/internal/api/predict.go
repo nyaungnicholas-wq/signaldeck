@@ -46,6 +46,11 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 		"bins":        ensemble.CalibrationCurve(pairs, 10),
 		"brier":       ensemble.BrierScore(pairs),
 		"reliability": ensemble.ReliabilityScore(pairs),
+		// Phase 0 labeling: calibration is measured over BACKTESTED / in-sample
+		// resolutions until the system accrues a live track record. The frontend
+		// badges off `live`.
+		"live":       false,
+		"trackLabel": "backtested / in-sample — not a live track record",
 	})
 }
 

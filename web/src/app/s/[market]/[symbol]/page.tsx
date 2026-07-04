@@ -7,8 +7,10 @@ import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   api,
+  chartOverlays,
   pollMs,
   type Bar,
+  type ChartOverlayMarker,
   type Horizon,
   type Market,
   type SymbolDetail,
@@ -54,6 +56,14 @@ export default function SymbolPage({
   const barsKey = `${symbol}|${market}|${tf}`;
   const bars = barsState && barsState.key === barsKey ? barsState.list : null;
   const barsErr = barsErrState && barsErrState.key === barsKey ? barsErrState.msg : null;
+
+  // Stage 7: chart overlays (score extremes, regime changes, breakouts). Toggled
+  // on by default; keyed by symbol so switching symbols refetches.
+  const [showOverlays, setShowOverlays] = useState(true);
+  const [overlaysState, setOverlaysState] = useState<{ key: string; list: ChartOverlayMarker[] } | null>(null);
+  const overlaysKey = `${symbol}|${market}`;
+  const overlays =
+    showOverlays && overlaysState && overlaysState.key === overlaysKey ? overlaysState.list : undefined;
 
   // Poll the detail payload every 5s.
   useEffect(() => {
@@ -104,6 +114,29 @@ export default function SymbolPage({
       clearInterval(t);
     };
   }, [symbol, market, tf, marketOk]);
+
+  // Overlays: fetch once per symbol + a slow background refresh. Failures are
+  // silent (overlays are an enhancement; the chart still renders without them).
+  useEffect(() => {
+    if (!marketOk || !showOverlays) return;
+    let alive = true;
+    const key = `${symbol}|${market}`;
+    const load = () =>
+      chartOverlays(symbol, market)
+        .then((o) => {
+          if (!alive) return;
+          setOverlaysState({ key, list: o.markers ?? [] });
+        })
+        .catch(() => {
+          /* overlays are best-effort; keep the chart clean on error */
+        });
+    load();
+    const t = setInterval(load, 120_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [symbol, market, marketOk, showOverlays]);
 
   const lastBar = useMemo(
     () => (bars && bars.length ? bars.reduce((a, b) => (b.ts > a.ts ? b : a)) : null),
@@ -178,8 +211,22 @@ export default function SymbolPage({
 
       {/* Chart */}
       <section className="panel">
-        <div className="panel-h">
+        <div className="panel-h flex-wrap gap-2">
           <span>PRICE · {symbol}</span>
+          {/* Stage 7: signal-overlay toggle (score extremes / regime / breakout). */}
+          <button
+            type="button"
+            onClick={() => setShowOverlays((v) => !v)}
+            aria-pressed={showOverlays}
+            className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150"
+            title="Overlay score extremes, regime changes, and breakouts on the chart"
+            style={{
+              color: showOverlays ? "var(--accent)" : "var(--dim)",
+              borderColor: showOverlays ? "var(--accent)" : "var(--border)",
+            }}
+          >
+            signals {showOverlays ? "on" : "off"}
+          </button>
           <span className="ml-auto flex items-center gap-1" role="tablist" aria-label="timeframe">
             {TFS.map((t) => (
               <button
@@ -214,7 +261,25 @@ export default function SymbolPage({
               no {tf} bars stored yet — backfill runs shortly after subscribing.
             </div>
           ) : (
-            <CandleChart bars={bars} tf={tf} height={420} />
+            <CandleChart bars={bars} tf={tf} height={420} overlays={overlays} />
+          )}
+          {/* Overlay legend — only when signals are on and there are markers. */}
+          {showOverlays && overlays && overlays.length > 0 && (
+            <div
+              className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 pb-1 pt-2 text-[0.68rem]"
+              style={{ color: "var(--faint)" }}
+            >
+              <span className="flex items-center gap-1">
+                <span style={{ color: "var(--bid)" }}>▲▼</span> score extreme
+              </span>
+              <span className="flex items-center gap-1">
+                <span style={{ color: "var(--accent)" }}>●</span> regime change
+              </span>
+              <span className="flex items-center gap-1">
+                <span style={{ color: "var(--bid)" }}>■</span> breakout
+              </span>
+              <span className="ml-auto tnum">{overlays.length} markers</span>
+            </div>
           )}
         </div>
       </section>

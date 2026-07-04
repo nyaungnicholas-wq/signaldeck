@@ -71,6 +71,19 @@ export default function CalibrationPanel({
     <section className="panel">
       <div className="panel-h">
         CALIBRATION · RELIABILITY
+        {/* Phase 0 labeling: measured on backtested / in-sample resolutions. */}
+        {data && data.live !== true && (
+          <span
+            className="chip"
+            style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
+            title={
+              data.trackLabel ??
+              "Calibration is measured on backtested / in-sample resolutions, not a live forward track record."
+            }
+          >
+            backtested — not live
+          </span>
+        )}
         <div role="group" aria-label="Calibration horizon" className="ml-auto flex items-center gap-1">
           {CAL_HORIZONS.map((h) => {
             const active = h === horizon;

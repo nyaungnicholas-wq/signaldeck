@@ -7,33 +7,88 @@
 import { useEffect, useRef } from "react";
 import {
   createChart,
+  createSeriesMarkers,
   CandlestickSeries,
   HistogramSeries,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import type { Bar } from "@/lib/api";
+import type { Bar, ChartOverlayMarker } from "@/lib/api";
 
 const UP = "#34D399";
 const DOWN = "#F87171";
 const GRID = "#1E2633";
 
+// Overlay marker palette (kept in the existing dark aesthetic).
+const OVERLAY_BULL = "#34D399"; // bullish score / uptrend / up-breakout
+const OVERLAY_BEAR = "#F87171"; // bearish score / downtrend / down-breakout
+const OVERLAY_NEUTRAL = "#8B98A9"; // directionless (range/squeeze/vol-spike)
+
 export type Tf = "1m" | "1h" | "1d";
+
+// toSeriesMarkers converts the daemon's overlay markers into lightweight-charts
+// series markers. Score extremes are arrows below/above the bar; regime changes
+// are circles; breakouts are squares. Direction (up) picks green/red; neutral
+// events (directionless breakouts, range/squeeze regimes) render gray above bar.
+function toSeriesMarkers(overlays: ChartOverlayMarker[]): SeriesMarker<Time>[] {
+  const out = overlays.map((o): SeriesMarker<Time> => {
+    const color = o.up
+      ? OVERLAY_BULL
+      : o.type === "score" || o.type === "regime"
+        ? OVERLAY_BEAR
+        : OVERLAY_NEUTRAL;
+    if (o.type === "score") {
+      return {
+        time: o.ts as UTCTimestamp,
+        position: o.up ? "belowBar" : "aboveBar",
+        shape: o.up ? "arrowUp" : "arrowDown",
+        color,
+        text: o.label,
+      };
+    }
+    if (o.type === "regime") {
+      return {
+        time: o.ts as UTCTimestamp,
+        position: "aboveBar",
+        shape: "circle",
+        color: o.up ? OVERLAY_BULL : OVERLAY_NEUTRAL,
+        text: o.label,
+      };
+    }
+    // breakout
+    return {
+      time: o.ts as UTCTimestamp,
+      position: "belowBar",
+      shape: "square",
+      color: o.up ? OVERLAY_BULL : OVERLAY_NEUTRAL,
+      text: o.label,
+    };
+  });
+  // lightweight-charts requires markers sorted ascending by time.
+  return out.sort((a, b) => (a.time as number) - (b.time as number));
+}
 
 export default function CandleChart({
   bars,
   tf,
   height = 420,
+  overlays,
 }: {
   bars: Bar[];
   tf: Tf;
   height?: number;
+  // Stage 7: optional score/regime/breakout markers to overlay on the chart.
+  overlays?: ChartOverlayMarker[];
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const fitKeyRef = useRef<string>("");
 
   // Create the chart once.
@@ -83,9 +138,13 @@ export default function CandleChart({
       scaleMargins: { top: 0.82, bottom: 0 },
     });
 
+    // Stage 7: markers plugin bound to the candle series (score/regime/breakout).
+    const markers = createSeriesMarkers(candles, []);
+
     chartRef.current = chart;
     candleRef.current = candles;
     volumeRef.current = volume;
+    markersRef.current = markers;
     fitKeyRef.current = "";
 
     const ro = new ResizeObserver(() => {
@@ -100,6 +159,7 @@ export default function CandleChart({
       chartRef.current = null;
       candleRef.current = null;
       volumeRef.current = null;
+      markersRef.current = null;
     };
   }, [height]);
 
@@ -140,6 +200,15 @@ export default function CandleChart({
       chart.timeScale().fitContent();
     }
   }, [bars, tf]);
+
+  // Stage 7: push overlay markers whenever they change. lightweight-charts snaps
+  // each marker to the nearest bar, so score/regime/breakout events land on the
+  // right candle. Empty/undefined overlays clear the markers.
+  useEffect(() => {
+    const plugin = markersRef.current;
+    if (!plugin) return;
+    plugin.setMarkers(overlays && overlays.length ? toSeriesMarkers(overlays) : []);
+  }, [overlays]);
 
   return (
     <div

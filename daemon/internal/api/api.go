@@ -69,6 +69,12 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights) // learning-flywheel wave: learned per-regime ensemble weights
 	mux.HandleFunc("GET /api/universe", d.universe)        // broad-universe wave: streamed-count vs daily-universe-count + caps
 	mux.HandleFunc("GET /api/symbol-agent", d.symbolAgent) // per-symbol agents wave: one symbol's own model (tier + personality + skill + active weights)
+	d.registerFreeData(mux)                                // free-data wave (Stage 2): FRED macro series + SEC EDGAR fundamentals
+	d.registerLedger(mux)                                  // Stage 3: append-only hash-chained prediction ledger (verify + per-symbol list)
+	d.registerPaper(mux)                                   // Stage 4: INTERNAL simulated paper-trading book (equity curve + positions + trades + costed summary)
+	d.registerSignalBT(mux)                                // Stage 5: OWN-signal backtester (replay the feature store through the ensemble blend; IC/quintiles/turnover/costed equity vs SPY, gated on independent-N)
+	d.registerTrackRecord(mux)                             // Stage 7: LIVE OOS track record over resolved calibrated predictions (winrate/Brier/reliability/IC w/ CIs, independent-N gated, links ledger + paper)
+	d.registerChartOverlays(mux)                           // Stage 7: per-symbol chart-overlay markers (score extremes, regime changes, breakouts) for the candlestick chart
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,
@@ -370,14 +376,26 @@ func (d Deps) honesty(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, err.Error())
 		return
 	}
-	// Quintile buckets by score + Pearson correlation (information
-	// coefficient) — computed over outcomes with realized returns only.
-	var pts []honestyPt
+	// Raw resolved (score, realized fwd) pairs, newest-first.
+	var raw []honestyPt
 	for _, o := range outcomes {
 		if o.FwdReturn != nil {
-			pts = append(pts, honestyPt{o.Score, *o.FwdReturn, o.Ts})
+			raw = append(raw, honestyPt{o.Score, *o.FwdReturn, o.Ts, o.SymbolID})
 		}
 	}
+	// IC PSEUDO-REPLICATION FIX (honesty doctrine): the minute-cadence scoring
+	// pipeline writes MANY score_outcomes per symbol per day that all resolve
+	// against the SAME ~1 daily forward move. Pooling them inflates the row
+	// count without adding independent information, so any IC/quintile/Brier
+	// computed over the raw rows is a pseudo-replicated statistic that
+	// overstates confidence. Collapse to ONE observation per (symbol, UTC-day)
+	// — keeping the LATEST score that day — before computing any skill number.
+	// (Handler is already per-horizon, so the forward-period key is the day.)
+	pts := dedupeIndependent(raw)
+	rawN := len(raw)
+	indepN := len(pts)
+
+	// Quintile buckets by score — computed over the INDEPENDENT set only.
 	buckets := make([]map[string]any, 0, 5)
 	edges := []float64{-1, -0.6, -0.2, 0.2, 0.6, 1.01}
 	labels := []string{"strong sell", "sell", "neutral", "buy", "strong buy"}
@@ -400,22 +418,45 @@ func (d Deps) honesty(w http.ResponseWriter, r *http.Request) {
 		}
 		buckets = append(buckets, b)
 	}
-	writeJSON(w, map[string]any{
+
+	// GATE the IC/skill number behind a minimum independent-N. Below the gate,
+	// a correlation off a handful of independent symbol-days is noise, so we
+	// return no number and a plain "insufficient independent resolutions" note
+	// instead of a figure that would misrepresent skill.
+	gated := indepN < minIndependentN
+	resp := map[string]any{
 		"horizon": h,
-		"n":       len(pts),
-		"ic":      pearson(pts),
-		"buckets": buckets,
-		// pts is newest-first (ResolvedOutcomes orders ts DESC); take the
-		// NEWEST 2000 for the scatter, not the oldest, so it tracks fresh data.
+		// n stays = the independent count so downstream "resolved" copy is honest.
+		"n":               indepN,
+		"rawN":            rawN,
+		"independentN":    indepN,
+		"minIndependentN": minIndependentN,
+		"icGated":         gated,
+		"buckets":         buckets,
+		// pts is newest-first (dedupe preserves order); NEWEST 2000 for scatter.
 		"points": head(pts, 2000),
-	})
+		// Phase 0 labeling: every figure here is backtested / in-sample until
+		// live resolutions clear the gate. The frontend badges off these.
+		"live":       false,
+		"trackLabel": "backtested / in-sample — not a live track record",
+	}
+	if gated {
+		resp["ic"] = nil
+		resp["icNote"] = fmt.Sprintf("insufficient independent resolutions (%d/%d)", indepN, minIndependentN)
+	} else {
+		resp["ic"] = pearson(pts)
+	}
+	writeJSON(w, resp)
 }
 
-// honestyPt is one (score, realized forward return) pair.
+// honestyPt is one (score, realized forward return) pair. SymbolID is carried
+// (not serialized) so we can collapse to one independent observation per
+// (symbol, UTC-day) before computing any skill statistic.
 type honestyPt struct {
-	Score float64 `json:"score"`
-	Fwd   float64 `json:"fwd"`
-	Ts    int64   `json:"ts"`
+	Score    float64 `json:"score"`
+	Fwd      float64 `json:"fwd"`
+	Ts       int64   `json:"ts"`
+	SymbolID int64   `json:"-"`
 }
 
 func pearson(pts []honestyPt) float64 {
@@ -696,4 +737,46 @@ func sanitize(s string) string {
 		}
 		return '_'
 	}, s)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PHASE 0 — HONESTY: independent-N de-duplication for the /honesty IC
+// (appended; see honesty handler above). The scoring pipeline emits many
+// score_outcomes per symbol per day that all resolve against the same forward
+// move; pooling them pseudo-replicates the sample. Collapsing to one obs per
+// (symbol, UTC-day) yields the effective INDEPENDENT set the IC must be
+// computed over, and minIndependentN gates the number below significance.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// minIndependentN is the floor of distinct symbol-days below which the honesty
+// IC/skill number is withheld (shown as "insufficient independent resolutions").
+const minIndependentN = 30
+
+const secondsPerDay = 86400
+
+// dedupeIndependent collapses per-minute resolved pairs to ONE observation per
+// (symbol, UTC-day): the LATEST score for that symbol on that day. Input is
+// expected newest-first (ResolvedOutcomes orders ts DESC); the output preserves
+// that order and keeps the first (newest) row seen for each key. This is the
+// effective independent sample for IC/quintile/Brier — computing skill stats on
+// the raw minute rows would pseudo-replicate the same daily forward move.
+func dedupeIndependent(pts []honestyPt) []honestyPt {
+	if len(pts) == 0 {
+		return nil
+	}
+	type key struct {
+		sym int64
+		day int64
+	}
+	seen := make(map[key]struct{}, len(pts))
+	out := make([]honestyPt, 0, len(pts))
+	for _, p := range pts {
+		k := key{sym: p.SymbolID, day: p.Ts / secondsPerDay}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, p)
+	}
+	return out
 }
