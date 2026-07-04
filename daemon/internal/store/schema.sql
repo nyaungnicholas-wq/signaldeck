@@ -517,3 +517,129 @@ CREATE TABLE IF NOT EXISTS model_forecasts (
   n_eval    INTEGER NOT NULL,
   PRIMARY KEY (symbol_id, horizon, model)
 ) WITHOUT ROWID;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- SIGNAL8 WAVE — STAGE 1: SEC FILINGS INTELLIGENCE (appended block — do not
+-- merge into the sections above). All four tables hold PUBLIC-DOMAIN US
+-- government data (SEC EDGAR), which is free to store and redistribute.
+-- Honesty: the data LAGS by law/process — Form 4 ~2 business days after the
+-- trade, 13F quarterly with up to a 45-day lag — and the API notes say so.
+
+-- filings: the per-symbol SEC filings feed pulled from the EDGAR submissions
+-- API. id is the accession number (globally unique at the SEC), so INSERT OR
+-- IGNORE makes every re-sweep idempotent. label is the plain-English reading
+-- of the form type ("8-K — earnings release (Item 2.02)"), derived by
+-- edgar.FormLabel at ingest time.
+CREATE TABLE IF NOT EXISTS filings (
+  id        TEXT PRIMARY KEY,          -- SEC accession number
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  form      TEXT NOT NULL,             -- raw form type ("4", "8-K", "S-3", …)
+  filed_ts  INTEGER NOT NULL,          -- acceptance/filing time, unix seconds
+  title     TEXT NOT NULL DEFAULT '',  -- primary-document description
+  url       TEXT NOT NULL DEFAULT '',  -- EDGAR archive link to the document
+  label     TEXT NOT NULL DEFAULT ''   -- plain-English form label
+);
+CREATE INDEX IF NOT EXISTS idx_filings_sym_ts ON filings (symbol_id, filed_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_filings_ts ON filings (filed_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_filings_form ON filings (form, filed_ts DESC);
+
+-- insider_trades: parsed Form 4 (ownershipDocument XML). ONE row per filing
+-- (accession PK): multi-transaction filings are aggregated to the DOMINANT
+-- transaction code by total dollar value (shares summed, price = weighted
+-- average). code honesty: only P (open-market buy) and S (open-market sale)
+-- are headline-worthy; A/M/G/F/… are grants/exercises/gifts/withholding and
+-- are labeled as such, never sold as conviction trades.
+CREATE TABLE IF NOT EXISTS insider_trades (
+  accession TEXT PRIMARY KEY,          -- Form 4 accession number
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  insider   TEXT NOT NULL DEFAULT '',  -- reporting owner name
+  title     TEXT NOT NULL DEFAULT '',  -- officer title / Director / 10% owner
+  code      TEXT NOT NULL DEFAULT '',  -- dominant transaction code (P/S/A/M/…)
+  shares    REAL NOT NULL DEFAULT 0,   -- total shares in the dominant code
+  price     REAL NOT NULL DEFAULT 0,   -- weighted-average price per share
+  value     REAL NOT NULL DEFAULT 0,   -- shares * price (dollar value)
+  tx_ts     INTEGER NOT NULL DEFAULT 0,-- transaction date, unix seconds
+  filed_ts  INTEGER NOT NULL DEFAULT 0 -- filing time (lags the trade ~2 business days)
+);
+CREATE INDEX IF NOT EXISTS idx_insider_sym_ts ON insider_trades (symbol_id, filed_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_insider_ts ON insider_trades (filed_ts DESC);
+
+-- inst_holdings: parsed 13F-HR information tables for a curated list of
+-- notable managers (hardcoded CIKs in internal/ingest/edgar). Quarterly data
+-- with up to a 45-day legal lag. symbol_id is a BEST-EFFORT name match from
+-- the issuer name; unmatched rows keep symbol_id NULL (honest — CUSIP→ticker
+-- has no free authoritative map). value is as reported on the filing (USD).
+CREATE TABLE IF NOT EXISTS inst_holdings (
+  cik       TEXT NOT NULL,             -- manager CIK (zero-padded not required)
+  manager   TEXT NOT NULL DEFAULT '',  -- manager display name
+  period    TEXT NOT NULL,             -- report period YYYY-MM-DD
+  symbol_id INTEGER,                   -- best-effort matched symbol (NULL = unmatched)
+  cusip     TEXT NOT NULL,
+  name      TEXT NOT NULL DEFAULT '',  -- issuer name as filed
+  value     REAL NOT NULL DEFAULT 0,   -- position value as reported (USD)
+  shares    REAL NOT NULL DEFAULT 0,   -- shares/principal amount as reported
+  PRIMARY KEY (cik, period, cusip)
+);
+CREATE INDEX IF NOT EXISTS idx_inst_sym ON inst_holdings (symbol_id, period DESC);
+CREATE INDEX IF NOT EXISTS idx_inst_cik ON inst_holdings (cik, period DESC);
+
+-- dilution_flags: derived per-symbol dilution signal. level is descriptive,
+-- not a prediction: high = dilution-shaped filing (S-1/S-3/424B) in the last
+-- 180d AND shares outstanding up >2%; elevated = exactly one of the two;
+-- low = neither. reasons is a JSON array of plain-English evidence strings.
+CREATE TABLE IF NOT EXISTS dilution_flags (
+  symbol_id  INTEGER PRIMARY KEY REFERENCES symbols(id),
+  level      TEXT NOT NULL DEFAULT 'low' CHECK (level IN ('low','elevated','high')),
+  reasons    TEXT NOT NULL DEFAULT '[]',
+  updated_ts INTEGER NOT NULL DEFAULT 0
+);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- SIGNAL8 WAVE — STAGE 2: CONGRESSIONAL TRADES (appended block — do not merge
+-- into the sections above). Public-domain STOCK Act disclosures (Senate eFD /
+-- House Clerk) ingested via the free community Stock Watcher mirrors.
+-- HONESTY: disclosures LAG 30-45 DAYS BY LAW — never real-time; amounts are
+-- the RANGES reported on the disclosure, not exact values. id is a
+-- deterministic content hash, so INSERT OR IGNORE makes every re-download of
+-- the (cumulative) mirror dumps idempotent. symbol_id is set only when the
+-- disclosed ticker is one we track; unknown tickers keep NULL (honest) while
+-- the raw ticker text is preserved in symbol.
+CREATE TABLE IF NOT EXISTS congress_trades (
+  id           TEXT PRIMARY KEY,           -- sha256-derived content hash
+  chamber      TEXT NOT NULL,              -- 'senate' | 'house'
+  member       TEXT NOT NULL DEFAULT '',   -- senator / representative as disclosed
+  symbol       TEXT NOT NULL DEFAULT '',   -- disclosed ticker (uppercased, sanitized)
+  symbol_id    INTEGER,                    -- matched symbols.id (NULL = not tracked here)
+  tx_type      TEXT NOT NULL DEFAULT '',   -- purchase | sale_full | sale_partial | sale | exchange | …
+  amount_range TEXT NOT NULL DEFAULT '',   -- disclosed range ("$1,001 - $15,000"), never exact
+  tx_ts        INTEGER NOT NULL DEFAULT 0, -- transaction date (0 = unparseable on the disclosure)
+  disclosed_ts INTEGER NOT NULL DEFAULT 0  -- filing date (lags the trade 30-45d by law)
+);
+CREATE INDEX IF NOT EXISTS idx_congress_sym_ts ON congress_trades (symbol, tx_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_congress_ts ON congress_trades (tx_ts DESC, disclosed_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_congress_member ON congress_trades (member, tx_ts DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- SIGNAL8 WAVE — STAGE 3: ANOMALY LAYER (appended block — do not merge into
+-- the sections above). Trade-imbalance + unusual-volatility/volume detections
+-- from internal/anomaly. HONESTY: every row is a DESCRIPTIVE statistic — a
+-- z-score of recent activity vs the SAME symbol's own trailing baseline — not
+-- a prediction. detail always states the window + baseline it was measured
+-- against; the stock "imbalance" kind is a volume-side PROXY (up-volume vs
+-- down-volume on 1m bars) because no true order book exists on free stock
+-- data, and its detail says so. hour_bucket = ts/3600: the dedup key that
+-- keeps a persisting condition to ONE open anomaly per (symbol, kind) per
+-- hour via INSERT OR IGNORE (same idempotency pattern as idx_alerts_dedup).
+CREATE TABLE IF NOT EXISTS anomalies (
+  id          INTEGER PRIMARY KEY,
+  symbol_id   INTEGER NOT NULL REFERENCES symbols(id),
+  ts          INTEGER NOT NULL,     -- detection instant (last bar/snap ts), unix seconds
+  kind        TEXT NOT NULL CHECK (kind IN ('anomaly_imbalance','anomaly_vol','anomaly_volume')),
+  z           REAL NOT NULL,        -- signed z-score (or stated ratio — detail says which)
+  detail      TEXT NOT NULL DEFAULT '',
+  hour_bucket INTEGER NOT NULL      -- ts/3600, the per-hour dedup bucket
+);
+CREATE INDEX IF NOT EXISTS idx_anomalies_ts ON anomalies (ts DESC);
+CREATE INDEX IF NOT EXISTS idx_anomalies_sym_ts ON anomalies (symbol_id, ts DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_anomalies_dedup
+  ON anomalies (symbol_id, kind, hour_bucket);

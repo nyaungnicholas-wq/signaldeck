@@ -18,6 +18,11 @@ const KIND_META: Record<string, { label: string; color: string }> = {
   regime_change: { label: "REGIME", color: "var(--dim)" },
   prediction_high: { label: "P(UP) HIGH", color: "var(--bid)" },
   prediction_low: { label: "P(UP) LOW", color: "var(--ask)" },
+  // Signal8 wave Stage 3: anomaly kinds — DESCRIPTIVE z-scores vs the
+  // symbol's own baseline (the detail carries window/baseline/proxy labels).
+  anomaly_imbalance: { label: "IMBALANCE", color: "var(--warn)" },
+  anomaly_vol: { label: "VOLATILITY", color: "var(--warn)" },
+  anomaly_volume: { label: "VOLUME", color: "var(--warn)" },
 };
 
 function kindMeta(kind: string) {

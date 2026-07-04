@@ -1116,3 +1116,341 @@ export interface ChartOverlays {
 export function chartOverlays(symbol: string, market: Market, days = 365) {
   return get<ChartOverlays>(`/api/chart-overlays?${q(symbol, market)}&days=${days}`);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNAL8 WAVE — STAGE 1: SEC FILINGS INTELLIGENCE (appended block; keep at
+// END). Public-domain SEC EDGAR data rendered plain-English. Every payload
+// carries an honest `note` about the LEGAL lag of the data (Form 4 ~2
+// business days after the trade; 13F quarterly + up to 45 days) — surface it.
+
+/** One SEC filing in the plain-English feed. */
+export interface Filing {
+  id: string; // SEC accession number
+  symbolId: number;
+  symbol?: string;
+  form: string; // raw form type ("4", "8-K", "S-3", …)
+  filedTs: number;
+  title: string;
+  url: string; // EDGAR archive link
+  label: string; // plain-English reading ("8-K — earnings release (Item 2.02)")
+}
+
+/** GET /api/filings payload. */
+export interface FilingsResponse {
+  filings: Filing[] | null;
+  count: number;
+  form: string;
+  symbol?: string;
+  note: string;
+}
+
+/** Fetch the filings feed (fleet-wide without symbol; form is a prefix filter). */
+export function filings(symbol?: string, form?: string, limit = 100) {
+  const p = new URLSearchParams();
+  if (symbol) p.set("symbol", symbol);
+  if (form) p.set("form", form);
+  p.set("limit", String(limit));
+  return get<FilingsResponse>(`/api/filings?${p.toString()}`);
+}
+
+/** One parsed Form 4 insider transaction (aggregated per filing). */
+export interface InsiderTrade {
+  accession: string;
+  symbolId: number;
+  symbol?: string;
+  insider: string;
+  title: string; // officer title / Director / 10% owner
+  code: string; // dominant transaction code (P/S/A/M/…)
+  codeLabel: string; // honest reading; only P/S are open-market trades
+  openMarket: boolean; // true ONLY for P and S
+  shares: number;
+  price: number;
+  value: number;
+  txTs: number; // transaction date
+  filedTs: number; // filing time (~2 business days AFTER the trade, by law)
+}
+
+/** GET /api/insiders payload. */
+export interface InsidersResponse {
+  trades: InsiderTrade[] | null;
+  count: number;
+  symbol?: string;
+  note: string;
+}
+
+/** Fetch insider trades (fleet-wide recent without symbol; code filters P/S/…). */
+export function insiders(symbol?: string, code?: string, limit = 100) {
+  const p = new URLSearchParams();
+  if (symbol) p.set("symbol", symbol);
+  if (code) p.set("code", code);
+  p.set("limit", String(limit));
+  return get<InsidersResponse>(`/api/insiders?${p.toString()}`);
+}
+
+/** One 13F position (latest stored period). symbolId null = unmatched issuer. */
+export interface InstHolding {
+  cik: string;
+  manager: string;
+  period: string; // report quarter end (YYYY-MM-DD) — lags up to 45 days
+  symbolId: number | null;
+  symbol?: string;
+  cusip: string;
+  name: string; // issuer name as filed
+  value: number; // as reported (USD)
+  shares: number;
+}
+
+/** GET /api/institutions payloads (three shapes by query). */
+export interface InstitutionsBySymbol {
+  holdings: InstHolding[] | null;
+  count: number;
+  symbol: string;
+  note: string;
+}
+export interface InstitutionsByManager {
+  holdings: InstHolding[] | null;
+  count: number;
+  cik: string;
+  note: string;
+}
+export interface InstitutionsOverview {
+  managers: { cik: string; manager: string; period: string; positions: number; totalValue: number }[] | null;
+  curated: { cik: number; name: string }[];
+  note: string;
+}
+
+export function institutionsBySymbol(symbol: string, limit = 50) {
+  return get<InstitutionsBySymbol>(`/api/institutions?symbol=${encodeURIComponent(symbol)}&limit=${limit}`);
+}
+export function institutionsByManager(manager: string, limit = 100) {
+  return get<InstitutionsByManager>(`/api/institutions?manager=${encodeURIComponent(manager)}&limit=${limit}`);
+}
+export function institutionsOverview() {
+  return get<InstitutionsOverview>(`/api/institutions`);
+}
+
+/** GET /api/dilution?symbol= payload. level unknown = never derived (honest). */
+export interface DilutionFlag {
+  symbol: string;
+  derived: boolean;
+  level: "low" | "elevated" | "high" | "unknown";
+  reasons: string[];
+  updatedTs?: number;
+  note: string;
+}
+
+/** Fleet-wide flagged list (level elevated/high only). */
+export interface DilutionFlagged {
+  flagged: { symbol: string; level: string; reasons: string[]; updatedTs: number }[] | null;
+  count: number;
+  note: string;
+}
+
+export function dilution(symbol: string) {
+  return get<DilutionFlag>(`/api/dilution?symbol=${encodeURIComponent(symbol)}`);
+}
+export function dilutionFlagged(limit = 100) {
+  return get<DilutionFlagged>(`/api/dilution?limit=${limit}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNAL8 WAVE — STAGE 2: CONGRESSIONAL TRADES (appended block; keep at END).
+// Public-domain STOCK Act disclosures (Senate eFD / House Clerk) via the free
+// Stock Watcher community mirrors. HONESTY (surface all of it): disclosures
+// LAG 30-45 DAYS BY LAW (lagNote) — never real-time; amounts are the RANGES
+// on the disclosure, not exact values; `source` reports mirror health — both
+// mirrors are DEAD as of 2026-07-04 (DNS gone / S3 403), so stored history is
+// served and the UI must say the source is down, not pretend freshness.
+
+/** One disclosed congressional stock transaction. */
+export interface CongressTrade {
+  id: string; // deterministic content hash (dedup key)
+  chamber: "senate" | "house";
+  member: string; // senator / representative as disclosed
+  symbol: string; // disclosed ticker (uppercased)
+  symbolId: number | null; // null = ticker not tracked by SignalDeck (honest)
+  txType: string; // purchase | sale_full | sale_partial | sale | exchange | …
+  amountRange: string; // disclosed RANGE ("$1,001 - $15,000"), never exact
+  txTs: number; // transaction date (0 = unparseable on the disclosure)
+  disclosedTs: number; // filing date — lags the trade 30-45 days by law
+}
+
+/** Per-chamber mirror health from the poller's last run. */
+export interface CongressChamberStatus {
+  ok: boolean;
+  fetched?: number;
+  new?: number;
+  detail?: string; // error text when !ok (honest, not hidden)
+}
+
+/** The poller's last mirror-health snapshot (absent before the first run). */
+export interface CongressMirrorStatus {
+  checkedTs?: number;
+  senate?: CongressChamberStatus;
+  house?: CongressChamberStatus;
+}
+
+/** GET /api/congress payload. */
+export interface CongressResponse {
+  trades: CongressTrade[] | null;
+  count: number;
+  symbol?: string;
+  member?: string;
+  chamber?: string;
+  recent90d?: number; // symbol queries only: trades in the last 90d
+  lastTxTs?: number; // symbol queries only: latest transaction date
+  lagNote: string; // the EXPLICIT legal-lag note — always render it
+  note: string;
+  source?: CongressMirrorStatus | null;
+}
+
+/** Fetch congressional trades (all filters optional). */
+export function congress(symbol?: string, member?: string, chamber?: string, limit = 100) {
+  const p = new URLSearchParams();
+  if (symbol) p.set("symbol", symbol);
+  if (member) p.set("member", member);
+  if (chamber) p.set("chamber", chamber);
+  p.set("limit", String(limit));
+  return get<CongressResponse>(`/api/congress?${p.toString()}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNAL8 WAVE — STAGE 3: ANOMALY LAYER (appended block; keep at END).
+// Trade-imbalance + unusual-volatility/volume detections. HONESTY (surface
+// all of it): every row is a DESCRIPTIVE z-score of recent activity vs the
+// SAME symbol's own trailing baseline — each detail states the window and
+// baseline it was measured over — NOT a prediction (`note`). Stock
+// "imbalance" is a volume-side PROXY (up-volume vs down-volume on 1m bars;
+// free stock data has no order book) and both its detail and `proxyNote`
+// say so — always render the labels.
+
+/** One detected anomaly (descriptive statistic, never a prediction). */
+export interface AnomalyRow {
+  id: number;
+  symbol: string;
+  market: Market;
+  ts: number; // detection instant (last bar/snap ts)
+  kind: "anomaly_imbalance" | "anomaly_vol" | "anomaly_volume";
+  z: number; // signed z-score (or stated TR/ATR ratio — detail says which)
+  detail: string; // states window + baseline (+ proxy label for stocks)
+}
+
+/** GET /api/anomalies payload. */
+export interface AnomaliesResponse {
+  anomalies: AnomalyRow[] | null;
+  count: number;
+  symbol?: string;
+  kind?: string;
+  note: string; // "descriptive, not predictions" — always render it
+  proxyNote: string; // stock-imbalance proxy label — render near imbalance rows
+}
+
+/** Fetch anomalies (all filters optional; no symbol ⇒ fleet-wide feed). */
+export function anomalies(symbol?: string, market?: Market, kind?: string, limit = 50) {
+  const p = new URLSearchParams();
+  if (symbol) p.set("symbol", symbol);
+  if (market) p.set("market", market);
+  if (kind) p.set("kind", kind);
+  p.set("limit", String(limit));
+  return get<AnomaliesResponse>(`/api/anomalies?${p.toString()}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNAL8 WAVE — STAGE 4: HOME SURFACES (appended block; keep at END).
+// Ticker tape (index/sector ETFs + BTC + VIX), movers with best-effort mcap,
+// and the honest free-data calendar. HONESTY (render every note): tape prices
+// are STORED DAILY CLOSES on worker cadence — not live quotes; VIX is the
+// FRED VIXCLS daily close (~1 trading day lag); mcap = SEC EDGAR
+// SharesOutstanding × last close and is "unavailable" (null) when EDGAR
+// hasn't covered a symbol — never fabricated; earnings dates are ESTIMATES
+// (last SEC filing date + ~91 days), never confirmed dates. There is NO IPO
+// calendar: no free, redistributable source of IPO pricing/listing dates
+// exists (EDGAR S-1s show intent, not dates), so per the honesty doctrine
+// the surface is omitted rather than faked.
+
+/** One ticker-tape strip entry. hasData=false = registered, no bars yet. */
+export interface TapeItem {
+  symbol: string;
+  label: string;
+  kind: "index" | "sector" | "crypto" | "vix";
+  market?: Market;
+  price: number;
+  dayChangePct: number;
+  ts: number;
+  hasData: boolean;
+  note?: string; // VIX carries its FRED-lag note
+}
+
+/** GET /api/tape payload. */
+export interface TapeResponse {
+  items: TapeItem[] | null;
+  count: number;
+  note: string;
+}
+
+/** Fetch the whole ticker-tape strip in one call. */
+export function tape() {
+  return get<TapeResponse>("/api/tape");
+}
+
+/** One gainers/losers row. mcap null = "mcap unavailable" (EDGAR gap). */
+export interface MoverRow {
+  symbol: string;
+  name: string;
+  price: number;
+  dayChangePct: number;
+  mcap: number | null;
+  mcapAsOf?: number;
+  ts: number;
+}
+
+/** GET /api/movers payload. */
+export interface MoversResponse {
+  gainers: MoverRow[] | null;
+  losers: MoverRow[] | null;
+  universeN: number;
+  minMcap: number;
+  unknownMcapExcluded: number; // symbols dropped by the mcap filter for UNKNOWN mcap
+  note: string;
+  mcapNote: string;
+  asOf: number;
+}
+
+/** Fetch gainers/losers; minMcap in dollars (0 = no filter). */
+export function movers(minMcap = 0, limit = 10) {
+  const p = new URLSearchParams();
+  if (minMcap > 0) p.set("minMcap", String(minMcap));
+  p.set("limit", String(limit));
+  return get<MoversResponse>(`/api/movers?${p.toString()}`);
+}
+
+/** One latest-observed FRED print (NOT a forward release calendar). */
+export interface EconPrint {
+  series: string;
+  label: string;
+  value: number;
+  ts: number;
+}
+
+/** One "reports soon" row — ALWAYS an estimate; render the EST label. */
+export interface EarningsEst {
+  symbol: string;
+  name: string;
+  lastFilingTs: number;
+  estTs: number;
+  estimate: true;
+}
+
+/** GET /api/calendar payload (econ prints + earnings estimates; no IPO — see block comment). */
+export interface CalendarResponse {
+  econ: EconPrint[] | null;
+  econNote: string;
+  earningsEst: EarningsEst[] | null;
+  earningsNote: string;
+  asOf: number;
+}
+
+/** Fetch the honest free-data calendar card. */
+export function calendar() {
+  return get<CalendarResponse>("/api/calendar");
+}

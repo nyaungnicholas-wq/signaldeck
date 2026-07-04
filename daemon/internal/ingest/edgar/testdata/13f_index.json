@@ -1,0 +1,12 @@
+{
+  "directory": {
+    "item": [
+      {"name": "0001067983-26-000012-index.htm", "type": "text.gif", "size": "4680"},
+      {"name": "primary_doc.xml", "type": "text.gif", "size": "2312"},
+      {"name": "form13fInfoTable.xml", "type": "text.gif", "size": "912345"},
+      {"name": "form13f.txt", "type": "text.gif", "size": "1002345"}
+    ],
+    "name": "/Archives/edgar/data/1067983/000106798326000012",
+    "parent-dir": "/Archives/edgar/data/1067983"
+  }
+}

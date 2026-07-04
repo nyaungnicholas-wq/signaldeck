@@ -1,0 +1,54 @@
+[
+  {
+    "transaction_date": "05/12/2026",
+    "owner": "Self",
+    "ticker": "AAPL",
+    "asset_description": "Apple Inc. - Common Stock",
+    "asset_type": "Stock",
+    "type": "Purchase",
+    "amount": "$15,001 - $50,000",
+    "comment": "--",
+    "senator": "Jane Q Senator",
+    "ptr_link": "https://efdsearch.senate.gov/search/view/ptr/aaa11111-1111-1111-1111-111111111111/",
+    "disclosure_date": "06/20/2026"
+  },
+  {
+    "transaction_date": "04/02/2026",
+    "owner": "Spouse",
+    "ticker": "ZZTOP",
+    "asset_description": "ZZ Top Industries Inc",
+    "asset_type": "Stock",
+    "type": "Sale (Full)",
+    "amount": "$1,001 - $15,000",
+    "comment": "--",
+    "senator": "John P Senator",
+    "ptr_link": "https://efdsearch.senate.gov/search/view/ptr/bbb22222-2222-2222-2222-222222222222/",
+    "disclosure_date": "05/10/2026"
+  },
+  {
+    "transaction_date": "03/15/2026",
+    "owner": "Self",
+    "ticker": "--",
+    "asset_description": "Municipal Bond Fund Series 2031",
+    "asset_type": "Municipal Security",
+    "type": "Purchase",
+    "amount": "$1,001 - $15,000",
+    "comment": "--",
+    "senator": "Jane Q Senator",
+    "ptr_link": "https://efdsearch.senate.gov/search/view/ptr/ccc33333-3333-3333-3333-333333333333/",
+    "disclosure_date": "04/20/2026"
+  },
+  {
+    "transaction_date": "02/27/2026",
+    "owner": "Self",
+    "ticker": "<a href=\"https://finance.example.com/q?s=BA\" target=\"_blank\">BA</a>",
+    "asset_description": "Boeing Company",
+    "asset_type": "Stock",
+    "type": "Sale (Partial)",
+    "amount": "$50,001 - $100,000",
+    "comment": "--",
+    "senator": "John P Senator",
+    "ptr_link": "https://efdsearch.senate.gov/search/view/ptr/ddd44444-4444-4444-4444-444444444444/",
+    "disclosure_date": "04/01/2026"
+  }
+]

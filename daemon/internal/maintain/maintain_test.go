@@ -374,6 +374,14 @@ func TestDownsamplerFailSafeSkipsPruneOnArchiveError(t *testing.T) {
 	if err := st.InsertSnap1s(ctx, md.Snap1s{SymbolID: sym.ID, Ts: old, Mid: 1}); err != nil {
 		t.Fatal(err)
 	}
+	// An anomaly past its retention window too — the anomalies tier must obey
+	// the SAME fail-safe (no durable archive ⇒ no prune).
+	oldAnomTs := time.Now().Add(-100 * 24 * time.Hour).Unix()
+	if _, err := st.InsertAnomaly(ctx, store.AnomalyRow{
+		SymbolID: sym.ID, Ts: oldAnomTs, Kind: "anomaly_vol", Z: 3.0, Detail: "old",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Make the archive root un-creatable: a regular FILE where the root dir
 	// (and its subdirs) would need to be — MkdirAll then fails, so ArchiveX
@@ -397,6 +405,13 @@ func TestDownsamplerFailSafeSkipsPruneOnArchiveError(t *testing.T) {
 	}
 	if len(kept) != 1 {
 		t.Fatalf("fail-safe violated: old snap was pruned despite archive failure (kept=%d)", len(kept))
+	}
+	keptAnoms, err := st.Anomalies(ctx, sym.ID, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keptAnoms) != 1 {
+		t.Fatalf("fail-safe violated: old anomaly was pruned despite archive failure (kept=%d)", len(keptAnoms))
 	}
 	// A dq event must record the skip.
 	dq, err := st.RecentDQ(ctx, 20)
@@ -550,3 +565,80 @@ func TestStorageGovernorVacuumsAboveThreshold(t *testing.T) {
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
+
+// The anomalies tier: detections older than the hot window (default ~90d) are
+// archived to cold gzip-CSV and pruned; in-window detections stay; the
+// archived row round-trips. Same archive-before-prune fail-safe as bars/snaps
+// (exercised for anomalies in TestDownsamplerFailSafeSkipsPruneOnArchiveError).
+func TestDownsamplerAnomaliesTierArchiveThenPrune(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	root := t.TempDir()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple Inc.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	oldTs := now.Add(-100 * 24 * time.Hour).Unix() // past the 90d default → archive+prune
+	newTs := now.Add(-1 * 24 * time.Hour).Unix()   // inside window → keep
+	if _, err := st.InsertAnomaly(ctx, store.AnomalyRow{
+		SymbolID: sym.ID, Ts: oldTs, Kind: "anomaly_vol", Z: 3.2, Detail: "old detection",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.InsertAnomaly(ctx, store.AnomalyRow{
+		SymbolID: sym.ID, Ts: newTs, Kind: "anomaly_volume", Z: 2.8, Detail: "fresh detection",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &Downsampler{St: st, Arc: archive.New(root)}
+	if _, err := d.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Old anomaly pruned, fresh one retained.
+	kept, err := st.Anomalies(ctx, sym.ID, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 || kept[0].Ts != newTs {
+		t.Fatalf("want only the in-window anomaly kept, got %+v", kept)
+	}
+	// The old anomaly survives in cold storage, values intact.
+	if got := countArchiveFiles(t, root, "anomalies"); got != 1 {
+		t.Fatalf("want 1 anomalies archive file, got %d", got)
+	}
+	var found bool
+	_ = filepath.Walk(filepath.Join(root, "anomalies"), func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || filepath.Ext(p) != ".gz" {
+			return nil
+		}
+		fp, _ := os.Open(p)
+		defer fp.Close()
+		gz, _ := gzip.NewReader(fp)
+		defer gz.Close()
+		recs, _ := csv.NewReader(gz).ReadAll()
+		for _, r := range recs[1:] { // id,symbol_id,symbol,ts,kind,z,detail
+			if r[3] == itoa(oldTs) && r[4] == "anomaly_vol" && r[2] == "AAPL" && r[6] == "old detection" {
+				found = true
+			}
+		}
+		return nil
+	})
+	if !found {
+		t.Fatalf("archived old anomaly ts=%d not found in cold storage", oldTs)
+	}
+
+	// Explicit window override: a shorter KeepAnoms prunes the fresh one too.
+	if _, err := (&Downsampler{St: st, Arc: archive.New(root), KeepAnoms: time.Hour}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	kept2, _ := st.Anomalies(ctx, sym.ID, "", 10)
+	if len(kept2) != 0 {
+		t.Fatalf("KeepAnoms=1h must prune the 1d-old anomaly, kept %+v", kept2)
+	}
+	if got := countArchiveFiles(t, root, "anomalies"); got != 2 {
+		t.Fatalf("second prune must add a second archive file, got %d", got)
+	}
+}

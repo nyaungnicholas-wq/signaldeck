@@ -12,6 +12,11 @@ import Spark from "@/components/Spark";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import UnusualActivityPanel from "@/components/UnusualActivityPanel";
+import TickerTape from "@/components/TickerTape";
+import HomeFeed from "@/components/HomeFeed";
+import MoversPanel from "@/components/MoversPanel";
+import CalendarsCard from "@/components/CalendarsCard";
 
 type SortKey = "score" | "change" | "symbol";
 
@@ -242,8 +247,18 @@ export default function WatchlistPage() {
         .wl-add:disabled { color: var(--faint); cursor: default; }
       `}</style>
 
+      {/* Signal8 wave Stage 4: ticker tape — index/sector ETFs + BTC + VIX.
+          Stored daily closes on worker cadence (not live quotes); VIX is the
+          FRED daily close (~1d lag). Hidden entirely while offline/empty. */}
+      <TickerTape />
+
       {/* pinned daily briefing (renders only when today's briefing exists) */}
       <DailyBriefingCard />
+
+      {/* Signal8 wave Stage 3: fleet-wide unusual-activity feed (imbalance /
+          volatility / volume z-scores vs each symbol's own baseline —
+          descriptive, never predictions; stock imbalance = labeled proxy). */}
+      <UnusualActivityPanel />
 
       {/* header row: title + contextual chips + add-symbol box */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -428,6 +443,20 @@ export default function WatchlistPage() {
           })}
         </div>
       )}
+
+      {/* Signal8 wave Stage 4: signal8-style market surfaces BELOW the
+          briefing + watchlist — merged news+filings feed, movers with
+          best-effort mcap, honest free-data calendars (no IPO calendar:
+          no free source exists, so none is faked). */}
+      <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-3">
+        <div className="xl:col-span-2">
+          <HomeFeed />
+        </div>
+        <div className="flex flex-col gap-3">
+          <MoversPanel />
+          <CalendarsCard />
+        </div>
+      </div>
     </div>
   );
 }

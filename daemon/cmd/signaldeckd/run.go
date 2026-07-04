@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/alerts"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/anomaly"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/api"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/archive"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/backup"
@@ -23,6 +24,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/hud"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/congress"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptolive"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
@@ -62,6 +64,14 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	}
 	krakenClient := cryptohist.New()
 	backfiller := pipeline.NewBackfiller(st, alpacaClient, krakenClient)
+
+	// ONE EDGAR client for the WHOLE daemon. SEC's fair-access policy caps
+	// clients at 10 req/s; the limiter that enforces that lives INSIDE
+	// *edgar.Client (mutex-serialized min-interval pacing), so every worker
+	// that talks to EDGAR must share this instance. Two independent clients
+	// (fundamentals fetcher + filings/13F pollers) would each pace themselves
+	// correctly yet sum to ~13.3 req/s when their runs overlap.
+	edgarClient := edgar.New()
 
 	// Cold-archive sink (tiered-storage wave): every row past retention is
 	// exported here to gzip-CSV before it is pruned, so nothing is ever truly
@@ -218,12 +228,43 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// fred-poller (6h, keyless FRED macro) + edgar-fetcher (24h, SEC EDGAR
 	// fundamentals, gated on Alpaca keys only so the equity universe exists);
 	// BEFORE the watchdog spec snapshot so both are health-audited.
-	fleet = append(fleet, freeDataWorkers(cfg, st)...)
+	fleet = append(fleet, freeDataWorkers(cfg, st, edgarClient)...)
 	// Paper-trading wave / Stage 4 (constructor appended at the END of this file)
 	// — paper-trader (1h): the INTERNAL SIMULATED book driven by the flagship
 	// calibrated predictions. It NEVER contacts a broker; every fill is computed
 	// from stored bars. BEFORE the watchdog spec snapshot so it's health-audited.
 	fleet = append(fleet, paperWorkers(st)...)
+	// Signal8 wave / Stage 1 (constructor appended at the END of this file) —
+	// filings-poller (2h, EDGAR submissions → filings feed + Form 4 insider
+	// parse + dilution flags) and 13f-poller (24h, curated notable managers'
+	// 13F-HR holdings). BEFORE the watchdog spec snapshot so both are
+	// health-audited like every other worker.
+	fleet = append(fleet, signal8Workers(cfg, st, edgarClient)...)
+	// Signal8 wave / Stage 2 (constructor appended at the END of this file) —
+	// congress-poller (12h): free public congressional stock-disclosure
+	// mirrors (Senate + House Stock Watcher dumps). Needs no API key; degrades
+	// gracefully (dq event + honest status) when a mirror is dead — which both
+	// currently are (verified 2026-07-04). BEFORE the watchdog spec snapshot
+	// so it's health-audited like every other worker.
+	fleet = append(fleet, congressWorkers(st)...)
+	// Signal8 wave / Stage 3 (constructor appended at the END of this file) —
+	// anomaly-scanner (5m): trade-imbalance + unusual-volatility/volume
+	// detection as DESCRIPTIVE z-scores vs each symbol's own trailing
+	// baseline (crypto imbalance from real snapshots_1s; stock imbalance is
+	// a labeled volume-side proxy). Hot set every tick (stock 1m scans gated
+	// on marketcal), broad daily-only universe once per ET trading day.
+	// BEFORE the watchdog spec snapshot so it's health-audited like every
+	// other worker.
+	fleet = append(fleet, anomalyWorkers(st)...)
+	// Signal8 wave / Stage 4 (constructor appended at the END of this file) —
+	// tape-seeder (6h): registers the home ticker-tape's index/sector ETFs
+	// (SPY/QQQ/DIA/IWM + XLK/XLF/XLE/XLV) into the BROAD DAILY-ONLY universe
+	// (stream=0 — never the streamed hot set) and deep-backfills daily bars
+	// for any that have none; thereafter the universe-poller keeps them fresh
+	// like every other daily-only symbol, so steady-state runs are no-op
+	// sweeps. BEFORE the watchdog spec snapshot so it's health-audited like
+	// every other worker.
+	fleet = append(fleet, tapeWorkers(cfg, st, alpacaClient)...)
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -471,12 +512,16 @@ func perSymbolWorkers(st *store.Store) []workers.Worker {
 //     successive daily runs via a persisted cursor. Gated on Alpaca keys only
 //     because that's what populates the stock universe to fetch fundamentals
 //     for; EDGAR itself needs no key. Degrades to a no-op with no key/universe.
-func freeDataWorkers(cfg config.Config, st *store.Store) []workers.Worker {
+//
+// ec is the daemon-wide SHARED EDGAR client (see run()): its single
+// mutex-serialized limiter spaces this fetcher's requests against the
+// signal8 pollers' too, keeping the whole process under SEC's 10 req/s.
+func freeDataWorkers(cfg config.Config, st *store.Store, ec *edgar.Client) []workers.Worker {
 	fp := &pipeline.FredPoller{St: st, Client: fred.New(os.Getenv("SIGNALDECK_FRED_KEY"))}
 	ef := &pipeline.EdgarFetcher{St: st}
 	if cfg.HasAlpaca() {
 		// Only fetch fundamentals when there's a stock universe to fetch for.
-		ef.Client = edgar.New()
+		ef.Client = ec
 	}
 	return []workers.Worker{fp, ef}
 }
@@ -517,4 +562,110 @@ func edgeModelWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.GBMTrainer{St: st},
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNAL8 WAVE — STAGE 1: SEC FILINGS INTELLIGENCE (appended block).
+// signal8Workers returns the wave's two workers:
+//   - filings-poller (2h): sweeps a rotating window of universe stocks
+//     through the EDGAR submissions API into the plain-English filings feed,
+//     fetches + parses NEW Form 4 documents into insider_trades (bounded per
+//     run), and re-derives per-symbol dilution flags (S-1/S-3/424B in 180d +
+//     shares-outstanding growth >2%). Gated on Alpaca keys only because
+//     that's what populates the stock universe to sweep — EDGAR itself needs
+//     no key and the worker no-ops cleanly with no stocks.
+//   - 13f-poller (24h): rotates through the curated notable-manager list
+//     (~25 hardcoded CIKs — Berkshire, Bridgewater, RenTech, Citadel, …),
+//     storing each manager's LATEST 13F-HR information table once per report
+//     period. Always enabled: it depends on nothing but EDGAR.
+// Both share the edgar package's rate limiter (150ms min interval, ≤10 req/s
+// per SEC policy), descriptive User-Agent, and 429/503 backoff. Everything
+// stored is public-domain government data; the API labels its legal lags
+// (Form 4 ~2 business days; 13F quarterly + ≤45 days) honestly.
+//
+// ec is the daemon-wide SHARED EDGAR client (see run()): wrapping it (not a
+// fresh edgar.New()) means the filings/13F pollers AND the fundamentals
+// fetcher all pace through ONE limiter — separate limiters would each be
+// individually compliant yet sum past SEC's 10 req/s when runs overlap.
+func signal8Workers(cfg config.Config, st *store.Store, ec *edgar.Client) []workers.Worker {
+	fc := &edgar.FilingsClient{Client: ec}
+	fp := &pipeline.FilingsPoller{St: st}
+	if cfg.HasAlpaca() {
+		fp.Client = fc
+	}
+	tf := &pipeline.ThirteenFPoller{St: st, Client: fc}
+	return []workers.Worker{fp, tf}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNAL8 WAVE — STAGE 2: CONGRESSIONAL TRADES (appended block).
+// congressWorkers returns the wave's worker: congress-poller (12h) that pulls
+// US congressional stock-transaction disclosures (public-domain STOCK Act
+// data) from the FREE Stock Watcher community mirrors — Senate + House JSON
+// dumps on S3 — hashes each row to a deterministic id (INSERT OR IGNORE ⇒
+// idempotent re-downloads), and maps disclosed tickers onto tracked stocks
+// (unknown tickers keep symbol_id NULL, honestly). No API key needed.
+// MIRROR REALITY (verified 2026-07-04 via Firecrawl): senatestockwatcher.com
+// and housestockwatcher.com no longer resolve, and both S3 dumps return 403 —
+// the poller records a dq event + an honest per-chamber status in meta every
+// run and NEVER fails the fleet; /api/congress keeps serving stored history
+// and surfaces the outage. SIGNALDECK_SENATE_TRADES_URL /
+// SIGNALDECK_HOUSE_TRADES_URL override the mirror URLs the moment a live
+// mirror (or a self-hosted export) exists, with zero code change.
+// HONESTY: disclosures lag 30-45 days BY LAW; amounts are ranges. The API's
+// lagNote states both.
+func congressWorkers(st *store.Store) []workers.Worker {
+	c := congress.New()
+	if u := os.Getenv("SIGNALDECK_SENATE_TRADES_URL"); u != "" {
+		c.SenateURL = u
+	}
+	if u := os.Getenv("SIGNALDECK_HOUSE_TRADES_URL"); u != "" {
+		c.HouseURL = u
+	}
+	return []workers.Worker{&pipeline.CongressPoller{St: st, Client: c}}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNAL8 WAVE — STAGE 3: ANOMALY LAYER (appended block).
+// anomalyWorkers returns the wave's worker: anomaly-scanner (5m) — the
+// user's explicit ask: trade-imbalance + unusual-volatility/volume detection
+// as a DESCRIPTIVE layer (z-scores vs each symbol's OWN trailing baseline;
+// every stored detail states its window + baseline), never predictions.
+//   - HOT SET every tick: crypto order-book imbalance from snapshots_1s
+//     (real book data) + realized-vol/TR-spike + same-time-of-day volume on
+//     1m bars; streamed stocks get the same on 1m bars with imbalance as a
+//     LABELED volume-side proxy (no order book exists on free stock data).
+//     Stock scans respect marketcal (skipped entirely when closed).
+//   - DAILY-ONLY UNIVERSE once per ET trading day: vol + volume on daily
+//     bars (no intraday data ⇒ no imbalance proxy fabricated).
+// Detections land in the anomalies table (hour-deduped per symbol+kind) and
+// the alert-runner fans them out to watchlists as anomaly_* alert kinds.
+// |z| threshold: SIGNALDECK_ANOM_Z (default 2.5).
+func anomalyWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&anomaly.Scanner{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNAL8 WAVE — STAGE 4: SIGNAL8-STYLE HOME (appended block).
+// tapeWorkers returns the wave's worker: tape-seeder (6h) — a tiny,
+// idempotent, self-healing seeder for the home ticker tape's equity members
+// (index ETFs SPY/QQQ/DIA/IWM + sector ETFs XLK/XLF/XLE/XLV). Every run it
+// re-asserts each ETF's registration in the BROAD DAILY-ONLY universe
+// (UpsertDailyUniverseSymbol never demotes an already-streamed symbol, so
+// hot-set SPY/QQQ keep streaming) and deep-backfills ~2y of daily bars ONLY
+// for members with zero daily bars — a single free multi-symbol request at
+// most. Once registered, the regular universe-poller refreshes them with the
+// rest of the daily universe, so the steady-state run is a no-op sweep.
+// BTC and VIX complete the strip in the API layer (/api/tape) from crypto
+// bars + the stored FRED VIXCLS series — no equity seeding needed for them.
+// Without Alpaca keys the worker still registers the symbols and reports
+// honestly that it cannot backfill.
+func tapeWorkers(cfg config.Config, st *store.Store, ac *alpaca.Client) []workers.Worker {
+	w := &universe.TapeSeeder{St: st}
+	if cfg.HasAlpaca() {
+		w.Alpaca = ac
+	}
+	return []workers.Worker{w}
 }

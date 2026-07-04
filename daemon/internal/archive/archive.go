@@ -31,6 +31,7 @@ import (
 	"strconv"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // DefaultDir is the archive root used when SIGNALDECK_ARCHIVE_DIR is unset. It
@@ -65,6 +66,7 @@ func New(dir string) *Archiver { return &Archiver{Root: dir} }
 // column types are documented for DuckDB/pandas readers.
 var barHeader = []string{"symbol_id", "symbol", "tf", "ts", "open", "high", "low", "close", "volume"}
 var snapHeader = []string{"symbol_id", "symbol", "ts", "bid", "ask", "mid", "wmid", "imb_signed", "spread", "apply_lat_ns"}
+var anomalyHeader = []string{"id", "symbol_id", "symbol", "ts", "kind", "z", "detail"}
 
 // ArchiveBars appends the given bars to cold storage, one file per symbol_id,
 // named <symbol>_<minTs>-<maxTs>.csv.gz under archive/bars_<tf>/. It returns
@@ -166,6 +168,68 @@ func (a *Archiver) ArchiveSnapshots(ctx context.Context, rows []md.Snap1s, symbo
 		}
 		if err := writeGzCSV(path, wf); err != nil {
 			return files, fmt.Errorf("archive snapshots %s: %w", name, err)
+		}
+		files++
+	}
+	return files, nil
+}
+
+// ArchiveAnomalies appends anomalies rows to cold storage, one file per
+// symbol_id under archive/anomalies/. Same fail-safe contract as ArchiveBars:
+// err != nil ⇒ caller must NOT prune.
+func (a *Archiver) ArchiveAnomalies(ctx context.Context, rows []store.AnomalyRow, symbolName map[int64]string) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	bySym := map[int64][]store.AnomalyRow{}
+	for _, r := range rows {
+		bySym[r.SymbolID] = append(bySym[r.SymbolID], r)
+	}
+	files := 0
+	for sid, ans := range bySym {
+		if err := ctx.Err(); err != nil {
+			return files, err
+		}
+		name := symName(symbolName, sid)
+		// Stored Symbol (from the read's JOIN) wins for the CSV column; the
+		// filename fallback keeps archiving from ever blocking on a lookup.
+		lo, hi := tsSpanAnomalies(ans)
+		path, err := a.open("anomalies", name, lo, hi)
+		if err != nil {
+			return files, err
+		}
+		wf := func(cw *csv.Writer) error {
+			if err := cw.Write(anomalyHeader); err != nil {
+				return err
+			}
+			sort.Slice(ans, func(i, j int) bool {
+				if ans[i].Ts != ans[j].Ts {
+					return ans[i].Ts < ans[j].Ts
+				}
+				return ans[i].ID < ans[j].ID
+			})
+			for _, r := range ans {
+				sym := r.Symbol
+				if sym == "" {
+					sym = name
+				}
+				rec := []string{
+					strconv.FormatInt(r.ID, 10),
+					strconv.FormatInt(r.SymbolID, 10),
+					sym,
+					strconv.FormatInt(r.Ts, 10),
+					r.Kind,
+					f(r.Z),
+					r.Detail,
+				}
+				if err := cw.Write(rec); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := writeGzCSV(path, wf); err != nil {
+			return files, fmt.Errorf("archive anomalies %s: %w", name, err)
 		}
 		files++
 	}
@@ -296,6 +360,19 @@ func tsSpanBars(b []md.Bar) (lo, hi int64) {
 func tsSpanSnaps(s []md.Snap1s) (lo, hi int64) {
 	lo, hi = s[0].Ts, s[0].Ts
 	for _, x := range s {
+		if x.Ts < lo {
+			lo = x.Ts
+		}
+		if x.Ts > hi {
+			hi = x.Ts
+		}
+	}
+	return
+}
+
+func tsSpanAnomalies(a []store.AnomalyRow) (lo, hi int64) {
+	lo, hi = a[0].Ts, a[0].Ts
+	for _, x := range a {
 		if x.Ts < lo {
 			lo = x.Ts
 		}

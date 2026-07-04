@@ -23,6 +23,9 @@ import MicroPanel from "@/components/symbol/MicroPanel";
 import InsightsPanel from "@/components/symbol/InsightsPanel";
 import SymbolAgentPanel from "@/components/symbol/SymbolAgentPanel";
 import CoveragePanel from "@/components/symbol/CoveragePanel";
+import FilingsIntelPanel from "@/components/symbol/FilingsIntelPanel";
+import CongressChip from "@/components/symbol/CongressChip";
+import UnusualActivityPanel from "@/components/UnusualActivityPanel";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 
@@ -299,6 +302,26 @@ export default function SymbolPage({
           {/* THIS SYMBOL'S AGENT — the model learned from THIS symbol's own
               resolved outcomes (personality + per-signal skill + honest tier). */}
           <SymbolAgentPanel symbol={symbol} market={market} />
+
+          {/* Signal8 wave Stage 3: this symbol's unusual-activity history —
+              imbalance / volatility / volume z-scores vs its OWN baseline
+              (descriptive, never predictions; stock imbalance = labeled
+              volume-side proxy). */}
+          <UnusualActivityPanel symbol={symbol} market={market} limit={8} />
+
+          {/* Signal8 wave: SEC filings intelligence — stocks only (crypto has
+              no SEC filings). Insider activity + 13F holders + dilution badge,
+              all with honest legal-lag labels. */}
+          {market === "stocks" && <FilingsIntelPanel symbol={symbol} />}
+
+          {/* Signal8 wave Stage 2: congressional-activity chip — renders only
+              when this ticker has disclosed trades in the last 90d (the legal
+              30-45d disclosure lag is stated on the chip itself). */}
+          {market === "stocks" && (
+            <div className="px-1">
+              <CongressChip symbol={symbol} />
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {market === "crypto" && detail.latestSnap && (

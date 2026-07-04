@@ -75,6 +75,10 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerSignalBT(mux)                                // Stage 5: OWN-signal backtester (replay the feature store through the ensemble blend; IC/quintiles/turnover/costed equity vs SPY, gated on independent-N)
 	d.registerTrackRecord(mux)                             // Stage 7: LIVE OOS track record over resolved calibrated predictions (winrate/Brier/reliability/IC w/ CIs, independent-N gated, links ledger + paper)
 	d.registerChartOverlays(mux)                           // Stage 7: per-symbol chart-overlay markers (score extremes, regime changes, breakouts) for the candlestick chart
+	d.registerSignal8(mux)                                 // Signal8 wave Stage 1: SEC filings feed + Form 4 insiders + 13F institutions + dilution flags (all reads, honest lag notes)
+	d.registerCongress(mux)                                // Signal8 wave Stage 2: congressional trades (STOCK Act disclosures via free mirrors; explicit 30-45d legal-lag note + honest mirror-health status)
+	d.registerAnomalies(mux)                               // Signal8 wave Stage 3: anomaly layer — trade imbalance + unusual vol/volume as DESCRIPTIVE z-scores vs each symbol's own baseline (stock imbalance = volume-side proxy, labeled)
+	d.registerSignal8Home(mux)                             // Signal8 wave Stage 4: home surfaces — ticker tape (index/sector ETFs + BTC + FRED VIX), movers w/ best-effort EDGAR mcap, honest FRED/EDGAR calendar (earnings = labeled ESTIMATE; IPO omitted — no free source)
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,

@@ -1,0 +1,44 @@
+[
+  {
+    "disclosure_year": 2026,
+    "disclosure_date": "06/15/2026",
+    "transaction_date": "2026-05-01",
+    "owner": "joint",
+    "ticker": "NVDA",
+    "asset_description": "NVIDIA Corporation",
+    "type": "purchase",
+    "amount": "$1,001 - $15,000",
+    "representative": "Hon. Alexis Example",
+    "district": "CA12",
+    "ptr_link": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20026001.pdf",
+    "cap_gains_over_200_usd": false
+  },
+  {
+    "disclosure_year": 2026,
+    "disclosure_date": "06/15/2026",
+    "transaction_date": "2026-05-03",
+    "owner": "self",
+    "ticker": "N/A",
+    "asset_description": "US Treasury Note 4.25% 2033",
+    "type": "sale_full",
+    "amount": "$15,001 - $50,000",
+    "representative": "Hon. Alexis Example",
+    "district": "CA12",
+    "ptr_link": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20026001.pdf",
+    "cap_gains_over_200_usd": false
+  },
+  {
+    "disclosure_year": 2026,
+    "disclosure_date": "06/28/2026",
+    "transaction_date": "--",
+    "owner": "dependent",
+    "ticker": "TSLA",
+    "asset_description": "Tesla Inc",
+    "type": "sale_partial",
+    "amount": "$1,001 - $15,000",
+    "representative": "Hon. Morgan Sample",
+    "district": "TX07",
+    "ptr_link": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/20026002.pdf",
+    "cap_gains_over_200_usd": true
+  }
+]

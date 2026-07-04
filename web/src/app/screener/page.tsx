@@ -19,6 +19,7 @@ import { ago, fmtPct, fmtPrice, fmtScore, scoreColor, verdict } from "@/lib/form
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import MoversPanel from "@/components/MoversPanel";
 
 type Direction = "all" | "buy" | "sell";
 type MarketFilter = "all" | Market;
@@ -411,6 +412,11 @@ export default function ScreenerPage() {
           </span>
         )}
       </div>
+
+      {/* Signal8 wave Stage 4: gainers/losers over the daily universe with
+          the best-effort mcap filter (unknown mcap = excluded + counted,
+          never guessed). */}
+      <MoversPanel limit={10} />
 
       {/* discovery panel (hidden when logged out) */}
       <DiscoverPanel />

@@ -58,6 +58,7 @@ func (d Deps) symbolAgent(w http.ResponseWriter, r *http.Request) {
 		Horizon:       string(h),
 		Tier:          symbolagent.TierStatic,
 		Threshold:     symbolagent.MinPersonal,
+		Skill:         []symbolAgentSkill{}, // "skill": [] even with no model row — never null
 		ActiveWeights: map[string]float64{},
 	}
 

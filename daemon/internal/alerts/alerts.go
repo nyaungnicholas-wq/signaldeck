@@ -23,6 +23,15 @@ const (
 	KindRegimeChange   = "regime_change"
 	KindPredictionHigh = "prediction_high"
 	KindPredictionLow  = "prediction_low"
+	// Signal8 wave Stage 3: anomaly kinds. These mirror the anomalies-table
+	// kinds 1:1 (internal/anomaly) — the sweep fans stored anomaly rows out
+	// to watchers, so the alert kind IS the anomaly kind. All three are
+	// DESCRIPTIVE (z vs the symbol's own baseline), never predictions, and
+	// the fanned-out detail carries the detector's window/baseline/proxy
+	// wording verbatim.
+	KindAnomalyImbalance = "anomaly_imbalance"
+	KindAnomalyVol       = "anomaly_vol"
+	KindAnomalyVolume    = "anomaly_volume"
 )
 
 // Default prediction thresholds (calibrated P(up)).
@@ -37,6 +46,9 @@ const (
 const (
 	metaBreakoutCursor = "alerts_last_breakout_id"
 	metaRegimeCursor   = "alerts_last_regime_id"
+	// Signal8 wave Stage 3: anomaly-sweep rowid cursor (same gap-free
+	// id-cursor pattern as breakouts/regime changes).
+	metaAnomalyCursor = "alerts_last_anomaly_id"
 )
 
 // predictionDedupWindow: at most one prediction alert per
@@ -219,6 +231,47 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 		}
 	}
 
+	// ── anomalies since last sweep (Signal8 wave Stage 3) ───────────────
+	// Fan stored anomaly rows (internal/anomaly's scanner writes them,
+	// already hour-deduped per symbol+kind) out to watchers. The alert kind
+	// is the anomaly kind and the detail carries the detector's honest
+	// window/baseline/proxy wording verbatim, prefixed with the symbol —
+	// e.g. "BTC/USD: unusual buy pressure … (z=+3.1 vs trailing 60m
+	// baseline …)". idx_alerts_dedup makes partial-sweep retries no-ops.
+	aCursor, firstA := r.cursor(ctx, metaAnomalyCursor)
+	sinceTs = 0
+	maxA := aCursor
+	if firstA {
+		sinceTs = now.Add(-24 * time.Hour).Unix()
+		if maxA, err = r.St.MaxAnomalyID(ctx); err != nil {
+			return "", err
+		}
+	}
+	aEvents, err := r.St.AnomaliesAfterID(ctx, aCursor, sinceTs, sweepBatch)
+	if err != nil {
+		return "", err
+	}
+	for _, ev := range aEvents {
+		if ev.ID > maxA {
+			maxA = ev.ID
+		}
+		for _, uid := range userIDs {
+			s, watched := watch[uid][ev.SymbolID]
+			if !watched {
+				continue
+			}
+			sid := ev.SymbolID
+			if err := r.St.InsertAlert(ctx, store.Alert{
+				UserID: uid, SymbolID: &sid, Kind: ev.Kind,
+				Detail: fmt.Sprintf("%s: %s", s.Symbol, ev.Detail),
+				Ts:     ev.Ts,
+			}); err != nil {
+				return "", err
+			}
+			created++
+		}
+	}
+
 	// ── predictions crossing thresholds (per-user dedup: 24h per side) ──
 	dedupSince := now.Add(-predictionDedupWindow).Unix()
 	freshCutoff := now.Add(-24 * time.Hour).Unix() // ignore stale predictions
@@ -262,6 +315,9 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if err := r.St.SetMeta(ctx, metaRegimeCursor, strconv.FormatInt(maxR, 10)); err != nil {
+		return "", err
+	}
+	if err := r.St.SetMeta(ctx, metaAnomalyCursor, strconv.FormatInt(maxA, 10)); err != nil {
 		return "", err
 	}
 

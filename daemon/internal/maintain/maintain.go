@@ -36,10 +36,13 @@ import (
 // TIERED RETENTION (every window env-tunable; see fields below): snapshots_1s
 // keep a short hot window (6h) → archive+prune; 1m bars keep ~60d → compact to
 // 1h (information preserved) + archive the raw → prune; 1h bars keep ~3y →
-// compact to 1d + archive → prune; DAILY bars are the permanent record and are
-// NEVER pruned (enforced in store.PruneBars, not just here). Archive-before-
-// prune is FAIL-SAFE: if the archive write errors, the matching prune is
-// SKIPPED so data is never lost silently (a dq event + log record the skip).
+// compact to 1d + archive → prune; anomalies keep ~90d hot → archive+prune
+// (they are descriptive detections, not market history — no compaction form
+// exists, so the full rows go to cold storage); DAILY bars are the permanent
+// record and are NEVER pruned (enforced in store.PruneBars, not just here).
+// Archive-before-prune is FAIL-SAFE: if the archive write errors, the matching
+// prune is SKIPPED so data is never lost silently (a dq event + log record the
+// skip).
 type Downsampler struct {
 	St  *store.Store
 	Arc *archive.Archiver // cold-archive sink (required for archive-before-prune)
@@ -48,6 +51,7 @@ type Downsampler struct {
 	Keep1m    time.Duration // 1m bars kept hot; default 60d (env SIGNALDECK_1M_RETENTION_D)
 	Keep1h    time.Duration // 1h bars kept hot; default 3y  (env SIGNALDECK_1H_RETENTION_D)
 	KeepSnaps time.Duration // snapshots_1s hot window; default 6h (env SIGNALDECK_SNAP_RETENTION_H)
+	KeepAnoms time.Duration // anomalies kept hot; default 90d (env SIGNALDECK_ANOM_RETENTION_D)
 }
 
 // archiveBatch bounds how many rows are read+archived+pruned per pass so a huge
@@ -142,14 +146,15 @@ func (d *Downsampler) Run(ctx context.Context) (string, error) {
 	prunedMin, minSkipped := d.archivePruneBars(ctx, md.TF1m, cutoff1m, names, now)
 	pruned1h, hourSkipped := d.archivePruneBars(ctx, md.TF1h, cutoff1h, names, now)
 	prunedSnaps, snapSkipped := d.archivePruneSnaps(ctx, now.Add(-keepSnaps).Unix(), names, now)
+	prunedAnoms, anomSkipped := d.archivePruneAnomalies(ctx, now.Add(-d.retentionAnoms()).Unix(), names, now)
 
 	if err := d.St.PruneWorkerRuns(ctx, 2000); err != nil {
 		return "", err
 	}
 
-	msg := fmt.Sprintf("rolled up %d symbols; archived+pruned %d 1m, %d 1h bars, %d snaps",
-		len(syms), prunedMin, pruned1h, prunedSnaps)
-	if minSkipped || hourSkipped || snapSkipped {
+	msg := fmt.Sprintf("rolled up %d symbols; archived+pruned %d 1m, %d 1h bars, %d snaps, %d anomalies",
+		len(syms), prunedMin, pruned1h, prunedSnaps, prunedAnoms)
+	if minSkipped || hourSkipped || snapSkipped || anomSkipped {
 		msg += " (SOME PRUNES SKIPPED — archive failed, data retained; see dq)"
 	}
 	return msg, nil
@@ -176,6 +181,13 @@ func (d *Downsampler) retentionSnaps() time.Duration {
 		return d.KeepSnaps
 	}
 	return time.Duration(envIntOr("SIGNALDECK_SNAP_RETENTION_H", 6)) * time.Hour
+}
+
+func (d *Downsampler) retentionAnoms() time.Duration {
+	if d.KeepAnoms > 0 {
+		return d.KeepAnoms
+	}
+	return time.Duration(envIntOr("SIGNALDECK_ANOM_RETENTION_D", 90)) * 24 * time.Hour
 }
 
 // archivePruneBars archives every bar of tf below cutoff to cold storage in
@@ -290,6 +302,56 @@ func (d *Downsampler) archivePruneSnaps(ctx context.Context, cutoff int64, names
 	}
 }
 
+// archivePruneAnomalies is archivePruneBars for the anomalies table (the
+// ~90d-hot descriptive-detection tier). Identical fail-safe contract: any
+// archive error skips the prune and records a dq event; nothing is ever
+// deleted without a durable cold copy.
+func (d *Downsampler) archivePruneAnomalies(ctx context.Context, cutoff int64, names map[int64]string, now time.Time) (pruned int64, skipped bool) {
+	if d.Arc == nil {
+		d.dqSkip(ctx, now, "anomalies", "no cold-archive sink configured")
+		return 0, true
+	}
+	for {
+		rows, err := d.St.AnomaliesBelow(ctx, cutoff, archiveBatch)
+		if err != nil {
+			d.dqSkip(ctx, now, "anomalies", "read for archive failed: "+err.Error())
+			return pruned, true
+		}
+		if len(rows) == 0 {
+			return pruned, skipped
+		}
+		// Same trailing-max-ts trim as archivePruneBars (see its comment).
+		full := len(rows) == archiveBatch
+		prune := rows
+		var upper int64 = cutoff
+		if full {
+			maxTs := rows[len(rows)-1].Ts
+			cut := len(rows)
+			for cut > 0 && rows[cut-1].Ts == maxTs {
+				cut--
+			}
+			if cut == 0 {
+				upper = maxTs + 1
+			} else {
+				prune = rows[:cut]
+				upper = maxTs
+			}
+		}
+		if _, err := d.Arc.ArchiveAnomalies(ctx, prune, names); err != nil {
+			d.dqSkip(ctx, now, "anomalies", "archive write failed: "+err.Error())
+			return pruned, true
+		}
+		n, err := d.St.PruneAnomalies(ctx, upper)
+		if err != nil {
+			return pruned, true
+		}
+		pruned += n
+		if !full {
+			return pruned, skipped
+		}
+	}
+}
+
 // dqSkip logs and records a data-quality event when a prune is skipped because
 // its archive step failed — the fail-safe is observable, never silent.
 func (d *Downsampler) dqSkip(ctx context.Context, now time.Time, table, reason string) {
@@ -308,6 +370,7 @@ func (d *Downsampler) dqSkip(ctx context.Context, now time.Time, table, reason s
 func RetentionSnapsHours() int { return envIntOr("SIGNALDECK_SNAP_RETENTION_H", 6) }
 func Retention1mDays() int     { return envIntOr("SIGNALDECK_1M_RETENTION_D", 60) }
 func Retention1hDays() int     { return envIntOr("SIGNALDECK_1H_RETENTION_D", 3*365) }
+func RetentionAnomDays() int   { return envIntOr("SIGNALDECK_ANOM_RETENTION_D", 90) }
 
 // envIntOr parses an integer env var, returning def on empty/invalid input.
 func envIntOr(k string, def int) int {
