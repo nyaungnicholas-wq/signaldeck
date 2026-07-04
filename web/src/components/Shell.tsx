@@ -1,35 +1,50 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, type Me } from "@/lib/api";
 
-const NAV: { href: string; label: string }[] = [
-  { href: "/", label: "WATCHLIST" },
-  { href: "/screener", label: "SCREENER" },
-  { href: "/trends", label: "TRENDS" },
-  { href: "/predict", label: "PREDICT" },
-  { href: "/regime", label: "REGIME" },
-  { href: "/news", label: "NEWS" },
-  { href: "/filings", label: "FILINGS" },
-  { href: "/insiders", label: "INSIDERS" },
-  { href: "/institutions", label: "INSTITUTIONS" },
-  { href: "/congress", label: "CONGRESS" },
-  { href: "/macro", label: "MACRO" },
-  { href: "/forecast", label: "FORECAST" },
-  { href: "/backtest", label: "BACKTEST" },
-  { href: "/risk", label: "RISK" },
-  { href: "/portfolio", label: "PORTFOLIO" },
-  { href: "/paper", label: "PAPER" },
-  { href: "/signal-backtest", label: "SIGNAL BT" },
-  { href: "/track-record", label: "TRACK RECORD" },
-  { href: "/ai", label: "AI" },
-  { href: "/insights", label: "INSIGHTS" },
-  { href: "/honesty", label: "HONESTY" },
-  { href: "/quality", label: "QUALITY" },
-  { href: "/agents", label: "AGENTS" },
-  { href: "/hud", label: "PUSH-20" },
+// Stage 2 nav consolidation: 24 flat entries → 6 hubs (user decision; HUD
+// stays separate). `href` is the hub's default sub-tab; `match` lists every
+// pathname prefix that keeps the hub highlighted — INCLUDING the old flat
+// URLs, so the active state is right even during the brief moment before a
+// next.config redirect lands.
+const NAV: { href: string; label: string; match: string[] }[] = [
+  { href: "/", label: "DASHBOARD", match: ["/"] },
+  {
+    href: "/markets/screener",
+    label: "MARKETS",
+    match: ["/markets", "/screener", "/trends", "/regime", "/macro"],
+  },
+  {
+    href: "/signals/predictions",
+    label: "SIGNALS",
+    match: ["/signals", "/predict", "/forecast", "/insights", "/alerts"],
+  },
+  {
+    href: "/intel/news",
+    label: "INTEL",
+    match: ["/intel", "/news", "/filings", "/insiders", "/institutions", "/congress"],
+  },
+  {
+    href: "/lab/backtest",
+    label: "LAB",
+    match: [
+      "/lab",
+      "/backtest",
+      "/signal-backtest",
+      "/risk",
+      "/portfolio",
+      "/paper",
+      "/track-record",
+      "/honesty",
+      "/quality",
+      "/agents",
+      "/ai",
+    ],
+  },
+  { href: "/hud", label: "HUD", match: ["/hud"] },
 ];
 
 const READING_KEY = "sd-reading-mode";
@@ -109,7 +124,7 @@ function AlertsBell() {
   if (count === null) return null;
   return (
     <Link
-      href="/alerts"
+      href="/signals/alerts"
       aria-label={`alerts — ${count} unread`}
       title={`${count} unread alert(s)`}
       className="chip flex min-h-[40px] cursor-pointer items-center gap-1.5 px-3 transition-colors duration-150 hover:text-[var(--text)]"
@@ -119,6 +134,57 @@ function AlertsBell() {
       <span className="tnum">{count}</span>
       <span className="hidden sm:inline">alerts</span>
     </Link>
+  );
+}
+
+/** Header auth chip: shows who is signed in (session cookie); click to log
+ *  out. Logged out / daemon unreachable → links to /login instead. */
+function AuthChip() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const [me, setMe] = useState<Me | null | undefined>(undefined); // undefined = unknown
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .me()
+      .then((m) => alive && setMe(m))
+      .catch(() => alive && setMe(null)); // 401 / offline
+    return () => {
+      alive = false;
+    };
+  }, [pathname]); // re-check after login/logout navigations
+
+  if (me === undefined) return null;
+  if (me === null) {
+    if (pathname === "/login") return null; // already there
+    return (
+      <Link
+        href="/login"
+        className="chip flex min-h-[40px] cursor-pointer items-center px-3 transition-colors duration-150 hover:text-[var(--text)]"
+      >
+        login
+      </Link>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        api
+          .logout()
+          .catch(() => {})
+          .finally(() => router.replace("/login"));
+      }}
+      title={`signed in as ${me.username} — click to log out`}
+      aria-label={`signed in as ${me.username} — log out`}
+      className="chip flex min-h-[40px] cursor-pointer items-center gap-1.5 px-3 transition-colors duration-150 hover:text-[var(--text)]"
+    >
+      <span aria-hidden="true" style={{ color: "var(--accent)" }}>
+        ◈
+      </span>
+      <span className="max-w-[10ch] truncate">{me.username}</span>
+    </button>
   );
 }
 
@@ -149,7 +215,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   const navLinks = NAV.map((n) => {
-    const active = n.href === "/" ? pathname === "/" : pathname.startsWith(n.href);
+    const active =
+      n.href === "/"
+        ? pathname === "/"
+        : n.match.some((m) => pathname === m || pathname.startsWith(m + "/"));
     return (
       <Link
         key={n.href}
@@ -191,6 +260,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           </nav>
           <div className="ml-auto flex items-center gap-2 text-[0.75rem]" style={{ color: "var(--dim)" }}>
             <AlertsBell />
+            <AuthChip />
             <ReadingModeToggle />
             <span className="flex items-center gap-2">
               <span

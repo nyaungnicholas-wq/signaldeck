@@ -12,12 +12,16 @@ import (
 // InsightsByKind returns the newest insights whose evidence blob carries
 // data.kind == kind (e.g. "daily_briefing"), newest first. Uses SQLite's
 // json_extract, so only insights written with a JSON `data` object match.
+// The json_valid guard is load-bearing: writers that don't set Data persist
+// the Go zero value '' (e.g. the Risk watcher), and a bare json_extract over
+// such a row makes the WHOLE query fail with "malformed JSON" — which 500'd
+// /api/dashboard (Stage 6 verify). Non-JSON rows are simply not matches.
 func (s *Store) InsightsByKind(ctx context.Context, kind string, limit int) ([]md.Insight, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT i.id, i.scope, i.symbol_id, i.ts, i.headline, i.body, i.data,
 		       COALESCE(sym.symbol, '')
 		FROM insights i LEFT JOIN symbols sym ON sym.id = i.symbol_id
-		WHERE json_extract(i.data, '$.kind') = ?
+		WHERE json_valid(i.data) AND json_extract(i.data, '$.kind') = ?
 		ORDER BY i.ts DESC, i.id DESC LIMIT ?`, kind, limit)
 	if err != nil {
 		return nil, err

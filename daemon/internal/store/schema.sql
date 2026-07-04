@@ -643,3 +643,11 @@ CREATE INDEX IF NOT EXISTS idx_anomalies_ts ON anomalies (ts DESC);
 CREATE INDEX IF NOT EXISTS idx_anomalies_sym_ts ON anomalies (symbol_id, ts DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_anomalies_dedup
   ON anomalies (symbol_id, kind, hour_bucket);
+
+-- ── dashboard performance (visual-compact wave) ─────────────────────────
+-- Covering index for timeframe-led scans: the bars PK leads with symbol_id,
+-- so tf='1d' window queries (LastTwoDailyCloses, LastNDailyCloses sparks,
+-- movers/heatmap/breadth) otherwise walk EVERY bar row (~29s cold dashboard
+-- on a ~470k-row table). (tf, symbol_id, ts, close) makes those scans
+-- index-only over just the daily rows.
+CREATE INDEX IF NOT EXISTS idx_bars_tf_sym_ts ON bars (tf, symbol_id, ts, close);

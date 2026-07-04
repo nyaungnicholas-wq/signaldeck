@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -33,9 +34,10 @@ import (
 const (
 	tickersURL   = "https://www.sec.gov/files/company_tickers.json"
 	factsBaseURL = "https://data.sec.gov/api/xbrl/companyfacts"
-	// defaultUA is a descriptive User-Agent per SEC's fair-access policy. SEC
-	// asks for a contact; this identifies the app and is overridable.
-	defaultUA = "SignalDeck/1.0 (free fundamentals ingest; contact: local@signaldeck)"
+	// defaultContact is the last-resort contact when neither SIGNALDECK_EDGAR_UA
+	// nor SIGNALDECK_CONTACT_EMAIL is configured. SEC's WAF 403s UAs it cannot
+	// attribute — set a REAL deliverable email in daemon/.env for production.
+	defaultContact = "signaldeck@localhost"
 	// defaultMinInterval spaces requests to stay comfortably under SEC's 10/s
 	// ceiling (150ms ⇒ ~6.6/s), leaving headroom for other clients on the host.
 	defaultMinInterval = 150 * time.Millisecond
@@ -61,7 +63,7 @@ type Client struct {
 // New returns a Client wired to SEC's production hosts.
 func New() *Client {
 	return &Client{
-		UA:          defaultUA,
+		UA:          ResolveUA(),
 		TickersURL:  tickersURL,
 		FactsBase:   factsBaseURL,
 		MinInterval: defaultMinInterval,
@@ -69,11 +71,33 @@ func New() *Client {
 	}
 }
 
+// ResolveUA builds the SEC-compliant declarative User-Agent. SEC's fair-access
+// policy (and its Akamai WAF, which 403s anonymous-looking clients) requires a
+// UA that identifies the app AND a deliverable contact, e.g.
+// "Sample Company Name AdminContact@sample.com". Precedence:
+//  1. SIGNALDECK_EDGAR_UA — full override, used verbatim.
+//  2. SIGNALDECK_CONTACT_EMAIL — "SignalDeck/0.1 (<email>)".
+//  3. Fallback "SignalDeck/0.1 (signaldeck@localhost)" — works only until the
+//     WAF decides otherwise; configure a real email in daemon/.env.
+//
+// config.Load() exports both vars from daemon/.env into the process env (the
+// daemon runs under launchd, which loads no .env), so this sees them either way.
+func ResolveUA() string {
+	if ua := strings.TrimSpace(os.Getenv("SIGNALDECK_EDGAR_UA")); ua != "" {
+		return ua
+	}
+	contact := strings.TrimSpace(os.Getenv("SIGNALDECK_CONTACT_EMAIL"))
+	if contact == "" {
+		contact = defaultContact
+	}
+	return "SignalDeck/0.1 (" + contact + ")"
+}
+
 func (c *Client) ua() string {
 	if c.UA != "" {
 		return c.UA
 	}
-	return defaultUA
+	return ResolveUA()
 }
 
 func (c *Client) tickersEndpoint() string {
@@ -144,6 +168,9 @@ func (c *Client) get(ctx context.Context, u string) ([]byte, error) {
 			return nil, err
 		}
 		req.Header.Set("User-Agent", c.ua())
+		// A permissive Accept keeps SEC's WAF happy on JSON endpoints while
+		// remaining correct for the XML/HTML archive documents we also fetch.
+		req.Header.Set("Accept", "application/json, text/html, application/xml;q=0.9, */*;q=0.8")
 		// Deliberately do NOT set Accept-Encoding: Go's transport adds gzip and
 		// transparently decompresses only when it owns that header. Setting it
 		// ourselves would hand back a compressed body we'd have to unzip.

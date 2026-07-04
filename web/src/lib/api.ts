@@ -1454,3 +1454,185 @@ export interface CalendarResponse {
 export function calendar() {
   return get<CalendarResponse>("/api/calendar");
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// VISUAL KIT — STAGE 3: ONE-CALL DASHBOARD (appended block; keep at END).
+// GET /api/dashboard returns every home-screen section in one payload so the
+// page stops issuing ~10 fetches: tape + heatmap + gauges + movers + merged
+// feed (all cached server-side up to 60s — the payload says so) and, ONLY
+// when a session cookie is present, the caller's watchlist sparklines
+// (batched server-side, one SQL). HONESTY (render every caption/note):
+// every gauge carries its gate caption verbatim (breadth n, VIX FRED lag,
+// anomalies are descriptive, confidence is GATED below 30 resolved outcomes
+// — show "not significant", never a verdict); heatmap cells with mcap=null
+// are UNIFORM size and labeled "sized: mcap unavailable"; all prices are
+// stored daily closes on worker cadence, never live quotes.
+
+/** One heatmap tile. mcap null = EDGAR hasn't covered it (uniform size). */
+export interface DashHeatCell {
+  symbol: string;
+  name: string;
+  changePct: number;
+  mcap: number | null;
+  ts: number;
+}
+
+/** One kind-tagged row of the merged home feed. */
+export interface DashFeedItem {
+  kind: "news" | "filing" | "anomaly" | "briefing";
+  ts: number;
+  symbol?: string;
+  market?: Market;
+  title: string;
+  detail?: string;
+  url?: string;
+  sentiment?: string; // news only
+  sub?: string; // anomaly kind / filing form
+  z?: number; // anomaly z-score
+}
+
+/** One watchlist row with sparkline closes (oldest→newest, ≤60 points). */
+export interface DashWatchSpark {
+  symbol: string;
+  market: Market;
+  name: string;
+  closes: number[] | null; // null/empty = no daily bars yet (honest absence)
+  lastClose: number;
+  dayChangePct: number;
+}
+
+/** Breadth gauge: % advancers over symbols with fresh daily bars. */
+export interface DashBreadthGauge {
+  pct: number;
+  advancers: number;
+  decliners: number;
+  n: number;
+  hasData: boolean;
+  caption: string; // "breadth over N symbols — …" — ALWAYS render it
+}
+
+/** VIX gauge: FRED daily close + conventional regime band. */
+export interface DashVixGauge {
+  level?: number;
+  regime?: "calm" | "normal" | "elevated" | "stressed";
+  regimeOrdinal?: number; // 0..3
+  ts?: number;
+  dayChangePct?: number;
+  hasData: boolean;
+  caption: string; // FRED ~1-day-lag note — ALWAYS render it
+}
+
+/** Anomaly gauge: count in the last 24h (hour-deduped, DESCRIPTIVE). */
+export interface DashAnomalyGauge {
+  count: number;
+  windowH: number;
+  caption: string;
+}
+
+/** Confidence gauge — GATED: below minResolvedN the caption says n=X/30. */
+export interface DashConfidenceGauge {
+  avg: number; // mean |cal_prob − 0.5| × 2 over latest 1d predictions
+  n: number; // symbols with a prediction
+  resolvedN: number;
+  minResolvedN: number;
+  gated: boolean;
+  hasData: boolean;
+  caption: string; // the gate text — ALWAYS render it
+}
+
+/** GET /api/dashboard payload. watchlist null ⇒ no session (UI: "log in"). */
+export interface DashboardResponse {
+  asOf: number;
+  cacheTtlS: number;
+  note: string;
+  tape: { items: TapeItem[] | null; note: string };
+  heatmap: {
+    items: DashHeatCell[] | null;
+    n: number;
+    mcapCovered: number;
+    note: string;
+    mcapNote: string;
+    sizeNote: string;
+  };
+  movers: {
+    gainers: DashHeatCell[] | null;
+    losers: DashHeatCell[] | null;
+    note: string;
+    mcapNote: string;
+  };
+  gauges: {
+    breadth: DashBreadthGauge;
+    vix: DashVixGauge;
+    anomalies: DashAnomalyGauge;
+    confidence: DashConfidenceGauge;
+  };
+  feed: { items: DashFeedItem[] | null; count: number; note: string };
+  watchlist: {
+    sparks: DashWatchSpark[] | null;
+    unseenAlerts: number;
+    sparkPoints: number;
+    note: string;
+  } | null;
+}
+
+/** Fetch the whole dashboard in ONE call (server caches shared sections 60s). */
+export function dashboard() {
+  return get<DashboardResponse>("/api/dashboard");
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 4 — DASHBOARD REBUILD (appended block; keep at END).
+// The daemon's /api/dashboard watchlist sparks now carry the latest 1d
+// ensemble score for the sidebar score chip. Declared as an interface MERGE
+// with DashWatchSpark above (same-module declaration merging) so this file
+// stays append-only. null/absent = not scored yet — the UI shows "—".
+export interface DashWatchSpark {
+  /** Latest 1d ensemble score in [-1,+1]; null/absent = pending (honest). */
+  score1d?: number | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 5 — VISUAL HUBS (appended block; keep at END).
+// (1) screenerRows(): the MARKETS screener reads the PUBLIC whole-universe
+//     GET /api/screener (same WatchRow shape, incl. `spark` daily closes)
+//     instead of the session-scoped /api/watchlist — the hub renders logged
+//     out. (2) latestPredictions(): the SIGNALS predictions table in one
+//     batched call. HONESTY: the payload's gate fields (gated/resolvedN/
+//     minResolvedN/caption) and the backtested-not-live trackLabel MUST be
+//     rendered next to any confidence badge — a badge without its gate
+//     caption is a lie of omission. A 404 from an older daemon binary means
+//     the endpoint isn't deployed yet — say that, never fake rows.
+
+/** Whole-universe screener rows (public read; spark = last ~30 daily closes). */
+export function screenerRows() {
+  return get<WatchRow[]>("/api/screener");
+}
+
+/** One symbol's newest calibrated prediction (SIGNALS hub table row). */
+export interface LatestPredictionRow {
+  symbol: string;
+  market: Market;
+  name: string;
+  ts: number;
+  rawProb: number;
+  calProb: number;
+  nUsed: number;
+}
+
+/** GET /api/predictions/latest payload — rows + the honesty gate, together. */
+export interface LatestPredictionsResponse {
+  horizon: "1d" | "1w";
+  rows: LatestPredictionRow[] | null;
+  n: number;
+  resolvedN: number;
+  minResolvedN: number;
+  gated: boolean;
+  caption: string; // gate text ("n=X/30 resolved — not significant yet …") — ALWAYS render
+  trackLabel: string; // "backtested / in-sample — not a live track record" — ALWAYS render
+  note: string;
+}
+
+/** Latest calibrated prediction per active symbol, strongest conviction first. */
+export function latestPredictions(horizon: "1d" | "1w") {
+  return get<LatestPredictionsResponse>(`/api/predictions/latest?horizon=${horizon}`);
+}

@@ -20,7 +20,7 @@ import { tape, type TapeItem, type TapeResponse } from "@/lib/api";
 import { fmtPct, fmtPrice } from "@/lib/format";
 
 function itemHref(it: TapeItem): string {
-  if (it.kind === "vix") return "/macro";
+  if (it.kind === "vix") return "/markets/macro";
   const market = it.market ?? "stocks";
   return `/s/${market}/${encodeURIComponent(it.symbol)}`;
 }
@@ -61,10 +61,22 @@ function TapeEntry({ it }: { it: TapeItem }) {
   );
 }
 
-export default function TickerTape() {
+export default function TickerTape({
+  // Stage 4 (dashboard rebuild): when the parent already holds the tape from
+  // the ONE /api/dashboard roundup it passes items/note here and this strip
+  // does NOT fetch on its own (no duplicate /api/tape call). Omit the prop
+  // (undefined) for the original self-fetching behavior.
+  items: itemsProp,
+  note: noteProp,
+}: {
+  items?: TapeItem[] | null;
+  note?: string;
+} = {}) {
   const [resp, setResp] = useState<TapeResponse | null>(null);
+  const driven = itemsProp !== undefined;
 
   useEffect(() => {
+    if (driven) return; // parent-driven: no self-fetch, no poll
     let alive = true;
     const load = () =>
       tape()
@@ -76,15 +88,16 @@ export default function TickerTape() {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [driven]);
 
-  const items = resp?.items ?? [];
+  const items = (driven ? itemsProp : resp?.items) ?? [];
+  const note = driven ? noteProp : resp?.note;
   if (items.length === 0) return null; // no data / offline → no strip (honest quiet)
 
   const track = items.map((it) => <TapeEntry key={`${it.kind}:${it.symbol}`} it={it} />);
 
   return (
-    <section aria-label="market ticker tape" className="panel" title={resp?.note}>
+    <section aria-label="market ticker tape" className="panel" title={note}>
       <style>{`
         .tape-wrap { overflow: hidden; }
         .tape-track {

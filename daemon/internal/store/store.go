@@ -606,12 +606,21 @@ func (s *Store) Expectancy(ctx context.Context, symbolID int64, h md.Horizon) ([
 
 // ── insights ────────────────────────────────────────────────────────────
 
-// InsertInsight stores one readable insight.
+// InsertInsight stores one readable insight. An unset Data ("" — the Go zero
+// value, e.g. the Risk watcher persists no evidence blob) is stored as '{}'
+// (the schema's own DEFAULT; the column is NOT NULL): SQLite's json_extract
+// raises "malformed JSON" on '' and one such row made every json-filtered
+// insights query (InsightsByKind → /api/dashboard feed) fail outright
+// (found in Stage 6 verify).
 func (s *Store) InsertInsight(ctx context.Context, in md.Insight) error {
+	data := in.Data
+	if data == "" {
+		data = "{}"
+	}
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO insights (scope, symbol_id, ts, headline, body, data)
 		VALUES (?,?,?,?,?,?)`,
-		in.Scope, in.SymbolID, in.Ts, in.Headline, in.Body, in.Data)
+		in.Scope, in.SymbolID, in.Ts, in.Headline, in.Body, data)
 	return err
 }
 
@@ -692,11 +701,22 @@ func (s *Store) RecentWorkerRuns(ctx context.Context, limit int) ([]md.WorkerRun
 	return out, rows.Err()
 }
 
-// PruneWorkerRuns keeps the run log bounded.
+// PruneWorkerRuns keeps the run log bounded. Two retention rules combine:
+// the newest `keep` rows globally, PLUS the newest 20 rows PER WORKER. The
+// per-worker floor keeps rare-cadence agents (13f-poller: 24h, backup: 24h,
+// congress-poller: 12h, …) visible on the Agents page — without it, one
+// flapping high-frequency worker (e.g. crypto-live erroring every ~5s while
+// tickstream is down) floods the global window within hours and erases every
+// trace that the slow workers ever ran.
 func (s *Store) PruneWorkerRuns(ctx context.Context, keep int) error {
 	_, err := s.w.ExecContext(ctx, `
 		DELETE FROM worker_runs WHERE id NOT IN
-		  (SELECT id FROM worker_runs ORDER BY started_at DESC, id DESC LIMIT ?)`, keep)
+		  (SELECT id FROM worker_runs ORDER BY started_at DESC, id DESC LIMIT ?)
+		AND id NOT IN
+		  (SELECT id FROM (
+		     SELECT id, ROW_NUMBER() OVER
+		       (PARTITION BY worker ORDER BY started_at DESC, id DESC) AS rn
+		     FROM worker_runs) WHERE rn <= 20)`, keep)
 	return err
 }
 

@@ -42,10 +42,13 @@ const isTrAtrRatio = (row: AnomalyRow) => row.detail.includes("TR/ATR ratio");
 export default function UnusualActivityPanel({
   symbol,
   market,
+  kind,
   limit = 12,
 }: {
   symbol?: string;
   market?: Market;
+  /** Stage 5: optional server-side kind filter (imbalance/vol/volume). */
+  kind?: AnomalyRow["kind"];
   limit?: number;
 }) {
   const [resp, setResp] = useState<AnomaliesResponse | null>(null);
@@ -54,7 +57,7 @@ export default function UnusualActivityPanel({
   useEffect(() => {
     let alive = true;
     const load = () =>
-      anomalies(symbol, market, undefined, limit)
+      anomalies(symbol, market, kind, limit)
         .then((r) => {
           if (!alive) return;
           setResp(r);
@@ -70,7 +73,7 @@ export default function UnusualActivityPanel({
       alive = false;
       clearInterval(t);
     };
-  }, [symbol, market, limit]);
+  }, [symbol, market, kind, limit]);
 
   const rows = resp?.anomalies ?? [];
 
@@ -101,7 +104,7 @@ export default function UnusualActivityPanel({
         )}
         {resp !== null && rows.length === 0 && (
           <EmptyState
-            message="No unusual activity detected"
+            message={kind ? `No ${KIND_LABEL[kind].toLowerCase()} anomalies detected` : "No unusual activity detected"}
             detail="Nothing is currently outside its own statistical baseline (|z| threshold applies). Quiet is the honest default state."
           />
         )}

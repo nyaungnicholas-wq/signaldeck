@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/fred"
-	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/universe"
 )
 
@@ -64,19 +63,8 @@ type tapeItem struct {
 	Note         string  `json:"note,omitempty"`
 }
 
-// lastTwoCloses returns (last, prev, ts, ok) from a symbol's daily bars.
-func (d Deps) lastTwoCloses(r *http.Request, symbolID int64) (last, prev float64, ts int64, ok bool) {
-	bars, err := d.St.LastBars(r.Context(), symbolID, md.TF1d, 2)
-	if err != nil || len(bars) == 0 {
-		return 0, 0, 0, false
-	}
-	n := len(bars)
-	last, ts = bars[n-1].Close, bars[n-1].Ts
-	if n > 1 {
-		prev = bars[n-2].Close
-	}
-	return last, prev, ts, true
-}
+// (lastTwoCloses moved to dashboard.go as lastTwoClosesCtx — the ctx-based
+// form both the tape and the dashboard builders share.)
 
 func pctChange(last, prev float64) float64 {
 	if prev == 0 {
@@ -85,43 +73,12 @@ func pctChange(last, prev float64) float64 {
 	return (last/prev - 1) * 100
 }
 
-// tape serves the ticker-tape strip in one call.
+// tape serves the ticker-tape strip in one call. Assembly lives in buildTape
+// (dashboard.go) so GET /api/tape and the /api/dashboard tape section can
+// never drift apart.
 // GET /api/tape
 func (d Deps) tape(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	items := make([]tapeItem, 0, len(universe.TapeETFs)+2)
-
-	// Index + sector ETFs from stored daily bars.
-	for _, e := range universe.TapeETFs {
-		it := tapeItem{Symbol: e.Symbol, Label: e.Name, Kind: e.Kind, Market: string(md.Stocks)}
-		if s, err := d.St.GetSymbol(ctx, e.Symbol, md.Stocks); err == nil {
-			if last, prev, ts, ok := d.lastTwoCloses(r, s.ID); ok {
-				it.Price, it.DayChangePct, it.Ts, it.HasData = last, pctChange(last, prev), ts, true
-			}
-		}
-		items = append(items, it)
-	}
-
-	// BTC (the consolidated crypto symbol) from its daily bars.
-	btc := tapeItem{Symbol: d.Cfg.CryptoSymbol, Label: "Bitcoin", Kind: "crypto", Market: string(md.Crypto)}
-	if s, err := d.St.GetSymbol(ctx, d.Cfg.CryptoSymbol, md.Crypto); err == nil {
-		if last, prev, ts, ok := d.lastTwoCloses(r, s.ID); ok {
-			btc.Price, btc.DayChangePct, btc.Ts, btc.HasData = last, pctChange(last, prev), ts, true
-		}
-	}
-	items = append(items, btc)
-
-	// VIX from the stored FRED VIXCLS series (daily close, ~1 day lag).
-	vix := tapeItem{Symbol: "VIX", Label: "CBOE Volatility Index", Kind: "vix", Note: vixNote}
-	if pts, err := d.St.MacroSeries(ctx, "VIXCLS", 2); err == nil && len(pts) > 0 {
-		n := len(pts)
-		vix.Price, vix.Ts, vix.HasData = pts[n-1].Value, pts[n-1].Ts, true
-		if n > 1 {
-			vix.DayChangePct = pctChange(pts[n-1].Value, pts[n-2].Value)
-		}
-	}
-	items = append(items, vix)
-
+	items := d.buildTape(r.Context())
 	writeJSON(w, map[string]any{
 		"items": items,
 		"count": len(items),

@@ -31,6 +31,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
 )
 
 const (
@@ -39,9 +41,6 @@ const (
 	// revived mirror starts working again with zero code change).
 	DefaultSenateURL = "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json"
 	DefaultHouseURL  = "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
-
-	// defaultUA identifies the app politely (same policy as the edgar client).
-	defaultUA = "SignalDeck/1.0 (free congressional-disclosure ingest; contact: local@signaldeck)"
 
 	// defaultMinInterval spaces the (two) requests per run — plain politeness
 	// toward a community mirror, mirroring the edgar limiter pattern.
@@ -77,9 +76,11 @@ type Client struct {
 // New returns a Client wired to the canonical mirror URLs.
 func New() *Client {
 	return &Client{
-		SenateURL:   DefaultSenateURL,
-		HouseURL:    DefaultHouseURL,
-		UA:          defaultUA,
+		SenateURL: DefaultSenateURL,
+		HouseURL:  DefaultHouseURL,
+		// Same declarative identity as the edgar/fred clients (env-driven
+		// contact email) — WAFs increasingly drop anonymous-looking UAs.
+		UA:          edgar.ResolveUA(),
 		MinInterval: defaultMinInterval,
 		HTTP:        &http.Client{Timeout: 120 * time.Second},
 	}
@@ -89,7 +90,7 @@ func (c *Client) ua() string {
 	if c.UA != "" {
 		return c.UA
 	}
-	return defaultUA
+	return edgar.ResolveUA()
 }
 
 func (c *Client) senateURL() string {

@@ -34,7 +34,7 @@ export default function CongressChip({ symbol }: { symbol: string }) {
 
   return (
     <Link
-      href="/congress"
+      href="/intel/congress"
       className="chip inline-flex min-h-[36px] items-center gap-2 px-3 hover:underline"
       style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
       title="Congressional stock disclosures lag 30-45 days by law — never real-time."

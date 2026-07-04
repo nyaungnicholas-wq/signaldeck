@@ -100,13 +100,30 @@ func (r *Runner) runOnce(ctx context.Context, w Worker) {
 		}
 	}
 	if runID != 0 {
-		// Persist with a fresh context: the run context may already be dead.
-		fctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := r.st.FinishWorkerRun(fctx, runID, status, clip(detail, 500)); err != nil {
-			slog.Error("worker: finish record", "worker", w.Name(), "err", err)
+		r.finishRecord(w.Name(), runID, status, clip(detail, 500))
+	}
+}
+
+// finishRecord persists the run outcome with its OWN context — never the run
+// context, which may already be expired after a slow/timed-out run (a worker
+// that blew its deadline must still record that failure). The single SQLite
+// write conn can queue for a while when many workers finish together (the
+// startup herd), so the deadline is generous and one retry absorbs a
+// transient "context deadline exceeded"/busy window.
+func (r *Runner) finishRecord(worker string, runID int64, status, detail string) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(2 * time.Second)
+		}
+		fctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		lastErr = r.st.FinishWorkerRun(fctx, runID, status, detail)
+		cancel()
+		if lastErr == nil {
+			return
 		}
 	}
+	slog.Error("worker: finish record", "worker", worker, "err", lastErr)
 }
 
 func (r *Runner) safeRun(ctx context.Context, w Worker) (detail string, err error) {

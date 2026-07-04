@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -188,7 +189,12 @@ func (c *Client) get(ctx context.Context, u string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "SignalDeck/1.0 (free macro ingest; contact: local)")
+	// Same declarative identity the EDGAR client sends: FRED sits behind the
+	// same style of WAF, which drops connections (h2 INTERNAL_ERROR) from
+	// anonymous-looking UAs — verified live 2026-07-04: the old
+	// "contact: local" UA was killed on both HTTP/1.1 and h2, while the
+	// contact-email UA gets 200 on both.
+	req.Header.Set("User-Agent", edgar.ResolveUA())
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, err

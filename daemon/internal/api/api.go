@@ -79,6 +79,8 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerCongress(mux)                                // Signal8 wave Stage 2: congressional trades (STOCK Act disclosures via free mirrors; explicit 30-45d legal-lag note + honest mirror-health status)
 	d.registerAnomalies(mux)                               // Signal8 wave Stage 3: anomaly layer — trade imbalance + unusual vol/volume as DESCRIPTIVE z-scores vs each symbol's own baseline (stock imbalance = volume-side proxy, labeled)
 	d.registerSignal8Home(mux)                             // Signal8 wave Stage 4: home surfaces — ticker tape (index/sector ETFs + BTC + FRED VIX), movers w/ best-effort EDGAR mcap, honest FRED/EDGAR calendar (earnings = labeled ESTIMATE; IPO omitted — no free source)
+	d.registerDashboard(mux)                               // Visual-kit Stage 3: ONE-call GET /api/dashboard (tape + heatmap + gauges w/ honesty captions + movers + merged feed; 60s cache; per-user watchlist sparks only with a session)
+	d.registerStage5(mux)                                  // Visual-hub Stage 5: GET /api/predictions/latest — SIGNALS hub predictions table in one batched read (latest calibrated prediction per active symbol; independent-N gate + backtested-not-live label carried in the payload)
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,
