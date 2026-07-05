@@ -44,7 +44,9 @@ const NAV: { href: string; label: string; match: string[] }[] = [
       "/ai",
     ],
   },
-  { href: "/hud", label: "HUD", match: ["/hud"] },
+  // HUD (the user's personal PUSH-20 live-trading sync) is deliberately NOT in
+  // the nav — it stays reachable directly at /hud but is personal, not part of
+  // the product surface.
 ];
 
 const READING_KEY = "sd-reading-mode";
