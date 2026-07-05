@@ -22,6 +22,9 @@ const TABS = [
   { href: "/intel/insiders", label: "INSIDERS" },
   { href: "/intel/institutions", label: "INSTITUTIONS" },
   { href: "/intel/congress", label: "CONGRESS" },
+  // Signal8 wave Stage 5: the full SEC-registered company directory (free
+  // EDGAR map joined to our tracked bars/fundamentals; honest "—" elsewhere).
+  { href: "/intel/companies", label: "COMPANIES" },
 ];
 
 export default function IntelLayout({ children }: { children: React.ReactNode }) {

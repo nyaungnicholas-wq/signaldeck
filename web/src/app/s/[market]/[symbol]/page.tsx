@@ -24,6 +24,7 @@ import InsightsPanel from "@/components/symbol/InsightsPanel";
 import SymbolAgentPanel from "@/components/symbol/SymbolAgentPanel";
 import CoveragePanel from "@/components/symbol/CoveragePanel";
 import FilingsIntelPanel from "@/components/symbol/FilingsIntelPanel";
+import FinancialsPanel from "@/components/symbol/FinancialsPanel";
 import CongressChip from "@/components/symbol/CongressChip";
 import UnusualActivityPanel from "@/components/UnusualActivityPanel";
 import Skeleton from "@/components/Skeleton";
@@ -308,6 +309,12 @@ export default function SymbolPage({
               (descriptive, never predictions; stock imbalance = labeled
               volume-side proxy). */}
           <UnusualActivityPanel symbol={symbol} market={market} limit={8} />
+
+          {/* Signal8 wave Stage 5: FINANCIALS — headline EDGAR company-facts
+              (Revenues/EPS/shares/float) + small history sparklines; honest
+              "EDGAR sweep pending" until the daily sweep covers this symbol.
+              Stocks only (crypto has no SEC filings). */}
+          {market === "stocks" && <FinancialsPanel symbol={symbol} />}
 
           {/* Signal8 wave: SEC filings intelligence — stocks only (crypto has
               no SEC filings). Insider activity + 13F holders + dilution badge,

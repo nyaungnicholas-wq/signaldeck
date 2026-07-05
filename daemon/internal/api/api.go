@@ -81,6 +81,7 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerSignal8Home(mux)                             // Signal8 wave Stage 4: home surfaces — ticker tape (index/sector ETFs + BTC + FRED VIX), movers w/ best-effort EDGAR mcap, honest FRED/EDGAR calendar (earnings = labeled ESTIMATE; IPO omitted — no free source)
 	d.registerDashboard(mux)                               // Visual-kit Stage 3: ONE-call GET /api/dashboard (tape + heatmap + gauges w/ honesty captions + movers + merged feed; 60s cache; per-user watchlist sparks only with a session)
 	d.registerStage5(mux)                                  // Visual-hub Stage 5: GET /api/predictions/latest — SIGNALS hub predictions table in one batched read (latest calibrated prediction per active symbol; independent-N gate + backtested-not-live label carried in the payload)
+	d.registerCompanies(mux)                               // Signal8 wave Stage 5: COMPANIES DIRECTORY (free EDGAR company map joined to our tracked bars/fundamentals; untracked rows honest "—") + GET /api/earnings-est (filing-cadence estimate, labeled — never a confirmed date)
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,

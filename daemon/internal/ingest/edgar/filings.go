@@ -78,9 +78,14 @@ type SubFiling struct {
 }
 
 // submissionsResp is the (partial) shape of CIK##########.json we consume.
+// sic/sicDescription feed the companies-directory SIC enrichment: the
+// filings-poller ALREADY fetches this document per swept symbol, so the
+// industry classification rides along at zero added request volume.
 type submissionsResp struct {
 	CIK     json.RawMessage `json:"cik"` // string or number depending on file
 	Name    string          `json:"name"`
+	SIC     string          `json:"sic"`
+	SICDesc string          `json:"sicDescription"`
 	Filings struct {
 		Recent struct {
 			AccessionNumber    []string `json:"accessionNumber"`
@@ -95,18 +100,40 @@ type submissionsResp struct {
 	} `json:"filings"`
 }
 
+// CompanyProfile is the company-level header of a submissions response —
+// the registrant name and its SIC industry classification (the directory's
+// "sector" column). Fields may be "" when EDGAR has none (honest absence).
+type CompanyProfile struct {
+	Name    string
+	SIC     string
+	SICDesc string
+}
+
 // Submissions fetches a company's recent filings (newest first, as EDGAR
 // returns them). The columnar JSON is zipped into row structs; rows with a
 // blank accession or form are skipped.
 func (c *FilingsClient) Submissions(ctx context.Context, cik int64) ([]SubFiling, error) {
+	subs, _, err := c.SubmissionsWithProfile(ctx, cik)
+	return subs, err
+}
+
+// SubmissionsWithProfile is Submissions plus the company profile header
+// (name + SIC), parsed from the SAME response — the filings-poller uses this
+// so SIC enrichment costs zero extra requests.
+func (c *FilingsClient) SubmissionsWithProfile(ctx context.Context, cik int64) ([]SubFiling, CompanyProfile, error) {
 	u := fmt.Sprintf("%s/%s.json", c.submissionsBase(), CIKPadded(cik))
 	body, err := c.get(ctx, u)
 	if err != nil {
-		return nil, err
+		return nil, CompanyProfile{}, err
 	}
 	var resp submissionsResp
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("edgar: parse submissions CIK %d: %w", cik, err)
+		return nil, CompanyProfile{}, fmt.Errorf("edgar: parse submissions CIK %d: %w", cik, err)
+	}
+	prof := CompanyProfile{
+		Name:    strings.TrimSpace(resp.Name),
+		SIC:     strings.TrimSpace(resp.SIC),
+		SICDesc: strings.TrimSpace(resp.SICDesc),
 	}
 	rec := resp.Filings.Recent
 	at := func(s []string, i int) string {
@@ -137,7 +164,7 @@ func (c *FilingsClient) Submissions(ctx context.Context, cik int64) ([]SubFiling
 		}
 		out = append(out, f)
 	}
-	return out, nil
+	return out, prof, nil
 }
 
 // parseAcceptance parses EDGAR's acceptanceDateTime (RFC3339-ish, Z-suffixed).

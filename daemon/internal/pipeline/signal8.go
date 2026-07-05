@@ -109,7 +109,7 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 		if !ok {
 			continue // not an SEC filer we can resolve (ETFs etc.) — honest skip
 		}
-		subs, serr := w.Client.Submissions(ctx, cik)
+		subs, prof, serr := w.Client.SubmissionsWithProfile(ctx, cik)
 		if serr != nil {
 			// One bad symbol never aborts the sweep; record and continue.
 			id := s.ID
@@ -120,6 +120,14 @@ func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 			continue
 		}
 		swept++
+		// Companies-directory SIC enrichment (Stage 5): the submissions JSON we
+		// JUST fetched carries the registrant's SIC industry classification —
+		// store it at zero added request volume. When the directory has no row
+		// for the CIK yet (companies-sync hasn't run, or the ticker is absent
+		// from the exchange file) a minimal fallback row keeps the enrichment.
+		if prof.SIC != "" {
+			w.storeSIC(ctx, cik, s, prof, now.Unix())
+		}
 		for _, f := range subs {
 			if !edgar.InterestingForm(f.Form) {
 				continue
@@ -296,6 +304,33 @@ func (w *FilingsPoller) form4Failure(ctx context.Context, symbolID int64, f edga
 			f.Accession, attempts, ferr),
 	})
 	return nil
+}
+
+// storeSIC persists a swept symbol's SIC classification into the companies
+// directory. Best-effort: an update failure is a dq event, never a sweep
+// abort — the classification re-arrives on the next rotation anyway.
+func (w *FilingsPoller) storeSIC(ctx context.Context, cik int64, s md.Symbol, prof edgar.CompanyProfile, ts int64) {
+	n, err := w.St.UpdateCompanySICByCIK(ctx, cik, prof.SIC, prof.SICDesc, ts)
+	if err == nil && n == 0 {
+		// No directory row for this CIK yet — insert a minimal one keyed by the
+		// swept ticker (name from EDGAR when present, else our symbol record;
+		// exchange unknown here and left '' — the daily sync fills it in).
+		name := prof.Name
+		if name == "" {
+			name = s.Name
+		}
+		err = w.St.UpsertCompanies(ctx, []store.CompanyRow{{
+			CIK: cik, Ticker: strings.ToUpper(s.Symbol), Name: name,
+			SIC: prof.SIC, SICDesc: prof.SICDesc, UpdatedTs: ts,
+		}})
+	}
+	if err != nil {
+		id := s.ID
+		_ = w.St.InsertDQ(ctx, md.DQEvent{
+			SymbolID: &id, Ts: ts, Kind: "companies_sic_error",
+			Detail: fmt.Sprintf("%s: %v", s.Symbol, err),
+		})
+	}
 }
 
 // deriveDilution recomputes one symbol's dilution flag.

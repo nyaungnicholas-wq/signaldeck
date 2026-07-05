@@ -1636,3 +1636,112 @@ export interface LatestPredictionsResponse {
 export function latestPredictions(horizon: "1d" | "1w") {
   return get<LatestPredictionsResponse>(`/api/predictions/latest?horizon=${horizon}`);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNAL8 WAVE — STAGE 5: COMPANIES DIRECTORY (appended block; keep at END).
+// (1) companiesList(): the full SEC-registered company table (free EDGAR
+//     company_tickers_exchange.json, synced daily by companies-sync) joined
+//     server-side to OUR tracked data where present. HONESTY: every market
+//     column (price/chg/volume/mcap/shares/float) is null for rows we do not
+//     track or EDGAR hasn't covered — render "—", NEVER a fabricated number.
+//     Prices are stored daily closes on worker cadence, not live quotes;
+//     sector = the SEC's own SIC industry description ('' = not classified
+//     by a sweep yet). Render note/mcapNote verbatim.
+// (2) earningsEst(): the filing-cadence earnings-ESTIMATE calendar — next
+//     10-Q/10-K ≈ last periodic filing + ~91d. Every row is an ESTIMATE and
+//     the payload's note ("not a confirmed date") MUST be rendered.
+// A 404 from either means the running daemon predates this wave — say that,
+// never fake rows.
+
+/** One directory row. Null market fields = no real data (render "—"). */
+export interface CompanyDirRow {
+  ticker: string;
+  name: string;
+  exchange: string; // "" = SEC lists no exchange (render "—")
+  cik: number;
+  sic: string;
+  sicDesc: string; // "" = not yet classified by a filings sweep
+  tracked: boolean;
+  price: number | null;
+  dayChangePct: number | null;
+  volume: number | null;
+  mcap: number | null;
+  sharesOutstanding: number | null;
+  float: number | null;
+  barTs?: number;
+}
+
+/** One filter facet option (sector / exchange) with its directory count. */
+export interface CompanyFacet {
+  value: string;
+  n: number;
+}
+
+/** GET /api/companies payload. */
+export interface CompaniesResponse {
+  companies: CompanyDirRow[] | null;
+  total: number; // filtered count (pagination denominator)
+  limit: number;
+  offset: number;
+  trackedCount: number;
+  unknownMcapExcluded: number; // >0 only with a mcap filter active
+  directoryCount: number; // 0 = companies-sync hasn't completed a run yet
+  lastSyncTs: number;
+  sectors: CompanyFacet[] | null;
+  exchanges: CompanyFacet[] | null;
+  note: string; // provenance + honesty — render verbatim
+  mcapNote: string; // mcap/float provenance — render verbatim
+  asOf: number;
+}
+
+/** Filters for the companies directory (all optional). */
+export interface CompaniesQuery {
+  q?: string;
+  sector?: string;
+  exchange?: string;
+  mcapMin?: number;
+  mcapMax?: number;
+  tracked?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+/** The SEC company directory joined to tracked market data (paginated). */
+export function companiesList(f: CompaniesQuery = {}) {
+  const p = new URLSearchParams();
+  if (f.q) p.set("q", f.q);
+  if (f.sector) p.set("sector", f.sector);
+  if (f.exchange) p.set("exchange", f.exchange);
+  if (f.mcapMin && f.mcapMin > 0) p.set("mcapMin", String(f.mcapMin));
+  if (f.mcapMax && f.mcapMax > 0) p.set("mcapMax", String(f.mcapMax));
+  if (f.tracked) p.set("tracked", "true");
+  if (f.limit) p.set("limit", String(f.limit));
+  if (f.offset) p.set("offset", String(f.offset));
+  const qs = p.toString();
+  return get<CompaniesResponse>(`/api/companies${qs ? `?${qs}` : ""}`);
+}
+
+/** One estimated next-report row (10-Q/10-K cadence heuristic — labeled). */
+export interface EarningsEstRow {
+  symbol: string;
+  name: string;
+  lastForm: string; // 10-Q | 10-K (the cadence anchor)
+  lastFiledTs: number;
+  estTs: number; // ESTIMATED next report date (epoch)
+  estimate: true;
+  overdue: boolean; // estTs already passed (cadence slipped)
+}
+
+/** GET /api/earnings-est payload — rows + the mandatory estimate label. */
+export interface EarningsEstResponse {
+  rows: EarningsEstRow[] | null;
+  count: number;
+  total: number;
+  note: string; // "estimated from filing cadence — not a confirmed date" — ALWAYS render
+  asOf: number;
+}
+
+/** Filing-cadence earnings estimates, soonest first (labeled, never confirmed). */
+export function earningsEst(limit = 100) {
+  return get<EarningsEstResponse>(`/api/earnings-est?limit=${limit}`);
+}

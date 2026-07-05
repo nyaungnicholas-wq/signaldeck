@@ -53,6 +53,9 @@ type Client struct {
 	UA          string
 	TickersURL  string
 	FactsBase   string
+	// ExchangeURL overrides the company_tickers_exchange.json endpoint (the
+	// companies-directory map; see companies.go). Zero value = production.
+	ExchangeURL string
 	MinInterval time.Duration
 	HTTP        *http.Client
 
@@ -256,6 +259,7 @@ type Fundamentals struct {
 	Revenues          *Fact // latest annual/quarterly revenue
 	EPS               *Fact // latest diluted EPS
 	SharesOutstanding *Fact // latest common shares outstanding
+	EntityPublicFloat *Fact // latest public float (USD, dei cover-page fact)
 	LatestFilingDate  int64 // most recent "filed" date across facts (epoch)
 }
 
@@ -332,6 +336,10 @@ func (c *Client) CompanyFacts(ctx context.Context, cik int64) (Fundamentals, err
 		out.SharesOutstanding = latestFact(resp.Facts.USGAAP,
 			[]string{"CommonStockSharesOutstanding", "WeightedAverageNumberOfDilutedSharesOutstanding"}, "shares")
 	}
+
+	// Public float: a dei cover-page fact in USD (companies-directory wave).
+	// Missing on funds/foreign filers — stays nil, honest absence.
+	out.EntityPublicFloat = latestFact(resp.Facts.DEI, []string{"EntityPublicFloat"}, "USD")
 
 	// Latest filing date across every point we looked at (best-effort recency).
 	out.LatestFilingDate = latestFiled(resp.Facts.USGAAP, resp.Facts.DEI)
@@ -474,6 +482,7 @@ func factRows(symbolID, cik int64, f Fundamentals, fetchedAt int64) []store.Fund
 	add("Revenues", f.Revenues)
 	add("EPS", f.EPS)
 	add("SharesOutstanding", f.SharesOutstanding)
+	add("EntityPublicFloat", f.EntityPublicFloat)
 	// CIK + latest filing date are recorded with as_of = the fact date so they
 	// upsert cleanly; store the CIK for traceability.
 	if cik > 0 {

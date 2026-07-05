@@ -16,6 +16,8 @@ import Bar from "@/components/macro/Bar";
 import Push20Macro from "@/components/macro/Push20Macro";
 import SectorRow from "@/components/macro/SectorRow";
 import Gauge from "@/components/viz/Gauge";
+import CalendarsCard from "@/components/CalendarsCard";
+import EarningsEstCard from "@/components/EarningsEstCard";
 
 const POLL_MS = 10000;
 
@@ -304,6 +306,14 @@ export default function MacroPage() {
           )}
         </section>
       )}
+
+      {/* Signal8 wave Stage 5: the honest free-data calendars — the econ
+          calendar (latest FRED prints + near-window filing-derived "reports
+          soon" strip) and, under it, the FULL filing-cadence earnings
+          ESTIMATE calendar (GET /api/earnings-est; every row labeled EST —
+          there is no free confirmed-earnings-date feed, so none is faked). */}
+      <CalendarsCard />
+      <EarningsEstCard />
     </div>
   );
 }

@@ -651,3 +651,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_anomalies_dedup
 -- on a ~470k-row table). (tf, symbol_id, ts, close) makes those scans
 -- index-only over just the daily rows.
 CREATE INDEX IF NOT EXISTS idx_bars_tf_sym_ts ON bars (tf, symbol_id, ts, close);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- SIGNAL8 WAVE — STAGE 5: COMPANIES DIRECTORY (appended block — do not merge
+-- into the sections above). The full SEC-registered company map from the FREE
+-- EDGAR file www.sec.gov/files/company_tickers_exchange.json (~10.4k rows,
+-- fields cik/name/ticker/exchange — shape verified live 2026-07-04), refreshed
+-- by the companies-sync worker in ONE request per 24h run. sic/sic_desc are
+-- enriched OPPORTUNISTICALLY from the submissions responses the filings-poller
+-- ALREADY fetches for universe symbols (zero added request volume), so they
+-- fill in over sweeps and stay '' (honest absence) until covered.
+-- ticker is the PK exactly as the SEC file is keyed: one company (one CIK) may
+-- appear under several tickers (share classes) — that mirrors the source.
+-- exchange may be '' (the SEC lists some registrants with a null exchange);
+-- the API/UI renders it as "—", never a guess.
+CREATE TABLE IF NOT EXISTS companies (
+  cik        INTEGER NOT NULL,
+  ticker     TEXT PRIMARY KEY,
+  name       TEXT NOT NULL DEFAULT '',
+  exchange   TEXT NOT NULL DEFAULT '',
+  sic        TEXT NOT NULL DEFAULT '',
+  sic_desc   TEXT NOT NULL DEFAULT '',
+  updated_ts INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_companies_cik ON companies (cik);
+CREATE INDEX IF NOT EXISTS idx_companies_exchange ON companies (exchange);
+CREATE INDEX IF NOT EXISTS idx_companies_sic_desc ON companies (sic_desc);

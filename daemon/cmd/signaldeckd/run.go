@@ -265,6 +265,15 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// sweeps. BEFORE the watchdog spec snapshot so it's health-audited like
 	// every other worker.
 	fleet = append(fleet, tapeWorkers(cfg, st, alpacaClient)...)
+	// Signal8 wave / Stage 5 (constructor appended at the END of this file) —
+	// companies-sync (24h): refreshes the FULL SEC company directory
+	// (cik/name/ticker/exchange, ~10.4k rows) from ONE free EDGAR request per
+	// run, feeding the /intel/companies directory. SIC enrichment costs zero
+	// extra requests (it rides the filings-poller's existing submissions
+	// fetches). Always enabled — depends on nothing but EDGAR. Shares the ONE
+	// process-wide edgar limiter. BEFORE the watchdog spec snapshot so it's
+	// health-audited like every other worker.
+	fleet = append(fleet, companiesWorkers(st, edgarClient)...)
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -668,4 +677,26 @@ func tapeWorkers(cfg config.Config, st *store.Store, ac *alpaca.Client) []worker
 		w.Alpaca = ac
 	}
 	return []workers.Worker{w}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNAL8 WAVE — STAGE 5: COMPANIES DIRECTORY (appended block).
+// companiesWorkers returns the wave's worker: companies-sync (24h) — mirrors
+// the free SEC file www.sec.gov/files/company_tickers_exchange.json (the full
+// registered-company map: cik/name/ticker/exchange, ~10.4k rows) into the
+// companies table with ONE request per run, upserted in one transaction.
+// Always enabled: it depends on nothing but EDGAR (no key, no Alpaca gate).
+// SIC industry enrichment deliberately does NOT live here — the
+// filings-poller extracts sic/sicDescription from the submissions responses
+// it ALREADY fetches per swept universe symbol, so sector coverage grows at
+// zero added request volume.
+//
+// ec is the daemon-wide SHARED EDGAR client (see run()): its single
+// mutex-serialized limiter paces this worker's one request against the
+// fundamentals fetcher and the filings/13F pollers, keeping the whole
+// process under SEC's 10 req/s policy.
+func companiesWorkers(st *store.Store, ec *edgar.Client) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.CompaniesSync{St: st, Client: ec},
+	}
 }

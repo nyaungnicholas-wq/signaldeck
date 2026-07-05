@@ -1,0 +1,14 @@
+{
+  "fields": ["cik", "name", "ticker", "exchange"],
+  "data": [
+    [1045810, "NVIDIA CORP", "NVDA", "Nasdaq"],
+    [320193, "Apple Inc.", "AAPL", "Nasdaq"],
+    [789019, "MICROSOFT CORP", "MSFT", "Nasdaq"],
+    [1067983, "BERKSHIRE HATHAWAY INC", "BRK-B", "NYSE"],
+    [1067983, "BERKSHIRE HATHAWAY INC", "BRK-A", "NYSE"],
+    [803016, "CALIFORNIA FIRST LEASING CORP", "cfnb", null],
+    [1988979, "Tiny OTC Widgets Inc.", "TOWI", "OTC"],
+    [0, "ZERO CIK SHOULD BE SKIPPED", "ZCIK", "NYSE"],
+    [1999999, "BLANK TICKER SHOULD BE SKIPPED", "", "NYSE"]
+  ]
+}
