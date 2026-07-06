@@ -38,6 +38,11 @@ import (
 //     (Stage 3) and the simulated paper-equity summary (Stage 4) so the record
 //     links to its own tamper-evidence and its costed P&L on one surface.
 
+// trackMinDistinctDays is the floor of DISTINCT resolution days before skill
+// numbers are shown: cross-sectional obs on one day share one market move, so
+// day-count is the binding measure of time-series evidence.
+const trackMinDistinctDays = 10
+
 // trackMinIndependentN is the floor of independent (symbol, UTC-day) resolutions
 // below which a winrate/Brier/IC is noise, so we report no number and a plain
 // "not yet significant" note instead of a figure that overstates skill.
@@ -97,13 +102,26 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	indepN := len(pts)
-	gated := indepN < trackMinIndependentN
+	// Cross-sectional clustering guard: ~500 symbols resolving on the SAME
+	// market day are one market move, not 500 independent tests. Counting
+	// (symbol, day) pairs alone let 995 obs over 3 days ungate the record —
+	// a ~20x overstatement of evidence. Skill numbers therefore also require
+	// a minimum number of DISTINCT resolution days.
+	dayset := map[string]bool{}
+	for _, p := range pts {
+		dayset[time.Unix(p.ts, 0).UTC().Format("2006-01-02")] = true
+	}
+	distinctDays := len(dayset)
+	gated := indepN < trackMinIndependentN || distinctDays < trackMinDistinctDays
 
 	resp := map[string]any{
 		"horizon":         h,
 		"rawN":            rawN,
 		"independentN":    indepN,
 		"minIndependentN": trackMinIndependentN,
+		"distinctDays":    distinctDays,
+		"minDistinctDays": trackMinDistinctDays,
+		"clusterNote": "observations on the same market day are cross-sectionally correlated (one market move); skill unlocks only after both gates: independent obs AND distinct days",
 		"gated":           gated,
 		// This IS a live forward record (calibrated prob frozen at prediction
 		// time, graded against realized bars) — but until it clears the gate it
@@ -141,7 +159,12 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		resp["winRate"] = nil
 		resp["brier"] = nil
 		resp["ic"] = nil
-		resp["note"] = notSignificant(indepN, trackMinIndependentN)
+		note := notSignificant(indepN, trackMinIndependentN)
+		if indepN >= trackMinIndependentN && distinctDays < trackMinDistinctDays {
+			note = "not yet significant — " + strconv.Itoa(distinctDays) + "/" +
+				strconv.Itoa(trackMinDistinctDays) + " distinct market days (obs on one day share one market move)"
+		}
+		resp["note"] = note
 		// Still return the (empty-ish) reliability scaffold + regime buckets so
 		// the page can render its honest, mostly-empty shape.
 		resp["reliability"] = reliabilityCurve(pts)
