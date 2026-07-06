@@ -15,11 +15,11 @@ import Link from "next/link";
 import {
   HORIZONS,
   pollMs,
-  trackRecord,
+  trackRecordWithGate,
   type Horizon,
-  type TrackRecord,
+  type TrackRecordWithGate,
 } from "@/lib/api";
-import { ago, fmtPct } from "@/lib/format";
+import { ago, fmtDate, fmtPct } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ReliabilityCurve from "@/components/trackrecord/ReliabilityCurve";
@@ -35,7 +35,7 @@ function num(v: number | null | undefined, digits = 3): string {
 
 export default function TrackRecordPage() {
   const [horizon, setHorizon] = useState<Horizon>("1d");
-  const [data, setData] = useState<TrackRecord | null>(null);
+  const [data, setData] = useState<TrackRecordWithGate | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState(0);
   const [retryTick, setRetryTick] = useState(0);
@@ -43,7 +43,7 @@ export default function TrackRecordPage() {
   useEffect(() => {
     let alive = true;
     const load = () =>
-      trackRecord(horizon)
+      trackRecordWithGate(horizon)
         .then((d) => {
           if (!alive) return;
           setData(d);
@@ -144,22 +144,92 @@ export default function TrackRecordPage() {
 
       {current && (
         <>
-          {/* GATE NOTICE — the honest empty-today message. */}
+          {/* GATE COUNTDOWN — the wait itself, made visible: progress toward
+              the independent-N threshold, a LABELED estimate of when the gate
+              clears (from the measured last-7-day accrual), and what is
+              already accruing per horizon. Honest: no accrual → no ETA. */}
           {gated && (
             <section className="panel p-5">
-              <p className="text-[0.85rem]" style={{ color: "var(--warn)" }}>
-                {current.note ??
-                  `Not yet significant — ${current.independentN}/${current.minIndependentN} independent resolutions.`}
-              </p>
-              <p className="mt-2 text-[0.78rem]" style={{ color: "var(--dim)" }}>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-[0.85rem] font-semibold" style={{ color: "var(--warn)" }}>
+                  <span className="tnum">
+                    {current.independentN}/{current.gate?.threshold ?? current.minIndependentN}
+                  </span>{" "}
+                  independent (symbol, UTC-day) resolutions
+                </p>
+                <p className="text-[0.78rem] tnum" style={{ color: "var(--dim)" }}>
+                  {current.gate == null
+                    ? (current.note ?? "not yet significant")
+                    : current.gate.estDaysToUngate == null
+                      ? "unlock ETA unknown — nothing resolved in the last 7 days to measure an accrual rate from"
+                      : `win rate, Brier & IC unlock in ~${current.gate.estDaysToUngate} trading day${current.gate.estDaysToUngate === 1 ? "" : "s"} (estimate)`}
+                </p>
+              </div>
+              {/* progress bar */}
+              <div
+                className="mt-3 h-2 w-full overflow-hidden rounded"
+                style={{ background: "var(--border)" }}
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={current.gate?.threshold ?? current.minIndependentN}
+                aria-valuenow={current.independentN}
+                aria-label="independent resolutions toward the significance gate"
+              >
+                <div
+                  className="h-full rounded transition-[width] duration-500"
+                  style={{
+                    width: `${Math.min(100, (current.independentN / (current.gate?.threshold ?? current.minIndependentN)) * 100)}%`,
+                    background: "var(--warn)",
+                  }}
+                />
+              </div>
+              {current.gate && (
+                <p className="mt-2 text-[0.72rem] tnum" style={{ color: "var(--faint)" }}>
+                  last 7 days: +{current.gate.accrual7d.independentNew} independent
+                  symbol-day{current.gate.accrual7d.independentNew === 1 ? "" : "s"} over{" "}
+                  {current.gate.accrual7d.tradingDays} trading days (
+                  {current.gate.accrual7d.perTradingDay.toFixed(1)}/day) ·{" "}
+                  {current.gate.estBasis}
+                </p>
+              )}
+              {/* what's already accruing, per horizon — incl. first-outcome ETAs */}
+              <div className="mt-3 flex flex-wrap gap-2">
+                {HORIZONS.map((h) => {
+                  const c = current.coverage?.[h];
+                  const eta = current.gate?.firstResolveEta?.[h];
+                  if (c && c.resolved > 0) {
+                    return (
+                      <span key={h} className="chip tnum" title={`${c.resolved} resolved of ${c.total} ${h} predictions — already accruing`}>
+                        {h}: {c.resolved.toLocaleString("en-US")} resolved
+                      </span>
+                    );
+                  }
+                  return (
+                    <span
+                      key={h}
+                      className="chip tnum"
+                      style={{ color: "var(--faint)" }}
+                      title={
+                        eta != null
+                          ? (current.gate?.firstResolveEtaNote ?? "estimate")
+                          : `no ${h} predictions old enough to grade yet`
+                      }
+                    >
+                      {h}: 0 resolved
+                      {eta != null ? ` — first outcomes expected ~${fmtDate(eta)} (estimate)` : ""}
+                    </span>
+                  );
+                })}
+              </div>
+              <p className="mt-3 text-[0.78rem]" style={{ color: "var(--dim)" }}>
                 A signal has no value without a verifiable, costed, out-of-sample track
                 record. This page grades the platform&rsquo;s own calibrated predictions
                 against realized outcomes and withholds every skill number
                 (win-rate, Brier, IC) until there are at least{" "}
                 <span className="tnum">{current.minIndependentN}</span> independent
-                (symbol, UTC-day) resolutions. The system is young — most horizons
-                have ~0 resolved live outcomes — so an honest &ldquo;no live edge
-                yet&rdquo; is the correct output. It fills in as predictions mature.
+                (symbol, UTC-day) resolutions. The system is young — an honest
+                &ldquo;no live edge yet&rdquo; is the correct output. It fills in as
+                predictions mature; the bar above is the record accruing.
               </p>
             </section>
           )}

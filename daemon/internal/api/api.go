@@ -18,6 +18,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -33,6 +34,10 @@ type Deps struct {
 	Subscribe func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error)
 	// CurrentState returns the live expectancy state keys for a symbol.
 	CurrentState func(ctx context.Context, symbolID int64) (map[md.Horizon]string, error)
+	// Notifier is the Stage-3 remote-delivery notifier (Discord/Telegram/
+	// webhook), surfaced read-only via GET /api/notify-status. nil is safe
+	// (tests / minimal wiring): every remote transport reads unconfigured.
+	Notifier *notify.Notifier
 }
 
 // Serve runs the API server until ctx is canceled.
@@ -82,6 +87,8 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerDashboard(mux)                               // Visual-kit Stage 3: ONE-call GET /api/dashboard (tape + heatmap + gauges w/ honesty captions + movers + merged feed; 60s cache; per-user watchlist sparks only with a session)
 	d.registerStage5(mux)                                  // Visual-hub Stage 5: GET /api/predictions/latest — SIGNALS hub predictions table in one batched read (latest calibrated prediction per active symbol; independent-N gate + backtested-not-live label carried in the payload)
 	d.registerCompanies(mux)                               // Signal8 wave Stage 5: COMPANIES DIRECTORY (free EDGAR company map joined to our tracked bars/fundamentals; untracked rows honest "—") + GET /api/earnings-est (filing-cadence estimate, labeled — never a confirmed date)
+	d.registerNotify(mux)                                  // Stage 3 alert delivery: GET /api/notify-status — which remote transports (Discord/Telegram/webhook) are configured + last delivery/redacted error; macOS listed with an honest "untracked" note; email honestly absent (needs SMTP/provider — future)
+	d.registerShorts(mux)                                  // Stage 5 FINRA Reg SHO: GET /api/shorts — daily short sale VOLUME ratio (per-symbol series + fleet-wide latest extremes w/ stated min-volume floor); caveat verbatim in every payload: NOT short interest, includes market makers, high ratio NOT directly bearish
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,

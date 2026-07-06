@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/papertrade"
 )
@@ -111,8 +113,10 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Per-horizon resolved/total coverage so the page shows how thin the record
-	// still is across ALL horizons, not just the selected one.
-	if counts, cerr := d.St.ResolvedPredictionCounts(ctx); cerr == nil {
+	// still is across ALL horizons, not just the selected one. Hoisted so the
+	// Stage-2 gate countdown below can reuse the same counts.
+	counts, countsErr := d.St.ResolvedPredictionCounts(ctx)
+	if countsErr == nil {
 		cov := map[string]map[string]int{}
 		for _, hz := range md.Horizons {
 			c := counts[hz]
@@ -120,6 +124,12 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		}
 		resp["coverage"] = cov
 	}
+
+	// STAGE 2 — gate countdown: threshold, remaining, and an HONEST unlock
+	// estimate from the measured accrual of independent symbol-days over the
+	// last 7 calendar days. Best-effort: on any error the gate block is simply
+	// absent and the page falls back to the plain notice.
+	resp["gate"] = d.trackGate(ctx, h, indepN, counts, countsErr)
 
 	// Self-verifying links: ledger integrity (Stage 3) + paper equity (Stage 4).
 	if v, verr := d.St.VerifyLedger(ctx); verr == nil {
@@ -399,4 +409,131 @@ func notSignificant(n, min int) string {
 // registerTrackRecord wires the Stage-7 live track-record read route.
 func (d Deps) registerTrackRecord(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/track-record", d.trackRecord)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STAGE 2 — GATE COUNTDOWN (appended block).
+//
+// The independent-N gate used to be a dead-feeling "not yet significant"
+// notice. This block makes the WAIT itself visible: how many independent
+// (symbol, UTC-day) resolutions exist, how many remain to the threshold, and a
+// LABELED ESTIMATE of when the gate clears — derived only from the measured
+// accrual of the last 7 days (distinct new symbol-days per NYSE trading day).
+// When nothing accrued recently the estimate is null and the payload says why:
+// an unknown is reported as unknown, never extrapolated from thin air.
+
+// trackAccrualWindowDays is the lookback used to measure the recent accrual
+// rate of independent resolutions.
+const trackAccrualWindowDays = 7
+
+// trackGate assembles the countdown payload for the selected horizon. All
+// estimate fields are explicitly labeled; every input is measured.
+func (d Deps) trackGate(ctx context.Context, h md.Horizon, indepN int,
+	counts map[md.Horizon][2]int, countsErr error,
+) map[string]any {
+	now := time.Now()
+	since := now.Add(-trackAccrualWindowDays * 24 * time.Hour).Unix()
+
+	accr := map[md.Horizon]stStage2Accrual{}
+	if m, err := d.St.ResolutionsSince(ctx, since); err == nil {
+		for hz, a := range m {
+			accr[hz] = stStage2Accrual{Raw: a.Raw, Independent: a.Independent}
+		}
+	}
+	tradingDays := tradingDaysInLastN(now, trackAccrualWindowDays)
+	gate := trackGateCountdown(indepN, trackMinIndependentN,
+		accr[h].Independent, tradingDays)
+
+	// First-resolution ETA per horizon (labeled estimate): earliest still-open
+	// prediction + its forward window. Only offered for horizons with ZERO
+	// resolved outcomes — once anything resolved, the accrual rate is the story.
+	eta := map[string]any{}
+	for _, hz := range md.Horizons {
+		eta[string(hz)] = nil
+		if countsErr != nil || counts[hz][0] > 0 {
+			continue
+		}
+		if ts, ok, err := d.St.EarliestUnresolvedTs(ctx, hz); err == nil && ok {
+			eta[string(hz)] = ts + horizonWindowSecs(hz)
+		}
+	}
+	gate["firstResolveEta"] = eta
+	gate["firstResolveEtaNote"] = "earliest still-open prediction plus its forward window — an estimate, not a promise"
+	return gate
+}
+
+// stStage2Accrual mirrors store.ResolutionAccrual locally so the pure
+// countdown math below stays store-free and unit-testable.
+type stStage2Accrual struct{ Raw, Independent int }
+
+// trackGateCountdown is the PURE countdown math: given the current independent
+// count, the gate threshold, the independent symbol-days accrued in the last
+// window, and how many trading days that window held, it returns the payload
+// block. estDaysToUngate is nil when no recent accrual exists to extrapolate
+// from (an honest unknown), 0 when the gate is already clear.
+func trackGateCountdown(indepN, threshold, newIndep, tradingDays int) map[string]any {
+	remaining := threshold - indepN
+	if remaining < 0 {
+		remaining = 0
+	}
+	var perDay float64
+	if tradingDays > 0 {
+		perDay = float64(newIndep) / float64(tradingDays)
+	}
+	var est any // nil = unknown (nothing accrued recently)
+	switch {
+	case remaining == 0:
+		est = 0
+	case perDay > 0:
+		est = int(math.Ceil(float64(remaining) / perDay))
+	}
+	return map[string]any{
+		"threshold":       threshold,
+		"remaining":       remaining,
+		"estDaysToUngate": est,
+		"estimate":        true,
+		"estBasis": "accrual rate measured over the last " + strconv.Itoa(trackAccrualWindowDays) +
+			" days (independent symbol-days per NYSE trading day), assumed to continue — an estimate, not a promise",
+		"accrual7d": map[string]any{
+			"independentNew": newIndep,
+			"tradingDays":    tradingDays,
+			"perTradingDay":  perDay,
+		},
+	}
+}
+
+// tradingDaysInLastN counts NYSE trading days (weekdays that are not full
+// holidays, in exchange time) inside the last n calendar days ending today.
+// Crypto resolves on all days, so for mixed samples this undercounts the true
+// accrual window slightly — which biases the estimate LONGER, the honest side
+// to err on.
+func tradingDaysInLastN(now time.Time, n int) int {
+	loc := marketcal.Loc()
+	local := now.In(loc)
+	days := 0
+	for i := 0; i < n; i++ {
+		d := local.AddDate(0, 0, -i)
+		if wd := d.Weekday(); wd == time.Saturday || wd == time.Sunday {
+			continue
+		}
+		if marketcal.IsFullHoliday(d) {
+			continue
+		}
+		days++
+	}
+	return days
+}
+
+// horizonWindowSecs is the forward window a horizon needs before its first
+// prediction can resolve (matches the resolver's rule: 1w = 7 calendar days,
+// 1d = 1 day, 1h = 1 hour).
+func horizonWindowSecs(h md.Horizon) int64 {
+	switch h {
+	case md.H1w:
+		return 7 * 86400
+	case md.H1h:
+		return 3600
+	default:
+		return 86400
+	}
 }

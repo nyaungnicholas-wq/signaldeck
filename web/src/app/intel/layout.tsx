@@ -25,6 +25,9 @@ const TABS = [
   // Signal8 wave Stage 5: the full SEC-registered company directory (free
   // EDGAR map joined to our tracked bars/fundamentals; honest "—" elsewhere).
   { href: "/intel/companies", label: "COMPANIES" },
+  // Stage 5 FINRA Reg SHO: daily short sale VOLUME ratio (free FINRA files,
+  // universe-scoped). The NOT-short-interest caveat renders verbatim.
+  { href: "/intel/shorts", label: "SHORTS" },
 ];
 
 export default function IntelLayout({ children }: { children: React.ReactNode }) {

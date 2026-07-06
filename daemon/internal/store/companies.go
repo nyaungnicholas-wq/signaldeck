@@ -259,3 +259,67 @@ func (s *Store) LatestPeriodicFilingAll(ctx context.Context) (map[int64]Periodic
 	}
 	return out, rows.Err()
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 4 — SIC/SECTOR COVERAGE FOR THE WHOLE DIRECTORY (appended block).
+// Store support for the sic-bulk-sync worker: a one-query coverage counter
+// (the worker's boot-vs-monthly gate + before/after logging) and a
+// one-transaction batch variant of UpdateCompanySICByCIK (the bulk archive
+// yields ~10k classifications at once; 10k autocommit UPDATEs would churn
+// the single write conn).
+
+// SICUpdate is one CIK's industry classification to apply to the directory.
+type SICUpdate struct {
+	CIK     int64
+	SIC     string
+	SICDesc string
+}
+
+// CompanySICCoverage reports, in ONE query, how many directory rows exist and
+// how many carry a SIC classification. (0,0) = companies-sync hasn't run yet.
+func (s *Store) CompanySICCoverage(ctx context.Context) (total, withSIC int, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(sic != ''), 0) FROM companies`).Scan(&total, &withSIC)
+	return total, withSIC, err
+}
+
+// BatchUpdateCompanySICByCIK applies many SIC classifications in ONE
+// transaction — the same statement as UpdateCompanySICByCIK (every share
+// class sharing a CIK is updated), prepared once. Records with a blank SIC
+// are skipped (enrichment never wipes a stored classification with absence).
+// Returns directory ROWS updated (>= number of matched CIKs when share
+// classes are present; a CIK absent from the directory updates 0 rows and is
+// simply not counted — the bulk archive covers ~1M registrants, the
+// directory ~10.4k).
+func (s *Store) BatchUpdateCompanySICByCIK(ctx context.Context, recs []SICUpdate, ts int64) (rowsUpdated int64, err error) {
+	if len(recs) == 0 {
+		return 0, nil
+	}
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	stmt, err := tx.PrepareContext(ctx,
+		`UPDATE companies SET sic=?, sic_desc=?, updated_ts=? WHERE cik=?`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close() //nolint:errcheck
+	for _, r := range recs {
+		if strings.TrimSpace(r.SIC) == "" || r.CIK == 0 {
+			continue
+		}
+		res, xerr := stmt.ExecContext(ctx, strings.TrimSpace(r.SIC), strings.TrimSpace(r.SICDesc), ts, r.CIK)
+		if xerr != nil {
+			return 0, xerr
+		}
+		if n, aerr := res.RowsAffected(); aerr == nil {
+			rowsUpdated += n
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return rowsUpdated, nil
+}

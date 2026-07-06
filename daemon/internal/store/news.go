@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 )
 
 // NewsItem is one headline + its sentiment tag.
@@ -28,7 +29,9 @@ func (s *Store) InsertNews(ctx context.Context, n NewsItem) error {
 	return err
 }
 
-// UnratedNews returns headlines awaiting sentiment tagging.
+// UnratedNews returns headlines awaiting sentiment tagging. Only
+// sentiment='unrated' rows qualify — 'skipped' rows (deliberately not rated;
+// symbol outside the news scope) are terminal and never re-enter the queue.
 func (s *Store) UnratedNews(ctx context.Context, limit int) ([]NewsItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.id, n.symbol_id, sym.symbol, n.ts, n.headline
@@ -99,11 +102,38 @@ func (s *Store) RecentNews(ctx context.Context, limit int) ([]NewsItem, error) {
 }
 
 // NewsSentimentAgg returns the mean sentiment score + counts for a symbol over
-// the last `sinceTs` window (for a symbol-level sentiment gauge).
+// the last `sinceTs` window (for a symbol-level sentiment gauge). Only rated
+// headlines count: 'unrated' (pending) and 'skipped' (deliberately not rated)
+// are both excluded so their default 0 scores can't dilute the mean.
 func (s *Store) NewsSentimentAgg(ctx context.Context, symbolID, sinceTs int64) (mean float64, n int, err error) {
 	var m sql.NullFloat64
 	err = s.db.QueryRowContext(ctx, `
 		SELECT AVG(score), COUNT(*) FROM news
-		WHERE symbol_id=? AND ts>=? AND sentiment!='unrated'`, symbolID, sinceTs).Scan(&m, &n)
+		WHERE symbol_id=? AND ts>=? AND sentiment NOT IN ('unrated','skipped')`, symbolID, sinceTs).Scan(&m, &n)
 	return m.Float64, n, err
+}
+
+// SkipUnratedOutside marks every still-unrated headline whose symbol is NOT in
+// keepIDs as sentiment='skipped' — an honest terminal label meaning "we chose
+// not to spend LLM budget rating this" (symbol outside the news scope), as
+// opposed to 'unrated' which means "still pending". Skipped rows are excluded
+// from UnratedNews and from all sentiment aggregates. Rated rows are never
+// touched. Returns the number of rows relabeled.
+//
+// keepIDs is bound as one placeholder per id; the news scope is at most a few
+// hundred symbols, far below SQLite's 32766-variable limit.
+func (s *Store) SkipUnratedOutside(ctx context.Context, keepIDs []int64) (int64, error) {
+	q := `UPDATE news SET sentiment='skipped' WHERE sentiment='unrated'`
+	args := make([]any, 0, len(keepIDs))
+	if len(keepIDs) > 0 {
+		q += ` AND symbol_id NOT IN (?` + strings.Repeat(",?", len(keepIDs)-1) + `)`
+		for _, id := range keepIDs {
+			args = append(args, id)
+		}
+	}
+	res, err := s.w.ExecContext(ctx, q, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

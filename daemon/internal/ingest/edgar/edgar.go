@@ -56,6 +56,9 @@ type Client struct {
 	// ExchangeURL overrides the company_tickers_exchange.json endpoint (the
 	// companies-directory map; see companies.go). Zero value = production.
 	ExchangeURL string
+	// BulkURL overrides the nightly bulk submissions.zip endpoint (the SIC
+	// bulk sync; see bulk.go). Zero value = production.
+	BulkURL string
 	MinInterval time.Duration
 	HTTP        *http.Client
 

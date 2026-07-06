@@ -165,6 +165,26 @@ func (s *Store) ListUserSymbols(ctx context.Context, userID int64) ([]md.Symbol,
 	return out, rows.Err()
 }
 
+// WatchedSymbolIDs returns the distinct symbol ids present on ANY user's
+// watchlist. It drives the news-fetch scope: a symbol somebody watches always
+// gets headlines, regardless of stream flag or ranking.
+func (s *Store) WatchedSymbolIDs(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT symbol_id FROM user_symbols`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // AdoptActiveSymbols puts every currently-active symbol on a user's watchlist
 // and assigns any unowned positions to them (first-boot multi-user migration,
 // so existing single-user behavior continues unchanged).

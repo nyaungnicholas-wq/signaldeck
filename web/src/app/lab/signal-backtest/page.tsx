@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  api,
   pollMs,
-  type SignalBacktestResponse,
+  signalBacktestLive,
+  signalBacktestPinned,
+  type SignalBacktestPinnedResponse,
   type SignalEquityPoint,
 } from "@/lib/api";
 import { fmtPct, fmtDate } from "@/lib/format";
@@ -174,15 +175,18 @@ function Metric({
 
 export default function SignalBacktestPage() {
   const [horizon, setHorizon] = useState<SignalHorizon>("1d");
-  const [data, setData] = useState<SignalBacktestResponse | null>(null);
+  // STAGE 2: default to the WEEKLY PINNED Sunday snapshot ("as of Sunday"),
+  // with a one-click live recompute via the existing endpoint. The daemon
+  // falls back to a live compute (labeled via pinnedNote) when no pin exists.
+  const [mode, setMode] = useState<"pinned" | "live">("pinned");
+  const [data, setData] = useState<SignalBacktestPinnedResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
     const load = () =>
-      api
-        .signalBacktest(horizon)
+      (mode === "pinned" ? signalBacktestPinned(horizon) : signalBacktestLive(horizon))
         .then((r) => {
           if (!alive) return;
           setData(r);
@@ -198,7 +202,7 @@ export default function SignalBacktestPage() {
       alive = false;
       clearInterval(id);
     };
-  }, [horizon, retryTick]);
+  }, [horizon, mode, retryTick]);
 
   // Only trust data tagged for the selected horizon (avoids a stale mix while
   // switching chips).
@@ -264,7 +268,53 @@ export default function SignalBacktestPage() {
             {res.costBps.toFixed(1)}bps/side
           </span>
         )}
+        {/* STAGE 2 — pinned Sunday snapshot vs live recompute. */}
+        {current && (
+          <span className="ml-auto flex flex-wrap items-center gap-2">
+            <span
+              className="px-2 py-1 text-[0.7rem] font-semibold tnum"
+              style={{
+                border: "1px solid var(--border)",
+                color: current.pinned ? "var(--accent)" : "var(--dim)",
+              }}
+              title={
+                current.pinned
+                  ? `Stored by the signalbt-weekly worker — the exact result the weekly insight described (computed ${current.pinnedTs ? fmtDate(current.pinnedTs) : "—"}).`
+                  : "Computed just now from the current feature store."
+              }
+            >
+              {current.pinned
+                ? `pinned · as of ${current.pinnedDay ?? "—"}`
+                : "live compute"}
+            </span>
+            <button
+              type="button"
+              onClick={() => setMode(mode === "pinned" ? "live" : "pinned")}
+              className="px-2 py-1 text-[0.7rem] font-semibold"
+              style={{
+                border: "1px solid var(--border)",
+                background: "transparent",
+                color: "var(--dim)",
+                cursor: "pointer",
+              }}
+              title={
+                mode === "pinned"
+                  ? "Re-run the evaluation on the current feature store right now"
+                  : "Show the weekly Sunday snapshot instead"
+              }
+            >
+              {mode === "pinned" ? "recompute live" : "show weekly pin"}
+            </button>
+          </span>
+        )}
       </div>
+
+      {/* Requested the pin, none stored yet — say so instead of pretending. */}
+      {current?.pinnedNote && (
+        <p className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          {current.pinnedNote}
+        </p>
+      )}
 
       {err && !current ? (
         <ErrorState message={err} retry={() => setRetryTick((t) => t + 1)} />

@@ -677,3 +677,39 @@ CREATE TABLE IF NOT EXISTS companies (
 CREATE INDEX IF NOT EXISTS idx_companies_cik ON companies (cik);
 CREATE INDEX IF NOT EXISTS idx_companies_exchange ON companies (exchange);
 CREATE INDEX IF NOT EXISTS idx_companies_sic_desc ON companies (sic_desc);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- NEWS SCOPE WAVE (appended block — do not merge into the sections above).
+-- No DDL change: this documents a new VALUE for news.sentiment. In addition
+-- to bullish|bearish|neutral|unrated (see the news table above), a row may be
+-- 'skipped' — an honest TERMINAL label meaning "deliberately not rated":
+-- the symbol was outside the news-fetch scope (streamed hot set + top-ranked
+-- + user-watchlisted), so no LLM budget is spent on it. 'skipped' differs
+-- from 'unrated' ("still pending tagging"): skipped rows are excluded from
+-- the UnratedNews queue AND from every sentiment aggregate
+-- (sentiment_daily, NewsSentimentAgg), so they can neither inflate the
+-- pending backlog nor dilute means with their default 0 score. Applied once
+-- by the meta-gated backlog cleanup (meta key 'news_scope_skip_v1') and to
+-- nothing else; rated rows are never relabeled.
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- STAGE 5 — FINRA REG SHO DAILY SHORT SALE VOLUME (appended block — do not
+-- merge into the sections above). Free, registration-less FINRA data
+-- (cdn.finra.org/equity/regsho/daily/CNMSshvolYYYYMMDD.txt, verified live
+-- 2026-07-06), UNIVERSE-SCOPED: the finra-shorts worker stores rows ONLY for
+-- symbols we track. Volumes are REAL because the live files carry FRACTIONAL
+-- share volumes (fractional-share trades). short_pct is the derived daily
+-- short sale volume ratio short_vol/total_vol (0 when total_vol=0).
+-- HONESTY: this ratio is NOT short interest — it includes market-maker
+-- liquidity provision, and a high ratio is NOT directly bearish. The API and
+-- UI carry that caveat verbatim wherever the number appears.
+CREATE TABLE IF NOT EXISTS short_volume (
+  symbol_id    INTEGER NOT NULL REFERENCES symbols(id),
+  day          TEXT NOT NULL,            -- trade date, YYYY-MM-DD
+  short_vol    REAL NOT NULL,
+  short_exempt REAL NOT NULL,
+  total_vol    REAL NOT NULL,
+  short_pct    REAL NOT NULL,            -- short_vol/total_vol (0 when total 0)
+  PRIMARY KEY (symbol_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_short_volume_day ON short_volume (day DESC);

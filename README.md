@@ -131,3 +131,28 @@ bcrypt-hashed passwords; the first registered user is admin). On first boot with
 database, a `local` admin user is created and its random password printed once to stderr,
 and the current watchlist/positions are migrated to it. The daily AI spend cap is persisted
 in SQLite, so restarts cannot reset it.
+
+### Remote alert delivery (beyond the Mac)
+
+By default, batched alert + watchdog notifications land only as macOS popups on the
+daemon's machine. Three optional remote transports fan the SAME messages out —
+configure any subset in `daemon/.env` (see `.env.example`):
+
+| Transport | Env var(s) | Payload |
+|-----------|-----------|---------|
+| Discord   | `SIGNALDECK_DISCORD_WEBHOOK` (channel webhook URL) | webhook JSON `{content}` |
+| Telegram  | `SIGNALDECK_TELEGRAM_BOT_TOKEN` **and** `SIGNALDECK_TELEGRAM_CHAT_ID` | Bot API `sendMessage` |
+| Generic webhook | `SIGNALDECK_WEBHOOK_URL` | `POST` JSON `{title, body, kind, ts}` |
+
+Behavior (honest by design):
+
+- The alert-runner sends **one batched message per sweep** (up to 5 alert detail lines,
+  then `+N more`), under the same shared 30-minute cooldown as the macOS popup. The
+  watchdog's healthy→unhealthy transition is delivered too (same 6h cooldown).
+- Every delivery has a **5s timeout and 1 retry**; a transport that still fails records a
+  `notify_failed` dq event and **never blocks or fails the fleet**. Webhook URLs and bot
+  tokens are **redacted** from all logs, errors, and dq details.
+- `GET /api/notify-status` (and the note on `/signals/alerts`) shows which transports are
+  configured plus last delivery / last redacted error — secrets are never echoed.
+- **No email transport**: that needs SMTP credentials or a provider account — noted as
+  future work rather than half-implemented.

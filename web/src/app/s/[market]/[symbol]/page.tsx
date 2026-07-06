@@ -24,6 +24,7 @@ import InsightsPanel from "@/components/symbol/InsightsPanel";
 import SymbolAgentPanel from "@/components/symbol/SymbolAgentPanel";
 import CoveragePanel from "@/components/symbol/CoveragePanel";
 import FilingsIntelPanel from "@/components/symbol/FilingsIntelPanel";
+import ShortVolumePanel from "@/components/symbol/ShortVolumePanel";
 import FinancialsPanel from "@/components/symbol/FinancialsPanel";
 import CongressChip from "@/components/symbol/CongressChip";
 import UnusualActivityPanel from "@/components/UnusualActivityPanel";
@@ -320,6 +321,11 @@ export default function SymbolPage({
               no SEC filings). Insider activity + 13F holders + dilution badge,
               all with honest legal-lag labels. */}
           {market === "stocks" && <FilingsIntelPanel symbol={symbol} />}
+
+          {/* Stage 5 FINRA Reg SHO: daily short sale VOLUME ratio (free FINRA
+              files, universe-scoped) with the NOT-short-interest caveat
+              rendered verbatim. Stocks only (crypto has no Reg SHO data). */}
+          {market === "stocks" && <ShortVolumePanel symbol={symbol} />}
 
           {/* Signal8 wave Stage 2: congressional-activity chip — renders only
               when this ticker has disclosed trades in the last 90d (the legal

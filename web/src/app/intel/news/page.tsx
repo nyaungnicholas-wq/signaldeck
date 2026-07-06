@@ -26,7 +26,9 @@ function inferMarket(symbol: string): Market {
   return symbol.includes("/") ? "crypto" : "stocks";
 }
 
-/** Color + label for a sentiment tag. Unknown/missing → "unrated". */
+/** Color + label for a sentiment tag. "skipped" is terminal — the symbol sits
+    outside the news-fetch scope so the tagger deliberately won't rate it —
+    distinct from "unrated" (still pending). Unknown/missing → "unrated". */
 function sentimentStyle(sentiment: string): { color: string; label: string } {
   switch (sentiment) {
     case "bullish":
@@ -35,6 +37,8 @@ function sentimentStyle(sentiment: string): { color: string; label: string } {
       return { color: "var(--ask)", label: "bearish" };
     case "neutral":
       return { color: "var(--dim)", label: "neutral" };
+    case "skipped":
+      return { color: "var(--faint)", label: "skipped" };
     default:
       return { color: "var(--faint)", label: "unrated" };
   }
@@ -219,6 +223,9 @@ export default function NewsPage() {
         <p className="px-4 py-3 text-[0.76rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           Sentiment is tagged by the local AI from the headline text only; &ldquo;unrated&rdquo;
           means it hasn&rsquo;t been processed yet (tagging runs every 10 min).
+          &ldquo;skipped&rdquo; is permanent: the symbol sits outside the news scope
+          (streamed hot set, top-ranked, or watchlisted), so its headline is
+          deliberately never rated and never counts toward sentiment aggregates.
         </p>
       </section>
 

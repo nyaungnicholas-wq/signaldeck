@@ -23,6 +23,8 @@ const version = "0.1.0-dev"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
+	sicBulk := flag.Bool("sic-bulk-sync", false,
+		"run ONE forced SIC bulk sync (SEC EDGAR bulk submissions.zip, ~1.5 GB streamed to SIGNALDECK_TMP) against the configured DB, print the result, and exit — stop the daemon first")
 	flag.Parse()
 	fmt.Printf("signaldeckd v%s\n", version)
 	if *showVersion {
@@ -63,6 +65,19 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Manual one-shot: SIC bulk sync (Stage 4). Runs the sic-bulk-sync worker
+	// once with the gate forced, prints its honest detail line, and exits —
+	// the fleet is never started.
+	if *sicBulk {
+		detail, err := runSICBulkOnce(ctx, st)
+		if err != nil {
+			slog.Error("sic-bulk-sync", "err", err)
+			os.Exit(1)
+		}
+		fmt.Println(detail)
+		return
+	}
 
 	slog.Info("signaldeckd started", "db", cfg.DBPath, "http", cfg.HTTPAddr,
 		"alpaca", cfg.HasAlpaca(), "hud", cfg.HudURL)

@@ -27,7 +27,9 @@ type SentimentDay struct {
 // (YYYY-MM-DD) across ALL symbols in a single INSERT..SELECT..ON CONFLICT
 // statement: rated headlines whose article timestamp falls on that day are
 // aggregated per symbol; existing rows for the day are replaced with the
-// fresh aggregate (idempotent recompute). Unrated headlines never count.
+// fresh aggregate (idempotent recompute). Unrated headlines never count, and
+// neither do 'skipped' ones (deliberately not rated — out-of-scope symbols):
+// both carry a default 0 score that would silently dilute the mean.
 // Returns the number of symbol-day rows written.
 func (s *Store) UpsertSentimentDaily(ctx context.Context, day string) (int, error) {
 	res, err := s.w.ExecContext(ctx, `
@@ -35,7 +37,7 @@ func (s *Store) UpsertSentimentDaily(ctx context.Context, day string) (int, erro
 		SELECT symbol_id, ?, COUNT(*), AVG(score),
 		       SUM(sentiment='bullish'), SUM(sentiment='bearish'), SUM(sentiment='neutral')
 		FROM news
-		WHERE sentiment != 'unrated' AND date(ts, 'unixepoch') = ?
+		WHERE sentiment NOT IN ('unrated','skipped') AND date(ts, 'unixepoch') = ?
 		GROUP BY symbol_id
 		ON CONFLICT(symbol_id, day) DO UPDATE SET
 		  n=excluded.n, mean_score=excluded.mean_score,

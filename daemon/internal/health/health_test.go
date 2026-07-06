@@ -3,12 +3,17 @@ package health
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -45,13 +50,17 @@ func TestStaleWorkers(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "fast stale past floor, hourly stale past 3x",
+			// fast succeeded AFTER boot then went silent past the 30m floor →
+			// genuine stall, flags. hourly's lastOK (4h ago) PRE-DATES boot
+			// (2h ago) so it gets boot grace: reference clamps to boot, and
+			// 2h since boot < its 3h threshold → not stale (yet).
+			name: "genuine stall flags; pre-boot lastOK gets boot grace",
 			lastOK: map[string]time.Time{
 				"fast":      now.Add(-31 * time.Minute),
 				"hourly":    now.Add(-4 * time.Hour),
 				"never-ran": now,
 			},
-			want: []string{"fast", "hourly"},
+			want: []string{"fast"},
 		},
 		{
 			name: "missing worker uses boot fallback (2h ago > 30m floor)",
@@ -78,6 +87,63 @@ func TestStaleWorkersFreshBootNotStale(t *testing.T) {
 	specs := []WorkerSpec{{Name: "w", Interval: time.Minute}}
 	if got := StaleWorkers(specs, nil, boot, now); len(got) != 0 {
 		t.Errorf("fresh boot flagged stale: %v", got)
+	}
+}
+
+// TestStaleWorkersSleepGrace is the wake-from-sleep regression (observed
+// 2026-07-06: daemon uptime 298s after a Mac wake, all 35 workers flagged
+// stale + macOS ping while running fine). A lastOK that pre-dates boot must
+// be clamped to boot, so the fleet only pages once workers have had a full
+// threshold window since boot to succeed — while a worker that HAS succeeded
+// since boot and then stalled still flags.
+func TestStaleWorkersSleepGrace(t *testing.T) {
+	now := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	specs := []WorkerSpec{{Name: "tenmin", Interval: 10 * time.Minute}} // threshold = 30m floor
+	cases := []struct {
+		name   string
+		boot   time.Time
+		lastOK map[string]time.Time
+		want   []string
+	}{
+		{
+			// The verified false alarm: last success 2 days ago (pre-sleep),
+			// daemon booted/woke 5 minutes ago → NOT stale (5m < 30m floor).
+			name:   "wake-from-sleep: 2-day-old lastOK, boot 5m ago → grace",
+			boot:   now.Add(-5 * time.Minute),
+			lastOK: map[string]time.Time{"tenmin": now.Add(-48 * time.Hour)},
+			want:   nil,
+		},
+		{
+			// Grace expires: booted 2h ago and still no success since boot →
+			// stale (2h since boot > 30m threshold).
+			name:   "boot 2h ago, no success since boot → stale",
+			boot:   now.Add(-2 * time.Hour),
+			lastOK: map[string]time.Time{"tenmin": now.Add(-48 * time.Hour)},
+			want:   []string{"tenmin"},
+		},
+		{
+			// Genuine stall is NOT masked: succeeded after boot, then silent
+			// for > 3x interval (and past the 30m floor) → stale.
+			name:   "lastOK after boot but 40m old → genuine stall flags",
+			boot:   now.Add(-3 * time.Hour),
+			lastOK: map[string]time.Time{"tenmin": now.Add(-40 * time.Minute)},
+			want:   []string{"tenmin"},
+		},
+		{
+			// Healthy after boot: succeeded 5m ago → not stale.
+			name:   "lastOK after boot and fresh → healthy",
+			boot:   now.Add(-3 * time.Hour),
+			lastOK: map[string]time.Time{"tenmin": now.Add(-5 * time.Minute)},
+			want:   nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := StaleWorkers(specs, tc.lastOK, tc.boot, now)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -155,5 +221,75 @@ func TestWatchdogEndToEnd(t *testing.T) {
 	}
 	if staleEvents != 1 {
 		t.Errorf("dq worker_stale events = %d, want 1 (deduped)", staleEvents)
+	}
+}
+
+// TestWatchdogRemoteNotifyOnTransition (Stage 3): the healthy→unhealthy
+// transition must fan out EXACTLY ONE remote message (same 6h cooldown as the
+// local notification), and a second unhealthy run must deliver nothing more.
+func TestWatchdogRemoteNotifyOnTransition(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close() //nolint:errcheck
+	ctx := context.Background()
+
+	// One successful run 2h ago for a 5m-interval worker → stale (floor 30m).
+	id, err := st.StartWorkerRun(ctx, "slowpoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishWorkerRun(ctx, id, "ok", "old"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().Exec(`UPDATE worker_runs SET started_at = ? WHERE id = ?`,
+		time.Now().Add(-2*time.Hour).Unix(), id); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var msgs []notify.Message
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m notify.Message
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		mu.Lock()
+		msgs = append(msgs, m)
+		mu.Unlock()
+	}))
+	defer srv.Close()
+
+	w := &Watchdog{
+		St:         st,
+		Specs:      []WorkerSpec{{Name: "slowpoke", Interval: 5 * time.Minute}},
+		StatusPath: filepath.Join(dir, "health.json"),
+		Notify:     func(string) error { return nil },
+		Remote:     &notify.Notifier{WebhookURL: srv.URL},
+	}
+	w.started, w.wasOK, w.inited = time.Now().Add(-3*time.Hour), true, true
+
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	mu.Lock()
+	got := append([]notify.Message{}, msgs...)
+	mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("remote messages = %d, want 1 (transition only)", len(got))
+	}
+	if got[0].Kind != "watchdog" || !strings.Contains(got[0].Body, "slowpoke") {
+		t.Errorf("watchdog message = %+v, want kind=watchdog naming the stale worker", got[0])
+	}
+
+	// Second unhealthy run: no transition + cooldown → nothing delivered.
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	n := len(msgs)
+	mu.Unlock()
+	if n != 1 {
+		t.Errorf("remote fired again without a transition: %d messages", n)
 	}
 }

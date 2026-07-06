@@ -17,6 +17,7 @@ import (
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -36,9 +37,17 @@ type WorkerSpec struct {
 // StaleWorkers is the pure staleness rule: a worker is stale when its last
 // successful run is older than 3x its interval (floored at 30 minutes).
 // Long-running workers (Interval <= 0, e.g. stream ingestors) are skipped —
-// their runs block for days by design. Workers missing from lastOK are
-// compared against `fallback` (typically daemon boot time), so a freshly
-// booted daemon doesn't page before workers had a chance to succeed.
+// their runs block for days by design.
+//
+// Boot/wake grace: any lastOK that PRE-DATES `fallback` (typically daemon boot
+// time) belongs to a previous daemon life — right after a restart or a Mac
+// wake-from-sleep EVERY worker's last success is older than boot, which used
+// to flag the whole fleet as stale while it was running fine. The reference
+// time is therefore max(lastOK, fallback): a worker only goes stale once it
+// has had at least one full threshold window (>= its interval, min 30m floor)
+// SINCE BOOT to succeed. Workers missing from lastOK entirely use `fallback`
+// the same way. A lastOK AFTER boot is judged as-is, so a genuine stall
+// (succeeded since boot, then silent for > 3x interval) still flags.
 // The result is sorted by name.
 func StaleWorkers(specs []WorkerSpec, lastOK map[string]time.Time, fallback, now time.Time) []string {
 	var stale []string
@@ -51,8 +60,8 @@ func StaleWorkers(specs []WorkerSpec, lastOK map[string]time.Time, fallback, now
 			threshold = minThreshold
 		}
 		last, ok := lastOK[s.Name]
-		if !ok {
-			last = fallback
+		if !ok || last.Before(fallback) {
+			last = fallback // boot/wake grace: pre-boot successes don't count against the worker
 		}
 		if now.Sub(last) > threshold {
 			stale = append(stale, s.Name)
@@ -76,6 +85,12 @@ type Watchdog struct {
 	StatusPath string // where health.json goes (required)
 	// Notify shows a user-facing alert; nil = osascript display notification.
 	Notify func(msg string) error
+	// Remote fans the unhealthy-transition message out to the env-configured
+	// remote transports (Discord/Telegram/webhook — internal/notify); nil or
+	// unconfigured = macOS-only. Fires under the SAME 6h cooldown +
+	// healthy→unhealthy transition gate as the local notification, and its
+	// failures degrade to dq events (never the watchdog run).
+	Remote *notify.Notifier
 
 	started    time.Time
 	lastNotify time.Time
@@ -116,12 +131,22 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 	// Notify only on the healthy→unhealthy transition, at most once per 6h.
 	if !ok && w.wasOK && now.Sub(w.lastNotify) > notifyCooldown {
 		w.lastNotify = now
-		notify := w.Notify
-		if notify == nil {
-			notify = osascriptNotify
+		local := w.Notify
+		if local == nil {
+			local = osascriptNotify
 		}
-		if err := notify(fmt.Sprintf("SignalDeck: %d stale worker(s): %v", len(stale), stale)); err != nil {
+		if err := local(fmt.Sprintf("SignalDeck: %d stale worker(s): %v", len(stale), stale)); err != nil {
 			slog.Warn("watchdog: notification failed", "err", err) // never fatal
+		}
+		// Stage 3: same transition + 6h cooldown, delivered beyond the Mac.
+		// Send degrades to dq events internally and never errors.
+		if w.Remote != nil {
+			w.Remote.Send(ctx, notify.Message{
+				Title: "SignalDeck watchdog: fleet unhealthy",
+				Body:  fmt.Sprintf("%d stale worker(s): %v", len(stale), stale),
+				Kind:  "watchdog",
+				Ts:    now.Unix(),
+			})
 		}
 	}
 	w.wasOK = ok

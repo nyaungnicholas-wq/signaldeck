@@ -7,7 +7,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { api, type AlertRow } from "@/lib/api";
+import { api, notifyStatus, type AlertRow, type NotifyStatusResponse } from "@/lib/api";
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -35,6 +35,23 @@ export default function AlertsPage() {
   const [tick, setTick] = useState(0);
   const [marking, setMarking] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Stage 3: delivery-transport status (macOS + Discord/Telegram/webhook).
+  // Best-effort settings note — a fetch failure just hides the line.
+  const [deliveries, setDeliveries] = useState<NotifyStatusResponse | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    notifyStatus()
+      .then((d) => {
+        if (alive) setDeliveries(d);
+      })
+      .catch(() => {
+        /* note is optional — never an error state */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -111,6 +128,39 @@ export default function AlertsPage() {
         Breakouts, regime changes, and calibrated predictions crossing conviction thresholds —
         for symbols on your watchlist only. Alerts are measurements of stored events, not advice.
       </p>
+
+      {deliveries && (
+        <div
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.72rem]"
+          style={{ color: "var(--faint)" }}
+        >
+          <span>deliveries:</span>
+          {deliveries.transports.map((t) => (
+            <span
+              key={t.name}
+              className="chip px-2 py-[2px] text-[0.7rem]"
+              style={
+                t.configured
+                  ? { color: "var(--accent)", borderColor: "var(--accent)" }
+                  : undefined
+              }
+              title={
+                t.configured
+                  ? (t.note ?? (t.lastError ? `last error (redacted): ${t.lastError}` : "configured"))
+                  : `off — set ${t.env} in daemon/.env to enable`
+              }
+            >
+              {t.name} {t.configured ? "✓" : "—"}
+            </span>
+          ))}
+          {deliveries.transports.some((t) => !t.configured) && (
+            <span>
+              — off transports: set the env shown on hover in daemon/.env (see .env.example).
+              Email: {deliveries.email}.
+            </span>
+          )}
+        </div>
+      )}
 
       {actionError && (
         <div role="alert" className="text-[0.78rem]" style={{ color: "var(--bad)" }}>

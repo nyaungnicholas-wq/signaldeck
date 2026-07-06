@@ -28,11 +28,13 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptolive"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/finra"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/fred"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/news"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/universe"
@@ -88,6 +90,12 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	} else {
 		slog.Warn("AI layer disabled — no LLM key (set SIGNALDECK_NVIDIA_KEY in daemon/.env)")
 	}
+
+	// Stage 3 — alert delivery beyond the Mac: ONE daemon-wide outbound
+	// notifier (Discord/Telegram/generic webhook, all env-configured, all
+	// optional) shared by the alert-runner, the watchdog, and
+	// /api/notify-status. Constructor appended at the END of this file.
+	remote := remoteNotifier(st)
 
 	// ── multi-user bootstrap: seed the "local" account on first boot ────
 	if err := bootstrapUsers(ctx, st); err != nil {
@@ -197,7 +205,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	})
 	// Alerts + daily-briefing wave (constructor appended at the END of this
 	// file) — must join the fleet BEFORE the watchdog snapshots its specs.
-	fleet = append(fleet, alertBriefingWorkers(st, llmClient)...)
+	fleet = append(fleet, alertBriefingWorkers(st, llmClient, remote)...)
 	// Universe-discovery wave (constructor appended at the END of this file) —
 	// also BEFORE the watchdog spec snapshot so it's health-audited.
 	fleet = append(fleet, discoveryWorkers(cfg, st, alpacaClient, backfiller, streamer)...)
@@ -274,6 +282,29 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// process-wide edgar limiter. BEFORE the watchdog spec snapshot so it's
 	// health-audited like every other worker.
 	fleet = append(fleet, companiesWorkers(st, edgarClient)...)
+	// Stage 4 — SIC/SECTOR COVERAGE wave (constructor appended at the END of
+	// this file) — sic-bulk-sync (12h tick): classifies the WHOLE companies
+	// directory from SEC's official nightly bulk submissions.zip (~1.5 GB,
+	// stream-downloaded to SIGNALDECK_TMP and deleted after) in ONE request.
+	// Gate: boot catch-up when SIC coverage < 50% (≤1 attempt/UTC day), else
+	// once per UTC month; 403/moved/corrupt degrades to the filings-poller
+	// rotation with a dq note, never failing the fleet. Shares the ONE
+	// process-wide edgar limiter + UA. BEFORE the watchdog spec snapshot so
+	// it's health-audited like every other worker.
+	fleet = append(fleet, sicBulkWorkers(st, edgarClient)...)
+	// Stage-2 "make the proof visible" wave (constructor appended at the END of
+	// this file) — weekly-report (Sun ~5pm ET) + signalbt-weekly pin (Sun ~6pm
+	// ET), both once-per-NY-week with meta week-key dedup. BEFORE the watchdog
+	// spec snapshot so both are health-audited like every other worker.
+	fleet = append(fleet, weeklyProofWorkers(st, llmClient)...)
+	// Stage 5 — FINRA Reg SHO wave (constructor appended at the END of this
+	// file) — finra-shorts (6h tick): free, registration-less daily short sale
+	// volume files (cdn.finra.org Consolidated NMS), NY ~18:30 publish gate +
+	// meta day-key dedup, ~30-trading-day first-run backfill, universe-scoped
+	// storage. Missing/late files degrade to a dq event, never a fleet
+	// failure. BEFORE the watchdog spec snapshot so it's health-audited like
+	// every other worker.
+	fleet = append(fleet, finraShortsWorkers(st)...)
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -284,15 +315,17 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		St:         st,
 		Specs:      specs,
 		StatusPath: filepath.Join(filepath.Dir(cfg.DBPath), "health.json"),
+		Remote:     remote, // Stage 3: unhealthy transition also delivered beyond the Mac (same 6h cooldown)
 	})
 
 	// ── API ─────────────────────────────────────────────────────────
 	deps := api.Deps{
-		St:      st,
-		Cfg:     cfg,
-		Version: version,
-		Started: time.Now(),
-		LLM:     llmClient,
+		St:       st,
+		Cfg:      cfg,
+		Version:  version,
+		Started:  time.Now(),
+		LLM:      llmClient,
+		Notifier: remote, // Stage 3: /api/notify-status transport visibility
 		CurrentState: func(ctx context.Context, symbolID int64) (map[md.Horizon]string, error) {
 			return pipeline.CurrentState(ctx, st, symbolID)
 		},
@@ -415,9 +448,13 @@ func refreshStreamerSymbols(ctx context.Context, st *store.Store, streamer *alpa
 //   - daily-briefing (10m tick, fires once per day at ~7:00am ET): one
 //     honest market insight composed from stored data only (LLM-polished
 //     when a key is configured, deterministic template otherwise).
-func alertBriefingWorkers(st *store.Store, llmClient llm.Client) []workers.Worker {
+//
+// Stage 3 (alert delivery beyond the Mac): the alert-runner also carries the
+// shared remote notifier — ONE batched message per sweep to every configured
+// transport, under the same 30m cooldown as the macOS popup.
+func alertBriefingWorkers(st *store.Store, llmClient llm.Client, remote *notify.Notifier) []workers.Worker {
 	return []workers.Worker{
-		&alerts.Runner{St: st},
+		&alerts.Runner{St: st, Remote: remote},
 		&briefing.Worker{St: st, LLM: llmClient},
 	}
 }
@@ -699,4 +736,119 @@ func companiesWorkers(st *store.Store, ec *edgar.Client) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.CompaniesSync{St: st, Client: ec},
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 2 — MAKE THE PROOF VISIBLE (appended block).
+// weeklyProofWorkers returns the wave's two once-per-NY-week workers (both
+// tick every 30m; the meta week-key dedup + Sunday-hour gate does the pacing,
+// with catch-up later in the week if the daemon was down at the time):
+//   - weekly-report (Sun ≥5pm ET): ONE insight (kind weekly_report) measuring
+//     the platform's own week from stored data only — resolutions added by
+//     horizon (raw + independent symbol-days), adaptive weights now vs last
+//     week's snapshot (meta adaptive_weights_prev; first run = baseline
+//     recorded), paper-book P&L change + trades, the per-symbol agents nearest
+//     personal-model graduation (n/40), sentiment coverage, and the week's
+//     anomaly count. Deterministic template; optional LLM polish under the
+//     daily briefing's facts-are-untrusted-DATA rule.
+//   - signalbt-weekly (Sun ≥6pm ET): runs the internal/signalbt evaluation per
+//     horizon with the SAME parameters as /api/signal-backtest, stores the full
+//     Result JSON in meta (signalbt_weekly:<sunday> + signalbt_latest — served
+//     by ?pinned=1), and writes one honest insight (IC, quintile spread, N,
+//     gated-or-not; always labeled backtested, never live).
+func weeklyProofWorkers(st *store.Store, llmClient llm.Client) []workers.Worker {
+	return []workers.Worker{
+		&briefing.WeeklyWorker{St: st, LLM: llmClient},
+		&briefing.SignalBTPinWorker{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 3 — ALERT DELIVERY BEYOND THE MAC (appended block).
+// remoteNotifier builds the ONE daemon-wide outbound notifier
+// (internal/notify): three optional, env-configured transports —
+//   - Discord   SIGNALDECK_DISCORD_WEBHOOK            (webhook JSON {content})
+//   - Telegram  SIGNALDECK_TELEGRAM_BOT_TOKEN
+//               + SIGNALDECK_TELEGRAM_CHAT_ID         (Bot API sendMessage)
+//   - Webhook   SIGNALDECK_WEBHOOK_URL                (POST {title,body,kind,ts})
+//
+// Contract: 5s timeout + 1 retry per delivery; failures become dq events
+// (kind notify_failed, secrets redacted) and NEVER block the alert sweep or
+// the watchdog; with nothing configured every Send is a no-op and alerts stay
+// macOS-only. The same instance backs the alert-runner's batched sweep
+// message, the watchdog's unhealthy-transition ping, and the read-only
+// GET /api/notify-status. Email is deliberately NOT a transport — it needs
+// SMTP credentials or a provider account (documented as future work).
+func remoteNotifier(st *store.Store) *notify.Notifier {
+	n := notify.NewFromEnv(st)
+	if n.Enabled() {
+		slog.Info("remote notify enabled", "transports", n.ConfiguredNames())
+	} else {
+		slog.Info("remote notify: no transports configured — alerts stay macOS-only " +
+			"(set SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, or SIGNALDECK_WEBHOOK_URL in daemon/.env)")
+	}
+	return n
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 4 — SIC/SECTOR COVERAGE FOR THE WHOLE DIRECTORY (appended block).
+// sicBulkWorkers returns the wave's worker: sic-bulk-sync (12h tick) — closes
+// the directory's SIC gap (533/10,415 classified at ship time) with ONE free
+// download of SEC's official nightly bulk export of the Submissions API,
+//   https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip
+// (documented on sec.gov "EDGAR Application Programming Interfaces"; ~1.5 GB,
+// verified live 2026-07-06). Every CIK##########.json entry carries the same
+// sic/sicDescription header the filings-poller extracts one company at a
+// time, so one archive classifies the whole directory.
+//   - Gate (pure, tested): boot catch-up when coverage < 50% (at most one
+//     attempt per UTC day), else once per UTC month.
+//   - Discipline: stream-download to SIGNALDECK_TMP (else os.TempDir(); temp
+//     file deleted after, success or failure), > 5 GiB free-disk guard, only
+//     directory CIKs decompressed, one batched transaction to update
+//     companies.sic/sic_desc, coverage logged before/after.
+//   - Degradation: 403/moved/corrupt archive ⇒ dq event (sic_bulk_unavailable)
+//     + honest detail; the filings-poller SIC rotation keeps enriching; the
+//     fleet NEVER fails. Blank SICs are honest absence and never stored.
+//
+// ec is the daemon-wide SHARED EDGAR client (see run()): the one download
+// paces through the same limiter + declarative UA as every other SEC call.
+func sicBulkWorkers(st *store.Store, ec *edgar.Client) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.SICBulkSync{St: st, Client: ec},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 5 — FINRA REG SHO DAILY SHORT SALE VOLUME (appended block).
+// finraShortsWorkers returns the wave's worker: finra-shorts (6h tick) —
+// ingests FINRA's FREE, no-registration Consolidated NMS daily short sale
+// volume file (cdn.finra.org/equity/regsho/daily/CNMSshvolYYYYMMDD.txt,
+// verified live 2026-07-06; posted by ~6pm ET on the trade date) into the
+// universe-scoped short_volume table (tracked symbols only, ~500 of ~12k
+// rows/file). The tick is a heartbeat: the pure TargetShortVolDay gate only
+// expects a day's file after ~18:30 ET on that TRADING day (weekends + full
+// NYSE holidays step back via marketcal) and a meta day-key dedups each trade
+// date to exactly one ingest; the first run backfills ~30 trading days (30
+// paced requests). The finra client carries its own declarative UA (reusing
+// edgar.ResolveUA()) and 500ms min-interval pacer; FINRA's CDN 403s absent
+// days, which maps to an honest skip. A missing file past the deadline or a
+// fetch error records a dq event (finra_shorts_unavailable/_error) and
+// retries next tick — NEVER a fleet failure, and nothing fabricated.
+// HONESTY: the derived short_pct is the daily short sale VOLUME ratio — NOT
+// short interest; it includes market-maker activity and a high ratio is NOT
+// directly bearish. /api/shorts and the UI carry that caveat verbatim.
+func finraShortsWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.ShortVolPoller{St: st, Client: finra.New()},
+	}
+}
+
+// runSICBulkOnce is the MANUAL one-shot entry behind `signaldeckd
+// -sic-bulk-sync`: one forced sync (gate bypassed; disk guard still applies)
+// against the configured store, returning the worker's honest detail line.
+// Stop the daemon first — two processes contending for SQLite writes will
+// see busy timeouts.
+func runSICBulkOnce(ctx context.Context, st *store.Store) (string, error) {
+	w := &pipeline.SICBulkSync{St: st, Client: edgar.New(), Force: true}
+	return w.Run(ctx)
 }

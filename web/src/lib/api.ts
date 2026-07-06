@@ -1745,3 +1745,160 @@ export interface EarningsEstResponse {
 export function earningsEst(limit = 100) {
   return get<EarningsEstResponse>(`/api/earnings-est?limit=${limit}`);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 2 — MAKE THE PROOF VISIBLE (appended block; keep at END).
+// (a) GATE COUNTDOWN: /api/track-record now carries a `gate` block — the
+// threshold, how many independent (symbol, UTC-day) resolutions remain, and a
+// LABELED ESTIMATE of when the gate clears, derived only from the measured
+// accrual of the last 7 days. estDaysToUngate is null when nothing accrued
+// recently (an honest unknown). firstResolveEta offers, per horizon with ZERO
+// resolved outcomes, the estimated timestamp of the first resolution
+// (earliest open prediction + its forward window) — also labeled an estimate.
+// (b) WEEKLY SIGNAL-BACKTEST PIN: /api/signal-backtest?pinned=1 serves the
+// snapshot the signalbt-weekly worker stored on Sunday evening ET, so the page
+// can show "as of Sunday" without recomputing; when no pin exists the daemon
+// falls back to a live compute and says so via pinnedNote.
+
+/** Measured accrual of independent resolutions over the last 7 days. */
+export interface TrackGateAccrual {
+  independentNew: number; // distinct new (symbol, UTC-day) resolutions
+  tradingDays: number; // NYSE trading days inside the window
+  perTradingDay: number; // the measured accrual rate
+}
+
+/** The gate-countdown block on /api/track-record. All estimates are labeled. */
+export interface TrackGate {
+  threshold: number; // independent-N floor (30)
+  remaining: number; // max(0, threshold - independentN)
+  estDaysToUngate: number | null; // null = unknown (no recent accrual); 0 = clear
+  estimate: true; // this block is an estimate, render it as one
+  estBasis: string; // plain-English basis of the estimate — render verbatim
+  accrual7d: TrackGateAccrual;
+  firstResolveEta: Record<string, number | null>; // horizon -> est. first-resolution ts (only when 0 resolved)
+  firstResolveEtaNote: string; // estimate label — render verbatim
+}
+
+/** TrackRecord + the Stage-2 gate countdown. */
+export interface TrackRecordWithGate extends TrackRecord {
+  gate?: TrackGate;
+}
+
+/** Fetch the track record including the gate-countdown block. */
+export function trackRecordWithGate(horizon: Horizon = "1d") {
+  return get<TrackRecordWithGate>(`/api/track-record?horizon=${horizon}`);
+}
+
+/** /api/signal-backtest payload + the Stage-2 pin envelope. */
+export interface SignalBacktestPinnedResponse extends SignalBacktestResponse {
+  pinned: boolean; // true = the stored Sunday snapshot, not a fresh compute
+  pinnedDay?: string; // NY Sunday the pin covers (YYYY-MM-DD)
+  pinnedTs?: number; // when the pin was computed (unix seconds)
+  equityDownsampled?: boolean; // stored curve was decimated (stats unaffected)
+  pinnedNote?: string; // present when pinned was requested but none exists
+}
+
+/** The weekly pinned own-signal backtest (falls back to live + note when absent). */
+export function signalBacktestPinned(horizon: "1d" | "1w") {
+  return get<SignalBacktestPinnedResponse>(
+    `/api/signal-backtest?horizon=${horizon}&pinned=1`,
+  );
+}
+
+/** A live own-signal backtest compute, typed with the pin envelope (pinned=false). */
+export function signalBacktestLive(horizon: "1d" | "1w") {
+  return get<SignalBacktestPinnedResponse>(
+    `/api/signal-backtest?horizon=${horizon}`,
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 3 — ALERT DELIVERY BEYOND THE MAC (appended block; keep at END).
+// GET /api/notify-status reports which outbound delivery transports are
+// configured — macOS (always attempted, honestly labeled untracked) plus the
+// three optional env-configured remotes (Discord webhook, Telegram bot,
+// generic webhook) — with last delivery ts and last SECRET-REDACTED error per
+// transport. The payload never contains webhook URLs or tokens. Email is
+// deliberately absent: it needs SMTP creds/provider (noted as future).
+
+/** One delivery transport's honest status + the env var(s) that enable it. */
+export interface NotifyTransport {
+  name: string; // "macos" | "discord" | "telegram" | "webhook"
+  configured: boolean;
+  env: string; // env var(s) to set in daemon/.env ("(built-in)" for macos)
+  note?: string; // honest caveat (e.g. macOS delivery untracked)
+  lastOk?: number; // unix seconds of last successful delivery
+  lastError?: string; // redacted — never contains secrets
+  lastErrorTs?: number;
+}
+
+/** GET /api/notify-status payload. */
+export interface NotifyStatusResponse {
+  transports: NotifyTransport[];
+  email: string; // honest "not supported — needs SMTP/provider (future)" note
+  note: string; // how remote transports are configured + degrade
+}
+
+/** Fetch delivery-transport status (secrets never included). */
+export function notifyStatus() {
+  return get<NotifyStatusResponse>(`/api/notify-status`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 5 — FINRA REG SHO DAILY SHORT SALE VOLUME (appended block; keep at
+// END). GET /api/shorts serves FINRA's free, registration-less Consolidated
+// NMS daily short-sale volume (universe-scoped to tracked symbols).
+// HONESTY — render `caveat` VERBATIM wherever a ratio is shown: this is the
+// daily short sale VOLUME ratio, NOT short interest; it includes market-maker
+// activity; a high ratio is NOT directly bearish. `latestZ` is descriptive
+// (latest ratio vs the symbol's own trailing window), never a signal.
+
+/** One symbol-day of Reg SHO daily short-sale volume. */
+export interface ShortVolumePoint {
+  symbolId: number;
+  symbol?: string;
+  day: string; // YYYY-MM-DD trade date
+  shortVol: number; // may be fractional (fractional-share trades)
+  shortExempt: number;
+  totalVol: number;
+  shortPct: number; // shortVol/totalVol, 0 when totalVol=0
+}
+
+/** One fleet-wide extremes row (+ last ≤30 daily ratios, ASC). */
+export interface ShortsExtreme extends ShortVolumePoint {
+  symbol: string;
+  spark: number[];
+}
+
+/** GET /api/shorts?symbol= — one stock's series + labeled descriptive z. */
+export interface ShortsSymbolResponse {
+  caveat: string; // render verbatim
+  note: string;
+  symbol: string;
+  days: number;
+  series: ShortVolumePoint[] | null; // ASC; null/empty = nothing stored yet
+  latestZ: number | null; // null = <10 prior days or flat baseline
+  zNote: string; // render verbatim next to the z
+}
+
+/** GET /api/shorts — fleet-wide latest-day top ratios (floor stated). */
+export interface ShortsExtremesResponse {
+  caveat: string; // render verbatim
+  note: string;
+  day: string; // "" = nothing stored yet
+  minTotalVol: number;
+  floorNote: string;
+  extremes: ShortsExtreme[] | null;
+  emptyNote?: string; // present when nothing is stored yet
+}
+
+/** Fetch one tracked stock's Reg SHO daily short-volume series. */
+export function shortsSymbol(symbol: string, days = 30) {
+  const p = new URLSearchParams({ symbol, days: String(days) });
+  return get<ShortsSymbolResponse>(`/api/shorts?${p.toString()}`);
+}
+
+/** Fetch the fleet-wide latest-day short-volume-ratio extremes. */
+export function shortsExtremes(limit = 20) {
+  return get<ShortsExtremesResponse>(`/api/shorts?limit=${limit}`);
+}

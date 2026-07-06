@@ -11,9 +11,11 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -55,8 +57,14 @@ const (
 // (user, symbol, horizon, side) per this window.
 const predictionDedupWindow = 24 * time.Hour
 
-// notifyCooldown limits macOS notifications to one per 30 minutes.
+// notifyCooldown limits notifications to one per 30 minutes. Stage 3: the
+// SAME single cooldown gates the macOS popup AND every remote transport
+// (Discord/Telegram/webhook) — one shared clock, deliberately not per-transport.
 const notifyCooldown = 30 * time.Minute
+
+// notifyMaxLines caps the per-sweep batched remote message at this many alert
+// detail lines; overflow is summarized as "+N more".
+const notifyMaxLines = 5
 
 // sweepBatch bounds how many events one sweep will consume per table.
 const sweepBatch = 500
@@ -104,6 +112,11 @@ type Runner struct {
 	Hi, Lo float64
 	// Notify shows a user-facing alert; nil = osascript display notification.
 	Notify func(msg string) error
+	// Remote fans the same batched sweep message out to the env-configured
+	// remote transports (Discord/Telegram/generic webhook — internal/notify);
+	// nil or unconfigured = macOS-only. Shares the SAME 30m cooldown as the
+	// macOS popup, and its failures degrade to dq events (never the sweep).
+	Remote *notify.Notifier
 	// Now is a test hook; nil = time.Now.
 	Now func() time.Time
 
@@ -156,6 +169,25 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 
 	created := 0
 
+	// Stage 3 (remote delivery): collect UNIQUE event lines for the ONE
+	// batched remote message per sweep. Fan-out to multiple watchers repeats
+	// the same detail — the notification is device-level, so each distinct
+	// event appears once. Capped at notifyMaxLines; the unique total drives
+	// the "+N more" overflow.
+	lineSeen := map[string]struct{}{}
+	var lines []string
+	uniqueEvents := 0
+	addLine := func(detail string) {
+		if _, dup := lineSeen[detail]; dup {
+			return
+		}
+		lineSeen[detail] = struct{}{}
+		uniqueEvents++
+		if len(lines) < notifyMaxLines {
+			lines = append(lines, detail)
+		}
+	}
+
 	// ── breakouts since last sweep (id cursor; first sweep looks back 24h) ──
 	bCursor, firstB := r.cursor(ctx, metaBreakoutCursor)
 	sinceTs := int64(0)
@@ -185,14 +217,16 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 				continue
 			}
 			sid := *ev.SymbolID
+			detail := fmt.Sprintf("%s: %s %s", s.Symbol, ev.Kind, ev.Detail)
 			if err := r.St.InsertAlert(ctx, store.Alert{
 				UserID: uid, SymbolID: &sid, Kind: KindBreakout,
-				Detail: fmt.Sprintf("%s: %s %s", s.Symbol, ev.Kind, ev.Detail),
+				Detail: detail,
 				Ts:     ev.Ts,
 			}); err != nil {
 				return "", err
 			}
 			created++
+			addLine(detail)
 		}
 	}
 
@@ -220,14 +254,16 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 				continue
 			}
 			sid := ev.SymbolID
+			detail := fmt.Sprintf("%s: regime %s → %s", s.Symbol, ev.From, ev.To)
 			if err := r.St.InsertAlert(ctx, store.Alert{
 				UserID: uid, SymbolID: &sid, Kind: KindRegimeChange,
-				Detail: fmt.Sprintf("%s: regime %s → %s", s.Symbol, ev.From, ev.To),
+				Detail: detail,
 				Ts:     ev.Ts,
 			}); err != nil {
 				return "", err
 			}
 			created++
+			addLine(detail)
 		}
 	}
 
@@ -261,14 +297,16 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 				continue
 			}
 			sid := ev.SymbolID
+			detail := fmt.Sprintf("%s: %s", s.Symbol, ev.Detail)
 			if err := r.St.InsertAlert(ctx, store.Alert{
 				UserID: uid, SymbolID: &sid, Kind: ev.Kind,
-				Detail: fmt.Sprintf("%s: %s", s.Symbol, ev.Detail),
+				Detail: detail,
 				Ts:     ev.Ts,
 			}); err != nil {
 				return "", err
 			}
 			created++
+			addLine(detail)
 		}
 	}
 
@@ -297,15 +335,17 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 					continue
 				}
 				symID := sid
+				detail := fmt.Sprintf("%s %s: calibrated P(up) %.0f%% (ensemble n=%d)",
+					s.Symbol, h, p.CalProb*100, p.NUsed)
 				if err := r.St.InsertAlert(ctx, store.Alert{
 					UserID: uid, SymbolID: &symID, Horizon: string(h), Kind: kind,
-					Detail: fmt.Sprintf("%s %s: calibrated P(up) %.0f%% (ensemble n=%d)",
-						s.Symbol, h, p.CalProb*100, p.NUsed),
-					Ts: now.Unix(),
+					Detail: detail,
+					Ts:     now.Unix(),
 				}); err != nil {
 					return "", err
 				}
 				created++
+				addLine(detail)
 			}
 		}
 	}
@@ -321,17 +361,44 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	// Batched macOS notification: best-effort, cooldown-limited, never fatal.
+	// Batched notification: best-effort, cooldown-limited, never fatal.
+	// ONE shared 30m cooldown gates the macOS popup AND all remote transports.
 	if created > 0 && now.Sub(r.lastNotify) > notifyCooldown {
 		r.lastNotify = now
-		notify := r.Notify
-		if notify == nil {
-			notify = osascriptNotify
+		local := r.Notify
+		if local == nil {
+			local = osascriptNotify
 		}
-		_ = notify(fmt.Sprintf("%d new SignalDeck alert(s)", created))
+		_ = local(fmt.Sprintf("%d new SignalDeck alert(s)", created))
+		// Stage 3: ONE batched remote message per sweep (Discord/Telegram/
+		// webhook). Send degrades to dq events internally and never errors,
+		// so a dead webhook can never fail the sweep.
+		if r.Remote != nil {
+			title, body := BatchMessage(created, uniqueEvents, lines)
+			r.Remote.Send(ctx, notify.Message{Title: title, Body: body, Kind: "alerts", Ts: now.Unix()})
+		}
 	}
 
 	return fmt.Sprintf("created %d alert(s) across %d user(s)", created, len(userIDs)), nil
+}
+
+// BatchMessage builds the ONE batched per-sweep remote notification.
+// created = alert rows inserted (fan-out across users counts), events =
+// distinct event lines observed, lines = the first <=notifyMaxLines of them.
+// Overflow beyond the shown lines is summarized honestly as "+N more".
+func BatchMessage(created, events int, lines []string) (title, body string) {
+	title = fmt.Sprintf("SignalDeck: %d new alert(s)", created)
+	if len(lines) > notifyMaxLines {
+		lines = lines[:notifyMaxLines]
+	}
+	body = strings.Join(lines, "\n")
+	if extra := events - len(lines); extra > 0 {
+		if body != "" {
+			body += "\n"
+		}
+		body += fmt.Sprintf("+%d more", extra)
+	}
+	return title, body
 }
 
 // cursor reads an id cursor from meta; first=true when it was never set.

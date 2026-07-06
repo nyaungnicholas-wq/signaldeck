@@ -2,12 +2,18 @@ package alerts
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -266,6 +272,147 @@ func TestMarkAlertsSeenFlow(t *testing.T) {
 	// Idempotent.
 	if n, _ := st.MarkAlertsSeen(ctx, uid); n != 0 {
 		t.Fatalf("second mark changed %d rows", n)
+	}
+}
+
+// ── Stage 3: batched remote delivery ─────────────────────────────────────
+
+func TestBatchMessage(t *testing.T) {
+	cases := []struct {
+		created, events int
+		lines           []string
+		wantTitle       string
+		wantBody        string
+	}{
+		{1, 1, []string{"NVDA: high_break 20d high"},
+			"SignalDeck: 1 new alert(s)", "NVDA: high_break 20d high"},
+		{3, 2, []string{"a", "b"}, // fan-out to 2 users can make created > events
+			"SignalDeck: 3 new alert(s)", "a\nb"},
+		{7, 7, []string{"l1", "l2", "l3", "l4", "l5"},
+			"SignalDeck: 7 new alert(s)", "l1\nl2\nl3\nl4\nl5\n+2 more"},
+		{9, 9, []string{"l1", "l2", "l3", "l4", "l5", "l6"}, // defensive re-cap
+			"SignalDeck: 9 new alert(s)", "l1\nl2\nl3\nl4\nl5\n+4 more"},
+		{2, 2, nil, "SignalDeck: 2 new alert(s)", "+2 more"},
+	}
+	for _, c := range cases {
+		title, body := BatchMessage(c.created, c.events, c.lines)
+		if title != c.wantTitle || body != c.wantBody {
+			t.Errorf("BatchMessage(%d,%d,%v) = %q,%q want %q,%q",
+				c.created, c.events, c.lines, title, body, c.wantTitle, c.wantBody)
+		}
+	}
+}
+
+// TestRunnerRemoteBatchCapAndCooldown drives the runner against a captured
+// generic-webhook transport: 7 events in one sweep must produce EXACTLY ONE
+// remote message with 5 detail lines + "+2 more", and a follow-up sweep with
+// a fresh event inside the 30m cooldown must deliver nothing.
+func TestRunnerRemoteBatchCapAndCooldown(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	_, sym := seedUserWithSymbol(t, st, "alice", "NVDA")
+	sid := sym.ID
+
+	now := time.Now()
+	for i := 0; i < 7; i++ {
+		if err := st.InsertBreakout(ctx, &sid, now.Unix()-60+int64(i), "high_break",
+			fmt.Sprintf("event %d", i), 1); err != nil {
+			t.Fatalf("seed breakout %d: %v", i, err)
+		}
+	}
+
+	var mu sync.Mutex
+	var bodies []notify.Message
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m notify.Message
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		mu.Lock()
+		bodies = append(bodies, m)
+		mu.Unlock()
+	}))
+	defer srv.Close()
+
+	r := &Runner{
+		St:     st,
+		Notify: func(string) error { return nil },
+		Remote: &notify.Notifier{WebhookURL: srv.URL},
+	}
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	mu.Lock()
+	got := append([]notify.Message{}, bodies...)
+	mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("remote messages = %d, want 1 (batched per sweep)", len(got))
+	}
+	m := got[0]
+	if m.Kind != "alerts" || m.Ts == 0 {
+		t.Errorf("message envelope = %+v, want kind=alerts + ts", m)
+	}
+	if !strings.Contains(m.Title, "7 new alert(s)") {
+		t.Errorf("title = %q, want the created count", m.Title)
+	}
+	lines := strings.Split(m.Body, "\n")
+	if len(lines) != 6 || lines[5] != "+2 more" {
+		t.Fatalf("body cap violated: %d lines, last %q (body %q)", len(lines), lines[len(lines)-1], m.Body)
+	}
+	if !strings.Contains(m.Body, "NVDA: high_break event 0") {
+		t.Errorf("body missing alert detail: %q", m.Body)
+	}
+
+	// A NEW event inside the shared 30m cooldown: alert row is created but
+	// NO second remote delivery happens.
+	if err := st.InsertBreakout(ctx, &sid, now.Unix(), "squeeze", "late event", 1); err != nil {
+		t.Fatalf("seed late breakout: %v", err)
+	}
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	mu.Lock()
+	n := len(bodies)
+	mu.Unlock()
+	if n != 1 {
+		t.Errorf("remote fired inside cooldown: %d messages", n)
+	}
+}
+
+// TestRunnerRemoteFailureNeverFailsSweep points the remote at a dead server:
+// the sweep must still succeed and record a notify_failed dq event.
+func TestRunnerRemoteFailureNeverFailsSweep(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	_, sym := seedUserWithSymbol(t, st, "alice", "NVDA")
+	sid := sym.ID
+	if err := st.InsertBreakout(ctx, &sid, time.Now().Unix()-60, "high_break", "x", 1); err != nil {
+		t.Fatalf("seed breakout: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	dead := srv.URL
+	srv.Close()
+
+	r := &Runner{
+		St:     st,
+		Notify: func(string) error { return nil },
+		Remote: &notify.Notifier{WebhookURL: dead, DQ: st},
+	}
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatalf("sweep failed on dead remote: %v", err)
+	}
+	events, err := st.RecentDQ(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ev := range events {
+		if ev.Kind == "notify_failed" && strings.Contains(ev.Detail, "transport=webhook") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no notify_failed dq event recorded: %+v", events)
 	}
 }
 
