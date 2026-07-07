@@ -32,6 +32,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/macrofeat"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/universe"
 )
 
@@ -86,14 +87,25 @@ type feedItem struct {
 // watchSpark is one watchlist row with its sparkline closes (oldest→newest).
 // Score1d (Stage 4, dashboard rebuild) is the latest 1d ensemble score for
 // the sidebar score chip; nil = not scored yet (the UI shows "—", honestly).
+//
+// Stage 2 (verdict cards): CalProb1d/NUsed1d/Tier1d/NSamples1d/TierThreshold
+// feed the sidebar verdict card — the newest REAL calibrated P(up) plus the
+// honest evidence tier behind it, from ONE batched VerdictStats read.
+// CalProb1d nil = no prediction stored yet → the card says "NO READ YET",
+// never a fabricated lean; Tier1d "" = no symbol-agent row yet (static).
 type watchSpark struct {
-	Symbol       string    `json:"symbol"`
-	Market       md.Market `json:"market"`
-	Name         string    `json:"name"`
-	Closes       []float64 `json:"closes"`
-	LastClose    float64   `json:"lastClose"`
-	DayChangePct float64   `json:"dayChangePct"`
-	Score1d      *float64  `json:"score1d"`
+	Symbol        string    `json:"symbol"`
+	Market        md.Market `json:"market"`
+	Name          string    `json:"name"`
+	Closes        []float64 `json:"closes"`
+	LastClose     float64   `json:"lastClose"`
+	DayChangePct  float64   `json:"dayChangePct"`
+	Score1d       *float64  `json:"score1d"`
+	CalProb1d     *float64  `json:"calProb1d"`
+	NUsed1d       int       `json:"nUsed1d"`
+	Tier1d        string    `json:"tier1d"`
+	NSamples1d    int       `json:"nSamples1d"`
+	TierThreshold int       `json:"tierThreshold"`
 }
 
 // ── cache ────────────────────────────────────────────────────────────────
@@ -423,9 +435,20 @@ func (d Deps) buildDashWatchlist(ctx context.Context, uid int64) (map[string]any
 	if err != nil {
 		return nil, err
 	}
+	// Stage 2 (verdict cards): the whole watchlist's newest calibrated 1d
+	// prediction + symbol-agent tier in one batched read (never per-symbol).
+	verdicts, err := d.St.VerdictStats(ctx, ids, md.H1d)
+	if err != nil {
+		return nil, err
+	}
 	sparks := make([]watchSpark, 0, len(syms))
 	for _, s := range syms {
 		ws := watchSpark{Symbol: s.Symbol, Market: s.Market, Name: s.Name, Closes: sparkMap[s.ID]}
+		if vs, ok := verdicts[s.ID]; ok {
+			ws.CalProb1d, ws.NUsed1d = vs.CalProb, vs.NUsed
+			ws.Tier1d, ws.NSamples1d = vs.Tier, vs.NSamples
+		}
+		ws.TierThreshold = symbolagent.MinPersonal
 		if n := len(ws.Closes); n > 0 {
 			ws.LastClose = ws.Closes[n-1]
 			if n > 1 {

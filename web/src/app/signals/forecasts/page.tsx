@@ -19,6 +19,7 @@ import { ago, fmtTs } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 interface Selected {
   symbol: string;
@@ -355,6 +356,12 @@ export default function ForecastPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="signals-forecasts"
+        text="How likely is this symbol to rise over each horizon — shown right next to how that same forecast has actually scored out of sample? A probability with no proven lift is labeled noise."
+      />
 
       {/* explainer — always visible; the honesty framing IS the product */}
       <section className="panel">

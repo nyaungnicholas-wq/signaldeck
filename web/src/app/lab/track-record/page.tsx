@@ -20,6 +20,12 @@ import {
   type TrackRecordWithGate,
 } from "@/lib/api";
 import { ago, fmtDate, fmtPct } from "@/lib/format";
+import { metricLabel, readMetric, type MetricKey, type PlainCtx } from "@/lib/plain";
+import Plain, { useViewMode } from "@/components/Plain";
+import GradeMeter from "@/components/viz/GradeMeter";
+import CellBar from "@/components/viz/CellBar";
+import PagePurpose from "@/components/PagePurpose";
+import StorySection from "@/components/StorySection";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ReliabilityCurve from "@/components/trackrecord/ReliabilityCurve";
@@ -130,6 +136,12 @@ export default function TrackRecordPage() {
         </div>
       </div>
 
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-track-record"
+        text="Is SignalDeck actually right when it predicts? (measured honestly) — its own frozen predictions graded against what the market really did, with every skill number withheld until there is enough independent evidence."
+      />
+
       {err && !current && (
         <ErrorState
           message={err}
@@ -144,20 +156,25 @@ export default function TrackRecordPage() {
 
       {current && (
         <>
-          {/* GATE COUNTDOWN — the wait itself, made visible: progress toward
-              the independent-N threshold, a LABELED estimate of when the gate
-              clears (from the measured last-7-day accrual), and what is
-              already accruing per horizon. Honest: no accrual → no ETA. */}
-          {gated && (
+          {/* ── STAGE 3 STORY, SECTION 1: the verdict itself ── */}
+          <StorySection
+            n={1}
+            title="THE VERDICT"
+            sub="the scoreboard's one honest headline"
+          >
+          {gated ? (
             <section className="panel p-5">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="text-[0.85rem] font-semibold" style={{ color: "var(--warn)" }}>
+              <p className="m-0 text-[1.05rem] font-extrabold tracking-wide" style={{ color: "var(--warn)" }}>
+                TOO EARLY TO GRADE
+              </p>
+              <div className="mt-1 flex flex-wrap items-baseline justify-between gap-2">
+                <p className="m-0 text-[0.85rem] font-semibold" style={{ color: "var(--warn)" }}>
                   <span className="tnum">
                     {current.independentN}/{current.gate?.threshold ?? current.minIndependentN}
                   </span>{" "}
                   independent (symbol, UTC-day) resolutions
                 </p>
-                <p className="text-[0.78rem] tnum" style={{ color: "var(--dim)" }}>
+                <p className="m-0 text-[0.78rem] tnum" style={{ color: "var(--dim)" }}>
                   {current.gate == null
                     ? (current.note ?? "not yet significant")
                     : current.gate.estDaysToUngate == null
@@ -183,6 +200,34 @@ export default function TrackRecordPage() {
                   }}
                 />
               </div>
+              <p className="mt-2 text-[0.75rem]" style={{ color: "var(--dim)" }}>
+                An honest &ldquo;not enough evidence yet&rdquo; beats a fake verdict — the skill
+                numbers below stay withheld until this bar fills.
+              </p>
+            </section>
+          ) : (
+            <section className="panel p-5">
+              <p className="m-0 text-[1.05rem] font-extrabold tracking-wide" style={{ color: "var(--ok)" }}>
+                MEASURED{current.winRate != null ? `: right ${pct(current.winRate)} of the time` : ""}
+              </p>
+              <p className="mt-1 text-[0.8rem] tnum" style={{ color: "var(--dim)" }}>
+                over {(current.independentN ?? 0).toLocaleString("en-US")} independent (symbol,
+                UTC-day) resolutions
+                {current.winRateCI ? ` · 95% CI ${pct(current.winRateCI[0])}–${pct(current.winRateCI[1])}` : ""}
+                {current.baseRate != null ? ` · vs a ${pct(current.baseRate)} always-up base rate` : ""}
+              </p>
+            </section>
+          )}
+          </StorySection>
+
+          {/* ── STAGE 3 STORY, SECTION 2: why the verdict is what it is ── */}
+          <StorySection
+            n={2}
+            title="WHY"
+            sub="what is accruing, what is withheld, and the measured components"
+          >
+          {gated && (
+            <section className="panel p-5">
               {current.gate && (
                 <p className="mt-2 text-[0.72rem] tnum" style={{ color: "var(--faint)" }}>
                   last 7 days: +{current.gate.accrual7d.independentNew} independent
@@ -234,11 +279,16 @@ export default function TrackRecordPage() {
             </section>
           )}
 
-          {/* HERO STATS — measured only when ungated; each with its CI. */}
+          {/* COMPONENT STATS — measured only when ungated; each with its CI.
+              Stage-1 translation layer: every number renders through <Plain>
+              (SIMPLE: sentence first; PRO: raw first) — the gate still
+              withholds values in BOTH modes. */}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Stat
-              label="WIN RATE"
-              value={pct(current.winRate)}
+              metric="win_rate"
+              value={current.winRate}
+              ctx={{ gated, n: current.independentN, baseRate: current.baseRate ?? undefined }}
+              raw={pct(current.winRate)}
               sub={
                 current.winRateCI
                   ? `95% CI ${pct(current.winRateCI[0])}–${pct(current.winRateCI[1])}`
@@ -246,11 +296,12 @@ export default function TrackRecordPage() {
                     ? "withheld — too few obs"
                     : undefined
               }
-              tip="Fraction of resolved predictions where the market moved up. Base rate shown as the honest benchmark."
             />
             <Stat
-              label="BRIER"
-              value={num(current.brier)}
+              metric="brier"
+              value={current.brier}
+              ctx={{ gated, n: current.independentN }}
+              raw={num(current.brier)}
               sub={
                 current.brierSkill != null
                   ? `skill ${current.brierSkill >= 0 ? "+" : ""}${(current.brierSkill * 100).toFixed(0)}% vs base rate`
@@ -258,12 +309,12 @@ export default function TrackRecordPage() {
                     ? "withheld — too few obs"
                     : undefined
               }
-              tip="Mean squared error of the calibrated probability vs the {0,1} outcome. Lower is better; 0.25 is a coin flip. Brier skill > 0 beats always predicting the base rate."
-              good={current.brier != null && current.brier < 0.25}
             />
             <Stat
-              label="IC"
-              value={num(current.ic)}
+              metric="ic"
+              value={current.ic}
+              ctx={{ gated, n: current.independentN }}
+              raw={num(current.ic)}
               sub={
                 current.icCI
                   ? `95% CI ${num(current.icCI[0], 2)}–${num(current.icCI[1], 2)}`
@@ -271,17 +322,37 @@ export default function TrackRecordPage() {
                     ? "withheld — too few obs"
                     : undefined
               }
-              tip="Information coefficient — correlation of the signal (prob−0.5) with the realized forward return over independent obs. Fisher-z 95% CI."
-              good={current.ic != null && current.ic > 0}
             />
             <Stat
-              label="BASE RATE"
-              value={pct(current.baseRate)}
+              metric="base_rate"
+              value={current.baseRate}
+              ctx={{ gated }}
+              raw={pct(current.baseRate)}
               sub={gated ? "withheld — too few obs" : "the constant-forecast benchmark"}
-              tip="Realized up-rate of the sample — the honest benchmark any signal must beat."
             />
           </div>
 
+          {/* Stage 4 (tables→charts): the REPORT CARD — the same gated
+              readings as big grade meters. Below the gate every meter is an
+              honest EMPTY bar with the "no read yet" sentence; the gate never
+              gets bypassed by a visualization. */}
+          <TrackReportCard
+            gated={gated}
+            n={current.independentN ?? 0}
+            winRate={current.winRate}
+            baseRate={current.baseRate}
+            brier={current.brier}
+            reliabilityScore={current.reliabilityScore}
+          />
+          </StorySection>
+
+          {/* ── STAGE 3 STORY, SECTION 3 (SIMPLE mode starts folded) ── */}
+          <StorySection
+            n={3}
+            title="THE DETAILS"
+            sub="calibration curve, coverage, by-market sample, self-verification"
+            collapsible
+          >
           {/* RELIABILITY CURVE + COVERAGE */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <section className="panel">
@@ -373,8 +444,24 @@ export default function TrackRecordPage() {
                       <tr key={m.market} style={{ borderTop: "1px solid var(--border)" }}>
                         <td className="px-4 py-2 uppercase tracking-wider">{m.market}</td>
                         <td className="px-4 py-2 text-right tnum">{m.n.toLocaleString("en-US")}</td>
-                        <td className="px-4 py-2 text-right tnum">{pct(m.upRate)}</td>
-                        <td className="px-4 py-2 text-right tnum">{pct(m.dirHitRate)}</td>
+                        {/* Stage 4: inline magnitude bars (absolute 0–100% scale,
+                            neutral color — this block is descriptive, not a skill claim) */}
+                        <td className="px-4 py-2 text-right">
+                          <CellBar
+                            frac={Number.isFinite(m.upRate) ? m.upRate : null}
+                            label={pct(m.upRate)}
+                            color="var(--dim)"
+                            title="share of this market's resolved outcomes that went up — descriptive, absolute 0–100% scale"
+                          />
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          <CellBar
+                            frac={Number.isFinite(m.dirHitRate) ? m.dirHitRate : null}
+                            label={pct(m.dirHitRate)}
+                            color="var(--dim)"
+                            title="directional hit rate in this market's sample — descriptive (compare against the up rate), absolute 0–100% scale"
+                          />
+                        </td>
                         <td
                           className="px-4 py-2 text-right tnum"
                           style={{ color: m.meanFwd >= 0 ? "var(--bid)" : "var(--ask)" }}
@@ -497,33 +584,79 @@ export default function TrackRecordPage() {
               honest gap rather than a fabricated breakdown.
             </p>
           </section>
+          </StorySection>
         </>
       )}
     </div>
   );
 }
 
-function Stat({
-  label,
-  value,
-  sub,
-  tip,
-  good,
+/** Stage 4 (tables→charts): the track record's grade meters — win rate vs
+ *  base rate, prediction error, and calibration honesty, each rendered from
+ *  the SAME plain.ts reading (bar + sentence can never disagree). Gated →
+ *  every meter is empty and says so. */
+function TrackReportCard({
+  gated,
+  n,
+  winRate,
+  baseRate,
+  brier,
+  reliabilityScore,
 }: {
-  label: string;
-  value: string;
-  sub?: string;
-  tip?: string;
-  good?: boolean;
+  gated: boolean;
+  n: number;
+  winRate: number | null | undefined;
+  baseRate: number | null | undefined;
+  brier: number | null | undefined;
+  reliabilityScore: number | null | undefined;
 }) {
-  const color = value === "—" ? "var(--faint)" : good === undefined ? "var(--text)" : good ? "var(--bid)" : "var(--ask)";
+  const mode = useViewMode();
+  const ctx: PlainCtx = { gated, n };
+  const winRead = readMetric("win_rate", winRate, { ...ctx, baseRate: baseRate ?? undefined });
+  const brierRead = readMetric("brier", brier, ctx);
+  const relRead = readMetric("reliability", reliabilityScore, ctx);
+  return (
+    <section className="panel">
+      <div className="panel-h">
+        REPORT CARD
+        <span className="ml-auto text-[0.66rem] font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
+          {gated
+            ? "all meters empty on purpose — skill numbers are withheld below the significance gate"
+            : "bar and sentence come from the same reading"}
+        </span>
+      </div>
+      <div className="grid gap-x-8 gap-y-4 px-4 py-4 sm:grid-cols-3">
+        <GradeMeter label={metricLabel("win_rate", mode)} reading={winRead} />
+        <GradeMeter label={metricLabel("brier", mode)} reading={brierRead} />
+        <GradeMeter label={metricLabel("reliability", mode)} reading={relRead} />
+      </div>
+    </section>
+  );
+}
+
+/** Hero stat backed by the translation layer: label wording follows the
+ *  SIMPLE/PRO toggle and the value renders through <Plain>. */
+function Stat({
+  metric,
+  value,
+  ctx,
+  raw,
+  sub,
+}: {
+  metric: MetricKey;
+  value: number | null | undefined;
+  ctx?: PlainCtx;
+  raw?: string;
+  sub?: string;
+}) {
+  const mode = useViewMode();
   return (
     <div className="panel p-3">
-      <div className="text-[0.66rem] tracking-[0.14em]" style={{ color: "var(--faint)" }} title={tip}>
-        {label}
+      <div className="text-[0.66rem] uppercase tracking-[0.14em]" style={{ color: "var(--faint)" }}>
+        {metricLabel(metric, mode)}
       </div>
-      <div className="mt-1 text-lg font-bold tnum" style={{ color }}>
-        {value}
+      <div className="mt-1 text-[0.82rem]">
+        <Plain metric={metric} value={value} ctx={ctx} raw={raw} />
       </div>
       {sub && (
         <div className="mt-0.5 text-[0.66rem] tnum" style={{ color: "var(--faint)" }}>

@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
 )
 
 // predictionsLatest handles GET /api/predictions/latest?horizon=1d|1w.
@@ -44,6 +45,9 @@ func (d Deps) predictionsLatest(w http.ResponseWriter, r *http.Request) {
 		"gated":        gated,
 		"caption":      caption,
 		"trackLabel":   "backtested / in-sample — not a live track record",
+		// Stage 2 (verdict cards): each row's tier/nSamples measures against
+		// this personal-model graduation gate ("still learning 12/40 …").
+		"tierThreshold": symbolagent.MinPersonal,
 		"note": "Latest calibrated ensemble prediction per active symbol, strongest conviction first. " +
 			"Symbols without a stored prediction are absent (the predictor fills them in on worker cadence) — never fabricated.",
 	})

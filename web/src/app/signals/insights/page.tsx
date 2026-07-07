@@ -7,6 +7,7 @@ import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 type Filter = "all" | "market" | "symbol";
 
@@ -140,6 +141,12 @@ export default function InsightsPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="signals-insights"
+        text="What has the AI written about your symbols and the market — daily briefings and notes, grounded only in data the platform actually stored?"
+      />
 
       {/* what this page is */}
       <section className="panel">

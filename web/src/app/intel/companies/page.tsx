@@ -26,6 +26,7 @@ import {
   type CompanyDirRow,
 } from "@/lib/api";
 import { ago, fmtPct, fmtPrice } from "@/lib/format";
+import PagePurpose from "@/components/PagePurpose";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
@@ -158,6 +159,11 @@ export default function CompaniesPage() {
 
   return (
     <div className="flex flex-col gap-3">
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="intel-companies"
+        text="Every SEC-registered company in one directory — and which of them SignalDeck actually tracks. Untracked rows honestly show a dash, never a fabricated price."
+      />
       {/* header + filters */}
       <div className="panel flex flex-wrap items-center gap-2 px-3 py-2">
         <input

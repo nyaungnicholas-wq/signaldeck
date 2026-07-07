@@ -18,20 +18,27 @@ import {
   type ScoreComponent,
   type WatchRow,
 } from "@/lib/api";
-import { ago, fmtPct, fmtPrice, fmtScore, scoreColor, verdict } from "@/lib/format";
+import { ago, fmtPct, fmtPrice, fmtScore, scoreColor } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
+import VerdictCard from "@/components/VerdictCard";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import MoversPanel from "@/components/MoversPanel";
 import Sparkline from "@/components/viz/Sparkline";
 import Heatmap, { type HeatmapItem } from "@/components/viz/Heatmap";
 import { regimeColor } from "@/components/regime/regime";
+import PagePurpose from "@/components/PagePurpose";
+import { useViewMode } from "@/components/Plain";
 
 type Direction = "all" | "buy" | "sell";
 type MarketFilter = "all" | Market;
 /** Stage 5: TABLE stays the workhorse; HEATMAP is the same filtered set as
- *  color tiles (day % change) — a view toggle, not different data. */
-type View = "table" | "heatmap";
+ *  color tiles (day % change) — a view toggle, not different data.
+ *  Stage 4 (tables→charts): CARDS is the same filtered set as a grid of
+ *  verdict cards (sparkline + honest tier badge). Default view follows the
+ *  SIMPLE/PRO toggle — cards in simple, table in pro — until the user picks
+ *  one explicitly. No view ever loses data: all three render the SAME rows. */
+type View = "cards" | "table" | "heatmap";
 type SortKey =
   | "symbol"
   | "market"
@@ -55,7 +62,9 @@ const COLUMNS: { key: SortKey; label: string; numeric: boolean; title?: string; 
   { key: "lastClose", label: "LAST", numeric: true, title: "Last close price" },
   { key: "dayChangePct", label: "DAY %", numeric: true, title: "Change since previous close" },
   { key: "score", label: "SCORE", numeric: true, title: "Pressure score, −1 (sell) to +1 (buy)" },
-  { key: "verdict", label: "VERDICT", numeric: false },
+  // Stage 2 (verdict cards): the REAL calibrated 1d P(up) as an honest
+  // verdict card — sortable by that probability; "NO READ YET" rows sink.
+  { key: "verdict", label: "VERDICT (1d)", numeric: false, title: "Calibrated 1d P(up) as a verdict card — near-50% reads NO CLEAR LEAN; no stored prediction reads NO READ YET (never a fabricated lean). Backtested calibration, not a live track record." },
   // Stage 5: cross-sectional relative-strength rank + current regime label.
   { key: "rank", label: "RANK", numeric: true, title: "Cross-sectional relative-strength rank (1 = strongest); — = not in the latest ranking pass" },
   { key: "regime", label: "REGIME", numeric: false, title: "Current detected regime (described from stored bars, no lookahead); — = not classified yet" },
@@ -97,8 +106,13 @@ function sortValue(d: Derived, key: SortKey): string | number | null {
     case "dayChangePct":
       return isFinite(d.row.dayChangePct) ? d.row.dayChangePct : null;
     case "score":
-    case "verdict":
       return d.score;
+    case "verdict": {
+      // Stage 2: sort by the REAL calibrated 1d P(up); rows without a stored
+      // prediction return null and sink to the bottom (honest absence).
+      const p = d.row.calProb1d;
+      return typeof p === "number" && isFinite(p) ? p : null;
+    }
     case "rank":
       // rank 1 is best — negate so "desc" (the numeric default) puts #1 on top.
       return d.rank === null ? null : -d.rank;
@@ -349,7 +363,11 @@ export default function ScreenerPage() {
   const [direction, setDirection] = useState<Direction>("all");
   const [market, setMarket] = useState<MarketFilter>("all");
   const [search, setSearch] = useState("");
-  const [view, setView] = useState<View>("table");
+  // Stage 4 (tables→charts): null = "follow the SIMPLE/PRO mode default"
+  // (cards in simple, table in pro); a click pins an explicit choice.
+  const [view, setView] = useState<View | null>(null);
+  const mode = useViewMode();
+  const effView: View = view ?? (mode === "simple" ? "cards" : "table");
 
   // sorting
   const [sortKey, setSortKey] = useState<SortKey>("score");
@@ -470,6 +488,12 @@ export default function ScreenerPage() {
         )}
       </div>
 
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="markets-screener"
+        text="Which stocks look strongest right now? Ranks every tracked symbol by its pressure score — stored daily data on worker cadence, not live quotes, and never advice."
+      />
+
       {/* Signal8 wave Stage 4: gainers/losers over the daily universe with
           the best-effort mcap filter (unknown mcap = excluded + counted,
           never guessed). */}
@@ -558,19 +582,21 @@ export default function ScreenerPage() {
       <section className="panel">
         <div className="panel-h flex-wrap gap-2">
           RESULTS
-          {/* Stage 5: table ↔ heatmap view toggle (same filtered rows). */}
+          {/* Stage 4 (tables→charts): cards ↔ table ↔ heatmap view toggle —
+              all three render the SAME filtered rows; nothing is lost by
+              switching. Default: cards in simple mode, table in pro. */}
           <span className="flex items-center gap-1" role="tablist" aria-label="results view">
-            {(["table", "heatmap"] as View[]).map((v) => (
+            {(["cards", "table", "heatmap"] as View[]).map((v) => (
               <button
                 key={v}
                 type="button"
                 role="tab"
-                aria-selected={view === v}
+                aria-selected={effView === v}
                 onClick={() => setView(v)}
                 className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150"
                 style={{
-                  color: view === v ? "var(--accent)" : "var(--dim)",
-                  borderColor: view === v ? "var(--accent)" : "var(--border)",
+                  color: effView === v ? "var(--accent)" : "var(--dim)",
+                  borderColor: effView === v ? "var(--accent)" : "var(--border)",
                 }}
               >
                 {v}
@@ -578,9 +604,11 @@ export default function ScreenerPage() {
             ))}
           </span>
           <span className="tnum ml-auto" style={{ color: "var(--faint)" }}>
-            {view === "table"
+            {effView === "table"
               ? `score horizon = ${horizon} · sorted by ${sortKey} ${sortDir}`
-              : "color = day % change vs previous stored close"}
+              : effView === "cards"
+                ? `verdict per symbol (1d) · sorted by ${sortKey} ${sortDir} · same rows as the table`
+                : "color = day % change vs previous stored close"}
           </span>
         </div>
 
@@ -612,11 +640,61 @@ export default function ScreenerPage() {
           />
         )}
 
+        {/* Stage 4 (tables→charts): CARDS view — the same filtered rows as a
+            grid of verdict cards: symbol + price + day %, the 30d sparkline,
+            and the Stage-2 VerdictCard (REAL calibrated 1d prob or the honest
+            NO READ YET, tier badge always visible). Nothing the table shows
+            is lost — switch views any time. */}
+        {effView === "cards" && filtered.length > 0 && (
+          <div className="grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {filtered.map((d) => {
+              const r = d.row;
+              return (
+                <div
+                  key={`${r.market}:${r.symbol}`}
+                  className="flex flex-col gap-2 rounded-lg border p-3 transition-colors duration-150 hover:bg-[var(--panel)]"
+                  style={{ borderColor: "var(--border)", background: "var(--panel2)" }}
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <Link
+                      href={`/s/${r.market}/${encodeURIComponent(r.symbol)}`}
+                      className="min-w-0 cursor-pointer truncate font-bold transition-colors duration-150 hover:text-[var(--accent)]"
+                      title={r.name || r.symbol}
+                    >
+                      {r.symbol}
+                      <span className="ml-1.5 text-[0.72rem] font-normal" style={{ color: "var(--faint)" }}>
+                        {r.market}
+                      </span>
+                    </Link>
+                    <span className="tnum shrink-0 text-[0.78rem]">
+                      {fmtPrice(r.lastClose)}{" "}
+                      <span style={{ color: scoreColor(r.dayChangePct) }} title="change since previous stored close">
+                        {fmtPct(r.dayChangePct)}
+                      </span>
+                    </span>
+                  </div>
+                  {/* same stored daily closes as the table's TREND 30D column */}
+                  <Sparkline closes={r.spark} width={190} height={34} area={false} />
+                  <VerdictCard
+                    size="sm"
+                    symbol={r.symbol}
+                    market={r.market}
+                    calProb={r.calProb1d ?? null}
+                    nUsed={r.nUsed1d ?? 0}
+                    tier={r.tier1d ?? ""}
+                    tierProgress={{ nSamples: r.nSamples1d ?? 0, threshold: r.tierThreshold ?? 0 }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Stage 5: HEATMAP view — same filtered set as color tiles. Rows
             without any stored daily bar are OMITTED and counted (a tile needs
             a real close; nothing is faked to fill the grid). mcap is not part
             of the screener payload, so tiles are uniform and say so. */}
-        {view === "heatmap" && filtered.length > 0 && (
+        {effView === "heatmap" && filtered.length > 0 && (
           <div className="px-4 py-3">
             <Heatmap
               items={filtered
@@ -638,7 +716,7 @@ export default function ScreenerPage() {
           </div>
         )}
 
-        {view === "table" && filtered.length > 0 && (
+        {effView === "table" && filtered.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-[0.8rem]">
               <thead>
@@ -721,8 +799,18 @@ export default function ScreenerPage() {
                           <span style={{ color: scoreColor(d.score) }}>{fmtScore(d.score)}</span>
                         )}
                       </td>
-                      <td className="px-3 py-2" style={{ color: "var(--dim)" }}>
-                        {d.score === null ? "unscored" : verdict(d.score)}
+                      {/* Stage 2: calibrated 1d verdict card — real prob or
+                          the honest NO READ YET, tier badge always visible. */}
+                      <td className="px-3 py-2">
+                        <VerdictCard
+                          size="sm"
+                          symbol={r.symbol}
+                          market={r.market}
+                          calProb={r.calProb1d ?? null}
+                          nUsed={r.nUsed1d ?? 0}
+                          tier={r.tier1d ?? ""}
+                          tierProgress={{ nSamples: r.nSamples1d ?? 0, threshold: r.tierThreshold ?? 0 }}
+                        />
                       </td>
                       {/* Stage 5: relative-strength rank (1 = strongest) */}
                       <td className="px-3 py-2 text-right">

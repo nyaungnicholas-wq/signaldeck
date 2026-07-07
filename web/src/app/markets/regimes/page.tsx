@@ -18,6 +18,7 @@ import RankingTable from "@/components/regime/RankingTable";
 import BreakoutFeed from "@/components/regime/BreakoutFeed";
 import Gauge from "@/components/viz/Gauge";
 import { regimeColor, regimeKind } from "@/components/regime/regime";
+import PagePurpose from "@/components/PagePurpose";
 
 // This page describes what IS. It polls three trend-detection endpoints and
 // renders them side by side. Regimes/rankings are computed from stored bars
@@ -117,6 +118,12 @@ export default function RegimePage() {
           </span>
         </div>
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="markets-regimes"
+        text="What mode is each market in right now — trending, choppy, or stressed? Strategies that work in one regime fail in another; this page names the regime first."
+      />
 
       {/* hard error (nothing to show) */}
       {hardError && (

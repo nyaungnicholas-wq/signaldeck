@@ -23,6 +23,7 @@ import { ago, fmtPct, fmtPrice, fmtScore, fmtTs, scoreColor } from "@/lib/format
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 // ── correlation cell color ──────────────────────────────────────────────
 // +correlation (move together) → red (--ask); −correlation (diversifying) →
@@ -641,6 +642,12 @@ export default function PortfolioPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-portfolio"
+        text="Are YOUR calls any good? Log discretionary trades and get graded against what actually happened — the same honesty loop the model runs on itself."
+      />
 
       {/* honesty note — the reason this page exists */}
       <p className="px-1 text-[0.78rem] italic leading-relaxed" style={{ color: "var(--faint)" }}>

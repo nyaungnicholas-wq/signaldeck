@@ -17,6 +17,9 @@ import {
   type WatchRow,
 } from "@/lib/api";
 import { ago } from "@/lib/format";
+import { metricLabel } from "@/lib/plain";
+import { useViewMode } from "@/components/Plain";
+import VerdictCard from "@/components/VerdictCard";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
@@ -24,6 +27,8 @@ import PredictionGauge from "@/components/predict/PredictionGauge";
 import CalibrationPanel from "@/components/predict/CalibrationPanel";
 import FusionExplainer from "@/components/predict/FusionExplainer";
 import Sparkline from "@/components/viz/Sparkline";
+import ProbHistogram from "@/components/viz/ProbHistogram";
+import PagePurpose from "@/components/PagePurpose";
 
 type CalHorizon = "1d" | "1w";
 // Big P(up) dials are shown for these horizons (per the product spec).
@@ -229,6 +234,12 @@ export default function PredictPage() {
           </span>
         </div>
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="signals-predictions"
+        text="How likely is an up move for each tracked symbol, per the calibrated model? Every probability carries its sample size — thin evidence says so."
+      />
 
       {/* watchlist hard error */}
       {watchHardError && (
@@ -488,13 +499,9 @@ function SelfKnowledgePanel({
 // badge never appears without them. A 404 means the running daemon predates
 // this endpoint; the panel says exactly that instead of faking rows.
 
-function confidenceBadge(calProb: number): { label: string; color: string } {
-  const conf = Math.abs(calProb - 0.5) * 2; // 0 = coin flip, 1 = certainty
-  const dir = calProb >= 0.5 ? "up" : "down";
-  const color =
-    conf < 0.1 ? "var(--dim)" : dir === "up" ? "var(--bid)" : "var(--ask)";
-  return { label: `P(up) ${(calProb * 100).toFixed(0)}%`, color };
-}
+// Stage-1 translation layer: the confidence chip IS the verdict card seed —
+// colored arrow + "LEANS UP — 62%" straight from the REAL calibrated prob
+// (probVerdict never invents a lean; near-50% reads NO CLEAR LEAN).
 
 function PredictionsTablePanel({ onPick }: { onPick: (symbol: string, market: Market) => void }) {
   const [ph, setPh] = useState<"1d" | "1w">("1d");
@@ -547,6 +554,46 @@ function PredictionsTablePanel({ onPick }: { onPick: (symbol: string, market: Ma
 
   const rows = resp?.rows ?? [];
   const notDeployed = err !== null && err.includes("404");
+  const mode = useViewMode();
+  // Stage 4 (tables→charts): in SIMPLE mode the raw numeric columns
+  // (cal % / raw % / blend n) fold behind an explicit "show raw columns"
+  // toggle — the verdict card row IS the reading. PRO mode always shows
+  // everything. Data is never lost, only one click away.
+  const [showRaw, setShowRaw] = useState(false);
+  const rawCols = mode === "pro" || showRaw;
+
+  // Column headers follow the SIMPLE/PRO toggle — same columns, translated
+  // wording. Tooltips carry the technical definition in both modes.
+  const HEADERS: { key: string; label: string; tip?: string }[] = [
+    { key: "symbol", label: "SYMBOL" },
+    { key: "market", label: "MARKET" },
+    { key: "trend", label: mode === "simple" ? "LAST 30 DAYS" : "TREND 30D" },
+    {
+      key: "verdict",
+      label: "VERDICT",
+      tip: "Direction + calibrated probability — near-50% reads NO CLEAR LEAN. See the gate caption above.",
+    },
+    ...(rawCols
+      ? [
+          {
+            key: "cal",
+            label: metricLabel("cal_prob", mode).toUpperCase(),
+            tip: "calibrated probability the price is higher at the horizon — corrected against resolved outcomes",
+          },
+          {
+            key: "raw",
+            label: mode === "simple" ? "BEFORE TUNING" : "RAW",
+            tip: "raw ensemble probability before calibration",
+          },
+          {
+            key: "blend",
+            label: mode === "simple" ? "SIGNALS USED" : "BLEND N",
+            tip: "how many ensemble legs contributed to this prediction",
+          },
+        ]
+      : []),
+    { key: "updated", label: "UPDATED" },
+  ];
 
   return (
     <section className="panel">
@@ -573,6 +620,23 @@ function PredictionsTablePanel({ onPick }: { onPick: (symbol: string, market: Ma
         {resp !== null && (
           <span className="chip tnum">{rows.length} symbols predicted</span>
         )}
+        {/* Stage 4: simple mode folds the raw numeric columns behind this
+            toggle — reachable in one click, never deleted. */}
+        {mode === "simple" && rows.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowRaw((s) => !s)}
+            aria-pressed={showRaw}
+            className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150"
+            style={{
+              color: showRaw ? "var(--accent)" : "var(--dim)",
+              borderColor: showRaw ? "var(--accent)" : "var(--border)",
+            }}
+            title="show/hide the raw numeric columns (calibrated %, pre-calibration %, blend size)"
+          >
+            {showRaw ? "hide raw columns" : "show raw columns"}
+          </button>
+        )}
         {resp !== null && (
           <span
             className="ml-auto text-[0.68rem] font-normal normal-case tracking-normal"
@@ -588,6 +652,21 @@ function PredictionsTablePanel({ onPick }: { onPick: (symbol: string, market: Ma
         <p className="px-4 py-2.5 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
           {resp.caption}
         </p>
+      )}
+
+      {/* Stage 4 (tables→charts): the distribution strip — where the fleet's
+          CURRENT calibrated {ph} probabilities pile up, before the row-by-row
+          table. Same rows, nothing resampled; near-50% bars are dim because a
+          pile of coin flips is not conviction. */}
+      {rows.length > 0 && (
+        <div className="px-4 pb-1">
+          <ProbHistogram probs={rows.map((r) => r.calProb)} />
+          <p className="mt-1 text-[0.68rem]" style={{ color: "var(--faint)" }}>
+            distribution of the {rows.length} current calibrated {ph} P(up) values below —
+            left of the dashed line leans down, right leans up, the middle is coin-flip
+            territory. Same gate caveat as above: backtested calibration, not a live track record.
+          </p>
+        </div>
       )}
 
       {resp === null && err === null && (
@@ -625,32 +704,23 @@ function PredictionsTablePanel({ onPick }: { onPick: (symbol: string, market: Ma
           <table className="w-full text-[0.8rem]">
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["SYMBOL", "MARKET", "TREND 30D", "CONFIDENCE", "CAL P(UP)", "RAW", "BLEND N", "UPDATED"].map(
-                  (h, i) => (
-                    <th
-                      key={h}
-                      scope="col"
-                      className={`px-3 py-2 text-[0.72rem] font-medium tracking-wide ${
-                        i >= 4 ? "text-right" : "text-left"
-                      }`}
-                      style={{ color: "var(--faint)" }}
-                      title={
-                        h === "CONFIDENCE"
-                          ? "calibrated probability distance from coin-flip — see the gate caption above"
-                          : h === "BLEND N"
-                            ? "how many ensemble legs contributed to this prediction"
-                            : undefined
-                      }
-                    >
-                      {h}
-                    </th>
-                  ),
-                )}
+                {HEADERS.map((h, i) => (
+                  <th
+                    key={h.key}
+                    scope="col"
+                    className={`px-3 py-2 text-[0.72rem] font-medium tracking-wide ${
+                      i >= 4 ? "text-right" : "text-left"
+                    }`}
+                    style={{ color: "var(--faint)" }}
+                    title={h.tip}
+                  >
+                    {h.label}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className="tnum">
               {rows.map((r) => {
-                const badge = confidenceBadge(r.calProb);
                 return (
                   <tr
                     key={`${r.market}:${r.symbol}`}
@@ -678,27 +748,41 @@ function PredictionsTablePanel({ onPick }: { onPick: (symbol: string, market: Ma
                         area={false}
                       />
                     </td>
+                    {/* Stage 2: the verdict card — real calibrated prob +
+                        the always-visible evidence-tier badge. */}
                     <td className="px-3 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
-                      <span
-                        className="chip px-2 py-[1px] text-[0.68rem] tracking-wider"
-                        style={{ color: badge.color, borderColor: badge.color }}
-                      >
-                        {badge.label}
-                      </span>
+                      <VerdictCard
+                        size="sm"
+                        symbol={r.symbol}
+                        market={r.market}
+                        horizon={ph}
+                        calProb={r.calProb}
+                        nUsed={r.nUsed}
+                        tier={r.tier ?? ""}
+                        tierProgress={{ nSamples: r.nSamples ?? 0, threshold: resp?.tierThreshold ?? 0 }}
+                      />
                     </td>
-                    <td className="px-3 py-2 text-right" style={{ borderBottom: "1px solid var(--border)" }}>
-                      {(r.calProb * 100).toFixed(1)}%
-                    </td>
-                    <td
-                      className="px-3 py-2 text-right"
-                      style={{ color: "var(--faint)", borderBottom: "1px solid var(--border)" }}
-                      title="raw ensemble probability before calibration"
-                    >
-                      {(r.rawProb * 100).toFixed(1)}%
-                    </td>
-                    <td className="px-3 py-2 text-right" style={{ color: "var(--dim)", borderBottom: "1px solid var(--border)" }}>
-                      {r.nUsed}
-                    </td>
+                    {rawCols && (
+                      <>
+                        <td
+                          className="px-3 py-2 text-right"
+                          style={{ borderBottom: "1px solid var(--border)" }}
+                          title={mode === "simple" ? "chance the price is higher at the horizon — 50% would be a coin flip" : undefined}
+                        >
+                          {(r.calProb * 100).toFixed(1)}%
+                        </td>
+                        <td
+                          className="px-3 py-2 text-right"
+                          style={{ color: "var(--faint)", borderBottom: "1px solid var(--border)" }}
+                          title="raw ensemble probability before calibration"
+                        >
+                          {(r.rawProb * 100).toFixed(1)}%
+                        </td>
+                        <td className="px-3 py-2 text-right" style={{ color: "var(--dim)", borderBottom: "1px solid var(--border)" }}>
+                          {r.nUsed}
+                        </td>
+                      </>
+                    )}
                     <td className="px-3 py-2 text-right" style={{ color: "var(--faint)", borderBottom: "1px solid var(--border)" }}>
                       {ago(r.ts)}
                     </td>

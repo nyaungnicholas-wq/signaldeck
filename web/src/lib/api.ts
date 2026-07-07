@@ -1902,3 +1902,64 @@ export function shortsSymbol(symbol: string, days = 30) {
 export function shortsExtremes(limit = 20) {
   return get<ShortsExtremesResponse>(`/api/shorts?limit=${limit}`);
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// STAGE 2 — VERDICT CARDS (appended block; keep at END).
+// The daemon now attaches each symbol's newest calibrated 1d prediction AND
+// its symbol-agent evidence tier to three existing payloads, all batched
+// server-side (one VerdictStats read per response, never per-row):
+//   (1) /api/dashboard watchlist sparks   → DashWatchSpark merge below
+//   (2) /api/screener + /api/watchlist    → WatchRow merge below
+//   (3) /api/predictions/latest rows      → LatestPredictionRow merge below
+//       (+ top-level tierThreshold on the payload)
+// All three are declaration MERGES with the interfaces above (same-module
+// declaration merging) so this file stays append-only.
+// HONESTY (render rules for <VerdictCard/>):
+//   · calProb1d/absent-tier fields are OPTIONAL — an older daemon binary
+//     simply omits them and the card shows the honest "NO READ YET", never
+//     a fabricated lean;
+//   · calProb1d null = no prediction stored yet → "NO READ YET — still
+//     collecting evidence";
+//   · tier1d "" = no symbol-agent row yet → reads as the static tier
+//     ("no learned model yet"), NEVER "own model";
+//   · nSamples1d/tierThreshold feed the always-visible tier badge
+//     ("still learning 12/40 — using global model");
+//   · every verdict is backtested calibration, not a live track record —
+//     the card carries that caveat itself.
+
+/** /api/dashboard watchlist sparks now carry the 1d verdict inputs. */
+export interface DashWatchSpark {
+  /** Newest calibrated 1d P(up); null/absent = no prediction stored (honest). */
+  calProb1d?: number | null;
+  /** Ensemble legs behind that prediction (0 when calProb1d is null). */
+  nUsed1d?: number;
+  /** Symbol-agent evidence tier: personal|regime|global|static; "" = no row yet. */
+  tier1d?: string;
+  /** This symbol's OWN resolved outcomes behind that tier. */
+  nSamples1d?: number;
+  /** Personal-model graduation gate (nSamples1d/tierThreshold = "12/40"). */
+  tierThreshold?: number;
+}
+
+/** /api/screener and /api/watchlist rows carry the same 1d verdict inputs. */
+export interface WatchRow {
+  calProb1d?: number | null;
+  nUsed1d?: number;
+  tier1d?: string;
+  nSamples1d?: number;
+  tierThreshold?: number;
+}
+
+/** /api/predictions/latest rows now say WHICH model produced each number. */
+export interface LatestPredictionRow {
+  /** Evidence tier behind the prediction; ""/absent = no agent row yet. */
+  tier?: string;
+  /** This symbol's own resolved outcomes behind that tier. */
+  nSamples?: number;
+}
+
+/** /api/predictions/latest payload gains the personal-model gate constant. */
+export interface LatestPredictionsResponse {
+  /** Samples a symbol needs before its OWN model is trusted (e.g. 40). */
+  tierThreshold?: number;
+}

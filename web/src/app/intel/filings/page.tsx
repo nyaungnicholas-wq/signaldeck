@@ -12,6 +12,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
+import PagePurpose from "@/components/PagePurpose";
 
 const POLL_MS = 60_000;
 
@@ -85,6 +86,12 @@ export default function FilingsPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="intel-filings"
+        text="What are companies officially telling the SEC? Public EDGAR filings in plain English — filings lag by law and process, never real-time."
+      />
 
       {loading && <Skeleton lines={6} label="loading filings feed" />}
       {hardError && (

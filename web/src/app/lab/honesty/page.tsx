@@ -10,6 +10,7 @@ import Explainer from "@/components/honesty/Explainer";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 /** HONESTY — grades persisted scores against what the market actually did. */
 export default function HonestyPage() {
@@ -120,6 +121,12 @@ export default function HonestyPage() {
           </span>
         </div>
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-honesty"
+        text="Were past scores any good? Score buckets graded against the returns that actually followed — the page that argues against the product when the data says so."
+      />
 
       {/* error state */}
       {err && !current && (

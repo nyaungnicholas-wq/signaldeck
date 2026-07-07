@@ -9,6 +9,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import Gauge from "@/components/viz/Gauge";
+import PagePurpose from "@/components/PagePurpose";
 
 function MoverRow({ m }: { m: TrendsMover }) {
   return (
@@ -133,6 +134,12 @@ export default function TrendsPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="markets-trends"
+        text="Which symbols are trending up or down right now, and how strongly? Descriptive trend state per symbol — what IS happening, not what will."
+      />
 
       {loading && <Skeleton lines={4} label="loading trends" />}
 

@@ -18,6 +18,7 @@ import SectorRow from "@/components/macro/SectorRow";
 import Gauge from "@/components/viz/Gauge";
 import CalendarsCard from "@/components/CalendarsCard";
 import EarningsEstCard from "@/components/EarningsEstCard";
+import PagePurpose from "@/components/PagePurpose";
 
 const POLL_MS = 10000;
 
@@ -126,6 +127,12 @@ export default function MacroPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="markets-macro"
+        text="What is the big-picture backdrop — rates, inflation, VIX — from free official sources (FRED), each series on its own publication lag?"
+      />
 
       {loading && <Skeleton lines={4} label="loading market context" />}
 

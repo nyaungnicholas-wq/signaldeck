@@ -2,24 +2,13 @@
 
 import type { Honesty, Horizon } from "@/lib/api";
 import { fmtPct } from "@/lib/format";
-
-/** Plain-English read of the information coefficient. */
-function icLine(ic: number, n: number): string {
-  if (!n || !Number.isFinite(ic)) return "no resolved outcomes yet";
-  const a = Math.abs(ic);
-  let s: string;
-  if (a < 0.03) s = "no measurable edge yet";
-  else if (a < 0.1) s = "weak signal";
-  else s = "meaningful signal";
-  if (ic < 0 && a >= 0.03) s += " — inverted";
-  if (n < 100) s += " (sample still small — keep collecting)";
-  return s;
-}
-
-function icColor(ic: number, n: number): string {
-  if (!n || !Number.isFinite(ic) || Math.abs(ic) < 0.03) return "var(--dim)";
-  return ic > 0 ? "var(--bid)" : "var(--ask)";
-}
+// Stage-1 translation layer: IC/spread wording now comes from the central
+// plain-English dictionary so every page says it the same way.
+import { metricLabel, readMetric } from "@/lib/plain";
+import { useViewMode } from "@/components/Plain";
+// Stage 4 (tables→charts): the big grade meters render the SAME central-
+// dictionary readings as the stat cards — bar and sentence can't disagree.
+import GradeMeter from "@/components/viz/GradeMeter";
 
 function Stat({
   label,
@@ -72,41 +61,76 @@ export default function HeroStats({ data, horizon }: { data: Honesty; horizon: H
     Number.isFinite(last.meanFwd);
   const spread = spreadOk ? last.meanFwd - first.meanFwd : NaN;
 
+  const mode = useViewMode();
+  // Central-dictionary readings — gated/null inputs degrade to "no read yet".
+  const gateRead = readMetric("sample_gate", n, { minN });
+  const icRead = readMetric("ic", gated ? null : ic, { gated, n });
+  const spreadRead = readMetric("quintile_spread", spreadOk ? spread : null, { n });
+
   return (
+    <div className="flex flex-col gap-4">
     <div className="grid gap-4 sm:grid-cols-3">
       <Stat
-        label="INDEPENDENT RESOLUTIONS"
+        label={mode === "simple" ? "EVIDENCE COLLECTED" : "INDEPENDENT RESOLUTIONS"}
         title="One observation per (symbol, UTC-day). Minute-cadence rows that all resolve against the same daily move are collapsed, so this is the effective independent sample."
         value={n.toLocaleString("en-US")}
         sub={
-          rawN > n
-            ? `${rawN.toLocaleString("en-US")} raw rows → ${n.toLocaleString("en-US")} independent (symbol, UTC-day) at ${horizon}`
-            : `independent score → outcome pairs at the ${horizon} horizon`
+          n < minN
+            ? gateRead.plain
+            : rawN > n
+              ? `${rawN.toLocaleString("en-US")} raw rows → ${n.toLocaleString("en-US")} independent (symbol, UTC-day) at ${horizon}`
+              : `independent score → outcome pairs at the ${horizon} horizon`
         }
       />
       <Stat
-        label="IC · SCORE ↔ FWD RETURN"
-        title="Information coefficient — correlation between score and forward return over the INDEPENDENT set (+1 perfect, 0 no information). Withheld below the minimum independent sample."
+        label={mode === "simple" ? metricLabel("ic", "simple").toUpperCase() : "IC · SCORE ↔ FWD RETURN"}
+        title={icRead.detail}
         value={gated ? "—" : n && Number.isFinite(ic) ? ic.toFixed(3) : "—"}
-        valueColor={gated ? "var(--dim)" : icColor(ic, n)}
+        valueColor={
+          gated || !Number.isFinite(ic) || Math.abs(ic) < 0.02
+            ? "var(--dim)"
+            : ic > 0
+              ? "var(--bid)"
+              : "var(--ask)"
+        }
         sub={
           gated
-            ? `insufficient independent resolutions (${n}/${minN}) — no IC until the sample is large enough`
-            : icLine(ic, n)
+            ? `insufficient independent resolutions (${n}/${minN}) — no signal-quality read until the sample is large enough`
+            : icRead.plain
         }
       />
       <Stat
-        label="TOP − BOTTOM BUCKET"
+        label={mode === "simple" ? metricLabel("quintile_spread", "simple").toUpperCase() : "TOP − BOTTOM BUCKET"}
+        title={spreadRead.detail}
         value={spreadOk ? fmtPct(spread * 100) : "—"}
         valueColor={
           spreadOk ? (spread > 0 ? "var(--bid)" : spread < 0 ? "var(--ask)" : "var(--dim)") : "var(--dim)"
         }
         sub={
           spreadOk
-            ? `${last?.label ?? "strong buy"} minus ${first?.label ?? "strong sell"} mean forward return`
+            ? mode === "simple"
+              ? spreadRead.plain
+              : `${last?.label ?? "strong buy"} minus ${first?.label ?? "strong sell"} mean forward return`
             : "needs outcomes in both extreme buckets"
         }
       />
+    </div>
+
+    {/* Stage 4 (tables→charts): the REPORT CARD — the same two readings as
+        big centered grade meters. Gated/withheld inputs render an EMPTY
+        meter with the honest "no read yet" sentence, never a fake fill. */}
+    <section className="panel">
+      <div className="panel-h">
+        REPORT CARD
+        <span className="ml-auto text-[0.66rem] font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
+          bar and sentence come from the same reading — a withheld number stays an empty bar
+        </span>
+      </div>
+      <div className="grid gap-x-8 gap-y-4 px-4 py-4 sm:grid-cols-2">
+        <GradeMeter label={metricLabel("ic", mode)} reading={icRead} />
+        <GradeMeter label={metricLabel("quintile_spread", mode)} reading={spreadRead} />
+      </div>
+    </section>
     </div>
   );
 }

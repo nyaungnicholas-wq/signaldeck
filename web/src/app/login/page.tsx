@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import PagePurpose from "@/components/PagePurpose";
 import { api } from "@/lib/api";
 
 /** Minimal login / register form in the SignalDeck terminal style. */
@@ -29,7 +30,13 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-[70vh] items-center justify-center px-4">
+    <div className="flex min-h-[70vh] flex-col items-center justify-center gap-4 px-4">
+      <div className="w-full max-w-sm">
+        <PagePurpose
+          id="login"
+          text="Sign in (or create an account) so SignalDeck can keep your watchlist and settings. Everything else on the site is read-only market analysis — an account changes what you can save, not what the data says."
+        />
+      </div>
       <form
         onSubmit={submit}
         className="w-full max-w-sm border border-[var(--border)] bg-[var(--panel)] p-6"

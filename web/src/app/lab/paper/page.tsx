@@ -11,6 +11,7 @@ import { fmtPct, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 /** USD formatter for book values. */
 function usd(v: number): string {
@@ -229,6 +230,12 @@ export default function PaperPage() {
           daemon&apos;s own stored bars.
         </div>
       </header>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-paper"
+        text="What would trading the model's own predictions have earned in a costed simulation? An upper bound on free data — not a brokerage account."
+      />
 
       {/* Strategy switcher (one simulated portfolio per prediction horizon). */}
       <div className="flex flex-wrap items-center gap-2">

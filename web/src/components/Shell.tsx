@@ -50,6 +50,46 @@ const NAV: { href: string; label: string; match: string[] }[] = [
 ];
 
 const READING_KEY = "sd-reading-mode";
+const VIEW_KEY = "sd-view-mode";
+
+/** Header toggle for SIMPLE/PRO language — persists in localStorage, flips
+ *  `data-view-mode` on <html>, and fires an `sd-view-mode` event so every
+ *  mounted <Plain> re-reads. Default is SIMPLE (plain English first); PRO
+ *  leads with the raw numbers. Caveats/gates render in BOTH modes. */
+function ViewModeToggle() {
+  const [pro, setPro] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(VIEW_KEY) === "pro";
+    setPro(saved);
+    document.documentElement.setAttribute("data-view-mode", saved ? "pro" : "simple");
+  }, []);
+
+  const toggle = () => {
+    const next = !pro;
+    setPro(next);
+    localStorage.setItem(VIEW_KEY, next ? "pro" : "simple");
+    document.documentElement.setAttribute("data-view-mode", next ? "pro" : "simple");
+    window.dispatchEvent(new Event("sd-view-mode"));
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-pressed={pro}
+      title={
+        pro
+          ? "PRO: raw metrics first, plain English as the subtitle"
+          : "SIMPLE: plain English first, raw metrics small underneath — honesty gates show in both"
+      }
+      className="chip min-h-[40px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
+      style={pro ? { color: "var(--accent)", borderColor: "var(--accent)" } : undefined}
+    >
+      {pro ? "pro" : "simple"}
+    </button>
+  );
+}
 
 /** Header toggle for reading mode — persists in localStorage and flips
  *  `data-reading-mode` on <html> so globals.css can restyle site-wide. */
@@ -263,6 +303,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           <div className="ml-auto flex items-center gap-2 text-[0.75rem]" style={{ color: "var(--dim)" }}>
             <AlertsBell />
             <AuthChip />
+            <ViewModeToggle />
             <ReadingModeToggle />
             <span className="flex items-center gap-2">
               <span

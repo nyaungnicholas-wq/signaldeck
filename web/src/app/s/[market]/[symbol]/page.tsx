@@ -2,6 +2,12 @@
 
 // Symbol deep-dive: candlestick chart, pressure decomposition, expectancy
 // ("what usually happens next"), microstructure (crypto), insights, coverage.
+//
+// STAGE 3 — guided story flow: the page reads 1 · THE VERDICT (hero verdict
+// card + chart) → 2 · WHY (this symbol's agent, score components, expectancy,
+// AI insights) → 3 · THE DETAILS (raw records: unusual activity, financials,
+// filings, shorts, congress, microstructure, coverage). In SIMPLE view-mode
+// the DETAILS section starts collapsed ("show the numbers"); PRO expanded.
 
 import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -9,12 +15,16 @@ import {
   api,
   chartOverlays,
   pollMs,
+  symbolAgent,
   type Bar,
   type ChartOverlayMarker,
   type Horizon,
   type Market,
+  type Prediction,
+  type SymbolAgent,
   type SymbolDetail,
 } from "@/lib/api";
+import VerdictCard from "@/components/VerdictCard";
 import { ago, fmtPct, fmtPrice, fmtScore, scoreColor, verdict } from "@/lib/format";
 import CandleChart, { type Tf } from "@/components/symbol/CandleChart";
 import PressurePanel from "@/components/symbol/PressurePanel";
@@ -28,6 +38,8 @@ import ShortVolumePanel from "@/components/symbol/ShortVolumePanel";
 import FinancialsPanel from "@/components/symbol/FinancialsPanel";
 import CongressChip from "@/components/symbol/CongressChip";
 import UnusualActivityPanel from "@/components/UnusualActivityPanel";
+import PagePurpose from "@/components/PagePurpose";
+import StorySection from "@/components/StorySection";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 
@@ -69,6 +81,34 @@ export default function SymbolPage({
   const overlaysKey = `${symbol}|${market}`;
   const overlays =
     showOverlays && overlaysState && overlaysState.key === overlaysKey ? overlaysState.list : undefined;
+
+  // Stage 2 (verdict cards): the hero verdict's inputs — the REAL calibrated
+  // 1d prediction + the symbol-agent evidence tier. Keyed by symbol so a
+  // symbol switch never flashes another symbol's verdict; failures are soft
+  // (the card renders the honest "NO READ YET", never a fabricated lean).
+  const heroKey = `${symbol}|${market}`;
+  const [heroPreds, setHeroPreds] = useState<{ key: string; p: Record<string, Prediction> } | null>(null);
+  const [heroAgent, setHeroAgent] = useState<{ key: string; a: SymbolAgent } | null>(null);
+  useEffect(() => {
+    if (!marketOk) return;
+    let alive = true;
+    const key = `${symbol}|${market}`;
+    const load = () => {
+      api
+        .predictions(symbol, market)
+        .then((p) => alive && setHeroPreds({ key, p }))
+        .catch(() => {});
+      symbolAgent(symbol, market, "1d")
+        .then((a) => alive && setHeroAgent({ key, a }))
+        .catch(() => {});
+    };
+    load();
+    const t = setInterval(load, pollMs());
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [symbol, market, marketOk, retryTick]);
 
   // Poll the detail payload every 5s.
   useEffect(() => {
@@ -203,6 +243,12 @@ export default function SymbolPage({
         )}
       </div>
 
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="symbol"
+        text={`What does SignalDeck currently make of ${symbol}? The verdict first, the reasons behind it second, the raw records last. Every read carries its evidence tier — 'no read yet' is a real answer here.`}
+      />
+
       {detailErr && !detail && (
         <ErrorState
           message={detailErr}
@@ -213,6 +259,38 @@ export default function SymbolPage({
         />
       )}
       {!detailErr && !detail && <Skeleton lines={5} label={`loading ${symbol}`} />}
+
+      {/* ── STAGE 3 STORY, SECTION 1 ── */}
+      <StorySection
+        n={1}
+        title="THE VERDICT"
+        sub="the model's honest current read — plus the price itself"
+      >
+      {/* Stage 2: the hero VERDICT card — the one honest read-out. Real
+          calibrated 1d P(up) or "NO READ YET"; the evidence-tier badge
+          ("still learning 12/40 — using global model") is always visible. */}
+      <VerdictCard
+        size="lg"
+        symbol={symbol}
+        market={market}
+        horizon="1d"
+        calProb={
+          heroPreds?.key === heroKey && typeof heroPreds.p?.["1d"]?.calProb === "number"
+            ? heroPreds.p["1d"].calProb
+            : null
+        }
+        nUsed={heroPreds?.key === heroKey ? (heroPreds.p?.["1d"]?.nUsed ?? 0) : 0}
+        tier={heroAgent?.key === heroKey ? heroAgent.a.tier : ""}
+        tierProgress={{
+          nSamples: heroAgent?.key === heroKey ? (heroAgent.a.nSamples ?? 0) : 0,
+          threshold: heroAgent?.key === heroKey ? (heroAgent.a.threshold ?? 0) : 0,
+        }}
+        sparkCloses={
+          tf === "1d" && bars && bars.length > 0
+            ? [...bars].sort((a, b) => a.ts - b.ts).slice(-30).map((b) => b.c)
+            : undefined
+        }
+      />
 
       {/* Chart */}
       <section className="panel">
@@ -288,9 +366,16 @@ export default function SymbolPage({
           )}
         </div>
       </section>
+      </StorySection>
 
       {detail && (
         <>
+          {/* ── STAGE 3 STORY, SECTION 2 ── */}
+          <StorySection
+            n={2}
+            title="WHY"
+            sub="what is pushing the read: score components, what usually follows, this symbol's own agent"
+          >
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <PressurePanel scores={detail.scores ?? {}} horizon={horizon} onHorizon={setHorizon} />
             <ExpectancyPanel
@@ -305,6 +390,16 @@ export default function SymbolPage({
               resolved outcomes (personality + per-signal skill + honest tier). */}
           <SymbolAgentPanel symbol={symbol} market={market} />
 
+          <InsightsPanel insights={detail.insights} />
+          </StorySection>
+
+          {/* ── STAGE 3 STORY, SECTION 3 (SIMPLE mode starts folded) ── */}
+          <StorySection
+            n={3}
+            title="THE DETAILS"
+            sub="raw records: unusual activity, financials, SEC filings, shorts, coverage"
+            collapsible
+          >
           {/* Signal8 wave Stage 3: this symbol's unusual-activity history —
               imbalance / volatility / volume z-scores vs its OWN baseline
               (descriptive, never predictions; stock imbalance = labeled
@@ -336,16 +431,12 @@ export default function SymbolPage({
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {market === "crypto" && detail.latestSnap && (
-              <MicroPanel symbol={symbol} market={market} snap={detail.latestSnap} />
-            )}
-            <div className={market === "crypto" && detail.latestSnap ? "" : "lg:col-span-2"}>
-              <InsightsPanel insights={detail.insights} />
-            </div>
-          </div>
+          {market === "crypto" && detail.latestSnap && (
+            <MicroPanel symbol={symbol} market={market} snap={detail.latestSnap} />
+          )}
 
           <CoveragePanel symbol={symbol} market={market} coverage={detail.coverage ?? {}} />
+          </StorySection>
         </>
       )}
     </div>

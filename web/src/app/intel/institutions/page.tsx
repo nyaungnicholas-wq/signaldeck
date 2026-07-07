@@ -20,6 +20,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
+import PagePurpose from "@/components/PagePurpose";
 
 function fmtUSD(v: number): string {
   if (!isFinite(v) || v === 0) return "—";
@@ -378,6 +379,12 @@ function InstitutionsInner() {
         <h1 className="text-sm font-bold tracking-[0.18em]">INSTITUTIONS</h1>
         <span className="chip">SEC 13F-HR · quarterly, filed up to 45 days after quarter end</span>
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="intel-institutions"
+        text="What are notable big funds holding? 13F snapshots are quarterly and filed up to 45 days late — positions may already have changed."
+      />
       {symbol ? (
         <SymbolHolders symbol={symbol} />
       ) : manager ? (

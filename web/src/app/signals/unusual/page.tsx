@@ -11,6 +11,7 @@
 import { useState } from "react";
 import UnusualActivityPanel from "@/components/UnusualActivityPanel";
 import type { AnomalyRow } from "@/lib/api";
+import PagePurpose from "@/components/PagePurpose";
 
 type KindFilter = AnomalyRow["kind"] | undefined;
 
@@ -52,6 +53,12 @@ export default function UnusualPage() {
           })}
         </span>
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="signals-unusual"
+        text="Which symbols are behaving unusually versus their own normal? Descriptive flags (volume, volatility, imbalance) — observations, never predictions."
+      />
       <UnusualActivityPanel kind={kind} limit={50} />
     </div>
   );

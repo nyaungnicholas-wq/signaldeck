@@ -22,6 +22,14 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
+import PagePurpose from "@/components/PagePurpose";
+// Stage 4 (tables→charts): inline magnitude bars behind the ratio cells —
+// deliberately ACCENT (direction-neutral), because this ratio is not
+// bullish/bearish and a green/red fill would imply it is.
+import CellBar from "@/components/viz/CellBar";
+
+const RATIO_BAR_TITLE =
+  "share of the day's volume sold short — absolute 0–100% scale; magnitude only, NOT directional (includes market makers)";
 
 const POLL_MS = 300_000; // files land once per trading day — poll slowly
 
@@ -132,6 +140,12 @@ export default function ShortsPage() {
         )}
       </div>
 
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="intel-shorts"
+        text="How much of each stock's daily volume was sold short? This is NOT short interest — it includes market makers, and a high ratio is not automatically bearish."
+      />
+
       {loading && <Skeleton lines={6} label="loading short sale volume" />}
       {hardError && (
         <ErrorState
@@ -195,7 +209,15 @@ export default function ShortsPage() {
                     {[...series.series].reverse().map((p: ShortVolumePoint) => (
                       <tr key={p.day} style={{ borderTop: "1px solid var(--border)" }}>
                         <td className="px-4 py-2 tnum">{p.day}</td>
-                        <td className="px-4 py-2 tnum">{fmtPct(p.shortPct)}</td>
+                        <td className="px-4 py-2">
+                          <CellBar
+                            frac={Number.isFinite(p.shortPct) ? p.shortPct : null}
+                            label={fmtPct(p.shortPct)}
+                            color="var(--accent)"
+                            align="left"
+                            title={RATIO_BAR_TITLE}
+                          />
+                        </td>
                         <td className="px-4 py-2 tnum">{fmtVol(p.shortVol)}</td>
                         <td className="px-4 py-2 tnum">{fmtVol(p.shortExempt)}</td>
                         <td className="px-4 py-2 tnum">{fmtVol(p.totalVol)}</td>
@@ -237,7 +259,15 @@ export default function ShortsPage() {
                         </Link>
                       </td>
                       <td className="px-4 py-2 tnum">{e.day}</td>
-                      <td className="px-4 py-2 tnum">{fmtPct(e.shortPct)}</td>
+                      <td className="px-4 py-2">
+                        <CellBar
+                          frac={Number.isFinite(e.shortPct) ? e.shortPct : null}
+                          label={fmtPct(e.shortPct)}
+                          color="var(--accent)"
+                          align="left"
+                          title={RATIO_BAR_TITLE}
+                        />
+                      </td>
                       <td className="px-4 py-2">
                         <RatioSpark values={e.spark} />
                       </td>

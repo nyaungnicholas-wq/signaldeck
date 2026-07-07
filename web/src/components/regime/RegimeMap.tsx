@@ -1,11 +1,45 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { RegimeState } from "@/lib/api";
 import { ago } from "@/lib/format";
 import EmptyState from "@/components/EmptyState";
+import { useViewMode } from "@/components/Plain";
+import { regimeSentence } from "@/lib/plain";
 import { regimeColor, regimeKind, regimeSortRank, strengthPct } from "./regime";
+
+// Stage 4 (tables→charts): the map leads with a heatmap-style COLORED TILE
+// GRID (tile tint = regime color, so the whole universe's mood reads in one
+// glance), with the detailed per-symbol cards one toggle away. Default view
+// follows the SIMPLE/PRO toggle — grid in simple, detailed cards in pro.
+// Both views render the SAME classified states; unclassified symbols simply
+// aren't in the payload (honest absence, nothing invented to fill the grid).
+type MapView = "grid" | "detailed";
+
+/** Compact heatmap-style tile: symbol on a regime-tinted background. */
+function CompactTile({ s }: { s: RegimeState }) {
+  const color = regimeColor(s.label);
+  const pct = strengthPct(s.strength);
+  return (
+    <Link
+      href={`/s/${s.market}/${encodeURIComponent(s.symbol)}`}
+      className="flex cursor-pointer flex-col items-center gap-0.5 rounded-md px-2 py-2 text-center transition-transform duration-150 hover:scale-[1.03]"
+      style={{
+        background: `color-mix(in srgb, ${color} 16%, var(--panel2))`,
+        border: `1px solid color-mix(in srgb, ${color} 45%, var(--border))`,
+      }}
+      title={`${s.symbol} (${s.market}) — ${regimeSentence(s.label)} · strength ${pct.toFixed(0)}% · ${ago(s.ts)} — descriptive from stored bars, no lookahead`}
+    >
+      <span className="text-[0.8rem] font-bold leading-tight" style={{ color: "var(--text)" }}>
+        {s.symbol}
+      </span>
+      <span className="text-[0.6rem] uppercase tracking-wider" style={{ color }}>
+        {s.label || "—"}
+      </span>
+    </Link>
+  );
+}
 
 function RegimeTile({ s }: { s: RegimeState }) {
   const color = regimeColor(s.label);
@@ -66,6 +100,11 @@ function RegimeTile({ s }: { s: RegimeState }) {
 
 /** REGIME MAP — every tracked symbol as a tile, grouped by regime. */
 export default function RegimeMap({ states }: { states: RegimeState[] }) {
+  const mode = useViewMode();
+  // null = follow the SIMPLE/PRO default (grid in simple, detailed in pro).
+  const [view, setView] = useState<MapView | null>(null);
+  const effView: MapView = view ?? (mode === "simple" ? "grid" : "detailed");
+
   const sorted = useMemo(() => {
     return [...states].sort((a, b) => {
       const r = regimeSortRank(a.label) - regimeSortRank(b.label);
@@ -77,12 +116,44 @@ export default function RegimeMap({ states }: { states: RegimeState[] }) {
     });
   }, [states]);
 
+  // Legend: which regimes actually appear (never a legend entry for a regime
+  // that isn't in the data).
+  const legend = useMemo(() => {
+    const seen = new Map<string, string>(); // kind → representative label
+    for (const s of sorted) {
+      const k = regimeKind(s.label);
+      if (!seen.has(k)) seen.set(k, s.label || k);
+    }
+    return [...seen.entries()];
+  }, [sorted]);
+
   return (
     <section className="panel">
-      <div className="panel-h">
+      <div className="panel-h flex-wrap gap-2">
         REGIME MAP
-        <span className="tnum" style={{ color: "var(--faint)" }}>
-          what state each symbol is in right now
+        {/* Stage 4: grid ↔ detailed toggle — same classified states. */}
+        <span className="flex items-center gap-1" role="tablist" aria-label="regime map view">
+          {(["grid", "detailed"] as MapView[]).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={effView === v}
+              onClick={() => setView(v)}
+              className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150"
+              style={{
+                color: effView === v ? "var(--accent)" : "var(--dim)",
+                borderColor: effView === v ? "var(--accent)" : "var(--border)",
+              }}
+            >
+              {v}
+            </button>
+          ))}
+        </span>
+        <span className="tnum ml-auto" style={{ color: "var(--faint)" }}>
+          {effView === "grid"
+            ? "tile color = detected regime (descriptive, no lookahead)"
+            : "what state each symbol is in right now"}
         </span>
       </div>
       {sorted.length === 0 ? (
@@ -91,6 +162,34 @@ export default function RegimeMap({ states }: { states: RegimeState[] }) {
           message="No regimes classified yet"
           detail="States appear once enough bars are stored per symbol."
         />
+      ) : effView === "grid" ? (
+        <div className="p-3">
+          <div
+            className="grid gap-1.5"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(86px, 1fr))" }}
+          >
+            {sorted.map((s) => (
+              <CompactTile key={`${s.market}:${s.symbol}`} s={s} />
+            ))}
+          </div>
+          {legend.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[0.68rem]">
+              {legend.map(([kind, label]) => (
+                <span key={kind} className="inline-flex items-center gap-1" style={{ color: "var(--faint)" }}>
+                  <span
+                    aria-hidden="true"
+                    className="inline-block h-2.5 w-2.5 rounded-sm"
+                    style={{ background: `color-mix(in srgb, ${regimeColor(label)} 45%, var(--panel2))` }}
+                  />
+                  {kind}
+                </span>
+              ))}
+              <span style={{ color: "var(--faint)" }}>
+                · hover a tile for the plain-English read; switch to “detailed” for strength bars and notes
+              </span>
+            </div>
+          )}
+        </div>
       ) : (
         <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2 lg:grid-cols-3">
           {sorted.map((s) => (

@@ -9,6 +9,7 @@ import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 const KNOWN_AGENTS: { name: string; role: string }[] = [
   { name: "crypto-live", role: "streams TickStream's consolidated book at 1Hz" },
@@ -222,6 +223,12 @@ export default function AgentsPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-system-agents"
+        text="Are the background workers running on schedule, and what did each one last do? The machine's own attendance sheet."
+      />
 
       {err && !runs && (
         <ErrorState

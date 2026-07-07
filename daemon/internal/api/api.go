@@ -20,6 +20,7 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
 )
 
 // Deps wires the API to the rest of the daemon.
@@ -144,13 +145,25 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 }
 
 // watchRow is one watchlist/screener entry.
+//
+// Stage 2 (verdict cards): CalProb1d/NUsed1d/Tier1d/NSamples1d/TierThreshold
+// carry the newest REAL calibrated 1d P(up) plus the honest symbol-agent
+// evidence tier behind it, filled from ONE batched VerdictStats read per
+// response (never per-row). CalProb1d nil = no prediction stored yet — the
+// UI renders "NO READ YET", never a fabricated lean; Tier1d "" = no
+// symbol-agent row yet (honest static/still-learning).
 type watchRow struct {
 	md.Symbol
-	LastClose    float64                 `json:"lastClose"`
-	DayChangePct float64                 `json:"dayChangePct"`
-	Spark        []float64               `json:"spark"`
-	Scores       map[md.Horizon]md.Score `json:"scores"`
-	LatestBarTs  int64                   `json:"latestBarTs"`
+	LastClose     float64                 `json:"lastClose"`
+	DayChangePct  float64                 `json:"dayChangePct"`
+	Spark         []float64               `json:"spark"`
+	Scores        map[md.Horizon]md.Score `json:"scores"`
+	LatestBarTs   int64                   `json:"latestBarTs"`
+	CalProb1d     *float64                `json:"calProb1d"`
+	NUsed1d       int                     `json:"nUsed1d"`
+	Tier1d        string                  `json:"tier1d"`
+	NSamples1d    int                     `json:"nSamples1d"`
+	TierThreshold int                     `json:"tierThreshold"`
 }
 
 // watchlist returns the session user's watchlist rows (auth enforced by the
@@ -176,9 +189,24 @@ func (d Deps) screener(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) writeWatchRows(w http.ResponseWriter, r *http.Request, syms []md.Symbol) {
 	ctx := r.Context()
+	// Stage 2 (verdict cards): every row's newest calibrated 1d prediction +
+	// symbol-agent tier from ONE batched read up front (never per-row).
+	ids := make([]int64, len(syms))
+	for i, s := range syms {
+		ids[i] = s.ID
+	}
+	verdicts, err := d.St.VerdictStats(ctx, ids, md.H1d)
+	if err != nil {
+		httpErr(w, 500, err.Error())
+		return
+	}
 	rows := make([]watchRow, 0, len(syms))
 	for _, s := range syms {
-		row := watchRow{Symbol: s, Scores: map[md.Horizon]md.Score{}}
+		row := watchRow{Symbol: s, Scores: map[md.Horizon]md.Score{}, TierThreshold: symbolagent.MinPersonal}
+		if vs, ok := verdicts[s.ID]; ok {
+			row.CalProb1d, row.NUsed1d = vs.CalProb, vs.NUsed
+			row.Tier1d, row.NSamples1d = vs.Tier, vs.NSamples
+		}
 		daily, err := d.St.LastBars(ctx, s.ID, md.TF1d, 30)
 		if err != nil {
 			httpErr(w, 500, err.Error())

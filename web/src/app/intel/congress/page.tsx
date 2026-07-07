@@ -14,6 +14,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
+import PagePurpose from "@/components/PagePurpose";
 
 const POLL_MS = 120_000;
 
@@ -115,6 +116,12 @@ export default function CongressPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="intel-congress"
+        text="Which stocks are members of Congress trading? STOCK Act disclosures lag 30-45 days by law, and amounts are ranges, not exact values."
+      />
 
       {loading && <Skeleton lines={6} label="loading congressional trades" />}
       {hardError && (

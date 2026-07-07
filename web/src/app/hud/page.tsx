@@ -15,6 +15,7 @@ import EquityChart from "@/components/hud/EquityChart";
 import PositionsPanel from "@/components/hud/PositionsPanel";
 import StrategyPanel from "@/components/hud/StrategyPanel";
 import TradesPanel from "@/components/hud/TradesPanel";
+import PagePurpose from "@/components/PagePurpose";
 
 export default function HudPage() {
   const [hud, setHud] = useState<Hud | null>(null);
@@ -83,6 +84,12 @@ export default function HudPage() {
           </span>
         ) : null}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="hud"
+        text="How is the live PUSH-20 strategy doing on its Alpaca PAPER account? Synced from the trader daemon — simulated money, real discipline."
+      />
 
       {/* Daemon unreachable and nothing to show yet */}
       {err && !hud ? (

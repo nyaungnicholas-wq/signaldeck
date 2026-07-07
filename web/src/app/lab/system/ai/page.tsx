@@ -12,6 +12,7 @@ import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 const AMBER = "var(--accent)";
 const AMBER_BG = "rgba(251,191,36,.10)";
@@ -659,6 +660,12 @@ export default function AIPage() {
   return (
     <div className="flex flex-col gap-4">
       <StatusHeader status={status} />
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-system-ai"
+        text="What can the built-in AI do with your stored data? Its status, hard spend cap and chat surface — it answers from recorded data, not the open internet."
+      />
 
       {/* honesty framing — always visible */}
       <section className="panel">

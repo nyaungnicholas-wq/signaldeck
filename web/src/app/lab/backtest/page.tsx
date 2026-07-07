@@ -13,6 +13,7 @@ import { fmtPct, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 const EXAMPLES = [
   "50/200 moving-average crossover",
@@ -325,6 +326,12 @@ export default function BacktestPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-backtest"
+        text="What would a chosen rule have done in the past? A simulation on stored bars with next-bar fills and no lookahead — history, not a promise."
+      />
 
       {/* strategy composer */}
       <section className="panel">

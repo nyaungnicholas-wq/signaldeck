@@ -11,6 +11,7 @@ import {
 import { fmtPct } from "@/lib/format";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 // A holding row as edited in the builder. weight is a raw percent (need not
 // sum to 100 — the backend normalizes). A stable id keeps React keys sane
@@ -210,6 +211,12 @@ export default function RiskPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-risk"
+        text="How risky is a given mix of holdings, and what actually diversifies it? Computed from stored history — the past, which is not a guarantee."
+      />
 
       {/* builder */}
       <section className="panel">

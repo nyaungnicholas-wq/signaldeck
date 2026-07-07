@@ -13,6 +13,13 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
+import PagePurpose from "@/components/PagePurpose";
+// Stage 4 (tables→charts): inline magnitude bar behind the $ value so a
+// $5M conviction buy visibly dwarfs a $20K one. Scale is RELATIVE to the
+// largest trade currently listed (open-ended dollar values have no natural
+// 0..1) and the tooltip says so; color follows the honest P/S/mechanics
+// coding — grants and exercises stay neutral.
+import CellBar from "@/components/viz/CellBar";
 
 const POLL_MS = 60_000;
 
@@ -74,6 +81,12 @@ export default function InsidersPage() {
   const loading = rows === null && err === null;
   const hardError = rows === null && err !== null;
   const list = useMemo(() => rows ?? [], [rows]);
+  // Largest |value| among the listed trades — the relative scale for the
+  // inline bars (0 when nothing has a finite value → all bars stay empty).
+  const maxValue = useMemo(
+    () => list.reduce((m, t) => (Number.isFinite(t.value) ? Math.max(m, Math.abs(t.value)) : m), 0),
+    [list],
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -86,6 +99,12 @@ export default function InsidersPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="intel-insiders"
+        text="Are executives buying or selling their own company's stock? Only open-market buys and sells count as conviction — grants and exercises are mechanics — and Form 4s lag about 2 business days by law."
+      />
 
       {loading && <Skeleton lines={6} label="loading insider trades" />}
       {hardError && (
@@ -177,8 +196,17 @@ export default function InsidersPage() {
                     {t.shares > 0 ? `${t.shares.toLocaleString()} sh` : "—"}
                     {t.price > 0 ? ` @ $${t.price.toFixed(2)}` : ""}
                   </span>
-                  <span className="tnum" style={{ color: "var(--dim)" }}>
-                    {fmtUSD(t.value)}
+                  <span style={{ color: "var(--dim)" }}>
+                    <CellBar
+                      frac={
+                        maxValue > 0 && Number.isFinite(t.value) && t.value !== 0
+                          ? Math.abs(t.value) / maxValue
+                          : null
+                      }
+                      label={fmtUSD(t.value)}
+                      color={codeColor(t)}
+                      title={`trade value — bar scaled RELATIVE to the largest trade shown (${fmtUSD(maxValue)}); grants/exercises stay neutral-colored`}
+                    />
                   </span>
                   <span className="tnum ml-auto text-[0.72rem]" style={{ color: "var(--faint)" }}>
                     filed {ago(t.filedTs)}

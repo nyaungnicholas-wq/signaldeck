@@ -8,6 +8,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
+import PagePurpose from "@/components/PagePurpose";
 
 const POLL_MS = 10000;
 
@@ -216,6 +217,12 @@ export default function NewsPage() {
           </span>
         )}
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="intel-news"
+        text="What is in the news for tracked stocks? Each story carries a model-rated sentiment tag — a tag, not a recommendation."
+      />
 
       {/* what this page is */}
       <section className="panel">

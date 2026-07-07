@@ -12,6 +12,7 @@ import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 const KIND_META: Record<string, { label: string; color: string }> = {
   breakout: { label: "BREAKOUT", color: "var(--accent)" },
@@ -123,6 +124,12 @@ export default function AlertsPage() {
           {marking ? "marking…" : "mark all read"}
         </button>
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="signals-alerts"
+        text="What just happened to the symbols you watch? Breakouts, regime changes and strong predictions, written as they were detected — not replayed after the fact."
+      />
 
       <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
         Breakouts, regime changes, and calibrated predictions crossing conviction thresholds —

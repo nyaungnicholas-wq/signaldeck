@@ -9,6 +9,7 @@ import { ago, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 // fmtBytes renders a byte count in the tightest sensible unit.
 function fmtBytes(n: number): string {
@@ -135,6 +136,12 @@ export default function QualityPage() {
           If it&apos;s not on this page, we didn&apos;t measure it.
         </span>
       </div>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-system-quality"
+        text="Is the stored data complete and fresh — and what went wrong lately? If it is not measured on this page, it was not measured."
+      />
 
       {err && !data && (
         <ErrorState

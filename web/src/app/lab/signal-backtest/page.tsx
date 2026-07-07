@@ -12,6 +12,7 @@ import { fmtPct, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import PagePurpose from "@/components/PagePurpose";
 
 type SignalHorizon = "1d" | "1w";
 const SIGNAL_HORIZONS: SignalHorizon[] = ["1d", "1w"];
@@ -236,6 +237,12 @@ export default function SignalBacktestPage() {
             "backtested — not live (own-signal replay of the feature store, net of cost)"}
         </div>
       </header>
+
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-signal-backtest"
+        text="Does SignalDeck's own flagship signal predict returns out of sample, after costs? Graded on the record it actually made, gates included."
+      />
 
       {/* Horizon switcher. */}
       <div className="flex flex-wrap items-center gap-2">

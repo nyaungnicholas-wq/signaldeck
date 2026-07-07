@@ -8,6 +8,7 @@
 // note/gate renders identically here; the AI chat keeps its own auth gate.
 // The QUALITY / AGENTS / AI tabs above remain as focused deep links.
 
+import PagePurpose from "@/components/PagePurpose";
 import QualityPage from "./quality/page";
 import AgentsPage from "./agents/page";
 import AIPage from "./ai/page";
@@ -15,6 +16,11 @@ import AIPage from "./ai/page";
 export default function SystemAllPage() {
   return (
     <div className="flex flex-col gap-8">
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="lab-system"
+        text="Is the machine itself healthy? Data quality, the background worker fleet, and the AI surface — one look, same honesty gates as the focused tabs."
+      />
       <section aria-label="data quality">
         <QualityPage />
       </section>

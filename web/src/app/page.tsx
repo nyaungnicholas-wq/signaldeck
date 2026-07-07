@@ -26,13 +26,20 @@ import { useEffect, useMemo, useState } from "react";
 import {
   api,
   dashboard,
+  trackRecordWithGate,
   type AlertRow,
   type DashboardResponse,
   type DashFeedItem,
   type DashWatchSpark,
   type Market,
+  type TrackRecordWithGate,
 } from "@/lib/api";
-import { ago, fmtPct, fmtScore, scoreColor } from "@/lib/format";
+import PagePurpose from "@/components/PagePurpose";
+import StorySection from "@/components/StorySection";
+import { ago, fmtPct } from "@/lib/format";
+import { confidenceWord } from "@/lib/plain";
+import Plain, { useViewMode } from "@/components/Plain";
+import VerdictCard from "@/components/VerdictCard";
 import TickerTape from "@/components/TickerTape";
 import Heatmap, { type HeatmapItem } from "@/components/viz/Heatmap";
 import BigCandle, { type ChipSym } from "@/components/viz/BigCandle";
@@ -274,6 +281,10 @@ function vixRegimeColor(regime?: string): string {
 
 function GaugeRow({ dash }: { dash: DashboardResponse }) {
   const g = dash.gauges;
+  // Stage-1 translation layer: SIMPLE mode adds a plain-English line under
+  // the jargon-heavy dials. The API's honesty gate captions stay verbatim in
+  // BOTH modes — plain language supplements the caveats, never replaces them.
+  const mode = useViewMode();
   return (
     <section className="panel" aria-label="market gauges">
       <div className="panel-h">
@@ -334,6 +345,16 @@ function GaugeRow({ dash }: { dash: DashboardResponse }) {
               )}
             </span>
           )}
+          {/* plain-English read of the VIX level (SIMPLE mode only; no data →
+              the dial's own gate caption already says why, so add nothing) */}
+          {g.vix.hasData && (
+            <Plain
+              metric="vix"
+              value={g.vix.level ?? null}
+              compact
+              className="max-w-[170px] justify-center text-center"
+            />
+          )}
         </div>
 
         <StatTile
@@ -343,15 +364,28 @@ function GaugeRow({ dash }: { dash: DashboardResponse }) {
           caption={g.anomalies.caption}
         />
 
-        <Gauge
-          value={g.confidence.avg}
-          min={0}
-          max={1}
-          label="PREDICTION CONFIDENCE"
-          caption={g.confidence.caption}
-          hasData={g.confidence.hasData}
-          format={(v) => `${(v * 100).toFixed(0)}%`}
-        />
+        <div className="flex flex-col items-center gap-1">
+          <Gauge
+            value={g.confidence.avg}
+            min={0}
+            max={1}
+            label="PREDICTION CONFIDENCE"
+            caption={g.confidence.caption}
+            hasData={g.confidence.hasData}
+            format={(v) => `${(v * 100).toFixed(0)}%`}
+          />
+          {/* plain read of the average lean strength (SIMPLE mode only) —
+              the gate caption above it stays verbatim either way */}
+          {mode === "simple" && g.confidence.hasData && (
+            <span
+              className="max-w-[170px] text-center text-[0.72rem] leading-snug"
+              style={{ color: "var(--dim)" }}
+              title="mean |calibrated P(up) − 50%| × 2 across the latest 1d predictions — how far from a coin flip the fleet leans on average"
+            >
+              typical prediction: {confidenceWord(g.confidence.avg)}
+            </span>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -366,7 +400,6 @@ function WatchRowItem({
   r: DashWatchSpark;
   onUnwatch: (r: DashWatchSpark) => void;
 }) {
-  const score = typeof r.score1d === "number" && Number.isFinite(r.score1d) ? r.score1d : null;
   return (
     <li
       className="flex items-center gap-2 border-t px-3 py-2"
@@ -385,23 +418,18 @@ function WatchRowItem({
           {(r.closes?.length ?? 0) > 1 ? fmtPct(r.dayChangePct) : "—"}
         </span>
       </Link>
-      {score !== null ? (
-        <span
-          className="chip tnum shrink-0 px-2 py-[1px] text-[0.68rem]"
-          style={{ color: scoreColor(score) }}
-          title="latest 1d ensemble score, [-1,+1] — backtested calibration, not a live track record"
-        >
-          {fmtScore(score)}
-        </span>
-      ) : (
-        <span
-          className="chip shrink-0 px-2 py-[1px] text-[0.68rem]"
-          style={{ color: "var(--faint)" }}
-          title="1d score pending — the scorer needs more stored history for this symbol"
-        >
-          —
-        </span>
-      )}
+      {/* Stage 2: the 1d verdict card — REAL calibrated prob or the honest
+          "NO READ YET", with the evidence-tier badge always visible. */}
+      <VerdictCard
+        size="sm"
+        symbol={r.symbol}
+        market={r.market}
+        calProb={r.calProb1d ?? null}
+        nUsed={r.nUsed1d ?? 0}
+        tier={r.tier1d ?? ""}
+        tierProgress={{ nSamples: r.nSamples1d ?? 0, threshold: r.tierThreshold ?? 0 }}
+        className="shrink-0"
+      />
       <button
         type="button"
         onClick={() => onUnwatch(r)}
@@ -645,6 +673,155 @@ function MoversMini({ dash }: { dash: DashboardResponse }) {
   );
 }
 
+// ── proof strip (story section 4) ────────────────────────────────────────
+
+// STAGE 3: the dashboard's compact "PROOF IT WORKS" strip — the track-record
+// gate progress, the costed paper P&L and the ledger-integrity chip, each
+// pulled from the REAL /api/track-record payload and each keeping its honest
+// framing (gated = "too early to grade", paper = simulation upper bound).
+// Nothing here is ever fabricated: fetch failure renders an honest note.
+function ProofStrip() {
+  const [tr, setTr] = useState<TrackRecordWithGate | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      trackRecordWithGate("1d")
+        .then((d) => {
+          if (!alive) return;
+          setTr(d);
+          setErr(null);
+        })
+        .catch((e: unknown) => {
+          if (!alive) return;
+          setErr(e instanceof Error ? e.message : String(e));
+        });
+    load();
+    const t = setInterval(load, 300_000); // the record moves on daily cadence
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  if (err && !tr) {
+    return (
+      <section className="panel px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+        proof data unavailable ({err}) — the track record lives at{" "}
+        <Link href="/lab/track-record" className="cursor-pointer underline" style={{ color: "var(--dim)" }}>
+          /lab/track-record
+        </Link>{" "}
+        once the daemon is reachable.
+      </section>
+    );
+  }
+  if (!tr) {
+    return (
+      <section className="panel p-3">
+        <Skeleton lines={2} label="loading track-record proof" />
+      </section>
+    );
+  }
+
+  const threshold = tr.gate?.threshold ?? tr.minIndependentN;
+  const paper = tr.paper;
+  return (
+    <section className="panel" aria-label="proof it works">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3">
+        {/* gate progress — the honest scoreboard state */}
+        <div className="flex min-w-[220px] flex-1 flex-col gap-1">
+          {tr.gated ? (
+            <>
+              <span className="text-[0.78rem] font-semibold" style={{ color: "var(--warn)" }}>
+                too early to grade —{" "}
+                <span className="tnum">
+                  {tr.independentN}/{threshold}
+                </span>{" "}
+                independent symbol-days
+              </span>
+              <div
+                className="h-1.5 w-full overflow-hidden rounded"
+                style={{ background: "var(--border)" }}
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={threshold}
+                aria-valuenow={tr.independentN}
+                aria-label="independent resolutions toward the significance gate"
+              >
+                <div
+                  className="h-full rounded"
+                  style={{
+                    width: `${Math.min(100, (tr.independentN / Math.max(1, threshold)) * 100)}%`,
+                    background: "var(--warn)",
+                  }}
+                />
+              </div>
+              <span className="text-[0.65rem]" style={{ color: "var(--faint)" }}>
+                skill numbers stay withheld until the bar fills — an honest wait, not a hidden score
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-[0.78rem] font-semibold" style={{ color: "var(--ok)" }}>
+                measured: right {tr.winRate != null ? `${(tr.winRate * 100).toFixed(1)}%` : "—"} of the time
+              </span>
+              <span className="tnum text-[0.65rem]" style={{ color: "var(--faint)" }}>
+                over {tr.independentN.toLocaleString("en-US")} independent (symbol, UTC-day) resolutions · 1d horizon
+              </span>
+            </>
+          )}
+        </div>
+
+        {/* paper P&L — always labeled a simulation */}
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[0.62rem] tracking-wider" style={{ color: "var(--faint)" }}>
+            PAPER P&amp;L (SIMULATED, COSTED)
+          </span>
+          {paper?.available ? (
+            <span
+              className="tnum text-[0.85rem] font-semibold"
+              style={{ color: (paper.totalReturn ?? 0) >= 0 ? "var(--bid)" : "var(--ask)" }}
+              title="Simulated book on stored data with next-bar fills and per-side costs — an upper bound, not a brokerage account."
+            >
+              {fmtPct((paper.totalReturn ?? 0) * 100)}
+            </span>
+          ) : (
+            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
+              no fills yet
+            </span>
+          )}
+        </div>
+
+        {/* ledger integrity — the record grades the record that was made */}
+        {tr.ledger && (
+          <span
+            className="chip"
+            style={
+              tr.ledger.intact
+                ? { color: "var(--ok)", borderColor: "var(--ok)" }
+                : { color: "var(--bad)", borderColor: "var(--bad)" }
+            }
+            title="Every flagship prediction is hash-chained append-only — intact means no prediction was silently edited or deleted."
+          >
+            {tr.ledger.intact ? "ledger intact" : "ledger BROKEN"}
+            <span className="tnum ml-1.5 font-normal" style={{ color: "var(--faint)" }}>
+              {tr.ledger.count.toLocaleString("en-US")}
+            </span>
+          </span>
+        )}
+
+        <Link
+          href="/lab/track-record"
+          className="chip ml-auto min-h-[36px] cursor-pointer items-center transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          style={{ color: "var(--dim)", display: "inline-flex" }}
+        >
+          full track record →
+        </Link>
+      </div>
+    </section>
+  );
+}
+
 // ── the page ─────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -794,6 +971,12 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* STAGE 3: what this page answers, in plain English */}
+      <PagePurpose
+        id="dashboard"
+        text="What is the market doing right now, and where do your symbols stand? Read top to bottom: market mood → your watchlist → what changed today → proof it works."
+      />
+
       {/* first-load states: full-width skeleton band / recoverable error */}
       {dash === null && !error && (
         <>
@@ -831,6 +1014,12 @@ export default function DashboardPage() {
 
       {dash !== null && (
         <>
+          {/* ── STAGE 3 STORY, SECTION 1: the big picture ── */}
+          <StorySection
+            n={1}
+            title="MARKET MOOD"
+            sub="what the whole market is doing today — stored closes on worker cadence"
+          >
           {/* ── VISUAL BAND: heatmap (left ~50%) + featured candle (right) ── */}
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <section className="panel" aria-label="market heatmap" title={dash.heatmap.note}>
@@ -871,7 +1060,41 @@ export default function DashboardPage() {
 
           {/* ── GAUGE ROW ── */}
           <GaugeRow dash={dash} />
+          </StorySection>
 
+          {/* ── STAGE 3 STORY, SECTION 2: your symbols, verdicts first ── */}
+          <StorySection
+            n={2}
+            title="YOUR WATCHLIST"
+            sub="the model's honest read on each symbol you track — or 'no read yet'"
+          >
+            {dash.watchlist !== null ? (
+              <WatchlistPanel wl={dash.watchlist} onChanged={() => setTick((t) => t + 1)} />
+            ) : (
+              <section className="panel" aria-label="watchlist">
+                <div className="panel-h">WATCHLIST</div>
+                <p className="px-4 py-3 text-[0.78rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+                  Watchlists and alerts are per-account.{" "}
+                  <Link
+                    href="/login"
+                    className="cursor-pointer font-bold underline transition-colors duration-150 hover:text-[var(--accent)]"
+                    style={{ color: "var(--accent)" }}
+                  >
+                    Sign in
+                  </Link>{" "}
+                  to track symbols with sparklines, 1d verdict cards and unread
+                  alerts. Everything else on this dashboard is public-read.
+                </p>
+              </section>
+            )}
+          </StorySection>
+
+          {/* ── STAGE 3 STORY, SECTION 3: the day's events ── */}
+          <StorySection
+            n={3}
+            title="WHAT CHANGED TODAY"
+            sub="news, filings, unusual activity and your alerts — newest first"
+          >
           {/* ── MAIN: merged feed 2/3 + sidebar 1/3 (stacks after feed <lg) ── */}
           <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-3">
             <section className="panel lg:col-span-2" aria-label="merged market feed">
@@ -943,34 +1166,24 @@ export default function DashboardPage() {
               </p>
             </section>
 
-            {/* ── SIDEBAR ── */}
+            {/* ── SIDEBAR: alerts (session-scoped) + movers ── */}
             <div className="flex flex-col gap-3">
-              {dash.watchlist !== null ? (
-                <>
-                  <WatchlistPanel wl={dash.watchlist} onChanged={() => setTick((t) => t + 1)} />
-                  <AlertsPanel alerts={alerts} unseen={dash.watchlist.unseenAlerts} />
-                </>
-              ) : (
-                <section className="panel" aria-label="watchlist">
-                  <div className="panel-h">WATCHLIST</div>
-                  <p className="px-4 py-3 text-[0.78rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-                    Watchlists and alerts are per-account.{" "}
-                    <Link
-                      href="/login"
-                      className="cursor-pointer font-bold underline transition-colors duration-150 hover:text-[var(--accent)]"
-                      style={{ color: "var(--accent)" }}
-                    >
-                      Sign in
-                    </Link>{" "}
-                    to track symbols with sparklines, 1d score chips and unread
-                    alerts. Everything else on this dashboard is public-read.
-                  </p>
-                </section>
+              {dash.watchlist !== null && (
+                <AlertsPanel alerts={alerts} unseen={dash.watchlist.unseenAlerts} />
               )}
-
               <MoversMini dash={dash} />
             </div>
           </div>
+          </StorySection>
+
+          {/* ── STAGE 3 STORY, SECTION 4: the honest scoreboard, compact ── */}
+          <StorySection
+            n={4}
+            title="PROOF IT WORKS"
+            sub="is any of this actually right? measured against real outcomes, gates and all"
+          >
+            <ProofStrip />
+          </StorySection>
         </>
       )}
     </div>
