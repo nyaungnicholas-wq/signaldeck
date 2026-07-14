@@ -140,18 +140,15 @@ func Run(ctx context.Context, client llm.Client, st *store.Store, symbol string)
 		"DATA DIGEST for %s (the only numbers in play):\n%s\n\nBULL CASE:\n%s\n\nBEAR CASE:\n%s\n\n"+
 			"Adjudicate per your output format.", resolved, digest, bull, bear)
 
-	// The deep model is a reasoning model: it emits a hidden reasoning trace
-	// before its answer, so it needs a generous token budget to finish BOTH the
-	// reasoning and the full 4-field verdict block (a tight budget truncates the
-	// CRUXES/RATIONALE lines).
+	// The judge uses the default INSTRUCT model, not the deep reasoning model.
+	// Adjudication requires a STRICT 4-field output format (VERDICT / CONFIDENCE
+	// / CRUXES / RATIONALE); instruct models follow it reliably, whereas reasoning
+	// models spend their token budget on a hidden trace and often emit a terse,
+	// partial answer that drops the CRUXES/RATIONALE lines. (The deep tier stays
+	// available via llm.Tiered for free-form reasoning where format doesn't
+	// matter.)
 	judgeModel := client.Model()
-	var judgeOut string
-	if t, ok := client.(llm.Tiered); ok {
-		judgeModel = t.DeepModel()
-		judgeOut, err = t.CompleteWith(ctx, judgeModel, JudgeCharter, []llm.Message{{Role: "user", Content: judgeUser}}, 1400)
-	} else {
-		judgeOut, err = client.Complete(ctx, JudgeCharter, []llm.Message{{Role: "user", Content: judgeUser}}, 1400)
-	}
+	judgeOut, err := client.Complete(ctx, JudgeCharter, []llm.Message{{Role: "user", Content: judgeUser}}, 800)
 	if err != nil {
 		return Debate{Symbol: resolved, Model: client.Model(), JudgeModel: judgeModel,
 			Bull: bull, Bear: bear, Digest: digest, Cruxes: []string{}}, err

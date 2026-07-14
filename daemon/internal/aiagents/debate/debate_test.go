@@ -109,9 +109,12 @@ func TestRunFull(t *testing.T) {
 	if f.calls != 3 {
 		t.Fatalf("expected 3 model calls (bull/bear/judge), got %d", f.calls)
 	}
-	// last model used must be the deep model (the judge).
-	if got := f.usedModels[len(f.usedModels)-1]; got != "deep-model" {
-		t.Fatalf("judge must use deep-model, used %q", got)
+	// All three calls use the default instruct model (the judge no longer uses
+	// the deep reasoning model — instruct follows the strict format reliably).
+	for _, m := range f.usedModels {
+		if m == "deep-model" {
+			t.Fatalf("no call should use the deep model now, saw %v", f.usedModels)
+		}
 	}
 	if !strings.HasPrefix(d.Bull, "Bull:") || !strings.HasPrefix(d.Bear, "Bear:") {
 		t.Fatalf("bull/bear not wired: bull=%q bear=%q", d.Bull, d.Bear)
@@ -122,7 +125,7 @@ func TestRunFull(t *testing.T) {
 	if len(d.Cruxes) != 2 {
 		t.Fatalf("expected 2 cruxes, got %d: %v", len(d.Cruxes), d.Cruxes)
 	}
-	if d.Symbol != "NVDA" || d.Model != "fast-model" || d.JudgeModel != "deep-model" {
+	if d.Symbol != "NVDA" || d.Model != "fast-model" || d.JudgeModel != "fast-model" {
 		t.Fatalf("metadata wrong: %+v", d)
 	}
 	if !strings.Contains(d.Digest, "NVDA") || !strings.Contains(d.Digest, "1d score") {
