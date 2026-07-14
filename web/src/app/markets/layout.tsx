@@ -15,6 +15,8 @@ const TABS = [
   { href: "/markets/trends", label: "TRENDS" },
   { href: "/markets/regimes", label: "REGIMES" },
   { href: "/markets/macro", label: "MACRO" },
+  { href: "/markets/memory", label: "MEMORY" },
+  { href: "/markets/graph", label: "GRAPH" },
 ];
 
 export default function MarketsLayout({ children }: { children: React.ReactNode }) {

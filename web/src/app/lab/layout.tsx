@@ -27,6 +27,8 @@ const TABS = [
   { href: "/lab/strategies", label: "STRATEGIES" },
   // Stage 5: SYSTEM lands on the combined quality+agents+AI page.
   { href: "/lab/system", label: "SYSTEM" },
+  { href: "/lab/scenario", label: "SCENARIO" },
+  { href: "/lab/optimizer", label: "OPTIMIZER" },
 ];
 
 export default function LabLayout({ children }: { children: React.ReactNode }) {

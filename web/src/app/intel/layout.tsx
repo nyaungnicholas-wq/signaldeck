@@ -32,6 +32,7 @@ const TABS = [
   // Stage 5 FINRA Reg SHO: daily short sale VOLUME ratio (free FINRA files,
   // universe-scoped). The NOT-short-interest caveat renders verbatim.
   { href: "/intel/shorts", label: "SHORTS" },
+  { href: "/intel/company", label: "COMPANY" },
 ];
 
 export default function IntelLayout({ children }: { children: React.ReactNode }) {

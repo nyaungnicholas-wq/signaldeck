@@ -16,6 +16,7 @@ const TABS = [
   { href: "/signals/insights", label: "INSIGHTS" },
   { href: "/signals/alerts", label: "ALERTS" },
   { href: "/signals/unusual", label: "UNUSUAL" },
+  { href: "/signals/debate", label: "DEBATE" },
 ];
 
 export default function SignalsLayout({ children }: { children: React.ReactNode }) {
