@@ -294,12 +294,22 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 	}
 
 	perAttempt := c.attemptTimeout(model)
-	attempts := len(c.keys)
-	if attempts > maxAttempts {
-		attempts = maxAttempts
-	}
+	// Retry transient failures (429 / 5xx / network / timeout / bad-key) up to
+	// maxAttempts even on a SINGLE key. A freshly-restarted daemon fires dozens
+	// of concurrent LLM calls and the provider occasionally returns a transient
+	// error under that burst; a single-attempt client would surface it to the
+	// user. With multiple keys each attempt rotates to a fresh key; with one key
+	// it retries the same key after a short backoff. Permanent errors (bad
+	// request / unknown model) are not retryable and return immediately.
 	var lastErr error
-	for i := 0; i < attempts; i++ {
+	for i := 0; i < maxAttempts; i++ {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Duration(i) * 250 * time.Millisecond):
+			}
+		}
 		out, retryable, err := c.attempt(ctx, c.nextKey(), body, perAttempt, now)
 		if err == nil {
 			return out, nil
@@ -308,7 +318,6 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 		if !retryable {
 			return "", err
 		}
-		// retryable → rotate to the next key and try again
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("llm: request failed")
