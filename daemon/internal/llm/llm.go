@@ -367,7 +367,15 @@ func (c *httpClient) attempt(ctx context.Context, key string, body []byte, timeo
 	if len(cr.Choices) == 0 {
 		return "", true, fmt.Errorf("llm: empty response")
 	}
-	return extractAnswer(cr.Choices[0].Message.Content, cr.Choices[0].Message.ReasoningContent), false, nil
+	ans := extractAnswer(cr.Choices[0].Message.Content, cr.Choices[0].Message.ReasoningContent)
+	if strings.TrimSpace(ans) == "" {
+		// A 200 with empty content AND empty reasoning is a transient degenerate
+		// response (seen under concurrent load). Retry it — another attempt
+		// almost always returns real content — rather than handing the caller
+		// an empty string it can't use.
+		return "", true, fmt.Errorf("llm: empty content")
+	}
+	return ans, false, nil
 }
 
 // attemptTimeout gives the deep reasoning model a longer per-request budget

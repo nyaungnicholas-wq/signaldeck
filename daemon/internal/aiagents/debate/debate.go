@@ -140,13 +140,17 @@ func Run(ctx context.Context, client llm.Client, st *store.Store, symbol string)
 		"DATA DIGEST for %s (the only numbers in play):\n%s\n\nBULL CASE:\n%s\n\nBEAR CASE:\n%s\n\n"+
 			"Adjudicate per your output format.", resolved, digest, bull, bear)
 
+	// The deep model is a reasoning model: it emits a hidden reasoning trace
+	// before its answer, so it needs a generous token budget to finish BOTH the
+	// reasoning and the full 4-field verdict block (a tight budget truncates the
+	// CRUXES/RATIONALE lines).
 	judgeModel := client.Model()
 	var judgeOut string
 	if t, ok := client.(llm.Tiered); ok {
 		judgeModel = t.DeepModel()
-		judgeOut, err = t.CompleteWith(ctx, judgeModel, JudgeCharter, []llm.Message{{Role: "user", Content: judgeUser}}, 600)
+		judgeOut, err = t.CompleteWith(ctx, judgeModel, JudgeCharter, []llm.Message{{Role: "user", Content: judgeUser}}, 1400)
 	} else {
-		judgeOut, err = client.Complete(ctx, JudgeCharter, []llm.Message{{Role: "user", Content: judgeUser}}, 600)
+		judgeOut, err = client.Complete(ctx, JudgeCharter, []llm.Message{{Role: "user", Content: judgeUser}}, 1400)
 	}
 	if err != nil {
 		return Debate{Symbol: resolved, Model: client.Model(), JudgeModel: judgeModel,
