@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef } from "react";
 import {
   createChart,
   createSeriesMarkers,
+  createTextWatermark,
   CandlestickSeries,
   HistogramSeries,
   LineSeries,
@@ -30,6 +31,7 @@ import {
   type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
+  type ITextWatermarkPluginApi,
   type HistogramData,
   type LineData,
   type SeriesMarker,
@@ -40,6 +42,7 @@ import {
 import type { Bar, CandlePattern, ChartOverlayMarker, PatternBar, Trendline } from "@/lib/api";
 import {
   computeIndicator,
+  indicatorMeta,
   type DashStyle,
   type HistPoint,
   type IndicatorId,
@@ -181,6 +184,9 @@ export default function CandleChart({
   // Indicator layer bookkeeping (rebuilt each effect run).
   const indSeriesRef = useRef<ISeriesApi<SeriesType>[]>([]);
   const candleLevelsRef = useRef<IPriceLine[]>([]);
+  // Per-pane "type" labels (RSI, MACD, …) so an enabled indicator is never an
+  // anonymous line/pane — detached and rebuilt alongside the series.
+  const indLabelsRef = useRef<ITextWatermarkPluginApi<Time>[]>([]);
   // Trendline series (rebuilt on trend changes).
   const trendSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
 
@@ -337,6 +343,16 @@ export default function CandleChart({
       }
     }
     indSeriesRef.current = [];
+    // Detach the previous pane labels before panes are torn down.
+    for (const wm of indLabelsRef.current) {
+      try {
+        wm.detach();
+      } catch {
+        /* already detached */
+      }
+    }
+    indLabelsRef.current = [];
+
     // Collapse every pane except the price pane (index 0).
     const existing = chart.panes();
     for (let i = existing.length - 1; i >= 1; i--) {
@@ -348,6 +364,21 @@ export default function CandleChart({
     }
 
     if (!cleanBars.length || !indicators.length) return;
+
+    // A left-anchored "NAME · params" label for a pane, colored to the
+    // indicator, so the chart always names the type of indicator it's showing.
+    const labelPane = (paneIndex: number, lines: { text: string; color: string }[]) => {
+      const panes = chart.panes();
+      if (paneIndex >= panes.length || !lines.length) return;
+      const wm = createTextWatermark(panes[paneIndex], {
+        horzAlign: "left",
+        vertAlign: "top",
+        lines: lines.map((l) => ({ text: l.text, color: l.color, fontSize: 11, fontStyle: "bold" })),
+      });
+      indLabelsRef.current.push(wm);
+    };
+    // Overlay indicators share the price pane, so their labels stack there.
+    const overlayLabels: { text: string; color: string }[] = [];
 
     const addPlot = (plot: PlotSpec, paneIndex: number): ISeriesApi<SeriesType> => {
       const lastValueVisible = paneIndex !== 0;
@@ -387,6 +418,9 @@ export default function CandleChart({
     for (const id of indicators) {
       const r = computeIndicator(id, cleanBars, tf);
       if (!r) continue;
+      const meta = indicatorMeta(id);
+      const labelText = `${meta.name} · ${meta.params}`;
+      const labelColor = r.plots[0]?.color ?? "#94a3b8";
       if (r.pane === "own") {
         const paneIndex = chart.panes().length; // next free index → new pane
         let host: ISeriesApi<SeriesType> | null = null;
@@ -406,6 +440,8 @@ export default function CandleChart({
             });
           }
         }
+        // Name the oscillator pane immediately (its index is stable now).
+        labelPane(paneIndex, [{ text: labelText, color: labelColor }]);
       } else {
         for (const plot of r.plots) addPlot(plot, 0);
         for (const lv of r.levels) {
@@ -419,8 +455,12 @@ export default function CandleChart({
           });
           candleLevelsRef.current.push(pl);
         }
+        overlayLabels.push({ text: labelText, color: labelColor });
       }
     }
+
+    // Stack every overlay indicator's label in the top-left of the price pane.
+    labelPane(0, overlayLabels);
 
     // Give the price pane the lion's share of the height.
     const panes = chart.panes();

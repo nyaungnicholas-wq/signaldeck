@@ -5,15 +5,19 @@
 // per-bucket hit rates) converges on one rule: a top RANK must never be read as
 // certainty. The rank answers "where does this symbol sit in today's cross-
 // section?"; CONVICTION answers "how much should you trust that rank as a real
-// forward edge?" A #1 rank built on a coin-flip-sized, statistically-unproven,
-// or self-contradictory edge deserves LOW conviction — that is the honest
-// antidote to "10/10 = sure thing" (the user's exact complaint).
+// forward edge?"
 //
-// Conviction is computed from facts already on the stored prediction (edge
-// magnitude, blend depth, freshness, factor agreement) plus ONE fleet fact —
-// whether the platform's own calibrated predictions have proven a live edge
-// out-of-sample. It is a small ordinal (low/moderate/high), never a false-
-// precise number, so it can't manufacture the certainty it exists to deny.
+// The honest anchor is the model's MEASURED realized accuracy, NOT the per-
+// symbol calibrated probability. Those stored probabilities are demonstrably
+// overconfident (thin per-symbol calibration maps raw 0.74 → cal 0.96 and raw
+// 0.70 → cal 0.17), so a large |edge| must never buy conviction. The fleet is
+// right only ~54% of the time, so even the #1 symbol is a modest edge at best —
+// and an extreme calibrated probability the realized accuracy can't support is
+// treated as OVERCONFIDENCE that LOWERS conviction. That is the honest antidote
+// to reading "10/10" as a sure thing (the user's exact complaint).
+//
+// Conviction is a small ordinal (low/moderate/high), never a false-precise
+// number, so it can't manufacture the certainty it exists to deny.
 package composite
 
 import (
@@ -30,42 +34,52 @@ const (
 	BandHigh     Band = "high"
 )
 
-// Edge-magnitude thresholds on |calProb − 0.5| — the size of the directional
-// lean over a 50% coin flip, the primary conviction driver.
+// Conviction thresholds. The CEILING is set by the model's MEASURED realized
+// accuracy (win rate), NEVER by the per-symbol calibrated probability.
 const (
-	// EdgeSlight: below this the "edge" is inside coin-flip range.
+	// strongWinRate: measured live accuracy at/above this is a strong edge (HIGH
+	// ceiling). ~58% 1-day directional accuracy is genuinely strong.
+	strongWinRate = 0.58
+	// modestWinRate: at/above this (but below strong) the edge is real but modest
+	// (MODERATE ceiling); below it a "proven" edge is still marginal (LOW ceiling).
+	modestWinRate = 0.53
+	// trustworthyWinRate: below this realized accuracy, an EXTREME calibrated
+	// probability is untrustworthy overconfidence — it lowers conviction.
+	trustworthyWinRate = 0.60
+	// overconfidentEdge: |calProb − 0.5| at/above this (calProb ≥ 0.70 or ≤ 0.30)
+	// is an extreme 1-day call the realized accuracy usually can't support.
+	overconfidentEdge = 0.20
+	// EdgeSlight: below this the symbol's OWN lean is inside coin-flip range.
 	EdgeSlight = 0.02
-	// EdgeClear: at/above this the read is materially directional.
-	EdgeClear = 0.05
 	// convStaleAgeSec: a prediction older than ~a day is discounted a band.
 	convStaleAgeSec = 26 * 3600
 )
 
 // ConvictionInputs are everything the assessment needs: per-symbol facts from
-// the stored prediction plus the fleet-level "is the edge proven live?" fact.
+// the stored prediction plus the fleet-level measured-skill facts.
 type ConvictionInputs struct {
-	Edge       float64 // calProb − 0.5 (signed)
+	Edge       float64 // calProb − 0.5 (signed) — a RANK input, not a trusted probability
 	PredAgeSec int64   // age of the underlying prediction
 	NUsed      int     // ensemble legs behind the probability
 	// Directional factor tallies for the agreement check (BuildFactors verdicts;
 	// gated + context tiles are verdict 0 and so naturally excluded).
 	Bull, Bear int
 	// EdgeProvenLive: the platform's OWN calibrated predictions have cleared the
-	// live out-of-sample track-record gate (enough independent resolutions AND a
-	// win rate significantly above a coin flip). Currently false (in-sample
-	// only) → conviction is capped below High for EVERY symbol, honestly.
+	// live out-of-sample track-record gate. WinRate is the measured realized
+	// directional accuracy (0..1) — the CEILING on conviction.
 	EdgeProvenLive bool
-	SkillNote      string // one-line reason for the skill state, rendered verbatim
+	WinRate        float64 // measured live accuracy (0 if unknown)
+	SkillNote      string  // one-line reason for the skill state, rendered verbatim
 }
 
 // ConvictionResult is the assessed conviction with its plain-English drivers and
 // the persistent risk caveat that must ride with every score.
 type ConvictionResult struct {
-	Band     Band     `json:"band"`
-	Label    string   `json:"label"`    // "LOW conviction" etc.
-	Drivers  []string `json:"drivers"`  // reasons, always shown (never hidden)
-	SkillNote string  `json:"skillNote"` // the fleet live-edge status, verbatim
-	RiskNote string   `json:"riskNote"` // persistent "not a certainty" caveat
+	Band      Band     `json:"band"`
+	Label     string   `json:"label"`     // "LOW conviction" etc.
+	Drivers   []string `json:"drivers"`   // reasons, always shown (never hidden)
+	SkillNote string   `json:"skillNote"` // the fleet live-edge status, verbatim
+	RiskNote  string   `json:"riskNote"`  // persistent "not a certainty" caveat
 }
 
 // riskNote is the always-visible caveat. Framed like Danelfin's "probabilities,
@@ -73,40 +87,52 @@ type ConvictionResult struct {
 // found missing.
 const riskNote = "A high score is a RELATIVE rank of today's cross-section, not a probability of profit — even the top-ranked symbol can fall, and every position carries real risk of loss. Probabilities, not certainties; not investment advice."
 
-// Assess computes conviction. Only the edge magnitude can set the base band;
-// every other signal can lower it but never raise it — conviction is
-// deliberately conservative, so a top rank on a thin, stale, unproven, or
-// contradictory edge cannot present as high conviction.
-func Assess(in ConvictionInputs) ConvictionResult {
-	mag := math.Abs(in.Edge)
-	var drivers []string
-
-	// 1) Base band from the size of the lean (the unarguable primary driver).
-	var band Band
-	switch {
-	case mag >= EdgeClear:
-		band = BandHigh
-		drivers = append(drivers, fmt.Sprintf("edge %+.1fpp — a clear directional lean", in.Edge*100))
-	case mag >= EdgeSlight:
-		band = BandModerate
-		drivers = append(drivers, fmt.Sprintf("edge %+.1fpp — only a slight lean over a coin flip", in.Edge*100))
-	default:
-		band = BandLow
-		drivers = append(drivers, fmt.Sprintf("edge %+.1fpp — within coin-flip range (±%.0fpp)", in.Edge*100, EdgeSlight*100))
+// skillCeiling returns the highest conviction the MEASURED live accuracy can
+// justify, with a plain-English reason. Nothing else can raise conviction above
+// this.
+func skillCeiling(proven bool, winRate float64) (Band, string) {
+	if !proven {
+		return BandLow, "model edge not yet proven on live out-of-sample results — conviction capped low"
 	}
+	switch {
+	case winRate >= strongWinRate:
+		return BandHigh, fmt.Sprintf("model's proven live accuracy is %.1f%% — a strong measured edge", winRate*100)
+	case winRate >= modestWinRate:
+		return BandModerate, fmt.Sprintf("model's proven live accuracy is only %.1f%% — a real but modest edge (capped below high; you are still wrong ~%.0f%% of the time)", winRate*100, (1-winRate)*100)
+	default:
+		return BandLow, fmt.Sprintf("model's proven live accuracy is %.1f%% — marginal, barely above a coin flip", winRate*100)
+	}
+}
 
-	// 2) Cap-on-unproven-model (Seeking Alpha's disqualify-on-weak-signal): if
-	//    the platform hasn't proven a live edge, NOTHING can be high conviction.
-	if !in.EdgeProvenLive {
-		if band == BandHigh {
-			band = BandModerate
-			drivers = append(drivers, "capped below high: the model's edge is not yet proven on live out-of-sample results")
+// Assess computes conviction. The base band is the measured-skill CEILING; every
+// per-symbol signal can only LOWER it. A large (calibration-inflated) edge never
+// buys conviction the realized accuracy hasn't earned — an extreme calibrated
+// probability the model can't back up is flagged as overconfidence.
+func Assess(in ConvictionInputs) ConvictionResult {
+	band, ceilNote := skillCeiling(in.EdgeProvenLive, in.WinRate)
+	drivers := []string{ceilNote}
+	mag := math.Abs(in.Edge)
+
+	// Overconfidence: an EXTREME calibrated probability the realized accuracy
+	// can't support LOWERS conviction (the raw→cal inflation we measured), rather
+	// than raising it.
+	if mag >= overconfidentEdge && in.WinRate < trustworthyWinRate {
+		band = lower(band)
+		impliedPct := (0.5 + mag) * 100
+		if in.WinRate > 0 {
+			drivers = append(drivers, fmt.Sprintf("calibrated probability is extreme (~%.0f%% implied) but the model is right only %.0f%% of the time — treat as overconfident, not a sure thing", impliedPct, in.WinRate*100))
 		} else {
-			drivers = append(drivers, "model edge not yet proven live (in-sample only)")
+			drivers = append(drivers, fmt.Sprintf("calibrated probability is extreme (~%.0f%% implied) with no proven live accuracy — treat as overconfident", impliedPct))
 		}
 	}
 
-	// 3) Discounts — each lowers the band once (floored at low).
+	// The symbol's OWN lean is a coin flip.
+	if mag < EdgeSlight {
+		band = lower(band)
+		drivers = append(drivers, fmt.Sprintf("edge %+.1fpp — within coin-flip range (±%.0fpp)", in.Edge*100, EdgeSlight*100))
+	}
+
+	// Discounts — each lowers the band once (floored at low).
 	if in.PredAgeSec > convStaleAgeSec {
 		band = lower(band)
 		drivers = append(drivers, fmt.Sprintf("underlying prediction is %.0fh old", float64(in.PredAgeSec)/3600))

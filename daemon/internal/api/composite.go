@@ -56,10 +56,11 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, "stored payload does not parse: "+err.Error())
 		return
 	}
-	// CONVICTION — the honest second axis. A top rank on a coin-flip-sized,
-	// unproven, stale, or self-contradictory edge is LOW conviction. Computed at
-	// READ time so it reflects the current live-edge status, not a stale snapshot.
-	proven, skillNote := d.fleetEdgeSkill(r.Context())
+	// CONVICTION — the honest second axis. Anchored to the model's MEASURED live
+	// accuracy (not the overconfident per-symbol calProb), so a top rank on an
+	// extreme-but-unbacked, stale, thin, or contradictory read is LOW conviction.
+	// Computed at READ time so it reflects the current live-edge status.
+	proven, winRate, skillNote := d.fleetEdgeSkill(r.Context())
 	bull, bear := composite.FactorAgreement(p.Factors)
 	conv := composite.Assess(composite.ConvictionInputs{
 		Edge:           row.Edge,
@@ -68,19 +69,19 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 		Bull:           bull,
 		Bear:           bear,
 		EdgeProvenLive: proven,
+		WinRate:        winRate,
 		SkillNote:      skillNote,
 	})
 	writeJSON(w, map[string]any{
-		"available": true,
-		"symbol":    s.Symbol,
-		"market":    s.Market,
-		"horizon":   row.Horizon,
-		"ts":        row.Ts,
-		"score":     row.Score,
-		"curvePct":  row.CurvePct,
-		"edge":      row.Edge,
-		"edgeLine": fmt.Sprintf("P(up 1d) %.1f%% vs 50%% coin = %+.1fpp edge",
-			p.CalProb*100, row.Edge*100),
+		"available":  true,
+		"symbol":     s.Symbol,
+		"market":     s.Market,
+		"horizon":    row.Horizon,
+		"ts":         row.Ts,
+		"score":      row.Score,
+		"curvePct":   row.CurvePct,
+		"edge":       row.Edge,
+		"edgeLine":   honestEdgeLine(p.CalProb, proven, winRate),
 		"rawProb":    p.RawProb,
 		"calProb":    p.CalProb,
 		"nUsed":      p.NUsed,
@@ -94,6 +95,27 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// honestEdgeLine frames the stored calibrated probability WITHOUT overstating
+// it. The per-symbol calibration is overconfident (measured raw→cal inflation),
+// so the line pairs the number with the model's realized accuracy and says,
+// verbatim, to read it as a RANK signal rather than a literal probability.
+func honestEdgeLine(calProb float64, proven bool, winRate float64) string {
+	dir := "up"
+	if calProb < 0.5 {
+		dir = "down"
+	}
+	base := fmt.Sprintf("Model leans %s — calibrated P(up 1d) %.0f%%", dir, calProb*100)
+	extreme := calProb >= 0.7 || calProb <= 0.3
+	switch {
+	case proven && extreme:
+		return base + fmt.Sprintf(", but realized live accuracy is only %.0f%% — read this as a RANK, not a %.0f%% chance", winRate*100, calProb*100)
+	case proven:
+		return base + fmt.Sprintf(" (realized live accuracy %.0f%% — a ranking signal, not a literal probability)", winRate*100)
+	default:
+		return base + " — realized accuracy not yet proven live; treat as a RANK, not a probability"
+	}
+}
+
 // fleetEdgeSkill answers the one fleet-level question conviction needs: has the
 // platform proven a LIVE out-of-sample edge? It grades the platform's OWN
 // calibrated 1d predictions (prediction_outcomes — prob frozen at prediction
@@ -102,10 +124,10 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 // only when it clears the SAME gate the /track-record page uses AND the win
 // rate's 95% Wilson lower bound sits above a coin flip. Best-effort: any error
 // returns "not proven" with a stated reason — never a fabricated pass.
-func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, note string) {
+func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, winRate float64, note string) {
 	rows, err := d.St.ResolvedPredictionOutcomes(ctx, md.H1d, 20000)
 	if err != nil {
-		return false, "live edge status unavailable (" + err.Error() + ")"
+		return false, 0, "live edge status unavailable (" + err.Error() + ")"
 	}
 	// One independent obs per (symbol, UTC-day), keeping the latest (rows ts DESC).
 	seen := map[[2]int64]bool{}
@@ -125,16 +147,16 @@ func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, note string) {
 	}
 	distinctDays := len(dayset)
 	if indepN < trackMinIndependentN || distinctDays < trackMinDistinctDays {
-		return false, fmt.Sprintf("live track record still thin — %d independent resolutions across %d day(s) (need %d / %d)",
+		return false, 0, fmt.Sprintf("live track record still thin — %d independent resolutions across %d day(s) (need %d / %d)",
 			indepN, distinctDays, trackMinIndependentN, trackMinDistinctDays)
 	}
-	winRate := float64(wins) / float64(indepN)
+	winRate = float64(wins) / float64(indepN)
 	lo, _ := wilson(wins, indepN)
 	if lo > 0.5 {
-		return true, fmt.Sprintf("edge proven live: %.1f%% win rate over %d independent resolutions across %d days (95%% floor %.1f%% > 50%%)",
+		return true, winRate, fmt.Sprintf("edge proven live: %.1f%% directional accuracy over %d independent resolutions across %d days (95%% floor %.1f%% > 50%%)",
 			winRate*100, indepN, distinctDays, lo*100)
 	}
-	return false, fmt.Sprintf("no proven live edge yet: %.1f%% win rate over %d independent resolutions is within noise of a coin flip (95%% floor %.1f%% ≤ 50%%)",
+	return false, winRate, fmt.Sprintf("no proven live edge yet: %.1f%% accuracy over %d independent resolutions is within noise of a coin flip (95%% floor %.1f%% ≤ 50%%)",
 		winRate*100, indepN, lo*100)
 }
 
@@ -190,8 +212,8 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 		prevRank[p.SymbolID] = i + 1 // store order = score DESC, pct DESC
 	}
 
-	// Live-edge status once for the whole leaderboard (the conviction cap).
-	proven, skillNote := d.fleetEdgeSkill(ctx)
+	// Live-edge status once for the whole leaderboard (the conviction ceiling).
+	proven, winRate, skillNote := d.fleetEdgeSkill(ctx)
 
 	out := make([]compositeTopRow, 0, min(limit, len(rows)))
 	for i, c := range rows {
@@ -206,13 +228,14 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 			delta := pr - row.Rank
 			row.PrevRank, row.RankChange = &pr, &delta
 		}
-		// Coarse conviction for the list: edge magnitude capped by the live-edge
-		// status. NUsed=2 / PredAgeSec=0 keep it to those two drivers only (the
-		// detail view applies the freshness/blend/agreement discounts).
+		// Coarse conviction for the list: measured-skill ceiling + the
+		// overconfidence penalty on extreme edges. NUsed=2 / PredAgeSec=0 skip the
+		// freshness/blend/agreement discounts (the detail view applies those).
 		conv := composite.Assess(composite.ConvictionInputs{
 			Edge:           c.Edge,
 			NUsed:          2,
 			EdgeProvenLive: proven,
+			WinRate:        winRate,
 			SkillNote:      skillNote,
 		})
 		row.Conviction, row.ConvictionLabel = string(conv.Band), conv.Label

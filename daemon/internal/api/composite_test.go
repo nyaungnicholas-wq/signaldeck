@@ -104,8 +104,11 @@ func TestCompositeDetailEndpoint(t *testing.T) {
 	if len(body.Ledger.Entries) == 0 || body.Ledger.Method == "" {
 		t.Fatalf("ledger = %+v", body.Ledger)
 	}
-	// Danelfin-style edge framing with real numbers.
-	if !strings.Contains(body.EdgeLine, "56.3%") || !strings.Contains(body.EdgeLine, "+6.3pp") {
+	// Honest edge framing: the calibrated probability paired with an explicit
+	// "read this as a RANK, not a probability" caveat (the model is unproven in
+	// this fixture, so no realized accuracy is claimed).
+	if !strings.Contains(body.EdgeLine, "P(up 1d) 56%") ||
+		!strings.Contains(body.EdgeLine, "RANK") {
 		t.Fatalf("edgeLine = %q", body.EdgeLine)
 	}
 	if !strings.Contains(body.CurveNote, "not a probability") ||
