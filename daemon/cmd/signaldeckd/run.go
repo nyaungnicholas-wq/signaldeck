@@ -207,7 +207,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		backupDir = filepath.Join(filepath.Dir(cfg.DBPath), "backups")
 	}
 	fleet = append(fleet, &backup.Worker{
-		St: st, Dir: backupDir, Keep: 7, FirstRunDelay: 5 * time.Minute,
+		St: st, Dir: backupDir, OffsiteDir: offsiteBackupDir(), Keep: 7, FirstRunDelay: 5 * time.Minute,
 	})
 	// Alerts + daily-briefing wave (constructor appended at the END of this
 	// file) — must join the fleet BEFORE the watchdog snapshots its specs.
@@ -366,6 +366,13 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// grade proves out). BEFORE the watchdog spec snapshot so it's
 	// health-audited like every other worker.
 	fleet = append(fleet, alphaXWorkers(st)...)
+	// DATA-SOURCE FRESHNESS wave (constructor appended at the END of this file) —
+	// source-audit (1h): checks the age of every EXTERNAL source's newest row
+	// against a market-calendar-aware staleness budget and records a
+	// dq_events(source_stale) per quietly-dead source (deduped per source per UTC
+	// day); served live at GET /api/source-health. BEFORE the watchdog spec
+	// snapshot so it's health-audited like every other worker.
+	fleet = append(fleet, sourceAuditWorkers(cfg, st)...)
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -1130,5 +1137,47 @@ func newsTrendsStrategyLabWorkers(st *store.Store) []workers.Worker {
 func alphaXWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.AlphaXTrainer{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// DATA-SOURCE FRESHNESS wave (appended block).
+// sourceAuditWorkers returns the wave's worker: source-audit (1h) — the
+// "self-honest, not self-healing" watchdog for EXTERNAL data. The fleet
+// watchdog (internal/health) flags workers that stop RUNNING; this flags
+// sources that stop PRODUCING while their worker keeps returning ok (a scraper
+// that drifts, a source that goes quietly dead). Every hour it asks
+// internal/srchealth how old each registered source's newest row is against a
+// market-calendar-aware budget and records a dq_events(source_stale) per stale
+// source (deduped per source per UTC day). Market-gated stock sources are NOT
+// flagged when the exchange is legitimately closed; crypto/24-7 sources are
+// always checked. The tv_signals webhook source is judged ONLY when a webhook
+// secret is configured AND the market is open — the case that catches a silently
+// dead tunnel/webhook while trading is live. Served live at GET
+// /api/source-health. BEFORE the watchdog spec snapshot so it's health-audited.
+func sourceAuditWorkers(cfg config.Config, st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.SourceAuditor{St: st, WebhookSecretSet: cfg.TVWebhookSecret != ""},
+	}
+}
+
+// offsiteBackupDir resolves the OFF-MACHINE backup destination for the nightly
+// backup worker. SIGNALDECK_OFFSITE_BACKUP_DIR overrides; the value "off" (or
+// "none") explicitly disables the offsite copy. Default: the iCloud Drive
+// SignalDeckBackups folder (verified to exist), so a total-loss event — the
+// single SQLite file on the one Mac dying — is survivable out of the box. An
+// unresolvable home dir degrades to disabled (local backup still runs).
+func offsiteBackupDir() string {
+	switch v := strings.TrimSpace(os.Getenv("SIGNALDECK_OFFSITE_BACKUP_DIR")); strings.ToLower(v) {
+	case "off", "none", "-":
+		return ""
+	case "":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		return filepath.Join(home, "Library", "Mobile Documents", "com~apple~CloudDocs", "SignalDeckBackups")
+	default:
+		return v
 	}
 }

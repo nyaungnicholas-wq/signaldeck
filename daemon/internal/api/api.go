@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/backup"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -109,6 +110,9 @@ func Serve(ctx context.Context, d Deps) error {
 	// ── CROSS-SECTIONAL ALPHA wave (appended — keep new routes at the END of
 	// this block so parallel route edits by other agents never collide) ─────
 	d.registerAlphaX(mux) // pooled cross-sectional alpha model: GET /api/alphax — per-horizon purged-walk-forward OOS grade + gate state + (only while measured OOS lift > 0) top-20 current symbol scores framed as RELATIVE to the same-day universe median; caveat verbatim: gated off (never blended, never displayed as signal) until measured OOS lift > 0; backtested, not a live track record
+	// ── DATA-SOURCE FRESHNESS wave (appended — keep new routes at the END of
+	// this block so parallel route edits by other agents never collide) ──────
+	mux.HandleFunc("GET /api/source-health", d.sourceHealth) // the one "is anything quietly dead?" dashboard: per EXTERNAL source lastTs/ageSecs/staleBudgetSecs/stale/marketGated/note + overall{staleCount}; market-gated stock sources report "market closed" (not stale) when the exchange is closed; crypto/24-7 sources always checked
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,
@@ -578,7 +582,28 @@ func (d Deps) quality(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, map[string]any{"symbols": out, "events": events})
+	writeJSON(w, map[string]any{"symbols": out, "events": events, "ops": d.backupOps(ctx)})
+}
+
+// backupOps surfaces the off-machine backup state (from the meta keys the
+// backup worker records) so a silent backup failure — the local file dying with
+// no offsite copy — is VISIBLE, never discovered only after a total loss.
+// lastBackupTs/lastOffsiteTs are 0 when that step has never succeeded.
+func (d Deps) backupOps(ctx context.Context) map[string]any {
+	atoi := func(k string) int64 {
+		v, _ := d.St.GetMeta(ctx, k)
+		n, _ := strconv.ParseInt(v, 10, 64)
+		return n
+	}
+	offsiteDir, _ := d.St.GetMeta(ctx, backup.MetaOffsiteDir)
+	lastFile, _ := d.St.GetMeta(ctx, backup.MetaLastBackupFile)
+	return map[string]any{
+		"lastBackupTs":      atoi(backup.MetaLastBackupTs),
+		"lastBackupFile":    lastFile,
+		"lastOffsiteTs":     atoi(backup.MetaLastOffsiteTs),
+		"offsiteConfigured": offsiteDir != "",
+		"offsiteDir":        offsiteDir,
+	}
 }
 
 func (d Deps) agents(w http.ResponseWriter, r *http.Request) {
