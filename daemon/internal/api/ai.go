@@ -6,6 +6,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/aiagents/analyst"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/aiagents/chat"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/aiagents/debate"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/aiagents/filingmind"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 )
@@ -91,6 +92,27 @@ func (d Deps) aiFiling(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, res)
 }
 
+// aiDebate stages a bull/bear/judge debate on one symbol (read-only over the
+// store; costs 3 LLM calls, the judge on the deep model). Body: {"symbol":"NVDA"}.
+func (d Deps) aiDebate(w http.ResponseWriter, r *http.Request) {
+	if !d.aiReady(w) {
+		return
+	}
+	var body struct {
+		Symbol string `json:"symbol"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpErr(w, 400, "bad json: "+err.Error())
+		return
+	}
+	res, err := debate.Run(r.Context(), d.LLM, d.St, body.Symbol)
+	if err != nil {
+		httpErr(w, 400, aiErr(err))
+		return
+	}
+	writeJSON(w, res)
+}
+
 // aiReady 503s when the AI layer has no key configured.
 func (d Deps) aiReady(w http.ResponseWriter) bool {
 	if d.LLM == nil || !d.LLM.Enabled() {
@@ -120,4 +142,5 @@ func (d Deps) registerAI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/ai/analyst", d.aiAnalyst)
 	mux.HandleFunc("POST /api/ai/chat", d.aiChat)
 	mux.HandleFunc("POST /api/ai/filing", d.aiFiling)
+	mux.HandleFunc("POST /api/ai/debate", d.aiDebate)
 }

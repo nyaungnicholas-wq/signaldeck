@@ -130,6 +130,7 @@ func (d Deps) requiresAuth(path string) bool {
 		strings.HasPrefix(path, "/api/alerts"),
 		path == "/api/ai/chat",
 		path == "/api/ai/filing",
+		path == "/api/ai/debate",
 		// discovery wave (appended): candidate mutations are session-scoped.
 		path == "/api/candidates/add",
 		path == "/api/candidates/monitor-all",
