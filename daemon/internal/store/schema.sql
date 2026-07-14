@@ -1081,3 +1081,28 @@ CREATE TABLE IF NOT EXISTS pattern_stats (
   n         INTEGER NOT NULL,        -- historical firings behind the stats (>= 15)
   PRIMARY KEY (symbol_id, pattern, horizon)
 );
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- RESEARCH DESK — recommendation audit trail (appended block).
+-- An append-only, hash-chained record of every DISTINCT recommendation the
+-- Desk produces (internal/store/recaudit.go). content_hash makes a rec
+-- reproducible (rebuild from the same inputs → same digest); entry_hash chains
+-- rows for tamper-evidence exactly like prediction_ledger. WRITE-ONCE: only
+-- ever INSERTed. Dedup on (symbol_id, content_hash) keeps polling from growing
+-- the chain when a recommendation hasn't changed.
+CREATE TABLE IF NOT EXISTS recommendation_audit (
+  seq            INTEGER PRIMARY KEY,
+  created_at     INTEGER NOT NULL,     -- wall-clock unix seconds at generation
+  symbol_id      INTEGER NOT NULL REFERENCES symbols(id),
+  symbol         TEXT NOT NULL,
+  market         TEXT NOT NULL,
+  decision       TEXT NOT NULL,
+  confidence     TEXT NOT NULL,
+  content_hash   TEXT NOT NULL,        -- reproducibility digest of rec + inputs
+  sources        TEXT NOT NULL,        -- JSON array of data sources used
+  model_versions TEXT NOT NULL,        -- JSON object of model versions
+  assumptions    TEXT NOT NULL,        -- JSON array of stated assumptions
+  prev_hash      TEXT NOT NULL,        -- entry_hash of seq-1 ("" for genesis)
+  entry_hash     TEXT NOT NULL         -- the chain link
+);
+CREATE INDEX IF NOT EXISTS idx_recaudit_symbol ON recommendation_audit(symbol_id, seq DESC);

@@ -1,23 +1,28 @@
 package api
 
 import (
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/graph"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketmem"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/portopt"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/scenario"
 )
 
 // registerCapstones wires the "capstone" analytics surfaces built on the pure
-// engines: macro scenario simulation and the mean-variance portfolio optimizer.
-// (market-memory / knowledge-graph join here as their handlers land.) All GET,
+// engines: macro scenario simulation, the mean-variance portfolio optimizer,
+// the knowledge-graph ripple, and the market-memory historical analog. All GET,
 // read-only.
 func (d Deps) registerCapstones(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/scenario", d.scenario)
 	mux.HandleFunc("GET /api/portfolio/optimize", d.portfolioOptimize)
+	mux.HandleFunc("GET /api/graph", d.knowledgeGraph)
+	mux.HandleFunc("GET /api/market-memory", d.marketMemory)
 }
 
 // scenario estimates how a hypothetical macro shock would move a symbol, from
@@ -255,6 +260,214 @@ func meanF(xs []float64) float64 {
 		sum += x
 	}
 	return sum / float64(len(xs))
+}
+
+// knowledgeGraph returns the "ripple" neighborhood around one symbol built from
+// FREE data only: the tracked names it co-moves with (return correlation) and
+// those held by overlapping institutional managers (13F co-ownership). Query:
+// symbol (required), minCorr (default 0.5). Computed live over the streamed hot
+// set to stay fast.
+//
+//	GET /api/graph?symbol=NVDA&minCorr=0.5
+func (d Deps) knowledgeGraph(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	center := strings.ToUpper(strings.TrimSpace(q.Get("symbol")))
+	if center == "" {
+		httpErr(w, 400, "symbol is required")
+		return
+	}
+	minCorr := 0.5
+	if s := q.Get("minCorr"); s != "" {
+		if v, err := strconv.ParseFloat(s, 64); err == nil && v > 0 {
+			minCorr = v
+		}
+	}
+	ctx := r.Context()
+	syms, err := d.St.ListSymbols(ctx, true)
+	if err != nil {
+		httpErr(w, 500, "list symbols")
+		return
+	}
+	type row struct {
+		id   int64
+		name string
+	}
+	var set []row
+	var centerName string
+	seen := map[string]bool{}
+	for _, s := range syms {
+		base := s.Symbol
+		if i := strings.IndexByte(base, '/'); i >= 0 {
+			base = base[:i]
+		}
+		isCenter := equalFoldASCII(s.Symbol, center) || equalFoldASCII(base, center)
+		if isCenter {
+			centerName = s.Symbol
+		}
+		if (s.Stream || isCenter) && !seen[s.Symbol] {
+			seen[s.Symbol] = true
+			set = append(set, row{s.ID, s.Symbol})
+		}
+		if len(set) >= 30 {
+			break
+		}
+	}
+	if centerName == "" {
+		httpErr(w, 404, "symbol not tracked: "+center)
+		return
+	}
+
+	// Aligned daily returns over common days → correlation edges.
+	retByDay := make([]map[int64]float64, len(set))
+	dayCount := map[int64]int{}
+	for i, rrow := range set {
+		bars, _ := d.St.LastBars(ctx, rrow.id, md.TF1d, 260)
+		m := map[int64]float64{}
+		for j := 1; j < len(bars); j++ {
+			if p := bars[j-1].Close; p != 0 {
+				m[bars[j].Ts/86400] = bars[j].Close/p - 1
+			}
+		}
+		retByDay[i] = m
+		for day := range m {
+			dayCount[day]++
+		}
+	}
+	var days []int64
+	for day, n := range dayCount {
+		if n == len(set) {
+			days = append(days, day)
+		}
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i] < days[j] })
+	names := make([]string, len(set))
+	returns := make([][]float64, len(set))
+	for i := range set {
+		names[i] = set[i].name
+		s := make([]float64, len(days))
+		for k, day := range days {
+			s[k] = retByDay[i][day]
+		}
+		returns[i] = s
+	}
+	var corrEdges []graph.Edge
+	if len(days) >= 30 {
+		corrEdges = graph.CorrelationEdges(names, returns, minCorr)
+	}
+
+	// Co-ownership edges from 13F holders (Jaccard of manager CIK sets).
+	holders := map[string][]string{}
+	for _, rrow := range set {
+		rows, _ := d.St.InstHoldingsBySymbol(ctx, rrow.id, 200)
+		var ciks []string
+		for _, h := range rows {
+			if h.CIK != "" {
+				ciks = append(ciks, h.CIK)
+			}
+		}
+		if len(ciks) > 0 {
+			holders[rrow.name] = ciks
+		}
+	}
+	coEdges := graph.CoOwnershipEdges(holders, 0.15)
+
+	all := append(append([]graph.Edge{}, corrEdges...), coEdges...)
+	writeJSON(w, map[string]any{
+		"center":       centerName,
+		"neighborhood": graph.NeighborhoodOf(centerName, all),
+		"comparedWith": names,
+		"commonDays":   len(days),
+		"edgeKinds":    map[string]int{"correlation": len(corrEdges), "coowned": len(coEdges)},
+		"note":         "Ripple graph from FREE data only: return correlation (co-movement, not causation) over the streamed hot set + 13F institutional co-ownership (Jaccard of shared managers). Supplier/customer/peer edges need data not held here.",
+	})
+}
+
+// marketMemory finds the historical days whose market state most resembles today
+// and reports what FOLLOWED. Market state = SPY's own trend/vol features; the
+// forward outcome = SPY's realized next-20-trading-day return. Honesty-gated
+// (needs >=60 past days with a known forward outcome).
+//
+//	GET /api/market-memory
+func (d Deps) marketMemory(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	syms, err := d.St.ListSymbols(ctx, true)
+	if err != nil {
+		httpErr(w, 500, "list symbols")
+		return
+	}
+	var spyID int64
+	for _, s := range syms {
+		if equalFoldASCII(s.Symbol, "SPY") {
+			spyID = s.ID
+			break
+		}
+	}
+	if spyID == 0 {
+		httpErr(w, 404, "SPY not tracked (needed as the market proxy)")
+		return
+	}
+	bars, err := d.St.LastBars(ctx, spyID, md.TF1d, 800)
+	if err != nil || len(bars) < 90 {
+		writeJSON(w, map[string]any{"gated": true, "note": "insufficient SPY history for analog matching"})
+		return
+	}
+	const fwd, look = 20, 20
+	var hist []marketmem.Snapshot
+	var curFeat []float64
+	for i := look; i < len(bars); i++ {
+		ret1 := 0.0
+		if bars[i-1].Close != 0 {
+			ret1 = bars[i].Close/bars[i-1].Close - 1
+		}
+		vol5 := stddevReturns(bars[i-5 : i+1])
+		mom20 := 0.0
+		if bars[i-look].Close != 0 {
+			mom20 = bars[i].Close/bars[i-look].Close - 1
+		}
+		feat := []float64{ret1, vol5, mom20}
+		if i+fwd < len(bars) && bars[i].Close != 0 {
+			hist = append(hist, marketmem.Snapshot{
+				Ts: bars[i].Ts, Features: feat,
+				FwdReturn: (bars[i+fwd].Close/bars[i].Close - 1) * 100,
+			})
+		}
+		if i == len(bars)-1 {
+			curFeat = feat
+		}
+	}
+	if curFeat == nil || len(hist) < 60 {
+		writeJSON(w, map[string]any{"gated": true, "history": len(hist),
+			"note": "insufficient history (need >=60 past days with a known forward outcome)"})
+		return
+	}
+	res := marketmem.Find(curFeat, hist, 8, 60, bars[len(bars)-1].Ts, int64(fwd)*86400)
+	writeJSON(w, map[string]any{
+		"proxy":              "SPY",
+		"features":           []string{"1d return", "5d realized vol", "20d momentum"},
+		"forwardHorizonDays": fwd,
+		"today":              map[string]float64{"ret1": curFeat[0], "vol5": curFeat[1], "mom20": curFeat[2]},
+		"result":             res,
+		"note":               "Descriptive analogs, NOT a forecast: the K most similar past SPY days (by normalized trend/vol features) and the return that FOLLOWED them. The future need not rhyme.",
+	})
+}
+
+// stddevReturns is the sample stddev of the day-over-day returns within bars.
+func stddevReturns(bars []md.Bar) float64 {
+	var rets []float64
+	for i := 1; i < len(bars); i++ {
+		if bars[i-1].Close != 0 {
+			rets = append(rets, bars[i].Close/bars[i-1].Close-1)
+		}
+	}
+	if len(rets) < 2 {
+		return 0
+	}
+	m := meanF(rets)
+	var ss float64
+	for _, x := range rets {
+		ss += (x - m) * (x - m)
+	}
+	return math.Sqrt(ss / float64(len(rets)-1))
 }
 
 // signedLabel renders a shock as " +10" / " -0.25" for the human label.

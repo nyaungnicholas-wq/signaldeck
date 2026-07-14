@@ -40,6 +40,9 @@ import (
 var DefaultSeries = []string{
 	"VIXCLS", "DGS10", "T10Y2Y", "DFF",
 	"DGS2", "T10Y3M", "BAMLH0A0HYM2", "NFCI", "UNRATE", "CPIAUCSL", "M2SL",
+	// World-model wave: WTI crude oil spot — feeds the flagship geopolitical →
+	// oil → inflation → rates causal chain with a live driver value.
+	"DCOILWTICO",
 }
 
 // csvBase is the keyless CSV endpoint host+path (no key required).
