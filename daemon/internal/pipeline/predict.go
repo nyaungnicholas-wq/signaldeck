@@ -94,7 +94,7 @@ func horizonSecs(h md.Horizon) int64 {
 // firing). Bumped for the same reason every prior field-adding wave bumped:
 // the per-symbol GBM trains per version, so v7 rows accumulate their own
 // labeled set rather than dilute absent-vs-zero across the v6 rows.
-const featureVersion = 7
+const featureVersion = 8
 
 // ledgerModelVersion stamps each hash-chained ledger entry with the version of
 // the prediction MODEL/pipeline that produced it (Stage 3 tamper-evident
@@ -283,6 +283,10 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// derived from THIS symbol's daily bars (shared across horizons). Each
 		// field is absent when unavailable (see indicatorfeat.go).
 		idxMap := indicatorPatternFeatures(daily)
+		// TREND-STRUCTURE wave (featureVersion 8) — geometric trend read (class,
+		// slope, distance-to-support/resistance, channel) as learnable features;
+		// see trendfeat.go. Absent-when-uncomputable, gated by OOS lift.
+		trendMap := trendFeatures(daily)
 		// Sentiment feature (per symbol, shared across horizons): the latest
 		// daily aggregate, only when fresh (<=3 days) AND resting on enough
 		// headlines (n>=3). Best-effort — a read error means "absent".
@@ -390,7 +394,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if pct, ok := rankPcts[s.ID]; ok {
 				rankPct = &pct
 			}
-			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, newsMap, alphaSymMap, alphaMktMap, idxMap)
+			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap)
 			if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
 				featErrs++
 				slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)

@@ -7,6 +7,8 @@
 // (discovery sweeps every 6h — polling gently is honest).
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   api,
   pollMs,
@@ -39,6 +41,7 @@ function fmtDollarVol(v: number): string {
  * session-scoped, so an anonymous panel would be all dead buttons).
  */
 export default function DiscoverPanel() {
+  const router = useRouter();
   const [data, setData] = useState<CandidatesResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false); // 401 → logged out → hide
@@ -88,6 +91,21 @@ export default function DiscoverPanel() {
       .then((r) => setData(r))
       .catch((e: unknown) => setActionErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(null));
+  };
+
+  // Monitor a candidate AND open its chart: subscribe/backfill it (so the chart
+  // has data to draw), then navigate to its symbol page. This is what "Monitor"
+  // means to the user — go look at the actual charts, not just silently add it.
+  const monitorAndOpen = (symbol: string, market: Market) => {
+    setBusy(symbol);
+    setActionErr(null);
+    setActionMsg(null);
+    addCandidate(symbol, market)
+      .then(() => router.push(`/s/${market}/${encodeURIComponent(symbol)}`))
+      .catch((e: unknown) => {
+        setActionErr(e instanceof Error ? e.message : String(e));
+        setBusy(null); // only reset on error — on success we're navigating away
+      });
   };
 
   const monitorAll = () => {
@@ -148,7 +166,7 @@ export default function DiscoverPanel() {
         {data !== null && data.candidates.length > 0 && (
           <button
             type="button"
-            disabled={busyAll || busy !== null || atMonitorCap}
+            disabled={busyAll || busy !== null}
             onClick={monitorAll}
             title="Monitor every new candidate below (adds each to your watchlist; streamed if a live slot is free, otherwise polled)"
             className="chip ml-auto min-h-[36px] cursor-pointer px-3 font-bold transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
@@ -241,7 +259,15 @@ export default function DiscoverPanel() {
                   className="transition-colors duration-150 hover:bg-[var(--panel2)]"
                   style={{ borderBottom: "1px solid var(--border)" }}
                 >
-                  <td className="px-3 py-2 font-bold">{c.symbol}</td>
+                  <td className="px-3 py-2 font-bold">
+                    <Link
+                      href={`/s/${c.market}/${encodeURIComponent(c.symbol)}`}
+                      title={`Open ${c.symbol} charts`}
+                      className="cursor-pointer transition-colors duration-150 hover:text-[var(--accent)]"
+                    >
+                      {c.symbol}
+                    </Link>
+                  </td>
                   <td className="px-3 py-2 text-right">{fmtDollarVol(c.dollarVol)}</td>
                   <td className="px-3 py-2 text-right" style={{ color: scoreColor(c.pctChange) }}>
                     {c.pctChange === 0 ? "—" : fmtPct(c.pctChange)}
@@ -256,9 +282,9 @@ export default function DiscoverPanel() {
                     <div className="flex justify-end gap-2">
                       <button
                         type="button"
-                        disabled={busy !== null || busyAll || atMonitorCap}
-                        title={`Monitor ${c.symbol} — add it to your watchlist (streamed if a live slot is free, otherwise polled)`}
-                        onClick={() => act(c.symbol, c.market, () => addCandidate(c.symbol, c.market))}
+                        disabled={busy !== null || busyAll}
+                        title={`Monitor ${c.symbol} — subscribe it (streamed if a live slot is free, otherwise polled) and open its charts`}
+                        onClick={() => monitorAndOpen(c.symbol, c.market)}
                         className="chip min-h-[44px] min-w-[44px] cursor-pointer px-4 font-bold transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
                         style={{ color: "var(--ok)", borderColor: "var(--ok)" }}
                       >

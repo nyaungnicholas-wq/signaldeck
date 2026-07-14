@@ -39,12 +39,15 @@ import (
 )
 
 // DefaultUniverseCap is the default max size of the broad daily universe
-// (env-tunable via SIGNALDECK_UNIVERSE_CAP). The seed is ~the S&P 500 (~500);
-// the headroom above it is for symbols the user explicitly chooses to MONITOR
-// from discovery (small-caps, movers) that aren't in the seed. Daily+minute
-// multi-symbol polling stays far under Alpaca's free 200 req/min even at this
-// size (100 symbols/request), so monitoring can scale without a paid feed.
-const DefaultUniverseCap = 1000
+// (env-tunable via SIGNALDECK_UNIVERSE_CAP). The ~500-name S&P seed ALREADY
+// consumes half of a 1000 cap, so with 500+ discovered candidates the user
+// hits the ceiling almost immediately — which silently blocks further
+// monitoring. 3000 gives room for the seed PLUS the entire liquid discovery
+// universe (most-actives + movers + whole-market top-volume, at most ~1-2k
+// names). Rate stays safe: the 60s live poller batches 100 symbols/request, so
+// 3000 monitored = ~30 req/min, far under Alpaca's free 200/min; storage is
+// bounded by the same tiered retention as everything else.
+const DefaultUniverseCap = 3000
 
 // DefaultInterval is how often the poller refreshes daily bars for the whole
 // universe. Staggered by FirstRunDelay so it doesn't fire in lockstep with the

@@ -520,8 +520,14 @@ func registerSymbol(ctx context.Context, st *store.Store, ac *alpaca.Client,
 		if err != nil {
 			return md.Symbol{}, err
 		}
+		// Immediate backfill is BEST-EFFORT for a monitored symbol: it is already
+		// registered in the daily universe, so the universe-poller (60s live / 6h
+		// deep) fills its bars even if the backfill queue is momentarily full
+		// (e.g. right after a bulk "monitor all"). A full queue must NOT fail the
+		// monitor — that would leave the user staring at a dead button.
 		if err := bf.Enqueue(sym); err != nil {
-			return md.Symbol{}, err
+			slog.Warn("monitor: immediate backfill skipped, universe poller will fill bars",
+				"symbol", symbol, "err", err)
 		}
 		return sym, nil
 	}
