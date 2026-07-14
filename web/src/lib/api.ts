@@ -230,8 +230,173 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 const q = (symbol: string, market: Market) =>
   `symbol=${encodeURIComponent(symbol)}&market=${market}`;
 
+// ── Capstones wave: debate / scenario / optimizer / market-memory / graph /
+// digital-twin. Some engine payloads use Go's default (Capitalized) JSON field
+// names — mirrored here verbatim so no server change is needed. ──
+export interface DebateResult {
+  symbol: string;
+  bull: string;
+  bear: string;
+  verdict: string;
+  confidence: string;
+  cruxes: string[];
+  rationale: string;
+  model: string;
+  judgeModel: string;
+  digest: string;
+  disabled: boolean;
+}
+export interface ScenarioImpact {
+  Symbol: string;
+  Beta: number;
+  R2: number;
+  N: number;
+  ShockLabel: string;
+  ExpectedMovePct: number;
+  Gated: boolean;
+  Note: string;
+}
+export interface ScenarioResult {
+  symbol: string;
+  factor: string;
+  shock: number;
+  pairedDays: number;
+  impact: ScenarioImpact;
+  disclaimer: string;
+}
+export interface OptWeights {
+  Symbols: string[];
+  Weights: number[];
+  ExpRet: number;
+  Vol: number;
+  Sharpe: number;
+  Method: string;
+  Note: string;
+}
+export interface OptimizeResult {
+  symbols: string[];
+  commonDays: number;
+  lookback: number;
+  minVariance: OptWeights;
+  maxSharpe: OptWeights;
+  note: string;
+  gated?: boolean;
+}
+export interface Analog {
+  Ts: number;
+  Distance: number;
+  FwdReturn: number;
+}
+export interface MarketMemoryResult {
+  proxy?: string;
+  features?: string[];
+  forwardHorizonDays?: number;
+  today?: { ret1: number; vol5: number; mom20: number };
+  result?: {
+    Analogs: Analog[] | null;
+    MeanFwd: number;
+    MedianFwd: number;
+    HitRate: number;
+    N: number;
+    Gated: boolean;
+    Note: string;
+  };
+  note?: string;
+  gated?: boolean;
+  history?: number;
+}
+export interface GraphEdge {
+  A: string;
+  B: string;
+  Kind: string;
+  Weight: number;
+}
+export interface GraphResult {
+  center: string;
+  neighborhood: {
+    Center: string;
+    Edges: GraphEdge[] | null;
+    Neighbors: string[] | null;
+    Note: string;
+  };
+  comparedWith: string[] | null;
+  edgeKinds: Record<string, number>;
+  note: string;
+}
+export interface CompanyProfile {
+  symbol: string;
+  name: string;
+  market: string;
+  company?: {
+    cik: number;
+    sic: string;
+    sicDesc: string;
+    exchange: string;
+    name: string;
+  } | null;
+  peers: { ticker: string; name: string }[];
+  insiders: { insider: string; title: string; code: string; shares: number; value: number; ts: number }[];
+  holders: { manager: string; value: number; shares: number }[];
+  filings: { form: string; title: string; label: string; filedTs: number; url: string }[];
+  fundamentals: { metric: string; value: number; asOf: number }[];
+  profile?: string;
+  profileModel?: string;
+  note: string;
+}
+export interface RebalanceTrade {
+  Symbol: string;
+  Side: string; // "buy" | "sell"
+  Shares: number;
+  Notional: number;
+  Cost: number;
+  RealizedGain: number;
+  ShortTerm: boolean;
+}
+export interface RebalancePlan {
+  Trades: RebalanceTrade[] | null;
+  ShortTermGain: number;
+  LongTermGain: number;
+  TotalRealizedGain: number;
+  EstTax: number;
+  TotalCost: number;
+  TurnoverPct: number;
+  Note: string;
+}
+export interface RebalanceResult {
+  targetMethod: string;
+  target: { symbol: string; weight: number }[];
+  equity: number;
+  heldCount: number;
+  plan: RebalancePlan;
+  note: string;
+  gated?: boolean;
+  commonDays?: number;
+}
+
 export const api = {
   health: () => get<{ version: string; uptimeS: number; alpaca: boolean }>("/api/health"),
+
+  // ── capstones wave ──
+  debate: (symbol: string) => post<DebateResult>("/api/ai/debate", { symbol }),
+  scenario: (symbol: string, factor: string, shock: number) =>
+    get<ScenarioResult>(
+      `/api/scenario?symbol=${encodeURIComponent(symbol)}&factor=${encodeURIComponent(factor)}&shock=${shock}`,
+    ),
+  optimize: (symbols: string, lookback = 180) =>
+    get<OptimizeResult>(
+      `/api/portfolio/optimize?symbols=${encodeURIComponent(symbols)}&lookback=${lookback}`,
+    ),
+  marketMemory: () => get<MarketMemoryResult>("/api/market-memory"),
+  knowledgeGraph: (symbol: string, minCorr = 0.5) =>
+    get<GraphResult>(`/api/graph?symbol=${encodeURIComponent(symbol)}&minCorr=${minCorr}`),
+  companyProfile: (symbol: string, summary = false) =>
+    get<CompanyProfile>(
+      `/api/company/profile?symbol=${encodeURIComponent(symbol)}${summary ? "&summary=1" : ""}`,
+    ),
+  rebalance: (symbols: string, lookback = 180, shortRate = 0.35, longRate = 0.15) =>
+    get<RebalanceResult>(
+      `/api/portfolio/rebalance?symbols=${encodeURIComponent(symbols)}&lookback=${lookback}&shortRate=${shortRate}&longRate=${longRate}`,
+    ),
 
   // ── auth (session cookie; all calls send credentials: "include") ──
   register: (username: string, password: string) =>
