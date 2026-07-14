@@ -11,6 +11,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -55,6 +56,20 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, "stored payload does not parse: "+err.Error())
 		return
 	}
+	// CONVICTION — the honest second axis. A top rank on a coin-flip-sized,
+	// unproven, stale, or self-contradictory edge is LOW conviction. Computed at
+	// READ time so it reflects the current live-edge status, not a stale snapshot.
+	proven, skillNote := d.fleetEdgeSkill(r.Context())
+	bull, bear := composite.FactorAgreement(p.Factors)
+	conv := composite.Assess(composite.ConvictionInputs{
+		Edge:           row.Edge,
+		PredAgeSec:     time.Now().Unix() - p.PredTs,
+		NUsed:          p.NUsed,
+		Bull:           bull,
+		Bear:           bear,
+		EdgeProvenLive: proven,
+		SkillNote:      skillNote,
+	})
 	writeJSON(w, map[string]any{
 		"available": true,
 		"symbol":    s.Symbol,
@@ -72,10 +87,55 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 		"predTs":     p.PredTs,
 		"factors":    p.Factors,
 		"ledger":     p.Ledger,
+		"conviction": conv,
 		"curveNote":  compositeCurveNote,
 		"edgeNote":   compositeEdgeNote,
 		"trackLabel": "backtested / in-sample — not a live track record",
 	})
+}
+
+// fleetEdgeSkill answers the one fleet-level question conviction needs: has the
+// platform proven a LIVE out-of-sample edge? It grades the platform's OWN
+// calibrated 1d predictions (prediction_outcomes — prob frozen at prediction
+// time, outcome filled by the resolver, no lookahead), deduped to ONE
+// independent observation per (symbol, UTC-day), and calls the edge "proven"
+// only when it clears the SAME gate the /track-record page uses AND the win
+// rate's 95% Wilson lower bound sits above a coin flip. Best-effort: any error
+// returns "not proven" with a stated reason — never a fabricated pass.
+func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, note string) {
+	rows, err := d.St.ResolvedPredictionOutcomes(ctx, md.H1d, 20000)
+	if err != nil {
+		return false, "live edge status unavailable (" + err.Error() + ")"
+	}
+	// One independent obs per (symbol, UTC-day), keeping the latest (rows ts DESC).
+	seen := map[[2]int64]bool{}
+	dayset := map[int64]bool{}
+	wins, indepN := 0, 0
+	for _, o := range rows {
+		key := [2]int64{o.SymbolID, o.Ts / 86400}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		indepN++
+		dayset[o.Ts/86400] = true
+		if o.Up == 1 {
+			wins++
+		}
+	}
+	distinctDays := len(dayset)
+	if indepN < trackMinIndependentN || distinctDays < trackMinDistinctDays {
+		return false, fmt.Sprintf("live track record still thin — %d independent resolutions across %d day(s) (need %d / %d)",
+			indepN, distinctDays, trackMinIndependentN, trackMinDistinctDays)
+	}
+	winRate := float64(wins) / float64(indepN)
+	lo, _ := wilson(wins, indepN)
+	if lo > 0.5 {
+		return true, fmt.Sprintf("edge proven live: %.1f%% win rate over %d independent resolutions across %d days (95%% floor %.1f%% > 50%%)",
+			winRate*100, indepN, distinctDays, lo*100)
+	}
+	return false, fmt.Sprintf("no proven live edge yet: %.1f%% win rate over %d independent resolutions is within noise of a coin flip (95%% floor %.1f%% ≤ 50%%)",
+		winRate*100, indepN, lo*100)
 }
 
 // compositeTopRow is one ranked row of the composite leaderboard. Rank is
@@ -93,6 +153,11 @@ type compositeTopRow struct {
 	Rank       int     `json:"rank"`
 	PrevRank   *int    `json:"prevRank"`
 	RankChange *int    `json:"rankChange"` // prevRank − rank; positive = moved up
+	// Conviction: the coarse (edge-magnitude + live-edge-cap) conviction band for
+	// this row — so the leaderboard never reads as a ladder of certainty. The
+	// per-symbol detail view adds the freshness/blend/agreement nuance.
+	Conviction      string `json:"conviction"`
+	ConvictionLabel string `json:"convictionLabel"`
 }
 
 // compositeTop serves the ranked SignalScore leaderboard with rank-change
@@ -125,6 +190,9 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 		prevRank[p.SymbolID] = i + 1 // store order = score DESC, pct DESC
 	}
 
+	// Live-edge status once for the whole leaderboard (the conviction cap).
+	proven, skillNote := d.fleetEdgeSkill(ctx)
+
 	out := make([]compositeTopRow, 0, min(limit, len(rows)))
 	for i, c := range rows {
 		if i >= limit {
@@ -138,18 +206,30 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 			delta := pr - row.Rank
 			row.PrevRank, row.RankChange = &pr, &delta
 		}
+		// Coarse conviction for the list: edge magnitude capped by the live-edge
+		// status. NUsed=2 / PredAgeSec=0 keep it to those two drivers only (the
+		// detail view applies the freshness/blend/agreement discounts).
+		conv := composite.Assess(composite.ConvictionInputs{
+			Edge:           c.Edge,
+			NUsed:          2,
+			EdgeProvenLive: proven,
+			SkillNote:      skillNote,
+		})
+		row.Conviction, row.ConvictionLabel = string(conv.Band), conv.Label
 		out = append(out, row)
 	}
 	writeJSON(w, map[string]any{
-		"horizon":    string(md.H1d),
-		"rows":       out,
-		"n":          len(out),
-		"total":      len(rows),
-		"curveNote":  compositeCurveNote,
-		"edgeNote":   compositeEdgeNote,
-		"rankNote":   "rankChange compares against each symbol's newest row before today (UTC); symbols absent from the previous pass carry null, never a fabricated change",
-		"trackLabel": "backtested / in-sample — not a live track record",
-		"minCurveN":  composite.MinCurveN,
+		"horizon":       string(md.H1d),
+		"rows":          out,
+		"n":             len(out),
+		"total":         len(rows),
+		"curveNote":     compositeCurveNote,
+		"edgeNote":      compositeEdgeNote,
+		"rankNote":      "rankChange compares against each symbol's newest row before today (UTC); symbols absent from the previous pass carry null, never a fabricated change",
+		"trackLabel":    "backtested / in-sample — not a live track record",
+		"convictionNote": "conviction is a SEPARATE axis from the rank: a top rank on a coin-flip-sized or unproven edge is low conviction. " + composite.Assess(composite.ConvictionInputs{}).RiskNote,
+		"skillNote":     skillNote,
+		"minCurveN":     composite.MinCurveN,
 	})
 }
 

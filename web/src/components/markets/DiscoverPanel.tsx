@@ -13,6 +13,7 @@ import {
   POLL_SLOW,
   candidates as fetchCandidates,
   addCandidate,
+  monitorAllCandidates,
   dismissCandidate,
   type CandidatesResponse,
   type Market,
@@ -42,7 +43,9 @@ export default function DiscoverPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false); // 401 → logged out → hide
   const [busy, setBusy] = useState<string | null>(null); // symbol being acted on
+  const [busyAll, setBusyAll] = useState(false); // "monitor all" in flight
   const [actionErr, setActionErr] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<string | null>(null); // success note
   const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
@@ -79,6 +82,7 @@ export default function DiscoverPanel() {
   const act = (symbol: string, market: Market, fn: () => Promise<unknown>) => {
     setBusy(symbol);
     setActionErr(null);
+    setActionMsg(null);
     fn()
       .then(() => fetchCandidates("new"))
       .then((r) => setData(r))
@@ -86,35 +90,82 @@ export default function DiscoverPanel() {
       .finally(() => setBusy(null));
   };
 
+  const monitorAll = () => {
+    setBusyAll(true);
+    setActionErr(null);
+    setActionMsg(null);
+    monitorAllCandidates()
+      .then((r) => {
+        setActionMsg(
+          `Monitoring ${r.added} symbol${r.added === 1 ? "" : "s"}${r.skipped > 0 ? ` (${r.skipped} skipped)` : ""}.${r.note ? " " + r.note : ""}`,
+        );
+        return fetchCandidates("new");
+      })
+      .then((r) => setData(r))
+      .catch((e: unknown) => setActionErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusyAll(false));
+  };
+
   if (hidden) return null;
 
   const loading = data === null && err === null;
-  const atCap = data !== null && data.active >= data.cap;
+  // The STREAM cap (small, free-ws) is full — new symbols are MONITORED via
+  // polling rather than streamed. The MONITOR cap (universe) is the real ceiling.
+  const streamCap = data?.streamCap ?? data?.cap ?? 0;
+  const atStreamCap = data !== null && data.active >= streamCap;
+  const monitorCap = data?.monitorCap ?? 0;
+  const atMonitorCap = data !== null && monitorCap > 0 && data.monitored >= monitorCap;
 
   return (
     <section className="panel">
-      <div className="panel-h">
+      <div className="panel-h flex-wrap gap-2">
         DISCOVER
         {data !== null && (
-          <span className="inline-flex items-center gap-1">
-            <span className="tnum" style={{ color: atCap ? "var(--bad)" : "var(--faint)" }}>
-              {data.active}/{data.cap} symbols active
+          <span className="inline-flex items-center gap-2">
+            <span
+              className="tnum"
+              style={{ color: atStreamCap ? "var(--warn)" : "var(--faint)" }}
+              title="live-websocket hot set — real-time tick (free-tier limit)"
+            >
+              {data.active}/{streamCap} streaming
             </span>
-            <HelpTip label="About the symbol budget">
-              Currently active symbols vs the SIGNALDECK_SYMBOL_CAP budget. At the cap, no new
-              candidate can be monitored until one is dismissed or unsubscribed.
+            <span
+              className="tnum"
+              style={{ color: atMonitorCap ? "var(--bad)" : "var(--faint)" }}
+              title="total monitored: streamed + polled universe (scored & predicted, minute bars)"
+            >
+              {data.monitored ?? data.active}/{monitorCap || "∞"} monitored
+            </span>
+            <HelpTip label="About the symbol budgets">
+              Two budgets. <b>Streaming</b> is the small real-time hot set bounded by Alpaca&apos;s
+              free websocket limit. <b>Monitored</b> is every tracked symbol — streamed PLUS the
+              broad polled universe (minute bars, fully scored &amp; predicted, just not real-time
+              tick). When the stream slots are full, adding a symbol monitors it via polling, so you
+              can monitor far more than you can stream.
             </HelpTip>
           </span>
+        )}
+        {data !== null && data.candidates.length > 0 && (
+          <button
+            type="button"
+            disabled={busyAll || busy !== null || atMonitorCap}
+            onClick={monitorAll}
+            title="Monitor every new candidate below (adds each to your watchlist; streamed if a live slot is free, otherwise polled)"
+            className="chip ml-auto min-h-[36px] cursor-pointer px-3 font-bold transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
+          >
+            {busyAll ? "monitoring…" : `Monitor all ${data.candidates.length}`}
+          </button>
         )}
       </div>
 
       <p className="px-4 pt-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
         Candidates from Alpaca&apos;s most-actives / movers screeners (swept every 6h). While
-        under the cap, symbols seen in ≥2 sweeps are auto-added by dollar volume
+        under the stream cap, symbols seen in ≥2 sweeps are auto-added by dollar volume
         {data !== null && (
           <> — max {data.autoAddDailyLimit}/day, {data.autoAddsToday} used today</>
         )}
-        .
+        . Beyond the stream cap, symbols are still monitored via minute polling.
       </p>
 
       {loading && <Skeleton lines={3} label="loading candidates" className="m-4" />}
@@ -144,10 +195,23 @@ export default function DiscoverPanel() {
         </p>
       )}
 
-      {data !== null && atCap && (
+      {actionMsg !== null && (
+        <p className="px-4 pb-1 text-[0.75rem]" style={{ color: "var(--ok)" }} role="status">
+          {actionMsg}
+        </p>
+      )}
+
+      {data !== null && atStreamCap && !atMonitorCap && (
+        <p className="px-4 pb-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+          Streaming slots full ({data.active}/{streamCap}) — new symbols are still fully monitored
+          via minute polling (scored &amp; predicted, just not real-time tick).
+        </p>
+      )}
+
+      {data !== null && atMonitorCap && (
         <p className="px-4 pb-1 text-[0.75rem]" style={{ color: "var(--bad)" }}>
-          Symbol cap reached ({data.active}/{data.cap}) — dismiss a candidate or unsubscribe a
-          symbol to make room before monitoring another.
+          Monitor cap reached ({data.monitored}/{monitorCap}) — dismiss a symbol or raise
+          SIGNALDECK_UNIVERSE_CAP to monitor more.
         </p>
       )}
 
@@ -192,8 +256,8 @@ export default function DiscoverPanel() {
                     <div className="flex justify-end gap-2">
                       <button
                         type="button"
-                        disabled={busy !== null || atCap}
-                        title={`Monitor ${c.symbol} — subscribe it and add it to your watchlist`}
+                        disabled={busy !== null || busyAll || atMonitorCap}
+                        title={`Monitor ${c.symbol} — add it to your watchlist (streamed if a live slot is free, otherwise polled)`}
                         onClick={() => act(c.symbol, c.market, () => addCandidate(c.symbol, c.market))}
                         className="chip min-h-[44px] min-w-[44px] cursor-pointer px-4 font-bold transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
                         style={{ color: "var(--ok)", borderColor: "var(--ok)" }}

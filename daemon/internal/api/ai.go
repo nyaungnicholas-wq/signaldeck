@@ -17,7 +17,7 @@ func (d Deps) aiStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s := d.LLM.Stats()
-	writeJSON(w, map[string]any{
+	out := map[string]any{
 		"enabled": d.LLM.Enabled(),
 		"model":   d.LLM.Model(),
 		"stats":   s,
@@ -26,7 +26,15 @@ func (d Deps) aiStatus(w http.ResponseWriter, r *http.Request) {
 			"chat":       chat.Charter,
 			"filingmind": filingmind.Charter,
 		},
-	})
+	}
+	// Surface the tier/pool details when the concrete client supports them
+	// (never the keys themselves — only the count).
+	if t, ok := d.LLM.(llm.Tiered); ok {
+		out["deepModel"] = t.DeepModel()
+		out["fastModel"] = t.FastModel()
+		out["keyCount"] = t.KeyCount()
+	}
+	writeJSON(w, out)
 }
 
 // aiAnalyst runs the analyst on demand and returns its brief (also persisted

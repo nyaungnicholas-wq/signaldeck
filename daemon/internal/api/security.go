@@ -132,6 +132,7 @@ func (d Deps) requiresAuth(path string) bool {
 		path == "/api/ai/filing",
 		// discovery wave (appended): candidate mutations are session-scoped.
 		path == "/api/candidates/add",
+		path == "/api/candidates/monitor-all",
 		path == "/api/candidates/dismiss":
 		return true
 	}

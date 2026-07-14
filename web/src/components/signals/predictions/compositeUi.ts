@@ -16,6 +16,23 @@ export function scoreColor(score: number): string {
   return "var(--bad)";
 }
 
+/** Conviction band → color + short label. Conviction is the SECOND axis: it
+ *  reflects how much to trust the rank (edge magnitude, proven live edge,
+ *  freshness, agreement), NOT the rank's position. Low = amber warning (a top
+ *  rank you should NOT read as a sure thing), high = green. */
+export function convictionMeta(band?: string): { color: string; short: string } {
+  switch (band) {
+    case "high":
+      return { color: "var(--ok)", short: "HIGH" };
+    case "moderate":
+      return { color: "var(--warn)", short: "MODERATE" };
+    case "low":
+      return { color: "var(--bad)", short: "LOW" };
+    default:
+      return { color: "var(--faint)", short: "—" };
+  }
+}
+
 /** Signed percentage-point formatter: 6.34 → "+6.3pp". */
 export function fmtPp(pp: number): string {
   return `${pp >= 0 ? "+" : ""}${pp.toFixed(1)}pp`;

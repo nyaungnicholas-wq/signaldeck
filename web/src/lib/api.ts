@@ -705,10 +705,31 @@ export interface Candidate {
 
 export interface CandidatesResponse {
   candidates: Candidate[];
-  active: number; // currently active symbols
-  cap: number; // SIGNALDECK_SYMBOL_CAP budget
+  active: number; // streamed hot-set size (live ws tick)
+  cap: number; // stream cap (kept for back-compat; === streamCap)
+  streamCap: number; // SIGNALDECK_STREAM_CAP — the small free-ws limit
+  monitored: number; // streamed + broad polled universe (the real monitor count)
+  monitorCap: number; // SIGNALDECK_UNIVERSE_CAP — the large monitoring ceiling
   autoAddsToday: number;
   autoAddDailyLimit: number;
+}
+
+/** Result of adding one candidate: streaming = it got a live-ws slot; monitored
+ *  = it is tracked (always true on success). Older daemons omit both fields. */
+export interface AddCandidateResult {
+  symbol: string;
+  market: Market;
+  streaming?: boolean;
+  monitored?: boolean;
+}
+
+/** Result of monitor-all: how many candidates were promoted to monitored. */
+export interface MonitorAllResult {
+  added: number;
+  skipped: number;
+  candidates: number;
+  monitorCap: number;
+  note?: string;
 }
 
 /** Discovered candidates + symbol-budget numbers (status defaults to "new"). */
@@ -716,9 +737,17 @@ export function candidates(status: "new" | "added" | "dismissed" | "all" = "new"
   return get<CandidatesResponse>(`/api/candidates?status=${status}`);
 }
 
-/** Promote a candidate: subscribe + this user's watchlist (409 at cap). CSRF header via post(). */
+/** Promote a candidate onto the watchlist: streamed when a live-ws slot is free,
+ *  otherwise MONITORED via the broad polled universe (never fails on the stream
+ *  cap). CSRF header via post(). */
 export function addCandidate(symbol: string, market: Market) {
-  return post<SymbolInfo>("/api/candidates/add", { symbol, market });
+  return post<AddCandidateResult>("/api/candidates/add", { symbol, market });
+}
+
+/** Monitor EVERY new candidate in one action (all promoted to polled stream=0,
+ *  bounded by the universe cap). CSRF header via post(). */
+export function monitorAllCandidates() {
+  return post<MonitorAllResult>("/api/candidates/monitor-all", {});
 }
 
 /** Dismiss a candidate (sticks across future discovery sweeps). CSRF header via post(). */
@@ -2112,6 +2141,17 @@ export interface CompositeUnavailable {
   curveNote: string; // render verbatim
 }
 
+/** Conviction — the SECOND axis, orthogonal to the 1–10 rank. A top rank on a
+ *  coin-flip-sized, unproven, stale, or self-contradictory edge is LOW
+ *  conviction. Older daemons omit it (optional on the payloads below). */
+export interface Conviction {
+  band: "low" | "moderate" | "high";
+  label: string; // "LOW conviction" etc. — render verbatim
+  drivers: string[]; // plain-English reasons — render verbatim
+  skillNote: string; // the fleet live-edge status — render verbatim
+  riskNote: string; // persistent "not a certainty" caveat — render verbatim
+}
+
 /** GET /api/composite — the full verdict. */
 export interface CompositeAvailable {
   available: true;
@@ -2129,6 +2169,7 @@ export interface CompositeAvailable {
   predTs: number; // ts of the prediction the verdict is built on
   factors: CompositeFactor[]; // exactly 11, fixed order (see CompositeFactor.key)
   ledger: CompositeLedger;
+  conviction?: Conviction; // second axis (optional — older daemons omit)
   curveNote: string; // render verbatim
   edgeNote: string; // render verbatim
   trackLabel: string; // render verbatim
@@ -2149,6 +2190,8 @@ export interface CompositeTopRow {
   rank: number; // 1 = best
   prevRank: number | null; // null = not present in the previous ranking
   rankChange: number | null; // null = no previous rank to compare
+  conviction?: "low" | "moderate" | "high"; // coarse band (optional — older daemons omit)
+  convictionLabel?: string;
 }
 
 /** GET /api/composite/top payload. */
@@ -2162,6 +2205,8 @@ export interface CompositeTop {
   edgeNote: string; // render verbatim
   rankNote: string; // render verbatim
   trackLabel: string; // render verbatim
+  convictionNote?: string; // render verbatim (optional — older daemons omit)
+  skillNote?: string; // fleet live-edge status — render verbatim
 }
 
 /** Measured forward returns after one alert kind (nulls = gated below minN). */
@@ -2502,4 +2547,77 @@ export function strategyLab(symbol?: string, market?: Market) {
   return get<StrategyLab>(
     symbol && market ? `/api/strategy-lab?${q(symbol, market)}` : "/api/strategy-lab",
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CHART ANALYTICS WAVE — CANDLE PATTERNS + TRENDLINES (appended block; keep at
+// END). Display-layer inputs for the candlestick chart. Both degrade honestly:
+// a 404 / empty payload throws in get(), the caller swallows it, and the
+// feature is silently absent — the chart never crashes. Go serializes nil
+// slices as JSON null, so every array must be read through `?? []` at the call
+// site (bars, patterns, trendlines).
+
+/** One measured forward-return edge for a pattern on THIS symbol. null when the
+ *  symbol lacks enough history (n < 15) to measure the edge honestly. */
+export interface PatternMeasured {
+  hitRate: number; // fraction of past occurrences that closed up over `horizon` bars
+  meanFwd: number; // mean forward return over `horizon` bars (fraction, e.g. 0.012)
+  n: number; // sample size on THIS symbol
+  horizon: number; // forward horizon in bars the edge was measured over
+}
+
+/** One recognized candlestick pattern on a bar. bias: -1 bear, 0 neutral, +1 bull. */
+export interface CandlePattern {
+  name: string; // plain-English name ("Hammer", "Bullish Engulfing")
+  bias: -1 | 0 | 1;
+  desc: string; // one-line plain-English description
+  measured: PatternMeasured | null; // null => not enough history to measure
+}
+
+/** All patterns detected on one bar. */
+export interface PatternBar {
+  ts: number; // bar timestamp (unix seconds)
+  patterns: CandlePattern[];
+}
+
+/** GET /api/candle-patterns payload. `note` is the honest weak/context-only
+ *  framing — render it verbatim. */
+export interface CandlePatterns {
+  symbol: string;
+  market: Market;
+  tf: string;
+  bars: PatternBar[] | null; // nil slice => null
+  note: string;
+}
+
+/** Detected candlestick patterns for one symbol+timeframe (best-effort). */
+export function candlePatterns(symbol: string, market: Market, tf: "1m" | "1h" | "1d") {
+  return get<CandlePatterns>(`/api/candle-patterns?${q(symbol, market)}&tf=${tf}`);
+}
+
+/** One drawn trendline (support/resistance) between two anchor points. */
+export interface Trendline {
+  fromTs: number;
+  fromPrice: number;
+  toTs: number;
+  toPrice: number;
+  kind: "support" | "resistance";
+  touchCount: number; // how many swing points the line was fit through
+}
+
+/** GET /api/trend payload. `note` renders verbatim. */
+export interface TrendAnalysis {
+  symbol: string;
+  market: Market;
+  tf: string;
+  classification: "uptrend" | "downtrend" | "range";
+  slopePctPerBar: number; // signed % change per bar of the fitted trend
+  trendlines: Trendline[] | null; // nil slice => null
+  channel: boolean; // the two lines read as a channel
+  note: string;
+}
+
+/** Trend classification + trendlines for one symbol+timeframe (best-effort). */
+export function trend(symbol: string, market: Market, tf: "1m" | "1h" | "1d") {
+  return get<TrendAnalysis>(`/api/trend?${q(symbol, market)}&tf=${tf}`);
 }

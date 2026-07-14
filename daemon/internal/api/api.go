@@ -31,9 +31,15 @@ type Deps struct {
 	Version string
 	Started time.Time
 	LLM     llm.Client // AI provider (may be disabled when no key is set)
-	// Subscribe validates a new symbol, upserts it, and kicks off backfill
-	// (async). Wired in cmd/signaldeckd.
+	// Subscribe validates a new symbol, upserts it into the STREAMED hot set
+	// (stream=1), and kicks off backfill (async). Wired in cmd/signaldeckd.
 	Subscribe func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error)
+	// Monitor validates + registers a symbol into the broad POLLED universe
+	// (stream=0 for stocks — no live-ws slot) and kicks off backfill. Used when
+	// the free-ws stream cap is full so a symbol can still be fully monitored
+	// (scored/predicted/charted) via polling. nil is safe (falls back to a 503
+	// on the monitor path). Wired in cmd/signaldeckd.
+	Monitor func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error)
 	// CurrentState returns the live expectancy state keys for a symbol.
 	CurrentState func(ctx context.Context, symbolID int64) (map[md.Horizon]string, error)
 	// Notifier is the Stage-3 remote-delivery notifier (Discord/Telegram/
@@ -113,6 +119,10 @@ func Serve(ctx context.Context, d Deps) error {
 	// ── DATA-SOURCE FRESHNESS wave (appended — keep new routes at the END of
 	// this block so parallel route edits by other agents never collide) ──────
 	mux.HandleFunc("GET /api/source-health", d.sourceHealth) // the one "is anything quietly dead?" dashboard: per EXTERNAL source lastTs/ageSecs/staleBudgetSecs/stale/marketGated/note + overall{staleCount}; market-gated stock sources report "market closed" (not stale) when the exchange is closed; crypto/24-7 sources always checked
+	// ── CANDLESTICK-PATTERNS wave (appended — keep new routes at the END of
+	// this block so parallel route edits by other agents never collide) ──────
+	d.registerCandlePatterns(mux) // GET /api/candle-patterns — candlestick patterns firing over the recent ~200 daily bars (no-pattern bars omitted), each annotated with its MEASURED edge on this symbol's own history where n>=15 (else null); caveat verbatim: patterns are WEAK, context-only signals; measured hit-rate is descriptive, not advice
+	d.registerTrendRead(mux)      // GET /api/trend — geometric trend read (uptrend|downtrend|range) + regression slope + fitted support/resistance trendlines + channel flag over the recent daily window; thin history returns a gate reason; caveat verbatim: descriptive read from recent swings, trendlines are fitted, not predictive
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,

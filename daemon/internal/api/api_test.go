@@ -44,6 +44,17 @@ func newTestServer(t *testing.T, mutate func(*config.Config)) (*httptest.Server,
 		Version: "test",
 		Started: time.Now(),
 		Subscribe: func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
+			s, err := st.UpsertSymbol(ctx, symbol, market, "")
+			if err == nil && market == md.Stocks {
+				_ = st.SetSymbolStream(ctx, s.ID, true) // subscribe → streamed hot set
+				s.Stream = true
+			}
+			return s, err
+		},
+		Monitor: func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
+			if market == md.Stocks { // monitor → broad polled universe (stream=0)
+				return st.UpsertDailyUniverseSymbol(ctx, symbol, "")
+			}
 			return st.UpsertSymbol(ctx, symbol, market, "")
 		},
 	}

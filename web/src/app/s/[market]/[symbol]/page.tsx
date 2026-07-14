@@ -13,23 +13,31 @@ import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   api,
+  candlePatterns,
   chartOverlays,
   pollMs,
   POLL_DEFAULT,
   POLL_FAST,
   POLL_SLOW,
   symbolAgent,
+  trend,
   type Bar,
+  type CandlePattern,
   type ChartOverlayMarker,
   type Horizon,
   type Market,
+  type PatternBar,
   type Prediction,
   type SymbolAgent,
   type SymbolDetail,
+  type Trendline,
 } from "@/lib/api";
 import VerdictCard from "@/components/VerdictCard";
 import { ago, fmtPct, fmtPrice, fmtScore, scoreColor, verdict } from "@/lib/format";
 import CandleChart, { type Tf } from "@/components/symbol/CandleChart";
+import IndicatorMenu from "@/components/symbol/IndicatorMenu";
+import PatternPopup from "@/components/symbol/PatternPopup";
+import { type IndicatorId } from "@/components/symbol/indicators";
 import PressurePanel from "@/components/symbol/PressurePanel";
 import ExpectancyPanel from "@/components/symbol/ExpectancyPanel";
 import MicroPanel from "@/components/symbol/MicroPanel";
@@ -49,6 +57,16 @@ import ErrorState from "@/components/ErrorState";
 
 const TF_LIMIT: Record<Tf, number> = { "1d": 365, "1h": 168, "1m": 390 };
 const TFS: Tf[] = ["1d", "1h", "1m"];
+
+// Chart indicator selection persists across sessions. First visit defaults to
+// Volume on (preserving the chart's long-standing always-on volume strip, now a
+// toggleable indicator in its own pane).
+const INDICATORS_KEY = "sd-chart-indicators";
+const DEFAULT_INDICATORS: IndicatorId[] = ["volume"];
+const VALID_INDICATORS = new Set<IndicatorId>([
+  "ma", "bbands", "rsi", "macd", "volume", "stoch", "adx", "atr", "cci", "willr",
+  "vwap", "fib", "pivots", "sr", "ichimoku", "supertrend", "psar", "keltner",
+]);
 
 function isMarket(m: string): m is Market {
   return m === "crypto" || m === "stocks";
@@ -85,6 +103,59 @@ export default function SymbolPage({
   const overlaysKey = `${symbol}|${market}`;
   const overlays =
     showOverlays && overlaysState && overlaysState.key === overlaysKey ? overlaysState.list : undefined;
+
+  // ── Chart analytics: indicators (client-side), patterns + trendlines (API) ──
+  // Indicator selection is hydrated from localStorage after first paint (SSR-safe
+  // default matches DEFAULT_INDICATORS), then persisted on every change.
+  const [indicators, setIndicators] = useState<IndicatorId[]>(DEFAULT_INDICATORS);
+  // Hydrate from localStorage AFTER first paint (SSR-safe), and subscribe to the
+  // `storage` event so a change in another tab syncs here — a genuine external
+  // subscription, the same shape as useViewMode (no bare setState in an effect).
+  useEffect(() => {
+    const read = () => {
+      try {
+        const raw = localStorage.getItem(INDICATORS_KEY);
+        if (raw === null) return; // keep the current selection
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setIndicators(parsed.filter((v): v is IndicatorId => VALID_INDICATORS.has(v as IndicatorId)));
+        }
+      } catch {
+        /* corrupt value — keep the current selection */
+      }
+    };
+    read();
+    window.addEventListener("storage", read);
+    return () => window.removeEventListener("storage", read);
+  }, []);
+  const updateIndicators = (ids: IndicatorId[]) => {
+    setIndicators(ids);
+    try {
+      localStorage.setItem(INDICATORS_KEY, JSON.stringify(ids));
+    } catch {
+      /* storage full / disabled — selection still works this session */
+    }
+  };
+
+  const [showPatterns, setShowPatterns] = useState(true);
+  const [showTrend, setShowTrend] = useState(true);
+
+  // Patterns are per-timeframe; keyed so a symbol/tf switch never shows stale
+  // markers. Failures are silent — the chart renders fine without them.
+  const [patternsState, setPatternsState] =
+    useState<{ key: string; bars: PatternBar[]; note: string } | null>(null);
+  const patternsKey = `${symbol}|${market}|${tf}`;
+  const patternPayload =
+    showPatterns && patternsState && patternsState.key === patternsKey ? patternsState : null;
+
+  const [trendState, setTrendState] =
+    useState<{ key: string; lines: Trendline[]; classification: string; slope: number; channel: boolean; note: string } | null>(null);
+  const trendPayload =
+    showTrend && trendState && trendState.key === patternsKey ? trendState : null;
+
+  // The clicked candle's patterns (keyed to bars so a tf/symbol switch hides it).
+  const [selected, setSelected] = useState<{ key: string; ts: number; patterns: CandlePattern[] } | null>(null);
+  const selectedShown = selected && selected.key === patternsKey ? selected : null;
 
   // Stage 2 (verdict cards): the hero verdict's inputs — the REAL calibrated
   // 1d prediction + the symbol-agent evidence tier. Keyed by symbol so a
@@ -189,6 +260,58 @@ export default function SymbolPage({
       stop();
     };
   }, [symbol, market, marketOk, showOverlays]);
+
+  // Patterns: fetch per symbol+market+tf when enabled; SLOW background refresh.
+  // Go nil slices arrive as JSON null, hence `?? []`. Silent on failure.
+  useEffect(() => {
+    if (!marketOk || !showPatterns) return;
+    let alive = true;
+    const key = `${symbol}|${market}|${tf}`;
+    const load = () =>
+      candlePatterns(symbol, market, tf)
+        .then((p) => {
+          if (!alive) return;
+          setPatternsState({ key, bars: p.bars ?? [], note: p.note ?? "" });
+        })
+        .catch(() => {
+          /* feature silently absent (404 / daemon not yet shipping it) */
+        });
+    load();
+    const stop = pollMs(load, POLL_SLOW);
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, [symbol, market, tf, marketOk, showPatterns]);
+
+  // Trend: fetch per symbol+market+tf when enabled; SLOW background refresh.
+  useEffect(() => {
+    if (!marketOk || !showTrend) return;
+    let alive = true;
+    const key = `${symbol}|${market}|${tf}`;
+    const load = () =>
+      trend(symbol, market, tf)
+        .then((t) => {
+          if (!alive) return;
+          setTrendState({
+            key,
+            lines: t.trendlines ?? [],
+            classification: t.classification,
+            slope: t.slopePctPerBar,
+            channel: t.channel,
+            note: t.note ?? "",
+          });
+        })
+        .catch(() => {
+          /* feature silently absent */
+        });
+    load();
+    const stop = pollMs(load, POLL_SLOW);
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, [symbol, market, tf, marketOk, showTrend]);
 
   const lastBar = useMemo(
     () => (bars && bars.length ? bars.reduce((a, b) => (b.ts > a.ts ? b : a)) : null),
@@ -306,6 +429,39 @@ export default function SymbolPage({
       <section className="panel">
         <div className="panel-h flex-wrap gap-2">
           <span>PRICE · {symbol}</span>
+
+          {/* Client-side technical indicators (RSI/MACD/BB/EMA/…): grouped
+              toggle menu, computed in-browser from the bars already loaded. */}
+          <IndicatorMenu value={indicators} onChange={updateIndicators} />
+
+          {/* Patterns: dot markers + click-a-candle detail. */}
+          <button
+            type="button"
+            onClick={() => setShowPatterns((v) => !v)}
+            aria-pressed={showPatterns}
+            className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:bg-[var(--panel3)]"
+            style={{
+              color: showPatterns ? "var(--accent)" : "var(--dim)",
+              borderColor: showPatterns ? "var(--accent)" : "var(--border)",
+            }}
+          >
+            patterns {showPatterns ? "on" : "off"}
+          </button>
+
+          {/* Trendlines + trend classification. */}
+          <button
+            type="button"
+            onClick={() => setShowTrend((v) => !v)}
+            aria-pressed={showTrend}
+            className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:bg-[var(--panel3)]"
+            style={{
+              color: showTrend ? "var(--accent)" : "var(--dim)",
+              borderColor: showTrend ? "var(--accent)" : "var(--border)",
+            }}
+          >
+            trend {showTrend ? "on" : "off"}
+          </button>
+
           {/* Stage 7: signal-overlay toggle (score extremes / regime / breakout). */}
           <button
             type="button"
@@ -319,10 +475,42 @@ export default function SymbolPage({
           >
             signals {showOverlays ? "on" : "off"}
           </button>
-          <HelpTip label="what the signal overlays show">
-            Marks past score extremes, regime changes and breakouts on the price
-            chart — historical annotations from stored data, not forecasts.
+          <HelpTip label="what the chart tools show">
+            Indicators are computed in your browser from the loaded bars. Patterns
+            marks candles with recognized shapes (click one for its measured
+            edge). Trend draws support/resistance lines. Signals marks past score
+            extremes, regime changes and breakouts. All are context, not forecasts.
           </HelpTip>
+
+          {/* Trend classification chip (rendered when the trend read is on). */}
+          {trendPayload && (
+            <span
+              className="chip tnum uppercase tracking-wider"
+              style={{
+                color:
+                  trendPayload.classification === "uptrend"
+                    ? "var(--bid)"
+                    : trendPayload.classification === "downtrend"
+                      ? "var(--ask)"
+                      : "var(--dim)",
+                borderColor:
+                  trendPayload.classification === "uptrend"
+                    ? "var(--bid)"
+                    : trendPayload.classification === "downtrend"
+                      ? "var(--ask)"
+                      : "var(--border)",
+              }}
+              title={`slope ${trendPayload.slope >= 0 ? "+" : ""}${trendPayload.slope.toFixed(3)}% per bar${trendPayload.channel ? " · channel" : ""}`}
+            >
+              {trendPayload.classification}
+              <span className="ml-1.5" style={{ color: "var(--faint)" }}>
+                {trendPayload.slope >= 0 ? "+" : ""}
+                {trendPayload.slope.toFixed(2)}%/bar
+                {trendPayload.channel ? " · channel" : ""}
+              </span>
+            </span>
+          )}
+
           <span className="ml-auto flex items-center gap-1" role="tablist" aria-label="timeframe">
             {TFS.map((t) => (
               <button
@@ -357,25 +545,71 @@ export default function SymbolPage({
               no {tf} bars stored yet — backfill runs shortly after subscribing.
             </div>
           ) : (
-            <CandleChart bars={bars} tf={tf} height={420} overlays={overlays} />
+            <CandleChart
+              bars={bars}
+              tf={tf}
+              height={420}
+              overlays={overlays}
+              indicators={indicators}
+              patternBars={patternPayload?.bars}
+              onCandleClick={(ts, patterns) =>
+                setSelected(patterns.length ? { key: patternsKey, ts, patterns } : null)
+              }
+              trendlines={trendPayload?.lines}
+              showTrend={showTrend}
+            />
           )}
-          {/* Overlay legend — only when signals are on and there are markers. */}
-          {showOverlays && overlays && overlays.length > 0 && (
+
+          {/* Click-a-candle pattern detail (only for a candle that has one). */}
+          {selectedShown && (
+            <PatternPopup
+              ts={selectedShown.ts}
+              patterns={selectedShown.patterns}
+              note={patternPayload?.note}
+              onClose={() => setSelected(null)}
+            />
+          )}
+
+          {/* Chart legend — indicators/patterns/trend hints + overlay markers. */}
+          {(showOverlays && overlays && overlays.length > 0) ||
+          (showPatterns && patternPayload && patternPayload.bars.length > 0) ||
+          (showTrend && trendPayload && trendPayload.lines.length > 0) ? (
             <div
               className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 pb-1 pt-2 text-[0.75rem]"
               style={{ color: "var(--faint)" }}
             >
-              <span className="flex items-center gap-1">
-                <span style={{ color: "var(--bid)" }}>▲▼</span> score extreme
-              </span>
-              <span className="flex items-center gap-1">
-                <span style={{ color: "var(--accent)" }}>●</span> regime change
-              </span>
-              <span className="flex items-center gap-1">
-                <span style={{ color: "var(--bid)" }}>■</span> breakout
-              </span>
-              <span className="ml-auto tnum">{overlays.length} markers</span>
+              {showPatterns && patternPayload && patternPayload.bars.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <span style={{ color: "var(--bid)" }}>●</span> pattern (click a candle)
+                </span>
+              )}
+              {showTrend && trendPayload && trendPayload.lines.length > 0 && (
+                <span className="flex items-center gap-1">
+                  <span style={{ color: "var(--bid)" }}>╱</span> support ·{" "}
+                  <span style={{ color: "var(--ask)" }}>╲</span> resistance
+                </span>
+              )}
+              {showOverlays && overlays && overlays.length > 0 && (
+                <>
+                  <span className="flex items-center gap-1">
+                    <span style={{ color: "var(--bid)" }}>▲▼</span> score extreme
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span style={{ color: "var(--accent)" }}>●</span> regime change
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span style={{ color: "var(--bid)" }}>■</span> breakout
+                  </span>
+                </>
+              )}
             </div>
+          ) : null}
+
+          {/* Trend note — rendered verbatim per the honesty doctrine. */}
+          {showTrend && trendPayload && trendPayload.note.trim() && (
+            <p className="px-2 pb-1 pt-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+              {trendPayload.note}
+            </p>
           )}
         </div>
       </section>

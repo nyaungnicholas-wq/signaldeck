@@ -25,7 +25,7 @@ import Sparkline from "@/components/viz/Sparkline";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import { edgePp, scoreColor } from "./compositeUi";
+import { edgePp, scoreColor, convictionMeta } from "./compositeUi";
 
 type View = "cards" | "table";
 
@@ -77,6 +77,22 @@ function ScoreBadge({ score }: { score: number }) {
       title="1–10 forced-curve rank on today's cross-section — not a probability"
     >
       {score}
+    </span>
+  );
+}
+
+/** Conviction chip — the SECOND axis. Low = amber/red (don't read a high rank
+ *  as a sure thing), high = green. Absent on older daemons → renders nothing. */
+function ConvictionChip({ band, label }: { band?: string; label?: string }) {
+  if (!band) return null;
+  const cm = convictionMeta(band);
+  return (
+    <span
+      className="chip"
+      style={{ color: cm.color, borderColor: cm.color }}
+      title={label ?? "conviction — how much to trust the rank (edge size + proven live edge)"}
+    >
+      {cm.short}
     </span>
   );
 }
@@ -248,6 +264,9 @@ export default function CompositeLeaderboard({
                 </span>
               </div>
               <div className="flex items-baseline gap-2">
+                <span className="text-[0.6rem] font-medium" style={{ color: "var(--faint)" }}>
+                  RANK
+                </span>
                 <span
                   className="tnum text-[1.6rem] font-extrabold leading-none"
                   style={{ color: scoreColor(r.score) }}
@@ -264,6 +283,9 @@ export default function CompositeLeaderboard({
                 >
                   {edgePp(r.edge)}
                 </span>
+              </div>
+              <div className="flex items-center">
+                <ConvictionChip band={r.conviction} label={r.convictionLabel} />
               </div>
               <Sparkline closes={sparks.get(`${r.market}:${r.symbol}`) ?? []} width={200} height={28} />
             </button>
@@ -282,7 +304,8 @@ export default function CompositeLeaderboard({
                   { k: "delta", l: "Δ RANK", right: false, tip: "vs each symbol's newest row before today — null renders as new" },
                   { k: "symbol", l: "SYMBOL", right: false },
                   { k: "market", l: "MARKET", right: false },
-                  { k: "score", l: "SCORE", right: false, tip: "1–10 forced-curve rank — not a probability" },
+                  { k: "score", l: mode === "simple" ? "RANK" : "SCORE", right: false, tip: "1–10 forced-curve rank — not a probability" },
+                  { k: "conviction", l: "CONVICTION", right: false, tip: "how much to trust the rank (edge size + whether the model's edge is proven live) — a separate axis" },
                   { k: "edge", l: mode === "simple" ? "EDGE VS COIN FLIP" : "EDGE (1d)", right: true, tip: "calibrated P(up,1d) − 50%, in percentage points" },
                   { k: "trend", l: mode === "simple" ? "LAST 30 DAYS" : "TREND 30D", right: false },
                   { k: "scored", l: "SCORED", right: true },
@@ -327,6 +350,9 @@ export default function CompositeLeaderboard({
                   </td>
                   <td className="px-3 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
                     <ScoreBadge score={r.score} />
+                  </td>
+                  <td className="px-3 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
+                    <ConvictionChip band={r.conviction} label={r.convictionLabel} />
                   </td>
                   <td
                     className="px-3 py-2 text-right"
@@ -378,6 +404,16 @@ export default function CompositeLeaderboard({
             {resp.edgeNote} · forced curve requires ≥{resp.minCurveN} usable predictions per pass ·{" "}
             {resp.trackLabel}
           </p>
+          {resp.convictionNote && (
+            <p className="text-[0.75rem] font-medium leading-relaxed" style={{ color: "var(--warn)" }}>
+              {resp.convictionNote}
+            </p>
+          )}
+          {resp.skillNote && (
+            <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+              live edge status: {resp.skillNote}
+            </p>
+          )}
         </div>
       )}
     </section>

@@ -150,11 +150,14 @@ func TestCandidateAddHappyPathAndDismiss(t *testing.T) {
 	drain(t, resp)
 }
 
-func TestCandidateAdd409AtCap(t *testing.T) {
+// At the STREAM cap, adding a candidate no longer refuses — it MONITORS the
+// symbol via the broad polled universe (stream=0) instead, so every discovered
+// symbol can be monitored. This is the core of the "let me monitor all symbols"
+// fix.
+func TestCandidateAddMonitorsAtCap(t *testing.T) {
 	url, st, c := newDiscoveryServer(t)
 	ctx := context.Background()
-	// Broad-universe wave: the cap now governs the STREAMED hot set, so the
-	// seeded symbol must be streamed to be "at cap".
+	// STREAM cap of 1, filled by a streamed SPY → the hot set is full.
 	t.Setenv("SIGNALDECK_STREAM_CAP", "1")
 	spy, err := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
 	if err != nil {
@@ -166,21 +169,66 @@ func TestCandidateAdd409AtCap(t *testing.T) {
 	_ = st.UpsertCandidate(ctx, store.Candidate{Symbol: "COIN", Market: md.Stocks, LastSeenTs: 1, DollarVol: 1e9})
 
 	resp := postJSON(t, c, url+"/api/candidates/add", map[string]string{"symbol": "COIN", "market": "stocks"})
-	if resp.StatusCode != 409 {
-		t.Fatalf("add at cap: %d want 409 (%s)", resp.StatusCode, drain(t, resp))
+	if resp.StatusCode != 200 {
+		t.Fatalf("add at cap: %d want 200 (monitored) (%s)", resp.StatusCode, drain(t, resp))
 	}
-	if body := drain(t, resp); !strings.Contains(body, "stream cap reached (1/1 streamed)") {
-		t.Fatalf("409 message unclear: %s", body)
+	if body := drain(t, resp); !strings.Contains(body, `"monitored":true`) || !strings.Contains(body, `"streaming":false`) {
+		t.Fatalf("expected a monitored (not streaming) response: %s", body)
 	}
-	// Nothing was added.
-	if _, err := st.GetSymbol(ctx, "COIN", md.Stocks); err == nil {
-		t.Fatalf("COIN created despite cap")
+	// COIN IS registered — as a daily-only universe symbol (stream=0), not streamed.
+	s, err := st.GetSymbol(ctx, "COIN", md.Stocks)
+	if err != nil {
+		t.Fatalf("COIN not registered at cap: %v", err)
+	}
+	if !s.Active || s.Stream {
+		t.Fatalf("COIN should be active+monitored (stream=0): active=%v stream=%v", s.Active, s.Stream)
+	}
+	// It landed on the watchlist and the candidate flipped to added.
+	resp, _ = c.Get(url + "/api/watchlist")
+	if got := drain(t, resp); !strings.Contains(got, `"COIN"`) {
+		t.Fatalf("watchlist missing monitored COIN: %s", got)
+	}
+	added, _ := st.Candidates(ctx, "added")
+	if len(added) != 1 || added[0].Symbol != "COIN" {
+		t.Fatalf("candidate not marked added: %+v", added)
 	}
 
-	// Adding an ALREADY-STREAMED symbol is allowed at cap (watchlist-only op).
-	resp = postJSON(t, c, url+"/api/candidates/add", map[string]string{"symbol": "SPY", "market": "stocks"})
-	if resp.StatusCode != 200 {
-		t.Fatalf("re-add streamed symbol at cap: %d %s", resp.StatusCode, drain(t, resp))
+	// The monitor cap (universe cap) is the real ceiling; setting it below the
+	// current monitored count makes a further add refuse honestly.
+	t.Setenv("SIGNALDECK_UNIVERSE_CAP", "1")
+	_ = st.UpsertCandidate(ctx, store.Candidate{Symbol: "GME", Market: md.Stocks, LastSeenTs: 1, DollarVol: 1e9})
+	resp = postJSON(t, c, url+"/api/candidates/add", map[string]string{"symbol": "GME", "market": "stocks"})
+	if resp.StatusCode != 409 {
+		t.Fatalf("add past monitor cap: %d want 409 (%s)", resp.StatusCode, drain(t, resp))
 	}
-	drain(t, resp)
+	if body := drain(t, resp); !strings.Contains(body, "monitor cap reached") {
+		t.Fatalf("409 message unclear: %s", body)
+	}
+}
+
+// monitor-all promotes every new candidate to a monitored (stream=0) symbol in
+// one action, bounded by the universe cap.
+func TestCandidateMonitorAll(t *testing.T) {
+	url, st, c := newDiscoveryServer(t)
+	ctx := context.Background()
+	for _, sym := range []string{"COIN", "GME", "AMC"} {
+		_ = st.UpsertCandidate(ctx, store.Candidate{Symbol: sym, Market: md.Stocks, LastSeenTs: 1, DollarVol: 1e9})
+	}
+	resp := postJSON(t, c, url+"/api/candidates/monitor-all", map[string]string{})
+	if resp.StatusCode != 200 {
+		t.Fatalf("monitor-all: %d %s", resp.StatusCode, drain(t, resp))
+	}
+	if body := drain(t, resp); !strings.Contains(body, `"added":3`) {
+		t.Fatalf("expected 3 added: %s", body)
+	}
+	// All three are registered as monitored (stream=0) and on the watchlist.
+	for _, sym := range []string{"COIN", "GME", "AMC"} {
+		s, err := st.GetSymbol(ctx, sym, md.Stocks)
+		if err != nil || !s.Active || s.Stream {
+			t.Fatalf("%s not monitored: err=%v active=%v stream=%v", sym, err, s.Active, s.Stream)
+		}
+	}
+	if remaining, _ := st.Candidates(ctx, "new"); len(remaining) != 0 {
+		t.Fatalf("candidates not all consumed: %+v", remaining)
+	}
 }

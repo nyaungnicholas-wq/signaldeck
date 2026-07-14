@@ -83,7 +83,18 @@ func horizonSecs(h md.Horizon) int64 {
 // for the same reason v3 bumped for gbm_prob: the GBM leg trains per version,
 // so the new field must accumulate its own labeled set rather than dilute
 // absent-vs-zero across the v5 rows.
-const featureVersion = 6
+// v7 (candlestick-patterns + model-fed indicators wave): + five model-fed
+// technical-indicator signals (stoch_k, adx14, cci20, bb_pctb, supertrend_dir
+// — see internal/indicators) and pattern_bias (the net Bias of the candlestick
+// patterns firing on the latest bar — see internal/candles, indicatorfeat.go).
+// These join the vector so the GBM/alphax legs LEARN whether they have edge —
+// the OOS-lift gate is the referee; nothing is trusted on faith. None is a
+// model output, so none is on the self-reference exclusion lists. Each is
+// absent when unavailable (thin history, a degenerate window, or no pattern
+// firing). Bumped for the same reason every prior field-adding wave bumped:
+// the per-symbol GBM trains per version, so v7 rows accumulate their own
+// labeled set rather than dilute absent-vs-zero across the v6 rows.
+const featureVersion = 7
 
 // ledgerModelVersion stamps each hash-chained ledger entry with the version of
 // the prediction MODEL/pipeline that produced it (Stage 3 tamper-evident
@@ -267,6 +278,11 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// stocktwits_bull_ratio / wiki_z / tv_reco), each gate-honoring and
 		// freshness-bounded; absent fields stay absent (see alphaxfeat.go).
 		alphaSymMap := alphaSymbolFeatures(ctx, w.St, s, time.Now())
+		// CANDLESTICK-PATTERNS + MODEL-FED INDICATORS wave (featureVersion 7) —
+		// model-fed technical-indicator signals + candlestick pattern_bias,
+		// derived from THIS symbol's daily bars (shared across horizons). Each
+		// field is absent when unavailable (see indicatorfeat.go).
+		idxMap := indicatorPatternFeatures(daily)
 		// Sentiment feature (per symbol, shared across horizons): the latest
 		// daily aggregate, only when fresh (<=3 days) AND resting on enough
 		// headlines (n>=3). Best-effort — a read error means "absent".
@@ -374,7 +390,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if pct, ok := rankPcts[s.ID]; ok {
 				rankPct = &pct
 			}
-			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, newsMap, alphaSymMap, alphaMktMap)
+			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, newsMap, alphaSymMap, alphaMktMap, idxMap)
 			if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
 				featErrs++
 				slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)

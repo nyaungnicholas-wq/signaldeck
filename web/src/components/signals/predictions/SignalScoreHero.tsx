@@ -12,7 +12,7 @@ import { ago } from "@/lib/format";
 import { useViewMode } from "@/components/Plain";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
-import { scoreColor } from "./compositeUi";
+import { scoreColor, convictionMeta } from "./compositeUi";
 
 /** Always-visible footnote block: the honesty chips ride the card itself. */
 function Footnotes({ notes }: { notes: string[] }) {
@@ -89,6 +89,17 @@ export default function SignalScoreHero({
   }
 
   const color = scoreColor(data.score);
+  const conv = data.conviction;
+  const cm = convictionMeta(conv?.band);
+  // Top 5% = 10 → the score's rough position in today's cross-section.
+  const topPct = Math.max(0, Math.min(100, 100 - data.curvePct));
+
+  // Every honesty note that rides the card. skillNote + riskNote come from the
+  // conviction axis — the persistent "this is a rank, not a certainty" caveat.
+  const notes = [data.curveNote, data.edgeNote];
+  if (conv?.skillNote) notes.push(conv.skillNote);
+  if (conv?.riskNote) notes.push(conv.riskNote);
+
   return (
     <section className="panel">
       <div className="panel-h flex-wrap gap-2">
@@ -99,36 +110,63 @@ export default function SignalScoreHero({
         <span className="chip tnum" title="the horizon this verdict is scored on">
           {data.horizon}
         </span>
-        {/* the gate chip — a score never appears without its track status */}
-        <span
-          className="chip ml-auto"
-          style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
-        >
-          {data.trackLabel}
-        </span>
+        {/* CONVICTION — the honest headline: how much to trust the rank. */}
+        {conv && (
+          <span
+            className="chip ml-auto font-bold"
+            style={{ color: cm.color, borderColor: cm.color }}
+            title="conviction is a SEPARATE axis from the rank — a top rank on a weak or unproven edge is low conviction"
+          >
+            {conv.label}
+          </span>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-8 gap-y-4 px-4 py-4">
-        {/* the big 1–10 — decile-colored rank on today's forced curve */}
-        <div
-          className="flex items-baseline gap-1.5"
-          role="img"
-          aria-label={`composite score ${data.score} out of 10 — a rank on today's cross-section, not a probability`}
-        >
-          <span
-            className="tnum text-[3.2rem] font-extrabold leading-none"
-            style={{ color }}
+        {/* the 1–10 — a RANK on today's forced curve, never a probability. */}
+        <div className="flex flex-col gap-1">
+          <span className="text-[0.7rem] font-medium tracking-wide" style={{ color: "var(--faint)" }}>
+            RANK · TOP {topPct.toFixed(0)}% TODAY
+          </span>
+          <div
+            className="flex items-baseline gap-1.5"
+            role="img"
+            aria-label={`composite rank ${data.score} of 10 — top ${topPct.toFixed(0)} percent of today's cross-section, a relative rank and not a probability of profit`}
           >
-            {data.score}
-          </span>
-          <span className="text-[1rem]" style={{ color: "var(--faint)" }}>
-            /10
-          </span>
+            <span className="tnum text-[3.2rem] font-extrabold leading-none" style={{ color }}>
+              {data.score}
+            </span>
+            <span className="text-[1rem]" style={{ color: "var(--faint)" }}>
+              /10 rank
+            </span>
+          </div>
         </div>
 
         <div className="flex min-w-[16rem] flex-1 flex-col gap-2">
-          {/* the edge line — VERBATIM from the API, the one honest headline */}
+          {/* the edge line — VERBATIM from the API: the REAL probability. */}
           <p className="tnum text-[0.95rem] font-bold leading-snug">{data.edgeLine}</p>
+
+          {/* conviction band + its drivers — the antidote to "10 = sure thing". */}
+          {conv && (
+            <div
+              className="flex flex-col gap-1 rounded-md px-2.5 py-2"
+              style={{ background: "var(--panel2)", border: `1px solid ${cm.color}` }}
+            >
+              <span className="text-[0.8rem] font-bold" style={{ color: cm.color }}>
+                {conv.label}
+              </span>
+              {conv.drivers.length > 0 && (
+                <ul className="flex flex-col gap-0.5">
+                  {conv.drivers.map((dstr) => (
+                    <li key={dstr} className="text-[0.75rem] leading-snug" style={{ color: "var(--dim)" }}>
+                      · {dstr}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-1.5">
             <span
               className="chip tnum"
@@ -148,6 +186,9 @@ export default function SignalScoreHero({
               title="the stored ensemble prediction this verdict is built on — never recomputed here"
             >
               prediction {ago(data.predTs)}
+            </span>
+            <span className="chip tnum" title="calibration track status">
+              {data.trackLabel}
             </span>
             {mode === "pro" && (
               <span
@@ -169,7 +210,7 @@ export default function SignalScoreHero({
       </div>
 
       {/* honesty footnotes — visible on the card, never hidden in hover */}
-      <Footnotes notes={[data.curveNote, data.edgeNote]} />
+      <Footnotes notes={notes} />
     </section>
   );
 }

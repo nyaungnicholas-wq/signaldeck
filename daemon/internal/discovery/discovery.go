@@ -39,7 +39,7 @@ const (
 	// Broad-universe wave: this cap governs ONLY the streamed hot set. The
 	// hundreds of REST daily-only universe symbols are governed separately by
 	// SIGNALDECK_UNIVERSE_CAP (see internal/universe) and are NOT counted here.
-	DefaultSymbolCap = 25
+	DefaultSymbolCap = 30
 	// MinSweeps is how many separate sweeps must have seen a candidate
 	// before it qualifies for auto-add.
 	MinSweeps = 2

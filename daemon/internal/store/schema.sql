@@ -1058,3 +1058,26 @@ CREATE TABLE IF NOT EXISTS alphax_models (
 -- and sorted the whole features table. This index serves the filter AND the
 -- order, letting SQLite walk it newest-first and stop at the limit. (L2)
 CREATE INDEX IF NOT EXISTS idx_features_h_ts ON features (horizon, ts DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- CANDLESTICK-PATTERNS wave (appended block).
+
+-- pattern_stats: ONE row per (symbol, pattern, horizon) — the MEASURED edge of
+-- a candlestick pattern on THIS symbol's OWN history, computed by the
+-- pattern-stats worker from ~2y of daily bars (internal/candles.MeasureEdges).
+-- hit_rate is the share of the pattern's historical firings whose forward
+-- `horizon`-bar move went the pattern's way (bias-aligned); mean_fwd is the
+-- mean forward return; n is the sample the stats rest on. Only DIRECTIONAL
+-- patterns are stored, and only when n >= MinPatternN (=15) — a thin sample is
+-- withheld, never shown as an edge. HONESTY: a measured tendency on this
+-- instrument's own past, descriptive and not advice; the API carries that
+-- caveat verbatim.
+CREATE TABLE IF NOT EXISTS pattern_stats (
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  pattern   TEXT NOT NULL,           -- candles.Pattern.Name (directional only)
+  horizon   INTEGER NOT NULL,        -- forward window in bars the edge was measured over
+  hit_rate  REAL NOT NULL,           -- share of firings that went the pattern's way
+  mean_fwd  REAL NOT NULL,           -- mean forward horizon-bar return (signed, as observed)
+  n         INTEGER NOT NULL,        -- historical firings behind the stats (>= 15)
+  PRIMARY KEY (symbol_id, pattern, horizon)
+);

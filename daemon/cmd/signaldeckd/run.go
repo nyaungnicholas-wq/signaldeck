@@ -89,12 +89,12 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// LLM provider (NVIDIA by default). Disabled/no-op until a key is set.
 	// The daily call counter is persisted in SQLite so restarts can't reset
 	// the spend cap.
-	llmClient := llm.New(cfg.LLMKey, cfg.LLMBaseURL, cfg.LLMModel, cfg.LLMDailyCap)
+	llmClient := llm.New(cfg.LLMKeys, cfg.LLMBaseURL, cfg.LLMModel, cfg.LLMModelDeep, cfg.LLMModelFast, cfg.LLMDailyCap)
 	llm.SetSpendStore(llmClient, st)
 	if llmClient.Enabled() {
-		slog.Info("AI layer enabled", "model", cfg.LLMModel, "dailyCap", cfg.LLMDailyCap)
+		slog.Info("AI layer enabled", "model", cfg.LLMModel, "deep", cfg.LLMModelDeep, "keys", len(cfg.LLMKeys), "dailyCap", cfg.LLMDailyCap)
 	} else {
-		slog.Warn("AI layer disabled — no LLM key (set SIGNALDECK_NVIDIA_KEY in daemon/.env)")
+		slog.Warn("AI layer disabled — no LLM key (set SIGNALDECK_NVIDIA_KEY or SIGNALDECK_NVIDIA_KEYS in daemon/.env)")
 	}
 
 	// Stage 3 — alert delivery beyond the Mac: ONE daemon-wide outbound
@@ -373,6 +373,13 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// day); served live at GET /api/source-health. BEFORE the watchdog spec
 	// snapshot so it's health-audited like every other worker.
 	fleet = append(fleet, sourceAuditWorkers(cfg, st)...)
+	// Candlestick-patterns wave (constructor appended at the END of this file) —
+	// pattern-stats (24h, once/UTC-day gate): recomputes each hot symbol's
+	// MEASURED candlestick edge from ~2y of daily bars and stores the gated
+	// (n>=15) hit-rate/mean-forward per pattern, read back by
+	// /api/candle-patterns. BEFORE the watchdog spec snapshot so it's
+	// health-audited like every other worker.
+	fleet = append(fleet, patternStatsWorkers(st)...)
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -399,6 +406,14 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		},
 		Subscribe: func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
 			return subscribe(ctx, st, alpacaClient, backfiller, streamer, symbol, market)
+		},
+		// Monitor registers a symbol WITHOUT claiming a live-websocket slot: a
+		// stock joins the broad daily+minute-POLLED universe (stream=0), still
+		// fully scored/predicted/charted but bounded by the large universe cap
+		// instead of the small free-ws stream cap. This is what lets every
+		// discovered candidate be monitored even when the hot set is full.
+		Monitor: func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
+			return monitor(ctx, st, alpacaClient, backfiller, streamer, symbol, market)
 		},
 	}
 	go func() {
@@ -440,10 +455,38 @@ func bootstrapUsers(ctx context.Context, st *store.Store) error {
 	return nil
 }
 
-// subscribe validates + registers a symbol and kicks off its backfill.
+// subscribe validates + registers a symbol into the STREAMED hot set (stream=1)
+// and kicks off its backfill. Use it for an explicit "give this a live slot"
+// add (manual subscribe, discovery auto-add) while under the free-ws cap.
 func subscribe(ctx context.Context, st *store.Store, ac *alpaca.Client,
 	bf *pipeline.Backfiller, streamer *alpaca.Streamer,
 	symbol string, market md.Market,
+) (md.Symbol, error) {
+	return registerSymbol(ctx, st, ac, bf, streamer, symbol, market, true)
+}
+
+// monitor validates + registers a symbol into the broad POLLED universe
+// (stream=0 for stocks) without claiming a live-websocket slot. The symbol is
+// still fully backfilled, scored, predicted, and charted — the universe-poller
+// (6h deep) and universe-live poller (60s during market hours) keep its daily,
+// hourly, and minute bars fresh — it just isn't real-time ws-streamed. This is
+// what lets monitoring scale past the small free-ws stream cap: it is bounded
+// only by the (large) universe cap. Crypto always streams (Kraken's public feed
+// is free), so monitor and subscribe are equivalent for crypto.
+func monitor(ctx context.Context, st *store.Store, ac *alpaca.Client,
+	bf *pipeline.Backfiller, streamer *alpaca.Streamer,
+	symbol string, market md.Market,
+) (md.Symbol, error) {
+	return registerSymbol(ctx, st, ac, bf, streamer, symbol, market, false)
+}
+
+// registerSymbol is the shared validate+register+backfill path. stream=true
+// promotes a stock into the live-ws hot set (counts against the stream cap);
+// stream=false registers it as a daily-only broad-universe symbol (polled, not
+// streamed). Crypto ignores the flag — it always streams via Kraken.
+func registerSymbol(ctx context.Context, st *store.Store, ac *alpaca.Client,
+	bf *pipeline.Backfiller, streamer *alpaca.Streamer,
+	symbol string, market md.Market, stream bool,
 ) (md.Symbol, error) {
 	name := ""
 	switch market {
@@ -466,15 +509,32 @@ func subscribe(ctx context.Context, st *store.Store, ac *alpaca.Client,
 			return md.Symbol{}, fmt.Errorf("crypto symbols are BASE/QUOTE, e.g. ETH/USD")
 		}
 	}
+
+	// MONITOR path (stock, stream=false): register as a broad-universe daily
+	// symbol (stream=0) — polled, never ws-streamed, so it never consumes a
+	// free-ws slot. UpsertDailyUniverseSymbol never DEMOTES an already-streamed
+	// name, so re-adding a hot-set symbol as "monitor" is a safe no-op on its
+	// stream flag.
+	if market == md.Stocks && !stream {
+		sym, err := st.UpsertDailyUniverseSymbol(ctx, symbol, name)
+		if err != nil {
+			return md.Symbol{}, err
+		}
+		if err := bf.Enqueue(sym); err != nil {
+			return md.Symbol{}, err
+		}
+		return sym, nil
+	}
+
 	sym, err := st.UpsertSymbol(ctx, symbol, market, name)
 	if err != nil {
 		return md.Symbol{}, err
 	}
-	// Broad-universe wave: an explicit subscribe (manual add or discovery
-	// auto-add) puts the symbol in the STREAMED HOT SET. Promote its stream
-	// flag so it joins the live ws + full 1m pipeline (and counts against the
-	// stream cap). A daily-only universe symbol being subscribed is thereby
-	// promoted; a fresh symbol is created with stream=1.
+	// STREAM path: an explicit subscribe (manual add or discovery auto-add)
+	// puts the symbol in the STREAMED HOT SET. Promote its stream flag so it
+	// joins the live ws + full 1m pipeline (and counts against the stream cap).
+	// A daily-only universe symbol being subscribed is thereby promoted; a
+	// fresh symbol is created with stream=1.
 	if market == md.Stocks {
 		if err := st.SetSymbolStream(ctx, sym.ID, true); err == nil {
 			sym.Stream = true
@@ -1158,6 +1218,25 @@ func alphaXWorkers(st *store.Store) []workers.Worker {
 func sourceAuditWorkers(cfg config.Config, st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.SourceAuditor{St: st, WebhookSecretSet: cfg.TVWebhookSecret != ""},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CANDLESTICK-PATTERNS wave (appended block).
+// patternStatsWorkers returns the wave's worker: pattern-stats (24h, gated
+// once per UTC day) — recomputes each HOT symbol's (streamed hot set + crypto)
+// MEASURED candlestick edge from ~2 years of daily bars
+// (internal/candles.MeasureEdges): the share of each directional pattern's
+// historical firings whose forward 5-bar move went the pattern's way, plus the
+// mean forward return and the sample size, stored per (symbol, pattern,
+// horizon) ONLY when the sample clears n>=15. The /api/candle-patterns handler
+// reads these back to annotate live firings; the model-fed pattern_bias
+// feature (featureVersion 7) is graded by the OOS-lift referee like every other
+// feature. CAVEAT (verbatim everywhere): candlestick patterns are WEAK,
+// context-only signals; the measured hit-rate is descriptive, not advice.
+func patternStatsWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.PatternStatsRunner{St: st},
 	}
 }
 

@@ -41,14 +41,17 @@ type Config struct {
 
 	// LLM layer (OpenAI-compatible; NVIDIA by default). Empty key = the AI
 	// agents stay in safe no-op mode.
-	LLMKey      string
-	LLMBaseURL  string // e.g. https://integrate.api.nvidia.com/v1
-	LLMModel    string // e.g. meta/llama-3.3-70b-instruct
-	LLMDailyCap int    // hard cap on LLM calls per day (spend guard); 0 = default
+	LLMKey       string   // first key (kept for LLMEnabled + display)
+	LLMKeys      []string // failover pool (round-robin); SIGNALDECK_NVIDIA_KEYS, comma-separated
+	LLMBaseURL   string   // e.g. https://integrate.api.nvidia.com/v1
+	LLMModel     string   // default (workhorse) model
+	LLMModelDeep string   // on-demand reasoning model (analyst/debate/scenario)
+	LLMModelFast string   // highest-frequency, lowest-stakes model (sentiment tagging)
+	LLMDailyCap  int      // hard cap on LLM calls per day (spend guard); 0 = default
 }
 
 // LLMEnabled reports whether the AI agents can run (a key is configured).
-func (c Config) LLMEnabled() bool { return c.LLMKey != "" }
+func (c Config) LLMEnabled() bool { return c.LLMKey != "" || len(c.LLMKeys) > 0 }
 
 // Load builds the config. Precedence: environment > project .env files > default.
 func Load() Config {
@@ -75,10 +78,26 @@ func Load() Config {
 		}
 		return def
 	}
+	// LLM key pool: SIGNALDECK_NVIDIA_KEYS (comma-separated) is the failover
+	// pool; a single SIGNALDECK_NVIDIA_KEY / SIGNALDECK_LLM_KEY still works and
+	// seeds a one-key pool. The first key is kept for LLMEnabled + display.
+	llmKeys := splitList(pick("SIGNALDECK_NVIDIA_KEYS", ""))
+	if len(llmKeys) == 0 {
+		if single := pick("SIGNALDECK_NVIDIA_KEY", pick("SIGNALDECK_LLM_KEY", "")); single != "" {
+			llmKeys = []string{single}
+		}
+	}
+	llmFirst := ""
+	if len(llmKeys) > 0 {
+		llmFirst = llmKeys[0]
+	}
 	cfg := Config{
-		LLMKey:          pick("SIGNALDECK_NVIDIA_KEY", pick("SIGNALDECK_LLM_KEY", "")),
+		LLMKey:          llmFirst,
+		LLMKeys:         llmKeys,
 		LLMBaseURL:      pick("SIGNALDECK_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-		LLMModel:        pick("SIGNALDECK_LLM_MODEL", "meta/llama-3.1-8b-instruct"), // 8B is fast+reliable on NVIDIA free tier (70B times out); override via SIGNALDECK_LLM_MODEL
+		LLMModel:        pick("SIGNALDECK_LLM_MODEL", "qwen/qwen3.5-122b-a10b"),                        // MoE: 122B knowledge / ~10B active → strong + ~4s on NVIDIA free tier
+		LLMModelDeep:    pick("SIGNALDECK_LLM_MODEL_DEEP", "nvidia/llama-3.3-nemotron-super-49b-v1.5"), // reasoning-tuned; on-demand only (~30s)
+		LLMModelFast:    pick("SIGNALDECK_LLM_MODEL_FAST", "meta/llama-3.1-8b-instruct"),              // ultra-fast for high-frequency low-stakes calls
 		LLMDailyCap:     atoiOr(pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
 		DBPath:          envOr("SIGNALDECK_DB", filepath.Join(home, "claude code", "signaldeck", "data", "signaldeck.db")),
 		HTTPAddr:        envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"),

@@ -51,7 +51,7 @@ func TestEnvInt(t *testing.T) {
 
 func TestSentimentTagger_SkipsWithoutLLMKey(t *testing.T) {
 	st := openStore(t)
-	w := &SentimentTagger{St: st, LLM: llm.New("", "http://unused", "model", 10)}
+	w := &SentimentTagger{St: st, LLM: llm.New(nil, "http://unused", "model", "", "", 10)}
 	detail, err := w.Run(context.Background())
 	if err != nil {
 		t.Fatalf("run: %v", err)
