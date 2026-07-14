@@ -547,9 +547,11 @@ func TestPoolAdjacentViolatorsMonotone(t *testing.T) {
 			t.Errorf("ky[%d]=%v, want 1/3 after pooling", i, ky[i])
 		}
 	}
-	// The last two levels (means 1,1) stay at 1.
-	if !approx(ky[3], 1.0, 1e-9) || !approx(ky[4], 1.0, 1e-9) {
-		t.Errorf("ky[3:5]=%v,%v want 1,1", ky[3], ky[4])
+	// The last two levels (means 1,1) are separate weight-1 blocks: the rule-
+	// of-succession bound caps a w=1 block at (1+1)/(1+2) = 2/3 — a single
+	// one-sided observation must never persist a certainty knot.
+	if !approx(ky[3], 2.0/3.0, 1e-9) || !approx(ky[4], 2.0/3.0, 1e-9) {
+		t.Errorf("ky[3:5]=%v,%v want 2/3,2/3 (succession-bounded)", ky[3], ky[4])
 	}
 }
 
@@ -581,5 +583,32 @@ func TestClamp01(t *testing.T) {
 		if got := clamp01(c.in); got != c.want {
 			t.Errorf("clamp01(%v)=%v want %v", c.in, got, c.want)
 		}
+	}
+}
+
+// Regression (adversarial review, CRITICAL): a lone thin-tail pair whose one
+// outcome went "up", sitting past a big well-behaved cluster, must not map any
+// query to a displayed certainty. Before the per-knot succession bound this
+// yielded fn(0.99)=0.9997 → rendered "100.0%" on live surfaces.
+func TestCalibrateThinTailNeverCertain(t *testing.T) {
+	pairs := make([]Pair, 0, 3000)
+	for i := 0; i < 2999; i++ {
+		p := 0.40 + 0.20*float64(i)/2999 // clustered 0.40–0.60
+		a := 0.0
+		if i%2 == 0 {
+			a = 1
+		}
+		pairs = append(pairs, Pair{Pred: p, Actual: a})
+	}
+	pairs = append(pairs, Pair{Pred: 0.99, Actual: 1}) // the thin tail
+	fn, ok := Calibrate(pairs)
+	if !ok {
+		t.Fatal("expected calibrated=true")
+	}
+	got := fn(0.99)
+	// A w=1 block is bounded at 2/3; allow interpolation slack but require the
+	// output to stay far away from the display-certainty region.
+	if got > 0.97 {
+		t.Fatalf("fn(0.99)=%v — thin-tail knot still surfaces near-certainty", got)
 	}
 }

@@ -11,6 +11,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  pollMs,
+  POLL_SLOW,
   shortsExtremes,
   shortsSymbol,
   type ShortsExtreme,
@@ -18,6 +20,7 @@ import {
   type ShortsSymbolResponse,
   type ShortVolumePoint,
 } from "@/lib/api";
+import HelpTip from "@/components/HelpTip";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
@@ -30,8 +33,6 @@ import CellBar from "@/components/viz/CellBar";
 
 const RATIO_BAR_TITLE =
   "share of the day's volume sold short — absolute 0–100% scale; magnitude only, NOT directional (includes market makers)";
-
-const POLL_MS = 300_000; // files land once per trading day — poll slowly
 
 function fmtVol(v: number): string {
   if (!isFinite(v)) return "—";
@@ -112,10 +113,12 @@ export default function ShortsPage() {
       }
     };
     load();
-    const t = setInterval(load, POLL_MS);
+    // POLL_SLOW: FINRA files land once per trading day — the slowest tier
+    // is still generous here.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [symbol, retryTick]);
 
@@ -174,14 +177,17 @@ export default function ShortsPage() {
               extremes?.day && <span className="chip tnum">{extremes.day}</span>
             )}
             {symbol && series?.latestZ != null && (
-              <span className="chip tnum" title={series.zNote}>
-                latest z {series.latestZ.toFixed(2)} (descriptive)
+              <span className="flex items-center gap-1">
+                <span className="chip tnum">
+                  latest z {series.latestZ.toFixed(2)} (descriptive)
+                </span>
+                <HelpTip label="what this z-score means">{series.zNote}</HelpTip>
               </span>
             )}
           </div>
 
           {/* Verbatim caveat + provenance — always visible, never abbreviated. */}
-          <p className="px-4 py-3 text-[0.76rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             {caveat}. {note}
             {!symbol && extremes ? ` ${extremes.floorNote} (minTotalVol ${fmtVol(extremes.minTotalVol)} shares).` : ""}
           </p>
@@ -194,8 +200,8 @@ export default function ShortsPage() {
                 detail="Rows exist only for tracked stocks and accrue one trading day at a time (first run backfills ~30 trading days). Crypto has no Reg SHO data."
               />
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-[0.8rem]">
+              <div className="table-wrap">
+                <table className="w-full text-[0.75rem]">
                   <thead>
                     <tr className="text-left" style={{ color: "var(--dim)" }}>
                       <th className="px-4 py-2 font-normal">DAY</th>
@@ -234,8 +240,8 @@ export default function ShortsPage() {
               detail={extremes?.emptyNote ?? "The finra-shorts worker ingests FINRA's free daily file after ~6:30pm ET and backfills ~30 trading days on first run."}
             />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-[0.8rem]">
+            <div className="table-wrap">
+              <table className="w-full text-[0.75rem]">
                 <thead>
                   <tr className="text-left" style={{ color: "var(--dim)" }}>
                     <th className="px-4 py-2 font-normal">SYMBOL</th>
@@ -252,7 +258,7 @@ export default function ShortsPage() {
                       <td className="px-4 py-2">
                         <Link
                           href={`/s/stocks/${encodeURIComponent(e.symbol)}`}
-                          className="font-bold"
+                          className="mono font-bold hover:underline"
                           style={{ color: "var(--accent)" }}
                         >
                           {e.symbol}

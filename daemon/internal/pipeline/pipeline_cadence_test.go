@@ -75,3 +75,45 @@ func distinctScoreTs(t *testing.T, st *store.Store, symbolID int64, h md.Horizon
 	}
 	return len(seen)
 }
+
+// Live-everything wave: universeDue cadence — 10m while market open, once per
+// UTC day closed, legacy day-string cursor reads as due.
+func TestUniverseDueLiveCadence(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/ucad.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+	// A known NYSE-open moment: Wed 2026-07-08 17:00 UTC (13:00 ET).
+	open := time.Date(2026, 7, 8, 17, 0, 0, 0, time.UTC)
+	due, cur := universeDue(ctx, st, "test_ucad", open)
+	if !due {
+		t.Fatal("first pass should be due")
+	}
+	_ = st.SetMeta(ctx, "test_ucad", cur)
+	if due, _ := universeDue(ctx, st, "test_ucad", open.Add(5*time.Minute)); due {
+		t.Error("5m after a pass (market open) must NOT be due")
+	}
+	if due, _ := universeDue(ctx, st, "test_ucad", open.Add(11*time.Minute)); !due {
+		t.Error("11m after a pass (market open) MUST be due")
+	}
+	// Market closed (Sat 2026-07-11 17:00 UTC): same-day pass blocks reruns...
+	sat := time.Date(2026, 7, 11, 17, 0, 0, 0, time.UTC)
+	due, cur = universeDue(ctx, st, "test_ucad2", sat)
+	if !due {
+		t.Fatal("first closed-day pass should be due")
+	}
+	_ = st.SetMeta(ctx, "test_ucad2", cur)
+	if due, _ := universeDue(ctx, st, "test_ucad2", sat.Add(2*time.Hour)); due {
+		t.Error("second same-closed-day pass must NOT be due")
+	}
+	if due, _ := universeDue(ctx, st, "test_ucad2", sat.Add(24*time.Hour)); !due {
+		t.Error("next closed day MUST be due")
+	}
+	// Legacy day-string cursor → parses 0 → due immediately.
+	_ = st.SetMeta(ctx, "test_ucad3", "2026-07-08")
+	if due, _ := universeDue(ctx, st, "test_ucad3", open); !due {
+		t.Error("legacy day-string cursor must read as due")
+	}
+}

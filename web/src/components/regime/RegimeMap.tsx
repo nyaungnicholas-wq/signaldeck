@@ -24,17 +24,17 @@ function CompactTile({ s }: { s: RegimeState }) {
   return (
     <Link
       href={`/s/${s.market}/${encodeURIComponent(s.symbol)}`}
-      className="flex cursor-pointer flex-col items-center gap-0.5 rounded-md px-2 py-2 text-center transition-transform duration-150 hover:scale-[1.03]"
+      className="flex cursor-pointer flex-col items-center gap-0.5 rounded-lg px-2 py-2 text-center transition-[filter] duration-150 hover:brightness-125"
       style={{
         background: `color-mix(in srgb, ${color} 16%, var(--panel2))`,
         border: `1px solid color-mix(in srgb, ${color} 45%, var(--border))`,
       }}
       title={`${s.symbol} (${s.market}) — ${regimeSentence(s.label)} · strength ${pct.toFixed(0)}% · ${ago(s.ts)} — descriptive from stored bars, no lookahead`}
     >
-      <span className="text-[0.8rem] font-bold leading-tight" style={{ color: "var(--text)" }}>
+      <span className="mono text-[0.75rem] font-bold leading-tight" style={{ color: "var(--text)" }}>
         {s.symbol}
       </span>
-      <span className="text-[0.6rem] uppercase tracking-wider" style={{ color }}>
+      <span className="text-[0.75rem] uppercase tracking-wider" style={{ color }}>
         {s.label || "—"}
       </span>
     </Link>
@@ -47,13 +47,13 @@ function RegimeTile({ s }: { s: RegimeState }) {
   const pct = strengthPct(s.strength);
   return (
     <div
-      className="flex flex-col gap-2 rounded-lg border p-3 transition-colors duration-150 hover:bg-[var(--panel2)]"
-      style={{ borderColor: "var(--border)", background: "var(--panel2)" }}
+      className="flex flex-col gap-2 rounded-lg border bg-[var(--panel2)] p-3 transition-colors duration-150 hover:bg-[var(--panel)]"
+      style={{ borderColor: "var(--border)" }}
     >
       <div className="flex items-center justify-between gap-2">
         <Link
           href={`/s/${s.market}/${encodeURIComponent(s.symbol)}`}
-          className="cursor-pointer text-[0.82rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
+          className="mono cursor-pointer text-sm font-bold transition-colors duration-150 hover:text-[var(--accent)]"
         >
           {s.symbol}
           <span className="ml-1.5 text-[0.75rem] font-normal" style={{ color: "var(--faint)" }}>
@@ -140,7 +140,7 @@ export default function RegimeMap({ states }: { states: RegimeState[] }) {
               role="tab"
               aria-selected={effView === v}
               onClick={() => setView(v)}
-              className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150"
+              className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:brightness-125"
               style={{
                 color: effView === v ? "var(--accent)" : "var(--dim)",
                 borderColor: effView === v ? "var(--accent)" : "var(--border)",
@@ -173,7 +173,7 @@ export default function RegimeMap({ states }: { states: RegimeState[] }) {
             ))}
           </div>
           {legend.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-[0.68rem]">
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-[0.75rem]">
               {legend.map(([kind, label]) => (
                 <span key={kind} className="inline-flex items-center gap-1" style={{ color: "var(--faint)" }}>
                   <span
@@ -185,7 +185,8 @@ export default function RegimeMap({ states }: { states: RegimeState[] }) {
                 </span>
               ))}
               <span style={{ color: "var(--faint)" }}>
-                · hover a tile for the plain-English read; switch to “detailed” for strength bars and notes
+                · each tile links to its symbol page; switch to “detailed” for strength bars and
+                plain-English notes
               </span>
             </div>
           )}

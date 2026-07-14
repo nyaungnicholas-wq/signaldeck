@@ -27,7 +27,7 @@ function RankRow({ r }: { r: RankedRow }) {
       <td className="px-3 py-2">
         <Link
           href={`/s/${r.market}/${encodeURIComponent(r.symbol)}`}
-          className="cursor-pointer text-[0.8rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
+          className="mono cursor-pointer text-[0.75rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
         >
           {r.symbol}
           <span className="ml-1.5 text-[0.75rem] font-normal" style={{ color: "var(--faint)" }}>
@@ -51,15 +51,15 @@ function RankRow({ r }: { r: RankedRow }) {
               style={{ width: `${pct}%`, background: "var(--accent)" }}
             />
           </div>
-          <span className="tnum w-9 shrink-0 text-right text-[0.78rem]" style={{ color: "var(--dim)" }}>
+          <span className="tnum w-9 shrink-0 text-right text-[0.75rem]" style={{ color: "var(--dim)" }}>
             {Number.isFinite(r.score) ? r.score.toFixed(0) : "—"}
           </span>
         </div>
       </td>
-      <td className="tnum px-3 py-2 text-right text-[0.78rem]" style={{ color: retColor(r.ret1m) }}>
+      <td className="tnum px-3 py-2 text-right text-[0.75rem]" style={{ color: retColor(r.ret1m) }}>
         {Number.isFinite(r.ret1m) ? fmtPct(r.ret1m) : "—"}
       </td>
-      <td className="tnum px-3 py-2 text-right text-[0.78rem]" style={{ color: retColor(r.ret3m) }}>
+      <td className="tnum px-3 py-2 text-right text-[0.75rem]" style={{ color: retColor(r.ret3m) }}>
         {Number.isFinite(r.ret3m) ? fmtPct(r.ret3m) : "—"}
       </td>
     </tr>
@@ -93,7 +93,7 @@ export default function RankingTable({ rows }: { rows: RankedRow[] }) {
         />
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[380px] text-[0.8rem]">
+          <table className="w-full min-w-[380px] text-[0.75rem]">
             <thead>
               <tr className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
                 <th className="px-3 py-2 text-right font-medium" title="rank within the field">#</th>

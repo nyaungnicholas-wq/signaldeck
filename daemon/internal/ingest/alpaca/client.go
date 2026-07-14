@@ -38,6 +38,32 @@ type Client struct {
 	BaseData  string       // market-data host, includes /v2
 	BasePaper string       // paper-trading host (asset validation), no /v2
 	HTTP      *http.Client // defaults to a 30s-timeout client
+	// Feed selects the REST bars feed. "" defaults to "sip": Alpaca's FREE
+	// tier serves FULL-MARKET SIP bars for historical queries (verified live
+	// 2026-07-10: NVDA 1d volume 148.3M on sip vs 5.5M on iex — 27× the tape)
+	// with only the most recent ~15 minutes restricted, which sipEndGuard
+	// respects. Real-time consumers (the universe-live poller) must set
+	// Feed:"iex" explicitly — SIP cannot serve the trailing window.
+	Feed string
+}
+
+// feed returns the effective REST bars feed.
+func (c *Client) feed() string {
+	if c.Feed != "" {
+		return c.Feed
+	}
+	return "sip"
+}
+
+// sipEndGuard bounds SIP requests away from the restricted trailing window.
+// Free-tier SIP rejects queries touching the most recent ~15 minutes, so SIP
+// requests carry end=now−16m; IEX requests are unbounded (real-time OK). The
+// guarded 16-minute tail is filled by the IEX universe-live poller and then
+// HEALED to full-volume SIP bars on the next deep pass (upserts overwrite).
+func (c *Client) sipEndGuard(q url.Values) {
+	if c.feed() == "sip" {
+		q.Set("end", time.Now().UTC().Add(-16*time.Minute).Format(time.RFC3339))
+	}
 }
 
 // New returns a Client wired to Alpaca's production hosts.
@@ -156,7 +182,8 @@ func (c *Client) fetchBarsPage(ctx context.Context, symbol, timeframe string, st
 	q.Set("start", start.Format(time.RFC3339))
 	q.Set("limit", "10000")
 	q.Set("adjustment", "split")
-	q.Set("feed", "iex")
+	q.Set("feed", c.feed())
+	c.sipEndGuard(q)
 	if pageToken != "" {
 		q.Set("page_token", pageToken)
 	}
@@ -271,6 +298,21 @@ func (c *Client) BackfillDailyMulti(ctx context.Context, st *store.Store, symbol
 	return c.backfillMulti(ctx, st, symbols, resolve, "1Day", md.TF1d, start)
 }
 
+// BackfillHourlyMulti is BackfillDailyMulti for HOURLY bars — same batching,
+// pacing, and 429 back-off; only the timeframe differs. Used by the
+// broad-universe poller so daily-only symbols get current 1h coverage too.
+func (c *Client) BackfillHourlyMulti(ctx context.Context, st *store.Store, symbols []string, resolve func(sym string) (int64, bool), start time.Time) (map[string]int, error) {
+	return c.backfillMulti(ctx, st, symbols, resolve, "1Hour", md.TF1h, start)
+}
+
+// BackfillMinuteMulti is BackfillDailyMulti for MINUTE bars. Minute pages are
+// the bulky ones (a 100-symbol batch spans multiple 10k-bar pages per trading
+// day), so callers keep the start window short — the pagination + pacing here
+// already keeps each run far under the free 200 req/min ceiling.
+func (c *Client) BackfillMinuteMulti(ctx context.Context, st *store.Store, symbols []string, resolve func(sym string) (int64, bool), start time.Time) (map[string]int, error) {
+	return c.backfillMulti(ctx, st, symbols, resolve, "1Min", md.TF1m, start)
+}
+
 // backfillMulti is the shared batched multi-symbol backfill used by the
 // broad-universe poller. timeframe is the Alpaca timeframe string ("1Day",
 // "1Hour"); tf is its store enum.
@@ -352,7 +394,8 @@ func (c *Client) fetchMultiBarsPage(ctx context.Context, symbols []string, timef
 	q.Set("start", start.Format(time.RFC3339))
 	q.Set("limit", "10000")
 	q.Set("adjustment", "split")
-	q.Set("feed", "iex")
+	q.Set("feed", c.feed())
+	c.sipEndGuard(q)
 	if pageToken != "" {
 		q.Set("page_token", pageToken)
 	}

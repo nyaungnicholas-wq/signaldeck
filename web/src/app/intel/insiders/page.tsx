@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { insiders, type InsiderTrade } from "@/lib/api";
+import { insiders, pollMs, POLL_SLOW, type InsiderTrade } from "@/lib/api";
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -20,8 +20,6 @@ import PagePurpose from "@/components/PagePurpose";
 // 0..1) and the tooltip says so; color follows the honest P/S/mechanics
 // coding — grants and exercises stay neutral.
 import CellBar from "@/components/viz/CellBar";
-
-const POLL_MS = 60_000;
 
 type CodeFilter = "all" | "P" | "S";
 
@@ -71,10 +69,11 @@ export default function InsidersPage() {
           setErr(msg);
         });
     load();
-    const t = setInterval(load, POLL_MS);
+    // POLL_SLOW: Form 4s land on the filings-poller's ~2h sweep cadence.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [code, symbol, retryTick]);
 
@@ -136,11 +135,11 @@ export default function InsidersPage() {
                   role="tab"
                   aria-selected={c === code}
                   onClick={() => setCode(c)}
-                  className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150"
+                  className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
                   title={c === "P" ? "open-market buys only" : c === "S" ? "open-market sells only" : "all codes"}
                   style={{
-                    color: c === code ? "var(--accent)" : "var(--dim)",
-                    borderColor: c === code ? "var(--accent)" : "var(--border)",
+                    color: c === code ? "var(--accent)" : undefined,
+                    borderColor: c === code ? "var(--accent)" : undefined,
                   }}
                 >
                   {c === "P" ? "buys" : c === "S" ? "sells" : "all"}
@@ -149,9 +148,12 @@ export default function InsidersPage() {
             </span>
           </div>
 
-          {/* honest classification + lag note, always visible */}
-          <p className="px-4 py-3 text-[0.76rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-            {note}
+          {/* honest classification + lag note, always visible. The bar-scale
+              caveat is visible text (not tooltip-only): the bars are relative,
+              so two pages of trades are never comparable by eye. */}
+          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+            {note} Value bars are scaled relative to the largest trade currently
+            listed — magnitude within this list only, not an absolute scale.
           </p>
 
           {list.length === 0 ? (
@@ -173,7 +175,7 @@ export default function InsidersPage() {
               {list.map((t) => (
                 <li
                   key={t.accession}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.8rem]"
+                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.75rem]"
                   style={{ borderBottom: "1px solid var(--border)" }}
                 >
                   <Link
@@ -208,7 +210,7 @@ export default function InsidersPage() {
                       title={`trade value — bar scaled RELATIVE to the largest trade shown (${fmtUSD(maxValue)}); grants/exercises stay neutral-colored`}
                     />
                   </span>
-                  <span className="tnum ml-auto text-[0.72rem]" style={{ color: "var(--faint)" }}>
+                  <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
                     filed {ago(t.filedTs)}
                   </span>
                 </li>

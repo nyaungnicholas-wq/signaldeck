@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/adaptive"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -68,6 +69,17 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("persist weights: %w", err)
 	}
 
+	// Model-evolution wave: meta keeps only the LATEST weights, so also append
+	// this run's learned weights to weight_history (one row per non-empty
+	// (cell, leg)) — the append-only series behind /api/model-evolution. Only
+	// cells that actually yielded learned weights are recorded; a cell held to
+	// the static prior has nothing to plot (honest gap, no synthetic zero).
+	if hist := weightHistoryRows(next); len(hist) > 0 {
+		if err := w.St.InsertWeightHistory(ctx, hist); err != nil {
+			return "", fmt.Errorf("append weight history: %w", err)
+		}
+	}
+
 	learned := 0
 	for _, c := range next.Cells {
 		if len(c.Weights) > 0 {
@@ -81,6 +93,30 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 	}
 	return fmt.Sprintf("attributed %d labeled example(s) across %d cell(s); %d cell(s) passed the n>=%d gate (max weight shift %.2f)",
 		len(examples), len(next.Cells), learned, adaptive.MinCellSamples, shift), nil
+}
+
+// weightHistoryRows flattens a computed weight set into append-only history
+// rows (one per non-empty (cell, leg)), stamped with the weights' computed ts so
+// the snapshot lines up with the meta version. Cells with no learned weights
+// contribute nothing — an honest gap, never a synthetic zero.
+func weightHistoryRows(next adaptive.Weights) []store.WeightHistoryRow {
+	names := make([]string, 0, len(next.Cells))
+	for n := range next.Cells {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var rows []store.WeightHistoryRow
+	for _, name := range names {
+		c := next.Cells[name]
+		for _, leg := range ensemble.LegNames {
+			if wgt, ok := c.Weights[leg]; ok {
+				rows = append(rows, store.WeightHistoryRow{
+					Ts: next.ComputedTs, Regime: name, Leg: leg, Weight: wgt,
+				})
+			}
+		}
+	}
+	return rows
 }
 
 // adaptiveShiftInsight composes the "weights materially changed" insight with

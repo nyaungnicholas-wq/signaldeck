@@ -38,14 +38,14 @@ export default function StorySection({
   return (
     <section aria-label={title} className="flex flex-col gap-3">
       <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h2 className="m-0 text-[0.8rem] font-extrabold tracking-[0.18em]">
+        <h2 className="m-0 text-[0.75rem] font-extrabold tracking-[0.18em]">
           <span aria-hidden="true" style={{ color: "var(--accent)" }}>
             {n} ·{" "}
           </span>
           {title}
         </h2>
         {sub && (
-          <span className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
             {sub}
           </span>
         )}
@@ -54,7 +54,7 @@ export default function StorySection({
             type="button"
             aria-expanded={open}
             onClick={() => setUserOpen(!open)}
-            className="chip ml-auto min-h-[36px] cursor-pointer px-3 text-[0.7rem] transition-colors duration-150 hover:text-[var(--text)]"
+            className="chip ml-auto min-h-[36px] cursor-pointer px-3 text-[0.75rem] transition-colors duration-150 hover:text-[var(--text)]"
             style={open ? undefined : { color: "var(--accent)", borderColor: "var(--accent)" }}
           >
             {open ? hideLabel : `${showLabel} ↓`}
@@ -63,7 +63,7 @@ export default function StorySection({
       </div>
       {open && children}
       {!open && (
-        <p className="m-0 text-[0.7rem]" style={{ color: "var(--faint)" }}>
+        <p className="m-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           detail panels are collapsed in simple view — nothing is hidden, only folded.
         </p>
       )}

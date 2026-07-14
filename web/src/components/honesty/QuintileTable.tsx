@@ -36,7 +36,7 @@ function QuintileBars({ rows }: { rows: HonestyBucket[] }) {
         const left = frac < 0 ? 50 + frac * 50 : 50;
         const width = Math.abs(frac) * 50;
         return (
-          <div key={`${b?.label ?? "bucket"}-${i}`} className="flex items-center gap-2 text-[0.72rem]">
+          <div key={`${b?.label ?? "bucket"}-${i}`} className="flex items-center gap-2 text-[0.75rem]">
             <span className="w-24 shrink-0 truncate" style={{ color: empty ? "var(--faint)" : "var(--dim)" }}>
               {b?.label || `bucket ${i + 1}`}
             </span>
@@ -73,7 +73,7 @@ function QuintileBars({ rows }: { rows: HonestyBucket[] }) {
           </div>
         );
       })}
-      <p className="m-0 mt-1 text-[0.66rem]" style={{ color: "var(--faint)" }}>
+      <p className="m-0 mt-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
         mean forward return per score bucket — bars grow from the 0% line; exact numbers in the table below.
       </p>
     </div>
@@ -111,7 +111,7 @@ export default function QuintileTable({ buckets }: { buckets: HonestyBucket[] })
         {/* Stage 4: chart first, exact table right below — data never lost. */}
         <QuintileBars rows={rows} />
         <div className="table-wrap">
-        <table className="w-full text-[0.8rem]">
+        <table className="w-full text-[0.75rem]">
           <thead>
             <tr className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
               <th

@@ -30,8 +30,17 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
-// DefaultSeries is the macro set SignalDeck tracks by default.
-var DefaultSeries = []string{"VIXCLS", "DGS10", "T10Y2Y", "DFF"}
+// DefaultSeries is the macro set SignalDeck tracks by default. The original
+// four (VIXCLS/DGS10/T10Y2Y/DFF) were joined by the DATA-EXPANSION wave's
+// seven: DGS2 (2y yield), T10Y3M (10y-3m spread — the recession-watch curve),
+// BAMLH0A0HYM2 (high-yield OAS — credit stress), NFCI (Chicago Fed financial
+// conditions), UNRATE (unemployment), CPIAUCSL (CPI), M2SL (M2 money stock).
+// All are DESCRIPTIVE macro context; the slower series update monthly/weekly
+// and simply carry their latest published observation.
+var DefaultSeries = []string{
+	"VIXCLS", "DGS10", "T10Y2Y", "DFF",
+	"DGS2", "T10Y3M", "BAMLH0A0HYM2", "NFCI", "UNRATE", "CPIAUCSL", "M2SL",
+}
 
 // csvBase is the keyless CSV endpoint host+path (no key required).
 const csvBase = "https://fred.stlouisfed.org/graph/fredgraph.csv"

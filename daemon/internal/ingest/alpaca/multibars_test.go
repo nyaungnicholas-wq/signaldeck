@@ -54,7 +54,7 @@ func TestBackfillDailyMultiBatchingAndParse(t *testing.T) {
 		}
 		q := r.URL.Query()
 		for k, want := range map[string]string{
-			"timeframe": "1Day", "adjustment": "split", "feed": "iex", "limit": "10000",
+			"timeframe": "1Day", "adjustment": "split", "feed": "sip", "limit": "10000",
 		} {
 			if q.Get(k) != want {
 				t.Errorf("query %s = %q, want %q", k, q.Get(k), want)

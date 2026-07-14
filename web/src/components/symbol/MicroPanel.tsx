@@ -5,7 +5,8 @@
 // 5-minute imbalance sparkline polled from /api/snaps.
 
 import { useEffect, useState } from "react";
-import { api, pollMs, type Market, type Snap } from "@/lib/api";
+import { api, pollMs, POLL_LIVE, type Market, type Snap } from "@/lib/api";
+import { useSnapStream } from "@/hooks/useSnapStream";
 import { ago, fmtPrice, fmtScore } from "@/lib/format";
 import Spark from "@/components/Spark";
 
@@ -53,42 +54,65 @@ export default function MicroPanel({
     const load = () =>
       api
         .snaps(symbol, market, 300)
-        .then((s) => alive && setSnaps(s ?? []))
-        .catch(() => alive && setSnaps([]));
+        .then((s) => {
+          if (alive) setSnaps(s ?? []);
+        })
+        .catch(() => {
+          if (alive) setSnaps([]);
+        });
     load();
-    const t = setInterval(load, pollMs());
+    // POLL_LIVE backfills the 5-min series and stays as the fallback if the
+    // SSE stream is unavailable; the stream (below) drives per-second updates.
+    const stop = pollMs(load, POLL_LIVE);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [symbol, market]);
 
-  const imbPct = Math.max(0, Math.min(100, 50 + snap.imb * 50));
+  // Live push: the newest snapshot the instant the daemon emits it (1 Hz+).
+  const { snap: live } = useSnapStream(symbol, market);
+  const s = live ?? snap;
+
+  // Advance the imbalance sparkline at the stream cadence by appending each
+  // freshly-pushed snap to the tail (deduped by ts, capped at 10 min).
+  // Guarded adjustment during render — no effect round-trip per pushed snap.
+  const [prevLive, setPrevLive] = useState<Snap | null>(null);
+  if (live && live !== prevLive) {
+    setPrevLive(live);
+    setSnaps((prev) => {
+      if (prev.length && prev[prev.length - 1].ts >= live.ts) return prev;
+      const next = [...prev, live];
+      return next.length > 600 ? next.slice(next.length - 600) : next;
+    });
+  }
+
+  const imbPct = Math.max(0, Math.min(100, 50 + s.imb * 50));
 
   return (
     <section className="panel">
       <div className="panel-h">
         <span>MICROSTRUCTURE</span>
         <span className="ml-auto tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          {ago(snap.ts)}
+          {ago(s.ts)}
         </span>
       </div>
       <div className="flex flex-col gap-4 p-4">
         <div className="grid grid-cols-3 gap-x-4 gap-y-3 sm:grid-cols-6">
-          <Cell label="BID" title="Best bid price" value={fmtPrice(snap.bid)} color="var(--bid)" />
-          <Cell label="ASK" title="Best ask price" value={fmtPrice(snap.ask)} color="var(--ask)" />
-          <Cell label="MID" title="Midpoint between bid and ask" value={fmtPrice(snap.mid)} />
-          <Cell label="WMID" title="Weighted mid price (size-weighted midpoint)" value={fmtPrice(snap.wmid)} />
-          <Cell label="SPREAD" title="Ask minus bid" value={fmtPrice(snap.spread)} />
+          <Cell label="BID" title="Best bid price" value={fmtPrice(s.bid)} color="var(--bid)" />
+          <Cell label="ASK" title="Best ask price" value={fmtPrice(s.ask)} color="var(--ask)" />
+          <Cell label="MID" title="Midpoint between bid and ask" value={fmtPrice(s.mid)} />
+          <Cell label="WMID" title="Weighted mid price (size-weighted midpoint)" value={fmtPrice(s.wmid)} />
+          <Cell label="SPREAD" title="Ask minus bid" value={fmtPrice(s.spread)} />
           <Cell
             label="APPLY LAT"
             title="Latency to apply a book update to the consolidated order book"
-            value={fmtLat(snap.applyLatNs)}
+            value={fmtLat(s.applyLatNs)}
           />
         </div>
 
         <div>
-          <div className="mb-1 flex items-baseline justify-between text-[0.78rem]">
+          <div className="mb-1 flex items-baseline justify-between text-[0.75rem]">
             <span
               style={{ color: "var(--dim)" }}
               title="Order-book imbalance: −1 = all size on the ask side, +1 = all size on the bid side"
@@ -96,14 +120,14 @@ export default function MicroPanel({
               book imbalance
             </span>
             <span className="tnum" style={{ color: "var(--text)" }}>
-              {fmtScore(snap.imb)} · {snap.imb >= 0.15 ? "bid-heavy" : snap.imb <= -0.15 ? "ask-heavy" : "balanced"}
+              {fmtScore(s.imb)} · {s.imb >= 0.15 ? "bid-heavy" : s.imb <= -0.15 ? "ask-heavy" : "balanced"}
             </span>
           </div>
           <div
             role="meter"
             aria-valuemin={-1}
             aria-valuemax={1}
-            aria-valuenow={Number(snap.imb.toFixed(3))}
+            aria-valuenow={Number(s.imb.toFixed(3))}
             aria-label="order book imbalance"
             className="relative rounded-full border"
             style={{
@@ -131,7 +155,7 @@ export default function MicroPanel({
           {snaps.length >= 2 ? (
             <Spark values={snaps.map((s) => s.imb)} width={280} height={36} />
           ) : (
-            <p className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
+            <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
               collecting snapshots…
             </p>
           )}

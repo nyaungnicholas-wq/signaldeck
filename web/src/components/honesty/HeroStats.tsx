@@ -30,7 +30,7 @@ function Stat({
         <div className="tnum text-2xl font-bold" style={{ color: valueColor ?? "var(--text)" }}>
           {value}
         </div>
-        <div className="mt-1 text-[0.78rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+        <div className="mt-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           {sub}
         </div>
       </div>
@@ -122,7 +122,7 @@ export default function HeroStats({ data, horizon }: { data: Honesty; horizon: H
     <section className="panel">
       <div className="panel-h">
         REPORT CARD
-        <span className="ml-auto text-[0.66rem] font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
+        <span className="ml-auto text-[0.75rem] font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
           bar and sentence come from the same reading — a withheld number stays an empty bar
         </span>
       </div>

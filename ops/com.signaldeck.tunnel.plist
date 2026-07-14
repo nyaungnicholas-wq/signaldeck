@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SignalDeck public tunnel LaunchAgent — an always-on ngrok tunnel that maps a
+  stable public HTTPS domain to the local daemon (127.0.0.1:8322), so external
+  push sources (TradingView alert webhooks) can reach POST /api/tv-webhook.
+  The domain is a reserved ngrok free static domain, so the URL survives
+  reboots and ngrok restarts (unlike a quick tunnel). The daemon's Host
+  allowlist (SIGNALDECK_ALLOWED_HOSTS) must include this domain.
+  Install:
+    cp ops/com.signaldeck.tunnel.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.signaldeck.tunnel.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.signaldeck.tunnel</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/natalienyaung/.local/bin/ngrok</string>
+    <string>http</string>
+    <string>8322</string>
+    <string>--domain=spearfish-dwindle-module.ngrok-free.dev</string>
+    <string>--log=stdout</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/tunnel.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/tunnel.err.log</string>
+</dict>
+</plist>

@@ -15,7 +15,7 @@ export default function ErrorState({
   return (
     <div
       role="alert"
-      className={`panel flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-4 text-[0.8rem] leading-relaxed ${className}`}
+      className={`panel flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-4 text-[0.75rem] leading-relaxed ${className}`}
     >
       <div className="min-w-0 flex-1">
         <span style={{ color: "var(--bad)" }}>{message}</span>

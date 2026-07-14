@@ -3,10 +3,14 @@ package alpaca
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"sort"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -168,6 +172,13 @@ func (s *Streamer) Run(ctx context.Context) error {
 			}
 		case r := <-reads:
 			if r.err != nil {
+				if isExpectedDisconnect(r.err) {
+					// Routine server-side teardown (idle timeout, deploy,
+					// network blip). The supervisor redials after its cooldown;
+					// a clean return keeps these out of the failure log so real
+					// faults stay visible.
+					return nil
+				}
 				return fmt.Errorf("alpaca stream: read: %w", r.err)
 			}
 			if err := s.handleFrame(ctx, r.data); err != nil {
@@ -175,6 +186,26 @@ func (s *Streamer) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// isExpectedDisconnect reports whether a read error is a routine websocket
+// teardown rather than a real fault: a normal/going-away/abnormal close frame,
+// a plain EOF, a closed socket, connection reset, or broken pipe. These recur
+// continuously on any long-lived feed and the supervisor already redials, so
+// they must not be logged as worker failures (they were ~90% of daemon.err.log).
+// Genuine faults — decode errors, DB upserts, bad bar data — still propagate.
+func isExpectedDisconnect(err error) bool {
+	switch websocket.CloseStatus(err) {
+	case websocket.StatusNormalClosure, websocket.StatusGoingAway,
+		websocket.StatusAbnormalClosure, websocket.StatusNoStatusRcvd:
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	return false
 }
 
 // handleFrame processes one raw websocket frame (a JSON array of envelopes):

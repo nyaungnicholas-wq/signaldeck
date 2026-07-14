@@ -32,7 +32,7 @@ export default function IntelShared({ children }: { children: React.ReactNode })
       {/* merged hub header */}
       <div className="flex flex-wrap items-center gap-2 px-1">
         <h1 className="text-sm font-extrabold tracking-[0.18em]">INTEL</h1>
-        <span className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
           stock intelligence — public-domain SEC + news data, one place
         </span>
         <label className="ml-auto flex items-center gap-2 text-[0.75rem]">
@@ -42,7 +42,7 @@ export default function IntelShared({ children }: { children: React.ReactNode })
             onChange={(e) => set(e.target.value)}
             placeholder="filter all intel tabs…"
             aria-label="symbol filter shared across all intel sub-tabs"
-            className="chip min-h-[40px] w-40 bg-transparent px-3 outline-none"
+            className="chip mono min-h-[40px] w-40 bg-transparent px-3 outline-none"
             style={{ color: "var(--text)" }}
           />
           {symbol && (
@@ -51,7 +51,6 @@ export default function IntelShared({ children }: { children: React.ReactNode })
               onClick={() => set("")}
               className="chip min-h-[40px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
               aria-label="clear symbol filter"
-              style={{ color: "var(--dim)" }}
             >
               clear
             </button>

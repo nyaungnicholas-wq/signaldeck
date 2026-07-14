@@ -34,7 +34,7 @@ export default function SectorRow({ s }: { s: SectorAgg }) {
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:flex-nowrap">
         <span
-          className="w-full truncate text-[0.82rem] font-bold sm:w-36 sm:shrink-0"
+          className="w-full truncate text-sm font-bold sm:w-36 sm:shrink-0"
           title={s.Sector}
         >
           {s.Sector || "(unlabeled)"}
@@ -47,7 +47,7 @@ export default function SectorRow({ s }: { s: SectorAgg }) {
           />
         </div>
         <span
-          className="tnum w-14 shrink-0 text-right text-[0.8rem]"
+          className="tnum w-14 shrink-0 text-right text-[0.75rem]"
           style={{ color: scoreColor(score) }}
           title="Mean pressure score (0–100)"
           aria-label={`mean score ${score.toFixed(0)}`}
@@ -55,7 +55,7 @@ export default function SectorRow({ s }: { s: SectorAgg }) {
           {score.toFixed(0)}
         </span>
         <span
-          className="tnum w-16 shrink-0 text-right text-[0.8rem]"
+          className="tnum w-16 shrink-0 text-right text-[0.75rem]"
           style={{ color: retColor(s.MeanRet1M) }}
           title="Mean 1-month return"
           aria-label={`mean 1-month return ${fmtPct(s.MeanRet1M)}`}
@@ -63,7 +63,7 @@ export default function SectorRow({ s }: { s: SectorAgg }) {
           {fmtPct(s.MeanRet1M)}
         </span>
         <span
-          className="tnum w-16 shrink-0 text-right text-[0.78rem]"
+          className="tnum w-16 shrink-0 text-right text-[0.75rem]"
           style={{ color: "var(--faint)" }}
           title="Number of symbols in this sector"
           aria-label={`${s.N} symbols`}

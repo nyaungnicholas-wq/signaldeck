@@ -16,7 +16,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { calendar, type CalendarResponse } from "@/lib/api";
+import { calendar, pollMs, POLL_SLOW, type CalendarResponse } from "@/lib/api";
 import { ago, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -47,10 +47,10 @@ export default function CalendarsCard() {
           setError(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, 5 * 60_000); // calendars move slowly
+    const stop = pollMs(load, POLL_SLOW); // calendars move slowly — slow tier
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 
@@ -62,7 +62,7 @@ export default function CalendarsCard() {
       <div className="panel-h flex-wrap gap-2">
         <span>CALENDARS</span>
         <span
-          className="text-[0.68rem] font-normal normal-case tracking-normal"
+          className="text-[0.75rem] font-normal normal-case tracking-normal"
           style={{ color: "var(--faint)" }}
         >
           free data only — see notes
@@ -91,11 +91,11 @@ export default function CalendarsCard() {
         <>
           {/* ECON — latest FRED prints */}
           <div className="border-t" style={{ borderColor: "var(--border)" }}>
-            <div className="px-3 pt-2 text-[0.68rem] font-bold tracking-[0.14em]" style={{ color: "var(--dim)" }}>
+            <div className="px-3 pt-2 text-[0.75rem] font-bold tracking-[0.14em]" style={{ color: "var(--dim)" }}>
               ECON — LATEST FRED PRINTS
             </div>
             {econ.length === 0 ? (
-              <p className="px-3 py-2 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+              <p className="px-3 py-2 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 No FRED prints stored yet — the fred-poller fills these on its 6h cadence.
               </p>
             ) : (
@@ -107,25 +107,25 @@ export default function CalendarsCard() {
                   >
                     <span style={{ color: "var(--dim)" }}>{e.label}</span>
                     <span className="tnum ml-auto font-bold">{fmtEconValue(e.series, e.value)}</span>
-                    <span className="tnum text-[0.68rem]" style={{ color: "var(--faint)" }}>
+                    <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
                       {fmtDate(e.ts)}
                     </span>
                   </div>
                 ))}
               </div>
             )}
-            <p className="px-3 pb-2 text-[0.65rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+            <p className="px-3 pb-2 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
               {resp.econNote}
             </p>
           </div>
 
           {/* EARNINGS — filing-derived ESTIMATES only */}
           <div className="border-t" style={{ borderColor: "var(--border)" }}>
-            <div className="px-3 pt-2 text-[0.68rem] font-bold tracking-[0.14em]" style={{ color: "var(--dim)" }}>
+            <div className="px-3 pt-2 text-[0.75rem] font-bold tracking-[0.14em]" style={{ color: "var(--dim)" }}>
               EARNINGS — REPORTS SOON (EST)
             </div>
             {ests.length === 0 ? (
-              <p className="px-3 py-2 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+              <p className="px-3 py-2 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 No estimated reports in the window — the heuristic needs EDGAR filing dates
                 (swept daily) and only shows companies due within ~3 weeks.
               </p>
@@ -138,13 +138,13 @@ export default function CalendarsCard() {
                   >
                     <Link
                       href={`/s/stocks/${encodeURIComponent(e.symbol)}`}
-                      className="cursor-pointer font-bold tracking-wide hover:text-[var(--accent)]"
+                      className="mono cursor-pointer font-bold tracking-wide transition-colors duration-150 hover:text-[var(--accent)]"
                       title={e.name || e.symbol}
                     >
                       {e.symbol}
                     </Link>
                     <span
-                      className="chip px-1.5 py-0 text-[0.62rem] tracking-wider"
+                      className="chip px-1.5 py-0 text-[0.75rem] tracking-wider"
                       style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
                       title={resp.earningsNote}
                     >
@@ -153,14 +153,14 @@ export default function CalendarsCard() {
                     <span className="tnum ml-auto" style={{ color: "var(--dim)" }}>
                       ~{fmtDate(e.estTs)}
                     </span>
-                    <span className="tnum text-[0.65rem]" style={{ color: "var(--faint)" }}>
+                    <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
                       last filed {ago(e.lastFilingTs)}
                     </span>
                   </div>
                 ))}
               </div>
             )}
-            <p className="px-3 pb-2 text-[0.65rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+            <p className="px-3 pb-2 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
               {resp.earningsNote}
             </p>
           </div>

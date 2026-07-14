@@ -1,3 +1,5 @@
+import { getConsecutiveFailures, onRetry, recordFailure, recordSuccess } from "./freshness";
+
 // Typed client for the SignalDeck API. Every page goes through this module.
 // Default is same-origin ("") — the Next.js app proxies /api/* to the daemon
 // (see next.config.ts), so the browser only ever talks to one host (:8323)
@@ -169,43 +171,59 @@ export interface Hud {
   summary?: Record<string, unknown>;
 }
 
-// Optional bearer token for remote-exposed deployments (unset for localhost).
-const API_TOKEN = process.env.NEXT_PUBLIC_SIGNALDECK_TOKEN;
-
 // The daemon requires this custom header on every call: its presence is what
 // defeats CSRF (a cross-origin attacker page can't send it without a preflight
 // that only an allowlisted origin passes). See daemon/internal/api/security.go.
+// Bearer tokens (remote deployments) are injected by the server-side proxy —
+// never by client code.
 function authHeaders(json: boolean): Record<string, string> {
   const h: Record<string, string> = { "X-Signaldeck": "1" };
   if (json) h["Content-Type"] = "application/json";
-  if (API_TOKEN) h["Authorization"] = `Bearer ${API_TOKEN}`;
   return h;
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    cache: "no-store",
-    credentials: "include",
-    headers: authHeaders(false),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      cache: "no-store",
+      credentials: "include",
+      headers: authHeaders(false),
+    });
+  } catch (e) {
+    recordFailure(); // network error — never reached the daemon
+    throw e;
+  }
   if (!res.ok) {
+    // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
+    // the daemon answered, just not with data.
+    if (res.status >= 500) recordFailure();
     const body = await res.text().catch(() => "");
     throw new Error(`API ${res.status}: ${body || path}`);
   }
+  recordSuccess();
   return res.json() as Promise<T>;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    credentials: "include",
-    headers: authHeaders(true),
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeaders(true),
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    recordFailure(); // network error — never reached the daemon
+    throw e;
+  }
   if (!res.ok) {
+    if (res.status >= 500) recordFailure();
     const err = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new Error(err?.error ?? `API ${res.status}`);
   }
+  recordSuccess();
   return res.json() as Promise<T>;
 }
 
@@ -302,6 +320,13 @@ export const api = {
   // leg is used by the ensemble ONLY when its lift > 0. ──
   modelForecasts: (symbol: string, market: Market) =>
     get<ModelForecast[]>(`/api/model-forecasts?${q(symbol, market)}`),
+
+  // ── composite verdict + alert outcomes (types + fns in the appended block
+  // at the END of this file; hoisted function declarations, so the shorthand
+  // references are safe here) ──
+  composite,
+  compositeTop,
+  alertOutcomes,
 };
 
 // One per-user alert row (alerts wave).
@@ -590,9 +615,77 @@ export interface DataStats {
   retention?: RetentionWindows;
 }
 
-// usePoll-style helper for client components (simple interval fetcher).
-export function pollMs(): number {
-  return 5000;
+// ── polling tiers (ms) — pages pick a tier; POLL_DEFAULT is the fallback ──
+export const POLL_LIVE = 5000; // tape/order-book style views
+export const POLL_FAST = 15000; // actively-watched dashboards
+export const POLL_DEFAULT = 30000; // everything else
+export const POLL_SLOW = 120000; // slow-moving reference data
+const POLL_BACKOFF_CAP = 300000; // 5 min ceiling on failure backoff
+
+// usePoll-style helper for client components.
+//
+// Legacy form — `setInterval(load, pollMs())` — keeps compiling: with no
+// arguments it just returns POLL_DEFAULT.
+//
+// Managed form — `useEffect(() => pollMs(load, POLL_FAST), [load])` — owns the
+// whole loop and returns its cleanup function: pauses while the tab is hidden
+// and refetches immediately on visibilitychange, backs off ×2 per consecutive
+// API failure (freshness store streak, cap 5 min, reset on any success), and
+// re-fires immediately when the freshness store requests a retry.
+export function pollMs(): number;
+export function pollMs(run: () => void | Promise<void>, baseMs?: number): () => void;
+export function pollMs(
+  run?: () => void | Promise<void>,
+  baseMs: number = POLL_DEFAULT,
+): number | (() => void) {
+  if (!run) return POLL_DEFAULT;
+
+  let stopped = false;
+  let inFlight = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const nextDelay = () => Math.min(baseMs * 2 ** getConsecutiveFailures(), POLL_BACKOFF_CAP);
+
+  const schedule = () => {
+    if (stopped) return;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(tick, nextDelay());
+  };
+
+  const tick = async () => {
+    if (stopped || inFlight) return;
+    // Hidden tab: stop the loop here — the visibilitychange handler restarts
+    // it (with an immediate refresh) when the tab comes back.
+    if (typeof document !== "undefined" && document.hidden) return;
+    inFlight = true;
+    try {
+      await run();
+    } catch {
+      // The fetch wrappers already recorded the failure; keep looping.
+    } finally {
+      inFlight = false;
+    }
+    schedule();
+  };
+
+  const onVisibility = () => {
+    if (!document.hidden) void tick();
+  };
+
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", onVisibility);
+  }
+  const offRetry = onRetry(() => void tick());
+  schedule();
+
+  return () => {
+    stopped = true;
+    if (timer !== null) clearTimeout(timer);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", onVisibility);
+    }
+    offRetry();
+  };
 }
 
 // ── universe-discovery wave (appended block — keep new client functions at
@@ -1962,4 +2055,451 @@ export interface LatestPredictionRow {
 export interface LatestPredictionsResponse {
   /** Samples a symbol needs before its OWN model is trusted (e.g. 40). */
   tierThreshold?: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// COMPOSITE VERDICT + ALERT OUTCOMES (appended block; keep at END).
+// (a) /api/composite — one symbol's 1–10 composite score built from EXACTLY
+//     11 fixed-order factor legs (technical, expectancy, forecast, sentiment,
+//     gbm, meanrev, ranking, regime, insiders, shortvol, breakout) plus the
+//     additive percentage-point ledger reconciling the legs to the calibrated
+//     edge. available:false is an honest miss (`reason` says why) — render
+//     `curveNote` either way.
+// (b) /api/composite/top — fleet ranking by composite score with prev-rank
+//     deltas (null = no previous ranking to compare against).
+// (c) /api/alert-outcomes — MEASURED forward returns after past alerts, by
+//     kind; every mean/median/hitRate is null when gated below minN (an
+//     honest unknown, never a fabricated stat) — render `note` + `method`.
+// (d) /api/anomalies rows now also carry {measure, value, proxy} — additive
+//     OPTIONAL fields (older daemons omit them); declaration-merged into
+//     AnomalyRow below, so this file stays append-only.
+
+/** One composite factor leg (exactly 11 per verdict, fixed order). */
+export interface CompositeFactor {
+  /** technical|expectancy|forecast|sentiment|gbm|meanrev|ranking|regime|insiders|shortvol|breakout */
+  key: string;
+  verdict: -1 | 0 | 1; // bearish | neutral/no-read | bullish
+  evidence: string; // plain-English basis — render verbatim
+  skillHitRate?: number | null; // measured per-leg hit rate; absent/null = unmeasured
+  skillIC?: number | null; // measured per-leg IC; absent/null = unmeasured
+  skillN?: number | null; // samples behind the skill stats
+  gated: boolean; // true = leg excluded from the score
+  gateReason?: string; // why (present when gated)
+}
+
+/** One additive ledger entry (leg → contribution in percentage points). */
+export interface CompositeLedgerEntry {
+  leg: string;
+  prob?: number | null; // the leg's probability input, when it has one
+  contribPp: number;
+}
+
+/** The percentage-point ledger reconciling factor legs to the calibrated edge. */
+export interface CompositeLedger {
+  method: string; // how contributions were attributed — render verbatim
+  exact: boolean; // true = entries sum exactly to targetPp
+  entries: CompositeLedgerEntry[] | null;
+  sumPp: number;
+  targetPp: number;
+}
+
+/** GET /api/composite — no verdict yet (honest miss; `reason` says why). */
+export interface CompositeUnavailable {
+  available: false;
+  symbol: string;
+  market: Market;
+  reason: string;
+  curveNote: string; // render verbatim
+}
+
+/** GET /api/composite — the full verdict. */
+export interface CompositeAvailable {
+  available: true;
+  symbol: string;
+  market: Market;
+  horizon: Horizon;
+  ts: number;
+  score: number; // 1–10 composite
+  curvePct: number;
+  edge: number;
+  edgeLine: string; // render verbatim
+  rawProb: number;
+  calProb: number;
+  nUsed: number; // ensemble legs behind calProb
+  predTs: number; // ts of the prediction the verdict is built on
+  factors: CompositeFactor[]; // exactly 11, fixed order (see CompositeFactor.key)
+  ledger: CompositeLedger;
+  curveNote: string; // render verbatim
+  edgeNote: string; // render verbatim
+  trackLabel: string; // render verbatim
+}
+
+/** GET /api/composite payload — discriminate on `available`. */
+export type Composite = CompositeUnavailable | CompositeAvailable;
+
+/** One /api/composite/top ranking row. */
+export interface CompositeTopRow {
+  symbol: string;
+  market: Market;
+  horizon: Horizon;
+  ts: number;
+  score: number;
+  curvePct: number;
+  edge: number;
+  rank: number; // 1 = best
+  prevRank: number | null; // null = not present in the previous ranking
+  rankChange: number | null; // null = no previous rank to compare
+}
+
+/** GET /api/composite/top payload. */
+export interface CompositeTop {
+  horizon: Horizon;
+  rows: CompositeTopRow[] | null;
+  n: number; // rows returned
+  total: number; // symbols eligible before the limit
+  minCurveN: number;
+  curveNote: string; // render verbatim
+  edgeNote: string; // render verbatim
+  rankNote: string; // render verbatim
+  trackLabel: string; // render verbatim
+}
+
+/** Measured forward returns after one alert kind (nulls = gated below minN). */
+export interface AlertKindOutcome {
+  kind: string;
+  n: number; // alerts of this kind in the window
+  n1d: number; // alerts with a resolved 1d forward return
+  n5d: number;
+  mean1d: number | null; // null = gated (n1d < minN) — an honest unknown
+  median1d: number | null;
+  hitRate1d: number | null;
+  gated1d: boolean;
+  mean5d: number | null;
+  median5d: number | null;
+  gated5d: boolean;
+}
+
+/** GET /api/alert-outcomes payload. */
+export interface AlertOutcomes {
+  kinds: AlertKindOutcome[] | null;
+  days: number; // lookback actually used
+  sinceTs: number;
+  minN: number; // gate floor per kind/window
+  note: string; // render verbatim
+  method: string; // how forward returns were measured — render verbatim
+}
+
+/** /api/anomalies rows also state their measurement basis (additive; older daemons omit). */
+export interface AnomalyRow {
+  measure?: "z" | "ratio"; // which statistic `value` is
+  value?: number; // the measured statistic (the same number `detail` states)
+  proxy?: boolean; // true = stock volume-side proxy — render proxyNote
+}
+
+/** Fetch one symbol's composite verdict (union — check `available`). */
+export function composite(symbol: string, market: Market) {
+  return get<Composite>(`/api/composite?${q(symbol, market)}`);
+}
+
+/** Fetch the fleet composite ranking (no market = both markets). */
+export function compositeTop(limit = 20, market?: Market) {
+  const p = new URLSearchParams({ limit: String(limit) });
+  if (market) p.set("market", market);
+  return get<CompositeTop>(`/api/composite/top?${p.toString()}`);
+}
+
+/** Fetch measured post-alert forward returns by alert kind. */
+export function alertOutcomes(days = 30) {
+  return get<AlertOutcomes>(`/api/alert-outcomes?days=${days}`);
+}
+
+// ── live-feed wave (SSE push) ────────────────────────────────────────────
+// The daemon streams the newest 1s microstructure snapshot over Server-Sent
+// Events so the UI reflects the live book at 1 Hz+ without REST polling. The
+// same-origin URL is proxied to the daemon by src/app/api/[...path]/route.ts,
+// which passes the streaming body through untouched. `ms` is the server tick
+// (clamped daemon-side to [250, 10000]); the browser EventSource sends the
+// session cookie automatically same-origin.
+export function snapStreamUrl(symbol: string, market: Market, ms = 1000): string {
+  const p = new URLSearchParams({ symbol, market, ms: String(ms) });
+  return `${API_BASE}/api/stream/snaps?${p.toString()}`;
+}
+
+// ── LIVE tab wave (TradingView webhook pipeline) — appended block; keep new
+// client functions at the END of this file so parallel edits by other agents
+// never collide. GET /api/tv-status answers "is the TradingView webhook + its
+// public tunnel + the streamed-symbol firing pipeline live?"; GET
+// /api/tv-signals is the recent raw-alert feed.
+
+/** One received TradingView webhook alert (raw; feed is newest-first). */
+export interface TVSignal {
+  id: number;
+  symbol?: string; // resolved SignalDeck symbol (absent = unmatched ticker)
+  market?: string;
+  ticker: string; // raw ticker as the alert arrived
+  action: string;
+  price?: number;
+  message: string;
+  ts: number;
+  seen: boolean;
+}
+
+/** One streamed symbol's firing tally in the /api/tv-status grid. */
+export interface TvStatusSymbol {
+  symbol: string;
+  market: string;
+  count: number;
+  lastFiredAt: number | null; // null = no alert has resolved to this symbol yet
+}
+
+/** GET /api/tv-status — the TradingView webhook pipeline's health at a glance.
+ *  publicHosts is the ngrok tunnel host(s) (never localhost); tunnelReachable
+ *  is a best-effort self-probe, null when no public host is configured. */
+export interface TvStatus {
+  secretConfigured: boolean;
+  webhookPath: string;
+  publicHosts: string[];
+  tunnelReachable: boolean | null;
+  tunnelCheckedAt: number | null;
+  total: number;
+  last24h: number;
+  lastAt: number | null;
+  lastTicker: string;
+  symbols: TvStatusSymbol[];
+}
+
+/** Webhook + tunnel + per-symbol firing health for the LIVE tab. */
+export function tvStatus() {
+  return get<TvStatus>("/api/tv-status");
+}
+
+/** The recent raw TradingView webhook alerts (newest first). */
+export function tvSignals(limit = 30) {
+  return get<TVSignal[]>(`/api/tv-signals?limit=${limit}`);
+}
+
+// ── TradingView external rating (tv-rating worker, 15m) — appended ────────
+/** GET /api/tv-rating — TradingView's OWN technical-analysis rating for one
+ *  symbol (public scanner, delayed). External context, NOT our model. */
+export interface TVRating {
+  available: boolean;
+  symbol: string;
+  market: string;
+  reason?: string;
+  ts?: number;
+  recoAll?: number;
+  recoMA?: number;
+  recoOther?: number;
+  rsi?: number;
+  close?: number;
+  label?: string;
+  note: string;
+}
+
+export const tvRating = (symbol: string, market: Market) =>
+  get<TVRating>(`/api/tv-rating?symbol=${encodeURIComponent(symbol)}&market=${market}`);
+
+// ── MODEL EVOLUTION wave (self-audit + learned-model history) — appended ──
+// GET /api/self-audit is the once-per-day deterministic auditor's latest
+// findings (calibration drift, prediction bias, factor-IC sign flips);
+// GET /api/model-evolution is the learned model's history over a trailing
+// window — adaptive blend weights per (regime, leg) and per-leg factor-IC
+// trend. Points ascend by ts; gaps are honest gaps — never interpolate.
+
+/** Status vocabulary shared by self-audit findings and factor-skill points. */
+export type AuditStatus =
+  | "ok"
+  | "degrading"
+  | "over_confident"
+  | "under_confident"
+  | "sign_flip"
+  | "insufficient";
+
+/** One deterministic self-audit finding. metric ∈ "calibration:1d|1w",
+ *  "prediction_bias:1d|1w", "factor_ic:<leg>". */
+export interface SelfAuditFinding {
+  ts: number;
+  metric: string;
+  value: number;
+  status: AuditStatus;
+  detail: string; // carries thresholds + n — render verbatim
+  symbolId?: number;
+}
+
+/** GET /api/self-audit payload. */
+export interface SelfAudit {
+  note: string; // render verbatim
+  generatedTs: number;
+  empty: boolean; // true = the once-per-day auditor hasn't produced findings yet
+  findings: SelfAuditFinding[];
+}
+
+/** One learned-blend-weight snapshot. */
+export interface EvolutionWeightPoint {
+  ts: number;
+  weight: number;
+}
+
+/** Weight history for one (regime cell, ensemble leg). */
+export interface EvolutionWeightSeries {
+  regime: string;
+  leg: string;
+  points: EvolutionWeightPoint[]; // ascending ts; gaps are honest gaps
+}
+
+/** One measured factor-IC point ("insufficient" = withheld below the gate). */
+export interface FactorSkillPoint {
+  ts: number;
+  ic: number;
+  status: AuditStatus;
+}
+
+/** Factor-IC trend for one ensemble leg. */
+export interface FactorSkillSeries {
+  leg: string;
+  points: FactorSkillPoint[]; // ascending ts; gaps are honest gaps
+}
+
+/** GET /api/model-evolution payload. Arrays are never null. */
+export interface ModelEvolution {
+  note: string; // render verbatim
+  days: number; // lookback actually used
+  weights: EvolutionWeightSeries[];
+  factorSkill: FactorSkillSeries[];
+}
+
+/** The latest deterministic self-audit findings. */
+export function selfAudit() {
+  return get<SelfAudit>("/api/self-audit");
+}
+
+/** Learned-model history over the trailing window (default 30 days). */
+export function modelEvolution(days = 30) {
+  return get<ModelEvolution>(`/api/model-evolution?days=${days}`);
+}
+
+// ── CROSS-SECTIONAL ALPHA wave (/api/alphax) — appended ───────────────────
+// The pooled cross-sectional model's per-horizon status: purged walk-forward
+// OOS grade, gate state with a stated reason, and — ONLY while ungated — the
+// top-20 current symbol scores (RELATIVE to the same-day universe, never
+// absolute direction). Go nil slices arrive as JSON null — `?? []` topScores.
+
+/** Purged walk-forward out-of-sample grade for one alpha-model horizon. */
+export interface AlphaXGrade {
+  lift: number; // accuracy minus base rate, as a fraction (render as pp)
+  auc: number;
+  accuracy: number;
+  baseRate: number;
+  brier?: number;
+  nTrain: number;
+  nTest: number;
+}
+
+/** One symbol's current alpha score — P(top half of the universe). */
+export interface AlphaXTopScore {
+  symbol: string;
+  prob: number;
+  ts: number;
+}
+
+/** One horizon's model status. available:false = no graded model yet. */
+export interface AlphaXHorizon {
+  available: boolean;
+  ts?: number;
+  gated: boolean;
+  gateReason?: string; // stated reason — render verbatim
+  grade?: AlphaXGrade;
+  topScores?: AlphaXTopScore[] | null; // only while ungated; null when absent
+  scoresNote?: string; // "relative rank, not direction" — render verbatim
+}
+
+/** GET /api/alphax payload. Horizons keyed "1d" / "1w". */
+export interface AlphaX {
+  note: string; // render verbatim
+  horizons: Partial<Record<"1d" | "1w", AlphaXHorizon>>;
+}
+
+/** The pooled cross-sectional alpha model's per-horizon status. */
+export function alphaX() {
+  return get<AlphaX>("/api/alphax");
+}
+
+// ── NEWS-TRENDS wave (/api/news-trends) — appended ────────────────────────
+// One symbol's 30d headline-volume series + live news-volume z (null with a
+// stated gate reason when the baseline can't support one) + the fleet's
+// top-10 trending headline tokens over the last 24h. Descriptive attention,
+// not a forecast. Go nil slices arrive as JSON null — `?? []` every array.
+
+/** One day's headline count (zero-news days are simply absent). */
+export interface NewsVolumeDay {
+  day: string; // YYYY-MM-DD (UTC)
+  n: number;
+}
+
+/** One fleet-wide trending headline token. */
+export interface FleetToken {
+  token: string;
+  count: number; // headline occurrences (once per headline)
+  symbols: number; // distinct symbols whose headlines used it
+}
+
+/** GET /api/news-trends payload. */
+export interface NewsTrends {
+  symbol: string;
+  volumeSeries: NewsVolumeDay[] | null; // oldest first; null when empty
+  day: string;
+  todayCount: number;
+  latestZ: number | null; // null = honest absence, never a fabricated 0
+  zGateReason?: string; // stated reason when latestZ is withheld
+  fleetTokens: FleetToken[] | null;
+  note: string; // render verbatim
+}
+
+/** One symbol's headline-volume trend + the fleet token board. */
+export const newsTrends = (symbol: string, market: Market) =>
+  get<NewsTrends>(`/api/news-trends?symbol=${encodeURIComponent(symbol)}&market=${market}`);
+
+// ── STRATEGY-LAB wave (/api/strategy-lab) — appended ──────────────────────
+// Classic published strategies backtested walk-forward on our own bars with
+// costs. Fleet aggregates always; per-symbol rows when ?symbol= is passed.
+// cagr/winRate are only honest when their flags say so — gate on them.
+
+/** One (symbol, strategy) backtest row. */
+export interface StrategyResultRow {
+  strategy: string;
+  ts: number;
+  totalReturn: number;
+  cagr: number; // only show when cagrReported
+  sharpe: number;
+  maxDrawdown: number;
+  winRate: number; // only show when winRateMeaningful
+  nTrades: number;
+  cagrReported: boolean;
+  winRateMeaningful: boolean;
+  nBars: number;
+}
+
+/** Per-strategy fleet aggregate (sorted by median Sharpe by the daemon). */
+export interface StrategyFleetAgg {
+  strategy: string;
+  nSymbols: number;
+  medianSharpe: number;
+  pctProfitable: number; // fraction of symbols with total return > 0
+  medianTotalRet: number;
+}
+
+/** GET /api/strategy-lab payload. symbol/strategies only with ?symbol=. */
+export interface StrategyLab {
+  symbol?: string;
+  strategies?: StrategyResultRow[] | null; // null when the daemon has none
+  emptyNote?: string; // stated reason for an empty symbol — render verbatim
+  fleet: StrategyFleetAgg[] | null;
+  note: string; // render verbatim
+}
+
+/** Fleet table alone (no args) or fleet + one symbol's per-strategy rows. */
+export function strategyLab(symbol?: string, market?: Market) {
+  return get<StrategyLab>(
+    symbol && market ? `/api/strategy-lab?${q(symbol, market)}` : "/api/strategy-lab",
+  );
 }

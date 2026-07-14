@@ -13,7 +13,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { api, filings, type Filing, type NewsItem } from "@/lib/api";
+import { api, filings, pollMs, POLL_DEFAULT, type Filing, type NewsItem } from "@/lib/api";
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -74,7 +74,7 @@ function SymbolChip({ symbol }: { symbol?: string }) {
   return (
     <Link
       href={`/s/${market}/${encodeURIComponent(symbol)}`}
-      className="chip cursor-pointer px-2 py-[1px] text-[0.68rem] font-bold tracking-wide transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)]"
+      className="chip mono cursor-pointer px-2 py-[1px] text-[0.75rem] font-bold tracking-wide transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)]"
     >
       {symbol}
     </Link>
@@ -84,13 +84,13 @@ function SymbolChip({ symbol }: { symbol?: string }) {
 function Row({ it }: { it: FeedItem }) {
   return (
     <div
-      className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t px-4 py-2 text-[0.78rem]"
+      className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t px-4 py-2 text-[0.75rem]"
       style={{ borderColor: "var(--border)" }}
     >
       <SymbolChip symbol={it.symbol} />
       {it.kind === "filing" ? (
         <span
-          className="chip px-2 py-[1px] text-[0.65rem] tracking-wider"
+          className="chip px-2 py-[1px] text-[0.75rem] tracking-wider"
           style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
         >
           sec-filing
@@ -99,14 +99,14 @@ function Row({ it }: { it: FeedItem }) {
         it.sentiment &&
         it.sentiment !== "unrated" && (
           <span
-            className="chip px-2 py-[1px] text-[0.65rem] tracking-wider"
+            className="chip px-2 py-[1px] text-[0.75rem] tracking-wider"
             style={{ color: sentimentColor(it.sentiment), borderColor: sentimentColor(it.sentiment) }}
           >
             {it.sentiment}
           </span>
         )
       )}
-      <span className="tnum ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>
+      <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
         {ago(it.ts)}
       </span>
       <span className="w-full leading-relaxed">
@@ -115,15 +115,14 @@ function Row({ it }: { it: FeedItem }) {
             href={it.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="cursor-pointer transition-colors duration-150 hover:text-[var(--accent)]"
-            style={{ color: "var(--text)" }}
+            className="cursor-pointer text-[var(--text)] transition-colors duration-150 hover:text-[var(--accent)]"
           >
             {it.headline}
           </a>
         ) : (
           it.headline
         )}
-        <span className="ml-2 text-[0.68rem]" style={{ color: "var(--faint)" }}>
+        <span className="ml-2 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           {it.kind === "news" ? it.source : "SEC EDGAR"}
         </span>
       </span>
@@ -152,10 +151,11 @@ export default function HomeFeed({ limit = 40 }: { limit?: number }) {
           setError(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, 60_000);
+    // POLL_DEFAULT tier — managed loop (hidden-tab pause, failure backoff).
+    const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [limit, retryTick]);
 
@@ -170,13 +170,13 @@ export default function HomeFeed({ limit = 40 }: { limit?: number }) {
       <div className="panel-h flex-wrap gap-2">
         <span>TOP STORIES / LATEST</span>
         <span
-          className="text-[0.68rem] font-normal normal-case tracking-normal"
+          className="text-[0.75rem] font-normal normal-case tracking-normal"
           style={{ color: "var(--faint)" }}
         >
           news + SEC filings in plain English, one time-ordered stream
         </span>
         {items !== null && (
-          <span className="tnum ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>
+          <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
             {items.length} items
           </span>
         )}
@@ -209,16 +209,16 @@ export default function HomeFeed({ limit = 40 }: { limit?: number }) {
       {top.length > 0 && (
         <div className="grid grid-cols-1 gap-2 border-t p-3 sm:grid-cols-3" style={{ borderColor: "var(--border)" }}>
           {top.map((it) => (
-            <div key={`top:${it.key}`} className="rounded border p-3" style={{ borderColor: "var(--border)", background: "var(--panel2)" }}>
+            <div key={`top:${it.key}`} className="rounded-lg border p-3" style={{ borderColor: "var(--border)", background: "var(--panel2)" }}>
               <div className="flex items-center gap-2">
                 <SymbolChip symbol={it.symbol} />
                 <span
-                  className="text-[0.65rem] font-bold tracking-wider"
+                  className="text-[0.75rem] font-bold tracking-wider"
                   style={{ color: sentimentColor(it.sentiment) }}
                 >
                   {it.sentiment?.toUpperCase()}
                 </span>
-                <span className="tnum ml-auto text-[0.65rem]" style={{ color: "var(--faint)" }}>
+                <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
                   {ago(it.ts)}
                 </span>
               </div>
@@ -226,7 +226,7 @@ export default function HomeFeed({ limit = 40 }: { limit?: number }) {
                 href={it.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-1.5 block cursor-pointer text-[0.78rem] font-bold leading-snug transition-colors duration-150 hover:text-[var(--accent)]"
+                className="mt-1.5 block cursor-pointer text-[0.75rem] font-bold leading-snug transition-colors duration-150 hover:text-[var(--accent)]"
               >
                 {it.headline}
               </a>
@@ -245,7 +245,7 @@ export default function HomeFeed({ limit = 40 }: { limit?: number }) {
 
       {filingsNote && (
         <p
-          className="border-t px-4 py-2 text-[0.68rem] leading-relaxed"
+          className="border-t px-4 py-2 text-[0.75rem] leading-relaxed"
           style={{ borderColor: "var(--border)", color: "var(--faint)" }}
         >
           {filingsNote}

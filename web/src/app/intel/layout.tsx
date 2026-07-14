@@ -13,9 +13,13 @@ import HubTabs from "@/components/HubTabs";
 import IntelShared from "@/components/intel/IntelShared";
 
 export const metadata: Metadata = {
-  title: "Intel — SignalDeck",
+  title: "Intel",
+  description:
+    "All stock intelligence in one hub — news, SEC filings, insiders, institutions, congressional trades, the company directory and short volume.",
 };
 
+// Tabs beyond the first five fold into HubTabs' "More research" menu
+// (progressive disclosure) — order here decides what stays visible.
 const TABS = [
   { href: "/intel/news", label: "NEWS" },
   { href: "/intel/filings", label: "FILINGS" },

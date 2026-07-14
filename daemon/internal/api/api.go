@@ -89,7 +89,26 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerStage5(mux)                                  // Visual-hub Stage 5: GET /api/predictions/latest — SIGNALS hub predictions table in one batched read (latest calibrated prediction per active symbol; independent-N gate + backtested-not-live label carried in the payload)
 	d.registerCompanies(mux)                               // Signal8 wave Stage 5: COMPANIES DIRECTORY (free EDGAR company map joined to our tracked bars/fundamentals; untracked rows honest "—") + GET /api/earnings-est (filing-cadence estimate, labeled — never a confirmed date)
 	d.registerNotify(mux)                                  // Stage 3 alert delivery: GET /api/notify-status — which remote transports (Discord/Telegram/webhook) are configured + last delivery/redacted error; macOS listed with an honest "untracked" note; email honestly absent (needs SMTP/provider — future)
+	d.registerTVWebhook(mux)                               // TradingView wave: POST /api/tv-webhook (shared-secret inbound Pine alerts) + GET /api/tv-signals (received signals, newest first)
+	d.registerTVStatus(mux)                                // TradingView wave: GET /api/tv-status — webhook ops (secret set? public tunnel host + best-effort reachability, received-signal totals, per-streamed-symbol fired counts); never echoes the secret
 	d.registerShorts(mux)                                  // Stage 5 FINRA Reg SHO: GET /api/shorts — daily short sale VOLUME ratio (per-symbol series + fleet-wide latest extremes w/ stated min-volume floor); caveat verbatim in every payload: NOT short interest, includes market makers, high ratio NOT directly bearish
+	// ── SIGNALS-hub overhaul (appended — keep new routes at the END of this
+	// block so parallel route edits by other agents never collide) ──────────
+	d.registerStream(mux)         // live-feed wave: SSE push of the newest 1s microstructure snap (GET /api/stream/snaps) so the UI keeps up at 1 Hz+ without REST polling
+	d.registerComposite(mux)      // composite SignalScore: GET /api/composite (one symbol's forced-curve 1-10 + factor tiles + additive ledger) + GET /api/composite/top (ranked leaderboard w/ rank-change vs previous day); whole-pass gated below 30 usable predictions — a rank, never a probability
+	d.registerTVRating(mux)       // TradingView scanner ratings: GET /api/tv-rating — the LATEST TradingView OWN technical-analysis rating for a tracked symbol (reco_all/ma/other + rsi + close + label), ingested by the tv-rating worker from TradingView's public scanner; EXTERNAL/descriptive/delayed, NOT our model and not advice (caveat verbatim)
+	d.registerSelfAudit(mux)      // self-audit / drift watchdog: GET /api/self-audit — latest finding per metric (calibration drift, factor-IC sign flips, prediction bias) measured deterministically from resolved history; every check gated at n>=30 (status "insufficient" below), never a false alarm
+	d.registerModelEvolution(mux) // model-evolution: GET /api/model-evolution — trailing-N-day adaptive-weight snapshots (per regime cell + leg) and per-leg factor-IC trend from self_audit, as compact chartable series; honest gaps where no data, no interpolation
+	// ── DATA-EXPANSION wave (appended — keep new routes at the END of this
+	// block so parallel route edits by other agents never collide) ──────────
+	d.registerDataExpansion(mux) // six free external context reads, every payload carrying its caveat verbatim: /api/short-interest (FINRA bi-monthly SI, ~2wks lagged), /api/crypto-perp (Hyperliquid funding/OI — one DEX venue), /api/cot (CFTC weekly positioning, not prediction), /api/stocktwits (retail page-snapshot sentiment), /api/wiki-attention (page views — attention proxy, not a signal), /api/cboe-pc (market-wide put/call — hedging gauge); DESCRIPTIVE context only, nothing here is a scored factor
+	// ── NEWS-TRENDS + STRATEGY-LAB wave (appended — keep new routes at the
+	// END of this block so parallel route edits by other agents never collide) ─
+	d.registerNewsTrends(mux)  // news trends: GET /api/news-trends — per-symbol 30d headline-volume series + own-baseline z (null w/ stated gate reason below 10 active prior days) + fleet top-10 trending headline tokens; caveat verbatim: headline-frequency trend — descriptive attention, not a forecast
+	d.registerStrategyLab(mux) // strategy lab: GET /api/strategy-lab[?symbol&market] — 8 classic published strategies replayed through the bias-free next-bar-fill backtester on our own ~2y daily bars with costs (per-row CAGRReported/WinRateMeaningful honesty flags) + fleet aggregates; caveat verbatim: in-sample history, not live performance and not advice
+	// ── CROSS-SECTIONAL ALPHA wave (appended — keep new routes at the END of
+	// this block so parallel route edits by other agents never collide) ─────
+	d.registerAlphaX(mux) // pooled cross-sectional alpha model: GET /api/alphax — per-horizon purged-walk-forward OOS grade + gate state + (only while measured OOS lift > 0) top-20 current symbol scores framed as RELATIVE to the same-day universe median; caveat verbatim: gated off (never blended, never displayed as signal) until measured OOS lift > 0; backtested, not a live track record
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,

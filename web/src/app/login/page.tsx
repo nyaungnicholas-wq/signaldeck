@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PagePurpose from "@/components/PagePurpose";
 import { api } from "@/lib/api";
 
@@ -13,6 +13,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const errorRef = useRef<HTMLDivElement | null>(null);
+
+  // On a failed submit the error box appears; move focus to it so keyboard
+  // and screen-reader users land on the message.
+  useEffect(() => {
+    if (error) errorRef.current?.focus();
+  }, [error]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -34,64 +41,100 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <PagePurpose
           id="login"
-          text="Sign in (or create an account) so SignalDeck can keep your watchlist and settings. Everything else on the site is read-only market analysis — an account changes what you can save, not what the data says."
+          text="SignalDeck is a private workspace — sign in to open your dashboard, signals, and research, or create an account to get started. Everything inside is descriptive market analysis, not financial advice."
         />
       </div>
-      <form
-        onSubmit={submit}
-        className="w-full max-w-sm border border-[var(--border)] bg-[var(--panel)] p-6"
-      >
-        <div className="mb-1 text-xs tracking-widest text-[var(--faint)]">
-          SIGNALDECK
+      <form onSubmit={submit} className="panel w-full max-w-sm">
+        <div className="panel-h">
+          <span
+            aria-hidden="true"
+            className="inline-block h-2 w-2 shrink-0 rounded-full"
+            style={{ background: "var(--accent)" }}
+          />
+          <span className="mono tracking-[0.22em]">SIGNALDECK</span>
         </div>
-        <h1 className="mb-6 text-lg font-bold text-[var(--text)]">
-          {mode === "login" ? "SIGN IN" : "CREATE ACCOUNT"}
-        </h1>
+        <div className="p-6">
+          <h1 className="mb-6 text-lg font-bold tracking-widest text-[var(--text)]">
+            {mode === "login" ? "SIGN IN" : "CREATE ACCOUNT"}
+          </h1>
 
-        <label className="mb-1 block text-xs text-[var(--dim)]">USERNAME</label>
-        <input
-          autoFocus
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          autoComplete="username"
-          className="mb-4 w-full border border-[var(--border)] bg-[var(--panel2)] px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
-        />
+          <label
+            htmlFor="login-username"
+            className="mb-1 block text-xs tracking-wider text-[var(--dim)]"
+          >
+            USERNAME
+          </label>
+          <input
+            autoFocus
+            id="login-username"
+            name="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "login-error" : undefined}
+            className="mono mb-4 w-full rounded-lg border border-[var(--border)] bg-[var(--panel2)] px-3 py-2 text-sm text-[var(--text)] outline-none transition-colors duration-150 focus:border-[var(--accent)]"
+          />
 
-        <label className="mb-1 block text-xs text-[var(--dim)]">PASSWORD</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoComplete={mode === "login" ? "current-password" : "new-password"}
-          className="mb-4 w-full border border-[var(--border)] bg-[var(--panel2)] px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
-        />
+          <label
+            htmlFor="login-password"
+            className="mb-1 block text-xs tracking-wider text-[var(--dim)]"
+          >
+            PASSWORD
+          </label>
+          <input
+            type="password"
+            id="login-password"
+            name="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "login-error" : undefined}
+            className="mono mb-4 w-full rounded-lg border border-[var(--border)] bg-[var(--panel2)] px-3 py-2 text-sm text-[var(--text)] outline-none transition-colors duration-150 focus:border-[var(--accent)]"
+          />
 
-        {error && (
-          <div className="mb-4 border border-[var(--ask)] bg-[var(--ask-dim)] px-3 py-2 text-xs text-[var(--ask)]">
-            {error}
-          </div>
-        )}
+          {error && (
+            <div
+              id="login-error"
+              role="alert"
+              tabIndex={-1}
+              ref={errorRef}
+              className="mb-4 rounded-lg border border-[var(--ask)] bg-[var(--ask-dim)] px-3 py-2 text-xs leading-relaxed text-[var(--ask)]"
+            >
+              {error}
+            </div>
+          )}
 
-        <button
-          type="submit"
-          disabled={busy || !username || !password}
-          className="w-full border border-[var(--accent)] bg-transparent px-3 py-2 text-sm font-bold tracking-widest text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--bg)] disabled:opacity-40"
-        >
-          {busy ? "…" : mode === "login" ? "SIGN IN" : "REGISTER"}
-        </button>
+          <button
+            type="submit"
+            disabled={busy || !username || !password}
+            aria-busy={busy}
+            aria-label={
+              busy
+                ? mode === "login"
+                  ? "signing in…"
+                  : "creating account…"
+                : undefined
+            }
+            className="w-full cursor-pointer rounded-lg border border-[var(--accent)] bg-transparent px-3 py-2 text-sm font-bold tracking-widest text-[var(--accent)] transition-colors duration-150 hover:bg-[var(--accent)] hover:text-[var(--bg)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy ? "…" : mode === "login" ? "SIGN IN" : "REGISTER"}
+          </button>
 
-        <button
-          type="button"
-          onClick={() => {
-            setMode(mode === "login" ? "register" : "login");
-            setError(null);
-          }}
-          className="mt-4 w-full text-center text-xs text-[var(--dim)] hover:text-[var(--text)]"
-        >
-          {mode === "login"
-            ? "no account? register →"
-            : "have an account? sign in →"}
-        </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode(mode === "login" ? "register" : "login");
+              setError(null);
+            }}
+            className="mt-4 w-full cursor-pointer text-center text-xs text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]"
+          >
+            {mode === "login"
+              ? "no account? register →"
+              : "have an account? sign in →"}
+          </button>
+        </div>
       </form>
     </div>
   );

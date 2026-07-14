@@ -103,15 +103,15 @@ export default function EquityChart({ history }: { history?: HudHistory | null }
                 stroke="var(--border)"
                 strokeDasharray="4 4"
               />
-              <text x={W - PX} y={y(100) - 4} textAnchor="end" fontSize="10" fill="var(--faint)">
+              <text x={W - PX} y={y(100) - 4} textAnchor="end" fontSize="12" fill="var(--faint)">
                 100
               </text>
             </>
           )}
-          <text x={PX} y={y(max) + 10} fontSize="10" fill="var(--faint)" className="tnum">
+          <text x={PX} y={y(max) + 10} fontSize="12" fill="var(--faint)" className="tnum">
             {max.toFixed(1)}
           </text>
-          <text x={PX} y={y(min) - 4} fontSize="10" fill="var(--faint)" className="tnum">
+          <text x={PX} y={y(min) - 4} fontSize="12" fill="var(--faint)" className="tnum">
             {min.toFixed(1)}
           </text>
           {spySegs.map((pts, i) => (

@@ -4,7 +4,7 @@
 // paper) as synced from trader-hud (:8787) by the SignalDeck daemon.
 
 import { useEffect, useState } from "react";
-import { api, pollMs, type Hud } from "@/lib/api";
+import { api, pollMs, POLL_FAST, type Hud } from "@/lib/api";
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -37,10 +37,12 @@ export default function HudPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     tick();
-    const t = setInterval(tick, pollMs());
+    // POLL_FAST: an actively-watched dashboard, but the daemon itself only
+    // syncs trader-hud periodically — nothing here moves per-second.
+    const stop = pollMs(tick, POLL_FAST);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 

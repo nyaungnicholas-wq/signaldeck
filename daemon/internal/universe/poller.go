@@ -9,17 +9,21 @@
 //
 // ── FREE-TIER RATE BUDGET ────────────────────────────────────────────────
 // Alpaca free tier: 200 requests/minute; multi-symbol bars packs up to
-// MaxBatchSymbols (100) symbols per request. With SIGNALDECK_UNIVERSE_CAP=500:
+// MaxBatchSymbols (100) symbols per request. With SIGNALDECK_UNIVERSE_CAP=500,
+// each ~6h run fetches THREE timeframes (live-coverage extension):
 //
-//	500 symbols ÷ 100/batch          = 5 requests per page
-//	daily window is short → ~1 page  ⇒ ~5 requests per run
-//	requests are spaced by pagePause (300ms) and the run happens every ~6h
+//	1d (-10d window): 5 batches × ~1 page            ≈  5 requests
+//	1h (-10d window): 5 batches × ~1-2 pages         ≈  5-10 requests
+//	1m (-4d steady / -8d first-run heal): 5 batches
+//	   × several 10k-bar pages                        ≈ 40-100 requests
 //
-// Even the once-a-day full ~2y backfill (a few pages) stays in the low tens of
-// requests — a tiny fraction of the 200/min ceiling — and the client backs off
-// on any 429. The streamer's live 1m pipeline and the discovery screener share
-// the same account but run on their own cadences; none of them approaches the
-// limit. Nothing here ever hits paid data: feed=iex, adjustment=split only.
+// All pages are spaced by pagePause (300ms), so even the heaviest run spreads
+// its requests over well under a minute of wall time at <200/min, and the
+// client backs off on any 429. The streamer's live 1m pipeline and the
+// discovery screener share the same account but run on their own cadences;
+// none of them approaches the limit. Nothing here ever hits paid data:
+// feed=iex, adjustment=split only. Storage: broad 1m bars are bounded by the
+// same tiered retention as everything else (60d → compact to 1h → archive).
 package universe
 
 import (
@@ -84,7 +88,8 @@ type Poller struct {
 	FirstRunDelay time.Duration
 	Ival          time.Duration // 0 → DefaultInterval
 
-	first bool // set after the first Run so the stagger only applies once
+	first        bool // set after the first Run so the stagger only applies once
+	minuteHealed bool // first minute fetch uses a deeper heal window
 }
 
 // Name implements workers.Worker.
@@ -149,16 +154,46 @@ func (p *Poller) Run(ctx context.Context) (string, error) {
 
 	// Short daily window each poll — heals gaps + adds the latest sessions
 	// cheaply. (The one-time full history comes from Seed's deep backfill.)
-	start := time.Now().UTC().AddDate(0, 0, -10)
-	counts, err := p.Alpaca.BackfillDailyMulti(ctx, p.St, names, resolve, start)
+	now := time.Now().UTC()
+	counts, err := p.Alpaca.BackfillDailyMulti(ctx, p.St, names, resolve, now.AddDate(0, 0, -10))
 	if err != nil {
 		return "", err
 	}
-	total := 0
-	for _, n := range counts {
-		total += n
+
+	// LIVE-COVERAGE EXTENSION: the broad universe also gets 1h and 1m bars so
+	// symbol pages never show intraday coverage frozen at some old date (the
+	// "bars end 6 days ago" complaint). Same batched multi-symbol endpoint —
+	// see the rate-budget note above; hourly adds ~1 page per batch and minute
+	// a handful, all paced. Windows: 1h shares the daily heal window; 1m uses
+	// a deeper first-run heal (covers a week-long gap after downtime), then a
+	// short steady-state window that still spans weekends + Monday holidays.
+	// Upserts are idempotent, so overlapping windows never duplicate bars.
+	hCounts, err := p.Alpaca.BackfillHourlyMulti(ctx, p.St, names, resolve, now.AddDate(0, 0, -10))
+	if err != nil {
+		return "", fmt.Errorf("hourly: %w", err)
 	}
-	return fmt.Sprintf("refreshed daily bars for %d/%d universe symbols (%d bars)", len(counts), len(names), total), nil
+	minStart := now.AddDate(0, 0, -4)
+	if !p.minuteHealed {
+		minStart = now.AddDate(0, 0, -8)
+		p.minuteHealed = true
+	}
+	mCounts, err := p.Alpaca.BackfillMinuteMulti(ctx, p.St, names, resolve, minStart)
+	if err != nil {
+		return "", fmt.Errorf("minute: %w", err)
+	}
+
+	tally := func(m map[string]int) (int, int) {
+		t := 0
+		for _, n := range m {
+			t += n
+		}
+		return len(m), t
+	}
+	dn, dt := tally(counts)
+	hn, ht := tally(hCounts)
+	mn, mt := tally(mCounts)
+	return fmt.Sprintf("refreshed %d/%d universe symbols (1d %d, 1h %d, 1m %d bars; 1h %d, 1m %d syms)",
+		dn, len(names), dt, ht, mt, hn, mn), nil
 }
 
 // Seed registers the curated broad universe as active-for-daily (stream=0) and

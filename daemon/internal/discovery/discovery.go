@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/tvscanner"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -280,6 +281,7 @@ type Worker struct {
 	St        *store.Store
 	Client    *Client       // nil when no Alpaca keys → worker degrades to a skip
 	Subscribe SubscribeFunc // required for auto-add (nil disables auto-add)
+	TV        TVSource      // nil → Alpaca-only (whole-market wave, see banner below)
 	NowFn     func() time.Time
 	// tunables (zero → defaults)
 	Cap        int // active-symbol budget; 0 → SymbolCap()
@@ -313,10 +315,10 @@ func (w *Worker) dailyLimit() int {
 // Run performs one sweep: fetch screeners, upsert candidates, then auto-add
 // under budget. Degrades like NewsFetcher when no Alpaca keys are configured.
 func (w *Worker) Run(ctx context.Context) (string, error) {
-	if w.Client == nil {
-		return "skipped: no Alpaca keys", nil
+	if w.Client == nil && w.TV == nil {
+		return "skipped: no Alpaca keys and no TV scanner", nil
 	}
-	swept, upserted, err := w.sweep(ctx)
+	res, err := w.sweep(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -324,13 +326,29 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("swept %d candidates (%d recorded), auto-added %d", swept, upserted, added), nil
+	detail := fmt.Sprintf("swept alpaca %d + tv %d candidates (%d recorded), auto-added %d",
+		res.alpacaN, res.tvN, res.upserted, added)
+	if res.degraded != "" {
+		detail += "; degraded: " + res.degraded
+	}
+	return detail, nil
 }
 
-// sweep fetches both screener endpoints (each may independently fail — e.g. a
-// 404 on a moved path — as long as ONE succeeds), merges rows per symbol, and
-// upserts candidates that are not already actively ingested.
-func (w *Worker) sweep(ctx context.Context) (swept, upserted int, err error) {
+// sweepResult carries per-source counts so the worker detail can honestly
+// say where candidates came from and what degraded.
+type sweepResult struct {
+	alpacaN  int    // symbols surfaced by Alpaca's screeners
+	tvN      int    // ADDITIONAL symbols surfaced by TradingView's whole-market scan
+	upserted int    // candidate rows recorded
+	degraded string // non-empty when a source failed (never fatal while one works)
+}
+
+// sweep fetches the Alpaca screener endpoints (each may independently fail —
+// e.g. a 404 on a moved path) AND TradingView's whole-market scan (see the
+// WHOLE-MARKET banner below), merges rows per symbol, and upserts candidates
+// that are not already actively ingested. It fails only when EVERY source
+// failed — otherwise it degrades honestly and says so in the result.
+func (w *Worker) sweep(ctx context.Context) (sweepResult, error) {
 	type obs struct {
 		volume    float64
 		price     float64
@@ -353,27 +371,63 @@ func (w *Worker) sweep(ctx context.Context) (swept, upserted int, err error) {
 		return o
 	}
 
-	actives, errA := w.Client.MostActives(ctx, 20)
-	if errA != nil {
-		slog.Warn("universe-discovery: most-actives fetch failed — falling back to movers only", "err", errA)
-	}
-	for _, a := range actives {
-		if o := note(a.Symbol); o != nil {
-			o.volume = a.Volume
+	var res sweepResult
+	var errA, errM error
+	if w.Client != nil {
+		var actives []ActiveRow
+		actives, errA = w.Client.MostActives(ctx, 20)
+		if errA != nil {
+			slog.Warn("universe-discovery: most-actives fetch failed — falling back to movers only", "err", errA)
+		}
+		for _, a := range actives {
+			if o := note(a.Symbol); o != nil {
+				o.volume = a.Volume
+			}
+		}
+		var gainers, losers []MoverRow
+		gainers, losers, errM = w.Client.Movers(ctx, 10)
+		if errM != nil {
+			slog.Warn("universe-discovery: movers fetch failed — falling back to most-actives only", "err", errM)
+		}
+		for _, m := range append(gainers, losers...) {
+			if o := note(m.Symbol); o != nil {
+				o.pctChange = m.PercentChange
+				o.price = m.Price
+			}
 		}
 	}
-	gainers, losers, errM := w.Client.Movers(ctx, 10)
-	if errM != nil {
-		slog.Warn("universe-discovery: movers fetch failed — falling back to most-actives only", "err", errM)
-	}
-	for _, m := range append(gainers, losers...) {
-		if o := note(m.Symbol); o != nil {
-			o.pctChange = m.PercentChange
-			o.price = m.Price
+	alpacaFailed := w.Client == nil || (errA != nil && errM != nil)
+	res.alpacaN = len(order)
+
+	// WHOLE-MARKET source: TradingView's scanner screens EVERY listed US
+	// symbol, not just what Alpaca surfaces. Top by volume + top by |change|
+	// (gainers AND losers). A TV failure degrades to Alpaca-only, reported —
+	// never fatal while any source worked.
+	tvErr := w.tvSweep(ctx, func(name string, closePx, changePct, volume float64) {
+		if o := note(name); o != nil {
+			if closePx > 0 {
+				o.price = closePx
+			}
+			if volume > 0 {
+				o.volume = volume
+			}
+			if changePct != 0 {
+				o.pctChange = changePct
+			}
 		}
+	})
+	res.tvN = len(order) - res.alpacaN
+
+	if alpacaFailed && tvErr != nil {
+		return res, fmt.Errorf("all discovery sources failed: alpaca most-actives: %v; movers: %v; tv: %v", errA, errM, tvErr)
 	}
-	if errA != nil && errM != nil {
-		return 0, 0, fmt.Errorf("both screener endpoints failed: most-actives: %v; movers: %v", errA, errM)
+	switch {
+	case w.Client != nil && errA != nil && errM != nil:
+		res.degraded = "alpaca screeners failed, tv-only this sweep"
+	case tvErr != nil:
+		res.degraded = "tv scan failed, alpaca-only this sweep: " + tvErr.Error()
+	case w.TV == nil:
+		res.degraded = "no tv scanner configured, alpaca-only"
 	}
 
 	// Enrich most-actives share volume into dollar volume with one bulk
@@ -386,7 +440,7 @@ func (w *Worker) sweep(ctx context.Context) (swept, upserted int, err error) {
 		}
 	}
 	sort.Strings(need)
-	if len(need) > 0 {
+	if len(need) > 0 && w.Client != nil {
 		prices, err := w.Client.LatestPrices(ctx, need)
 		if err != nil {
 			slog.Warn("universe-discovery: latest-price fetch failed — dollar volume partial this sweep", "err", err)
@@ -413,11 +467,11 @@ func (w *Worker) sweep(ctx context.Context) (swept, upserted int, err error) {
 			DollarVol:  o.volume * o.price,
 			PctChange:  o.pctChange,
 		}); err != nil {
-			return len(seen), upserted, fmt.Errorf("upsert candidate %s: %w", sym, err)
+			return res, fmt.Errorf("upsert candidate %s: %w", sym, err)
 		}
-		upserted++
+		res.upserted++
 	}
-	return len(seen), upserted, nil
+	return res, nil
 }
 
 // autoAdd promotes the best qualifying candidates while under budget. Every
@@ -483,4 +537,61 @@ func (w *Worker) autoAdd(ctx context.Context) (int, error) {
 		added++
 	}
 	return added, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// WHOLE-MARKET DISCOVERY WAVE (appended block). Alpaca's screener only
+// surfaces its own most-actives/movers lists; TradingView's public scanner
+// (internal/ingest/tvscanner.ScanDiscovery, verified live 2026-07-10)
+// screens EVERY listed US symbol with a liquidity filter (volume > 1M &&
+// close > $3). Each sweep also pulls the top TVTopN by volume plus the top
+// TVTopN gainers AND losers by day change, merged into the SAME candidates
+// pipeline: dedupe against symbols already noted this sweep and already-
+// active symbols, same MinSweeps / DailyAutoAddLimit / stream-cap budget —
+// discovery feeds CANDIDATES, humans and the budget gate actual adds.
+// A TV failure degrades to Alpaca-only with the reason in the worker detail;
+// it NEVER fails the fleet while another source worked.
+
+// TVTopN is how many rows each TV discovery query pulls (top-N by volume,
+// top-N gainers, top-N losers).
+const TVTopN = 100
+
+// TVSource is the whole-market scan dependency (satisfied by
+// *tvscanner.Client; an interface so tests use fixtures, never live calls).
+type TVSource interface {
+	ScanDiscovery(ctx context.Context, screener, sortBy, sortOrder string, limit int) ([]tvscanner.DiscoveryRow, error)
+}
+
+// tvSweep pulls the three whole-market lists and feeds every row to add
+// (name, close, changePct, volume). Returns the first error when ALL
+// queries failed OR the source is unconfigured; partial success is success.
+func (w *Worker) tvSweep(ctx context.Context, add func(name string, closePx, changePct, volume float64)) error {
+	if w.TV == nil {
+		return fmt.Errorf("no tv scanner configured")
+	}
+	queries := []struct{ sortBy, sortOrder string }{
+		{"volume", "desc"}, // most traded market-wide
+		{"change", "desc"}, // top gainers
+		{"change", "asc"},  // top losers (|change| needs both tails)
+	}
+	var firstErr error
+	ok := false
+	for _, q := range queries {
+		rows, err := w.TV.ScanDiscovery(ctx, "america", q.sortBy, q.sortOrder, TVTopN)
+		if err != nil {
+			slog.Warn("universe-discovery: tv scan failed", "sortBy", q.sortBy, "sortOrder", q.sortOrder, "err", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		ok = true
+		for _, r := range rows {
+			add(r.Name, r.Close, r.ChangePct, r.Volume)
+		}
+	}
+	if !ok {
+		return firstErr
+	}
+	return nil
 }

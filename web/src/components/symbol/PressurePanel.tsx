@@ -59,12 +59,12 @@ export default function PressurePanel({
                   <span className="tnum">as of {fmtTs(sel.ts)}</span>
                 </div>
                 {sel.components.length === 0 ? (
-                  <p className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
+                  <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                     no component breakdown stored for this score.
                   </p>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-[0.8rem] tnum">
+                  <div className="table-wrap">
+                    <table className="w-full text-[0.75rem] tnum">
                       <thead>
                         <tr className="text-left text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
                           <th className="py-1.5 pr-3 font-medium" title="Signal component (e.g. momentum, imbalance)">
@@ -98,11 +98,11 @@ export default function PressurePanel({
                             >
                               {fmtScore(c.contrib)}
                             </td>
-                            <td className="py-1.5 text-[0.78rem]" style={{ color: "var(--faint)" }}>{c.note || "—"}</td>
+                            <td className="py-1.5 text-[0.75rem]" style={{ color: "var(--faint)" }}>{c.note || "—"}</td>
                           </tr>
                         ))}
                         <tr className="border-t" style={{ borderColor: "var(--border)" }}>
-                          <td className="py-1.5 pr-3 text-[0.78rem] tracking-wide" style={{ color: "var(--faint)" }}>
+                          <td className="py-1.5 pr-3 text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
                             TOTAL
                           </td>
                           <td colSpan={3} />
@@ -120,7 +120,7 @@ export default function PressurePanel({
                 )}
               </div>
             ) : (
-              <p className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
+              <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 no {horizon} score yet — pick another horizon above.
               </p>
             )}

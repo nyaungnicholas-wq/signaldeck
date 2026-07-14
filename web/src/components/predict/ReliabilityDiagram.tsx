@@ -69,7 +69,7 @@ export default function ReliabilityDiagram({ bins }: { bins: CalBin[] }) {
             strokeWidth="1"
             strokeOpacity={t === 0 || t === 1 ? 0 : 0.4}
           />
-          <text x={px(t)} y={H - M.bottom + 16} fontSize="9" fill="var(--faint)" textAnchor="middle">
+          <text x={px(t)} y={H - M.bottom + 16} fontSize="12" fill="var(--faint)" textAnchor="middle">
             {t.toFixed(2)}
           </text>
         </g>
@@ -85,7 +85,7 @@ export default function ReliabilityDiagram({ bins }: { bins: CalBin[] }) {
             strokeWidth="1"
             strokeOpacity={t === 0 || t === 1 ? 0 : 0.4}
           />
-          <text x={M.left - 8} y={py(t) + 3} fontSize="9" fill="var(--faint)" textAnchor="end">
+          <text x={M.left - 8} y={py(t) + 3} fontSize="12" fill="var(--faint)" textAnchor="end">
             {t.toFixed(2)}
           </text>
         </g>
@@ -104,7 +104,7 @@ export default function ReliabilityDiagram({ bins }: { bins: CalBin[] }) {
       <text
         x={px(0.82)}
         y={py(0.82) - 6}
-        fontSize="9"
+        fontSize="12"
         fill="var(--faint)"
         textAnchor="middle"
         transform={`rotate(-45 ${px(0.82)} ${py(0.82) - 6})`}
@@ -149,13 +149,13 @@ export default function ReliabilityDiagram({ bins }: { bins: CalBin[] }) {
       })}
 
       {/* axis titles */}
-      <text x={M.left + IW / 2} y={H - 6} fontSize="10" fill="var(--dim)" textAnchor="middle">
+      <text x={M.left + IW / 2} y={H - 6} fontSize="12" fill="var(--dim)" textAnchor="middle">
         mean predicted P(up)
       </text>
       <text
         x={13}
         y={M.top + IH / 2}
-        fontSize="10"
+        fontSize="12"
         fill="var(--dim)"
         textAnchor="middle"
         transform={`rotate(-90 13 ${M.top + IH / 2})`}

@@ -1,42 +1,65 @@
 @import "tailwindcss";
 
-/* SignalDeck design tokens — the TickStream terminal language, carried over.
-   OLED-dark, JetBrains Mono, green/red bid-ask semantics, amber accent. */
+/* SignalDeck design tokens — v2 "professional terminal".
+   The TickStream terminal heritage (OLED-dark, green/red bid-ask semantics,
+   amber accent) upgraded to a product-grade system: Inter for UI text with
+   JetBrains Mono reserved for data (.tnum / .mono / charts), layered surfaces
+   with real elevation, and shared nav-link states. */
 :root {
-  --bg: #0a0e14;
-  --panel: #10151f;
-  --panel2: #0d1219;
-  --border: #1e2633;
-  --text: #e6edf3;
-  --dim: #8b98a9;
-  --faint: #5b6675;
+  --bg: #060910;
+  --panel: #0e1521;
+  --panel2: #0a101a;
+  --panel3: #151d2c; /* elevated: menus, popovers, active nav */
+  --border: #1e2637;
+  --border-strong: #2b3650;
+  --text: #e8eef6;
+  --dim: #94a3b8;
+  /* --faint is the darkest tier still used for real text (captions, axis
+     labels, tooltip underlines). #5b6675 measured 3.13:1 against the old
+     panel — below the WCAG AA 4.5:1 floor — so it was raised to #7a8595,
+     same slate-blue hue. The v2 surfaces are DARKER than the ones it was
+     audited against (#0e1521 < #10151f), so the ratio only improved.
+     Don't darken it again. */
+  --faint: #7a8595;
   --bid: #34d399;
   --bid-dim: rgba(52, 211, 153, 0.12);
   --ask: #f87171;
   --ask-dim: rgba(248, 113, 113, 0.12);
   --accent: #fbbf24;
+  --accent-dim: rgba(251, 191, 36, 0.12);
   --crossed: #a78bfa;
   --ok: #34d399;
   --warn: #fbbf24;
   --bad: #f87171;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 20px -12px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 12px 36px -8px rgba(0, 0, 0, 0.6);
 }
 
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.9rem;
+  font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: 0.875rem;
   line-height: 1.55;
-  background-image: radial-gradient(
-    1200px 500px at 50% -200px,
-    rgba(251, 191, 36, 0.04),
-    transparent
-  );
+  background-image:
+    radial-gradient(1100px 480px at 18% -140px, rgba(251, 191, 36, 0.045), transparent 60%),
+    radial-gradient(900px 420px at 85% -160px, rgba(59, 130, 246, 0.04), transparent 60%);
+}
+
+/* Data voice: JetBrains Mono for anything numeric or ticker-shaped. .tnum is
+   already on prices/counts app-wide, so numbers pick up the mono voice for
+   free; .mono is the explicit opt-in for tickers, hashes, code-ish strings. */
+.tnum {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.mono {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 /* READING MODE — toggled from the header, persisted in localStorage.
    Scales every rem-based size site-wide, relaxes leading, brightens the
-   dim/faint tiers for contrast. The terminal look stays; it just breathes. */
+   dim/faint tiers for contrast. The layout stays; it just breathes. */
 html[data-reading-mode="on"] {
   font-size: 17.5px;
 }
@@ -59,18 +82,23 @@ html[data-reading-mode="on"] th {
 
 .panel {
   border: 1px solid var(--border);
-  background: var(--panel);
-  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 56px),
+    var(--panel);
+  border-radius: 12px;
   overflow: hidden;
+  box-shadow: var(--shadow-1);
 }
 
 .panel-h {
   font-size: 0.75rem;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   color: var(--dim);
-  font-weight: 500;
+  font-weight: 600;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.015);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -79,13 +107,46 @@ html[data-reading-mode="on"] th {
 .chip {
   border: 1px solid var(--border);
   background: var(--panel2);
-  border-radius: 6px;
-  padding: 5px 10px;
+  border-radius: 999px;
+  padding: 4px 10px;
   font-size: 0.75rem;
   color: var(--dim);
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease;
 }
 
-/* Anything with a title tooltip advertises itself with a subtle underline. */
+/* Shared nav/tab states (header nav, hub tabs, folded menus). CSS classes —
+   not inline styles — so :hover works and every strip stays consistent. */
+.nav-link {
+  color: var(--dim);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+.nav-link:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.035);
+}
+.nav-link-active {
+  color: var(--text);
+  background: var(--panel3);
+  border-color: var(--border-strong);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* Anything with a title tooltip advertises itself with a subtle underline.
+   NOTE: this [title] pattern is being replaced by <HelpTip>
+   (src/components/HelpTip.tsx) — a click/keyboard/touch popover with no
+   hover requirement. Until pages migrate, the rules below keep the native
+   hover tooltip AND mirror the same title text for keyboard users on
+   :focus-visible, as a fixed readout at the viewport's bottom-left (fixed so
+   it can't be clipped by .panel overflow or scrolling table wrappers, and
+   never shifts layout). */
 [title] {
   text-decoration-line: underline;
   text-decoration-style: dotted;
@@ -98,6 +159,34 @@ button[title],
 [title=""] {
   text-decoration-line: none;
 }
+[title]:focus-visible::after {
+  content: attr(title);
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 1000;
+  max-width: min(480px, calc(100vw - 24px));
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel3);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  text-transform: none;
+  text-align: left;
+  white-space: normal;
+  box-shadow: var(--shadow-2);
+  pointer-events: none;
+}
+
+/* A11Y TYPE FLOOR — enforced AT THE SOURCE, not by matching generated class
+   names or inline-style strings (which silently miss any new value a future
+   edit introduces). The smallest sanctioned size is text-[0.75rem] (12px at the
+   16px root); SVG chart labels use fontSize="12"; inline font sizes are ≥0.75rem.
+   Rule for new code: never go below text-[0.75rem]. */
 
 /* Shared skeleton shimmer (see components/Skeleton.tsx). */
 .skeleton-bar {
@@ -114,6 +203,21 @@ button[title],
   }
 }
 
+/* Menus/popovers ease in (150ms — under the reduced-motion global kill). */
+.pop-in {
+  animation: pop-in 0.14s ease-out;
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Dense data tables never break the page — they scroll inside their panel. */
 .table-wrap {
   overflow-x: auto;
@@ -123,8 +227,12 @@ table {
   min-width: max-content;
 }
 
-.tnum {
-  font-variant-numeric: tabular-nums;
+/* Quiet row hover on data tables inside panels — feedback without shout. */
+.panel tbody tr {
+  transition: background-color 0.15s ease;
+}
+.panel tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
 }
 
 a {
@@ -135,6 +243,28 @@ a {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+::selection {
+  background: rgba(251, 191, 36, 0.28);
+  color: var(--text);
+}
+
+/* Slim, theme-matched scrollbars (dense tables scroll inside panels). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

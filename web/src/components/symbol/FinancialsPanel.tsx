@@ -11,11 +11,9 @@
 // "EDGAR sweep pending" empty state — nothing is ever estimated here.
 
 import { useEffect, useState } from "react";
-import { fundamentals, type FundamentalRow } from "@/lib/api";
+import { fundamentals, pollMs, POLL_SLOW, type FundamentalRow } from "@/lib/api";
 import { ago, fmtDate } from "@/lib/format";
 import Spark from "@/components/Spark";
-
-const POLL_MS = 5 * 60_000; // fundamentals move on filing cadence — poll slowly
 
 function fmtUSDish(v: number): string {
   if (!isFinite(v)) return "—";
@@ -65,10 +63,11 @@ export default function FinancialsPanel({ symbol }: { symbol: string }) {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, POLL_MS);
+    // POLL_SLOW: fundamentals move on filing cadence — poll slowly.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [symbol]);
 
@@ -83,25 +82,25 @@ export default function FinancialsPanel({ symbol }: { symbol: string }) {
     <section className="panel" aria-label={`SEC EDGAR financials for ${symbol}`}>
       <div className="panel-h flex-wrap gap-2">
         FINANCIALS · {symbol}
-        <span className="tnum ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>
+        <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
           SEC EDGAR XBRL, as filed · swept ~daily
           {fetchedAt > 0 ? ` · fetched ${ago(fetchedAt)}` : ""}
         </span>
       </div>
 
       {err !== null && latest === null && (
-        <p className="px-4 py-3 text-[0.78rem]" style={{ color: "var(--bad)" }}>
+        <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--bad)" }}>
           {err}
         </p>
       )}
       {latest === null && err === null && (
-        <p className="px-4 py-3 text-[0.78rem]" style={{ color: "var(--faint)" }}>
+        <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           loading EDGAR facts…
         </p>
       )}
 
       {latest !== null && !hasFinancials && (
-        <p className="px-4 py-4 text-[0.78rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+        <p className="px-4 py-4 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
           EDGAR sweep pending — the edgar-fetcher rotates the universe ~daily; financials
           appear once this symbol&rsquo;s company-facts are swept (symbols that don&rsquo;t
           file with the SEC never will — honest absence, not an error).
@@ -119,13 +118,13 @@ export default function FinancialsPanel({ symbol }: { symbol: string }) {
                   className="px-4 py-3"
                   style={{ borderTop: "1px solid var(--border)" }}
                 >
-                  <div className="text-[0.68rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+                  <div className="text-[0.75rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
                     {m.label}
                   </div>
                   <div className="tnum mt-1 text-[1.05rem] font-bold" style={{ color: "var(--text)" }}>
                     {row ? m.fmt(row.value) : "—"}
                   </div>
-                  <div className="tnum text-[0.66rem]" style={{ color: "var(--faint)" }}>
+                  <div className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
                     {row && row.asOf > 0 ? `as of ${fmtDate(row.asOf)}` : row ? "as filed" : "not tagged by this filer"}
                   </div>
                 </div>
@@ -142,7 +141,7 @@ export default function FinancialsPanel({ symbol }: { symbol: string }) {
             >
               {revHist.length >= 2 && (
                 <div>
-                  <div className="mb-1 text-[0.66rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+                  <div className="mb-1 text-[0.75rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
                     REVENUE HISTORY · {revHist.length} periods
                   </div>
                   <Spark values={revHist.map((h) => h.value)} width={160} height={36} />
@@ -150,13 +149,13 @@ export default function FinancialsPanel({ symbol }: { symbol: string }) {
               )}
               {epsHist.length >= 2 && (
                 <div>
-                  <div className="mb-1 text-[0.66rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+                  <div className="mb-1 text-[0.75rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
                     EPS HISTORY · {epsHist.length} periods
                   </div>
                   <Spark values={epsHist.map((h) => h.value)} width={160} height={36} />
                 </div>
               )}
-              <p className="ml-auto max-w-72 text-[0.64rem] leading-snug" style={{ color: "var(--faint)" }}>
+              <p className="ml-auto max-w-72 text-[0.75rem] leading-snug" style={{ color: "var(--faint)" }}>
                 mixed annual + quarterly period-ends as filed — a sawtooth shape is normal, not
                 a data error.
               </p>

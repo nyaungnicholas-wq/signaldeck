@@ -277,7 +277,11 @@ func FormLabel(form, items string) string {
 	case base == "20-F":
 		label = "20-F — foreign annual report"
 	case base == "144":
-		label = "Form 144 — proposed insider sale notice"
+		// Data-expansion wave honesty pass: a 144 is a NOTICE of proposed
+		// sale — intent to sell, not a sale (the actual sale, if it happens,
+		// shows up as a Form 4). Verified 2026-07-10 that form "144" rides
+		// the same issuer submissions feed the filings-poller already parses.
+		label = "Form 144 — proposed insider sale notice (intent to sell, not a sale)"
 	default:
 		label = base + " — SEC filing"
 	}
@@ -570,6 +574,18 @@ var NotableManagers = []Manager{
 	{921669, "Icahn Carl C"},
 	{1364742, "BlackRock Inc"},
 	{102909, "Vanguard Group"},
+	// DATA-EXPANSION wave additions — every CIK below was verified live on
+	// data.sec.gov 2026-07-10 (name resolves AND recent filings include
+	// 13F-HR). NOTE: Greenlight's real CIK is 1079114 — the widely-circulated
+	// 934639 is actually Maverick Capital, so both are listed under their
+	// verified names. A wrong/renamed entity still degrades gracefully (dq
+	// event + skip, per the poller's contract).
+	{1747057, "D1 Capital Partners"},
+	{1079114, "Greenlight Capital"},
+	{934639, "Maverick Capital"},
+	{315066, "FMR (Fidelity)"},
+	{93751, "State Street"},
+	{1697748, "ARK Investment Management"},
 }
 
 // Holding13F is one information-table position as filed.

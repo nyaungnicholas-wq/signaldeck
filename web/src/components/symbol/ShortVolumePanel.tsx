@@ -11,9 +11,8 @@
 // the panel's most important row.
 
 import { useEffect, useState } from "react";
-import { shortsSymbol, type ShortsSymbolResponse } from "@/lib/api";
-
-const POLL_MS = 5 * 60_000; // one file per trading day — poll slowly
+import { pollMs, POLL_SLOW, shortsSymbol, type ShortsSymbolResponse } from "@/lib/api";
+import HelpTip from "@/components/HelpTip";
 
 function fmtVol(v: number): string {
   if (!isFinite(v)) return "—";
@@ -71,10 +70,11 @@ export default function ShortVolumePanel({ symbol }: { symbol: string }) {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, POLL_MS);
+    // POLL_SLOW: one FINRA file per trading day — poll slowly.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [symbol]);
 
@@ -86,24 +86,26 @@ export default function ShortVolumePanel({ symbol }: { symbol: string }) {
     <section className="panel" aria-label={`FINRA Reg SHO daily short sale volume for ${symbol}`}>
       <div className="panel-h flex-wrap gap-2">
         SHORT VOLUME · {symbol}
-        <span className="tnum ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>
+        {/* freshness: the FINRA file day is the real data timestamp */}
+        <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
           FINRA Reg SHO daily (free) · posts ~6pm ET
+          {latest !== null ? ` · latest file day ${latest.day}` : ""}
         </span>
       </div>
 
       {err !== null && data === null && (
-        <p className="px-4 py-3 text-[0.78rem]" style={{ color: "var(--bad)" }}>
+        <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--bad)" }}>
           {err}
         </p>
       )}
       {data === null && err === null && (
-        <p className="px-4 py-3 text-[0.78rem]" style={{ color: "var(--faint)" }}>
+        <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           loading Reg SHO daily short volume…
         </p>
       )}
 
       {data !== null && latest === null && (
-        <p className="px-4 py-4 text-[0.78rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+        <p className="px-4 py-4 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
           No Reg SHO rows stored yet — the finra-shorts worker ingests one free FINRA
           file per trading day (first run backfills ~30 trading days). Honest absence,
           not an error.
@@ -113,13 +115,13 @@ export default function ShortVolumePanel({ symbol }: { symbol: string }) {
       {data !== null && latest !== null && (
         <div className="flex flex-wrap items-center gap-4 px-4 py-3">
           <div>
-            <div className="text-[0.7rem]" style={{ color: "var(--dim)" }}>
+            <div className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
               RATIO · {latest.day}
             </div>
             <div className="tnum text-lg font-bold">{(latest.shortPct * 100).toFixed(1)}%</div>
           </div>
           <div>
-            <div className="text-[0.7rem]" style={{ color: "var(--dim)" }}>
+            <div className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
               SHORT / TOTAL
             </div>
             <div className="tnum text-[0.85rem]">
@@ -127,15 +129,16 @@ export default function ShortVolumePanel({ symbol }: { symbol: string }) {
             </div>
           </div>
           <div>
-            <div className="text-[0.7rem]" style={{ color: "var(--dim)" }}>
+            <div className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
               LAST {series.length}D
             </div>
             <NeutralSpark values={ratios} />
           </div>
           {data.latestZ != null && (
-            <div title={data.zNote}>
-              <div className="text-[0.7rem]" style={{ color: "var(--dim)" }}>
+            <div>
+              <div className="flex items-center gap-1 text-[0.75rem]" style={{ color: "var(--dim)" }}>
                 Z (DESCRIPTIVE)
+                <HelpTip label="what this z-score means">{data.zNote}</HelpTip>
               </div>
               <div className="tnum text-[0.85rem]">{data.latestZ.toFixed(2)}</div>
             </div>
@@ -144,7 +147,7 @@ export default function ShortVolumePanel({ symbol }: { symbol: string }) {
       )}
 
       {/* THE caveat — verbatim, always rendered, even while empty/loading. */}
-      <p className="px-4 pb-3 text-[0.72rem] leading-relaxed" style={{ color: "var(--warn)" }}>
+      <p className="px-4 pb-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--warn)" }}>
         {data?.caveat ??
           "short sale volume ratio (Reg SHO daily) — NOT short interest; includes market-maker activity; a high ratio is NOT directly bearish"}
       </p>

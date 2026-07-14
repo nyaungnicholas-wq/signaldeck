@@ -64,7 +64,26 @@ func horizonSecs(h md.Horizon) int64 {
 // v3 (Stage 6): + crypto microstructure (micro_*) for crypto symbols; + FRED VIX
 // cross-asset features (vix_*) for all symbols; + gated model-leg probs
 // (gbm_prob / meanrev_prob) recorded when they cleared their OOS gate.
-const featureVersion = 3
+// v4 (news-trends wave): + news_vol_z — today's headline count standardized
+// vs the symbol's own trailing-30d baseline (news-trends worker). Absent when
+// the baseline gate is unmet or the row is stale — absence is information,
+// not zero. The GBM leg trains per version (LabeledFeaturesBySymbolVersion),
+// so v4 rows accumulate their own labeled set and the OOS-lift gate decides
+// whether the new field ever influences the live blend.
+// v5 (cross-sectional alpha wave): + the DATA-EXPANSION sources as gated,
+// freshness-bounded fields (see alphaxfeat.go) — per-symbol short_int_dtc,
+// funding_rate (crypto), stocktwits_bull_ratio, wiki_z, tv_reco; market-wide
+// pc_total + cot_spx_net (loaded once per pass, like vix_*). Every field is
+// absent when its source is unavailable/stale/thin — absence is information,
+// not zero. Same honesty contract as v4: nothing here touches a live output
+// until a measured OOS-lift gate says it earned it.
+// v6 (alphax-leg wave): + alphax_prob — the pooled cross-sectional leg's
+// P(beat same-day universe median), recorded ONLY when its stored OOS lift
+// cleared the gate (same treatment gbm_prob/meanrev_prob got at v3). Bumped
+// for the same reason v3 bumped for gbm_prob: the GBM leg trains per version,
+// so the new field must accumulate its own labeled set rather than dilute
+// absent-vs-zero across the v5 rows.
+const featureVersion = 6
 
 // ledgerModelVersion stamps each hash-chained ledger entry with the version of
 // the prediction MODEL/pipeline that produced it (Stage 3 tamper-evident
@@ -124,13 +143,16 @@ func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, nU
 	if c.MeanRevProb != nil && c.MeanRevLift != nil && *c.MeanRevLift > 0 {
 		vec["meanrev_prob"] = *c.MeanRevProb
 	}
+	if c.AlphaXProb != nil && c.AlphaXLift != nil && *c.AlphaXLift > 0 {
+		vec["alphax_prob"] = *c.AlphaXProb
+	}
 	if regimeLbl != "" {
 		vec["regime_"+regimeLbl] = 1
 	}
 	if rankPct != nil {
 		vec["rank_pct"] = *rankPct
 	}
-	// Merge cross-cutting Stage-6 feature maps (micro_* / vix_*).
+	// Merge cross-cutting feature maps (Stage 6 micro_* / vix_*; v4 news_vol_z).
 	for _, m := range extra {
 		for k, v := range m {
 			vec[k] = v
@@ -188,12 +210,15 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	if vix, ok, err := w.St.LatestVIX(ctx); err == nil && ok && vix > 0 {
 		vixMap = macrofeat.FromVIX(vix).Map()
 	}
-	// CADENCE SPLIT (free-scale): predict the streamed hot set + crypto every
-	// run; the broad daily-only universe (~500 names, daily bars only) once per
-	// UTC day, so predictions/prediction_outcomes/features don't explode.
-	today := time.Now().UTC().Format("2006-01-02")
-	lastDay, _ := w.St.GetMeta(ctx, "predict_universe_day")
-	doUniverse := lastDay != today
+	// CROSS-SECTIONAL ALPHA wave (featureVersion 5) — market-wide new-source
+	// features (pc_total / cot_spx_net), loaded ONCE per pass like vix_*.
+	// Best-effort + gate-honoring: stale or absent sources mean the fields are
+	// simply absent from every vector this pass (see alphaxfeat.go).
+	alphaMktMap := alphaMarketFeatures(ctx, w.St, time.Now())
+	// CADENCE SPLIT (live-everything wave): hot set + crypto every run; the
+	// broad universe every 10m while the market is open / once per UTC day
+	// closed (see universecadence.go — universe bars are minute-live now).
+	doUniverse, universeCursor := universeDue(ctx, w.St, "predict_universe_day", time.Now())
 	n, featErrs := 0, 0
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
@@ -228,6 +253,20 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				}
 			}
 		}
+		// NEWS-TRENDS (featureVersion 4) — news_vol_z: the symbol's freshest
+		// stored news-volume z (<=2 UTC days old), computed by the news-trends
+		// worker against the symbol's OWN trailing-30d baseline. Best-effort and
+		// gate-honoring: no fresh row, a NULL z (baseline gate unmet) or a read
+		// error all mean the field is simply ABSENT from the vector.
+		var newsMap map[string]float64
+		if z, ok, err := w.St.LatestNewsTrendZ(ctx, s.ID, 2); err == nil && ok {
+			newsMap = map[string]float64{"news_vol_z": z}
+		}
+		// CROSS-SECTIONAL ALPHA wave (featureVersion 5) — per-symbol
+		// new-source features (short_int_dtc / funding_rate /
+		// stocktwits_bull_ratio / wiki_z / tv_reco), each gate-honoring and
+		// freshness-bounded; absent fields stay absent (see alphaxfeat.go).
+		alphaSymMap := alphaSymbolFeatures(ctx, w.St, s, time.Now())
 		// Sentiment feature (per symbol, shared across horizons): the latest
 		// daily aggregate, only when fresh (<=3 days) AND resting on enough
 		// headlines (n>=3). Best-effort — a read error means "absent".
@@ -264,13 +303,23 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			}
 			// STAGE 6 gated model legs. Each carries its stored OOS lift; the
 			// ensemble includes the leg ONLY when lift > 0 (LegProbabilities). An
-			// absent leg (never trained, or too little history) contributes
-			// nothing — the blend is exactly the pre-Stage-6 blend.
-			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelGBM); ok {
+			// absent leg (never trained, too little history, or a row older than
+			// maxModelForecastAgeSecs — M3 freshness cap) contributes nothing —
+			// the blend is exactly the pre-Stage-6 blend.
+			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelGBM, ts); ok {
 				c.GBMProb, c.GBMLift = &p, &l
 			}
-			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelMeanRev); ok {
+			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelMeanRev, ts); ok {
 				c.MeanRevProb, c.MeanRevLift = &p, &l
+			}
+			// Cross-sectional alpha leg (alphax-leg wave): rows exist in
+			// model_forecasts ONLY while the pooled model's OOS lift > 0 (the
+			// AlphaXTrainer deletes them on a gated regrade), and the ensemble
+			// re-applies the same lift>0 gate. NOTE the category nuance: this
+			// prob is RELATIVE (beat the same-day universe median), blended as
+			// a directional tilt — see ensemble.Components.AlphaXProb.
+			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelAlphaX, ts); ok {
+				c.AlphaXProb, c.AlphaXLift = &p, &l
 			}
 			// PER-SYMBOL AGENTS: pick weights + calibration by tier order
 			//   personal(symbol) -> global-regime -> global -> static.
@@ -325,7 +374,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if pct, ok := rankPcts[s.ID]; ok {
 				rankPct = &pct
 			}
-			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap)
+			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, newsMap, alphaSymMap, alphaMktMap)
 			if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
 				featErrs++
 				slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)
@@ -364,7 +413,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	}
 	if doUniverse {
 		// Only after a clean full pass, so a mid-run error retries next minute.
-		_ = w.St.SetMeta(ctx, "predict_universe_day", today)
+		_ = w.St.SetMeta(ctx, "predict_universe_day", universeCursor)
 	}
 	detail := fmt.Sprintf("wrote %d predictions", n)
 	if featErrs > 0 {

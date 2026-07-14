@@ -17,9 +17,14 @@
 //     A leg that cannot beat 50/50 gets exactly zero weight, and if NO leg
 //     beats it the cell yields no learned weights at all (static prior again,
 //     never a fabricated tilt).
-//   - The sentiment leg additionally needs MinCellSamples of ITS OWN examples
-//     in the cell before it can receive ANY weight: it is the newest, least
-//     proven component and must earn its way in.
+//   - EVERY leg additionally needs MinCellSamples of ITS OWN examples in the
+//     cell before it can receive ANY weight. Legs can be much rarer than the
+//     cell (a gated model leg only exists where its OOS gate passed), and
+//     without the per-leg floor 3 lucky alphax examples inside a 40-sample
+//     cell were enough to hand it a 0.77 learned weight (adversarial finding
+//     H3). A leg below its floor gets no learned weight — the cell's other
+//     legs split the weight, and if none qualify the cell yields no learned
+//     weights at all (the existing fallback semantics).
 //
 // Every cell carries its sample counts, per-leg hit-rates, and ICs, so the UI
 // can show exactly WHY a weight is what it is (or why the gate refused).
@@ -32,8 +37,8 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 )
 
-// MinCellSamples is the minimum number of labeled examples a regime cell (or
-// a single leg, for the sentiment gate) needs before learned weights are
+// MinCellSamples is the minimum number of labeled examples a regime cell —
+// and, per leg, EACH LEG within it — needs before learned weights are
 // trusted. Mirrors ensemble.MinCalibrationPairs: below this, apparent edge is
 // indistinguishable from noise.
 const MinCellSamples = 30
@@ -148,12 +153,15 @@ func computeCell(exs []Example) Cell {
 		c.Gated = true
 		return c
 	}
-	// Weight ∝ max(0, hitRate-0.5); sentiment needs its own leg sample gate
-	// before receiving ANY weight.
+	// Weight ∝ max(0, hitRate-0.5). EVERY leg must clear its OWN per-leg
+	// sample floor first (H3): a leg present in only a handful of the cell's
+	// examples can post a perfect hit-rate by pure luck — 3/3 alphax hits in
+	// a 40-sample cell once earned it a 0.77 weight. Below the floor the leg
+	// gets NO learned weight (same fallback semantics as before).
 	raw := map[string]float64{}
 	var sum float64
 	for leg, hr := range c.HitRates {
-		if leg == ensemble.LegSentiment && c.LegN[leg] < MinCellSamples {
+		if c.LegN[leg] < MinCellSamples {
 			continue
 		}
 		if edge := hr - 0.5; edge > 0 {
@@ -229,6 +237,10 @@ func FromVector(vec map[string]float64) (legs map[string]float64, regime string)
 	if v, ok := vec["meanrev_prob"]; ok {
 		c.MeanRevProb = &v
 		c.MeanRevLift = &posLift
+	}
+	if v, ok := vec["alphax_prob"]; ok {
+		c.AlphaXProb = &v
+		c.AlphaXLift = &posLift
 	}
 	for k, v := range vec {
 		if v == 1 && len(k) > len("regime_") && k[:len("regime_")] == "regime_" {

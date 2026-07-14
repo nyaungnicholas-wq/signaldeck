@@ -43,7 +43,7 @@ const HIGHLIGHT_KEYS = new Set(
 export default function Push20Macro({ data }: { data: unknown }) {
   if (data === null || data === undefined) {
     return (
-      <p className="px-4 py-4 text-[0.76rem]" style={{ color: "var(--faint)" }}>
+      <p className="px-4 py-4 text-[0.75rem]" style={{ color: "var(--faint)" }}>
         PUSH-20 macro not synced (start trader-hud).
       </p>
     );
@@ -52,7 +52,7 @@ export default function Push20Macro({ data }: { data: unknown }) {
   if (!isRecord(data)) {
     // Some primitive/array — show it verbatim so nothing is silently dropped.
     return (
-      <p className="tnum px-4 py-4 text-[0.78rem]" style={{ color: "var(--dim)" }}>
+      <p className="tnum px-4 py-4 text-[0.75rem]" style={{ color: "var(--dim)" }}>
         {scalar(data) ?? JSON.stringify(data)}
       </p>
     );
@@ -75,7 +75,7 @@ export default function Push20Macro({ data }: { data: unknown }) {
 
   if (empty) {
     return (
-      <p className="px-4 py-4 text-[0.76rem]" style={{ color: "var(--faint)" }}>
+      <p className="px-4 py-4 text-[0.75rem]" style={{ color: "var(--faint)" }}>
         PUSH-20 macro synced but carried no readable fields.
       </p>
     );

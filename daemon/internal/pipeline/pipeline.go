@@ -76,9 +76,10 @@ func (w *SignalRunner) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	today := time.Now().UTC().Format("2006-01-02")
-	last, _ := w.St.GetMeta(ctx, "signal_universe_day")
-	doUniverse := last != today
+	// Live cadence: every 10m while the market is open, once/day closed (see
+	// universecadence.go — universe bars are now minute-live, so more passes
+	// mean fresh scores, not duplicate rows).
+	doUniverse, universeCursor := universeDue(ctx, w.St, "signal_universe_day", time.Now())
 	ts := time.Now().Truncate(time.Minute).Unix()
 	scored, hotCount := 0, 0
 	for _, s := range syms {
@@ -120,7 +121,7 @@ func (w *SignalRunner) Run(ctx context.Context) (string, error) {
 	if doUniverse {
 		// Mark the daily universe pass done for today only after it succeeded,
 		// so a mid-run error simply retries next minute.
-		_ = w.St.SetMeta(ctx, "signal_universe_day", today)
+		_ = w.St.SetMeta(ctx, "signal_universe_day", universeCursor)
 	}
 	return fmt.Sprintf("scored %d symbol-horizons (%d hot symbols%s)", scored, hotCount,
 		map[bool]string{true: " + daily universe", false: ""}[doUniverse]), nil

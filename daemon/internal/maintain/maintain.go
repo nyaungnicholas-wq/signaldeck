@@ -619,3 +619,177 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 	return fmt.Sprintf("checkpointed wal; db=%.1fMB wal=%.1fMB vacuumed=%v",
 		float64(dbBytes)/(1024*1024), float64(walBytes)/(1024*1024), vacuumed), nil
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// DERIVED-TABLE RETENTION (appended block — tiered-storage wave, phase 2).
+// ─────────────────────────────────────────────────────────────────────────
+
+// DerivedRetention is the Downsampler's sibling for the high-volume DERIVED
+// tables that grow unbounded (unlike the bars tiers): scores, score_outcomes,
+// and the feature store. It mirrors the Downsampler's archive-before-prune
+// FAIL-SAFE contract EXACTLY — every row past its tier's retention is exported
+// to the cold gzip-CSV archive FIRST and only pruned after a durable archive;
+// on any archive error the matching prune is SKIPPED and a dq_events(kind
+// archive_skip) records the fail-safe, so retention can never silently lose
+// data.
+//
+// PERMANENCE (the flywheel's labels are forever):
+//   - predictions + prediction_outcomes are NEVER pruned — they are the live
+//     track record. This worker does not touch them.
+//   - scores + score_outcomes older than SIGNALDECK_SCORES_RETENTION_D (default
+//     90d) are archived + pruned: high-volume minute-cadence churn whose
+//     resolved IC only needs recent windows on the honesty page.
+//   - features older than SIGNALDECK_FEATURES_RETENTION_D (default 180d) are
+//     archived + pruned ONLY when their prediction has already resolved — an
+//     unlabeled training row is never deleted.
+//
+// Bars/snapshots/anomalies retention stays entirely in the Downsampler; this
+// worker never prunes any bar timeframe.
+type DerivedRetention struct {
+	St  *store.Store
+	Arc *archive.Archiver // cold-archive sink (required for archive-before-prune)
+	// Retention windows (0 ⇒ env/default). Explicit so tests drive exact cutoffs.
+	KeepScores   time.Duration // scores + score_outcomes; default 90d  (env SIGNALDECK_SCORES_RETENTION_D)
+	KeepFeatures time.Duration // resolved features;        default 180d (env SIGNALDECK_FEATURES_RETENTION_D)
+}
+
+// Name implements workers.Worker.
+func (d *DerivedRetention) Name() string { return "derived-retention" }
+
+// Interval implements workers.Worker.
+func (d *DerivedRetention) Interval() time.Duration { return time.Hour }
+
+// Run archives+prunes the derived tiers, each fail-safe and independently.
+func (d *DerivedRetention) Run(ctx context.Context) (string, error) {
+	now := time.Now()
+	names, err := d.St.SymbolNameMap(ctx)
+	if err != nil {
+		return "", err
+	}
+	scoresCut := now.Add(-d.retentionScores()).Unix()
+	featuresCut := now.Add(-d.retentionFeatures()).Unix()
+
+	prunedScores, scSkip := archivePruneDerived(ctx, d, "scores", scoresCut, now,
+		func(ctx context.Context, cutoff int64, limit int) ([]store.ScoreRow, error) {
+			return d.St.ScoresBefore(ctx, cutoff, limit)
+		},
+		func(r store.ScoreRow) int64 { return r.Ts },
+		func(ctx context.Context, rows []store.ScoreRow) error {
+			_, err := d.Arc.ArchiveScores(ctx, rows, names)
+			return err
+		},
+		d.St.DeleteScoresBefore)
+
+	prunedOut, outSkip := archivePruneDerived(ctx, d, "score_outcomes", scoresCut, now,
+		func(ctx context.Context, cutoff int64, limit int) ([]store.ScoreOutcomeRow, error) {
+			return d.St.ScoreOutcomesBefore(ctx, cutoff, limit)
+		},
+		func(r store.ScoreOutcomeRow) int64 { return r.Ts },
+		func(ctx context.Context, rows []store.ScoreOutcomeRow) error {
+			_, err := d.Arc.ArchiveScoreOutcomes(ctx, rows, names)
+			return err
+		},
+		d.St.DeleteScoreOutcomesBefore)
+
+	prunedFeat, featSkip := archivePruneDerived(ctx, d, "features", featuresCut, now,
+		func(ctx context.Context, cutoff int64, limit int) ([]store.FeatureArchiveRow, error) {
+			return d.St.ResolvedFeaturesBefore(ctx, cutoff, limit)
+		},
+		func(r store.FeatureArchiveRow) int64 { return r.Ts },
+		func(ctx context.Context, rows []store.FeatureArchiveRow) error {
+			_, err := d.Arc.ArchiveFeatures(ctx, rows, names)
+			return err
+		},
+		d.St.DeleteResolvedFeaturesBefore)
+
+	msg := fmt.Sprintf("archived+pruned %d scores, %d score_outcomes, %d resolved features (predictions kept forever)",
+		prunedScores, prunedOut, prunedFeat)
+	if scSkip || outSkip || featSkip {
+		msg += " (SOME PRUNES SKIPPED — archive failed, data retained; see dq)"
+	}
+	return msg, nil
+}
+
+func (d *DerivedRetention) retentionScores() time.Duration {
+	if d.KeepScores > 0 {
+		return d.KeepScores
+	}
+	return time.Duration(envIntOr("SIGNALDECK_SCORES_RETENTION_D", 90)) * 24 * time.Hour
+}
+
+func (d *DerivedRetention) retentionFeatures() time.Duration {
+	if d.KeepFeatures > 0 {
+		return d.KeepFeatures
+	}
+	return time.Duration(envIntOr("SIGNALDECK_FEATURES_RETENTION_D", 180)) * 24 * time.Hour
+}
+
+// dqSkip logs + records the fail-safe (mirrors Downsampler.dqSkip).
+func (d *DerivedRetention) dqSkip(ctx context.Context, now time.Time, table, reason string) {
+	slog.Warn("derived retention prune skipped (fail-safe)", "table", table, "reason", reason)
+	_ = d.St.InsertDQ(ctx, md.DQEvent{
+		Ts:     now.Unix(),
+		Kind:   "archive_skip",
+		Detail: fmt.Sprintf("prune of %s skipped, data retained: %s", table, reason),
+	})
+}
+
+// archivePruneDerived is the generic archive-before-prune batch loop for a
+// derived table — the exact contract of Downsampler.archivePruneBars, factored
+// once over a row type T: read rows below cutoff (oldest-first, bounded),
+// archive them, then prune ONLY [<upper) where the archived set equals the
+// pruned set. On a FULL batch the trailing max-ts group is dropped so the two
+// sets stay identical and maxTs strictly advances (terminating); on any archive
+// error NOTHING is pruned for this (or any) batch and a dq event fires.
+func archivePruneDerived[T any](
+	ctx context.Context, d *DerivedRetention, table string, cutoff int64, now time.Time,
+	read func(ctx context.Context, cutoff int64, limit int) ([]T, error),
+	tsOf func(T) int64,
+	archive func(ctx context.Context, rows []T) error,
+	prune func(ctx context.Context, upper int64) (int64, error),
+) (pruned int64, skipped bool) {
+	if d.Arc == nil {
+		d.dqSkip(ctx, now, table, "no cold-archive sink configured")
+		return 0, true
+	}
+	for {
+		rows, err := read(ctx, cutoff, archiveBatch)
+		if err != nil {
+			d.dqSkip(ctx, now, table, "read for archive failed: "+err.Error())
+			return pruned, true
+		}
+		if len(rows) == 0 {
+			return pruned, skipped
+		}
+		// Same trailing-max-ts trim as Downsampler.archivePruneBars (see its
+		// comment): on a full batch drop the max-ts group so archived == pruned.
+		full := len(rows) == archiveBatch
+		toArchive := rows
+		upper := cutoff
+		if full {
+			maxTs := tsOf(rows[len(rows)-1])
+			cut := len(rows)
+			for cut > 0 && tsOf(rows[cut-1]) == maxTs {
+				cut--
+			}
+			if cut == 0 {
+				upper = maxTs + 1 // degenerate: whole batch at one ts
+			} else {
+				toArchive = rows[:cut]
+				upper = maxTs // exclusive: max-ts group waits for next read
+			}
+		}
+		if err := archive(ctx, toArchive); err != nil {
+			d.dqSkip(ctx, now, table, "archive write failed: "+err.Error())
+			return pruned, true
+		}
+		n, err := prune(ctx, upper)
+		if err != nil {
+			return pruned, true
+		}
+		pruned += n
+		if !full {
+			return pruned, skipped
+		}
+	}
+}

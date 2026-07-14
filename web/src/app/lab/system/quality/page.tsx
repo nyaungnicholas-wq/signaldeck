@@ -4,12 +4,13 @@
 // Honest framing: if it's not on this page, we didn't measure it.
 
 import { Fragment, useEffect, useState } from "react";
-import { api, pollMs, type Quality, type DQEvent, type DataStats } from "@/lib/api";
+import { api, pollMs, POLL_DEFAULT, type Quality, type DQEvent, type DataStats } from "@/lib/api";
 import { ago, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
+import ProOnly from "@/components/ProOnly";
 
 // fmtBytes renders a byte count in the tightest sensible unit.
 function fmtBytes(n: number): string {
@@ -51,7 +52,7 @@ function IncidentRow({ ev }: { ev: DQEvent }) {
   const s = kindStyle(ev.kind);
   return (
     <li className="border-b px-4 py-2.5 last:border-b-0" style={{ borderColor: "var(--border)" }}>
-      <div className="flex items-center gap-2 text-[0.78rem]">
+      <div className="flex items-center gap-2 text-[0.75rem]">
         <span
           className="chip"
           style={{ color: s.color, borderColor: s.border, padding: "1px 8px" }}
@@ -68,7 +69,7 @@ function IncidentRow({ ev }: { ev: DQEvent }) {
         </span>
       </div>
       {ev.detail && (
-        <div className="mt-1 text-[0.78rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+        <div className="mt-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           {ev.detail}
         </div>
       )}
@@ -110,10 +111,11 @@ export default function QualityPage() {
         });
     };
     load();
-    const t = setInterval(load, pollMs());
+    // Coverage/incidents move on ingest cadence — the default tier is plenty.
+    const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 
@@ -155,7 +157,7 @@ export default function QualityPage() {
       )}
       {!err && !data && <Skeleton lines={4} label="loading data quality" />}
       {err && data && (
-        <div className="px-1 text-[0.78rem]" style={{ color: "var(--bad)" }}>
+        <div className="px-1 text-[0.75rem]" style={{ color: "var(--bad)" }}>
           connection lost — showing last known data · {err}
         </div>
       )}
@@ -172,7 +174,7 @@ export default function QualityPage() {
               />
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-[0.8rem]">
+                <table className="w-full text-[0.75rem]">
                   <thead>
                     <tr
                       className="text-left text-[0.75rem] tracking-wide"
@@ -253,6 +255,15 @@ export default function QualityPage() {
                     ))}
                   </tbody>
                 </table>
+                {/* The freshness threshold is load-bearing — visible caption,
+                    not a hover-only tooltip. */}
+                <p
+                  className="px-4 pb-3 pt-2 text-[0.75rem]"
+                  style={{ color: "var(--faint)" }}
+                >
+                  &ldquo;fresh&rdquo; (green) = newest bar within 30m for 1m bars, within 2h
+                  for 1h and 1d bars; older turns amber.
+                </p>
               </div>
             )}
           </section>
@@ -305,7 +316,7 @@ export default function QualityPage() {
         </div>
         {stats?.retention && (
           <div
-            className="px-4 py-2 text-[0.72rem] normal-case tracking-normal"
+            className="px-4 py-2 text-[0.75rem] normal-case tracking-normal"
             style={{ color: "var(--dim)", borderBottom: "1px solid var(--border)" }}
           >
             Tiered retention (hot store, then archive + prune):{" "}
@@ -321,18 +332,22 @@ export default function QualityPage() {
               1h bars {stats.retention.bars1hDays}d
             </span>{" "}
             → 1d ·{" "}
-            <span style={{ color: "var(--good)" }}>daily kept forever</span>
+            <span style={{ color: "var(--ok)" }}>daily kept forever</span>
           </div>
         )}
         {statsErr && !stats && (
-          <div className="px-4 py-3 text-[0.78rem]" style={{ color: "var(--bad)" }}>
+          <div className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--bad)" }}>
             data stats unavailable · {statsErr}
           </div>
         )}
         {!statsErr && !stats && <Skeleton lines={3} label="loading data stats" />}
         {stats && (
+          <div className="px-4 py-3">
+          {/* Table-by-table accounting is PRO detail — the size chips and
+              retention line above stay visible in both modes. */}
+          <ProOnly summary="Show table-by-table detail">
           <div className="overflow-x-auto">
-            <table className="w-full text-[0.8rem]">
+            <table className="w-full text-[0.75rem]">
               <thead>
                 <tr
                   className="text-left text-[0.75rem] tracking-wide"
@@ -375,6 +390,8 @@ export default function QualityPage() {
                   ))}
               </tbody>
             </table>
+          </div>
+          </ProOnly>
           </div>
         )}
       </section>

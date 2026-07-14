@@ -53,7 +53,7 @@ function SkillBar({ label, hitRate, hasHR, ic, hasIC, n }: {
   const pct = hasHR ? Math.max(0, Math.min(1, hitRate)) * 100 : 0;
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-baseline justify-between gap-2 text-[0.78rem]">
+      <div className="flex items-baseline justify-between gap-2 text-[0.75rem]">
         <span style={{ color: "var(--text)" }}>{label}</span>
         <span className="tnum" style={{ color: "var(--faint)" }}>
           {hasHR ? `${(hitRate * 100).toFixed(0)}% hit` : "no directional calls"}
@@ -205,7 +205,7 @@ export default function SymbolAgentPanel({
               ))}
             </div>
           ) : (
-            <div className="text-[0.78rem]" style={{ color: "var(--dim)" }}>
+            <div className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
               No resolved outcomes for this symbol yet — skill fills in as its predictions resolve
               (resolutions begin after each prediction&rsquo;s horizon elapses).
             </div>

@@ -59,12 +59,13 @@ func canonicalFeatureKeys(rows []store.LabeledFeature) []string {
 //     let the tree learn "copy the ensemble" instead of finding independent
 //     structure, and would couple the GBM leg to the very blend it's meant to
 //     diversify;
-//   - the model legs' OWN prior outputs (gbm_prob/meanrev_prob) — a leg must not
-//     be fed its own past prediction, both to avoid a self-referential shortcut
-//     and to keep the GBM leg independent of the mean-reversion leg (and itself).
+//   - the model legs' OWN prior outputs (gbm_prob/meanrev_prob/alphax_prob) — a
+//     leg must not be fed its own past prediction, both to avoid a
+//     self-referential shortcut and to keep the GBM leg independent of the other
+//     model legs (and itself).
 func excludedGBMKey(k string) bool {
 	switch k {
-	case "pred_raw", "pred_cal", "gbm_prob", "meanrev_prob":
+	case "pred_raw", "pred_cal", "gbm_prob", "meanrev_prob", "alphax_prob":
 		return true
 	}
 	return false
@@ -205,12 +206,28 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 		trained, len(syms), gbmEdged, mrEdged), nil
 }
 
+// maxModelForecastAgeSecs caps how old a stored model_forecasts row may be and
+// still feed the live blend (M3). Without it a row entered every 10-minute
+// prediction pass FOREVER: the prob was computed from bars at training time,
+// and the featureVersion 6 bump means universe symbols won't accumulate enough
+// v6 rows for the per-symbol GBM to retrain for weeks — so "latest" rows can
+// be arbitrarily stale. 3 days is generous against the actual retrain
+// cadences (alphax re-scores every 6h, the GBM trainer runs hourly whenever a
+// symbol is trainable): a leg that hasn't refreshed in 3 days is a leg whose
+// trainer has stopped vouching for it.
+const maxModelForecastAgeSecs = 3 * 86400
+
 // modelLegProbLift pulls one model's stored prob+lift for a symbol+horizon from
-// a preloaded slice, returning ok=false when the leg isn't present. Used by the
-// PredictionRunner to feed the gated legs into the ensemble.
-func modelLegProbLift(models []store.ModelForecast, h md.Horizon, name string) (prob, lift float64, ok bool) {
+// a preloaded slice, returning ok=false when the leg isn't present OR its row
+// is older than maxModelForecastAgeSecs (stale probs must not keep entering
+// the blend). Used by the PredictionRunner to feed the gated legs into the
+// ensemble.
+func modelLegProbLift(models []store.ModelForecast, h md.Horizon, name string, now int64) (prob, lift float64, ok bool) {
 	for _, m := range models {
 		if m.Horizon == h && m.Model == name {
+			if now-m.Ts > maxModelForecastAgeSecs {
+				return 0, 0, false
+			}
 			return m.Prob, m.Lift, true
 		}
 	}

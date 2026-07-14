@@ -713,3 +713,348 @@ CREATE TABLE IF NOT EXISTS short_volume (
   PRIMARY KEY (symbol_id, day)
 );
 CREATE INDEX IF NOT EXISTS idx_short_volume_day ON short_volume (day DESC);
+
+-- TRADINGVIEW WEBHOOK SIGNALS (appended block — do not merge into the sections
+-- above). Inbound Pine Script alert webhooks (POST /api/tv-webhook, shared-secret
+-- authed). This is the ONE legitimate TradingView integration: TradingView pushes
+-- alert events to us; we never pull their licensed market data. Each row is one
+-- received alert. symbol_id is resolved best-effort from the raw ticker when we
+-- track it (NULL otherwise); the raw payload is always kept for provenance.
+CREATE TABLE IF NOT EXISTS tv_signals (
+  id        INTEGER PRIMARY KEY,
+  symbol_id INTEGER REFERENCES symbols(id), -- resolved from ticker, NULL if untracked/unresolvable
+  ticker    TEXT NOT NULL DEFAULT '',       -- raw ticker as TradingView sent it (e.g. "NASDAQ:NVDA")
+  action    TEXT NOT NULL DEFAULT '',       -- free-text: buy | sell | long | short | alert | ...
+  price     REAL,                           -- trigger price if the alert included one
+  message   TEXT NOT NULL DEFAULT '',       -- human-readable alert message / strategy comment
+  raw       TEXT NOT NULL DEFAULT '',       -- full raw JSON payload (provenance, capped)
+  ts        INTEGER NOT NULL,               -- receive time (unix seconds)
+  seen      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tv_signals_ts ON tv_signals (ts DESC);
+-- Supports the per-symbol firing roll-up (GROUP BY symbol_id, ticker) that
+-- GET /api/tv-status runs on every LIVE-tab poll; without it the aggregate is a
+-- full-table scan whose cost grows unbounded as tv_signals accumulates.
+CREATE INDEX IF NOT EXISTS idx_tv_signals_symbol_ticker ON tv_signals (symbol_id, ticker);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- SIGNALS-HUB OVERHAUL — COMPOSITE SIGNALSCORE (appended block — do not merge
+-- into the sections above). One row per (symbol, pass ts, horizon): the forced
+-- 1-10 curve score over the cross-section of latest calibrated predictions
+-- (see internal/composite). score is a RANK on a fixed distribution (top 5% =
+-- 10 … bottom 5% = 1), NOT a probability; curve_pct is the cross-sectional
+-- percentile of the edge; edge = calibrated P(up,1d) − 0.5 from the LATEST
+-- stored prediction (never recomputed). payload is the full evidence JSON
+-- (composite.Payload: factor tiles w/ verdicts+gates+skill chips, additive
+-- ledger). HONESTY: the composite-scorer worker stores NOTHING when fewer
+-- than 30 symbols have usable predictions — a forced curve over a thin
+-- cross-section would fabricate extremes.
+CREATE TABLE IF NOT EXISTS composite_scores (
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  ts        INTEGER NOT NULL,          -- pass timestamp, unix seconds
+  horizon   TEXT NOT NULL,             -- '1d' (the edge's prediction horizon)
+  score     INTEGER NOT NULL,          -- forced-curve 1..10
+  curve_pct REAL NOT NULL,             -- cross-sectional percentile of edge, 0..100
+  edge      REAL NOT NULL,             -- calibrated P(up) − 0.5 at the pass
+  payload   TEXT NOT NULL,             -- JSON: composite.Payload (factors + ledger)
+  PRIMARY KEY (symbol_id, ts, horizon)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_composite_scores_ts ON composite_scores (ts DESC);
+
+-- SIGNALS-hub overhaul review fix (appended): the composite-scorer's
+-- LatestPredictionsForScoring runs a MAX(ts) GROUP BY symbol_id WHERE horizon=?
+-- every 10 minutes; the predictions PK leads (symbol_id, horizon, ts), so that
+-- access pattern was a full-table SCAN (~370ms at 1.3M rows, growing unbounded
+-- since predictions are never pruned). This covering index serves it directly.
+CREATE INDEX IF NOT EXISTS idx_predictions_horizon_sym_ts
+  ON predictions (horizon, symbol_id, ts DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- TRADINGVIEW SCANNER RATINGS (appended block — do not merge into the sections
+-- above). TradingView's OWN technical-analysis RATING for our tracked symbols,
+-- pulled from its PUBLIC scanner endpoint (scanner.tradingview.com/{screener}/
+-- scan — no account, no key; verified live 2026-07-07) by the tv-rating worker.
+-- HONESTY: reco_* are TradingView's OWN descriptive TA scores (each in [-1,1])
+-- on DELAYED data — an EXTERNAL, independent signal, NOT SignalDeck's model and
+-- NOT advice. label is Label(reco_all) (Strong Buy … Strong Sell). The API/UI
+-- carry that caveat verbatim.
+
+-- tv_exchange caches each stock symbol's EXCHANGE:SYMBOL exchange, resolved via
+-- TradingView's public symbol-search endpoint (our symbols table has no
+-- exchange). One row per tracked symbol; refreshed incrementally so we never
+-- hardcode NASDAQ (DRAM/SNXX resolve to CBOE). resolved_at is when we last
+-- resolved it.
+CREATE TABLE IF NOT EXISTS tv_exchange (
+  symbol_id   INTEGER PRIMARY KEY REFERENCES symbols(id),
+  exchange    TEXT NOT NULL,
+  resolved_at INTEGER NOT NULL
+);
+
+-- tv_ratings is the append-only rating time series: one row per (symbol, pass
+-- ts). reco_* / rsi / close_px are nullable (a scanner row may omit a metric),
+-- but the worker only writes rows for symbols the scanner returned, so present
+-- rows carry real numbers. Never pruned — the external-rating history only grows.
+CREATE TABLE IF NOT EXISTS tv_ratings (
+  symbol_id  INTEGER NOT NULL,
+  ts         INTEGER NOT NULL,
+  reco_all   REAL,
+  reco_ma    REAL,
+  reco_other REAL,
+  rsi        REAL,
+  close_px   REAL,
+  label      TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (symbol_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_tv_ratings_ts ON tv_ratings (ts DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- SELF-AUDIT / DRIFT WATCHDOG (appended block — do not merge into the sections
+-- above). The self-audit worker MEASURES the platform's own honesty from
+-- resolved history (calibration drift, factor-IC sign flips, prediction bias)
+-- once per UTC day and records each finding here so it is queryable and
+-- graphable over time (GET /api/self-audit + /api/model-evolution). Append-only
+-- time series; every check carries a status so gates render as reasons.
+--   status ∈ ok | degrading | over_confident | under_confident | sign_flip
+--            | insufficient   (n<30 — measured too thin to judge, never alarmed)
+--   metric e.g. 'calibration:1d' | 'prediction_bias:1w' | 'factor_ic:pressure'
+--   symbol_id is nullable (fleet-level checks store NULL).
+CREATE TABLE IF NOT EXISTS self_audit (
+  id        INTEGER PRIMARY KEY,
+  ts        INTEGER NOT NULL,
+  metric    TEXT NOT NULL,
+  symbol_id INTEGER,
+  value     REAL NOT NULL DEFAULT 0,
+  status    TEXT NOT NULL,
+  detail    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_self_audit_metric_ts ON self_audit (metric, ts DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- MODEL-EVOLUTION: ADAPTIVE-WEIGHT HISTORY (appended block). The adaptive-
+-- weights worker only persists its LATEST weights in meta (adaptive_weights:v1),
+-- overwriting each run — so there was no history to chart. weight_history is the
+-- append-only per-run snapshot the worker now writes (one row per non-empty
+-- (regime cell, leg)), the source series behind GET /api/model-evolution. Honest
+-- by construction: gaps where no learned weight existed, no interpolation.
+CREATE TABLE IF NOT EXISTS weight_history (
+  id     INTEGER PRIMARY KEY,
+  ts     INTEGER NOT NULL,
+  regime TEXT NOT NULL,   -- the adaptive cell name ('all' or a regime label)
+  leg    TEXT NOT NULL,   -- ensemble leg name
+  weight REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_weight_history_ts ON weight_history (ts DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- DATA-EXPANSION WAVE (appended block — do not merge into the sections
+-- above). Seven new FREE, keyless external context sources, ALL stored and
+-- served as DESCRIPTIVE context with explicit caveats — NOTHING here becomes
+-- a scored factor in this wave.
+
+-- short_interest: FINRA's BI-MONTHLY short interest (settlement-dated 15th /
+-- EOM files, published ~9 business days after settlement; verified live
+-- 2026-07-10). UNIVERSE-SCOPED: the finra-shortint worker stores rows ONLY
+-- for symbols we track. Unlike short_volume (daily short-sale VOLUME ratio),
+-- this IS actual short interest — but it is ~2 weeks stale by publication.
+-- HONESTY: settlement-dated, published ~2wks lagged — descriptive
+-- positioning, not advice. The API carries that caveat verbatim.
+CREATE TABLE IF NOT EXISTS short_interest (
+  symbol_id       INTEGER NOT NULL REFERENCES symbols(id),
+  settlement_date TEXT NOT NULL,        -- YYYY-MM-DD (15th or EOM)
+  short_qty       REAL NOT NULL,        -- current short position (shares)
+  prev_qty        REAL NOT NULL,        -- previous period's short position
+  adv             REAL NOT NULL,        -- average daily volume (shares)
+  days_to_cover   REAL NOT NULL,        -- FINRA's own days-to-cover
+  change_pct      REAL NOT NULL,        -- FINRA's period-over-period change %
+  PRIMARY KEY (symbol_id, settlement_date)
+);
+CREATE INDEX IF NOT EXISTS idx_short_interest_settle ON short_interest (settlement_date DESC);
+
+-- crypto_perp: perp funding + open interest snapshots from Hyperliquid's free
+-- public info API (one POST per pass; arrays index-aligned; verified live
+-- 2026-07-10). HONESTY: ONE venue (a DEX) — a venue-specific positioning
+-- proxy, descriptive only. The API carries that caveat verbatim.
+CREATE TABLE IF NOT EXISTS crypto_perp (
+  symbol_id     INTEGER NOT NULL REFERENCES symbols(id),
+  ts            INTEGER NOT NULL,       -- snapshot time, unix seconds
+  funding       REAL NOT NULL,          -- current hourly funding rate
+  open_interest REAL NOT NULL,          -- open interest, coin units
+  mark_px       REAL NOT NULL,          -- mark price (USD)
+  PRIMARY KEY (symbol_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_crypto_perp_ts ON crypto_perp (ts DESC);
+
+-- cot_reports: the CFTC's weekly Commitments of Traders legacy futures-only
+-- report (free Socrata API, verified live 2026-07-10), ingested for a small
+-- curated set of index/crypto futures contracts. HONESTY: Tuesday positions
+-- published Friday (3-day lag) — positioning, NOT prediction. The API carries
+-- that caveat verbatim.
+CREATE TABLE IF NOT EXISTS cot_reports (
+  contract      TEXT NOT NULL,          -- contract_market_name
+  report_date   TEXT NOT NULL,          -- YYYY-MM-DD (Tuesday as-of date)
+  noncomm_long  REAL NOT NULL,
+  noncomm_short REAL NOT NULL,
+  comm_long     REAL NOT NULL,
+  comm_short    REAL NOT NULL,
+  open_interest REAL NOT NULL,
+  PRIMARY KEY (contract, report_date)
+);
+CREATE INDEX IF NOT EXISTS idx_cot_reports_date ON cot_reports (report_date DESC);
+
+-- stocktwits_sentiment: rolling per-symbol tallies of StockTwits' free public
+-- symbol stream (verified live 2026-07-10). Each row is a PAGE SNAPSHOT —
+-- counts over the ~30 newest messages at fetch time, NOT a complete census.
+-- Scope: watchlist + streamed hot set only (news-fetcher-style scoping).
+-- HONESTY: retail message sentiment from a self-selected crowd — descriptive
+-- only. The API carries that caveat verbatim.
+CREATE TABLE IF NOT EXISTS stocktwits_sentiment (
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  ts        INTEGER NOT NULL,           -- snapshot time, unix seconds
+  bullish   INTEGER NOT NULL,
+  bearish   INTEGER NOT NULL,
+  untagged  INTEGER NOT NULL,
+  total     INTEGER NOT NULL,
+  PRIMARY KEY (symbol_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_stocktwits_ts ON stocktwits_sentiment (ts DESC);
+
+-- wiki_article: the per-symbol Wikipedia article-title resolution CACHE for
+-- the attention proxy. ok=1 rows carry the resolved title; ok=0 rows remember
+-- a FAILED resolution so the worker never re-hammers Wikimedia for names its
+-- heuristic cannot map (honest absence, retried only if the row is deleted).
+CREATE TABLE IF NOT EXISTS wiki_article (
+  symbol_id   INTEGER PRIMARY KEY REFERENCES symbols(id),
+  article     TEXT NOT NULL DEFAULT '', -- resolved title ('' when ok=0)
+  ok          INTEGER NOT NULL,         -- 1 resolved / 0 resolution failed
+  resolved_at INTEGER NOT NULL          -- unix seconds
+);
+
+-- wiki_views: daily Wikipedia page views (agent=user, en.wikipedia) for
+-- resolved symbols — the public-attention proxy series. HONESTY: attention is
+-- NOT a trading signal, and the article resolution is a heuristic that can
+-- pick the wrong page. The API carries that caveat verbatim.
+CREATE TABLE IF NOT EXISTS wiki_views (
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  day       TEXT NOT NULL,              -- YYYY-MM-DD
+  views     INTEGER NOT NULL,
+  PRIMARY KEY (symbol_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_views_day ON wiki_views (day DESC);
+
+-- cboe_pc: CBOE's market-wide daily options put/call ratios + volumes from
+-- the free per-day statistics document (probed + verified live 2026-07-10).
+-- HONESTY: a market-wide positioning/hedging gauge — index puts are largely
+-- hedges, so high index P/C is NOT directly bearish; descriptive only. The
+-- API carries that caveat verbatim.
+CREATE TABLE IF NOT EXISTS cboe_pc (
+  day       TEXT PRIMARY KEY,           -- trade date, YYYY-MM-DD
+  total_pc  REAL NOT NULL,
+  index_pc  REAL NOT NULL,
+  equity_pc REAL NOT NULL,
+  vix_pc    REAL NOT NULL,
+  call_vol  REAL NOT NULL,
+  put_vol   REAL NOT NULL,
+  total_vol REAL NOT NULL
+);
+
+-- tv_quotes: near-real-time quote tape from TradingView's public scanner
+-- (verified live 2026-07-10) — fills the last-15-minutes gap free bar feeds
+-- leave (Alpaca SIP is 15m-guarded; IEX is volume-thin). price is the rtc
+-- REAL-TIME Cboe One composite when present (realtime=1), else the
+-- 15-min-DELAYED close (realtime=0, update_mode-flagged upstream);
+-- day_volume is FULL-MARKET cumulative. A QUOTE TAPE, not a record: the
+-- tv-quotes worker prunes rows older than ~2h inline every pass — bars are
+-- the durable history. HONESTY: descriptive supplement to the bar record,
+-- not a replacement; the API labels realtime-vs-delayed per row.
+CREATE TABLE IF NOT EXISTS tv_quotes (
+  symbol_id     INTEGER NOT NULL REFERENCES symbols(id),
+  ts            INTEGER NOT NULL,   -- fetch time, unix seconds
+  price         REAL NOT NULL,      -- rtc when present, else delayed close
+  delayed_close REAL NOT NULL,      -- the scanner's 15-min-delayed close
+  change_pct    REAL NOT NULL,      -- day change %
+  day_volume    REAL NOT NULL,      -- full-market cumulative day volume
+  realtime      INTEGER NOT NULL,   -- 1 = price is the real-time rtc composite
+  PRIMARY KEY (symbol_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_tv_quotes_ts ON tv_quotes (ts DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- NEWS-TRENDS + STRATEGY-LAB wave (appended block).
+
+-- news_trends: per-symbol daily headline-volume trend rows written by the
+-- news-trends worker (30m). n is the day's headline count; z is that count
+-- standardized against the symbol's OWN trailing-30-day baseline, and is
+-- NULL when the honesty gate is not met (fewer than 10 prior days with any
+-- news, or a zero-variance baseline) — an absent z is information, never a
+-- fabricated 0. HONESTY: a headline-frequency trend — descriptive attention,
+-- not a forecast. The API carries that caveat verbatim.
+CREATE TABLE IF NOT EXISTS news_trends (
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  day       TEXT NOT NULL,              -- YYYY-MM-DD (UTC)
+  n         INTEGER NOT NULL,           -- headlines on that day
+  z         REAL,                       -- NULL when the baseline gate fails
+  PRIMARY KEY (symbol_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_news_trends_day ON news_trends (day DESC);
+
+-- strategy_results: per-(symbol,strategy) walk-forward backtest results for
+-- the STRATEGY LAB — 8 classic PUBLISHED strategies (golden cross, Donchian,
+-- Connors RSI-2, Jegadeesh-Titman momentum, MACD, Bollinger mean-reversion,
+-- 52w-high breakout, absolute dual momentum) replayed by the strategy-lab
+-- worker through the bias-free next-bar-fill backtester on OUR OWN ~2y daily
+-- bars with explicit costs. cagr_reported mirrors the engine's CAGRReported
+-- honesty flag (CAGR below the span/trade floor must not be shown);
+-- win_rate_ok mirrors WinRateMeaningful. HONESTY: in-sample history on our
+-- bars, not live performance and not advice. The API carries that verbatim.
+CREATE TABLE IF NOT EXISTS strategy_results (
+  symbol_id     INTEGER NOT NULL REFERENCES symbols(id),
+  strategy      TEXT NOT NULL,
+  ts            INTEGER NOT NULL,        -- run time, unix seconds
+  total_return  REAL NOT NULL,
+  cagr          REAL NOT NULL,           -- only show when cagr_reported=1
+  sharpe        REAL NOT NULL,
+  max_dd        REAL NOT NULL,
+  win_rate      REAL NOT NULL,           -- only show when win_rate_ok=1
+  n_trades      INTEGER NOT NULL,
+  cagr_reported INTEGER NOT NULL,        -- engine CAGRReported honesty flag
+  win_rate_ok   INTEGER NOT NULL,        -- engine WinRateMeaningful flag
+  n_bars        INTEGER NOT NULL,        -- bars the backtest actually saw
+  PRIMARY KEY (symbol_id, strategy)
+);
+CREATE INDEX IF NOT EXISTS idx_strategy_results_strategy ON strategy_results (strategy);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- CROSS-SECTIONAL ALPHA wave (appended block).
+
+-- alphax_models: ONE row per horizon — the pooled cross-sectional model
+-- (trained over the WHOLE universe at once, predicting RELATIVE
+-- outperformance vs the same-day cross-section median, NOT absolute
+-- direction) with its latest PURGED WALK-FORWARD out-of-sample grade and
+-- gate state. model_json serializes the exact model that earned the grade
+-- (provenance). gated=1 means OOS lift <= 0: the model is stored for the
+-- record but NEVER blended and NEVER displayed as a signal — per-symbol
+-- scores (model_forecasts, model='alphax') exist only while gated=0.
+-- HONESTY: backtested, not a live track record. The API carries that
+-- caveat verbatim.
+CREATE TABLE IF NOT EXISTS alphax_models (
+  horizon    TEXT PRIMARY KEY,          -- '1d' / '1w'
+  ts         INTEGER NOT NULL,          -- grade time, unix seconds
+  oos_lift   REAL NOT NULL,             -- accuracy - base rate (<=0 => gated)
+  oos_auc    REAL NOT NULL,
+  oos_acc    REAL NOT NULL,
+  base_rate  REAL NOT NULL,             -- majority-class floor
+  n_train    INTEGER NOT NULL,          -- pooled labeled rows the model saw
+  n_test     INTEGER NOT NULL,          -- strictly out-of-sample scored rows
+  gated      INTEGER NOT NULL,          -- 1 = no measured edge: never shown as signal
+  model_json TEXT NOT NULL              -- serialized {featureKeys, gbm model}
+);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- ADVERSARIAL-REVIEW FIXES wave (appended block).
+
+-- idx_features_h_ts: LabeledFeaturesAll (the 6h alphax pooled-trainer read)
+-- filters features by horizon (+ version range) and orders by ts DESC with a
+-- LIMIT; the only prior index leads with symbol_id, so every pass full-scanned
+-- and sorted the whole features table. This index serves the filter AND the
+-- order, letting SQLite walk it newest-first and stop at the limit. (L2)
+CREATE INDEX IF NOT EXISTS idx_features_h_ts ON features (horizon, ts DESC);

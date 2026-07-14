@@ -35,7 +35,7 @@ export default function ExpectancyPanel({
         </span>
       </div>
       <div className="flex flex-col gap-3 p-4">
-        <p className="text-[0.78rem]" style={{ color: "var(--text)" }}>
+        <p className="text-[0.75rem]" style={{ color: "var(--text)" }}>
           <span style={{ color: "var(--dim)" }}>current state: </span>
           {humanizeState(stateKeys["1d"] ?? "")}
         </p>
@@ -46,8 +46,8 @@ export default function ExpectancyPanel({
             detail="Tendencies appear once enough history has been observed for each market state."
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[0.8rem] tnum">
+          <div className="table-wrap">
+            <table className="w-full text-[0.75rem] tnum">
               <thead>
                 <tr className="text-left text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
                   <th className="py-1.5 pr-3 font-medium" title="Market state (bucketed by score and trend)">
@@ -83,7 +83,7 @@ export default function ExpectancyPanel({
                         {humanizeState(r.stateKey)}
                         {isNow && (
                           <span
-                            className="ml-2 rounded border px-1.5 py-0.5 text-[0.75rem] tracking-wider"
+                            className="ml-2 rounded-full border px-1.5 py-0.5 text-[0.75rem] tracking-wider"
                             style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
                           >
                             NOW

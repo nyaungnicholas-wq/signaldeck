@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   pollMs,
+  POLL_SLOW,
   signalBacktestLive,
   signalBacktestPinned,
   type SignalBacktestPinnedResponse,
@@ -13,6 +14,8 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
+import HelpTip from "@/components/HelpTip";
+import ProOnly from "@/components/ProOnly";
 
 type SignalHorizon = "1d" | "1w";
 const SIGNAL_HORIZONS: SignalHorizon[] = ["1d", "1w"];
@@ -139,13 +142,14 @@ function Metric({
   value,
   color,
   hint,
-  title,
+  help,
 }: {
   label: string;
   value: string;
   color?: string;
   hint?: string;
-  title?: string;
+  /** Load-bearing explanation — rendered as a click/keyboard HelpTip, not a hover title. */
+  help?: string;
 }) {
   return (
     <div
@@ -153,11 +157,11 @@ function Metric({
       style={{ borderBottom: "1px solid var(--border)" }}
     >
       <span
-        className="text-[0.75rem] tracking-wide"
+        className="flex items-center gap-1 text-[0.75rem] tracking-wide"
         style={{ color: "var(--faint)" }}
-        title={title}
       >
         {label}
+        {help && <HelpTip label={`What does ${label.toLowerCase()} mean?`}>{help}</HelpTip>}
       </span>
       <span
         className="tnum text-[0.95rem] font-bold"
@@ -198,10 +202,12 @@ export default function SignalBacktestPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const id = setInterval(load, pollMs());
+    // Pinned weekly snapshot / slow-moving evaluation — no tick-rate polling.
+    // Switching horizon or mode re-runs the effect and fetches immediately.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(id);
+      stop();
     };
   }, [horizon, mode, retryTick]);
 
@@ -217,7 +223,7 @@ export default function SignalBacktestPage() {
     <div className="flex flex-col gap-4">
       <header className="flex flex-col gap-2">
         <h1 className="text-[1.1rem] font-bold tracking-wide">SIGNAL BACKTEST</h1>
-        <p className="text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+        <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           The platform&apos;s <strong>own</strong> flagship signal, graded out of
           sample. We replay the <strong>feature store</strong> — every resolved
           prediction&apos;s calibrated probability joined to what the market
@@ -255,7 +261,7 @@ export default function SignalBacktestPage() {
                 type="button"
                 onClick={() => setHorizon(h)}
                 aria-pressed={active}
-                className="px-3 py-1 text-[0.75rem] font-semibold tracking-wide"
+                className="cursor-pointer rounded-lg px-3 py-1 text-[0.75rem] font-semibold tracking-wide transition-colors duration-150 hover:brightness-125"
                 style={{
                   border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
                   background: "transparent",
@@ -269,7 +275,7 @@ export default function SignalBacktestPage() {
           })}
         </div>
         {res && (
-          <span className="text-[0.72rem] tnum" style={{ color: "var(--faint)" }}>
+          <span className="text-[0.75rem] tnum" style={{ color: "var(--faint)" }}>
             {res.rawN.toLocaleString("en-US")} raw rows →{" "}
             {res.independentN.toLocaleString("en-US")} independent · cost{" "}
             {res.costBps.toFixed(1)}bps/side
@@ -279,7 +285,7 @@ export default function SignalBacktestPage() {
         {current && (
           <span className="ml-auto flex flex-wrap items-center gap-2">
             <span
-              className="px-2 py-1 text-[0.7rem] font-semibold tnum"
+              className="rounded-lg px-2 py-1 text-[0.75rem] font-semibold tnum"
               style={{
                 border: "1px solid var(--border)",
                 color: current.pinned ? "var(--accent)" : "var(--dim)",
@@ -297,12 +303,11 @@ export default function SignalBacktestPage() {
             <button
               type="button"
               onClick={() => setMode(mode === "pinned" ? "live" : "pinned")}
-              className="px-2 py-1 text-[0.7rem] font-semibold"
+              className="cursor-pointer rounded-lg px-2 py-1 text-[0.75rem] font-semibold transition-colors duration-150 hover:brightness-125"
               style={{
                 border: "1px solid var(--border)",
                 background: "transparent",
                 color: "var(--dim)",
-                cursor: "pointer",
               }}
               title={
                 mode === "pinned"
@@ -318,7 +323,7 @@ export default function SignalBacktestPage() {
 
       {/* Requested the pin, none stored yet — say so instead of pretending. */}
       {current?.pinnedNote && (
-        <p className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+        <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
           {current.pinnedNote}
         </p>
       )}
@@ -341,12 +346,7 @@ export default function SignalBacktestPage() {
         <>
           {/* Costed equity vs SPY. */}
           <section className="panel">
-            <div
-              className="px-4 py-2 text-[0.75rem] font-semibold tracking-wide"
-              style={{ borderBottom: "1px solid var(--border)", color: "var(--dim)" }}
-            >
-              COSTED EQUITY — SIGNAL vs SPY BUY &amp; HOLD
-            </div>
+            <div className="panel-h">COSTED EQUITY — SIGNAL vs SPY BUY &amp; HOLD</div>
             {res.equity.length >= 2 ? (
               <EquityCurve curve={res.equity} />
             ) : (
@@ -367,20 +367,20 @@ export default function SignalBacktestPage() {
               label="INFORMATION COEFFICIENT"
               value={res.ic.toFixed(3)}
               color={res.ic > 0 ? upColor : res.ic < 0 ? downColor : undefined}
-              title="Spearman rank correlation of the signal with the realized forward return, over independent (symbol, day) observations. ~0 means no edge."
+              help="Spearman rank correlation of the signal with the realized forward return, over independent (symbol, day) observations. ~0 means no edge."
               hint="rank corr · signal vs fwd"
             />
             <Metric
               label="QUINTILE SPREAD"
               value={fmtPct(res.quintileSpread * 100)}
               color={res.quintileSpread > 0 ? upColor : downColor}
-              title="Mean forward return of the top signal quintile minus the bottom. Positive = higher signals really did precede higher returns."
+              help="Mean forward return of the top signal quintile minus the bottom. Positive = higher signals really did precede higher returns."
               hint="Q5 − Q1 mean fwd"
             />
             <Metric
               label="HIT RATE"
               value={fmtPct(res.hitRate * 100, false)}
-              title="Fraction of independent observations where the signal's directional lean matched the realized direction. 50% = coin flip."
+              help="Fraction of independent observations where the signal's directional lean matched the realized direction. 50% = coin flip."
               hint="direction correct"
             />
             <Metric
@@ -393,7 +393,7 @@ export default function SignalBacktestPage() {
               label="STRATEGY RETURN"
               value={fmtPct(res.strategyReturn * 100)}
               color={res.strategyReturn >= 0 ? upColor : downColor}
-              title="Net-of-cost total return of the long/flat strategy driven by the calibrated signal."
+              help="Net-of-cost total return of the long/flat strategy driven by the calibrated signal."
               hint="net of cost"
             />
             <Metric
@@ -408,27 +408,27 @@ export default function SignalBacktestPage() {
               label="EXCESS vs SPY"
               value={current.hasBenchmark ? fmtPct(res.excessReturn * 100) : "n/a"}
               color={res.excessReturn >= 0 ? upColor : downColor}
-              title="Strategy return minus SPY buy-and-hold over the same window."
+              help="Strategy return minus SPY buy-and-hold over the same window."
               hint="strategy − benchmark"
             />
             <Metric
               label="TURNOVER"
               value={res.turnover.toFixed(2) + "×"}
-              title="Mean absolute position change per observation — a churn proxy. High turnover means costs bite harder."
+              help="Mean absolute position change per observation — a churn proxy. High turnover means costs bite harder."
               hint="mean |Δposition|"
             />
           </section>
 
+          {/* IC decay + quintile profile are methodology detail — SIMPLE mode
+              folds them behind one disclosure; the honesty label, equity curve
+              and headline metrics above stay visible in both modes. */}
+          <ProOnly summary="Show methodology detail">
+          <div className="flex flex-col gap-4">
           {/* IC decay by lag. */}
           <section className="panel">
-            <div
-              className="px-4 py-2 text-[0.75rem] font-semibold tracking-wide"
-              style={{ borderBottom: "1px solid var(--border)", color: "var(--dim)" }}
-            >
-              IC DECAY BY LAG
-            </div>
+            <div className="panel-h">IC DECAY BY LAG</div>
             <div className="overflow-x-auto">
-              <table className="tnum w-full text-[0.8rem]">
+              <table className="tnum w-full text-[0.75rem]">
                 <thead>
                   <tr style={{ color: "var(--faint)" }}>
                     <th className="px-4 py-2 text-left font-normal">FWD LAG</th>
@@ -462,14 +462,9 @@ export default function SignalBacktestPage() {
 
           {/* Quintile forward-return profile. */}
           <section className="panel">
-            <div
-              className="px-4 py-2 text-[0.75rem] font-semibold tracking-wide"
-              style={{ borderBottom: "1px solid var(--border)", color: "var(--dim)" }}
-            >
-              SIGNAL QUINTILES — FORWARD-RETURN PROFILE
-            </div>
+            <div className="panel-h">SIGNAL QUINTILES — FORWARD-RETURN PROFILE</div>
             <div className="overflow-x-auto">
-              <table className="tnum w-full text-[0.8rem]">
+              <table className="tnum w-full text-[0.75rem]">
                 <thead>
                   <tr style={{ color: "var(--faint)" }}>
                     <th className="px-4 py-2 text-left font-normal">QUINTILE</th>
@@ -509,7 +504,7 @@ export default function SignalBacktestPage() {
               </table>
             </div>
             <p
-              className="px-4 py-3 text-[0.72rem] leading-relaxed"
+              className="px-4 py-3 text-[0.75rem] leading-relaxed"
               style={{ color: "var(--faint)", borderTop: "1px solid var(--border)" }}
             >
               A signal with edge shows mean forward return rising monotonically
@@ -517,6 +512,8 @@ export default function SignalBacktestPage() {
               result.
             </p>
           </section>
+          </div>
+          </ProOnly>
         </>
       ) : null}
     </div>

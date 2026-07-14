@@ -154,17 +154,18 @@ func TestGBMTrainer_StoresGradedLeg(t *testing.T) {
 }
 
 // canonicalFeatureKeys must EXCLUDE the blend's own outputs (pred_raw/pred_cal)
-// and the model legs' own past outputs (gbm_prob/meanrev_prob) — training on
-// them would be a self-referential shortcut.
+// and the model legs' own past outputs (gbm_prob/meanrev_prob/alphax_prob) —
+// training on them would be a self-referential shortcut.
 func TestCanonicalFeatureKeys_ExcludesModelOutputs(t *testing.T) {
 	rows := []store.LabeledFeature{
 		{Vec: map[string]float64{
 			"pressure_score": 0.1, "x": 0.2,
 			"pred_raw": 0.6, "pred_cal": 0.6, "gbm_prob": 0.55, "meanrev_prob": 0.45,
+			"alphax_prob": 0.61,
 		}},
 	}
 	keys := canonicalFeatureKeys(rows)
-	for _, bad := range []string{"pred_raw", "pred_cal", "gbm_prob", "meanrev_prob"} {
+	for _, bad := range []string{"pred_raw", "pred_cal", "gbm_prob", "meanrev_prob", "alphax_prob"} {
 		for _, k := range keys {
 			if k == bad {
 				t.Fatalf("canonical keys must exclude %q (self-reference/leakage)", bad)

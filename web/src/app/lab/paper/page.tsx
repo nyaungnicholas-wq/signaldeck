@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   paper,
   pollMs,
+  POLL_DEFAULT,
   type PaperResponse,
   type PaperEquityPoint,
 } from "@/lib/api";
@@ -12,6 +13,8 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
+import HelpTip from "@/components/HelpTip";
+import ProOnly from "@/components/ProOnly";
 
 /** USD formatter for book values. */
 function usd(v: number): string {
@@ -137,13 +140,14 @@ function Metric({
   value,
   color,
   hint,
-  title,
+  help,
 }: {
   label: string;
   value: string;
   color?: string;
   hint?: string;
-  title?: string;
+  /** Load-bearing explanation — rendered as a click/keyboard HelpTip, not a hover title. */
+  help?: string;
 }) {
   return (
     <div
@@ -151,11 +155,11 @@ function Metric({
       style={{ borderBottom: "1px solid var(--border)" }}
     >
       <span
-        className="text-[0.75rem] tracking-wide"
+        className="flex items-center gap-1 text-[0.75rem] tracking-wide"
         style={{ color: "var(--faint)" }}
-        title={title}
       >
         {label}
+        {help && <HelpTip label={`What does ${label} mean?`}>{help}</HelpTip>}
       </span>
       <span
         className="tnum text-[0.95rem] font-bold"
@@ -192,10 +196,11 @@ export default function PaperPage() {
           setErr(e.message);
         });
     load();
-    const id = setInterval(load, pollMs());
+    // The book marks once per new daily bar — no need to poll faster.
+    const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
-      clearInterval(id);
+      stop();
     };
   }, [strategy, retryTick]);
 
@@ -207,7 +212,7 @@ export default function PaperPage() {
     <div className="flex flex-col gap-4">
       <header className="flex flex-col gap-2">
         <h1 className="text-[1.1rem] font-bold tracking-wide">PAPER TRADING</h1>
-        <p className="text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+        <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           An <strong>internal simulation</strong> that trades the platform&apos;s own
           flagship calibrated prediction: go long when a symbol&apos;s calibrated
           probability crosses the long threshold, exit when it crosses the flat
@@ -245,7 +250,7 @@ export default function PaperPage() {
             <button
               key={name}
               onClick={() => setStrategy(name)}
-              className="px-3 py-1 text-[0.75rem] font-semibold tracking-wide"
+              className="mono cursor-pointer rounded-lg px-3 py-1 text-[0.75rem] font-semibold tracking-wide transition-colors duration-150 hover:brightness-125"
               style={{
                 border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
                 background: "transparent",
@@ -258,7 +263,7 @@ export default function PaperPage() {
           );
         })}
         {data ? (
-          <span className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
             long ≥ {data.longThresh.toFixed(2)} · flat ≤{" "}
             {data.flatThresh.toFixed(2)} · book {usd(data.startCash)}
           </span>
@@ -273,12 +278,7 @@ export default function PaperPage() {
         <>
           {/* Equity curve. */}
           <section className="panel">
-            <div
-              className="px-4 py-2 text-[0.75rem] font-semibold tracking-wide"
-              style={{ borderBottom: "1px solid var(--border)", color: "var(--dim)" }}
-            >
-              SIMULATED EQUITY CURVE
-            </div>
+            <div className="panel-h">SIMULATED EQUITY CURVE</div>
             {data.equity.length >= 2 ? (
               <EquityCurve curve={data.equity} start={s?.startEquity || data.startCash} />
             ) : (
@@ -290,8 +290,11 @@ export default function PaperPage() {
             )}
           </section>
 
-          {/* Costed summary — every stat gated to what the sample supports. */}
+          {/* Costed summary — every stat gated to what the sample supports.
+              SIMPLE mode folds the gauge grid; the equity curve + honesty
+              label above stay visible in both modes. */}
           {s ? (
+            <ProOnly summary="Show the numbers">
             <section
               className="panel grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"
               aria-label="costed summary"
@@ -311,13 +314,13 @@ export default function PaperPage() {
               <Metric
                 label="SHARPE"
                 value={s.sharpeValid ? s.sharpe.toFixed(2) : "n/a"}
-                title="Annualized per-mark Sharpe (rf=0). Withheld until there are enough equity marks to be meaningful."
+                help="Annualized per-mark Sharpe (rf=0). Withheld until there are enough equity marks to be meaningful."
                 hint={s.sharpeValid ? "annualized, rf=0" : "too few marks yet"}
               />
               <Metric
                 label="WIN RATE"
                 value={s.winRateValid ? fmtPct(s.winRate * 100, false) : "n/a"}
-                title="Fraction of closed round-trips that were net-positive after costs. Withheld below 5 closed trades."
+                help="Fraction of closed round-trips that were net-positive after costs. Withheld below 5 closed trades."
                 hint={
                   s.winRateValid
                     ? `${s.closedTrades} closed`
@@ -345,21 +348,17 @@ export default function PaperPage() {
                 hint="calendar length"
               />
             </section>
+            </ProOnly>
           ) : null}
 
           {/* Open positions. */}
           <section className="panel">
-            <div
-              className="px-4 py-2 text-[0.75rem] font-semibold tracking-wide"
-              style={{ borderBottom: "1px solid var(--border)", color: "var(--dim)" }}
-            >
-              OPEN POSITIONS ({data.positions.length})
-            </div>
+            <div className="panel-h">OPEN POSITIONS ({data.positions.length})</div>
             {data.positions.length === 0 ? (
               <EmptyState message="Flat — no open positions." className="border-0" />
             ) : (
               <div className="overflow-x-auto">
-                <table className="tnum w-full text-[0.8rem]">
+                <table className="tnum w-full text-[0.75rem]">
                   <thead>
                     <tr style={{ color: "var(--faint)" }}>
                       <th className="px-4 py-2 text-left font-normal">SYMBOL</th>
@@ -390,12 +389,7 @@ export default function PaperPage() {
 
           {/* Trade log. */}
           <section className="panel">
-            <div
-              className="px-4 py-2 text-[0.75rem] font-semibold tracking-wide"
-              style={{ borderBottom: "1px solid var(--border)", color: "var(--dim)" }}
-            >
-              TRADE LOG (most recent {data.trades.length})
-            </div>
+            <div className="panel-h">TRADE LOG (most recent {data.trades.length})</div>
             {data.trades.length === 0 ? (
               <EmptyState
                 message="No simulated trades yet."
@@ -404,7 +398,7 @@ export default function PaperPage() {
               />
             ) : (
               <div className="overflow-x-auto">
-                <table className="tnum w-full text-[0.8rem]">
+                <table className="tnum w-full text-[0.75rem]">
                   <thead>
                     <tr style={{ color: "var(--faint)" }}>
                       <th className="px-4 py-2 text-left font-normal">DATE</th>
@@ -434,7 +428,7 @@ export default function PaperPage() {
                         <td className="px-4 py-2 text-right" style={{ color: "var(--faint)" }}>
                           {usd2(t.cost)}
                         </td>
-                        <td className="px-4 py-2 text-[0.72rem]" style={{ color: "var(--dim)" }}>
+                        <td className="px-4 py-2 text-[0.75rem]" style={{ color: "var(--dim)" }}>
                           {t.reason}
                         </td>
                       </tr>

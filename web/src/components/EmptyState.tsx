@@ -9,7 +9,7 @@ export default function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={`panel px-4 py-6 text-[0.8rem] ${className}`} style={{ color: "var(--dim)" }}>
+    <div className={`panel px-4 py-6 text-[0.75rem] ${className}`} style={{ color: "var(--dim)" }}>
       {message}
       {detail ? (
         <div className="mt-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>

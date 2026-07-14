@@ -13,7 +13,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { anomalies, type AnomaliesResponse, type AnomalyRow, type Market } from "@/lib/api";
+import { anomalies, pollMs, POLL_SLOW, type AnomaliesResponse, type AnomalyRow, type Market } from "@/lib/api";
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import EmptyState from "@/components/EmptyState";
@@ -68,10 +68,11 @@ export default function UnusualActivityPanel({
           setError(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, 60_000);
+    // POLL_SLOW tier — a secondary panel; the full tape lives on /signals/unusual.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [symbol, market, kind, limit]);
 
@@ -82,14 +83,16 @@ export default function UnusualActivityPanel({
   return (
     <section className="panel" aria-label="unusual activity">
       <div className="panel-h flex-wrap gap-2">
-        <span>UNUSUAL ACTIVITY{symbol ? ` · ${symbol}` : ""}</span>
+        <span>
+          UNUSUAL ACTIVITY{symbol ? <> · <span className="mono">{symbol}</span></> : ""}
+        </span>
         <span
-          className="text-[0.68rem] font-normal normal-case tracking-normal"
+          className="text-[0.75rem] font-normal normal-case tracking-normal"
           style={{ color: "var(--faint)" }}
         >
           z-scores vs each symbol&rsquo;s own baseline — descriptive, not predictions
         </span>
-        {resp !== null && <span className="tnum ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>{rows.length} shown</span>}
+        {resp !== null && <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>{rows.length} shown</span>}
       </div>
       <div className="flex flex-col">
         {resp === null && !error && (
@@ -98,7 +101,7 @@ export default function UnusualActivityPanel({
           </div>
         )}
         {resp === null && error && (
-          <div className="p-3 text-[0.78rem]" style={{ color: "var(--bad)" }}>
+          <div className="p-3 text-[0.75rem]" style={{ color: "var(--bad)" }}>
             {error} — is the daemon running?
           </div>
         )}
@@ -111,26 +114,26 @@ export default function UnusualActivityPanel({
         {rows.map((a) => (
           <div
             key={a.id}
-            className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t px-4 py-2 text-[0.78rem]"
+            className="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t px-4 py-2 text-[0.75rem]"
             style={{ borderColor: "var(--border)" }}
           >
             {!symbol && (
               <Link
                 href={`/s/${a.market}/${encodeURIComponent(a.symbol)}`}
-                className="cursor-pointer font-bold tracking-wide hover:text-[var(--accent)]"
+                className="mono cursor-pointer font-bold tracking-wide transition-colors duration-150 hover:text-[var(--accent)]"
               >
                 {a.symbol}
               </Link>
             )}
             <span
-              className="chip px-2 py-[1px] text-[0.68rem] tracking-wider"
+              className="chip px-2 py-[1px] text-[0.75rem] tracking-wider"
               style={{ color: zColor(a), borderColor: zColor(a) }}
             >
               {KIND_LABEL[a.kind]}
             </span>
             {isProxy(a) && (
               <span
-                className="chip px-2 py-[1px] text-[0.68rem] tracking-wider"
+                className="chip px-2 py-[1px] text-[0.75rem] tracking-wider"
                 title={resp?.proxyNote}
                 style={{ color: "var(--faint)" }}
               >
@@ -142,17 +145,17 @@ export default function UnusualActivityPanel({
                 ? `TR/ATR=${a.z.toFixed(1)}x`
                 : `z=${a.z >= 0 ? "+" : ""}${a.z.toFixed(1)}`}
             </span>
-            <span className="tnum ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>
+            <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
               {ago(a.ts)}
             </span>
-            <span className="w-full text-[0.72rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            <span className="w-full text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
               {a.detail}
             </span>
           </div>
         ))}
         {resp !== null && (
           <p
-            className="border-t px-4 py-2 text-[0.68rem] leading-relaxed"
+            className="border-t px-4 py-2 text-[0.75rem] leading-relaxed"
             style={{ borderColor: "var(--border)", color: "var(--faint)" }}
           >
             {resp.note} {resp.proxyNote}

@@ -8,15 +8,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { congress, type CongressMirrorStatus, type CongressTrade } from "@/lib/api";
+import { congress, pollMs, POLL_SLOW, type CongressMirrorStatus, type CongressTrade } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
 import PagePurpose from "@/components/PagePurpose";
-
-const POLL_MS = 120_000;
 
 type ChamberFilter = "all" | "senate" | "house";
 
@@ -85,10 +83,12 @@ export default function CongressPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, POLL_MS);
+    // POLL_SLOW: the congress-poller sweeps the free mirrors every ~12h, and
+    // the underlying disclosures lag 30-45 days by law anyway.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [chamber, symbol, member, retryTick]);
 
@@ -161,10 +161,10 @@ export default function CongressPage() {
                   role="tab"
                   aria-selected={c === chamber}
                   onClick={() => setChamber(c)}
-                  className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150"
+                  className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
                   style={{
-                    color: c === chamber ? "var(--accent)" : "var(--dim)",
-                    borderColor: c === chamber ? "var(--accent)" : "var(--border)",
+                    color: c === chamber ? "var(--accent)" : undefined,
+                    borderColor: c === chamber ? "var(--accent)" : undefined,
                   }}
                 >
                   {c}
@@ -174,7 +174,7 @@ export default function CongressPage() {
           </div>
 
           {/* full honesty note: lag + ranges + mirror provenance */}
-          <p className="px-4 py-3 text-[0.76rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             {lagNote} {note}
           </p>
 
@@ -205,7 +205,7 @@ export default function CongressPage() {
               {list.map((t) => (
                 <li
                   key={t.id}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.8rem]"
+                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.75rem]"
                   style={{ borderBottom: "1px solid var(--border)" }}
                 >
                   {t.symbolId !== null ? (
@@ -217,13 +217,16 @@ export default function CongressPage() {
                       {t.symbol}
                     </Link>
                   ) : (
-                    <span
-                      className="tnum w-16 font-bold"
-                      style={{ color: "var(--text)" }}
-                      title="ticker as disclosed (not tracked by SignalDeck)"
-                    >
-                      {t.symbol}
-                    </span>
+                    // Untracked ticker: the "as disclosed" marker is visible
+                    // text, not a hover-only tooltip.
+                    <>
+                      <span className="tnum w-16 font-bold" style={{ color: "var(--text)" }}>
+                        {t.symbol}
+                      </span>
+                      <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                        as disclosed — not tracked
+                      </span>
+                    </>
                   )}
                   <span
                     className="chip"
@@ -238,7 +241,7 @@ export default function CongressPage() {
                   <span className="tnum" style={{ color: "var(--dim)" }} title="range as disclosed — exact amounts are not published">
                     {t.amountRange || "—"}
                   </span>
-                  <span className="tnum ml-auto text-[0.72rem]" style={{ color: "var(--faint)" }}>
+                  <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
                     traded {t.txTs > 0 ? fmtDate(t.txTs) : "n/a"} · disclosed{" "}
                     {t.disclosedTs > 0 ? fmtDate(t.disclosedTs) : "n/a"}
                   </span>

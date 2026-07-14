@@ -23,20 +23,20 @@ function ChangeRow({ c, marketFor }: { c: RegimeChange; marketFor: (sym: string)
     >
       <Link
         href={`/s/${marketFor(c.symbol)}/${encodeURIComponent(c.symbol)}`}
-        className="w-20 shrink-0 cursor-pointer text-[0.8rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
+        className="mono w-20 shrink-0 cursor-pointer text-[0.75rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
       >
         {c.symbol}
       </Link>
-      <span className="tnum text-[0.78rem]" style={{ color: fromColor }}>
+      <span className="tnum text-[0.75rem]" style={{ color: fromColor }}>
         {c.from || "—"}
       </span>
       <span aria-hidden="true" style={{ color: "var(--faint)" }}>
         →
       </span>
-      <span className="tnum text-[0.78rem] font-bold" style={{ color: toColor }}>
+      <span className="tnum text-[0.75rem] font-bold" style={{ color: toColor }}>
         {c.to || "—"}
       </span>
-      <span className="tnum ml-auto shrink-0 text-[0.78rem]" style={{ color: "var(--faint)" }}>
+      <span className="tnum ml-auto shrink-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
         {ago(c.ts)}
       </span>
     </li>

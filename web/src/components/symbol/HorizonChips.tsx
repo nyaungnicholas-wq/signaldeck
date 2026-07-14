@@ -26,7 +26,7 @@ export default function HorizonChips({
             aria-selected={active}
             disabled={!enabled}
             onClick={() => enabled && onChange(h)}
-            className="chip transition-colors duration-150"
+            className="chip transition-colors duration-150 enabled:hover:bg-[var(--panel3)]"
             style={{
               cursor: enabled ? "pointer" : "not-allowed",
               opacity: enabled ? 1 : 0.4,

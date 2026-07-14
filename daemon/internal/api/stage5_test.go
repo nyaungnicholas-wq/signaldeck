@@ -26,14 +26,14 @@ func newStage5Server(t *testing.T) (string, *store.Store) {
 }
 
 type stage5Resp struct {
-	Horizon      string                 `json:"horizon"`
-	Rows         []store.LatestPredRow  `json:"rows"`
-	N            int                    `json:"n"`
-	ResolvedN    int                    `json:"resolvedN"`
-	MinResolvedN int                    `json:"minResolvedN"`
-	Gated        bool                   `json:"gated"`
-	Caption      string                 `json:"caption"`
-	TrackLabel   string                 `json:"trackLabel"`
+	Horizon      string                `json:"horizon"`
+	Rows         []store.LatestPredRow `json:"rows"`
+	N            int                   `json:"n"`
+	ResolvedN    int                   `json:"resolvedN"`
+	MinResolvedN int                   `json:"minResolvedN"`
+	Gated        bool                  `json:"gated"`
+	Caption      string                `json:"caption"`
+	TrackLabel   string                `json:"trackLabel"`
 }
 
 func TestPredictionsLatestEndpoint(t *testing.T) {

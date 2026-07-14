@@ -119,7 +119,6 @@ export default function VerdictCard({
       ? `color-mix(in srgb, ${vd.color} 60%, var(--dim))`
       : vd.color;
 
-  const headline = noRead ? NO_READ_TEXT : `${vd.label} — ${vd.pct}%`;
   const tooltip = noRead
     ? `${symbol}: no calibrated ${horizon} prediction stored yet — a missing number is never dressed up as a verdict. ${badge.detail}`
     : `${symbol}: calibrated ${vd.pct}% chance the price is higher at the ${horizon} horizon — ${vd.confidenceWord} (50% would be a coin flip). Blend of ${nUsed} signal${nUsed === 1 ? "" : "s"}. ${badge.detail} ${BACKTEST_NOTE}.`;
@@ -129,15 +128,17 @@ export default function VerdictCard({
     return (
       <span className={`inline-flex min-w-[96px] max-w-[190px] flex-col gap-[3px] ${className}`} title={tooltip}>
         <span
-          className="inline-flex items-center gap-1 text-[0.7rem] font-bold tracking-wider"
+          className="inline-flex items-center gap-1 text-[0.75rem] font-bold tracking-wider"
           style={{ color }}
         >
           <span aria-hidden="true">{vd.arrow}</span>
-          <span>{noRead ? "NO READ YET" : `${vd.label} — ${vd.pct}%`}</span>
+          <span>
+            {noRead ? "NO READ YET" : <>{vd.label} — <span className="tnum">{vd.pct}%</span></>}
+          </span>
         </span>
         <ConfidenceMeter pct={vd.pct} color={color} h={3} />
         {/* the honest tier badge — visible in BOTH modes, never tooltip-only */}
-        <span className="truncate text-[0.62rem] leading-tight" style={{ color: "var(--faint)" }}>
+        <span className="truncate text-[0.75rem] leading-tight" style={{ color: "var(--faint)" }}>
           {noRead ? "still collecting evidence" : badge.label}
         </span>
       </span>
@@ -148,11 +149,11 @@ export default function VerdictCard({
   return (
     <section className={`panel ${className}`} title={tooltip}>
       <div className="panel-h flex-wrap gap-2">
-        VERDICT · {symbol}
+        <span>VERDICT · <span className="mono">{symbol}</span></span>
         {market && <span className="chip uppercase tracking-wider">{market}</span>}
         <span className="chip tnum">{horizon}</span>
         <span
-          className="ml-auto text-[0.66rem] font-normal normal-case tracking-normal"
+          className="ml-auto text-[0.75rem] font-normal normal-case tracking-normal"
           style={{ color: "var(--faint)" }}
         >
           {BACKTEST_NOTE}
@@ -165,13 +166,17 @@ export default function VerdictCard({
           </span>
           <div className="flex min-w-0 flex-col">
             <span className="text-lg font-extrabold tracking-[0.08em]" style={{ color }}>
-              {headline}
+              {noRead ? NO_READ_TEXT : <>{vd.label} — <span className="tnum">{vd.pct}%</span></>}
             </span>
-            <span className="text-[0.74rem]" style={{ color: "var(--dim)" }}>
+            <span className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
               {noRead
                 ? "no calibrated prediction stored for this symbol yet — nothing is invented in the meantime"
                 : mode === "pro"
-                  ? `calibrated P(up) ${((calProb as number) * 100).toFixed(1)}% · ${vd.confidenceWord} · blend n=${nUsed}`
+                  ? (
+                      <span className="tnum">
+                        calibrated P(up) {((calProb as number) * 100).toFixed(1)}% · {vd.confidenceWord} · blend n={nUsed}
+                      </span>
+                    )
                   : `${vd.pct}% chance the price is higher at the ${horizon} horizon — ${vd.confidenceWord} (50% would be a coin flip)`}
             </span>
           </div>
@@ -183,7 +188,7 @@ export default function VerdictCard({
         </div>
 
         <div className="flex flex-col gap-1">
-          <div className="flex items-center justify-between text-[0.64rem]" style={{ color: "var(--faint)" }}>
+          <div className="flex items-center justify-between text-[0.75rem]" style={{ color: "var(--faint)" }}>
             <span>↓ down</span>
             <span>coin flip</span>
             <span>up ↑</span>
@@ -194,7 +199,7 @@ export default function VerdictCard({
         {/* the honest evidence-tier badge — always visible */}
         <div className="flex flex-wrap items-center gap-2">
           <span
-            className="chip px-2 py-[1px] text-[0.68rem]"
+            className="chip px-2 py-[1px] text-[0.75rem]"
             style={{
               color: tier === "personal" ? "var(--accent)" : "var(--dim)",
               borderColor: tier === "personal" ? "var(--accent)" : "var(--border)",
@@ -204,7 +209,7 @@ export default function VerdictCard({
             {badge.label}
           </span>
           {mode === "simple" && !noRead && (
-            <span className="text-[0.68rem]" style={{ color: "var(--faint)" }}>
+            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
               blend of {nUsed} signal{nUsed === 1 ? "" : "s"}
             </span>
           )}

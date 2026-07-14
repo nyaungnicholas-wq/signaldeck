@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { api, pollMs, type Trends, type TrendsMover } from "@/lib/api";
+import { api, pollMs, POLL_DEFAULT, type Trends, type TrendsMover } from "@/lib/api";
 import { ago, fmtPct, fmtScore, scoreColor } from "@/lib/format";
 import ScoreGauge from "@/components/ScoreGauge";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import Gauge from "@/components/viz/Gauge";
+import HelpTip from "@/components/HelpTip";
 import PagePurpose from "@/components/PagePurpose";
 
 function MoverRow({ m }: { m: TrendsMover }) {
@@ -19,7 +20,7 @@ function MoverRow({ m }: { m: TrendsMover }) {
     >
       <Link
         href={`/s/${m.market}/${encodeURIComponent(m.symbol)}`}
-        className="w-24 shrink-0 cursor-pointer text-[0.8rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
+        className="mono w-24 shrink-0 cursor-pointer text-[0.75rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
       >
         {m.symbol}
         <span className="ml-1.5 text-[0.75rem] font-normal" style={{ color: "var(--faint)" }}>
@@ -30,13 +31,13 @@ function MoverRow({ m }: { m: TrendsMover }) {
         <ScoreGauge score={m.score} compact label={`${m.symbol} pressure score`} />
       </div>
       <span
-        className="tnum w-14 shrink-0 text-right text-[0.8rem]"
+        className="tnum w-14 shrink-0 text-right text-[0.75rem]"
         style={{ color: scoreColor(m.score) }}
       >
         {fmtScore(m.score)}
       </span>
       <span
-        className="tnum w-16 shrink-0 text-right text-[0.8rem]"
+        className="tnum w-16 shrink-0 text-right text-[0.75rem]"
         style={{ color: scoreColor(m.dayChangePct) }}
       >
         {fmtPct(m.dayChangePct)}
@@ -48,7 +49,14 @@ function MoverRow({ m }: { m: TrendsMover }) {
 function MoversPanel({ title, movers }: { title: string; movers: TrendsMover[] }) {
   return (
     <section className="panel">
-      <div className="panel-h">{title}</div>
+      <div className="panel-h">
+        {title}
+        <HelpTip label="What is the pressure score?">
+          The pressure score blends stored technical components into one number from −1 (sell
+          pressure) to +1 (buy pressure). It describes current conditions from recorded bars —
+          not a forecast, and not financial advice.
+        </HelpTip>
+      </div>
       {movers.length === 0 ? (
         <EmptyState
           message="No scored symbols yet"
@@ -85,10 +93,11 @@ export default function TrendsPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, pollMs());
+    // Trend scores move on worker cadence — the default tier is plenty.
+    const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 
@@ -210,7 +219,7 @@ export default function TrendsPage() {
                       style={{ width: `${100 - posPct}%`, background: "var(--ask)" }}
                     />
                   </div>
-                  <div className="tnum mt-2 flex justify-between text-[0.78rem]">
+                  <div className="tnum mt-2 flex justify-between text-[0.75rem]">
                     <span style={{ color: "var(--bid)" }}>
                       {positive} positive ({posPct.toFixed(0)}%)
                     </span>
@@ -229,6 +238,15 @@ export default function TrendsPage() {
             <MoversPanel title="TOP MOVERS — HIGHEST SCORE" movers={top} />
             <MoversPanel title="BOTTOM MOVERS — LOWEST SCORE" movers={bottom} />
           </div>
+          <p className="px-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+            <Link
+              href="/markets/screener"
+              className="cursor-pointer transition-colors duration-150 hover:text-[var(--accent)]"
+              style={{ color: "var(--dim)" }}
+            >
+              Compare the full universe on the screener →
+            </Link>
+          </p>
 
           {/* market insight */}
           <section className="panel">
@@ -242,11 +260,11 @@ export default function TrendsPage() {
             </div>
             {trends.marketInsight ? (
               <div className="px-4 py-4">
-                <h2 className="text-[0.85rem] font-bold" style={{ color: "var(--text)" }}>
+                <h2 className="text-sm font-bold" style={{ color: "var(--text)" }}>
                   {trends.marketInsight.headline}
                 </h2>
                 <p
-                  className="mt-2 whitespace-pre-wrap text-[0.78rem] leading-relaxed"
+                  className="mt-2 whitespace-pre-wrap text-[0.75rem] leading-relaxed"
                   style={{ color: "var(--dim)" }}
                 >
                   {trends.marketInsight.body}

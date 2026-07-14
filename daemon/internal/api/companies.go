@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	companiesNote = "Directory = SEC EDGAR company_tickers_exchange.json (synced daily, one free request). Price/chg/volume are OUR stored daily closes (worker cadence, not live quotes) and exist only for tracked symbols; untracked rows show '—', never a fabricated number. Sector is the SEC SIC industry description, filled in as the filings-poller sweeps."
+	companiesNote     = "Directory = SEC EDGAR company_tickers_exchange.json (synced daily, one free request). Price/chg/volume are OUR stored daily closes (worker cadence, not live quotes) and exist only for tracked symbols; untracked rows show '—', never a fabricated number. Sector is the SEC SIC industry description, filled in as the filings-poller sweeps."
 	companiesMcapNote = "mcap = SEC EDGAR SharesOutstanding × last stored close; float = EDGAR EntityPublicFloat (USD, as filed). Best-effort: symbols EDGAR hasn't covered have null mcap/float. With a mcap filter active, unknown-mcap rows are excluded and counted."
 	earningsEstNote   = "ESTIMATED FROM FILING CADENCE — NOT A CONFIRMED DATE. Next report ≈ last 10-Q/10-K filing date + ~91 days (quarterly-filer heuristic; amendments excluded). Companies pre-announce, delay, and shift cycles; there is no free confirmed-earnings-date feed, so none is faked."
 )
@@ -230,13 +230,13 @@ func (d Deps) companies(w http.ResponseWriter, r *http.Request) {
 
 // earningsEstRow is one estimated next-report row.
 type earningsEstRow struct {
-	Symbol       string `json:"symbol"`
-	Name         string `json:"name"`
-	LastForm     string `json:"lastForm"`     // 10-Q | 10-K (the cadence anchor)
-	LastFiledTs  int64  `json:"lastFiledTs"`  // when it was filed (epoch)
-	EstTs        int64  `json:"estTs"`        // ESTIMATED next report date (epoch)
-	Estimate     bool   `json:"estimate"`     // always true — rendered as a label
-	Overdue      bool   `json:"overdue"`      // estTs already passed (cadence slipped)
+	Symbol      string `json:"symbol"`
+	Name        string `json:"name"`
+	LastForm    string `json:"lastForm"`    // 10-Q | 10-K (the cadence anchor)
+	LastFiledTs int64  `json:"lastFiledTs"` // when it was filed (epoch)
+	EstTs       int64  `json:"estTs"`       // ESTIMATED next report date (epoch)
+	Estimate    bool   `json:"estimate"`    // always true — rendered as a label
+	Overdue     bool   `json:"overdue"`     // estTs already passed (cadence slipped)
 }
 
 // earningsEstimates serves the filing-cadence earnings-estimate calendar.

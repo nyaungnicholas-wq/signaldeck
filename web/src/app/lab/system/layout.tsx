@@ -4,7 +4,15 @@
 // Stage 5: ALL (/lab/system, exact-match so it doesn't stay lit on the
 // focused tabs) mounts all three surfaces together on one page.
 
+import type { Metadata } from "next";
 import HubTabs from "@/components/HubTabs";
+
+// Bare page name — the root layout's title template appends "- SignalDeck".
+export const metadata: Metadata = {
+  title: "System",
+  description:
+    "One look at the machine — data quality, the background worker fleet, and the AI surface, with the same honesty gates as the focused tabs.",
+};
 
 const TABS = [
   { href: "/lab/system", label: "ALL", exact: true },

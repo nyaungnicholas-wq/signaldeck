@@ -1,34 +1,29 @@
 "use client";
 
-// ALERTS — the session user's actionable event feed (alerts wave).
-// Breakouts, regime changes, and calibrated predictions crossing thresholds
-// for symbols on YOUR watchlist. Polls /api/alerts; "mark all read" clears
-// the header bell.
+// ALERTS — the session user's actionable event feed, rebuilt as
+// "Unusual-Whales-with-receipts":
+//   · every kind chip is a NAMED rule (rules.ts) with a collapsible
+//     METHODOLOGY panel citing the exact daemon thresholds;
+//   · the OUTCOMES panel shows MEASURED 1d/5d forward returns after past
+//     alerts by kind — gated cells say "withheld", never a tiny-sample stat;
+//   · unread-first toggle uses the API's ?unseen=1 (mark-all-read + the
+//     header-bell "sd-alerts-seen" event kept intact);
+//   · client-side kind filter chips (unknown kinds render generically);
+//   · delivery transport chips now state lastOk ("delivered 12m ago").
+// Polls /api/alerts on the POLL_FAST tier (15s). Alerts are measurements of
+// stored events, not advice.
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { api, notifyStatus, type AlertRow, type NotifyStatusResponse } from "@/lib/api";
-import { ago } from "@/lib/format";
+import { api, notifyStatus, pollMs, POLL_FAST, type AlertRow, type NotifyStatusResponse } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
-
-const KIND_META: Record<string, { label: string; color: string }> = {
-  breakout: { label: "BREAKOUT", color: "var(--accent)" },
-  regime_change: { label: "REGIME", color: "var(--dim)" },
-  prediction_high: { label: "P(UP) HIGH", color: "var(--bid)" },
-  prediction_low: { label: "P(UP) LOW", color: "var(--ask)" },
-  // Signal8 wave Stage 3: anomaly kinds — DESCRIPTIVE z-scores vs the
-  // symbol's own baseline (the detail carries window/baseline/proxy labels).
-  anomaly_imbalance: { label: "IMBALANCE", color: "var(--warn)" },
-  anomaly_vol: { label: "VOLATILITY", color: "var(--warn)" },
-  anomaly_volume: { label: "VOLUME", color: "var(--warn)" },
-};
-
-function kindMeta(kind: string) {
-  return KIND_META[kind] ?? { label: kind.toUpperCase(), color: "var(--dim)" };
-}
+import AlertItem from "@/components/signals/alerts/AlertItem";
+import DeliveryStatus from "@/components/signals/alerts/DeliveryStatus";
+import MethodologyPanel from "@/components/signals/alerts/MethodologyPanel";
+import OutcomesPanel from "@/components/signals/alerts/OutcomesPanel";
+import { ruleFor, sortKinds } from "@/components/signals/alerts/rules";
 
 export default function AlertsPage() {
   const [rows, setRows] = useState<AlertRow[] | null>(null);
@@ -36,8 +31,12 @@ export default function AlertsPage() {
   const [tick, setTick] = useState(0);
   const [marking, setMarking] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  // Stage 3: delivery-transport status (macOS + Discord/Telegram/webhook).
-  // Best-effort settings note — a fetch failure just hides the line.
+  // Unread-first: flips the fetch to /api/alerts?unseen=1 (server-side filter,
+  // not a client-side hide — what you see is exactly what the API returned).
+  const [unseenOnly, setUnseenOnly] = useState(false);
+  // Client-side kind filter (null = all kinds).
+  const [kindFilter, setKindFilter] = useState<string | null>(null);
+  // Delivery-transport status — best-effort; a fetch failure just hides the row.
   const [deliveries, setDeliveries] = useState<NotifyStatusResponse | null>(null);
 
   useEffect(() => {
@@ -58,7 +57,7 @@ export default function AlertsPage() {
     let alive = true;
     const load = () =>
       api
-        .alerts(false, 100)
+        .alerts(unseenOnly, 100)
         .then((data) => {
           if (!alive) return;
           setRows(data);
@@ -69,14 +68,29 @@ export default function AlertsPage() {
           setError(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, 15000);
+    // POLL_FAST tier — an actively-watched feed (managed loop: hidden-tab
+    // pause, failure backoff).
+    const stop = pollMs(load, POLL_FAST);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
-  }, [tick]);
+  }, [tick, unseenOnly]);
 
   const unread = useMemo(() => (rows ?? []).filter((r) => !r.seen).length, [rows]);
+
+  // Kinds actually present in the feed (published order first, unknown kinds
+  // after) — drives both the filter chips and the methodology panel.
+  const kinds = useMemo(() => {
+    const present = new Set((rows ?? []).map((r) => r.kind));
+    if (kindFilter) present.add(kindFilter); // keep the active chip alive across refetches
+    return sortKinds([...present]);
+  }, [rows, kindFilter]);
+
+  const filtered = useMemo(
+    () => (kindFilter ? (rows ?? []).filter((r) => r.kind === kindFilter) : (rows ?? [])),
+    [rows, kindFilter],
+  );
 
   async function onMarkAll() {
     if (marking) return;
@@ -99,8 +113,14 @@ export default function AlertsPage() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <h1 className="text-[0.9rem] font-extrabold tracking-[0.14em]">ALERTS</h1>
-        <span className="chip tnum">{rows === null ? "…" : rows.length} shown</span>
+        <h1 className="text-sm font-bold tracking-[0.18em]">ALERTS</h1>
+        <span className="chip tnum">
+          {rows === null
+            ? "…"
+            : kindFilter
+              ? `${filtered.length}/${rows.length} shown`
+              : `${rows.length} shown`}
+        </span>
         <span className="chip tnum">
           <span style={{ color: unread > 0 ? "var(--accent)" : "var(--dim)" }}>{unread}</span>{" "}
           unread
@@ -112,9 +132,23 @@ export default function AlertsPage() {
         )}
         <button
           type="button"
+          aria-pressed={unseenOnly}
+          onClick={() => setUnseenOnly((u) => !u)}
+          className="chip ml-auto min-h-[40px] cursor-pointer px-3 transition-colors duration-150 hover:bg-[var(--panel3)]"
+          style={
+            unseenOnly
+              ? { color: "var(--accent)", borderColor: "var(--accent)" }
+              : { color: "var(--dim)" }
+          }
+          title="server-side filter — fetches /api/alerts?unseen=1"
+        >
+          unread only {unseenOnly ? "✓" : ""}
+        </button>
+        <button
+          type="button"
           onClick={onMarkAll}
           disabled={marking || unread === 0}
-          className="chip ml-auto min-h-[40px] cursor-pointer px-4 transition-colors duration-150 hover:text-[var(--text)] disabled:cursor-default"
+          className="chip min-h-[40px] cursor-pointer px-4 transition-colors duration-150 hover:bg-[var(--panel3)] hover:text-[var(--text)] disabled:cursor-default"
           style={
             unread > 0
               ? { color: "var(--accent)", borderColor: "var(--accent)" }
@@ -125,53 +159,74 @@ export default function AlertsPage() {
         </button>
       </div>
 
-      {/* STAGE 3: what this page answers, in plain English */}
+      {/* what this page answers, in plain English */}
       <PagePurpose
         id="signals-alerts"
-        text="What just happened to the symbols you watch? Breakouts, regime changes and strong predictions, written as they were detected — not replayed after the fact."
+        text="What just happened to the symbols you watch — and what actually happened AFTER alerts like these fired before? Every alert cites its published rule; the outcomes table shows measured forward returns, gated below minimum sample size."
       />
 
       <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-        Breakouts, regime changes, and calibrated predictions crossing conviction thresholds —
-        for symbols on your watchlist only. Alerts are measurements of stored events, not advice.
+        Breakouts, regime changes, anomalies, and calibrated predictions crossing conviction
+        thresholds — for symbols on your watchlist only. Alerts are measurements of stored
+        events written as they were detected, not advice.
       </p>
 
-      {deliveries && (
-        <div
-          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.72rem]"
-          style={{ color: "var(--faint)" }}
-        >
-          <span>deliveries:</span>
-          {deliveries.transports.map((t) => (
-            <span
-              key={t.name}
-              className="chip px-2 py-[2px] text-[0.7rem]"
-              style={
-                t.configured
-                  ? { color: "var(--accent)", borderColor: "var(--accent)" }
-                  : undefined
-              }
-              title={
-                t.configured
-                  ? (t.note ?? (t.lastError ? `last error (redacted): ${t.lastError}` : "configured"))
-                  : `off — set ${t.env} in daemon/.env to enable`
-              }
-            >
-              {t.name} {t.configured ? "✓" : "—"}
-            </span>
-          ))}
-          {deliveries.transports.some((t) => !t.configured) && (
-            <span>
-              — off transports: set the env shown on hover in daemon/.env (see .env.example).
-              Email: {deliveries.email}.
-            </span>
-          )}
+      {deliveries && <DeliveryStatus status={deliveries} />}
+
+      {actionError && (
+        <div role="alert" className="text-[0.75rem]" style={{ color: "var(--bad)" }}>
+          {actionError}
         </div>
       )}
 
-      {actionError && (
-        <div role="alert" className="text-[0.78rem]" style={{ color: "var(--bad)" }}>
-          {actionError}
+      {/* the published rulebook for the kinds actually in this feed */}
+      {kinds.length > 0 && <MethodologyPanel kinds={kinds} />}
+
+      {/* the receipts: measured forward returns after past alerts, by kind */}
+      <OutcomesPanel days={90} />
+
+      {/* client-side kind filter — unknown kinds get a generic chip, never hidden */}
+      {rows !== null && kinds.length > 1 && (
+        <div
+          className="flex flex-wrap items-center gap-1"
+          role="tablist"
+          aria-label="alert kind filter"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={kindFilter === null}
+            onClick={() => setKindFilter(null)}
+            className="chip min-h-[36px] cursor-pointer px-3 text-[0.75rem] transition-colors duration-150 hover:bg-[var(--panel3)]"
+            style={{
+              color: kindFilter === null ? "var(--accent)" : "var(--dim)",
+              borderColor: kindFilter === null ? "var(--accent)" : "var(--border)",
+            }}
+          >
+            all
+          </button>
+          {kinds.map((k) => {
+            const r = ruleFor(k);
+            const active = kindFilter === k;
+            const count = (rows ?? []).filter((a) => a.kind === k).length;
+            return (
+              <button
+                key={k}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                title={r.rule}
+                onClick={() => setKindFilter(active ? null : k)}
+                className="chip min-h-[36px] cursor-pointer px-3 text-[0.75rem] tracking-wider transition-colors duration-150 hover:bg-[var(--panel3)]"
+                style={{
+                  color: active ? r.color : "var(--dim)",
+                  borderColor: active ? r.color : "var(--border)",
+                }}
+              >
+                {r.label} <span className="tnum">{count}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -194,52 +249,27 @@ export default function AlertsPage() {
 
       {rows !== null && rows.length === 0 && (
         <EmptyState
-          message="No alerts yet"
-          detail="The alert-runner sweeps every 5 minutes: new breakouts, regime changes, and high-conviction calibrated predictions on your watchlist will appear here."
+          message={unseenOnly ? "No unread alerts" : "No alerts yet"}
+          detail={
+            unseenOnly
+              ? "You're caught up — switch off “unread only” to see the full feed."
+              : "The alert-runner sweeps every 5 minutes: new breakouts, regime changes, anomalies, and high-conviction calibrated predictions on your watchlist will appear here."
+          }
         />
       )}
 
-      {rows !== null && rows.length > 0 && (
+      {rows !== null && rows.length > 0 && filtered.length === 0 && (
+        <EmptyState
+          message={`No ${ruleFor(kindFilter ?? "").label.toLowerCase()} alerts in this feed`}
+          detail="The kind filter is client-side — clear it to see everything the API returned."
+        />
+      )}
+
+      {filtered.length > 0 && (
         <div className="flex flex-col gap-2">
-          {rows.map((a) => {
-            const meta = kindMeta(a.kind);
-            return (
-              <div
-                key={a.id}
-                className="panel flex min-h-[48px] flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[0.8rem]"
-                style={a.seen ? undefined : { borderColor: meta.color }}
-              >
-                {!a.seen && (
-                  <span
-                    aria-label="unread"
-                    className="inline-block h-2 w-2 shrink-0 rounded-full"
-                    style={{ background: meta.color }}
-                  />
-                )}
-                <span
-                  className="chip shrink-0 px-2 py-[2px] text-[0.72rem] tracking-wider"
-                  style={{ color: meta.color, borderColor: meta.color }}
-                >
-                  {meta.label}
-                </span>
-                {a.symbol && a.market ? (
-                  <Link
-                    href={`/s/${a.market}/${encodeURIComponent(a.symbol)}`}
-                    className="flex min-h-[40px] cursor-pointer items-center font-bold tracking-wide transition-colors duration-150 hover:text-[var(--accent)]"
-                  >
-                    {a.symbol}
-                  </Link>
-                ) : null}
-                {a.horizon && <span className="chip px-2 py-[2px] text-[0.72rem]">{a.horizon}</span>}
-                <span className="min-w-0 flex-1" style={{ color: "var(--dim)" }}>
-                  {a.detail}
-                </span>
-                <span className="tnum shrink-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                  {ago(a.ts)}
-                </span>
-              </div>
-            );
-          })}
+          {filtered.map((a) => (
+            <AlertItem key={a.id} a={a} />
+          ))}
         </div>
       )}
     </div>

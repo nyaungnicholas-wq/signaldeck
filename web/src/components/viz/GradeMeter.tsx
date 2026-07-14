@@ -35,10 +35,10 @@ export default function GradeMeter({
   return (
     <div className={`flex flex-col gap-1 ${className}`} title={reading.detail}>
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[0.66rem] uppercase tracking-[0.14em]" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem] uppercase tracking-[0.14em]" style={{ color: "var(--faint)" }}>
           {label}
         </span>
-        <span className="tnum text-[0.72rem]" style={{ color: has ? color : "var(--faint)" }}>
+        <span className="tnum text-[0.75rem]" style={{ color: has ? color : "var(--faint)" }}>
           {reading.raw}
         </span>
       </div>
@@ -65,13 +65,13 @@ export default function GradeMeter({
           style={{ left: "50%", width: 1, background: "var(--dim)" }}
         />
       </div>
-      <div className="flex items-center justify-between text-[0.62rem]" style={{ color: "var(--faint)" }}>
+      <div className="flex items-center justify-between text-[0.75rem]" style={{ color: "var(--faint)" }}>
         <span>bad</span>
         <span>neutral</span>
         <span>good</span>
       </div>
       {/* the honest sentence (with its caveats) rides on the meter in both modes */}
-      <p className="m-0 text-[0.74rem] leading-snug" style={{ color: has ? "var(--dim)" : "var(--faint)" }}>
+      <p className="m-0 text-[0.75rem] leading-snug" style={{ color: has ? "var(--dim)" : "var(--faint)" }}>
         {reading.plain}
       </p>
     </div>

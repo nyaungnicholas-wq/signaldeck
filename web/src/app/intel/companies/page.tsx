@@ -94,9 +94,15 @@ export default function CompaniesPage() {
   // Debounced fetch: filters reset the page; the query fires 250ms after the
   // last keystroke so typing doesn't hammer the daemon.
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
+
+  // Any filter change resets pagination — guarded adjustment during render,
+  // so the fetch effect below already sees offset 0 (no double fetch).
+  const filterSig = JSON.stringify([effectiveQ, sector, exchange, bucket, trackedOnly]);
+  const [prevFilterSig, setPrevFilterSig] = useState(filterSig);
+  if (prevFilterSig !== filterSig) {
+    setPrevFilterSig(filterSig);
     setOffset(0);
-  }, [effectiveQ, sector, exchange, bucket, trackedOnly]);
+  }
 
   useEffect(() => {
     let alive = true;
@@ -145,7 +151,7 @@ export default function CompaniesPage() {
     addCandidate(c.ticker, "stocks")
       .then(() => {
         setLocallyTracked((m) => ({ ...m, [c.ticker]: true }));
-        setTrackMsg(`${c.ticker} subscribed — backfill starts now; market data fills in shortly.`);
+        setTrackMsg(`${c.ticker} is now monitored — backfill starts now; market data fills in shortly.`);
       })
       .catch((e: unknown) => {
         // 409 = stream cap; 401 = not logged in — show the daemon's words.
@@ -219,17 +225,17 @@ export default function CompaniesPage() {
           type="button"
           onClick={() => setTrackedOnly((v) => !v)}
           aria-pressed={trackedOnly}
-          className="chip min-h-[40px] cursor-pointer px-3 transition-colors duration-150"
+          className="chip min-h-[40px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
           title="Show only symbols we track (have market data for)"
           style={{
-            color: trackedOnly ? "var(--accent)" : "var(--dim)",
-            borderColor: trackedOnly ? "var(--accent)" : "var(--border)",
+            color: trackedOnly ? "var(--accent)" : undefined,
+            borderColor: trackedOnly ? "var(--accent)" : undefined,
           }}
         >
           tracked only
         </button>
         {resp !== null && (
-          <span className="tnum ml-auto text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
             {resp.directoryCount.toLocaleString()} SEC registrants
             {resp.lastSyncTs > 0 ? ` · synced ${ago(resp.lastSyncTs)}` : ""}
           </span>
@@ -288,16 +294,16 @@ export default function CompaniesPage() {
                 {resp.unknownMcapExcluded} excluded — mcap unknown
               </span>
             )}
-            <span className="tnum ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>
+            <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
               daily closes, worker cadence — not live quotes
             </span>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-[0.78rem]">
+          <div className="table-wrap">
+            <table className="w-full text-[0.75rem]">
               <thead>
                 <tr
-                  className="text-left text-[0.68rem] tracking-[0.12em]"
+                  className="text-left text-[0.75rem] tracking-[0.12em]"
                   style={{ color: "var(--dim)", borderBottom: "1px solid var(--border)" }}
                 >
                   <th className="px-3 py-2">TICKER</th>
@@ -327,8 +333,8 @@ export default function CompaniesPage() {
                         {tracked ? (
                           <Link
                             href={`/s/stocks/${encodeURIComponent(c.ticker)}`}
-                            className="cursor-pointer hover:text-[var(--accent)]"
-                            title={`Open ${c.ticker} — tracked symbol page`}
+                            className="cursor-pointer transition-colors duration-150 hover:text-[var(--accent)]"
+                            title={`Investigate ${c.ticker} — open its symbol page`}
                           >
                             {c.ticker}
                           </Link>
@@ -379,11 +385,11 @@ export default function CompaniesPage() {
                             type="button"
                             disabled={busy !== null}
                             onClick={() => track(c)}
-                            title={`Subscribe ${c.ticker} (needs login; respects the stream cap — a 409 shows the cap message)`}
+                            title={`Monitor ${c.ticker} (needs login; respects the stream cap — a 409 shows the cap message)`}
                             className="chip min-h-[40px] cursor-pointer px-3 font-bold transition-colors duration-150 hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
                             style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
                           >
-                            {busy === c.ticker ? "…" : "track"}
+                            {busy === c.ticker ? "…" : "monitor"}
                           </button>
                         )}
                       </td>
@@ -400,30 +406,28 @@ export default function CompaniesPage() {
               type="button"
               disabled={offset === 0}
               onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-              className="chip min-h-[40px] cursor-pointer px-4 transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40"
-              style={{ color: "var(--dim)" }}
+              className="chip min-h-[40px] cursor-pointer px-4 transition-colors duration-150 hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               ← prev
             </button>
-            <span className="tnum text-[0.72rem]" style={{ color: "var(--faint)" }}>
+            <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
               {pageFrom.toLocaleString()}–{pageTo.toLocaleString()} of {total.toLocaleString()}
             </span>
             <button
               type="button"
               disabled={offset + PAGE_SIZE >= total}
               onClick={() => setOffset(offset + PAGE_SIZE)}
-              className="chip min-h-[40px] cursor-pointer px-4 transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40"
-              style={{ color: "var(--dim)" }}
+              className="chip min-h-[40px] cursor-pointer px-4 transition-colors duration-150 hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               next →
             </button>
-            <span className="ml-auto text-[0.68rem]" style={{ color: "var(--faint)" }}>
-              untracked rows have no market data yet — &ldquo;track&rdquo; starts ingestion
+            <span className="ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
+              untracked rows have no market data yet — &ldquo;monitor&rdquo; starts ingestion
             </span>
           </div>
 
           {/* honesty notes, verbatim */}
-          <div className="flex flex-col gap-1 px-3 pb-3 text-[0.66rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+          <div className="flex flex-col gap-1 px-3 pb-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             <p>{resp.note}</p>
             <p>{resp.mcapNote}</p>
           </div>

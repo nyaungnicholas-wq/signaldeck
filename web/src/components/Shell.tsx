@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { api, type Me } from "@/lib/api";
+import FreshnessBadge from "@/components/FreshnessBadge";
+import OfflineBanner from "@/components/OfflineBanner";
 
 // Stage 2 nav consolidation: 24 flat entries → 6 hubs (user decision; HUD
 // stays separate). `href` is the hub's default sub-tab; `match` lists every
@@ -12,6 +14,7 @@ import { api, type Me } from "@/lib/api";
 // next.config redirect lands.
 const NAV: { href: string; label: string; match: string[] }[] = [
   { href: "/", label: "DASHBOARD", match: ["/"] },
+  { href: "/live", label: "LIVE", match: ["/live"] },
   {
     href: "/markets/screener",
     label: "MARKETS",
@@ -52,22 +55,47 @@ const NAV: { href: string; label: string; match: string[] }[] = [
 const READING_KEY = "sd-reading-mode";
 const VIEW_KEY = "sd-view-mode";
 
+// Both header toggles read localStorage through useSyncExternalStore, keyed
+// off the same window events their toggles fire — SSR renders the default,
+// the first client snapshot then reflects the persisted choice.
+function subscribeViewMode(cb: () => void): () => void {
+  window.addEventListener("sd-view-mode", cb);
+  return () => window.removeEventListener("sd-view-mode", cb);
+}
+function getViewModePro(): boolean {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "pro";
+  } catch {
+    return false;
+  }
+}
+function subscribeReadingMode(cb: () => void): () => void {
+  window.addEventListener("sd-reading-mode", cb);
+  return () => window.removeEventListener("sd-reading-mode", cb);
+}
+function getReadingModeOn(): boolean {
+  try {
+    return localStorage.getItem(READING_KEY) === "on";
+  } catch {
+    return false;
+  }
+}
+const getServerFalse = () => false;
+
 /** Header toggle for SIMPLE/PRO language — persists in localStorage, flips
  *  `data-view-mode` on <html>, and fires an `sd-view-mode` event so every
  *  mounted <Plain> re-reads. Default is SIMPLE (plain English first); PRO
  *  leads with the raw numbers. Caveats/gates render in BOTH modes. */
 function ViewModeToggle() {
-  const [pro, setPro] = useState(false);
+  const pro = useSyncExternalStore(subscribeViewMode, getViewModePro, getServerFalse);
 
+  // Keep <html data-view-mode> in sync (covers first mount + any change).
   useEffect(() => {
-    const saved = localStorage.getItem(VIEW_KEY) === "pro";
-    setPro(saved);
-    document.documentElement.setAttribute("data-view-mode", saved ? "pro" : "simple");
-  }, []);
+    document.documentElement.setAttribute("data-view-mode", pro ? "pro" : "simple");
+  }, [pro]);
 
   const toggle = () => {
     const next = !pro;
-    setPro(next);
     localStorage.setItem(VIEW_KEY, next ? "pro" : "simple");
     document.documentElement.setAttribute("data-view-mode", next ? "pro" : "simple");
     window.dispatchEvent(new Event("sd-view-mode"));
@@ -94,19 +122,18 @@ function ViewModeToggle() {
 /** Header toggle for reading mode — persists in localStorage and flips
  *  `data-reading-mode` on <html> so globals.css can restyle site-wide. */
 function ReadingModeToggle() {
-  const [on, setOn] = useState(false);
+  const on = useSyncExternalStore(subscribeReadingMode, getReadingModeOn, getServerFalse);
 
+  // Keep <html data-reading-mode> in sync (covers first mount + any change).
   useEffect(() => {
-    const saved = localStorage.getItem(READING_KEY) === "on";
-    setOn(saved);
-    document.documentElement.setAttribute("data-reading-mode", saved ? "on" : "off");
-  }, []);
+    document.documentElement.setAttribute("data-reading-mode", on ? "on" : "off");
+  }, [on]);
 
   const toggle = () => {
     const next = !on;
-    setOn(next);
     localStorage.setItem(READING_KEY, next ? "on" : "off");
     document.documentElement.setAttribute("data-reading-mode", next ? "on" : "off");
+    window.dispatchEvent(new Event("sd-reading-mode"));
   };
 
   return (
@@ -191,7 +218,12 @@ function AuthChip() {
     api
       .me()
       .then((m) => alive && setMe(m))
-      .catch(() => alive && setMe(null)); // 401 / offline
+      .catch((e: unknown) => {
+        if (!alive) return;
+        // Only a 401 is "logged out" — a daemon outage must not flip the
+        // chip into a login prompt (first load stays "unknown" instead).
+        if (e instanceof Error && e.message.startsWith("API 401")) setMe(null);
+      });
     return () => {
       alive = false;
     };
@@ -230,6 +262,43 @@ function AuthChip() {
   );
 }
 
+/** Daemon connectivity indicator — a coloured dot plus a plain-words label.
+ *  Shown inline in the header on desktop and inside the menu panel on mobile. */
+function DaemonStatus({ up }: { up: boolean | null }) {
+  return (
+    <span className="flex items-center gap-2">
+      <span
+        aria-label={up === null ? "checking daemon" : up ? "daemon connected" : "daemon offline"}
+        className="inline-block h-2 w-2 shrink-0 rounded-full"
+        style={{
+          background: up === null ? "var(--faint)" : up ? "var(--ok)" : "var(--bad)",
+          boxShadow: up ? "0 0 8px rgba(52,211,153,.7)" : undefined,
+        }}
+      />
+      <span>
+        {up === null ? "connecting" : up ? "daemon live" : "daemon offline — start signaldeckd"}
+      </span>
+    </span>
+  );
+}
+
+/** Brand mark: amber signal-bars glyph + mono wordmark (one place, both
+ *  header variants). */
+function Brand() {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" className="shrink-0">
+        <rect x="1" y="9" width="3.2" height="6" rx="1" fill="var(--accent)" opacity="0.4" />
+        <rect x="6.4" y="5" width="3.2" height="10" rx="1" fill="var(--accent)" opacity="0.7" />
+        <rect x="11.8" y="1" width="3.2" height="14" rx="1" fill="var(--accent)" />
+      </svg>
+      <span className="mono text-base font-extrabold tracking-[0.14em]">
+        <span style={{ color: "var(--accent)" }}>SIGNAL</span>DECK
+      </span>
+    </span>
+  );
+}
+
 /** App chrome: brand bar + nav + daemon connectivity dot. */
 export default function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -251,10 +320,13 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Close the mobile menu whenever navigation happens.
-  useEffect(() => {
-    setMenuOpen(false);
-  }, [pathname]);
+  // Close the mobile menu whenever navigation happens (guarded adjustment
+  // during render — never paints the menu open on the new page).
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  if (prevPathname !== pathname) {
+    setPrevPathname(pathname);
+    if (menuOpen) setMenuOpen(false);
+  }
 
   const navLinks = NAV.map((n) => {
     const active =
@@ -266,28 +338,54 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         key={n.href}
         href={n.href}
         aria-current={active ? "page" : undefined}
-        className="flex min-h-[40px] cursor-pointer items-center rounded px-3 py-2 transition-colors duration-200"
-        style={{
-          color: active ? "var(--text)" : "var(--dim)",
-          background: active ? "var(--panel2)" : "transparent",
-          border: `1px solid ${active ? "var(--border)" : "transparent"}`,
-        }}
+        className={`nav-link flex min-h-[40px] cursor-pointer items-center px-3 py-2 font-medium ${
+          active ? "nav-link-active" : ""
+        }`}
       >
         {n.label}
       </Link>
     );
   });
 
+  // The login page is the only public route: render minimal chrome (brand +
+  // footer) with no nav, freshness chip, toggles or daemon dot. There is no
+  // market data here, so a "updated 0s ago" freshness readout or a nav full of
+  // links that immediately bounce back to /login would both be misleading.
+  if (pathname === "/login") {
+    return (
+      <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-3 sm:p-4">
+        <header className="panel px-4 py-3 sm:px-5">
+          <Link href="/" className="inline-flex shrink-0 items-center">
+            <Brand />
+          </Link>
+        </header>
+        <main className="flex flex-1 flex-col gap-4">{children}</main>
+        <footer
+          className="px-2 pb-2 text-[0.75rem] leading-relaxed"
+          style={{ color: "var(--faint)" }}
+        >
+          SignalDeck measures and stores; it does not advise. Not financial advice.
+        </footer>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-3 sm:p-4">
-      <header className="panel px-4 py-3 sm:px-5">
+      <OfflineBanner />
+      {/* Sticky glass header: translucent panel + backdrop blur so content
+          scrolling underneath reads as depth, not clutter. */}
+      <header
+        className="panel sticky top-3 z-40 px-4 py-3 backdrop-blur-xl sm:top-4 sm:px-5"
+        style={{
+          background: "color-mix(in srgb, var(--panel) 84%, transparent)",
+        }}
+      >
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <Link href="/" className="shrink-0">
-            <span className="text-base font-extrabold tracking-[0.14em]">
-              <span style={{ color: "var(--accent)" }}>SIGNAL</span>DECK
-            </span>
+          <Link href="/" className="inline-flex shrink-0 items-center">
+            <Brand />
             <span
-              className="ml-3 hidden text-[0.72rem] tracking-wider xl:inline"
+              className="ml-3 hidden text-[0.75rem] tracking-wider xl:inline"
               style={{ color: "var(--faint)" }}
             >
               data-first market intelligence
@@ -300,24 +398,21 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           >
             {navLinks}
           </nav>
-          <div className="ml-auto flex items-center gap-2 text-[0.75rem]" style={{ color: "var(--dim)" }}>
+          <div
+            className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 text-[0.75rem]"
+            style={{ color: "var(--dim)" }}
+          >
             <AlertsBell />
             <AuthChip />
-            <ViewModeToggle />
-            <ReadingModeToggle />
-            <span className="flex items-center gap-2">
-              <span
-                aria-label={up === null ? "checking daemon" : up ? "daemon connected" : "daemon offline"}
-                className="inline-block h-2 w-2 rounded-full"
-                style={{
-                  background: up === null ? "var(--faint)" : up ? "var(--ok)" : "var(--bad)",
-                  boxShadow: up ? "0 0 8px rgba(52,211,153,.7)" : undefined,
-                }}
-              />
-              <span className="hidden sm:inline">
-                {up === null ? "connecting" : up ? "daemon live" : "daemon offline — start signaldeckd"}
-              </span>
-            </span>
+            {/* Secondary controls: inline on desktop, folded into the menu panel
+                on mobile so the header row can't overflow a phone width (which
+                was pushing the menu off-canvas). */}
+            <div className="hidden items-center gap-2 lg:flex">
+              <FreshnessBadge />
+              <ViewModeToggle />
+              <ReadingModeToggle />
+              <DaemonStatus up={up} />
+            </div>
             {/* Mobile menu button */}
             <button
               type="button"
@@ -331,20 +426,32 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             </button>
           </div>
         </div>
-        {/* Mobile nav */}
+        {/* Mobile nav + settings (secondary controls live here on phones) */}
         {menuOpen && (
-          <nav
-            id="mobile-nav"
-            aria-label="Primary"
-            className="mt-3 grid grid-cols-2 gap-1 border-t pt-3 text-[0.78rem] tracking-[0.1em] sm:grid-cols-3 lg:hidden"
-            style={{ borderColor: "var(--border)" }}
-          >
-            {navLinks}
-          </nav>
+          <div id="mobile-nav" className="mt-3 border-t pt-3 lg:hidden" style={{ borderColor: "var(--border)" }}>
+            <nav
+              aria-label="Primary"
+              className="grid grid-cols-2 gap-1 text-[0.78rem] tracking-[0.1em] sm:grid-cols-3"
+            >
+              {navLinks}
+            </nav>
+            <div
+              className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-3 text-[0.75rem]"
+              style={{ borderColor: "var(--border)", color: "var(--dim)" }}
+            >
+              <FreshnessBadge />
+              <ViewModeToggle />
+              <ReadingModeToggle />
+              <DaemonStatus up={up} />
+            </div>
+          </div>
         )}
       </header>
       <main className="flex flex-1 flex-col gap-4">{children}</main>
-      <footer className="px-2 pb-2 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+      <footer
+        className="mt-2 border-t px-2 pt-3 pb-2 text-[0.75rem] leading-relaxed"
+        style={{ color: "var(--faint)", borderColor: "var(--border)" }}
+      >
         SignalDeck measures and stores; it does not advise. Every score decomposes into its
         components; every tendency ships with its sample size; the Honesty page grades the
         scores against what actually happened. Not financial advice.

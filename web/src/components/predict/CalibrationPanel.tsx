@@ -3,6 +3,7 @@
 import type { Calibration } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
+import HelpTip from "@/components/HelpTip";
 import ReliabilityDiagram from "./ReliabilityDiagram";
 
 type CalHorizon = "1d" | "1w";
@@ -71,18 +72,21 @@ export default function CalibrationPanel({
     <section className="panel">
       <div className="panel-h">
         CALIBRATION · RELIABILITY
-        {/* Phase 0 labeling: measured on backtested / in-sample resolutions. */}
+        {/* Phase 0 labeling: measured on backtested / in-sample resolutions.
+            The explanation is a click/keyboard HelpTip, never hover-only. */}
         {data && data.live !== true && (
-          <span
-            className="chip"
-            style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
-            title={
-              data.trackLabel ??
-              "Calibration is measured on backtested / in-sample resolutions, not a live forward track record."
-            }
-          >
-            backtested — not live
-          </span>
+          <>
+            <span
+              className="chip"
+              style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
+            >
+              backtested — not live
+            </span>
+            <HelpTip label="What backtested means here">
+              {data.trackLabel ??
+                "Calibration is measured on backtested / in-sample resolutions, not a live forward track record."}
+            </HelpTip>
+          </>
         )}
         <div role="group" aria-label="Calibration horizon" className="ml-auto flex items-center gap-1">
           {CAL_HORIZONS.map((h) => {
@@ -93,7 +97,7 @@ export default function CalibrationPanel({
                 type="button"
                 onClick={() => onHorizon(h)}
                 aria-pressed={active}
-                className="chip cursor-pointer transition-colors duration-150 hover:text-[var(--text)]"
+                className="chip min-h-[40px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
                 style={
                   active ? { color: "var(--accent)", borderColor: "var(--accent)" } : undefined
                 }
@@ -121,7 +125,7 @@ export default function CalibrationPanel({
           {/* honest caveat when the calibrator hasn't kicked in yet */}
           {thin && (
             <div
-              className="mb-3 rounded-md border px-3 py-2.5 text-[0.78rem] leading-relaxed"
+              className="mb-3 rounded-lg border px-3 py-2.5 text-[0.75rem] leading-relaxed"
               style={{ borderColor: "var(--warn)", background: "var(--panel2)", color: "var(--warn)" }}
             >
               calibration is still the identity map — only {n.toLocaleString("en-US")} resolved

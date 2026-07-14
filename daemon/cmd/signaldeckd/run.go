@@ -24,13 +24,19 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/hud"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cboe"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cftc"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/congress"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptolive"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/finra"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/fred"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/hyperliquid"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/news"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/stocktwits"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/tvscanner"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/wikimedia"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -305,6 +311,61 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// failure. BEFORE the watchdog spec snapshot so it's health-audited like
 	// every other worker.
 	fleet = append(fleet, finraShortsWorkers(st)...)
+	// SIGNALS-hub overhaul (constructor appended at the END of this file) —
+	// composite-scorer (10m): the per-symbol SignalScore — forced 1-10 curve
+	// over the latest calibrated predictions' edges + factor tiles + additive
+	// ledger; whole pass gated below a 30-symbol cross-section. BEFORE the
+	// watchdog spec snapshot so it's health-audited like every other worker.
+	fleet = append(fleet, compositeWorkers(st)...)
+	// TradingView scanner-ratings wave (constructor appended at the END of this
+	// file) — tv-rating (15m): persists TradingView's OWN technical-analysis
+	// RATING for our tracked symbols from its PUBLIC scanner (no account/key)
+	// into tv_ratings, resolving each stock's exchange via TradingView's public
+	// symbol-search first. An EXTERNAL, descriptive, delayed signal — NOT our
+	// model and not advice. Resolution/network hiccups degrade honestly, never
+	// failing the fleet. BEFORE the watchdog spec snapshot so it's health-
+	// audited like every other worker.
+	fleet = append(fleet, tvRatingWorkers(st)...)
+	// Tiered-storage wave phase 2 (constructor appended at the END of this file)
+	// — derived-retention (1h): archive-before-prune for the high-volume DERIVED
+	// tables (scores/score_outcomes/features) that grow unbounded, with the same
+	// fail-safe contract as the Downsampler; predictions + prediction_outcomes
+	// are kept forever. Needs the cold-archive sink. BEFORE the watchdog spec
+	// snapshot so it's health-audited like every other worker.
+	fleet = append(fleet, derivedRetentionWorkers(st, archiver)...)
+	// Self-audit / drift-watchdog wave (constructor appended at the END of this
+	// file) — self-audit (6h, gated once/UTC-day): MEASURES the system's own
+	// honesty (calibration drift, factor-IC sign flips, prediction bias) from
+	// resolved history and writes findings to self_audit + insights, every check
+	// gated at n>=30. BEFORE the watchdog spec snapshot so it's health-audited.
+	fleet = append(fleet, selfAuditWorkers(st)...)
+	// DATA-EXPANSION wave (constructor appended at the END of this file) — six
+	// free, keyless external context pollers: finra-shortint (bi-monthly short
+	// interest), crypto-perp (Hyperliquid funding/OI), cot-poller (CFTC weekly
+	// positioning), stocktwits-fetcher + wiki-attention (watchlist/hot-set
+	// scoped attention proxies), cboe-pc (market-wide put/call). ALL stored +
+	// served as DESCRIPTIVE context with explicit caveats — nothing becomes a
+	// scored factor in this wave. Also tv-quotes (60s market-hours quote tape
+	// from TradingView's public scanner — real-time rtc composite when
+	// present, else labeled 15m-delayed close). BEFORE the watchdog spec
+	// snapshot so every one is health-audited like every other worker.
+	fleet = append(fleet, dataExpansionWorkers(st)...)
+	// News-trends + strategy-lab wave (constructor appended at the END of this
+	// file) — news-trends (30m, headline-volume z + fleet trending tokens) and
+	// strategy-lab (24h, once/day gate; 8 classic published strategies through
+	// the bias-free backtester on our own bars). BEFORE the watchdog spec
+	// snapshot so both are health-audited like every other worker.
+	fleet = append(fleet, newsTrendsStrategyLabWorkers(st)...)
+	// Cross-sectional alpha wave (constructor appended at the END of this
+	// file) — alpha-trainer (6h): ONE pooled model per horizon over the WHOLE
+	// universe's labeled feature rows, labeling each row vs its same-UTC-day
+	// cross-section median (relative alpha), graded by purged walk-forward
+	// day-splits with a 2-day embargo; per-symbol current scores are stored
+	// (model_forecasts, model="alphax") ONLY while measured OOS lift > 0 and
+	// the PredictionRunner does NOT consume them yet (later wave, after the
+	// grade proves out). BEFORE the watchdog spec snapshot so it's
+	// health-audited like every other worker.
+	fleet = append(fleet, alphaXWorkers(st)...)
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -470,7 +531,10 @@ func alertBriefingWorkers(st *store.Store, llmClient llm.Client, remote *notify.
 func discoveryWorkers(cfg config.Config, st *store.Store, ac *alpaca.Client,
 	bf *pipeline.Backfiller, streamer *alpaca.Streamer,
 ) []workers.Worker {
-	w := &discovery.Worker{St: st}
+	// WHOLE-MARKET extension: TradingView's public scanner needs no keys, so
+	// the TV source is always wired — each sweep also screens the entire US
+	// market (top volume + top |change|) into the same candidates pipeline.
+	w := &discovery.Worker{St: st, TV: tvscanner.New()}
 	if cfg.HasAlpaca() {
 		w.Client = discovery.NewClient(cfg.AlpacaKey, cfg.AlpacaSecret)
 		w.Subscribe = func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
@@ -524,10 +588,21 @@ func storageWorkers(st *store.Store) []workers.Worker {
 // Degrades to a skip when no Alpaca keys are configured (like NewsFetcher).
 func universeWorkers(cfg config.Config, st *store.Store, ac *alpaca.Client) []workers.Worker {
 	p := &universe.Poller{St: st}
+	lp := &universe.LivePoller{St: st}
 	if cfg.HasAlpaca() {
 		p.Alpaca = ac
+		// The live poller needs the REAL-TIME trailing window, which free-tier
+		// SIP cannot serve (sipEndGuard) — it gets its own IEX-feed client.
+		// The 16-minute IEX tail is healed to full-volume SIP bars by the deep
+		// pollers on their next pass (idempotent upserts overwrite).
+		iex := *ac
+		iex.Feed = "iex"
+		lp.Alpaca = &iex
 	}
-	return []workers.Worker{p}
+	// live-everything wave: universe-live (60s, marketcal-gated) keeps EVERY
+	// stock's 1m bars current during market hours; the 6h deep poller stays
+	// as heal + off-hours coverage.
+	return []workers.Worker{p, lp}
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -624,6 +699,7 @@ func edgeModelWorkers(st *store.Store) []workers.Worker {
 //     (~25 hardcoded CIKs — Berkshire, Bridgewater, RenTech, Citadel, …),
 //     storing each manager's LATEST 13F-HR information table once per report
 //     period. Always enabled: it depends on nothing but EDGAR.
+//
 // Both share the edgar package's rate limiter (150ms min interval, ≤10 req/s
 // per SEC policy), descriptive User-Agent, and 429/503 backoff. Everything
 // stored is public-domain government data; the API labels its legal lags
@@ -684,6 +760,7 @@ func congressWorkers(st *store.Store) []workers.Worker {
 //     Stock scans respect marketcal (skipped entirely when closed).
 //   - DAILY-ONLY UNIVERSE once per ET trading day: vol + volume on daily
 //     bars (no intraday data ⇒ no imbalance proxy fabricated).
+//
 // Detections land in the anomalies table (hour-deduped per symbol+kind) and
 // the alert-runner fans them out to watchlists as anomaly_* alert kinds.
 // |z| threshold: SIGNALDECK_ANOM_Z (default 2.5).
@@ -769,7 +846,7 @@ func weeklyProofWorkers(st *store.Store, llmClient llm.Client) []workers.Worker 
 // (internal/notify): three optional, env-configured transports —
 //   - Discord   SIGNALDECK_DISCORD_WEBHOOK            (webhook JSON {content})
 //   - Telegram  SIGNALDECK_TELEGRAM_BOT_TOKEN
-//               + SIGNALDECK_TELEGRAM_CHAT_ID         (Bot API sendMessage)
+//   - SIGNALDECK_TELEGRAM_CHAT_ID         (Bot API sendMessage)
 //   - Webhook   SIGNALDECK_WEBHOOK_URL                (POST {title,body,kind,ts})
 //
 // Contract: 5s timeout + 1 retry per delivery; failures become dq events
@@ -795,7 +872,9 @@ func remoteNotifier(st *store.Store) *notify.Notifier {
 // sicBulkWorkers returns the wave's worker: sic-bulk-sync (12h tick) — closes
 // the directory's SIC gap (533/10,415 classified at ship time) with ONE free
 // download of SEC's official nightly bulk export of the Submissions API,
-//   https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip
+//
+//	https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip
+//
 // (documented on sec.gov "EDGAR Application Programming Interfaces"; ~1.5 GB,
 // verified live 2026-07-06). Every CIK##########.json entry carries the same
 // sic/sicDescription header the filings-poller extracts one company at a
@@ -807,7 +886,7 @@ func remoteNotifier(st *store.Store) *notify.Notifier {
 //     directory CIKs decompressed, one batched transaction to update
 //     companies.sic/sic_desc, coverage logged before/after.
 //   - Degradation: 403/moved/corrupt archive ⇒ dq event (sic_bulk_unavailable)
-//     + honest detail; the filings-poller SIC rotation keeps enriching; the
+//   - honest detail; the filings-poller SIC rotation keeps enriching; the
 //     fleet NEVER fails. Blank SICs are honest absence and never stored.
 //
 // ec is the daemon-wide SHARED EDGAR client (see run()): the one download
@@ -851,4 +930,205 @@ func finraShortsWorkers(st *store.Store) []workers.Worker {
 func runSICBulkOnce(ctx context.Context, st *store.Store) (string, error) {
 	w := &pipeline.SICBulkSync{St: st, Client: edgar.New(), Force: true}
 	return w.Run(ctx)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SIGNALS-HUB OVERHAUL — COMPOSITE SIGNALSCORE (appended block).
+// compositeWorkers returns the wave's worker: composite-scorer (10m) — the
+// per-symbol SignalScore engine (internal/composite). Every pass it reads the
+// LATEST stored calibrated 1d predictions (never recomputing the ensemble),
+// ranks their edges on a FORCED cross-sectional curve (top 5% = 10 … bottom
+// 5% = 1), and persists one composite_scores row per symbol with the full
+// evidence payload: 11 factor tiles (verdict + raw-number evidence + measured
+// skill chip from the adaptive attribution + explicit gate reasons) and the
+// additive ledger decomposing (calProb − 0.5) per leg — labeled
+// "proportional attribution" whenever exactness can't be reconstructed from
+// the stored row, never faked. Cadence mirrors the PredictionRunner: hot set
+// (crypto + streamed stocks) every run, broad daily-only universe once per
+// UTC day (meta key composite_universe_day). HONESTY GATE: with fewer than 30
+// symbols carrying fresh usable predictions the whole pass stores NOTHING and
+// the worker detail says why — a forced curve over a thin cross-section would
+// fabricate 10s and 1s.
+func compositeWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.CompositeScorer{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// TRADINGVIEW SCANNER RATINGS (appended block).
+// tvRatingWorkers returns the wave's worker: tv-rating (15m tick) — persists
+// TradingView's OWN technical-analysis RATING for our tracked symbols from its
+// PUBLIC scanner endpoint (scanner.tradingview.com/{screener}/scan — no
+// account, no key; verified live 2026-07-07) into the append-only tv_ratings
+// table. Each pass first RESOLVES up to 60 missing stock exchanges via
+// TradingView's public symbol-search (our symbols table has no exchange, and
+// the scanner needs EXCHANGE:SYMBOL tickers — DRAM/SNXX resolve to CBOE, so
+// nothing is hardcoded), caching them in tv_exchange; then BATCH-SCANS the
+// "america" screener in one (chunked ≤200) POST over every active stock that
+// has a resolved exchange and upserts a rating row with Label(reco_all). Crypto
+// is special-cased: our only pair, BTC/USD, maps to BITSTAMP:BTCUSD on the
+// "crypto" screener, and its status is reported honestly in the detail string.
+// Resolution failures are non-fatal and a scanner network error is logged by
+// the supervisor — the fleet NEVER fails, and nothing is fabricated.
+// HONESTY: reco_* are TradingView's OWN descriptive TA scores on DELAYED data —
+// an EXTERNAL, independent signal, NOT SignalDeck's model and NOT advice.
+// /api/tv-rating and the UI carry that caveat verbatim.
+func tvRatingWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.TVRatingPoller{St: st, TV: tvscanner.New()},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// TIERED-STORAGE WAVE — PHASE 2: DERIVED-TABLE RETENTION (appended block).
+// derivedRetentionWorkers returns the wave's worker: derived-retention (1h) —
+// the Downsampler's sibling for the DERIVED tables that grow unbounded
+// (scores/score_outcomes past SIGNALDECK_SCORES_RETENTION_D=90d; resolved
+// features past SIGNALDECK_FEATURES_RETENTION_D=180d). Every row is exported to
+// the cold gzip-CSV archive BEFORE it is pruned; on any archive error the prune
+// is SKIPPED and a dq_events(archive_skip) records the fail-safe, so retention
+// never silently loses data. predictions + prediction_outcomes (the live track
+// record) are NEVER pruned, and unlabeled feature rows are never deleted. Shares
+// the daemon-wide cold-archive sink (archiver) with the Downsampler.
+func derivedRetentionWorkers(st *store.Store, arc *archive.Archiver) []workers.Worker {
+	return []workers.Worker{
+		&maintain.DerivedRetention{St: st, Arc: arc},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SELF-AUDIT / DRIFT-WATCHDOG WAVE (appended block).
+// selfAuditWorkers returns the wave's worker: self-audit (6h tick, gated to
+// once per UTC day via meta self_audit_day) — the honesty watchdog that
+// MEASURES the platform's own reliability from resolved history and records
+// findings, deterministically (no LLM), to the queryable self_audit table +
+// insights(kind self_audit):
+//   - CALIBRATION DRIFT per horizon: reliability (mean |cal_prob − realized|)
+//     this window vs the last audit — flagged "degrading" when it worsens past
+//     a threshold;
+//   - FACTOR-IC SIGN FLIP per ensemble leg: the adaptive attribution's IC
+//     flipping sign vs the last audit (model instability);
+//   - PREDICTION BIAS per horizon: mean(cal_prob) vs realized base rate —
+//     flagged over/under-confident.
+//
+// Every check is gated at n>=30 independent resolutions (below → status
+// "insufficient", never a false alarm). Served read-only at GET /api/self-audit.
+func selfAuditWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.SelfAuditor{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// DATA-EXPANSION WAVE (appended block).
+// dataExpansionWorkers returns the wave's six workers — every source FREE and
+// KEYLESS, every dataset stored + served as DESCRIPTIVE context with its
+// caveat verbatim (nothing becomes a scored factor in this wave), every
+// worker degrading honestly (skip-with-reason / dq event, NEVER a fleet
+// failure), every fetch carrying the shared declarative UA + a timeout:
+//   - finra-shortint (12h): FINRA's BI-MONTHLY short interest files
+//     (settlement dates = 15th/EOM; publication lags ~9 business days, so
+//     each run probes up to 3 cycles newest-first until one 200s; 403 = not
+//     yet published = honest skip). Universe-scoped like finra-shorts.
+//     CAVEAT: settlement-dated, ~2wks lagged — positioning, not advice.
+//   - crypto-perp (15m): ONE POST per pass to Hyperliquid's public info API
+//     (metaAndAssetCtxs, index-aligned arrays) snapshots funding/OI/mark for
+//     tracked crypto pairs. CAVEAT: one DEX venue — a positioning proxy.
+//   - cot-poller (24h): CFTC Commitments of Traders legacy futures-only
+//     report via the free Socrata API for a curated contract set (E-mini
+//     S&P, Nasdaq mini, bitcoin/ether complex); ~1y chunked backfill on
+//     first run. CAVEAT: weekly lag — positioning, NOT prediction.
+//   - stocktwits-fetcher (15m): page-snapshot sentiment tallies (~30 newest
+//     messages) for watchlist + hot-set stocks only (news-fetcher-style
+//     scope), paced ≤1 req/2s; 404s cached so unlisted symbols are never
+//     re-hammered. CAVEAT: self-selected retail crowd, descriptive only.
+//   - wiki-attention (24h): daily Wikipedia page views (official Wikimedia
+//     REST, agent=user) for the same scope, company-name → article via a
+//     suffix-stripping heuristic with FAILURES CACHED in wiki_article so
+//     unresolved names are never re-hammered. CAVEAT: attention proxy — not
+//     a trading signal.
+//   - cboe-pc (6h): CBOE's per-day options market statistics (market-wide
+//     put/call ratios + volumes), reusing the finra-shorts publish gate
+//     (~18:30 ET) + meta day-key dedup + ~30-trading-day first-run backfill;
+//     CBOE's CDN 403s absent days ⇒ ErrNotAvailable ⇒ honest skip. CAVEAT:
+//     index puts are largely hedges — a high index P/C is NOT directly
+//     bearish.
+//
+// All endpoint shapes were probed + verified live 2026-07-10 before this
+// wave shipped; every client lives in internal/ingest/* with fixture-driven
+// httptest coverage (NO live-network tests).
+func dataExpansionWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.ShortInterestPoller{St: st, Client: finra.NewSI()},
+		&pipeline.CryptoPerpPoller{St: st, Client: hyperliquid.New()},
+		&pipeline.COTPoller{St: st, Client: cftc.New()},
+		&pipeline.StocktwitsFetcher{St: st, Client: stocktwits.New()},
+		&pipeline.WikiAttention{St: st, Client: wikimedia.New()},
+		&pipeline.CboePCPoller{St: st, Client: cboe.New()},
+		// tv-quotes (60s, market-hours gated; crypto 24/7): near-real-time
+		// quote tape from TradingView's public scanner — rtc real-time Cboe
+		// One composite when present, else the 15-min-delayed close, per-row
+		// flagged; full-market day volume. A TAPE (rows >2h pruned inline) —
+		// bars stay the durable record. CAVEAT: descriptive supplement to the
+		// bar record, not a replacement.
+		&pipeline.TVQuotesPoller{St: st, TV: tvscanner.New()},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// NEWS-TRENDS + STRATEGY-LAB wave (appended block).
+// newsTrendsStrategyLabWorkers returns the wave's two workers:
+//   - news-trends (30m): per-symbol daily headline-volume z vs the symbol's
+//     OWN trailing-30d baseline (gate: >=10 prior days with any news, else
+//     the z is an honest NULL) stored in news_trends and joined into the
+//     prediction feature vector as news_vol_z (featureVersion 4 — the GBM
+//     leg's OOS-lift gate decides whether it ever influences the live
+//     blend); plus, once per 6h, ONE deterministic fleet insight (kind
+//     news_trends) listing the top-10 trending headline tokens. CAVEAT
+//     (verbatim everywhere): headline-frequency trend — descriptive
+//     attention, not a forecast.
+//   - strategy-lab (24h tick, once/day meta gate): replays 8 classic
+//     PUBLISHED strategies (golden cross, Donchian 20, Connors RSI-2,
+//     Jegadeesh-Titman 12-1 momentum, MACD, Bollinger mean-reversion,
+//     52w-high breakout, absolute dual momentum — internal/stratlib, each
+//     citing its origin, strictly no-lookahead) through the EXISTING
+//     bias-free next-bar-fill backtest engine on ~2y of our own daily bars
+//     with per-market costs, scoped to the streamed hot set + crypto only.
+//     Results honor the engine's CAGRReported/WinRateMeaningful honesty
+//     flags; one weekly insight (kind strategy_lab) names the fleet's top-3
+//     by median Sharpe. CAVEAT (verbatim everywhere): in-sample history on
+//     our own bars, not live performance and not advice.
+func newsTrendsStrategyLabWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.NewsTrends{St: st},
+		&pipeline.StrategyLab{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CROSS-SECTIONAL ALPHA wave (appended block).
+// alphaXWorkers returns the wave's worker: alpha-trainer (6h) — the pooled
+// CROSS-SECTIONAL model, the shape every serious competitor (Danelfin's GBT
+// ensemble, Zacks rank, the quant funds) actually uses: ONE gbm trained over
+// the WHOLE universe's labeled feature rows at once (v3+ versions pooled —
+// union-of-keys flatten; absent-vs-zero dilution can only dampen a grade,
+// never flatter it), where each row's label is "beat the same-UTC-day
+// cross-section MEDIAN" — relative alpha, with the market component cancelled
+// out of the label. Days with <10 resolved rows are dropped (thin
+// cross-section); grading is PURGED WALK-FORWARD BY DAY (2-trading-day
+// embargo, de Prado) and refuses below 1000 pooled train rows / 200 OOS test
+// rows. Each pass stores the model + grade in alphax_models and — ONLY when
+// the measured OOS lift > 0 — each symbol's current P(top half) into
+// model_forecasts (model="alphax"), deleting stale scores whenever a regrade
+// lands gated. The PredictionRunner/ensemble deliberately does NOT consume
+// alphax yet: that integration is a later wave, after the stored grade proves
+// out (core doctrine — a leg enters the live blend ONLY with measured OOS
+// lift > 0). CAVEAT (verbatim everywhere): pooled cross-sectional model —
+// predicts RELATIVE outperformance vs the same-day universe median; gated off
+// until measured OOS lift > 0; backtested, not a live track record.
+func alphaXWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.AlphaXTrainer{St: st},
+	}
 }

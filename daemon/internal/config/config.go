@@ -26,6 +26,12 @@ type Config struct {
 	AllowedHosts []string // Host-header allowlist (blocks DNS rebinding); empty = deny all
 	APIToken     string   // optional bearer token; alternative to a session cookie, maps to the admin user (scripts)
 
+	// TVWebhookSecret gates POST /api/tv-webhook. TradingView servers cannot
+	// send a session cookie or the CSRF header, so the inbound webhook is
+	// authenticated by this shared secret (in the JSON body or ?secret= query).
+	// Empty = the webhook is disabled (fails closed).
+	TVWebhookSecret string
+
 	// Multi-user + exposure controls.
 	OpenSignup  bool // SIGNALDECK_OPEN_SIGNUP (default true): allow POST /api/auth/register
 	PublicReads bool // SIGNALDECK_PUBLIC_READS (default true): read-only endpoints work without auth (localhost compatibility)
@@ -70,24 +76,25 @@ func Load() Config {
 		return def
 	}
 	cfg := Config{
-		LLMKey:        pick("SIGNALDECK_NVIDIA_KEY", pick("SIGNALDECK_LLM_KEY", "")),
-		LLMBaseURL:    pick("SIGNALDECK_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-		LLMModel:      pick("SIGNALDECK_LLM_MODEL", "meta/llama-3.1-8b-instruct"), // 8B is fast+reliable on NVIDIA free tier (70B times out); override via SIGNALDECK_LLM_MODEL
-		LLMDailyCap:   atoiOr(pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
-		DBPath:        envOr("SIGNALDECK_DB", filepath.Join(home, "claude code", "signaldeck", "data", "signaldeck.db")),
-		HTTPAddr:      envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"),
-		HudURL:        envOr("SIGNALDECK_HUD_URL", "http://127.0.0.1:8787/api/summary"),
-		TickstreamURL: envOr("SIGNALDECK_TICKSTREAM_URL", "http://127.0.0.1:8321/api/snapshot"),
-		GeminiKey:     os.Getenv("SIGNALDECK_GEMINI_KEY"),
-		CryptoSymbol:  "BTC/USD",
-		WebOrigins:    splitEnv("SIGNALDECK_WEB_ORIGINS", "http://localhost:8323,http://127.0.0.1:8323,http://localhost:3000,http://127.0.0.1:3000"),
-		AllowedHosts:  splitEnv("SIGNALDECK_ALLOWED_HOSTS", "127.0.0.1:8322,localhost:8322"),
-		APIToken:      os.Getenv("SIGNALDECK_API_TOKEN"),
-		OpenSignup:    boolEnv("SIGNALDECK_OPEN_SIGNUP", true),
-		PublicReads:   boolEnv("SIGNALDECK_PUBLIC_READS", true),
-		TrustProxy:    boolEnv("SIGNALDECK_TRUST_PROXY", false),
-		RateRPS:       atoiOr(os.Getenv("SIGNALDECK_RATE_RPS"), 0),
-		RateBurst:     atoiOr(os.Getenv("SIGNALDECK_RATE_BURST"), 0),
+		LLMKey:          pick("SIGNALDECK_NVIDIA_KEY", pick("SIGNALDECK_LLM_KEY", "")),
+		LLMBaseURL:      pick("SIGNALDECK_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+		LLMModel:        pick("SIGNALDECK_LLM_MODEL", "meta/llama-3.1-8b-instruct"), // 8B is fast+reliable on NVIDIA free tier (70B times out); override via SIGNALDECK_LLM_MODEL
+		LLMDailyCap:     atoiOr(pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
+		DBPath:          envOr("SIGNALDECK_DB", filepath.Join(home, "claude code", "signaldeck", "data", "signaldeck.db")),
+		HTTPAddr:        envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"),
+		HudURL:          envOr("SIGNALDECK_HUD_URL", "http://127.0.0.1:8787/api/summary"),
+		TickstreamURL:   envOr("SIGNALDECK_TICKSTREAM_URL", "http://127.0.0.1:8321/api/snapshot"),
+		GeminiKey:       os.Getenv("SIGNALDECK_GEMINI_KEY"),
+		CryptoSymbol:    "BTC/USD",
+		WebOrigins:      splitList(pick("SIGNALDECK_WEB_ORIGINS", "http://localhost:8323,http://127.0.0.1:8323,http://localhost:3000,http://127.0.0.1:3000")),
+		AllowedHosts:    splitList(pick("SIGNALDECK_ALLOWED_HOSTS", "127.0.0.1:8322,localhost:8322")),
+		APIToken:        os.Getenv("SIGNALDECK_API_TOKEN"),
+		TVWebhookSecret: pick("SIGNALDECK_TV_WEBHOOK_SECRET", ""),
+		OpenSignup:      boolEnv("SIGNALDECK_OPEN_SIGNUP", true),
+		PublicReads:     boolEnv("SIGNALDECK_PUBLIC_READS", true),
+		TrustProxy:      boolEnv("SIGNALDECK_TRUST_PROXY", false),
+		RateRPS:         atoiOr(os.Getenv("SIGNALDECK_RATE_RPS"), 0),
+		RateBurst:       atoiOr(os.Getenv("SIGNALDECK_RATE_BURST"), 0),
 	}
 	cfg.AlpacaKey = os.Getenv("ALPACA_KEY")
 	cfg.AlpacaSecret = os.Getenv("ALPACA_SECRET")
@@ -107,12 +114,10 @@ func Load() Config {
 // HasAlpaca reports whether stock ingestion can run.
 func (c Config) HasAlpaca() bool { return c.AlpacaKey != "" && c.AlpacaSecret != "" }
 
-// splitEnv reads a comma-separated env var (or def), trimming blanks.
-func splitEnv(k, def string) []string {
-	v := def
-	if e := os.Getenv(k); e != "" {
-		v = e
-	}
+// splitList splits a comma-separated string, trimming blanks. Callers pass the
+// already-resolved value (via pick, so env > .env > default all work under
+// launchd, which does not load .env into the process environment).
+func splitList(v string) []string {
 	var out []string
 	for _, p := range strings.Split(v, ",") {
 		if p = strings.TrimSpace(p); p != "" {

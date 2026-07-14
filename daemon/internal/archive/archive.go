@@ -382,3 +382,205 @@ func tsSpanAnomalies(a []store.AnomalyRow) (lo, hi int64) {
 	}
 	return
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// DERIVED-TABLE ARCHIVE (appended block — tiered-storage wave, phase 2). The
+// high-volume derived tables (scores / score_outcomes / features) grow
+// unbounded; maintain.DerivedRetention exports every row here to gzip-CSV
+// BEFORE it prunes, with the identical fail-safe contract as ArchiveBars:
+// err != nil ⇒ NOTHING was durably committed for the failing group, so the
+// caller must NOT prune. One file per (table, symbol, time-range).
+// ─────────────────────────────────────────────────────────────────────────
+
+var scoreHeader = []string{"symbol_id", "symbol", "horizon", "ts", "score", "components"}
+var scoreOutcomeHeader = []string{"symbol_id", "symbol", "horizon", "ts", "score", "fwd_return", "resolved_at"}
+var featureHeader = []string{"id", "symbol_id", "symbol", "horizon", "ts", "version", "vec"}
+
+// ArchiveScores appends scores rows to cold storage, one file per symbol_id
+// under archive/scores/. Same fail-safe contract as ArchiveBars.
+func (a *Archiver) ArchiveScores(ctx context.Context, rows []store.ScoreRow, symbolName map[int64]string) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	bySym := map[int64][]store.ScoreRow{}
+	for _, r := range rows {
+		bySym[r.SymbolID] = append(bySym[r.SymbolID], r)
+	}
+	files := 0
+	for sid, rs := range bySym {
+		if err := ctx.Err(); err != nil {
+			return files, err
+		}
+		name := symName(symbolName, sid)
+		lo, hi := tsSpanScores(rs)
+		path, err := a.open("scores", name, lo, hi)
+		if err != nil {
+			return files, err
+		}
+		wf := func(cw *csv.Writer) error {
+			if err := cw.Write(scoreHeader); err != nil {
+				return err
+			}
+			sort.Slice(rs, func(i, j int) bool { return rs[i].Ts < rs[j].Ts })
+			for _, r := range rs {
+				rec := []string{
+					strconv.FormatInt(r.SymbolID, 10), name, r.Horizon,
+					strconv.FormatInt(r.Ts, 10), f(r.Score), r.Components,
+				}
+				if err := cw.Write(rec); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := writeGzCSV(path, wf); err != nil {
+			return files, fmt.Errorf("archive scores %s: %w", name, err)
+		}
+		files++
+	}
+	return files, nil
+}
+
+// ArchiveScoreOutcomes appends score_outcomes rows to cold storage, one file per
+// symbol_id under archive/score_outcomes/. Same fail-safe contract as
+// ArchiveBars. Null fwd_return/resolved_at are written as empty CSV fields.
+func (a *Archiver) ArchiveScoreOutcomes(ctx context.Context, rows []store.ScoreOutcomeRow, symbolName map[int64]string) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	bySym := map[int64][]store.ScoreOutcomeRow{}
+	for _, r := range rows {
+		bySym[r.SymbolID] = append(bySym[r.SymbolID], r)
+	}
+	files := 0
+	for sid, rs := range bySym {
+		if err := ctx.Err(); err != nil {
+			return files, err
+		}
+		name := symName(symbolName, sid)
+		lo, hi := tsSpanScoreOutcomes(rs)
+		path, err := a.open("score_outcomes", name, lo, hi)
+		if err != nil {
+			return files, err
+		}
+		wf := func(cw *csv.Writer) error {
+			if err := cw.Write(scoreOutcomeHeader); err != nil {
+				return err
+			}
+			sort.Slice(rs, func(i, j int) bool { return rs[i].Ts < rs[j].Ts })
+			for _, r := range rs {
+				fwd := ""
+				if r.FwdReturn.Valid {
+					fwd = f(r.FwdReturn.Float64)
+				}
+				res := ""
+				if r.ResolvedAt.Valid {
+					res = strconv.FormatInt(r.ResolvedAt.Int64, 10)
+				}
+				rec := []string{
+					strconv.FormatInt(r.SymbolID, 10), name, r.Horizon,
+					strconv.FormatInt(r.Ts, 10), f(r.Score), fwd, res,
+				}
+				if err := cw.Write(rec); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := writeGzCSV(path, wf); err != nil {
+			return files, fmt.Errorf("archive score_outcomes %s: %w", name, err)
+		}
+		files++
+	}
+	return files, nil
+}
+
+// ArchiveFeatures appends features rows to cold storage, one file per symbol_id
+// under archive/features/. Same fail-safe contract as ArchiveBars. The raw JSON
+// vec is carried verbatim so the archived training set round-trips exactly.
+func (a *Archiver) ArchiveFeatures(ctx context.Context, rows []store.FeatureArchiveRow, symbolName map[int64]string) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	bySym := map[int64][]store.FeatureArchiveRow{}
+	for _, r := range rows {
+		bySym[r.SymbolID] = append(bySym[r.SymbolID], r)
+	}
+	files := 0
+	for sid, rs := range bySym {
+		if err := ctx.Err(); err != nil {
+			return files, err
+		}
+		name := symName(symbolName, sid)
+		lo, hi := tsSpanFeatures(rs)
+		path, err := a.open("features", name, lo, hi)
+		if err != nil {
+			return files, err
+		}
+		wf := func(cw *csv.Writer) error {
+			if err := cw.Write(featureHeader); err != nil {
+				return err
+			}
+			sort.Slice(rs, func(i, j int) bool {
+				if rs[i].Ts != rs[j].Ts {
+					return rs[i].Ts < rs[j].Ts
+				}
+				return rs[i].ID < rs[j].ID
+			})
+			for _, r := range rs {
+				rec := []string{
+					strconv.FormatInt(r.ID, 10), strconv.FormatInt(r.SymbolID, 10), name,
+					r.Horizon, strconv.FormatInt(r.Ts, 10), strconv.Itoa(r.Version), r.Vec,
+				}
+				if err := cw.Write(rec); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := writeGzCSV(path, wf); err != nil {
+			return files, fmt.Errorf("archive features %s: %w", name, err)
+		}
+		files++
+	}
+	return files, nil
+}
+
+func tsSpanScores(rs []store.ScoreRow) (lo, hi int64) {
+	lo, hi = rs[0].Ts, rs[0].Ts
+	for _, x := range rs {
+		if x.Ts < lo {
+			lo = x.Ts
+		}
+		if x.Ts > hi {
+			hi = x.Ts
+		}
+	}
+	return
+}
+
+func tsSpanScoreOutcomes(rs []store.ScoreOutcomeRow) (lo, hi int64) {
+	lo, hi = rs[0].Ts, rs[0].Ts
+	for _, x := range rs {
+		if x.Ts < lo {
+			lo = x.Ts
+		}
+		if x.Ts > hi {
+			hi = x.Ts
+		}
+	}
+	return
+}
+
+func tsSpanFeatures(rs []store.FeatureArchiveRow) (lo, hi int64) {
+	lo, hi = rs[0].Ts, rs[0].Ts
+	for _, x := range rs {
+		if x.Ts < lo {
+			lo = x.Ts
+		}
+		if x.Ts > hi {
+			hi = x.Ts
+		}
+	}
+	return
+}

@@ -99,10 +99,10 @@ export default function Gauge({
             );
           })}
         {/* min/max ticks */}
-        <text x={CX - R} y={CY + 14} textAnchor="middle" fontSize="9" fill="var(--faint)" className="tnum">
+        <text x={CX - R} y={CY + 14} textAnchor="middle" fontSize="12" fill="var(--faint)" className="tnum">
           {fmt(min)}
         </text>
-        <text x={CX + R} y={CY + 14} textAnchor="middle" fontSize="9" fill="var(--faint)" className="tnum">
+        <text x={CX + R} y={CY + 14} textAnchor="middle" fontSize="12" fill="var(--faint)" className="tnum">
           {fmt(max)}
         </text>
         {/* needle (hidden when there is honestly nothing to point at) */}
@@ -126,11 +126,11 @@ export default function Gauge({
         </text>
       </svg>
       <figcaption className="flex flex-col items-center gap-0.5 text-center">
-        <span className="text-[0.68rem] font-medium tracking-[0.14em]" style={{ color: "var(--dim)" }}>
+        <span className="text-[0.75rem] font-medium tracking-[0.14em]" style={{ color: "var(--dim)" }}>
           {label}
         </span>
         {/* THE gate caption — never conditionally removed */}
-        <span className="text-[0.62rem] leading-snug" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem] leading-snug" style={{ color: "var(--faint)" }}>
           {caption}
         </span>
       </figcaption>

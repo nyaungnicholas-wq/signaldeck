@@ -37,12 +37,12 @@ function BreakoutRowItem({
       {hasSym ? (
         <Link
           href={`/s/${marketFor(b.symbol)}/${encodeURIComponent(b.symbol)}`}
-          className="shrink-0 cursor-pointer text-[0.8rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
+          className="mono shrink-0 cursor-pointer text-[0.75rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
         >
           {b.symbol}
         </Link>
       ) : (
-        <span className="shrink-0 text-[0.78rem]" style={{ color: "var(--faint)" }}>
+        <span className="shrink-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           market-wide
         </span>
       )}
@@ -58,7 +58,7 @@ function BreakoutRowItem({
           {pct.toFixed(0)}%
         </span>
       )}
-      <span className="tnum shrink-0 text-[0.78rem]" style={{ color: "var(--faint)" }}>
+      <span className="tnum shrink-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
         {ago(b.ts)}
       </span>
     </li>

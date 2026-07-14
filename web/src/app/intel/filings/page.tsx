@@ -6,15 +6,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { filings, type Filing } from "@/lib/api";
+import { filings, pollMs, POLL_SLOW, type Filing } from "@/lib/api";
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
 import PagePurpose from "@/components/PagePurpose";
-
-const POLL_MS = 60_000;
 
 /** Form families offered as one-tap filters (prefix match server-side). */
 const FORM_FILTERS = ["all", "4", "8-K", "10-Q", "10-K", "S-3", "424B", "SC 13D", "SC 13G"];
@@ -64,10 +62,11 @@ export default function FilingsPage() {
           setErr(msg);
         });
     load();
-    const t = setInterval(load, POLL_MS);
+    // POLL_SLOW: the filings-poller only sweeps EDGAR every ~2h.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [form, symbol, retryTick]);
 
@@ -123,10 +122,10 @@ export default function FilingsPage() {
                   role="tab"
                   aria-selected={f === form}
                   onClick={() => setForm(f)}
-                  className="chip min-h-[36px] cursor-pointer px-2.5 transition-colors duration-150"
+                  className="chip min-h-[36px] cursor-pointer px-2.5 transition-colors duration-150 hover:text-[var(--text)]"
                   style={{
-                    color: f === form ? "var(--accent)" : "var(--dim)",
-                    borderColor: f === form ? "var(--accent)" : "var(--border)",
+                    color: f === form ? "var(--accent)" : undefined,
+                    borderColor: f === form ? "var(--accent)" : undefined,
                   }}
                 >
                   {f}
@@ -136,7 +135,7 @@ export default function FilingsPage() {
           </div>
 
           {/* honest lag note, always visible */}
-          <p className="px-4 py-3 text-[0.76rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             {note}
           </p>
 
@@ -159,7 +158,7 @@ export default function FilingsPage() {
               {list.map((f) => (
                 <li
                   key={f.id}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.8rem]"
+                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.75rem]"
                   style={{ borderBottom: "1px solid var(--border)" }}
                 >
                   <Link
@@ -176,7 +175,7 @@ export default function FilingsPage() {
                     {f.form}
                   </span>
                   <span style={{ color: "var(--dim)" }}>{f.label}</span>
-                  <span className="tnum ml-auto text-[0.72rem]" style={{ color: "var(--faint)" }}>
+                  <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
                     {ago(f.filedTs)}
                   </span>
                   {f.url && (
@@ -184,8 +183,7 @@ export default function FilingsPage() {
                       href={f.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[0.72rem] underline"
-                      style={{ color: "var(--faint)" }}
+                      className="text-[0.75rem] text-[var(--faint)] underline transition-colors duration-150 hover:text-[var(--text)]"
                     >
                       EDGAR ↗
                     </a>

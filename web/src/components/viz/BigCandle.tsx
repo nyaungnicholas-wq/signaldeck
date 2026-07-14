@@ -50,32 +50,26 @@ export default function BigCandle({
   presetChips?: ChipSym[];
 }) {
   const [active, setActive] = useState<{ symbol: string; market: Market }>({ symbol, market });
-  const [bars, setBars] = useState<Bar[] | null>(null);
-  const [overlays, setOverlays] = useState<ChartOverlayMarker[]>([]);
   const [signalsOn, setSignalsOn] = useState(true); // default ON per spec
-  const [chips, setChips] = useState<ChipSym[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
 
-  // Follow prop changes (e.g. the page swaps the featured symbol).
-  useEffect(() => setActive({ symbol, market }), [symbol, market]);
+  // Follow prop changes without an effect: when the caller swaps the featured
+  // symbol, reset `active` during render (the "adjust state on prop change"
+  // pattern) — no setState-in-effect, no extra render pass.
+  const propKey = `${market}:${symbol}`;
+  const [prevPropKey, setPrevPropKey] = useState(propKey);
+  if (propKey !== prevPropKey) {
+    setPrevPropKey(propKey);
+    setActive({ symbol, market });
+  }
+  const activeKey = `${active.market}:${active.symbol}`;
 
-  // Chip strip: watchlist (401 for anonymous users is fine — just skip) +
-  // top movers. Loaded once; deduped, watchlist first. Skipped entirely when
-  // the parent supplies presetChips (single-roundup dashboards).
+  // Chip strip: watchlist (401 for anonymous users is fine — skip) + top movers.
+  // Only fetched when the parent didn't supply presetChips; dedup happens in the
+  // memo below, so neither path setStates synchronously from props.
+  const [fetchedChips, setFetchedChips] = useState<ChipSym[]>([]);
   useEffect(() => {
-    if (presetChips) {
-      const seen = new Set<string>();
-      setChips(
-        presetChips.filter((c) => {
-          const k = `${c.market}:${c.symbol}`;
-          if (seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        })
-      );
-      return;
-    }
+    if (presetChips) return;
     let alive = true;
     (async () => {
       const acc: ChipSym[] = [];
@@ -93,57 +87,69 @@ export default function BigCandle({
       } catch {
         // movers unavailable — strip still works with watchlist/featured
       }
-      if (!alive) return;
-      const seen = new Set<string>();
-      setChips(
-        acc.filter((c) => {
-          const k = `${c.market}:${c.symbol}`;
-          if (seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        })
-      );
+      if (alive) setFetchedChips(acc);
     })();
     return () => {
       alive = false;
     };
   }, [presetChips]);
 
-  // Bars + (when signals ON) overlay markers for the active symbol.
+  const chips = useMemo(() => {
+    const src = presetChips ?? fetchedChips;
+    const seen = new Set<string>();
+    return src.filter((c) => {
+      const k = `${c.market}:${c.symbol}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }, [presetChips, fetchedChips]);
+
+  // Bars for the active symbol, keyed by activeKey so a stale response can't
+  // paint under a new header and the loading/error state is DERIVED from the
+  // key rather than reset synchronously inside the effect.
+  const [barsState, setBarsState] = useState<
+    { key: string; bars: Bar[] } | { key: string; error: string } | null
+  >(null);
   useEffect(() => {
     let alive = true;
-    setBars(null);
-    setError(null);
+    const key = `${active.market}:${active.symbol}`;
     api
       .bars(active.symbol, active.market, "1d", BAR_LIMIT)
       .then((b) => {
-        if (alive) setBars(b ?? []);
+        if (alive) setBarsState({ key, bars: b ?? [] });
       })
       .catch((e: unknown) => {
-        if (alive) setError(e instanceof Error ? e.message : String(e));
+        if (alive) setBarsState({ key, error: e instanceof Error ? e.message : String(e) });
       });
     return () => {
       alive = false;
     };
-  }, [active, retryTick]);
+  }, [active.symbol, active.market, retryTick]);
+  const loaded = barsState && barsState.key === activeKey ? barsState : null;
+  const bars = loaded && "bars" in loaded ? loaded.bars : null;
+  const barsError = loaded && "error" in loaded ? loaded.error : null;
 
+  // Overlay markers — fetched only when signals are ON, also keyed by activeKey.
+  // When signals are OFF we simply don't render them (no setState needed).
+  const [overlayState, setOverlayState] = useState<{ key: string; markers: ChartOverlayMarker[] } | null>(null);
   useEffect(() => {
+    if (!signalsOn) return;
     let alive = true;
-    if (!signalsOn) {
-      setOverlays([]);
-      return;
-    }
+    const key = `${active.market}:${active.symbol}`;
     chartOverlays(active.symbol, active.market)
       .then((o) => {
-        if (alive) setOverlays(o.markers ?? []);
+        if (alive) setOverlayState({ key, markers: o.markers ?? [] });
       })
       .catch(() => {
-        if (alive) setOverlays([]); // overlays are additive — chart stays useful
+        if (alive) setOverlayState({ key, markers: [] }); // additive — chart stays useful
       });
     return () => {
       alive = false;
     };
-  }, [active, signalsOn, retryTick]);
+  }, [active.symbol, active.market, signalsOn, retryTick]);
+  const overlays =
+    signalsOn && overlayState && overlayState.key === activeKey ? overlayState.markers : [];
 
   const chipList = useMemo(() => {
     // Ensure the active symbol is always visible in the strip.
@@ -157,14 +163,14 @@ export default function BigCandle({
         <span>
           {active.symbol} <span style={{ color: "var(--faint)" }}>· 1d</span>
         </span>
-        <span className="text-[0.65rem] font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem] font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
           stored daily bars, worker cadence — not live
         </span>
         <button
           type="button"
           onClick={() => setSignalsOn((v) => !v)}
           aria-pressed={signalsOn}
-          className="chip ml-auto min-h-[32px] cursor-pointer text-[0.65rem] transition-colors duration-150 hover:brightness-125"
+          className="chip ml-auto min-h-[32px] cursor-pointer text-[0.75rem] transition-colors duration-150 hover:brightness-125"
           style={signalsOn ? { color: "var(--text)", borderColor: "var(--accent)" } : undefined}
           title="score/regime/breakout markers from stored worker events"
         >
@@ -188,7 +194,7 @@ export default function BigCandle({
               role="tab"
               aria-selected={isActive}
               onClick={() => setActive({ symbol: c.symbol, market: c.market })}
-              className="chip min-h-[32px] shrink-0 cursor-pointer text-[0.68rem] transition-colors duration-150 hover:brightness-125"
+              className="chip min-h-[32px] shrink-0 cursor-pointer text-[0.75rem] transition-colors duration-150 hover:brightness-125"
               style={
                 isActive
                   ? { color: "var(--text)", borderColor: "var(--accent)" }
@@ -204,18 +210,18 @@ export default function BigCandle({
         })}
       </div>
 
-      {bars === null && !error && (
+      {loaded === null && (
         <div className="p-3" style={{ height }}>
           <Skeleton lines={6} label={`loading ${active.symbol} bars`} />
         </div>
       )}
-      {bars === null && error && (
+      {barsError && (
         <div className="p-3">
           <ErrorState
-            message={error}
+            message={barsError}
             hint="Is the daemon running? Bars come from /api/bars."
             retry={() => {
-              setError(null);
+              setBarsState(null);
               setRetryTick((t) => t + 1);
             }}
           />
@@ -229,7 +235,7 @@ export default function BigCandle({
       )}
       {bars !== null && bars.length > 0 && (
         <div className="px-1 pb-1">
-          <CandleChart bars={bars} tf="1d" height={height} overlays={signalsOn ? overlays : []} />
+          <CandleChart bars={bars} tf="1d" height={height} overlays={overlays} />
         </div>
       )}
     </section>

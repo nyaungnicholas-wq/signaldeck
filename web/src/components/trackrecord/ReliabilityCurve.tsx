@@ -38,14 +38,14 @@ export default function ReliabilityCurve({ bins }: { bins: ReliabilityBin[] }) {
         <line x1={x(0)} y1={y(0.5)} x2={x(1)} y2={y(0.5)} stroke="var(--border)" strokeWidth={0.5} />
 
         {/* axis labels */}
-        <text x={x(0.5)} y={H - 8} textAnchor="middle" fontSize="10" fill="var(--faint)">
+        <text x={x(0.5)} y={H - 8} textAnchor="middle" fontSize="12" fill="var(--faint)">
           mean predicted →
         </text>
         <text
           x={12}
           y={y(0.5)}
           textAnchor="middle"
-          fontSize="10"
+          fontSize="12"
           fill="var(--faint)"
           transform={`rotate(-90 12 ${y(0.5)})`}
         >
@@ -85,7 +85,7 @@ export default function ReliabilityCurve({ bins }: { bins: ReliabilityBin[] }) {
         })}
       </svg>
       {populated.length === 0 && (
-        <p className="mt-1 text-center text-[0.72rem]" style={{ color: "var(--faint)" }}>
+        <p className="mt-1 text-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
           no populated bins yet
         </p>
       )}

@@ -43,7 +43,7 @@ function fmtChg(v: number): string {
 export default function Heatmap({ items }: { items: HeatmapItem[] }) {
   if (!items || items.length === 0) {
     return (
-      <p className="px-3 py-4 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+      <p className="px-3 py-4 text-[0.75rem]" style={{ color: "var(--faint)" }}>
         No fresh universe bars yet — the universe poller fills daily closes on
         its own cadence; tiles appear as bars arrive (nothing is faked to fill
         the grid).
@@ -91,7 +91,7 @@ export default function Heatmap({ items }: { items: HeatmapItem[] }) {
                 href={`/s/${it.market ?? "stocks"}/${encodeURIComponent(it.symbol)}`}
                 title={tip}
                 aria-label={tip}
-                className="flex cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[4px] border transition-colors duration-150 hover:border-[var(--accent)]"
+                className="flex cursor-pointer flex-col items-center justify-center overflow-hidden rounded-lg border transition-colors duration-150 hover:border-[var(--accent)]"
                 style={{
                   width: s,
                   height: s,
@@ -109,7 +109,7 @@ export default function Heatmap({ items }: { items: HeatmapItem[] }) {
                 <span
                   className="tnum"
                   style={{
-                    fontSize: s >= 72 ? "0.66rem" : "0.56rem",
+                    fontSize: s >= 72 ? "0.72rem" : "0.6rem",
                     color: it.changePct > 0 ? "var(--bid)" : it.changePct < 0 ? "var(--ask)" : "var(--dim)",
                   }}
                 >
@@ -126,7 +126,7 @@ export default function Heatmap({ items }: { items: HeatmapItem[] }) {
 
       {/* legend — color scale + the sizing honesty note */}
       <div
-        className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.62rem]"
+        className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.75rem]"
         style={{ color: "var(--faint)" }}
       >
         <span className="flex items-center gap-1" aria-hidden="true">

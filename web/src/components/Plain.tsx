@@ -83,7 +83,7 @@ export default function Plain({
     if (mode === "pro") return null;
     return (
       <span
-        className={`inline-flex items-center gap-1.5 text-[0.72rem] leading-snug ${className}`}
+        className={`inline-flex items-center gap-1.5 text-[0.75rem] leading-snug ${className}`}
         style={{ color: "var(--dim)" }}
         title={r.detail}
       >
@@ -99,7 +99,7 @@ export default function Plain({
         <span className="tnum font-bold" style={{ color: goodnessColor(r.goodness) === "var(--faint)" && rawText !== "—" ? "var(--text)" : goodnessColor(r.goodness) }}>
           {rawText}
         </span>
-        <span className="text-[0.68rem] leading-snug" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem] leading-snug" style={{ color: "var(--faint)" }}>
           {r.plain}
         </span>
       </span>
@@ -115,7 +115,7 @@ export default function Plain({
         <span style={{ color: r.raw === "—" && rawText === "—" ? "var(--faint)" : "var(--text)" }}>{r.plain}</span>
       </span>
       {rawText !== "—" && (
-        <span className="tnum pl-3.5 text-[0.68rem]" style={{ color: "var(--faint)" }}>
+        <span className="tnum pl-3.5 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           {rawText}
         </span>
       )}

@@ -79,7 +79,7 @@ func TestBackfillPaging(t *testing.T) {
 				q := r.URL.Query()
 				for k, want := range map[string]string{
 					"timeframe": tt.wantTimeframe, "limit": "10000",
-					"adjustment": "split", "feed": "iex",
+					"adjustment": "split", "feed": "sip",
 				} {
 					if got := q.Get(k); got != want {
 						t.Errorf("query %s = %q, want %q", k, got, want)

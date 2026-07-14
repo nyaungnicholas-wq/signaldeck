@@ -12,14 +12,15 @@ import {
   filings,
   insiders,
   institutionsBySymbol,
+  pollMs,
+  POLL_SLOW,
   type DilutionFlag,
   type Filing,
   type InsiderTrade,
   type InstHolding,
 } from "@/lib/api";
 import { ago } from "@/lib/format";
-
-const POLL_MS = 120_000;
+import HelpTip from "@/components/HelpTip";
 
 function levelColor(level: string): string {
   switch (level) {
@@ -71,10 +72,11 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, POLL_MS);
+    // POLL_SLOW: EDGAR-derived data moves on the poller's ~2h sweeps.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [symbol]);
 
@@ -83,26 +85,29 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
       <div className="panel-h flex-wrap gap-2">
         SEC INTELLIGENCE · {symbol}
         {flag && (
-          <span
-            className="chip"
-            style={{ color: levelColor(flag.level), borderColor: levelColor(flag.level) }}
-            title={flag.note}
-          >
-            dilution {flag.level}
+          <span className="flex items-center gap-1">
+            <span
+              className="chip"
+              style={{ color: levelColor(flag.level), borderColor: levelColor(flag.level) }}
+            >
+              dilution {flag.level}
+            </span>
+            {/* the flag's reasoning — click/keyboard popover, not hover-only */}
+            {flag.note && <HelpTip label="how this dilution flag is derived">{flag.note}</HelpTip>}
           </span>
         )}
-        <span className="tnum ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>
+        <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
           EDGAR · lags by law (Form 4 ~2bd, 13F ≤45d)
         </span>
       </div>
 
       {err !== null && rows === null && (
-        <p className="px-4 py-3 text-[0.78rem]" style={{ color: "var(--bad)" }}>
+        <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--bad)" }}>
           {err}
         </p>
       )}
       {rows === null && err === null && (
-        <p className="px-4 py-3 text-[0.78rem]" style={{ color: "var(--faint)" }}>
+        <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           loading SEC data…
         </p>
       )}
@@ -111,7 +116,7 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
         <div className="grid grid-cols-1 gap-0 lg:grid-cols-3">
           {/* Recent filings */}
           <div className="px-4 py-3" style={{ borderTop: "1px solid var(--border)" }}>
-            <div className="mb-2 text-[0.72rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+            <div className="mb-2 text-[0.75rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
               RECENT FILINGS
             </div>
             {rows.length === 0 ? (
@@ -122,11 +127,11 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
               <ul className="flex flex-col gap-1.5">
                 {rows.map((f) => (
                   <li key={f.id} className="flex items-baseline gap-2 text-[0.75rem]">
-                    <span className="chip shrink-0">{f.form}</span>
+                    <span className="chip mono shrink-0">{f.form}</span>
                     <span className="min-w-0 flex-1 truncate" style={{ color: "var(--dim)" }} title={f.label}>
                       {f.label}
                     </span>
-                    <span className="tnum shrink-0 text-[0.68rem]" style={{ color: "var(--faint)" }}>
+                    <span className="tnum shrink-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                       {ago(f.filedTs)}
                     </span>
                   </li>
@@ -137,7 +142,7 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
 
           {/* Insider activity */}
           <div className="px-4 py-3" style={{ borderTop: "1px solid var(--border)" }}>
-            <div className="mb-2 text-[0.72rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+            <div className="mb-2 text-[0.75rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
               INSIDER ACTIVITY
             </div>
             {(trades ?? []).length === 0 ? (
@@ -149,7 +154,7 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
                 {(trades ?? []).map((t) => (
                   <li key={t.accession} className="flex items-baseline gap-2 text-[0.75rem]">
                     <span
-                      className="chip shrink-0"
+                      className="chip mono shrink-0"
                       style={{
                         color: t.code === "P" ? "var(--bid)" : t.code === "S" ? "var(--ask)" : "var(--dim)",
                         borderColor: t.code === "P" ? "var(--bid)" : t.code === "S" ? "var(--ask)" : "var(--border)",
@@ -168,14 +173,14 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
                 ))}
               </ul>
             )}
-            <p className="mt-2 text-[0.66rem] leading-snug" style={{ color: "var(--faint)" }}>
+            <p className="mt-2 text-[0.75rem] leading-snug" style={{ color: "var(--faint)" }}>
               only BUY/SELL are open-market; other codes are grants/exercises.
             </p>
           </div>
 
           {/* Institutional holders */}
           <div className="px-4 py-3" style={{ borderTop: "1px solid var(--border)" }}>
-            <div className="mb-2 text-[0.72rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+            <div className="mb-2 text-[0.75rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
               NOTABLE 13F HOLDERS
             </div>
             {(holders ?? []).length === 0 ? (
@@ -192,7 +197,7 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
                     <span className="tnum shrink-0" style={{ color: "var(--text)" }}>
                       {fmtUSD(h.value)}
                     </span>
-                    <span className="tnum shrink-0 text-[0.66rem]" style={{ color: "var(--faint)" }}>
+                    <span className="tnum shrink-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                       {h.period}
                     </span>
                   </li>
@@ -206,7 +211,7 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
       {/* dilution evidence, when any */}
       {flag && flag.reasons.length > 0 && (
         <div className="px-4 py-3" style={{ borderTop: "1px solid var(--border)" }}>
-          <div className="mb-1 text-[0.72rem] tracking-[0.12em]" style={{ color: levelColor(flag.level) }}>
+          <div className="mb-1 text-[0.75rem] tracking-[0.12em]" style={{ color: levelColor(flag.level) }}>
             DILUTION EVIDENCE
           </div>
           <ul className="flex flex-col gap-1">
@@ -216,7 +221,7 @@ export default function FilingsIntelPanel({ symbol }: { symbol: string }) {
               </li>
             ))}
           </ul>
-          <p className="mt-1 text-[0.66rem]" style={{ color: "var(--faint)" }}>
+          <p className="mt-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
             descriptive evidence, not a prediction.
           </p>
         </div>

@@ -185,7 +185,7 @@ func TestDilutionEndpoint(t *testing.T) {
 	nvda, _ := st.UpsertSymbol(ctx, "NVDA", md.Stocks, "NVIDIA Corp")
 	_ = st.UpsertDilutionFlag(ctx, store.DilutionFlagRow{
 		SymbolID: nvda.ID, Level: "high",
-		Reasons: `["1 dilution-shaped filing(s) in last 180d: 424B5","shares outstanding +4.0% over the trailing window (15B → 15.6B)"]`,
+		Reasons:   `["1 dilution-shaped filing(s) in last 180d: 424B5","shares outstanding +4.0% over the trailing window (15B → 15.6B)"]`,
 		UpdatedTs: 42})
 
 	// Derived flag.

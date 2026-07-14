@@ -1,11 +1,13 @@
 import type { NextConfig } from "next";
 
 // Single-URL setup: the browser only ever talks to the web app (:8323).
-// Every /api/* request is proxied server-side to the data daemon (:8322), so
-// the daemon port is never exposed and there is one localhost to open.
-// tickstream (:8321) and trader-hud (:8787) stay as background data sources
-// the daemon consumes — not user-facing.
-const DAEMON = process.env.SIGNALDECK_DAEMON ?? "http://127.0.0.1:8322";
+// Every /api/* request is proxied server-side to the data daemon (:8322) by
+// the route handler at src/app/api/[...path]/route.ts (reads
+// SIGNALDECK_DAEMON, forwards an allowlist of headers, attaches the
+// server-only SIGNALDECK_API_TOKEN when set), so the daemon port is never
+// exposed and there is one localhost to open. tickstream (:8321) and
+// trader-hud (:8787) stay as background data sources the daemon consumes —
+// not user-facing.
 
 // Stage 2 nav consolidation: 24 flat routes became 6 hubs with nested
 // sub-tab routes. Every old URL redirects (307, query string preserved —
@@ -50,9 +52,35 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   // together), so its old redirect-to-quality is gone.
 ];
 
+// Applied to every route. CSP still allows 'unsafe-inline' (Next.js inline
+// runtime scripts need it); the tightening path is a nonce-based CSP via
+// middleware once those are eliminated. 'unsafe-eval' is dev-only (webpack/
+// turbopack eval sourcemaps + HMR) — production builds never eval.
+// connect-src is 'self' only: 'self' already covers same-origin ws/wss
+// upgrades (incl. dev HMR), and bare ws:/wss: scheme sources would allow a
+// WebSocket to ANY host — an exfiltration channel the app never uses.
+const SCRIPT_SRC =
+  process.env.NODE_ENV === "development"
+    ? "'self' 'unsafe-inline' 'unsafe-eval'"
+    : "'self' 'unsafe-inline'";
+const SECURITY_HEADERS = [
+  {
+    key: "Content-Security-Policy",
+    value:
+      `default-src 'self'; script-src ${SCRIPT_SRC}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
+  },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "X-Frame-Options", value: "DENY" },
+  {
+    key: "Permissions-Policy",
+    value: "camera=(), microphone=(), geolocation=()",
+  },
+];
+
 const nextConfig: NextConfig = {
-  async rewrites() {
-    return [{ source: "/api/:path*", destination: `${DAEMON}/api/:path*` }];
+  async headers() {
+    return [{ source: "/(.*)", headers: SECURITY_HEADERS }];
   },
   async redirects() {
     // permanent:false → 307 so browsers don't cache the mapping forever

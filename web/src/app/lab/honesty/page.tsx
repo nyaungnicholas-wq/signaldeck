@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, HORIZONS, pollMs, type Honesty, type Horizon } from "@/lib/api";
+import { api, HORIZONS, pollMs, POLL_SLOW, type Honesty, type Horizon } from "@/lib/api";
 import { ago } from "@/lib/format";
 import HeroStats from "@/components/honesty/HeroStats";
 import QuintileTable from "@/components/honesty/QuintileTable";
@@ -11,6 +11,8 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
+import HelpTip from "@/components/HelpTip";
+import ProOnly from "@/components/ProOnly";
 
 /** HONESTY — grades persisted scores against what the market actually did. */
 export default function HonestyPage() {
@@ -36,10 +38,11 @@ export default function HonestyPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, pollMs());
+    // Grades move on resolution cadence (hours/days), not tick cadence.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [horizon, retryTick]);
 
@@ -53,7 +56,7 @@ export default function HonestyPage() {
       {/* header row */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <h1 className="text-sm font-extrabold tracking-[0.18em]">HONESTY</h1>
-        <span className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
           were the scores any good?
         </span>
         <div role="group" aria-label="Outcome horizon" className="flex items-center gap-1">
@@ -98,16 +101,16 @@ export default function HonestyPage() {
             </span>
           )}
           {current && (
-            <span
-              className="chip tnum"
-              title={
-                (current.rawN ?? current.independentN ?? current.n) !==
+            <span className="flex items-center gap-1.5">
+              <span className="chip tnum">
+                {(current.independentN ?? current.n ?? 0).toLocaleString("en-US")} independent
+              </span>
+              <HelpTip label="What counts as independent?">
+                {(current.rawN ?? current.independentN ?? current.n) !==
                 (current.independentN ?? current.n)
-                  ? `${(current.rawN ?? 0).toLocaleString("en-US")} raw minute-cadence rows collapse to ${(current.independentN ?? current.n).toLocaleString("en-US")} independent symbol-days`
-                  : "independent (symbol, UTC-day) resolutions"
-              }
-            >
-              {(current.independentN ?? current.n ?? 0).toLocaleString("en-US")} independent
+                  ? `${(current.rawN ?? 0).toLocaleString("en-US")} raw minute-cadence rows collapse to ${(current.independentN ?? current.n).toLocaleString("en-US")} independent (symbol, UTC-day) resolutions — pooling rows that resolve against the same move would overstate confidence.`
+                  : "One observation per (symbol, UTC-day) resolution — pooling rows that resolve against the same move would overstate confidence."}
+              </HelpTip>
             </span>
           )}
           <span className="chip tnum">
@@ -153,10 +156,14 @@ export default function HonestyPage() {
       {current && (current.n ?? 0) > 0 && (
         <>
           <HeroStats data={current} horizon={horizon} />
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <QuintileTable buckets={current.buckets ?? []} />
-            <ScatterPlot points={current.points ?? []} />
-          </div>
+          {/* Raw score buckets + scatter are the technical detail — SIMPLE mode
+              folds them; the verdicts above stay visible in both modes. */}
+          <ProOnly summary="Show the quintile table & scatter">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <QuintileTable buckets={current.buckets ?? []} />
+              <ScatterPlot points={current.points ?? []} />
+            </div>
+          </ProOnly>
         </>
       )}
 

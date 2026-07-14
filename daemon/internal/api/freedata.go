@@ -29,7 +29,7 @@ func (d Deps) macroSeries(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
 			"latest":  latest,
 			"tracked": fred.DefaultSeries,
-			"note":    "Free macro from FRED (St. Louis Fed): VIXCLS=VIX, DGS10=10y yield, T10Y2Y=10y-2y spread, DFF=fed funds. No paid feed; keyless CSV endpoint.",
+			"note":    "Free macro from FRED (St. Louis Fed): VIXCLS=VIX, DGS10=10y yield, T10Y2Y=10y-2y spread, DFF=fed funds, DGS2=2y yield, T10Y3M=10y-3m spread, BAMLH0A0HYM2=high-yield OAS, NFCI=financial conditions, UNRATE=unemployment, CPIAUCSL=CPI, M2SL=M2. No paid feed; keyless CSV endpoint. Monthly/weekly series carry their latest published observation.",
 		})
 		return
 	}

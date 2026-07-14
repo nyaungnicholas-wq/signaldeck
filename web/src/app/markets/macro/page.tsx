@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   api,
   dashboard,
+  pollMs,
+  POLL_SLOW,
   type DashboardResponse,
   type Macro,
   type SectorAgg,
@@ -12,6 +14,7 @@ import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import HelpTip from "@/components/HelpTip";
 import Bar from "@/components/macro/Bar";
 import Push20Macro from "@/components/macro/Push20Macro";
 import SectorRow from "@/components/macro/SectorRow";
@@ -19,8 +22,7 @@ import Gauge from "@/components/viz/Gauge";
 import CalendarsCard from "@/components/CalendarsCard";
 import EarningsEstCard from "@/components/EarningsEstCard";
 import PagePurpose from "@/components/PagePurpose";
-
-const POLL_MS = 10000;
+import ProOnly from "@/components/ProOnly";
 
 /** Breadth bar color: green when broadly positive, red when broadly weak. */
 function breadthColor(pct: number): string {
@@ -89,10 +91,12 @@ export default function MacroPage() {
         });
     };
     load();
-    const t = setInterval(load, POLL_MS);
+    // Macro series carry publication lags of hours to a day (FRED daily,
+    // sectors hourly) — the slow tier is honest about how fast this moves.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 
@@ -210,11 +214,11 @@ export default function MacroPage() {
             {/* BREADTH */}
             <div>
               <div className="mb-1.5 flex items-baseline justify-between">
-                <span className="text-[0.78rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+                <span className="text-[0.75rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
                   BREADTH
                 </span>
                 <span
-                  className="tnum text-[0.78rem]"
+                  className="tnum text-[0.75rem]"
                   style={{ color: breadthColor(breadth) }}
                   aria-label={`${macro.positive} of ${macro.scored} symbols positive`}
                 >
@@ -228,7 +232,7 @@ export default function MacroPage() {
                     color={breadthColor(breadth)}
                     label={`market breadth ${breadth.toFixed(0)} percent of scored symbols positive`}
                   />
-                  <div className="tnum mt-1 text-right text-[0.78rem]" style={{ color: "var(--faint)" }}>
+                  <div className="tnum mt-1 text-right text-[0.75rem]" style={{ color: "var(--faint)" }}>
                     {breadth.toFixed(0)}%
                   </div>
                 </>
@@ -241,8 +245,13 @@ export default function MacroPage() {
 
             {/* VOLATILITY */}
             <div>
-              <div className="mb-1.5 text-[0.78rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+              <div className="mb-1.5 flex items-center gap-1.5 text-[0.75rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
                 VOLATILITY
+                <HelpTip label="What does annualized volatility mean?">
+                  How much daily prices have been swinging lately, scaled up to a
+                  yearly rate so different periods compare fairly. Higher means
+                  choppier markets — it describes the recent past, not a forecast.
+                </HelpTip>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span
@@ -261,22 +270,25 @@ export default function MacroPage() {
               </div>
             </div>
 
-            {/* PUSH-20 MACRO */}
-            <div>
-              <div className="mb-1.5 text-[0.78rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
-                PUSH-20 MACRO
+            {/* PUSH-20 MACRO — strategy-gate internals; methodology detail, so
+                simple mode collapses it behind a disclosure (pro shows it). */}
+            <ProOnly summary="Show the PUSH-20 trader-gate detail">
+              <div>
+                <div className="mb-1.5 text-[0.75rem] tracking-[0.12em]" style={{ color: "var(--dim)" }}>
+                  PUSH-20 MACRO
+                </div>
+                <div
+                  className="rounded-lg border"
+                  style={{ borderColor: "var(--border)", background: "var(--panel2)" }}
+                >
+                  <Push20Macro data={macro.push20Macro} />
+                </div>
               </div>
-              <div
-                className="rounded-lg border"
-                style={{ borderColor: "var(--border)", background: "var(--panel2)" }}
-              >
-                <Push20Macro data={macro.push20Macro} />
-              </div>
-            </div>
+            </ProOnly>
 
             {/* honest note, verbatim */}
             {macro.note && (
-              <p className="text-[0.78rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+              <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
                 {macro.note}
               </p>
             )}
@@ -294,7 +306,7 @@ export default function MacroPage() {
             )}
           </div>
 
-          <p className="px-4 py-3 text-[0.76rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
             Which sectors are strongest right now — money rotates toward the top.
           </p>
 

@@ -1,0 +1,154 @@
+"use client";
+
+// PROOF IT WORKS strip — extracted from the old monolithic page.tsx. The
+// track-record gate progress, the costed paper P&L and the ledger-integrity
+// chip, each pulled from the REAL /api/track-record payload and each keeping
+// its honest framing (gated = "too early to grade", paper = simulation upper
+// bound). The load-bearing caveats that used to hide behind hover titles are
+// click/keyboard HelpTips now. Nothing here is ever fabricated: fetch failure
+// renders an honest note.
+
+import Link from "next/link";
+import { fmtPct } from "@/lib/format";
+import Skeleton from "@/components/Skeleton";
+import HelpTip from "@/components/HelpTip";
+import useDashboardProof from "@/hooks/useDashboardProof";
+
+export default function ProofStrip() {
+  const { tr, err } = useDashboardProof();
+
+  if (err && !tr) {
+    return (
+      <section className="panel px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+        proof data unavailable ({err}) — the track record lives at{" "}
+        <Link
+          href="/lab/track-record"
+          className="mono cursor-pointer text-[var(--dim)] underline transition-colors duration-150 hover:text-[var(--accent)]"
+        >
+          /lab/track-record
+        </Link>{" "}
+        once the daemon is reachable.
+      </section>
+    );
+  }
+  if (!tr) {
+    return (
+      <section className="panel p-3">
+        <Skeleton lines={2} label="loading track-record proof" />
+      </section>
+    );
+  }
+
+  const threshold = tr.gate?.threshold ?? tr.minIndependentN;
+  const paper = tr.paper;
+  return (
+    <section className="panel" aria-label="proof it works">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3">
+        {/* gate progress — the honest scoreboard state */}
+        <div className="flex min-w-[220px] flex-1 flex-col gap-1">
+          {tr.gated ? (
+            <>
+              <span className="text-[0.75rem] font-semibold" style={{ color: "var(--warn)" }}>
+                too early to grade —{" "}
+                <span className="tnum">
+                  {tr.independentN}/{threshold}
+                </span>{" "}
+                independent symbol-days
+              </span>
+              <div
+                className="h-1.5 w-full overflow-hidden rounded"
+                style={{ background: "var(--border)" }}
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={threshold}
+                aria-valuenow={tr.independentN}
+                aria-label="independent resolutions toward the significance gate"
+              >
+                <div
+                  className="h-full rounded"
+                  style={{
+                    width: `${Math.min(100, (tr.independentN / Math.max(1, threshold)) * 100)}%`,
+                    background: "var(--warn)",
+                  }}
+                />
+              </div>
+              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                skill numbers stay withheld until the bar fills — an honest wait, not a hidden score
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-[0.75rem] font-semibold" style={{ color: "var(--ok)" }}>
+                measured: right{" "}
+                <span className="tnum">
+                  {tr.winRate != null ? `${(tr.winRate * 100).toFixed(1)}%` : "—"}
+                </span>{" "}
+                of the time
+              </span>
+              <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                over {tr.independentN.toLocaleString("en-US")} independent (symbol, UTC-day) resolutions · 1d horizon
+              </span>
+            </>
+          )}
+        </div>
+
+        {/* paper P&L — always labeled a simulation */}
+        <div className="flex flex-col gap-0.5">
+          <span
+            className="inline-flex items-center gap-1 text-[0.75rem] tracking-wider"
+            style={{ color: "var(--faint)" }}
+          >
+            PAPER P&amp;L (SIMULATED, COSTED)
+            <HelpTip label="What paper P&L means">
+              A simulated book on stored data with next-bar fills and per-side costs — an upper
+              bound on what the signals could have earned, not a brokerage account and not a
+              promise of future returns.
+            </HelpTip>
+          </span>
+          {paper?.available ? (
+            <span
+              className="tnum text-[0.85rem] font-semibold"
+              style={{ color: (paper.totalReturn ?? 0) >= 0 ? "var(--bid)" : "var(--ask)" }}
+            >
+              {fmtPct((paper.totalReturn ?? 0) * 100)}
+            </span>
+          ) : (
+            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
+              no fills yet
+            </span>
+          )}
+        </div>
+
+        {/* ledger integrity — the record grades the record that was made */}
+        {tr.ledger && (
+          <span className="inline-flex items-center gap-1">
+            <span
+              className="chip"
+              style={
+                tr.ledger.intact
+                  ? { color: "var(--ok)", borderColor: "var(--ok)" }
+                  : { color: "var(--bad)", borderColor: "var(--bad)" }
+              }
+            >
+              {tr.ledger.intact ? "ledger intact" : "ledger BROKEN"}
+              <span className="tnum ml-1.5 font-normal" style={{ color: "var(--faint)" }}>
+                {tr.ledger.count.toLocaleString("en-US")}
+              </span>
+            </span>
+            <HelpTip label="What ledger intact means">
+              Every flagship prediction is hash-chained append-only — “intact” means no prediction
+              was silently edited or deleted after the fact.
+            </HelpTip>
+          </span>
+        )}
+
+        <Link
+          href="/lab/track-record"
+          className="chip ml-auto inline-flex min-h-[36px] cursor-pointer items-center transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)]"
+        >
+          Investigate the full track record →
+        </Link>
+      </div>
+    </section>
+  );
+}

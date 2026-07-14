@@ -95,9 +95,11 @@ function ManagerHoldings({ manager }: { manager: string }) {
         </Link>
       </div>
 
-      {/* the honest quarterly-lag note, verbatim from the API */}
-      <p className="px-4 py-3 text-[0.76rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-        {note}
+      {/* the honest quarterly-lag note, verbatim from the API — plus the
+          issuer-matching caveat as visible text, not a hover-only tooltip */}
+      <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+        {note} Rows marked &ldquo;unmatched&rdquo; mean the filed issuer name
+        couldn&rsquo;t be matched to a tracked ticker — no symbol is ever guessed.
       </p>
 
       {list.length === 0 ? (
@@ -107,11 +109,11 @@ function ManagerHoldings({ manager }: { manager: string }) {
           detail="The 13f-poller rotates through the curated list daily and stores each manager's latest 13F-HR once per report period."
         />
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table className="w-full text-[0.78rem]">
+        <div className="table-wrap">
+          <table className="w-full text-[0.75rem]">
             <thead>
               <tr
-                className="text-left text-[0.68rem] tracking-wider"
+                className="text-left text-[0.75rem] tracking-wider"
                 style={{ color: "var(--faint)", borderBottom: "1px solid var(--border)" }}
               >
                 <th className="px-4 py-2 font-normal">ISSUER (AS FILED)</th>
@@ -131,8 +133,7 @@ function ManagerHoldings({ manager }: { manager: string }) {
                     {h.symbol ? (
                       <Link
                         href={`/s/stocks/${encodeURIComponent(h.symbol)}`}
-                        className="tnum font-bold hover:text-[var(--accent)]"
-                        style={{ color: "var(--text)" }}
+                        className="tnum font-bold text-[var(--text)] transition-colors duration-150 hover:text-[var(--accent)]"
                       >
                         {h.symbol}
                       </Link>
@@ -211,7 +212,7 @@ function ManagersOverview() {
         </div>
 
         {/* the honest quarterly-lag note, verbatim from the API */}
-        <p className="px-4 py-3 text-[0.76rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+        <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
           {resp.note}
         </p>
 
@@ -252,7 +253,7 @@ function ManagersOverview() {
             CURATED — NOT YET STORED
             <span className="chip tnum">{pending.length}</span>
             <span
-              className="text-[0.68rem] font-normal normal-case tracking-normal"
+              className="text-[0.75rem] font-normal normal-case tracking-normal"
               style={{ color: "var(--faint)" }}
             >
               watched managers whose latest 13F-HR hasn&rsquo;t been swept in yet
@@ -331,7 +332,7 @@ function SymbolHolders({ symbol }: { symbol: string }) {
         </span>
       </div>
       {note && (
-        <p className="px-4 py-3 text-[0.76rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+        <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
           {note}
         </p>
       )}
@@ -346,7 +347,7 @@ function SymbolHolders({ symbol }: { symbol: string }) {
           {rows.map((h) => (
             <li
               key={`${h.manager}:${h.cusip}`}
-              className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.8rem]"
+              className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.75rem]"
               style={{ borderBottom: "1px solid var(--border)" }}
             >
               <span className="font-bold" style={{ color: "var(--text)" }}>

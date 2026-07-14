@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/tvscanner"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -40,7 +41,7 @@ func TestAutoAddBudget(t *testing.T) {
 
 func TestPickAutoAdds(t *testing.T) {
 	cands := []store.Candidate{
-		{Symbol: "ONE_SWEEP", Status: "new", SeenCount: 1, DollarVol: 9e9},   // flashy spike: excluded
+		{Symbol: "ONE_SWEEP", Status: "new", SeenCount: 1, DollarVol: 9e9}, // flashy spike: excluded
 		{Symbol: "BIG", Status: "new", SeenCount: 3, DollarVol: 5e9},
 		{Symbol: "MID", Status: "new", SeenCount: 2, DollarVol: 2e9},
 		{Symbol: "SMALL", Status: "new", SeenCount: 4, DollarVol: 1e8},
@@ -408,5 +409,134 @@ func TestSymbolCapEnv(t *testing.T) {
 	t.Setenv("SIGNALDECK_SYMBOL_CAP", "-3")
 	if got := SymbolCap(); got != DefaultSymbolCap {
 		t.Fatalf("negative cap: %d", got)
+	}
+}
+
+// ── WHOLE-MARKET DISCOVERY wave: TV source merge + degradation ───────────
+
+// fakeTV is a fixture TVSource keyed by "sortBy sortOrder".
+type fakeTV struct {
+	rows map[string][]tvscanner.DiscoveryRow
+	err  error
+	got  []string // queries received, for assertion
+}
+
+func (f *fakeTV) ScanDiscovery(_ context.Context, screener, sortBy, sortOrder string, limit int) ([]tvscanner.DiscoveryRow, error) {
+	f.got = append(f.got, screener+" "+sortBy+" "+sortOrder)
+	if f.err != nil {
+		return nil, f.err
+	}
+	rows := f.rows[sortBy+" "+sortOrder]
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
+}
+
+func TestTVSweepMergesAndDedupes(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	// ACTV is already actively ingested → must never become a candidate.
+	actv, err := st.UpsertSymbol(ctx, "ACTV", md.Stocks, "")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_ = actv
+	f := &fakeAlpaca{
+		actives: []ActiveRow{{Symbol: "COIN", Volume: 4e6}},
+		prices:  map[string]float64{"COIN": 300},
+	}
+	w := newWorker(t, st, f)
+	w.TV = &fakeTV{rows: map[string][]tvscanner.DiscoveryRow{
+		"volume desc": {
+			{Name: "COIN", Exchange: "NASDAQ", Close: 300, ChangePct: 1.0, Volume: 4e6}, // dup vs alpaca
+			{Name: "SOXS", Exchange: "AMEX", Close: 4, ChangePct: 0.2, Volume: 5e8},
+			{Name: "ACTV", Exchange: "NYSE", Close: 10, ChangePct: 0.1, Volume: 2e6}, // already active
+		},
+		"change desc": {{Name: "GMM", Exchange: "NASDAQ", Close: 4.57, ChangePct: 147.0, Volume: 1.4e8}},
+		"change asc":  {{Name: "SOXS", Exchange: "AMEX", Close: 4, ChangePct: 0.2, Volume: 5e8}}, // dup vs volume list
+	}}
+
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// COIN from alpaca; SOXS/ACTV/GMM new from TV (ACTV filtered at upsert).
+	if !strings.Contains(detail, "alpaca 1 + tv 3 candidates") {
+		t.Fatalf("detail: %q", detail)
+	}
+	if strings.Contains(detail, "degraded") {
+		t.Fatalf("healthy sweep must not report degradation: %q", detail)
+	}
+	cands, _ := st.Candidates(ctx, "new")
+	got := map[string]store.Candidate{}
+	for _, c := range cands {
+		got[c.Symbol] = c
+	}
+	if len(got) != 3 {
+		t.Fatalf("candidates: %+v", cands)
+	}
+	if _, leaked := got["ACTV"]; leaked {
+		t.Fatalf("active symbol leaked into candidates: %+v", cands)
+	}
+	// TV rows carry price directly → dollar vol = close * volume, pct kept.
+	if c := got["GMM"]; c.DollarVol != 4.57*1.4e8 || c.PctChange != 147.0 {
+		t.Fatalf("GMM row: %+v", c)
+	}
+	if c := got["SOXS"]; c.DollarVol != 4*5e8 {
+		t.Fatalf("SOXS row: %+v", c)
+	}
+	// All three whole-market queries issued against the america screener.
+	tv := w.TV.(*fakeTV)
+	want := []string{"america volume desc", "america change desc", "america change asc"}
+	if fmt.Sprint(tv.got) != fmt.Sprint(want) {
+		t.Fatalf("tv queries: %v want %v", tv.got, want)
+	}
+}
+
+func TestTVFailureDegradesToAlpacaOnly(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	f := &fakeAlpaca{
+		actives: []ActiveRow{{Symbol: "AMD", Volume: 3e7}},
+		prices:  map[string]float64{"AMD": 120},
+	}
+	w := newWorker(t, st, f)
+	w.TV = &fakeTV{err: fmt.Errorf("tv 429")}
+
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("tv failure must not fail the sweep: %v", err)
+	}
+	if !strings.Contains(detail, "alpaca 1 + tv 0 candidates") ||
+		!strings.Contains(detail, "degraded: tv scan failed") {
+		t.Fatalf("detail: %q", detail)
+	}
+	cands, _ := st.Candidates(ctx, "new")
+	if len(cands) != 1 || cands[0].Symbol != "AMD" {
+		t.Fatalf("alpaca-only candidates: %+v", cands)
+	}
+}
+
+func TestTVOnlyWhenAlpacaDown(t *testing.T) {
+	st := testStore(t)
+	ctx := context.Background()
+	f := &fakeAlpaca{activesStatus: 500, moversStatus: 500}
+	w := newWorker(t, st, f)
+	w.TV = &fakeTV{rows: map[string][]tvscanner.DiscoveryRow{
+		"volume desc": {{Name: "NVDA", Exchange: "NASDAQ", Close: 210.96, ChangePct: 4.0, Volume: 1.5e8}},
+	}}
+
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("tv-only sweep must survive alpaca outage: %v", err)
+	}
+	if !strings.Contains(detail, "alpaca 0 + tv 1 candidates") ||
+		!strings.Contains(detail, "degraded: alpaca screeners failed") {
+		t.Fatalf("detail: %q", detail)
+	}
+	cands, _ := st.Candidates(ctx, "new")
+	if len(cands) != 1 || cands[0].Symbol != "NVDA" {
+		t.Fatalf("tv-only candidates: %+v", cands)
 	}
 }

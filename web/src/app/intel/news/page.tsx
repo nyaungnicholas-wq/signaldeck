@@ -2,15 +2,14 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { api, type NewsItem, type WatchRow, type Market } from "@/lib/api";
+import { api, pollMs, POLL_SLOW, type NewsItem, type WatchRow, type Market } from "@/lib/api";
 import { ago, fmtScore } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
 import PagePurpose from "@/components/PagePurpose";
-
-const POLL_MS = 10000;
+import ProOnly from "@/components/ProOnly";
 
 type Tone = "all" | "bullish" | "bearish" | "neutral";
 
@@ -72,9 +71,9 @@ function NewsRow({ item }: { item: NewsItem }) {
         {sym && (
           <Link
             href={`/s/${inferMarket(sym)}/${encodeURIComponent(sym)}`}
-            className="chip shrink-0 cursor-pointer font-bold transition-colors duration-150 hover:text-[var(--accent)] hover:border-[var(--accent)]"
+            className="chip mono shrink-0 cursor-pointer font-bold transition-colors duration-150 hover:text-[var(--accent)] hover:border-[var(--accent)]"
             style={{ color: "var(--text)" }}
-            aria-label={`open ${sym} detail`}
+            aria-label={`investigate ${sym} — open its symbol page`}
           >
             {sym}
           </Link>
@@ -96,13 +95,12 @@ function NewsRow({ item }: { item: NewsItem }) {
           href={item.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-2 block cursor-pointer text-[0.86rem] font-bold leading-snug transition-colors duration-150 hover:text-[var(--accent)]"
-          style={{ color: "var(--text)" }}
+          className="mt-2 block cursor-pointer text-sm font-bold leading-snug text-[var(--text)] transition-colors duration-150 hover:text-[var(--accent)]"
         >
           {item.headline || "(untitled headline)"}
         </a>
       ) : (
-        <h2 className="mt-2 text-[0.86rem] font-bold leading-snug" style={{ color: "var(--text)" }}>
+        <h2 className="mt-2 text-sm font-bold leading-snug" style={{ color: "var(--text)" }}>
           {item.headline || "(untitled headline)"}
         </h2>
       )}
@@ -142,10 +140,12 @@ export default function NewsPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, POLL_MS);
+    // POLL_SLOW: the news-fetcher itself only pulls every 20 min and the
+    // tagger runs every 10 — intel moves slowly by nature.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 
@@ -224,17 +224,20 @@ export default function NewsPage() {
         text="What is in the news for tracked stocks? Each story carries a model-rated sentiment tag — a tag, not a recommendation."
       />
 
-      {/* what this page is */}
-      <section className="panel">
-        <div className="panel-h">HOW SENTIMENT IS TAGGED</div>
-        <p className="px-4 py-3 text-[0.76rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          Sentiment is tagged by the local AI from the headline text only; &ldquo;unrated&rdquo;
-          means it hasn&rsquo;t been processed yet (tagging runs every 10 min).
-          &ldquo;skipped&rdquo; is permanent: the symbol sits outside the news scope
-          (streamed hot set, top-ranked, or watchlisted), so its headline is
-          deliberately never rated and never counts toward sentiment aggregates.
-        </p>
-      </section>
+      {/* Methodology detail — folded behind a disclosure in SIMPLE mode
+          (the "a tag, not a recommendation" caveat above stays visible). */}
+      <ProOnly summary="How sentiment is tagged">
+        <section className="panel">
+          <div className="panel-h">HOW SENTIMENT IS TAGGED</div>
+          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            Sentiment is tagged by the local AI from the headline text only; &ldquo;unrated&rdquo;
+            means it hasn&rsquo;t been processed yet (tagging runs every 10 min).
+            &ldquo;skipped&rdquo; is permanent: the symbol sits outside the news scope
+            (streamed hot set, top-ranked, or watchlisted), so its headline is
+            deliberately never rated and never counts toward sentiment aggregates.
+          </p>
+        </section>
+      </ProOnly>
 
       {loading && <Skeleton lines={4} label="loading news" />}
 
@@ -311,7 +314,7 @@ export default function NewsPage() {
                     type="button"
                     aria-pressed={active}
                     onClick={() => setSym(active ? null : s)}
-                    className="chip min-h-[40px] cursor-pointer font-bold transition-colors duration-150 hover:text-[var(--text)]"
+                    className="chip mono min-h-[40px] cursor-pointer font-bold transition-colors duration-150 hover:text-[var(--text)]"
                     style={{
                       color: active ? "var(--text)" : undefined,
                       borderColor: active ? "var(--accent)" : undefined,

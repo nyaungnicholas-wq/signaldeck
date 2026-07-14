@@ -15,6 +15,7 @@ import Link from "next/link";
 import {
   HORIZONS,
   pollMs,
+  POLL_SLOW,
   trackRecordWithGate,
   type Horizon,
   type TrackRecordWithGate,
@@ -29,6 +30,7 @@ import StorySection from "@/components/StorySection";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ReliabilityCurve from "@/components/trackrecord/ReliabilityCurve";
+import HelpTip from "@/components/HelpTip";
 
 function pct(v: number | null | undefined, digits = 1): string {
   if (v == null || !isFinite(v)) return "—";
@@ -61,10 +63,11 @@ export default function TrackRecordPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, pollMs());
+    // The record moves on resolution cadence (hours/days), not tick cadence.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [horizon, retryTick]);
 
@@ -77,7 +80,7 @@ export default function TrackRecordPage() {
       {/* header */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <h1 className="text-sm font-extrabold tracking-[0.18em]">TRACK RECORD</h1>
-        <span className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
           live out-of-sample — calibrated predictions vs what the market did
         </span>
         <div role="group" aria-label="Outcome horizon" className="flex items-center gap-1">
@@ -174,7 +177,7 @@ export default function TrackRecordPage() {
                   </span>{" "}
                   independent (symbol, UTC-day) resolutions
                 </p>
-                <p className="m-0 text-[0.78rem] tnum" style={{ color: "var(--dim)" }}>
+                <p className="m-0 text-[0.75rem] tnum" style={{ color: "var(--dim)" }}>
                   {current.gate == null
                     ? (current.note ?? "not yet significant")
                     : current.gate.estDaysToUngate == null
@@ -210,7 +213,7 @@ export default function TrackRecordPage() {
               <p className="m-0 text-[1.05rem] font-extrabold tracking-wide" style={{ color: "var(--ok)" }}>
                 MEASURED{current.winRate != null ? `: right ${pct(current.winRate)} of the time` : ""}
               </p>
-              <p className="mt-1 text-[0.8rem] tnum" style={{ color: "var(--dim)" }}>
+              <p className="mt-1 text-[0.75rem] tnum" style={{ color: "var(--dim)" }}>
                 over {(current.independentN ?? 0).toLocaleString("en-US")} independent (symbol,
                 UTC-day) resolutions
                 {current.winRateCI ? ` · 95% CI ${pct(current.winRateCI[0])}–${pct(current.winRateCI[1])}` : ""}
@@ -229,7 +232,7 @@ export default function TrackRecordPage() {
           {gated && (
             <section className="panel p-5">
               {current.gate && (
-                <p className="mt-2 text-[0.72rem] tnum" style={{ color: "var(--faint)" }}>
+                <p className="mt-2 text-[0.75rem] tnum" style={{ color: "var(--faint)" }}>
                   last 7 days: +{current.gate.accrual7d.independentNew} independent
                   symbol-day{current.gate.accrual7d.independentNew === 1 ? "" : "s"} over{" "}
                   {current.gate.accrual7d.tradingDays} trading days (
@@ -266,7 +269,7 @@ export default function TrackRecordPage() {
                   );
                 })}
               </div>
-              <p className="mt-3 text-[0.78rem]" style={{ color: "var(--dim)" }}>
+              <p className="mt-3 text-[0.75rem]" style={{ color: "var(--dim)" }}>
                 A signal has no value without a verifiable, costed, out-of-sample track
                 record. This page grades the platform&rsquo;s own calibrated predictions
                 against realized outcomes and withholds every skill number
@@ -359,14 +362,18 @@ export default function TrackRecordPage() {
               <div className="panel-h">
                 <span>RELIABILITY (CALIBRATION)</span>
                 {current.reliabilityScore != null && !gated && (
-                  <span className="ml-auto chip tnum" title="Lower reliability = better calibration (mean |predicted − realized| across bins)">
-                    score {num(current.reliabilityScore)}
+                  <span className="ml-auto flex items-center gap-1.5">
+                    <span className="chip tnum">score {num(current.reliabilityScore)}</span>
+                    <HelpTip label="What does the reliability score mean?">
+                      Lower is better: it is the mean gap |predicted − realized| across
+                      probability bins, so 0 would be perfect calibration.
+                    </HelpTip>
                   </span>
                 )}
               </div>
               <div className="p-3">
                 <ReliabilityCurve bins={current.reliability ?? []} />
-                <p className="mt-2 text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                <p className="mt-2 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                   Each dot: predictions in a probability bin, plotted mean-predicted
                   (x) vs mean-realized (y). On the diagonal = perfectly calibrated.
                   {gated && " Too thin to read yet — shown for shape only."}
@@ -379,7 +386,7 @@ export default function TrackRecordPage() {
                 <span>RESOLVED COVERAGE · ALL HORIZONS</span>
               </div>
               <div className="table-wrap">
-                <table className="w-full text-[0.78rem]">
+                <table className="w-full text-[0.75rem]">
                   <thead>
                     <tr style={{ color: "var(--faint)" }}>
                       <th className="px-4 py-2 text-left font-medium">horizon</th>
@@ -412,7 +419,7 @@ export default function TrackRecordPage() {
                   </tbody>
                 </table>
               </div>
-              <p className="px-4 pb-3 pt-1 text-[0.7rem]" style={{ color: "var(--faint)" }}>
+              <p className="px-4 pb-3 pt-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 &ldquo;maturing&rdquo; predictions haven&rsquo;t hit their horizon yet — they
                 can&rsquo;t be graded without lookahead, so they wait.
               </p>
@@ -424,12 +431,12 @@ export default function TrackRecordPage() {
             <section className="panel">
               <div className="panel-h">
                 <span>BY MARKET · DESCRIPTIVE</span>
-                <span className="ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                <span className="ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
                   describes the sample, not a per-market skill claim
                 </span>
               </div>
               <div className="table-wrap">
-                <table className="w-full text-[0.78rem]">
+                <table className="w-full text-[0.75rem]">
                   <thead>
                     <tr style={{ color: "var(--faint)" }}>
                       <th className="px-4 py-2 text-left font-medium">market</th>
@@ -483,14 +490,13 @@ export default function TrackRecordPage() {
                 <span>SELF-VERIFYING · LEDGER</span>
                 <Link
                   href="/lab/signal-backtest"
-                  className="ml-auto chip cursor-pointer"
-                  style={{ color: "var(--dim)" }}
+                  className="ml-auto chip cursor-pointer hover:border-[var(--border-strong)] hover:text-[var(--text)]"
                   title="See the own-signal backtester (OOS IC / quintiles / costed equity vs SPY)"
                 >
-                  signal backtest →
+                  compare · signal backtest →
                 </Link>
               </div>
-              <div className="p-4 text-[0.8rem]">
+              <div className="p-4 text-[0.75rem]">
                 {current.ledger ? (
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-2">
@@ -508,13 +514,13 @@ export default function TrackRecordPage() {
                         {current.ledger.count.toLocaleString("en-US")} entries
                       </span>
                     </div>
-                    <p className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+                    <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                       Every flagship prediction is hash-chained (append-only). A verified
                       chain means no historical prediction was silently edited or deleted —
                       the record you&rsquo;re grading is the record that was made.
                     </p>
                     {current.ledger.head && (
-                      <p className="tnum break-all text-[0.68rem]" style={{ color: "var(--faint)" }}>
+                      <p className="tnum break-all text-[0.75rem]" style={{ color: "var(--faint)" }}>
                         head {current.ledger.head.slice(0, 24)}…
                       </p>
                     )}
@@ -530,14 +536,13 @@ export default function TrackRecordPage() {
                 <span>SELF-VERIFYING · PAPER P&amp;L</span>
                 <Link
                   href="/lab/paper"
-                  className="ml-auto chip cursor-pointer"
-                  style={{ color: "var(--dim)" }}
+                  className="ml-auto chip cursor-pointer hover:border-[var(--border-strong)] hover:text-[var(--text)]"
                   title="Open the full simulated paper-trading book"
                 >
-                  paper book →
+                  monitor · paper book →
                 </Link>
               </div>
-              <div className="p-4 text-[0.8rem]">
+              <div className="p-4 text-[0.75rem]">
                 {current.paper?.available ? (
                   <div className="grid grid-cols-2 gap-3">
                     <Mini label="total return" value={fmtPct((current.paper.totalReturn ?? 0) * 100)} good={(current.paper.totalReturn ?? 0) >= 0} />
@@ -552,7 +557,7 @@ export default function TrackRecordPage() {
                       value={(current.paper.numFills ?? 0).toLocaleString("en-US")}
                       tip="Total buy+sell fills in the simulated book."
                     />
-                    <div className="col-span-2 mt-1 text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                    <div className="col-span-2 mt-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                       Capacity note: this is a SIMULATION on free IEX / public-crypto data
                       with next-bar fills and per-side costs. Turnover of{" "}
                       <span className="tnum">{num(current.paper.turnover, 2)}×</span> over{" "}
@@ -571,7 +576,7 @@ export default function TrackRecordPage() {
           </div>
 
           {/* HONESTY FOOTER */}
-          <section className="panel p-4 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          <section className="panel p-4 text-[0.75rem]" style={{ color: "var(--faint)" }}>
             <p>
               {current.trackLabel}. Numbers are computed over INDEPENDENT (symbol,
               UTC-day) resolutions — the minute-cadence pipeline writes many
@@ -619,7 +624,7 @@ function TrackReportCard({
     <section className="panel">
       <div className="panel-h">
         REPORT CARD
-        <span className="ml-auto text-[0.66rem] font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
+        <span className="ml-auto text-[0.75rem] font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
           {gated
             ? "all meters empty on purpose — skill numbers are withheld below the significance gate"
             : "bar and sentence come from the same reading"}
@@ -652,14 +657,14 @@ function Stat({
   const mode = useViewMode();
   return (
     <div className="panel p-3">
-      <div className="text-[0.66rem] uppercase tracking-[0.14em]" style={{ color: "var(--faint)" }}>
+      <div className="text-[0.75rem] uppercase tracking-[0.14em]" style={{ color: "var(--faint)" }}>
         {metricLabel(metric, mode)}
       </div>
       <div className="mt-1 text-[0.82rem]">
         <Plain metric={metric} value={value} ctx={ctx} raw={raw} />
       </div>
       {sub && (
-        <div className="mt-0.5 text-[0.66rem] tnum" style={{ color: "var(--faint)" }}>
+        <div className="mt-0.5 text-[0.75rem] tnum" style={{ color: "var(--faint)" }}>
           {sub}
         </div>
       )}
@@ -671,8 +676,9 @@ function Mini({ label, value, tip, good }: { label: string; value: string; tip?:
   const color = good === undefined ? "var(--text)" : good ? "var(--bid)" : "var(--ask)";
   return (
     <div>
-      <div className="text-[0.64rem] tracking-wider" style={{ color: "var(--faint)" }} title={tip}>
+      <div className="flex items-center gap-1 text-[0.75rem] tracking-wider" style={{ color: "var(--faint)" }}>
         {label}
+        {tip && <HelpTip label={`What does ${label} mean?`}>{tip}</HelpTip>}
       </div>
       <div className="mt-0.5 text-[0.95rem] font-semibold tnum" style={{ color }}>
         {value}

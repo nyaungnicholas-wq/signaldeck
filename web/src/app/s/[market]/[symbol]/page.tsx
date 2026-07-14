@@ -15,6 +15,9 @@ import {
   api,
   chartOverlays,
   pollMs,
+  POLL_DEFAULT,
+  POLL_FAST,
+  POLL_SLOW,
   symbolAgent,
   type Bar,
   type ChartOverlayMarker,
@@ -38,6 +41,7 @@ import ShortVolumePanel from "@/components/symbol/ShortVolumePanel";
 import FinancialsPanel from "@/components/symbol/FinancialsPanel";
 import CongressChip from "@/components/symbol/CongressChip";
 import UnusualActivityPanel from "@/components/UnusualActivityPanel";
+import HelpTip from "@/components/HelpTip";
 import PagePurpose from "@/components/PagePurpose";
 import StorySection from "@/components/StorySection";
 import Skeleton from "@/components/Skeleton";
@@ -103,14 +107,17 @@ export default function SymbolPage({
         .catch(() => {});
     };
     load();
-    const t = setInterval(load, pollMs());
+    // POLL_DEFAULT: predictions and the agent tier move on model cadence,
+    // not per-second.
+    const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [symbol, market, marketOk, retryTick]);
 
-  // Poll the detail payload every 5s.
+  // Poll the detail payload on the FAST tier — it drives the price chip and
+  // the WHY panels on an actively-watched page.
   useEffect(() => {
     if (!marketOk) return;
     let alive = true;
@@ -128,14 +135,14 @@ export default function SymbolPage({
           setDetailErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, pollMs());
+    const stop = pollMs(load, POLL_FAST);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [symbol, market, marketOk, retryTick]);
 
-  // Bars: refetch on timeframe change + a slow 60s background refresh.
+  // Bars: refetch on timeframe change + a DEFAULT-tier background refresh.
   useEffect(() => {
     if (!marketOk) return;
     let alive = true;
@@ -153,15 +160,15 @@ export default function SymbolPage({
           setBarsErrState({ key, msg: e instanceof Error ? e.message : String(e) });
         });
     load();
-    const t = setInterval(load, 60_000);
+    const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [symbol, market, tf, marketOk]);
 
-  // Overlays: fetch once per symbol + a slow background refresh. Failures are
-  // silent (overlays are an enhancement; the chart still renders without them).
+  // Overlays: fetch once per symbol + a SLOW-tier background refresh. Failures
+  // are silent (overlays are an enhancement; the chart renders without them).
   useEffect(() => {
     if (!marketOk || !showOverlays) return;
     let alive = true;
@@ -176,10 +183,10 @@ export default function SymbolPage({
           /* overlays are best-effort; keep the chart clean on error */
         });
     load();
-    const t = setInterval(load, 120_000);
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [symbol, market, marketOk, showOverlays]);
 
@@ -196,12 +203,15 @@ export default function SymbolPage({
 
   if (!marketOk) {
     return (
-      <section className="panel p-6 text-[0.8rem]">
+      <section className="panel p-6 text-[0.75rem]">
         <p style={{ color: "var(--bad)" }}>
           unknown market &ldquo;{p.market}&rdquo; — expected /s/crypto/… or /s/stocks/…
         </p>
         <p className="mt-2">
-          <Link href="/" className="cursor-pointer underline" style={{ color: "var(--dim)" }}>
+          <Link
+            href="/"
+            className="cursor-pointer text-[var(--dim)] underline transition-colors duration-150 hover:text-[var(--text)]"
+          >
             back to watchlist
           </Link>
         </p>
@@ -215,7 +225,7 @@ export default function SymbolPage({
     <div className="flex flex-col gap-4">
       {/* Header row: title + contextual chips */}
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-lg font-extrabold tracking-[0.08em]" style={{ color: "var(--text)" }}>
+        <h1 className="mono text-lg font-extrabold tracking-[0.08em]" style={{ color: "var(--text)" }}>
           {symbol}
         </h1>
         <span className="chip uppercase tracking-wider">{market}</span>
@@ -301,8 +311,7 @@ export default function SymbolPage({
             type="button"
             onClick={() => setShowOverlays((v) => !v)}
             aria-pressed={showOverlays}
-            className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150"
-            title="Overlay score extremes, regime changes, and breakouts on the chart"
+            className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:bg-[var(--panel3)]"
             style={{
               color: showOverlays ? "var(--accent)" : "var(--dim)",
               borderColor: showOverlays ? "var(--accent)" : "var(--border)",
@@ -310,6 +319,10 @@ export default function SymbolPage({
           >
             signals {showOverlays ? "on" : "off"}
           </button>
+          <HelpTip label="what the signal overlays show">
+            Marks past score extremes, regime changes and breakouts on the price
+            chart — historical annotations from stored data, not forecasts.
+          </HelpTip>
           <span className="ml-auto flex items-center gap-1" role="tablist" aria-label="timeframe">
             {TFS.map((t) => (
               <button
@@ -318,7 +331,7 @@ export default function SymbolPage({
                 role="tab"
                 aria-selected={t === tf}
                 onClick={() => setTf(t)}
-                className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150"
+                className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:bg-[var(--panel3)]"
                 title={`Show ${t} bars`}
                 style={{
                   color: t === tf ? "var(--accent)" : "var(--dim)",
@@ -332,15 +345,15 @@ export default function SymbolPage({
         </div>
         <div className="p-2">
           {barsErr ? (
-            <div className="flex h-[420px] items-center justify-center text-[0.78rem]" style={{ color: "var(--bad)" }}>
+            <div className="flex h-[420px] items-center justify-center text-[0.75rem]" style={{ color: "var(--bad)" }}>
               {barsErr} — is the daemon running?
             </div>
           ) : bars === null ? (
-            <div className="flex h-[420px] items-center justify-center text-[0.78rem]" style={{ color: "var(--faint)" }}>
+            <div className="flex h-[420px] items-center justify-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
               loading…
             </div>
           ) : bars.length === 0 ? (
-            <div className="flex h-[420px] items-center justify-center text-[0.78rem]" style={{ color: "var(--faint)" }}>
+            <div className="flex h-[420px] items-center justify-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
               no {tf} bars stored yet — backfill runs shortly after subscribing.
             </div>
           ) : (
@@ -349,7 +362,7 @@ export default function SymbolPage({
           {/* Overlay legend — only when signals are on and there are markers. */}
           {showOverlays && overlays && overlays.length > 0 && (
             <div
-              className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 pb-1 pt-2 text-[0.68rem]"
+              className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 pb-1 pt-2 text-[0.75rem]"
               style={{ color: "var(--faint)" }}
             >
               <span className="flex items-center gap-1">

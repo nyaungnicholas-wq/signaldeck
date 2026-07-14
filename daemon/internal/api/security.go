@@ -78,8 +78,11 @@ func (d Deps) secure(next http.Handler) http.Handler {
 		}
 
 		// 5. CSRF: state-changing methods must carry the custom header AND,
-		// when an Origin is present, it must be allowlisted.
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		// when an Origin is present, it must be allowlisted. The TradingView
+		// webhook is exempt — TradingView's servers cannot send the header;
+		// that endpoint is authenticated by its own shared secret instead.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
+			r.URL.Path != "/api/tv-webhook" {
 			if r.Header.Get(csrfHeader) == "" {
 				http.Error(w, "missing "+csrfHeader+" header", http.StatusForbidden)
 				return
@@ -112,6 +115,11 @@ func (d Deps) secure(next http.Handler) http.Handler {
 //     SIGNALDECK_PUBLIC_READS=true (the localhost-friendly default).
 func (d Deps) requiresAuth(path string) bool {
 	if path == "/api/health" || strings.HasPrefix(path, "/api/auth/") {
+		return false
+	}
+	// The TradingView webhook is authenticated by its own shared secret, not by
+	// a session — it must stay reachable even when SIGNALDECK_PUBLIC_READS=false.
+	if path == "/api/tv-webhook" {
 		return false
 	}
 	switch {

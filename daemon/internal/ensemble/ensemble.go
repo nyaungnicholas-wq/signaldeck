@@ -96,6 +96,21 @@ type Components struct {
 	// walk-forward, COST-NET out-of-sample lift. Dropped unless *MeanRevLift > 0.
 	MeanRevProb *float64
 	MeanRevLift *float64
+
+	// CROSS-SECTIONAL ALPHA leg (CATEGORY NUANCE — stated because honesty is
+	// the brand): AlphaXProb is the pooled cross-sectional model's P(this
+	// symbol beats the SAME-DAY UNIVERSE MEDIAN forward return) — a RELATIVE
+	// outperformance probability, NOT an absolute P(up) like every other leg.
+	// Blending a relative prob into a directional blend is a deliberate
+	// category mix: the leg enters as a directional TILT (relative strength
+	// correlates with direction, and its purged walk-forward gate proved OOS
+	// lift on direction-correlated labels), while the adaptive attribution and
+	// self-audit measure per regime whether the tilt actually helps — the
+	// system's own referee. AlphaXLift is that walk-forward OOS lift; the leg
+	// is dropped unless *AlphaXLift > 0, the identical gate the other model
+	// legs pass through.
+	AlphaXProb *float64
+	AlphaXLift *float64
 }
 
 // SentimentScale converts a sentiment score in [-1,1] to a probability leg:
@@ -114,13 +129,17 @@ const (
 	// STAGE 6 gated model legs.
 	LegGBM     = "gbm"     // gradient-boosted-tree directional model
 	LegMeanRev = "meanrev" // gated mean-reversion (inverted-momentum) leg
+	// Cross-sectional alpha leg (relative-to-universe, blended as a
+	// directional tilt — see Components.AlphaXProb).
+	LegAlphaX = "alphax"
 )
 
 // LegNames lists every possible component leg in canonical order. The two
-// Stage-6 model legs are appended so existing weight maps (keyed by leg name)
-// remain valid — a leg absent from a stored map simply gets no learned weight
-// and falls back to equal-weight, exactly as before.
-var LegNames = []string{LegPressure, LegExpectancy, LegForecast, LegSentiment, LegGBM, LegMeanRev}
+// Stage-6 model legs (and the later cross-sectional alphax leg) are appended
+// so existing weight maps (keyed by leg name) remain valid — a leg absent
+// from a stored map simply gets no learned weight and falls back to
+// equal-weight, exactly as before.
+var LegNames = []string{LegPressure, LegExpectancy, LegForecast, LegSentiment, LegGBM, LegMeanRev, LegAlphaX}
 
 // LegProbabilities converts each AVAILABLE component to its 0..1
 // up-probability leg, keyed by canonical leg name. Exactly the legs that
@@ -147,6 +166,12 @@ func LegProbabilities(c Components) map[string]float64 {
 	}
 	if c.MeanRevProb != nil && c.MeanRevLift != nil && *c.MeanRevLift > 0 {
 		legs[LegMeanRev] = clamp01(*c.MeanRevProb)
+	}
+	// Cross-sectional alpha leg: identical gate. Its prob is RELATIVE (beat
+	// the same-day universe median), entering the directional blend as a tilt
+	// — see the Components.AlphaXProb comment for the category nuance.
+	if c.AlphaXProb != nil && c.AlphaXLift != nil && *c.AlphaXLift > 0 {
+		legs[LegAlphaX] = clamp01(*c.AlphaXProb)
 	}
 	return legs
 }
@@ -329,6 +354,9 @@ func Calibrate(pairs []Pair) (mapFn func(float64) float64, calibrated bool) {
 	// Aggregate to one point per distinct prediction level (x, mean-actual,
 	// weight=count), then run weighted PAV so the fitted knots are the
 	// isotonic-regressed realized frequency AT each observed prediction value.
+	// Knots are honesty-bounded per block inside poolAdjacentViolators (rule
+	// of succession over each block's OWN pooled weight), so interpolation can
+	// never surface a certainty claim from a thin one-sided bin.
 	kx, ky := poolAdjacentViolators(aggregateByPred(sorted))
 
 	fn := func(v float64) float64 {
@@ -458,14 +486,23 @@ func poolAdjacentViolators(levels []levelStat) (kx, ky []float64) {
 	}
 
 	// Expand each block's pooled mean back over the levels it covers, keeping
-	// one knot per distinct prediction value.
+	// one knot per distinct prediction value. Each knot's fitted frequency is
+	// bounded by the RULE OF SUCCESSION over the block's OWN pooled pair
+	// weight: a block backed by w pairs can never claim a frequency outside
+	// [1/(w+2), (w+1)/(w+2)]. This is the honesty bound that matters — a lone
+	// thin-tail pair whose one outcome went "up" pools to w=1 and is capped at
+	// 2/3, instead of dragging the whole map to a displayed P(up)=100.0%.
+	// (A bound keyed to the TOTAL pair count is useless here: at n=3000 it is
+	// 1/3002 ≈ 0.0003, which still renders as 100.0%.)
 	kx = make([]float64, 0, len(levels))
 	ky = make([]float64, 0, len(levels))
 	li := 0
 	for _, b := range blocks {
+		lo := 1.0 / float64(b.weight+2)
+		v := math.Min(1.0-lo, math.Max(lo, b.mean))
 		for k := 0; k < b.span; k++ {
 			kx = append(kx, levels[li].x)
-			ky = append(ky, b.mean)
+			ky = append(ky, v)
 			li++
 		}
 	}
@@ -533,6 +570,8 @@ func CalibrateKnots(pairs []Pair) (kx, ky []float64, calibrated bool) {
 	if clamp01(sorted[0].Pred) == clamp01(sorted[len(sorted)-1].Pred) {
 		return nil, nil, false
 	}
+	// Knots come back honesty-bounded per block (rule of succession over each
+	// block's own pooled weight), so persisted knots never encode certainty.
 	kx, ky = poolAdjacentViolators(aggregateByPred(sorted))
 	return kx, ky, true
 }
@@ -548,7 +587,14 @@ func MapFromKnots(kx, ky []float64) func(float64) float64 {
 	// Defensive copy so a caller mutating the slices can't change the closure.
 	xs := append([]float64(nil), kx...)
 	ys := append([]float64(nil), ky...)
+	// Honesty bound for PERSISTED knots (incl. ones stored before CalibrateKnots
+	// bounded them): any legitimate fit had n >= MinCalibrationPairs pairs, so
+	// the loosest justified frequency bound is 1/(MinCalibrationPairs+2) — a
+	// rebuilt map must never surface P(up)=0 or 1.
+	lo := 1.0 / float64(MinCalibrationPairs+2)
+	hi := 1.0 - lo
 	return func(v float64) float64 {
-		return clamp01(interpolate(xs, ys, clamp01(v)))
+		m := interpolate(xs, ys, clamp01(v))
+		return math.Min(hi, math.Max(lo, m))
 	}
 }

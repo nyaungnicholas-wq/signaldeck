@@ -4,7 +4,7 @@
 // worker name; known agents are always shown, even before their first run.
 
 import { useEffect, useState } from "react";
-import { api, pollMs, type WorkerRun } from "@/lib/api";
+import { api, pollMs, POLL_DEFAULT, type WorkerRun } from "@/lib/api";
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -77,7 +77,7 @@ function AgentCard({
               : undefined,
           }}
         />
-        <span className="text-[0.82rem] font-bold tracking-wide" style={{ color: "var(--text)" }}>
+        <span className="mono text-[0.82rem] font-bold tracking-wide" style={{ color: "var(--text)" }}>
           {name}
         </span>
         <span className="ml-auto tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
@@ -91,7 +91,7 @@ function AgentCard({
 
       {last ? (
         <>
-          <div className="flex items-center gap-2 text-[0.78rem]">
+          <div className="flex items-center gap-2 text-[0.75rem]">
             <span
               className="chip"
               style={{ color: statusColor(last.status), padding: "1px 8px" }}
@@ -113,7 +113,7 @@ function AgentCard({
           )}
         </>
       ) : (
-        <div className="text-[0.78rem] italic" style={{ color: "var(--faint)" }}>
+        <div className="text-[0.75rem] italic" style={{ color: "var(--faint)" }}>
           no runs yet
         </div>
       )}
@@ -128,7 +128,7 @@ function AgentCard({
             <span
               key={r.id}
               title={`${r.status} · ${ago(r.startedAt)}${r.detail ? ` · ${r.detail}` : ""}`}
-              className="inline-block h-2.5 w-2.5 cursor-pointer rounded-[3px] transition-transform duration-150 hover:scale-125"
+              className="inline-block h-2.5 w-2.5 cursor-pointer rounded-[3px] transition-colors duration-150 hover:brightness-125"
               style={{
                 background: statusColor(r.status),
                 opacity: r.status === "ok" ? 0.75 : 1,
@@ -167,10 +167,11 @@ export default function AgentsPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, pollMs());
+    // Worker runs land on minute-scale cadence — the default tier is plenty.
+    const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 
@@ -242,7 +243,7 @@ export default function AgentsPage() {
       )}
       {!err && !runs && <Skeleton lines={4} label="loading worker fleet" />}
       {err && runs && (
-        <div className="px-1 text-[0.78rem]" style={{ color: "var(--bad)" }}>
+        <div className="px-1 text-[0.75rem]" style={{ color: "var(--bad)" }}>
           connection lost — showing last known data · {err}
         </div>
       )}
@@ -266,7 +267,7 @@ export default function AgentsPage() {
               worker floods the log; the daemon keeps a per-worker floor of
               recent runs, so blank cards fill in after the worker's next
               completed run on the current build. */}
-          <p className="px-1 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+          <p className="px-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             A card with no runs means that worker hasn&apos;t completed a run recently enough to
             survive run-log pruning (rare-cadence workers like 13f-poller / fred-poller / backup
             run every 6–24h) — it does not mean the worker is broken. Each worker&apos;s last runs

@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	filingsNote = "SEC EDGAR filings (public-domain government data). Labels are plain-English readings of the form type. Filings appear when the SEC accepts them — Form 4 lags the trade ~2 business days; 13F lags the quarter by up to 45 days."
-	insiderNote = "Parsed from SEC Form 4 (public domain). Filed ~2 business days AFTER the trade by law. Only P (open-market buy) and S (open-market sale) reflect discretionary conviction; A/M/G/F are grants/exercises/gifts/withholding and are labeled as such."
-	instNote    = "Parsed from SEC 13F-HR (public domain). QUARTERLY snapshots filed up to 45 days after quarter end — positions may have changed since. Value is as reported on the filing. symbol matching from issuer names is best-effort; unmatched rows keep symbolId null."
+	filingsNote  = "SEC EDGAR filings (public-domain government data). Labels are plain-English readings of the form type. Filings appear when the SEC accepts them — Form 4 lags the trade ~2 business days; 13F lags the quarter by up to 45 days."
+	insiderNote  = "Parsed from SEC Form 4 (public domain). Filed ~2 business days AFTER the trade by law. Only P (open-market buy) and S (open-market sale) reflect discretionary conviction; A/M/G/F are grants/exercises/gifts/withholding and are labeled as such."
+	instNote     = "Parsed from SEC 13F-HR (public domain). QUARTERLY snapshots filed up to 45 days after quarter end — positions may have changed since. Value is as reported on the filing. symbol matching from issuer names is best-effort; unmatched rows keep symbolId null."
 	dilutionNote = "Descriptive evidence, not a prediction: high = dilution-shaped filing (S-1/S-3/424B) in the last 180d AND shares outstanding up >2%; elevated = one of the two; low = neither."
 )
 
@@ -95,7 +95,7 @@ func (d Deps) insiders(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{
 			"accession": t.Accession, "symbolId": t.SymbolID, "symbol": t.Symbol,
 			"insider": t.Insider, "title": t.Title, "code": t.Code,
-			"codeLabel": edgar.CodeLabel(t.Code),
+			"codeLabel":  edgar.CodeLabel(t.Code),
 			"openMarket": t.Code == "P" || t.Code == "S",
 			"shares":     t.Shares, "price": t.Price, "value": t.Value,
 			"txTs": t.TxTs, "filedTs": t.FiledTs,

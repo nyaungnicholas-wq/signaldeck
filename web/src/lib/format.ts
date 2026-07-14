@@ -41,6 +41,14 @@ export function ago(ts: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+// Seconds elapsed since a unix-seconds timestamp. Keeps the wall-clock read
+// (Date.now) inside this module so callers can compare an age against a
+// threshold without an impure call in a component's render body.
+export function secondsSince(ts: number): number {
+  if (!ts) return Infinity;
+  return Math.max(0, Math.floor(Date.now() / 1000 - ts));
+}
+
 // Score verdict wording — MUST match the daemon's insight writer buckets.
 export function verdict(score: number): string {
   if (score >= 0.5) return "strong buy pressure";

@@ -40,11 +40,11 @@ type signalBTBody struct {
 			N        int     `json:"n"`
 			MeanFwd  float64 `json:"meanFwd"`
 		} `json:"quintiles"`
-		QuintileSpread  float64 `json:"quintileSpread"`
-		HitRate         float64 `json:"hitRate"`
-		Turnover        float64 `json:"turnover"`
-		CostBps         float64 `json:"costBps"`
-		Equity          []struct {
+		QuintileSpread float64 `json:"quintileSpread"`
+		HitRate        float64 `json:"hitRate"`
+		Turnover       float64 `json:"turnover"`
+		CostBps        float64 `json:"costBps"`
+		Equity         []struct {
 			Ts        int64   `json:"ts"`
 			Strategy  float64 `json:"strategy"`
 			Benchmark float64 `json:"benchmark"`

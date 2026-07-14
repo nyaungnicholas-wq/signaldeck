@@ -71,7 +71,7 @@ export default function ProbHistogram({
                 x={x + binW / 2}
                 y={plotH - h + 11}
                 textAnchor="middle"
-                fontSize="9"
+                fontSize="12"
                 fill="var(--panel)"
                 fontWeight="700"
               >
@@ -90,13 +90,13 @@ export default function ProbHistogram({
         stroke="var(--faint)"
         strokeDasharray="3 3"
       />
-      <text x={padX} y={height - 3} fontSize="9" fill="var(--faint)">
+      <text x={padX} y={height - 3} fontSize="12" fill="var(--faint)">
         0% · leans down
       </text>
-      <text x={padX + (W - padX * 2) / 2} y={height - 3} fontSize="9" fill="var(--faint)" textAnchor="middle">
+      <text x={padX + (W - padX * 2) / 2} y={height - 3} fontSize="12" fill="var(--faint)" textAnchor="middle">
         50% coin flip
       </text>
-      <text x={W - padX} y={height - 3} fontSize="9" fill="var(--faint)" textAnchor="end">
+      <text x={W - padX} y={height - 3} fontSize="12" fill="var(--faint)" textAnchor="end">
         leans up · 100%
       </text>
     </svg>

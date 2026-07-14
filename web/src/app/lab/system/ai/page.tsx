@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   api,
+  pollMs,
+  POLL_FAST,
   type AIStatus,
   type AnalystBrief,
   type ChatAnswer,
@@ -16,7 +18,6 @@ import PagePurpose from "@/components/PagePurpose";
 
 const AMBER = "var(--accent)";
 const AMBER_BG = "rgba(251,191,36,.10)";
-const AMBER_BG_SOFT = "rgba(251,191,36,.06)";
 
 /** The honesty line repeated across the app — read-only, grounded, not advice. */
 const HONESTY =
@@ -40,7 +41,7 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      className="min-h-[40px] cursor-pointer rounded border px-5 py-2 text-[0.78rem] font-bold tracking-wide transition-colors duration-150 disabled:cursor-not-allowed"
+      className="min-h-[40px] cursor-pointer rounded-lg border px-5 py-2 text-[0.75rem] font-bold tracking-wide transition-colors duration-150 disabled:cursor-not-allowed"
       style={{
         borderColor: disabled ? "var(--border)" : AMBER,
         background: disabled ? "var(--panel2)" : AMBER_BG,
@@ -75,7 +76,7 @@ function Thinking({ note }: { note?: string }) {
 function InlineError({ msg }: { msg: string }) {
   return (
     <div
-      className="rounded border px-3 py-2.5 text-[0.78rem] leading-relaxed whitespace-pre-wrap"
+      className="rounded-lg border px-3 py-2.5 text-[0.75rem] leading-relaxed whitespace-pre-wrap"
       style={{
         color: "var(--bad)",
         borderColor: "var(--bad)",
@@ -199,7 +200,7 @@ function AnalystPanel({ enabled }: { enabled: boolean }) {
           </ActionButton>
           {running && <Thinking note="the analyst is reading the tape…" />}
           {!enabled && (
-            <span className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
+            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
               AI is off — enable it to generate a brief.
             </span>
           )}
@@ -243,7 +244,7 @@ function AnalystPanel({ enabled }: { enabled: boolean }) {
                     <li key={sym} className="flex flex-col gap-1 lg:flex-row lg:gap-3">
                       <span className="chip tnum shrink-0 self-start">{sym}</span>
                       <span
-                        className="text-[0.8rem] leading-relaxed"
+                        className="text-[0.75rem] leading-relaxed"
                         style={{ color: "var(--dim)" }}
                       >
                         {note}
@@ -352,7 +353,7 @@ function ChatPanel({ enabled }: { enabled: boolean }) {
                       error
                     </span>
                     <p
-                      className="text-[0.8rem] leading-relaxed whitespace-pre-wrap"
+                      className="text-[0.75rem] leading-relaxed whitespace-pre-wrap"
                       style={{ color: "var(--bad)" }}
                     >
                       {t.err}
@@ -414,7 +415,7 @@ function ChatPanel({ enabled }: { enabled: boolean }) {
               disabled={awaiting || !enabled}
               placeholder="e.g. which symbol has the strongest 1d buy pressure?"
               aria-label="chat question"
-              className="w-full rounded border px-3 py-2.5 text-[0.85rem] disabled:cursor-not-allowed"
+              className="w-full rounded-lg border px-3 py-2.5 text-[0.85rem] disabled:cursor-not-allowed"
               style={{
                 background: "var(--panel2)",
                 borderColor: "var(--border)",
@@ -457,7 +458,7 @@ function FilingSubPanel({
         {label}
       </div>
       <p
-        className="px-3 py-3 text-[0.78rem] leading-relaxed whitespace-pre-wrap"
+        className="px-3 py-3 text-[0.75rem] leading-relaxed whitespace-pre-wrap"
         style={{ color: "var(--dim)" }}
       >
         {body || "—"}
@@ -517,7 +518,7 @@ function FilingPanel({ enabled }: { enabled: boolean }) {
             disabled={!enabled}
             placeholder="Paste a company's 10-K / 10-Q / earnings text…"
             aria-label="filing text to analyze"
-            className="w-full resize-y rounded border px-3 py-2.5 text-[0.82rem] leading-relaxed disabled:cursor-not-allowed"
+            className="w-full resize-y rounded-lg border px-3 py-2.5 text-[0.82rem] leading-relaxed disabled:cursor-not-allowed"
             style={{
               background: "var(--panel2)",
               borderColor: "var(--border)",
@@ -602,17 +603,17 @@ function ChartersPanel({ charters }: { charters: Record<string, string> | undefi
             {entries.map(([name, rule]) => (
               <details
                 key={name}
-                className="rounded border"
+                className="rounded-lg border"
                 style={{ borderColor: "var(--border)", background: "var(--panel2)" }}
               >
                 <summary
-                  className="cursor-pointer px-3 py-2.5 text-[0.78rem] font-bold tracking-wide transition-colors duration-150 hover:text-[var(--accent)]"
+                  className="cursor-pointer px-3 py-2.5 text-[0.75rem] font-bold tracking-wide transition-colors duration-150 hover:text-[var(--accent)]"
                   style={{ color: "var(--text)" }}
                 >
                   {name}
                 </summary>
                 <p
-                  className="px-3 pb-3 text-[0.78rem] leading-relaxed whitespace-pre-wrap"
+                  className="px-3 pb-3 text-[0.75rem] leading-relaxed whitespace-pre-wrap"
                   style={{ color: "var(--dim)" }}
                 >
                   {rule}
@@ -648,10 +649,12 @@ export default function AIPage() {
           setStatusErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, 10000);
+    // Call counts / cap move only when someone uses the agents — fast tier
+    // keeps the "calls today" chip honest without tick-rate polling.
+    const stop = pollMs(load, POLL_FAST);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 
@@ -671,7 +674,7 @@ export default function AIPage() {
       <section className="panel">
         <div className="panel-h">HOW THESE AGENTS STAY HONEST</div>
         <p
-          className="px-4 py-3 text-[0.76rem] leading-relaxed"
+          className="px-4 py-3 text-[0.75rem] leading-relaxed"
           style={{ color: "var(--dim)" }}
         >
           {HONESTY}
@@ -707,7 +710,7 @@ export default function AIPage() {
             AI is off
           </div>
           <p
-            className="mt-1.5 text-[0.78rem] leading-relaxed"
+            className="mt-1.5 text-[0.75rem] leading-relaxed"
             style={{ color: "var(--dim)" }}
           >
             Add{" "}

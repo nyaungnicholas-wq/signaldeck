@@ -7,7 +7,7 @@ import type { Metadata } from "next";
 import HubTabs from "@/components/HubTabs";
 
 export const metadata: Metadata = {
-  title: "Markets — SignalDeck",
+  title: "Markets",
 };
 
 const TABS = [

@@ -13,7 +13,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { earningsEst, type EarningsEstResponse } from "@/lib/api";
+import { earningsEst, pollMs, POLL_SLOW, type EarningsEstResponse } from "@/lib/api";
 import { ago, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -46,10 +46,10 @@ export default function EarningsEstCard() {
           );
         });
     load();
-    const t = setInterval(load, 5 * 60_000); // filing cadence — slow poll
+    const stop = pollMs(load, POLL_SLOW); // filing cadence — slow tier
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 
@@ -61,13 +61,13 @@ export default function EarningsEstCard() {
       <div className="panel-h flex-wrap gap-2">
         <span>EARNINGS — ESTIMATED FROM FILING CADENCE</span>
         <span
-          className="chip px-1.5 py-0 text-[0.62rem] tracking-wider"
+          className="chip px-1.5 py-0 text-[0.75rem] tracking-wider"
           style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
         >
           EST — not confirmed dates
         </span>
         {resp !== null && (
-          <span className="tnum ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>
+          <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
             {resp.total} symbols with a 10-Q/10-K anchor
           </span>
         )}
@@ -109,13 +109,13 @@ export default function EarningsEstCard() {
               >
                 <Link
                   href={`/s/stocks/${encodeURIComponent(r.symbol)}`}
-                  className="cursor-pointer font-bold tracking-wide hover:text-[var(--accent)]"
+                  className="mono cursor-pointer font-bold tracking-wide transition-colors duration-150 hover:text-[var(--accent)]"
                   title={r.name || r.symbol}
                 >
                   {r.symbol}
                 </Link>
                 <span
-                  className="chip px-1.5 py-0 text-[0.62rem] tracking-wider"
+                  className="chip px-1.5 py-0 text-[0.75rem] tracking-wider"
                   style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
                   title={resp.note}
                 >
@@ -123,7 +123,7 @@ export default function EarningsEstCard() {
                 </span>
                 {r.overdue && (
                   <span
-                    className="chip px-1.5 py-0 text-[0.62rem] tracking-wider"
+                    className="chip px-1.5 py-0 text-[0.75rem] tracking-wider"
                     style={{ color: "var(--ask)", borderColor: "var(--ask)" }}
                     title="The +91d estimate has already passed — the filer's cadence slipped (or it pre-announced); this is exactly why these are estimates."
                   >
@@ -133,7 +133,7 @@ export default function EarningsEstCard() {
                 <span className="tnum ml-auto" style={{ color: "var(--dim)" }}>
                   ~{fmtDate(r.estTs)}
                 </span>
-                <span className="tnum text-[0.65rem]" style={{ color: "var(--faint)" }}>
+                <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
                   last {r.lastForm} {ago(r.lastFiledTs)}
                 </span>
               </li>
@@ -149,9 +149,18 @@ export default function EarningsEstCard() {
               {showAll ? "show fewer" : `show all ${rows.length}`}
             </button>
           )}
-          <p className="px-3 pb-2 text-[0.65rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+          <p className="px-3 pb-2 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             {resp.note}
           </p>
+          {/* The overdue explanation must be visible, not hover-only (the chip
+              title stays as a bonus for pointer users). */}
+          {rows.some((r) => r.overdue) && (
+            <p className="px-3 pb-2 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+              overdue — the +91-day estimate has already passed: the filer&apos;s
+              cadence slipped or it pre-announced. That is exactly why these are
+              estimates, not confirmed dates.
+            </p>
+          )}
         </>
       )}
     </section>

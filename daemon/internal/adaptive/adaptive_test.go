@@ -234,6 +234,37 @@ func TestFromVector_RebuildsLegsAndRegime(t *testing.T) {
 	}
 }
 
+// The stored model-leg probs (gbm_prob / meanrev_prob / alphax_prob) are
+// written to the vector ONLY when their OOS gate passed, so FromVector must
+// reconstruct each as a live leg — attribution then grades exactly the legs
+// the blend used, alphax included.
+func TestFromVector_ReconstructsModelLegs(t *testing.T) {
+	legs, _ := FromVector(map[string]float64{
+		"pressure_score": 0.2,
+		"gbm_prob":       0.61,
+		"meanrev_prob":   0.44,
+		"alphax_prob":    0.67,
+	})
+	posLift := 1.0
+	want := ensemble.LegProbabilities(ensemble.Components{
+		PressureScore: 0.2,
+		GBMProb:       fp(0.61), GBMLift: &posLift,
+		MeanRevProb: fp(0.44), MeanRevLift: &posLift,
+		AlphaXProb: fp(0.67), AlphaXLift: &posLift,
+	})
+	if len(legs) != len(want) || len(legs) != 4 {
+		t.Fatalf("legs = %v, want %v", legs, want)
+	}
+	for k, v := range want {
+		if legs[k] != v {
+			t.Fatalf("leg %s = %v, want %v", k, legs[k], v)
+		}
+	}
+	if legs[ensemble.LegAlphaX] != 0.67 {
+		t.Fatalf("alphax leg = %v, want 0.67", legs[ensemble.LegAlphaX])
+	}
+}
+
 func TestMaxWeightShift(t *testing.T) {
 	a := Weights{Cells: map[string]Cell{
 		AllCell: {Weights: map[string]float64{ensemble.LegPressure: 0.6, ensemble.LegExpectancy: 0.4}},
@@ -270,3 +301,69 @@ func TestPearson(t *testing.T) {
 }
 
 func fp(v float64) *float64 { return &v }
+
+// H3 (adversarial finding) — EVERY leg needs MinCellSamples of ITS OWN
+// examples, not just sentiment. The proven failure: a 40-sample cell where
+// alphax appeared in only 3 examples (all lucky hits) handed it the dominant
+// learned weight (0.77) while the legs with real evidence split the rest.
+// Now the thin leg is excluded outright and the evidenced legs share the
+// weight near-equally.
+func TestCompute_PerLegSampleGateExcludesThinLeg(t *testing.T) {
+	// 40 examples: pressure and expectancy are present in ALL 40 with a
+	// modest, identical edge (right 22/40 = 0.55); alphax is present in only
+	// 3 — and perfect in all 3.
+	var exs []Example
+	for i := 0; i < 40; i++ {
+		up := i%2 == 0
+		fwd := 0.01
+		if !up {
+			fwd = -0.01
+		}
+		right, wrong := 0.7, 0.3
+		if !up {
+			right, wrong = 0.3, 0.7
+		}
+		p := right // first 22 examples: correct call…
+		if i >= 22 {
+			p = wrong // …last 18: wrong call → hitRate 0.55
+		}
+		ex := Example{
+			Legs:   map[string]float64{ensemble.LegPressure: p, ensemble.LegExpectancy: p},
+			Regime: "uptrend", FwdReturn: fwd,
+		}
+		if up {
+			ex.Up = 1
+		}
+		if i < 3 { // alphax: 3 lucky, perfect examples
+			ex.Legs[ensemble.LegAlphaX] = right
+		}
+		exs = append(exs, ex)
+	}
+
+	w := Compute(exs, 0)
+	c := w.Cells["uptrend"]
+	if c.Gated || c.N != 40 {
+		t.Fatalf("cell must clear the cell-level gate: %+v", c)
+	}
+	// The evidence is still measured and reported (transparency)…
+	if c.HitRates[ensemble.LegAlphaX] != 1.0 || c.LegN[ensemble.LegAlphaX] != 3 {
+		t.Fatalf("alphax evidence must be reported: hitRates=%+v legN=%+v", c.HitRates, c.LegN)
+	}
+	// …but 3 lucky examples must never buy a learned weight.
+	if _, has := c.Weights[ensemble.LegAlphaX]; has {
+		t.Fatalf("alphax with legN=3 must get NO weight (was 0.77 pre-fix): %+v", c.Weights)
+	}
+	// The evidenced legs split the weight near-equally (identical hit-rates
+	// → exactly equal), and the set stays normalized.
+	pw, ew := c.Weights[ensemble.LegPressure], c.Weights[ensemble.LegExpectancy]
+	if pw <= 0 || math.Abs(pw-ew) > 1e-9 {
+		t.Fatalf("evidenced legs must share weight near-equally: %+v", c.Weights)
+	}
+	var sum float64
+	for _, v := range c.Weights {
+		sum += v
+	}
+	if math.Abs(sum-1) > 1e-9 {
+		t.Fatalf("weights not normalized: %+v (sum %v)", c.Weights, sum)
+	}
+}

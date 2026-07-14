@@ -12,9 +12,10 @@
 // default), then localStorage takes over. Shown in BOTH view modes — knowing
 // what a page is for is orientation, not jargon.
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 const LS_KEY = "sd-purpose-hidden";
+const EVT = "sd-purpose";
 
 function readHidden(): string[] {
   if (typeof window === "undefined") return [];
@@ -32,19 +33,31 @@ function writeHidden(ids: string[]) {
   } catch {
     /* storage blocked — the toggle still works for this render */
   }
+  window.dispatchEvent(new Event(EVT));
+}
+
+// Read straight from localStorage via useSyncExternalStore (same hydration-safe
+// idiom as the header toggles): SSR + first paint render the default (expanded),
+// then the store snapshot reflects the persisted choice — no setState-in-effect.
+function subscribe(cb: () => void): () => void {
+  window.addEventListener(EVT, cb);
+  window.addEventListener("storage", cb); // cross-tab sync
+  return () => {
+    window.removeEventListener(EVT, cb);
+    window.removeEventListener("storage", cb);
+  };
 }
 
 export default function PagePurpose({ id, text }: { id: string; text: string }) {
-  const [hidden, setHidden] = useState(false);
-  useEffect(() => {
-    setHidden(readHidden().includes(id));
-  }, [id]);
+  const hidden = useSyncExternalStore(
+    subscribe,
+    () => readHidden().includes(id),
+    () => false,
+  );
 
   const toggle = () => {
-    const next = !hidden;
-    setHidden(next);
     const ids = readHidden().filter((x) => x !== id);
-    if (next) ids.push(id);
+    if (!hidden) ids.push(id);
     writeHidden(ids);
   };
 
@@ -54,8 +67,7 @@ export default function PagePurpose({ id, text }: { id: string; text: string }) 
         type="button"
         onClick={toggle}
         aria-expanded={false}
-        className="min-h-[32px] cursor-pointer self-start text-left text-[0.68rem] tracking-wider transition-colors duration-150 hover:text-[var(--accent)]"
-        style={{ color: "var(--faint)" }}
+        className="min-h-[32px] cursor-pointer self-start text-left text-[0.75rem] tracking-wider text-[var(--faint)] transition-colors duration-150 hover:text-[var(--accent)]"
       >
         ? what is this page for
       </button>
@@ -66,7 +78,7 @@ export default function PagePurpose({ id, text }: { id: string; text: string }) 
     <div
       role="note"
       aria-label="what this page answers"
-      className="flex items-baseline gap-2 rounded border px-3 py-1.5 text-[0.78rem] leading-relaxed"
+      className="flex items-baseline gap-2 rounded-lg border px-3 py-1.5 text-[0.75rem] leading-relaxed"
       style={{ borderColor: "var(--border)", background: "var(--panel2)", color: "var(--dim)" }}
     >
       <span aria-hidden="true" className="shrink-0 font-bold" style={{ color: "var(--accent)" }}>
@@ -77,8 +89,7 @@ export default function PagePurpose({ id, text }: { id: string; text: string }) 
         type="button"
         onClick={toggle}
         aria-label="hide this explanation (remembered on this device)"
-        className="ml-auto shrink-0 cursor-pointer px-1 text-[0.8rem] transition-colors duration-150 hover:text-[var(--text)]"
-        style={{ color: "var(--faint)" }}
+        className="ml-auto inline-flex min-h-[24px] min-w-[24px] shrink-0 cursor-pointer items-center justify-center self-center px-1 text-[0.75rem] text-[var(--faint)] transition-colors duration-150 hover:text-[var(--text)]"
       >
         ×
       </button>

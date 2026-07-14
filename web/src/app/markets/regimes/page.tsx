@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   api,
+  pollMs,
+  POLL_DEFAULT,
   type BreakoutRow,
   type Market,
   type RankedRow,
@@ -12,6 +14,7 @@ import {
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
+import HelpTip from "@/components/HelpTip";
 import RegimeMap from "@/components/regime/RegimeMap";
 import RegimeChanges from "@/components/regime/RegimeChanges";
 import RankingTable from "@/components/regime/RankingTable";
@@ -19,11 +22,12 @@ import BreakoutFeed from "@/components/regime/BreakoutFeed";
 import Gauge from "@/components/viz/Gauge";
 import { regimeColor, regimeKind } from "@/components/regime/regime";
 import PagePurpose from "@/components/PagePurpose";
+import ProOnly from "@/components/ProOnly";
 
 // This page describes what IS. It polls three trend-detection endpoints and
 // renders them side by side. Regimes/rankings are computed from stored bars
-// with no lookahead — they are a description, not a prediction.
-const POLL_MS = 10_000;
+// with no lookahead — they are a description, not a prediction. Regimes move
+// on worker cadence, so the default polling tier is plenty.
 
 interface RegimeData {
   states: RegimeState[];
@@ -58,10 +62,10 @@ export default function RegimePage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    const t = setInterval(load, POLL_MS);
+    const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 
@@ -91,7 +95,7 @@ export default function RegimePage() {
       {/* header row */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-1">
         <h1 className="text-sm font-extrabold tracking-[0.18em]">REGIME</h1>
-        <span className="text-[0.78rem]" style={{ color: "var(--faint)" }}>
+        <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
           creating &amp; detecting trends
         </span>
         {data !== null && (
@@ -146,7 +150,15 @@ export default function RegimePage() {
               in an uptrend, plus per-regime counts. Descriptive (stored bars,
               no lookahead); the caption carries the honest n. */}
           <section className="panel">
-            <div className="panel-h">REGIME MIX</div>
+            <div className="panel-h">
+              REGIME MIX
+              <HelpTip label="What is a regime?">
+                A regime is the mode a symbol&apos;s market is currently in — uptrend, downtrend,
+                range, or squeeze — detected from stored bars with no lookahead. Strategies that
+                work in one regime fail in another, so the regime is named first. It describes
+                what IS, not what will be.
+              </HelpTip>
+            </div>
             <div className="flex flex-wrap items-center gap-x-8 gap-y-4 px-4 py-4">
               {(() => {
                 const total = data.states.length;
@@ -202,11 +214,15 @@ export default function RegimePage() {
             <BreakoutFeed breakouts={data.breakouts} marketBySymbol={marketBySymbol} />
           </div>
 
-          <RankingTable rows={data.ranking} />
+          {/* raw cross-sectional score table — methodology detail, folded in
+              simple mode (never deleted); pro mode renders it directly */}
+          <ProOnly summary="Show the relative-strength ranking table">
+            <RankingTable rows={data.ranking} />
+          </ProOnly>
 
           {/* honesty note */}
           <div
-            className="panel px-4 py-3 text-[0.78rem] leading-relaxed"
+            className="panel px-4 py-3 text-[0.75rem] leading-relaxed"
             style={{ color: "var(--faint)" }}
           >
             Regimes and rankings are computed from stored bars with no lookahead; they describe

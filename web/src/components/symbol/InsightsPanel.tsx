@@ -27,7 +27,7 @@ export default function InsightsPanel({ insights }: { insights?: Insight[] }) {
             {items.map((it) => (
               <li key={it.id} className="border-b pb-3 last:border-b-0 last:pb-0" style={{ borderColor: "var(--border)" }}>
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className="text-[0.8rem] font-bold" style={{ color: "var(--text)" }}>
+                  <span className="text-sm font-bold" style={{ color: "var(--text)" }}>
                     {it.headline}
                   </span>
                   <span className="tnum shrink-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>

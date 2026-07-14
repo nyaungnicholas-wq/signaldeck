@@ -1,18 +1,27 @@
 "use client";
 
-// Forecast page: the real backtested logistic model (beyond mechanical
-// expectancy). Pick a symbol from the watchlist; for each horizon we show
-// P(up) RIGHT NEXT TO its out-of-sample grade. The honesty rule is the
-// product — a probability with lift <= 0 is grayed out and labeled noise.
+// Forecast page, rebuilt as a MODEL RACE: three honestly-graded models —
+// walk-forward logistic (api.forecast), GBM and mean-reversion
+// (api.modelForecasts) — side by side for one symbol + horizon, each P(up)
+// shown RIGHT NEXT to its out-of-sample grade. The honesty rule is unchanged:
+// a probability with lift <= 0 is grayed out and labeled noise; a model the
+// trainer hasn't produced renders an honest empty lane. When 2+ models pass
+// the gate, the agreement strip says whether they land on the same side —
+// disagreement is a signal too.
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   api,
+  HORIZONS,
   pollMs,
+  POLL_DEFAULT,
+  POLL_SLOW,
   screenerRows,
   type Forecast,
+  type Horizon,
   type Market,
+  type ModelForecast,
   type WatchRow,
 } from "@/lib/api";
 import { ago, fmtTs } from "@/lib/format";
@@ -20,222 +29,67 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
+import ProOnly from "@/components/ProOnly";
+import HorizonChips from "@/components/symbol/HorizonChips";
+import ModelRaceCard, { type RaceStats } from "@/components/signals/forecasts/ModelRaceCard";
+import AgreementStrip, { type AgreementEntry } from "@/components/signals/forecasts/AgreementStrip";
+import ModelExplainer from "@/components/signals/forecasts/ModelExplainer";
+import ScoreEvolution from "@/components/signals/forecasts/ScoreEvolution";
 
 interface Selected {
   symbol: string;
   market: Market;
 }
 
-// ── grade helpers ──────────────────────────────────────────────────────────
-
-function pctText(v: number, digits = 1): string {
-  if (!isFinite(v)) return "—";
-  return `${(v * 100).toFixed(digits)}%`;
+/** Both endpoints for one symbol, keyed so switching symbols never shows
+ *  stale lanes. mfErr keeps the logistic lane alive if only the model-legs
+ *  poll fails (surfaced as a visible chip, per house rules). */
+interface RaceData {
+  key: string;
+  fc: Forecast[];
+  mf: ModelForecast[];
+  mfErr: string | null;
 }
 
-/** Signed percentage-point lift vs the base rate (accuracy − baseRate). */
-function liftText(lift: number): string {
-  if (!isFinite(lift)) return "—";
-  const pp = lift * 100;
-  return `${pp >= 0 ? "+" : ""}${pp.toFixed(1)}pp`;
-}
-
-function num(v: number, digits = 3): string {
-  if (!isFinite(v)) return "—";
-  return v.toFixed(digits);
-}
-
-/** Grade cell — a small stat with a caption underneath. */
-function Stat({
-  label,
-  value,
-  color,
-  title,
-}: {
-  label: string;
-  value: string;
-  color?: string;
-  title?: string;
-}) {
-  return (
-    <div className="flex flex-col gap-0.5" title={title}>
-      <span className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
-        {label}
-      </span>
-      <span className="tnum text-[0.82rem]" style={{ color: color ?? "var(--text)" }}>
-        {value}
-      </span>
-    </div>
-  );
-}
-
-function ForecastCard({ f, symbol }: { f: Forecast; symbol: string }) {
-  // Honesty gate: if the model can't beat the base rate out-of-sample, we
-  // gray the probability and call it noise. lift is accuracy − baseRate.
-  const beatsBaseRate = isFinite(f.lift) && f.lift > 0;
-  const smallSample = beatsBaseRate && f.nEval < 100;
-  const probPct = pctText(f.prob, 1);
-
-  // The bar visualizes P(up); a live green (up) fill against a red remainder.
-  const probClamped = Math.max(0, Math.min(1, isFinite(f.prob) ? f.prob : 0.5));
-  const probColor = beatsBaseRate
-    ? f.prob >= 0.5
-      ? "var(--bid)"
-      : "var(--ask)"
-    : "var(--faint)";
-
-  return (
-    <section className="panel">
-      <div className="panel-h">
-        <span style={{ color: "var(--text)" }}>{f.horizon.toUpperCase()} HORIZON</span>
-        <span className="tnum" style={{ color: "var(--faint)" }}>
-          trained {ago(f.ts)}
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
-        {/* ── LEFT: the probability, prominent, with its bar ── */}
-        <div className="flex flex-col gap-2">
-          <span className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
-            P(up over {f.horizon})
-          </span>
-          <div className="flex items-baseline gap-2">
-            <span
-              className="tnum text-4xl font-bold leading-none"
-              style={{ color: beatsBaseRate ? "var(--text)" : "var(--faint)" }}
-            >
-              {probPct}
-            </span>
-            {!beatsBaseRate && (
-              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                (ungraded)
-              </span>
-            )}
-          </div>
-
-          <div
-            role="meter"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Number((probClamped * 100).toFixed(1))}
-            aria-label={`probability up over ${f.horizon} for ${symbol}`}
-            className="mt-1 flex h-3 overflow-hidden rounded-full border"
-            style={{ borderColor: "var(--border)", background: "var(--panel2)" }}
-          >
-            <div
-              className="transition-[width] duration-300"
-              style={{
-                width: `${probClamped * 100}%`,
-                background: beatsBaseRate ? probColor : "var(--faint)",
-                opacity: beatsBaseRate ? 1 : 0.5,
-              }}
-            />
-          </div>
-          <div className="tnum flex justify-between text-[0.75rem]" style={{ color: "var(--faint)" }}>
-            <span>0%</span>
-            <span>base rate {pctText(f.baseRate, 0)}</span>
-            <span>100%</span>
-          </div>
-
-          {/* honesty verdict — the whole point of the page */}
-          {beatsBaseRate ? (
-            <div
-              className="mt-1 rounded border px-2.5 py-1.5 text-[0.78rem] leading-snug"
-              style={{
-                borderColor: "var(--ok)",
-                background: "var(--bid-dim)",
-                color: "var(--ok)",
-              }}
-            >
-              beats the base rate out-of-sample by {liftText(f.lift)}
-              {smallSample && (
-                <span style={{ color: "var(--warn)" }}> (small sample)</span>
-              )}
-            </div>
-          ) : (
-            <div
-              className="mt-1 rounded border px-2.5 py-1.5 text-[0.78rem] leading-snug"
-              style={{
-                borderColor: "var(--border)",
-                background: "var(--panel2)",
-                color: "var(--dim)",
-              }}
-            >
-              no measurable edge — this model doesn&apos;t beat the base rate on {symbol}; treat
-              P(up) as noise.
-            </div>
-          )}
-        </div>
-
-        {/* ── RIGHT: the out-of-sample grade, right next to the probability ── */}
-        <div className="flex flex-col gap-3">
-          <span className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
-            OUT-OF-SAMPLE GRADE
-          </span>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
-            <Stat
-              label="ACCURACY"
-              value={pctText(f.accuracy, 1)}
-              title="Share of out-of-sample predictions the model got right."
-            />
-            <Stat
-              label="BASE RATE"
-              value={pctText(f.baseRate, 1)}
-              color="var(--dim)"
-              title="How often up happens regardless of the model — the bar to clear."
-            />
-            <Stat
-              label="LIFT"
-              value={liftText(f.lift)}
-              color={beatsBaseRate ? "var(--ok)" : "var(--bad)"}
-              title="Accuracy minus base rate. Must be positive to earn a probability."
-            />
-            <Stat
-              label="BRIER"
-              value={num(f.brier, 3)}
-              title="Mean squared probability error (lower is better; 0 is perfect, 0.25 is a coin flip at 50%)."
-            />
-            <Stat
-              label="AUC"
-              value={num(f.auc, 3)}
-              color={
-                isFinite(f.auc) ? (f.auc > 0.5 ? "var(--ok)" : "var(--bad)") : undefined
-              }
-              title="Ranking quality: probability a random up bar scored above a random down bar. 0.50 = no skill."
-            />
-            <Stat
-              label="SAMPLE (nEval)"
-              value={isFinite(f.nEval) ? f.nEval.toLocaleString("en-US") : "—"}
-              color={smallSample ? "var(--warn)" : undefined}
-              title="Number of out-of-sample predictions graded via walk-forward."
-            />
-          </div>
-
-          <p className="text-[0.78rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-            Trained on {isFinite(f.nTrain) ? f.nTrain.toLocaleString("en-US") : "—"} bars; graded on{" "}
-            {isFinite(f.nEval) ? f.nEval.toLocaleString("en-US") : "—"} out-of-sample predictions via
-            walk-forward.
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
+/** The three lanes, in fixed race order. */
+const LANES = [
+  {
+    key: "logistic" as const,
+    name: "logistic (walk-forward)",
+    plainName: "straight-line model",
+    tagline: "linear read of the stored features — the baseline every other model must justify itself against.",
+  },
+  {
+    key: "gbm" as const,
+    name: "GBM (boosted trees)",
+    plainName: "pattern-finder (trees)",
+    tagline: "non-linear: gradient-boosted decision trees hunting interactions a straight line can't see.",
+  },
+  {
+    key: "meanrev" as const,
+    name: "mean-reversion (costed)",
+    plainName: "snap-back model",
+    tagline: "contrarian: fades the momentum lean; graded net of a round-trip cost.",
+    gradeNote: "graded net of round-trip cost",
+  },
+];
 
 export default function ForecastPage() {
   const [rows, setRows] = useState<WatchRow[] | null>(null);
   const [rowsErr, setRowsErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selected | null>(null);
+  const [horizon, setHorizon] = useState<Horizon>("1d");
   const [retryTick, setRetryTick] = useState(0);
 
-  // Forecasts are keyed by "symbol|market" so switching symbols shows a clean
-  // loading state instead of stale cards.
-  const [fcState, setFcState] = useState<{ key: string; list: Forecast[] } | null>(null);
-  const [fcErrState, setFcErrState] = useState<{ key: string; msg: string } | null>(null);
+  const [race, setRace] = useState<RaceData | null>(null);
+  const [raceErrState, setRaceErrState] = useState<{ key: string; msg: string } | null>(null);
 
   // Load the watchlist (for the picker); default to the first active symbol.
   // Stage 5: signed out the watchlist 401s — fall back to the strongest-
   // scored symbols from the PUBLIC universe screener so the page still works.
+  // Same fallback when the watchlist answers but is EMPTY (fresh account with
+  // no subscriptions): the daemon still has trained models for the public
+  // universe, so racing the screener's strongest symbols beats a dead page.
   useEffect(() => {
     let alive = true;
     const apply = (r: WatchRow[]) => {
@@ -249,12 +103,32 @@ export default function ForecastPage() {
         return first ? { symbol: first.symbol, market: first.market } : null;
       });
     };
+    const applyScreenerTop = () =>
+      screenerRows()
+        .then((all) => {
+          if (!alive) return;
+          const top = [...all]
+            .sort(
+              (a, b) =>
+                Math.abs(b.scores?.["1d"]?.score ?? 0) - Math.abs(a.scores?.["1d"]?.score ?? 0),
+            )
+            .slice(0, 24);
+          apply(top);
+        })
+        .catch((e2: unknown) => {
+          if (!alive) return;
+          setRowsErr(e2 instanceof Error ? e2.message : String(e2));
+        });
     const load = () =>
       api
         .watchlist()
         .then((r) => {
           if (!alive) return;
-          apply(r);
+          if (r.some((x) => x.active)) {
+            apply(r);
+            return;
+          }
+          return applyScreenerTop();
         })
         .catch((e: unknown) => {
           if (!alive) return;
@@ -263,65 +137,109 @@ export default function ForecastPage() {
             setRowsErr(msg);
             return;
           }
-          screenerRows()
-            .then((all) => {
-              if (!alive) return;
-              const top = [...all]
-                .sort(
-                  (a, b) =>
-                    Math.abs(b.scores?.["1d"]?.score ?? 0) - Math.abs(a.scores?.["1d"]?.score ?? 0),
-                )
-                .slice(0, 24);
-              apply(top);
-            })
-            .catch((e2: unknown) => {
-              if (!alive) return;
-              setRowsErr(e2 instanceof Error ? e2.message : String(e2));
-            });
+          return applyScreenerTop();
         });
     load();
-    const t = setInterval(load, pollMs());
+    // POLL_DEFAULT tier — managed loop (hidden-tab pause, failure backoff).
+    const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [retryTick]);
 
   const selKey = selected ? `${selected.symbol}|${selected.market}` : "";
 
-  // Poll the forecast for the selected symbol.
+  // Poll BOTH model sources for the selected symbol. The logistic forecast is
+  // the page's backbone (its failure is the page's failure); the model legs
+  // degrade to a visible chip instead of taking the whole page down.
   useEffect(() => {
     if (!selected) return;
     let alive = true;
     const key = `${selected.symbol}|${selected.market}`;
     const load = () =>
-      api
-        .forecast(selected.symbol, selected.market)
-        .then((list) => {
-          if (!alive) return;
-          setFcState({ key, list });
-          setFcErrState(null);
-        })
-        .catch((e: unknown) => {
-          if (!alive) return;
-          setFcErrState({ key, msg: e instanceof Error ? e.message : String(e) });
+      Promise.allSettled([
+        api.forecast(selected.symbol, selected.market),
+        api.modelForecasts(selected.symbol, selected.market),
+      ]).then(([fcRes, mfRes]) => {
+        if (!alive) return;
+        if (fcRes.status === "rejected") {
+          const e: unknown = fcRes.reason;
+          setRaceErrState({ key, msg: e instanceof Error ? e.message : String(e) });
+          return;
+        }
+        const mfOk = mfRes.status === "fulfilled";
+        // The daemon encodes an empty result as JSON null (Go nil slice) —
+        // normalize to [] so the lanes render honest empties, not a crash.
+        setRace({
+          key,
+          fc: fcRes.value ?? [],
+          mf: (mfOk ? mfRes.value : null) ?? [],
+          mfErr: mfOk
+            ? null
+            : mfRes.reason instanceof Error
+              ? mfRes.reason.message
+              : String(mfRes.reason),
         });
+        setRaceErrState(null);
+      });
     load();
-    const t = setInterval(load, pollMs());
+    // POLL_SLOW tier — the forecast-trainer refreshes models hourly.
+    const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, [selected, retryTick]);
 
-  const forecasts = fcState && fcState.key === selKey ? fcState.list : null;
-  const fcErr = fcErrState && fcErrState.key === selKey ? fcErrState.msg : null;
+  const data = race && race.key === selKey ? race : null;
+  const raceErr = raceErrState && raceErrState.key === selKey ? raceErrState.msg : null;
 
-  // newest training timestamp across returned horizons — for the header chip
+  // Which horizons actually have at least one trained model — drives the tabs.
+  const availableHorizons = useMemo<Horizon[]>(() => {
+    if (!data) return [];
+    const s = new Set<Horizon>();
+    data.fc.forEach((f) => s.add(f.horizon));
+    data.mf.forEach((m) => s.add(m.horizon));
+    return HORIZONS.filter((h) => s.has(h));
+  }, [data]);
+
+  // Keep the selected horizon valid as data arrives / symbols change —
+  // derived, not corrected in an effect (no cascading render).
+  const effHorizon: Horizon =
+    availableHorizons.length === 0 || availableHorizons.includes(horizon)
+      ? horizon
+      : availableHorizons.includes("1d")
+        ? "1d"
+        : availableHorizons[0];
+
+  // The three lanes for the selected horizon (null = honest empty lane).
+  const laneStats = useMemo<Record<(typeof LANES)[number]["key"], RaceStats | null>>(() => {
+    const logistic = data?.fc.find((f) => f.horizon === effHorizon) ?? null;
+    const gbm = data?.mf.find((m) => m.model === "gbm" && m.horizon === effHorizon) ?? null;
+    const meanrev = data?.mf.find((m) => m.model === "meanrev" && m.horizon === effHorizon) ?? null;
+    return { logistic, gbm, meanrev };
+  }, [data, effHorizon]);
+
+  const agreementEntries = useMemo<AgreementEntry[]>(
+    () =>
+      LANES.flatMap((l) => {
+        const s = laneStats[l.key];
+        return s
+          ? [{ key: l.key, name: l.name, plainName: l.plainName, prob: s.prob, lift: s.lift }]
+          : [];
+      }),
+    [laneStats],
+  );
+
+  // newest training timestamp across every model — for the header chip
   const trainedAt = useMemo(() => {
-    if (!forecasts || forecasts.length === 0) return 0;
-    return forecasts.reduce((m, f) => (f.ts > m ? f.ts : m), 0);
-  }, [forecasts]);
+    if (!data) return 0;
+    let m = 0;
+    data.fc.forEach((f) => (m = f.ts > m ? f.ts : m));
+    data.mf.forEach((r) => (m = r.ts > m ? r.ts : m));
+    return m;
+  }, [data]);
 
   const activeRows = useMemo(
     () => (rows ? rows.filter((r) => r.active) : []),
@@ -331,15 +249,16 @@ export default function ForecastPage() {
   const rowsLoading = rows === null && rowsErr === null;
   const rowsHardError = rows === null && rowsErr !== null;
 
-  const fcLoading = selected !== null && forecasts === null && fcErr === null;
-  const fcHardError = selected !== null && forecasts === null && fcErr !== null;
+  const raceLoading = selected !== null && data === null && raceErr === null;
+  const raceHardError = selected !== null && data === null && raceErr !== null;
+  const raceEmpty = data !== null && data.fc.length === 0 && data.mf.length === 0;
 
   return (
     <div className="flex flex-col gap-4">
       {/* header row */}
       <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">FORECAST</h1>
-        {selected && <span className="chip">{selected.symbol}</span>}
+        <h1 className="text-sm font-bold tracking-[0.18em]">MODEL RACE</h1>
+        {selected && <span className="chip mono">{selected.symbol}</span>}
         {selected && (
           <span className="chip" style={{ color: "var(--dim)" }}>
             {selected.market}
@@ -350,6 +269,15 @@ export default function ForecastPage() {
             trained {ago(trainedAt)}
           </span>
         )}
+        {data?.mfErr && (
+          <span
+            className="chip"
+            style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
+            title={data.mfErr}
+          >
+            model legs poll failed — logistic only
+          </span>
+        )}
         {rowsErr !== null && rows !== null && (
           <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
             poll failed — showing last data
@@ -357,33 +285,28 @@ export default function ForecastPage() {
         )}
       </div>
 
-      {/* STAGE 3: what this page answers, in plain English */}
+      {/* what this page answers, in plain English */}
       <PagePurpose
         id="signals-forecasts"
-        text="How likely is this symbol to rise over each horizon — shown right next to how that same forecast has actually scored out of sample? A probability with no proven lift is labeled noise."
+        text="Three models — a straight-line logistic, a boosted-tree pattern-finder, and a costed snap-back leg — race on the same symbol, each P(up) shown right next to its out-of-sample grade. A probability with no proven lift is labeled noise, and when 2+ graded models exist we say whether they agree."
       />
 
-      {/* explainer — always visible; the honesty framing IS the product */}
-      <section className="panel">
-        <div className="panel-h">HOW THIS MODEL EARNS THE RIGHT TO A NUMBER</div>
-        <p
-          className="px-4 py-4 text-[0.78rem] leading-relaxed"
-          style={{ color: "var(--dim)" }}
-        >
-          This is a logistic model trained walk-forward on stored bars with{" "}
-          <span style={{ color: "var(--text)" }}>no lookahead</span>. It only earns the right to
-          show a probability by beating the base rate out-of-sample; when it can&apos;t, we say so.
-          Forecasts refresh hourly (
-          <span style={{ color: "var(--dim)" }}>forecast-trainer</span> agent).
-        </p>
-      </section>
+      {/* explainer — methodology: direct in PRO, folded (never deleted) in
+          SIMPLE; the per-lane noise/beats-base-rate gates stay visible on
+          every card in both modes. */}
+      <ProOnly summary="Show how each model earns the right to a number">
+        <ModelExplainer />
+      </ProOnly>
 
       {/* symbol picker */}
       <section className="panel">
         <div className="panel-h">
           SYMBOL
-          <span className="tnum" style={{ color: "var(--faint)" }}>
-            pick a symbol to inspect its forecast
+          <span
+            className="text-[0.75rem] font-normal normal-case tracking-normal"
+            style={{ color: "var(--faint)" }}
+          >
+            pick a symbol to race its models
           </span>
         </div>
 
@@ -424,7 +347,7 @@ export default function ForecastPage() {
                   type="button"
                   onClick={() => setSelected({ symbol: r.symbol, market: r.market })}
                   aria-pressed={active}
-                  className="chip min-h-[40px] cursor-pointer transition-colors duration-150 hover:brightness-125"
+                  className="chip mono min-h-[40px] cursor-pointer transition-colors duration-150 hover:brightness-125"
                   style={{
                     color: active ? "var(--text)" : "var(--dim)",
                     borderColor: active ? "var(--accent)" : "var(--border)",
@@ -442,44 +365,77 @@ export default function ForecastPage() {
         )}
       </section>
 
-      {/* forecast cards */}
+      {/* the race itself */}
       {selected && (
         <>
-          {fcLoading && (
-            <Skeleton lines={4} label={`loading forecast for ${selected.symbol}`} />
+          {raceLoading && (
+            <Skeleton lines={4} label={`loading models for ${selected.symbol}`} />
           )}
 
-          {fcHardError && (
+          {raceHardError && (
             <ErrorState
-              message={fcErr ?? "forecast unavailable"}
+              message={raceErr ?? "forecast unavailable"}
               hint="Is the daemon running? Start it with signaldeckd."
               retry={() => {
-                setFcErrState(null);
+                setRaceErrState(null);
                 setRetryTick((t) => t + 1);
               }}
             />
           )}
 
-          {forecasts !== null && forecasts.length === 0 && (
+          {raceEmpty && (
             <EmptyState
-              message={`No forecast yet for ${selected.symbol}`}
+              message={`No models yet for ${selected.symbol}`}
               detail="The forecast-trainer runs hourly and needs ~150 daily bars before it can grade a model."
             />
           )}
 
-          {forecasts !== null && forecasts.length > 0 && (
+          {data !== null && !raceEmpty && (
             <div className="flex flex-col gap-4">
-              {forecasts.map((f) => (
-                <ForecastCard key={`${selKey}:${f.horizon}`} f={f} symbol={selected.symbol} />
-              ))}
+              {/* horizon tabs */}
+              <div className="flex flex-wrap items-center gap-2 px-1">
+                <span className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>
+                  HORIZON
+                </span>
+                <HorizonChips
+                  value={effHorizon}
+                  onChange={setHorizon}
+                  available={availableHorizons}
+                />
+              </div>
+
+              {/* agreement strip — do the graded models land on the same side? */}
+              <AgreementStrip entries={agreementEntries} horizon={effHorizon} />
+
+              {/* three lanes, side by side */}
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                {LANES.map((l) => (
+                  <ModelRaceCard
+                    key={`${selKey}:${effHorizon}:${l.key}`}
+                    name={l.name}
+                    plainName={l.plainName}
+                    tagline={l.tagline}
+                    gradeNote={l.gradeNote}
+                    horizon={effHorizon}
+                    symbol={selected.symbol}
+                    stats={laneStats[l.key]}
+                  />
+                ))}
+              </div>
+
+              {/* score evolution — the mechanical score's stored path (kept from the old page) */}
+              <ScoreEvolution
+                symbol={selected.symbol}
+                market={selected.market}
+                horizon={effHorizon}
+              />
+
               <div className="px-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-                Want the mechanical baseline instead? See{" "}
                 <Link
                   href={`/s/${selected.market}/${encodeURIComponent(selected.symbol)}`}
-                  className="cursor-pointer transition-colors duration-150 hover:text-[var(--accent)]"
-                  style={{ color: "var(--dim)" }}
+                  className="cursor-pointer text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]"
                 >
-                  {selected.symbol}&apos;s expectancy
+                  Compare with {selected.symbol}&apos;s mechanical expectancy
                 </Link>{" "}
                 (what usually happens next by state) on the symbol page.
               </div>

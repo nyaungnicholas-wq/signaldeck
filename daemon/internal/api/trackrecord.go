@@ -121,7 +121,7 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		"minIndependentN": trackMinIndependentN,
 		"distinctDays":    distinctDays,
 		"minDistinctDays": trackMinDistinctDays,
-		"clusterNote": "observations on the same market day are cross-sectionally correlated (one market move); skill unlocks only after both gates: independent obs AND distinct days",
+		"clusterNote":     "observations on the same market day are cross-sectionally correlated (one market move); skill unlocks only after both gates: independent obs AND distinct days",
 		"gated":           gated,
 		// This IS a live forward record (calibrated prob frozen at prediction
 		// time, graded against realized bars) — but until it clears the gate it

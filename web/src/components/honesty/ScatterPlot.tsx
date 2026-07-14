@@ -78,32 +78,32 @@ export default function ScatterPlot({ points }: { points: Honesty["points"] }) {
             <circle key={i} cx={x(p.score)} cy={y(p.fwd)} r="2" fill="var(--accent)" fillOpacity="0.5" />
           ))}
           {/* x tick labels */}
-          <text x={x(-1)} y={H - 18} fontSize="10" fill="var(--faint)" textAnchor="start">
+          <text x={x(-1)} y={H - 18} fontSize="12" fill="var(--faint)" textAnchor="start">
             −1
           </text>
-          <text x={x(0)} y={H - 18} fontSize="10" fill="var(--faint)" textAnchor="middle">
+          <text x={x(0)} y={H - 18} fontSize="12" fill="var(--faint)" textAnchor="middle">
             0
           </text>
-          <text x={x(1)} y={H - 18} fontSize="10" fill="var(--faint)" textAnchor="end">
+          <text x={x(1)} y={H - 18} fontSize="12" fill="var(--faint)" textAnchor="end">
             +1
           </text>
-          <text x={M.left + IW / 2} y={H - 5} fontSize="10" fill="var(--dim)" textAnchor="middle">
+          <text x={M.left + IW / 2} y={H - 5} fontSize="12" fill="var(--dim)" textAnchor="middle">
             score
           </text>
           {/* y tick labels */}
-          <text x={M.left - 6} y={M.top + 9} fontSize="10" fill="var(--faint)" textAnchor="end">
+          <text x={M.left - 6} y={M.top + 9} fontSize="12" fill="var(--faint)" textAnchor="end">
             +{fmtLim(yLim)}
           </text>
-          <text x={M.left - 6} y={y(0) + 3} fontSize="10" fill="var(--faint)" textAnchor="end">
+          <text x={M.left - 6} y={y(0) + 3} fontSize="12" fill="var(--faint)" textAnchor="end">
             0%
           </text>
-          <text x={M.left - 6} y={H - M.bottom} fontSize="10" fill="var(--faint)" textAnchor="end">
+          <text x={M.left - 6} y={H - M.bottom} fontSize="12" fill="var(--faint)" textAnchor="end">
             −{fmtLim(yLim)}
           </text>
           <text
             x={12}
             y={M.top + IH / 2}
-            fontSize="10"
+            fontSize="12"
             fill="var(--dim)"
             textAnchor="middle"
             transform={`rotate(-90 12 ${M.top + IH / 2})`}

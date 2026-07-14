@@ -21,12 +21,12 @@ import type { Bar, ChartOverlayMarker } from "@/lib/api";
 
 const UP = "#34D399";
 const DOWN = "#F87171";
-const GRID = "#1E2633";
+const GRID = "#1e2637"; // --border
 
 // Overlay marker palette (kept in the existing dark aesthetic).
 const OVERLAY_BULL = "#34D399"; // bullish score / uptrend / up-breakout
 const OVERLAY_BEAR = "#F87171"; // bearish score / downtrend / down-breakout
-const OVERLAY_NEUTRAL = "#8B98A9"; // directionless (range/squeeze/vol-spike)
+const OVERLAY_NEUTRAL = "#94a3b8"; // --dim — directionless (range/squeeze/vol-spike)
 
 export type Tf = "1m" | "1h" | "1d";
 
@@ -101,10 +101,10 @@ export default function CandleChart({
       height,
       layout: {
         background: { color: "transparent" },
-        textColor: "#8B98A9",
+        textColor: "#94a3b8", // --dim
         fontFamily:
           "var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: 11,
+        fontSize: 12,
         attributionLogo: false,
       },
       grid: {
@@ -114,8 +114,9 @@ export default function CandleChart({
       rightPriceScale: { borderColor: GRID },
       timeScale: { borderColor: GRID, secondsVisible: false },
       crosshair: {
-        vertLine: { color: "#5B6675", labelBackgroundColor: "#1E2633" },
-        horzLine: { color: "#5B6675", labelBackgroundColor: "#1E2633" },
+        // --faint lines, --panel3 label chips (elevated readouts).
+        vertLine: { color: "#7a8595", labelBackgroundColor: "#151d2c" },
+        horzLine: { color: "#7a8595", labelBackgroundColor: "#151d2c" },
       },
     });
 
