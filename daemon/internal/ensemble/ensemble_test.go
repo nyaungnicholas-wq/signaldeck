@@ -591,6 +591,25 @@ func TestCalibrateShrinksOverconfidentStreak(t *testing.T) {
 	}
 }
 
+// A rebuilt persisted per-symbol map can never DISPLAY an overconfident 1-day
+// probability, even from stale pre-shrinkage knots (the AAPL-straggler guard).
+func TestMapFromKnotsDisplayCeiling(t *testing.T) {
+	// Overconfident persisted knots (as an old high-history fit might store).
+	kx := []float64{0.2, 0.5, 0.9}
+	ky := []float64{0.05, 0.5, 0.95}
+	fn := MapFromKnots(kx, ky)
+	if hi := fn(0.9); hi > persistedCalHi+1e-9 {
+		t.Errorf("fn(0.9)=%v exceeds display ceiling %v", hi, persistedCalHi)
+	}
+	if lo := fn(0.2); lo < persistedCalLo-1e-9 {
+		t.Errorf("fn(0.2)=%v below display floor %v", lo, persistedCalLo)
+	}
+	// Still monotone through the band.
+	if !(fn(0.2) <= fn(0.5) && fn(0.5) <= fn(0.9)) {
+		t.Errorf("ceiling broke monotonicity: %v %v %v", fn(0.2), fn(0.5), fn(0.9))
+	}
+}
+
 func TestAggregateByPred(t *testing.T) {
 	// Pairs sorted by Pred; distinct levels collapse with correct means/weights.
 	sorted := []Pair{

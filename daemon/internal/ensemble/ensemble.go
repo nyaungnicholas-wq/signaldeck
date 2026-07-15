@@ -64,6 +64,20 @@ const MinCalibrationPairs = 30
 // the forced-curve rank depends on is preserved exactly.
 const calibrationPriorStrength = 25.0
 
+// persistedCalLo/Hi are the hard DISPLAY ceiling on a rebuilt PERSISTED per-
+// symbol calibration map. Shrinkage (poolAdjacentViolators) is the primary
+// tamer, but a symbol with hundreds of own outcomes has enough weight that
+// shrinkage barely moves an overfit block, and persisted knots fit before
+// shrinkage existed stay overconfident until the hourly per-symbol-learner
+// refits them. Realized 1-day directional accuracy sits near 51%, so a rebuilt
+// per-symbol map surfacing P(up,1d)=0.85 is not credible — cap the DISPLAYED
+// calibrated probability at a modest, honest band. Applied at read time, so it
+// also fixes stale persisted maps immediately without waiting for a refit.
+const (
+	persistedCalLo = 0.25
+	persistedCalHi = 0.75
+)
+
 // defaultBins is the bin count CalibrationCurve and derived helpers use when a
 // caller does not (or cannot) specify one.
 const defaultBins = 10
@@ -621,14 +635,8 @@ func MapFromKnots(kx, ky []float64) func(float64) float64 {
 	// Defensive copy so a caller mutating the slices can't change the closure.
 	xs := append([]float64(nil), kx...)
 	ys := append([]float64(nil), ky...)
-	// Honesty bound for PERSISTED knots (incl. ones stored before CalibrateKnots
-	// bounded them): any legitimate fit had n >= MinCalibrationPairs pairs, so
-	// the loosest justified frequency bound is 1/(MinCalibrationPairs+2) — a
-	// rebuilt map must never surface P(up)=0 or 1.
-	lo := 1.0 / float64(MinCalibrationPairs+2)
-	hi := 1.0 - lo
 	return func(v float64) float64 {
 		m := interpolate(xs, ys, clamp01(v))
-		return math.Min(hi, math.Max(lo, m))
+		return math.Min(persistedCalHi, math.Max(persistedCalLo, m))
 	}
 }
