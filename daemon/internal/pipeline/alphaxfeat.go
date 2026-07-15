@@ -18,11 +18,28 @@ package pipeline
 import (
 	"context"
 	"math"
+	"strings"
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
+
+// tvSignalMaxAgeSecs bounds a TradingView webhook Pine-alert: a crossing alert
+// older than a day no longer describes the current setup.
+const tvSignalMaxAgeSecs = 24 * 3600
+
+// tvSignalDir maps a TradingView alert action to a direction (+1 bull / -1 bear
+// / 0 non-directional). Free-text, so it matches the common Pine verbs.
+func tvSignalDir(action string) float64 {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "buy", "long", "bull", "bullish":
+		return 1
+	case "sell", "short", "bear", "bearish":
+		return -1
+	}
+	return 0
+}
 
 // Freshness/thinness gates for the v5 fields. Stale context is absent, never
 // silently carried forward.
@@ -198,6 +215,19 @@ func alphaSymbolFeatures(ctx context.Context, st *store.Store, s md.Symbol, now 
 
 	if r, ok := st.LatestTVRating(ctx, s.ID); ok && now.Unix()-r.Ts <= tvRecoMaxAgeSecs {
 		out["tv_reco"] = r.RecoAll
+	}
+
+	// tv_webhook_signal — direction of the latest TradingView PINE ALERT this
+	// symbol pushed to our webhook (buy/long → +1, sell/short → -1), ≤24h old.
+	// This is the daemon's ONLY compliant TradingView data path (the TV MCP is
+	// assistant-only). An EXTERNAL technical signal the model MAY learn from
+	// behind the OOS gate — never our output, and typically very sparse (only
+	// symbols with a firing alert), so absence is the norm.
+	if action, tsig, ok, err := st.LatestTVSignal(ctx, s.ID); err == nil && ok &&
+		now.Unix()-tsig <= tvSignalMaxAgeSecs {
+		if v := tvSignalDir(action); v != 0 {
+			out["tv_webhook_signal"] = v
+		}
 	}
 
 	if len(out) == 0 {

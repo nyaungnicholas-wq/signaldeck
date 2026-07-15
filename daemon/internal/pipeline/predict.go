@@ -102,7 +102,13 @@ func horizonSecs(h md.Horizon) int64 {
 // when unavailable. Same honesty contract: the OOS-lift gate is the referee —
 // neither touches a live output until it earns it. Bumped so the per-symbol GBM
 // accumulates a clean v9 labeled set instead of diluting absent-vs-zero.
-const featureVersion = 9
+// v10 (TradingView webhook wave): + tv_webhook_signal — the direction of the
+// latest TradingView Pine alert this symbol PUSHED to our webhook (the only
+// ToS-compliant TV data path; the TV MCP is assistant-only, unreachable by the
+// daemon). Sparse + weak (public technical crossings), so absence is the norm
+// and the OOS-lift gate will almost certainly find it immaterial — it earns its
+// way in or it doesn't, same contract as every other external source.
+const featureVersion = 10
 
 // ledgerModelVersion stamps each hash-chained ledger entry with the version of
 // the prediction MODEL/pipeline that produced it (Stage 3 tamper-evident

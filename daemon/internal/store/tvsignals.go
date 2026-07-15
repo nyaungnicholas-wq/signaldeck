@@ -28,6 +28,22 @@ type TVSignal struct {
 // out of the JSON the API returns.
 func (sig *TVSignal) SetRaw(raw string) { sig.rawJSON = raw }
 
+// LatestTVSignal returns the most recent TradingView webhook signal for a
+// symbol (its action + receive time) for the prediction feature. ok=false when
+// the symbol has no resolved signal yet.
+func (s *Store) LatestTVSignal(ctx context.Context, symbolID int64) (action string, ts int64, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT action, ts FROM tv_signals WHERE symbol_id=? ORDER BY ts DESC LIMIT 1`,
+		symbolID).Scan(&action, &ts)
+	if err == sql.ErrNoRows {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, err
+	}
+	return action, ts, true, nil
+}
+
 // InsertTVSignal stores one webhook signal, resolving the ticker to a tracked
 // symbol_id on a best-effort basis (NULL when we don't track it). Returns the
 // new row id.
