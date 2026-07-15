@@ -172,9 +172,13 @@ func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate f
 		return false, 0, "live edge status unavailable (" + err.Error() + ")"
 	}
 	// One independent obs per (symbol, UTC-day), keeping the latest (rows ts DESC).
+	// correct = the model got the DIRECTION right (predUp==actualUp); ups = how
+	// often the market actually rose (the base rate). Grading accuracy against a
+	// 50% coin flip is WRONG — equities close up >50% of days, so the honest
+	// benchmark is the best NAIVE constant predictor max(upRate, 1-upRate).
 	seen := map[[2]int64]bool{}
 	dayset := map[int64]bool{}
-	wins, indepN := 0, 0
+	correct, ups, indepN := 0, 0, 0
 	for _, o := range rows {
 		key := [2]int64{o.SymbolID, o.Ts / 86400}
 		if seen[key] {
@@ -183,8 +187,12 @@ func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate f
 		seen[key] = true
 		indepN++
 		dayset[o.Ts/86400] = true
-		if o.Up == 1 {
-			wins++
+		actualUp := o.Up == 1
+		if (o.Prob >= 0.5) == actualUp {
+			correct++
+		}
+		if actualUp {
+			ups++
 		}
 	}
 	distinctDays := len(dayset)
@@ -192,14 +200,22 @@ func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate f
 		return false, 0, fmt.Sprintf("live track record still thin — %d independent resolutions across %d day(s) (need %d / %d)",
 			indepN, distinctDays, trackMinIndependentN, trackMinDistinctDays)
 	}
-	winRate = float64(wins) / float64(indepN)
-	lo, _ := wilson(wins, indepN)
-	if lo > 0.5 {
-		return true, winRate, fmt.Sprintf("edge proven live: %.1f%% directional accuracy over %d independent resolutions across %d days (95%% floor %.1f%% > 50%%)",
-			winRate*100, indepN, distinctDays, lo*100)
+	acc := float64(correct) / float64(indepN)  // the model's REAL directional accuracy
+	baseUp := float64(ups) / float64(indepN)   // market up-rate
+	naive := baseUp                            // best constant predictor = max(up, 1-up)
+	naiveDir := "up"
+	if 1-baseUp > naive {
+		naive, naiveDir = 1-baseUp, "down"
 	}
-	return false, winRate, fmt.Sprintf("no proven live edge yet: %.1f%% accuracy over %d independent resolutions is within noise of a coin flip (95%% floor %.1f%% ≤ 50%%)",
-		winRate*100, indepN, lo*100)
+	lo, _ := wilson(correct, indepN) // 95% Wilson floor of the ACCURACY
+	// PROVEN only if the accuracy floor clears the naive baseline — beating a coin
+	// flip is not enough when "always up" already wins >50% of days.
+	if lo > naive {
+		return true, acc, fmt.Sprintf("edge proven live: model directional accuracy %.1f%% beats the naive 'always-%s' baseline %.1f%% over %d resolutions / %d days (95%% floor %.1f%% > %.1f%%)",
+			acc*100, naiveDir, naive*100, indepN, distinctDays, lo*100, naive*100)
+	}
+	return false, acc, fmt.Sprintf("NO measured edge: model directional accuracy %.1f%% vs the naive 'always-%s' baseline %.1f%% = %+.1fpp edge over %d resolutions / %d days — the predictions are not skillful (right ~half the time, below the baseline)",
+		acc*100, naiveDir, naive*100, (acc-naive)*100, indepN, distinctDays)
 }
 
 // compositeTopRow is one ranked row of the composite leaderboard. Rank is

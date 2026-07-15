@@ -149,9 +149,18 @@ func TestTrackRecord_UngatedMath(t *testing.T) {
 	if gated, _ := body["gated"].(bool); gated {
 		t.Fatal("expected gated=false with 40 independent obs")
 	}
-	// winRate = realized up-rate = 20/40 = 0.5.
-	if got := jnum(body, "winRate"); math.Abs(got-0.5) > 1e-9 {
-		t.Fatalf("winRate should be 0.5, got %.4f", got)
+	// winRate = DIRECTIONAL ACCURACY (predUp==actualUp): the model predicts up
+	// (0.8) on up days and down (0.2) on down days → perfectly directional → 1.0.
+	if got := jnum(body, "winRate"); math.Abs(got-1.0) > 1e-9 {
+		t.Fatalf("winRate (directional accuracy) should be 1.0, got %.4f", got)
+	}
+	// baseRate = realized up-rate = 20/40 = 0.5; naive baseline = max(0.5,0.5)=0.5;
+	// edge over the naive baseline = accuracy 1.0 − 0.5 = 0.5.
+	if got := jnum(body, "baseRate"); math.Abs(got-0.5) > 1e-9 {
+		t.Fatalf("baseRate should be 0.5, got %.4f", got)
+	}
+	if got := jnum(body, "edgeVsNaive"); math.Abs(got-0.5) > 1e-9 {
+		t.Fatalf("edgeVsNaive should be 0.5, got %.4f", got)
 	}
 	// IC of a strongly directional signal must be high (binary signal against a
 	// jittered forward return caps Pearson below 1, but it is clearly positive).

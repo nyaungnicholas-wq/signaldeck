@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net/http"
 	"sort"
@@ -74,7 +75,9 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		h = md.H1d
 	}
 
-	rows, err := d.St.ResolvedPredictionOutcomes(ctx, h, 20000)
+	// Same wide window as fleetEdgeSkill: at ~3k resolutions/day a 20k cap spans
+	// only ~7 days and wrongly RE-GATES the record now that the universe is large.
+	rows, err := d.St.ResolvedPredictionOutcomes(ctx, h, fleetSkillWindow)
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
@@ -175,13 +178,27 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── ungated: report the measured numbers, each with a CI ──
-	wins := 0
+	// winRate is the model's DIRECTIONAL ACCURACY (predUp==actualUp), NOT the
+	// market up-rate. Grading against 50% is dishonest: equities close up >50%
+	// of days, so the honest benchmark is the best NAIVE constant predictor
+	// (always guess the majority direction). edgeVsNaive<=0 means NO skill.
+	wins, ups := 0, 0
 	for _, p := range pts {
-		if p.up > 0.5 {
+		actualUp := p.up > 0.5
+		if (p.prob >= 0.5) == actualUp {
 			wins++
 		}
+		if actualUp {
+			ups++
+		}
 	}
-	winRate := float64(wins) / float64(indepN)
+	winRate := float64(wins) / float64(indepN) // directional accuracy
+	upRate := float64(ups) / float64(indepN)
+	naive := upRate // best constant predictor = max(upRate, 1-upRate)
+	naiveDir := "up"
+	if 1-upRate > naive {
+		naive, naiveDir = 1-upRate, "down"
+	}
 	loWin, hiWin := wilson(wins, indepN)
 
 	pairs := make([]ensemble.Pair, len(pts))
@@ -192,7 +209,7 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 	// Brier skill score vs the base-rate constant forecast (the only honest
 	// benchmark): 1 - Brier/Brier_baserate. >0 means better than always
 	// predicting the observed up-rate.
-	base := winRate
+	base := upRate
 	brierRef := base * (1 - base) // Brier of the constant base-rate forecast
 	var brierSkill float64
 	if brierRef > 0 {
@@ -203,7 +220,12 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 
 	resp["winRate"] = winRate
 	resp["winRateCI"] = [2]float64{loWin, hiWin}
-	resp["baseRate"] = base
+	resp["baseRate"] = upRate
+	resp["naiveBaseline"] = naive
+	resp["edgeVsNaive"] = winRate - naive
+	resp["accuracyNote"] = fmt.Sprintf("winRate is directional accuracy (predicted direction == realized); the honest benchmark is the naive 'always-%s' baseline of %.1f%%. edgeVsNaive of %+.1fpp %s.",
+		naiveDir, naive*100, (winRate-naive)*100,
+		map[bool]string{true: "means the model beats the naive guess", false: "means the model does NOT beat simply guessing the majority direction — no measured skill"}[winRate > naive])
 	resp["brier"] = brier
 	resp["brierSkill"] = brierSkill
 	resp["ic"] = ic
