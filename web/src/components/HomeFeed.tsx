@@ -115,9 +115,11 @@ function Row({ it }: { it: FeedItem }) {
             href={it.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="cursor-pointer text-[var(--text)] transition-colors duration-150 hover:text-[var(--accent)]"
+            title={`Open the original ${it.kind === "news" ? `article on ${it.source}` : "SEC filing"} (new tab)`}
+            className="cursor-pointer text-[var(--text)] underline decoration-[var(--border)] decoration-dotted underline-offset-2 transition-colors duration-150 hover:text-[var(--accent)] hover:decoration-[var(--accent)]"
           >
             {it.headline}
+            <span aria-hidden className="ml-1 text-[var(--faint)]">↗</span>
           </a>
         ) : (
           it.headline

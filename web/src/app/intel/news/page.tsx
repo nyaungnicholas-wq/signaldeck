@@ -95,9 +95,19 @@ function NewsRow({ item }: { item: NewsItem }) {
           href={item.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-2 block cursor-pointer text-sm font-bold leading-snug text-[var(--text)] transition-colors duration-150 hover:text-[var(--accent)]"
+          title={`Read the original article${item.source ? ` on ${item.source}` : ""} (opens in a new tab)`}
+          className="group mt-2 block cursor-pointer text-sm font-bold leading-snug text-[var(--text)] underline decoration-[var(--border)] decoration-dotted underline-offset-4 transition-colors duration-150 hover:text-[var(--accent)] hover:decoration-[var(--accent)]"
         >
           {item.headline || "(untitled headline)"}
+          <span aria-hidden className="ml-1 inline-block text-[var(--faint)] transition-colors duration-150 group-hover:text-[var(--accent)]">
+            ↗
+          </span>
+          <span
+            className="mt-0.5 block text-[0.7rem] font-normal not-italic"
+            style={{ color: "var(--faint)" }}
+          >
+            read the original{item.source ? ` on ${item.source}` : ""} →
+          </span>
         </a>
       ) : (
         <h2 className="mt-2 text-sm font-bold leading-snug" style={{ color: "var(--text)" }}>
