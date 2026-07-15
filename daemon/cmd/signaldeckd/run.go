@@ -67,6 +67,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	var alpacaClient *alpaca.Client
 	if cfg.HasAlpaca() {
 		alpacaClient = alpaca.New(cfg.AlpacaKey, cfg.AlpacaSecret)
+		alpacaClient.Feed = cfg.AlpacaFeed // "" → default "sip"; paid upgrade needs no code change
 	} else {
 		slog.Warn("no Alpaca keys found — stock ingestion disabled (set ALPACA_KEY/SECRET or keep them in stock-trader/.env)")
 	}

@@ -159,11 +159,11 @@ func TestNewsVolZJoinsFeatureVector(t *testing.T) {
 	if err != nil || len(feats) != 1 {
 		t.Fatalf("features: %v %v", feats, err)
 	}
-	// (featureVersion bumped 4→5 by the cross-sectional alpha wave, 5→6 by the
-	// alphax-leg wave, 6→7 by the candlestick-patterns + model-fed indicators
-	// wave, then 7→8 by the trend-structure wave — the news_vol_z field keeps
-	// riding the CURRENT vector version.)
-	if feats[0].Version != featureVersion || featureVersion != 8 {
+	// news_vol_z keeps riding the CURRENT vector version (bumped over successive
+	// feature waves: …7→8 trend-structure, 8→9 alpha-source insider/short-vol).
+	// Assert the row is stamped with the current const — never pin the const to a
+	// literal, or every future feature wave breaks this test.
+	if feats[0].Version != featureVersion {
 		t.Fatalf("news_vol_z rows must be stamped with the current version, got v%d (const %d)", feats[0].Version, featureVersion)
 	}
 	if got := feats[0].Vec["news_vol_z"]; got != z {

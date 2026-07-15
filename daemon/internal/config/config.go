@@ -16,6 +16,12 @@ type Config struct {
 	HTTPAddr      string
 	AlpacaKey     string
 	AlpacaSecret  string
+	// AlpacaFeed overrides the REST bars feed (SIGNALDECK_ALPACA_FEED). Empty →
+	// the client default "sip" (full-market historical, already requested on the
+	// free tier with a 16-min guarded tail). On a paid Algo Trader Plus upgrade
+	// nothing else changes — Alpaca simply serves the full real-time SIP the code
+	// already asks for; set this to "iex" only to force the free real-time feed.
+	AlpacaFeed string
 	HudURL        string // trader-hud summary endpoint
 	TickstreamURL string // tickstream dashboard snapshot endpoint
 	GeminiKey     string // optional: LLM polish for insights ("" = rule-based only)
@@ -127,6 +133,7 @@ func Load() Config {
 			cfg.AlpacaSecret = env["ALPACA_SECRET"]
 		}
 	}
+	cfg.AlpacaFeed = os.Getenv("SIGNALDECK_ALPACA_FEED") // "" → client default "sip"
 	return cfg
 }
 

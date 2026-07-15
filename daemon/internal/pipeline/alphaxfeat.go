@@ -50,6 +50,12 @@ const (
 	// cotSPXPattern selects the E-mini S&P 500 legacy report row (curated
 	// constant, matching the cot-poller's WantCOT filter — never user input).
 	cotSPXPattern = "%E-MINI S&P 500%"
+	// insiderWindowSecs bounds the Form 4 open-market lookback for the insider
+	// net-buy ratio — mirrors the composite factor's 90-day window.
+	insiderWindowSecs = 90 * 86400
+	// shortVolMinPrior mirrors /api/shorts' z gate: ≥10 prior days with a
+	// non-flat baseline before a short-volume z is computed at all.
+	shortVolMinPrior = 10
 )
 
 // trailingZ standardizes the LAST value of a series against the mean/stddev
@@ -148,6 +154,28 @@ func alphaSymbolFeatures(ctx context.Context, st *store.Store, s md.Symbol, now 
 		if rows, err := st.ShortInterestRecent(ctx, s.ID, 1); err == nil && len(rows) > 0 &&
 			rows[0].DaysToCover > 0 && dayWithinUTC(rows[0].Settlement, now, shortIntMaxAgeDays) {
 			out["short_int_dtc"] = rows[0].DaysToCover
+		}
+		// short_vol_z — the daily Reg SHO short-sale VOLUME ratio (distinct from
+		// the bi-monthly short INTEREST above) standardized vs the symbol's own
+		// trailing baseline. Same z gate as /api/shorts (≥10 prior days, stddev
+		// floor). NOT directional on its own — the model learns any edge behind
+		// the OOS gate; a high ratio is not itself bearish.
+		if series, err := st.ShortVolumeSeries(ctx, s.ID, 30); err == nil && len(series) > 0 {
+			ratios := make([]float64, len(series))
+			for i, r := range series {
+				ratios[i] = r.ShortPct
+			}
+			if z, ok := trailingZ(ratios, shortVolMinPrior); ok {
+				out["short_vol_z"] = z
+			}
+		}
+		// insider_net_ratio — Form 4 OPEN-MARKET net-buy ratio over 90d:
+		// (buys−sells)/(buys+sells) in [-1,1], scale-free so a mega-cap and a
+		// small-cap are comparable. Absent when no open-market P/S trades in the
+		// window (absence is information). Form 4 filings lag ~2 business days.
+		if buys, sells, nBuys, nSells, err := st.InsiderNetActivity(ctx, s.ID, now.Unix()-insiderWindowSecs); err == nil &&
+			nBuys+nSells > 0 && buys+sells > 0 {
+			out["insider_net_ratio"] = (buys - sells) / (buys + sells)
 		}
 	}
 

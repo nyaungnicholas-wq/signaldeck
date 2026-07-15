@@ -94,7 +94,15 @@ func horizonSecs(h md.Horizon) int64 {
 // firing). Bumped for the same reason every prior field-adding wave bumped:
 // the per-symbol GBM trains per version, so v7 rows accumulate their own
 // labeled set rather than dilute absent-vs-zero across the v6 rows.
-const featureVersion = 8
+// v9 (alpha-source wave): + two documented-edge sources that were ingested but
+// never reached the model — insider_net_ratio (Form 4 open-market net-buy ratio
+// over 90d, scale-free in [-1,1]) and short_vol_z (daily Reg SHO short-sale
+// VOLUME ratio z vs the symbol's own baseline; distinct from bi-monthly short
+// INTEREST). Both stocks-only, gated + freshness-bounded (alphaxfeat.go), absent
+// when unavailable. Same honesty contract: the OOS-lift gate is the referee —
+// neither touches a live output until it earns it. Bumped so the per-symbol GBM
+// accumulates a clean v9 labeled set instead of diluting absent-vs-zero.
+const featureVersion = 9
 
 // ledgerModelVersion stamps each hash-chained ledger entry with the version of
 // the prediction MODEL/pipeline that produced it (Stage 3 tamper-evident
