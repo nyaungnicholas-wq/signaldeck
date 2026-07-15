@@ -1181,6 +1181,24 @@ export interface PaperSummary {
   spanYears: number;
 }
 
+/** The expected-profit scoreboard (MONEY SCOREBOARD wave). Expectancy leads;
+ *  win rate is present but NOT the headline. profitFactor / payoffRatio are only
+ *  meaningful when their *Valid flag is true (no losing trades ⇒ undefined). */
+export interface Money {
+  trades: number;
+  winRate: number; // descriptive, NOT profitability
+  expectancy: number; // mean net profit per trade — the number that matters
+  profitFactor: number; // Σwins / Σ|losses| — only when profitFactorValid
+  avgWin: number;
+  avgLoss: number; // positive magnitude
+  payoffRatio: number; // avgWin / avgLoss — only when payoffRatioValid
+  grossWin: number;
+  grossLoss: number;
+  profitFactorValid: boolean;
+  payoffRatioValid: boolean;
+  meaningful: boolean; // false below the sample floor (≥20 trades)
+}
+
 /** The full /api/paper payload for one simulated strategy. */
 export interface PaperResponse {
   strategy: string;
@@ -1194,6 +1212,10 @@ export interface PaperResponse {
   positions: PaperPosition[];
   trades: PaperTrade[];
   summary: PaperSummary;
+  // MONEY SCOREBOARD: closed round-trips scored by expected profit; the caption
+  // reframes the whole page (win rate ≠ profit).
+  money: Money;
+  moneyCaption: string;
 }
 
 /** Fetch the simulated paper-trading book for a strategy (default flagship-1d). */
@@ -2411,10 +2433,14 @@ export function composite(symbol: string, market: Market) {
   return get<Composite>(`/api/composite?${q(symbol, market)}`);
 }
 
-/** Fetch the fleet composite ranking (no market = both markets). */
-export function compositeTop(limit = 20, market?: Market) {
+/** Fetch the fleet composite ranking (no market = both markets). horizon
+ *  defaults to 1d server-side; pass "1w" for the weekly cross-section — the
+ *  near-efficient 1-day coin flip vs the more plausible momentum/estimate-
+ *  revision edge at a week out (see EDGE_PLAN.md). */
+export function compositeTop(limit = 20, market?: Market, horizon?: "1d" | "1w") {
   const p = new URLSearchParams({ limit: String(limit) });
   if (market) p.set("market", market);
+  if (horizon) p.set("horizon", horizon);
   return get<CompositeTop>(`/api/composite/top?${p.toString()}`);
 }
 
@@ -2785,4 +2811,158 @@ export interface TrendAnalysis {
 /** Trend classification + trendlines for one symbol+timeframe (best-effort). */
 export function trend(symbol: string, market: Market, tf: "1m" | "1h" | "1d") {
   return get<TrendAnalysis>(`/api/trend?${q(symbol, market)}&tf=${tf}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SMART MONEY FACTS wave (appended block; keep at END).
+// A read of what INFORMED PARTICIPANTS ARE DOING — positioning from public
+// filings — NOT a price forecast. `caveat` renders VERBATIM on every surface.
+
+/** One decomposed factor of the Smart Money Score. */
+export interface SmartMoneyFactor {
+  key: string;
+  label: string;
+  line: string; // plain-English evidence
+  source: string; // the public filing behind it
+  value: number; // bounded [-1,1]
+  weight: number; // renormalized weight actually applied (Σ value*weight = score)
+}
+
+/** GET /api/smart-money?symbol= — one symbol's decomposed positioning score. */
+export interface SmartMoneyResponse {
+  available: boolean;
+  symbol: string;
+  market?: Market;
+  ts?: number;
+  score?: number; // [-1,1]
+  label?: string; // strong_accumulation … strong_distribution
+  caveat: string; // render verbatim
+  reason?: string; // present when available=false (honest absence)
+  factors?: SmartMoneyFactor[] | null;
+  insiderCluster?: {
+    distinctBuyers: number;
+    netValue: number; // open-market buys − sells, USD
+    windowDays: number;
+  };
+  squeeze?: {
+    daysToCover: number | null; // null = no short-interest row
+    shortVolZ: number | null; // null = below the z gate
+    funding: number | null; // null unless a fresh crypto perp snapshot
+  };
+}
+
+/** One accumulation-leaderboard row. */
+export interface SmartMoneyTopRow {
+  symbol: string;
+  market: Market;
+  score: number;
+  label: string;
+  topFactor: string; // the largest-contribution factor's label ("" if none)
+  ts: number;
+}
+
+/** GET /api/smart-money/top — the accumulation leaderboard. */
+export interface SmartMoneyTopResponse {
+  available: boolean;
+  caveat: string; // render verbatim
+  reason?: string; // present when available=false
+  rows?: SmartMoneyTopRow[] | null;
+}
+
+/** Fetch one symbol's decomposed Smart Money Score (positioning, not a forecast). */
+export function smartMoney(symbol?: string) {
+  const p = new URLSearchParams();
+  if (symbol) p.set("symbol", symbol);
+  return get<SmartMoneyResponse>(`/api/smart-money?${p.toString()}`);
+}
+
+/** Fetch the accumulation leaderboard (market omitted = both markets). */
+export function smartMoneyTop(market?: Market, limit = 50) {
+  const p = new URLSearchParams();
+  if (market) p.set("market", market);
+  p.set("limit", String(limit));
+  return get<SmartMoneyTopResponse>(`/api/smart-money/top?${p.toString()}`);
+}
+
+// ── CONFLUENCE GATE + MONEY SCOREBOARD wave ──────────────────────────────────
+// A SETUP is flagged only when several INDEPENDENT signal families AGREE on a
+// direction — shown transparently (every family's vote). It manufactures no
+// edge, is FORWARD-tracked with no lookahead, and is scored by EXPECTED PROFIT
+// (expectancy / profit factor), NOT win rate. `caveat` renders VERBATIM.
+
+/** One family's vote in a confluence assessment. */
+export interface ConfluenceVote {
+  family: string; // smart_money | trend | prediction | rel_strength | breakout
+  reason: string; // plain-English why
+  dir: number; // -1 | 0 | +1
+}
+
+/** GET /api/confluence?symbol= — one symbol's transparent confluence assessment. */
+export interface ConfluenceResponse {
+  available: boolean;
+  symbol: string;
+  market?: Market;
+  ts?: number;
+  direction?: number; // -1 | 0 | +1 net call
+  isSetup?: boolean; // cleared the agreement gate
+  agree?: number;
+  dissent?: number;
+  present?: number; // families with data this pass (absent ones excluded)
+  score?: number; // (long−short)/present ∈ [-1,1]
+  votes?: ConfluenceVote[];
+  caveat: string; // render verbatim
+  reason?: string; // present when available=false (honest absence)
+}
+
+/** One leaderboard row. */
+export interface ConfluenceTopRow {
+  symbol: string;
+  market: Market;
+  direction: number;
+  agree: number;
+  score: number;
+  isSetup: boolean;
+  ts: number;
+}
+
+/** GET /api/confluence/top — the current-setups leaderboard. */
+export interface ConfluenceTopResponse {
+  available: boolean;
+  caveat: string; // render verbatim
+  reason?: string; // present when available=false
+  rows?: ConfluenceTopRow[] | null;
+}
+
+/** GET /api/confluence/track — the accruing MONEY scoreboard over resolved,
+ *  forward-tracked setups. money/byDirection are null until BOTH gates clear. */
+export interface ConfluenceTrackResponse {
+  available: boolean;
+  live: boolean; // true — a real forward record
+  resolved: number; // independent (symbol, day) resolutions
+  gate: { minIndependent: number; distinctDays: number };
+  money: Money | null; // null while gated
+  byDirection: { long: Money; short: Money } | null;
+  note: string; // gate countdown or the expectancy-not-winrate note
+  caveat: string; // render verbatim
+}
+
+/** Fetch one symbol's transparent confluence assessment. */
+export function confluence(symbol?: string) {
+  const p = new URLSearchParams();
+  if (symbol) p.set("symbol", symbol);
+  return get<ConfluenceResponse>(`/api/confluence?${p.toString()}`);
+}
+
+/** Fetch the current-setups leaderboard (market omitted = both markets). */
+export function confluenceTop(market?: Market, limit = 50, onlySetups = false) {
+  const p = new URLSearchParams();
+  if (market) p.set("market", market);
+  p.set("limit", String(limit));
+  if (onlySetups) p.set("onlySetups", "1");
+  return get<ConfluenceTopResponse>(`/api/confluence/top?${p.toString()}`);
+}
+
+/** Fetch the accruing money scoreboard over resolved confluence setups. */
+export function confluenceTrack() {
+  return get<ConfluenceTrackResponse>(`/api/confluence/track`);
 }

@@ -37,13 +37,20 @@ func (s *Store) UpsertCompositeScore(ctx context.Context, c CompositeScore) erro
 	return err
 }
 
-// LatestCompositeScore returns a symbol's newest composite row (ok=false when
-// the symbol has never been scored — honest absence, not an error).
-func (s *Store) LatestCompositeScore(ctx context.Context, symbolID int64) (CompositeScore, bool, error) {
+// LatestCompositeScore returns a symbol's newest composite row FOR THE GIVEN
+// HORIZON (ok=false when the symbol has never been scored at that horizon —
+// honest absence, not an error). horizon="" means "any horizon, newest wins" —
+// kept for callers (desk.go) that don't distinguish 1d vs 1w.
+func (s *Store) LatestCompositeScore(ctx context.Context, symbolID int64, horizon string) (CompositeScore, bool, error) {
 	c := CompositeScore{SymbolID: symbolID}
-	err := s.db.QueryRowContext(ctx, `
-		SELECT ts, horizon, score, curve_pct, edge, payload FROM composite_scores
-		WHERE symbol_id=? ORDER BY ts DESC LIMIT 1`, symbolID).
+	q := `SELECT ts, horizon, score, curve_pct, edge, payload FROM composite_scores WHERE symbol_id=?`
+	args := []any{symbolID}
+	if horizon != "" {
+		q += ` AND horizon=?`
+		args = append(args, horizon)
+	}
+	q += ` ORDER BY ts DESC LIMIT 1`
+	err := s.db.QueryRowContext(ctx, q, args...).
 		Scan(&c.Ts, &c.Horizon, &c.Score, &c.CurvePct, &c.Edge, &c.Payload)
 	if err == sql.ErrNoRows {
 		return c, false, nil
@@ -51,35 +58,57 @@ func (s *Store) LatestCompositeScore(ctx context.Context, symbolID int64) (Compo
 	return c, err == nil, err
 }
 
-// TopCompositeScores returns each ACTIVE symbol's newest composite row joined
-// to its symbol, best score first (score DESC, then curve_pct DESC, then
-// symbol for determinism). market "" means both markets; limit <= 0 means all
-// rows (the API ranks over the full set before truncating).
-func (s *Store) TopCompositeScores(ctx context.Context, limit int, market string) ([]CompositeScore, error) {
-	return s.compositeLatestRows(ctx, 1<<62, limit, market)
+// TopCompositeScores returns each ACTIVE symbol's newest composite row AT THE
+// GIVEN HORIZON, joined to its symbol, best score first (score DESC, then
+// curve_pct DESC, then symbol for determinism). horizon="" means any horizon
+// (back-compat for callers that don't distinguish); market "" means both
+// markets; limit <= 0 means all rows (the API ranks over the full set before
+// truncating).
+func (s *Store) TopCompositeScores(ctx context.Context, limit int, market, horizon string) ([]CompositeScore, error) {
+	return s.compositeLatestRows(ctx, 1<<62, limit, market, horizon)
 }
 
-// CompositeScoresBefore returns each active symbol's newest composite row
-// with ts < cutoff — the previous pass set the API computes rank-change
-// against (e.g. cutoff = start of today UTC for "vs previous day").
-func (s *Store) CompositeScoresBefore(ctx context.Context, cutoff int64, market string) ([]CompositeScore, error) {
-	return s.compositeLatestRows(ctx, cutoff, 0, market)
+// CompositeScoresBefore returns each active symbol's newest composite row AT
+// THE GIVEN HORIZON with ts < cutoff — the previous pass set the API computes
+// rank-change against (e.g. cutoff = start of today UTC for "vs previous day").
+func (s *Store) CompositeScoresBefore(ctx context.Context, cutoff int64, market, horizon string) ([]CompositeScore, error) {
+	return s.compositeLatestRows(ctx, cutoff, 0, market, horizon)
 }
 
 // compositeLatestRows is the shared newest-row-per-symbol read (same window
-// pattern as LatestPredictionsAll): rows with ts < cutoff, optional market
-// filter, ordered best score first.
-func (s *Store) compositeLatestRows(ctx context.Context, cutoff int64, limit int, market string) ([]CompositeScore, error) {
+// pattern as LatestPredictionsAll): rows with ts < cutoff, optional market AND
+// horizon filter, ordered best score first. The MAX(ts) subquery is itself
+// horizon-scoped so a symbol's 1d and 1w rows never leak into each other's
+// "latest" — without this a fresher 1w write would silently shadow a 1d row.
+func (s *Store) compositeLatestRows(ctx context.Context, cutoff int64, limit int, market, horizon string) ([]CompositeScore, error) {
+	sub := `SELECT symbol_id, MAX(ts) AS mx FROM composite_scores WHERE ts < ?`
+	subArgs := []any{cutoff}
+	if horizon != "" {
+		sub += ` AND horizon=?`
+		subArgs = append(subArgs, horizon)
+	}
+	sub += ` GROUP BY symbol_id`
+
 	q := `
 		SELECT c.symbol_id, sy.symbol, sy.market, c.ts, c.horizon, c.score, c.curve_pct, c.edge, c.payload
 		FROM composite_scores c
-		JOIN (SELECT symbol_id, MAX(ts) AS mx FROM composite_scores WHERE ts < ? GROUP BY symbol_id) t
-		  ON t.symbol_id = c.symbol_id AND t.mx = c.ts
+		JOIN (` + sub + `) t ON t.symbol_id = c.symbol_id AND t.mx = c.ts
 		JOIN symbols sy ON sy.id = c.symbol_id AND sy.active = 1`
-	args := []any{cutoff}
+	args := append([]any{}, subArgs...)
+	where := []string{}
+	if horizon != "" {
+		where = append(where, `c.horizon=?`)
+		args = append(args, horizon)
+	}
 	if market != "" {
-		q += ` WHERE sy.market = ?`
+		where = append(where, `sy.market=?`)
 		args = append(args, market)
+	}
+	if len(where) > 0 {
+		q += ` WHERE ` + where[0]
+		for _, w := range where[1:] {
+			q += ` AND ` + w
+		}
 	}
 	q += ` ORDER BY c.score DESC, c.curve_pct DESC, sy.symbol`
 	if limit > 0 {

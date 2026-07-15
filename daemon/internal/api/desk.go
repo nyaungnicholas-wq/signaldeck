@@ -104,7 +104,7 @@ func (d Deps) deskRecommendation(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, err.Error())
 		return
 	}
-	row, ok, err := d.St.LatestCompositeScore(ctx, s.ID)
+	row, ok, err := d.St.LatestCompositeScore(ctx, s.ID, string(md.H1d))
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
@@ -284,7 +284,7 @@ func (d Deps) appendRecAudit(ctx context.Context, s md.Symbol, rec recommendatio
 func (d Deps) deskTop(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	limit := limitParam(r, 12, 50)
-	rows, err := d.St.TopCompositeScores(ctx, 0, "")
+	rows, err := d.St.TopCompositeScores(ctx, 0, "", string(md.H1d))
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return

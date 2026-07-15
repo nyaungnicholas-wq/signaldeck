@@ -26,7 +26,7 @@ func TestCompositeScoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, ok, err := st.LatestCompositeScore(ctx, sym.ID); err != nil || ok {
+	if _, ok, err := st.LatestCompositeScore(ctx, sym.ID, ""); err != nil || ok {
 		t.Fatalf("empty table: ok=%v err=%v, want honest absence", ok, err)
 	}
 
@@ -45,7 +45,7 @@ func TestCompositeScoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, ok, err := st.LatestCompositeScore(ctx, sym.ID)
+	got, ok, err := st.LatestCompositeScore(ctx, sym.ID, "")
 	if err != nil || !ok {
 		t.Fatalf("latest: ok=%v err=%v", ok, err)
 	}
@@ -76,7 +76,7 @@ func TestTopCompositeScoresAndBefore(t *testing.T) {
 		}
 	}
 
-	top, err := st.TopCompositeScores(ctx, 0, "")
+	top, err := st.TopCompositeScores(ctx, 0, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,13 +88,13 @@ func TestTopCompositeScoresAndBefore(t *testing.T) {
 	}
 
 	// Market filter + limit.
-	stocks, err := st.TopCompositeScores(ctx, 1, "stocks")
+	stocks, err := st.TopCompositeScores(ctx, 1, "stocks", "")
 	if err != nil || len(stocks) != 1 || stocks[0].Symbol != "NVDA" {
 		t.Fatalf("stocks top-1 = %+v (err %v)", stocks, err)
 	}
 
 	// The previous pass set: rows strictly before today's pass.
-	prev, err := st.CompositeScoresBefore(ctx, today, "")
+	prev, err := st.CompositeScoresBefore(ctx, today, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestTopCompositeScoresAndBefore(t *testing.T) {
 	if err := st.SetSymbolActive(ctx, btc.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	top, err = st.TopCompositeScores(ctx, 0, "")
+	top, err = st.TopCompositeScores(ctx, 0, "", "")
 	if err != nil || len(top) != 2 {
 		t.Fatalf("after deactivate: %d rows (err %v), want 2", len(top), err)
 	}

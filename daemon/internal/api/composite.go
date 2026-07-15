@@ -52,13 +52,26 @@ const (
 // compositeDetail serves one symbol's latest SignalScore with its full
 // evidence payload (factor tiles + additive ledger).
 // GET /api/composite?symbol=&market=
+// compositeHorizon reads ?horizon= (default 1d), honoring only the horizons
+// the scorer actually produces (1d, 1w) — anything else falls back to 1d
+// rather than silently returning an empty/mixed result.
+func compositeHorizon(r *http.Request) md.Horizon {
+	switch md.Horizon(r.URL.Query().Get("horizon")) {
+	case md.H1w:
+		return md.H1w
+	default:
+		return md.H1d
+	}
+}
+
 func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 	s, err := d.symbolFromQuery(r)
 	if err != nil {
 		httpErr(w, 404, err.Error())
 		return
 	}
-	row, ok, err := d.St.LatestCompositeScore(r.Context(), s.ID)
+	horizon := compositeHorizon(r)
+	row, ok, err := d.St.LatestCompositeScore(r.Context(), s.ID, string(horizon))
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
@@ -242,25 +255,31 @@ type compositeTopRow struct {
 
 // compositeTop serves the ranked SignalScore leaderboard with rank-change
 // movers vs the previous day's pass.
-// GET /api/composite/top?limit=&market=
+// GET /api/composite/top?limit=&market=&horizon=1d|1w (default 1d)
 func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	market := ""
 	if m := md.Market(r.URL.Query().Get("market")); m == md.Crypto || m == md.Stocks {
 		market = string(m)
 	}
+	horizon := compositeHorizon(r)
 	limit := limitParam(r, 50, 500)
 
 	// Rank over the FULL latest set, then truncate — a limited read must not
 	// change anyone's rank.
-	rows, err := d.St.TopCompositeScores(ctx, 0, market)
+	rows, err := d.St.TopCompositeScores(ctx, 0, market, string(horizon))
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
 	}
-	// Previous day's pass: each symbol's newest row before today (UTC).
+	// Previous PASS: 1d compares vs the start of today (UTC); 1w compares vs 7
+	// days ago, so "previous" means the last weekly pass, not yesterday's.
 	startOfToday := time.Now().UTC().Truncate(24 * time.Hour).Unix()
-	prev, err := d.St.CompositeScoresBefore(ctx, startOfToday, market)
+	cutoff := startOfToday
+	if horizon == md.H1w {
+		cutoff = startOfToday - 7*86400
+	}
+	prev, err := d.St.CompositeScoresBefore(ctx, cutoff, market, string(horizon))
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
@@ -300,7 +319,7 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 		out = append(out, row)
 	}
 	writeJSON(w, map[string]any{
-		"horizon":       string(md.H1d),
+		"horizon":       string(horizon),
 		"rows":          out,
 		"n":             len(out),
 		"total":         len(rows),

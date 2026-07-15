@@ -65,7 +65,7 @@ func TestCompositeScorerGatesBelowMinCurveN(t *testing.T) {
 		t.Fatalf("gate detail = %q — must say the pass was gated and why", detail)
 	}
 	for _, id := range ids {
-		if _, ok, err := st.LatestCompositeScore(ctx, id); err != nil || ok {
+		if _, ok, err := st.LatestCompositeScore(ctx, id, "1d"); err != nil || ok {
 			t.Fatalf("symbol %d has a composite row despite the gate (ok=%v err=%v)", id, ok, err)
 		}
 	}
@@ -99,7 +99,7 @@ func TestCompositeScorerEmitsForcedCurve(t *testing.T) {
 
 	counts := map[int]int{}
 	for i, id := range ids {
-		row, ok, err := st.LatestCompositeScore(ctx, id)
+		row, ok, err := st.LatestCompositeScore(ctx, id, "1d")
 		if err != nil || !ok {
 			t.Fatalf("symbol %d: no composite row (err %v)", id, err)
 		}

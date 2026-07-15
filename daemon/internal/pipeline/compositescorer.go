@@ -43,16 +43,34 @@ const compositeInsiderWindow = 90 * 86400
 // compositeBreakoutWindow is the recency window for the breakout factor.
 const compositeBreakoutWindow = 7 * 86400
 
-// CompositeScorer computes and persists the composite SignalScore rows.
+// CompositeScorer computes and persists the composite SignalScore rows for ONE
+// horizon. Horizon="" defaults to 1d (back-compat with the original single-
+// horizon worker); register a second instance with Horizon:md.H1w to also
+// score the weekly cross-section — momentum/estimate-revision edges are more
+// plausible at 1w than the near-efficient 1d coin flip (see EDGE_PLAN.md).
 type CompositeScorer struct {
-	St *store.Store
+	St      *store.Store
+	Horizon md.Horizon // "" -> md.H1d
 }
 
-func (w *CompositeScorer) Name() string            { return "composite-scorer" }
+func (w *CompositeScorer) horizon() md.Horizon {
+	if w.Horizon == "" {
+		return md.H1d
+	}
+	return w.Horizon
+}
+
+func (w *CompositeScorer) Name() string {
+	if w.horizon() == md.H1w {
+		return "composite-scorer-1w"
+	}
+	return "composite-scorer"
+}
 func (w *CompositeScorer) Interval() time.Duration { return 10 * time.Minute }
 
 func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
-	preds, err := w.St.LatestPredictionsForScoring(ctx, md.H1d)
+	h := w.horizon()
+	preds, err := w.St.LatestPredictionsForScoring(ctx, h)
 	if err != nil {
 		return "", err
 	}
@@ -110,7 +128,11 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 	// CADENCE SPLIT (live-everything wave): hot set + crypto every run; the
 	// broad universe every 10m market-open / once per UTC day closed (see
 	// universecadence.go). Same meta-cursor pattern as the PredictionRunner.
-	doUniverse, universeCursor := universeDue(ctx, w.St, "composite_universe_day", time.Now())
+	universeCadenceKey := "composite_universe_day"
+	if h == md.H1w {
+		universeCadenceKey = "composite_universe_day_1w"
+	}
+	doUniverse, universeCursor := universeDue(ctx, w.St, universeCadenceKey, time.Now())
 
 	// One-query-per-fleet context (best-effort, same as the PredictionRunner:
 	// an error only means those factors gate as absent this pass).
@@ -209,7 +231,7 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 		}
 
 		payload := composite.Payload{
-			Horizon: string(md.H1d),
+			Horizon: string(h),
 			Edge:    p.CalProb - 0.5,
 			RawProb: p.RawProb,
 			CalProb: p.CalProb,
@@ -225,7 +247,7 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 		if err := w.St.UpsertCompositeScore(ctx, store.CompositeScore{
 			SymbolID: p.SymbolID,
 			Ts:       ts,
-			Horizon:  string(md.H1d),
+			Horizon:  string(h),
 			Score:    cs.Score,
 			CurvePct: cs.Pct,
 			Edge:     p.CalProb - 0.5,
@@ -237,7 +259,7 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 	}
 	if doUniverse {
 		// Only after a clean full pass, so a mid-run error retries next tick.
-		_ = w.St.SetMeta(ctx, "composite_universe_day", universeCursor)
+		_ = w.St.SetMeta(ctx, universeCadenceKey, universeCursor)
 	}
 	detail := fmt.Sprintf("scored %d symbol(s) on a %d-symbol forced curve (universe pass: %v)", n, len(eligible), doUniverse)
 	if parseErrs > 0 {

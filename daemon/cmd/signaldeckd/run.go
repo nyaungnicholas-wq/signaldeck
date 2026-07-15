@@ -381,6 +381,24 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// /api/candle-patterns. BEFORE the watchdog spec snapshot so it's
 	// health-audited like every other worker.
 	fleet = append(fleet, patternStatsWorkers(st)...)
+	// SMART MONEY FACTS wave (constructor appended at the END of this file) —
+	// smart-money-scorer (1h): turns ALREADY-INGESTED positioning data (Form 4
+	// open-market insiders, FINRA short interest / Reg SHO short volume, crypto
+	// perp funding, 13F holdings) into ONE transparent, decomposed per-symbol
+	// Smart Money Score + two deduped events (insider-cluster buy, squeeze
+	// setup). A read of what informed participants are DOING, NOT a forecast.
+	// BEFORE the watchdog spec snapshot so it's health-audited like every
+	// other worker.
+	fleet = append(fleet, smartMoneyWorkers(st)...)
+	// CONFLUENCE GATE + MONEY SCOREBOARD wave (constructor appended at the END of
+	// this file) — confluence-scorer (30m): flags a SETUP only when several
+	// INDEPENDENT signal families (smart-money, trend, prediction, relative-
+	// strength, breakout) AGREE on a direction, stored transparently, and
+	// forward-tracks each flagged setup with NO lookahead; confluence-resolver
+	// (15m): grades matured setups against realized bars to feed the money
+	// scoreboard (scored by EXPECTED PROFIT, not win rate). BEFORE the watchdog
+	// spec snapshot so both are health-audited like every other worker.
+	fleet = append(fleet, confluenceWorkers(st)...)
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -632,6 +650,10 @@ func learningWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.SentimentAggregator{St: st},
 		&pipeline.AdaptiveWeightsWorker{St: st},
+		// Research Lab: postmortem-runner (1h) attributes every resolved WRONG,
+		// meaningfully-convicted prediction to a ranked failure taxonomy and
+		// stores it, so misses can be clustered and mined for new hypotheses.
+		pipeline.NewPostmortemWorker(st),
 	}
 }
 
@@ -1025,7 +1047,8 @@ func runSICBulkOnce(ctx context.Context, st *store.Store) (string, error) {
 // fabricate 10s and 1s.
 func compositeWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
-		&pipeline.CompositeScorer{St: st},
+		&pipeline.CompositeScorer{St: st},                       // 1d (default)
+		&pipeline.CompositeScorer{St: st, Horizon: md.H1w}, // 1w — see EDGE_PLAN.md: momentum/estimate-revision edges are more plausible at 1w than 1d
 	}
 }
 
@@ -1244,6 +1267,35 @@ func sourceAuditWorkers(cfg config.Config, st *store.Store) []workers.Worker {
 func patternStatsWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.PatternStatsRunner{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SMART MONEY FACTS wave (appended block).
+// smartMoneyWorkers returns the wave's worker: smart-money-scorer (1h) — turns
+// ALREADY-INGESTED positioning data (SEC Form 4 open-market insider trades,
+// FINRA short interest / Reg SHO short volume, crypto perp funding, SEC 13F
+// holdings) into ONE transparent, decomposed per-symbol Smart Money Score via
+// the PURE internal/smartmoney engine, and emits two day-deduped positioning
+// events (insider_cluster, squeeze_setup). Best-effort per source (an absent
+// source drops out, never imputed as 0); a symbol with no positioning data is
+// simply not scored. HONESTY: a read of what informed participants are DOING,
+// NOT a price forecast — /api/smart-money carries that caveat verbatim.
+func smartMoneyWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.SmartMoneyScorer{St: st},
+	}
+}
+
+// confluenceWorkers builds the CONFLUENCE GATE + MONEY SCOREBOARD wave workers:
+// the scorer (30m — flags setups only on INDEPENDENT-family agreement + forward-
+// tracks them) and the resolver (15m — grades matured setups against realized
+// bars for the expected-profit scoreboard). Both are pure glue over the PURE
+// internal/confluence engine + the store; no broker, no lookahead.
+func confluenceWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.ConfluenceScorer{St: st},
+		&pipeline.ConfluenceResolver{St: st},
 	}
 }
 

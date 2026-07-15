@@ -109,13 +109,17 @@ export default function CompositeLeaderboard({
   // View follows the SIMPLE/PRO toggle until the user pins a choice.
   const [view, setView] = useState<View | null>(null);
   const [expanded, setExpanded] = useState(false);
+  // 1d (near-efficient, coin-flip) vs 1w (momentum/estimate-revision edges are
+  // more plausible at a week out) — see EDGE_PLAN.md. Resetting resp on switch
+  // avoids showing stale 1d rows tagged as 1w while the new fetch is in flight.
+  const [horizon, setHorizon] = useState<"1d" | "1w">("1d");
   const mode = useViewMode();
   const effView: View = view ?? (mode === "simple" ? "cards" : "table");
 
   useEffect(() => {
     let alive = true;
     const load = () =>
-      compositeTop(FETCH_LIMIT)
+      compositeTop(FETCH_LIMIT, undefined, horizon)
         .then((r) => {
           if (!alive) return;
           setResp(r);
@@ -132,7 +136,7 @@ export default function CompositeLeaderboard({
       alive = false;
       stop();
     };
-  }, [retryTick]);
+  }, [retryTick, horizon]);
 
   // 30d closes from the public screener payload (fetched gently — it is the
   // whole universe). Failure is soft: rows render without sparklines.
@@ -157,7 +161,10 @@ export default function CompositeLeaderboard({
     };
   }, []);
 
-  const allRows = resp?.rows ?? [];
+  // A response for the PREVIOUS horizon is stale during a switch — treat it as
+  // "still loading" rather than flashing the wrong horizon's rows.
+  const fresh = resp !== null && resp.horizon === horizon;
+  const allRows = fresh ? (resp?.rows ?? []) : [];
   const rows = expanded ? allRows : allRows.slice(0, COLLAPSED_COUNT);
   const total = resp?.total ?? 0;
   const notDeployed = err !== null && err.includes("404");
@@ -174,6 +181,28 @@ export default function CompositeLeaderboard({
             </span>
           </>
         )}
+        {/* 1d ↔ 1w horizon — 1d is a near-efficient coin flip (see the honesty
+            footer); momentum/estimate-revision edges are more plausible at a
+            week out. Switching refetches; stale rows are cleared first. */}
+        <span className="flex items-center gap-1" role="tablist" aria-label="leaderboard horizon">
+          {(["1d", "1w"] as const).map((h) => (
+            <button
+              key={h}
+              type="button"
+              role="tab"
+              aria-selected={horizon === h}
+              onClick={() => setHorizon(h)}
+              title={h === "1w" ? "weekly cross-section — momentum/estimate-revision edges are more plausible here than 1-day direction" : "1-day cross-section"}
+              className="chip min-h-[36px] cursor-pointer px-3 uppercase transition-colors duration-150 hover:brightness-125"
+              style={{
+                color: horizon === h ? "var(--accent)" : "var(--dim)",
+                borderColor: horizon === h ? "var(--accent)" : "var(--border)",
+              }}
+            >
+              {h}
+            </button>
+          ))}
+        </span>
         {/* cards ↔ table toggle — default follows SIMPLE/PRO, a click pins */}
         <span className="flex items-center gap-1" role="tablist" aria-label="leaderboard view">
           {(["cards", "table"] as View[]).map((v) => (
@@ -203,7 +232,7 @@ export default function CompositeLeaderboard({
         )}
       </div>
 
-      {resp === null && err === null && (
+      {!fresh && err === null && (
         <div className="p-4">
           <Skeleton lines={5} label="loading the composite leaderboard" />
         </div>
