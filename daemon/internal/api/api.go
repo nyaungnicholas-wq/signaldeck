@@ -81,6 +81,8 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerAlerts(mux)                                  // alerts wave: per-user alerts list + mark-seen
 	d.registerDiscovery(mux)                               // discovery wave: candidates list/add/dismiss
 	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights) // learning-flywheel wave: learned per-regime ensemble weights
+	mux.HandleFunc("GET /api/postmortems", d.postmortems)  // Research Lab: clustered failure attribution over resolved WRONG predictions
+	mux.HandleFunc("GET /api/research", d.research)         // Research Lab: hypothesis registry (shadow/promoted/rejected) + advisory feedback
 	mux.HandleFunc("GET /api/universe", d.universe)        // broad-universe wave: streamed-count vs daily-universe-count + caps
 	mux.HandleFunc("GET /api/symbol-agent", d.symbolAgent) // per-symbol agents wave: one symbol's own model (tier + personality + skill + active weights)
 	d.registerFreeData(mux)                                // free-data wave (Stage 2): FRED macro series + SEC EDGAR fundamentals
@@ -127,6 +129,13 @@ func Serve(ctx context.Context, d Deps) error {
 	// ── AI RESEARCH DESK wave (appended — keep new routes at the END of this
 	// block so parallel route edits by other agents never collide) ───────────
 	d.registerDesk(mux) // AI Research Desk: GET /api/world-model (+/shocks +/propagate) = live macro causal graph + shock propagation; GET /api/recommendation (explain-every-rec structured card assembled from real composite+conviction+fundamentals+expectancy, 9 deterministic agent views, reproducible hash-chained audit) + GET /api/recommendation/top (high-conviction opportunities); relative-rank read, heuristic fair value labeled, not advice
+	// ── SMART MONEY FACTS wave (appended — keep new routes at the END of this
+	// block so parallel route edits by other agents never collide) ───────────
+	d.registerSmartMoney(mux) // GET /api/smart-money[?symbol&market] (one symbol's decomposed Smart Money Score — insider/squeeze/institutional factors with lines+sources) + GET /api/smart-money/top[?market&limit] (accumulation leaderboard w/ top factor); a read of what informed participants are DOING from public filings, NOT a forecast — caveat verbatim in every payload
+	// ── CONFLUENCE GATE + MONEY SCOREBOARD wave (appended — keep new routes at
+	// the END of this block so parallel route edits by other agents never collide) ──
+	d.registerConfluence(mux) // GET /api/confluence[?symbol&market] (one symbol's transparent confluence — every INDEPENDENT family's vote+reason, agree/dissent/score, isSetup) + GET /api/confluence/top[?market&limit&onlySetups] (leaderboard of current setups) + GET /api/confluence/track (accruing MONEY scoreboard over FORWARD-tracked resolved setups — expectancy/profit-factor, independent-N gated); no manufactured edge, no lookahead, scored by EXPECTED PROFIT not win rate — caveat verbatim
+	d.registerAttribution(mux) // attribution-engine wave: GET /api/attribution[?symbol&market&horizon] — BLENDED-EVIDENCE report fusing a regime/state-conditioned HISTORICAL prior (~2y expectancy) with LIVE resolved outcomes, kept strictly separate + sample-size-weighted; reports both Ns, regime-match quality, calibrated prob + Wilson band, and whether attribution is supported or underpowered (thin live volume != no edge)
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,
