@@ -48,6 +48,7 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   { source: "/signals", destination: "/signals/predictions" },
   { source: "/intel", destination: "/intel/news" },
   { source: "/lab", destination: "/lab/backtest" },
+  { source: "/desk", destination: "/desk/overview" },
   // Stage 5: /lab/system is now a real page (quality + agents + AI mounted
   // together), so its old redirect-to-quality is gone.
 ];

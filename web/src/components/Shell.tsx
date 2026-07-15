@@ -14,6 +14,7 @@ import OfflineBanner from "@/components/OfflineBanner";
 // next.config redirect lands.
 const NAV: { href: string; label: string; match: string[] }[] = [
   { href: "/", label: "DASHBOARD", match: ["/"] },
+  { href: "/desk/overview", label: "DESK", match: ["/desk"] },
   { href: "/live", label: "LIVE", match: ["/live"] },
   {
     href: "/markets/screener",

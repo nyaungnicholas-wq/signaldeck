@@ -124,6 +124,9 @@ func Serve(ctx context.Context, d Deps) error {
 	// this block so parallel route edits by other agents never collide) ──────
 	d.registerCandlePatterns(mux) // GET /api/candle-patterns — candlestick patterns firing over the recent ~200 daily bars (no-pattern bars omitted), each annotated with its MEASURED edge on this symbol's own history where n>=15 (else null); caveat verbatim: patterns are WEAK, context-only signals; measured hit-rate is descriptive, not advice
 	d.registerTrendRead(mux)      // GET /api/trend — geometric trend read (uptrend|downtrend|range) + regression slope + fitted support/resistance trendlines + channel flag over the recent daily window; thin history returns a gate reason; caveat verbatim: descriptive read from recent swings, trendlines are fitted, not predictive
+	// ── AI RESEARCH DESK wave (appended — keep new routes at the END of this
+	// block so parallel route edits by other agents never collide) ───────────
+	d.registerDesk(mux) // AI Research Desk: GET /api/world-model (+/shocks +/propagate) = live macro causal graph + shock propagation; GET /api/recommendation (explain-every-rec structured card assembled from real composite+conviction+fundamentals+expectancy, 9 deterministic agent views, reproducible hash-chained audit) + GET /api/recommendation/top (high-conviction opportunities); relative-rank read, heuristic fair value labeled, not advice
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,

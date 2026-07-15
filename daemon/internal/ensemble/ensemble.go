@@ -51,6 +51,19 @@ import (
 // Calibrate returns the identity map and reports calibrated=false.
 const MinCalibrationPairs = 30
 
+// calibrationPriorStrength is the empirical-Bayes pseudocount used to SHRINK
+// each isotonic block's fitted frequency toward the dataset base rate. A block
+// backed by w real pairs is pulled toward the base rate as if it also carried
+// calibrationPriorStrength coin-flip pairs: with thin per-symbol data (blocks
+// of a handful of pairs over ~10 days) this dominates and the calibrated
+// probability stays near the base rate; with a heavily-populated global block
+// (hundreds of pairs) it barely moves. This is the fix for degenerate per-
+// symbol calibration that mapped a short up-streak to P(up,1d)=0.85–0.96 —
+// overconfident probabilities no realized 1-day accuracy could support. It is
+// monotonic (a convex combination with a constant), so the isotonic ordering
+// the forced-curve rank depends on is preserved exactly.
+const calibrationPriorStrength = 25.0
+
 // defaultBins is the bin count CalibrationCurve and derived helpers use when a
 // caller does not (or cannot) specify one.
 const defaultBins = 10
@@ -467,6 +480,20 @@ func poolAdjacentViolators(levels []levelStat) (kx, ky []float64) {
 	}
 	blocks := make([]block, 0, len(levels))
 
+	// Base rate = overall weighted mean of realized outcomes — the empirical
+	// prior each block is shrunk toward (below). For 1-day up/down this sits
+	// near a coin flip; a market with real drift gets its own honest prior.
+	var sumW int
+	var sumWM float64
+	for _, lv := range levels {
+		sumW += lv.weight
+		sumWM += lv.mean * float64(lv.weight)
+	}
+	base := 0.5
+	if sumW > 0 {
+		base = sumWM / float64(sumW)
+	}
+
 	for _, lv := range levels {
 		b := block{mean: lv.mean, weight: lv.weight, span: 1}
 		// Merge with the previous block while it violates monotonicity, i.e.
@@ -498,8 +525,15 @@ func poolAdjacentViolators(levels []levelStat) (kx, ky []float64) {
 	ky = make([]float64, 0, len(levels))
 	li := 0
 	for _, b := range blocks {
+		// SHRINK the fitted frequency toward the base rate by sample size
+		// (empirical Bayes): (w·mean + k·base)/(w + k). Thin blocks collapse to
+		// the base rate; data-rich blocks keep their fit. This is what stops a
+		// short per-symbol up-streak from calibrating to an overconfident 0.85+.
+		m := (float64(b.weight)*b.mean + calibrationPriorStrength*base) / (float64(b.weight) + calibrationPriorStrength)
+		// Rule-of-succession hard cap on top (a block of w pairs can never claim
+		// a frequency outside [1/(w+2),(w+1)/(w+2)]) — belt to the shrinkage braces.
 		lo := 1.0 / float64(b.weight+2)
-		v := math.Min(1.0-lo, math.Max(lo, b.mean))
+		v := math.Min(1.0-lo, math.Max(lo, m))
 		for k := 0; k < b.span; k++ {
 			kx = append(kx, levels[li].x)
 			ky = append(ky, v)

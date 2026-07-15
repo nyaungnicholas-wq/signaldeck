@@ -541,17 +541,53 @@ func TestPoolAdjacentViolatorsMonotone(t *testing.T) {
 		}
 		prev = y
 	}
-	// The leading violation [1,0,0] pools to mean 1/3 over the first 3 levels.
+	// Base rate = weighted mean of all outcomes = 3/5 = 0.6; every block is
+	// SHRUNK toward it by calibrationPriorStrength (k=25) pseudo-pairs.
+	// The leading violation [1,0,0] pools to raw mean 1/3 over 3 pairs, then
+	// shrinks: (3·(1/3) + 25·0.6)/(3+25) = 16/28 = 4/7 ≈ 0.571.
 	for i := 0; i < 3; i++ {
-		if !approx(ky[i], 1.0/3.0, 1e-9) {
-			t.Errorf("ky[%d]=%v, want 1/3 after pooling", i, ky[i])
+		if !approx(ky[i], 4.0/7.0, 1e-9) {
+			t.Errorf("ky[%d]=%v, want 4/7 (pooled 1/3 shrunk toward base 0.6)", i, ky[i])
 		}
 	}
-	// The last two levels (means 1,1) are separate weight-1 blocks: the rule-
-	// of-succession bound caps a w=1 block at (1+1)/(1+2) = 2/3 — a single
-	// one-sided observation must never persist a certainty knot.
-	if !approx(ky[3], 2.0/3.0, 1e-9) || !approx(ky[4], 2.0/3.0, 1e-9) {
-		t.Errorf("ky[3:5]=%v,%v want 2/3,2/3 (succession-bounded)", ky[3], ky[4])
+	// The last two levels (means 1,1) are separate weight-1 blocks: shrinkage
+	// pulls each to (1·1 + 25·0.6)/(1+25) = 16/26 = 8/13 ≈ 0.615 — well inside
+	// the rule-of-succession cap of 2/3, so a lone one-sided observation can
+	// never persist an overconfident knot.
+	if !approx(ky[3], 8.0/13.0, 1e-9) || !approx(ky[4], 8.0/13.0, 1e-9) {
+		t.Errorf("ky[3:5]=%v,%v want 8/13 (shrunk toward base)", ky[3], ky[4])
+	}
+}
+
+// TestCalibrateShrinksOverconfidentStreak is the regression for the degenerate
+// per-symbol calibration: a thin history where every high prediction rode a
+// short up-streak used to map to a near-certain P(up,1d). Shrinkage toward the
+// base rate must keep it moderate.
+func TestCalibrateShrinksOverconfidentStreak(t *testing.T) {
+	var pairs []Pair
+	for i := 0; i < 15; i++ {
+		pairs = append(pairs, Pair{Pred: 0.3, Actual: 0}) // low preds resolved down
+	}
+	for i := 0; i < 15; i++ {
+		pairs = append(pairs, Pair{Pred: 0.8, Actual: 1}) // high preds ALL up (streak)
+	}
+	fn, ok := Calibrate(pairs)
+	if !ok {
+		t.Fatal("expected calibration to fit with 30 pairs")
+	}
+	hi := fn(0.8)
+	// Without shrinkage the isotonic fit maps 0.8 → ~1.0 (overconfident). With
+	// the k=25 base-rate prior over w=15 it must stay well below 0.8.
+	if hi >= 0.75 {
+		t.Errorf("calibrated P(up) at 0.8 = %.3f — still overconfident; expected shrinkage below 0.75", hi)
+	}
+	// Still directional and monotone (a real, modest lean, not a coin flip).
+	lo := fn(0.3)
+	if lo >= hi {
+		t.Errorf("calibration must stay monotone: fn(0.3)=%.3f fn(0.8)=%.3f", lo, hi)
+	}
+	if hi <= 0.5 {
+		t.Errorf("calibrated P(up) at 0.8 = %.3f collapsed below the base rate — over-shrunk", hi)
 	}
 }
 

@@ -15,11 +15,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/composite"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
+
+// fleetSkillWindow is how many recent resolved 1d outcomes fleetEdgeSkill scans.
+// It MUST comfortably span the trackMinDistinctDays (10) distinct market days
+// even as the monitored universe grows — at ~3k resolutions/day a 20k cap only
+// reached ~7 days, which wrongly RE-GATED the live track record to "0% / not
+// proven". 120k spans ~40 days at current volume (still >10 if the universe
+// doubles). The dedup to one obs per (symbol, UTC-day) runs over this window.
+const fleetSkillWindow = 120000
+
+// fleetSkillCache memoizes the fleet-wide live-edge grade (it changes only as
+// outcomes resolve, hours apart) so the 120k-row scan fires at most once per
+// fleetSkillTTL instead of on every composite/recommendation read.
+var fleetSkillCache struct {
+	sync.Mutex
+	at      time.Time
+	proven  bool
+	winRate float64
+	note    string
+	valid   bool
+}
+
+const fleetSkillTTL = 60 * time.Second
 
 const (
 	compositeCurveNote = "score 1-10 is a FORCED cross-sectional curve over all symbols scored in the pass (top 5% = 10 … bottom 5% = 1) — a rank on today's cross-section, not a probability; below 30 usable predictions no scores are emitted at all"
@@ -125,7 +148,26 @@ func honestEdgeLine(calProb float64, proven bool, winRate float64) string {
 // rate's 95% Wilson lower bound sits above a coin flip. Best-effort: any error
 // returns "not proven" with a stated reason — never a fabricated pass.
 func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, winRate float64, note string) {
-	rows, err := d.St.ResolvedPredictionOutcomes(ctx, md.H1d, 20000)
+	// Serve from the short-TTL cache when fresh (the 120k-row scan is heavy).
+	fleetSkillCache.Lock()
+	if fleetSkillCache.valid && time.Since(fleetSkillCache.at) < fleetSkillTTL {
+		p, wr, n := fleetSkillCache.proven, fleetSkillCache.winRate, fleetSkillCache.note
+		fleetSkillCache.Unlock()
+		return p, wr, n
+	}
+	fleetSkillCache.Unlock()
+
+	proven, winRate, note = d.computeFleetEdgeSkill(ctx)
+
+	fleetSkillCache.Lock()
+	fleetSkillCache.at, fleetSkillCache.proven, fleetSkillCache.winRate, fleetSkillCache.note = time.Now(), proven, winRate, note
+	fleetSkillCache.valid = true
+	fleetSkillCache.Unlock()
+	return proven, winRate, note
+}
+
+func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate float64, note string) {
+	rows, err := d.St.ResolvedPredictionOutcomes(ctx, md.H1d, fleetSkillWindow)
 	if err != nil {
 		return false, 0, "live edge status unavailable (" + err.Error() + ")"
 	}
