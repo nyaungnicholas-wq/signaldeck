@@ -26,7 +26,11 @@ func (d Deps) predictionsLatest(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 500, err.Error())
 		return
 	}
-	resolvedN, err := d.St.ResolvedPredictionCount(r.Context(), h)
+	// INDEPENDENT (symbol, UTC-day) resolutions — the unit minIndependentN is
+	// DEFINED in (api.go: "the floor of distinct symbol-days"). A raw COUNT(*)
+	// here overstated the evidence ~11x and published that inflated number to
+	// the UI as `resolvedN`.
+	resolvedN, distinctDays, err := d.St.ResolvedPredictionIndependentCount(r.Context(), h)
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
@@ -41,6 +45,7 @@ func (d Deps) predictionsLatest(w http.ResponseWriter, r *http.Request) {
 		"rows":         rows,
 		"n":            len(rows),
 		"resolvedN":    resolvedN,
+		"distinctDays": distinctDays,
 		"minResolvedN": minIndependentN,
 		"gated":        gated,
 		"caption":      caption,

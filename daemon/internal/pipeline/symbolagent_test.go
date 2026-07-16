@@ -18,12 +18,19 @@ import (
 // spread that TRACKS the outcome — so the per-symbol calibration has something
 // to fit. Each row's outcome is RESOLVED, so it's a valid prequential training
 // example.
+//
+// One row per UTC DAY, because n here means n INDEPENDENT outcomes and that is
+// the unit MinPersonal gates on. Spacing these an hour apart (as this helper
+// once did) wrote n rows that collapse to a handful of symbol-days — i.e. it
+// seeded the pseudo-replication rather than the history it claimed to.
 func seedLabeledSpread(t *testing.T, st *store.Store, symbolID int64, h md.Horizon, n int) {
 	t.Helper()
 	ctx := context.Background()
-	base := time.Now().Unix() - int64(n+1)*3600
+	const day = int64(86400)
+	base := time.Now().Unix() - int64(n+1)*day
+	base -= base % day // align to a UTC-day boundary so row i lands on day i
 	for i := 0; i < n; i++ {
-		ts := base + int64(i)*3600
+		ts := base + int64(i)*day + 3600
 		up := i%2 == 0
 		pressure, fwd, raw := 0.5, 0.01, 0.62
 		if !up {

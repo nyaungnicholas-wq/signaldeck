@@ -102,6 +102,12 @@ func (s *Store) ResolvePrediction(ctx context.Context, symbolID int64, h md.Hori
 }
 
 // ResolvedPredictionPairs returns (prob, up) pairs for the calibration curve.
+//
+// RAW ROWS — pseudo-replicated. It returns neither symbol_id nor ts, so a
+// caller CANNOT dedupe what it gets back. Prefer ResolvedPredictionPairsIndependent
+// for anything that FITS a map or REPORTS a sample size; the raw form is kept
+// only for consumers that genuinely want every resolution (e.g. postmortem
+// distribution scans, where replication is the subject rather than the bias).
 func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit int) (probs []float64, ups []float64, err error) {
 	rows, qerr := s.db.QueryContext(ctx, `
 		SELECT prob, up FROM prediction_outcomes
@@ -121,6 +127,46 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 		ups = append(ups, float64(u))
 	}
 	return probs, ups, rows.Err()
+}
+
+// ResolvedPredictionPairsIndependent is ResolvedPredictionPairs collapsed to ONE
+// pair per (symbol, UTC-day) — the LATEST that day — plus the number of DISTINCT
+// UTC days those pairs span. Newest first, capped.
+//
+// Both returns matter, and for different reasons:
+//
+//   - Deduping fixes the SAMPLE. Raw, the newest 3,000 resolved 1d rows span
+//     exactly ONE UTC day (measured 2026-07-16) — so a fit over them learns one
+//     day's market and MinCalibrationPairs=30 is cleared 100x over by replication
+//     of a single session. Deduped, the same 3,000-row budget spans several days.
+//   - distinctDays fixes the CLAIM. Even deduped, observations sharing a UTC day
+//     share one market-wide move: 1,000 symbol-days from one session is ~1 bet,
+//     not 1,000. Callers gate on it the way /api/track-record already does with
+//     trackMinDistinctDays.
+func (s *Store) ResolvedPredictionPairsIndependent(ctx context.Context, h md.Horizon, limit int) (probs []float64, ups []float64, distinctDays int, err error) {
+	rows, qerr := s.db.QueryContext(ctx, `
+		SELECT prob, up, MAX(ts) AS ts FROM prediction_outcomes
+		WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND horizon=?
+		GROUP BY symbol_id, ts/86400
+		ORDER BY ts DESC LIMIT ?`,
+		string(h), limit)
+	if qerr != nil {
+		return nil, nil, 0, qerr
+	}
+	defer rows.Close() //nolint:errcheck
+	days := map[int64]struct{}{}
+	for rows.Next() {
+		var p float64
+		var u int
+		var ts int64
+		if err := rows.Scan(&p, &u, &ts); err != nil {
+			return nil, nil, 0, err
+		}
+		probs = append(probs, p)
+		ups = append(ups, float64(u))
+		days[ts/86400] = struct{}{}
+	}
+	return probs, ups, len(days), rows.Err()
 }
 
 // ── regime ──────────────────────────────────────────────────────────────

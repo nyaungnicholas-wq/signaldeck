@@ -17,12 +17,18 @@ import (
 // seedLabeled writes n labeled training rows for one horizon: a persisted
 // feature vector (pressure leg perfectly predictive, regime one-hot) plus a
 // RESOLVED prediction outcome at the same (symbol, horizon, ts) key.
+//
+// One row per UTC DAY. The worker reads the INDEPENDENT set (one row per
+// symbol per day), so n rows an hour apart would collapse to a couple of
+// observations and gate — n here means n independent observations.
 func seedLabeled(t *testing.T, st *store.Store, symbolID int64, h md.Horizon, n int, regime string) {
 	t.Helper()
 	ctx := context.Background()
-	base := time.Now().Unix() - int64(n+1)*3600
+	const day = int64(86400)
+	base := time.Now().Unix() - int64(n+1)*day
+	base -= base % day // align to a UTC-day boundary so row i lands on day i
 	for i := 0; i < n; i++ {
-		ts := base + int64(i)*3600
+		ts := base + int64(i)*day + 3600
 		up := i%2 == 0
 		pressure, fwd := 0.5, 0.01 // pressure_score 0.5 -> leg 0.75 (up call)
 		if !up {

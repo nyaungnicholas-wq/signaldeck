@@ -122,6 +122,56 @@ func (s *Store) LabeledFeatures(ctx context.Context, h md.Horizon, limit int) ([
 	return out, rows.Err()
 }
 
+// LabeledFeaturesIndependent is LabeledFeatures collapsed to ONE row per
+// (symbol, UTC-day) — the LATEST that day — i.e. the INDEPENDENT sample any
+// grade, weight or statistic must be computed over. Newest first, capped.
+//
+// Use this, not LabeledFeatures, for anything that measures skill. The
+// predictor emits up to ~150 feature rows per symbol per day and every one of
+// them resolves against the SAME daily forward move, so pooling raw rows
+// pseudo-replicates the sample: it inflates N (~11x on the live 1d set) and
+// row-frequency-weights every statistic toward the hot, high-cadence symbols.
+// Mirrors alphax.BuildDataset and api.dedupeIndependent, which already do this.
+//
+// The dedupe is done in SQL deliberately, because doing it in the caller would
+// dedupe only AFTER the LIMIT had already been spent on replicated rows: the
+// newest 20,000 raw 1d rows span just 2 UTC days, whereas 20,000 INDEPENDENT
+// rows span the full 13 (measured 2026-07-16). Same budget, 6.5x the history.
+//
+// The MAX(f.ts) + bare-column form is SQLite's documented "bare columns in an
+// aggregate query" rule: with exactly one min/max aggregate, the bare columns
+// come from the row that produced it. Verified against the live DB — the up /
+// fwd_return returned always belong to the MAX(ts) row.
+func (s *Store) LabeledFeaturesIndependent(ctx context.Context, h md.Horizon, limit int) ([]LabeledFeature, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT f.symbol_id, MAX(f.ts) AS ts, f.version, f.vec, o.up, o.fwd_return
+		FROM features f
+		JOIN prediction_outcomes o
+		  ON o.symbol_id=f.symbol_id AND o.horizon=f.horizon AND o.ts=f.ts
+		WHERE f.horizon=? AND o.resolved_at IS NOT NULL
+		  AND o.up IS NOT NULL AND o.fwd_return IS NOT NULL
+		GROUP BY f.symbol_id, f.ts/86400
+		ORDER BY ts DESC LIMIT ?`,
+		string(h), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []LabeledFeature
+	for rows.Next() {
+		lf := LabeledFeature{Horizon: h}
+		var vec string
+		if err := rows.Scan(&lf.SymbolID, &lf.Ts, &lf.Version, &vec, &lf.Up, &lf.FwdReturn); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(vec), &lf.Vec); err != nil {
+			return nil, err
+		}
+		out = append(out, lf)
+	}
+	return out, rows.Err()
+}
+
 // ── cheap per-symbol lookups the feature capture uses ───────────────────
 
 // RegimeLabels returns the latest regime label per symbol id (one query for

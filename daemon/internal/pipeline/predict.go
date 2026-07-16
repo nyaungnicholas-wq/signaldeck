@@ -126,6 +126,13 @@ const (
 	sentimentMaxAgeDays   = 3
 )
 
+// calibrationMaxObs caps how many INDEPENDENT (symbol, UTC-day) resolutions the
+// pass's global calibration fit consumes, newest first. Unchanged in value from
+// the old raw-row cap, but the unit is now independent observations rather than
+// rows — which is a strictly wider window on the same budget: 3,000 raw 1d rows
+// covered ONE UTC day, 3,000 independent ones cover several.
+const calibrationMaxObs = 3000
+
 // buildFeatureVector assembles the EXACT inputs used for one prediction into
 // a flat name->value map (the feature store's row payload). Optional signals
 // are simply absent — absence is information, not zero. The regime label is
@@ -225,6 +232,33 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	if raw, err := w.St.GetMeta(ctx, adaptive.MetaKey); err == nil && raw != "" {
 		if err := json.Unmarshal([]byte(raw), &learned); err != nil {
 			learned = adaptive.Weights{}
+		}
+	}
+	// Global calibration map per horizon, fitted ONCE per pass. The fit is
+	// market-wide and identical for every symbol, but it used to be refitted
+	// INSIDE the per-symbol loop — the same query ran once per (symbol,
+	// horizon), ~4,000 identical scans a pass.
+	//
+	// Fitted over INDEPENDENT (symbol, UTC-day) resolutions. On raw rows the
+	// newest 3,000 resolved 1d outcomes spanned exactly ONE UTC day (measured
+	// 2026-07-16): the map was learning a single session's market while
+	// ensemble.MinCalibrationPairs=30 was cleared 100x over by replication of
+	// that one day. Deduped, the same budget reaches several distinct days.
+	// calDays records how many days each fit actually rests on, so the caller
+	// can report it rather than implying a track record it does not have.
+	globalCal := map[md.Horizon]func(float64) float64{}
+	calDays := map[md.Horizon]int{}
+	for _, h := range predHorizons {
+		probs, ups, days, err := w.St.ResolvedPredictionPairsIndependent(ctx, h, calibrationMaxObs)
+		if err != nil || len(probs) == 0 {
+			continue
+		}
+		pairs := make([]ensemble.Pair, len(probs))
+		for i := range probs {
+			pairs[i] = ensemble.Pair{Pred: probs[i], Actual: ups[i]}
+		}
+		if mapFn, calibrated := ensemble.Calibrate(pairs); calibrated {
+			globalCal[h], calDays[h] = mapFn, days
 		}
 	}
 	// STAGE 6 — FRED VIX cross-asset feature, loaded ONCE per pass (the VIX level
@@ -385,14 +419,10 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if usePersonalCal {
 				// Personal tier: recalibrate with the symbol's OWN isotonic map.
 				cal = personalCal(raw)
-			} else if probs, ups, err := w.St.ResolvedPredictionPairs(ctx, h, 3000); err == nil && len(probs) > 0 {
-				pairs := make([]ensemble.Pair, len(probs))
-				for i := range probs {
-					pairs[i] = ensemble.Pair{Pred: probs[i], Actual: ups[i]}
-				}
-				if mapFn, calibrated := ensemble.Calibrate(pairs); calibrated {
-					cal = mapFn(raw)
-				}
+			} else if mapFn, ok := globalCal[h]; ok {
+				// Global tier: the pass's fleet-wide calibration map (fitted
+				// once above over independent symbol-days).
+				cal = mapFn(raw)
 			}
 			comps, _ := json.Marshal(c)
 			if err := w.St.UpsertPrediction(ctx, store.Prediction{
@@ -450,6 +480,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		_ = w.St.SetMeta(ctx, "predict_universe_day", universeCursor)
 	}
 	detail := fmt.Sprintf("wrote %d predictions", n)
+	// Say what the global calibration actually rests on. A map fitted over a
+	// couple of sessions is a statement about those sessions; the operator
+	// should be able to see that in the worker line rather than infer it.
+	for _, h := range predHorizons {
+		if d, ok := calDays[h]; ok {
+			detail += fmt.Sprintf("; %s calibration fitted over %d distinct day(s)", h, d)
+		}
+	}
 	if featErrs > 0 {
 		detail += fmt.Sprintf(" (%d feature-vector write(s) failed — see dq)", featErrs)
 	}

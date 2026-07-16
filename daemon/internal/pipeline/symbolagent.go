@@ -67,7 +67,13 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 		regimeLearned := gate == adaptive.GateLearnedRegime
 
 		for _, h := range predHorizons {
-			rows, err := w.St.LabeledFeaturesBySymbol(ctx, s.ID, h, symbolAgentMaxRows)
+			// INDEPENDENT rows only — one per UTC day for THIS symbol. MinPersonal
+			// is a count of the symbol's own resolved OUTCOMES; on raw rows it was
+			// a count of feature rows, so a hot name's ~150 same-day rows read as
+			// ~150 outcomes and it graduated to its own calibration map in a day.
+			// rawPairs is built from the same deduped rows, so the prequential
+			// pairing below stays 1:1 with examples.
+			rows, err := w.St.LabeledFeaturesBySymbolIndependent(ctx, s.ID, h, symbolAgentMaxRows)
 			if err != nil {
 				return "", fmt.Errorf("labeled features %s %s: %w", s.Symbol, h, err)
 			}
@@ -78,6 +84,7 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 				legs, regime := adaptive.FromVector(r.Vec)
 				examples = append(examples, adaptive.Example{
 					Legs: legs, Regime: regime, Up: r.Up, FwdReturn: r.FwdReturn,
+					Day: r.Ts / 86400,
 				})
 				// Prequential calibration pairs: the raw blend prob this symbol
 				// produced at prediction time vs the realized outcome. Each pair

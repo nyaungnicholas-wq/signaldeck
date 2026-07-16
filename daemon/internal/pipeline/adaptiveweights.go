@@ -38,9 +38,16 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 	// Pool labeled examples across the predicted horizons: weights are keyed
 	// by regime cell (the plan's unit of learning), and pooling reaches the
 	// n>=30 honesty gate sooner without changing what is measured.
+	//
+	// INDEPENDENT rows only — one per (symbol, UTC-day). adaptive.Example is
+	// anonymous but for Day, so this is the ONLY place the dedupe can happen;
+	// once a row is appended its symbol identity is gone. Reading raw rows here
+	// is what let a "30-sample" gate be cleared by one hot symbol's ~150
+	// same-day rows, and row-frequency-weighted every hit rate and IC toward
+	// the highest-cadence symbols.
 	var examples []adaptive.Example
 	for _, h := range predHorizons {
-		rows, err := w.St.LabeledFeatures(ctx, h, adaptiveMaxRows)
+		rows, err := w.St.LabeledFeaturesIndependent(ctx, h, adaptiveMaxRows)
 		if err != nil {
 			return "", fmt.Errorf("labeled features %s: %w", h, err)
 		}
@@ -48,6 +55,7 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 			legs, regime := adaptive.FromVector(r.Vec)
 			examples = append(examples, adaptive.Example{
 				Legs: legs, Regime: regime, Up: r.Up, FwdReturn: r.FwdReturn,
+				Day: r.Ts / 86400,
 			})
 		}
 	}
@@ -91,8 +99,12 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("insight: %w", err)
 		}
 	}
-	return fmt.Sprintf("attributed %d labeled example(s) across %d cell(s); %d cell(s) passed the n>=%d gate (max weight shift %.2f)",
-		len(examples), len(next.Cells), learned, adaptive.MinCellSamples, shift), nil
+	days := map[int64]struct{}{}
+	for _, ex := range examples {
+		days[ex.Day] = struct{}{}
+	}
+	return fmt.Sprintf("attributed %d independent observation(s) (symbol/UTC-day) across %d distinct day(s), %d cell(s); %d cell(s) passed the n>=%d + days>=%d gate (max weight shift %.2f)",
+		len(examples), len(days), len(next.Cells), learned, adaptive.MinCellSamples, adaptive.MinCellDays, shift), nil
 }
 
 // weightHistoryRows flattens a computed weight set into append-only history

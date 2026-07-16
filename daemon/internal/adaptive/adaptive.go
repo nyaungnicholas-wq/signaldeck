@@ -31,6 +31,7 @@
 package adaptive
 
 import (
+	"fmt"
 	"math"
 	"sort"
 
@@ -41,7 +42,26 @@ import (
 // and, per leg, EACH LEG within it — needs before learned weights are
 // trusted. Mirrors ensemble.MinCalibrationPairs: below this, apparent edge is
 // indistinguishable from noise.
+//
+// THE UNIT IS INDEPENDENT (symbol, UTC-day) OBSERVATIONS, NOT ROWS. Compute
+// counts whatever it is handed, so the caller MUST hand it a deduped set
+// (store.LabeledFeaturesIndependent). Feeding raw feature rows silently
+// defeats this gate: the predictor emits up to ~150 rows per symbol per day
+// that all resolve against ONE forward move, so a single hot symbol-day can
+// supply 117 "samples" — 3.9x this floor — entirely on its own.
 const MinCellSamples = 30
+
+// MinCellDays is the minimum number of DISTINCT UTC days a cell — and, per
+// leg, EACH LEG within it — must span before learned weights are trusted.
+// Mirrors trackMinDistinctDays in the API's track-record gate, for the reason
+// stated there: observations sharing a UTC day share one market-wide move, so
+// 1,000 symbol-days drawn from one session is close to ONE bet, not 1,000.
+//
+// This is deliberately a SECOND gate rather than a bigger MinCellSamples:
+// sample count and day count fail independently. A cross-section can be wide
+// and shallow (2,091 symbol-days over 2 days — the live 1d set at the old
+// 20,000-row cap) or narrow and long. Only requiring both rules out each.
+const MinCellDays = 10
 
 // AllCell is the key of the aggregate cell that pools every labeled example
 // regardless of regime — the first fallback when a regime cell is too thin.
@@ -58,12 +78,24 @@ type Example struct {
 	Regime    string             // regime label ("" = unknown)
 	Up        int                // realized 1/0
 	FwdReturn float64            // realized forward return
+	// Day is the example's UTC day number (ts/86400). It is the identity that
+	// makes the day gate possible: without it an Example is anonymous and a
+	// cell cannot tell 30 bets across 30 sessions from 30 rows of one session.
+	// Callers MUST supply pre-deduped examples (one per symbol per UTC day —
+	// see store.LabeledFeaturesIndependent); Day gates the SECOND, independent
+	// axis, it does not itself dedupe.
+	Day int64
 }
 
 // Cell is the measured evidence + derived weights for one regime cell.
 type Cell struct {
-	// N is the number of labeled examples in the cell.
+	// N is the number of labeled examples in the cell. With a deduped caller
+	// this is the count of INDEPENDENT (symbol, UTC-day) observations.
 	N int `json:"n"`
+	// Days is how many DISTINCT UTC days the cell's examples span — the second
+	// gate axis. A large N over a tiny Days is a wide cross-section of ONE
+	// market move, not a track record.
+	Days int `json:"days"`
 	// Weights are the learned normalized blend weights per leg. nil when the
 	// honesty gate refused (Gated) or when no leg beat the coin flip.
 	Weights map[string]float64 `json:"weights,omitempty"`
@@ -76,9 +108,19 @@ type Cell struct {
 	// LegN is the per-leg sample count (a leg can be rarer than the cell,
 	// e.g. sentiment only exists where fresh headlines existed).
 	LegN map[string]int `json:"legN,omitempty"`
-	// Gated is true when the cell has fewer than MinCellSamples examples, so
-	// its learned weights are withheld (Weights==nil) by the honesty gate.
+	// LegDays is the per-leg count of DISTINCT UTC days. A leg can be rarer
+	// than its cell on BOTH axes, and the day axis is the one that catches a
+	// leg whose whole sample came from a couple of sessions — e.g. sentiment,
+	// which only exists where fresh headlines existed and therefore clusters
+	// hard in time.
+	LegDays map[string]int `json:"legDays,omitempty"`
+	// Gated is true when the cell has fewer than MinCellSamples examples or
+	// spans fewer than MinCellDays distinct days, so its learned weights are
+	// withheld (Weights==nil) by the honesty gate.
 	Gated bool `json:"gated"`
+	// GateReason names which floor refused, so the API/UI can say why rather
+	// than showing a bare absence. Empty when not gated.
+	GateReason string `json:"gateReason,omitempty"`
 }
 
 // Weights is the versioned, persisted output of one attribution pass.
@@ -113,17 +155,25 @@ func computeCell(exs []Example) Cell {
 		HitRates: map[string]float64{},
 		IC:       map[string]float64{},
 		LegN:     map[string]int{},
+		LegDays:  map[string]int{},
 	}
+	cellDays := map[int64]struct{}{}
+	for _, ex := range exs {
+		cellDays[ex.Day] = struct{}{}
+	}
+	c.Days = len(cellDays)
 	// Per-leg evidence.
 	for _, leg := range ensemble.LegNames {
 		var n, dirN, hits int
 		var ps, fwds []float64
+		legDays := map[int64]struct{}{}
 		for _, ex := range exs {
 			p, ok := ex.Legs[leg]
 			if !ok {
 				continue
 			}
 			n++
+			legDays[ex.Day] = struct{}{}
 			ps = append(ps, p)
 			fwds = append(fwds, ex.FwdReturn)
 			// Directional hit-rate: p==0.5 makes no call, so it neither
@@ -140,6 +190,7 @@ func computeCell(exs []Example) Cell {
 			continue
 		}
 		c.LegN[leg] = n
+		c.LegDays[leg] = len(legDays)
 		if dirN > 0 {
 			c.HitRates[leg] = float64(hits) / float64(dirN)
 		}
@@ -147,10 +198,14 @@ func computeCell(exs []Example) Cell {
 			c.IC[leg] = ic
 		}
 	}
-	// Honesty gate: too few examples in the cell -> evidence is shown but
-	// weights are withheld.
+	// Honesty gate: too few INDEPENDENT examples, or too few distinct days, in
+	// the cell -> evidence is shown but weights are withheld.
 	if c.N < MinCellSamples {
-		c.Gated = true
+		c.Gated, c.GateReason = true, fmt.Sprintf("cell has %d independent observation(s), need %d", c.N, MinCellSamples)
+		return c
+	}
+	if c.Days < MinCellDays {
+		c.Gated, c.GateReason = true, fmt.Sprintf("cell spans %d distinct day(s), need %d (observations on one day share one market move)", c.Days, MinCellDays)
 		return c
 	}
 	// Weight ∝ max(0, hitRate-0.5). EVERY leg must clear its OWN per-leg
@@ -158,10 +213,17 @@ func computeCell(exs []Example) Cell {
 	// examples can post a perfect hit-rate by pure luck — 3/3 alphax hits in
 	// a 40-sample cell once earned it a 0.77 weight. Below the floor the leg
 	// gets NO learned weight (same fallback semantics as before).
+	//
+	// The floor is applied on BOTH axes, and the day axis is what makes it
+	// bite: measured 2026-07-16, sentiment in the `squeeze` cell posted
+	// LegN=895 and in `downtrend` LegN=768 — both sailing past a 30 ROW floor
+	// while resting on just 22 and 26 independent symbol-days respectively.
+	// Counting rows is exactly the unit confusion this floor was written to
+	// stop, so it was being bypassed by the bug it was meant to catch.
 	raw := map[string]float64{}
 	var sum float64
 	for leg, hr := range c.HitRates {
-		if c.LegN[leg] < MinCellSamples {
+		if c.LegN[leg] < MinCellSamples || c.LegDays[leg] < MinCellDays {
 			continue
 		}
 		if edge := hr - 0.5; edge > 0 {

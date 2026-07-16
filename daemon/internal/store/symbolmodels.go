@@ -25,6 +25,34 @@ func (s *Store) LabeledFeaturesBySymbol(ctx context.Context, symbolID int64, h m
 	return s.labeledFeaturesBySymbol(ctx, symbolID, h, 0, limit)
 }
 
+// LabeledFeaturesBySymbolIndependent is LabeledFeaturesBySymbol collapsed to ONE
+// row per UTC day — the LATEST that day — i.e. that symbol's INDEPENDENT sample.
+//
+// For a per-SYMBOL learner the replication is at its most extreme: every row it
+// sees is the same symbol, so a hot name's ~150 same-day feature rows are ~150
+// "own resolved outcomes" that all settle against ONE forward move. Measured
+// 2026-07-16, that is not theoretical — 369 symbols held the `personal` tier on
+// 46-198 rows spanning just TWO distinct days, and the deepest history in the
+// whole fleet was 13 independent observations against a MinPersonal floor of 40.
+// Counting rows is what let a symbol earn its own calibration map in a day.
+func (s *Store) LabeledFeaturesBySymbolIndependent(ctx context.Context, symbolID int64, h md.Horizon, limit int) ([]LabeledFeature, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT f.symbol_id, MAX(f.ts) AS ts, f.version, f.vec, o.up, o.fwd_return
+		FROM features f
+		JOIN prediction_outcomes o
+		  ON o.symbol_id=f.symbol_id AND o.horizon=f.horizon AND o.ts=f.ts
+		WHERE f.symbol_id=? AND f.horizon=? AND o.resolved_at IS NOT NULL
+		  AND o.up IS NOT NULL AND o.fwd_return IS NOT NULL
+		GROUP BY f.ts/86400
+		ORDER BY ts DESC LIMIT ?`,
+		symbolID, string(h), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	return scanLabeledFeatures(rows, h)
+}
+
 // LabeledFeaturesBySymbolVersion is LabeledFeaturesBySymbol restricted to ONE
 // feature-schema version. Trainers that flatten the key union across rows (the
 // GBM) must use this: mixing v2 rows (no micro_*/vix_* keys) with v3 rows makes

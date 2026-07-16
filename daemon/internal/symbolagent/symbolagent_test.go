@@ -11,7 +11,7 @@ import (
 
 // mkExample builds one labeled example: pressure leg = pr, forecast leg = fc,
 // realized up/down, and a forward return that matches the direction.
-func mkExample(pr, fc float64, up int) adaptive.Example {
+func mkExample(pr, fc float64, up int, day int64) adaptive.Example {
 	fwd := 0.01
 	if up == 0 {
 		fwd = -0.01
@@ -21,6 +21,7 @@ func mkExample(pr, fc float64, up int) adaptive.Example {
 		Regime:    "trend_up",
 		Up:        up,
 		FwdReturn: fwd,
+		Day:       day,
 	}
 }
 
@@ -48,7 +49,10 @@ func synthetic(n int) ([]adaptive.Example, []ensemble.Pair) {
 		if i%4 >= 2 {
 			fc = 0.3
 		}
-		ex = append(ex, mkExample(pr, fc, up))
+		// One example per UTC day: a symbol's own resolved outcomes are one per
+		// day (store.LabeledFeaturesBySymbolIndependent), so n examples means n
+		// days of history — which is what MinPersonal is a floor on.
+		ex = append(ex, mkExample(pr, fc, up, int64(i)))
 		// Raw blend prob: track the outcome loosely so there's spread to fit.
 		raw := 0.45 + 0.1*float64(up)
 		pairs = append(pairs, ensemble.Pair{Pred: raw, Actual: float64(up)})
@@ -208,7 +212,7 @@ func TestLearn_NoEdgeStaysUnpersonal(t *testing.T) {
 		if i%3 == 0 {
 			fc = 0.7
 		}
-		ex = append(ex, mkExample(pr, fc, up))
+		ex = append(ex, mkExample(pr, fc, up, int64(i)))
 		pairs = append(pairs, ensemble.Pair{Pred: 0.5, Actual: float64(up)})
 	}
 	m := Learn(ex, pairs, true, true)
