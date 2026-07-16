@@ -122,15 +122,18 @@ func (d Deps) requiresAuth(path string) bool {
 	if path == "/api/tv-webhook" {
 		return false
 	}
+	// Every /api/ai/ route spends real LLM budget, so gate the whole prefix by
+	// default rather than by remembering to list each new one. /api/ai/status
+	// only reports availability and spends nothing, so it stays public.
+	if strings.HasPrefix(path, "/api/ai/") && path != "/api/ai/status" {
+		return true
+	}
 	switch {
 	case path == "/api/watchlist",
 		path == "/api/subscribe",
 		path == "/api/unsubscribe",
 		strings.HasPrefix(path, "/api/portfolio"),
 		strings.HasPrefix(path, "/api/alerts"),
-		path == "/api/ai/chat",
-		path == "/api/ai/filing",
-		path == "/api/ai/debate",
 		// discovery wave (appended): candidate mutations are session-scoped.
 		path == "/api/candidates/add",
 		path == "/api/candidates/monitor-all",

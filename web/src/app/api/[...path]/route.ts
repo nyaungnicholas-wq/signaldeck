@@ -46,9 +46,15 @@ async function proxy(
     const value = req.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
-  if (process.env.SIGNALDECK_API_TOKEN) {
-    headers.set("Authorization", `Bearer ${process.env.SIGNALDECK_API_TOKEN}`);
-  }
+  // Deliberately do NOT attach SIGNALDECK_API_TOKEN here. The daemon's
+  // resolveUser() checks the session cookie first and falls back to the bearer
+  // token, which maps to the ADMIN user. Attaching the bearer unconditionally
+  // therefore inverted the precedence: a logged-in visitor got their own
+  // identity, but an ANONYMOUS visitor was handed admin — reading and mutating
+  // the admin's watchlist/portfolio and burning LLM budget, which also defeated
+  // SIGNALDECK_PUBLIC_READS=false. The browser's credential is the session
+  // cookie, and it is already forwarded via REQUEST_HEADERS above. The bearer
+  // token remains for non-browser clients that call the daemon directly.
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
   let res: Response;

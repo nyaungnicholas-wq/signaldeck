@@ -65,14 +65,20 @@ func Load() Config {
 	// The daemon runs under launchd, which does NOT auto-load a .env, so we
 	// read the daemon's own .env here (owner-only file holding the LLM key).
 	dotenv := parseDotEnv(filepath.Join(home, "claude code", "signaldeck", "daemon", ".env"))
-	// Export the SEC EDGAR identity vars from .env into the process env: the
-	// edgar package resolves its SEC-required declarative User-Agent straight
-	// from os.Getenv (SIGNALDECK_EDGAR_UA override, else SIGNALDECK_CONTACT_EMAIL
-	// → "SignalDeck/0.1 (<email>)"), and under launchd nothing else loads .env.
-	// Real env always wins; we only fill gaps from the file.
-	for _, k := range []string{"SIGNALDECK_EDGAR_UA", "SIGNALDECK_CONTACT_EMAIL"} {
-		if os.Getenv(k) == "" && dotenv[k] != "" {
-			_ = os.Setenv(k, dotenv[k])
+	// Export EVERY key from .env into the process env before anything reads it.
+	// The daemon runs under launchd, which does not load .env, and much of the
+	// codebase reads settings straight from os.Getenv rather than through pick()
+	// below — notably the security toggles (SIGNALDECK_PUBLIC_READS,
+	// SIGNALDECK_OPEN_SIGNUP, SIGNALDECK_API_TOKEN, SIGNALDECK_TRUST_PROXY, the
+	// rate limits), the notify webhooks (Discord/Telegram/generic) and FRED.
+	// Exporting only a couple of keys here meant those settings were silently
+	// ignored: an operator could set SIGNALDECK_PUBLIC_READS=false in .env and
+	// the daemon would still serve anonymous reads — while SIGNALDECK_ALLOWED_HOSTS
+	// (which does go through pick()) happily admitted the public tunnel. The door
+	// opened and the locks never engaged. Real env always wins; we only fill gaps.
+	for k, v := range dotenv {
+		if v != "" && os.Getenv(k) == "" {
+			_ = os.Setenv(k, v)
 		}
 	}
 	pick := func(env, def string) string {
