@@ -10,6 +10,11 @@ import (
 // mkExamples builds n labeled examples in one regime where the pressure leg
 // is always RIGHT (p=0.75 on up moves, 0.25 on down) and the expectancy leg
 // is always WRONG. Outcomes alternate up/down; fwd return follows direction.
+//
+// Each example lands on its OWN UTC day, because that is what an independent
+// example IS — the caller (store.LabeledFeaturesIndependent) emits one row per
+// (symbol, UTC-day), so n examples means n symbol-days. Piling n examples onto
+// one day would model the pseudo-replicated input the day gate exists to reject.
 func mkExamples(n int, regime string) []Example {
 	out := make([]Example, 0, n)
 	for i := 0; i < n; i++ {
@@ -25,6 +30,7 @@ func mkExamples(n int, regime string) []Example {
 			Regime:    regime,
 			Up:        0,
 			FwdReturn: fwd,
+			Day:       int64(i),
 		}
 		if up {
 			ex.Up = 1
@@ -99,7 +105,7 @@ func TestCompute_NoEdgeNoWeights(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		up := i%2 == 0
 		p := 0.4 // always leans down; hits only the down half -> hitRate 0.5
-		ex := Example{Legs: map[string]float64{ensemble.LegPressure: p}, Regime: "chop", FwdReturn: -0.01}
+		ex := Example{Legs: map[string]float64{ensemble.LegPressure: p}, Regime: "chop", FwdReturn: -0.01, Day: int64(i)}
 		if up {
 			ex.Up = 1
 			ex.FwdReturn = 0.01
@@ -329,7 +335,7 @@ func TestCompute_PerLegSampleGateExcludesThinLeg(t *testing.T) {
 		}
 		ex := Example{
 			Legs:   map[string]float64{ensemble.LegPressure: p, ensemble.LegExpectancy: p},
-			Regime: "uptrend", FwdReturn: fwd,
+			Regime: "uptrend", FwdReturn: fwd, Day: int64(i),
 		}
 		if up {
 			ex.Up = 1

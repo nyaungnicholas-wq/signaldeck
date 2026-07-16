@@ -324,7 +324,9 @@ func (d Deps) buildDashGauges(ctx context.Context, universeN, advancers, decline
 	if err != nil {
 		return nil, err
 	}
-	resolvedN, err := d.St.ResolvedPredictionCount(ctx, md.H1d)
+	// INDEPENDENT (symbol, UTC-day) resolutions — see stage5.go. The gauge's
+	// "resolved outcomes" claim must count bets, not rows.
+	resolvedN, distinctDays, err := d.St.ResolvedPredictionIndependentCount(ctx, md.H1d)
 	if err != nil {
 		return nil, err
 	}
@@ -335,6 +337,7 @@ func (d Deps) buildDashGauges(ctx context.Context, universeN, advancers, decline
 	}
 	conf := map[string]any{
 		"avg": avgConf, "n": predN, "resolvedN": resolvedN,
+		"distinctDays": distinctDays,
 		"minResolvedN": minIndependentN, "gated": gated,
 		"hasData": predN > 0, "caption": confCaption,
 	}

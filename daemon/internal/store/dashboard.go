@@ -94,6 +94,23 @@ func (s *Store) ResolvedPredictionCount(ctx context.Context, h md.Horizon) (int,
 	return n, err
 }
 
+// ResolvedPredictionIndependentCount returns how many INDEPENDENT (symbol,
+// UTC-day) outcomes have resolved for one horizon, and how many DISTINCT UTC
+// days they span.
+//
+// This is the unit every honesty gate in this codebase is DEFINED in
+// (minIndependentN is documented as "the floor of distinct symbol-days") but
+// ResolvedPredictionCount above answers in RAW ROWS, which overstates it ~11x
+// on the live 1d set. Gating on the raw count is therefore strictly more
+// permissive than intended: it can only ever ungate too EARLY, never too late.
+func (s *Store) ResolvedPredictionIndependentCount(ctx context.Context, h md.Horizon) (n, distinctDays int, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT symbol_id || '-' || (ts/86400)), COUNT(DISTINCT ts/86400)
+		FROM prediction_outcomes
+		WHERE horizon=? AND resolved_at IS NOT NULL`, string(h)).Scan(&n, &distinctDays)
+	return n, distinctDays, err
+}
+
 // UnseenAlertCount returns one user's unseen-alert count (the dashboard
 // sidebar badge) without paging the full alert list.
 func (s *Store) UnseenAlertCount(ctx context.Context, userID int64) (int, error) {

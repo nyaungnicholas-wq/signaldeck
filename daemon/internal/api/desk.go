@@ -339,10 +339,26 @@ func (d Deps) deskTop(w http.ResponseWriter, r *http.Request) {
 			ExpectedReturnPct: rec.ExpectedReturnPct, HasExpectedReturn: rec.HasExpectedReturn,
 		})
 	}
+	// Quote an accuracy only when one was actually MEASURED. winRate is 0 on
+	// exactly two paths, and neither means "never right" — it means UNKNOWN: a
+	// store error, and the thin-sample gate (below trackMinIndependentN
+	// independent resolutions or trackMinDistinctDays distinct days). Formatting
+	// it unconditionally printed "measured accuracy 0.0%", turning "we don't
+	// know yet" into "it loses" — the exact 0-for-null substitution the honesty
+	// doctrine forbids.
+	//
+	// Guarding on `proven` instead would be wrong in the other direction: the
+	// measured-but-not-proven path deliberately returns a REAL accuracy, and
+	// suppressing that would hide an honest number. `winRate > 0` is the same
+	// discriminator composite.Assess already uses (conviction.go).
+	accNote := skillNote
+	if winRate > 0 {
+		accNote = "measured accuracy " + strconv.FormatFloat(winRate*100, 'f', 1, 64) + "%"
+	}
 	writeJSON(w, map[string]any{
 		"rows": out,
-		"note": "ranked by the composite forced-curve; decision + confidence are a relative-rank read over the platform's own calibrated predictions (measured accuracy " +
-			strconv.FormatFloat(winRate*100, 'f', 1, 64) + "%), not advice",
+		"note": "ranked by the composite forced-curve; decision + confidence are a relative-rank read over the platform's own calibrated predictions (" +
+			accNote + "), not advice",
 	})
 }
 
