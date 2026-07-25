@@ -5,11 +5,37 @@
 // it never reappears. No animation beyond the shared .pop-in ease, which the
 // global prefers-reduced-motion kill already disables.
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const DONE_KEY = "sd-tour-done";
+const EVT = "sd-tour";
+
+// Read the done flag straight from localStorage via useSyncExternalStore (the
+// same hydration-safe idiom as <PagePurpose>): SSR + first paint render nothing,
+// then the snapshot decides — no setState-in-effect. `blockedDismiss` covers the
+// storage-blocked case: the tour can't persist, so Finish/Skip only has to hold
+// for this session.
+let blockedDismiss = false;
+
+function readDone(): boolean {
+  try {
+    return localStorage.getItem(DONE_KEY) !== null;
+  } catch {
+    // storage blocked → show once this session, can't persist either way
+    return false;
+  }
+}
+
+function subscribe(cb: () => void): () => void {
+  window.addEventListener(EVT, cb);
+  window.addEventListener("storage", cb); // cross-tab sync
+  return () => {
+    window.removeEventListener(EVT, cb);
+    window.removeEventListener("storage", cb);
+  };
+}
 
 const STEPS: { title: string; body: string; href?: string; linkLabel?: string }[] = [
   {
@@ -36,18 +62,15 @@ const STEPS: { title: string; body: string; href?: string; linkLabel?: string }[
 
 export default function FirstRunTour() {
   const pathname = usePathname();
-  const [show, setShow] = useState(false);
   const [step, setStep] = useState(0);
 
-  // Decide after mount (localStorage is client-only); never on the login page.
-  useEffect(() => {
-    try {
-      if (!localStorage.getItem(DONE_KEY)) setShow(true);
-    } catch {
-      // storage blocked → show once this session, can't persist either way
-      setShow(true);
-    }
-  }, []);
+  // false during SSR + first paint (localStorage is client-only), so the tour
+  // never flashes for someone who already dismissed it.
+  const show = useSyncExternalStore(
+    subscribe,
+    () => !blockedDismiss && !readDone(),
+    () => false,
+  );
 
   if (!show || pathname === "/login") return null;
 
@@ -57,7 +80,8 @@ export default function FirstRunTour() {
     } catch {
       // ignore — worst case the tour shows again next visit
     }
-    setShow(false);
+    blockedDismiss = true;
+    window.dispatchEvent(new Event(EVT));
   };
 
   const s = STEPS[step];

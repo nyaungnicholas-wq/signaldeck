@@ -28,22 +28,25 @@ function fmtQty(v: number): string {
 }
 
 export default function ShortInterestPanel({ symbol }: { symbol: string }) {
-  const [data, setData] = useState<ShortInterestResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // Keyed by symbol so a symbol switch shows a loading state without a bare
+  // setState inside the effect body (the page's own convention).
+  const [state, setState] = useState<{ key: string; r: ShortInterestResponse } | null>(null);
+  const [errState, setErrState] = useState<{ key: string; msg: string } | null>(null);
+  const data = state && state.key === symbol ? state.r : null;
+  const err = errState && errState.key === symbol ? errState.msg : null;
 
   useEffect(() => {
     let alive = true;
-    setData(null);
     const load = () =>
       shortInterest(symbol, "stocks")
         .then((r) => {
           if (!alive) return;
-          setData(r);
-          setErr(null);
+          setState({ key: symbol, r });
+          setErrState(null);
         })
         .catch((e: unknown) => {
           if (!alive) return;
-          setErr(e instanceof Error ? e.message : String(e));
+          setErrState({ key: symbol, msg: e instanceof Error ? e.message : String(e) });
         });
     load();
     // POLL_SLOW: two publications a month — there is nothing to poll fast for.

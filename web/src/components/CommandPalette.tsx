@@ -92,6 +92,9 @@ type Item =
   | { type: "page"; label: string; href: string }
   | { type: "symbol"; row: CompanyDirRow };
 
+/** Stable empty reference so the derived symbol list keeps memo identity. */
+const NO_SYMS: CompanyDirRow[] = [];
+
 export default function CommandPalette() {
   const router = useRouter();
   const pathname = usePathname();
@@ -99,7 +102,7 @@ export default function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [syms, setSyms] = useState<CompanyDirRow[]>([]);
-  const [active, setActive] = useState(0);
+  const [activeRaw, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
 
@@ -120,32 +123,42 @@ export default function CommandPalette() {
     };
   }, []);
 
-  // Close on navigation; reset state on close.
-  useEffect(() => {
+  // Close on navigation, and clear the query state when the palette closes.
+  // Both are adjusted during render (the prev-key pattern, cf. viz/BigCandle)
+  // instead of from an effect, which would cascade an extra render pass.
+  const [prevPath, setPrevPath] = useState(pathname);
+  if (pathname !== prevPath) {
+    setPrevPath(pathname);
     setOpen(false);
-  }, [pathname]);
-  useEffect(() => {
-    if (open) {
-      inputRef.current?.focus();
-      document.body.style.overflow = "hidden";
-      return () => {
-        document.body.style.overflow = "";
-      };
+  }
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (!open) {
+      setQuery("");
+      setSyms([]);
+      setActive(0);
     }
-    setQuery("");
-    setSyms([]);
-    setActive(0);
+  }
+
+  // Focus the input and lock body scroll while open — external-system sync,
+  // the only work left in an effect here.
+  useEffect(() => {
+    if (!open) return;
+    inputRef.current?.focus();
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = "";
+    };
   }, [open]);
 
   // Symbol lookup — 200ms debounce, stale responses dropped by the cleanup.
   useEffect(() => {
-    if (!open || query.trim().length < 1) {
-      setSyms([]);
-      return;
-    }
+    const q = query.trim();
+    if (!open || !q) return;
     let dead = false;
     const t = setTimeout(() => {
-      companiesList({ q: query.trim(), limit: 8 })
+      companiesList({ q, limit: 8 })
         .then((r) => !dead && setSyms(r.companies ?? []))
         .catch(() => !dead && setSyms([]));
     }, 200);
@@ -154,6 +167,10 @@ export default function CommandPalette() {
       clearTimeout(t);
     };
   }, [open, query]);
+
+  // Closed or empty query → the SYMBOLS group is simply not shown. Derived, so
+  // the debounce effect never has to setState synchronously to hide it.
+  const symHits = open && query.trim().length > 0 ? syms : NO_SYMS;
 
   const pageHits = useMemo(() => {
     const q = query.trim();
@@ -168,15 +185,14 @@ export default function CommandPalette() {
   const items: Item[] = useMemo(
     () => [
       ...pageHits.map((p) => ({ type: "page" as const, label: p.label, href: p.href })),
-      ...syms.map((row) => ({ type: "symbol" as const, row })),
+      ...symHits.map((row) => ({ type: "symbol" as const, row })),
     ],
-    [pageHits, syms],
+    [pageHits, symHits],
   );
 
-  // Clamp the cursor whenever the result list shrinks.
-  useEffect(() => {
-    setActive((a) => Math.min(a, Math.max(0, items.length - 1)));
-  }, [items.length]);
+  // Cursor clamped by derivation, not by a setState-in-effect: the result list
+  // shrinks as the query narrows, and the stored index may outlive it.
+  const active = Math.min(activeRaw, Math.max(0, items.length - 1));
 
   // Keep the active row scrolled into view.
   useEffect(() => {
@@ -201,10 +217,10 @@ export default function CommandPalette() {
       setOpen(false);
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((a) => Math.min(a + 1, items.length - 1));
+      setActive(Math.min(active + 1, items.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setActive((a) => Math.max(a - 1, 0));
+      setActive(Math.max(active - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
       const it = items[active];
@@ -220,7 +236,8 @@ export default function CommandPalette() {
 
   if (!open) return null;
 
-  let idx = -1; // running flat index across both groups
+  // Flat index across both groups: pages first, symbols offset past them. Read
+  // positionally rather than from a counter mutated during render.
   return (
     <div
       className="fixed inset-0 z-[70] flex items-start justify-center px-3 pt-[12vh]"
@@ -274,9 +291,7 @@ export default function CommandPalette() {
               PAGES
             </li>
           )}
-          {pageHits.map((p) => {
-            idx += 1;
-            const i = idx;
+          {pageHits.map((p, i) => {
             return (
               <li key={p.href} role="presentation">
                 <button
@@ -301,7 +316,7 @@ export default function CommandPalette() {
               </li>
             );
           })}
-          {syms.length > 0 && (
+          {symHits.length > 0 && (
             <li
               aria-hidden="true"
               className="px-2 pb-1 pt-3 text-[0.75rem] font-semibold tracking-[0.14em]"
@@ -310,9 +325,8 @@ export default function CommandPalette() {
               SYMBOLS
             </li>
           )}
-          {syms.map((row) => {
-            idx += 1;
-            const i = idx;
+          {symHits.map((row, n) => {
+            const i = pageHits.length + n;
             return (
               <li key={row.cik + row.ticker} role="presentation">
                 <div

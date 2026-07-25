@@ -111,20 +111,30 @@ export default function ValidatedSignalsPanel({
   symbol: string;
   market: Market;
 }) {
-  // Each source keeps its own state so one failure keeps the others' last-good.
-  const [stack, setStack] = useState<StructRegimeForecast[] | null>(null);
-  const [vol63, setVol63] = useState<VolRegimeForecast | null>(null);
+  // Per-symbol slices are keyed by symbol|market so a symbol switch invalidates
+  // them without a bare setState in the effect body; the fleet-wide kind docs
+  // are symbol-independent and need no key. Each source keeps its own state, so
+  // one failure keeps the others' last-good values.
+  const key = `${symbol}|${market}`;
+  const [stackState, setStackState] =
+    useState<{ key: string; rows: StructRegimeForecast[]; vol63: VolRegimeForecast | null } | null>(null);
+  const [volState, setVolState] =
+    useState<{ key: string; vol63: VolRegimeForecast | null } | null>(null);
   const [docs, setDocs] = useState<Record<string, StructRegimeKindDoc>>({});
   const [volCaveat, setVolCaveat] = useState<string>("");
   const [volTradeability, setVolTradeability] = useState<string | undefined>(undefined);
-  const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [errState, setErrState] = useState<{ key: string; msg: string | null } | null>(null);
+  const stack = stackState && stackState.key === key ? stackState.rows : null;
+  // Prefer the per-symbol report's vol63; fall back to the fleet-wide row.
+  const vol63 =
+    (stackState && stackState.key === key ? stackState.vol63 : null) ??
+    (volState && volState.key === key ? volState.vol63 : null);
+  const err = errState && errState.key === key ? errState.msg : null;
+  const loading = errState?.key !== key;
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
-    setStack(null);
-    setVol63(null);
+    const k = `${symbol}|${market}`;
     const load = async () => {
       const [rep, regs, vol] = await Promise.allSettled([
         signalReport(symbol, market, "overview"),
@@ -140,22 +150,27 @@ export default function ValidatedSignalsPanel({
       };
       if (rep.status === "fulfilled") {
         // Go nil slices arrive as JSON null — normalize before any .map.
-        setStack(rep.value.regimeStack ?? []);
-        if (rep.value.vol63) setVol63(rep.value.vol63);
+        setStackState({
+          key: k,
+          rows: rep.value.regimeStack ?? [],
+          vol63: rep.value.vol63 ?? null,
+        });
       } else note(rep);
       if (regs.status === "fulfilled") setDocs(regs.value.kinds ?? {});
       else note(regs);
       if (vol.status === "fulfilled") {
         setVolCaveat(vol.value.caveat);
         setVolTradeability(vol.value.tradeability);
-        // Fleet-wide fallback when the per-symbol report didn't carry vol63.
-        const mine = (vol.value.forecasts ?? []).find(
-          (f) => f.symbol === symbol && f.market === market,
-        );
-        if (mine) setVol63((cur) => cur ?? mine);
+        setVolState({
+          key: k,
+          vol63:
+            (vol.value.forecasts ?? []).find(
+              (f) => f.symbol === symbol && f.market === market,
+            ) ?? null,
+        });
       } else note(vol);
-      setErr(firstErr);
-      setLoading(false);
+      // Written last: this is also the "first pass landed" marker for `loading`.
+      setErrState({ key: k, msg: firstErr });
     };
     void load();
     // POLL_SLOW: the regime runner writes every 6h.

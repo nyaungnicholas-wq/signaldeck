@@ -32,24 +32,29 @@ export default function SymbolNewsPanel({
   market: Market;
   limit?: number;
 }) {
-  const [items, setItems] = useState<NewsItem[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // Keyed by symbol|market (the page's own convention) so a symbol switch shows
+  // a loading state without a bare setState inside the effect body.
+  const key = `${symbol}|${market}`;
+  const [state, setState] = useState<{ key: string; items: NewsItem[] } | null>(null);
+  const [errState, setErrState] = useState<{ key: string; msg: string } | null>(null);
+  const items = state && state.key === key ? state.items : null;
+  const err = errState && errState.key === key ? errState.msg : null;
 
   useEffect(() => {
     let alive = true;
-    setItems(null);
+    const k = `${symbol}|${market}`;
     const load = () =>
       api
         .news(symbol, market)
         .then((n) => {
           if (!alive) return;
           // Go nil slices arrive as JSON null — normalize before sorting.
-          setItems([...(n ?? [])].sort((a, b) => b.ts - a.ts));
-          setErr(null);
+          setState({ key: k, items: [...(n ?? [])].sort((a, b) => b.ts - a.ts) });
+          setErrState(null);
         })
         .catch((e: unknown) => {
           if (!alive) return;
-          setErr(e instanceof Error ? e.message : String(e));
+          setErrState({ key: k, msg: e instanceof Error ? e.message : String(e) });
         });
     load();
     const stop = pollMs(load, POLL_DEFAULT);

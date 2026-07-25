@@ -30,10 +30,17 @@ export default function PatternsExplorer() {
   const [data, setData] = useState<CandlePatterns | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    let dead = false;
+  // Clear the previous symbol's rows during render (the prev-key pattern, cf.
+  // viz/BigCandle) so the skeleton shows immediately without a setState-in-effect.
+  const [prevSymbol, setPrevSymbol] = useState(symbol);
+  if (symbol !== prevSymbol) {
+    setPrevSymbol(symbol);
     setData(null);
     setErr(null);
+  }
+
+  useEffect(() => {
+    let dead = false;
     candlePatterns(symbol, "stocks" as Market, "1d")
       .then((d) => !dead && setData(d))
       .catch((e: unknown) => !dead && setErr(e instanceof Error ? e.message : String(e)));

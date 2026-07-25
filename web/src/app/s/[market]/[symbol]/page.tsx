@@ -65,6 +65,11 @@ import FilingsIntelPanel from "@/components/symbol/FilingsIntelPanel";
 import ShortVolumePanel from "@/components/symbol/ShortVolumePanel";
 import FinancialsPanel from "@/components/symbol/FinancialsPanel";
 import CongressChip from "@/components/symbol/CongressChip";
+import WhyMovingPanel from "@/components/symbol/WhyMovingPanel";
+import ValidatedSignalsPanel from "@/components/symbol/ValidatedSignalsPanel";
+import SymbolNewsPanel from "@/components/symbol/SymbolNewsPanel";
+import SentimentPanel from "@/components/symbol/SentimentPanel";
+import ShortInterestPanel from "@/components/symbol/ShortInterestPanel";
 import UnusualActivityPanel from "@/components/UnusualActivityPanel";
 import HelpTip from "@/components/HelpTip";
 import PagePurpose from "@/components/PagePurpose";
@@ -198,6 +203,39 @@ export default function SymbolPage({
     // POLL_DEFAULT: predictions and the agent tier move on model cadence,
     // not per-second.
     const stop = pollMs(load, POLL_DEFAULT);
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, [symbol, market, marketOk, retryTick]);
+
+  // ── IDENTITY + RECENT BREAKOUTS (why-it's-moving wave) ──
+  // Two independent reads, settled together so one failure never blanks the
+  // other (the useLive.ts pattern). The company profile is EDGAR-only, so it is
+  // fetched for stocks and simply absent for crypto — the header degrades to
+  // the symbol itself rather than showing a fabricated sector.
+  const [profile, setProfile] = useState<{ key: string; p: CompanyProfile } | null>(null);
+  const [breakouts, setBreakouts] = useState<{ key: string; rows: BreakoutRow[] } | null>(null);
+  useEffect(() => {
+    if (!marketOk) return;
+    let alive = true;
+    const key = `${symbol}|${market}`;
+    const load = async () => {
+      const [prof, brk] = await Promise.allSettled([
+        market === "stocks" ? api.companyProfile(symbol) : Promise.reject(new Error("crypto")),
+        api.breakouts(),
+      ]);
+      if (!alive) return;
+      // Failures are silent: both are context, and the page must render without
+      // them. A rejected source keeps its last-good value.
+      if (prof.status === "fulfilled") setProfile({ key, p: prof.value });
+      if (brk.status === "fulfilled") {
+        // Go nil slices arrive as JSON null — normalize before filtering.
+        setBreakouts({ key, rows: (brk.value ?? []).filter((b) => b.symbol === symbol) });
+      }
+    };
+    void load();
+    const stop = pollMs(() => void load(), POLL_SLOW);
     return () => {
       alive = false;
       stop();
@@ -360,16 +398,33 @@ export default function SymbolPage({
   }
 
   const score1d = detail?.scores?.["1d"];
+  const idKey = `${symbol}|${market}`;
+  // EDGAR identity — stocks only, and only when this symbol's own profile
+  // landed (a stale key would label the wrong company).
+  const company = profile?.key === idKey ? profile.p.company : null;
+  const symbolBreakouts = breakouts?.key === idKey ? breakouts.rows : [];
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header row: title + contextual chips */}
+      {/* Header row: title + identity + contextual chips */}
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="mono text-lg font-extrabold tracking-[0.08em]" style={{ color: "var(--text)" }}>
           {symbol}
         </h1>
         <span className="chip uppercase tracking-wider">{market}</span>
         {detail?.symbol?.name && <span className="chip">{detail.symbol.name}</span>}
+        {/* Sector + exchange from EDGAR; absent for crypto and for stocks the
+            company sweep has not reached yet — never fabricated. */}
+        {company?.sicDesc && (
+          <span className="chip" style={{ color: "var(--dim)" }}>
+            {company.sicDesc}
+          </span>
+        )}
+        {company?.exchange && (
+          <span className="chip uppercase tracking-wider" style={{ color: "var(--dim)" }}>
+            {company.exchange}
+          </span>
+        )}
         {lastBar && (
           <span className="chip tnum" style={{ color: "var(--text)" }}>
             {fmtPrice(lastBar.c)}
@@ -393,11 +448,38 @@ export default function SymbolPage({
         )}
       </div>
 
-      {/* STAGE 3: what this page answers, in plain English */}
+      {/* what this page answers, in plain English */}
       <PagePurpose
         id="symbol"
-        text={`What does SignalDeck currently make of ${symbol}? The verdict first, the reasons behind it second, the raw records last. Every read carries its evidence tier — 'no read yet' is a real answer here.`}
+        text={`Everything SignalDeck knows about ${symbol}, in evidence order: what it is and what it costs, then the VALIDATED regime signals with their measured per-band accuracy, then why it is moving (signed contributors, a real historical analog, today's headlines, recent breakouts), then the experimental directional read clearly labelled as such, then the raw records. 'No read yet' is a real answer here.`}
       />
+
+      {/* DEEPER PAGES — these links did not exist before this wave; the symbol
+          page was a dead end. Each one opens the full working behind a read. */}
+      <nav className="flex flex-wrap items-center gap-2" aria-label="deeper reports for this symbol">
+        <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
+          go deeper:
+        </span>
+        {["vol21", "vol63", "liquidity21", "trend21", "overview"].map((kind) => (
+          <Link
+            key={kind}
+            href={`/signals/report/${market}/${encodeURIComponent(symbol)}?kind=${kind}`}
+            className="chip inline-flex min-h-[36px] cursor-pointer items-center px-3 text-[0.75rem] transition-colors duration-150 hover:border-[var(--accent)]"
+            style={{ color: "var(--accent)" }}
+          >
+            {kind} report →
+          </Link>
+        ))}
+        {market === "stocks" && (
+          <Link
+            href={`/intel/company?symbol=${encodeURIComponent(symbol)}`}
+            className="chip inline-flex min-h-[36px] cursor-pointer items-center px-3 text-[0.75rem] transition-colors duration-150 hover:border-[var(--accent)]"
+            style={{ color: "var(--accent)" }}
+          >
+            company dossier (EDGAR) →
+          </Link>
+        )}
+      </nav>
 
       {detailErr && !detail && (
         <ErrorState
@@ -410,38 +492,12 @@ export default function SymbolPage({
       )}
       {!detailErr && !detail && <Skeleton lines={5} label={`loading ${symbol}`} />}
 
-      {/* ── STAGE 3 STORY, SECTION 1 ── */}
+      {/* ── STORY, SECTION 1 · IDENTITY + PRICE ── */}
       <StorySection
         n={1}
-        title="THE VERDICT"
-        sub="the model's honest current read — plus the price itself"
+        title="IDENTITY & PRICE"
+        sub="what this is, and what it costs right now"
       >
-      {/* Stage 2: the hero VERDICT card — the one honest read-out. Real
-          calibrated 1d P(up) or "NO READ YET"; the evidence-tier badge
-          ("still learning 12/40 — using global model") is always visible. */}
-      <VerdictCard
-        size="lg"
-        symbol={symbol}
-        market={market}
-        horizon="1d"
-        calProb={
-          heroPreds?.key === heroKey && typeof heroPreds.p?.["1d"]?.calProb === "number"
-            ? heroPreds.p["1d"].calProb
-            : null
-        }
-        nUsed={heroPreds?.key === heroKey ? (heroPreds.p?.["1d"]?.nUsed ?? 0) : 0}
-        tier={heroAgent?.key === heroKey ? heroAgent.a.tier : ""}
-        tierProgress={{
-          nSamples: heroAgent?.key === heroKey ? (heroAgent.a.nSamples ?? 0) : 0,
-          threshold: heroAgent?.key === heroKey ? (heroAgent.a.threshold ?? 0) : 0,
-        }}
-        sparkCloses={
-          tf === "1d" && bars && bars.length > 0
-            ? [...bars].sort((a, b) => a.ts - b.ts).slice(-30).map((b) => b.c)
-            : undefined
-        }
-      />
-
       {/* Chart */}
       <section className="panel">
         <div className="panel-h flex-wrap gap-2">
@@ -632,14 +688,72 @@ export default function SymbolPage({
       </section>
       </StorySection>
 
+      {/* ── STORY, SECTION 2 · THE VALIDATED SIGNALS ── */}
+      <StorySection
+        n={2}
+        title="VALIDATED SIGNALS"
+        sub="the regime stack that survived re-validation — volatility leads, and each read carries the measured accuracy of its OWN conviction band"
+      >
+      <ValidatedSignalsPanel symbol={symbol} market={market} />
+      </StorySection>
+
+      {/* ── STORY, SECTION 3 · WHY IT'S MOVING ── */}
+      <StorySection
+        n={3}
+        title="WHY IT'S MOVING"
+        sub="signed contributors, a real historical analog with its realized outcome, today's headlines, and what just broke"
+      >
+      {/* The auditable attribution engine (/api/explain) plus the on-demand
+          blended prior (/api/attribution) — both shipped in the daemon for
+          weeks with no client until this wave. */}
+      <WhyMovingPanel symbol={symbol} market={market} />
+
+      <SymbolNewsPanel symbol={symbol} market={market} />
+
+      {/* RECENT BREAKOUTS for this symbol, pulled out of the fleet-wide list.
+          Descriptive events with their measured strength, never a forecast. */}
+      {symbolBreakouts.length > 0 && (
+        <section className="panel" aria-label={`recent breakouts for ${symbol}`}>
+          <div className="panel-h flex-wrap gap-2">
+            <span>RECENT BREAKOUTS · {symbol}</span>
+            <HelpTip label="what a breakout row is">
+              A detected range/level break with its measured strength. It is a
+              description of what price already did, not a prediction of what it
+              does next.
+            </HelpTip>
+            <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
+              {symbolBreakouts.length} stored
+            </span>
+          </div>
+          <ul className="m-0 list-none p-0">
+            {symbolBreakouts.slice(0, 6).map((b) => (
+              <li
+                key={`${b.kind}-${b.ts}`}
+                className="flex flex-wrap items-baseline gap-2 border-t px-4 py-2 text-[0.75rem]"
+                style={{ borderColor: "var(--border)" }}
+              >
+                <span className="chip uppercase tracking-wider">{b.kind}</span>
+                <span style={{ color: "var(--text)" }}>{b.detail}</span>
+                <span className="tnum" style={{ color: "var(--dim)" }}>
+                  strength {b.strength.toFixed(2)}
+                </span>
+                <span className="tnum ml-auto" style={{ color: "var(--faint)" }}>
+                  {ago(b.ts)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* Signal8 wave Stage 3: this symbol's unusual-activity history —
+          imbalance / volatility / volume z-scores vs its OWN baseline
+          (descriptive, never predictions; stock imbalance = labeled
+          volume-side proxy). */}
+      <UnusualActivityPanel symbol={symbol} market={market} limit={8} />
+
       {detail && (
         <>
-          {/* ── STAGE 3 STORY, SECTION 2 ── */}
-          <StorySection
-            n={2}
-            title="WHY"
-            sub="what is pushing the read: score components, what usually follows, this symbol's own agent"
-          >
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <PressurePanel scores={detail.scores ?? {}} horizon={horizon} onHorizon={setHorizon} />
             <ExpectancyPanel
@@ -655,21 +769,65 @@ export default function SymbolPage({
           <SymbolAgentPanel symbol={symbol} market={market} />
 
           <InsightsPanel insights={detail.insights} />
-          </StorySection>
+        </>
+      )}
+      </StorySection>
 
-          {/* ── STAGE 3 STORY, SECTION 3 (SIMPLE mode starts folded) ── */}
-          <StorySection
-            n={3}
-            title="THE DETAILS"
-            sub="raw records: unusual activity, financials, SEC filings, shorts, coverage"
-            collapsible
-          >
-          {/* Signal8 wave Stage 3: this symbol's unusual-activity history —
-              imbalance / volatility / volume z-scores vs its OWN baseline
-              (descriptive, never predictions; stock imbalance = labeled
-              volume-side proxy). */}
-          <UnusualActivityPanel symbol={symbol} market={market} limit={8} />
+      {/* ── STORY, SECTION 4 · THE EXPERIMENTAL DIRECTIONAL READ ──
+          DEMOTED ON PURPOSE. The measured live skill is NEGATIVE, so this read
+          sits below the validated signals, under its own EXPERIMENTAL heading,
+          with the numbers that condemn it stated before the card itself. It is
+          kept visible rather than deleted: hiding a failed model is how it
+          quietly comes back. */}
+      <StorySection
+        n={4}
+        title="EXPERIMENTAL · DIRECTIONAL P(UP)"
+        sub="not the product — a research read with measured NEGATIVE live skill"
+      >
+      <p
+        className="m-0 border-l-2 pl-3 text-[0.75rem] leading-relaxed"
+        style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
+      >
+        Treat the number below as experimental. Over 12,931 independent
+        symbol-days the directional model scored 48.08% accuracy against a 54.50%
+        majority-class null — its entire confidence interval sits BELOW the null,
+        and raising its conviction makes it WORSE, not better. Nothing here should
+        be traded on. The validated read for this symbol is the regime stack in
+        section 2.
+      </p>
+      {/* the hero VERDICT card, now demoted: real calibrated 1d P(up) or
+          "NO READ YET", with the evidence-tier badge always visible. */}
+      <VerdictCard
+        size="lg"
+        symbol={symbol}
+        market={market}
+        horizon="1d"
+        calProb={
+          heroPreds?.key === heroKey && typeof heroPreds.p?.["1d"]?.calProb === "number"
+            ? heroPreds.p["1d"].calProb
+            : null
+        }
+        nUsed={heroPreds?.key === heroKey ? (heroPreds.p?.["1d"]?.nUsed ?? 0) : 0}
+        tier={heroAgent?.key === heroKey ? heroAgent.a.tier : ""}
+        tierProgress={{
+          nSamples: heroAgent?.key === heroKey ? (heroAgent.a.nSamples ?? 0) : 0,
+          threshold: heroAgent?.key === heroKey ? (heroAgent.a.threshold ?? 0) : 0,
+        }}
+        sparkCloses={
+          tf === "1d" && bars && bars.length > 0
+            ? [...bars].sort((a, b) => a.ts - b.ts).slice(-30).map((b) => b.c)
+            : undefined
+        }
+      />
+      </StorySection>
 
+      {/* ── STORY, SECTION 5 · THE DETAILS (SIMPLE mode starts folded) ── */}
+      <StorySection
+        n={5}
+        title="THE DETAILS"
+        sub="raw records: financials, SEC filings, short volume AND short interest, retail sentiment, coverage"
+        collapsible
+      >
           {/* Signal8 wave Stage 5: FINANCIALS — headline EDGAR company-facts
               (Revenues/EPS/shares/float) + small history sparklines; honest
               "EDGAR sweep pending" until the daily sweep covers this symbol.
@@ -686,6 +844,15 @@ export default function SymbolPage({
               rendered verbatim. Stocks only (crypto has no Reg SHO data). */}
           {market === "stocks" && <ShortVolumePanel symbol={symbol} />}
 
+          {/* …and its SIBLING: the REAL bi-monthly FINRA short INTEREST with
+              days-to-cover. Both are shown because they answer different
+              questions, and each panel states the difference explicitly. */}
+          {market === "stocks" && <ShortInterestPanel symbol={symbol} />}
+
+          {/* Retail sentiment (StockTwits page snapshots) + public attention
+              (Wikipedia views). Context datasets, never scored factors. */}
+          {market === "stocks" && <SentimentPanel symbol={symbol} market={market} />}
+
           {/* Signal8 wave Stage 2: congressional-activity chip — renders only
               when this ticker has disclosed trades in the last 90d (the legal
               30-45d disclosure lag is stated on the chip itself). */}
@@ -695,14 +862,14 @@ export default function SymbolPage({
             </div>
           )}
 
-          {market === "crypto" && detail.latestSnap && (
+          {market === "crypto" && detail?.latestSnap && (
             <MicroPanel symbol={symbol} market={market} snap={detail.latestSnap} />
           )}
 
-          <CoveragePanel symbol={symbol} market={market} coverage={detail.coverage ?? {}} />
-          </StorySection>
-        </>
-      )}
+          {detail && (
+            <CoveragePanel symbol={symbol} market={market} coverage={detail.coverage ?? {}} />
+          )}
+      </StorySection>
     </div>
   );
 }

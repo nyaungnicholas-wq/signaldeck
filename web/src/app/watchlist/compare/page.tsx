@@ -222,18 +222,32 @@ function CompareInner() {
     router.replace(`/compare?${q.toString()}`);
   };
 
-  useEffect(() => {
-    // keep the drafts in step when the URL changes (swap, back button)
+  // Both syncs happen during render (the prev-key pattern, cf. viz/BigCandle)
+  // rather than in an effect: the URL is a prop-like input here, and adjusting
+  // state from it synchronously avoids a cascading second render.
+  //   urlKey  → keep the drafts in step when the URL changes (swap, back button)
+  //   fetchKey → drop the stale reports so the skeletons show while refetching
+  //              (retry bumps `tick`, which must reset them too)
+  const urlKey = `${a.market}:${a.symbol}|${b.market}:${b.symbol}`;
+  const [prevUrlKey, setPrevUrlKey] = useState(urlKey);
+  if (urlKey !== prevUrlKey) {
+    setPrevUrlKey(urlKey);
     setDraftA(a.symbol);
     setDraftB(b.symbol);
     setDraftAm(a.market);
     setDraftBm(b.market);
-  }, [a.symbol, b.symbol, a.market, b.market]);
+  }
+
+  const fetchKey = `${urlKey}#${tick}`;
+  const [prevFetchKey, setPrevFetchKey] = useState(fetchKey);
+  if (fetchKey !== prevFetchKey) {
+    setPrevFetchKey(fetchKey);
+    setRepA(null);
+    setRepB(null);
+  }
 
   useEffect(() => {
     let dead = false;
-    setRepA(null);
-    setRepB(null);
     signalReport(a.symbol, a.market, "overview")
       .then((r) => !dead && (setRepA(r), setErrA(null)))
       .catch((e: unknown) => !dead && setErrA(e instanceof Error ? e.message : String(e)));

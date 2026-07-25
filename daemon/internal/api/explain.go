@@ -57,8 +57,21 @@ func (d Deps) explain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TRADE PLAN (2026-07-25). Accuracy alone cannot say whether a call makes
+	// money — on this data the two INVERT at the top band — so the plan is
+	// scored by expectancy, with a stop sized from the symbol's own ATR and a
+	// target taken from the band's MEASURED forward return. A band with no
+	// measured return produces no plan rather than an invented one.
+	atr := atr14(bars)
+	var plan any
+	if p, ok := structregime.BuildTradePlan(ex.Kind, ex.Conviction,
+		bars[len(bars)-1].Close, atr); ok {
+		plan = p
+	}
+
 	writeJSON(w, map[string]any{
 		"symbol":      s.Symbol,
+		"tradePlan":   plan,
 		"market":      string(s.Market),
 		"available":   true,
 		"asOf":        bars[len(bars)-1].Ts,
@@ -87,4 +100,33 @@ func (d Deps) explain(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) registerExplain(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/explain", d.explain)
+}
+
+// atr14 is the 14-period average true range in price terms — the symbol's own
+// measure of how far it routinely travels, which is what a stop must clear.
+func atr14(bars []md.Bar) float64 {
+	const n = 14
+	if len(bars) < n+1 {
+		return 0
+	}
+	sum := 0.0
+	for i := len(bars) - n; i < len(bars); i++ {
+		h, l, pc := bars[i].High, bars[i].Low, bars[i-1].Close
+		tr := h - l
+		if d := absf(h - pc); d > tr {
+			tr = d
+		}
+		if d := absf(l - pc); d > tr {
+			tr = d
+		}
+		sum += tr
+	}
+	return sum / n
+}
+
+func absf(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

@@ -64,16 +64,21 @@ export default function SentimentPanel({
   symbol: string;
   market: Market;
 }) {
-  const [st, setSt] = useState<StocktwitsResponse | null>(null);
-  const [wiki, setWiki] = useState<WikiAttentionResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Every slice is keyed by symbol|market so a symbol switch invalidates it
+  // without a bare setState in the effect body. `loading` is derived, not
+  // stored: the first pass has landed once either slice carries this key.
+  const key = `${symbol}|${market}`;
+  const [stState, setStState] = useState<{ key: string; r: StocktwitsResponse } | null>(null);
+  const [wikiState, setWikiState] = useState<{ key: string; r: WikiAttentionResponse } | null>(null);
+  const [errState, setErrState] = useState<{ key: string; msg: string | null } | null>(null);
+  const st = stState && stState.key === key ? stState.r : null;
+  const wiki = wikiState && wikiState.key === key ? wikiState.r : null;
+  const err = errState && errState.key === key ? errState.msg : null;
+  const loading = errState?.key !== key;
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
-    setSt(null);
-    setWiki(null);
+    const k = `${symbol}|${market}`;
     // Settled independently (useLive.ts pattern): a missing StockTwits series
     // must not hide a perfectly good attention series.
     const load = async () => {
@@ -88,12 +93,12 @@ export default function SentimentPanel({
           firstErr = r.reason instanceof Error ? r.reason.message : String(r.reason);
         }
       };
-      if (s.status === "fulfilled") setSt(s.value);
+      if (s.status === "fulfilled") setStState({ key: k, r: s.value });
       else note(s);
-      if (wv.status === "fulfilled") setWiki(wv.value);
+      if (wv.status === "fulfilled") setWikiState({ key: k, r: wv.value });
       else note(wv);
-      setErr(firstErr);
-      setLoading(false);
+      // Written last: this is also the "first pass landed" marker for `loading`.
+      setErrState({ key: k, msg: firstErr });
     };
     void load();
     // POLL_SLOW: snapshots land every 15m, page views once a day.

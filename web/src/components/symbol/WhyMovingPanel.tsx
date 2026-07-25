@@ -77,27 +77,27 @@ export default function WhyMovingPanel({
   symbol: string;
   market: Market;
 }) {
-  const [data, setData] = useState<Explain | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-
-  // Keyed by symbol|market so a symbol switch never shows another symbol's
-  // attribution; POLL_SLOW because the trend audit moves on daily bars.
+  // Every slice is keyed by symbol|market so a symbol switch never shows
+  // another symbol's attribution (and never needs a setState in an effect body).
   const key = `${symbol}|${market}`;
-  const [dataKey, setDataKey] = useState<string>("");
+  const [state, setState] = useState<{ key: string; e: Explain } | null>(null);
+  const [errState, setErrState] = useState<{ key: string; msg: string } | null>(null);
+  const err = errState && errState.key === key ? errState.msg : null;
 
   useEffect(() => {
     let alive = true;
+    const k = `${symbol}|${market}`;
+    // POLL_SLOW: the trend audit moves on daily bars.
     const load = () =>
       explain(symbol, market)
         .then((e) => {
           if (!alive) return;
-          setData(e);
-          setDataKey(`${symbol}|${market}`);
-          setErr(null);
+          setState({ key: k, e });
+          setErrState(null);
         })
         .catch((e: unknown) => {
           if (!alive) return;
-          setErr(e instanceof Error ? e.message : String(e));
+          setErrState({ key: k, msg: e instanceof Error ? e.message : String(e) });
         });
     load();
     const stop = pollMs(load, POLL_SLOW);
@@ -108,26 +108,29 @@ export default function WhyMovingPanel({
   }, [symbol, market]);
 
   // ── on-demand blended attribution (see the header note on its cost) ──
-  const [attr, setAttr] = useState<AttributionResponse | null>(null);
-  const [attrErr, setAttrErr] = useState<string | null>(null);
-  const [attrLoading, setAttrLoading] = useState(false);
-  // A symbol switch invalidates a loaded report rather than mislabeling it.
-  useEffect(() => {
-    setAttr(null);
-    setAttrErr(null);
-    setAttrLoading(false);
-  }, [symbol, market]);
+  // Also keyed: a symbol switch invalidates a loaded report by construction
+  // rather than mislabeling it with the new symbol's name.
+  const [attrState, setAttrState] =
+    useState<{ key: string; a: AttributionResponse } | null>(null);
+  const [attrErrState, setAttrErrState] = useState<{ key: string; msg: string } | null>(null);
+  const [attrLoadingKey, setAttrLoadingKey] = useState<string | null>(null);
+  const attr = attrState && attrState.key === key ? attrState.a : null;
+  const attrErr = attrErrState && attrErrState.key === key ? attrErrState.msg : null;
+  const attrLoading = attrLoadingKey === key;
 
   const loadAttribution = () => {
-    setAttrLoading(true);
-    setAttrErr(null);
+    const k = key;
+    setAttrLoadingKey(k);
+    setAttrErrState(null);
     attributionFor(symbol, market, "1d")
-      .then((a) => setAttr(a))
-      .catch((e: unknown) => setAttrErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setAttrLoading(false));
+      .then((a) => setAttrState({ key: k, a }))
+      .catch((e: unknown) =>
+        setAttrErrState({ key: k, msg: e instanceof Error ? e.message : String(e) }),
+      )
+      .finally(() => setAttrLoadingKey((cur) => (cur === k ? null : cur)));
   };
 
-  const ex = dataKey === key ? data : null;
+  const ex = state && state.key === key ? state.e : null;
   const analog = ex?.analog;
 
   return (
