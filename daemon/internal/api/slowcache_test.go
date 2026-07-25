@@ -103,6 +103,86 @@ func TestSWRCache_ErrorIsNotCached(t *testing.T) {
 	}
 }
 
+func TestSWRCache_ColdBuildDoesNotBlockOtherKeys(t *testing.T) {
+	// The production regression this pins: the warmer cold-building one horizon
+	// (~40s) must not stall a cache HIT on a different, already-warm horizon.
+	c := newSWRCache(time.Minute)
+	_, _ = c.get(context.Background(), "warm", func(ctx context.Context) (map[string]any, error) {
+		return map[string]any{"v": 1}, nil
+	})
+
+	slowStarted := make(chan struct{})
+	slowRelease := make(chan struct{})
+	go func() {
+		_, _ = c.get(context.Background(), "cold", func(ctx context.Context) (map[string]any, error) {
+			close(slowStarted)
+			<-slowRelease
+			return map[string]any{"v": 2}, nil
+		})
+	}()
+	<-slowStarted // the cold build for "cold" is now in flight
+
+	done := make(chan map[string]any, 1)
+	go func() {
+		got, _ := c.get(context.Background(), "warm", func(ctx context.Context) (map[string]any, error) {
+			return map[string]any{"v": 99}, nil
+		})
+		done <- got
+	}()
+	select {
+	case got := <-done:
+		if got["v"] != 1 {
+			t.Fatalf("warm hit returned wrong payload: %v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("warm-key hit blocked behind another key's cold build")
+	}
+	close(slowRelease)
+}
+
+func TestSWRCache_ConcurrentColdCallersCoalesce(t *testing.T) {
+	c := newSWRCache(time.Minute)
+	var mu sync.Mutex
+	builds := 0
+	started := make(chan struct{})
+	release := make(chan struct{})
+	build := func(ctx context.Context) (map[string]any, error) {
+		mu.Lock()
+		builds++
+		mu.Unlock()
+		close(started)
+		<-release
+		return map[string]any{"v": 7}, nil
+	}
+	go func() { _, _ = c.get(context.Background(), "k", build) }()
+	<-started
+
+	// Followers on the same cold key must WAIT for the in-flight build, not
+	// start their own.
+	var wg sync.WaitGroup
+	results := make([]map[string]any, 3)
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], _ = c.get(context.Background(), "k", build)
+		}(i)
+	}
+	time.Sleep(20 * time.Millisecond) // let followers reach the wait
+	close(release)
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if builds != 1 {
+		t.Fatalf("concurrent cold callers must coalesce into one build, got %d", builds)
+	}
+	for i, r := range results {
+		if r["v"] != 7 {
+			t.Fatalf("follower %d got wrong payload: %v", i, r)
+		}
+	}
+}
+
 func TestSWRCache_KeysAreIndependent(t *testing.T) {
 	c := newSWRCache(time.Minute)
 	mk := func(v int) func(context.Context) (map[string]any, error) {

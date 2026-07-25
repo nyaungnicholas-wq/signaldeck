@@ -15,6 +15,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -65,6 +66,17 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	}
 	if _, err := sharedRegimesCache.get(ctx, "regimes", d.buildStructuralRegimes); err != nil {
 		return err
+	}
+	// /api/predictions/latest: the latest-per-symbol self-join over 240k
+	// prediction rows (~45s measured) — the SIGNALS hub's first paint.
+	for _, h := range []md.Horizon{md.H1d, md.H1w} {
+		hh := h
+		if _, err := sharedPredictionsCache.get(ctx, fmt.Sprintf("%p|%s", d.St, hh),
+			func(c context.Context) (map[string]any, error) {
+				return d.buildPredictionsLatest(c, hh)
+			}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
