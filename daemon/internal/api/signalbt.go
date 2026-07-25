@@ -63,6 +63,7 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 						"pinnedDay":         p.DayKey,
 						"pinnedTs":          p.ComputedTs,
 						"equityDownsampled": p.EquityDownsampled,
+						"survivorship":      survivorshipBlock(), // #20: stats rest on the tracked-universe bars table
 					})
 					return
 				}
@@ -114,6 +115,7 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 		"benchmarkSymbol": "SPY",
 		"hasBenchmark":    len(benchmark) > 0,
 		"pinned":          false,
+		"survivorship":    survivorshipBlock(), // #20: stats rest on the tracked-universe bars table
 	}
 	if pinnedRequested {
 		resp["pinnedNote"] = "no pinned weekly result stored yet — showing a live compute (the signalbt-weekly worker pins one every Sunday evening ET)"

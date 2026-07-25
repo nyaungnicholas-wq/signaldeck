@@ -62,12 +62,12 @@ func TestNewsFetcher_ScopeAndSkipMigration(t *testing.T) {
 		}
 		return s
 	}
-	hot := mk("HOT", md.Stocks)     // streamed hot set
-	rnkA := mk("RNKA", md.Stocks)   // ranking #1 → in top-2
-	rnkB := mk("RNKB", md.Stocks)   // ranking #2 → in top-2
-	watch := mk("WTCH", md.Stocks)  // on a user watchlist
-	cold := mk("COLD", md.Stocks) // active, daily-only, unranked-top, unwatched → OUT of scope
-	mk("BTC/USD", md.Crypto)      // crypto: in scope but never fetched (Alpaca news is stocks-only)
+	hot := mk("HOT", md.Stocks)    // streamed hot set
+	rnkA := mk("RNKA", md.Stocks)  // ranking #1 → in top-2
+	rnkB := mk("RNKB", md.Stocks)  // ranking #2 → in top-2
+	watch := mk("WTCH", md.Stocks) // on a user watchlist
+	cold := mk("COLD", md.Stocks)  // active, daily-only, unranked-top, unwatched → OUT of scope
+	mk("BTC/USD", md.Crypto)       // crypto: in scope but never fetched (Alpaca news is stocks-only)
 
 	if err := st.SetSymbolStream(ctx, hot.ID, true); err != nil {
 		t.Fatal(err)

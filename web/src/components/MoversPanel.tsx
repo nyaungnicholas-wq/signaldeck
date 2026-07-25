@@ -14,7 +14,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { movers, pollMs, POLL_SLOW, type MoverRow, type MoversResponse } from "@/lib/api";
-import { fmtPct, fmtPrice } from "@/lib/format";
+import { ago, fmtPct, fmtPrice, fmtTs } from "@/lib/format";
+import { usePeek } from "@/components/CompanyPeek";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
@@ -45,6 +46,7 @@ function MoverTable({
   color: string;
   mcapNote: string;
 }) {
+  const peek = usePeek();
   return (
     <div className="min-w-0">
       <div
@@ -62,7 +64,7 @@ function MoverTable({
           <table className="w-full text-[0.75rem]">
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                {["SYM", "LAST", "CHG%", "MCAP"].map((h, i) => (
+                {["SYM", "LAST", "CHG%", "MCAP", "AGE"].map((h, i) => (
                   <th
                     key={h}
                     scope="col"
@@ -78,12 +80,15 @@ function MoverTable({
               {rows.map((r) => (
                 <tr
                   key={r.symbol}
-                  className="transition-colors duration-150 hover:bg-[var(--panel2)]"
+                  className="cursor-pointer transition-colors duration-150 hover:bg-[rgba(255,255,255,0.04)]"
                   style={{ borderBottom: "1px solid var(--border)" }}
+                  onClick={() => peek.open(r.symbol, "stocks")}
+                  title={`peek inside ${r.name || r.symbol}`}
                 >
                   <td className="px-3 py-1.5 text-left">
                     <Link
                       href={`/s/stocks/${encodeURIComponent(r.symbol)}`}
+                      onClick={(e) => e.stopPropagation()}
                       className="cursor-pointer font-bold tracking-wide transition-colors duration-150 hover:text-[var(--accent)]"
                       title={r.name || r.symbol}
                     >
@@ -100,6 +105,13 @@ function MoverTable({
                     title={r.mcap === null ? `mcap unavailable — ${mcapNote}` : undefined}
                   >
                     {fmtMcap(r.mcap)}
+                  </td>
+                  <td
+                    className="px-3 py-1.5 text-right"
+                    style={{ color: "var(--faint)" }}
+                    title={`bar timestamp ${fmtTs(r.ts)} — exact age of this close`}
+                  >
+                    {ago(r.ts)}
                   </td>
                 </tr>
               ))}

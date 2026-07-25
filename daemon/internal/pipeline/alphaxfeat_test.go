@@ -87,8 +87,8 @@ func TestAlphaFeaturesJoinFeatureVector(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.UpsertCOT(ctx, []store.COTRow{{
-		Contract: "E-MINI S&P 500 - CHICAGO MERCANTILE EXCHANGE",
-		ReportDate: now.UTC().AddDate(0, 0, -3).Format("2006-01-02"),
+		Contract:    "E-MINI S&P 500 - CHICAGO MERCANTILE EXCHANGE",
+		ReportDate:  now.UTC().AddDate(0, 0, -3).Format("2006-01-02"),
 		NoncommLong: 100, NoncommShort: 40, OpenInterest: 200,
 	}}); err != nil {
 		t.Fatal(err)
@@ -164,8 +164,8 @@ func TestAlphaFeaturesGatesLeaveFieldsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.UpsertCOT(ctx, []store.COTRow{{
-		Contract: "E-MINI S&P 500 - CHICAGO MERCANTILE EXCHANGE",
-		ReportDate: now.UTC().AddDate(0, 0, -60).Format("2006-01-02"),
+		Contract:    "E-MINI S&P 500 - CHICAGO MERCANTILE EXCHANGE",
+		ReportDate:  now.UTC().AddDate(0, 0, -60).Format("2006-01-02"),
 		NoncommLong: 100, NoncommShort: 40, OpenInterest: 200,
 	}}); err != nil { // 60d > 21d bound
 		t.Fatal(err)

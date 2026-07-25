@@ -12,7 +12,7 @@ import Plain, { useViewMode } from "@/components/Plain";
 import Gauge from "@/components/viz/Gauge";
 import HelpTip from "@/components/HelpTip";
 import ProOnly from "@/components/ProOnly";
-import type { DashboardResponse } from "@/lib/api";
+import { regimesGauge, type DashboardResponse } from "@/lib/api";
 import { changeColor } from "@/components/home/helpers";
 
 /** Count tile matching the Gauge footprint — a dial needs a bounded scale and
@@ -144,7 +144,7 @@ export default function GaugeRow({ dash }: { dash: DashboardResponse }) {
 
       <div className={mode === "simple" ? "px-4 pb-3" : undefined}>
         <ProOnly summary="Show methodology">
-          <div className="grid grid-cols-2 justify-items-center gap-x-2 gap-y-5 px-3 py-4 lg:grid-cols-4">
+          <div className="grid grid-cols-2 justify-items-center gap-x-2 gap-y-5 px-3 py-4 lg:grid-cols-5">
             <div className="flex flex-col items-center gap-1">
               <Gauge
                 value={g.breadth.pct}
@@ -229,6 +229,33 @@ export default function GaugeRow({ dash }: { dash: DashboardResponse }) {
                 format={(v) => `${(v * 100).toFixed(0)}%`}
               />
             </div>
+
+            {(() => {
+              const rg = regimesGauge(dash);
+              if (!rg) return null;
+              return (
+                <div className="flex flex-col items-center gap-1">
+                  <Gauge
+                    value={rg.uptrendPct}
+                    min={0}
+                    max={100}
+                    label="TREND BREADTH"
+                    caption={rg.caption}
+                    hasData={rg.hasData}
+                    format={(v) => `${v.toFixed(0)}%`}
+                    zones={[
+                      { from: 0, to: 45, color: "var(--ask)" },
+                      { from: 55, to: 100, color: "var(--bid)" },
+                    ]}
+                  />
+                  {rg.hasData && (
+                    <span className="tnum text-[0.75rem]" style={{ color: "var(--dim)" }}>
+                      {rg.uptrendPct.toFixed(0)}% uptrend · {rg.elevatedPct.toFixed(0)}% elev vol
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </ProOnly>
       </div>

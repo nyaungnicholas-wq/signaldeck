@@ -117,10 +117,11 @@ func (d Deps) backtestRun(w http.ResponseWriter, r *http.Request) {
 		ts[i] = b.Ts
 	}
 	writeJSON(w, map[string]any{
-		"strategy": strat,
-		"result":   res,
-		"explain":  backtest.Explain(strat, res),
-		"ts":       ts,
+		"strategy":     strat,
+		"result":       res,
+		"explain":      backtest.Explain(strat, res),
+		"ts":           ts,
+		"survivorship": survivorshipBlock(), // #20: replayed on the tracked-universe bars table
 	})
 }
 

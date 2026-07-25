@@ -30,6 +30,7 @@ import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
 import ProOnly from "@/components/ProOnly";
+import ReportLink from "@/components/signals/ReportLink";
 import HorizonChips from "@/components/symbol/HorizonChips";
 import ModelRaceCard, { type RaceStats } from "@/components/signals/forecasts/ModelRaceCard";
 import AgreementStrip, { type AgreementEntry } from "@/components/signals/forecasts/AgreementStrip";
@@ -357,6 +358,9 @@ export default function ForecastPage() {
                   {r.symbol}
                   <span className="ml-1.5 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                     {r.market}
+                  </span>
+                  <span className="ml-1.5">
+                    <ReportLink symbol={r.symbol} market={r.market} kind="prediction" />
                   </span>
                 </button>
               );

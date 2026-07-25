@@ -65,12 +65,17 @@ func TestLedgerVerifyEndpoint(t *testing.T) {
 		t.Fatalf("intact chain response wrong: %+v (want head %q)", body, head)
 	}
 
-	// Tamper with seq 3, then re-verify → intact=false at seq 3.
+	// Tamper with seq 3 (payload mutated, stored hashes untouched), then
+	// re-verify with ?full=1 → intact=false at seq 3. The full walk is the
+	// deliberate audit path: this tamper preserves every stored hash and the
+	// checkpoint anchor, so the incremental default cannot see it — the
+	// endpoint discloses exactly that in verifiedNote (cold-load precompute
+	// wave; see internal/store/ledgercache.go).
 	if _, err := st.DB().ExecContext(ctx, // read pool can exec; a single connection
 		`UPDATE prediction_ledger SET raw_prob=raw_prob+1 WHERE seq=3`); err != nil {
 		t.Fatal(err)
 	}
-	res2, err := newClient(t).Get(srv.URL + "/api/ledger/verify")
+	res2, err := newClient(t).Get(srv.URL + "/api/ledger/verify?full=1")
 	if err != nil {
 		t.Fatal(err)
 	}

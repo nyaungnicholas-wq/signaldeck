@@ -36,24 +36,28 @@ export default function GraphPage() {
   const [minCorr, setMinCorr] = useState(0.5);
   const [query, setQuery] = useState<Query>({ symbol: "NVDA", minCorr: 0.5 });
 
-  const [result, setResult] = useState<GraphResult | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  // Result + error are KEYED to the committed query (same idiom as the
+  // forecasts page): switching symbols/threshold changes queryKey, so the
+  // derived `data`/`err` below fall back to null and the loading state shows —
+  // no setState inside the effect, no cascading renders.
+  const [result, setResult] = useState<{ key: string; data: GraphResult } | null>(null);
+  const [errState, setErrState] = useState<{ key: string; msg: string } | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+
+  const queryKey = `${query.symbol}|${query.minCorr}`;
 
   useEffect(() => {
     let alive = true;
-    setResult(null);
-    setErr(null);
+    const key = `${query.symbol}|${query.minCorr}`;
     api
       .knowledgeGraph(query.symbol, query.minCorr)
       .then((r) => {
         if (!alive) return;
-        setResult(r);
-        setErr(null);
+        setResult({ key, data: r });
       })
       .catch((e: unknown) => {
         if (!alive) return;
-        setErr(e instanceof Error ? e.message : String(e));
+        setErrState({ key, msg: e instanceof Error ? e.message : String(e) });
       });
     return () => {
       alive = false;
@@ -66,11 +70,15 @@ export default function GraphPage() {
     setQuery({ symbol: s, minCorr });
   };
 
+  // Derived: only data/error matching the CURRENT query counts; anything stale
+  // reads as null and the page shows the loading skeleton.
+  const data = result && result.key === queryKey ? result.data : null;
+  const err = errState && errState.key === queryKey ? errState.msg : null;
+
   // Guarded reads — the daemon serializes empty Go slices as JSON null.
-  const edges = useMemo(() => result?.neighborhood.Edges ?? [], [result]);
-  const neighbors = result?.neighborhood.Neighbors ?? [];
-  const comparedWith = result?.comparedWith ?? [];
-  const center = result?.center || result?.neighborhood.Center || query.symbol;
+  const edges = useMemo(() => data?.neighborhood.Edges ?? [], [data]);
+  const comparedWith = data?.comparedWith ?? [];
+  const center = data?.center || data?.neighborhood.Center || query.symbol;
 
   // Rows for the adjacency table + the two derived counts the header chips show.
   // Neighbors are derived from the drawn edges so the count matches the viz.
@@ -81,14 +89,14 @@ export default function GraphPage() {
   );
   // Symbols the daemon lists in the neighborhood but which have no drawn link at
   // the current threshold — surfaced honestly rather than hidden.
-  const belowThreshold = useMemo(
-    () => neighbors.filter((nb) => !drawnSet.has(nb.toUpperCase())).length,
-    [neighbors, drawnSet],
-  );
+  const belowThreshold = useMemo(() => {
+    const nbrs = data?.neighborhood.Neighbors ?? [];
+    return nbrs.filter((nb) => !drawnSet.has(nb.toUpperCase())).length;
+  }, [data, drawnSet]);
 
-  const loading = result === null && err === null;
-  const hardError = result === null && err !== null;
-  const empty = result !== null && edges.length === 0;
+  const loading = data === null && err === null;
+  const hardError = data === null && err !== null;
+  const empty = data !== null && edges.length === 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -170,7 +178,7 @@ export default function GraphPage() {
           message={err ?? "graph unavailable"}
           hint="Is the daemon running? Start it with signaldeckd."
           retry={() => {
-            setErr(null);
+            setErrState(null);
             setRetryTick((t) => t + 1);
           }}
         />
@@ -183,7 +191,7 @@ export default function GraphPage() {
         />
       )}
 
-      {result !== null && !empty && (
+      {data !== null && !empty && (
         <>
           {/* the viz */}
           <section className="panel">
@@ -254,7 +262,7 @@ export default function GraphPage() {
               </span>
               <span style={{ color: "var(--faint)" }}>line thickness ∝ weight</span>
               <span className="ml-auto flex flex-wrap gap-1.5">
-                {Object.entries(result.edgeKinds).map(([k, c]) => (
+                {Object.entries(data.edgeKinds).map(([k, c]) => (
                   <span
                     key={k}
                     className="chip tnum"
@@ -333,9 +341,9 @@ export default function GraphPage() {
             className="flex flex-col gap-1 px-1 text-[0.75rem] leading-relaxed"
             style={{ color: "var(--faint)" }}
           >
-            {result.note ? <p>{result.note}</p> : null}
-            {result.neighborhood.Note && result.neighborhood.Note !== result.note ? (
-              <p>{result.neighborhood.Note}</p>
+            {data.note ? <p>{data.note}</p> : null}
+            {data.neighborhood.Note && data.neighborhood.Note !== data.note ? (
+              <p>{data.neighborhood.Note}</p>
             ) : null}
           </div>
         </>

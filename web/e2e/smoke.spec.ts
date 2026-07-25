@@ -72,7 +72,11 @@ test.describe("login page", () => {
     await page.getByLabel("USERNAME").fill("definitely-not-a-user");
     await page.getByLabel("PASSWORD").fill("wrong-password-123");
     await page.getByRole("button", { name: "SIGN IN" }).click();
-    await expect(page.getByRole("alert")).toBeVisible({ timeout: 10000 });
+    // #login-error is the page's own alert box — a bare getByRole("alert")
+    // also matches Next's route announcer and trips strict mode.
+    const alert = page.locator("#login-error");
+    await expect(alert).toBeVisible({ timeout: 10000 });
+    await expect(alert).toHaveAttribute("role", "alert");
   });
 
   // ── (3) keyboard-only: Tab order reaches username → password → submit ──

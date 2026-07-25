@@ -9,6 +9,16 @@ import Link from "next/link";
 import { ago } from "@/lib/format";
 import type { AlertRow } from "@/lib/api";
 import { ruleFor } from "./rules";
+import ReportLink from "@/components/signals/ReportLink";
+
+// map an alert kind to the detail-report kind that explains it
+function reportKind(kind: string): string {
+  if (kind.startsWith("prediction")) return "prediction";
+  if (kind.startsWith("anomaly")) return "anomaly";
+  if (kind === "breakout") return "breakout";
+  if (kind === "regime_change") return "overview";
+  return "overview";
+}
 
 export default function AlertItem({ a }: { a: AlertRow }) {
   const r = ruleFor(a.kind);
@@ -38,6 +48,9 @@ export default function AlertItem({ a }: { a: AlertRow }) {
         >
           {a.symbol}
         </Link>
+      ) : null}
+      {a.symbol && a.market ? (
+        <ReportLink symbol={a.symbol} market={a.market} kind={reportKind(a.kind)} />
       ) : null}
       {a.horizon && <span className="chip px-2 py-[2px] text-[0.75rem]">{a.horizon}</span>}
       <span className="min-w-0 flex-1" style={{ color: "var(--dim)" }}>

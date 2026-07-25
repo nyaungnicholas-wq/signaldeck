@@ -6,25 +6,40 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { api, type Me } from "@/lib/api";
 import FreshnessBadge from "@/components/FreshnessBadge";
 import OfflineBanner from "@/components/OfflineBanner";
+import CommandPalette, { CMDK_EVENT } from "@/components/CommandPalette";
+import FirstRunTour from "@/components/FirstRunTour";
 
-// Stage 2 nav consolidation: 24 flat entries → 6 hubs (user decision; HUD
-// stays separate). `href` is the hub's default sub-tab; `match` lists every
-// pathname prefix that keeps the hub highlighted — INCLUDING the old flat
-// URLs, so the active state is right even during the brief moment before a
-// next.config redirect lands.
+// Nav consolidation (2026-07-19, user decision): 9 tabs → 5 clean hubs.
+// HOME absorbs the old DASHBOARD + TODAY; WATCHLIST absorbs DECK + COMPARE;
+// DESK and LIVE fold into LAB as sub-tabs. `href` is the hub's default
+// sub-tab; `match` lists every pathname prefix that keeps the hub highlighted
+// — INCLUDING the old flat URLs, so the active state is right during the brief
+// moment before a next.config redirect lands.
 const NAV: { href: string; label: string; match: string[] }[] = [
-  { href: "/", label: "DASHBOARD", match: ["/"] },
-  { href: "/desk/overview", label: "DESK", match: ["/desk"] },
-  { href: "/live", label: "LIVE", match: ["/live"] },
+  { href: "/", label: "HOME", match: ["/", "/today"] },
+  // MARKETS + SIGNALS merged into one MARKET hub. Legacy prefixes stay in
+  // `match` so the hub highlights through the redirect.
   {
-    href: "/markets/screener",
-    label: "MARKETS",
-    match: ["/markets", "/screener", "/trends", "/regime", "/macro"],
+    href: "/market/overview",
+    label: "MARKET",
+    match: [
+      "/market",
+      "/markets",
+      "/signals",
+      "/screener",
+      "/trends",
+      "/regime",
+      "/macro",
+      "/predict",
+      "/alerts",
+    ],
   },
+  // WATCHLIST = the old DECK (watchlist cards) + COMPARE (two symbols), now
+  // one hub with a compare sub-tab.
   {
-    href: "/signals/predictions",
-    label: "SIGNALS",
-    match: ["/signals", "/predict", "/forecast", "/insights", "/alerts"],
+    href: "/watchlist",
+    label: "WATCHLIST",
+    match: ["/watchlist", "/deck", "/compare"],
   },
   {
     href: "/intel/news",
@@ -46,6 +61,9 @@ const NAV: { href: string; label: string; match: string[] }[] = [
       "/quality",
       "/agents",
       "/ai",
+      // DESK (AI research desk) + LIVE (pipeline health) fold in here.
+      "/desk",
+      "/live",
     ],
   },
   // HUD (the user's personal PUSH-20 live-trading sync) is deliberately NOT in
@@ -348,11 +366,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     );
   });
 
-  // The login page is the only public route: render minimal chrome (brand +
-  // footer) with no nav, freshness chip, toggles or daemon dot. There is no
-  // market data here, so a "updated 0s ago" freshness readout or a nav full of
-  // links that immediately bounce back to /login would both be misleading.
-  if (pathname === "/login") {
+  // Public routes render minimal chrome (brand + footer) with no nav, freshness
+  // chip, toggles or daemon dot: /login (sign-in) and /proof (the shareable
+  // public track-record + ledger page). A nav full of links that bounce to
+  // /login, or a "updated 0s ago" chip, would both be misleading here.
+  if (pathname === "/login" || pathname === "/proof") {
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-3 sm:p-4">
         <header className="panel px-4 py-3 sm:px-5">
@@ -403,6 +421,18 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 text-[0.75rem]"
             style={{ color: "var(--dim)" }}
           >
+            {/* Command palette trigger — the keyboard-free way in; ⌘K/Ctrl+K
+                fires the same event listener inside CommandPalette. */}
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event(CMDK_EVENT))}
+              title="open the command palette — jump to any page or symbol"
+              aria-label="open command palette (Command+K)"
+              className="chip flex min-h-[40px] cursor-pointer items-center gap-1 px-3 transition-colors duration-150 hover:text-[var(--text)]"
+            >
+              <span className="mono">⌘K</span>
+              <span className="hidden sm:inline">search</span>
+            </button>
             <AlertsBell />
             <AuthChip />
             {/* Secondary controls: inline on desktop, folded into the menu panel
@@ -448,6 +478,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           </div>
         )}
       </header>
+      <CommandPalette />
+      <FirstRunTour />
       <main className="flex flex-1 flex-col gap-4">{children}</main>
       <footer
         className="mt-2 border-t px-2 pt-3 pb-2 text-[0.75rem] leading-relaxed"

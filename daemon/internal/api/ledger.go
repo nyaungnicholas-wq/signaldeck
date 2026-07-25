@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // ── STAGE 3: append-only, hash-chained prediction ledger (read routes) ──────
@@ -17,17 +18,36 @@ import (
 // Both are read-only (public under SIGNALDECK_PUBLIC_READS like the other
 // market-data reads).
 
-// ledgerVerify recomputes the entire hash chain and reports its integrity.
+// ledgerVerify reports the chain's integrity via the incremental checkpoint
+// path (cold-load precompute wave): only the suffix since the last intact
+// checkpoint is re-hashed unless the checkpoint anchor mismatches — the
+// tamper signal that forces (and fails) a full walk. Same answer as a full
+// recomputation on an untampered chain, ~12s cheaper at 200k rows.
+//
+// ?full=1 forces the complete genesis walk — the deliberate auditor's path.
+// The disclosed limit of the fast path: a payload mutated strictly BEFORE the
+// checkpoint that leaves every stored hash untouched is internally
+// inconsistent but only caught by the full walk (any rewrite that keeps the
+// chain consistent must change the anchor hash and IS caught).
 func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
-	v, err := d.St.VerifyLedger(r.Context())
+	var v store.LedgerVerification
+	var err error
+	fullWalk := true
+	if r.URL.Query().Get("full") == "1" {
+		v, err = d.St.VerifyLedger(r.Context())
+	} else {
+		v, fullWalk, err = d.St.VerifyLedgerCached(r.Context())
+	}
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
 	}
 	out := map[string]any{
-		"intact": v.Intact,
-		"count":  v.Count,
-		"head":   v.HeadHash,
+		"intact":       v.Intact,
+		"count":        v.Count,
+		"head":         v.HeadHash,
+		"incremental":  !fullWalk,
+		"verifiedNote": "verified incrementally from the last intact checkpoint (hash chains verify incrementally by design); a checkpoint-anchor mismatch forces a full walk and reads as tamper; ?full=1 forces the complete genesis walk, the only path that catches a stored-hash-preserving payload mutation before the checkpoint",
 	}
 	if v.BrokenAtSeq != nil {
 		out["brokenAtSeq"] = *v.BrokenAtSeq

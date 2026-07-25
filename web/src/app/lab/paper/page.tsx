@@ -7,6 +7,7 @@ import {
   POLL_DEFAULT,
   type PaperResponse,
   type PaperEquityPoint,
+  type Money,
 } from "@/lib/api";
 import { fmtPct, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
@@ -176,6 +177,84 @@ function Metric({
   );
 }
 
+/** Signed percent for per-trade returns, honest "n/a" when a ratio is undefined. */
+function pct(v: number, signed = true): string {
+  if (!isFinite(v)) return "n/a";
+  return fmtPct(v * 100, signed);
+}
+
+/** The MONEY SCOREBOARD — expectancy leads; win rate is present but demoted.
+ *  This is the honest reframing: a high win rate with large losers still loses
+ *  money, so expectancy (avg profit per trade after costs) is the headline. */
+function MoneyScoreboard({ money, caption }: { money: Money; caption: string }) {
+  const upColor = "var(--bid)";
+  const downColor = "var(--ask)";
+  const expColor = money.expectancy >= 0 ? upColor : downColor;
+  return (
+    <section className="panel">
+      <div className="panel-h flex-wrap gap-2">
+        MONEY SCOREBOARD
+        <span className="chip" style={{ color: "var(--faint)" }}>
+          scored by expected profit, not win rate
+        </span>
+        {!money.meaningful ? (
+          <span className="chip ml-auto tnum" style={{ color: "var(--warn)", borderColor: "var(--warn)" }}>
+            {money.trades}/20 trades — not yet meaningful
+          </span>
+        ) : null}
+      </div>
+
+      {/* The verbatim caption — the whole point of the page. */}
+      <p
+        className="px-4 py-3 text-[0.8rem] font-semibold leading-relaxed"
+        style={{ color: "var(--warn)", borderBottom: "1px solid var(--border)" }}
+      >
+        {caption}
+      </p>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+        <Metric
+          label="EXPECTANCY"
+          value={pct(money.expectancy)}
+          color={expColor}
+          help="Average net profit per trade after costs. THE number that decides whether the signal makes money — positive means it makes money on average, negative means it loses."
+          hint="avg profit / trade"
+        />
+        <Metric
+          label="PROFIT FACTOR"
+          value={money.profitFactorValid ? money.profitFactor.toFixed(2) + "×" : "n/a"}
+          color={money.profitFactorValid && money.profitFactor >= 1 ? upColor : money.profitFactorValid ? downColor : undefined}
+          help="Gross profit ÷ gross loss. Above 1.0 makes money, below 1.0 loses. Undefined (n/a) when there are no losing trades yet."
+          hint={money.profitFactorValid ? "wins$ ÷ losses$" : "no losses yet"}
+        />
+        <Metric
+          label="PAYOFF RATIO"
+          value={money.payoffRatioValid ? money.payoffRatio.toFixed(2) + "×" : "n/a"}
+          help="Average win ÷ average loss. A big payoff ratio lets a LOW win rate still be profitable."
+          hint={money.payoffRatioValid ? "avgWin ÷ avgLoss" : "no losses yet"}
+        />
+        <Metric label="AVG WIN" value={pct(money.avgWin, false)} color={upColor} hint="mean winning trade" />
+        <Metric label="AVG LOSS" value={pct(money.avgLoss, false)} color={downColor} hint="mean losing trade" />
+      </div>
+
+      {/* Win rate DEMOTED — kept for completeness, explicitly labeled not-profit. */}
+      <div
+        className="tnum flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-3 text-[0.75rem]"
+        style={{ borderTop: "1px solid var(--border)", color: "var(--faint)" }}
+      >
+        <span>
+          win rate{" "}
+          <span className="font-bold" style={{ color: "var(--dim)" }}>
+            {fmtPct(money.winRate * 100, false)}
+          </span>{" "}
+          over {money.trades} closed trade{money.trades === 1 ? "" : "s"}
+        </span>
+        <span style={{ color: "var(--dim)" }}>— descriptive only; NOT profitability</span>
+      </div>
+    </section>
+  );
+}
+
 export default function PaperPage() {
   const [strategy, setStrategy] = useState("flagship-1d");
   const [data, setData] = useState<PaperResponse | null>(null);
@@ -289,6 +368,12 @@ export default function PaperPage() {
               />
             )}
           </section>
+
+          {/* MONEY SCOREBOARD — leads the numeric readout: expectancy / profit
+              factor / payoff, with the verbatim win-rate-≠-profit caption. */}
+          {data.money ? (
+            <MoneyScoreboard money={data.money} caption={data.moneyCaption} />
+          ) : null}
 
           {/* Costed summary — every stat gated to what the sample supports.
               SIMPLE mode folds the gauge grid; the equity curve + honesty

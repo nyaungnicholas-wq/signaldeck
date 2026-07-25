@@ -1,8 +1,9 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Shell from "@/components/Shell";
 import AuthGate from "@/components/AuthGate";
+import CompanyPeekProvider from "@/components/CompanyPeek";
 
 // UI voice = Inter; data voice = JetBrains Mono (.tnum/.mono/charts keep the
 // --font-mono variable name, so CandleChart's axis font needs no change).
@@ -25,6 +26,18 @@ export const metadata: Metadata = {
   },
   description:
     "Continuously records crypto + stock market data, computes decomposable pressure scores, and grades itself against realized returns.",
+  // PWA install surface (static manifest + SVG icon in /public). No service
+  // worker yet — installability/offline caching is deliberately out of scope.
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
+};
+
+// Next 16: themeColor lives on the viewport export, not metadata.
+export const viewport: Viewport = {
+  themeColor: "#060910",
 };
 
 export default function RootLayout({
@@ -36,7 +49,9 @@ export default function RootLayout({
     <html lang="en" className={`${sans.variable} ${mono.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col">
         <AuthGate>
-          <Shell>{children}</Shell>
+          <CompanyPeekProvider>
+            <Shell>{children}</Shell>
+          </CompanyPeekProvider>
         </AuthGate>
       </body>
     </html>

@@ -18,7 +18,7 @@ import (
 // (Kraken public OHLC). Long-running; fed by Enqueue from the subscribe API.
 type Backfiller struct {
 	St     *store.Store
-	Alpaca *alpaca.Client     // nil when no keys: stock backfills error visibly
+	Alpaca *alpaca.Client // nil when no keys: stock backfills error visibly
 	Kraken *cryptohist.Client
 	queue  chan md.Symbol
 }

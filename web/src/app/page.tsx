@@ -26,6 +26,7 @@ import Heatmap, { type HeatmapItem } from "@/components/viz/Heatmap";
 import BigCandle, { type ChipSym } from "@/components/viz/BigCandle";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
+import TodaysRead from "@/components/home/TodaysRead";
 import InsightSpotlight from "@/components/home/InsightSpotlight";
 import WelcomeCard from "@/components/home/WelcomeCard";
 import GaugeRow from "@/components/home/GaugeRow";
@@ -135,7 +136,12 @@ export default function DashboardPage() {
           {/* first-run welcome — dismissible, remembered in sd-onboarded */}
           <WelcomeCard watchlistEmpty={watchlistEmpty} />
 
-          {/* ── THE HERO: exactly one decisive top insight ── */}
+          {/* ── THE OPENING VERDICT: the single best-evidenced read, or an
+                honest "No qualified read today" when nothing clears the gate ── */}
+          <TodaysRead dash={dash} />
+
+          {/* ── secondary hero: what else is notable right now (alerts,
+                regime changes, anomalies) via the deterministic ladder ── */}
           <InsightSpotlight dash={dash} alerts={alerts} />
 
           {/* ── SECTION 1: the big picture ── */}

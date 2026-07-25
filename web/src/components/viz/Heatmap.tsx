@@ -10,8 +10,8 @@
 // size). Every tile is a real <Link> → /s/{market}/{symbol}: keyboard
 // focusable, focus ring from globals.css, hover tooltip via title.
 
-import Link from "next/link";
 import type { Market } from "@/lib/api";
+import { usePeek } from "@/components/CompanyPeek";
 
 export interface HeatmapItem {
   symbol: string;
@@ -41,6 +41,7 @@ function fmtChg(v: number): string {
 }
 
 export default function Heatmap({ items }: { items: HeatmapItem[] }) {
+  const peek = usePeek();
   if (!items || items.length === 0) {
     return (
       <p className="px-3 py-4 text-[0.75rem]" style={{ color: "var(--faint)" }}>
@@ -87,8 +88,11 @@ export default function Heatmap({ items }: { items: HeatmapItem[] }) {
             (hasMcap ? "" : " · sized: mcap unavailable (EDGAR gap)");
           return (
             <li key={it.symbol} className="m-0 p-0">
-              <Link
-                href={`/s/${it.market ?? "stocks"}/${encodeURIComponent(it.symbol)}`}
+              {/* 2026-07-18: tiles open the CompanyPeek slide-over (fast
+                  browsing); the full symbol page is one click inside it. */}
+              <button
+                type="button"
+                onClick={() => peek.open(it.symbol, (it.market ?? "stocks") as Market)}
                 title={tip}
                 aria-label={tip}
                 className="flex cursor-pointer flex-col items-center justify-center overflow-hidden rounded-lg border transition-colors duration-150 hover:border-[var(--accent)]"
@@ -118,7 +122,7 @@ export default function Heatmap({ items }: { items: HeatmapItem[] }) {
                 {!hasMcap && s >= 64 && (
                   <span style={{ fontSize: "0.5rem", color: "var(--faint)" }}>mcap n/a</span>
                 )}
-              </Link>
+              </button>
             </li>
           );
         })}

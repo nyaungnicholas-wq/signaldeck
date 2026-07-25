@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { api, pollMs, POLL_DEFAULT, type Insight } from "@/lib/api";
 import { ago } from "@/lib/format";
+import ReportLink from "@/components/signals/ReportLink";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
@@ -60,13 +61,16 @@ function InsightCard({ ins }: { ins: Insight }) {
           <>
             <span className="chip">symbol</span>
             {symbol && (
-              <Link
-                href={`/s/${inferMarket(symbol)}/${encodeURIComponent(symbol)}`}
-                className="chip mono cursor-pointer font-bold transition-colors duration-150 hover:text-[var(--accent)]"
-                title={`open the ${symbol} symbol page`}
-              >
-                {symbol}
-              </Link>
+              <>
+                <Link
+                  href={`/s/${inferMarket(symbol)}/${encodeURIComponent(symbol)}`}
+                  className="chip mono cursor-pointer font-bold transition-colors duration-150 hover:text-[var(--accent)]"
+                  title={`open the ${symbol} symbol page`}
+                >
+                  {symbol}
+                </Link>
+                <ReportLink symbol={symbol} market={inferMarket(symbol)} kind="overview" />
+              </>
             )}
           </>
         )}

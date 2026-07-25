@@ -22,7 +22,7 @@ function WatchRowItem({
 }) {
   return (
     <li
-      className="flex items-center gap-2 border-t px-3 py-2"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t px-3 py-2"
       style={{ borderColor: "var(--border)" }}
     >
       <Link
@@ -38,6 +38,17 @@ function WatchRowItem({
           {(r.closes?.length ?? 0) > 1 ? fmtPct(r.dayChangePct) : "—"}
         </span>
       </Link>
+      {/* 2026-07-18 technical readouts — server-derived from the same
+          sparkline closes; "—" = window too short (honest absence). */}
+      <span
+        className="tnum basis-full text-[0.7rem]"
+        style={{ color: "var(--faint)" }}
+        title="RSI(14) · distance to SMA20 · 20-day realized vol (annualized) — from stored daily closes"
+      >
+        RSI {r.rsi14 != null ? r.rsi14.toFixed(0) : "—"}
+        {" · "}SMA20 {r.sma20DistPct != null ? fmtPct(r.sma20DistPct) : "—"}
+        {" · "}σ20 {r.vol20AnnPct != null ? `${r.vol20AnnPct.toFixed(0)}%` : "—"}
+      </span>
       {/* the 1d verdict card — REAL calibrated prob or the honest
           "NO READ YET", with the evidence-tier badge always visible. */}
       <VerdictCard

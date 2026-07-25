@@ -164,11 +164,11 @@ const (
 	DefaultFast  = "meta/llama-3.1-8b-instruct"
 )
 
-func (c *httpClient) Enabled() bool   { return len(c.keys) > 0 }
-func (c *httpClient) Model() string   { return c.model }
+func (c *httpClient) Enabled() bool     { return len(c.keys) > 0 }
+func (c *httpClient) Model() string     { return c.model }
 func (c *httpClient) DeepModel() string { return c.deepModel }
 func (c *httpClient) FastModel() string { return c.fastModel }
-func (c *httpClient) KeyCount() int   { return len(c.keys) }
+func (c *httpClient) KeyCount() int     { return len(c.keys) }
 
 func (c *httpClient) Stats() Stats {
 	c.mu.Lock()
@@ -412,8 +412,13 @@ const (
 	maxPromptChars  = 24000
 	maxOutputTokens = 2000
 	maxAttempts     = 3
-	defaultTimeout  = 45 * time.Second
-	deepTimeout     = 100 * time.Second
+	// defaultTimeout: 45s produced a steady trickle of "context deadline
+	// exceeded" from the free NVIDIA endpoint on analyst-sized prompts
+	// (measured 3 worker errors/24h on the hourly analyst = ~12% of runs, all
+	// three attempts timing out under provider load). 75s clears the observed
+	// slow tail while still failing over well inside the hourly cadence.
+	defaultTimeout = 75 * time.Second
+	deepTimeout    = 100 * time.Second
 )
 
 // trimToBudget shrinks the message list to at most `budget` total content

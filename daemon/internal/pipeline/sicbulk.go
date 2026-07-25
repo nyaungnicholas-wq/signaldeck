@@ -7,6 +7,7 @@
 // directory with ONE free download.
 //
 // SOURCE (researched 2026-07-06; candidates compared):
+//
 //	(a) EDGAR bulk submissions.zip — CHOSEN. SEC's official nightly export of
 //	    the entire Submissions API, documented on "EDGAR Application
 //	    Programming Interfaces" (sec.gov/search-filings/

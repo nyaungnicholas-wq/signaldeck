@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SignalDeck DAILY FULL-UNIVERSE REFRESH trigger.
+  Fires weekdays at 13:15 Pacific (15 min after the US close). launchd coalesces
+  a missed calendar job to the next wake, so if the Mac is asleep/closed at 13:15
+  it runs on the FIRST WAKE after the close instead — never silently skips a day.
+  The script itself is idempotent (once per trading day) and self-manages the
+  daemon: reactivate full universe -> pull the day's bars + recompute signals ->
+  prune back to the lean kept set -> stop. Runs at the daemon's background
+  priority, so the once-a-day burst yields to whatever you're doing.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.signaldeck.daily-refresh</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/natalienyaung/claude code/signaldeck/ops/signaldeck-refresh.sh</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>13</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>13</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>13</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>13</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>13</integer><key>Minute</key><integer>15</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/refresh.sched.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/refresh.sched.log</string>
+</dict>
+</plist>

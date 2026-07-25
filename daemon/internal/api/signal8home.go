@@ -127,6 +127,7 @@ func (d Deps) movers(w http.ResponseWriter, r *http.Request) {
 
 	staleCutoff := time.Now().Unix() - 5*86400
 	unknownExcluded := 0
+	suspectExcluded := 0
 	rows := make([]moverRow, 0, len(syms))
 	for _, s := range syms {
 		if universe.IsTapeETF(s.Symbol) {
@@ -137,6 +138,14 @@ func (d Deps) movers(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		last, prev, ts := dc.Last, dc.Prev, dc.Ts
+		// 2026-07-18 accuracy pass: a >65% one-day close ratio is almost
+		// always an UNADJUSTED SPLIT artifact (incremental fetches straddling
+		// a reverse split — CELUW "+533%" was the tell), not a real move.
+		// Excluded and counted, never ranked as a gainer/loser.
+		if c := pctChange(last, prev); c > 65 || c < -65 {
+			suspectExcluded++
+			continue
+		}
 		row := moverRow{
 			Symbol: s.Symbol, Name: s.Name,
 			Price: last, DayChangePct: pctChange(last, prev), Ts: ts,
@@ -167,13 +176,18 @@ func (d Deps) movers(w http.ResponseWriter, r *http.Request) {
 		losers = append(losers, rows[i])
 	}
 
+	note := moversNote
+	if suspectExcluded > 0 {
+		note += " " + strconv.Itoa(suspectExcluded) + " symbol(s) excluded for a >65% one-day jump — almost always an unadjusted corporate action in the stored bars, not a real move."
+	}
 	writeJSON(w, map[string]any{
 		"gainers":             gainers,
 		"losers":              losers,
 		"universeN":           len(rows),
 		"minMcap":             minMcap,
 		"unknownMcapExcluded": unknownExcluded, // >0 only when a min-mcap filter is active
-		"note":                moversNote,
+		"suspectExcluded":     suspectExcluded,
+		"note":                note,
 		"mcapNote":            mcapNote,
 		"asOf":                time.Now().Unix(),
 	})
@@ -268,9 +282,14 @@ func (d Deps) calendar(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// registerSignal8Home wires the Stage-4 home-surface read routes.
+// registerSignal8Home wires the Stage-4 home-surface read routes. Movers sits
+// behind the SHARED response cache (cold-load precompute wave, warm.go) so the
+// cache-warmer worker keeps its default entry hot; parameterized calls cache
+// per raw query string.
 func (d Deps) registerSignal8Home(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/tape", d.tape)
-	mux.HandleFunc("GET /api/movers", d.movers)
+	mux.HandleFunc("GET /api/movers", func(w http.ResponseWriter, r *http.Request) {
+		sharedMoversCache.serve(r.URL.RawQuery, w, r, d.movers)
+	})
 	mux.HandleFunc("GET /api/calendar", d.calendar)
 }

@@ -4,13 +4,16 @@ export function fmtPrice(v: number): string {
   if (!isFinite(v) || v === 0) return "—";
   if (v >= 1000) return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (v >= 1) return v.toFixed(2);
-  return v.toPrecision(4);
+  // sub-$1: full significant precision, never scientific notation
+  return v.toPrecision(4).replace(/e[-+]\d+$/i, "") || v.toFixed(4);
 }
 
+// 2026-07-18 accuracy pass: two decimals platform-wide — a 0.05% move and a
+// 0.14% move must not both render as "+0.1%".
 export function fmtPct(v: number, signed = true): string {
   if (!isFinite(v)) return "—";
   const s = signed && v > 0 ? "+" : "";
-  return `${s}${v.toFixed(1)}%`;
+  return `${s}${v.toFixed(2)}%`;
 }
 
 export function fmtScore(v: number): string {

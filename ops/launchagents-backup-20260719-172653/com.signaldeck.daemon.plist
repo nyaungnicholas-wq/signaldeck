@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SignalDeck data daemon LaunchAgent — the 24/7 collector: 12 in-app agents
+  (ingest, signals, expectancy, insights, honesty resolver, hud sync, DQ)
+  plus the JSON API on :8322. This is the process that makes the database
+  grow continuously.
+  Install:
+    cp ops/com.signaldeck.daemon.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.signaldeck.daemon.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.signaldeck.daemon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/natalienyaung/claude code/signaldeck/bin/signaldeckd</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/daemon</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/daemon.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/daemon.err.log</string>
+</dict>
+</plist>

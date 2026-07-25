@@ -1,0 +1,17 @@
+{
+  "name": "SignalDeck",
+  "short_name": "SignalDeck",
+  "description": "Data-first market intelligence: recorded market data, decomposable pressure scores, and a system that grades itself against realized returns.",
+  "display": "standalone",
+  "background_color": "#060910",
+  "theme_color": "#060910",
+  "start_url": "/today",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

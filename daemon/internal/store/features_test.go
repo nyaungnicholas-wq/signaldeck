@@ -280,7 +280,7 @@ func TestGovernorPrimitives(t *testing.T) {
 	for i := int64(0); i < 100; i++ {
 		_ = st.UpsertBars(ctx, []md.Bar{{SymbolID: sym.ID, TF: md.TF1m, Ts: i * 60, Close: float64(i)}})
 	}
-	if err := st.WALCheckpointTruncate(ctx); err != nil {
+	if _, err := st.WALCheckpointTruncate(ctx); err != nil {
 		t.Fatalf("wal checkpoint truncate: %v", err)
 	}
 	if err := st.Vacuum(ctx); err != nil {

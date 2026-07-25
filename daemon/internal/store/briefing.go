@@ -13,7 +13,7 @@ import (
 // data.kind == kind (e.g. "daily_briefing"), newest first. Uses SQLite's
 // json_extract, so only insights written with a JSON `data` object match.
 // The json_valid guard is load-bearing: writers that don't set Data persist
-// the Go zero value '' (e.g. the Risk watcher), and a bare json_extract over
+// the Go zero value ” (e.g. the Risk watcher), and a bare json_extract over
 // such a row makes the WHOLE query fail with "malformed JSON" — which 500'd
 // /api/dashboard (Stage 6 verify). Non-JSON rows are simply not matches.
 func (s *Store) InsightsByKind(ctx context.Context, kind string, limit int) ([]md.Insight, error) {

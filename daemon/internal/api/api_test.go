@@ -32,15 +32,25 @@ func baseCfg() config.Config {
 // against a temp store. mutate tweaks cfg before the middleware captures it.
 func newTestServer(t *testing.T, mutate func(*config.Config)) (*httptest.Server, *store.Store, Deps) {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "api.db"))
+	dbPath := filepath.Join(t.TempDir(), "api.db")
+	// Close the last hermeticity hatch (council note): archive.Dir honors
+	// SIGNALDECK_ARCHIVE_DIR before falling back to the DB dir, so an ambient
+	// export could still re-point a handler at the live 50k-file tree.
+	t.Setenv("SIGNALDECK_ARCHIVE_DIR", filepath.Join(t.TempDir(), "archive"))
+	st, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
+	// Pin DBPath to the temp store so handlers that resolve paths from it
+	// (datastats -> archive.Dir) walk a tiny temp tree, never the LIVE
+	// archive (49k+ files — the non-hermetic walk the council flagged).
+	cfg := baseCfg()
+	cfg.DBPath = dbPath
 	d := Deps{
 		St:      st,
-		Cfg:     baseCfg(),
+		Cfg:     cfg,
 		Version: "test",
 		Started: time.Now(),
 		Subscribe: func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {

@@ -13,11 +13,16 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  API_BASE,
   HORIZONS,
   pollMs,
   POLL_SLOW,
+  regimePostmortems,
+  trackRecordRegimes,
   trackRecordWithGate,
   type Horizon,
+  type RegimeKindRecord,
+  type RegimePostmortems,
   type TrackRecordWithGate,
 } from "@/lib/api";
 import { ago, fmtDate, fmtPct } from "@/lib/format";
@@ -31,6 +36,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ReliabilityCurve from "@/components/trackrecord/ReliabilityCurve";
 import HelpTip from "@/components/HelpTip";
+import ExportMenu from "@/components/ExportMenu";
 
 function pct(v: number | null | undefined, digits = 1): string {
   if (v == null || !isFinite(v)) return "—";
@@ -47,6 +53,25 @@ export default function TrackRecordPage() {
   const [err, setErr] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState(0);
   const [retryTick, setRetryTick] = useState(0);
+  // Credibility wave: high-conviction regime misses (its own read; best-effort —
+  // a failed fetch leaves the panel on its honest empty state).
+  const [pms, setPms] = useState<RegimePostmortems | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      regimePostmortems()
+        .then((p) => {
+          if (alive) setPms(p);
+        })
+        .catch(() => undefined);
+    load();
+    const stop = pollMs(load, POLL_SLOW);
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, [retryTick]);
 
   useEffect(() => {
     let alive = true;
@@ -136,6 +161,15 @@ export default function TrackRecordPage() {
               "—"
             )}
           </span>
+          {/* Export unification (#23): the record's raw resolved outcomes. */}
+          <ExportMenu
+            items={[
+              {
+                label: `outcomes.csv · ${horizon} horizon`,
+                href: `${API_BASE}/api/export/outcomes.csv?horizon=${horizon}`,
+              },
+            ]}
+          />
         </div>
       </div>
 
@@ -159,6 +193,10 @@ export default function TrackRecordPage() {
 
       {current && (
         <>
+          {/* ── CREDIBILITY WAVE: live regime grading + owned misses ── */}
+          <RegimesLivePanel regimes={trackRecordRegimes(current)} />
+          <RegimeMissesPanel pms={pms} />
+
           {/* ── STAGE 3 STORY, SECTION 1: the verdict itself ── */}
           <StorySection
             n={1}
@@ -669,6 +707,155 @@ function Stat({
         </div>
       )}
     </div>
+  );
+}
+
+/** Credibility wave — REGIMES — LIVE: per-kind live regime grading. The whole
+ *  point is CLAIMED (frozen at call time) next to LIVE (what actually
+ *  resolved); below 30 resolutions the kind's gate note renders verbatim. */
+const REGIME_KIND_ORDER = ["trend21", "trend63", "liquidity21", "vol21"];
+
+function RegimesLivePanel({
+  regimes,
+}: {
+  regimes: ReturnType<typeof trackRecordRegimes>;
+}) {
+  if (!regimes) return null;
+  if (!regimes.available) {
+    return (
+      <section className="panel">
+        <div className="panel-h">REGIMES — LIVE</div>
+        <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+          regime grading unavailable{regimes.error ? ` — ${regimes.error}` : ""}.
+        </p>
+      </section>
+    );
+  }
+  const kinds = regimes.kinds ?? {};
+  const order = [
+    ...REGIME_KIND_ORDER.filter((k) => k in kinds),
+    ...Object.keys(kinds).filter((k) => !REGIME_KIND_ORDER.includes(k)).sort(),
+  ];
+  return (
+    <section className="panel">
+      <div className="panel-h">
+        <span>REGIMES — LIVE</span>
+        <span
+          className="ml-auto text-[0.75rem] font-normal normal-case tracking-normal"
+          style={{ color: "var(--faint)" }}
+          title={regimes.dedupNote}
+        >
+          live resolution vs the accuracy claimed at call time
+        </span>
+      </div>
+      {order.length === 0 ? (
+        <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+          no regime calls have resolved yet — rows appear as calls hit their horizons.
+        </p>
+      ) : (
+        <div className="table-wrap">
+          <table className="w-full text-[0.75rem]">
+            <thead>
+              <tr style={{ color: "var(--faint)" }}>
+                <th className="px-4 py-2 text-left font-medium">kind</th>
+                <th className="px-4 py-2 text-right font-medium">resolved</th>
+                <th className="px-4 py-2 text-right font-medium">live accuracy</th>
+                <th className="px-4 py-2 text-right font-medium">claimed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {order.map((k) => {
+                const e: RegimeKindRecord = kinds[k];
+                return (
+                  <tr key={k} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td className="px-4 py-2">{k}</td>
+                    <td className="px-4 py-2 text-right tnum">
+                      {e.resolvedN.toLocaleString("en-US")}
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      {e.gated ? (
+                        <span style={{ color: "var(--warn)" }}>
+                          {e.note ?? "not yet significant"}
+                        </span>
+                      ) : (
+                        <span className="tnum">
+                          {pct(e.liveAccuracy)}
+                          {e.liveAccuracyCI
+                            ? ` (95% CI ${pct(e.liveAccuracyCI[0])}–${pct(e.liveAccuracyCI[1])})`
+                            : ""}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-right tnum" style={{ color: "var(--dim)" }}>
+                      {pct(e.claimed)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="px-4 pb-3 pt-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+        each call&rsquo;s claimed accuracy was frozen at call time — live resolution grades
+        it against what actually happened.
+      </p>
+    </section>
+  );
+}
+
+/** Credibility wave — WHEN WE WERE WRONG: the latest high-conviction regime
+ *  misses with their plain-English narratives. Owning misses in public IS the
+ *  credibility play; the empty state says why empty is expected early. */
+function RegimeMissesPanel({ pms }: { pms: RegimePostmortems | null }) {
+  const rows = pms?.postmortems ?? [];
+  return (
+    <section className="panel">
+      <div className="panel-h">
+        <span>WHEN WE WERE WRONG</span>
+        <span
+          className="ml-auto text-[0.75rem] font-normal normal-case tracking-normal"
+          style={{ color: "var(--faint)" }}
+          title={pms?.note}
+        >
+          high-conviction regime misses, newest first
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+          no high-conviction regime misses resolved yet — this list is expected to be
+          non-empty over time; a 96% tier is still wrong ~1 in 25 times.
+        </p>
+      ) : (
+        <ul className="max-h-[420px] overflow-y-auto px-4 py-2">
+          {rows.map((p) => (
+            <li
+              key={p.outcomeId}
+              className="py-2 text-[0.75rem]"
+              style={{ borderTop: "1px solid var(--border)" }}
+            >
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="font-semibold">{p.symbol}</span>
+                <span style={{ color: "var(--dim)" }}>{p.kind}</span>
+                <span>
+                  called <span style={{ color: "var(--warn)" }}>{p.regime}</span> · realized{" "}
+                  <span style={{ color: "var(--ask)" }}>{p.actual}</span>
+                </span>
+                <span className="tnum" style={{ color: "var(--faint)" }}>
+                  claimed {pct(p.claimedAccuracy)} · conviction {pct(p.conviction)}
+                </span>
+                <span className="ml-auto tnum" style={{ color: "var(--faint)" }}>
+                  {ago(p.createdAt)}
+                </span>
+              </div>
+              <p className="mt-1 leading-relaxed" style={{ color: "var(--dim)" }}>
+                {p.narrative}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

@@ -16,6 +16,32 @@ import type { NextConfig } from "next";
 // their default sub-tab so /markets etc. never 404. next.config redirects
 // run before the filesystem AND are honored on client-side <Link> navs.
 const HUB_REDIRECTS: { source: string; destination: string }[] = [
+  // 2026-07-19 nav consolidation (9 tabs → 5): HOME absorbs TODAY, WATCHLIST
+  // absorbs DECK + COMPARE, LAB absorbs DESK + LIVE. Old URLs land on the new
+  // homes so bookmarks, the alerts bell and briefing links keep working.
+  { source: "/today", destination: "/" },
+  { source: "/deck", destination: "/watchlist" },
+  { source: "/compare", destination: "/watchlist/compare" },
+  { source: "/desk", destination: "/lab/desk" },
+  { source: "/desk/overview", destination: "/lab/desk" },
+  { source: "/live", destination: "/lab/live" },
+  // 2026-07-18 hub merge: MARKETS + SIGNALS → one MARKET hub; research tabs
+  // → LAB. Old tab URLs land on their new homes (flat legacy URLs below may
+  // chain through these — two 307s, acceptable while the IA settles).
+  { source: "/markets/screener", destination: "/market/overview" },
+  { source: "/markets/trends", destination: "/market/trends" },
+  { source: "/markets/macro", destination: "/market/macro" },
+  { source: "/markets/regimes", destination: "/market/macro" },
+  { source: "/markets/memory", destination: "/lab/memory" },
+  { source: "/markets/graph", destination: "/lab/graph" },
+  { source: "/signals/predictions", destination: "/market/signals" },
+  { source: "/signals/regimes", destination: "/market/regimes" },
+  { source: "/signals/alerts", destination: "/market/activity" },
+  { source: "/signals/unusual", destination: "/market/unusual" },
+  { source: "/signals/forecasts", destination: "/lab/forecasts" },
+  { source: "/signals/confluence", destination: "/lab/confluence" },
+  { source: "/signals/insights", destination: "/lab/insights" },
+  { source: "/signals/debate", destination: "/lab/debate" },
   // MARKETS
   { source: "/screener", destination: "/markets/screener" },
   { source: "/trends", destination: "/markets/trends" },
@@ -48,7 +74,6 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   { source: "/signals", destination: "/signals/predictions" },
   { source: "/intel", destination: "/intel/news" },
   { source: "/lab", destination: "/lab/backtest" },
-  { source: "/desk", destination: "/desk/overview" },
   // Stage 5: /lab/system is now a real page (quality + agents + AI mounted
   // together), so its old redirect-to-quality is gone.
 ];

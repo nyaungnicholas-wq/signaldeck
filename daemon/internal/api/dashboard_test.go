@@ -328,7 +328,9 @@ func TestDashboardCache(t *testing.T) {
 		t.Errorf("cacheTtlS = %d, want %d", second.CacheTtlS, int(dashboardTTL/time.Second))
 	}
 
-	// Force expiry → rebuild picks up BBB.
+	// Force expiry → stale-while-revalidate: the next request serves the
+	// STALE payload instantly (users never block behind a rebuild) and kicks
+	// a background rebuild that picks up BBB.
 	c.mu.Lock()
 	c.builtAt = time.Now().Add(-dashboardTTL - time.Second)
 	c.mu.Unlock()
@@ -337,7 +339,26 @@ func TestDashboardCache(t *testing.T) {
 	if code := s8Get(t, srv.URL+"/api/dashboard", &third); code != 200 {
 		t.Fatalf("status = %d", code)
 	}
-	if third.Heatmap.N != 2 {
-		t.Errorf("post-expiry heatmap n = %d, want 2", third.Heatmap.N)
+	if third.Heatmap.N != 1 {
+		t.Errorf("stale-serve heatmap n = %d, want 1 (stale copy)", third.Heatmap.N)
+	}
+
+	// The background rebuild lands shortly; poll the cache, then re-request.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		fresh := time.Since(c.builtAt) < c.ttl
+		c.mu.Unlock()
+		if fresh || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var fourth dashResp
+	if code := s8Get(t, srv.URL+"/api/dashboard", &fourth); code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	if fourth.Heatmap.N != 2 {
+		t.Errorf("post-rebuild heatmap n = %d, want 2", fourth.Heatmap.N)
 	}
 }

@@ -1,29 +1,14 @@
-// SIGNALS hub — sub-tabs: Predictions · Forecasts · Insights · Alerts ·
-// Unusual (Stage 2 nav consolidation). Old routes /predict /forecast
-// /insights /alerts redirect here via next.config.ts; /signals/unusual is
-// new (fleet-wide UnusualActivityPanel, previously home-page only).
+// SIGNALS namespace — after the 2026-07-18 hub merge only the signal detail
+// REPORT pages still live here (/signals/report/[market]/[symbol]); every
+// former tab 307-redirects to its new MARKET or LAB home (next.config).
+// No hub tabs: the report page carries its own navigation.
 
 import type { Metadata } from "next";
-import HubTabs from "@/components/HubTabs";
 
 export const metadata: Metadata = {
-  title: "Signals",
+  title: "Signal report",
 };
 
-const TABS = [
-  { href: "/signals/predictions", label: "PREDICTIONS" },
-  { href: "/signals/forecasts", label: "FORECASTS" },
-  { href: "/signals/insights", label: "INSIGHTS" },
-  { href: "/signals/alerts", label: "ALERTS" },
-  { href: "/signals/unusual", label: "UNUSUAL" },
-  { href: "/signals/debate", label: "DEBATE" },
-];
-
 export default function SignalsLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <>
-      <HubTabs ariaLabel="Signals sections" tabs={TABS} />
-      {children}
-    </>
-  );
+  return <>{children}</>;
 }

@@ -106,28 +106,113 @@ type watchSpark struct {
 	Tier1d        string    `json:"tier1d"`
 	NSamples1d    int       `json:"nSamples1d"`
 	TierThreshold int       `json:"tierThreshold"`
+	// Technical readouts (2026-07-18 dashboard pass), computed from the same
+	// sparkline closes — nil when the window is too short (honest absence).
+	Rsi14        *float64 `json:"rsi14"`
+	Sma20DistPct *float64 `json:"sma20DistPct"`
+	Vol20AnnPct  *float64 `json:"vol20AnnPct"`
+}
+
+// sparkTechnicals derives RSI(14), distance to SMA20, and 20d realized vol
+// (annualized) from a closes window — pure, nil-safe on short windows.
+func sparkTechnicals(closes []float64) (rsi, smaDist, volAnn *float64) {
+	n := len(closes)
+	if n >= 15 {
+		var gain, loss float64
+		for i := n - 14; i < n; i++ {
+			d := closes[i] - closes[i-1]
+			if d > 0 {
+				gain += d
+			} else {
+				loss -= d
+			}
+		}
+		v := 100.0
+		if loss > 0 {
+			rs := gain / loss
+			v = 100 - 100/(1+rs)
+		} else if gain == 0 {
+			v = 50
+		}
+		rsi = &v
+	}
+	if n >= 20 && closes[n-1] > 0 {
+		var s float64
+		for _, c := range closes[n-20:] {
+			s += c
+		}
+		sma := s / 20
+		if sma > 0 {
+			v := (closes[n-1]/sma - 1) * 100
+			smaDist = &v
+		}
+	}
+	if n >= 21 {
+		rets := make([]float64, 0, 20)
+		for i := n - 20; i < n; i++ {
+			if closes[i-1] > 0 {
+				rets = append(rets, closes[i]/closes[i-1]-1)
+			}
+		}
+		if len(rets) >= 15 {
+			var m float64
+			for _, r := range rets {
+				m += r
+			}
+			m /= float64(len(rets))
+			var vv float64
+			for _, r := range rets {
+				vv += (r - m) * (r - m)
+			}
+			v := math.Sqrt(vv/float64(len(rets))) * math.Sqrt(252) * 100
+			volAnn = &v
+		}
+	}
+	return rsi, smaDist, volAnn
 }
 
 // ── cache ────────────────────────────────────────────────────────────────
 
 // dashCache holds the user-independent sections for one server instance.
 type dashCache struct {
-	mu      sync.Mutex
-	ttl     time.Duration
-	builtAt time.Time
-	global  map[string]any
+	mu         sync.Mutex
+	ttl        time.Duration
+	builtAt    time.Time
+	global     map[string]any
+	rebuilding bool
 }
 
 func newDashCache(ttl time.Duration) *dashCache { return &dashCache{ttl: ttl} }
 
-// get returns the cached global sections, rebuilding when stale. Built under
-// the lock so concurrent requests never stampede the store.
+// get returns the cached global sections. Fresh → serve; stale-but-present →
+// serve the stale copy immediately and kick ONE background rebuild
+// (stale-while-revalidate, 2026-07-24: rebuilds run at Nice=20 alongside
+// workers and can take tens of seconds — users must never block behind one).
+// Only a cold cache (first build after boot, normally done by the warmer
+// before anyone arrives) builds inline under the lock.
 func (c *dashCache) get(ctx context.Context, d Deps) (map[string]any, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.global != nil && time.Since(c.builtAt) < c.ttl {
-		return c.global, nil
+	if c.global != nil {
+		g := c.global
+		if time.Since(c.builtAt) >= c.ttl && !c.rebuilding {
+			c.rebuilding = true
+			go func() {
+				// Detached from the request: the rebuild must outlive the
+				// caller that happened to trigger it.
+				ng, err := d.buildDashGlobal(context.Background())
+				c.mu.Lock()
+				c.rebuilding = false
+				if err == nil {
+					c.global = ng
+					c.builtAt = time.Now()
+				}
+				c.mu.Unlock()
+			}()
+		}
+		c.mu.Unlock()
+		return g, nil
 	}
+	defer c.mu.Unlock()
 	g, err := d.buildDashGlobal(ctx)
 	if err != nil {
 		return nil, err
@@ -137,9 +222,11 @@ func (c *dashCache) get(ctx context.Context, d Deps) (map[string]any, error) {
 	return g, nil
 }
 
-// registerDashboard wires GET /api/dashboard with the production 60s cache.
+// registerDashboard wires GET /api/dashboard with the production 60s cache —
+// the SHARED process-wide instance (warm.go) so the cache-warmer worker
+// pre-builds the exact cache this route serves from.
 func (d Deps) registerDashboard(mux *http.ServeMux) {
-	d.registerDashboardCache(mux, newDashCache(dashboardTTL))
+	d.registerDashboardCache(mux, sharedDashCache)
 }
 
 // registerDashboardCache wires the route against an injected cache (tests
@@ -202,6 +289,7 @@ func (d Deps) buildDashGlobal(ctx context.Context) (map[string]any, error) {
 	cells := make([]heatCell, 0, len(syms))
 	mcapCovered := 0
 	advancers, decliners := 0, 0
+	suspectSkipped := 0
 	for _, s := range syms {
 		if universe.IsTapeETF(s.Symbol) {
 			continue // baskets, not single-name moves
@@ -213,6 +301,13 @@ func (d Deps) buildDashGlobal(ctx context.Context) (map[string]any, error) {
 		cell := heatCell{
 			Symbol: s.Symbol, Name: s.Name,
 			ChangePct: pctChange(dc.Last, dc.Prev), Ts: dc.Ts,
+		}
+		// 2026-07-18 accuracy pass: >65% one-day ratios are unadjusted-split
+		// artifacts in the stored bars — excluded from heatmap/movers/breadth
+		// rather than rendered as fake +500% tiles.
+		if cell.ChangePct > 65 || cell.ChangePct < -65 {
+			suspectSkipped++
+			continue
 		}
 		if f, has := shares[s.ID]; has && f.Value > 0 {
 			mc := f.Value * dc.Last
@@ -260,7 +355,7 @@ func (d Deps) buildDashGlobal(ctx context.Context) (map[string]any, error) {
 			"items":       cells,
 			"n":           len(cells),
 			"mcapCovered": mcapCovered,
-			"note":        moversNote,
+			"note":        heatNote(suspectSkipped),
 			"mcapNote":    mcapNote,
 			"sizeNote":    heatSizeNote,
 		},
@@ -339,12 +434,47 @@ func (d Deps) buildDashGauges(ctx context.Context, universeN, advancers, decline
 		"hasData": predN > 0, "caption": confCaption,
 	}
 
+	// Regime breadth (2026-07-18 dashboard pass): the validated regime
+	// forecasts aggregated fleet-wide — % of stocks in an uptrend (above
+	// SMA200) and % with elevated monthly vol. Direct reads of the same rows
+	// /signals/regimes serves; measured per-band accuracies apply per symbol.
+	upN, trendN, elevN, volN, rbErr := d.St.RegimeBreadth(ctx)
+	if rbErr != nil {
+		return nil, rbErr
+	}
+	regimes := map[string]any{
+		"uptrendPct":  pctOf(upN, trendN),
+		"trendN":      trendN,
+		"elevatedPct": pctOf(elevN, volN),
+		"volN":        volN,
+		"hasData":     trendN > 0,
+		"caption":     "share of stocks whose validated trend/vol regime calls read uptrend / elevated — from the same rows as /signals/regimes",
+	}
+
 	return map[string]any{
 		"breadth":    breadth,
 		"vix":        vix,
 		"anomalies":  anoms,
 		"confidence": conf,
+		"regimes":    regimes,
 	}, nil
+}
+
+func pctOf(k, n int) float64 {
+	if n == 0 {
+		return 0
+	}
+	return float64(k) / float64(n) * 100
+}
+
+// heatNote appends the suspect-exclusion count to the movers note so a
+// filtered universe never silently reads as full coverage.
+func heatNote(suspectSkipped int) string {
+	if suspectSkipped == 0 {
+		return moversNote
+	}
+	return moversNote + " " + strconv.Itoa(suspectSkipped) +
+		" symbol(s) excluded for a >65% one-day jump — almost always an unadjusted corporate action in the stored bars, not a real move."
 }
 
 func fmtBreadthCaption(n int) string {
@@ -455,6 +585,7 @@ func (d Deps) buildDashWatchlist(ctx context.Context, uid int64) (map[string]any
 				ws.DayChangePct = pctChange(ws.Closes[n-1], ws.Closes[n-2])
 			}
 		}
+		ws.Rsi14, ws.Sma20DistPct, ws.Vol20AnnPct = sparkTechnicals(ws.Closes)
 		// Stage 4: 1d score chip for the sidebar — same per-symbol lookup the
 		// /api/watchlist handler already does; watchlists are small (user-sized).
 		if sc, ok, serr := d.St.LatestScore(ctx, s.ID, md.H1d); serr != nil {

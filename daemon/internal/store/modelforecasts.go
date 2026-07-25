@@ -21,6 +21,13 @@ import (
 const (
 	ModelGBM     = "gbm"
 	ModelMeanRev = "meanrev"
+	// ModelPressure grades the ensemble's oldest base leg (the composite
+	// Pressure Score) walk-forward OOS and stores its lift here like a model
+	// leg. Unlike the opt-in model legs, pressure is OPT-OUT: the row is written
+	// even when lift<=0 so the PredictionRunner can see the measured
+	// anti-predictive grade and bench the leg (it is not deleted on a gated
+	// regrade the way alphax is).
+	ModelPressure = "pressure"
 )
 
 // ModelForecast is one stored model-leg forecast + its out-of-sample grade.

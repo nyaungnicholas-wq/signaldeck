@@ -25,7 +25,10 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // the effect never needs to setState synchronously for it. Once established,
   // `ready` stays true, so navigating between protected pages never re-flashes.
   const [ready, setReady] = useState(false);
-  const onLogin = pathname === "/login";
+  // Public routes render without a session: /login (the sign-in) and /proof
+  // (the shareable public track-record + ledger page). Everything else gates.
+  const isPublic = pathname === "/login" || pathname === "/proof";
+  const onLogin = isPublic;
 
   useEffect(() => {
     if (onLogin || ready) return;

@@ -149,7 +149,7 @@ func (s *Store) FilingsSince(ctx context.Context, symbolID int64, formPrefixes [
 
 // UnparsedForm4s returns Form 4 filings that have no insider_trades row yet —
 // the fetch/parse backlog (bounded by limit so one run never floods EDGAR).
-// Sentinel rows (code='') count as parsed here BY DESIGN: a derivative-only or
+// Sentinel rows (code=”) count as parsed here BY DESIGN: a derivative-only or
 // permanently-unfetchable Form 4 leaves the backlog via its sentinel instead
 // of being re-fetched from EDGAR every run forever.
 func (s *Store) UnparsedForm4s(ctx context.Context, limit int) ([]FilingRow, error) {
@@ -192,7 +192,7 @@ func (s *Store) InsertInsiderTrade(ctx context.Context, t InsiderTradeRow) error
 
 // InsiderTrades returns parsed insider transactions newest-first. symbolID=0
 // means fleet-wide recent; code="" means all transaction codes. Sentinel rows
-// (code='' — parsed-empty markers for derivative-only/abandoned Form 4s, see
+// (code=” — parsed-empty markers for derivative-only/abandoned Form 4s, see
 // the filings-poller) are ALWAYS excluded: they exist only to take an
 // accession out of the UnparsedForm4s backlog, never to be shown.
 func (s *Store) InsiderTrades(ctx context.Context, symbolID int64, code string, limit int) ([]InsiderTradeRow, error) {

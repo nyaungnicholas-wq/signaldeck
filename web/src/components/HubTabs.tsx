@@ -31,10 +31,11 @@ export interface HubTab {
   exact?: boolean;
 }
 
-/** Hubs with more tabs than this fold the rest into the "More research" menu.
- *  Folding is currently DISABLED (Infinity): every tab stays directly visible
- *  and the strip scrolls horizontally instead of hiding routes in a menu. */
-const MAX_VISIBLE = Infinity;
+/** Hubs with more tabs than this keep the first N visible and fold the rest
+ *  into the "MORE" menu (progressive disclosure). Re-enabled 2026-07-19 as
+ *  part of the nav consolidation — the LAB hub's 21 tabs were the bulk of the
+ *  "too many tabs" clutter; seven stay out front, the specialist rest fold. */
+const MAX_VISIBLE = 7;
 
 export default function HubTabs({
   tabs,

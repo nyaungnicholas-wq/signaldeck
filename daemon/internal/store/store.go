@@ -30,11 +30,21 @@ type Store struct {
 	db   *sql.DB // read pool
 	w    *sql.DB // dedicated single-connection write path
 	path string  // database file path (for size accounting in DataStats)
+	dsn  string  // connection string (so a reader clone opens identically)
+	// borrowedWriter marks a ReaderClone: it shares the parent's write
+	// connection, so Close must not close the writer out from under the parent.
+	borrowedWriter bool
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
 func Open(path string) (*Store, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", path)
+	// journal_size_limit caps the WAL FILE: once a checkpoint completes, SQLite
+	// truncates the WAL back to this bound instead of letting it grow without
+	// limit. Before this, a slow read (e.g. the old full-universe screener) held
+	// old WAL frames long enough for concurrent writes to push the file past
+	// 1GB, which the live governor's TRUNCATE checkpoint could never reclaim
+	// while readers stayed active. 256MB is comfortably above the working set.
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=journal_size_limit(268435456)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -58,7 +68,7 @@ func Open(path string) (*Store, error) {
 		w.Close()  //nolint:errcheck
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	return &Store{db: db, w: w, path: path}, nil
+	return &Store{db: db, w: w, path: path, dsn: dsn}, nil
 }
 
 // migrate applies in-place column additions that CREATE TABLE IF NOT EXISTS
@@ -99,12 +109,61 @@ func migrate(w *sql.DB) error {
 			return err
 		}
 	}
+	// research discovery engine wave: decay-tracker fields + a machine-readable
+	// rule spec on ledger hypotheses. The table already exists on live DBs (the
+	// ledger shipped before this wave), so these ride the same
+	// pragma_table_info-guarded ALTER path as the columns above.
+	for _, col := range []struct{ name, ddl string }{
+		{"peak_posterior", `ALTER TABLE research_ledger_hypotheses ADD COLUMN peak_posterior REAL NOT NULL DEFAULT 0`},
+		{"peak_ts", `ALTER TABLE research_ledger_hypotheses ADD COLUMN peak_ts INTEGER NOT NULL DEFAULT 0`},
+		{"last_grade_ts", `ALTER TABLE research_ledger_hypotheses ADD COLUMN last_grade_ts INTEGER NOT NULL DEFAULT 0`},
+		{"spec", `ALTER TABLE research_ledger_hypotheses ADD COLUMN spec TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('research_ledger_hypotheses') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
-// Close closes the database.
+// ReaderClone returns a Store that READS through its own private connection
+// pool while SHARING this Store's single write connection.
+//
+// WHY (measured 2026-07-16): one 4-connection read pool served ~30 background
+// workers AND every interactive API handler. When the worker fleet scanned the
+// multi-GB database concurrently, all four connections were held and API reads
+// queued behind multi-second scans — a 61s /api/honesty. Giving interactive
+// traffic its own pool means batch work cannot starve it. WAL readers never
+// block each other in SQLite, so extra read connections are cheap and safe.
+//
+// The writer is deliberately SHARED (the same *sql.DB pointer, not a new one):
+// the single-writer discipline is what keeps SQLITE_BUSY off this database, and
+// a second write connection would reintroduce exactly that. A clone's Close
+// therefore closes only its own read pool.
+func (s *Store) ReaderClone(maxConns int) (*Store, error) {
+	if maxConns <= 0 {
+		maxConns = 4
+	}
+	db, err := sql.Open("sqlite", s.dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(maxConns)
+	return &Store{db: db, w: s.w, path: s.path, dsn: s.dsn, borrowedWriter: true}, nil
+}
+
+// Close closes the database. A ReaderClone closes only its own read pool — the
+// write connection belongs to the parent Store.
 func (s *Store) Close() error {
 	err := s.db.Close()
+	if s.borrowedWriter {
+		return err
+	}
 	if werr := s.w.Close(); err == nil {
 		err = werr
 	}
@@ -609,7 +668,7 @@ func (s *Store) Expectancy(ctx context.Context, symbolID int64, h md.Horizon) ([
 // InsertInsight stores one readable insight. An unset Data ("" — the Go zero
 // value, e.g. the Risk watcher persists no evidence blob) is stored as '{}'
 // (the schema's own DEFAULT; the column is NOT NULL): SQLite's json_extract
-// raises "malformed JSON" on '' and one such row made every json-filtered
+// raises "malformed JSON" on ” and one such row made every json-filtered
 // insights query (InsightsByKind → /api/dashboard feed) fail outright
 // (found in Stage 6 verify).
 func (s *Store) InsertInsight(ctx context.Context, in md.Insight) error {
@@ -927,18 +986,45 @@ func (s *Store) FileSizes() (dbBytes, walBytes int64) {
 	return
 }
 
+// WALCheckpointResult reports what a checkpoint ACTUALLY did — SQLite reports
+// partial and blocked checkpoints through the pragma's result row, not through
+// an error, so a caller that ignores the row cannot tell "truncated" from
+// "did nothing".
+type WALCheckpointResult struct {
+	// Busy is true when the checkpoint could NOT complete: a TRUNCATE needs a
+	// moment with no active readers, and a busy fleet may never grant one.
+	Busy bool
+	// LogFrames is the WAL length in frames; Checkpointed is how many were
+	// moved back into the database. Busy && Checkpointed==0 means nothing
+	// happened at all.
+	LogFrames, Checkpointed int
+}
+
+// Truncated reports whether the WAL was actually flushed AND truncated.
+func (r WALCheckpointResult) Truncated() bool { return !r.Busy }
+
 // WALCheckpointTruncate runs PRAGMA wal_checkpoint(TRUNCATE): it flushes the
 // WAL into the main database and then truncates the WAL file to zero, bounding
 // the single biggest source of unbounded disk growth in a busy WAL database.
 // Run on the WRITE connection so it can't race a concurrent writer.
-func (s *Store) WALCheckpointTruncate(ctx context.Context) error {
-	// The pragma returns (busy, log, checkpointed); we only care about errors.
+//
+// It RETURNS THE OUTCOME rather than discarding it. The previous form scanned
+// (busy, log, checkpointed) and threw all three away with the comment "we only
+// care about errors" — so the governor logged "checkpointed wal" every hour
+// while a reader-starved TRUNCATE did nothing and the WAL grew unbounded
+// (observed live 2026-07-16: three consecutive passes reporting success with
+// the WAL frozen at exactly 254.1MB). Reporting an action the return value
+// says did not happen is precisely the honesty failure this codebase forbids.
+func (s *Store) WALCheckpointTruncate(ctx context.Context) (WALCheckpointResult, error) {
 	var busy, logFrames, ckpt int
 	err := s.w.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &ckpt)
 	if err == sql.ErrNoRows {
-		return nil
+		return WALCheckpointResult{}, nil
 	}
-	return err
+	if err != nil {
+		return WALCheckpointResult{}, err
+	}
+	return WALCheckpointResult{Busy: busy == 1, LogFrames: logFrames, Checkpointed: ckpt}, nil
 }
 
 // Vacuum runs a full VACUUM to reclaim free pages left behind by retention

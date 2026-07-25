@@ -88,8 +88,18 @@ const defaultBins = 10
 // that "absent" is distinct from a real zero value.
 type Components struct {
 	// PressureScore is the composite Pressure Score in [-1, +1]
-	// (sell..buy). It is always present. Converted via (score+1)/2.
+	// (sell..buy). Converted via (score+1)/2. Whether it CONTRIBUTES is now
+	// governed by PressureLift (below) — see LegProbabilities.
 	PressureScore float64
+	// PressureLift is the pressure leg's measured out-of-sample lift over the
+	// naive baseline, graded by the pressure-trainer worker and stored like a
+	// model leg. FAIL-SAFE, deliberately asymmetric with the opt-in model legs:
+	// the leg is dropped ONLY when this is non-nil AND <= 0 (a MEASURED
+	// anti-predictive grade); an unmeasured leg (nil) is KEPT, so a cold or
+	// erroring trainer never blanks the platform's oldest base leg. Historically
+	// pressure was always-on (PressureLift implicitly nil), so prior behavior is
+	// preserved until a negative grade is measured.
+	PressureLift *float64
 	// ExpectancyHitRate is the measured fraction of positive forward returns
 	// for the current state, in [0, 1]. nil when no expectancy is available.
 	// Used as-is (it is already an up-probability).
@@ -173,8 +183,17 @@ var LegNames = []string{LegPressure, LegExpectancy, LegForecast, LegSentiment, L
 // RawProbability would blend are returned (pressure always; expectancy when
 // present; forecast only with demonstrated edge; sentiment when present).
 func LegProbabilities(c Components) map[string]float64 {
-	legs := map[string]float64{
-		LegPressure: clamp01((c.PressureScore + 1) / 2),
+	legs := map[string]float64{}
+	// Pressure leg — historically the always-on base leg, now held to an OOS
+	// lift gate once that lift has been MEASURED (pressure-trainer). FAIL-SAFE
+	// and deliberately asymmetric with the opt-in model legs below: an
+	// UNMEASURED leg (PressureLift==nil) is KEPT — we do not bench the base leg
+	// on absence of evidence — while a MEASURED anti-predictive leg
+	// (*PressureLift <= 0) is DROPPED, never down-weighted (honesty doctrine).
+	// The resolved-outcome record shows the fixed-weight pressure score is
+	// anti-predictive at 1d/1w, so once graded it benches fleet-wide.
+	if c.PressureLift == nil || *c.PressureLift > 0 {
+		legs[LegPressure] = clamp01((c.PressureScore + 1) / 2)
 	}
 	if c.ExpectancyHitRate != nil {
 		legs[LegExpectancy] = clamp01(*c.ExpectancyHitRate)
@@ -208,7 +227,9 @@ func LegProbabilities(c Components) map[string]float64 {
 // contributed (nUsed).
 //
 // Conversions:
-//   - PressureScore in [-1,1] -> (score+1)/2 (always contributes).
+//   - PressureScore in [-1,1] -> (score+1)/2, contributing UNLESS its measured
+//     OOS lift is <=0 (PressureLift non-nil and <=0); unmeasured pressure
+//     (nil) still contributes — see LegProbabilities.
 //   - ExpectancyHitRate in [0,1] -> used as-is (contributes when non-nil).
 //   - ForecastProb in [0,1] -> used as-is, but ONLY when ForecastLift is
 //     non-nil AND *ForecastLift > 0. An edgeless or absent forecast is dropped
@@ -217,8 +238,9 @@ func LegProbabilities(c Components) map[string]float64 {
 //     non-nil). Absent sentiment leaves the blend exactly as before.
 //
 // The returned probability is clamped to [0,1]. If no component contributes
-// (which cannot happen while PressureScore is always counted, but is handled
-// defensively), prob=0.5 and nUsed=0 — a neutral, information-free prior.
+// (now POSSIBLE when the pressure leg is benched by its OOS gate and no other
+// leg qualifies — an honest "no measured signal" state), prob=0.5 and nUsed=0,
+// a neutral, information-free prior.
 func RawProbability(c Components) (prob float64, nUsed int) {
 	legs := LegProbabilities(c)
 	if len(legs) == 0 {

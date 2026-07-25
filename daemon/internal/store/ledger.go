@@ -167,9 +167,9 @@ func (s *Store) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry, e
 
 // LedgerVerification is the result of walking the whole chain.
 type LedgerVerification struct {
-	Intact      bool   `json:"intact"`               // true iff every recomputed hash matches
-	Count       int64  `json:"count"`                // rows examined
-	HeadHash    string `json:"headHash"`             // entry_hash of the last row ("" if empty)
+	Intact      bool   `json:"intact"`                // true iff every recomputed hash matches
+	Count       int64  `json:"count"`                 // rows examined
+	HeadHash    string `json:"headHash"`              // entry_hash of the last row ("" if empty)
 	BrokenAtSeq *int64 `json:"brokenAtSeq,omitempty"` // first seq whose stored/linkage hash disagrees
 }
 

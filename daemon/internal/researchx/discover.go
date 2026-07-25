@@ -1,0 +1,245 @@
+package researchx
+
+import (
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// Candidate is one auto-discovered rule with its full judgment record.
+type Candidate struct {
+	ID          string // "AD-" + hex(sha1(canonical spec))[:8]
+	Rule        Rule
+	Desc        string
+	Grade       WeekGrade
+	CF          CFReport
+	Survival    SurvivalReport
+	WilsonLower float64 // Bonferroni-corrected over the number of rules tested
+	Survives    bool
+}
+
+// DiscoverConfig bounds the discovery grid and its false-discovery gates.
+// Zero fields take the documented defaults.
+type DiscoverConfig struct {
+	MinWeekObs     int     // default 10
+	MinWeeks       int     // default 30
+	MinWeeksPerEra int     // default 8
+	Alpha          float64 // default 0.05 (Bonferroni-corrected over the grid)
+	MaxCandidates  int     // hard cap on the grid, default 48
+}
+
+func (c DiscoverConfig) withDefaults() DiscoverConfig {
+	if c.MinWeekObs <= 0 {
+		c.MinWeekObs = 10
+	}
+	if c.MinWeeks <= 0 {
+		c.MinWeeks = 30
+	}
+	if c.MinWeeksPerEra <= 0 {
+		c.MinWeeksPerEra = 8
+	}
+	if c.Alpha <= 0 {
+		c.Alpha = 0.05
+	}
+	if c.MaxCandidates <= 0 {
+		c.MaxCandidates = 48
+	}
+	return c
+}
+
+// discoverAtoms is the fixed condition vocabulary. The first discoverAnchors
+// entries (pressure_abs, ext_score) are the only atoms allowed to anchor a
+// pair — the grid stays bounded and every pair asks "does X sharpen a
+// pressure/extension setup?", not "do any two features correlate?".
+var discoverAtoms = []Cond{
+	{Key: "pressure_abs", Op: ">=", Val: 0.75, Pct: true},
+	{Key: "pressure_abs", Op: ">=", Val: 0.90, Pct: true},
+	{Key: "ext_score", Op: ">=", Val: 0.70},
+	{Key: "rsi_pct", Op: ">=", Val: 0.80},
+	{Key: "rsi_pct", Op: "<=", Val: 0.20},
+	{Key: "vol_pct", Op: ">=", Val: 0.80},
+	{Key: "vol_anomaly", Op: ">=", Val: 0.85, Pct: true},
+	{Key: "price_accel", Op: ">=", Val: 0.85, Pct: true},
+	{Key: "price_accel", Op: "<=", Val: 0.15, Pct: true},
+	{Key: "consec_dir", Op: ">=", Val: 0.40},
+	{Key: "consec_dir", Op: "<=", Val: -0.40},
+	{Key: "vix_high_vol", Op: ">=", Val: 1},
+}
+
+const discoverAnchors = 3
+
+var discoverCalls = []string{"inverse_pressure", "follow_pressure"}
+
+// discoverGrid enumerates the bounded deterministic grid: every single atom ×
+// call, then every distinct-key anchored pair × call, truncated at maxRules
+// (singles enumerate first, so the cap trims the pair tail).
+func discoverGrid(maxRules int) []Rule {
+	var rules []Rule
+	add := func(r Rule) bool {
+		if len(rules) >= maxRules {
+			return false
+		}
+		rules = append(rules, r)
+		return true
+	}
+	for _, a := range discoverAtoms {
+		for _, call := range discoverCalls {
+			if !add(Rule{Conds: []Cond{a}, Call: call}) {
+				return rules
+			}
+		}
+	}
+	for i := 0; i < discoverAnchors; i++ {
+		for j := i + 1; j < len(discoverAtoms); j++ {
+			if discoverAtoms[i].Key == discoverAtoms[j].Key {
+				continue
+			}
+			for _, call := range discoverCalls {
+				if !add(Rule{Conds: []Cond{discoverAtoms[i], discoverAtoms[j]}, Call: call}) {
+					return rules
+				}
+			}
+		}
+	}
+	return rules
+}
+
+// Discover runs the bounded deterministic grid over obs and returns the
+// SURVIVING candidates, sorted by ID. Every candidate is judged: the
+// week-trial winrate's Bonferroni-corrected (alpha/nTested) Wilson lower
+// bound must exceed 0.5, AND the grade must survive RegimeSurvival, AND the
+// thresholds must not be fragile, AND (multi-cond rules only) the
+// counterfactual must show incremental value. Grades below MinWeeks are never
+// judged — too little history to claim anything. Pure and deterministic: the
+// same obs always yield the same survivors.
+func Discover(obs []Obs, cfg DiscoverConfig) []Candidate {
+	cfg = cfg.withDefaults()
+	grid := discoverGrid(cfg.MaxCandidates)
+	if len(grid) == 0 {
+		return nil
+	}
+	z := normalQuantile(1 - cfg.Alpha/float64(len(grid)))
+	var out []Candidate
+	for _, r := range grid {
+		g := GradeWeeks(obs, r, cfg.MinWeekObs)
+		if g.Weeks < cfg.MinWeeks {
+			continue
+		}
+		wl := wilsonLower(winRate(g), g.Weeks, z)
+		if wl <= 0.5 {
+			continue
+		}
+		sv := RegimeSurvival(g, cfg.MinWeeksPerEra)
+		if !sv.Survives {
+			continue
+		}
+		if _, fragile := FragileThreshold(obs, r, cfg.MinWeekObs); fragile {
+			continue
+		}
+		cf := Counterfactual(obs, r, cfg.MinWeekObs, cfg.MinWeeks)
+		if len(r.Conds) > 1 && !cf.AddsValue {
+			continue
+		}
+		out = append(out, Candidate{
+			ID: ruleID(r), Rule: r, Desc: ruleDesc(r), Grade: g, CF: cf,
+			Survival: sv, WilsonLower: wl, Survives: true,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// ruleID derives the stable candidate ID: "AD-" + hex(sha1(canonical
+// spec))[:8]. Conds are sorted in the canonical form so equivalent rules hash
+// identically regardless of cond order.
+func ruleID(r Rule) string {
+	sum := sha1.Sum([]byte(canonicalSpec(r)))
+	return "AD-" + hex.EncodeToString(sum[:])[:8]
+}
+
+func canonicalSpec(r Rule) string {
+	parts := make([]string, len(r.Conds))
+	for i, c := range r.Conds {
+		pct := ""
+		if c.Pct {
+			pct = "~pct"
+		}
+		parts[i] = c.Key + pct + c.Op + strconv.FormatFloat(c.Val, 'g', -1, 64)
+	}
+	sort.Strings(parts)
+	return r.Call + "|" + strings.Join(parts, "&")
+}
+
+func ruleDesc(r Rule) string {
+	if len(r.Conds) == 0 {
+		return fmt.Sprintf("Auto-discovered weekly rule: %s unconditioned (week-trial graded)", r.Call)
+	}
+	parts := make([]string, len(r.Conds))
+	for i, c := range r.Conds {
+		k := c.Key
+		if c.Pct {
+			k += " (week-pct)"
+		}
+		parts[i] = fmt.Sprintf("%s %s %g", k, c.Op, c.Val)
+	}
+	return fmt.Sprintf("Auto-discovered weekly rule: %s when %s (week-trial graded)", r.Call, strings.Join(parts, " and "))
+}
+
+// wilsonLower and normalQuantile are copied from internal/researchlab
+// (unexported there) so researchx stays self-contained.
+
+// wilsonLower returns the lower bound of the Wilson score interval for a
+// proportion phat over n trials at the given z. Returns 0 for n<=0.
+func wilsonLower(phat float64, n int, z float64) float64 {
+	if n <= 0 {
+		return 0
+	}
+	nf := float64(n)
+	z2 := z * z
+	denom := 1 + z2/nf
+	center := phat + z2/(2*nf)
+	margin := z * math.Sqrt(phat*(1-phat)/nf+z2/(4*nf*nf))
+	lb := (center - margin) / denom
+	if lb < 0 {
+		return 0
+	}
+	return lb
+}
+
+// normalQuantile is the inverse standard-normal CDF (probit) via Acklam's
+// rational approximation — pure and deterministic (no RNG, no clock). Accurate
+// to ~1e-9, plenty for a significance threshold.
+func normalQuantile(p float64) float64 {
+	if p <= 0 {
+		return math.Inf(-1)
+	}
+	if p >= 1 {
+		return math.Inf(1)
+	}
+	// coefficients
+	a := []float64{-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00}
+	b := []float64{-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01}
+	c := []float64{-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00}
+	d := []float64{7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00}
+	const plow = 0.02425
+	phigh := 1 - plow
+	switch {
+	case p < plow:
+		q := math.Sqrt(-2 * math.Log(p))
+		return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q + c[5]) /
+			((((d[0]*q+d[1])*q+d[2])*q+d[3])*q + 1)
+	case p <= phigh:
+		q := p - 0.5
+		r := q * q
+		return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r + a[5]) * q /
+			(((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r + 1)
+	default:
+		q := math.Sqrt(-2 * math.Log(1-p))
+		return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q + c[5]) /
+			((((d[0]*q+d[1])*q+d[2])*q+d[3])*q + 1)
+	}
+}

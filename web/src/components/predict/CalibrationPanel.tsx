@@ -88,6 +88,22 @@ export default function CalibrationPanel({
             </HelpTip>
           </>
         )}
+        {/* 2026-07-17: once a live prequential record exists the honest chip
+            is the live verdict itself — including (especially) a bad one. */}
+        {data && data.live === true && (
+          <>
+            <span
+              className="chip"
+              style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
+            >
+              live record
+            </span>
+            <HelpTip label="The live prequential record">
+              {data.trackLabel ??
+                "Graded forward on probabilities frozen at prediction time — a live track record, not a backtest."}
+            </HelpTip>
+          </>
+        )}
         <div role="group" aria-label="Calibration horizon" className="ml-auto flex items-center gap-1">
           {CAL_HORIZONS.map((h) => {
             const active = h === horizon;

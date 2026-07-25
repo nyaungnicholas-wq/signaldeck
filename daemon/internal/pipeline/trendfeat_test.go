@@ -20,8 +20,8 @@ func TestTrendFeatures(t *testing.T) {
 	bars := make([]md.Bar, 0, 80)
 	base := 100.0
 	for i := 0; i < 80; i++ {
-		c := base + float64(i)                // steady climb
-		if i%5 == 0 {                          // periodic dip → swing lows
+		c := base + float64(i) // steady climb
+		if i%5 == 0 {          // periodic dip → swing lows
 			c -= 3
 		}
 		h, l := c+1, c-1

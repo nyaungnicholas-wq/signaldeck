@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,6 +49,12 @@ type Worker struct {
 	// worker immediately at boot; a fresh backup at every restart is noise).
 	// 0 = no delay.
 	FirstRunDelay time.Duration
+	// MinGap skips a Run when the last successful local backup (meta
+	// backup_last_ts) is younger than this (default 20h). The delay above only
+	// postpones the boot run — without this gate every daemon restart still
+	// produced a full VACUUM INTO copy plus its offsite upload, and a few
+	// deploys in one day rotated real nightly history out of the Keep window.
+	MinGap time.Duration
 
 	ran bool
 }
@@ -60,6 +67,26 @@ func (w *Worker) Interval() time.Duration { return 24 * time.Hour }
 
 // Run takes one backup and prunes old ones.
 func (w *Worker) Run(ctx context.Context) (string, error) {
+	if w.St != nil {
+		gap := w.MinGap
+		if gap <= 0 {
+			// 30h (was 20h, 2026-07-24): the primary backup is now the OFFLINE
+			// post-market-close run (ops/signaldeck-backup-offline.sh) — with the
+			// daemon gated to 06:20-13:10 PT, a 20h gate made this worker fire its
+			// full VACUUM INTO at boot every morning during market hours, wedging
+			// the app. At 30h this worker is a pure failsafe: it only runs when
+			// the offline backup has actually missed a day.
+			gap = 30 * time.Hour
+		}
+		if v, err := w.St.GetMeta(ctx, MetaLastBackupTs); err == nil && v != "" {
+			if last, perr := strconv.ParseInt(v, 10, 64); perr == nil {
+				if age := time.Since(time.Unix(last, 0)); age >= 0 && age < gap {
+					return fmt.Sprintf("skipped — last backup %s ago (restart gate, min gap %s)",
+						age.Round(time.Minute), gap), nil
+				}
+			}
+		}
+	}
 	if !w.ran {
 		w.ran = true
 		if w.FirstRunDelay > 0 {
@@ -155,8 +182,8 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()      //nolint:errcheck
-		os.Remove(tmp)   //nolint:errcheck
+		out.Close()    //nolint:errcheck
+		os.Remove(tmp) //nolint:errcheck
 		return err
 	}
 	if err := out.Close(); err != nil {

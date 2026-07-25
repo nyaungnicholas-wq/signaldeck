@@ -11,6 +11,7 @@ import EmptyState from "@/components/EmptyState";
 import Gauge from "@/components/viz/Gauge";
 import HelpTip from "@/components/HelpTip";
 import PagePurpose from "@/components/PagePurpose";
+import PatternsExplorer from "@/components/markets/PatternsExplorer";
 
 function MoverRow({ m }: { m: TrendsMover }) {
   return (
@@ -107,8 +108,8 @@ export default function TrendsPage() {
       .filter((m) => isFinite(m.score))
       .sort((a, b) => b.score - a.score);
     return {
-      top: sorted.slice(0, 5),
-      bottom: [...sorted].reverse().slice(0, 5),
+      top: sorted.slice(0, 10),
+      bottom: [...sorted].reverse().slice(0, 10),
     };
   }, [trends]);
 
@@ -238,6 +239,9 @@ export default function TrendsPage() {
             <MoversPanel title="TOP MOVERS — HIGHEST SCORE" movers={top} />
             <MoversPanel title="BOTTOM MOVERS — LOWEST SCORE" movers={bottom} />
           </div>
+
+          {/* 2026-07-18 upgrade: what kind of candlestick patterns are firing */}
+          <PatternsExplorer />
           <p className="px-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
             <Link
               href="/markets/screener"

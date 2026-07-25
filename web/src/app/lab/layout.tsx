@@ -13,22 +13,34 @@ export const metadata: Metadata = {
     "Research and self-measurement tools — backtests, risk, paper trading, and the honesty scoreboard, all graded on stored data.",
 };
 
-// Tabs beyond the first five fold into HubTabs' "More research" menu
-// (progressive disclosure) — order here decides what stays visible.
+// Tabs beyond the first seven (HubTabs MAX_VISIBLE) fold into the "MORE"
+// menu — order here decides what stays visible. The seven core research +
+// self-measurement surfaces stay out front; specialist/experimental tabs fold.
+// 2026-07-19 nav consolidation: DESK (former /desk, the AI research desk) and
+// LIVE (former /live, pipeline health) folded in here.
 const TABS = [
   { href: "/lab/backtest", label: "BACKTEST" },
-  { href: "/lab/signal-backtest", label: "SIGNAL BT" },
   { href: "/lab/risk", label: "RISK" },
   { href: "/lab/portfolio", label: "PORTFOLIO" },
   { href: "/lab/paper", label: "PAPER" },
   { href: "/lab/track-record", label: "TRACK RECORD" },
   { href: "/lab/honesty", label: "HONESTY" },
+  { href: "/lab/desk", label: "DESK" },
+  // ── everything below folds into "MORE" ──
+  { href: "/lab/system", label: "SYSTEM" },
+  { href: "/lab/forecasts", label: "MODELS" },
+  { href: "/lab/confluence", label: "CONFLUENCE" },
+  { href: "/lab/insights", label: "INSIGHTS" },
+  { href: "/lab/signal-backtest", label: "SIGNAL BT" },
+  { href: "/lab/research", label: "RESEARCH" },
   { href: "/lab/evolution", label: "EVOLUTION" },
   { href: "/lab/strategies", label: "STRATEGIES" },
-  // Stage 5: SYSTEM lands on the combined quality+agents+AI page.
-  { href: "/lab/system", label: "SYSTEM" },
   { href: "/lab/scenario", label: "SCENARIO" },
   { href: "/lab/optimizer", label: "OPTIMIZER" },
+  { href: "/lab/debate", label: "DEBATE" },
+  { href: "/lab/memory", label: "MEMORY" },
+  { href: "/lab/graph", label: "GRAPH" },
+  { href: "/lab/live", label: "LIVE" },
 ];
 
 export default function LabLayout({ children }: { children: React.ReactNode }) {

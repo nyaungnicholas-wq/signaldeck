@@ -72,13 +72,18 @@ func (s *Store) AnomalyCountSince(ctx context.Context, since int64) (int, error)
 // symbols have a prediction — in ONE query. Feeds the dashboard confidence
 // gauge; the gate flag comes from ResolvedPredictionCount.
 func (s *Store) LatestPredictionStats(ctx context.Context, h md.Horizon) (avgConf float64, n int, err error) {
+	// 2026-07-24 perf pass: the old GROUP BY + self-join form re-aggregated the
+	// whole predictions table (~240k rows, ~3.7s cold). Driving from symbols
+	// with one idx_predictions_horizon_sym_ts probe per symbol (~50ms) returns
+	// the identical latest-per-symbol stats.
 	err = s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(AVG(ABS(p.cal_prob - 0.5) * 2), 0), COUNT(*)
-		FROM predictions p
-		JOIN (SELECT symbol_id, MAX(ts) AS mx FROM predictions
-		      WHERE horizon=? GROUP BY symbol_id) t
-		  ON t.symbol_id = p.symbol_id AND t.mx = p.ts
-		WHERE p.horizon=?`, string(h), string(h)).Scan(&avgConf, &n)
+		SELECT COALESCE(AVG(ABS(cal_prob - 0.5) * 2), 0), COUNT(*)
+		FROM (
+			SELECT (SELECT p.cal_prob FROM predictions p
+			        WHERE p.horizon=? AND p.symbol_id=s.id
+			        ORDER BY p.ts DESC LIMIT 1) AS cal_prob
+			FROM symbols s
+		) WHERE cal_prob IS NOT NULL`, string(h)).Scan(&avgConf, &n)
 	return avgConf, n, err
 }
 
@@ -92,6 +97,37 @@ func (s *Store) ResolvedPredictionCount(ctx context.Context, h md.Horizon) (int,
 		SELECT COUNT(*) FROM prediction_outcomes
 		WHERE horizon=? AND resolved_at IS NOT NULL`, string(h)).Scan(&n)
 	return n, err
+}
+
+// LiveDirectionalRecord summarizes the LIVE forward record of the calibrated
+// directional predictions for one horizon over INDEPENDENT (symbol, UTC-day)
+// resolutions — one obs per symbol-day (latest ts wins), the same dedup
+// discipline as /honesty and /track-record. Cheap aggregate (ms on ~100k
+// rows), so label surfaces can carry the live verdict on every request.
+func (s *Store) LiveDirectionalRecord(ctx context.Context, h md.Horizon) (independentN int, winRate float64, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(AVG(CASE WHEN (prob>=0.5)=(up=1) THEN 1.0 ELSE 0.0 END),0)
+		FROM (
+		  SELECT symbol_id, date(ts,'unixepoch') AS d, prob, up, MAX(ts)
+		  FROM prediction_outcomes
+		  WHERE horizon=? AND resolved_at IS NOT NULL AND up IS NOT NULL
+		  GROUP BY symbol_id, d
+		)`, string(h)).Scan(&independentN, &winRate)
+	return independentN, winRate, err
+}
+
+// RegimeBreadth aggregates the validated regime forecasts fleet-wide for the
+// dashboard gauges: how many stocks read uptrend (of trend21 rows) and how
+// many read elevated (of vol21 rows).
+func (s *Store) RegimeBreadth(ctx context.Context) (uptrend, trendN, elevated, volN int, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT
+		  COALESCE(SUM(CASE WHEN kind='trend21' AND regime='uptrend' THEN 1 ELSE 0 END),0),
+		  COALESCE(SUM(CASE WHEN kind='trend21' THEN 1 ELSE 0 END),0),
+		  COALESCE(SUM(CASE WHEN kind='vol21' AND regime='elevated' THEN 1 ELSE 0 END),0),
+		  COALESCE(SUM(CASE WHEN kind='vol21' THEN 1 ELSE 0 END),0)
+		FROM regime_forecasts`).Scan(&uptrend, &trendN, &elevated, &volN)
+	return uptrend, trendN, elevated, volN, err
 }
 
 // UnseenAlertCount returns one user's unseen-alert count (the dashboard

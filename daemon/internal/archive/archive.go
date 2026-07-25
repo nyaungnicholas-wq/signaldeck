@@ -584,3 +584,72 @@ func tsSpanFeatures(rs []store.FeatureArchiveRow) (lo, hi int64) {
 	}
 	return
 }
+
+// ═══ COMPOSITE_SCORES COLD ARCHIVE (scores-compactor wave, appended) ═════════
+
+var compositeHeader = []string{"symbol_id", "symbol", "ts", "horizon", "score", "curve_pct", "edge", "payload"}
+
+// ArchiveComposite cold-stores full composite_scores rows (factor payload JSON)
+// before the compactor strips or downsamples them. Same fail-safe contract as
+// ArchiveScores: err != nil ⇒ nothing durably committed for the failing group.
+func (a *Archiver) ArchiveComposite(ctx context.Context, rows []store.CompositeArchiveRow, symbolName map[int64]string) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	bySym := map[int64][]store.CompositeArchiveRow{}
+	for _, r := range rows {
+		bySym[r.SymbolID] = append(bySym[r.SymbolID], r)
+	}
+	files := 0
+	for sid, rs := range bySym {
+		if err := ctx.Err(); err != nil {
+			return files, err
+		}
+		name := symName(symbolName, sid)
+		lo, hi := rs[0].Ts, rs[0].Ts
+		for _, r := range rs {
+			if r.Ts < lo {
+				lo = r.Ts
+			}
+			if r.Ts > hi {
+				hi = r.Ts
+			}
+		}
+		path, err := a.open("composite_scores", name, lo, hi)
+		if err != nil {
+			return files, err
+		}
+		wf := func(cw *csv.Writer) error {
+			if err := cw.Write(compositeHeader); err != nil {
+				return err
+			}
+			sort.Slice(rs, func(i, j int) bool {
+				if rs[i].Ts != rs[j].Ts {
+					return rs[i].Ts < rs[j].Ts
+				}
+				return rs[i].Horizon < rs[j].Horizon
+			})
+			for _, r := range rs {
+				rec := []string{
+					strconv.FormatInt(r.SymbolID, 10),
+					name,
+					strconv.FormatInt(r.Ts, 10),
+					r.Horizon,
+					strconv.FormatInt(r.Score, 10),
+					f(r.CurvePct),
+					f(r.Edge),
+					r.Payload,
+				}
+				if err := cw.Write(rec); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := writeGzCSV(path, wf); err != nil {
+			return files, fmt.Errorf("archive composite %s: %w", name, err)
+		}
+		files++
+	}
+	return files, nil
+}

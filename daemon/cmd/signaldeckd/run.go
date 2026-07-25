@@ -61,6 +61,12 @@ func (w streamWorker) Run(ctx context.Context) (string, error) {
 	return "stream ended", w.s.Run(ctx)
 }
 
+// apiReadConns is the size of the API's PRIVATE read pool (see the ReaderClone
+// call below). Kept small: WAL readers don't block each other, so this only has
+// to cover concurrent interactive requests on a single-user local app — its job
+// is isolation from the worker fleet, not throughput.
+const apiReadConns = 4
+
 // run wires the whole daemon: store-backed agents + the JSON API.
 func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// ── clients ─────────────────────────────────────────────────────
@@ -235,6 +241,13 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// each leg's prob+lift so the PredictionRunner blends it only when lift>0.
 	// BEFORE the watchdog spec snapshot so it's health-audited like every worker.
 	fleet = append(fleet, edgeModelWorkers(st)...)
+	// Credibility wave (constructor appended at the END of this file) — the
+	// regime-outcome-runner (6h) that freezes every regime forecast into an
+	// ungraded outcome row (once per symbol/kind/UTC-day), later grades it with
+	// the exact engine math, and writes plain-English postmortems for
+	// high-conviction misses. BEFORE the watchdog spec snapshot so it's
+	// health-audited like every other worker.
+	fleet = append(fleet, regimeOutcomeWorkers(st)...)
 	// Tiered-storage wave (constructor appended at the END of this file) — the
 	// storage governor (WAL checkpoint + threshold VACUUM); BEFORE the watchdog
 	// spec snapshot so it's health-audited like every other worker.
@@ -399,6 +412,26 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// scoreboard (scored by EXPECTED PROFIT, not win rate). BEFORE the watchdog
 	// spec snapshot so both are health-audited like every other worker.
 	fleet = append(fleet, confluenceWorkers(st)...)
+	// RESEARCH DISCOVERY ENGINE wave: hist-backfill (once/UTC-day) deepens the
+	// stock universe's daily bars to 2019 and rebuilds the research_weeks
+	// evidence base (point-in-time weekly features + realized labels across
+	// COVID/bull/bear/AI-rally eras); research-engine (once/UTC-day) grades the
+	// ledger's machine-readable hypotheses era by era as BACKTEST evidence
+	// (survivorship penalized), runs counterfactual + fragile-threshold +
+	// regime-survival attacks, seeds H002-R1, auto-discovers bounded new
+	// candidates under a Bonferroni bar, and sweeps decay. Audit surface only —
+	// mutates nothing live. BEFORE the watchdog spec snapshot so both are
+	// health-audited like every other worker.
+	fleet = append(fleet, discoveryEngineWorkers(st, alpacaClient)...)
+	// WAVE 2 — cold-load precompute + weekly digest (constructors appended at
+	// the END of this file). The cache-warmer's target is set AFTER the API
+	// deps are built (the shared caches live in the api package and warm
+	// against the same reader pool the handlers use), so it takes a settable
+	// indirection here; until wired each tick is an honest no-op. BEFORE the
+	// watchdog spec snapshot so both are health-audited like every worker.
+	var warmTarget func(context.Context) error
+	fleet = append(fleet, cacheWarmWorkers(&warmTarget)...)
+	fleet = append(fleet, digestWorkers(st, remote)...)
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -413,8 +446,23 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	})
 
 	// ── API ─────────────────────────────────────────────────────────
+	// Interactive reads get their OWN connection pool. The shared 4-connection
+	// read pool was serving ~30 batch workers AND every handler, so a fleet
+	// scanning the multi-GB database held all four and API reads queued behind
+	// multi-second scans (measured 2026-07-16: /api/honesty at 61s during a
+	// 10-worker storm). The clone shares the single WRITE connection, so the
+	// no-SQLITE_BUSY discipline is untouched; only reads are isolated.
+	// Best-effort: if the clone cannot open, serve from the shared pool rather
+	// than fail the daemon.
+	apiSt := st
+	if clone, err := st.ReaderClone(apiReadConns); err != nil {
+		slog.Error("api read pool: falling back to the shared pool", "err", err)
+	} else {
+		defer clone.Close() //nolint:errcheck
+		apiSt = clone
+	}
 	deps := api.Deps{
-		St:       st,
+		St:       apiSt,
 		Cfg:      cfg,
 		Version:  version,
 		Started:  time.Now(),
@@ -435,6 +483,10 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 			return monitor(ctx, st, alpacaClient, backfiller, streamer, symbol, market)
 		},
 	}
+	// Cold-load precompute: the cache-warmer (appended to the fleet above) now
+	// warms the SAME shared api caches these deps serve from, on the same
+	// isolated reader pool.
+	warmTarget = deps.WarmCaches
 	go func() {
 		if err := api.Serve(ctx, deps); err != nil {
 			slog.Error("api server exited", "err", err)
@@ -654,6 +706,19 @@ func learningWorkers(st *store.Store) []workers.Worker {
 		// meaningfully-convicted prediction to a ranked failure taxonomy and
 		// stores it, so misses can be clustered and mined for new hypotheses.
 		pipeline.NewPostmortemWorker(st),
+		// Research Lab: research-lab (6h heartbeat, gated to once/UTC-day) mines
+		// hypotheses from the failure clusters, grades each by strict walk-forward
+		// OOS with a Bonferroni-corrected Wilson floor, shadows survivors, and
+		// promotes only after a sustained streak of wins on fresh data. Nothing
+		// it produces mutates live predictions — promotions are advisory.
+		pipeline.NewResearchLabWorker(st),
+		// Research Ledger: research-ledger (6h heartbeat, once/UTC-day) is the
+		// BAYESIAN belief layer above the lab — named program-level discoveries
+		// with prior->posterior evidence chains. Seeds the Pressure chapter once,
+		// then re-grades open discoveries (H002/H008) on fresh, disjoint data
+		// windows; every grade runs a self-attack battery whose failures enter
+		// the same evidence chain. Audit surface only — mutates nothing live.
+		pipeline.NewResearchLedgerWorker(st),
 	}
 }
 
@@ -778,6 +843,15 @@ func paperWorkers(st *store.Store) []workers.Worker {
 func edgeModelWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.GBMTrainer{St: st},
+		// pressure-trainer (1h): grades the ensemble's oldest base leg (the
+		// composite Pressure Score) walk-forward OOS and stores its lift like a
+		// model leg, so the PredictionRunner benches the leg when its measured
+		// lift is <=0 — the same honesty gate the model legs pass.
+		&pipeline.PressureTrainer{St: st},
+		// vol-regime-runner (6h): the platform's ONE validated-edge forecast —
+		// per-stock next-quarter volatility regime (elevated/calm) with MEASURED
+		// walk-forward accuracy (74-76% high-conviction). NOT price direction.
+		&pipeline.VolRegimeRunner{St: st},
 	}
 }
 
@@ -1047,7 +1121,7 @@ func runSICBulkOnce(ctx context.Context, st *store.Store) (string, error) {
 // fabricate 10s and 1s.
 func compositeWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
-		&pipeline.CompositeScorer{St: st},                       // 1d (default)
+		&pipeline.CompositeScorer{St: st},                  // 1d (default)
 		&pipeline.CompositeScorer{St: st, Horizon: md.H1w}, // 1w — see EDGE_PLAN.md: momentum/estimate-revision edges are more plausible at 1w than 1d
 	}
 }
@@ -1091,6 +1165,12 @@ func tvRatingWorkers(st *store.Store) []workers.Worker {
 func derivedRetentionWorkers(st *store.Store, arc *archive.Archiver) []workers.Worker {
 	return []workers.Worker{
 		&maintain.DerivedRetention{St: st, Arc: arc},
+		// scores-compactor (1h): the NEAR-tier sibling — archives then strips
+		// the per-row JSON blobs (scores.components / composite_scores.payload)
+		// past 2d and daily-downsamples intraday rows past 30d. The blobs are
+		// ~60% of the database file yet only the latest row per symbol renders
+		// them; DerivedRetention's 90d far tier can't touch rows that young.
+		&maintain.ScoresCompactor{St: st, Arc: arc},
 	}
 }
 
@@ -1317,5 +1397,73 @@ func offsiteBackupDir() string {
 		return filepath.Join(home, "Library", "Mobile Documents", "com~apple~CloudDocs", "SignalDeckBackups")
 	default:
 		return v
+	}
+}
+
+// discoveryEngineWorkers is the research discovery engine wave: the historical
+// evidence-base builder and the era-grading research engine. alpacaClient may
+// be nil (no keys) — hist-backfill then computes rows from whatever daily bars
+// already exist instead of deepening them.
+func discoveryEngineWorkers(st *store.Store, alpacaClient *alpaca.Client) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.HistoryBackfillWorker{St: st, Alpaca: alpacaClient},
+		&pipeline.ResearchEngineWorker{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CREDIBILITY WAVE — LIVE REGIME-FORECAST GRADING (appended block).
+// regimeOutcomeWorkers returns the wave's worker: regime-outcome-runner (6h)
+// that (1) freezes every current regime forecast (trend21/trend63/liquidity21/
+// vol21) into regime_outcomes at most once per (symbol, kind, UTC-day) — call,
+// conviction and CLAIMED accuracy captured before the answer is known; (2) once
+// the horizon has elapsed (horizon_days*1.45 calendar days AND enough newer
+// daily bars), recomputes the REALIZED regime label with the exact engine
+// arithmetic (internal/structregime Resolve*At) and grades the call; and (3)
+// writes a deterministic plain-English postmortem for every HIGH-conviction
+// (>=0.8) miss, including the base rate the claimed accuracy itself implies.
+// This is the loop that lets /api/track-record show LIVE regime accuracy next
+// to the claimed walk-forward tiers — the credibility surface.
+func regimeOutcomeWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.RegimeOutcomeWorker{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// WAVE 2 — COLD-LOAD PRECOMPUTE + WEEKLY DIGEST (appended block).
+// cacheWarmWorkers returns the cache-warmer (60s): each tick calls through
+// the settable *target into api.Deps.WarmCaches, rebuilding the shared
+// dashboard cache and the default /api/movers response-cache entry exactly
+// the way the handlers would — so the first request after a restart (or
+// during a worker write-sweep) is a 3ms cache hit, never a 30-55s cold
+// build. The indirection exists because the fleet is assembled (and the
+// watchdog snapshot taken) before the API deps — and their isolated reader
+// pool — are built; until the target is set each tick is an honest no-op.
+func cacheWarmWorkers(target *func(context.Context) error) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.CacheWarmer{Warm: func(ctx context.Context) error {
+			if *target == nil {
+				return nil
+			}
+			return (*target)(ctx)
+		}},
+	}
+}
+
+// digestWorkers returns the weekly-digest worker (1h tick; fires once per NY
+// week from Sunday 17:00 ET with meta week-key dedup, catching up later in
+// the week if the daemon was down): composes a plain-text digest from STORED
+// data only — per watchlist-active-symbol regime changes this week
+// (regime_outcomes earliest frozen call vs the current regime_forecasts row),
+// resolved regime outcomes + live accuracy so far (per kind, 30-resolution
+// honesty gate), the top 3 current highest-conviction validated calls, and
+// the flagship paper books' week P&L — stores it in meta digest_last_text
+// (served at GET /api/digest), and delivers it via the ONE daemon-wide
+// notifier. No transport configured = honest no-op ("digest skipped: no
+// transport"), never a failure.
+func digestWorkers(st *store.Store, remote *notify.Notifier) []workers.Worker {
+	return []workers.Worker{
+		&briefing.DigestWorker{St: st, Notifier: remote},
 	}
 }

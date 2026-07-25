@@ -8,8 +8,11 @@ package workers
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
+	"os"
 	"runtime/debug"
+	"sort"
 	"sync"
 	"time"
 
@@ -27,18 +30,35 @@ type Worker interface {
 	Run(ctx context.Context) (detail string, err error)
 }
 
+// ShutdownGrace is how long Start waits after ctx cancellation for workers to
+// drain before force-exiting the process. A worker parked in a
+// context-insensitive call (SQLite exec, HTTP with no timeout, a bare channel
+// receive) would otherwise hang wg.Wait() forever — observed 2026-07-24 as a
+// daemon stuck 30+ min post-SIGTERM until SIGKILL.
+var ShutdownGrace = 75 * time.Second
+
+// forceExit is swappable so tests can observe the escalation without dying.
+var forceExit = func(code int) { os.Exit(code) }
+
 // Runner schedules workers and records their runs.
 type Runner struct {
 	st      *store.Store
 	workers []Worker
+
+	mu      sync.Mutex
+	running map[string]time.Time // worker name → start of in-flight Run
 }
 
 // NewRunner builds a runner over the given workers.
 func NewRunner(st *store.Store, ws ...Worker) *Runner {
-	return &Runner{st: st, workers: ws}
+	return &Runner{st: st, workers: ws, running: make(map[string]time.Time)}
 }
 
-// Start launches every worker and blocks until ctx is done and all exit.
+// Start launches every worker and blocks until ctx is done and all exit —
+// or until ShutdownGrace after cancellation, at which point it logs which
+// workers are still in-flight and force-exits the process. SQLite (WAL) and
+// every worker's persistence are crash-safe, so a hard exit beats a daemon
+// parked forever behind a stuck goroutine.
 func (r *Runner) Start(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, w := range r.workers {
@@ -48,7 +68,40 @@ func (r *Runner) Start(ctx context.Context) {
 			r.loop(ctx, w)
 		}(w)
 	}
-	wg.Wait()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	select {
+	case <-done:
+	case <-time.After(ShutdownGrace):
+		slog.Error("shutdown deadline exceeded — forcing exit",
+			"grace", ShutdownGrace, "stuckWorkers", r.stuckWorkers())
+		forceExit(1)
+	}
+}
+
+// stuckWorkers names the workers with a Run still in flight, oldest first.
+func (r *Runner) stuckWorkers() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	type entry struct {
+		name  string
+		since time.Time
+	}
+	entries := make([]entry, 0, len(r.running))
+	for name, since := range r.running {
+		entries = append(entries, entry{name, since})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].since.Before(entries[j].since) })
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = fmt.Sprintf("%s (running %s)", e.name, time.Since(e.since).Round(time.Second))
+	}
+	return names
 }
 
 func (r *Runner) loop(ctx context.Context, w Worker) {
@@ -65,7 +118,28 @@ func (r *Runner) loop(ctx context.Context, w Worker) {
 		}
 		return
 	}
-	// Periodic worker: run immediately, then on cadence.
+	// Periodic worker: stagger the first run, then hold that phase.
+	//
+	// WHY (measured 2026-07-16): every periodic worker used to call runOnce
+	// immediately at t=0 and then start its ticker, so (a) the whole fleet
+	// stampeded on boot and (b) tickers created in the same instant stayed
+	// PHASE-LOCKED forever — all hourly workers firing together every hour,
+	// all 10-minute workers together every 10 minutes. Observed: 10 heavy
+	// workers scanning a 5.5GB database concurrently, starving the API's read
+	// pool (a 61s /api/honesty) and denying the WAL checkpoint the reader-free
+	// moment a TRUNCATE needs. De-phasing the fleet is the root fix.
+	//
+	// The offset is DETERMINISTIC (FNV of the worker name, not RNG) so runs
+	// stay reproducible and the Agents page cadence is legible: a given worker
+	// always occupies the same slot in its interval, and distinct names get
+	// distinct slots.
+	if off := startOffset(w.Name(), iv); off > 0 {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(off):
+		}
+	}
 	t := time.NewTicker(iv)
 	defer t.Stop()
 	r.runOnce(ctx, w)
@@ -79,6 +153,27 @@ func (r *Runner) loop(ctx context.Context, w Worker) {
 	}
 }
 
+// maxStartOffset caps the de-phasing delay: long enough to spread the fleet
+// across the heaviest scans, short enough that a fresh daemon is fully warm in
+// under a minute.
+const maxStartOffset = 45 * time.Second
+
+// startOffset returns a worker's deterministic phase offset, bounded by both
+// maxStartOffset and the worker's own interval (a 5s worker must not wait 45s).
+// Long-running workers (interval 0) never reach here.
+func startOffset(name string, interval time.Duration) time.Duration {
+	span := maxStartOffset
+	if interval < span {
+		span = interval
+	}
+	if span <= 0 {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	return time.Duration(uint64(h.Sum32()) % uint64(span))
+}
+
 // runOnce executes one run with persistence + panic isolation.
 func (r *Runner) runOnce(ctx context.Context, w Worker) {
 	if ctx.Err() != nil {
@@ -88,7 +183,13 @@ func (r *Runner) runOnce(ctx context.Context, w Worker) {
 	if err != nil {
 		slog.Error("worker: start record", "worker", w.Name(), "err", err)
 	}
+	r.mu.Lock()
+	r.running[w.Name()] = time.Now()
+	r.mu.Unlock()
 	detail, runErr := r.safeRun(ctx, w)
+	r.mu.Lock()
+	delete(r.running, w.Name())
+	r.mu.Unlock()
 	status := "ok"
 	if runErr != nil {
 		// A cancellation at shutdown is not a failure worth alarming on.

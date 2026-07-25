@@ -6,7 +6,9 @@
 // is identical to the old single-file page, plus a SavedViewsBar that
 // remembers filter/sort state on this device.
 
+import { API_BASE } from "@/lib/api";
 import PagePurpose from "@/components/PagePurpose";
+import ExportMenu from "@/components/ExportMenu";
 import MoversPanel from "@/components/MoversPanel";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import DiscoverPanel from "@/components/markets/DiscoverPanel";
@@ -53,6 +55,24 @@ export default function ScreenerPage() {
   const { rows, err, ranking, regimes, retry } = useScreenerData();
   const f = useScreenerFilters(rows, ranking, regimes);
 
+  // Export unification (#23). The daemon's scores.csv / bars.csv both REQUIRE
+  // symbol+market (checked in ../daemon/internal/api/api.go), and the screener
+  // has no selection concept — so the export follows the TOP row of the
+  // current filter/sort and says so in the label. No rows → no menu.
+  const top = f.filtered[0]?.row;
+  const exportItems = top
+    ? [
+        {
+          label: `scores.csv · ${top.symbol} (top row) · ${f.horizon}`,
+          href: `${API_BASE}/api/export/scores.csv?symbol=${encodeURIComponent(top.symbol)}&market=${top.market}&horizon=${f.horizon}`,
+        },
+        {
+          label: `bars.csv · ${top.symbol} (top row) · 1d`,
+          href: `${API_BASE}/api/export/bars.csv?symbol=${encodeURIComponent(top.symbol)}&market=${top.market}&tf=1d`,
+        },
+      ]
+    : [];
+
   return (
     <div className="flex flex-col gap-4">
       {/* header row */}
@@ -69,6 +89,9 @@ export default function ScreenerPage() {
             poll failed — showing last data
           </span>
         )}
+        <div className="ml-auto">
+          <ExportMenu items={exportItems} />
+        </div>
       </div>
 
       {/* STAGE 3: what this page answers, in plain English */}
@@ -80,7 +103,7 @@ export default function ScreenerPage() {
       {/* Signal8 wave Stage 4: gainers/losers over the daily universe with
           the best-effort mcap filter (unknown mcap = excluded + counted,
           never guessed). */}
-      <MoversPanel limit={10} />
+      <MoversPanel limit={20} />
 
       {/* discovery panel (hidden when logged out) */}
       <DiscoverPanel />

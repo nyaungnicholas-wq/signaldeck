@@ -122,10 +122,10 @@ func TestSICBulkSync_BootCatchUpEndToEnd(t *testing.T) {
 // (≤1 attempt/day), else monthly; force bypasses; empty directory waits.
 func TestSICBulkShouldRun(t *testing.T) {
 	cases := []struct {
-		name                        string
-		total, withSIC              int
-		month, lastMonth, day, att  string
-		force, want                 bool
+		name                       string
+		total, withSIC             int
+		month, lastMonth, day, att string
+		force, want                bool
 	}{
 		{"empty directory waits", 0, 0, "2026-07", "", "2026-07-06", "", false, false},
 		{"boot: low coverage runs", 10415, 533, "2026-07", "", "2026-07-06", "", false, true},

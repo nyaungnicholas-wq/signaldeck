@@ -12,6 +12,7 @@ import Skeleton from "@/components/Skeleton";
 import EmptyState from "@/components/EmptyState";
 import { ago } from "@/lib/format";
 import type { AnomalyRow } from "@/lib/api";
+import ReportLink from "@/components/signals/ReportLink";
 import SeverityBadge from "./SeverityBadge";
 import MagnitudeBar from "./MagnitudeBar";
 import {
@@ -104,6 +105,7 @@ export default function UnusualTape({
             >
               {kindLabel(a.kind, mode)}
             </span>
+            <ReportLink symbol={a.symbol} market={a.market} kind="anomaly" />
             <SeverityBadge row={a} />
             <MagnitudeBar row={a} />
             {rowProxy(a) && (

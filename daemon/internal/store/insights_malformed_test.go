@@ -1,5 +1,5 @@
 // Stage 6 verify regression: one insights row whose `data` is not valid JSON
-// ('' — the Go zero value, written by pre-fix InsertInsight for writers like
+// (” — the Go zero value, written by pre-fix InsertInsight for writers like
 // the Risk watcher that persist no evidence blob) made InsightsByKind fail
 // outright with "SQL logic error: malformed JSON (1)", which 500'd
 // GET /api/dashboard. Guards both halves of the fix:

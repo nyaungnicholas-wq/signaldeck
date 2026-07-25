@@ -27,19 +27,19 @@ import (
 // fill the identity + content fields. Sources/ModelVersions/Assumptions are
 // stored as pre-serialized JSON strings (the API layer owns their shape).
 type RecAuditEntry struct {
-	Seq           int64     `json:"seq"`
-	CreatedAt     int64     `json:"createdAt"`
-	SymbolID      int64     `json:"symbolId"`
-	Symbol        string    `json:"symbol"`
-	Market        md.Market `json:"market"`
-	Decision      string    `json:"decision"`
-	Confidence    string    `json:"confidence"`
-	ContentHash   string    `json:"contentHash"`   // reproducibility digest of the rec + inputs
-	SourcesJSON   string    `json:"sources"`       // JSON array of data sources used
-	VersionsJSON  string    `json:"modelVersions"` // JSON object of model versions
-	AssumptionsJSON string  `json:"assumptions"`   // JSON array of stated assumptions
-	PrevHash      string    `json:"prevHash"`
-	EntryHash     string    `json:"entryHash"`
+	Seq             int64     `json:"seq"`
+	CreatedAt       int64     `json:"createdAt"`
+	SymbolID        int64     `json:"symbolId"`
+	Symbol          string    `json:"symbol"`
+	Market          md.Market `json:"market"`
+	Decision        string    `json:"decision"`
+	Confidence      string    `json:"confidence"`
+	ContentHash     string    `json:"contentHash"`   // reproducibility digest of the rec + inputs
+	SourcesJSON     string    `json:"sources"`       // JSON array of data sources used
+	VersionsJSON    string    `json:"modelVersions"` // JSON object of model versions
+	AssumptionsJSON string    `json:"assumptions"`   // JSON array of stated assumptions
+	PrevHash        string    `json:"prevHash"`
+	EntryHash       string    `json:"entryHash"`
 }
 
 // canonicalRecAuditPayload is the byte-stable serialization hashed into the

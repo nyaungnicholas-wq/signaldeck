@@ -89,11 +89,11 @@ func (s *Store) InsertPostmortem(ctx context.Context, m MissRow, rep postmortem.
 // PostmortemCluster is an aggregated failure mode straight from SQL, matching
 // postmortem.Cluster's shape for the API.
 type PostmortemCluster struct {
-	Code       string  `json:"code"`
-	Count      int     `json:"count"`
-	Share      float64 `json:"share"`
-	MeanMag    float64 `json:"meanMag"`
-	MeanConv   float64 `json:"meanConviction"`
+	Code     string  `json:"code"`
+	Count    int     `json:"count"`
+	Share    float64 `json:"share"`
+	MeanMag  float64 `json:"meanMag"`
+	MeanConv float64 `json:"meanConviction"`
 }
 
 // PostmortemClusters aggregates stored postmortems by primary reason over the
@@ -133,15 +133,15 @@ func (s *Store) PostmortemClusters(ctx context.Context, sinceTs int64) ([]Postmo
 
 // RecentPostmortemRow is one stored postmortem for the recent-misses feed.
 type RecentPostmortemRow struct {
-	Symbol    string     `json:"symbol"`
-	Market    md.Market  `json:"market"`
-	Horizon   md.Horizon `json:"horizon"`
-	Ts        int64      `json:"ts"`
-	Prob      float64    `json:"prob"`
-	Up        int        `json:"up"`
-	FwdReturn float64    `json:"fwdReturn"`
-	Primary   string     `json:"primary"`
-	Secondary string     `json:"secondary,omitempty"`
+	Symbol    string          `json:"symbol"`
+	Market    md.Market       `json:"market"`
+	Horizon   md.Horizon      `json:"horizon"`
+	Ts        int64           `json:"ts"`
+	Prob      float64         `json:"prob"`
+	Up        int             `json:"up"`
+	FwdReturn float64         `json:"fwdReturn"`
+	Primary   string          `json:"primary"`
+	Secondary string          `json:"secondary,omitempty"`
 	Reasons   json.RawMessage `json:"reasons"`
 }
 

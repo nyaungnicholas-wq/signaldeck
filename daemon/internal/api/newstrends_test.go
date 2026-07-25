@@ -52,14 +52,21 @@ func newsTrendsGET(t *testing.T, srv *httptest.Server, path string) (int, map[st
 	return resp.StatusCode, out
 }
 
+// seedAPINews seeds n copies of headline on the UTC day daysAgo days back,
+// timestamped at the END of that day (23:59:59Z, stepping backwards). End-of-day
+// keeps the test deterministic at any wall-clock time: yesterday's items always
+// sit inside the handler's rolling 24h fleet-token window (now-24h is yesterday
+// at the current wall-clock time, which never passes 23:59:59), while day-2+
+// items always sit outside it.
 func seedAPINews(t *testing.T, st *store.Store, symbolID int64, daysAgo, n int, headline string) {
 	t.Helper()
-	day := time.Now().UTC().AddDate(0, 0, -daysAgo)
-	noon := time.Date(day.Year(), day.Month(), day.Day(), 12, 0, 0, 0, time.UTC).Unix()
+	now := time.Now().UTC()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	dayEnd := midnight.AddDate(0, 0, 1-daysAgo).Add(-time.Second).Unix()
 	for i := 0; i < n; i++ {
 		if err := st.InsertNews(context.Background(), store.NewsItem{
 			ID:       fmt.Sprintf("nta-%d-%d-%d", symbolID, daysAgo, i),
-			SymbolID: symbolID, Ts: noon + int64(i), Headline: headline,
+			SymbolID: symbolID, Ts: dayEnd - int64(i), Headline: headline,
 			URL: "http://x", Source: "t",
 		}); err != nil {
 			t.Fatalf("insert news: %v", err)
@@ -106,9 +113,9 @@ func TestNewsTrendsAPI(t *testing.T) {
 		t.Fatalf("fleet tokens missing: %v", out)
 	}
 	top := toks[0].(map[string]any)
-	// "tariffs" rides every seeded headline (today's 4 for sure; yesterday's
-	// may fall inside the rolling 24h window depending on wall-clock time).
-	if top["token"] != "tariffs" || top["count"].(float64) < 4 {
+	// "tariffs" rides every seeded headline: today's 4 plus yesterday's 2,
+	// both inside the rolling 24h window thanks to end-of-day seeding.
+	if top["token"] != "tariffs" || top["count"].(float64) != 6 {
 		t.Fatalf("top token wrong: %v", top)
 	}
 

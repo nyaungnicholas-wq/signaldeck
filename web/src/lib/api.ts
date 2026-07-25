@@ -182,27 +182,70 @@ function authHeaders(json: boolean): Record<string, string> {
   return h;
 }
 
+// ── Client GET cache (2026-07-19): stale-while-revalidate-lite so repeat
+// navigations paint instantly instead of flashing a skeleton through a cold
+// round-trip. Browser-only (never shared across SSR requests, so no cross-user
+// leak); an in-flight map dedupes concurrent identical GETs; any successful
+// POST busts the whole cache so a mutation shows up on the next read. The live
+// daemon-health poll opts out so its connectivity dot stays honest.
+const GET_TTL_MS = 8_000;
+const getCache = new Map<string, { ts: number; data: unknown }>();
+const inflightGet = new Map<string, Promise<unknown>>();
+const GET_NO_CACHE = ["/api/health"];
+const getCacheable = (path: string) =>
+  typeof window !== "undefined" && !GET_NO_CACHE.some((p) => path.startsWith(p));
+
+/** Drop the whole GET cache after a mutation so the next read is fresh. */
+function bustGetCache(): void {
+  getCache.clear();
+  inflightGet.clear();
+}
+
 async function get<T>(path: string): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}${path}`, {
-      cache: "no-store",
-      credentials: "include",
-      headers: authHeaders(false),
-    });
-  } catch (e) {
-    recordFailure(); // network error — never reached the daemon
-    throw e;
+  if (getCacheable(path)) {
+    const hit = getCache.get(path);
+    if (hit && Date.now() - hit.ts < GET_TTL_MS) return hit.data as T;
+    const flying = inflightGet.get(path);
+    if (flying) return flying as Promise<T>;
   }
-  if (!res.ok) {
-    // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
-    // the daemon answered, just not with data.
-    if (res.status >= 500) recordFailure();
-    const body = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${body || path}`);
+  const fetchP = (async (): Promise<T> => {
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}${path}`, {
+        cache: "no-store",
+        credentials: "include",
+        headers: authHeaders(false),
+      });
+    } catch (e) {
+      recordFailure(); // network error — never reached the daemon
+      throw e;
+    }
+    if (!res.ok) {
+      // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
+      // the daemon answered, just not with data.
+      if (res.status >= 500) recordFailure();
+      const body = await res.text().catch(() => "");
+      throw new Error(`API ${res.status}: ${body || path}`);
+    }
+    recordSuccess();
+    const data = (await res.json()) as T;
+    if (getCacheable(path)) getCache.set(path, { ts: Date.now(), data });
+    return data;
+  })();
+  if (getCacheable(path)) {
+    inflightGet.set(path, fetchP as Promise<unknown>);
+    // Clear the in-flight slot once settled (either outcome); the caller still
+    // owns fetchP and handles any rejection itself.
+    void fetchP.then(
+      () => {
+        if (inflightGet.get(path) === fetchP) inflightGet.delete(path);
+      },
+      () => {
+        if (inflightGet.get(path) === fetchP) inflightGet.delete(path);
+      },
+    );
   }
-  recordSuccess();
-  return res.json() as Promise<T>;
+  return fetchP;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
@@ -224,6 +267,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     throw new Error(err?.error ?? `API ${res.status}`);
   }
   recordSuccess();
+  bustGetCache(); // a mutation just landed — force fresh reads next time
   return res.json() as Promise<T>;
 }
 
@@ -2965,4 +3009,501 @@ export function confluenceTop(market?: Market, limit = 50, onlySetups = false) {
 /** Fetch the accruing money scoreboard over resolved confluence setups. */
 export function confluenceTrack() {
   return get<ConfluenceTrackResponse>(`/api/confluence/track`);
+}
+
+// ── RESEARCH DISCOVERY ENGINE wave (2026-07-16) — appended ────────────────
+// The Bayesian research ledger + evidence graph. Wire types tolerate both
+// json-tagged (lowercase) and default (Capitalized) Go marshaling for the
+// newest payload blocks, normalized at the fetch boundary so the page code
+// sees one shape.
+
+/** One named research belief (rl.Hypothesis — stable lowercase JSON tags). */
+export interface LedgerHypothesis {
+  id: string;
+  family: string;
+  statement: string;
+  horizon: string;
+  prior: number;
+  maxEdge: number;
+  posterior: number;
+  status: "rejected" | "doubtful" | "uncertain" | "tentative" | "supported";
+  replications: number;
+  contradictions: number;
+  regimes: number;
+  openQuestions: string[] | null;
+  peakPosterior: number;
+  peakTs: number;
+  lastGradeTs: number;
+  spec?: string; // rule JSON for machine-graded hypotheses; absent = prose-only
+}
+
+/** One evidence row in a hypothesis's chain (rl.Evidence). */
+export interface LedgerEvidence {
+  hypId: string;
+  ts: number;
+  kind: "experiment" | "replication" | "backtest" | "attack" | "manual";
+  k: number;
+  n: number;
+  p0: number;
+  bf: number;
+  note: string; // render verbatim — it carries the honesty caveats
+  windowFrom: number;
+  windowTo: number;
+}
+
+export interface LedgerFamilyStat {
+  family: string;
+  n: number;
+  avgPosterior: number;
+  supported: number;
+  tentative: number;
+  rejected: number;
+}
+
+export interface LedgerAttackStat {
+  attack: string;
+  failed: number;
+  run: number;
+}
+
+/** Historical evidence-base coverage (research_weeks). Normalized casing. */
+export interface ResearchWeeksStats {
+  rows: number;
+  symbols: number;
+  weeks: number;
+  minTs: number;
+  maxTs: number;
+  byEra: Record<string, number>;
+}
+
+/** Per-hypothesis decay report (peak vs current posterior). */
+export interface LedgerDecay {
+  id: string;
+  peak: number;
+  current: number;
+  edgeWeakening: boolean;
+  stale: boolean;
+}
+
+/** GET /api/research-ledger — normalized payload. */
+export interface ResearchLedger {
+  hypotheses: LedgerHypothesis[];
+  evidence: LedgerEvidence[];
+  meta: { families: LedgerFamilyStat[] | null; attacks: LedgerAttackStat[] | null };
+  weeks: ResearchWeeksStats | null;
+  evidenceKinds: Record<string, number>;
+  liveVsBacktest: { live: number; backtest: number };
+  decay: LedgerDecay[];
+  discipline: string; // render verbatim
+}
+
+export interface ResearchGraphNode {
+  id: string;
+  kind: string; // hypothesis | family | attack | era | evidence_kind
+  label: string;
+  posterior: number;
+  status: string;
+}
+
+export interface ResearchGraphEdge {
+  from: string;
+  to: string;
+  weight: number;
+  avgBF: number;
+}
+
+export interface ResearchGraph {
+  nodes: ResearchGraphNode[];
+  edges: ResearchGraphEdge[];
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function numOr0(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+function normWeeksStats(w: any): ResearchWeeksStats | null {
+  if (!w || typeof w !== "object") return null;
+  return {
+    rows: numOr0(w.rows ?? w.Rows),
+    symbols: numOr0(w.symbols ?? w.Symbols),
+    weeks: numOr0(w.weeks ?? w.Weeks),
+    minTs: numOr0(w.minTs ?? w.MinTs),
+    maxTs: numOr0(w.maxTs ?? w.MaxTs),
+    byEra: (w.byEra ?? w.ByEra ?? {}) as Record<string, number>,
+  };
+}
+
+function normGraph(g: any): ResearchGraph {
+  const nodes = ((g?.nodes ?? g?.Nodes ?? []) as any[]).map((n) => ({
+    id: String(n.id ?? n.ID ?? ""),
+    kind: String(n.kind ?? n.Kind ?? ""),
+    label: String(n.label ?? n.Label ?? ""),
+    posterior: numOr0(n.posterior ?? n.Posterior),
+    status: String(n.status ?? n.Status ?? ""),
+  }));
+  const edges = ((g?.edges ?? g?.Edges ?? []) as any[]).map((e) => ({
+    from: String(e.from ?? e.From ?? ""),
+    to: String(e.to ?? e.To ?? ""),
+    weight: numOr0(e.weight ?? e.Weight),
+    avgBF: numOr0(e.avgBF ?? e.AvgBF),
+  }));
+  return { nodes, edges };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/** The Bayesian research ledger: hypotheses, evidence chains, coverage, decay. */
+export async function researchLedger(): Promise<ResearchLedger> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>("/api/research-ledger");
+  return {
+    hypotheses: (raw.hypotheses ?? []) as LedgerHypothesis[],
+    evidence: (raw.evidence ?? []) as LedgerEvidence[],
+    meta: {
+      families: raw.meta?.families ?? null,
+      attacks: raw.meta?.attacks ?? null,
+    },
+    weeks: normWeeksStats(raw.weeks),
+    evidenceKinds: (raw.evidenceKinds ?? {}) as Record<string, number>,
+    liveVsBacktest: {
+      live: numOr0(raw.liveVsBacktest?.live),
+      backtest: numOr0(raw.liveVsBacktest?.backtest),
+    },
+    decay: (raw.decay ?? []) as LedgerDecay[],
+    discipline: String(raw.discipline ?? ""),
+  };
+}
+
+/** The evidence graph: why each hypothesis survives (or does not). */
+export async function researchGraph(): Promise<ResearchGraph> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>("/api/research-graph");
+  return normGraph(raw.graph ?? raw);
+}
+
+/* ── 2026-07-17 alpha-loop structural regimes (GET /api/regimes) ── */
+
+/** One structural-regime forecast (trend21 / liquidity21 / vol21 / gapfill5). */
+export interface StructRegimeForecast {
+  symbol: string;
+  market: string;
+  ts: number;
+  kind: string;
+  horizonDays: number;
+  regime: string;
+  conviction: number;
+  historicalAccuracy: number;
+  tier: string;
+  rank: number;
+  n: number;
+}
+
+export interface StructRegimeKindDoc {
+  what: string;
+  accuracyTiers: Record<string, string>;
+  caveat: string;
+}
+
+export interface StructRegimes {
+  forecasts: Record<string, StructRegimeForecast[]>;
+  kinds: Record<string, StructRegimeKindDoc>;
+  methodology: string;
+  whyHonest: string;
+}
+
+/** The validated market-structure regime forecasts, grouped by kind, with the
+ *  measured accuracy tiers + honesty caveats the daemon ships in-payload. */
+export async function structuralRegimes(): Promise<StructRegimes> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>("/api/regimes");
+  return {
+    forecasts: (raw.forecasts ?? {}) as Record<string, StructRegimeForecast[]>,
+    kinds: (raw.kinds ?? {}) as Record<string, StructRegimeKindDoc>,
+    methodology: String(raw.methodology ?? ""),
+    whyHonest: String(raw.whyHonest ?? ""),
+  };
+}
+
+/** One quarterly volatility-regime forecast (GET /api/vol-regime). */
+export interface VolRegimeForecast {
+  symbol: string;
+  market: string;
+  ts: number;
+  regime: string;
+  conviction: number;
+  historicalAccuracy: number;
+  tier: string;
+  rank: number;
+  n: number;
+}
+
+export interface VolRegime {
+  forecasts: VolRegimeForecast[];
+  highConviction: number;
+  what: string;
+  whyHonest: string;
+  accuracyTiers: Record<string, string>;
+  caveat: string;
+}
+
+/** The quarterly vol-regime forecasts + their measured accuracy tiers. */
+export async function volRegime(): Promise<VolRegime> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>("/api/vol-regime");
+  return {
+    forecasts: (raw.forecasts ?? []) as VolRegimeForecast[],
+    highConviction: Number(raw.highConviction ?? 0),
+    what: String(raw.what ?? ""),
+    whyHonest: String(raw.whyHonest ?? ""),
+    accuracyTiers: (raw.accuracyTiers ?? {}) as Record<string, string>,
+    caveat: String(raw.caveat ?? ""),
+  };
+}
+
+/* ── per-signal detail report (GET /api/signal-report) ── */
+
+export interface ReportInput {
+  name: string;
+  value: number;
+  note: string;
+}
+
+export interface ReportInstance {
+  ts: number;
+  regime: string;
+  conviction: number;
+  actual: string;
+  correct: boolean;
+}
+
+export interface ReportHistory {
+  instances?: ReportInstance[];
+  rows?: {
+    ts: number;
+    horizon: string;
+    prob: number;
+    up: boolean;
+    fwdReturn: number;
+    correct: boolean;
+  }[];
+  breakouts?: ReportEvent[];
+  anomalies?: ReportEvent[];
+  correct?: number;
+  total?: number;
+  hitRate?: number;
+  note?: string;
+}
+
+export interface ReportEvent {
+  ts: number;
+  kind: string;
+  detail: string;
+  z?: number;
+  fwd5Pct: number;
+  hasFwd: boolean;
+}
+
+export interface SignalReport {
+  symbol: string;
+  market: string;
+  kind: string;
+  asOf: number;
+  barAge: number;
+  signal?: StructRegimeForecast | VolRegimeForecast | Record<string, unknown>;
+  whyFired?: ReportInput[];
+  history?: ReportHistory;
+  regimeStack?: StructRegimeForecast[];
+  vol63?: VolRegimeForecast;
+  predictionNow?: {
+    ts: number;
+    rawProb: number;
+    calProb: number;
+    nUsed: number;
+    components?: Record<string, unknown>;
+  };
+  composite?: {
+    ts: number;
+    score: number;
+    curvePct: number;
+    edge: number;
+    payload?: Record<string, unknown>;
+  };
+  pressure1d?: Record<string, unknown>;
+  liveDirectionalNote?: string;
+  tradeContext?: Record<string, number>;
+  recentBreakouts?: ReportEvent[];
+  recentAnomalies?: { ts: number; kind: string; z: number; detail: string }[];
+  honesty?: string;
+}
+
+/** The one-call payload behind /signals/report — why it fired, the signal's
+ *  own history on this symbol, the full signal stack, and trade context. */
+export async function signalReport(
+  symbol: string,
+  market: Market,
+  kind: string,
+): Promise<SignalReport> {
+  const p = new URLSearchParams({ symbol, market, kind });
+  return get<SignalReport>(`/api/signal-report?${p.toString()}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 2026-07-18 DASHBOARD TECHNICAL PASS (appended block; keep at END).
+// (1) watchlist sparks carry RSI(14) / SMA20 distance / 20d annualized vol,
+//     derived server-side from the SAME sparkline closes (nil = window too
+//     short, an honest absence). (2) gauges gained a REGIME BREADTH section
+//     aggregated from the validated regime forecasts.
+
+/** /api/dashboard watchlist sparks: technical readouts (nullable, honest). */
+export interface DashWatchSpark {
+  rsi14?: number | null;
+  sma20DistPct?: number | null;
+  vol20AnnPct?: number | null;
+}
+
+/** The regime-breadth gauge in /api/dashboard `gauges.regimes`. */
+export interface DashRegimesGauge {
+  uptrendPct: number;
+  trendN: number;
+  elevatedPct: number;
+  volN: number;
+  hasData: boolean;
+  caption: string;
+}
+
+/** Typed access to the appended gauges.regimes section. */
+export function regimesGauge(dash: DashboardResponse): DashRegimesGauge | undefined {
+  return (dash.gauges as DashboardResponse["gauges"] & { regimes?: DashRegimesGauge })
+    .regimes;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 2026-07-18 CREDIBILITY WAVE (appended block; keep at END).
+// (1) /api/track-record gained a `regimes` section: per-kind LIVE regime
+//     grading (claimed accuracy frozen at call time vs live resolution),
+//     gated per kind below 30 resolutions.
+// (2) /api/regimes gained top-level earningsWindows + earningsNote, and
+//     /api/signal-report gained an optional per-symbol earningsWindow label.
+// (3) GET /api/earnings-window — one symbol's estimated next earnings
+//     (honest null when no periodic filing is stored).
+// (4) GET /api/regime-postmortems — latest high-conviction regime misses
+//     with plain-English narratives.
+
+/** Per-kind live regime grading in /api/track-record `regimes.kinds`. */
+export interface RegimeKindRecord {
+  resolvedN: number;
+  minResolutions: number;
+  /** Mean CLAIMED accuracy of the resolved calls — frozen at call time. */
+  claimed: number;
+  gated: boolean;
+  liveAccuracy: number | null;
+  liveAccuracyCI: [number, number] | null;
+  /** Verbatim gate note ("not yet significant — k/30") when gated. */
+  note?: string;
+}
+
+/** The appended `regimes` section of /api/track-record. */
+export interface RegimeTrackRecord {
+  available: boolean;
+  error?: string;
+  kinds?: Record<string, RegimeKindRecord>;
+  dedupNote?: string;
+}
+
+/** Typed access to the appended `regimes` section of the track record. */
+export function trackRecordRegimes(tr: TrackRecordWithGate): RegimeTrackRecord | undefined {
+  return (tr as TrackRecordWithGate & { regimes?: RegimeTrackRecord }).regimes;
+}
+
+/** The earnings-window annotation carried by /api/regimes (per symbol),
+ *  /api/signal-report, and derived from /api/earnings-window. A label only —
+ *  forecasts are never suppressed. */
+export interface EarningsWindowLabel {
+  daysUntil: number;
+  withinWindow: boolean;
+  note?: string;
+}
+
+/** SignalReport plus the appended optional earningsWindow label. The base
+ *  SignalReport interface lives in an earlier frozen block, so this is the
+ *  intersection type call sites cast to. */
+export type SignalReportWithEarnings = SignalReport & {
+  earningsWindow?: EarningsWindowLabel;
+};
+
+/** StructRegimes plus the appended top-level earnings-window annotations. */
+export interface StructRegimesWithEarnings extends StructRegimes {
+  earningsWindows?: Record<string, EarningsWindowLabel>;
+  earningsNote?: string;
+}
+
+/** structuralRegimes() plus the appended earningsWindows/earningsNote fields
+ *  (the original normalizer drops unknown keys, so this reads them too). */
+export async function structuralRegimesWithEarnings(): Promise<StructRegimesWithEarnings> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>("/api/regimes");
+  return {
+    forecasts: (raw.forecasts ?? {}) as Record<string, StructRegimeForecast[]>,
+    kinds: (raw.kinds ?? {}) as Record<string, StructRegimeKindDoc>,
+    methodology: String(raw.methodology ?? ""),
+    whyHonest: String(raw.whyHonest ?? ""),
+    earningsWindows: (raw.earningsWindows ?? undefined) as
+      | Record<string, EarningsWindowLabel>
+      | undefined,
+    earningsNote: raw.earningsNote != null ? String(raw.earningsNote) : undefined,
+  };
+}
+
+/** GET /api/earnings-window — the filing-cadence estimate for one symbol.
+ *  estimatedNext/daysUntil are HONEST NULLS when no periodic filing exists. */
+export interface EarningsWindowResp {
+  symbol: string;
+  market: string;
+  estimatedNext: number | null;
+  daysUntil: number | null;
+  withinWindow: boolean;
+  overdue?: boolean;
+  lastForm?: string;
+  lastFiledTs?: number;
+  method: string;
+  caveat: string;
+}
+
+export function earningsWindowFor(symbol: string, market: Market): Promise<EarningsWindowResp> {
+  const p = new URLSearchParams({ symbol, market });
+  return get<EarningsWindowResp>(`/api/earnings-window?${p.toString()}`);
+}
+
+/** One high-conviction regime miss (GET /api/regime-postmortems): what was
+ *  called, what realized (the key number), and the measured narrative. */
+export interface RegimePostmortemRow {
+  outcomeId: number;
+  symbol: string;
+  kind: string;
+  ts: number;
+  regime: string;
+  conviction: number;
+  claimedAccuracy: number;
+  actual: string;
+  keyName: string;
+  keyValue: number;
+  narrative: string;
+  createdAt: number;
+}
+
+export interface RegimePostmortems {
+  postmortems: RegimePostmortemRow[];
+  count: number;
+  note: string;
+}
+
+/** The latest (≤50) high-conviction regime misses, newest first. */
+export async function regimePostmortems(): Promise<RegimePostmortems> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>("/api/regime-postmortems");
+  return {
+    postmortems: (raw.postmortems ?? []) as RegimePostmortemRow[],
+    count: Number(raw.count ?? 0),
+    note: String(raw.note ?? ""),
+  };
 }

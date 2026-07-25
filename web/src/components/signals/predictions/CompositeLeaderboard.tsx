@@ -21,6 +21,7 @@ import {
 } from "@/lib/api";
 import { ago } from "@/lib/format";
 import { useViewMode } from "@/components/Plain";
+import ReportLink from "@/components/signals/ReportLink";
 import Sparkline from "@/components/viz/Sparkline";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -288,6 +289,7 @@ export default function CompositeLeaderboard({
                 <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                   {r.market}
                 </span>
+                <ReportLink symbol={r.symbol} market={r.market} kind="composite" />
                 <span className="ml-auto">
                   <RankDelta row={r} />
                 </span>
@@ -372,7 +374,8 @@ export default function CompositeLeaderboard({
                       className="mono font-bold transition-colors duration-150 hover:text-[var(--accent)]"
                     >
                       {r.symbol}
-                    </Link>
+                    </Link>{" "}
+                    <ReportLink symbol={r.symbol} market={r.market} kind="composite" />
                   </td>
                   <td className="px-3 py-2" style={{ color: "var(--dim)", borderBottom: "1px solid var(--border)" }}>
                     {r.market}

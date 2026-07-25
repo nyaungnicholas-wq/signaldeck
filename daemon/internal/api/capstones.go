@@ -292,12 +292,12 @@ func (d Deps) scenario(w http.ResponseWriter, r *http.Request) {
 	label := factor + signedLabel(shock)
 	impact := scenario.Estimate(canon, assetRet, factorChg, shock, label, 30)
 	writeJSON(w, map[string]any{
-		"symbol":      canon,
-		"factor":      factor,
-		"shock":       shock,
-		"pairedDays":  len(assetRet),
-		"impact":      impact,
-		"disclaimer":  "Historical sensitivity (OLS beta), not a forecast. A shock's effect is estimated from how this symbol has co-moved with the factor; correlation is not causation and betas drift.",
+		"symbol":     canon,
+		"factor":     factor,
+		"shock":      shock,
+		"pairedDays": len(assetRet),
+		"impact":     impact,
+		"disclaimer": "Historical sensitivity (OLS beta), not a forecast. A shock's effect is estimated from how this symbol has co-moved with the factor; correlation is not causation and betas drift.",
 	})
 }
 

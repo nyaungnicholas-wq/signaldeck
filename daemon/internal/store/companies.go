@@ -14,7 +14,7 @@ import (
 )
 
 // CompanyRow is one SEC-registered company (one ticker) in the directory.
-// SIC/SICDesc are '' until the filings-poller has seen the company's
+// SIC/SICDesc are ” until the filings-poller has seen the company's
 // submissions JSON (honest absence, never a guessed sector).
 type CompanyRow struct {
 	CIK       int64  `json:"cik"`
@@ -137,7 +137,7 @@ type CompanyFacet struct {
 }
 
 // CompanySectors returns the distinct SIC industry descriptions present (the
-// sector-filter options), most common first, capped. '' rows (not yet
+// sector-filter options), most common first, capped. ” rows (not yet
 // enriched) are excluded — they are absence, not a sector.
 func (s *Store) CompanySectors(ctx context.Context, limit int) ([]CompanyFacet, error) {
 	if limit <= 0 || limit > 500 {
@@ -153,7 +153,7 @@ func (s *Store) CompanySectors(ctx context.Context, limit int) ([]CompanyFacet, 
 }
 
 // CompanyExchanges returns the distinct exchanges present (filter options),
-// most common first. '' (SEC null) is excluded from the options; rows keep it
+// most common first. ” (SEC null) is excluded from the options; rows keep it
 // and render "—".
 func (s *Store) CompanyExchanges(ctx context.Context) ([]CompanyFacet, error) {
 	rows, err := s.db.QueryContext(ctx, `

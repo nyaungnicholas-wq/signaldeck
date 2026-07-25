@@ -11,9 +11,10 @@
 //
 // Rate budget (all through the shared edgar limiter, 150ms min interval,
 // descriptive UA, 429 backoff — well under SEC's 10 req/s):
-//   filings-poller: ≤40 submissions + ≤25 Form 4 docs per 2h run ⇒ ≤65 req/run,
-//   ≤780/day. 13f-poller: ≤5 managers × ≤3 req ⇒ ≤15 req/day. Combined worst
-//   case ≈ 800 requests/day, spaced ≥150ms apart.
+//
+//	filings-poller: ≤40 submissions + ≤25 Form 4 docs per 2h run ⇒ ≤65 req/run,
+//	≤780/day. 13f-poller: ≤5 managers × ≤3 req ⇒ ≤15 req/day. Combined worst
+//	case ≈ 800 requests/day, spaced ≥150ms apart.
 //
 // Honesty: everything stored is public-domain government data; the LAGS are
 // legal/procedural (Form 4 ~2 business days; 13F quarterly + ≤45 days) and are
@@ -238,9 +239,10 @@ func form4AttemptsKey(accession string) string { return "form4_attempts:" + acce
 // eventually leaves the accession OUT of the UnparsedForm4s set —
 //   - parseable non-derivative transactions ⇒ the real insider_trades row;
 //   - derivative-only filings and blank primary documents are SUCCESS-EMPTY,
-//     not errors ⇒ a sentinel row (code='') that reads exclude;
+//     not errors ⇒ a sentinel row (code=”) that reads exclude;
 //   - genuine fetch/XML errors are retried up to form4MaxAttempts times, then
 //     abandoned with the sentinel + one dq event.
+//
 // Without this, a permanently-unparseable Form 4 would be re-fetched every
 // 2h forever, wasting the whole backlog budget on the same documents.
 func (w *FilingsPoller) parseForm4(ctx context.Context, cik, symbolID int64, f edgar.SubFiling) error {
@@ -267,8 +269,8 @@ func (w *FilingsPoller) parseForm4(ctx context.Context, cik, symbolID int64, f e
 	})
 }
 
-// insertForm4Sentinel records the parsed-empty marker row: code='' shares=0
-// value=0. store.InsiderTrades and the API exclude code='' rows, but the row's
+// insertForm4Sentinel records the parsed-empty marker row: code=” shares=0
+// value=0. store.InsiderTrades and the API exclude code=” rows, but the row's
 // presence removes the accession from the UnparsedForm4s backlog for good.
 func (w *FilingsPoller) insertForm4Sentinel(ctx context.Context, symbolID int64, f edgar.SubFiling, insider, title string) error {
 	return w.St.InsertInsiderTrade(ctx, store.InsiderTradeRow{

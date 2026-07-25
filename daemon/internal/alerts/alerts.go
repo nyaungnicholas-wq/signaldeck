@@ -34,6 +34,18 @@ const (
 	KindAnomalyImbalance = "anomaly_imbalance"
 	KindAnomalyVol       = "anomaly_vol"
 	KindAnomalyVolume    = "anomaly_volume"
+	// SMART MONEY FACTS wave: positioning-event kinds. These mirror the
+	// smart_money_events kinds 1:1 (internal/smartmoney + pipeline). Both are
+	// reads of POSITIONING — what informed participants are DOING — never a
+	// forecast; the fanned-out detail carries the scorer's wording verbatim.
+	KindInsiderCluster = "insider_cluster"
+	KindSqueeze        = "squeeze_setup"
+	// CONFLUENCE GATE wave: the confluence-setup kind. Mirrors the
+	// confluence_events kind 1:1 (internal/confluence + pipeline). It fires only
+	// when several INDEPENDENT signal families AGREE on a direction — no
+	// manufactured edge; the fanned-out detail carries the scorer's wording
+	// verbatim ("SYM: N-signal LONG/SHORT confluence (families…)").
+	KindConfluence = "confluence_setup"
 )
 
 // Default prediction thresholds (calibrated P(up)).
@@ -51,6 +63,12 @@ const (
 	// Signal8 wave Stage 3: anomaly-sweep rowid cursor (same gap-free
 	// id-cursor pattern as breakouts/regime changes).
 	metaAnomalyCursor = "alerts_last_anomaly_id"
+	// SMART MONEY FACTS wave: smart-money-event sweep rowid cursor (same
+	// gap-free id-cursor pattern as breakouts/regime/anomalies).
+	metaSmartMoneyCursor = "alerts_last_smart_money_id"
+	// CONFLUENCE GATE wave: confluence-event sweep rowid cursor (same gap-free
+	// id-cursor pattern as every other event table).
+	metaConfluenceCursor = "alerts_last_confluence_id"
 )
 
 // predictionDedupWindow: at most one prediction alert per
@@ -310,6 +328,49 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 		}
 	}
 
+	// ── smart-money events since last sweep (SMART MONEY FACTS wave) ────
+	// Fan stored insider-cluster / squeeze-setup events (the smart-money-scorer
+	// writes them, already day-deduped per symbol+kind) out to watchers. The
+	// alert kind IS the event kind and the detail carries the scorer's
+	// positioning wording verbatim (already symbol-prefixed — e.g. "NVDA: 3
+	// insiders net-bought $2.1M (Form 4)"). These are reads of POSITIONING,
+	// what informed participants are DOING, NEVER a forecast.
+	// idx_alerts_dedup makes partial-sweep retries no-ops.
+	smCursor, firstSM := r.cursor(ctx, metaSmartMoneyCursor)
+	sinceTs = 0
+	maxSM := smCursor
+	if firstSM {
+		sinceTs = now.Add(-24 * time.Hour).Unix()
+		if maxSM, err = r.St.MaxSmartMoneyEventID(ctx); err != nil {
+			return "", err
+		}
+	}
+	smEvents, err := r.St.SmartMoneyEventsAfterID(ctx, smCursor, sinceTs, sweepBatch)
+	if err != nil {
+		return "", err
+	}
+	for _, ev := range smEvents {
+		if ev.ID > maxSM {
+			maxSM = ev.ID
+		}
+		for _, uid := range userIDs {
+			if _, watched := watch[uid][ev.SymbolID]; !watched {
+				continue
+			}
+			sid := ev.SymbolID
+			detail := ev.Detail // already "SYM: …" (scorer wording, verbatim)
+			if err := r.St.InsertAlert(ctx, store.Alert{
+				UserID: uid, SymbolID: &sid, Kind: ev.Kind,
+				Detail: detail,
+				Ts:     ev.Ts,
+			}); err != nil {
+				return "", err
+			}
+			created++
+			addLine(detail)
+		}
+	}
+
 	// ── predictions crossing thresholds (per-user dedup: 24h per side) ──
 	dedupSince := now.Add(-predictionDedupWindow).Unix()
 	freshCutoff := now.Add(-24 * time.Hour).Unix() // ignore stale predictions
@@ -350,6 +411,48 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 		}
 	}
 
+	// ── confluence setups since last sweep (CONFLUENCE GATE wave) ──────
+	// Fan stored "confluence setup" events (the confluence-scorer writes them,
+	// already day-deduped per symbol) out to watchers. A setup fires only when
+	// several INDEPENDENT signal families AGREE on a direction — no manufactured
+	// edge; the detail carries the scorer's wording verbatim (already symbol-
+	// prefixed, e.g. "NVDA: 4-signal LONG confluence (smart_money, trend, ...)").
+	// idx_alerts_dedup makes partial-sweep retries no-ops.
+	cCursor, firstC := r.cursor(ctx, metaConfluenceCursor)
+	sinceTs = 0
+	maxC := cCursor
+	if firstC {
+		sinceTs = now.Add(-24 * time.Hour).Unix()
+		if maxC, err = r.St.MaxConfluenceEventID(ctx); err != nil {
+			return "", err
+		}
+	}
+	cEvents, err := r.St.ConfluenceEventsAfterID(ctx, cCursor, sinceTs, sweepBatch)
+	if err != nil {
+		return "", err
+	}
+	for _, ev := range cEvents {
+		if ev.ID > maxC {
+			maxC = ev.ID
+		}
+		for _, uid := range userIDs {
+			if _, watched := watch[uid][ev.SymbolID]; !watched {
+				continue
+			}
+			sid := ev.SymbolID
+			detail := ev.Detail // already "SYM: ..." (scorer wording, verbatim)
+			if err := r.St.InsertAlert(ctx, store.Alert{
+				UserID: uid, SymbolID: &sid, Kind: ev.Kind,
+				Detail: detail,
+				Ts:     ev.Ts,
+			}); err != nil {
+				return "", err
+			}
+			created++
+			addLine(detail)
+		}
+	}
+
 	// Advance the sweep cursors only after all inserts succeeded.
 	if err := r.St.SetMeta(ctx, metaBreakoutCursor, strconv.FormatInt(maxB, 10)); err != nil {
 		return "", err
@@ -358,6 +461,12 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if err := r.St.SetMeta(ctx, metaAnomalyCursor, strconv.FormatInt(maxA, 10)); err != nil {
+		return "", err
+	}
+	if err := r.St.SetMeta(ctx, metaSmartMoneyCursor, strconv.FormatInt(maxSM, 10)); err != nil {
+		return "", err
+	}
+	if err := r.St.SetMeta(ctx, metaConfluenceCursor, strconv.FormatInt(maxC, 10)); err != nil {
 		return "", err
 	}
 

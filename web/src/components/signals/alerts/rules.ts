@@ -36,6 +36,9 @@ export const KIND_ORDER = [
   "anomaly_imbalance",
   "anomaly_vol",
   "anomaly_volume",
+  "insider_cluster",
+  "squeeze_setup",
+  "confluence_setup",
 ];
 
 const ANOMALY_BASE = [
@@ -113,6 +116,48 @@ export const ALERT_RULES: Record<string, AlertRule> = {
     color: "var(--warn)",
     rule: "z ≥ 2.5 vs its own baseline — volume spike",
     thresholds: [...ANOMALY_BASE],
+    known: true,
+  },
+  // SMART MONEY FACTS wave: positioning events from the smart-money-scorer.
+  // Sources of truth (keep in sync): daemon/internal/pipeline/smartmoney.go.
+  // HONESTY: reads of what informed participants are DOING, never a forecast.
+  insider_cluster: {
+    label: "Insider cluster buy",
+    color: "var(--bid)",
+    rule: "≥ 2 distinct insiders net-buying hard on open-market Form 4s",
+    thresholds: [
+      "fires when ≥ 2 distinct insiders bought open-market (code P) over 90d (SIGNALDECK_INSIDER_CLUSTER_MIN, default 2) AND the net-buy dollar ratio (buys−sells)/(buys+sells) > 0.5",
+      "deduped to one event per symbol per latest-transaction UTC day; Form 4s lag the trade ~2 business days by law — positioning, not a forecast",
+    ],
+    href: "/intel/smart-money",
+    hrefLabel: "see /intel/smart-money",
+    known: true,
+  },
+  squeeze_setup: {
+    label: "Short-squeeze setup",
+    color: "var(--warn)",
+    rule: "elevated days-to-cover AND elevated short-volume vs own baseline",
+    thresholds: [
+      "fires when short-interest days-to-cover ≥ 5 (SIGNALDECK_SQUEEZE_DTC_MIN) AND the Reg SHO short-volume ratio z ≥ +1.5σ vs the symbol's own 30d (SIGNALDECK_SQUEEZE_Z_MIN)",
+      "LATENT squeeze FUEL — upside potential IF a catalyst hits, not a directional call; short-volume ratio is not short interest and includes market-maker flow",
+    ],
+    href: "/intel/smart-money",
+    hrefLabel: "see /intel/smart-money",
+    known: true,
+  },
+  // CONFLUENCE GATE wave: a setup fired by the confluence-scorer.
+  // Sources of truth (keep in sync): daemon/internal/confluence/confluence.go.
+  // HONESTY: agreement across INDEPENDENT families, no manufactured edge.
+  confluence_setup: {
+    label: "Confluence setup",
+    color: "var(--accent)",
+    rule: "≥ 3 INDEPENDENT signal families agree on a direction, ≤ 1 dissenting",
+    thresholds: [
+      "fires when at least 3 of 5 independent families (smart-money, trend, prediction, relative-strength, breakout) agree on a direction (SIGNALDECK_CONFLUENCE_MIN, default 3) with at most 1 dissenter",
+      "an absent family is excluded (never a fabricated neutral); a near-coin-flip prediction is one weak, non-decisive vote — this manufactures no edge and is scored by expected profit, not win rate",
+    ],
+    href: "/signals/confluence",
+    hrefLabel: "see /signals/confluence",
     known: true,
   },
 };

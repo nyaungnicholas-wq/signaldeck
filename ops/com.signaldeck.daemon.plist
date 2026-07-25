@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  SignalDeck data daemon LaunchAgent — the 24/7 collector: 12 in-app agents
-  (ingest, signals, expectancy, insights, honesty resolver, hud sync, DQ)
-  plus the JSON API on :8322. This is the process that makes the database
-  grow continuously.
-  Install:
-    cp ops/com.signaldeck.daemon.plist ~/Library/LaunchAgents/
-    launchctl load ~/Library/LaunchAgents/com.signaldeck.daemon.plist
+  SignalDeck data daemon LaunchAgent — the collector (in-app agents for ingest,
+  signals, expectancy, insights, honesty resolver, hud sync, DQ) plus the JSON
+  API on :8322.
+
+  ON-DEMAND / MARKET-HOURS MODEL (changed 2026-07-19):
+  RunAtLoad=false and no KeepAlive, so this loads at login but stays IDLE. It
+  only runs when kickstarted — by com.signaldeck.market-open (weekdays 06:20 PT)
+  or manually via ops/signaldeck-ctl.sh (up|collect). com.signaldeck.market-close
+  (13:10 PT) stops it. This is what stops it pinning the CPU 24/7.
+  Start now:  ops/signaldeck-ctl.sh up
 -->
 <plist version="1.0">
 <dict>
@@ -22,25 +25,23 @@
   <string>/Users/natalienyaung/claude code/signaldeck/daemon</string>
 
   <key>RunAtLoad</key>
-  <true/>
-
-  <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
+  <false/>
 
   <!--
-    Log growth: the daemon now rotates its own log in-process — slog goes to
-    BOTH stderr and logs/signaldeckd.log (20 MB x 3 generations; override the
-    path with SIGNALDECK_LOG_FILE, or set it to "" to disable file logging).
-    The launchd redirects below are kept ON PURPOSE as a crash net: they
-    capture panics, runtime faults, and anything printed before logging is
-    initialized — output the in-process writer can miss. Trade-off:
-    daemon.err.log duplicates slog output and still grows unbounded; if that
-    ever matters, point StandardErrorPath at /dev/null — signaldeckd.log
-    carries the same stream, rotated.
+    LOW-PRIORITY / STAY-OUT-OF-THE-WAY (added 2026-07-19):
+    ProcessType=Background + Nice=20 put signaldeckd in the throttled background
+    scheduling tier (same class as Spotlight/backups), so it yields CPU instantly
+    whenever you're actively using the Mac and only uses spare cycles otherwise.
+    LowPriorityIO deprioritizes its heavy SQLite disk writes too. It still runs
+    and collects — it just can't hog the machine anymore.
   -->
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Nice</key>
+  <integer>20</integer>
+  <key>LowPriorityIO</key>
+  <true/>
+
   <key>StandardOutPath</key>
   <string>/Users/natalienyaung/claude code/signaldeck/logs/daemon.out.log</string>
   <key>StandardErrorPath</key>

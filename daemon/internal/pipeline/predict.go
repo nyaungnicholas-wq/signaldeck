@@ -355,6 +355,16 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelAlphaX, ts); ok {
 				c.AlphaXProb, c.AlphaXLift = &p, &l
 			}
+			// PRESSURE LEG GATE: the pressure score is the platform's oldest base
+			// leg, but the resolved record shows its fixed-weight directional call
+			// is anti-predictive at 1d/1w. The pressure-trainer grades it
+			// walk-forward and stores the OOS lift like a model leg; here we inject
+			// only the LIFT (the leg's PROB stays live from sc.Score above). A
+			// MEASURED lift <= 0 benches the leg in LegProbabilities; an unmeasured
+			// leg (no fresh row) is kept — fail-safe against a cold trainer.
+			if _, l, ok := modelLegProbLift(modelFcs, h, store.ModelPressure, ts); ok {
+				c.PressureLift = &l
+			}
 			// PER-SYMBOL AGENTS: pick weights + calibration by tier order
 			//   personal(symbol) -> global-regime -> global -> static.
 			// When this symbol has EARNED a personal model (tier=personal), use

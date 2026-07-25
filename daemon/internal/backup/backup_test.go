@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,6 +196,46 @@ func TestOffsiteNotConfigured(t *testing.T) {
 		if e.Kind == "offsite_backup_unavailable" {
 			t.Error("no dq event should be recorded when offsite is a deliberate opt-out")
 		}
+	}
+}
+
+// TestRestartGateSkipsFreshBackup: a Run while the backup_last_ts cursor is
+// younger than MinGap must skip (a daemon restart is not a new night), and an
+// aged cursor must back up again.
+func TestRestartGateSkipsFreshBackup(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "src.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close() //nolint:errcheck
+	ctx := context.Background()
+	bdir := filepath.Join(dir, "backups")
+	w := &Worker{St: st, Dir: bdir, Keep: 7}
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	// Simulated restart: the fleet fires Run again right away.
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("gated Run: %v", err)
+	}
+	if !strings.Contains(detail, "skipped") {
+		t.Errorf("detail = %q; want restart-gate skip", detail)
+	}
+	if entries, err := os.ReadDir(bdir); err != nil || len(entries) != 1 {
+		t.Fatalf("restart must not add a backup: got %d (err %v)", len(entries), err)
+	}
+	// Age the cursor past the gate → the nightly run proceeds again.
+	if err := st.SetMeta(ctx, MetaLastBackupTs, fmt.Sprintf("%d", time.Now().Add(-31*time.Hour).Unix())); err != nil {
+		t.Fatal(err)
+	}
+	detail, err = w.Run(ctx)
+	if err != nil {
+		t.Fatalf("aged Run: %v", err)
+	}
+	if !strings.Contains(detail, "backup signaldeck-") {
+		t.Errorf("detail = %q; want a fresh backup past the gate", detail)
 	}
 }
 

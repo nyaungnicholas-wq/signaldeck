@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/archive"
@@ -528,8 +530,26 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 			// marketcal excludes weekends, holidays, and post-close hours,
 			// and closes half-days at 1:00pm ET — so a market holiday like
 			// July 4th no longer false-flags every symbol.
-			stale = latest > 0 && age > 20*60 && marketcal.OpenForBars(now)
-			detail = fmt.Sprintf("last 1m bar %dm old during market hours", age/60)
+			//
+			// ONLY the streamed hot set (stream=1) receives live 1m bars; the
+			// broad daily-only universe is polled for DAILY bars every ~6h and
+			// must be graded on those — grading it on 1m freshness false-flagged
+			// ~500 symbols every sweep (measured 1,559 stale events/24h,
+			// drowning real incidents).
+			if s.Stream {
+				stale = latest > 0 && age > 20*60 && marketcal.OpenForBars(now)
+				detail = fmt.Sprintf("last 1m bar %dm old during market hours", age/60)
+			} else {
+				latestD, err := a.St.LatestBarTs(ctx, s.ID, md.TF1d)
+				if err != nil {
+					return "", err
+				}
+				// >4 calendar days with no daily bar spans any weekend or
+				// single holiday; longer means the 6h poller is missing it.
+				ageD := now.Unix() - latestD
+				stale = latestD > 0 && ageD > 4*86400
+				detail = fmt.Sprintf("last daily bar %dd old (daily-only universe)", ageD/86400)
+			}
 		}
 		if !stale {
 			continue
@@ -578,6 +598,11 @@ type StorageGovernor struct {
 	MinVacuumInterval time.Duration
 }
 
+// walBusyAlertBytes is the WAL size above which a BLOCKED checkpoint stops
+// being noise and becomes an incident worth a dq event (the WAL is growing and
+// nothing is reclaiming it).
+const walBusyAlertBytes = 128 * 1024 * 1024
+
 // Name implements workers.Worker.
 func (g *StorageGovernor) Name() string { return "storage-governor" }
 
@@ -586,10 +611,30 @@ func (g *StorageGovernor) Interval() time.Duration { return time.Hour }
 
 // Run checkpoints the WAL and, when warranted, vacuums.
 func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
-	if err := g.St.WALCheckpointTruncate(ctx); err != nil {
+	ckpt, err := g.St.WALCheckpointTruncate(ctx)
+	if err != nil {
 		return "", fmt.Errorf("wal checkpoint: %w", err)
 	}
 	dbBytes, walBytes := g.St.FileSizes()
+
+	// REPORT WHAT ACTUALLY HAPPENED. A TRUNCATE checkpoint needs a moment with
+	// no active readers; a busy fleet can deny it indefinitely, and SQLite
+	// signals that through the pragma's result row, not an error. When the WAL
+	// stays large AND blocked, that is a real incident (unbounded WAL growth)
+	// and must surface — not be papered over with "checkpointed wal".
+	walNote := fmt.Sprintf("wal truncated (%d frames)", ckpt.Checkpointed)
+	if ckpt.Busy {
+		walNote = fmt.Sprintf("wal checkpoint BUSY — readers active, %d/%d frames moved, WAL NOT truncated",
+			ckpt.Checkpointed, ckpt.LogFrames)
+		if walBytes >= walBusyAlertBytes {
+			_ = g.St.InsertDQ(ctx, md.DQEvent{
+				Ts:   time.Now().Unix(),
+				Kind: "wal_checkpoint_busy",
+				Detail: fmt.Sprintf("WAL %.1fMB and growing: TRUNCATE blocked by active readers (%d/%d frames moved). Worker read pressure is denying the checkpoint a reader-free window.",
+					float64(walBytes)/(1024*1024), ckpt.Checkpointed, ckpt.LogFrames),
+			})
+		}
+	}
 
 	threshold := g.VacuumThreshold
 	if threshold == 0 {
@@ -600,24 +645,66 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 		minInterval = 24 * time.Hour
 	}
 
+	// OFF-HOURS GATE: a VACUUM rewrites the whole file and briefly stalls the
+	// single writer, so restrict it to a quiet overnight window (2–6am
+	// America/New_York) instead of letting it fire mid-session under load —
+	// UNLESS the file has blown to 2× the threshold, where reclaiming space
+	// outweighs the stall. This is the "schedule VACUUM off-hours" fix.
+	offHours := inETWindow(time.Now(), 2, 6)
+	emergency := dbBytes >= 2*threshold
+
 	vacuumed := false
-	if dbBytes >= threshold {
+	if dbBytes >= threshold && (offHours || emergency) {
 		last, _ := g.St.GetMeta(ctx, "storage_last_vacuum")
 		var lastTs int64
 		if last != "" {
 			lastTs, _ = strconv.ParseInt(last, 10, 64)
 		}
 		if time.Since(time.Unix(lastTs, 0)) >= minInterval {
-			if err := g.St.Vacuum(ctx); err != nil {
-				return "", fmt.Errorf("vacuum: %w", err)
+			// DISK-FREE PRECHECK (council-mandated): VACUUM rewrites the whole
+			// database into a temp copy, so it needs ~dbBytes of headroom; a
+			// mid-VACUUM disk-full errors every writer on the box. Require
+			// 1.2× the file size free or skip loudly (dq) and retry next pass.
+			// FAIL-CLOSED: if headroom cannot be VERIFIED, do not rewrite a
+			// multi-GB file. An unverifiable statfs is not permission to
+			// proceed (council note: the earlier form failed open, so a
+			// statfs error silently restored the pre-guard behavior).
+			free, ferr := diskFree(filepath.Dir(g.St.Path()))
+			need := dbBytes + dbBytes/5
+			if ferr != nil || free < need {
+				reason := fmt.Sprintf("%.1fGB free < %.1fGB needed (1.2x db)", float64(free)/(1<<30), float64(need)/(1<<30))
+				if ferr != nil {
+					reason = "could not verify free disk: " + ferr.Error()
+				}
+				_ = g.St.InsertDQ(ctx, md.DQEvent{
+					Ts:     time.Now().Unix(),
+					Kind:   "vacuum_skip",
+					Detail: "vacuum skipped: " + reason + " — data safe, retrying next pass",
+				})
+			} else {
+				if err := g.St.Vacuum(ctx); err != nil {
+					return "", fmt.Errorf("vacuum: %w", err)
+				}
+				_ = g.St.SetMeta(ctx, "storage_last_vacuum", strconv.FormatInt(time.Now().Unix(), 10))
+				vacuumed = true
+				dbBytes, walBytes = g.St.FileSizes()
 			}
-			_ = g.St.SetMeta(ctx, "storage_last_vacuum", strconv.FormatInt(time.Now().Unix(), 10))
-			vacuumed = true
-			dbBytes, walBytes = g.St.FileSizes()
 		}
 	}
-	return fmt.Sprintf("checkpointed wal; db=%.1fMB wal=%.1fMB vacuumed=%v",
-		float64(dbBytes)/(1024*1024), float64(walBytes)/(1024*1024), vacuumed), nil
+	return fmt.Sprintf("%s; db=%.1fMB wal=%.1fMB vacuumed=%v",
+		walNote, float64(dbBytes)/(1024*1024), float64(walBytes)/(1024*1024), vacuumed), nil
+}
+
+// inETWindow reports whether t's hour in America/New_York falls in [lo, hi).
+// The daemon embeds tzdata (marketcal), so LoadLocation succeeds; UTC is a
+// safe fallback that only shifts the window, never breaks it.
+func inETWindow(t time.Time, lo, hi int) bool {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.UTC
+	}
+	h := t.In(loc).Hour()
+	return h >= lo && h < hi
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -792,4 +879,13 @@ func archivePruneDerived[T any](
 			return pruned, skipped
 		}
 	}
+}
+
+// diskFree returns the available bytes on the filesystem holding dir.
+func diskFree(dir string) (int64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, err
+	}
+	return int64(st.Bavail) * int64(st.Bsize), nil
 }

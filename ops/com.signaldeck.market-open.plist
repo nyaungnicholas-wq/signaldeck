@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SignalDeck market-open trigger. Weekdays at 06:20 Pacific (10 min before the
+  US regular session opens, 06:30 PT / 09:30 ET) it starts data collection
+  (daemon + tunnel) via signaldeck-ctl.sh. If the Mac is asleep at 06:20,
+  launchd runs the missed job when the Mac next wakes during the day.
+  Pairs with com.signaldeck.market-close (stops the stack at 13:10 PT).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.signaldeck.market-open</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/natalienyaung/claude code/signaldeck/ops/market-open-guard.sh</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+  </array>
+
+  <!-- RunAtLoad + the guard script (2026-07-24): a reboot/login after 06:20
+       used to leave the stack dead all day (launchd only replays calendar jobs
+       missed during sleep, not across reboots). Now login fires the guard,
+       which starts collection only inside the weekday 06:20–13:10 PT window. -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/schedule.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/natalienyaung/claude code/signaldeck/logs/schedule.err.log</string>
+</dict>
+</plist>
