@@ -414,7 +414,19 @@ func (d Deps) bars(w http.ResponseWriter, r *http.Request) {
 	// guard trips only where the daemon is actually reachable by someone else.
 	// Derived analytics (forecasts, regimes, risk) are unaffected — the point
 	// is the raw records, not the insight computed from them.
-	if !d.Cfg.AllowRawExport && !d.Cfg.PublicReads && !datalicense.BarsRedistributable() {
+	// The test is the REQUEST's origin, not a config flag. The first version of
+	// this guard keyed off PublicReads and was inverted: PublicReads=true means
+	// MORE open, so the guard only fired on locked-down deployments and stood
+	// down on exposed ones — precisely backwards. It also missed the real
+	// exposure surface, which is the web proxy's bind address rather than the
+	// daemon's: the daemon can sit on loopback while the Next.js app in front of
+	// it listens on every interface and forwards.
+	//
+	// Serving licensed bars to the machine they were downloaded on is personal
+	// use. Serving them to anyone else is redistribution, whatever the config
+	// says, so a non-loopback caller is refused unless the operator has
+	// explicitly asserted the right.
+	if !d.Cfg.AllowRawExport && !requestIsLoopback(r) && !datalicense.BarsRedistributable() {
 		httpErr(w, 451, datalicense.RawDataNotice())
 		return
 	}
@@ -954,4 +966,16 @@ func dedupeIndependent(pts []honestyPt) []honestyPt {
 		out = append(out, p)
 	}
 	return out
+}
+
+// requestIsLoopback reports whether the caller is the local machine. Proxy
+// headers are deliberately IGNORED — an attacker sets those, and trusting them
+// would hand the redistribution guard to whoever is asking.
+func requestIsLoopback(r *http.Request) bool {
+	host := r.RemoteAddr
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	host = strings.Trim(host, "[]")
+	return host == "127.0.0.1" || host == "::1" || strings.HasPrefix(host, "127.")
 }
