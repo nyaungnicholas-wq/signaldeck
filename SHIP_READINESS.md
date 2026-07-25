@@ -1,5 +1,11 @@
 # Ship readiness — honest audit (2026-07-25)
 
+> **UPDATE, same day.** Blockers 1, 2 and 3 are FIXED (LICENSE, in-code data
+> classification with a 451 guard on raw bar export, PublicReads now defaults
+> from the bind address). Blocker 4 was RE-TESTED against the survivorship-clean
+> universe — see "What the re-validation found" at the end. Blockers 5 and 6
+> (deployment, paid feed) remain open and are decisions, not code.
+
 What would actually have to be true before this goes to a company, separated by
 whether the blocker is legal, evidential, or operational. Verified against the
 repository, not estimated.
@@ -120,3 +126,44 @@ These are the parts that would survive scrutiny, and they are the unusual ones:
 
 Steps 1–3 are days of work. Step 4 cannot be compressed, and trying to is how
 the directional model shipped for months at negative skill.
+
+
+---
+
+## What the re-validation found (2026-07-25)
+
+`tools/revalidate_structural.py` re-ran trend21 over the survivorship-clean
+universe — every symbol ever tracked, including delisted names — with
+non-overlapping 21-session sampling and quarter-block bootstrap CIs.
+
+**54,969 independent observations across 24 quarters**, roughly 3x the original
+sample and the first run that includes the graveyard:
+
+| conviction band | active only | delisted only | survivorship-clean |
+|---|---|---|---|
+| low (<0.5) | 73.6% | 72.6% | **72.9%** |
+| moderate (0.5–0.8) | 91.0% | 90.2% | **90.5%** |
+| high (0.8–0.9) | 95.1% | 95.1% | **95.1%** |
+| very-high (>=0.9) | 97.8% | 97.5% | **97.6%** |
+| overall | 83.6% | 82.7% | **83.0%** |
+
+**The claim survives.** Survivorship inflation is +1.0pp overall, and the
+band structure is essentially unchanged — the shipped 97.2% for very-high
+conviction measures 97.6% on the clean universe. Dead companies were very
+slightly harder, not dramatically easier, which is the outcome that leaves the
+published numbers usable.
+
+### But the headline number is NOT skill, and must never be quoted as one
+
+The naive strategy for "will price stay on the same side of its 200-day
+average" is to always answer yes. That scores the base rate of persistence —
+**the same 83%** the model scores, because the model also answers yes almost
+every time. Quoting "83% accurate" claims credit for the base rate.
+
+The real product is **discrimination**: the model sorts calls into bands whose
+accuracy genuinely differs, ~73% at low conviction versus ~98% at very-high, a
+**24.7pp spread** that holds across 24 quarters and survives the graveyard.
+Knowing WHICH regime calls are reliable is the useful thing. The average is not.
+
+This is what can honestly be said before 2026-08-07, and it is a stronger claim
+than the headline was, because it is the one that is actually true.
