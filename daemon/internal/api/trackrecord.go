@@ -68,19 +68,51 @@ type trackPt struct {
 	market   md.Market
 }
 
+// trackRecord is the UNCACHED handler — tests drive it directly so seeded rows
+// are always visible. Production traffic goes through registerTrackRecord's
+// stale-while-revalidate wrapper below.
 func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	h := md.Horizon(r.URL.Query().Get("horizon"))
 	if h != md.H1h && h != md.H1d && h != md.H1w {
 		h = md.H1d
 	}
+	resp, err := d.buildTrackRecord(r.Context(), h)
+	if err != nil {
+		httpErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, resp)
+}
 
+// trackRecordCached serves the same payload through the SWR cache. Perf wave
+// 2026-07-24: the full grade over the 120k-row window costs ~22s per request
+// in the pure-Go driver and is identical for every user; the 2m TTL sits well
+// under the 10m resolver cadence that changes the underlying rows, so
+// staleness is bounded by design and nobody waits behind a rebuild.
+func (d Deps) trackRecordCached(w http.ResponseWriter, r *http.Request) {
+	h := md.Horizon(r.URL.Query().Get("horizon"))
+	if h != md.H1h && h != md.H1d && h != md.H1w {
+		h = md.H1d
+	}
+	resp, err := sharedTrackCache.get(r.Context(), string(h),
+		func(ctx context.Context) (map[string]any, error) {
+			return d.buildTrackRecord(ctx, h)
+		})
+	if err != nil {
+		httpErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, resp)
+}
+
+// buildTrackRecord computes the full track-record payload for one horizon.
+// Pure build — no HTTP — so the response cache can rebuild it off-request.
+func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]any, error) {
 	// Same wide window as fleetEdgeSkill: at ~3k resolutions/day a 20k cap spans
 	// only ~7 days and wrongly RE-GATES the record now that the universe is large.
 	rows, err := d.St.ResolvedPredictionOutcomes(ctx, h, fleetSkillWindow)
 	if err != nil {
-		httpErr(w, 500, err.Error())
-		return
+		return nil, err
 	}
 	rawN := len(rows)
 
@@ -131,6 +163,9 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		// carries no claimable skill, so we still frame it honestly.
 		"live":       true,
 		"trackLabel": "live out-of-sample — calibrated predictions vs realized outcomes",
+		// #20: the predictions record is graded on the currently-tracked
+		// universe's bars — the survivorship label travels with the stats.
+		"survivorship": survivorshipBlock(),
 	}
 
 	// Per-horizon resolved/total coverage so the page shows how thin the record
@@ -152,8 +187,14 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 	// absent and the page falls back to the plain notice.
 	resp["gate"] = d.trackGate(ctx, h, indepN, counts, countsErr)
 
-	// Self-verifying links: ledger integrity (Stage 3) + paper equity (Stage 4).
-	if v, verr := d.St.VerifyLedger(ctx); verr == nil {
+	// Credibility wave: LIVE regime-forecast grading per kind (claimed vs
+	// realized, own 30-resolution gate per kind — appended block below). Not
+	// affected by the directional gate: regimes are their own record.
+	resp["regimes"] = d.regimeTrackRecord(ctx)
+
+	// Self-verifying links: ledger integrity (Stage 3, incremental checkpoint
+	// path — cold-load precompute wave) + paper equity (Stage 4).
+	if v, _, verr := d.St.VerifyLedgerCached(ctx); verr == nil {
 		resp["ledger"] = map[string]any{"intact": v.Intact, "count": v.Count, "head": v.HeadHash}
 	}
 	resp["paper"] = d.paperSummaryForTrackRecord(ctx)
@@ -173,8 +214,7 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		resp["reliability"] = reliabilityCurve(pts)
 		resp["byRegime"] = nil
 		resp["byMarket"] = trackByMarket(pts) // descriptive only; not skill claims
-		writeJSON(w, resp)
-		return
+		return resp, nil
 	}
 
 	// ── ungated: report the measured numbers, each with a CI ──
@@ -235,7 +275,7 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 	resp["byMarket"] = trackByMarket(pts)
 	resp["reliabilityScore"] = ensemble.ReliabilityScore(pairs)
 
-	writeJSON(w, resp)
+	return resp, nil
 }
 
 // paperSummaryForTrackRecord returns a compact costed summary of the default
@@ -451,9 +491,9 @@ func notSignificant(n, min int) string {
 	return "not yet significant — " + strconv.Itoa(n) + "/" + strconv.Itoa(min) + " independent resolutions"
 }
 
-// registerTrackRecord wires the Stage-7 live track-record read route.
+// registerTrackRecord wires the Stage-7 live track-record read route (cached).
 func (d Deps) registerTrackRecord(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/track-record", d.trackRecord)
+	mux.HandleFunc("GET /api/track-record", d.trackRecordCached)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -580,5 +620,106 @@ func horizonWindowSecs(h md.Horizon) int64 {
 		return 3600
 	default:
 		return 86400
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CREDIBILITY WAVE — LIVE REGIME-FORECAST GRADING (appended block).
+//
+// The regime forecasts ship with MEASURED walk-forward accuracy tiers; this
+// section is where those claims meet reality: for every kind, the resolved
+// live record (regime_outcomes, frozen at call time by the regime-outcome
+// worker) is graded — live accuracy with a Wilson 95% CI next to the MEAN
+// CLAIMED accuracy of the same resolved calls. Same honesty pattern as the
+// directional record: below regimeMinResolutions resolutions PER KIND the
+// accuracy is withheld with a "not yet significant — k/30" note, never a
+// number that overstates a thin sample.
+
+// regimeMinResolutions is the per-kind floor of resolved regime calls below
+// which live accuracy is withheld.
+const regimeMinResolutions = 30
+
+// regimeTrackRecord assembles the per-kind live regime grading payload.
+// Best-effort: on a store error it returns an "available:false" stub rather
+// than failing the whole track-record page.
+func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
+	rows, err := d.St.ResolvedRegimeOutcomes(ctx, 50000)
+	if err != nil {
+		return map[string]any{"available": false, "error": err.Error()}
+	}
+	// One independent observation per (symbol, kind, UTC-day). The dedup unique
+	// index already guarantees this at write time; the re-check here is
+	// defensive so a future schema change can't silently pseudo-replicate.
+	type agg struct {
+		n, correct int
+		sumClaimed float64
+	}
+	seen := map[[3]int64]bool{}
+	byKind := map[string]*agg{}
+	for _, r := range rows {
+		k := string(r.Kind)
+		dk := [3]int64{r.SymbolID, kindOrdinal(k), r.Ts / 86400}
+		if seen[dk] {
+			continue
+		}
+		seen[dk] = true
+		a := byKind[k]
+		if a == nil {
+			a = &agg{}
+			byKind[k] = a
+		}
+		a.n++
+		if r.Correct == 1 {
+			a.correct++
+		}
+		a.sumClaimed += r.HistoricalAccuracy
+	}
+	kinds := map[string]any{}
+	for k, a := range byKind {
+		e := map[string]any{
+			"resolvedN":      a.n,
+			"minResolutions": regimeMinResolutions,
+			"claimed":        a.sumClaimed / float64(a.n), // mean claimed acc of resolved calls
+		}
+		if a.n < regimeMinResolutions {
+			e["gated"] = true
+			e["liveAccuracy"] = nil
+			e["liveAccuracyCI"] = nil
+			e["note"] = notSignificant(a.n, regimeMinResolutions)
+		} else {
+			lo, hi := wilson(a.correct, a.n)
+			e["gated"] = false
+			e["liveAccuracy"] = float64(a.correct) / float64(a.n)
+			e["liveAccuracyCI"] = [2]float64{lo, hi}
+		}
+		kinds[k] = e
+	}
+	return map[string]any{
+		"available": true,
+		"kinds":     kinds,
+		"dedupNote": "one observation per (symbol, kind, UTC-day); conviction and claimed accuracy frozen at call time, realized labels recomputed with the exact engine math",
+		// #20: regime claims were measured on (and are resolved against) the
+		// currently-tracked universe's bars.
+		"survivorship": survivorshipBlock(),
+	}
+}
+
+// kindOrdinal maps a regime kind to a stable small int for the dedup key.
+func kindOrdinal(k string) int64 {
+	switch k {
+	case "trend21":
+		return 1
+	case "trend63":
+		return 2
+	case "liquidity21":
+		return 3
+	case "vol21":
+		return 4
+	case "trend21-crypto":
+		return 5
+	case "liquidity21-crypto":
+		return 6
+	default:
+		return 99
 	}
 }

@@ -1106,3 +1106,323 @@ CREATE TABLE IF NOT EXISTS recommendation_audit (
   entry_hash     TEXT NOT NULL         -- the chain link
 );
 CREATE INDEX IF NOT EXISTS idx_recaudit_symbol ON recommendation_audit(symbol_id, seq DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- SMART MONEY FACTS wave (appended block — do not merge into the sections
+-- above). ONE transparent, decomposed per-symbol "Smart Money Score" plus two
+-- event kinds, all built from ALREADY-INGESTED positioning data (SEC Form 4
+-- open-market insider trades, FINRA short interest / Reg SHO short volume,
+-- crypto perp funding, SEC 13F holdings — see internal/smartmoney). HONESTY:
+-- the score is a read of what INFORMED PARTICIPANTS ARE DOING, NOT a price
+-- forecast; every component is a bounded factor with its source and the API
+-- carries the caveat verbatim (13F quarterly + ~45d lagged; short-volume ratio
+-- is not short interest and includes market-maker flow).
+
+-- smart_money_scores: the LATEST score per symbol (upserted every pass). score
+-- is the renormalized weighted-mean of the present factors in [-1,1]; label is
+-- the descriptive band (strong_accumulation … strong_distribution); payload is
+-- the full evidence JSON (factors + raw sub-fields the API re-serves typed).
+CREATE TABLE IF NOT EXISTS smart_money_scores (
+  symbol_id INTEGER PRIMARY KEY REFERENCES symbols(id),
+  ts        INTEGER NOT NULL,
+  score     REAL NOT NULL,
+  label     TEXT NOT NULL,
+  payload   TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_smart_money_score ON smart_money_scores(score);
+
+-- smart_money_events: append-only insider-cluster / squeeze-setup detections.
+-- day_bucket (the latest relevant UTC filing/short-vol day) is the dedup key so
+-- a persisting condition becomes ONE event per (symbol, kind) per day via the
+-- UNIQUE index + INSERT OR IGNORE (same idempotency pattern as anomalies).
+CREATE TABLE IF NOT EXISTS smart_money_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  symbol_id  INTEGER NOT NULL REFERENCES symbols(id),
+  ts         INTEGER NOT NULL,
+  kind       TEXT NOT NULL,   -- insider_cluster | squeeze_setup
+  detail     TEXT NOT NULL,
+  day_bucket TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sme_dedup ON smart_money_events(symbol_id, kind, day_bucket);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- CONFLUENCE GATE + MONEY SCOREBOARD wave (appended block — do not merge into
+-- the sections above). A trade SETUP is only flagged when several INDEPENDENT
+-- signal FAMILIES (smart-money, trend, prediction, relative-strength, breakout)
+-- AGREE on a direction (see internal/confluence). HONESTY: this manufactures no
+-- edge — it is a strict AND over signals that already exist, shown transparently
+-- (every family's vote is in the payload). Flagged setups are FORWARD-TRACKED
+-- with no lookahead and scored by EXPECTED PROFIT (expectancy/profit-factor),
+-- not win rate.
+
+-- confluence_setups: the LATEST assessment per symbol (upserted every pass —
+-- all symbols stored, is_setup flags the ones that cleared the gate). payload is
+-- the full votes JSON (every present family's dir + reason) the API re-serves.
+CREATE TABLE IF NOT EXISTS confluence_setups (
+  symbol_id INTEGER PRIMARY KEY REFERENCES symbols(id),
+  ts        INTEGER NOT NULL,
+  direction INTEGER NOT NULL,
+  agree     INTEGER NOT NULL,
+  dissent   INTEGER NOT NULL,
+  score     REAL NOT NULL,
+  is_setup  INTEGER NOT NULL,
+  payload   TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_confluence_score ON confluence_setups(score);
+
+-- confluence_outcomes: the FORWARD-TRACKED record of flagged setups. One row per
+-- (symbol, ts, horizon); entry_px frozen at flag time; fwd_return / win / resolved_at
+-- filled later by the resolver from realized bars (NO lookahead). This is what the
+-- money scoreboard grades — by expectancy, not win rate.
+CREATE TABLE IF NOT EXISTS confluence_outcomes (
+  symbol_id   INTEGER NOT NULL REFERENCES symbols(id),
+  ts          INTEGER NOT NULL,
+  horizon     TEXT NOT NULL,
+  direction   INTEGER NOT NULL,
+  agree       INTEGER NOT NULL,
+  entry_px    REAL NOT NULL,
+  fwd_return  REAL,
+  win         INTEGER,
+  resolved_at INTEGER,
+  PRIMARY KEY(symbol_id, ts, horizon)
+);
+
+-- confluence_events: append-only "confluence setup" detections. day_bucket (the
+-- setup's UTC day) is the dedup key so a persisting setup becomes ONE event per
+-- (symbol, kind) per day via the UNIQUE index + INSERT OR IGNORE.
+CREATE TABLE IF NOT EXISTS confluence_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  symbol_id  INTEGER NOT NULL REFERENCES symbols(id),
+  ts         INTEGER NOT NULL,
+  kind       TEXT NOT NULL,   -- confluence_setup
+  detail     TEXT NOT NULL,
+  day_bucket TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_confl_evt_dedup ON confluence_events(symbol_id, kind, day_bucket);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- RESEARCH LAB — POSTMORTEM ENGINE (appended block — do not merge above).
+-- One row per resolved, WRONG, meaningfully-convicted prediction. The
+-- postmortem-runner worker attributes each miss to a ranked failure taxonomy
+-- (internal/postmortem) and stores the result so failures can be CLUSTERED and
+-- fed back as research. Idempotent: PK is (symbol_id, horizon, ts) = the exact
+-- prediction it explains, so a miss is postmortem'd at most once (INSERT OR
+-- IGNORE). reasons is the full ranked JSON array; primary/secondary are lifted
+-- out for cheap clustering queries. NO lookahead: every input was recorded at
+-- or before resolution time.
+CREATE TABLE IF NOT EXISTS prediction_postmortems (
+  symbol_id   INTEGER NOT NULL,
+  horizon     TEXT NOT NULL,
+  ts          INTEGER NOT NULL,   -- the prediction's bar ts (unix s)
+  prob        REAL NOT NULL,      -- calibrated P(up) at prediction time
+  up          INTEGER NOT NULL,   -- realized 1/0
+  fwd_return  REAL NOT NULL,      -- realized forward return (signed)
+  conviction  REAL NOT NULL,      -- |prob-0.5|
+  magnitude   REAL NOT NULL,      -- |fwd_return|
+  primary_reason   TEXT NOT NULL,
+  secondary_reason TEXT NOT NULL DEFAULT '',
+  reasons     TEXT NOT NULL DEFAULT '[]',  -- full ranked JSON
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (symbol_id, horizon, ts)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_postmortem_primary ON prediction_postmortems(primary_reason);
+CREATE INDEX IF NOT EXISTS idx_postmortem_created ON prediction_postmortems(created_at);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- RESEARCH LAB — HYPOTHESIS REGISTRY (appended block — do not merge above).
+-- One row per candidate feature-rule the Research Lab has promoted to SHADOW.
+-- A hypothesis earns a shadow row only after beating the incumbent baseline by a
+-- Bonferroni-corrected Wilson lower bound on strict walk-forward OOS data. It is
+-- then RE-EVALUATED every run on fresh, accruing data; pass_streak counts
+-- consecutive wins, and only a sustained streak flips status to 'promoted'. A
+-- run that fails resets the streak; repeated failure flips status to 'rejected'.
+-- NOTHING here mutates live predictions — a promoted hypothesis is an advisory,
+-- independently-verifiable finding. id is the deterministic spec hash.
+CREATE TABLE IF NOT EXISTS research_hypotheses (
+  id            TEXT PRIMARY KEY,       -- deterministic hash of the spec
+  kind          TEXT NOT NULL,          -- ablation | interaction | row_gate
+  spec          TEXT NOT NULL,          -- full Hypothesis JSON
+  description   TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL,          -- shadow | promoted | rejected
+  discovered_at INTEGER NOT NULL,
+  base_lift     REAL NOT NULL DEFAULT 0, -- incumbent baseline lift at discovery
+  disc_lift     REAL NOT NULL DEFAULT 0, -- candidate OOS lift at discovery
+  last_lift     REAL NOT NULL DEFAULT 0, -- most recent OOS lift
+  last_wilson   REAL NOT NULL DEFAULT 0, -- most recent corrected Wilson floor
+  last_n        INTEGER NOT NULL DEFAULT 0,
+  pass_streak   INTEGER NOT NULL DEFAULT 0,
+  fail_streak   INTEGER NOT NULL DEFAULT 0,
+  evals         INTEGER NOT NULL DEFAULT 0,
+  promoted_at   INTEGER NOT NULL DEFAULT 0,
+  updated_at    INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_research_status ON research_hypotheses(status);
+
+-- ═══ BAYESIAN RESEARCH LEDGER (internal/researchledger) ═══════════════════
+-- Named research beliefs with an auditable evidence chain. Unlike
+-- research_hypotheses (the automated micro-hypothesis lab), these are the
+-- PROGRAM-level discoveries: prior fixed at creation, posterior recomputed
+-- from the full evidence chain on every insert (deterministic — the chain IS
+-- the belief). Status is a derived band, never the source of truth.
+CREATE TABLE IF NOT EXISTS research_ledger_hypotheses (
+  id             TEXT PRIMARY KEY,        -- 'H001', 'H008', ...
+  family         TEXT NOT NULL,           -- signal family: momentum|meanrev|...
+  statement      TEXT NOT NULL,
+  horizon        TEXT NOT NULL DEFAULT '',
+  prior          REAL NOT NULL,           -- fixed at creation, never edited
+  max_edge       REAL NOT NULL DEFAULT 0.10, -- plausible-edge band for BF
+  posterior      REAL NOT NULL,           -- derived: recomputed from evidence
+  status         TEXT NOT NULL,           -- derived band (see researchledger)
+  replications   INTEGER NOT NULL DEFAULT 0, -- derived from evidence
+  contradictions INTEGER NOT NULL DEFAULT 0, -- derived from evidence
+  regimes        INTEGER NOT NULL DEFAULT 1, -- distinct vol regimes covered
+  open_questions TEXT NOT NULL DEFAULT '[]', -- JSON array of strings
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS research_ledger_evidence (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  hyp_id      TEXT NOT NULL REFERENCES research_ledger_hypotheses(id),
+  ts          INTEGER NOT NULL,
+  kind        TEXT NOT NULL,   -- experiment | replication | attack | manual
+  k           INTEGER NOT NULL DEFAULT 0,  -- binomial wins (experiment/replication)
+  n           INTEGER NOT NULL DEFAULT 0,  -- binomial trials
+  p0          REAL NOT NULL DEFAULT 0,     -- naive baseline graded against
+  bf          REAL NOT NULL,               -- Bayes factor (re-clamped on read)
+  note        TEXT NOT NULL DEFAULT '',
+  window_from INTEGER NOT NULL DEFAULT 0,  -- data window graded (unix secs);
+  window_to   INTEGER NOT NULL DEFAULT 0   -- replications use disjoint windows
+);
+CREATE INDEX IF NOT EXISTS idx_rledger_evidence_hyp ON research_ledger_evidence(hyp_id, ts);
+
+-- ── research discovery engine wave (appended block — keep at END of file so
+-- parallel schema edits by other agents never collide) ──────────────────────
+-- research_weeks: the HISTORICAL evidence base for the research engine — one
+-- point-in-time weekly observation per (symbol, calendar week) computed from
+-- daily bars (2020→present backfill). vec is the same JSON name->float64 shape
+-- as features.vec but computed retrospectively with strict no-lookahead
+-- discipline (trailing windows only; label = the exact live outcome-resolver
+-- geometry). The independence unit for grading is the calendar WEEK, matching
+-- the ledger's week-trial discipline. Rows are recompute-idempotent (REPLACE).
+-- NOTE: this is a survivor-universe backtest base (today's active symbols
+-- projected into the past) — the ledger levies a standing survivorship attack
+-- on every grade drawn from it.
+CREATE TABLE IF NOT EXISTS research_weeks (
+  symbol_id  INTEGER NOT NULL,
+  week       INTEGER NOT NULL,   -- calendar-week bucket = ts / 604800
+  ts         INTEGER NOT NULL,   -- anchor daily-bar ts (last bar of the week)
+  vec        TEXT NOT NULL,      -- JSON name -> float64, point-in-time features
+  fwd_return REAL NOT NULL,      -- forward 1w return (resolver geometry)
+  up         INTEGER NOT NULL,   -- fwd_return > 0
+  era        TEXT NOT NULL,      -- covid_crash | bull_2020_21 | bear_2022 | ...
+  high_vol   INTEGER NOT NULL DEFAULT 0,  -- VIX >= 25 at the anchor
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (symbol_id, week)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_research_weeks_week ON research_weeks(week);
+CREATE INDEX IF NOT EXISTS idx_research_weeks_era ON research_weeks(era);
+
+-- ═══ VOLATILITY-REGIME FORECASTS (internal/volregime) ════════════════════════
+-- The platform's one validated-edge forecast: will a symbol's next-quarter
+-- realized volatility be elevated or calm? One row per symbol, overwritten each
+-- pass (INSERT OR REPLACE on the symbol_id PK — only the latest read renders).
+CREATE TABLE IF NOT EXISTS vol_forecasts (
+  symbol_id           INTEGER NOT NULL PRIMARY KEY REFERENCES symbols(id),
+  ts                  INTEGER NOT NULL,   -- when computed, unix seconds
+  regime              TEXT    NOT NULL,   -- 'elevated' | 'calm'
+  conviction          REAL    NOT NULL,   -- [0,1]
+  historical_accuracy REAL    NOT NULL,   -- MEASURED walk-forward acc at this tier
+  tier                TEXT    NOT NULL,
+  rank                REAL    NOT NULL,    -- current vol percentile in trailing window
+  n                   INTEGER NOT NULL     -- daily returns the forecast rests on
+) WITHOUT ROWID;
+
+-- ═══ MARKET-STRUCTURE REGIME FORECASTS (internal/structregime) ═══════════════
+-- The 2026-07-17 alpha-loop winners beyond vol63: trend/liquidity/vol21 regime
+-- calls plus gap-fill event forecasts. One row per (symbol, kind), overwritten
+-- each pass — only the latest read renders.
+CREATE TABLE IF NOT EXISTS regime_forecasts (
+  symbol_id           INTEGER NOT NULL REFERENCES symbols(id),
+  kind                TEXT    NOT NULL,   -- 'trend21' | 'liquidity21' | 'vol21' | 'gapfill5' | 'trend63' | 'trend21-crypto' | 'liquidity21-crypto'
+  ts                  INTEGER NOT NULL,   -- when computed, unix seconds
+  horizon_days        INTEGER NOT NULL,
+  regime              TEXT    NOT NULL,
+  conviction          REAL    NOT NULL,   -- [0,1]
+  historical_accuracy REAL    NOT NULL,   -- MEASURED walk-forward acc at this tier
+  tier                TEXT    NOT NULL,
+  rank                REAL    NOT NULL,
+  n                   INTEGER NOT NULL,
+  PRIMARY KEY (symbol_id, kind)
+) WITHOUT ROWID;
+
+-- ═══ REGIME-FORECAST OUTCOMES — LIVE GRADING (credibility wave) ═══════════════
+-- The regime forecasts above are overwritten in place, so on their own they can
+-- never be graded: this table FREEZES at most one call per (symbol, kind,
+-- UTC-day) — conviction and the CLAIMED accuracy captured at call time, never
+-- rewritten — and the regime-outcome worker later fills in the REALIZED regime
+-- label recomputed exactly as the engine defines it (internal/structregime
+-- resolve helpers). correct/actual stay NULL until enough forward daily bars
+-- exist. Idempotency: INSERT OR IGNORE on the (symbol_id, kind, day) unique
+-- index, day = ts/86400 (UTC day of the call).
+CREATE TABLE IF NOT EXISTS regime_outcomes (
+  id                  INTEGER PRIMARY KEY,
+  symbol_id           INTEGER NOT NULL REFERENCES symbols(id),
+  kind                TEXT    NOT NULL,
+  ts                  INTEGER NOT NULL,   -- call time (unix s), frozen
+  day                 INTEGER NOT NULL,   -- ts/86400 (UTC day) — dedup key part
+  horizon_days        INTEGER NOT NULL,
+  regime              TEXT    NOT NULL,   -- the call, frozen
+  conviction          REAL    NOT NULL,   -- frozen at call time
+  historical_accuracy REAL    NOT NULL,   -- CLAIMED accuracy at call time, frozen
+  rank                REAL    NOT NULL,
+  resolved_at         INTEGER,            -- NULL until graded
+  actual              TEXT,               -- realized regime label (NULL until graded)
+  correct             INTEGER             -- 1/0 (NULL until graded)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_regime_outcomes_dedup
+  ON regime_outcomes (symbol_id, kind, day);
+CREATE INDEX IF NOT EXISTS idx_regime_outcomes_unresolved
+  ON regime_outcomes (resolved_at) WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_regime_outcomes_resolved
+  ON regime_outcomes (kind, resolved_at) WHERE resolved_at IS NOT NULL;
+
+-- ═══ REGIME-CALL POSTMORTEMS (credibility wave) ═══════════════════════════════
+-- One deterministic plain-English postmortem per HIGH-conviction (>=0.8) regime
+-- call that resolved WRONG. Shape differs from prediction_postmortems (no
+-- prob/up, no reason taxonomy — a regime miss has one measured story: what was
+-- called, what realized, and the honest base rate implied by the CLAIMED
+-- accuracy), so it gets its own small table. Idempotent per outcome via the
+-- UNIQUE outcome_id (INSERT OR IGNORE).
+CREATE TABLE IF NOT EXISTS regime_postmortems (
+  id               INTEGER PRIMARY KEY,
+  outcome_id       INTEGER NOT NULL UNIQUE REFERENCES regime_outcomes(id),
+  symbol_id        INTEGER NOT NULL REFERENCES symbols(id),
+  kind             TEXT    NOT NULL,
+  ts               INTEGER NOT NULL,   -- the call's ts
+  regime           TEXT    NOT NULL,   -- what was called
+  conviction       REAL    NOT NULL,
+  claimed_accuracy REAL    NOT NULL,   -- claimed at call time (the base-rate input)
+  actual           TEXT    NOT NULL,   -- what realized
+  key_name         TEXT    NOT NULL,   -- the one measured number behind the miss
+  key_value        REAL    NOT NULL,
+  narrative        TEXT    NOT NULL,   -- deterministic plain English, never invented
+  created_at       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_regime_postmortems_created
+  ON regime_postmortems (created_at DESC);
+
+-- ── SLOW-READ INDEXES (2026-07-24 perf wave) ─────────────────────────────────
+-- /api/track-record scanned prediction_outcomes (240k rows) with a temp-B-tree
+-- sort on EVERY request (~22s in the pure-Go driver). This partial index serves
+-- the exact read — resolved rows of one horizon, newest first — as an index
+-- walk with no sort.
+CREATE INDEX IF NOT EXISTS idx_predoutcomes_resolved_hts
+  ON prediction_outcomes (horizon, ts DESC)
+  WHERE resolved_at IS NOT NULL AND up IS NOT NULL;
+
+-- LatestPeriodicFilingAll (the /api/regimes earnings annotation) GROUP-BYs the
+-- 710k-row filings table by symbol over 10-Q/10-K rows. Covering index makes
+-- both the grouped subquery and the self-join index-only.
+CREATE INDEX IF NOT EXISTS idx_filings_form_sym_ts
+  ON filings (form, symbol_id, filed_ts DESC);
