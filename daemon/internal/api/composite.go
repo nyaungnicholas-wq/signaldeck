@@ -20,6 +20,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/composite"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 )
 
 // fleetSkillWindow is how many recent resolved 1d outcomes fleetEdgeSkill scans.
@@ -108,26 +109,40 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 		WinRate:        winRate,
 		SkillNote:      skillNote,
 	})
+	edgeLine := honestEdgeLine(p.CalProb, proven, winRate)
+	trackLabel := "backtested / in-sample — not a live track record"
+	// Model-health gate (mirrors /api/predictions/latest, 2026-07-24): the
+	// composite score's edge leg is fed by this same directional ensemble, so
+	// a symbol the model-health worker has RETIRED must say so here too — the
+	// flagship SIGNALS page must not read as more trustworthy than the page
+	// that already carries the retirement notice.
+	emitting, hVerdict := pipeline.ModelEmitting(r.Context(), d.St, "directional-ensemble-"+string(horizon))
+	if !emitting {
+		edgeLine = fmt.Sprintf("MODEL RETIRED (%s) — the live record does not support this model; %s shown for audit only, not tradeable", hVerdict, edgeLine)
+		trackLabel = fmt.Sprintf("RETIRED (%s): the live record does not support this model — %s", hVerdict, trackLabel)
+	}
 	writeJSON(w, map[string]any{
-		"available":  true,
-		"symbol":     s.Symbol,
-		"market":     s.Market,
-		"horizon":    row.Horizon,
-		"ts":         row.Ts,
-		"score":      row.Score,
-		"curvePct":   row.CurvePct,
-		"edge":       row.Edge,
-		"edgeLine":   honestEdgeLine(p.CalProb, proven, winRate),
-		"rawProb":    p.RawProb,
-		"calProb":    p.CalProb,
-		"nUsed":      p.NUsed,
-		"predTs":     p.PredTs,
-		"factors":    p.Factors,
-		"ledger":     p.Ledger,
-		"conviction": conv,
-		"curveNote":  compositeCurveNote,
-		"edgeNote":   compositeEdgeNote,
-		"trackLabel": "backtested / in-sample — not a live track record",
+		"available":     true,
+		"symbol":        s.Symbol,
+		"market":        s.Market,
+		"horizon":       row.Horizon,
+		"ts":            row.Ts,
+		"score":         row.Score,
+		"curvePct":      row.CurvePct,
+		"edge":          row.Edge,
+		"edgeLine":      edgeLine,
+		"rawProb":       p.RawProb,
+		"calProb":       p.CalProb,
+		"nUsed":         p.NUsed,
+		"predTs":        p.PredTs,
+		"factors":       p.Factors,
+		"ledger":        p.Ledger,
+		"conviction":    conv,
+		"curveNote":     compositeCurveNote,
+		"edgeNote":      compositeEdgeNote,
+		"trackLabel":    trackLabel,
+		"modelEmitting": emitting,
+		"modelVerdict":  hVerdict,
 	})
 }
 
@@ -170,19 +185,30 @@ func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, winRate float64,
 	}
 	fleetSkillCache.Unlock()
 
-	proven, winRate, note = d.computeFleetEdgeSkill(ctx)
+	var ok bool
+	proven, winRate, note, ok = d.computeFleetEdgeSkill(ctx)
 
-	fleetSkillCache.Lock()
-	fleetSkillCache.at, fleetSkillCache.proven, fleetSkillCache.winRate, fleetSkillCache.note = time.Now(), proven, winRate, note
-	fleetSkillCache.valid = true
-	fleetSkillCache.Unlock()
+	// Only pin a SUCCESSFUL measurement. A transient read failure (e.g. a
+	// canceled context from a client that disconnected mid-scan) is not a
+	// verdict about the model's skill — caching it would serve "status
+	// unavailable" to every reader of the composite leaderboard for the
+	// remainder of the TTL, which is exactly the kind of stale-error bug this
+	// gate exists to prevent elsewhere. Leave the entry as it was (still
+	// stale, so the very next call retries) instead of overwriting a good
+	// cached verdict with a bad one, or pinning "unavailable" from cold.
+	if ok {
+		fleetSkillCache.Lock()
+		fleetSkillCache.at, fleetSkillCache.proven, fleetSkillCache.winRate, fleetSkillCache.note = time.Now(), proven, winRate, note
+		fleetSkillCache.valid = true
+		fleetSkillCache.Unlock()
+	}
 	return proven, winRate, note
 }
 
-func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate float64, note string) {
+func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate float64, note string, ok bool) {
 	rows, err := d.St.ResolvedPredictionOutcomes(ctx, md.H1d, fleetSkillWindow)
 	if err != nil {
-		return false, 0, "live edge status unavailable (" + err.Error() + ")"
+		return false, 0, "live edge status unavailable (" + err.Error() + ")", false
 	}
 	// One independent obs per (symbol, UTC-day), keeping the latest (rows ts DESC).
 	// correct = the model got the DIRECTION right (predUp==actualUp); ups = how
@@ -211,7 +237,7 @@ func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate f
 	distinctDays := len(dayset)
 	if indepN < trackMinIndependentN || distinctDays < trackMinDistinctDays {
 		return false, 0, fmt.Sprintf("live track record still thin — %d independent resolutions across %d day(s) (need %d / %d)",
-			indepN, distinctDays, trackMinIndependentN, trackMinDistinctDays)
+			indepN, distinctDays, trackMinIndependentN, trackMinDistinctDays), true
 	}
 	acc := float64(correct) / float64(indepN) // the model's REAL directional accuracy
 	baseUp := float64(ups) / float64(indepN)  // market up-rate
@@ -225,10 +251,10 @@ func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate f
 	// flip is not enough when "always up" already wins >50% of days.
 	if lo > naive {
 		return true, acc, fmt.Sprintf("edge proven live: model directional accuracy %.1f%% beats the naive 'always-%s' baseline %.1f%% over %d resolutions / %d days (95%% floor %.1f%% > %.1f%%)",
-			acc*100, naiveDir, naive*100, indepN, distinctDays, lo*100, naive*100)
+			acc*100, naiveDir, naive*100, indepN, distinctDays, lo*100, naive*100), true
 	}
 	return false, acc, fmt.Sprintf("NO measured edge: model directional accuracy %.1f%% vs the naive 'always-%s' baseline %.1f%% = %+.1fpp edge over %d resolutions / %d days — the predictions are not skillful (right ~half the time, below the baseline)",
-		acc*100, naiveDir, naive*100, (acc-naive)*100, indepN, distinctDays)
+		acc*100, naiveDir, naive*100, (acc-naive)*100, indepN, distinctDays), true
 }
 
 // compositeTopRow is one ranked row of the composite leaderboard. Rank is
@@ -318,6 +344,11 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 		row.Conviction, row.ConvictionLabel = string(conv.Band), conv.Label
 		out = append(out, row)
 	}
+	trackLabel := "backtested / in-sample — not a live track record"
+	emitting, hVerdict := pipeline.ModelEmitting(ctx, d.St, "directional-ensemble-"+string(horizon))
+	if !emitting {
+		trackLabel = fmt.Sprintf("RETIRED (%s): the live record does not support this model — %s", hVerdict, trackLabel)
+	}
 	writeJSON(w, map[string]any{
 		"horizon":        string(horizon),
 		"rows":           out,
@@ -326,10 +357,12 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 		"curveNote":      compositeCurveNote,
 		"edgeNote":       compositeEdgeNote,
 		"rankNote":       "rankChange compares against each symbol's newest row before today (UTC); symbols absent from the previous pass carry null, never a fabricated change",
-		"trackLabel":     "backtested / in-sample — not a live track record",
+		"trackLabel":     trackLabel,
 		"convictionNote": "conviction is a SEPARATE axis from the rank: a top rank on a coin-flip-sized or unproven edge is low conviction. " + composite.Assess(composite.ConvictionInputs{}).RiskNote,
 		"skillNote":      skillNote,
 		"minCurveN":      composite.MinCurveN,
+		"modelEmitting":  emitting,
+		"modelVerdict":   hVerdict,
 	})
 }
 

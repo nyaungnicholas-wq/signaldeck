@@ -41,6 +41,10 @@ const (
 	driftRefDays  = 60
 )
 
+// structuralHighConviction is the band whose claim is largest (97%+ for
+// trend21) and therefore the one most worth holding to account separately.
+const structuralHighConviction = 0.9
+
 func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 	var graded, retired int
 	var summary []string
@@ -105,7 +109,87 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		summary = append(summary, fmt.Sprintf("%s=%s(%.2f)", h, score.Verdict, score.Overall))
 	}
 
+	// STRUCTURAL MODELS (2026-07-25). The gate was aimed only at the directional
+	// ensemble — the model that is now retired. trend21/vol21/liquidity21 are the
+	// three that survived validation, and until something holds their SHIPPED
+	// accuracy claim against what actually happened, that claim is a backtest
+	// number wearing a live label.
+	//
+	// They are graded differently from direction on purpose. A structural call's
+	// honest null is not 50% but the PERSISTENCE base rate: "the regime
+	// continued" is what a predictor scores by doing nothing, so edge is measured
+	// against that. This is the same correction the survivorship re-validation
+	// forced — the 83% headline was the base rate, and only the spread between
+	// conviction bands was ever the product.
+	sg, sr := w.gradeStructural(ctx)
+	graded += sg
+	retired += sr
+
 	return fmt.Sprintf("graded %d, retired %d — %v", graded, retired, summary), nil
+}
+
+// gradeStructural grades each structural predictor against its own live record
+// and its own shipped claim, and persists a verdict the API can honour.
+func (w *ModelHealthWorker) gradeStructural(ctx context.Context) (graded, retired int) {
+	recs, err := w.St.StructuralRecords(ctx, 0)
+	if err != nil {
+		return 0, 0
+	}
+	// High-conviction slice: the tier a user would actually act on, and the one
+	// carrying the biggest claim (97%+ for trend21).
+	hi, _ := w.St.StructuralRecords(ctx, structuralHighConviction)
+	hiByKind := map[string]store.StructuralRecordRow{}
+	for _, r := range hi {
+		hiByKind[r.Kind] = r
+	}
+
+	for _, r := range recs {
+		score := modelhealth.Grade(modelhealth.Inputs{
+			Observations: r.N,
+			Accuracy:     r.Accuracy,
+			// The honest null for a persistence forecast.
+			BaselineAcc: r.PersistenceBase,
+			RecentAcc:   r.Accuracy,
+			RecentN:     r.N,
+			// A structural call emits a regime, not a probability, so Brier and
+			// calibration error are not measurable here. Left at zero rather
+			// than invented — Grade weights skill highest for exactly this kind
+			// of case.
+			CalibrationErr: 0,
+		})
+		graded++
+		if !score.Emitting {
+			retired++
+		}
+
+		h := hiByKind[r.Kind]
+		blob, err := json.Marshal(map[string]any{
+			"model":           "structural-" + r.Kind,
+			"kind":            r.Kind,
+			"verdict":         score.Verdict,
+			"emitting":        score.Emitting,
+			"overall":         score.Overall,
+			"components":      score.Components,
+			"reasons":         score.Reasons,
+			"observations":    r.N,
+			"distinctDays":    r.DistinctDays,
+			"liveAccuracy":    r.Accuracy,
+			"claimedAccuracy": r.ClaimedAccuracy,
+			"persistenceBase": r.PersistenceBase,
+			// Edge is live accuracy MINUS the persistence base rate. This is the
+			// number that says whether the predictor does anything at all.
+			"edgeVsPersistence": r.Accuracy - r.PersistenceBase,
+			// Claim drift: did the shipped number survive contact with reality?
+			"claimGap":       r.Accuracy - r.ClaimedAccuracy,
+			"highConviction": map[string]any{"n": h.N, "accuracy": h.Accuracy, "claimed": h.ClaimedAccuracy},
+			"gradedAt":       time.Now().Unix(),
+		})
+		if err != nil {
+			continue
+		}
+		_ = w.St.SetMeta(ctx, MetaKeyPrefix+"structural-"+r.Kind, string(blob))
+	}
+	return graded, retired
 }
 
 // featureDrift returns the fraction of features whose distribution has moved

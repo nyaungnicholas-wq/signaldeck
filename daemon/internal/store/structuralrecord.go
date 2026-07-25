@@ -1,0 +1,120 @@
+// Live record accessors for the STRUCTURAL predictors (2026-07-25).
+//
+// The model-health gate was pointed only at the directional ensemble — the
+// model that is now retired. trend21, vol21 and liquidity21, the three that
+// actually survived validation, had no live-record accessor at all, so the
+// machinery that graded a failing model against its own claim could not be
+// aimed at the models worth keeping.
+//
+// This supplies that: per-kind and per-conviction-band live accuracy, measured
+// against the accuracy each forecast CLAIMED at the time it was made. That
+// comparison is the whole point — a structural forecast ships a banded number
+// ("97.2% of very-high-conviction calls are right"), and until something checks
+// that number against what happened, it is a backtest assertion wearing a live
+// label.
+package store
+
+import (
+	"context"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
+)
+
+// StructuralRecordRow is one predictor's live scoreboard.
+type StructuralRecordRow struct {
+	Kind string `json:"kind"`
+	// N counts INDEPENDENT resolutions: one per (symbol, kind, UTC-day). The
+	// forecast writer already dedups, but recomputing here means a future
+	// schema change cannot silently reintroduce pseudo-replication.
+	N int `json:"n"`
+	// Correct and Accuracy are the realized live record.
+	Correct  int     `json:"correct"`
+	Accuracy float64 `json:"accuracy"`
+	// ClaimedAccuracy is the mean accuracy these same forecasts ADVERTISED when
+	// they were made — the number the live record is being held to.
+	ClaimedAccuracy float64 `json:"claimedAccuracy"`
+	// PersistenceBase is the honest null: the share of calls whose regime simply
+	// continued. A structural predictor that merely reports "it persists" scores
+	// this by default, so accuracy only means something above it.
+	PersistenceBase float64 `json:"persistenceBase"`
+	FirstTs         int64   `json:"firstTs"`
+	LastTs          int64   `json:"lastTs"`
+	DistinctDays    int     `json:"distinctDays"`
+}
+
+// StructuralRecords grades every resolved structural forecast by kind.
+// `minConviction` restricts to a conviction band; 0 includes everything.
+func (s *Store) StructuralRecords(ctx context.Context, minConviction float64) ([]StructuralRecordRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT kind,
+		       COUNT(*),
+		       SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END),
+		       AVG(historical_accuracy),
+		       MIN(ts), MAX(ts),
+		       COUNT(DISTINCT ts/86400)
+		FROM (
+		  SELECT kind, ts, correct, historical_accuracy,
+		         ROW_NUMBER() OVER (
+		           PARTITION BY symbol_id, kind, ts/86400 ORDER BY ts DESC) rn
+		  FROM regime_outcomes
+		  WHERE resolved_at IS NOT NULL AND correct IN (0,1)
+		    AND conviction >= ?
+		)
+		WHERE rn = 1
+		GROUP BY kind ORDER BY kind`, minConviction)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []StructuralRecordRow
+	for rows.Next() {
+		var r StructuralRecordRow
+		var claimed *float64
+		if err := rows.Scan(&r.Kind, &r.N, &r.Correct, &claimed,
+			&r.FirstTs, &r.LastTs, &r.DistinctDays); err != nil {
+			return nil, err
+		}
+		if r.N > 0 {
+			r.Accuracy = float64(r.Correct) / float64(r.N)
+		}
+		if claimed != nil {
+			r.ClaimedAccuracy = *claimed
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Persistence base rate, computed per kind over the same population: how
+	// often the regime simply continued. For trend/liquidity/vol this IS the
+	// naive strategy, so it is the number accuracy must beat to mean anything.
+	for i := range out {
+		var n, persisted int
+		err := s.db.QueryRowContext(ctx, `
+			SELECT COUNT(*), SUM(CASE WHEN actual = regime THEN 1 ELSE 0 END)
+			FROM (
+			  SELECT regime, actual,
+			         ROW_NUMBER() OVER (
+			           PARTITION BY symbol_id, kind, ts/86400 ORDER BY ts DESC) rn
+			  FROM regime_outcomes
+			  WHERE kind = ? AND resolved_at IS NOT NULL AND correct IN (0,1)
+			    AND conviction >= ?
+			)
+			WHERE rn = 1`, out[i].Kind, minConviction).Scan(&n, &persisted)
+		if err == nil && n > 0 {
+			out[i].PersistenceBase = float64(persisted) / float64(n)
+		}
+	}
+	return out, nil
+}
+
+// StructuralKinds is the set the health gate tracks as first-class models.
+func StructuralKinds() []string {
+	return []string{
+		string(structregime.KindTrend21),
+		string(structregime.KindVol21),
+		string(structregime.KindLiquidity21),
+	}
+}

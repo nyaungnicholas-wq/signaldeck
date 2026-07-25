@@ -2403,7 +2403,9 @@ export interface CompositeAvailable {
   conviction?: Conviction; // second axis (optional — older daemons omit)
   curveNote: string; // render verbatim
   edgeNote: string; // render verbatim
-  trackLabel: string; // render verbatim
+  trackLabel: string; // render verbatim — carries "RETIRED (…)" when modelEmitting is false
+  modelEmitting?: boolean; // model-health gate (2026-07-24) — false = retired, audit-only (optional, older daemons omit)
+  modelVerdict?: string; // "healthy" | "watch" | "degraded" | "retired" | "provisional"
 }
 
 /** GET /api/composite payload — discriminate on `available`. */
@@ -2435,9 +2437,11 @@ export interface CompositeTop {
   curveNote: string; // render verbatim
   edgeNote: string; // render verbatim
   rankNote: string; // render verbatim
-  trackLabel: string; // render verbatim
+  trackLabel: string; // render verbatim — carries "RETIRED (…)" when modelEmitting is false
   convictionNote?: string; // render verbatim (optional — older daemons omit)
   skillNote?: string; // fleet live-edge status — render verbatim
+  modelEmitting?: boolean; // model-health gate (2026-07-24) — false = retired, audit-only (optional, older daemons omit)
+  modelVerdict?: string; // "healthy" | "watch" | "degraded" | "retired" | "provisional"
 }
 
 /** Measured forward returns after one alert kind (nulls = gated below minN). */
