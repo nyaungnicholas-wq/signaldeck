@@ -14,6 +14,7 @@ import (
 	"net/http"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
 )
 
@@ -88,6 +89,22 @@ func (d Deps) buildPredictionsLatest(ctx context.Context, h md.Horizon) (map[str
 		}
 		trackLabel = fmt.Sprintf("LIVE forward record: win rate %.1f%% over %d independent symbol-days — %s", liveWin*100, liveN, verdict)
 	}
+
+	// Model-health gate (2026-07-24). A model the live record has condemned
+	// must stop presenting itself as a forecast — the failure this closes is
+	// exactly that the directional ensemble kept emitting through 18,762
+	// observations of negative skill because nothing could switch it off.
+	// Rows are still returned (retiring the model must not blank the page or
+	// hide the evidence), but the payload declares it retired and non-emitting
+	// so no consumer can read a P(up) as actionable.
+	emitting, hVerdict := pipeline.ModelEmitting(ctx, d.St, "directional-ensemble-"+string(h))
+	if !emitting {
+		gated = true
+		caption = "MODEL RETIRED — automatically disabled by the model-health gate; " +
+			"these probabilities are shown for audit only and must not be traded"
+		trackLabel = fmt.Sprintf(
+			"RETIRED (%s): the live record does not support this model — %s", hVerdict, trackLabel)
+	}
 	return map[string]any{
 		"horizon":      h,
 		"rows":         rows,
@@ -97,6 +114,8 @@ func (d Deps) buildPredictionsLatest(ctx context.Context, h md.Horizon) (map[str
 		"gated":        gated,
 		"caption":      caption,
 		"live":         liveN >= minIndependentN,
+		"modelEmitting": emitting,
+		"modelVerdict":  hVerdict,
 		"liveRecord":   map[string]any{"independentN": liveN, "winRate": liveWin},
 		"trackLabel":   trackLabel,
 		// Stage 2 (verdict cards): each row's tier/nSamples measures against

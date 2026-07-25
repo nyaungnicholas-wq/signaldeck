@@ -259,6 +259,12 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// forecast window) before this shipped. Detects and re-backfills, budgeted
 	// so a first pass cannot exhaust the free-tier API allowance.
 	fleet = append(fleet, &pipeline.SplitRepair{St: st, Alpaca: alpacaClient})
+	// Model-health gate (2026-07-24, 1h) — grades every emitting model against
+	// its own live record and writes a verdict the prediction path honours. The
+	// directional ensemble is why this exists: it shipped through 18,762
+	// independent observations of NEGATIVE skill because nothing in the system
+	// had the authority to switch a model off.
+	fleet = append(fleet, &pipeline.ModelHealthWorker{St: st})
 	// Free-data wave / Stage 2 (constructor appended at the END of this file) —
 	// fred-poller (6h, keyless FRED macro) + edgar-fetcher (24h, SEC EDGAR
 	// fundamentals, gated on Alpaca keys only so the equity universe exists);
