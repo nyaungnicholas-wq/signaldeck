@@ -4,13 +4,17 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 )
 
 // structuralRegimes serves the market-structure regime forecasts validated by
 // the 2026-07-17 alpha-discovery loop (internal/structregime): trend21,
 // trend63, liquidity21 and vol21. Methodology + MEASURED per-band accuracy +
 // every honesty caveat ship in the payload so the surface can never overstate
-// skill. Gap-fill was validated as a behavior but is NOT served — see
+// skill — including the 2026-07-24 finding that trend ACCURACY and forward
+// RETURN invert at the top conviction band, which every trend row carries as
+// `tradeability`. Gap-fill was validated as a behavior but is NOT served — see
 // whyHonest below and internal/structregime/gapfill.go.
 //
 // Credibility wave: symbols whose filing-cadence earnings ESTIMATE falls in
@@ -53,12 +57,17 @@ func (d Deps) buildStructuralRegimes(ctx context.Context) (map[string]any, error
 	byKind := map[string][]any{}
 	forecastSyms := map[string]bool{}
 	for _, f := range fcs {
+		// tradeability is a pure function of kind + conviction and is not stored,
+		// so derive it per row from the row's OWN kind — a trend21 forward-return
+		// number must never end up labelling a trend63 or crypto row. Kinds whose
+		// forward return was never measured get "" and the field is omitted.
+		f.Tradeability = structregime.TradeabilityFor(f.Kind, f.Conviction)
 		byKind[string(f.Kind)] = append(byKind[string(f.Kind)], f)
 		forecastSyms[f.Symbol] = true
 	}
 	resp := map[string]any{
 		"forecasts":   byKind,
-		"methodology": "Every accuracy below is MEASURED, walk-forward, with NON-OVERLAPPING forward windows over ~900 stocks / 7.5 years (2019-2026), quarter-block-clustered so autocorrelated days never inflate the sample, and independently re-verified by a second implementation the same day. None of these is a price-direction call — direction's ~52-55% ceiling was re-confirmed a sixth time in the same loop.",
+		"methodology": "ACCURACY IS NOT RETURN: at the top conviction band the two are INVERTED (see each trend kind's forwardReturnByBand and every forecast's tradeability field) — the most accurate band of trend21 has a NEGATIVE mean forward 21d return. Every accuracy below is MEASURED, walk-forward, with NON-OVERLAPPING forward windows over ~900 stocks / 7.5 years (2019-2026), quarter-block-clustered so autocorrelated days never inflate the sample, and independently re-verified by a second implementation the same day. None of these is a price-direction call — direction's ~52-55% ceiling was re-confirmed a sixth time in the same loop.",
 		"kinds": map[string]any{
 			"trend21": map[string]any{
 				"what": "Will the stock still be on its current side of its 200-day average in 21 trading days?",
@@ -68,7 +77,14 @@ func (d Deps) buildStructuralRegimes(ctx context.Context) (map[string]any, error
 					"moderate conviction (0.5-0.8)": "90.0%",
 					"low conviction (<0.5)":         "73.1%",
 				},
-				"caveat": "Each forecast reports the accuracy of its own conviction BAND (a low-conviction call says 73.1%, never the 83.3% whole-population average). The skill IS trend persistence plus distance (base rate 54-57% up). Universe is currently-tracked stocks, so delisted names are absent — downtrend persistence into delisting is unobserved.",
+				"forwardReturnByBand": map[string]string{
+					"very-high conviction (>=0.9)":  "-0.39% — BEST accuracy, WORST return",
+					"high conviction (0.8-0.9)":     "+0.79%",
+					"moderate conviction (0.5-0.8)": "+0.58%",
+					"low conviction (0.25-0.5)":     "+0.51%",
+					"low conviction (<0.25)":        "+0.41%",
+				},
+				"caveat": "Each forecast reports the accuracy of its own conviction BAND (a low-conviction call says 73.1%, never the 83.3% whole-population average). The skill IS trend persistence plus distance (base rate 54-57% up). Universe is currently-tracked stocks, so delisted names are absent — downtrend persistence into delisting is unobserved. ACCURACY AND RETURN INVERT AT THE TOP BAND: an independent 2026-07-24 re-validation (968 stocks, 1900 trading days, non-overlapping windows, date-clustered CIs) replicated every accuracy tier above AND measured mean forward 21d return by band for the first time — the >=0.9 band scores the highest hit rate and returns -0.39%, while the lower bands return +0.41% to +0.79%. The mechanism is mechanical: high conviction MEANS price is far from its 200-day average, i.e. already extended, and extended names mean-revert. So '97.2% chance it stays above its 200-day average' and 'this basket makes money' are different claims and only the first one is true. The hit rate is real; the trade is not. Read the accuracy as a persistence statistic, never as an expected return.",
 			},
 			"trend63": map[string]any{
 				"what": "Will the stock still be on its current side of its 200-day average in 63 trading days (one quarter)? Same predictor as trend21, quarterly horizon.",
@@ -78,7 +94,11 @@ func (d Deps) buildStructuralRegimes(ctx context.Context) (map[string]any, error
 					"moderate conviction (>=0.5)":  "77.7%",
 					"all decisions":                "70.0%",
 				},
-				"caveat": "These are CUMULATIVE tiers (accuracy of all calls at or above the conviction floor), not the per-band decompositions the 21d kinds report — the 63d loop did not record band shares, so a call at the bottom of its band is slightly overstated by its tier number. Measured 2026-07-17, quarter-clustered, ~904 stocks 2019-2026. Same survivorship caveat as trend21: universe is currently-tracked stocks, so delisted names are absent — downtrend persistence into delisting is unobserved.",
+				"forwardReturnByBand": map[string]string{
+					"very-high conviction (>=0.9)": "-1.30% — BEST accuracy, WORST return",
+					"bands below 0.9":              "not measured at the 63d horizon — no number is invented here",
+				},
+				"caveat": "ACCURACY AND RETURN INVERT AT THE TOP BAND, more sharply than at 21d: the 2026-07-24 re-validation measured the conv>=0.9 band's mean forward 63d return at -1.30% while it scored 83.8% accuracy. High conviction means price is already far from its 200-day average, and extended names mean-revert over the quarter — the persistence call can be right and the position still lose. These are CUMULATIVE tiers (accuracy of all calls at or above the conviction floor), not the per-band decompositions the 21d kinds report — the 63d loop did not record band shares, so a call at the bottom of its band is slightly overstated by its tier number. Measured 2026-07-17, quarter-clustered, ~904 stocks 2019-2026. Same survivorship caveat as trend21: universe is currently-tracked stocks, so delisted names are absent — downtrend persistence into delisting is unobserved.",
 			},
 			"liquidity21": map[string]any{
 				"what": "Will average daily dollar volume over the next 21 sessions be ABOVE (active) or BELOW (quiet) its trailing-200-day median?",
@@ -98,7 +118,7 @@ func (d Deps) buildStructuralRegimes(ctx context.Context) (map[string]any, error
 					"moderate conviction (0.5-0.8)": "64.3%",
 					"low conviction (<0.5)":         "55.8%",
 				},
-				"caveat": "Per-band accuracies. Same options/vol expression caveat as the quarterly vol regime: a regime call is situational awareness with a measured hit rate, not a trade.",
+				"caveat": "Per-band accuracies. Same options/vol expression caveat as the quarterly vol regime: a regime call is situational awareness with a measured hit rate, not a trade. Stronger version of that caveat, measured 2026-07-24 on the trend kinds: a higher hit rate can come with a WORSE forward return (trend21's most accurate band returns -0.39%), so a hit rate is not a weak version of an edge — it is a different quantity. Forward return was NOT measured for this vol kind, so no return number is shown rather than borrowing another kind's.",
 			},
 			// ── crypto kinds (2026-07-18 crypto discovery loop; appended) ──
 			"trend21-crypto": map[string]any{
@@ -120,7 +140,7 @@ func (d Deps) buildStructuralRegimes(ctx context.Context) (map[string]any, error
 				"caveat": "MANDATORY: only ~2 years / 6 quarterly clusters, much smaller n than the stock tables. The predictor agrees with naive persistence on 98% of samples (persistence baseline 78.3%): the skill IS liquidity-regime stickiness sized by rank extremity — the accuracy claim holds, a novelty claim would not. Tiers are CUMULATIVE (calls at or above the conviction floor); conviction <0.5 reports the all-decisions 79.5%. The crypto VOL regime did NOT replicate and is deliberately not served.",
 			},
 		},
-		"whyHonest": "Accuracy targets were chosen where prediction is genuinely possible (persistence of structure), not where it is impossible (1-day direction). Every forecast reports the measured accuracy of its own conviction band; thin history yields NO forecast rather than a guess. Gap-fill was validated as a market behavior (gaps under 4% fill within 5 sessions 72-87% of the time, matched-null verified over 802k events) but is NOT served: those rates are only true at the OPEN of the gap day, and for gaps surviving day 0 unfilled — the only population an end-of-day worker can forecast — the rate collapses to 44-61%, below the 70% bar. Pulled by the 2026-07-17 verification pass.",
+		"whyHonest": "A measured hit rate is not a measured profit — the 2026-07-24 re-validation found trend21's most accurate conviction band (>=0.9) has a NEGATIVE mean forward 21d return, so the tables below are published as persistence statistics and every affected forecast says so in its tradeability field. Accuracy targets were chosen where prediction is genuinely possible (persistence of structure), not where it is impossible (1-day direction). Every forecast reports the measured accuracy of its own conviction band; thin history yields NO forecast rather than a guess. Gap-fill was validated as a market behavior (gaps under 4% fill within 5 sessions 72-87% of the time, matched-null verified over 802k events) but is NOT served: those rates are only true at the OPEN of the gap day, and for gaps surviving day 0 unfilled — the only population an end-of-day worker can forecast — the rate collapses to 44-61%, below the 70% bar. Pulled by the 2026-07-17 verification pass.",
 		// #20: every accuracy table above was measured on the currently-tracked
 		// universe's bars — the survivorship label travels with the stats.
 		"survivorship": survivorshipBlock(),

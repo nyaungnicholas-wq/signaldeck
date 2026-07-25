@@ -21,6 +21,11 @@
 //	cumulative: all 83.3% · conv>0.5 93.1% · conv>0.8 96.2% · conv>0.9 97.2% [CI 0.965-0.978]
 //	per-band (what a forecast reports): <0.5 73.1% · 0.5-0.8 90.0% · 0.8-0.9 94.6% · >=0.9 97.2%
 //
+// MEASURED mean forward 21d RETURN by the same bands (2026-07-24
+// re-validation) — the accuracy above buys none of it:
+//
+//	<0.25 +0.41% · 0.25-0.5 +0.51% · 0.5-0.8 +0.58% · 0.8-0.9 +0.79% · >=0.9 -0.39%
+//
 // LIQUIDITY (21d): will mean daily DOLLAR VOLUME over the next 21 sessions be
 // above or below its trailing-200d median? Conviction = 2*|rank-0.5| of the
 // current 21d mean in its trailing distribution.
@@ -47,11 +52,25 @@
 //   - TREND: the predictor is trend persistence + distance; base rate 54-57%.
 //     Universe is currently-tracked stocks, so delisted names are absent
 //     (survivorship) — persistence of downtrends into delisting is unobserved.
+//   - ACCURACY IS NOT RETURN, and at the top band they are INVERTED. The
+//     2026-07-24 independent re-validation (fresh reimplementation, 968 stocks,
+//     1900 trading days 2019-2026, NON-OVERLAPPING 21d/63d windows,
+//     date-clustered bootstrap CIs) replicated every trend accuracy tier AND
+//     measured forward return by band for the first time: trend21 conv>=0.9 has
+//     the BEST hit rate and a NEGATIVE mean forward 21d return (-0.39%), while
+//     the lower bands earn +0.41% to +0.79%; trend63 conv>=0.9 is worse still
+//     (-1.30%). The mechanism is mechanical, not a fluke: high conviction MEANS
+//     price is far from its SMA200 — already extended — and extended names
+//     mean-revert. So "96% chance it stays above its 200-day average" and "this
+//     basket makes money" are different claims and only the first is true. The
+//     hit rate is real; the trade is not. Every trend forecast ships this
+//     verbatim in Tradeability (see forwardReturnFor / TradeabilityFor).
 //   - All targets: a regime call is situational awareness with a measured hit
 //     rate, not a trade recommendation.
 package structregime
 
 import (
+	"fmt"
 	"math"
 	"sort"
 )
@@ -86,6 +105,12 @@ type Forecast struct {
 	Tier               string  `json:"tier"`
 	Rank               float64 `json:"rank"`
 	N                  int     `json:"n"`
+	// Tradeability states the MEASURED mean forward return of THIS conviction
+	// band in plain English — including the case the accuracy number hides, a
+	// top band that is the most accurate and the least profitable (package doc,
+	// 2026-07-24 re-validation). Empty for kinds whose forward return was never
+	// measured; never inferred from another kind's table.
+	Tradeability string `json:"tradeability,omitempty"`
 }
 
 // maxSaneReturn is the wild-move guard: a single-day |simple return| above
@@ -162,6 +187,7 @@ func PredictTrend(closes []float64) (Forecast, bool) {
 		Tier:               tierName(conv),
 		Rank:               conv,
 		N:                  n,
+		Tradeability:       TradeabilityFor(KindTrend21, conv),
 	}, true
 }
 
@@ -455,4 +481,84 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ── forward return by conviction band (2026-07-24 re-validation) ──
+
+// forwardReturnFor is accuracyFor's parallel: it maps (kind, conviction) to the
+// MEASURED mean forward return, in percent, of the conviction BAND the forecast
+// falls in — the number that decides whether the hit rate is worth anything.
+// Same band cutoffs as accuracyFor, and the same rule: measured or absent,
+// never invented. ok=false for every kind whose forward return the 2026-07-24
+// re-validation did not measure (liquidity21, vol21, both crypto kinds) and for
+// trend63's bands below 0.9, which it did not report.
+//
+// Unlike accuracyFor this is NOT monotone in conviction — trend21 rises to
+// +0.79% at 0.8-0.9 and then INVERTS to -0.39% at >=0.9. That inversion is the
+// finding, not a typo: conviction is distance from the SMA200, so the most
+// confident band is by construction the most extended one, and extended names
+// mean-revert over the next month.
+func forwardReturnFor(k Kind, conv float64) (pct float64, ok bool) {
+	type bands struct{ lo, b50, b80, b90 float64 }
+	nm := math.NaN() // not measured — refuse rather than interpolate
+	var t bands
+	switch k {
+	case KindTrend21:
+		// The re-validation split the sub-0.5 region into 0.00-0.25 (+0.41%) and
+		// 0.25-0.50 (+0.51%); the band served here is the LOWER of the two,
+		// because a share-weighted blend of them was never measured.
+		t = bands{0.41, 0.58, 0.79, -0.39}
+	case KindTrend63:
+		// Only the top band was reported at the quarterly horizon.
+		t = bands{nm, nm, nm, -1.30}
+	default:
+		return 0, false
+	}
+	var v float64
+	switch {
+	case conv >= 0.9:
+		v = t.b90
+	case conv >= 0.8:
+		v = t.b80
+	case conv >= 0.5:
+		v = t.b50
+	default:
+		v = t.lo
+	}
+	if !finite(v) {
+		return 0, false
+	}
+	return v, true
+}
+
+// TradeabilityFor renders forwardReturnFor as the sentence that ships with the
+// forecast. Exported because the store does not persist the string (it is a
+// pure function of kind + conviction), so every read surface derives it from
+// the row's OWN kind — a trend21 number can never end up labelling a trend63 or
+// crypto row. Empty string means the forward return was not measured, which is
+// the honest output rather than a reassuring guess.
+func TradeabilityFor(k Kind, conv float64) string {
+	pct, ok := forwardReturnFor(k, conv)
+	if !ok {
+		return ""
+	}
+	h := horizon
+	if k == KindTrend63 {
+		h = horizon63
+	}
+	if pct <= 0 {
+		return fmt.Sprintf("NOT A TRADE: the measured mean forward %dd return in this "+
+			"conviction band is %+.2f%% — this band has the HIGHEST hit rate and the WORST "+
+			"return. High conviction means price is far from its 200-day average, i.e. already "+
+			"extended, and extended names mean-revert. Accuracy here is a persistence "+
+			"statistic, NOT a profitable trade: higher accuracy does NOT mean higher return. "+
+			"Measured 2026-07-24 over 968 stocks / 1900 trading days with non-overlapping "+
+			"forward windows.", h, pct)
+	}
+	return fmt.Sprintf("The measured mean forward %dd return in this conviction band is "+
+		"%+.2f%% (2026-07-24, 968 stocks / 1900 trading days, non-overlapping forward "+
+		"windows). That is a measurement of what this band did on average, not advice and "+
+		"not an expectation for any one symbol — and accuracy is a separate axis from "+
+		"return: the HIGHEST-accuracy band of this kind has a NEGATIVE mean forward return.",
+		h, pct)
 }

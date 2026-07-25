@@ -16,6 +16,11 @@
 // CUMULATIVE tier at the call's conviction floor (the volregime precedent).
 // That slightly overstates a call sitting at the bottom of its band — the
 // /api/regimes caveat says so explicitly rather than inventing band shares.
+//
+// MEASURED mean forward 63d RETURN at the top band (2026-07-24 re-validation):
+// conv>=0.9 returns -1.30% while scoring 83.8% accuracy — the same
+// accuracy/return inversion as trend21, larger at the quarterly horizon. Only
+// that band's return was reported, so forwardReturnFor refuses the others.
 package structregime
 
 // KindTrend63 is the quarterly trend-persistence regime call.
@@ -36,5 +41,6 @@ func PredictTrend63(closes []float64) (Forecast, bool) {
 	f.Kind = KindTrend63
 	f.HorizonDays = horizon63
 	f.HistoricalAccuracy = accuracyFor(KindTrend63, f.Conviction)
+	f.Tradeability = TradeabilityFor(KindTrend63, f.Conviction)
 	return f, true
 }

@@ -3,11 +3,26 @@
 // Symbol deep-dive: candlestick chart, pressure decomposition, expectancy
 // ("what usually happens next"), microstructure (crypto), insights, coverage.
 //
-// STAGE 3 — guided story flow: the page reads 1 · THE VERDICT (hero verdict
-// card + chart) → 2 · WHY (this symbol's agent, score components, expectancy,
-// AI insights) → 3 · THE DETAILS (raw records: unusual activity, financials,
-// filings, shorts, congress, microstructure, coverage). In SIMPLE view-mode
-// the DETAILS section starts collapsed ("show the numbers"); PRO expanded.
+// WHY-IT'S-MOVING wave (2026-07-24) — the story order now follows the MEASURED
+// evidence rather than the old verdict-first flow:
+//
+//   1 · IDENTITY & PRICE   name/sector/exchange + the chart
+//   2 · VALIDATED SIGNALS  the regime stack (vol leads — it is the replicated,
+//                          significant read) with banded accuracy + tradeability
+//   3 · WHY IT'S MOVING    /api/explain attribution, this symbol's headlines,
+//                          recent breakouts + unusual activity, then the score
+//                          components / expectancy / agent / AI insights
+//   4 · EXPERIMENTAL P(UP) the directional read, DEMOTED: it measured 48.08%
+//                          directional accuracy against a 54.50% majority-class
+//                          null over 12,931 independent symbol-days, its whole
+//                          CI sits below the null, and raising conviction makes
+//                          it WORSE. It stays visible and stays labeled.
+//   5 · THE DETAILS        raw records: financials, filings, short volume AND
+//                          real short interest, retail sentiment/attention,
+//                          congress, microstructure, coverage.
+//
+// In SIMPLE view-mode the DETAILS section starts collapsed ("show the
+// numbers"); PRO expanded.
 
 import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -22,8 +37,10 @@ import {
   symbolAgent,
   trend,
   type Bar,
+  type BreakoutRow,
   type CandlePattern,
   type ChartOverlayMarker,
+  type CompanyProfile,
   type Horizon,
   type Market,
   type PatternBar,

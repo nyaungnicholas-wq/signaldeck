@@ -265,6 +265,13 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// independent observations of NEGATIVE skill because nothing in the system
 	// had the authority to switch a model off.
 	fleet = append(fleet, &pipeline.ModelHealthWorker{St: st})
+	// Autonomous research loop (2026-07-25, 24h) — generate -> test -> judge ->
+	// ledger -> kill, without a human starting it. Hypotheses tested per week was
+	// the rate limiter on finding edge, and it equalled how often someone sat
+	// down and asked. Bonferroni-corrected over the grid, era-covered,
+	// non-overlapping weekly observations, and deliberately unable to promote its
+	// own findings past `shadow`.
+	fleet = append(fleet, &pipeline.ResearchLoop{St: st})
 	// Free-data wave / Stage 2 (constructor appended at the END of this file) —
 	// fred-poller (6h, keyless FRED macro) + edgar-fetcher (24h, SEC EDGAR
 	// fundamentals, gated on Alpaca keys only so the equity universe exists);

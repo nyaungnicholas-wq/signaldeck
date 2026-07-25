@@ -8,9 +8,12 @@
 // api.dashboard() roundup (server caches shared sections 60s and says so).
 //
 // HONESTY: nothing is fabricated to fill a panel — gauges keep their gate
-// captions in BOTH simple and pro modes, the hero's confidence chip is a real
-// calibrated probability or "still learning", every price is a stored daily
-// close on worker cadence, and every empty state says WHY it is empty.
+// captions in BOTH simple and pro modes, every price is a stored daily close on
+// worker cadence, and every empty state says WHY it is empty. The opening hero
+// leads with a VALIDATED structural regime call (measured skill on a balanced
+// label); the directional P(up) is demoted inside it to a labelled experimental
+// footnote that states its own negative live record. See TodaysRead.tsx for the
+// measurements behind that ordering.
 
 import Link from "next/link";
 import { useMemo } from "react";

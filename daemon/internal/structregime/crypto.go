@@ -86,6 +86,10 @@ func PredictTrendCrypto(closes []float64) (Forecast, bool) {
 	}
 	f.Kind = KindTrendCrypto21
 	f.HistoricalAccuracy = cryptoAccuracyFor(KindTrendCrypto21, f.Conviction)
+	// PredictTrend already stamped the US-STOCK forward-return disclosure; this
+	// is a crypto row, where forward return was never measured, so re-derive it
+	// for this kind (empty) rather than inheriting a number from another market.
+	f.Tradeability = TradeabilityFor(KindTrendCrypto21, f.Conviction)
 	return f, true
 }
 
@@ -100,5 +104,8 @@ func PredictLiquidityCrypto(closes, volumes []float64) (Forecast, bool) {
 	}
 	f.Kind = KindLiquidityCrypto21
 	f.HistoricalAccuracy = cryptoAccuracyFor(KindLiquidityCrypto21, f.Conviction)
+	// Same reason as PredictTrendCrypto: never inherit another market's measured
+	// forward return onto a crypto row.
+	f.Tradeability = TradeabilityFor(KindLiquidityCrypto21, f.Conviction)
 	return f, true
 }

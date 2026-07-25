@@ -3200,12 +3200,17 @@ export interface StructRegimeForecast {
   tier: string;
   rank: number;
   n: number;
+  /** Whether an accurate call is actually TRADEABLE (measured forward return).
+   *  Optional — the daemon is still growing this field; absent ⇒ don't claim. */
+  tradeability?: string;
 }
 
 export interface StructRegimeKindDoc {
   what: string;
   accuracyTiers: Record<string, string>;
   caveat: string;
+  /** Kind-level tradeability verdict, same optionality as the per-forecast one. */
+  tradeability?: string;
 }
 
 export interface StructRegimes {
@@ -3239,6 +3244,8 @@ export interface VolRegimeForecast {
   tier: string;
   rank: number;
   n: number;
+  /** Optional per-forecast tradeability string (see StructRegimeForecast). */
+  tradeability?: string;
 }
 
 export interface VolRegime {
@@ -3248,6 +3255,8 @@ export interface VolRegime {
   whyHonest: string;
   accuracyTiers: Record<string, string>;
   caveat: string;
+  /** Payload-level tradeability verdict; optional until the daemon ships it. */
+  tradeability?: string;
 }
 
 /** The quarterly vol-regime forecasts + their measured accuracy tiers. */
@@ -3261,6 +3270,8 @@ export async function volRegime(): Promise<VolRegime> {
     whyHonest: String(raw.whyHonest ?? ""),
     accuracyTiers: (raw.accuracyTiers ?? {}) as Record<string, string>,
     caveat: String(raw.caveat ?? ""),
+    // Possibly-absent: only render it when the daemon actually sent one.
+    tradeability: raw.tradeability != null ? String(raw.tradeability) : undefined,
   };
 }
 
@@ -3509,5 +3520,267 @@ export async function regimePostmortems(): Promise<RegimePostmortems> {
     postmortems: (raw.postmortems ?? []) as RegimePostmortemRow[],
     count: Number(raw.count ?? 0),
     note: String(raw.note ?? ""),
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   WHY-IT'S-MOVING wave (2026-07-24) — the two finished attribution engines the
+   web app never consumed, plus the per-symbol context datasets the symbol page
+   was missing. Everything below is read-only and ships its own caveat strings,
+   which surfaces render VERBATIM (a paraphrased caveat is a broken caveat).
+
+   Go encodes nil slices as JSON `null`, so EVERY array field is normalized
+   with `?? []` here — the recurring bug in this repo is a `.map` on null.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/** One factor's signed push toward (+weight) or against (−weight) the call. */
+export interface ExplainContribution {
+  name: string;
+  value: number; // the measured quantity, in its own units
+  weight: number; // signed: + supports the call, − opposes it
+  detail: string; // plain English, straight from the engine
+}
+
+/** The closest historical precedent and what actually happened next. */
+export interface ExplainAnalog {
+  found: boolean;
+  distance: number;
+  priorDistPct: number;
+  fwdReturnPct: number;
+  heldSide: boolean;
+  note: string;
+}
+
+/**
+ * GET /api/explain — the auditable regime forecast: signed contributors, a real
+ * historical analog with its realized outcome, the accuracy of THIS conviction
+ * band, and an explicit refusal to decorate the retired directional model
+ * (`whyNotDirection`). `available: false` carries `reason` — an honest absence.
+ */
+export interface Explain {
+  symbol: string;
+  market: string;
+  available: boolean;
+  /** Why no explanation exists (thin history / refused series). Verbatim. */
+  reason?: string;
+  barsHave?: number;
+  barsNeed?: number;
+  asOf?: number;
+  close?: number;
+  prediction?: string;
+  kind?: string;
+  regime?: string;
+  horizonDays?: number;
+  /** Accuracy of this conviction BAND, never the population average. */
+  bandedAccuracy?: number;
+  tier?: string;
+  conviction?: number;
+  supports: ExplainContribution[];
+  opposes: ExplainContribution[];
+  analog?: ExplainAnalog;
+  caveat?: string;
+  /** The engine's refusal string for BUY/SELL — rendered verbatim, always. */
+  whyNotDirection?: string;
+  /** Optional: is an accurate call of this kind actually tradeable? */
+  tradeability?: string;
+}
+
+/** The auditable "why does the model say this?" record for one symbol. */
+export async function explain(symbol: string, market: Market): Promise<Explain> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>(`/api/explain?${q(symbol, market)}`);
+  return {
+    symbol: String(raw.symbol ?? symbol),
+    market: String(raw.market ?? market),
+    available: raw.available === true,
+    reason: raw.reason != null ? String(raw.reason) : undefined,
+    barsHave: raw.barsHave != null ? Number(raw.barsHave) : undefined,
+    barsNeed: raw.barsNeed != null ? Number(raw.barsNeed) : undefined,
+    asOf: raw.asOf != null ? Number(raw.asOf) : undefined,
+    close: raw.close != null ? Number(raw.close) : undefined,
+    prediction: raw.prediction != null ? String(raw.prediction) : undefined,
+    kind: raw.kind != null ? String(raw.kind) : undefined,
+    regime: raw.regime != null ? String(raw.regime) : undefined,
+    horizonDays: raw.horizonDays != null ? Number(raw.horizonDays) : undefined,
+    bandedAccuracy: raw.bandedAccuracy != null ? Number(raw.bandedAccuracy) : undefined,
+    tier: raw.tier != null ? String(raw.tier) : undefined,
+    conviction: raw.conviction != null ? Number(raw.conviction) : undefined,
+    // Go nil slices arrive as null — normalize both contributor lists.
+    supports: (raw.supports ?? []) as ExplainContribution[],
+    opposes: (raw.opposes ?? []) as ExplainContribution[],
+    analog: (raw.analog ?? undefined) as ExplainAnalog | undefined,
+    caveat: raw.caveat != null ? String(raw.caveat) : undefined,
+    whyNotDirection: raw.whyNotDirection != null ? String(raw.whyNotDirection) : undefined,
+    tradeability: raw.tradeability != null ? String(raw.tradeability) : undefined,
+  };
+}
+
+/** The blended-evidence report (historical prior ⊕ live resolved outcomes). */
+export interface AttributionReport {
+  symbol: string;
+  horizon: string;
+  regime: string;
+  liveResolvedN: number;
+  historicalPriorN: number;
+  priorHitRate: number;
+  liveAccuracy: number;
+  regimeMatch: string; // "good" | "weak" | "none"
+  calibratedProbability: number;
+  uncertaintyLo: number;
+  uncertaintyHi: number;
+  liveWeight: number; // 0..1 — how much the blend leans on live vs prior
+  driver: string; // "historical-prior" | "blended" | "live" | "insufficient"
+  attributionSupported: boolean;
+  explanation: string; // the most honest statement available — verbatim
+}
+
+/**
+ * GET /api/attribution — a state-conditioned historical prior blended with this
+ * symbol's live resolved outcomes, weighted by sample size. MEASURED COST: this
+ * scans the full resolved-outcome ledger and took ~63s against the live daemon
+ * on 2026-07-24, so callers must load it ON DEMAND, never on page mount.
+ */
+export interface AttributionResponse {
+  available: boolean;
+  market: string;
+  currentState: string;
+  report: AttributionReport | null;
+  doctrine: string;
+}
+
+export async function attributionFor(
+  symbol: string,
+  market: Market,
+  horizon: "1d" | "1w" = "1d",
+): Promise<AttributionResponse> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>(`/api/attribution?${q(symbol, market)}&horizon=${horizon}`);
+  return {
+    available: raw.available === true,
+    market: String(raw.market ?? market),
+    currentState: String(raw.currentState ?? ""),
+    report: (raw.report ?? null) as AttributionReport | null,
+    doctrine: String(raw.doctrine ?? ""),
+  };
+}
+
+/** One bi-monthly FINRA short-interest settlement row (NOT short volume). */
+export interface ShortInterestRow {
+  symbolId: number;
+  symbol?: string;
+  settlementDate: string; // YYYY-MM-DD (15th or EOM)
+  shortQty: number;
+  prevQty: number;
+  adv: number;
+  daysToCover: number;
+  changePct: number;
+}
+
+/** GET /api/short-interest — the REAL short interest, settlement-dated. */
+export interface ShortInterestResponse {
+  symbol: string;
+  note: string; // verbatim caveat
+  recent: ShortInterestRow[]; // newest first, ≤8 settlement periods
+  latest: ShortInterestRow | null;
+  previous: ShortInterestRow | null;
+  emptyNote?: string;
+}
+
+export async function shortInterest(
+  symbol: string,
+  market: Market = "stocks",
+): Promise<ShortInterestResponse> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>(`/api/short-interest?${q(symbol, market)}`);
+  return {
+    symbol: String(raw.symbol ?? symbol),
+    note: String(raw.note ?? ""),
+    recent: (raw.recent ?? []) as ShortInterestRow[],
+    latest: (raw.latest ?? null) as ShortInterestRow | null,
+    previous: (raw.previous ?? null) as ShortInterestRow | null,
+    emptyNote: raw.emptyNote != null ? String(raw.emptyNote) : undefined,
+  };
+}
+
+/** One StockTwits PAGE SNAPSHOT (tag counts over the ~30 newest messages). */
+export interface StocktwitsPoint {
+  symbolId: number;
+  ts: number;
+  bullish: number;
+  bearish: number;
+  untagged: number;
+  total: number;
+}
+
+/** GET /api/stocktwits — retail message sentiment, snapshots not a census. */
+export interface StocktwitsResponse {
+  symbol: string;
+  note: string; // verbatim
+  snapshotNote: string; // verbatim — "each point is a PAGE SNAPSHOT"
+  hours: number;
+  series: StocktwitsPoint[]; // ASC
+  latest: StocktwitsPoint | null;
+  emptyNote?: string;
+}
+
+export async function stocktwits(
+  symbol: string,
+  market: Market = "stocks",
+  hours = 72,
+): Promise<StocktwitsResponse> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>(`/api/stocktwits?${q(symbol, market)}&hours=${hours}`);
+  return {
+    symbol: String(raw.symbol ?? symbol),
+    note: String(raw.note ?? ""),
+    snapshotNote: String(raw.snapshotNote ?? ""),
+    hours: Number(raw.hours ?? hours),
+    // Measured: this endpoint returns `"series": null` for uncovered symbols.
+    series: (raw.series ?? []) as StocktwitsPoint[],
+    latest: (raw.latest ?? null) as StocktwitsPoint | null,
+    emptyNote: raw.emptyNote != null ? String(raw.emptyNote) : undefined,
+  };
+}
+
+/** One day of Wikipedia article views for a symbol's resolved article. */
+export interface WikiViewPoint {
+  symbolId: number;
+  day: string; // YYYY-MM-DD
+  views: number;
+}
+
+/** GET /api/wiki-attention — a public ATTENTION proxy, never a direction. */
+export interface WikiAttentionResponse {
+  symbol: string;
+  note: string; // verbatim — "public attention proxy — not a trading signal"
+  days: number;
+  series: WikiViewPoint[]; // ASC
+  article?: string;
+  resolved?: boolean;
+  resolutionNote?: string;
+  /** Descriptive z of the latest day vs its own trailing baseline; honest null. */
+  latestZ: number | null;
+  zNote: string;
+  emptyNote?: string;
+}
+
+export async function wikiAttention(
+  symbol: string,
+  market: Market = "stocks",
+  days = 90,
+): Promise<WikiAttentionResponse> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = await get<any>(`/api/wiki-attention?${q(symbol, market)}&days=${days}`);
+  return {
+    symbol: String(raw.symbol ?? symbol),
+    note: String(raw.note ?? ""),
+    days: Number(raw.days ?? days),
+    series: (raw.series ?? []) as WikiViewPoint[],
+    article: raw.article != null ? String(raw.article) : undefined,
+    resolved: raw.resolved != null ? raw.resolved === true : undefined,
+    resolutionNote: raw.resolutionNote != null ? String(raw.resolutionNote) : undefined,
+    latestZ: raw.latestZ != null ? Number(raw.latestZ) : null,
+    zNote: String(raw.zNote ?? ""),
+    emptyNote: raw.emptyNote != null ? String(raw.emptyNote) : undefined,
   };
 }

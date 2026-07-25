@@ -1455,3 +1455,21 @@ CREATE INDEX IF NOT EXISTS idx_split_repairs_at
 -- silently dropped every name that died. With this, a point-in-time universe
 -- can be reconstructed (store.TradableAt) instead of guessed.
 -- Added via the idempotent ALTER path in migrate() — see store.go.
+
+-- ── AUTONOMOUS RESEARCH LOOP (2026-07-25) ────────────────────────────────────
+-- Every rule the loop tests, including the ones it kills. A search that records
+-- only its winners cannot be audited, and the rejections are what stop the same
+-- idea being retried forever. status is 'shadow' or 'rejected' — the loop is
+-- deliberately unable to write 'promoted', because automation that can put its
+-- own output into production is how a p-hacked rule becomes a live position.
+CREATE TABLE IF NOT EXISTS research_loop_hypotheses (
+  id           TEXT PRIMARY KEY,
+  descr        TEXT    NOT NULL,
+  status       TEXT    NOT NULL,
+  wilson_lower REAL    NOT NULL,
+  survives     INTEGER NOT NULL,
+  found_at     INTEGER NOT NULL,
+  last_seen    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_loop_hyp_seen
+  ON research_loop_hypotheses (last_seen DESC);

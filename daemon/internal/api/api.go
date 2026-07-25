@@ -157,6 +157,9 @@ func Serve(ctx context.Context, d Deps) error {
 	// appended — keep new routes at the END of this block so parallel route
 	// edits by other agents never collide) ───────────────────────────────────
 	d.registerDigest(mux) // GET /api/digest — the latest weekly digest text the weekly-digest worker composed (regime changes / live regime record / top calls / paper P&L), with generatedAt + sentAt (0 = composed but never delivered: no notify transport configured); available:false before the first Sunday-17:00-ET gate fires
+	// ── CROSS-SECTIONAL FACTOR wave (appended — keep new routes at the END of
+	// this block so parallel route edits by other agents never collide) ──────
+	d.registerXSFactor(mux) // GET /api/xs-factor?horizon=5d|21d|63d&limit= — CROSS-SECTIONAL factor ranking (low-vol + size/liquidity + mom12-1, point-in-time from trailing bars, percentiles over the active universe, composite renormalized over PRESENT legs) with the MEASURED per-leg edge/CIs shipped as data; read-time only (no table, no worker), SWR-cached; caveat verbatim: relative rank vs the same-day universe MEDIAN, absolute direction failed 20/20, these are PUBLIC capacity-constrained factors with an implied IC of only ~0.03-0.07
 
 	srv := &http.Server{
 		Addr:              d.Cfg.HTTPAddr,

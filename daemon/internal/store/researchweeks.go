@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/researchx"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
@@ -158,4 +159,92 @@ func (s *Store) EarliestBarTs(ctx context.Context, symbolID int64, tf md.Timefra
 		`SELECT COALESCE(MIN(ts), 0) FROM bars WHERE symbol_id=? AND tf=?`,
 		symbolID, string(tf)).Scan(&ts)
 	return ts, err
+}
+
+// ── autonomous research loop (2026-07-25) ────────────────────────────────────
+
+// LoopHypothesis is one rule the automated loop discovered and judged.
+type LoopHypothesis struct {
+	ID          string  `json:"id"`
+	Desc        string  `json:"desc"`
+	Status      string  `json:"status"` // shadow | rejected — never "promoted"
+	WilsonLower float64 `json:"wilsonLower"`
+	Survives    bool    `json:"survives"`
+	FoundAt     int64   `json:"foundAt"`
+}
+
+// ResearchObservations loads weekly observations in the shape the discovery
+// grid consumes. limit<=0 loads everything.
+func (s *Store) ResearchObservations(ctx context.Context, limit int) ([]researchx.Obs, error) {
+	q := `SELECT symbol_id, week, ts, vec, fwd_return, up, era, high_vol
+	      FROM research_weeks ORDER BY week, symbol_id`
+	args := []any{}
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := []researchx.Obs{}
+	for rows.Next() {
+		var o researchx.Obs
+		var vec string
+		var up, highVol int
+		if err := rows.Scan(&o.SymbolID, &o.Week, &o.Ts, &vec, &o.FwdRet,
+			&up, &o.Era, &highVol); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal([]byte(vec), &o.Vec) != nil {
+			continue // a malformed vector is skipped, never guessed at
+		}
+		o.Up = up == 1
+		o.HighVol = highVol == 1
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// UpsertLoopHypothesis records one discovered rule and its verdict. Idempotent
+// on ID so a re-run updates rather than duplicating — the same rule rediscovered
+// tomorrow is the same hypothesis, not a new one.
+func (s *Store) UpsertLoopHypothesis(ctx context.Context, h LoopHypothesis) error {
+	_, err := s.w.ExecContext(ctx, `
+		INSERT INTO research_loop_hypotheses
+		  (id, descr, status, wilson_lower, survives, found_at, last_seen)
+		VALUES (?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET
+		  status=excluded.status, wilson_lower=excluded.wilson_lower,
+		  survives=excluded.survives, last_seen=excluded.last_seen`,
+		h.ID, h.Desc, h.Status, h.WilsonLower, boolToInt(h.Survives),
+		h.FoundAt, h.FoundAt)
+	return err
+}
+
+// LoopHypotheses returns what the loop has found, newest first.
+func (s *Store) LoopHypotheses(ctx context.Context, limit int) ([]LoopHypothesis, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, descr, status, wilson_lower, survives, found_at
+		FROM research_loop_hypotheses ORDER BY last_seen DESC, id LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := []LoopHypothesis{}
+	for rows.Next() {
+		var h LoopHypothesis
+		var sv int
+		if err := rows.Scan(&h.ID, &h.Desc, &h.Status, &h.WilsonLower, &sv,
+			&h.FoundAt); err != nil {
+			return nil, err
+		}
+		h.Survives = sv == 1
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }

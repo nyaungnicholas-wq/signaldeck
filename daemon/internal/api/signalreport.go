@@ -76,6 +76,12 @@ func (d Deps) signalReport(w http.ResponseWriter, r *http.Request) {
 		if f, inputs, ok := structregime.ExplainTrend(closes); ok {
 			out["signal"] = f
 			out["whyFired"] = inputs
+			// The measured forward return of this call's conviction band — the
+			// number that says whether the hit rate is worth anything. Hoisted out
+			// of the signal so the page cannot show accuracy without it.
+			if f.Tradeability != "" {
+				out["tradeability"] = f.Tradeability
+			}
 		}
 		out["history"] = summarizeInstances(structregime.TrendHistory(ts, closes))
 	case "liquidity21":
@@ -99,6 +105,12 @@ func (d Deps) signalReport(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		out["history"] = summarizeVolInstances(volregime.History(retTs, rets, 63))
+	case "overview":
+		// The default kind CompanyPeek links to had no case at all, so the page's
+		// "why it fired" panel rendered empty. Overview is not a fired signal, so
+		// the honest content is the measured state the rest of the report reasons
+		// from — same Input convention, every value computed from stored bars.
+		out["whyFired"] = overviewInputs(bars, closes, vols)
 	case "prediction", "composite":
 		// history = this symbol's slice of the LIVE forward record
 		rows, correct, total, err := d.St.PredictionOutcomesForSymbol(ctx, s.ID, "1d", 50)
@@ -126,6 +138,12 @@ func (d Deps) signalReport(w http.ResponseWriter, r *http.Request) {
 
 	// ── the symbol's full current signal stack (always) ──
 	if stack, err := d.St.RegimeForecastsForSymbol(ctx, s.ID); err == nil {
+		// tradeability is not persisted (pure function of kind + conviction), so
+		// derive it per row — kinds whose forward return was never measured get ""
+		// and the field is omitted rather than borrowing another kind's number.
+		for i := range stack {
+			stack[i].Tradeability = structregime.TradeabilityFor(stack[i].Kind, stack[i].Conviction)
+		}
 		out["regimeStack"] = stack
 	}
 	// Earnings-window label (credibility wave): added only when the
@@ -172,7 +190,7 @@ func (d Deps) signalReport(w http.ResponseWriter, r *http.Request) {
 	if an, err := d.St.Anomalies(ctx, s.ID, "", 10); err == nil {
 		out["recentAnomalies"] = an
 	}
-	out["honesty"] = "Every accuracy on this page is the measured walk-forward number for the signal's conviction band on the whole universe; the history table is THIS symbol's own record and is usually a small sample — judge it as one."
+	out["honesty"] = "Every accuracy on this page is the measured walk-forward number for the signal's conviction band on the whole universe; the history table is THIS symbol's own record and is usually a small sample — judge it as one. An accuracy is not a return: the 2026-07-24 re-validation measured trend21's most accurate conviction band (>=0.9) at a NEGATIVE mean forward 21d return (-0.39%), because high conviction means price is already extended from its 200-day average and extended names mean-revert. Where that applies to a signal shown here it is stated in its tradeability field."
 	writeJSON(w, out)
 }
 
@@ -390,4 +408,63 @@ func fmtFloat(x float64, dec int) string {
 	v := math.Round(x*pow) / pow
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// ── overview inputs (2026-07-24: the default report kind had no whyFired) ──
+
+// overviewInputs is the "why it fired" surface for kind=overview, which is not
+// a fired signal at all — so the honest content is the measured price state the
+// rest of the report reasons from, in the same Input shape the structural kinds
+// use. Every value comes from the stored daily bars via tradeContext, so the
+// page and this panel can never disagree; a quantity the history is too short
+// to support (no 200-day average yet) is omitted rather than shown as zero.
+func overviewInputs(bars []md.Bar, closes, vols []float64) []structregime.Input {
+	tc := tradeContext(bars, closes, vols)
+	// Two different absences: tradeContext omits the 52-week keys outright when
+	// it cannot compute them, but reports 0 for an average it lacks history for.
+	// present() keeps a genuine 0 (a stock AT its 52-week high) visible; nonzero()
+	// drops the placeholder zeros.
+	present := func(k string) (float64, bool) {
+		v, ok := tc[k].(float64)
+		return v, ok
+	}
+	nonzero := func(k string) (float64, bool) {
+		v, ok := tc[k].(float64)
+		return v, ok && v != 0
+	}
+	last := closes[len(closes)-1]
+	in := []structregime.Input{
+		{Name: "close", Value: last, Note: "latest stored daily close — everything below is derived from it"},
+	}
+	if n := len(closes); n >= 2 && closes[n-2] > 0 {
+		in = append(in, structregime.Input{Name: "day_change_pct",
+			Value: (last/closes[n-2] - 1) * 100, Note: "close-to-close move on the latest session"})
+	}
+	if v, ok := present("offHigh52Pct"); ok {
+		in = append(in, structregime.Input{Name: "off_52w_high_pct", Value: v,
+			Note: "distance from the highest close of the last 252 sessions; 0 = at the high"})
+	}
+	if v, ok := present("offLow52Pct"); ok {
+		in = append(in, structregime.Input{Name: "off_52w_low_pct", Value: v,
+			Note: "distance above the lowest close of the last 252 sessions"})
+	}
+	if sma, ok := nonzero("sma50"); ok {
+		in = append(in, structregime.Input{Name: "distance_from_sma50_pct",
+			Value: (last/sma - 1) * 100, Note: "close vs the 50-day average — the medium-term structure"})
+	}
+	if sma, ok := nonzero("sma200"); ok {
+		in = append(in, structregime.Input{Name: "distance_from_sma200_pct",
+			Value: (last/sma - 1) * 100,
+			Note: "close vs the 200-day average; the SIGN is the trend21/trend63 call and the " +
+				"|magnitude| percentile is their conviction — large values mean already extended"})
+	}
+	if v, ok := nonzero("atr14Pct"); ok {
+		in = append(in, structregime.Input{Name: "atr14_pct", Value: v,
+			Note: "average true range over 14 sessions as % of price — the typical daily range"})
+	}
+	if v, ok := nonzero("avgDollarVol21"); ok {
+		in = append(in, structregime.Input{Name: "avg_dollar_volume_21d", Value: v,
+			Note: "mean daily close×volume over the last 21 sessions — tradability, not a signal"})
+	}
+	return in
 }

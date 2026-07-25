@@ -99,6 +99,10 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	warmBody("/api/calibration", "", sharedCalibrationSWR, d.calibration)
 	warmBody("/api/datastats", "datastats", sharedDatastatsSWR, d.datastats)
 	warmBody("/api/macro", "macro", sharedMacroSWR, d.macro)
+	// /api/xs-factor: recomputes the whole cross-section at read time from ~300
+	// trailing daily bars per active symbol, so a cold build must land on the
+	// warmer, never on the first visitor. Default query (21d / stocks / 50).
+	warmBody("/api/xs-factor", xsFactorWarmKey(d.St), sharedXSFactorSWR, d.xsFactor)
 	return nil
 }
 
