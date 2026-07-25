@@ -241,6 +241,12 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// each leg's prob+lift so the PredictionRunner blends it only when lift>0.
 	// BEFORE the watchdog spec snapshot so it's health-audited like every worker.
 	fleet = append(fleet, edgeModelWorkers(st)...)
+	// Sentiment-correlation wave (constructor appended at the END of this file) —
+	// the platform's first test of a NON-price signal. The scorer + study always
+	// run (they need no key); the historical backfiller only exists when there
+	// are Alpaca credentials to fetch the archive with.
+	fleet = append(fleet, sentCorrWorkers(st, cfg)...)
+	fleet = append(fleet, honestyGapWorkers(st)...)
 	// Credibility wave (constructor appended at the END of this file) — the
 	// regime-outcome-runner (6h) that freezes every regime forecast into an
 	// ungraded outcome row (once per symbol/kind/UTC-day), later grades it with
@@ -1486,4 +1492,87 @@ func digestWorkers(st *store.Store, remote *notify.Notifier) []workers.Worker {
 	return []workers.Worker{
 		&briefing.DigestWorker{St: st, Notifier: remote},
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// HONESTY-GAP WAVE (appended block).
+// honestyGapWorkers returns the five workers behind the gaps
+// PREDICTION_PROCESS.md left open — the ones that were documented controls with
+// no runtime:
+//
+//   - return-distribution-runner (6h): the replacement for the binary up/down
+//     target. Per symbol+horizon it estimates a COST-AWARE conditional return
+//     distribution (P of clearing +/-tau, the no-trade zone, expected value,
+//     quantiles), conditioned on the volatility regime — the one axis this
+//     platform has validated skill on — and grades that conditioning
+//     walk-forward against its own climatology. Non-positive skill means the
+//     conditioning earned nothing, which the payload says outright.
+//   - feature-redundancy-runner (24h): measures how many INDEPENDENT inputs the
+//     feature vector actually carries. The adaptive weighter treats every leg as
+//     a separate vote, so a price path rendered four ways was being weighted
+//     four times; this makes that visible.
+//   - dataset-version-runner (24h): content-hashes each symbol's daily bars and
+//     raises a dq event when a provider REWRITES history inside a range a claim
+//     was already measured on. An append is not a revision and is not flagged.
+//   - canary-runner (1h): grades the newest feature/model version against the
+//     previous one and records whether it may serve. It never flips serving
+//     itself — automation that can promote its own output is precisely the
+//     failure this layer exists to prevent.
+//   - price-validator (24h, OPT-IN via SIGNALDECK_PRICE_VALIDATION_URL): the
+//     only check that can catch a provider being quietly wrong, because every
+//     other data check here is internal consistency. Compares daily closes
+//     against an independent source and stores ONLY derived statistics — the
+//     second provider's prices are read, compared and discarded.
+func honestyGapWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.ReturnDistributionRunner{St: st},
+		&pipeline.FeatureRedundancyRunner{St: st},
+		&pipeline.DatasetVersionRunner{St: st},
+		&pipeline.CanaryRunner{St: st},
+		&pipeline.PriceValidator{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SENTIMENT-CORRELATION WAVE (appended block).
+//
+// sentCorrWorkers returns the wave's three workers. This is the platform's first
+// test of a signal that is NOT derived from price, which is the entire reason it
+// is worth running: the documented ~55% directional ceiling applies to every
+// price/technical predictor at once, so an orthogonal input is the only kind of
+// thing that could move it. Text sentiment might also join the pile of killed
+// hypotheses, and the pipeline is built to establish that cleanly rather than to
+// avoid it.
+//
+//   - news-backfiller (30m, needs Alpaca keys): walks the news archive BACKWARD a
+//     month per pass to 2019 (where our daily bars start), batching 50 symbols per
+//     request and storing the full multi-ticker mapping. Without it the study can
+//     only ever see the weeks since the feed started, which is far too thin to
+//     measure an IC.
+//   - sentiment-lex-scorer (15m): scores every headline with the DETERMINISTIC
+//     lexicon (internal/newssent) — not the LLM tagger, which cannot score years
+//     of archive under its call cap and whose scores would change silently on a
+//     prompt edit — then rebuilds the as-of-aligned daily features. Alignment is
+//     the honesty-critical part: a headline is keyed to the first session on which
+//     it was already public, because most financial news publishes outside market
+//     hours and keying it to its own day grants lookahead.
+//   - sentiment-corr-runner (12h): the study. Reports the PARTIAL IC (sentiment vs
+//     forward return, both residualised on same-session and trailing price moves)
+//     with a month-clustered bootstrap interval, and withholds every metric behind
+//     explicit sample/symbol/era gates.
+//
+// Nothing here feeds a prediction, score or alert. It is a measurement surface
+// until a partial IC survives with an interval excluding zero AND a cost-net
+// quintile spread that is positive.
+func sentCorrWorkers(st *store.Store, cfg config.Config) []workers.Worker {
+	fleet := []workers.Worker{
+		&pipeline.SentimentLexScorer{St: st},
+		&pipeline.SentCorrRunner{St: st},
+	}
+	if cfg.AlpacaKey != "" && cfg.AlpacaSecret != "" {
+		fleet = append(fleet, &pipeline.NewsBackfiller{
+			St: st, Client: news.New(cfg.AlpacaKey, cfg.AlpacaSecret),
+		})
+	}
+	return fleet
 }

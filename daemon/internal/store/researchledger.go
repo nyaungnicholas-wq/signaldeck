@@ -33,16 +33,20 @@ func (s *Store) UpsertLedgerHypothesis(ctx context.Context, h rl.Hypothesis, now
 		INSERT INTO research_ledger_hypotheses
 		  (id, family, statement, horizon, prior, max_edge, posterior, status,
 		   replications, contradictions, regimes, open_questions,
-		   peak_posterior, peak_ts, last_grade_ts, spec, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		   peak_posterior, peak_ts, last_grade_ts, spec, tradable_form,
+		   economic_test, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 		  statement=excluded.statement,
 		  open_questions=excluded.open_questions,
 		  spec=excluded.spec,
+		  tradable_form=excluded.tradable_form,
+		  economic_test=excluded.economic_test,
 		  updated_at=excluded.updated_at`,
 		h.ID, h.Family, h.Statement, h.Horizon, h.Prior, h.MaxEdge,
 		h.Posterior, h.Status, h.Replications, h.Contradictions, h.Regimes,
-		string(oq), h.PeakPosterior, h.PeakTs, h.LastGradeTs, h.Spec, now, now)
+		string(oq), h.PeakPosterior, h.PeakTs, h.LastGradeTs, h.Spec,
+		h.TradableForm, h.EconomicTest, now, now)
 	return err
 }
 
@@ -84,7 +88,8 @@ func (s *Store) LedgerHypotheses(ctx context.Context) ([]rl.Hypothesis, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, family, statement, horizon, prior, max_edge, posterior, status,
 		       replications, contradictions, regimes, open_questions,
-		       peak_posterior, peak_ts, last_grade_ts, spec
+		       peak_posterior, peak_ts, last_grade_ts, spec, tradable_form,
+		       economic_test
 		FROM research_ledger_hypotheses ORDER BY posterior DESC, id`)
 	if err != nil {
 		return nil, err
@@ -96,7 +101,8 @@ func (s *Store) LedgerHypotheses(ctx context.Context) ([]rl.Hypothesis, error) {
 		var oq string
 		if err := rows.Scan(&h.ID, &h.Family, &h.Statement, &h.Horizon, &h.Prior,
 			&h.MaxEdge, &h.Posterior, &h.Status, &h.Replications, &h.Contradictions,
-			&h.Regimes, &oq, &h.PeakPosterior, &h.PeakTs, &h.LastGradeTs, &h.Spec); err != nil {
+			&h.Regimes, &oq, &h.PeakPosterior, &h.PeakTs, &h.LastGradeTs, &h.Spec,
+			&h.TradableForm, &h.EconomicTest); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(oq), &h.OpenQuestions); err != nil {

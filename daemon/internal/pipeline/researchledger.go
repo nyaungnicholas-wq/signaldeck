@@ -97,8 +97,22 @@ const (
 func (w *ResearchLedgerWorker) Run(ctx context.Context) (string, error) {
 	now := w.now()
 	day := now.UTC().Format("2006-01-02")
+
+	// The tradable-forms pass runs BEFORE the once-per-day guard on purpose.
+	// It is a one-time migration behind its own meta key, and gating it on the
+	// daily cursor would mean a deploy landing after the day's run leaves the
+	// gate unpopulated for up to 24 hours — during which every strong
+	// hypothesis reports "no position stated" for the wrong reason.
+	stated, err := w.stateTradableForms(ctx, now.Unix())
+	if err != nil {
+		return "", fmt.Errorf("state tradable forms: %w", err)
+	}
+
 	if w.OncePerDay {
 		if last, _ := w.St.GetMeta(ctx, researchLedgerDayKey); last == day {
+			if stated > 0 {
+				return fmt.Sprintf("already ran today; stated %d tradable forms", stated), nil
+			}
 			return "already ran today", nil
 		}
 	}
@@ -143,10 +157,87 @@ func (w *ResearchLedgerWorker) Run(ctx context.Context) (string, error) {
 		top = fmt.Sprintf("%s (avg posterior %.2f over %d)", meta[0].Family, meta[0].AvgPosterior, meta[0].N)
 	}
 	msg := fmt.Sprintf("%d hypotheses, %d new grades, strongest family: %s", len(hyps), graded, top)
+	if stated > 0 {
+		msg = fmt.Sprintf("stated %d tradable forms; ", stated) + msg
+	}
 	if seeded {
 		msg = "seeded Pressure chapter + open program; " + msg
 	}
 	return msg, nil
+}
+
+// ── the tradability gate: stating what each belief would have to trade ───
+
+// tradableFormsKey guards the one-time pass below, in the same crash-safe way
+// as the seed keys.
+const tradableFormsKey = "research_ledger_tradable_forms_v1"
+
+// tradableForms names, for each hypothesis that has one, the POSITION that
+// would have to earn the money if the belief is true — and, where that position
+// has actually been graded net of costs, the run that graded it.
+//
+// Only H018 carries an economic test today, and it is the reason this gate
+// exists: the tradable form of "63-day correlation regime persists" is a
+// dollar-neutral cointegration spread, and building it settled in one run what
+// eight days of accumulating quarters had not. Every other entry is a stated
+// position awaiting its test — which is exactly the state the gate is meant to
+// make visible, rather than letting a strong posterior read as a green light.
+//
+// Hypotheses absent from this map keep an empty tradable form on purpose: some
+// (H019, H020) are already rejected, and inventing a position for a dead belief
+// would be dishonest bookkeeping.
+var tradableForms = map[string]struct{ form, test string }{
+	"H005": {form: "Drop the contaminating partner leg from the blend and hold the remainder — the P&L difference between blended and pruned ensembles, net of the extra turnover pruning causes.", test: ""},
+	"H006": {form: "Hold the pressure-inverse signal to its longer horizon rather than the shipped one, sized by conviction — graded on horizon-matched cost, since a longer hold trades less often.", test: ""},
+	"H011": {form: "Fade the overnight gap at the open and close into the session — must clear the open's spread, which is the widest of the day and is where this family usually dies.", test: ""},
+	"H012": {form: "Enter against a >1% opening gap and hold to fill or five sessions, whichever comes first, net of spread and slippage at the open.", test: ""},
+	"H015": {form: "A long-vol or short-vol options position taken on the monthly regime call — the vol-edge surface at /lab/options is the calculator for it, and it is NOT backtested.", test: ""},
+	"H016": {form: "None yet, and possibly none: the predictor scores the same as naive persistence (0.876 vs 0.876), so any position it implies is a position persistence already implies for free.", test: ""},
+	"H017": {form: "Trend-following the SMA200 state at the 21-day horizon, sized by |distance|, net of the turnover the state changes force.", test: ""},
+	"H018": {
+		form: "A dollar-neutral cointegration spread between two names selected on trailing co-movement — the only position a correlation-regime belief can express.",
+		test: "2026-07-25 pairs test (tools/pairs_trading.py, PAIRS_TRADING.md, /lab/pairs): walk-forward 252d/63d over 26 non-overlapping blocks and 918 symbols. The selected arm is indistinguishable from random same-sector pairs (selection edge +0.017%/trade) and its interval contains zero at ZERO cost. FAILED.",
+	},
+}
+
+// stateTradableForms writes the stated positions onto existing hypotheses once.
+// It is idempotent and deliberately additive: it never clears a form that is
+// already recorded, because the map is a starting point for beliefs that
+// predate the gate, not the authority on them.
+func (w *ResearchLedgerWorker) stateTradableForms(ctx context.Context, now int64) (int, error) {
+	if v, _ := w.St.GetMeta(ctx, tradableFormsKey); v != "" {
+		return 0, nil
+	}
+	hyps, err := w.St.LedgerHypotheses(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, h := range hyps {
+		tf, ok := tradableForms[h.ID]
+		if !ok {
+			continue
+		}
+		if h.TradableForm == tf.form && h.EconomicTest == tf.test {
+			continue
+		}
+		if h.TradableForm == "" {
+			h.TradableForm = tf.form
+		}
+		if h.EconomicTest == "" {
+			h.EconomicTest = tf.test
+		}
+		if err := w.St.UpsertLedgerHypothesis(ctx, h, now); err != nil {
+			return n, err
+		}
+		n++
+	}
+	// Only mark the pass done once it has written everything; a crash midway
+	// re-runs it, and the upsert makes the repeat free.
+	if err := w.St.SetMeta(ctx, tradableFormsKey, "1"); err != nil {
+		return n, err
+	}
+	return n, nil
 }
 
 // ── replication graders ──────────────────────────────────────────────────
@@ -426,7 +517,12 @@ func (w *ResearchLedgerWorker) recompute(ctx context.Context, hypID string, regi
 	// latest row so an unchanged concern is levied once, not once per grade.
 	post := rl.Posterior(hyp.Prior, rl.EffectiveChain(chain))
 	reps, contras := rl.Counters(chain)
-	status := rl.Status(post, reps, regimes)
+	// StatusWithGates, not Status: promotion also requires the hypothesis to
+	// have been stated as a position and that position graded net of costs.
+	status := rl.StatusWithGates(post, rl.Gates{
+		Replications: reps, Regimes: regimes,
+		TradableForm: hyp.TradableForm, EconomicTest: hyp.EconomicTest,
+	})
 	return w.St.UpdateLedgerDerived(ctx, hypID, post, status, reps, contras, regimes, now)
 }
 
@@ -671,6 +767,10 @@ const researchLedgerSeedV2Key = "research_ledger_seed_v3"
 // hypotheses that already carry other evidence.
 const alphaLoopTag = "2026-07-17 alpha-loop"
 
+// pairsTag marks the cointegration pairs-trading resolution of H018 for the
+// same crash-safe idempotency reason as alphaLoopTag.
+const pairsTag = "2026-07-25 pairs-test"
+
 func (w *ResearchLedgerWorker) seedWave2(ctx context.Context, now int64) (bool, error) {
 	if v, _ := w.St.GetMeta(ctx, researchLedgerSeedV2Key); v != "" {
 		return false, nil
@@ -733,12 +833,14 @@ func (w *ResearchLedgerWorker) seedWave2(ctx context.Context, now int64) (bool, 
 				ID: "H018", Family: "correlation", Horizon: "63d",
 				Statement: "63d SPY-correlation regime persists (trailing-rank predictable)",
 				Prior:     0.50, MaxEdge: 0.25,
-				OpenQuestions: []string{"CI lower bound 0.671 straddles the 0.70 product bar — needs more independent quarters before shipping. Beta regime FAILED (64.1% top tier) — why does corr persist but beta not?"},
+				OpenQuestions: []string{"RESOLVED 2026-07-25 by the pairs-trading test (tools/pairs_trading.py): the persistence is real but NOT harvestable. Remaining question is whether any correlation-regime surface can be built that is not just shared market beta."},
 			},
 			regimes: 1,
 			ev: []ev{
 				{k: 3146, n: 4303, p0: 0.5,
 					note: alphaLoopTag + ": conv>0.9 tier 73.1% (quarter-clustered CI 0.671-0.795, 25 clusters, labelUp 0.466). Real but tentative — NOT shipped as a product surface."},
+				{k: 414, n: 938, p0: 0.437,
+					note: pairsTag + ": DO NOT SHIP. Cointegration pairs trading is the tradable form of this hypothesis, and it does not pay. Walk-forward 252d/63d, 26 non-overlapping blocks, 918 SIC-sectored symbols, frozen hedge ratio + spread z. Cointegrated arm +0.339%/trade at ZERO cost, block-bootstrap CI [-0.164%, +0.791%] — contains zero before a cent of cost. Matched null kills it: random same-sector pairs +0.321%, least-cointegrated pairs +0.360%. Selection edge +0.017%/trade, i.e. nothing. P&L is generic sector mean reversion, is size-not-frequency (44.1% win rate, winners +4.24% vs losers -2.75%), and concentrates in 2020Q1/2022Q3/2023Q4. THE MECHANISM FINDING: correlation rank persists hard (Spearman rho +0.725, CI [0.706, 0.747], 26/26 blocks positive) while COINTEGRATION rank persists not at all (rho -0.004, CI [-0.014, +0.011]). So the persistent thing is shared market beta, which every pair already has and no spread position can monetize — the same reason the beta-regime variant failed at 64.1%. Caveat: DB has ~no delistings (delisted_at NULL fleet-wide, 18/746 inactive names stop printing), so pairs tail risk is understated, which only makes the verdict safer."},
 			},
 		},
 		{

@@ -65,6 +65,10 @@ const (
 	// engine: independent data the discovery never saw, but survivor-universe
 	// backtest, not a live forward record.
 	KindBacktest = "backtest"
+	// KindEconomic grades the hypothesis's TRADABLE FORM net of costs — the
+	// position that would have to make the money, not the statistic. See the
+	// tradability gate below for why this is a distinct kind.
+	KindEconomic = "economic"
 )
 
 // Status bands (derived, never stored as the source of truth).
@@ -81,6 +85,81 @@ const (
 	MinReplications = 2 // independent data-window grades (experiment+replications)
 	MinRegimes      = 2 // distinct volatility regimes covered by the evidence
 )
+
+// ── The tradability gate ─────────────────────────────────────────────────
+//
+// A hypothesis may not reach StatusSupported on a statistic alone, however well
+// estimated. It must first STATE the position that would have to earn the money
+// (TradableForm) and have that position graded net of costs (EconomicTest).
+//
+// This gate exists because the ledger produced two independent demonstrations of
+// the same failure, eight days apart, and neither was catchable by collecting
+// more data:
+//
+//   - H018 (63d SPY-correlation regime persists) sat at 73.1% with a tight
+//     out-of-sample interval for over a week. Its tradable form — cointegration
+//     pairs trading — turned out to be indistinguishable from picking pairs at
+//     random inside the same sector, because the quantity that persists is
+//     shared market beta and a dollar-neutral spread is built precisely to
+//     cancel it. The statistic was correct. It was also empty.
+//   - The 1-session news-sentiment IC reached an interval excluding zero even
+//     after a Bonferroni correction, while its cost-net aligned quintile book
+//     returned NEGATIVE. Detectable and unprofitable at once.
+//
+// In both cases the tradable form settled in one run what no amount of further
+// sampling would have settled, because the missing thing was never sample size.
+// A hypothesis without a stated position is not yet a claim about markets — it
+// is a claim about a number.
+//
+// EconomicTest holds a description or tag of the run that graded the position
+// (for H018: the 2026-07-25 pairs test). Whether that run PASSED is deliberately
+// not part of the gate — a failing economic test enters the chain as ordinary
+// evidence with BF < 1 and moves the posterior down on its own. Counting it
+// twice would double-punish it.
+
+// EconomicGrades counts evidence rows that graded a hypothesis's TRADABLE FORM
+// rather than its statistic. Cost-aware backtests of the actual position enter
+// the chain under this kind.
+func EconomicGrades(evidence []Evidence) int {
+	n := 0
+	for _, e := range evidence {
+		if e.Kind == KindEconomic {
+			n++
+		}
+	}
+	return n
+}
+
+// Gates bundles the hard supported-gates beyond the posterior. The zero value
+// is the honest default for a hypothesis nobody has tried to trade: no
+// replications, no regimes, no stated position.
+type Gates struct {
+	Replications int
+	Regimes      int
+	// TradableForm is the position that would have to make the money —
+	// "" means the hypothesis has never been stated as a trade.
+	TradableForm string
+	// EconomicTest names the run that graded that position net of costs;
+	// "" means the position was stated but never tested.
+	EconomicTest string
+}
+
+// UnmetGate returns the first supported-gate this hypothesis fails, in plain
+// words, or "" when every gate is met. The page shows this instead of leaving a
+// high posterior looking arbitrarily withheld.
+func (g Gates) UnmetGate() string {
+	switch {
+	case g.Replications < MinReplications:
+		return "needs independent replication on a fresh data window"
+	case g.Regimes < MinRegimes:
+		return "measured in only one volatility regime"
+	case g.TradableForm == "":
+		return "no tradable form stated — the position that would earn the money is unspecified"
+	case g.EconomicTest == "":
+		return "tradable form stated but never graded net of costs"
+	}
+	return ""
+}
 
 // Bayes-factor and posterior clamps (honesty caps — see package doc).
 const (
@@ -136,6 +215,12 @@ type Hypothesis struct {
 	// Spec is the machine-gradable rule JSON for engine-graded hypotheses;
 	// "" = prose-only.
 	Spec string `json:"spec,omitempty"`
+	// TradableForm is the position that would have to earn the money if this
+	// belief is true, and EconomicTest names the run that graded that position
+	// net of costs. Both are required before a hypothesis may reach
+	// StatusSupported — see the tradability gate.
+	TradableForm string `json:"tradableForm,omitempty"`
+	EconomicTest string `json:"economicTest,omitempty"`
 }
 
 // Evidence is one entry in a hypothesis's chain. For experiment/replication
@@ -333,8 +418,20 @@ func attackName(note string) string {
 	return note
 }
 
-// Status derives the band from the posterior plus the hard supported-gates.
+// Status derives the band from the posterior plus the independence gates.
+//
+// It cannot return StatusSupported, because it has no way to know whether the
+// hypothesis was ever stated as a position — see the tradability gate above.
+// Seeding paths (prior only, no evidence) use it; every promotion path must use
+// StatusWithGates, which is the only function that can promote.
 func Status(posterior float64, replications, regimes int) string {
+	return StatusWithGates(posterior, Gates{Replications: replications, Regimes: regimes})
+}
+
+// StatusWithGates derives the band from the posterior plus every hard
+// supported-gate: independent replication, regime coverage, a stated tradable
+// form, and an economic grade of that form.
+func StatusWithGates(posterior float64, g Gates) string {
 	if math.IsNaN(posterior) {
 		return StatusUncertain // a malformed posterior must never read as supported
 	}
@@ -348,8 +445,8 @@ func Status(posterior float64, replications, regimes int) string {
 	case posterior < 0.85:
 		return StatusTentative
 	}
-	if replications < MinReplications || regimes < MinRegimes {
-		return StatusTentative // strong number, unmet independence gates
+	if g.UnmetGate() != "" {
+		return StatusTentative // strong number, unmet gate
 	}
 	return StatusSupported
 }

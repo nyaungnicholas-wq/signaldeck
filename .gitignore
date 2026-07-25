@@ -6,3 +6,8 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Working files from one-off research runs. Anything worth keeping gets a
+# durable home beside the code that serves it (e.g. the pairs study result is
+# embedded at daemon/internal/pairsstudy/result.json).
+scratchpad/

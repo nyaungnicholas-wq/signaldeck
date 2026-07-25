@@ -28,6 +28,16 @@ type decayRow struct {
 // counts, the live-vs-backtest replication split, and a per-hypothesis decay
 // summary. ?id=H008 narrows the evidence — and therefore the decay rows — to
 // one hypothesis.
+// gateRow reports one hypothesis's tradability state: the position it implies,
+// the run that graded that position, and the first supported-gate it still
+// fails ("" when it fails none).
+type gateRow struct {
+	ID           string `json:"id"`
+	TradableForm string `json:"tradableForm"`
+	EconomicTest string `json:"economicTest"`
+	UnmetGate    string `json:"unmetGate"`
+}
+
 func (d Deps) researchLedger(w http.ResponseWriter, r *http.Request) {
 	hyps, err := d.St.LedgerHypotheses(r.Context())
 	if err != nil {
@@ -67,8 +77,23 @@ func (d Deps) researchLedger(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// The tradability gate, per hypothesis: a strong posterior held at
+	// "tentative" must say WHY, or it reads as arbitrary withholding.
+	gates := make([]gateRow, 0, len(hyps))
+	for _, h := range hyps {
+		g := rl.Gates{
+			Replications: h.Replications, Regimes: h.Regimes,
+			TradableForm: h.TradableForm, EconomicTest: h.EconomicTest,
+		}
+		gates = append(gates, gateRow{
+			ID: h.ID, TradableForm: h.TradableForm, EconomicTest: h.EconomicTest,
+			UnmetGate: g.UnmetGate(),
+		})
+	}
+
 	writeJSON(w, map[string]any{
 		"hypotheses":    hyps,
+		"gates":         gates,
 		"evidence":      evidence,
 		"weeks":         weeks,
 		"evidenceKinds": kinds,
@@ -82,5 +107,6 @@ func (d Deps) researchLedger(w http.ResponseWriter, r *http.Request) {
 			"attacks":  rl.AttackLethality(evidence),
 		},
 		"discipline": "priors fixed at creation; posterior = prior odds × ∏ Bayes factors (each clamped to [1/20,20] — no single experiment can reach certainty); replications grade only NEW disjoint data windows; failed self-attacks enter the same evidence chain; 'supported' additionally requires ≥2 replications and ≥2 volatility regimes; historical era grades are BACKTEST evidence on a survivor universe — penalized as such, never presented as live.",
+		"tradabilityGate": "A hypothesis may not reach 'supported' on a statistic alone. It must state the POSITION that would have to earn the money and have that position graded net of costs. H018 is why: it held a 73.1% point estimate with a tight out-of-sample interval for eight days, and its tradable form — a cointegration spread — turned out indistinguishable from picking pairs at random, because the quantity that persists is shared market beta and a dollar-neutral spread cancels exactly that. The 1-session news-sentiment IC repeated the lesson from the other side: an interval excluding zero even after Bonferroni, with a NEGATIVE cost-net book. In neither case was the missing ingredient sample size.",
 	})
 }

@@ -131,6 +131,12 @@ func migrate(w *sql.DB) error {
 		{"peak_ts", `ALTER TABLE research_ledger_hypotheses ADD COLUMN peak_ts INTEGER NOT NULL DEFAULT 0`},
 		{"last_grade_ts", `ALTER TABLE research_ledger_hypotheses ADD COLUMN last_grade_ts INTEGER NOT NULL DEFAULT 0`},
 		{"spec", `ALTER TABLE research_ledger_hypotheses ADD COLUMN spec TEXT NOT NULL DEFAULT ''`},
+		// Tradability gate: the position a belief implies, and the run that
+		// graded it net of costs. Empty on every pre-existing row, which is the
+		// truthful state — those hypotheses were never stated as trades — and
+		// which holds them at "tentative" until someone states one.
+		{"tradable_form", `ALTER TABLE research_ledger_hypotheses ADD COLUMN tradable_form TEXT NOT NULL DEFAULT ''`},
+		{"economic_test", `ALTER TABLE research_ledger_hypotheses ADD COLUMN economic_test TEXT NOT NULL DEFAULT ''`},
 	} {
 		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('research_ledger_hypotheses') WHERE name=?`, col.name).Scan(&n); err != nil {
 			return err
@@ -140,6 +146,37 @@ func migrate(w *sql.DB) error {
 				return err
 			}
 		}
+	}
+	// sentiment-correlation wave: the deterministic LEXICON score lives beside
+	// the LLM tagger's verdict rather than overwriting it. The two answer
+	// different questions — the LLM one is better per headline, the lexicon one
+	// is the only one that can score twelve years of archive reproducibly — and
+	// keeping both means the study can be re-run without a 2,000-call/day cap
+	// and the news feed keeps showing the richer read.
+	//
+	// lex_polar is the load-bearing column: 0 means the headline expressed NO
+	// opinion, which is not the same as an opinion of zero, and the feature
+	// builder drops those rows rather than averaging them in.
+	for _, col := range []struct{ name, ddl string }{
+		{"lex_score", `ALTER TABLE news ADD COLUMN lex_score REAL NOT NULL DEFAULT 0`},
+		{"lex_ver", `ALTER TABLE news ADD COLUMN lex_ver INTEGER NOT NULL DEFAULT 0`},
+		{"lex_polar", `ALTER TABLE news ADD COLUMN lex_polar INTEGER NOT NULL DEFAULT 0`},
+		{"lex_hedged", `ALTER TABLE news ADD COLUMN lex_hedged INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('news') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	// lex_ver=0 marks a headline the current lexicon has never scored, so the
+	// scorer's work queue is an index lookup rather than a full-table scan of a
+	// growing archive.
+	if _, err := w.Exec(`CREATE INDEX IF NOT EXISTS idx_news_lex_pending ON news (lex_ver)`); err != nil {
+		return err
 	}
 	return nil
 }

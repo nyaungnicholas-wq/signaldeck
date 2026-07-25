@@ -165,6 +165,80 @@ test.describe("offline banner", () => {
   });
 });
 
+// ── (7) COMPARE: symbols can be changed repeatedly, not just once ──
+
+// Regression for the 2026-07-25 bug: symbols could be changed at most once per
+// page load. navigate() went through router.replace() to the LEGACY /compare
+// path that next.config 307s here; the router resolved that redirect once and
+// dropped every later replace(). Underneath sat a second defect — on 16.2.10
+// router.replace/push with only the query changed is dropped outright once
+// this route has settled — so the page now writes the URL with the native
+// History API. Three consecutive changes is the assertion: one alone passed
+// even with the bug present.
+
+test.describe("compare page symbol changes", () => {
+  test("swap and submit keep working after the first change", async ({ page, context }) => {
+    // The daemon's password hashing makes /api/auth/login cost tens of seconds
+    // on this box; the default 30s test budget expires inside the login alone.
+    test.setTimeout(180000);
+    await loginAsSmokeUser(context);
+    // The first-run tour is a modal overlay that swallows clicks; a real
+    // returning user has this flag set.
+    await context.addInitScript(() => localStorage.setItem("sd-tour-done", "1"));
+
+    // Every refetch the page performs, recorded from the proxied daemon calls.
+    const reportCalls: string[] = [];
+    page.on("request", (req) => {
+      const u = new URL(req.url());
+      if (u.pathname === "/api/signal-report") reportCalls.push(u.searchParams.get("symbol") ?? "");
+    });
+
+    await page.goto("/watchlist/compare?a=NVDA&b=AMD");
+    // Scoped to the picker form so the page's other controls (peek buttons,
+    // command palette) can never satisfy these role queries.
+    const form = page.locator("main form");
+    const symA = form.getByLabel("symbol A");
+    const symB = form.getByLabel("symbol B");
+    const submit = form.getByRole("button", { name: "compare" });
+    const swap = form.getByRole("button", { name: "swap" });
+    // AuthGate resolves the session before the page paints — allow for it.
+    await expect(symA).toHaveValue("NVDA", { timeout: 30000 });
+    await expect(symB).toHaveValue("AMD");
+
+    // Drive the form only once the first pair has actually rendered. Typing
+    // into the page mid-load races its own hydration and first fetch, which
+    // makes this spec flaky for reasons that have nothing to do with the bug.
+    // exact:true matters — the default substring match is case-insensitive and
+    // would match "aligned trade context" in the purpose banner, which paints
+    // immediately and so gates nothing.
+    await expect(page.getByText("TRADE CONTEXT", { exact: true })).toBeVisible({ timeout: 60000 });
+
+    // change 1 — submit a new A
+    await symA.fill("MSFT");
+    await submit.click();
+    await expect(page).toHaveURL(/\/watchlist\/compare\?a=MSFT&b=AMD$/);
+    await expect(symA).toHaveValue("MSFT");
+
+    // change 2 — swap (the one that used to die)
+    await swap.click();
+    await expect(page).toHaveURL(/\/watchlist\/compare\?a=AMD&b=MSFT$/);
+    await expect(symA).toHaveValue("AMD");
+    await expect(symB).toHaveValue("MSFT");
+
+    // change 3 — submit again, proving it is not a one-per-load allowance
+    await symA.fill("TSLA");
+    await submit.click();
+    await expect(page).toHaveURL(/\/watchlist\/compare\?a=TSLA&b=MSFT$/);
+    await expect(symA).toHaveValue("TSLA");
+
+    // The URL changing is only half the fix: the data must actually refetch.
+    await expect
+      .poll(() => reportCalls.filter((s) => s === "TSLA").length, { timeout: 15000 })
+      .toBeGreaterThan(0);
+    expect(reportCalls).toContain("MSFT");
+  });
+});
+
 // ── (6) mobile 375px: no horizontal scroll on /login and / ──
 
 test.describe("mobile 375px viewport", () => {
@@ -188,5 +262,46 @@ test.describe("mobile 375px viewport", () => {
     // settles — a short fixed pause lets the first data paint land instead.
     await page.waitForTimeout(2000);
     await noHorizontalScroll(page);
+  });
+});
+
+// ── (8) LAB research surfaces render their measured numbers ──
+
+// The three studies wired into the Lab hub on 2026-07-25 (options vol edge,
+// sentiment correlation, pairs / H018). Each is a client component that paints
+// a skeleton until its daemon fetch lands, so a 200 on the document proves
+// nothing — these assert content that only exists AFTER the payload arrives,
+// and specifically the honesty-bearing content: the pairs verdict, the
+// sentiment page's partial-vs-raw framing, and the options page's own panels.
+test.describe("lab research surfaces", () => {
+  test("options, sentiment and pairs each paint real content", async ({ page, context }) => {
+    // Login alone costs tens of seconds on this box (deliberate password
+    // hashing cost), and this test then loads three data-backed pages.
+    test.setTimeout(240000);
+    await loginAsSmokeUser(context);
+    await context.addInitScript(() => localStorage.setItem("sd-tour-done", "1"));
+
+    await page.goto("/lab/pairs");
+    await expect(page.getByRole("heading", { name: "PAIRS", exact: true })).toBeVisible({
+      timeout: 30000,
+    });
+    // The verdict badge and the mechanism contrast are the page's reason to
+    // exist; if the fetch failed, ErrorState renders instead and both vanish.
+    await expect(page.getByText("DO NOT SHIP", { exact: true })).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("cointegration rank persists")).toBeVisible();
+    await expect(page.getByRole("cell", { name: "random same-sector" })).toBeVisible();
+    // The tab is reachable from the hub, not just by URL.
+    await expect(page.getByRole("link", { name: "PAIRS", exact: true })).toBeVisible();
+
+    await page.goto("/lab/sentiment");
+    await expect(page.getByRole("heading", { name: "SENTIMENT", exact: true })).toBeVisible({
+      timeout: 30000,
+    });
+    await expect(page.getByText("DATA COVERAGE")).toBeVisible({ timeout: 30000 });
+
+    await page.goto("/lab/options");
+    await expect(page.getByRole("heading", { name: "OPTIONS", exact: true })).toBeVisible({
+      timeout: 30000,
+    });
   });
 });

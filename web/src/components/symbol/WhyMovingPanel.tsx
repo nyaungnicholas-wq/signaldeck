@@ -8,11 +8,13 @@
 //                      accuracy of THIS conviction band, and the engine's
 //                      explicit refusal to offer a BUY/SELL (whyNotDirection).
 //   /api/attribution — a state-conditioned historical prior blended with this
-//                      symbol's live resolved outcomes. MEASURED at ~63s per
-//                      call against the live daemon (it walks the whole
-//                      resolved-outcome ledger), so it is loaded ON DEMAND
-//                      behind a button that says so — never on mount, because
-//                      one minute of spinner is not an explanation.
+//                      symbol's live resolved outcomes. It USED to cost ~29s
+//                      per call (it walked the whole resolved-outcome ledger)
+//                      and so hid behind an opt-in button; the daemon now caches
+//                      that ledger walk fleet-wide per horizon and pre-warms it,
+//                      so it loads on mount alongside /api/explain — which is
+//                      the honest pairing, since neither half of the evidence
+//                      means much without the other.
 //
 // HONESTY: `caveat`, `whyNotDirection`, `analog.note` and the attribution
 // `explanation` are rendered VERBATIM. Absence is a real answer here — an
@@ -84,51 +86,47 @@ export default function WhyMovingPanel({
   const [errState, setErrState] = useState<{ key: string; msg: string } | null>(null);
   const err = errState && errState.key === key ? errState.msg : null;
 
+  // Blended attribution rides the SAME load as explain: allSettled, not all —
+  // one half failing must never blank the other, and the two are separately
+  // keyed so a symbol switch invalidates a stale report by construction rather
+  // than mislabeling it with the new symbol's name.
+  const [attrState, setAttrState] =
+    useState<{ key: string; a: AttributionResponse } | null>(null);
+  const [attrErrState, setAttrErrState] = useState<{ key: string; msg: string } | null>(null);
+  const attr = attrState && attrState.key === key ? attrState.a : null;
+  const attrErr = attrErrState && attrErrState.key === key ? attrErrState.msg : null;
+
   useEffect(() => {
     let alive = true;
     const k = `${symbol}|${market}`;
+    const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
     // POLL_SLOW: the trend audit moves on daily bars.
-    const load = () =>
-      explain(symbol, market)
-        .then((e) => {
-          if (!alive) return;
-          setState({ key: k, e });
-          setErrState(null);
-        })
-        .catch((e: unknown) => {
-          if (!alive) return;
-          setErrState({ key: k, msg: e instanceof Error ? e.message : String(e) });
-        });
-    load();
-    const stop = pollMs(load, POLL_SLOW);
+    const load = async () => {
+      const [ex, at] = await Promise.allSettled([
+        explain(symbol, market),
+        attributionFor(symbol, market, "1d"),
+      ]);
+      if (!alive) return;
+      if (ex.status === "fulfilled") {
+        setState({ key: k, e: ex.value });
+        setErrState(null);
+      } else {
+        setErrState({ key: k, msg: msg(ex.reason) });
+      }
+      if (at.status === "fulfilled") {
+        setAttrState({ key: k, a: at.value });
+        setAttrErrState(null);
+      } else {
+        setAttrErrState({ key: k, msg: msg(at.reason) });
+      }
+    };
+    void load();
+    const stop = pollMs(() => void load(), POLL_SLOW);
     return () => {
       alive = false;
       stop();
     };
   }, [symbol, market]);
-
-  // ── on-demand blended attribution (see the header note on its cost) ──
-  // Also keyed: a symbol switch invalidates a loaded report by construction
-  // rather than mislabeling it with the new symbol's name.
-  const [attrState, setAttrState] =
-    useState<{ key: string; a: AttributionResponse } | null>(null);
-  const [attrErrState, setAttrErrState] = useState<{ key: string; msg: string } | null>(null);
-  const [attrLoadingKey, setAttrLoadingKey] = useState<string | null>(null);
-  const attr = attrState && attrState.key === key ? attrState.a : null;
-  const attrErr = attrErrState && attrErrState.key === key ? attrErrState.msg : null;
-  const attrLoading = attrLoadingKey === key;
-
-  const loadAttribution = () => {
-    const k = key;
-    setAttrLoadingKey(k);
-    setAttrErrState(null);
-    attributionFor(symbol, market, "1d")
-      .then((a) => setAttrState({ key: k, a }))
-      .catch((e: unknown) =>
-        setAttrErrState({ key: k, msg: e instanceof Error ? e.message : String(e) }),
-      )
-      .finally(() => setAttrLoadingKey((cur) => (cur === k ? null : cur)));
-  };
 
   const ex = state && state.key === key ? state.e : null;
   const analog = ex?.analog;
@@ -297,27 +295,19 @@ export default function WhyMovingPanel({
             </div>
           )}
 
-          {/* ── BLENDED ATTRIBUTION (on demand — it is genuinely slow) ── */}
+          {/* ── BLENDED ATTRIBUTION (loaded with explain — see header note) ── */}
           <div className="border-t px-4 py-3" style={{ borderColor: "var(--border)" }}>
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[0.75rem] font-bold tracking-[0.14em]" style={{ color: "var(--dim)" }}>
                 BLENDED EVIDENCE (HISTORICAL PRIOR ⊕ LIVE OUTCOMES)
               </span>
-              {attr === null && (
-                <button
-                  type="button"
-                  onClick={loadAttribution}
-                  disabled={attrLoading}
-                  className="chip min-h-[36px] cursor-pointer px-3 text-[0.75rem] transition-colors duration-150 hover:bg-[var(--panel3)]"
-                  style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
-                >
-                  {attrLoading ? "scanning the ledger…" : "load (≈1 min scan) →"}
-                </button>
-              )}
-              <HelpTip label="why this one is a button">
-                It walks the entire resolved-outcome ledger for this symbol and
-                measured ~63 seconds against the live daemon. Loading it on page
-                open would hold the whole page hostage, so it is opt-in.
+              <HelpTip label="what is being blended">
+                Two sources kept strictly separate: a state-conditioned
+                HISTORICAL prior over ~2y of this symbol&rsquo;s bars, and the
+                deployed engine&rsquo;s LIVE resolved outcomes for this symbol,
+                deduped to one independent observation per day. They are weighted
+                by sample size, so a thin live record is reported as
+                underpowered — not as a measured absence of edge.
               </HelpTip>
             </div>
 
@@ -326,10 +316,10 @@ export default function WhyMovingPanel({
                 no blended attribution available — {attrErr}
               </p>
             )}
-            {attrLoading && attr === null && attrErr === null && (
+            {attr === null && attrErr === null && (
               <p className="mt-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 blending the state-conditioned prior with this symbol&rsquo;s live
-                resolved outcomes… this takes about a minute.
+                resolved outcomes…
               </p>
             )}
 

@@ -339,7 +339,7 @@ export default function WelcomePage() {
               <p className="m-0 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
                 Every fired alert lands in your dashboard sidebar and on{" "}
                 <Link
-                  href="/signals/alerts"
+                  href="/market/activity"
                   className="cursor-pointer font-bold underline transition-colors duration-150 hover:text-[var(--accent)]"
                   style={{ color: "var(--accent)" }}
                 >

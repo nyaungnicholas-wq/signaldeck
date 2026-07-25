@@ -420,6 +420,12 @@ export interface RebalanceResult {
 export const api = {
   health: () => get<{ version: string; uptimeS: number; alpaca: boolean }>("/api/health"),
 
+  // ── sentiment-correlation wave: the first non-price signal test ──
+  sentimentCorrelation: (p?: { symbol?: string; market?: Market }) => sentimentCorrelation(p),
+
+  // ── pairs wave: a published DO-NOT-SHIP result (H018 / CORR63) ──
+  pairsStudy: () => pairsStudy(),
+
   // ── capstones wave ──
   debate: (symbol: string) => post<DebateResult>("/api/ai/debate", { symbol }),
   scenario: (symbol: string, factor: string, shock: number) =>
@@ -3039,6 +3045,19 @@ export interface LedgerHypothesis {
   peakTs: number;
   lastGradeTs: number;
   spec?: string; // rule JSON for machine-graded hypotheses; absent = prose-only
+  // The tradability gate: the position this belief implies, and the run that
+  // graded that position net of costs. Absent = never stated / never tested,
+  // which is what holds a strong posterior at "tentative".
+  tradableForm?: string;
+  economicTest?: string;
+}
+
+/** One hypothesis's tradability state, including the first gate it still fails. */
+export interface LedgerGate {
+  id: string;
+  tradableForm: string;
+  economicTest: string;
+  unmetGate: string; // "" when every supported-gate is met
 }
 
 /** One evidence row in a hypothesis's chain (rl.Evidence). */
@@ -3098,7 +3117,9 @@ export interface ResearchLedger {
   evidenceKinds: Record<string, number>;
   liveVsBacktest: { live: number; backtest: number };
   decay: LedgerDecay[];
+  gates: LedgerGate[];
   discipline: string; // render verbatim
+  tradabilityGate: string; // render verbatim
 }
 
 export interface ResearchGraphNode {
@@ -3169,6 +3190,10 @@ export async function researchLedger(): Promise<ResearchLedger> {
     },
     weeks: normWeeksStats(raw.weeks),
     evidenceKinds: (raw.evidenceKinds ?? {}) as Record<string, number>,
+    // [] on a daemon predating the tradability wave — the page treats a missing
+    // gate as "unknown", never as "gate met".
+    gates: (raw.gates ?? []) as LedgerGate[],
+    tradabilityGate: String(raw.tradabilityGate ?? ""),
     liveVsBacktest: {
       live: numOr0(raw.liveVsBacktest?.live),
       backtest: numOr0(raw.liveVsBacktest?.backtest),
@@ -3783,4 +3808,384 @@ export async function wikiAttention(
     zNote: String(raw.zNote ?? ""),
     emptyNote: raw.emptyNote != null ? String(raw.emptyNote) : undefined,
   };
+}
+
+/* ── OPTIONS wave (GET /api/options/price, GET /api/options/vol-edge) ──
+   The pricing route is a pure calculator; the vol-edge route turns the
+   platform's ONE validated forecast (the volatility regime) into a volatility
+   LEVEL and compares it to a market implied vol THE USER SUPPLIES — SignalDeck
+   has no options feed and never invents an implied vol. */
+
+export interface OptionInputs {
+  spot: number;
+  strike: number;
+  t: number; // years
+  rate: number;
+  divYield: number;
+  vol: number;
+}
+
+export interface OptionPriced {
+  price: number;
+  delta: number;
+  gamma: number;
+  vega: number; // per ONE vol point
+  theta: number; // per calendar day
+  rho: number; // per ONE percentage point of rate
+  d1: number;
+  d2: number;
+  probITM: number; // RISK-NEUTRAL, not a forecast
+}
+
+export interface OptionStraddle {
+  call: OptionPriced;
+  put: OptionPriced;
+  price: number;
+  breakevenMovePct: number;
+  upperBreakeven: number;
+  lowerBreakeven: number;
+  vega: number;
+  theta: number;
+  netDelta: number;
+}
+
+export interface OptionPriceResult {
+  inputs: OptionInputs;
+  type: "call" | "put" | "straddle";
+  assumptions: string;
+  priced?: OptionPriced;
+  straddle?: OptionStraddle;
+  probITMNote?: string;
+  /** Present only when a market quote was supplied AND a vol is recoverable. */
+  impliedVol?: number;
+  /** Verbatim refusal when no implied vol is identifiable from the quote. */
+  impliedVolNote?: string;
+}
+
+export async function optionPrice(p: {
+  spot: number;
+  strike: number;
+  days: number;
+  vol: number;
+  rate: number;
+  divYield?: number;
+  type: "call" | "put" | "straddle";
+  price?: number;
+}): Promise<OptionPriceResult> {
+  const qs = new URLSearchParams({
+    spot: String(p.spot),
+    strike: String(p.strike),
+    days: String(p.days),
+    vol: String(p.vol),
+    rate: String(p.rate),
+    divYield: String(p.divYield ?? 0),
+    type: p.type,
+  });
+  if (p.price != null && p.price > 0) qs.set("price", String(p.price));
+  return get<OptionPriceResult>(`/api/options/price?${qs.toString()}`);
+}
+
+/** What forward vol ACTUALLY did on this symbol after each regime label. */
+export interface OptionVolStats {
+  horizon: number;
+  n: number;
+  accuracy: number;
+  elevatedVol: number;
+  calmVol: number;
+  elevatedN: number;
+  calmN: number;
+  unconditional: number;
+  median: number;
+  p10: number;
+  p90: number;
+  realized21: number;
+  realized63: number;
+}
+
+export interface OptionExpectation {
+  regime: string;
+  conviction: number;
+  tier: string;
+  accuracy: number;
+  ifRight: number;
+  ifWrong: number;
+  expected: number;
+  realized63: number;
+  /** Expected vol / current trailing vol — how far the historical levels sit
+   *  from today. Above ~1.5x or below ~0.67x the payload also sets a warning. */
+  levelDrift: number;
+  driftWarning?: string;
+  basis: string;
+}
+
+export interface OptionEdge {
+  marketIV: number;
+  expectedVol: number;
+  vrp: number;
+  fairIV: number;
+  edgeVol: number;
+  verdict: "iv-rich" | "iv-cheap" | "in-line";
+  expression: string;
+  fairIVIfRight: number;
+  fairIVIfWrong: number;
+  robust: boolean;
+  robustNote: string;
+  breakevenVRP: number;
+  caveat: string;
+}
+
+export interface OptionTrade {
+  marketStraddle: OptionStraddle;
+  modelStraddle: OptionStraddle;
+  edgePerContract: number;
+  marketBreakevenPct: number;
+  forecastMovePct: number;
+  caveat: string;
+}
+
+export interface VolEdgeResult {
+  symbol: string;
+  market: string;
+  spot: number;
+  asOf: number;
+  what: string;
+  whyNoChain: string;
+  /** Present unless a gate withheld it. */
+  forecast?: {
+    regime: string;
+    conviction: number;
+    historicalAccuracy: number;
+    tier: string;
+    rank: number;
+    n: number;
+  };
+  volStats?: OptionVolStats;
+  expectation?: OptionExpectation;
+  edge?: OptionEdge;
+  trade?: OptionTrade;
+  pricingInputs?: OptionInputs;
+  rateSource?: string;
+  horizonMismatch?: string;
+  vrpNote?: string;
+  /** Why a forecast or verdict was withheld — always rendered when present. */
+  gate?: string;
+  next?: string;
+}
+
+export async function optionVolEdge(p: {
+  symbol: string;
+  market: Market;
+  iv?: number;
+  days?: number;
+  vrp?: number;
+}): Promise<VolEdgeResult> {
+  const qs = new URLSearchParams({ symbol: p.symbol, market: p.market });
+  if (p.iv != null && p.iv > 0) qs.set("iv", String(p.iv));
+  if (p.days != null) qs.set("days", String(p.days));
+  if (p.vrp != null) qs.set("vrp", String(p.vrp));
+  return get<VolEdgeResult>(`/api/options/vol-edge?${qs.toString()}`);
+}
+
+// ── sentiment-correlation wave ───────────────────────────────────────────
+// The platform's first NON-price signal test. Nullable metrics are nullable on
+// purpose: the daemon withholds a number it cannot support rather than sending a
+// zero, and the page must render "withheld" for null instead of "0.0000".
+
+export interface SentQuintile {
+  quintile: number;
+  n: number;
+  meanSent: number;
+  meanFwd: number;
+}
+
+export interface SentCorrResult {
+  horizon: number;
+  rawObs: number;
+  obs: number;
+  symbols: number;
+  months: number;
+  firstDay: string;
+  lastDay: string;
+  overlappingDropped: number;
+  gated: boolean;
+  gateReason?: string;
+  rawIC: number | null;
+  rawSpearman: number | null;
+  /** The headline metric: sentiment vs forward return, price controlled for. */
+  partialIC: number | null;
+  /** Family-adjusted interval — the one a decision should use. */
+  partialICLo: number | null;
+  partialICHi: number | null;
+  partialIC95Lo: number | null;
+  partialIC95Hi: number | null;
+  ciLevel: string;
+  familySize: number;
+  priceExplainedShare: number | null;
+  hitRate: number | null;
+  baseRate: number | null;
+  edgeVsConstant: number | null;
+  quintiles: SentQuintile[];
+  spreadGross: number | null;
+  spreadNet: number | null;
+  spreadAlignedNet: number | null;
+  alignedSide?: string;
+  monotonic: boolean | null;
+  verdict: string;
+}
+
+export interface SentCorrStudy {
+  feature: string;
+  ranAt: number;
+  result: SentCorrResult;
+}
+
+export interface SentCorrCoverage {
+  rows: number;
+  symbols: number;
+  days: number;
+  firstDay: string;
+  lastDay: string;
+  polarRows: number;
+  headlinesScored: number;
+  newsRowsTotal: number;
+  newsRowsPolar: number;
+  newsFirstDay: string;
+  newsLastDay: string;
+  lexiconVersion: number;
+}
+
+export interface SentimentFeatureRow {
+  day: string;
+  nPolar: number;
+  nAll: number;
+  meanScore: number;
+  pos: number;
+  neg: number;
+  hedged: number;
+  ver: number;
+}
+
+/** How much of the stored archive the study can actually see. */
+export interface SentCorrAlignment {
+  archiveFirstDay: string;
+  alignedFirstDay: string;
+  archiveOldestScoredDay?: string;
+  /** "" until the backwards feature backfill has run a pass. */
+  backfillReachedDay?: string;
+  caughtUp?: boolean;
+  note: string;
+}
+
+export interface SentCorrPayload {
+  studies: SentCorrStudy[];
+  alignment?: SentCorrAlignment;
+  horizons: number[];
+  coverage: SentCorrCoverage;
+  symbol: string;
+  symbolFeatures: SentimentFeatureRow[];
+  lexiconVersion: number;
+  headlineMetric: string;
+  methodology: string;
+  whyPartialNotRaw: string;
+  whyClusteredCI: string;
+  scoring: string;
+  gates: string;
+  caveat: string;
+  expectation: string;
+}
+
+export async function sentimentCorrelation(p?: {
+  symbol?: string;
+  market?: Market;
+}): Promise<SentCorrPayload> {
+  const qs = new URLSearchParams();
+  if (p?.symbol) qs.set("symbol", p.symbol);
+  if (p?.market) qs.set("market", p.market);
+  const q = qs.toString();
+  return get<SentCorrPayload>(`/api/sentiment-correlation${q ? `?${q}` : ""}`);
+}
+
+// ── pairs wave: the study that resolved ledger hypothesis H018 DO-NOT-SHIP ──
+// Frozen offline backtest, not a worker — see /api/pairs-study.
+
+export interface PairsPersistence {
+  corrRho: number;
+  corrRhoLo: number | null;
+  corrRhoHi: number | null;
+  cointRho: number;
+  blocks: number;
+  aboveMedian: number;
+  aboveMedianLo: number;
+  aboveMedianHi: number;
+  topTercile: number;
+  topDecile: number;
+  pairsEvaluated: number;
+}
+
+export interface PairsArm {
+  arm: string;
+  trades: number;
+  meanRet: number;
+  meanLo: number;
+  meanHi: number;
+  medianRet: number;
+  winRate: number;
+  winLo: number;
+  winHi: number;
+  sharpe: number;
+  totalRet: number;
+  avgBars: number;
+  exits: { revert: number; stop: number; windowEnd: number; delisted: number };
+  excludesZero: boolean;
+}
+
+export interface PairsCostLevel {
+  costBps: number;
+  coint: PairsArm;
+  random: PairsArm;
+  worst: PairsArm;
+  selectionEdge: number;
+}
+
+export interface PairsStudy {
+  hypothesis: string;
+  verdict: string;
+  ranOn: string;
+  persistence: PairsPersistence;
+  costs: PairsCostLevel[];
+  method: {
+    window: string;
+    universe: string;
+    frozenParams: string;
+    criticalValues: string;
+    matchedNulls: string;
+    blockBootstrap: string;
+    costSweepReason: string;
+  };
+  limitations: string[];
+  mechanism: string;
+  why: string;
+  lessons: string[];
+  rules: {
+    entry: string;
+    exit: string;
+    stop: string;
+    forceClose: string;
+    pairsPerFold: number;
+  };
+}
+
+export interface PairsStudyPayload {
+  study: PairsStudy;
+  frozen: boolean;
+  whyFrozen: string;
+  headlineMetric: string;
+  readThisFirst: string;
+  reproduce: string;
+  writeup: string;
+  ledgerTag: string;
+}
+
+export async function pairsStudy(): Promise<PairsStudyPayload> {
+  return get<PairsStudyPayload>("/api/pairs-study");
 }

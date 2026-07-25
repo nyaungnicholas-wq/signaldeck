@@ -152,7 +152,7 @@ function PinnedBriefing({ it }: { it: DashFeedItem }) {
         </p>
       )}
       <Link
-        href="/signals/insights"
+        href="/lab/insights"
         className="mt-2 inline-flex min-h-[40px] cursor-pointer items-center text-[0.75rem] tracking-wider text-[var(--faint)] transition-colors duration-150 hover:text-[var(--accent)]"
       >
         Investigate all insights →

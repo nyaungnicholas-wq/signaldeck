@@ -57,7 +57,7 @@ export default function MoversMini({ movers }: { movers: DashboardResponse["move
           </div>
           <div className="border-t px-3 py-1.5" style={{ borderColor: "var(--border)" }}>
             <Link
-              href="/markets/screener"
+              href="/market/overview"
               className="inline-flex min-h-[36px] cursor-pointer items-center text-[0.75rem] tracking-wider text-[var(--faint)] transition-colors duration-150 hover:text-[var(--accent)]"
             >
               Compare the whole universe →

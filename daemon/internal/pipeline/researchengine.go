@@ -643,7 +643,12 @@ func (w *ResearchEngineWorker) recomputeAndDecay(ctx context.Context, hyp rl.Hyp
 	}
 	post := rl.Posterior(hyp.Prior, rl.EffectiveChain(chain))
 	reps, contras := rl.Counters(chain)
-	status := rl.Status(post, reps, regimes)
+	// StatusWithGates, not Status: promotion also requires the hypothesis to
+	// have been stated as a position and that position graded net of costs.
+	status := rl.StatusWithGates(post, rl.Gates{
+		Replications: reps, Regimes: regimes,
+		TradableForm: hyp.TradableForm, EconomicTest: hyp.EconomicTest,
+	})
 	if err := w.St.UpdateLedgerDerived(ctx, hyp.ID, post, status, reps, contras, regimes, now); err != nil {
 		return err
 	}

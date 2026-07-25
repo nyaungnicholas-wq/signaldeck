@@ -37,7 +37,7 @@ func (d Deps) secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Host allowlist — the request's Host must be one we serve.
 		if !hostAllowed(r.Host, allowedHosts) {
-			http.Error(w, "forbidden host", http.StatusForbidden)
+			httpErr(w, http.StatusForbidden, "forbidden host: "+r.Host+" is not in the daemon's allowed-hosts list")
 			return
 		}
 
@@ -58,7 +58,7 @@ func (d Deps) secure(next http.Handler) http.Handler {
 			if originOK {
 				w.WriteHeader(http.StatusNoContent)
 			} else {
-				http.Error(w, "origin not allowed", http.StatusForbidden)
+				httpErr(w, http.StatusForbidden, "origin not allowed: "+origin+" is not in the daemon's web-origins list")
 			}
 			return
 		}
@@ -73,7 +73,7 @@ func (d Deps) secure(next http.Handler) http.Handler {
 			strings.HasPrefix(r.URL.Path, "/api/ai/")
 		if !limiter.allow(d.clientKey(r, uid), writeTier) {
 			w.Header().Set("Retry-After", "1")
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			httpErr(w, http.StatusTooManyRequests, "rate limit exceeded — retry in a second")
 			return
 		}
 
@@ -84,11 +84,13 @@ func (d Deps) secure(next http.Handler) http.Handler {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
 			r.URL.Path != "/api/tv-webhook" {
 			if r.Header.Get(csrfHeader) == "" {
-				http.Error(w, "missing "+csrfHeader+" header", http.StatusForbidden)
+				httpErr(w, http.StatusForbidden, "missing "+csrfHeader+" header — every non-GET "+
+					"request must carry it; this is the CSRF guard, not a credential problem")
 				return
 			}
 			if origin != "" && !originAllowed(origin, allowedOrigins) {
-				http.Error(w, "origin not allowed", http.StatusForbidden)
+				httpErr(w, http.StatusForbidden, "origin not allowed: "+origin+
+					" is not in the daemon's web-origins list")
 				return
 			}
 		}

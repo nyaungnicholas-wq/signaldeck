@@ -42,6 +42,52 @@ type StructuralRecordRow struct {
 	DistinctDays    int     `json:"distinctDays"`
 }
 
+// StructuralPendingRow is one kind's UNRESOLVED forecast backlog: how many
+// calls are outstanding and when the earliest of them comes due.
+//
+// It exists so "not graded yet" can say WHICH kind of not-yet it is. A
+// predictor with 4,000 outstanding calls whose first horizon elapses in a
+// fortnight is in a completely different state from one that has never emitted,
+// and reporting both as "the health worker runs hourly" blames a scheduler for
+// the passage of time.
+type StructuralPendingRow struct {
+	Kind string `json:"kind"`
+	// Pending counts unresolved calls; FirstDueTs is when the earliest of them
+	// completes its horizon (0 when there are none).
+	Pending   int   `json:"pending"`
+	FirstDue  int64 `json:"firstDueTs"`
+	FirstCall int64 `json:"firstCallTs"`
+}
+
+// StructuralPending reports the unresolved forecast backlog per kind.
+func (s *Store) StructuralPending(ctx context.Context) ([]StructuralPendingRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT kind, COUNT(*), MIN(ts + horizon_days * 86400), MIN(ts)
+		FROM regime_outcomes
+		WHERE resolved_at IS NULL
+		GROUP BY kind ORDER BY kind`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []StructuralPendingRow
+	for rows.Next() {
+		var r StructuralPendingRow
+		var due, first *int64
+		if err := rows.Scan(&r.Kind, &r.Pending, &due, &first); err != nil {
+			return nil, err
+		}
+		if due != nil {
+			r.FirstDue = *due
+		}
+		if first != nil {
+			r.FirstCall = *first
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // StructuralRecords grades every resolved structural forecast by kind.
 // `minConviction` restricts to a conviction band; 0 includes everything.
 func (s *Store) StructuralRecords(ctx context.Context, minConviction float64) ([]StructuralRecordRow, error) {

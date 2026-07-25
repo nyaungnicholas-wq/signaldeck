@@ -9,7 +9,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { signalReport, type Market, type SignalReport } from "@/lib/api";
 import { ago, fmtPrice } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
@@ -197,7 +197,6 @@ function PredictionCell({ report }: { report: SignalReport }) {
 
 function CompareInner() {
   const sp = useSearchParams();
-  const router = useRouter();
 
   const a: Side = { symbol: (sp.get("a") ?? "NVDA").toUpperCase(), market: parseMarket(sp.get("am")) };
   const b: Side = { symbol: (sp.get("b") ?? "AMD").toUpperCase(), market: parseMarket(sp.get("bm")) };
@@ -215,11 +214,18 @@ function CompareInner() {
   const [tick, setTick] = useState(0);
   const retry = () => setTick((t) => t + 1);
 
+  // Write the CANONICAL path (never the legacy /compare that next.config 307s
+  // here) through the native History API rather than router.replace().
+  // Measured on 16.2.10: router.replace/push to this route with only the query
+  // changed is silently dropped once the route has settled — the swap button
+  // and the compare submit did nothing at all — while replaceState lands every
+  // time. It is the documented way to update search params and keeps
+  // useSearchParams in sync, which is what re-runs the fetches below.
   const navigate = (na: Side, nb: Side) => {
     const q = new URLSearchParams({ a: na.symbol, b: nb.symbol });
     if (na.market !== "stocks") q.set("am", na.market);
     if (nb.market !== "stocks") q.set("bm", nb.market);
-    router.replace(`/compare?${q.toString()}`);
+    window.history.replaceState(null, "", `/watchlist/compare?${q.toString()}`);
   };
 
   // Both syncs happen during render (the prev-key pattern, cf. viz/BigCandle)

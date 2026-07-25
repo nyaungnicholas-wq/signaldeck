@@ -180,7 +180,7 @@ export default function DeckPage() {
             detail="Nothing is faked in the meantime — add symbols from the screener and each one becomes a card here."
           />
           <Link
-            href="/markets/screener"
+            href="/market/overview"
             className="chip inline-flex min-h-[40px] cursor-pointer items-center px-4 text-[0.75rem] tracking-wider transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)]"
           >
             Open the screener →

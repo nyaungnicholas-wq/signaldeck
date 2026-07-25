@@ -21,6 +21,7 @@ import {
   researchGraph,
   researchLedger,
   type LedgerEvidence,
+  type LedgerGate,
   type LedgerHypothesis,
   type ResearchGraph,
   type ResearchLedger,
@@ -180,6 +181,8 @@ export default function ResearchPage() {
     evByHyp.set(e.hypId, arr);
   }
   const decayById = new Map(ledger.decay.map((d) => [d.id, d]));
+  // gates may be absent on a daemon older than the tradability wave.
+  const gateById = new Map((ledger.gates ?? []).map((g) => [g.id, g]));
   const weeks = ledger.weeks;
 
   return (
@@ -274,6 +277,7 @@ export default function ResearchPage() {
                     h={h}
                     chain={evByHyp.get(h.id) ?? []}
                     decay={decayById.get(h.id)}
+                    gate={gateById.get(h.id)}
                     open={!!open[h.id]}
                     onToggle={() => setOpen((o) => ({ ...o, [h.id]: !o[h.id] }))}
                   />
@@ -350,12 +354,14 @@ function HypRow({
   h,
   chain,
   decay,
+  gate,
   open,
   onToggle,
 }: {
   h: LedgerHypothesis;
   chain: LedgerEvidence[];
   decay?: { peak: number; edgeWeakening: boolean; stale: boolean };
+  gate?: LedgerGate;
   open: boolean;
   onToggle: () => void;
 }) {
@@ -405,12 +411,35 @@ function HypRow({
           )}{" "}
           {decay?.stale && (
             <Chip text="stale" color="var(--faint)" title="no new grade in 60+ days" />
+          )}{" "}
+          {/* A high posterior held at "tentative" has to say why, or the band
+              reads as arbitrary. The tradability gate is the usual reason. */}
+          {h.posterior >= 0.85 && gate?.unmetGate && (
+            <Chip
+              text={gate.unmetGate.startsWith("no tradable form") ? "no position stated" : "gate unmet"}
+              color="var(--ask)"
+              title={gate.unmetGate}
+            />
           )}
         </td>
       </tr>
       {open && (
         <tr>
           <td colSpan={7} style={{ padding: "0 8px 10px 24px" }}>
+            {gate && (
+              <p style={{ fontSize: 12, color: "var(--dim)", margin: "6px 0" }}>
+                <b>tradable form:</b>{" "}
+                {gate.tradableForm || "not stated — this belief has never been written as a position"}
+                {gate.economicTest ? (
+                  <>
+                    {" · "}
+                    <b>graded:</b> {gate.economicTest}
+                  </>
+                ) : (
+                  " · never graded net of costs"
+                )}
+              </p>
+            )}
             {(h.openQuestions ?? []).length > 0 && (
               <p style={{ fontSize: 12, color: "var(--dim)", margin: "6px 0" }}>
                 open questions: {(h.openQuestions ?? []).join(" · ")}

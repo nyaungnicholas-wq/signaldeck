@@ -1277,6 +1277,8 @@ CREATE TABLE IF NOT EXISTS research_ledger_hypotheses (
   contradictions INTEGER NOT NULL DEFAULT 0, -- derived from evidence
   regimes        INTEGER NOT NULL DEFAULT 1, -- distinct vol regimes covered
   open_questions TEXT NOT NULL DEFAULT '[]', -- JSON array of strings
+  tradable_form  TEXT NOT NULL DEFAULT '',   -- the position that would earn the money
+  economic_test  TEXT NOT NULL DEFAULT '',   -- the run that graded that position net of costs
   created_at     INTEGER NOT NULL,
   updated_at     INTEGER NOT NULL
 ) WITHOUT ROWID;
@@ -1473,3 +1475,139 @@ CREATE TABLE IF NOT EXISTS research_loop_hypotheses (
 );
 CREATE INDEX IF NOT EXISTS idx_loop_hyp_seen
   ON research_loop_hypotheses (last_seen DESC);
+
+-- ── HONESTY-GAP WAVE (2026-07-25) ────────────────────────────────────────────
+-- The four tables behind PREDICTION_PROCESS.md's remaining gaps: a forecast
+-- return DISTRIBUTION (replacing the binary up/down target), a content hash per
+-- dataset slice (so a claim can be shown irreproducible when a provider revises
+-- history), and a canary trial record (so a new model version cannot inherit
+-- production automatically).
+
+-- One conditional return-distribution forecast per (symbol, horizon). The
+-- probabilities are cost-aware: p_up/p_down are P(move clears +/-tau), and
+-- p_inside is the no-trade zone the binary target could not express. skill is
+-- the pinball-loss skill of the CONDITIONAL forecast against its own
+-- climatology; a non-positive skill means conditioning added nothing and the
+-- caller is expected to render the climatology instead of claiming an edge.
+CREATE TABLE IF NOT EXISTS return_forecasts (
+  symbol_id  INTEGER NOT NULL,
+  horizon    TEXT    NOT NULL,
+  ts         INTEGER NOT NULL,
+  regime     TEXT    NOT NULL,  -- the vol regime conditioned on
+  n          INTEGER NOT NULL,
+  tau        REAL    NOT NULL,
+  mean       REAL    NOT NULL,
+  sigma      REAL    NOT NULL,
+  q10        REAL    NOT NULL,
+  q50        REAL    NOT NULL,
+  q90        REAL    NOT NULL,
+  p_up       REAL    NOT NULL,
+  p_down     REAL    NOT NULL,
+  p_inside   REAL    NOT NULL,
+  edge       REAL    NOT NULL,
+  expected_value REAL NOT NULL,
+  skill      REAL,               -- NULL until gradeable
+  coverage80 REAL,
+  graded_n   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (symbol_id, horizon)
+) WITHOUT ROWID;
+
+-- Content hash of the exact rows a measurement read. A changed hash inside a
+-- previously-recorded range means the provider rewrote history.
+CREATE TABLE IF NOT EXISTS dataset_versions (
+  symbol_id  INTEGER NOT NULL,
+  timeframe  TEXT    NOT NULL,
+  first_ts   INTEGER NOT NULL,
+  last_ts    INTEGER NOT NULL,
+  n          INTEGER NOT NULL,
+  hash       TEXT    NOT NULL,
+  checked_at INTEGER NOT NULL,
+  revisions  INTEGER NOT NULL DEFAULT 0,  -- times history was rewritten
+  PRIMARY KEY (symbol_id, timeframe)
+) WITHOUT ROWID;
+
+-- Canary trials: one row per model family, holding the incumbent/challenger
+-- versions and the last verdict. decision is promote | hold | reject; a trial
+-- that has never cleared its floors sits at hold, which is the correct default.
+CREATE TABLE IF NOT EXISTS canary_trials (
+  model       TEXT    NOT NULL PRIMARY KEY,
+  incumbent   TEXT    NOT NULL,
+  challenger  TEXT    NOT NULL,
+  decision    TEXT    NOT NULL,
+  serving     TEXT    NOT NULL,
+  reason      TEXT    NOT NULL,
+  inc_n       INTEGER NOT NULL,
+  inc_acc     REAL    NOT NULL,
+  ch_n        INTEGER NOT NULL,
+  ch_acc      REAL    NOT NULL,
+  ch_lower    REAL    NOT NULL,
+  ch_upper    REAL    NOT NULL,
+  baseline    REAL    NOT NULL,
+  decided_at  INTEGER NOT NULL
+) WITHOUT ROWID;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- SENTIMENT-CORRELATION WAVE (appended block — do not merge into the sections
+-- above).
+--
+-- sentiment_features: per-symbol daily sentiment features, keyed by the SESSION
+-- ON WHICH THE SENTIMENT WAS ALREADY ACTIONABLE — not by the headline's own
+-- calendar day. A headline published at 21:30 UTC lands after the US close and
+-- cannot be traded until the next session; keying it to its own day would grant
+-- silent lookahead on the majority of articles, which are published outside
+-- market hours. `day` is therefore the first trading session strictly after the
+-- article timestamp.
+--
+-- Distinct from sentiment_daily (which the retired directional ensemble
+-- consumed): that table keys on the ARTICLE's UTC day, aggregates only
+-- LLM-rated rows, and counts neutral rows as zeros. This one is as-of aligned,
+-- lexicon-scored (so the whole archive can be scored reproducibly), and counts
+-- ONLY headlines that expressed polarity — a factual headline has no sentiment
+-- rather than a sentiment of zero.
+CREATE TABLE IF NOT EXISTS sentiment_features (
+  symbol_id  INTEGER NOT NULL REFERENCES symbols(id),
+  day        TEXT    NOT NULL,           -- YYYY-MM-DD, first ACTIONABLE session
+  n_polar    INTEGER NOT NULL,           -- headlines that expressed polarity
+  n_all      INTEGER NOT NULL,           -- all headlines mapped to this session
+  mean_score REAL    NOT NULL,           -- mean of the polar scores, [-1,+1]
+  pos        INTEGER NOT NULL DEFAULT 0,
+  neg        INTEGER NOT NULL DEFAULT 0,
+  hedged     INTEGER NOT NULL DEFAULT 0, -- polar-but-qualified count
+  ver        INTEGER NOT NULL,           -- newssent.Version that produced this
+  PRIMARY KEY (symbol_id, day)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_sentiment_features_day ON sentiment_features (day);
+
+-- sentiment_corr: the latest study result per (feature, horizon). One row is
+-- overwritten in place rather than appended so a re-run cannot masquerade as
+-- fresh independent evidence — the same discipline the research loop's
+-- hypothesis table uses. payload is the full sentcorr.Result as JSON, including
+-- its gate reason when gated.
+CREATE TABLE IF NOT EXISTS sentiment_corr (
+  feature  TEXT    NOT NULL,   -- mean_score | score_delta | attention
+  horizon  INTEGER NOT NULL,   -- forward sessions
+  ts       INTEGER NOT NULL,   -- when the study ran
+  obs      INTEGER NOT NULL,   -- independent observations studied
+  gated    INTEGER NOT NULL,   -- 1 = no verdict claimed
+  payload  TEXT    NOT NULL,   -- JSON sentcorr.Result
+  PRIMARY KEY (feature, horizon)
+) WITHOUT ROWID;
+
+-- news_symbols: the article <-> symbol mapping.
+--
+-- WHY THIS EXISTS: `news.id` is the provider article id and the PRIMARY KEY, so
+-- the table can hold each article exactly once — but a single article routinely
+-- tags several tickers ("Apple and Qualcomm settle"). Under the one-row-per-
+-- article constraint every symbol but the first loses that headline, and the
+-- names most affected are the smaller ones that have the least coverage to
+-- begin with. Normalising the mapping into its own table fixes the coverage gap
+-- without migrating a primary key on a live table.
+--
+-- The sentiment score itself stays on `news`: polarity is a property of the
+-- TEXT, identical for every symbol the article mentions.
+CREATE TABLE IF NOT EXISTS news_symbols (
+  news_id   TEXT    NOT NULL,
+  symbol_id INTEGER NOT NULL,
+  PRIMARY KEY (news_id, symbol_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_news_symbols_sym ON news_symbols (symbol_id);

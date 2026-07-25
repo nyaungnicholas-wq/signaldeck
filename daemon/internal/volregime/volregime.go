@@ -68,6 +68,12 @@ type Forecast struct {
 	N int `json:"n"`
 }
 
+// TradingDaysPerYear is the annualization factor for daily volatility. Exported
+// because every consumer that converts this predictor's output into an
+// annualized vol (internal/options) must use the SAME constant — a mismatched
+// annualization silently shifts every implied-vs-forecast comparison.
+const TradingDaysPerYear = 252
+
 // maxSaneReturn guards against unadjusted-split corruption: a one-day |simple
 // return| above this inside the prediction window (found on ~130 live symbols
 // by the 2026-07-17 inspection — 2x-44x "jumps" where incremental fetches
@@ -176,6 +182,11 @@ type Instance struct {
 	Conviction float64 `json:"conviction"`
 	Actual     string  `json:"actual"`
 	Correct    bool    `json:"correct"`
+	// ForwardVol is the ANNUALIZED realized volatility that actually followed
+	// this call over the horizon (daily stdev x sqrt(252)). The regime label is
+	// binary; this is the level behind it, and it is what an options surface
+	// needs to compare a forecast against an implied vol (internal/options).
+	ForwardVol float64 `json:"forwardVol"`
 }
 
 // History replays the predictor over one symbol's returns (ts aligned to
@@ -215,7 +226,8 @@ func History(ts []int64, rets []float64, horizon int) []Instance {
 			act = "elevated"
 		}
 		out = append(out, Instance{Ts: ts[i], Regime: pred, Conviction: conv,
-			Actual: act, Correct: pred == act})
+			Actual: act, Correct: pred == act,
+			ForwardVol: rv[i+horizon] * math.Sqrt(TradingDaysPerYear)})
 	}
 	return out
 }

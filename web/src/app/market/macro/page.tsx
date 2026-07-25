@@ -12,6 +12,7 @@ import Link from "next/link";
 import {
   api,
   type Macro,
+  type RankedRow,
   type RegimeResponse,
   type SectorAgg,
 } from "@/lib/api";
@@ -19,6 +20,11 @@ import { ago, fmtPct } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import PagePurpose from "@/components/PagePurpose";
+import ProOnly from "@/components/ProOnly";
+import Push20Macro from "@/components/macro/Push20Macro";
+import RankingTable from "@/components/regime/RankingTable";
+import CalendarsCard from "@/components/CalendarsCard";
+import EarningsEstCard from "@/components/EarningsEstCard";
 
 const REGIME_COLORS: Record<string, string> = {
   uptrend: "var(--bid)",
@@ -47,6 +53,7 @@ export default function MacroCombinedPage() {
   const [macro, setMacro] = useState<Macro | null>(null);
   const [regime, setRegime] = useState<RegimeResponse | null>(null);
   const [sectors, setSectors] = useState<SectorAgg[] | null>(null);
+  const [ranking, setRanking] = useState<RankedRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -55,6 +62,7 @@ export default function MacroCombinedPage() {
       api.macro().then((m) => !dead && setMacro(m)).catch((e: unknown) => !dead && setErr(String(e)));
       api.regime().then((r) => !dead && setRegime(r)).catch(() => undefined);
       api.sectors().then((s) => !dead && setSectors(s)).catch(() => undefined);
+      api.ranking().then((r) => !dead && setRanking(r)).catch(() => undefined);
     };
     pull();
     const t = setInterval(pull, 120_000);
@@ -204,6 +212,36 @@ export default function MacroCombinedPage() {
           </div>
         </section>
       ) : null}
+
+      {/* Methodology detail, folded in simple mode (never deleted) — the
+          PUSH-20 trader-gate internals and the raw cross-sectional score
+          table, both of which lost their only mount point in the 2026-07-18
+          merge while their endpoints kept serving. Collapsed by default keeps
+          the three bands above the compact read they were trimmed to be. */}
+      {macro ? (
+        <ProOnly summary="Show the PUSH-20 trader-gate detail">
+          <div
+            className="rounded-lg border"
+            style={{ borderColor: "var(--border)", background: "var(--panel2)" }}
+          >
+            <Push20Macro data={macro.push20Macro} />
+          </div>
+        </ProOnly>
+      ) : null}
+
+      {ranking && ranking.length > 0 ? (
+        <ProOnly summary="Show the relative-strength ranking table">
+          <RankingTable rows={ranking} />
+        </ProOnly>
+      ) : null}
+
+      {/* The free-data calendars: the econ calendar (latest FRED prints +
+          near-window "reports soon" strip) and, under it, the full
+          filing-cadence earnings ESTIMATE calendar. Both lost their only mount
+          point in the same merge — they are calendars, not regime state, so
+          the "compact by design" trim never meant to drop them. */}
+      <CalendarsCard />
+      <EarningsEstCard />
     </main>
   );
 }

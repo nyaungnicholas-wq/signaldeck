@@ -267,6 +267,17 @@ func TestPosteriorLongChainNoOverflow(t *testing.T) {
 }
 
 func TestStatusBands(t *testing.T) {
+	// Bands, exercised through StatusWithGates with the tradability gate met —
+	// since the gate was added, that is the only path that can reach
+	// "supported". Status() itself now caps at tentative by construction and is
+	// covered by TestLegacyStatusCannotPromote.
+	traded := func(reps, regs int) Gates {
+		return Gates{
+			Replications: reps, Regimes: regs,
+			TradableForm: "a stated position",
+			EconomicTest: "graded net of costs",
+		}
+	}
 	cases := []struct {
 		p    float64
 		reps int
@@ -282,8 +293,9 @@ func TestStatusBands(t *testing.T) {
 		{0.90, 2, 1, StatusTentative}, // regime gate unmet — single-regime cap
 	}
 	for _, c := range cases {
-		if got := Status(c.p, c.reps, c.regs); got != c.want {
-			t.Errorf("Status(%.2f, %d, %d) = %s, want %s", c.p, c.reps, c.regs, got, c.want)
+		if got := StatusWithGates(c.p, traded(c.reps, c.regs)); got != c.want {
+			t.Errorf("StatusWithGates(%.2f, %d reps, %d regimes) = %s, want %s",
+				c.p, c.reps, c.regs, got, c.want)
 		}
 	}
 }
@@ -321,5 +333,82 @@ func TestAttackLethality(t *testing.T) {
 	}
 	if as[1].Attack != "time-split" || as[1].Failed != 0 || as[1].Run != 1 {
 		t.Errorf("time-split stat = %+v", as[1])
+	}
+}
+
+// ── the tradability gate ─────────────────────────────────────────────────
+
+// A statistic alone must not promote a hypothesis, however strong. H018 is the
+// worked example: 73.1% with a tight interval, and a tradable form that turned
+// out to be indistinguishable from picking pairs at random.
+func TestStatusWithGatesRequiresATradableForm(t *testing.T) {
+	strong := 0.95
+	full := Gates{
+		Replications: MinReplications, Regimes: MinRegimes,
+		TradableForm: "dollar-neutral cointegration spread",
+		EconomicTest: "2026-07-25 pairs test: FAILED",
+	}
+	if got := StatusWithGates(strong, full); got != StatusSupported {
+		t.Errorf("every gate met → %q, want %q", got, StatusSupported)
+	}
+
+	noForm := full
+	noForm.TradableForm = ""
+	if got := StatusWithGates(strong, noForm); got != StatusTentative {
+		t.Errorf("no tradable form → %q, want %q", got, StatusTentative)
+	}
+
+	untested := full
+	untested.EconomicTest = ""
+	if got := StatusWithGates(strong, untested); got != StatusTentative {
+		t.Errorf("form stated but never graded → %q, want %q", got, StatusTentative)
+	}
+
+	// The independence gates still bind on their own.
+	thin := full
+	thin.Replications = MinReplications - 1
+	if got := StatusWithGates(strong, thin); got != StatusTentative {
+		t.Errorf("unreplicated → %q, want %q", got, StatusTentative)
+	}
+}
+
+// Status (the legacy signature, still used by the seeding paths) must never be
+// able to promote, because it cannot see whether a position was ever stated.
+func TestLegacyStatusCannotPromote(t *testing.T) {
+	if got := Status(0.99, 99, 99); got == StatusSupported {
+		t.Error("Status promoted to supported without knowing the tradable form")
+	}
+}
+
+// The reason a hypothesis is being held back has to be legible, or a high
+// posterior sitting at "tentative" reads as arbitrary.
+func TestUnmetGateNamesTheFirstFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		g    Gates
+		want string
+	}{
+		{"unreplicated", Gates{Regimes: MinRegimes}, "needs independent replication on a fresh data window"},
+		{"one regime", Gates{Replications: MinReplications, Regimes: 1}, "measured in only one volatility regime"},
+		{"no position", Gates{Replications: MinReplications, Regimes: MinRegimes}, "no tradable form stated — the position that would earn the money is unspecified"},
+		{"untested position", Gates{Replications: MinReplications, Regimes: MinRegimes, TradableForm: "spread"}, "tradable form stated but never graded net of costs"},
+		{"all met", Gates{Replications: MinReplications, Regimes: MinRegimes, TradableForm: "spread", EconomicTest: "run"}, ""},
+	}
+	for _, c := range cases {
+		if got := c.g.UnmetGate(); got != c.want {
+			t.Errorf("%s: unmet gate = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Economic grades are a distinct evidence kind so a cost-aware grade of the
+// POSITION is never confused with another grade of the statistic.
+func TestEconomicGradesCountsOnlyEconomicRows(t *testing.T) {
+	chain := []Evidence{
+		{Kind: KindExperiment}, {Kind: KindReplication},
+		{Kind: KindEconomic}, {Kind: KindAttack}, {Kind: KindEconomic},
+	}
+	if got := EconomicGrades(chain); got != 2 {
+		t.Errorf("economic grades = %d, want 2", got)
 	}
 }

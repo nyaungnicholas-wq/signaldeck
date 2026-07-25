@@ -244,7 +244,7 @@ export default function TrendsPage() {
           <PatternsExplorer />
           <p className="px-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
             <Link
-              href="/markets/screener"
+              href="/market/overview"
               className="cursor-pointer transition-colors duration-150 hover:text-[var(--accent)]"
               style={{ color: "var(--dim)" }}
             >

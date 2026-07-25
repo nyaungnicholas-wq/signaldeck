@@ -212,7 +212,7 @@ function AlertsBell() {
   if (count === null) return null;
   return (
     <Link
-      href="/signals/alerts"
+      href="/market/activity"
       aria-label={`alerts — ${count} unread`}
       title={`${count} unread alert(s)`}
       className="chip flex min-h-[40px] cursor-pointer items-center gap-1.5 px-3 transition-colors duration-150 hover:text-[var(--text)]"

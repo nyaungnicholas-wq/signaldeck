@@ -14,7 +14,10 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -27,6 +30,17 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 	// Directional + structural verdicts are stored by the hourly worker under a
 	// shared meta prefix; read whatever it has written rather than recomputing,
 	// so this endpoint and the gate can never disagree.
+	// Unresolved backlog per structural kind, so an ungraded model can say
+	// which kind of ungraded it is: never emitted, or emitting into horizons
+	// that have not elapsed. Blaming the hourly worker for the latter — as this
+	// endpoint used to — reads as a stuck scheduler when it is just time.
+	pending := map[string]store.StructuralPendingRow{}
+	if rows, err := d.St.StructuralPending(ctx); err == nil {
+		for _, p := range rows {
+			pending[p.Kind] = p
+		}
+	}
+
 	keys := []string{"directional-ensemble-1d", "directional-ensemble-1w"}
 	for _, k := range store.StructuralKinds() {
 		keys = append(keys, "structural-"+k)
@@ -34,10 +48,7 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 	for _, k := range keys {
 		raw, err := d.St.GetMeta(ctx, pipeline.MetaKeyPrefix+k)
 		if err != nil || raw == "" {
-			models = append(models, map[string]any{
-				"model": k, "graded": false,
-				"note": "not yet graded — the health worker runs hourly",
-			})
+			models = append(models, ungradedModel(k, pending))
 			continue
 		}
 		var v map[string]any
@@ -93,4 +104,42 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 
 func (d Deps) registerModelHealth(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/model-health", d.modelHealth)
+}
+
+// ungradedModel explains WHY a model has no verdict yet, using the only
+// evidence that can distinguish the cases: its unresolved forecast backlog.
+//
+// Three genuinely different states hid behind one sentence before this:
+//
+//   - the model has never emitted a call, so there is nothing to grade;
+//   - it has emitted and the horizons have not elapsed — the honest answer is a
+//     DATE, not a scheduler cadence;
+//   - horizons have elapsed and a verdict still has not been written, which is
+//     the only case where the hourly worker is actually the explanation.
+func ungradedModel(key string, pending map[string]store.StructuralPendingRow) map[string]any {
+	m := map[string]any{"model": key, "graded": false}
+	kind := strings.TrimPrefix(key, "structural-")
+	p, ok := pending[kind]
+	if !ok || p.Pending == 0 {
+		m["note"] = "not yet graded — no unresolved forecasts on record, so this model " +
+			"has not emitted a call the grader could score"
+		return m
+	}
+	m["pending"] = p.Pending
+	m["firstDueTs"] = p.FirstDue
+	due := time.Unix(p.FirstDue, 0).UTC()
+	if p.FirstDue > time.Now().Unix() {
+		m["note"] = fmt.Sprintf("not yet graded — %d forecasts outstanding and the earliest "+
+			"horizon does not elapse until %s. This is the passage of time, not a stalled worker: "+
+			"no verdict is possible before the calls resolve.",
+			p.Pending, due.Format("2006-01-02"))
+		m["awaitingResolution"] = true
+		return m
+	}
+	m["note"] = fmt.Sprintf("not yet graded — %d forecasts are outstanding and the earliest was "+
+		"due %s, so resolution is overdue rather than pending. The health worker runs hourly; if "+
+		"this persists, the resolver is not keeping up.",
+		p.Pending, due.Format("2006-01-02"))
+	m["awaitingResolution"] = false
+	return m
 }

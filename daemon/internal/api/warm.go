@@ -39,6 +39,30 @@ var sharedMoversCache = newSWRBodyCache(respCacheTTL)
 // cadence: a fresh cache entry short-circuits, so a warm pass on a hot cache
 // costs two map lookups.
 func (d Deps) WarmCaches(ctx context.Context) error {
+	// /api/attribution goes FIRST, ahead of even the dashboard, and deliberately
+	// so. It is by far the cheapest of the slow builds (~1s per horizon, and one
+	// ledger grade covers every symbol at once) but it is the only one the symbol
+	// page fetches ON MOUNT, so a visitor must never be the one to build it.
+	//
+	// It sat after the dashboard for one deploy and that was not good enough:
+	// MEASURED on a cold daemon, the pass had not finished dashboard+movers 11
+	// minutes in, so a symbol page opened at T+7min still ate the cold build.
+	// Position in this list is the whole guarantee — everything below is a page
+	// a human navigates to deliberately and can wait a beat for.
+	//
+	// Fire-and-forget, like warmBody below: a failed warm is not a failed warm
+	// PASS. The SWR cache simply stays cold and the next caller rebuilds, which
+	// is the behavior without a warmer at all — whereas returning here would
+	// starve every cache after this point, which is exactly the trap the early
+	// `return err`s below set for anything downstream of them.
+	for _, h := range []md.Horizon{md.H1d, md.H1w} {
+		hh := h
+		_, _ = sharedAttributionLiveCache.get(ctx, attributionCacheKey(d.St, hh),
+			func(c context.Context) (map[string]any, error) {
+				return d.buildAttributionLive(c, hh)
+			})
+	}
+
 	if _, err := sharedDashCache.get(ctx, d); err != nil {
 		return err
 	}

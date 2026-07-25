@@ -67,6 +67,59 @@ func (s *Store) ResolvedPredictionOutcomes(ctx context.Context, h md.Horizon, li
 	return out, rows.Err()
 }
 
+// DirectionalAccuracy is one symbol's realized directional record over its
+// INDEPENDENT observations (at most one per UTC day).
+type DirectionalAccuracy struct {
+	N       int // independent (symbol, UTC-day) observations
+	Correct int // of those, how many had predUp == actualUp
+}
+
+// DirectionalAccuracyBySymbol grades the whole resolved ledger for a horizon in
+// ONE query and returns the per-symbol record.
+//
+// Why not ResolvedPredictionOutcomes + a Go loop: /api/attribution measured
+// ~29s doing exactly that — pulling the full 120k-row ledger and then
+// discarding every row that wasn't the requested symbol. MEASURED on the live
+// DB through this driver, per 1d grade: 2.4s for the raw scan, 1.6-2.3s for the
+// same aggregate written as a MAX(ts) self-join, and 0.8-1.1s for the window
+// form below (1w: 0.4s). Notably the driver's per-row Scan was NOT the bill —
+// 120k rows scan in ~1.2s — so the win here is SQLite doing one partitioned
+// pass instead of a join, not the smaller result set.
+//
+// Semantics match the loop it replaces: the newest row of each (symbol, UTC
+// day) is that day's single independent observation (the PK makes (symbol_id,
+// horizon, ts) unique, so the ROW_NUMBER pick is deterministic), and it scores
+// DIRECTION — predUp == actualUp — not the up-rate. It grades the FULL ledger
+// rather than the newest 120k rows; 1d is already at 120,055 resolved rows, so
+// the old limit had begun to silently drop the oldest of them.
+func (s *Store) DirectionalAccuracyBySymbol(ctx context.Context, h md.Horizon) (map[int64]DirectionalAccuracy, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol_id, COUNT(*) AS n,
+		       SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END) AS correct
+		FROM (
+		  SELECT symbol_id, prob, up,
+		         ROW_NUMBER() OVER (PARTITION BY symbol_id, ts/86400 ORDER BY ts DESC) AS rn
+		  FROM prediction_outcomes
+		  WHERE resolved_at IS NOT NULL AND horizon = ? AND up IS NOT NULL
+		)
+		WHERE rn = 1
+		GROUP BY symbol_id`, string(h))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[int64]DirectionalAccuracy{}
+	for rows.Next() {
+		var id int64
+		var da DirectionalAccuracy
+		if err := rows.Scan(&id, &da.N, &da.Correct); err != nil {
+			return nil, err
+		}
+		out[id] = da
+	}
+	return out, rows.Err()
+}
+
 // ── STAGE 7: per-symbol chart-overlay markers ────────────────────────────────
 //
 // These power the candlestick overlays: regime changes and breakouts for one

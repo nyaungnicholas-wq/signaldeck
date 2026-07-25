@@ -405,3 +405,52 @@ func TestPublicReadsTrueServesTrendsAnonymously(t *testing.T) {
 		t.Fatalf("trends payload: %s", got)
 	}
 }
+
+// ── security rejections are JSON, and they say what to fix ───────────────
+
+// A rejected non-GET used to answer with a plain-text body, so a client that
+// parses JSON errors (which is every client here) reported a bare status code
+// and nothing else. That is how a missing CSRF header gets misdiagnosed as a
+// credential problem or a rate limit — the status is 403 either way, and the
+// only thing that distinguishes them is the body.
+func TestSecurityRejectionsAreJSONAndSelfDiagnosing(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "security.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	d := Deps{St: st, Cfg: baseCfg(), Version: "test", Started: time.Now()}
+	srv := httptest.NewUnstartedServer(nil)
+	t.Cleanup(srv.Close)
+	d.Cfg.AllowedHosts = []string{srv.Listener.Addr().String()}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"ok": true})
+	})
+	srv.Config.Handler = d.secure(mux)
+	srv.Start()
+
+	resp, err := http.Post(srv.URL+"/api/auth/login", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (no CSRF header sent)", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("content-type = %q, want JSON so clients can read the reason", ct)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if !strings.Contains(body.Error, csrfHeader) {
+		t.Errorf("error = %q, want it to name the missing header", body.Error)
+	}
+	if !strings.Contains(body.Error, "not a credential problem") {
+		t.Errorf("error = %q, want it to rule out the wrong diagnosis explicitly", body.Error)
+	}
+}

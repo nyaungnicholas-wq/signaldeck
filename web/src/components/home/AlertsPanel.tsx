@@ -36,7 +36,7 @@ export default function AlertsPanel({
           </span>
         )}
         <Link
-          href="/signals/alerts"
+          href="/market/activity"
           className="ml-auto cursor-pointer text-[0.75rem] font-normal normal-case tracking-wider text-[var(--faint)] transition-colors duration-150 hover:text-[var(--accent)]"
         >
           Monitor all →
