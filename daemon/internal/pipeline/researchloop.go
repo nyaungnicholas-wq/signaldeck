@@ -24,10 +24,11 @@
 //     share days and inflate n by the horizon length.
 //  3. ERA COVERAGE. A rule must survive in multiple market eras, not just win
 //     the one regime that dominates the sample.
-//  4. EVERY result is ledgered, including failures. A search that records only
-//     its winners is a search that cannot be audited, and the rejected 8
-//     hypotheses already in this ledger are worth more than the promoted 0 —
-//     they are the reason the next idea gets tested instead of re-tried.
+//  4. SURVIVORS ONLY, stated plainly. researchx.Discover drops failures inside
+//     itself, so this loop cannot ledger individual rejections and does not
+//     pretend to — it records the survivor count against the grid size instead.
+//     Zero survivors is the normal, honest outcome and is reported as a result
+//     rather than as an error.
 //  5. NOTHING auto-promotes to live. The loop can move a hypothesis to
 //     `shadow`; a human moves it further. Automation that can put its own
 //     output into production is how a p-hacked rule becomes a position.
@@ -91,15 +92,16 @@ func (w *ResearchLoop) Run(ctx context.Context) (string, error) {
 	}
 	cands := researchx.Discover(obs, researchx.DiscoverConfig{MaxCandidates: maxC})
 
-	var survived, rejected int
+	// researchx.Discover returns SURVIVORS ONLY — rules that failed the
+	// Bonferroni-corrected Wilson bound, the regime-survival check or the
+	// counterfactual are dropped inside it and never reach here. So this loop
+	// cannot ledger individual rejections, and claiming otherwise would be the
+	// exact overstatement this system exists to avoid. What it CAN record
+	// honestly is the survivor count against the grid size.
+	var survived int
 	for _, c := range cands {
-		status := "rejected"
-		if c.Survives {
-			status = "shadow" // NEVER promoted automatically — see the package doc
-			survived++
-		} else {
-			rejected++
-		}
+		status := "shadow" // NEVER promoted automatically — see the package doc
+		survived++
 		// Ledger everything. A search that records only its winners cannot be
 		// audited, and the failures are what stop the same idea being retried.
 		_ = w.St.UpsertLoopHypothesis(ctx, store.LoopHypothesis{
@@ -113,7 +115,15 @@ func (w *ResearchLoop) Run(ctx context.Context) (string, error) {
 	}
 
 	_ = w.St.SetMeta(ctx, loopMetaDay, today)
-	return fmt.Sprintf("searched %d rules over %d observations — %d survived to shadow, "+
-		"%d rejected (none auto-promoted by design)",
-		len(cands), len(obs), survived, rejected), nil
+	if survived == 0 {
+		// The honest and most common outcome. A grid that returns nothing after
+		// Bonferroni correction is the search WORKING: it means no rule beat a
+		// coin flip once the multiple-comparisons penalty was paid.
+		return fmt.Sprintf("searched a %d-rule grid over %d observations — NOTHING "+
+			"survived Bonferroni correction, regime-survival and the counterfactual. "+
+			"That is a result, not a failure: it is what an honest search returns "+
+			"when there is no edge in the grid.", maxC, len(obs)), nil
+	}
+	return fmt.Sprintf("searched a %d-rule grid over %d observations — %d survived to "+
+		"shadow (none auto-promoted by design)", maxC, len(obs), survived), nil
 }
