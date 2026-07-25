@@ -149,6 +149,7 @@ func Serve(ctx context.Context, d Deps) error {
 	// ── CREDIBILITY wave (appended — keep new routes at the END of this
 	// block so parallel route edits by other agents never collide) ──────────
 	d.registerRegimePostmortems(mux) // GET /api/regime-postmortems — latest ≤50 plain-English postmortems for HIGH-conviction regime calls that resolved WRONG (what was called, what realized + the key number, base rate computed from the CLAIMED accuracy); live regime grading itself ships inside /api/track-record's "regimes" section
+	d.registerExplain(mux)          // auditable regime forecast: contributors + weights + historical analog
 	d.registerEarningsWindow(mux)    // GET /api/earnings-window?symbol&market — estimated next earnings from the filing-cadence heuristic (last 10-Q/10-K + ~91d), HONEST NULLS when unknown; the same math annotates /api/regimes + /api/signal-report with earningsWindow labels (forecasts never suppressed — labeled only)
 	// ── WAVE 2 (crypto kinds + precompute + digest + AD live + survivorship;
 	// appended — keep new routes at the END of this block so parallel route
