@@ -1426,3 +1426,32 @@ CREATE INDEX IF NOT EXISTS idx_predoutcomes_resolved_hts
 -- both the grouped subquery and the self-join index-only.
 CREATE INDEX IF NOT EXISTS idx_filings_form_sym_ts
   ON filings (form, symbol_id, filed_ts DESC);
+
+-- ── SPLIT-CORRUPTION REPAIR (2026-07-24) ─────────────────────────────────────
+-- Audit trail for the split-repair worker. Incremental fetches leave stored
+-- history on a stale price basis after a split; the worker detects the
+-- resulting discontinuity and re-backfills. Recording every attempt (including
+-- failures) is what makes a repair that does NOT clear the corruption visible
+-- as a repeated row instead of a silent retry loop.
+CREATE TABLE IF NOT EXISTS split_repairs (
+  id          INTEGER PRIMARY KEY,
+  symbol_id   INTEGER NOT NULL REFERENCES symbols(id),
+  split_date  TEXT    NOT NULL,   -- UTC date of the worst detected discontinuity
+  ratio       TEXT    NOT NULL,   -- nearest known split factor, e.g. "2:1"
+  suspects    INTEGER NOT NULL,   -- how many discontinuities the series carried
+  ok          INTEGER NOT NULL,   -- 1 = re-backfill succeeded
+  err         TEXT    NOT NULL DEFAULT '',
+  repaired_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_split_repairs_sym
+  ON split_repairs (symbol_id, repaired_at DESC);
+CREATE INDEX IF NOT EXISTS idx_split_repairs_at
+  ON split_repairs (repaired_at DESC);
+
+-- ── SURVIVORSHIP (2026-07-24) ────────────────────────────────────────────────
+-- delisted_at separates a MARKET fact (the symbol stopped trading) from a
+-- SUBSCRIPTION decision (active=0, the user stopped watching). Conflating them
+-- is what made survivorship bias invisible: research iterated active=1 and
+-- silently dropped every name that died. With this, a point-in-time universe
+-- can be reconstructed (store.TradableAt) instead of guessed.
+-- Added via the idempotent ALTER path in migrate() — see store.go.

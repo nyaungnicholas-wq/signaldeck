@@ -252,6 +252,13 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// storage governor (WAL checkpoint + threshold VACUUM); BEFORE the watchdog
 	// spec snapshot so it's health-audited like every other worker.
 	fleet = append(fleet, storageWorkers(st)...)
+	// Data-integrity wave (2026-07-24) — split-repair (6h): incremental fetches
+	// leave stored history on a stale price basis after a split, welding a fake
+	// +/-50-95% move into the series that every predictor then has to refuse.
+	// Measured 521 discontinuities over 185 symbols (107 inside the live
+	// forecast window) before this shipped. Detects and re-backfills, budgeted
+	// so a first pass cannot exhaust the free-tier API allowance.
+	fleet = append(fleet, &pipeline.SplitRepair{St: st, Alpaca: alpacaClient})
 	// Free-data wave / Stage 2 (constructor appended at the END of this file) —
 	// fred-poller (6h, keyless FRED macro) + edgar-fetcher (24h, SEC EDGAR
 	// fundamentals, gated on Alpaca keys only so the equity universe exists);

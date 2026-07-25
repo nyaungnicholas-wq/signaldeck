@@ -109,6 +109,19 @@ func migrate(w *sql.DB) error {
 			return err
 		}
 	}
+	// Survivorship wave (2026-07-24): delisted_at records a MARKET fact (the
+	// symbol stopped trading), distinct from active=0 which is a SUBSCRIPTION
+	// decision. Research iterated active=1 and silently dropped every name that
+	// died — the bias that most inflates oversold/mean-reversion studies. With
+	// this column a point-in-time universe is reconstructable (TradableAt).
+	if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('symbols') WHERE name='delisted_at'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := w.Exec(`ALTER TABLE symbols ADD COLUMN delisted_at INTEGER`); err != nil {
+			return err
+		}
+	}
 	// research discovery engine wave: decay-tracker fields + a machine-readable
 	// rule spec on ledger hypotheses. The table already exists on live DBs (the
 	// ledger shipped before this wave), so these ride the same
