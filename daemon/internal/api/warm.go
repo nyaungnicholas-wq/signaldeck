@@ -26,11 +26,13 @@ import (
 // registerDashboardCache — unaffected.)
 var sharedDashCache = newDashCache(dashboardTTL)
 
-// sharedMoversCache is the response cache in front of GET /api/movers — the
-// same respCache machinery /api/honesty uses, keyed by the raw query so
-// parameterized calls cache independently. The warmer keeps the default-query
-// entry ("" — what the dashboard's first paint requests) hot.
-var sharedMoversCache = newRespCache(respCacheTTL)
+// sharedMoversCache is the response cache in front of GET /api/movers, keyed
+// by the raw query so parameterized calls cache independently. The warmer
+// keeps the default-query entry ("" — what the dashboard's first paint
+// requests) hot. Perf wave 2026-07-24: moved from the synchronous respCache to
+// the SWR body cache — movers reaches the network for EDGAR mcap, and a TTL
+// lapse mid-fetch made a visitor wait ~20s for the inline rebuild.
+var sharedMoversCache = newSWRBodyCache(respCacheTTL)
 
 // WarmCaches rebuilds the shared dashboard cache and the default /api/movers
 // response-cache entry the way the handlers would. Safe to call on any
@@ -78,6 +80,25 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 			return err
 		}
 	}
+
+	// Body-cached slow pages (perf wave 2026-07-24, measured): composite/top
+	// 40s, honesty 22.7s, calibration 22.6s, datastats >30s, macro 5.9s. Warm
+	// each default-query entry through the same cache the route serves from —
+	// on a hot cache this costs a map lookup; when stale, the warmer is the one
+	// caller that eats the rebuild.
+	warmBody := func(path, key string, c *swrBodyCache, h http.HandlerFunc) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return
+		}
+		rec := &discardResponseWriter{header: http.Header{}}
+		c.serve(key, rec, req, h)
+	}
+	warmBody("/api/composite/top", "", sharedCompositeSWR, d.compositeTop)
+	warmBody("/api/honesty", "", sharedHonestySWR, d.honesty)
+	warmBody("/api/calibration", "", sharedCalibrationSWR, d.calibration)
+	warmBody("/api/datastats", "datastats", sharedDatastatsSWR, d.datastats)
+	warmBody("/api/macro", "macro", sharedMacroSWR, d.macro)
 	return nil
 }
 

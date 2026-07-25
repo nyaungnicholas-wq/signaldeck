@@ -213,9 +213,9 @@ func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate f
 		return false, 0, fmt.Sprintf("live track record still thin — %d independent resolutions across %d day(s) (need %d / %d)",
 			indepN, distinctDays, trackMinIndependentN, trackMinDistinctDays)
 	}
-	acc := float64(correct) / float64(indepN)  // the model's REAL directional accuracy
-	baseUp := float64(ups) / float64(indepN)   // market up-rate
-	naive := baseUp                            // best constant predictor = max(up, 1-up)
+	acc := float64(correct) / float64(indepN) // the model's REAL directional accuracy
+	baseUp := float64(ups) / float64(indepN)  // market up-rate
+	naive := baseUp                           // best constant predictor = max(up, 1-up)
 	naiveDir := "up"
 	if 1-baseUp > naive {
 		naive, naiveDir = 1-baseUp, "down"
@@ -319,22 +319,25 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 		out = append(out, row)
 	}
 	writeJSON(w, map[string]any{
-		"horizon":       string(horizon),
-		"rows":          out,
-		"n":             len(out),
-		"total":         len(rows),
-		"curveNote":     compositeCurveNote,
-		"edgeNote":      compositeEdgeNote,
-		"rankNote":      "rankChange compares against each symbol's newest row before today (UTC); symbols absent from the previous pass carry null, never a fabricated change",
-		"trackLabel":    "backtested / in-sample — not a live track record",
+		"horizon":        string(horizon),
+		"rows":           out,
+		"n":              len(out),
+		"total":          len(rows),
+		"curveNote":      compositeCurveNote,
+		"edgeNote":       compositeEdgeNote,
+		"rankNote":       "rankChange compares against each symbol's newest row before today (UTC); symbols absent from the previous pass carry null, never a fabricated change",
+		"trackLabel":     "backtested / in-sample — not a live track record",
 		"convictionNote": "conviction is a SEPARATE axis from the rank: a top rank on a coin-flip-sized or unproven edge is low conviction. " + composite.Assess(composite.ConvictionInputs{}).RiskNote,
-		"skillNote":     skillNote,
-		"minCurveN":     composite.MinCurveN,
+		"skillNote":      skillNote,
+		"minCurveN":      composite.MinCurveN,
 	})
 }
 
 // registerComposite wires the composite SignalScore read routes.
 func (d Deps) registerComposite(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/composite", d.compositeDetail)
-	mux.HandleFunc("GET /api/composite/top", d.compositeTop)
+	mux.HandleFunc("GET /api/composite/top", func(w http.ResponseWriter, r *http.Request) {
+		// Perf wave 2026-07-24: measured 40s per request; SWR-cached by query.
+		sharedCompositeSWR.serve(r.URL.RawQuery, w, r, d.compositeTop)
+	})
 }

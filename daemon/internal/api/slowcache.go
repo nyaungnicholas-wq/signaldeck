@@ -23,6 +23,7 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -122,4 +123,128 @@ var (
 	sharedTrackCache       = newSWRCache(2 * time.Minute)
 	sharedRegimesCache     = newSWRCache(5 * time.Minute)
 	sharedPredictionsCache = newSWRCache(2 * time.Minute)
+)
+
+// ── body-level SWR cache ─────────────────────────────────────────────────────
+//
+// Same stale-while-revalidate + per-entry coalescing contract as swrCache, but
+// wrapping whole http.HandlerFuncs at the ROUTE, for slow endpoints whose
+// handlers render directly (honesty, calibration, datastats, macro). The
+// existing respCache in honestycache.go is synchronous: when its 60s TTL
+// lapses, the next visitor rebuilds inline — which for /api/honesty meant a
+// ~22s page load once a minute. Here the visitor gets the stale body instantly
+// and the rebuild happens behind them.
+
+type swrBodyCache struct {
+	mu  sync.Mutex
+	ttl time.Duration
+	ent map[string]*swrBodyEntry
+}
+
+type swrBodyEntry struct {
+	builtAt    time.Time
+	body       []byte
+	rebuilding bool
+	building   chan struct{}
+}
+
+func newSWRBodyCache(ttl time.Duration) *swrBodyCache {
+	return &swrBodyCache{ttl: ttl, ent: map[string]*swrBodyEntry{}}
+}
+
+// render runs the handler against a throwaway recorder and returns the body,
+// or nil when the handler answered non-200 (errors must never be pinned).
+func swrRender(r *http.Request, h http.HandlerFunc) []byte {
+	rec := &bodyRecorder{ResponseWriter: &discardResponseWriter{header: http.Header{}}}
+	h(rec, r)
+	if rec.status == 0 || rec.status == http.StatusOK {
+		return rec.buf
+	}
+	return nil
+}
+
+// serve returns the cached body for key, rendering via h when cold and
+// revalidating in the background when stale. Background rebuilds re-issue the
+// request with a detached context so they outlive the caller.
+func (c *swrBodyCache) serve(key string, w http.ResponseWriter, r *http.Request, h http.HandlerFunc) {
+	c.mu.Lock()
+	e := c.ent[key]
+	if e == nil {
+		e = &swrBodyEntry{}
+		c.ent[key] = e
+	}
+
+	if e.body != nil {
+		body := e.body
+		if time.Since(e.builtAt) >= c.ttl && !e.rebuilding {
+			e.rebuilding = true
+			bg := r.Clone(context.Background())
+			go func() {
+				nb := swrRender(bg, h)
+				c.mu.Lock()
+				e.rebuilding = false
+				if nb != nil {
+					e.body = nb
+					e.builtAt = time.Now()
+				}
+				c.mu.Unlock()
+			}()
+		}
+		c.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache", "hit")
+		_, _ = w.Write(body)
+		return
+	}
+
+	// Cold: one renderer per key; same-key followers wait, other keys untouched.
+	if e.building != nil {
+		ch := e.building
+		c.mu.Unlock()
+		select {
+		case <-ch:
+		case <-r.Context().Done():
+			httpErr(w, 504, "cache build in progress; request canceled")
+			return
+		}
+		c.mu.Lock()
+		body := e.body
+		c.mu.Unlock()
+		if body == nil {
+			httpErr(w, 500, "cache build failed; retry")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache", "coalesced")
+		_, _ = w.Write(body)
+		return
+	}
+	ch := make(chan struct{})
+	e.building = ch
+	c.mu.Unlock()
+
+	// Build inline for the cold caller, streaming to them directly while a
+	// recorder tees the body for the cache.
+	rec := &bodyRecorder{ResponseWriter: w}
+	h(rec, r)
+	c.mu.Lock()
+	e.building = nil
+	if rec.status == 0 || rec.status == http.StatusOK {
+		e.body = rec.buf
+		e.builtAt = time.Now()
+	}
+	c.mu.Unlock()
+	close(ch)
+}
+
+// Shared body-cache instances for the remaining measured-slow read pages:
+// honesty/calibration ~22.7s, datastats >30s (timed out), macro ~5.9s. TTLs
+// match the underlying worker cadences (outcomes resolve on 10m cadence;
+// datastats counts whole tables — 5m is plenty fresh for an ops page).
+var (
+	sharedHonestySWR     = newSWRBodyCache(2 * time.Minute)
+	sharedCompositeSWR   = newSWRBodyCache(2 * time.Minute)
+	sharedCalibrationSWR = newSWRBodyCache(2 * time.Minute)
+	sharedDatastatsSWR   = newSWRBodyCache(5 * time.Minute)
+	sharedMacroSWR       = newSWRBodyCache(2 * time.Minute)
 )

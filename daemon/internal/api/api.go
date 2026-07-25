@@ -77,7 +77,10 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/export/outcomes.csv", d.exportOutcomes)
 	// ── storage-permanence wave (appended — keep new routes at the END of
 	// this block so parallel route edits by other agents never collide) ──
-	mux.HandleFunc("GET /api/datastats", d.datastats)            // dataset accounting (read, gated like other reads)
+	mux.HandleFunc("GET /api/datastats", func(w http.ResponseWriter, r *http.Request) {
+		// Perf wave 2026-07-24: measured >30s (timed out); SWR-cached.
+		sharedDatastatsSWR.serve("datastats", w, r, d.datastats)
+	})            // dataset accounting (read, gated like other reads)
 	d.registerAlerts(mux)                                        // alerts wave: per-user alerts list + mark-seen
 	d.registerDiscovery(mux)                                     // discovery wave: candidates list/add/dismiss
 	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights)       // learning-flywheel wave: learned per-regime ensemble weights

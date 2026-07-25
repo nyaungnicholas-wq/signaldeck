@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
@@ -40,17 +41,29 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 	for i := range probs {
 		pairs[i] = ensemble.Pair{Pred: probs[i], Actual: ups[i]}
 	}
+	// 2026-07-17 inspection: the system HAS accrued a live prequential record
+	// (every point's prob was frozen at prediction time and graded forward).
+	// Once the independent sample clears the gate, "backtested" stops being
+	// the honest label — the live record is, whatever it says.
+	liveN, liveWin, err := d.St.LiveDirectionalRecord(r.Context(), h)
+	if err != nil {
+		httpErr(w, 500, err.Error())
+		return
+	}
+	live := liveN >= minIndependentN
+	trackLabel := "backtested / in-sample — not a live track record"
+	if live {
+		trackLabel = fmt.Sprintf("LIVE prequential record: win rate %.1f%% over %d independent symbol-days — probabilities were frozen at prediction time and graded forward; a bad number here is the honest product, not a display bug", liveWin*100, liveN)
+	}
 	writeJSON(w, map[string]any{
 		"horizon":     h,
 		"n":           len(pairs),
 		"bins":        ensemble.CalibrationCurve(pairs, 10),
 		"brier":       ensemble.BrierScore(pairs),
 		"reliability": ensemble.ReliabilityScore(pairs),
-		// Phase 0 labeling: calibration is measured over BACKTESTED / in-sample
-		// resolutions until the system accrues a live track record. The frontend
-		// badges off `live`.
-		"live":       false,
-		"trackLabel": "backtested / in-sample — not a live track record",
+		"live":        live,
+		"liveRecord":  map[string]any{"independentN": liveN, "winRate": liveWin},
+		"trackLabel":  trackLabel,
 	})
 }
 
@@ -92,7 +105,10 @@ func (d Deps) breakouts(w http.ResponseWriter, r *http.Request) {
 // registerPredict wires the prediction + trends routes.
 func (d Deps) registerPredict(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/predictions", d.predictions)
-	mux.HandleFunc("GET /api/calibration", d.calibration)
+	mux.HandleFunc("GET /api/calibration", func(w http.ResponseWriter, r *http.Request) {
+		// Perf wave 2026-07-24: measured 22.6s per request; SWR-cached by query.
+		sharedCalibrationSWR.serve(r.URL.RawQuery, w, r, d.calibration)
+	})
 	mux.HandleFunc("GET /api/regime", d.regimes)
 	mux.HandleFunc("GET /api/ranking", d.ranking)
 	mux.HandleFunc("GET /api/breakouts", d.breakouts)

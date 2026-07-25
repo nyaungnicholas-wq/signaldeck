@@ -169,5 +169,8 @@ func (d Deps) registerData(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/news", d.news)
 	mux.HandleFunc("GET /api/sectors", d.sectors)
 	mux.HandleFunc("GET /api/regime-conditioned", d.regimeConditioned)
-	mux.HandleFunc("GET /api/macro", d.macro)
+	mux.HandleFunc("GET /api/macro", func(w http.ResponseWriter, r *http.Request) {
+		// Perf wave 2026-07-24: measured 5.9s per request; SWR-cached.
+		sharedMacroSWR.serve("macro", w, r, d.macro)
+	})
 }
