@@ -34,6 +34,13 @@ const MetaKeyPrefix = "model_health:"
 // recentWindowDays bounds the "is it decaying" comparison.
 const recentWindowDays = 14
 
+// Drift windows: the live sample is what the model is being asked to predict
+// from now; the reference is the older stretch it was effectively fit against.
+const (
+	driftLiveDays = 14
+	driftRefDays  = 60
+)
+
 func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 	var graded, retired int
 	var summary []string
@@ -54,14 +61,20 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 			recent = store.DirectionalRecordRow{}
 		}
 
+		// FEATURE DRIFT (2026-07-25): compare the recent feature distribution
+		// against an older reference window. Split by TIME, not randomly — a
+		// random split compares a model to itself and always looks stable.
+		drift := w.featureDrift(ctx)
+
 		score := modelhealth.Grade(modelhealth.Inputs{
-			Observations: full.N,
-			Accuracy:     full.Accuracy,
-			BaselineAcc:  full.BaselineAcc,
-			RecentAcc:    recent.Accuracy,
-			RecentN:      recent.N,
-			BrierSkill:   full.BrierSkill,
-			CalibrationErr: full.CalibrationErr,
+			FeatureDriftPct: drift,
+			Observations:    full.N,
+			Accuracy:        full.Accuracy,
+			BaselineAcc:     full.BaselineAcc,
+			RecentAcc:       recent.Accuracy,
+			RecentN:         recent.N,
+			BrierSkill:      full.BrierSkill,
+			CalibrationErr:  full.CalibrationErr,
 			// The ensemble retrains continuously off resolved outcomes, so age
 			// is not a meaningful axis for it; leaving it zero scores freshness
 			// full rather than inventing a retrain date.
@@ -93,6 +106,32 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 	}
 
 	return fmt.Sprintf("graded %d, retired %d — %v", graded, retired, summary), nil
+}
+
+// featureDrift returns the fraction of features whose distribution has moved
+// materially between an older reference window and the recent one. Returns 0
+// on any failure — a drift number nobody can compute must not retire a model,
+// and the observation floor in Grade guards the opposite direction.
+func (w *ModelHealthWorker) featureDrift(ctx context.Context) float64 {
+	version, err := w.St.LatestFeatureVersion(ctx)
+	if err != nil || version == 0 {
+		return 0
+	}
+	now := time.Now()
+	liveTo := now.Unix()
+	liveFrom := now.AddDate(0, 0, -driftLiveDays).Unix()
+	refTo := liveFrom
+	refFrom := now.AddDate(0, 0, -driftLiveDays-driftRefDays).Unix()
+
+	ref, live, err := w.St.FeatureWindows(ctx, version, refFrom, refTo, liveFrom, liveTo, 0)
+	if err != nil {
+		return 0
+	}
+	var results []modelhealth.DriftResult
+	for name, refVals := range ref {
+		results = append(results, modelhealth.DriftFor(name, refVals, live[name]))
+	}
+	return modelhealth.DriftFraction(results)
 }
 
 // ModelEmitting reports whether a model is currently cleared to emit. Unknown
