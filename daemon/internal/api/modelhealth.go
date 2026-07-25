@@ -62,11 +62,22 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 		hi = []store.StructuralRecordRow{}
 	}
 
+	// Phase 3: per-symbol grading. A predictor can be right fleet-wide and
+	// reliably wrong on a subset, and averaging hides exactly the cases a user
+	// would most want warned about. Symbols below the evidence floor are omitted
+	// rather than shown with a noisy number.
+	perSymbol, _ := d.St.SymbolStructuralRecords(ctx, r.URL.Query().Get("kind"), 20)
+	if perSymbol == nil {
+		perSymbol = []store.SymbolStructuralRow{}
+	}
+
 	writeJSON(w, map[string]any{
-		"models":              models,
-		"structuralAll":       all,
-		"structuralHighConv":  hi,
-		"minObservations":     30,
+		"models":             models,
+		"perSymbol":          perSymbol,
+		"perSymbolMinN":      20,
+		"structuralAll":      all,
+		"structuralHighConv": hi,
+		"minObservations":    30,
 		"howToRead": "liveAccuracy is what happened. claimedAccuracy is what the " +
 			"forecast advertised when it was made. persistenceBase is what doing " +
 			"nothing would have scored — for a structural call that is the honest " +

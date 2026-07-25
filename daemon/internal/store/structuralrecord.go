@@ -118,3 +118,72 @@ func StructuralKinds() []string {
 		string(structregime.KindLiquidity21),
 	}
 }
+
+// SymbolStructuralRow is one (symbol, kind) live record — Phase 3.
+//
+// A predictor can be right in aggregate and reliably wrong on a subset. trend21
+// scoring 83% fleet-wide says nothing about whether it works on a volatile
+// micro-cap, and averaging hides exactly the cases a user would most want
+// warned about. Grading per symbol is what turns "the model works" into "the
+// model works HERE".
+type SymbolStructuralRow struct {
+	SymbolID        int64   `json:"symbolId"`
+	Symbol          string  `json:"symbol"`
+	Kind            string  `json:"kind"`
+	N               int     `json:"n"`
+	Correct         int     `json:"correct"`
+	Accuracy        float64 `json:"accuracy"`
+	ClaimedAccuracy float64 `json:"claimedAccuracy"`
+	PersistenceBase float64 `json:"persistenceBase"`
+	Edge            float64 `json:"edgeVsPersistence"`
+}
+
+// SymbolStructuralRecords grades each (symbol, kind) pair that has at least
+// minN independent resolutions. Symbols below the floor are omitted rather than
+// reported with a noisy number — a per-symbol accuracy from four observations
+// is not evidence, and showing it invites acting on it.
+func (s *Store) SymbolStructuralRecords(ctx context.Context, kind string, minN int) ([]SymbolStructuralRow, error) {
+	if minN <= 0 {
+		minN = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT o.symbol_id, sy.symbol, o.kind,
+		       COUNT(*),
+		       SUM(CASE WHEN o.correct = 1 THEN 1 ELSE 0 END),
+		       AVG(o.historical_accuracy),
+		       AVG(CASE WHEN o.actual = o.regime THEN 1.0 ELSE 0.0 END)
+		FROM regime_outcomes o
+		JOIN symbols sy ON sy.id = o.symbol_id
+		WHERE o.resolved_at IS NOT NULL AND o.correct IN (0,1)
+		  AND (? = '' OR o.kind = ?)
+		GROUP BY o.symbol_id, o.kind
+		HAVING COUNT(*) >= ?
+		ORDER BY o.kind, sy.symbol`, kind, kind, minN)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	out := []SymbolStructuralRow{}
+	for rows.Next() {
+		var r SymbolStructuralRow
+		var claimed, persist *float64
+		if err := rows.Scan(&r.SymbolID, &r.Symbol, &r.Kind, &r.N, &r.Correct,
+			&claimed, &persist); err != nil {
+			return nil, err
+		}
+		if r.N > 0 {
+			r.Accuracy = float64(r.Correct) / float64(r.N)
+		}
+		if claimed != nil {
+			r.ClaimedAccuracy = *claimed
+		}
+		if persist != nil {
+			r.PersistenceBase = *persist
+		}
+		r.Edge = r.Accuracy - r.PersistenceBase
+		return_ := r
+		out = append(out, return_)
+	}
+	return out, rows.Err()
+}
