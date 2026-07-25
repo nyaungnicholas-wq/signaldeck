@@ -1,0 +1,52 @@
+SignalDeck — Source-Available License
+Copyright (c) 2026 Nicholas Nyaung. All rights reserved.
+
+WHY THIS LICENSE
+This is the reversible choice. Source-available preserves every option: the
+copyright holder can relicense this permissively (MIT, Apache-2.0) at any time,
+but an open-source release cannot be taken back. Anyone evaluating the work —
+an employer, a collaborator, a potential customer — can read all of it, which
+is what matters for evaluation. Commercial rights stay with the author until
+the author decides otherwise.
+
+GRANT
+Permission is granted, free of charge, to any person obtaining a copy of this
+software and its documentation (the "Software"), to:
+
+  (a) view, read, and study the source code;
+  (b) run the Software for personal, educational, evaluation, or internal
+      research purposes;
+  (c) modify the Software for those same purposes.
+
+RESTRICTIONS
+Without prior written permission from the copyright holder, you may NOT:
+
+  (a) use the Software, in whole or in part, for commercial purposes, including
+      operating it as a hosted or managed service;
+  (b) redistribute, sublicense, sell, or publish the Software or substantial
+      portions of it;
+  (c) remove or alter this license or the copyright notice.
+
+DATA IS NOT COVERED BY THIS LICENSE
+The Software ingests third-party market data. That data is licensed separately
+by its providers and is NOT granted to you by this license under any terms.
+Operating this Software requires your OWN agreements and API keys with each
+data provider, and each provider's terms govern what you may do with the data
+they supply — including whether you may store it, derive from it, display it,
+or pass it to anyone else. Several providers prohibit redistribution outright.
+See DATA_SOURCES.md for the per-source classification.
+
+NO WARRANTY, AND EXPLICITLY NOT FINANCIAL ADVICE
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Nothing produced by this Software is financial advice, an offer, or a
+recommendation to buy or sell any instrument. Its forecasts are statistical
+estimates with measured and openly published error rates. Trading involves risk
+of total loss, and leveraged instruments can lose more than the amount
+deposited. Past performance does not predict future results.

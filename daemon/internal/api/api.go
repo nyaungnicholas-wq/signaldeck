@@ -18,6 +18,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/backup"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -406,6 +407,16 @@ func (d Deps) bars(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 5000 {
 		limit = 500
+	}
+	// REDISTRIBUTION GUARD (2026-07-25). Raw bars are licensed vendor data;
+	// serving them to a third party is redistribution, which every price feed
+	// in use prohibits. Consuming them privately on loopback is fine, so the
+	// guard trips only where the daemon is actually reachable by someone else.
+	// Derived analytics (forecasts, regimes, risk) are unaffected — the point
+	// is the raw records, not the insight computed from them.
+	if !d.Cfg.AllowRawExport && !d.Cfg.PublicReads && !datalicense.BarsRedistributable() {
+		httpErr(w, 451, datalicense.RawDataNotice())
+		return
 	}
 	bars, err := d.St.LastBars(r.Context(), s.ID, tf, limit)
 	if err != nil {

@@ -40,6 +40,7 @@ type Config struct {
 
 	// Multi-user + exposure controls.
 	OpenSignup  bool // SIGNALDECK_OPEN_SIGNUP (default true): allow POST /api/auth/register
+	AllowRawExport bool // SIGNALDECK_ALLOW_RAW_EXPORT (default false): serve raw licensed bars
 	PublicReads bool // SIGNALDECK_PUBLIC_READS (default true): read-only endpoints work without auth (localhost compatibility)
 	TrustProxy  bool // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
 	RateRPS     int  // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
@@ -122,7 +123,15 @@ func Load() Config {
 		APIToken:        os.Getenv("SIGNALDECK_API_TOKEN"),
 		TVWebhookSecret: pick("SIGNALDECK_TV_WEBHOOK_SECRET", ""),
 		OpenSignup:      boolEnv("SIGNALDECK_OPEN_SIGNUP", true),
-		PublicReads:     boolEnv("SIGNALDECK_PUBLIC_READS", true),
+		// SAFE BY DEFAULT (2026-07-25): unauthenticated reads are a localhost
+		// convenience, not a deployment posture. The default now follows the
+		// BIND ADDRESS — true on loopback, false the moment the daemon listens
+		// anywhere reachable — so exposing it can no longer silently publish
+		// every read endpoint. An explicit env var still wins either way.
+		PublicReads:     boolEnv("SIGNALDECK_PUBLIC_READS", loopbackOnly(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
+		// Asserting you hold redistribution rights for the stored price data.
+		// The flag records the operator's assertion; it does not grant a right.
+		AllowRawExport:  boolEnv("SIGNALDECK_ALLOW_RAW_EXPORT", false),
 		TrustProxy:      boolEnv("SIGNALDECK_TRUST_PROXY", false),
 		RateRPS:         atoiOr(os.Getenv("SIGNALDECK_RATE_RPS"), 0),
 		RateBurst:       atoiOr(os.Getenv("SIGNALDECK_RATE_BURST"), 0),
@@ -215,4 +224,23 @@ func parseDotEnv(path string) map[string]string {
 		out[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), `"'`)
 	}
 	return out
+}
+
+// loopbackOnly reports whether addr binds only to the local machine. Used to
+// derive a safe PublicReads default: convenience on localhost, closed anywhere
+// a stranger could reach.
+func loopbackOnly(addr string) bool {
+	host := addr
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		host = addr[:i]
+	}
+	host = strings.Trim(host, "[]")
+	// An EMPTY host (":8322") binds every interface, so it is emphatically not
+	// loopback — treating it as local would hand out the safe-looking default
+	// on exactly the configuration that is reachable from the network.
+	switch host {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	return strings.HasPrefix(host, "127.")
 }
