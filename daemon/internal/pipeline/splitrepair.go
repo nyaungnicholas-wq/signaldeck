@@ -75,7 +75,7 @@ func (w *SplitRepair) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
 	cutoff := now - int64(recheck.Seconds())
 
-	scanned, flagged, repaired, failed := 0, 0, 0, 0
+	scanned, flagged, repaired, failed, confirmedReal := 0, 0, 0, 0, 0
 	for _, s := range syms {
 		select {
 		case <-ctx.Done():
@@ -115,11 +115,42 @@ func (w *SplitRepair) Run(ctx context.Context) (string, error) {
 				len(rep.Suspects), false, err.Error(), now)
 			continue
 		}
+
+		// VERIFY, then believe the provider. Re-running detection on the
+		// refetched bars is what separates the two cases a jump alone cannot:
+		//
+		//   gone  -> the stored series really was on a stale split basis, and
+		//            the refetch repaired it.
+		//   still -> the provider, asked for a clean two-year window on one
+		//            consistent basis, returned the same move. That is the
+		//            provider asserting the move is REAL, and the detector was
+		//            wrong. Confirmed live on BMNR (+695% the day it announced
+		//            an ETH treasury) and CIRC (+202% post-IPO) — both landed
+		//            near clean ratios by coincidence.
+		//
+		// Recording the second case as a failure with its reason is what stops
+		// the worker re-fetching a genuine move forever, and leaves a readable
+		// trail of the detector's false positives.
+		after, err := w.St.Bars(ctx, s.ID, md.TF1d, 0, now+86400, 0)
+		if err == nil && len(after) >= 2 {
+			in2 := make([]splitfix.Bar, len(after))
+			for i, b := range after {
+				in2[i] = splitfix.Bar{Ts: b.Ts, Close: b.Close, Volume: b.Volume}
+			}
+			if splitfix.Detect(in2).Recent {
+				confirmedReal++
+				_ = w.St.RecordSplitRepair(ctx, s.ID, worst.Date, worst.NearestName,
+					len(rep.Suspects), false,
+					"provider returned the same move on a clean refetch — treating as a REAL price move, not a split",
+					now)
+				continue
+			}
+		}
 		repaired++
 		_ = w.St.RecordSplitRepair(ctx, s.ID, worst.Date, worst.NearestName,
 			len(rep.Suspects), true, "", now)
 	}
 
-	return fmt.Sprintf("scanned %d, contaminated %d, repaired %d, failed %d",
-		scanned, flagged, repaired, failed), nil
+	return fmt.Sprintf("scanned %d, contaminated %d, repaired %d, confirmed-real %d, failed %d",
+		scanned, flagged, repaired, confirmedReal, failed), nil
 }
