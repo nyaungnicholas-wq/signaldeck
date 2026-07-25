@@ -122,7 +122,11 @@ func Load() Config {
 		AllowedHosts:    splitList(pick("SIGNALDECK_ALLOWED_HOSTS", "127.0.0.1:8322,localhost:8322")),
 		APIToken:        os.Getenv("SIGNALDECK_API_TOKEN"),
 		TVWebhookSecret: pick("SIGNALDECK_TV_WEBHOOK_SECRET", ""),
-		OpenSignup:      boolEnv("SIGNALDECK_OPEN_SIGNUP", true),
+		// SAFE BY DEFAULT (2026-07-25): open registration is a localhost
+		// convenience. On a reachable deployment it lets any stranger create an
+		// account and spend the LLM budget, so it follows the bind address for
+		// the same reason PublicReads does.
+		OpenSignup:      boolEnv("SIGNALDECK_OPEN_SIGNUP", loopbackOnly(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
 		// SAFE BY DEFAULT (2026-07-25): unauthenticated reads are a localhost
 		// convenience, not a deployment posture. The default now follows the
 		// BIND ADDRESS — true on loopback, false the moment the daemon listens
