@@ -194,6 +194,37 @@ func gbmSamplesFromLabeled(rows []store.LabeledFeature, keys []string) []gbm.Sam
 // pressure feature directly and applies the same [-1,1] -> [0,1] conversion
 // ensemble.LegProbabilities uses for LegPressure. That is an input, not an
 // output. Rows lacking it are skipped, exactly as rows lacking pred_raw were.
+// meanRevLatestInput derives the momentum probability the mean-reversion leg
+// inverts when it SERVES, using the same construction as the samples it is
+// GRADED on.
+//
+// It used to read rows[0].Vec["pred_raw"], which was wrong twice over.
+// gbm/selfref.go names the first fault in its own doctrine comment: pred_raw is
+// the blend output computed WITH the mean-reversion leg inside it, so the leg
+// inverted a number that already contained its own inversion. The sample
+// builder was moved onto pressure_score when that was found; this serve path,
+// forty lines away, was not.
+//
+// The second fault is quieter and just as bad: the OOS lift that admits this
+// leg into the blend was measured on (pressure_score+1)/2 while the probability
+// actually published inverted pred_raw. The gate was validating a signal that
+// was never served. Live on 2026-07-26, 7 of 37 graded meanrev rows carried
+// lift>0 and were therefore in the blend on that basis.
+//
+// It refuses rather than falling back when the newest row has no pressure
+// score: a fallback to pred_raw would quietly restore the self-reference during
+// exactly the source outage that makes it hardest to notice.
+func meanRevLatestInput(rows []store.LabeledFeature) (float64, bool) {
+	if len(rows) == 0 {
+		return 0, false
+	}
+	pressure, ok := rows[0].Vec["pressure_score"]
+	if !ok {
+		return 0, false
+	}
+	return (pressure + 1) / 2, true
+}
+
 func meanRevSamplesFromLabeled(rows []store.LabeledFeature) []meanrev.Sample {
 	out := make([]meanrev.Sample, 0, len(rows))
 	for i := len(rows) - 1; i >= 0; i-- {
@@ -283,7 +314,7 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 
 			// ── mean-reversion leg ───────────────────────────────────────
 			mrSamples := meanRevSamplesFromLabeled(rows)
-			latestRaw, hasRaw := rows[0].Vec["pred_raw"]
+			latestRaw, hasRaw := meanRevLatestInput(rows)
 			if hasRaw {
 				if prob, g, ok := meanrev.Run(mrSamples, latestRaw, meanRevFolds, meanrev.DefaultStrength, meanRevCost); ok {
 					if err := w.St.UpsertModelForecast(ctx, store.ModelForecast{

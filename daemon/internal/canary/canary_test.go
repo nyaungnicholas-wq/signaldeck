@@ -10,11 +10,51 @@ const day = int64(86400)
 
 // rec builds an arm observed on every day of its window — the ordinary case.
 // Records where rows and days come apart are built with spanRec below.
+//
+// Its observations are spread EVENLY across the window, hits included, which is
+// what "observed on every day" means and is the fixture these tests always
+// intended. Spelling it out per day is now required rather than implied,
+// because the promotion interval resamples days: an arm that reports only a row
+// total has no measurable between-day variance and so gets no interval at all.
+// An even spread carries no clustering penalty, so every assertion written
+// against this helper keeps exactly the meaning it had.
 func rec(version string, n, correct int, days int64, baseline float64) Record {
-	return Record{
+	r := Record{
 		Version: version, N: n, Correct: correct, Days: int(days),
 		FirstTs: 0, LastTs: days * day, BaselineAccuracy: baseline,
 	}
+	r.DayTallies = evenTallies(n, correct, int(days))
+	return r
+}
+
+// evenTallies spreads n observations and correct hits across d days as evenly
+// as integer division allows, always summing back to exactly (n, correct).
+// Days beyond the observation count are dropped rather than left empty.
+func evenTallies(n, correct, d int) []DayTally {
+	if d > n {
+		d = n
+	}
+	if d < 1 || n < 1 {
+		return nil
+	}
+	out := make([]DayTally, d)
+	for i := range out {
+		out[i] = DayTally{Day: int64(i), N: n / d, Hits: correct / d}
+	}
+	// Hand the integer-division remainder to the first days so the tallies
+	// reconcile with the headline counts exactly.
+	for i := 0; i < n%d; i++ {
+		out[i].N++
+	}
+	for i := 0; i < correct%d; i++ {
+		out[i].Hits++
+	}
+	for i := range out {
+		if out[i].Hits > out[i].N {
+			out[i].Hits = out[i].N
+		}
+	}
+	return out
 }
 
 // A thin challenger must HOLD, however good it looks. This is the whole point:

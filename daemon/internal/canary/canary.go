@@ -54,6 +54,8 @@ package canary
 import (
 	"fmt"
 	"math"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 )
 
 const (
@@ -104,9 +106,50 @@ type Record struct {
 	// FirstTs / LastTs bound the observation window (Unix seconds).
 	FirstTs int64 `json:"firstTs"`
 	LastTs  int64 `json:"lastTs"`
+	// DayTallies is the record broken out per UTC day: the unit this platform
+	// resamples on. It is REQUIRED for a promotion, because the interval that
+	// decides a promotion has to be a day-count interval and there is no way to
+	// recover the between-day variance from N and Correct alone. Fill it with
+	// TallyDays. An arm that omits it can be rejected and can be held, but can
+	// never be promoted — see Evaluate.
+	DayTallies []DayTally `json:"dayTallies,omitempty"`
 	// BaselineAccuracy is the naive majority-class accuracy over the SAME
 	// observations — the null any model must beat to be worth serving.
 	BaselineAccuracy float64 `json:"baselineAccuracy"`
+}
+
+// DayTally is one UTC day's graded observations. It mirrors clusterstat.Day so
+// a Record can be handed to the platform's cluster-robust estimator without the
+// caller reshaping it.
+type DayTally struct {
+	Day  int64 `json:"day"`
+	N    int   `json:"n"`
+	Hits int   `json:"hits"`
+}
+
+// TallyDays folds parallel timestamp/correctness slices into per-day tallies —
+// the only correct way to fill Record.DayTallies, and the companion to
+// DistinctDays.
+func TallyDays(ts []int64, correct []bool) []DayTally {
+	if len(ts) != len(correct) {
+		return nil
+	}
+	idx := map[int64]int{}
+	var out []DayTally
+	for i, t := range ts {
+		d := t / 86400
+		j, ok := idx[d]
+		if !ok {
+			idx[d] = len(out)
+			out = append(out, DayTally{Day: d})
+			j = len(out) - 1
+		}
+		out[j].N++
+		if correct[i] {
+			out[j].Hits++
+		}
+	}
+	return out
 }
 
 // Accuracy is Correct/N, or 0 when N is 0.
@@ -170,6 +213,80 @@ func DistinctDays(ts []int64) int {
 	return len(seen)
 }
 
+// Interval returns the challenger interval this gate decides on, with the
+// method that produced it.
+//
+// # Why this is not a Wilson interval over N
+//
+// Until 2026-07-26 it was, and that was the defect. Every observation on this
+// platform is one symbol on one day, and on any given day ~1,000 symbols share
+// ONE market move. A Wilson interval over 10,000 such rows asserts 10,000
+// independent trials in a sample that holds roughly twenty. Measured on the
+// live 1d record the design effect is ~14x, so the shipped interval was ~3.8x
+// too narrow — and this gate promotes when the LOWER BOUND clears the incumbent
+// by half a point. A bound that is four times too tight turns twenty days of
+// noise into a promotion.
+//
+// The display surfaces were corrected for this when clusterstat was written;
+// this gate was not, so the platform's most consequential decision was the last
+// one still reading a row-count interval. It now resamples days, like
+// everything else.
+//
+// method is one of:
+//   - "day-clustered-wilson": corrected, promotable.
+//   - "withheld": the arm did not supply per-day tallies, so no honest interval
+//     exists. Reported as [0,1] — maximal uncertainty, which cannot promote and
+//     cannot reject. Falling back to the pooled interval here would reintroduce
+//     the defect through the back door.
+func (r Record) Interval() (lo, hi float64, method string, deff, effN float64) {
+	days := r.clusterDays()
+	if days == nil {
+		return 0, 1, "withheld", 0, 0
+	}
+	// The same refusal floor clusterstat applies everywhere else. A between-day
+	// variance estimated from two or three days is not a correction — it is a
+	// second way to be overconfident, and it is worse than none because the
+	// result carries a label saying it was corrected. Measured live on
+	// 2026-07-26 the v8 incumbent held 1,046 rows on 2 days: the estimator
+	// floors that to deff 1.0 and would have published a 6.0pp interval as
+	// "day-clustered". This gate already demands 14 distinct days to be
+	// gradable at all, so the floor can never loosen a check that existed.
+	if len(days) < clusterstat.MinDistinctDays {
+		return 0, 1, "withheld", 0, 0
+	}
+	d, ok := clusterstat.DesignEffect(days)
+	if !ok || d <= 0 {
+		return 0, 1, "withheld", 0, 0
+	}
+	eff := float64(r.N) / d
+	iv := clusterstat.WilsonEff(r.Accuracy(), eff)
+	return iv.Lo, iv.Hi, "day-clustered-wilson", d, eff
+}
+
+// clusterDays converts the arm's tallies to clusterstat's unit, returning nil
+// when they are absent or do not reconcile with the headline counts. A tally
+// set that disagrees with N/Correct is a bug in the caller, and silently
+// preferring one over the other would hide it.
+func (r Record) clusterDays() []clusterstat.Day {
+	if len(r.DayTallies) < 2 {
+		return nil
+	}
+	out := make([]clusterstat.Day, 0, len(r.DayTallies))
+	var n, hits int
+	for _, t := range r.DayTallies {
+		if t.N <= 0 || t.Hits < 0 || t.Hits > t.N {
+			return nil
+		}
+		n += t.N
+		hits += t.Hits
+		out = append(out, clusterstat.Day{Day: t.Day, N: t.N, Hits: t.Hits})
+	}
+	if n != r.N || hits != r.Correct {
+		return nil
+	}
+	return out
+}
+
 // Verdict is the full evaluation, built to be rendered verbatim: the reason is
 // part of the output, not something a caller reconstructs.
 type Verdict struct {
@@ -203,6 +320,15 @@ type Verdict struct {
 	ObservationsNeeded int `json:"observationsNeeded"`
 	// DaysNeeded is how much longer the window must run, 0 when met.
 	DaysNeeded float64 `json:"daysNeeded"`
+	// IntervalMethod names the estimator behind ChallengerLower/Upper, so a
+	// reader can tell a day-clustered bound from a withheld one.
+	IntervalMethod string `json:"intervalMethod"`
+	// DesignEffect is the measured clustering penalty, and EffectiveN is
+	// N/DesignEffect — the sample size the interval was actually computed at.
+	// Both are 0 when the interval was withheld. Publishing them is the point:
+	// "6,957 observations, effective 480" is the honest description.
+	DesignEffect float64 `json:"designEffect"`
+	EffectiveN   float64 `json:"effectiveN"`
 	// The same two shortfalls for the INCUMBENT. They are published for the
 	// same reason the challenger's are: a bar that cannot be verified is a fact
 	// about the platform, not a detail to keep on the inside.
@@ -225,8 +351,9 @@ func Evaluate(incumbent, challenger Record) Verdict {
 		Shadow:             challenger.Version,
 		Decision:           DecisionHold,
 	}
-	lo, hi := WilsonInterval(challenger.Correct, challenger.N)
+	lo, hi, method, deff, effN := challenger.Interval()
 	v.ChallengerLower, v.ChallengerUpper = lo, hi
+	v.IntervalMethod, v.DesignEffect, v.EffectiveN = method, deff, effN
 
 	// Both arms, same floors, before any comparison. The incumbent is checked
 	// first because without a bar there is nothing to measure a challenger
@@ -243,6 +370,18 @@ func Evaluate(incumbent, challenger Record) Verdict {
 		return v
 	}
 	v.Comparable = true
+
+	// A withheld interval is not a wide interval to reason about — it is the
+	// absence of one, and it stops the comparison here rather than flowing into
+	// the switch below where it would be reported as "does not clear the naive
+	// baseline". That reason would be a statement about the challenger; the
+	// true statement is about the platform's own bookkeeping.
+	if v.IntervalMethod == "withheld" {
+		v.Reason = "holding: the challenger does not report its observations per UTC day, " +
+			"so no day-resampled interval can be computed — and a row-count interval over " +
+			"one market move per day is the overstatement this gate exists to avoid"
+		return v
+	}
 
 	margin := MinMarginPp / 100
 	switch {

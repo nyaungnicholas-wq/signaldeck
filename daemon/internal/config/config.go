@@ -188,14 +188,24 @@ func atoiOr(s string, def int) int {
 }
 
 // boolEnv reads a boolean env var ("false"/"0"/"no" = false, "true"/"1"/"yes" = true).
+//
+// An unrecognised NON-EMPTY value fails CLOSED (false) rather than falling
+// through to the default. The two callers that matter — SIGNALDECK_PUBLIC_READS
+// and SIGNALDECK_OPEN_SIGNUP — both default to true on a loopback bind, so a
+// value the parser did not understand used to silently mean "open". An operator
+// who typed something is expressing an intent to restrict far more often than an
+// intent to open, and a security default should never be reachable by a typo.
 func boolEnv(k string, def bool) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(k))) {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(k)))
+	switch raw {
+	case "":
+		return def
 	case "1", "true", "yes", "on":
 		return true
 	case "0", "false", "no", "off":
 		return false
 	default:
-		return def
+		return false
 	}
 }
 
@@ -225,7 +235,22 @@ func parseDotEnv(path string) map[string]string {
 		if !ok {
 			continue
 		}
-		out[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), `"'`)
+		v = strings.TrimSpace(v)
+		// Strip a trailing ` #…` comment on an UNQUOTED value. Without this,
+		// `SIGNALDECK_PUBLIC_READS=false  # locked down for the tunnel` parses
+		// as the literal string "false  # locked down for the tunnel", which
+		// boolEnv cannot recognise — and the exact remediation ops/GO-LIVE.md
+		// tells the operator to type then does nothing. A `#` inside a quoted
+		// value is left alone, because secrets legitimately contain one.
+		if !strings.HasPrefix(v, `"`) && !strings.HasPrefix(v, `'`) {
+			if i := strings.Index(v, " #"); i >= 0 {
+				v = strings.TrimSpace(v[:i])
+			}
+			if i := strings.Index(v, "\t#"); i >= 0 {
+				v = strings.TrimSpace(v[:i])
+			}
+		}
+		out[strings.TrimSpace(k)] = strings.Trim(v, `"'`)
 	}
 	return out
 }
