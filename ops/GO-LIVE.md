@@ -41,6 +41,18 @@ switch it on.
    batched Telegram message per pass (30-min cooldown), and health-watchdog
    warnings ride the same channel. Failures appear as `notify_failed` dq
    events — secrets are redacted everywhere.
+5. **Confirm it actually delivers, immediately:**
+
+   ```
+   curl -X POST -H 'X-Signaldeck: 1' http://127.0.0.1:8322/api/notify/test
+   ```
+
+   This sends a real message through every configured transport and reports
+   each one's status *after* the attempt. Do not skip it. Delivery is
+   deliberately best-effort, so a mistyped token raises no error — it fails
+   quietly into a dq event, and without this call the first thing you learn
+   is that an alert you needed never arrived. With nothing configured, the
+   response names the exact env vars to set.
 
 ## 3. PWA (after Tailscale)
 
