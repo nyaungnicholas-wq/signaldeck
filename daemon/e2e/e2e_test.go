@@ -16,6 +16,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -52,11 +54,40 @@ func freePort(t *testing.T) int {
 	return 0
 }
 
+// safeBuffer guards a bytes.Buffer with a mutex. cmd.Stdout/cmd.Stderr are
+// written by exec's internal copy goroutines for as long as the child is
+// alive, while the test goroutine reads d.logs.String() on every failure path
+// (including ones that fire before the child exits, e.g. waitHealthy timing
+// out) — a bare bytes.Buffer is not safe for that concurrent access and
+// go test -race catches it reliably.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type daemon struct {
-	cmd  *exec.Cmd
-	url  string
-	done chan error
-	logs *bytes.Buffer
+	cmd *exec.Cmd
+	url string
+	// done receives cmd.Wait()'s result exactly once; exited flips true in the
+	// same goroutine right after, so other goroutines can check "has this
+	// process been reaped" without touching cmd.ProcessState directly. Reading
+	// ProcessState from Cleanup while cmd.Wait() (running in its own goroutine)
+	// writes it is the second race go test -race reports on this file.
+	done   chan error
+	exited atomic.Bool
+	logs   *safeBuffer
 }
 
 // startDaemon launches the binary with an isolated HOME (so no real .env,
@@ -65,7 +96,7 @@ func startDaemon(t *testing.T, bin, home, dbPath string, port int) *daemon {
 	t.Helper()
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	cmd := exec.Command(bin)
-	logs := &bytes.Buffer{}
+	logs := &safeBuffer{}
 	cmd.Stdout = logs
 	cmd.Stderr = logs
 	cmd.Env = []string{
@@ -86,9 +117,13 @@ func startDaemon(t *testing.T, bin, home, dbPath string, port int) *daemon {
 		t.Fatalf("start daemon: %v", err)
 	}
 	d := &daemon{cmd: cmd, url: "http://" + addr, done: make(chan error, 1), logs: logs}
-	go func() { d.done <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		d.exited.Store(true)
+		d.done <- err
+	}()
 	t.Cleanup(func() {
-		if cmd.ProcessState == nil {
+		if !d.exited.Load() {
 			_ = cmd.Process.Kill()
 			<-d.done
 		}
