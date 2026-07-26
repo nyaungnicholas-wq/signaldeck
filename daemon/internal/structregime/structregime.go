@@ -562,3 +562,21 @@ func TradeabilityFor(k Kind, conv float64) string {
 		"return: the HIGHEST-accuracy band of this kind has a NEGATIVE mean forward return.",
 		h, pct)
 }
+
+// AccuracyForTest exposes the band-accuracy tables to the pre-registration
+// package, which must compare what a predictor CLAIMS today against the claim
+// frozen before its forecasts resolved. Exported for that check specifically:
+// the alternative is duplicating the tables in prereg, and two copies of the
+// same numbers is precisely the drift the check exists to catch.
+//
+// It routes crypto kinds to the crypto table, because those accuracies were
+// measured on a different (much smaller, bear-dominated) sample and quoting an
+// equity number for them would be the same class of error the check prevents.
+func AccuracyForTest(k Kind, conv float64) float64 {
+	switch k {
+	case KindTrendCrypto21, KindLiquidityCrypto21:
+		return cryptoAccuracyFor(k, conv)
+	default:
+		return accuracyFor(k, conv)
+	}
+}

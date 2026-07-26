@@ -247,6 +247,9 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// are Alpaca credentials to fetch the archive with.
 	fleet = append(fleet, sentCorrWorkers(st, cfg)...)
 	fleet = append(fleet, honestyGapWorkers(st)...)
+	// Meta-labeling wave (constructor appended at the END of this file) — the
+	// take-or-skip study. Measurement only; it never sizes a trade.
+	fleet = append(fleet, metaLabelWorkers(st)...)
 	// Credibility wave (constructor appended at the END of this file) — the
 	// regime-outcome-runner (6h) that freezes every regime forecast into an
 	// ungraded outcome row (once per symbol/kind/UTC-day), later grades it with
@@ -745,6 +748,11 @@ func learningWorkers(st *store.Store) []workers.Worker {
 		// windows; every grade runs a self-attack battery whose failures enter
 		// the same evidence chain. Audit surface only — mutates nothing live.
 		pipeline.NewResearchLedgerWorker(st),
+		// Pre-registration registrar: freezes what each structural predictor
+		// CLAIMS into a hash-chained record BEFORE its forecasts resolve
+		// (first gradable 2026-08-07). The value of a pre-registration is
+		// entirely in its timing, so this runs early and is idempotent.
+		&pipeline.PreregRegistrar{St: st},
 	}
 }
 
@@ -1575,4 +1583,27 @@ func sentCorrWorkers(st *store.Store, cfg config.Config) []workers.Worker {
 		})
 	}
 	return fleet
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// META-LABELING WAVE (appended block).
+//
+// metaLabelWorkers returns the single worker behind internal/metalabel: the
+// study of whether FILTERING the platform's own directional calls earns its
+// place. The primary model picks the side; a secondary model, trained on
+// whether the primary's call cleared cost, decides take-or-skip.
+//
+//   - metalabel-runner (12h): grades the filter walk-forward on independent
+//     symbol-day observations and publishes the verdict to meta.
+//
+// It is a MEASUREMENT surface and gates nothing. That is deliberate and it is
+// the whole point of the design: the primary it currently grades is the
+// auto-retired directional ensemble, and its first live grade showed the filter
+// lifting precision by 17.7 points while still being correctly REJECTED,
+// because a filter on a signal with no cost-net edge just makes fewer of the
+// same losing trades. Promoting it to size anything is a human decision.
+func metaLabelWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.MetaLabelRunner{St: st},
+	}
 }

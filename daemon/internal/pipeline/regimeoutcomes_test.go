@@ -13,6 +13,7 @@ import (
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 )
@@ -284,6 +285,144 @@ func TestRegimeOutcomeResolveLiquidityAndVol(t *testing.T) {
 	for _, p := range pms {
 		if p.KeyName == "" || p.KeyValue <= 0 {
 			t.Fatalf("postmortem missing its measured key number: %+v", p)
+		}
+	}
+}
+
+// ── pre-8/7 pipeline QA: every pre-registered kind must actually resolve ──
+
+// This is the check the whole 2026-08-07 window depends on.
+//
+// The resolver dispatches on kind with a `default: continue` — an unrecognised
+// kind is silently skipped forever, its forecasts piling up unresolved with no
+// error anywhere. That failure mode is invisible until someone asks why a
+// predictor still has no live record weeks after its horizons elapsed, by which
+// point the observation window is spent and cannot be re-run.
+//
+// So every kind carrying outstanding forecasts is walked end to end here:
+// freeze a backdated call, seed enough forward bars, run the worker, and assert
+// a graded row exists. A new kind added without a resolver arm fails this test
+// on the day it is added rather than on the day its evidence is needed.
+func TestEveryPreregisteredKindActuallyResolves(t *testing.T) {
+	ctx := context.Background()
+
+	for _, spec := range prereg.Specs() {
+		spec := spec
+		t.Run(spec.Kind, func(t *testing.T) {
+			st := newRegimeOutcomeStore(t, "resolves.db")
+			market := md.Stocks
+			if strings.HasSuffix(spec.Kind, "-crypto") {
+				market = md.Crypto
+			}
+			sym, err := st.UpsertSymbol(ctx, "AAA", market, "")
+			if err != nil {
+				t.Fatalf("symbol: %v", err)
+			}
+
+			// A tape with real variation in BOTH price and volume, so trend,
+			// vol and liquidity resolvers each have something to decide. A flat
+			// tape would produce degenerate windows and let a broken resolver
+			// pass as an honest non-grade.
+			const start = 1000
+			price := func(i int) (float64, float64) {
+				p := 100.0 * math.Pow(1.001, float64(i))
+				p += math.Sin(float64(i)/3.0) * float64(i%7)
+				vol := 1e6 + float64((i*37)%500)*1e3
+				return p, vol
+			}
+			// Enough history for a 200-day mean plus the full forward horizon.
+			bars := 260 + spec.HorizonDays*2
+			seedRegimeBars(t, st, sym.ID, start, bars, price)
+
+			callIdx := 240
+			callTs := int64(start+callIdx) * 86400
+			// The clock only has to be past the calendar due date; the worker
+			// still refuses to grade until the forward BARS exist, which is the
+			// property the older tests pin.
+			clock := callTs + int64(float64(spec.HorizonDays)*1.5*86400) + 10
+
+			// Regime label must be one the resolver can return for this kind,
+			// otherwise "correct" is meaningless — the point here is that a
+			// GRADE happens, not which way it goes.
+			regime := "uptrend"
+			switch spec.Kind {
+			case "vol21":
+				regime = "elevated"
+			case "liquidity21", "liquidity21-crypto":
+				regime = "active"
+			}
+			freezeCall(t, st, sym.ID, structregime.Kind(spec.Kind), callTs,
+				spec.HorizonDays, regime, 0.91, spec.Bands[len(spec.Bands)-1].Claimed)
+
+			w := &RegimeOutcomeWorker{St: st, Now: func() time.Time { return time.Unix(clock, 0) }}
+			if _, err := w.Run(ctx); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+
+			res, err := st.ResolvedRegimeOutcomes(ctx, 0)
+			if err != nil {
+				t.Fatalf("resolved: %v", err)
+			}
+			if len(res) == 0 {
+				t.Fatalf("kind %q produced NO graded row after its horizon elapsed with forward bars "+
+					"present. Either the resolver has no arm for this kind (the `default: continue` "+
+					"branch swallows it) or its window arithmetic is wrong. Its forecasts will pile up "+
+					"unresolved and its 2026-08-07 evidence window will be lost silently.", spec.Kind)
+			}
+			got := res[0]
+			if string(got.Kind) != spec.Kind {
+				t.Errorf("graded row kind = %q, want %q", got.Kind, spec.Kind)
+			}
+			if got.Actual == "" {
+				t.Errorf("%s: graded with an empty realized label", spec.Kind)
+			}
+			if got.Correct != 0 && got.Correct != 1 {
+				t.Errorf("%s: correct = %d, want 0 or 1", spec.Kind, got.Correct)
+			}
+		})
+	}
+}
+
+// The horizon the resolver grades against must be the horizon the claim was
+// pre-registered with. A forecast frozen at 21 days but graded at 63 would
+// produce a live record that looks like the predictor while measuring something
+// else entirely — and nothing else in the pipeline would notice.
+func TestFrozenHorizonMatchesPreregistration(t *testing.T) {
+	ctx := context.Background()
+	st := newRegimeOutcomeStore(t, "horizon.db")
+	sym, _ := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
+
+	for _, spec := range prereg.Specs() {
+		if strings.HasSuffix(spec.Kind, "-crypto") {
+			continue // same arithmetic, separate symbol/market fixture
+		}
+		freezeCall(t, st, sym.ID, structregime.Kind(spec.Kind),
+			int64(1000+len(spec.Kind))*86400, spec.HorizonDays, "uptrend", 0.5, 0.7)
+	}
+	due, err := st.DueRegimeOutcomes(ctx, 1<<60, 0)
+	if err != nil {
+		t.Fatalf("due: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, o := range due {
+		spec, ok := prereg.SpecFor(string(o.Kind))
+		if !ok {
+			t.Errorf("outstanding forecast of kind %q has NO pre-registered claim — its accuracy "+
+				"cannot be checked against anything frozen", o.Kind)
+			continue
+		}
+		if o.HorizonDays != spec.HorizonDays {
+			t.Errorf("%s frozen at %d days but pre-registered as %d",
+				o.Kind, o.HorizonDays, spec.HorizonDays)
+		}
+		seen[string(o.Kind)] = true
+	}
+	for _, spec := range prereg.Specs() {
+		if strings.HasSuffix(spec.Kind, "-crypto") {
+			continue
+		}
+		if !seen[spec.Kind] {
+			t.Errorf("pre-registered kind %q never appeared in the due queue", spec.Kind)
 		}
 	}
 }

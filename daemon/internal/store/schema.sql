@@ -1611,3 +1611,22 @@ CREATE TABLE IF NOT EXISTS news_symbols (
   PRIMARY KEY (news_id, symbol_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_news_symbols_sym ON news_symbols (symbol_id);
+
+-- ═══ PRE-REGISTRATION CHAIN (internal/prereg) ═════════════════════════════
+-- What each structural predictor CLAIMED, frozen and hash-chained BEFORE its
+-- forecasts began resolving. The chain construction matches the prediction
+-- ledger: entry_hash = sha256(prev_hash ‖ payload), so a rewritten claim
+-- breaks every link after it and the break is found by recomputation rather
+-- than by trust. Rows are APPEND-ONLY — an amended claim is a new row, never
+-- an update, so a change stays visible as a change.
+CREATE TABLE IF NOT EXISTS prereg_records (
+  seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts         INTEGER NOT NULL,
+  kind       TEXT    NOT NULL,
+  spec_json  TEXT    NOT NULL,
+  spec_hash  TEXT    NOT NULL,
+  prev_hash  TEXT    NOT NULL,
+  entry_hash TEXT    NOT NULL,
+  note       TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_prereg_kind ON prereg_records(kind, seq);
