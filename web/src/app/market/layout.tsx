@@ -17,6 +17,9 @@ const TABS = [
   { href: "/market/overview", label: "OVERVIEW" },
   { href: "/market/signals", label: "SIGNALS" },
   { href: "/market/regimes", label: "REGIMES" },
+  // BREADTH reads the same regime calls across the index + sector baskets —
+  // the market-wide view the per-symbol REGIMES tab cannot show.
+  { href: "/market/breadth", label: "BREADTH" },
   { href: "/market/trends", label: "TRENDS" },
   { href: "/market/macro", label: "MACRO" },
   { href: "/market/activity", label: "ACTIVITY" },

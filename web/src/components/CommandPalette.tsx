@@ -30,6 +30,7 @@ const PAGES: { label: string; href: string }[] = [
   { label: "Market — trends", href: "/market/trends" },
   { label: "Market — signals & predictions", href: "/market/signals" },
   { label: "Market — regimes (validated)", href: "/market/regimes" },
+  { label: "Market — breadth (index + sector regimes)", href: "/market/breadth" },
   { label: "Market — macro", href: "/market/macro" },
   { label: "Market — unusual activity", href: "/market/unusual" },
   { label: "Market — activity & alerts", href: "/market/activity" },

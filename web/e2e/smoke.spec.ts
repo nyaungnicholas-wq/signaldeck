@@ -305,3 +305,24 @@ test.describe("lab research surfaces", () => {
     });
   });
 });
+
+// ── (9) MARKET BREADTH: the index/sector regime view ──
+
+// The page's whole reason to exist is the breadth split; a 200 on the document
+// says nothing, since it paints a skeleton until the daemon call lands.
+test.describe("market breadth", () => {
+  test("renders the breadth panel and the basket tables", async ({ page, context }) => {
+    test.setTimeout(240000);
+    await loginAsSmokeUser(context);
+    await context.addInitScript(() => localStorage.setItem("sd-tour-done", "1"));
+
+    await page.goto("/market/breadth");
+    await expect(page.getByRole("heading", { name: "BREADTH", exact: true })).toBeVisible({
+      timeout: 30000,
+    });
+    await expect(page.getByText("SECTOR BREADTH")).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText("INDICES", { exact: true })).toBeVisible();
+    // The tab is reachable from the Market hub, not only by URL.
+    await expect(page.getByRole("link", { name: "BREADTH", exact: true })).toBeVisible();
+  });
+});

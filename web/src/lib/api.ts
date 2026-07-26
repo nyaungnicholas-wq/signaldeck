@@ -426,6 +426,10 @@ export const api = {
   // ── pairs wave: a published DO-NOT-SHIP result (H018 / CORR63) ──
   pairsStudy: () => pairsStudy(),
 
+  // ── market-regime wave: index + sector baskets, and the alert self-test ──
+  marketRegimes: () => marketRegimes(),
+  notifyTest: () => notifyTest(),
+
   // ── capstones wave ──
   debate: (symbol: string) => post<DebateResult>("/api/ai/debate", { symbol }),
   scenario: (symbol: string, factor: string, shock: number) =>
@@ -4188,4 +4192,51 @@ export interface PairsStudyPayload {
 
 export async function pairsStudy(): Promise<PairsStudyPayload> {
   return get<PairsStudyPayload>("/api/pairs-study");
+}
+
+// ── market-regime wave: the same structural calls, read at index/sector level ──
+
+export interface MarketRegimeRow {
+  symbol: string;
+  name: string;
+  group: "index" | "sector";
+  kind: string;
+  regime: string;
+  conviction: number;
+  tier: string;
+  historicalAccuracy: number;
+  ts: number;
+  horizonDays: number;
+}
+
+export interface MarketRegimesPayload {
+  rows: MarketRegimeRow[];
+  /** kind -> regime label -> count, over SECTOR baskets only. */
+  breadth: Record<string, Record<string, number>>;
+  /** Baskets with no call at all — absence stated, not implied. */
+  uncovered: string[] | null;
+  sectors: number;
+  indices: number;
+  howToRead: string;
+  inheritedAccuracy: string;
+  whyThisExists: string;
+  tradeability: string;
+}
+
+export async function marketRegimes(): Promise<MarketRegimesPayload> {
+  return get<MarketRegimesPayload>("/api/market-regimes");
+}
+
+/** Fire a real test message through every configured alert transport. */
+export interface NotifyTestResult {
+  sent: boolean;
+  reason?: string;
+  transports: Array<
+    string | { name: string; configured: boolean; env?: string; lastOk?: number; lastError?: string; lastErrorTs?: number }
+  >;
+  howToRead?: string;
+}
+
+export async function notifyTest(): Promise<NotifyTestResult> {
+  return post<NotifyTestResult>("/api/notify/test", {});
 }

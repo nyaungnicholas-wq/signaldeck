@@ -58,6 +58,58 @@ func (d Deps) notifyStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// notifyTest sends a real message through every configured transport, so the
+// operator can confirm a freshly-set token actually delivers to their phone.
+//
+// Why this exists: setting SIGNALDECK_TELEGRAM_BOT_TOKEN is the whole job, but
+// until an alert happens to fire there is no way to tell a correct token from a
+// typo — and the transport is deliberately best-effort, so a bad token fails
+// silently into a dq event rather than into the operator's face. One button
+// closes that loop.
+//
+// It is a POST behind the normal auth + CSRF path (never a GET, which a link
+// or a prefetch could fire), and it reports per-transport status AFTER the
+// attempt so a failure is visible immediately rather than on the next alert.
+func (d Deps) notifyTest(w http.ResponseWriter, r *http.Request) {
+	if !d.Notifier.Enabled() {
+		writeJSON(w, map[string]any{
+			"sent": false,
+			"reason": "no remote transport is configured — set SIGNALDECK_DISCORD_WEBHOOK, " +
+				"SIGNALDECK_TELEGRAM_BOT_TOKEN + SIGNALDECK_TELEGRAM_CHAT_ID, or " +
+				"SIGNALDECK_WEBHOOK_URL in daemon/.env and restart the daemon",
+			"transports": d.Notifier.ConfiguredNames(),
+		})
+		return
+	}
+
+	d.Notifier.Send(r.Context(), notify.Message{
+		Kind:  "test",
+		Title: "SignalDeck test notification",
+		Body: "If you can read this, remote alert delivery works. Sent from " +
+			"/api/notify/test — no market event occurred.",
+	})
+
+	// Status is read AFTER the send so lastOk / lastError describe THIS attempt.
+	rows := []notifyTransportRow{}
+	for _, ts := range d.Notifier.Status() {
+		if !ts.Configured {
+			continue
+		}
+		rows = append(rows, notifyTransportRow{
+			Name: ts.Name, Configured: true, Env: notifyEnvHints[ts.Name],
+			LastOK: ts.LastOK, LastError: ts.LastError, LastErrorTs: ts.LastErrorTs,
+		})
+	}
+	writeJSON(w, map[string]any{
+		"sent":       true,
+		"transports": rows,
+		"howToRead": "A transport whose lastError timestamp is newer than its lastOk did NOT " +
+			"deliver this message. Errors are redacted before they leave the daemon, so a bad " +
+			"token reads as an auth failure without echoing the token back.",
+	})
+}
+
 func (d Deps) registerNotify(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/notify-status", d.notifyStatus)
+	mux.HandleFunc("POST /api/notify/test", d.notifyTest)
 }

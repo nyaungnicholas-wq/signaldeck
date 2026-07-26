@@ -3,10 +3,19 @@ package api
 import (
 	"context"
 	"net/http"
+	"sort"
+	"strconv"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 )
+
+// highConvictionFloor is the conviction at or above which a call is treated as
+// high conviction for the earnings cross-flag. It matches the 0.8 band
+// boundary the published accuracy tiers use, so the flag and the tiers cannot
+// disagree about what "high conviction" means.
+const highConvictionFloor = 0.8
 
 // structuralRegimes serves the market-structure regime forecasts validated by
 // the 2026-07-17 alpha-discovery loop (internal/structregime): trend21,
@@ -150,6 +159,47 @@ func (d Deps) buildStructuralRegimes(ctx context.Context) (map[string]any, error
 	if ew := d.earningsWindowsForSymbols(ctx, forecastSyms, time.Now().Unix()); ew != nil {
 		resp["earningsWindows"] = ew
 		resp["earningsNote"] = earningsRiskNote + " — dates are filing-cadence ESTIMATES (see /api/earnings-window); forecasts are labeled, never suppressed"
+
+		// The intersection that actually matters: calls the platform is MOST
+		// sure about that sit in front of a scheduled event the model cannot
+		// see. A structural predictor extrapolates a regime; an earnings print
+		// is exactly the thing that ends one. Listing the whole earnings map
+		// beside the whole forecast map leaves that cross-reference to the
+		// reader, and nobody does it — so it is computed here.
+		//
+		// This is a LABEL, never a suppression. Removing a forecast because it
+		// might be wrong would corrupt the live record that makes the accuracy
+		// claims meaningful; the record has to include the hard cases.
+		flagged := []map[string]any{}
+		for kind, rows := range byKind {
+			for _, row := range rows {
+				f, ok := row.(store.RegimeForecast)
+				if !ok || f.Conviction < highConvictionFloor {
+					continue
+				}
+				w, inWindow := ew[f.Symbol]
+				if !inWindow {
+					continue
+				}
+				flagged = append(flagged, map[string]any{
+					"symbol": f.Symbol, "kind": kind, "regime": f.Regime,
+					"conviction": f.Conviction, "daysUntilEarnings": w["daysUntil"],
+				})
+			}
+		}
+		sort.Slice(flagged, func(i, j int) bool {
+			if flagged[i]["symbol"] != flagged[j]["symbol"] {
+				return flagged[i]["symbol"].(string) < flagged[j]["symbol"].(string)
+			}
+			return flagged[i]["kind"].(string) < flagged[j]["kind"].(string)
+		})
+		resp["highConvictionInEarningsWindow"] = flagged
+		resp["highConvictionInEarningsWindowNote"] = "Calls at conviction >= " +
+			strconv.FormatFloat(highConvictionFloor, 'f', 2, 64) + " whose symbol has an ESTIMATED " +
+			"earnings date inside the window. A structural predictor extrapolates a regime; an " +
+			"earnings print is the event most likely to end one, and the model cannot see it coming. " +
+			"These are LABELED, never suppressed — dropping the calls most likely to be wrong would " +
+			"flatter the live record that makes every accuracy claim on this page worth anything."
 	}
 	return resp, nil
 }

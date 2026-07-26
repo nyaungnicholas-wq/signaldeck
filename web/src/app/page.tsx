@@ -31,6 +31,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import TodaysRead from "@/components/home/TodaysRead";
 import InsightSpotlight from "@/components/home/InsightSpotlight";
+import VolRegimeLead from "@/components/home/VolRegimeLead";
 import WelcomeCard from "@/components/home/WelcomeCard";
 import GaugeRow from "@/components/home/GaugeRow";
 import DashFeed from "@/components/home/DashFeed";
@@ -142,6 +143,13 @@ export default function DashboardPage() {
           {/* ── THE OPENING VERDICT: the single best-evidenced read, or an
                 honest "No qualified read today" when nothing clears the gate ── */}
           <TodaysRead dash={dash} />
+
+          {/* ── THE VALIDATED FORECAST: promoted out of the tile grid on
+                2026-07-25. The volatility regime is the only claim here that
+                has been re-tested and independently re-implemented, and the
+                options surface is built on it — presenting it alongside
+                unvalidated signals understated the one thing that holds up. ── */}
+          <VolRegimeLead />
 
           {/* ── secondary hero: what else is notable right now (alerts,
                 regime changes, anomalies) via the deterministic ladder ── */}
