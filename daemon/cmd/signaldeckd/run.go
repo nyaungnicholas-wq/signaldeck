@@ -21,6 +21,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/briefing"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/discovery"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/evidence"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/hud"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
@@ -247,6 +248,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// are Alpaca credentials to fetch the archive with.
 	fleet = append(fleet, sentCorrWorkers(st, cfg)...)
 	fleet = append(fleet, honestyGapWorkers(st)...)
+	// Evidence Engine: nightly staleness sweep over evidence_claims — claims
+	// past revalidate_by go stale and lose one confidence tier; refuting
+	// evidence retires the claim. First run also seeds the built-in example
+	// claims (idempotent, never overwrites a swept row).
+	fleet = append(fleet, &evidence.SweepRunner{St: st})
 	// Meta-labeling wave (constructor appended at the END of this file) — the
 	// take-or-skip study. Measurement only; it never sizes a trade.
 	fleet = append(fleet, metaLabelWorkers(st)...)

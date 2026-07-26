@@ -1663,3 +1663,47 @@ CREATE TABLE IF NOT EXISTS ledger_anchors (
   digest       TEXT    NOT NULL    -- short publishable digest (message ‖ sig ‖ pubkey)
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_anchors_seq ON ledger_anchors(ledger_seq);
+
+-- ═══ EVIDENCE ENGINE (internal/evidence) ══════════════════════════════════
+-- Every claim the system publishes gets a machine-checkable evidence record
+-- that can go STALE and auto-downgrade. A claim is only as good as its most
+-- recent validation: `revalidate_by` is a promise, and the nightly sweep
+-- (evidence.SweepRunner) enforces it — past-due claims are marked stale and
+-- lose one confidence tier, so an unmaintained claim decays toward "weak"
+-- instead of silently keeping yesterday's certainty. Refuting evidence
+-- (an interval entirely on the wrong side of the claim's baseline) retires
+-- the claim outright. Tiers are RULE-JUSTIFIED, not asserted: the store
+-- accepts a claim only when its tier is defensible from its own items
+-- (evidence.Validate), so a "strong" row always carries a corrected,
+-- cluster-robust interval that excludes its null.
+CREATE TABLE IF NOT EXISTS evidence_claims (
+  id             TEXT    PRIMARY KEY,
+  text           TEXT    NOT NULL,
+  scope_json     TEXT    NOT NULL,             -- assets/regimes/horizons/date range
+  tier           TEXT    NOT NULL,             -- strong|moderate|weak|refuted
+  status         TEXT    NOT NULL,             -- active|stale|downgraded|retired
+  last_validated INTEGER NOT NULL,             -- unix seconds of last validation
+  revalidate_by  INTEGER NOT NULL,             -- unix seconds; past this = stale
+  lineage_json   TEXT    NOT NULL,             -- feature keys + model names
+  seeded         INTEGER NOT NULL DEFAULT 0,   -- 1 = programmatic seed, labeled
+  updated_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_claims_status ON evidence_claims(status);
+
+-- One measured piece of support per row. `n_effective` is CLUSTER-ROBUST
+-- (raw n / design effect), never a raw row count — the 2026-07-26 re-audit
+-- (A1/A2) is why that distinction is load-bearing here.
+CREATE TABLE IF NOT EXISTS evidence_items (
+  claim_id    TEXT    NOT NULL REFERENCES evidence_claims(id) ON DELETE CASCADE,
+  idx         INTEGER NOT NULL,               -- stable order within the claim
+  kind        TEXT    NOT NULL,               -- live-record|backtest|study|...
+  value       REAL    NOT NULL,               -- the measured statistic
+  n_effective REAL    NOT NULL,               -- cluster-robust effective n
+  method      TEXT    NOT NULL,               -- walk-forward|purged-walk-forward|live-forward|...
+  correction  TEXT    NOT NULL DEFAULT '',    -- multiple-testing correction applied ('' = none)
+  ci_low      REAL,                           -- NULL = no interval (thin evidence)
+  ci_high     REAL,
+  baseline    REAL,                           -- the null the CI is judged against
+  source_ref  TEXT    NOT NULL DEFAULT '',    -- file/table the number came from
+  PRIMARY KEY (claim_id, idx)
+) WITHOUT ROWID;
