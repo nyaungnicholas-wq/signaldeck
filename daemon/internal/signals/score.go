@@ -184,6 +184,9 @@ func imbalanceComponent(micro MicroInputs) marketdata.ScoreComponent {
 }
 
 // volRegimeComponent is informational only (Weight and Contrib stay 0):
+// Weight==0 is the signal to consumers that Contrib carries NO information
+// here — it is Norm × Weight, so it is identically zero. The feature store
+// keys off exactly that (predict.go) to persist Value rather than a constant.
 // where today's Bollinger width sits in its 90-bar history. Compression and
 // stretch are worth SEEING, but width direction does not predict price
 // direction, so it never moves the score.

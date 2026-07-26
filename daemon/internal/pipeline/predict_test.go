@@ -17,8 +17,12 @@ func TestBuildFeatureVector(t *testing.T) {
 	sc := md.Score{
 		Score: 0.4,
 		Components: []md.ScoreComponent{
-			{Name: "rsi", Contrib: 0.1},
-			{Name: "trend_sma", Contrib: 0.3},
+			// Weights are stated because production always sets them
+			// (assemble renormalizes to sum 1); only the informational
+			// vol_regime component carries Weight 0. Verified on the live
+			// scores table: every other component's weight is > 0.
+			{Name: "rsi", Norm: 0.3, Weight: 1.0 / 3, Contrib: 0.1},
+			{Name: "trend_sma", Norm: 0.45, Weight: 2.0 / 3, Contrib: 0.3},
 		},
 	}
 	sent := 0.3
@@ -96,7 +100,7 @@ func TestPredictionRunnerPersistsFeatures(t *testing.T) {
 	for _, h := range predHorizons {
 		if err := st.InsertScore(ctx, md.Score{
 			SymbolID: sym.ID, Horizon: h, Ts: now - 60, Score: 0.3,
-			Components: []md.ScoreComponent{{Name: "rsi", Contrib: 0.3}},
+			Components: []md.ScoreComponent{{Name: "rsi", Norm: 0.3, Weight: 1, Contrib: 0.3}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +186,7 @@ func TestPredictionRunnerAppendsLedger(t *testing.T) {
 	for _, h := range predHorizons {
 		if err := st.InsertScore(ctx, md.Score{
 			SymbolID: sym.ID, Horizon: h, Ts: now - 60, Score: 0.3,
-			Components: []md.ScoreComponent{{Name: "rsi", Contrib: 0.3}},
+			Components: []md.ScoreComponent{{Name: "rsi", Norm: 0.3, Weight: 1, Contrib: 0.3}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -248,5 +252,34 @@ func TestPredictionRunnerAppendsLedger(t *testing.T) {
 	}
 	if v2.Count <= v.Count {
 		t.Errorf("ledger did not grow on re-run: %d then %d", v.Count, v2.Count)
+	}
+}
+
+// A8 — a weight-0 component's Contrib is ALGEBRAICALLY zero (Contrib = Norm ×
+// Weight), so storing it makes the column a constant across every row ever
+// written. The derived "__has" bit is then the only varying signal from that
+// component, and it encodes "enough history exists to compute it" — a
+// data-completeness proxy a tree can split on to learn recency, not a market
+// state. Informational components must therefore contribute their READING
+// (comp_<name>_value), never their contribution.
+func TestInformationalComponentStoresItsReadingNotAConstantContrib(t *testing.T) {
+	sc := md.Score{
+		Score: 0.3,
+		Components: []md.ScoreComponent{
+			{Name: "rsi", Norm: 0.5, Weight: 0.6, Contrib: 0.3},
+			// vol_regime as signals.volRegimeComponent actually emits it.
+			{Name: "vol_regime", Value: 83, Norm: 0, Weight: 0, Contrib: 0},
+		},
+	}
+	vec := buildFeatureVector(sc, ensemble.Components{PressureScore: 0.3}, 0.5, 0.5, 1, "", nil, 0)
+
+	if _, ok := vec["comp_vol_regime"]; ok {
+		t.Fatalf("comp_vol_regime stored the always-zero Contrib: %v", vec["comp_vol_regime"])
+	}
+	if got, ok := vec["comp_vol_regime_value"]; !ok || got != 83 {
+		t.Fatalf("comp_vol_regime_value = %v (present=%v), want 83", got, ok)
+	}
+	if got := vec["comp_rsi"]; got != 0.3 {
+		t.Fatalf("weighted component must keep its Contrib: comp_rsi = %v, want 0.3", got)
 	}
 }

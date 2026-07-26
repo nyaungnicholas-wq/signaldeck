@@ -94,12 +94,15 @@ func CanonicalKeys(rows []Row) []string {
 	return keys
 }
 
+// excludedKey delegates to the ONE shared predicate rather than restating the
+// list. This function held a private copy of five names — and worse than the
+// other copies, it did not trim the presence suffix, so pred_raw__has was a
+// legal hypothesis input here. The 2026-07-26 re-audit (A7) added four more
+// outputs and two class rules to the shared predicate; a copy would have kept
+// grading hypotheses that were free to read forecast_prob and forecast_lift,
+// which is precisely the "edge" this package exists to refuse to believe in.
 func excludedKey(k string) bool {
-	switch k {
-	case "pred_raw", "pred_cal", "gbm_prob", "meanrev_prob", "alphax_prob":
-		return true
-	}
-	return false
+	return gbm.SelfReferentialKey(k)
 }
 
 // GenerateHypotheses produces a deterministic, BOUNDED candidate set over the

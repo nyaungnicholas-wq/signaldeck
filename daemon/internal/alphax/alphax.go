@@ -118,21 +118,19 @@ type Dataset struct {
 	DupRowsDropped int
 }
 
-// excludedKey mirrors the per-symbol GBM trainer's exclusion list: the
-// blend's own outputs (pred_raw/pred_cal) and the model legs' prior outputs
-// (gbm_prob/meanrev_prob/alphax_prob — the last is THIS model's own output,
-// now recorded on the vector since it joined the blend) must never be
-// training inputs — that would be a self-referential shortcut, not learning.
+// excludedKey refuses model outputs and label-derived statistics as training
+// inputs — the blend's own probabilities, every leg's prior output (including
+// THIS model's, recorded on the vector since alphax joined the blend), and any
+// accuracy statistic computed from the labels.
+//
+// It DELEGATES rather than restating the list. This function used to carry its
+// own copy of five names, and a private copy is exactly what finding H6 cost and
+// what the 2026-07-26 re-audit's A7 cost again: the shared predicate grew four
+// more keys and two class rules, and this copy would have silently kept training
+// alphax on forecast_prob and forecast_lift. The shared predicate also trims the
+// presence suffix itself, so pred_raw__has is excluded with its base key.
 func excludedKey(k string) bool {
-	// The __has presence indicator of an excluded key is excluded too — a
-	// presence bit for pred_raw would leak the same self-reference its value
-	// would (and lets the exclusion list keep working by base name only).
-	k = strings.TrimSuffix(k, hasSuffix)
-	switch k {
-	case "pred_raw", "pred_cal", "gbm_prob", "meanrev_prob", "alphax_prob":
-		return true
-	}
-	return false
+	return gbm.SelfReferentialKey(k)
 }
 
 // hasSuffix marks the DERIVED per-feature presence indicators (M2): for every
@@ -142,7 +140,7 @@ func excludedKey(k string) bool {
 // crowd (and missing short_int_dtc/pc_total from measured zeros) — the model
 // could not tell "unknown" from "extreme". Base values still flatten to 0 when
 // absent; the indicator carries the missingness as its own feature.
-const hasSuffix = "__has"
+const hasSuffix = gbm.PresenceSuffix
 
 // Flatten turns a feature map into a fixed-dimension vector in the given key
 // order; missing keys become 0 (the union key set means dimensions always

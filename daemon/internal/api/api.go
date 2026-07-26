@@ -17,8 +17,8 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/backup"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -81,35 +81,35 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/datastats", func(w http.ResponseWriter, r *http.Request) {
 		// Perf wave 2026-07-24: measured >30s (timed out); SWR-cached.
 		sharedDatastatsSWR.serve("datastats", w, r, d.datastats)
-	})            // dataset accounting (read, gated like other reads)
-	d.registerAlerts(mux)                                        // alerts wave: per-user alerts list + mark-seen
-	d.registerDiscovery(mux)                                     // discovery wave: candidates list/add/dismiss
-	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights)       // learning-flywheel wave: learned per-regime ensemble weights
-	mux.HandleFunc("GET /api/postmortems", d.postmortems)        // Research Lab: clustered failure attribution over resolved WRONG predictions
-	mux.HandleFunc("GET /api/research", d.research)              // Research Lab: hypothesis registry (shadow/promoted/rejected) + advisory feedback
-	mux.HandleFunc("GET /api/research-ledger", d.researchLedger) // Bayesian Research Ledger: program-level hypotheses w/ prior→posterior evidence chains + meta-analysis
-	mux.HandleFunc("GET /api/vol-regime", d.volRegime)           // the validated-edge forecast: per-stock volatility regime (elevated/calm) + MEASURED walk-forward accuracy tiers
-	mux.HandleFunc("GET /api/regimes", d.structuralRegimesCached)      // 2026-07-17 alpha-loop winners: trend21/liquidity21/vol21 regimes, measured per-band tiers + caveats in-payload
-	mux.HandleFunc("GET /api/signal-report", d.signalReport)     // per-signal detail report: why it fired (raw inputs), walk-forward history on THIS symbol, full signal stack, trade context
-	mux.HandleFunc("GET /api/universe", d.universe)              // broad-universe wave: streamed-count vs daily-universe-count + caps
-	mux.HandleFunc("GET /api/symbol-agent", d.symbolAgent)       // per-symbol agents wave: one symbol's own model (tier + personality + skill + active weights)
-	d.registerFreeData(mux)                                      // free-data wave (Stage 2): FRED macro series + SEC EDGAR fundamentals
-	d.registerLedger(mux)                                        // Stage 3: append-only hash-chained prediction ledger (verify + per-symbol list)
-	d.registerPaper(mux)                                         // Stage 4: INTERNAL simulated paper-trading book (equity curve + positions + trades + costed summary)
-	d.registerSignalBT(mux)                                      // Stage 5: OWN-signal backtester (replay the feature store through the ensemble blend; IC/quintiles/turnover/costed equity vs SPY, gated on independent-N)
-	d.registerTrackRecord(mux)                                   // Stage 7: LIVE OOS track record over resolved calibrated predictions (winrate/Brier/reliability/IC w/ CIs, independent-N gated, links ledger + paper)
-	d.registerChartOverlays(mux)                                 // Stage 7: per-symbol chart-overlay markers (score extremes, regime changes, breakouts) for the candlestick chart
-	d.registerSignal8(mux)                                       // Signal8 wave Stage 1: SEC filings feed + Form 4 insiders + 13F institutions + dilution flags (all reads, honest lag notes)
-	d.registerCongress(mux)                                      // Signal8 wave Stage 2: congressional trades (STOCK Act disclosures via free mirrors; explicit 30-45d legal-lag note + honest mirror-health status)
-	d.registerAnomalies(mux)                                     // Signal8 wave Stage 3: anomaly layer — trade imbalance + unusual vol/volume as DESCRIPTIVE z-scores vs each symbol's own baseline (stock imbalance = volume-side proxy, labeled)
-	d.registerSignal8Home(mux)                                   // Signal8 wave Stage 4: home surfaces — ticker tape (index/sector ETFs + BTC + FRED VIX), movers w/ best-effort EDGAR mcap, honest FRED/EDGAR calendar (earnings = labeled ESTIMATE; IPO omitted — no free source)
-	d.registerDashboard(mux)                                     // Visual-kit Stage 3: ONE-call GET /api/dashboard (tape + heatmap + gauges w/ honesty captions + movers + merged feed; 60s cache; per-user watchlist sparks only with a session)
-	d.registerStage5(mux)                                        // Visual-hub Stage 5: GET /api/predictions/latest — SIGNALS hub predictions table in one batched read (latest calibrated prediction per active symbol; independent-N gate + backtested-not-live label carried in the payload)
-	d.registerCompanies(mux)                                     // Signal8 wave Stage 5: COMPANIES DIRECTORY (free EDGAR company map joined to our tracked bars/fundamentals; untracked rows honest "—") + GET /api/earnings-est (filing-cadence estimate, labeled — never a confirmed date)
-	d.registerNotify(mux)                                        // Stage 3 alert delivery: GET /api/notify-status — which remote transports (Discord/Telegram/webhook) are configured + last delivery/redacted error; macOS listed with an honest "untracked" note; email honestly absent (needs SMTP/provider — future)
-	d.registerTVWebhook(mux)                                     // TradingView wave: POST /api/tv-webhook (shared-secret inbound Pine alerts) + GET /api/tv-signals (received signals, newest first)
-	d.registerTVStatus(mux)                                      // TradingView wave: GET /api/tv-status — webhook ops (secret set? public tunnel host + best-effort reachability, received-signal totals, per-streamed-symbol fired counts); never echoes the secret
-	d.registerShorts(mux)                                        // Stage 5 FINRA Reg SHO: GET /api/shorts — daily short sale VOLUME ratio (per-symbol series + fleet-wide latest extremes w/ stated min-volume floor); caveat verbatim in every payload: NOT short interest, includes market makers, high ratio NOT directly bearish
+	}) // dataset accounting (read, gated like other reads)
+	d.registerAlerts(mux)                                         // alerts wave: per-user alerts list + mark-seen
+	d.registerDiscovery(mux)                                      // discovery wave: candidates list/add/dismiss
+	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights)        // learning-flywheel wave: learned per-regime ensemble weights
+	mux.HandleFunc("GET /api/postmortems", d.postmortems)         // Research Lab: clustered failure attribution over resolved WRONG predictions
+	mux.HandleFunc("GET /api/research", d.research)               // Research Lab: hypothesis registry (shadow/promoted/rejected) + advisory feedback
+	mux.HandleFunc("GET /api/research-ledger", d.researchLedger)  // Bayesian Research Ledger: program-level hypotheses w/ prior→posterior evidence chains + meta-analysis
+	mux.HandleFunc("GET /api/vol-regime", d.volRegime)            // the validated-edge forecast: per-stock volatility regime (elevated/calm) + MEASURED walk-forward accuracy tiers
+	mux.HandleFunc("GET /api/regimes", d.structuralRegimesCached) // 2026-07-17 alpha-loop winners: trend21/liquidity21/vol21 regimes, measured per-band tiers + caveats in-payload
+	mux.HandleFunc("GET /api/signal-report", d.signalReport)      // per-signal detail report: why it fired (raw inputs), walk-forward history on THIS symbol, full signal stack, trade context
+	mux.HandleFunc("GET /api/universe", d.universe)               // broad-universe wave: streamed-count vs daily-universe-count + caps
+	mux.HandleFunc("GET /api/symbol-agent", d.symbolAgent)        // per-symbol agents wave: one symbol's own model (tier + personality + skill + active weights)
+	d.registerFreeData(mux)                                       // free-data wave (Stage 2): FRED macro series + SEC EDGAR fundamentals
+	d.registerLedger(mux)                                         // Stage 3: append-only hash-chained prediction ledger (verify + per-symbol list)
+	d.registerPaper(mux)                                          // Stage 4: INTERNAL simulated paper-trading book (equity curve + positions + trades + costed summary)
+	d.registerSignalBT(mux)                                       // Stage 5: OWN-signal backtester (replay the feature store through the ensemble blend; IC/quintiles/turnover/costed equity vs SPY, gated on independent-N)
+	d.registerTrackRecord(mux)                                    // Stage 7: LIVE OOS track record over resolved calibrated predictions (winrate/Brier/reliability/IC w/ CIs, independent-N gated, links ledger + paper)
+	d.registerChartOverlays(mux)                                  // Stage 7: per-symbol chart-overlay markers (score extremes, regime changes, breakouts) for the candlestick chart
+	d.registerSignal8(mux)                                        // Signal8 wave Stage 1: SEC filings feed + Form 4 insiders + 13F institutions + dilution flags (all reads, honest lag notes)
+	d.registerCongress(mux)                                       // Signal8 wave Stage 2: congressional trades (STOCK Act disclosures via free mirrors; explicit 30-45d legal-lag note + honest mirror-health status)
+	d.registerAnomalies(mux)                                      // Signal8 wave Stage 3: anomaly layer — trade imbalance + unusual vol/volume as DESCRIPTIVE z-scores vs each symbol's own baseline (stock imbalance = volume-side proxy, labeled)
+	d.registerSignal8Home(mux)                                    // Signal8 wave Stage 4: home surfaces — ticker tape (index/sector ETFs + BTC + FRED VIX), movers w/ best-effort EDGAR mcap, honest FRED/EDGAR calendar (earnings = labeled ESTIMATE; IPO omitted — no free source)
+	d.registerDashboard(mux)                                      // Visual-kit Stage 3: ONE-call GET /api/dashboard (tape + heatmap + gauges w/ honesty captions + movers + merged feed; 60s cache; per-user watchlist sparks only with a session)
+	d.registerStage5(mux)                                         // Visual-hub Stage 5: GET /api/predictions/latest — SIGNALS hub predictions table in one batched read (latest calibrated prediction per active symbol; independent-N gate + backtested-not-live label carried in the payload)
+	d.registerCompanies(mux)                                      // Signal8 wave Stage 5: COMPANIES DIRECTORY (free EDGAR company map joined to our tracked bars/fundamentals; untracked rows honest "—") + GET /api/earnings-est (filing-cadence estimate, labeled — never a confirmed date)
+	d.registerNotify(mux)                                         // Stage 3 alert delivery: GET /api/notify-status — which remote transports (Discord/Telegram/webhook) are configured + last delivery/redacted error; macOS listed with an honest "untracked" note; email honestly absent (needs SMTP/provider — future)
+	d.registerTVWebhook(mux)                                      // TradingView wave: POST /api/tv-webhook (shared-secret inbound Pine alerts) + GET /api/tv-signals (received signals, newest first)
+	d.registerTVStatus(mux)                                       // TradingView wave: GET /api/tv-status — webhook ops (secret set? public tunnel host + best-effort reachability, received-signal totals, per-streamed-symbol fired counts); never echoes the secret
+	d.registerShorts(mux)                                         // Stage 5 FINRA Reg SHO: GET /api/shorts — daily short sale VOLUME ratio (per-symbol series + fleet-wide latest extremes w/ stated min-volume floor); caveat verbatim in every payload: NOT short interest, includes market makers, high ratio NOT directly bearish
 	// ── SIGNALS-hub overhaul (appended — keep new routes at the END of this
 	// block so parallel route edits by other agents never collide) ──────────
 	d.registerStream(mux)         // live-feed wave: SSE push of the newest 1s microstructure snap (GET /api/stream/snaps) so the UI keeps up at 1 Hz+ without REST polling
@@ -150,9 +150,9 @@ func Serve(ctx context.Context, d Deps) error {
 	// ── CREDIBILITY wave (appended — keep new routes at the END of this
 	// block so parallel route edits by other agents never collide) ──────────
 	d.registerRegimePostmortems(mux) // GET /api/regime-postmortems — latest ≤50 plain-English postmortems for HIGH-conviction regime calls that resolved WRONG (what was called, what realized + the key number, base rate computed from the CLAIMED accuracy); live regime grading itself ships inside /api/track-record's "regimes" section
-	d.registerModelHealth(mux)      // every tracked model: claimed vs live, and whether it may still emit
-	d.registerSentCorr(mux)         // GET /api/sentiment-correlation — the platform's FIRST non-price signal test: does news-text sentiment predict forward returns once same-session and trailing price moves are controlled for? Leads with the PARTIAL IC + month-clustered bootstrap CI, ships the raw IC only to expose how much was price contamination; gated on obs/symbols/era coverage (nulls, never zeros); EXPERIMENTAL — wired into nothing
-	d.registerExplain(mux)          // auditable regime forecast: contributors + weights + historical analog
+	d.registerModelHealth(mux)       // every tracked model: claimed vs live, and whether it may still emit
+	d.registerSentCorr(mux)          // GET /api/sentiment-correlation — the platform's FIRST non-price signal test: does news-text sentiment predict forward returns once same-session and trailing price moves are controlled for? Leads with the PARTIAL IC + month-clustered bootstrap CI, ships the raw IC only to expose how much was price contamination; gated on obs/symbols/era coverage (nulls, never zeros); EXPERIMENTAL — wired into nothing
+	d.registerExplain(mux)           // auditable regime forecast: contributors + weights + historical analog
 	d.registerEarningsWindow(mux)    // GET /api/earnings-window?symbol&market — estimated next earnings from the filing-cadence heuristic (last 10-Q/10-K + ~91d), HONEST NULLS when unknown; the same math annotates /api/regimes + /api/signal-report with earningsWindow labels (forecasts never suppressed — labeled only)
 	// ── WAVE 2 (crypto kinds + precompute + digest + AD live + survivorship;
 	// appended — keep new routes at the END of this block so parallel route
@@ -168,17 +168,13 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerOptions(mux) // GET /api/options/price (Black-Scholes-Merton value + Greeks + implied-vol inversion; refuses a vol for quotes with no vega rather than inventing one) + GET /api/options/vol-edge?symbol&market&iv= (the VALIDATED vol-regime forecast turned into a vol LEVEL from this symbol's own walk-forward history, compared against a market implied vol the USER supplies — there is no options feed here); every verdict ships its assumed variance risk premium, the premium at which it flips, and whether it survives the regime call being wrong
 	// ── PAIRS wave (appended — keep new routes at the END of this block so
 	// parallel route edits by other agents never collide) ────────────────────
-	d.registerPrereg(mux) // GET /api/prereg — what each structural predictor CLAIMED, frozen + hash-chained BEFORE its forecasts began resolving (first gradable 2026-08-07). Makes the advertised accuracy tables falsifiable: after the live record arrives the comparison is against a dated, hashed commitment rather than against whatever the code says at that time; the chain turns a later edit into a detectable break instead of a matter of trust, and amendments are appended, never applied in place
+	d.registerPrereg(mux)        // GET /api/prereg — what each structural predictor CLAIMED, frozen + hash-chained BEFORE its forecasts began resolving (first gradable 2026-08-07). Makes the advertised accuracy tables falsifiable: after the live record arrives the comparison is against a dated, hashed commitment rather than against whatever the code says at that time; the chain turns a later edit into a detectable break instead of a matter of trust, and amendments are appended, never applied in place
 	d.registerMarketRegimes(mux) // GET /api/market-regimes — the SAME structural trend/vol/liquidity calls, grouped for the index and sector baskets (SPY/QQQ/IWM/DIA + all 11 SPDR sectors) instead of buried among ~885 single names; ships sector BREADTH per kind (one elevated sector is noise, eleven of eleven is a market state), names any basket with no call rather than letting absence read as neutral, and states that the accuracy tiers are INHERITED from the stock-universe validation and were never re-measured on baskets
-	d.registerPairsStudy(mux) // GET /api/pairs-study — the cointegration pairs-trading test that resolved ledger hypothesis H018 (CORR63) DO-NOT-SHIP: a frozen walk-forward backtest (252d formation -> 63d traded, 26 non-overlapping blocks, 918 SIC-sectored symbols, frozen hedge ratio + spread z, Engle-Granger critical values, block bootstrap, cost sweep) whose selected arm is INDISTINGUISHABLE from random same-sector pairs. Published because the mechanism is the finding — correlation rank persists (rho +0.73) while cointegration rank does not (rho -0.004), so the persistent quantity is shared market beta that no dollar-neutral spread can monetize
-	d.registerXSFactor(mux) // GET /api/xs-factor?horizon=5d|21d|63d&limit= — CROSS-SECTIONAL factor ranking (low-vol + size/liquidity + mom12-1, point-in-time from trailing bars, percentiles over the active universe, composite renormalized over PRESENT legs) with the MEASURED per-leg edge/CIs shipped as data; read-time only (no table, no worker), SWR-cached; caveat verbatim: relative rank vs the same-day universe MEDIAN, absolute direction failed 20/20, these are PUBLIC capacity-constrained factors with an implied IC of only ~0.03-0.07
-	d.registerMetaLabel(mux) // GET /api/metalabel — does FILTERING the platform's own directional calls earn its place? A secondary model trained on "did the primary's call clear cost" decides take-or-skip; graded on EXPECTANCY per decision OFFERED (never precision — a filter that is more often right while making less money is the trend21 trap) with three gates applied in order: the primary must have cost-net edge at all, the filter's trades must span enough DISTINCT DAYS to be independent, and expectancy must actually improve. First live grade: +17.7pp precision and still REJECTED, because the primary loses 0.29%/decision. Measurement only — never sizes a trade
+	d.registerPairsStudy(mux)    // GET /api/pairs-study — the cointegration pairs-trading test that resolved ledger hypothesis H018 (CORR63) DO-NOT-SHIP: a frozen walk-forward backtest (252d formation -> 63d traded, 26 non-overlapping blocks, 918 SIC-sectored symbols, frozen hedge ratio + spread z, Engle-Granger critical values, block bootstrap, cost sweep) whose selected arm is INDISTINGUISHABLE from random same-sector pairs. Published because the mechanism is the finding — correlation rank persists (rho +0.73) while cointegration rank does not (rho -0.004), so the persistent quantity is shared market beta that no dollar-neutral spread can monetize
+	d.registerXSFactor(mux)      // GET /api/xs-factor?horizon=5d|21d|63d&limit= — CROSS-SECTIONAL factor ranking (low-vol + size/liquidity + mom12-1, point-in-time from trailing bars, percentiles over the active universe, composite renormalized over PRESENT legs) with the MEASURED per-leg edge/CIs shipped as data; read-time only (no table, no worker), SWR-cached; caveat verbatim: relative rank vs the same-day universe MEDIAN, absolute direction failed 20/20, these are PUBLIC capacity-constrained factors with an implied IC of only ~0.03-0.07
+	d.registerMetaLabel(mux)     // GET /api/metalabel — does FILTERING the platform's own directional calls earn its place? A secondary model trained on "did the primary's call clear cost" decides take-or-skip; graded on EXPECTANCY per decision OFFERED (never precision — a filter that is more often right while making less money is the trend21 trap) with three gates applied in order: the primary must have cost-net edge at all, the filter's trades must span enough DISTINCT DAYS to be independent, and expectancy must actually improve. First live grade: +17.7pp precision and still REJECTED, because the primary loses 0.29%/decision. Measurement only — never sizes a trade
 
-	srv := &http.Server{
-		Addr:              d.Cfg.HTTPAddr,
-		Handler:           d.secure(mux),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	srv := d.httpServer(mux)
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -190,6 +186,66 @@ func Serve(ctx context.Context, d Deps) error {
 		return err
 	}
 	return nil
+}
+
+// Connection deadlines. The 2026-07-26 review held a connection open for 60s
+// having sent 15 bytes of body, because ReadHeaderTimeout was the only limit
+// set.
+const (
+	// requestReadTimeout bounds reading the request BODY after the headers
+	// land — the slow-body case.
+	requestReadTimeout = 20 * time.Second
+	// responseWriteTimeout bounds writing a response to a client that reads
+	// slowly. It is generous because the slowest cold cache builds measured
+	// 22-45s; the point is a bound, not a tight one.
+	responseWriteTimeout = 90 * time.Second
+	// idleTimeout reaps keep-alive connections between requests.
+	idleTimeout = 120 * time.Second
+)
+
+// httpServer builds the configured server. Deadlines are deliberately split
+// between the Server and withDeadlines:
+//
+//   - ReadHeaderTimeout is server-wide and safe: headers arrive before any
+//     handler runs, streaming included.
+//   - ReadTimeout is NOT set server-wide. Go arms it for the whole request and
+//     the background read that detects a closed connection then trips it, which
+//     would tear down every SSE stream on a timer. withDeadlines applies it
+//     per-request instead, to the routes that actually have a body to read.
+//   - WriteTimeout is NOT set server-wide for the same reason in the other
+//     direction: a live SSE subscriber legitimately writes for hours, and a
+//     blanket write deadline kills it mid-stream. withDeadlines applies the
+//     write deadline to every non-streaming route, so the JSON and CSV paths
+//     are bounded and only the stream is exempt.
+//   - IdleTimeout is server-wide: it only covers the gap BETWEEN requests, so
+//     an in-flight stream is never affected.
+func (d Deps) httpServer(mux http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              d.Cfg.HTTPAddr,
+		Handler:           withDeadlines(d.secure(mux)),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       idleTimeout,
+	}
+}
+
+// streamPath reports whether a path is a long-lived streaming response, which
+// must not carry a write deadline.
+func streamPath(path string) bool { return strings.HasPrefix(path, "/api/stream/") }
+
+// withDeadlines applies per-request read/write deadlines to every route except
+// the streaming ones. See httpServer for why this is not a Server-wide setting.
+func withDeadlines(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !streamPath(r.URL.Path) {
+			rc := http.NewResponseController(w)
+			// Both may fail on a wrapped ResponseWriter that does not expose
+			// the connection (httptest, TimeoutHandler). A missing deadline is
+			// the pre-existing behaviour, so there is nothing to report.
+			_ = rc.SetReadDeadline(time.Now().Add(requestReadTimeout))
+			_ = rc.SetWriteDeadline(time.Now().Add(responseWriteTimeout))
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -443,8 +499,7 @@ func (d Deps) bars(w http.ResponseWriter, r *http.Request) {
 	// use. Serving them to anyone else is redistribution, whatever the config
 	// says, so a non-loopback caller is refused unless the operator has
 	// explicitly asserted the right.
-	if !d.Cfg.AllowRawExport && !requestIsLoopback(r) && !datalicense.BarsRedistributable() {
-		httpErr(w, 451, datalicense.RawDataNotice())
+	if d.rawDataRefused(w, r) {
 		return
 	}
 	bars, err := d.St.LastBars(r.Context(), s.ID, tf, limit)
@@ -453,6 +508,22 @@ func (d Deps) bars(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, bars)
+}
+
+// rawDataRefused is THE redistribution guard — the one /api/bars uses and the
+// one every raw-row export must call. It writes the 451 + actionable notice and
+// reports true when the caller must be refused.
+//
+// It exists as a function rather than as a block copied per handler because the
+// 2026-07-26 review found the copy missing entirely from the CSV exports: the
+// same licensed rows walked out through a second door with no policy on it.
+// Two copies of a legal rule drift; one cannot.
+func (d Deps) rawDataRefused(w http.ResponseWriter, r *http.Request) bool {
+	if !d.Cfg.AllowRawExport && !requestIsLoopback(r) && !datalicense.BarsRedistributable() {
+		httpErr(w, 451, datalicense.RawDataNotice())
+		return true
+	}
+	return false
 }
 
 func (d Deps) scoreHistory(w http.ResponseWriter, r *http.Request) {
@@ -849,6 +920,27 @@ func (d Deps) unsubscribe(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── CSV exports ─────────────────────────────────────────────────────────
+//
+// Every export below is a bulk dump of stored rows, so every export goes
+// through d.rawDataRefused — the SAME guard /api/bars uses. Scores and outcomes
+// are included deliberately: each row is keyed to a licensed vendor bar and its
+// fwd_return is arithmetic on two licensed closes, which the source agreements
+// cover as derived works. A per-row dump of them is substantially-raw
+// redistribution, whatever the file extension says.
+
+// maxExportRows bounds every CSV. exportOutcomes previously asked the store for
+// 100,000 rows with no symbol scoping — one unauthenticated GET dumping the
+// whole outcomes table.
+const maxExportRows = 20000
+
+// exportLimit reads ?limit=, clamped into (0, maxExportRows].
+func exportLimit(r *http.Request) int {
+	n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if n <= 0 || n > maxExportRows {
+		return maxExportRows
+	}
+	return n
+}
 
 func (d Deps) exportBars(w http.ResponseWriter, r *http.Request) {
 	s, err := d.symbolFromQuery(r)
@@ -856,11 +948,14 @@ func (d Deps) exportBars(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, err.Error())
 		return
 	}
+	if d.rawDataRefused(w, r) {
+		return
+	}
 	tf := md.Timeframe(r.URL.Query().Get("tf"))
 	if tf != md.TF1m && tf != md.TF1h && tf != md.TF1d {
 		tf = md.TF1d
 	}
-	bars, err := d.St.LastBars(r.Context(), s.ID, tf, 100000)
+	bars, err := d.St.LastBars(r.Context(), s.ID, tf, exportLimit(r))
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
@@ -880,6 +975,9 @@ func (d Deps) exportScores(w http.ResponseWriter, r *http.Request) {
 	s, err := d.symbolFromQuery(r)
 	if err != nil {
 		httpErr(w, 404, err.Error())
+		return
+	}
+	if d.rawDataRefused(w, r) {
 		return
 	}
 	h := md.Horizon(r.URL.Query().Get("horizon"))
@@ -902,16 +1000,26 @@ func (d Deps) exportScores(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) exportOutcomes(w http.ResponseWriter, r *http.Request) {
+	// Scoped to one symbol like the other two exports. Symbol-less, this was a
+	// whole-table dump reachable with no parameters at all.
+	s, err := d.symbolFromQuery(r)
+	if err != nil {
+		httpErr(w, 404, err.Error())
+		return
+	}
+	if d.rawDataRefused(w, r) {
+		return
+	}
 	h := md.Horizon(r.URL.Query().Get("horizon"))
 	if h != md.H1h && h != md.H1d && h != md.H1w {
 		h = md.H1d
 	}
-	outcomes, err := d.St.ResolvedOutcomes(r.Context(), 0, h, 100000)
+	outcomes, err := d.St.ResolvedOutcomes(r.Context(), s.ID, h, exportLimit(r))
 	if err != nil {
 		httpErr(w, 500, err.Error())
 		return
 	}
-	csvStart(w, fmt.Sprintf("outcomes_%s.csv", h))
+	csvStart(w, fmt.Sprintf("%s_outcomes_%s.csv", sanitize(s.Symbol), h))
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{"symbol_id", "ts", "horizon", "score", "fwd_return"})
 	for _, o := range outcomes {

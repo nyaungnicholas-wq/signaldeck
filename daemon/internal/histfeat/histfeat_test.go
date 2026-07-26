@@ -212,7 +212,25 @@ func TestPressureParity(t *testing.T) {
 	if nComp != len(want.Components) {
 		t.Fatalf("comp_ key count %d != %d components", nComp, len(want.Components))
 	}
+	// A zero-WEIGHT component is stored as its VALUE under a distinct key, not
+	// as a contribution that is algebraically zero forever (A8, 2026-07-26
+	// re-audit: measured min = max = 0 over 248,390 live rows, which left the
+	// derived __has bit — "enough history exists" — as the column's only
+	// varying signal). This assertion is STRONGER than the one it replaces: it
+	// used to accept the constant, and now it requires the informative reading
+	// to be there under its own name.
 	for _, c := range want.Components {
+		if c.Weight == 0 {
+			got, ok := last.Vec["comp_"+c.Name+"_value"]
+			if !ok || got != c.Value {
+				t.Fatalf("comp_%s_value = %v (present %v), want the component's Value %v",
+					c.Name, got, ok, c.Value)
+			}
+			if _, ok := last.Vec["comp_"+c.Name]; ok {
+				t.Fatalf("comp_%s is still stored; a zero-weight component's contribution is a constant", c.Name)
+			}
+			continue
+		}
 		got, ok := last.Vec["comp_"+c.Name]
 		if !ok || got != c.Contrib {
 			t.Fatalf("comp_%s = %v (present %v), want %v", c.Name, got, ok, c.Contrib)

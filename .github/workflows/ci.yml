@@ -49,3 +49,21 @@ jobs:
       # H7: `npm run lint` (eslint) existed but was never invoked in CI.
       - run: npm run lint
       - run: npm run build
+
+  pre-publish-scan:
+    runs-on: ubuntu-latest
+    steps:
+      # A13 hostile-review finding — this scan existed but was wired into
+      # nobody's workflow, so a case-sensitivity bug that made it blind to
+      # this project's own (UPPERCASE) env var names went unnoticed, and
+      # it had never checked git history at all. fetch-depth: 0 is required
+      # here — the default shallow checkout has exactly one commit, which
+      # would make the history-scan step in pre-publish-scan.sh silently
+      # check nothing.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Self-test first: if the scanner itself can't prove it still detects
+      # a planted secret, the real scan below is not trustworthy evidence.
+      - run: ops/pre-publish-scan-test.sh
+      - run: ops/pre-publish-scan.sh

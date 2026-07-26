@@ -36,7 +36,6 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ReliabilityCurve from "@/components/trackrecord/ReliabilityCurve";
 import HelpTip from "@/components/HelpTip";
-import ExportMenu from "@/components/ExportMenu";
 
 function pct(v: number | null | undefined, digits = 1): string {
   if (v == null || !isFinite(v)) return "—";
@@ -161,15 +160,16 @@ export default function TrackRecordPage() {
               "—"
             )}
           </span>
-          {/* Export unification (#23): the record's raw resolved outcomes. */}
-          <ExportMenu
-            items={[
-              {
-                label: `outcomes.csv · ${horizon} horizon`,
-                href: `${API_BASE}/api/export/outcomes.csv?horizon=${horizon}`,
-              },
-            ]}
-          />
+          {/* Export unification (#23): the record's raw resolved outcomes.
+              A10 (2026-07-26 re-audit) put the raw-data redistribution guard on
+              the CSV exports and made outcomes.csv symbol-scoped — an unscoped
+              dump of every resolved row is redistribution of licensed vendor
+              data through a second door. This page has no symbol in scope, so
+              it links to the per-symbol page rather than offering a download
+              that would now 404. Better a working pointer than a dead button. */}
+          <span className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+            raw outcomes export is per-symbol — open a symbol and use its export menu
+          </span>
         </div>
       </div>
 

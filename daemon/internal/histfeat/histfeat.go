@@ -212,6 +212,19 @@ func WeeklyRows(daily []md.Bar, mkt MarketCtx, rowsFrom int64) []WeekRow {
 			vec["pressure_score"] = s.Score
 			vec["pressure_abs"] = math.Abs(s.Score)
 			for _, c := range s.Components {
+				// Same rule as the live feature writer (pipeline/predict.go):
+				// a zero-WEIGHT component contributes Norm x 0 = 0 forever, so
+				// storing Contrib writes a column that is algebraically
+				// constant — measured at min = max = 0 over 248,390 rows before
+				// this was fixed — and leaves its derived __has bit as the only
+				// varying signal, which encodes "enough history exists" rather
+				// than any market state. Store the informative Value under a
+				// distinct key instead, so a pooled reader sees a NEW column
+				// rather than an old one whose meaning silently changed.
+				if c.Weight == 0 {
+					vec["comp_"+c.Name+"_value"] = c.Value
+					continue
+				}
 				vec["comp_"+c.Name] = c.Contrib
 			}
 		}

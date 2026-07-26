@@ -167,7 +167,22 @@ func horizonSecs(h md.Horizon) int64 {
 // prior source wave: the OOS-lift gate is the referee, nothing is trusted on
 // faith. Bumped so the per-symbol GBM accumulates a clean v11 labeled set
 // instead of diluting absent-vs-zero across v10 rows.
-const featureVersion = 11
+// v12 (informational-component repair): comp_vol_regime is REMOVED and
+// comp_vol_regime_value added. The old key stored the score component's
+// Contrib, which for a weight-0 component is algebraically zero — measured
+// over the live store at v11, 248,390 rows with min = max = 0. The column
+// carried no market state; its only variation was the derived "__has" bit,
+// which says a 90-bar window exists, so a tree splitting on it learns recency.
+// The Bollinger-width percentile it discards is genuinely informative (it is
+// the input to the one independently replicated edge in the platform) and is
+// distinct from bb_pctb, which is band POSITION, not band WIDTH. Renamed
+// rather than redefined in place: alphax pools every version from v3 up, so a
+// key that silently changed meaning would be pooled across the change. Bumped
+// for the standard reason — the per-symbol GBM trains per version, so v12 rows
+// accumulate their own labeled set instead of diluting absent-vs-zero across
+// v11. Cost: the per-symbol GBM restarts from an empty v12 history (v11 held
+// 7,070 rows) and legs stay gated out until v12 clears its own OOS-lift gate.
+const featureVersion = 12
 
 // ledgerModelVersion stamps each hash-chained ledger entry with the version of
 // the prediction MODEL/pipeline that produced it (Stage 3 tamper-evident
@@ -203,6 +218,16 @@ func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, nU
 		"n_used":         float64(nUsed),
 	}
 	for _, comp := range sc.Components {
+		// A weight-0 component is INFORMATIONAL: its Contrib is Norm × Weight,
+		// so storing it writes an algebraic constant into every row, and the
+		// derived "__has" bit becomes the column's only variation — encoding
+		// "enough history exists", a data-completeness proxy a tree can split
+		// on to learn recency. Store the READING instead, under its own key so
+		// no existing key's meaning changes for readers pooling old versions.
+		if comp.Weight == 0 {
+			vec["comp_"+comp.Name+"_value"] = comp.Value
+			continue
+		}
 		vec["comp_"+comp.Name] = comp.Contrib
 	}
 	if c.ExpectancyHitRate != nil {

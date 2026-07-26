@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,6 +16,22 @@ import (
 func (d Deps) registerStream(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/stream/snaps", d.streamSnaps)
 }
+
+// maxStreamSubscribers caps concurrent SSE streams daemon-wide.
+//
+// A subscriber spends ONE rate-limit token and then runs for as long as it
+// likes, polling the store on every tick — the 2026-07-26 review took daemon
+// CPU from 26.9% to 55.2% with ten anonymous streams. The limiter cannot see
+// this because it prices requests, not residency, so residency needs its own
+// bound. 32 is far above any real UI need (a browser tab opens one per visible
+// symbol) and far below the point where the polling load matters.
+//
+// Beyond the cap the daemon refuses the NEW subscriber. Admitting it would
+// degrade every stream already running, which trades a clear error for a
+// diffuse one.
+const maxStreamSubscribers = 32
+
+var streamSubscribers atomic.Int64
 
 // streamSnaps pushes the newest 1-second microstructure snapshot for one symbol
 // as Server-Sent Events. This is how the UI "keeps up" with the live feed: the
@@ -32,6 +49,16 @@ func (d Deps) streamSnaps(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, err.Error())
 		return
 	}
+
+	if n := streamSubscribers.Add(1); n > maxStreamSubscribers {
+		streamSubscribers.Add(-1)
+		w.Header().Set("Retry-After", "5")
+		httpErr(w, http.StatusServiceUnavailable, fmt.Sprintf(
+			"stream capacity reached (%d concurrent subscribers) — retry shortly, "+
+				"or poll GET /api/snaps instead", maxStreamSubscribers))
+		return
+	}
+	defer streamSubscribers.Add(-1)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
