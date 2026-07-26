@@ -126,13 +126,13 @@ func Load() Config {
 		// convenience. On a reachable deployment it lets any stranger create an
 		// account and spend the LLM budget, so it follows the bind address for
 		// the same reason PublicReads does.
-		OpenSignup:      boolEnv("SIGNALDECK_OPEN_SIGNUP", loopbackOnly(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
+		OpenSignup:      boolEnv("SIGNALDECK_OPEN_SIGNUP", reachablePrivately(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
 		// SAFE BY DEFAULT (2026-07-25): unauthenticated reads are a localhost
 		// convenience, not a deployment posture. The default now follows the
 		// BIND ADDRESS — true on loopback, false the moment the daemon listens
 		// anywhere reachable — so exposing it can no longer silently publish
 		// every read endpoint. An explicit env var still wins either way.
-		PublicReads:     boolEnv("SIGNALDECK_PUBLIC_READS", loopbackOnly(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
+		PublicReads:     boolEnv("SIGNALDECK_PUBLIC_READS", reachablePrivately(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
 		// Asserting you hold redistribution rights for the stored price data.
 		// The flag records the operator's assertion; it does not grant a right.
 		AllowRawExport:  boolEnv("SIGNALDECK_ALLOW_RAW_EXPORT", false),
@@ -255,9 +255,15 @@ func parseDotEnv(path string) map[string]string {
 	return out
 }
 
-// loopbackOnly reports whether addr binds only to the local machine. Used to
-// derive a safe PublicReads default: convenience on localhost, closed anywhere
-// a stranger could reach.
+// loopbackOnly reports whether addr binds only to the local machine.
+//
+// IT IS NOT SUFFICIENT ON ITS OWN, and the reason is the whole point of
+// reachablePrivately below: a REVERSE TUNNEL makes the daemon public without
+// changing the bind at all. ngrok dials out and connects back from 127.0.0.1,
+// so this function answers "loopback" at precisely the moment a stranger can
+// reach the process, and every tunneled request also presents a loopback
+// RemoteAddr. A default derived from this alone is safest-looking exactly when
+// it is least safe. Callers must use reachablePrivately.
 func loopbackOnly(addr string) bool {
 	host := addr
 	if i := strings.LastIndex(addr, ":"); i >= 0 {
@@ -272,4 +278,48 @@ func loopbackOnly(addr string) bool {
 		return true
 	}
 	return strings.HasPrefix(host, "127.")
+}
+
+// tunnelAgentPaths are the LaunchAgents that expose this daemon through a
+// reverse tunnel. Their mere PRESENCE is the signal: a launchd-managed tunnel
+// can start at any moment without the daemon being restarted or reconfigured,
+// so a default that is only correct while the tunnel happens to be down is not
+// a default, it is a race.
+var tunnelAgentPaths = []string{
+	"ops/com.signaldeck.tunnel.plist",
+	os.ExpandEnv("$HOME/Library/LaunchAgents/com.signaldeck.tunnel.plist"),
+}
+
+// tunnelConfigured reports whether a reverse-tunnel LaunchAgent exists on this
+// machine. Overridable by SIGNALDECK_ASSUME_TUNNEL for testing and for an
+// operator running a tunnel this list does not know about — set it to true, and
+// the defaults close.
+func tunnelConfigured() bool {
+	if v := strings.TrimSpace(os.Getenv("SIGNALDECK_ASSUME_TUNNEL")); v != "" {
+		return v == "1" || strings.EqualFold(v, "true")
+	}
+	for _, p := range tunnelAgentPaths {
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// reachablePrivately is the signal the open-by-default settings actually need:
+// bound to loopback AND with no reverse tunnel configured that could publish it.
+//
+// Deriving convenience defaults from the bind address alone was a real finding
+// (A9, 2026-07-26 re-audit): this machine runs a launchd-managed ngrok agent
+// pointed at :8322 with a reserved public hostname, and the daemon's own
+// allowlist already names that hostname. So the "safe by default" heuristic
+// evaluated safe on the exact deployment that is public. Both signals must
+// agree before anything opens; when they disagree the answer is closed, because
+// an operator who wants reads open can say so in one env var, and a stranger
+// who gets them by accident cannot be un-given them.
+func reachablePrivately(addr string) bool {
+	return loopbackOnly(addr) && !tunnelConfigured()
 }
