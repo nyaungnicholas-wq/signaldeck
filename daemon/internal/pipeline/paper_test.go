@@ -122,11 +122,22 @@ func TestPaperTrader_CostChargedOnEntry(t *testing.T) {
 	if diff := loss - trades[0].Cost; diff > 1e-6 || diff < -1e-6 {
 		t.Fatalf("equity loss=%v must equal the recorded entry cost=%v", loss, trades[0].Cost)
 	}
-	// And the cost must be positive and equal notional*costFraction.
-	c := papertrade.CostBpsFor(md.Stocks) / 1e4
-	wantCost := trades[0].Qty * trades[0].Px * c
-	if diff := trades[0].Cost - wantCost; diff > 1e-6 || diff < -1e-6 {
-		t.Fatalf("recorded cost=%v want notional*c=%v", trades[0].Cost, wantCost)
+	// The charge is now spread PLUS square-root-law market impact, so it must
+	// STRICTLY EXCEED the old flat spread-only assumption. Asserting equality
+	// with the constant is what let the book's fills beat their own cost model.
+	spreadOnly := trades[0].Qty * trades[0].Px * papertrade.CostBpsFor(md.Stocks) / 1e4
+	if trades[0].Cost <= spreadOnly {
+		t.Fatalf("recorded cost=%v is not above the spread-only charge=%v; impact was not applied",
+			trades[0].Cost, spreadOnly)
+	}
+	// And the fill price must BE the stored bar's open, exactly — the property
+	// that makes the trade log reconcilable against the bars.
+	bar, okBar, _ := st.BarAtOrBefore(ctx, sym.ID, md.TF1d, trades[0].Ts)
+	if !okBar || bar.Ts != trades[0].Ts {
+		t.Fatalf("no stored bar at the fill ts %d", trades[0].Ts)
+	}
+	if trades[0].Px != bar.Open {
+		t.Fatalf("fill px=%v != stored bar open=%v", trades[0].Px, bar.Open)
 	}
 }
 
@@ -170,16 +181,27 @@ func TestPaperTrader_PnLAcrossSequence(t *testing.T) {
 	}
 
 	// Realized: bought qty@100 (paid entry cost), sold qty@120 (paid exit cost).
+	// Costs are modelled per fill now, so reconcile against the RECORDED costs
+	// rather than a constant — the identity being checked is that the cash the
+	// book holds equals the cash the trade log says it should.
 	cur, _, _ := st.PaperCursor(ctx, "flagship-1d")
 	start := papertrade.StartingCash()
-	c := papertrade.CostBpsFor(md.Stocks) / 1e4
+	trades, _ := st.AllPaperTradesAsc(ctx, "flagship-1d")
+	if len(trades) != 2 {
+		t.Fatalf("want a buy and a sell, got %d fills", len(trades))
+	}
 	entryNotional := qty * 100
 	exitNotional := qty * 120
-	// cash after buy = start - entryNotional - entryNotional*c
-	// cash after sell = that + exitNotional - exitNotional*c
-	wantCash := start - entryNotional - entryNotional*c + exitNotional - exitNotional*c
+	wantCash := start - entryNotional - trades[0].Cost + exitNotional - trades[1].Cost
 	if diff := cur.Cash - wantCash; diff > 1e-6 || diff < -1e-6 {
 		t.Fatalf("final cash=%v want %v (buy@100, sell@120, both-side costs)", cur.Cash, wantCash)
+	}
+	// Both sides must have paid more than the spread-only constant.
+	for i, n := range []float64{entryNotional, exitNotional} {
+		spreadOnly := n * papertrade.CostBpsFor(md.Stocks) / 1e4
+		if trades[i].Cost <= spreadOnly {
+			t.Errorf("fill %d cost=%v not above spread-only %v", i, trades[i].Cost, spreadOnly)
+		}
 	}
 	if cur.Cash <= start {
 		t.Fatalf("a +20%% move should net positive after costs: cash=%v start=%v", cur.Cash, start)
@@ -188,6 +210,41 @@ func TestPaperTrader_PnLAcrossSequence(t *testing.T) {
 
 // TestPaperTrader_Idempotent: re-running with NO new bar does not trade again;
 // the trade log and cursor are unchanged.
+// TestPaperTrader_SkipsWhenLiquidityIsUnknown: with no traded volume on record
+// there is no way to price a fill's market impact or bound its size. The old
+// engine filled anyway, at the bar open, with a flat cost — the most optimistic
+// answer available, applied by default. The worker must now decline.
+func TestPaperTrader_SkipsWhenLiquidityIsUnknown(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "NOVOL", md.Stocks, "")
+
+	// Same shape as the other fixtures, but every bar has zero volume.
+	bars := []md.Bar{}
+	for d, o := range map[int64]float64{1: 100, 2: 102, 3: 110} {
+		bars = append(bars, md.Bar{
+			SymbolID: sym.ID, TF: md.TF1d, Ts: d * 86400,
+			Open: o, High: o * 1.01, Low: o * 0.99, Close: o, Volume: 0,
+		})
+	}
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatalf("seed bars: %v", err)
+	}
+	seedPrediction(t, st, sym.ID, md.H1d, 2*86400, 0.95)
+
+	w := &PaperTrader{St: st}
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	trades, _ := st.PaperTrades(ctx, "flagship-1d", 10)
+	if len(trades) != 0 {
+		t.Fatalf("filled %d trade(s) on a symbol with no volume on record; want none", len(trades))
+	}
+	if _, ok, _ := st.PaperPosition(ctx, "flagship-1d", sym.ID); ok {
+		t.Fatal("opened a position that could not be priced")
+	}
+}
+
 func TestPaperTrader_Idempotent(t *testing.T) {
 	st := openStore(t)
 	ctx := context.Background()

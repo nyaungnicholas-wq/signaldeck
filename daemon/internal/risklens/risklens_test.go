@@ -44,25 +44,27 @@ func TestDailyReturns(t *testing.T) {
 
 // ---- ParametricVaR ---------------------------------------------------------
 
+// TestParametricVaR checks the ARITHMETIC on a sample that clears both gates.
+// The five-return case this test used to assert on is now withheld by design —
+// see paramvar_test.go, which owns the gating contract.
 func TestParametricVaR(t *testing.T) {
-	// Returns with mean 0 and known stdev. Use a symmetric set.
-	// {-0.02,-0.01,0,0.01,0.02}: mean=0, sample var = (0.0004+0.0001+0+0.0001+0.0004)/4
-	//   = 0.001/4 = 0.00025, std = 0.0158113883.
-	// z(0.05) ~= -1.6448536; VaR = -(0 + z*std) = 1.6448536*0.0158113883 ~= 0.02600658.
-	rets := []float64{-0.02, -0.01, 0, 0.01, 0.02}
-	got := ParametricVaR(rets, 0.95)
+	// A near-normal 600-day window: mean/stdev computed the same way, so the
+	// formula -(mean + z*sd) is checked against an independent evaluation.
+	rets := gaussianish(600)
+	got, gate := ParametricVaR(rets, 0.95)
 	if got == nil {
-		t.Fatal("ParametricVaR withheld on a 5-return series")
+		t.Fatalf("ParametricVaR withheld on a near-normal 600-return series: %s", gate.Reason)
 	}
-	want := 1.6448536269514722 * 0.015811388300841896
-	if !approx(*got, want, 1e-6) {
+	mean, std := meanStd(rets)
+	want := -(mean + normInvCDF(0.05)*std)
+	if !approx(*got, want, 1e-9) {
 		t.Errorf("ParametricVaR=%.8f want %.8f", *got, want)
 	}
 	// Degenerate: nil, never 0 — a 0 would render as "no risk".
-	if v := ParametricVaR(nil, 0.95); v != nil {
+	if v, _ := ParametricVaR(nil, 0.95); v != nil {
 		t.Errorf("nil series -> %.6f want withheld", *v)
 	}
-	if v := ParametricVaR([]float64{0.01}, 0.95); v != nil {
+	if v, _ := ParametricVaR([]float64{0.01}, 0.95); v != nil {
 		t.Errorf("single return -> %.6f want withheld", *v)
 	}
 }

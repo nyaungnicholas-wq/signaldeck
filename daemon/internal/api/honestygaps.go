@@ -62,8 +62,8 @@ func (d Deps) returnForecast(w http.ResponseWriter, r *http.Request) {
 		// with); minSample is the floor below which a distribution is refused
 		// rather than estimated from a handful of points.
 		"minSample": distribution.MinSample,
-		"howToRead":     returnForecastHowToRead,
-		"live":          true,
+		"howToRead": returnForecastHowToRead,
+		"live":      true,
 	})
 }
 
@@ -89,7 +89,7 @@ func (d Deps) featureRedundancy(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-const canaryHowToRead = "A new model version does not inherit production. Its own confidence interval must clear BOTH the incumbent's live accuracy and the naive majority-class baseline before it may serve; an interval sitting entirely below the incumbent ends the trial as a rejection; everything else HOLDS, with the challenger recording forecasts it does not serve. Hold is the default and the most common verdict, which is correct — most retrains are not improvements. Version identity here is the feature-vector version, because a changed vector IS a changed model."
+const canaryHowToRead = "A new model version does not inherit production. Before any comparison is made, BOTH arms must clear the same floors measured the same way — enough graded observations, falling on enough DISTINCT UTC days, spanning enough calendar days — because an incumbent observed for four hours is not a bar, and grading a challenger against one lets the direction of four hours of noise decide which model serves. When either arm falls short the verdict is 'no comparison possible — holding' with the shortfall named, which is not the same statement as a considered hold. Once both arms qualify, the challenger's own confidence interval must clear BOTH the incumbent's live accuracy and the naive majority-class baseline before it may serve; an interval sitting entirely below the incumbent ends the trial as a rejection; everything else HOLDS, with the challenger recording forecasts it does not serve. Hold is the default and the most common verdict, which is correct — most retrains are not improvements. Version identity here is the feature-vector version, because a changed vector IS a changed model."
 
 func (d Deps) canaryTrials(w http.ResponseWriter, r *http.Request) {
 	rows, err := d.St.CanaryTrials(r.Context())
@@ -104,6 +104,12 @@ func (d Deps) canaryTrials(w http.ResponseWriter, r *http.Request) {
 			"minObservations": canary.MinObservations,
 			"minWindowDays":   canary.MinWindowDays,
 			"minMarginPp":     canary.MinMarginPp,
+			// Which side the floors bind, and what they count, are part of the
+			// gate: the same numbers applied to one arm only are a different
+			// rule, and that was the defect.
+			"appliedTo":       "incumbent and challenger alike",
+			"observationUnit": "one graded forecast per (symbol, UTC day)",
+			"windowUnit":      "distinct UTC days carrying observations, and the span between the first and last",
 		},
 		"howToRead": canaryHowToRead,
 	})

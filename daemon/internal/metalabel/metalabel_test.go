@@ -8,6 +8,24 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/gbm"
 )
 
+// testSpan is the label horizon every fixture in this file declares: one row per
+// day with a one-day forward label, so consecutive labels abut rather than
+// overlap and the purge removes only the single row whose outcome resolves at
+// the boundary. Fixtures that exercise the OVERLAP leak live in purge_test.go.
+const testSpan = int64(86400)
+
+// testRows is what a fixture needs to yield FOUR purged retrains.
+//
+// It grew from 600 to 1000 when the purge landed, and the reason is worth
+// stating: the first geometric boundary trains on exactly minTrain=60 rows, that
+// floor is gbm's own fitting minimum, and purging removes at least the one row
+// whose label resolves at the boundary — so the first boundary can no longer fit
+// a model and is no longer a retrain. Four retrains therefore start at the 960
+// boundary. The geometry was deliberately NOT retuned to keep the old fixtures
+// passing: moving minTrain would re-cut every recorded grade in history, and
+// buying back a fold by lowering a floor is how a leak gets reintroduced.
+const testRows = 1000
+
 // buildSamples makes a deterministic candidate set. ctxSignal controls a context
 // feature that, when informative, separates the rows whose primary call wins from
 // those whose call loses — exactly the structure meta-labeling is meant to find.
@@ -31,8 +49,10 @@ func buildSamples(n int, informative bool) []Sample {
 		if good {
 			fwd = 0.03 // primary's call wins comfortably net of 10bps
 		}
+		ts := int64(i) * testSpan
 		out = append(out, Sample{
-			Ts:          int64(i * 86400),
+			Ts:          ts,
+			LabelEnd:    ts + testSpan,
 			PrimaryProb: 0.62, // a directional long call
 			Context:     []float64{ctx, noise},
 			FwdReturn:   fwd,
@@ -45,14 +65,16 @@ func buildSamples(n int, informative bool) []Sample {
 // meta-model may rescue it. This is the platform's own documented finding —
 // filtering an edgeless signal yields fewer trades with the same lack of edge.
 func TestEdgelessPrimaryIsRejectedOutright(t *testing.T) {
-	// 600 rows: geometric fold boundaries (60/120/240/480) need ~500 rows to
-	// yield the 4 retrains this asks for.
-	n := 600
+	// Geometric fold boundaries are 60/120/240/480/960; the first cannot train
+	// once purged, so 4 retrains need testRows.
+	n := testRows
 	samples := make([]Sample, 0, n)
 	for i := 0; i < n; i++ {
 		// Every call loses after cost.
+		ts := int64(i) * testSpan
 		samples = append(samples, Sample{
-			Ts:          int64(i * 86400),
+			Ts:          ts,
+			LabelEnd:    ts + testSpan,
 			PrimaryProb: 0.62,
 			Context:     []float64{float64(i % 3), float64(i%5) / 5.0},
 			FwdReturn:   -0.01,
@@ -161,7 +183,7 @@ func TestDayClusteredTradesAreInsufficient(t *testing.T) {
 // trading less. Halving the trades at identical per-trade quality must NOT
 // register as an improvement.
 func TestTradingLessIsNotAnImprovement(t *testing.T) {
-	samples := buildSamples(600, false) // context carries no information
+	samples := buildSamples(testRows, false) // context carries no information
 	g, err := Evaluate(samples, 4, 0.001, DefaultThreshold)
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
@@ -179,20 +201,21 @@ func TestTradingLessIsNotAnImprovement(t *testing.T) {
 // out-of-sample probability assigned to an EARLIER row. If it does, some fold
 // trained on the future.
 func TestNoLookahead(t *testing.T) {
-	base := buildSamples(600, true)
+	base := buildSamples(testRows, true)
 	extended := append(append([]Sample{}, base...), buildSamples(120, true)...)
 	// Re-stamp the appended rows so time stays strictly ascending.
 	for i := len(base); i < len(extended); i++ {
-		extended[i].Ts = int64(i * 86400)
+		extended[i].Ts = int64(i) * testSpan
+		extended[i].LabelEnd = extended[i].Ts + testSpan
 	}
 
 	metaOf := func(ss []Sample) []float64 {
 		cands := directional(ss)
 		ms := make([]gbm.Sample, len(cands))
 		for i, c := range cands {
-			ms[i] = gbm.Sample{Ts: c.Ts, Feat: c.Context, Y: metaLabel(c, 0.001)}
+			ms[i] = gbm.Sample{Ts: c.Ts, LabelEnd: c.LabelEnd, Feat: c.Context, Y: metaLabel(c, 0.001)}
 		}
-		probs, _, err := walkForward(ms, 4)
+		probs, _, _, err := walkForward(ms, 4, testSpan, embargoFor(testSpan))
 		if err != nil {
 			t.Fatalf("walkForward: %v", err)
 		}
@@ -231,11 +254,13 @@ func TestNoDirectionalCalls(t *testing.T) {
 
 // An unearned meta-model must never gate a live decision.
 func TestRunRefusesWhenNotEarned(t *testing.T) {
-	n := 600
+	n := testRows
 	samples := make([]Sample, 0, n)
 	for i := 0; i < n; i++ {
+		ts := int64(i) * testSpan
 		samples = append(samples, Sample{
-			Ts:          int64(i * 86400),
+			Ts:          ts,
+			LabelEnd:    ts + testSpan,
 			PrimaryProb: 0.62,
 			Context:     []float64{float64(i % 3), 0.5},
 			FwdReturn:   -0.01, // edgeless primary

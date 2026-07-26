@@ -79,11 +79,16 @@ func PositionBudget(equity, cash float64) float64 {
 	return slice
 }
 
-// CostBpsFor returns the per-SIDE cost in basis points for a market's fills — a
-// combined spread+slippage proxy consistent with internal/backtest's per-side
-// CostBps convention. Defaults sit in the middle of the ranges the design calls
-// for (stocks ~5-10bps, crypto ~2-5bps): stocks 7.5bps, crypto 3.5bps. Both are
+// CostBpsFor returns the per-SIDE HALF-SPREAD in basis points for a market's
+// fills, consistent with internal/backtest's per-side CostBps convention.
+// Defaults sit in the middle of the ranges the design calls for (stocks
+// ~5-10bps, crypto ~2-5bps): stocks 7.5bps, crypto 3.5bps. Both are
 // env-overridable so the cost assumption is explicit and tunable, never hidden.
+//
+// This is no longer the WHOLE cost of a fill. It is the spread component; the
+// size-dependent market-impact component is added by the execution model (see
+// execution.go), because a flat constant is a cost assumption a fill can beat,
+// and the live book's fills were beating it.
 func CostBpsFor(market md.Market) float64 {
 	if market == md.Crypto {
 		return envFloat("SIGNALDECK_PAPER_COST_CRYPTO_BPS", 3.5)
@@ -120,74 +125,9 @@ func DecideTarget(cal float64) Target {
 	return Hold
 }
 
-// Fill is the result of executing one transition at a bar open. It is a pure
-// value: the caller applies it to the persisted book (cash/position/trade log).
-// Qty is the units bought (Side=="buy") or sold (Side=="sell"); Cost is the
-// dollar cost charged on this side; CashDelta is the signed change to book cash
-// (negative on a buy: you pay notional + cost; positive on a sell: you receive
-// notional minus cost).
-type Fill struct {
-	Side      string  // "buy" | "sell"
-	Qty       float64 // units transacted (>0)
-	Px        float64 // fill price (the next bar's OPEN)
-	Cost      float64 // dollar cost charged on this fill (>=0)
-	CashDelta float64 // signed change to cash after notional + cost
-	Reason    string  // human-readable why (set by caller/worker)
-}
-
-// EnterLong sizes and prices a buy-to-open at fillPx, deploying a target dollar
-// BUDGET (inclusive of the entry cost) so multiple positions can coexist and the
-// book never goes negative. budget is the total outlay allowed for this entry
-// (notional + cost); it must already be clamped to the cash on hand by the
-// caller (see PositionBudget). It returns the fill and the resulting position
-// quantity + average price. A non-positive budget/fillPx yields ok=false.
-//
-// Sizing math (so the outlay equals the budget and cash never goes negative):
-//
-//	let c = costBps/1e4 (cost fraction). We buy qty units at fillPx and pay a
-//	cost of qty*fillPx*c. Total outlay = qty*fillPx*(1+c) must equal budget, so
-//	qty = budget / (fillPx*(1+c)). Then notional = qty*fillPx, cost = notional*c,
-//	and cash after = cash - notional - cost = cash - budget (>= 0 when budget<=cash).
-func EnterLong(budget, fillPx, costBps float64) (Fill, float64, float64, bool) {
-	if budget <= 0 || fillPx <= 0 {
-		return Fill{}, 0, 0, false
-	}
-	c := costBps / 1e4
-	qty := budget / (fillPx * (1 + c))
-	if qty <= 0 {
-		return Fill{}, 0, 0, false
-	}
-	notional := qty * fillPx
-	cost := notional * c
-	f := Fill{
-		Side:      "buy",
-		Qty:       qty,
-		Px:        fillPx,
-		Cost:      cost,
-		CashDelta: -(notional + cost),
-	}
-	return f, qty, fillPx, true
-}
-
-// ExitLong prices a sell-to-close of the whole position at fillPx. It returns
-// the fill; cash received = notional - cost. A non-positive qty or fillPx yields
-// ok=false. costBps is the per-side cost in bps.
-func ExitLong(qty, fillPx, costBps float64) (Fill, bool) {
-	if qty <= 0 || fillPx <= 0 {
-		return Fill{}, false
-	}
-	c := costBps / 1e4
-	notional := qty * fillPx
-	cost := notional * c
-	f := Fill{
-		Side:      "sell",
-		Qty:       qty,
-		Px:        fillPx,
-		Cost:      cost,
-		CashDelta: notional - cost,
-	}
-	return f, true
-}
+// Fill, EnterLong and ExitLong live in execution.go: pricing a fill is no
+// longer "the bar open times a constant", it is a spread + impact + capacity
+// model, and it earns its own file.
 
 // EquityPoint is one mark on the simulated equity curve.
 type EquityPoint struct {

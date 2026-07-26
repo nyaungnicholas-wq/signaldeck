@@ -162,7 +162,9 @@ func Specs() []Spec {
 			Baseline: "Persistence — the share of calls whose side simply did not change. This is NOT 50%: " +
 				"SMA200 state is sticky, and any accuracy at or below persistence means the predictor adds nothing.",
 			KnownWeakness: "The 2026-07-24 re-validation measured the most ACCURATE band (>=0.9) as carrying a " +
-				"NEGATIVE mean forward 21d return (-0.39%): high conviction means price is already far from its " +
+				"NEGATIVE mean forward 21d return (-0.76%, 95% CI [-1.19%, -0.32%], n=18,850 non-overlapping, " +
+				"corrected 2026-07-26 from the originally registered -0.39% — see the AMENDMENT record in this " +
+				"chain): high conviction means price is already far from its " +
 				"average, and extended names mean-revert. Accuracy and return are different quantities here. " +
 				"Survivorship: the universe is currently-tracked stocks, so downtrend persistence into delisting " +
 				"is unobserved.",

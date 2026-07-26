@@ -1,14 +1,22 @@
 // Package portopt is a small, dependency-free mean-variance portfolio
 // optimizer (Markowitz) for long-only allocations.
 //
-// Given aligned per-asset return series it builds a sample covariance matrix
-// and produces two classic allocations, both constrained to be long-only
-// (weights >= 0, summing to 1):
+// Given aligned per-asset return series it builds a SHRUNK covariance matrix
+// (Ledoit-Wolf, see shrinkage.go) and produces long-only allocations (weights
+// >= 0, summing to 1):
 //
 //   - MinVariance: the global minimum-variance portfolio via the closed-form
 //     inverse-covariance solution, clipped to the long-only simplex.
-//   - MaxSharpe: the maximum-Sharpe portfolio via projected gradient ascent on
+//   - MaxSharpe: the SAFE DEFAULT. It takes no view on expected returns — see
+//     its doc for why a mean vector handed to a library cannot be distinguished
+//     from in-window noise — so it returns the minimum-variance allocation and
+//     says so in the Note.
+//   - TangencyWithViews: the classic maximum-Sharpe solve, for callers who can
+//     assert their expected returns are EXOGENOUS. Projected gradient ascent on
 //     the long-only simplex (no closed form exists under the sign constraint).
+//   - MaxSharpeFromReturns: the honest history-only path. It knows T, so it
+//     shrinks the covariance (Ledoit-Wolf) and the means (Jorion Bayes-Stein)
+//     by data-derived intensities before solving, and reports both.
 //
 // Every function is pure: numbers in, numbers out. No I/O, no persistence, no
 // clock, no randomness, no goroutines. It depends only on the standard library;
@@ -16,22 +24,29 @@
 // products, quadratic forms, simplex projection) is implemented here.
 //
 // HONESTY NOTES (this is the brand):
-//   - ESTIMATES, NOT TRUTH. Expected returns and covariances are noisy sample
-//     statistics estimated from the supplied history. Mean-variance optimization
-//     is notoriously sensitive to these inputs — small changes in the estimated
-//     mean can swing weights a lot. Treat the output as one reasonable
-//     allocation given this history, not a forecast or a guarantee.
+//   - ESTIMATION ERROR IS THE DOMINANT RISK, AND IT IS REGULARISED, NOT JUST
+//     DISCLOSED. Expected returns and covariances estimated on the same short
+//     window the optimizer allocates over make it an error-maximizing machine:
+//     it concentrates on whichever estimate noise flattered most. This package
+//     therefore SHRINKS both inputs (see shrinkage.go) rather than printing a
+//     caveat beside an unshrunk answer. Covariance() is the Ledoit-Wolf
+//     estimator, not the raw sample matrix; MaxSharpe takes no view on returns
+//     unless the caller states the views are exogenous.
+//   - IN-SAMPLE IS SAID IN THE FIELD NAME. Every statistic a Result reports is
+//     measured on the estimation window. The Sharpe field is SharpeInSample and
+//     is nil when there is nothing to compute it from — a 0 Sharpe is a claim,
+//     not an absence.
 //   - APPROXIMATE LONG-ONLY MIN-VARIANCE. The long-only minimum-variance
 //     portfolio is a quadratic program. Rather than solve the QP, MinVariance
 //     uses the exact unconstrained closed form (weights proportional to
 //     Sigma^-1 * 1) and then clips negative weights to zero and renormalizes.
 //     This is a documented approximation, not the certified constrained optimum;
 //     when clipping occurs it is recorded in Result.Note.
-//   - BEST-FOUND, NOT CERTIFIED. MaxSharpe runs deterministic projected gradient
-//     ascent for a fixed number of iterations and returns the best weights it
-//     visited. The long-only Sharpe objective over the simplex is well-behaved,
-//     so this reliably finds the tangency portfolio in practice, but no global
-//     optimality certificate is produced.
+//   - BEST-FOUND, NOT CERTIFIED. TangencyWithViews runs deterministic projected
+//     gradient ascent for a fixed number of iterations and returns the best
+//     weights it visited. The long-only Sharpe objective over the simplex is
+//     well-behaved, so this reliably finds the tangency portfolio in practice,
+//     but no global optimality certificate is produced.
 //   - NEVER NaN/Inf. Singular or ill-conditioned covariance, shape mismatches,
 //     zero-variance portfolios, or too few assets all fall back gracefully to
 //     an equal-weight allocation with an explanatory Result.Note. Divisions are
@@ -47,78 +62,77 @@ import (
 const (
 	// MethodMinVariance marks a minimum-variance allocation.
 	MethodMinVariance = "min_variance"
-	// MethodMaxSharpe marks a maximum-Sharpe allocation.
+	// MethodMaxSharpe marks a maximum-Sharpe (tangency) allocation built on
+	// views the caller asserted are exogenous.
 	MethodMaxSharpe = "max_sharpe"
+	// MethodMinVarianceNoView marks the no-view default: expected returns were
+	// fully shrunk to their cross-sectional mean, so the maximum-Sharpe
+	// portfolio IS the minimum-variance portfolio.
+	MethodMinVarianceNoView = "min_variance_no_view"
 	// MethodEqualWeightFallback marks a graceful equal-weight fallback.
 	MethodEqualWeightFallback = "equal_weight_fallback"
 )
 
+// Shrinkage records how far each noisy input was pulled toward its prior, so a
+// reader can see how much of the allocation is data and how much is the
+// regulariser. Nil intensities mean "not applicable on this path" (e.g. the
+// caller supplied a covariance matrix, so this package never saw the returns
+// the Ledoit-Wolf intensity is derived from).
+type Shrinkage struct {
+	CovarianceIntensity *float64 `json:",omitempty"` // Ledoit-Wolf delta in [0,1]
+	CovarianceTarget    string   `json:",omitempty"`
+	MeanIntensity       *float64 `json:",omitempty"` // Bayes-Stein w in [0,1]; 1 = no view
+	MeanTarget          string   `json:",omitempty"`
+	// Views are the expected returns actually optimized on, after shrinkage.
+	Views []float64 `json:",omitempty"`
+}
+
 // Result is an optimized allocation. Weights are aligned with Symbols, are
 // long-only (each >= 0) and sum to 1 (except the degenerate empty-input case,
-// which yields no weights). ExpRet, Vol and Sharpe are computed for the chosen
-// weights when the necessary inputs are available.
+// which yields no weights).
+//
+// Every reported statistic is measured on the SAME window that produced the
+// inputs — InSample is true and SharpeInSample is named for it. A Sharpe
+// computed on the window an optimizer just fitted is a fit statistic; reporting
+// it as "Sharpe" beside an allocation invites it to be read as the allocation's
+// expected performance, which was precisely the review's complaint.
 type Result struct {
 	Symbols []string
 	Weights []float64 // long-only, sum to 1
-	ExpRet  float64   // portfolio expected return (if expRet provided)
-	Vol     float64   // portfolio volatility (sqrt wᵀΣw)
-	Sharpe  float64   // (ExpRet - rf) / Vol
-	Method  string    // "min_variance" | "max_sharpe" | "equal_weight_fallback"
-	Note    string
+	ExpRet  float64   // portfolio expected return over the estimation window
+	Vol     float64   // portfolio volatility (sqrt wᵀΣw) over the estimation window
+	// SharpeInSample is (ExpRet - rf)/Vol for these weights ON THE ESTIMATION
+	// WINDOW. It is nil — never 0 — when no expected returns were supplied or
+	// the volatility is not positive.
+	SharpeInSample *float64 `json:",omitempty"`
+	// InSample is always true for this package and is carried in the payload so
+	// a consumer that only reads JSON cannot miss it.
+	InSample  bool
+	Method    string // see the Method* constants
+	Note      string
+	Shrinkage *Shrinkage `json:",omitempty"`
 }
 
-// Covariance returns the NxN sample covariance matrix of the given aligned
-// return series (returns[i] is asset i's series). Series are expected to share
-// the same length; if they differ, the common leading length (the minimum
-// across series) is used defensively. The estimator is the unbiased sample
-// covariance with an (T-1) denominator, where T is that common length.
-//
-// With fewer than two observations there is no sample covariance to form, so an
-// all-zero matrix is returned rather than a division by zero.
-func Covariance(returns [][]float64) [][]float64 {
-	n := len(returns)
-	cov := make([][]float64, n)
-	for i := range cov {
-		cov[i] = make([]float64, n)
+// withSharpe fills ExpRet/Vol/SharpeInSample for weights w, withholding the
+// Sharpe (nil) when it cannot be formed.
+func (r Result) withSharpe(expRet []float64, cov [][]float64, rf float64) Result {
+	r.InSample = true
+	if !isSquare(cov, len(r.Weights)) {
+		return r
 	}
-	if n == 0 {
-		return cov
+	r.Vol = math.Sqrt(clampNonNeg(quadForm(r.Weights, cov)))
+	if len(expRet) != len(r.Weights) {
+		return r
 	}
-
-	// Common (minimum) length across series, so unequal input can't panic.
-	t := len(returns[0])
-	for _, r := range returns {
-		if len(r) < t {
-			t = len(r)
-		}
+	r.ExpRet = dot(expRet, r.Weights)
+	if r.Vol > 0 {
+		s := (r.ExpRet - rf) / r.Vol
+		r.SharpeInSample = &s
 	}
-	if t < 2 {
-		return cov // not enough data for a sample covariance
-	}
-
-	means := make([]float64, n)
-	for i := 0; i < n; i++ {
-		s := 0.0
-		for k := 0; k < t; k++ {
-			s += returns[i][k]
-		}
-		means[i] = s / float64(t)
-	}
-
-	den := float64(t - 1)
-	for i := 0; i < n; i++ {
-		for j := i; j < n; j++ {
-			s := 0.0
-			for k := 0; k < t; k++ {
-				s += (returns[i][k] - means[i]) * (returns[j][k] - means[j])
-			}
-			c := s / den
-			cov[i][j] = c
-			cov[j][i] = c
-		}
-	}
-	return cov
+	return r
 }
+
+// Covariance and its shrinkage machinery live in shrinkage.go.
 
 // MinVariance returns the long-only minimum-variance weights for cov.
 //
@@ -127,29 +141,48 @@ func Covariance(returns [][]float64) [][]float64 {
 // negative weights to zero and renormalizes so the result is long-only. If cov
 // is singular or ill-conditioned, has a shape that does not match symbols, or
 // there are too few assets to optimize, it falls back to equal weight and
-// records why in the returned Note. Result.Vol is sqrt(wᵀ·cov·w); ExpRet and
-// Sharpe are left at zero because no expected returns are supplied.
+// records why in the returned Note. Result.Vol is sqrt(wᵀ·cov·w); ExpRet is
+// zero and SharpeInSample is nil (withheld) because no expected returns are
+// supplied — there is nothing to compute a Sharpe from, and a 0 would be a
+// claim rather than an absence.
 func MinVariance(symbols []string, cov [][]float64) Result {
+	return minVariance(symbols, cov, nil, 0, MethodMinVariance, "")
+}
+
+// minVariance is the shared long-only minimum-variance solve. expRet/rf are
+// used only to fill the in-sample statistics; they never influence the weights.
+// method/extraNote let the no-view MaxSharpe path label itself honestly.
+func minVariance(symbols []string, cov [][]float64, expRet []float64, rf float64, method, extraNote string) Result {
 	n := len(symbols)
+	join := func(base string) string {
+		if extraNote == "" {
+			return base
+		}
+		if base == "" {
+			return extraNote
+		}
+		return extraNote + " " + base
+	}
 	if n == 0 {
-		return Result{Symbols: symbols, Weights: []float64{}, Method: MethodEqualWeightFallback, Note: "no assets to optimize"}
+		return Result{Symbols: symbols, Weights: []float64{}, InSample: true,
+			Method: MethodEqualWeightFallback, Note: join("no assets to optimize")}
 	}
 	if n == 1 {
-		return Result{
+		r := Result{
 			Symbols: symbols,
 			Weights: []float64{1},
-			Vol:     math.Sqrt(clampNonNeg(covAt(cov, 0, 0))),
 			Method:  MethodEqualWeightFallback,
-			Note:    "single asset: nothing to optimize, allocated 100%",
+			Note:    join("single asset: nothing to optimize, allocated 100%"),
 		}
+		return r.withSharpe(expRet, cov, rf)
 	}
 	if !isSquare(cov, n) {
-		return equalWeightResult(symbols, nil, cov, 0, "covariance shape does not match symbols; used equal weight")
+		return equalWeightResult(symbols, expRet, cov, rf, join("covariance shape does not match symbols; used equal weight"))
 	}
 
 	inv, ok := invert(cov)
 	if !ok {
-		return equalWeightResult(symbols, nil, cov, 0, "covariance is singular or ill-conditioned; used equal weight")
+		return equalWeightResult(symbols, expRet, cov, rf, join("covariance is singular or ill-conditioned; used equal weight"))
 	}
 
 	// Unconstrained global minimum variance: w ∝ Σ⁻¹·1.
@@ -163,7 +196,7 @@ func MinVariance(symbols []string, cov [][]float64) Result {
 		sum += x
 	}
 	if math.Abs(sum) < 1e-15 {
-		return equalWeightResult(symbols, nil, cov, 0, "min-variance weights undefined (degenerate covariance); used equal weight")
+		return equalWeightResult(symbols, expRet, cov, rf, join("min-variance weights undefined (degenerate covariance); used equal weight"))
 	}
 	w := make([]float64, n)
 	for i := range raw {
@@ -173,58 +206,94 @@ func MinVariance(symbols []string, cov [][]float64) Result {
 	// Long-only: clip negatives to zero and renormalize.
 	clipped, numClipped, allZero := clipRenorm(w)
 	if allZero {
-		return equalWeightResult(symbols, nil, cov, 0, "long-only clipping removed all weight; used equal weight")
+		return equalWeightResult(symbols, expRet, cov, rf, join("long-only clipping removed all weight; used equal weight"))
 	}
 
-	res := Result{
-		Symbols: symbols,
-		Weights: clipped,
-		Vol:     math.Sqrt(clampNonNeg(quadForm(clipped, cov))),
-		Method:  MethodMinVariance,
-	}
+	res := Result{Symbols: symbols, Weights: clipped, Method: method}
 	if numClipped > 0 {
 		res.Note = "clipped negative weights to zero and renormalized for long-only"
+	}
+	res.Note = join(res.Note)
+	return res.withSharpe(expRet, cov, rf)
+}
+
+// noViewNote is the sentence a no-view allocation carries. It has to say what
+// happened to the caller's expected returns, because the weights no longer
+// depend on them at all.
+const noViewNote = "expected returns were fully shrunk to their cross-sectional mean: sample means over a window this short are not distinguishable from noise, and tilting on them maximizes estimation error rather than return. With no view, the maximum-Sharpe portfolio IS the minimum-variance portfolio. Supply exogenous views to TangencyWithViews, or use MaxSharpeFromReturns to shrink by a data-derived intensity."
+
+// MaxSharpe is the SAFE DEFAULT entry point, and it deliberately does not tilt
+// on the expected returns it is handed.
+//
+// THE FINDING THIS IMPLEMENTS: the optimizer estimated expected returns and
+// covariance on the same window and then reported the Sharpe that overweighting
+// produced. Given only a mean vector and a covariance matrix, this function
+// cannot tell an exogenous view from a sample mean computed on the very window
+// the covariance came from — and the caller that shipped the defect was passing
+// the latter. So the default assumes the latter: expRet is fully shrunk to its
+// cross-sectional mean, which makes the tangency portfolio the minimum-variance
+// portfolio, and the Note says so.
+//
+// expRet is still used to report the in-sample ExpRet and SharpeInSample OF THE
+// CHOSEN WEIGHTS. Those are fit statistics on the estimation window, named for
+// it, and the Sharpe is withheld (nil) rather than zeroed when it cannot be
+// formed.
+//
+// Callers with genuinely exogenous views want TangencyWithViews. Callers who
+// have the return history want MaxSharpeFromReturns, which knows T and can
+// therefore shrink by a derived intensity instead of shrinking all the way.
+func MaxSharpe(symbols []string, expRet []float64, cov [][]float64, rf float64) Result {
+	if len(symbols) > 1 && (!isSquare(cov, len(symbols)) || len(expRet) != len(symbols)) {
+		return equalWeightResult(symbols, expRet, cov, rf, "inputs shape mismatch; used equal weight")
+	}
+	full := 1.0
+	res := minVariance(symbols, cov, expRet, rf, MethodMinVarianceNoView, noViewNote)
+	res.Shrinkage = &Shrinkage{
+		MeanIntensity: &full,
+		MeanTarget:    "cross-sectional mean of the supplied expected returns (no view)",
 	}
 	return res
 }
 
-// MaxSharpe returns long-only weights maximizing (expRet·w - rf)/sqrt(wᵀΣw) via
-// projected gradient ascent on the simplex. rf is the per-period risk-free rate
-// (expressed in the same units as expRet, e.g. per-day if returns are daily).
+// TangencyWithViews returns long-only weights maximizing (views·w - rf)/sqrt(wᵀΣw)
+// via projected gradient ascent on the simplex. rf is the per-period risk-free
+// rate (expressed in the same units as views, e.g. per-day if returns are
+// daily).
+//
+// CONTRACT — READ BEFORE CALLING: `views` must be EXOGENOUS expected returns.
+// Trailing sample means computed on the same window as cov are not views; they
+// are noise, and this solver will faithfully concentrate the book on whichever
+// asset that noise flattered. That is the error-maximization the review found.
+// If all you have is history, call MaxSharpeFromReturns.
 //
 // The search is fully deterministic: it starts from equal weight, takes a fixed
 // number of gradient steps with a decaying, scale-normalized step size,
 // projects onto the long-only simplex after each step, and returns the
 // best-Sharpe weights encountered. If the inputs are shape-mismatched, the
 // starting portfolio has zero variance, or there are too few assets, it falls
-// back to equal weight with an explanatory Note. Result reports ExpRet, Vol and
-// Sharpe for the chosen weights.
-func MaxSharpe(symbols []string, expRet []float64, cov [][]float64, rf float64) Result {
+// back to equal weight with an explanatory Note.
+func TangencyWithViews(symbols []string, views []float64, cov [][]float64, rf float64) Result {
 	n := len(symbols)
 	if n == 0 {
-		return Result{Symbols: symbols, Weights: []float64{}, Method: MethodEqualWeightFallback, Note: "no assets to optimize"}
+		return Result{Symbols: symbols, Weights: []float64{}, InSample: true,
+			Method: MethodEqualWeightFallback, Note: "no assets to optimize"}
 	}
 	if n == 1 {
-		w := []float64{1}
-		er := safeIndex(expRet, 0)
-		vol := math.Sqrt(clampNonNeg(covAt(cov, 0, 0)))
-		return Result{
+		r := Result{
 			Symbols: symbols,
-			Weights: w,
-			ExpRet:  er,
-			Vol:     vol,
-			Sharpe:  sharpe(er, vol, rf),
+			Weights: []float64{1},
 			Method:  MethodEqualWeightFallback,
 			Note:    "single asset: nothing to optimize, allocated 100%",
 		}
+		return r.withSharpe(views, cov, rf)
 	}
-	if !isSquare(cov, n) || len(expRet) != n {
-		return equalWeightResult(symbols, expRet, cov, rf, "inputs shape mismatch; used equal weight")
+	if !isSquare(cov, n) || len(views) != n {
+		return equalWeightResult(symbols, views, cov, rf, "inputs shape mismatch; used equal weight")
 	}
 
 	w := equalWeights(n)
 	if quadForm(w, cov) <= 0 {
-		return equalWeightResult(symbols, expRet, cov, rf, "zero-variance portfolio; Sharpe undefined, used equal weight")
+		return equalWeightResult(symbols, views, cov, rf, "zero-variance portfolio; Sharpe undefined, used equal weight")
 	}
 
 	const (
@@ -232,9 +301,9 @@ func MaxSharpe(symbols []string, expRet []float64, cov [][]float64, rf float64) 
 		step0 = 0.1
 	)
 	best := append([]float64(nil), w...)
-	bestS := sharpeAt(w, expRet, cov, rf)
+	bestS := sharpeAt(w, views, cov, rf)
 	for t := 0; t < iters; t++ {
-		g, ok := sharpeGradient(w, expRet, cov, rf)
+		g, ok := sharpeGradient(w, views, cov, rf)
 		if !ok {
 			break // hit a zero-variance point; stop and keep best
 		}
@@ -251,22 +320,57 @@ func MaxSharpe(symbols []string, expRet []float64, cov [][]float64, rf float64) 
 			nw[i] = w[i] + frac/gmax*g[i]
 		}
 		w = projectSimplex(nw)
-		if s := sharpeAt(w, expRet, cov, rf); s > bestS {
+		if s := sharpeAt(w, views, cov, rf); s > bestS {
 			bestS = s
 			copy(best, w)
 		}
 	}
 
-	er := dot(expRet, best)
-	vol := math.Sqrt(clampNonNeg(quadForm(best, cov)))
-	return Result{
-		Symbols: symbols,
-		Weights: best,
-		ExpRet:  er,
-		Vol:     vol,
-		Sharpe:  sharpe(er, vol, rf),
-		Method:  MethodMaxSharpe,
+	res := Result{Symbols: symbols, Weights: best, Method: MethodMaxSharpe}
+	return res.withSharpe(views, cov, rf)
+}
+
+// MaxSharpeFromReturns is the honest mean-variance path when history is all you
+// have. Because it receives the raw aligned return series it knows T, so it can
+// shrink BOTH inputs by intensities derived from the data instead of asserting
+// them:
+//
+//   - covariance: Ledoit-Wolf toward a constant-correlation target;
+//   - expected returns: Jorion (1986) Bayes-Stein toward the minimum-variance
+//     portfolio's return.
+//
+// It then runs the same tangency solve on those shrunk estimates and reports
+// both intensities and the shrunk views in Result.Shrinkage, so a reader can
+// see how much of the allocation survived regularisation. The reported Sharpe
+// is still an in-sample fit statistic and is named accordingly.
+func MaxSharpeFromReturns(symbols []string, returns [][]float64, rf float64) Result {
+	n := len(symbols)
+	if n == 0 || len(returns) != n {
+		return equalWeightResult(symbols, nil, nil, rf, "no aligned return series for these symbols; used equal weight")
 	}
+	cov, covDelta := CovarianceShrinkage(returns)
+	T := commonLength(returns)
+	raw := meansOf(returns, T)
+	views, meanW := ShrinkMeans(raw, cov, T)
+
+	var res Result
+	if meanW >= 1 {
+		// Fully shrunk: every asset carries the same expected return, so the
+		// tangency portfolio collapses onto minimum variance. Solve it directly
+		// rather than asking gradient ascent to rediscover it.
+		res = minVariance(symbols, cov, views, rf, MethodMinVarianceNoView,
+			"Bayes-Stein shrank the sample means all the way to the minimum-variance portfolio's return: their cross-sectional dispersion is within what sampling noise alone produces at this sample size.")
+	} else {
+		res = TangencyWithViews(symbols, views, cov, rf)
+	}
+	res.Shrinkage = &Shrinkage{
+		CovarianceIntensity: &covDelta,
+		CovarianceTarget:    "constant correlation (Ledoit-Wolf)",
+		MeanIntensity:       &meanW,
+		MeanTarget:          "minimum-variance portfolio return (Jorion Bayes-Stein)",
+		Views:               views,
+	}
+	return res
 }
 
 // --- internal helpers ------------------------------------------------------
@@ -286,24 +390,16 @@ func equalWeights(n int) []float64 {
 }
 
 // equalWeightResult builds an equal-weight fallback Result, filling in Vol from
-// cov when its shape matches and ExpRet/Sharpe from expRet when supplied.
+// cov when its shape matches and ExpRet/SharpeInSample from expRet when
+// supplied.
 func equalWeightResult(symbols []string, expRet []float64, cov [][]float64, rf float64, note string) Result {
-	n := len(symbols)
-	w := equalWeights(n)
 	res := Result{
 		Symbols: symbols,
-		Weights: w,
+		Weights: equalWeights(len(symbols)),
 		Method:  MethodEqualWeightFallback,
 		Note:    note,
 	}
-	if isSquare(cov, n) {
-		res.Vol = math.Sqrt(clampNonNeg(quadForm(w, cov)))
-	}
-	if len(expRet) == n {
-		res.ExpRet = dot(expRet, w)
-		res.Sharpe = sharpe(res.ExpRet, res.Vol, rf)
-	}
-	return res
+	return res.withSharpe(expRet, cov, rf)
 }
 
 // clipRenorm returns a copy of w with negative entries set to zero and the
@@ -416,22 +512,6 @@ func isSquare(m [][]float64, n int) bool {
 		}
 	}
 	return true
-}
-
-// covAt safely reads m[i][j], returning 0 when out of range.
-func covAt(m [][]float64, i, j int) float64 {
-	if i < 0 || i >= len(m) || j < 0 || j >= len(m[i]) {
-		return 0
-	}
-	return m[i][j]
-}
-
-// safeIndex returns v[i], or 0 when out of range.
-func safeIndex(v []float64, i int) float64 {
-	if i < 0 || i >= len(v) {
-		return 0
-	}
-	return v[i]
 }
 
 // invert returns the inverse of the square matrix a via Gauss-Jordan

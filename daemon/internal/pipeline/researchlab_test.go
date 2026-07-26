@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,5 +114,52 @@ func TestResearchLabWorker_RunsAndGatesDaily(t *testing.T) {
 	// An advisory feedback signal is written (never null after a real run).
 	if fb, _ := st.GetMeta(ctx, "research_feedback:v1"); fb == "" {
 		t.Fatal("expected research_feedback meta to be written")
+	}
+}
+
+// The Bonferroni divisor must GROW night over night. The bug this pins: the
+// nightly re-test corrected by the size of the shadow pool, and that pool
+// shrinks as members are promoted or rejected — so asking the same question
+// again made it easier to answer yes.
+func TestResearchLabWorker_DivisorGrowsAcrossNights(t *testing.T) {
+	ctx := context.Background()
+	st := newRLWorkerStore(t)
+	sym, _ := st.UpsertSymbol(ctx, "CCC", md.Stocks, "")
+	const rowSpacing = 8 * 86400
+	for i := int64(0); i < 200; i++ {
+		sig, fwd := 1.0, 0.01
+		if (i/4)%2 == 1 {
+			sig, fwd = -1.0, -0.01
+		}
+		seedRLLabeled(t, st, sym, 1000+i*rowSpacing, map[string]float64{
+			"signal": sig, "noise": float64(i%5) / 5.0,
+		}, fwd)
+	}
+	w := NewResearchLabWorker(st)
+
+	divisors := make([]int, 0, 4)
+	for night := 0; night < 4; night++ {
+		day := time.Unix(1_700_000_000+int64(night)*86400, 0)
+		w.Now = func() time.Time { return day }
+		detail, err := w.Run(ctx)
+		if err != nil {
+			t.Fatalf("night %d: %v", night+1, err)
+		}
+		var div, prior int
+		if _, err := fmt.Sscanf(detail[strings.Index(detail, "Bonferroni divisor "):],
+			"Bonferroni divisor %d = tonight's batch + %d prior looks", &div, &prior); err != nil {
+			t.Fatalf("night %d: divisor not reported in %q", night+1, detail)
+		}
+		if night > 0 && div <= divisors[night-1] {
+			t.Fatalf("night %d divisor %d did not exceed night %d's %d",
+				night+1, div, night, divisors[night-1])
+		}
+		divisors = append(divisors, div)
+	}
+
+	// And the accumulated count is persisted, not recomputed from a table rows
+	// leave when they are promoted or rejected.
+	if v, _ := st.GetMeta(ctx, researchLabTestsKey); v == "" || v == "0" {
+		t.Errorf("cumulative look counter = %q, want a positive persisted count", v)
 	}
 }

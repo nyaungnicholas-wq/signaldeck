@@ -4,7 +4,7 @@
 // --------------------
 // "Maximize accuracy AND return" reads like one goal and is two, and on this
 // data they point in OPPOSITE directions: trend21's conv>=0.9 band has the best
-// hit rate in the system (97.2%) and a mean forward 21d return of -0.39%.
+// hit rate in the system (97.2%) and a mean forward 21d return of -0.76% (corrected 2026-07-26 from -0.39% by replication; see forwardReturnFor).
 // Optimising accuracy walks you directly into the losing band.
 //
 // Expectancy is what reconciles them, because it is the quantity that actually

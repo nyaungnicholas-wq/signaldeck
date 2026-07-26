@@ -2,11 +2,17 @@
 //
 //	GET /api/xs-factor?horizon=21d&limit=50[&market=stocks|crypto|all]
 //
-// WHY THIS EXISTS: an independent re-validation (968 stocks / 1,900 trading
-// days) found that absolute direction fails at every horizon, while the
+// WHY THIS EXISTS: absolute direction fails at every horizon, while the
 // CROSS-SECTIONAL question — "will this symbol beat the same-day universe
-// MEDIAN forward return?" — carries a real, statistically significant edge that
-// GROWS with horizon. The app had no surface for it. This is that surface.
+// MEDIAN forward return?" — carries a small but measurable edge. The app had no
+// surface for it. This is that surface.
+//
+// 2026-07-26: the per-leg edges are now re-derived by tools/xsfactor_edge.py,
+// committed, and asserted against its output in the tests. That re-derivation
+// RETRACTED the size/liquidity leg at every horizon (it measures negative, not
+// the published +1.46/+2.50/+3.04pp) and low-volatility at 63d. The edge does
+// NOT grow with horizon, as the old copy here claimed; 63d has no surviving leg
+// at all and the endpoint gates it with a stated reason.
 //
 // DELIBERATELY NO NEW STATE: no table, no worker, no migration. Every number is
 // recomputed at read time from the daily bars already stored (one batched
@@ -15,10 +21,12 @@
 // for that cache and a visitor never waits behind a rebuild.
 //
 // HONESTY (shipped verbatim in every payload): xsfactor.Caveat — relative rank
-// only, the legs are the PUBLIC low-volatility anomaly and size/liquidity
-// premium, capacity-constrained, implied IC ~0.03-0.07 (accuracy 51-54%) is the
-// realistic ceiling. The measured edge block ships as data, exactly as
-// measured, with no invented rows for legs/horizons nobody measured.
+// only; what survives is the PUBLIC low-volatility anomaly (5d/21d) and
+// momentum-12-1 (5d), capacity-constrained, at a measured 51.1-52.0% accuracy
+// against a 50% base rate. The edge block ships as data, exactly as re-derived,
+// with no invented rows — and the legs that FAILED ship beside it in "withheld"
+// with their measured values and their reasons, so a reader can audit the
+// retraction rather than take it on trust.
 package api
 
 import (
@@ -48,11 +56,13 @@ const (
 	xsFactorMaxSkipped = 100
 
 	// xsFactorGateThinUniverse is the stated gate reason.
-	xsFactorGateThinUniverse = "cross-section too thin — a percentile over this few symbols is noise, not a rank; the measured edge was estimated across a ~968-name daily cross-section"
+	xsFactorGateThinUniverse = "cross-section too thin — a percentile over this few symbols is noise, not a rank; the re-derived edge was estimated across a ~1,000-name daily cross-section"
 	// xsFactorSplitNote explains the artifact rejections.
 	xsFactorSplitNote = "symbols whose trailing series contains a |daily return| above 0.65 are REFUSED, not smoothed: this repo's bars carry known uncorrected-split artifacts that would corrupt both the volatility and the momentum leg"
-	// xsFactorUniverseNote states what the cross-section actually is.
-	xsFactorUniverseNote = "percentiles are relative to the ACTIVE tracked symbols in this request only (default market=stocks, since the edge was measured on US stocks) — not to the whole market, and not to the 968-name universe the edge was measured on"
+	// xsFactorUniverseNote states what the cross-section actually is, and names
+	// the gap between it and the universe the edge was measured on — the live
+	// rank is over SURVIVORS, the measurement deliberately was not.
+	xsFactorUniverseNote = "percentiles are relative to the ACTIVE tracked symbols in this request only (default market=stocks, since the edge was measured on US stocks) — not to the whole market. The edge itself was re-derived on the SURVIVORSHIP-CLEAN universe of 1,059 stocks including 739 delisted names, which this live cross-section does not contain; on the active-only universe the same script measures every leg as indistinguishable from zero, and that gap is a real limit on what a live rank here can be expected to deliver"
 )
 
 // sharedXSFactorSWR fronts GET /api/xs-factor. The read costs one batched
@@ -172,7 +182,11 @@ func (d Deps) xsFactor(w http.ResponseWriter, r *http.Request) {
 		"trailingBars":      xsfactor.TrailingBars,
 		"compositeLegs":     res.CompositeLegs,
 		"edge":              res.Edge,
+		"withheld":          res.Withheld,
 		"edgeNote":          xsfactor.EvidenceNote,
+		"retractionNote":    xsfactor.RetractionNote,
+		"derivationScript":  xsfactor.DerivationScript,
+		"derivationOutput":  "daemon/internal/xsfactor/" + xsfactor.DerivationJSON,
 		"methodNote":        xsfactor.MethodNote,
 		"universeNote":      xsFactorUniverseNote,
 		"splitRejected":     res.SplitRejected,
@@ -180,6 +194,21 @@ func (d Deps) xsFactor(w http.ResponseWriter, r *http.Request) {
 		"skippedTotal":      len(res.Skipped),
 		"skipped":           res.Skipped[:min(len(res.Skipped), xsFactorMaxSkipped)],
 		"caveat":            xsfactor.Caveat,
+	}
+
+	// Gate: a horizon whose every leg was retracted or withheld has nothing to
+	// rank BY. Composite would be an average over zero published legs, and the
+	// house rule is that a gated metric is withheld with a reason, never
+	// rendered as 0. This fires at 63d, where the re-derivation left no
+	// surviving leg. The per-leg failures still ship in "withheld".
+	if len(res.CompositeLegs) == 0 {
+		out["gated"] = true
+		out["gateReason"] = xsfactor.GateNoMeasuredLeg
+		out["rows"] = []xsfactor.Row{}
+		out["n"] = 0
+		out["total"] = 0
+		writeJSON(w, out)
+		return
 	}
 
 	// Gate: below the cross-section floor a percentile means nothing, so the

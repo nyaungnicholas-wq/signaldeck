@@ -92,12 +92,12 @@ func TestJudge_RejectsNoiseAblation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("eval: %v", err)
 	}
-	d := Judge(h, g, base, 24, 0.05)
+	d := Judge(h, g, base, Multiplicity{Batch: 24})
 	if d.Survives {
 		t.Fatalf("noise ablation must NOT survive the corrected test (wl=%.3f base=%.3f n=%d)",
 			d.WilsonLower, base.Accuracy, g.N)
 	}
-	if d.CorrectedAlpha >= 0.05 {
+	if d.CorrectedAlpha >= MaxNominalAlpha {
 		t.Fatalf("Bonferroni correction not applied: alpha=%.4f", d.CorrectedAlpha)
 	}
 }

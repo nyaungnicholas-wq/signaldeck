@@ -21,8 +21,14 @@
 //   - COSTS/ASSUMPTIONS. Returns are simple (arithmetic) daily close-to-close.
 //     No trading costs, slippage, dividends, or intraday risk are modeled —
 //     close-to-close only. Weights are assumed constant over the window (no
-//     rebalancing drift). ParametricVaR additionally assumes normally
-//     distributed returns, which understates tail risk for real markets.
+//     rebalancing drift).
+//   - THE NORMAL-MODEL VaR IS TESTED, NOT JUST CAVEATED. ParametricVaR assumes
+//     normally distributed returns, and that assumption is checked against the
+//     same sample (Jarque-Bera at 1%). A window that rejects normality gets no
+//     parametric figure at all, because the model's error runs one way — it
+//     understates the tail — and shipping it beside the caveat is how the
+//     understating estimate came to fill the hole left by a withheld historical
+//     VaR. On real daily equity returns this gate fires essentially always.
 //   - WITHHOLDING BEATS GUESSING. Every published figure here is nullable. A
 //     VaR whose loss tail is a handful of points, or a market shock for a book
 //     whose betas cannot be estimated, is returned as nil with a stated reason —
@@ -50,6 +56,10 @@ var (
 	ErrUnequalLength = errors.New("risklens: series lengths differ (caller must align)")
 	// ErrZeroWeight is returned when holding weights sum to zero and cannot be normalized.
 	ErrZeroWeight = errors.New("risklens: holding weights sum to zero")
+	// ErrNonPositiveClose is returned when a series carries a close that is not a
+	// finite positive price. Such a series yields no usable return vector, and
+	// accepting it panicked the weighted-sum loops (see alignSeries).
+	ErrNonPositiveClose = errors.New("risklens: series contains a non-positive or non-finite close")
 )
 
 // MinCloses is the minimum number of aligned closes required per series so the
@@ -126,8 +136,9 @@ type VaRGate struct {
 // (e.g. 100000 for "per $100k"); zero defaults to 100000.
 //
 // The three VaR fields are pointers and are OMITTED from the JSON when the
-// sample cannot support them — see VaRGate for the reason. They are never 0:
-// a zero VaR reads as "this book cannot lose money".
+// sample cannot support them — see VaRGate (historical, tail-count) and
+// ParamVaRGate (parametric, sample size + normality) for the reason. They are
+// never 0: a zero VaR reads as "this book cannot lose money".
 type Report struct {
 	Confidence    float64
 	NotionalUSD   float64
@@ -135,6 +146,7 @@ type Report struct {
 	HistCVaRPct   *float64 `json:"HistCVaRPct,omitempty"`
 	ParamVaRPct   *float64 `json:"ParamVaRPct,omitempty"`
 	VaRGate       VaRGate
+	ParamVaRGate  ParamVaRGate
 	MarketProxy   string        `json:",omitempty"`
 	MarketBetas   []HoldingBeta `json:",omitempty"`
 	Contributions []Contribution

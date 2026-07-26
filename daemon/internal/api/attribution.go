@@ -17,9 +17,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/attribution"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -209,9 +211,108 @@ func (d Deps) attribution(w http.ResponseWriter, r *http.Request) {
 		"available":    true,
 		"market":       s.Market,
 		"currentState": currentState,
-		"report":       rep,
+		"report":       attributionBand(rep, prior, live, h),
 		"doctrine":     "Blended evidence: a regime/state-conditioned HISTORICAL prior (~2y expectancy) plus LIVE resolved outcomes, kept strictly separate and weighted by sample size. Live weight = liveN/(priorEff+liveN). Underpowered live attribution is reported as such — it is NOT a measured lack of edge.",
 	})
+}
+
+// ── the uncertainty band, re-derived through clusterstat (C4) ────────────────
+
+// attributionReport is the engine's report with its uncertainty band replaced by
+// a WITHHOLDABLE one. The two float fields it shadows are plain float64 in
+// internal/attribution, so a band that cannot honestly be produced has no way to
+// say so there; these pointers serialize as null instead. The shadowing works
+// because encoding/json prefers the shallower field when two carry the same tag.
+type attributionReport struct {
+	attribution.Report
+	BandLo *float64 `json:"uncertaintyLo"`
+	BandHi *float64 `json:"uncertaintyHi"`
+	// BandSource is "live", "historical-prior" or "withheld" — which evidence the
+	// band describes, so a reader never has to infer it from liveN.
+	BandSource string `json:"uncertaintyBandSource"`
+	BandMethod string `json:"uncertaintyBandMethod"`
+	BandReason string `json:"uncertaintyBandReason"`
+	// LiveDistinctDays is the resampling-unit count behind the live evidence. It
+	// equals liveResolvedN because the store admits at most one row per (symbol,
+	// UTC-day); it is reported anyway because the house rule is that no N ships
+	// without its day count beside it.
+	LiveDistinctDays int `json:"liveDistinctDays"`
+	// LiveDesignEffect is 1.0 BY CONSTRUCTION for a single symbol, not by
+	// assumption — see attributionBand.
+	LiveDesignEffect float64 `json:"liveDesignEffect"`
+	LiveEffectiveN   float64 `json:"liveEffectiveN"`
+}
+
+const (
+	attributionLiveBandMethod = "Wilson at the effective N of the live record. For ONE symbol the store admits at most one row per " +
+		"(symbol, UTC-day) — ROW_NUMBER() OVER (PARTITION BY symbol_id, ts/86400) ... WHERE rn=1 — so distinct days equal " +
+		"observations and the day-clustering design effect is 1 BY CONSTRUCTION. The fleet-wide 14.7x correction does not " +
+		"apply to a single-symbol record; the day FLOOR still does."
+	attributionPriorBandMethod = "Wilson at the historical analog count. At the 1d horizon internal/expectancy records one " +
+		"non-overlapping next-day return per daily bar, so n counts distinct days for this symbol."
+)
+
+// attributionBand re-derives the published uncertainty band through the one
+// module that owns intervals, and withholds it where no honest one exists.
+//
+// The two sources need different treatment and the difference is the point:
+//
+//   - LIVE is already one observation per (symbol, UTC-day), and for a single
+//     symbol that means one observation per cluster. Cross-sectional clustering
+//     is what makes the fleet-wide interval 3.8x too narrow, and it is absent
+//     here — so the correction is deff=1 and the remaining rule is the day floor.
+//   - The PRIOR at 1w is sampled from closes[i+5]/closes[i]-1 at EVERY daily bar
+//     (internal/expectancy), so consecutive analogs overlap by four days and n
+//     overstates the independent count roughly fivefold. The expectancy table
+//     stores (state_key, n, hit_rate) and no timestamps, so the overlap CANNOT be
+//     measured or corrected from here. A withheld band beats a band that asserts
+//     five times the evidence that exists; correcting it properly means giving
+//     internal/expectancy a distinct-day count, which is not this file's to do.
+func attributionBand(rep attribution.Report, prior, live attribution.Evidence, h md.Horizon) attributionReport {
+	out := attributionReport{
+		Report:           rep,
+		LiveDistinctDays: live.N,
+		LiveDesignEffect: 1,
+		LiveEffectiveN:   float64(live.N),
+	}
+	set := func(iv clusterstat.Interval, source, method string) {
+		lo, hi := iv.Lo, iv.Hi
+		out.BandLo, out.BandHi = &lo, &hi
+		out.BandSource, out.BandMethod = source, method
+	}
+	withhold := func(reason string) {
+		out.BandSource, out.BandReason = "withheld", reason
+		out.BandMethod = "none — see uncertaintyBandReason"
+	}
+
+	// Mirrors attribution.Assess's own choice of which evidence the band
+	// describes, so the number and its label can never disagree.
+	if live.N >= attribution.LivePriorThreshold {
+		if live.N < clusterstat.MinDistinctDays {
+			withhold("no interval: the live record spans " + strconv.Itoa(live.N) + "/" +
+				strconv.Itoa(clusterstat.MinDistinctDays) + " distinct days")
+			return out
+		}
+		set(clusterstat.WilsonEff(live.HitRate, float64(live.N)), "live", attributionLiveBandMethod)
+		return out
+	}
+
+	switch {
+	case prior.N == 0:
+		withhold("no interval: no historical analogs and " + strconv.Itoa(live.N) +
+			" live resolutions — this is absence of evidence, not a measured band")
+	case h != md.H1d:
+		withhold("no interval: the " + string(h) + " expectancy prior samples an overlapping forward window at every daily bar, " +
+			"so its " + strconv.Itoa(prior.N) + " analogs are roughly a fifth as many independent outcomes, and the expectancy " +
+			"table keeps no timestamp with which to correct the overlap. A band at that count would assert ~5x the evidence " +
+			"that exists.")
+	case prior.N < clusterstat.MinDistinctDays:
+		withhold("no interval: " + strconv.Itoa(prior.N) + "/" + strconv.Itoa(clusterstat.MinDistinctDays) +
+			" historical analogs — below the distinct-day floor every other surface enforces")
+	default:
+		set(clusterstat.WilsonEff(prior.HitRate, float64(prior.N)), "historical-prior", attributionPriorBandMethod)
+	}
+	return out
 }
 
 func (d Deps) registerAttribution(mux *http.ServeMux) {

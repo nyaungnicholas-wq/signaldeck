@@ -27,7 +27,16 @@ func normalizeWeights(holdings []Holding) ([]Holding, error) {
 // per-holding return matrix (one []float64 of returns per holding, in holdings
 // order) alongside the normalized holdings. It enforces: at least one holding
 // and series, each holding has a matching series, every series shares the same
-// length, and that length is >= MinCloses.
+// length, that length is >= MinCloses, and that every close is a finite
+// positive price.
+//
+// The CLOSE-VALUE check is load-bearing, not hygiene. DailyReturns returns nil
+// for a series containing a zero close (the division is undefined), so a book
+// whose second holding carried one produced rets = [[n returns], nil] and every
+// caller below sized its loop from rets[0] and then indexed rets[i][t] — an
+// index-out-of-range panic on the risk endpoint. Rejecting the input here,
+// with a named error, is the fix; a defensive length check at each call site
+// would only convert the panic into a portfolio silently missing a leg.
 func alignSeries(holdings []Holding, series []Series) (norm []Holding, rets [][]float64, err error) {
 	if len(holdings) == 0 {
 		return nil, nil, ErrNoHoldings
@@ -61,7 +70,21 @@ func alignSeries(holdings []Holding, series []Series) (norm []Holding, rets [][]
 		if !ok {
 			return nil, nil, ErrMissingSeries
 		}
-		rets[i] = DailyReturns(s.Closes)
+		for _, c := range s.Closes {
+			// A zero close makes the return undefined; a negative or non-finite
+			// one is not a price at all, and DailyReturns would happily turn it
+			// into a finite, entirely fictional return.
+			if !(c > 0) || math.IsInf(c, 0) {
+				return nil, nil, ErrNonPositiveClose
+			}
+		}
+		r := DailyReturns(s.Closes)
+		if len(r) != length-1 {
+			// Unreachable given the checks above; kept so a future change to
+			// DailyReturns cannot silently reintroduce a ragged return matrix.
+			return nil, nil, ErrNonPositiveClose
+		}
+		rets[i] = r
 	}
 	return norm, rets, nil
 }

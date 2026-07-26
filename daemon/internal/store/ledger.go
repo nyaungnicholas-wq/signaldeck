@@ -9,10 +9,19 @@
 //
 // where canonical-json is a byte-stable, fixed-field-order encoding (NOT
 // encoding/json map ordering) so the same logical entry always hashes to the
-// same digest on any machine. The chain gives tamper-evidence: recomputing it
+// same digest on any machine. The chain detects EDITS: recomputing it
 // reproduces every head, and any silent UPDATE/DELETE of a historical row
 // breaks the recomputation at that exact seq. Rows are WRITE-ONCE — this file
 // only ever INSERTs (append), never UPDATE/REPLACE/DELETE.
+//
+// WHAT THE CHAIN DOES NOT PROVE (finding C2 — do not restore the old wording,
+// which called this tamper-evidence full stop): it proves internal
+// CONSISTENCY, not ANTERIORITY. An operator who deletes every row, deletes the
+// in-DB verification checkpoint and re-appends a fabricated chain through this
+// same function gets intact=true from both verify paths — reproduced in
+// TestLedger_ChainProvesConsistencyNotAnteriority. Anteriority comes only from
+// the externally-signed anchors in ledgeranchor.go, and only for history at or
+// before the newest anchor the chain still reproduces.
 package store
 
 import (

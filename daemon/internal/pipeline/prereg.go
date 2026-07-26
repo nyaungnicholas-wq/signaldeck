@@ -43,10 +43,36 @@ func (w *PreregRegistrar) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Newest stored spec hash per kind. A kind already registered whose spec
+	// hash has CHANGED is not a no-op: the claim in code no longer matches the
+	// claim on the chain, and skipping it would let the two diverge silently —
+	// which is the exact failure pre-registration exists to prevent. It gets an
+	// AMENDMENT record instead, so the chain carries both the original claim and
+	// the correction, in order, and neither can be mistaken for the other.
+	latest, err := w.St.LatestPreregHashes(ctx)
+	if err != nil {
+		return "", err
+	}
 	now := w.now().Unix()
-	written := 0
+	written, amended := 0, 0
 	for _, spec := range prereg.Specs() {
 		if have[spec.Kind] {
+			if prior, ok := latest[spec.Kind]; ok && prior != spec.Hash() {
+				blob, err := json.Marshal(spec)
+				if err != nil {
+					return "", fmt.Errorf("marshal amendment %s: %w", spec.Kind, err)
+				}
+				if _, err := w.St.AppendPrereg(ctx, prereg.Record{
+					Ts: now, Kind: spec.Kind,
+					SpecJSON: string(blob), SpecHash: spec.Hash(),
+					Note: "AMENDMENT — the claim in code changed after registration. The prior record " +
+						"stands unaltered above this one; read them in order. An amendment is evidence of a " +
+						"correction, not a replacement of the original commitment.",
+				}); err != nil {
+					return "", fmt.Errorf("append amendment %s: %w", spec.Kind, err)
+				}
+				amended++
+			}
 			continue
 		}
 		blob, err := json.Marshal(spec)
@@ -62,9 +88,12 @@ func (w *PreregRegistrar) Run(ctx context.Context) (string, error) {
 		}
 		written++
 	}
-	if written == 0 {
+	if written == 0 && amended == 0 {
 		return "all predictor claims already pre-registered", nil
 	}
-	return fmt.Sprintf("pre-registered %d predictor claims (first gradable %s)",
-		written, prereg.FirstGradableOn), nil
+	if written == 0 {
+		return fmt.Sprintf("appended %d AMENDMENT record(s) — a registered claim changed in code", amended), nil
+	}
+	return fmt.Sprintf("pre-registered %d predictor claims (first gradable %s), %d amendment(s)",
+		written, prereg.FirstGradableOn, amended), nil
 }

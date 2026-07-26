@@ -45,6 +45,8 @@ func TestDecideTarget_EnvOverride(t *testing.T) {
 }
 
 func TestCostBpsFor_ByMarket(t *testing.T) {
+	// CostBpsFor is now the SPREAD component only; the size-dependent impact
+	// component is added by the execution model (execution_test.go).
 	if s := CostBpsFor(md.Stocks); s != 7.5 {
 		t.Fatalf("stock cost bps=%v want 7.5", s)
 	}
@@ -57,15 +59,20 @@ func TestCostBpsFor_ByMarket(t *testing.T) {
 	}
 }
 
-// EnterLong must deploy ALL cash including the cost so the book ends at exactly
-// zero cash, never negative, and the cost equals notional*costFraction.
+// EnterLong must deploy ALL cash including every modelled cost so the book ends
+// at exactly zero cash, never negative. The cost is now spread + impact rather
+// than a flat rate, so the assertion is on the invariant, not the constant.
 func TestEnterLong_FullyFundedNeverNegative(t *testing.T) {
 	cash := 100_000.0
 	px := 200.0
-	costBps := 7.5
-	f, qty, avgPx, ok := EnterLong(cash, px, costBps)
+	in := ExecInputs{
+		Bar:    md.Bar{Ts: 1783396800, Open: px, High: px * 1.01, Low: px * 0.99, Close: px, Volume: 1e6},
+		Market: md.Stocks,
+		ADVUSD: 5e9, // deep enough that the ADV cap cannot bind
+	}
+	f, qty, avgPx, ok := EnterLong(cash, in)
 	if !ok {
-		t.Fatal("EnterLong not ok")
+		t.Fatalf("EnterLong not ok: %s", f.Reason)
 	}
 	if f.Side != "buy" {
 		t.Fatalf("side=%q", f.Side)
@@ -74,9 +81,9 @@ func TestEnterLong_FullyFundedNeverNegative(t *testing.T) {
 		t.Fatalf("avgPx=%v want %v", avgPx, px)
 	}
 	notional := qty * px
-	c := costBps / 1e4
-	if !approx(f.Cost, notional*c, 1e-6) {
-		t.Fatalf("cost=%v want %v", f.Cost, notional*c)
+	wantCost := notional * (f.SpreadBps + f.ImpactBps) / 1e4
+	if !approx(f.Cost, wantCost, 1e-6) {
+		t.Fatalf("cost=%v want %v (spread %.3f + impact %.3f bps)", f.Cost, wantCost, f.SpreadBps, f.ImpactBps)
 	}
 	// Cash after applying the fill = starting + CashDelta must be ~0 (all-in) and
 	// never negative.
@@ -90,10 +97,13 @@ func TestEnterLong_FullyFundedNeverNegative(t *testing.T) {
 }
 
 func TestEnterLong_RejectsBadInputs(t *testing.T) {
-	if _, _, _, ok := EnterLong(0, 100, 7.5); ok {
+	ok1 := ExecInputs{Bar: md.Bar{Open: 100, High: 101, Low: 99, Close: 100, Volume: 1e6}, Market: md.Stocks, ADVUSD: 1e9}
+	if _, _, _, ok := EnterLong(0, ok1); ok {
 		t.Fatal("zero budget should not enter")
 	}
-	if _, _, _, ok := EnterLong(1000, 0, 7.5); ok {
+	noPx := ok1
+	noPx.Bar.Open = 0
+	if _, _, _, ok := EnterLong(1000, noPx); ok {
 		t.Fatal("zero price should not enter")
 	}
 }
@@ -121,9 +131,14 @@ func TestPositionBudget_SplitsAndClamps(t *testing.T) {
 func TestEnterLong_DeploysBudgetOnly(t *testing.T) {
 	cash := 100_000.0
 	budget := 10_000.0
-	f, qty, _, ok := EnterLong(budget, 250, 7.5)
+	in := ExecInputs{
+		Bar:    md.Bar{Ts: 1783396800, Open: 250, High: 252.5, Low: 247.5, Close: 250, Volume: 1e6},
+		Market: md.Stocks,
+		ADVUSD: 5e9,
+	}
+	f, qty, _, ok := EnterLong(budget, in)
 	if !ok {
-		t.Fatal("enter failed")
+		t.Fatalf("enter failed: %s", f.Reason)
 	}
 	outlay := qty*250 + f.Cost
 	if !approx(outlay, budget, 1e-6) {
@@ -140,25 +155,26 @@ func TestEnterLong_DeploysBudgetOnly(t *testing.T) {
 func TestRoundTrip_LosesTwoSidedCost(t *testing.T) {
 	cash := 100_000.0
 	px := 50.0
-	costBps := 10.0
-	c := costBps / 1e4
+	in := ExecInputs{
+		Bar:    md.Bar{Ts: 1783396800, Open: px, High: px * 1.01, Low: px * 0.99, Close: px, Volume: 1e6},
+		Market: md.Stocks,
+		ADVUSD: 5e9,
+	}
 
-	enter, qty, _, ok := EnterLong(cash, px, costBps)
+	enter, qty, _, ok := EnterLong(cash, in)
 	if !ok {
-		t.Fatal("enter failed")
+		t.Fatalf("enter failed: %s", enter.Reason)
 	}
 	cashAfterBuy := cash + enter.CashDelta
 
-	exit, ok := ExitLong(qty, px, costBps)
+	exit, ok := ExitLong(qty, in)
 	if !ok {
-		t.Fatal("exit failed")
+		t.Fatalf("exit failed: %s", exit.Reason)
 	}
 	cashAfterSell := cashAfterBuy + exit.CashDelta
 
-	// Expected loss = entry cost + exit cost. Entry notional == exit notional
-	// (same px, same qty), so loss = 2 * notional * c.
-	notional := qty * px
-	wantLoss := 2 * notional * c
+	// Expected loss = entry cost + exit cost, each modelled from its own side.
+	wantLoss := enter.Cost + exit.Cost
 	gotLoss := cash - cashAfterSell
 	if !approx(gotLoss, wantLoss, 1e-6) {
 		t.Fatalf("round-trip loss=%v want %v (two-sided cost)", gotLoss, wantLoss)

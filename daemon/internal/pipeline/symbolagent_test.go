@@ -20,29 +20,41 @@ import (
 // example.
 func seedLabeledSpread(t *testing.T, st *store.Store, symbolID int64, h md.Horizon, n int) {
 	t.Helper()
+	seedLabeledSpreadDays(t, st, symbolID, h, n, 1)
+}
+
+// seedLabeledSpreadDays is seedLabeledSpread with the row/day split made
+// explicit: `days` distinct UTC days carrying `perDay` rows each, which is the
+// shape the live predictor produces (a 10-minute cadence against daily labels,
+// ~12 rows per symbol-day). Row count is days*perDay; independent evidence is
+// days.
+func seedLabeledSpreadDays(t *testing.T, st *store.Store, symbolID int64, h md.Horizon, days, perDay int) {
+	t.Helper()
 	ctx := context.Background()
-	base := time.Now().Unix() - int64(n+1)*3600
-	for i := 0; i < n; i++ {
-		ts := base + int64(i)*3600
-		up := i%2 == 0
+	base := time.Now().Unix() - int64(days+1)*86400
+	for d := 0; d < days; d++ {
+		up := d%2 == 0
 		pressure, fwd, raw := 0.5, 0.01, 0.62
 		if !up {
 			pressure, fwd, raw = -0.5, -0.01, 0.38
 		}
-		vec := map[string]float64{
-			"pressure_score": pressure,
-			"pred_raw":       raw, "pred_cal": raw, "n_used": 1,
-		}
-		if err := st.InsertFeatures(ctx, symbolID, h, ts, featureVersion, vec); err != nil {
-			t.Fatalf("features: %v", err)
-		}
-		if err := st.UpsertPrediction(ctx, store.Prediction{
-			SymbolID: symbolID, Horizon: h, Ts: ts, RawProb: raw, CalProb: raw, NUsed: 1, Components: "{}",
-		}); err != nil {
-			t.Fatalf("prediction: %v", err)
-		}
-		if err := st.ResolvePrediction(ctx, symbolID, h, ts, fwd); err != nil {
-			t.Fatalf("resolve: %v", err)
+		for k := 0; k < perDay; k++ {
+			ts := base + int64(d)*86400 + int64(k)*600
+			vec := map[string]float64{
+				"pressure_score": pressure,
+				"pred_raw":       raw, "pred_cal": raw, "n_used": 1,
+			}
+			if err := st.InsertFeatures(ctx, symbolID, h, ts, featureVersion, vec); err != nil {
+				t.Fatalf("features: %v", err)
+			}
+			if err := st.UpsertPrediction(ctx, store.Prediction{
+				SymbolID: symbolID, Horizon: h, Ts: ts, RawProb: raw, CalProb: raw, NUsed: 1, Components: "{}",
+			}); err != nil {
+				t.Fatalf("prediction: %v", err)
+			}
+			if err := st.ResolvePrediction(ctx, symbolID, h, ts, fwd); err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
 		}
 	}
 }
@@ -58,7 +70,7 @@ func TestPerSymbolLearner_GraduatesAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedLabeledSpread(t, st, sym.ID, md.H1d, symbolagent.MinPersonal+10)
+	seedLabeledSpread(t, st, sym.ID, md.H1d, symbolagent.MinPersonalDays+10)
 
 	w := &PerSymbolLearner{St: st}
 	if _, err := w.Run(ctx); err != nil {
@@ -199,5 +211,47 @@ func TestPredictionRunner_PersonalTierOverridesGlobal(t *testing.T) {
 	}
 	if p.CalProb != p.RawProb {
 		t.Fatalf("identity personal calibration must leave cal==raw, got cal=%v raw=%v", p.CalProb, p.RawProb)
+	}
+}
+
+// H5 end-to-end — CLUSTERED ROWS MUST NOT BUY A PERSONAL MODEL.
+//
+// 5 UTC days x 12 rows is 60 resolved rows, half again over the 40-ROW floor,
+// and it is what the live predictor produces in under a week: 158,204 resolved
+// rows were 13,058 symbol-days, and 1,045 of 1,050 symbols held a personal 1d
+// model on that basis. The symbol must stay on the global fallback and say so
+// in days.
+func TestPerSymbolLearner_ClusteredRowsDoNotGraduate(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	sym, err := st.UpsertSymbol(ctx, "NVDA", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedLabeledSpreadDays(t, st, sym.ID, md.H1d, 5, 12)
+
+	if _, err := (&PerSymbolLearner{St: st}).Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	m, ok, _ := st.SymbolModel(ctx, sym.ID, md.H1d)
+	if !ok {
+		t.Fatal("a still-learning symbol should still get a model row")
+	}
+	if m.NSamples <= symbolagent.MinPersonal {
+		t.Fatalf("fixture must clear the row floor to isolate the day floor: n=%d", m.NSamples)
+	}
+	if m.Tier == symbolagent.TierPersonal {
+		t.Fatalf("%d rows over 5 distinct days must NOT be personal (floor is %d days)",
+			m.NSamples, symbolagent.MinPersonalDays)
+	}
+	if m.Weights != "{}" {
+		t.Fatalf("no personal weights may be stored on 5 days of evidence, got %q", m.Weights)
+	}
+	var cal symbolagent.Calibration
+	if err := json.Unmarshal([]byte(m.Calibration), &cal); err != nil || cal.Fitted {
+		t.Fatalf("no personal calibration may be fitted on 5 days of evidence: %+v %v", cal, err)
+	}
+	if !strings.Contains(m.Personality, "day") {
+		t.Fatalf("the still-learning line must be counted in days: %q", m.Personality)
 	}
 }

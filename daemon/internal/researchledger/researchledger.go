@@ -48,9 +48,12 @@
 //     MinReplications independent data-window replications AND coverage of at
 //     least MinRegimes volatility regimes. A single-regime discovery caps at
 //     "tentative" no matter how strong its number is.
+//   - An ASSERTED row (n=0 — no observation the integral above could grade)
+//     may withhold belief but never manufacture it. See AssertedMaxBF.
 package researchledger
 
 import (
+	"encoding/json"
 	"math"
 	"sort"
 )
@@ -241,6 +244,149 @@ type Evidence struct {
 	WindowTo   int64 `json:"windowTo"`
 }
 
+// ── Asserted evidence: the hand-entered Bayes factor ─────────────────────
+//
+// A row with N == 0 carries no graded observation, so its Bayes factor was
+// DECLARED — nothing above computed it and nothing can re-derive it. Two
+// legitimate row shapes are of that kind (attack penalties and transcribed
+// judgments), and one illegitimate one was found in the live ledger on
+// 2026-07-25: of 86 evidence rows, 58 carried n=0, and two published posteriors
+// were the product of a single typed number each —
+//
+//	H006 (0.50 prior → published 0.75, "tentative") on one manual row at BF=3;
+//	H003 (0.50 prior → published 0.048, "REJECTED") on one manual row at
+//	exactly MinBF, the floor of the honesty clamp.
+//
+// AssertedMaxBF is the correction, and its asymmetry is the whole point: an
+// assertion may WITHHOLD belief but may never MANUFACTURE it. A declared
+// penalty states a known weakness and moves the posterior conservatively — that
+// is the honest alternative to ignoring the weakness, and the entire attack
+// battery depends on it, so penalties keep full force down to MinBF. A declared
+// BF > 1 is positive evidence claimed on zero trials; there is no n for it, no
+// integral behind it, and no way to audit it. It gets 1.
+//
+// This never deletes a row. The declared number is stored, marshaled and
+// reported verbatim (see Evidence.MarshalJSON and Breakdown); only the weight
+// it carries into the posterior is refused.
+const AssertedMaxBF = 1.0
+
+// Band sides, for reproducing a stored BF from its own observation.
+const (
+	SideAbove = "above" // BayesFactorAbove: the hypothesis predicts a rate above p0
+	SideBelow = "below" // BayesFactorBelow: it predicts a rate below p0
+)
+
+// DataBacked reports whether this row's Bayes factor came from a graded
+// binomial observation the beta-binomial integral could produce, rather than
+// from a human. N is the discriminator because it is the only field that
+// cannot be true of an assertion: zero trials, zero evidence.
+func (e Evidence) DataBacked() bool { return e.N > 0 }
+
+// AppliedBF is the Bayes factor the posterior actually uses for this row: the
+// stored value re-clamped to [MinBF, MaxBF], and additionally capped at
+// AssertedMaxBF when the row carries no observation. A malformed BF reports 1
+// because that is what Posterior does with it — skips it, leaving the odds
+// unchanged — and a payload that said otherwise would misdescribe the chain.
+func (e Evidence) AppliedBF() float64 {
+	if e.BF <= 0 || math.IsNaN(e.BF) {
+		return 1
+	}
+	bf := clampBF(e.BF)
+	if !e.DataBacked() && bf > AssertedMaxBF {
+		return AssertedMaxBF
+	}
+	return bf
+}
+
+// MarshalJSON emits the stored row verbatim plus two derived fields, because
+// /api/research-ledger marshals []Evidence straight into the payload: without
+// them a reader cannot tell a measurement from an assertion, which is the
+// condition that let a typed 3 become a published 0.75.
+func (e Evidence) MarshalJSON() ([]byte, error) {
+	type row Evidence // shed MarshalJSON to avoid infinite recursion
+	return json.Marshal(struct {
+		row
+		Asserted  bool    `json:"asserted"`
+		AppliedBF float64 `json:"appliedBf"`
+	}{row(e), !e.DataBacked(), e.AppliedBF()})
+}
+
+// ReproducesBF re-derives a data-backed row's Bayes factor from its own
+// (K, N, P0) under maxEdge and reports which band side matches, or ok=false if
+// neither does. A row whose stored BF matches neither integral is a number
+// somebody typed into a field documented as computed.
+//
+// maxEdge and the band side are NOT stored on the row, which is why this takes
+// the band as an argument and why the check did not exist before: a stored BF
+// was unverifiable by construction. Verified over the live DB on 2026-07-25 all
+// 28 data-backed rows reproduced (grade rows under WeekTrialMaxEdge, transcribed
+// rows under their hypothesis's own MaxEdge) — the audit passes today, and now
+// it is an audit rather than an assumption.
+func ReproducesBF(e Evidence, maxEdge float64) (side string, ok bool) {
+	if !e.DataBacked() {
+		return "", false
+	}
+	const tol = 1e-9
+	if math.Abs(BayesFactorAbove(e.K, e.N, e.P0, maxEdge)-e.BF) <= tol*math.Max(1, e.BF) {
+		return SideAbove, true
+	}
+	if math.Abs(BayesFactorBelow(e.K, e.N, e.P0, maxEdge)-e.BF) <= tol*math.Max(1, e.BF) {
+		return SideBelow, true
+	}
+	return "", false
+}
+
+// PosteriorParts separates what the data proved from what a human declared, so
+// a refused assertion is disclosed rather than silently absorbed.
+type PosteriorParts struct {
+	// Posterior is the headline: data-backed BFs plus asserted PENALTIES.
+	Posterior float64 `json:"posterior"`
+	// DataOnly drops every asserted row, penalties included — the belief the
+	// observations alone support.
+	DataOnly float64 `json:"dataOnly"`
+	// Declared is what the chain would read if every stored BF were taken at
+	// face value. It is the number the ledger used to publish.
+	Declared     float64 `json:"declared"`
+	DataRows     int     `json:"dataRows"`
+	AssertedRows int     `json:"assertedRows"`
+	// RefusedRows counts asserted rows that argued FOR the hypothesis and were
+	// capped to AssertedMaxBF.
+	RefusedRows int `json:"refusedRows"`
+	// Note states the refusal in words; "" when nothing was refused, because a
+	// caveat printed on every hypothesis is a caveat nobody reads.
+	Note string `json:"note,omitempty"`
+}
+
+// Breakdown computes the three posteriors side by side over one evidence chain.
+// Pass the chain through EffectiveChain first if the caller maintains attack
+// evidence — Breakdown does not dedupe, exactly like Posterior.
+func Breakdown(prior float64, evidence []Evidence) PosteriorParts {
+	p := PosteriorParts{}
+	data := make([]Evidence, 0, len(evidence))
+	for _, e := range evidence {
+		if e.DataBacked() {
+			p.DataRows++
+			data = append(data, e)
+			continue
+		}
+		p.AssertedRows++
+		if clampBF(e.BF) > AssertedMaxBF {
+			p.RefusedRows++
+		}
+	}
+	p.Posterior = Posterior(prior, evidence)
+	p.DataOnly = Posterior(prior, data)
+	// Declared takes every stored BF at face value — the arithmetic the ledger
+	// published before assertions were made second-class.
+	p.Declared = chainPosterior(prior, evidence, func(e Evidence) float64 { return clampBF(e.BF) })
+	if p.RefusedRows > 0 {
+		p.Note = "posterior excludes the FOR-weight of asserted evidence: " +
+			"rows with n=0 carry no observation the beta-binomial integral can grade, " +
+			"so they may argue against a belief but not for it"
+	}
+	return p
+}
+
 // BayesFactorAbove grades H1 "p ~ U(p0, p0+maxEdge)" against H0 "p = p0" for k
 // wins in n trials — the one-sided "this signal beats naive" comparison. The
 // result is clamped to [MinBF, MaxBF].
@@ -319,13 +465,21 @@ func Posterior(prior float64, evidence []Evidence) float64 {
 	if prior >= 1 {
 		prior = MaxPosterior
 	}
+	// AppliedBF, not the stored BF: an asserted row (n=0) may argue against a
+	// belief at full force but may not argue for it. See AssertedMaxBF.
+	return chainPosterior(prior, evidence, Evidence.AppliedBF)
+}
+
+// chainPosterior multiplies a chain's Bayes factors into the prior odds, taking
+// each row's weight from bfOf so the honest posterior and the as-declared one
+// share the same arithmetic and can only differ where intended.
+func chainPosterior(prior float64, evidence []Evidence, bfOf func(Evidence) float64) float64 {
 	odds := prior / (1 - prior)
 	for _, e := range evidence {
-		bf := e.BF
-		if bf <= 0 || math.IsNaN(bf) {
+		if e.BF <= 0 || math.IsNaN(e.BF) {
 			continue // malformed row contributes nothing rather than -Inf/NaN
 		}
-		odds *= clampBF(bf)
+		odds *= bfOf(e)
 		// Running cap: a long chain of capped BFs must saturate, not overflow
 		// to +Inf (whose posterior would be NaN). 1e12 is already far past the
 		// posterior clamp.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/gbm"
@@ -29,6 +30,14 @@ const (
 	meanRevFolds = 5
 )
 
+// presenceSuffix marks a DERIVED per-feature presence indicator: for base key
+// K, K+presenceSuffix is 1 when K was in the row's raw map and 0 when it was
+// absent. Aliased to the shared constant so this package, the pooled
+// cross-sectional engine (alphax) and the self-reference predicate that trims
+// it (gbm.SelfReferentialKey) can never drift to two spellings — a second
+// spelling would silently re-open the exclusion hole that predicate closes.
+const presenceSuffix = gbm.PresenceSuffix
+
 // canonicalFeatureKeys returns a STABLE, sorted union of feature-vector keys
 // across the given labeled rows, EXCLUDING the model's own outputs (pred_raw /
 // pred_cal) so the GBM cannot trivially copy the blend it is trying to
@@ -36,6 +45,11 @@ const (
 // A deterministic ordering is essential: the GBM is index-based, so every
 // sample (and the live latest vector) must be flattened with the identical key
 // order.
+//
+// These are BASE keys only — the genuine data sources. The feature-redundancy
+// surface (honestygaps.go) passes them as its allowlist of fields to correlate,
+// and a presence indicator is not a data source. Callers building a MODEL INPUT
+// layout want modelFeatureKeys instead.
 func canonicalFeatureKeys(rows []store.LabeledFeature) []string {
 	set := map[string]struct{}{}
 	for _, r := range rows {
@@ -63,22 +77,86 @@ func canonicalFeatureKeys(rows []store.LabeledFeature) []string {
 //     leg must not be fed its own past prediction, both to avoid a
 //     self-referential shortcut and to keep the GBM leg independent of the other
 //     model legs (and itself).
+//
+// It delegates to the shared predicate rather than keeping a private copy of
+// the list: finding H6 is what a private copy cost, and the shared predicate
+// also matches by BASE name, so a presence indicator (pred_raw__has) is
+// excluded with its value — a bit saying "the blend had an opinion here" leaks
+// the same self-reference the probability does.
 func excludedGBMKey(k string) bool {
-	switch k {
-	case "pred_raw", "pred_cal", "gbm_prob", "meanrev_prob", "alphax_prob":
-		return true
+	return gbm.SelfReferentialKey(k)
+}
+
+// modelFeatureKeys returns the MODEL INPUT layout: every base key from
+// canonicalFeatureKeys followed by its derived K+presenceSuffix indicator,
+// sorted so the ordering stays deterministic (the GBM is index-based).
+//
+// WHY the indicators exist. The pipeline is careful to OMIT a feature it could
+// not observe — buildFeatureVector, macrofeat.FromSeries, alphaxfeat and
+// trendfeat all say "absence is information, not zero" in prose — and flatten
+// then destroyed that distinction by filling absent keys with 0. Zero is a real
+// and often MODAL value for these fields, measured on the live DB (mode=ro) on
+// 2026-07-26:
+//
+//   - macro_fedfunds_chg is exactly 0.0 on 312 of 312 v11 rows — the policy rate
+//     does not move between FOMC meetings, so 0 IS the normal reading;
+//   - vix_high_vol is exactly 0.0 on all 100,503 v10 rows;
+//   - BTC/USD v10 carries 749 measured-zero micro_spread_bps against 14 rows
+//     where the book read failed and the key is absent.
+//
+// And the outage is not hypothetical: v3's vix_* keys are absent across a
+// perfectly contiguous window, 2026-07-04 09:00:00 to 23:03:00 UTC, 1,272 rows
+// with not one present row inside it, while vix_high_vol reads exactly 0.0 on
+// all 30,826 rows where FRED did answer. Under the old flatten those 1,272
+// outage rows were byte-identical to a measured "vol regime not elevated" — a
+// tree splitting there learns the hours the data provider was down, not a
+// market state.
+//
+// Raw keys already ending in presenceSuffix are dropped from the base set: the
+// suffix is RESERVED for these derived bits, so a stored key can never shadow
+// one and make "present" mean whatever value happened to be written.
+//
+// NOT a featureVersion bump, deliberately. featureVersion stamps the vector
+// PERSISTED by InsertFeatures, and this changes nothing about what is stored —
+// only the layout derived from stored rows at training time. Bumping would
+// orphan the v11 rows and stall every per-symbol GBM for weeks (the cost
+// maxModelForecastAgeSecs below documents), to protect models that do not exist:
+// no trained model is persisted anywhere, gbm.Run retrains from the rows on
+// every pass, and modelFeatureKeys is recomputed in the same call that consumes
+// it. There is no stored artifact whose width could disagree.
+func modelFeatureKeys(rows []store.LabeledFeature) []string {
+	base := canonicalFeatureKeys(rows)
+	keys := make([]string, 0, 2*len(base))
+	for _, k := range base {
+		if strings.HasSuffix(k, presenceSuffix) {
+			continue
+		}
+		keys = append(keys, k, k+presenceSuffix)
 	}
-	return false
+	sort.Strings(keys)
+	return keys
 }
 
 // flatten turns a feature map into a fixed-dimension vector in the given key
-// order. Missing keys become 0 (a feature absent from a row is treated as its
-// neutral value — the GBM splits handle it, and the key set is the union so
-// dimensions always match).
+// order. A key ending in presenceSuffix is DERIVED from the raw map — 1 when
+// its base key is present, 0 when it is not — and is never read out of the map,
+// so the training path and the live-scoring path (which flatten with the same
+// key slice) agree by construction. Base values still flatten to 0 when absent;
+// the indicator beside them is what carries the missingness, which is why a
+// missing feature is no longer the same model input as an observed zero.
+//
+// Callers passing a base-only key slice (canonicalFeatureKeys) get the original
+// behaviour unchanged.
 func flatten(vec map[string]float64, keys []string) []float64 {
 	out := make([]float64, len(keys))
 	for i, k := range keys {
-		out[i] = vec[k] // zero if absent
+		if b, ok := strings.CutSuffix(k, presenceSuffix); ok {
+			if _, present := vec[b]; present {
+				out[i] = 1
+			}
+			continue
+		}
+		out[i] = vec[k] // zero if absent — the __has bit says which
 	}
 	return out
 }
@@ -172,7 +250,10 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 			}
 
 			// ── GBM leg ──────────────────────────────────────────────────
-			keys := canonicalFeatureKeys(rows)
+			// Model layout, not the base union: every field carries a
+			// presence indicator so an unobserved feature cannot arrive as
+			// the zero it is often genuinely measured at.
+			keys := modelFeatureKeys(rows)
 			if len(keys) > 0 {
 				// Declare the label horizon so gbm.Evaluate can PURGE training
 				// rows whose label resolves inside the test block. Without it

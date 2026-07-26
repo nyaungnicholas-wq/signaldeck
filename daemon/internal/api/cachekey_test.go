@@ -138,3 +138,89 @@ func TestCompositeTopCacheKey_DefaultIsTheWarmerKey(t *testing.T) {
 		t.Fatalf("default composite key = %q, want %q (warm.go:121 warms \"\")", got, "")
 	}
 }
+
+// ── C6 residual: /api/calibration and /api/honesty ──────────────────────────
+//
+// The first C6 pass whitelisted /api/composite/top and /api/movers and stopped
+// there. /api/calibration kept keying on r.URL.RawQuery, and /api/honesty kept
+// keying on the raw VALUE of ?horizon — a whitelisted NAME with an unvalidated
+// value, which mints keys just as freely.
+
+func calibrationKey(target string) string {
+	return calibrationCacheKey(httptest.NewRequest("GET", target, nil))
+}
+
+func honestyKey(target string) string {
+	return honestyCacheKey(httptest.NewRequest("GET", target, nil))
+}
+
+func TestCalibrationCacheKey_JunkResolvesToTheDefaultEntry(t *testing.T) {
+	base := calibrationKey("/api/calibration")
+	if base != "" {
+		t.Fatalf("default calibration key = %q, want %q (warm.go:123 warms \"\")", base, "")
+	}
+	// predict.go: h != 1d && h != 1w → 1d. Every one of these renders the 1d
+	// body, so every one must share the 1d entry.
+	for _, q := range []string{
+		"/api/calibration?horizon=aaa1",
+		"/api/calibration?horizon=aaa2",
+		"/api/calibration?horizon=1d", // the default, spelled out — what the web client sends
+		"/api/calibration?horizon=1h", // NOT a calibration horizon; resolves to 1d
+		"/api/calibration?horizon=",
+		"/api/calibration?zz=1",
+		"/api/calibration?a=1&b=2&c=3&d=4&e=5",
+	} {
+		if got := calibrationKey(q); got != base {
+			t.Fatalf("%s minted key %q; the handler resolves it to 1d, which is entry %q", q, got, base)
+		}
+	}
+}
+
+func TestCalibrationCacheKey_RealHorizonStaysDistinct(t *testing.T) {
+	// The other half: 1w renders a different payload and must not collapse onto
+	// the 1d entry, or a 1w caller is served the 1d reliability curve.
+	if got := calibrationKey("/api/calibration?horizon=1w"); got == "" {
+		t.Fatal("horizon=1w must key distinctly from the 1d default — it is a different payload")
+	}
+}
+
+func TestHonestyCacheKey_JunkResolvesToTheDefaultEntry(t *testing.T) {
+	base := honestyKey("/api/honesty")
+	if base != "" {
+		t.Fatalf("default honesty key = %q, want %q (warm.go:122 warms \"\")", base, "")
+	}
+	// api.go: h != 1h && h != 1d && h != 1w → 1d.
+	//
+	// ?horizon=1d is in this list ON PURPOSE. warm.go warms this route with a
+	// query-less request, so the "" entry already holds the 1d body, and the web
+	// client always sends ?horizon=1d (web/src/lib/api.ts:473). Giving 1d its own
+	// key would strand the warmed entry and make the client's request the cold
+	// build the warmer was added to absorb.
+	for _, q := range []string{
+		"/api/honesty?horizon=aaa1",
+		"/api/honesty?horizon=aaa2",
+		"/api/honesty?horizon=1d",
+		"/api/honesty?horizon=1D", // handler compares case-sensitively → 1d
+		"/api/honesty?horizon=",
+		"/api/honesty?zz=1",
+	} {
+		if got := honestyKey(q); got != base {
+			t.Fatalf("%s minted key %q; the handler resolves it to 1d, which is entry %q", q, got, base)
+		}
+	}
+}
+
+func TestHonestyCacheKey_RealHorizonsStayDistinct(t *testing.T) {
+	seen := map[string]string{}
+	for _, q := range []string{
+		"/api/honesty",
+		"/api/honesty?horizon=1h",
+		"/api/honesty?horizon=1w",
+	} {
+		k := honestyKey(q)
+		if prev, dup := seen[k]; dup {
+			t.Fatalf("%s and %s collapsed onto key %q but resolve different horizons", prev, q, k)
+		}
+		seen[k] = q
+	}
+}

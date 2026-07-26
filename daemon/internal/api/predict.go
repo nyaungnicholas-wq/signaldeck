@@ -137,8 +137,11 @@ func (d Deps) breakouts(w http.ResponseWriter, r *http.Request) {
 func (d Deps) registerPredict(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/predictions", d.predictions)
 	mux.HandleFunc("GET /api/calibration", func(w http.ResponseWriter, r *http.Request) {
-		// Perf wave 2026-07-24: measured 22.6s per request; SWR-cached by query.
-		sharedCalibrationSWR.serve(r.URL.RawQuery, w, r, d.calibration)
+		// Perf wave 2026-07-24: measured 22.6s per request; SWR-cached.
+		// C6: keyed on the WHITELISTED horizon, never on r.URL.RawQuery — a raw
+		// query string is attacker-controlled, and every novel one was a cold
+		// build holding one of the store's four read connections for ~22s.
+		sharedCalibrationSWR.serve(calibrationCacheKey(r), w, r, d.calibration)
 	})
 	mux.HandleFunc("GET /api/regime", d.regimes)
 	mux.HandleFunc("GET /api/ranking", d.ranking)

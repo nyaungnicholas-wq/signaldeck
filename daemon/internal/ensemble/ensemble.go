@@ -109,6 +109,35 @@ const monotoneEps = 1e-12
 // Calibrate returns the identity map and reports calibrated=false.
 const MinCalibrationPairs = 30
 
+// MinCalibrationDays is the minimum number of DISTINCT UTC DAYS the pairs must
+// span before a per-symbol isotonic map is fitted from them.
+//
+// MinCalibrationPairs counts PAIRS, and pairs are not observations: the
+// predictor runs every 10 minutes against daily labels, so 30 pairs for one
+// symbol is about three days of evidence (measured live: 12.1 rows per
+// symbol-day, one case of 153 rows inside a single day). An isotonic map fitted
+// on three days is fitting three market moves, and it then rewrites every
+// published probability for that symbol.
+//
+// 20 days is the same floor adaptive.MinCellDays uses, generalised from
+// metalabel.MinTakenDays for the same stated reason: same-day rows are not
+// independent evidence.
+//
+// NOT YET ENFORCED ON THE FLEET-WIDE MAP — see Calibrate.
+const MinCalibrationDays = 20
+
+// DistinctPairDays counts the distinct UTC days a set of graded pairs spans —
+// the honest sample size behind anything fitted from them. Unstamped pairs
+// (Ts==0) all collapse onto day 0, so a caller that supplies no timestamps
+// reports one day and is refused rather than silently trusted.
+func DistinctPairDays(pairs []Pair) int {
+	days := make(map[int64]struct{}, len(pairs))
+	for _, p := range pairs {
+		days[p.Ts/86400] = struct{}{}
+	}
+	return len(days)
+}
+
 // calibrationPriorStrength is the empirical-Bayes pseudocount used to SHRINK
 // each isotonic block's fitted frequency toward the dataset base rate. A block
 // backed by w real pairs is pulled toward the base rate as if it also carried
@@ -358,6 +387,15 @@ func WeightedProbability(c Components, weights map[string]float64) (prob float64
 type Pair struct {
 	Pred   float64 // predicted P(up), [0,1]
 	Actual float64 // realized outcome in {0,1}
+	// Ts is the prediction's unix timestamp. Its UTC day is the independence
+	// unit: the predictor runs every 10 minutes against daily labels, so a
+	// dozen pairs can share one symbol-day and a thousand symbols share one
+	// market move. Grading helpers (BrierScore, CalibrationCurve) ignore it;
+	// anything that FITS a map from these pairs must count distinct days, not
+	// pairs — see MinCalibrationDays. Ts==0 means unstamped, which counts as
+	// a single day, so a caller that forgets to stamp is refused rather than
+	// silently trusted.
+	Ts int64
 }
 
 // Bin is one bucket of the reliability (calibration) curve: predictions whose
@@ -477,6 +515,19 @@ func BrierSkill(pairs []Pair) (skill, baseRate float64, ok bool) {
 // evidence to fit, so Calibrate returns the identity map and calibrated=false.
 // The identity map is also returned (calibrated=false) when every prediction is
 // identical (no spread to fit against).
+//
+// KNOWN GAP — MinCalibrationDays is NOT enforced here, only in CalibrateKnots.
+// This entry point fits the FLEET-WIDE map, and its only caller
+// (pipeline.globalCalibration) reads store.ResolvedRawPredictionPairs, which
+// returns the newest calibrationPairLimit=3000 ROWS with no timestamp. Measured
+// live 2026-07-26: that window spans 5 distinct days for 1d and 1 for 1w, and
+// reaching 20 would require deduping to one pair per (symbol, UTC-day) across
+// the full history — a change to the store query and the predictor's window,
+// not to this function. Enforcing the floor here without that change would
+// disable fleet calibration for a reason the code could not honestly state
+// ("no timestamps supplied" is not "too few days"). The gap is real and is
+// recorded rather than papered over: the fleet map is still fitted on ~5
+// clustered days.
 func Calibrate(pairs []Pair) (mapFn func(float64) float64, calibrated bool) {
 	if len(pairs) < MinCalibrationPairs {
 		return identity, false
@@ -762,6 +813,16 @@ func interpolate(kx, ky []float64, x float64) float64 {
 // reconstruct with MapFromKnots.
 func CalibrateKnots(pairs []Pair) (kx, ky []float64, calibrated bool) {
 	if len(pairs) < MinCalibrationPairs {
+		return nil, nil, false
+	}
+	// DISTINCT-DAY FLOOR (2026-07-26 review, H5). The pair floor counts rows,
+	// and the predictor writes ~12 rows per symbol-day, so 30 pairs is about
+	// three market moves — measured live, 158,204 resolved rows were 13,058
+	// symbol-days, with one case of 153 rows inside a single day. A map fitted
+	// on three days encodes those three days' moves and then rewrites every
+	// published probability for the symbol. Refusing is the honest failure: the
+	// caller uses the identity map and ships an uncorrected probability.
+	if DistinctPairDays(pairs) < MinCalibrationDays {
 		return nil, nil, false
 	}
 	sorted := make([]Pair, len(pairs))

@@ -31,6 +31,16 @@
 // Strict expanding-window walk-forward with the same fold geometry as
 // forecast/gbm/meanrev: fold k trains on everything before it and is scored only
 // on rows after it, so a row is never graded by a model that saw its own outcome.
+// "Before it" means before BY LABEL, not by index — each fold is PURGED and
+// EMBARGOED (de Prado). A candidate's meta-label is "did the primary's call clear
+// cost over its forward horizon", so a row ordered before the split boundary
+// still carries an answer decided AFTER it, and this platform's candidates are
+// symbol-days: ~530 rows share one UTC day, so a boundary cutting a day in half
+// hands the tree that day's outcomes and then grades it on the rest of the same
+// day through a feature region those rows share. Callers therefore declare when
+// their label resolved (Sample.LabelEnd, one line via WithLabelSpan); a set that
+// declares nothing is REFUSED (ErrNoLabelSpan) rather than graded unpurged.
+//
 // The secondary learner is internal/gbm (from-scratch gradient-boosted trees),
 // reused rather than reimplemented — meta-labeling's value is in the TARGET, not
 // in a novel learner, and interactions between context features are exactly what
@@ -44,6 +54,7 @@ package metalabel
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -61,6 +72,19 @@ var (
 	// ErrNotAscending is returned when samples are not in ascending time order,
 	// which would break the walk-forward no-lookahead guarantee.
 	ErrNotAscending = errors.New("metalabel: samples must be sorted ascending by ts")
+	// ErrNoLabelSpan is returned when NO candidate declares when its label
+	// resolved (Sample.LabelEnd). Without the horizon the purge width is
+	// unknowable, so the walk-forward split cannot be certified free of the
+	// overlap leak — and this package publishes a VERDICT, so an uncertifiable
+	// verdict is withheld rather than printed. Callers declare the horizon they
+	// labeled with in one line via WithLabelSpan.
+	ErrNoLabelSpan = errors.New("metalabel: candidates do not declare a label horizon (LabelEnd) — cannot purge")
+	// ErrPurgedTooThin is returned when purging leaves fewer usable retrain
+	// boundaries than the caller demanded. It is the honest answer for a history
+	// shorter than a few label spans: a filter graded on one surviving retrain is
+	// not walk-forward evidence, and loosening the gate to publish something
+	// would be the exact flattering arithmetic this package exists to refuse.
+	ErrPurgedTooThin = errors.New("metalabel: purge left too few trainable folds to grade")
 )
 
 const (
@@ -87,6 +111,14 @@ const (
 // outcome and the context the meta-model is allowed to judge it by.
 type Sample struct {
 	Ts int64
+	// LabelEnd is when this candidate's outcome was REALIZED — Ts plus the
+	// primary's forward horizon, in the same units as Ts. It is what makes the
+	// purge possible: index order alone cannot tell walkForward that a row
+	// sitting before a fold boundary carries an answer decided after it. Callers
+	// that labeled with a single horizon declare it in one line with
+	// WithLabelSpan; a set where no row declares it is refused (ErrNoLabelSpan)
+	// rather than graded unpurged.
+	LabelEnd int64
 	// PrimaryProb is the primary model's P(up) for this row. Its distance from
 	// 0.5 is the side and the conviction.
 	PrimaryProb float64
@@ -95,6 +127,27 @@ type Sample struct {
 	Context []float64
 	// FwdReturn is the realized forward return over the primary's horizon.
 	FwdReturn float64
+}
+
+// WithLabelSpan returns a COPY of samples with LabelEnd filled in as Ts+span for
+// every row that has not already declared a later one. span is the primary's
+// forward window in Ts units (e.g. 604800 for a 1-week horizon on unix seconds).
+// This is the one-line declaration the purge needs; without it the caller gets
+// ErrNoLabelSpan, by design.
+//
+// It mirrors gbm.WithLabelSpan deliberately: the two packages grade the same
+// rows through the same learner, and a horizon declared one way here and another
+// way there would make their purges — and therefore their verdicts —
+// incomparable.
+func WithLabelSpan(samples []Sample, span int64) []Sample {
+	out := make([]Sample, len(samples))
+	copy(out, samples)
+	for i := range out {
+		if end := out[i].Ts + span; end > out[i].LabelEnd {
+			out[i].LabelEnd = end
+		}
+	}
+	return out
 }
 
 // Grade is the honest verdict on whether meta-labeling earned its place.
@@ -127,6 +180,18 @@ type Grade struct {
 	ExpectancyLift float64 `json:"expectancyLift"`
 	PrecisionLift  float64 `json:"precisionLift"`
 
+	// The purge is reported, not assumed. LabelSpan is the primary's forward
+	// horizon read off the candidates, EmbargoSpan the extra gap held in front of
+	// each test block, PurgedTrainRows how many training rows the two together
+	// removed across all folds, and TrainedFolds how many retrain boundaries
+	// actually produced a model afterwards. PurgedTrainRows == 0 on symbol-day
+	// candidates is a red flag that the caller mis-declared its horizon: with
+	// ~530 rows sharing a UTC day, every boundary should straddle one.
+	LabelSpan       int64 `json:"labelSpan"`
+	EmbargoSpan     int64 `json:"embargoSpan"`
+	PurgedTrainRows int   `json:"purgedTrainRows"`
+	TrainedFolds    int   `json:"trainedFolds"`
+
 	// PrimaryHasEdge records whether the base signal was worth filtering at all.
 	PrimaryHasEdge bool `json:"primaryHasEdge"`
 	// Verdict is one of "earned", "rejected", or "insufficient".
@@ -145,9 +210,19 @@ const (
 // Evaluate grades meta-labeling walk-forward over samples, with cost applied to
 // every realized outcome, and returns the honest verdict.
 //
-// folds is the number of expanding-window folds; cost is the round-trip cost as
-// a return fraction (e.g. 0.001 = 10bps); threshold is the meta-probability at
-// or above which a candidate is taken.
+// folds is the number of expanding-window retrains demanded — boundaries that
+// actually FIT a model after purging, not boundaries that merely exist; cost is
+// the round-trip cost as a return fraction (e.g. 0.001 = 10bps); threshold is the
+// meta-probability at or above which a candidate is taken.
+//
+// It withholds the verdict entirely, with a stated reason, in two cases the
+// purge introduced. ErrNoLabelSpan: no candidate declares when its outcome
+// resolved, so the purge width is unknowable and the split cannot be certified.
+// ErrPurgedTooThin: purging left fewer trainable retrains than demanded, which is
+// what a candidate history shorter than a few of its own label spans produces.
+// Both are refusals on purpose — a verdict on filtering the platform's own calls
+// is published to readers, and a leak-fed or single-retrain verdict is worse than
+// none.
 func Evaluate(samples []Sample, folds int, cost, threshold float64) (Grade, error) {
 	if !ascendingTs(samples) {
 		return Grade{}, ErrNotAscending
@@ -160,26 +235,54 @@ func Evaluate(samples []Sample, folds int, cost, threshold float64) (Grade, erro
 		return Grade{}, ErrTooFewSamples
 	}
 
+	// The purge width comes from the DATA — the widest declared horizon among the
+	// candidates — never from a constant. Undeclared means unpurgeable, and an
+	// unpurgeable verdict is withheld.
+	span, ok := labelSpanOf(cands)
+	if !ok {
+		return Grade{}, ErrNoLabelSpan
+	}
+	embargo := embargoFor(span)
+
 	// The meta-label: did the primary's side clear cost on this row?
 	metaSamples := make([]gbm.Sample, len(cands))
 	for i, c := range cands {
 		metaSamples[i] = gbm.Sample{
-			Ts:   c.Ts,
-			Feat: c.Context,
-			Y:    metaLabel(c, cost),
+			Ts:       c.Ts,
+			LabelEnd: labelEndOf(c, span),
+			Feat:     c.Context,
+			Y:        metaLabel(c, cost),
 		}
 	}
 
 	// Walk-forward: collect out-of-sample meta-probabilities aligned to cands.
-	probs, scored, err := walkForward(metaSamples, folds)
+	probs, scored, wf, err := walkForward(metaSamples, folds, span, embargo)
 	if err != nil {
 		return Grade{}, err
 	}
 	if len(scored) == 0 {
 		return Grade{}, ErrTooFewSamples
 	}
+	// A boundary that could not be trained after purging is not a retrain. Folds
+	// is the number of retrains the caller demands before a grade is considered
+	// structurally sound, so counting boundaries that produced no model would be
+	// widening the claim to match what survived.
+	if wf.trained < folds {
+		return Grade{}, fmt.Errorf("%w: %d of %d fold boundaries had a usable training set "+
+			"after purging %d rows whose labels resolve inside their test block "+
+			"(label horizon %ds, embargo %ds); %d retrains were demanded. The candidates span "+
+			"too few distinct days for their own label horizon — grading on what survived "+
+			"would present fewer retrains than were asked for as walk-forward evidence",
+			ErrPurgedTooThin, wf.trained, wf.boundaries, wf.purged, span, embargo, folds)
+	}
 
-	g := Grade{N: len(scored)}
+	g := Grade{
+		N:               len(scored),
+		LabelSpan:       span,
+		EmbargoSpan:     embargo,
+		PurgedTrainRows: wf.purged,
+		TrainedFolds:    wf.trained,
+	}
 
 	// Baseline: take every graded candidate.
 	var primHits int
@@ -267,7 +370,15 @@ func judge(g Grade) (verdict, reason string) {
 
 // Run grades the meta-model and, when it is earned, returns a take/skip decision
 // for the latest candidate. ok is false whenever the verdict is not "earned" —
-// an unearned meta-model must not gate anything.
+// an unearned meta-model must not gate anything, and that now includes a verdict
+// whose walk-forward could not be purged (ErrNoLabelSpan) or whose purge left too
+// few retrains (ErrPurgedTooThin): Evaluate refuses, so Run refuses.
+//
+// The point model below trains on ALL candidates without a purge, and that is
+// correct rather than an oversight: there is no test block here. Every candidate
+// handed in has a REALIZED outcome, so none of them resolves after the moment
+// this prediction is made — the purge exists to keep a fold's training labels out
+// of the block it grades, and a live prediction has no such block.
 func Run(samples []Sample, latestContext []float64, folds int, cost, threshold float64) (take bool, prob float64, g Grade, ok bool) {
 	g, err := Evaluate(samples, folds, cost, threshold)
 	if err != nil || g.Verdict != VerdictEarned {
@@ -289,8 +400,18 @@ func Run(samples []Sample, latestContext []float64, folds int, cost, threshold f
 	return prob >= threshold, prob, g, true
 }
 
+// walkReport is what walkForward measured about its own splits, so the purge is
+// published as a number rather than asserted in a comment.
+type walkReport struct {
+	boundaries int // geometric retrain points that fit inside the sample set
+	trained    int // boundaries that still had a usable training set after purging
+	purged     int // training rows dropped across all folds for straddling a boundary
+}
+
 // walkForward returns out-of-sample meta-probabilities indexed to samples, plus
-// the indices actually scored. Fold k trains strictly on rows before it.
+// the indices actually scored. Fold k trains strictly on rows whose LABEL
+// resolved before it — not merely on rows indexed before it. There is no
+// unpurged mode: the zero-gap split is the defect, not an option.
 //
 // The fold boundaries are GEOMETRIC from a fixed origin — minTrain, 2*minTrain,
 // 4*minTrain, … — and deliberately NOT derived from len(samples). Two properties
@@ -315,31 +436,107 @@ func Run(samples []Sample, latestContext []float64, folds int, cost, threshold f
 //
 // folds is the minimum number of retrain boundaries the caller demands before a
 // grade is considered structurally sound.
-func walkForward(samples []gbm.Sample, folds int) (probs []float64, scored []int, err error) {
+func walkForward(samples []gbm.Sample, folds int, span, embargo int64) (probs []float64, scored []int, rep walkReport, err error) {
 	n := len(samples)
 	probs = make([]float64, n)
 	if n < minTrain+minPerFold {
-		return nil, nil, ErrTooFewSamples
+		return nil, nil, rep, ErrTooFewSamples
 	}
 	bounds := foldBoundaries(n)
 	if len(bounds) < folds {
-		return nil, nil, ErrTooFewSamples
+		return nil, nil, rep, ErrTooFewSamples
 	}
+	rep.boundaries = len(bounds)
 	for bi, trainEnd := range bounds {
 		testEnd := n
 		if bi+1 < len(bounds) {
 			testEnd = bounds[bi+1]
 		}
-		m, e := gbm.Train(samples[:trainEnd], gbm.Defaults())
+		train := purgedTrain(samples, trainEnd, samples[trainEnd].Ts, span, embargo)
+		rep.purged += trainEnd - len(train)
+		m, e := gbm.Train(train, gbm.Defaults())
 		if e != nil {
+			// Usually ErrInsufficientData because the purge emptied the training
+			// set. Skipping is right — a fold with nothing legitimate to learn
+			// from must not score rows — but the caller counts what survived and
+			// refuses when too little did.
 			continue
 		}
+		rep.trained++
 		for i := trainEnd; i < testEnd; i++ {
 			probs[i] = m.Predict(samples[i].Feat)
 			scored = append(scored, i)
 		}
 	}
-	return probs, scored, nil
+	return probs, scored, rep, nil
+}
+
+// embargoDenom sets the embargo as a fraction (1/embargoDenom) of the label span.
+// de Prado's embargo is a small gap BEYOND the purge, guarding the residual
+// serial correlation that survives the exact label window — context features are
+// built from trailing windows, so rows just outside the purge still share most
+// of their inputs with the first test rows. It matches internal/gbm's embargo
+// rule on purpose: the two packages purge the same rows through the same learner,
+// and two different embargoes would make their verdicts incomparable.
+const embargoDenom = 10
+
+// embargoFor returns the embargo gap for a measured label span.
+func embargoFor(span int64) int64 { return span / embargoDenom }
+
+// labelSpanOf reads the primary's forward horizon OFF THE DATA: the widest
+// declared (LabelEnd - Ts) among the candidates. Widest, not median — with mixed
+// horizons in one set a narrower purge would leave the long-horizon rows
+// straddling the boundary, and over-purging costs training rows while
+// under-purging costs the honesty of the verdict. ok=false when no row declares
+// a horizon at all.
+func labelSpanOf(cands []Sample) (int64, bool) {
+	var span int64
+	ok := false
+	for _, c := range cands {
+		if c.LabelEnd <= c.Ts {
+			continue // undeclared (or a zero-width label, which needs no purge)
+		}
+		ok = true
+		if d := c.LabelEnd - c.Ts; d > span {
+			span = d
+		}
+	}
+	return span, ok
+}
+
+// labelEndOf returns when a candidate's outcome was realized, defaulting an
+// undeclared row to the set's widest span. A row that forgot to declare is
+// treated as the WORST case, so a partially-declared set cannot smuggle unpurged
+// rows through a boundary.
+func labelEndOf(c Sample, span int64) int64 {
+	if end := c.Ts + span; end > c.LabelEnd {
+		return end
+	}
+	return c.LabelEnd
+}
+
+// purgedTrain returns one fold's training rows: those among samples[:trainEnd]
+// whose label was fully realized at least `embargo` before the test block opens
+// at testStartTs. Filtered row by row rather than truncated, so a set with mixed
+// horizons is handled correctly.
+//
+// A label realized exactly AT testStartTs is kept: its terminal price is the test
+// block's opening price, which the test rows' own features already contain —
+// contemporaneous, not future.
+func purgedTrain(samples []gbm.Sample, trainEnd int, testStartTs, span, embargo int64) []gbm.Sample {
+	cutoff := testStartTs - embargo
+	out := make([]gbm.Sample, 0, trainEnd)
+	for i := 0; i < trainEnd; i++ {
+		end := samples[i].LabelEnd
+		if e := samples[i].Ts + span; e > end {
+			end = e
+		}
+		if end > cutoff {
+			continue // label reaches into the test block (or its embargo) — purge
+		}
+		out = append(out, samples[i])
+	}
+	return out
 }
 
 // foldBoundaries returns the geometric retrain points that fit inside n. Each

@@ -38,10 +38,44 @@ type respCache struct {
 type respEntry struct {
 	body    []byte
 	builtAt time.Time
+	usedAt  time.Time // last read; drives LRU eviction
 }
 
 func newRespCache(ttl time.Duration) *respCache {
 	return &respCache{ttl: ttl, ent: map[string]respEntry{}}
+}
+
+// evictLRULocked bounds the entry map at maxCacheEntries, dropping the least
+// recently USED entry first — same contract as the two maps in slowcache.go,
+// and simpler here because respCache holds the lock across the build, so no
+// entry can ever be mid-build while this runs.
+//
+// C6 (2026-07-26 review) called this map out as unbounded. It has no live
+// instance today — registerHonestyCache is a test seam and the live route runs
+// on sharedHonestySWR — so this is a latent leak, not a measured one. Bounding
+// it now is what stops re-wiring this cache from silently reintroducing the
+// 12-KB-per-junk-key growth the reviewer measured on the SWR maps.
+//
+// What this does NOT address, deliberately: serve() still builds under the
+// GLOBAL lock, so one slow key blocks every other key's hits. That is the flaw
+// that moved /api/honesty to swrBodyCache in the first place. Fixing it here
+// would mean reimplementing per-entry coalescing that already exists one file
+// over, for a cache nothing in production constructs.
+func (c *respCache) evictLRULocked() {
+	for len(c.ent) >= maxCacheEntries {
+		var oldestKey string
+		var oldest time.Time
+		found := false
+		for k, e := range c.ent {
+			if !found || e.usedAt.Before(oldest) {
+				oldestKey, oldest, found = k, e.usedAt, true
+			}
+		}
+		if !found {
+			return
+		}
+		delete(c.ent, oldestKey)
+	}
 }
 
 // serve runs h with a capturing writer unless a fresh entry exists for key.
@@ -51,6 +85,8 @@ func (c *respCache) serve(key string, w http.ResponseWriter, r *http.Request, h 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.ent[key]; ok && time.Since(e.builtAt) < c.ttl {
+		e.usedAt = time.Now()
+		c.ent[key] = e
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache", "hit")
 		_, _ = w.Write(e.body)
@@ -61,7 +97,11 @@ func (c *respCache) serve(key string, w http.ResponseWriter, r *http.Request, h 
 	// Only successful bodies are cached — an error must not be pinned for a
 	// minute, and a partial write is not a valid answer to reuse.
 	if rec.status == 0 || rec.status == http.StatusOK {
-		c.ent[key] = respEntry{body: rec.buf, builtAt: time.Now()}
+		if _, replacing := c.ent[key]; !replacing {
+			c.evictLRULocked()
+		}
+		now := time.Now()
+		c.ent[key] = respEntry{body: rec.buf, builtAt: now, usedAt: now}
 	}
 }
 
@@ -87,19 +127,26 @@ func (b *bodyRecorder) Write(p []byte) (int, error) {
 }
 
 // registerHonestyCached wires GET /api/honesty behind the response cache. The
-// cache key is the horizon — the only input that changes the payload.
+// cache key is the RESOLVED horizon — the only input that changes the payload.
+//
+// C6: it used to be the raw ?horizon value. Whitelisting the parameter NAME is
+// not the fix; the handler resolves anything outside {1h,1d,1w} to 1d, so
+// ?horizon=aaa1, ?horizon=aaa2 ... each built the same body under a new key.
+// honestyCacheKey normalises to what the handler will actually render.
 func (d Deps) registerHonestyCached(mux *http.ServeMux) {
 	// Perf wave 2026-07-24: moved from the synchronous respCache (whose TTL
 	// lapse made the next visitor rebuild inline, ~22s) to the SWR body cache.
 	mux.HandleFunc("GET /api/honesty", func(w http.ResponseWriter, r *http.Request) {
-		sharedHonestySWR.serve(r.URL.Query().Get("horizon"), w, r, d.honesty)
+		sharedHonestySWR.serve(honestyCacheKey(r), w, r, d.honesty)
 	})
 }
 
 // registerHonestyCache wires the route against an injected cache (tests pass
-// their own instance to drive TTL behavior deterministically).
+// their own instance to drive TTL behavior deterministically). It keys through
+// the same whitelist as the live route: a test seam that keys differently from
+// production tests something production does not do.
 func (d Deps) registerHonestyCache(mux *http.ServeMux, c *respCache) {
 	mux.HandleFunc("GET /api/honesty", func(w http.ResponseWriter, r *http.Request) {
-		c.serve(r.URL.Query().Get("horizon"), w, r, d.honesty)
+		c.serve(honestyCacheKey(r), w, r, d.honesty)
 	})
 }

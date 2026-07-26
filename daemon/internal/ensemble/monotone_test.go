@@ -153,18 +153,21 @@ func TestValidateKnots(t *testing.T) {
 // CalibrateKnots persists what it returns, so it must never hand back a map
 // ValidateKnots would reject.
 func TestCalibrateKnotsOutputPassesItsOwnAssertion(t *testing.T) {
+	// One pair per UTC day: CalibrateKnots also enforces MinCalibrationDays, so
+	// an unstamped fixture would be refused for spanning a single day and this
+	// test would stop exercising the monotonicity assertion at all.
 	var pairs []Pair
 	for i := 0; i < 40; i++ {
-		pairs = append(pairs, Pair{Pred: 0.30, Actual: 0})
+		pairs = append(pairs, Pair{Pred: 0.30, Actual: 0, Ts: int64(i) * 86400})
 	}
 	for i := 0; i < 40; i++ {
 		a := 0.0
 		if i < 26 {
 			a = 1
 		}
-		pairs = append(pairs, Pair{Pred: 0.36, Actual: a})
+		pairs = append(pairs, Pair{Pred: 0.36, Actual: a, Ts: int64(i) * 86400})
 	}
-	pairs = append(pairs, Pair{Pred: 0.37, Actual: 1})
+	pairs = append(pairs, Pair{Pred: 0.37, Actual: 1, Ts: 0})
 
 	kx, ky, ok := CalibrateKnots(pairs)
 	if !ok {

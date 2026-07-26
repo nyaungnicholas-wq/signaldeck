@@ -10,6 +10,10 @@ import (
 // mkExamples builds n labeled examples in one regime where the pressure leg
 // is always RIGHT (p=0.75 on up moves, 0.25 on down) and the expectancy leg
 // is always WRONG. Outcomes alternate up/down; fwd return follows direction.
+//
+// ONE EXAMPLE PER UTC DAY. Every floor in this package counts distinct days,
+// so an unstamped fixture would sit on day 0 and be gated for the wrong
+// reason — which is exactly the confusion the row-counting floors created.
 func mkExamples(n int, regime string) []Example {
 	out := make([]Example, 0, n)
 	for i := 0; i < n; i++ {
@@ -23,6 +27,7 @@ func mkExamples(n int, regime string) []Example {
 		ex := Example{
 			Legs:      map[string]float64{ensemble.LegPressure: pPressure, ensemble.LegExpectancy: pExpect},
 			Regime:    regime,
+			Ts:        int64(i) * 86400,
 			Up:        0,
 			FwdReturn: fwd,
 		}
@@ -45,8 +50,9 @@ func TestCompute_HitRateICAndWeights(t *testing.T) {
 		if !ok {
 			t.Fatalf("cell %q missing: %+v", cellName, w.Cells)
 		}
-		if c.N != 40 || c.Gated {
-			t.Fatalf("%s: n=%d gated=%v, want n=40 ungated", cellName, c.N, c.Gated)
+		if c.N != 40 || c.Days != 40 || c.Gated {
+			t.Fatalf("%s: n=%d days=%d gated=%v, want 40 rows over 40 days, ungated",
+				cellName, c.N, c.Days, c.Gated)
 		}
 		// Evidence: pressure always right, expectancy always wrong.
 		if c.HitRates[ensemble.LegPressure] != 1.0 || c.HitRates[ensemble.LegExpectancy] != 0.0 {
@@ -67,8 +73,8 @@ func TestCompute_HitRateICAndWeights(t *testing.T) {
 }
 
 func TestCompute_HonestyGateUnder30(t *testing.T) {
-	// 20 examples: perfect signal, but BELOW the sample gate — evidence is
-	// reported, weights are withheld.
+	// 20 examples on 20 days: perfect signal, days floor cleared, but BELOW the
+	// ROW gate — evidence is reported, weights are withheld.
 	w := Compute(mkExamples(20, "squeeze"), 0)
 	for _, cellName := range []string{"squeeze", AllCell} {
 		c := w.Cells[cellName]
@@ -99,7 +105,10 @@ func TestCompute_NoEdgeNoWeights(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		up := i%2 == 0
 		p := 0.4 // always leans down; hits only the down half -> hitRate 0.5
-		ex := Example{Legs: map[string]float64{ensemble.LegPressure: p}, Regime: "chop", FwdReturn: -0.01}
+		ex := Example{
+			Legs: map[string]float64{ensemble.LegPressure: p}, Regime: "chop",
+			Ts: int64(i) * 86400, FwdReturn: -0.01,
+		}
 		if up {
 			ex.Up = 1
 			ex.FwdReturn = 0.01
@@ -117,8 +126,8 @@ func TestCompute_NoEdgeNoWeights(t *testing.T) {
 }
 
 func TestCompute_SentimentNeedsOwnSampleGate(t *testing.T) {
-	// 40 examples, but sentiment is present (and perfect) in only 10 of
-	// them: the sentiment-specific gate must refuse it ANY weight.
+	// 40 examples over 40 days, but sentiment is present (and perfect) on only
+	// 10 of them: the sentiment-specific gate must refuse it ANY weight.
 	build := func(sentimentN int) []Example {
 		exs := mkExamples(40, "uptrend")
 		for i := 0; i < sentimentN; i++ {
@@ -139,7 +148,7 @@ func TestCompute_SentimentNeedsOwnSampleGate(t *testing.T) {
 		t.Fatalf("sentiment with legN=10 must get NO weight: %+v", c.Weights)
 	}
 
-	// With 30+ of its own samples it earns its way in.
+	// With 30+ of its own samples spanning 30 days it earns its way in.
 	w = Compute(build(30), 0)
 	c = w.Cells["uptrend"]
 	if _, has := c.Weights[ensemble.LegSentiment]; !has {
@@ -309,9 +318,16 @@ func fp(v float64) *float64 { return &v }
 // Now the thin leg is excluded outright and the evidenced legs share the
 // weight near-equally.
 func TestCompute_PerLegSampleGateExcludesThinLeg(t *testing.T) {
-	// 40 examples: pressure and expectancy are present in ALL 40 with a
-	// modest, identical edge (right 22/40 = 0.55); alphax is present in only
-	// 3 — and perfect in all 3.
+	// 40 examples on 40 distinct days: pressure and expectancy are present on
+	// ALL of them with a large, identical edge (right 34/40 = 0.85); alphax is
+	// present on only 3 days — and perfect on all 3.
+	//
+	// The edge is 0.85 rather than the 0.55 this test originally used because
+	// the panel now requires a leg to beat the coin flip by more than its own
+	// noise (H4): at 40 days the standard error is 0.5/sqrt(40) = 0.079, so
+	// 0.55 is well inside noise and correctly earns nothing. The property under
+	// test — a thin leg is excluded outright rather than handed the largest
+	// weight — needs the evidenced legs to actually survive.
 	var exs []Example
 	for i := 0; i < 40; i++ {
 		up := i%2 == 0
@@ -323,18 +339,18 @@ func TestCompute_PerLegSampleGateExcludesThinLeg(t *testing.T) {
 		if !up {
 			right, wrong = 0.3, 0.7
 		}
-		p := right // first 22 examples: correct call…
-		if i >= 22 {
-			p = wrong // …last 18: wrong call → hitRate 0.55
+		p := right // first 34 examples: correct call…
+		if i >= 34 {
+			p = wrong // …last 6: wrong call → hitRate 0.85
 		}
 		ex := Example{
 			Legs:   map[string]float64{ensemble.LegPressure: p, ensemble.LegExpectancy: p},
-			Regime: "uptrend", FwdReturn: fwd,
+			Regime: "uptrend", Ts: int64(i) * 86400, FwdReturn: fwd,
 		}
 		if up {
 			ex.Up = 1
 		}
-		if i < 3 { // alphax: 3 lucky, perfect examples
+		if i < 3 { // alphax: 3 lucky, perfect days
 			ex.Legs[ensemble.LegAlphaX] = right
 		}
 		exs = append(exs, ex)

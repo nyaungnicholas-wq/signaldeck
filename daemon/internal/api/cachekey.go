@@ -144,3 +144,33 @@ func moversCacheKey(r *http.Request) string {
 		floorParam("minMcap"),
 	)
 }
+
+// calibrationCacheKey whitelists the one parameter d.calibration reads:
+// ?horizon, which predict.go:33 resolves to 1d for anything that is not "1w".
+//
+// The route previously keyed on r.URL.RawQuery, so the whole attack was still
+// open here after the first C6 pass: `?zz=1` was an unseen key, and so was
+// `?horizon=aaa1`, `?horizon=aaa2`, ... — each a cold build of the SAME 1d
+// body on one of four read connections.
+func calibrationCacheKey(r *http.Request) string {
+	return canonicalCacheKey(r, enumParam("horizon", string(md.H1w)))
+}
+
+// honestyCacheKey whitelists the one parameter d.honesty reads: ?horizon,
+// which api.go:553 resolves to 1d for anything outside {1h, 1d, 1w}. The route
+// previously keyed on the raw VALUE of ?horizon — the parameter NAME was known
+// but nothing validated what it contained, so `?horizon=aaa1`, `?horizon=aaa2`
+// still minted entries without bound.
+//
+// 1d is deliberately OMITTED rather than listed, and that is the opposite of
+// what a leftover patch note in this repo advised. Verified before writing it:
+// warm.go:122-123 warms both routes with a request carrying NO query string, so
+// the entry it pre-builds under "" already holds the 1d body — while the web
+// client always spells the horizon out (web/src/lib/api.ts:473,511 send
+// `?horizon=1d`). Listing 1d would fork `?horizon=1d` onto its own key, leaving
+// the warmer filling an entry no caller reads and handing every real 1d visitor
+// the ~22s cold build the warmer exists to absorb. Omitting it puts the client's
+// request on the warmed entry, which is the rule the top of this file states.
+func honestyCacheKey(r *http.Request) string {
+	return canonicalCacheKey(r, enumParam("horizon", string(md.H1h), string(md.H1w)))
+}

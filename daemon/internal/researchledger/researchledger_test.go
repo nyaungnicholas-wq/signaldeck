@@ -97,8 +97,10 @@ func TestBayesFactorBelowMirror(t *testing.T) {
 
 func TestPosteriorChain(t *testing.T) {
 	// prior 0.25 → odds 1/3; evidence BF 5 then attack 0.6 → odds 1 → 0.5.
+	// N is set on the grade row because a grade with no observation is an
+	// assertion, and Posterior refuses an assertion's FOR-weight (AssertedMaxBF).
 	ev := []Evidence{
-		{Kind: KindExperiment, BF: 5},
+		{Kind: KindExperiment, K: 60, N: 100, P0: 0.5, BF: 5},
 		{Kind: KindAttack, BF: 0.6},
 	}
 	if got := Posterior(0.25, ev); math.Abs(got-0.5) > 1e-9 {
@@ -109,14 +111,14 @@ func TestPosteriorChain(t *testing.T) {
 func TestPosteriorClamps(t *testing.T) {
 	strong := make([]Evidence, 10)
 	for i := range strong {
-		strong[i] = Evidence{Kind: KindReplication, BF: MaxBF}
+		strong[i] = Evidence{Kind: KindReplication, K: 60, N: 100, P0: 0.5, BF: MaxBF}
 	}
 	if got := Posterior(0.5, strong); got != MaxPosterior {
 		t.Errorf("posterior = %.4f, want clamp %.2f (never certainty)", got, MaxPosterior)
 	}
 	weak := make([]Evidence, 10)
 	for i := range weak {
-		weak[i] = Evidence{Kind: KindReplication, BF: MinBF}
+		weak[i] = Evidence{Kind: KindReplication, K: 40, N: 100, P0: 0.5, BF: MinBF}
 	}
 	if got := Posterior(0.5, weak); got != MinPosterior {
 		t.Errorf("posterior = %.4f, want clamp %.2f", got, MinPosterior)
@@ -126,7 +128,7 @@ func TestPosteriorClamps(t *testing.T) {
 func TestPosteriorRecapsStoredBF(t *testing.T) {
 	// A stored row with an out-of-cap BF (edited DB, legacy row) must be
 	// re-clamped at recompute time.
-	ev := []Evidence{{Kind: KindExperiment, BF: 1e6}}
+	ev := []Evidence{{Kind: KindExperiment, K: 60, N: 100, P0: 0.5, BF: 1e6}}
 	if got := Posterior(0.5, ev); got > MaxPosterior {
 		t.Errorf("posterior = %.4f exceeded cap via un-clamped stored BF", got)
 	}
@@ -185,9 +187,9 @@ func TestBayesFactorSmallSampleBeyondBand(t *testing.T) {
 // an unchanged concern is levied once, not once per grade.
 func TestEffectiveChainDedupesSingleRegime(t *testing.T) {
 	ev := []Evidence{
-		{Kind: KindExperiment, BF: 5},
+		{Kind: KindExperiment, K: 60, N: 100, P0: 0.5, BF: 5},
 		{Kind: KindAttack, BF: PenaltySingleRegime, Note: "single-regime: calm only"},
-		{Kind: KindReplication, BF: 4},
+		{Kind: KindReplication, K: 58, N: 100, P0: 0.5, BF: 4},
 		{Kind: KindAttack, BF: PenaltySingleRegime, Note: "single-regime: calm only"},
 		{Kind: KindAttack, BF: PenaltyTimeSplitFail, Note: "time-split: flip"},
 	}
@@ -216,10 +218,10 @@ func TestEffectiveChainDedupesSingleRegime(t *testing.T) {
 // while per-grade attacks all pass through.
 func TestEffectiveChainDedupesSurvivorship(t *testing.T) {
 	ev := []Evidence{
-		{Kind: KindBacktest, BF: 4},
+		{Kind: KindBacktest, K: 58, N: 100, P0: 0.5, BF: 4},
 		{Kind: KindAttack, BF: PenaltySurvivorship, Note: "survivorship: backfilled universe is today's survivor set"},
 		{Kind: KindAttack, BF: PenaltySingleRegime, Note: "single-regime: calm only"},
-		{Kind: KindBacktest, BF: 3},
+		{Kind: KindBacktest, K: 57, N: 100, P0: 0.5, BF: 3},
 		{Kind: KindAttack, BF: PenaltySurvivorship, Note: "survivorship: backfilled universe is today's survivor set"},
 		{Kind: KindAttack, BF: PenaltyTimeSplitFail, Note: "time-split: flip"},
 	}
@@ -258,7 +260,7 @@ func TestStatusNaN(t *testing.T) {
 func TestPosteriorLongChainNoOverflow(t *testing.T) {
 	ev := make([]Evidence, 500)
 	for i := range ev {
-		ev[i] = Evidence{Kind: KindReplication, BF: MaxBF}
+		ev[i] = Evidence{Kind: KindReplication, K: 60, N: 100, P0: 0.5, BF: MaxBF}
 	}
 	got := Posterior(0.5, ev)
 	if math.IsNaN(got) || got != MaxPosterior {

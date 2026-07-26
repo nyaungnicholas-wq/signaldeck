@@ -24,9 +24,11 @@ const symbolAgentMaxRows = 5000
 // agent is a stored row, not a process/goroutine.
 //
 // Honesty: a symbol only graduates to the "personal" tier once it has
-// >= symbolagent.MinPersonal of its own resolved outcomes for a horizon AND
-// that history yields weights that beat a coin flip; until then the row records
-// the measured skill but stays on the global fallback tier ("still learning").
+// >= symbolagent.MinPersonal of its own resolved rows for a horizon spanning
+// >= symbolagent.MinPersonalDays DISTINCT UTC DAYS, AND that history yields
+// weights that survive the adaptive panel's shrinkage and multiplicity
+// correction; until then the row records the measured skill but stays on the
+// global fallback tier ("still learning").
 // The FIRST time a symbol+horizon graduates to personal, one insight is
 // written.
 type PerSymbolLearner struct {
@@ -76,8 +78,12 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 			rawPairs := make([]ensemble.Pair, 0, len(rows))
 			for _, r := range rows {
 				legs, regime := adaptive.FromVector(r.Vec)
+				// Ts carries the UTC day both floors count. Without it a symbol
+				// with 300 rows drawn from three market moves looks like 300
+				// observations, which is how 1,045 of 1,050 symbols held a
+				// personal model on ~12 days of evidence.
 				examples = append(examples, adaptive.Example{
-					Legs: legs, Regime: regime, Up: r.Up, FwdReturn: r.FwdReturn,
+					Legs: legs, Regime: regime, Ts: r.Ts, Up: r.Up, FwdReturn: r.FwdReturn,
 				})
 				// Prequential calibration pairs: the raw blend prob this symbol
 				// produced at prediction time vs the realized outcome. Each pair
@@ -85,7 +91,7 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 				// its own outcome (that outcome didn't exist when the prob was
 				// made, and a live prediction is never in this set).
 				if raw, ok := r.Vec["pred_raw"]; ok {
-					rawPairs = append(rawPairs, ensemble.Pair{Pred: raw, Actual: float64(r.Up)})
+					rawPairs = append(rawPairs, ensemble.Pair{Pred: raw, Actual: float64(r.Up), Ts: r.Ts})
 				}
 			}
 
@@ -117,8 +123,11 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	return fmt.Sprintf("modeled %d symbol×horizon(s) over %d symbols; %d personal, %d newly graduated",
-		upserts, len(syms), personalCount, graduated), nil
+	// The day floors are reported beside the count so a drop in `personal` is
+	// legible as a change of UNIT, not a loss of data.
+	return fmt.Sprintf("modeled %d symbol×horizon(s) over %d symbols; %d personal, %d newly graduated (personal needs %d rows over %d distinct days)",
+		upserts, len(syms), personalCount, graduated,
+		symbolagent.MinPersonal, symbolagent.MinPersonalDays), nil
 }
 
 // marshalSymbolModel serializes a learned model into a storable row. The JSON
@@ -157,7 +166,7 @@ func marshalSymbolModel(symbolID int64, h md.Horizon, m symbolagent.Model, ts in
 func graduationInsight(symbolID int64, symbol, horizon string, m symbolagent.Model) md.Insight {
 	data, _ := json.Marshal(map[string]any{
 		"kind": "symbol_agent_graduated", "symbol": symbol, "horizon": horizon,
-		"nSamples": m.NSamples, "weights": m.Weights,
+		"nSamples": m.NSamples, "nDays": m.NDays, "weights": m.Weights,
 	})
 	id := symbolID
 	return md.Insight{
@@ -166,8 +175,8 @@ func graduationInsight(symbolID int64, symbol, horizon string, m symbolagent.Mod
 		Symbol:   symbol,
 		Ts:       time.Now().Unix(),
 		Headline: fmt.Sprintf("%s (%s) now has its own agent", symbol, horizon),
-		Body: fmt.Sprintf("%s reached %d of its own resolved %s outcomes — enough to trust a model learned from THIS symbol's behavior instead of the global one. %s",
-			symbol, m.NSamples, horizon, m.Personality),
+		Body: fmt.Sprintf("%s reached %d distinct days of its own resolved %s outcomes (%d graded rows) — enough to trust a model learned from THIS symbol's behavior instead of the global one. %s",
+			symbol, m.NDays, horizon, m.NSamples, m.Personality),
 		Data: string(data),
 	}
 }

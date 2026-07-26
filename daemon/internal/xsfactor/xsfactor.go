@@ -128,7 +128,13 @@ type Result struct {
 	UniverseN     int       `json:"universeN"`
 	Skipped       []Skipped `json:"skipped"`
 	SplitRejected int       `json:"splitRejected"`
-	Edge          []LegEdge `json:"edge"`
+	// Edge carries the PUBLISHED legs; Withheld carries every leg that was
+	// measured and did not survive, each with its reason. Withheld ships so a
+	// reader sees what failed — a leg that silently disappears from a payload
+	// teaches nothing, and one that silently reappears is how the liquidity leg
+	// shipped with the wrong sign.
+	Edge     []LegEdge `json:"edge"`
+	Withheld []LegEdge `json:"withheld"`
 }
 
 // metrics holds one symbol's point-in-time factor inputs. A nil pointer means
@@ -154,6 +160,7 @@ func Rank(h Horizon, inputs []Input) (Result, error) {
 		Rows:          []Row{},
 		Skipped:       []Skipped{},
 		Edge:          MeasuredEdge(h),
+		Withheld:      WithheldEdge(h),
 	}
 
 	// Pass 1 — per-symbol metrics, refusing corrupt or too-short series.

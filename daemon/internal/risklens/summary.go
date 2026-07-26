@@ -38,7 +38,7 @@ func Analyze(holdings []Holding, series []Series, market Series, confidence, not
 		return Report{}, err
 	}
 	histVaR, histCVaR, gate := HistoricalVaR(port, confidence)
-	paramVaR := ParametricVaR(port, confidence)
+	paramVaR, paramGate := ParametricVaR(port, confidence)
 
 	contribs, err := RiskContributions(holdings, series)
 	if err != nil {
@@ -60,6 +60,7 @@ func Analyze(holdings []Holding, series []Series, market Series, confidence, not
 		HistCVaRPct:   histCVaR,
 		ParamVaRPct:   paramVaR,
 		VaRGate:       gate,
+		ParamVaRGate:  paramGate,
 		MarketProxy:   market.Symbol,
 		MarketBetas:   betas,
 		Contributions: contribs,
@@ -117,8 +118,20 @@ func Summary(report Report) string {
 			humanMoney(cvarDollars),
 		)
 	}
+	// The normal-model VaR travels with its assumption, ALWAYS — stating it only
+	// in a doc comment is how a number that understates fat tails ends up read as
+	// a risk limit. When it is withheld, say so: silence reads as "not computed",
+	// which is a different (and flattering) claim than "we refused to publish it".
 	if report.ParamVaRPct != nil {
-		fmt.Fprintf(&b, " The normal-model VaR is %.2f%%.", *report.ParamVaRPct*100)
+		fmt.Fprintf(&b,
+			" The normal-model VaR is %.2f%% — it assumes normally distributed returns and therefore understates fat tails; the historical figure above is the one to trust.",
+			*report.ParamVaRPct*100)
+	} else if report.ParamVaRGate.Withheld {
+		reason := report.ParamVaRGate.Reason
+		if reason == "" {
+			reason = "the sample cannot support a normal-model estimate"
+		}
+		fmt.Fprintf(&b, " We are not publishing a normal-model VaR: %s.", reason)
 	}
 
 	// Sentence 3: biggest risk driver.

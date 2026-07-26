@@ -7,7 +7,7 @@ import "testing"
 
 func TestTopAccuracyBandIsRefusedAsATrade(t *testing.T) {
 	// conv 0.95 on trend21: the system's best hit rate (97.2%) and a measured
-	// mean forward return of -0.39%. It must be refused.
+	// mean forward return of -0.76%. It must be refused.
 	p, ok := BuildTradePlan(KindTrend21, 0.95, 100, 2)
 	if !ok {
 		t.Fatal("expected a plan to be computable for a measured band")

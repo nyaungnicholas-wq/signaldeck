@@ -172,17 +172,58 @@ func TestLowVolOutranksHighVol(t *testing.T) {
 	}
 }
 
-// TestLiquidityLegFavorsThinNames pins the direction of the size/liquidity leg:
-// the SMALLER median dollar volume scores high.
-func TestLiquidityLegFavorsThinNames(t *testing.T) {
+// TestLiquidityLegIsDiagnosticOnly pins the RETRACTED size/liquidity leg.
+//
+// Its percentile is still computed and still points the documented way (the
+// SMALLER median dollar volume scores high), because a reader auditing the
+// retraction needs to see the quantity that was retracted. What it must never
+// do again is move anyone's composite: the re-derivation measures it negative at
+// every horizon, so it is reported and not weighted.
+func TestLiquidityLegIsDiagnosticOnly(t *testing.T) {
 	thin := named("THIN", series(momMinCloses, 100, 0, 0.5, 1e5))
 	fat := named("FAT", series(momMinCloses, 100, 0, 0.5, 9e9))
-	res := mustRank(t, H63d, []Input{fat, thin})
+	res := mustRank(t, H5d, []Input{fat, thin})
 	if *rowBySymbol(t, res, "THIN").LiquidityPct != 1 {
-		t.Fatalf("thin name liquidityPct=%v, want 1", *rowBySymbol(t, res, "THIN").LiquidityPct)
+		t.Fatalf("thin name liquidityPct=%v, want 1 — the diagnostic must survive the retraction",
+			*rowBySymbol(t, res, "THIN").LiquidityPct)
 	}
-	if res.Rows[0].Symbol != "THIN" {
-		t.Fatalf("rank 1 = %q, want THIN", res.Rows[0].Symbol)
+	for _, r := range res.Rows {
+		if idxOf(r.LegsUsed, LegLiquidity) >= 0 {
+			t.Fatalf("%s weighted the retracted liquidity leg (legsUsed=%v)", r.Symbol, r.LegsUsed)
+		}
+	}
+	// Thin vs fat alone must no longer decide the ranking: with vol and
+	// momentum tied, both composites are the tied 0.5.
+	for _, r := range res.Rows {
+		if math.Abs(r.Composite-0.5) > 1e-12 {
+			t.Fatalf("%s composite=%.6f, want 0.5 — only the retracted leg separates these two",
+				r.Symbol, r.Composite)
+		}
+	}
+}
+
+// TestNoSurvivingLegAtHorizon: at 63d the re-derivation left NOTHING, so every
+// symbol is refused with a stated reason rather than scored on an empty average.
+// The failure it prevents is a composite of zero legs rendering as 0.0 and being
+// read as a rank.
+func TestNoSurvivingLegAtHorizon(t *testing.T) {
+	if got := CompositeLegs(H63d); len(got) != 0 {
+		t.Fatalf("CompositeLegs(63d)=%v, want empty — no leg survived re-derivation there", got)
+	}
+	res := mustRank(t, H63d, []Input{
+		named("AAA", series(momMinCloses, 100, 0, 0.10, 1e5)),
+		named("BBB", series(momMinCloses, 100, 0, 6.00, 9e9)),
+	})
+	if len(res.Rows) != 0 {
+		t.Fatalf("rows=%d at 63d, want 0", len(res.Rows))
+	}
+	for _, s := range res.Skipped {
+		if !contains(s.Reason, "no measured-edge leg computable") {
+			t.Fatalf("%s skipped without naming the cause: %q", s.Symbol, s.Reason)
+		}
+	}
+	if len(res.Withheld) != 3 {
+		t.Fatalf("withheld=%d at 63d, want all 3 legs reported with their reasons", len(res.Withheld))
 	}
 }
 
@@ -200,24 +241,27 @@ func TestRenormalizationOverPresentLegs(t *testing.T) {
 	if s.Mom121 != nil || s.Mom121Pct != nil {
 		t.Fatalf("SHORTY should have no momentum leg, got %v/%v", s.Mom121, s.Mom121Pct)
 	}
-	wantLegs := []string{LegLowVol, LegLiquidity}
+	// Liquidity is retracted, so the only published leg SHORTY can carry is
+	// low-vol; momentum is published at 5d but SHORTY is too short for it.
+	wantLegs := []string{LegLowVol}
 	if !reflect.DeepEqual(s.LegsUsed, wantLegs) {
 		t.Fatalf("legsUsed=%v, want %v", s.LegsUsed, wantLegs)
 	}
-	// Both present legs are 1 (calmest AND thinnest of the two), so a correctly
-	// renormalized composite is 1.0 — averaging over 3 slots would give 0.667.
+	// Its one present leg is 1 (the calmer of the two), so a correctly
+	// renormalized composite is 1.0 — averaging over 2 published slots would
+	// give 0.5 and an absent leg would have been scored as a zero.
 	if math.Abs(s.Composite-1.0) > 1e-12 {
 		t.Fatalf("composite=%.6f, want 1.0 (renormalized over %d present legs)", s.Composite, len(s.LegsUsed))
 	}
 
 	f := rowBySymbol(t, res, "FULL")
-	if len(f.LegsUsed) != 3 {
-		t.Fatalf("FULL legsUsed=%v, want all three at 5d", f.LegsUsed)
+	if !reflect.DeepEqual(f.LegsUsed, []string{LegLowVol, LegMom121}) {
+		t.Fatalf("FULL legsUsed=%v, want the two published legs at 5d", f.LegsUsed)
 	}
-	// FULL is the wildest and fattest (both legs 0) but the only momentum
-	// holder, so its momentum percentile is the single-member 0.5 → 1/6.
-	if math.Abs(f.Composite-0.5/3) > 1e-12 {
-		t.Fatalf("FULL composite=%.6f, want %.6f", f.Composite, 0.5/3)
+	// FULL is the wildest (low-vol leg 0) but the only momentum holder, so its
+	// momentum percentile is the single-member 0.5 → composite 0.25.
+	if math.Abs(f.Composite-0.25) > 1e-12 {
+		t.Fatalf("FULL composite=%.6f, want 0.25", f.Composite)
 	}
 }
 
@@ -234,8 +278,9 @@ func TestUnmeasuredLegNotWeighted(t *testing.T) {
 	b.Closes[0] = 120 // → prior-year loss
 	res := mustRank(t, H21d, []Input{a, b})
 
-	if got := CompositeLegs(H21d); !reflect.DeepEqual(got, []string{LegLiquidity, LegLowVol}) {
-		t.Fatalf("CompositeLegs(21d)=%v, want liquidity+lowVol only", got)
+	if got := CompositeLegs(H21d); !reflect.DeepEqual(got, []string{LegLowVol}) {
+		t.Fatalf("CompositeLegs(21d)=%v, want lowVol only (liquidity is retracted, "+
+			"momentum's 21d interval spans zero)", got)
 	}
 	for _, r := range res.Rows {
 		if r.Mom121Pct == nil {
@@ -368,45 +413,61 @@ func TestDeterminism(t *testing.T) {
 	}
 }
 
-// TestMeasuredEdgeConstants: the measured numbers ship exactly as recorded, no
-// leg is invented where nothing was measured, and the block is copy-safe.
+// TestMeasuredEdgeConstants: the PUBLISHED numbers ship exactly as re-derived,
+// no leg is invented where nothing survived, and the block is copy-safe.
+// TestConstantsAreRederivable in edge_test.go is what ties these to the script;
+// this pins the exact set so a leg cannot be added or dropped unnoticed.
 func TestMeasuredEdgeConstants(t *testing.T) {
 	want := map[Horizon]map[string][3]float64{
 		H5d: {
-			LegLiquidity: {1.46, 1.01, 1.86},
-			LegLowVol:    {1.56, 0.67, 2.54},
-			LegMom121:    {1.47, 0.67, 2.30},
+			LegLowVol: {1.10, 0.17, 2.06},
+			LegMom121: {1.24, 0.34, 2.13},
 		},
 		H21d: {
-			LegLiquidity: {2.50, 1.61, 3.37},
-			LegLowVol:    {2.80, 0.81, 4.66},
+			LegLowVol: {1.99, 0.17, 3.81},
 		},
-		H63d: {
-			LegLiquidity: {3.04, 1.85, 4.27},
-			LegLowVol:    {3.56, 0.14, 7.00},
-		},
+		H63d: {}, // nothing survived re-derivation at a quarterly horizon
 	}
 	for _, h := range Horizons {
 		legs := MeasuredEdge(h)
 		if len(legs) != len(want[h]) {
-			t.Fatalf("%s: %d legs, want %d", h, len(legs), len(want[h]))
+			t.Fatalf("%s: %d published legs, want %d (%v)", h, len(legs), len(want[h]), legs)
 		}
 		for _, l := range legs {
 			w, ok := want[h][l.Leg]
 			if !ok {
-				t.Fatalf("%s: unexpected leg %q — no measurement exists for it", h, l.Leg)
+				t.Fatalf("%s: unexpected leg %q — no surviving measurement exists for it", h, l.Leg)
 			}
 			if l.EdgePP != w[0] || l.CILow != w[1] || l.CIHigh != w[2] {
 				t.Fatalf("%s/%s = %+v, want %v", h, l.Leg, l, w)
 			}
-			if l.CILow <= 0 {
-				t.Fatalf("%s/%s CI touches zero (%v) — it would not be a measured edge", h, l.Leg, l)
+			if !l.Positive() {
+				t.Fatalf("%s/%s CI touches zero (%v) — it would not be a published edge", h, l.Leg, l)
+			}
+			if l.Status != StatusPublished {
+				t.Fatalf("%s/%s status=%q in the published block", h, l.Leg, l.Status)
+			}
+			if l.N <= 0 || l.DistinctDays <= 0 {
+				t.Fatalf("%s/%s ships without an N or a distinct-day count: %+v", h, l.Leg, l)
+			}
+		}
+		// Every leg is accounted for at every horizon: published + withheld
+		// must be the full set of three, so nothing can vanish silently.
+		if got := len(MeasuredEdge(h)) + len(WithheldEdge(h)); got != 3 {
+			t.Fatalf("%s: %d legs accounted for, want all 3", h, got)
+		}
+		for _, l := range WithheldEdge(h) {
+			if l.Reason == "" {
+				t.Fatalf("%s/%s is withheld without a stated reason", h, l.Leg)
+			}
+			if l.Status == StatusPublished {
+				t.Fatalf("%s/%s is in the withheld block with status published", h, l.Leg)
 			}
 		}
 	}
-	// Momentum is measured ONLY at 5d.
-	if got := CompositeLegs(H63d); reflect.DeepEqual(got, []string{}) || idxOf(got, LegMom121) >= 0 {
-		t.Fatalf("CompositeLegs(63d)=%v, must not include momentum", got)
+	// Momentum is published ONLY at 5d.
+	if idxOf(CompositeLegs(H21d), LegMom121) >= 0 || idxOf(CompositeLegs(H63d), LegMom121) >= 0 {
+		t.Fatal("momentum reached a composite beyond 5d")
 	}
 	// Mutating the returned copy must not touch the constants.
 	c := MeasuredEdge(H21d)
@@ -414,8 +475,13 @@ func TestMeasuredEdgeConstants(t *testing.T) {
 	if MeasuredEdge(H21d)[0].EdgePP == 99 {
 		t.Fatal("MeasuredEdge leaked its backing array")
 	}
-	if MeasuredEdge("7d") != nil {
-		t.Fatal("MeasuredEdge invented a leg for an unmeasured horizon")
+	w := WithheldEdge(H21d)
+	w[0].EdgePP = 99
+	if WithheldEdge(H21d)[0].EdgePP == 99 {
+		t.Fatal("WithheldEdge leaked its backing array")
+	}
+	if MeasuredEdge("7d") != nil || WithheldEdge("7d") != nil || AllMeasured("7d") != nil {
+		t.Fatal("the edge block invented a leg for an unmeasured horizon")
 	}
 }
 
@@ -436,29 +502,44 @@ func TestParseHorizonAndUnknownRank(t *testing.T) {
 }
 
 // TestCaveatCarriesHonestFraming keeps the non-negotiable framing in the
-// payload: relative-not-directional, the named public factors, and the IC
-// ceiling.
+// payload: relative-not-directional, the named public factors, the measured
+// ceiling, the retraction, and the name of the script that derives it all.
 func TestCaveatCarriesHonestFraming(t *testing.T) {
 	for _, want := range []string{
 		"same-day universe MEDIAN forward return",
 		"base rate is exactly 50%",
 		"LOW-VOLATILITY ANOMALY",
 		"SIZE/LIQUIDITY PREMIUM",
+		"RETRACTED",
 		"capacity-constrained",
 		"risk-compensation rather than free alpha",
-		"~0.03-0.07",
-		"51-54%",
+		"51.1-52.0%",
 		"realistic ceiling, not an oracle",
+		"Bonferroni",
 	} {
 		if !contains(Caveat, want) {
 			t.Errorf("Caveat missing %q", want)
 		}
 	}
-	if !contains(EvidenceNote, "968 stocks") || !contains(EvidenceNote, "NON-OVERLAPPING") {
-		t.Errorf("EvidenceNote lost its provenance: %q", EvidenceNote)
+	// The provenance claim H2 was raised about: the payload must name the
+	// script, and the script must be the one the constants are checked against.
+	for _, want := range []string{DerivationScript, "NON-OVERLAPPING", "1,900 trading days",
+		"one observation per (symbol, UTC-day)", "FORMATION DAYS"} {
+		if !contains(EvidenceNote, want) {
+			t.Errorf("EvidenceNote missing %q: %q", want, EvidenceNote)
+		}
+	}
+	// The correction itself ships; it is not left to a changelog nobody reads.
+	for _, want := range []string{"H2", "+2.50pp", "-1.65", "RETRACTED"} {
+		if !contains(RetractionNote, want) {
+			t.Errorf("RetractionNote missing %q: %q", want, RetractionNote)
+		}
 	}
 	if !contains(MethodNote, "point-in-time") {
 		t.Errorf("MethodNote lost the point-in-time statement: %q", MethodNote)
+	}
+	if !contains(GateNoMeasuredLeg, "no leg survives re-derivation") {
+		t.Errorf("GateNoMeasuredLeg lost its reason: %q", GateNoMeasuredLeg)
 	}
 }
 

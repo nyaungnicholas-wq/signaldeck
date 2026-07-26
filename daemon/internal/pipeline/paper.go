@@ -28,7 +28,13 @@ import (
 //   - if a transition is needed, fill at the OPEN of the FIRST daily bar STRICTLY
 //     AFTER the prediction's ts (never same-bar — the no-lookahead guarantee),
 //     provided that bar exists at/before the run's as-of clock;
-//   - pay a realistic per-side cost (papertrade.CostBpsFor by market).
+//   - price the fill through papertrade's execution model: the recorded price is
+//     the stored bar's OPEN exactly (so the trade log stays reconcilable against
+//     the bars), and the charge is the market's half-spread plus square-root-law
+//     market impact for that size against the name's average daily dollar
+//     volume, capped at a participation limit (a partial fill, not a pretend
+//     one). A symbol with no usable ADV estimate is SKIPPED, not filled at zero
+//     impact.
 // Then mark equity at the as-of clock and advance the strategy cursor.
 //
 // IDEMPOTENCY: the strategy's cursor stores the newest global bar ts it has
@@ -182,14 +188,26 @@ func (w *PaperTrader) buildStep(
 		if fillBar.Ts > asof {
 			continue
 		}
-		costBps := papertrade.CostBpsFor(marketByID[s.ID])
+
+		// Liquidity for the execution model: the name's trailing average daily
+		// DOLLAR volume, measured on bars at or before the fill (never after —
+		// the fill may not know how much traded on days it has not seen).
+		adv, err := w.advUSD(ctx, s.ID, fillBar.Ts)
+		if err != nil {
+			return apply, err
+		}
+		in := papertrade.ExecInputs{Bar: fillBar, Market: marketByID[s.ID], ADVUSD: adv}
 
 		if wantEnter {
 			// Size to a bounded slice of book equity, clamped to cash on hand.
 			budget := papertrade.PositionBudget(equity, cash)
-			f, qty, avgPx, ok := papertrade.EnterLong(budget, fillBar.Open, costBps)
+			f, qty, avgPx, ok := papertrade.EnterLong(budget, in)
 			if !ok {
-				continue // no cash slice to deploy (book already fully allocated)
+				// No cash slice to deploy, or no liquidity estimate to price the
+				// fill with. Skipping is the honest outcome: a fill we cannot
+				// cost would enter the book at the most favourable price
+				// available and never be questioned again.
+				continue
 			}
 			cash += f.CashDelta
 			apply.Opens = append(apply.Opens, store.PaperPosition{
@@ -200,7 +218,7 @@ func (w *PaperTrader) buildStep(
 				Reason: fmt.Sprintf("cal_prob %.3f >= long %.2f", pred.CalProb, papertrade.LongThreshold()),
 			})
 		} else { // wantExit
-			f, ok := papertrade.ExitLong(pos.Qty, fillBar.Open, costBps)
+			f, ok := papertrade.ExitLong(pos.Qty, in)
 			if !ok {
 				continue
 			}
@@ -227,6 +245,50 @@ func (w *PaperTrader) buildStep(
 	apply.EquityPositionsValue = posValue
 	apply.EquityValue = cash + posValue
 	return apply, nil
+}
+
+// advLookbackBars is how many daily bars the average-daily-dollar-volume
+// estimate is drawn from. A month of sessions is long enough to smooth a single
+// heavy print and short enough to track a name whose liquidity is changing.
+const advLookbackBars = 21
+
+// advUSD estimates a symbol's average daily DOLLAR volume from the bars at or
+// before ts. It is the denominator of both the market-impact and the capacity
+// calculation, so it must never look past the fill: using volume from days the
+// fill has not lived through would price the trade with information it could
+// not have had.
+//
+// It scans the most recent advLookbackBars*2 stored bars, which covers a fill
+// up to about a month behind the latest bar — far more slack than the worker
+// ever needs, since it fills on the first bar after a fresh prediction. Returns
+// 0 when that window holds no priced, non-zero-volume bar at or before ts; the
+// execution model treats that as "cannot price this fill" and the caller skips
+// the symbol rather than filling at zero impact. Failing to a skip, rather than
+// to a free fill, is the whole point.
+func (w *PaperTrader) advUSD(ctx context.Context, symbolID, ts int64) (float64, error) {
+	bars, err := w.St.LastBars(ctx, symbolID, md.TF1d, advLookbackBars*2)
+	if err != nil {
+		return 0, err
+	}
+	// LastBars returns ascending by ts; walk backwards so the window is the most
+	// recent advLookbackBars bars at or before ts, not the oldest ones.
+	var sum float64
+	var n int
+	for i := len(bars) - 1; i >= 0 && n < advLookbackBars; i-- {
+		b := bars[i]
+		if b.Ts > ts {
+			continue // strictly no lookahead
+		}
+		if b.Close <= 0 || b.Volume <= 0 {
+			continue
+		}
+		sum += b.Close * b.Volume
+		n++
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	return sum / float64(n), nil
 }
 
 // markPositions returns the marked-to-market value of the strategy's open

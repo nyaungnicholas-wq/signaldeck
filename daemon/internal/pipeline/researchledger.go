@@ -142,6 +142,16 @@ func (w *ResearchLedgerWorker) Run(ctx context.Context) (string, error) {
 		}
 	}
 
+	// The posterior column is documented as DERIVED, but until now it was only
+	// rewritten for hypotheses that had a grader — so a belief nobody grades
+	// (H006 and every frontier row) kept whatever number it was seeded with,
+	// forever, no matter what the evidence rules said afterwards. That is how a
+	// correction to the ledger fails to reach the page it is meant to correct.
+	// Recompute every chain each run: sixteen hypotheses, one query each.
+	if err := w.recomputeAll(ctx, now.Unix()); err != nil {
+		return "", fmt.Errorf("recompute all: %w", err)
+	}
+
 	if err := w.St.SetMeta(ctx, researchLedgerDayKey, day); err != nil {
 		return "", err
 	}
@@ -163,7 +173,32 @@ func (w *ResearchLedgerWorker) Run(ctx context.Context) (string, error) {
 	if seeded {
 		msg = "seeded Pressure chapter + open program; " + msg
 	}
+	// Refused assertions are DISCLOSED, not silently absorbed. A correction
+	// nobody can see is the same failure as the defect it corrects: the number
+	// on the page stops matching the number in the chain, and only one of them
+	// is written down.
+	if ids := w.assertedPromotions(ctx, hyps); len(ids) > 0 {
+		msg += fmt.Sprintf("; asserted FOR-weight refused on %v (n=0 rows carry no observation)", ids)
+	}
 	return msg, nil
+}
+
+// assertedPromotions names the hypotheses whose chains contain an asserted row
+// arguing FOR the belief — the rows whose weight rl.Posterior refuses. Returned
+// sorted so the run summary is stable between reads.
+func (w *ResearchLedgerWorker) assertedPromotions(ctx context.Context, hyps []rl.Hypothesis) []string {
+	var out []string
+	for _, h := range hyps {
+		chain, err := w.St.LedgerEvidence(ctx, h.ID)
+		if err != nil {
+			continue
+		}
+		if rl.Breakdown(h.Prior, rl.EffectiveChain(chain)).RefusedRows > 0 {
+			out = append(out, h.ID)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ── the tradability gate: stating what each belief would have to trade ───
@@ -515,7 +550,9 @@ func (w *ResearchLedgerWorker) recompute(ctx context.Context, hypID string, regi
 	}
 	// EffectiveChain dedupes static-state attacks (single-regime) to the
 	// latest row so an unchanged concern is levied once, not once per grade.
-	post := rl.Posterior(hyp.Prior, rl.EffectiveChain(chain))
+	// Breakdown, not Posterior, so the number written is the one that excludes
+	// the FOR-weight of asserted (n=0) rows — see rl.AssertedMaxBF.
+	post := rl.Breakdown(hyp.Prior, rl.EffectiveChain(chain)).Posterior
 	reps, contras := rl.Counters(chain)
 	// StatusWithGates, not Status: promotion also requires the hypothesis to
 	// have been stated as a position and that position graded net of costs.
@@ -524,6 +561,26 @@ func (w *ResearchLedgerWorker) recompute(ctx context.Context, hypID string, regi
 		TradableForm: hyp.TradableForm, EconomicTest: hyp.EconomicTest,
 	})
 	return w.St.UpdateLedgerDerived(ctx, hypID, post, status, reps, contras, regimes, now)
+}
+
+// recomputeAll re-derives every hypothesis's posterior/status/counters from its
+// evidence chain, preserving the stored regime count (regimes accrue from
+// graded windows and are not re-derivable from the chain alone).
+func (w *ResearchLedgerWorker) recomputeAll(ctx context.Context, now int64) error {
+	hyps, err := w.St.LedgerHypotheses(ctx)
+	if err != nil {
+		return err
+	}
+	for _, h := range hyps {
+		regimes := h.Regimes
+		if regimes < 1 {
+			regimes = 1
+		}
+		if err := w.recompute(ctx, h.ID, regimes, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *ResearchLedgerWorker) ledgerHyp(ctx context.Context, id string) (rl.Hypothesis, bool, error) {
@@ -628,6 +685,13 @@ func (w *ResearchLedgerWorker) seedOnce(ctx context.Context, now int64) (bool, e
 				Prior:     0.50, MaxEdge: rl.DefaultMaxEdge,
 				OpenQuestions: []string{"Does the growth continue past 1w (2w/1m), or peak?"},
 			},
+			// This row is the reason rl.AssertedMaxBF exists. It carries no k/n,
+			// so nothing can re-derive its 3, and until 2026-07-26 it was the
+			// ENTIRE evidence for H006 — a published posterior of 0.75 resting
+			// on one typed number. The row stays in the chain verbatim (deleting
+			// evidence is worse than refusing it) and the ledger now declines its
+			// FOR-weight, so H006 reads at its 0.50 prior until something grades
+			// it. Do not "fix" this by inventing a k/n for it.
 			ev: []seedEv{
 				{kind: rl.KindManual, bf: 3,
 					note: "STATED JUDGMENT (BF=3 is a declared weak-moderate weight, not a computed statistic): inverse edge -3.5pp->+5.2pp and PF 1.09->1.80 from 1d to 1w — monotone over only two points, same period"},

@@ -589,7 +589,24 @@ func forwardReturnFor(k Kind, conv float64) (pct float64, ok bool) {
 		// The re-validation split the sub-0.5 region into 0.00-0.25 (+0.41%) and
 		// 0.25-0.50 (+0.51%); the band served here is the LOWER of the two,
 		// because a share-weighted blend of them was never measured.
-		t = bands{0.41, 0.58, 0.79, -0.39}
+		//
+		// TOP BAND CORRECTED 2026-07-26 from -0.39% to -0.76%. An adversarial
+		// review claimed the disclosed downside understated the measured loss by
+		// 5x (-2.05%). An independent replication run here against the live bars
+		// — 976 stock symbols, conviction >= 0.9, NON-OVERLAPPING 21-session
+		// forward windows, one call per (symbol, day), n = 18,850 — measured
+		// -0.76% with a 95% interval of [-1.19%, -0.32%], alongside a 95.17%
+		// persistence accuracy that corroborates the accuracy ladder.
+		//
+		// So the reviewer's DIRECTION replicates and their MAGNITUDE does not:
+		// -2.05% sits outside this interval, and their method was not stated, so
+		// it could not be reproduced. The served number is the measurement, not
+		// the worse unreproduced figure and not the kinder original — adopting an
+		// unverified number because it flatters nobody would be the same failure
+		// as keeping one that flatters us. The interval is what to quote; the
+		// point estimate is a mean over a right-skewed distribution whose median
+		// is only -0.05%, i.e. the loss lives in a tail, not in the typical call.
+		t = bands{0.41, 0.58, 0.79, -0.76}
 	case KindTrend63:
 		// Only the top band was reported at the quarterly horizon.
 		t = bands{nm, nm, nm, -1.30}
