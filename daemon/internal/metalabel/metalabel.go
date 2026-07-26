@@ -72,6 +72,13 @@ const (
 	// its measured expectancy is reported as meaningful. A filter that takes
 	// four trades and wins three has told us nothing.
 	MinTakenTrades = 30
+	// MinTakenDays is the floor on DISTINCT days those trades span. It is the
+	// gate that actually binds: trade count is inflated by cross-sectional
+	// clustering (every symbol shares the day's market move) while day count
+	// is not. This platform has twice shipped a false result by counting
+	// clustered rows as independent, so the day floor is enforced separately
+	// and cannot be satisfied by simply trading more symbols.
+	MinTakenDays = 20
 	// DefaultThreshold is the meta-probability above which a candidate is taken.
 	DefaultThreshold = 0.55
 )
@@ -99,7 +106,16 @@ type Grade struct {
 	PrimaryExpectancy float64 `json:"primaryExpectancy"` // mean cost-net return per decision offered
 
 	// Filtered: what taking only the meta-model's accepted calls produced.
-	TakenN            int     `json:"takenN"`
+	TakenN int `json:"takenN"`
+	// TakenDays is how many DISTINCT UTC days the accepted trades fall on, and
+	// it — not TakenN — is the honest sample size. On any given day every
+	// symbol shares one market move, so a thousand same-day trades are closer
+	// to one observation than to a thousand. Measured live on this platform,
+	// 11,811 symbol-day rows spanned just 22 distinct days across 1,050
+	// symbols; a filter selecting the best few percent of those is largely
+	// learning WHICH DAYS were good days, which does not generalise forward.
+	TakenDays         int     `json:"takenDays"`
+	TotalDays         int     `json:"totalDays"`         // distinct days among all graded candidates
 	TakeRate          float64 `json:"takeRate"`          // fraction of candidates accepted
 	FilteredPrecision float64 `json:"filteredPrecision"` // precision among taken
 	// FilteredExpectancy is per DECISION OFFERED, not per trade taken — a
@@ -185,17 +201,23 @@ func Evaluate(samples []Sample, folds int, cost, threshold float64) (Grade, erro
 	// stays divided by ALL decisions offered so trading less cannot flatter it.
 	var takenHits int
 	var takenSum float64
+	takenDays := map[int64]struct{}{}
+	allDays := map[int64]struct{}{}
 	for _, i := range scored {
+		c := cands[i]
+		allDays[c.Ts/86400] = struct{}{}
 		if probs[i] < threshold {
 			continue
 		}
-		c := cands[i]
 		g.TakenN++
+		takenDays[c.Ts/86400] = struct{}{}
 		takenSum += costNetReturn(c, cost)
 		if metaLabel(c, cost) == 1 {
 			takenHits++
 		}
 	}
+	g.TakenDays = len(takenDays)
+	g.TotalDays = len(allDays)
 	g.TakeRate = float64(g.TakenN) / float64(len(scored))
 	if g.TakenN > 0 {
 		g.FilteredPrecision = float64(takenHits) / float64(g.TakenN)
@@ -220,6 +242,14 @@ func judge(g Grade) (verdict, reason string) {
 		return VerdictInsufficient, "the filter took only " + itoa(g.TakenN) + " of " +
 			itoa(g.N) + " candidates — below the " + itoa(MinTakenTrades) +
 			"-trade floor, so its measured expectancy is not yet distinguishable from luck"
+	}
+	if g.TakenDays < MinTakenDays {
+		return VerdictInsufficient, "the filter's " + itoa(g.TakenN) + " trades span only " +
+			itoa(g.TakenDays) + " distinct days (of " + itoa(g.TotalDays) +
+			" available) — below the " + itoa(MinTakenDays) + "-day floor. Every symbol " +
+			"shares the same market move on a given day, so same-day trades are not " +
+			"independent evidence; a filter measured on this few days is mostly learning " +
+			"WHICH DAYS were good, which does not generalise forward"
 	}
 	if g.ExpectancyLift <= 0 {
 		r := "the filter did not improve expectancy (" + pct(g.FilteredExpectancy) +

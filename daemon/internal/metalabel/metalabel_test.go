@@ -83,8 +83,10 @@ func TestPrecisionUpButExpectancyDownIsRejected(t *testing.T) {
 		PrimaryPrecision:   0.50,
 		PrimaryExpectancy:  0.004,
 		TakenN:             120,
+		TakenDays:          40, // ample sample, so the verdict turns purely on expectancy
+		TotalDays:          60,
 		TakeRate:           0.30,
-		FilteredPrecision:  0.72, // much more often right
+		FilteredPrecision:  0.72,  // much more often right
 		FilteredExpectancy: 0.001, // but worse per decision offered
 		PrimaryHasEdge:     true,
 	}
@@ -107,6 +109,8 @@ func TestThinFilterIsInsufficientNotEarned(t *testing.T) {
 		N:                  400,
 		PrimaryExpectancy:  0.002,
 		TakenN:             MinTakenTrades - 1,
+		TakenDays:          40,
+		TotalDays:          60,
 		FilteredExpectancy: 0.010,
 		PrimaryHasEdge:     true,
 	}
@@ -117,6 +121,37 @@ func TestThinFilterIsInsufficientNotEarned(t *testing.T) {
 	}
 	if reason == "" {
 		t.Fatal("reason required")
+	}
+}
+
+// The gate the LIVE data forced into existence. Many trades concentrated on a
+// handful of days are not independent evidence: on any given day every symbol
+// shares one market move. Measured on this platform, 11,811 symbol-day rows
+// spanned just 22 distinct days across 1,050 symbols, and a filter taking the
+// best 4.8% showed a +17.7pp precision gain that is mostly "which days were
+// good days". Trade count alone must NOT be able to satisfy the gate.
+func TestDayClusteredTradesAreInsufficient(t *testing.T) {
+	g := Grade{
+		N:                  11811,
+		PrimaryExpectancy:  0.002,
+		TakenN:             567, // far above the trade floor
+		TakenDays:          8,   // but concentrated on 8 days
+		TotalDays:          22,
+		FilteredExpectancy: 0.006,
+		PrimaryHasEdge:     true,
+	}
+	g.ExpectancyLift = g.FilteredExpectancy - g.PrimaryExpectancy
+	verdict, reason := judge(g)
+	if verdict != VerdictInsufficient {
+		t.Fatalf("verdict = %q, want %q — 567 trades on 8 days is not 567 observations", verdict, VerdictInsufficient)
+	}
+	if !contains(reason, "distinct days") {
+		t.Fatalf("reason must name day clustering, got: %s", reason)
+	}
+	// And the same filter spread across enough days must be allowed through.
+	g.TakenDays = MinTakenDays
+	if v, _ := judge(g); v != VerdictEarned {
+		t.Fatalf("verdict = %q, want %q once the day floor is met", v, VerdictEarned)
 	}
 }
 
