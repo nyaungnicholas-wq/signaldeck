@@ -25,16 +25,24 @@
 //
 // A per-symbol model is only trusted when the symbol has earned it:
 //
-//	personal  n >= MinPersonal of the symbol's OWN resolved outcomes for this
-//	          horizon  -> use its own weights + its own calibration;
+//	personal  n >= MinPersonal rows of the symbol's OWN resolved outcomes for
+//	          this horizon, spanning >= MinPersonalDays DISTINCT UTC DAYS
+//	          -> use its own weights + its own calibration;
 //	regime    otherwise -> the caller falls back to the global per-regime
 //	          learned weights (the symbol's current regime cell);
 //	global    otherwise -> the pooled global weights;
 //	static    otherwise -> equal-weight prior.
 //
-// Below MinPersonal the model is still stored (so the UI can show "still
-// learning n/40"), but its weights/calibration are NOT marked personal and the
-// live predictor must not use them — it uses the global fallbacks instead.
+// Below either floor the model is still stored (so the UI can show "still
+// learning n/30 days"), but its weights/calibration are NOT marked personal and
+// the live predictor must not use them — it uses the global fallbacks instead.
+//
+// # Rows are not observations
+//
+// The predictor runs every ~10 minutes against daily labels, so a symbol
+// accrues ~12 rows per symbol-day and a 40-ROW floor is roughly three market
+// moves. Every floor here counts DISTINCT UTC DAYS; the row floors are kept
+// only as a secondary bound on raw evidence.
 package symbolagent
 
 import (
@@ -46,14 +54,31 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 )
 
-// MinPersonal is the number of a symbol's OWN resolved outcomes (for one
-// horizon) required before its personally-learned weights + calibration are
-// trusted. Mirrors adaptive.MinCellSamples / ensemble.MinCalibrationPairs:
-// below this, apparent per-symbol edge is indistinguishable from noise, so the
-// agent falls back to the (much larger-sampled) global model and is labeled
-// "still learning". Default 40 (a touch above the n>=30 calibration/weight
-// floors so a personal model has real margin over noise before it's used).
+// MinPersonal is the number of a symbol's OWN resolved ROWS (for one horizon)
+// required before its personally-learned weights + calibration are trusted.
+// Mirrors adaptive.MinCellSamples / ensemble.MinCalibrationPairs, and like
+// them it bounds RAW evidence only — it is not a sample size. MinPersonalDays
+// is the floor that binds.
 const MinPersonal = 40
+
+// MinPersonalDays is the number of DISTINCT UTC DAYS the symbol's own resolved
+// outcomes must span before its personal weights + calibration are trusted.
+//
+// MinPersonal counts ROWS, and rows are not observations: the predictor runs
+// every 10 minutes against daily labels, so a symbol accumulates ~12 rows per
+// symbol-day (measured live: 158,204 resolved rows are 13,058 symbol-days).
+// 1,045 of 1,050 symbols cleared the 40-ROW floor for the 1d horizon on a
+// median of 12 distinct days — a personal model, the strongest per-symbol
+// claim this platform makes, bought with about a fortnight of evidence.
+//
+// 30 days preserves the doctrine MinPersonal was chosen under — a personal
+// model needs real margin over the shared floors (adaptive.MinCellDays and
+// ensemble.MinCalibrationDays, both 20) before it displaces the far
+// larger-sampled global model. 30 distinct days is roughly six trading weeks,
+// and at n=30 the standard error of a hit rate under the no-skill null is
+// 0.5/sqrt(30) = 0.091 — so a personal edge must exceed ~9 points before one
+// standard error separates it from a coin flip.
+const MinPersonalDays = 30
 
 // Tier names the evidence tier the active model rests on (most→least specific).
 const (
@@ -89,7 +114,11 @@ func (c Calibration) Map() func(float64) float64 {
 
 // Model is one symbol+horizon agent: what it learned from its own history.
 type Model struct {
-	NSamples    int                `json:"nSamples"`    // the symbol's own resolved outcomes, this horizon
+	NSamples int `json:"nSamples"` // the symbol's own resolved ROWS, this horizon
+	// NDays is how many DISTINCT UTC DAYS those rows span — the honest sample
+	// size, and what the graduation gate is decided on. Not persisted as a
+	// column; Personality carries it to the UI.
+	NDays       int                `json:"nDays"`
 	Tier        string             `json:"tier"`        // personal|regime|global|static
 	Weights     map[string]float64 `json:"weights"`     // personal blend weights (nil unless personal)
 	Calibration Calibration        `json:"calibration"` // personal calibration (identity unless personal)
@@ -98,10 +127,11 @@ type Model struct {
 }
 
 // Learn computes a symbol's model from its OWN labeled examples plus the tier
-// of global fallback available to it. It never fabricates: with < MinPersonal
-// samples the returned model carries the measured skill (so the UI shows what
-// it has) but Tier is the best AVAILABLE fallback and Weights is nil /
-// Calibration is identity, so the predictor uses the global model.
+// of global fallback available to it. It never fabricates: below MinPersonal
+// rows OR MinPersonalDays distinct days the returned model carries the measured
+// skill (so the UI shows what it has) but Tier is the best AVAILABLE fallback
+// and Weights is nil / Calibration is identity, so the predictor uses the
+// global model.
 //
 //   - examples:      the symbol's own resolved LabeledFeatures → adaptive.Example
 //     (legs + regime + up + fwdReturn), built by the caller via
@@ -118,6 +148,7 @@ type Model struct {
 func Learn(examples []adaptive.Example, rawPairs []ensemble.Pair, regimeLearned, globalLearned bool) Model {
 	m := Model{
 		NSamples: len(examples),
+		NDays:    adaptive.DistinctDays(examples),
 		Skill:    map[string]Skill{},
 	}
 
@@ -143,11 +174,18 @@ func Learn(examples []adaptive.Example, rawPairs []ensemble.Pair, regimeLearned,
 	}
 
 	// Tier gate. A symbol EARNS a personal model at MinPersonal of its own
-	// resolved outcomes AND only if that history actually yielded weights that
-	// beat the coin flip (cell.Weights non-empty — the adaptive honesty gate).
+	// resolved outcomes spanning MinPersonalDays DISTINCT UTC DAYS, AND only if
+	// that history actually yielded weights that survived the adaptive panel's
+	// shrinkage and multiplicity correction (cell.Weights non-empty).
 	// Otherwise fall back down the same chain the global picker uses.
+	//
+	// The day floor is the one that binds, and it is not redundant with the row
+	// floor: the predictor writes ~12 rows per symbol-day, so 40 rows is about
+	// three market moves. It is also not redundant with adaptive.MinCellDays —
+	// that floor (20) qualifies the WEIGHTS; this one (30) qualifies the claim
+	// that this symbol needs its own model at all.
 	switch {
-	case len(examples) >= MinPersonal && len(cell.Weights) > 0:
+	case len(examples) >= MinPersonal && m.NDays >= MinPersonalDays && len(cell.Weights) > 0:
 		m.Tier = TierPersonal
 		m.Weights = cell.Weights
 		if kx, ky, ok := ensemble.CalibrateKnots(rawPairs); ok {
@@ -177,8 +215,12 @@ func personality(m Model) string {
 			TierGlobal: "global model",
 			TierStatic: "equal-weight prior",
 		}[m.Tier]
-		return fmt.Sprintf("Still learning (%d/%d own outcomes) — using the %s until this symbol has enough of its own resolved calls.",
-			m.NSamples, MinPersonal, fallback)
+		// Progress is stated in DAYS because days are what the gate counts:
+		// quoting "114/40 outcomes" while withholding the model reads as a
+		// contradiction, and it was the row count that was misleading in the
+		// first place.
+		return fmt.Sprintf("Still learning (%d/%d own-outcome days, %d graded rows) — using the %s until this symbol has enough of its own resolved calls.",
+			m.NDays, MinPersonalDays, m.NSamples, fallback)
 	}
 
 	// Personal: lead with the strongest measured component, then flag the ones
@@ -205,7 +247,7 @@ func personality(m Model) string {
 	})
 
 	if len(rs) == 0 {
-		return fmt.Sprintf("Personal model (%d own outcomes), but no component shows a measurable edge yet.", m.NSamples)
+		return fmt.Sprintf("Personal model (%d own-outcome days, %d graded rows), but no component shows a measurable edge yet.", m.NDays, m.NSamples)
 	}
 
 	lead := rs[0]
@@ -218,7 +260,7 @@ func personality(m Model) string {
 		}
 		b += "."
 	} else {
-		b = fmt.Sprintf("Personal model (%d own outcomes); no component beats a coin flip yet — leaning on the blend.", m.NSamples)
+		b = fmt.Sprintf("Personal model (%d own-outcome days, %d graded rows); no component beats a coin flip yet — leaning on the blend.", m.NDays, m.NSamples)
 	}
 
 	// Name components that add nothing (present, but no edge over 50/50).

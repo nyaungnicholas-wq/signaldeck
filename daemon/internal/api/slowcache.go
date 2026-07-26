@@ -28,6 +28,53 @@ import (
 	"time"
 )
 
+// ── C6 admission control and entry bounds (2026-07-26 hostile review) ────────
+//
+// The whole read path shares FOUR connections (store.go:53) and a cold build
+// holds one for 22-45s. With the key taken straight from the query string
+// (see cachekey.go) five requests carrying five junk parameters took every
+// connection and the daemon stopped answering, /api/health included. Nothing
+// capped how many cold builds could run at once, and nothing ever deleted an
+// entry, so each junk key also leaked its payload for the life of the process.
+//
+// Whitelisted keys stop an unknown PARAMETER from minting an entry. These two
+// bounds stop a flood of otherwise-legal keys from doing the same thing, and
+// they apply to every cache in the package — including the routes whose keys
+// are still built from raw input, which is why they live here and not in the
+// handlers.
+const (
+	// maxConcurrentColdBuilds leaves half the read pool free no matter what is
+	// rebuilding, so hits and health checks keep answering during a cold build.
+	maxConcurrentColdBuilds = 2
+	// coldBuildWait is how long a caller queues for a slot before being told to
+	// retry. A fast 503 is a better answer than a request parked on a
+	// connection the rest of the daemon needs.
+	coldBuildWait = 5 * time.Second
+	// maxCacheEntries bounds each entry map. Far above the legitimate key space
+	// of any route here (horizon x market x limit), far below the point where a
+	// flood of distinct keys is worth memory.
+	maxCacheEntries = 64
+)
+
+var coldBuildSlots = make(chan struct{}, maxConcurrentColdBuilds)
+
+// acquireColdSlot queues up to coldBuildWait for permission to run a cold
+// build. A caller that gets one MUST releaseColdSlot when the build returns.
+func acquireColdSlot(ctx context.Context) bool {
+	t := time.NewTimer(coldBuildWait)
+	defer t.Stop()
+	select {
+	case coldBuildSlots <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return false
+	}
+}
+
+func releaseColdSlot() { <-coldBuildSlots }
+
 // swrCache caches one built payload per key (e.g. per horizon).
 type swrCache struct {
 	mu  sync.Mutex
@@ -37,9 +84,39 @@ type swrCache struct {
 
 type swrEntry struct {
 	builtAt    time.Time
+	usedAt     time.Time // last read; drives LRU eviction
 	payload    map[string]any
 	rebuilding bool          // a stale-refresh goroutine is in flight
 	building   chan struct{} // non-nil while a COLD build is in flight; closed on completion
+}
+
+// evictLRULocked makes room for a new entry by dropping the least recently
+// USED idle one — LRU rather than oldest-built so the hot default entry the
+// warmer keeps alive survives a flood of one-shot junk keys.
+//
+// An entry with a build in flight is never evicted: waiters already hold a
+// pointer to it, and replacing it would let the next caller start a SECOND
+// build for the same key, which is exactly the stampede the single-flight
+// exists to prevent. The cold-build ceiling bounds how many entries can be in
+// that state at once, so this can never fail to make progress for long.
+func (c *swrCache) evictLRULocked() {
+	for len(c.ent) >= maxCacheEntries {
+		var oldestKey string
+		var oldest time.Time
+		found := false
+		for k, e := range c.ent {
+			if e.building != nil || e.rebuilding {
+				continue
+			}
+			if !found || e.usedAt.Before(oldest) {
+				oldestKey, oldest, found = k, e.usedAt, true
+			}
+		}
+		if !found {
+			return
+		}
+		delete(c.ent, oldestKey)
+	}
 }
 
 func newSWRCache(ttl time.Duration) *swrCache {
@@ -55,9 +132,11 @@ func (c *swrCache) get(ctx context.Context, key string,
 	c.mu.Lock()
 	e := c.ent[key]
 	if e == nil {
+		c.evictLRULocked()
 		e = &swrEntry{}
 		c.ent[key] = e
 	}
+	e.usedAt = time.Now()
 
 	// Warm entry: serve immediately; when stale, kick ONE detached refresh.
 	if e.payload != nil {
@@ -65,6 +144,18 @@ func (c *swrCache) get(ctx context.Context, key string,
 		if time.Since(e.builtAt) >= c.ttl && !e.rebuilding {
 			e.rebuilding = true
 			go func() {
+				// Background refreshes read the same four connections a cold
+				// build does, so they queue behind the same ceiling. Losing the
+				// slot just abandons this refresh — the stale copy keeps serving
+				// and the next stale hit tries again.
+				if !acquireColdSlot(context.Background()) {
+					c.mu.Lock()
+					e.rebuilding = false
+					c.mu.Unlock()
+					return
+				}
+				defer releaseColdSlot()
+
 				np, err := build(context.Background())
 				c.mu.Lock()
 				e.rebuilding = false
@@ -100,6 +191,20 @@ func (c *swrCache) get(ctx context.Context, key string,
 	ch := make(chan struct{})
 	e.building = ch
 	c.mu.Unlock()
+
+	// Admission control before the build, not before the lookup: a hit never
+	// touches this, so a queue of cold builds cannot delay a warm read.
+	if !acquireColdSlot(ctx) {
+		c.mu.Lock()
+		e.building = nil
+		c.mu.Unlock()
+		close(ch)
+		return nil, errors.New("cache build capacity exhausted; retry")
+	}
+	// Deferred, not straight-line: a panicking build already poisons its own
+	// entry, but a leaked slot would shrink the ceiling for every cache in the
+	// process until a restart.
+	defer releaseColdSlot()
 
 	p, err := build(ctx)
 	c.mu.Lock()
@@ -143,9 +248,34 @@ type swrBodyCache struct {
 
 type swrBodyEntry struct {
 	builtAt    time.Time
+	usedAt     time.Time // last read; drives LRU eviction
 	body       []byte
 	rebuilding bool
 	building   chan struct{}
+}
+
+// evictLRULocked bounds the entry map. Same contract as swrCache's: least
+// recently USED idle entry first, entries mid-build are untouchable. This map
+// is the one the hostile review measured leaking ~12 KB per junk key, because
+// /api/composite/top and /api/movers keyed it on the raw query string.
+func (c *swrBodyCache) evictLRULocked() {
+	for len(c.ent) >= maxCacheEntries {
+		var oldestKey string
+		var oldest time.Time
+		found := false
+		for k, e := range c.ent {
+			if e.building != nil || e.rebuilding {
+				continue
+			}
+			if !found || e.usedAt.Before(oldest) {
+				oldestKey, oldest, found = k, e.usedAt, true
+			}
+		}
+		if !found {
+			return
+		}
+		delete(c.ent, oldestKey)
+	}
 }
 
 func newSWRBodyCache(ttl time.Duration) *swrBodyCache {
@@ -170,9 +300,11 @@ func (c *swrBodyCache) serve(key string, w http.ResponseWriter, r *http.Request,
 	c.mu.Lock()
 	e := c.ent[key]
 	if e == nil {
+		c.evictLRULocked()
 		e = &swrBodyEntry{}
 		c.ent[key] = e
 	}
+	e.usedAt = time.Now()
 
 	if e.body != nil {
 		body := e.body
@@ -180,6 +312,17 @@ func (c *swrBodyCache) serve(key string, w http.ResponseWriter, r *http.Request,
 			e.rebuilding = true
 			bg := r.Clone(context.Background())
 			go func() {
+				// Same ceiling as a cold build: a background refresh reads the
+				// same connections. Losing the slot abandons this refresh and
+				// keeps serving the stale body.
+				if !acquireColdSlot(context.Background()) {
+					c.mu.Lock()
+					e.rebuilding = false
+					c.mu.Unlock()
+					return
+				}
+				defer releaseColdSlot()
+
 				nb := swrRender(bg, h)
 				c.mu.Lock()
 				e.rebuilding = false
@@ -222,6 +365,19 @@ func (c *swrBodyCache) serve(key string, w http.ResponseWriter, r *http.Request,
 	ch := make(chan struct{})
 	e.building = ch
 	c.mu.Unlock()
+
+	// Admission control before the build, never before the lookup — a cache
+	// hit must stay free while cold builds queue.
+	if !acquireColdSlot(r.Context()) {
+		c.mu.Lock()
+		e.building = nil
+		c.mu.Unlock()
+		close(ch)
+		w.Header().Set("Retry-After", "5")
+		httpErr(w, 503, "cache build capacity exhausted; retry")
+		return
+	}
+	defer releaseColdSlot() // see swrCache.get: never leak a process-wide slot
 
 	// Build inline for the cold caller, streaming to them directly while a
 	// recorder tees the body for the cache.

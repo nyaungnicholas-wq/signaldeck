@@ -30,14 +30,17 @@ func approx(a, b, eps float64) bool { return math.Abs(a-b) <= eps }
 
 // --- Covariance -------------------------------------------------------------
 
-func TestCovariance(t *testing.T) {
+// TestSampleCovariance pins the RAW estimator's arithmetic. Covariance() is
+// now the Ledoit-Wolf shrinkage estimator (see shrinkage_test.go); this test
+// follows the unregularised math to SampleCovariance, where it still belongs.
+func TestSampleCovariance(t *testing.T) {
 	// Two series with hand-computed sample (n-1) covariance.
 	//   A = [1,2,3]  mean 2  dev [-1,0,1]
 	//   B = [1,3,2]  mean 2  dev [-1,1,0]
 	//   cov_AA = (1+0+1)/2 = 1
 	//   cov_BB = (1+1+0)/2 = 1
 	//   cov_AB = (1+0+0)/2 = 0.5
-	got := Covariance([][]float64{{1, 2, 3}, {1, 3, 2}})
+	got := SampleCovariance([][]float64{{1, 2, 3}, {1, 3, 2}})
 	want := [][]float64{{1, 0.5}, {0.5, 1}}
 	if len(got) != 2 || len(got[0]) != 2 {
 		t.Fatalf("shape = %dx?, want 2x2", len(got))
@@ -55,7 +58,7 @@ func TestCovariance(t *testing.T) {
 	}
 
 	// Degenerate: fewer than two observations -> all-zero, no panic/NaN.
-	z := Covariance([][]float64{{1}, {2}})
+	z := SampleCovariance([][]float64{{1}, {2}})
 	if z[0][0] != 0 || z[0][1] != 0 || z[1][1] != 0 {
 		t.Errorf("short-series covariance = %v, want all zeros", z)
 	}
@@ -176,9 +179,13 @@ func TestMinVariance(t *testing.T) {
 	}
 }
 
-// --- MaxSharpe --------------------------------------------------------------
+// --- TangencyWithViews ------------------------------------------------------
 
-func TestMaxSharpe(t *testing.T) {
+// The tangency solver is unchanged and still lives here; only its entry point
+// moved. MaxSharpe no longer tilts on the means it is handed (see
+// shrinkage_test.go), so the analytical-tangency assertions belong to the
+// function that still promises them.
+func TestTangencyWithViews(t *testing.T) {
 	// (3) Asset A: higher expected return AND lower vol than B, uncorrelated.
 	// Long-only tangency (rf=0) ∝ Σ⁻¹μ = (μ0/σ0², μ1/σ1²) = (3.75, 0.3125)
 	// -> ~ (0.923, 0.077), so A should dominate.
@@ -187,7 +194,7 @@ func TestMaxSharpe(t *testing.T) {
 	cov := [][]float64{{0.0004, 0}, {0, 0.0016}}
 	rf := 0.0
 
-	r := MaxSharpe(symbols, expRet, cov, rf)
+	r := TangencyWithViews(symbols, expRet, cov, rf)
 
 	if r.Method != MethodMaxSharpe {
 		t.Fatalf("Method = %q, want %q (Note=%q)", r.Method, MethodMaxSharpe, r.Note)
@@ -220,24 +227,27 @@ func TestMaxSharpe(t *testing.T) {
 	if !approx(r.Vol, wantVol, tol) {
 		t.Errorf("Vol = %v, want %v", r.Vol, wantVol)
 	}
-	wantSharpe := sharpe(r.ExpRet, r.Vol, rf)
-	if !approx(r.Sharpe, wantSharpe, tol) {
-		t.Errorf("Sharpe = %v, want %v", r.Sharpe, wantSharpe)
+	if r.SharpeInSample == nil {
+		t.Fatal("SharpeInSample withheld for inputs that can form one")
 	}
-	if r.Sharpe <= 0 {
-		t.Errorf("Sharpe = %v, want positive for these inputs", r.Sharpe)
+	wantSharpe := sharpe(r.ExpRet, r.Vol, rf)
+	if !approx(*r.SharpeInSample, wantSharpe, tol) {
+		t.Errorf("SharpeInSample = %v, want %v", *r.SharpeInSample, wantSharpe)
+	}
+	if *r.SharpeInSample <= 0 {
+		t.Errorf("SharpeInSample = %v, want positive for these inputs", *r.SharpeInSample)
 	}
 
 	// The optimized Sharpe must beat both single-asset Sharpes' worse pick and
 	// the equal-weight portfolio (sanity that ascent actually improved things).
 	ew := equalWeights(2)
 	ewSharpe := sharpeAt(ew, expRet, cov, rf)
-	if r.Sharpe < ewSharpe-tol {
-		t.Errorf("optimized Sharpe %v worse than equal-weight %v", r.Sharpe, ewSharpe)
+	if *r.SharpeInSample < ewSharpe-tol {
+		t.Errorf("optimized Sharpe %v worse than equal-weight %v", *r.SharpeInSample, ewSharpe)
 	}
 
 	// Degenerate: zero-variance covariance -> graceful equal-weight fallback.
-	deg := MaxSharpe(symbols, expRet, [][]float64{{0, 0}, {0, 0}}, rf)
+	deg := TangencyWithViews(symbols, expRet, [][]float64{{0, 0}, {0, 0}}, rf)
 	if deg.Method != MethodEqualWeightFallback {
 		t.Errorf("zero-variance Method = %q, want %q", deg.Method, MethodEqualWeightFallback)
 	}
@@ -372,9 +382,10 @@ func TestPipelineFromReturns(t *testing.T) {
 	}
 
 	expRet := []float64{0.001, 0.0008, 0.0012}
+	// MaxSharpe is the no-view default: it must NOT tilt on these sample means.
 	ms := MaxSharpe(symbols, expRet, cov, 0.0)
-	if ms.Method != MethodMaxSharpe {
-		t.Errorf("MaxSharpe method = %q, want %q (Note=%q)", ms.Method, MethodMaxSharpe, ms.Note)
+	if ms.Method != MethodMinVarianceNoView {
+		t.Errorf("MaxSharpe method = %q, want %q (Note=%q)", ms.Method, MethodMinVarianceNoView, ms.Note)
 	}
 	if hasNaNorInf(ms.Weights) || !approx(sumWeights(ms.Weights), 1, tol) {
 		t.Errorf("MaxSharpe weights bad: %v", ms.Weights)

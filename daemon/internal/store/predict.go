@@ -101,7 +101,15 @@ func (s *Store) ResolvePrediction(ctx context.Context, symbolID int64, h md.Hori
 	return err
 }
 
-// ResolvedPredictionPairs returns (prob, up) pairs for the calibration curve.
+// ResolvedPredictionPairs returns (PUBLISHED prob, up) pairs — the calibrated
+// probability frozen at prediction time against its realized outcome. This is
+// the GRADING view: it answers "are our 70% calls actually 70%?" about the
+// number users saw.
+//
+// Do NOT fit a recalibration map on it. The map is applied to the RAW blend
+// probability, and prob here is the map's own previous output, so fitting on
+// it is both a coordinate error and a recursion (2026-07-26 review, C3). Use
+// ResolvedRawPredictionPairs to fit; use this to grade.
 func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit int) (probs []float64, ups []float64, err error) {
 	rows, qerr := s.db.QueryContext(ctx, `
 		SELECT prob, up FROM prediction_outcomes
@@ -121,6 +129,45 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 		ups = append(ups, float64(u))
 	}
 	return probs, ups, rows.Err()
+}
+
+// ResolvedRawPredictionPairs returns (RAW blend prob, realized up) pairs for
+// fitting the recalibration map — the newest `limit` resolved outcomes for one
+// horizon.
+//
+// It exists because ResolvedPredictionPairs returns prediction_outcomes.prob,
+// which UpsertPrediction seeds from CalProb: fitting a map on that column and
+// then applying the map to raw is a coordinate error, and since cal_prob is the
+// map's own previous output it also makes the fit recursive rather than out of
+// sample (2026-07-26 review, C3). A map applied to raw must be fit on raw, so
+// this joins predictions.raw_prob to the resolved outcome.
+//
+// Only resolved, non-voided rows are returned (resolved_at and up both NOT
+// NULL), so a still-open prediction can never train the map that will be
+// applied to it.
+func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, limit int) (raws []float64, ups []float64, err error) {
+	rows, qerr := s.db.QueryContext(ctx, `
+		SELECT p.raw_prob, o.up
+		FROM prediction_outcomes o
+		JOIN predictions p
+		  ON p.symbol_id=o.symbol_id AND p.horizon=o.horizon AND p.ts=o.ts
+		WHERE o.resolved_at IS NOT NULL AND o.up IS NOT NULL AND o.horizon=?
+		ORDER BY o.ts DESC LIMIT ?`,
+		string(h), limit)
+	if qerr != nil {
+		return nil, nil, qerr
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var p float64
+		var u int
+		if err := rows.Scan(&p, &u); err != nil {
+			return nil, nil, err
+		}
+		raws = append(raws, p)
+		ups = append(ups, float64(u))
+	}
+	return raws, ups, rows.Err()
 }
 
 // ── regime ──────────────────────────────────────────────────────────────

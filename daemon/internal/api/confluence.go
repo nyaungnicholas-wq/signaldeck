@@ -13,9 +13,11 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/confluence"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/moneymetrics"
@@ -177,27 +179,27 @@ func (d Deps) confluenceTrack(w http.ResponseWriter, r *http.Request) {
 	// distinct-day gate.
 	seen := map[[2]int64]bool{}
 	dayset := map[int64]bool{}
-	var allReturns []float64
-	var longReturns, shortReturns []float64
+	var all, long, short []confluenceTrade
 	for _, o := range rows {
-		key := [2]int64{o.SymbolID, o.Ts / 86400}
+		day := o.Ts / 86400
+		key := [2]int64{o.SymbolID, day}
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		dayset[o.Ts/86400] = true
+		dayset[day] = true
 		// Direction-adjusted, cost-netted trade return: a LONG profits when price
 		// rises, a SHORT when it falls; both pay the round-trip cost. This is the
 		// PROFIT of having taken the setup, not the raw price move.
-		trade := float64(o.Direction)*o.FwdReturn - 2*confluenceCostPerSide
-		allReturns = append(allReturns, trade)
+		t := confluenceTrade{day: day, ret: float64(o.Direction)*o.FwdReturn - 2*confluenceCostPerSide}
+		all = append(all, t)
 		if o.Direction > 0 {
-			longReturns = append(longReturns, trade)
+			long = append(long, t)
 		} else if o.Direction < 0 {
-			shortReturns = append(shortReturns, trade)
+			short = append(short, t)
 		}
 	}
-	independent := len(allReturns)
+	independent := len(all)
 	distinctDays := len(dayset)
 
 	resp := map[string]any{
@@ -213,20 +215,144 @@ func (d Deps) confluenceTrack(w http.ResponseWriter, r *http.Request) {
 
 	if independent < confluenceMinIndependent || distinctDays < confluenceMinDays {
 		// GATED: withhold every money number, say exactly how far off we are.
+		// The cluster block still ships, stripped to sample-size facts only —
+		// how much evidence exists is not a profitability claim, and publishing
+		// it is what stops "2,530 resolutions" reading as 2,530 trials.
 		resp["money"] = nil
 		resp["byDirection"] = nil
+		resp["cluster"] = trackClusterDescriptive(clusterstat.Grade(confluenceObs(all)))
+		resp["expectancy"] = nil
 		resp["note"] = notYetSignificantConfluence(independent, distinctDays)
 		writeJSON(w, resp)
 		return
 	}
 
-	resp["money"] = moneymetrics.FromReturns(allReturns)
+	allBook := confluenceGrade(all)
+	refusedReason := ""
+	if allBook.ExpectancyCI == nil {
+		refusedReason = allBook.ExpectancyCINote
+	}
+	resp["money"] = allBook.Money
+	resp["cluster"] = allBook.Cluster
+	resp["expectancy"] = map[string]any{
+		"point":   allBook.Money.Expectancy,
+		"ci":      allBook.ExpectancyCI,
+		"refused": allBook.ExpectancyCI == nil,
+		"reason":  refusedReason,
+		"method":  confluenceExpectancyMethod,
+	}
 	resp["byDirection"] = map[string]any{
-		"long":  moneymetrics.FromReturns(longReturns),
-		"short": moneymetrics.FromReturns(shortReturns),
+		"long":  confluenceGrade(long),
+		"short": confluenceGrade(short),
 	}
 	resp["note"] = "scored by EXPECTED PROFIT (expectancy / profit factor), NOT win rate — a high win rate with large losers still loses money"
+	resp["clusterNote"] = "raw N is not a sample size: every setup flagged on one day rides the same market move, so cluster reports the " +
+		"distinct-day count, the MEASURED design effect and the effective N those imply, and every interval resamples DAYS. " +
+		"The long and short books are graded separately and each must clear the day floor on its own."
 	writeJSON(w, resp)
+}
+
+// ── cluster-robust plumbing for the money scoreboard (C4) ────────────────────
+
+// confluenceTrade is one independent (symbol, UTC-day) setup: the day that
+// clusters it and its cost-netted realized profit.
+type confluenceTrade struct {
+	day int64
+	ret float64
+}
+
+const confluenceExpectancyMethod = "percentile interval of the mean cost-netted trade return over WHOLE DAYS resampled with " +
+	"replacement. A row-level standard error would assert one independent trial per setup; the variance on this record lives " +
+	"between days, not between symbols within a day."
+
+// confluenceBook is one book's money scoreboard together with the cluster-robust
+// evidence behind it. Money is embedded so its fields stay at the top level of
+// the JSON object — the confluence page reads byDirection.long.expectancy and
+// .trades directly, and moving them would break it.
+type confluenceBook struct {
+	moneymetrics.Money
+	// Cluster grades the WIN RATE as a day-clustered proportion. Its intervals
+	// are nil below the day floor, with Reason saying so.
+	Cluster clusterstat.Result `json:"cluster"`
+	// ExpectancyCI is the day-resampled interval around the headline expectancy,
+	// nil when the book cannot support one. Win rate is not profitability, so an
+	// interval on the win rate alone would leave the number that decides whether
+	// this makes money standing without one.
+	ExpectancyCI     *clusterstat.Interval `json:"expectancyCI"`
+	ExpectancyCINote string                `json:"expectancyCINote"`
+}
+
+// confluenceObs projects trades into the shape clusterstat grades. Dir stays
+// DirNone deliberately: the outcome here is "did this setup PROFIT after cost",
+// not "did the model call the market's direction", and feeding the setup's
+// long/short side in as a direction would make clusterstat's breadth diagnostic
+// recover a realized direction from a profitability flag — a setup that moved
+// the right way but not far enough to clear costs would be recorded as the
+// market having moved the other way.
+func confluenceObs(trades []confluenceTrade) []clusterstat.Obs {
+	out := make([]clusterstat.Obs, len(trades))
+	for i, t := range trades {
+		out[i] = clusterstat.Obs{Day: t.day, Hit: t.ret > 0}
+	}
+	return out
+}
+
+// confluenceGrade scores one book and attaches its cluster-robust evidence.
+func confluenceGrade(trades []confluenceTrade) confluenceBook {
+	rets := make([]float64, len(trades))
+	for i, t := range trades {
+		rets[i] = t.ret
+	}
+	b := confluenceBook{
+		Money:   moneymetrics.FromReturns(rets),
+		Cluster: clusterstat.Grade(confluenceObs(trades)),
+	}
+	b.ExpectancyCI, b.ExpectancyCINote = dayResampledMeanCI(trades)
+	return b
+}
+
+// dayResampledMeanCI bootstraps the mean trade return by resampling WHOLE DAYS.
+// It returns nil and a stated reason below clusterstat.MinDistinctDays — the
+// same refusal the proportion side takes, because an expectancy estimated from a
+// handful of days is exactly as overconfident as a proportion from the same
+// days, and this record's mean is routinely one day's move (live: a −22.6% day
+// carries the entire −4.4% headline).
+func dayResampledMeanCI(trades []confluenceTrade) (*clusterstat.Interval, string) {
+	byDay := map[int64][]float64{}
+	for _, t := range trades {
+		byDay[t.day] = append(byDay[t.day], t.ret)
+	}
+	days := make([]int64, 0, len(byDay))
+	for d := range byDay {
+		days = append(days, d)
+	}
+	if len(days) < clusterstat.MinDistinctDays {
+		return nil, "no interval: " + strconv.Itoa(len(days)) + "/" + strconv.Itoa(clusterstat.MinDistinctDays) +
+			" distinct days. Every setup on one day shares one market move, so this book's expectancy cannot be given " +
+			"an honest interval yet — a narrow one would be worse than none."
+	}
+	// Deterministic order so the resample draws map to the same days every run
+	// and the published interval is reproducible.
+	sort.Slice(days, func(i, j int) bool { return days[i] < days[j] })
+
+	iv, ok := clusterstat.BootstrapStat(len(days), 2000, 0.05, func(idx []int) (float64, bool) {
+		var sum float64
+		var n int
+		for _, i := range idx {
+			for _, r := range byDay[days[i]] {
+				sum += r
+				n++
+			}
+		}
+		if n == 0 {
+			return 0, false
+		}
+		return sum / float64(n), true
+	})
+	if !ok {
+		return nil, "no interval: the day resample did not produce enough usable draws"
+	}
+	return &iv, confluenceExpectancyMethod
 }
 
 // notYetSignificantConfluence is the honest gate note: how far the accruing

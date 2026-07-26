@@ -12,6 +12,7 @@ package backup
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"os"
@@ -20,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	_ "modernc.org/sqlite"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -56,7 +59,49 @@ type Worker struct {
 	// deploys in one day rotated real nightly history out of the Keep window.
 	MinGap time.Duration
 
+	// VerifyBackup is the post-write integrity check applied to every fresh
+	// copy (local and offsite) before it is trusted. nil = the real
+	// PRAGMA-quick_check-based verifyBackup; overridable in tests to simulate
+	// a corrupt result without needing an actually-corrupt multi-GB SQLite
+	// file. H8 hostile-review fix: before this field existed, success was
+	// `os.Stat(target)` returning without error, which accepts a
+	// corrupt-but-nonzero-sized copy — and KEEP=7 rotation would then destroy
+	// the last good generation behind it.
+	VerifyBackup func(ctx context.Context, path string) error
+
 	ran bool
+}
+
+// verify runs the configured integrity check (or the real one) against path.
+func (w *Worker) verify(ctx context.Context, path string) error {
+	if w.VerifyBackup != nil {
+		return w.VerifyBackup(ctx, path)
+	}
+	return verifyBackup(ctx, path)
+}
+
+// verifyBackup opens the freshly-written copy at path and runs PRAGMA
+// quick_check — SQLite's structural-integrity scan — so a corrupt-but-nonzero
+// copy (a torn write, a disk error VACUUM INTO didn't surface as a Go error)
+// is caught before it is trusted as a good generation. quick_check, not the
+// slower full integrity_check: this runs nightly against a file that can be
+// 2GB+, and quick_check still catches the page/btree-level corruption a torn
+// write produces while skipping the exhaustive index/foreign-key cross-check.
+func verifyBackup(ctx context.Context, path string) error {
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", path)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("open for verify: %w", err)
+	}
+	defer db.Close() //nolint:errcheck
+	var result string
+	if err := db.QueryRowContext(ctx, `PRAGMA quick_check`).Scan(&result); err != nil {
+		return fmt.Errorf("quick_check query: %w", err)
+	}
+	if result != "ok" {
+		return fmt.Errorf("quick_check reported corruption: %s", result)
+	}
+	return nil
 }
 
 // Name implements workers.Worker.
@@ -117,6 +162,20 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("backup written but unstattable: %w", err)
 	}
+	// H8: verify BEFORE pruning or recording success. A failed check removes
+	// the corrupt copy, records why, and returns an error — which means
+	// prune() below is never reached, so the existing (good) generations in
+	// w.Dir are never rotated away behind a bad one, and meta's
+	// backup_last_ts is never advanced past the last KNOWN-GOOD backup.
+	if verr := w.verify(ctx, target); verr != nil {
+		os.Remove(target) //nolint:errcheck
+		_ = w.St.InsertDQ(ctx, md.DQEvent{
+			Ts:     time.Now().Unix(),
+			Kind:   "backup_corrupt",
+			Detail: fmt.Sprintf("%s failed integrity check (removed, previous generations NOT rotated): %v", filepath.Base(target), verr),
+		})
+		return "", fmt.Errorf("backup integrity check failed, corrupt copy removed, no rotation: %w", verr)
+	}
 	pruned, perr := w.prune(w.Dir)
 	detail := fmt.Sprintf("backup %s (%.1f MB), pruned %d old", filepath.Base(target), float64(st.Size())/(1024*1024), pruned)
 	if perr != nil {
@@ -146,6 +205,15 @@ func (w *Worker) offsite(ctx context.Context, src string) string {
 	dst := filepath.Join(w.OffsiteDir, filepath.Base(src))
 	if err := copyFile(src, dst); err != nil {
 		return w.offsiteFail(ctx, fmt.Sprintf("offsite copy to %s failed: %v", w.OffsiteDir, err))
+	}
+	// H8: the offsite copy is the actual disaster-recovery artifact (the one
+	// meant to survive the single Mac dying), so it gets the same integrity
+	// check as the local copy — a bit-flip introduced by the raw file copy
+	// (network drive hiccup, interrupted iCloud sync) must not silently pass
+	// as a good offsite generation either.
+	if verr := w.verify(ctx, dst); verr != nil {
+		os.Remove(dst) //nolint:errcheck
+		return w.offsiteFail(ctx, fmt.Sprintf("offsite copy to %s failed integrity check (removed, not rotated): %v", w.OffsiteDir, verr))
 	}
 	pruned, perr := w.prune(w.OffsiteDir)
 	_ = w.St.SetMeta(ctx, MetaLastOffsiteTs, fmt.Sprintf("%d", time.Now().Unix()))

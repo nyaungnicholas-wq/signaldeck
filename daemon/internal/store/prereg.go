@@ -103,3 +103,29 @@ func (s *Store) VerifyPrereg(ctx context.Context) (ok bool, brokenAtSeq int64, e
 	}
 	return true, 0, nil
 }
+
+// LatestPreregHashes returns each kind's NEWEST stored spec hash.
+//
+// The registrar needs it to tell two states apart that look identical from a
+// bare kind list: a claim already registered and unchanged (a genuine no-op),
+// and a claim already registered whose text has since changed in code. The
+// second is not a no-op — it means the chain and the code now disagree, and the
+// honest response is an appended amendment, never a silent divergence.
+func (s *Store) LatestPreregHashes(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT kind, spec_hash FROM prereg_records
+		WHERE seq IN (SELECT MAX(seq) FROM prereg_records GROUP BY kind)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[string]string{}
+	for rows.Next() {
+		var k, h string
+		if err := rows.Scan(&k, &h); err != nil {
+			return nil, err
+		}
+		out[k] = h
+	}
+	return out, rows.Err()
+}

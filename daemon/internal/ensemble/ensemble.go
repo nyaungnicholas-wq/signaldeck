@@ -41,15 +41,102 @@
 package ensemble
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"sort"
 )
+
+// ErrNonMonotone reports a calibration map whose fitted frequencies decrease as
+// the prediction increases. It is the one property isotonic regression exists
+// to guarantee, and the property every cal_prob ranking depends on: if a more
+// bullish raw input can publish a LOWER probability, sorting by the published
+// probability sorts nothing. Returned by ValidateKnots and refused (never
+// served) by MapFromKnotsChecked.
+var ErrNonMonotone = errors.New("ensemble: calibration knots are not monotone")
+
+// ValidateKnots is the WRITE-TIME assertion on a calibration map: a map that
+// fails here must fail loudly rather than ship. It checks everything the live
+// interpolation assumes and the published probability depends on:
+//
+//   - the knots are non-empty and the same length;
+//   - kx is STRICTLY increasing (interpolate divides by the segment width, and
+//     aggregateByPred is supposed to emit one knot per distinct prediction);
+//   - ky is non-decreasing (monotonicity — see ErrNonMonotone);
+//   - every ky is a frequency in [0,1].
+//
+// This exists because the 2026-07-26 review found 495 of 928 PERSISTED live
+// maps violating monotonicity with nothing in the codebase checking. PAV
+// itself is monotone by construction; the violations came from weight-
+// dependent per-block transforms applied AFTER it. An assertion at the write
+// and read boundaries is what makes that class of bug impossible to ship
+// silently again.
+func ValidateKnots(kx, ky []float64) error {
+	if len(kx) == 0 || len(ky) == 0 {
+		return errors.New("ensemble: calibration knots are empty")
+	}
+	if len(kx) != len(ky) {
+		return fmt.Errorf("ensemble: calibration knot length mismatch: kx=%d ky=%d", len(kx), len(ky))
+	}
+	for i := range ky {
+		if math.IsNaN(ky[i]) || ky[i] < 0 || ky[i] > 1 {
+			return fmt.Errorf("ensemble: calibrated frequency ky[%d]=%v is not a probability", i, ky[i])
+		}
+		if math.IsNaN(kx[i]) {
+			return fmt.Errorf("ensemble: prediction knot kx[%d] is NaN", i)
+		}
+		if i == 0 {
+			continue
+		}
+		if kx[i] <= kx[i-1] {
+			return fmt.Errorf("ensemble: prediction knots not strictly increasing at %d: %v <= %v", i, kx[i], kx[i-1])
+		}
+		if ky[i] < ky[i-1]-monotoneEps {
+			return fmt.Errorf("%w: at kx=%v the fitted frequency drops %v -> %v", ErrNonMonotone, kx[i], ky[i-1], ky[i])
+		}
+	}
+	return nil
+}
+
+// monotoneEps is the float slack ValidateKnots allows before calling a
+// decrease a real inversion. Sized for accumulated float error in a weighted
+// mean, far below any difference a published percentage could show.
+const monotoneEps = 1e-12
 
 // MinCalibrationPairs is the minimum number of (prediction, outcome) pairs
 // required before Calibrate will fit a recalibration map. Below this, there is
 // not enough evidence to distinguish a real miscalibration from noise, so
 // Calibrate returns the identity map and reports calibrated=false.
 const MinCalibrationPairs = 30
+
+// MinCalibrationDays is the minimum number of DISTINCT UTC DAYS the pairs must
+// span before a per-symbol isotonic map is fitted from them.
+//
+// MinCalibrationPairs counts PAIRS, and pairs are not observations: the
+// predictor runs every 10 minutes against daily labels, so 30 pairs for one
+// symbol is about three days of evidence (measured live: 12.1 rows per
+// symbol-day, one case of 153 rows inside a single day). An isotonic map fitted
+// on three days is fitting three market moves, and it then rewrites every
+// published probability for that symbol.
+//
+// 20 days is the same floor adaptive.MinCellDays uses, generalised from
+// metalabel.MinTakenDays for the same stated reason: same-day rows are not
+// independent evidence.
+//
+// NOT YET ENFORCED ON THE FLEET-WIDE MAP — see Calibrate.
+const MinCalibrationDays = 20
+
+// DistinctPairDays counts the distinct UTC days a set of graded pairs spans —
+// the honest sample size behind anything fitted from them. Unstamped pairs
+// (Ts==0) all collapse onto day 0, so a caller that supplies no timestamps
+// reports one day and is refused rather than silently trusted.
+func DistinctPairDays(pairs []Pair) int {
+	days := make(map[int64]struct{}, len(pairs))
+	for _, p := range pairs {
+		days[p.Ts/86400] = struct{}{}
+	}
+	return len(days)
+}
 
 // calibrationPriorStrength is the empirical-Bayes pseudocount used to SHRINK
 // each isotonic block's fitted frequency toward the dataset base rate. A block
@@ -59,9 +146,14 @@ const MinCalibrationPairs = 30
 // probability stays near the base rate; with a heavily-populated global block
 // (hundreds of pairs) it barely moves. This is the fix for degenerate per-
 // symbol calibration that mapped a short up-streak to P(up,1d)=0.85–0.96 —
-// overconfident probabilities no realized 1-day accuracy could support. It is
-// monotonic (a convex combination with a constant), so the isotonic ordering
-// the forced-curve rank depends on is preserved exactly.
+// overconfident probabilities no realized 1-day accuracy could support.
+//
+// It is a convex combination with a constant, so it preserves order between
+// blocks of the SAME weight — but NOT across blocks of different weight, which
+// is the case that actually ships. That was C3: the shrinkage reordered what
+// PAV had just ordered, and 495 of 928 live maps published a lower probability
+// for a more bullish input. poolAdjacentViolators therefore re-projects onto
+// the monotone cone AFTER shrinking; do not remove that second pass.
 const calibrationPriorStrength = 25.0
 
 // persistedCalLo/Hi are the hard DISPLAY ceiling on a rebuilt PERSISTED per-
@@ -295,6 +387,15 @@ func WeightedProbability(c Components, weights map[string]float64) (prob float64
 type Pair struct {
 	Pred   float64 // predicted P(up), [0,1]
 	Actual float64 // realized outcome in {0,1}
+	// Ts is the prediction's unix timestamp. Its UTC day is the independence
+	// unit: the predictor runs every 10 minutes against daily labels, so a
+	// dozen pairs can share one symbol-day and a thousand symbols share one
+	// market move. Grading helpers (BrierScore, CalibrationCurve) ignore it;
+	// anything that FITS a map from these pairs must count distinct days, not
+	// pairs — see MinCalibrationDays. Ts==0 means unstamped, which counts as
+	// a single day, so a caller that forgets to stamp is refused rather than
+	// silently trusted.
+	Ts int64
 }
 
 // Bin is one bucket of the reliability (calibration) curve: predictions whose
@@ -366,6 +467,37 @@ func BrierScore(pairs []Pair) float64 {
 	return sum / float64(len(pairs))
 }
 
+// BrierSkill returns the Brier SKILL score of the history against the only
+// honest benchmark — the constant base-rate forecast — together with that base
+// rate. skill = 1 - Brier/(base*(1-base)). Positive means the model beats
+// always forecasting the observed up-rate; NEGATIVE means it is worse than a
+// constant, which is a verdict, not a rounding detail.
+//
+// A bare Brier score is not interpretable and must never be published alone:
+// the live 1d record scores 0.302, which sounds small until the 56.0% base rate
+// puts the constant forecast at 0.246 — the model is 23% WORSE than a constant
+// (skill -0.226). Omitting the skill score while publishing the raw Brier reads
+// as selective, so every surface that shows one must show the other.
+//
+// ok=false — WITHHOLD, never report 0 — when there is no history or when every
+// outcome went the same way (a degenerate zero-variance reference against which
+// no skill is defined).
+func BrierSkill(pairs []Pair) (skill, baseRate float64, ok bool) {
+	if len(pairs) == 0 {
+		return 0, 0, false
+	}
+	var sumActual float64
+	for _, p := range pairs {
+		sumActual += p.Actual
+	}
+	baseRate = sumActual / float64(len(pairs))
+	ref := baseRate * (1 - baseRate) // Brier of the constant base-rate forecast
+	if ref <= 0 {
+		return 0, baseRate, false
+	}
+	return 1 - BrierScore(pairs)/ref, baseRate, true
+}
+
 // Calibrate fits a monotone recalibration map from raw predicted probabilities
 // to calibrated ones and returns it together with a flag reporting whether a
 // real fit was performed.
@@ -383,6 +515,19 @@ func BrierScore(pairs []Pair) float64 {
 // evidence to fit, so Calibrate returns the identity map and calibrated=false.
 // The identity map is also returned (calibrated=false) when every prediction is
 // identical (no spread to fit against).
+//
+// KNOWN GAP — MinCalibrationDays is NOT enforced here, only in CalibrateKnots.
+// This entry point fits the FLEET-WIDE map, and its only caller
+// (pipeline.globalCalibration) reads store.ResolvedRawPredictionPairs, which
+// returns the newest calibrationPairLimit=3000 ROWS with no timestamp. Measured
+// live 2026-07-26: that window spans 5 distinct days for 1d and 1 for 1w, and
+// reaching 20 would require deduping to one pair per (symbol, UTC-day) across
+// the full history — a change to the store query and the predictor's window,
+// not to this function. Enforcing the floor here without that change would
+// disable fleet calibration for a reason the code could not honestly state
+// ("no timestamps supplied" is not "too few days"). The gap is real and is
+// recorded rather than papered over: the fleet map is still fitted on ~5
+// clustered days.
 func Calibrate(pairs []Pair) (mapFn func(float64) float64, calibrated bool) {
 	if len(pairs) < MinCalibrationPairs {
 		return identity, false
@@ -407,6 +552,14 @@ func Calibrate(pairs []Pair) (mapFn func(float64) float64, calibrated bool) {
 	// of succession over each block's OWN pooled weight), so interpolation can
 	// never surface a certainty claim from a thin one-sided bin.
 	kx, ky := poolAdjacentViolators(aggregateByPred(sorted))
+	// ASSERT on write: a map that is not monotone is not a calibration, it is a
+	// scrambler — a more bullish input publishing a lower probability breaks
+	// every ranking keyed on the result. poolAdjacentViolators guarantees this
+	// by construction; if a future change breaks that guarantee the honest
+	// output is "no correction applied", never a silently inverted map.
+	if err := ValidateKnots(kx, ky); err != nil {
+		return identity, false
+	}
 
 	fn := func(v float64) float64 {
 		return clamp01(interpolate(kx, ky, clamp01(v)))
@@ -506,16 +659,6 @@ func binIndex(pred float64, bins int) int {
 // realized frequency of outcomes at and around it. len(kx) == len(ky) ==
 // len(levels).
 func poolAdjacentViolators(levels []levelStat) (kx, ky []float64) {
-	// Each block tracks its weighted mean, total pair weight, and how many
-	// input levels it spans (so the pooled value can be expanded back over
-	// exactly those levels).
-	type block struct {
-		mean   float64
-		weight int // total pair count
-		span   int // number of levels covered
-	}
-	blocks := make([]block, 0, len(levels))
-
 	// Base rate = overall weighted mean of realized outcomes — the empirical
 	// prior each block is shrunk toward (below). For 1-day up/down this sits
 	// near a coin flip; a market with real drift gets its own honest prior.
@@ -530,23 +673,14 @@ func poolAdjacentViolators(levels []levelStat) (kx, ky []float64) {
 		base = sumWM / float64(sumW)
 	}
 
+	// Pass 1: PAV over the raw per-level realized frequencies. Adjacent levels
+	// that violate monotonicity (a higher prediction with a lower realized
+	// frequency) pool into one block carrying their weighted mean.
+	singles := make([]calBlock, 0, len(levels))
 	for _, lv := range levels {
-		b := block{mean: lv.mean, weight: lv.weight, span: 1}
-		// Merge with the previous block while it violates monotonicity, i.e.
-		// while the previous block's mean exceeds this block's mean.
-		for len(blocks) > 0 {
-			prev := blocks[len(blocks)-1]
-			if prev.mean <= b.mean {
-				break
-			}
-			totalW := prev.weight + b.weight
-			b.mean = (prev.mean*float64(prev.weight) + b.mean*float64(b.weight)) / float64(totalW)
-			b.weight = totalW
-			b.span += prev.span
-			blocks = blocks[:len(blocks)-1]
-		}
-		blocks = append(blocks, b)
+		singles = append(singles, calBlock{mean: lv.mean, weight: lv.weight, span: 1})
 	}
+	blocks := poolBlocks(singles)
 
 	// Expand each block's pooled mean back over the levels it covers, keeping
 	// one knot per distinct prediction value. Each knot's fitted frequency is
@@ -557,10 +691,7 @@ func poolAdjacentViolators(levels []levelStat) (kx, ky []float64) {
 	// 2/3, instead of dragging the whole map to a displayed P(up)=100.0%.
 	// (A bound keyed to the TOTAL pair count is useless here: at n=3000 it is
 	// 1/3002 ≈ 0.0003, which still renders as 100.0%.)
-	kx = make([]float64, 0, len(levels))
-	ky = make([]float64, 0, len(levels))
-	li := 0
-	for _, b := range blocks {
+	for i, b := range blocks {
 		// SHRINK the fitted frequency toward the base rate by sample size
 		// (empirical Bayes): (w·mean + k·base)/(w + k). Thin blocks collapse to
 		// the base rate; data-rich blocks keep their fit. This is what stops a
@@ -569,14 +700,66 @@ func poolAdjacentViolators(levels []levelStat) (kx, ky []float64) {
 		// Rule-of-succession hard cap on top (a block of w pairs can never claim
 		// a frequency outside [1/(w+2),(w+1)/(w+2)]) — belt to the shrinkage braces.
 		lo := 1.0 / float64(b.weight+2)
-		v := math.Min(1.0-lo, math.Max(lo, m))
+		blocks[i].mean = math.Min(1.0-lo, math.Max(lo, m))
+	}
+
+	// RE-PROJECT onto the monotone cone. Both transforms above are weight-
+	// DEPENDENT — shrinkage pulls a thin block toward the base rate hard and a
+	// heavy block barely at all, and the succession bound tightens as the block
+	// thins — so applying them to blocks of DIFFERENT weight reorders the values
+	// PAV had just ordered. That is C3: 495 of 928 live maps published a lower
+	// probability for a more bullish input (symbol 12/1d: raw 0.3611 -> 63.8%,
+	// raw 0.3652 -> 41.8%), which scrambles every ranking keyed on cal_prob.
+	// A second weighted PAV pass over the transformed block values is the
+	// weighted-L2 projection back onto the monotone cone, so the output is
+	// non-decreasing BY CONSTRUCTION rather than by assumption. It preserves the
+	// honesty bounds: pooling only ever produces a weighted mean of values that
+	// already sit inside their own blocks' bounds, and the pooled block's bound
+	// is the looser one (more pairs).
+	blocks = poolBlocks(blocks)
+
+	kx = make([]float64, 0, len(levels))
+	ky = make([]float64, 0, len(levels))
+	li := 0
+	for _, b := range blocks {
 		for k := 0; k < b.span; k++ {
 			kx = append(kx, levels[li].x)
-			ky = append(ky, v)
+			ky = append(ky, b.mean)
 			li++
 		}
 	}
 	return kx, ky
+}
+
+// calBlock is one pooled isotonic block: its fitted frequency, the pair weight
+// backing it, and how many input levels it covers.
+type calBlock struct {
+	mean   float64
+	weight int // total pair count
+	span   int // number of levels covered
+}
+
+// poolBlocks runs weighted pool-adjacent-violators over already-formed blocks,
+// merging any adjacent pair whose values decrease. Used to re-establish
+// monotonicity after the weight-dependent shrinkage/bounding transforms, which
+// are order-preserving only between blocks of EQUAL weight.
+func poolBlocks(in []calBlock) []calBlock {
+	out := make([]calBlock, 0, len(in))
+	for _, b := range in {
+		for len(out) > 0 {
+			prev := out[len(out)-1]
+			if prev.mean <= b.mean {
+				break
+			}
+			totalW := prev.weight + b.weight
+			b.mean = (prev.mean*float64(prev.weight) + b.mean*float64(b.weight)) / float64(totalW)
+			b.weight = totalW
+			b.span += prev.span
+			out = out[:len(out)-1]
+		}
+		out = append(out, b)
+	}
+	return out
 }
 
 // interpolate linearly interpolates y at x over the knots (kx, ky), where kx is
@@ -632,6 +815,16 @@ func CalibrateKnots(pairs []Pair) (kx, ky []float64, calibrated bool) {
 	if len(pairs) < MinCalibrationPairs {
 		return nil, nil, false
 	}
+	// DISTINCT-DAY FLOOR (2026-07-26 review, H5). The pair floor counts rows,
+	// and the predictor writes ~12 rows per symbol-day, so 30 pairs is about
+	// three market moves — measured live, 158,204 resolved rows were 13,058
+	// symbol-days, with one case of 153 rows inside a single day. A map fitted
+	// on three days encodes those three days' moves and then rewrites every
+	// published probability for the symbol. Refusing is the honest failure: the
+	// caller uses the identity map and ships an uncorrected probability.
+	if DistinctPairDays(pairs) < MinCalibrationDays {
+		return nil, nil, false
+	}
 	sorted := make([]Pair, len(pairs))
 	copy(sorted, pairs)
 	sort.SliceStable(sorted, func(i, j int) bool {
@@ -643,16 +836,45 @@ func CalibrateKnots(pairs []Pair) (kx, ky []float64, calibrated bool) {
 	// Knots come back honesty-bounded per block (rule of succession over each
 	// block's own pooled weight), so persisted knots never encode certainty.
 	kx, ky = poolAdjacentViolators(aggregateByPred(sorted))
+	// ASSERT before anything can PERSIST these knots. This is the boundary the
+	// 2026-07-26 review found unguarded: 495 of 928 stored per-symbol maps were
+	// non-monotone and nothing refused them, so they shipped to every ranking
+	// keyed on cal_prob. Refusing to fit is the honest failure — the caller then
+	// uses the identity map rather than an inverted one.
+	if err := ValidateKnots(kx, ky); err != nil {
+		return nil, nil, false
+	}
 	return kx, ky, true
 }
 
-// MapFromKnots rebuilds a recalibration map from persisted knots. With empty or
-// mismatched knots it returns the identity map, so a symbol without a fitted
-// calibration transparently falls back to "no correction". The rebuilt map is
-// the SAME clamped linear interpolation Calibrate returns.
+// MapFromKnots rebuilds a recalibration map from persisted knots, REFUSING any
+// map ValidateKnots rejects — an invalid or inverted persisted map yields the
+// identity, so the symbol ships an honestly uncorrected probability instead of
+// a scrambled one. See MapFromKnotsChecked for the reason a caller wants; this
+// form is for callers that only need the safe map. The rebuilt map is the SAME
+// clamped linear interpolation Calibrate returns.
 func MapFromKnots(kx, ky []float64) func(float64) float64 {
-	if len(kx) == 0 || len(kx) != len(ky) {
+	fn, err := MapFromKnotsChecked(kx, ky)
+	if err != nil {
 		return identity
+	}
+	return fn
+}
+
+// MapFromKnotsChecked rebuilds a recalibration map from persisted knots and
+// reports WHY a map was refused, so the caller can fall back to a better tier
+// (e.g. the global calibration) and count the refusal rather than silently
+// degrade to the identity.
+//
+// This is the read-side half of the C3 fix. 495 of 928 live per-symbol maps
+// were persisted non-monotone before poolAdjacentViolators was corrected;
+// those rows are only rewritten when the hourly per-symbol learner refits
+// them. Until then, serving them inverts the published probability against the
+// raw input — so they are refused on read, immediately, rather than served
+// until a refit happens to land.
+func MapFromKnotsChecked(kx, ky []float64) (func(float64) float64, error) {
+	if err := ValidateKnots(kx, ky); err != nil {
+		return nil, err
 	}
 	// Defensive copy so a caller mutating the slices can't change the closure.
 	xs := append([]float64(nil), kx...)
@@ -660,5 +882,5 @@ func MapFromKnots(kx, ky []float64) func(float64) float64 {
 	return func(v float64) float64 {
 		m := interpolate(xs, ys, clamp01(v))
 		return math.Min(persistedCalHi, math.Max(persistedCalLo, m))
-	}
+	}, nil
 }

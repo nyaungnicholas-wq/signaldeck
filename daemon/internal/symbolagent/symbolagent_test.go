@@ -10,8 +10,10 @@ import (
 )
 
 // mkExample builds one labeled example: pressure leg = pr, forecast leg = fc,
-// realized up/down, and a forward return that matches the direction.
-func mkExample(pr, fc float64, up int) adaptive.Example {
+// realized up/down, a forward return that matches the direction, and the UTC
+// day the example falls on. Every floor in this package counts distinct days,
+// so a fixture that leaves ts at 0 is one day of evidence and is refused.
+func mkExample(pr, fc float64, up int, ts int64) adaptive.Example {
 	fwd := 0.01
 	if up == 0 {
 		fwd = -0.01
@@ -19,6 +21,7 @@ func mkExample(pr, fc float64, up int) adaptive.Example {
 	return adaptive.Example{
 		Legs:      map[string]float64{ensemble.LegPressure: pr, ensemble.LegForecast: fc},
 		Regime:    "trend_up",
+		Ts:        ts,
 		Up:        up,
 		FwdReturn: fwd,
 	}
@@ -48,10 +51,11 @@ func synthetic(n int) ([]adaptive.Example, []ensemble.Pair) {
 		if i%4 >= 2 {
 			fc = 0.3
 		}
-		ex = append(ex, mkExample(pr, fc, up))
+		ts := int64(i) * 86400 // one example per distinct UTC day
+		ex = append(ex, mkExample(pr, fc, up, ts))
 		// Raw blend prob: track the outcome loosely so there's spread to fit.
 		raw := 0.45 + 0.1*float64(up)
-		pairs = append(pairs, ensemble.Pair{Pred: raw, Actual: float64(up)})
+		pairs = append(pairs, ensemble.Pair{Pred: raw, Actual: float64(up), Ts: ts})
 	}
 	return ex, pairs
 }
@@ -208,8 +212,9 @@ func TestLearn_NoEdgeStaysUnpersonal(t *testing.T) {
 		if i%3 == 0 {
 			fc = 0.7
 		}
-		ex = append(ex, mkExample(pr, fc, up))
-		pairs = append(pairs, ensemble.Pair{Pred: 0.5, Actual: float64(up)})
+		ts := int64(i) * 86400
+		ex = append(ex, mkExample(pr, fc, up, ts))
+		pairs = append(pairs, ensemble.Pair{Pred: 0.5, Actual: float64(up), Ts: ts})
 	}
 	m := Learn(ex, pairs, true, true)
 	if m.Tier == TierPersonal {

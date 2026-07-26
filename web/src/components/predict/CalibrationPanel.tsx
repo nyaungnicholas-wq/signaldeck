@@ -166,6 +166,28 @@ export default function CalibrationPanel({
                 value={n && Number.isFinite(data?.brier ?? NaN) ? (data!.brier).toFixed(4) : "—"}
                 sub="mean squared error of P(up); lower = sharper, 0.25 = coin-flip"
               />
+              {/* Brier SKILL, always beside the raw Brier. Alone, 0.302 reads
+                  as "small error"; against the measured base rate the constant
+                  forecast scores 0.246, so the honest headline is a NEGATIVE
+                  skill. Publishing one without the other is the omission the
+                  2026-07-26 review called selective. null → "—", never 0. */}
+              <Stat
+                label="Brier skill"
+                value={
+                  data?.brierSkill != null && Number.isFinite(data.brierSkill)
+                    ? `${data.brierSkill >= 0 ? "+" : ""}${(data.brierSkill * 100).toFixed(1)}%`
+                    : "—"
+                }
+                valueColor={
+                  data?.brierSkill == null ? "var(--dim)" : data.brierSkill > 0 ? "var(--bid)" : "var(--ask)"
+                }
+                sub={
+                  data?.brierSkill == null
+                    ? "not gradable yet — needs resolved outcomes on both sides"
+                    : `vs always forecasting the ${((data.baseRate ?? 0) * 100).toFixed(1)}% base rate; ` +
+                      (data.brierSkill > 0 ? "positive = real probabilistic skill" : "negative = worse than the constant")
+                }
+              />
               <Stat
                 label="resolved"
                 value={n.toLocaleString("en-US")}

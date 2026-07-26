@@ -67,8 +67,8 @@ func TestQuintiles_MonotoneSpread(t *testing.T) {
 	// 25 obs where forward return rises with the signal: Q5 mean must exceed Q1.
 	var sigs, fwds []float64
 	for i := 0; i < 25; i++ {
-		s := float64(i) / 24.0        // 0..1
-		sigs = append(sigs, s)        // signal
+		s := float64(i) / 24.0          // 0..1
+		sigs = append(sigs, s)          // signal
 		fwds = append(fwds, s*0.1-0.05) // fwd rises with signal, -5%..+5%
 	}
 	qs := quintiles(sigs, fwds)
@@ -167,7 +167,7 @@ func TestEquityCurve_DeadbandHoldsNoCost(t *testing.T) {
 	// forward returns, with no cost on the hold step.
 	p := (Params{PrimaryLag: 1, CostBps: 100, LongThreshold: 0.6, FlatThreshold: 0.4}).withDefaults()
 	obs := []Observation{
-		obsAt(1, 0, 0.9, map[int]float64{1: 0.10}), // enter long, +10%
+		obsAt(1, 0, 0.9, map[int]float64{1: 0.10}),  // enter long, +10%
 		obsAt(1, 1, 0.50, map[int]float64{1: 0.10}), // deadband → hold long, +10%
 	}
 	curve, turnover := equityCurve(dedupeIndependentSorted(obs), nil, p)
@@ -196,6 +196,153 @@ func TestEquityCurve_FlatEarnsNothing(t *testing.T) {
 	}
 	if turnover != 0 {
 		t.Fatalf("flat turnover = %v, want 0", turnover)
+	}
+}
+
+// ── C1: cross-sectional accounting within a day ──────────────────────────
+//
+// The equity curve compounded once per (symbol, UTC-day) ROW while carrying a
+// single scalar position across every symbol, so a universe of S symbols over D
+// days compounded S*D times — against a benchmark built over D distinct days.
+// Live that published strategyReturn=-0.9995 at turnover=0.00032. An unlevered
+// book cannot lose 99.95% of its capital while trading 0.03% of itself, so the
+// figure was an artifact of the accounting, not a grade of the signal. These
+// tests pin the per-day book: aggregate cross-sectionally WITHIN a day, compound
+// only ACROSS days.
+
+func TestEquityCurve_AggregatesCrossSectionallyWithinDay(t *testing.T) {
+	// 10 symbols observed on the SAME two days, every name long, +2% then -1%.
+	// One book long the whole universe earns the cross-sectional mean each day:
+	// two compounding steps, not twenty.
+	p := (Params{PrimaryLag: 1, CostBps: 100, LongThreshold: 0.6, FlatThreshold: 0.4}).withDefaults()
+	var obs []Observation
+	for s := int64(0); s < 10; s++ {
+		obs = append(obs, obsAt(s, 0, 0.9, map[int]float64{1: 0.02}))
+		obs = append(obs, obsAt(s, 1, 0.9, map[int]float64{1: -0.01}))
+	}
+	curve, turnover := equityCurve(dedupeIndependentSorted(obs), nil, p)
+	if len(curve) != 2 {
+		t.Fatalf("curve len %d, want 2 — one mark per DISTINCT DAY, not per (symbol,day) row", len(curve))
+	}
+	// Day 0 buys the whole book (turnover 1.0 → one 1% side cost) and earns +2%;
+	// day 1 holds (no cost) and earns -1%.
+	want := (1 - 0.01) * 1.02 * 0.99
+	if !approx(curve[1].Strategy, want, 1e-12) {
+		t.Fatalf("final equity = %v, want %v (cross-sectional mean per day, compounded across 2 days)", curve[1].Strategy, want)
+	}
+	// Marks sit on the day index the benchmark is built on, not on a raw obs ts.
+	if curve[0].Ts != 0 || curve[1].Ts != dayS {
+		t.Fatalf("equity ts = (%d,%d), want day starts (0,%d) so strategy and benchmark share one index", curve[0].Ts, curve[1].Ts, dayS)
+	}
+	if !approx(turnover, 0.5, 1e-12) {
+		t.Fatalf("turnover = %v, want 0.5 (book bought on day 0, held on day 1)", turnover)
+	}
+}
+
+func TestEquityCurve_WeightsCapAtOneWithinDay(t *testing.T) {
+	// Four names on one day: two long, two flat. The long leg is HALF the book,
+	// so a +10% move on it is a +5% day — capital not deployed earns nothing and
+	// the flat names' +50% move is not collected. Weights must sum to <= 1, so
+	// adding names can never lever the book up.
+	p := (Params{PrimaryLag: 1, CostBps: 100, LongThreshold: 0.6, FlatThreshold: 0.4}).withDefaults()
+	obs := []Observation{
+		obsAt(1, 0, 0.9, map[int]float64{1: 0.10}),
+		obsAt(2, 0, 0.9, map[int]float64{1: 0.10}),
+		obsAt(3, 0, 0.1, map[int]float64{1: 0.50}),
+		obsAt(4, 0, 0.1, map[int]float64{1: 0.50}),
+	}
+	curve, turnover := equityCurve(dedupeIndependentSorted(obs), nil, p)
+	if len(curve) != 1 {
+		t.Fatalf("curve len %d, want 1 (a single trading day)", len(curve))
+	}
+	want := (1 - 0.01*0.5) * 1.05 // half the book bought, half the book's +10%
+	if !approx(curve[0].Strategy, want, 1e-12) {
+		t.Fatalf("equity = %v, want %v (weighted mean across the day, weights summing to 0.5)", curve[0].Strategy, want)
+	}
+	if !approx(turnover, 0.5, 1e-12) {
+		t.Fatalf("turnover = %v, want 0.5 (only half the book was bought)", turnover)
+	}
+}
+
+func TestEquityCurve_DeadbandHoldsPerSymbolNotPortfolioWide(t *testing.T) {
+	// The deadband "hold the prior position" must mean the prior position OF THAT
+	// SYMBOL. With one scalar position shared across the universe, whichever name
+	// the map iteration happened to visit last set the position every other name
+	// inherited — so the book depended on iteration order.
+	//
+	// Symbol 1 goes long on day 0; symbol 2 never leaves the deadband and must
+	// stay flat. On day 1 both sit in the deadband: 1 holds long, 2 holds flat, so
+	// the book is half invested and earns half of the +10% move.
+	p := (Params{PrimaryLag: 1, CostBps: 100, LongThreshold: 0.6, FlatThreshold: 0.4}).withDefaults()
+	obs := []Observation{
+		obsAt(1, 0, 0.9, map[int]float64{1: 0.0}),
+		obsAt(2, 0, 0.5, map[int]float64{1: 0.0}),
+		obsAt(1, 1, 0.5, map[int]float64{1: 0.10}),
+		obsAt(2, 1, 0.5, map[int]float64{1: 0.10}),
+	}
+	curve, _ := equityCurve(dedupeIndependentSorted(obs), nil, p)
+	if len(curve) != 2 {
+		t.Fatalf("curve len %d, want 2", len(curve))
+	}
+	want := (1 - 0.01*0.5) * 1.05
+	if !approx(curve[1].Strategy, want, 1e-12) {
+		t.Fatalf("equity = %v, want %v (symbol 2 held FLAT through the deadband)", curve[1].Strategy, want)
+	}
+}
+
+func TestEquityCurve_SharesTheDayIndexWithTheBenchmark(t *testing.T) {
+	// The two series are only comparable if they are marked on the same days.
+	// The strategy used to emit one point per (symbol,day) row against a
+	// benchmark of one point per day, so "vs SPY" compared 3 marks to 1.
+	p := (Params{PrimaryLag: 1, CostBps: 0, LongThreshold: 0.6, FlatThreshold: 0.4}).withDefaults()
+	var obs []Observation
+	for s := int64(0); s < 3; s++ {
+		obs = append(obs, obsAt(s, 0, 0.9, map[int]float64{1: 0.01}))
+		obs = append(obs, obsAt(s, 1, 0.9, map[int]float64{1: 0.01}))
+	}
+	indep := dedupeIndependentSorted(obs)
+	bench := []EquityPoint{{Ts: 0, Benchmark: 1.0}, {Ts: dayS, Benchmark: 1.5}}
+	curve, _ := equityCurve(indep, bench, p)
+	if len(curve) != len(bench) {
+		t.Fatalf("strategy has %d marks vs benchmark %d — the curves must share the day index", len(curve), len(bench))
+	}
+	for i := range curve {
+		if curve[i].Ts != bench[i].Ts {
+			t.Fatalf("mark %d: strategy ts=%d benchmark ts=%d", i, curve[i].Ts, bench[i].Ts)
+		}
+		if curve[i].Benchmark != bench[i].Benchmark {
+			t.Fatalf("mark %d: benchmark %v not carried onto the strategy mark (want %v)", i, curve[i].Benchmark, bench[i].Benchmark)
+		}
+	}
+}
+
+func TestBacktest_GatesAnImpossibleReturnInsteadOfPublishing(t *testing.T) {
+	// Sanity assertion on the accounting itself. A long/flat book with weights
+	// summing to at most 1 cannot go to zero or below, so an equity path that
+	// does is a broken computation, not a result. The surface must WITHHOLD it
+	// with a stated reason — the C1 failure mode was publishing -99.95% because
+	// nothing checked whether the number was reachable.
+	//
+	// A corrupt -200% forward return stands in for whatever produces the break.
+	var obs []Observation
+	for s := int64(0); s < 40; s++ {
+		obs = append(obs, obsAt(s, 0, 0.9, map[int]float64{1: -2.0}))
+	}
+	res := Backtest(obs, nil, "1d", Params{PrimaryLag: 1})
+	if res.IndependentN != 40 {
+		t.Fatalf("independentN = %d, want 40 (the N gate must not be what fires here)", res.IndependentN)
+	}
+	if !res.Gated {
+		t.Fatal("an unreachable equity path must gate the surface, not be published")
+	}
+	if res.Note == "" {
+		t.Fatal("the gate must state its reason")
+	}
+	if res.Equity != nil {
+		t.Fatalf("gated equity must be withheld, got %d marks", len(res.Equity))
+	}
+	if res.StrategyReturn != nil || res.BenchmarkReturn != nil || res.ExcessReturn != nil {
+		t.Fatal("a gated return is null, never a number the reader could quote")
 	}
 }
 

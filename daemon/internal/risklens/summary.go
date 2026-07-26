@@ -16,10 +16,16 @@ const defaultNotional = 100000.0
 // confidence <= 0 or >= 1 defaults to 0.95; a notional <= 0 defaults to
 // $100,000.
 //
+// market is the EXOGENOUS factor the stress betas are estimated against (SPY on
+// the live path), aligned to the same window as series. Pass a zero Series when
+// none is available: the market-shock scenarios then withhold with that reason
+// rather than falling back to the portfolio's own returns, which forced the
+// book beta to 1.0 and made every shock equal to itself.
+//
 // All sub-measures are in-sample, backward-looking descriptions of the supplied
 // window (see package doc). Analyze surfaces the same errors as its
 // constituents (short/misaligned/missing series, zero weights).
-func Analyze(holdings []Holding, series []Series, confidence, notionalUSD float64) (Report, error) {
+func Analyze(holdings []Holding, series []Series, market Series, confidence, notionalUSD float64) (Report, error) {
 	if confidence <= 0 || confidence >= 1 {
 		confidence = 0.95
 	}
@@ -31,14 +37,18 @@ func Analyze(holdings []Holding, series []Series, confidence, notionalUSD float6
 	if err != nil {
 		return Report{}, err
 	}
-	histVaR, histCVaR := HistoricalVaR(port, confidence)
-	paramVaR := ParametricVaR(port, confidence)
+	histVaR, histCVaR, gate := HistoricalVaR(port, confidence)
+	paramVaR, paramGate := ParametricVaR(port, confidence)
 
 	contribs, err := RiskContributions(holdings, series)
 	if err != nil {
 		return Report{}, err
 	}
-	scenarios, err := StressScenarios(holdings, series)
+	scenarios, err := StressScenarios(holdings, series, market)
+	if err != nil {
+		return Report{}, err
+	}
+	betas, err := MarketBetas(holdings, series, market)
 	if err != nil {
 		return Report{}, err
 	}
@@ -49,6 +59,10 @@ func Analyze(holdings []Holding, series []Series, confidence, notionalUSD float6
 		HistVaRPct:    histVaR,
 		HistCVaRPct:   histCVaR,
 		ParamVaRPct:   paramVaR,
+		VaRGate:       gate,
+		ParamVaRGate:  paramGate,
+		MarketProxy:   market.Symbol,
+		MarketBetas:   betas,
 		Contributions: contribs,
 		Scenarios:     scenarios,
 	}, nil
@@ -72,25 +86,53 @@ func Summary(report Report) string {
 
 	var b strings.Builder
 
-	// Sentence 1: headline VaR in % and $.
-	varDollars := report.HistVaRPct * notional
-	fmt.Fprintf(&b,
-		"Your 1-day %.0f%% VaR is %.2f%%: on a bad day (worse than about %.0f%% of days in this history) you could lose roughly $%s per $%s.",
-		confPct,
-		report.HistVaRPct*100,
-		confPct,
-		humanMoney(varDollars),
-		humanMoney(notional),
-	)
+	// Sentence 1: headline VaR in % and $ — or the reason there isn't one. A
+	// withheld VaR must be SAID, not silently rendered as a 0.00% loss.
+	if report.HistVaRPct == nil {
+		reason := report.VaRGate.Reason
+		if reason == "" {
+			reason = "the sample is too small to place a loss percentile"
+		}
+		fmt.Fprintf(&b,
+			"We are not publishing a 1-day %.0f%% VaR for this portfolio: %s.",
+			confPct, reason)
+	} else {
+		varDollars := *report.HistVaRPct * notional
+		fmt.Fprintf(&b,
+			"Your 1-day %.0f%% VaR is %.2f%%: on a bad day (worse than about %.0f%% of days in this history) you could lose roughly $%s per $%s.",
+			confPct,
+			*report.HistVaRPct*100,
+			confPct,
+			humanMoney(varDollars),
+			humanMoney(notional),
+		)
+	}
 
-	// Sentence 2: tail severity (CVaR).
-	cvarDollars := report.HistCVaRPct * notional
-	fmt.Fprintf(&b,
-		" When it is that bad, the average loss (CVaR) is about %.2f%% (~$%s), and the normal-model VaR is %.2f%%.",
-		report.HistCVaRPct*100,
-		humanMoney(cvarDollars),
-		report.ParamVaRPct*100,
-	)
+	// Sentence 2: tail severity (CVaR) and the normal-model comparison, each
+	// only when it exists.
+	if report.HistCVaRPct != nil {
+		cvarDollars := *report.HistCVaRPct * notional
+		fmt.Fprintf(&b,
+			" When it is that bad, the average loss (CVaR) is about %.2f%% (~$%s).",
+			*report.HistCVaRPct*100,
+			humanMoney(cvarDollars),
+		)
+	}
+	// The normal-model VaR travels with its assumption, ALWAYS — stating it only
+	// in a doc comment is how a number that understates fat tails ends up read as
+	// a risk limit. When it is withheld, say so: silence reads as "not computed",
+	// which is a different (and flattering) claim than "we refused to publish it".
+	if report.ParamVaRPct != nil {
+		fmt.Fprintf(&b,
+			" The normal-model VaR is %.2f%% — it assumes normally distributed returns and therefore understates fat tails; the historical figure above is the one to trust.",
+			*report.ParamVaRPct*100)
+	} else if report.ParamVaRGate.Withheld {
+		reason := report.ParamVaRGate.Reason
+		if reason == "" {
+			reason = "the sample cannot support a normal-model estimate"
+		}
+		fmt.Fprintf(&b, " We are not publishing a normal-model VaR: %s.", reason)
+	}
 
 	// Sentence 3: biggest risk driver.
 	if top, ok := topDriver(report.Contributions); ok {
@@ -103,13 +145,14 @@ func Summary(report Report) string {
 		)
 	}
 
-	// Sentence 4: worst modeled stress scenario.
+	// Sentence 4: worst modeled stress scenario, drawn only from scenarios that
+	// were actually computed.
 	if worst, ok := worstScenario(report.Scenarios); ok {
 		fmt.Fprintf(&b,
 			" Under a %q shock the portfolio would move about %.1f%% (~$%s).",
 			worst.Name,
-			worst.PnLPct*100,
-			humanMoney(worst.PnLPct*notional),
+			*worst.PnLPct*100,
+			humanMoney(*worst.PnLPct*notional),
 		)
 	}
 
@@ -129,18 +172,22 @@ func topDriver(cs []Contribution) (Contribution, bool) {
 	return sorted[0], true
 }
 
-// worstScenario returns the scenario with the most negative PnLPct.
+// worstScenario returns the scenario with the most negative PnLPct, skipping
+// withheld ones — a withheld scenario has no P&L to compare and must never be
+// treated as a 0% move (which would look like the mildest outcome and win the
+// "worst case" slot only when everything else was a gain).
 func worstScenario(ss []Scenario) (Scenario, bool) {
-	if len(ss) == 0 {
-		return Scenario{}, false
-	}
-	worst := ss[0]
-	for _, s := range ss[1:] {
-		if s.PnLPct < worst.PnLPct {
-			worst = s
+	var worst Scenario
+	found := false
+	for _, s := range ss {
+		if s.PnLPct == nil {
+			continue
+		}
+		if !found || *s.PnLPct < *worst.PnLPct {
+			worst, found = s, true
 		}
 	}
-	return worst, true
+	return worst, found
 }
 
 // humanMoney formats a dollar amount with thousands separators and no cents for

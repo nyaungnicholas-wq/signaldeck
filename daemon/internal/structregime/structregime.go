@@ -67,6 +67,22 @@
 //     verbatim in Tradeability (see forwardReturnFor / TradeabilityFor).
 //   - All targets: a regime call is situational awareness with a measured hit
 //     rate, not a trade recommendation.
+//
+// # Backtest, not (yet) live — read this before quoting HistoricalAccuracy
+//
+// Every number in the tables above was MEASURED in a BACKTEST: computed once,
+// offline, over historical bars, then frozen into accuracyFor's lookup table.
+// A Forecast's HistoricalAccuracy is that lookup, stamped at predict time —
+// it is not, and cannot yet be, a live/graded number. The pipeline DOES
+// snapshot every forecast into regime_outcomes for later live grading
+// (internal/pipeline's regime-outcome-runner) and DOES freeze the exact
+// claims below into a hash-chained, falsifiable record before any of them
+// resolved (internal/prereg, served at GET /api/prereg) — but as of this
+// writing zero of the outstanding calls have resolved, and none can before
+// firstGradableOn. A backtest number and a live number answer different
+// questions and must never be read as the same thing, so every Forecast
+// carries Evidence, FirstGradableOn and EvidenceCaveat rather than leaving a
+// JSON consumer to infer which kind of number HistoricalAccuracy is.
 package structregime
 
 import (
@@ -99,12 +115,32 @@ type Forecast struct {
 	// vol21 "elevated"/"calm".
 	Regime     string  `json:"regime"`
 	Conviction float64 `json:"conviction"`
-	// HistoricalAccuracy is the MEASURED walk-forward accuracy at THIS
-	// conviction tier (package doc) — the honest confidence.
+	// HistoricalAccuracy is the accuracy accuracyFor measured for THIS
+	// conviction tier in the offline BACKTEST described in the package doc —
+	// the honest confidence, but NOT a live/graded number. See Evidence and
+	// EvidenceCaveat, which say so explicitly on every Forecast rather than
+	// leaving a reader of the JSON to infer it from this comment.
 	HistoricalAccuracy float64 `json:"historicalAccuracy"`
-	Tier               string  `json:"tier"`
-	Rank               float64 `json:"rank"`
-	N                  int     `json:"n"`
+	// Evidence names what HistoricalAccuracy is. Always evidenceBacktest for
+	// every Forecast this package can currently produce — see the package
+	// doc's "Backtest, not (yet) live" section. Reserved so a future "live"
+	// value (built from a resolved regime_outcomes row instead of this table)
+	// can never be mistaken for this one; nothing here produces that value
+	// today.
+	Evidence string `json:"evidence"`
+	// FirstGradableOn is the earliest date this platform's structural claims
+	// can have a resolved live outcome — mirrors internal/prereg.FirstGradableOn
+	// exactly (TestFirstGradableOnMatchesPrereg asserts the two never drift).
+	// Before it, EVERY HistoricalAccuracy on this platform is a backtest
+	// claim, however it is labeled elsewhere.
+	FirstGradableOn string `json:"firstGradableOn"`
+	// EvidenceCaveat is the sentence a payload should render verbatim next to
+	// HistoricalAccuracy so a reader never has to infer what kind of number it
+	// is — see the evidenceCaveat constant's doc.
+	EvidenceCaveat string  `json:"evidenceCaveat"`
+	Tier           string  `json:"tier"`
+	Rank           float64 `json:"rank"`
+	N              int     `json:"n"`
 	// Tradeability states the MEASURED mean forward return of THIS conviction
 	// band in plain English — including the case the accuracy number hides, a
 	// top band that is the most accurate and the least profitable (package doc,
@@ -120,6 +156,43 @@ type Forecast struct {
 // or in a news regime the persistence statistics were not measured to cover.
 // Either way the honest output is NO forecast.
 const maxSaneReturn = 0.65
+
+// firstGradableOn mirrors internal/prereg.FirstGradableOn exactly: the date
+// the earliest pre-registered structural claim (internal/prereg.Specs) can
+// produce a resolved live verdict. Duplicated here rather than imported, on
+// purpose — prereg exists to freeze a claim independently of the code that
+// produces it, so the prediction path deliberately does not import back into
+// the audit package (the mirror image of prereg_test.go, which imports
+// structregime to check ITS frozen numbers match, never the reverse).
+// TestFirstGradableOnMatchesPrereg keeps the two dates from drifting apart
+// silently, the same discipline TestFrozenClaimsMatchLivePredictors already
+// applies to the accuracy numbers.
+const firstGradableOn = "2026-08-07"
+
+// evidenceBacktest/evidenceLive name what a Forecast's HistoricalAccuracy
+// actually is (Forecast.Evidence). Every Forecast this package returns today
+// is evidenceBacktest — read from accuracyFor's offline lookup table, never
+// from grading a resolved regime_outcomes row. evidenceLive is reserved for a
+// Forecast built FROM such a resolved row; nothing in this package
+// constructs one, so the constant exists only so a future caller that does
+// can use the same vocabulary instead of inventing a second one.
+const (
+	evidenceBacktest = "backtest"
+	evidenceLive     = "live"
+)
+
+// evidenceCaveat is Forecast.EvidenceCaveat's fixed text. Deliberately names
+// no Kind or accuracy tier of its own: trend63 and the crypto kinds build
+// their Forecast by copying PredictTrend/PredictLiquidity's output and only
+// overwriting Kind, HistoricalAccuracy and Tradeability (see trend63.go,
+// crypto.go), so a caveat that named "trend21" here would ship unchanged on a
+// trend63 or crypto row and be wrong.
+const evidenceCaveat = "BACKTEST CLAIM, not a live measurement: HistoricalAccuracy is a walk-" +
+	"forward backtest lookup, frozen and hash-chained BEFORE any of this predictor's forecasts " +
+	"resolved — see GET /api/prereg (internal/prereg) for the exact claim this call will be " +
+	"checked against. First gradable " + firstGradableOn + " — before that date this number has " +
+	"zero live resolutions behind it, whatever it is labeled elsewhere. Once resolutions exist, " +
+	"GET /api/track-record carries the live-vs-claimed comparison."
 
 // wildClose reports whether the trailing `lookback` closes contain a 1-day
 // move beyond maxSaneReturn.
@@ -184,6 +257,9 @@ func PredictTrend(closes []float64) (Forecast, bool) {
 		Kind: KindTrend21, HorizonDays: horizon, Regime: regime,
 		Conviction:         conv,
 		HistoricalAccuracy: accuracyFor(KindTrend21, conv),
+		Evidence:           evidenceBacktest,
+		FirstGradableOn:    firstGradableOn,
+		EvidenceCaveat:     evidenceCaveat,
 		Tier:               tierName(conv),
 		Rank:               conv,
 		N:                  n,
@@ -222,6 +298,9 @@ func PredictLiquidity(closes, volumes []float64) (Forecast, bool) {
 		Kind: KindLiquidity21, HorizonDays: horizon, Regime: regime,
 		Conviction:         conv,
 		HistoricalAccuracy: accuracyFor(KindLiquidity21, conv),
+		Evidence:           evidenceBacktest,
+		FirstGradableOn:    firstGradableOn,
+		EvidenceCaveat:     evidenceCaveat,
 		Tier:               tierName(conv),
 		Rank:               rank,
 		N:                  n,
@@ -247,6 +326,9 @@ func PredictVol21(rets []float64) (Forecast, bool) {
 		Kind: KindVol21, HorizonDays: horizon, Regime: regime,
 		Conviction:         conv,
 		HistoricalAccuracy: accuracyFor(KindVol21, conv),
+		Evidence:           evidenceBacktest,
+		FirstGradableOn:    firstGradableOn,
+		EvidenceCaveat:     evidenceCaveat,
 		Tier:               tierName(conv),
 		Rank:               rank,
 		N:                  n,
@@ -507,7 +589,24 @@ func forwardReturnFor(k Kind, conv float64) (pct float64, ok bool) {
 		// The re-validation split the sub-0.5 region into 0.00-0.25 (+0.41%) and
 		// 0.25-0.50 (+0.51%); the band served here is the LOWER of the two,
 		// because a share-weighted blend of them was never measured.
-		t = bands{0.41, 0.58, 0.79, -0.39}
+		//
+		// TOP BAND CORRECTED 2026-07-26 from -0.39% to -0.76%. An adversarial
+		// review claimed the disclosed downside understated the measured loss by
+		// 5x (-2.05%). An independent replication run here against the live bars
+		// — 976 stock symbols, conviction >= 0.9, NON-OVERLAPPING 21-session
+		// forward windows, one call per (symbol, day), n = 18,850 — measured
+		// -0.76% with a 95% interval of [-1.19%, -0.32%], alongside a 95.17%
+		// persistence accuracy that corroborates the accuracy ladder.
+		//
+		// So the reviewer's DIRECTION replicates and their MAGNITUDE does not:
+		// -2.05% sits outside this interval, and their method was not stated, so
+		// it could not be reproduced. The served number is the measurement, not
+		// the worse unreproduced figure and not the kinder original — adopting an
+		// unverified number because it flatters nobody would be the same failure
+		// as keeping one that flatters us. The interval is what to quote; the
+		// point estimate is a mean over a right-skewed distribution whose median
+		// is only -0.05%, i.e. the loss lives in a tail, not in the typical call.
+		t = bands{0.41, 0.58, 0.79, -0.76}
 	case KindTrend63:
 		// Only the top band was reported at the quarterly horizon.
 		t = bands{nm, nm, nm, -1.30}

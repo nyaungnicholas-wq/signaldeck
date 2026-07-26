@@ -37,7 +37,8 @@ func (w *AdaptiveWeightsWorker) Interval() time.Duration { return 6 * time.Hour 
 func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 	// Pool labeled examples across the predicted horizons: weights are keyed
 	// by regime cell (the plan's unit of learning), and pooling reaches the
-	// n>=30 honesty gate sooner without changing what is measured.
+	// honesty gates sooner without changing what is measured. Pooling adds
+	// rows, not days — the gates count days, so this cannot buy a gate pass.
 	var examples []adaptive.Example
 	for _, h := range predHorizons {
 		rows, err := w.St.LabeledFeatures(ctx, h, adaptiveMaxRows)
@@ -47,7 +48,11 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 		for _, r := range rows {
 			legs, regime := adaptive.FromVector(r.Vec)
 			examples = append(examples, adaptive.Example{
-				Legs: legs, Regime: regime, Up: r.Up, FwdReturn: r.FwdReturn,
+				// Ts is what makes the attribution's floors and standard errors
+				// count DISTINCT UTC DAYS instead of rows. Dropping it here
+				// would silently restore the row-counting defect: this pass
+				// pools ~40,000 rows that span only 12 days.
+				Legs: legs, Regime: regime, Ts: r.Ts, Up: r.Up, FwdReturn: r.FwdReturn,
 			})
 		}
 	}
@@ -80,10 +85,13 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 		}
 	}
 
-	learned := 0
+	learned, days := 0, 0
 	for _, c := range next.Cells {
 		if len(c.Weights) > 0 {
 			learned++
+		}
+		if c.Days > days {
+			days = c.Days
 		}
 	}
 	if shift > adaptiveShiftThreshold && len(prev.Cells) > 0 {
@@ -91,8 +99,13 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("insight: %w", err)
 		}
 	}
-	return fmt.Sprintf("attributed %d labeled example(s) across %d cell(s); %d cell(s) passed the n>=%d gate (max weight shift %.2f)",
-		len(examples), len(next.Cells), learned, adaptive.MinCellSamples, shift), nil
+	// Report the DAY count beside the row count on every surface: a row total
+	// with no day total is the number that made three days of evidence look
+	// like a sample of 40,000.
+	return fmt.Sprintf("attributed %d labeled row(s) spanning %d distinct day(s) across %d cell(s); %d cell(s) yielded learned weights (floors: %d rows AND %d days; %d panel test(s) at family-wise alpha %.2f; max weight shift %.2f)",
+		len(examples), days, len(next.Cells), learned,
+		adaptive.MinCellSamples, adaptive.MinCellDays,
+		next.Panel.Tests, next.Panel.Alpha, shift), nil
 }
 
 // weightHistoryRows flattens a computed weight set into append-only history
@@ -142,7 +155,7 @@ func adaptiveShiftInsight(w adaptive.Weights, shift float64) md.Insight {
 		for _, leg := range legs {
 			ws = append(ws, fmt.Sprintf("%s %.2f", leg, c.Weights[leg]))
 		}
-		parts = append(parts, fmt.Sprintf("%s (n=%d): %s", n, c.N, strings.Join(ws, ", ")))
+		parts = append(parts, fmt.Sprintf("%s (n=%d rows over %d days): %s", n, c.N, c.Days, strings.Join(ws, ", ")))
 	}
 	data, _ := json.Marshal(map[string]any{"kind": "adaptive_weights_shift", "maxShift": shift, "weights": w})
 	return md.Insight{
@@ -151,7 +164,7 @@ func adaptiveShiftInsight(w adaptive.Weights, shift float64) md.Insight {
 		Headline: fmt.Sprintf("Ensemble weights shifted (max move %.2f)", shift),
 		Body: "The adaptive learning pass re-measured per-component edge from resolved outcomes and the blend weights moved materially. New learned weights — " +
 			strings.Join(parts, "; ") +
-			". Cells without enough samples keep the static equal prior (honesty gate).",
+			". Cells without enough independent days keep the static equal prior (honesty gate).",
 		Data: string(data),
 	}
 }

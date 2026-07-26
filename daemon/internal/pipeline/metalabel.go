@@ -10,8 +10,30 @@
 // sake — the primary this currently grades is the auto-retired directional
 // ensemble, and a filter wired into a signal with no cost-net edge would produce
 // fewer trades with the same lack of edge while looking like an improvement.
-// When it was first graded live it showed a +17.7pp precision gain and was still
+// When it was first graded live it showed a large precision gain and was still
 // correctly rejected for exactly that reason.
+//
+// # Why both horizons currently publish a REFUSAL rather than a grade
+//
+// Those early grades were computed on a walk-forward with no purge, and this
+// runner's candidates are symbol-days: measured on the live database
+// (2026-07-25, read-only), ~5,870 1d candidates span ELEVEN distinct days and
+// ~5,610 1w candidates span twelve. With a one-day label and ~530 rows per day,
+// 57.8% of the training rows across folds carried outcomes realised inside the
+// block they were about to be graded on; at the 1w horizon it was 94.1%. Purging
+// them honestly removes 5,436 training rows at 1d and 7,181 at 1w and leaves 2 of
+// 7 fold boundaries trainable at 1d, 1 of 7 at 1w, against the 4 retrains
+// demanded — so metalabel.Evaluate now withholds both grades with the reason, and
+// this worker publishes that reason. (Candidate counts are approximate because
+// the 40,000-row cap cuts mid-day; the contamination and purge counts are exact.)
+//
+// That is the correct output, not a regression to fix: the history is shorter
+// than a handful of its own label spans. The withheld numbers were not neutral
+// either — the last unpurged 1d grade reported a filtered expectancy of +0.19%
+// per decision against a primary at -0.22%, i.e. a filter that appeared to turn a
+// losing signal profitable. It was still rejected, but only because the
+// edgeless-primary gate fired first. Both horizons become gradable once the
+// candidate set spans enough distinct days to survive its own purge.
 package pipeline
 
 import (
@@ -61,9 +83,15 @@ func (w *MetaLabelRunner) Interval() time.Duration { return 12 * time.Hour }
 
 // publishedMetaLabel is one horizon's grade as stored and served.
 type publishedMetaLabel struct {
-	Horizon    string          `json:"horizon"`
-	Grade      metalabel.Grade `json:"grade"`
-	ComputedAt int64           `json:"computedAt"`
+	Horizon string `json:"horizon"`
+	// Grade is a POINTER and omitted entirely when the horizon was not graded.
+	// A zero Grade would render a full set of 0.00% expectancies and an empty
+	// verdict beside the reason it could not be measured, and a withheld number
+	// must be absent, never zero. Skipped horizons became the common case once
+	// the walk-forward started purging: on the live data neither horizon's
+	// history is long enough to support four purged retrains.
+	Grade      *metalabel.Grade `json:"grade,omitempty"`
+	ComputedAt int64            `json:"computedAt"`
 	// Skipped carries the honest reason a horizon produced no grade at all,
 	// so an empty result is never mistaken for a passing one.
 	Skipped string `json:"skipped,omitempty"`
@@ -91,7 +119,10 @@ func (w *MetaLabelRunner) Run(ctx context.Context) (string, error) {
 			continue
 		}
 
-		samples, ctxKeys := metaLabelSamples(rows)
+		// horizonSecs is the same source of truth the GBM leg's trainer declares
+		// with, so the two purges are sized identically and their grades stay
+		// comparable.
+		samples, ctxKeys := metaLabelSamples(rows, horizonSecs(h))
 		if len(samples) == 0 {
 			out = append(out, publishedMetaLabel{
 				Horizon: string(h), ComputedAt: now,
@@ -112,9 +143,9 @@ func (w *MetaLabelRunner) Run(ctx context.Context) (string, error) {
 			continue
 		}
 
-		out = append(out, publishedMetaLabel{Horizon: string(h), Grade: g, ComputedAt: now})
-		summary = append(summary, fmt.Sprintf("%s: %s (n=%d over %d days, took %d on %d days)",
-			h, g.Verdict, g.N, g.TotalDays, g.TakenN, g.TakenDays))
+		out = append(out, publishedMetaLabel{Horizon: string(h), Grade: &g, ComputedAt: now})
+		summary = append(summary, fmt.Sprintf("%s: %s (n=%d over %d days, took %d on %d days, purged %d train rows)",
+			h, g.Verdict, g.N, g.TotalDays, g.TakenN, g.TakenDays, g.PurgedTrainRows))
 		_ = ctxKeys
 	}
 
@@ -132,8 +163,9 @@ func (w *MetaLabelRunner) Run(ctx context.Context) (string, error) {
 }
 
 // metaLabelSamples turns labeled feature rows into meta-label candidates.
+// labelSpan is the primary's forward horizon in seconds.
 //
-// Two disciplines are enforced here rather than trusted:
+// Three disciplines are enforced here rather than trusted:
 //
 //   - ONE OBSERVATION PER SYMBOL PER UTC DAY. Pooling intraday rows inflates n
 //     roughly 60x on this platform's data and has manufactured false
@@ -142,7 +174,13 @@ func (w *MetaLabelRunner) Run(ctx context.Context) (string, error) {
 //     prediction but never the prediction itself: canonicalFeatureKeys already
 //     drops pred_raw/pred_cal/gbm_prob/meanrev_prob/alphax_prob, so a filter
 //     cannot score well by simply re-reading the primary's own output.
-func metaLabelSamples(rows []store.LabeledFeature) ([]metalabel.Sample, []string) {
+//   - THE LABEL HORIZON IS DECLARED. Every candidate records when its outcome
+//     resolved, which is what lets the walk-forward PURGE training rows whose
+//     answer lands inside the block they are about to be graded on. It is set
+//     here rather than at the call site so no path can build candidates and
+//     forget: metalabel refuses to grade an undeclared set, so forgetting would
+//     turn the whole surface off silently.
+func metaLabelSamples(rows []store.LabeledFeature, labelSpan int64) ([]metalabel.Sample, []string) {
 	ctxKeys := canonicalFeatureKeys(rows)
 	if len(ctxKeys) == 0 {
 		return nil, nil
@@ -172,6 +210,7 @@ func metaLabelSamples(rows []store.LabeledFeature) ([]metalabel.Sample, []string
 		vec := flatten(r.Vec, ctxKeys)
 		samples = append(samples, metalabel.Sample{
 			Ts:          r.Ts,
+			LabelEnd:    r.Ts + labelSpan,
 			PrimaryProb: p,
 			Context:     vec,
 			FwdReturn:   r.FwdReturn,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/gbm"
@@ -29,6 +30,14 @@ const (
 	meanRevFolds = 5
 )
 
+// presenceSuffix marks a DERIVED per-feature presence indicator: for base key
+// K, K+presenceSuffix is 1 when K was in the row's raw map and 0 when it was
+// absent. Aliased to the shared constant so this package, the pooled
+// cross-sectional engine (alphax) and the self-reference predicate that trims
+// it (gbm.SelfReferentialKey) can never drift to two spellings — a second
+// spelling would silently re-open the exclusion hole that predicate closes.
+const presenceSuffix = gbm.PresenceSuffix
+
 // canonicalFeatureKeys returns a STABLE, sorted union of feature-vector keys
 // across the given labeled rows, EXCLUDING the model's own outputs (pred_raw /
 // pred_cal) so the GBM cannot trivially copy the blend it is trying to
@@ -36,6 +45,11 @@ const (
 // A deterministic ordering is essential: the GBM is index-based, so every
 // sample (and the live latest vector) must be flattened with the identical key
 // order.
+//
+// These are BASE keys only — the genuine data sources. The feature-redundancy
+// surface (honestygaps.go) passes them as its allowlist of fields to correlate,
+// and a presence indicator is not a data source. Callers building a MODEL INPUT
+// layout want modelFeatureKeys instead.
 func canonicalFeatureKeys(rows []store.LabeledFeature) []string {
 	set := map[string]struct{}{}
 	for _, r := range rows {
@@ -63,22 +77,86 @@ func canonicalFeatureKeys(rows []store.LabeledFeature) []string {
 //     leg must not be fed its own past prediction, both to avoid a
 //     self-referential shortcut and to keep the GBM leg independent of the other
 //     model legs (and itself).
+//
+// It delegates to the shared predicate rather than keeping a private copy of
+// the list: finding H6 is what a private copy cost, and the shared predicate
+// also matches by BASE name, so a presence indicator (pred_raw__has) is
+// excluded with its value — a bit saying "the blend had an opinion here" leaks
+// the same self-reference the probability does.
 func excludedGBMKey(k string) bool {
-	switch k {
-	case "pred_raw", "pred_cal", "gbm_prob", "meanrev_prob", "alphax_prob":
-		return true
+	return gbm.SelfReferentialKey(k)
+}
+
+// modelFeatureKeys returns the MODEL INPUT layout: every base key from
+// canonicalFeatureKeys followed by its derived K+presenceSuffix indicator,
+// sorted so the ordering stays deterministic (the GBM is index-based).
+//
+// WHY the indicators exist. The pipeline is careful to OMIT a feature it could
+// not observe — buildFeatureVector, macrofeat.FromSeries, alphaxfeat and
+// trendfeat all say "absence is information, not zero" in prose — and flatten
+// then destroyed that distinction by filling absent keys with 0. Zero is a real
+// and often MODAL value for these fields, measured on the live DB (mode=ro) on
+// 2026-07-26:
+//
+//   - macro_fedfunds_chg is exactly 0.0 on 312 of 312 v11 rows — the policy rate
+//     does not move between FOMC meetings, so 0 IS the normal reading;
+//   - vix_high_vol is exactly 0.0 on all 100,503 v10 rows;
+//   - BTC/USD v10 carries 749 measured-zero micro_spread_bps against 14 rows
+//     where the book read failed and the key is absent.
+//
+// And the outage is not hypothetical: v3's vix_* keys are absent across a
+// perfectly contiguous window, 2026-07-04 09:00:00 to 23:03:00 UTC, 1,272 rows
+// with not one present row inside it, while vix_high_vol reads exactly 0.0 on
+// all 30,826 rows where FRED did answer. Under the old flatten those 1,272
+// outage rows were byte-identical to a measured "vol regime not elevated" — a
+// tree splitting there learns the hours the data provider was down, not a
+// market state.
+//
+// Raw keys already ending in presenceSuffix are dropped from the base set: the
+// suffix is RESERVED for these derived bits, so a stored key can never shadow
+// one and make "present" mean whatever value happened to be written.
+//
+// NOT a featureVersion bump, deliberately. featureVersion stamps the vector
+// PERSISTED by InsertFeatures, and this changes nothing about what is stored —
+// only the layout derived from stored rows at training time. Bumping would
+// orphan the v11 rows and stall every per-symbol GBM for weeks (the cost
+// maxModelForecastAgeSecs below documents), to protect models that do not exist:
+// no trained model is persisted anywhere, gbm.Run retrains from the rows on
+// every pass, and modelFeatureKeys is recomputed in the same call that consumes
+// it. There is no stored artifact whose width could disagree.
+func modelFeatureKeys(rows []store.LabeledFeature) []string {
+	base := canonicalFeatureKeys(rows)
+	keys := make([]string, 0, 2*len(base))
+	for _, k := range base {
+		if strings.HasSuffix(k, presenceSuffix) {
+			continue
+		}
+		keys = append(keys, k, k+presenceSuffix)
 	}
-	return false
+	sort.Strings(keys)
+	return keys
 }
 
 // flatten turns a feature map into a fixed-dimension vector in the given key
-// order. Missing keys become 0 (a feature absent from a row is treated as its
-// neutral value — the GBM splits handle it, and the key set is the union so
-// dimensions always match).
+// order. A key ending in presenceSuffix is DERIVED from the raw map — 1 when
+// its base key is present, 0 when it is not — and is never read out of the map,
+// so the training path and the live-scoring path (which flatten with the same
+// key slice) agree by construction. Base values still flatten to 0 when absent;
+// the indicator beside them is what carries the missingness, which is why a
+// missing feature is no longer the same model input as an observed zero.
+//
+// Callers passing a base-only key slice (canonicalFeatureKeys) get the original
+// behaviour unchanged.
 func flatten(vec map[string]float64, keys []string) []float64 {
 	out := make([]float64, len(keys))
 	for i, k := range keys {
-		out[i] = vec[k] // zero if absent
+		if b, ok := strings.CutSuffix(k, presenceSuffix); ok {
+			if _, present := vec[b]; present {
+				out[i] = 1
+			}
+			continue
+		}
+		out[i] = vec[k] // zero if absent — the __has bit says which
 	}
 	return out
 }
@@ -101,17 +179,61 @@ func gbmSamplesFromLabeled(rows []store.LabeledFeature, keys []string) []gbm.Sam
 }
 
 // meanRevSamplesFromLabeled builds time-ASCENDING meanrev.Samples from labeled
-// rows. Each carries the stored momentum raw prob (pred_raw) the blend produced
-// plus the realized outcome + forward return for cost-net grading. Rows lacking
-// a stored pred_raw are skipped (no momentum lean to invert).
+// rows, carrying the momentum lean this leg exists to invert plus the realized
+// outcome + forward return for cost-net grading.
+//
+// IT MUST NOT READ pred_raw, and that is the whole point of this comment.
+// pred_raw is the BLEND output, and the blend contains the mean-reversion leg
+// whenever its lift is positive — so training the leg on pred_raw closes a loop
+// in which the leg learns to invert a number that already contains itself. The
+// file forty lines above this one excludes pred_raw from GBM training for
+// exactly that reason; this builder quietly read it anyway, and 1,093 live
+// predictions across 12 symbols were emitted through that loop.
+//
+// The leg's own doctrine is "invert an extreme pressure score", so it reads the
+// pressure feature directly and applies the same [-1,1] -> [0,1] conversion
+// ensemble.LegProbabilities uses for LegPressure. That is an input, not an
+// output. Rows lacking it are skipped, exactly as rows lacking pred_raw were.
+// meanRevLatestInput derives the momentum probability the mean-reversion leg
+// inverts when it SERVES, using the same construction as the samples it is
+// GRADED on.
+//
+// It used to read rows[0].Vec["pred_raw"], which was wrong twice over.
+// gbm/selfref.go names the first fault in its own doctrine comment: pred_raw is
+// the blend output computed WITH the mean-reversion leg inside it, so the leg
+// inverted a number that already contained its own inversion. The sample
+// builder was moved onto pressure_score when that was found; this serve path,
+// forty lines away, was not.
+//
+// The second fault is quieter and just as bad: the OOS lift that admits this
+// leg into the blend was measured on (pressure_score+1)/2 while the probability
+// actually published inverted pred_raw. The gate was validating a signal that
+// was never served. Live on 2026-07-26, 7 of 37 graded meanrev rows carried
+// lift>0 and were therefore in the blend on that basis.
+//
+// It refuses rather than falling back when the newest row has no pressure
+// score: a fallback to pred_raw would quietly restore the self-reference during
+// exactly the source outage that makes it hardest to notice.
+func meanRevLatestInput(rows []store.LabeledFeature) (float64, bool) {
+	if len(rows) == 0 {
+		return 0, false
+	}
+	pressure, ok := rows[0].Vec["pressure_score"]
+	if !ok {
+		return 0, false
+	}
+	return (pressure + 1) / 2, true
+}
+
 func meanRevSamplesFromLabeled(rows []store.LabeledFeature) []meanrev.Sample {
 	out := make([]meanrev.Sample, 0, len(rows))
 	for i := len(rows) - 1; i >= 0; i-- {
 		r := rows[i]
-		raw, ok := r.Vec["pred_raw"]
+		pressure, ok := r.Vec["pressure_score"]
 		if !ok {
 			continue
 		}
+		raw := (pressure + 1) / 2
 		out = append(out, meanrev.Sample{
 			Ts:        r.Ts,
 			RawProb:   raw,
@@ -159,9 +281,17 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 			}
 
 			// ── GBM leg ──────────────────────────────────────────────────
-			keys := canonicalFeatureKeys(rows)
+			// Model layout, not the base union: every field carries a
+			// presence indicator so an unobserved feature cannot arrive as
+			// the zero it is often genuinely measured at.
+			keys := modelFeatureKeys(rows)
 			if len(keys) > 0 {
-				samples := gbmSamplesFromLabeled(rows, keys)
+				// Declare the label horizon so gbm.Evaluate can PURGE training
+				// rows whose label resolves inside the test block. Without it
+				// Evaluate refuses to grade rather than publish a Lift computed
+				// across overlapping labels — the gate that admits this leg to
+				// the live blend must not be measured on leaked rows.
+				samples := gbm.WithLabelSpan(gbmSamplesFromLabeled(rows, keys), horizonSecs(h))
 				// Latest live vector = newest row (rows[0]) flattened with the
 				// same key order. It IS in the training set (its outcome already
 				// resolved, so it's a legitimate labeled example); Run grades
@@ -184,7 +314,7 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 
 			// ── mean-reversion leg ───────────────────────────────────────
 			mrSamples := meanRevSamplesFromLabeled(rows)
-			latestRaw, hasRaw := rows[0].Vec["pred_raw"]
+			latestRaw, hasRaw := meanRevLatestInput(rows)
 			if hasRaw {
 				if prob, g, ok := meanrev.Run(mrSamples, latestRaw, meanRevFolds, meanrev.DefaultStrength, meanRevCost); ok {
 					if err := w.St.UpsertModelForecast(ctx, store.ModelForecast{

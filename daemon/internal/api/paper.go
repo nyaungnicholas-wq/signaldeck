@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/moneymetrics"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/papertrade"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -74,6 +76,14 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 	closed, numFills, tradedNotional := reconstructRoundTrips(all)
 	summary := papertrade.Summarize(curve, closed, numFills, tradedNotional)
 
+	// FILL FIDELITY: re-derive every logged fill from the bar it names, on every
+	// read. A verified-by-assumption trade log is how 21 of 44 fills sat in a
+	// "track record" while differing from their own bars by up to 90.3 bps —
+	// `bars` is written INSERT OR REPLACE, so a provider revision rewrites the
+	// reference a past fill priced off and nothing notices. This is the check
+	// that notices.
+	fidelity := d.checkPaperFills(r.Context(), all)
+
 	// MONEY SCOREBOARD: score the closed round-trips by EXPECTED PROFIT
 	// (expectancy / profit factor / payoff), the numbers that actually decide
 	// whether the signal makes money. Returns are already NET of both-side costs.
@@ -92,10 +102,47 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		"positions":  positions,
 		"trades":     recent,
 		"summary":    summary,
+		// The equity curve is only as good as the fills under it. Ship the
+		// reconciliation beside the summary so a reader never has to assume it.
+		"fillFidelity": fidelity,
+		"verified":     fidelity.Verified,
 		// Money scoreboard leads the display; the caption reframes win rate.
 		"money":        money,
 		"moneyCaption": paperMoneyCaption,
 	})
+}
+
+// maxFidelityChecks bounds how many fills one read reconciles. The paper log is
+// small (tens of fills) and each check is one indexed bar lookup, but the read
+// pool has four connections and this route is public — an unbounded per-request
+// fan-out over a growing log is a denial-of-service waiting to be written.
+const maxFidelityChecks = 500
+
+// checkPaperFills re-derives each logged fill from the stored bar at its
+// timestamp and returns the verdict. Fills are written AT the bar open, so any
+// deviation means the bar was revised after the fill (or the fill never came
+// from that bar) — either way the equity curve built on it can no longer be
+// re-derived from the database, and the payload has to say so.
+//
+// Only the most recent maxFidelityChecks fills are checked; the returned counts
+// describe exactly that window, never the whole log by implication.
+func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade) papertrade.Fidelity {
+	from := 0
+	if len(all) > maxFidelityChecks {
+		from = len(all) - maxFidelityChecks
+	}
+	pairs := make([]papertrade.FillVsBar, 0, len(all)-from)
+	for _, t := range all[from:] {
+		p := papertrade.FillVsBar{Px: t.Px}
+		// BarAtOrBefore is the exact bar only when its ts matches; an earlier bar
+		// is NOT the one this fill named, so it counts as "no bar".
+		if bar, ok, err := d.St.BarAtOrBefore(ctx, t.SymbolID, md.TF1d, t.Ts); err == nil && ok && bar.Ts == t.Ts {
+			p.BarOpen = bar.Open
+			p.HasBar = true
+		}
+		pairs = append(pairs, p)
+	}
+	return papertrade.CheckFillFidelity(pairs)
 }
 
 // roundTripReturns walks the ordered trade log and returns the NET fractional

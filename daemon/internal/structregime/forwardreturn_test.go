@@ -27,8 +27,8 @@ func TestForwardReturnForBands(t *testing.T) {
 		{"trend21 just under 0.8", KindTrend21, 0.7999, 0.58, true},
 		{"trend21 at 0.8", KindTrend21, 0.8, 0.79, true},
 		{"trend21 just under 0.9", KindTrend21, 0.8999, 0.79, true},
-		{"trend21 at 0.9 inverts", KindTrend21, 0.9, -0.39, true},
-		{"trend21 top", KindTrend21, 1.0, -0.39, true},
+		{"trend21 at 0.9 inverts", KindTrend21, 0.9, -0.76, true},
+		{"trend21 top", KindTrend21, 1.0, -0.76, true},
 		{"trend63 at 0.9", KindTrend63, 0.9, -1.30, true},
 		{"trend63 top", KindTrend63, 1.0, -1.30, true},
 		{"trend63 below 0.9 not measured", KindTrend63, 0.8999, 0, false},
@@ -108,7 +108,7 @@ func TestTradeabilityTopTrend21StatesNegativeReturn(t *testing.T) {
 	if got == "" {
 		t.Fatal("top-band trend21 forecast shipped an EMPTY tradeability string")
 	}
-	for _, want := range []string{"-0.39%", "NOT A TRADE", "does NOT mean higher return", "mean-revert"} {
+	for _, want := range []string{"-0.76%", "NOT A TRADE", "does NOT mean higher return", "mean-revert"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tradeability missing %q\ngot: %s", want, got)
 		}

@@ -260,3 +260,84 @@ func TestResearchLedgerContradictionLowersPosterior(t *testing.T) {
 		t.Errorf("contradictions = %d, want 1", h2.Contradictions)
 	}
 }
+
+// H006's entire evidence chain is one `manual` row with n=0 and a typed BF of 3.
+// On the live DB (2026-07-25) that row was publishing a posterior of 0.75 for a
+// belief nothing had ever measured. The row must SURVIVE — deleting evidence is
+// worse than refusing it — while the published number falls back to the prior.
+func TestResearchLedgerRefusesAssertedPromotion(t *testing.T) {
+	ctx := context.Background()
+	st := newLedgerStore(t)
+	w := NewResearchLedgerWorker(st)
+	w.Now = func() time.Time { return time.Unix(1_800_000_000, 0) }
+
+	msg, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	h6 := ledgerHypByID(t, st, "H006")
+	if h6.Posterior != h6.Prior {
+		t.Errorf("H006 posterior = %.4f, want its %.4f prior — an n=0 assertion promoted it",
+			h6.Posterior, h6.Prior)
+	}
+	chain, err := st.LedgerEvidence(ctx, "H006")
+	if err != nil {
+		t.Fatalf("evidence: %v", err)
+	}
+	if len(chain) != 1 || chain[0].BF != 3 {
+		t.Errorf("H006 chain = %+v, want the declared BF=3 row kept verbatim", chain)
+	}
+	if !strings.Contains(msg, "H006") || !strings.Contains(msg, "refused") {
+		t.Errorf("run message %q does not disclose the refusal", msg)
+	}
+
+	// The mirror: H003's asserted row argues AGAINST and keeps full force, so
+	// the hypothesis stays rejected. Refusing that too would have LOOSENED the
+	// ledger, which is the opposite of the defect.
+	h3 := ledgerHypByID(t, st, "H003")
+	if h3.Status != rl.StatusRejected {
+		t.Errorf("H003 = (%.4f, %s), want rejected — an asserted penalty must keep full force",
+			h3.Posterior, h3.Status)
+	}
+}
+
+// The posterior column is derived, so it must be re-derived for EVERY
+// hypothesis on every run — not only for the two that have graders. A belief
+// nobody grades kept its seeded number forever, which is how a corrected rule
+// fails to reach the page it corrects.
+func TestResearchLedgerRecomputesUngradedHypotheses(t *testing.T) {
+	ctx := context.Background()
+	st := newLedgerStore(t)
+	w := NewResearchLedgerWorker(st)
+	w.Now = func() time.Time { return time.Unix(1_800_000_000, 0) }
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+
+	// Corrupt the derived columns on a hypothesis with NO grader (H013 is a
+	// frontier row) through the same path the worker writes them, which is the
+	// only path that can write them — the upsert deliberately leaves derived
+	// columns alone on conflict.
+	h := ledgerHypByID(t, st, "H013")
+	want := h.Posterior
+	if err := st.UpdateLedgerDerived(ctx, "H013", 0.99, rl.StatusSupported,
+		h.Replications, h.Contradictions, h.Regimes, 1_800_000_000); err != nil {
+		t.Fatalf("corrupt derived: %v", err)
+	}
+	if got := ledgerHypByID(t, st, "H013"); got.Posterior != 0.99 {
+		t.Fatalf("fixture did not take: posterior = %.4f", got.Posterior)
+	}
+
+	w.Now = func() time.Time { return time.Unix(1_800_000_000+86400, 0) }
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	got := ledgerHypByID(t, st, "H013")
+	if got.Posterior != want {
+		t.Errorf("H013 posterior = %.4f after a run, want %.4f re-derived from its chain",
+			got.Posterior, want)
+	}
+	if got.Status == rl.StatusSupported {
+		t.Errorf("H013 kept a stale 'supported' status on a %.4f posterior", got.Posterior)
+	}
+}

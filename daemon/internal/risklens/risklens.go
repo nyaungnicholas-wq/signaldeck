@@ -21,8 +21,23 @@
 //   - COSTS/ASSUMPTIONS. Returns are simple (arithmetic) daily close-to-close.
 //     No trading costs, slippage, dividends, or intraday risk are modeled —
 //     close-to-close only. Weights are assumed constant over the window (no
-//     rebalancing drift). ParametricVaR additionally assumes normally
-//     distributed returns, which understates tail risk for real markets.
+//     rebalancing drift).
+//   - THE NORMAL-MODEL VaR IS TESTED, NOT JUST CAVEATED. ParametricVaR assumes
+//     normally distributed returns, and that assumption is checked against the
+//     same sample (Jarque-Bera at 1%). A window that rejects normality gets no
+//     parametric figure at all, because the model's error runs one way — it
+//     understates the tail — and shipping it beside the caveat is how the
+//     understating estimate came to fill the hole left by a withheld historical
+//     VaR. On real daily equity returns this gate fires essentially always.
+//   - WITHHOLDING BEATS GUESSING. Every published figure here is nullable. A
+//     VaR whose loss tail is a handful of points, or a market shock for a book
+//     whose betas cannot be estimated, is returned as nil with a stated reason —
+//     never as 0, which renders as "no risk" and is the opposite of "we cannot
+//     say". Callers must render nil as "—".
+//   - BETAS ARE EXOGENOUS. Market-shock scenarios regress holdings on a market
+//     factor supplied by the caller (SPY on the live path), never on the
+//     portfolio's own returns. Self-regression forces the book beta to exactly
+//     1.0 and turns every stress number into the shock itself.
 package risklens
 
 import "errors"
@@ -41,6 +56,10 @@ var (
 	ErrUnequalLength = errors.New("risklens: series lengths differ (caller must align)")
 	// ErrZeroWeight is returned when holding weights sum to zero and cannot be normalized.
 	ErrZeroWeight = errors.New("risklens: holding weights sum to zero")
+	// ErrNonPositiveClose is returned when a series carries a close that is not a
+	// finite positive price. Such a series yields no usable return vector, and
+	// accepting it panicked the weighted-sum loops (see alignSeries).
+	ErrNonPositiveClose = errors.New("risklens: series contains a non-positive or non-finite close")
 )
 
 // MinCloses is the minimum number of aligned closes required per series so the
@@ -73,25 +92,63 @@ type Contribution struct {
 	Vol       float64 // daily return stdev (sample)
 }
 
+// HoldingBeta is one holding's estimated sensitivity to the exogenous market
+// factor. Beta is nil — and Reason says why — when it could not be estimated
+// over the shared window. A nil beta is EXCLUDED from every market-shock P&L
+// rather than defaulted to 1.0; defaulting is what made the stress surface
+// return the same number for every book.
+type HoldingBeta struct {
+	Symbol string
+	Weight float64
+	Beta   *float64 `json:",omitempty"`
+	Reason string   `json:",omitempty"`
+}
+
 // Scenario is one stress test's estimated portfolio profit/loss. PnLPct is the
-// portfolio return under the shock (negative = loss). Detail explains the shock
-// and its assumptions.
+// portfolio return under the shock (negative = loss), or nil when the scenario
+// is WITHHELD — the key is then absent from the JSON so a UI renders "—"
+// instead of a fabricated 0. Detail explains the shock, its assumptions, and
+// (when withheld) exactly what was missing.
 type Scenario struct {
-	Name   string
-	PnLPct float64
-	Detail string
+	Name     string
+	PnLPct   *float64 `json:"PnLPct,omitempty"`
+	Withheld bool     `json:",omitempty"`
+	Detail   string
+}
+
+// VaRGate records the sample a historical VaR was computed from — or refused
+// on. TailN is the number of observations at or below the VaR quantile: it is
+// the only count that matters for a percentile estimate, and the count the old
+// code let fall to 3 while still publishing a dollar figure.
+type VaRGate struct {
+	Confidence float64
+	N          int // return observations (one per day) in the window
+	TailN      int // observations at or below the VaR quantile
+	MinTailN   int // floor required to publish
+	NeedN      int // return days needed to reach MinTailN at this confidence
+	Withheld   bool
+	Reason     string `json:",omitempty"`
 }
 
 // Report bundles a full RiskLens run for a portfolio so Summary can render it.
 // Confidence is the VaR confidence used (e.g. 0.95). NotionalUSD is the
 // portfolio size used to translate percentages into dollars in the summary
 // (e.g. 100000 for "per $100k"); zero defaults to 100000.
+//
+// The three VaR fields are pointers and are OMITTED from the JSON when the
+// sample cannot support them — see VaRGate (historical, tail-count) and
+// ParamVaRGate (parametric, sample size + normality) for the reason. They are
+// never 0: a zero VaR reads as "this book cannot lose money".
 type Report struct {
 	Confidence    float64
 	NotionalUSD   float64
-	HistVaRPct    float64
-	HistCVaRPct   float64
-	ParamVaRPct   float64
+	HistVaRPct    *float64 `json:"HistVaRPct,omitempty"`
+	HistCVaRPct   *float64 `json:"HistCVaRPct,omitempty"`
+	ParamVaRPct   *float64 `json:"ParamVaRPct,omitempty"`
+	VaRGate       VaRGate
+	ParamVaRGate  ParamVaRGate
+	MarketProxy   string        `json:",omitempty"`
+	MarketBetas   []HoldingBeta `json:",omitempty"`
 	Contributions []Contribution
 	Scenarios     []Scenario
 }

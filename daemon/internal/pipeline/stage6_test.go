@@ -199,13 +199,18 @@ func TestGBMSamplesAscendingTs(t *testing.T) {
 	}
 }
 
-// meanRevSamplesFromLabeled must skip rows lacking a stored pred_raw and keep
+// meanRevSamplesFromLabeled must skip rows lacking the pressure input and keep
 // ascending order.
-func TestMeanRevSamplesSkipMissingRaw(t *testing.T) {
+//
+// It reads pressure_score, NOT pred_raw. pred_raw is the blend output and the
+// blend contains this very leg, so reading it closed a self-reference loop —
+// the leg learning to invert a number that already contained itself. A row with
+// only pred_raw must now be skipped, which is what the middle row asserts.
+func TestMeanRevSamplesSkipMissingPressure(t *testing.T) {
 	rows := []store.LabeledFeature{
-		{Ts: 300, Vec: map[string]float64{"pred_raw": 0.7}, Up: 0, FwdReturn: -0.01},
-		{Ts: 200, Vec: map[string]float64{"x": 1}, Up: 1, FwdReturn: 0.01}, // no pred_raw
-		{Ts: 100, Vec: map[string]float64{"pred_raw": 0.3}, Up: 1, FwdReturn: 0.01},
+		{Ts: 300, Vec: map[string]float64{"pressure_score": 0.4}, Up: 0, FwdReturn: -0.01},
+		{Ts: 200, Vec: map[string]float64{"pred_raw": 0.9}, Up: 1, FwdReturn: 0.01}, // blend output only — must be skipped
+		{Ts: 100, Vec: map[string]float64{"pressure_score": -0.4}, Up: 1, FwdReturn: 0.01},
 	}
 	samples := meanRevSamplesFromLabeled(rows)
 	if len(samples) != 2 {

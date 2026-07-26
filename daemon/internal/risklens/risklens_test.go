@@ -40,74 +40,32 @@ func TestDailyReturns(t *testing.T) {
 	}
 }
 
-// ---- HistoricalVaR (hand-computed) -----------------------------------------
-
-// A 20-element return vector. Sorted ascending the two worst are -0.10 and
-// -0.06. At confidence 0.95, alpha=0.05, idx=floor(0.05*20)=1 -> sorted[1]=-0.06
-// -> VaR = +0.06. CVaR = mean(sorted[0..1]) = mean(-0.10,-0.06) = -0.08 -> 0.08.
-func TestHistoricalVaR_HandComputed(t *testing.T) {
-	rets := []float64{
-		-0.10, -0.06, -0.05, -0.04, -0.03,
-		-0.02, -0.01, 0.00, 0.005, 0.01,
-		0.012, 0.015, 0.02, 0.025, 0.03,
-		0.035, 0.04, 0.05, 0.06, 0.08,
-	}
-	varPct, cvarPct := HistoricalVaR(rets, 0.95)
-	if !approx(varPct, 0.06, 1e-9) {
-		t.Errorf("VaR=%.6f want 0.06", varPct)
-	}
-	if !approx(cvarPct, 0.08, 1e-9) {
-		t.Errorf("CVaR=%.6f want 0.08", cvarPct)
-	}
-	// CVaR must be at least as severe as VaR.
-	if cvarPct < varPct {
-		t.Errorf("CVaR %.4f < VaR %.4f (must be >=)", cvarPct, varPct)
-	}
-}
-
-func TestHistoricalVaR_Edge(t *testing.T) {
-	tests := []struct {
-		name              string
-		rets              []float64
-		confVal           float64
-		wantVar, wantCVaR float64
-	}{
-		{"empty", nil, 0.95, 0, 0},
-		{"conf_clamped_high", []float64{-0.02, 0.01, 0.03}, 1.5, 0.02, 0.02},
-		{"conf_clamped_low", []float64{-0.02, 0.01, 0.03}, -0.5, -0.03, -0.00666667},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			gotVar, gotCVaR := HistoricalVaR(tc.rets, tc.confVal)
-			if !approx(gotVar, tc.wantVar, 1e-6) {
-				t.Errorf("VaR=%.6f want %.6f", gotVar, tc.wantVar)
-			}
-			if !approx(gotCVaR, tc.wantCVaR, 1e-6) {
-				t.Errorf("CVaR=%.6f want %.6f", gotCVaR, tc.wantCVaR)
-			}
-		})
-	}
-}
+// ---- HistoricalVaR: see var_test.go for the gate and the hand-computed case --
 
 // ---- ParametricVaR ---------------------------------------------------------
 
+// TestParametricVaR checks the ARITHMETIC on a sample that clears both gates.
+// The five-return case this test used to assert on is now withheld by design —
+// see paramvar_test.go, which owns the gating contract.
 func TestParametricVaR(t *testing.T) {
-	// Returns with mean 0 and known stdev. Use a symmetric set.
-	// {-0.02,-0.01,0,0.01,0.02}: mean=0, sample var = (0.0004+0.0001+0+0.0001+0.0004)/4
-	//   = 0.001/4 = 0.00025, std = 0.0158113883.
-	// z(0.05) ~= -1.6448536; VaR = -(0 + z*std) = 1.6448536*0.0158113883 ~= 0.02600658.
-	rets := []float64{-0.02, -0.01, 0, 0.01, 0.02}
-	got := ParametricVaR(rets, 0.95)
-	want := 1.6448536269514722 * 0.015811388300841896
-	if !approx(got, want, 1e-6) {
-		t.Errorf("ParametricVaR=%.8f want %.8f", got, want)
+	// A near-normal 600-day window: mean/stdev computed the same way, so the
+	// formula -(mean + z*sd) is checked against an independent evaluation.
+	rets := gaussianish(600)
+	got, gate := ParametricVaR(rets, 0.95)
+	if got == nil {
+		t.Fatalf("ParametricVaR withheld on a near-normal 600-return series: %s", gate.Reason)
 	}
-	// Degenerate.
-	if v := ParametricVaR(nil, 0.95); v != 0 {
-		t.Errorf("nil -> %.6f want 0", v)
+	mean, std := meanStd(rets)
+	want := -(mean + normInvCDF(0.05)*std)
+	if !approx(*got, want, 1e-9) {
+		t.Errorf("ParametricVaR=%.8f want %.8f", *got, want)
 	}
-	if v := ParametricVaR([]float64{0.01}, 0.95); v != 0 {
-		t.Errorf("single -> %.6f want 0", v)
+	// Degenerate: nil, never 0 — a 0 would render as "no risk".
+	if v, _ := ParametricVaR(nil, 0.95); v != nil {
+		t.Errorf("nil series -> %.6f want withheld", *v)
+	}
+	if v, _ := ParametricVaR([]float64{0.01}, 0.95); v != nil {
+		t.Errorf("single return -> %.6f want withheld", *v)
 	}
 }
 
@@ -231,10 +189,11 @@ func TestPortfolioReturns_Validation(t *testing.T) {
 // ---- Single-asset portfolio VaR == that asset's VaR ------------------------
 
 func TestSingleAssetPortfolioVaR(t *testing.T) {
-	// Build a 61-close series (60 returns) with a varied return pattern.
+	// 240 returns — past MinVaRTailObservations at 95%, so the VaR is publishable
+	// and the two sides are actually comparable.
 	rets := repeatPattern([]float64{
 		-0.05, 0.02, -0.03, 0.01, 0.04, -0.02, 0.03, -0.01, 0.00, -0.06,
-	}, 60)
+	}, 240)
 	closes := closesFromReturns(100, rets)
 	holdings := []Holding{{"SOLO", 1.0}}
 	series := []Series{{"SOLO", closes}}
@@ -254,10 +213,13 @@ func TestSingleAssetPortfolioVaR(t *testing.T) {
 		}
 	}
 	// Therefore VaR of the portfolio equals VaR of the asset.
-	pv, pc := HistoricalVaR(port, 0.95)
-	av, ac := HistoricalVaR(assetRets, 0.95)
-	if !approx(pv, av, 1e-12) || !approx(pc, ac, 1e-12) {
-		t.Errorf("portfolio VaR (%.6f,%.6f) != asset VaR (%.6f,%.6f)", pv, pc, av, ac)
+	pv, pc, pg := HistoricalVaR(port, 0.95)
+	av, ac, _ := HistoricalVaR(assetRets, 0.95)
+	if pv == nil || av == nil {
+		t.Fatalf("VaR withheld at n=%d: %s", pg.N, pg.Reason)
+	}
+	if !approx(*pv, *av, 1e-12) || !approx(*pc, *ac, 1e-12) {
+		t.Errorf("portfolio VaR (%.6f,%.6f) != asset VaR (%.6f,%.6f)", *pv, *pc, *av, *ac)
 	}
 }
 
@@ -369,14 +331,18 @@ func TestDiversification_UncorrelatedBeatsCorrelated(t *testing.T) {
 
 func TestStressScenarios(t *testing.T) {
 	n := 100
-	aRet := repeatPattern([]float64{0.01, -0.02, 0.015, -0.03, 0.02}, n)
-	bRet := repeatPattern([]float64{-0.005, 0.01, -0.02, 0.025, -0.015}, n)
+	// A and B are built as leveraged versions of the market factor so the book
+	// carries a real, positive beta and the market shocks are losses.
+	mktRet := repeatPattern([]float64{0.01, -0.02, 0.015, -0.03, 0.02}, n)
+	aRet := repeatPattern([]float64{0.012, -0.024, 0.018, -0.036, 0.024}, n)
+	bRet := repeatPattern([]float64{0.005, -0.01, 0.008, -0.015, 0.01}, n)
 	holdings := []Holding{{"A", 0.6}, {"B", 0.4}}
 	series := []Series{
 		{"A", closesFromReturns(100, aRet)},
 		{"B", closesFromReturns(100, bRet)},
 	}
-	scen, err := StressScenarios(holdings, series)
+	market := Series{Symbol: "MKT", Closes: closesFromReturns(100, mktRet)}
+	scen, err := StressScenarios(holdings, series, market)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,14 +377,18 @@ func TestStressScenarios(t *testing.T) {
 		}
 	}
 	for _, s := range scen {
+		if s.PnLPct == nil {
+			t.Errorf("%q withheld; every scenario is computable here (%s)", s.Name, s.Detail)
+			continue
+		}
 		if s.Name == "worst historical day" {
-			if !approx(s.PnLPct, worst, 1e-12) {
-				t.Errorf("worst-day PnL=%.6f want %.6f", s.PnLPct, worst)
+			if !approx(*s.PnLPct, worst, 1e-12) {
+				t.Errorf("worst-day PnL=%.6f want %.6f", *s.PnLPct, worst)
 			}
 		}
-		// Market shocks should be losses (negative) for a long book.
-		if (s.Name == "2008 equity -40%" || s.Name == "COVID-2020 -34%") && s.PnLPct >= 0 {
-			t.Errorf("%q PnL=%.6f expected negative for long book", s.Name, s.PnLPct)
+		// Market shocks should be losses (negative) for a long, positive-beta book.
+		if (s.Name == "2008 equity -40%" || s.Name == "COVID-2020 -34%") && *s.PnLPct >= 0 {
+			t.Errorf("%q PnL=%.6f expected negative for long book", s.Name, *s.PnLPct)
 		}
 	}
 }
@@ -426,22 +396,27 @@ func TestStressScenarios(t *testing.T) {
 // ---- Summary contains the key numbers --------------------------------------
 
 func TestSummary_ContainsKeyNumbers(t *testing.T) {
-	n := 90
+	n := 240 // long enough to clear the VaR tail gate
 	aRet := repeatPattern([]float64{0.02, -0.04, 0.01, -0.02, 0.03}, n)
 	bRet := repeatPattern([]float64{-0.01, 0.015, -0.02, 0.01, -0.005}, n)
+	mktRet := repeatPattern([]float64{0.01, -0.02, 0.005, -0.01, 0.015}, n)
 	holdings := []Holding{{"AAA", 0.7}, {"BBB", 0.3}}
 	series := []Series{
 		{"AAA", closesFromReturns(100, aRet)},
 		{"BBB", closesFromReturns(100, bRet)},
 	}
-	report, err := Analyze(holdings, series, 0.95, 100000)
+	market := Series{Symbol: "MKT", Closes: closesFromReturns(100, mktRet)}
+	report, err := Analyze(holdings, series, market, 0.95, 100000)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if report.HistVaRPct == nil {
+		t.Fatalf("VaR withheld at n=%d: %s", report.VaRGate.N, report.VaRGate.Reason)
 	}
 	s := Summary(report)
 
 	// Must mention the VaR percent, "95%", "VaR", the notional, and the top driver.
-	varStr := fmt.Sprintf("%.2f%%", report.HistVaRPct*100)
+	varStr := fmt.Sprintf("%.2f%%", *report.HistVaRPct*100)
 	mustContain := []string{
 		"95% VaR",
 		varStr,
@@ -467,15 +442,16 @@ func TestSummary_ContainsKeyNumbers(t *testing.T) {
 
 func TestSummary_DefaultsNotional(t *testing.T) {
 	// Report with zero notional/confidence should default gracefully.
+	f := func(v float64) *float64 { return &v }
 	r := Report{
-		HistVaRPct:  0.03,
-		HistCVaRPct: 0.05,
-		ParamVaRPct: 0.028,
+		HistVaRPct:  f(0.03),
+		HistCVaRPct: f(0.05),
+		ParamVaRPct: f(0.028),
 		Contributions: []Contribution{
 			{Symbol: "X", PctOfRisk: 80, Weight: 0.5, Vol: 0.02},
 			{Symbol: "Y", PctOfRisk: 20, Weight: 0.5, Vol: 0.01},
 		},
-		Scenarios: []Scenario{{Name: "worst historical day", PnLPct: -0.07}},
+		Scenarios: []Scenario{{Name: "worst historical day", PnLPct: f(-0.07)}},
 	}
 	s := Summary(r)
 	if !strings.Contains(s, "per $100,000") {
@@ -486,6 +462,40 @@ func TestSummary_DefaultsNotional(t *testing.T) {
 	}
 	if !strings.Contains(s, "X") {
 		t.Errorf("top driver X missing: %s", s)
+	}
+}
+
+// TestSummary_WithheldVaRSaysSo: when the VaR is gated the prose must state
+// that plainly. Rendering a withheld figure as 0.00% would tell a user the book
+// cannot lose money — the exact failure mode the gate exists to prevent.
+func TestSummary_WithheldVaRSaysSo(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	r := Report{
+		Confidence: 0.95,
+		VaRGate: VaRGate{
+			Withheld: true,
+			Reason:   "a 95% historical VaR needs at least 10 return days in the loss tail; this 59-day window puts only 3 there",
+		},
+		Contributions: []Contribution{{Symbol: "X", PctOfRisk: 100, Weight: 1, Vol: 0.02}},
+		Scenarios: []Scenario{
+			{Name: "2008 equity -40%", Withheld: true, Detail: "WITHHELD — no exogenous market factor supplied."},
+			{Name: "worst historical day", PnLPct: f(-0.07)},
+		},
+	}
+	s := Summary(r)
+	if !strings.Contains(s, "not publishing") || !strings.Contains(s, "loss tail") {
+		t.Errorf("withheld VaR not disclosed in prose: %s", s)
+	}
+	if strings.Contains(s, "0.00%") {
+		t.Errorf("withheld VaR rendered as a zero loss: %s", s)
+	}
+	// The worst-case sentence must come from the computed scenario, not the
+	// withheld one.
+	if !strings.Contains(s, "worst historical day") {
+		t.Errorf("worst computed scenario missing: %s", s)
+	}
+	if strings.Contains(s, "2008 equity") {
+		t.Errorf("withheld scenario used as the worst case: %s", s)
 	}
 }
 

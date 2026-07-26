@@ -18,9 +18,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/composite"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 // fleetSkillWindow is how many recent resolved 1d outcomes fleetEdgeSkill scans.
@@ -31,16 +33,35 @@ import (
 // doubles). The dedup to one obs per (symbol, UTC-day) runs over this window.
 const fleetSkillWindow = 120000
 
-// fleetSkillCache memoizes the fleet-wide live-edge grade (it changes only as
-// outcomes resolve, hours apart) so the 120k-row scan fires at most once per
-// fleetSkillTTL instead of on every composite/recommendation read.
-var fleetSkillCache struct {
-	sync.Mutex
-	at      time.Time
+// fleetSkill is the fleet-wide live-edge verdict together with the CLUSTER-
+// ROBUST evidence it rests on. The cluster grade travels with the verdict rather
+// than being recomputed by each caller, because the whole point of C4 is that no
+// surface computes its own interval.
+type fleetSkill struct {
 	proven  bool
 	winRate float64
 	note    string
-	valid   bool
+	// cluster is the day-clustered grade of the same observations the verdict
+	// was taken on. graded is false when the record never reached the grading
+	// step (read failure, or below the track gates), in which case only the
+	// sample-size facts in cluster are meaningful.
+	cluster clusterstat.Result
+	graded  bool
+}
+
+// fleetSkillCache memoizes the fleet-wide live-edge grade (it changes only as
+// outcomes resolve, hours apart) so the 120k-row scan fires at most once per
+// fleetSkillTTL instead of on every composite/recommendation read.
+//
+// key scopes the entry to the store instance for the same reason
+// attributionCacheKey does: this cache is package-level, so without it a caller
+// holding a different store is served another store's verdict.
+var fleetSkillCache struct {
+	sync.Mutex
+	at    time.Time
+	key   string
+	skill fleetSkill
+	valid bool
 }
 
 const fleetSkillTTL = 60 * time.Second
@@ -56,6 +77,15 @@ const (
 // compositeHorizon reads ?horizon= (default 1d), honoring only the horizons
 // the scorer actually produces (1d, 1w) — anything else falls back to 1d
 // rather than silently returning an empty/mixed result.
+// ?limit bounds for /api/composite/top. Shared with compositeTopCacheKey
+// (cachekey.go) rather than repeated as literals: if the key normalised a
+// limit the handler then resolved differently, the cache would serve one
+// request's rows to another.
+const (
+	compositeTopDefaultLimit = 50
+	compositeTopMaxLimit     = 500
+)
+
 func compositeHorizon(r *http.Request) md.Horizon {
 	switch md.Horizon(r.URL.Query().Get("horizon")) {
 	case md.H1w:
@@ -97,7 +127,8 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 	// accuracy (not the overconfident per-symbol calProb), so a top rank on an
 	// extreme-but-unbacked, stale, thin, or contradictory read is LOW conviction.
 	// Computed at READ time so it reflects the current live-edge status.
-	proven, winRate, skillNote := d.fleetEdgeSkill(r.Context())
+	skill := d.fleetEdgeGrade(r.Context())
+	proven, winRate, skillNote := skill.proven, skill.winRate, skill.note
 	bull, bear := composite.FactorAgreement(p.Factors)
 	conv := composite.Assess(composite.ConvictionInputs{
 		Edge:           row.Edge,
@@ -143,6 +174,8 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 		"trackLabel":    trackLabel,
 		"modelEmitting": emitting,
 		"modelVerdict":  hVerdict,
+		"skillNote":     skillNote,
+		"skillCluster":  skill.cluster,
 	})
 }
 
@@ -168,25 +201,33 @@ func honestEdgeLine(calProb float64, proven bool, winRate float64) string {
 }
 
 // fleetEdgeSkill answers the one fleet-level question conviction needs: has the
-// platform proven a LIVE out-of-sample edge? It grades the platform's OWN
-// calibrated 1d predictions (prediction_outcomes — prob frozen at prediction
-// time, outcome filled by the resolver, no lookahead), deduped to ONE
-// independent observation per (symbol, UTC-day), and calls the edge "proven"
-// only when it clears the SAME gate the /track-record page uses AND the win
-// rate's 95% Wilson lower bound sits above a coin flip. Best-effort: any error
-// returns "not proven" with a stated reason — never a fabricated pass.
+// platform proven a LIVE out-of-sample edge? Kept at three return values because
+// desk.go reads it; callers that need the evidence behind the verdict take
+// fleetEdgeGrade, which serves the same cached measurement.
 func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, winRate float64, note string) {
+	g := d.fleetEdgeGrade(ctx)
+	return g.proven, g.winRate, g.note
+}
+
+// fleetEdgeGrade grades the platform's OWN calibrated 1d predictions
+// (prediction_outcomes — prob frozen at prediction time, outcome filled by the
+// resolver, no lookahead), deduped to ONE independent observation per (symbol,
+// UTC-day), and calls the edge "proven" only when it clears the SAME gates the
+// /track-record page uses AND the accuracy's CLUSTER-ROBUST 95% lower bound sits
+// above the naive baseline. Best-effort: any error returns "not proven" with a
+// stated reason — never a fabricated pass.
+func (d Deps) fleetEdgeGrade(ctx context.Context) fleetSkill {
+	key := fmt.Sprintf("%p", d.St)
 	// Serve from the short-TTL cache when fresh (the 120k-row scan is heavy).
 	fleetSkillCache.Lock()
-	if fleetSkillCache.valid && time.Since(fleetSkillCache.at) < fleetSkillTTL {
-		p, wr, n := fleetSkillCache.proven, fleetSkillCache.winRate, fleetSkillCache.note
+	if fleetSkillCache.valid && fleetSkillCache.key == key && time.Since(fleetSkillCache.at) < fleetSkillTTL {
+		s := fleetSkillCache.skill
 		fleetSkillCache.Unlock()
-		return p, wr, n
+		return s
 	}
 	fleetSkillCache.Unlock()
 
-	var ok bool
-	proven, winRate, note, ok = d.computeFleetEdgeSkill(ctx)
+	skill, ok := d.computeFleetEdgeSkill(ctx)
 
 	// Only pin a SUCCESSFUL measurement. A transient read failure (e.g. a
 	// canceled context from a client that disconnected mid-scan) is not a
@@ -198,18 +239,40 @@ func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, winRate float64,
 	// cached verdict with a bad one, or pinning "unavailable" from cold.
 	if ok {
 		fleetSkillCache.Lock()
-		fleetSkillCache.at, fleetSkillCache.proven, fleetSkillCache.winRate, fleetSkillCache.note = time.Now(), proven, winRate, note
+		fleetSkillCache.at, fleetSkillCache.key, fleetSkillCache.skill = time.Now(), key, skill
 		fleetSkillCache.valid = true
 		fleetSkillCache.Unlock()
 	}
-	return proven, winRate, note
+	return skill
 }
 
-func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate float64, note string, ok bool) {
+func (d Deps) computeFleetEdgeSkill(ctx context.Context) (fleetSkill, bool) {
 	rows, err := d.St.ResolvedPredictionOutcomes(ctx, md.H1d, fleetSkillWindow)
 	if err != nil {
-		return false, 0, "live edge status unavailable (" + err.Error() + ")", false
+		// A read failure is not a measurement. Ship the cluster block already
+		// REFUSED with that reason rather than its zero value, which would
+		// serialize as refused:false with empty intervals and no explanation.
+		return fleetSkill{
+			note:    "live edge status unavailable (" + err.Error() + ")",
+			cluster: clusterstat.Result{Refused: true, Reason: "live record could not be read: " + err.Error()},
+		}, false
 	}
+	return gradeFleetEdge(rows), true
+}
+
+// gradeFleetEdge is the pure grade, split out of the store read so the interval
+// arithmetic is testable without a database.
+//
+// C4 — the accuracy floor that decides "proven" is CLUSTER-ROBUST, never Wilson
+// at the raw independent count. indepN counts (symbol, UTC-day) rows, and the
+// ~1,000 symbols sharing a day share ONE market move: measured on the live 1d
+// record this endpoint reads, the design effect is 14.7x, so 13,058 rows carry
+// the information of 887. The raw-N floor is 3.8x too tight, and a too-tight
+// floor is what UNLOCKS "edge proven live" — it lifts the conviction ceiling on
+// every row of the SIGNALS leaderboard on evidence that cannot carry it. The
+// correction can only ever LOWER the floor (deff >= 1 by construction), so this
+// can never make an edge appear that the previous code withheld.
+func gradeFleetEdge(rows []store.ResolvedPredictionOutcome) fleetSkill {
 	// One independent obs per (symbol, UTC-day), keeping the latest (rows ts DESC).
 	// correct = the model got the DIRECTION right (predUp==actualUp); ups = how
 	// often the market actually rose (the base rate). Grading accuracy against a
@@ -217,17 +280,27 @@ func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate f
 	// benchmark is the best NAIVE constant predictor max(upRate, 1-upRate).
 	seen := map[[2]int64]bool{}
 	dayset := map[int64]bool{}
+	obs := make([]clusterstat.Obs, 0, len(rows))
 	correct, ups, indepN := 0, 0, 0
 	for _, o := range rows {
-		key := [2]int64{o.SymbolID, o.Ts / 86400}
+		day := o.Ts / 86400
+		key := [2]int64{o.SymbolID, day}
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
 		indepN++
-		dayset[o.Ts/86400] = true
+		dayset[day] = true
 		actualUp := o.Up == 1
-		if (o.Prob >= 0.5) == actualUp {
+		bullish := o.Prob >= 0.5
+		// The day index is the SAME key the dedup above uses, so the resampling
+		// unit and the dedup unit cannot drift apart.
+		dir := clusterstat.DirDown
+		if bullish {
+			dir = clusterstat.DirUp
+		}
+		obs = append(obs, clusterstat.Obs{Day: day, Hit: bullish == actualUp, Dir: dir})
+		if bullish == actualUp {
 			correct++
 		}
 		if actualUp {
@@ -235,9 +308,16 @@ func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate f
 		}
 	}
 	distinctDays := len(dayset)
+	cl := clusterstat.Grade(obs)
 	if indepN < trackMinIndependentN || distinctDays < trackMinDistinctDays {
-		return false, 0, fmt.Sprintf("live track record still thin — %d independent resolutions across %d day(s) (need %d / %d)",
-			indepN, distinctDays, trackMinIndependentN, trackMinDistinctDays), true
+		// Below the gates the record may state how much evidence it holds but not
+		// one number that reads as a skill claim, so every interval is stripped —
+		// the same treatment the /track-record page gives its gated branch.
+		return fleetSkill{
+			cluster: trackClusterDescriptive(cl),
+			note: fmt.Sprintf("live track record still thin — %d independent resolutions across %d day(s) (need %d / %d)",
+				indepN, distinctDays, trackMinIndependentN, trackMinDistinctDays),
+		}
 	}
 	acc := float64(correct) / float64(indepN) // the model's REAL directional accuracy
 	baseUp := float64(ups) / float64(indepN)  // market up-rate
@@ -246,15 +326,29 @@ func (d Deps) computeFleetEdgeSkill(ctx context.Context) (proven bool, winRate f
 	if 1-baseUp > naive {
 		naive, naiveDir = 1-baseUp, "down"
 	}
-	lo, _ := wilson(correct, indepN) // 95% Wilson floor of the ACCURACY
-	// PROVEN only if the accuracy floor clears the naive baseline — beating a coin
-	// flip is not enough when "always up" already wins >50% of days.
-	if lo > naive {
-		return true, acc, fmt.Sprintf("edge proven live: model directional accuracy %.1f%% beats the naive 'always-%s' baseline %.1f%% over %d resolutions / %d days (95%% floor %.1f%% > %.1f%%)",
-			acc*100, naiveDir, naive*100, indepN, distinctDays, lo*100, naive*100), true
+	g := fleetSkill{winRate: acc, cluster: cl, graded: true}
+	if cl.Refused || cl.CI == nil {
+		// No honest interval exists, so there is no verdict either way. Saying
+		// "no measured edge" here would be a claim this sample cannot support in
+		// the other direction.
+		g.note = fmt.Sprintf("live edge NOT ESTABLISHED: model directional accuracy %.1f%% vs the naive 'always-%s' baseline %.1f%% over %d resolutions / %d days, but the interval is withheld — %s",
+			acc*100, naiveDir, naive*100, indepN, distinctDays, cl.Reason)
+		return g
 	}
-	return false, acc, fmt.Sprintf("NO measured edge: model directional accuracy %.1f%% vs the naive 'always-%s' baseline %.1f%% = %+.1fpp edge over %d resolutions / %d days — the predictions are not skillful (right ~half the time, below the baseline)",
-		acc*100, naiveDir, naive*100, (acc-naive)*100, indepN, distinctDays), true
+	lo := cl.CI.Lo
+	evidence := fmt.Sprintf("%d resolutions / %d days, measured design effect %.1fx → effective N %.0f",
+		indepN, distinctDays, cl.DesignEffect, cl.EffectiveN)
+	// PROVEN only if the cluster-robust accuracy floor clears the naive baseline —
+	// beating a coin flip is not enough when "always up" already wins >50% of days.
+	if lo > naive {
+		g.proven = true
+		g.note = fmt.Sprintf("edge proven live: model directional accuracy %.1f%% beats the naive 'always-%s' baseline %.1f%% over %s (cluster-robust 95%% floor %.1f%% > %.1f%%)",
+			acc*100, naiveDir, naive*100, evidence, lo*100, naive*100)
+		return g
+	}
+	g.note = fmt.Sprintf("NO measured edge: model directional accuracy %.1f%% vs the naive 'always-%s' baseline %.1f%% = %+.1fpp edge over %s — the cluster-robust 95%% floor is %.1f%%, below the baseline, so no skill is demonstrated",
+		acc*100, naiveDir, naive*100, (acc-naive)*100, evidence, lo*100)
+	return g
 }
 
 // compositeTopRow is one ranked row of the composite leaderboard. Rank is
@@ -289,7 +383,7 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 		market = string(m)
 	}
 	horizon := compositeHorizon(r)
-	limit := limitParam(r, 50, 500)
+	limit := limitParam(r, compositeTopDefaultLimit, compositeTopMaxLimit)
 
 	// Rank over the FULL latest set, then truncate — a limited read must not
 	// change anyone's rank.
@@ -316,7 +410,8 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Live-edge status once for the whole leaderboard (the conviction ceiling).
-	proven, winRate, skillNote := d.fleetEdgeSkill(ctx)
+	skill := d.fleetEdgeGrade(ctx)
+	proven, winRate, skillNote := skill.proven, skill.winRate, skill.note
 
 	out := make([]compositeTopRow, 0, min(limit, len(rows)))
 	for i, c := range rows {
@@ -360,9 +455,12 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 		"trackLabel":     trackLabel,
 		"convictionNote": "conviction is a SEPARATE axis from the rank: a top rank on a coin-flip-sized or unproven edge is low conviction. " + composite.Assess(composite.ConvictionInputs{}).RiskNote,
 		"skillNote":      skillNote,
-		"minCurveN":      composite.MinCurveN,
-		"modelEmitting":  emitting,
-		"modelVerdict":   hVerdict,
+		"skillCluster":   skill.cluster,
+		"skillNoteCI": "the live-edge verdict is decided by a CLUSTER-ROBUST 95% floor (day is the unit of resampling); " +
+			"skillCluster carries the raw N, the distinct-day count, the MEASURED design effect and the effective N it implies",
+		"minCurveN":     composite.MinCurveN,
+		"modelEmitting": emitting,
+		"modelVerdict":  hVerdict,
 	})
 }
 
@@ -370,7 +468,11 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 func (d Deps) registerComposite(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/composite", d.compositeDetail)
 	mux.HandleFunc("GET /api/composite/top", func(w http.ResponseWriter, r *http.Request) {
-		// Perf wave 2026-07-24: measured 40s per request; SWR-cached by query.
-		sharedCompositeSWR.serve(r.URL.RawQuery, w, r, d.compositeTop)
+		// Perf wave 2026-07-24: measured 40s per request; SWR-cached.
+		// C6 2026-07-26: the key was r.URL.RawQuery, so `?zz=1` was a key the
+		// process had never seen — a cold build holding a read connection for
+		// 40s. Five junk parameters stalled the daemon. The key now comes from
+		// the whitelist in cachekey.go and an unknown parameter cannot mint one.
+		sharedCompositeSWR.serve(compositeTopCacheKey(r), w, r, d.compositeTop)
 	})
 }

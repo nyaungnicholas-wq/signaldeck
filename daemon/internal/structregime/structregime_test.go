@@ -3,8 +3,80 @@ package structregime
 import (
 	"math"
 	"math/rand"
+	"strings"
 	"testing"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
 )
+
+// C5 (2026-07-26 hostile review): regime_outcomes carries thousands of frozen
+// calls and zero resolutions, yet HistoricalAccuracy was documented only as
+// "MEASURED walk-forward acc" — indistinguishable, on the wire, from a live
+// number. Every Forecast must now self-report that it is a backtest constant,
+// not a live measurement, without a reader having to infer it.
+func TestForecastCarriesBacktestEvidence(t *testing.T) {
+	closes := make([]float64, 800)
+	p := 100.0
+	for i := range closes {
+		p *= 1.001
+		closes[i] = p
+	}
+	f, ok := PredictTrend(closes)
+	if !ok {
+		t.Fatal("expected forecast")
+	}
+	if f.Evidence != "backtest" {
+		t.Fatalf("Evidence = %q, want %q — HistoricalAccuracy comes from accuracyFor's lookup "+
+			"table, never a resolved regime_outcomes row", f.Evidence, "backtest")
+	}
+	if f.FirstGradableOn != prereg.FirstGradableOn {
+		t.Fatalf("FirstGradableOn = %q, want %q (internal/prereg.FirstGradableOn) — a mismatch "+
+			"here means a reader is told a different date than the frozen pre-registration",
+			f.FirstGradableOn, prereg.FirstGradableOn)
+	}
+	for _, want := range []string{"BACKTEST CLAIM", "not a live measurement", "/api/prereg", f.FirstGradableOn} {
+		if !strings.Contains(f.EvidenceCaveat, want) {
+			t.Errorf("EvidenceCaveat missing %q; got: %s", want, f.EvidenceCaveat)
+		}
+	}
+}
+
+// The mirrored date must never silently drift from the one internal/prereg
+// actually freezes — that mirror is the whole reason firstGradableOn exists
+// as a local constant instead of an import.
+func TestFirstGradableOnMatchesPrereg(t *testing.T) {
+	if firstGradableOn != prereg.FirstGradableOn {
+		t.Fatalf("structregime.firstGradableOn = %q but prereg.FirstGradableOn = %q — "+
+			"a forecast is now quoting a different first-gradable date than the frozen "+
+			"pre-registration record. Update both together.", firstGradableOn, prereg.FirstGradableOn)
+	}
+}
+
+// trend63 and the crypto kinds build their Forecast by copying
+// PredictTrend/PredictLiquidity's output and only overwriting Kind,
+// HistoricalAccuracy and Tradeability — Evidence/FirstGradableOn/EvidenceCaveat
+// must survive that copy unchanged, or a derived kind would ship unlabeled.
+func TestEvidenceFieldsSurviveDerivedKinds(t *testing.T) {
+	closes := make([]float64, 800)
+	p := 100.0
+	for i := range closes {
+		p *= 1.001
+		closes[i] = p
+	}
+	base, ok := PredictTrend(closes)
+	if !ok {
+		t.Fatal("expected base forecast")
+	}
+	t63, ok := PredictTrend63(closes)
+	if !ok {
+		t.Fatal("expected trend63 forecast")
+	}
+	if t63.Evidence != base.Evidence || t63.FirstGradableOn != base.FirstGradableOn ||
+		t63.EvidenceCaveat != base.EvidenceCaveat {
+		t.Fatalf("trend63 evidence fields diverged from the base predictor's:\nbase: %+v\nt63:  %+v",
+			base, t63)
+	}
+}
 
 // A persistent uptrend far above its SMA must call "uptrend" at high
 // conviction, and GradeTrend must beat a coin flip decisively on it.

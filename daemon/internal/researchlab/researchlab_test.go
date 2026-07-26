@@ -76,6 +76,11 @@ func TestJudge_RejectsNoiseAblation(t *testing.T) {
 	rows := syntheticRows(240)
 	keys := CanonicalKeys(rows)
 	cfg := DefaultEvalConfig()
+	// syntheticRows are spaced one second apart, so a 1s label span makes each
+	// row's label resolve before the next one begins — no overlap to purge.
+	// Declaring it is not optional: the evaluator now REFUSES to grade samples
+	// with no stated horizon rather than compute a Lift across leaked rows.
+	cfg.LabelSpan = 1
 	base, err := Baseline(rows, keys, cfg)
 	if err != nil {
 		t.Fatalf("baseline: %v", err)
@@ -87,12 +92,12 @@ func TestJudge_RejectsNoiseAblation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("eval: %v", err)
 	}
-	d := Judge(h, g, base, 24, 0.05)
+	d := Judge(h, g, base, Multiplicity{Batch: 24})
 	if d.Survives {
 		t.Fatalf("noise ablation must NOT survive the corrected test (wl=%.3f base=%.3f n=%d)",
 			d.WilsonLower, base.Accuracy, g.N)
 	}
-	if d.CorrectedAlpha >= 0.05 {
+	if d.CorrectedAlpha >= MaxNominalAlpha {
 		t.Fatalf("Bonferroni correction not applied: alpha=%.4f", d.CorrectedAlpha)
 	}
 }

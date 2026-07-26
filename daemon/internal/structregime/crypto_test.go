@@ -93,4 +93,14 @@ func TestCryptoPredictorsMirrorStockArithmetic(t *testing.T) {
 	if _, ok := PredictLiquidityCrypto(closes[:100], vols[:100]); ok {
 		t.Fatal("thin history must refuse")
 	}
+
+	// C5: a crypto row must still self-report as a backtest constant, and its
+	// caveat must not have picked up "trend21" or "liquidity21" wording from
+	// the base predictor it was copied from — evidenceCaveat names no Kind.
+	if cf.Evidence != "backtest" || cf.FirstGradableOn == "" || cf.EvidenceCaveat == "" {
+		t.Fatalf("crypto trend forecast missing evidence fields: %+v", cf)
+	}
+	if lc.Evidence != "backtest" || lc.FirstGradableOn == "" || lc.EvidenceCaveat == "" {
+		t.Fatalf("crypto liquidity forecast missing evidence fields: %+v", lc)
+	}
 }

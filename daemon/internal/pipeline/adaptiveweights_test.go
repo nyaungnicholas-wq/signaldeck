@@ -17,12 +17,16 @@ import (
 // seedLabeled writes n labeled training rows for one horizon: a persisted
 // feature vector (pressure leg perfectly predictive, regime one-hot) plus a
 // RESOLVED prediction outcome at the same (symbol, horizon, ts) key.
+//
+// ONE ROW PER UTC DAY. The attribution's floors count distinct days, so an
+// hourly stride would put 40 rows on two days and the cell would be gated —
+// for the right reason, but it would stop this test exercising anything else.
 func seedLabeled(t *testing.T, st *store.Store, symbolID int64, h md.Horizon, n int, regime string) {
 	t.Helper()
 	ctx := context.Background()
-	base := time.Now().Unix() - int64(n+1)*3600
+	base := time.Now().Unix() - int64(n+1)*86400
 	for i := 0; i < n; i++ {
-		ts := base + int64(i)*3600
+		ts := base + int64(i)*86400
 		up := i%2 == 0
 		pressure, fwd := 0.5, 0.01 // pressure_score 0.5 -> leg 0.75 (up call)
 		if !up {

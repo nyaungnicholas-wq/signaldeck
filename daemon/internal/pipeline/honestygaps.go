@@ -595,12 +595,18 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 		type agg struct {
 			n, correct, ups int
 			first, last     int64
+			// days tallies the arm per UTC day. The canary interval resamples
+			// days, so a row total alone is not enough to grade an arm: ~1,000
+			// symbols on one day share one market move, and an interval that
+			// counts them as independent trials is ~4x too tight at exactly the
+			// moment it decides which model serves.
+			days map[int64]*canary.DayTally
 		}
 		byVer := map[int]*agg{}
 		for _, r := range rows {
 			a := byVer[r.Version]
 			if a == nil {
-				a = &agg{first: r.Ts, last: r.Ts}
+				a = &agg{first: r.Ts, last: r.Ts, days: map[int64]*canary.DayTally{}}
 				byVer[r.Version] = a
 			}
 			a.n++
@@ -616,6 +622,24 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 			if r.Ts > a.last {
 				a.last = r.Ts
 			}
+			d := r.Ts / 86400
+			t := a.days[d]
+			if t == nil {
+				t = &canary.DayTally{Day: d}
+				a.days[d] = t
+			}
+			t.N++
+			if r.Correct {
+				t.Hits++
+			}
+		}
+		tallies := func(a *agg) []canary.DayTally {
+			out := make([]canary.DayTally, 0, len(a.days))
+			for _, t := range a.days {
+				out = append(out, *t)
+			}
+			sort.Slice(out, func(i, j int) bool { return out[i].Day < out[j].Day })
+			return out
 		}
 		var vers []int
 		for v := range byVer {
@@ -635,8 +659,10 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 		}
 		v := canary.Evaluate(
 			canary.Record{Version: fmt.Sprintf("v%d", incV), N: inc.n, Correct: inc.correct,
+				Days: len(inc.days), DayTallies: tallies(inc),
 				FirstTs: inc.first, LastTs: inc.last, BaselineAccuracy: base},
 			canary.Record{Version: fmt.Sprintf("v%d", chV), N: ch.n, Correct: ch.correct,
+				Days: len(ch.days), DayTallies: tallies(ch),
 				FirstTs: ch.first, LastTs: ch.last, BaselineAccuracy: base},
 		)
 		model := "directional-ensemble-" + string(h)

@@ -75,7 +75,11 @@ type xsFactorPayload struct {
 	SymbolsConsidered int                `json:"symbolsConsidered"`
 	CompositeLegs     []string           `json:"compositeLegs"`
 	Edge              []xsfactor.LegEdge `json:"edge"`
+	Withheld          []xsfactor.LegEdge `json:"withheld"`
 	EdgeNote          string             `json:"edgeNote"`
+	RetractionNote    string             `json:"retractionNote"`
+	DerivationScript  string             `json:"derivationScript"`
+	DerivationOutput  string             `json:"derivationOutput"`
 	MethodNote        string             `json:"methodNote"`
 	UniverseNote      string             `json:"universeNote"`
 	SplitRejected     int                `json:"splitRejected"`
@@ -197,34 +201,59 @@ func TestXSFactorRanking(t *testing.T) {
 		t.Fatal("splitNote/universeNote missing")
 	}
 
-	// Measured edge at 21d: liquidity + low-vol only, exactly as measured.
-	if len(got.Edge) != 2 {
-		t.Fatalf("edge legs=%d, want 2 at 21d: %+v", len(got.Edge), got.Edge)
+	// Published edge at 21d: low-vol ONLY. Liquidity was retracted (it
+	// re-derives negative) and momentum's 21d interval spans zero.
+	if len(got.Edge) != 1 || got.Edge[0].Leg != xsfactor.LegLowVol {
+		t.Fatalf("edge block=%+v, want low-vol only at 21d", got.Edge)
 	}
-	wantEdge := map[string][3]float64{
-		xsfactor.LegLiquidity: {2.50, 1.61, 3.37},
-		xsfactor.LegLowVol:    {2.80, 0.81, 4.66},
+	if e := got.Edge[0]; e.EdgePP != 1.99 || e.CILow != 0.17 || e.CIHigh != 3.81 {
+		t.Fatalf("21d/lowVol = %+v, want +1.99 [0.17, 3.81]", e)
 	}
-	for _, e := range got.Edge {
-		w, ok := wantEdge[e.Leg]
-		if !ok {
-			t.Fatalf("unmeasured leg %q in the 21d edge block", e.Leg)
+	if len(got.CompositeLegs) != 1 {
+		t.Fatalf("compositeLegs=%v, want lowVol only at 21d", got.CompositeLegs)
+	}
+
+	// THE H2 CONTRACT. What failed must be visible, with its reason and its
+	// measured value, and the payload must name the script that derived it —
+	// the original constants came from a script that was never committed.
+	if len(got.Withheld) != 2 {
+		t.Fatalf("withheld=%+v, want liquidity + momentum at 21d", got.Withheld)
+	}
+	var sawLiquidity bool
+	for _, e := range got.Withheld {
+		if e.Reason == "" {
+			t.Fatalf("withheld leg %q ships without a reason", e.Leg)
 		}
-		if e.EdgePP != w[0] || e.CILow != w[1] || e.CIHigh != w[2] {
-			t.Fatalf("21d/%s = %+v, want %v", e.Leg, e, w)
+		if e.Leg != xsfactor.LegLiquidity {
+			continue
+		}
+		sawLiquidity = true
+		if e.Status != xsfactor.StatusRetracted {
+			t.Fatalf("liquidity status=%q, want retracted", e.Status)
+		}
+		if e.EdgePP != -1.65 || e.CIHigh >= 0 {
+			t.Fatalf("liquidity = %+v, want the measured -1.65pp with an interval below zero", e)
 		}
 	}
-	if len(got.CompositeLegs) != 2 {
-		t.Fatalf("compositeLegs=%v, want liquidity+lowVol at 21d", got.CompositeLegs)
+	if !sawLiquidity {
+		t.Fatalf("the retracted liquidity leg vanished from the payload: %+v", got.Withheld)
 	}
+	if got.RetractionNote != xsfactor.RetractionNote {
+		t.Fatal("retractionNote not shipped verbatim")
+	}
+	if got.DerivationScript != xsfactor.DerivationScript || got.DerivationOutput == "" {
+		t.Fatalf("payload does not name a re-runnable derivation: script=%q output=%q",
+			got.DerivationScript, got.DerivationOutput)
+	}
+
 	for _, row := range got.Rows {
 		for _, leg := range row.LegsUsed {
-			if leg == xsfactor.LegMom121 {
-				t.Fatalf("%s weighted momentum at 21d, where it has no measured edge", row.Symbol)
+			if leg != xsfactor.LegLowVol {
+				t.Fatalf("%s weighted %q at 21d, where only low-vol survives", row.Symbol, leg)
 			}
 		}
-		if row.Mom121Pct == nil {
-			t.Fatalf("%s: momentum should still ship as a diagnostic percentile", row.Symbol)
+		if row.Mom121Pct == nil || row.LiquidityPct == nil {
+			t.Fatalf("%s: momentum and liquidity must still ship as diagnostic percentiles", row.Symbol)
 		}
 	}
 	if len(got.HorizonsAvailable) != 3 {
@@ -242,19 +271,21 @@ func TestXSFactorHorizonsAndLimit(t *testing.T) {
 		seedXSFactorSymbol(t, st, fmt.Sprintf("T%02d", k), 0.05*float64(k+1), 1e5*float64(k+1))
 	}
 
+	// Leg counts follow the re-derivation, not the old block: low-vol + momentum
+	// at 5d, low-vol alone at 21d, and NOTHING at 63d, where the endpoint gates.
 	cases := []struct {
-		query    string
-		horizon  string
-		legs     int
-		wantMom  bool
-		edgeLegs int
+		query   string
+		horizon string
+		legs    int
+		wantMom bool
+		gated   bool
 	}{
-		{"?horizon=5d", "5d", 3, true, 3},
-		{"?horizon=21d", "21d", 2, false, 2},
-		{"?horizon=63d", "63d", 2, false, 2},
-		{"?horizon=1d", "21d", 2, false, 2}, // unmeasured → default, never invented
-		{"?horizon=", "21d", 2, false, 2},   // empty → default
-		{"?horizon=252d", "21d", 2, false, 2},
+		{"?horizon=5d", "5d", 2, true, false},
+		{"?horizon=21d", "21d", 1, false, false},
+		{"?horizon=63d", "63d", 0, false, true},
+		{"?horizon=1d", "21d", 1, false, false}, // unmeasured → default, never invented
+		{"?horizon=", "21d", 1, false, false},   // empty → default
+		{"?horizon=252d", "21d", 1, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.query, func(t *testing.T) {
@@ -262,8 +293,27 @@ func TestXSFactorHorizonsAndLimit(t *testing.T) {
 			if got.Horizon != tc.horizon {
 				t.Fatalf("horizon=%q, want %q", got.Horizon, tc.horizon)
 			}
-			if len(got.CompositeLegs) != tc.legs || len(got.Edge) != tc.edgeLegs {
+			if len(got.CompositeLegs) != tc.legs || len(got.Edge) != tc.legs {
 				t.Fatalf("compositeLegs=%v edge=%d, want %d legs", got.CompositeLegs, len(got.Edge), tc.legs)
+			}
+			// Whatever the horizon, every leg is accounted for — published or
+			// withheld with a reason. A leg cannot just disappear.
+			if len(got.Edge)+len(got.Withheld) != 3 {
+				t.Fatalf("%d legs accounted for, want 3 (edge=%v withheld=%v)",
+					len(got.Edge)+len(got.Withheld), got.CompositeLegs, got.Withheld)
+			}
+			if tc.gated {
+				if !got.Gated || len(got.Rows) != 0 || got.N != 0 {
+					t.Fatalf("63d must be gated with no rows, got gated=%v rows=%d",
+						got.Gated, len(got.Rows))
+				}
+				if got.GateReason != xsfactor.GateNoMeasuredLeg {
+					t.Fatalf("63d gateReason=%q, want the no-surviving-leg reason", got.GateReason)
+				}
+				return
+			}
+			if got.Gated {
+				t.Fatalf("%s gated unexpectedly: %s", tc.horizon, got.GateReason)
 			}
 			var weighted bool
 			for _, leg := range got.Rows[0].LegsUsed {
@@ -274,7 +324,20 @@ func TestXSFactorHorizonsAndLimit(t *testing.T) {
 			if weighted != tc.wantMom {
 				t.Fatalf("momentum weighted=%v, want %v (legsUsed=%v)", weighted, tc.wantMom, got.Rows[0].LegsUsed)
 			}
-			// The calmest+thinnest name leads at every horizon.
+			if tc.horizon == "5d" {
+				// In this fixture momentum-12-1 rises with the same wobble that
+				// raises volatility, so the two published legs are exact
+				// opposites and every composite renormalizes to 0.5. Pinning the
+				// tie is the point: it proves both legs are actually weighted.
+				for _, row := range got.Rows {
+					if row.Composite != 0.5 || len(row.LegsUsed) != 2 {
+						t.Fatalf("%s composite=%.4f legsUsed=%v, want 0.5 over both published legs",
+							row.Symbol, row.Composite, row.LegsUsed)
+					}
+				}
+				return
+			}
+			// At 21d low-vol alone decides, so the calmest name leads.
 			if got.Rows[0].Symbol != "T00" {
 				t.Fatalf("rank 1 = %q, want T00", got.Rows[0].Symbol)
 			}

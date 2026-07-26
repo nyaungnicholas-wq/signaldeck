@@ -18,18 +18,34 @@ type Candidate struct {
 	Grade       WeekGrade
 	CF          CFReport
 	Survival    SurvivalReport
-	WilsonLower float64 // Bonferroni-corrected over the number of rules tested
-	Survives    bool
+	WilsonLower float64 // lower bound at the corrected alpha below
+	// Divisor is the Bonferroni divisor this candidate cleared. Recorded on the
+	// row because "survived Bonferroni correction" is unauditable without the
+	// number that was corrected for.
+	Divisor  int
+	Survives bool
 }
+
+// MaxAlpha is the family-wise significance level the grid search runs at. It is
+// a package CONSTANT and not a DiscoverConfig field: a false-discovery guardrail
+// an operator can widen is the whole guardrail undone in one line, and raising
+// alpha leaves no trace in the result.
+const MaxAlpha = 0.05
 
 // DiscoverConfig bounds the discovery grid and its false-discovery gates.
 // Zero fields take the documented defaults.
 type DiscoverConfig struct {
-	MinWeekObs     int     // default 10
-	MinWeeks       int     // default 30
-	MinWeeksPerEra int     // default 8
-	Alpha          float64 // default 0.05 (Bonferroni-corrected over the grid)
-	MaxCandidates  int     // hard cap on the grid, default 48
+	MinWeekObs     int // default 10
+	MinWeeks       int // default 30
+	MinWeeksPerEra int // default 8
+	MaxCandidates  int // hard cap on the grid, default 48
+	// PriorSearches is how many times this grid has ALREADY been run over
+	// (largely) this data — every prior night of a scheduled loop is another
+	// look, and looks are what multiplicity corrects for. Zero is a CLAIM that
+	// this is the first search ever conducted; a caller running on a schedule
+	// that leaves it zero is correcting for one night's grid while taking many
+	// nights' chances.
+	PriorSearches int
 }
 
 func (c DiscoverConfig) withDefaults() DiscoverConfig {
@@ -42,14 +58,29 @@ func (c DiscoverConfig) withDefaults() DiscoverConfig {
 	if c.MinWeeksPerEra <= 0 {
 		c.MinWeeksPerEra = 8
 	}
-	if c.Alpha <= 0 {
-		c.Alpha = 0.05
-	}
 	if c.MaxCandidates <= 0 {
 		c.MaxCandidates = 48
 	}
+	if c.PriorSearches < 0 {
+		c.PriorSearches = 0
+	}
 	return c
 }
+
+// Divisor is the Bonferroni divisor: every rule in the grid, once per search
+// conducted over this data including this one. It is derived, never supplied —
+// widening the grid and re-running the search both RAISE it.
+func (c DiscoverConfig) Divisor() int {
+	d := c.withDefaults()
+	n := len(discoverGrid(d.MaxCandidates)) * (1 + d.PriorSearches)
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// CorrectedAlpha is the per-rule significance level actually applied.
+func (c DiscoverConfig) CorrectedAlpha() float64 { return MaxAlpha / float64(c.Divisor()) }
 
 // discoverAtoms is the fixed condition vocabulary. The first discoverAnchors
 // entries (pressure_abs, ext_score) are the only atoms allowed to anchor a
@@ -110,19 +141,25 @@ func discoverGrid(maxRules int) []Rule {
 
 // Discover runs the bounded deterministic grid over obs and returns the
 // SURVIVING candidates, sorted by ID. Every candidate is judged: the
-// week-trial winrate's Bonferroni-corrected (alpha/nTested) Wilson lower
-// bound must exceed 0.5, AND the grade must survive RegimeSurvival, AND the
-// thresholds must not be fragile, AND (multi-cond rules only) the
-// counterfactual must show incremental value. Grades below MinWeeks are never
-// judged — too little history to claim anything. Pure and deterministic: the
-// same obs always yield the same survivors.
+// week-trial winrate's Bonferroni-corrected Wilson lower bound must exceed 0.5,
+// AND the grade must survive RegimeSurvival, AND the thresholds must not be
+// fragile, AND (multi-cond rules only) the counterfactual must show incremental
+// value. Grades below MinWeeks are never judged — too little history to claim
+// anything. Pure and deterministic: the same obs always yield the same
+// survivors.
+//
+// The correction is DERIVED (cfg.Divisor): the grid size times the number of
+// searches conducted over this data. Widening the grid and re-running the
+// search both make every individual rule harder to clear, which is the only
+// arrangement under which "search more" is not a way to manufacture a finding.
 func Discover(obs []Obs, cfg DiscoverConfig) []Candidate {
 	cfg = cfg.withDefaults()
 	grid := discoverGrid(cfg.MaxCandidates)
 	if len(grid) == 0 {
 		return nil
 	}
-	z := normalQuantile(1 - cfg.Alpha/float64(len(grid)))
+	divisor := cfg.Divisor()
+	z := normalQuantile(1 - cfg.CorrectedAlpha())
 	var out []Candidate
 	for _, r := range grid {
 		g := GradeWeeks(obs, r, cfg.MinWeekObs)
@@ -146,7 +183,7 @@ func Discover(obs []Obs, cfg DiscoverConfig) []Candidate {
 		}
 		out = append(out, Candidate{
 			ID: ruleID(r), Rule: r, Desc: ruleDesc(r), Grade: g, CF: cf,
-			Survival: sv, WilsonLower: wl, Survives: true,
+			Survival: sv, WilsonLower: wl, Divisor: divisor, Survives: true,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

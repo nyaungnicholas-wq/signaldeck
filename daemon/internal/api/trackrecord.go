@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -32,6 +33,13 @@ import (
 //     collapse to ONE observation per (symbol, UTC-day) keeping the LATEST
 //     prediction that day before computing ANY skill number, so a handful of
 //     independent bets can't masquerade as thousands.
+//   - Cluster-robust intervals: deduplicating to one row per symbol-day removes
+//     the intraday pseudo-replication and leaves the LARGER problem untouched —
+//     ~1,000 symbols on one day share ONE market move. Every interval published
+//     here therefore comes from internal/clusterstat with the DAY as the unit of
+//     resampling, corrected by a design effect measured from the data (14.7x on
+//     the live 1d record: effective N 887, not 13,058). The raw count never sets
+//     an interval's width, and it is never presented alone as a sample size.
 //   - Gate: below trackMinIndependentN independent observations we WITHHOLD every
 //     headline number (winrate/Brier/IC null) and say why. With ~0 resolved live
 //     outcomes today this page renders honest and mostly-empty — that's the point.
@@ -156,8 +164,11 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 		"minIndependentN": trackMinIndependentN,
 		"distinctDays":    distinctDays,
 		"minDistinctDays": trackMinDistinctDays,
-		"clusterNote":     "observations on the same market day are cross-sectionally correlated (one market move); skill unlocks only after both gates: independent obs AND distinct days",
-		"gated":           gated,
+		"clusterNote": "observations on the same market day are cross-sectionally correlated (one market move); " +
+			"skill unlocks only after both gates (independent obs AND distinct days), and every interval " +
+			"published here is then corrected by a MEASURED design effect with the day as the unit of " +
+			"resampling — see the 'cluster' block for the design effect, the effective N and the distinct-day count",
+		"gated": gated,
 		// This IS a live forward record (calibrated prob frozen at prediction
 		// time, graded against realized bars) — but until it clears the gate it
 		// carries no claimable skill, so we still frame it honestly.
@@ -209,6 +220,11 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 				strconv.Itoa(trackMinDistinctDays) + " distinct market days (obs on one day share one market move)"
 		}
 		resp["note"] = note
+		// Sample-size facts only. A gated record may say HOW MUCH evidence it
+		// holds — raw N, distinct days, the measured design effect and the
+		// effective N those imply — but not one number that reads as a skill
+		// claim, so every interval is stripped before this ships.
+		resp["cluster"] = trackClusterDescriptive(clusterstat.Grade(trackClusterObs(pts)))
 		// Still return the (empty-ish) reliability scaffold + regime buckets so
 		// the page can render its honest, mostly-empty shape.
 		resp["reliability"] = reliabilityCurve(pts)
@@ -239,7 +255,20 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	if 1-upRate > naive {
 		naive, naiveDir = 1-upRate, "down"
 	}
-	loWin, hiWin := wilson(wins, indepN)
+
+	// C4 — the accuracy interval is CLUSTER-ROBUST, never Wilson at indepN.
+	// indepN counts symbol-days; the symbols on one day share one market move,
+	// so the honest sample size is indepN/designEffect. Measured on the live 1d
+	// record the correction is 14.7x, which widened the published interval by
+	// 3.8x. clusterstat refuses outright below its day floor, and a refusal
+	// means winRateCI is null — a withheld interval beats a narrow one.
+	cl := clusterstat.Grade(trackClusterObs(pts))
+	resp["cluster"] = cl
+	if cl.CI != nil {
+		resp["winRateCI"] = [2]float64{cl.CI.Lo, cl.CI.Hi}
+	} else {
+		resp["winRateCI"] = nil
+	}
 
 	pairs := make([]ensemble.Pair, len(pts))
 	for i, p := range pts {
@@ -257,9 +286,17 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	}
 
 	ic, icLo, icHi := icWithCI(pts)
+	// The IC interval is the SAME defect on a different statistic: a Fisher-z
+	// interval at n assumes n independent pairs. Re-derive it by resampling
+	// whole days; the Fisher version survives only as the fallback for samples
+	// too thin for the bootstrap, and is labeled as such in the payload.
+	icMethod := "Fisher-z at raw symbol-day count — NOT cluster-corrected (too few days to resample)"
+	if lo, hi, ok := icDayClusteredCI(pts); ok {
+		icLo, icHi = lo, hi
+		icMethod = "day-clustered bootstrap (whole days resampled with replacement)"
+	}
 
 	resp["winRate"] = winRate
-	resp["winRateCI"] = [2]float64{loWin, hiWin}
 	resp["baseRate"] = upRate
 	resp["naiveBaseline"] = naive
 	resp["edgeVsNaive"] = winRate - naive
@@ -270,6 +307,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	resp["brierSkill"] = brierSkill
 	resp["ic"] = ic
 	resp["icCI"] = [2]float64{icLo, icHi}
+	resp["icCIMethod"] = icMethod
 	resp["reliability"] = reliabilityCurve(pts)
 	resp["byRegime"] = trackByRegime(ctx, pts, h)
 	resp["byMarket"] = trackByMarket(pts)
@@ -311,6 +349,97 @@ func (d Deps) paperSummaryForTrackRecord(ctx context.Context) map[string]any {
 	}
 }
 
+// ── cluster-robust plumbing (C4) ──────────────────────────────────────────────
+
+// trackClusterObs projects the independent record into the one shape
+// internal/clusterstat grades: an outcome plus the DAY that clusters it. The
+// day index is ts/86400 — the same key the (symbol, UTC-day) dedup above uses,
+// so the resampling unit and the dedup unit cannot drift apart.
+func trackClusterObs(pts []trackPt) []clusterstat.Obs {
+	out := make([]clusterstat.Obs, len(pts))
+	for i, p := range pts {
+		bullish := p.prob >= 0.5
+		dir := clusterstat.DirDown
+		if bullish {
+			dir = clusterstat.DirUp
+		}
+		out[i] = clusterstat.Obs{
+			Day: p.ts / 86400,
+			Hit: bullish == (p.up > 0.5), // same rule as the winRate loop above
+			Dir: dir,
+		}
+	}
+	return out
+}
+
+// trackClusterDescriptive strips every interval and every point estimate from a
+// cluster grade, leaving only the sample-size facts. It is what a GATED record
+// is allowed to publish: how much evidence exists, with nothing that reads as a
+// skill claim. Without this, wiring the cluster block into the gated branch
+// would quietly route an accuracy and its interval around the gate.
+func trackClusterDescriptive(cl clusterstat.Result) clusterstat.Result {
+	cl.CI, cl.NaiveCIDiscredited, cl.BootstrapCI, cl.DayBet = nil, nil, nil, nil
+	cl.P, cl.WidthRatio, cl.DailyAgreement = 0, 0, 0
+	gateReason := "intervals withheld: the record has not cleared the track-record gates"
+	if cl.Refused && cl.Reason != "" {
+		gateReason = cl.Reason + " (and the record is gated)"
+	}
+	cl.Refused, cl.Reason = true, gateReason
+	return cl
+}
+
+// icDayClusteredCI re-derives the IC interval by resampling WHOLE DAYS. The
+// Fisher-z interval it replaces assumes n independent (signal, return) pairs;
+// the pairs on one day share one market move, so that interval is too narrow by
+// the same factor as the accuracy interval was. ok is false when there are too
+// few days to resample, and the caller then labels the Fisher fallback plainly
+// rather than presenting it as corrected.
+func icDayClusteredCI(pts []trackPt) (lo, hi float64, ok bool) {
+	type xy struct{ x, y float64 }
+	byDay := map[int64][]xy{}
+	for _, p := range pts {
+		d := p.ts / 86400
+		byDay[d] = append(byDay[d], xy{x: p.prob - 0.5, y: p.fwd})
+	}
+	days := make([]int64, 0, len(byDay))
+	for d := range byDay {
+		days = append(days, d)
+	}
+	if len(days) < clusterstat.MinDistinctDays {
+		return 0, 0, false
+	}
+	// Deterministic order, so the resample draws map to the same days on every
+	// run and the interval is reproducible.
+	sort.Slice(days, func(i, j int) bool { return days[i] < days[j] })
+
+	// Buffers hoisted out of the closure: the bootstrap rebuilds a sample the
+	// size of the whole record on every draw, and reallocating it 1,000 times
+	// is the difference between milliseconds and seconds on this endpoint.
+	xs := make([]float64, 0, len(pts))
+	ys := make([]float64, 0, len(pts))
+	iv, ok := clusterstat.BootstrapStat(len(days), 1000, 0.05, func(idx []int) (float64, bool) {
+		xs, ys = xs[:0], ys[:0]
+		for _, i := range idx {
+			for _, v := range byDay[days[i]] {
+				xs = append(xs, v.x)
+				ys = append(ys, v.y)
+			}
+		}
+		if len(xs) < 4 {
+			return 0, false
+		}
+		// A resample with no variance left in the signal or the outcome has an
+		// UNDEFINED correlation, not a zero one. Counting it as 0 would pull the
+		// percentile interval toward a spurious [0,0] — false certainty, which
+		// is the same defect as a too-narrow interval wearing different clothes.
+		return pearsonOK(xs, ys)
+	})
+	if !ok {
+		return 0, 0, false
+	}
+	return iv.Lo, iv.Hi, true
+}
+
 // ── skill math (self-contained; the api.go pearson is honestyPt-typed) ──
 
 // icWithCI computes the information coefficient (Pearson correlation of the
@@ -335,9 +464,19 @@ func icWithCI(pts []trackPt) (ic, lo, hi float64) {
 // pearsonF is Pearson correlation of two equal-length slices; 0 on degenerate
 // (zero-variance) inputs.
 func pearsonF(xs, ys []float64) float64 {
+	r, _ := pearsonOK(xs, ys)
+	return r
+}
+
+// pearsonOK is pearsonF with the degenerate case made VISIBLE: ok is false when
+// either series has no variance, so a caller that must not conflate "no
+// correlation" with "no correlation is defined" can tell them apart. The
+// day-clustered bootstrap needs that distinction — averaging degenerate draws in
+// as zeros collapses its interval to a spuriously certain [0,0].
+func pearsonOK(xs, ys []float64) (float64, bool) {
 	n := float64(len(xs))
 	if n < 3 {
-		return 0
+		return 0, false
 	}
 	var sx, sy, sxx, syy, sxy float64
 	for i := range xs {
@@ -349,9 +488,9 @@ func pearsonF(xs, ys []float64) float64 {
 	}
 	den := (n*sxx - sx*sx) * (n*syy - sy*sy)
 	if den <= 0 {
-		return 0
+		return 0, false
 	}
-	return (n*sxy - sx*sy) / math.Sqrt(den)
+	return (n*sxy - sx*sy) / math.Sqrt(den), true
 }
 
 // fisherCI returns a 95% confidence interval for a correlation via the Fisher
@@ -369,8 +508,12 @@ func fisherCI(r float64, n int) (lo, hi float64) {
 	return lo, hi
 }
 
-// wilson returns the Wilson 95% score interval for a binomial proportion
-// (wins/n). More honest than the normal approximation at small n and near 0/1.
+// wilson returns the Wilson 95% score interval for a binomial proportion at the
+// RAW count. Nothing in this file publishes it any more: it assumes n
+// independent trials, and on this platform n counts symbol-days that share one
+// market move, which made every interval it produced 3.8-4.9x too narrow. Use
+// clusterstat.Grade instead. It survives only because api/composite.go:258 still
+// calls it, and that file is not this change's to edit.
 func wilson(wins, n int) (lo, hi float64) {
 	if n == 0 {
 		return 0, 0
@@ -653,6 +796,11 @@ func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
 	type agg struct {
 		n, correct int
 		sumClaimed float64
+		// obs carries the day each call resolved on. Regime calls cluster the
+		// same way directional ones do — every symbol's vol regime moves with
+		// the same market — so this record gets the same cluster-robust
+		// treatment rather than a Wilson interval at the raw call count.
+		obs []clusterstat.Obs
 	}
 	seen := map[[3]int64]bool{}
 	byKind := map[string]*agg{}
@@ -673,6 +821,9 @@ func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
 			a.correct++
 		}
 		a.sumClaimed += r.HistoricalAccuracy
+		// Dir is DirNone: "was this regime call right" is not a directional bet,
+		// so the market-breadth diagnostic must not be computed for it.
+		a.obs = append(a.obs, clusterstat.Obs{Day: r.Ts / 86400, Hit: r.Correct == 1})
 	}
 	kinds := map[string]any{}
 	for k, a := range byKind {
@@ -685,12 +836,22 @@ func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
 			e["gated"] = true
 			e["liveAccuracy"] = nil
 			e["liveAccuracyCI"] = nil
+			e["cluster"] = trackClusterDescriptive(clusterstat.Grade(a.obs))
 			e["note"] = notSignificant(a.n, regimeMinResolutions)
 		} else {
-			lo, hi := wilson(a.correct, a.n)
+			cl := clusterstat.Grade(a.obs)
 			e["gated"] = false
 			e["liveAccuracy"] = float64(a.correct) / float64(a.n)
-			e["liveAccuracyCI"] = [2]float64{lo, hi}
+			e["cluster"] = cl
+			// A refusal here means the calls span too few days to support any
+			// interval. Publishing null with the reason beats publishing the
+			// Wilson interval this branch used to compute at the raw count.
+			if cl.CI != nil {
+				e["liveAccuracyCI"] = [2]float64{cl.CI.Lo, cl.CI.Hi}
+			} else {
+				e["liveAccuracyCI"] = nil
+				e["ciNote"] = cl.Reason
+			}
 		}
 		kinds[k] = e
 	}

@@ -198,6 +198,12 @@ type Grade = gbm.Grade
 type EvalConfig struct {
 	Folds  int
 	Params gbm.Params
+	// LabelSpan is how long after its timestamp a row's label resolves, in
+	// seconds. gbm.Evaluate needs it to purge training rows whose label lands
+	// inside the test block; without it the grade is refused rather than
+	// computed across overlapping labels. Zero means the caller has not
+	// declared it, which is itself a defect the evaluator will surface.
+	LabelSpan int64
 }
 
 // DefaultEvalConfig uses the same shallow, small GBM the live trainer uses (the
@@ -210,7 +216,7 @@ func DefaultEvalConfig() EvalConfig {
 // must beat. Returns ErrInsufficientData transparently when there is too little
 // labeled data to grade honestly (the correct "NO EDGE DETECTED" outcome).
 func Baseline(rows []Row, keys []string, cfg EvalConfig) (Grade, error) {
-	samples := toSamples(rows, keys, nil)
+	samples := toSamples(rows, keys, nil, cfg.LabelSpan)
 	return gbm.Evaluate(samples, cfg.Folds, cfg.Params)
 }
 
@@ -221,7 +227,7 @@ func EvaluateHypothesis(h Hypothesis, rows []Row, keys []string, cfg EvalConfig)
 	switch h.Kind {
 	case KindAblation:
 		kept := without(keys, h.Drop)
-		return gbm.Evaluate(toSamples(rows, kept, nil), cfg.Folds, cfg.Params)
+		return gbm.Evaluate(toSamples(rows, kept, nil, cfg.LabelSpan), cfg.Folds, cfg.Params)
 	case KindInteraction:
 		if len(h.Interact) != 2 {
 			return Grade{}, fmt.Errorf("interaction needs exactly 2 features")
@@ -229,7 +235,7 @@ func EvaluateHypothesis(h Hypothesis, rows []Row, keys []string, cfg EvalConfig)
 		a, b := h.Interact[0], h.Interact[1]
 		return gbm.Evaluate(toSamples(rows, keys, func(v map[string]float64) []float64 {
 			return []float64{v[a] * v[b]}
-		}), cfg.Folds, cfg.Params)
+		}, cfg.LabelSpan), cfg.Folds, cfg.Params)
 	case KindRowGate:
 		gated := make([]Row, 0, len(rows))
 		for _, r := range rows {
@@ -237,14 +243,14 @@ func EvaluateHypothesis(h Hypothesis, rows []Row, keys []string, cfg EvalConfig)
 				gated = append(gated, r)
 			}
 		}
-		return gbm.Evaluate(toSamples(gated, keys, nil), cfg.Folds, cfg.Params)
+		return gbm.Evaluate(toSamples(gated, keys, nil, cfg.LabelSpan), cfg.Folds, cfg.Params)
 	}
 	return Grade{}, fmt.Errorf("unknown hypothesis kind %q", h.Kind)
 }
 
 // toSamples builds gbm samples from rows over an ordered key list, optionally
 // appending extra engineered features (e.g. an interaction product).
-func toSamples(rows []Row, keys []string, extra func(map[string]float64) []float64) []gbm.Sample {
+func toSamples(rows []Row, keys []string, extra func(map[string]float64) []float64, labelSpan int64) []gbm.Sample {
 	out := make([]gbm.Sample, 0, len(rows))
 	for _, r := range rows {
 		feat := make([]float64, 0, len(keys)+1)
@@ -254,7 +260,7 @@ func toSamples(rows []Row, keys []string, extra func(map[string]float64) []float
 		if extra != nil {
 			feat = append(feat, extra(r.Vec)...)
 		}
-		out = append(out, gbm.Sample{Ts: r.Ts, Feat: feat, Y: r.Y})
+		out = append(out, gbm.Sample{Ts: r.Ts, Feat: feat, Y: r.Y, LabelEnd: r.Ts + labelSpan})
 	}
 	return out
 }
@@ -269,13 +275,60 @@ func without(keys []string, drop string) []string {
 	return out
 }
 
+// MaxNominalAlpha is the family-wise level the lab runs at. It is a package
+// CONSTANT, not a caller argument, because an anti-p-hacking guardrail an
+// operator can widen is not a guardrail — raising alpha is the cheapest way to
+// manufacture a discovery, and it leaves no trace in the result.
+const MaxNominalAlpha = 0.05
+
+// Multiplicity is the number of looks at the data one decision has to be
+// corrected for. Every field is a COUNT OF TESTS ALREADY CONDUCTED, never a
+// tuning knob, and the divisor is derived from them rather than supplied.
+//
+// WHY PriorTests EXISTS: the nightly loop re-grades its shadow pool, and that
+// pool SHRINKS as members are promoted or rejected. Correcting by tonight's
+// pool size alone meant a hypothesis that cleared a 24-way bar on its first
+// night faced a 3-way bar a week later, while being asked the same question of
+// largely the same data. Each re-look is another chance for noise to clear, so
+// the correction must grow with the looks. PriorTests carries the count of
+// gradings already conducted, so the divisor is monotone non-decreasing over
+// the program's life and repeated testing TIGHTENS the bar.
+//
+// This is a Bonferroni over every look taken, not an optimal alpha-spending
+// function: the sum of alpha/k over k looks slightly exceeds alpha, so it is not
+// an exact sequential procedure. It is strictly more conservative than
+// correcting for tonight alone, which is the defect it replaces, and it is
+// monotone by construction, which is the property the guardrail needs.
+type Multiplicity struct {
+	// Batch is how many hypotheses were graded in the batch this decision
+	// belongs to.
+	Batch int
+	// PriorTests is how many hypothesis-gradings the lab conducted before this
+	// batch. It only ever accumulates.
+	PriorTests int
+}
+
+// Divisor is the Bonferroni divisor: every look taken, including this batch.
+func (m Multiplicity) Divisor() int {
+	d := m.Batch
+	if d < 1 {
+		d = 1
+	}
+	if m.PriorTests > 0 {
+		d += m.PriorTests
+	}
+	return d
+}
+
 // Decision is the verdict on one hypothesis for a night.
 type Decision struct {
 	Hypothesis Hypothesis
 	Grade      Grade
 	Baseline   Grade
+	// Divisor is the number of looks the significance level was divided by.
+	Divisor int
 	// CorrectedAlpha is the Bonferroni-adjusted significance level applied
-	// (nominal alpha / number of hypotheses tested).
+	// (MaxNominalAlpha / Divisor).
 	CorrectedAlpha float64
 	// WilsonLower is the corrected-alpha lower bound on the candidate's OOS
 	// accuracy — the honest floor of its skill.
@@ -287,21 +340,21 @@ type Decision struct {
 
 // Judge applies the Bonferroni-corrected Wilson-lower-bound test. A candidate
 // survives ONLY when even the pessimistic floor of its OOS accuracy — corrected
-// for having tested nTested hypotheses tonight — still beats the incumbent
-// baseline's accuracy, and its lift over its own base rate is positive.
+// for every look the lab has taken, this batch and all prior ones — still beats
+// the incumbent baseline's accuracy, and its lift over its own base rate is
+// positive.
 //
 // This is the anti-false-discovery gate: it is deliberately HARD to pass, and
-// gets harder the more hypotheses are tested.
-func Judge(h Hypothesis, g, baseline Grade, nTested int, nominalAlpha float64) Decision {
-	if nTested < 1 {
-		nTested = 1
-	}
-	corrected := nominalAlpha / float64(nTested)
+// gets harder both the more hypotheses are tested tonight AND the more nights
+// the same question has been asked.
+func Judge(h Hypothesis, g, baseline Grade, m Multiplicity) Decision {
+	div := m.Divisor()
+	corrected := MaxNominalAlpha / float64(div)
 	z := normalQuantile(1 - corrected) // one-sided
 	wl := wilsonLower(g.Accuracy, g.N, z)
 	survives := g.N > 0 && g.Lift > 0 && wl > baseline.Accuracy
 	return Decision{
-		Hypothesis: h, Grade: g, Baseline: baseline,
+		Hypothesis: h, Grade: g, Baseline: baseline, Divisor: div,
 		CorrectedAlpha: corrected, WilsonLower: wl, Survives: survives,
 	}
 }

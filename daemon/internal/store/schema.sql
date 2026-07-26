@@ -1630,3 +1630,36 @@ CREATE TABLE IF NOT EXISTS prereg_records (
   note       TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_prereg_kind ON prereg_records(kind, seq);
+
+-- ═══ LEDGER ANCHORS (external tamper-evidence — finding C2) ═══════════════
+-- The prediction ledger's hash chain proves INTERNAL CONSISTENCY: no stored row
+-- was edited, deleted or reordered. It cannot prove ANTERIORITY, because every
+-- anchor it had (meta.ledger_verify_checkpoint) lived in the same file it was
+-- policing — an operator can drop every row, drop the checkpoint, regenerate a
+-- fabricated chain through the same append path, and both the cached verify and
+-- the full genesis walk report intact=true (reproduced in
+-- store.TestLedger_ChainProvesConsistencyNotAnteriority).
+--
+-- Each row here is an Ed25519 signature over (created_at, ledger_seq,
+-- ledger_count, head_hash), made with a key held OUTSIDE the database (0600
+-- file, path from SIGNALDECK_LEDGER_ANCHOR_KEY). Only the PUBLIC key is stored,
+-- so verification needs no secret. Regenerating history and still producing an
+-- anchor over the old head requires forging a signature.
+--
+-- The honest limits, stated here so the table is not read as more than it is:
+-- nothing before the FIRST anchor is protected, and an operator who holds the
+-- signing key can re-sign a fabricated chain — which is why `digest` is
+-- published externally, where a third party's timestamp is outside the
+-- operator's reach. APPEND-ONLY: rows are only ever INSERTed.
+CREATE TABLE IF NOT EXISTS ledger_anchors (
+  seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at   INTEGER NOT NULL,   -- unix seconds at signing
+  ledger_seq   INTEGER NOT NULL,   -- prediction_ledger.seq of the anchored head
+  ledger_count INTEGER NOT NULL,   -- chain length at signing time
+  head_hash    TEXT    NOT NULL,   -- prediction_ledger.entry_hash at ledger_seq
+  alg          TEXT    NOT NULL,   -- signature scheme (ed25519)
+  pub_key      TEXT    NOT NULL,   -- hex public key — verification needs no secret
+  sig          TEXT    NOT NULL,   -- hex signature over the canonical message
+  digest       TEXT    NOT NULL    -- short publishable digest (message ‖ sig ‖ pubkey)
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_anchors_seq ON ledger_anchors(ledger_seq);

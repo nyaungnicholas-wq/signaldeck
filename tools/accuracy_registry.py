@@ -43,6 +43,12 @@ DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 # Below this many independent observations no verdict is claimed either way.
 MIN_INDEPENDENT_N = 30
 
+# Below this many DISTINCT UTC days no interval is published at all. Mirrors
+# clusterstat.MinDistinctDays in the Go daemon, and exists for the same reason:
+# a between-day variance estimated from three days is not a correction, it is a
+# different way to be overconfident.
+MIN_DISTINCT_DAYS = 10
+
 # Conviction bands. A predictor's accuracy is only meaningful within its band.
 BANDS = [(0.0, 0.5, "all"), (0.5, 0.8, "conv>0.5"), (0.8, 0.9, "conv>0.8"), (0.9, 1.01, "conv>0.9")]
 
@@ -58,6 +64,103 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return (max(0.0, centre - half), min(1.0, centre + half))
 
 
+def design_effect(days: list[tuple[int, int]]) -> float | None:
+    """Measured clustering penalty over per-day (n, hits) tallies.
+
+    Deduplicating to one row per (symbol, UTC-day) removes intraday
+    pseudo-replication and leaves the larger problem untouched: on any given day
+    ~1,000 symbols share ONE market move. A binomial interval over those rows
+    asserts thousands of independent trials in a sample that holds a handful of
+    days.
+
+    This is the survey-linearization ("ultimate cluster") variance of a ratio
+    estimator, which is what handles the very unequal day sizes here — one day
+    holds 7 observations and the next holds 1,046. It is the same estimator as
+    clusterstat.DesignEffect in the Go daemon, deliberately: a registry verdict
+    and a canary decision must never disagree about the same numbers.
+
+    Returns None when it cannot be measured; never returns below 1.0, because a
+    value under 1 is sampling noise and using it would make the interval
+    NARROWER than the independence assumption it was brought in to correct.
+    """
+    k = len(days)
+    if k < 2:
+        return None
+    n = sum(dn for dn, _ in days)
+    hits = sum(dh for _, dh in days)
+    if n <= 0:
+        return None
+    p = hits / n
+    # A degenerate proportion carries no between-day variance to measure, but it
+    # is also the most perfectly clustered sample possible — every day is
+    # internally uniform. The honest reading is the worst case, one independent
+    # observation per day, not the flattering 1.0 the arithmetic would give.
+    if p <= 0 or p >= 1:
+        return n / k
+    s = sum((dh - dn * p) ** 2 for dn, dh in days)
+    cluster_var = k / ((k - 1) * n * n) * s
+    binom_var = p * (1 - p) / n
+    if binom_var <= 0 or cluster_var <= 0:
+        return 1.0
+    return max(1.0, cluster_var / binom_var)
+
+
+def wilson_eff(p: float, eff_n: float, z: float = 1.96) -> tuple[float, float]:
+    """Wilson interval at an EFFECTIVE sample size (n / design effect).
+
+    Passing the raw row count here is the bug this function exists to prevent.
+    """
+    if eff_n <= 0:
+        return (0.0, 1.0)
+    p = min(1.0, max(0.0, p))
+    d = 1 + z * z / eff_n
+    centre = (p + z * z / (2 * eff_n)) / d
+    half = z * math.sqrt(p * (1 - p) / eff_n + z * z / (4 * eff_n * eff_n)) / d
+    return (max(0.0, centre - half), min(1.0, centre + half))
+
+
+def clustered_ci(days: list[tuple[int, int]]) -> dict:
+    """Grade per-day tallies into a publishable, day-resampled interval.
+
+    Returns a dict carrying the interval AND the evidence behind it — distinct
+    days, measured design effect, effective n — because "6,957 observations,
+    effective 4,153 over 11 days" is the honest description and the row count
+    alone is not.
+
+    ci is None when the sample covers fewer than MIN_DISTINCT_DAYS days. That is
+    a refusal, not a wide interval, and it must never be rendered as a number.
+    """
+    n = sum(dn for dn, _ in days)
+    hits = sum(dh for _, dh in days)
+    out = {
+        "n": n,
+        "hits": hits,
+        "distinct_days": len(days),
+        "acc": (hits / n) if n else None,
+        "ci": None,
+        "design_effect": None,
+        "effective_n": None,
+        "ci_method": "withheld",
+    }
+    if n <= 0:
+        return out
+    if len(days) < MIN_DISTINCT_DAYS:
+        out["ci_reason"] = (f"withheld: {len(days)}/{MIN_DISTINCT_DAYS} distinct days — "
+                            "too few to measure between-day variance")
+        return out
+    deff = design_effect(days)
+    if deff is None:
+        out["ci_reason"] = "withheld: design effect not measurable"
+        return out
+    eff = n / deff
+    lo, hi = wilson_eff(hits / n, eff)
+    out["ci"] = [lo, hi]
+    out["design_effect"] = deff
+    out["effective_n"] = eff
+    out["ci_method"] = "day-clustered-wilson"
+    return out
+
+
 def connect(path: str) -> sqlite3.Connection:
     if not os.path.exists(path):
         sys.exit(f"database not found: {path}")
@@ -71,69 +174,73 @@ def connect(path: str) -> sqlite3.Connection:
 def grade_directional(con: sqlite3.Connection) -> list[dict]:
     """Grade prediction_outcomes on independent (symbol, horizon, UTC-day) rows."""
     rows = []
+    # Per-DAY tallies, not per-horizon totals. The dedup below still collapses
+    # intraday repeats to one row per (symbol, horizon, UTC-day); the day
+    # grouping is what lets the interval resample days instead of rows.
     q = """
     WITH dedup AS (
-      SELECT symbol_id, horizon, prob, up,
+      SELECT symbol_id, horizon, prob, up, ts,
              ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, ts/86400
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
     )
-    SELECT horizon,
+    SELECT horizon, ts/86400 AS day,
            COUNT(*),
            SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
-           AVG(CASE WHEN up = 1 THEN 1.0 ELSE 0.0 END)
-    FROM dedup WHERE rn = 1 GROUP BY horizon
+           SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
+           SUM(CASE WHEN ABS(prob - 0.5) >= 0.15 THEN 1 ELSE 0 END),
+           SUM(CASE WHEN ABS(prob - 0.5) >= 0.15 AND (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
+           SUM(CASE WHEN ABS(prob - 0.5) >= 0.15 AND up = 1 THEN 1 ELSE 0 END)
+    FROM dedup WHERE rn = 1 GROUP BY horizon, day ORDER BY horizon, day
     """
-    for horizon, n, hits, base in con.execute(q):
-        # The honest null for a directional call is the best constant guess — always
-        # predicting the majority class. Beating 50% means nothing if up-days are 55%.
+    by_h: dict[str, list] = {}
+    for horizon, day, n, hits, ups, hc_n, hc_hits, hc_ups in con.execute(q):
+        by_h.setdefault(horizon, []).append((n, hits, ups, hc_n, hc_hits, hc_ups))
+
+    def emit(name: str, band: str, days: list[tuple[int, int]], ups: int, note: str) -> None:
+        g = clustered_ci(days)
+        if not g["n"]:
+            return
+        # The honest null for a directional call is the best constant guess —
+        # always predicting the majority class. Beating 50% means nothing if
+        # up-days are 55%.
+        base = ups / g["n"]
         null_acc = max(base, 1 - base)
-        lo, hi = wilson(hits, n)
+        lo, hi = (g["ci"] if g["ci"] else (None, None))
         rows.append({
-            "predictor": f"directional-ensemble ({horizon})",
+            "predictor": name,
             "family": "direction",
-            "band": "all",
+            "band": band,
             "claimed": None,
-            "live_n": n,
-            "live_acc": hits / n if n else None,
-            "ci": [lo, hi],
+            "live_n": g["n"],
+            "live_acc": g["acc"],
+            "ci": g["ci"],
+            "ci_method": g["ci_method"],
+            "distinct_days": g["distinct_days"],
+            "design_effect": g["design_effect"],
+            "effective_n": g["effective_n"],
             "null_acc": null_acc,
-            "skill": (hits / n - null_acc) if n else None,
-            "verdict": verdict_for(hits / n if n else None, lo, hi, n, null_acc, None),
-            "note": "live forward record; independent symbol-days",
+            "skill": g["acc"] - null_acc,
+            "verdict": verdict_for(g["acc"], lo, hi, g["n"], null_acc, None,
+                                   distinct_days=g["distinct_days"]),
+            "note": note,
         })
 
-    # High-conviction slice — the tier a user would actually act on.
-    q2 = """
-    WITH dedup AS (
-      SELECT symbol_id, horizon, prob, up,
-             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, ts/86400
-                                ORDER BY ts DESC) rn
-      FROM prediction_outcomes
-      WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
-    )
-    SELECT COUNT(*), SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
-           AVG(CASE WHEN up = 1 THEN 1.0 ELSE 0.0 END)
-    FROM dedup WHERE rn = 1 AND ABS(prob - 0.5) >= 0.15
-    """
-    n, hits, base = con.execute(q2).fetchone()
-    if n:
-        null_acc = max(base, 1 - base)
-        lo, hi = wilson(hits, n)
-        rows.append({
-            "predictor": "directional-ensemble (high conviction)",
-            "family": "direction",
-            "band": "|p-0.5|>=0.15",
-            "claimed": None,
-            "live_n": n,
-            "live_acc": hits / n,
-            "ci": [lo, hi],
-            "null_acc": null_acc,
-            "skill": hits / n - null_acc,
-            "verdict": verdict_for(hits / n, lo, hi, n, null_acc, None),
-            "note": "the tier a user would actually trade",
-        })
+    for horizon, per_day in sorted(by_h.items()):
+        emit(f"directional-ensemble ({horizon})", "all",
+             [(d[0], d[1]) for d in per_day], sum(d[2] for d in per_day),
+             "live forward record; independent symbol-days, day-resampled interval")
+
+    # High-conviction slice — the tier a user would actually act on. Graded PER
+    # HORIZON: the same symbol on the same day appears in both the 1d and the 1w
+    # record, and pooling them counted one correlated call twice.
+    for horizon, per_day in sorted(by_h.items()):
+        days = [(d[3], d[4]) for d in per_day if d[3] > 0]
+        if not days:
+            continue
+        emit(f"directional-ensemble ({horizon}, high conviction)", "|p-0.5|>=0.15",
+             days, sum(d[5] for d in per_day), "the tier a user would actually trade")
     return rows
 
 
@@ -143,27 +250,45 @@ def grade_directional(con: sqlite3.Connection) -> list[dict]:
 
 def grade_structural(con: sqlite3.Connection) -> list[dict]:
     rows = []
+    # Totals and first-call time per predictor.
     q = """
-    SELECT kind, horizon_days,
-           COUNT(*),
-           SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END),
-           SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END),
-           AVG(historical_accuracy),
-           MIN(ts)
-    FROM regime_outcomes
-    GROUP BY kind, horizon_days ORDER BY kind
+    SELECT kind, horizon_days, COUNT(*), AVG(historical_accuracy), MIN(ts)
+    FROM regime_outcomes GROUP BY kind, horizon_days ORDER BY kind
     """
-    for kind, hd, total, resolved, correct, claimed, first_ts in con.execute(q):
-        resolved = resolved or 0
-        correct = correct or 0
+    # Resolved outcomes tallied PER CALL-DAY. regime_outcomes is already unique
+    # on (symbol_id, kind, day), so each row is one symbol-day — but ~870
+    # symbols share each call day, and grading those as 870 independent trials
+    # is how a single market day becomes a confident verdict on a 82% claim.
+    qd = """
+    SELECT kind, horizon_days, day, COUNT(*), SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END)
+    FROM regime_outcomes WHERE resolved_at IS NOT NULL
+    GROUP BY kind, horizon_days, day ORDER BY kind, day
+    """
+    per_day: dict[tuple, list[tuple[int, int]]] = {}
+    for kind, hd, _day, n, hits in con.execute(qd):
+        per_day.setdefault((kind, hd), []).append((n, hits or 0))
+
+    for kind, hd, total, claimed, first_ts in con.execute(q):
+        days = per_day.get((kind, hd), [])
+        g = clustered_ci(days)
+        resolved = g["n"]
+        lo = hi = None
+        acc = None
+        extra = {}
         if resolved >= MIN_INDEPENDENT_N:
-            lo, hi = wilson(correct, resolved)
-            acc = correct / resolved
-            v = verdict_for(acc, lo, hi, resolved, None, claimed)
-            note = "live-graded"
+            acc = g["acc"]
+            if g["ci"]:
+                lo, hi = g["ci"]
+            v = verdict_for(acc, lo, hi, resolved, None, claimed,
+                            distinct_days=g["distinct_days"])
+            note = "live-graded, day-resampled interval"
+            extra = {
+                "ci_method": g["ci_method"],
+                "distinct_days": g["distinct_days"],
+                "design_effect": g["design_effect"],
+                "effective_n": g["effective_n"],
+            }
         else:
-            lo = hi = None
-            acc = None
             # A horizon-day forecast cannot be graded before its horizon elapses.
             eligible = dt.date.fromtimestamp(first_ts) + dt.timedelta(days=hd)
             v = f"PENDING (first grade {eligible.isoformat()}, {resolved}/{MIN_INDEPENDENT_N} resolved)"
@@ -181,14 +306,25 @@ def grade_structural(con: sqlite3.Connection) -> list[dict]:
             "verdict": v,
             "note": note,
             "forecasts_recorded": total,
+            **extra,
         })
     return rows
 
 
-def verdict_for(acc, lo, hi, n, null_acc, claimed) -> str:
+def verdict_for(acc, lo, hi, n, null_acc, claimed, distinct_days=None) -> str:
     """Verdicts come from the interval, never the point estimate."""
     if n < MIN_INDEPENDENT_N:
         return f"INSUFFICIENT ({n}/{MIN_INDEPENDENT_N})"
+    # No interval, no verdict. A sample spread over too few market days has no
+    # measurable between-day variance, and the row count is not a substitute:
+    # 408 forecasts resolving on one day are one market observation, however
+    # many symbols they cover. Reading a verdict off the point estimate here is
+    # exactly the failure the interval discipline exists to prevent.
+    if lo is None or hi is None:
+        if distinct_days is not None:
+            return (f"INSUFFICIENT DAYS ({distinct_days}/{MIN_DISTINCT_DAYS} distinct days) — "
+                    "no interval, so no verdict")
+        return "NO INTERVAL — no verdict"
     # Against a stated null (direction): the whole interval must clear it.
     if null_acc is not None:
         if hi < null_acc:
@@ -243,7 +379,15 @@ def main() -> int:
         print("backtest claims. They become real evidence on the dates shown above.")
         print()
     print(f"Independence rule: one observation per (symbol, horizon, UTC-day).")
-    print(f"Verdict threshold: {MIN_INDEPENDENT_N} independent observations minimum.")
+    print(f"Verdict threshold: {MIN_INDEPENDENT_N} independent observations minimum, "
+          f"on at least {MIN_DISTINCT_DAYS} distinct UTC days.")
+    print("Intervals resample DAYS, not rows: on any one day ~1,000 symbols share one")
+    print("market move, so the row count overstates the evidence. Each graded row below")
+    print("reports its measured design effect and effective n in the JSON output.")
+    for r in rows:
+        if r.get("design_effect"):
+            print(f"  {r['predictor']}: n={r['live_n']:,} over {r['distinct_days']} days, "
+                  f"design effect {r['design_effect']:.1f}x -> effective n {r['effective_n']:.0f}")
 
     if args.json:
         with open(args.json, "w") as f:
