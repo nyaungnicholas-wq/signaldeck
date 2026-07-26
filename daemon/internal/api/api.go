@@ -1093,10 +1093,22 @@ func dedupeIndependent(pts []honestyPt) []honestyPt {
 	return out
 }
 
-// requestIsLoopback reports whether the caller is the local machine. Proxy
-// headers are deliberately IGNORED — an attacker sets those, and trusting them
-// would hand the redistribution guard to whoever is asking.
+// requestIsLoopback reports whether the caller is the local machine.
+//
+// Two asymmetric rules, both fail-closed (A9, 2026-07-26 re-audit):
+//   - Proxy headers can never GRANT loopback status — an attacker sets those,
+//     and trusting them would hand the redistribution guard to whoever asks.
+//   - Proxy headers DO revoke it: an ngrok reverse tunnel connects from
+//     127.0.0.1 and stamps X-Forwarded-For with the real client IP, so a
+//     loopback RemoteAddr carrying any forwarding header is a remote caller
+//     wearing a local address. Honoring the header here only ever denies, so
+//     a forged header cannot widen access.
 func requestIsLoopback(r *http.Request) bool {
+	for _, h := range []string{"X-Forwarded-For", "X-Real-Ip", "Forwarded", "Ngrok-Skip-Browser-Warning"} {
+		if r.Header.Get(h) != "" {
+			return false
+		}
+	}
 	host := r.RemoteAddr
 	if i := strings.LastIndex(host, ":"); i >= 0 {
 		host = host[:i]

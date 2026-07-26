@@ -119,9 +119,10 @@ horizon-aware — a 1w label reaches 7 days forward and is purged accordingly.
 
 **4. Feature leakage.** `alphax` uses purged walk-forward splits by UTC day with
 a horizon-aware embargo (de Prado). Self-referential features are excluded from
-`canonicalFeatureKeys`. Tests: `test_no_lookahead`, `test_fill_timing`, and a
-GBM test proving appending future rows cannot change an earlier fold's
-predictions.
+`canonicalFeatureKeys`. Tests: `TestNoLookahead_LaterDaysDontChangeEarlierFolds` (alphax),
+`TestNoSameBarFill` / `TestNextBarFillTiming` (backtest), and
+`TestEvaluateNoLookaheadAppendingFuture` (forecast) proving appending future
+rows cannot change an earlier fold's predictions.
 
 **5. Survivorship bias.** `store.ResearchUniverse` / `TradableAt`. Known live
 limit, stated rather than hidden: the tracked universe still under-represents
