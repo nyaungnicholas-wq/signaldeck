@@ -156,7 +156,7 @@ func Evaluate(samples []Sample, folds int, cost, threshold float64) (Grade, erro
 	if len(cands) == 0 {
 		return Grade{}, ErrNoDirectionalCalls
 	}
-	if folds < 2 || len(cands) < minTrain+foldStride {
+	if folds < 2 || len(cands) < minTrain+minPerFold {
 		return Grade{}, ErrTooFewSamples
 	}
 
@@ -292,15 +292,26 @@ func Run(samples []Sample, latestContext []float64, folds int, cost, threshold f
 // walkForward returns out-of-sample meta-probabilities indexed to samples, plus
 // the indices actually scored. Fold k trains strictly on rows before it.
 //
-// The fold boundaries are a FIXED stride from a fixed origin, deliberately NOT
-// derived from len(samples). Deriving them from n is the obvious implementation
-// and it is subtly wrong here: every new observation would re-cut the whole
-// history, so a row graded today could carry a different out-of-sample
-// probability tomorrow purely because unrelated rows arrived after it. That is
-// not lookahead — each model still trains only on its own past — but it makes
-// recorded grades irreproducible, and this platform re-grades continuously and
-// tracks model health over time. With a fixed stride, a row's grade is decided
-// once and never moves. The test pins exactly this.
+// The fold boundaries are GEOMETRIC from a fixed origin — minTrain, 2*minTrain,
+// 4*minTrain, … — and deliberately NOT derived from len(samples). Two properties
+// are being bought at once, and both were learned the hard way:
+//
+//   - REPRODUCIBILITY. Deriving boundaries from n is the obvious implementation
+//     and is subtly wrong: every new observation would re-cut the whole history,
+//     so a row graded today could carry a different out-of-sample probability
+//     tomorrow purely because unrelated rows arrived after it. That is not
+//     lookahead — each model still trains only on its own past — but it makes
+//     recorded grades irreproducible, and this platform re-grades continuously.
+//     With boundaries at fixed positions a row's grade is decided once.
+//   - COST. A fixed CONSTANT stride is reproducible but quadratic: it retrains
+//     every stride rows on an ever-growing training set, which on this
+//     platform's ~13k independent candidates meant ~430 boosted-tree fits and a
+//     pass that did not finish. Geometric growth makes it O(log n) — 8 fits for
+//     13k rows — while keeping every boundary independent of n.
+//
+// The trade is that later rows are scored by a model retrained less often. That
+// is the honest direction to err: the model is always STALER than it could be,
+// never fresher, so no grade is flattered by recency it would not have had live.
 //
 // folds is the minimum number of retrain boundaries the caller demands before a
 // grade is considered structurally sound.
@@ -310,15 +321,14 @@ func walkForward(samples []gbm.Sample, folds int) (probs []float64, scored []int
 	if n < minTrain+minPerFold {
 		return nil, nil, ErrTooFewSamples
 	}
-	// Boundaries: minTrain, minTrain+stride, minTrain+2*stride, ... independent of n.
-	available := (n - minTrain + foldStride - 1) / foldStride
-	if available < folds {
+	bounds := foldBoundaries(n)
+	if len(bounds) < folds {
 		return nil, nil, ErrTooFewSamples
 	}
-	for trainEnd := minTrain; trainEnd < n; trainEnd += foldStride {
-		testEnd := trainEnd + foldStride
-		if testEnd > n {
-			testEnd = n
+	for bi, trainEnd := range bounds {
+		testEnd := n
+		if bi+1 < len(bounds) {
+			testEnd = bounds[bi+1]
 		}
 		m, e := gbm.Train(samples[:trainEnd], gbm.Defaults())
 		if e != nil {
@@ -332,14 +342,26 @@ func walkForward(samples []gbm.Sample, folds int) (probs []float64, scored []int
 	return probs, scored, nil
 }
 
+// foldBoundaries returns the geometric retrain points that fit inside n. Each
+// position depends only on minTrain and the doubling schedule, never on n, so a
+// row always lands in the same fold however much data arrives later.
+func foldBoundaries(n int) []int {
+	var out []int
+	for b := minTrain; b < n; b *= 2 {
+		// A boundary is only usable if at least minPerFold rows follow it.
+		if n-b < minPerFold {
+			break
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
 const (
 	// minTrain mirrors gbm's own floor: below it a boosted tree is fitting noise.
 	minTrain = 60
 	// minPerFold keeps each fold's out-of-sample slice large enough to score.
 	minPerFold = 12
-	// foldStride is how often the model retrains, in observations. Fixed on
-	// purpose — see walkForward.
-	foldStride = 30
 )
 
 // metaLabel is 1 when the primary's side cleared cost, 0 otherwise. This — not

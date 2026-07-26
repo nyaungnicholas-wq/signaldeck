@@ -45,7 +45,9 @@ func buildSamples(n int, informative bool) []Sample {
 // meta-model may rescue it. This is the platform's own documented finding —
 // filtering an edgeless signal yields fewer trades with the same lack of edge.
 func TestEdgelessPrimaryIsRejectedOutright(t *testing.T) {
-	n := 200
+	// 600 rows: geometric fold boundaries (60/120/240/480) need ~500 rows to
+	// yield the 4 retrains this asks for.
+	n := 600
 	samples := make([]Sample, 0, n)
 	for i := 0; i < n; i++ {
 		// Every call loses after cost.
@@ -159,7 +161,7 @@ func TestDayClusteredTradesAreInsufficient(t *testing.T) {
 // trading less. Halving the trades at identical per-trade quality must NOT
 // register as an improvement.
 func TestTradingLessIsNotAnImprovement(t *testing.T) {
-	samples := buildSamples(300, false) // context carries no information
+	samples := buildSamples(600, false) // context carries no information
 	g, err := Evaluate(samples, 4, 0.001, DefaultThreshold)
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
@@ -177,8 +179,8 @@ func TestTradingLessIsNotAnImprovement(t *testing.T) {
 // out-of-sample probability assigned to an EARLIER row. If it does, some fold
 // trained on the future.
 func TestNoLookahead(t *testing.T) {
-	base := buildSamples(200, true)
-	extended := append(append([]Sample{}, base...), buildSamples(60, true)...)
+	base := buildSamples(600, true)
+	extended := append(append([]Sample{}, base...), buildSamples(120, true)...)
 	// Re-stamp the appended rows so time stays strictly ascending.
 	for i := len(base); i < len(extended); i++ {
 		extended[i].Ts = int64(i * 86400)
@@ -229,7 +231,7 @@ func TestNoDirectionalCalls(t *testing.T) {
 
 // An unearned meta-model must never gate a live decision.
 func TestRunRefusesWhenNotEarned(t *testing.T) {
-	n := 200
+	n := 600
 	samples := make([]Sample, 0, n)
 	for i := 0; i < n; i++ {
 		samples = append(samples, Sample{
