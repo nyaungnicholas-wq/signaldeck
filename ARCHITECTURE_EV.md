@@ -17,7 +17,7 @@ onto what already exists (file:line verified 2026-07-26) and orders the work.
 | 6 | Prediction attribution | STRONG | Full comp decomposition on pressure score; GBM leg unattributed |
 | 7 | Capital allocator | EXISTS | riskgate is a pure function; portopt not wired to allocation |
 | 8 | Knowledge base | PARTIAL | Bayesian ledger is permanent; three fragmented hypothesis stores |
-| 9 | Continuous self-critique | EXISTS | canary/model-health/drift/honesty-gaps; registry unscheduled |
+| 9 | Continuous self-critique | EXISTS | canary/model-health/drift/honesty-gaps; registry scheduled (plist now versioned) |
 | 10 | Evidence Engine | PARTIAL→BUILT | `internal/evidence` added this session; wiring below |
 
 ## Layer 1 — Decision Engine (build first after evidence)
@@ -57,7 +57,9 @@ exists anywhere in the schema; no claims table; no auto-downgrade path to the UI
 `revalidate_by` staleness sweep with one-tier auto-downgrade, retirement on
 refuting evidence, `/api/evidence`. Follow-ups: subsume the Python registry's
 grading into the Go worker (clusterstat already exists in Go — canary.go:270),
-schedule it (ops/accuracy-registry.sh has **no plist** today), and make the web
+(scheduling correction: the registry IS scheduled — `com.signaldeck.accuracy`
+is loaded in launchd; its plist was unversioned and is now mirrored into ops/),
+and make the web
 UI cite claim IDs so a downgrade visibly changes what displays.
 
 ## Layers 2+8 — one lineage spine, not two features
@@ -104,7 +106,8 @@ missing-candle scenarios reuse the e2e harness.
 - **7 Allocator:** wire `portopt` into sizing (it currently only feeds
   /api/quant); Kelly edge is book-wide realized payoff (paperrisk.go:128) —
   move to per-signal expectancy with shrinkage toward the book prior.
-- **9 Self-critique:** schedule the accuracy registry; add the decision-layer
+- **9 Self-critique:** registry scheduling verified (com.signaldeck.accuracy,
+  plist now versioned in ops/); add the decision-layer
   audit (cost of refusals) once Layer 1 ledgers DO_NOTHINGs.
 
 ## Order of work
