@@ -3,6 +3,9 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -179,6 +182,156 @@ func TestSWRCache_ConcurrentColdCallersCoalesce(t *testing.T) {
 	for i, r := range results {
 		if r["v"] != 7 {
 			t.Fatalf("follower %d got wrong payload: %v", i, r)
+		}
+	}
+}
+
+// ── C6: the entry maps are bounded and cold builds are admission-controlled ──
+//
+// Before the 2026-07-26 fix neither cache ever deleted an entry, so every key
+// that reached a build pinned its payload (~12 KB) for the life of the
+// process, and there was no limit on how many cold builds could be in flight
+// at once — five requests with five distinct query strings took all four of
+// the store's read connections and the daemon stopped answering, /api/health
+// included. These tests pin both bounds.
+
+func TestSWRCache_EntryMapIsBounded(t *testing.T) {
+	c := newSWRCache(time.Minute)
+	for i := 0; i < maxCacheEntries*3; i++ {
+		k := fmt.Sprintf("junk-%d", i)
+		_, _ = c.get(context.Background(), k, func(ctx context.Context) (map[string]any, error) {
+			return map[string]any{"v": k}, nil
+		})
+	}
+	c.mu.Lock()
+	n := len(c.ent)
+	c.mu.Unlock()
+	if n > maxCacheEntries {
+		t.Fatalf("entry map grew to %d entries; it must be capped at %d or a junk-key flood leaks memory permanently", n, maxCacheEntries)
+	}
+}
+
+func TestSWRCache_EvictionKeepsTheMostRecentlyUsed(t *testing.T) {
+	// Eviction must be LRU, not arbitrary: the hot default entry (the one the
+	// warmer keeps alive) must survive a flood of one-shot junk keys, or the
+	// attack degrades into "evict the warm entry and make the next real
+	// visitor pay the cold build".
+	c := newSWRCache(time.Minute)
+	build := func(v string) func(context.Context) (map[string]any, error) {
+		return func(ctx context.Context) (map[string]any, error) { return map[string]any{"v": v}, nil }
+	}
+	_, _ = c.get(context.Background(), "hot", build("hot"))
+	for i := 0; i < maxCacheEntries*2; i++ {
+		k := fmt.Sprintf("junk-%d", i)
+		_, _ = c.get(context.Background(), k, build(k))
+		// Touch the hot key between junk keys, the way a real visitor would.
+		_, _ = c.get(context.Background(), "hot", build("REBUILT"))
+	}
+	got, _ := c.get(context.Background(), "hot", build("REBUILT"))
+	if got["v"] != "hot" {
+		t.Fatalf("the continuously-used entry was evicted (got %v); LRU eviction must drop the idle junk keys first", got)
+	}
+}
+
+func TestSWRBodyCache_EntryMapIsBounded(t *testing.T) {
+	c := newSWRBodyCache(time.Minute)
+	h := func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"ok":true}`)) }
+	for i := 0; i < maxCacheEntries*3; i++ {
+		req := httptest.NewRequest("GET", fmt.Sprintf("/api/composite/top?zz=%d", i), nil)
+		c.serve(fmt.Sprintf("junk-%d", i), httptest.NewRecorder(), req, h)
+	}
+	c.mu.Lock()
+	n := len(c.ent)
+	c.mu.Unlock()
+	if n > maxCacheEntries {
+		t.Fatalf("body-cache entry map grew to %d entries; cap is %d", n, maxCacheEntries)
+	}
+}
+
+func TestSWRBodyCache_JunkQueryFloodIsOneBuildAndOneEntry(t *testing.T) {
+	// The measured attack, end to end through the real key function: the
+	// review sent /api/composite/top?zz=1, ?zz=2 and so on and each one was a
+	// fresh 28-40s inline build on a read connection. Driving the same
+	// requests through compositeTopCacheKey must produce exactly ONE build and
+	// exactly ONE entry, because none of those parameters is whitelisted.
+	c := newSWRBodyCache(time.Minute)
+	builds := 0
+	h := func(w http.ResponseWriter, r *http.Request) {
+		builds++
+		_, _ = w.Write([]byte(`{"rows":[]}`))
+	}
+	for _, q := range []string{
+		"/api/composite/top",
+		"/api/composite/top?zz=1",
+		"/api/composite/top?zz=2",
+		"/api/composite/top?a=1&b=2&c=3&d=4&e=5",
+		"/api/composite/top?limit=0&horizon=garbage&market=garbage",
+	} {
+		req := httptest.NewRequest("GET", q, nil)
+		c.serve(compositeTopCacheKey(req), httptest.NewRecorder(), req, h)
+	}
+	c.mu.Lock()
+	n := len(c.ent)
+	c.mu.Unlock()
+	if builds != 1 || n != 1 {
+		t.Fatalf("junk-parameter flood caused %d builds across %d entries; want 1 and 1 — each extra build is a read connection held for ~40s", builds, n)
+	}
+}
+
+func TestColdBuilds_AreCappedGlobally(t *testing.T) {
+	// The pool has four read connections. More than maxConcurrentColdBuilds
+	// cold builds must never be in flight at once, no matter how many DISTINCT
+	// keys arrive — that headroom is what keeps /api/health answering while a
+	// slow page rebuilds.
+	c := newSWRCache(time.Minute)
+	var mu sync.Mutex
+	inFlight, peak := 0, 0
+	release := make(chan struct{})
+	started := make(chan struct{}, 16)
+	build := func(ctx context.Context) (map[string]any, error) {
+		mu.Lock()
+		inFlight++
+		if inFlight > peak {
+			peak = inFlight
+		}
+		mu.Unlock()
+		started <- struct{}{}
+		<-release
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return map[string]any{"v": 1}, nil
+	}
+
+	const callers = 6
+	done := make(chan struct{}, callers)
+	for i := 0; i < callers; i++ {
+		go func(i int) {
+			defer func() { done <- struct{}{} }()
+			_, _ = c.get(context.Background(), fmt.Sprintf("cold-%d", i), build)
+		}(i)
+	}
+	// Let every caller reach the admission gate, then read the peak.
+	for i := 0; i < maxConcurrentColdBuilds; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("no cold build was admitted")
+		}
+	}
+	time.Sleep(50 * time.Millisecond) // any over-admission would show up here
+	mu.Lock()
+	p := peak
+	mu.Unlock()
+	if p > maxConcurrentColdBuilds {
+		t.Fatalf("%d cold builds ran concurrently; the ceiling is %d — a burst of distinct keys must not drain the read pool", p, maxConcurrentColdBuilds)
+	}
+	close(release)
+	for i := 0; i < callers; i++ {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("callers did not drain after the builds were released")
 		}
 	}
 }

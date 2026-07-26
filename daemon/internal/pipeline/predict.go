@@ -46,6 +46,49 @@ func decodeCalibration(blob string) (symbolagent.Calibration, bool) {
 	return c, true
 }
 
+// calibrationPairLimit caps how many of the newest RESOLVED outcomes train the
+// fleet-wide recalibration map for one horizon.
+const calibrationPairLimit = 3000
+
+// globalCalibration fits the fleet-wide recalibration map for one horizon from
+// RESOLVED outcomes, and is the fallback for every symbol without a personal
+// map.
+//
+// Two properties this function exists to hold (2026-07-26 review, C3):
+//
+//   - FIT ON THE VARIABLE IT IS APPLIED TO. The map is evaluated at the raw
+//     blend probability, so it is fit on predictions.raw_prob. The previous
+//     implementation fit on prediction_outcomes.prob — which UpsertPrediction
+//     seeds from cal_prob — and applied the result to raw. A recalibration map
+//     carries no meaning off the coordinate it was fit against.
+//   - NOT RECURSIVE. cal_prob is this map's OWN output from the previous pass,
+//     so training on it made every day's map a function of the day before's
+//     map rather than of realized outcomes. Training on raw_prob paired with
+//     the realized direction breaks that loop: the only feedback left is
+//     through the legs, which are graded separately.
+//
+// ok=false means there is not enough evidence to correct anything (no resolved
+// history, or ensemble.Calibrate refused the fit) — the caller then publishes
+// the raw probability uncorrected rather than an invented one.
+func globalCalibration(ctx context.Context, st *store.Store, h md.Horizon) (func(float64) float64, bool, error) {
+	raws, ups, err := st.ResolvedRawPredictionPairs(ctx, h, calibrationPairLimit)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(raws) == 0 {
+		return nil, false, nil
+	}
+	pairs := make([]ensemble.Pair, len(raws))
+	for i := range raws {
+		pairs[i] = ensemble.Pair{Pred: raws[i], Actual: ups[i]}
+	}
+	mapFn, calibrated := ensemble.Calibrate(pairs)
+	if !calibrated {
+		return nil, false, nil
+	}
+	return mapFn, true, nil
+}
+
 // predHorizons are the horizons the ensemble predicts (forecast + expectancy
 // both cover these).
 var predHorizons = []md.Horizon{md.H1d, md.H1w}
@@ -268,7 +311,19 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// broad universe every 10m while the market is open / once per UTC day
 	// closed (see universecadence.go — universe bars are minute-live now).
 	doUniverse, universeCursor := universeDue(ctx, w.St, "predict_universe_day", time.Now())
-	n, featErrs := 0, 0
+	// Fleet-wide fallback calibration, fit ONCE per horizon per pass. The
+	// resolved-outcome set it trains on cannot change mid-pass (this pass only
+	// writes UNresolved rows), so hoisting is output-identical and drops one
+	// 3000-row join per symbol.
+	globalCal := map[md.Horizon]func(float64) float64{}
+	for _, h := range predHorizons {
+		if fn, ok, err := globalCalibration(ctx, w.St, h); err == nil && ok {
+			globalCal[h] = fn
+		} else if err != nil {
+			slog.Warn("global calibration: fit failed, publishing uncorrected probabilities", "horizon", h, "err", err)
+		}
+	}
+	n, featErrs, staleCals := 0, 0, 0
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
@@ -405,13 +460,22 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					wts = pw
 				}
 				// Only take the personal calibration when it actually FITTED
-				// (>=MinCalibrationPairs, real spread). An unfitted personal
-				// map is the identity, so without this guard a just-graduated
-				// symbol would emit an UNcalibrated prob while a still-learning
-				// one gets the global calibration — a quality regression. When
-				// unfitted, fall through to the global-calibration branch.
+				// (>=MinCalibrationPairs, real spread) AND its persisted knots
+				// still pass ensemble.ValidateKnots. 495 of 928 stored maps were
+				// non-monotone before the isotonic fix (2026-07-26 review, C3);
+				// those rows survive until the hourly per-symbol learner refits
+				// them, and serving one inverts the published probability
+				// against the raw input. A REFUSED map falls through to the
+				// global calibration — a coarser correction, never a scrambled
+				// one. An unfitted personal map falls through for the same
+				// reason (it would otherwise emit an UNcalibrated prob while a
+				// still-learning symbol gets the global map).
 				if cal, ok := decodeCalibration(pm.Calibration); ok && cal.Fitted {
-					personalCal, usePersonalCal = cal.Map(), true
+					if fn, err := ensemble.MapFromKnotsChecked(cal.KX, cal.KY); err == nil {
+						personalCal, usePersonalCal = fn, true
+					} else {
+						staleCals++
+					}
 				}
 			}
 			raw, nUsed := ensemble.WeightedProbability(c, wts)
@@ -419,14 +483,10 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if usePersonalCal {
 				// Personal tier: recalibrate with the symbol's OWN isotonic map.
 				cal = personalCal(raw)
-			} else if probs, ups, err := w.St.ResolvedPredictionPairs(ctx, h, 3000); err == nil && len(probs) > 0 {
-				pairs := make([]ensemble.Pair, len(probs))
-				for i := range probs {
-					pairs[i] = ensemble.Pair{Pred: probs[i], Actual: ups[i]}
-				}
-				if mapFn, calibrated := ensemble.Calibrate(pairs); calibrated {
-					cal = mapFn(raw)
-				}
+			} else if fn, ok := globalCal[h]; ok {
+				// Fleet-wide fallback, fit on raw_prob against realized
+				// outcomes — the SAME variable it is applied to here.
+				cal = fn(raw)
 			}
 			comps, _ := json.Marshal(c)
 			if err := w.St.UpsertPrediction(ctx, store.Prediction{
@@ -486,6 +546,13 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	detail := fmt.Sprintf("wrote %d predictions", n)
 	if featErrs > 0 {
 		detail += fmt.Sprintf(" (%d feature-vector write(s) failed — see dq)", featErrs)
+	}
+	if staleCals > 0 {
+		// Visible, not silent: these symbols are on the global calibration
+		// because their stored per-symbol map failed the monotonicity
+		// assertion. The count must fall to 0 as the per-symbol learner refits.
+		detail += fmt.Sprintf(" (%d stale non-monotone per-symbol map(s) refused — using global calibration until refit)", staleCals)
+		slog.Warn("calibration: refused stale per-symbol maps", "count", staleCals)
 	}
 	return detail, nil
 }

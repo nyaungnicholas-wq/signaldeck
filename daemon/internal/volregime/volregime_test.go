@@ -2,8 +2,44 @@ package volregime
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
+
+// C5 (2026-07-26 hostile review): HistoricalAccuracy is a backtest lookup
+// (AccuracyForConviction), never a live/graded number — nothing snapshots
+// this predictor's calls for later grading at all. Every Forecast must say
+// so explicitly rather than leaving a reader of the JSON to infer it from a
+// doc comment that used the word "MEASURED" with no further qualifier.
+func TestForecastCarriesBacktestEvidence(t *testing.T) {
+	calm := make([]float64, 260)
+	for i := range calm {
+		calm[i] = 0.001 * sign(i)
+	}
+	hot := make([]float64, 20)
+	for i := range hot {
+		hot[i] = 0.06 * sign(i)
+	}
+	f, ok := Predict(append(append([]float64{}, calm...), hot...))
+	if !ok {
+		t.Fatal("expected forecast")
+	}
+	if f.Evidence != "backtest" {
+		t.Fatalf("Evidence = %q, want %q", f.Evidence, "backtest")
+	}
+	// Unlike internal/structregime, nothing snapshots this predictor's calls
+	// for live grading, so no first-gradable date is promised — an invented
+	// date would be less honest than none.
+	if f.FirstGradableOn != "" {
+		t.Fatalf("FirstGradableOn = %q, want empty — no live grading loop is wired to this "+
+			"predictor, so no date should be promised", f.FirstGradableOn)
+	}
+	for _, want := range []string{"BACKTEST CLAIM", "not a live measurement", "No live grading loop"} {
+		if !strings.Contains(f.EvidenceCaveat, want) {
+			t.Errorf("EvidenceCaveat missing %q; got: %s", want, f.EvidenceCaveat)
+		}
+	}
+}
 
 func TestInsufficientHistory(t *testing.T) {
 	if _, ok := Predict(make([]float64, minHistory-1)); ok {

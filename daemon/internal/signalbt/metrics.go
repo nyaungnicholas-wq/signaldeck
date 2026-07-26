@@ -194,31 +194,50 @@ func icDecay(indep []Observation, lags []int) []ICPoint {
 // ── costed equity curve ──────────────────────────────────────────────────
 
 // equityCurve replays the independent observations (already sorted ascending by
-// ts) as a long/flat strategy and returns the net-of-cost equity path plus the
+// ts) as a long/flat PORTFOLIO and returns the net-of-cost equity path plus the
 // realized turnover.
+//
+// The unit of compounding is the DAY, not the row. Observations are one per
+// (symbol, UTC-day), so a universe of S symbols over D days is S*D rows. This
+// used to compound every row against a single scalar position shared by every
+// symbol, which made ~1,000 names compound as if they were 1,000 sequential
+// days — and put the strategy on a row index while BenchmarkCurve built SPY on a
+// day index, so the two series were not comparable at all. It published
+// strategyReturn=-0.9995 at turnover=0.00032: an unlevered book cannot lose
+// 99.95% of its capital while trading 0.03% of itself, so the figure graded the
+// accounting, not the signal.
 //
 // Mechanics (no lookahead, costs explicit — same discipline as internal/backtest
 // and internal/papertrade):
 //
-//   - At each observation the CALIBRATED signal maps to a target position via
-//     the LongThreshold / FlatThreshold deadband: >=Long → fully long (pos=1),
-//     <=Flat → flat (pos=0), in between → hold the prior position. The decision
-//     uses only the signal available AT that observation.
-//   - The position taken at observation i earns observation i's PRIMARY-LAG
-//     forward return (the realized close-to-forward-close move that begins at i).
-//     The signal at i was computable from data up to i; its forward return is
-//     strictly later — so equity never earns a return the signal peeked at.
-//   - A per-side CostBps is charged on the equity whenever the target position
-//     CHANGES from the prior observation's position (|Δpos| units of turnover).
-//     Going 0→1 or 1→0 pays the cost once; there is no shorting so |Δpos|∈{0,1}.
+//   - Per symbol, the CALIBRATED signal maps to a target position via the
+//     LongThreshold / FlatThreshold deadband: >=Long → long, <=Flat → flat, in
+//     between → hold THAT SYMBOL's prior position. The decision uses only the
+//     signal available at that observation.
+//   - A day's book weights each of that day's N names at target/N, so the
+//     invested fraction is (#long)/N and can never exceed 1: the book is capped
+//     and unlevered, and capital left over earns nothing rather than being
+//     silently redeployed. The day's return is the weighted mean of the
+//     PRIMARY-LAG forward returns of the names held — realized
+//     close-to-forward-close moves that begin that day, strictly later than the
+//     signals that chose the book.
+//   - A per-side CostBps is charged on the fraction of the book that actually
+//     changed hands, Σ|Δwᵢ| over the union of yesterday's and today's names. A
+//     name leaving the universe is a sale; a name joining it is a buy.
 //
-// Turnover is the mean |Δpos| across observations — the average fraction of the
-// book that traded per step, a churn proxy consistent with the paper book.
+// Turnover is the mean per-DAY Σ|Δwᵢ| — the average fraction of the book that
+// traded per rebalance, on the same footing as the paper book.
 //
-// The benchmark series (SPY buy-and-hold, aligned to the distinct trading days
-// of the independent set) is copied through onto each equity point so the UI can
-// plot both on one axis. When benchmark is nil/short the Benchmark field stays
-// at its last known value (or 1.0), and BenchmarkReturn ends at 0.
+// When the primary lag is longer than a day the day index is STEPPED by that
+// lag, so the compounded windows do not overlap. Compounding a 5-day forward
+// return on every one of those days would count each market move five times —
+// the same double-counting in the time dimension that the row-wise bug was in
+// the name dimension.
+//
+// Marks are stamped at DAY START, the same key BenchmarkCurve uses, so strategy
+// and benchmark share one x-axis; each mark carries the SPY equity as of its own
+// day. When benchmark is nil/short the Benchmark field stays at its last known
+// value (or 1.0), and BenchmarkReturn ends at 0.
 func equityCurve(indep []Observation, benchmark []EquityPoint, p Params) ([]EquityPoint, float64) {
 	if len(indep) == 0 {
 		return nil, 0
@@ -232,39 +251,93 @@ func equityCurve(indep []Observation, benchmark []EquityPoint, p Params) ([]Equi
 		benchByDay[b.Ts/secondsPerDay] = b.Benchmark
 	}
 
-	out := make([]EquityPoint, 0, len(indep))
-	eq := 1.0
-	prevPos := 0.0
-	var turnoverSum float64
-	lastBench := 1.0
+	// Group into ascending days — indep is sorted by ts, so first sight of a day
+	// is its position in the calendar.
+	days := make([]int64, 0, len(indep))
+	byDay := make(map[int64][]Observation, len(indep))
 	for _, o := range indep {
-		// Target position from the deadband on the calibrated signal.
-		target := prevPos
-		switch {
-		case o.Signal >= p.LongThreshold:
-			target = 1.0
-		case o.Signal <= p.FlatThreshold:
-			target = 0.0
+		d := o.Ts / secondsPerDay
+		if _, seen := byDay[d]; !seen {
+			days = append(days, d)
 		}
-		// Cost on the change, charged before earning the forward return.
-		dPos := math.Abs(target - prevPos)
-		turnoverSum += dPos
-		if dPos > 0 {
-			eq *= (1 - cost*dPos)
-		}
-		// Earn the primary-lag forward return if long (target==1).
-		if f, ok := o.FwdByLag[p.PrimaryLag]; ok {
-			eq *= (1 + target*f)
-		}
-		prevPos = target
+		byDay[d] = append(byDay[d], o)
+	}
 
-		if b, ok := benchByDay[o.Ts/secondsPerDay]; ok {
+	step := p.PrimaryLag
+	if step < 1 {
+		step = 1
+	}
+
+	out := make([]EquityPoint, 0, len(days)/step+1)
+	eq := 1.0
+	lastBench := 1.0
+	// Position is carried PER SYMBOL: the deadband's "hold" means hold this
+	// name's own prior stance. A shared scalar made every name inherit whichever
+	// one the loop happened to visit last.
+	prevPos := make(map[int64]float64, len(byDay))
+	prevW := map[int64]float64{}
+	var turnoverSum float64
+	marks := 0
+
+	for i := 0; i < len(days); i += step {
+		d := days[i]
+		// Only names with a realized return at the primary lag are tradeable;
+		// a still-open forward window is not a position we can grade.
+		tradeable := make([]Observation, 0, len(byDay[d]))
+		for _, o := range byDay[d] {
+			if _, ok := o.FwdByLag[p.PrimaryLag]; ok {
+				tradeable = append(tradeable, o)
+			}
+		}
+		if len(tradeable) == 0 {
+			continue
+		}
+
+		n := float64(len(tradeable))
+		curW := make(map[int64]float64, len(tradeable))
+		var bookRet float64
+		for _, o := range tradeable {
+			target := prevPos[o.SymbolID]
+			switch {
+			case o.Signal >= p.LongThreshold:
+				target = 1.0
+			case o.Signal <= p.FlatThreshold:
+				target = 0.0
+			}
+			prevPos[o.SymbolID] = target
+			w := target / n
+			curW[o.SymbolID] = w
+			bookRet += w * o.FwdByLag[p.PrimaryLag]
+		}
+
+		var traded float64
+		for sym, w := range curW {
+			traded += math.Abs(w - prevW[sym])
+		}
+		for sym, w := range prevW {
+			if _, stillHeld := curW[sym]; !stillHeld {
+				traded += math.Abs(w)
+			}
+		}
+		turnoverSum += traded
+		marks++
+
+		// Cost on the rebalance, charged before the book earns the day.
+		if traded > 0 {
+			eq *= (1 - cost*traded)
+		}
+		eq *= (1 + bookRet)
+		prevW = curW
+
+		if b, ok := benchByDay[d]; ok {
 			lastBench = b
 		}
-		out = append(out, EquityPoint{Ts: o.Ts, Strategy: eq, Benchmark: lastBench})
+		out = append(out, EquityPoint{Ts: d * secondsPerDay, Strategy: eq, Benchmark: lastBench})
 	}
-	turnover := turnoverSum / float64(len(indep))
-	return out, turnover
+	if marks == 0 {
+		return nil, 0
+	}
+	return out, turnoverSum / float64(marks)
 }
 
 // BenchmarkCurve builds a SPY buy-and-hold equity path (start 1.0) over the

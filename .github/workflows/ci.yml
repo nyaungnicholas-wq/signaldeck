@@ -18,7 +18,20 @@ jobs:
           cache-dependency-path: daemon/go.sum
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./...
+      # -race: H7 hostile-review finding — CI ran build/vet/test with zero
+      # concurrency coverage despite a single-writer-connection design
+      # (internal/store) and shared-instance workers (internal/notify) that
+      # depend on it being correct. A reviewer already ran `go test -race`
+      # over store, api, pipeline, and metalabel by hand and it passed clean,
+      # so this is not expected to be flaky — it was simply never wired in.
+      # Coverage is collected in the same invocation so this stays one test
+      # run instead of two (a -race run is materially slower).
+      - run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - run: go tool cover -func=coverage.out | tail -1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: daemon/coverage.out
 
   web:
     runs-on: ubuntu-latest
@@ -33,4 +46,6 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      # H7: `npm run lint` (eslint) existed but was never invoked in CI.
+      - run: npm run lint
       - run: npm run build

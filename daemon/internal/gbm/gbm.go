@@ -7,9 +7,16 @@
 //   - NO LOOKAHEAD. The engine is fed labeled Samples the CALLER assembled from
 //     the feature store, where each Sample's feature vector was computable at its
 //     bar and its label is the later-realized direction. Walk-forward Evaluate
-//     only ever trains on samples that resolved strictly BEFORE the block it
-//     scores (temporal, expanding-window folds over time-ordered samples), so a
-//     future row can never train a past prediction — enforced by construction.
+//     only ever trains on samples whose LABEL resolved before the block it
+//     scores — PURGED and EMBARGOED (de Prado), not merely index-ordered. A row
+//     ordered before the split boundary is NOT automatically safe: a label
+//     spanning a week, sampled every ten minutes, resolves inside the test block
+//     for the ~1,000 rows preceding the boundary, and persistent features let a
+//     tree read those answers straight back out. Each Sample therefore declares
+//     when its label was realized (LabelEnd) and Evaluate drops every training
+//     row whose label window reaches the test block or the embargo gap in front
+//     of it. Samples that do not declare a label horizon are REFUSED
+//     (ErrNoLabelSpan) rather than graded unpurged.
 //
 //   - NEVER A PREDICTION WITHOUT ITS GRADE. Predictive quality is measured by
 //     the SAME out-of-sample report card forecast.Evaluate produces (accuracy,
@@ -40,7 +47,10 @@
 //     book already do this for the fused probability).
 //   - Overlapping forward windows make consecutive samples autocorrelated, so
 //     effective N < len(samples); reported confidence is mildly optimistic (the
-//     point estimate is not).
+//     point estimate is not). The purge removes the overlap that crosses the
+//     train/test boundary — it does NOT make the surviving test rows independent
+//     of each other, so an interval computed from N here is still too narrow.
+//     Day-clustered inference is a separate, unfixed problem (review finding C4).
 //   - Trees can overfit; the depth limit, min-leaf guard, learning-rate shrink,
 //     and (above all) the strictly out-of-sample walk-forward grade are the
 //     defenses. If there is no non-linear structure, the grade honestly lands
@@ -61,6 +71,13 @@ var (
 	// ErrBadParams is returned for invalid arguments (e.g. folds < 2, empty
 	// feature vectors, mismatched dimensions).
 	ErrBadParams = errors.New("gbm: invalid parameters")
+	// ErrNoLabelSpan is returned by Evaluate when NO sample declares when its
+	// label was realized (Sample.LabelEnd). Without the label horizon the purge
+	// width is unknowable, so the walk-forward split cannot be certified free of
+	// the overlap leak — and a Lift that cannot be certified is the gate that
+	// admits a leg to the live blend. Withhold the grade instead: callers use
+	// WithLabelSpan to declare the horizon they labeled with.
+	ErrNoLabelSpan = errors.New("gbm: samples do not declare a label horizon (LabelEnd) — cannot purge")
 )
 
 // Params are the GBM hyperparameters. Defaults() gives the fixed, reproducible
@@ -91,10 +108,34 @@ func Defaults() Params {
 // walk-forward folds never let a later sample train an earlier prediction.
 // Feat is the raw feature vector (any fixed dimension, shared across samples);
 // Y is the binary label (1 for an up move, 0 otherwise).
+//
+// LabelEnd is when the label was REALIZED — Ts plus the forward window the
+// caller labeled with, in the same units as Ts. It is what makes the purge
+// possible: index order alone cannot tell Evaluate that a row sitting before the
+// split boundary carries an answer decided after it. Callers that labeled with a
+// single horizon declare it in one line with WithLabelSpan; a set where no row
+// declares it is refused (ErrNoLabelSpan) rather than graded unpurged.
 type Sample struct {
-	Ts   int64
-	Feat []float64
-	Y    float64
+	Ts       int64
+	LabelEnd int64
+	Feat     []float64
+	Y        float64
+}
+
+// WithLabelSpan returns a COPY of samples with LabelEnd filled in as Ts+span for
+// every row that has not already declared a later one. spanSecs is the forward
+// window the caller labeled with, in Ts units (e.g. 604800 for a 1-week label on
+// unix-second timestamps). This is the one-line declaration Evaluate needs to
+// purge; without it the caller gets ErrNoLabelSpan, by design.
+func WithLabelSpan(samples []Sample, span int64) []Sample {
+	out := make([]Sample, len(samples))
+	copy(out, samples)
+	for i := range out {
+		if end := out[i].Ts + span; end > out[i].LabelEnd {
+			out[i].LabelEnd = end
+		}
+	}
+	return out
 }
 
 // Grade is the out-of-sample report card — identical in shape and meaning to
@@ -108,6 +149,15 @@ type Grade struct {
 	AUC        float64 `json:"auc"`        // ROC AUC via rank statistic (0.5 = no skill)
 	BaseRate   float64 `json:"baseRate"`   // majority-class accuracy floor
 	Lift       float64 `json:"lift"`       // Accuracy - BaseRate (<=0 => no edge)
+
+	// The purge is reported, not assumed: LabelSpan is the horizon Evaluate read
+	// off the data, EmbargoSpan the extra gap it held in front of each test
+	// block, and PurgedTrainRows how many training rows the two together removed
+	// across all folds. A grade with PurgedTrainRows == 0 on densely sampled,
+	// long-horizon data is a red flag that the caller mis-declared its horizon.
+	LabelSpan       int64 `json:"labelSpan"`
+	EmbargoSpan     int64 `json:"embargoSpan"`
+	PurgedTrainRows int   `json:"purgedTrainRows"`
 }
 
 // treeNode is one node of a CART regression tree. A leaf carries Value; an
@@ -357,18 +407,32 @@ func checkDims(samples []Sample) (int, error) {
 	return d, nil
 }
 
-// Evaluate grades a GBM out-of-sample with expanding-window walk-forward, using
-// the SAME fold construction as forecast.Evaluate: samples MUST already be in
-// ascending time order (the caller assembles them that way from the feature
-// store). It splits them into `folds` contiguous, time-ordered blocks; for each
-// fold after the first it trains a fresh GBM on ALL earlier samples and predicts
-// the current block, which the model never trained on. Because blocks are
-// strictly time-ordered and a fold's training set contains only earlier samples,
-// no future information enters any prediction — a later sample can NOT influence
-// an earlier fold's grade (verified in tests).
+// Evaluate grades a GBM out-of-sample with PURGED, EMBARGOED expanding-window
+// walk-forward. Samples MUST already be in ascending time order (the caller
+// assembles them that way from the feature store; Evaluate re-sorts defensively).
+// It splits them into `folds` contiguous, time-ordered blocks; for each fold
+// after the first it trains a fresh GBM on the earlier samples and predicts the
+// current block.
+//
+// "Earlier" means earlier BY LABEL, not by index. Index order alone is the
+// leak the de Prado purge exists to close: with a week-long label sampled every
+// ten minutes, the ~1,000 training rows preceding the boundary carry outcomes
+// decided INSIDE the test block, and because features are persistent a tree
+// re-reads those outcomes for test rows sitting in the same feature region. The
+// grade then measures memorisation, and since Lift > 0 is the gate that admits
+// a leg to the live blend, the leak buys real allocation. So each fold drops
+// every training row whose label window reaches the test block, plus an embargo
+// gap in front of it for the residual serial correlation the exact label window
+// does not capture.
+//
+// The purge width comes from the DATA — the widest declared label horizon in the
+// set — never from a constant. When no row declares one, Evaluate returns
+// ErrNoLabelSpan: an unpurgeable grade is withheld, not published.
 //
 // It errors with ErrBadParams for folds < 2 and ErrInsufficientData when there
-// are too few samples to give each fold a usable train/test split.
+// are too few samples to give each fold a usable train/test split — including
+// when the purge itself leaves every fold's training set too thin, which is the
+// honest answer for a set whose history is shorter than its own label horizon.
 func Evaluate(samples []Sample, folds int, p Params) (Grade, error) {
 	if folds < 2 {
 		return Grade{}, ErrBadParams
@@ -379,6 +443,81 @@ func Evaluate(samples []Sample, folds int, p Params) (Grade, error) {
 	if _, err := checkDims(samples); err != nil {
 		return Grade{}, err
 	}
+	span, ok := labelSpanOf(samples)
+	if !ok {
+		return Grade{}, ErrNoLabelSpan
+	}
+	return evaluateFolds(samples, folds, p, span, embargoFor(span), true)
+}
+
+// embargoDenom sets the embargo as a fraction (1/embargoDenom) of the label
+// span. de Prado's embargo is a small gap BEYOND the purge, guarding the
+// residual serial correlation that survives the exact label window — features
+// are built from trailing windows, so rows just outside the purge still share
+// most of their inputs with the first test rows. Expressing it as a fraction of
+// the measured label span keeps it scale-free: a 1-day label earns a gap
+// proportionate to a 1-day label, a 1-week label to a week. A fixed constant is
+// exactly what finding H1 objected to.
+const embargoDenom = 10
+
+// embargoFor returns the embargo gap for a measured label span.
+func embargoFor(span int64) int64 { return span / embargoDenom }
+
+// labelSpanOf reads the label horizon OFF THE DATA: the widest declared
+// (LabelEnd - Ts) in the set. Widest, not median — with mixed horizons in one
+// set a narrower purge would leave the long-horizon rows straddling the
+// boundary, and over-purging costs training rows while under-purging costs the
+// honesty of the grade. ok=false when no row declares a horizon at all.
+func labelSpanOf(samples []Sample) (int64, bool) {
+	var span int64
+	ok := false
+	for _, s := range samples {
+		if s.LabelEnd <= s.Ts {
+			continue // undeclared (or a zero-width label, which needs no purge)
+		}
+		ok = true
+		if d := s.LabelEnd - s.Ts; d > span {
+			span = d
+		}
+	}
+	return span, ok
+}
+
+// labelEndOf returns when a sample's label was realized, defaulting an
+// undeclared row to the set's widest span. A row that forgot to declare is
+// treated as the WORST case, so a partially-declared set cannot smuggle
+// unpurged rows through the boundary.
+func labelEndOf(s Sample, span int64) int64 {
+	if end := s.Ts + span; end > s.LabelEnd {
+		return end
+	}
+	return s.LabelEnd
+}
+
+// purgedTrain returns the training rows for one fold: those among
+// samples[:trainEnd] whose label was fully realized at least `embargo` before
+// the test block opens at testStartTs. Filtered rather than truncated so a set
+// with mixed horizons is handled row by row.
+//
+// A label realized exactly AT testStartTs is kept: its terminal price is the
+// test block's opening price, which is information the test rows' own features
+// already contain — that is contemporaneous, not future.
+func purgedTrain(samples []Sample, trainEnd int, testStartTs, span, embargo int64) []Sample {
+	cutoff := testStartTs - embargo
+	out := make([]Sample, 0, trainEnd)
+	for i := 0; i < trainEnd; i++ {
+		if labelEndOf(samples[i], span) > cutoff {
+			continue // label reaches into the test block (or its embargo) — purge
+		}
+		out = append(out, samples[i])
+	}
+	return out
+}
+
+// evaluateFolds is the shared walk-forward body. purge=false reproduces the
+// PRE-FIX, zero-gap split and exists only so the tests can measure what the leak
+// was worth; every production path goes through Evaluate with purge=true.
+func evaluateFolds(samples []Sample, folds int, p Params, span, embargo int64, purge bool) (Grade, error) {
 	// Defensive: enforce ascending time order (no reliance on caller memory).
 	if !ascendingTs(samples) {
 		sorted := make([]Sample, len(samples))
@@ -389,13 +528,21 @@ func Evaluate(samples []Sample, folds int, p Params) (Grade, error) {
 
 	n := len(samples)
 	var preds, actuals []float64
+	purged := 0
 	for f := 1; f < folds; f++ {
 		trainEnd := n * f / folds
 		testEnd := n * (f + 1) / folds
-		if trainEnd < minTrainSamples || testEnd <= trainEnd {
-			continue // train slice too thin to trust
+		if testEnd <= trainEnd {
+			continue
 		}
 		train := samples[:trainEnd]
+		if purge {
+			train = purgedTrain(samples, trainEnd, samples[trainEnd].Ts, span, embargo)
+			purged += trainEnd - len(train)
+		}
+		if len(train) < minTrainSamples {
+			continue // train slice too thin to trust (often BECAUSE of the purge)
+		}
 		test := samples[trainEnd:testEnd]
 		m, err := Train(train, p)
 		if err != nil {
@@ -409,7 +556,11 @@ func Evaluate(samples []Sample, folds int, p Params) (Grade, error) {
 	if len(preds) == 0 {
 		return Grade{}, ErrInsufficientData
 	}
-	return gradeFrom(preds, actuals), nil
+	g := gradeFrom(preds, actuals)
+	if purge {
+		g.LabelSpan, g.EmbargoSpan, g.PurgedTrainRows = span, embargo, purged
+	}
+	return g, nil
 }
 
 // minPerFold requires each fold hold a handful of samples so a grade is not one
@@ -429,8 +580,9 @@ func ascendingTs(samples []Sample) bool {
 // Run is the top-level convenience entry point: it walk-forward grades the model
 // FIRST (no probability is returned without a grade), then trains a point model
 // on all samples and predicts a caller-supplied latest feature vector. ok=false
-// whenever there is insufficient data for either grading or training — so a
-// caller never surfaces an ungraded GBM probability.
+// whenever there is insufficient data for either grading or training, AND
+// whenever the samples do not declare a label horizon (ErrNoLabelSpan) — so a
+// caller never surfaces a GBM probability whose grade could not be purged.
 func Run(samples []Sample, latest []float64, folds int, p Params) (prob float64, grade Grade, ok bool) {
 	grade, err := Evaluate(samples, folds, p)
 	if err != nil {

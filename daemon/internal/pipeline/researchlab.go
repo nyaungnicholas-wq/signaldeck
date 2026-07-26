@@ -99,6 +99,16 @@ func (w *ResearchLabWorker) Run(ctx context.Context) (string, error) {
 
 	keys := researchlab.CanonicalKeys(rows)
 	cfg := researchlab.DefaultEvalConfig()
+	// Rows are pooled across horizons above, so a single purge span has to
+	// cover the WIDEST label in the pool. Purging more than strictly necessary
+	// costs training rows; purging less admits a row whose label resolved
+	// inside the block it is about to be graded on, which is the leak this
+	// exists to close. The conservative direction is the only defensible one.
+	for _, h := range predHorizons {
+		if secs := horizonSecs(h); secs > cfg.LabelSpan {
+			cfg.LabelSpan = secs
+		}
+	}
 	baseline, err := researchlab.Baseline(rows, keys, cfg)
 	if err != nil {
 		_ = w.St.SetMeta(ctx, researchLabDayKey, day)

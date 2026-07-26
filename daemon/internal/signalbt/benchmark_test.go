@@ -69,16 +69,21 @@ func TestBacktest_CarriesBenchmarkOntoEquity(t *testing.T) {
 	if len(res.Equity) != 30 {
 		t.Fatalf("equity len %d, want 30", len(res.Equity))
 	}
-	if res.BenchmarkReturn <= 0 {
-		t.Fatalf("benchmark return = %v, want > 0 for a rising SPY", res.BenchmarkReturn)
+	// The returns are pointers so a gated surface can publish null; an ungated
+	// one must actually carry them.
+	if res.StrategyReturn == nil || res.BenchmarkReturn == nil || res.ExcessReturn == nil {
+		t.Fatalf("ungated result withheld its returns: gated=%v note=%q", res.Gated, res.Note)
+	}
+	if *res.BenchmarkReturn <= 0 {
+		t.Fatalf("benchmark return = %v, want > 0 for a rising SPY", *res.BenchmarkReturn)
 	}
 	// Deadband-neutral signal (0.5) holds flat: strategy return 0, so excess is
 	// negative vs a rising market — the honest read.
-	if res.StrategyReturn != 0 {
-		t.Fatalf("neutral-signal strategy return = %v, want 0 (held flat)", res.StrategyReturn)
+	if *res.StrategyReturn != 0 {
+		t.Fatalf("neutral-signal strategy return = %v, want 0 (held flat)", *res.StrategyReturn)
 	}
-	if res.ExcessReturn >= 0 {
-		t.Fatalf("excess vs rising SPY = %v, want negative", res.ExcessReturn)
+	if *res.ExcessReturn >= 0 {
+		t.Fatalf("excess vs rising SPY = %v, want negative", *res.ExcessReturn)
 	}
 }
 

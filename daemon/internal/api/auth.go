@@ -68,7 +68,9 @@ func (d Deps) resolveUser(r *http.Request) int64 {
 	return 0
 }
 
-// newSessionToken returns 32 bytes of crypto/rand as hex.
+// newSessionToken returns 32 bytes of crypto/rand as hex. This plaintext is
+// handed to the browser in Set-Cookie and to the store, which persists only its
+// SHA-256 digest (store.CreateSession) — it is never written to disk.
 func newSessionToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -180,16 +182,22 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 401, "invalid username or password")
 		return
 	}
-	_ = d.St.PruneSessions(r.Context())
 	d.startSession(w, r, u.ID, u.Username, u.IsAdmin)
 }
 
 func (d Deps) startSession(w http.ResponseWriter, r *http.Request, uid int64, username string, isAdmin bool) {
+	// Prune on every session creation, not just login: it also deletes the
+	// pre-digest rows that stored a cookie value verbatim (see
+	// store.PruneSessions). Those rows stopped authenticating the moment the
+	// hashed lookup shipped, so this is cleanup of a dead credential, not the
+	// invalidation itself.
+	_ = d.St.PruneSessions(r.Context())
 	token, err := newSessionToken()
 	if err != nil {
 		httpErr(w, 500, "token generation failed")
 		return
 	}
+	// Only the digest of token reaches the database.
 	if err := d.St.CreateSession(r.Context(), token, uid, time.Now().Add(sessionTTL).Unix()); err != nil {
 		httpErr(w, 500, err.Error())
 		return

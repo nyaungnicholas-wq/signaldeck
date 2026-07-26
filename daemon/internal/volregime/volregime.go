@@ -33,6 +33,20 @@
 //
 // The predictor never claims more than it measured, and it labels a low-
 // conviction call as exactly that.
+//
+// # Backtest, not (yet) live — read this before quoting HistoricalAccuracy
+//
+// "Measured" above means measured in a BACKTEST: the tiers were computed once,
+// offline, over historical bars, then frozen into the AccuracyForConviction
+// lookup table. Every Forecast this package returns today reads that table —
+// none is built from a resolved live outcome, because no live outcome exists
+// yet. Nothing in this package or its callers snapshots a Forecast and grades
+// it after the fact the way internal/structregime's regime_outcomes table
+// does (and that table, as of this writing, ALSO has zero resolutions — see
+// internal/prereg). A backtest number and a live number answer different
+// questions and must never be read as the same thing, so every Forecast is
+// stamped with Evidence and EvidenceCaveat rather than leaving a JSON
+// consumer to infer which kind of number HistoricalAccuracy is.
 package volregime
 
 import (
@@ -56,10 +70,30 @@ type Forecast struct {
 	Regime string `json:"regime"`
 	// Conviction in [0,1] = |rank-0.5|*2. Extremes predict best.
 	Conviction float64 `json:"conviction"`
-	// HistoricalAccuracy is the MEASURED walk-forward accuracy at THIS
-	// conviction tier (see AccuracyForConviction). It is the honest confidence,
-	// never an invented probability.
+	// HistoricalAccuracy is the accuracy AccuracyForConviction measured for
+	// THIS conviction tier in the offline BACKTEST described in the package
+	// doc — the honest confidence, never an invented probability, but also
+	// NOT a live/graded number. See Evidence and EvidenceCaveat, which say so
+	// explicitly on every Forecast rather than leaving a reader of the JSON to
+	// infer it from this comment.
 	HistoricalAccuracy float64 `json:"historicalAccuracy"`
+	// Evidence names what HistoricalAccuracy is. Always evidenceBacktest for
+	// every Forecast this package can currently produce — see the package
+	// doc's "Backtest, not (yet) live" section. Reserved so a future "live"
+	// value (built from a resolved, out-of-sample outcome instead of this
+	// table) can never be mistaken for this one; nothing here produces that
+	// value today.
+	Evidence string `json:"evidence"`
+	// FirstGradableOn is deliberately left empty (omitted from JSON): unlike
+	// internal/structregime, whose forecasts are snapshotted for later grading
+	// and carry a committed date (internal/prereg.FirstGradableOn), nothing
+	// snapshots THIS predictor's calls for live grading, so there is no date
+	// to honestly promise. Populated only if that changes.
+	FirstGradableOn string `json:"firstGradableOn,omitempty"`
+	// EvidenceCaveat is the sentence a payload should render verbatim next to
+	// HistoricalAccuracy so a reader never has to infer what kind of number it
+	// is — see the evidenceCaveat constant's doc.
+	EvidenceCaveat string `json:"evidenceCaveat"`
 	// Tier is a human label for the conviction bucket.
 	Tier string `json:"tier"`
 	// Rank is the current EWMA vol's percentile in its trailing window [0,1].
@@ -73,6 +107,21 @@ type Forecast struct {
 // annualized vol (internal/options) must use the SAME constant — a mismatched
 // annualization silently shifts every implied-vs-forecast comparison.
 const TradingDaysPerYear = 252
+
+// evidenceBacktest is the only value Forecast.Evidence currently takes — see
+// the package doc's "Backtest, not (yet) live" section. Defined as a named
+// constant (rather than a literal "backtest" repeated at each call site) so a
+// future live-grading path has one place to introduce its counterpart.
+const evidenceBacktest = "backtest"
+
+// evidenceCaveat is Forecast.EvidenceCaveat's fixed text. Deliberately names
+// no conviction tier or accuracy number of its own, so it stays correct
+// regardless of which tier a given Forecast landed in.
+const evidenceCaveat = "BACKTEST CLAIM, not a live measurement: HistoricalAccuracy is a walk-" +
+	"forward backtest lookup (AccuracyForConviction), computed offline before any forecast from " +
+	"this predictor was graded against what actually happened. No live grading loop is wired to " +
+	"this quarterly predictor yet, so no first-gradable date is promised here. Treat this number " +
+	"as the platform's best backtest evidence for this predictor, not a live track record."
 
 // maxSaneReturn guards against unadjusted-split corruption: a one-day |simple
 // return| above this inside the prediction window (found on ~130 live symbols
@@ -108,6 +157,8 @@ func Predict(rets []float64) (Forecast, bool) {
 		Regime:             regime,
 		Conviction:         conv,
 		HistoricalAccuracy: AccuracyForConviction(conv),
+		Evidence:           evidenceBacktest,
+		EvidenceCaveat:     evidenceCaveat,
 		Tier:               tierName(conv),
 		Rank:               rank,
 		N:                  len(rets),

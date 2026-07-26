@@ -99,9 +99,16 @@ type moverRow struct {
 
 // movers serves gainers/losers from the daily universe bars.
 // GET /api/movers?limit=&minMcap=   (minMcap in dollars; 0 = no filter)
+// ?limit bounds for /api/movers. Shared with moversCacheKey (cachekey.go) so
+// the cache key and the handler can never resolve the same query differently.
+const (
+	moversDefaultLimit = 10
+	moversMaxLimit     = 50
+)
+
 func (d Deps) movers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	limit := limitParam(r, 10, 50)
+	limit := limitParam(r, moversDefaultLimit, moversMaxLimit)
 	minMcap, _ := strconv.ParseFloat(strings.TrimSpace(r.URL.Query().Get("minMcap")), 64)
 	if minMcap < 0 || minMcap != minMcap { // negative or NaN → no filter
 		minMcap = 0
@@ -285,11 +292,14 @@ func (d Deps) calendar(w http.ResponseWriter, r *http.Request) {
 // registerSignal8Home wires the Stage-4 home-surface read routes. Movers sits
 // behind the SHARED response cache (cold-load precompute wave, warm.go) so the
 // cache-warmer worker keeps its default entry hot; parameterized calls cache
-// per raw query string.
+// per WHITELISTED parameter (cachekey.go). It keyed on the raw query string
+// until C6 (2026-07-26), which made every novel query — `?zz=1` included — a
+// cold build holding one of four read connections, and leaked the entry
+// permanently because nothing evicted the map.
 func (d Deps) registerSignal8Home(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/tape", d.tape)
 	mux.HandleFunc("GET /api/movers", func(w http.ResponseWriter, r *http.Request) {
-		sharedMoversCache.serve(r.URL.RawQuery, w, r, d.movers)
+		sharedMoversCache.serve(moversCacheKey(r), w, r, d.movers)
 	})
 	mux.HandleFunc("GET /api/calendar", d.calendar)
 }

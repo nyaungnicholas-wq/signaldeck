@@ -73,3 +73,58 @@ if mkdir -p "$OFFSITE" 2>/dev/null; then
 else
   log "WARN: offsite dir unavailable"
 fi
+
+# ── H9 (hostile review, 2026-07-26): nothing pages a human ─────────────────
+# Unrelated to backups — piggybacked here on purpose. This is the one script
+# in the fleet guaranteed to run once a day (market-close.sh -> this script),
+# so it needs no new launchd job, and this remediation pass's ops/*.sh budget
+# was one new FILE (ops/restore-rehearsal.sh, for H8) — a second standalone
+# script for this would have needed its own scheduling to ever actually run.
+#
+# THE PROBLEM: daemon/cmd/signaldeckd/run.go logs "remote notify: no
+# transports configured" exactly ONCE per daemon start (54 occurrences seen
+# live) — a line in a log nobody tails routinely. Until
+# SIGNALDECK_DISCORD_WEBHOOK / SIGNALDECK_TELEGRAM_BOT_TOKEN+CHAT_ID /
+# SIGNALDECK_WEBHOOK_URL is set in daemon/.env, EVERY daemon alert degrades to
+# a macOS `display notification` banner that reaches nobody with the lid
+# closed — and that silence is itself invisible: nothing distinguishes "quiet
+# because nothing is wrong" from "quiet because nobody could see it."
+#
+# This sets NO credential (deliberately out of scope). It only makes the
+# absence loud, once a day, in the same channel every other ops script here
+# already uses to reach a human.
+NOTIFY_ENV="$SD/daemon/.env"
+NOTIFY_LOG="$SD/logs/notify-silence.log"
+NOTIFY_COOLDOWN_FILE="$SD/data/.notify-silence-banner-ts"
+NOTIFY_COOLDOWN_SECS=$((24 * 3600))
+
+notify_log() { echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> "$NOTIFY_LOG"; }
+
+# has_nonempty KEY — true if KEY=<something non-empty> appears in
+# daemon/.env. Never echoes the value, only presence/absence — the same
+# redaction discipline internal/notify.Redact applies to error strings.
+has_nonempty() {
+  [ -f "$NOTIFY_ENV" ] && grep -qE "^${1}=.+" "$NOTIFY_ENV"
+}
+
+notify_configured=false
+has_nonempty SIGNALDECK_DISCORD_WEBHOOK && notify_configured=true
+if has_nonempty SIGNALDECK_TELEGRAM_BOT_TOKEN && has_nonempty SIGNALDECK_TELEGRAM_CHAT_ID; then
+  notify_configured=true
+fi
+has_nonempty SIGNALDECK_WEBHOOK_URL && notify_configured=true
+
+if [ "$notify_configured" = true ]; then
+  notify_log "remote notify configured — daemon alerts are pageable beyond this Mac"
+else
+  notify_log "SILENT-FAILURE MODE — no remote transport configured (Discord/Telegram/webhook all unset). Every daemon alert is macOS-only and goes unseen with the lid closed or nobody at the keyboard. Set SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, or SIGNALDECK_WEBHOOK_URL in $NOTIFY_ENV and restart the daemon."
+  # Rate-limited: this banner is warning about missed alerts, so it must not
+  # itself become one more notification the operator learns to swipe away.
+  now=$(date +%s)
+  last=0
+  [ -f "$NOTIFY_COOLDOWN_FILE" ] && last=$(cat "$NOTIFY_COOLDOWN_FILE" 2>/dev/null || echo 0)
+  if [ $((now - last)) -ge $NOTIFY_COOLDOWN_SECS ]; then
+    osascript -e 'display notification "No Discord/Telegram/webhook transport configured — daemon alerts are macOS-only and go unseen when this Mac is unattended." with title "SignalDeck: alerts are SILENT beyond this Mac"' >/dev/null 2>&1
+    echo "$now" > "$NOTIFY_COOLDOWN_FILE"
+  fi
+fi

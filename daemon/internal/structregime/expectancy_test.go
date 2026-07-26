@@ -23,14 +23,28 @@ func TestTopAccuracyBandIsRefusedAsATrade(t *testing.T) {
 }
 
 func TestPositiveReturnBandCanBeTradeable(t *testing.T) {
-	// A mid band has a positive measured forward return; with a tight enough
-	// stop it should clear expectancy.
+	// H7 hostile-review fix: this used to be `if p.MeanFwdRet <= 0 { t.Skip(...) }`
+	// — a quantitative regression (the 0.8-0.9 band's measured forward return
+	// going non-positive) would have reported PASS via the skip instead of
+	// FAIL. conv 0.85 on trend21 sits in that band, whose 2026-07-24
+	// re-validation measured mean forward return is +0.79%
+	// (structregime.go's forwardReturnFor, the b80 case). Pinning that number
+	// here — rather than skipping when it isn't positive — means ANY change
+	// to the measured band (a genuine re-validation, or a refactor that
+	// silently swaps in the wrong band/kind) FAILS this test instead of
+	// silently adapting. If the number legitimately changes, update the
+	// pinned constant deliberately, with a comment saying why.
+	const wantMeanFwdRet = 0.79
+
 	p, ok := BuildTradePlan(KindTrend21, 0.85, 100, 0.2)
 	if !ok {
 		t.Fatal("expected a computable plan")
 	}
-	if p.MeanFwdRet <= 0 {
-		t.Skip("band's measured return is not positive in this build")
+	if diff := p.MeanFwdRet - wantMeanFwdRet; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("trend21 0.8-0.9 band's measured mean forward return changed: got %.4f%%, "+
+			"want %.4f%% (pinned 2026-07-24 re-validation) — this band moving is exactly the "+
+			"kind of regression a t.Skip used to hide; if this is a genuine re-measurement, "+
+			"update the pinned constant on purpose", p.MeanFwdRet, wantMeanFwdRet)
 	}
 	if !p.Tradeable {
 		t.Fatalf("positive return + tight stop should clear expectancy: %+v", p)

@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -81,37 +84,85 @@ func (s *Store) AdminUserID(ctx context.Context) (int64, error) {
 }
 
 // ── sessions ────────────────────────────────────────────────────────────
+//
+// A session token is a bearer credential: whoever holds the cookie value IS
+// that user for the whole TTL. Until 2026-07-25 the cookie value itself was the
+// primary key of this table, so reading the database file — which is
+// world-readable and copied verbatim to iCloud — was full account takeover for
+// every live session. Only a digest is persisted now; the plaintext lives in
+// the cookie and nowhere else. Every method below takes the PLAINTEXT and
+// hashes it here, so no caller can forget to.
 
-// CreateSession stores a browser session token (stored plaintext: it is a
-// 256-bit random value, useless outside this DB, and the DB is the trust root).
+// sessionTokenScheme tags the stored format. It is not a secret; it exists so a
+// pre-2026-07-25 row (which stored the plaintext) is identifiable and can be
+// deleted. Those sessions cannot be MIGRATED — computing a digest requires the
+// plaintext, which is exactly what is no longer known — so they are invalidated
+// instead and everyone logs in again. That is the correct trade against leaving
+// 76 working credentials in cleartext on disk.
+const sessionTokenScheme = "sha256:"
+
+// hashSessionToken maps a plaintext session token to the value persisted for
+// it. Plain SHA-256 is right here and would be wrong for a password: the input
+// is 256 bits of crypto/rand, so there is no dictionary to attack and nothing
+// for key stretching to buy.
+func hashSessionToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return sessionTokenScheme + hex.EncodeToString(sum[:])
+}
+
+// CreateSession stores a browser session. Only the token's digest is written —
+// the caller keeps the plaintext for the Set-Cookie header.
 func (s *Store) CreateSession(ctx context.Context, token string, userID int64, expiresTs int64) error {
 	_, err := s.w.ExecContext(ctx,
 		`INSERT INTO sessions (token, user_id, created_ts, expires_ts) VALUES (?,?,?,?)`,
-		token, userID, time.Now().Unix(), expiresTs)
+		hashSessionToken(token), userID, time.Now().Unix(), expiresTs)
 	return err
 }
 
-// SessionUser resolves a token to its (unexpired) user id (ok=false otherwise).
+// SessionUser resolves a presented cookie value to its (unexpired) user id
+// (ok=false otherwise).
+//
+// The SQL equality is an index probe on the DIGEST, never on the plaintext; it
+// is not itself constant-time, but all it can leak is coarse hit/miss timing on
+// a value from which the cookie cannot be recovered. The comparison that
+// actually authorises the request is redone with subtle.ConstantTimeCompare,
+// which does not return early on the first differing byte. Note also that
+// replaying the STORED value as a cookie fails: it gets hashed like anything
+// else, so a DB reader still cannot log in.
 func (s *Store) SessionUser(ctx context.Context, token string) (int64, bool, error) {
+	want := hashSessionToken(token)
 	var uid int64
+	var stored string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT user_id FROM sessions WHERE token=? AND expires_ts>?`,
-		token, time.Now().Unix()).Scan(&uid)
+		`SELECT user_id, token FROM sessions WHERE token=? AND expires_ts>?`,
+		want, time.Now().Unix()).Scan(&uid, &stored)
 	if err == sql.ErrNoRows {
 		return 0, false, nil
 	}
-	return uid, err == nil, err
+	if err != nil {
+		return 0, false, err
+	}
+	if subtle.ConstantTimeCompare([]byte(stored), []byte(want)) != 1 {
+		return 0, false, nil
+	}
+	return uid, true, nil
 }
 
-// DeleteSession removes one session (logout).
+// DeleteSession removes one session (logout), given the plaintext cookie value.
 func (s *Store) DeleteSession(ctx context.Context, token string) error {
-	_, err := s.w.ExecContext(ctx, `DELETE FROM sessions WHERE token=?`, token)
+	_, err := s.w.ExecContext(ctx, `DELETE FROM sessions WHERE token=?`, hashSessionToken(token))
 	return err
 }
 
-// PruneSessions removes expired sessions.
+// PruneSessions removes expired sessions, and every legacy row whose token is
+// not a digest. Those legacy rows are already inert — SessionUser hashes what
+// it is given, so a stored plaintext can never be matched — but deleting them
+// is what stops a stale bearer credential sitting in the DB file (and in every
+// backup and iCloud copy of it) for the rest of its 30-day TTL.
 func (s *Store) PruneSessions(ctx context.Context) error {
-	_, err := s.w.ExecContext(ctx, `DELETE FROM sessions WHERE expires_ts<=?`, time.Now().Unix())
+	_, err := s.w.ExecContext(ctx,
+		`DELETE FROM sessions WHERE expires_ts<=? OR token NOT LIKE ?`,
+		time.Now().Unix(), sessionTokenScheme+"%")
 	return err
 }
 

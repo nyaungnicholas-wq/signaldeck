@@ -23,6 +23,14 @@ import (
 // signalbt.MinIndependentN — with ~0 resolved live outcomes today the honest
 // output is "insufficient data", and the payload says so (gated=true + note).
 //
+// The equity block carries its own gate. The engine compounds ONE cross-
+// sectional book per day; if the accounting ever yields a path a capped,
+// unlevered book cannot reach, equity/strategyReturn/benchmarkReturn/
+// excessReturn come back null with gated=true and the reason in note. This
+// endpoint published -99.95% at 0.03% turnover while it compounded once per
+// (symbol,day) row, so the equity numbers here are null-able by design and the
+// UI must read gated before reading them.
+//
 // STAGE 2 addition: ?pinned=1 serves the WEEKLY STORED evaluation (written by
 // the signalbt-weekly worker every Sunday evening NY, meta signalbt_latest)
 // instead of recomputing — so the page can show the exact "as of Sunday" grade

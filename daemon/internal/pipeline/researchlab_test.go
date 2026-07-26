@@ -73,6 +73,14 @@ func TestResearchLabWorker_RunsAndGatesDaily(t *testing.T) {
 	st := newRLWorkerStore(t)
 	sym, _ := st.UpsertSymbol(ctx, "BBB", md.Stocks, "")
 	// 200 labeled rows with a couple of features; enough to grade a baseline.
+	//
+	// Spaced 8 days apart on purpose. The evaluator now PURGES training rows
+	// whose label resolves inside the test block, and the widest pooled label
+	// here is a week — so rows one second apart, as this fixture used to seed
+	// them, are all overlap and all purged, and the honest outcome is "not
+	// gradable". Non-overlapping spacing is what real walk-forward data has to
+	// look like for a grade to mean anything.
+	const rowSpacing = 8 * 86400
 	for i := int64(0); i < 200; i++ {
 		sig := 1.0
 		fwd := 0.01
@@ -80,7 +88,7 @@ func TestResearchLabWorker_RunsAndGatesDaily(t *testing.T) {
 			sig, fwd = -1.0, -0.01
 		}
 		noise := float64(i%5) / 5.0
-		seedRLLabeled(t, st, sym, 1000+i, map[string]float64{"signal": sig, "noise": noise}, fwd)
+		seedRLLabeled(t, st, sym, 1000+i*rowSpacing, map[string]float64{"signal": sig, "noise": noise}, fwd)
 	}
 	w := NewResearchLabWorker(st)
 	fixed := time.Unix(1_700_000_000, 0)

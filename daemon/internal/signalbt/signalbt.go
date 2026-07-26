@@ -33,7 +33,11 @@
 // synthetic ones. This keeps the math independently verifiable.
 package signalbt
 
-import "sort"
+import (
+	"fmt"
+	"math"
+	"sort"
+)
 
 // MinIndependentN is the floor of distinct (symbol, UTC-day) observations below
 // which the headline skill statistics (IC, quintile spread, hit-rate) are
@@ -56,9 +60,9 @@ const secondsPerDay = 86400
 // rank/threshold statistics are invariant to that affine shift.
 type Observation struct {
 	SymbolID int64
-	Ts       int64              // prediction bar ts (unix seconds, UTC)
-	Signal   float64            // calibrated P(up) in [0,1] emitted at Ts
-	FwdByLag map[int]float64    // lag(days) -> realized forward return
+	Ts       int64           // prediction bar ts (unix seconds, UTC)
+	Signal   float64         // calibrated P(up) in [0,1] emitted at Ts
+	FwdByLag map[int]float64 // lag(days) -> realized forward return
 }
 
 // Params configure the backtest. Zero values are filled with honest defaults by
@@ -143,6 +147,12 @@ type EquityPoint struct {
 // skill number is GATED behind Gated: below MinIndependentN independent
 // observations the fields are still populated for completeness but Gated is
 // true and the UI must show "insufficient data".
+//
+// Gated has a SECOND trigger — an equity path a capped, unlevered book cannot
+// produce (see equitySanityReason). That gate is stricter because the number it
+// withholds is not merely thin, it is wrong: Equity is nil and the three returns
+// are nil, so the payload says null rather than a figure a reader could quote.
+// Note carries the reason in both cases.
 type Result struct {
 	Horizon string `json:"horizon"`
 
@@ -153,20 +163,22 @@ type Result struct {
 	Gated           bool `json:"gated"`
 
 	// Headline skill (over the independent set, at PrimaryLag).
-	IC            float64          `json:"ic"`             // primary-lag information coefficient (Spearman)
-	ICDecay       []ICPoint        `json:"icDecay"`        // IC by forward lag
-	Quintiles     []QuintileBucket `json:"quintiles"`      // signal-quintile forward profile
-	QuintileSpread float64         `json:"quintileSpread"` // Q5.MeanFwd - Q1.MeanFwd
-	HitRate       float64          `json:"hitRate"`        // signal>0.5 predicts fwd>0, over independent set
-	MeanFwd       float64          `json:"meanFwd"`        // mean primary-lag forward return over independent set
+	IC             float64          `json:"ic"`             // primary-lag information coefficient (Spearman)
+	ICDecay        []ICPoint        `json:"icDecay"`        // IC by forward lag
+	Quintiles      []QuintileBucket `json:"quintiles"`      // signal-quintile forward profile
+	QuintileSpread float64          `json:"quintileSpread"` // Q5.MeanFwd - Q1.MeanFwd
+	HitRate        float64          `json:"hitRate"`        // signal>0.5 predicts fwd>0, over independent set
+	MeanFwd        float64          `json:"meanFwd"`        // mean primary-lag forward return over independent set
 
-	// Costed strategy vs SPY buy-and-hold.
-	Turnover        float64       `json:"turnover"`        // mean |position change| per observation (round-trip churn proxy)
+	// Costed strategy vs SPY buy-and-hold. The three returns are POINTERS so a
+	// withheld one serializes as null: a reader who sees 0 quotes it, a reader
+	// who sees null asks. They are nil whenever the equity block is gated.
+	Turnover        float64       `json:"turnover"`        // mean per-day fraction of the book that traded
 	CostBps         float64       `json:"costBps"`         // per-side cost applied
 	Equity          []EquityPoint `json:"equity"`          // costed equity curve + benchmark
-	StrategyReturn  float64       `json:"strategyReturn"`  // net-of-cost total return of the signal strategy
-	BenchmarkReturn float64       `json:"benchmarkReturn"` // SPY buy-and-hold total return
-	ExcessReturn    float64       `json:"excessReturn"`    // strategyReturn - benchmarkReturn
+	StrategyReturn  *float64      `json:"strategyReturn"`  // net-of-cost total return of the signal strategy
+	BenchmarkReturn *float64      `json:"benchmarkReturn"` // SPY buy-and-hold total return
+	ExcessReturn    *float64      `json:"excessReturn"`    // strategyReturn - benchmarkReturn
 
 	// Honesty labeling — the flagship has ~0 LIVE resolved outcomes today.
 	Live       bool   `json:"live"`
@@ -227,13 +239,68 @@ func Backtest(obs []Observation, benchmark []EquityPoint, horizon string, p Para
 	res.ICDecay = icDecay(indep, lags)
 
 	// --- costed equity curve vs SPY buy-and-hold ---
-	res.Equity, res.Turnover = equityCurve(indep, benchmark, p)
-	if n := len(res.Equity); n > 0 {
-		res.StrategyReturn = res.Equity[n-1].Strategy - 1
-		res.BenchmarkReturn = res.Equity[n-1].Benchmark - 1
-		res.ExcessReturn = res.StrategyReturn - res.BenchmarkReturn
+	equity, turnover := equityCurve(indep, benchmark, p)
+	res.Turnover = turnover
+	reason := equitySanityReason(equity)
+	if reason == "" && len(equity) == 0 && res.IndependentN > 0 {
+		reason = "no independent observation carried a forward return at the primary lag, so there is no equity path to grade — withheld"
+	}
+	if reason != "" {
+		// The accounting broke, not the signal. Withhold the whole equity block
+		// behind the reason instead of printing a number the reader would be
+		// right to disbelieve — this surface shipped -99.95% at 0.03% turnover
+		// because nothing asked whether the figure was reachable.
+		res.Gated = true
+		if res.Note == "" {
+			res.Note = reason
+		} else {
+			res.Note += "; " + reason
+		}
+		return res
+	}
+	res.Equity = equity
+	if n := len(equity); n > 0 {
+		strategy := equity[n-1].Strategy - 1
+		bench := equity[n-1].Benchmark - 1
+		excess := strategy - bench
+		res.StrategyReturn = &strategy
+		res.BenchmarkReturn = &bench
+		res.ExcessReturn = &excess
 	}
 	return res
+}
+
+// MaxPlausibleAbsReturn bounds what the equity accounting is allowed to publish.
+// The book this engine models is long/flat and unlevered — a day's weights sum
+// to at most 1 — so it cannot lose more than its capital, and over the
+// out-of-sample history this replay has actually accrued it cannot honestly
+// double either. The band is a tripwire on the ARITHMETIC, not a claim about the
+// signal: a break of the C1 kind lands far outside it long before it looks
+// merely lucky. If a real track record ever grows into this band, THIS CONSTANT
+// is what gets re-derived — the check does not get removed.
+const MaxPlausibleAbsReturn = 1.0
+
+// equitySanityReason returns a non-empty explanation when the equity path is one
+// an unlevered long/flat book cannot produce, and "" when the curve is
+// self-consistent. The caller gates the surface on the reason rather than
+// publishing the number.
+func equitySanityReason(pts []EquityPoint) string {
+	for _, pt := range pts {
+		if math.IsNaN(pt.Strategy) || math.IsInf(pt.Strategy, 0) {
+			return "equity accounting produced a non-finite value — result withheld until the accounting is corrected"
+		}
+		if pt.Strategy <= 0 {
+			return "equity accounting drove a capped, unlevered long/flat book to zero or below, which it cannot reach — result withheld until the accounting is corrected"
+		}
+	}
+	if n := len(pts); n > 0 {
+		if total := pts[n-1].Strategy - 1; math.Abs(total) > MaxPlausibleAbsReturn {
+			return fmt.Sprintf(
+				"equity accounting produced a %.1f%% total return, outside the ±%.0f%% a capped, unlevered long/flat book can reach over this record — result withheld until the accounting is corrected",
+				total*100, MaxPlausibleAbsReturn*100)
+		}
+	}
+	return ""
 }
 
 // dedupeIndependent collapses observations to ONE per (symbol, UTC-day): the

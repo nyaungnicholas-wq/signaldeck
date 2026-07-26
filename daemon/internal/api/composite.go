@@ -56,6 +56,15 @@ const (
 // compositeHorizon reads ?horizon= (default 1d), honoring only the horizons
 // the scorer actually produces (1d, 1w) — anything else falls back to 1d
 // rather than silently returning an empty/mixed result.
+// ?limit bounds for /api/composite/top. Shared with compositeTopCacheKey
+// (cachekey.go) rather than repeated as literals: if the key normalised a
+// limit the handler then resolved differently, the cache would serve one
+// request's rows to another.
+const (
+	compositeTopDefaultLimit = 50
+	compositeTopMaxLimit     = 500
+)
+
 func compositeHorizon(r *http.Request) md.Horizon {
 	switch md.Horizon(r.URL.Query().Get("horizon")) {
 	case md.H1w:
@@ -289,7 +298,7 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 		market = string(m)
 	}
 	horizon := compositeHorizon(r)
-	limit := limitParam(r, 50, 500)
+	limit := limitParam(r, compositeTopDefaultLimit, compositeTopMaxLimit)
 
 	// Rank over the FULL latest set, then truncate — a limited read must not
 	// change anyone's rank.
@@ -370,7 +379,11 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 func (d Deps) registerComposite(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/composite", d.compositeDetail)
 	mux.HandleFunc("GET /api/composite/top", func(w http.ResponseWriter, r *http.Request) {
-		// Perf wave 2026-07-24: measured 40s per request; SWR-cached by query.
-		sharedCompositeSWR.serve(r.URL.RawQuery, w, r, d.compositeTop)
+		// Perf wave 2026-07-24: measured 40s per request; SWR-cached.
+		// C6 2026-07-26: the key was r.URL.RawQuery, so `?zz=1` was a key the
+		// process had never seen — a cold build holding a read connection for
+		// 40s. Five junk parameters stalled the daemon. The key now comes from
+		// the whitelist in cachekey.go and an unknown parameter cannot mint one.
+		sharedCompositeSWR.serve(compositeTopCacheKey(r), w, r, d.compositeTop)
 	})
 }

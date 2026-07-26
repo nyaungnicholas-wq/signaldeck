@@ -101,17 +101,30 @@ func gbmSamplesFromLabeled(rows []store.LabeledFeature, keys []string) []gbm.Sam
 }
 
 // meanRevSamplesFromLabeled builds time-ASCENDING meanrev.Samples from labeled
-// rows. Each carries the stored momentum raw prob (pred_raw) the blend produced
-// plus the realized outcome + forward return for cost-net grading. Rows lacking
-// a stored pred_raw are skipped (no momentum lean to invert).
+// rows, carrying the momentum lean this leg exists to invert plus the realized
+// outcome + forward return for cost-net grading.
+//
+// IT MUST NOT READ pred_raw, and that is the whole point of this comment.
+// pred_raw is the BLEND output, and the blend contains the mean-reversion leg
+// whenever its lift is positive — so training the leg on pred_raw closes a loop
+// in which the leg learns to invert a number that already contains itself. The
+// file forty lines above this one excludes pred_raw from GBM training for
+// exactly that reason; this builder quietly read it anyway, and 1,093 live
+// predictions across 12 symbols were emitted through that loop.
+//
+// The leg's own doctrine is "invert an extreme pressure score", so it reads the
+// pressure feature directly and applies the same [-1,1] -> [0,1] conversion
+// ensemble.LegProbabilities uses for LegPressure. That is an input, not an
+// output. Rows lacking it are skipped, exactly as rows lacking pred_raw were.
 func meanRevSamplesFromLabeled(rows []store.LabeledFeature) []meanrev.Sample {
 	out := make([]meanrev.Sample, 0, len(rows))
 	for i := len(rows) - 1; i >= 0; i-- {
 		r := rows[i]
-		raw, ok := r.Vec["pred_raw"]
+		pressure, ok := r.Vec["pressure_score"]
 		if !ok {
 			continue
 		}
+		raw := (pressure + 1) / 2
 		out = append(out, meanrev.Sample{
 			Ts:        r.Ts,
 			RawProb:   raw,
@@ -161,7 +174,12 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 			// ── GBM leg ──────────────────────────────────────────────────
 			keys := canonicalFeatureKeys(rows)
 			if len(keys) > 0 {
-				samples := gbmSamplesFromLabeled(rows, keys)
+				// Declare the label horizon so gbm.Evaluate can PURGE training
+				// rows whose label resolves inside the test block. Without it
+				// Evaluate refuses to grade rather than publish a Lift computed
+				// across overlapping labels — the gate that admits this leg to
+				// the live blend must not be measured on leaked rows.
+				samples := gbm.WithLabelSpan(gbmSamplesFromLabeled(rows, keys), horizonSecs(h))
 				// Latest live vector = newest row (rows[0]) flattened with the
 				// same key order. It IS in the training set (its outcome already
 				// resolved, so it's a legitimate labeled example); Run grades

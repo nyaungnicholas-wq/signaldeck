@@ -76,6 +76,11 @@ func TestJudge_RejectsNoiseAblation(t *testing.T) {
 	rows := syntheticRows(240)
 	keys := CanonicalKeys(rows)
 	cfg := DefaultEvalConfig()
+	// syntheticRows are spaced one second apart, so a 1s label span makes each
+	// row's label resolve before the next one begins — no overlap to purge.
+	// Declaring it is not optional: the evaluator now REFUSES to grade samples
+	// with no stated horizon rather than compute a Lift across leaked rows.
+	cfg.LabelSpan = 1
 	base, err := Baseline(rows, keys, cfg)
 	if err != nil {
 		t.Fatalf("baseline: %v", err)

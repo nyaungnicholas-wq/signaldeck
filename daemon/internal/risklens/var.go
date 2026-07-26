@@ -1,6 +1,7 @@
 package risklens
 
 import (
+	"fmt"
 	"math"
 	"sort"
 )
@@ -26,37 +27,58 @@ func DailyReturns(closes []float64) []float64 {
 	return out
 }
 
+// MinVaRTailObservations is the smallest number of returns allowed at or below
+// the VaR quantile before a historical VaR may be published.
+//
+// WHY THIS EXISTS: a historical VaR is a single order statistic of the loss
+// tail, so its precision is governed by how many observations are IN that tail,
+// not by how many days the window spans. At the package's 60-close minimum a
+// 95% VaR sat on a tail of three points — three coin flips deciding a number
+// the UI rendered as a dollar figure. Ten is the smallest tail at which the
+// estimate stops being dominated by which single day happened to be worst; at
+// 95% confidence it requires ~180 return days, which the live 400-bar fetch
+// comfortably supplies.
+const MinVaRTailObservations = 10
+
 // HistoricalVaR reports the empirical Value-at-Risk and Conditional VaR (a.k.a.
-// Expected Shortfall) of a return series at the given confidence.
+// Expected Shortfall) of a return series at the given confidence, together with
+// the gate that admitted or refused them.
 //
 // confidence 0.95 means we look at the worst 5% of days: varPct is the loss at
 // the 5th percentile of returns, cvarPct is the mean loss across days at or
-// beyond that threshold. Both are returned as POSITIVE loss magnitudes (a
-// varPct of 0.03 means "a 3% loss"). A profitable quantile yields a negative
-// magnitude (i.e. even the tail was a gain), which is reported as-is.
+// beyond that threshold. Both are POSITIVE loss magnitudes (a varPct of 0.03
+// means "a 3% loss"). A profitable quantile yields a negative magnitude (i.e.
+// even the tail was a gain), which is reported as-is.
 //
 // Method: sort returns ascending, take the index at (1-confidence) using the
 // "lower" empirical quantile (index = floor((1-confidence)*n), clamped), and
 // negate to express loss. This is a purely descriptive, in-sample statistic —
-// no distributional assumption, no lookahead. confidence is clamped to
-// (0,1); an empty series yields (0,0).
-func HistoricalVaR(portfolioReturns []float64, confidence float64) (varPct, cvarPct float64) {
+// no distributional assumption, no lookahead. confidence is clamped to (0,1).
+//
+// WITHHOLDING: when the loss tail holds fewer than MinVaRTailObservations
+// points, both figures come back nil with gate.Reason set. Callers must render
+// that as "—". Returning 0 would publish "this portfolio cannot lose money",
+// which is the single worst thing a risk surface can say.
+func HistoricalVaR(portfolioReturns []float64, confidence float64) (varPct, cvarPct *float64, gate VaRGate) {
 	n := len(portfolioReturns)
-	if n == 0 {
-		return 0, 0
-	}
 	if confidence <= 0 {
 		confidence = 0.0001
 	}
 	if confidence >= 1 {
 		confidence = 0.9999
 	}
-
-	sorted := make([]float64, n)
-	copy(sorted, portfolioReturns)
-	sort.Float64s(sorted)
-
 	alpha := 1 - confidence // tail mass, e.g. 0.05
+
+	// Return days needed for the tail to reach the floor: the tail holds
+	// floor(alpha*n)+1 points, so floor(alpha*n) >= MinVaRTailObservations-1.
+	needN := int(math.Ceil(float64(MinVaRTailObservations-1) / alpha))
+	gate = VaRGate{
+		Confidence: confidence,
+		N:          n,
+		MinTailN:   MinVaRTailObservations,
+		NeedN:      needN,
+	}
+
 	// Lower empirical quantile index: the largest index strictly inside the
 	// tail. floor(alpha*n) lands on the first return just past the tail cutoff;
 	// we use index = floor(alpha*n) as the VaR return, clamped to [0, n-1].
@@ -64,19 +86,32 @@ func HistoricalVaR(portfolioReturns []float64, confidence float64) (varPct, cvar
 	if idx >= n {
 		idx = n - 1
 	}
-	varReturn := sorted[idx]
-	varPct = -varReturn
+	if n > 0 {
+		gate.TailN = idx + 1
+	}
+
+	if gate.TailN < MinVaRTailObservations {
+		gate.Withheld = true
+		gate.Reason = fmt.Sprintf(
+			"a %.0f%% historical VaR needs at least %d return days in the loss tail; this %d-day window puts only %d there (about %d days are required at this confidence)",
+			confidence*100, MinVaRTailObservations, n, gate.TailN, needN)
+		return nil, nil, gate
+	}
+
+	sorted := make([]float64, n)
+	copy(sorted, portfolioReturns)
+	sort.Float64s(sorted)
+
+	v := -sorted[idx]
 
 	// CVaR: mean of all returns at or below the VaR return (the tail itself).
-	// Include index idx so a single-element tail still has a defined mean.
+	// Include index idx so the tail mean covers exactly gate.TailN points.
 	tailSum := 0.0
-	tailCount := 0
 	for i := 0; i <= idx; i++ {
 		tailSum += sorted[i]
-		tailCount++
 	}
-	cvarPct = -(tailSum / float64(tailCount))
-	return varPct, cvarPct
+	cv := -(tailSum / float64(gate.TailN))
+	return &v, &cv, gate
 }
 
 // ParametricVaR reports the variance-covariance (Gaussian) Value-at-Risk of a
@@ -90,12 +125,16 @@ func HistoricalVaR(portfolioReturns []float64, confidence float64) (varPct, cvar
 // distributed. Real market returns are fat-tailed and left-skewed, so this
 // figure typically UNDERSTATES true tail risk relative to HistoricalVaR,
 // especially around crashes. Prefer HistoricalVaR when the sample is large
-// enough; use this as a smooth complement. An empty or single-element series
-// yields 0.
-func ParametricVaR(portfolioReturns []float64, confidence float64) float64 {
+// enough; use this as a smooth complement.
+//
+// It carries no tail-count gate because it is a moment estimate, not an order
+// statistic — it needs enough points for a mean and a standard deviation, not
+// enough points in the tail. A series with fewer than two returns yields nil
+// (not 0, which would publish "no risk").
+func ParametricVaR(portfolioReturns []float64, confidence float64) *float64 {
 	n := len(portfolioReturns)
 	if n < 2 {
-		return 0
+		return nil
 	}
 	if confidence <= 0 {
 		confidence = 0.0001
@@ -107,7 +146,7 @@ func ParametricVaR(portfolioReturns []float64, confidence float64) float64 {
 	// z at the lower tail (1-confidence). normInvCDF(0.05) ~= -1.645.
 	z := normInvCDF(1 - confidence)
 	loss := -(mean + z*std)
-	return loss
+	return &loss
 }
 
 // meanStd returns the arithmetic mean and sample (n-1) standard deviation of

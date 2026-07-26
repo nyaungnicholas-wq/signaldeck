@@ -55,7 +55,18 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 	if live {
 		trackLabel = fmt.Sprintf("LIVE prequential record: win rate %.1f%% over %d independent symbol-days — probabilities were frozen at prediction time and graded forward; a bad number here is the honest product, not a display bug", liveWin*100, liveN)
 	}
-	writeJSON(w, map[string]any{
+	// A bare Brier score is not interpretable and must never ship alone. The
+	// live 1d record scores 0.302, which reads as "small error" until the 56.0%
+	// base rate puts the constant forecast at 0.246 — the model is 23% WORSE
+	// than always forecasting the base rate (skill -0.226). /api/trackrecord
+	// already computed skill correctly, so publishing only the raw Brier here
+	// read as selective (2026-07-26 review, C3). Both numbers, same payload.
+	//
+	// The graded variable is the PUBLISHED probability (prediction_outcomes.prob
+	// = cal_prob frozen at prediction time), which is what this endpoint is for:
+	// it answers "are our 70% calls actually 70%?" about the number users see.
+	skill, baseRate, gradable := ensemble.BrierSkill(pairs)
+	out := map[string]any{
 		"horizon":     h,
 		"n":           len(pairs),
 		"bins":        ensemble.CalibrationCurve(pairs, 10),
@@ -64,7 +75,27 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 		"live":        live,
 		"liveRecord":  map[string]any{"independentN": liveN, "winRate": liveWin},
 		"trackLabel":  trackLabel,
-	})
+	}
+	if gradable {
+		out["brierSkill"] = skill
+		out["baseRate"] = baseRate
+		out["brierRef"] = baseRate * (1 - baseRate)
+		out["brierNote"] = fmt.Sprintf(
+			"brier %.4f against the constant base-rate forecast's %.4f (base rate %.1f%%) → skill %+.3f: %s",
+			ensemble.BrierScore(pairs), baseRate*(1-baseRate), baseRate*100, skill,
+			map[bool]string{
+				true:  "better than forecasting the base rate every day",
+				false: "WORSE than forecasting the base rate every day — no measured probabilistic skill",
+			}[skill > 0])
+	} else {
+		// Gated, with the reason. null, never 0 — a zero skill score is a real
+		// verdict ("exactly as good as the base rate") and must not be faked.
+		out["brierSkill"] = nil
+		out["baseRate"] = nil
+		out["brierRef"] = nil
+		out["brierNote"] = "brier skill not gradable: no resolved history, or every outcome resolved the same way (the base-rate reference has zero variance)"
+	}
+	writeJSON(w, out)
 }
 
 // regimes returns the current regime per symbol + recent regime changes.

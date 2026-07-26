@@ -127,6 +127,29 @@ func (d Deps) backtestRun(w http.ResponseWriter, r *http.Request) {
 
 // ── risk (RiskLens) ─────────────────────────────────────────────────────
 
+// marketProxySymbol is the EXOGENOUS factor the stress betas are regressed on.
+// RiskLens previously used the portfolio's own return series as its "market
+// proxy", which makes the weighted sum of betas identically Var(p)/Var(p) = 1
+// and every market-shock P&L equal to the shock itself — the same -40.0% for a
+// concentrated book and an all-Treasury book. The factor has to come from
+// outside the book for the number to carry information.
+const marketProxySymbol = "SPY"
+
+// marketFactorSeries loads the exogenous market factor's daily closes. Returns
+// ok=false when the proxy is not tracked or has too little history; the caller
+// then withholds the market shocks rather than substituting a beta.
+func (d Deps) marketFactorSeries(r *http.Request) (breakout.Series, bool) {
+	s, err := d.St.GetSymbol(r.Context(), marketProxySymbol, md.Stocks)
+	if err != nil {
+		return breakout.Series{}, false
+	}
+	bs, err := d.dailySeries(r, s.Symbol, s.ID, 400)
+	if err != nil || len(bs.Closes) < risklens.MinCloses {
+		return breakout.Series{}, false
+	}
+	return bs, true
+}
+
 func (d Deps) risk(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Holdings []struct {
@@ -175,6 +198,21 @@ func (d Deps) risk(w http.ResponseWriter, r *http.Request) {
 	// Align every series on shared bar timestamps (real date alignment; a
 	// symbol with gaps lines up on actual shared dates).
 	aligned := breakout.AlignByTs(raw)
+
+	// Pull the exogenous market factor into the SAME intersection so betas,
+	// VaR and contributions all describe one window. If adding it shortens the
+	// shared window past the minimum — a crypto book barely overlapping SPY's
+	// session calendar — keep the holdings-only window and pass no factor, and
+	// the market scenarios withhold with that reason instead of inventing one.
+	var market risklens.Series
+	if mkt, ok := d.marketFactorSeries(r); ok {
+		withMkt := breakout.AlignByTs(append(append([]breakout.Series{}, raw...), mkt))
+		if len(withMkt[len(raw)]) >= risklens.MinCloses {
+			aligned = withMkt[:len(raw)]
+			market = risklens.Series{Symbol: mkt.Symbol, Closes: withMkt[len(raw)]}
+		}
+	}
+
 	for i, h := range holdings {
 		if len(aligned[i]) < 60 {
 			httpErr(w, 422, "not enough overlapping history across holdings")
@@ -182,7 +220,7 @@ func (d Deps) risk(w http.ResponseWriter, r *http.Request) {
 		}
 		series = append(series, risklens.Series{Symbol: h.Symbol, Closes: aligned[i]})
 	}
-	report, err := risklens.Analyze(holdings, series, 0.95, body.NotionalUSD)
+	report, err := risklens.Analyze(holdings, series, market, 0.95, body.NotionalUSD)
 	if err != nil {
 		httpErr(w, 422, err.Error())
 		return
