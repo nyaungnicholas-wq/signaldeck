@@ -250,6 +250,9 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// Meta-labeling wave (constructor appended at the END of this file) — the
 	// take-or-skip study. Measurement only; it never sizes a trade.
 	fleet = append(fleet, metaLabelWorkers(st)...)
+	// Survivorship wave (constructor appended at the END of this file) — the
+	// delisting detector that finally populates symbols.delisted_at.
+	fleet = append(fleet, survivorshipWorkers(st)...)
 	// Credibility wave (constructor appended at the END of this file) — the
 	// regime-outcome-runner (6h) that freezes every regime forecast into an
 	// ungraded outcome row (once per symbol/kind/UTC-day), later grades it with
@@ -1605,5 +1608,27 @@ func sentCorrWorkers(st *store.Store, cfg config.Config) []workers.Worker {
 func metaLabelWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.MetaLabelRunner{St: st},
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SURVIVORSHIP WAVE (appended block).
+//
+// survivorshipWorkers returns the delisting detector — the worker that finally
+// POPULATES symbols.delisted_at.
+//
+//   - delisting-detector (24h): marks stocks whose daily series stopped while
+//     the rest of the fleet kept printing, dating the fact at the last bar, and
+//     clears the marker if a symbol resumes.
+//
+// The survivorship machinery (delisted_at, MarkDelisted, TradableAt,
+// ResearchUniverse) was built and tested in July and then found EMPTY fleet-wide
+// by an adversarial audit, because nothing ever called it. Every study was still
+// measured on survivors while the code documented a control that did not run.
+// This closes that gap; the guard against marking our own ingestion outages as
+// mass delistings is the load-bearing part and lives in the worker.
+func survivorshipWorkers(st *store.Store) []workers.Worker {
+	return []workers.Worker{
+		&pipeline.DelistingDetector{St: st},
 	}
 }

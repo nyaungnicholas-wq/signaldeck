@@ -115,6 +115,21 @@ func (w *SplitRepair) Run(ctx context.Context) (string, error) {
 				len(rep.Suspects), false, err.Error(), now)
 			continue
 		}
+		// INTRADAY REPAIR (2026-07-26). Detection runs on daily bars because
+		// that is the series long enough to see a split, but the corruption is
+		// not confined there: the 1h and 1m series are fetched incrementally on
+		// short windows, so after a split every bar older than that window keeps
+		// the pre-split basis. Repairing only the daily series left ~9.2M 1m and
+		// ~0.55M 1h rows welded to a stale basis with NO detector that could ever
+		// see them — a 4:1 split manufactures a -75% intraday bar that the
+		// maxSaneReturn guard never inspects.
+		//
+		// Best-effort by design: the daily repair above is the one that decides
+		// the verdict below, so an intraday refetch that fails must not turn a
+		// successful daily repair into a recorded failure. It is logged as a dq
+		// event instead, because silently leaving known-corrupt intraday history
+		// in place is exactly the state this fix exists to end.
+		w.repairIntraday(ctx, s.ID, s.Symbol, now)
 
 		// VERIFY, then believe the provider. Re-running detection on the
 		// refetched bars is what separates the two cases a jump alone cannot:
@@ -153,4 +168,44 @@ func (w *SplitRepair) Run(ctx context.Context) (string, error) {
 
 	return fmt.Sprintf("scanned %d, contaminated %d, repaired %d, confirmed-real %d, failed %d",
 		scanned, flagged, repaired, confirmedReal, failed), nil
+}
+
+// intradayRepairDays bounds how much intraday history is refetched after a
+// split repair. Alpaca serves ~30 days of 1m to free accounts, so asking for
+// more buys nothing; 1h reaches back further and is cheap on the multi-symbol
+// endpoint.
+const (
+	intradayRepairMinuteDays = 30
+	intradayRepairHourDays   = 400
+)
+
+// repairIntraday refetches the 1h and 1m series for one symbol on a single
+// consistent split basis, so the intraday history stops disagreeing with the
+// daily series the repair just corrected.
+//
+// Failures are recorded as dq events rather than propagated: the daily repair is
+// what the verify-and-learn verdict is computed from, and letting a transient
+// intraday fetch error mark that repair "failed" would send the symbol back
+// through the queue forever.
+func (w *SplitRepair) repairIntraday(ctx context.Context, symbolID int64, symbol string, now int64) {
+	resolve := func(string) (int64, bool) { return symbolID, true }
+	syms := []string{symbol}
+
+	nowT := time.Unix(now, 0).UTC()
+	if _, err := w.Alpaca.BackfillHourlyMulti(ctx, w.St, syms, resolve,
+		nowT.AddDate(0, 0, -intradayRepairHourDays)); err != nil {
+		_ = w.St.InsertDQ(ctx, md.DQEvent{
+			Ts: now, Kind: "split_repair_intraday_failed",
+			Detail: fmt.Sprintf("%s: 1h refetch after split repair: %v — daily series is "+
+				"repaired but hourly history may still be on a stale basis", symbol, err),
+		})
+	}
+	if _, err := w.Alpaca.BackfillMinuteMulti(ctx, w.St, syms, resolve,
+		nowT.AddDate(0, 0, -intradayRepairMinuteDays)); err != nil {
+		_ = w.St.InsertDQ(ctx, md.DQEvent{
+			Ts: now, Kind: "split_repair_intraday_failed",
+			Detail: fmt.Sprintf("%s: 1m refetch after split repair: %v — daily series is "+
+				"repaired but minute history may still be on a stale basis", symbol, err),
+		})
+	}
 }

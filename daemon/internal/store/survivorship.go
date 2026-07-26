@@ -105,3 +105,60 @@ func (s *Store) TradableAt(ctx context.Context, ts int64) ([]md.Symbol, error) {
 	}
 	return out, rows.Err()
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// DELISTING DETECTION (appended block).
+
+// StockLastBar is the newest daily bar timestamp held for one stock symbol.
+type StockLastBar struct {
+	SymbolID int64
+	Symbol   string
+	Active   bool
+	// LastTs is 0 when the symbol has no daily bars at all.
+	LastTs int64
+	// DelistedAt is 0 when the symbol is not marked delisted.
+	DelistedAt int64
+}
+
+// StockLastBars returns the newest tf='1d' bar per stock symbol, including
+// symbols with no bars at all, plus the current delisted marker.
+//
+// Daily bars are pruning-protected in code, so "no recent bar" is a statement
+// about the MARKET rather than about our retention — which is what makes this
+// query usable as delisting evidence at all.
+func (s *Store) StockLastBars(ctx context.Context) ([]StockLastBar, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT sy.id, sy.symbol, sy.active,
+		       COALESCE(MAX(b.ts), 0)          AS last_ts,
+		       COALESCE(sy.delisted_at, 0)     AS delisted_at
+		FROM symbols sy
+		LEFT JOIN bars b ON b.symbol_id = sy.id AND b.tf = '1d'
+		WHERE sy.market = ?
+		GROUP BY sy.id, sy.symbol, sy.active, sy.delisted_at`, string(md.Stocks))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []StockLastBar
+	for rows.Next() {
+		var r StockLastBar
+		var active int
+		if err := rows.Scan(&r.SymbolID, &r.Symbol, &active, &r.LastTs, &r.DelistedAt); err != nil {
+			return nil, err
+		}
+		r.Active = active == 1
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ClearDelisted removes a delisting marker. A symbol that prints a bar again was
+// never delisted — it was halted, or our fetch was failing — and a permanent
+// marker would silently shrink every point-in-time universe built afterwards.
+// Delisting must therefore be REVERSIBLE on evidence, or a false positive
+// becomes indistinguishable from a market fact.
+func (s *Store) ClearDelisted(ctx context.Context, symbolID int64) error {
+	_, err := s.w.ExecContext(ctx,
+		`UPDATE symbols SET delisted_at=NULL WHERE id=?`, symbolID)
+	return err
+}
