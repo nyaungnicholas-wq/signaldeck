@@ -171,11 +171,57 @@ type dailyDoc struct {
 		Name  string `json:"name"`
 		Value string `json:"value"`
 	} `json:"ratios"`
-	Sum struct {
-		Call  float64 `json:"call"`
-		Put   float64 `json:"put"`
-		Total float64 `json:"total"`
-	} `json:"SUM OF ALL PRODUCTS"`
+	// Sum is json.RawMessage because Cboe has published this field in TWO
+	// shapes. It was a single object; it is now an ARRAY carrying both VOLUME
+	// and OPEN INTEREST. See sumVolume for why the entry is chosen by NAME.
+	Sum json.RawMessage `json:"SUM OF ALL PRODUCTS"`
+}
+
+// sumEntry is one "SUM OF ALL PRODUCTS" record in either shape.
+type sumEntry struct {
+	Name  string  `json:"name"`
+	Call  float64 `json:"call"`
+	Put   float64 `json:"put"`
+	Total float64 `json:"total"`
+}
+
+// sumVolume extracts the VOLUME record from the "SUM OF ALL PRODUCTS" field,
+// accepting both shapes Cboe has served.
+//
+// The field began as one object and became an array of records — the live error
+// was "cannot unmarshal array into Go struct field dailyDoc.SUM OF ALL
+// PRODUCTS", and it had left the cboe_pc table at ZERO rows.
+//
+// The entry is selected BY NAME, never by position, and that is the load-bearing
+// part rather than a stylistic nicety: the array's other record is OPEN
+// INTEREST, which runs roughly fifty times larger than volume. Taking index 0
+// would work today and silently poison the put/call volume — a model feature —
+// the day Cboe reorders the array. A document whose shape is understood but
+// which carries no VOLUME record yields ok=false, so the caller records absence
+// instead of zeros.
+func sumVolume(raw json.RawMessage) (sumEntry, bool) {
+	if len(raw) == 0 {
+		return sumEntry{}, false
+	}
+	// Current shape: an array of named records.
+	var arr []sumEntry
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		for _, e := range arr {
+			if strings.EqualFold(strings.TrimSpace(e.Name), "VOLUME") {
+				return e, true
+			}
+		}
+		return sumEntry{}, false
+	}
+	// Legacy shape: a single object. Accepted so archived fixtures and any
+	// cached document still parse.
+	var one sumEntry
+	if err := json.Unmarshal(raw, &one); err == nil {
+		if one.Total > 0 || one.Call > 0 || one.Put > 0 {
+			return one, true
+		}
+	}
+	return sumEntry{}, false
 }
 
 // ParseDaily parses one statistics document (fixture-tested). A document with
@@ -185,7 +231,10 @@ func ParseDaily(raw []byte, day string) (Stats, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return Stats{}, fmt.Errorf("cboe: parse daily statistics: %w", err)
 	}
-	s := Stats{Day: day, CallVol: doc.Sum.Call, PutVol: doc.Sum.Put, TotalVol: doc.Sum.Total}
+	s := Stats{Day: day}
+	if sum, ok := sumVolume(doc.Sum); ok {
+		s.CallVol, s.PutVol, s.TotalVol = sum.Call, sum.Put, sum.Total
+	}
 	found := false
 	for _, r := range doc.Ratios {
 		v, err := strconv.ParseFloat(strings.TrimSpace(r.Value), 64)

@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -274,11 +275,46 @@ type Fact struct {
 
 // factsResp is the (partial) shape of the companyfacts JSON we consume.
 type factsResp struct {
-	CIK   int64 `json:"cik"`
+	CIK   flexInt64 `json:"cik"`
 	Facts struct {
 		USGAAP map[string]conceptUnits `json:"us-gaap"`
 		DEI    map[string]conceptUnits `json:"dei"`
 	} `json:"facts"`
+}
+
+// flexInt64 accepts a JSON number OR a quoted number.
+//
+// EDGAR emits companyfacts `cik` both ways — most issuers as a bare number, some
+// as a string — and a plain int64 field makes the string form a hard parse
+// failure for the WHOLE document. That was costing ~106 fundamentals_error dq
+// events a day, each one discarding an entire issuer's fundamentals over a field
+// we barely use (the CIK is already known: it is what we requested). Accepting
+// both shapes is the correct read of a provider that has never promised one.
+//
+// A malformed or absent value yields 0, which the caller already treats as
+// "keep the CIK we asked with" — so a bad cik can never silently retarget the
+// fundamentals onto a different company.
+type flexInt64 int64
+
+func (f *flexInt64) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "null" || s == `""` || s == "" {
+		*f = 0
+		return nil
+	}
+	s = strings.Trim(s, `"`)
+	if s == "" {
+		*f = 0
+		return nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		// Not fatal: the document is still usable and the CIK is already known.
+		*f = 0
+		return nil
+	}
+	*f = flexInt64(n)
+	return nil
 }
 
 type conceptUnits struct {
@@ -315,7 +351,7 @@ func (c *Client) CompanyFacts(ctx context.Context, cik int64) (Fundamentals, err
 	}
 	out := Fundamentals{CIK: cik}
 	if out.CIK == 0 {
-		out.CIK = resp.CIK
+		out.CIK = int64(resp.CIK)
 	}
 
 	// Revenue: issuers use several concept names; take the first that resolves.

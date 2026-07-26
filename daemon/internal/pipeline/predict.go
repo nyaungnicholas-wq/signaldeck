@@ -108,7 +108,23 @@ func horizonSecs(h md.Horizon) int64 {
 // daemon). Sparse + weak (public technical crossings), so absence is the norm
 // and the OOS-lift gate will almost certainly find it immaterial — it earns its
 // way in or it doesn't, same contract as every other external source.
-const featureVersion = 10
+// v11 (macro-breadth wave): + the REST of the free FRED panel, which had been
+// ingested (~104k observations across twelve series) with exactly one series
+// (VIXCLS) ever reaching the model. Adds macro_<key>_pct / macro_<key>_chg for
+// the yield curve (DGS10/DGS2/T10Y2Y/T10Y3M), the policy rate (DFF), risk
+// appetite (BAMLH0A0HYM2 high-yield spread, NFCI financial conditions) and oil
+// (DCOILWTICO) — see internal/macrofeat. Market-wide, so identical across
+// symbols at a given ts; their value is TEMPORAL, letting the tree condition a
+// symbol's own features on the prevailing macro state. Two deliberate
+// restrictions: the REVISED series (CPIAUCSL/M2SL/UNRATE) are excluded because
+// only current values are stored and feeding a restated number is lookahead;
+// and levels are encoded as trailing PERCENTILE + squashed CHANGE rather than
+// raw, because a raw level teaches a tree to split on an era instead of a
+// state. Absent when a series is missing/thin/degenerate. Same contract as every
+// prior source wave: the OOS-lift gate is the referee, nothing is trusted on
+// faith. Bumped so the per-symbol GBM accumulates a clean v11 labeled set
+// instead of diluting absent-vs-zero across v10 rows.
+const featureVersion = 11
 
 // ledgerModelVersion stamps each hash-chained ledger entry with the version of
 // the prediction MODEL/pipeline that produced it (Stage 3 tamper-evident
@@ -235,6 +251,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	if vix, ok, err := w.St.LatestVIX(ctx); err == nil && ok && vix > 0 {
 		vixMap = macrofeat.FromVIX(vix).Map()
 	}
+	// MACRO-BREADTH WAVE (featureVersion 11) — the rest of the free FRED panel
+	// (curve/policy/credit/conditions/oil), loaded ONCE per pass for the same
+	// reason vix_* is: these are market-wide levels, identical for every symbol
+	// at this ts. Best-effort throughout — an unreadable or thin series simply
+	// contributes no keys this pass. Revised series are excluded at the
+	// macrofeat layer, not here, so the admissibility rule lives with the
+	// encoding it protects.
+	macroMap := macroPanelFeatures(ctx, w.St)
 	// CROSS-SECTIONAL ALPHA wave (featureVersion 5) — market-wide new-source
 	// features (pc_total / cot_spx_net), loaded ONCE per pass like vix_*.
 	// Best-effort + gate-honoring: stale or absent sources mean the fields are
@@ -418,7 +442,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if pct, ok := rankPcts[s.ID]; ok {
 				rankPct = &pct
 			}
-			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap)
+			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap)
 			if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
 				featErrs++
 				slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)
@@ -661,4 +685,38 @@ func (w *BreakoutRunner) Run(ctx context.Context) (string, error) {
 		_ = w.St.SetMeta(ctx, "corr_break_last", fmt.Sprintf("%d", now.Unix()))
 	}
 	return fmt.Sprintf("%d event(s) logged", inserted), nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// MACRO-BREADTH WAVE (appended block).
+
+// macroPanelLookback is how many observations of each FRED series are loaded.
+// Enough to cover macrofeat's trailing percentile window with room for the
+// change lookback, and small enough that eight series cost one cheap read each.
+const macroPanelLookback = macrofeat.PercentileWindow + 60
+
+// macroPanelFeatures loads the admissible FRED series and encodes them as
+// market-wide model features.
+//
+// Best-effort by design: this runs inside the prediction pass, and a macro read
+// failing must degrade the vector, never the prediction. A series that errors,
+// is missing, or is too thin contributes no keys — absence is already
+// distinguished from zero everywhere downstream.
+func macroPanelFeatures(ctx context.Context, st *store.Store) map[string]float64 {
+	hist := make(map[string][]macrofeat.Point, len(macrofeat.AdmissibleSeries))
+	for _, s := range macrofeat.AdmissibleSeries {
+		pts, err := st.MacroSeries(ctx, s.ID, macroPanelLookback)
+		if err != nil || len(pts) == 0 {
+			continue
+		}
+		conv := make([]macrofeat.Point, 0, len(pts))
+		for _, p := range pts {
+			conv = append(conv, macrofeat.Point{Ts: p.Ts, Value: p.Value})
+		}
+		hist[s.ID] = conv
+	}
+	if len(hist) == 0 {
+		return nil
+	}
+	return macrofeat.FromSeries(hist)
 }

@@ -13,10 +13,12 @@
 package edgar
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -390,7 +392,7 @@ type form4XML struct {
 // Pure function — tests feed it fixture files from testdata/.
 func ParseForm4(data []byte) (Form4, error) {
 	var doc form4XML
-	if err := xml.Unmarshal(data, &doc); err != nil {
+	if err := decodeXML(data, &doc); err != nil {
 		return Form4{}, fmt.Errorf("edgar: parse form 4: %w", err)
 	}
 	var out Form4
@@ -616,7 +618,7 @@ type infoTableXML struct {
 // Parse13F parses a 13F information-table XML. Pure function (fixture-tested).
 func Parse13F(data []byte) ([]Holding13F, error) {
 	var doc infoTableXML
-	if err := xml.Unmarshal(data, &doc); err != nil {
+	if err := decodeXML(data, &doc); err != nil {
 		return nil, fmt.Errorf("edgar: parse 13F information table: %w", err)
 	}
 	out := make([]Holding13F, 0, len(doc.Entries))
@@ -690,4 +692,46 @@ func (c *FilingsClient) Fetch13FHoldings(ctx context.Context, cik int64, accessi
 		return nil, err
 	}
 	return Parse13F(body)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CHARSET-TOLERANT XML DECODING (appended block).
+
+// decodeXML unmarshals an EDGAR XML document, tolerating the legacy character
+// encodings SEC filers actually declare.
+//
+// Go's encoding/xml refuses any document whose declared encoding is not UTF-8
+// unless a CharsetReader is supplied, so a filer writing
+// `<?xml version="1.0" encoding="us-ascii"?>` — which several 13F filers do,
+// Two Sigma among them — made the whole information table unparseable and cost
+// a 13f_parse_error per attempt. The bytes were always readable; only the label
+// was unfamiliar.
+//
+// Only encodings that are byte-compatible subsets of, or trivially convertible
+// to, UTF-8 are accepted, and the reader is handed through unchanged:
+//
+//   - us-ascii / ascii — a strict subset of UTF-8.
+//   - utf-8 — the default; named explicitly for documents that say so.
+//   - iso-8859-1 / latin1 / windows-1252 — single-byte supersets of ASCII. These
+//     are passed through rather than transcoded, which is correct for the ASCII
+//     range that EDGAR filings live in and degrades to a mojibake character
+//     rather than a hard failure on a stray high byte. Refusing the document
+//     outright is strictly worse: it discards an entire institutional holdings
+//     table over one accented name.
+//
+// An encoding outside that set is still rejected, so a genuinely
+// non-ASCII-compatible document fails loudly instead of being silently
+// misread.
+func decodeXML(data []byte, v any) error {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	dec.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
+		switch strings.ToLower(strings.TrimSpace(charset)) {
+		case "us-ascii", "ascii", "utf-8", "utf8",
+			"iso-8859-1", "latin1", "windows-1252", "cp1252":
+			return input, nil
+		default:
+			return nil, fmt.Errorf("edgar: unsupported xml charset %q", charset)
+		}
+	}
+	return dec.Decode(v)
 }

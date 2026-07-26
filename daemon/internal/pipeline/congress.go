@@ -110,12 +110,31 @@ func (w *CongressPoller) ingestChamber(ctx context.Context, chamber string,
 		trades, err = w.Client.FetchHouse(ctx)
 	}
 	if err != nil {
-		_ = w.St.InsertDQ(ctx, md.DQEvent{
-			Ts: now.Unix(), Kind: "congress_mirror_error",
-			Detail: fmt.Sprintf("%s: %v", chamber, err),
-		})
+		// The free mirrors have been dead since 2026-07 (DNS gone, S3 403) and
+		// the poller runs on a schedule that produced ~56 identical dq events a
+		// day. A permanently-failing known source is not news; it is noise that
+		// buries the events a human should actually act on, and this platform
+		// already learned that lesson with the watchdog's alert cooldown.
+		//
+		// One event per chamber per UTC day preserves the signal (a human can
+		// still see the source is down, and the per-chamber status in meta is
+		// unaffected and updated every pass) while removing the flood. A source
+		// that starts working again clears the marker on its next success, so a
+		// recovery is never suppressed.
+		key := "congress_dq_day:" + chamber
+		day := now.UTC().Format("2006-01-02")
+		if last, _ := w.St.GetMeta(ctx, key); last != day {
+			_ = w.St.InsertDQ(ctx, md.DQEvent{
+				Ts: now.Unix(), Kind: "congress_mirror_error",
+				Detail: fmt.Sprintf("%s: %v", chamber, err),
+			})
+			_ = w.St.SetMeta(ctx, key, day)
+		}
 		return CongressChamberStatus{OK: false, Detail: err.Error()}
 	}
+	// A successful fetch clears the day marker so a recovery-then-failure is
+	// reported rather than swallowed by a stale marker.
+	_ = w.St.SetMeta(ctx, "congress_dq_day:"+chamber, "")
 	st := CongressChamberStatus{OK: true, Fetched: len(trades)}
 	for _, t := range trades {
 		row := store.CongressTradeRow{
