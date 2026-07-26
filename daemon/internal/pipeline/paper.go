@@ -7,6 +7,7 @@ import (
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/papertrade"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/riskgate"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -88,6 +89,7 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 
 	startCash := papertrade.StartingCash()
 	acted := 0
+	refused := 0 // entries the pretrade risk gate vetoed, across all strategies
 	for _, strat := range paperStrategies {
 		if _, err := w.St.InitPaperBook(ctx, strat.Name, startCash, asof); err != nil {
 			return "", err
@@ -107,10 +109,11 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 			continue // no new global bar for this strategy — idempotent no-op
 		}
 
-		apply, err := w.buildStep(ctx, strat.Name, strat.Horizon, syms, marketByID, cur, asof)
+		apply, vetoed, err := w.buildStep(ctx, strat.Name, strat.Horizon, syms, marketByID, cur, asof)
 		if err != nil {
 			return "", err
 		}
+		refused += vetoed
 		applied, err := w.St.ApplyPaperStep(ctx, apply)
 		if err != nil {
 			return "", err
@@ -118,6 +121,9 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 		if applied {
 			acted++
 		}
+	}
+	if refused > 0 {
+		return fmt.Sprintf("marked %d strateg(ies) at asof=%d — risk gate vetoed %d entr(ies)", acted, asof, refused), nil
 	}
 	return fmt.Sprintf("marked %d strateg(ies) at asof=%d", acted, asof), nil
 }
@@ -136,9 +142,13 @@ func (w *PaperTrader) buildStep(
 	marketByID map[int64]md.Market,
 	cur store.PaperCursor,
 	asof int64,
-) (store.PaperApply, error) {
+) (store.PaperApply, int, error) {
 	cash := cur.Cash
 	apply := store.PaperApply{Strategy: strategy, BarTs: asof, EquityTs: asof}
+	// refused counts entries the pretrade risk gate vetoed this step. It is
+	// reported in the worker's status line so a veto is visible in the run log
+	// rather than being an entry that silently never happened.
+	refused := 0
 
 	// Book equity for POSITION SIZING: cash + the marked value of positions that
 	// are already open coming into this step (valued at the as-of clock). Each new
@@ -148,18 +158,38 @@ func (w *PaperTrader) buildStep(
 	// the step; the per-entry clamp to the running `cash` keeps the book funded).
 	priorPosValue, err := w.openPositionsValue(ctx, strategy, asof)
 	if err != nil {
-		return apply, err
+		return apply, refused, err
 	}
 	equity := cash + priorPosValue
+
+	// PRETRADE RISK GATE (internal/riskgate). Every ENTRY below is sized and
+	// vetted by it; exits are never gated, so a tripped breaker can never trap
+	// the book in a position. The book's condition and its realized edge are
+	// measured once per step, then updated in-step as entries consume cash,
+	// sector headroom and position slots — without that, ten entries in one step
+	// would each be judged against an empty book.
+	symByID := make(map[int64]string, len(syms))
+	for _, s := range syms {
+		symByID[s.ID] = s.Symbol
+	}
+	limits := riskgate.Defaults()
+	book, err := w.riskBook(ctx, strategy, equity, cash, symByID, asof)
+	if err != nil {
+		return apply, refused, err
+	}
+	edge, err := w.tradedEdge(ctx, strategy)
+	if err != nil {
+		return apply, refused, err
+	}
 
 	for _, s := range syms {
 		pos, hasPos, err := w.St.PaperPosition(ctx, strategy, s.ID)
 		if err != nil {
-			return apply, err
+			return apply, refused, err
 		}
 		pred, okP, err := w.St.LatestPrediction(ctx, s.ID, h)
 		if err != nil {
-			return apply, err
+			return apply, refused, err
 		}
 		if !okP {
 			continue // no signal for this symbol/horizon yet
@@ -179,7 +209,7 @@ func (w *PaperTrader) buildStep(
 		// data produced it.
 		fillBar, okFill, err := w.St.BarAtOrAfter(ctx, s.ID, md.TF1d, pred.Ts+1)
 		if err != nil {
-			return apply, err
+			return apply, refused, err
 		}
 		if !okFill || fillBar.Open <= 0 {
 			continue // no eligible next bar yet — wait
@@ -194,13 +224,25 @@ func (w *PaperTrader) buildStep(
 		// the fill may not know how much traded on days it has not seen).
 		adv, err := w.advUSD(ctx, s.ID, fillBar.Ts)
 		if err != nil {
-			return apply, err
+			return apply, refused, err
 		}
 		in := papertrade.ExecInputs{Bar: fillBar, Market: marketByID[s.ID], ADVUSD: adv}
 
 		if wantEnter {
-			// Size to a bounded slice of book equity, clamped to cash on hand.
-			budget := papertrade.PositionBudget(equity, cash)
+			// The gate owns sizing now: fractional Kelly on the realized
+			// round-trip record when that record can support it, the old
+			// equal-slice budget when it cannot, and a REFUSAL when the measured
+			// expectancy is non-positive or a limit is breached.
+			book.Cash = cash
+			sector := riskSector(s.Symbol)
+			decision := riskgate.Evaluate(book, riskgate.Request{
+				Symbol: s.Symbol, Sector: sector, Action: riskgate.Enter,
+			}, edge, limits)
+			if !decision.Allow {
+				refused++
+				continue
+			}
+			budget := decision.Notional
 			f, qty, avgPx, ok := papertrade.EnterLong(budget, in)
 			if !ok {
 				// No cash slice to deploy, or no liquidity estimate to price the
@@ -210,14 +252,26 @@ func (w *PaperTrader) buildStep(
 				continue
 			}
 			cash += f.CashDelta
+			// Consume the slot, the cash and the sector headroom this entry just
+			// took, so the next candidate in this same step is judged against the
+			// book as it now stands.
+			book.OpenPositions++
+			if sector != "" {
+				book.ExposureBySector[sector] += f.Qty * f.Px
+			}
 			apply.Opens = append(apply.Opens, store.PaperPosition{
 				Strategy: strategy, SymbolID: s.ID, Qty: qty, AvgPx: avgPx, OpenedTs: fillBar.Ts,
 			})
 			apply.Trades = append(apply.Trades, store.PaperTrade{
 				Strategy: strategy, SymbolID: s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost, Ts: fillBar.Ts,
-				Reason: fmt.Sprintf("cal_prob %.3f >= long %.2f", pred.CalProb, papertrade.LongThreshold()),
+				// The sizing rationale is part of the audit trail: a reader of the
+				// log should be able to see WHY this size, not just this price.
+				Reason: fmt.Sprintf("cal_prob %.3f >= long %.2f · %s", pred.CalProb, papertrade.LongThreshold(), decision.Sizing),
 			})
 		} else { // wantExit
+			// Deliberately NOT gated. riskgate would allow every exit anyway, and
+			// routing a de-risking trade through a component that can refuse is how
+			// a book ends up trapped in the position a breaker was tripped by.
 			f, ok := papertrade.ExitLong(pos.Qty, in)
 			if !ok {
 				continue
@@ -237,14 +291,14 @@ func (w *PaperTrader) buildStep(
 	// open set = (stored open positions - closed) + newly opened.
 	posValue, err := w.markPositions(ctx, strategy, apply, asof)
 	if err != nil {
-		return apply, err
+		return apply, refused, err
 	}
 
 	apply.NewCash = cash
 	apply.EquityCash = cash
 	apply.EquityPositionsValue = posValue
 	apply.EquityValue = cash + posValue
-	return apply, nil
+	return apply, refused, nil
 }
 
 // advLookbackBars is how many daily bars the average-daily-dollar-volume
