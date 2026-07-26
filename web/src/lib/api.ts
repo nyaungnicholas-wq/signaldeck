@@ -626,6 +626,16 @@ export interface Calibration {
   n: number;
   bins: CalBin[];
   brier: number;
+  // Brier SKILL against the constant base-rate forecast: 1 - brier/(p(1-p)).
+  // A bare Brier score is not interpretable — 0.302 reads as small until the
+  // 56% base rate puts the constant forecast at 0.246, i.e. the model is 23%
+  // WORSE than a constant. null = not gradable (no history, or every outcome
+  // resolved the same way, leaving a zero-variance reference); never 0, which
+  // is the real verdict "exactly as good as the base rate".
+  brierSkill: number | null;
+  baseRate: number | null;
+  brierRef: number | null;
+  brierNote?: string;
   reliability: number;
   // Phase 0 labeling: calibration is backtested / in-sample until live.
   live?: boolean;
@@ -1317,7 +1327,10 @@ export interface SignalBacktestResult {
   rawN: number;
   independentN: number;
   minIndependentN: number;
-  gated: boolean; // true => insufficient independent-N; hide headline numbers
+  // true => headline numbers withheld. TWO triggers: too few independent
+  // resolutions, OR an equity path a capped unlevered book cannot reach (the
+  // C1 gate). `note` carries which one.
+  gated: boolean;
 
   ic: number;
   icDecay: SignalICPoint[];
@@ -1328,10 +1341,15 @@ export interface SignalBacktestResult {
 
   turnover: number;
   costBps: number;
-  equity: SignalEquityPoint[];
-  strategyReturn: number;
-  benchmarkReturn: number;
-  excessReturn: number;
+  // The whole equity block is NULL-ABLE by design. When the daemon's equity
+  // accounting yields a path this book cannot produce it withholds the curve
+  // and all three returns (gated=true, reason in `note`) rather than publish a
+  // figure a reader could quote — this surface once shipped -99.95% at 0.03%
+  // turnover. null means "not published", NOT 0: narrow before formatting.
+  equity: SignalEquityPoint[] | null;
+  strategyReturn: number | null;
+  benchmarkReturn: number | null;
+  excessReturn: number | null;
 
   live: false; // ALWAYS false — this is a replay, not a live track record
   trackLabel: string;

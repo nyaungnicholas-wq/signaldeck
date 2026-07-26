@@ -20,6 +20,26 @@ import ProOnly from "@/components/ProOnly";
 type SignalHorizon = "1d" | "1w";
 const SIGNAL_HORIZONS: SignalHorizon[] = ["1d", "1w"];
 
+const upColor = "var(--bid)";
+const downColor = "var(--ask)";
+
+/** The three costed returns arrive as `null` whenever the daemon WITHHELD the
+ *  equity block — either the accounting produced a path a capped unlevered book
+ *  cannot reach, or there was no gradable equity path at all. `res.note` says
+ *  which. Formatting a null as 0.00% would read as "flat", which is exactly the
+ *  misreading the null exists to prevent, so say WITHHELD and print the note. */
+function fmtReturn(v: number | null): string {
+  return v === null ? "withheld" : fmtPct(v * 100);
+}
+
+function returnColor(v: number | null): string | undefined {
+  return v === null ? undefined : v >= 0 ? upColor : downColor;
+}
+
+function returnHint(v: number | null, published: string): string {
+  return v === null ? "withheld — see note" : published;
+}
+
 /** Two overlaid equity curves — the signal-driven strategy (net of cost) vs the
  *  SPY buy-and-hold benchmark. Both start at 1.0; a faint dashed baseline marks
  *  1.0. Strategy is green above / red below its start; the benchmark is a thin
@@ -216,8 +236,6 @@ export default function SignalBacktestPage() {
   const current =
     data && data.result.horizon === horizon ? data : null;
   const res = current?.result;
-  const upColor = "var(--bid)";
-  const downColor = "var(--ask)";
 
   return (
     <div className="flex flex-col gap-4">
@@ -335,8 +353,14 @@ export default function SignalBacktestPage() {
       ) : res && res.gated ? (
         // HONEST insufficient-data state — the truth today (~0 resolved live
         // outcomes). We still show sample accounting, never a fabricated number.
+        // The gate also fires with a FULL sample when the equity accounting is
+        // untrustworthy, so don't claim a sample shortfall that isn't there.
         <EmptyState
-          message={`Insufficient data — ${res.independentN} of ${res.minIndependentN} independent resolutions.`}
+          message={
+            res.independentN < res.minIndependentN
+              ? `Insufficient data — ${res.independentN} of ${res.minIndependentN} independent resolutions.`
+              : "Result withheld — the costed equity accounting did not pass its sanity check."
+          }
           detail={
             res.note ||
             "The flagship signal needs a real out-of-sample track record before any skill number can be trusted. Headline IC, quintile spread, and hit-rate are withheld until the gate clears."
@@ -347,7 +371,18 @@ export default function SignalBacktestPage() {
           {/* Costed equity vs SPY. */}
           <section className="panel">
             <div className="panel-h">COSTED EQUITY — SIGNAL vs SPY BUY &amp; HOLD</div>
-            {res.equity.length >= 2 ? (
+            {res.equity === null ? (
+              // Withheld, not empty — the daemon nulls the whole block when the
+              // accounting can't be trusted, and `note` is the reason.
+              <EmptyState
+                message="Costed equity withheld."
+                detail={
+                  res.note ||
+                  "The equity accounting produced a path a capped, unlevered book cannot reach, so no curve is published."
+                }
+                className="border-0"
+              />
+            ) : res.equity.length >= 2 ? (
               <EquityCurve curve={res.equity} />
             ) : (
               <EmptyState
@@ -389,27 +424,40 @@ export default function SignalBacktestPage() {
               color={res.meanFwd >= 0 ? upColor : downColor}
               hint="avg realized, independent set"
             />
+            {/* The three costed returns are null when the equity block is
+                withheld — narrow via fmtReturn/returnColor rather than leaning
+                on the `gated` branch above to keep them unreachable. */}
             <Metric
               label="STRATEGY RETURN"
-              value={fmtPct(res.strategyReturn * 100)}
-              color={res.strategyReturn >= 0 ? upColor : downColor}
+              value={fmtReturn(res.strategyReturn)}
+              color={returnColor(res.strategyReturn)}
               help="Net-of-cost total return of the long/flat strategy driven by the calibrated signal."
-              hint="net of cost"
+              hint={returnHint(res.strategyReturn, "net of cost")}
             />
             <Metric
               label="SPY BUY & HOLD"
-              value={
-                current.hasBenchmark ? fmtPct(res.benchmarkReturn * 100) : "n/a"
+              value={current.hasBenchmark ? fmtReturn(res.benchmarkReturn) : "n/a"}
+              color={
+                current.hasBenchmark ? returnColor(res.benchmarkReturn) : undefined
               }
-              color={res.benchmarkReturn >= 0 ? upColor : downColor}
-              hint={current.hasBenchmark ? "benchmark" : "SPY not tracked"}
+              hint={
+                current.hasBenchmark
+                  ? returnHint(res.benchmarkReturn, "benchmark")
+                  : "SPY not tracked"
+              }
             />
             <Metric
               label="EXCESS vs SPY"
-              value={current.hasBenchmark ? fmtPct(res.excessReturn * 100) : "n/a"}
-              color={res.excessReturn >= 0 ? upColor : downColor}
+              value={current.hasBenchmark ? fmtReturn(res.excessReturn) : "n/a"}
+              color={
+                current.hasBenchmark ? returnColor(res.excessReturn) : undefined
+              }
               help="Strategy return minus SPY buy-and-hold over the same window."
-              hint="strategy − benchmark"
+              hint={
+                current.hasBenchmark
+                  ? returnHint(res.excessReturn, "strategy − benchmark")
+                  : "SPY not tracked"
+              }
             />
             <Metric
               label="TURNOVER"
@@ -418,6 +466,15 @@ export default function SignalBacktestPage() {
               hint="mean |Δposition|"
             />
           </section>
+
+          {/* Why the return tiles read "withheld" — the payload's own reason,
+              verbatim. */}
+          {res.strategyReturn === null && (
+            <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+              {res.note ||
+                "Costed returns withheld — the equity accounting did not pass its sanity check."}
+            </p>
+          )}
 
           {/* IC decay + quintile profile are methodology detail — SIMPLE mode
               folds them behind one disclosure; the honesty label, equity curve
