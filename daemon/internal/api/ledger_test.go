@@ -25,11 +25,40 @@ import (
 func newLedgerServer(t *testing.T, mutate func(*config.Config)) (*httptest.Server, *store.Store) {
 	t.Helper()
 	t.Setenv(ledgeranchor.EnvKeyPath, filepath.Join(t.TempDir(), "anchor.key"))
-	srv, st, d := newTestServer(t, mutate)
+	srv, st, d := newTestServer(t, func(c *config.Config) {
+		// ?full=1 requires identity (finding A11); tests authenticate with
+		// this token via ledgerGet.
+		c.APIToken = ledgerTestToken
+		if mutate != nil {
+			mutate(c)
+		}
+	})
+	// The bearer token maps to the admin user, which a fresh temp DB lacks.
+	if _, err := st.CreateUser(context.Background(), "admin", "hash", true); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
 	mux := http.NewServeMux()
 	d.registerLedger(mux)
 	srv.Config.Handler = d.secure(mux)
 	return srv, st
+}
+
+// ledgerTestToken authenticates test requests to the auth-gated full walk.
+const ledgerTestToken = "ledger-test-token"
+
+// ledgerGet GETs a ledger route with the bearer token attached.
+func ledgerGet(t *testing.T, srv *httptest.Server, path string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+ledgerTestToken)
+	res, err := newClient(t).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
 }
 
 // ledgerVerifyBody is the verify payload, including the tamper-evidence block
@@ -59,10 +88,7 @@ type ledgerVerifyBody struct {
 // getLedgerVerify GETs the verify route and decodes the payload.
 func getLedgerVerify(t *testing.T, srv *httptest.Server, query string) ledgerVerifyBody {
 	t.Helper()
-	res, err := newClient(t).Get(srv.URL + "/api/ledger/verify" + query)
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := ledgerGet(t, srv, "/api/ledger/verify"+query)
 	defer res.Body.Close() //nolint:errcheck
 	if res.StatusCode != 200 {
 		t.Fatalf("status = %d, want 200", res.StatusCode)
@@ -179,10 +205,7 @@ func TestLedgerAnchorsEndpoint(t *testing.T) {
 		t.Fatalf("setup: no anchor written (%s)", v.Tamper.Anchoring.Reason)
 	}
 
-	res, err := newClient(t).Get(srv.URL + "/api/ledger/anchors?full=1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := ledgerGet(t, srv, "/api/ledger/anchors?full=1")
 	defer res.Body.Close() //nolint:errcheck
 	if res.StatusCode != 200 {
 		t.Fatalf("status = %d, want 200", res.StatusCode)
@@ -320,10 +343,7 @@ func TestLedgerVerifyEndpoint(t *testing.T) {
 		`UPDATE prediction_ledger SET raw_prob=raw_prob+1 WHERE seq=3`); err != nil {
 		t.Fatal(err)
 	}
-	res2, err := newClient(t).Get(srv.URL + "/api/ledger/verify?full=1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	res2 := ledgerGet(t, srv, "/api/ledger/verify?full=1")
 	defer res2.Body.Close() //nolint:errcheck
 	var body2 struct {
 		Intact      bool   `json:"intact"`
@@ -507,5 +527,107 @@ func TestLedgerVerify_FailingOlderAnchorDominatesANewerGoodOne(t *testing.T) {
 	}
 	if !strings.Contains(v.Tamper.Claim, "TAMPER EVIDENCE") {
 		t.Errorf("claim does not lead with the tamper signal: %q", v.Tamper.Claim)
+	}
+}
+
+// ── Finding A11: the verify routes must be bounded, not a DoS lever ─────────
+
+// TestLedgerVerify_FullWalkRequiresAuth: the ?full=1 genesis walk is the
+// expensive auditor path and must reject anonymous callers even when
+// PublicReads is on; the incremental default stays public.
+func TestLedgerVerify_FullWalkRequiresAuth(t *testing.T) {
+	srv, st := newLedgerServer(t, nil)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendLedgerRows(t, st, sym.ID, 3, 0.5)
+
+	for _, path := range []string{"/api/ledger/verify?full=1", "/api/ledger/anchors?full=1"} {
+		res, err := newClient(t).Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close() //nolint:errcheck
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Errorf("anonymous %s: status = %d, want 401", path, res.StatusCode)
+		}
+	}
+	// The incremental default remains a public read.
+	res, err := newClient(t).Get(srv.URL + "/api/ledger/verify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close() //nolint:errcheck
+	if res.StatusCode != 200 {
+		t.Errorf("anonymous incremental verify: status = %d, want 200", res.StatusCode)
+	}
+}
+
+// TestLedgerVerify_ConcurrencyGuard: with the daemon-wide verification
+// semaphore saturated, a verify request 429s immediately instead of queueing a
+// CPU-bound chain walk — the exact resource-exhaustion lever of finding A11.
+func TestLedgerVerify_ConcurrencyGuard(t *testing.T) {
+	srv, st := newLedgerServer(t, nil)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendLedgerRows(t, st, sym.ID, 3, 0.5)
+
+	for i := 0; i < ledgerVerifyConcurrency; i++ {
+		ledgerVerifySem <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < ledgerVerifyConcurrency; i++ {
+			<-ledgerVerifySem
+		}
+	}()
+	res := ledgerGet(t, srv, "/api/ledger/verify")
+	defer res.Body.Close() //nolint:errcheck
+	if res.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("saturated semaphore: status = %d, want 429", res.StatusCode)
+	}
+	if res.Header.Get("Retry-After") == "" {
+		t.Error("429 without Retry-After")
+	}
+}
+
+// TestLedgerVerify_SyntheticChainCompletesAndDetectsTamper: a synthetic chain
+// of a few thousand rows verifies well inside the request deadline via both
+// paths, and a payload mutation is detected at the exact seq by the full walk.
+func TestLedgerVerify_SyntheticChainCompletesAndDetectsTamper(t *testing.T) {
+	srv, st := newLedgerServer(t, nil)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 3000
+	appendLedgerRows(t, st, sym.ID, n, 0.5)
+
+	start := time.Now()
+	v := getLedgerVerify(t, srv, "?full=1")
+	elapsed := time.Since(start)
+	if !v.Intact || v.Count != n {
+		t.Fatalf("intact/count = %v/%d, want true/%d", v.Intact, v.Count, n)
+	}
+	if elapsed > ledgerVerifyTimeout {
+		t.Fatalf("full walk of %d rows took %s, exceeding the %s request deadline", n, elapsed, ledgerVerifyTimeout)
+	}
+
+	// Mutate one payload mid-chain; the full walk must break exactly there.
+	if _, err := st.DB().ExecContext(ctx,
+		`UPDATE prediction_ledger SET cal_prob=cal_prob+0.25 WHERE seq=1500`); err != nil {
+		t.Fatal(err)
+	}
+	v2 := getLedgerVerify(t, srv, "?full=1")
+	if v2.Intact {
+		t.Fatal("full walk reported intact after payload mutation")
+	}
+	if v2.BrokenAtSeq == nil || *v2.BrokenAtSeq != 1500 {
+		t.Fatalf("brokenAtSeq = %v, want 1500", v2.BrokenAtSeq)
 	}
 }

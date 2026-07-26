@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -55,6 +56,21 @@ const anchorEnvInterval = "SIGNALDECK_LEDGER_ANCHOR_INTERVAL"
 // anchor already carries the whole claim — an unbounded limit would only let a
 // caller size the response for us.
 const maxAnchorsPerRequest = 500
+
+// ledgerVerifyTimeout bounds one verification request end-to-end. A full
+// genesis walk of the live chain measures ~4s at 245k rows; 30s is generous
+// headroom under load while making a hung request impossible (finding A11:
+// the endpoint used to hold the connection open >180s).
+const ledgerVerifyTimeout = 30 * time.Second
+
+// ledgerVerifyConcurrency caps chain verifications running at once across the
+// daemon. Verification is CPU-bound (sha256 per row); unbounded concurrent
+// walks were the resource-exhaustion lever in finding A11.
+const ledgerVerifyConcurrency = 2
+
+// ledgerVerifySem admits at most ledgerVerifyConcurrency verifications; the
+// rest 429 immediately rather than queue.
+var ledgerVerifySem = make(chan struct{}, ledgerVerifyConcurrency)
 
 // anchorPolicy resolves the cadence from the environment.
 func anchorPolicy() store.AnchorPolicy {
@@ -194,15 +210,46 @@ func tamperEvidence(av store.LedgerAnchorVerification, anchoring map[string]any)
 // "intact" on its own is exactly the number that misled a reviewer: intact is a
 // statement about consistency, and only the anchors speak to anteriority.
 func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
+	full := r.URL.Query().Get("full") == "1"
+	// ?full=1 walks the whole chain at least twice (VerifyLedger + the anchor
+	// recompute). That is the auditor's path, not an anonymous one: on a public
+	// deployment it is a resource-exhaustion lever, so it needs identity.
+	if full && userID(r) == 0 {
+		httpErr(w, http.StatusUnauthorized, "?full=1 re-derives the whole chain and requires authentication; the default incremental verify is public")
+		return
+	}
+	// At most ledgerVerifyConcurrency verifications run at once, daemon-wide.
+	// Anything beyond that gets an immediate 429 instead of stacking CPU-bound
+	// chain walks behind each other until the daemon starves (finding A11).
+	select {
+	case ledgerVerifySem <- struct{}{}:
+		defer func() { <-ledgerVerifySem }()
+	default:
+		w.Header().Set("Retry-After", "5")
+		httpErr(w, http.StatusTooManyRequests, "a ledger verification is already running — retry shortly")
+		return
+	}
+	// Hard deadline: even a full genesis walk finishes in seconds (measured
+	// ~4s at 245k rows); anything still running past this bound is contention,
+	// and holding the connection open indefinitely (the observed >180s hang)
+	// helps nobody.
+	ctx, cancel := context.WithTimeout(r.Context(), ledgerVerifyTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+
 	var v store.LedgerVerification
 	var err error
 	fullWalk := true
-	if r.URL.Query().Get("full") == "1" {
-		v, err = d.St.VerifyLedger(r.Context())
+	if full {
+		v, err = d.St.VerifyLedger(ctx)
 	} else {
-		v, fullWalk, err = d.St.VerifyLedgerCached(r.Context())
+		v, fullWalk, err = d.St.VerifyLedgerCached(ctx)
 	}
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			httpErr(w, http.StatusServiceUnavailable, "ledger verification exceeded "+ledgerVerifyTimeout.String()+" — retry, or use the incremental path (no ?full=1)")
+			return
+		}
 		httpErr(w, 500, err.Error())
 		return
 	}
@@ -215,8 +262,12 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 	// Every anchor, not just the newest. A newer anchor over a fabricated chain
 	// reproduces fine; the honest OLDER anchor is the thing that reports the
 	// history is gone, and checking only the newest would never surface it.
-	av, err := d.St.VerifyLedgerAnchors(r.Context(), 0, r.URL.Query().Get("full") == "1")
+	av, err := d.St.VerifyLedgerAnchors(ctx, 0, full)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			httpErr(w, http.StatusServiceUnavailable, "ledger verification exceeded "+ledgerVerifyTimeout.String()+" — retry, or use the incremental path (no ?full=1)")
+			return
+		}
 		httpErr(w, 500, err.Error())
 		return
 	}
@@ -256,8 +307,29 @@ func (d Deps) ledgerAnchors(w http.ResponseWriter, r *http.Request) {
 		limit = maxAnchorsPerRequest
 	}
 	recompute := r.URL.Query().Get("full") == "1"
-	av, err := d.St.VerifyLedgerAnchors(r.Context(), limit, recompute)
+	// Same guards as ledgerVerify: recompute mode re-derives the chain from
+	// genesis, so it is gated on identity, bounded in concurrency, and given a
+	// hard deadline (finding A11 applies to this route equally).
+	if recompute && userID(r) == 0 {
+		httpErr(w, http.StatusUnauthorized, "?full=1 re-derives the whole chain and requires authentication; the stored-hash check is public")
+		return
+	}
+	select {
+	case ledgerVerifySem <- struct{}{}:
+		defer func() { <-ledgerVerifySem }()
+	default:
+		w.Header().Set("Retry-After", "5")
+		httpErr(w, http.StatusTooManyRequests, "a ledger verification is already running — retry shortly")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), ledgerVerifyTimeout)
+	defer cancel()
+	av, err := d.St.VerifyLedgerAnchors(ctx, limit, recompute)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			httpErr(w, http.StatusServiceUnavailable, "anchor verification exceeded "+ledgerVerifyTimeout.String()+" — retry without ?full=1")
+			return
+		}
 		httpErr(w, 500, err.Error())
 		return
 	}
