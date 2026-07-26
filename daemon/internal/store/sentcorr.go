@@ -213,8 +213,33 @@ type SentimentFeature struct {
 	Ver       int     `json:"ver"`
 }
 
-// UpsertSentimentFeatures writes a batch of daily features idempotently.
+// featureUpsertChunk bounds how many feature rows one transaction writes.
+//
+// The store has a SINGLE writer, so every other worker's write queues behind
+// whatever transaction is open. A whole-window batch is tens of thousands of
+// rows — fine on an idle machine, and a multi-second stall for the entire
+// daemon on a busy one. Chunking releases the writer between batches.
+//
+// Splitting the batch gives up all-or-nothing application, which is safe HERE
+// and would not be everywhere: these rows are recomputed from source news on
+// every pass, the upsert is idempotent, and the backfill cursor advances only
+// after the whole call succeeds — so a pass that dies halfway is simply redone
+// over the same window.
+const featureUpsertChunk = 5000
+
+// UpsertSentimentFeatures writes daily features idempotently, in bounded
+// transactions.
 func (s *Store) UpsertSentimentFeatures(ctx context.Context, fs []SentimentFeature) error {
+	for start := 0; start < len(fs); start += featureUpsertChunk {
+		end := min(start+featureUpsertChunk, len(fs))
+		if err := s.upsertSentimentFeatureChunk(ctx, fs[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) upsertSentimentFeatureChunk(ctx context.Context, fs []SentimentFeature) error {
 	if len(fs) == 0 {
 		return nil
 	}
