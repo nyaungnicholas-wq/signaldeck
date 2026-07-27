@@ -1,0 +1,2 @@
+seq,grader_sha256,grader_commit,min_independent_n,min_distinct_days,min_distinct_blocks,max_alpha,multiplicity_rule,looks
+11,25cd8923d9f9ceffc3d7c8f878f2550d16ab7e44cf14ec2b7b9fa2f9e62a9f2f,04395a2e8fec1e558cd8cfe0c12a50dbc360cabb,30,10,,,,0

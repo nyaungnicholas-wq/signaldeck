@@ -53,7 +53,7 @@ func TestRepeatedTestingNeverPromotesNoise(t *testing.T) {
 	rows := syntheticRows(240)
 	keys := CanonicalKeys(rows)
 	cfg := DefaultEvalConfig()
-	cfg.LabelSpan = 1
+	cfg.LabelSpan = 86400 // syntheticRows are one day apart — see researchlab_test.go
 	base, err := Baseline(rows, keys, cfg)
 	if err != nil {
 		t.Fatalf("baseline: %v", err)

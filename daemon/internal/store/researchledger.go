@@ -10,7 +10,9 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	rl "github.com/nyaungnicholas-wq/signaldeck/internal/researchledger"
@@ -224,4 +226,176 @@ func (s *Store) LabeledFeaturesSince(ctx context.Context, h md.Horizon, sinceTs 
 		out = append(out, lf)
 	}
 	return out, rows.Err()
+}
+
+// LedgerHypHealth is one hypothesis's testing verdict: what its posterior is
+// made of, when it was last put at risk, and the word a surface may render.
+type LedgerHypHealth struct {
+	ID              string            `json:"id"`
+	Posterior       float64           `json:"posterior"`
+	Status          string            `json:"status"`
+	Verdict         string            `json:"verdict"`
+	ReplicationRows int               `json:"replicationRows"`
+	ExperimentRows  int               `json:"experimentRows"`
+	NewestEvidence  int64             `json:"newestEvidenceTs"`
+	EvidenceAgeDays int               `json:"evidenceAgeDays"` // -1 when the chain is empty
+	LastGradeTs     int64             `json:"lastGradeTs"`
+	Liveness        rl.LedgerLiveness `json:"liveness"`
+}
+
+// LedgerEngineHealth is the liveness verdict on the Bayes LEDGER itself,
+// modelled on LoopEngineHealth: the discovery loop already refuses to let a
+// dead engine read like an honest null, and the ledger — which publishes the
+// posteriors — had no equivalent. Corpus growth plays the role corpus size
+// plays there: it is the precondition that makes silence diagnostic.
+type LedgerEngineHealth struct {
+	Hypotheses      []LedgerHypHealth `json:"hypotheses"`
+	ReplicationRows int               `json:"replicationRows"`
+	ExperimentRows  int               `json:"experimentRows"`
+	EvidenceRows    int               `json:"evidenceRows"`
+	NewestEvidence  int64             `json:"newestEvidenceTs"`
+	EvidenceAgeDays int               `json:"evidenceAgeDays"` // -1 when the ledger is empty
+	LastGradeTs     int64             `json:"lastGradeTs"`
+	CorpusMaxTs     int64             `json:"corpusMaxTs"`
+	CorpusGrew      bool              `json:"corpusGrew"`
+	Unreplicated    int               `json:"unreplicated"`
+	Stale           int               `json:"stale"`
+	State           string            `json:"state"`
+	Healthy         bool              `json:"healthy"`
+	Detail          string            `json:"detail"`
+}
+
+// LedgerEngineHealth reports, per hypothesis and for the ledger as a whole, how
+// many replication and experiment rows exist, how old the newest evidence row
+// of any kind is, and the newest grade timestamp — and turns that into the two
+// explicit states rl.LivenessOf defines.
+//
+// It changes no posterior, no null and no threshold; UNREPLICATED and STALE can
+// only make a hypothesis read weaker than its band already does.
+func (s *Store) LedgerEngineHealth(ctx context.Context, now time.Time) (LedgerEngineHealth, error) {
+	h := LedgerEngineHealth{EvidenceAgeDays: -1, State: rl.LivenessLive, Healthy: true}
+
+	hyps, err := s.LedgerHypotheses(ctx)
+	if err != nil {
+		return h, err
+	}
+	weeks, err := s.ResearchWeeksStats(ctx)
+	if err != nil {
+		return h, err
+	}
+	h.CorpusMaxTs = weeks.MaxTs
+
+	type counts struct {
+		rep, exp int
+		newest   int64
+	}
+	perHyp := map[string]*counts{}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT hyp_id, kind, COUNT(*), MAX(ts)
+		FROM research_ledger_evidence GROUP BY hyp_id, kind`)
+	if err != nil {
+		return h, err
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var id, kind string
+		var n int
+		var maxTs int64
+		if err := rows.Scan(&id, &kind, &n, &maxTs); err != nil {
+			return h, err
+		}
+		c, ok := perHyp[id]
+		if !ok {
+			c = &counts{}
+			perHyp[id] = c
+		}
+		h.EvidenceRows += n
+		switch kind {
+		case rl.KindReplication:
+			c.rep += n
+			h.ReplicationRows += n
+		case rl.KindExperiment:
+			c.exp += n
+			h.ExperimentRows += n
+		}
+		if maxTs > c.newest {
+			c.newest = maxTs
+		}
+		if maxTs > h.NewestEvidence {
+			h.NewestEvidence = maxTs
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return h, err
+	}
+	h.EvidenceAgeDays = ageDays(h.NewestEvidence, now)
+	// The corpus has moved past the ledger: there IS newer data to grade, so
+	// silence is a stopped grader rather than an empty queue.
+	h.CorpusGrew = weeks.MaxTs > h.NewestEvidence
+
+	for _, hyp := range hyps {
+		c := perHyp[hyp.ID]
+		if c == nil {
+			c = &counts{}
+		}
+		row := LedgerHypHealth{
+			ID: hyp.ID, Posterior: hyp.Posterior, Status: hyp.Status,
+			ReplicationRows: c.rep, ExperimentRows: c.exp,
+			NewestEvidence: c.newest, EvidenceAgeDays: ageDays(c.newest, now),
+			LastGradeTs: hyp.LastGradeTs,
+		}
+		row.Liveness = rl.LivenessOf(hyp.Posterior, c.rep, c.exp,
+			row.EvidenceAgeDays, weeks.MaxTs > c.newest)
+		row.Verdict = rl.Verdict(hyp.Status, row.Liveness)
+		switch row.Liveness.State {
+		case rl.LivenessUnreplicated:
+			h.Unreplicated++
+		case rl.LivenessStale:
+			h.Stale++
+		}
+		if hyp.LastGradeTs > h.LastGradeTs {
+			h.LastGradeTs = hyp.LastGradeTs
+		}
+		h.Hypotheses = append(h.Hypotheses, row)
+	}
+
+	switch {
+	case h.Unreplicated > 0:
+		h.State, h.Healthy = rl.LivenessUnreplicated, false
+		h.Detail = fmt.Sprintf("%d of %d hypotheses publish a posterior ≥ %.2f with "+
+			"ZERO replication rows; the ledger holds %d replication and %d experiment "+
+			"rows over %d evidence rows in total — those numbers were never re-graded",
+			h.Unreplicated, len(hyps), rl.LivenessUnreplicatedMin, h.ReplicationRows,
+			h.ExperimentRows, h.EvidenceRows)
+	case h.Stale > 0:
+		h.State, h.Healthy = rl.LivenessStale, false
+		h.Detail = fmt.Sprintf("%d of %d hypotheses have had no evidence row of any kind "+
+			"for %d+ days while the research corpus holds newer data",
+			h.Stale, len(hyps), rl.LivenessStaleDays)
+	default:
+		h.Detail = fmt.Sprintf("%d hypotheses; %d replication and %d experiment rows; "+
+			"newest evidence %s", len(hyps), h.ReplicationRows, h.ExperimentRows,
+			agePhraseDays(h.EvidenceAgeDays))
+	}
+	return h, nil
+}
+
+// ageDays is whole UTC days between an evidence timestamp and now, -1 when the
+// timestamp is absent — never 0, which would read as "graded today".
+func ageDays(ts int64, now time.Time) int {
+	if ts <= 0 {
+		return -1
+	}
+	d := int(now.UTC().Sub(time.Unix(ts, 0).UTC()).Hours() / 24)
+	if d < 0 {
+		d = 0
+	}
+	return d
+}
+
+func agePhraseDays(days int) string {
+	if days < 0 {
+		return "never"
+	}
+	return fmt.Sprintf("%d days old", days)
 }

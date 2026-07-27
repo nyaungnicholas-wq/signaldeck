@@ -83,6 +83,13 @@ func canonicalFeatureKeys(rows []store.LabeledFeature) []string {
 // also matches by BASE name, so a presence indicator (pred_raw__has) is
 // excluded with its value — a bit saying "the blend had an opinion here" leaks
 // the same self-reference the probability does.
+//
+// The four A7 shortcut keys (forecast_prob / forecast_lift /
+// expectancy_hit_rate / n_used) are no longer written by buildFeatureVector at
+// all — the ablation harness measured them worthless, so they were deleted at
+// construction instead of built-then-gated. The predicate still bans them here
+// because the labeled sets this trainer reads reach back into pre-deletion
+// rows that carry them.
 func excludedGBMKey(k string) bool {
 	return gbm.SelfReferentialKey(k)
 }
@@ -125,7 +132,20 @@ func excludedGBMKey(k string) bool {
 // every pass, and modelFeatureKeys is recomputed in the same call that consumes
 // it. There is no stored artifact whose width could disagree.
 func modelFeatureKeys(rows []store.LabeledFeature) []string {
-	base := canonicalFeatureKeys(rows)
+	return modelFeatureKeysExcluding(rows, nil)
+}
+
+// modelFeatureKeysExcluding is modelFeatureKeys with the feature-health retire
+// set applied. This is the ENFORCEMENT point for per-feature retirement: a
+// feature the grader retired stops being trained on here, rather than staying in
+// the vector forever while a report says it is dead.
+//
+// The filter runs on the BASE set, before the presence indicators are derived, so
+// retiring "foo" drops both "foo" and "foo__present". Filtering the expanded list
+// instead would leave an orphaned indicator whose base value is no longer read —
+// a column that is always 1 and means nothing.
+func modelFeatureKeysExcluding(rows []store.LabeledFeature, retired map[string]bool) []string {
+	base, _ := dropRetired(canonicalFeatureKeys(rows), retired)
 	keys := make([]string, 0, 2*len(base))
 	for _, k := range base {
 		if strings.HasSuffix(k, presenceSuffix) {
@@ -266,9 +286,25 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 		return "", err
 	}
 	now := time.Now().Unix()
+
+	// Per-feature retirement, read ONCE per horizon rather than per
+	// (symbol, horizon): the verdict is fleet-wide, and re-reading it inside the
+	// inner loop would hit the meta table once per symbol to learn the same
+	// answer. An absent report retires nothing (see retiredFeatureKeys).
+	retiredByHorizon := make(map[md.Horizon]map[string]bool, len(predHorizons))
+	droppedNames := map[string]bool{}
+	for _, h := range predHorizons {
+		set := retiredFeatureKeys(ctx, w.St, h)
+		retiredByHorizon[h] = set
+		for k := range set {
+			droppedNames[k] = true
+		}
+	}
+
 	gbmEdged, mrEdged, trained := 0, 0, 0
 	for _, s := range syms {
 		for _, h := range predHorizons {
+			retired := retiredByHorizon[h]
 			// Version-pinned: the GBM flattens the key union across rows, so
 			// mixing feature-schema versions would dilute absent-vs-zero
 			// (review finding). Train on the current layout only.
@@ -284,7 +320,7 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 			// Model layout, not the base union: every field carries a
 			// presence indicator so an unobserved feature cannot arrive as
 			// the zero it is often genuinely measured at.
-			keys := modelFeatureKeys(rows)
+			keys := modelFeatureKeysExcluding(rows, retired)
 			if len(keys) > 0 {
 				// Declare the label horizon so gbm.Evaluate can PURGE training
 				// rows whose label resolves inside the test block. Without it
@@ -332,8 +368,19 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	return fmt.Sprintf("trained %d model legs over %d symbols (%d GBM + %d mean-rev with OOS edge)",
-		trained, len(syms), gbmEdged, mrEdged), nil
+	msg := fmt.Sprintf("trained %d model legs over %d symbols (%d GBM + %d mean-rev with OOS edge)",
+		trained, len(syms), gbmEdged, mrEdged)
+	if len(droppedNames) > 0 {
+		// Name them. A feature leaving the model silently is how a model becomes
+		// unexplainable six months later.
+		names := make([]string, 0, len(droppedNames))
+		for k := range droppedNames {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		msg += fmt.Sprintf("; feature-health retired %d input(s): %s", len(names), strings.Join(names, ","))
+	}
+	return msg, nil
 }
 
 // maxModelForecastAgeSecs caps how old a stored model_forecasts row may be and

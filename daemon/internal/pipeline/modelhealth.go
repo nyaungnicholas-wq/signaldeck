@@ -13,6 +13,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -23,6 +26,9 @@ import (
 // ModelHealthWorker grades models and persists their verdicts.
 type ModelHealthWorker struct {
 	St *store.Store
+	// RegistryPath overrides where data/accuracy_registry.json is read from
+	// (tests, unusual layouts). Empty means the standard candidates.
+	RegistryPath string
 }
 
 func (w *ModelHealthWorker) Name() string            { return "model-health" }
@@ -49,6 +55,14 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 	var graded, retired int
 	var summary []string
 
+	// The pre-registered FAILED-forward retire flags from the accuracy
+	// registry (auto-retire rule, chained 2026-07-26 while every directional
+	// verdict was still INSUFFICIENT). A flag here outranks the composite
+	// score below: a row whose whole effective-N interval sits below the
+	// prequential null is retired the grade it happens, not when the score
+	// catches up.
+	regRetired := w.registryRetired()
+
 	for _, h := range []md.Horizon{md.H1d, md.H1w} {
 		model := "directional-ensemble-" + string(h)
 
@@ -63,6 +77,31 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		recent, err := w.St.DirectionalRecord(ctx, h, since)
 		if err != nil {
 			recent = store.DirectionalRecordRow{}
+		}
+
+		// HEAD-TO-HEAD vs the tracked prequential-majority benchmark — the
+		// live "<horizon>#pm" rows the prediction pipeline commits under
+		// identical dedup/survivorship/resolution rules. Graded by the SAME
+		// accessor, and the ensemble side is re-sliced to the benchmark's own
+		// resolution window so the two accuracies cover the same market days
+		// (the benchmark only exists since the tracked-benchmark wave).
+		// skillVsBenchmark <= 0 is the deficit the offline registry keeps
+		// finding, now visible in the daemon's own health output every pass.
+		bench, berr := w.St.DirectionalRecord(ctx, benchmarkHorizon(h), 0)
+		if berr != nil {
+			bench = store.DirectionalRecordRow{}
+		}
+		var aligned store.DirectionalRecordRow
+		if bench.N > 0 {
+			if first, ok, err := w.St.FirstResolutionAt(ctx, benchmarkHorizon(h)); err == nil && ok {
+				if a, err := w.St.DirectionalRecord(ctx, h, first); err == nil {
+					aligned = a
+				}
+			}
+		}
+		var skillVsBenchmark any // nil until both sides have aligned rows
+		if bench.N > 0 && aligned.N > 0 {
+			skillVsBenchmark = aligned.Accuracy - bench.Accuracy
 		}
 
 		// FEATURE DRIFT (2026-07-25): compare the recent feature distribution
@@ -83,22 +122,42 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 			// is not a meaningful axis for it; leaving it zero scores freshness
 			// full rather than inventing a retrain date.
 		})
+		if regRetired[model] {
+			score.Verdict = modelhealth.VerdictRetired
+			score.Emitting = false
+			score.Reasons = append(score.Reasons,
+				"accuracy-registry retire flag: effective-N Wilson upper bound below the "+
+					"prequential null at the pre-registered evidence floors (auto-retire rule)")
+		}
 		graded++
 		if !score.Emitting {
 			retired++
 		}
 
 		blob, err := json.Marshal(map[string]any{
-			"model":        model,
-			"verdict":      score.Verdict,
-			"emitting":     score.Emitting,
-			"overall":      score.Overall,
-			"components":   score.Components,
-			"reasons":      score.Reasons,
-			"observations": score.Observations,
-			"accuracy":     full.Accuracy,
-			"baseline":     full.BaselineAcc,
-			"gradedAt":     time.Now().Unix(),
+			"model":          model,
+			"verdict":        score.Verdict,
+			"emitting":       score.Emitting,
+			"overall":        score.Overall,
+			"components":     score.Components,
+			"reasons":        score.Reasons,
+			"observations":   score.Observations,
+			"accuracy":       full.Accuracy,
+			"baseline":       full.BaselineAcc,
+			"registryRetire": regRetired[model],
+			// The tracked benchmark's own record plus the ensemble re-graded
+			// over the benchmark's window — same days, same rules, one number
+			// (skillVsBenchmark) that says whether the ensemble is beating a
+			// bettor who just follows the running majority.
+			"benchmark": map[string]any{
+				"model":              "prequential-majority-" + string(h),
+				"n":                  bench.N,
+				"accuracy":           bench.Accuracy,
+				"ensembleAlignedN":   aligned.N,
+				"ensembleAlignedAcc": aligned.Accuracy,
+			},
+			"skillVsBenchmark": skillVsBenchmark,
+			"gradedAt":         time.Now().Unix(),
 		})
 		if err != nil {
 			continue
@@ -106,7 +165,11 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		if err := w.St.SetMeta(ctx, MetaKeyPrefix+model, string(blob)); err != nil {
 			continue
 		}
-		summary = append(summary, fmt.Sprintf("%s=%s(%.2f)", h, score.Verdict, score.Overall))
+		line := fmt.Sprintf("%s=%s(%.2f)", h, score.Verdict, score.Overall)
+		if bench.N > 0 && aligned.N > 0 {
+			line += fmt.Sprintf(" vsPM%+.1fpp/n%d", (aligned.Accuracy-bench.Accuracy)*100, bench.N)
+		}
+		summary = append(summary, line)
 	}
 
 	// STRUCTURAL MODELS (2026-07-25). The gate was aimed only at the directional
@@ -216,6 +279,73 @@ func (w *ModelHealthWorker) featureDrift(ctx context.Context) float64 {
 		results = append(results, modelhealth.DriftFor(name, refVals, live[name]))
 	}
 	return modelhealth.DriftFraction(results)
+}
+
+// registryRetired resolves the registry path and returns the retire flags.
+// Candidates mirror PreregRegistrar.fileDigest: launchd runs the daemon from
+// <repo>/daemon, and tools run from the repo root.
+func (w *ModelHealthWorker) registryRetired() map[string]bool {
+	path := w.RegistryPath
+	if path == "" {
+		for _, p := range []string{
+			filepath.Join("..", "data", "accuracy_registry.json"),
+			filepath.Join("data", "accuracy_registry.json"),
+		} {
+			if _, err := os.Stat(p); err == nil {
+				path = p
+				break
+			}
+		}
+	}
+	return retiredFromRegistry(path)
+}
+
+// retiredFromRegistry maps model name -> true for every directional registry
+// row carrying the pre-registered FAILED-forward retire flag (the auto-retire
+// rule chained under prereg kind "auto-retire-rule"). An unreadable file or
+// malformed JSON returns an empty map — the kill switch must never fire on
+// evidence nobody can read, the same posture featureDrift takes — and the
+// opposite failure is guarded by Grade's own skill gate, which still retires
+// on the store's record without the registry.
+func retiredFromRegistry(path string) map[string]bool {
+	out := map[string]bool{}
+	if path == "" {
+		return out
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	var reg struct {
+		Rows []struct {
+			Predictor string `json:"predictor"`
+			Family    string `json:"family"`
+			Retire    bool   `json:"retire"`
+		} `json:"rows"`
+	}
+	if json.Unmarshal(raw, &reg) != nil {
+		return out
+	}
+	for _, r := range reg.Rows {
+		if r.Family != "direction" || !r.Retire {
+			continue
+		}
+		// "directional-ensemble (1d)" / "directional-ensemble (1w, high
+		// conviction)" -> directional-ensemble-1d / -1w. A FAILED tier retires
+		// its horizon: the horizon is the unit that publishes.
+		i := strings.IndexByte(r.Predictor, '(')
+		if i < 0 {
+			continue
+		}
+		h := r.Predictor[i+1:]
+		if j := strings.IndexAny(h, ",)"); j >= 0 {
+			h = h[:j]
+		}
+		if h = strings.TrimSpace(h); h != "" {
+			out["directional-ensemble-"+h] = true
+		}
+	}
+	return out
 }
 
 // ModelEmitting reports whether a model is currently cleared to emit. Unknown

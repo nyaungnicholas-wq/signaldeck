@@ -208,3 +208,73 @@ func (s *Store) PruneCompositeKeepDailyLast(ctx context.Context, cutoff int64) (
 // Path returns the database file path (for disk-headroom checks by callers
 // that must never guess where the DB lives).
 func (s *Store) Path() string { return s.path }
+
+// ─────────────────────────────────────────────────────────────────────────
+// RESEARCH_WEEKS RETENTION (appended block — unmanaged-table sweep, phase 3).
+//
+// research_weeks is ALREADY at the downsampled grain the reaudit asked for —
+// PRIMARY KEY (symbol_id, week) structurally guarantees one row per (symbol,
+// week). What was missing is any bound on the WINDOW: the evidence base grows
+// a full universe-width band of ~1KB vec rows every week, forever (measured
+// 165MB live). These helpers give rows past the active research window the
+// house archive-before-prune contract. Two coupled honesty constraints:
+//
+//   - The hist-backfill worker recomputes the base DAILY from rowsFrom onward
+//     (REPLACE on the key), so the prune floor and the recompute floor MUST
+//     move in lockstep — pipeline.HistoryBackfillWorker clamps its rowsFrom
+//     to maintain.RetentionResearchWeeksDays(); pruning without that clamp
+//     would resurrect rows daily and re-archive them hourly (churn loop).
+//   - Nothing is ever lost: every pruned row is archived first, AND the base
+//     is recompute-idempotent from daily bars, which are NEVER pruned — so
+//     widening the window later rebuilds the hot rows from source.
+// ─────────────────────────────────────────────────────────────────────────
+
+// ResearchWeekArchiveRow is one research_weeks row for the cold archive. The
+// vec JSON is carried verbatim so the archived evidence base round-trips
+// exactly into offline research (DuckDB/pandas).
+type ResearchWeekArchiveRow struct {
+	SymbolID  int64
+	Week      int64
+	Ts        int64
+	Vec       string
+	FwdReturn float64
+	Up        int
+	Era       string
+	HighVol   int
+	CreatedAt int64
+}
+
+// ResearchWeeksBefore returns up to limit research_weeks rows with ts <
+// cutoff (the anchor daily-bar ts), ts ascending — archive-before-prune read,
+// same contract as ScoresBefore in retention.go.
+func (s *Store) ResearchWeeksBefore(ctx context.Context, cutoff int64, limit int) ([]ResearchWeekArchiveRow, error) {
+	if limit <= 0 {
+		limit = 1 << 30
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol_id, week, ts, vec, fwd_return, up, era, high_vol, created_at
+		FROM research_weeks WHERE ts < ? ORDER BY ts, symbol_id LIMIT ?`, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := make([]ResearchWeekArchiveRow, 0, 8)
+	for rows.Next() {
+		var r ResearchWeekArchiveRow
+		if err := rows.Scan(&r.SymbolID, &r.Week, &r.Ts, &r.Vec, &r.FwdReturn, &r.Up, &r.Era, &r.HighVol, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DeleteResearchWeeksBefore deletes research_weeks rows with ts < cutoff
+// (retention). Callers MUST have durably archived the rows first.
+func (s *Store) DeleteResearchWeeksBefore(ctx context.Context, cutoff int64) (int64, error) {
+	res, err := s.w.ExecContext(ctx, `DELETE FROM research_weeks WHERE ts < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

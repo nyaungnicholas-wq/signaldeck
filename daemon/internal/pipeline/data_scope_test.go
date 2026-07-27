@@ -29,7 +29,7 @@ func newsTestServer(t *testing.T) (*httptest.Server, map[string]int) {
 		requested[sym]++
 		nextID++
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"news":[{"id":%d,"headline":"h%d","source":"t","url":"","created_at":"2026-07-06T00:00:00Z","symbols":[%q]}],"next_page_token":null}`,
+		_, _ = fmt.Fprintf(w, `{"news":[{"id":%d,"headline":"h%d","source":"t","url":"","created_at":"2026-07-06T00:00:00Z","symbols":[%q]}],"next_page_token":null}`,
 			nextID, nextID, sym)
 	}))
 	t.Cleanup(srv.Close)

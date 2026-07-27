@@ -30,6 +30,63 @@ type Worker interface {
 	Run(ctx context.Context) (detail string, err error)
 }
 
+// TimeoutWorker is the optional escape hatch for a worker whose honest worst
+// case does not fit the default deadline (a full-universe backfill on a 1h
+// cadence, say). Workers that do not implement it get defaultRunTimeout.
+type TimeoutWorker interface {
+	Worker
+	// RunTimeout bounds ONE Run. Return 0 to accept the default.
+	RunTimeout() time.Duration
+}
+
+// Per-run deadline constants. WHY (measured over 7 days): the runner passed the
+// daemon ROOT context into every Run, so a worker parked in a
+// context-insensitive SQLite scan or a bodyless HTTP read stayed parked until
+// the process restarted — 662 worker_stale plus 261 stale dq events with ZERO
+// automated recoveries. A worker that is silently dead for a day leaves
+// unattributed holes in a forward prediction record whose entire value is
+// completeness, so "eventually a human restarts it" is not an acceptable
+// recovery path.
+//
+// The bound is deliberately generous — timeoutFactor x Interval, floored so a
+// 1m worker still gets 15m and capped so nothing runs unbounded. It is a
+// LIVENESS bound, not a performance target: a run that hits it is a bug, and it
+// is recorded as its own `timeout` status so it is never confused with a
+// returned error.
+const (
+	timeoutFactor  = 3
+	minRunTimeout  = 15 * time.Minute
+	maxRunTimeout  = 6 * time.Hour
+	quiesceDrainTO = 30 * time.Second
+)
+
+// defaultRunTimeout is the deadline for a periodic worker with the given
+// interval. Long-running workers (interval 0) are exempt: they block until the
+// daemon's context ends BY DESIGN, so any deadline would kill them on a timer.
+func defaultRunTimeout(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	d := timeoutFactor * interval
+	if d < minRunTimeout {
+		d = minRunTimeout
+	}
+	if d > maxRunTimeout {
+		d = maxRunTimeout
+	}
+	return d
+}
+
+// runTimeoutFor resolves a worker's deadline, honoring an explicit override.
+func runTimeoutFor(w Worker) time.Duration {
+	if tw, ok := w.(TimeoutWorker); ok {
+		if d := tw.RunTimeout(); d > 0 {
+			return d
+		}
+	}
+	return defaultRunTimeout(w.Interval())
+}
+
 // ShutdownGrace is how long Start waits after ctx cancellation for workers to
 // drain before force-exiting the process. A worker parked in a
 // context-insensitive call (SQLite exec, HTTP with no timeout, a bare channel
@@ -40,19 +97,35 @@ var ShutdownGrace = 75 * time.Second
 // forceExit is swappable so tests can observe the escalation without dying.
 var forceExit = func(code int) { os.Exit(code) }
 
+// inflight is one Run currently executing.
+type inflight struct {
+	since    time.Time
+	deadline time.Time // zero = no deadline (long-running worker)
+	cancel   context.CancelFunc
+	canceled bool // an actuator already cancelled this run
+}
+
 // Runner schedules workers and records their runs.
 type Runner struct {
 	st      *store.Store
 	workers []Worker
 
 	mu      sync.Mutex
-	running map[string]time.Time // worker name → start of in-flight Run
+	running map[string]*inflight // worker name → in-flight Run
+	// quiesce is non-nil while the fleet is quiesced; it is closed on release.
+	quiesce chan struct{}
 }
 
 // NewRunner builds a runner over the given workers.
 func NewRunner(st *store.Store, ws ...Worker) *Runner {
-	return &Runner{st: st, workers: ws, running: make(map[string]time.Time)}
+	return &Runner{st: st, workers: ws, running: make(map[string]*inflight)}
 }
+
+// Add appends workers before Start. It exists so callers can build the Runner
+// FIRST and hand it to components that need to act on the fleet (the health
+// watchdog's actuator, the storage governor's quiesce window) before the fleet
+// itself is assembled.
+func (r *Runner) Add(ws ...Worker) { r.workers = append(r.workers, ws...) }
 
 // Start launches every worker and blocks until ctx is done and all exit —
 // or until ShutdownGrace after cancellation, at which point it logs which
@@ -84,6 +157,12 @@ func (r *Runner) Start(ctx context.Context) {
 	}
 }
 
+// InFlightNames names the workers with a Run still in flight, oldest first,
+// each annotated with how long it has been running. Exported so a diagnosis
+// that needs a HOLDER CENSUS (e.g. a WAL checkpoint that keeps stalling at the
+// same frame) can name the daemon's own candidates instead of guessing.
+func (r *Runner) InFlightNames() []string { return r.stuckWorkers() }
+
 // stuckWorkers names the workers with a Run still in flight, oldest first.
 func (r *Runner) stuckWorkers() []string {
 	r.mu.Lock()
@@ -93,8 +172,8 @@ func (r *Runner) stuckWorkers() []string {
 		since time.Time
 	}
 	entries := make([]entry, 0, len(r.running))
-	for name, since := range r.running {
-		entries = append(entries, entry{name, since})
+	for name, in := range r.running {
+		entries = append(entries, entry{name, in.since})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].since.Before(entries[j].since) })
 	names := make([]string, len(entries))
@@ -174,28 +253,64 @@ func startOffset(name string, interval time.Duration) time.Duration {
 	return time.Duration(uint64(h.Sum32()) % uint64(span))
 }
 
-// runOnce executes one run with persistence + panic isolation.
+// runOnce executes one run with persistence + panic isolation, under a per-run
+// deadline (see the timeout constants above). The run's cancel func is parked
+// in r.running so an actuator — the health watchdog — can cut a hung run loose
+// without waiting for the deadline or a daemon restart.
 func (r *Runner) runOnce(ctx context.Context, w Worker) {
 	if ctx.Err() != nil {
+		return
+	}
+	if !r.awaitQuiesce(ctx) {
 		return
 	}
 	runID, err := r.st.StartWorkerRun(ctx, w.Name())
 	if err != nil {
 		slog.Error("worker: start record", "worker", w.Name(), "err", err)
 	}
+
+	var (
+		runCtx context.Context
+		cancel context.CancelFunc
+	)
+	in := &inflight{since: time.Now()}
+	if to := runTimeoutFor(w); to > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, to)
+		in.deadline = in.since.Add(to)
+	} else {
+		runCtx, cancel = context.WithCancel(ctx)
+	}
+	in.cancel = cancel
+	defer cancel()
+
 	r.mu.Lock()
-	r.running[w.Name()] = time.Now()
+	r.running[w.Name()] = in
 	r.mu.Unlock()
-	detail, runErr := r.safeRun(ctx, w)
+	detail, runErr := r.safeRun(runCtx, w)
 	r.mu.Lock()
+	intervened := in.canceled
 	delete(r.running, w.Name())
 	r.mu.Unlock()
+
 	status := "ok"
 	if runErr != nil {
+		switch {
 		// A cancellation at shutdown is not a failure worth alarming on.
-		if ctx.Err() != nil {
+		case ctx.Err() != nil:
 			status, detail = "ok", "stopped (shutdown)"
-		} else {
+		// The run blew its own deadline (or was cut loose by the watchdog) while
+		// the daemon kept running. Recorded as its OWN status so a hung worker is
+		// never filed as an ordinary error — the two have different causes and
+		// different fixes.
+		case runCtx.Err() != nil:
+			status = "timeout"
+			reason := fmt.Sprintf("exceeded run deadline %s", runTimeoutFor(w))
+			if intervened {
+				reason = "cancelled by watchdog (stale + past deadline)"
+			}
+			detail = fmt.Sprintf("%s after %s: %v", reason, time.Since(in.since).Round(time.Second), runErr)
+			slog.Warn("worker run timed out", "worker", w.Name(), "after", time.Since(in.since), "err", runErr)
+		default:
 			status, detail = "error", runErr.Error()
 			slog.Warn("worker failed", "worker", w.Name(), "err", runErr)
 		}
@@ -203,6 +318,126 @@ func (r *Runner) runOnce(ctx context.Context, w Worker) {
 	if runID != 0 {
 		r.finishRecord(w.Name(), runID, status, clip(detail, 500))
 	}
+}
+
+// CancelOverdue cancels the named worker's in-flight run if it is past its
+// deadline, returning how long it had been running. It is the ACTUATOR half of
+// staleness detection: before this, the watchdog observed 662 worker_stale
+// events over 7 days, wrote health.json, and recovered exactly nothing.
+//
+// It deliberately does NOT touch a run that is merely long — only one that has
+// already blown the deadline the runner itself set — so it cannot shorten any
+// worker's honest budget.
+func (r *Runner) CancelOverdue(name string) (time.Duration, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	in, ok := r.running[name]
+	if !ok || in.canceled || in.deadline.IsZero() || time.Now().Before(in.deadline) {
+		return 0, false
+	}
+	in.canceled = true
+	in.cancel()
+	return time.Since(in.since), true
+}
+
+// awaitQuiesce blocks a starting run while the fleet is quiesced. Returns false
+// if ctx ended first (shutdown), in which case the run is skipped entirely.
+func (r *Runner) awaitQuiesce(ctx context.Context) bool {
+	for {
+		r.mu.Lock()
+		ch := r.quiesce
+		r.mu.Unlock()
+		if ch == nil {
+			return true
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+// Quiesce holds the fleet still for d: no new runs start, in-flight runs are
+// drained (bounded by quiesceDrainTO — a worker that ignores cancellation must
+// not be able to block the window forever), and the window is then held open
+// for d before the fleet is released. Workers named in except are ignored when
+// draining, so the caller's OWN run does not deadlock the wait.
+//
+// This exists because the WAL's only reclaim path — a TRUNCATE checkpoint —
+// needs an instant with no active readers, and a permanently-running fleet
+// never yields one (measured: 0/22 TRUNCATE successes, 21 BUSY, WAL 5,396 MB
+// against a 64 MB journal_size_limit). Quiesce MANUFACTURES that instant
+// instead of waiting for luck. It returns ctx.Err() if the window is cut short.
+func (r *Runner) Quiesce(ctx context.Context, d time.Duration, except ...string) error {
+	return r.QuiesceDo(ctx, d, nil, except...)
+}
+
+// QuiesceDo is Quiesce with work to perform INSIDE the held window, once the
+// drain has completed. A caller that needs the pause for something (the WAL
+// TRUNCATE checkpoint) must use this: with plain Quiesce it cannot tell when
+// the drain ended, so it would race its own window.
+func (r *Runner) QuiesceDo(ctx context.Context, d time.Duration, fn func(context.Context), except ...string) error {
+	skip := make(map[string]bool, len(except))
+	for _, n := range except {
+		skip[n] = true
+	}
+	r.mu.Lock()
+	if r.quiesce != nil {
+		r.mu.Unlock()
+		return fmt.Errorf("fleet already quiesced")
+	}
+	gate := make(chan struct{})
+	r.quiesce = gate
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.quiesce = nil
+		r.mu.Unlock()
+		close(gate)
+	}()
+
+	drainBy := time.Now().Add(quiesceDrainTO)
+	for {
+		r.mu.Lock()
+		n := 0
+		for name, in := range r.running {
+			// Long-running workers (no deadline: stream ingestors) are never
+			// drainable — they block until the daemon exits by design — so
+			// waiting on them would guarantee the drain always times out. They
+			// are excluded from the wait, and any WAL frames they pin simply
+			// show up as a BUSY rung in the checkpoint ladder's honest report.
+			if !skip[name] && !in.deadline.IsZero() {
+				n++
+			}
+		}
+		r.mu.Unlock()
+		if n == 0 || time.Now().After(drainBy) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	if fn != nil {
+		fn(ctx)
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
+// InFlight reports how many runs are currently executing (test/telemetry).
+func (r *Runner) InFlight() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.running)
 }
 
 // finishRecord persists the run outcome with its OWN context — never the run

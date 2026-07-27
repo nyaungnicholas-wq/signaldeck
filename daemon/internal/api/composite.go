@@ -217,7 +217,7 @@ func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, winRate float64,
 // above the naive baseline. Best-effort: any error returns "not proven" with a
 // stated reason — never a fabricated pass.
 func (d Deps) fleetEdgeGrade(ctx context.Context) fleetSkill {
-	key := fmt.Sprintf("%p", d.St)
+	key := d.St.CacheKey()
 	// Serve from the short-TTL cache when fresh (the 120k-row scan is heavy).
 	fleetSkillCache.Lock()
 	if fleetSkillCache.valid && fleetSkillCache.key == key && time.Since(fleetSkillCache.at) < fleetSkillTTL {

@@ -44,6 +44,25 @@ import "strings"
 // A derived presence indicator (KEY+"__has") is excluded with its base key: a
 // bit saying "the blend had an opinion here" leaks the same self-reference the
 // value does.
+//
+// The A7 removal is MEASURED, not asserted: cmd/selfref-ablation retrained
+// every leg twice on a frozen 2026-07-27 snapshot, with and without the four
+// excluded keys, and zero admission-gate decisions changed — the only two
+// GBM legs with positive OOS lift (WULF, BTC/USD) carry identical lift to four
+// decimals in both arms, and the pooled alphax leg stays gated out either way.
+// The per-leg table is published in EDGE_PLAN.md ("the edge was not the
+// shortcut"). The census test in selfref_test.go keeps this list honest
+// forward: a newly-logged feature key that nobody classified fails the suite.
+//
+// On the strength of that measurement, the four A7 keys (forecast_prob /
+// forecast_lift / expectancy_hit_rate / n_used) are no longer WRITTEN at all:
+// pipeline.buildFeatureVector deleted them from the row payload, so new rows
+// never carry a key whose only fate was to be banned here. Their entries below
+// are NOT dead code — the store holds hundreds of thousands of pre-deletion
+// rows (n_used alone on 248,391) that every trainer keeps reading, and the
+// ablation harness restores the keys from exactly those rows. The predicate is
+// what keeps historical rows and any future reintroduction equally excluded;
+// TestModelFeatureKeys_NoBannedKeys (pipeline/stage6_test.go) pins that.
 func SelfReferentialKey(k string) bool {
 	base := strings.TrimSuffix(k, PresenceSuffix)
 	switch base {

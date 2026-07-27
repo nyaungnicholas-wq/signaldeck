@@ -1,0 +1,32 @@
+# selfref ablation — 2026-07-27 00:34 UTC
+source=/Users/natalienyaung/claude code/signaldeck/data/signaldeck.db
+snapshot=./ablate-snapshot.db
+snapshot_sha256=7e5c205ee295ee274dc146ef18f0dc57c4bda423cb4b78a7aa05dfea9c8ae635
+ablated keys (A7): forecast_prob, forecast_lift, expectancy_hit_rate, n_used
+
+## GBM leg · v8 · 1d — labeled rows 15514 (hash 9594c124666ccf63)
+  with shortcuts (pre-A7)  graded=   0 admitted(lift>0)=   0 (0.0%) meanLift=+0.0000 medianLift=+0.0000 NwLift=+0.0000 OOS-N=0
+  without (shipped)        graded=   0 admitted(lift>0)=   0 (0.0%) meanLift=+0.0000 medianLift=+0.0000 NwLift=+0.0000 OOS-N=0
+
+## GBM leg · v8 · 1w — labeled rows 15461 (hash c5757f1d0f1a0838)
+  with shortcuts (pre-A7)  graded=   0 admitted(lift>0)=   0 (0.0%) meanLift=+0.0000 medianLift=+0.0000 NwLift=+0.0000 OOS-N=0
+  without (shipped)        graded=   0 admitted(lift>0)=   0 (0.0%) meanLift=+0.0000 medianLift=+0.0000 NwLift=+0.0000 OOS-N=0
+
+## GBM leg · v10 · 1d — labeled rows 27490 (hash 686c087ad63207cd)
+  with shortcuts (pre-A7)  graded=  37 admitted(lift>0)=   2 (5.4%) meanLift=-0.3737 medianLift=-0.3383 NwLift=-0.3725 OOS-N=10057
+  without (shipped)        graded=  37 admitted(lift>0)=   2 (5.4%) meanLift=-0.3998 medianLift=-0.4737 NwLift=-0.3987 OOS-N=10057
+  paired legs=37 mean Δlift (with − without) = +0.0261
+
+## GBM leg · v10 · 1w — labeled rows 12783 (hash 2dcc6c637562ce66)
+  with shortcuts (pre-A7)  graded=   0 admitted(lift>0)=   0 (0.0%) meanLift=+0.0000 medianLift=+0.0000 NwLift=+0.0000 OOS-N=0
+  without (shipped)        graded=   0 admitted(lift>0)=   0 (0.0%) meanLift=+0.0000 medianLift=+0.0000 NwLift=+0.0000 OOS-N=0
+
+## alphax leg (pooled) · v3+ · 1d — pooled rows 50000 (hash ed439e23dbeb02ab)
+  with shortcuts (pre-A7) lift=-0.0045 acc=0.4957 base=0.5001 auc=0.4947 N=3807 → GATED OUT
+  without (shipped)       lift=-0.0084 acc=0.4917 base=0.5001 auc=0.4909 N=3807 → GATED OUT
+  Δlift (with − without): +0.0039
+
+## alphax leg (pooled) · v3+ · 1w — pooled rows 50000 (hash d227e79492c3a0f9)
+  with shortcuts (pre-A7) refused: too few distinct days for purged walk-forward folds
+  without (shipped)       refused: too few distinct days for purged walk-forward folds
+

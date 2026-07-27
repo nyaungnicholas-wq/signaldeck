@@ -1,0 +1,65 @@
+reusing existing snapshot ./ablate-snapshot.db
+# selfref ablation — 2026-07-27 00:37 UTC
+source=/Users/natalienyaung/claude code/signaldeck/data/signaldeck.db
+snapshot=./ablate-snapshot.db
+snapshot_sha256=247c9d1339990575184304d060f03941628c02e60f5ad9aa794efe2900de83b2
+ablated keys (A7): forecast_prob, forecast_lift, expectancy_hit_rate, n_used
+
+## GBM leg · v10 · 1d — labeled rows 27490 (hash 686c087ad63207cd)
+  with shortcuts (pre-A7)  graded=  37 admitted(lift>0)=   2 (5.4%) meanLift=-0.3737 medianLift=-0.3383 NwLift=-0.3725 OOS-N=10057
+  without (shipped)        graded=  37 admitted(lift>0)=   2 (5.4%) meanLift=-0.3998 medianLift=-0.4737 NwLift=-0.3987 OOS-N=10057
+  paired legs=37 mean Δlift (with − without) = +0.0261
+
+  per-leg (OOS lift; admitted = lift>0):
+  symbol        OOS-N  with(preA7)      without        Δ gate flip?
+  WULF            264      +0.0076      +0.0076  +0.0000 no
+  BTC/USD         290      +0.0069      +0.0069  +0.0000 no
+  ADA/USD         291      +0.0000      +0.0000  +0.0000 no
+  HOOD            270      +0.0000      +0.0000  +0.0000 no
+  TSLA            265      +0.0000      +0.0000  +0.0000 no
+  SPCX            265      +0.0000      +0.0000  +0.0000 no
+  TSLL            265      +0.0000      +0.0000  +0.0000 no
+  SOFI            266      -0.0000      -0.0000  +0.0000 no
+  SPY             265      -0.0000      -0.0000  +0.0000 no
+  NOK             268      -0.0000      -0.0000  +0.0000 no
+  DRAM            271      -0.1070      -0.0406  -0.0664 no
+  DOGE/USD        286      -0.2413      -0.1923  -0.0490 no
+  XRP/USD         283      -0.1449      -0.2862  +0.1413 no
+  NU              268      -0.6604      -0.3284  -0.3321 no
+  T               265      -0.3321      -0.3321  +0.0000 no
+  AAL             275      -0.3345      -0.3345  +0.0000 no
+  COIN            272      -0.6765      -0.3456  -0.3309 no
+  LINK/USD        285      -0.1614      -0.4035  +0.2421 no
+  RIVN            266      -0.4323      -0.4737  +0.0414 no
+  SOL/USD         284      -0.5246      -0.4894  -0.0352 no
+  CLRO            272      -0.5588      -0.5588  +0.0000 no
+  ETH/USD         285      -0.5509      -0.5684  +0.0175 no
+  HYG             270      -0.6519      -0.6370  -0.0148 no
+  AAPL            275      -0.6473      -0.6473  +0.0000 no
+  AMD             273      -0.6557      -0.6557  +0.0000 no
+  TQQQ            265      -0.6642      -0.6642  +0.0000 no
+  SNDK            266      -0.6654      -0.6654  +0.0000 no
+  SOXL            266      -0.5677      -0.6654  +0.0977 no
+  SOXS            266      -0.5677      -0.6654  +0.0977 no
+  INTC            269      -0.2937      -0.6654  +0.3717 no
+  CRNX            272      -0.6654      -0.6654  +0.0000 no
+  APP             272      -0.6654      -0.6654  +0.0000 no
+  BITO            272      -0.3272      -0.6765  +0.3493 no
+  LQD             269      -0.3383      -0.6840  +0.3457 no
+  NVDA            268      -0.7015      -0.7015  +0.0000 no
+  QQQ             267      -0.8015      -0.8914  +0.0899 no
+  SNXX            266      -0.9023      -0.9023  +0.0000 no
+
+## GBM leg · v10 · 1w — labeled rows 12783 (hash 2dcc6c637562ce66)
+  with shortcuts (pre-A7)  graded=   0 admitted(lift>0)=   0 (0.0%) meanLift=+0.0000 medianLift=+0.0000 NwLift=+0.0000 OOS-N=0
+  without (shipped)        graded=   0 admitted(lift>0)=   0 (0.0%) meanLift=+0.0000 medianLift=+0.0000 NwLift=+0.0000 OOS-N=0
+
+## alphax leg (pooled) · v3+ · 1d — pooled rows 50000 (hash ed439e23dbeb02ab)
+  with shortcuts (pre-A7) lift=-0.0045 acc=0.4957 base=0.5001 auc=0.4947 N=3807 → GATED OUT
+  without (shipped)       lift=-0.0084 acc=0.4917 base=0.5001 auc=0.4909 N=3807 → GATED OUT
+  Δlift (with − without): +0.0039
+
+## alphax leg (pooled) · v3+ · 1w — pooled rows 50000 (hash d227e79492c3a0f9)
+  with shortcuts (pre-A7) refused: too few distinct days for purged walk-forward folds
+  without (shipped)       refused: too few distinct days for purged walk-forward folds
+

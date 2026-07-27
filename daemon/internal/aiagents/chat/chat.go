@@ -137,12 +137,12 @@ func Snapshot(ctx context.Context, st *store.Store) (string, error) {
 	}
 
 	b.WriteString("\nMARKET BREADTH: ")
-	b.WriteString(fmt.Sprintf("%d symbols tracked", len(syms)))
+	fmt.Fprintf(&b, "%d symbols tracked", len(syms))
 	if truncated {
-		b.WriteString(fmt.Sprintf(" (only the first %d shown in this snapshot)", maxSnapshotSymbols))
+		fmt.Fprintf(&b, " (only the first %d shown in this snapshot)", maxSnapshotSymbols)
 	}
-	b.WriteString(fmt.Sprintf("; %d with a 1d score: %d buy-leaning, %d sell-leaning, %d balanced.\n",
-		scored, pos, neg, neu))
+	fmt.Fprintf(&b, "; %d with a 1d score: %d buy-leaning, %d sell-leaning, %d balanced.\n",
+		scored, pos, neg, neu)
 
 	return b.String(), nil
 }

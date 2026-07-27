@@ -2,6 +2,7 @@ package researchx
 
 import (
 	"math"
+	"reflect"
 	"testing"
 )
 
@@ -72,6 +73,19 @@ func unit(a, b, salt int64) float64 {
 
 func coin(a, b, salt int64) bool { return hash64(a+salt, b)&1 == 0 }
 
+// survivors filters Discover's full judged output down to the rules that
+// cleared every gate. Discover returns the rejections too — that is what makes
+// the search auditable — so every survivor assertion must filter first.
+func survivors(cands []Candidate) []Candidate {
+	var out []Candidate
+	for _, c := range cands {
+		if c.Survives {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // ── the failure the module exists to prevent ────────────────────────────────
 
 // A grid search over pure noise must return NOTHING. 48 rules at alpha=0.05
@@ -80,7 +94,7 @@ func coin(a, b, salt int64) bool { return hash64(a+salt, b)&1 == 0 }
 func TestDiscoverRejectsPureNoise(t *testing.T) {
 	for _, salt := range []int64{0, 101, 202, 303, 404} {
 		obs := noiseObs(80, 40, salt)
-		if got := Discover(obs, DiscoverConfig{}); len(got) != 0 {
+		if got := survivors(Discover(obs, DiscoverConfig{})); len(got) != 0 {
 			for _, c := range got {
 				t.Errorf("salt %d: noise rule survived: %s wl=%.4f weeks=%d/%d",
 					salt, c.Desc, c.WilsonLower, c.Grade.WinWeeks, c.Grade.Weeks)
@@ -92,7 +106,7 @@ func TestDiscoverRejectsPureNoise(t *testing.T) {
 // The control: the same harness on a planted edge must still find it. Without
 // this, "rejects everything" would pass the test above for the wrong reason.
 func TestDiscoverFindsAPlantedEdge(t *testing.T) {
-	got := Discover(edgeObs(80, 40, 55), DiscoverConfig{})
+	got := survivors(Discover(edgeObs(80, 40, 55), DiscoverConfig{}))
 	if len(got) == 0 {
 		t.Fatal("planted 92% inverse-pressure edge found nothing — the harness rejects everything, " +
 			"which would make the noise test vacuous")
@@ -121,7 +135,7 @@ func TestRepeatedSearchesTightenTheBar(t *testing.T) {
 				night+1, div, lastDiv)
 		}
 		lastDiv = div
-		if got := Discover(obs, cfg); len(got) != 0 {
+		if got := survivors(Discover(obs, cfg)); len(got) != 0 {
 			t.Fatalf("night %d: noise rule survived %d re-searches: %s", night+1, night, got[0].Desc)
 		}
 	}
@@ -152,7 +166,7 @@ func TestDiscoverAlphaIsNotConfigurable(t *testing.T) {
 // A survivor must carry the correction it actually cleared, or the claim
 // "survived Bonferroni" is unauditable from the record.
 func TestCandidateRecordsItsDivisor(t *testing.T) {
-	got := Discover(edgeObs(80, 40, 55), DiscoverConfig{PriorSearches: 2})
+	got := survivors(Discover(edgeObs(80, 40, 55), DiscoverConfig{PriorSearches: 2}))
 	if len(got) == 0 {
 		t.Skip("planted edge did not survive at 3 searches — covered by TestDiscoverFindsAPlantedEdge")
 	}
@@ -160,6 +174,49 @@ func TestCandidateRecordsItsDivisor(t *testing.T) {
 	for _, c := range got {
 		if c.Divisor != want {
 			t.Errorf("%s recorded divisor %d, want %d", c.ID, c.Divisor, want)
+		}
+	}
+}
+
+// A search that returns only its winners is unauditable: a grid that found
+// nothing is indistinguishable from a grid that never ran. Discover must hand
+// back EVERY judged rule, each rejection naming the gate that killed it and
+// carrying the divisor it was judged under.
+func TestDiscoverReturnsItsRejections(t *testing.T) {
+	cfg := DiscoverConfig{}
+	all := Discover(noiseObs(80, 40, 0), cfg)
+	if want := len(discoverGrid(48)); len(all) != want {
+		t.Fatalf("judged %d rules, want the whole %d-rule grid", len(all), want)
+	}
+	if n := len(survivors(all)); n != 0 {
+		t.Fatalf("%d noise rules survived — the noise test's premise is broken", n)
+	}
+	gates := map[string]bool{}
+	for _, c := range all {
+		if c.RejectedBy == "" {
+			t.Errorf("%s is a rejection with no gate named", c.ID)
+		}
+		if c.Divisor != cfg.Divisor() {
+			t.Errorf("%s recorded divisor %d, want %d", c.ID, c.Divisor, cfg.Divisor())
+		}
+		gates[c.RejectedBy] = true
+	}
+	for g := range gates {
+		switch g {
+		case RejectMinWeeks, RejectWilson, RejectRegimeSurvival,
+			RejectFragile, RejectCounterfactual:
+		default:
+			t.Errorf("unknown rejection gate %q", g)
+		}
+	}
+}
+
+// A survivor must never carry a rejection gate, or the ledger's
+// status='rejected' rows and its shadow rows would disagree with each other.
+func TestSurvivorsCarryNoGate(t *testing.T) {
+	for _, c := range survivors(Discover(edgeObs(80, 40, 55), DiscoverConfig{})) {
+		if c.RejectedBy != "" {
+			t.Errorf("survivor %s claims gate %q", c.ID, c.RejectedBy)
 		}
 	}
 }
@@ -234,5 +291,148 @@ func TestWilsonLowerBounds(t *testing.T) {
 	// under any usable bar.
 	if got := wilsonLower(1.0, 3, z); got > 0.45 {
 		t.Errorf("wilsonLower(1.0, 3) = %.4f — a 3-week perfect record must not clear a 0.5 bar", got)
+	}
+}
+
+// ── the null the gates score against ────────────────────────────────────────
+
+// RegimeSurvival and FragileThreshold used to score eras against a 0.5 literal
+// while Discover had already MEASURED that the no-skill week-win rate is not
+// 0.5 (a week trial is won only by beating that week's own folded majority).
+// Both now take that measured p0. Because p0 is floored at max(0.5, ·), the
+// substitution must be strictly one-directional: for any p0 >= 0.5 the gates
+// may only admit a SUBSET of what the 0.5 versions admitted. A rule that the
+// old literal rejected can never become a survivor under the measured null.
+func TestMeasuredNullOnlyNarrowsTheGates(t *testing.T) {
+	obs := edgeObs(80, 40, 55)
+	cfg := DiscoverConfig{}.withDefaults()
+	grid := discoverGrid(cfg.MaxCandidates)
+	for _, p0 := range []float64{0.5, 0.52, 0.55, 0.6, 0.7} {
+		for _, r := range grid {
+			g := GradeWeeks(obs, r, cfg.MinWeekObs)
+			base := RegimeSurvival(g, 8, 0.5)
+			got := RegimeSurvival(g, 8, p0)
+			if got.Survives && !base.Survives {
+				t.Errorf("p0=%.2f: %s survives the measured-null era gate but not the 0.5 gate — "+
+					"raising the null must never admit a new rule", p0, ruleDesc(r))
+			}
+			if got.PositiveEras > base.PositiveEras {
+				t.Errorf("p0=%.2f: %s has %d positive eras vs %d at 0.5 — non-monotonic",
+					p0, ruleDesc(r), got.PositiveEras, base.PositiveEras)
+			}
+			_, baseFragile := FragileThreshold(obs, r, cfg.MinWeekObs, 0.5)
+			_, gotFragile := FragileThreshold(obs, r, cfg.MinWeekObs, p0)
+			if baseFragile && !gotFragile && winRate(g) > p0 {
+				t.Errorf("p0=%.2f: %s is fragile at the 0.5 null but robust at the measured one — "+
+					"raising the null must never rescue a knife-edge fit", p0, ruleDesc(r))
+			}
+		}
+	}
+}
+
+// The p0 argument must be REQUIRED, not a package-level default a call site can
+// silently omit — omission is exactly how the 0.5 literal survived this long.
+// Signature-level assertion: both gates take an explicit trailing float64.
+func TestNullP0IsARequiredArgument(t *testing.T) {
+	for name, fn := range map[string]any{
+		"RegimeSurvival":   RegimeSurvival,
+		"FragileThreshold": FragileThreshold,
+	} {
+		ft := reflect.TypeOf(fn)
+		if ft.IsVariadic() {
+			t.Errorf("%s is variadic — p0 must not be omittable", name)
+			continue
+		}
+		last := ft.In(ft.NumIn() - 1)
+		if last.Kind() != reflect.Float64 {
+			t.Errorf("%s's last parameter is %s, want float64 p0 (the measured no-skill rate)", name, last)
+		}
+	}
+}
+
+// ── the blind final era ─────────────────────────────────────────────────────
+
+// shiftWeeks moves an observation set forward by wkOffset weeks and stamps it
+// with an era, so two independently generated blocks can be concatenated into
+// one chronological corpus.
+func shiftWeeks(obs []Obs, wkOffset int64, era string) []Obs {
+	out := make([]Obs, len(obs))
+	for i, o := range obs {
+		o.Week += wkOffset
+		o.Ts = o.Week * 604800
+		o.Era = era
+		out[i] = o
+	}
+	return out
+}
+
+// The point of a holdout: a rule fitted on a period where the edge is real, in
+// a corpus whose FINAL era is pure noise, must not reach "shadow". Without the
+// holdout gate the noise era is just 1/4 of one pooled sample and the rule
+// survives; with it, the rule has to repeat on data the grid never saw.
+func TestHoldoutEraRejectsAnEdgeThatDoesNotRepeat(t *testing.T) {
+	obs := append(edgeObs(80, 40, 55), shiftWeeks(noiseObs(30, 40, 909), 80, "y2026")...)
+
+	pooled := survivors(Discover(obs, DiscoverConfig{}))
+	if len(pooled) == 0 {
+		t.Fatal("fixture is vacuous: the pooled search found nothing even before the holdout gate")
+	}
+	blind := Discover(obs, DiscoverConfig{HoldoutEra: "y2026"})
+	if got := survivors(blind); len(got) != 0 {
+		t.Errorf("%d rule(s) reached shadow despite failing on the blind era, e.g. %s (holdout wl=%.4f vs p0=%.4f over %d weeks)",
+			len(got), got[0].Desc, got[0].HoldoutWilsonLower, got[0].HoldoutNullP0, got[0].HoldoutWeeks)
+	}
+	var killed int
+	for _, c := range blind {
+		if c.RejectedBy == RejectHoldout {
+			killed++
+			if c.HoldoutWeeks == 0 || c.HoldoutEra != "y2026" {
+				t.Errorf("%s ledgered a holdout rejection with no evidence: era=%q weeks=%d",
+					c.ID, c.HoldoutEra, c.HoldoutWeeks)
+			}
+		}
+	}
+	if killed == 0 {
+		t.Error("no candidate was ledgered with RejectedBy=holdout — the kills must be auditable, not silent")
+	}
+}
+
+// The control: an edge that IS present in the blind era still survives. A gate
+// that rejects everything would make the test above vacuous.
+func TestHoldoutEraKeepsAnEdgeThatRepeats(t *testing.T) {
+	obs := append(edgeObs(80, 40, 55), shiftWeeks(edgeObs(30, 40, 606), 80, "y2026")...)
+	got := survivors(Discover(obs, DiscoverConfig{HoldoutEra: "y2026"}))
+	if len(got) == 0 {
+		t.Fatal("a genuinely repeating edge was killed by the holdout gate")
+	}
+	for _, c := range got {
+		if c.HoldoutWilsonLower <= c.HoldoutNullP0 {
+			t.Errorf("%s survived with holdout wl=%.4f <= p0=%.4f", c.ID, c.HoldoutWilsonLower, c.HoldoutNullP0)
+		}
+	}
+}
+
+// A holdout can only ever remove survivors. Whatever the data, the blind-era
+// run's survivor set must be a subset of the pooled run's.
+func TestHoldoutNeverPromotes(t *testing.T) {
+	for _, salt := range []int64{0, 101, 202, 55} {
+		obs := append(edgeObs(80, 40, salt), shiftWeeks(edgeObs(30, 40, salt+7), 80, "y2026")...)
+		pooled := map[string]bool{}
+		for _, c := range survivors(Discover(obs, DiscoverConfig{})) {
+			pooled[c.ID] = true
+		}
+		for _, c := range survivors(Discover(obs, DiscoverConfig{HoldoutEra: "y2026"})) {
+			if !pooled[c.ID] {
+				t.Errorf("salt %d: %s survives WITH the holdout but not without it — a holdout must only subtract", salt, c.ID)
+			}
+		}
+	}
+}
+
+// Too little held-out history is a rejection, not a free pass.
+func TestHoldoutTooShortIsRejected(t *testing.T) {
+	obs := append(edgeObs(80, 40, 55), shiftWeeks(edgeObs(3, 40, 606), 80, "y2026")...)
+	if got := survivors(Discover(obs, DiscoverConfig{HoldoutEra: "y2026"})); len(got) != 0 {
+		t.Errorf("%d rule(s) survived on a 3-week holdout — unconfirmable is not confirmed", len(got))
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 )
 
 // Candidate is one auto-discovered rule with its full judgment record.
@@ -19,12 +21,65 @@ type Candidate struct {
 	CF          CFReport
 	Survival    SurvivalReport
 	WilsonLower float64 // lower bound at the corrected alpha below
+	// NullP0 is the win rate the Wilson lower bound was actually compared
+	// against: max(0.5, CF.NullMatched.WinRate). A week trial is scored a win
+	// against that week's OWN folded majority max(upRate, 1-upRate), so the
+	// no-skill week-win rate is not 0.5 and assuming it was understated the
+	// bar. The null arm keeps the same matched observations and only
+	// randomizes direction, so its realised week-win rate is the null this
+	// rule faced. The max(0.5, …) floor makes the substitution strictly
+	// one-directional: the bar can rise, never fall.
+	NullP0 float64
+	// NullWeeks is how many week-trials the null arm was measured over —
+	// without it NullP0 is a number of unknown precision.
+	NullWeeks int
 	// Divisor is the Bonferroni divisor this candidate cleared. Recorded on the
 	// row because "survived Bonferroni correction" is unauditable without the
 	// number that was corrected for.
 	Divisor  int
 	Survives bool
+	// HoldoutEra is the pre-registered final era the grid never graded on
+	// ("" when no holdout was configured). The four gates above are all
+	// computed on the in-sample corpus EXCLUDING this era.
+	HoldoutEra string
+	// HoldoutWeeks / HoldoutWilsonLower / HoldoutNullP0 record the blind
+	// confirmation: the same Wilson-vs-measured-null test re-run on the
+	// held-out era alone. A candidate that cleared every in-sample gate is
+	// still rejected (RejectedBy=RejectHoldout) unless HoldoutWilsonLower
+	// exceeds HoldoutNullP0 over at least MinHoldoutWeeks week-trials. The
+	// numbers are ledgered on rejections too — "failed out of sample" is only
+	// auditable with the bound it failed against.
+	HoldoutWeeks       int
+	HoldoutWilsonLower float64
+	HoldoutNullP0      float64
+	// RejectedBy names the gate that killed this rule ("" when it survived).
+	// A search that returns only its winners is unauditable by construction:
+	// without the rejections there is no way to tell a grid that found nothing
+	// from a grid that was never run, and no way to detect the same rule being
+	// re-tested until it passes.
+	RejectedBy string
 }
+
+// Rejection gate names recorded in Candidate.RejectedBy.
+const (
+	RejectMinWeeks       = "min_weeks"
+	RejectWilson         = "wilson_lower"
+	RejectRegimeSurvival = "regime_survival"
+	RejectFragile        = "fragile_threshold"
+	RejectCounterfactual = "counterfactual"
+	RejectHoldout        = "holdout"
+)
+
+// PreregHoldoutEra is the pre-registered blind era: the discovery grid never
+// grades on it, and a candidate that clears every in-sample gate must clear
+// the Wilson bound against its own measured null a SECOND time on this era
+// alone before Survives can be true. It is a package constant, and frozen in
+// the PREREGISTRATION.md hash chain, for the same reason MaxAlpha is: a
+// holdout an operator can retarget after seeing the result is not a holdout.
+//
+// It matches histfeat.EraY2026 (2026-01-01..) by value rather than by import;
+// researchx is the pure analysis core and takes no dependencies.
+const PreregHoldoutEra = "y2026"
 
 // MaxAlpha is the family-wise significance level the grid search runs at. It is
 // a package CONSTANT and not a DiscoverConfig field: a false-discovery guardrail
@@ -46,6 +101,19 @@ type DiscoverConfig struct {
 	// that leaves it zero is correcting for one night's grid while taking many
 	// nights' chances.
 	PriorSearches int
+	// HoldoutEra is the era name withheld from the grid entirely. Every
+	// existing gate is computed on the observations NOT in this era, and a
+	// candidate that clears them all must then clear the Wilson bound against
+	// its own measured null on this era alone. Empty means no holdout, which
+	// is the pre-2026-07-27 behaviour and is only correct for callers that are
+	// not conducting a search (replays, tests). The scheduled loop passes
+	// PreregHoldoutEra.
+	HoldoutEra string
+	// MinHoldoutWeeks is the minimum week-trials the held-out era must supply
+	// before a confirmation means anything, default MinWeeksPerEra. Too few
+	// and the candidate is rejected, not waved through: an unconfirmable rule
+	// is not a confirmed one.
+	MinHoldoutWeeks int
 }
 
 func (c DiscoverConfig) withDefaults() DiscoverConfig {
@@ -63,6 +131,9 @@ func (c DiscoverConfig) withDefaults() DiscoverConfig {
 	}
 	if c.PriorSearches < 0 {
 		c.PriorSearches = 0
+	}
+	if c.MinHoldoutWeeks <= 0 {
+		c.MinHoldoutWeeks = c.MinWeeksPerEra
 	}
 	return c
 }
@@ -139,9 +210,14 @@ func discoverGrid(maxRules int) []Rule {
 	return rules
 }
 
-// Discover runs the bounded deterministic grid over obs and returns the
-// SURVIVING candidates, sorted by ID. Every candidate is judged: the
-// week-trial winrate's Bonferroni-corrected Wilson lower bound must exceed 0.5,
+// Discover runs the bounded deterministic grid over obs and returns EVERY
+// judged candidate, sorted by ID — survivors carry Survives=true and an empty
+// RejectedBy, rejections carry Survives=false and the name of the gate that
+// killed them. Callers that want survivors only filter on Survives; the
+// rejections exist so the search is auditable and so a re-test of an
+// already-killed rule is detectable. Every candidate is judged: the
+// week-trial winrate's Bonferroni-corrected Wilson lower bound must exceed the
+// MEASURED null-matched week-win rate floored at 0.5 (Candidate.NullP0),
 // AND the grade must survive RegimeSurvival, AND the thresholds must not be
 // fragile, AND (multi-cond rules only) the counterfactual must show incremental
 // value. Grades below MinWeeks are never judged — too little history to claim
@@ -160,34 +236,136 @@ func Discover(obs []Obs, cfg DiscoverConfig) []Candidate {
 	}
 	divisor := cfg.Divisor()
 	z := normalQuantile(1 - cfg.CorrectedAlpha())
+	// THE BLIND ERA. The grid — and therefore every gate below — sees only
+	// inSample. holdout is never graded until a candidate has already survived
+	// on data it was fitted to, so "shadow" now requires one result the search
+	// could not have selected for. Whole weeks move together (a week's era is
+	// the era of its latest obs, as gradeArm defines it) so no week's
+	// cross-sectional percentile ranks are computed over half a cross-section.
+	inSample, holdout := splitHoldout(obs, cfg.HoldoutEra)
 	var out []Candidate
-	for _, r := range grid {
-		g := GradeWeeks(obs, r, cfg.MinWeekObs)
-		if g.Weeks < cfg.MinWeeks {
-			continue
-		}
-		wl := wilsonLower(winRate(g), g.Weeks, z)
-		if wl <= 0.5 {
-			continue
-		}
-		sv := RegimeSurvival(g, cfg.MinWeeksPerEra)
-		if !sv.Survives {
-			continue
-		}
-		if _, fragile := FragileThreshold(obs, r, cfg.MinWeekObs); fragile {
-			continue
-		}
-		cf := Counterfactual(obs, r, cfg.MinWeekObs, cfg.MinWeeks)
-		if len(r.Conds) > 1 && !cf.AddsValue {
-			continue
-		}
-		out = append(out, Candidate{
+	cand := func(r Rule, gate string, g WeekGrade, wl, p0 float64, nw int, sv SurvivalReport, cf CFReport, h holdoutResult) Candidate {
+		return Candidate{
 			ID: ruleID(r), Rule: r, Desc: ruleDesc(r), Grade: g, CF: cf,
-			Survival: sv, WilsonLower: wl, Divisor: divisor, Survives: true,
-		})
+			Survival: sv, WilsonLower: wl, NullP0: p0, NullWeeks: nw,
+			HoldoutEra: cfg.HoldoutEra, HoldoutWeeks: h.weeks,
+			HoldoutWilsonLower: h.wilsonLower, HoldoutNullP0: h.nullP0,
+			Divisor: divisor, Survives: gate == "", RejectedBy: gate,
+		}
+	}
+	reject := func(r Rule, gate string, g WeekGrade, wl, p0 float64, nw int, sv SurvivalReport, cf CFReport) {
+		out = append(out, cand(r, gate, g, wl, p0, nw, sv, cf, holdoutResult{}))
+	}
+	for _, r := range grid {
+		g := GradeWeeks(inSample, r, cfg.MinWeekObs)
+		if g.Weeks < cfg.MinWeeks {
+			reject(r, RejectMinWeeks, g, 0, 0, 0, SurvivalReport{}, CFReport{})
+			continue
+		}
+		// MEASURED null, not an assumed one. The counterfactual is computed
+		// here rather than after the Wilson gate so the null arm it already
+		// grades — same matched obs, direction randomized — can supply the
+		// rate this rule is judged against. Floored at 0.5 so no rule ever
+		// becomes easier to clear than under the old literal.
+		cf := Counterfactual(inSample, r, cfg.MinWeekObs, cfg.MinWeeks)
+		p0 := math.Max(0.5, cf.NullMatched.WinRate)
+		nullWeeks := cf.NullMatched.Grade.Weeks
+		wl := wilsonLower(winRate(g), g.Weeks, z)
+		if wl <= p0 {
+			reject(r, RejectWilson, g, wl, p0, nullWeeks, SurvivalReport{}, cf)
+			continue
+		}
+		sv := RegimeSurvival(g, cfg.MinWeeksPerEra, p0)
+		if !sv.Survives {
+			reject(r, RejectRegimeSurvival, g, wl, p0, nullWeeks, sv, cf)
+			continue
+		}
+		if _, fragile := FragileThreshold(inSample, r, cfg.MinWeekObs, p0); fragile {
+			reject(r, RejectFragile, g, wl, p0, nullWeeks, sv, cf)
+			continue
+		}
+		if len(r.Conds) > 1 && !cf.AddsValue {
+			reject(r, RejectCounterfactual, g, wl, p0, nullWeeks, sv, cf)
+			continue
+		}
+		// LAST GATE, AND ONLY OUT OF SAMPLE. Everything above was measured on
+		// data the grid searched; this is not. A candidate confirms only by
+		// clearing the same corrected Wilson bound against the null it
+		// measures on the blind era itself.
+		h := judgeHoldout(holdout, r, cfg, z)
+		if !h.ok {
+			out = append(out, cand(r, RejectHoldout, g, wl, p0, nullWeeks, sv, cf, h))
+			continue
+		}
+		out = append(out, cand(r, "", g, wl, p0, nullWeeks, sv, cf, h))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// splitHoldout partitions obs into (in-sample, held-out) by WEEK, assigning
+// each week to the era of its latest observation — the same convention
+// gradeArm uses when a week straddles an era boundary. Splitting by week and
+// not by row keeps every week's cross-section intact on exactly one side, so
+// within-week percentile conditions mean the same thing in both arms. An
+// empty era name yields (obs, nil): no holdout, no split.
+func splitHoldout(obs []Obs, era string) (inSample, holdout []Obs) {
+	if era == "" {
+		return obs, nil
+	}
+	type mark struct {
+		maxTs int64
+		era   string
+	}
+	weekEra := map[int64]mark{}
+	for _, o := range obs {
+		m, ok := weekEra[o.Week]
+		if !ok || o.Ts > m.maxTs {
+			weekEra[o.Week] = mark{maxTs: o.Ts, era: o.Era}
+		}
+	}
+	for _, o := range obs {
+		if weekEra[o.Week].era == era {
+			holdout = append(holdout, o)
+		} else {
+			inSample = append(inSample, o)
+		}
+	}
+	return inSample, holdout
+}
+
+// holdoutResult is the blind-era confirmation of one candidate.
+type holdoutResult struct {
+	weeks       int
+	wilsonLower float64
+	nullP0      float64
+	ok          bool
+}
+
+// judgeHoldout re-runs the Wilson-vs-measured-null test on the held-out era
+// alone, at the SAME corrected alpha. Insufficient held-out week-trials is a
+// failure, not a pass: a rule that cannot be checked out of sample has not
+// been checked. With no holdout configured (empty obs) it reports ok=true and
+// zero weeks, which is the pre-holdout behaviour and is visible as such on the
+// ledgered row.
+func judgeHoldout(holdout []Obs, r Rule, cfg DiscoverConfig, z float64) holdoutResult {
+	if len(holdout) == 0 && cfg.HoldoutEra == "" {
+		return holdoutResult{ok: true}
+	}
+	hg := GradeWeeks(holdout, r, cfg.MinWeekObs)
+	res := holdoutResult{weeks: hg.Weeks}
+	if hg.Weeks < cfg.MinHoldoutWeeks {
+		return res
+	}
+	// The null is measured on the blind era's own matched observations —
+	// importing the in-sample null would reintroduce exactly the dependence
+	// this gate exists to break. Floored at 0.5 as everywhere else, so the
+	// substitution can only raise the bar.
+	hcf := Counterfactual(holdout, r, cfg.MinWeekObs, cfg.MinHoldoutWeeks)
+	res.nullP0 = math.Max(0.5, hcf.NullMatched.WinRate)
+	res.wilsonLower = wilsonLower(winRate(hg), hg.Weeks, z)
+	res.ok = res.wilsonLower > res.nullP0
+	return res
 }
 
 // ruleID derives the stable candidate ID: "AD-" + hex(sha1(canonical
@@ -226,25 +404,18 @@ func ruleDesc(r Rule) string {
 	return fmt.Sprintf("Auto-discovered weekly rule: %s when %s (week-trial graded)", r.Call, strings.Join(parts, " and "))
 }
 
-// wilsonLower and normalQuantile are copied from internal/researchlab
-// (unexported there) so researchx stays self-contained.
-
 // wilsonLower returns the lower bound of the Wilson score interval for a
 // proportion phat over n trials at the given z. Returns 0 for n<=0.
+//
+// It delegates to clusterstat.WilsonEffAt — the ONE Wilson implementation in
+// the tree — with effN = n. The raw count is the right unit at this gate's one
+// call site: n is g.Weeks, already one trial per WEEK, which is the clustered
+// unit of this discovery loop, not a symbol-day row count.
 func wilsonLower(phat float64, n int, z float64) float64 {
 	if n <= 0 {
 		return 0
 	}
-	nf := float64(n)
-	z2 := z * z
-	denom := 1 + z2/nf
-	center := phat + z2/(2*nf)
-	margin := z * math.Sqrt(phat*(1-phat)/nf+z2/(4*nf*nf))
-	lb := (center - margin) / denom
-	if lb < 0 {
-		return 0
-	}
-	return lb
+	return clusterstat.WilsonEffAt(phat, float64(n), z).Lo
 }
 
 // normalQuantile is the inverse standard-normal CDF (probit) via Acklam's

@@ -208,7 +208,7 @@ func TestCounterfactualAblatesEachCondition(t *testing.T) {
 
 func TestRegimeSurvivalGates(t *testing.T) {
 	mk := func(eras []EraGrade, weeks int) SurvivalReport {
-		return RegimeSurvival(WeekGrade{Weeks: weeks, ByEra: eras}, 8)
+		return RegimeSurvival(WeekGrade{Weeks: weeks, ByEra: eras}, 8, 0.5)
 	}
 	twoGood := []EraGrade{{Era: "a", Weeks: 20, WinWeeks: 14}, {Era: "b", Weeks: 20, WinWeeks: 13}}
 	if r := mk(twoGood, 40); !r.Survives || r.PositiveEras != 2 || r.GradedEras != 2 {
@@ -242,11 +242,11 @@ func TestRegimeSurvivalGates(t *testing.T) {
 // report "not fragile" rather than manufacture a verdict.
 func TestFragileThresholdNothingToPerturb(t *testing.T) {
 	obs := week(1, 20, 12, -1)
-	if w, f := FragileThreshold(obs, Rule{Call: "long"}, 10); w != 1 || f {
+	if w, f := FragileThreshold(obs, Rule{Call: "long"}, 10, 0.5); w != 1 || f {
 		t.Errorf("unconditioned rule: worst=%.2f fragile=%v, want 1/false", w, f)
 	}
 	r := Rule{Call: "long", Conds: []Cond{{Key: "pressure_score", Op: "<=", Val: 0}}}
-	if w, f := FragileThreshold(obs, r, 10); w != 1 || f {
+	if w, f := FragileThreshold(obs, r, 10, 0.5); w != 1 || f {
 		t.Errorf("no positive edge: worst=%.2f fragile=%v, want 1/false", w, f)
 	}
 }
@@ -288,7 +288,7 @@ func TestFragileThresholdCatchesAKnifeEdge(t *testing.T) {
 	if g := GradeWeeks(obs, r, 5); g.WinWeeks != g.Weeks || g.Weeks == 0 {
 		t.Fatalf("fixture broken: unperturbed rule won %d/%d weeks, want all", g.WinWeeks, g.Weeks)
 	}
-	worst, fragile := FragileThreshold(obs, r, 5)
+	worst, fragile := FragileThreshold(obs, r, 5, 0.5)
 	if !fragile {
 		t.Errorf("knife-edge threshold reported robust (worst retained %.3f)", worst)
 	}

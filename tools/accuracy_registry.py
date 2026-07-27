@@ -30,7 +30,10 @@ Discipline enforced here, learned from the failures this repo already found:
   * SURVIVORSHIP boundary. symbols.delisted_at only exists since the 2026-07-24
     survivorship wave (store.go), so everything recorded before it was graded
     against a universe seeded from 2026 survivors. Pre-epoch rows never enter a
-    tally here; every published row is stamped survivorship_clean accordingly.
+    tally here. survivorship_clean is then MEASURED, not asserted: over the
+    symbols actually contributing graded rows, the flag is true only when every
+    one of their listing statuses resolves (delisted_at set, or still active);
+    otherwise the row publishes false plus survivorship_reason and coverage.
     Post-epoch attrition is BOUNDED, not declared unmeasurable:
     tools/backfill_delistings.py --survivorship-bound counts symbols that left
     the universe (SEC EDGAR Form 25 record UNION the live detector's stamps)
@@ -62,10 +65,12 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import hashlib
 import json
 import math
 import os
 import sqlite3
+import statistics
 import sys
 
 DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -80,27 +85,819 @@ MIN_INDEPENDENT_N = 30
 # different way to be overconfident.
 MIN_DISTINCT_DAYS = 10
 
+# STRUCTURAL predictors only. regime_outcomes freezes one call per
+# (symbol, kind, UTC-day) at horizon_days=21, so 21 consecutive call days share
+# at least 17 of their 21 forward sessions: they are ONE independent forward
+# window wearing 21 costumes. Clustering on the call day therefore still
+# pseudo-replicates, exactly the failure PREDICTION_PROCESS.md point 8 names and
+# that internal/volregime and the PAIRS study already avoid with non-overlapping
+# 63d windows. Structural grading clusters on integer horizon BLOCKS
+# (day // horizon_days) instead, and this is the floor on how many
+# NON-OVERLAPPING blocks must exist before any interval is published.
+# Directional grading is untouched: at horizon 1 a block IS a day, and the
+# auto-retire rule's frozen digest still pins MIN_DISTINCT_DAYS.
+MIN_DISTINCT_BLOCKS = 10
+
+# --------------------------------------------------------------------------- #
+# MULTIPLICITY — what the published interval's error rate actually is
+# --------------------------------------------------------------------------- #
+#
+# Every interval on this surface was a hard-coded z=1.96, i.e. a nominal 95%,
+# and that number was never true of the surface as a whole. Two multiplicities
+# are paid here and neither was priced:
+#
+#   * FAMILY. One run publishes ~10 rows simultaneously (directional horizons,
+#     their prequential benchmarks, every structural kind, every persistence
+#     twin). "The 95% interval" describes ONE of them; the chance that at least
+#     one of ten independent 95% intervals excludes its null is ~40%, not 5%.
+#   * LOOKS. ops/com.signaldeck.accuracy.plist re-grades the SAME accruing rows
+#     every day. Repeatedly re-testing a growing sample and reading a verdict
+#     off whichever look crosses the bar is the oldest optional-stopping error
+#     there is, and only the FAILED direction had any frozen stopping rule.
+#
+# researchx.DiscoverConfig.Divisor() already prices the grid and the prior
+# searches INSIDE discovery. This is the same discipline applied to the surface
+# that actually publishes verdicts.
+#
+# The correction is strictly interval-WIDENING by construction (see
+# corrected_z): it can turn VALIDATED into NO SKILL or HOLDING into WIDE and
+# never the reverse, and it cannot move a point estimate by a single basis
+# point. It makes the bar harder, and it is fixed by pre-registration rather
+# than by outcome — the divisor is a rule frozen on the chain, not a knob.
+MAX_ALPHA = 0.05
+
+# The rule itself, frozen on the pre-registration chain and compared
+# byte-for-byte against prereg.MultiplicityRule in the Go daemon. A grader
+# running a different rule than the chain froze does not grade (see
+# grader_registration_error).
+#
+# NOTE ON THE HALF-ALPHA. The interval is TWO-SIDED — verdict_for reads both
+# ends (hi < null -> FAILED, lo > null -> VALIDATED) — so the corrected alpha
+# is split across the two tails, exactly as the uncorrected 1.96 = probit(1 -
+# 0.05/2) always was. Spending the whole corrected alpha in one tail would make
+# the divisor=1 case z=1.645, i.e. NARROWER than what it replaced, which would
+# be a loosening dressed as a correction. The explicit floor below makes that
+# impossible in either direction.
+MULTIPLICITY_RULE = (
+    "Published intervals are Bonferroni-corrected for both multiplicities this "
+    "surface pays: FAMILY (rows published in the same grading cycle) and LOOKS "
+    "(grading cycles taken over the same accruing rows). "
+    "divisor = family_size * looks; corrected_alpha = maxAlpha / divisor; "
+    "z = probit(1 - corrected_alpha/2), floored at the uncorrected two-sided z "
+    "so the correction can only ever WIDEN an interval, never narrow one. "
+    "family_size is the number of rows the cycle actually publishes, measured "
+    "from the rows themselves, then folded with max() against the largest "
+    "family ever published on the grading-look chain and the family the last "
+    "published registry JSON declared, so publishing fewer rows can never "
+    "refund multiplicity a wider family already spent. "
+    "looks is the monotone count of 'grading-look' "
+    "records on the pre-registration chain, folded with max() over the record "
+    "count, the counters those records carry, and the looks already published "
+    "in the registry JSON, so neither log rotation nor a re-cut snapshot can "
+    "refund a look already taken."
+)
+
+# The uncorrected two-sided z this file used to hard-code, kept as the FLOOR.
+_UNCORRECTED_Z = statistics.NormalDist().inv_cdf(1 - MAX_ALPHA / 2)
+
+# Current cycle's multiplicity. Defaults to the uncorrected single-test case so
+# that a direct call to wilson() from a test or another tool behaves exactly as
+# it did before; main() sizes it from the real family and the real look count
+# before any published number is computed.
+_MULT = {"family_size": 1, "looks": 1, "divisor": 1,
+         "corrected_alpha": MAX_ALPHA, "z": _UNCORRECTED_Z}
+
+# The largest family EVER published on this chain. The look count is already
+# monotone; the family term was not, and a divisor that can fall between cycles
+# buys statistical power back by publishing less — a kind withheld under
+# INSUFFICIENT BLOCKS, a retired ensemble dropping out — which is the same
+# optional-stopping failure the look counter exists to price, wearing the other
+# half of the product. main() raises this floor from the chain and the last
+# published registry before any interval exists; it defaults to 1 so a direct
+# call from a test behaves exactly as it did.
+_FAMILY_FLOOR = 1
+
+# The chain kind carrying the append-only look counter. Mirrors
+# prereg.LookKind in the Go daemon.
+LOOK_KIND = "grading-look"
+
+
+def corrected_z(family_size: int, looks: int) -> tuple[float, int, float]:
+    """(z, divisor, corrected_alpha) for a family of `family_size` over `looks`.
+
+    Floored at the uncorrected z: a divisor can only ever make the interval
+    wider. Nothing here can be tuned to lift a number — raising the divisor
+    strictly loses verdicts.
+    """
+    divisor = max(1, int(family_size)) * max(1, int(looks))
+    alpha = MAX_ALPHA / divisor
+    z = max(_UNCORRECTED_Z, statistics.NormalDist().inv_cdf(1 - alpha / 2))
+    return z, divisor, alpha
+
+
+def set_family_floor(n: int) -> int:
+    """Raise the monotone family floor. It only ever goes up."""
+    global _FAMILY_FLOOR
+    _FAMILY_FLOOR = max(_FAMILY_FLOOR, 1, int(n))
+    return _FAMILY_FLOOR
+
+
+def set_multiplicity(family_size: int, looks: int) -> dict:
+    """Price this cycle's multiplicity; every later interval uses it.
+
+    The family term is folded with max() against the largest family ever
+    published, exactly as chain_looks() folds the look count: a divisor that
+    could fall because fewer rows cleared the evidence floors would hand back
+    power that a wider family already spent. Folding is strictly
+    interval-widening — it can only lose verdicts, and it moves no estimate.
+    """
+    family_size = max(int(family_size), _FAMILY_FLOOR)
+    z, divisor, alpha = corrected_z(family_size, looks)
+    _MULT.update({"family_size": max(1, int(family_size)),
+                  "looks": max(1, int(looks)), "divisor": divisor,
+                  "corrected_alpha": alpha, "z": z})
+    return dict(_MULT)
+
+
+def multiplicity() -> dict:
+    """The multiplicity every published interval in this cycle was priced at."""
+    return dict(_MULT)
+
+
+def current_z() -> float:
+    return _MULT["z"]
+
+
+def stamp_multiplicity(rows: list[dict]) -> None:
+    """Put the divisor on every row, so no number travels without its price."""
+    m = multiplicity()
+    for r in rows:
+        r["family_size"] = m["family_size"]
+        r["looks"] = m["looks"]
+        r["divisor"] = m["divisor"]
+        r["corrected_alpha"] = m["corrected_alpha"]
+        r["ci_z"] = m["z"]
+
+
+def grade_with_multiplicity(grade_once, looks: int) -> list[dict]:
+    """Grade, size the family from what was actually published, regrade.
+
+    Two passes, because family_size is a property of the output. It is a fixed
+    point rather than a circularity: WHICH rows get published depends only on
+    the evidence floors (n, distinct days, distinct blocks) and never on z, so
+    the second pass emits the same rows as the first. The loop only ever raises
+    the family size, so if that assumption were ever violated the divisor moves
+    in the widening direction.
+    """
+    rows = grade_once()
+    fam = len(rows)
+    for _ in range(3):
+        set_multiplicity(fam, looks)
+        rows = grade_once()
+        if len(rows) <= fam:
+            stamp_multiplicity(rows)
+            return rows
+        fam = len(rows)
+    set_multiplicity(max(fam, len(rows)), looks)
+    rows = grade_once()
+    stamp_multiplicity(rows)
+    return rows
+
+
+def chain_looks(con: sqlite3.Connection) -> int:
+    """The monotone number of grading looks taken, read off the chain.
+
+    Folded with max() over three sources for the same reason
+    ResearchLoop.priorSearches folds meta / worker_runs / the durable append-only
+    tables: a look already taken must never be refundable. The record COUNT
+    alone would be refunded by a truncated chain; the counters the records carry
+    survive a missing row; and both are maxed against whatever the last
+    published registry already declared. A read that comes back short can only
+    fail to raise the bar, never lower it.
+    """
+    try:
+        rows = con.execute("SELECT spec_json FROM prereg_records WHERE kind = ?",
+                           (LOOK_KIND,)).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+    n = len(rows)
+    for (blob,) in rows:
+        try:
+            n = max(n, int(json.loads(blob).get("counter", 0)))
+        except (TypeError, ValueError):
+            continue
+    return n
+
+
+def chain_families(con: sqlite3.Connection) -> int:
+    """The largest family ever published, read off the grading-look chain.
+
+    Same durability argument as chain_looks: a look record carries the family
+    the grade it observed published, so the widest family already charged
+    survives log rotation and a re-cut snapshot. Look records written before
+    the family was carried report 0 and simply fail to raise the floor, which
+    is the safe direction.
+    """
+    try:
+        rows = con.execute("SELECT spec_json FROM prereg_records WHERE kind = ?",
+                           (LOOK_KIND,)).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+    n = 0
+    for (blob,) in rows:
+        try:
+            n = max(n, int(json.loads(blob).get("family", 0)))
+        except (TypeError, ValueError):
+            continue
+    return n
+
+
+def published_looks(path: str | None) -> int:
+    """Looks already declared by the previously published registry JSON."""
+    return _published_int(path, "looks")
+
+
+def published_family(path: str | None) -> int:
+    """Family size already declared by the previously published registry JSON."""
+    return _published_int(path, "family_size")
+
+
+def _published_int(path: str | None, key: str) -> int:
+    if not path or not os.path.exists(path):
+        return 0
+    try:
+        with open(path) as f:
+            return int(json.load(f).get(key) or 0)
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
+        return 0
+
+
+# --------------------------------------------------------------------------- #
+# WHICH GRADER IS THIS, AND WHICH CODE WROTE THE ROWS IT IS GRADING
+# --------------------------------------------------------------------------- #
+#
+# PREREGISTRATION.md §2 says this grader is pinned by commit AND content
+# SHA-256, and that an edited grader re-digests differently. Nothing here ever
+# checked that. The script had no self-hash at all — its only sha256 work was
+# the snapshot manifest — so it would happily publish verdicts while being a
+# version no chained record names. A protocol nobody verifies is a protocol
+# nobody is bound by, in both directions.
+#
+# So: at startup this file hashes ITSELF, reads the newest chained
+# grading-protocol record, and refuses to run when they disagree, or when the
+# record's frozen thresholds disagree with the constants above. Every branch is
+# strictly restrictive — it can only stop a verdict from being published.
+
+SELF_PATH = os.path.abspath(__file__)
+REPO_ROOT = os.path.dirname(os.path.dirname(SELF_PATH))
+
+
+def self_sha256() -> str:
+    """SHA-256 of this grader, byte-for-byte — the digest the chain must name."""
+    with open(SELF_PATH, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def newest_grading_protocol(con: sqlite3.Connection) -> dict | None:
+    """The newest chained grading-protocol record, parsed. None if absent."""
+    try:
+        row = con.execute(
+            """SELECT seq, spec_json FROM prereg_records WHERE kind = 'grading-protocol'
+               ORDER BY seq DESC LIMIT 1""").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not row:
+        return None
+    try:
+        rec = json.loads(row[1])
+    except (TypeError, ValueError):
+        return None
+    rec["_seq"] = int(row[0])
+    return rec
+
+
+def grader_registration_error(rec: dict | None, origin: str) -> str | None:
+    """The registration check itself, over a parsed grading-protocol record.
+
+    Split out of require_registered_grader so the SNAPSHOT path can run the
+    identical check against the record carried in repro/grading_protocol.csv.
+    Two callers, one rule: a grader nothing names produces no verdict, whether
+    the record was read from the chain in the DB or from the shipped bundle.
+    Returns the refusal text, or None if the record registers this grader.
+    """
+    mine = self_sha256()
+    if rec is None:
+        return ("UNREGISTERED GRADER: no grading-protocol record in "
+                f"{origin}. This grader hashes {mine}; nothing names it, so no "
+                "verdict it produces can be tied to a frozen protocol.")
+    theirs = rec.get("graderSha256") or ""
+    if theirs != mine:
+        return ("UNREGISTERED GRADER: the grading protocol in "
+                f"{origin} (seq {rec.get('_seq')}) pins graderSha256 "
+                f"{theirs or '(absent)'} at commit "
+                f"{rec.get('graderCommit') or '(absent)'}, but this file hashes {mine}. "
+                "Refusing to grade: the pinned grader and the running grader are "
+                "different code, and PREREGISTRATION.md §2 makes the chain "
+                "authoritative.")
+    expected = {"minIndependentN": MIN_INDEPENDENT_N,
+                "minDistinctDays": MIN_DISTINCT_DAYS,
+                "minDistinctBlocks": MIN_DISTINCT_BLOCKS,
+                # The multiplicity price is a frozen floor like any other: an
+                # unregistered maxAlpha or a rule that differs by one byte from
+                # the one the chain froze means the published error rate is not
+                # the one anybody committed to.
+                "maxAlpha": MAX_ALPHA,
+                "multiplicityRule": MULTIPLICITY_RULE}
+    for key, want in expected.items():
+        got = rec.get(key)
+        if got != want:
+            return ("UNREGISTERED GRADER: the grading protocol in "
+                    f"{origin} (seq {rec.get('_seq')}) freezes {key}={got!r} but this "
+                    f"grader enforces {want!r}. Refusing to grade: the evidence floor "
+                    "deciding the refusals is not the floor that was registered.")
+    return None
+
+
+def require_research_liveness(con: sqlite3.Connection, db_path: str) -> None:
+    """Exit non-zero unless every narrated grid search has a judgment ledger.
+
+    ops/accuracy-registry.sh already runs tools/research_liveness.py before the
+    grader and refuses to publish when it fails. That guard protects ONE
+    script. The artifact it protects — data/accuracy_registry.json — is what
+    README.md and the /accuracy page read, and it can also be produced by
+    invoking this grader directly, which is how it was produced at
+    2026-07-27T01:01 while the liveness check was failing on two claims.
+
+    So the precondition belongs to the GRADER, not to one caller of it. Moving
+    it here makes the refusal a property of the artifact: no path produces a
+    registry while a narrated search has no judgment ledger, and the shell
+    guard becomes a fast pre-check rather than the only one.
+
+    Read-only, like the check it delegates to: this can suppress a publication,
+    never repair a ledger.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import research_liveness
+    except ImportError as e:  # pragma: no cover - the tool ships beside this one
+        sys.exit(f"research-loop liveness: cannot import the checker: {e}")
+    try:
+        violations = research_liveness.check_liveness(con)
+    except sqlite3.OperationalError as e:
+        # A database with no worker_runs table has NARRATED nothing, so there is
+        # nothing to corroborate — the fixture and snapshot paths are exactly
+        # that. Every other query failure is a refusal: an unreadable ledger is
+        # indistinguishable from an absent one, and this check exists because
+        # they must not be confused. store.Open's schema contract guarantees the
+        # table on any real database, so this branch is unreachable in
+        # production by construction.
+        if "no such table: worker_runs" not in str(e):
+            sys.exit(f"research-loop liveness: query failed against {db_path}: {e}")
+        return
+    except sqlite3.Error as e:
+        sys.exit(f"research-loop liveness: query failed against {db_path}: {e}")
+    if not violations:
+        return
+    lines = [f"RESEARCH-LOOP LIVENESS FAILED — {len(violations)} claim(s) the "
+             "database cannot corroborate:"]
+    lines += [f"  {v}" for v in violations]
+    lines.append("Refusing to grade: a search whose judgments cannot be counted "
+                 "from the database is an unverifiable null result, and a registry "
+                 "published beside one inherits its unverifiability.")
+    sys.exit("\n".join(lines))
+
+
+def require_registered_grader(con: sqlite3.Connection) -> dict:
+    """Exit non-zero unless the chain names THIS grader and THESE thresholds.
+
+    Three ways to fail, all of them the same failure wearing different clothes —
+    the code deciding the verdicts is not the code the pre-registration froze:
+
+      * no grading-protocol record at all,
+      * a record whose graderSha256 is not this file's digest,
+      * a record whose minIndependentN / minDistinctDays / minDistinctBlocks
+        differ from the module constants that actually gate every refusal.
+
+    minDistinctBlocks is included because it is the floor that decides STRUCTURAL
+    verdicts; a chain that froze only the day floor left the strictest gate in
+    the grader unregistered and therefore free to move.
+    """
+    rec = newest_grading_protocol(con)
+    err = grader_registration_error(rec, "the pre-registration chain in this database")
+    if err:
+        sys.exit(err)
+    return rec
+
+
+# --------------------------------------------------------------------------- #
+# CODE-REVISION GATE — what produced the rows being graded
+# --------------------------------------------------------------------------- #
+#
+# The daemon has always known its own vcs.revision and has always thrown it
+# away: it went into one meta row and nowhere else, so "which binary wrote this
+# forecast" was unanswerable for every one of the 247,164 prediction_ledger
+# rows in this database. That absence is the root cause of the only
+# unrepairable data event here — nothing could be attributed to a build, so
+# nothing could be bounded to one.
+#
+# regime_outcomes.revision / prediction_ledger.revision fix that going FORWARD
+# only. Rows frozen before the column existed carry NULL, and NULL is honest:
+# their code is not recoverable and must not be invented. So the gate applies
+# from the epoch onward, and a post-epoch row whose stamp is missing, "+dirty"
+# (vcs.modified=true), or names a commit this repository does not contain
+# blocks the verdict for its predictor and prints the offending revision.
+REVISION_EPOCH = dt.date(2026, 7, 27)
+REVISION_EPOCH_TS = int(dt.datetime(2026, 7, 27, tzinfo=dt.timezone.utc).timestamp())
+
+
+def revision_resolvable(rev: str) -> bool:
+    """True only when rev names a commit THIS repository actually contains.
+
+    A stamp that git cannot resolve is worth exactly as much as no stamp. When
+    git itself cannot be run the answer is False, not True: an unverifiable
+    provenance claim must block a verdict, never wave one through.
+    """
+    if not rev or rev.endswith("+dirty"):
+        return False
+    try:
+        import subprocess
+        return subprocess.run(["git", "cat-file", "-e", rev + "^{commit}"],
+                              cwd=REPO_ROOT, capture_output=True).returncode == 0
+    except Exception:
+        return False
+
+
+# Sentinel key meaning "every predictor in this family is unattributable".
+# It exists so the one branch that cannot enumerate offenders per predictor —
+# the revision column being absent outright — still FAILS CLOSED. Every other
+# provenance branch is strictly restrictive; a branch that let verdicts through
+# because it could check less than the others would invert the contract, and it
+# is the branch a database written by an older daemon actually takes.
+GATE_ALL = "*"
+GATE_NO_COLUMN = "(no revision column)"
+
+
+def revision_gate(con: sqlite3.Connection) -> dict:
+    """Per-predictor offending revisions among post-epoch contributing rows.
+
+    Returns {"structure": {kind: [revs]}, "direction": {horizon: [revs]},
+             "epoch": ..., "checked": bool}. An empty list means every
+    post-epoch row that feeds that predictor names code this repo contains.
+    A GATE_ALL key means the whole family is unattributable.
+    """
+    out = {"structure": {}, "direction": {}, "epoch": REVISION_EPOCH.isoformat(),
+           "checked": True}
+    cache: dict[str, bool] = {}
+
+    def bad(revs) -> list[str]:
+        offenders = []
+        for rev in revs:
+            key = rev or ""
+            if key not in cache:
+                cache[key] = revision_resolvable(key)
+            if not cache[key]:
+                offenders.append(key or "(unstamped)")
+        return sorted(set(offenders))
+
+    try:
+        rows = con.execute(
+            """SELECT kind, revision FROM regime_outcomes
+               WHERE ts >= ? GROUP BY kind, revision""", (REVISION_EPOCH_TS,)).fetchall()
+    except sqlite3.OperationalError:
+        # The column does not exist on this database at all, so no row can be
+        # attributed. Every post-epoch verdict is unattributable — refuse the
+        # whole family rather than printing a caveat and publishing anyway.
+        out["checked"] = False
+        out["structure"][GATE_ALL] = [GATE_NO_COLUMN]
+        out["direction"][GATE_ALL] = [GATE_NO_COLUMN]
+        return out
+    by_kind: dict[str, list] = {}
+    for kind, rev in rows:
+        by_kind.setdefault(kind, []).append(rev)
+    for kind, revs in by_kind.items():
+        offenders = bad(revs)
+        if offenders:
+            out["structure"][kind] = offenders
+
+    try:
+        led = con.execute(
+            """SELECT horizon, revision FROM prediction_ledger
+               WHERE predicted_at >= ? GROUP BY horizon, revision""",
+            (REVISION_EPOCH_TS,)).fetchall()
+    except sqlite3.OperationalError:
+        led = []
+        out["checked"] = False
+        out["direction"][GATE_ALL] = [GATE_NO_COLUMN]
+    by_h: dict[str, list] = {}
+    for h, rev in led:
+        by_h.setdefault(h or "", []).append(rev)
+    for h, revs in by_h.items():
+        offenders = bad(revs)
+        if offenders:
+            out["direction"][h] = offenders
+    return out
+
+
+def apply_revision_gate(rows: list[dict], gate: dict) -> list[str]:
+    """Strip the verdict from any predictor with unattributable contributing rows.
+
+    Returns the human-readable refusals, for printing. Dropping the field
+    entirely (rather than downgrading its text) is deliberate and matches the
+    legacy-snapshot path: an absent verdict cannot be quoted, a reworded one can.
+    """
+    refusals = []
+    for r in rows:
+        offenders = None
+        if r["family"].startswith("structure"):
+            key = r["predictor"].split(PERSISTENCE_SUFFIX)[0]
+            offenders = gate["structure"].get(GATE_ALL) or gate["structure"].get(key)
+        elif r["family"].startswith("direction"):
+            offenders = gate["direction"].get(GATE_ALL)
+            if not offenders:
+                for h, offs in gate["direction"].items():
+                    if h and h != GATE_ALL and h in r["predictor"]:
+                        offenders = offs
+                        break
+        if not offenders:
+            continue
+        r["revision_gate"] = offenders
+        r.pop("verdict", None)
+        r.pop("claim_verdict", None)
+        if offenders == [GATE_NO_COLUMN]:
+            refusals.append(f"  * {r['predictor']}: this database carries no per-row "
+                            "revision column, so no contributing row can be attributed "
+                            "to any build")
+        else:
+            refusals.append(f"  * {r['predictor']}: contributing rows written by "
+                            f"{', '.join(offenders)} — not a commit in this repository")
+    return refusals
+
+
 # Conviction bands. A predictor's accuracy is only meaningful within its band.
 BANDS = [(0.0, 0.5, "all"), (0.5, 0.8, "conv>0.5"), (0.8, 0.9, "conv>0.8"), (0.9, 1.01, "conv>0.9")]
+
+# The daemon commits the prequential-majority BENCHMARK as its own tracked
+# predictor: pipeline/predict.go seeds prediction_outcomes rows under the
+# "<horizon>#pm" namespace for the same symbols at the same ts as the ensemble,
+# so those rows arrive here through the same dedup/survivorship SQL and are
+# graded by the same day-clustered machinery. First-class on purpose — a
+# baseline that skips the grading rules is not a baseline.
+BENCHMARK_SUFFIX = "#pm"
+
+# "<kind>#persist" namespaces the STRUCTURAL naive-persistence benchmark rows —
+# the "nothing changes" null frozen at call time beside every regime call.
+PERSISTENCE_SUFFIX = "#persist"
+
+# Reliability-diagram bins: fixed-width bins over predicted P(up). The
+# high-conviction gate (|p-0.5| >= 0.15) lives in the outer bins, so an
+# anti-calibrated conviction tier shows up here — per-bin predicted vs
+# realized — while it is still correctable (raise the threshold, isotonic
+# recalibration) rather than only when the auto-retire gate fires.
+CALIBRATION_BINS = 10
+
+# --------------------------------------------------------------------------- #
+# AUTO-RETIRE RULE — pre-registered 2026-07-26, while every directional verdict
+# was still INSUFFICIENT (1d: 42.9% vs a 75.0% prequential null; 1w high
+# conviction: 33.3% vs 83.3%). Both live rows show negative skill but are
+# unfalsifiable until the evidence floors are met — which is exactly the moment
+# a kill criterion is cheap to promise and expensive to keep. So it is committed
+# NOW, before the data can argue back:
+#
+#   FAILED-forward. The first time a directional row reaches MIN_INDEPENDENT_N
+#   independent observations over MIN_DISTINCT_DAYS distinct UTC days with the
+#   upper bound of its effective-N Wilson 95% interval below the prequential
+#   null, the verdict is FAILED, the row publishes retire=true in the registry
+#   JSON, and the daemon's model-health worker (pipeline/modelhealth.go) stops
+#   publishing that horizon's predictions. No grace period, no re-window, no
+#   threshold revision after the evidence arrives.
+#
+# The rule's digest is chained by the prereg registrar (kind "auto-retire-rule",
+# daemon/internal/pipeline/prereg.go) and the chain head is pushed to the public
+# anchors repo by ops/anchor-publish.sh, so the threshold is provably older than
+# the data it will judge. tools/test_accuracy_registry.py and the Go side pin
+# the SAME digest constant — the enforced rule and the chained rule are one rule.
+AUTO_RETIRE_MODEL = "directional-ensemble"
+AUTO_RETIRE_REGISTERED = "2026-07-26"
+AUTO_RETIRE_CRITERION = (
+    f"The first time a directional row reaches {MIN_INDEPENDENT_N} independent "
+    "(symbol, horizon, UTC-day) observations spread over "
+    f"{MIN_DISTINCT_DAYS} distinct UTC days, if the upper bound of its "
+    "effective-N day-clustered Wilson 95% interval is below the "
+    "prequential-majority null, the verdict is FAILED and the row carries "
+    "retire=true. No grace period, no re-window, no threshold revision after "
+    "the evidence arrives.")
+AUTO_RETIRE_ACTION = (
+    "The daemon's model-health worker reads retire from "
+    "data/accuracy_registry.json and stops publishing the flagged horizon's "
+    "predictions. The flag is recomputed on every grade under these same "
+    "frozen thresholds; only a record whose interval clears the null lifts it.")
+
+
+def auto_retire_rule_digest() -> str:
+    """Canonical digest of the frozen rule.
+
+    Byte-identical to prereg.AutoRetireRule().Hash() in the Go daemon — same
+    field order, same separator — so the chain record and this grader provably
+    freeze the same thresholds. Both sides pin the digest in their tests.
+    """
+    canon = (f"model={AUTO_RETIRE_MODEL}"
+             f"|minIndependentN={MIN_INDEPENDENT_N}"
+             f"|minDistinctDays={MIN_DISTINCT_DAYS}"
+             f"|criterion={AUTO_RETIRE_CRITERION}"
+             f"|action={AUTO_RETIRE_ACTION}"
+             f"|registered={AUTO_RETIRE_REGISTERED}")
+    return hashlib.sha256(canon.encode()).hexdigest()
+
+
+def auto_retire_rule() -> dict:
+    """The frozen rule as published in the registry JSON, digest included."""
+    return {
+        "model": AUTO_RETIRE_MODEL,
+        "minIndependentN": MIN_INDEPENDENT_N,
+        "minDistinctDays": MIN_DISTINCT_DAYS,
+        "criterion": AUTO_RETIRE_CRITERION,
+        "action": AUTO_RETIRE_ACTION,
+        "registered": AUTO_RETIRE_REGISTERED,
+        "sha256": auto_retire_rule_digest(),
+    }
 
 # The day symbols.delisted_at started being recorded (store.go survivorship
 # wave). Rows created before this were graded against a survivor-seeded
 # universe and are unfit for a published verdict — both graders filter them
-# out at the SQL layer, which is what makes survivorship_clean true by
-# construction on every row this script emits.
+# out at the SQL layer. That filter is a property of the QUERY, not of the
+# sample: it says nothing about whether the listing history of the symbols
+# actually graded is known. survivorship_clean is therefore MEASURED per
+# grade by measure_universe_completeness() below, never asserted.
 SURVIVORSHIP_EPOCH = dt.date(2026, 7, 24)
 SURVIVORSHIP_EPOCH_TS = int(dt.datetime(2026, 7, 24, tzinfo=dt.timezone.utc).timestamp())
 
 
-def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
-    """Wilson score interval — behaves at small n and near 0/1, unlike normal approx."""
+def measure_universe_completeness(con: sqlite3.Connection | None,
+                                  table: str) -> dict:
+    """Fraction of the graded symbols whose listing status is RESOLVABLE.
+
+    Over exactly the symbols contributing resolved post-epoch rows to `table`,
+    a symbol counts as resolvable when either symbols.delisted_at is set (it
+    left the universe on a known date) or symbols.active = 1 (it is provably
+    still listed at grading time). An inactive symbol with no delisted_at is
+    NOT resolvable: it stopped being tracked at an unknown moment, which is
+    exactly the shape survivorship bias takes. A symbol_id with no symbols row
+    is unresolvable too.
+
+    survivorship_clean is true only at complete coverage. Anything short of
+    that publishes false plus a reason naming the shortfall, because an
+    unverifiable claim of cleanliness is strictly worse than an admitted gap.
+    """
+    if con is None:
+        return {"clean": False, "coverage": None,
+                "reason": ("unmeasured — graded from a snapshot, which carries "
+                           "per-day tallies but no symbols/listing table")}
+    q = f"""
+    SELECT COUNT(*),
+           SUM(CASE WHEN s.id IS NULL THEN 1 ELSE 0 END),
+           SUM(CASE WHEN s.id IS NOT NULL AND s.delisted_at IS NULL
+                         AND s.active = 0 THEN 1 ELSE 0 END)
+    FROM (SELECT DISTINCT symbol_id FROM {table}
+          WHERE resolved_at IS NOT NULL AND ts >= ?) g
+    LEFT JOIN symbols s ON s.id = g.symbol_id
+    """
+    try:
+        n, unknown, undated = con.execute(q, (SURVIVORSHIP_EPOCH_TS,)).fetchone()
+    except sqlite3.OperationalError as e:
+        return {"clean": False, "coverage": None,
+                "reason": f"unmeasured — listing status unreadable ({e})"}
+    n, unknown, undated = n or 0, unknown or 0, undated or 0
+    if not n:
+        return {"clean": False, "coverage": None,
+                "reason": "unmeasured — no graded post-epoch symbols"}
+    resolvable = n - unknown - undated
+    cov = resolvable / n
+    out = {"clean": resolvable == n,
+           "symbols_graded": n,
+           "symbols_resolvable": resolvable,
+           "symbols_inactive_undated": undated,
+           "symbols_unknown": unknown,
+           "coverage": cov,
+           "method": ("delisted_at set, or active=1 at grading time, over the "
+                      "distinct symbols contributing resolved post-epoch rows"),
+           "reason": None}
+    if not out["clean"]:
+        parts = []
+        if undated:
+            parts.append(f"{undated} inactive symbol(s) with no delisted_at")
+        if unknown:
+            parts.append(f"{unknown} symbol_id(s) absent from the symbols table")
+        out["reason"] = (f"listing status resolvable for {resolvable}/{n} graded "
+                         f"symbols ({cov * 100:.1f}%): " + "; ".join(parts))
+    return out
+
+
+def survivorship_stamp(surv: dict | None) -> dict:
+    """Row fields carrying the measured (never assumed) survivorship state."""
+    # No measurement supplied means the caller had no symbols table to measure
+    # against — the snapshot path. Unmeasured, never assumed clean.
+    surv = surv or measure_universe_completeness(None, "")
+    stamp = {"survivorship_clean": bool(surv.get("clean"))}
+    if not stamp["survivorship_clean"]:
+        stamp["survivorship_reason"] = surv.get("reason") or "unmeasured"
+        stamp["survivorship_coverage"] = surv.get("coverage")
+    return stamp
+
+# The amendment that introduced regime_outcomes.naive_label. From this instant
+# every frozen structural call must carry a matched naive-persistence baseline,
+# and the daemon's store refuses the write otherwise (store.NullAmendmentEpoch).
+# A post-epoch row with a NULL baseline therefore means the deployed binary is
+# not the source — this script exits non-zero on it so the daily LaunchAgent
+# turns the divergence into a visible failure instead of a line of prose.
+# Rows BEFORE this instant are left alone on purpose: a persistence label
+# computed once the outcome is known is a hindsight baseline, not a null.
+NULL_AMENDMENT_EPOCH = dt.date(2026, 7, 27)
+NULL_AMENDMENT_EPOCH_TS = int(dt.datetime(2026, 7, 27, tzinfo=dt.timezone.utc).timestamp())
+
+
+def null_amendment_probe(con: sqlite3.Connection) -> dict:
+    """Read the write-path invariant off the LIVE table, per structural kind.
+
+    The guard that is supposed to make a post-epoch NULL baseline impossible
+    lives in the daemon's store. Whether it is RUNNING is not knowable from the
+    source; it is knowable from the data. This counts the rows that prove it is
+    not, and names the newest one — a recent ts means the divergent binary is
+    still writing, which no amount of reading the code path would reveal.
+
+    Returns {"count": n, "newest_ts": ts|None, "kinds": [kind, ...]}.
+    """
+    out = {"count": 0, "newest_ts": None, "kinds": []}
+    try:
+        rows = con.execute(
+            """SELECT kind, COUNT(*), MAX(ts) FROM regime_outcomes
+               WHERE ts >= ? AND naive_label IS NULL GROUP BY kind""",
+            (NULL_AMENDMENT_EPOCH_TS,)).fetchall()
+    except sqlite3.OperationalError:
+        # No naive_label column at all: the "NOT FROZEN" path already grades
+        # every structural kind NO BASELINE, so there is nothing to add here.
+        return out
+    for kind, n, newest in rows:
+        out["count"] += n
+        out["kinds"].append(kind)
+        if newest is not None and (out["newest_ts"] is None or newest > out["newest_ts"]):
+            out["newest_ts"] = newest
+    out["kinds"] = sorted(k for k in out["kinds"] if k)
+    return out
+
+
+def apply_null_amendment_probe(rows: list[dict], probe: dict) -> list[str]:
+    """Refuse a verdict for every structural kind the probe found contaminated.
+
+    Strictly restrictive, like every other gate here: it can only withhold.
+    """
+    refusals = []
+    if not probe["count"]:
+        return refusals
+    kinds = set(probe["kinds"])
+    for r in rows:
+        if not r["family"].startswith("structure"):
+            continue
+        key = r["predictor"].split(PERSISTENCE_SUFFIX)[0]
+        if key not in kinds:
+            continue
+        r["null_amendment_gate"] = True
+        r.pop("verdict", None)
+        r.pop("claim_verdict", None)
+        refusals.append(f"  * {r['predictor']}: post-amendment rows exist with no frozen "
+                        "naive baseline, so the deployed writer is not this source")
+    return refusals
+
+
+def wilson(k: int, n: int, z: float | None = None) -> tuple[float, float]:
+    """Wilson score interval — behaves at small n and near 0/1, unlike normal approx.
+
+    z defaults to THIS CYCLE's multiplicity-corrected z (see corrected_z), not
+    to a hard-coded 1.96: the surface publishes a family of rows and re-grades
+    them daily, so a fixed 95% was never its operating error rate.
+
+    The p = 0 and p = 1 endpoints are returned EXACTLY. They are exact
+    algebraically — at p = 1, centre + half = (1 + z²/2n + z²/2n)/(1 + z²/n) = 1
+    — and float64 returns 0.9999999999999999 for them instead. That epsilon is
+    not cosmetic: verdict_for compares the bound against the null with a strict
+    inequality, so an upper bound one ulp under a 100% null read as "the whole
+    interval lies below the null" for EVERY record, including a perfect one.
+    Handling it here rather than only at the comparison keeps every other
+    consumer of this function honest too.
+    """
+    if z is None:
+        z = current_z()
     if n <= 0:
         return (0.0, 0.0)
     p = k / n
     d = 1 + z * z / n
     centre = (p + z * z / (2 * n)) / d
     half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
-    return (max(0.0, centre - half), min(1.0, centre + half))
+    lo, hi = max(0.0, centre - half), min(1.0, centre + half)
+    if p <= 0:
+        lo = 0.0
+    if p >= 1:
+        hi = 1.0
+    return (lo, hi)
 
 
 def design_effect(days: list[tuple[int, int]]) -> float | None:
@@ -144,21 +941,97 @@ def design_effect(days: list[tuple[int, int]]) -> float | None:
     return max(1.0, cluster_var / binom_var)
 
 
-def wilson_eff(p: float, eff_n: float, z: float = 1.96) -> tuple[float, float]:
+def wilson_eff(p: float, eff_n: float, z: float | None = None) -> tuple[float, float]:
     """Wilson interval at an EFFECTIVE sample size (n / design effect).
 
     Passing the raw row count here is the bug this function exists to prevent.
+    z defaults to the cycle's family- and look-corrected z, as in wilson().
+
+    The p = 0 and p = 1 endpoints are exact here for the same reason they are
+    exact in wilson(): float64 lands one ulp inside a bound that is algebraically
+    ON the boundary, and verdict_for's strict inequality reads that ulp as a
+    separated interval.
     """
+    if z is None:
+        z = current_z()
     if eff_n <= 0:
         return (0.0, 1.0)
     p = min(1.0, max(0.0, p))
     d = 1 + z * z / eff_n
     centre = (p + z * z / (2 * eff_n)) / d
     half = z * math.sqrt(p * (1 - p) / eff_n + z * z / (4 * eff_n * eff_n)) / d
-    return (max(0.0, centre - half), min(1.0, centre + half))
+    lo, hi = max(0.0, centre - half), min(1.0, centre + half)
+    if p <= 0:
+        lo = 0.0
+    if p >= 1:
+        hi = 1.0
+    return (lo, hi)
 
 
-def clustered_ci(days: list[tuple[int, int]]) -> dict:
+def horizon_blocks(day_rows: list[tuple[int, int, int]],
+                   horizon_days: int) -> list[tuple[int, int, int]]:
+    """Fold per-CALL-DAY tallies into non-overlapping forward-horizon blocks.
+
+    day_rows are (utc_day, n, hits) with utc_day the integer ts//86400 the
+    daemon writes. Two call days inside the same block share nearly all of their
+    forward window, so they are pooled into ONE cluster rather than counted as
+    two. Returns (anchor_day, n, hits) sorted by anchor; horizon 1 is identity.
+
+    The blocks are built by a greedy chronological sweep, NOT by a fixed epoch
+    grid: a block opens at the first unassigned call day d and absorbs every day
+    in [d, d + hd). A calendar grid would split days 1007 and 1008 across two
+    "non-overlapping" blocks even though their forward windows share 20 of 21
+    sessions — the pseudo-replication this function exists to remove. The sweep
+    guarantees consecutive anchors are at least hd days apart, so no forward
+    window is ever counted twice.
+    """
+    hd = max(1, int(horizon_days or 1))
+    agg: dict[int, tuple[int, int]] = {}
+    for day, n, hits in day_rows:
+        pn, ph = agg.get(day, (0, 0))
+        agg[day] = (pn + n, ph + hits)
+    blocks: list[tuple[int, int, int]] = []
+    anchor: int | None = None
+    for day in sorted(agg):
+        n, h = agg[day]
+        if anchor is None or day >= anchor + hd:
+            anchor = day
+            blocks.append((anchor, n, h))
+        else:
+            a, pn, ph = blocks[-1]
+            blocks[-1] = (a, pn + n, ph + h)
+    return blocks
+
+
+def clustered_ci_blocks(day_rows: list[tuple[int, int, int]],
+                        horizon_days: int) -> dict:
+    """clustered_ci with the cluster unit set to a non-overlapping horizon block.
+
+    Same estimator, honest unit: the design effect and effective n are measured
+    BETWEEN blocks, so overlapping call days can no longer inflate the evidence.
+    Publishes distinct_blocks and block_span beside distinct_days, and withholds
+    the interval below MIN_DISTINCT_BLOCKS.
+    """
+    blocks = horizon_blocks(day_rows, horizon_days)
+    out = clustered_ci([(n, h) for _b, n, h in blocks],
+                       min_clusters=MIN_DISTINCT_BLOCKS,
+                       unit="non-overlapping horizon blocks",
+                       method="block-clustered-wilson")
+    out["distinct_blocks"] = len(blocks)
+    out["distinct_days"] = len({d for d, _n, _h in day_rows})
+    hd = max(1, int(horizon_days or 1))
+    # Anchors are call days, so the span is reported in block-widths: how many
+    # non-overlapping forward windows the sample stretches across.
+    out["block_span"] = (
+        (blocks[-1][0] - blocks[0][0] + hd) // hd if blocks else 0
+    )
+    out["horizon_days"] = max(1, int(horizon_days or 1))
+    return out
+
+
+def clustered_ci(days: list[tuple[int, int]], min_clusters: int = MIN_DISTINCT_DAYS,
+                 unit: str = "distinct days",
+                 method: str = "day-clustered-wilson") -> dict:
     """Grade per-day tallies into a publishable, day-resampled interval.
 
     Returns a dict carrying the interval AND the evidence behind it — distinct
@@ -183,9 +1056,9 @@ def clustered_ci(days: list[tuple[int, int]]) -> dict:
     }
     if n <= 0:
         return out
-    if len(days) < MIN_DISTINCT_DAYS:
-        out["ci_reason"] = (f"withheld: {len(days)}/{MIN_DISTINCT_DAYS} distinct days — "
-                            "too few to measure between-day variance")
+    if len(days) < min_clusters:
+        out["ci_reason"] = (f"withheld: {len(days)}/{min_clusters} {unit} — "
+                            "too few to measure between-cluster variance")
         return out
     deff = design_effect(days)
     if deff is None:
@@ -196,7 +1069,7 @@ def clustered_ci(days: list[tuple[int, int]]) -> dict:
     out["ci"] = [lo, hi]
     out["design_effect"] = deff
     out["effective_n"] = eff
-    out["ci_method"] = "day-clustered-wilson"
+    out["ci_method"] = method
     return out
 
 
@@ -230,6 +1103,99 @@ def connect(path: str) -> sqlite3.Connection:
     if not os.path.exists(path):
         sys.exit(f"database not found: {path}")
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+
+# --------------------------------------------------------------------------- #
+# The frozen claim — read from the pre-registration chain, never recomputed
+# --------------------------------------------------------------------------- #
+
+def fetch_prereg_claims(con: sqlite3.Connection) -> dict[str, dict]:
+    """Newest chained pre-registration record per kind -> its frozen claim.
+
+    The graded universe is ALL decisions of a kind (PREREGISTRATION.md §6), so
+    the target is the min-conviction band's claim — Bands[0], floor 0.0 — and
+    nothing else. Recomputing the target instead (AVG(historical_accuracy) over
+    regime_outcomes) reads a conviction-mix-weighted number out of the same
+    table the outcomes live in: it drifts with the mix, after outcomes are
+    visible, without breaking a single hash. That would make the chain
+    decorative on the one code path that emits verdicts, which is the whole
+    thing pre-registration exists to prevent.
+
+    The NEWEST row is deliberate: an amended claim is appended, never updated,
+    and grading against a superseded target would ignore a correction that is
+    itself on the record.
+    """
+    try:
+        rows = con.execute("""
+            SELECT kind, spec_json, spec_hash, ts FROM prereg_records
+            WHERE seq IN (SELECT MAX(seq) FROM prereg_records GROUP BY kind)""").fetchall()
+    except sqlite3.OperationalError:
+        return {}  # reduced/older DBs carry no chain; callers fall back loudly
+    out: dict[str, dict] = {}
+    for kind, spec_json, spec_hash, ts in rows:
+        try:
+            bands = json.loads(spec_json).get("bands") or []
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if not bands:
+            continue  # non-claim records (grading protocol, document digests)
+        base = min(bands, key=lambda b: b.get("minConviction", 0.0))
+        if base.get("minConviction", 0.0) != 0.0:
+            continue  # no all-decisions band: refuse to invent one
+        out[kind] = {"claimed": float(base["claimedAccuracy"]),
+                     "spec_hash": spec_hash, "registered_ts": int(ts)}
+    return out
+
+
+def fetch_chain_presence(con: sqlite3.Connection) -> dict:
+    """Verify, by reading the DB, the two anteriority claims the summary makes.
+
+    The report used to assert both as present-tense fact: that every regime
+    call carries a naive-persistence label frozen beside it, and that the
+    auto-retire rule is on the pre-registration chain. Neither was looked up —
+    the digest was recomputed from this script's own constants, which proves
+    the constants hash to themselves and nothing about anteriority. A claim of
+    priority that no read backs is exactly the failure pre-registration exists
+    to prevent, so the summary is now gated on these reads and prints the
+    negative when they fail. Where prose and chain disagree, the chain governs.
+    """
+    out = {"null_frozen": False, "null_coverage": None, "unmatched_nulls": None,
+           "retire_rule_chained": False, "retire_rule_chain_seq": None,
+           "retire_rule_chain_hash": None}
+    try:
+        cols = [r[0] for r in con.execute(
+            "SELECT name FROM pragma_table_info('regime_outcomes')")]
+    except sqlite3.OperationalError:
+        cols = []
+    if "naive_label" in cols:
+        # Column presence is not coverage: a table that has the column but no
+        # frozen labels grades NO BASELINE just as surely as one without it.
+        total, labelled = con.execute(
+            """SELECT COUNT(*), SUM(CASE WHEN naive_label IS NOT NULL THEN 1 ELSE 0 END)
+               FROM regime_outcomes WHERE resolved_at IS NOT NULL AND ts >= ?""",
+            (SURVIVORSHIP_EPOCH_TS,)).fetchone()
+        if total:
+            out["null_coverage"] = (labelled or 0) / total
+            out["null_frozen"] = (labelled or 0) > 0
+        # Write-path invariant, read back: rows frozen at/after the amendment
+        # with no baseline cannot exist unless the deployed daemon diverges from
+        # source. Counted over ALL such rows, graded or not — a divergence must
+        # surface before the rows become due, not after.
+        out["unmatched_nulls"] = con.execute(
+            "SELECT COUNT(*) FROM regime_outcomes WHERE ts >= ? AND naive_label IS NULL",
+            (NULL_AMENDMENT_EPOCH_TS,)).fetchone()[0]
+    try:
+        row = con.execute(
+            """SELECT seq, spec_hash FROM prereg_records WHERE kind LIKE '%retire%'
+               ORDER BY seq DESC LIMIT 1""").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    if row:
+        out["retire_rule_chain_seq"] = int(row[0])
+        out["retire_rule_chain_hash"] = row[1]
+        # Chained under some other thresholds is NOT chained under these ones.
+        out["retire_rule_chained"] = row[1] == auto_retire_rule_digest()
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -271,16 +1237,74 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
     return by_h
 
 
+def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
+    """Per-horizon reliability-diagram bins: predicted P(up) vs realized up-rate.
+
+    The graded rows above can only say the high-conviction slice is doing worse
+    than the base row; they cannot say WHERE the probabilities are wrong. These
+    bins can: each holds (mean predicted probability, realized up-frequency, n)
+    over the same independent (symbol, horizon, UTC-day) observations, post-epoch
+    only, so an anti-calibrated conviction tier is visible per-bin — and
+    correctable — before the auto-retire gate ever fires.
+
+    n and distinct_days are published beside every bin because a three-row bin
+    is noise, not a calibration measurement.
+    """
+    q = f"""
+    WITH dedup AS (
+      SELECT symbol_id, horizon, prob, up, ts,
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, ts/86400
+                                ORDER BY ts DESC) rn
+      FROM prediction_outcomes
+      WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
+        AND ts >= ?  -- survivorship boundary, same as the graded rows
+    )
+    SELECT horizon,
+           CAST(MIN(prob * {CALIBRATION_BINS}, {CALIBRATION_BINS} - 1) AS INTEGER) AS bin,
+           COUNT(*),
+           AVG(prob),
+           SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
+           COUNT(DISTINCT ts / 86400)
+    FROM dedup WHERE rn = 1
+    GROUP BY horizon, bin ORDER BY horizon, bin
+    """
+    horizons: dict[str, list[dict]] = {}
+    for horizon, b, n, mean_p, ups, days in con.execute(q, (SURVIVORSHIP_EPOCH_TS,)):
+        # The prequential-majority benchmark ("<horizon>#pm") is a constant
+        # guess, not a probability model — binning it would put a fake
+        # perfectly-confident predictor on the reliability diagram.
+        if horizon.endswith(BENCHMARK_SUFFIX):
+            continue
+        horizons.setdefault(horizon, []).append({
+            "p_lo": b / CALIBRATION_BINS,
+            "p_hi": (b + 1) / CALIBRATION_BINS,
+            "mean_predicted": mean_p,
+            "realized_up_freq": (ups / n) if n else None,
+            "n": n,
+            "distinct_days": days,
+        })
+    return {
+        "method": (f"{CALIBRATION_BINS} fixed-width bins over predicted P(up); one "
+                   "observation per (symbol, horizon, UTC-day), post-epoch only"),
+        "conviction_threshold": 0.15,
+        "horizons": horizons,
+    }
+
+
 def grade_directional(con: sqlite3.Connection) -> list[dict]:
     """Grade prediction_outcomes on independent (symbol, horizon, UTC-day) rows."""
-    return grade_directional_days(fetch_directional_days(con))
+    return grade_directional_days(
+        fetch_directional_days(con),
+        measure_universe_completeness(con, "prediction_outcomes"))
 
 
-def grade_directional_days(by_h: dict[str, list[tuple]]) -> list[dict]:
+def grade_directional_days(by_h: dict[str, list[tuple]],
+                           surv: dict | None = None) -> list[dict]:
     """Grade directional per-day tallies from either the DB or a snapshot."""
     rows = []
 
-    def emit(name: str, band: str, days: list[tuple[int, int, int]], note: str) -> None:
+    def emit(name: str, band: str, days: list[tuple[int, int, int]], note: str,
+             family: str = "direction", retirable: bool = True) -> None:
         g = clustered_ci([(n, hits) for n, hits, _ in days])
         if not g["n"]:
             return
@@ -297,9 +1321,11 @@ def grade_directional_days(by_h: dict[str, list[tuple]]) -> list[dict]:
         # the walk-forward prequential majority only.
         null_acc = null_g["acc"]
         lo, hi = (g["ci"] if g["ci"] else (None, None))
+        v = verdict_for(g["acc"], lo, hi, g["n"], null_acc, None,
+                        distinct_days=g["distinct_days"])
         rows.append({
             "predictor": name,
-            "family": "direction",
+            "family": family,
             "band": band,
             "claimed": None,
             "live_n": g["n"],
@@ -314,13 +1340,34 @@ def grade_directional_days(by_h: dict[str, list[tuple]]) -> list[dict]:
             "null_method": "prequential-majority (walk-forward)",
             "null_ci": null_g["ci"],
             "skill": g["acc"] - null_acc,
-            "verdict": verdict_for(g["acc"], lo, hi, g["n"], null_acc, None,
-                                   distinct_days=g["distinct_days"]),
+            "verdict": v,
+            # The pre-registered FAILED-forward flag (auto-retire rule, chained
+            # 2026-07-26). This flag — not a human reading the report — is what
+            # the daemon's model-health worker consumes to stop publishing.
+            # Benchmark rows are never retirable: the rule was pre-registered
+            # for the directional ensemble alone, and a majority-follower that
+            # fails its own null is a market observation, not a model to kill.
+            "retire": retirable and v.startswith("FAILED"),
             "note": note,
-            "survivorship_clean": True,
+            **survivorship_stamp(surv),
         })
 
     for horizon, per_day in sorted(by_h.items()):
+        if horizon.endswith(BENCHMARK_SUFFIX):
+            # The tracked prequential-majority benchmark (pipeline/predict.go,
+            # "<horizon>#pm" rows): same dedup, same survivorship boundary,
+            # same day-clustered interval, same walk-forward null as the
+            # ensemble it shadows. Its skill column reads its live record
+            # against the registry's own null — NO SKILL by construction is
+            # the honest expected verdict, and any gap between its accuracy
+            # and the ensemble's is the ensemble's deficit, measured live.
+            base = horizon[:-len(BENCHMARK_SUFFIX)]
+            emit(f"prequential-majority ({base})", "all",
+                 [(d[1], d[2], d[3]) for d in per_day],
+                 "live-committed running-majority benchmark; graded under the "
+                 "identical dedup/survivorship rules as the ensemble",
+                 family="benchmark", retirable=False)
+            continue
         emit(f"directional-ensemble ({horizon})", "all",
              [(d[1], d[2], d[3]) for d in per_day],
              "live forward record; independent symbol-days, day-resampled interval")
@@ -329,6 +1376,8 @@ def grade_directional_days(by_h: dict[str, list[tuple]]) -> list[dict]:
     # HORIZON: the same symbol on the same day appears in both the 1d and the 1w
     # record, and pooling them counted one correlated call twice.
     for horizon, per_day in sorted(by_h.items()):
+        if horizon.endswith(BENCHMARK_SUFFIX):
+            continue  # a constant guess has no conviction tiers
         days = [(d[4], d[5], d[6]) for d in per_day if d[4] > 0]
         if not days:
             continue
@@ -341,13 +1390,19 @@ def grade_directional_days(by_h: dict[str, list[tuple]]) -> list[dict]:
 # Structural regime predictors — claims awaiting their first live grade
 # --------------------------------------------------------------------------- #
 
-def fetch_structural(con: sqlite3.Connection) -> tuple[list[tuple], dict[tuple, list[tuple]]]:
+def fetch_structural(con: sqlite3.Connection):
     """Claims plus per-day tallies behind every structural grade.
 
-    Returns (totals, per_day): totals rows are
-    (kind, horizon_days, forecasts_recorded, claimed_accuracy, first_ts) and
-    per_day maps (kind, horizon_days) -> [(day, n, correct)] — the exact shape
-    the reproducibility snapshot exports.
+    Returns (totals, per_day, naive_per_day): totals rows are
+    (kind, horizon_days, forecasts_recorded, claimed_accuracy, first_ts),
+    per_day maps (kind, horizon_days) -> [(day, n, correct)], and naive_per_day
+    the same for the FROZEN naive-persistence null (regime_outcomes.naive_label,
+    committed at call time by the regime-outcome worker, never recomputed) —
+    the exact shapes the reproducibility snapshot exports.
+
+    The naive tally counts only rows that actually carry a frozen baseline. A
+    row without one leaves the benchmark denominator rather than being scored
+    as a null miss, which would flatter the model.
     """
     # Totals and first-call time per predictor.
     q = """
@@ -368,34 +1423,96 @@ def fetch_structural(con: sqlite3.Connection) -> tuple[list[tuple], dict[tuple, 
     for kind, hd, day, n, hits in con.execute(qd, (SURVIVORSHIP_EPOCH_TS,)):
         per_day.setdefault((kind, hd), []).append((day, n, hits or 0))
     totals = [tuple(r) for r in con.execute(q, (SURVIVORSHIP_EPOCH_TS,))]
-    return totals, per_day
+    # The frozen naive-persistence null, tallied per call-day so it flows
+    # through the IDENTICAL clustered_ci path as the model it benchmarks.
+    qn = """
+    SELECT kind, horizon_days, day, COUNT(*),
+           SUM(CASE WHEN naive_label = actual THEN 1 ELSE 0 END)
+    FROM regime_outcomes
+    WHERE resolved_at IS NOT NULL AND ts >= ? AND naive_label IS NOT NULL
+    GROUP BY kind, horizon_days, day ORDER BY kind, day
+    """
+    naive_per_day: dict[tuple, list[tuple[int, int, int]]] = {}
+    try:
+        for kind, hd, day, n, hits in con.execute(qn, (SURVIVORSHIP_EPOCH_TS,)):
+            naive_per_day.setdefault((kind, hd), []).append((day, n, hits or 0))
+    except sqlite3.OperationalError:
+        pass  # database predates naive_label: no baseline exists, and rows say so
+    return totals, per_day, naive_per_day
 
 
 def grade_structural(con: sqlite3.Connection) -> list[dict]:
-    totals, per_day = fetch_structural(con)
-    return grade_structural_days(totals, per_day)
+    totals, per_day, naive_per_day = fetch_structural(con)
+    return grade_structural_days(totals, per_day, fetch_prereg_claims(con), naive_per_day,
+                                 measure_universe_completeness(con, "regime_outcomes"))
 
 
-def grade_structural_days(totals: list[tuple], per_day: dict[tuple, list[tuple]]) -> list[dict]:
-    """Grade structural claims from either the DB or a snapshot."""
+def grade_structural_days(totals: list[tuple], per_day: dict[tuple, list[tuple]],
+                          prereg_claims: dict[str, dict] | None = None,
+                          naive_per_day: dict[tuple, list[tuple]] | None = None,
+                          surv: dict | None = None) -> list[dict]:
+    """Grade structural claims from either the DB or a snapshot.
+
+    The target C comes from the pre-registration chain (fetch_prereg_claims).
+    The DB-derived average that USED to be the target is kept as a separate,
+    clearly-labelled diagnostic (`claimed_db_avg`) so the two stay comparable
+    and a drift between them is visible rather than silently absorbed. When no
+    chain record exists for a kind, the row says so in `claimed_source` instead
+    of pretending the number was frozen.
+
+    Each kind is graded TWICE: against the frozen claim (has live accuracy
+    decayed?) and against the FROZEN NAIVE-PERSISTENCE NULL (is there any skill
+    beyond "nothing changes"?). The null is the load-bearing one — without a
+    baseline a structural predictor could never receive a failing verdict, and
+    this repo's own liquidity caveat states that naive persistence scores the
+    SAME accuracy. `verdict` therefore carries the null comparison; the claim
+    comparison is kept beside it as `claim_verdict`, so nothing previously
+    reported is lost.
+    """
+    prereg_claims = prereg_claims or {}
+    naive_per_day = naive_per_day or {}
     rows = []
-    for kind, hd, total, claimed, first_ts in totals:
-        days = [(n, hits) for _day, n, hits in per_day.get((kind, hd), [])]
-        g = clustered_ci(days)
+    for kind, hd, total, db_avg, first_ts in totals:
+        pre = prereg_claims.get(kind)
+        claimed = pre["claimed"] if pre else db_avg
+        claimed_source = "prereg chain" if pre else "DB average (NO CHAIN RECORD)"
+        # Cluster on non-overlapping horizon blocks, not on call days: at
+        # horizon_days=21 twenty-one consecutive call days are one forward
+        # window, and grading them as 21 clusters is pseudo-replication.
+        g = clustered_ci_blocks(per_day.get((kind, hd), []), hd)
         resolved = g["n"]
         lo = hi = None
         acc = None
         extra = {}
+        ng = clustered_ci_blocks(naive_per_day.get((kind, hd), []), hd)
+        null_acc = ng["acc"] if ng["n"] >= MIN_INDEPENDENT_N else None
+        # Coverage of the matched null: what fraction of the graded rows the
+        # model is scored on actually carry a frozen baseline. Anything below
+        # 1.0 means the null was measured on a self-selected subset, which is
+        # not a matched null and cannot support a skill verdict.
+        null_coverage = (ng["n"] / resolved) if resolved else None
+        claim_v = None
         if resolved >= MIN_INDEPENDENT_N:
             acc = g["acc"]
             if g["ci"]:
                 lo, hi = g["ci"]
-            v = verdict_for(acc, lo, hi, resolved, None, claimed,
-                            distinct_days=g["distinct_days"])
-            note = "live-graded, day-resampled interval"
+            claim_v = verdict_for(acc, lo, hi, resolved, None, claimed,
+                                  distinct_blocks=g["distinct_blocks"])
+            if null_acc is None:
+                # No frozen baseline to grade against. Say so, rather than let
+                # the claim comparison masquerade as a verdict on skill.
+                v = "NO BASELINE — naive-persistence null not frozen for these calls"
+            else:
+                v = verdict_for(acc, lo, hi, resolved, null_acc, None,
+                                distinct_blocks=g["distinct_blocks"],
+                                null_coverage=null_coverage)
+            note = "live-graded, interval resampled over non-overlapping horizon blocks"
             extra = {
                 "ci_method": g["ci_method"],
                 "distinct_days": g["distinct_days"],
+                "distinct_blocks": g["distinct_blocks"],
+                "block_span": g["block_span"],
+                "horizon_days": g["horizon_days"],
                 "design_effect": g["design_effect"],
                 "effective_n": g["effective_n"],
             }
@@ -404,23 +1521,75 @@ def grade_structural_days(totals: list[tuple], per_day: dict[tuple, list[tuple]]
             eligible = dt.date.fromtimestamp(first_ts) + dt.timedelta(days=hd)
             v = f"PENDING (first grade {eligible.isoformat()}, {resolved}/{MIN_INDEPENDENT_N} resolved)"
             note = "claim is backtested, not yet a live record"
+            # Evidence accrual is visible while still PENDING: how many
+            # non-overlapping forward windows exist so far, not just call days.
+            extra = {
+                "distinct_days": g["distinct_days"],
+                "distinct_blocks": g["distinct_blocks"],
+                "block_span": g["block_span"],
+                "horizon_days": g["horizon_days"],
+            }
         rows.append({
             "predictor": kind,
             "family": "structure",
             "band": "all",
             "claimed": claimed,
+            # Provenance of C travels with every row: which chained record it
+            # came from, and what the old recomputed average would have been.
+            "claimed_source": claimed_source,
+            "claimed_spec_hash": pre["spec_hash"] if pre else None,
+            "claimed_registered_ts": pre["registered_ts"] if pre else None,
+            "claimed_db_avg": db_avg,  # DIAGNOSTIC ONLY — never the grading target
             "live_n": resolved,
             "live_acc": acc,
             "ci": [lo, hi] if lo is not None else None,
             "null_prequential": None,
-            "null_acc": None,
-            "skill": None,
+            "null_acc": null_acc,
+            "null_method": "naive-persistence (frozen at call time, same resolver)",
+            "null_n": ng["n"],
+            "null_coverage": null_coverage,
+            "null_ci": ng["ci"],
+            "skill": (acc - null_acc) if (acc is not None and null_acc is not None) else None,
             "verdict": v,
+            "claim_verdict": claim_v,
             "note": note,
             "forecasts_recorded": total,
-            "survivorship_clean": True,
+            **survivorship_stamp(surv),
             **extra,
         })
+        # The null as a FIRST-CLASS benchmark row through the identical
+        # clustered_ci path, so a reader sees the baseline's own accuracy, its
+        # interval and the days behind it instead of a bare number.
+        if ng["n"]:
+            rows.append({
+                "predictor": f"{kind}{PERSISTENCE_SUFFIX}",
+                "family": "structure-benchmark",
+                "band": "all",
+                "claimed": None,
+                "live_n": ng["n"],
+                "live_acc": ng["acc"],
+                "ci": ng["ci"],
+                "ci_method": ng["ci_method"],
+                "distinct_days": ng["distinct_days"],
+                "distinct_blocks": ng["distinct_blocks"],
+                "block_span": ng["block_span"],
+                "horizon_days": ng["horizon_days"],
+                "design_effect": ng["design_effect"],
+                "effective_n": ng["effective_n"],
+                "null_prequential": None,
+                "null_acc": None,
+                # How much of the graded model sample this benchmark actually
+                # covers — 1.0 is the only value that makes it a matched null.
+                "null_coverage": null_coverage,
+                "skill": None,
+                "verdict": ("BENCHMARK — the frozen naive-persistence null itself"
+                            if ng["n"] >= MIN_INDEPENDENT_N
+                            else f"BENCHMARK (INSUFFICIENT {ng['n']}/{MIN_INDEPENDENT_N})"),
+                "note": ('"nothing changes" guess frozen at call time and graded by the '
+                         "same resolver as the call; never recomputed afterwards"),
+                "retire": False,
+                **survivorship_stamp(surv),
+            })
     return rows
 
 
@@ -428,13 +1597,24 @@ def grade_structural_days(totals: list[tuple], per_day: dict[tuple, list[tuple]]
 # Reproducibility snapshot — grading without the (gitignored) database
 # --------------------------------------------------------------------------- #
 
-def load_snapshot(snap_dir: str):
+def load_snapshot(snap_dir: str, allow_legacy: bool = False):
     """Load grading inputs from a committed snapshot (see REPRODUCE.md).
 
     Every CSV is verified against its MANIFEST.json hash before a single row
     is graded — the same canonical scheme as daemon/internal/datasetver — so a
     tampered or hand-edited snapshot refuses to grade rather than quietly
     publishing different numbers.
+
+    COMPLETENESS IS AN INTEGRITY PROPERTY, NOT A CONVENIENCE. The frozen
+    grading target (prereg_claims.csv) and the frozen null
+    (structural_naive_days.csv) used to be loaded only `if os.path.exists(...)`,
+    and grade_structural_days silently fell back to the DB-derived average as
+    the target. That fallback recomputes the very number the pre-registration
+    exists to freeze — on the ONLY grading path a third party can run. A
+    snapshot missing any file the exporter declares now aborts exactly as a
+    hash mismatch does. `allow_legacy` (--allow-legacy-snapshot) exists for
+    reading pre-freeze archives: it tolerates the absence, but the caller must
+    then publish no verdict at all (see main()).
     """
     from make_repro_snapshot import FILES, hash_records  # same tools/ dir
 
@@ -443,6 +1623,15 @@ def load_snapshot(snap_dir: str):
         sys.exit(f"snapshot manifest not found: {man_path}")
     with open(man_path) as f:
         manifest = {e["file"]: e for e in json.load(f)["files"]}
+
+    missing = [f for f in FILES
+               if f not in manifest or not os.path.exists(os.path.join(snap_dir, f))]
+    if missing and not allow_legacy:
+        sys.exit(f"incomplete snapshot: {snap_dir} is missing {', '.join(sorted(missing))} "
+                 "— refusing to grade. The frozen target and frozen null must travel "
+                 "with the tallies; without them a grade recomputes the target it was "
+                 "supposed to be held to. Re-cut with tools/make_repro_snapshot.py, or "
+                 "pass --allow-legacy-snapshot to inspect an archive with NO verdicts.")
 
     def read(fname: str) -> list[list[str]]:
         path = os.path.join(snap_dir, fname)
@@ -468,11 +1657,87 @@ def load_snapshot(snap_dir: str):
         per_day.setdefault((kind, int(hd)), []).append((int(day), int(n), int(hits)))
     totals = [(kind, int(hd), int(total), float(claimed) if claimed else None, int(first_ts))
               for kind, hd, total, claimed, first_ts in read("structural_claims.csv")]
-    return by_h, totals, per_day
+
+    # The frozen claims travel with the snapshot as a committed copy of the
+    # chain's newest record per kind, hashed like every other file. Absence is
+    # an abort above; under --allow-legacy-snapshot it leaves the map empty and
+    # the caller suppresses verdicts entirely.
+    prereg_claims: dict[str, dict] = {}
+    if "prereg_claims.csv" not in missing:
+        for kind, claimed, spec_hash, ts in read("prereg_claims.csv"):
+            prereg_claims[kind] = {"claimed": float(claimed), "spec_hash": spec_hash,
+                                   "registered_ts": int(ts)}
+
+    # The frozen naive-persistence null travels the same way.
+    naive_per_day: dict[tuple, list] = {}
+    if "structural_naive_days.csv" not in missing:
+        for kind, hd, day, n, hits in read("structural_naive_days.csv"):
+            naive_per_day.setdefault((kind, int(hd)), []).append((int(day), int(n), int(hits)))
+
+    # THE GRADER PIN TRAVELS WITH THE BUNDLE. The DB path refuses to compute a
+    # single number until the chain names this exact file and these exact
+    # thresholds; this path used to check nothing and publish verdicts anyway,
+    # on the only route REPRODUCE.md offers a third party. The record now ships
+    # as a manifest-hashed file, so the same refusal applies here. A record that
+    # names different code is a hard exit, exactly as in the DB path. An ABSENT
+    # record (legacy archive) is not an exit — it leaves protocol None and the
+    # caller drops the verdict field entirely, the same treatment a missing
+    # frozen target already gets. Do NOT resolve a refusal by writing a new
+    # chain record or re-pinning graderSha256: the refusal is the finding.
+    protocol = None
+    if "grading_protocol.csv" not in missing:
+        rows = read("grading_protocol.csv")
+        if rows:
+            (seq, sha, commit, min_n, min_days, min_blocks,
+             max_alpha, mult_rule, looks_col) = rows[0]
+            # An empty threshold column means the chained record never froze
+            # that floor. It reads back as None so the check below refuses,
+            # rather than being filled in from this grader's own constant.
+            num = lambda v: int(v) if v != "" else None
+            protocol = {"_seq": int(seq), "graderSha256": sha,
+                        "graderCommit": commit or None,
+                        "minIndependentN": num(min_n),
+                        "minDistinctDays": num(min_days),
+                        "minDistinctBlocks": num(min_blocks),
+                        "maxAlpha": float(max_alpha) if max_alpha != "" else None,
+                        "multiplicityRule": mult_rule or None,
+                        # The look count travels WITH the bundle, hashed like
+                        # every other field. A re-cut snapshot that came back
+                        # with fewer looks than the one before it must not be
+                        # able to refund a look, so the loader treats this as a
+                        # lower bound and main() maxes it against the looks the
+                        # published registry already declared.
+                        "_looks": num(looks_col) or 0}
+        err = grader_registration_error(
+            protocol, f"the snapshot bundle {snap_dir}/grading_protocol.csv")
+        if err and protocol is not None:
+            sys.exit(err)
+    return by_h, totals, per_day, prereg_claims, naive_per_day, protocol
 
 
-def verdict_for(acc, lo, hi, n, null_acc, claimed, distinct_days=None) -> str:
-    """Verdicts come from the interval, never the point estimate."""
+# VERDICT_EPS is the smallest interval-vs-null gap that may decide anything.
+#
+# It is a float64 resolution guard, not a materiality threshold: at 1e-12 it is
+# ~4,000x the double-precision epsilon near 1.0 and ~10 orders of magnitude
+# below any accuracy difference this platform could measure, so it can only ever
+# suppress a verdict that arithmetic noise produced. It is applied SYMMETRICALLY
+# in verdict_for — a gap inside the band yields NO SKILL, never VALIDATED and
+# never FAILED.
+VERDICT_EPS = 1e-12
+
+
+def verdict_for(acc, lo, hi, n, null_acc, claimed, distinct_days=None,
+                null_coverage=None, distinct_blocks=None) -> str:
+    """Verdicts come from the interval, never the point estimate.
+
+    The [lo, hi] handed in is the MULTIPLICITY-CORRECTED interval — priced for
+    the family of rows this cycle publishes and for every grading look already
+    taken (see corrected_z) — not a fixed 95%. Nothing in this function names a
+    coverage, and that is deliberate: the widening happens where the interval is
+    computed, so every caller inherits it and none can opt out by passing a
+    friendlier number. Since the correction only ever widens, it can turn
+    VALIDATED into NO SKILL or HOLDING into WIDE and never the reverse.
+    """
     if n < MIN_INDEPENDENT_N:
         return f"INSUFFICIENT ({n}/{MIN_INDEPENDENT_N})"
     # No interval, no verdict. A sample spread over too few market days has no
@@ -481,15 +1746,36 @@ def verdict_for(acc, lo, hi, n, null_acc, claimed, distinct_days=None) -> str:
     # many symbols they cover. Reading a verdict off the point estimate here is
     # exactly the failure the interval discipline exists to prevent.
     if lo is None or hi is None:
+        # Structural rows are gated on NON-OVERLAPPING horizon blocks: their
+        # call days overlap by construction, so counting days here would let a
+        # single forward window pass a ten-cluster floor.
+        if distinct_blocks is not None:
+            return (f"INSUFFICIENT BLOCKS ({distinct_blocks}/{MIN_DISTINCT_BLOCKS} "
+                    "non-overlapping horizon blocks) — no interval, so no verdict")
         if distinct_days is not None:
             return (f"INSUFFICIENT DAYS ({distinct_days}/{MIN_DISTINCT_DAYS} distinct days) — "
                     "no interval, so no verdict")
         return "NO INTERVAL — no verdict"
-    # Against a stated null (direction): the whole interval must clear it.
+    # A null measured on only some of the rows the model is measured on is not
+    # a matched null: the uncovered rows are self-selected (the baseline was
+    # incomputable exactly where the state was degenerate or the history thin),
+    # so any skill verdict read off it is a comparison between two different
+    # samples. Refuse the verdict rather than qualify it in prose.
+    if null_coverage is not None and null_coverage < 1.0:
+        return f"PARTIAL BASELINE ({null_coverage:.1%} of graded rows carry a frozen null)"
+    # Against a stated null (direction): the whole interval must clear it, by a
+    # margin the arithmetic can actually represent.
+    #
+    # VERDICT_EPS is symmetric on purpose. It cannot hand out a VALIDATED any
+    # more than it can hand out a FAILED, so it is not a loosened threshold —
+    # it is a refusal to decide anything on a difference smaller than the last
+    # bit of a float64. Without it, a null of exactly 1.0 made "hi < null_acc"
+    # true for every conceivable record, so FAILED (and with it retire=true) was
+    # algebraically constant regardless of the model's accuracy.
     if null_acc is not None:
-        if hi < null_acc:
+        if hi < null_acc - VERDICT_EPS:
             return "FAILED — significantly worse than the naive baseline"
-        if lo > null_acc:
+        if lo > null_acc + VERDICT_EPS:
             return "VALIDATED — beats baseline"
         return "NO SKILL — indistinguishable from baseline"
     # Against a frozen claim (structure): has live accuracy decayed below it?
@@ -509,15 +1795,99 @@ def main() -> int:
     ap.add_argument("--snapshot", metavar="DIR",
                     help="grade from a committed reproducibility snapshot (repro/) "
                          "instead of the gitignored DB; verifies manifest hashes first")
+    ap.add_argument("--allow-legacy-snapshot", action="store_true",
+                    help="read a snapshot cut before the frozen target/null shipped. "
+                         "Structural rows are stamped 'DB average (NO CHAIN RECORD)' and "
+                         "NO verdict is published from such a snapshot.")
     args = ap.parse_args()
 
+    # Where a previously published registry would be, read BEFORE anything is
+    # graded: it is one of the durable sources the look counter is maxed over.
+    reg_path = args.json or os.path.join(os.path.dirname(DEFAULT_DB),
+                                         "accuracy_registry.json")
+
     if args.snapshot:
-        by_h, totals, per_day = load_snapshot(args.snapshot)
-        rows = grade_directional_days(by_h) + grade_structural_days(totals, per_day)
+        by_h, totals, per_day, pre, naive_per_day, protocol = load_snapshot(
+            args.snapshot, allow_legacy=args.allow_legacy_snapshot)
+        looks = max(1, (protocol or {}).get("_looks") or 0,
+                    published_looks(reg_path))
+        rows = grade_with_multiplicity(
+            lambda: (grade_directional_days(by_h)
+                     + grade_structural_days(totals, per_day, pre, naive_per_day)),
+            looks)
+        if protocol is None:
+            # No pinned grader in the bundle: nothing in this artifact says the
+            # code producing these verdicts is the code the protocol froze. Drop
+            # every verdict rather than publish one no record backs — an absent
+            # verdict cannot be quoted, a downgraded one can.
+            for r in rows:
+                r.pop("verdict", None)
+                r.pop("claim_verdict", None)
+        if args.allow_legacy_snapshot and not pre:
+            # A legacy archive cannot say what the target WAS, so it must not
+            # publish what the record IS relative to one. Drop the verdict
+            # field entirely rather than emit a downgraded string a reader
+            # could quote — an absent verdict cannot be misread as a grade.
+            for r in rows:
+                if r["family"].startswith("structure"):
+                    r["claimed_source"] = "DB average (NO CHAIN RECORD)"
+                    r.pop("verdict", None)
+                    r.pop("claim_verdict", None)
+        # The snapshot exports per-day tallies, not per-prediction probabilities,
+        # so reliability bins cannot be rebuilt from it. Saying so beats an
+        # empty dict pretending the calibration was measured and came up clean.
+        calibration = None
+        # A snapshot carries tallies, not the chain or the outcome schema, so
+        # neither anteriority claim can be verified from it. Unverified is not
+        # verified: the summary says so rather than asserting either.
+        chain = None
+        # A snapshot carries neither the chain nor per-row revisions, so neither
+        # the grader registration nor the code provenance can be checked from
+        # one. Unchecked is not clean; the summary says so below.
+        gate = {"structure": {}, "direction": {}, "epoch": REVISION_EPOCH.isoformat(),
+                "checked": False}
+        revision_refusals = []
+        # A snapshot carries tallies, not regime_outcomes, so the live
+        # write-path invariant cannot be probed from one.
+        probe = {"count": 0, "newest_ts": None, "kinds": []}
+        null_refusals = []
+        # A snapshot has no symbols/listing table, so universe completeness is
+        # UNMEASURED here rather than assumed clean.
+        survivorship_completeness = {
+            "direction": measure_universe_completeness(None, "prediction_outcomes"),
+            "structure": measure_universe_completeness(None, "regime_outcomes"),
+        }
         source = f"snapshot {args.snapshot} (manifest hashes verified)"
     else:
         con = connect(args.db)
-        rows = grade_directional(con) + grade_structural(con)
+        # Before a single number is computed: is THIS the grader the chain
+        # registered, under THESE thresholds? A grader nothing names cannot
+        # produce a pre-registered verdict, so this exits rather than grades.
+        protocol = require_registered_grader(con)
+        # And: has the research loop actually recorded the judgments it narrated?
+        require_research_liveness(con, args.db)
+        # And before a single number is published: does the live table still
+        # satisfy the write-path invariant the store is supposed to enforce?
+        probe = null_amendment_probe(con)
+        # Price the multiplicity BEFORE any interval exists: how many looks have
+        # been taken at these rows, and how many rows this cycle publishes.
+        looks = max(1, chain_looks(con), published_looks(reg_path))
+        set_family_floor(max(chain_families(con), published_family(reg_path)))
+        rows = grade_with_multiplicity(
+            lambda: grade_directional(con) + grade_structural(con), looks)
+        null_refusals = apply_null_amendment_probe(rows, probe)
+        chain = fetch_chain_presence(con)
+        chain["grading_protocol_seq"] = protocol["_seq"]
+        chain["grader_sha256"] = self_sha256()
+        chain["grader_commit"] = protocol.get("graderCommit")
+        calibration = fetch_calibration_bins(con)
+        # And: what code wrote the rows behind each verdict?
+        gate = revision_gate(con)
+        revision_refusals = apply_revision_gate(rows, gate)
+        survivorship_completeness = {
+            "direction": measure_universe_completeness(con, "prediction_outcomes"),
+            "structure": measure_universe_completeness(con, "regime_outcomes"),
+        }
         source = f"database {args.db}"
 
     print("=" * 104)
@@ -525,17 +1895,63 @@ def main() -> int:
     print("Every predictor, its claim, and what the live record actually supports.")
     print(f"Graded from {source}")
     print("=" * 104)
+    m = multiplicity()
+    print(f"Interval coverage: {1 - m['corrected_alpha']:.4%} — maxAlpha {MAX_ALPHA} "
+          f"divided by {m['divisor']} ({m['family_size']} rows published this cycle "
+          f"x {m['looks']} grading looks taken), z={m['z']:.4f}. NOT a fixed 95%: this "
+          "surface publishes a family of rows and re-grades them daily, and both are "
+          "priced. The correction only ever widens.")
+    print("=" * 104)
     hdr = "%-40s %8s %9s %9s %-19s %s"
-    print(hdr % ("PREDICTOR", "CLAIM", "LIVE n", "LIVE ACC", "95% CI", "VERDICT"))
+    print(hdr % ("PREDICTOR", "CLAIM", "LIVE n", "LIVE ACC", "CORRECTED CI", "VERDICT"))
     print("-" * 104)
     for r in rows:
         claim = f"{r['claimed']:.1%}" if r["claimed"] is not None else "—"
         acc = f"{r['live_acc']:.1%}" if r["live_acc"] is not None else "—"
         ci = f"[{r['ci'][0]:.3f}, {r['ci'][1]:.3f}]" if r["ci"] else "—"
-        print(hdr % (r["predictor"][:40], claim, f"{r['live_n']:,}", acc, ci, r["verdict"]))
+        print(hdr % (r["predictor"][:40], claim, f"{r['live_n']:,}", acc, ci,
+                     r.get("verdict", "NO VERDICT — withheld, see notes below")))
 
-    failed = [r for r in rows if r["verdict"].startswith("FAILED")]
-    pending = [r for r in rows if r["verdict"].startswith("PENDING")]
+    if args.snapshot and protocol is None:
+        print("NO VERDICT — UNREGISTERED GRADER. This snapshot carries no "
+              "grading-protocol record (repro/grading_protocol.csv), so nothing in it "
+              f"names the code that graded it; this grader hashes {self_sha256()}. "
+              "The verdict field is dropped rather than downgraded. Re-cut the snapshot "
+              "from a database whose chain registers this grader — do NOT write a new "
+              "chain record or re-pin graderSha256 to make the refusal go away.")
+        print()
+
+    if revision_refusals:
+        print("NO VERDICT — unattributable code provenance. These predictors have rows "
+              f"frozen on/after {gate['epoch']} whose writing binary cannot be resolved "
+              "to a commit in this repository (a '+dirty' stamp means the binary was "
+              "built from a modified checkout; '(unstamped)' means it recorded nothing):")
+        for line in revision_refusals:
+            print(line)
+        print("    The verdict field is dropped, not downgraded — an absent verdict "
+              "cannot be quoted as one.")
+        print()
+    elif not gate["checked"]:
+        print(f"Code provenance: NOT CHECKED from this source (no per-row revision "
+              "available). Absence of a check is not a clean check.")
+        print()
+
+    if null_refusals:
+        newest = (dt.datetime.fromtimestamp(probe["newest_ts"], dt.timezone.utc)
+                  .isoformat().replace("+00:00", "Z")) if probe["newest_ts"] else "unknown"
+        print(f"NO VERDICT — write-path invariant violated in the live data. "
+              f"{probe['count']:,} regime_outcomes row(s) frozen at/after "
+              f"{NULL_AMENDMENT_EPOCH.isoformat()} carry no naive_label; newest offending "
+              f"ts {newest}. The store refuses such writes, so the binary that wrote them "
+              "is not this source and its calls cannot be graded:")
+        for line in null_refusals:
+            print(line)
+        print("    Do NOT backfill the column — a persistence label computed after the "
+              "outcome is a hindsight baseline. Rebuild and restart the daemon.")
+        print()
+
+    failed = [r for r in rows if r.get("verdict", "").startswith("FAILED")]
+    pending = [r for r in rows if r.get("verdict", "").startswith("PENDING")]
     print()
     if failed:
         print("ACTION REQUIRED — these are shipping a prediction the live record contradicts:")
@@ -543,10 +1959,21 @@ def main() -> int:
             print(f"  * {r['predictor']}: {r['live_acc']:.1%} over {r['live_n']:,} independent "
                   f"observations, entire CI below the {r['null_acc']:.1%} prequential baseline.")
         print("    Retire, invert, or relabel as experimental. Do not display as a forecast.")
+        print("    Directional FAILED rows publish retire=true — the daemon's model-health")
+        print("    worker enforces the pre-registered retirement automatically.")
         print()
     if pending:
         print(f"{len(pending)} structural predictor(s) not yet gradable — their numbers are")
         print("backtest claims. They become real evidence on the dates shown above.")
+        print()
+    srcs = {r.get("claimed_source") for r in rows if r["family"] == "structure"}
+    if srcs:
+        print("Structural claim C is READ from the pre-registration chain (the "
+              "min-conviction, all-decisions band), never recomputed at grading time; "
+              f"sources this run: {', '.join(sorted(s for s in srcs if s))}.")
+        print("Each row also carries claimed_db_avg — the conviction-mix-weighted average "
+              "over regime_outcomes — as a DIAGNOSTIC. It is not the target; a gap between "
+              "it and C is mix drift, which is exactly what the freeze is meant to survive.")
         print()
     print(f"Independence rule: one observation per (symbol, horizon, UTC-day).")
     print(f"Verdict threshold: {MIN_INDEPENDENT_N} independent observations minimum, "
@@ -559,20 +1986,81 @@ def main() -> int:
     print("Directional null: PREQUENTIAL only — each day's constant guess is the majority")
     print("class over days strictly BEFORE it (a coin flip on day one or a tied prior),")
     print("graded through the same day-clustered machinery as the model it benchmarks.")
+    if chain is None:
+        print("Structural null: UNVERIFIED — graded from a snapshot, which carries tallies")
+        print("but not the outcome schema; whether a baseline was frozen cannot be read here.")
+    elif chain["null_frozen"]:
+        print("Structural null: NAIVE PERSISTENCE — the \"nothing changes\" label frozen at call")
+        print("time beside every regime call (regime_outcomes.naive_label) and graded by the same")
+        print("resolver, published as its own '<kind>#persist' row. A structural verdict is read")
+        print("against it; the frozen-claim comparison rides along as claim_verdict. Calls frozen")
+        print("before 2026-07-27 carry no baseline and grade NO BASELINE rather than a skill claim.")
+        print(f"Verified this run: {chain['null_coverage']:.1%} of graded outcomes carry a "
+              "frozen baseline.")
+        print(f"Write-path invariant: {chain['unmatched_nulls']} post-"
+              f"{NULL_AMENDMENT_EPOCH.isoformat()} rows with no baseline (must be 0; the "
+              "store refuses such writes and this run exits non-zero otherwise).")
+    else:
+        print("Structural null: NOT FROZEN — regime_outcomes carries no naive_label column;")
+        print("every structural kind grades NO BASELINE. No claim of a frozen \"nothing")
+        print("changes\" benchmark is supported by this database.")
     print("The hindsight null was retired after its one dual-null transition cycle; the")
     print("switchover regrade against the committed repro snapshot recorded ZERO verdict")
     print("changes — see audits/2026-07-27-null-transition.md.")
+    if chain is None:
+        print("Auto-retire rule: UNVERIFIED — the pre-registration chain is not carried in a")
+        print("snapshot, so anteriority cannot be checked from this grade.")
+    elif chain["retire_rule_chained"]:
+        print(f"Auto-retire rule (pre-registered {AUTO_RETIRE_REGISTERED}, chained as "
+              f"'auto-retire-rule' at chain seq {chain['retire_rule_chain_seq']}):")
+        print("a directional row that meets both evidence floors with its effective-N Wilson")
+        print("upper bound below the prequential null grades FAILED, publishes retire=true, and")
+        print("the daemon stops publishing it. Chained digest matches the graded rule: "
+              f"{auto_retire_rule_digest()}.")
+    else:
+        print("Auto-retire rule: NOT ON CHAIN — digest computed locally, anteriority unproven.")
+        print("The thresholds below are the ones this run graded under, but nothing in the")
+        print(f"pre-registration chain freezes them: local digest {auto_retire_rule_digest()}"
+              + (f", chain carries {chain['retire_rule_chain_hash']}."
+                 if chain["retire_rule_chain_hash"] else ", chain carries no such record."))
     for r in rows:
         if r.get("design_effect"):
             print(f"  {r['predictor']}: n={r['live_n']:,} over {r['distinct_days']} days, "
                   f"design effect {r['design_effect']:.1f}x -> effective n {r['effective_n']:.0f}")
 
+    if calibration and any(calibration["horizons"].values()):
+        print()
+        print("Reliability (predicted P(up) vs realized up-frequency, independent symbol-days):")
+        for horizon, bins in sorted(calibration["horizons"].items()):
+            for b in bins:
+                conv = " <- conviction tier" if (
+                    b["p_hi"] <= 0.5 - calibration["conviction_threshold"] + 1e-9
+                    or b["p_lo"] >= 0.5 + calibration["conviction_threshold"] - 1e-9) else ""
+                print(f"  {horizon}: p in [{b['p_lo']:.1f},{b['p_hi']:.1f}) "
+                      f"mean {b['mean_predicted']:.3f} -> realized {b['realized_up_freq']:.3f} "
+                      f"(n={b['n']}, {b['distinct_days']} days){conv}")
+        print("A conviction-tier bin whose realized frequency sits on the wrong side of its")
+        print("predicted probability is the anti-calibration to fix (threshold or isotonic")
+        print("recalibration) BEFORE the auto-retire gate fires on the graded slice.")
+    elif calibration is None:
+        print()
+        print("Reliability bins: unavailable from a snapshot grade — the committed snapshot")
+        print("carries per-day tallies, not per-prediction probabilities. Grade from the DB")
+        print("to publish calibration.")
+
+    print()
+    for fam, m in survivorship_completeness.items():
+        if m.get("clean"):
+            print(f"Universe completeness ({fam}): listing status resolvable for all "
+                  f"{m['symbols_graded']:,} graded symbols — survivorship_clean.")
+        else:
+            print(f"Universe completeness ({fam}): NOT CLEAN — {m['reason']}. "
+                  "Rows carry survivorship_clean=false.")
+
     # Post-epoch attrition is MEASURED, not declared unmeasurable: the bound is
     # computed against an external delistings record (SEC EDGAR Form 25) by
     # tools/backfill_delistings.py --survivorship-bound, which owns this field
     # in the registry JSON. This block only reports what was measured.
-    reg_path = args.json or os.path.join(os.path.dirname(DEFAULT_DB),
-                                         "accuracy_registry.json")
     sb = None
     if os.path.exists(reg_path):
         try:
@@ -595,14 +2083,66 @@ def main() -> int:
         print("to bound accuracy inflation from dropped symbols against SEC EDGAR Form 25 filings.")
 
     if args.json:
-        payload = {"generated": dt.datetime.now().isoformat(timespec="seconds"),
+        now = dt.datetime.now().isoformat(timespec="seconds")
+        payload = {"generated": now,
+                   # graded_at is the timestamp of the grade that produced THESE
+                   # rows, and refused_since is null on a successful grade. A
+                   # refusal envelope (written by ops/accuracy-registry.sh when
+                   # this grader exits non-zero) carries the stale graded_at
+                   # forward and sets refused_since, so a consumer can see the
+                   # outage without inferring it from file mtime.
+                   "graded_at": now,
+                   "refused_since": None,
                    "min_independent_n": MIN_INDEPENDENT_N,
+                   # The published interval's actual error rate, and the two
+                   # multiplicities it is paying for. A consumer reading `ci`
+                   # off any row can read here what that interval covers.
+                   "max_alpha": MAX_ALPHA,
+                   "family_size": multiplicity()["family_size"],
+                   "looks": multiplicity()["looks"],
+                   "divisor": multiplicity()["divisor"],
+                   "corrected_alpha": multiplicity()["corrected_alpha"],
+                   "ci_z": multiplicity()["z"],
+                   "multiplicity_rule": MULTIPLICITY_RULE,
                    "survivorship_epoch": SURVIVORSHIP_EPOCH.isoformat(),
+                   # Measured, per graded sample: the share of contributing
+                   # symbols whose listing status is resolvable. Every row's
+                   # survivorship_clean flag is read off this, never asserted.
+                   "survivorship_completeness": survivorship_completeness,
                    "null_policy": ("prequential-majority only: each day's constant guess "
                                    "is the majority class over days strictly before it. "
                                    "The hindsight null was retired after the dual-null "
                                    "transition cycle; the switchover regrade recorded zero "
                                    "verdict changes (audits/2026-07-27-null-transition.md)."),
+                   "min_distinct_blocks": MIN_DISTINCT_BLOCKS,
+                   "auto_retire_rule": auto_retire_rule(),
+                   # Provenance, both directions: the digest of the grader that
+                   # produced this file (checked against the chained protocol
+                   # before anything was graded), and which predictors were
+                   # refused a verdict because the code behind their rows could
+                   # not be resolved to a commit.
+                   "grader_sha256": self_sha256(),
+                   "grading_protocol_seq": chain.get("grading_protocol_seq") if chain else None,
+                   "revision_epoch": gate["epoch"],
+                   "revision_gate_checked": gate["checked"],
+                   "revision_gate_offenders": {"structure": gate["structure"],
+                                               "direction": gate["direction"]},
+                   # The live probe of the naive-baseline write-path invariant:
+                   # how many post-amendment rows carry no frozen baseline, the
+                   # newest one, and which structural kinds were refused for it.
+                   "null_amendment_probe": probe,
+                   # Verified by reading the DB, not asserted: whether a naive
+                   # baseline is actually frozen beside the graded outcomes, and
+                   # whether the auto-retire digest above is on the prereg chain.
+                   # null means the grade could not check (snapshot source).
+                   "null_frozen": chain["null_frozen"] if chain else None,
+                   "null_frozen_coverage": chain["null_coverage"] if chain else None,
+                   "retire_rule_chained": chain["retire_rule_chained"] if chain else None,
+                   "retire_rule_chain_seq": chain["retire_rule_chain_seq"] if chain else None,
+                   # Reliability-diagram bins (per horizon: predicted probability,
+                   # realized frequency, n). null when graded from a snapshot,
+                   # which carries no per-prediction probabilities.
+                   "calibration": calibration,
                    "rows": rows}
         # backfill_delistings.py --survivorship-bound owns survivorship_bound;
         # regenerating the registry must not silently discard the measurement.
@@ -617,6 +2157,18 @@ def main() -> int:
         with open(args.json, "w") as f:
             json.dump(payload, f, indent=1)
         print(f"\nwrote {args.json}")
+
+    # FAIL LOUDLY on a broken write-path invariant. Everything above is already
+    # written and reported honestly; this only changes the exit status, so the
+    # daily LaunchAgent shows a failed run rather than burying the divergence in
+    # prose nobody reads.
+    if chain and chain.get("unmatched_nulls"):
+        print(f"\nINVARIANT VIOLATION: {chain['unmatched_nulls']} regime_outcomes rows frozen "
+              f"at/after {NULL_AMENDMENT_EPOCH.isoformat()} carry no naive_label.")
+        print("The daemon's store refuses such writes, so the deployed binary is not this")
+        print("source. Do NOT backfill the column — a persistence label computed after the")
+        print("outcome is a hindsight baseline. Rebuild and restart the daemon.")
+        return 1
     return 0
 
 

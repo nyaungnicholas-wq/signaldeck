@@ -29,7 +29,7 @@ func TestScanRatings_Parsing(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &gotBody)
 		// NVDA + AAPL present; MSFT (requested) absent; a malformed short row.
-		io.WriteString(w, `{"totalCount":2,"data":[
+		_, _ = io.WriteString(w, `{"totalCount":2,"data":[
 			{"s":"NASDAQ:NVDA","d":[0.5576,0.9333,0.1818,56.97,210.96]},
 			{"s":"NASDAQ:AAPL","d":[-0.2,-0.3,-0.1,44.1,190.5]},
 			{"s":"NASDAQ:BAD","d":[0.1,0.2]}
@@ -92,14 +92,14 @@ func TestResolveExchange(t *testing.T) {
 		case "DRAM":
 			// A non-stock (CBOE index-ish) hit appears first, then the stock —
 			// the stock must win, and <em> markup on symbol must be stripped.
-			io.WriteString(w, `[
+			_, _ = io.WriteString(w, `[
 				{"symbol":"DR<em>AM</em>X","exchange":"NASDAQ","prefix":"","type":"fund"},
 				{"symbol":"<em>DRAM</em>","exchange":"CBOE","prefix":"","type":"stock"}
 			]`)
 		case "NVDA":
-			io.WriteString(w, `[{"symbol":"NVDA","exchange":"NASDAQ","prefix":"","type":"stock"}]`)
+			_, _ = io.WriteString(w, `[{"symbol":"NVDA","exchange":"NASDAQ","prefix":"","type":"stock"}]`)
 		default:
-			io.WriteString(w, `[]`)
+			_, _ = io.WriteString(w, `[]`)
 		}
 	}))
 	defer srv.Close()

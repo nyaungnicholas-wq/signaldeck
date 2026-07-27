@@ -97,7 +97,7 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	// prediction rows (~45s measured) — the SIGNALS hub's first paint.
 	for _, h := range []md.Horizon{md.H1d, md.H1w} {
 		hh := h
-		if _, err := sharedPredictionsCache.get(ctx, fmt.Sprintf("%p|%s", d.St, hh),
+		if _, err := sharedPredictionsCache.get(ctx, fmt.Sprintf("%s|%s", d.St.CacheKey(), hh),
 			func(c context.Context) (map[string]any, error) {
 				return d.buildPredictionsLatest(c, hh)
 			}); err != nil {

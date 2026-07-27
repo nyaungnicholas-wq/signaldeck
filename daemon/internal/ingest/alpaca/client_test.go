@@ -94,13 +94,13 @@ func TestBackfillPaging(t *testing.T) {
 				gotTokens = append(gotTokens, q.Get("page_token"))
 				w.Header().Set("Content-Type", "application/json")
 				if q.Get("page_token") == "" {
-					fmt.Fprint(w, `{"bars":[
+					_, _ = fmt.Fprint(w, `{"bars":[
 						{"t":"2026-06-01T04:00:00Z","o":1,"h":2,"l":0.5,"c":1.5,"v":100},
 						{"t":"2026-06-02T04:00:00Z","o":1.5,"h":3,"l":1,"c":2.5,"v":200}
 					],"next_page_token":"tok2"}`)
 					return
 				}
-				fmt.Fprint(w, `{"bars":[
+				_, _ = fmt.Fprint(w, `{"bars":[
 					{"t":"2026-06-03T04:00:00Z","o":2.5,"h":4,"l":2,"c":3.5,"v":300}
 				],"next_page_token":null}`)
 			}))

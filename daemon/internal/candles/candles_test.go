@@ -18,10 +18,8 @@ func trendBars(dir, n int) []marketdata.Bar {
 	for i := 0; i < n; i++ {
 		c += float64(dir) * 2
 		o := c - float64(dir)*1.0
-		hi, lo := o, o
-		if c > o {
-			hi, lo = c, o
-		} else {
+		hi, lo := c, o
+		if c <= o {
 			hi, lo = o, c
 		}
 		out[i] = mkBar(int64(i), o, hi+0.8, lo-0.8, c)

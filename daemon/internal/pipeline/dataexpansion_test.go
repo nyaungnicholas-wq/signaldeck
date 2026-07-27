@@ -372,7 +372,7 @@ func TestCboePCPollerBackfillAndDedup(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Serve every requested trading day with the same headline ratios.
 		if strings.HasSuffix(r.URL.Path, "_daily_options") {
-			fmt.Fprint(w, `{"ratios":[{"name":"TOTAL PUT/CALL RATIO","value":"0.86"},
+			_, _ = fmt.Fprint(w, `{"ratios":[{"name":"TOTAL PUT/CALL RATIO","value":"0.86"},
 				{"name":"INDEX PUT/CALL RATIO","value":"1.01"},
 				{"name":"EQUITY PUT/CALL RATIO","value":"0.57"}],
 				"SUM OF ALL PRODUCTS":{"call":100,"put":86,"total":186}}`)
@@ -460,10 +460,10 @@ func TestTVQuotesPollerMarketHoursAndPrune(t *testing.T) {
 		switch r.URL.Path {
 		case "/america/scan":
 			// rtc present ⇒ price is the real-time composite.
-			fmt.Fprint(w, `{"data":[{"s":"NASDAQ:NVDA","d":["NVDA","NASDAQ",315.32,-1.4,34132321,"delayed_streaming_900",314.96]}]}`)
+			_, _ = fmt.Fprint(w, `{"data":[{"s":"NASDAQ:NVDA","d":["NVDA","NASDAQ",315.32,-1.4,34132321,"delayed_streaming_900",314.96]}]}`)
 		case "/crypto/scan":
 			// rtc null ⇒ price falls back to the (labeled) delayed close.
-			fmt.Fprint(w, `{"data":[{"s":"BITSTAMP:BTCUSD","d":["BTCUSD","BITSTAMP",64135.0,2.1,9999.5,"streaming",null]}]}`)
+			_, _ = fmt.Fprint(w, `{"data":[{"s":"BITSTAMP:BTCUSD","d":["BTCUSD","BITSTAMP",64135.0,2.1,9999.5,"streaming",null]}]}`)
 		default:
 			http.Error(w, "bad path", http.StatusNotFound)
 		}

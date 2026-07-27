@@ -60,6 +60,17 @@ universe was seeded from 2026 survivors so the delisted arm is itself incomplete
 A symbol that stops trading inside a forward window has no forward return and is
 dropped from that day's cross-section; the count is reported, not hidden.
 
+Reproducibility
+---------------
+The exact input series this script consumes are content-versioned in
+``repro/xsfactor_inputs.csv`` (kind ``xsfactor-1d-day-close-volume``: one row
+per symbol, hashing the (UTC-day, close, volume) triples under the datasetver
+v1 scheme — written by ``tools/make_repro_snapshot.py``, pinned against this
+script's own loader by ``TestXsfactorSnapshotRoundTrip``). Bars are licensed
+and never redistributed; hash your own licensed series against that file
+first, and only then is a differing report attributable to code. See
+REPRODUCE.md.
+
 Usage
 -----
     python3 tools/xsfactor_edge.py                       # full report

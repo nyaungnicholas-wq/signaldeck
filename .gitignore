@@ -11,3 +11,9 @@ node_modules/
 # durable home beside the code that serves it (e.g. the pairs study result is
 # embedded at daemon/internal/pairsstudy/result.json).
 scratchpad/
+
+# Local build outputs and scratch verification trees. Absent from a clone by
+# design; ops/manifest-check.sh skips gitignored paths for exactly this reason.
+daemon/sdmaint
+.tmpverify/
+*.bak-[0-9]*

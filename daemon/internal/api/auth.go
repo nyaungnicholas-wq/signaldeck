@@ -114,7 +114,8 @@ func (b *credsBody) validate() string {
 		return "password must be 8-72 characters"
 	}
 	for _, r := range b.Username {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.') {
+		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.'
+		if !ok {
 			return "username may only contain letters, digits, . _ -"
 		}
 	}

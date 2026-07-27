@@ -11,6 +11,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/breakout"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/macrofeat"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/micro"
@@ -92,6 +93,31 @@ func globalCalibration(ctx context.Context, st *store.Store, h md.Horizon) (func
 // predHorizons are the horizons the ensemble predicts (forecast + expectancy
 // both cover these).
 var predHorizons = []md.Horizon{md.H1d, md.H1w}
+
+// ── prequential-majority benchmark (tracked-benchmark wave) ─────────────
+//
+// The registry's null — the walk-forward majority-follower — is the baseline
+// the ensemble keeps losing to, and until now it existed only inside the
+// offline grader. Here it becomes a first-class TRACKED predictor: every pass
+// commits its constant guess for the same symbols at the same ts, namespaced
+// under "<horizon>#pm" in prediction_outcomes, so the registry grades it with
+// the identical dedup / survivorship / day-clustered rules as the ensemble
+// while every other reader (calibration fits, dashboards, the ledger) stays
+// blind to it — they all filter on exact horizon values.
+
+// benchmarkSuffix namespaces benchmark rows inside prediction_outcomes.
+const benchmarkSuffix = "#pm"
+
+// benchmarkHorizon maps an ensemble horizon to its benchmark namespace.
+func benchmarkHorizon(h md.Horizon) md.Horizon { return h + benchmarkSuffix }
+
+// benchmarkMajorityEpoch bounds the evidence the live majority-follower may
+// lean on. Rows before it were graded against a survivor-seeded universe; a
+// benchmark fed that evidence would be a null in name only.
+//
+// It reads the ONE boundary rather than restating it: a second copy of the same
+// instant is a second place it can drift out of step with the registry.
+const benchmarkMajorityEpoch = store.SurvivorshipEpoch
 
 func horizonSecs(h md.Horizon) int64 {
 	if h == md.H1w {
@@ -206,16 +232,24 @@ const (
 // one-hot encoded ("regime_<label>"=1) and the prediction's own raw +
 // calibrated probabilities are included so the labeled set can grade the
 // calibration layer itself.
+//
+// The four A7 shortcut keys (forecast_prob / forecast_lift /
+// expectancy_hit_rate / n_used) are NOT written at all. They were only ever
+// gated out of training by gbm.SelfReferentialKey, no non-test reader ever
+// consumed them back out of a row, and cmd/selfref-ablation measured their
+// restoration as worthless (+0.026 mean lift, zero admission-gate flips), so
+// they are deleted at the source rather than built and then banned. No
+// featureVersion bump: the trained layout is unchanged, because these keys
+// never survived the exclusion predicate anyway.
 // extra carries cross-cutting feature maps (Stage 6): crypto microstructure
 // (micro_*) for crypto symbols and FRED VIX (vix_*) for all symbols. Each is
 // merged verbatim; absence of a map means those features are simply not present
 // for this row (absence is information, not zero).
-func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, nUsed int, regimeLbl string, rankPct *float64, sentN int, extra ...map[string]float64) map[string]float64 {
+func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, regimeLbl string, rankPct *float64, sentN int, extra ...map[string]float64) map[string]float64 {
 	vec := map[string]float64{
 		"pressure_score": c.PressureScore,
 		"pred_raw":       raw,
 		"pred_cal":       cal,
-		"n_used":         float64(nUsed),
 	}
 	for _, comp := range sc.Components {
 		// A weight-0 component is INFORMATIONAL: its Contrib is Norm × Weight,
@@ -229,15 +263,6 @@ func buildFeatureVector(sc md.Score, c ensemble.Components, raw, cal float64, nU
 			continue
 		}
 		vec["comp_"+comp.Name] = comp.Contrib
-	}
-	if c.ExpectancyHitRate != nil {
-		vec["expectancy_hit_rate"] = *c.ExpectancyHitRate
-	}
-	if c.ForecastProb != nil {
-		vec["forecast_prob"] = *c.ForecastProb
-	}
-	if c.ForecastLift != nil {
-		vec["forecast_lift"] = *c.ForecastLift
 	}
 	if c.SentimentScore != nil {
 		vec["sentiment_score"] = *c.SentimentScore
@@ -346,6 +371,20 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			globalCal[h] = fn
 		} else if err != nil {
 			slog.Warn("global calibration: fit failed, publishing uncorrected probabilities", "horizon", h, "err", err)
+		}
+	}
+	// PREQUENTIAL-MAJORITY BENCHMARK: the constant guess is decided ONCE per
+	// pass per horizon, from the deduplicated resolved record over UTC days
+	// strictly before today — committed before today's outcome can exist, so
+	// the benchmark never sees the move it will be graded on. A failed read
+	// skips the benchmark this pass rather than inventing a guess.
+	benchProb := map[md.Horizon]float64{}
+	todayUTC := time.Now().UTC().Unix() / 86400
+	for _, h := range predHorizons {
+		if p, err := w.St.PrequentialMajorityProb(ctx, h, todayUTC, benchmarkMajorityEpoch); err == nil {
+			benchProb[h] = p
+		} else {
+			slog.Warn("prequential-majority benchmark: majority read failed — skipping this pass", "horizon", h, "err", err)
 		}
 	}
 	n, featErrs, staleCals := 0, 0, 0
@@ -521,13 +560,23 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				return "", err
 			}
 			n++
+			// Benchmark row for the SAME (symbol, ts): identical universe,
+			// identical resolution path, identical dedup keys — the registry
+			// grades both under one set of rules, which is the entire point.
+			// Best-effort: the benchmark must never break the prediction it
+			// exists to hold to account.
+			if bp, ok := benchProb[h]; ok {
+				if err := w.St.SeedBenchmarkOutcome(ctx, s.ID, benchmarkHorizon(h), ts, bp); err != nil {
+					slog.Warn("prequential-majority benchmark: seed failed", "symbol", s.Symbol, "horizon", h, "err", err)
+				}
+			}
 			// Feature store: persist the full input vector this prediction
 			// used. Failure must NOT fail the prediction — log + dq metric.
 			var rankPct *float64
 			if pct, ok := rankPcts[s.ID]; ok {
 				rankPct = &pct
 			}
-			vec := buildFeatureVector(sc, c, raw, cal, nUsed, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap)
+			vec := buildFeatureVector(sc, c, raw, cal, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap)
 			if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
 				featErrs++
 				slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)
@@ -545,7 +594,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// is reproducible from the persisted row. Best-effort: a ledger
 			// failure logs + records a dq event but MUST NOT fail the prediction
 			// (the prediction is already durably written above).
-			if _, lerr := w.St.AppendLedger(ctx, store.LedgerEntry{
+			if entry, lerr := w.St.AppendLedger(ctx, store.LedgerEntry{
 				PredictedAt:  time.Now().Unix(),
 				SymbolID:     s.ID,
 				Horizon:      h,
@@ -561,6 +610,37 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					SymbolID: &sid, Ts: time.Now().Unix(),
 					Kind: "ledger_append_error", Detail: fmt.Sprintf("horizon %s: %v", h, lerr),
 				})
+			} else {
+				// Lineage spine (Layers 2+8): tie the ledgered prediction to
+				// each MODEL LEG that actually contributed to its blend (nil
+				// pointer = leg absent or gated off, so no edge — an edge
+				// means "this leg's probability was in the mix"). Idempotent
+				// upserts, best-effort: a lineage failure must not fail the
+				// prediction (already durably ledgered above).
+				for _, leg := range []struct {
+					name string
+					on   bool
+				}{
+					{store.ModelGBM, c.GBMProb != nil},
+					{store.ModelMeanRev, c.MeanRevProb != nil},
+					{store.ModelAlphaX, c.AlphaXProb != nil},
+				} {
+					if !leg.on {
+						continue
+					}
+					_ = lineage.Link(ctx, w.St, lineage.Edge{
+						SrcKind:  lineage.KindPrediction,
+						SrcID:    fmt.Sprintf("%d", entry.Seq),
+						DstKind:  lineage.KindModel,
+						DstID:    leg.name + ":" + string(h),
+						EdgeKind: lineage.EdgeGeneratedBy, MetaJSON: lineage.RevMeta(),
+					})
+				}
+				// Prediction attribution (Layer 6): persist the top-N named
+				// parts of THIS ledgered prediction's raw blend (comp_*
+				// components + legs, probability deltas from the 0.5 prior).
+				// Best-effort like the ledger append itself.
+				WriteLedgerAttribution(ctx, w.St, entry.Seq, s.ID, h, ts, sc, c, wts)
 			}
 		}
 	}
@@ -594,33 +674,39 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
 	resolved := 0
 	for _, h := range predHorizons {
-		pending, err := w.St.UnresolvedPredictions(ctx, h, now-horizonSecs(h), 1500)
-		if err != nil {
-			return "", err
-		}
-		for _, p := range pending {
-			base, okB, err := w.St.BarAtOrBefore(ctx, p.SymbolID, md.TF1d, p.Ts)
+		// The prequential-majority benchmark rows ("<horizon>#pm") resolve
+		// through the exact same path on the exact same horizon clock —
+		// identical grading rules is the entire point of tracking the
+		// benchmark as a predictor.
+		for _, hh := range []md.Horizon{h, benchmarkHorizon(h)} {
+			pending, err := w.St.UnresolvedPredictions(ctx, hh, now-horizonSecs(h), 1500)
 			if err != nil {
 				return "", err
 			}
-			if !okB {
-				continue
+			for _, p := range pending {
+				base, okB, err := w.St.BarAtOrBefore(ctx, p.SymbolID, md.TF1d, p.Ts)
+				if err != nil {
+					return "", err
+				}
+				if !okB {
+					continue
+				}
+				target := base.Ts + horizonSecs(h)
+				if now < target {
+					continue
+				}
+				fwd, okF, err := w.St.BarAtOrAfter(ctx, p.SymbolID, md.TF1d, target)
+				if err != nil {
+					return "", err
+				}
+				if !okF || base.Close <= 0 || fwd.Ts-target > 3*horizonSecs(h) {
+					continue
+				}
+				if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, fwd.Close/base.Close-1); err != nil {
+					return "", err
+				}
+				resolved++
 			}
-			target := base.Ts + horizonSecs(h)
-			if now < target {
-				continue
-			}
-			fwd, okF, err := w.St.BarAtOrAfter(ctx, p.SymbolID, md.TF1d, target)
-			if err != nil {
-				return "", err
-			}
-			if !okF || base.Close <= 0 || fwd.Ts-target > 3*horizonSecs(h) {
-				continue
-			}
-			if err := w.St.ResolvePrediction(ctx, p.SymbolID, h, p.Ts, fwd.Close/base.Close-1); err != nil {
-				return "", err
-			}
-			resolved++
 		}
 	}
 	return fmt.Sprintf("resolved %d predictions", resolved), nil
@@ -765,7 +851,7 @@ func (w *BreakoutRunner) Run(ctx context.Context) (string, error) {
 	now := time.Now()
 	last, _ := w.St.GetMeta(ctx, "corr_break_last")
 	lastTs := int64(0)
-	fmt.Sscanf(last, "%d", &lastTs)
+	_, _ = fmt.Sscanf(last, "%d", &lastTs)
 	if now.Unix()-lastTs > 6*3600 {
 		for _, b := range breakout.CorrelationBreaks(series, 20, 90) {
 			detail := fmt.Sprintf("%s vs %s: recent r=%.2f, base r=%.2f (change %.2f)", b.A, b.B, b.RecentR, b.BaseR, b.Delta)

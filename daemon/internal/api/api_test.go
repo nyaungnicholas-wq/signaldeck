@@ -434,7 +434,7 @@ func TestSecurityRejectionsAreJSONAndSelfDiagnosing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (no CSRF header sent)", resp.StatusCode)
 	}

@@ -13,12 +13,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/canary"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -56,6 +61,15 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		v["graded"] = true
+		v = guardDerivedVariant(v)
+		// The retired flagship's one door back: its shadow rows keep accruing
+		// in prediction_outcomes, and the coded threshold — never a judgment
+		// call — decides whether they have earned emission back.
+		if h, isDirectional := strings.CutPrefix(k, "directional-ensemble-"); isDirectional {
+			if shadow, ok := d.directionalShadow(ctx, md.Horizon(h)); ok {
+				v = applyReadmission(v, shadow)
+			}
+		}
 		models = append(models, v)
 	}
 
@@ -98,12 +112,140 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 			"is retired automatically and stops emitting, regardless of how it scores " +
 			"on calibration, drift or freshness. Below 30 independent observations no " +
 			"verdict is claimed in either direction.",
+		"inversionRule": "Inverting or relabeling a retired model is not a rescue: " +
+			"48.1% inverts to 51.9%, still below the 54.6% majority-class null, because " +
+			"the honest competing model is the constant majority guess, not a coin flip. " +
+			"A derived variant is a new model and may emit only after passing the full " +
+			"canary re-admission gate.",
+		"readmissionRule": fmt.Sprintf("Re-admission is a coded threshold, not a judgment "+
+			"call: a retired model's emitting flips back to true only when its shadow "+
+			"record's day-clustered Wilson lower bound (design effect measured from the "+
+			"between-day variance, interval evaluated at effective N) clears the "+
+			"prequential null on at least %d distinct UTC days — 2x the platform's "+
+			"%d-day interval floor. The same rule is the canary promotion bar for any "+
+			"successor model, so the two gates can never disagree about the same record.",
+			canary.ReadmitMinDistinctDays, clusterstat.MinDistinctDays),
 		"survivorship": survivorshipBlock(),
 	})
 }
 
 func (d Deps) registerModelHealth(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/model-health", d.modelHealth)
+}
+
+// derivedVariantMarkers flag a model key as a re-signed or re-badged rescue of
+// a retired model — the same below-null signal wearing a new name. Inversion
+// is refuted by arithmetic, not policy: flipping the ensemble's 48.1% yields
+// 51.9%, still below the 54.6% majority-class null, because the honest
+// competing model is the constant majority guess. See PREDICTION_PROCESS.md,
+// "Why inversion is not a rescue".
+var derivedVariantMarkers = []string{"-inverted", "-relabeled", "-flipped"}
+
+// guardDerivedVariant forces an inverted/relabeled variant off unless the
+// canary re-admission gate has written readmitted=true for it. A variant is a
+// NEW model and earns emission the way one does; nothing it inherits from the
+// retired original counts as evidence.
+func guardDerivedVariant(v map[string]any) map[string]any {
+	name, _ := v["model"].(string)
+	derived := false
+	for _, marker := range derivedVariantMarkers {
+		if strings.Contains(name, marker) {
+			derived = true
+			break
+		}
+	}
+	if !derived {
+		return v
+	}
+	if readmitted, _ := v["readmitted"].(bool); readmitted {
+		return v
+	}
+	v["emitting"] = false
+	v["verdict"] = "retired"
+	v["note"] = "inverted/relabeled variant of a retired model — blocked from emitting. " +
+		"Inverting a below-null signal cannot beat the majority-class null (48.1% flips " +
+		"to 51.9%, still under 54.6%). Emission requires passing the canary re-admission " +
+		"gate, which records readmitted=true."
+	return v
+}
+
+// applyReadmission is the other half of the retirement story guardDerivedVariant
+// tells: the guard keeps a re-badged corpse from emitting, and this codifies the
+// one door back in. Re-admission is a threshold, not a judgment call — emitting
+// flips back to true ONLY when the shadow record's day-clustered CI lower bound
+// (clusterstat.DesignEffect + WilsonEff, the same machinery as the canary gate)
+// clears the prequential null on >= canary.ReadmitMinDistinctDays distinct days.
+// The verdict block is published either way, designEffect and effectiveN
+// included, so the payload always shows how far the record sits from the bar.
+func applyReadmission(v map[string]any, shadow canary.Record) map[string]any {
+	if verdict, _ := v["verdict"].(string); verdict != "retired" {
+		return v
+	}
+	ra := canary.Readmit(shadow)
+	v["readmission"] = ra
+	if !ra.Eligible {
+		return v
+	}
+	v["emitting"] = true
+	v["readmitted"] = true
+	v["verdict"] = "readmitted"
+	v["note"] = "re-admitted by the coded threshold: " + ra.Reason
+	return v
+}
+
+// directionalShadow rebuilds a retired directional model's LIVE shadow record
+// from prediction_outcomes — the rows keep accruing after retirement precisely
+// so re-admission can be a measurement. The aggregation mirrors the canary
+// runner's: one observation per (symbol, UTC day), tallied per day, with the
+// prequential null replayed in day order over the same tallies.
+func (d Deps) directionalShadow(ctx context.Context, h md.Horizon) (canary.Record, bool) {
+	// Bounded at the SURVIVORSHIP EPOCH, the same boundary the accuracy registry
+	// grades on. Re-admission compares an ABSOLUTE record against an absolute
+	// null, which is the comparison survivor-seeded rows distort; measured on the
+	// live DB (2026-07-27) the unbounded window supplied 13,065 rows over 24 days
+	// where only 21 rows over 3 days were post-epoch, so the 20-distinct-day
+	// floor was being cleared entirely by rows the grader refuses to publish.
+	rows, err := d.St.VersionedOutcomes(ctx, h, 200000, store.SurvivorshipEpoch)
+	if err != nil || len(rows) == 0 {
+		return canary.Record{}, false
+	}
+	rec := canary.Record{Version: "shadow-" + string(h), FirstTs: rows[0].Ts, LastTs: rows[0].Ts}
+	byDay := map[int64]*canary.DayTally{}
+	dayUps := map[int64]int{}
+	for _, r := range rows {
+		rec.N++
+		if r.Correct {
+			rec.Correct++
+		}
+		if r.Ts < rec.FirstTs {
+			rec.FirstTs = r.Ts
+		}
+		if r.Ts > rec.LastTs {
+			rec.LastTs = r.Ts
+		}
+		day := r.Ts / 86400
+		t := byDay[day]
+		if t == nil {
+			t = &canary.DayTally{Day: day}
+			byDay[day] = t
+		}
+		t.N++
+		if r.Correct {
+			t.Hits++
+		}
+		if r.Up {
+			dayUps[day]++
+		}
+	}
+	tallies := make([]canary.DayTally, 0, len(byDay))
+	for _, t := range byDay {
+		tallies = append(tallies, *t)
+	}
+	sort.Slice(tallies, func(i, j int) bool { return tallies[i].Day < tallies[j].Day })
+	rec.DayTallies = tallies
+	rec.Days = len(tallies)
+	rec.BaselineAccuracy = canary.PrequentialBaseline(tallies, dayUps)
+	return rec, true
 }
 
 // ungradedModel explains WHY a model has no verdict yet, using the only

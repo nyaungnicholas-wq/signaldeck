@@ -54,6 +54,7 @@ package researchledger
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"sort"
 )
@@ -133,12 +134,64 @@ func EconomicGrades(evidence []Evidence) int {
 	return n
 }
 
+// ── The machine-evidence floor ───────────────────────────────────────────
+//
+// A posterior is a summary of evidence, and nothing in the arithmetic records
+// WHO produced that evidence. A 0.95 derived from one hand-typed `manual`
+// assertion renders identically to a 0.95 derived from thirty machine grades on
+// disjoint windows. On 2026-07-27 that was the ledger's actual state: H005,
+// H011, H012 and H015–H018 sat at 0.896–0.97 on one or two transcribed rows
+// each, while the only hypotheses that ever met a grader (H002, H002-R1, H008,
+// with 20–30 backtest and attack rows) were rejected at 0.02. The band was
+// reading as a claim about markets when it was a claim about typing.
+//
+// So a hypothesis whose chain contains ZERO machine-produced rows may not
+// report a band above "uncertain", whatever its posterior. This can only lower
+// a status, never raise one: it does not touch the posterior, and manual rows
+// keep their full downward weight — a hand-entered attack still demotes.
+//
+// MachineKinds are the evidence kinds a grader produces. Everything except
+// KindManual (which is, by definition, transcribed by a human) qualifies.
+var MachineKinds = map[string]bool{
+	KindExperiment:  true,
+	KindReplication: true,
+	KindAttack:      true,
+	KindBacktest:    true,
+	KindEconomic:    true,
+}
+
+// MachineGrades counts evidence rows produced by a grader rather than typed in
+// by hand. Zero means the hypothesis has never been machine-tested.
+func MachineGrades(evidence []Evidence) int {
+	n := 0
+	for _, e := range evidence {
+		if MachineKinds[e.Kind] {
+			n++
+		}
+	}
+	return n
+}
+
+// EvidenceMix counts an evidence chain by kind, so the UI can render WHAT a
+// posterior is made of next to the posterior itself.
+func EvidenceMix(evidence []Evidence) map[string]int {
+	mix := map[string]int{}
+	for _, e := range evidence {
+		mix[e.Kind]++
+	}
+	return mix
+}
+
 // Gates bundles the hard supported-gates beyond the posterior. The zero value
-// is the honest default for a hypothesis nobody has tried to trade: no
-// replications, no regimes, no stated position.
+// is the honest default for a hypothesis nobody has tried to trade and nothing
+// has ever graded: no machine evidence, no replications, no regimes, no stated
+// position.
 type Gates struct {
-	Replications int
-	Regimes      int
+	// MachineGrades is the number of grader-produced rows in the chain; 0
+	// caps the band at StatusUncertain regardless of posterior.
+	MachineGrades int
+	Replications  int
+	Regimes       int
 	// TradableForm is the position that would have to make the money —
 	// "" means the hypothesis has never been stated as a trade.
 	TradableForm string
@@ -152,6 +205,8 @@ type Gates struct {
 // high posterior looking arbitrarily withheld.
 func (g Gates) UnmetGate() string {
 	switch {
+	case g.MachineGrades == 0:
+		return "no machine-graded evidence — the posterior rests on hand-entered rows only"
 	case g.Replications < MinReplications:
 		return "needs independent replication on a fresh data window"
 	case g.Regimes < MinRegimes:
@@ -327,10 +382,13 @@ func ReproducesBF(e Evidence, maxEdge float64) (side string, ok bool) {
 		return "", false
 	}
 	const tol = 1e-9
-	if math.Abs(BayesFactorAbove(e.K, e.N, e.P0, maxEdge)-e.BF) <= tol*math.Max(1, e.BF) {
+	null := storedNull(e)
+	if above, ok := BayesFactorAbove(e.K, e.N, null, maxEdge); ok &&
+		math.Abs(above-e.BF) <= tol*math.Max(1, e.BF) {
 		return SideAbove, true
 	}
-	if math.Abs(BayesFactorBelow(e.K, e.N, e.P0, maxEdge)-e.BF) <= tol*math.Max(1, e.BF) {
+	if below, ok := BayesFactorBelow(e.K, e.N, null, maxEdge); ok &&
+		math.Abs(below-e.BF) <= tol*math.Max(1, e.BF) {
 		return SideBelow, true
 	}
 	return "", false
@@ -387,18 +445,90 @@ func Breakdown(prior float64, evidence []Evidence) PosteriorParts {
 	return p
 }
 
-// BayesFactorAbove grades H1 "p ~ U(p0, p0+maxEdge)" against H0 "p = p0" for k
-// wins in n trials — the one-sided "this signal beats naive" comparison. The
-// result is clamped to [MinBF, MaxBF].
+// MeasuredNull is the no-skill rate a Bayes factor is graded against, together
+// with the number of trials that rate was itself measured over. It exists so a
+// null cannot be a literal: the fields are unexported, so the only ways to
+// obtain one are the constructors below, each of which demands a sample.
+//
+// The motivating defect: the week-trial no-skill rate is NOT 0.5 (a week is
+// won only by STRICTLY beating that week's own folded majority
+// max(upRate,1-upRate)), yet several grading sites passed the bare 0.5 anyway
+// while researchx.Discover measured the same statistic on the matched null
+// arm. Two paths in one repository judged the same statistic against two
+// different nulls. An unmeasured null is now unrepresentable rather than
+// merely discouraged.
+type MeasuredNull struct {
+	p0     float64
+	trials int    // observations/weeks the null rate was measured over
+	source string // where the rate came from, for the evidence note
+}
+
+// P0 is the measured no-skill rate; Trials is its sample size; Source names
+// its provenance. Measured reports whether the null has a sample at all — a
+// null with zero trials is not a null, and grading against it must not happen.
+func (m MeasuredNull) P0() float64    { return m.p0 }
+func (m MeasuredNull) Trials() int    { return m.trials }
+func (m MeasuredNull) Source() string { return m.source }
+func (m MeasuredNull) Measured() bool { return m.trials > 0 && m.p0 > 0 && m.p0 < 1 }
+func (m MeasuredNull) String() string {
+	return fmt.Sprintf("%.4f (measured over %d %s trials)", m.p0, m.trials, m.source)
+}
+
+// NullFromArm builds the null from a GRADED arm — winTrials wins out of
+// trials, e.g. researchx CFReport.NullMatched (the same matched observations
+// with direction randomized). The rate is floored at 0.5 so substituting a
+// measured null for the old 0.5 literal can only make a hypothesis harder to
+// support, never easier: every posterior can fall or stay, never rise.
+//
+// An arm with zero trials yields a non-Measured null, and BayesFactorAbove
+// then returns ok=false — the caller must write no evidence row rather than
+// fall back to an assumption.
+func NullFromArm(winTrials, trials int, source string) MeasuredNull {
+	if trials <= 0 {
+		return MeasuredNull{source: source}
+	}
+	return MeasuredNull{
+		p0:     math.Max(0.5, float64(winTrials)/float64(trials)),
+		trials: trials,
+		source: source,
+	}
+}
+
+// TranscribedNull carries a null that an external, cited measurement produced
+// over `trials` observations (the seeded/manual chapters). It still requires a
+// sample size — a rate with no observations behind it is refused here too.
+func TranscribedNull(p0 float64, trials int, source string) MeasuredNull {
+	if trials <= 0 {
+		return MeasuredNull{source: source}
+	}
+	return MeasuredNull{p0: p0, trials: trials, source: source}
+}
+
+// storedNull reconstructs the null of an already-written row for the
+// reproduction audit. Package-private on purpose: it is the one place a rate
+// legitimately arrives without a fresh measurement, because it is re-deriving
+// a number that was measured when the row was written.
+func storedNull(e Evidence) MeasuredNull {
+	return MeasuredNull{p0: e.P0, trials: e.N, source: "stored-row"}
+}
+
+// BayesFactorAbove grades H1 "p ~ U(p0, p0+maxEdge)" against H0 "p = null.P0()"
+// for k wins in n trials — the one-sided "this signal beats naive" comparison.
+// The result is clamped to [MinBF, MaxBF]. ok=false means the null was never
+// measured; there is then no Bayes factor and the caller must write no row.
 //
 // The band integral is evaluated for EVERY input — including k/n beyond the
 // band, where the exact marginal keeps the answer n-aware (3/3 wins is mild
 // evidence, 700/1000 is decisive). Only when the integral underflows entirely
 // (huge n, data far outside the band) does the fallback decide by which SIDE
 // of the band the data sit on.
-func BayesFactorAbove(k, n int, p0, maxEdge float64) float64 {
-	if n <= 0 || p0 <= 0 || p0 >= 1 || maxEdge <= 0 {
-		return 1
+func BayesFactorAbove(k, n int, null MeasuredNull, maxEdge float64) (float64, bool) {
+	if !null.Measured() {
+		return 0, false
+	}
+	p0 := null.p0
+	if n <= 0 || maxEdge <= 0 {
+		return 1, true
 	}
 	hi := math.Min(1, p0+maxEdge)
 	bf, ok := bfBandLoHi(k, n, p0, hi, p0)
@@ -406,29 +536,33 @@ func BayesFactorAbove(k, n int, p0, maxEdge float64) float64 {
 		// Underflow: decisively outside the band. Above it = capped evidence
 		// for; below the null = floored evidence against.
 		if float64(k)/float64(n) >= hi {
-			return MaxBF
+			return MaxBF, true
 		}
-		return MinBF
+		return MinBF, true
 	}
-	return clampBF(bf)
+	return clampBF(bf), true
 }
 
 // BayesFactorBelow is the mirror: H1 "p ~ U(p0-maxEdge, p0)" vs H0 "p = p0" —
 // for hypotheses that predict the rate is BELOW the baseline (e.g. "adding leg X
 // makes the blend WORSE than the partner alone").
-func BayesFactorBelow(k, n int, p0, maxEdge float64) float64 {
-	if n <= 0 || p0 <= 0 || p0 >= 1 || maxEdge <= 0 {
-		return 1
+func BayesFactorBelow(k, n int, null MeasuredNull, maxEdge float64) (float64, bool) {
+	if !null.Measured() {
+		return 0, false
+	}
+	p0 := null.p0
+	if n <= 0 || maxEdge <= 0 {
+		return 1, true
 	}
 	lo := math.Max(0, p0-maxEdge)
 	bf, ok := bfBandLoHi(k, n, lo, p0, p0)
 	if !ok {
 		if float64(k)/float64(n) <= lo {
-			return MaxBF
+			return MaxBF, true
 		}
-		return MinBF
+		return MinBF, true
 	}
-	return clampBF(bf)
+	return clampBF(bf), true
 }
 
 // bfBandLoHi computes marginal-likelihood(p ~ U(lo,hi)) / likelihood(p=null),
@@ -576,6 +710,9 @@ func attackName(note string) string {
 //
 // It cannot return StatusSupported, because it has no way to know whether the
 // hypothesis was ever stated as a position — see the tradability gate above.
+// It also cannot exceed StatusUncertain, because a caller passing no Gates has
+// no machine evidence to report — which is correct for its users: a prior with
+// an empty chain is exactly the manual-only case the floor exists for.
 // Seeding paths (prior only, no evidence) use it; every promotion path must use
 // StatusWithGates, which is the only function that can promote.
 func Status(posterior float64, replications, regimes int) string {
@@ -597,7 +734,13 @@ func StatusWithGates(posterior float64, g Gates) string {
 	case posterior < 0.60:
 		return StatusUncertain
 	case posterior < 0.85:
+		if g.MachineGrades == 0 {
+			return StatusUncertain // manual-only chain: see the machine-evidence floor
+		}
 		return StatusTentative
+	}
+	if g.MachineGrades == 0 {
+		return StatusUncertain
 	}
 	if g.UnmetGate() != "" {
 		return StatusTentative // strong number, unmet gate
@@ -803,4 +946,93 @@ func betacf(x, a, b float64) float64 {
 		}
 	}
 	return h
+}
+
+// ── Ledger liveness: is this posterior still being TESTED? ──
+//
+// The band answers "how strong is the number"; it cannot answer "when was that
+// number last put at risk". Those are different questions and the ledger had
+// only one word for both. The state it exists to name was live:
+// research_ledger_evidence held 55 attack + 15 backtest + 16 manual rows, every
+// one dated 2026-07-16/17, and ZERO rows of kind experiment or replication — so
+// no hypothesis had ever been graded on a fresh window, while five published
+// posteriors of 0.95-0.97 under the word "tentative". "Tentative, posterior
+// 0.952" and "seeded once, never re-tested" were the same sentence.
+//
+// This measures and refuses to describe. It moves no posterior, no threshold
+// and no null; it can only make a hypothesis read WEAKER than its band does.
+const (
+	LivenessLive         = "live"
+	LivenessUnreplicated = "UNREPLICATED"
+	LivenessStale        = "STALE"
+)
+
+// LivenessUnreplicatedMin is the posterior at which never having been replicated
+// stops being a stage of research and starts being a claim the chain does not
+// support. Below it the band already reads weak; at or above it the number is
+// the loudest thing on the surface and must carry how it was earned.
+const LivenessUnreplicatedMin = 0.9
+
+// LivenessStaleDays is how many days without ANY new evidence row, while the
+// research corpus itself has moved on, mean the hypothesis stopped being graded
+// rather than having nothing new to grade.
+const LivenessStaleDays = 14
+
+// LedgerLiveness is the verdict on a hypothesis's TESTING, beside the verdict
+// on its truth.
+type LedgerLiveness struct {
+	State   string `json:"state"`
+	Healthy bool   `json:"healthy"`
+	Detail  string `json:"detail"`
+}
+
+// LivenessOf derives the testing verdict. replications/experiments are ROW
+// counts of KindReplication / KindExperiment evidence (not the stored
+// replications counter, which also credits backtest rows); evidenceAgeDays is
+// the age of the newest evidence row of ANY kind, -1 when the chain is empty;
+// corpusGrew says the research corpus holds data newer than that newest row —
+// the precondition that makes silence diagnostic, exactly as corpus size is for
+// LoopEngineHealth. With nothing new to grade, silence is honest.
+//
+// UNREPLICATED outranks STALE: a 0.95 that no fresh window ever touched is the
+// stronger indictment, and reporting the milder one would understate it.
+func LivenessOf(posterior float64, replications, experiments, evidenceAgeDays int, corpusGrew bool) LedgerLiveness {
+	switch {
+	case posterior >= LivenessUnreplicatedMin && replications == 0:
+		return LedgerLiveness{State: LivenessUnreplicated, Detail: fmt.Sprintf(
+			"posterior %.3f with ZERO replication rows (%d experiment rows) — this "+
+				"number was never re-graded on a fresh, disjoint window, so it is an "+
+				"initial claim, not a confirmed one",
+			posterior, experiments)}
+	case corpusGrew && evidenceAgeDays >= LivenessStaleDays:
+		age := "never" // an empty chain on a corpus that has data is the extreme case
+		if evidenceAgeDays >= 0 {
+			age = fmt.Sprintf("%d days ago", evidenceAgeDays)
+		}
+		return LedgerLiveness{State: LivenessStale, Detail: fmt.Sprintf(
+			"newest evidence of any kind is %s while the research corpus holds newer "+
+				"data — this hypothesis stopped being graded, it did not run out of "+
+				"data to grade", age)}
+	}
+	return LedgerLiveness{State: LivenessLive, Healthy: true, Detail: fmt.Sprintf(
+		"%d replication and %d experiment rows; newest evidence %s",
+		replications, experiments, agePhrase(evidenceAgeDays))}
+}
+
+func agePhrase(days int) string {
+	if days < 0 {
+		return "never"
+	}
+	return fmt.Sprintf("%d days old", days)
+}
+
+// Verdict is the single word a surface may render for a hypothesis. When
+// testing is unhealthy it REPLACES the band: a hypothesis whose posterior was
+// never replicated must not be renderable as "tentative", because "tentative"
+// describes a number under test and this one is not.
+func Verdict(status string, l LedgerLiveness) string {
+	if !l.Healthy {
+		return l.State
+	}
+	return status
 }

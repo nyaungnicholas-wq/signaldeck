@@ -77,7 +77,7 @@ func TestEvidenceGatesArePinned(t *testing.T) {
 // promoting eight hypotheses that are sitting at posterior 0.90+.
 func TestSupportedStillRequiresAGradedPosition(t *testing.T) {
 	strong := 0.97
-	g := rl.Gates{Replications: rl.MinReplications, Regimes: rl.MinRegimes}
+	g := rl.Gates{MachineGrades: 3, Replications: rl.MinReplications, Regimes: rl.MinRegimes}
 	if got := rl.StatusWithGates(strong, g); got == rl.StatusSupported {
 		t.Fatal("a posterior of 0.97 reached 'supported' with no tradable form stated")
 	}
@@ -88,5 +88,13 @@ func TestSupportedStillRequiresAGradedPosition(t *testing.T) {
 	g.EconomicTest = "graded, and it failed"
 	if got := rl.StatusWithGates(strong, g); got != rl.StatusSupported {
 		t.Fatalf("every gate met but status = %q", got)
+	}
+	// ...and the machine-evidence floor binds on top of all of it: a chain of
+	// hand-entered `manual` rows cannot report a confident band at any
+	// posterior, however many other gates are met.
+	manual := g
+	manual.MachineGrades = 0
+	if got := rl.StatusWithGates(strong, manual); got != rl.StatusUncertain {
+		t.Fatalf("manual-only chain at 0.97 = %q, want %q", got, rl.StatusUncertain)
 	}
 }

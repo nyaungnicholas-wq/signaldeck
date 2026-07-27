@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/ev"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/papertrade"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/riskgate"
@@ -89,7 +90,7 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 
 	startCash := papertrade.StartingCash()
 	acted := 0
-	refused := 0 // entries the pretrade risk gate vetoed, across all strategies
+	refused := 0 // entries the EV engine or the pretrade risk gate refused, across all strategies
 	for _, strat := range paperStrategies {
 		if _, err := w.St.InitPaperBook(ctx, strat.Name, startCash, asof); err != nil {
 			return "", err
@@ -123,7 +124,7 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 		}
 	}
 	if refused > 0 {
-		return fmt.Sprintf("marked %d strateg(ies) at asof=%d — risk gate vetoed %d entr(ies)", acted, asof, refused), nil
+		return fmt.Sprintf("marked %d strateg(ies) at asof=%d — EV/risk gates refused %d entr(ies)", acted, asof, refused), nil
 	}
 	return fmt.Sprintf("marked %d strateg(ies) at asof=%d", acted, asof), nil
 }
@@ -145,7 +146,8 @@ func (w *PaperTrader) buildStep(
 ) (store.PaperApply, int, error) {
 	cash := cur.Cash
 	apply := store.PaperApply{Strategy: strategy, BarTs: asof, EquityTs: asof}
-	// refused counts entries the pretrade risk gate vetoed this step. It is
+	// refused counts entries the EV decision engine or the pretrade risk gate
+	// refused this step. It is
 	// reported in the worker's status line so a veto is visible in the run log
 	// rather than being an entry that silently never happened.
 	refused := 0
@@ -182,6 +184,32 @@ func (w *PaperTrader) buildStep(
 		return apply, refused, err
 	}
 
+	// DECISION ENGINE (internal/ev — ARCHITECTURE_EV.md Layer 1). The entry
+	// go/no-go is no longer the bare cal_prob threshold: every candidate is
+	// ASSESSED (net EV, no-trade zone, tail, cost, liquidity, correlation, all
+	// with explicit has-flags), the pass's candidates are RANKED by net EV —
+	// replacing the old arbitrary symbol-order capital allocation — and only a
+	// BUY proceeds to riskgate for sizing. Every verdict, especially every
+	// DO_NOTHING, is ledgered to ev_decisions so refusals stay auditable.
+	// cal_prob still picks the INTENT (long/flat/hold deadband, unchanged);
+	// the engine decides whether the long is WORTH ITS COST.
+	forecasts, err := w.returnForecastsByID(ctx, h)
+	if err != nil {
+		return apply, refused, err
+	}
+	thresholds := ev.DefaultThresholds()
+
+	// Phase 1: execute EXITS and collect entry candidates. Exits run first —
+	// they are never gated (see below) and the cash they free is real before
+	// any entry is sized.
+	type entryCand struct {
+		s      md.Symbol
+		pred   store.Prediction
+		bar    md.Bar
+		in     papertrade.ExecInputs
+		assess ev.Assessment
+	}
+	var cands []entryCand
 	for _, s := range syms {
 		pos, hasPos, err := w.St.PaperPosition(ctx, strategy, s.ID)
 		if err != nil {
@@ -228,53 +256,22 @@ func (w *PaperTrader) buildStep(
 		}
 		in := papertrade.ExecInputs{Bar: fillBar, Market: marketByID[s.ID], ADVUSD: adv}
 
-		if wantEnter {
-			// The gate owns sizing now: fractional Kelly on the realized
-			// round-trip record when that record can support it, the old
-			// equal-slice budget when it cannot, and a REFUSAL when the measured
-			// expectancy is non-positive or a limit is breached.
-			book.Cash = cash
-			sector := riskSector(s.Symbol)
-			decision := riskgate.Evaluate(book, riskgate.Request{
-				Symbol: s.Symbol, Sector: sector, Action: riskgate.Enter,
-			}, edge, limits)
-			if !decision.Allow {
-				refused++
-				continue
-			}
-			budget := decision.Notional
-			f, qty, avgPx, ok := papertrade.EnterLong(budget, in)
-			if !ok {
-				// No cash slice to deploy, or no liquidity estimate to price the
-				// fill with. Skipping is the honest outcome: a fill we cannot
-				// cost would enter the book at the most favourable price
-				// available and never be questioned again.
-				continue
-			}
-			cash += f.CashDelta
-			// Consume the slot, the cash and the sector headroom this entry just
-			// took, so the next candidate in this same step is judged against the
-			// book as it now stands.
-			book.OpenPositions++
-			if sector != "" {
-				book.ExposureBySector[sector] += f.Qty * f.Px
-			}
-			apply.Opens = append(apply.Opens, store.PaperPosition{
-				Strategy: strategy, SymbolID: s.ID, Qty: qty, AvgPx: avgPx, OpenedTs: fillBar.Ts,
-			})
-			apply.Trades = append(apply.Trades, store.PaperTrade{
-				Strategy: strategy, SymbolID: s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost, Ts: fillBar.Ts,
-				// The sizing rationale is part of the audit trail: a reader of the
-				// log should be able to see WHY this size, not just this price.
-				Reason: fmt.Sprintf("cal_prob %.3f >= long %.2f · %s", pred.CalProb, papertrade.LongThreshold(), decision.Sizing),
-			})
-		} else { // wantExit
-			// Deliberately NOT gated. riskgate would allow every exit anyway, and
-			// routing a de-risking trade through a component that can refuse is how
-			// a book ends up trapped in the position a breaker was tripped by.
+		if wantExit {
+			// Deliberately NOT gated — by the EV engine or by riskgate. Both state
+			// the same doctrine: routing a de-risking trade through a component
+			// that can refuse is how a book ends up trapped in the position a
+			// breaker was tripped by. The engine still LEDGERS the SELL so the
+			// decision log is the complete record of every transition.
 			f, ok := papertrade.ExitLong(pos.Qty, in)
 			if !ok {
 				continue
+			}
+			exitAssess := ev.Assessment{Inputs: ev.Inputs{
+				Symbol: s.Symbol, Horizon: string(h), CalProb: pred.CalProb, HasProb: true,
+			}}
+			exitDecision := ev.Decide(exitAssess, ev.ExitLong, thresholds)
+			if err := w.ledgerEVDecision(ctx, strategy, s.ID, exitAssess, exitDecision, asof); err != nil {
+				return apply, refused, err
 			}
 			cash += f.CashDelta
 			apply.CloseSymbolIDs = append(apply.CloseSymbolIDs, s.ID)
@@ -282,7 +279,83 @@ func (w *PaperTrader) buildStep(
 				Strategy: strategy, SymbolID: s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost, Ts: fillBar.Ts,
 				Reason: fmt.Sprintf("cal_prob %.3f <= flat %.2f", pred.CalProb, papertrade.FlatThreshold()),
 			})
+			continue
 		}
+
+		// Entry candidate: measure every Decision Engine input now; the verdict
+		// waits until the whole pass can be ranked.
+		var fc *store.ReturnForecast
+		if f, okF := forecasts[s.ID]; okF {
+			fc = &f
+		}
+		a, err := w.assessEntry(ctx, s, h, strategy, pred, in, equity, cash, fc, asof)
+		if err != nil {
+			return apply, refused, err
+		}
+		cands = append(cands, entryCand{s: s, pred: pred, bar: fillBar, in: in, assess: a})
+	}
+
+	// Phase 2: rank the pass's candidates by net EV — the rank IS the
+	// opportunity-cost input — then decide each in rank order, so capital goes
+	// to the best measured EV first instead of the alphabetically luckiest.
+	byName := make(map[string]entryCand, len(cands))
+	var assessments []ev.Assessment
+	for _, c := range cands {
+		byName[c.s.Symbol] = c
+		assessments = append(assessments, c.assess)
+	}
+	for _, a := range ev.RankByNetEV(assessments) {
+		c := byName[a.Symbol]
+		decision := ev.Decide(a, ev.EnterLong, thresholds)
+		if err := w.ledgerEVDecision(ctx, strategy, c.s.ID, a, decision, asof); err != nil {
+			return apply, refused, err
+		}
+		if decision.Action != ev.BUY {
+			refused++ // the EV gate's DO_NOTHING — ledgered above, auditable
+			continue
+		}
+
+		// Only a BUY reaches the pretrade risk gate, which still owns sizing:
+		// fractional Kelly on the realized round-trip record when that record
+		// can support it, the old equal-slice budget when it cannot, and a
+		// REFUSAL when the measured expectancy is non-positive or a limit is
+		// breached.
+		book.Cash = cash
+		sector := riskSector(c.s.Symbol)
+		gate := riskgate.Evaluate(book, riskgate.Request{
+			Symbol: c.s.Symbol, Sector: sector, Action: riskgate.Enter,
+		}, edge, limits)
+		if !gate.Allow {
+			refused++
+			continue
+		}
+		budget := gate.Notional
+		f, qty, avgPx, ok := papertrade.EnterLong(budget, c.in)
+		if !ok {
+			// No cash slice to deploy, or no liquidity estimate to price the
+			// fill with. Skipping is the honest outcome: a fill we cannot
+			// cost would enter the book at the most favourable price
+			// available and never be questioned again.
+			continue
+		}
+		cash += f.CashDelta
+		// Consume the slot, the cash and the sector headroom this entry just
+		// took, so the next candidate in this same step is judged against the
+		// book as it now stands.
+		book.OpenPositions++
+		if sector != "" {
+			book.ExposureBySector[sector] += f.Qty * f.Px
+		}
+		apply.Opens = append(apply.Opens, store.PaperPosition{
+			Strategy: strategy, SymbolID: c.s.ID, Qty: qty, AvgPx: avgPx, OpenedTs: c.bar.Ts,
+		})
+		apply.Trades = append(apply.Trades, store.PaperTrade{
+			Strategy: strategy, SymbolID: c.s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost, Ts: c.bar.Ts,
+			// The sizing rationale is part of the audit trail: a reader of the
+			// log should be able to see WHY this size, not just this price.
+			Reason: fmt.Sprintf("net_ev %.4f (rank %d/%d) · cal_prob %.3f >= long %.2f · %s",
+				a.NetEV, a.Rank, a.RankOf, c.pred.CalProb, papertrade.LongThreshold(), gate.Sizing),
+		})
 	}
 
 	// Mark-to-market: value every still-open position at its latest close at/

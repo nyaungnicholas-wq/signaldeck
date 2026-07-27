@@ -19,6 +19,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/histfeat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/maintain"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -90,8 +91,27 @@ func (w *HistoryBackfillWorker) Run(ctx context.Context) (string, error) {
 	if rowsFrom.IsZero() {
 		rowsFrom = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	}
+	// Respect the research_weeks retention window (maintain.DerivedRetention):
+	// recomputing rows the retention tier archived+pruned would resurrect them
+	// daily and re-archive them hourly — a churn loop. The recompute floor
+	// therefore advances in lockstep with the prune cutoff. (Default 7y ⇒ no
+	// change today; the clamp matters once the window starts sliding.)
+	if d := maintain.RetentionResearchWeeksDays(); d > 0 {
+		if floor := now.AddDate(0, 0, -d); floor.After(rowsFrom) {
+			rowsFrom = floor
+		}
+	}
 
-	syms, err := w.St.ActiveStockSymbols(ctx, nil)
+	// THE CORPUS IS THE UNIVERSE THAT EXISTED, NOT THE ONE THAT SURVIVED.
+	// This pass previously iterated ActiveStockSymbols, so a corpus spanning
+	// 2020→today was assembled only from names still active today, and the
+	// era-survival gate was then measured on it. That cannot distinguish "this
+	// rule worked in 2022" from "this rule worked on the 2022 names still
+	// listed in 2026" — the exact contamination that makes a result worthless
+	// regardless of its number. ResearchUniverse returns everything ever
+	// tracked, dead included, so a name that left still contributes the weeks
+	// it actually traded.
+	syms, err := w.St.ResearchUniverse(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -106,6 +126,32 @@ func (w *HistoryBackfillWorker) Run(ctx context.Context) (string, error) {
 		syms = append(syms, spy)
 	}
 
+	// The FETCH set is a different question from the ROWS set: only a name
+	// tradable today can print new bars, and asking Alpaca to deepen a delisted
+	// ticker burns the budget that deepens live ones. TradableAt is the
+	// point-in-time universe accessor, so it answers exactly that.
+	//
+	// The clamp is load-bearing. TradableAt also filters on added_at — when WE
+	// started tracking a name, a bookkeeping fact, never a market one — so a run
+	// clock behind the newest added_at (an injected clock, a skewed host) would
+	// return the EMPTY set and silently deepen nothing while reporting success.
+	// Evaluating at the later of the two makes a clock artifact incapable of
+	// shrinking the universe; only a delisting can.
+	asOf := now.Unix()
+	for _, s := range syms {
+		if s.AddedAt > asOf {
+			asOf = s.AddedAt
+		}
+	}
+	tradableNow, err := w.St.TradableAt(ctx, asOf)
+	if err != nil {
+		return "", err
+	}
+	fetchable := make(map[int64]bool, len(tradableNow))
+	for _, s := range tradableNow {
+		fetchable[s.ID] = true
+	}
+
 	// (1) deepen shallow symbols. A fetch failure is recorded and skipped —
 	// the rows pass still runs on whatever bars exist.
 	byName := make(map[string]int64, len(syms))
@@ -117,7 +163,7 @@ func (w *HistoryBackfillWorker) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if earliest == 0 || earliest > shallowCut {
+		if (earliest == 0 || earliest > shallowCut) && fetchable[s.ID] {
 			shallow = append(shallow, s.Symbol)
 		}
 	}
@@ -197,9 +243,22 @@ func (w *HistoryBackfillWorker) Run(ctx context.Context) (string, error) {
 	if err := w.St.SetMeta(ctx, histBackfillDayKey, day); err != nil {
 		return "", err
 	}
+	// Publishing coverage changes no reported figure. It bounds the residual
+	// survivorship the corpus cannot fix on its own: names that died BEFORE
+	// this platform ever tracked them are absent from the numerator and from
+	// the denominator alike, and no free data source recovers them. What the
+	// figure does catch is the part we CAN see — weeks where the market printed
+	// bars for symbols the corpus never included.
+	stats, err := w.St.ResearchWeeksStats(ctx)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(
-		"bars: deepened %d/%d symbols; weeks: %d rows / %d symbols / %d weeks; eras: %s; crypto skipped (Kraken depth ~2y — no fake history)",
-		deepened, len(shallow), totalRows, rowSymbols, len(weekSet), eraSummary(eraCount)), nil
+		"bars: deepened %d/%d symbols; weeks: %d rows / %d symbols / %d weeks; eras: %s; "+
+			"universe: %d ever-tracked (%d tradable now — point-in-time, not survivors); %s; "+
+			"crypto skipped (Kraken depth ~2y — no fake history)",
+		deepened, len(shallow), totalRows, rowSymbols, len(weekSet), eraSummary(eraCount),
+		len(syms), len(tradableNow), stats.CoverageSummary()), nil
 }
 
 // findSymbol locates one symbol string in a listed set.

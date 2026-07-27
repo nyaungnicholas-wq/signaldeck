@@ -42,6 +42,7 @@ func TestRiskGateEnforcesSectorCapAcrossOneStep(t *testing.T) {
 			{3, 100, 100},
 		})
 		seedPrediction(t, st, sym.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, sym.ID, md.H1d, 2*86400)
 	}
 
 	w := &PaperTrader{St: st}
@@ -89,6 +90,7 @@ func TestRiskGateRecordsSizingRationaleOnTheFill(t *testing.T) {
 	sym, _ := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
 	seedDailyPx(t, st, sym.ID, [][3]float64{{1, 100, 100}, {2, 100, 100}, {3, 100, 100}})
 	seedPrediction(t, st, sym.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, sym.ID, md.H1d, 2*86400)
 
 	w := &PaperTrader{St: st}
 	if _, err := w.Run(ctx); err != nil {
@@ -123,6 +125,7 @@ func TestRiskGateNeverBlocksAnExit(t *testing.T) {
 		{3, 100, 100},
 	})
 	seedPrediction(t, st, sym.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, sym.ID, md.H1d, 2*86400)
 
 	w := &PaperTrader{St: st}
 	if _, err := w.Run(ctx); err != nil {

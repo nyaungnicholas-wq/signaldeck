@@ -76,7 +76,7 @@ func TestConcurrentWrites(t *testing.T) {
 		go func(g int) {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
-				fmt.Fprintf(w, "goroutine %d line %d\n", g, i)
+				_, _ = fmt.Fprintf(w, "goroutine %d line %d\n", g, i)
 			}
 		}(g)
 	}

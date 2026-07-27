@@ -512,27 +512,15 @@ func fisherCI(r float64, n int) (lo, hi float64) {
 // RAW count. Nothing in this file publishes it any more: it assumes n
 // independent trials, and on this platform n counts symbol-days that share one
 // market move, which made every interval it produced 3.8-4.9x too narrow. Use
-// clusterstat.Grade instead. It survives only because api/composite.go:258 still
-// calls it, and that file is not this change's to edit.
+// clusterstat.Grade instead. It survives only for its regression tests — no
+// production code calls it — and it delegates to clusterstat.WilsonEffAt so
+// the tree holds ONE Wilson implementation (gates_test.go enforces both).
 func wilson(wins, n int) (lo, hi float64) {
 	if n == 0 {
 		return 0, 0
 	}
-	const z = 1.959963985
-	p := float64(wins) / float64(n)
-	nn := float64(n)
-	denom := 1 + z*z/nn
-	center := (p + z*z/(2*nn)) / denom
-	half := (z * math.Sqrt(p*(1-p)/nn+z*z/(4*nn*nn))) / denom
-	lo = center - half
-	hi = center + half
-	if lo < 0 {
-		lo = 0
-	}
-	if hi > 1 {
-		hi = 1
-	}
-	return lo, hi
+	iv := clusterstat.WilsonEffAt(float64(wins)/float64(n), float64(n), 1.959963985)
+	return iv.Lo, iv.Hi
 }
 
 // reliabilityCurve buckets the independent predictions into calibration bins

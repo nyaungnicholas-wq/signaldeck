@@ -89,9 +89,9 @@ func Curated(cap int) []string {
 type Poller struct {
 	St     *store.Store
 	Alpaca *alpaca.Client // nil when no Alpaca keys → worker degrades to a skip
-	// Cap bounds the universe (0 → UniverseCap()); FirstRunDelay staggers the
-	// first run off the other 6h workers (0 → 90s).
-	Cap           int
+	// FirstRunDelay staggers the first run off the other 6h workers (0 → 90s).
+	// The universe size itself is bounded at REGISTRATION time (Seed/Curated
+	// honor UniverseCap()); Run always refreshes exactly the registered set.
 	FirstRunDelay time.Duration
 	Ival          time.Duration // 0 → DefaultInterval
 
@@ -108,13 +108,6 @@ func (p *Poller) Interval() time.Duration {
 		return p.Ival
 	}
 	return DefaultInterval
-}
-
-func (p *Poller) cap() int {
-	if p.Cap > 0 {
-		return p.Cap
-	}
-	return UniverseCap()
 }
 
 // Run refreshes daily bars for the entire registered daily universe. On the

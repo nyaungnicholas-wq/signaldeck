@@ -18,6 +18,60 @@ jobs:
           cache-dependency-path: daemon/go.sum
       - run: go build ./...
       - run: go vet ./...
+      # Build the COMMIT, not the checkout. checkout@v4 gives a clean tree
+      # today, but the class of defect this guards is the one that actually
+      # bit: a load-bearing source file present locally, absent from git, and
+      # therefore absent from every clone — while builds kept passing for
+      # whoever had the file. Extracting `git archive HEAD` into a scratch dir
+      # and building THAT proves a fresh clone compiles and vets on its own.
+      - name: Build and vet an extracted git archive HEAD (clone-only tree)
+        working-directory: .
+        run: |
+          tmp=$(mktemp -d)
+          git archive HEAD | tar -x -C "$tmp"
+          cd "$tmp/daemon"
+          go build ./...
+          go vet ./...
+      # Load-bearing paths must be tracked. See ops/manifest-check.sh for the
+      # manifest and the history of why it exists.
+      - name: Manifest — load-bearing paths are tracked by git
+        working-directory: .
+        run: bash ops/manifest-check.sh
+      # A build must not mutate the tree. Two failure modes this catches, both
+      # of which have bitten this repo's class of change: a generated file
+      # (go.mod/go.sum tidy drift, a checked-in generated source) that was
+      # edited by the build but never committed, and a build step that writes
+      # an artifact into the source tree instead of a temp dir. Placed before
+      # the coverage run on purpose — that step writes coverage.out, which is
+      # deliberately untracked and would otherwise fail this check.
+      - name: Build must leave the tree clean
+        working-directory: .
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::the build modified or created tracked-tree paths:"
+            git status --porcelain
+            git diff
+            exit 1
+          fi
+          echo "tree clean after build"
+      # Lint gate beyond vet — errcheck/staticcheck/ineffassign/unused per
+      # daemon/.golangci.yml. The unused/dead-code class is the mechanical
+      # detector for 'existed but never wired' defects (A4 dead gate floor,
+      # A13 unwired scan). working-directory is set explicitly because the
+      # job's run-step default does not apply to actions.
+      # FULL enforcement since 2026-07-26: the 44-issue baseline this step
+      # used to grandfather via only-new-issues (really 72 — golangci's
+      # default max-same-issues/max-issues-per-linter caps hid 28) was burned
+      # to zero. All 5 unused findings were dead code and deleted — including
+      # two never-wired api handlers (registerHonestyCache, predictionsLatest)
+      # and a Poller.Cap knob Run never read, the A4/A13 class itself — plus
+      # 47 errcheck discards made explicit and 20 staticcheck/ineffassign
+      # cleanups. Any issue anywhere in the tree now fails the build; do not
+      # reintroduce only-new-issues.
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          working-directory: daemon
       # -race: H7 hostile-review finding — CI ran build/vet/test with zero
       # concurrency coverage despite a single-writer-connection design
       # (internal/store) and shared-instance workers (internal/notify) that
@@ -28,6 +82,54 @@ jobs:
       # run instead of two (a -race run is materially slower).
       - run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - run: go tool cover -func=coverage.out | tail -1
+      # Coverage gate — the step above only *printed* the total, so coverage
+      # could silently decay. The floor is the measured total minus 2pp;
+      # ratchet it upward in later passes, never down.
+      - name: Enforce coverage floor
+        env:
+          # Ratchet history: 69.2% measured 2026-07-26 → floor 67.2. Later the
+          # same day a test pass lifted the total to 72.1% (store 52.8→73.4%,
+          # archive 22.1→74.7%, plus alerts/confluence/evidence/lineage/alphax/
+          # retention/prereg/recaudit round-trips); floor = 72.1 - 2pp.
+          COVERAGE_FLOOR: "70.1"
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $NF}' | tr -d '%')
+          echo "total coverage: ${total}% (floor: ${COVERAGE_FLOOR}%)"
+          awk -v t="$total" -v f="$COVERAGE_FLOOR" 'BEGIN { exit (t+0 < f+0) ? 1 : 0 }' || {
+            echo "::error::total coverage ${total}% fell below the ${COVERAGE_FLOOR}% floor"
+            exit 1
+          }
+      # Per-package floors for the correctness-critical packages. The total
+      # gate above can be satisfied by coverage-rich display/CRUD packages
+      # while a decision gate quietly loses its tests — these floors make the
+      # packages that decide what ships (store = every persisted fact and
+      # grading view, forecast = purge/embargo discipline, canary = the
+      # promotion gate) fail CI on their own numbers. Percentages are
+      # statement-weighted, aggregated from the same coverage.out the total
+      # gate reads (measured 2026-07-26: store 73.4, forecast 93.7, canary
+      # 81.2; floors ≈ measured - 3pp — ratchet up with the total, never down).
+      - name: Enforce per-package coverage floors (store, forecast, canary)
+        run: |
+          check() {
+            pkg="$1"; floor="$2"
+            pct=$(awk -v pkg="$pkg/" 'NR>1 {
+              split($1, a, ":"); dir=a[1]; sub(/\/[^\/]*$/, "", dir); dir=dir "/";
+              if (substr(dir, length(dir)-length(pkg)+1) != pkg) next;
+              tot += $(NF-1); if ($NF > 0) cov += $(NF-1);
+            } END { if (tot == 0) print "MISSING"; else printf "%.1f", 100*cov/tot }' coverage.out)
+            if [ "$pct" = "MISSING" ]; then
+              echo "::error::${pkg}: no statements found in coverage.out (package moved or profile broken)"
+              exit 1
+            fi
+            echo "${pkg}: ${pct}% (floor: ${floor}%)"
+            awk -v t="$pct" -v f="$floor" 'BEGIN { exit (t+0 < f+0) ? 1 : 0 }' || {
+              echo "::error::${pkg} coverage ${pct}% fell below its ${floor}% floor"
+              exit 1
+            }
+          }
+          check internal/store 70
+          check internal/forecast 90
+          check internal/canary 78
       - uses: actions/upload-artifact@v4
         with:
           name: go-coverage
@@ -49,6 +151,46 @@ jobs:
       # H7: `npm run lint` (eslint) existed but was never invoked in CI.
       - run: npm run lint
       - run: npm run build
+
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # A16 regression channel — tools/test_accuracy_registry.py holds 18
+      # tests guarding the script that grades every shipped claim (including
+      # test_one_market_day_cannot_validate_a_claim), but nothing ran them in
+      # CI, so the day-resampling discipline could regress silently. This is
+      # the discovery command the test file's own header documents.
+      - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      # The snapshot is the ONLY grading path an outside reader can run, and it
+      # is worthless if a file REPRODUCE.md tells them to check is missing from
+      # the clone. This asserts completeness, per-file re-hash, and git-tracked
+      # status without touching the (gitignored) database, so "documented but
+      # not shipped" is a build failure instead of a reviewer's dead end.
+      - run: python3 tools/make_repro_snapshot.py --verify-complete
+      # --verify-complete asserts the snapshot is internally whole; this asserts
+      # it produces the SAME published state from a cold export of HEAD as it
+      # does in the working tree. The failure it exists to catch was live: a
+      # clone of HEAD printed a full verdict table from a grader predating the
+      # registration gate, while the operator's own tree refused to grade — a
+      # stranger got more published numbers from weaker code. It compares two
+      # runs of an unmodified grader, so it can only fail a build, never move a
+      # number. A depth-1 checkout suffices: it only ever reads HEAD's tree.
+      - name: Cold clone reproduces the working tree's published state
+        run: bash ops/cold-clone-repro-check.sh
+      # The manifest check also runs in the daemon job, but it now reads
+      # repro/MANIFEST.json (tier 3) and every tracked markdown doc (tier 2),
+      # which makes it a tools-surface guard as much as a Go one: the defect it
+      # caught here was repro/grading_protocol.csv being named by MANIFEST.json
+      # and by REPRODUCE.md while missing from every clone, so a stranger's
+      # `tools/accuracy_registry.py --snapshot repro` graded with an
+      # unregistered grader instead of aborting. Running it in this job keeps
+      # that failure attached to the job that owns the grading tools.
+      - name: Manifest — documented paths are shipped
+        run: bash ops/manifest-check.sh
 
   pre-publish-scan:
     runs-on: ubuntu-latest

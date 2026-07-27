@@ -30,8 +30,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	rl "github.com/nyaungnicholas-wq/signaldeck/internal/researchledger"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/researchx"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -180,7 +182,30 @@ func (w *ResearchLedgerWorker) Run(ctx context.Context) (string, error) {
 	if ids := w.assertedPromotions(ctx, hyps); len(ids) > 0 {
 		msg += fmt.Sprintf("; asserted FOR-weight refused on %v (n=0 rows carry no observation)", ids)
 	}
+	msg += w.ledgerLiveness(ctx, now)
 	return msg, nil
+}
+
+// ledgerLiveness annotates the run summary with the ledger's TESTING verdict
+// and raises a dq_event when it is unhealthy — the same discipline the
+// discovery loop applies to itself in ResearchLoop.engineLiveness.
+//
+// The state it names: every evidence row in the ledger was written on
+// 2026-07-16/17, none of kind experiment or replication, while five hypotheses
+// published 0.95-0.97 under the word "tentative". A band describes how strong a
+// number is; it cannot say when that number was last put at risk, so "tentative,
+// posterior 0.952" and "seeded once, never re-tested" read identically. Empty
+// when healthy, so a live pass reads unchanged.
+func (w *ResearchLedgerWorker) ledgerLiveness(ctx context.Context, now time.Time) string {
+	h, err := w.St.LedgerEngineHealth(ctx, now)
+	if err != nil || h.Healthy {
+		return ""
+	}
+	_ = w.St.InsertDQ(ctx, md.DQEvent{
+		Ts: now.UTC().Unix(), Kind: "research_ledger_" + strings.ToLower(h.State),
+		Detail: h.Detail,
+	})
+	return " [" + h.State + ": " + h.Detail + "]"
 }
 
 // assertedPromotions names the hypotheses whose chains contain an asserted row
@@ -279,11 +304,12 @@ func (w *ResearchLedgerWorker) stateTradableForms(ctx context.Context, now int64
 
 // ledgerObs is one deduplicated, non-overlapping graded observation.
 type ledgerObs struct {
-	ts   int64
-	week int64 // calendar-week cluster (ts / weekSecs)
-	up   bool
-	win  bool
-	high bool // vix_high_vol regime flag at prediction time
+	ts      int64
+	week    int64 // calendar-week cluster (ts / weekSecs)
+	up      bool
+	win     bool
+	nullWin bool // same obs under the null-matched (randomized) direction
+	high    bool // vix_high_vol regime flag at prediction time
 }
 
 // ledgerGrader grades one open hypothesis on fresh labeled 1w rows. filter
@@ -375,12 +401,18 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 		}
 		lastKept[r.SymbolID] = r.Ts
 		up := r.Up == 1
+		week := r.Ts / weekSecs
 		os = append(os, ledgerObs{
 			ts:   r.Ts,
-			week: r.Ts / weekSecs,
+			week: week,
 			up:   up,
 			win:  g.call(r.Vec) == up,
 			high: r.Vec["vix_high_vol"] == 1,
+			// nullWin is the SAME observation graded by the null-matched
+			// direction (deterministic hash parity of symbol+week, the rule
+			// researchx uses), so the no-skill week-win rate is measured on
+			// this very window instead of assumed to be 0.5.
+			nullWin: researchx.NullDirLong(r.SymbolID, week) == up,
 		})
 	}
 
@@ -395,6 +427,9 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 		wa.n++
 		if o.win {
 			wa.wins++
+		}
+		if o.nullWin {
+			wa.nullWins++
 		}
 		if o.up {
 			wa.ups++
@@ -419,16 +454,25 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 	}
 
 	// Week trials.
-	n, k := len(weeks), 0
+	n, k, nullK := len(weeks), 0, 0
 	for _, wa := range weeks {
 		if wa.winsTrial() {
 			k++
 		}
+		if wa.winsNullTrial() {
+			nullK++
+		}
 	}
-	bf := rl.BayesFactorAbove(k, n, 0.5, rl.WeekTrialMaxEdge)
+	// The null is MEASURED on these same weeks (randomized direction against
+	// the identical per-week folded bar), floored at 0.5, never assumed.
+	null := rl.NullFromArm(nullK, n, "null-matched week")
+	bf, ok := rl.BayesFactorAbove(k, n, null, rl.WeekTrialMaxEdge)
+	if !ok {
+		return false, nil // no measurable null ⇒ no grade, no row
+	}
 
 	kind := rl.KindReplication
-	note := fmt.Sprintf("live grade: %d/%d winning weeks (%d obs; win = week's cross-sectional win rate beats its own naive baseline)", k, n, totalObs)
+	note := fmt.Sprintf("live grade: %d/%d winning weeks (%d obs; win = week's cross-sectional win rate beats its own naive baseline); graded against measured null %s", k, n, totalObs, null)
 	if cursor == 0 {
 		// The first grade re-measures the discovery window the prior was
 		// formed on — cap its weight (rl.DiscoveryMaxBF) and say so. It also
@@ -446,13 +490,24 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 	// rows bias conservative — never optimistic.
 	evidence := w.attacks(g.hypID, now, weeks, k, n, highs, winFrom, winTo)
 	evidence = append(evidence, rl.Evidence{
-		HypID: g.hypID, Ts: now, Kind: kind, K: k, N: n, P0: 0.5, BF: bf,
+		HypID: g.hypID, Ts: now, Kind: kind, K: k, N: n, P0: null.P0(), BF: bf,
 		Note: note, WindowFrom: winFrom, WindowTo: winTo,
 	})
 	for _, e := range evidence {
 		if err := w.St.InsertLedgerEvidence(ctx, e); err != nil {
 			return false, err
 		}
+		// Lineage spine (Layers 2+8): hypothesis --evidenced_by--> this
+		// evidence row, edge stamped with the build's git rev so every grade
+		// is tied to the code version that produced it. Best-effort — a
+		// lineage failure must not fail the grade (the evidence row above is
+		// already durably written).
+		_ = lineage.Link(ctx, w.St, lineage.Edge{
+			SrcKind: lineage.KindHypothesis, SrcID: "ledger:" + e.HypID,
+			DstKind:  lineage.KindClaim,
+			DstID:    fmt.Sprintf("ledger-evidence:%s@%d:%s", e.HypID, e.Ts, e.Kind),
+			EdgeKind: lineage.EdgeEvidencedBy, MetaJSON: lineage.RevMeta(),
+		})
 	}
 
 	// Regime coverage accumulates on the hypothesis — but a token high-vol
@@ -469,14 +524,21 @@ func (w *ResearchLedgerWorker) replicate(ctx context.Context, g ledgerGrader, no
 // outcome: the cross-sectional win rate strictly beats the week's own folded
 // naive baseline.
 type weekAgg struct {
-	week             int64
-	n, wins, ups, hi int
+	week                       int64
+	n, wins, ups, hi, nullWins int
 }
 
-func (wa *weekAgg) winsTrial() bool {
+func (wa *weekAgg) winsTrial() bool { return wa.beats(wa.wins) }
+
+// winsNullTrial is the same trial for the null-matched arm: the randomized
+// direction has to clear the identical bar. Its rate over the window IS the
+// no-skill week-win rate — the quantity the 0.5 literal used to stand in for.
+func (wa *weekAgg) winsNullTrial() bool { return wa.beats(wa.nullWins) }
+
+func (wa *weekAgg) beats(wins int) bool {
 	upRate := float64(wa.ups) / float64(wa.n)
 	p0 := math.Max(upRate, 1-upRate)
-	return float64(wa.wins)/float64(wa.n) > p0
+	return float64(wins)/float64(wa.n) > p0
 }
 
 // attacks runs the self-attack battery over one graded window of week trials.
@@ -557,7 +619,8 @@ func (w *ResearchLedgerWorker) recompute(ctx context.Context, hypID string, regi
 	// StatusWithGates, not Status: promotion also requires the hypothesis to
 	// have been stated as a position and that position graded net of costs.
 	status := rl.StatusWithGates(post, rl.Gates{
-		Replications: reps, Regimes: regimes,
+		MachineGrades: rl.MachineGrades(chain),
+		Replications:  reps, Regimes: regimes,
 		TradableForm: hyp.TradableForm, EconomicTest: hyp.EconomicTest,
 	})
 	return w.St.UpdateLedgerDerived(ctx, hypID, post, status, reps, contras, regimes, now)
@@ -792,11 +855,11 @@ func (w *ResearchLedgerWorker) seedOnce(ctx context.Context, now int64) (bool, e
 		}
 		for _, e := range s.ev {
 			bf := e.bf
-			switch {
-			case bf == 0: // compute one-sided above-band BF from the recorded observation
-				bf = rl.BayesFactorAbove(e.k, e.n, e.p0, h.MaxEdge)
-			case bf == -1: // below-band (the hypothesis predicts a rate BELOW p0)
-				bf = rl.BayesFactorBelow(e.k, e.n, e.p0, h.MaxEdge)
+			switch bf {
+			case 0: // compute one-sided above-band BF from the recorded observation
+				bf, _ = rl.BayesFactorAbove(e.k, e.n, rl.TranscribedNull(e.p0, e.n, "transcribed"), h.MaxEdge)
+			case -1: // below-band (the hypothesis predicts a rate BELOW p0)
+				bf, _ = rl.BayesFactorBelow(e.k, e.n, rl.TranscribedNull(e.p0, e.n, "transcribed"), h.MaxEdge)
 			}
 			if err := w.St.InsertLedgerEvidence(ctx, rl.Evidence{
 				HypID: h.ID, Ts: now, Kind: e.kind, K: e.k, N: e.n, P0: e.p0, BF: bf,
@@ -947,7 +1010,7 @@ func (w *ResearchLedgerWorker) seedWave2(ctx context.Context, now int64) (bool, 
 			continue // crash-safe: never duplicate transcribed evidence
 		}
 		for _, e := range s.ev {
-			bf := rl.BayesFactorAbove(e.k, e.n, e.p0, h.MaxEdge)
+			bf, _ := rl.BayesFactorAbove(e.k, e.n, rl.TranscribedNull(e.p0, e.n, "transcribed"), h.MaxEdge)
 			if err := w.St.InsertLedgerEvidence(ctx, rl.Evidence{
 				HypID: h.ID, Ts: now, Kind: rl.KindManual, K: e.k, N: e.n, P0: e.p0,
 				BF: bf, Note: e.note,
@@ -993,7 +1056,7 @@ func (w *ResearchLedgerWorker) seedWave2(ctx context.Context, now int64) (bool, 
 		if err != nil || !ok {
 			continue // frontier row absent (fresh DB mid-seed) — skip, not fatal
 		}
-		bf := rl.BayesFactorAbove(f.e.k, f.e.n, f.e.p0, hyp.MaxEdge)
+		bf, _ := rl.BayesFactorAbove(f.e.k, f.e.n, rl.TranscribedNull(f.e.p0, f.e.n, "transcribed"), hyp.MaxEdge)
 		if err := w.St.InsertLedgerEvidence(ctx, rl.Evidence{
 			HypID: f.hypID, Ts: now, Kind: rl.KindManual, K: f.e.k, N: f.e.n,
 			P0: f.e.p0, BF: bf, Note: f.e.note,

@@ -52,7 +52,7 @@ func TestCompositeScorerGatesBelowMinCurveN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	ids := seedCompositePreds(t, st, ctx, composite.MinCurveN-1)
 
@@ -84,7 +84,7 @@ func TestCompositeScorerEmitsForcedCurve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	ids := seedCompositePreds(t, st, ctx, 40)
 
@@ -154,7 +154,7 @@ func TestCompositeScorerCadence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	ids := seedCompositePreds(t, st, ctx, 40)
 	// Promote the first symbol into the streamed hot set.
@@ -188,7 +188,7 @@ func TestCompositeScorerSkipsStaleAndUnusable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	// 30 symbols: 29 fresh + 1 stale -> 29 usable -> gate.
 	seedCompositePreds(t, st, ctx, composite.MinCurveN-1)

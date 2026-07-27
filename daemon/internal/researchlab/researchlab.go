@@ -29,6 +29,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/gbm"
 )
 
@@ -334,10 +335,22 @@ type Decision struct {
 	// (MaxNominalAlpha / Divisor).
 	CorrectedAlpha float64
 	// WilsonLower is the corrected-alpha lower bound on the candidate's OOS
-	// accuracy — the honest floor of its skill.
+	// accuracy, evaluated at its day-clustered EFFECTIVE sample size — the
+	// honest floor of its skill. Zero when no honest bound exists (see Bound).
 	WilsonLower float64
+	// DesignEffect and EffectiveN describe the sample the bound was actually
+	// computed at: N/DesignEffect, never raw rows. Both 0 when the bound was
+	// withheld, and published because a threshold whose inputs are hidden is a
+	// judgment call with a constant in it.
+	DesignEffect float64
+	EffectiveN   float64
+	// Bound names the estimator behind WilsonLower: "day-clustered-wilson" or
+	// "withheld" (no per-day tallies, tallies that do not reconcile with N, or
+	// too few distinct days to measure clustering). Withheld cannot survive.
+	Bound string
 	// Survives is true iff the candidate's Wilson lower bound (at the corrected
-	// alpha) exceeds the baseline's point accuracy AND its lift is positive.
+	// alpha, at effective N) exceeds the baseline's point accuracy AND its lift
+	// is positive.
 	Survives bool
 }
 
@@ -347,6 +360,14 @@ type Decision struct {
 // the incumbent baseline's accuracy, and its lift over its own base rate is
 // positive.
 //
+// The floor is evaluated at the grade's day-clustered EFFECTIVE sample size,
+// never its raw row count. Rows scored on one day share one market move; a
+// Wilson bound over raw rows was measured ~3.8x too narrow on the live record
+// (A1), and this gate was the last decision surface still reading one. A grade
+// without reconcilable per-day tallies gets no bound and cannot survive —
+// falling back to raw N here would reintroduce the defect through the back
+// door, exactly as the canary gate's Interval refuses to.
+//
 // This is the anti-false-discovery gate: it is deliberately HARD to pass, and
 // gets harder both the more hypotheses are tested tonight AND the more nights
 // the same question has been asked.
@@ -354,30 +375,51 @@ func Judge(h Hypothesis, g, baseline Grade, m Multiplicity) Decision {
 	div := m.Divisor()
 	corrected := MaxNominalAlpha / float64(div)
 	z := normalQuantile(1 - corrected) // one-sided
-	wl := wilsonLower(g.Accuracy, g.N, z)
-	survives := g.N > 0 && g.Lift > 0 && wl > baseline.Accuracy
+	wl, deff, effN, ok := clusteredLower(g, z)
+	bound := "day-clustered-wilson"
+	if !ok {
+		bound = "withheld"
+	}
+	survives := ok && g.N > 0 && g.Lift > 0 && wl > baseline.Accuracy
 	return Decision{
 		Hypothesis: h, Grade: g, Baseline: baseline, Divisor: div,
-		CorrectedAlpha: corrected, WilsonLower: wl, Survives: survives,
+		CorrectedAlpha: corrected, WilsonLower: wl,
+		DesignEffect: deff, EffectiveN: effN, Bound: bound, Survives: survives,
 	}
 }
 
-// wilsonLower returns the lower bound of the Wilson score interval for a
-// proportion phat over n trials at the given z. Returns 0 for n<=0.
-func wilsonLower(phat float64, n int, z float64) float64 {
-	if n <= 0 {
-		return 0
+// clusteredLower is the one-sided Wilson lower bound of the grade's OOS
+// accuracy at z, evaluated at N divided by the MEASURED day design effect —
+// the same clusterstat machinery the canary and re-admission gates read, so
+// the platform's decision gates cannot disagree about what a sample size is.
+//
+// ok is false — no bound, cannot promote — when the tallies are absent, do not
+// reconcile with the headline counts (a caller bug that silently preferring
+// either number would hide), or cover fewer distinct days than clusterstat can
+// measure clustering from.
+func clusteredLower(g Grade, z float64) (lower, deff, effN float64, ok bool) {
+	if len(g.DayTallies) < clusterstat.MinDistinctDays {
+		return 0, 0, 0, false
 	}
-	nf := float64(n)
-	z2 := z * z
-	denom := 1 + z2/nf
-	center := phat + z2/(2*nf)
-	margin := z * math.Sqrt(phat*(1-phat)/nf+z2/(4*nf*nf))
-	lb := (center - margin) / denom
-	if lb < 0 {
-		return 0
+	days := make([]clusterstat.Day, 0, len(g.DayTallies))
+	var n, hits int
+	for _, t := range g.DayTallies {
+		if t.N <= 0 || t.Hits < 0 || t.Hits > t.N {
+			return 0, 0, 0, false
+		}
+		n += t.N
+		hits += t.Hits
+		days = append(days, clusterstat.Day{Day: t.Day, N: t.N, Hits: t.Hits})
 	}
-	return lb
+	if n != g.N {
+		return 0, 0, 0, false
+	}
+	d, dok := clusterstat.DesignEffect(days)
+	if !dok || d <= 0 {
+		return 0, 0, 0, false
+	}
+	eff := float64(n) / d
+	return clusterstat.WilsonEffAt(float64(hits)/float64(n), eff, z).Lo, d, eff, true
 }
 
 // normalQuantile is the inverse standard-normal CDF (probit) via Acklam's

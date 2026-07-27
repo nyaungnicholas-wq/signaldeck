@@ -22,7 +22,7 @@ func TestTrackRecord_DayClusterGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	// 60 symbols all resolving on the SAME 2 days: indepN=120 >= 30, days=2 < 10.
 	day1 := time.Date(2026, 7, 3, 14, 0, 0, 0, time.UTC).Unix()

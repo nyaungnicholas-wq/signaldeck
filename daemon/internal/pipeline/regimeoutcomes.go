@@ -28,6 +28,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -62,14 +63,122 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 	now := w.now()
 	nowUnix := now.Unix()
 
-	// 1. SNAPSHOT: freeze every current forecast (≤1 row per symbol/kind/day).
+	// HARD REFUSAL 1 — no baseline column, no freezing. A binary predating the
+	// naive_label migration would write rows that can never be benchmarked, and
+	// the registry would be structurally unable to publish anything but
+	// "HOLDING". Failing the worker run is the visible state; writing
+	// null-less rows is the invisible one.
+	hasNull, err := w.St.HasNaiveLabelColumn(ctx)
+	if err != nil {
+		return "", fmt.Errorf("naive_label column check: %w", err)
+	}
+	if !hasNull {
+		return "", fmt.Errorf("regime_outcomes has no naive_label column: refusing to freeze " +
+			"calls with no matched persistence null (rebuild/restart the daemon so the migration applies)")
+	}
+
+	// HARD REFUSAL 1b — STARTUP INVARIANT. The store now rejects a baseline-less
+	// structural row at the write path, so a post-amendment row with a NULL
+	// naive_label can only mean the deployed binary is not this source. Read the
+	// table before doing any work: a divergence surfaces within one tick and
+	// lands a dq event, instead of accumulating silently for weeks.
+	//
+	// One historical exception exists and is bounded by construction. Before the
+	// write-path guard, a silent INSERT-OR-IGNORE no-op in the freeze path left
+	// post-epoch rows with no baseline. They cannot be repaired (a persistence
+	// label computed after the outcome is hindsight, not a null), so they are
+	// frozen ONCE into a quarantine manifest whose digest rides the
+	// pre-registration chain: countable, immutable, and still ungraded. The set
+	// is not growable — the freeze is a no-op once the manifest exists, so any
+	// row that goes unmatched from here on still fails this check.
+	//
+	// The manifest is VERIFIED before its exclusion is trusted: if the exempt set
+	// were extended or edited after freezing, the recomputed digest differs and
+	// the worker fails here rather than quietly exempting more rows.
+	qm, didFreeze, err := w.St.FreezeNullQuarantine(ctx, nowUnix)
+	if err != nil {
+		return "", fmt.Errorf("freeze null quarantine: %w", err)
+	}
+	if didFreeze {
+		_ = w.St.InsertDQ(ctx, md.DQEvent{Ts: nowUnix, Kind: "regime_outcome_quarantine",
+			Detail: fmt.Sprintf("froze %d pre-guard regime_outcomes rows with no naive baseline "+
+				"under manifest digest %s; they stay ungraded (NO BASELINE) and out of every "+
+				"structural denominator, and the set cannot grow", qm.NRows, qm.Digest)})
+	}
+	if _, _, err := w.St.VerifyNullQuarantine(ctx); err != nil {
+		detail := fmt.Sprintf("null-quarantine manifest verification failed: %v", err)
+		_ = w.St.InsertDQ(ctx, md.DQEvent{Ts: nowUnix, Kind: "regime_outcome_error", Detail: detail})
+		return "", errors.New(detail)
+	}
+
+	unmatched, err := w.St.UnmatchedNullCount(ctx)
+	if err != nil {
+		return "", fmt.Errorf("unmatched-null invariant check: %w", err)
+	}
+	if unmatched > 0 {
+		detail := fmt.Sprintf("%d regime_outcomes rows at/after the null amendment carry no "+
+			"naive_label; the write-path guard cannot have produced them (deployed binary "+
+			"differs from source)", unmatched)
+		_ = w.St.InsertDQ(ctx, md.DQEvent{Ts: nowUnix, Kind: "regime_outcome_error", Detail: detail})
+		return "", fmt.Errorf("unmatched persistence null: %s", detail)
+	}
+
+	// Per-symbol daily series, loaded at most once per tick and shared by the
+	// freeze (naive baseline) and resolve (grading) phases.
+	cache := map[int64]*series{}
+	load := func(symbolID, from int64) *series {
+		if sr, ok := cache[symbolID]; ok {
+			return sr
+		}
+		bars, err := w.St.Bars(ctx, symbolID, md.TF1d, from, nowUnix+1, 5000)
+		if err != nil {
+			_ = w.St.InsertDQ(ctx, md.DQEvent{Ts: nowUnix, Kind: "regime_outcome_error",
+				Detail: fmt.Sprintf("bars sym %d: %v", symbolID, err)})
+			return nil
+		}
+		sr := &series{}
+		for _, b := range bars {
+			if b.Close > 0 {
+				sr.ts = append(sr.ts, b.Ts)
+				sr.closes = append(sr.closes, b.Close)
+				sr.vols = append(sr.vols, b.Volume)
+			}
+		}
+		cache[symbolID] = sr
+		return sr
+	}
+
+	// 1. SNAPSHOT: freeze every current forecast (≤1 row per symbol/kind/day),
+	// each with its NAIVE-PERSISTENCE baseline — the "nothing changes" guess
+	// computed from the call bar at freeze time, so the null is committed before
+	// the outcome exists and can never be recomputed once the answer is known.
 	calls, err := w.St.RegimeForecastCalls(ctx)
 	if err != nil {
 		return "", err
 	}
-	frozen := 0
+	frozen, noNull, dropped := 0, 0, 0
 	for _, c := range calls {
+		c.NaiveLabel = w.naiveLabel(load(c.SymbolID, c.Ts-int64(volLookbackDays)*86400), c)
+		if c.NaiveLabel == "" {
+			// The store would refuse this write anyway; skip it here so the pass
+			// still resolves due outcomes and reports the gap at the end rather
+			// than aborting on the first uncomputable baseline.
+			noNull++
+			continue
+		}
 		isNew, err := w.St.InsertRegimeOutcome(ctx, c)
+		if errors.Is(err, store.ErrNaiveLabelDropped) {
+			// The stored row for this (symbol, kind, day) has no baseline and the
+			// dedup would have discarded the one we just computed. That silent
+			// no-op is how the quarantined rows were manufactured, so it is
+			// recorded loudly and counted rather than folded into "already
+			// frozen". The row is NOT repaired — backfilling a null after the
+			// fact is hindsight — it simply stays NO BASELINE, visibly.
+			dropped++
+			_ = w.St.InsertDQ(ctx, md.DQEvent{Ts: nowUnix, Kind: "regime_outcome_error",
+				Detail: fmt.Sprintf("baseline dropped by dedup: %v", err)})
+			continue
+		}
 		if err != nil {
 			return "", fmt.Errorf("freeze %d/%s: %w", c.SymbolID, c.Kind, err)
 		}
@@ -83,41 +192,14 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	type series struct {
-		ts     []int64
-		closes []float64
-		vols   []float64
-	}
-	cache := map[int64]*series{}
 	resolved, misses, pms := 0, 0, 0
 	for _, o := range due {
-		sr, ok := cache[o.SymbolID]
-		if !ok {
-			from := o.Ts - int64(volLookbackDays)*86400
-			bars, err := w.St.Bars(ctx, o.SymbolID, md.TF1d, from, nowUnix+1, 5000)
-			if err != nil {
-				_ = w.St.InsertDQ(ctx, md.DQEvent{Ts: nowUnix, Kind: "regime_outcome_error",
-					Detail: fmt.Sprintf("bars sym %d: %v", o.SymbolID, err)})
-				continue
-			}
-			sr = &series{}
-			for _, b := range bars {
-				if b.Close > 0 {
-					sr.ts = append(sr.ts, b.Ts)
-					sr.closes = append(sr.closes, b.Close)
-					sr.vols = append(sr.vols, b.Volume)
-				}
-			}
-			cache[o.SymbolID] = sr
+		sr := load(o.SymbolID, o.Ts-int64(volLookbackDays)*86400)
+		if sr == nil {
+			continue
 		}
 		// call bar = last bar at or before the frozen call ts
-		t := -1
-		for i := len(sr.ts) - 1; i >= 0; i-- {
-			if sr.ts[i] <= o.Ts {
-				t = i
-				break
-			}
-		}
+		t := barIndexAt(sr.ts, o.Ts)
 		// require enough NEWER daily bars: the calendar-day approximation alone
 		// must never grade against a window that hasn't printed yet.
 		if t < 0 || len(sr.closes)-1-t < o.HorizonDays {
@@ -163,8 +245,73 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	return fmt.Sprintf("froze %d regime calls, resolved %d (%d wrong, %d high-conviction postmortems)",
-		frozen, resolved, misses, pms), nil
+	summary := fmt.Sprintf("froze %d regime calls (%d without a naive baseline), resolved %d (%d wrong, %d high-conviction postmortems)",
+		frozen, noNull, resolved, misses, pms)
+	// HARD REFUSAL 2 — partial coverage is not a matched null. If any call in
+	// this pass was frozen without a baseline, the benchmark denominator is a
+	// self-selected subset of the rows the model is scored on. Resolution work
+	// above is kept (it is already committed and is never wrong), but the pass
+	// lands as a FAILED worker_runs row so the gap is on the record instead of
+	// being tolerated forever.
+	if noNull > 0 {
+		return summary, fmt.Errorf("%d/%d frozen calls carry no naive-persistence baseline: "+
+			"the null is unmatched for this pass", noNull, len(calls))
+	}
+	return summary, nil
+}
+
+// series is one symbol's positive-close daily history for this tick.
+type series struct {
+	ts     []int64
+	closes []float64
+	vols   []float64
+}
+
+// barIndexAt is the last bar index at or before ts (-1 when none).
+func barIndexAt(ts []int64, at int64) int {
+	for i := len(ts) - 1; i >= 0; i-- {
+		if ts[i] <= at {
+			return i
+		}
+	}
+	return -1
+}
+
+// naiveLabel computes the frozen naive-persistence null for one call: the label
+// the CURRENT state already carries at the call bar, in the same vocabulary the
+// resolver will produce. "" is an honest absence (no bars, thin history, or a
+// degenerate/tied state) and is stored as NULL — the benchmark drops those rows
+// rather than scoring them as misses.
+//
+// It is MEASURED from bars, never copied from the call: for trend and liquidity
+// the two are expected to coincide (this package's own caveats say the skill IS
+// persistence), and the grader must be able to observe that rather than assume
+// it.
+func (w *RegimeOutcomeWorker) naiveLabel(sr *series, c store.RegimeCall) string {
+	if sr == nil {
+		return ""
+	}
+	t := barIndexAt(sr.ts, c.Ts)
+	if t < 0 {
+		return ""
+	}
+	var lbl string
+	var ok bool
+	switch c.Kind {
+	case structregime.KindTrend21, structregime.KindTrend63, structregime.KindTrendCrypto21:
+		lbl, ok = structregime.NaiveTrendAt(sr.closes, t)
+	case structregime.KindLiquidity21, structregime.KindLiquidityCrypto21:
+		lbl, ok = structregime.NaiveLiquidityAt(sr.closes, sr.vols, t)
+	case structregime.KindVol21:
+		// return index t-1 aligns to bar index t, exactly as the resolver does
+		lbl, ok = structregime.NaiveVol21At(barReturns2(sr.closes), t-1)
+	default:
+		return ""
+	}
+	if !ok {
+		return ""
+	}
+	return lbl
 }
 
 // regimePostmortemNarrative is the DETERMINISTIC plain-English miss report:

@@ -235,7 +235,7 @@ func (d Deps) confluenceTrack(w http.ResponseWriter, r *http.Request) {
 	resp["money"] = allBook.Money
 	resp["cluster"] = allBook.Cluster
 	resp["expectancy"] = map[string]any{
-		"point":   allBook.Money.Expectancy,
+		"point":   allBook.Expectancy,
 		"ci":      allBook.ExpectancyCI,
 		"refused": allBook.ExpectancyCI == nil,
 		"reason":  refusedReason,

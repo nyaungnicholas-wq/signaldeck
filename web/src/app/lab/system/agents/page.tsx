@@ -29,7 +29,8 @@ const KNOWN_AGENTS: { name: string; role: string }[] = [
 
 function statusColor(status: WorkerRun["status"]): string {
   if (status === "ok") return "var(--ok)";
-  if (status === "error") return "var(--bad)";
+  // A blown per-run deadline is a FAILURE, not an in-progress state.
+  if (status === "error" || status === "timeout") return "var(--bad)";
   return "var(--accent)";
 }
 
@@ -70,7 +71,7 @@ function AgentCard({
               ? `0 0 8px ${
                   last.status === "ok"
                     ? "rgba(52,211,153,.5)"
-                    : last.status === "error"
+                    : last.status === "error" || last.status === "timeout"
                       ? "rgba(248,113,113,.5)"
                       : "rgba(251,191,36,.6)"
                 }`
@@ -198,7 +199,7 @@ export default function AgentsPage() {
 
   const lastByAgent = cards.map((c) => c.runs[0]).filter(Boolean) as WorkerRun[];
   const nRunning = lastByAgent.filter((r) => r.status === "running").length;
-  const nError = lastByAgent.filter((r) => r.status === "error").length;
+  const nError = lastByAgent.filter((r) => r.status === "error" || r.status === "timeout").length;
   const lastTs = Math.max(0, ...(runs ?? []).map((r) => r.finishedAt ?? r.startedAt));
 
   return (

@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -34,6 +36,67 @@ type Store struct {
 	// borrowedWriter marks a ReaderClone: it shares the parent's write
 	// connection, so Close must not close the writer out from under the parent.
 	borrowedWriter bool
+	// id is this instance's process-unique identity, for callers that key a
+	// cache by "which store produced this". See CacheKey.
+	id uint64
+}
+
+// storeSeq issues store identities. It is monotonic on purpose: the identity it
+// replaces was the store's ADDRESS, and Go reuses addresses as soon as an
+// allocation is unreachable.
+var storeSeq atomic.Uint64
+
+// CacheKey is a process-unique identity for this store instance, for keying
+// package-level caches that must never serve one store's aggregation to
+// another.
+//
+// It exists because the obvious identity — fmt.Sprintf("%p", st) — is not one.
+// Measured 2026-07-27: opening and closing 40 stores in sequence yielded 26
+// distinct addresses, so a third of them inherited a dead predecessor's cache
+// entries. Live, with one store per process, that never bites; in the test
+// suite it made internal/api fail at random on whichever test happened to reuse
+// an address, which is how a suite's failures stop being read.
+func (s *Store) CacheKey() string {
+	if s == nil {
+		return "nil-store"
+	}
+	return "st" + strconv.FormatUint(s.id, 10)
+}
+
+// ReadConnMaxLifetime / ReadConnMaxIdleTime bound how long ANY read connection
+// in ANY read pool (the daemon's own and every ReaderClone) may live.
+//
+// WHY (measured 2026-07-26/27): a WAL frame cannot be checkpointed past the
+// oldest read snapshot still open, so a long-lived reader pins the WAL
+// indefinitely — TRUNCATE stalled at the IDENTICAL frame index 581124 at 05:06,
+// 06:06 and 08:09 while the WAL reached 5,396MB against a 2,233MB database, and
+// journal_size_limit cannot help because it only applies once a checkpoint
+// COMPLETES. database/sql recycles connections only when told to, and nothing
+// in this tree told it to: every read connection was unbounded, so the daemon
+// could not even rule its own pools out as the starver.
+//
+// The bound is chosen to sit far above any legitimate query (the slowest
+// full-universe scans are seconds; worker deadlines are 15m at the outside for
+// work that does not hold one snapshot throughout) and far below the hourly
+// checkpoint window, so by the time a checkpoint runs, no reader from the
+// previous pass can still be holding frames. It bounds a LIFETIME; it does not
+// interrupt a query in flight — database/sql retires the connection only once
+// it is returned to the pool.
+//
+// The single WRITE connection is deliberately left unbounded: it is the
+// serialization point for the whole daemon and recycling it buys nothing (a
+// writer does not pin old WAL frames the way a read snapshot does).
+const (
+	ReadConnMaxLifetime = 3 * time.Minute
+	ReadConnMaxIdleTime = 1 * time.Minute
+)
+
+// boundReadConns applies the read-connection lifetime bounds. Every read pool
+// in the process — Open's and every ReaderClone's — goes through here so the
+// bound is a property of the store, not of any one call site.
+func boundReadConns(db *sql.DB) {
+	db.SetConnMaxLifetime(ReadConnMaxLifetime)
+	db.SetConnMaxIdleTime(ReadConnMaxIdleTime)
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
@@ -43,14 +106,18 @@ func Open(path string) (*Store, error) {
 	// limit. Before this, a slow read (e.g. the old full-universe screener) held
 	// old WAL frames long enough for concurrent writes to push the file past
 	// 1GB, which the live governor's TRUNCATE checkpoint could never reclaim
-	// while readers stayed active. 256MB is comfortably above the working set.
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=journal_size_limit(268435456)", path)
+	// while readers stayed active. The first bound (256MB) just let the WAL sit
+	// at 256MB forever (observed live 2026-07-26): the limit is a ceiling the
+	// file settles AT, not below. 64MB is still far above the per-checkpoint
+	// working set while returning ~200MB to disk.
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=journal_size_limit(67108864)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
 	// Read pool: WAL readers don't block each other.
 	db.SetMaxOpenConns(4)
+	boundReadConns(db)
 	w, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		db.Close() //nolint:errcheck
@@ -68,7 +135,34 @@ func Open(path string) (*Store, error) {
 		w.Close()  //nolint:errcheck
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	return &Store{db: db, w: w, path: path, dsn: dsn}, nil
+	// After migrate, the declared schema and the live database MUST agree. They
+	// can silently disagree because schema.sql is CREATE TABLE IF NOT EXISTS: a
+	// column added to a CREATE statement rather than to migrate() lands on a
+	// fresh test DB and never on production. Refusing to open is the point —
+	// the alternative is workers reporting status='ok' while the units they
+	// claim to record have nowhere to go.
+	if err := verifySchema(w); err != nil {
+		db.Close() //nolint:errcheck
+		w.Close()  //nolint:errcheck
+		return nil, err
+	}
+	st := &Store{db: db, w: w, path: path, dsn: dsn, id: storeSeq.Add(1)}
+	// A worker whose only product is an audit record must not be allowed to
+	// start when it has nowhere to write that record (see AuditRecordWorkers).
+	// verifySchema catches divergence from the DECLARATION; this catches the
+	// case where the contracted object is absent for any reason at all.
+	if err := st.VerifyAuditContract(context.Background()); err != nil {
+		db.Close() //nolint:errcheck
+		w.Close()  //nolint:errcheck
+		return nil, err
+	}
+	// Deploy-time reconstruction of the research loop's look count. Those
+	// nightly searches were taken and their multiplicity spent; the durable
+	// ledger arrived later, and starting it at zero would refund every look.
+	// Best-effort by design: it seeds a counter that is a max over sources, so
+	// a failure here can only under-charge, never manufacture a survivor.
+	_, _ = st.BackfillLoopRuns(context.Background())
+	return st, nil
 }
 
 // migrate applies in-place column additions that CREATE TABLE IF NOT EXISTS
@@ -147,6 +241,46 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// multiplicity wave: the corrected divisor a loop hypothesis cleared. Live
+	// DBs already hold rows from before the loop fed PriorSearches, and those
+	// rows keep divisor=0 — the truthful state, meaning "correction unrecorded",
+	// not a claim of a divisor of one.
+	for _, col := range []struct{ name, ddl string }{
+		{"divisor", `ALTER TABLE research_loop_hypotheses ADD COLUMN divisor INTEGER NOT NULL DEFAULT 0`},
+		// rejection-ledger wave: Discover now returns every JUDGED rule, not
+		// only its winners, so the row must carry how wide the search was
+		// (grid_size), how much history judged it (weeks), which gate killed
+		// it (rejected_by, '' for survivors) and the corpus span searched
+		// (obs_window). Pre-existing rows keep the zero/empty defaults, which
+		// truthfully read as "unrecorded" rather than as a claim.
+		{"grid_size", `ALTER TABLE research_loop_hypotheses ADD COLUMN grid_size INTEGER NOT NULL DEFAULT 0`},
+		{"weeks", `ALTER TABLE research_loop_hypotheses ADD COLUMN weeks INTEGER NOT NULL DEFAULT 0`},
+		{"rejected_by", `ALTER TABLE research_loop_hypotheses ADD COLUMN rejected_by TEXT NOT NULL DEFAULT ''`},
+		{"obs_window", `ALTER TABLE research_loop_hypotheses ADD COLUMN obs_window TEXT NOT NULL DEFAULT ''`},
+		// measured-null wave: the win rate the Wilson bound was compared
+		// against (null_p0) and how many week-trials measured it
+		// (null_weeks). Pre-existing rows keep 0, which truthfully reads as
+		// "the null this rule was judged against was not recorded" — those
+		// rows were judged against the 0.5 literal.
+		{"null_p0", `ALTER TABLE research_loop_hypotheses ADD COLUMN null_p0 REAL NOT NULL DEFAULT 0`},
+		{"null_weeks", `ALTER TABLE research_loop_hypotheses ADD COLUMN null_weeks INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('research_loop_hypotheses') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	// Indexed only now that the column is guaranteed to exist — see the note in
+	// schema.sql. Rejections are the rows this table is most often queried by
+	// (has this dead rule been re-tested?), so the index belongs with them.
+	if _, err := w.Exec(`CREATE INDEX IF NOT EXISTS idx_loop_hyp_rejected
+		ON research_loop_hypotheses (rejected_by)`); err != nil {
+		return err
+	}
 	// sentiment-correlation wave: the deterministic LEXICON score lives beside
 	// the LLM tagger's verdict rather than overwriting it. The two answer
 	// different questions — the LLM one is better per headline, the lexicon one
@@ -164,6 +298,44 @@ func migrate(w *sql.DB) error {
 		{"lex_hedged", `ALTER TABLE news ADD COLUMN lex_hedged INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('news') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	// naive-persistence null wave: the frozen "nothing changes" baseline beside
+	// every structural regime call. Live DBs already hold regime_outcomes rows,
+	// so it rides the same guarded ALTER path; pre-existing rows keep NULL,
+	// which is the truthful state — no baseline was frozen for them.
+	if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('regime_outcomes') WHERE name='naive_label'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := w.Exec(`ALTER TABLE regime_outcomes ADD COLUMN naive_label TEXT`); err != nil {
+			return err
+		}
+	}
+	// CODE-REVISION stamping wave: the first question anyone asks about a
+	// published number is which code produced it, and until now the database
+	// could not answer it for a single row. Same guarded ALTER path; existing
+	// rows keep NULL/'' because their revision is genuinely unrecoverable, and
+	// the grader treats that absence as a reason to refuse rather than as a
+	// pass. Adding the column can only cause fewer verdicts, never more.
+	for _, col := range []struct{ table, name, ddl string }{
+		{"regime_outcomes", "revision", `ALTER TABLE regime_outcomes ADD COLUMN revision TEXT`},
+		{"prediction_ledger", "revision", `ALTER TABLE prediction_ledger ADD COLUMN revision TEXT`},
+		{"worker_runs", "revision", `ALTER TABLE worker_runs ADD COLUMN revision TEXT NOT NULL DEFAULT ''`},
+		// Point-in-time corpus coverage of the searched evidence base. Rows
+		// written before the measurement existed keep 0, which reads as
+		// "unmeasured" — the same honest-absence convention as the columns
+		// above, and the reason it is not defaulted to 1.
+		{"research_loop_runs", "corpus_coverage", `ALTER TABLE research_loop_runs ADD COLUMN corpus_coverage REAL NOT NULL DEFAULT 0`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`,
+			col.table, col.name).Scan(&n); err != nil {
 			return err
 		}
 		if n == 0 {
@@ -204,7 +376,8 @@ func (s *Store) ReaderClone(maxConns int) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(maxConns)
-	return &Store{db: db, w: s.w, path: s.path, dsn: s.dsn, borrowedWriter: true}, nil
+	boundReadConns(db)
+	return &Store{db: db, w: s.w, path: s.path, dsn: s.dsn, borrowedWriter: true, id: storeSeq.Add(1)}, nil
 }
 
 // Close closes the database. A ReaderClone closes only its own read pool — the
@@ -770,8 +943,8 @@ func (s *Store) RecentInsights(ctx context.Context, symbolID int64, limit int) (
 // StartWorkerRun opens a run record and returns its id.
 func (s *Store) StartWorkerRun(ctx context.Context, worker string) (int64, error) {
 	res, err := s.w.ExecContext(ctx,
-		`INSERT INTO worker_runs (worker, started_at, status) VALUES (?,?,'running')`,
-		worker, time.Now().Unix())
+		`INSERT INTO worker_runs (worker, started_at, status, revision) VALUES (?,?,'running',?)`,
+		worker, time.Now().Unix(), CodeRevision())
 	if err != nil {
 		return 0, err
 	}
@@ -817,6 +990,14 @@ func (s *Store) RecentWorkerRuns(ctx context.Context, limit int) ([]md.WorkerRun
 // flapping high-frequency worker (e.g. crypto-live erroring every ~5s while
 // tickstream is down) floods the global window within hours and erases every
 // trace that the slow workers ever ran.
+//
+// A third rule is an EXEMPTION rather than a quota: a research-loop row whose
+// detail records a completed grid search ("searched a N-rule grid …") is never
+// pruned. That line is the record of a look taken at the corpus, and looks are
+// what the Bonferroni divisor charges for. Deleting one refunds multiplicity
+// that was actually spent, which makes the bar easier to clear the longer the
+// logs rotate — the exact opposite of the monotonicity the ledger claims.
+// Refusals and same-day skips ("skip — …") took no look and stay prunable.
 func (s *Store) PruneWorkerRuns(ctx context.Context, keep int) error {
 	_, err := s.w.ExecContext(ctx, `
 		DELETE FROM worker_runs WHERE id NOT IN
@@ -825,7 +1006,8 @@ func (s *Store) PruneWorkerRuns(ctx context.Context, keep int) error {
 		  (SELECT id FROM (
 		     SELECT id, ROW_NUMBER() OVER
 		       (PARTITION BY worker ORDER BY started_at DESC, id DESC) AS rn
-		     FROM worker_runs) WHERE rn <= 20)`, keep)
+		     FROM worker_runs) WHERE rn <= 20)
+		AND NOT (worker='research-loop' AND detail LIKE 'searched a%')`, keep)
 	return err
 }
 
@@ -1053,6 +1235,46 @@ type WALCheckpointResult struct {
 // Truncated reports whether the WAL was actually flushed AND truncated.
 func (r WALCheckpointResult) Truncated() bool { return !r.Busy }
 
+// walCheckpoint runs one PRAGMA wal_checkpoint(<mode>) on the WRITE connection
+// and returns the pragma's own result row. mode is a fixed literal chosen by
+// the callers below — never user input.
+func (s *Store) walCheckpoint(ctx context.Context, mode string) (WALCheckpointResult, error) {
+	var busy, logFrames, ckpt int
+	err := s.w.QueryRowContext(ctx, `PRAGMA wal_checkpoint(`+mode+`)`).Scan(&busy, &logFrames, &ckpt)
+	if err == sql.ErrNoRows {
+		return WALCheckpointResult{}, nil
+	}
+	if err != nil {
+		return WALCheckpointResult{}, err
+	}
+	return WALCheckpointResult{Busy: busy == 1, LogFrames: logFrames, Checkpointed: ckpt}, nil
+}
+
+// WALCheckpointPassive runs PRAGMA wal_checkpoint(PASSIVE): it copies whatever
+// frames it can back into the main database WITHOUT waiting for readers or
+// writers, and never blocks. It does not shrink the -wal FILE, but it does
+// bound how far the WAL's live region grows, and its frame count is the honest
+// measure of whether anything is being reclaimed at all.
+//
+// This is the bottom rung of the checkpoint ladder. It exists because the
+// TRUNCATE-only design measured 0 successes in 22 attempts (BUSY 21) while the
+// WAL reached 5,396 MB: TRUNCATE requires a reader-free instant that a fleet of
+// ~97 workers on a shared read pool plus the API's ReaderClone never provides,
+// so the ONLY checkpoint the daemon ever ran was the one that could not run.
+func (s *Store) WALCheckpointPassive(ctx context.Context) (WALCheckpointResult, error) {
+	return s.walCheckpoint(ctx, "PASSIVE")
+}
+
+// WALCheckpointRestart runs PRAGMA wal_checkpoint(RESTART): like FULL, it
+// blocks until all frames are checkpointed, then forces the next writer to
+// restart the WAL from frame 1. The file is not truncated, so its size is
+// capped at the current high-water mark instead of growing without bound —
+// the middle rung, reachable when readers are merely busy rather than
+// permanently present.
+func (s *Store) WALCheckpointRestart(ctx context.Context) (WALCheckpointResult, error) {
+	return s.walCheckpoint(ctx, "RESTART")
+}
+
 // WALCheckpointTruncate runs PRAGMA wal_checkpoint(TRUNCATE): it flushes the
 // WAL into the main database and then truncates the WAL file to zero, bounding
 // the single biggest source of unbounded disk growth in a busy WAL database.
@@ -1066,15 +1288,7 @@ func (r WALCheckpointResult) Truncated() bool { return !r.Busy }
 // the WAL frozen at exactly 254.1MB). Reporting an action the return value
 // says did not happen is precisely the honesty failure this codebase forbids.
 func (s *Store) WALCheckpointTruncate(ctx context.Context) (WALCheckpointResult, error) {
-	var busy, logFrames, ckpt int
-	err := s.w.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &ckpt)
-	if err == sql.ErrNoRows {
-		return WALCheckpointResult{}, nil
-	}
-	if err != nil {
-		return WALCheckpointResult{}, err
-	}
-	return WALCheckpointResult{Busy: busy == 1, LogFrames: logFrames, Checkpointed: ckpt}, nil
+	return s.walCheckpoint(ctx, "TRUNCATE")
 }
 
 // Vacuum runs a full VACUUM to reclaim free pages left behind by retention

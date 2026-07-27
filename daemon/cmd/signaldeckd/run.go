@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sort"
 	"strings"
 	"time"
 
@@ -179,6 +182,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	}
 
 	// ── the agent fleet ─────────────────────────────────────────────
+	// The Runner is built FIRST because two members of the fleet act ON the
+	// fleet: the storage governor needs a quiesce window for its WAL TRUNCATE,
+	// and the watchdog needs to cancel runs that have blown their deadline.
+	// Workers are attached with Add before Start.
+	runner := workers.NewRunner(st)
 	fleet := []workers.Worker{
 		cryptolive.New(st, cfg.TickstreamURL, cryptoSym.ID),
 		&pipeline.CryptoBars{St: st, Kraken: krakenClient},
@@ -216,6 +224,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	}
 	fleet = append(fleet, &backup.Worker{
 		St: st, Dir: backupDir, OffsiteDir: offsiteBackupDir(), Keep: 7, FirstRunDelay: 5 * time.Minute,
+		Remote: remote, // H9: a failed/corrupt backup pages beyond the Mac
 	})
 	// Alerts + daily-briefing wave (constructor appended at the END of this
 	// file) — must join the fleet BEFORE the watchdog snapshots its specs.
@@ -269,7 +278,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// Tiered-storage wave (constructor appended at the END of this file) — the
 	// storage governor (WAL checkpoint + threshold VACUUM); BEFORE the watchdog
 	// spec snapshot so it's health-audited like every other worker.
-	fleet = append(fleet, storageWorkers(st)...)
+	fleet = append(fleet, storageWorkers(st, runner)...)
 	// Data-integrity wave (2026-07-24) — split-repair (6h): incremental fetches
 	// leave stored history on a stale price basis after a split, welding a fake
 	// +/-50-95% move into the series that every predictor then has to refuse.
@@ -470,6 +479,20 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	var warmTarget func(context.Context) error
 	fleet = append(fleet, cacheWarmWorkers(&warmTarget)...)
 	fleet = append(fleet, digestWorkers(st, remote)...)
+	// Ops-notify wave (constructor appended at the END of this file) — the
+	// daily dead-man heartbeat + ledger-verify escalation (H9). BEFORE the
+	// watchdog spec snapshot so it's health-audited like every other worker.
+	fleet = append(fleet, opsNotifyWorkers(st, remote)...)
+	// SCHEMA CONTRACT (boot-time). Every worker in store.SchemaContract names
+	// the tables/columns it reads or writes. If the database lacks one, the
+	// worker cannot record what it claims to judge — its writes no-op or fail
+	// into a swallowed path while the run still lands as status='ok'. Starting
+	// it would manufacture the appearance of work. So it is never REGISTERED:
+	// the absence is written to dq_events, published on /api/health, and the
+	// worker is dropped from the fleet before the watchdog snapshots specs (so
+	// it is not then reported as stale for not running).
+	fleet = enforceSchemaContract(ctx, st, fleet)
+
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
@@ -481,6 +504,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		Specs:      specs,
 		StatusPath: filepath.Join(filepath.Dir(cfg.DBPath), "health.json"),
 		Remote:     remote, // Stage 3: unhealthy transition also delivered beyond the Mac (same 6h cooldown)
+		Runner:     runner, // actuator: cancel a stale worker's overdue run instead of only reporting it
 	})
 
 	// ── API ─────────────────────────────────────────────────────────
@@ -531,7 +555,8 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		}
 	}()
 
-	workers.NewRunner(st, fleet...).Start(ctx)
+	runner.Add(fleet...)
+	runner.Start(ctx)
 }
 
 // bootstrapUsers migrates a pre-multi-user database: when no accounts exist
@@ -773,9 +798,12 @@ func learningWorkers(st *store.Store) []workers.Worker {
 // pages freed by retention deletes to the filesystem (rate-limited to once/day
 // via a meta cursor). Tiered retention + archive-before-prune themselves live
 // in the Downsampler (given the cold-archive sink above).
-func storageWorkers(st *store.Store) []workers.Worker {
+// The runner handle is what lets the governor hold the fleet still for the
+// TRUNCATE rung of its checkpoint ladder — without it, TRUNCATE never gets the
+// reader-free instant it requires (measured: 0/22 successes, WAL at 5,396MB).
+func storageWorkers(st *store.Store, runner *workers.Runner) []workers.Worker {
 	return []workers.Worker{
-		&maintain.StorageGovernor{St: st},
+		&maintain.StorageGovernor{St: st, Quiescer: runner},
 	}
 }
 
@@ -1544,6 +1572,7 @@ func honestyGapWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.ReturnDistributionRunner{St: st},
 		&pipeline.FeatureRedundancyRunner{St: st},
+		&pipeline.FeatureHealthGrader{St: st},
 		&pipeline.DatasetVersionRunner{St: st},
 		&pipeline.CanaryRunner{St: st},
 		&pipeline.PriceValidator{St: st},
@@ -1637,4 +1666,126 @@ func survivorshipWorkers(st *store.Store) []workers.Worker {
 	return []workers.Worker{
 		&pipeline.DelistingDetector{St: st},
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// OPS-NOTIFY WAVE (appended block) — H9: internal/notify had transports,
+// redaction, timeouts and dq accounting, but nothing CRITICAL was wired to
+// it, so a dead backup or a broken ledger chain never paged a human. One
+// worker closes both gaps:
+//
+//   - ops-heartbeat (24h): runs the incremental ledger verification. A broken
+//     chain sends an URGENT remote message immediately and fails the run (red
+//     on the Agents page) instead of waiting to be noticed on
+//     /api/ledger/verify. An intact chain sends ONE daily heartbeat line
+//     (ledger rows + last-backup age). The heartbeat is the DEAD-MAN SWITCH:
+//     the page-worthy signal is its ABSENCE — a silently dead daemon (crash
+//     loop, hung boot, dead Mac) produces no heartbeat, and that silence is
+//     the alert. With no transport configured the run stays honest about the
+//     inactive switch in its detail line rather than pretending coverage.
+func opsNotifyWorkers(st *store.Store, remote *notify.Notifier) []workers.Worker {
+	return []workers.Worker{&opsHeartbeat{st: st, remote: remote}}
+}
+
+type opsHeartbeat struct {
+	st     *store.Store
+	remote *notify.Notifier
+}
+
+func (h *opsHeartbeat) Name() string            { return "ops-heartbeat" }
+func (h *opsHeartbeat) Interval() time.Duration { return 24 * time.Hour }
+
+func (h *opsHeartbeat) Run(ctx context.Context) (string, error) {
+	v, _, verr := h.st.VerifyLedgerCached(ctx)
+	if verr == nil && !v.Intact {
+		broken := "?"
+		if v.BrokenAtSeq != nil {
+			broken = strconv.FormatInt(*v.BrokenAtSeq, 10)
+		}
+		h.remote.Send(ctx, notify.Message{
+			Title: "SignalDeck URGENT: prediction-ledger verification FAILED",
+			Body: fmt.Sprintf("hash chain broken at seq %s (%d rows) — inspect /api/ledger/verify before trusting the track record",
+				broken, v.Count),
+			Kind: "ledger",
+		})
+		return "", fmt.Errorf("ledger verification failed: chain broken at seq %s (urgent page sent)", broken)
+	}
+	ledger := fmt.Sprintf("ledger intact (%d rows)", v.Count)
+	if verr != nil {
+		ledger = "ledger verify errored: " + verr.Error()
+	}
+	backupAge := "no backup recorded"
+	if raw, err := h.st.GetMeta(ctx, backup.MetaLastBackupTs); err == nil && raw != "" {
+		if ts, perr := strconv.ParseInt(raw, 10, 64); perr == nil {
+			backupAge = fmt.Sprintf("last backup %s ago", time.Since(time.Unix(ts, 0)).Round(time.Hour))
+		}
+	}
+	line := fmt.Sprintf("SignalDeck heartbeat — daemon alive; %s; %s", ledger, backupAge)
+	if !h.remote.Enabled() {
+		return "no remote transport configured — heartbeat NOT delivered (dead-man switch inactive; " +
+			"set SIGNALDECK_TELEGRAM_BOT_TOKEN/_CHAT_ID or SIGNALDECK_DISCORD_WEBHOOK in daemon/.env)", verr
+	}
+	h.remote.Send(ctx, notify.Message{Title: line, Kind: "heartbeat"})
+	return line, verr
+}
+
+// enforceSchemaContract drops every worker whose store.SchemaContract objects
+// the database does not have, records each absence as a dq_event, and publishes
+// the refusal set on /api/health (meta key store.SchemaContractMetaKey).
+//
+// Refusing to register is the whole point: a worker whose target column is
+// missing still completes, still writes a status='ok' run, and still looks like
+// evidence — it just records nothing. Not starting it makes the gap visible
+// instead of silent. This gate can only ever remove workers; it cannot change a
+// threshold, a label, or any reported number.
+func enforceSchemaContract(ctx context.Context, st *store.Store, fleet []workers.Worker) []workers.Worker {
+	names := make([]string, 0, len(fleet))
+	for _, w := range fleet {
+		names = append(names, w.Name())
+	}
+	bad, err := st.ContractViolations(ctx, names)
+	if err != nil {
+		// A contract check that cannot run is itself a reason to be loud, but
+		// it is not evidence that any object is missing — keep the fleet and
+		// report. (verifySchema already hard-failed Open on real divergence.)
+		slog.Error("schema contract: check failed", "err", err)
+		return fleet
+	}
+	if len(bad) == 0 {
+		_ = st.SetMeta(ctx, store.SchemaContractMetaKey, "{}")
+		return fleet
+	}
+	now := time.Now().Unix()
+	var fatal []string
+	for worker, missing := range bad {
+		detail := fmt.Sprintf("worker %s NOT REGISTERED: database lacks %s", worker, strings.Join(missing, ", "))
+		slog.Error("schema contract: refusing to register worker", "worker", worker, "missing", missing)
+		_ = st.InsertDQ(ctx, md.DQEvent{Ts: now, Kind: "schema_contract_unmet", Detail: detail})
+		if store.AuditRecordWorkers[worker] {
+			fatal = append(fatal, worker+" requires "+strings.Join(missing, ", "))
+		}
+	}
+	if b, err := json.Marshal(bad); err == nil {
+		_ = st.SetMeta(ctx, store.SchemaContractMetaKey, string(b))
+	}
+	// An audit-record worker (research-loop, regime-outcome-runner) produces
+	// NOTHING BUT the record it cannot write. Quietly de-registering it leaves
+	// the same unfalsifiable hole the contract exists to close, so escalate to
+	// a boot refusal naming the object. Store.Open makes the same refusal; this
+	// covers a contract that names an object schema.sql never declared.
+	if len(fatal) > 0 {
+		sort.Strings(fatal)
+		slog.Error("schema contract: audit-record worker cannot store its judgments — refusing to start",
+			"workers", fatal)
+		fmt.Fprintf(os.Stderr, "FATAL: audit-record schema contract unmet: %s\n", strings.Join(fatal, "; "))
+		os.Exit(1)
+	}
+	kept :=make([]workers.Worker, 0, len(fleet))
+	for _, w := range fleet {
+		if _, refused := bad[w.Name()]; refused {
+			continue
+		}
+		kept = append(kept, w)
+	}
+	return kept
 }

@@ -35,6 +35,21 @@ func seedDailyPx(t *testing.T, st *store.Store, id int64, rows [][3]float64) {
 	}
 }
 
+// seedGoodForecast stores a return-distribution forecast with clearly positive
+// cost-adjusted EV, so the EV decision engine (internal/ev) lets the entry
+// through and the test under it exercises what it was written to exercise. The
+// engine's own refusal branches are proven in evgate_test.go / internal/ev.
+func seedGoodForecast(t *testing.T, st *store.Store, id int64, h md.Horizon, ts int64) {
+	t.Helper()
+	if err := st.UpsertReturnForecast(context.Background(), store.ReturnForecast{
+		SymbolID: id, Horizon: h, Ts: ts, Regime: "calm", N: 200,
+		Tau: 0.002, Mean: 0.012, Sigma: 0.02, Q10: -0.01, Q50: 0.01, Q90: 0.03,
+		PUp: 0.55, PDown: 0.15, PInside: 0.30, Edge: 0.40, ExpectedValue: 0.010,
+	}); err != nil {
+		t.Fatalf("seed forecast: %v", err)
+	}
+}
+
 func seedPrediction(t *testing.T, st *store.Store, id int64, h md.Horizon, ts int64, cal float64) {
 	t.Helper()
 	if err := st.UpsertPrediction(context.Background(), store.Prediction{
@@ -60,6 +75,7 @@ func TestPaperTrader_NextBarFillNoLookahead(t *testing.T) {
 	})
 	// Prediction ts == day-2 bar ts. cal_prob strong long.
 	seedPrediction(t, st, sym.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, sym.ID, md.H1d, 2*86400)
 
 	w := &PaperTrader{St: st}
 	if _, err := w.Run(ctx); err != nil {
@@ -97,6 +113,7 @@ func TestPaperTrader_CostChargedOnEntry(t *testing.T) {
 		{3, 100, 100},
 	})
 	seedPrediction(t, st, sym.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, sym.ID, md.H1d, 2*86400)
 
 	w := &PaperTrader{St: st}
 	if _, err := w.Run(ctx); err != nil {
@@ -157,6 +174,7 @@ func TestPaperTrader_PnLAcrossSequence(t *testing.T) {
 		{3, 100, 100}, // fill open = 100
 	})
 	seedPrediction(t, st, sym.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, sym.ID, md.H1d, 2*86400)
 	if _, err := w.Run(ctx); err != nil {
 		t.Fatalf("run1: %v", err)
 	}
@@ -255,6 +273,7 @@ func TestPaperTrader_Idempotent(t *testing.T) {
 		{3, 100, 100},
 	})
 	seedPrediction(t, st, sym.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, sym.ID, md.H1d, 2*86400)
 
 	w := &PaperTrader{St: st}
 	if _, err := w.Run(ctx); err != nil {

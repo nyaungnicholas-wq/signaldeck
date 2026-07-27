@@ -158,6 +158,23 @@ type Grade struct {
 	LabelSpan       int64 `json:"labelSpan"`
 	EmbargoSpan     int64 `json:"embargoSpan"`
 	PurgedTrainRows int   `json:"purgedTrainRows"`
+
+	// DayTallies is the scored OOS record folded per UTC day (Ts/86400),
+	// ascending. It exists because N alone cannot support an interval: rows on
+	// one day share one market move, so a gate needs the clusters to measure a
+	// design effect (clusterstat.DesignEffect) and evaluate its bound at the
+	// EFFECTIVE sample size. Empty on grades built before this field existed —
+	// which a gate must treat as "no honest interval", never as deff 1.
+	DayTallies []DayTally `json:"dayTallies,omitempty"`
+}
+
+// DayTally is one UTC day of the out-of-sample record: predictions scored and
+// how many were correct at the 0.5 threshold. Kept local (not clusterstat.Day)
+// so this package stays dependency-free; converting is the caller's one line.
+type DayTally struct {
+	Day  int64 `json:"day"`
+	N    int   `json:"n"`
+	Hits int   `json:"hits"`
 }
 
 // treeNode is one node of a CART regression tree. A leaf carries Value; an
@@ -528,6 +545,7 @@ func evaluateFolds(samples []Sample, folds int, p Params, span, embargo int64, p
 
 	n := len(samples)
 	var preds, actuals []float64
+	var scoredTs []int64
 	purged := 0
 	for f := 1; f < folds; f++ {
 		trainEnd := n * f / folds
@@ -551,12 +569,14 @@ func evaluateFolds(samples []Sample, folds int, p Params, span, embargo int64, p
 		for _, s := range test {
 			preds = append(preds, m.Predict(s.Feat))
 			actuals = append(actuals, s.Y)
+			scoredTs = append(scoredTs, s.Ts)
 		}
 	}
 	if len(preds) == 0 {
 		return Grade{}, ErrInsufficientData
 	}
 	g := gradeFrom(preds, actuals)
+	g.DayTallies = dayTallies(scoredTs, preds, actuals)
 	if purge {
 		g.LabelSpan, g.EmbargoSpan, g.PurgedTrainRows = span, embargo, purged
 	}
@@ -626,6 +646,30 @@ func gradeFrom(preds, actuals []float64) Grade {
 		BaseRate:   baseRate,
 		Lift:       acc - baseRate,
 	}
+}
+
+// dayTallies folds the scored OOS predictions into per-UTC-day clusters, using
+// the same 0.5 hit threshold gradeFrom counts Accuracy at, so the tallies always
+// reconcile with N and Accuracy — a gate that finds they do not has caught a
+// bug, not a rounding difference.
+func dayTallies(ts []int64, preds, actuals []float64) []DayTally {
+	idx := map[int64]int{}
+	var out []DayTally
+	for i, t := range ts {
+		day := t / 86400
+		j, seen := idx[day]
+		if !seen {
+			j = len(out)
+			idx[day] = j
+			out = append(out, DayTally{Day: day})
+		}
+		out[j].N++
+		if (preds[i] >= 0.5) == (actuals[i] >= 0.5) {
+			out[j].Hits++
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].Day < out[b].Day })
+	return out
 }
 
 // aucRank computes ROC AUC via the Mann-Whitney rank statistic with average

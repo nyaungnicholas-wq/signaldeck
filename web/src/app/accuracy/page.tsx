@@ -1,0 +1,391 @@
+// PUBLIC ACCURACY REGISTRY (/accuracy) — the registry's verdicts, verbatim, on
+// a page a visitor can reach without an account. The design rule is the same
+// one tools/accuracy_registry.py enforces in prose: FAILED is the primary
+// visual state, not a footnote. A model the live record contradicts renders
+// first, largest, and in red; PENDING backtest claims render as exactly that.
+//
+// This is a server component that reads data/accuracy_registry.json straight
+// from disk (the ops/accuracy-registry.sh LaunchAgent regenerates it daily),
+// so the page can never disagree with the file the daily grade wrote — there
+// is no second copy of the verdict logic here to drift.
+
+import fs from "node:fs/promises";
+import path from "node:path";
+import Link from "next/link";
+
+export const dynamic = "force-dynamic";
+
+type RegistryRow = {
+  predictor: string;
+  family: string;
+  band: string;
+  claimed: number | null;
+  live_n: number;
+  live_acc: number | null;
+  ci: [number, number] | null;
+  ci_method?: string;
+  distinct_days?: number | null;
+  effective_n?: number | null;
+  null_hindsight: number | null;
+  null_prequential: number | null;
+  null_acc: number | null;
+  skill: number | null;
+  verdict: string;
+  note?: string;
+};
+
+type CalibrationBin = {
+  p_lo: number;
+  p_hi: number;
+  mean_predicted: number | null;
+  realized_up_freq: number | null;
+  n: number;
+  distinct_days?: number;
+};
+
+type Calibration = {
+  method: string;
+  conviction_threshold: number;
+  horizons: Record<string, CalibrationBin[]>;
+};
+
+type Registry = {
+  generated: string;
+  min_independent_n: number;
+  survivorship_epoch: string;
+  null_policy: string;
+  calibration?: Calibration | null;
+  rows: RegistryRow[];
+};
+
+// The flagship's full-record grade and retirement are permanent facts. The
+// post-epoch registry rows restart the count, so without this block the page
+// would quietly forget the one verdict a visitor most needs to see.
+const FLAGSHIP_RETIREMENT = {
+  date: "2026-07-24",
+  rows: [
+    { name: "directional-ensemble (1d)", acc: "48.1%", baseline: "54.6%", n: "13,058", skill: "−6.5pp" },
+    { name: "directional-ensemble (1w)", acc: "46.2%", baseline: "54.4%", n: "9,164", skill: "−8.2pp" },
+    { name: "directional-ensemble (1d, high conviction)", acc: "48.6%", baseline: "56.2%", n: "8,272", skill: "−7.6pp" },
+  ],
+};
+
+async function loadRegistry(): Promise<Registry | null> {
+  // npm run dev / next start run from web/, the LaunchAgent sets the same
+  // WorkingDirectory; the repo-root fallback covers ad-hoc invocations.
+  for (const p of [
+    path.resolve(process.cwd(), "..", "data", "accuracy_registry.json"),
+    path.resolve(process.cwd(), "data", "accuracy_registry.json"),
+  ]) {
+    try {
+      return JSON.parse(await fs.readFile(p, "utf8")) as Registry;
+    } catch {
+      /* try the next location */
+    }
+  }
+  return null;
+}
+
+function pct(x: number | null | undefined, dec = 1): string {
+  return x == null ? "—" : `${(x * 100).toFixed(dec)}%`;
+}
+
+// null_policy: hindsight and prequential publish side by side; the stricter
+// (higher) drives the verdict.
+function drivingBaseline(r: RegistryRow): number | null {
+  const vals = [r.null_hindsight, r.null_prequential].filter((v): v is number => v != null);
+  if (vals.length) return Math.max(...vals);
+  return r.null_acc;
+}
+
+function verdictTone(verdict: string): string {
+  if (verdict.startsWith("FAILED") || verdict.startsWith("DECAYED")) return "var(--bad)";
+  if (verdict.startsWith("VALIDATED") || verdict.startsWith("HOLDING")) return "var(--ok)";
+  if (verdict.startsWith("NO SKILL") || verdict.startsWith("WIDE")) return "var(--warn)";
+  return "var(--dim)"; // INSUFFICIENT / PENDING / UNGRADED
+}
+
+function Cell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[0.65rem] tracking-[0.12em]" style={{ color: "var(--faint)" }}>
+        {label}
+      </span>
+      <span className="tnum text-[0.95rem] font-bold">{value}</span>
+    </div>
+  );
+}
+
+function DirectionalRow({ r, minN }: { r: RegistryRow; minN: number }) {
+  const failed = r.verdict.startsWith("FAILED");
+  const tone = verdictTone(r.verdict);
+  // Conviction slices below the evidence floor get NO percentage. The early
+  // high-conviction record graded WORSE than the base row — anti-calibrated —
+  // and a 6-observation "33.3%" reads as a measurement it is not. The floor is
+  // the registry's own min_independent_n; the accuracy renders once n clears it.
+  const convictionGated = r.band !== "all" && r.live_n < minN;
+  return (
+    <section
+      className="panel"
+      style={failed ? { borderColor: "var(--bad)" } : undefined}
+      aria-label={`${r.predictor} verdict`}
+    >
+      <div className="panel-h">
+        <span>{r.predictor}</span>
+        <span className="chip px-2 py-[1px] text-[0.7rem]">band {r.band}</span>
+      </div>
+      <div className="flex flex-col gap-3 px-5 py-4">
+        {/* the verdict string, verbatim from the registry — FAILED renders primary */}
+        <span
+          className={failed ? "text-[1.35rem] font-extrabold" : "text-[1.05rem] font-bold"}
+          style={{ color: tone }}
+        >
+          {r.verdict}
+        </span>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <Cell
+            label="LIVE ACC"
+            value={convictionGated ? `insufficient, n=${r.live_n}/${minN}` : pct(r.live_acc)}
+          />
+          <Cell
+            label="SKILL VS BASELINE"
+            value={
+              convictionGated || r.skill == null
+                ? "—"
+                : `${r.skill >= 0 ? "+" : ""}${(r.skill * 100).toFixed(1)}pp`
+            }
+          />
+          <Cell label="BASELINE (STRICTER NULL)" value={pct(drivingBaseline(r))} />
+          <Cell
+            label="95% CI (DAY-CLUSTERED)"
+            value={r.ci ? `${pct(r.ci[0])}–${pct(r.ci[1])}` : r.ci_method === "withheld" ? "withheld" : "—"}
+          />
+          <Cell
+            label="EFFECTIVE N"
+            value={r.effective_n != null ? r.effective_n.toLocaleString() : `${r.live_n.toLocaleString()} raw`}
+          />
+        </div>
+        {convictionGated ? (
+          <span className="text-[0.72rem] leading-relaxed" style={{ color: "var(--warn)" }}>
+            Accuracy withheld: this conviction slice is below the {minN}-observation evidence
+            floor, and its early record runs worse than the base row (anti-calibrated). See the
+            reliability bins below for where the probabilities are wrong.
+          </span>
+        ) : null}
+        {r.note ? (
+          <span className="text-[0.72rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            {r.note}
+          </span>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+/** Reliability diagram as a table: per bin of predicted P(up), what actually
+ * happened. This is the surface where an anti-calibrated conviction tier is
+ * visible per-bin — and correctable (threshold, isotonic recalibration) —
+ * rather than buried inside a band average. */
+function CalibrationPanel({ cal }: { cal: Calibration }) {
+  const horizons = Object.entries(cal.horizons).filter(([, bins]) => bins.length > 0);
+  if (!horizons.length) return null;
+  const thr = cal.conviction_threshold;
+  const isConviction = (b: CalibrationBin) => b.p_hi <= 0.5 - thr + 1e-9 || b.p_lo >= 0.5 + thr - 1e-9;
+  return (
+    <section className="panel" aria-label="calibration reliability bins">
+      <div className="panel-h">
+        <span style={{ color: "var(--dim)" }}>CALIBRATION — PREDICTED VS REALIZED</span>
+        <span className="chip px-2 py-[1px] text-[0.7rem]">
+          conviction gate |p−0.5| ≥ {thr}
+        </span>
+      </div>
+      <div className="overflow-x-auto px-5 py-3">
+        <table className="w-full text-left text-[0.78rem]">
+          <thead>
+            <tr style={{ color: "var(--faint)" }}>
+              <th className="pr-4 font-medium">horizon</th>
+              <th className="pr-4 font-medium">predicted P(up)</th>
+              <th className="pr-4 font-medium">mean predicted</th>
+              <th className="pr-4 font-medium">realized up-freq</th>
+              <th className="pr-4 font-medium">n</th>
+              <th className="font-medium">tier</th>
+            </tr>
+          </thead>
+          <tbody className="tnum">
+            {horizons.flatMap(([horizon, bins]) =>
+              bins.map((b) => {
+                const conv = isConviction(b);
+                // Miscalibration flag: realized frequency on the wrong side of
+                // 0.5 relative to the bin's predicted probability.
+                const inverted =
+                  b.mean_predicted != null &&
+                  b.realized_up_freq != null &&
+                  (b.mean_predicted - 0.5) * (b.realized_up_freq - 0.5) < 0;
+                return (
+                  <tr key={`${horizon}|${b.p_lo}`}>
+                    <td className="pr-4 py-1">{horizon}</td>
+                    <td className="pr-4">
+                      {b.p_lo.toFixed(1)}–{b.p_hi.toFixed(1)}
+                    </td>
+                    <td className="pr-4">{pct(b.mean_predicted)}</td>
+                    <td className="pr-4" style={inverted ? { color: "var(--bad)", fontWeight: 700 } : undefined}>
+                      {pct(b.realized_up_freq)}
+                      {inverted ? " (inverted)" : ""}
+                    </td>
+                    <td className="pr-4">{b.n.toLocaleString()}</td>
+                    <td style={conv ? { color: "var(--warn)" } : { color: "var(--faint)" }}>
+                      {conv ? "conviction" : "—"}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="border-t px-5 py-2 text-[0.72rem]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
+        {cal.method}. A conviction-tier bin whose realized frequency sits on the wrong side of
+        its predicted probability is the miscalibration to fix — raise the conviction threshold
+        or recalibrate — before the auto-retire gate fires on the graded slice.
+      </div>
+    </section>
+  );
+}
+
+export default async function AccuracyPage() {
+  const reg = await loadRegistry();
+  const rows = reg?.rows ?? [];
+  const directional = rows
+    .filter((r) => r.family === "direction")
+    .sort((a, b) => Number(b.verdict.startsWith("FAILED")) - Number(a.verdict.startsWith("FAILED")));
+  const structural = rows.filter((r) => r.family === "structure");
+  const pendingCount = structural.filter((r) => r.verdict.startsWith("PENDING")).length;
+
+  return (
+    <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
+      <header className="flex flex-col gap-2">
+        <h1 className="text-[1.4rem] font-extrabold tracking-tight">Accuracy registry</h1>
+        <p className="m-0 max-w-[68ch] text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+          Every predictor, its claim, and what the live record actually supports — regraded daily
+          against the naive baseline on independent (symbol, horizon, UTC-day) observations. The
+          failures lead. Descriptive, not advice.
+        </p>
+      </header>
+
+      {/* ── FLAGSHIP RETIREMENT: the disclosure that must not be buried ── */}
+      <section className="panel" style={{ borderColor: "var(--bad)" }} aria-label="flagship retirement">
+        <div className="panel-h">
+          <span style={{ color: "var(--bad)" }}>FLAGSHIP RETIRED {FLAGSHIP_RETIREMENT.date}</span>
+          <span className="chip px-2 py-[1px] text-[0.7rem]">no longer emitting</span>
+        </div>
+        <div className="flex flex-col gap-3 px-5 py-4">
+          <span className="text-[1.35rem] font-extrabold" style={{ color: "var(--bad)" }}>
+            FAILED — significantly worse than the naive baseline
+          </span>
+          <p className="m-0 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            On its full live record every directional row graded FAILED — the entire day-clustered
+            confidence interval below the majority-class baseline — so the model was automatically
+            retired and stopped emitting. Inverting or relabeling it is not a rescue (48.1% inverts
+            to 51.9%, still below the null). The directional rows below are its post-retirement
+            shadow record, restarted at the survivorship epoch.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-[0.78rem]">
+              <thead>
+                <tr style={{ color: "var(--faint)" }}>
+                  <th className="pr-4 font-medium">predictor</th>
+                  <th className="pr-4 font-medium">live acc</th>
+                  <th className="pr-4 font-medium">baseline</th>
+                  <th className="pr-4 font-medium">independent n</th>
+                  <th className="font-medium">skill</th>
+                </tr>
+              </thead>
+              <tbody className="tnum">
+                {FLAGSHIP_RETIREMENT.rows.map((f) => (
+                  <tr key={f.name}>
+                    <td className="pr-4 py-1">{f.name}</td>
+                    <td className="pr-4">{f.acc}</td>
+                    <td className="pr-4">{f.baseline}</td>
+                    <td className="pr-4">{f.n}</td>
+                    <td style={{ color: "var(--bad)" }} className="font-bold">
+                      {f.skill}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      {!reg && (
+        <section className="panel px-5 py-4" aria-label="registry unavailable">
+          <span className="text-[0.85rem]" style={{ color: "var(--warn)" }}>
+            data/accuracy_registry.json is not readable on this deployment — the live rows cannot
+            render. The retirement disclosure above still stands.
+          </span>
+        </section>
+      )}
+
+      {/* ── LIVE DIRECTIONAL ROWS, FAILED FIRST ── */}
+      {directional.map((r) => (
+        <DirectionalRow key={`${r.predictor}|${r.band}`} r={r} minN={reg?.min_independent_n ?? 30} />
+      ))}
+
+      {/* ── RELIABILITY BINS: where the probabilities are actually wrong ── */}
+      {reg?.calibration ? <CalibrationPanel cal={reg.calibration} /> : null}
+
+      {/* ── STRUCTURAL CLAIMS: PENDING means backtest, not evidence ── */}
+      {structural.length > 0 && (
+        <section className="panel" aria-label="structural claims">
+          <div className="panel-h">
+            <span style={{ color: "var(--dim)" }}>STRUCTURAL CLAIMS</span>
+            <span className="chip px-2 py-[1px] text-[0.7rem]">
+              {pendingCount}/{structural.length} pending — backtested, not live
+            </span>
+          </div>
+          <div className="overflow-x-auto px-5 py-3">
+            <table className="w-full text-left text-[0.78rem]">
+              <thead>
+                <tr style={{ color: "var(--faint)" }}>
+                  <th className="pr-4 font-medium">predictor</th>
+                  <th className="pr-4 font-medium">backtest claim</th>
+                  <th className="font-medium">status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {structural.map((r) => (
+                  <tr key={r.predictor}>
+                    <td className="tnum pr-4 py-1">{r.predictor}</td>
+                    <td className="tnum pr-4">{pct(r.claimed)}</td>
+                    <td style={{ color: verdictTone(r.verdict) }}>{r.verdict}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="border-t px-5 py-2 text-[0.72rem]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
+            A PENDING claim is a backtested number, not a live record — it becomes evidence on the
+            first-grade date in its status, never before.
+          </div>
+        </section>
+      )}
+
+      {reg && (
+        <p className="m-0 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+          Regenerated {reg.generated} · minimum {reg.min_independent_n} independent observations
+          for any verdict · survivorship epoch {reg.survivorship_epoch} (earlier rows were graded
+          against a survivor-seeded universe and are excluded) · intervals resample days, not rows.
+        </p>
+      )}
+
+      <Link
+        href="/proof"
+        className="w-fit text-[0.78rem] font-semibold tracking-wide transition-colors duration-150"
+        style={{ color: "var(--accent)" }}
+      >
+        ← the receipts (ledger + live track record)
+      </Link>
+    </div>
+  );
+}

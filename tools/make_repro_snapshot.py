@@ -22,6 +22,13 @@ What ships in the snapshot (repro/, committed):
     themselves are NOT exported — bar data is license-classified (A10) and not
     redistributable — but anyone with their own licensed bars can verify they
     hold the identical dataset before comparing pairs-study results.
+  * xsfactor_inputs.csv   — the same versioning for the cross-sectional factor
+    derivation (tools/xsfactor_edge.py): one row per symbol series that study
+    consumes, under ITS universe (every stock ever tracked, series >=
+    MIN_VOL_CLOSES bars) and ITS view of a bar (UTC-day, close, volume). The
+    active flag ships in the row because the study's --universe split turns
+    on it. Matching hashes mean a reader holds the identical dataset before
+    comparing against daemon/internal/xsfactor/derivation.json.
   * MANIFEST.json         — a hash per CSV under the same canonical scheme, so
     the graders can refuse a tampered snapshot.
 
@@ -55,6 +62,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import accuracy_registry as reg  # noqa: E402 — single source of truth for the SQL
+import xsfactor_edge as xsf  # noqa: E402 — single source of truth for the study's floor
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_OUT = os.path.join(REPO, "repro")
@@ -64,17 +72,29 @@ DEFAULT_OUT = os.path.join(REPO, "repro")
 FILES = {
     "directional_days.csv": "directional-day-tallies",
     "structural_days.csv": "structural-day-tallies",
+    "structural_naive_days.csv": "structural-naive-persistence-day-tallies",
     "structural_claims.csv": "structural-claims",
     "pairs_inputs.csv": "pairs-input-series-versions",
+    "xsfactor_inputs.csv": "xsfactor-input-series-versions",
+    "prereg_claims.csv": "prereg-frozen-claims",
+    "grading_protocol.csv": "prereg-grading-protocol",
 }
 
 HEADERS = {
     "directional_days.csv": ["horizon", "day", "n", "correct", "up_days",
                              "hc_n", "hc_correct", "hc_up_days"],
     "structural_days.csv": ["kind", "horizon_days", "day", "n", "correct"],
+    "structural_naive_days.csv": ["kind", "horizon_days", "day", "n", "correct"],
     "structural_claims.csv": ["kind", "horizon_days", "forecasts_recorded",
                               "claimed_accuracy", "first_ts"],
     "pairs_inputs.csv": ["symbol", "timeframe", "first_ts", "last_ts", "n", "sha256"],
+    "xsfactor_inputs.csv": ["symbol", "timeframe", "active", "first_day", "last_day",
+                            "n", "sha256"],
+    "prereg_claims.csv": ["kind", "claimed_accuracy", "spec_hash", "registered_ts"],
+    "grading_protocol.csv": ["seq", "grader_sha256", "grader_commit",
+                             "min_independent_n", "min_distinct_days",
+                             "min_distinct_blocks", "max_alpha",
+                             "multiplicity_rule", "looks"],
 }
 
 
@@ -109,16 +129,26 @@ def directional_records(con: sqlite3.Connection) -> list[list[str]]:
     return recs
 
 
-def structural_records(con: sqlite3.Connection) -> tuple[list[list[str]], list[list[str]]]:
-    totals, per_day = reg.fetch_structural(con)
-    days = []
-    for (kind, hd) in sorted(per_day):
-        for day, n, hits in per_day[(kind, hd)]:
-            days.append([str(kind), str(int(hd)), str(int(day)), str(int(n)), str(int(hits))])
+def structural_records(con: sqlite3.Connection):
+    """(day tallies, claims, naive-persistence day tallies).
+
+    The naive tallies are the FROZEN "nothing changes" null — exported so an
+    outside reader can reproduce the skill verdict, not just the accuracy.
+    """
+    totals, per_day, naive_per_day = reg.fetch_structural(con)
+
+    def day_rows(src) -> list[list[str]]:
+        out = []
+        for (kind, hd) in sorted(src):
+            for day, n, hits in src[(kind, hd)]:
+                out.append([str(kind), str(int(hd)), str(int(day)), str(int(n)), str(int(hits))])
+        return out
+
+    days = day_rows(per_day)
     claims = [[str(kind), str(int(hd)), str(int(total)),
                g10(claimed) if claimed is not None else "", str(int(first_ts))]
               for kind, hd, total, claimed, first_ts in totals]
-    return days, claims
+    return days, claims, day_rows(naive_per_day)
 
 
 def pairs_input_records(con: sqlite3.Connection) -> list[list[str]]:
@@ -150,13 +180,103 @@ def pairs_input_records(con: sqlite3.Connection) -> list[list[str]]:
     return recs
 
 
+def xsfactor_input_records(con: sqlite3.Connection) -> list[list[str]]:
+    """Version every symbol series the cross-sectional factor study consumes.
+
+    Mirrors xsfactor_edge.load exactly: the --universe all universe (every
+    stock ever tracked, active or not), its floor (a series shorter than
+    MIN_VOL_CLOSES bars is never constructed), and its view of a bar —
+    (UTC-day, close, volume), because ts/86400 is all the study ever reads.
+    Hashes, not bars: the raw series stay under their data license.
+    TestXsfactorSnapshotRoundTrip pins this mirror against the study's own
+    loader, so the two cannot drift silently.
+    """
+    try:
+        syms = con.execute(
+            "SELECT s.id, s.symbol, s.active FROM symbols s "
+            "WHERE s.market = 'stocks' ORDER BY s.symbol").fetchall()
+    except sqlite3.OperationalError:
+        return []  # reduced test databases have no bars universe to version
+    recs = []
+    for sid, sym, active in syms:
+        series = con.execute(
+            "SELECT ts/86400, close, volume FROM bars WHERE tf = '1d' "
+            "AND symbol_id = ? ORDER BY ts", (sid,)).fetchall()
+        if len(series) < xsf.MIN_VOL_CLOSES:
+            continue  # below the study's floor: xsfactor_edge.load drops it too
+        h = hash_records(sym, "xsfactor-1d-day-close-volume",
+                         [[str(int(d)), g10(c), g10(v or 0.0)] for d, c, v in series])
+        recs.append([str(sym), "1d", str(int(active or 0)),
+                     str(int(series[0][0])), str(int(series[-1][0])),
+                     str(len(series)), h])
+    return recs
+
+
+def prereg_claim_records(con: sqlite3.Connection) -> list[list[str]]:
+    """Ship the frozen grading target itself, not just the outcomes.
+
+    Without this, a snapshot grade could only recompute the target from the
+    exported tallies — the exact drift the chain exists to prevent. One row per
+    kind: the newest chained record's min-conviction (all-decisions) claim and
+    the spec hash a reader can check against the daemon's own chain.
+    """
+    return [[kind, g10(c["claimed"]), c["spec_hash"], str(int(c["registered_ts"]))]
+            for kind, c in sorted(reg.fetch_prereg_claims(con).items())]
+
+
+def grading_protocol_records(con: sqlite3.Connection) -> list[list[str]]:
+    """Ship the grader pin itself, so the reproduce path can enforce it.
+
+    require_registered_grader used to run only against the chain in the
+    gitignored database — i.e. only on the path nobody outside this machine can
+    run. A third party following REPRODUCE.md graded with --snapshot, which
+    checked no registration at all and printed verdicts anyway. Exporting the
+    newest grading-protocol record as a manifest-hashed file puts the pin inside
+    the reproducible bundle: the snapshot grade now fails closed on exactly the
+    condition the DB path fails on, and an outside reader can read the pinned
+    digest and thresholds from an artifact rather than taking them on trust.
+
+    One row: the newest record. If the chain has none, the file is empty and the
+    snapshot grade publishes no verdicts — which is the correct output, not a
+    reason to write a chain record or re-pin the digest.
+    """
+    rec = reg.newest_grading_protocol(con)
+    if rec is None:
+        return []
+    # A threshold the record never froze exports as EMPTY, not as the string
+    # "None" and never as the grader's own constant — an unregistered floor must
+    # read back as unregistered so the loader's check refuses on it.
+    def fld(key: str) -> str:
+        v = rec.get(key)
+        return "" if v is None else str(int(v))
+
+    return [[str(int(rec["_seq"])), str(rec.get("graderSha256") or ""),
+             str(rec.get("graderCommit") or ""),
+             fld("minIndependentN"), fld("minDistinctDays"),
+             fld("minDistinctBlocks"),
+             # The multiplicity price rides along: without maxAlpha and the
+             # divisor rule the bundle cannot say what coverage its intervals
+             # claim, and the loader refuses rather than assume 95%.
+             "" if rec.get("maxAlpha") is None else g10(rec["maxAlpha"]),
+             str(rec.get("multiplicityRule") or ""),
+             # LOOKS TAKEN, counted off the chain at cut time. Exported so a
+             # third-party snapshot grade prices the same optional stopping the
+             # DB path does. The grader maxes it against the looks the published
+             # registry already declared, so a re-cut cannot refund one.
+             str(reg.chain_looks(con))]]
+
+
 def build_all(con: sqlite3.Connection) -> dict[str, list[list[str]]]:
-    s_days, s_claims = structural_records(con)
+    s_days, s_claims, s_naive = structural_records(con)
     return {
         "directional_days.csv": directional_records(con),
+        "prereg_claims.csv": prereg_claim_records(con),
+        "grading_protocol.csv": grading_protocol_records(con),
         "structural_days.csv": s_days,
+        "structural_naive_days.csv": s_naive,
         "structural_claims.csv": s_claims,
         "pairs_inputs.csv": pairs_input_records(con),
+        "xsfactor_inputs.csv": xsfactor_input_records(con),
     }
 
 
@@ -222,13 +342,70 @@ def verify_snapshot(con: sqlite3.Connection, out_dir: str) -> int:
     return rc
 
 
+def verify_complete(out_dir: str) -> int:
+    """Database-free audit of the SHIPPED snapshot — the CI gate.
+
+    --verify needs the DB, so it can only ever run on the one machine that
+    holds it; nothing checked that what a cold clone contains matches what
+    REPRODUCE.md tells a reviewer to check. Three properties, all checkable
+    from the repository alone:
+      1. every FILES entry appears in MANIFEST.json AND on disk,
+      2. each file re-hashes to its manifest value (canonical scheme),
+      3. each file is git-TRACKED — a file present only in the working tree
+         is documented-but-not-shipped, which is the failure this catches.
+    """
+    man_path = os.path.join(out_dir, "MANIFEST.json")
+    if not os.path.exists(man_path):
+        print(f"MISSING: {man_path}")
+        return 1
+    with open(man_path) as f:
+        manifest = {e["file"]: e for e in json.load(f)["files"]}
+    rc = 0
+    for fname, kind in sorted(FILES.items()):
+        path = os.path.join(out_dir, fname)
+        ent = manifest.get(fname)
+        if ent is None:
+            print(f"NOT IN MANIFEST: {fname}")
+            rc = 1
+            continue
+        if not os.path.exists(path):
+            print(f"IN MANIFEST BUT NOT ON DISK: {fname}")
+            rc = 1
+            continue
+        with open(path, newline="") as f:
+            recs = list(csv.reader(f))[1:]
+        got = hash_records(fname, kind, recs)
+        if got != ent["sha256"]:
+            print(f"HASH MISMATCH: {fname} is {got}, manifest says {ent['sha256']}")
+            rc = 1
+            continue
+        tracked = subprocess.run(["git", "ls-files", "--error-unmatch", path],
+                                 cwd=REPO, capture_output=True)
+        if tracked.returncode != 0:
+            print(f"UNTRACKED (present locally, absent from a clone): {fname}")
+            rc = 1
+            continue
+        print(f"ok: {fname:30s} {len(recs):6d} rows  tracked  hash verified")
+    extra = sorted(set(manifest) - set(FILES))
+    if extra:
+        print(f"manifest lists files the exporter does not produce: {', '.join(extra)}")
+        rc = 1
+    return rc
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=reg.DEFAULT_DB)
     ap.add_argument("--out", default=DEFAULT_OUT, help="snapshot directory (default repro/)")
     ap.add_argument("--verify", action="store_true",
                     help="compare the committed snapshot to the live DB instead of writing")
+    ap.add_argument("--verify-complete", action="store_true",
+                    help="database-free: assert the shipped snapshot is complete, "
+                         "correctly hashed, and git-tracked (CI gate)")
     args = ap.parse_args()
+
+    if args.verify_complete:
+        return verify_complete(args.out)
 
     con = reg.connect(args.db)
     if args.verify:

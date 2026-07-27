@@ -367,10 +367,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   });
 
   // Public routes render minimal chrome (brand + footer) with no nav, freshness
-  // chip, toggles or daemon dot: /login (sign-in) and /proof (the shareable
-  // public track-record + ledger page). A nav full of links that bounce to
-  // /login, or a "updated 0s ago" chip, would both be misleading here.
-  if (pathname === "/login" || pathname === "/proof") {
+  // chip, toggles or daemon dot: /login (sign-in), /proof (the shareable
+  // public track-record + ledger page) and /accuracy (the registry verdicts).
+  // A nav full of links that bounce to /login, or a "updated 0s ago" chip,
+  // would both be misleading here.
+  if (pathname === "/login" || pathname === "/proof" || pathname === "/accuracy") {
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-3 sm:p-4">
         <header className="panel px-4 py-3 sm:px-5">

@@ -14,19 +14,6 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
-// dailyCloses returns up to n most-recent daily closes (oldest→newest).
-func (d Deps) dailyCloses(r *http.Request, symbolID int64, n int) ([]float64, error) {
-	bars, err := d.St.LastBars(r.Context(), symbolID, md.TF1d, n)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]float64, len(bars))
-	for i, b := range bars {
-		out[i] = b.Close
-	}
-	return out, nil
-}
-
 // dailySeries returns a symbol's daily closes WITH bar timestamps, so callers
 // can align multiple symbols on real shared dates (breakout.AlignByTs) instead
 // of approximating by index/min-length.

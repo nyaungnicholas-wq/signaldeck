@@ -25,6 +25,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -69,7 +70,18 @@ type Worker struct {
 	// the last good generation behind it.
 	VerifyBackup func(ctx context.Context, path string) error
 
+	// Remote fans backup failures out BEYOND the Mac (H9: dq_events and
+	// /api/quality only page a human who is already looking). nil or
+	// unconfigured = no-op — dq/meta visibility above is unchanged.
+	Remote *notify.Notifier
+
 	ran bool
+}
+
+// page delivers one backup-failure message to the remote transports.
+// Best-effort by notify's own contract: never blocks, never fails the run.
+func (w *Worker) page(ctx context.Context, title, body string) {
+	w.Remote.Send(ctx, notify.Message{Title: title, Body: body, Kind: "backup"})
 }
 
 // verify runs the configured integrity check (or the real one) against path.
@@ -156,6 +168,7 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	// keeping it off the single write connection means writers aren't queued
 	// behind a potentially long copy.
 	if _, err := w.St.DB().ExecContext(ctx, `VACUUM INTO ?`, target); err != nil {
+		w.page(ctx, "SignalDeck backup FAILED", fmt.Sprintf("VACUUM INTO %s: %v", filepath.Base(target), err))
 		return "", fmt.Errorf("vacuum into %s: %w", target, err)
 	}
 	st, err := os.Stat(target)
@@ -174,6 +187,8 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 			Kind:   "backup_corrupt",
 			Detail: fmt.Sprintf("%s failed integrity check (removed, previous generations NOT rotated): %v", filepath.Base(target), verr),
 		})
+		w.page(ctx, "SignalDeck backup FAILED — corrupt copy",
+			fmt.Sprintf("%s failed integrity check (removed, previous generations kept): %v", filepath.Base(target), verr))
 		return "", fmt.Errorf("backup integrity check failed, corrupt copy removed, no rotation: %w", verr)
 	}
 	pruned, perr := w.prune(w.Dir)
@@ -225,12 +240,15 @@ func (w *Worker) offsite(ctx context.Context, src string) string {
 }
 
 // offsiteFail records the honest dq event and returns the detail fragment.
+// It also pages: the offsite copy is the disaster-recovery artifact, so its
+// failure is critical even though the local run still succeeds.
 func (w *Worker) offsiteFail(ctx context.Context, reason string) string {
 	_ = w.St.InsertDQ(ctx, md.DQEvent{
 		Ts:     time.Now().Unix(),
 		Kind:   "offsite_backup_unavailable",
 		Detail: reason,
 	})
+	w.page(ctx, "SignalDeck offsite backup unavailable", reason+" (local backup kept)")
 	return reason + " (local backup kept; dq recorded)"
 }
 

@@ -367,14 +367,23 @@ func (w *ResearchEngineWorker) gradeHypEras(ctx context.Context, hyp rl.Hypothes
 		if g.Weeks < minWeeksPerEra {
 			continue // too thin to acquit OR convict — no row
 		}
+		// Measured null on the era's own matched obs (see measuredWeekNull);
+		// an era whose null arm grades nothing produces no evidence row.
+		null, ok := measuredWeekNull(eraObs, rule, minWeekObs, minWeeksPerEra)
+		if !ok {
+			continue
+		}
+		bf, ok := rl.BayesFactorAbove(g.WinWeeks, g.Weeks, null, rl.WeekTrialMaxEdge)
+		if !ok {
+			continue
+		}
 		evidence := engineGradeAttacks(hyp.ID, rule, eraObs, g, era, now, spanFrom, spanTo,
 			minWeekObs, minWeeksPerEra)
 		evidence = append(evidence, rl.Evidence{
 			HypID: hyp.ID, Ts: now, Kind: rl.KindBacktest,
-			K: g.WinWeeks, N: g.Weeks, P0: 0.5,
-			BF: rl.BayesFactorAbove(g.WinWeeks, g.Weeks, 0.5, rl.WeekTrialMaxEdge),
-			Note: fmt.Sprintf("era=%s: %d/%d winning weeks (%d obs) — historical backfill, survivor universe",
-				era, g.WinWeeks, g.Weeks, g.TotalObs),
+			K: g.WinWeeks, N: g.Weeks, P0: null.P0(), BF: bf,
+			Note: fmt.Sprintf("era=%s: %d/%d winning weeks (%d obs) — historical backfill, survivor universe; graded against measured null %s",
+				era, g.WinWeeks, g.Weeks, g.TotalObs, null),
 			WindowFrom: spanFrom, WindowTo: spanTo,
 		})
 		for _, e := range evidence {
@@ -453,7 +462,10 @@ func engineGradeAttacks(hypID string, rule researchx.Rule, obs []researchx.Obs, 
 		} else {
 			add(rl.PenaltyNoIncrementalValue, note+" — conditions carry no incremental value")
 		}
-		worst, fragile := researchx.FragileThreshold(obs, rule, minWeekObs)
+		// Same MEASURED no-skill week-win rate the discovery gates use
+		// (floored at 0.5), not the 0.5 literal the null arm disproves.
+		p0 := math.Max(0.5, cf.NullMatched.WinRate)
+		worst, fragile := researchx.FragileThreshold(obs, rule, minWeekObs, p0)
 		if fragile {
 			add(rl.PenaltyFragileThreshold, fmt.Sprintf(
 				"fragile-threshold: era=%s ±10%% threshold perturbation retains %.2f of the edge — knife-edge fit", era, worst))
@@ -524,9 +536,17 @@ func (w *ResearchEngineWorker) seedV2(ctx context.Context, now int64) bool {
 // new ledger hypotheses, capped at maxNewHyps per run. Already-registered
 // candidate IDs are skipped, so re-runs are idempotent.
 func (w *ResearchEngineWorker) discover(ctx context.Context, obs []researchx.Obs, now int64, minWeekObs, minWeeks, minWeeksPerEra, maxNewHyps int) int {
-	cands := researchx.Discover(obs, researchx.DiscoverConfig{
+	judged := researchx.Discover(obs, researchx.DiscoverConfig{
 		MinWeekObs: minWeekObs, MinWeeks: minWeeks, MinWeeksPerEra: minWeeksPerEra,
 	})
+	// Discover returns every judged rule; only survivors become ledger
+	// hypotheses here. The rejections are ledgered by pipeline.ResearchLoop.
+	cands := make([]researchx.Candidate, 0, len(judged))
+	for _, c := range judged {
+		if c.Survives {
+			cands = append(cands, c)
+		}
+	}
 	if len(cands) == 0 {
 		return 0
 	}
@@ -566,6 +586,14 @@ func (w *ResearchEngineWorker) insertCandidate(ctx context.Context, c researchx.
 	if err != nil {
 		return err
 	}
+	// The candidate already carries the null arm Discover graded it against
+	// (same matched obs, direction randomized) — reuse that measurement
+	// rather than re-assuming 0.5. No graded null weeks ⇒ no evidence.
+	null := rl.NullFromArm(c.CF.NullMatched.Grade.WinWeeks, c.CF.NullMatched.Grade.Weeks, "null-matched week")
+	rawBF, ok := rl.BayesFactorAbove(c.Grade.WinWeeks, c.Grade.Weeks, null, rl.WeekTrialMaxEdge)
+	if !ok {
+		return nil
+	}
 	h := rl.Hypothesis{
 		ID: c.ID, Family: "auto", Horizon: "1w", Statement: c.Desc,
 		Prior: 0.15, MaxEdge: 0.20, Spec: string(spec),
@@ -578,14 +606,12 @@ func (w *ResearchEngineWorker) insertCandidate(ctx context.Context, c researchx.
 	}
 	evidence := engineGradeAttacks(c.ID, c.Rule, obs, c.Grade, "all", now, winFrom, winTo,
 		minWeekObs, minWeeks)
-	bf := math.Min(
-		rl.BayesFactorAbove(c.Grade.WinWeeks, c.Grade.Weeks, 0.5, rl.WeekTrialMaxEdge),
-		rl.DiscoveryMaxBF)
+	bf := math.Min(rawBF, rl.DiscoveryMaxBF)
 	evidence = append(evidence, rl.Evidence{
 		HypID: c.ID, Ts: now, Kind: rl.KindExperiment,
-		K: c.Grade.WinWeeks, N: c.Grade.Weeks, P0: 0.5, BF: bf,
-		Note: fmt.Sprintf("era=all: %d/%d winning weeks (%d obs) — auto-discovered on this very window — in-sample; disjoint-era/live replications are the real test; BF capped",
-			c.Grade.WinWeeks, c.Grade.Weeks, c.Grade.TotalObs),
+		K: c.Grade.WinWeeks, N: c.Grade.Weeks, P0: null.P0(), BF: bf,
+		Note: fmt.Sprintf("era=all: %d/%d winning weeks (%d obs) — auto-discovered on this very window — in-sample; disjoint-era/live replications are the real test; BF capped; graded against measured null %s",
+			c.Grade.WinWeeks, c.Grade.Weeks, c.Grade.TotalObs, null),
 		WindowFrom: winFrom, WindowTo: winTo,
 	})
 	for _, e := range evidence {
@@ -646,7 +672,8 @@ func (w *ResearchEngineWorker) recomputeAndDecay(ctx context.Context, hyp rl.Hyp
 	// StatusWithGates, not Status: promotion also requires the hypothesis to
 	// have been stated as a position and that position graded net of costs.
 	status := rl.StatusWithGates(post, rl.Gates{
-		Replications: reps, Regimes: regimes,
+		MachineGrades: rl.MachineGrades(chain),
+		Replications:  reps, Regimes: regimes,
 		TradableForm: hyp.TradableForm, EconomicTest: hyp.EconomicTest,
 	})
 	if err := w.St.UpdateLedgerDerived(ctx, hyp.ID, post, status, reps, contras, regimes, now); err != nil {
@@ -654,6 +681,24 @@ func (w *ResearchEngineWorker) recomputeAndDecay(ctx context.Context, hyp rl.Hyp
 	}
 	d := researchx.Decay(hyp.Prior, chain, now)
 	return w.St.UpdateLedgerDecay(ctx, hyp.ID, d.Peak, d.PeakTs, d.LastGradeTs)
+}
+
+// measuredWeekNull grades the null-matched arm of a rule on the SAME matched
+// observations the rule itself is graded on — direction randomized by
+// deterministic hash parity — and returns its week-win rate as the null this
+// window must beat. This is the arm researchx.Discover already gates on; the
+// grading paths here used to pass the literal 0.5 instead, so one repository
+// judged the same statistic against two different nulls. The rate is floored
+// at 0.5 inside rl.NullFromArm, so the substitution can only make a grade
+// harder to pass.
+//
+// ok=false means the null arm graded ZERO weeks: the no-skill rate for this
+// window was never measured, so there is nothing to grade against and the
+// caller must write no evidence row.
+func measuredWeekNull(obs []researchx.Obs, rule researchx.Rule, minWeekObs, minWeeks int) (rl.MeasuredNull, bool) {
+	cf := researchx.Counterfactual(obs, rule, minWeekObs, minWeeks)
+	null := rl.NullFromArm(cf.NullMatched.Grade.WinWeeks, cf.NullMatched.Grade.Weeks, "null-matched week")
+	return null, null.Measured()
 }
 
 // obsSpan returns the min/max anchor ts over obs (obs must be non-empty).

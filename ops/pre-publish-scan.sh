@@ -58,13 +58,25 @@ GENERIC_PATTERN='(api[_-]?key|apikey|secret|password|passwd|token|authtoken|auth
 # in daemon/internal/api/auth_test.go, daemon/e2e/e2e_test.go) — those are
 # real, deliberately fake test data, not a leak.
 EXCLUDE_PATTERN='os\.Getenv|process\.env|\.env\.example|placeholder|example|_test\.go|e2e/|csrf'
+# The scanner's OWN self-test fixture plants synthetic, never-live secrets
+# (nvapi-, whsec_, a fake password) on purpose — that is how it proves the
+# detector still detects. Scanning it meant this script reported
+# "DO NOT PUBLISH" on every run forever, which trains everyone to ignore the
+# only tool that would catch a real leak. Excluded by EXACT PATH, not by a
+# pattern: a *-test.sh or ops/ glob would blind the scan to any future file
+# that happens to match. ops/pre-publish-scan-test-scope.sh in the self-test
+# pins that the exclusion cannot widen.
+SELFTEST_FIXTURE='ops/pre-publish-scan-test.sh'
 
 say "── 1. Secrets in the tracked working tree ─────────────────────────────"
 # Tracked files only: an ignored .env is fine on disk and fatal in a commit.
 tracked=$(git ls-files)
-vendor_hits=$(printf '%s\n' "$tracked" | xargs grep -InE "$VENDOR_PATTERN" 2>/dev/null \
+# Content scan skips exactly the self-test fixture; .env / data-file checks
+# below still see the full tracked list.
+scannable=$(printf '%s\n' "$tracked" | grep -vxF "$SELFTEST_FIXTURE")
+vendor_hits=$(printf '%s\n' "$scannable" | xargs grep -InE "$VENDOR_PATTERN" 2>/dev/null \
   | grep -viE "$EXCLUDE_PATTERN")
-generic_hits=$(printf '%s\n' "$tracked" | xargs grep -InE "$GENERIC_PATTERN" 2>/dev/null \
+generic_hits=$(printf '%s\n' "$scannable" | xargs grep -InE "$GENERIC_PATTERN" 2>/dev/null \
   | grep -viE "$EXCLUDE_PATTERN" \
   | awk -F: '{content=$0; sub(/^[^:]*:[0-9]+:/, "", content); if (content ~ /[0-9]/) print}')
 hits=$(printf '%s\n%s\n' "$vendor_hits" "$generic_hits" | grep -v '^$' | sort -u | head -20)
@@ -119,9 +131,10 @@ else
   hist_log=$(git log -p --all -- . 2>/dev/null)
 fi
 
-hist_hits=$(printf '%s\n' "$hist_log" | VENDOR_PATTERN="$VENDOR_PATTERN" GENERIC_PATTERN="$GENERIC_PATTERN" EXCLUDE_PATTERN="$EXCLUDE_PATTERN" perl -ne '
-  BEGIN { $vendor = $ENV{VENDOR_PATTERN}; $generic = $ENV{GENERIC_PATTERN}; $excl = $ENV{EXCLUDE_PATTERN}; $file = "(unknown)"; }
+hist_hits=$(printf '%s\n' "$hist_log" | VENDOR_PATTERN="$VENDOR_PATTERN" GENERIC_PATTERN="$GENERIC_PATTERN" EXCLUDE_PATTERN="$EXCLUDE_PATTERN" SELFTEST_FIXTURE="$SELFTEST_FIXTURE" perl -ne '
+  BEGIN { $vendor = $ENV{VENDOR_PATTERN}; $generic = $ENV{GENERIC_PATTERN}; $excl = $ENV{EXCLUDE_PATTERN}; $self = $ENV{SELFTEST_FIXTURE}; $file = "(unknown)"; }
   if (/^\+\+\+ b\/(.*)$/) { $file = $1; next }
+  next if $file eq $self;   # exact-path exclusion, same as the tracked-tree scan
   next unless /^\+/;
   next if $file =~ /(_test\.go|\.env\.example|\/e2e\/|testdata\/)/;
   next if /$excl/i;
@@ -161,6 +174,21 @@ if [ "$untracked" != "0" ]; then
   git status --porcelain | grep '^??' | head -10 | sed 's/^/      /'
 else
   ok "working tree has no untracked paths"
+fi
+
+say "── 5. Manifest ────────────────────────────────────────────────────────"
+# Section 4 says untracked paths are simply not published. That is true and it
+# is exactly the hazard: PREREGISTRATION.md — the document whose SHA-256 the
+# daemon chains onto prediction rows — and daemon/.golangci.yml were both
+# untracked, so a published clone contained neither the pre-registration nor
+# the lint configuration CI claimed to enforce. A HARD failure, not a note.
+man_out="$(/bin/bash "$(dirname "$0")/manifest-check.sh" 2>&1)"; man_rc=$?
+printf '%s\n' "$man_out" | sed 's/^/  /'
+if [ "$man_rc" = "0" ]; then
+  ok "every load-bearing path is tracked"
+else
+  bad "load-bearing paths are missing from git (see above) — a clone would NOT"
+  bad "contain the system this repo's documentation describes."
 fi
 
 say ""

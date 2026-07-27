@@ -18,23 +18,8 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
 )
 
-// predictionsLatest handles GET /api/predictions/latest?horizon=1d|1w —
-// UNCACHED build path; tests drive it directly. Production traffic goes
-// through predictionsLatestCached.
-func (d Deps) predictionsLatest(w http.ResponseWriter, r *http.Request) {
-	h := md.Horizon(r.URL.Query().Get("horizon"))
-	if h != md.H1d && h != md.H1w {
-		h = md.H1d
-	}
-	resp, err := d.buildPredictionsLatest(r.Context(), h)
-	if err != nil {
-		httpErr(w, 500, err.Error())
-		return
-	}
-	writeJSON(w, resp)
-}
-
-// predictionsLatestCached serves the same payload through the SWR cache. Perf
+// predictionsLatestCached serves GET /api/predictions/latest?horizon=1d|1w
+// through the SWR cache — the only build path; tests exercise it too. Perf
 // wave 2026-07-24: the latest-per-symbol self-join over the 240k-row
 // predictions table costs ~45s per request in the pure-Go driver (measured);
 // the payload is identical for every user and the prediction runner writes on
@@ -47,7 +32,7 @@ func (d Deps) predictionsLatestCached(w http.ResponseWriter, r *http.Request) {
 	// Cache key includes the store identity: production has exactly one store
 	// so behavior is unchanged, while each test's isolated store gets its own
 	// entry instead of inheriting another test's cached payload.
-	resp, err := sharedPredictionsCache.get(r.Context(), fmt.Sprintf("%p|%s", d.St, h),
+	resp, err := sharedPredictionsCache.get(r.Context(), fmt.Sprintf("%s|%s", d.St.CacheKey(), h),
 		func(ctx context.Context) (map[string]any, error) {
 			return d.buildPredictionsLatest(ctx, h)
 		})

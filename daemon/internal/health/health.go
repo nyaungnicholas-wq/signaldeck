@@ -78,11 +78,27 @@ type Status struct {
 	Ts           int64    `json:"ts"`
 }
 
+// Actuator is the half of the watchdog that can actually DO something about a
+// stale worker. *workers.Runner implements it. Kept as an interface here so
+// health does not import workers (workers already owns run bookkeeping) and so
+// tests can observe interventions.
+type Actuator interface {
+	// CancelOverdue cancels the named worker's in-flight run IF that run is
+	// already past its own deadline, reporting how long it had been running.
+	CancelOverdue(name string) (time.Duration, bool)
+}
+
 // Watchdog is the periodic health worker (implements workers.Worker).
 type Watchdog struct {
 	St         *store.Store
 	Specs      []WorkerSpec
 	StatusPath string // where health.json goes (required)
+	// Runner, when set, lets the watchdog INTERVENE instead of only reporting:
+	// a worker that is both stale AND sitting in a run past its deadline gets
+	// that run cancelled, so the next tick can start clean. Nil = observe-only
+	// (the pre-2026-07-27 behaviour). The staleness rule itself is unchanged —
+	// this only changes what happens after a worker is judged stale.
+	Runner Actuator
 	// Notify shows a user-facing alert; nil = osascript display notification.
 	Notify func(msg string) error
 	// Remote fans the unhealthy-transition message out to the env-configured
@@ -122,9 +138,28 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		slog.Warn("watchdog: write health.json", "err", err)
 	}
 
+	var recovered []string
 	for _, name := range stale {
 		if err := w.recordDQ(ctx, name, lastOK[name], now); err != nil {
 			slog.Warn("watchdog: record dq", "worker", name, "err", err)
+		}
+		// ACTUATE. Detection without a recovery path is why 662 worker_stale
+		// events over 7 days produced zero recoveries: the daemon knew, and
+		// waited for a human restart while the prediction record grew holes.
+		if w.Runner == nil {
+			continue
+		}
+		if ran, ok := w.Runner.CancelOverdue(name); ok {
+			recovered = append(recovered, name)
+			slog.Warn("watchdog: cancelled overdue run", "worker", name, "running", ran)
+			if err := w.St.InsertDQ(ctx, md.DQEvent{
+				Ts:   now.Unix(),
+				Kind: "worker_run_cancelled",
+				Detail: fmt.Sprintf("worker=%s stale AND its run was %s past start with the deadline blown — run cancelled by the watchdog so the next tick can start clean",
+					name, ran.Round(time.Second)),
+			}); err != nil {
+				slog.Warn("watchdog: record intervention dq", "worker", name, "err", err)
+			}
 		}
 	}
 
@@ -153,6 +188,9 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 
 	if ok {
 		return fmt.Sprintf("healthy: %d workers checked", len(w.Specs)), nil
+	}
+	if len(recovered) > 0 {
+		return fmt.Sprintf("UNHEALTHY: stale %v (cancelled overdue runs: %v)", stale, recovered), nil
 	}
 	return fmt.Sprintf("UNHEALTHY: stale %v", stale), nil
 }

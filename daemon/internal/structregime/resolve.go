@@ -134,3 +134,106 @@ func ResolveVol21At(rets []float64, t int) (Resolution, bool) {
 	}
 	return Resolution{Actual: act, KeyName: "fwd21d_realized_vol_minus_trailing_median_daily", KeyValue: fwd - med}, true
 }
+
+// ── NAIVE-PERSISTENCE NULL (2026-07-27) ──────────────────────────────────────
+//
+// Every structural predictor here answers a persistence question, so the only
+// baseline that can falsify one is the "nothing changes" guess: the label the
+// CURRENT state already carries at the call bar. Until now the grader had no
+// such null for structural kinds and could therefore never return a failing
+// verdict for them — while this package's own liquidity caveat states that
+// naive persistence scores the SAME accuracy. These helpers compute that guess
+// from the same causal arithmetic the resolvers use (indices <= t only), so it
+// is measured, never asserted equal to the call.
+//
+// ok=false is an honest "no baseline here" — the caller freezes NULL rather
+// than guessing, and a NULL naive label is excluded from the benchmark tally
+// instead of being scored as a miss.
+
+// NaiveTrendAt is the at-call-time side of the SMA200 at bar t — the guess that
+// the current trend simply persists over the horizon.
+func NaiveTrendAt(closes []float64, t int) (string, bool) {
+	if t < 0 || t >= len(closes) {
+		return "", false
+	}
+	sma := rollMean(closes, 200)
+	if sma[t] <= 0 {
+		return "", false
+	}
+	d := closes[t]/sma[t] - 1
+	if !finite(d) || d == 0 {
+		return "", false
+	}
+	if d > 0 {
+		return "uptrend", true
+	}
+	return "downtrend", true
+}
+
+// NaiveLiquidityAt is the at-call-time liquidity side at bar t: the causal
+// rolling-21d mean log dollar volume vs its trailing-200d median — the same
+// two numbers ResolveLiquidityAt compares the FORWARD window against.
+func NaiveLiquidityAt(closes, volumes []float64, t int) (string, bool) {
+	n := len(closes)
+	if len(volumes) != n || t < 0 || t >= n {
+		return "", false
+	}
+	dv := make([]float64, t+1)
+	for i := 0; i <= t; i++ {
+		x := closes[i] * volumes[i]
+		if x > 0 {
+			dv[i] = math.Log(x)
+		} else {
+			dv[i] = math.NaN()
+		}
+	}
+	m := rollMeanNaN(dv, horizon)
+	cur := m[t]
+	med := medianOf(m[max(0, t-window) : t+1])
+	if !finite(cur) || !finite(med) || cur == med {
+		return "", false
+	}
+	if cur > med {
+		return "active", true
+	}
+	return "quiet", true
+}
+
+// NaiveVol21At is the at-call-time volatility half at RETURN index t: the
+// causal rolling-21d realized vol vs its trailing-200d median — the same pair
+// ResolveVol21At compares the forward window against. Deliberately NOT the
+// predictor's EWMA rank, so the benchmark is an independent baseline rather
+// than a copy of the model.
+func NaiveVol21At(rets []float64, t int) (string, bool) {
+	if t < horizon-1 || t >= len(rets) {
+		return "", false
+	}
+	rv := make([]float64, t+1)
+	for i := range rv {
+		rv[i] = math.NaN()
+	}
+	for i := horizon - 1; i <= t; i++ {
+		var sum, sq float64
+		cnt := 0
+		for _, x := range rets[i-horizon+1 : i+1] {
+			if finite(x) {
+				sum += x
+				sq += x * x
+				cnt++
+			}
+		}
+		if cnt == horizon {
+			mean := sum / float64(cnt)
+			rv[i] = math.Sqrt(sq/float64(cnt) - mean*mean)
+		}
+	}
+	cur := rv[t]
+	med := medianOf(rv[max(0, t-window) : t+1])
+	if !finite(cur) || !finite(med) || cur == med {
+		return "", false
+	}
+	if cur > med {
+		return "elevated", true
+	}
+	return "calm", true
+}

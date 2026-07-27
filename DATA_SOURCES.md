@@ -34,6 +34,23 @@ analytics — forecasts, regimes, risk metrics, explanations — are deliberatel
 never restricted.** The line is drawn at raw records, not at insight computed
 from them, which is also the line that makes a commercial product possible.
 
+## Survivorship boundary
+
+`symbols.delisted_at` has only existed since the 2026-07-24 survivorship wave
+(`daemon/internal/store/store.go`). Every row recorded before that date was
+produced against a universe seeded from 2026 survivors — names that had
+already died could never have entered it, which is exactly the bias that most
+inflates oversold and mean-reversion results.
+
+**Pre-epoch history is survivor-seeded and unfit for published claims.** Any
+accuracy number, backtest, or verdict quoted externally must be built
+exclusively from rows created at or after the epoch. This is enforced in code:
+`tools/accuracy_registry.py` carries `SURVIVORSHIP_EPOCH = 2026-07-24`, both
+graders filter to `ts >=` the epoch at the SQL layer, and every row published
+to `data/accuracy_registry.json` is stamped `survivorship_clean: true` because
+no pre-epoch row can reach a tally. Pre-epoch data remains in the database for
+private inspection only.
+
 ## The shape that is sellable
 
 Ship the platform; the customer brings their own provider keys and operates

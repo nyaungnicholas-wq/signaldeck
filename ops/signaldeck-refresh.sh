@@ -99,6 +99,57 @@ log "pruned back to $after active"
 # ── 7. mark this trading day done ──
 qw "INSERT INTO meta(k,v) VALUES('last_full_sweep','$target') ON CONFLICT(k) DO UPDATE SET v='$target';"
 
+# ── 7b. nightly storage budget report — sdmaint storage-report prints per-table
+#      dbstat MB + WAL/backup/log sizes vs declared budgets and exits non-zero
+#      when any surface outgrew its budget. Paged through the same remote
+#      transports the daemon's internal/notify uses (daemon/.env), so a growth
+#      regression is a page the night it starts instead of a 13GB surprise.
+#      Best-effort: a missing binary or notify failure never fails the sweep. ──
+notify_remote() {
+  local msg="$1" env="$SD/daemon/.env" tok chat disc hook
+  [ -f "$env" ] || return 0
+  tok=$(sed -n 's/^SIGNALDECK_TELEGRAM_BOT_TOKEN=//p' "$env" | tail -1)
+  chat=$(sed -n 's/^SIGNALDECK_TELEGRAM_CHAT_ID=//p' "$env" | tail -1)
+  disc=$(sed -n 's/^SIGNALDECK_DISCORD_WEBHOOK=//p' "$env" | tail -1)
+  hook=$(sed -n 's/^SIGNALDECK_WEBHOOK_URL=//p' "$env" | tail -1)
+  if [ -n "$tok" ] && [ -n "$chat" ]; then
+    curl -sS -m 10 -X POST "https://api.telegram.org/bot${tok}/sendMessage" \
+      --data-urlencode "chat_id=${chat}" --data-urlencode "text=${msg}" >/dev/null 2>&1
+  fi
+  if [ -n "$disc" ]; then
+    curl -sS -m 10 -H 'Content-Type: application/json' \
+      -d "$(python3 -c 'import json,sys; print(json.dumps({"content": sys.argv[1][:1900]}))' "$msg")" \
+      "$disc" >/dev/null 2>&1
+  fi
+  if [ -n "$hook" ]; then
+    curl -sS -m 10 -H 'Content-Type: application/json' \
+      -d "$(python3 -c 'import json,sys,time; print(json.dumps({"title":"SignalDeck storage","body":sys.argv[1],"kind":"storage","ts":int(time.time())}))' "$msg")" \
+      "$hook" >/dev/null 2>&1
+  fi
+}
+SDMAINT="$SD/daemon/bin/sdmaint"
+if [ -x "$SDMAINT" ]; then
+  report=$(cd "$SD" && "$SDMAINT" storage-report -db "$DB" \
+    -budget-db-mb "${SIGNALDECK_BUDGET_DB_MB:-4096}" \
+    -budget-wal-mb "${SIGNALDECK_BUDGET_WAL_MB:-512}" \
+    -budget-backups-mb "${SIGNALDECK_BUDGET_BACKUPS_MB:-12288}" \
+    -budget-logs-mb "${SIGNALDECK_BUDGET_LOGS_MB:-512}" 2>&1)
+  rc=$?
+  printf '%s\n' "$report" >> "$LOG"
+  if [ "$rc" -ne 0 ]; then
+    over=$(printf '%s\n' "$report" | grep -E 'OVER BUDGET')
+    log "STORAGE OVER BUDGET — paging"
+    notify_remote "SignalDeck storage budget exceeded (nightly sweep, $target):
+$over
+Full report in logs/refresh.log"
+    osascript -e "display notification \"A storage surface outgrew its budget — see logs/refresh.log.\" with title \"SignalDeck storage\"" >/dev/null 2>&1
+  else
+    log "storage report: all surfaces within budget"
+  fi
+else
+  log "sdmaint not built at $SDMAINT — skipping storage report (build: cd daemon && go build -o bin/sdmaint ./cmd/sdmaint)"
+fi
+
 # ── 8. restart the daemon only if it was already running before the sweep
 #      (a manual refresh during market hours); otherwise leave it off. ──
 if [ "$was_up" = "yes" ]; then

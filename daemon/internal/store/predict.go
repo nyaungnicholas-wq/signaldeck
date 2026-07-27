@@ -170,6 +170,54 @@ func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, li
 	return raws, ups, rows.Err()
 }
 
+// ── prequential-majority benchmark ──────────────────────────────────────
+
+// SeedBenchmarkOutcome seeds an outcome row for a BENCHMARK pseudo-predictor
+// (a namespaced horizon such as "1d#pm"). Benchmarks bypass the predictions
+// table on purpose: they exist to be graded, never displayed, and must not
+// enter calibration fits, dashboards or the ledger — every reader of
+// predictions/prediction_outcomes filters on exact horizon values, so the
+// namespaced horizon keeps benchmark rows out of all of those by construction
+// while the registry's per-horizon grouping picks them up automatically.
+func (s *Store) SeedBenchmarkOutcome(ctx context.Context, symbolID int64, h md.Horizon, ts int64, prob float64) error {
+	_, err := s.w.ExecContext(ctx, `
+		INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob)
+		VALUES (?,?,?,?)`, symbolID, string(h), ts, prob)
+	return err
+}
+
+// PrequentialMajorityProb returns the hindsight-free constant guess a
+// majority-follower would commit RIGHT NOW for horizon h: 1 when the
+// deduplicated resolved record over UTC days strictly before beforeDay runs
+// majority-up, 0 when majority-down, 0.5 when empty or tied. (0.5 grades as a
+// constant "up" guess under the >=0.5 rule — the closest committable analog
+// of the registry null's expected coin flip.) Dedup mirrors DirectionalRecord
+// and the accuracy registry: one row per (symbol, UTC-day), keeping the day's
+// latest. sinceTs bounds the evidence window (the survivorship epoch — a
+// majority learned from survivor-seeded rows would be a null in name only).
+func (s *Store) PrequentialMajorityProb(ctx context.Context, h md.Horizon, beforeDay, sinceTs int64) (float64, error) {
+	q := `
+	WITH dedup AS (
+	  SELECT up, ROW_NUMBER() OVER (PARTITION BY symbol_id, ts/86400 ORDER BY ts DESC) rn
+	  FROM prediction_outcomes
+	  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
+	    AND ts >= ? AND ts/86400 < ?
+	)
+	SELECT COUNT(*), COALESCE(SUM(up),0) FROM dedup WHERE rn = 1`
+	var n, ups int
+	if err := s.db.QueryRowContext(ctx, q, string(h), sinceTs, beforeDay).Scan(&n, &ups); err != nil {
+		return 0.5, err
+	}
+	switch {
+	case n == 0 || ups*2 == n:
+		return 0.5, nil
+	case ups*2 > n:
+		return 1, nil
+	default:
+		return 0, nil
+	}
+}
+
 // ── regime ──────────────────────────────────────────────────────────────
 
 // UpsertRegime stores the latest regime for a symbol and logs a change row

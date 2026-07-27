@@ -212,9 +212,10 @@ func gradeFrom(preds, dirTargets, costLabels []float64) Grade {
 		if call != 0 && call == lbl {
 			signalWins++
 		}
-		if lbl == 1 {
+		switch lbl {
+		case 1:
 			longWins++
-		} else if lbl == -1 {
+		case -1:
 			shortWins++
 		}
 	}

@@ -19,8 +19,6 @@ func barsFromCloses(cs ...float64) []marketdata.Bar {
 	return bars
 }
 
-const eps = 1e-9
-
 func approx(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +160,7 @@ func TestSMACrossKnownCross(t *testing.T) {
 	}
 	// Independently compute the regime (fast>=slow) at each index and find the
 	// first golden cross (regime turns true) and first subsequent death cross.
-	var goldenSignal, deathSignal int = -1, -1
+	goldenSignal, deathSignal := -1, -1
 	prevRegime := false
 	for i := range bars {
 		fast, okf := sma(bars[:i+1], 2)

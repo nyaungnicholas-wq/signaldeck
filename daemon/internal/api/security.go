@@ -30,9 +30,15 @@ const csrfHeader = "X-Signaldeck"
 //   - per-endpoint auth enforcement (see requiresAuth);
 //   - a body-size cap on every request.
 func (d Deps) secure(next http.Handler) http.Handler {
+	return d.secureWith(next, newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst))
+}
+
+// secureWith is secure with the limiter supplied by the caller, so the MCP
+// mount can share the SAME bucket instance rather than getting a second full
+// budget by arriving through a different door (see mcpmount.go).
+func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 	allowedOrigins := d.Cfg.WebOrigins
 	allowedHosts := d.Cfg.AllowedHosts
-	limiter := newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Host allowlist — the request's Host must be one we serve.
@@ -82,7 +88,7 @@ func (d Deps) secure(next http.Handler) http.Handler {
 		// webhook is exempt — TradingView's servers cannot send the header;
 		// that endpoint is authenticated by its own shared secret instead.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead &&
-			r.URL.Path != "/api/tv-webhook" {
+			r.URL.Path != "/api/tv-webhook" && !mcpExempt(r.URL.Path) {
 			if r.Header.Get(csrfHeader) == "" {
 				httpErr(w, http.StatusForbidden, "missing "+csrfHeader+" header — every non-GET "+
 					"request must carry it; this is the CSRF guard, not a credential problem")
@@ -122,6 +128,14 @@ func (d Deps) requiresAuth(path string) bool {
 	// The TradingView webhook is authenticated by its own shared secret, not by
 	// a session — it must stay reachable even when SIGNALDECK_PUBLIC_READS=false.
 	if path == "/api/tv-webhook" {
+		return false
+	}
+	// The MCP endpoint authenticates itself, and strictly more tightly than
+	// this gate does: a signed, expiring, revocable per-client key, with
+	// anonymous access permitted only on a privately-reachable bind. Letting
+	// the session gate answer first would 401 a legitimate key holder while
+	// adding nothing — see internal/mcp/auth.go.
+	if mcpExempt(path) {
 		return false
 	}
 	// Every /api/ai/ route spends real LLM budget, so gate the whole prefix by

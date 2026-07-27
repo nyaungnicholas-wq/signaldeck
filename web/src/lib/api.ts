@@ -140,7 +140,9 @@ export interface WorkerRun {
   worker: string;
   startedAt: number;
   finishedAt?: number;
-  status: "running" | "ok" | "error";
+  // "timeout": the run blew its per-run deadline (or was cancelled by the
+  // watchdog for being stale AND overdue) — distinct from a returned error.
+  status: "running" | "ok" | "error" | "timeout";
   detail: string;
 }
 

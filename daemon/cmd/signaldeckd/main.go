@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/logrotate"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -65,6 +66,35 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Lineage spine (Layers 2+8): record the running build's VCS revision
+	// (embedded by the Go toolchain — no git exec at runtime) so the DB knows
+	// which code versions have operated on it; research producers stamp the
+	// same rev into the lineage edges they write.
+	if err := lineage.RecordBuildRevision(ctx, st); err != nil {
+		slog.Warn("lineage: record build revision", "err", err)
+	}
+
+	// REFUSE to run an unattributable build. Every row this process freezes is
+	// stamped with lineage.RevisionStamp(); when the stamp is empty or carries
+	// the "+dirty" suffix, tools/accuracy_registry.py's revision_resolvable()
+	// permanently refuses those rows, so the daemon would spend days producing
+	// evidence no one can grade or reproduce. Same doctrine as store.Open
+	// refusing an uncontracted schema: a worker whose output cannot be audited
+	// must not report success. SIGNALDECK_ALLOW_DIRTY_BUILD is the development
+	// override (`go run`, local iteration) and is deliberately explicit.
+	if lineage.BuildModified() || lineage.BuildRevision() == "" {
+		if _, dev := os.LookupEnv("SIGNALDECK_ALLOW_DIRTY_BUILD"); !dev {
+			slog.Error("refusing to start: build is unattributable — rows it writes cannot be graded",
+				"revision_stamp", lineage.RevisionStamp(),
+				"vcs_modified", lineage.BuildModified(),
+				"fix", "deploy via ops/signaldeck-ctl.sh deploy (builds from `git archive HEAD`)",
+				"override", "SIGNALDECK_ALLOW_DIRTY_BUILD=1 for development only")
+			os.Exit(1)
+		}
+		slog.Warn("SIGNALDECK_ALLOW_DIRTY_BUILD set: running an unattributable build; rows it writes are ungradable",
+			"revision_stamp", lineage.RevisionStamp())
+	}
 
 	// Manual one-shot: SIC bulk sync (Stage 4). Runs the sic-bulk-sync worker
 	// once with the gate forced, prints its honest detail line, and exits —

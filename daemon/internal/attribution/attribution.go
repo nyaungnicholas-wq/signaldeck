@@ -23,6 +23,8 @@ package attribution
 import (
 	"fmt"
 	"math"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 )
 
 // LivePriorThreshold is the number of INDEPENDENT live resolved outcomes for a
@@ -66,17 +68,18 @@ func Blend(prior, live Evidence) (posterior, liveWeight float64) {
 
 // Wilson is the 95% score interval for hits/n — the same honest small-sample
 // band used elsewhere in the app. Returns (0,1) on n==0.
+//
+// It delegates to clusterstat.WilsonEffAt with effN = n. The raw count is
+// legitimate at THIS call shape — the live evidence is one symbol's record
+// deduplicated to one row per UTC day, so its design effect is 1 by
+// construction (see api's attribution_cluster_test) — but the arithmetic lives
+// in clusterstat so the tree holds ONE Wilson implementation.
 func Wilson(hits, n int) (lo, hi float64) {
 	if n == 0 {
 		return 0, 1
 	}
-	const z = 1.96
-	p := float64(hits) / float64(n)
-	nf := float64(n)
-	den := 1 + z*z/nf
-	centre := (p + z*z/(2*nf)) / den
-	half := (z * math.Sqrt(p*(1-p)/nf+z*z/(4*nf*nf))) / den
-	return math.Max(0, centre - half), math.Min(1, centre + half)
+	iv := clusterstat.WilsonEffAt(float64(hits)/float64(n), float64(n), 1.96)
+	return iv.Lo, iv.Hi
 }
 
 // RegimeMatch grades how well today's setup is covered by historical analogs.
@@ -163,12 +166,12 @@ func Assess(symbol, horizon, regime string, prior, live Evidence, matchedState b
 // using the doctrine's preferred phrasing. It NEVER fabricates a cause and
 // NEVER conflates thin live volume with lack of edge.
 func explain(r Report, matchedState bool) string {
-	switch {
-	case r.Driver == "insufficient":
+	switch r.Driver {
+	case "insufficient":
 		return fmt.Sprintf(
 			"Neither source is strong enough: %d live resolved outcomes and %d historical analogs. Report uncertainty, not a story — this is genuine lack of evidence, not a measured lack of edge.",
 			r.LiveN, r.HistN)
-	case r.Driver == "historical-prior":
+	case "historical-prior":
 		base := fmt.Sprintf(
 			"Live sample is insufficient for strong attribution (%d resolved, need %d); historical priors remain the main driver: %d analogs in a %s-match state put the base hit rate at %.0f%%. ",
 			r.LiveN, LivePriorThreshold, r.HistN, r.RegimeMatch, r.PriorHit*100)
@@ -176,7 +179,7 @@ func explain(r Report, matchedState bool) string {
 			return base + "The historical analog is well-populated, so the prior is informative even though live attribution is still underpowered."
 		}
 		return base + "Both live and analog evidence are thin here, so treat the calibrated probability as weakly held — underpowered, but not evidence of no edge."
-	case r.Driver == "blended" || r.Driver == "live":
+	case "blended", "live":
 		return fmt.Sprintf(
 			"Enough live evidence (%d resolved) to earn %.0f%% of the blend; live directional accuracy is %.0f%% against a %.0f%% historical prior (%d analogs). Calibrated probability %.0f%% [%.0f–%.0f%% 95%%].",
 			r.LiveN, r.LiveWeight*100, r.LiveAcc*100, r.PriorHit*100, r.HistN, r.CalibratedProb*100, r.BandLo*100, r.BandHi*100)

@@ -28,6 +28,23 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
+// SurvivorshipEpoch is 2026-07-24T00:00:00Z as Unix seconds: the instant before
+// which every graded row was scored against a survivor-seeded universe.
+//
+// It lives here, exported, because three consumers need the SAME instant and
+// each had been free to hold its own copy — the accuracy registry
+// (SURVIVORSHIP_EPOCH in tools/accuracy_registry.py), the live
+// prequential-majority benchmark (internal/pipeline), and the re-admission gate
+// that decides whether a retired model may emit again (internal/api). A
+// boundary duplicated three times can drift in two of them without anything
+// failing. TestSurvivorshipEpochMatchesRegistryBoundary pins it to the
+// registry's value.
+//
+// Any evidence window that DECIDES something must start here. A gate graded on
+// earlier rows is graded on a sample the platform's own grader refuses to
+// publish.
+const SurvivorshipEpoch int64 = 1784851200
+
 // ResearchUniverse returns EVERY stock symbol ever tracked, active or not, for
 // backtests and statistical studies. Live trading paths must keep using
 // ActiveStockSymbols — this one deliberately includes the dead.

@@ -33,22 +33,22 @@ func TestBuildFeatureVector(t *testing.T) {
 		ForecastLift:      &fl,
 		SentimentScore:    &sent,
 	}
-	vec := buildFeatureVector(sc, c, 0.66, 0.61, 3, "uptrend", &pct, 5)
+	vec := buildFeatureVector(sc, c, 0.66, 0.61, "uptrend", &pct, 5)
 
+	// The A7 shortcut keys (expectancy_hit_rate / forecast_prob / forecast_lift
+	// / n_used) are deliberately missing even though c carries those legs: they
+	// are deleted at construction, not gated — the len() check below enforces
+	// their absence.
 	want := map[string]float64{
-		"pressure_score":      0.4,
-		"comp_rsi":            0.1,
-		"comp_trend_sma":      0.3,
-		"expectancy_hit_rate": 0.62,
-		"forecast_prob":       0.71,
-		"forecast_lift":       0.05,
-		"sentiment_score":     0.3,
-		"sentiment_n":         5,
-		"regime_uptrend":      1,
-		"rank_pct":            83,
-		"pred_raw":            0.66,
-		"pred_cal":            0.61,
-		"n_used":              3,
+		"pressure_score":  0.4,
+		"comp_rsi":        0.1,
+		"comp_trend_sma":  0.3,
+		"sentiment_score": 0.3,
+		"sentiment_n":     5,
+		"regime_uptrend":  1,
+		"rank_pct":        83,
+		"pred_raw":        0.66,
+		"pred_cal":        0.61,
 	}
 	if len(vec) != len(want) {
 		t.Fatalf("vec has %d keys, want %d: %+v", len(vec), len(want), vec)
@@ -60,7 +60,7 @@ func TestBuildFeatureVector(t *testing.T) {
 	}
 
 	// Optional signals absent → keys absent (absence is information).
-	vec = buildFeatureVector(md.Score{Score: -0.2}, ensemble.Components{PressureScore: -0.2}, 0.4, 0.4, 1, "", nil, 0)
+	vec = buildFeatureVector(md.Score{Score: -0.2}, ensemble.Components{PressureScore: -0.2}, 0.4, 0.4, "", nil, 0)
 	for _, k := range []string{"expectancy_hit_rate", "forecast_prob", "forecast_lift", "rank_pct", "sentiment_score", "sentiment_n"} {
 		if _, ok := vec[k]; ok {
 			t.Fatalf("absent signal %q must not appear in the vector", k)
@@ -271,7 +271,7 @@ func TestInformationalComponentStoresItsReadingNotAConstantContrib(t *testing.T)
 			{Name: "vol_regime", Value: 83, Norm: 0, Weight: 0, Contrib: 0},
 		},
 	}
-	vec := buildFeatureVector(sc, ensemble.Components{PressureScore: 0.3}, 0.5, 0.5, 1, "", nil, 0)
+	vec := buildFeatureVector(sc, ensemble.Components{PressureScore: 0.3}, 0.5, 0.5, "", nil, 0)
 
 	if _, ok := vec["comp_vol_regime"]; ok {
 		t.Fatalf("comp_vol_regime stored the always-zero Contrib: %v", vec["comp_vol_regime"])

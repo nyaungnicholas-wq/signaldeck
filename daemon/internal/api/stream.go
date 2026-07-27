@@ -84,7 +84,7 @@ func (d Deps) streamSnaps(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	// Tell the browser how long to wait before auto-reconnecting after a drop.
-	fmt.Fprintf(w, "retry: %d\n\n", ms)
+	_, _ = fmt.Fprintf(w, "retry: %d\n\n", ms)
 	flusher.Flush()
 
 	ctx := r.Context()

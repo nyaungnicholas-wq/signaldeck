@@ -179,7 +179,7 @@ func TestEvidenceJSONRoundTrip(t *testing.T) {
 func TestReproducesBFAcceptsComputedRows(t *testing.T) {
 	// A live backtest row: 1/19 winning weeks vs 0.5 on the week-trial band.
 	e := Evidence{Kind: KindBacktest, K: 1, N: 19, P0: 0.5,
-		BF: BayesFactorAbove(1, 19, 0.5, WeekTrialMaxEdge)}
+		BF: mustBF(BayesFactorAbove(1, 19, TranscribedNull(0.5, 19, "test"), WeekTrialMaxEdge))}
 	side, ok := ReproducesBF(e, WeekTrialMaxEdge)
 	if !ok || side != SideAbove {
 		t.Errorf("computed above-band row: side=%q ok=%v, want above/true", side, ok)
@@ -187,7 +187,7 @@ func TestReproducesBFAcceptsComputedRows(t *testing.T) {
 
 	// A live below-band row: the H005 contamination grade.
 	e2 := Evidence{Kind: KindManual, K: 1330, N: 2984, P0: 0.5563,
-		BF: BayesFactorBelow(1330, 2984, 0.5563, 0.15)}
+		BF: mustBF(BayesFactorBelow(1330, 2984, TranscribedNull(0.5563, 2984, "test"), 0.15))}
 	if side, ok := ReproducesBF(e2, 0.15); !ok || side != SideBelow {
 		t.Errorf("computed below-band row: side=%q ok=%v, want below/true", side, ok)
 	}

@@ -64,7 +64,7 @@ func TestEnsemble_AlphaXLegGate(t *testing.T) {
 func TestBuildFeatureVector_AlphaXGated(t *testing.T) {
 	ap, al := 0.67, 0.03
 	c := ensemble.Components{PressureScore: 0.1, AlphaXProb: &ap, AlphaXLift: &al}
-	vec := buildFeatureVector(md.Score{Score: 0.1}, c, 0.5, 0.5, 2, "", nil, 0)
+	vec := buildFeatureVector(md.Score{Score: 0.1}, c, 0.5, 0.5, "", nil, 0)
 	if vec["alphax_prob"] != 0.67 {
 		t.Fatalf("alphax_prob = %v, want 0.67", vec["alphax_prob"])
 	}
@@ -73,7 +73,7 @@ func TestBuildFeatureVector_AlphaXGated(t *testing.T) {
 	// recorded — absence is information).
 	alNo := -0.02
 	c.AlphaXLift = &alNo
-	vec = buildFeatureVector(md.Score{Score: 0.1}, c, 0.5, 0.5, 1, "", nil, 0)
+	vec = buildFeatureVector(md.Score{Score: 0.1}, c, 0.5, 0.5, "", nil, 0)
 	if _, ok := vec["alphax_prob"]; ok {
 		t.Fatal("an edgeless alphax leg must not appear in the feature vector")
 	}

@@ -116,7 +116,7 @@ func TestAnalyze_FilingInUserRoleDelimited(t *testing.T) {
 	open := strings.LastIndex(m.Content, "<FILING>")
 	closeIdx := strings.LastIndex(m.Content, "</FILING>")
 	mk := strings.Index(m.Content, marker)
-	if !(open < mk && mk < closeIdx) {
+	if open >= mk || mk >= closeIdx {
 		t.Error("filing text must appear between the FILING tags")
 	}
 	// The charter must NOT be in the user role (it belongs in system only).
@@ -152,7 +152,7 @@ func TestAnalyze_InjectionStaysInUserData(t *testing.T) {
 	open := strings.LastIndex(uc, "<FILING>")
 	closeIdx := strings.LastIndex(uc, "</FILING>")
 	pos := strings.Index(uc, inject)
-	if !(open < pos && pos < closeIdx) {
+	if open >= pos || pos >= closeIdx {
 		t.Error("injection text must be contained within the FILING delimiters")
 	}
 }

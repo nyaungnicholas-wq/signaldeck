@@ -55,7 +55,7 @@ func TestConvictionOverconfidentExtremeEdgeIsLow(t *testing.T) {
 func TestConvictionCoinFlipEdgeLowered(t *testing.T) {
 	strong := Assess(ConvictionInputs{Edge: 0.06, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60})
 	flat := Assess(ConvictionInputs{Edge: 0.005, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60})
-	if !(rank(flat.Band) < rank(strong.Band)) {
+	if rank(flat.Band) >= rank(strong.Band) {
 		t.Fatalf("coin-flip edge should lower conviction: flat=%q strong=%q", flat.Band, strong.Band)
 	}
 }

@@ -114,6 +114,10 @@ type CFReport struct {
 	Base      CFArm   // no conds, same call
 	// NullMatched grades the SAME matched obs as Full, but with direction =
 	// deterministic hash parity of (SymbolID, Week) — the random-baseline arm.
+	// Because a week trial is won only by beating that week's own folded
+	// majority max(upRate, 1-upRate), the no-skill week-win rate is NOT 0.5;
+	// this arm is where it is actually measured, and Discover gates on it
+	// (floored at 0.5) rather than on the 0.5 literal.
 	NullMatched CFArm
 	AddsValue   bool    // Full beats EVERY ablation AND Base AND NullMatched
 	Margin      float64 // Full winrate − best competing arm winrate
@@ -148,18 +152,23 @@ func Counterfactual(obs []Obs, r Rule, minWeekObs, minWeeks int) CFReport {
 // SurvivalReport gates a grade on cross-regime (era) robustness.
 type SurvivalReport struct {
 	Eras         []EraGrade
-	PositiveEras int // eras with >=minWeeksPerEra weeks AND winRate > 0.5
+	PositiveEras int // eras with >=minWeeksPerEra weeks AND winRate > p0
 	GradedEras   int // eras with >=minWeeksPerEra weeks
 	TotalWeeks   int
 	// Survives: PositiveEras >= 2 AND TotalWeeks >= 30 AND no graded era has
-	// winRate < 0.35 (catastrophic regime failure).
+	// winRate < p0-0.15 (catastrophic regime failure).
 	Survives bool
+	// P0 is the no-skill week-win rate the eras were scored against.
+	P0 float64
 }
 
 // RegimeSurvival judges a grade's era decomposition. Eras below minWeeksPerEra
-// weeks are ungraded: too thin to acquit OR convict.
-func RegimeSurvival(g WeekGrade, minWeeksPerEra int) SurvivalReport {
-	rep := SurvivalReport{Eras: g.ByEra, TotalWeeks: g.Weeks}
+// weeks are ungraded: too thin to acquit OR convict. p0 is the MEASURED
+// no-skill week-win rate (Candidate.NullP0, floored at 0.5) — a required
+// argument so no caller can silently fall back to the 0.5 literal that the
+// null-matched arm already disproves.
+func RegimeSurvival(g WeekGrade, minWeeksPerEra int, p0 float64) SurvivalReport {
+	rep := SurvivalReport{Eras: g.ByEra, TotalWeeks: g.Weeks, P0: p0}
 	catastrophic := false
 	for _, e := range g.ByEra {
 		if e.Weeks < minWeeksPerEra {
@@ -167,10 +176,10 @@ func RegimeSurvival(g WeekGrade, minWeeksPerEra int) SurvivalReport {
 		}
 		rep.GradedEras++
 		wr := float64(e.WinWeeks) / float64(e.Weeks)
-		if wr > 0.5 {
+		if wr > p0 {
 			rep.PositiveEras++
 		}
-		if wr < 0.35 {
+		if wr < p0-0.15 {
 			catastrophic = true
 		}
 	}
@@ -180,13 +189,14 @@ func RegimeSurvival(g WeekGrade, minWeeksPerEra int) SurvivalReport {
 
 // FragileThreshold perturbs every numeric threshold ±10% (both directions, one
 // cond at a time), re-grades, and reports the WORST retained edge fraction
-// (perturbed edge / original edge, where edge = week win rate − 0.5).
+// (perturbed edge / original edge, where edge = week win rate − p0, p0 being
+// the MEASURED no-skill week-win rate — a required argument, never defaulted).
 // fragile = original edge > 0 AND worst retained < 0.5 of the original. With
 // no conds or no positive original edge there is nothing to perturb or
 // destroy: worstRetained = 1, fragile = false.
-func FragileThreshold(obs []Obs, r Rule, minWeekObs int) (worstRetained float64, fragile bool) {
+func FragileThreshold(obs []Obs, r Rule, minWeekObs int, p0 float64) (worstRetained float64, fragile bool) {
 	orig := GradeWeeks(obs, r, minWeekObs)
-	edge := winRate(orig) - 0.5
+	edge := winRate(orig) - p0
 	if len(r.Conds) == 0 || edge <= 0 {
 		return 1, false
 	}
@@ -197,7 +207,7 @@ func FragileThreshold(obs []Obs, r Rule, minWeekObs int) (worstRetained float64,
 			pert := make([]Cond, len(r.Conds))
 			copy(pert, r.Conds)
 			pert[i].Val *= f
-			retained := (winRate(gradeArm(obs, pert, dir, minWeekObs)) - 0.5) / edge
+			retained := (winRate(gradeArm(obs, pert, dir, minWeekObs)) - p0) / edge
 			worstRetained = math.Min(worstRetained, retained)
 		}
 	}
@@ -240,12 +250,18 @@ func nullDir(real dirFunc) dirFunc {
 		if real(o) == 0 {
 			return 0
 		}
-		if hash64(o.SymbolID, o.Week)&1 == 0 {
+		if NullDirLong(o.SymbolID, o.Week) {
 			return 1
 		}
 		return -1
 	}
 }
+
+// NullDirLong is THE null-arm direction rule, exported so graders outside this
+// package (the live ledger grader) randomize direction the same deterministic
+// way the counterfactual null arm does instead of inventing a second one:
+// true = long, by hash parity of (symbolID, week).
+func NullDirLong(symbolID, week int64) bool { return hash64(symbolID, week)&1 == 0 }
 
 func hash64(a, b int64) uint64 {
 	h := fnv.New64a()

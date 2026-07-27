@@ -3,9 +3,15 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/histfeat"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -173,5 +179,182 @@ func TestSymbolWithNoBarsIsNeverMarked(t *testing.T) {
 		if r.SymbolID == fresh.ID && r.DelistedAt != 0 {
 			t.Fatal("a symbol with no bars yet must not be marked delisted")
 		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// THE DEAD-CONTROL TEST.
+//
+// This file's header records the finding that motivated the survivorship
+// worker: "the code documented a control that did not run". The same defect
+// recurred one level up — PREDICTION_PROCESS.md listed
+// `store.ResearchUniverse` / `TradableAt` under "Implemented, with proof"
+// while neither had a single non-test caller, so the documented survivorship
+// control was inert and the document read as evidence for it anyway.
+//
+// A prose fix would have decayed the same way. This turns the repo's own
+// stated lesson into a checkable invariant: every Go identifier the gate
+// section names must be reachable from production code, or the build fails.
+//
+// Scope is deliberately conservative — a name is only checked once it is
+// confirmed to be DECLARED in the Go tree, so ordinary prose in backticks
+// (paths, file names, verdict strings, commit hashes) is ignored rather than
+// guessed at. It under-checks rather than failing on English.
+
+// docIdentRe matches the backticked spans the gate section uses.
+var docIdentRe = regexp.MustCompile("`([^`]+)`")
+
+// goIdentRe accepts `pkg.Ident`, `Ident` and `camelIdent` shapes.
+var goIdentRe = regexp.MustCompile(`^(?:[a-z][A-Za-z0-9]*\.)?[A-Za-z][A-Za-z0-9]*$`)
+
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatalf("abs repo root: %v", err)
+	}
+	return root
+}
+
+// goSources returns (production sources, test sources) under daemon/.
+func goSources(t *testing.T, root string) (prod, tests []string) {
+	t.Helper()
+	err := filepath.WalkDir(filepath.Join(root, "daemon"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".go") {
+			return nil
+		}
+		if strings.HasSuffix(p, "_test.go") {
+			tests = append(tests, p)
+		} else {
+			prod = append(prod, p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk daemon: %v", err)
+	}
+	return prod, tests
+}
+
+// readAll concatenates files, dropping whole-line comments so a MENTION in a
+// comment can never be mistaken for a caller — that mistake is the entire bug
+// this test exists to catch.
+func readAll(t *testing.T, paths []string) string {
+	t.Helper()
+	var b strings.Builder
+	for _, p := range paths {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue
+			}
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func TestDocumentedControlsHaveNonTestCallers(t *testing.T) {
+	root := repoRoot(t)
+	doc, err := os.ReadFile(filepath.Join(root, "PREDICTION_PROCESS.md"))
+	if err != nil {
+		t.Fatalf("read PREDICTION_PROCESS.md: %v", err)
+	}
+	section := gateSection(t, string(doc))
+
+	prodPaths, testPaths := goSources(t, root)
+	prod := readAll(t, prodPaths)
+	tests := readAll(t, testPaths)
+	all := prod + tests
+
+	checked := 0
+	for _, m := range docIdentRe.FindAllStringSubmatch(section, -1) {
+		raw := m[1]
+		if !goIdentRe.MatchString(raw) {
+			continue // a path, a file name, a verdict string — not an identifier claim
+		}
+		qualified := strings.Contains(raw, ".")
+		name := raw
+		if i := strings.LastIndex(name, "."); i >= 0 {
+			name = name[i+1:]
+		}
+		if len(name) < 4 {
+			continue // `go`, `n`, and friends — prose, not a control
+		}
+		// A test name's "caller" is the test runner; the checkable claim is
+		// that the named test exists at all.
+		if strings.HasPrefix(name, "Test") {
+			if !strings.Contains(tests, "func "+name+"(") {
+				t.Errorf("PREDICTION_PROCESS.md cites test %s, which does not exist", name)
+			}
+			checked++
+			continue
+		}
+		// DECLARED means declared as a callable — `func name(` or a method
+		// `) name(`. A local variable that happens to share the name (a JSON
+		// key like byRegime colliding with a loop-local in another package) is
+		// deliberately NOT a declaration: the gate section talks about
+		// controls, and a control is something that can be called.
+		declared := strings.Contains(all, "func "+name+"(") || strings.Contains(all, ") "+name+"(")
+		if !declared {
+			if qualified {
+				t.Errorf("PREDICTION_PROCESS.md cites %s under \"Implemented, with proof\", "+
+					"but no such function is declared anywhere in the Go tree", raw)
+				checked++
+			}
+			continue // unqualified prose that merely looks like an identifier
+		}
+		checked++
+		// A caller is a USE outside the declaration: any `.name(` selector or a
+		// bare `name(` that is not the `func name(` declaration itself.
+		uses := strings.Count(prod, "."+name+"(") +
+			strings.Count(prod, name+"(") -
+			strings.Count(prod, "func "+name+"(") -
+			strings.Count(prod, ") "+name+"(")
+		if uses <= 0 {
+			t.Errorf("PREDICTION_PROCESS.md lists %s under \"Implemented, with proof\", "+
+				"but it has no non-test caller — a documented control that does not run "+
+				"is worse than an undocumented one, because the document reads as evidence",
+				raw)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("parsed no identifiers out of the gate section — the parser, not the repo, is broken")
+	}
+}
+
+// gateSection extracts the "Implemented, with proof" block: the claims that
+// assert something RUNS. The sections after it describe known gaps and must
+// not be held to the same standard.
+func gateSection(t *testing.T, doc string) string {
+	t.Helper()
+	const head = "### Implemented, with proof"
+	i := strings.Index(doc, head)
+	if i < 0 {
+		t.Fatal("PREDICTION_PROCESS.md has no \"Implemented, with proof\" section")
+	}
+	rest := doc[i+len(head):]
+	if j := strings.Index(rest, "\n### "); j >= 0 {
+		rest = rest[:j]
+	}
+	return rest
+}
+
+// TestCoverageWeekBucketMatchesHistfeat pins store's duplicated week-bucket
+// literal to the feature package's constant. The coverage ratio divides a
+// corpus count by a bar count bucketed with this literal; if the two ever
+// drift the figure silently compares different weeks.
+func TestCoverageWeekBucketMatchesHistfeat(t *testing.T) {
+	if store.WeekBucketSecs != histfeat.WeekSecs {
+		t.Fatalf("week bucket drift: store %d vs histfeat %d — the coverage ratio "+
+			"would divide corpus counts by bar counts bucketed differently",
+			store.WeekBucketSecs, histfeat.WeekSecs)
 	}
 }

@@ -257,3 +257,66 @@ func ledgerHypByID(ctx context.Context, t *testing.T, st *Store, id string) rl.H
 	t.Fatalf("hypothesis %s not found", id)
 	return rl.Hypothesis{}
 }
+
+// THE GATE MUST BE A PROJECTION OF THE LEDGER, NOT A SECOND CLAIM ABOUT IT.
+// The live database held meta.research_loop_last_day='2026-07-27' while
+// research_loop_runs and research_loop_hypotheses held nothing at all: the loop
+// skipped the rest of the day on a search no table could substantiate. A failed
+// RecordLoopSearch must therefore leave the day RETRYABLE rather than gated.
+func TestLoopDayGateDerivesFromTheDurableRun(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	const key = "research_loop_last_day"
+	day := "2026-07-27"
+
+	hyps := []LoopHypothesis{{ID: "r1", Status: "rejected", ObsWindow: "w"}}
+	judgments := []LoopJudgment{{Day: day, RuleID: "r1", Status: "rejected"}}
+
+	// The historical failure: an un-migrated database where the append-only
+	// judgment ledger does not exist. The transaction rolls back everything,
+	// including the current-state hypothesis row written before it.
+	ddl := `CREATE TABLE research_loop_judgments (
+		day TEXT NOT NULL, rule_id TEXT NOT NULL, status TEXT NOT NULL,
+		wilson_lower REAL NOT NULL, p0 REAL NOT NULL, divisor INTEGER NOT NULL,
+		grid_size INTEGER NOT NULL, weeks INTEGER NOT NULL,
+		rejected_by TEXT NOT NULL DEFAULT '', obs_window TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (day, rule_id))`
+	if _, err := st.DB().ExecContext(ctx, `DROP TABLE research_loop_judgments`); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordLoopSearch(ctx,
+		LoopRun{Day: day, RanAt: 1, GridSize: 1, Judged: 1}, hyps, judgments); err == nil {
+		t.Fatal("a search with nowhere to write its judgments must fail")
+	}
+	if _, ok, rerr := st.LoopRunForDay(ctx, day); ok || rerr != nil {
+		t.Fatalf("a rolled-back search must leave no run row: ok=%v err=%v", ok, rerr)
+	}
+	if gerr := st.MarkLoopDayFromRun(ctx, key, day); gerr == nil {
+		t.Fatal("the gate must refuse a day the ledger does not record")
+	}
+	if v, _ := st.GetMeta(ctx, key); v != "" {
+		t.Fatalf("the day must stay retryable, meta holds %q", v)
+	}
+
+	// The same call once the ledger can accept the search is the gate doing its job.
+	if _, err := st.DB().ExecContext(ctx, ddl); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordLoopSearch(ctx,
+		LoopRun{Day: day, RanAt: 2, GridSize: 1, Judged: 1}, hyps, judgments); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkLoopDayFromRun(ctx, key, day); err != nil {
+		t.Fatalf("a ledgered search must gate its day: %v", err)
+	}
+	if v, _ := st.GetMeta(ctx, key); v != day {
+		t.Fatalf("gate = %q, want %q", v, day)
+	}
+	// And a DIFFERENT day with no row of its own cannot ride on it.
+	if err := st.MarkLoopDayFromRun(ctx, key, "2026-07-28"); err == nil {
+		t.Fatal("the gate must be per-day, derived from that day's row")
+	}
+	if v, _ := st.GetMeta(ctx, key); v != day {
+		t.Fatalf("a refused gate must not overwrite: %q", v)
+	}
+}

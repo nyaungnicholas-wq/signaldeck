@@ -53,6 +53,7 @@ type Deps struct {
 func Serve(ctx context.Context, d Deps) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", d.health)
+	mux.HandleFunc("GET /api/version", d.version) // which code is producing these numbers
 	d.registerAuth(mux) // register, login, logout, me
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
 	mux.HandleFunc("GET /api/symbol", d.symbolDetail)
@@ -88,6 +89,7 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/postmortems", d.postmortems)         // Research Lab: clustered failure attribution over resolved WRONG predictions
 	mux.HandleFunc("GET /api/research", d.research)               // Research Lab: hypothesis registry (shadow/promoted/rejected) + advisory feedback
 	mux.HandleFunc("GET /api/research-ledger", d.researchLedger)  // Bayesian Research Ledger: program-level hypotheses w/ prior→posterior evidence chains + meta-analysis
+	mux.HandleFunc("GET /api/research-loop", d.researchLoop)       // autonomous research loop: every pass (incl. refusals), judged rules, append-only per-(day,rule) judgments, rejection tally by gate
 	mux.HandleFunc("GET /api/vol-regime", d.volRegime)            // the validated-edge forecast: per-stock volatility regime (elevated/calm) + MEASURED walk-forward accuracy tiers
 	mux.HandleFunc("GET /api/regimes", d.structuralRegimesCached) // 2026-07-17 alpha-loop winners: trend21/liquidity21/vol21 regimes, measured per-band tiers + caveats in-payload
 	mux.HandleFunc("GET /api/signal-report", d.signalReport)      // per-signal detail report: why it fired (raw inputs), walk-forward history on THIS symbol, full signal stack, trade context
@@ -117,6 +119,9 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerTVRating(mux)       // TradingView scanner ratings: GET /api/tv-rating — the LATEST TradingView OWN technical-analysis rating for a tracked symbol (reco_all/ma/other + rsi + close + label), ingested by the tv-rating worker from TradingView's public scanner; EXTERNAL/descriptive/delayed, NOT our model and not advice (caveat verbatim)
 	d.registerSelfAudit(mux)      // self-audit / drift watchdog: GET /api/self-audit — latest finding per metric (calibration drift, factor-IC sign flips, prediction bias) measured deterministically from resolved history; every check gated at n>=30 (status "insufficient" below), never a false alarm
 	d.registerModelEvolution(mux) // model-evolution: GET /api/model-evolution — trailing-N-day adaptive-weight snapshots (per regime cell + leg) and per-leg factor-IC trend from self_audit, as compact chartable series; honest gaps where no data, no interpolation
+	d.registerFleetHealth(mux)    // one assembled platform-health read: the simulated book's realized performance (Sortino/profit factor/current-vs-max drawdown from FIFO round trips), each model's stored grade, worker cadence + data freshness, and architectural layer coverage; every unmeasurable metric null and named in `withheld`, an empty fleet reports "unknown" and never "healthy"
+	d.registerFeatureHealth(mux)  // per-INPUT scorecard + the retire set the GBM trainer honors: decay (recent vs full-record IC), sign stability across blocks, coverage, redundancy; a feature below the evidence floor is KEPT, and a wholesale retirement is reported but NOT applied
+	d.registerConfidence(mux)     // GET /api/confidence?symbol&horizon — one gated object per prediction: probability + state-conditional expected return + measured adverse excursion (expected drawdown, labeled unconditional) + confidence and Wilson uncertainty, each null with a stated reason when unmeasurable
 	// ── DATA-EXPANSION wave (appended — keep new routes at the END of this
 	// block so parallel route edits by other agents never collide) ──────────
 	d.registerDataExpansion(mux) // six free external context reads, every payload carrying its caveat verbatim: /api/short-interest (FINRA bi-monthly SI, ~2wks lagged), /api/crypto-perp (Hyperliquid funding/OI — one DEX venue), /api/cot (CFTC weekly positioning, not prediction), /api/stocktwits (retail page-snapshot sentiment), /api/wiki-attention (page views — attention proxy, not a signal), /api/cboe-pc (market-wide put/call — hedging gauge); DESCRIPTIVE context only, nothing here is a scored factor
@@ -146,7 +151,8 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerAttribution(mux) // attribution-engine wave: GET /api/attribution[?symbol&market&horizon] — BLENDED-EVIDENCE report fusing a regime/state-conditioned HISTORICAL prior (~2y expectancy) with LIVE resolved outcomes, kept strictly separate + sample-size-weighted; reports both Ns, regime-match quality, calibrated prob + Wilson band, and whether attribution is supported or underpowered (thin live volume != no edge)
 	// ── RESEARCH DISCOVERY ENGINE wave (appended — keep new routes at the END
 	// of this block so parallel route edits by other agents never collide) ──
-	mux.HandleFunc("GET /api/research-graph", d.researchGraph) // the evidence graph: every ledger hypothesis linked to its family, attacks, graded eras, and evidence kinds — why each belief stands. /api/research-ledger (above) now also carries research_weeks coverage, evidence-kind counts, live-vs-backtest split, and per-hypothesis decay
+	mux.HandleFunc("GET /api/research-graph", d.researchGraph)
+	d.registerLineage(mux) // Lineage spine (Layers 2+8): GET /api/lineage?kind=&id=&depth= — connected subgraph around any node (hypothesis/prediction/model/feature/trade/claim/dataset/experiment), edges stamped with the writing build's git rev // the evidence graph: every ledger hypothesis linked to its family, attacks, graded eras, and evidence kinds — why each belief stands. /api/research-ledger (above) now also carries research_weeks coverage, evidence-kind counts, live-vs-backtest split, and per-hypothesis decay
 	// ── CREDIBILITY wave (appended — keep new routes at the END of this
 	// block so parallel route edits by other agents never collide) ──────────
 	d.registerRegimePostmortems(mux) // GET /api/regime-postmortems — latest ≤50 plain-English postmortems for HIGH-conviction regime calls that resolved WRONG (what was called, what realized + the key number, base rate computed from the CLAIMED accuracy); live regime grading itself ships inside /api/track-record's "regimes" section
@@ -169,13 +175,30 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerOptions(mux) // GET /api/options/price (Black-Scholes-Merton value + Greeks + implied-vol inversion; refuses a vol for quotes with no vega rather than inventing one) + GET /api/options/vol-edge?symbol&market&iv= (the VALIDATED vol-regime forecast turned into a vol LEVEL from this symbol's own walk-forward history, compared against a market implied vol the USER supplies — there is no options feed here); every verdict ships its assumed variance risk premium, the premium at which it flips, and whether it survives the regime call being wrong
 	// ── PAIRS wave (appended — keep new routes at the END of this block so
 	// parallel route edits by other agents never collide) ────────────────────
-	d.registerPrereg(mux)        // GET /api/prereg — what each structural predictor CLAIMED, frozen + hash-chained BEFORE its forecasts began resolving (first gradable 2026-08-07). Makes the advertised accuracy tables falsifiable: after the live record arrives the comparison is against a dated, hashed commitment rather than against whatever the code says at that time; the chain turns a later edit into a detectable break instead of a matter of trust, and amendments are appended, never applied in place
+	d.registerPrereg(mux) // GET /api/prereg — what each structural predictor CLAIMED, frozen + hash-chained BEFORE its forecasts began resolving (first gradable 2026-08-07). Makes the advertised accuracy tables falsifiable: after the live record arrives the comparison is against a dated, hashed commitment rather than against whatever the code says at that time; the chain turns a later edit into a detectable break instead of a matter of trust, and amendments are appended, never applied in place
+	d.registerStress(mux) // Layer-4 stress lab: GET /api/stress/scenarios (composable effect-vector catalog) + POST /api/stress/run (auth-required, capped compute — joint scenarios + regime-conditional block bootstrap replayed through the REAL decide→riskgate→papertrade path; reports system behavior, never a PnL claim)
+
 	d.registerMarketRegimes(mux) // GET /api/market-regimes — the SAME structural trend/vol/liquidity calls, grouped for the index and sector baskets (SPY/QQQ/IWM/DIA + all 11 SPDR sectors) instead of buried among ~885 single names; ships sector BREADTH per kind (one elevated sector is noise, eleven of eleven is a market state), names any basket with no call rather than letting absence read as neutral, and states that the accuracy tiers are INHERITED from the stock-universe validation and were never re-measured on baskets
 	d.registerPairsStudy(mux)    // GET /api/pairs-study — the cointegration pairs-trading test that resolved ledger hypothesis H018 (CORR63) DO-NOT-SHIP: a frozen walk-forward backtest (252d formation -> 63d traded, 26 non-overlapping blocks, 918 SIC-sectored symbols, frozen hedge ratio + spread z, Engle-Granger critical values, block bootstrap, cost sweep) whose selected arm is INDISTINGUISHABLE from random same-sector pairs. Published because the mechanism is the finding — correlation rank persists (rho +0.73) while cointegration rank does not (rho -0.004), so the persistent quantity is shared market beta that no dollar-neutral spread can monetize
 	d.registerXSFactor(mux)      // GET /api/xs-factor?horizon=5d|21d|63d&limit= — CROSS-SECTIONAL factor ranking (low-vol + size/liquidity + mom12-1, point-in-time from trailing bars, percentiles over the active universe, composite renormalized over PRESENT legs) with the MEASURED per-leg edge/CIs shipped as data; read-time only (no table, no worker), SWR-cached; caveat verbatim: relative rank vs the same-day universe MEDIAN, absolute direction failed 20/20, these are PUBLIC capacity-constrained factors with an implied IC of only ~0.03-0.07
 	d.registerMetaLabel(mux)     // GET /api/metalabel — does FILTERING the platform's own directional calls earn its place? A secondary model trained on "did the primary's call clear cost" decides take-or-skip; graded on EXPECTANCY per decision OFFERED (never precision — a filter that is more often right while making less money is the trend21 trap) with three gates applied in order: the primary must have cost-net edge at all, the filter's trades must span enough DISTINCT DAYS to be independent, and expectancy must actually improve. First live grade: +17.7pp precision and still REJECTED, because the primary loses 0.29%/decision. Measurement only — never sizes a trade
+	// ── PREDICTION-ATTRIBUTION wave (appended — keep new routes at the END
+	// of this block so parallel route edits by other agents never collide) ──
+	d.registerPredAttribution(mux) // Layer 6: GET /api/attribution/prediction?symbol&market&horizon[&seq] — the persisted top-8 named parts (comp_* components / gbm features / legs) of one LEDGERED prediction's raw blend, probability deltas from the 0.5 prior; method note (Saabas, not exact SHAP) shipped verbatim in-payload
+	// ── DECISION ENGINE wave (appended — keep new routes at the END of this
+	// block so parallel route edits by other agents never collide) ──────────
+	d.registerEVDecisions(mux) // Layer 1: GET /api/ev/decisions[?decision&symbol&limit] — the EV gate's ledger over the SIMULATED paper book: every BUY/SELL and every DO_NOTHING refusal with its enumerated reason, net EV (null = unmeasurable, the gate refused rather than defaulted), net-EV rank within the pass (the opportunity-cost input), and the full has-flagged inputs snapshot; makes "what did refusing cost" a query instead of a shrug
 
-	srv := d.httpServer(mux)
+	// ── MCP wave (appended) ─────────────────────────────────────────────────
+	// POST /mcp — the Model Context Protocol server (internal/mcp): advisory
+	// methodology exposition and today's BANDED structural verdicts for an AI
+	// client, behind six independently-tested defense layers. Off unless
+	// SIGNALDECK_MCP_ENABLED is set; the limiter instance is shared with the
+	// rest of the API so a client cannot get two budgets by using two doors.
+	limiter := newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)
+	d.registerMCP(mux, limiter)
+
+	srv := d.httpServerWith(mux, limiter)
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -221,9 +244,15 @@ const (
 //   - IdleTimeout is server-wide: it only covers the gap BETWEEN requests, so
 //     an in-flight stream is never affected.
 func (d Deps) httpServer(mux http.Handler) *http.Server {
+	return d.httpServerWith(mux, newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst))
+}
+
+// httpServerWith is httpServer with a caller-supplied limiter, so the MCP
+// mount and the HTTP middleware share one bucket.
+func (d Deps) httpServerWith(mux http.Handler, limiter *rateLimiter) *http.Server {
 	return &http.Server{
 		Addr:              d.Cfg.HTTPAddr,
-		Handler:           withDeadlines(d.secure(mux)),
+		Handler:           withDeadlines(d.secureWith(mux, limiter)),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       idleTimeout,
 	}
@@ -276,11 +305,20 @@ func (d Deps) symbolFromQuery(r *http.Request) (md.Symbol, error) {
 // ── basic ───────────────────────────────────────────────────────────────
 
 func (d Deps) health(w http.ResponseWriter, r *http.Request) {
+	// schemaContract: workers the daemon REFUSED to register at boot because
+	// the database lacks a table/column they read or write. Non-empty means
+	// those workers are not running AND were never going to record anything —
+	// surfaced here so the absence is not mistaken for a healthy quiet fleet.
+	refusals := map[string][]string{}
+	if raw, err := d.St.GetMeta(r.Context(), store.SchemaContractMetaKey); err == nil && raw != "" {
+		_ = json.Unmarshal([]byte(raw), &refusals)
+	}
 	writeJSON(w, map[string]any{
-		"version": d.Version,
-		"uptimeS": int(time.Since(d.Started).Seconds()),
-		"alpaca":  d.Cfg.HasAlpaca(),
-		"time":    time.Now().Unix(),
+		"version":        d.Version,
+		"uptimeS":        int(time.Since(d.Started).Seconds()),
+		"alpaca":         d.Cfg.HasAlpaca(),
+		"time":           time.Now().Unix(),
+		"schemaContract": refusals,
 	})
 }
 
@@ -817,7 +855,7 @@ func (d Deps) hud(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprintf(w, `{"available":true,"fetchedAt":%d,"summary":%s}`, fetchedAt, payload)
+	_, _ = fmt.Fprintf(w, `{"available":true,"fetchedAt":%d,"summary":%s}`, fetchedAt, payload)
 }
 
 func (d Deps) insights(w http.ResponseWriter, r *http.Request) {

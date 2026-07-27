@@ -34,6 +34,102 @@
 ### Phase 4 — Validate honestly (the guardrail)
 - Walk-forward, cost-adjusted, N in the hundreds, pre-registered, multiple-comparison corrected. Ship a claim ONLY when accuracy's Wilson floor beats the naive baseline by a real margin. Keep the gate — it's the moat.
 
+## Ablation (2026-07-27): "the edge was not the shortcut" — now a measured claim
+
+A7 removed four model-output / label-derived keys from model-leg training
+(`forecast_prob`, `forecast_lift`, `expectancy_hit_rate`, `n_used` — 232k/232k/239k/248k
+live feature rows each at the time). The removal was made on principle; this section
+measures what it cost. Harness: `daemon/cmd/selfref-ablation` retrains every leg twice on
+ONE frozen snapshot (`VACUUM INTO` copy of the live DB, 2026-07-27 00:34 UTC, snapshot
+sha256 `7e5c205e…8ae635`), once on the shipped post-A7 layout (**without**) and once with
+the four keys restored under aliases that bypass `gbm.SelfReferentialKey` (**with**) —
+identical rows, folds, purge and hyperparameters otherwise, so the arms differ in nothing
+but those four features (and their derived `__has` presence bits).
+
+**Result: zero admission-gate decisions change.** Every leg that clears the lift>0 gate
+without the shortcut features is the same leg, at the same lift, that clears it with them.
+
+### Per-symbol GBM leg · featureVersion 10 · 1d (the live admission-gate population; 27,490 labeled rows, dataset hash `686c087ad63207cd`)
+
+37 legs graded in both arms (per-leg purged walk-forward, 5 folds, OOS N=10,057 per arm):
+
+| arm | graded | admitted (lift>0) | mean lift | median lift | N-weighted lift |
+|---|---|---|---|---|---|
+| with shortcuts (pre-A7) | 37 | **2** (5.4%) | −0.3737 | −0.3383 | −0.3725 |
+| without (shipped) | 37 | **2** (5.4%) | −0.3998 | −0.4737 | −0.3987 |
+
+Per-leg OOS lift (admitted = lift>0; **gate flips: 0 of 37**):
+
+| symbol | OOS-N | with (pre-A7) | without | Δ | flip? |
+|---|---|---|---|---|---|
+| WULF | 264 | **+0.0076** | **+0.0076** | +0.0000 | no |
+| BTC/USD | 290 | **+0.0069** | **+0.0069** | +0.0000 | no |
+| ADA/USD | 291 | +0.0000 | +0.0000 | +0.0000 | no |
+| HOOD | 270 | +0.0000 | +0.0000 | +0.0000 | no |
+| TSLA | 265 | +0.0000 | +0.0000 | +0.0000 | no |
+| SPCX | 265 | +0.0000 | +0.0000 | +0.0000 | no |
+| TSLL | 265 | +0.0000 | +0.0000 | +0.0000 | no |
+| SOFI | 266 | −0.0000 | −0.0000 | +0.0000 | no |
+| SPY | 265 | −0.0000 | −0.0000 | +0.0000 | no |
+| NOK | 268 | −0.0000 | −0.0000 | +0.0000 | no |
+| DRAM | 271 | −0.1070 | −0.0406 | −0.0664 | no |
+| DOGE/USD | 286 | −0.2413 | −0.1923 | −0.0490 | no |
+| XRP/USD | 283 | −0.1449 | −0.2862 | +0.1413 | no |
+| NU | 268 | −0.6604 | −0.3284 | −0.3321 | no |
+| T | 265 | −0.3321 | −0.3321 | +0.0000 | no |
+| AAL | 275 | −0.3345 | −0.3345 | +0.0000 | no |
+| COIN | 272 | −0.6765 | −0.3456 | −0.3309 | no |
+| LINK/USD | 285 | −0.1614 | −0.4035 | +0.2421 | no |
+| RIVN | 266 | −0.4323 | −0.4737 | +0.0414 | no |
+| SOL/USD | 284 | −0.5246 | −0.4894 | −0.0352 | no |
+| CLRO | 272 | −0.5588 | −0.5588 | +0.0000 | no |
+| ETH/USD | 285 | −0.5509 | −0.5684 | +0.0175 | no |
+| HYG | 270 | −0.6519 | −0.6370 | −0.0148 | no |
+| AAPL | 275 | −0.6473 | −0.6473 | +0.0000 | no |
+| AMD | 273 | −0.6557 | −0.6557 | +0.0000 | no |
+| TQQQ | 265 | −0.6642 | −0.6642 | +0.0000 | no |
+| SNDK | 266 | −0.6654 | −0.6654 | +0.0000 | no |
+| SOXL | 266 | −0.5677 | −0.6654 | +0.0977 | no |
+| SOXS | 266 | −0.5677 | −0.6654 | +0.0977 | no |
+| INTC | 269 | −0.2937 | −0.6654 | +0.3717 | no |
+| CRNX | 272 | −0.6654 | −0.6654 | +0.0000 | no |
+| APP | 272 | −0.6654 | −0.6654 | +0.0000 | no |
+| BITO | 272 | −0.3272 | −0.6765 | +0.3493 | no |
+| LQD | 269 | −0.3383 | −0.6840 | +0.3457 | no |
+| NVDA | 268 | −0.7015 | −0.7015 | +0.0000 | no |
+| QQQ | 267 | −0.8015 | −0.8914 | +0.0899 | no |
+| SNXX | 266 | −0.9023 | −0.9023 | +0.0000 | no |
+
+The two admitted legs (WULF, BTC/USD) carry **identical lift to four decimals with and
+without the shortcuts** — the shortcut features contributed nothing to the only legs with
+measured edge. The paired mean Δlift of +0.0261 (shortcuts flattering the average) lives
+entirely in deeply-gated-out legs (−0.29 to −0.90 lift), where "less bad" still means
+"nowhere near the blend".
+
+### Pooled cross-sectional alphax leg · v3+ pool · 1d (50,000 pooled rows, dataset hash `ed439e23dbeb02ab`)
+
+| arm | OOS lift | accuracy | base rate | AUC | N | gate |
+|---|---|---|---|---|---|---|
+| with shortcuts (pre-A7) | −0.0045 | 0.4957 | 0.5001 | 0.4947 | 3,807 | GATED OUT |
+| without (shipped) | −0.0084 | 0.4917 | 0.5001 | 0.4909 | 3,807 | GATED OUT |
+
+Shortcuts flattered pooled lift by +0.0039 — still below zero, gate unchanged.
+
+### Legs the grader refused in BOTH arms (identically)
+
+GBM v8 (both horizons), GBM v10 1w, alphax 1w pool: too little per-symbol/per-day history
+for purged walk-forward grading — with or without the shortcuts. This matches production
+(no GBM 1w legs exist in `model_forecasts`). The mean-reversion and linear forecast legs
+never read the feature store through the exclusion predicate (meanrev consumes
+`pressure_score` only), so the ablation cannot move them by construction.
+
+**Reproduce:** `cd daemon && go run ./cmd/selfref-ablation -db ../data/signaldeck.db
+-snapshot /tmp/ablate.db -versions 8,10`. The per-dataset row hashes above
+(sha256 over `symbol|ts|up|fwd_return` of the exact labeled rows consumed) pin the inputs;
+training is deterministic given them. Guard against regression: the census test in
+`daemon/internal/gbm/selfref_test.go` fails the suite the day any newly-logged feature key
+is not explicitly classified as observation or model output.
+
 ## Realistic timeline
 - Weeks: reframe + features + data upgrade.
 - **Months** of live resolutions before ANY edge claim is trustworthy (crypto accrues fastest, 24/7).

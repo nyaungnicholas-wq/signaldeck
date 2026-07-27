@@ -293,3 +293,69 @@ func TestWatchdogRemoteNotifyOnTransition(t *testing.T) {
 		t.Errorf("remote fired again without a transition: %d messages", n)
 	}
 }
+
+// fakeActuator records which workers the watchdog tried to recover.
+type fakeActuator struct {
+	overdue  map[string]bool
+	attempts []string
+}
+
+func (a *fakeActuator) CancelOverdue(name string) (time.Duration, bool) {
+	a.attempts = append(a.attempts, name)
+	if a.overdue[name] {
+		return 42 * time.Minute, true
+	}
+	return 0, false
+}
+
+// TestWatchdogActuatesOnStale: the watchdog must now ACT on a stale worker
+// whose run has blown its deadline — cancel it and record the intervention as
+// its own dq kind — not merely write health.json. Detection alone produced 662
+// worker_stale events over 7 days and zero recoveries.
+func TestWatchdogActuatesOnStale(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close() //nolint:errcheck
+	ctx := context.Background()
+
+	act := &fakeActuator{overdue: map[string]bool{"hung": true}}
+	w := &Watchdog{
+		St: st,
+		// "hung" is stale and overdue; "healthy-ish" is stale but its run is
+		// within budget, so it must be reported and NOT cancelled.
+		Specs:      []WorkerSpec{{Name: "hung", Interval: 5 * time.Minute}, {Name: "patient", Interval: 5 * time.Minute}},
+		StatusPath: filepath.Join(dir, "health.json"),
+		Notify:     func(string) error { return nil },
+		Runner:     act,
+	}
+	w.started, w.wasOK, w.inited = time.Now().Add(-3*time.Hour), true, true
+
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(detail, "cancelled overdue runs: [hung]") {
+		t.Errorf("detail %q does not report the intervention", detail)
+	}
+	if len(act.attempts) != 2 {
+		t.Errorf("actuator consulted for %v, want both stale workers", act.attempts)
+	}
+
+	var n int
+	if err := st.DB().QueryRow(
+		`SELECT COUNT(*) FROM dq_events WHERE kind='worker_run_cancelled' AND detail LIKE 'worker=hung%'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("worker_run_cancelled dq events = %d, want exactly 1 (and none for the patient worker)", n)
+	}
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM dq_events WHERE kind='worker_stale'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("worker_stale dq events = %d, want 2 — the staleness rule must be unchanged", n)
+	}
+}

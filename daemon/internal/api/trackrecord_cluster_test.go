@@ -74,7 +74,7 @@ func TestTrackRecord_ClusterCorrectedInterval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	const days, symsPerDay = 15, 40
 	seedClusteredRecord(t, st, days, symsPerDay)
@@ -170,7 +170,7 @@ func TestTrackRecord_ClusterRefusesRatherThanNarrows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	// Exactly at the existing distinct-day gate but with a deliberately tiny
 	// day count relative to what an interval needs: the cluster module's own

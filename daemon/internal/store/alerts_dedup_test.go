@@ -15,7 +15,7 @@ func TestInsertAlert_SweepRetryIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	uid, err := st.CreateUser(ctx, "dedup-user", "h", false)
 	if err != nil {
 		t.Fatalf("user: %v", err)

@@ -267,7 +267,15 @@ type VersionedOutcome struct {
 // ONE observation per (symbol, UTC day) — the independent-observation
 // discipline every accuracy surface here uses, because pooling intraday rows
 // inflates n roughly sixtyfold. The kept row per symbol-day is the latest.
-func (s *Store) VersionedOutcomes(ctx context.Context, h md.Horizon, limit int) ([]VersionedOutcome, error) {
+//
+// sinceTs bounds the evidence window (0 = the whole record). It is an explicit
+// parameter rather than a default because the two callers legitimately want
+// different windows and the difference is load-bearing: a HEAD-TO-HEAD grade
+// between two model versions can use the whole record, since survivorship
+// contamination hits both arms alike, while any gate comparing an ABSOLUTE
+// record against an absolute null must start at SurvivorshipEpoch — that
+// comparison is precisely the one the contamination distorts.
+func (s *Store) VersionedOutcomes(ctx context.Context, h md.Horizon, limit int, sinceTs int64) ([]VersionedOutcome, error) {
 	if limit <= 0 {
 		limit = 100000
 	}
@@ -280,10 +288,12 @@ func (s *Store) VersionedOutcomes(ctx context.Context, h md.Horizon, limit int) 
 		  SELECT symbol_id, o2.ts/86400 AS day, MAX(o2.ts) AS mts
 		  FROM prediction_outcomes o2
 		  WHERE o2.horizon=? AND o2.resolved_at IS NOT NULL AND o2.up IS NOT NULL
+		    AND o2.ts >= ?
 		  GROUP BY symbol_id, day
 		) d ON d.symbol_id=o.symbol_id AND d.mts=o.ts
 		WHERE f.horizon=? AND o.resolved_at IS NOT NULL AND o.up IS NOT NULL
-		ORDER BY o.ts DESC LIMIT ?`, string(h), string(h), limit)
+		  AND o.ts >= ?
+		ORDER BY o.ts DESC LIMIT ?`, string(h), sinceTs, string(h), sinceTs, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -20,12 +20,12 @@ func readGzCSV(t *testing.T, path string) (header []string, records [][]string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer fp.Close()
+	defer func() { _ = fp.Close() }()
 	gz, err := gzip.NewReader(fp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	cr := csv.NewReader(gz)
 	all, err := cr.ReadAll()
 	if err != nil && err != io.EOF {

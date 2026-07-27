@@ -584,7 +584,13 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 	}
 	var lines []string
 	for _, h := range []md.Horizon{md.H1d, md.H1w} {
-		rows, err := w.St.VersionedOutcomes(ctx, h, 200000)
+		// The whole record, deliberately: this is a HEAD-TO-HEAD grade of one
+		// feature version against another, and survivorship contamination sits in
+		// both arms alike, so bounding the window here would only shrink the
+		// comparison without making it cleaner. The gate that compares an
+		// absolute record against an absolute null — re-admission, in
+		// internal/api — is the one that must start at the epoch, and does.
+		rows, err := w.St.VersionedOutcomes(ctx, h, 200000, 0)
 		if err != nil {
 			return "", err
 		}
@@ -593,28 +599,29 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 		}
 		// Group by feature version — a changed vector IS a changed model.
 		type agg struct {
-			n, correct, ups int
-			first, last     int64
+			n, correct  int
+			first, last int64
 			// days tallies the arm per UTC day. The canary interval resamples
 			// days, so a row total alone is not enough to grade an arm: ~1,000
 			// symbols on one day share one market move, and an interval that
 			// counts them as independent trials is ~4x too tight at exactly the
 			// moment it decides which model serves.
 			days map[int64]*canary.DayTally
+			// dayUps counts up-moves per UTC day so the prequential baseline
+			// can replay the majority guess in call order.
+			dayUps map[int64]int
 		}
 		byVer := map[int]*agg{}
 		for _, r := range rows {
 			a := byVer[r.Version]
 			if a == nil {
-				a = &agg{first: r.Ts, last: r.Ts, days: map[int64]*canary.DayTally{}}
+				a = &agg{first: r.Ts, last: r.Ts,
+					days: map[int64]*canary.DayTally{}, dayUps: map[int64]int{}}
 				byVer[r.Version] = a
 			}
 			a.n++
 			if r.Correct {
 				a.correct++
-			}
-			if r.Up {
-				a.ups++
 			}
 			if r.Ts < a.first {
 				a.first = r.Ts
@@ -631,6 +638,9 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 			t.N++
 			if r.Correct {
 				t.Hits++
+			}
+			if r.Up {
+				a.dayUps[d]++
 			}
 		}
 		tallies := func(a *agg) []canary.DayTally {
@@ -652,11 +662,13 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 		chV, incV := vers[len(vers)-1], vers[len(vers)-2]
 		ch, inc := byVer[chV], byVer[incV]
 		// Majority-class baseline over the CHALLENGER's own observations, so an
-		// imbalanced up-rate cannot masquerade as edge.
-		base := float64(ch.ups) / float64(ch.n)
-		if base < 0.5 {
-			base = 1 - base
-		}
+		// imbalanced up-rate cannot masquerade as edge — and PREQUENTIAL, so
+		// the baseline cannot cheat either: each day's constant guess is the
+		// majority class over the days strictly before it. The old
+		// max(base, 1-base) over the finished window handed the null hindsight
+		// the models never had, retroactively crediting it with any mid-window
+		// class flip.
+		base := canary.PrequentialBaseline(tallies(ch), ch.dayUps)
 		v := canary.Evaluate(
 			canary.Record{Version: fmt.Sprintf("v%d", incV), N: inc.n, Correct: inc.correct,
 				Days: len(inc.days), DayTallies: tallies(inc),
@@ -683,6 +695,11 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 	}
 	return strings.Join(lines, "; "), nil
 }
+
+// The prequential baseline lives in the canary package (canary.
+// PrequentialBaseline) so this runner and the model-health re-admission gate
+// replay the SAME hindsight-free null — the two decisions must never disagree
+// about the same numbers.
 
 // ─────────────────────────────────────────────────────────────────────────
 // E. Second-source price validation.

@@ -86,7 +86,7 @@ func Hash(symbol, timeframe string, rows []Row) Version {
 	h := sha256.New()
 	// Header binds the hash to its identity: the same bars under a different
 	// symbol or timeframe are a different dataset.
-	fmt.Fprintf(h, "v1|%s|%s|%d\n", symbol, timeframe, len(sorted))
+	_, _ = fmt.Fprintf(h, "v1|%s|%s|%d\n", symbol, timeframe, len(sorted))
 	var b strings.Builder
 	for _, r := range sorted {
 		b.Reset()
@@ -123,7 +123,7 @@ func HashRecords(name, kind string, records [][]string) Version {
 		return v
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "v1|%s|%s|%d\n", name, kind, len(records))
+	_, _ = fmt.Fprintf(h, "v1|%s|%s|%d\n", name, kind, len(records))
 	var b strings.Builder
 	for _, rec := range records {
 		b.Reset()

@@ -54,7 +54,7 @@ func fetchModels(t *testing.T, srv *httptest.Server) map[string]healthModel {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -115,6 +115,7 @@ func TestModelHealthUngradedWhileHorizonsAreOpen(t *testing.T) {
 	if _, err := st.InsertRegimeOutcome(ctx, store.RegimeCall{
 		SymbolID: sym.ID, Kind: structregime.Kind(kind), Ts: time.Now().Unix(),
 		HorizonDays: 21, Regime: "up", Conviction: 0.8, HistoricalAccuracy: 0.7,
+		NaiveLabel: "up",
 	}); err != nil {
 		t.Fatalf("insert outcome: %v", err)
 	}

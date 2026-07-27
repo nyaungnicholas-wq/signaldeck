@@ -195,6 +195,16 @@ export default function ProofPage() {
         </section>
       )}
 
+      {/* The registry verdicts — including the retired flagship's FAILED grade —
+          must be one click from this headline page, not buried in the repo. */}
+      <Link
+        href="/accuracy"
+        className="w-fit text-[0.78rem] font-semibold tracking-wide transition-colors duration-150"
+        style={{ color: "var(--bad)" }}
+      >
+        accuracy registry — every verdict, failures first (flagship retired 2026-07-24) →
+      </Link>
+
       <Link
         href="/"
         className="w-fit text-[0.78rem] font-semibold tracking-wide transition-colors duration-150"

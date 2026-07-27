@@ -100,6 +100,30 @@ off. The structural predictors (trend21, vol21, liquidity21) are correctly
 `PENDING` — 12,529 forecasts recorded, 0 resolvable before **2026-08-07**,
 because a 21-day horizon cannot be graded sooner.
 
+### Why inversion is not a rescue
+
+The registry's failure menu ("retire, invert, or relabel as experimental")
+invites a tempting arithmetic mistake, so the arithmetic goes on record here.
+Inverting the retired ensemble's 48.1% produces a 51.9% predictor — still
+**2.7 points below the 54.6% majority-class null**. The honest competing model
+was never a coin flip; it is the constant majority-class guess, and an
+inverted signal clears that bar only when the original sits below
+1 − 54.6% = **45.4%**. At 48.1% the ensemble is not anti-predictive enough to
+be useful upside down — it is noise around the base rate — and no sign flip or
+relabeling of a below-null signal beats the constant guess. Relabeling changes
+the badge, not the record.
+
+This is enforced in code, not just prose: `daemon/internal/api/modelhealth.go`
+refuses `emitting: true` for any model key marked as an inverted or relabeled
+variant (`-inverted`, `-relabeled`, `-flipped`) unless that variant has passed
+the full canary re-admission gate (Part 2, point D — Wilson lower bound above
+both the incumbent and the majority-class null, over ≥30 independent
+observations spanning ≥14 days) and carries the gate's `readmitted: true`
+record. A variant is a new model and re-enters through the same front door as
+one. And no recalibration work applies either way: **calibration = 0 is the
+correct score for a retired model** — a model that no longer emits has no
+probabilities left to calibrate.
+
 ---
 
 ## Part 2 — The eighteen-point gate
@@ -124,10 +148,26 @@ a horizon-aware embargo (de Prado). Self-referential features are excluded from
 `TestEvaluateNoLookaheadAppendingFuture` (forecast) proving appending future
 rows cannot change an earlier fold's predictions.
 
-**5. Survivorship bias.** `store.ResearchUniverse` / `TradableAt`. Known live
-limit, stated rather than hidden: the tracked universe still under-represents
-delisted names, which is why the capitulation-bounce expectancy (+5.6%/trade)
-is flagged untrustworthy rather than shipped.
+**5. Survivorship bias.** The discovery corpus is built from the universe that
+EXISTED, not the one that survived: `hist-backfill` recomputes `research_weeks`
+off `store.ResearchUniverse` (every name ever tracked, dead included), so a name
+that left still contributes the weeks it actually traded, while the deep-fetch
+set is bounded by `store.TradableAt` at run time. Until 2026-07-27 that pass
+iterated the ACTIVE list, which meant a corpus spanning 2020→today was assembled
+only from names still listed today and the era-survival gate was measured on it —
+indistinguishable from "the rule worked on the 2022 names that survived to 2026".
+Every `research_loop_runs` row now also records `corpus_coverage`: the worst week's
+(symbols in the corpus / symbols that actually printed a daily bar), named in the
+loop's summary line. It corrects no reported figure — it BOUNDS the bias a
+Bonferroni-corrected, era-gated grid search cannot correct internally.
+Known live limit, stated rather than hidden: names that died BEFORE this platform
+ever tracked them are absent from numerator and denominator alike and no free data
+source recovers them, which is why the capitulation-bounce expectancy
+(+5.6%/trade) is flagged untrustworthy rather than shipped.
+`TestDocumentedControlsHaveNonTestCallers` fails the build if any Go identifier
+named in this section has no non-test caller — the lesson from the earlier
+finding that `delisted_at` sat empty fleet-wide because nothing called
+`MarkDelisted`, turned into an invariant instead of a comment.
 
 **6. Look-ahead.** Fills are `next_open` / `same_close`, never the bar that
 generated the signal. Calibration is prequential. `byRegime` on `/track-record`
@@ -241,6 +281,86 @@ timestamp, the pooling-inflation factor, skill published below its sample floor,
 canary promotions below their gates, and retired models still emitting. First
 run: PASS — 20 invariant tests, 151,924 raw outcomes → 19,128 independent
 (inflation 7.9×), live invariants clean.
+
+---
+
+## Part 3 — Pre-registration of the 2026-08-07 structural grading
+
+**Registered 2026-07-26.** As of this date the structural predictors carry
+~12,529 outstanding forecasts and **0 of 30 required observations have
+resolved** — nothing below was written with any knowledge of the outcome. That
+is the entire value of this section: after 2026-08-07 it can only be checked,
+never rewritten. The machine-readable twin of this section lives in the
+hash-chained `prereg_records` table (`internal/prereg`, served at
+`GET /api/prereg`). The chain head is NOT externally timestamped: as of
+2026-07-27 no public anchors repository exists and `ops/anchor-publish.sh` has
+never pushed, so a later edit is detectable only to someone who already trusts
+the operator's copy of the chain — which is to say, it is a matter of trust.
+
+### The hypotheses
+
+Each kind's full band table, resolution rule, stated null, and known weakness
+are frozen verbatim in the chain; the top-band claims being tested are:
+
+| kind | question (abbreviated) | horizon | top-band claim | null to beat |
+|---|---|---|---|---|
+| trend21 | same side of SMA200 in 21 sessions | 21d | 94.6% (≥0.8) / 97.2% (≥0.9) | persistence, not 50% |
+| vol21 | vol regime (elevated/calm) persists | 21d | 72.0% (≥0.9) | vol-regime persistence |
+| liquidity21 | dollar-volume side vs 200d median | 21d | 87.6% (≥0.9) | persistence scores the SAME 0.876 |
+| trend63 | same side of SMA200 in 63 sessions | 63d | 83.7% (≥0.9) | quarterly persistence |
+| trend21-crypto | as trend21, crypto tables | 21d | 98.5% (≥0.5) | bear-heavy persistence |
+| liquidity21-crypto | as liquidity21, crypto tables | 21d | 96.4% (≥0.9) | persistence scores 0.783 |
+
+These are backtest numbers until graded, and the platform labels them so
+everywhere they render.
+
+### The grading code, pinned
+
+- Grader: `tools/accuracy_registry.py`, registered at commit
+  `04395a2e8fec1e558cd8cfe0c12a50dbc360cabb` (the last commit touching the
+  grader on the registration date — checkable in git history independently of
+  this document).
+- The grader file's SHA-256 is measured at registration time and frozen into
+  the chain record (kind `grading-protocol`, `GET /api/prereg`). Any later
+  edit to the grader re-digests to a different protocol hash and the
+  registrar appends an **AMENDMENT** record on its next pass — the grader
+  cannot move under the frozen claims without leaving a chained trace.
+- `TestGradingProtocolMatchesTheActualGrader` additionally fails the build if
+  the refusal thresholds registered here stop matching the grader's source.
+- Independence: one observation per (symbol, horizon, UTC day). 408 forecasts
+  resolving on one day are ONE market observation.
+
+### The refusal rule (decided now, not after seeing the sample)
+
+- Fewer than **30 independent observations** → `INSUFFICIENT`: no verdict is
+  claimed either way.
+- Fewer than **`MIN_DISTINCT_BLOCKS = 10` distinct non-overlapping horizon
+  blocks** (`call_day // horizon_days`, anchored at the first call day) → no
+  interval is published at all, and **no interval means no verdict**. For
+  horizon-1 directional rows a block *is* a UTC day, so those keep the
+  `MIN_DISTINCT_DAYS = 10` gate; for a 21-day structural kind the block gate is
+  the stricter one, requiring ~10 x 21 days of calls rather than 10 days. A
+  sample spread over three non-overlapping windows has no measurable
+  between-cluster variance; reading a verdict off its point estimate is the
+  exact failure this gate exists to prevent. The chained grading protocol
+  (`prereg.GradingProtocol`, chain kind `grading-protocol`) registers both
+  floors, so the machine-readable record and this prose name the same gate.
+
+### What each outcome will mean
+
+With `[lo, hi]` the day-clustered 95% interval on live accuracy and `C` the
+claim frozen in the chain (never the code's value on grading day):
+
+| live record | verdict | consequence, committed now |
+|---|---|---|
+| `hi < C − 0.05` | **DECAYED** | the advertised band table is retired from display; the failure is recorded unfiltered in the registry (and would publish unfiltered once a public anchors repo exists — none does today) |
+| `lo ≥ C − 0.05` | **HOLDING** | the claim may keep rendering, now citing the live record instead of the backtest |
+| otherwise | **WIDE** | still experimental — no promotion, wait for more independent days |
+| refusal rule fires | **INSUFFICIENT** | no verdict claimed; the gap is reported, not papered over |
+
+A pre-registered negative is publishable evidence; a post-hoc one is not.
+Whatever the registry prints on 2026-08-07 ships to the public repo exactly as
+printed — DECAYED included.
 
 ---
 

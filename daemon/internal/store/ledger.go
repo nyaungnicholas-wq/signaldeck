@@ -158,10 +158,11 @@ func (s *Store) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry, e
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO prediction_ledger
 		  (predicted_at, symbol_id, horizon, bar_ts, raw_prob, cal_prob,
-		   feature_hash, model_version, prev_hash, entry_hash)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		   feature_hash, model_version, prev_hash, entry_hash, revision)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		e.PredictedAt, e.SymbolID, string(e.Horizon), e.BarTs, e.RawProb, e.CalProb,
-		e.FeatureHash, e.ModelVersion, e.PrevHash, e.EntryHash)
+		e.FeatureHash, e.ModelVersion, e.PrevHash, e.EntryHash,
+		nullString(CodeRevision()))
 	if err != nil {
 		return e, err
 	}

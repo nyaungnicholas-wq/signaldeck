@@ -17,7 +17,9 @@ const STALE_AFTER_S = 3600;
 
 function statusColor(status: WorkerRun["status"]): string {
   if (status === "ok") return "var(--ok)";
-  if (status === "error") return "var(--bad)";
+  // A blown per-run deadline is a FAILURE, not an in-progress state: it must
+  // never render as the neutral/accent colour a running worker gets.
+  if (status === "error" || status === "timeout") return "var(--bad)";
   return "var(--accent)";
 }
 
@@ -103,7 +105,7 @@ export default function SystemHealth({
   }
   const latest = [...byWorker.values()].sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt));
   const nRunning = latest.filter((r) => r.status === "running").length;
-  const nError = latest.filter((r) => r.status === "error").length;
+  const nError = latest.filter((r) => r.status === "error" || r.status === "timeout").length;
 
   const ret = stats?.retention;
 

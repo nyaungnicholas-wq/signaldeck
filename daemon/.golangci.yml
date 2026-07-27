@@ -1,0 +1,20 @@
+# Minimal lint gate (hostile-review follow-up): the 'existed but never
+# wired' defect class (A4 dead gate floor, A13 unwired scan) is exactly
+# what unused/dead-code linters surface mechanically, so CI runs a small
+# high-signal set instead of vet alone. Grow this list deliberately;
+# if a new linter is too noisy on first run, use --new-from-rev=main
+# and burn the backlog down instead of disabling it.
+#
+# Baseline burned to zero 2026-07-26 (72 issues; the CI comment records the
+# breakdown), so CI enforces every issue in the tree — no only-new-issues.
+# When hand-running, add --max-issues-per-linter=0 --max-same-issues=0:
+# golangci's default caps silently truncate the list (44 shown of 72 here).
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - unused

@@ -56,15 +56,29 @@ Method — the parts that keep it honest
     trading is a cost-dominated strategy and the break-even level is the
     finding.
 
+Reproducibility — this study is PINNED to a snapshot
+-----------------------------------------------------
+The exact universe the published result was computed from (dates, closes,
+dollar volumes, symbols, SIC sectors) is frozen at repro/pairs_universe_v1.npz
+and content-hashed with SNAPSHOT_SHA256 below. When that file exists it is the
+default data source, so a stranger with the repo but WITHOUT data/signaldeck.db
+reruns the identical study. The hash is over the canonical array bytes, not the
+container file, so re-zipping cannot silently change what "the same data" means.
+The live DB keeps growing; the snapshot is the citable dataset. See
+PAIRS_TRADING.md for the writeup that carries this hash.
+
 Usage:
     python3 tools/pairs_trading.py                    # full run, default costs
     python3 tools/pairs_trading.py --cost-bps 5       # single cost level
     python3 tools/pairs_trading.py --quick            # fewer sectors, for a smoke test
+    python3 tools/pairs_trading.py --write-snapshot   # freeze the DB universe to repro/
+    python3 tools/pairs_trading.py --from-db          # ignore the snapshot, read the DB
 """
 from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import itertools
 import json
 import math
@@ -76,8 +90,16 @@ from collections import defaultdict
 
 import numpy as np
 
-DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "data", "signaldeck.db")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_DB = os.path.join(REPO_ROOT, "data", "signaldeck.db")
+DEFAULT_SNAPSHOT = os.path.join(REPO_ROOT, "repro", "pairs_universe_v1.npz")
+
+# SHA-256 of the CANONICAL CONTENT of the pinned snapshot (dates ++ close ++
+# dvol raw little-endian bytes ++ symbols ++ sectors), not of the .npz file, so
+# zip metadata cannot masquerade as a data change. Set by --write-snapshot;
+# verified on every snapshot load. Changing it means the published numbers in
+# PAIRS_TRADING.md refer to a different dataset — rev the filename if you do.
+SNAPSHOT_SHA256 = "f84ee4bdeafb9afa329011909cdd6469e9bf49d71dbb6ec33aefb31523a39c61"
 
 FORMATION = 252          # 1 trading year to select and parameterize
 TRADE = 63               # H018's own horizon, and one quarter of trading
@@ -230,7 +252,63 @@ def quarter_of(ts):
 
 # ------------------------------------------------------------------- loading
 
-def load_universe(db_path, quick=False):
+def universe_sha256(dates, close, dvol, syms, sectors):
+    """Content hash of the universe — canonical bytes, container-independent.
+
+    Field order, dtypes and the NUL separator are pinned: changing any of them
+    invalidates the published hash, exactly like datasetver's canonicalFloatFmt.
+    """
+    h = hashlib.sha256()
+    h.update(np.ascontiguousarray(np.asarray(dates, dtype="<i8")).tobytes())
+    h.update(np.ascontiguousarray(np.asarray(close, dtype="<f8")).tobytes())
+    h.update(np.ascontiguousarray(np.asarray(dvol, dtype="<f8")).tobytes())
+    h.update("\n".join(syms).encode())
+    h.update(b"\x00")
+    h.update("\n".join(sectors).encode())
+    return h.hexdigest()
+
+
+def write_snapshot(path, dates, close, dvol, syms, sectors):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    np.savez_compressed(path, dates=np.asarray(dates, dtype="<i8"),
+                        close=np.asarray(close, dtype="<f8"),
+                        dvol=np.asarray(dvol, dtype="<f8"),
+                        symbols=np.asarray(syms), sectors=np.asarray(sectors))
+    return universe_sha256(dates, close, dvol, syms, sectors)
+
+
+def load_snapshot(path, verify=True):
+    z = np.load(path, allow_pickle=False)
+    dates = z["dates"]
+    close = z["close"].astype(np.float64)
+    dvol = z["dvol"].astype(np.float64)
+    syms = [str(s) for s in z["symbols"]]
+    sectors = [str(s) for s in z["sectors"]]
+    got = universe_sha256(dates, close, dvol, syms, sectors)
+    if verify:
+        if SNAPSHOT_SHA256 is None:
+            print(f"  WARNING: no pinned hash in this file; snapshot content "
+                  f"hash is {got}", file=sys.stderr)
+        elif got != SNAPSHOT_SHA256:
+            sys.exit(f"snapshot content hash mismatch:\n  pinned {SNAPSHOT_SHA256}"
+                     f"\n  loaded {got}\nThis is not the dataset the published "
+                     f"result was computed from. Pass --no-verify to run anyway.")
+    return dates, close, dvol, syms, sectors, got
+
+
+def quick_filter(close, dvol, syms, sectors):
+    """Keep only the 4 biggest sectors — the smoke-test universe. Applied after
+    loading so it works identically for the DB and the snapshot."""
+    by_sec = defaultdict(list)
+    for j, sec in enumerate(sectors):
+        by_sec[sec].append(j)
+    big = set(sorted(by_sec, key=lambda s: -len(by_sec[s]))[:4])
+    cols = [j for j, sec in enumerate(sectors) if sec in big]
+    return (close[:, cols], dvol[:, cols],
+            [syms[j] for j in cols], [sectors[j] for j in cols])
+
+
+def load_universe(db_path):
     """Returns (dates, close matrix, dollar-volume matrix, symbols, sectors).
 
     Matrices are (n_days, n_symbols) with NaN where a name had no print — which
@@ -251,13 +329,6 @@ def load_universe(db_path, quick=False):
             meta[sid] = (sym, sic)
     if not meta:
         sys.exit("no stock symbols with SIC sectors — cannot form same-sector pairs")
-
-    if quick:
-        by_sec = defaultdict(list)
-        for sid, (sym, sic) in meta.items():
-            by_sec[sic].append(sid)
-        big = sorted(by_sec, key=lambda s: -len(by_sec[s]))[:4]
-        meta = {sid: v for sid, v in meta.items() if v[1] in big}
 
     ids = sorted(meta)
     idx = {sid: i for i, sid in enumerate(ids)}
@@ -383,7 +454,7 @@ def trade_pair(p, logc, close, t0, t1, cost_bps):
 
         # A leg stopped printing: close at the last good price, take the loss.
         if pos != 0 and not alive:
-            trades.append({"ret": cum - cost, "bars": k - entry_i,
+            trades.append({"ret": cum - cost, "bars": k - entry_i, "ei": entry_i,
                            "exit": "delisted", "entry_z": entry_z})
             pos, cum, entry_z, entry_i = 0, 0.0, None, None
             continue
@@ -406,7 +477,7 @@ def trade_pair(p, logc, close, t0, t1, cost_bps):
             if hit_stop or reverted or last_bar:
                 cum -= cost                     # exit cost
                 daily[k - t0] -= cost
-                trades.append({"ret": cum, "bars": k - entry_i,
+                trades.append({"ret": cum, "bars": k - entry_i, "ei": entry_i,
                                "exit": "stop" if hit_stop else
                                        ("revert" if reverted else "window_end"),
                                "entry_z": entry_z})
@@ -511,6 +582,9 @@ def run(close, dvol, logc, dates, sectors, cost_bps, verbose=True):
                 d, tr = trade_pair(p, logc, close, t0, t1, cost_bps)
                 port += d / len(sel)
                 for t in tr:
+                    # Entry DAY is the cross-sectional cluster: trades opened
+                    # the same session share the market's move that session.
+                    t["day"] = int(dates[t.pop("ei")])
                     res[arm]["trades"][bkey].append(t)
             res[arm]["daily"][bkey].extend(port.tolist())
 
@@ -527,8 +601,35 @@ def run(close, dvol, logc, dates, sectors, cost_bps, verbose=True):
 
 # ------------------------------------------------------------------ reporting
 
+def design_effect(values, groups):
+    """DEFF = cluster-robust variance of the mean / naive iid variance (CR0).
+
+    DEFF k means the naive CI is sqrt(k) too narrow and the effective sample
+    is n/k — the honest denominator for any 'n=938 trades' claim. Groups can
+    be entry days (cross-sectional pseudo-replication) or quarters (regime).
+    """
+    x = np.asarray(values, float)
+    n = len(x)
+    if n < 3:
+        return None, None
+    s2 = float(x.var(ddof=1))
+    if s2 <= 0:
+        return None, None
+    resid = defaultdict(float)
+    xbar = x.mean()
+    for v, g in zip(x, groups):
+        resid[g] += v - xbar
+    var_cl = sum(e * e for e in resid.values()) / (n * n)
+    deff = var_cl / (s2 / n)
+    return float(deff), float(n / max(deff, 1e-12))
+
+
 def arm_stats(arm):
-    trades = [t for v in arm["trades"].values() for t in v]
+    trades, blocks_of = [], []
+    for bk, v in arm["trades"].items():
+        for t in v:
+            trades.append(t)
+            blocks_of.append(bk)
     daily = [d for v in arm["daily"].values() for d in v]
     if not trades:
         return None
@@ -539,6 +640,17 @@ def arm_stats(arm):
     lo, hi = block_bootstrap(by_block_ret, "mean")
     wlo, whi = block_bootstrap(by_block_ret, "winrate")
     wins = int((rets > 0).sum())
+
+    # Day-level clustering: the finer decomposition of the same non-independence
+    # the quarter blocks capture coarsely. Days resampled as whole clusters.
+    days_of = [t["day"] for t in trades]
+    by_day_ret = defaultdict(list)
+    for t in trades:
+        by_day_ret[t["day"]].append(t["ret"])
+    dlo, dhi = block_bootstrap(by_day_ret, "mean")
+    deff_day, neff_day = design_effect(rets, days_of)
+    deff_block, neff_block = design_effect(rets, blocks_of)
+
     return {
         "n_trades": len(trades),
         "mean_ret": float(rets.mean()),
@@ -552,6 +664,10 @@ def arm_stats(arm):
         "exits": {e: sum(1 for t in trades if t["exit"] == e)
                   for e in ("revert", "stop", "window_end", "delisted")},
         "avg_bars": float(np.mean([t["bars"] for t in trades])),
+        "n_entry_days": len(by_day_ret),
+        "day_ci": (dlo, dhi),
+        "deff_day": deff_day, "n_eff_day": neff_day,
+        "deff_block": deff_block, "n_eff_block": neff_block,
     }
 
 
@@ -592,6 +708,24 @@ def report(res, persistence, coint_persist, blocks, cost_bps):
             verdict = ("POSITIVE and the CI excludes zero" if lo > 0 else
                        "NOT distinguishable from zero — the CI contains it")
             print(f"Cointegrated arm mean return is {verdict}.")
+
+    # Clustering audit: trades are NOT independent draws. Same-day entries
+    # share the market's move (cross-sectional pseudo-replication); same-quarter
+    # entries share a regime. DEFF says how much a naive n overstates evidence.
+    print("\nClustering audit (design effect = naive-CI shrinkage factor; n_eff = n/DEFF):")
+    for arm, label in (("coint", "cointegrated"), ("random", "random"),
+                       ("worst", "least-coint")):
+        s = stats[arm]
+        if not s or s["deff_day"] is None:
+            continue
+        dlo, dhi = s["day_ci"]
+        dci = (f"[{dlo*100:+.3f}%, {dhi*100:+.3f}%]"
+               if dlo is not None else "(few days)")
+        print(f"  {label:<13} {s['n_trades']:4d} trades on {s['n_entry_days']:3d} entry days | "
+              f"day-clustered CI {dci:<22} DEFF(day) {s['deff_day']:5.2f} -> "
+              f"n_eff {s['n_eff_day']:6.0f} | DEFF(quarter) "
+              f"{s['deff_block'] if s['deff_block'] is not None else float('nan'):5.2f} -> "
+              f"n_eff {s['n_eff_block'] if s['n_eff_block'] is not None else float('nan'):6.0f}")
     if c:
         ex = c["exits"]
         tot = max(1, sum(ex.values()))
@@ -729,14 +863,43 @@ def verdict(stats_by_cost, h018):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=DEFAULT_DB)
+    ap.add_argument("--snapshot", default=DEFAULT_SNAPSHOT,
+                    help="pinned universe snapshot (.npz); preferred over the DB")
+    ap.add_argument("--write-snapshot", action="store_true",
+                    help="freeze the DB universe to --snapshot, print its hash, exit")
+    ap.add_argument("--from-db", action="store_true",
+                    help="read the live DB even when the snapshot exists")
+    ap.add_argument("--no-verify", action="store_true",
+                    help="skip the pinned-hash check on the snapshot")
     ap.add_argument("--cost-bps", type=float, default=None,
                     help="single cost level; default sweeps 0/2.5/5/10")
     ap.add_argument("--quick", action="store_true", help="4 sectors only")
     ap.add_argument("--json", help="write machine-readable results here")
     args = ap.parse_args()
 
-    print("loading survivorship-clean universe...", file=sys.stderr)
-    dates, close, dvol, syms, sectors = load_universe(args.db, args.quick)
+    if args.write_snapshot:
+        print("loading survivorship-clean universe from DB...", file=sys.stderr)
+        dates, close, dvol, syms, sectors = load_universe(args.db)
+        digest = write_snapshot(args.snapshot, dates, close, dvol, syms, sectors)
+        print(f"wrote {args.snapshot}")
+        print(f"  {close.shape[1]} symbols, {close.shape[0]} sessions, "
+              f"{os.path.getsize(args.snapshot) / 1e6:.1f} MB")
+        print(f"  content sha256 = {digest}")
+        print("Pin this hash as SNAPSHOT_SHA256 in this file and in PAIRS_TRADING.md.")
+        return
+
+    if not args.from_db and os.path.exists(args.snapshot):
+        print(f"loading pinned universe snapshot {args.snapshot}...", file=sys.stderr)
+        dates, close, dvol, syms, sectors, digest = load_snapshot(
+            args.snapshot, verify=not args.no_verify)
+        print(f"  snapshot content sha256 = {digest}", file=sys.stderr)
+    else:
+        print("loading survivorship-clean universe from DB (unpinned — the live "
+              "DB keeps growing; published numbers come from the snapshot)...",
+              file=sys.stderr)
+        dates, close, dvol, syms, sectors = load_universe(args.db)
+    if args.quick:
+        close, dvol, syms, sectors = quick_filter(close, dvol, syms, sectors)
     print(f"  {close.shape[1]} symbols with SIC sectors, {close.shape[0]} sessions "
           f"({datetime.datetime.utcfromtimestamp(int(dates[0])).date()} to "
           f"{datetime.datetime.utcfromtimestamp(int(dates[-1])).date()})", file=sys.stderr)

@@ -38,7 +38,7 @@ func TestComplete(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer k" {
 			t.Errorf("missing bearer auth")
 		}
-		fmt.Fprint(w, jsonResp("hello"))
+		_, _ = fmt.Fprint(w, jsonResp("hello"))
 	}))
 	defer srv.Close()
 
@@ -81,7 +81,7 @@ func TestKeyPoolRoundRobin(t *testing.T) {
 		mu.Lock()
 		seen = append(seen, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		mu.Unlock()
-		fmt.Fprint(w, jsonResp("ok"))
+		_, _ = fmt.Fprint(w, jsonResp("ok"))
 	}))
 	defer srv.Close()
 
@@ -110,7 +110,7 @@ func TestFailoverOnServerError(t *testing.T) {
 			http.Error(w, `{"error":{"message":"overloaded"}}`, 500)
 			return
 		}
-		fmt.Fprint(w, jsonResp("recovered"))
+		_, _ = fmt.Fprint(w, jsonResp("recovered"))
 	}))
 	defer srv.Close()
 
@@ -153,7 +153,7 @@ func TestNoFailoverOnBadRequest(t *testing.T) {
 // returned rather than an empty string.
 func TestReasoningContentFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"","reasoning_content":"the answer"}}]}`)
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"","reasoning_content":"the answer"}}]}`)
 	}))
 	defer srv.Close()
 
@@ -191,7 +191,7 @@ func TestCompleteWithModel(t *testing.T) {
 		}
 		_ = jsonDecode(r, &body)
 		gotModel = body.Model
-		fmt.Fprint(w, jsonResp("ok"))
+		_, _ = fmt.Fprint(w, jsonResp("ok"))
 	}))
 	defer srv.Close()
 
@@ -206,7 +206,7 @@ func TestCompleteWithModel(t *testing.T) {
 
 func TestDailyCapEnforced(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, jsonResp("ok"))
+		_, _ = fmt.Fprint(w, jsonResp("ok"))
 	}))
 	defer srv.Close()
 

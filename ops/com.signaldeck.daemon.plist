@@ -17,8 +17,18 @@
   <string>com.signaldeck.daemon</string>
 
   <key>ProgramArguments</key>
+  <!--
+    PROVENANCE GATE (2026-07-27): launchd runs the ctl script's `launch` branch,
+    NOT the bare binary. That branch reuses build_from_head() — the same clean
+    tree / manifest / `git archive HEAD` / -ldflags revision-stamp preflight the
+    `deploy` branch uses — and exits non-zero instead of exec'ing when any step
+    refuses. Exec'ing bin/signaldeckd directly bypassed every one of those
+    checks, which is how a dirty-tree build ended up stamping rows "+dirty".
+  -->
   <array>
-    <string>/Users/natalienyaung/claude code/signaldeck/bin/signaldeckd</string>
+    <string>/bin/bash</string>
+    <string>/Users/natalienyaung/claude code/signaldeck/ops/signaldeck-ctl.sh</string>
+    <string>launch</string>
   </array>
 
   <key>WorkingDirectory</key>

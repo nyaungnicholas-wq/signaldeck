@@ -2,6 +2,7 @@ package researchledger
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -40,7 +41,7 @@ func TestBayesFactorRealCaseH002(t *testing.T) {
 	// The measured H002 non-overlapping grade: 546/1006 vs naive 0.5070
 	// (z≈2.27). A plausible-edge band of 0.10 should read this as moderate
 	// evidence FOR — well above 1, nowhere near the cap.
-	bf := BayesFactorAbove(546, 1006, 0.5070, 0.10)
+	bf := mustBF(BayesFactorAbove(546, 1006, TranscribedNull(0.5070, 1006, "test"), 0.10))
 	if bf < 2 || bf > 12 {
 		t.Errorf("H002 case BF = %.2f, want moderate evidence in [2, 12]", bf)
 	}
@@ -49,7 +50,7 @@ func TestBayesFactorRealCaseH002(t *testing.T) {
 func TestBayesFactorAgainst(t *testing.T) {
 	// The measured H001 case: pressure-direct 3375/7117 vs naive 0.5093 —
 	// accuracy far BELOW baseline must floor at MinBF.
-	if bf := BayesFactorAbove(3375, 7117, 0.5093, 0.10); bf != MinBF {
+	if bf := mustBF(BayesFactorAbove(3375, 7117, TranscribedNull(0.5093, 7117, "test"), 0.10)); bf != MinBF {
 		t.Errorf("anti-predictive BF = %.4f, want floor %.4f", bf, MinBF)
 	}
 }
@@ -57,7 +58,7 @@ func TestBayesFactorAgainst(t *testing.T) {
 func TestBayesFactorNeutral(t *testing.T) {
 	// k exactly at the baseline: BF must be below 1 (no-edge data should
 	// slightly favor the point null over the edge band) but not floored.
-	bf := BayesFactorAbove(507, 1000, 0.507, 0.10)
+	bf := mustBF(BayesFactorAbove(507, 1000, TranscribedNull(0.507, 1000, "test"), 0.10))
 	if bf >= 1 || bf <= MinBF {
 		t.Errorf("at-baseline BF = %.4f, want in (%.3f, 1)", bf, MinBF)
 	}
@@ -66,15 +67,15 @@ func TestBayesFactorNeutral(t *testing.T) {
 func TestBayesFactorSuspiciouslyGood(t *testing.T) {
 	// Accuracy above the entire plausible band returns the cap (and the
 	// suspicious-edge ATTACK is what flags it — not unbounded confidence).
-	if bf := BayesFactorAbove(700, 1000, 0.52, 0.10); bf != MaxBF {
+	if bf := mustBF(BayesFactorAbove(700, 1000, TranscribedNull(0.52, 1000, "test"), 0.10)); bf != MaxBF {
 		t.Errorf("beyond-band BF = %.4f, want cap %.4f", bf, MaxBF)
 	}
 }
 
 func TestBayesFactorGrowsWithN(t *testing.T) {
 	// Same observed edge, more data ⇒ more evidence (until the cap).
-	small := BayesFactorAbove(109, 200, 0.50, 0.10)  // 54.5% on n=200
-	large := BayesFactorAbove(545, 1000, 0.50, 0.10) // 54.5% on n=1000
+	small := mustBF(BayesFactorAbove(109, 200, TranscribedNull(0.50, 200, "test"), 0.10))   // 54.5% on n=200
+	large := mustBF(BayesFactorAbove(545, 1000, TranscribedNull(0.50, 1000, "test"), 0.10)) // 54.5% on n=1000
 	if large <= small {
 		t.Errorf("BF(n=1000)=%.2f not > BF(n=200)=%.2f", large, small)
 	}
@@ -83,11 +84,11 @@ func TestBayesFactorGrowsWithN(t *testing.T) {
 func TestBayesFactorBelowMirror(t *testing.T) {
 	// "Blend is WORSE than partner": blend 1330/2984 (44.6%) vs partner-alone
 	// null 0.5563 — decisive evidence the rate sits below the null.
-	if bf := BayesFactorBelow(1330, 2984, 0.5563, 0.15); bf != MaxBF {
+	if bf := mustBF(BayesFactorBelow(1330, 2984, TranscribedNull(0.5563, 2984, "test"), 0.15)); bf != MaxBF {
 		t.Errorf("contamination BF = %.4f, want cap %.4f", bf, MaxBF)
 	}
 	// Mirror sanity: data AT the null reads below 1, not floored.
-	bf := BayesFactorBelow(556, 1000, 0.556, 0.10)
+	bf := mustBF(BayesFactorBelow(556, 1000, TranscribedNull(0.556, 1000, "test"), 0.10))
 	if bf >= 1 || bf <= MinBF {
 		t.Errorf("at-null below-BF = %.4f, want in (%.3f, 1)", bf, MinBF)
 	}
@@ -174,7 +175,7 @@ func TestCountersBacktest(t *testing.T) {
 // A tiny sample beyond the plausible band must grade as MILD evidence — the
 // removed early-return used to hand 3/3 wins the full cap.
 func TestBayesFactorSmallSampleBeyondBand(t *testing.T) {
-	bf := BayesFactorAbove(3, 3, 0.5, 0.10)
+	bf := mustBF(BayesFactorAbove(3, 3, TranscribedNull(0.5, 3, "test"), 0.10))
 	if bf >= 3 {
 		t.Errorf("3/3 wins BF = %.2f, want small-sample-aware (<3), not the cap", bf)
 	}
@@ -275,7 +276,8 @@ func TestStatusBands(t *testing.T) {
 	// covered by TestLegacyStatusCannotPromote.
 	traded := func(reps, regs int) Gates {
 		return Gates{
-			Replications: reps, Regimes: regs,
+			MachineGrades: 3,
+			Replications:  reps, Regimes: regs,
 			TradableForm: "a stated position",
 			EconomicTest: "graded net of costs",
 		}
@@ -346,7 +348,8 @@ func TestAttackLethality(t *testing.T) {
 func TestStatusWithGatesRequiresATradableForm(t *testing.T) {
 	strong := 0.95
 	full := Gates{
-		Replications: MinReplications, Regimes: MinRegimes,
+		MachineGrades: 3,
+		Replications:  MinReplications, Regimes: MinRegimes,
 		TradableForm: "dollar-neutral cointegration spread",
 		EconomicTest: "2026-07-25 pairs test: FAILED",
 	}
@@ -390,11 +393,11 @@ func TestUnmetGateNamesTheFirstFailure(t *testing.T) {
 		g    Gates
 		want string
 	}{
-		{"unreplicated", Gates{Regimes: MinRegimes}, "needs independent replication on a fresh data window"},
-		{"one regime", Gates{Replications: MinReplications, Regimes: 1}, "measured in only one volatility regime"},
-		{"no position", Gates{Replications: MinReplications, Regimes: MinRegimes}, "no tradable form stated — the position that would earn the money is unspecified"},
-		{"untested position", Gates{Replications: MinReplications, Regimes: MinRegimes, TradableForm: "spread"}, "tradable form stated but never graded net of costs"},
-		{"all met", Gates{Replications: MinReplications, Regimes: MinRegimes, TradableForm: "spread", EconomicTest: "run"}, ""},
+		{"unreplicated", Gates{MachineGrades: 1, Regimes: MinRegimes}, "needs independent replication on a fresh data window"},
+		{"one regime", Gates{MachineGrades: 1, Replications: MinReplications, Regimes: 1}, "measured in only one volatility regime"},
+		{"no position", Gates{MachineGrades: 1, Replications: MinReplications, Regimes: MinRegimes}, "no tradable form stated — the position that would earn the money is unspecified"},
+		{"untested position", Gates{MachineGrades: 1, Replications: MinReplications, Regimes: MinRegimes, TradableForm: "spread"}, "tradable form stated but never graded net of costs"},
+		{"all met", Gates{MachineGrades: 1, Replications: MinReplications, Regimes: MinRegimes, TradableForm: "spread", EconomicTest: "run"}, ""},
 	}
 	for _, c := range cases {
 		if got := c.g.UnmetGate(); got != c.want {
@@ -412,5 +415,135 @@ func TestEconomicGradesCountsOnlyEconomicRows(t *testing.T) {
 	}
 	if got := EconomicGrades(chain); got != 2 {
 		t.Errorf("economic grades = %d, want 2", got)
+	}
+}
+
+// ── the machine-evidence floor ───────────────────────────────────────────
+
+// A posterior built only from hand-typed `manual` rows must not render in a
+// confident band. This is the H005/H011/H012/H015-H018 case: 0.896-0.97 on one
+// or two transcribed assertions each, displayed identically to a chain of
+// thirty machine grades.
+func TestManualOnlyChainCannotExceedUncertain(t *testing.T) {
+	manualOnly := Gates{
+		MachineGrades: 0,
+		Replications:  MinReplications, Regimes: MinRegimes,
+		TradableForm: "a stated position",
+		EconomicTest: "graded net of costs",
+	}
+	for _, p := range []float64{0.70, 0.90, 0.97} {
+		if got := StatusWithGates(p, manualOnly); got != StatusUncertain {
+			t.Errorf("manual-only chain at posterior %.2f → %q, want %q", p, got, StatusUncertain)
+		}
+	}
+	// The floor only LOWERS: a weak posterior keeps its honest low band.
+	if got := StatusWithGates(0.05, manualOnly); got != StatusRejected {
+		t.Errorf("manual-only rejection → %q, want %q", got, StatusRejected)
+	}
+	if got := StatusWithGates(0.20, manualOnly); got != StatusDoubtful {
+		t.Errorf("manual-only doubtful → %q, want %q", got, StatusDoubtful)
+	}
+	// And it is the FIRST thing the page says about why the band is held.
+	if got := manualOnly.UnmetGate(); got == "" {
+		t.Error("manual-only chain reported every gate met")
+	}
+}
+
+// The floor as a table over the FULL posterior range crossed with otherwise
+// all-gates-met and gates-missing chains, so neither a band-boundary change
+// nor a gate reordering can quietly let a manual-only chain read confidently.
+// One machine grade is included at each posterior as the control: it is the
+// only difference between the capped and uncapped rows.
+func TestMachineEvidenceFloorTable(t *testing.T) {
+	full := func(machine int) Gates {
+		return Gates{
+			MachineGrades: machine,
+			Replications:  MinReplications, Regimes: MinRegimes,
+			TradableForm: "a stated position", EconomicTest: "graded net of costs",
+		}
+	}
+	for _, c := range []struct {
+		name         string
+		posterior    float64
+		manual, mach string
+	}{
+		{"rejected band", 0.05, StatusRejected, StatusRejected},
+		{"doubtful band", 0.20, StatusDoubtful, StatusDoubtful},
+		{"uncertain band", 0.50, StatusUncertain, StatusUncertain},
+		{"tentative band", 0.70, StatusUncertain, StatusTentative},
+		{"supported band", 0.90, StatusUncertain, StatusSupported},
+		{"posterior ceiling", MaxPosterior, StatusUncertain, StatusSupported},
+	} {
+		if got := StatusWithGates(c.posterior, full(0)); got != c.manual {
+			t.Errorf("%s: manual-only at %.2f = %q, want %q", c.name, c.posterior, got, c.manual)
+		}
+		if got := StatusWithGates(c.posterior, full(1)); got != c.mach {
+			t.Errorf("%s: one machine grade at %.2f = %q, want %q", c.name, c.posterior, got, c.mach)
+		}
+	}
+}
+
+func TestMachineGradesAndEvidenceMix(t *testing.T) {
+	chain := []Evidence{
+		{Kind: KindManual, BF: 3}, {Kind: KindManual, BF: 2},
+		{Kind: KindExperiment, BF: 1.5}, {Kind: KindAttack, BF: 0.6},
+		{Kind: KindBacktest, BF: 1.2}, {Kind: KindReplication, BF: 1.1},
+		{Kind: KindEconomic, BF: 0.5},
+	}
+	if got := MachineGrades(chain); got != 5 {
+		t.Errorf("MachineGrades = %d, want 5", got)
+	}
+	if got := MachineGrades(chain[:2]); got != 0 {
+		t.Errorf("MachineGrades(manual only) = %d, want 0", got)
+	}
+	mix := EvidenceMix(chain)
+	if mix[KindManual] != 2 || mix[KindExperiment] != 1 || mix[KindEconomic] != 1 {
+		t.Errorf("EvidenceMix = %v", mix)
+	}
+	if len(EvidenceMix(nil)) != 0 {
+		t.Error("EvidenceMix(nil) should be empty")
+	}
+}
+
+// A 0.95 THAT NO REPLICATION EVER TOUCHED MUST NOT RENDER AS "tentative".
+// The ledger's real state on 2026-07-27: 55 attack + 15 backtest + 16 manual
+// rows, all written 2026-07-16/17, and ZERO rows of kind experiment or
+// replication — so no hypothesis had ever been graded on a fresh window while
+// five published 0.95-0.97 under a word that describes a number under test.
+func TestUnreplicatedPosteriorDoesNotRenderTentative(t *testing.T) {
+	l := LivenessOf(0.95, 0, 0, 3, true)
+	if l.State != LivenessUnreplicated || l.Healthy {
+		t.Fatalf("0.95 with zero replication rows must be UNREPLICATED, got %+v", l)
+	}
+	if v := Verdict(StatusTentative, l); v != LivenessUnreplicated {
+		t.Fatalf("the liveness verdict must REPLACE the band, got %q", v)
+	}
+	if !strings.Contains(l.Detail, "ZERO replication rows") {
+		t.Errorf("the state must name what is missing, got %q", l.Detail)
+	}
+
+	// One replication on a fresh window is what changes it — nothing else does.
+	if rep := LivenessOf(0.95, 1, 0, 3, true); rep.State != LivenessLive ||
+		Verdict(StatusTentative, rep) != StatusTentative {
+		t.Fatalf("a replicated 0.95 keeps its band, got %+v", rep)
+	}
+
+	// A weak posterior is not accused of anything: the band already reads weak.
+	if weak := LivenessOf(0.40, 0, 0, 3, true); weak.State != LivenessLive {
+		t.Fatalf("below the unreplicated floor the band is honest already, got %+v", weak)
+	}
+
+	// STALE needs a corpus that MOVED ON. With nothing new to grade, silence
+	// is honest and must not be reported as a stopped grader.
+	if s := LivenessOf(0.50, 1, 1, LivenessStaleDays+1, true); s.State != LivenessStale || s.Healthy {
+		t.Fatalf("no evidence in %d+ days on a growing corpus is STALE, got %+v", LivenessStaleDays, s)
+	}
+	if s := LivenessOf(0.50, 1, 1, LivenessStaleDays+1, false); s.State != LivenessLive {
+		t.Fatalf("with no newer data to grade, silence is honest: %+v", s)
+	}
+
+	// UNREPLICATED outranks STALE — the stronger indictment must be the one told.
+	if both := LivenessOf(0.95, 0, 0, LivenessStaleDays+1, true); both.State != LivenessUnreplicated {
+		t.Fatalf("an unreplicated 0.95 must not be softened to STALE, got %+v", both)
 	}
 }

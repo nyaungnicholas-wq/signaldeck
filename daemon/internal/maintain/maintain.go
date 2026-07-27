@@ -5,11 +5,14 @@ package maintain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -223,7 +226,7 @@ func (d *Downsampler) archivePruneBars(ctx context.Context, tf md.Timeframe, cut
 		// and maxTs strictly advances.
 		full := len(rows) == archiveBatch
 		prune := rows
-		var upper int64 = cutoff // exclusive prune bound
+		upper := cutoff // exclusive prune bound
 		if full {
 			maxTs := rows[len(rows)-1].Ts
 			cut := len(rows)
@@ -275,7 +278,7 @@ func (d *Downsampler) archivePruneSnaps(ctx context.Context, cutoff int64, names
 		// Same trailing-max-ts trim as archivePruneBars (see its comment).
 		full := len(rows) == archiveBatch
 		prune := rows
-		var upper int64 = cutoff
+		upper := cutoff
 		if full {
 			maxTs := rows[len(rows)-1].Ts
 			cut := len(rows)
@@ -325,7 +328,7 @@ func (d *Downsampler) archivePruneAnomalies(ctx context.Context, cutoff int64, n
 		// Same trailing-max-ts trim as archivePruneBars (see its comment).
 		full := len(rows) == archiveBatch
 		prune := rows
-		var upper int64 = cutoff
+		upper := cutoff
 		if full {
 			maxTs := rows[len(rows)-1].Ts
 			cut := len(rows)
@@ -580,8 +583,10 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 //
 //   - WAL CHECKPOINT (TRUNCATE) every pass — a busy WAL database grows its
 //     -wal sidecar without bound until a checkpoint flushes it back into the
-//     main file; TRUNCATE also returns that space to the filesystem. This is
-//     cheap and always safe, so it runs unconditionally.
+//     main file; TRUNCATE also returns that space to the filesystem. Deferred
+//     during US market hours (the read fleet denies it a reader-free window
+//     anyway) unless the WAL is past walBusyAlertBytes; the pass cadence is
+//     env-tunable via SIGNALDECK_WAL_CHECKPOINT_MIN (minutes, default 60).
 //   - VACUUM when the database file has grown past VacuumThreshold — the DB is
 //     auto_vacuum=NONE, so pages freed by retention deletes are reused but
 //     never returned to disk until a VACUUM rewrites the file. VACUUM briefly
@@ -596,7 +601,33 @@ type StorageGovernor struct {
 	VacuumThreshold int64
 	// MinVacuumInterval: minimum wall time between VACUUMs (0 ⇒ 24h).
 	MinVacuumInterval time.Duration
+	// Quiescer, when set, can hold the worker fleet still briefly so a TRUNCATE
+	// checkpoint gets the reader-free instant it requires (*workers.Runner).
+	// Nil = the top rung of the ladder is attempted unquiesced, exactly as
+	// before — the ladder's lower rungs still run.
+	Quiescer Quiescer
 }
+
+// Quiescer manufactures a brief fleet-wide pause. Declared here (not imported
+// from workers) to keep maintain free of a dependency on the scheduler.
+type Quiescer interface {
+	// QuiesceDo gates new runs, drains in-flight ones, then calls fn inside the
+	// held window and keeps holding for d before releasing the fleet.
+	QuiesceDo(ctx context.Context, d time.Duration, fn func(context.Context), except ...string) error
+}
+
+// quiesceWindow is how long the fleet is held still for the TRUNCATE rung. Long
+// enough for one checkpoint on a multi-GB database, short enough that no
+// worker's cadence is meaningfully perturbed (the shortest periodic worker runs
+// every minute and its deadline is 15m).
+const quiesceWindow = 3 * time.Second
+
+// walIneffectiveRuns is how many consecutive passes may reclaim ZERO frames
+// while the WAL is still growing before that becomes its own dq event. Distinct
+// from wal_checkpoint_busy, which fires on SIZE: a WAL can sit under the size
+// alert and still be un-reclaimable, which is the failure that went unnoticed
+// for 22 straight passes.
+const walIneffectiveRuns = 3
 
 // walBusyAlertBytes is the WAL size above which a BLOCKED checkpoint stops
 // being noise and becomes an incident worth a dq event (the WAL is growing and
@@ -606,35 +637,27 @@ const walBusyAlertBytes = 128 * 1024 * 1024
 // Name implements workers.Worker.
 func (g *StorageGovernor) Name() string { return "storage-governor" }
 
-// Interval implements workers.Worker.
-func (g *StorageGovernor) Interval() time.Duration { return time.Hour }
+// Interval implements workers.Worker. Env-tunable (SIGNALDECK_WAL_CHECKPOINT_MIN,
+// minutes, default 60) so the checkpoint cadence can be tightened or relaxed
+// without a rebuild.
+func (g *StorageGovernor) Interval() time.Duration {
+	return time.Duration(envIntOr("SIGNALDECK_WAL_CHECKPOINT_MIN", 60)) * time.Minute
+}
 
 // Run checkpoints the WAL and, when warranted, vacuums.
 func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
-	ckpt, err := g.St.WALCheckpointTruncate(ctx)
-	if err != nil {
-		return "", fmt.Errorf("wal checkpoint: %w", err)
-	}
 	dbBytes, walBytes := g.St.FileSizes()
 
-	// REPORT WHAT ACTUALLY HAPPENED. A TRUNCATE checkpoint needs a moment with
-	// no active readers; a busy fleet can deny it indefinitely, and SQLite
-	// signals that through the pragma's result row, not an error. When the WAL
-	// stays large AND blocked, that is a real incident (unbounded WAL growth)
-	// and must surface — not be papered over with "checkpointed wal".
-	walNote := fmt.Sprintf("wal truncated (%d frames)", ckpt.Checkpointed)
-	if ckpt.Busy {
-		walNote = fmt.Sprintf("wal checkpoint BUSY — readers active, %d/%d frames moved, WAL NOT truncated",
-			ckpt.Checkpointed, ckpt.LogFrames)
-		if walBytes >= walBusyAlertBytes {
-			_ = g.St.InsertDQ(ctx, md.DQEvent{
-				Ts:   time.Now().Unix(),
-				Kind: "wal_checkpoint_busy",
-				Detail: fmt.Sprintf("WAL %.1fMB and growing: TRUNCATE blocked by active readers (%d/%d frames moved). Worker read pressure is denying the checkpoint a reader-free window.",
-					float64(walBytes)/(1024*1024), ckpt.Checkpointed, ckpt.LogFrames),
-			})
-		}
-	}
+	// MARKET-HOURS GATE: a TRUNCATE checkpoint needs a reader-free moment, and
+	// during the US session the worker fleet reads constantly — the attempt
+	// mostly comes back Busy while still contending with the live pipeline for
+	// the write connection. Defer it to off-hours UNLESS the WAL has already
+	// grown past the alert bound, where reclaiming space outweighs the
+	// contention (journal_size_limit only bounds the file AFTER a successful
+	// truncate, so an untried checkpoint reclaims nothing).
+	walNote, reclaimed := g.checkpointLadder(ctx, walBytes)
+	dbBytes, walBytes = g.St.FileSizes()
+	g.trackEffectiveness(ctx, reclaimed, walBytes)
 
 	threshold := g.VacuumThreshold
 	if threshold == 0 {
@@ -695,6 +718,263 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 		walNote, float64(dbBytes)/(1024*1024), float64(walBytes)/(1024*1024), vacuumed), nil
 }
 
+// checkpointLadder walks PASSIVE → RESTART → TRUNCATE, stopping at the first
+// rung that leaves nothing to reclaim, and reports which rung ran and how many
+// frames each moved. It returns the note for worker_runs.detail and the total
+// frames reclaimed this pass.
+//
+// WHY A LADDER. The governor previously attempted ONLY TRUNCATE, which requires
+// an instant with no active readers. Measured over 22 consecutive passes: 0
+// truncations, 21 BUSY, 0 frames deferred elsewhere — while the WAL grew to
+// 5,396 MB against a 64 MB journal_size_limit. ~97 workers on a 4-connection
+// read pool plus the API's 4-connection ReaderClone never leave that instant
+// open, so the single mechanism the daemon relied on was structurally incapable
+// of ever firing. PASSIVE always makes progress (it never waits for anyone);
+// RESTART caps the file at its high-water mark instead of letting it grow; only
+// the top rung needs the quiesce window. Nothing here relaxes an alert: the
+// existing size-based wal_checkpoint_busy dq still fires on a blocked TRUNCATE.
+func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64) (note string, reclaimed int) {
+	parts := make([]string, 0, 3)
+
+	passive, err := g.St.WALCheckpointPassive(ctx)
+	if err != nil {
+		return "wal passive checkpoint failed: " + err.Error(), 0
+	}
+	reclaimed += passive.Checkpointed
+	parts = append(parts, fmt.Sprintf("PASSIVE %d/%d frames", passive.Checkpointed, passive.LogFrames))
+	if passive.LogFrames == 0 {
+		return "wal checkpoint: " + strings.Join(parts, "; ") + " (wal empty)", reclaimed
+	}
+
+	// RESTART blocks until every frame is checkpointed and then forces the WAL
+	// to rewind — the file stops growing even when it cannot shrink.
+	restart, err := g.St.WALCheckpointRestart(ctx)
+	if err != nil {
+		return "wal checkpoint: " + strings.Join(parts, "; ") + "; RESTART failed: " + err.Error(), reclaimed
+	}
+	reclaimed += restart.Checkpointed
+	rn := fmt.Sprintf("RESTART %d/%d frames", restart.Checkpointed, restart.LogFrames)
+	if restart.Busy {
+		rn += " BUSY"
+	}
+	parts = append(parts, rn)
+
+	// TRUNCATE is the only rung that returns bytes to the filesystem. Keep the
+	// original market-hours gate — it governs WHEN the expensive rung is worth
+	// contending for, not whether the WAL is checkpointed at all (the two rungs
+	// above just ran regardless, which is the actual fix).
+	if marketcal.OpenForBars(time.Now()) && walBefore < walBusyAlertBytes {
+		parts = append(parts, "TRUNCATE deferred (market hours)")
+		return "wal checkpoint: " + strings.Join(parts, "; "), reclaimed
+	}
+
+	// Run TRUNCATE inside a quiesce window when one is available: the fleet is
+	// gated and drained FIRST, so the pragma actually meets the reader-free
+	// instant it needs instead of racing the readers that denied it 21 times.
+	var trunc store.WALCheckpointResult
+	quiesced := g.Quiescer != nil
+	err = nil
+	checkpoint := func(c context.Context) { trunc, err = g.St.WALCheckpointTruncate(c) }
+	if quiesced {
+		if qerr := g.Quiescer.QuiesceDo(ctx, quiesceWindow, checkpoint, g.Name()); qerr != nil && err == nil {
+			parts = append(parts, "quiesce: "+qerr.Error())
+		}
+	} else {
+		checkpoint(ctx)
+	}
+	if err != nil {
+		return "wal checkpoint: " + strings.Join(parts, "; ") + "; TRUNCATE failed: " + err.Error(), reclaimed
+	}
+	reclaimed += trunc.Checkpointed
+	tn := fmt.Sprintf("TRUNCATE %d/%d frames", trunc.Checkpointed, trunc.LogFrames)
+	if quiesced {
+		tn += " (quiesced)"
+	}
+	if trunc.Busy {
+		tn += " BUSY — WAL NOT truncated"
+		_, walAfter := g.St.FileSizes()
+		g.trackTruncateStall(ctx, trunc.LogFrames, walAfter)
+		if walAfter >= walBusyAlertBytes {
+			_ = g.St.InsertDQ(ctx, md.DQEvent{
+				Ts:   time.Now().Unix(),
+				Kind: "wal_checkpoint_busy",
+				Detail: fmt.Sprintf("WAL %.1fMB and growing: TRUNCATE blocked by active readers (%d/%d frames moved, quiesced=%v). Worker read pressure is denying the checkpoint a reader-free window.",
+					float64(walAfter)/(1024*1024), trunc.Checkpointed, trunc.LogFrames, quiesced),
+			})
+		}
+	} else {
+		g.clearTruncateStall(ctx)
+	}
+	parts = append(parts, tn)
+	return "wal checkpoint: " + strings.Join(parts, "; "), reclaimed
+}
+
+// walStallRuns is how many CONSECUTIVE passes must stall at the SAME WAL frame
+// index before the situation stops being "the checkpoint was unlucky" and
+// becomes a named starvation verdict. Two is the smallest number that can tell
+// those apart: one stall is a busy instant, the same frame twice in a row is a
+// held snapshot that has survived a whole checkpoint cadence.
+const walStallRuns = 2
+
+// trackTruncateStall records WHERE a blocked TRUNCATE stopped and escalates a
+// repeat at the same frame into its own dq event.
+//
+// WHY THIS EXISTS AND WHY IT IS NOT THE SIZE ALERT. wal_checkpoint_busy says
+// the WAL is large; it names no cause and implies no action — the pattern this
+// codebase itself calls out as a defect ("detection without a recovery path").
+// The live incident it failed on: TRUNCATE stalled at the IDENTICAL frame index
+// 581124 at 05:06, 06:06 and 08:09 while the WAL grew to 5,396MB, and the
+// actual holder was only ever identified by an operator running lsof by hand. A
+// frame index that does not move across passes is proof that one specific read
+// snapshot is pinned, not that readers are merely busy — so this verdict
+// carries the repeated frame, how long it has been stuck, how much WAL has
+// accumulated since it first stuck, and a census of who could be holding it
+// (the daemon's own in-flight workers, plus any non-daemon process with the db
+// or -wal file open). Nothing here changes a threshold or suppresses the
+// size-based alert, which still fires on exactly its old terms.
+func (g *StorageGovernor) trackTruncateStall(ctx context.Context, frame int, walBytes int64) {
+	now := time.Now().Unix()
+	prevFrameStr, _ := g.St.GetMeta(ctx, "storage_wal_stall_frame")
+	prevFrame, err := strconv.Atoi(prevFrameStr)
+	if prevFrameStr == "" || err != nil || prevFrame != frame {
+		_ = g.St.SetMeta(ctx, "storage_wal_stall_frame", strconv.Itoa(frame))
+		_ = g.St.SetMeta(ctx, "storage_wal_stall_since", strconv.FormatInt(now, 10))
+		_ = g.St.SetMeta(ctx, "storage_wal_stall_bytes", strconv.FormatInt(walBytes, 10))
+		_ = g.St.SetMeta(ctx, "storage_wal_stall_runs", "1")
+		return
+	}
+	runsStr, _ := g.St.GetMeta(ctx, "storage_wal_stall_runs")
+	runs, _ := strconv.Atoi(runsStr)
+	runs++
+	_ = g.St.SetMeta(ctx, "storage_wal_stall_runs", strconv.Itoa(runs))
+	if runs < walStallRuns {
+		return
+	}
+	sinceStr, _ := g.St.GetMeta(ctx, "storage_wal_stall_since")
+	since, _ := strconv.ParseInt(sinceStr, 10, 64)
+	firstBytesStr, _ := g.St.GetMeta(ctx, "storage_wal_stall_bytes")
+	firstBytes, _ := strconv.ParseInt(firstBytesStr, 10, 64)
+
+	_ = g.St.InsertDQ(ctx, md.DQEvent{
+		Ts:   now,
+		Kind: "wal_checkpoint_starved",
+		Detail: fmt.Sprintf(
+			"WAL checkpoint STARVED: TRUNCATE has stalled at the same frame %d for %d consecutive passes (%s since first stall); WAL %.1fMB, +%.1fMB since the stall began. A frame index that does not move means one read snapshot is pinned open, not that readers are merely busy. Daemon read connections are lifetime-bounded at %s, so any holder older than that is NOT a daemon read pool. Holders: %s",
+			frame, runs, time.Since(time.Unix(since, 0)).Round(time.Second),
+			float64(walBytes)/(1024*1024), float64(walBytes-firstBytes)/(1024*1024),
+			store.ReadConnMaxLifetime, g.holderCensus()),
+	})
+}
+
+// clearTruncateStall resets the stall cursor once a TRUNCATE completes.
+func (g *StorageGovernor) clearTruncateStall(ctx context.Context) {
+	if s, _ := g.St.GetMeta(ctx, "storage_wal_stall_runs"); s == "" || s == "0" {
+		return
+	}
+	_ = g.St.SetMeta(ctx, "storage_wal_stall_runs", "0")
+	_ = g.St.SetMeta(ctx, "storage_wal_stall_frame", "")
+}
+
+// inFlightNamer is the fleet-side half of the holder census. Satisfied by
+// *workers.Runner (already wired in as Quiescer); declared here so maintain
+// keeps no dependency on the scheduler package.
+type inFlightNamer interface{ InFlightNames() []string }
+
+// holderCensus lists who could be holding the pinned read snapshot: the
+// daemon's own in-flight workers, and any process other than this one with the
+// database or its -wal open. The external half is what an operator previously
+// had to produce by hand with lsof.
+func (g *StorageGovernor) holderCensus() string {
+	parts := make([]string, 0, 2)
+	if n, ok := g.Quiescer.(inFlightNamer); ok && n != nil {
+		names := n.InFlightNames()
+		if len(names) == 0 {
+			parts = append(parts, "daemon in-flight workers: none")
+		} else {
+			parts = append(parts, "daemon in-flight workers: "+strings.Join(names, ", "))
+		}
+	} else {
+		parts = append(parts, "daemon in-flight workers: unavailable")
+	}
+	parts = append(parts, "external holders: "+externalHolders(g.St.Path()))
+	return strings.Join(parts, "; ")
+}
+
+// externalHolders shells out to lsof for the db and -wal files and reports the
+// non-daemon processes holding them (pid/command), or why it could not tell.
+// Best-effort and bounded: a census that cannot be taken says so rather than
+// implying "nobody else".
+func externalHolders(dbPath string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "lsof", "-F", "pc", "--", dbPath, dbPath+"-wal").Output()
+	if err != nil && len(out) == 0 {
+		// lsof exits non-zero when nothing has the files open, which is a real
+		// answer only when it also printed nothing AND the binary exists.
+		if errors.Is(err, exec.ErrNotFound) {
+			return "unknown (lsof not available)"
+		}
+		return "none"
+	}
+	self := os.Getpid()
+	seen := map[string]bool{}
+	var pid string
+	var holders []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) < 2 {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			pid = line[1:]
+		case 'c':
+			if pid == strconv.Itoa(self) {
+				continue
+			}
+			h := line[1:] + " (pid " + pid + ")"
+			if !seen[h] {
+				seen[h] = true
+				holders = append(holders, h)
+			}
+		}
+	}
+	if len(holders) == 0 {
+		return "none"
+	}
+	return strings.Join(holders, ", ")
+}
+
+// trackEffectiveness records a dq event once the checkpoint machinery has been
+// measurably USELESS for walIneffectiveRuns consecutive passes — zero frames
+// reclaimed while the WAL kept growing. The pre-existing wal_checkpoint_busy
+// alert only fires once the WAL is already past 128MB; this one catches the
+// "mechanism does nothing" state directly, which is what actually went
+// unobserved for 22 passes. Counters live in meta so they survive restarts.
+func (g *StorageGovernor) trackEffectiveness(ctx context.Context, reclaimed int, walBytes int64) {
+	prevStr, _ := g.St.GetMeta(ctx, "storage_wal_bytes_last")
+	prev, _ := strconv.ParseInt(prevStr, 10, 64)
+	_ = g.St.SetMeta(ctx, "storage_wal_bytes_last", strconv.FormatInt(walBytes, 10))
+
+	if reclaimed > 0 || walBytes <= prev {
+		_ = g.St.SetMeta(ctx, "storage_wal_ineffective_runs", "0")
+		return
+	}
+	nStr, _ := g.St.GetMeta(ctx, "storage_wal_ineffective_runs")
+	n, _ := strconv.Atoi(nStr)
+	n++
+	_ = g.St.SetMeta(ctx, "storage_wal_ineffective_runs", strconv.Itoa(n))
+	if n < walIneffectiveRuns {
+		return
+	}
+	_ = g.St.InsertDQ(ctx, md.DQEvent{
+		Ts:   time.Now().Unix(),
+		Kind: "wal_checkpoint_ineffective",
+		Detail: fmt.Sprintf("%d consecutive passes reclaimed ZERO WAL frames while the WAL grew (%.1fMB → %.1fMB). Every rung of the checkpoint ladder is being denied; the WAL is unbounded until read pressure drops.",
+			n, float64(prev)/(1024*1024), float64(walBytes)/(1024*1024)),
+	})
+	_ = g.St.SetMeta(ctx, "storage_wal_ineffective_runs", "0")
+}
+
 // inETWindow reports whether t's hour in America/New_York falls in [lo, hi).
 // The daemon embeds tzdata (marketcal), so LoadLocation succeeds; UTC is a
 // safe fallback that only shifts the window, never breaks it.
@@ -730,14 +1010,40 @@ func inETWindow(t time.Time, lo, hi int) bool {
 //     archived + pruned ONLY when their prediction has already resolved — an
 //     unlabeled training row is never deleted.
 //
+// UNMANAGED-TABLE SWEEP (phase 3 — the 2026-07 reaudit's ~513MB of tables with
+// no retention path, measured live via dbstat): filings (125MB) and insights
+// (55MB) age out past 180d/90d; prediction_postmortems (35MB) age into the
+// cold archive past 180d (the misses' EXPLANATIONS age out — the predictions
+// they explain stay forever); research_weeks (165MB) is already at the
+// one-row-per-(symbol, week) grain by PRIMARY KEY, so its tier bounds the
+// WINDOW instead — rows past the active research window (default 7y, i.e. the
+// full 2020→present base today: the tier bounds growth from here on rather
+// than cutting into the era evidence) are archived + pruned, and
+// pipeline.HistoryBackfillWorker clamps its daily recompute floor to the SAME
+// window so pruned rows are never resurrected. score_outcomes (51MB) already
+// had its 90d tier above; predictions (82MB) are the permanent track record
+// and get NO tier by doctrine.
+//
 // Bars/snapshots/anomalies retention stays entirely in the Downsampler; this
 // worker never prunes any bar timeframe.
+//
+// research_loop_runs and research_loop_hypotheses are deliberately EXCLUDED
+// from every tier here and must stay excluded: they are the research audit
+// trail (which searches ran, under which correction, and which rules were
+// killed by which gate), not derived data. An honest null result is the
+// strongest evidence this platform produces, and a null that ages out of the
+// database is a null nobody can check. Both tables grow at roughly one row
+// per rule per day, which is nothing next to the tiers below.
 type DerivedRetention struct {
 	St  *store.Store
 	Arc *archive.Archiver // cold-archive sink (required for archive-before-prune)
 	// Retention windows (0 ⇒ env/default). Explicit so tests drive exact cutoffs.
-	KeepScores   time.Duration // scores + score_outcomes; default 90d  (env SIGNALDECK_SCORES_RETENTION_D)
-	KeepFeatures time.Duration // resolved features;        default 180d (env SIGNALDECK_FEATURES_RETENTION_D)
+	KeepScores        time.Duration // scores + score_outcomes;   default 90d  (env SIGNALDECK_SCORES_RETENTION_D)
+	KeepFeatures      time.Duration // resolved features;          default 180d (env SIGNALDECK_FEATURES_RETENTION_D)
+	KeepFilings       time.Duration // filings feed;               default 180d (env SIGNALDECK_FILINGS_RETENTION_D)
+	KeepInsights      time.Duration // generated insights;         default 90d  (env SIGNALDECK_INSIGHTS_RETENTION_D)
+	KeepPostmortems   time.Duration // prediction_postmortems;     default 180d (env SIGNALDECK_POSTMORTEM_RETENTION_D)
+	KeepResearchWeeks time.Duration // research_weeks window;      default 7y   (env SIGNALDECK_RESEARCH_WEEKS_RETENTION_D)
 }
 
 // Name implements workers.Worker.
@@ -789,9 +1095,59 @@ func (d *DerivedRetention) Run(ctx context.Context) (string, error) {
 		},
 		d.St.DeleteResolvedFeaturesBefore)
 
-	msg := fmt.Sprintf("archived+pruned %d scores, %d score_outcomes, %d resolved features (predictions kept forever)",
-		prunedScores, prunedOut, prunedFeat)
-	if scSkip || outSkip || featSkip {
+	// Phase-3 tiers (unmanaged-table sweep) — same generic loop, same fail-safe.
+	filingsCut := now.Add(-d.retentionFilings()).Unix()
+	insightsCut := now.Add(-d.retentionInsights()).Unix()
+	postmortemCut := now.Add(-d.retentionPostmortems()).Unix()
+	weeksCut := now.Add(-d.retentionResearchWeeks()).Unix()
+
+	prunedFil, filSkip := archivePruneDerived(ctx, d, "filings", filingsCut, now,
+		func(ctx context.Context, cutoff int64, limit int) ([]store.FilingArchiveRow, error) {
+			return d.St.FilingsBefore(ctx, cutoff, limit)
+		},
+		func(r store.FilingArchiveRow) int64 { return r.FiledTs },
+		func(ctx context.Context, rows []store.FilingArchiveRow) error {
+			_, err := d.Arc.ArchiveFilings(ctx, rows, names)
+			return err
+		},
+		d.St.DeleteFilingsBefore)
+
+	prunedIns, insSkip := archivePruneDerived(ctx, d, "insights", insightsCut, now,
+		func(ctx context.Context, cutoff int64, limit int) ([]store.InsightArchiveRow, error) {
+			return d.St.InsightsBefore(ctx, cutoff, limit)
+		},
+		func(r store.InsightArchiveRow) int64 { return r.Ts },
+		func(ctx context.Context, rows []store.InsightArchiveRow) error {
+			_, err := d.Arc.ArchiveInsights(ctx, rows, names)
+			return err
+		},
+		d.St.DeleteInsightsBefore)
+
+	prunedPM, pmSkip := archivePruneDerived(ctx, d, "prediction_postmortems", postmortemCut, now,
+		func(ctx context.Context, cutoff int64, limit int) ([]store.PostmortemArchiveRow, error) {
+			return d.St.PostmortemsBefore(ctx, cutoff, limit)
+		},
+		func(r store.PostmortemArchiveRow) int64 { return r.Ts },
+		func(ctx context.Context, rows []store.PostmortemArchiveRow) error {
+			_, err := d.Arc.ArchivePostmortems(ctx, rows, names)
+			return err
+		},
+		d.St.DeletePostmortemsBefore)
+
+	prunedRW, rwSkip := archivePruneDerived(ctx, d, "research_weeks", weeksCut, now,
+		func(ctx context.Context, cutoff int64, limit int) ([]store.ResearchWeekArchiveRow, error) {
+			return d.St.ResearchWeeksBefore(ctx, cutoff, limit)
+		},
+		func(r store.ResearchWeekArchiveRow) int64 { return r.Ts },
+		func(ctx context.Context, rows []store.ResearchWeekArchiveRow) error {
+			_, err := d.Arc.ArchiveResearchWeeks(ctx, rows, names)
+			return err
+		},
+		d.St.DeleteResearchWeeksBefore)
+
+	msg := fmt.Sprintf("archived+pruned %d scores, %d score_outcomes, %d resolved features, %d filings, %d insights, %d postmortems, %d research_weeks (predictions kept forever)",
+		prunedScores, prunedOut, prunedFeat, prunedFil, prunedIns, prunedPM, prunedRW)
+	if scSkip || outSkip || featSkip || filSkip || insSkip || pmSkip || rwSkip {
 		msg += " (SOME PRUNES SKIPPED — archive failed, data retained; see dq)"
 	}
 	return msg, nil
@@ -809,6 +1165,43 @@ func (d *DerivedRetention) retentionFeatures() time.Duration {
 		return d.KeepFeatures
 	}
 	return time.Duration(envIntOr("SIGNALDECK_FEATURES_RETENTION_D", 180)) * 24 * time.Hour
+}
+
+func (d *DerivedRetention) retentionFilings() time.Duration {
+	if d.KeepFilings > 0 {
+		return d.KeepFilings
+	}
+	return time.Duration(envIntOr("SIGNALDECK_FILINGS_RETENTION_D", 180)) * 24 * time.Hour
+}
+
+func (d *DerivedRetention) retentionInsights() time.Duration {
+	if d.KeepInsights > 0 {
+		return d.KeepInsights
+	}
+	return time.Duration(envIntOr("SIGNALDECK_INSIGHTS_RETENTION_D", 90)) * 24 * time.Hour
+}
+
+func (d *DerivedRetention) retentionPostmortems() time.Duration {
+	if d.KeepPostmortems > 0 {
+		return d.KeepPostmortems
+	}
+	return time.Duration(envIntOr("SIGNALDECK_POSTMORTEM_RETENTION_D", 180)) * 24 * time.Hour
+}
+
+func (d *DerivedRetention) retentionResearchWeeks() time.Duration {
+	if d.KeepResearchWeeks > 0 {
+		return d.KeepResearchWeeks
+	}
+	return time.Duration(RetentionResearchWeeksDays()) * 24 * time.Hour
+}
+
+// RetentionResearchWeeksDays exposes the ACTIVE research_weeks window in days
+// (env-resolved, default 7y) — shared with pipeline.HistoryBackfillWorker,
+// whose daily recompute floor MUST move in lockstep with this prune cutoff or
+// pruned rows resurrect daily and re-archive hourly (churn loop). One source
+// of truth, mirroring RetentionSnapsHours & co below.
+func RetentionResearchWeeksDays() int {
+	return envIntOr("SIGNALDECK_RESEARCH_WEEKS_RETENTION_D", 7*365)
 }
 
 // dqSkip logs + records the fail-safe (mirrors Downsampler.dqSkip).

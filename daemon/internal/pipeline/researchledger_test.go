@@ -64,10 +64,12 @@ func TestResearchLedgerSeed(t *testing.T) {
 	}
 
 	// H005 (contamination): two decisive-for below-band experiments cap the
-	// posterior at 0.97 — but single-regime evidence caps status at tentative.
+	// posterior at 0.97 — but the chain is two hand-transcribed `manual` rows
+	// and nothing else, so the machine-evidence floor holds the band at
+	// uncertain no matter how confident the arithmetic looks.
 	h5 := ledgerHypByID(t, st, "H005")
-	if h5.Posterior != rl.MaxPosterior || h5.Status != rl.StatusTentative {
-		t.Errorf("H005 = (%.4f, %s), want (%.2f, tentative — regime gate)", h5.Posterior, h5.Status, rl.MaxPosterior)
+	if h5.Posterior != rl.MaxPosterior || h5.Status != rl.StatusUncertain {
+		t.Errorf("H005 = (%.4f, %s), want (%.2f, uncertain — machine-evidence floor)", h5.Posterior, h5.Status, rl.MaxPosterior)
 	}
 
 	// H002 (open discovery): NO transcribed evidence — sits at its prior until
@@ -94,6 +96,54 @@ func TestResearchLedgerSeed(t *testing.T) {
 	}
 	if strings.Contains(msg, "seeded") {
 		t.Errorf("seed re-ran: %q", msg)
+	}
+}
+
+// The machine-evidence floor, asserted over the REAL seed rather than a
+// hand-built Gates literal: every seeded hypothesis whose evidence chain is
+// entirely hand-transcribed (MachineGrades == 0) must render in a band no
+// higher than uncertain, whatever its posterior. This is the cross-package
+// half of researchledger.TestManualOnlyChainCannotExceedUncertain — the unit
+// test pins the function, this pins what the seed actually writes, so the
+// floor cannot be silently re-broken from either side.
+func TestSeededManualOnlyHypothesesCapAtUncertain(t *testing.T) {
+	ctx := context.Background()
+	st := newLedgerStore(t)
+	w := NewResearchLedgerWorker(st)
+	w.Now = func() time.Time { return time.Unix(1_800_000_000, 0) }
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	hyps, err := st.LedgerHypotheses(ctx)
+	if err != nil {
+		t.Fatalf("hyps: %v", err)
+	}
+	if len(hyps) == 0 {
+		t.Fatal("seed wrote no hypotheses — the floor below would assert nothing")
+	}
+
+	// Bands at or below uncertain. Anything else is a confident display.
+	capped := map[string]bool{
+		rl.StatusRejected: true, rl.StatusDoubtful: true, rl.StatusUncertain: true,
+	}
+	manualOnly := 0
+	for _, h := range hyps {
+		ev, err := st.LedgerEvidence(ctx, h.ID)
+		if err != nil {
+			t.Fatalf("evidence %s: %v", h.ID, err)
+		}
+		if rl.MachineGrades(ev) != 0 {
+			continue
+		}
+		manualOnly++
+		if !capped[h.Status] {
+			t.Errorf("%s: %d evidence rows, all manual, posterior %.4f → status %q; want no higher than %q",
+				h.ID, len(ev), h.Posterior, h.Status, rl.StatusUncertain)
+		}
+	}
+	if manualOnly == 0 {
+		t.Fatal("no seeded hypothesis has a manual-only chain — this test is vacuous; re-point it at the seed")
 	}
 }
 

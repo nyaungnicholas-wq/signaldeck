@@ -13,7 +13,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
@@ -25,6 +27,31 @@ type DirectionalRecordRow struct {
 	UpRate         float64 `json:"upRate"`
 	BrierSkill     float64 `json:"brierSkill"`
 	CalibrationErr float64 `json:"calibrationErr"`
+
+	// Days is the per-UTC-day tally behind N — the clusters a consumer needs
+	// to measure the design effect (clusterstat.DesignEffect) and evaluate any
+	// interval at an EFFECTIVE sample size instead of treating N's symbol-days
+	// as independent trials. Not serialized: surfaces publish the derived
+	// effective N, not the raw tallies.
+	Days []clusterstat.Day `json:"-"`
+}
+
+// FirstResolutionAt returns the earliest resolved_at among a horizon's graded
+// outcome rows (ok=false when none have resolved yet). Model-health uses it to
+// align the ensemble-vs-benchmark head-to-head on the benchmark's own live
+// window: the prequential-majority rows only exist since the tracked-benchmark
+// wave, and grading the ensemble's whole record against them would compare
+// different stretches of market.
+func (s *Store) FirstResolutionAt(ctx context.Context, h md.Horizon) (int64, bool, error) {
+	var ts sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT MIN(resolved_at) FROM prediction_outcomes
+		WHERE horizon=? AND resolved_at IS NOT NULL AND up IS NOT NULL`,
+		string(h)).Scan(&ts)
+	if err != nil {
+		return 0, false, err
+	}
+	return ts.Int64, ts.Valid, nil
 }
 
 // DirectionalRecord grades resolved predictions for one horizon. `since`
@@ -75,5 +102,31 @@ func (s *Store) DirectionalRecord(ctx context.Context, h md.Horizon, since int64
 	if calErr != nil {
 		r.CalibrationErr = *calErr
 	}
-	return r, nil
+
+	// The same dedup, folded per day, so the caller can measure how much of N
+	// is one market move counted many times.
+	qDays := `
+	WITH dedup AS (
+	  SELECT ts/86400 AS day, prob, up,
+	         ROW_NUMBER() OVER (PARTITION BY symbol_id, ts/86400 ORDER BY ts DESC) rn
+	  FROM prediction_outcomes
+	  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
+	    AND prob IS NOT NULL AND resolved_at >= ?
+	)
+	SELECT day, COUNT(*),
+	       SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END)
+	FROM dedup WHERE rn = 1 GROUP BY day ORDER BY day`
+	rows, err := s.db.QueryContext(ctx, qDays, string(h), since)
+	if err != nil {
+		return r, err
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var d clusterstat.Day
+		if err := rows.Scan(&d.Day, &d.N, &d.Hits); err != nil {
+			return r, err
+		}
+		r.Days = append(r.Days, d)
+	}
+	return r, rows.Err()
 }

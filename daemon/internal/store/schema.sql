@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS worker_runs (
   started_at  INTEGER NOT NULL,
   finished_at INTEGER,
   status      TEXT NOT NULL DEFAULT 'running',
-  detail      TEXT NOT NULL DEFAULT ''
+  detail      TEXT NOT NULL DEFAULT '',
+  revision    TEXT NOT NULL DEFAULT ''  -- writing binary's lineage.RevisionStamp ('' = unknown)
 );
 CREATE INDEX IF NOT EXISTS idx_worker_runs ON worker_runs (worker, started_at DESC);
 
@@ -413,7 +414,11 @@ CREATE TABLE IF NOT EXISTS prediction_ledger (
   feature_hash  TEXT,               -- sha256 of the persisted feature-vector JSON
   model_version INTEGER,            -- ledgerModelVersion const at emit time
   prev_hash     TEXT,               -- entry_hash of seq-1 ("" for the genesis row)
-  entry_hash    TEXT    NOT NULL    -- sha256(prev_hash ‖ canonical-json of this entry) — the chain link
+  entry_hash    TEXT    NOT NULL,   -- sha256(prev_hash ‖ canonical-json of this entry) — the chain link
+  revision      TEXT                -- writing binary's lineage.RevisionStamp (see regime_outcomes.revision).
+                                    -- NOT part of the chained payload: entry_hash is frozen by its 2026 definition
+                                    -- and re-including a new field would break every prior link. The stamp is
+                                    -- provenance, not a claim, so it rides beside the chain rather than inside it.
 );
 CREATE INDEX IF NOT EXISTS idx_prediction_ledger_sym
   ON prediction_ledger (symbol_id, horizon, seq DESC);
@@ -1380,7 +1385,24 @@ CREATE TABLE IF NOT EXISTS regime_outcomes (
   rank                REAL    NOT NULL,
   resolved_at         INTEGER,            -- NULL until graded
   actual              TEXT,               -- realized regime label (NULL until graded)
-  correct             INTEGER             -- 1/0 (NULL until graded)
+  correct             INTEGER,            -- 1/0 (NULL until graded)
+  -- NAIVE-PERSISTENCE NULL, frozen at call time alongside the call (2026-07-27).
+  -- The "nothing changes" guess: the label the CURRENT state already carries at
+  -- the call bar (structregime.Naive*At). It exists so a structural predictor can
+  -- receive a FAILING verdict — without a baseline the grader could only ever
+  -- compare live accuracy to its own backtest claim. Frozen, never recomputed;
+  -- graded against `actual` by the same resolver output. NULL = no baseline was
+  -- computable at freeze time (honest absence, excluded from the benchmark tally,
+  -- never scored as a miss).
+  naive_label         TEXT,
+  -- CODE REVISION that froze this row (lineage.RevisionStamp): the bare
+  -- vcs.revision of the writing binary, that revision plus "+dirty" when it was
+  -- built from a modified checkout, or NULL when the binary embedded no
+  -- revision. Added 2026-07-27; rows frozen before that keep NULL, which is the
+  -- truthful state — the code behind them is not recoverable and cannot be
+  -- invented. The grader refuses to publish a verdict from post-epoch rows whose
+  -- stamp is dirty, empty, or names a commit this repository does not contain.
+  revision            TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_regime_outcomes_dedup
   ON regime_outcomes (symbol_id, kind, day);
@@ -1388,6 +1410,42 @@ CREATE INDEX IF NOT EXISTS idx_regime_outcomes_unresolved
   ON regime_outcomes (resolved_at) WHERE resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_regime_outcomes_resolved
   ON regime_outcomes (kind, resolved_at) WHERE resolved_at IS NOT NULL;
+
+-- ═══ NULL-QUARANTINE MANIFEST (frozen, non-extendable) ════════════════════════
+-- A silent INSERT-OR-IGNORE no-op in the freeze path wrote 1,157 post-amendment
+-- regime_outcomes rows with a NULL naive_label before the write-path guard
+-- existed. Those rows cannot be repaired: a persistence baseline computed today
+-- for a call made weeks ago is hindsight, not a null, so backfilling is refused.
+-- They also cannot be waved through, because the startup invariant that every
+-- post-amendment structural row carries a matched null is the thing that makes a
+-- FAILING verdict reachable.
+--
+-- So the historical set is FROZEN here, once, exactly as it stood: one row per
+-- affected outcome, plus a manifest digest that is appended to the
+-- pre-registration hash chain. The set is never extended — the writer refuses to
+-- populate a second time, and any change to these rows re-digests, fails the
+-- worker's per-tick verification, and appears on the chain as an AMENDMENT.
+--
+-- Quarantined rows are NOT relabelled and NOT backfilled. They keep their NULL
+-- naive_label, keep grading as NO BASELINE, and stay excluded from every
+-- structural benchmark denominator. The manifest raises no number; it only makes
+-- one historical data event an immutable, publicly-countable fact so the guard
+-- can stay absolutely strict for every FUTURE row.
+CREATE TABLE IF NOT EXISTS regime_outcome_quarantine (
+  outcome_id INTEGER PRIMARY KEY REFERENCES regime_outcomes(id),
+  symbol_id  INTEGER NOT NULL,
+  kind       TEXT    NOT NULL,
+  day        INTEGER NOT NULL,
+  frozen_ts  INTEGER NOT NULL   -- when the set was frozen (never the call time)
+);
+-- Single-row manifest. id is pinned to 1 so a second freeze is a primary-key
+-- violation rather than a second opinion.
+CREATE TABLE IF NOT EXISTS regime_outcome_quarantine_manifest (
+  id        INTEGER PRIMARY KEY CHECK (id = 1),
+  digest    TEXT    NOT NULL,   -- sha256 over the canonical member rendering
+  n_rows    INTEGER NOT NULL,
+  frozen_ts INTEGER NOT NULL
+);
 
 -- ═══ REGIME-CALL POSTMORTEMS (credibility wave) ═══════════════════════════════
 -- One deterministic plain-English postmortem per HIGH-conviction (>=0.8) regime
@@ -1471,10 +1529,88 @@ CREATE TABLE IF NOT EXISTS research_loop_hypotheses (
   wilson_lower REAL    NOT NULL,
   survives     INTEGER NOT NULL,
   found_at     INTEGER NOT NULL,
-  last_seen    INTEGER NOT NULL
+  last_seen    INTEGER NOT NULL,
+  -- The Bonferroni divisor this rule actually cleared: grid size times every
+  -- search the loop has run over this corpus (research_loop_searches). It is
+  -- stored per row because the bar RISES every night — correcting for one
+  -- night's grid while taking many nights' chances is the multiplicity error
+  -- this column exists to make visible after the fact.
+  divisor      INTEGER NOT NULL DEFAULT 0,
+  -- The rest of the audit record. grid_size and weeks say how wide the search
+  -- was and how much history the rule was judged on; rejected_by names the
+  -- gate that killed it ('' when it survived), which is what makes a silent
+  -- re-test of an already-killed rule detectable; obs_window pins the exact
+  -- research_weeks span searched.
+  grid_size    INTEGER NOT NULL DEFAULT 0,
+  weeks        INTEGER NOT NULL DEFAULT 0,
+  rejected_by  TEXT    NOT NULL DEFAULT '',
+  obs_window   TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_loop_hyp_seen
   ON research_loop_hypotheses (last_seen DESC);
+-- NOTE: the index on rejected_by is created in store.go's migration block, NOT
+-- here. This file runs BEFORE the ALTER TABLE migrations, so on a live database
+-- whose research_loop_hypotheses predates the rejection-ledger wave the column
+-- does not exist yet and indexing it here fails the whole schema apply — which
+-- is exactly what kept this wave from ever reaching the live daemon.
+
+-- One row per research-loop PASS, including the passes that REFUSED to search.
+-- research_loop_hypotheses records what a search judged; this records that the
+-- search happened at all, over what corpus, and under which correction. Without
+-- it a null result leaves no durable trace — the only record was a free-text
+-- line in worker_runs, a table that is pruned — and a well-powered null is the
+-- strongest evidence an honest search can produce.
+--
+-- Deliberately NOT part of the derived-retention tiers in internal/maintain: it
+-- is an audit trail rather than derived data, and it grows at one row per day.
+CREATE TABLE IF NOT EXISTS research_loop_runs (
+  day             TEXT PRIMARY KEY,
+  ran_at          INTEGER NOT NULL,
+  grid_size       INTEGER NOT NULL,
+  divisor         INTEGER NOT NULL,
+  corrected_alpha REAL    NOT NULL,
+  obs_count       INTEGER NOT NULL,
+  obs_ts_from     INTEGER NOT NULL,
+  obs_ts_to       INTEGER NOT NULL,
+  survivors       INTEGER NOT NULL,
+  judged          INTEGER NOT NULL DEFAULT 0,
+  refusal_reason  TEXT    NOT NULL DEFAULT '',
+  git_rev         TEXT    NOT NULL DEFAULT '',
+  -- Worst-week point-in-time coverage of the corpus this pass searched:
+  -- symbols carrying a research row that week / symbols that actually printed
+  -- a daily bar that week. The pass row already says what was searched and
+  -- under which correction; this says how much of the market was in front of
+  -- the search. 0 on rows written before the measurement existed means
+  -- "unmeasured", not "no coverage".
+  corpus_coverage REAL    NOT NULL DEFAULT 0
+);
+
+-- One row per (day, rule) JUDGMENT — the append-only half of the rejection
+-- ledger. research_loop_hypotheses is keyed on the rule id and upserted, so it
+-- can only ever hold the LATEST verdict for a rule: a rule judged and killed on
+-- 200 consecutive nights leaves exactly one row there, and "has this dead rule
+-- been silently re-tested?" is unanswerable by construction. Here it is a
+-- COUNT(*). Nothing in this table is ever updated in place except by a same-day
+-- re-run of the same rule, which is the same look, not a new one.
+--
+-- Also the durable multiplicity source: COUNT(DISTINCT day) is a count of
+-- nights the grid was actually searched that no log-retention policy can prune
+-- back down, which is what keeps the Bonferroni divisor monotone.
+CREATE TABLE IF NOT EXISTS research_loop_judgments (
+  day          TEXT    NOT NULL,
+  rule_id      TEXT    NOT NULL,
+  status       TEXT    NOT NULL,
+  wilson_lower REAL    NOT NULL,
+  p0           REAL    NOT NULL,
+  divisor      INTEGER NOT NULL,
+  grid_size    INTEGER NOT NULL,
+  weeks        INTEGER NOT NULL,
+  rejected_by  TEXT    NOT NULL DEFAULT '',
+  obs_window   TEXT    NOT NULL DEFAULT '',
+  PRIMARY KEY (day, rule_id)
+);
+CREATE INDEX IF NOT EXISTS idx_loop_judgment_rule
+  ON research_loop_judgments (rule_id, day DESC);
 
 -- ── HONESTY-GAP WAVE (2026-07-25) ────────────────────────────────────────────
 -- The four tables behind PREDICTION_PROCESS.md's remaining gaps: a forecast
@@ -1707,3 +1843,69 @@ CREATE TABLE IF NOT EXISTS evidence_items (
   source_ref  TEXT    NOT NULL DEFAULT '',    -- file/table the number came from
   PRIMARY KEY (claim_id, idx)
 ) WITHOUT ROWID;
+
+-- Lineage spine (Layers 2+8)
+-- One edge table ties the three hypothesis registries, dataset windows,
+-- model legs, ledgered predictions, paper trades and evidence claims into a
+-- single traversable graph (lineage.Trace / GET /api/lineage). Node kinds and
+-- edge kinds are validated in internal/lineage — the table stores strings so
+-- the schema never has to migrate for a new kind. PERMANENT: never pruned by
+-- retention (see store/retention.go doctrine comment).
+CREATE TABLE IF NOT EXISTS lineage_edges (
+  src_kind   TEXT    NOT NULL,               -- feature|dataset_version|hypothesis|experiment|model|prediction|trade|claim
+  src_id     TEXT    NOT NULL,
+  dst_kind   TEXT    NOT NULL,
+  dst_id     TEXT    NOT NULL,
+  edge_kind  TEXT    NOT NULL,               -- generated_by|tested_in|produced|traded_as|graded_by|evidenced_by
+  created_at INTEGER NOT NULL,
+  meta_json  TEXT    NOT NULL DEFAULT '',    -- e.g. {"rev":"<git sha>"} — code version that wrote the edge
+  PRIMARY KEY (src_kind, src_id, dst_kind, dst_id, edge_kind)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_lineage_edges_dst ON lineage_edges(dst_kind, dst_id);
+
+-- Decision Engine (Layer 1)
+-- ═══ EV DECISIONS (internal/ev) ═══════════════════════════════════════════
+-- Every entry/exit verdict the EV gate renders — INCLUDING every DO_NOTHING —
+-- so refusals become auditable: "what did not trading cost" is a query, not a
+-- shrug (ARCHITECTURE_EV.md Layer 1/Layer 9). `inputs_json` snapshots the full
+-- assessment with its has-flags, so a missing input is visibly missing rather
+-- than a zero; `net_ev` is NULL when it was not measurable. Symbol text is
+-- denormalized at write time so the row stays readable if the universe changes.
+CREATE TABLE IF NOT EXISTS ev_decisions (
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts          INTEGER NOT NULL,   -- decision time (the pass's as-of clock)
+  strategy    TEXT    NOT NULL,   -- e.g. flagship-1d
+  symbol_id   INTEGER NOT NULL,
+  symbol      TEXT    NOT NULL,
+  horizon     TEXT    NOT NULL,
+  decision    TEXT    NOT NULL,   -- BUY | SELL | DO_NOTHING
+  reason      TEXT    NOT NULL,   -- enumerated ev.Reason label
+  net_ev      REAL,               -- NULL = unmeasurable (never a silent zero)
+  rank        INTEGER NOT NULL DEFAULT 0, -- 1-based net-EV rank within the pass (0 = unranked)
+  rank_of     INTEGER NOT NULL DEFAULT 0, -- candidates assessed in the pass
+  inputs_json TEXT    NOT NULL    -- full ev.Assessment snapshot incl. has-flags
+);
+CREATE INDEX IF NOT EXISTS idx_ev_decisions_ts ON ev_decisions(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_ev_decisions_symbol ON ev_decisions(symbol_id, ts DESC);
+
+-- Prediction attribution (Layer 6)
+-- Top-N named parts of one ledgered prediction's RAW blended probability:
+-- each row is a probability-delta from the neutral 0.5 prior (parts across a
+-- seq sum to raw_prob - 0.5 before top-N truncation). kind is
+-- component|gbm_feature|leg; method records how the parts were derived
+-- ('saabas' = Saabas path attribution for GBM feature parts — an approximation
+-- with disclosed depth-interaction bias, NOT exact SHAP).
+CREATE TABLE IF NOT EXISTS prediction_attributions (
+  ledger_seq   INTEGER NOT NULL,   -- prediction_ledger.seq this explains
+  rank         INTEGER NOT NULL,   -- 0 = largest |contribution|
+  symbol_id    INTEGER NOT NULL,
+  horizon      TEXT    NOT NULL,
+  ts           INTEGER NOT NULL,   -- the prediction's bar ts
+  name         TEXT    NOT NULL,   -- comp_* / gbm_<feature> / leg name
+  kind         TEXT    NOT NULL,   -- component | gbm_feature | leg
+  contribution REAL    NOT NULL,   -- probability delta from the 0.5 prior
+  method       TEXT    NOT NULL DEFAULT 'saabas',
+  PRIMARY KEY (ledger_seq, rank)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_pred_attr_symbol
+  ON prediction_attributions(symbol_id, horizon, ledger_seq);

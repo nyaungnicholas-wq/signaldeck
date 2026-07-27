@@ -51,10 +51,11 @@ func newRespCache(ttl time.Duration) *respCache {
 // entry can ever be mid-build while this runs.
 //
 // C6 (2026-07-26 review) called this map out as unbounded. It has no live
-// instance today — registerHonestyCache is a test seam and the live route runs
-// on sharedHonestySWR — so this is a latent leak, not a measured one. Bounding
-// it now is what stops re-wiring this cache from silently reintroducing the
-// 12-KB-per-junk-key growth the reviewer measured on the SWR maps.
+// instance today — the live route runs on sharedHonestySWR and only tests
+// construct a respCache — so this is a latent leak, not a measured one.
+// Bounding it now is what stops re-wiring this cache from silently
+// reintroducing the 12-KB-per-junk-key growth the reviewer measured on the
+// SWR maps.
 //
 // What this does NOT address, deliberately: serve() still builds under the
 // GLOBAL lock, so one slow key blocks every other key's hits. That is the flaw
@@ -138,15 +139,5 @@ func (d Deps) registerHonestyCached(mux *http.ServeMux) {
 	// lapse made the next visitor rebuild inline, ~22s) to the SWR body cache.
 	mux.HandleFunc("GET /api/honesty", func(w http.ResponseWriter, r *http.Request) {
 		sharedHonestySWR.serve(honestyCacheKey(r), w, r, d.honesty)
-	})
-}
-
-// registerHonestyCache wires the route against an injected cache (tests pass
-// their own instance to drive TTL behavior deterministically). It keys through
-// the same whitelist as the live route: a test seam that keys differently from
-// production tests something production does not do.
-func (d Deps) registerHonestyCache(mux *http.ServeMux, c *respCache) {
-	mux.HandleFunc("GET /api/honesty", func(w http.ResponseWriter, r *http.Request) {
-		c.serve(honestyCacheKey(r), w, r, d.honesty)
 	})
 }

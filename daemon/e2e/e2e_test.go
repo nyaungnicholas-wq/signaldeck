@@ -103,6 +103,14 @@ func startDaemon(t *testing.T, bin, home, dbPath string, port int) *daemon {
 		"HOME=" + home, // isolates config.Load's .env lookups → no keys
 		"PATH=" + os.Getenv("PATH"),
 		"TMPDIR=" + os.TempDir(),
+		// The daemon refuses to start from an unattributable build, because rows
+		// it freezes into the real DB could not then be graded (cmd/signaldeckd
+		// main.go). That guard is right in production and wrong here: this
+		// daemon writes to a throwaway temp DB whose rows are never graded by
+		// anything, and a working tree is dirty by definition while it is being
+		// worked on. Without this the entire e2e suite fails on every developer
+		// machine mid-change — which is how an e2e suite quietly stops being run.
+		"SIGNALDECK_ALLOW_DIRTY_BUILD=1",
 		"SIGNALDECK_DB=" + dbPath,
 		"SIGNALDECK_HTTP=" + addr,
 		"SIGNALDECK_ALLOWED_HOSTS=" + addr,

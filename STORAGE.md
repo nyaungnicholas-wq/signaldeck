@@ -23,8 +23,10 @@ archive grows past tens of GB or research queries over it become routine.
 
 ### Tiered retention (all windows env-tunable)
 
-Enforced by the `Downsampler` worker (`internal/maintain`), archive-before-prune
-at every tier:
+Enforced by three sibling workers in `internal/maintain` — the `Downsampler`
+(bars/snapshots/anomalies), the `ScoresCompactor` (near-tier blob strip +
+daily-downsample of the score tables), and `DerivedRetention` (far tier of the
+derived tables) — archive-before-prune at every tier:
 
 | Data | Hot window (default) | Env override | On expiry |
 |------|----------------------|--------------|-----------|
@@ -32,7 +34,17 @@ at every tier:
 | `bars` 1m | **60 days** | `SIGNALDECK_1M_RETENTION_D` | compact → 1h **+** archive raw → prune |
 | `bars` 1h | **3 years** | `SIGNALDECK_1H_RETENTION_D` | compact → 1d **+** archive raw → prune |
 | `bars` 1d (daily) | **forever** | — (refused in code) | never archived, never pruned |
-| feature store, sentiment_daily, scores/outcomes | **forever** | — | never pruned (the learning flywheel's training set) |
+| `anomalies` | **90 days** | `SIGNALDECK_ANOM_RETENTION_D` | archive → prune (descriptive detections, not market history) |
+| `scores` / `composite_scores` heavy JSON blobs | **2 days** | `SIGNALDECK_SCORES_HEAVY_RETENTION_D` | archive full rows → strip blobs (numeric row stays hot) |
+| `scores` / `composite_scores` intraday rows | **30 days** | `SIGNALDECK_SCORES_INTRADAY_RETENTION_D` | daily-downsample — keep the daily-last row per (symbol, horizon) |
+| `scores` + `score_outcomes` (far tier) | **90 days** | `SIGNALDECK_SCORES_RETENTION_D` | archive → prune |
+| `features` (resolved rows only) | **180 days** | `SIGNALDECK_FEATURES_RETENTION_D` | archive → prune (an unlabeled training row is never deleted) |
+| `filings` | **180 days** | `SIGNALDECK_FILINGS_RETENTION_D` | archive → prune |
+| `insights` | **90 days** | `SIGNALDECK_INSIGHTS_RETENTION_D` | archive → prune |
+| `prediction_postmortems` | **180 days** | `SIGNALDECK_POSTMORTEM_RETENTION_D` | archive → prune (the miss *explanations* age out; the predictions they explain stay) |
+| `research_weeks` | **7-year window** | `SIGNALDECK_RESEARCH_WEEKS_RETENTION_D` | archive → prune; the history-backfill recompute floor moves in lockstep so pruned rows never resurrect |
+| `predictions` + `prediction_outcomes` (the prediction ledger) | **forever** | — (by doctrine) | never pruned — the append-only track record |
+| `sentiment_daily` | **forever** | — | one small row per symbol-day; negligible growth |
 
 "Compact → coarser" means information is preserved in a smaller form *before* the
 raw rows are archived and pruned, so nothing is lost from the live store either —
@@ -133,6 +145,15 @@ statement, so nothing about today's format blocks that future.
 | `SIGNALDECK_SNAP_RETENTION_H` | `6` | snapshots_1s hot window (hours) |
 | `SIGNALDECK_1M_RETENTION_D` | `60` | 1m bars hot window (days) |
 | `SIGNALDECK_1H_RETENTION_D` | `1095` | 1h bars hot window (days) |
+| `SIGNALDECK_ANOM_RETENTION_D` | `90` | anomalies hot window (days) |
+| `SIGNALDECK_SCORES_HEAVY_RETENTION_D` | `2` | scores/composite full-blob hot window (days) |
+| `SIGNALDECK_SCORES_INTRADAY_RETENTION_D` | `30` | scores/composite intraday-row hot window (days) |
+| `SIGNALDECK_SCORES_RETENTION_D` | `90` | scores + score_outcomes far-tier hot window (days) |
+| `SIGNALDECK_FEATURES_RETENTION_D` | `180` | resolved-features hot window (days) |
+| `SIGNALDECK_FILINGS_RETENTION_D` | `180` | filings hot window (days) |
+| `SIGNALDECK_INSIGHTS_RETENTION_D` | `90` | insights hot window (days) |
+| `SIGNALDECK_POSTMORTEM_RETENTION_D` | `180` | prediction_postmortems hot window (days) |
+| `SIGNALDECK_RESEARCH_WEEKS_RETENTION_D` | `2555` | research_weeks active window (days, ~7y) |
 | `SIGNALDECK_VACUUM_THRESHOLD_MB` | `2048` | DB size above which the governor VACUUMs |
 
 Daily bars have no retention knob by design: `store.PruneBars` refuses `tf=1d`,

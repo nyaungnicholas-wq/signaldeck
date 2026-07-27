@@ -40,8 +40,18 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 	registeredBefore := true
 	firstGradable, _ := time.Parse("2006-01-02", prereg.FirstGradableOn)
 	for _, rec := range recs {
-		var spec prereg.Spec
-		_ = json.Unmarshal([]byte(rec.SpecJSON), &spec)
+		// The grading-protocol record carries a Protocol payload, not a Spec —
+		// decode it as what it is so its frozen text renders too.
+		var spec any
+		if rec.Kind == prereg.ProtocolKind {
+			var p prereg.Protocol
+			_ = json.Unmarshal([]byte(rec.SpecJSON), &p)
+			spec = p
+		} else {
+			var s prereg.Spec
+			_ = json.Unmarshal([]byte(rec.SpecJSON), &s)
+			spec = s
+		}
 		when := time.Unix(rec.Ts, 0).UTC()
 		before := when.Before(firstGradable)
 		if !before {

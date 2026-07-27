@@ -282,9 +282,9 @@ func TestDownsamplerTieredSnapshotArchiveThenPrune(t *testing.T) {
 			return nil
 		}
 		fp, _ := os.Open(p)
-		defer fp.Close()
+		defer func() { _ = fp.Close() }()
 		gz, _ := gzip.NewReader(fp)
-		defer gz.Close()
+		defer func() { _ = gz.Close() }()
 		recs, _ := csv.NewReader(gz).ReadAll()
 		for _, r := range recs[1:] { // skip header
 			if r[2] == itoa(oldTs) {
@@ -478,9 +478,9 @@ func TestDownsamplerArchiveConservesRowsAcrossBatches(t *testing.T) {
 			return nil
 		}
 		fp, _ := os.Open(p)
-		defer fp.Close()
+		defer func() { _ = fp.Close() }()
 		gz, _ := gzip.NewReader(fp)
-		defer gz.Close()
+		defer func() { _ = gz.Close() }()
 		recs, _ := csv.NewReader(gz).ReadAll()
 		for _, r := range recs[1:] { // skip header
 			total++
@@ -615,9 +615,9 @@ func TestDownsamplerAnomaliesTierArchiveThenPrune(t *testing.T) {
 			return nil
 		}
 		fp, _ := os.Open(p)
-		defer fp.Close()
+		defer func() { _ = fp.Close() }()
 		gz, _ := gzip.NewReader(fp)
-		defer gz.Close()
+		defer func() { _ = gz.Close() }()
 		recs, _ := csv.NewReader(gz).ReadAll()
 		for _, r := range recs[1:] { // id,symbol_id,symbol,ts,kind,z,detail
 			if r[3] == itoa(oldTs) && r[4] == "anomaly_vol" && r[2] == "AAPL" && r[6] == "old detection" {
@@ -640,5 +640,83 @@ func TestDownsamplerAnomaliesTierArchiveThenPrune(t *testing.T) {
 	}
 	if got := countArchiveFiles(t, root, "anomalies"); got != 2 {
 		t.Fatalf("second prune must add a second archive file, got %d", got)
+	}
+}
+
+// fakeQuiescer stands in for the worker Runner: it records that the window was
+// requested and runs the work inside it.
+type fakeQuiescer struct {
+	calls  int
+	except []string
+}
+
+func (q *fakeQuiescer) QuiesceDo(ctx context.Context, d time.Duration, fn func(context.Context), except ...string) error {
+	q.calls++
+	q.except = except
+	if fn != nil {
+		fn(ctx)
+	}
+	return nil
+}
+
+// The checkpoint ladder must walk PASSIVE → RESTART → TRUNCATE and REPORT which
+// rungs ran with the frames each moved. The old single-rung design attempted
+// only TRUNCATE, which requires a reader-free instant the fleet never yields:
+// measured 0 successes in 22 passes while the WAL reached 5,396MB.
+func TestStorageGovernorCheckpointLadder(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	sym, _ := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
+	for i := 0; i < 50; i++ {
+		_ = st.UpsertBars(ctx, []md.Bar{{SymbolID: sym.ID, TF: md.TF1m, Ts: int64(60 * i), Close: float64(i)}})
+	}
+
+	q := &fakeQuiescer{}
+	g := &StorageGovernor{St: st, Quiescer: q}
+	msg, err := g.Run(ctx)
+	if err != nil {
+		t.Fatalf("governor run: %v", err)
+	}
+	for _, want := range []string{"PASSIVE", "frames"} {
+		if !contains(msg, want) {
+			t.Fatalf("ladder report %q missing %q", msg, want)
+		}
+	}
+	// PASSIVE may empty the WAL outright on a quiet temp DB, in which case the
+	// upper rungs are correctly skipped; otherwise TRUNCATE must have run inside
+	// the quiesce window.
+	if contains(msg, "TRUNCATE") && q.calls != 1 {
+		t.Errorf("TRUNCATE ran with %d quiesce windows, want exactly 1", q.calls)
+	}
+	if q.calls > 0 && (len(q.except) != 1 || q.except[0] != g.Name()) {
+		t.Errorf("quiesce except=%v, want the governor itself (else it waits on its own run)", q.except)
+	}
+}
+
+// After walIneffectiveRuns consecutive passes that reclaim ZERO frames while the
+// WAL GROWS, the governor must raise its own dq event — the "the mechanism does
+// nothing" state that went unobserved for 22 straight passes, distinct from the
+// existing size-threshold wal_checkpoint_busy alert.
+func TestStorageGovernorFlagsIneffectiveCheckpoints(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	g := &StorageGovernor{St: st}
+
+	var wal int64
+	for i := 0; i < walIneffectiveRuns; i++ {
+		wal += 1 << 20 // WAL grew, nothing reclaimed
+		g.trackEffectiveness(ctx, 0, wal)
+	}
+	var n int
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM dq_events WHERE kind='wal_checkpoint_ineffective'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("wal_checkpoint_ineffective events = %d, want 1 after %d dead passes", n, walIneffectiveRuns)
+	}
+	// A pass that actually reclaims frames resets the streak.
+	g.trackEffectiveness(ctx, 5, wal+1<<20)
+	if v, _ := st.GetMeta(ctx, "storage_wal_ineffective_runs"); v != "0" {
+		t.Errorf("streak = %q after a productive pass, want reset to 0", v)
 	}
 }

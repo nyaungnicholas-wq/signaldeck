@@ -3,12 +3,17 @@ package researchlab
 import (
 	"math"
 	"testing"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/gbm"
 )
 
 func approx(a, b, tol float64) bool { return math.Abs(a-b) < tol }
 
 // synthetic rows: label depends deterministically on a "signal" feature plus a
-// pure-"noise" feature that carries nothing. n rows, ascending ts.
+// pure-"noise" feature that carries nothing. n rows, ascending ts, one row per
+// UTC DAY — the gate now evaluates its bound at the day-clustered effective
+// sample size, so a fixture whose rows all land on one day would (correctly)
+// get every bound withheld and test nothing.
 func syntheticRows(n int) []Row {
 	rows := make([]Row, n)
 	for i := 0; i < n; i++ {
@@ -25,7 +30,7 @@ func syntheticRows(n int) []Row {
 		if i%7 < 3 {
 			noise = 1.0
 		}
-		rows[i] = Row{Ts: int64(i), Y: y, Vec: map[string]float64{
+		rows[i] = Row{Ts: int64(i) * 86400, Y: y, Vec: map[string]float64{
 			"signal": sig, "noise": noise,
 		}}
 	}
@@ -76,11 +81,11 @@ func TestJudge_RejectsNoiseAblation(t *testing.T) {
 	rows := syntheticRows(240)
 	keys := CanonicalKeys(rows)
 	cfg := DefaultEvalConfig()
-	// syntheticRows are spaced one second apart, so a 1s label span makes each
+	// syntheticRows are spaced one day apart, so a 1-day label span makes each
 	// row's label resolve before the next one begins — no overlap to purge.
 	// Declaring it is not optional: the evaluator now REFUSES to grade samples
 	// with no stated horizon rather than compute a Lift across leaked rows.
-	cfg.LabelSpan = 1
+	cfg.LabelSpan = 86400
 	base, err := Baseline(rows, keys, cfg)
 	if err != nil {
 		t.Fatalf("baseline: %v", err)
@@ -116,16 +121,38 @@ func TestNormalQuantile(t *testing.T) {
 	}
 }
 
-// wilsonLower is below phat and rises toward phat as n grows.
-func TestWilsonLower(t *testing.T) {
-	z := 1.96
-	small := wilsonLower(0.7, 20, z)
-	large := wilsonLower(0.7, 2000, z)
-	if !(small < 0.7 && large < 0.7 && large > small) {
-		t.Fatalf("wilson monotonicity broken: small=%.3f large=%.3f", small, large)
+// The gate's lower bound is DAY-CLUSTERED: reconcilable per-day tallies yield a
+// bound at effective N, below the point estimate; a grade without them gets no
+// bound and cannot survive however good its raw numbers look — falling back to
+// raw N is the A1 defect this gate was the last to shed.
+func TestClusteredLowerBound(t *testing.T) {
+	g := Grade{N: 200, Accuracy: 0.7, Lift: 0.2}
+	for d := int64(0); d < 20; d++ {
+		g.DayTallies = append(g.DayTallies, gbm.DayTally{Day: d, N: 10, Hits: 7})
 	}
-	if wilsonLower(0.7, 0, z) != 0 {
-		t.Fatal("n=0 must yield 0")
+	lo, deff, effN, ok := clusteredLower(g, 1.96)
+	if !ok || !(lo > 0 && lo < 0.7) {
+		t.Fatalf("clustered lower bound wrong: lo=%.3f ok=%v", lo, ok)
+	}
+	if deff < 1 || effN <= 0 || effN > 200 {
+		t.Fatalf("deff=%.3f effN=%.1f — effective N must be N/deff with deff >= 1", deff, effN)
+	}
+
+	// No tallies: no bound, and Judge refuses to promote.
+	bare := Grade{N: 200, Accuracy: 0.99, Lift: 0.5}
+	if _, _, _, ok := clusteredLower(bare, 1.96); ok {
+		t.Fatal("a grade without per-day tallies must not get a bound")
+	}
+	d := Judge(Hypothesis{Kind: KindAblation}, bare, Grade{Accuracy: 0.5, N: 200}, Multiplicity{Batch: 1})
+	if d.Survives || d.Bound != "withheld" {
+		t.Fatalf("a tally-less grade must be withheld, got bound=%q survives=%v", d.Bound, d.Survives)
+	}
+
+	// Irreconcilable tallies are a caller bug, not a sample.
+	bad := g
+	bad.N = 150
+	if _, _, _, ok := clusteredLower(bad, 1.96); ok {
+		t.Fatal("tallies that do not reconcile with N must not get a bound")
 	}
 }
 

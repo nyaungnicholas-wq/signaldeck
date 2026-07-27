@@ -99,7 +99,7 @@ func xsFactorMarket(r *http.Request) string {
 // without it a test with its own isolated store would be served another test's
 // body (the predictions cache keys the same way).
 func xsFactorCacheKey(st *store.Store, r *http.Request) string {
-	return fmt.Sprintf("%p|%s|%s|%d", st, xsFactorHorizon(r), xsFactorMarket(r),
+	return fmt.Sprintf("%s|%s|%s|%d", st.CacheKey(), xsFactorHorizon(r), xsFactorMarket(r),
 		limitParam(r, xsFactorDefaultLimit, xsFactorMaxLimit))
 }
 
@@ -109,7 +109,7 @@ func xsFactorCacheKey(st *store.Store, r *http.Request) string {
 func xsFactorWarmKey(st *store.Store) string {
 	req, err := http.NewRequest(http.MethodGet, "/api/xs-factor", nil)
 	if err != nil {
-		return fmt.Sprintf("%p|%s|%s|%d", st, xsfactor.H21d, md.Stocks, xsFactorDefaultLimit)
+		return fmt.Sprintf("%s|%s|%s|%d", st.CacheKey(), xsfactor.H21d, md.Stocks, xsFactorDefaultLimit)
 	}
 	return xsFactorCacheKey(st, req)
 }

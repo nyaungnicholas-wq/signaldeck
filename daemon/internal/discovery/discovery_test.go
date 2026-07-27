@@ -100,7 +100,7 @@ func (f *fakeAlpaca) server(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1beta1/screener/stocks/most-actives", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("APCA-API-KEY-ID") == "" {
-			http.Error(w, "no auth", 403)
+			http.Error(w, "no auth", http.StatusForbidden)
 			return
 		}
 		if r.URL.Query().Get("by") != "volume" {

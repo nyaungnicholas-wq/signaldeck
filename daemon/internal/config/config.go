@@ -46,6 +46,16 @@ type Config struct {
 	RateRPS     int  // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
 	RateBurst   int  // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
 
+	// MCP server (internal/mcp) — advisory methodology + current regime
+	// verdicts for AI clients. OFF unless explicitly enabled, because it is
+	// the one surface designed to be consumed by a third party's agent and a
+	// default-on third-party interface is not a default anyone chose.
+	MCPEnabled      bool     // SIGNALDECK_MCP_ENABLED (default false)
+	MCPSecret       string   // SIGNALDECK_MCP_SECRET: HMAC key signing client keys; empty = no key can verify
+	MCPAuditPath    string   // SIGNALDECK_MCP_AUDIT: append-only JSONL audit sink
+	MCPDailyCalls   int      // SIGNALDECK_MCP_DAILY_CALLS: per-client daily call cap (0 = default)
+	MCPRevoked      []string // SIGNALDECK_MCP_REVOKED: comma-separated revoked client ids
+
 	// LLM layer (OpenAI-compatible; NVIDIA by default). Empty key = the AI
 	// agents stay in safe no-op mode.
 	LLMKey       string   // first key (kept for LLMEnabled + display)
@@ -139,6 +149,15 @@ func Load() Config {
 		TrustProxy:      boolEnv("SIGNALDECK_TRUST_PROXY", false),
 		RateRPS:         atoiOr(os.Getenv("SIGNALDECK_RATE_RPS"), 0),
 		RateBurst:       atoiOr(os.Getenv("SIGNALDECK_RATE_BURST"), 0),
+		// The MCP server never inherits an "open on loopback" default the way
+		// PublicReads does. Exposing an interface built for someone else's AI
+		// agent is a decision with compliance implications, so it is made once,
+		// explicitly, by setting this.
+		MCPEnabled:    boolEnv("SIGNALDECK_MCP_ENABLED", false),
+		MCPSecret:     pick("SIGNALDECK_MCP_SECRET", ""),
+		MCPAuditPath:  pick("SIGNALDECK_MCP_AUDIT", filepath.Join(home, "claude code", "signaldeck", "logs", "mcp_audit.jsonl")),
+		MCPDailyCalls: atoiOr(os.Getenv("SIGNALDECK_MCP_DAILY_CALLS"), 0),
+		MCPRevoked:    splitList(pick("SIGNALDECK_MCP_REVOKED", "")),
 	}
 	cfg.AlpacaKey = os.Getenv("ALPACA_KEY")
 	cfg.AlpacaSecret = os.Getenv("ALPACA_SECRET")
@@ -323,3 +342,10 @@ func tunnelConfigured() bool {
 func reachablePrivately(addr string) bool {
 	return loopbackOnly(addr) && !tunnelConfigured()
 }
+
+// ReachablePrivately is the exported form of the safe-by-default signal, for
+// packages outside config that must inherit the same posture — notably the MCP
+// server, which permits an anonymous caller only when this is true. Exported as
+// a function over the ADDRESS rather than as a stored bool so a caller cannot
+// hold a stale copy taken before the tunnel agent appeared.
+func (c Config) ReachablePrivately() bool { return reachablePrivately(c.HTTPAddr) }

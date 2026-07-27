@@ -168,7 +168,7 @@ func TestSPYDailyCloses_ReturnsAscendingSeries(t *testing.T) {
 		t.Fatalf("want 3 SPY bars, got %d/%d", len(ts), len(closes))
 	}
 	// Ascending by ts.
-	if !(ts[0] < ts[1] && ts[1] < ts[2]) {
+	if ts[0] >= ts[1] || ts[1] >= ts[2] {
 		t.Fatalf("SPY series not ascending: %v", ts)
 	}
 	if closes[0] != 400 || closes[2] != 420 {

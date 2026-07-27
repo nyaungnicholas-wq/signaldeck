@@ -132,6 +132,55 @@ else
 fi
 rm -rf "$d5"
 
+# ── Case 6: the self-test-fixture exclusion is PATH-SCOPED ──────────────
+#    This file plants synthetic nvapi-/whsec_ strings on purpose, so the
+#    scanner excludes it by exact path — otherwise it prints DO NOT PUBLISH
+#    on a clean repo forever and everyone learns to ignore it. The risk of
+#    that exclusion is that it quietly widens into "*-test.sh" or "ops/*"
+#    and blinds the scan. All three assertions below must hold together:
+#      6a the excluded path itself does not trip the scan,
+#      6b the SAME planted strings in a near-miss neighbouring path do,
+#      6c and they do from git history too, not just the working tree.
+PLANTED='export SIGNALDECK_NVIDIA_KEY=nvapi-zZ9yYx8wWv7uUt6sSr5qQp4o
+export SIGNALDECK_TV_WEBHOOK_SECRET=whsec_1a2b3c4d5e6f7081bb55dd'
+
+d6=$(mktemp -d)
+init_repo "$d6"
+printf '%s\n' "$PLANTED" > "$d6/ops/pre-publish-scan-test.sh"
+git -C "$d6" add -A && git -C "$d6" commit -q -m "add self-test fixture"
+out6=$(run_scan "$d6"); rc6=$?
+if [ "$rc6" -eq 0 ]; then
+  check_pass "6a excluded fixture path: planted secrets do NOT fail the scan"
+else
+  check_fail "6a excluded fixture path: expected exit 0, got exit=$rc6"
+  printf '%s\n' "$out6" | sed 's/^/      /'
+fi
+
+# 6b: one character off the excluded path — must still fail.
+printf '%s\n' "$PLANTED" > "$d6/ops/pre-publish-scan-test-scope.sh"
+git -C "$d6" add -A && git -C "$d6" commit -q -m "planted in a neighbouring path"
+out6b=$(run_scan "$d6"); rc6b=$?
+if [ "$rc6b" -ne 0 ] && printf '%s' "$out6b" | grep -q "pre-publish-scan-test-scope.sh"; then
+  check_pass "6b neighbouring path: same planted secrets still FAIL the scan"
+else
+  check_fail "6b neighbouring path: exclusion is not path-scoped (exit=$rc6b)"
+  printf '%s\n' "$out6b" | sed 's/^/      /'
+fi
+
+# 6c: delete the neighbouring file — the working tree is clean again, but
+# history still carries it, and the history scan must not inherit the
+# exclusion for a path that was never excluded.
+rm "$d6/ops/pre-publish-scan-test-scope.sh"
+git -C "$d6" add -A && git -C "$d6" commit -q -m "delete it (still in history)"
+out6c=$(run_scan "$d6"); rc6c=$?
+if [ "$rc6c" -ne 0 ] && printf '%s' "$out6c" | grep -qi "history"; then
+  check_pass "6c history scan: exclusion does not leak to other paths in history"
+else
+  check_fail "6c history scan: expected nonzero exit citing history, got exit=$rc6c"
+  printf '%s\n' "$out6c" | sed 's/^/      /'
+fi
+rm -rf "$d6"
+
 note ""
 note "pre-publish-scan self-test: $pass passed, $fail failed"
 exit "$([ "$fail" -eq 0 ] && echo 0 || echo 1)"

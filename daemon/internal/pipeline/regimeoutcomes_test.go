@@ -55,6 +55,11 @@ func TestRegimeOutcomeSnapshotIdempotent(t *testing.T) {
 	}
 
 	day0 := int64(1_700_000_000)
+	// A frozen call with no computable naive baseline is a refusal, not a
+	// snapshot (see the coverage invariant in Run), so the fixture carries the
+	// history the baseline needs: 282 daily bars ending the day AFTER the call.
+	seedRegimeBars(t, st, sym.ID, int(day0/86400)-280, 282,
+		func(i int) (float64, float64) { return 100.0 * math.Pow(1.002, float64(i)), 1e6 })
 	f := structregime.Forecast{Kind: structregime.KindTrend21, HorizonDays: 21,
 		Regime: "uptrend", Conviction: 0.91, HistoricalAccuracy: 0.972,
 		Tier: "very-high conviction", Rank: 0.91, N: 500}
@@ -90,6 +95,34 @@ func TestRegimeOutcomeSnapshotIdempotent(t *testing.T) {
 	}
 	if n := countOutcomes(t, st); n != 2 {
 		t.Fatalf("new UTC day must freeze a 2nd outcome, got %d", n)
+	}
+}
+
+// The matched-null invariant: a pass that freezes even one call without a
+// frozen naive-persistence baseline must FAIL, not succeed quietly. Partial
+// coverage means the benchmark denominator is a self-selected subset of the
+// rows the model is scored on, and a silent success would let that state
+// persist indefinitely — the registry could then never publish NO SKILL.
+func TestRegimeOutcomeRefusesUnmatchedNull(t *testing.T) {
+	ctx := context.Background()
+	st := newRegimeOutcomeStore(t, "nonull.db")
+	sym, _ := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
+
+	day0 := int64(1_700_000_000)
+	// No bars at all → NaiveTrendAt cannot produce a label.
+	if err := st.UpsertRegimeForecast(ctx, sym.ID, day0, structregime.Forecast{
+		Kind: structregime.KindTrend21, HorizonDays: 21, Regime: "uptrend",
+		Conviction: 0.91, HistoricalAccuracy: 0.972, Tier: "very-high conviction",
+		Rank: 0.91, N: 500}); err != nil {
+		t.Fatalf("forecast: %v", err)
+	}
+	w := &RegimeOutcomeWorker{St: st, Now: func() time.Time { return time.Unix(day0+100, 0) }}
+	_, err := w.Run(ctx)
+	if err == nil {
+		t.Fatal("a call frozen without a naive baseline must fail the worker run")
+	}
+	if !strings.Contains(err.Error(), "no naive-persistence baseline") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

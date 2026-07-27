@@ -109,7 +109,7 @@ func TestRecentFlagMarksLiveContamination(t *testing.T) {
 	for i := 0; i < RecentSessions+10; i++ {
 		closes = append(closes, 50)
 	}
-	if rep := Detect(series(closes, nil)); !(len(rep.Suspects) == 1 && !rep.Recent) {
+	if rep := Detect(series(closes, nil)); len(rep.Suspects) != 1 || rep.Recent {
 		t.Fatalf("old split should be found but not Recent: %+v", rep)
 	}
 }

@@ -360,7 +360,21 @@ func DesignEffect(days []Day) (deff float64, ok bool) {
 // after correction (887 on the live record, and far less on thinner surfaces)
 // and the normal interval misbehaves there and near 0/1.
 func WilsonEff(p, effN float64) Interval {
-	if effN <= 0 || math.IsNaN(p) {
+	return WilsonEffAt(p, effN, z95)
+}
+
+// WilsonEffAt is WilsonEff at a caller-supplied z — for gates that run at a
+// Bonferroni-corrected level rather than the house 95% (internal/researchlab's
+// corrected-alpha lower bound, internal/researchx's weekly discovery gate).
+//
+// This is the ONE Wilson implementation in the tree, by enforced invariant
+// (gates_test.go): every copy of this formula that lived in a decision gate was
+// a chance for that gate to be fed raw N, which is exactly how A1 shipped.
+// Callers that legitimately want a raw-count interval (a per-symbol record
+// whose design effect is 1 by construction, the registry-parity reference)
+// still route through here with effN = N so the arithmetic exists once.
+func WilsonEffAt(p, effN, z float64) Interval {
+	if effN <= 0 || z <= 0 || math.IsNaN(p) || math.IsNaN(z) {
 		return Interval{}
 	}
 	if p < 0 {
@@ -369,9 +383,9 @@ func WilsonEff(p, effN float64) Interval {
 	if p > 1 {
 		p = 1
 	}
-	denom := 1 + z95*z95/effN
-	center := (p + z95*z95/(2*effN)) / denom
-	half := (z95 * math.Sqrt(p*(1-p)/effN+z95*z95/(4*effN*effN))) / denom
+	denom := 1 + z*z/effN
+	center := (p + z*z/(2*effN)) / denom
+	half := (z * math.Sqrt(p*(1-p)/effN+z*z/(4*effN*effN))) / denom
 	lo, hi := center-half, center+half
 	if lo < 0 {
 		lo = 0

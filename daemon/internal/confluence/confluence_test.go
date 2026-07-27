@@ -185,12 +185,12 @@ func TestPredictionVote_CoinFlipIsPresentNeutral(t *testing.T) {
 
 func TestBreakoutVote_FreshnessAndKind(t *testing.T) {
 	// Stale breakout → absent (excluded), never a stale directional vote.
-	d, present, _ := breakoutVote(Inputs{BreakoutPresent: true, BreakoutKind: "donchian_up", BreakoutAgeDays: 9, BreakoutDir: +1})
+	_, present, _ := breakoutVote(Inputs{BreakoutPresent: true, BreakoutKind: "donchian_up", BreakoutAgeDays: 9, BreakoutDir: +1})
 	if present {
 		t.Fatalf("a %vd-old breakout should be absent (fresh window %v)", 9.0, breakoutFreshDays)
 	}
 	// Fresh donchian_up → +1.
-	d, present, _ = breakoutVote(Inputs{BreakoutPresent: true, BreakoutKind: "donchian_up", BreakoutAgeDays: 2, BreakoutDir: +1})
+	d, present, _ := breakoutVote(Inputs{BreakoutPresent: true, BreakoutKind: "donchian_up", BreakoutAgeDays: 2, BreakoutDir: +1})
 	if !present || d != 1 {
 		t.Fatalf("fresh donchian_up: dir/present = %d/%v, want +1/true", d, present)
 	}

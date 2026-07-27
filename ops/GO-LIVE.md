@@ -1,5 +1,35 @@
 # SignalDeck — Go-Live Guide (phone access + remote alerts)
 
+## 0. Deploying code: `ops/signaldeck-ctl.sh deploy` is the ONLY sanctioned path
+
+Do not `go build` in `daemon/` and restart the daemon by hand. That path is how
+the running binary came to differ from the reviewed source — mechanisms that
+existed in the working tree were never in the process producing rows, and a
+review of the source measured an artifact rather than the system.
+
+```
+ops/signaldeck-ctl.sh deploy
+```
+
+It refuses, in order, and only ever refuses — it can never make a result look
+better:
+
+1. **Dirty working tree** → refuse. A deploy must be reproducible from a commit
+   anyone else can check out.
+2. **Load-bearing path untracked** (`ops/manifest-check.sh`) → refuse.
+3. **`go test ./...` in `daemon/` non-zero** → refuse.
+4. Builds `signaldeckd` from a `git archive HEAD` extraction in a temp dir —
+   **not** from the working tree — and installs it to `bin/signaldeckd`.
+5. Restarts `com.signaldeck.daemon`, then `GET /api/version` and requires the
+   running `revision` to equal the commit just built with `resolvable: true`.
+   Anything else prints `deploy UNVERIFIED` and exits non-zero; do not treat an
+   unverified run as deployed.
+
+`/api/version` is the check anyone can repeat at any time: the `rowStamp` it
+returns is the exact string the process writes onto every ledger row, so a row
+can be tied to a commit without trusting the deployment.
+
+
 Everything below is prepared; the two ★ steps need YOUR accounts/credentials —
 Claude cannot (and should not) do them for you.
 
@@ -62,3 +92,13 @@ native app.
 
 ## Order of operations
 Tailscale (1) → open on phone → PWA install (3) → Telegram (2).
+
+## Recurring
+
+- [ ] **Quarterly: execute `ops/DR_RUNBOOK.md` on a second machine** — full
+      drill, not a read-through: restore the newest offsite backup on a Mac
+      that isn't this one, reinstall the launchd fleet, and verify the
+      restored ledger reproduces the last published external anchor. The
+      weekly `com.signaldeck.restore` rehearsal proves the *backup* restores;
+      only this drill proves the *procedure* (and the operator) can bring
+      SignalDeck back when this Mac is gone.

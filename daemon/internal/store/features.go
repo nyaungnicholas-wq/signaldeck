@@ -193,6 +193,14 @@ type DataStatsResult struct {
 	// Active tiered-retention windows (human-readable), so the growth panel
 	// shows exactly how long each tier stays hot before archive+prune.
 	Retention *RetentionWindows `json:"retention,omitempty"`
+
+	// Configured upper bound on the lifetime of ANY daemon read connection
+	// (seconds). Published so a WAL diagnosis can state as a FACT, not a
+	// hope, that no daemon reader has been open longer than N minutes — which
+	// is what lets a stalled checkpoint be attributed to (or cleared of) the
+	// daemon's own read pools.
+	ReadConnMaxLifetimeSec int `json:"readConnMaxLifetimeSec"`
+	ReadConnMaxIdleSec     int `json:"readConnMaxIdleSec"`
 }
 
 // RetentionWindows describes the active hot-store retention per tier, in the
@@ -238,7 +246,11 @@ var statTables = []struct{ name, tsCol string }{
 // and WAL file sizes — the raw material of the "data growth" panel that
 // makes storage permanence visible and provable.
 func (s *Store) DataStats(ctx context.Context) (DataStatsResult, error) {
-	res := DataStatsResult{GeneratedAt: time.Now().Unix()}
+	res := DataStatsResult{
+		GeneratedAt:            time.Now().Unix(),
+		ReadConnMaxLifetimeSec: int(ReadConnMaxLifetime / time.Second),
+		ReadConnMaxIdleSec:     int(ReadConnMaxIdleTime / time.Second),
+	}
 	for _, t := range statTables {
 		st := TableStat{Table: t.name}
 		if t.tsCol == "" {

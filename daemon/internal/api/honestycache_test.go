@@ -169,7 +169,7 @@ func TestCalibrationRoute_JunkQueryCannotMintCacheEntries(t *testing.T) {
 // The unbounded map the review called out separately: respCache never deleted
 // an entry and builds under a GLOBAL lock, so a caller that could reach it with
 // distinct keys grew it without limit. There is no production instance today
-// (registerHonestyCache is a test seam), which makes this a latent defect
+// (only tests construct a respCache), which makes this a latent defect
 // rather than a live one — bound it now so wiring it later cannot reintroduce
 // the leak.
 func TestRespCacheIsBounded(t *testing.T) {

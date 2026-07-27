@@ -69,7 +69,7 @@ const attributionLiveField = "byID"
 // it a test with its own isolated store would be served another test's
 // aggregation (the predictions and xs-factor caches key the same way).
 func attributionCacheKey(st *store.Store, h md.Horizon) string {
-	return fmt.Sprintf("%p|%s", st, h)
+	return fmt.Sprintf("%s|%s", st.CacheKey(), h)
 }
 
 // buildAttributionLive grades the resolved ledger for one horizon and returns
@@ -125,7 +125,7 @@ func (d Deps) currentStateFor(ctx context.Context, symbolID int64) map[md.Horizo
 	if d.CurrentState == nil {
 		return nil
 	}
-	payload, err := sharedCurrentStateCache.get(ctx, fmt.Sprintf("%p|%d", d.St, symbolID),
+	payload, err := sharedCurrentStateCache.get(ctx, fmt.Sprintf("%s|%d", d.St.CacheKey(), symbolID),
 		func(c context.Context) (map[string]any, error) {
 			states, serr := d.CurrentState(c, symbolID)
 			if serr != nil {

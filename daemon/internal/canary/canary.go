@@ -53,7 +53,6 @@ package canary
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 )
@@ -73,6 +72,15 @@ const (
 	// challenger's Wilson lower bound must clear the incumbent by. Small but
 	// non-zero: promoting on a hairline win invites promoting on noise.
 	MinMarginPp = 0.5
+	// ReadmitMinDistinctDays is the distinct-UTC-day floor of the RE-ADMISSION
+	// threshold — the one coded door back to emitting for a retired model, and
+	// identically the day floor a successor must clear to be promoted, so the
+	// canary gate and the re-admission gate can never disagree about the same
+	// record. It is 2x clusterstat.MinDistinctDays deliberately: ten days is
+	// the floor below which no interval exists at all, and a model that has
+	// already been retired on live evidence earns its way back at double that,
+	// not at the bare minimum where the interval first becomes computable.
+	ReadmitMinDistinctDays = 2 * clusterstat.MinDistinctDays
 )
 
 // Decision is the outcome of a canary evaluation.
@@ -113,8 +121,12 @@ type Record struct {
 	// TallyDays. An arm that omits it can be rejected and can be held, but can
 	// never be promoted — see Evaluate.
 	DayTallies []DayTally `json:"dayTallies,omitempty"`
-	// BaselineAccuracy is the naive majority-class accuracy over the SAME
+	// BaselineAccuracy is the majority-class accuracy over the SAME
 	// observations — the null any model must beat to be worth serving.
+	// Callers must fill it PREQUENTIALLY (each day's constant guess is the
+	// majority class over days strictly before it, as PrequentialBaseline
+	// does), never as max(base, 1-base) over the finished window — that hands
+	// the null hindsight the models never had.
 	BaselineAccuracy float64 `json:"baselineAccuracy"`
 }
 
@@ -393,28 +405,129 @@ func Evaluate(incumbent, challenger Record) Verdict {
 	case lo <= challenger.BaselineAccuracy:
 		v.Reason = "holding: the challenger does not clear the naive baseline, so replacing a failing incumbent with it would change nothing that matters"
 	case lo > incumbent.Accuracy()+margin:
+		// The promotion bar IS the re-admission threshold. A successor that
+		// clears the incumbent but not Readmit is held, not promoted: were
+		// promotion allowed at fewer days than re-admission, a retired model
+		// could reach production faster by re-badging itself as a successor
+		// than through the door built for it, and the two gates would disagree
+		// about the same record.
+		if ra := Readmit(challenger); !ra.Eligible {
+			v.Reason = "holding: the challenger clears the incumbent but not the re-admission threshold — " + ra.Reason
+			return v
+		}
 		v.Decision = DecisionPromote
 		v.Serving, v.Shadow = challenger.Version, ""
-		v.Reason = "promoted: the challenger's confidence interval clears both the incumbent's live accuracy and the naive baseline"
+		v.Reason = "promoted: the challenger's confidence interval clears the incumbent's live accuracy, the naive baseline, and the re-admission threshold"
 	default:
 		v.Reason = "holding: the challenger leads on the point estimate but not by more than its own confidence interval"
 	}
 	return v
 }
 
+// Readmission is the coded verdict on whether a retired model's shadow record
+// has earned emission back — or, identically, whether a successor's record
+// clears the promotion bar. Every number the decision turned on is in the
+// struct, designEffect and effectiveN included, because a threshold whose
+// inputs are not published is a judgment call with a constant in it.
+type Readmission struct {
+	Eligible bool `json:"eligible"`
+	// Lower/Upper are the day-clustered Wilson bounds of the shadow record —
+	// clusterstat.DesignEffect + WilsonEff, the same machinery as the canary
+	// interval, so the two gates read one estimator.
+	Lower float64 `json:"lower"`
+	Upper float64 `json:"upper"`
+	// Null is the prequential baseline the LOWER bound must clear.
+	Null float64 `json:"null"`
+	// DistinctDays is the shadow record's distinct-UTC-day count, judged
+	// against MinDistinctDays (= ReadmitMinDistinctDays).
+	DistinctDays    int    `json:"distinctDays"`
+	MinDistinctDays int    `json:"minDistinctDays"`
+	IntervalMethod  string `json:"intervalMethod"`
+	// DesignEffect and EffectiveN describe the sample the bounds were actually
+	// computed at: N/DesignEffect, never raw rows. Both 0 when withheld.
+	DesignEffect float64 `json:"designEffect"`
+	EffectiveN   float64 `json:"effectiveN"`
+	// Reason states the shortfall (or the clearance) in one sentence.
+	Reason string `json:"reason"`
+}
+
+// Readmit applies the re-admission threshold to a retired model's live shadow
+// record. Shadow rows keep accruing in prediction_outcomes after retirement
+// precisely so this can be a measurement instead of a judgment call: emitting
+// may flip back to true ONLY when the record's day-clustered CI lower bound
+// clears the prequential null on at least ReadmitMinDistinctDays distinct UTC
+// days. There is no discretionary path around any leg of that conjunction.
+func Readmit(shadow Record) Readmission {
+	lo, hi, method, deff, effN := shadow.Interval()
+	days := shadow.Days
+	if len(shadow.DayTallies) > 0 && len(shadow.DayTallies) < days {
+		// The tallies are the interval's actual input; a headline day count
+		// they cannot back does not get to satisfy the floor.
+		days = len(shadow.DayTallies)
+	}
+	r := Readmission{
+		Lower: lo, Upper: hi, Null: shadow.BaselineAccuracy,
+		DistinctDays: days, MinDistinctDays: ReadmitMinDistinctDays,
+		IntervalMethod: method, DesignEffect: deff, EffectiveN: effN,
+	}
+	switch {
+	case days < ReadmitMinDistinctDays:
+		r.Reason = fmt.Sprintf("not re-admitted: the shadow record covers %d distinct days, short of the %d the threshold requires — a streak below the day floor is not evidence however good it looks", days, ReadmitMinDistinctDays)
+	case method != "day-clustered-wilson":
+		r.Reason = "not re-admitted: the shadow record does not yield a day-clustered interval (per-day tallies missing or irreconcilable), and a row-count interval cannot re-admit what a day-clustered one retired"
+	case lo <= shadow.BaselineAccuracy:
+		r.Reason = fmt.Sprintf("not re-admitted: the day-clustered lower bound %.1f%% does not clear the prequential null %.1f%% (design effect %.1fx, effective n %.0f of %d rows)", lo*100, shadow.BaselineAccuracy*100, deff, effN, shadow.N)
+	default:
+		r.Eligible = true
+		r.Reason = fmt.Sprintf("re-admitted: the day-clustered lower bound %.1f%% clears the prequential null %.1f%% on %d distinct days (threshold %d; design effect %.1fx, effective n %.0f of %d rows)", lo*100, shadow.BaselineAccuracy*100, days, ReadmitMinDistinctDays, deff, effN, shadow.N)
+	}
+	return r
+}
+
+// PrequentialBaseline grades the hindsight-free constant guess over an arm's
+// day sequence (chronological): for each UTC day the guess is the majority
+// class over the days strictly before it — expected accuracy 0.5 on day one or
+// on a tied prior — and the return is that guess-sequence's pooled accuracy.
+// It mirrors prequential_null in tools/accuracy_registry.py deliberately, and
+// it lives HERE so the canary runner and the re-admission gate replay one
+// null: a registry verdict, a canary decision and a re-admission must never
+// disagree about the same numbers.
+func PrequentialBaseline(days []DayTally, dayUps map[int64]int) float64 {
+	var priorN, priorUps, n int
+	var hits float64
+	for _, d := range days {
+		ups := dayUps[d.Day]
+		switch {
+		case priorN == 0 || priorUps*2 == priorN:
+			hits += float64(d.N) / 2 // no majority to lean on yet — a coin flip
+		case priorUps*2 > priorN:
+			hits += float64(ups) // constant "up" guess
+		default:
+			hits += float64(d.N - ups) // constant "down" guess
+		}
+		n += d.N
+		priorN += d.N
+		priorUps += ups
+	}
+	if n == 0 {
+		return 0.5
+	}
+	return hits / float64(n)
+}
+
 // WilsonInterval returns the 95% Wilson score interval for k successes in n
 // trials — the same estimator the accuracy registry uses, so a canary decision
 // and a registry verdict can never disagree about the same numbers.
+//
+// It delegates to clusterstat.WilsonEffAt with effN = n: the RAW-count reading
+// is deliberate here (registry parity is its whole purpose, and nothing on a
+// decision path calls it — gates read Record.Interval, which is day-clustered),
+// but the arithmetic lives in clusterstat so the tree holds ONE Wilson
+// implementation, an invariant clusterstat's gates_test enforces.
 func WilsonInterval(k, n int) (lo, hi float64) {
 	if n <= 0 {
 		return 0, 1
 	}
-	const z = 1.959963984540054
-	p := float64(k) / float64(n)
-	nf := float64(n)
-	denom := 1 + z*z/nf
-	center := (p + z*z/(2*nf)) / denom
-	half := z * math.Sqrt(p*(1-p)/nf+z*z/(4*nf*nf)) / denom
-	lo, hi = center-half, center+half
-	return math.Max(0, lo), math.Min(1, hi)
+	iv := clusterstat.WilsonEffAt(float64(k)/float64(n), float64(n), 1.959963984540054)
+	return iv.Lo, iv.Hi
 }

@@ -26,7 +26,7 @@ func TestBuildFeatureVector_Stage6Features(t *testing.T) {
 	micro := map[string]float64{"micro_imbalance": 0.15, "micro_spread_bps": 3.2}
 	vix := map[string]float64{"vix_level": 0.18, "vix_high_vol": 0}
 
-	vec := buildFeatureVector(sc, c, 0.55, 0.55, 1, "", nil, 0, micro, vix)
+	vec := buildFeatureVector(sc, c, 0.55, 0.55, "", nil, 0, micro, vix)
 
 	for k, want := range map[string]float64{
 		"micro_imbalance":  0.15,
@@ -47,7 +47,7 @@ func TestBuildFeatureVector_Stage6Features(t *testing.T) {
 func TestBuildFeatureVector_UngatedLegAbsent(t *testing.T) {
 	gp, gl := 0.63, -0.02 // GBM had NO edge (lift<=0)
 	c := ensemble.Components{PressureScore: 0.1, GBMProb: &gp, GBMLift: &gl}
-	vec := buildFeatureVector(md.Score{Score: 0.1}, c, 0.5, 0.5, 1, "", nil, 0)
+	vec := buildFeatureVector(md.Score{Score: 0.1}, c, 0.5, 0.5, "", nil, 0)
 	if _, ok := vec["gbm_prob"]; ok {
 		t.Fatal("an edgeless GBM leg must not appear in the feature vector")
 	}
@@ -179,6 +179,55 @@ func TestCanonicalFeatureKeys_ExcludesModelOutputs(t *testing.T) {
 	}
 	if !got["pressure_score"] || !got["x"] {
 		t.Fatalf("canonical keys dropped genuine features: %v", keys)
+	}
+}
+
+// A7 REGRESSION — the four shortcut keys are DELETED at construction, not
+// gated: buildFeatureVector must not emit them even when the components carry
+// the forecast/expectancy legs, and the MODEL INPUT layout must contain no
+// banned key (base or presence bit) even over historical rows that still carry
+// every one of them. cmd/selfref-ablation measured what the deletion cost
+// (+0.026 mean lift, zero admission-gate flips); this pins both halves so the
+// defect class cannot silently return.
+func TestBannedKeys_DeletedNotGated(t *testing.T) {
+	// Construction side: forecast/expectancy legs present, keys still absent.
+	hr, fp, fl := 0.62, 0.71, 0.05
+	c := ensemble.Components{
+		PressureScore:     0.2,
+		ExpectancyHitRate: &hr,
+		ForecastProb:      &fp,
+		ForecastLift:      &fl,
+	}
+	vec := buildFeatureVector(md.Score{Score: 0.2}, c, 0.55, 0.55, "", nil, 0)
+	for _, k := range []string{"forecast_prob", "forecast_lift", "expectancy_hit_rate", "n_used"} {
+		if _, ok := vec[k]; ok {
+			t.Fatalf("A7 shortcut key %q must no longer be constructed", k)
+		}
+	}
+
+	// Training side: a historical-shaped row carrying every banned key must
+	// yield a model layout containing none of them, base or presence bit.
+	banned := []string{
+		"pred_raw", "pred_cal",
+		"gbm_prob", "meanrev_prob", "alphax_prob", "forecast_prob",
+		"forecast_lift", "expectancy_hit_rate", "n_used",
+	}
+	rowVec := map[string]float64{"pressure_score": 0.1, "x_feature": 0.2}
+	for _, k := range banned {
+		rowVec[k] = 0.5
+	}
+	keys := modelFeatureKeys([]store.LabeledFeature{{Vec: rowVec}})
+	got := map[string]bool{}
+	for _, k := range keys {
+		got[k] = true
+	}
+	for _, bad := range banned {
+		if got[bad] || got[bad+presenceSuffix] {
+			t.Fatalf("training feature list must not contain banned key %q (or its presence bit): %v", bad, keys)
+		}
+	}
+	if !got["x_feature"] || !got["x_feature"+presenceSuffix] {
+		t.Fatalf("genuine features must survive with their presence bits: %v", keys)
 	}
 }
 

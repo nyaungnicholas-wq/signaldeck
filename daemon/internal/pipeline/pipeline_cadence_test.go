@@ -19,7 +19,7 @@ func TestSignalRunner_DailyUniverseScoredOncePerDay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	hot, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "") // streamed hot set
 	if err != nil {

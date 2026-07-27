@@ -679,3 +679,13 @@ func AccuracyForTest(k Kind, conv float64) float64 {
 		return accuracyFor(k, conv)
 	}
 }
+
+// EvidenceCaveatText exposes the fixed caveat sentence so a surface OUTSIDE
+// this package (the MCP server) can ship it verbatim beside a stored accuracy
+// rather than paraphrasing it. A paraphrase of a caveat is how a caveat gets
+// softer with every copy.
+func EvidenceCaveatText() string { return evidenceCaveat }
+
+// FirstGradableOnDate exposes the mirrored first-gradable date for the same
+// reason.
+func FirstGradableOnDate() string { return firstGradableOn }

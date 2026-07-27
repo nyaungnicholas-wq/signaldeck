@@ -110,6 +110,148 @@ func TestRunOnce_RecordsSuccessDetail(t *testing.T) {
 	}
 }
 
+// boundedWorker overrides the per-run deadline so the timeout path is testable
+// in milliseconds instead of the default 3x-interval hours.
+type boundedWorker struct {
+	fakeWorker
+	timeout time.Duration
+}
+
+func (w boundedWorker) RunTimeout() time.Duration { return w.timeout }
+
+// TestRunOnce_TimeoutIsItsOwnStatus is the core of the deadline fix: a worker
+// that hangs while the DAEMON is healthy must be cut loose and recorded as
+// `timeout`, distinct from an ordinary returned error. Before this, the root
+// context went straight into Run, so such a worker stayed hung until restart
+// (measured: 662 worker_stale events, 0 automated recoveries).
+func TestRunOnce_TimeoutIsItsOwnStatus(t *testing.T) {
+	st := openTemp(t)
+	r := NewRunner(st)
+
+	w := boundedWorker{
+		fakeWorker: fakeWorker{name: "hung-worker", fn: func(ctx context.Context) (string, error) {
+			<-ctx.Done() // the run context, NOT the daemon's
+			return "", ctx.Err()
+		}},
+		timeout: 30 * time.Millisecond,
+	}
+	// Parent context stays ALIVE — this is a per-run deadline, not a shutdown.
+	r.runOnce(context.Background(), w)
+
+	status, detail, finished := lastRun(t, st, "hung-worker")
+	if !finished || status != "timeout" {
+		t.Fatalf("finished=%v status=%q, want a finished timeout row (detail=%q)", finished, status, detail)
+	}
+	if !strings.Contains(detail, "exceeded run deadline") {
+		t.Errorf("detail %q does not explain the deadline", detail)
+	}
+}
+
+// A worker with no timeout override gets a deadline derived from its interval,
+// floored and capped — and long-running workers stay exempt.
+func TestDefaultRunTimeout(t *testing.T) {
+	if got := defaultRunTimeout(0); got != 0 {
+		t.Errorf("long-running worker deadline = %v, want none", got)
+	}
+	if got := defaultRunTimeout(time.Minute); got != minRunTimeout {
+		t.Errorf("1m worker deadline = %v, want the %v floor", got, minRunTimeout)
+	}
+	if got := defaultRunTimeout(time.Hour); got != 3*time.Hour {
+		t.Errorf("1h worker deadline = %v, want 3h", got)
+	}
+	if got := defaultRunTimeout(24 * time.Hour); got != maxRunTimeout {
+		t.Errorf("24h worker deadline = %v, want the %v cap", got, maxRunTimeout)
+	}
+}
+
+// TestCancelOverdue is the actuator contract: a run that is merely long is left
+// alone, and only one already past its deadline is cancelled. Detection alone
+// recovered nothing; this is the half that acts.
+func TestCancelOverdue(t *testing.T) {
+	st := openTemp(t)
+	r := NewRunner(st)
+
+	// Checks ctx only COARSELY (the real failure shape: a long context-blind
+	// SQLite scan or HTTP read), so it is still in flight after its deadline.
+	started := make(chan struct{})
+	w := boundedWorker{
+		fakeWorker: fakeWorker{name: "overdue-worker", fn: func(ctx context.Context) (string, error) {
+			close(started)
+			time.Sleep(300 * time.Millisecond)
+			return "", ctx.Err()
+		}},
+		timeout: 50 * time.Millisecond,
+	}
+	done := make(chan struct{})
+	go func() { r.runOnce(context.Background(), w); close(done) }()
+	<-started
+
+	// Still inside its budget → must NOT be touched.
+	if _, ok := r.CancelOverdue("overdue-worker"); ok {
+		t.Fatal("cancelled a run that was still within its deadline")
+	}
+	// A worker that isn't running at all is a no-op.
+	if _, ok := r.CancelOverdue("nobody"); ok {
+		t.Fatal("cancelled a run that does not exist")
+	}
+
+	time.Sleep(80 * time.Millisecond) // now past the deadline
+	if _, ok := r.CancelOverdue("overdue-worker"); !ok {
+		t.Fatal("did not cancel an overdue run")
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled run never returned")
+	}
+	status, detail, _ := lastRun(t, st, "overdue-worker")
+	if status != "timeout" || !strings.Contains(detail, "watchdog") {
+		t.Fatalf("status=%q detail=%q, want a timeout row attributed to the watchdog", status, detail)
+	}
+}
+
+// TestQuiesceDo_HoldsFleetStill: no new run may START during a quiesce window,
+// and the work handed to QuiesceDo runs inside it. This is what manufactures
+// the reader-free instant a TRUNCATE checkpoint needs (measured 0/22 without).
+func TestQuiesceDo_HoldsFleetStill(t *testing.T) {
+	st := openTemp(t)
+	r := NewRunner(st)
+
+	var insideInFlight int
+	w := fakeWorker{name: "gated-worker", fn: func(ctx context.Context) (string, error) {
+		return "ran", nil
+	}}
+
+	held := make(chan struct{})
+	go func() {
+		_ = r.QuiesceDo(context.Background(), 150*time.Millisecond, func(context.Context) {
+			insideInFlight = r.InFlight()
+			close(held)
+		})
+	}()
+	<-held
+
+	ran := make(chan struct{})
+	go func() { r.runOnce(context.Background(), w); close(ran) }()
+	select {
+	case <-ran:
+		t.Fatal("a run started while the fleet was quiesced")
+	case <-time.After(60 * time.Millisecond):
+	}
+	if insideInFlight != 0 {
+		t.Errorf("quiesce window opened with %d runs still in flight", insideInFlight)
+	}
+	// …and it proceeds once the window closes.
+	select {
+	case <-ran:
+	case <-time.After(3 * time.Second):
+		t.Fatal("run never resumed after the quiesce window")
+	}
+	if status, _, finished := lastRun(t, st, "gated-worker"); !finished || status != "ok" {
+		t.Fatalf("gated worker status=%q finished=%v, want a normal ok run", status, finished)
+	}
+}
+
 // De-phasing: offsets are deterministic, bounded by both the cap and the
 // worker's own interval, and spread distinct workers across the window — the
 // fix for the measured boot stampede + permanent phase-lock.

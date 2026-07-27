@@ -572,6 +572,265 @@ func tsSpanScoreOutcomes(rs []store.ScoreOutcomeRow) (lo, hi int64) {
 	return
 }
 
+// ─── UNMANAGED-TABLE SWEEP (appended block — tiered-storage wave, phase 3) ───
+// Cold sinks for the reaudit's unmanaged tables: filings, insights,
+// prediction_postmortems and research_weeks. Identical fail-safe contract as
+// ArchiveBars: err != nil ⇒ NOTHING durably committed for the failing group,
+// so the caller must NOT prune. One file per (table, symbol, time-range);
+// market-scope insights (no symbol) group under the "market" file.
+
+var filingHeader = []string{"id", "symbol_id", "symbol", "form", "filed_ts", "title", "url", "label"}
+var insightHeader = []string{"id", "scope", "symbol_id", "symbol", "ts", "headline", "body", "data"}
+var postmortemHeader = []string{"symbol_id", "symbol", "horizon", "ts", "prob", "up", "fwd_return",
+	"conviction", "magnitude", "primary_reason", "secondary_reason", "reasons", "created_at"}
+var researchWeekHeader = []string{"symbol_id", "symbol", "week", "ts", "vec", "fwd_return", "up",
+	"era", "high_vol", "created_at"}
+
+// ArchiveFilings appends filings rows to cold storage under archive/filings/.
+// The accession id + EDGAR url are carried so every archived row stays a
+// working pointer to the primary source.
+func (a *Archiver) ArchiveFilings(ctx context.Context, rows []store.FilingArchiveRow, symbolName map[int64]string) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	bySym := map[int64][]store.FilingArchiveRow{}
+	for _, r := range rows {
+		bySym[r.SymbolID] = append(bySym[r.SymbolID], r)
+	}
+	files := 0
+	for sid, rs := range bySym {
+		if err := ctx.Err(); err != nil {
+			return files, err
+		}
+		name := symName(symbolName, sid)
+		lo, hi := rs[0].FiledTs, rs[0].FiledTs
+		for _, r := range rs {
+			if r.FiledTs < lo {
+				lo = r.FiledTs
+			}
+			if r.FiledTs > hi {
+				hi = r.FiledTs
+			}
+		}
+		path, err := a.open("filings", name, lo, hi)
+		if err != nil {
+			return files, err
+		}
+		wf := func(cw *csv.Writer) error {
+			if err := cw.Write(filingHeader); err != nil {
+				return err
+			}
+			sort.Slice(rs, func(i, j int) bool {
+				if rs[i].FiledTs != rs[j].FiledTs {
+					return rs[i].FiledTs < rs[j].FiledTs
+				}
+				return rs[i].ID < rs[j].ID
+			})
+			for _, r := range rs {
+				rec := []string{
+					r.ID, strconv.FormatInt(r.SymbolID, 10), name, r.Form,
+					strconv.FormatInt(r.FiledTs, 10), r.Title, r.URL, r.Label,
+				}
+				if err := cw.Write(rec); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := writeGzCSV(path, wf); err != nil {
+			return files, fmt.Errorf("archive filings %s: %w", name, err)
+		}
+		files++
+	}
+	return files, nil
+}
+
+// ArchiveInsights appends insights rows to cold storage under
+// archive/insights/. Market-scope rows (NULL symbol_id) file as "market".
+func (a *Archiver) ArchiveInsights(ctx context.Context, rows []store.InsightArchiveRow, symbolName map[int64]string) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	bySym := map[int64][]store.InsightArchiveRow{}
+	for _, r := range rows {
+		sid := int64(0) // market scope groups under 0 → "market"
+		if r.SymbolID.Valid {
+			sid = r.SymbolID.Int64
+		}
+		bySym[sid] = append(bySym[sid], r)
+	}
+	files := 0
+	for sid, rs := range bySym {
+		if err := ctx.Err(); err != nil {
+			return files, err
+		}
+		name := "market"
+		if sid != 0 {
+			name = symName(symbolName, sid)
+		}
+		lo, hi := rs[0].Ts, rs[0].Ts
+		for _, r := range rs {
+			if r.Ts < lo {
+				lo = r.Ts
+			}
+			if r.Ts > hi {
+				hi = r.Ts
+			}
+		}
+		path, err := a.open("insights", name, lo, hi)
+		if err != nil {
+			return files, err
+		}
+		wf := func(cw *csv.Writer) error {
+			if err := cw.Write(insightHeader); err != nil {
+				return err
+			}
+			sort.Slice(rs, func(i, j int) bool {
+				if rs[i].Ts != rs[j].Ts {
+					return rs[i].Ts < rs[j].Ts
+				}
+				return rs[i].ID < rs[j].ID
+			})
+			for _, r := range rs {
+				symID := ""
+				if r.SymbolID.Valid {
+					symID = strconv.FormatInt(r.SymbolID.Int64, 10)
+				}
+				rec := []string{
+					strconv.FormatInt(r.ID, 10), r.Scope, symID, name,
+					strconv.FormatInt(r.Ts, 10), r.Headline, r.Body, r.Data,
+				}
+				if err := cw.Write(rec); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := writeGzCSV(path, wf); err != nil {
+			return files, fmt.Errorf("archive insights %s: %w", name, err)
+		}
+		files++
+	}
+	return files, nil
+}
+
+// ArchivePostmortems appends prediction_postmortems rows to cold storage
+// under archive/prediction_postmortems/. The full ranked reasons JSON is
+// carried verbatim so archived failure history round-trips exactly.
+func (a *Archiver) ArchivePostmortems(ctx context.Context, rows []store.PostmortemArchiveRow, symbolName map[int64]string) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	bySym := map[int64][]store.PostmortemArchiveRow{}
+	for _, r := range rows {
+		bySym[r.SymbolID] = append(bySym[r.SymbolID], r)
+	}
+	files := 0
+	for sid, rs := range bySym {
+		if err := ctx.Err(); err != nil {
+			return files, err
+		}
+		name := symName(symbolName, sid)
+		lo, hi := rs[0].Ts, rs[0].Ts
+		for _, r := range rs {
+			if r.Ts < lo {
+				lo = r.Ts
+			}
+			if r.Ts > hi {
+				hi = r.Ts
+			}
+		}
+		path, err := a.open("prediction_postmortems", name, lo, hi)
+		if err != nil {
+			return files, err
+		}
+		wf := func(cw *csv.Writer) error {
+			if err := cw.Write(postmortemHeader); err != nil {
+				return err
+			}
+			sort.Slice(rs, func(i, j int) bool {
+				if rs[i].Ts != rs[j].Ts {
+					return rs[i].Ts < rs[j].Ts
+				}
+				return rs[i].Horizon < rs[j].Horizon
+			})
+			for _, r := range rs {
+				rec := []string{
+					strconv.FormatInt(r.SymbolID, 10), name, r.Horizon,
+					strconv.FormatInt(r.Ts, 10), f(r.Prob), strconv.Itoa(r.Up), f(r.FwdReturn),
+					f(r.Conviction), f(r.Magnitude), r.PrimaryReason, r.SecondaryReason,
+					r.Reasons, strconv.FormatInt(r.CreatedAt, 10),
+				}
+				if err := cw.Write(rec); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := writeGzCSV(path, wf); err != nil {
+			return files, fmt.Errorf("archive postmortems %s: %w", name, err)
+		}
+		files++
+	}
+	return files, nil
+}
+
+// ArchiveResearchWeeks appends research_weeks rows to cold storage under
+// archive/research_weeks/. The vec JSON is carried verbatim so the archived
+// evidence base round-trips exactly into offline research.
+func (a *Archiver) ArchiveResearchWeeks(ctx context.Context, rows []store.ResearchWeekArchiveRow, symbolName map[int64]string) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	bySym := map[int64][]store.ResearchWeekArchiveRow{}
+	for _, r := range rows {
+		bySym[r.SymbolID] = append(bySym[r.SymbolID], r)
+	}
+	files := 0
+	for sid, rs := range bySym {
+		if err := ctx.Err(); err != nil {
+			return files, err
+		}
+		name := symName(symbolName, sid)
+		lo, hi := rs[0].Ts, rs[0].Ts
+		for _, r := range rs {
+			if r.Ts < lo {
+				lo = r.Ts
+			}
+			if r.Ts > hi {
+				hi = r.Ts
+			}
+		}
+		path, err := a.open("research_weeks", name, lo, hi)
+		if err != nil {
+			return files, err
+		}
+		wf := func(cw *csv.Writer) error {
+			if err := cw.Write(researchWeekHeader); err != nil {
+				return err
+			}
+			sort.Slice(rs, func(i, j int) bool { return rs[i].Ts < rs[j].Ts })
+			for _, r := range rs {
+				rec := []string{
+					strconv.FormatInt(r.SymbolID, 10), name,
+					strconv.FormatInt(r.Week, 10), strconv.FormatInt(r.Ts, 10), r.Vec,
+					f(r.FwdReturn), strconv.Itoa(r.Up), r.Era, strconv.Itoa(r.HighVol),
+					strconv.FormatInt(r.CreatedAt, 10),
+				}
+				if err := cw.Write(rec); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := writeGzCSV(path, wf); err != nil {
+			return files, fmt.Errorf("archive research_weeks %s: %w", name, err)
+		}
+		files++
+	}
+	return files, nil
+}
+
 func tsSpanFeatures(rs []store.FeatureArchiveRow) (lo, hi int64) {
 	lo, hi = rs[0].Ts, rs[0].Ts
 	for _, x := range rs {

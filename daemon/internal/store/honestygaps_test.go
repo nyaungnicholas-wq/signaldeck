@@ -191,7 +191,7 @@ func TestVersionedOutcomesDedupesToOnePerSymbolDay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := st.VersionedOutcomes(ctx, md.H1d, 0)
+	got, err := st.VersionedOutcomes(ctx, md.H1d, 0, 0)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestVersionedOutcomesDedupesToOnePerSymbolDay(t *testing.T) {
 		}
 	}
 	// A different horizon must not leak in.
-	if got, _ := st.VersionedOutcomes(ctx, md.H1w, 0); len(got) != 0 {
+	if got, _ := st.VersionedOutcomes(ctx, md.H1w, 0, 0); len(got) != 0 {
 		t.Fatalf("1w query returned %d 1d rows", len(got))
 	}
 }

@@ -99,15 +99,26 @@ func (w *ResearchEngineWorker) adReplicateOne(ctx context.Context, hyp rl.Hypoth
 	if g.Weeks < minWeeksPerEra {
 		return false, nil // too thin to acquit OR convict — no row
 	}
+	// Null MEASURED on the same matched observations (direction randomized),
+	// not assumed to be 0.5 — the week-trial no-skill rate is not 0.5 because
+	// a week is won only by beating its own folded majority. If the null arm
+	// grades no weeks there is no null, and therefore no grade: write nothing.
+	null, ok := measuredWeekNull(fresh, rule, minWeekObs, minWeeksPerEra)
+	if !ok {
+		return false, nil
+	}
+	bf, ok := rl.BayesFactorAbove(g.WinWeeks, g.Weeks, null, rl.WeekTrialMaxEdge)
+	if !ok {
+		return false, nil
+	}
 	winFrom, winTo := obsSpan(fresh)
 	evidence := engineGradeAttacks(hyp.ID, rule, fresh, g, "live-fresh", now, winFrom, winTo,
 		minWeekObs, minWeeksPerEra)
 	evidence = append(evidence, rl.Evidence{
 		HypID: hyp.ID, Ts: now, Kind: rl.KindReplication,
-		K: g.WinWeeks, N: g.Weeks, P0: 0.5,
-		BF: rl.BayesFactorAbove(g.WinWeeks, g.Weeks, 0.5, rl.WeekTrialMaxEdge),
-		Note: fmt.Sprintf("post-discovery fresh-window replication: %d/%d winning weeks (%d obs) on data strictly after the discovery window — the out-of-sample test the capped in-sample experiment could not be",
-			g.WinWeeks, g.Weeks, g.TotalObs),
+		K: g.WinWeeks, N: g.Weeks, P0: null.P0(), BF: bf,
+		Note: fmt.Sprintf("post-discovery fresh-window replication: %d/%d winning weeks (%d obs) on data strictly after the discovery window — the out-of-sample test the capped in-sample experiment could not be; graded against measured null %s",
+			g.WinWeeks, g.Weeks, g.TotalObs, null),
 		WindowFrom: winFrom, WindowTo: winTo,
 	})
 	// Attacks precede the grade row (same crash discipline as gradeHypEras):
