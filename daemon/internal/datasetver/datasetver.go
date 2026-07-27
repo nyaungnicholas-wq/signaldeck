@@ -101,6 +101,43 @@ func Hash(symbol, timeframe string, rows []Row) Version {
 	return v
 }
 
+// HashRecords versions an arbitrary tabular export under the same canonical
+// scheme as Hash. It exists for the reproducibility snapshot
+// (tools/make_repro_snapshot.py): the grading tallies committed there are not
+// OHLCV rows, but they need the same property — one hash on any machine, and a
+// single edited cell changes it. The Python side reimplements this
+// serialization byte for byte, so the two must never drift; the parity test
+// pins a shared vector.
+//
+// Unlike Hash, records are hashed in the order given and fields are hashed as
+// the exact strings supplied — the caller owns row order and numeric
+// formatting (numbers must already be rendered with canonicalFloatFmt).
+// Name and kind are bound into the hash exactly as symbol and timeframe are
+// for bars: the same records under a different identity are a different
+// dataset.
+func HashRecords(name, kind string, records [][]string) Version {
+	v := Version{Symbol: name, Timeframe: kind, N: len(records)}
+	if len(records) == 0 {
+		sum := sha256.Sum256([]byte("empty|" + name + "|" + kind))
+		v.Hash = hex.EncodeToString(sum[:])
+		return v
+	}
+	h := sha256.New()
+	fmt.Fprintf(h, "v1|%s|%s|%d\n", name, kind, len(records))
+	var b strings.Builder
+	for _, rec := range records {
+		b.Reset()
+		for _, f := range rec {
+			b.WriteString(f)
+			b.WriteByte('|')
+		}
+		b.WriteByte('\n')
+		h.Write([]byte(b.String())) //nolint:errcheck // hash.Write never errors
+	}
+	v.Hash = hex.EncodeToString(h.Sum(nil))
+	return v
+}
+
 // Revision describes how a re-read of the same slice differs from what was
 // recorded.
 type Revision struct {

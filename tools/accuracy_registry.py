@@ -24,12 +24,33 @@ Discipline enforced here, learned from the failures this repo already found:
   * Wilson intervals, and a verdict driven by the interval — not the point estimate.
   * PENDING is a real verdict. A forecast whose horizon has not elapsed is not
     evidence, and saying so is the point.
+  * PREQUENTIAL null. The majority-class baseline for each day is built from
+    days strictly BEFORE it, never the graded window itself — a null computed
+    in-sample gets hindsight the model never had.
+  * SURVIVORSHIP boundary. symbols.delisted_at only exists since the 2026-07-24
+    survivorship wave (store.go), so everything recorded before it was graded
+    against a universe seeded from 2026 survivors. Pre-epoch rows never enter a
+    tally here; every published row is stamped survivorship_clean accordingly.
+  * DUAL NULLS for one transition cycle. The hindsight null (best constant
+    guess over the finished sample) uses information not available at
+    prediction time; the prequential null (follow the running majority,
+    walk-forward) is the fair forward baseline and is <= the hindsight null by
+    construction. Every directional row publishes BOTH, and the stricter
+    (higher) one drives the verdict, so any verdict change across the switch
+    is attributable to the null definition and not to data drift — the same
+    discipline the A1 fix used publishing intervalMethod/designEffect beside
+    the new intervals.
 
 Usage:  python3 tools/accuracy_registry.py [--db PATH] [--json OUT]
+        python3 tools/accuracy_registry.py --snapshot repro   # grade from the
+            committed reproducibility snapshot instead of the (gitignored) DB,
+            verifying every CSV against its manifest hash first. This is the
+            path an outside reader uses — see REPRODUCE.md.
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import json
 import math
@@ -51,6 +72,14 @@ MIN_DISTINCT_DAYS = 10
 
 # Conviction bands. A predictor's accuracy is only meaningful within its band.
 BANDS = [(0.0, 0.5, "all"), (0.5, 0.8, "conv>0.5"), (0.8, 0.9, "conv>0.8"), (0.9, 1.01, "conv>0.9")]
+
+# The day symbols.delisted_at started being recorded (store.go survivorship
+# wave). Rows created before this were graded against a survivor-seeded
+# universe and are unfit for a published verdict — both graders filter them
+# out at the SQL layer, which is what makes survivorship_clean true by
+# construction on every row this script emits.
+SURVIVORSHIP_EPOCH = dt.date(2026, 7, 24)
+SURVIVORSHIP_EPOCH_TS = int(dt.datetime(2026, 7, 24, tzinfo=dt.timezone.utc).timestamp())
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -161,6 +190,32 @@ def clustered_ci(days: list[tuple[int, int]]) -> dict:
     return out
 
 
+def prequential_null(days: list[tuple[int, int]]) -> dict:
+    """Out-of-sample majority null over chronological per-day (n, ups) tallies.
+
+    The old null was max(base, 1-base) with base computed over the SAME window
+    being graded — hindsight the model never had, which retroactively credited
+    the null with any mid-window class flip. Here the constant guess for day d
+    is the majority class over days strictly BEFORE d, with expected accuracy
+    0.5 when there is no prior evidence (day one, or a tied prior). The
+    guess-sequence is graded through the same clustered_ci machinery as the
+    model it benchmarks.
+    """
+    null_days: list[tuple[int, float]] = []
+    prior_n = prior_ups = 0
+    for n, ups in days:
+        if prior_n == 0 or prior_ups * 2 == prior_n:
+            hits = n / 2  # no majority to lean on yet — a coin flip
+        elif prior_ups * 2 > prior_n:
+            hits = float(ups)  # constant "up" guess
+        else:
+            hits = float(n - ups)  # constant "down" guess
+        null_days.append((n, hits))
+        prior_n += n
+        prior_ups += ups
+    return clustered_ci(null_days)
+
+
 def connect(path: str) -> sqlite3.Connection:
     if not os.path.exists(path):
         sys.exit(f"database not found: {path}")
@@ -171,9 +226,14 @@ def connect(path: str) -> sqlite3.Connection:
 # Directional ensemble — the one predictor with a real live record
 # --------------------------------------------------------------------------- #
 
-def grade_directional(con: sqlite3.Connection) -> list[dict]:
-    """Grade prediction_outcomes on independent (symbol, horizon, UTC-day) rows."""
-    rows = []
+def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
+    """Per-day tallies behind every directional grade, keyed by horizon.
+
+    Each value is (day, n, correct, up_days, hc_n, hc_correct, hc_up_days) —
+    exactly what the reproducibility snapshot (tools/make_repro_snapshot.py)
+    exports, so a grade from the DB and a grade from the committed snapshot
+    start from identical inputs.
+    """
     # Per-DAY tallies, not per-horizon totals. The dedup below still collapses
     # intraday repeats to one row per (symbol, horizon, UTC-day); the day
     # grouping is what lets the interval resample days instead of rows.
@@ -184,6 +244,7 @@ def grade_directional(con: sqlite3.Connection) -> list[dict]:
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
+        AND ts >= ?  -- survivorship boundary: pre-epoch rows are survivor-seeded
     )
     SELECT horizon, ts/86400 AS day,
            COUNT(*),
@@ -195,18 +256,39 @@ def grade_directional(con: sqlite3.Connection) -> list[dict]:
     FROM dedup WHERE rn = 1 GROUP BY horizon, day ORDER BY horizon, day
     """
     by_h: dict[str, list] = {}
-    for horizon, day, n, hits, ups, hc_n, hc_hits, hc_ups in con.execute(q):
-        by_h.setdefault(horizon, []).append((n, hits, ups, hc_n, hc_hits, hc_ups))
+    for horizon, day, n, hits, ups, hc_n, hc_hits, hc_ups in con.execute(q, (SURVIVORSHIP_EPOCH_TS,)):
+        by_h.setdefault(horizon, []).append((day, n, hits, ups, hc_n, hc_hits, hc_ups))
+    return by_h
 
-    def emit(name: str, band: str, days: list[tuple[int, int]], ups: int, note: str) -> None:
-        g = clustered_ci(days)
+
+def grade_directional(con: sqlite3.Connection) -> list[dict]:
+    """Grade prediction_outcomes on independent (symbol, horizon, UTC-day) rows."""
+    return grade_directional_days(fetch_directional_days(con))
+
+
+def grade_directional_days(by_h: dict[str, list[tuple]]) -> list[dict]:
+    """Grade directional per-day tallies from either the DB or a snapshot."""
+    rows = []
+
+    def emit(name: str, band: str, days: list[tuple[int, int, int]], note: str) -> None:
+        g = clustered_ci([(n, hits) for n, hits, _ in days])
         if not g["n"]:
             return
-        # The honest null for a directional call is the best constant guess —
-        # always predicting the majority class. Beating 50% means nothing if
-        # up-days are 55%.
-        base = ups / g["n"]
-        null_acc = max(base, 1 - base)
+        # The honest null for a directional call is the best constant guess a
+        # bettor WITHOUT hindsight could have made — the prequential majority,
+        # not the whole window's. Beating 50% still means nothing if up-days
+        # run 55%, but the null only learns that rate as the days arrive.
+        null_g = prequential_null([(n, ups) for n, _, ups in days])
+        null_preq = null_g["acc"]
+        # TRANSITION CYCLE: the retired hindsight null is published beside the
+        # prequential one, and the STRICTER (higher) of the two drives the
+        # verdict. Since the prequential null can only sit at or below the
+        # hindsight null, verdicts cannot soften this cycle — so when the
+        # hindsight column is dropped next release, any change is attributable
+        # to the null definition alone, never to data drift.
+        base = sum(ups for _, _, ups in days) / g["n"]
+        null_hind = max(base, 1 - base)
+        null_acc = max(null_hind, null_preq)
         lo, hi = (g["ci"] if g["ci"] else (None, None))
         rows.append({
             "predictor": name,
@@ -220,27 +302,32 @@ def grade_directional(con: sqlite3.Connection) -> list[dict]:
             "distinct_days": g["distinct_days"],
             "design_effect": g["design_effect"],
             "effective_n": g["effective_n"],
+            "null_hindsight": null_hind,
+            "null_prequential": null_preq,
             "null_acc": null_acc,
+            "null_method": "transition-dual: verdict vs max(hindsight-majority, prequential-majority)",
+            "null_ci": null_g["ci"],
             "skill": g["acc"] - null_acc,
             "verdict": verdict_for(g["acc"], lo, hi, g["n"], null_acc, None,
                                    distinct_days=g["distinct_days"]),
             "note": note,
+            "survivorship_clean": True,
         })
 
     for horizon, per_day in sorted(by_h.items()):
         emit(f"directional-ensemble ({horizon})", "all",
-             [(d[0], d[1]) for d in per_day], sum(d[2] for d in per_day),
+             [(d[1], d[2], d[3]) for d in per_day],
              "live forward record; independent symbol-days, day-resampled interval")
 
     # High-conviction slice — the tier a user would actually act on. Graded PER
     # HORIZON: the same symbol on the same day appears in both the 1d and the 1w
     # record, and pooling them counted one correlated call twice.
     for horizon, per_day in sorted(by_h.items()):
-        days = [(d[3], d[4]) for d in per_day if d[3] > 0]
+        days = [(d[4], d[5], d[6]) for d in per_day if d[4] > 0]
         if not days:
             continue
         emit(f"directional-ensemble ({horizon}, high conviction)", "|p-0.5|>=0.15",
-             days, sum(d[5] for d in per_day), "the tier a user would actually trade")
+             days, "the tier a user would actually trade")
     return rows
 
 
@@ -248,12 +335,19 @@ def grade_directional(con: sqlite3.Connection) -> list[dict]:
 # Structural regime predictors — claims awaiting their first live grade
 # --------------------------------------------------------------------------- #
 
-def grade_structural(con: sqlite3.Connection) -> list[dict]:
-    rows = []
+def fetch_structural(con: sqlite3.Connection) -> tuple[list[tuple], dict[tuple, list[tuple]]]:
+    """Claims plus per-day tallies behind every structural grade.
+
+    Returns (totals, per_day): totals rows are
+    (kind, horizon_days, forecasts_recorded, claimed_accuracy, first_ts) and
+    per_day maps (kind, horizon_days) -> [(day, n, correct)] — the exact shape
+    the reproducibility snapshot exports.
+    """
     # Totals and first-call time per predictor.
     q = """
     SELECT kind, horizon_days, COUNT(*), AVG(historical_accuracy), MIN(ts)
-    FROM regime_outcomes GROUP BY kind, horizon_days ORDER BY kind
+    FROM regime_outcomes WHERE ts >= ?
+    GROUP BY kind, horizon_days ORDER BY kind
     """
     # Resolved outcomes tallied PER CALL-DAY. regime_outcomes is already unique
     # on (symbol_id, kind, day), so each row is one symbol-day — but ~870
@@ -261,15 +355,26 @@ def grade_structural(con: sqlite3.Connection) -> list[dict]:
     # is how a single market day becomes a confident verdict on a 82% claim.
     qd = """
     SELECT kind, horizon_days, day, COUNT(*), SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END)
-    FROM regime_outcomes WHERE resolved_at IS NOT NULL
+    FROM regime_outcomes WHERE resolved_at IS NOT NULL AND ts >= ?
     GROUP BY kind, horizon_days, day ORDER BY kind, day
     """
-    per_day: dict[tuple, list[tuple[int, int]]] = {}
-    for kind, hd, _day, n, hits in con.execute(qd):
-        per_day.setdefault((kind, hd), []).append((n, hits or 0))
+    per_day: dict[tuple, list[tuple[int, int, int]]] = {}
+    for kind, hd, day, n, hits in con.execute(qd, (SURVIVORSHIP_EPOCH_TS,)):
+        per_day.setdefault((kind, hd), []).append((day, n, hits or 0))
+    totals = [tuple(r) for r in con.execute(q, (SURVIVORSHIP_EPOCH_TS,))]
+    return totals, per_day
 
-    for kind, hd, total, claimed, first_ts in con.execute(q):
-        days = per_day.get((kind, hd), [])
+
+def grade_structural(con: sqlite3.Connection) -> list[dict]:
+    totals, per_day = fetch_structural(con)
+    return grade_structural_days(totals, per_day)
+
+
+def grade_structural_days(totals: list[tuple], per_day: dict[tuple, list[tuple]]) -> list[dict]:
+    """Grade structural claims from either the DB or a snapshot."""
+    rows = []
+    for kind, hd, total, claimed, first_ts in totals:
+        days = [(n, hits) for _day, n, hits in per_day.get((kind, hd), [])]
         g = clustered_ci(days)
         resolved = g["n"]
         lo = hi = None
@@ -301,14 +406,64 @@ def grade_structural(con: sqlite3.Connection) -> list[dict]:
             "live_n": resolved,
             "live_acc": acc,
             "ci": [lo, hi] if lo is not None else None,
+            "null_hindsight": None,
+            "null_prequential": None,
             "null_acc": None,
             "skill": None,
             "verdict": v,
             "note": note,
             "forecasts_recorded": total,
+            "survivorship_clean": True,
             **extra,
         })
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# Reproducibility snapshot — grading without the (gitignored) database
+# --------------------------------------------------------------------------- #
+
+def load_snapshot(snap_dir: str):
+    """Load grading inputs from a committed snapshot (see REPRODUCE.md).
+
+    Every CSV is verified against its MANIFEST.json hash before a single row
+    is graded — the same canonical scheme as daemon/internal/datasetver — so a
+    tampered or hand-edited snapshot refuses to grade rather than quietly
+    publishing different numbers.
+    """
+    from make_repro_snapshot import FILES, hash_records  # same tools/ dir
+
+    man_path = os.path.join(snap_dir, "MANIFEST.json")
+    if not os.path.exists(man_path):
+        sys.exit(f"snapshot manifest not found: {man_path}")
+    with open(man_path) as f:
+        manifest = {e["file"]: e for e in json.load(f)["files"]}
+
+    def read(fname: str) -> list[list[str]]:
+        path = os.path.join(snap_dir, fname)
+        if not os.path.exists(path):
+            sys.exit(f"snapshot file missing: {path}")
+        with open(path, newline="") as f:
+            recs = list(csv.reader(f))[1:]  # drop the header row
+        ent = manifest.get(fname)
+        if ent is None:
+            sys.exit(f"snapshot file not in manifest: {fname}")
+        got = hash_records(fname, FILES[fname], recs)
+        if got != ent["sha256"]:
+            sys.exit(f"snapshot integrity failure: {fname} hashes {got}, manifest "
+                     f"says {ent['sha256']} — refusing to grade a modified snapshot")
+        return recs
+
+    by_h: dict[str, list] = {}
+    for horizon, *nums in read("directional_days.csv"):
+        by_h.setdefault(horizon, []).append(tuple(int(x) for x in nums))
+
+    per_day: dict[tuple, list] = {}
+    for kind, hd, day, n, hits in read("structural_days.csv"):
+        per_day.setdefault((kind, int(hd)), []).append((int(day), int(n), int(hits)))
+    totals = [(kind, int(hd), int(total), float(claimed) if claimed else None, int(first_ts))
+              for kind, hd, total, claimed, first_ts in read("structural_claims.csv")]
+    return by_h, totals, per_day
 
 
 def verdict_for(acc, lo, hi, n, null_acc, claimed, distinct_days=None) -> str:
@@ -346,14 +501,24 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--json", help="write the registry as JSON here")
+    ap.add_argument("--snapshot", metavar="DIR",
+                    help="grade from a committed reproducibility snapshot (repro/) "
+                         "instead of the gitignored DB; verifies manifest hashes first")
     args = ap.parse_args()
 
-    con = connect(args.db)
-    rows = grade_directional(con) + grade_structural(con)
+    if args.snapshot:
+        by_h, totals, per_day = load_snapshot(args.snapshot)
+        rows = grade_directional_days(by_h) + grade_structural_days(totals, per_day)
+        source = f"snapshot {args.snapshot} (manifest hashes verified)"
+    else:
+        con = connect(args.db)
+        rows = grade_directional(con) + grade_structural(con)
+        source = f"database {args.db}"
 
     print("=" * 104)
     print(f"SIGNALDECK ACCURACY REGISTRY — {dt.date.today()}")
     print("Every predictor, its claim, and what the live record actually supports.")
+    print(f"Graded from {source}")
     print("=" * 104)
     hdr = "%-40s %8s %9s %9s %-19s %s"
     print(hdr % ("PREDICTOR", "CLAIM", "LIVE n", "LIVE ACC", "95% CI", "VERDICT"))
@@ -371,7 +536,8 @@ def main() -> int:
         print("ACTION REQUIRED — these are shipping a prediction the live record contradicts:")
         for r in failed:
             print(f"  * {r['predictor']}: {r['live_acc']:.1%} over {r['live_n']:,} independent "
-                  f"observations, entire CI below the {r['null_acc']:.1%} baseline.")
+                  f"observations, entire CI below the {r['null_acc']:.1%} baseline "
+                  f"(hindsight {r['null_hindsight']:.1%} / prequential {r['null_prequential']:.1%}).")
         print("    Retire, invert, or relabel as experimental. Do not display as a forecast.")
         print()
     if pending:
@@ -381,9 +547,18 @@ def main() -> int:
     print(f"Independence rule: one observation per (symbol, horizon, UTC-day).")
     print(f"Verdict threshold: {MIN_INDEPENDENT_N} independent observations minimum, "
           f"on at least {MIN_DISTINCT_DAYS} distinct UTC days.")
+    print(f"Survivorship boundary: rows before {SURVIVORSHIP_EPOCH.isoformat()} were graded "
+          "against a survivor-seeded universe and are excluded from every tally above.")
     print("Intervals resample DAYS, not rows: on any one day ~1,000 symbols share one")
     print("market move, so the row count overstates the evidence. Each graded row below")
     print("reports its measured design effect and effective n in the JSON output.")
+    print("Directional nulls are in a DUAL-NULL TRANSITION cycle: every row publishes the")
+    print("retiring hindsight null (best constant guess over the finished sample) beside")
+    print("the prequential null (each day's guess is the majority class over days strictly")
+    print("before it). The stricter (higher) of the two drives the verdict, so when the")
+    print("hindsight column is dropped next release, any verdict change is attributable to")
+    print("the null definition alone — not data drift. Prequential <= hindsight by")
+    print("construction, so FAILED verdicts can only soften across the switch, never sharpen.")
     for r in rows:
         if r.get("design_effect"):
             print(f"  {r['predictor']}: n={r['live_n']:,} over {r['distinct_days']} days, "
@@ -393,6 +568,11 @@ def main() -> int:
         with open(args.json, "w") as f:
             json.dump({"generated": dt.datetime.now().isoformat(timespec="seconds"),
                        "min_independent_n": MIN_INDEPENDENT_N,
+                       "survivorship_epoch": SURVIVORSHIP_EPOCH.isoformat(),
+                       "null_policy": ("transition cycle: null_hindsight and null_prequential "
+                                       "published side by side on every row; the stricter "
+                                       "(higher) drives the verdict. Hindsight column drops "
+                                       "next release."),
                        "rows": rows}, f, indent=1)
         print(f"\nwrote {args.json}")
     return 0

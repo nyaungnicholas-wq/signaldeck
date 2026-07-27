@@ -1,0 +1,4 @@
+# Only grading tallies and dataset-version hashes may be committed here.
+# Raw bar matrices (e.g. pairs_universe_*.npz) are license-classified (A10)
+# and must never enter the repository — reproduce them locally per REPRODUCE.md.
+*.npz

@@ -1,0 +1,33 @@
+{
+ "generated": "2026-07-27T00:18:29+00:00",
+ "git_commit": "40bf3b28272b925f1519bf2e8d61b700119e6bd9",
+ "survivorship_epoch": "2026-07-24",
+ "hash_scheme": "datasetver v1 canonical records, sha256, floats %.10g (daemon/internal/datasetver.HashRecords)",
+ "note": "grading tallies + input-series versions only; no bar data is redistributed (A10). Regenerate the published numbers with `python3 tools/accuracy_registry.py --snapshot repro` \u2014 see REPRODUCE.md.",
+ "files": [
+  {
+   "file": "directional_days.csv",
+   "kind": "directional-day-tallies",
+   "rows": 2,
+   "sha256": "1da06c7794d024ba7bc98f9f48d172a1812a18f438b1620523ac42d58fd39b4e"
+  },
+  {
+   "file": "structural_days.csv",
+   "kind": "structural-day-tallies",
+   "rows": 0,
+   "sha256": "01d637913a78bf0367672989e8664bfb37080abd821ca96d9c0d82690d0ae2d8"
+  },
+  {
+   "file": "structural_claims.csv",
+   "kind": "structural-claims",
+   "rows": 6,
+   "sha256": "2f5653b9fda7acc417b89a5ce3ea79d375c47b6b93bf21cf16e3ed56a7bbe4f8"
+  },
+  {
+   "file": "pairs_inputs.csv",
+   "kind": "pairs-input-series-versions",
+   "rows": 918,
+   "sha256": "1513bf91fd440d3c54b66de52b0953794f138d2b78b1cad405f22d47dab3a484"
+  }
+ ]
+}

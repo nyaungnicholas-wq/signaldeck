@@ -140,6 +140,45 @@ func TestUnknownOverlapIsTreatedAsRevision(t *testing.T) {
 	}
 }
 
+// HashRecords must agree byte for byte with the Python implementation in
+// tools/make_repro_snapshot.py — these vectors were produced by that
+// implementation. If this test fails after an edit to either side, the
+// committed reproducibility snapshot's manifest hashes are silently invalid.
+func TestHashRecordsMatchesPythonImplementation(t *testing.T) {
+	v := HashRecords("directional_days.csv", "directional-day-tallies", [][]string{
+		{"1d", "20660", "1046", "512", "531", "88", "41", "45"},
+		{"1w", "20661", "7", "3", "4", "0", "0", "0"},
+	})
+	const want = "f6951da903b4ba4cac87ced7abaa6374a64d9583af3b194cb56e7b1328980e9b"
+	if v.Hash != want {
+		t.Fatalf("cross-language drift: got %s want %s", v.Hash, want)
+	}
+	if v.N != 2 || v.Symbol != "directional_days.csv" {
+		t.Fatalf("version metadata wrong: %+v", v)
+	}
+	empty := HashRecords("x.csv", "k", nil)
+	const wantEmpty = "03ba0f839b23e3f634b938b259fea4a371bd3804415c659809be9bc65bb38ecd"
+	if empty.Hash != wantEmpty {
+		t.Fatalf("empty-record identity drifted: got %s want %s", empty.Hash, wantEmpty)
+	}
+}
+
+// Record identity is bound to name and kind, and record ORDER is significant —
+// tallies are not bars, and a reordered export is a different export.
+func TestHashRecordsIdentityAndOrder(t *testing.T) {
+	recs := [][]string{{"a", "1"}, {"b", "2"}}
+	base := HashRecords("f.csv", "k", recs)
+	if HashRecords("g.csv", "k", recs).Hash == base.Hash {
+		t.Fatal("different names hashed identically")
+	}
+	if HashRecords("f.csv", "k2", recs).Hash == base.Hash {
+		t.Fatal("different kinds hashed identically")
+	}
+	if HashRecords("f.csv", "k", [][]string{{"b", "2"}, {"a", "1"}}).Hash == base.Hash {
+		t.Fatal("record order was normalized away — snapshot rows are ordered")
+	}
+}
+
 // Duplicate timestamps are a data defect and must be exposed, not collapsed.
 func TestDuplicateTimestampsAreExposed(t *testing.T) {
 	clean := []Row{{Ts: 0, Close: 100}, {Ts: day, Close: 101}}

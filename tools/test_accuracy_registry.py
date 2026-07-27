@@ -10,6 +10,7 @@ Run: python3 -m unittest discover -s tools -p 'test_*.py'
 """
 import math
 import os
+import sqlite3
 import sys
 import unittest
 
@@ -17,8 +18,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from accuracy_registry import (  # noqa: E402
     MIN_DISTINCT_DAYS,
+    SURVIVORSHIP_EPOCH_TS,
     clustered_ci,
     design_effect,
+    grade_directional,
+    grade_structural,
+    prequential_null,
     verdict_for,
     wilson,
     wilson_eff,
@@ -119,6 +124,127 @@ class TestVerdict(unittest.TestCase):
         self.assertTrue(v.startswith("INSUFFICIENT"), v)
 
 
+class TestSurvivorshipBoundary(unittest.TestCase):
+    """Rows created before symbols.delisted_at existed (2026-07-24) were graded
+    against a survivor-seeded universe. They must never enter a graded tally."""
+
+    @staticmethod
+    def _db():
+        con = sqlite3.connect(":memory:")
+        con.execute("""CREATE TABLE prediction_outcomes (
+            symbol_id INTEGER, horizon TEXT, prob REAL, up INTEGER,
+            ts INTEGER, resolved_at INTEGER)""")
+        con.execute("""CREATE TABLE regime_outcomes (
+            symbol_id INTEGER, kind TEXT, horizon_days INTEGER, day INTEGER,
+            ts INTEGER, resolved_at INTEGER, correct INTEGER,
+            historical_accuracy REAL)""")
+        return con
+
+    def test_pre_epoch_directional_rows_cannot_enter_a_tally(self):
+        con = self._db()
+        pre = SURVIVORSHIP_EPOCH_TS - 86400
+        con.execute("INSERT INTO prediction_outcomes VALUES (1,'1d',0.8,1,?,?)",
+                    (pre, pre + 86400))
+        self.assertEqual(grade_directional(con), [])
+
+    def test_directional_tally_counts_only_post_epoch_rows(self):
+        con = self._db()
+        pre = SURVIVORSHIP_EPOCH_TS - 86400
+        con.execute("INSERT INTO prediction_outcomes VALUES (1,'1d',0.8,1,?,?)",
+                    (pre, pre + 86400))
+        # Epoch day itself is INCLUDED — the boundary is "at or after".
+        for i in range(3):
+            ts = SURVIVORSHIP_EPOCH_TS + i * 86400
+            con.execute("INSERT INTO prediction_outcomes VALUES (?, '1d',0.8,1,?,?)",
+                        (10 + i, ts, ts + 86400))
+        rows = grade_directional(con)
+        all_band = [r for r in rows if r["band"] == "all"]
+        self.assertEqual(len(all_band), 1)
+        self.assertEqual(all_band[0]["live_n"], 3)
+        self.assertTrue(all_band[0]["survivorship_clean"])
+
+    def test_pre_epoch_structural_rows_cannot_enter_a_tally(self):
+        con = self._db()
+        pre = SURVIVORSHIP_EPOCH_TS - 86400
+        con.execute("INSERT INTO regime_outcomes VALUES (1,'oversold',21,?,?,?,1,0.82)",
+                    (pre // 86400, pre, pre + 86400))
+        self.assertEqual(grade_structural(con), [])
+
+    def test_structural_tally_counts_only_post_epoch_rows(self):
+        con = self._db()
+        pre = SURVIVORSHIP_EPOCH_TS - 86400
+        con.execute("INSERT INTO regime_outcomes VALUES (1,'oversold',21,?,?,?,1,0.82)",
+                    (pre // 86400, pre, pre + 86400))
+        for i in range(2):
+            ts = SURVIVORSHIP_EPOCH_TS + i * 86400
+            con.execute("INSERT INTO regime_outcomes VALUES (?, 'oversold',21,?,?,?,1,0.82)",
+                        (10 + i, ts // 86400, ts, ts + 86400))
+        rows = grade_structural(con)
+        self.assertEqual(len(rows), 1)
+        # Both the resolved tally AND the forecasts-recorded total exclude pre-epoch.
+        self.assertEqual(rows[0]["live_n"], 2)
+        self.assertEqual(rows[0]["forecasts_recorded"], 2)
+        self.assertTrue(rows[0]["survivorship_clean"])
+
+
+class TestPrequentialNull(unittest.TestCase):
+    """The majority-class null must be graded OUT of sample. The old
+    max(base, 1-base) was computed over the same window it benchmarked, which
+    handed the null hindsight the model never had."""
+
+    def test_null_is_out_of_sample(self):
+        """A mid-window class flip must not be retroactively credited to the null.
+
+        Eight all-down days then twelve all-up days. The hindsight null sees
+        the whole window, calls the majority UP, and claims 60%. The
+        prequential bettor guesses down through the flip and only crosses over
+        once up-days actually outnumber down-days: day 1 is a coin flip (50),
+        days 2-8 guess down and score 700, days 9-16 guess down into the flip
+        and score 0, day 17 sits on a tied prior (50), days 18-20 finally
+        guess up (300) — 1100/2000 = 55%.
+        """
+        days = [(100, 0)] * 8 + [(100, 100)] * 12  # chronological (n, ups)
+        hindsight = max(12 / 20, 8 / 20)  # the old, clairvoyant null: 60%
+        g = prequential_null(days)
+        self.assertAlmostEqual(g["acc"], 1100 / 2000, places=9)
+        self.assertLess(g["acc"], hindsight)
+
+    def test_day_one_is_a_coin_flip(self):
+        """With no prior days there is no majority to guess — 0.5, not 1.0."""
+        g = prequential_null([(100, 100)])
+        self.assertAlmostEqual(g["acc"], 0.5, places=9)
+
+    def test_stationary_majority_is_still_credited(self):
+        """When up-days really do run 100% throughout, the null must converge
+        on that rate — the change removes hindsight, not the majority null."""
+        g = prequential_null([(100, 100)] * 20)
+        self.assertAlmostEqual(g["acc"], (50 + 19 * 100) / 2000, places=9)
+
+    def test_grade_directional_publishes_an_out_of_sample_prequential_null(self):
+        """End to end: two all-up days then three all-down days, two symbols
+        per day. Hindsight null = 6/10 = 60%. Prequential: day 1 coin flip (1),
+        day 2 guess up (2), days 3-4 guess up into the flip (0), day 5 tied
+        prior (1) — 4/10 = 40%. The flip must NOT be retroactively credited to
+        the prequential null; during the dual-null transition cycle the row
+        publishes both and the verdict uses the stricter (higher) of the two."""
+        con = TestSurvivorshipBoundary._db()
+        for day in range(5):
+            up = 1 if day < 2 else 0
+            ts = SURVIVORSHIP_EPOCH_TS + day * 86400
+            for sym in (1, 2):
+                con.execute(
+                    "INSERT INTO prediction_outcomes VALUES (?, '1d', 0.8, ?, ?, ?)",
+                    (sym, up, ts, ts + 86400))
+        rows = grade_directional(con)
+        row = next(r for r in rows if r["band"] == "all")
+        self.assertIn("prequential", row["null_method"])
+        self.assertAlmostEqual(row["null_prequential"], 0.4, places=9)
+        self.assertNotAlmostEqual(row["null_prequential"], 0.6, places=3)
+        self.assertAlmostEqual(row["null_hindsight"], 0.6, places=9)
+        self.assertEqual(row["null_acc"],
+                         max(row["null_hindsight"], row["null_prequential"]))
+
+
 class TestWilsonEff(unittest.TestCase):
     def test_matches_plain_wilson_at_deff_one(self):
         lo1, hi1 = wilson(600, 1000)
@@ -136,6 +262,62 @@ class TestWilsonEff(unittest.TestCase):
         self.assertGreaterEqual(lo, 0.0)
         self.assertLessEqual(hi, 1.0)
         self.assertFalse(math.isnan(lo) or math.isnan(hi))
+
+
+class TestSnapshotRoundTrip(unittest.TestCase):
+    """The committed reproducibility snapshot must grade to exactly what the
+    database grades to — that equivalence is the promise REPRODUCE.md makes."""
+
+    @staticmethod
+    def _seeded_db():
+        con = TestSurvivorshipBoundary._db()
+        for i in range(12):
+            ts = SURVIVORSHIP_EPOCH_TS + i * 86400
+            con.execute("INSERT INTO prediction_outcomes VALUES (?, '1d', 0.8, ?, ?, ?)",
+                        (10 + i, i % 2, ts, ts + 86400))
+            con.execute("INSERT INTO regime_outcomes VALUES (?, 'oversold', 21, ?, ?, ?, 1, 0.82)",
+                        (10 + i, ts // 86400, ts, ts + 86400))
+        return con
+
+    def test_snapshot_grades_identically_to_db(self):
+        import tempfile
+
+        from accuracy_registry import (grade_directional_days, grade_structural_days,
+                                       load_snapshot)
+        from make_repro_snapshot import write_snapshot
+
+        con = self._seeded_db()
+        db_rows = grade_directional(con) + grade_structural(con)
+        with tempfile.TemporaryDirectory() as td:
+            write_snapshot(con, td)
+            by_h, totals, per_day = load_snapshot(td)
+            snap_rows = grade_directional_days(by_h) + grade_structural_days(totals, per_day)
+        # The snapshot pins floats to %.10g (the datasetver canonical format);
+        # everything else must round-trip exactly.
+        for r in db_rows + snap_rows:
+            if r.get("claimed") is not None:
+                r["claimed"] = float("%.10g" % r["claimed"])
+        self.assertEqual(db_rows, snap_rows)
+
+    def test_tampered_snapshot_refuses_to_grade(self):
+        """One edited cell must fail the manifest hash and abort the grade."""
+        import tempfile
+
+        from accuracy_registry import load_snapshot
+        from make_repro_snapshot import write_snapshot
+
+        con = self._seeded_db()
+        with tempfile.TemporaryDirectory() as td:
+            write_snapshot(con, td)
+            path = os.path.join(td, "directional_days.csv")
+            with open(path) as f:
+                header, first, *rest = f.readlines()
+            cells = first.strip().split(",")
+            cells[3] = str(int(cells[3]) + 1)  # one extra "correct" tally
+            with open(path, "w") as f:
+                f.writelines([header, ",".join(cells) + "\n", *rest])
+            with self.assertRaises(SystemExit):
+                load_snapshot(td)
 
 
 if __name__ == "__main__":
