@@ -185,6 +185,8 @@ class TestSurvivorshipBoundary(unittest.TestCase):
         self.assertEqual(rows[0]["live_n"], 2)
         self.assertEqual(rows[0]["forecasts_recorded"], 2)
         self.assertTrue(rows[0]["survivorship_clean"])
+        # The hindsight null is retired everywhere — structural rows included.
+        self.assertNotIn("null_hindsight", rows[0])
 
 
 class TestPrequentialNull(unittest.TestCase):
@@ -222,11 +224,13 @@ class TestPrequentialNull(unittest.TestCase):
 
     def test_grade_directional_publishes_an_out_of_sample_prequential_null(self):
         """End to end: two all-up days then three all-down days, two symbols
-        per day. Hindsight null = 6/10 = 60%. Prequential: day 1 coin flip (1),
-        day 2 guess up (2), days 3-4 guess up into the flip (0), day 5 tied
-        prior (1) — 4/10 = 40%. The flip must NOT be retroactively credited to
-        the prequential null; during the dual-null transition cycle the row
-        publishes both and the verdict uses the stricter (higher) of the two."""
+        per day. The retired hindsight null would have claimed 6/10 = 60%.
+        Prequential: day 1 coin flip (1), day 2 guess up (2), days 3-4 guess
+        up into the flip (0), day 5 tied prior (1) — 4/10 = 40%. The flip must
+        NOT be retroactively credited to the null, and since the dual-null
+        transition cycle closed (audits/2026-07-27-null-transition.md, zero
+        verdict changes) the prequential null alone drives the verdict — no
+        row may publish a hindsight column at all."""
         con = TestSurvivorshipBoundary._db()
         for day in range(5):
             up = 1 if day < 2 else 0
@@ -237,12 +241,12 @@ class TestPrequentialNull(unittest.TestCase):
                     (sym, up, ts, ts + 86400))
         rows = grade_directional(con)
         row = next(r for r in rows if r["band"] == "all")
-        self.assertIn("prequential", row["null_method"])
+        self.assertEqual(row["null_method"], "prequential-majority (walk-forward)")
         self.assertAlmostEqual(row["null_prequential"], 0.4, places=9)
         self.assertNotAlmostEqual(row["null_prequential"], 0.6, places=3)
-        self.assertAlmostEqual(row["null_hindsight"], 0.6, places=9)
-        self.assertEqual(row["null_acc"],
-                         max(row["null_hindsight"], row["null_prequential"]))
+        self.assertEqual(row["null_acc"], row["null_prequential"])
+        for r in rows:
+            self.assertNotIn("null_hindsight", r)
 
 
 class TestWilsonEff(unittest.TestCase):
@@ -318,6 +322,164 @@ class TestSnapshotRoundTrip(unittest.TestCase):
                 f.writelines([header, ",".join(cells) + "\n", *rest])
             with self.assertRaises(SystemExit):
                 load_snapshot(td)
+
+
+class TestXsfactorSnapshotRoundTrip(unittest.TestCase):
+    """repro/xsfactor_inputs.csv must version EXACTLY the series
+    tools/xsfactor_edge.py consumes — same universe, same length floor, same
+    canonical bytes — or the committed manifest pins a different study than
+    the one whose numbers shipped in daemon/internal/xsfactor."""
+
+    # (symbol, market, active, n_bars). BBB is delisted but stays in the
+    # --universe all study; TINY is below the MIN_VOL_CLOSES floor and CCC is
+    # not a stock — neither may appear in the snapshot or the study.
+    SPEC = [("AAA", "stocks", 1, 30), ("BBB", "stocks", 0, 25),
+            ("TINY", "stocks", 1, 5), ("CCC", "crypto", 1, 30)]
+
+    @classmethod
+    def _bars_db(cls, path):
+        con = sqlite3.connect(path)
+        # write_snapshot builds every file, so the outcome tables must exist
+        # (empty) alongside the bars universe under version here.
+        con.execute("""CREATE TABLE prediction_outcomes (
+            symbol_id INTEGER, horizon TEXT, prob REAL, up INTEGER,
+            ts INTEGER, resolved_at INTEGER)""")
+        con.execute("""CREATE TABLE regime_outcomes (
+            symbol_id INTEGER, kind TEXT, horizon_days INTEGER, day INTEGER,
+            ts INTEGER, resolved_at INTEGER, correct INTEGER,
+            historical_accuracy REAL)""")
+        con.execute("CREATE TABLE symbols (id INTEGER PRIMARY KEY, symbol TEXT,"
+                    " market TEXT, active INTEGER)")
+        con.execute("CREATE TABLE bars (symbol_id INTEGER, tf TEXT, ts INTEGER,"
+                    " close REAL, volume REAL)")
+        bars = {}
+        for sid, (sym, market, active, n) in enumerate(cls.SPEC, start=1):
+            con.execute("INSERT INTO symbols VALUES (?,?,?,?)", (sid, sym, market, active))
+            rows = []
+            for i in range(n):
+                ts = (20000 + i) * 86400  # one bar per UTC day
+                close = 10.0 + sid + i * 0.25
+                vol = 1000.0 * sid + i
+                con.execute("INSERT INTO bars VALUES (?,?,?,?,?)",
+                            (sid, "1d", ts, close, vol))
+                rows.append((ts // 86400, close, vol))
+            bars[sym] = rows
+        con.commit()
+        return con, bars
+
+    def test_snapshot_versions_exactly_what_the_study_loads(self):
+        import tempfile
+
+        import xsfactor_edge as xsf
+        from make_repro_snapshot import g10, hash_records, write_snapshot
+
+        with tempfile.TemporaryDirectory() as td:
+            db_path = os.path.join(td, "bars.db")
+            con, bars = self._bars_db(db_path)
+            snap_dir = os.path.join(td, "repro")
+            manifest = write_snapshot(con, snap_dir)
+            con.close()
+
+            import csv
+            with open(os.path.join(snap_dir, "xsfactor_inputs.csv"), newline="") as f:
+                recs = list(csv.reader(f))[1:]
+            by_sym = {r[0]: r for r in recs}
+
+            # Universe and floor are the STUDY's, not the exporter's opinion:
+            # the snapshot lists exactly the series xsfactor_edge.load builds.
+            study = {s.sym: s for s in xsf.load(db_path, "all")}
+            self.assertEqual(set(by_sym), set(study))
+            self.assertEqual(set(by_sym), {"AAA", "BBB"})
+
+            for sym, s in study.items():
+                row = by_sym[sym]
+                self.assertEqual(int(row[2]), int(s.active))       # active flag
+                self.assertEqual(int(row[3]), s.days[0])           # first day
+                self.assertEqual(int(row[4]), s.days[-1])          # last day
+                self.assertEqual(int(row[5]), len(s.days))         # n
+                # Byte-level pin: the hash must equal one computed straight
+                # from the ground-truth bars, not from any DB round trip.
+                expected = hash_records(sym, "xsfactor-1d-day-close-volume",
+                                        [[str(d), g10(c), g10(v)]
+                                         for d, c, v in bars[sym]])
+                self.assertEqual(row[6], expected)
+
+            # The CSV read back through csv.reader re-hashes to the manifest
+            # value — the same tamper-evidence contract the graded files carry.
+            ent = next(e for e in manifest["files"]
+                       if e["file"] == "xsfactor_inputs.csv")
+            self.assertEqual(ent["kind"], "xsfactor-input-series-versions")
+            self.assertEqual(ent["rows"], 2)
+            self.assertEqual(
+                hash_records("xsfactor_inputs.csv", ent["kind"], recs), ent["sha256"])
+
+
+class TestFrozenSnapshotVerdicts(unittest.TestCase):
+    """CI freeze of the prequential-only verdicts on the COMMITTED repro/ snapshot.
+
+    The snapshot is fixed data, so grading it is a pure function of the
+    registry's rules. Pinning every row's exact verdict here means any future
+    change to null construction, the dedup discipline, the survivorship
+    boundary, or the day-clustering floor that moves a published verdict
+    fails CI loudly instead of drifting into the public registry unnoticed.
+    A verdict change that is INTENDED must update this table in the same
+    commit — which is exactly the review trail the freeze exists to force.
+    """
+
+    REPRO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "repro")
+
+    # (predictor, band) -> the exact verdict the committed snapshot grades to.
+    EXPECTED = {
+        ("directional-ensemble (1d)", "all"):
+            "INSUFFICIENT (18/30)",
+        ("directional-ensemble (1d, high conviction)", "|p-0.5|>=0.15"):
+            "INSUFFICIENT (8/30)",
+        # The six structural claims are backtests awaiting their first live
+        # grade — PENDING until the horizon elapses, never a live verdict.
+        ("liquidity21", "all"):
+            "PENDING (first grade 2026-08-14, 0/30 resolved)",
+        ("liquidity21-crypto", "all"):
+            "PENDING (first grade 2026-08-14, 0/30 resolved)",
+        ("trend21", "all"):
+            "PENDING (first grade 2026-08-14, 0/30 resolved)",
+        ("trend21-crypto", "all"):
+            "PENDING (first grade 2026-08-14, 0/30 resolved)",
+        ("trend63", "all"):
+            "PENDING (first grade 2026-09-25, 0/30 resolved)",
+        ("vol21", "all"):
+            "PENDING (first grade 2026-08-14, 0/30 resolved)",
+    }
+
+    @classmethod
+    def _rows(cls):
+        from accuracy_registry import (grade_directional_days, grade_structural_days,
+                                       load_snapshot)
+        by_h, totals, per_day = load_snapshot(cls.REPRO)
+        return grade_directional_days(by_h) + grade_structural_days(totals, per_day)
+
+    def test_every_row_grades_to_its_frozen_verdict(self):
+        """Exact row set AND exact verdict strings — no extras, no drift."""
+        got = {(r["predictor"], r["band"]): r["verdict"] for r in self._rows()}
+        self.assertEqual(got, self.EXPECTED)
+
+    def test_directional_rows_are_prequential_only(self):
+        """The hindsight null retired after its transition cycle; a row that
+        publishes it again (or reads a verdict against it) must fail here."""
+        directional = [r for r in self._rows() if r["family"] == "direction"]
+        self.assertTrue(directional)
+        for r in directional:
+            self.assertNotIn("null_hindsight", r)
+            self.assertIn("prequential", r["null_method"])
+            self.assertEqual(r["null_acc"], r["null_prequential"])
+
+    def test_no_frozen_row_slipped_past_the_sample_floor(self):
+        """The snapshot record is below both evidence floors everywhere; if a
+        rule change lets any row publish an interval or a live verdict off
+        this data, the freeze above fails too — this pins the reason why."""
+        for r in self._rows():
+            self.assertIsNone(r["ci"], r["predictor"])
+            self.assertLess(r["live_n"], MIN_INDEPENDENT_N, r["predictor"])
 
 
 if __name__ == "__main__":

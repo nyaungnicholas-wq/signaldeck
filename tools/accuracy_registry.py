@@ -31,21 +31,31 @@ Discipline enforced here, learned from the failures this repo already found:
     survivorship wave (store.go), so everything recorded before it was graded
     against a universe seeded from 2026 survivors. Pre-epoch rows never enter a
     tally here; every published row is stamped survivorship_clean accordingly.
-  * DUAL NULLS for one transition cycle. The hindsight null (best constant
-    guess over the finished sample) uses information not available at
-    prediction time; the prequential null (follow the running majority,
-    walk-forward) is the fair forward baseline and is <= the hindsight null by
-    construction. Every directional row publishes BOTH, and the stricter
-    (higher) one drives the verdict, so any verdict change across the switch
-    is attributable to the null definition and not to data drift — the same
-    discipline the A1 fix used publishing intervalMethod/designEffect beside
-    the new intervals.
+    Post-epoch attrition is BOUNDED, not declared unmeasurable:
+    tools/backfill_delistings.py --survivorship-bound counts symbols that left
+    the universe (SEC EDGAR Form 25 record UNION the live detector's stamps)
+    against symbols graded, publishes survivorship_bound — max accuracy
+    inflation in pp if every dropped symbol had been wrong — in the JSON, and
+    the summary prints it beside the design-effect disclosure.
+  * HINDSIGHT NULL RETIRED. The hindsight null (best constant guess over the
+    finished sample) used information not available at prediction time. It
+    ran for exactly one dual-null transition cycle — published beside the
+    prequential null with the stricter of the two driving the verdict — and
+    was then dropped, as promised. The regrade against the committed repro
+    snapshot recorded ZERO verdict changes across the switch
+    (audits/2026-07-27-null-transition.md), so the walk-forward prequential
+    majority is now the only null a verdict is read against.
 
 Usage:  python3 tools/accuracy_registry.py [--db PATH] [--json OUT]
         python3 tools/accuracy_registry.py --snapshot repro   # grade from the
             committed reproducibility snapshot instead of the (gitignored) DB,
             verifying every CSV against its manifest hash first. This is the
             path an outside reader uses — see REPRODUCE.md.
+        python3 tools/accuracy_registry.py --snapshot repro --json out.json
+            # same, plus the full-precision JSON a third party diffs against
+            # the published accuracy_registry.json in the public anchors repo
+            # — the complete outsider procedure (anchors.log digest line,
+            # prereg.log chain head) is "Verify the anchors" in REPRODUCE.md.
 """
 from __future__ import annotations
 
@@ -279,16 +289,13 @@ def grade_directional_days(by_h: dict[str, list[tuple]]) -> list[dict]:
         # not the whole window's. Beating 50% still means nothing if up-days
         # run 55%, but the null only learns that rate as the days arrive.
         null_g = prequential_null([(n, ups) for n, _, ups in days])
-        null_preq = null_g["acc"]
-        # TRANSITION CYCLE: the retired hindsight null is published beside the
-        # prequential one, and the STRICTER (higher) of the two drives the
-        # verdict. Since the prequential null can only sit at or below the
-        # hindsight null, verdicts cannot soften this cycle — so when the
-        # hindsight column is dropped next release, any change is attributable
-        # to the null definition alone, never to data drift.
-        base = sum(ups for _, _, ups in days) / g["n"]
-        null_hind = max(base, 1 - base)
-        null_acc = max(null_hind, null_preq)
+        # The hindsight null (best constant guess over the finished sample) is
+        # RETIRED. It ran for one dual-null transition cycle so any verdict
+        # change would be attributable to the null definition alone, and the
+        # switchover regrade recorded zero verdict changes
+        # (audits/2026-07-27-null-transition.md). Verdicts are read against
+        # the walk-forward prequential majority only.
+        null_acc = null_g["acc"]
         lo, hi = (g["ci"] if g["ci"] else (None, None))
         rows.append({
             "predictor": name,
@@ -302,10 +309,9 @@ def grade_directional_days(by_h: dict[str, list[tuple]]) -> list[dict]:
             "distinct_days": g["distinct_days"],
             "design_effect": g["design_effect"],
             "effective_n": g["effective_n"],
-            "null_hindsight": null_hind,
-            "null_prequential": null_preq,
+            "null_prequential": null_acc,
             "null_acc": null_acc,
-            "null_method": "transition-dual: verdict vs max(hindsight-majority, prequential-majority)",
+            "null_method": "prequential-majority (walk-forward)",
             "null_ci": null_g["ci"],
             "skill": g["acc"] - null_acc,
             "verdict": verdict_for(g["acc"], lo, hi, g["n"], null_acc, None,
@@ -406,7 +412,6 @@ def grade_structural_days(totals: list[tuple], per_day: dict[tuple, list[tuple]]
             "live_n": resolved,
             "live_acc": acc,
             "ci": [lo, hi] if lo is not None else None,
-            "null_hindsight": None,
             "null_prequential": None,
             "null_acc": None,
             "skill": None,
@@ -536,8 +541,7 @@ def main() -> int:
         print("ACTION REQUIRED — these are shipping a prediction the live record contradicts:")
         for r in failed:
             print(f"  * {r['predictor']}: {r['live_acc']:.1%} over {r['live_n']:,} independent "
-                  f"observations, entire CI below the {r['null_acc']:.1%} baseline "
-                  f"(hindsight {r['null_hindsight']:.1%} / prequential {r['null_prequential']:.1%}).")
+                  f"observations, entire CI below the {r['null_acc']:.1%} prequential baseline.")
         print("    Retire, invert, or relabel as experimental. Do not display as a forecast.")
         print()
     if pending:
@@ -552,28 +556,66 @@ def main() -> int:
     print("Intervals resample DAYS, not rows: on any one day ~1,000 symbols share one")
     print("market move, so the row count overstates the evidence. Each graded row below")
     print("reports its measured design effect and effective n in the JSON output.")
-    print("Directional nulls are in a DUAL-NULL TRANSITION cycle: every row publishes the")
-    print("retiring hindsight null (best constant guess over the finished sample) beside")
-    print("the prequential null (each day's guess is the majority class over days strictly")
-    print("before it). The stricter (higher) of the two drives the verdict, so when the")
-    print("hindsight column is dropped next release, any verdict change is attributable to")
-    print("the null definition alone — not data drift. Prequential <= hindsight by")
-    print("construction, so FAILED verdicts can only soften across the switch, never sharpen.")
+    print("Directional null: PREQUENTIAL only — each day's constant guess is the majority")
+    print("class over days strictly BEFORE it (a coin flip on day one or a tied prior),")
+    print("graded through the same day-clustered machinery as the model it benchmarks.")
+    print("The hindsight null was retired after its one dual-null transition cycle; the")
+    print("switchover regrade against the committed repro snapshot recorded ZERO verdict")
+    print("changes — see audits/2026-07-27-null-transition.md.")
     for r in rows:
         if r.get("design_effect"):
             print(f"  {r['predictor']}: n={r['live_n']:,} over {r['distinct_days']} days, "
                   f"design effect {r['design_effect']:.1f}x -> effective n {r['effective_n']:.0f}")
 
+    # Post-epoch attrition is MEASURED, not declared unmeasurable: the bound is
+    # computed against an external delistings record (SEC EDGAR Form 25) by
+    # tools/backfill_delistings.py --survivorship-bound, which owns this field
+    # in the registry JSON. This block only reports what was measured.
+    reg_path = args.json or os.path.join(os.path.dirname(DEFAULT_DB),
+                                         "accuracy_registry.json")
+    sb = None
+    if os.path.exists(reg_path):
+        try:
+            with open(reg_path) as f:
+                sb = json.load(f).get("survivorship_bound")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            sb = None
+    if sb and sb.get("bound_pp") is not None:
+        print(f"Survivorship bound (measured {sb['as_of']}, {sb['source']}): "
+              f"{sb['symbols_dropped']} symbol(s) left the tracked universe since "
+              f"{sb['epoch']} vs {sb['symbols_graded']:,} graded. If every dropped symbol")
+        print(f"had kept being graded and been WRONG every time, headline accuracy would "
+              f"fall by at most {sb['bound_pp']:.2f} pp.")
+    elif sb:
+        print(f"Survivorship bound: measured {sb['as_of']} but not computable — "
+              f"{sb.get('reason', 'no graded post-epoch record')}.")
+    else:
+        print("Survivorship bound: NOT YET MEASURED this cycle — run")
+        print("  python3 tools/backfill_delistings.py --survivorship-bound")
+        print("to bound accuracy inflation from dropped symbols against SEC EDGAR Form 25 filings.")
+
     if args.json:
+        payload = {"generated": dt.datetime.now().isoformat(timespec="seconds"),
+                   "min_independent_n": MIN_INDEPENDENT_N,
+                   "survivorship_epoch": SURVIVORSHIP_EPOCH.isoformat(),
+                   "null_policy": ("prequential-majority only: each day's constant guess "
+                                   "is the majority class over days strictly before it. "
+                                   "The hindsight null was retired after the dual-null "
+                                   "transition cycle; the switchover regrade recorded zero "
+                                   "verdict changes (audits/2026-07-27-null-transition.md)."),
+                   "rows": rows}
+        # backfill_delistings.py --survivorship-bound owns survivorship_bound;
+        # regenerating the registry must not silently discard the measurement.
+        if os.path.exists(args.json):
+            try:
+                with open(args.json) as f:
+                    prev = json.load(f).get("survivorship_bound")
+            except (OSError, json.JSONDecodeError, AttributeError):
+                prev = None
+            if prev:
+                payload["survivorship_bound"] = prev
         with open(args.json, "w") as f:
-            json.dump({"generated": dt.datetime.now().isoformat(timespec="seconds"),
-                       "min_independent_n": MIN_INDEPENDENT_N,
-                       "survivorship_epoch": SURVIVORSHIP_EPOCH.isoformat(),
-                       "null_policy": ("transition cycle: null_hindsight and null_prequential "
-                                       "published side by side on every row; the stricter "
-                                       "(higher) drives the verdict. Hindsight column drops "
-                                       "next release."),
-                       "rows": rows}, f, indent=1)
+            json.dump(payload, f, indent=1)
         print(f"\nwrote {args.json}")
     return 0
 
