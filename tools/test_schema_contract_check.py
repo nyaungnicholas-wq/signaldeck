@@ -37,7 +37,7 @@ var SchemaContract = map[string][]string{{
 
 def write(tmp, name, body):
     p = os.path.join(tmp, name)
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8") as f:
         f.write(body)
     return p
 

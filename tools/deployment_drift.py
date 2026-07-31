@@ -340,7 +340,7 @@ def main() -> int:
     for c in checks:
         print(f"  [{'ok  ' if c['ok'] else 'FAIL'}] {c['name']}: {c['evidence']}")
     if args.json:
-        with open(args.json, "w") as f:
+        with open(args.json, "w", encoding="utf-8") as f:
             json.dump({"ok": status == 0, "checks": checks}, f, indent=1)
     if status:
         names = ", ".join(c["name"] for c in checks if not c["ok"])

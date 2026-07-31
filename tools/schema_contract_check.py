@@ -165,11 +165,11 @@ def missing_objects(conn, objects):
 def check(schema_path, contract_path, migrate_path):
     """Returns (exit_code, list of report lines)."""
     try:
-        with open(schema_path) as f:
+        with open(schema_path, encoding="utf-8") as f:
             schema_sql = f.read()
-        with open(contract_path) as f:
+        with open(contract_path, encoding="utf-8") as f:
             go_src = f.read()
-        with open(migrate_path) as f:
+        with open(migrate_path, encoding="utf-8") as f:
             migrate_src = f.read()
     except OSError as e:
         return 2, [f"schema contract check: cannot read source: {e}"]

@@ -588,7 +588,7 @@ def main():
         "horizons": {r["horizon"]: r for r in results},
     }
     if args.out:
-        with open(args.out, "w") as f:
+        with open(args.out, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
             f.write("\n")
         print("\nwrote %s" % args.out)

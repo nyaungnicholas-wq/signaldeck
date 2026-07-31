@@ -13,7 +13,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  API_BASE,
   HORIZONS,
   pollMs,
   POLL_SLOW,

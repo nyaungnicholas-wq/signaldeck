@@ -17,3 +17,6 @@ scratchpad/
 daemon/sdmaint
 .tmpverify/
 *.bak-[0-9]*
+
+# Python bytecode from running the tools/tests locally.
+__pycache__/

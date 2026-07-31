@@ -113,7 +113,20 @@ done
 
 echo "── manifest tier 3: repro/MANIFEST.json members are shipped ───────────"
 if [ -f repro/MANIFEST.json ]; then
-  members=$(python3 - <<'PY'
+  # `python3` on Windows resolves to the Store alias stub, which prints an
+  # install advert and exits 0 — the members list came back EMPTY and the check
+  # reported a manifest naming nothing. An interpreter that is not there must
+  # not read as a snapshot that documents nothing.
+  py=""
+  for c in python3 python; do
+    if "$c" -c "import sys" >/dev/null 2>&1; then py="$c"; break; fi
+  done
+  if [ -z "$py" ]; then
+    printf '  ✗ no working python found — tier 3 cannot be checked\n'
+    fail=1
+    py=false
+  fi
+  members=$("$py" - <<'PY'
 import json, sys
 try:
     d = json.load(open("repro/MANIFEST.json"))
@@ -126,6 +139,10 @@ for f in d.get("files", []):
         print("repro/" + str(name).lstrip("./"))
 PY
 )
+  # A Windows python prints CRLF, and \r is not in IFS — every path would carry
+  # a trailing \r, so `git cat-file` missed files that ARE in HEAD and the check
+  # reported the snapshot unshipped. Strip it before splitting.
+  members=${members//$'\r'/}
   case "$members" in
     PARSE_ERROR*)
       printf '  ✗ repro/MANIFEST.json is unparseable — %s\n' "${members#PARSE_ERROR }"

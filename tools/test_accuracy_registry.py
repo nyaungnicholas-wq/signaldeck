@@ -519,11 +519,11 @@ class TestSnapshotRoundTrip(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             write_snapshot(con, td)
             path = os.path.join(td, "directional_days.csv")
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 header, first, *rest = f.readlines()
             cells = first.strip().split(",")
             cells[3] = str(int(cells[3]) + 1)  # one extra "correct" tally
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 f.writelines([header, ",".join(cells) + "\n", *rest])
             with self.assertRaises(SystemExit):
                 load_snapshot(td)
@@ -580,17 +580,17 @@ class TestSnapshotRoundTrip(unittest.TestCase):
             recs = [["7", "0" * 64, "cafebabe", "30", "10", "10",
                      "0.05", MULTIPLICITY_RULE, "0"]]
             f = "grading_protocol.csv"
-            with open(os.path.join(td, f), "w", newline="") as fh:
+            with open(os.path.join(td, f), "w", newline="", encoding="utf-8") as fh:
                 w = _csv.writer(fh)
                 w.writerow(mrs.HEADERS[f])
                 w.writerows(recs)
             man_path = os.path.join(td, "MANIFEST.json")
-            man = _json.load(open(man_path))
+            man = _json.load(open(man_path, encoding="utf-8"))
             for e in man["files"]:
                 if e["file"] == f:
                     e["sha256"] = mrs.hash_records(f, mrs.FILES[f], recs)
                     e["rows"] = 1
-            _json.dump(man, open(man_path, "w"), indent=1)
+            _json.dump(man, open(man_path, "w", encoding="utf-8"), indent=1)
             with self.assertRaises(SystemExit):
                 load_snapshot(td)
 
@@ -652,7 +652,7 @@ class TestXsfactorSnapshotRoundTrip(unittest.TestCase):
             con.close()
 
             import csv
-            with open(os.path.join(snap_dir, "xsfactor_inputs.csv"), newline="") as f:
+            with open(os.path.join(snap_dir, "xsfactor_inputs.csv"), newline="", encoding="utf-8") as f:
                 recs = list(csv.reader(f))[1:]
             by_sym = {r[0]: r for r in recs}
 
@@ -749,7 +749,7 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
             raise AssertionError(
                 "the shipped snapshot has no grading_protocol.csv — the reproduce "
                 "path would grade with no registered grader")
-        with open(path, newline="") as fh:
+        with open(path, newline="", encoding="utf-8") as fh:
             rows = list(_csv.reader(fh))[1:]
         rec = None
         if rows:
@@ -1065,6 +1065,7 @@ class TestChainPresenceIsRead(unittest.TestCase):
             self._bare_db(path).close()
             con = sqlite3.connect(path)
             pres = fetch_chain_presence(con)
+            con.close()
         self.assertFalse(pres["null_frozen"])
         self.assertFalse(pres["retire_rule_chained"])
         self.assertIsNone(pres["retire_rule_chain_seq"])
@@ -1079,7 +1080,9 @@ class TestChainPresenceIsRead(unittest.TestCase):
                         " VALUES (1,'auto-retire-rule','{}','stale-digest','','e1','')")
             con.commit()
             con.close()
-            pres = fetch_chain_presence(sqlite3.connect(path))
+            con = sqlite3.connect(path)
+            pres = fetch_chain_presence(con)
+            con.close()
         self.assertFalse(pres["retire_rule_chained"])
         self.assertEqual(pres["retire_rule_chain_hash"], "stale-digest")
 
@@ -1093,7 +1096,9 @@ class TestChainPresenceIsRead(unittest.TestCase):
                         (auto_retire_rule_digest(),))
             con.commit()
             con.close()
-            pres = fetch_chain_presence(sqlite3.connect(path))
+            con = sqlite3.connect(path)
+            pres = fetch_chain_presence(con)
+            con.close()
         self.assertTrue(pres["retire_rule_chained"])
         self.assertEqual(pres["retire_rule_chain_seq"], 1)
 
@@ -1104,7 +1109,9 @@ class TestChainPresenceIsRead(unittest.TestCase):
             con.execute("ALTER TABLE regime_outcomes ADD COLUMN naive_label TEXT")
             con.commit()
             con.close()
-            pres = fetch_chain_presence(sqlite3.connect(path))
+            con = sqlite3.connect(path)
+            pres = fetch_chain_presence(con)
+            con.close()
         self.assertFalse(pres["null_frozen"])
         self.assertEqual(pres["null_coverage"], 0.0)
 
@@ -1138,7 +1145,7 @@ class TestChainPresenceIsRead(unittest.TestCase):
             finally:
                 sys.argv = argv
             text = buf.getvalue()
-            with open(out_json) as f:
+            with open(out_json, encoding="utf-8") as f:
                 payload = json.load(f)
         self.assertIn("Structural null: NOT FROZEN", text)
         self.assertIn("Auto-retire rule: NOT ON CHAIN", text)
@@ -1241,7 +1248,7 @@ class TestChainedProtocolMatchesThisGrader(unittest.TestCase):
                                "daemon", "internal", "prereg", "prereg.go")
 
     def _go_field(self, name: str) -> int:
-        src = open(self.GO_PROTOCOL).read()
+        src = open(self.GO_PROTOCOL, encoding="utf-8").read()
         m = re.search(rf"^\s*{name}:\s*(\d+),\s*$", src, re.M)
         self.assertIsNotNone(
             m, f"GradingProtocol() no longer registers {name} — the chain would pin a "
@@ -1572,7 +1579,7 @@ class TestMultiplicityCorrection(unittest.TestCase):
         """One rule, two languages. A drift here means the grader refuses."""
         go = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                           "daemon", "internal", "prereg", "prereg.go")
-        src = open(go).read()
+        src = open(go, encoding="utf-8").read()
         start = src.index("const MultiplicityRule =")
         end = src.index("\n\n", start)
         literal = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', src[start:end]))
@@ -1606,7 +1613,7 @@ class ProtocolDocumentGateTest(unittest.TestCase):
         self.script = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "ops", "accuracy-registry.sh")
-        self.src = open(self.script).read()
+        self.src = open(self.script, encoding="utf-8").read()
 
     def test_publishing_path_recomputes_the_document_digest(self):
         self.assertIn('shasum -a 256 "$SD/PREREGISTRATION.md"', self.src,

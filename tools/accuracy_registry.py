@@ -326,7 +326,7 @@ def _published_int(path: str | None, key: str) -> int:
     if not path or not os.path.exists(path):
         return 0
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return int(json.load(f).get(key) or 0)
     except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
         return 0
@@ -1621,7 +1621,7 @@ def load_snapshot(snap_dir: str, allow_legacy: bool = False):
     man_path = os.path.join(snap_dir, "MANIFEST.json")
     if not os.path.exists(man_path):
         sys.exit(f"snapshot manifest not found: {man_path}")
-    with open(man_path) as f:
+    with open(man_path, encoding="utf-8") as f:
         manifest = {e["file"]: e for e in json.load(f)["files"]}
 
     missing = [f for f in FILES
@@ -1637,7 +1637,7 @@ def load_snapshot(snap_dir: str, allow_legacy: bool = False):
         path = os.path.join(snap_dir, fname)
         if not os.path.exists(path):
             sys.exit(f"snapshot file missing: {path}")
-        with open(path, newline="") as f:
+        with open(path, newline="", encoding="utf-8") as f:
             recs = list(csv.reader(f))[1:]  # drop the header row
         ent = manifest.get(fname)
         if ent is None:
@@ -1889,6 +1889,7 @@ def main() -> int:
             "structure": measure_universe_completeness(con, "regime_outcomes"),
         }
         source = f"database {args.db}"
+        con.close()
 
     print("=" * 104)
     print(f"SIGNALDECK ACCURACY REGISTRY — {dt.date.today()}")
@@ -2064,7 +2065,7 @@ def main() -> int:
     sb = None
     if os.path.exists(reg_path):
         try:
-            with open(reg_path) as f:
+            with open(reg_path, encoding="utf-8") as f:
                 sb = json.load(f).get("survivorship_bound")
         except (OSError, json.JSONDecodeError, AttributeError):
             sb = None
@@ -2148,13 +2149,13 @@ def main() -> int:
         # regenerating the registry must not silently discard the measurement.
         if os.path.exists(args.json):
             try:
-                with open(args.json) as f:
+                with open(args.json, encoding="utf-8") as f:
                     prev = json.load(f).get("survivorship_bound")
             except (OSError, json.JSONDecodeError, AttributeError):
                 prev = None
             if prev:
                 payload["survivorship_bound"] = prev
-        with open(args.json, "w") as f:
+        with open(args.json, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=1)
         print(f"\nwrote {args.json}")
 

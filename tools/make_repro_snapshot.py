@@ -287,7 +287,7 @@ def write_snapshot(con: sqlite3.Connection, out_dir: str) -> dict:
     data = build_all(con)
     entries = []
     for fname, recs in data.items():
-        with open(os.path.join(out_dir, fname), "w", newline="") as f:
+        with open(os.path.join(out_dir, fname), "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(HEADERS[fname])
             w.writerows(recs)
@@ -309,7 +309,7 @@ def write_snapshot(con: sqlite3.Connection, out_dir: str) -> dict:
                 "`python3 tools/accuracy_registry.py --snapshot repro` — see REPRODUCE.md.",
         "files": entries,
     }
-    with open(os.path.join(out_dir, "MANIFEST.json"), "w") as f:
+    with open(os.path.join(out_dir, "MANIFEST.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=1)
         f.write("\n")
     return manifest
@@ -321,7 +321,7 @@ def verify_snapshot(con: sqlite3.Connection, out_dir: str) -> int:
     if not os.path.exists(man_path):
         print(f"no snapshot at {out_dir} — run without --verify to create one")
         return 1
-    with open(man_path) as f:
+    with open(man_path, encoding="utf-8") as f:
         committed = {e["file"]: e for e in json.load(f)["files"]}
     fresh = build_all(con)
     rc = 0
@@ -358,7 +358,7 @@ def verify_complete(out_dir: str) -> int:
     if not os.path.exists(man_path):
         print(f"MISSING: {man_path}")
         return 1
-    with open(man_path) as f:
+    with open(man_path, encoding="utf-8") as f:
         manifest = {e["file"]: e for e in json.load(f)["files"]}
     rc = 0
     for fname, kind in sorted(FILES.items()):
@@ -372,7 +372,7 @@ def verify_complete(out_dir: str) -> int:
             print(f"IN MANIFEST BUT NOT ON DISK: {fname}")
             rc = 1
             continue
-        with open(path, newline="") as f:
+        with open(path, newline="", encoding="utf-8") as f:
             recs = list(csv.reader(f))[1:]
         got = hash_records(fname, kind, recs)
         if got != ent["sha256"]:

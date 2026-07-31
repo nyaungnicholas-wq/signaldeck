@@ -919,7 +919,7 @@ def main():
     verdict(stats_by_cost, h018)
 
     if args.json:
-        with open(args.json, "w") as f:
+        with open(args.json, "w", encoding="utf-8") as f:
             json.dump({"h018": h018,
                        "by_cost": {str(k): v for k, v in stats_by_cost.items()}},
                       f, indent=2, default=str)
