@@ -5,11 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ledgeranchor"
@@ -444,9 +443,9 @@ func TestLedgerListEndpoint(t *testing.T) {
 // as "anchored" — without disclosing where the key lives.
 func TestLedgerVerify_KeyFailureDoesNotLeakThePath(t *testing.T) {
 	keyPath := filepath.Join(t.TempDir(), "readable-anchor.key")
-	if err := os.WriteFile(keyPath, []byte(strings.Repeat("ab", 32)+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Exposure is mode bits on Unix and an Everyone ACE on Windows; see
+	// keyexposure_unix_test.go / keyexposure_windows_test.go.
+	writeExposedKey(t, keyPath)
 	srv, st := newLedgerServer(t, nil)
 	t.Setenv(ledgeranchor.EnvKeyPath, keyPath) // world-readable → refused
 	ctx := context.Background()

@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,7 +29,13 @@ const csrfHeader = "X-Signaldeck"
 // buildDaemon compiles the daemon once into a temp dir.
 func buildDaemon(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "signaldeckd")
+	// Windows will not exec a file without the .exe extension, and `go build -o`
+	// writes exactly the name it is given.
+	name := "signaldeckd"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), name)
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/signaldeckd")
 	cmd.Dir = ".." // daemon module root
 	out, err := cmd.CombinedOutput()
@@ -207,6 +214,15 @@ func getBody(t *testing.T, c *http.Client, url string) (*http.Response, string) 
 func TestDaemonEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e: skipped in -short mode")
+	}
+	if runtime.GOOS == "windows" {
+		// The suite's contract includes graceful SIGTERM shutdown and restart
+		// persistence, and Go cannot deliver SIGTERM on Windows at all
+		// (os.Process.Signal returns "not supported by windows"). Downgrading
+		// that step to a hard Kill would keep the test green while no longer
+		// testing the thing it exists to test, so it is skipped outright and
+		// stays honest. The daemon deploys on Unix (see ops/*.plist).
+		t.Skip("e2e: graceful-SIGTERM shutdown is not expressible on Windows; run this suite on Unix")
 	}
 	bin := buildDaemon(t)
 	home := t.TempDir() // fake HOME: no .env files → no Alpaca/LLM keys

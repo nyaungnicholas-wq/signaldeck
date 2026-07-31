@@ -38,7 +38,7 @@ type respCache struct {
 type respEntry struct {
 	body    []byte
 	builtAt time.Time
-	usedAt  time.Time // last read; drives LRU eviction
+	usedSeq uint64 // last read; drives LRU eviction (see lruclock.go)
 }
 
 func newRespCache(ttl time.Duration) *respCache {
@@ -65,11 +65,11 @@ func newRespCache(ttl time.Duration) *respCache {
 func (c *respCache) evictLRULocked() {
 	for len(c.ent) >= maxCacheEntries {
 		var oldestKey string
-		var oldest time.Time
+		var oldest uint64
 		found := false
 		for k, e := range c.ent {
-			if !found || e.usedAt.Before(oldest) {
-				oldestKey, oldest, found = k, e.usedAt, true
+			if !found || e.usedSeq < oldest {
+				oldestKey, oldest, found = k, e.usedSeq, true
 			}
 		}
 		if !found {
@@ -86,7 +86,7 @@ func (c *respCache) serve(key string, w http.ResponseWriter, r *http.Request, h 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.ent[key]; ok && time.Since(e.builtAt) < c.ttl {
-		e.usedAt = time.Now()
+		e.usedSeq = lruTick()
 		c.ent[key] = e
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Cache", "hit")
@@ -102,7 +102,7 @@ func (c *respCache) serve(key string, w http.ResponseWriter, r *http.Request, h 
 			c.evictLRULocked()
 		}
 		now := time.Now()
-		c.ent[key] = respEntry{body: rec.buf, builtAt: now, usedAt: now}
+		c.ent[key] = respEntry{body: rec.buf, builtAt: now, usedSeq: lruTick()}
 	}
 }
 

@@ -19,20 +19,9 @@ func TestSigner_KeyIsCreatedOwnerOnlyAndStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := fi.Mode().Perm(); perm != 0o600 {
-		t.Errorf("key perms = %04o, want 0600 — a readable signing key proves nothing", perm)
-	}
-	di, err := os.Stat(filepath.Dir(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := di.Mode().Perm(); perm&0o077 != 0 {
-		t.Errorf("key dir perms = %04o, want owner-only", perm)
-	}
+	// "Owner-only" means mode bits on Unix and a protected DACL on Windows, so
+	// the assertion lives in keyperm_unix_test.go / keyperm_windows_test.go.
+	assertKeyIsOwnerOnly(t, path)
 
 	again, err := LoadOrCreateSigner(path)
 	if err != nil {
@@ -55,9 +44,7 @@ func TestSigner_RefusesWiderPermissions(t *testing.T) {
 	if _, err := LoadOrCreateSigner(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	widenKeyPermissions(t, path)
 	_, err := LoadOrCreateSigner(path)
 	if !errors.Is(err, ErrKeyPermissions) {
 		t.Fatalf("err = %v, want ErrKeyPermissions", err)

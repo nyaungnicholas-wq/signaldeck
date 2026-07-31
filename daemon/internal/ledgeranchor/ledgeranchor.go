@@ -202,8 +202,10 @@ func LoadOrCreateSigner(path string) (*Signer, error) {
 	fi, err := os.Stat(path)
 	switch {
 	case err == nil:
-		if fi.Mode().Perm()&0o077 != 0 {
-			return nil, fmt.Errorf("%w (%s is %04o)", ErrKeyPermissions, path, fi.Mode().Perm())
+		// Platform-specific: Unix checks mode bits, Windows inspects the DACL.
+		// Implementations live in keyperm_unix.go / keyperm_windows.go.
+		if err := enforceKeyPerm(path, fi); err != nil {
+			return nil, err
 		}
 		return loadSigner(path)
 	case os.IsNotExist(err):
@@ -254,6 +256,13 @@ func createSigner(path string) (*Signer, error) {
 	}
 	if err := f.Close(); err != nil {
 		return nil, err
+	}
+	// O_EXCL's 0600 is honoured on Unix but ignored on Windows, where the file
+	// simply inherits the parent's ACL. hardenNewKey closes that gap; a key we
+	// cannot restrict is removed rather than left readable.
+	if err := hardenNewKey(path); err != nil {
+		os.Remove(path) //nolint:errcheck // best effort; the error below is what matters
+		return nil, fmt.Errorf("ledgeranchor: securing new key: %w", err)
 	}
 	return &Signer{priv: priv, path: path}, nil
 }

@@ -84,7 +84,7 @@ type swrCache struct {
 
 type swrEntry struct {
 	builtAt    time.Time
-	usedAt     time.Time // last read; drives LRU eviction
+	usedSeq    uint64 // last read; drives LRU eviction (see lruclock.go)
 	payload    map[string]any
 	rebuilding bool          // a stale-refresh goroutine is in flight
 	building   chan struct{} // non-nil while a COLD build is in flight; closed on completion
@@ -102,14 +102,14 @@ type swrEntry struct {
 func (c *swrCache) evictLRULocked() {
 	for len(c.ent) >= maxCacheEntries {
 		var oldestKey string
-		var oldest time.Time
+		var oldest uint64
 		found := false
 		for k, e := range c.ent {
 			if e.building != nil || e.rebuilding {
 				continue
 			}
-			if !found || e.usedAt.Before(oldest) {
-				oldestKey, oldest, found = k, e.usedAt, true
+			if !found || e.usedSeq < oldest {
+				oldestKey, oldest, found = k, e.usedSeq, true
 			}
 		}
 		if !found {
@@ -136,7 +136,7 @@ func (c *swrCache) get(ctx context.Context, key string,
 		e = &swrEntry{}
 		c.ent[key] = e
 	}
-	e.usedAt = time.Now()
+	e.usedSeq = lruTick()
 
 	// Warm entry: serve immediately; when stale, kick ONE detached refresh.
 	if e.payload != nil {
@@ -248,7 +248,7 @@ type swrBodyCache struct {
 
 type swrBodyEntry struct {
 	builtAt    time.Time
-	usedAt     time.Time // last read; drives LRU eviction
+	usedSeq    uint64 // last read; drives LRU eviction (see lruclock.go)
 	body       []byte
 	rebuilding bool
 	building   chan struct{}
@@ -261,14 +261,14 @@ type swrBodyEntry struct {
 func (c *swrBodyCache) evictLRULocked() {
 	for len(c.ent) >= maxCacheEntries {
 		var oldestKey string
-		var oldest time.Time
+		var oldest uint64
 		found := false
 		for k, e := range c.ent {
 			if e.building != nil || e.rebuilding {
 				continue
 			}
-			if !found || e.usedAt.Before(oldest) {
-				oldestKey, oldest, found = k, e.usedAt, true
+			if !found || e.usedSeq < oldest {
+				oldestKey, oldest, found = k, e.usedSeq, true
 			}
 		}
 		if !found {
@@ -304,7 +304,7 @@ func (c *swrBodyCache) serve(key string, w http.ResponseWriter, r *http.Request,
 		e = &swrBodyEntry{}
 		c.ent[key] = e
 	}
-	e.usedAt = time.Now()
+	e.usedSeq = lruTick()
 
 	if e.body != nil {
 		body := e.body

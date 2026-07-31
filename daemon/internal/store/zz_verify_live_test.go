@@ -95,6 +95,10 @@ func TestZZGateActuallyFires(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Close on every exit path, including t.Skip/t.Fatal (which Goexit): a
+	// leaked handle keeps drop.db open and TempDir cleanup then fails on
+	// Windows, where an open file cannot be unlinked.
+	defer db.Close() //nolint:errcheck
 	if _, err := db.Exec(schemaSQL); err != nil {
 		t.Fatal(err)
 	}
@@ -118,10 +122,12 @@ func TestZZGateActuallyFires(t *testing.T) {
 	if target == "" {
 		t.Fatal("no droppable column found")
 	}
-	if _, err := db.Exec(`ALTER TABLE ` + table + ` DROP COLUMN ` + target); err != nil {
-		t.Skipf("cannot drop %s.%s: %v", table, target, err)
+	// The probe loop above already performed the drop. Re-running it here always
+	// failed ("no such column"), so this test skipped on every platform and
+	// never actually exercised the gate.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
-	db.Close() //nolint:errcheck
 
 	st, err := Open(p)
 	if err == nil {

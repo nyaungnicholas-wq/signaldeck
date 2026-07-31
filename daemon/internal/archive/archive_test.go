@@ -197,7 +197,10 @@ func TestDirPrecedence(t *testing.T) {
 		t.Fatalf("env override: got %q", got)
 	}
 	t.Setenv("SIGNALDECK_ARCHIVE_DIR", "")
-	if got := Dir("/data/sub/x.db"); got != "/data/sub/archive" {
-		t.Fatalf("db-dir default: got %q", got)
+	// Dir uses filepath.Join, so the separator is platform-native; build the
+	// expectation the same way rather than hardcoding POSIX slashes.
+	want := filepath.Join("/data/sub", "archive")
+	if got := Dir("/data/sub/x.db"); got != want {
+		t.Fatalf("db-dir default: got %q, want %q", got, want)
 	}
 }
