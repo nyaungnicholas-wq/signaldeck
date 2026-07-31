@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/archive"
@@ -1275,10 +1274,4 @@ func archivePruneDerived[T any](
 }
 
 // diskFree returns the available bytes on the filesystem holding dir.
-func diskFree(dir string) (int64, error) {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(dir, &st); err != nil {
-		return 0, err
-	}
-	return int64(st.Bavail) * int64(st.Bsize), nil
-}
+// Platform implementations live in diskfree_unix.go / diskfree_windows.go.

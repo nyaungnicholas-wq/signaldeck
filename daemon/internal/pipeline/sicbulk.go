@@ -53,7 +53,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
@@ -144,11 +143,8 @@ func (w *SICBulkSync) freeDisk(dir string) (uint64, error) {
 	if w.FreeDisk != nil {
 		return w.FreeDisk(dir)
 	}
-	var fs syscall.Statfs_t
-	if err := syscall.Statfs(dir, &fs); err != nil {
-		return 0, err
-	}
-	return uint64(fs.Bavail) * uint64(fs.Bsize), nil
+	// Platform implementations live in freedisk_unix.go / freedisk_windows.go.
+	return statfsFreeBytes(dir)
 }
 
 // degrade records a dq event and returns an HONEST ok-status detail — a bulk
