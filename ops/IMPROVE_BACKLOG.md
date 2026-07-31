@@ -1,0 +1,78 @@
+# Improvement backlog
+
+The self-improvement loop (`ops/selfimprove-loop.ps1`) consumes this file top to
+bottom. One item per `## ` heading. The loop works the FIRST unchecked item each
+cycle, and checks it off only when its stated verification command passes.
+
+Order is priority. Put new work where it belongs, not at the end.
+
+Each item needs a `verify:` line holding a shell command that exits non-zero
+until the item is genuinely done. An item without a runnable verification is a
+wish, not a task — the loop skips it and says so.
+
+---
+
+## [ ] Research-loop liveness: judgments missing for 2026-07-26..29
+
+`tools/research_liveness.py` refuses to let the accuracy registry publish because
+`worker_runs` narrated 48-rule grid searches on four days while
+`research_loop_judgments` / `research_loop_runs` hold no rows for those days.
+Either the judgments were never persisted (fix the writer in
+`daemon/internal/pipeline/researchloop*.go` so a narrated search cannot commit
+without its judgment rows), or the narration overstates what ran (fix the
+narration). Do NOT delete the liveness check.
+
+verify: `python tools/research_liveness.py --db data/signaldeck.db`
+
+## [ ] Structural outcomes carry no naive_label
+
+16,022 of 19,058 `regime_outcomes` rows have a NULL `naive_label`, so
+`regime-outcome-runner` refuses to run and no structural kind can ever be
+graded. Find the write path that produced label-less rows and make the guard
+unbypassable there. Backfilling the label is only correct where the naive
+baseline can be recomputed from stored bars; where it cannot, quarantine the
+rows rather than inventing a label.
+
+verify: `python -c "import sqlite3;n=sqlite3.connect('file:data/signaldeck.db?mode=ro',uri=True).execute('select count(*) from regime_outcomes where naive_label is null and ts > 1785000000').fetchone()[0];raise SystemExit(1 if n else 0)"`
+
+## [ ] Project root is hardcoded to $HOME/claude code
+
+`daemon/internal/config/config.go` builds four paths from
+`filepath.Join(home, "claude code", ...)` (lines 78, 125, 158, 166). This repo
+lives at `$HOME/Desktop/claude code`, so the daemon silently loaded NO `.env`:
+the NVIDIA key was ignored, Alpaca keys were never found, and the security
+toggles in `.env` never applied. Resolve the root by walking up from the
+executable/cwd for a directory containing `signaldeck/daemon/.env`, honour a
+`SIGNALDECK_ROOT` override, and keep the current path as the last fallback so
+the macOS launchd deployment is unaffected.
+
+verify: `cd daemon && go test ./internal/config/...`
+
+## [ ] Grader digest breaks on a Windows clone
+
+`core.autocrlf=true` stores `tools/accuracy_registry.py` as LF and checks it out
+as CRLF, which changes its SHA-256 — so a fresh Windows clone gets a grader that
+refuses to grade itself against the digest pinned in the prereg chain. Add a
+`.gitattributes` marking the digest-pinned files `-text` so their bytes are
+identical on every platform.
+
+verify: `python -c "import hashlib,subprocess,sys;d=hashlib.sha256(open('tools/accuracy_registry.py','rb').read()).hexdigest();sys.exit(0 if b'\r\n' not in open('tools/accuracy_registry.py','rb').read() else 1)"`
+
+## [ ] Prereg chain pins a stale grader digest
+
+The chain's newest `grading-protocol` record pins the grader digest from before
+the encoding fix, so `tools/accuracy_registry.py` refuses to grade. The
+registrar appends the amendment automatically on a clean (non-dirty) build —
+confirm that path runs, rather than appending by hand.
+
+verify: `python tools/accuracy_registry.py --db data/signaldeck.db`
+
+## [ ] Silent data sources: congress, EDGAR
+
+`congress_trades` holds 0 rows while `congress-poller` reports `ok` ("congress
+mirrors unavailable", 94 dq events in 7 days). `edgar-fetcher` and
+`filings-poller` report `ok` with "skipped: no EDGAR client" on every run. A
+source that never delivers must not report success — make the pollers surface a
+degraded status the watchdog can see.
+
+verify: `cd daemon && go test ./internal/pipeline/... -run 'Poller|Source'`
