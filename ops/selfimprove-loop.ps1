@@ -144,58 +144,121 @@ function Gates {
 # Returns the list of files it changed and verified, or $null. The caller commits
 # exactly those -- never `git add -A`, which in a tree shared with another agent
 # sweeps up that agent's unreviewed work. That happened once already.
-function BriefWorker([string]$task, [string]$evidence, [string]$verifyCmd, [string]$lane = 'code') {
+# Pull repo-relative source paths out of a brief or a compiler error, keeping
+# only ones that actually exist. This is how the worker learns WHICH file it is
+# allowed to rewrite -- and how it gets to see that file at all.
+function TargetFiles([string]$text, [string]$verifyCmd = '') {
+  # The worker must NEVER be handed the file that implements the check it is
+  # being asked to satisfy. Extraction on backlog item 1 returned
+  # tools/research_liveness.py -- the liveness checker itself -- and a model told
+  # "make this command exit zero" while holding the checker will eventually just
+  # gut the checker. Anything named in the verify command is off limits, as is
+  # anything that looks like a test.
+  $banned = New-Object System.Collections.Generic.List[string]
+  foreach ($m in [regex]::Matches($verifyCmd, '((?:[\w.-]+[/\\])*[\w.-]+\.(?:go|py|ts|tsx|ps1|sh|mjs))')) {
+    $banned.Add(($m.Groups[1].Value -replace '\\', '/'))
+  }
+
+  $hits = [regex]::Matches($text, '(?<![\w./\\-])((?:[\w.-]+[/\\])+[\w.-]+\.(?:go|py|ts|tsx|ps1|sh|md|json|mjs))')
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($m in $hits) {
+    $p = $m.Groups[1].Value -replace '\\', '/'
+    if ($p -match '^(data|logs|node_modules|\.git|quarantine)/') { continue }
+    if ($p -match '(^|/)(test_[\w.-]+\.py|[\w.-]+_test\.go|[\w.-]+\.test\.tsx?)$') { continue }
+    if ($banned -contains ($p -split '/')[-1] -or $banned -contains $p) { continue }
+    if ((Test-Path (Join-Path $repo $p)) -and -not $out.Contains($p)) { $out.Add($p) }
+  }
+  $out
+}
+
+# Returns the list of files it changed and verified, or $null. The caller commits
+# exactly those -- never `git add -A`, which in a tree shared with another agent
+# sweeps up that agent's unreviewed work. That happened once already.
+#
+# WHOLE FILE IN, WHOLE FILE OUT. The first design asked for a unified diff and
+# never showed the worker the code: 41 consecutive cycles produced diffs, 0 of
+# which applied. A local model cannot invent matching context for a file it has
+# never read, and a diff is unusable the moment one context line is wrong. So the
+# file goes in via -File and the complete rewritten file comes back via -Out.
+function BriefWorker([string]$task, [string]$evidence, [string]$verifyCmd, [string]$lane = 'code', [string]$explicitFile = '') {
   if (-not (Test-Path $omni)) { Note 'omni-missing'; return $null }
+
+  if ($explicitFile -and (Test-Path (Join-Path $repo $explicitFile))) {
+    $targets = @($explicitFile)
+  }
+  else {
+    $targets = TargetFiles "$task`n$evidence" $verifyCmd
+  }
+  if ($targets.Count -eq 0) { Note 'no-target-file'; return $null }
+  $target = $targets[0]
+  $full = Join-Path $repo $target
+  Note 'worker-start' @{ file = $target; lane = $lane; candidates = $targets.Count }
+
   $prompt = @"
-You are fixing the SignalDeck repository at $repo. You are a worker with no
-tools and no memory: this brief is everything you get.
+You are fixing ONE file in the SignalDeck repository. You have no tools and no
+memory: this brief and the attached file are everything you get.
 
 TASK
 $task
 
-FAILING EVIDENCE (verbatim output of the check that must pass)
+EVIDENCE (verbatim output of the check that must pass)
 $evidence
+
+THE FILE TO FIX: $target
+Its complete current contents are attached below.
 
 RULES THAT ARE NOT NEGOTIABLE
 - Fix the ROOT CAUSE. Do not weaken, skip, delete or special-case the check that
   caught this. This repository's checks exist to refuse dishonest results; a
   green light obtained by softening a check is a regression, not a fix.
-- Do not touch anything under data/, .env, or the prereg chain.
-- Smallest correct diff. Match the surrounding style. No new dependencies.
-- Output ONLY a unified diff applicable with `git apply`. No prose.
+- Change as little as possible. Keep every unrelated line byte-identical.
+- Match the surrounding style. Add no dependencies.
 
-The change is accepted only if this command then exits zero:
+OUTPUT FORMAT -- follow exactly:
+Return the COMPLETE contents of $target after your fix. Start at the very first
+line of the file and end at the very last. No markdown fences, no ``` markers,
+no commentary, no diff, no ellipses, no "rest of file unchanged". The raw file
+and nothing else. Your output will be written directly over $target.
+
+It is accepted only if this command then exits zero:
   $verifyCmd
 "@
-  $patch = Join-Path $env:TEMP "sd-worker-$([guid]::NewGuid().ToString('N').Substring(0,8)).patch"
+
+  $outFile = Join-Path $env:TEMP "sd-worker-$([guid]::NewGuid().ToString('N').Substring(0,8)).out"
   try {
-    & powershell -NoProfile -File $omni -Prompt $prompt -Task $lane -Out $patch -TimeoutSec 900 2>&1 | Out-Null
+    & powershell -NoProfile -File $omni -Prompt $prompt -File $full -Task $lane -Out $outFile -TimeoutSec 900 2>&1 | Out-Null
   } catch { Note 'worker-error' @{ err = "$_" }; return $null }
-  if (-not (Test-Path $patch) -or (Get-Item $patch).Length -lt 20) { Note 'worker-empty'; return $null }
+  if (-not (Test-Path $outFile) -or (Get-Item $outFile).Length -lt 20) { Note 'worker-empty'; return $null }
 
-  # Revert ONLY what this patch touched. `git checkout -- .` would also wipe any
-  # uncommitted edit made by anything else sharing this working tree, and this
-  # repo is edited by more than one agent.
-  $touched = @(git apply --numstat $patch 2>$null | ForEach-Object { ($_ -split "`t")[2] } | Where-Object { $_ })
-  function RevertTouched {
-    if ($touched.Count -eq 0) { Note 'revert-skipped-unknown-files'; return }
-    foreach ($f in $touched) { git checkout -- $f 2>&1 | Out-Null }
-    Note 'reverted' @{ files = ($touched -join ',') }
+  # omni.ps1 writes a UTF-8 BOM; models wrap output in ``` despite instructions.
+  $bytes = [IO.File]::ReadAllBytes($outFile)
+  if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+    $bytes = $bytes[3..($bytes.Length - 1)]
   }
+  $new = ([Text.Encoding]::UTF8.GetString($bytes) -replace "`r`n", "`n")
+  $new = (($new -split "`n") | Where-Object { $_ -notmatch '^\s*```' }) -join "`n"
+  $new = $new.TrimEnd() + "`n"
 
-  if ($touched.Count -eq 0) { Note 'patch-touches-nothing'; return $null }
+  # Truncation is the failure mode that matters: a model that stops early hands
+  # back a file that still parses but has lost its tail. Anything under 60% of
+  # the original is refused rather than written.
+  $old = ([IO.File]::ReadAllText($full) -replace "`r`n", "`n")
+  if ($new.Length -lt ($old.Length * 0.6)) {
+    Note 'output-truncated' @{ file = $target; oldLen = $old.Length; newLen = $new.Length }
+    return $null
+  }
+  if ($new -eq $old) { Note 'no-change-produced' @{ file = $target }; return $null }
 
-  git apply --3way $patch 2>&1 | Out-Null
-  if ($LASTEXITCODE -ne 0) { Note 'patch-rejected'; RevertTouched; return $null }
+  [IO.File]::WriteAllText($full, $new, (New-Object Text.UTF8Encoding $false))
 
   $v = Run 'verify' $verifyCmd 1800
   if (-not $v.Ok) {
-    Note 'verify-failed' @{ tail = ($v.Output -split "`n" | Select-Object -Last 3) -join ' ' }
-    RevertTouched   # a fix that does not verify is not a fix
+    Note 'verify-failed' @{ file = $target; tail = ($v.Output -split "`n" | Select-Object -Last 3) -join ' ' }
+    git checkout -- $target 2>&1 | Out-Null   # a fix that does not verify is not a fix
     return $null
   }
-  Note 'verify-passed' @{ files = ($touched -join ',') }
-  return $touched
+  Note 'verify-passed' @{ file = $target }
+  return @($target)
 }
 
 function NextBacklogItem {
@@ -206,7 +269,15 @@ function NextBacklogItem {
     $body = $b.Groups[2].Value
     $m = [regex]::Match($body, '(?m)^verify: `(.+)`\s*$')
     if ($m.Success) {
-      return [pscustomobject]@{ Title = $b.Groups[1].Value.Trim(); Body = $body.Trim(); Verify = $m.Groups[1].Value.Trim() }
+      $fm = [regex]::Match($body, '(?m)^files: `(.+)`\s*$')
+      return [pscustomobject]@{
+        Title  = $b.Groups[1].Value.Trim()
+        Body   = $body.Trim()
+        Verify = $m.Groups[1].Value.Trim()
+        # An explicit target beats extraction, which guessed the liveness CHECKER
+        # for item 1 -- the one file a worker must never be allowed to rewrite.
+        File   = $(if ($fm.Success) { $fm.Groups[1].Value.Trim() } else { '' })
+      }
     }
     Note 'backlog-item-unverifiable' @{ title = $b.Groups[1].Value.Trim() }
   }
@@ -284,7 +355,7 @@ while ((Get-Date) -lt $deadline) {
     if ($null -eq $item) { Note 'backlog-empty' }
     else {
       Note 'backlog-item' @{ title = $item.Title }
-      $worked = BriefWorker $item.Body '(no failing gate -- this is planned improvement work)' $item.Verify $BacklogLane
+      $worked = BriefWorker $item.Body '(no failing gate -- this is planned improvement work)' $item.Verify $BacklogLane $item.File
       if ($worked) {
         # Tick it off only after its own verification passed.
         (Get-Content $backlog -Raw).Replace("## [ ] $($item.Title)", "## [x] $($item.Title)") |

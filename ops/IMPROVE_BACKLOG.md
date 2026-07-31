@@ -23,6 +23,7 @@ without its judgment rows), or the narration overstates what ran (fix the
 narration). Do NOT delete the liveness check.
 
 verify: `python tools/research_liveness.py --db data/signaldeck.db`
+files: `daemon/internal/pipeline/researchloop.go`
 
 ## [ ] Structural outcomes carry no naive_label
 
@@ -34,6 +35,7 @@ baseline can be recomputed from stored bars; where it cannot, quarantine the
 rows rather than inventing a label.
 
 verify: `python -c "import sqlite3;n=sqlite3.connect('file:data/signaldeck.db?mode=ro',uri=True).execute('select count(*) from regime_outcomes where naive_label is null and ts > 1785000000').fetchone()[0];raise SystemExit(1 if n else 0)"`
+files: `daemon/internal/pipeline/regimeoutcomes.go`
 
 ## [ ] Project root is hardcoded to $HOME/claude code
 
@@ -47,6 +49,7 @@ executable/cwd for a directory containing `signaldeck/daemon/.env`, honour a
 the macOS launchd deployment is unaffected.
 
 verify: `cd daemon && go test ./internal/config/...`
+files: `daemon/internal/config/config.go`
 
 ## [ ] Grader digest breaks on a Windows clone
 
@@ -57,6 +60,7 @@ refuses to grade itself against the digest pinned in the prereg chain. Add a
 identical on every platform.
 
 verify: `python -c "import hashlib,subprocess,sys;d=hashlib.sha256(open('tools/accuracy_registry.py','rb').read()).hexdigest();sys.exit(0 if b'\r\n' not in open('tools/accuracy_registry.py','rb').read() else 1)"`
+files: `.gitattributes`
 
 ## [ ] Prereg chain pins a stale grader digest
 
@@ -66,6 +70,7 @@ registrar appends the amendment automatically on a clean (non-dirty) build —
 confirm that path runs, rather than appending by hand.
 
 verify: `python tools/accuracy_registry.py --db data/signaldeck.db`
+files: `daemon/internal/pipeline/prereg.go`
 
 ## [ ] Silent data sources: congress, EDGAR
 
@@ -76,3 +81,4 @@ source that never delivers must not report success — make the pollers surface 
 degraded status the watchdog can see.
 
 verify: `cd daemon && go test ./internal/pipeline/... -run 'Poller|Source'`
+files: `daemon/internal/pipeline/congress.go`
