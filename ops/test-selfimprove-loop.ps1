@@ -20,7 +20,7 @@ function Check($label, $actual, $expect) {
 # If Run() fails to load, every Check below throws while evaluating its argument
 # and never increments the counter -- the run then ends with "0 failures" and
 # reports success having tested nothing. The expected count is the guard.
-$EXPECTED_CHECKS = 8
+$EXPECTED_CHECKS = 9
 
 Check 'native non-zero exit is RED'    (Run t 'cmd /c "exit 3"').Ok             $false
 Check 'native zero exit is GREEN'      (Run t 'cmd /c "exit 0"').Ok             $true
@@ -36,6 +36,11 @@ $text = Get-Content "$PSScriptRoot\IMPROVE_BACKLOG.md" -Raw
 $open = [regex]::Matches($text, '(?ms)^## \[ \] (.+?)$(.*?)(?=^## |\z)')
 $withVerify = @($open | Where-Object { $_.Groups[2].Value -match '(?m)^verify: `(.+)`\s*$' }).Count
 Check 'every open backlog item verifiable' $withVerify $open.Count
+
+# -UntilGoal stops the loop when gates are green AND NextBacklogItem is null. If
+# the parser silently returned null while work remained, the loop would declare
+# GOAL-MET and quit having done nothing. Work remains, so this must not be null.
+Check 'backlog still has work to hand out' ($null -ne (NextBacklogItem)) $true
 
 if ($ran -ne $EXPECTED_CHECKS) {
   "`nONLY $ran OF $EXPECTED_CHECKS CHECKS RAN -- the rest errored out, so this run proves nothing"

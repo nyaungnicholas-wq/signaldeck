@@ -35,10 +35,19 @@
 #>
 [CmdletBinding()]
 param(
+  # Wall-clock cap. 0 means no cap -- run until the goal is met or you kill it.
   [double]$Hours = 24,
+  # Stop as soon as the goal is met: every gate green AND no unchecked backlog
+  # item left. Without this the loop keeps cycling until the clock runs out.
+  [switch]$UntilGoal,
   [switch]$Push,
   [switch]$AllowChainWrites,
   [int]$CyclePauseSec = 60,
+  # Model lanes. Both default to LOCAL Ollama models so a long run costs nothing:
+  # code -> qwen3.6:27b, reason -> deepseek-r1:32b. 'best' would invert to the
+  # paid gateway first, which is the wrong trade for a run measured in days.
+  [string]$GateLane = 'code',
+  [string]$BacklogLane = 'reason',
   [switch]$SelfTestOnly
 )
 
@@ -46,7 +55,8 @@ $ErrorActionPreference = 'Continue'
 $repo = Split-Path $PSScriptRoot -Parent
 Set-Location $repo
 
-$deadline = (Get-Date).AddHours($Hours)
+$noTimeLimit = ($Hours -le 0)
+$deadline = if ($noTimeLimit) { [datetime]::MaxValue } else { (Get-Date).AddHours($Hours) }
 $journal  = Join-Path $repo 'logs\selfimprove.jsonl'
 $omni     = Join-Path $env:USERPROFILE '.claude\scripts\omni.ps1'
 $backlog  = Join-Path $repo 'ops\IMPROVE_BACKLOG.md'
@@ -186,7 +196,15 @@ if ($branch -in @('main', 'master')) {
   $branch = "selfimprove/$(Get-Date -Format 'yyyyMMdd-HHmm')"
   git checkout -b $branch 2>&1 | Out-Null
 }
-Note 'loop-start' @{ branch = $branch; deadline = $deadline.ToString('o'); push = [bool]$Push; chainWrites = [bool]$AllowChainWrites }
+Note 'loop-start' @{
+  branch      = $branch
+  deadline    = $(if ($noTimeLimit) { 'none' } else { $deadline.ToString('o') })
+  untilGoal   = [bool]$UntilGoal
+  push        = [bool]$Push
+  chainWrites = [bool]$AllowChainWrites
+  gateLane    = $GateLane
+  backlogLane = $BacklogLane
+}
 
 if ($AllowChainWrites) {
   $snap = Join-Path $repo "data\signaldeck.db.loopsnapshot"
@@ -199,13 +217,22 @@ if ($AllowChainWrites) {
 $cycle = 0
 while ((Get-Date) -lt $deadline) {
   $cycle++
-  Note 'cycle-start' @{ cycle = $cycle; remainingH = [math]::Round(($deadline - (Get-Date)).TotalHours, 2) }
+  $remaining = if ($noTimeLimit) { 'unlimited' } else { [math]::Round(($deadline - (Get-Date)).TotalHours, 2) }
+  Note 'cycle-start' @{ cycle = $cycle; remainingH = $remaining }
 
   try { git pull --rebase --autostash 2>&1 | Out-Null } catch { Note 'pull-failed' @{ err = "$_" } }
 
   $results = Gates
   $red = @($results | Where-Object { -not $_.Ok })
   Note 'gates' @{ total = $results.Count; red = $red.Count; failing = ($red.Name -join ',') }
+
+  # THE GOAL: every gate green and nothing left unchecked in the backlog. Checked
+  # against freshly-run gates, never against a cached verdict -- "we were green
+  # last cycle" is not evidence that we are green now.
+  if ($UntilGoal -and $red.Count -eq 0 -and $null -eq (NextBacklogItem)) {
+    Note 'GOAL-MET' @{ cycle = $cycle; gates = $results.Count }
+    break
+  }
 
   $worked = $false
   if ($red.Count -gt 0) {
@@ -222,14 +249,14 @@ while ((Get-Date) -lt $deadline) {
       default        { 'exit 1' }
     }
     $tail = ($g.Output -split "`n" | Select-Object -Last 80) -join "`n"
-    $worked = BriefWorker "The '$($g.Name)' gate is failing. Make it pass." $tail $cmd
+    $worked = BriefWorker "The '$($g.Name)' gate is failing. Make it pass." $tail $cmd $GateLane
   }
   else {
     $item = NextBacklogItem
     if ($null -eq $item) { Note 'backlog-empty' }
     else {
       Note 'backlog-item' @{ title = $item.Title }
-      $worked = BriefWorker $item.Body '(no failing gate -- this is planned improvement work)' $item.Verify 'best'
+      $worked = BriefWorker $item.Body '(no failing gate -- this is planned improvement work)' $item.Verify $BacklogLane
       if ($worked) {
         # Tick it off only after its own verification passed.
         (Get-Content $backlog -Raw).Replace("## [ ] $($item.Title)", "## [x] $($item.Title)") |
