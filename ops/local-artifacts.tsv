@@ -1,0 +1,31 @@
+# local-artifacts.tsv — the register of gitignored paths that tracked documentation
+# names. Enforced by ops/manifest-check.sh tier 4.
+#
+# Being gitignored is not an excuse for a document to promise something a clone
+# cannot obtain. Every path here is absent from a fresh clone by design, and every
+# row must say WHY it is excluded, WHETHER a third party can obtain it at all, and
+# BY WHAT ROUTE. A documented gitignored path with no row fails the build.
+#
+# Columns, tab-separated:
+#   1 path                   repo-relative, no trailing slash
+#   2 class                  licensed | database | generated | secret | log
+#   3 reader-obtainable      yes | no  — can a stranger end up with this exact
+#                            artifact, byte-for-byte or by a route we can name?
+#   4 substitute route       what a third party actually does instead. Never "N/A".
+#
+# path	class	reader-obtainable	substitute route
+bin	generated	yes	Build outputs; produced by `cd daemon && go build -o ../bin/ ./cmd/...`
+bin/signaldeckd	generated	yes	Build it: `cd daemon && go build -o ../bin/signaldeckd ./cmd/signaldeckd`
+bin/sdmaint	generated	yes	Build it: `cd daemon && go build -o ../bin/sdmaint ./cmd/sdmaint`
+daemon/.env	secret	no	Secrets are never shipped; copy .env.example and supply your own vendor keys
+data	database	no	Local operating state; created by running the daemon against your own feeds
+data/signaldeck.db	database	no	Rebuilt locally by running the daemon's backfill; see REPRODUCE.md
+data/archive	database	no	Cold bar archive written by ops/signaldeck-cleanup.sh from your own database
+data/archive/bars_1m	database	no	Cold 1m bar archive written by ops/signaldeck-cleanup.sh from your own database
+data/backups	database	no	Backups of your own database, written by ops/signaldeck-backup-offline.sh
+data/accuracy_registry.json	generated	no	produced by tools/accuracy_registry.py against your own database
+logs	log	no	Runtime logs of this machine; your own run produces its own
+logs/anchor-publish.log	log	no	Written by ops/anchor-publish.sh on the machine that publishes anchors
+logs/mcp_audit.jsonl	log	no	Written by the MCP server as it serves your own requests; see MCP_SERVER.md
+repro/pairs_universe_v1.npz	licensed	no	Licensed Kraken+Alpaca bars; reconstruct locally and verify against repro/pairs_inputs.csv
+scratchpad/pairs_results.json	generated	yes	Output of `python3 tools/pairs_trading.py --json scratchpad/pairs_results.json`

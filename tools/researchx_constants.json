@@ -1,0 +1,8 @@
+{
+  "_generatedBy": "daemon/internal/store/researchx_constants_export_test.go (go test ./internal/store -run TestWriteResearchxConstantsJSON)",
+  "_purpose": "floors the in-daemon research gate enforces, for tools/research_liveness.py",
+  "holdoutEra": "y2026",
+  "minHoldoutWeeks": 8,
+  "minPositiveEras": 2,
+  "weekBucketSecs": 604800
+}

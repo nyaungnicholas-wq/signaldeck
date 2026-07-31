@@ -111,8 +111,14 @@ func (s Spec) Hash() string {
 
 // Record is one pre-registration entry in the chain.
 type Record struct {
-	Seq       int64  `json:"seq"`
-	Ts        int64  `json:"ts"`
+	Seq int64 `json:"seq"`
+	Ts  int64 `json:"ts"`
+	// TsNanos is the sub-second part of the registration instant. It is not an
+	// input to HashEntry, so populating it does not disturb any existing chain
+	// hash. Records written before the column existed carry 0, which reads as
+	// "sub-second order unrecorded" — the strictly-after rule then degrades to
+	// second granularity for those rows rather than silently passing.
+	TsNanos   int64  `json:"tsNanos"`
 	Kind      string `json:"kind"`
 	SpecJSON  string `json:"specJson"`
 	SpecHash  string `json:"specHash"`
@@ -123,6 +129,11 @@ type Record struct {
 	// claim is visible as a change rather than as the truth).
 	Note string `json:"note"`
 }
+
+// Instant is the registration time in nanoseconds since the epoch, so freeze
+// order stays comparable when a single registrar pass writes several records
+// inside the same second.
+func (r Record) Instant() int64 { return r.Ts*1_000_000_000 + r.TsNanos }
 
 // HashEntry computes entry_hash = sha256(prev_hash ‖ payload), matching the
 // prediction ledger's construction so both chains verify the same way.

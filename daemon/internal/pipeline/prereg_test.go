@@ -63,9 +63,11 @@ func TestPreregRegistrarIsIdempotentWhenNothingChanged(t *testing.T) {
 		t.Fatalf("records: %v", err)
 	}
 	// One record per claim spec, plus the filings-drift hypothesis, the grading
-	// protocol, the protocol document (PREREGISTRATION.md), and the directional
-	// auto-retire rule.
-	if want := len(prereg.Specs()) + 4; len(first) != want {
+	// protocol, the protocol document (PREREGISTRATION.md), the directional
+	// auto-retire rule, and the null-quarantine manifest — the frozen set of
+	// outcome rows exempt from the unmatched-null invariant, which is registered
+	// precisely so the exemption cannot be extended quietly.
+	if want := len(prereg.Specs()) + 5; len(first) != want {
 		t.Fatalf("registered %d records, want %d", len(first), want)
 	}
 	var haveProtocol, haveDoc, haveDrift, haveRule bool

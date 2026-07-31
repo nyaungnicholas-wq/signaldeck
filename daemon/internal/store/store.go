@@ -241,6 +241,23 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// time-integrity wave: the sub-second part of a pre-registration instant, so
+	// freeze order is provable when one registrar pass writes several records
+	// inside the same second. Not an input to entry_hash, so adding it leaves
+	// every existing chain link verifying exactly as before; pre-existing rows
+	// keep 0, which reads as "sub-second order unrecorded".
+	for _, col := range []struct{ name, ddl string }{
+		{"ts_nanos", `ALTER TABLE prereg_records ADD COLUMN ts_nanos INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('prereg_records') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
 	// multiplicity wave: the corrected divisor a loop hypothesis cleared. Live
 	// DBs already hold rows from before the loop fed PriorSearches, and those
 	// rows keep divisor=0 — the truthful state, meaning "correction unrecorded",

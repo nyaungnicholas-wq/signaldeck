@@ -31,9 +31,9 @@ func (s *Store) AppendPrereg(ctx context.Context, r prereg.Record) (prereg.Recor
 	r.EntryHash = prereg.HashEntry(r.PrevHash, r)
 
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO prereg_records (ts, kind, spec_json, spec_hash, prev_hash, entry_hash, note)
-		VALUES (?,?,?,?,?,?,?)`,
-		r.Ts, r.Kind, r.SpecJSON, r.SpecHash, r.PrevHash, r.EntryHash, r.Note)
+		INSERT INTO prereg_records (ts, ts_nanos, kind, spec_json, spec_hash, prev_hash, entry_hash, note)
+		VALUES (?,?,?,?,?,?,?,?)`,
+		r.Ts, r.TsNanos, r.Kind, r.SpecJSON, r.SpecHash, r.PrevHash, r.EntryHash, r.Note)
 	if err != nil {
 		return r, err
 	}
@@ -46,7 +46,7 @@ func (s *Store) AppendPrereg(ctx context.Context, r prereg.Record) (prereg.Recor
 // PreregRecords returns the whole chain, oldest first.
 func (s *Store) PreregRecords(ctx context.Context) ([]prereg.Record, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT seq, ts, kind, spec_json, spec_hash, prev_hash, entry_hash, note
+		SELECT seq, ts, ts_nanos, kind, spec_json, spec_hash, prev_hash, entry_hash, note
 		FROM prereg_records ORDER BY seq`)
 	if err != nil {
 		return nil, err
@@ -55,7 +55,7 @@ func (s *Store) PreregRecords(ctx context.Context) ([]prereg.Record, error) {
 	var out []prereg.Record
 	for rows.Next() {
 		var r prereg.Record
-		if err := rows.Scan(&r.Seq, &r.Ts, &r.Kind, &r.SpecJSON, &r.SpecHash,
+		if err := rows.Scan(&r.Seq, &r.Ts, &r.TsNanos, &r.Kind, &r.SpecJSON, &r.SpecHash,
 			&r.PrevHash, &r.EntryHash, &r.Note); err != nil {
 			return nil, err
 		}
