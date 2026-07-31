@@ -99,19 +99,32 @@ Write-Output "__EXIT__:`$(if (`$null -eq `$global:LASTEXITCODE) { 0 } else { `$g
 }
 
 # --- the gates -------------------------------------------------------------
+# NEVER call `exit` in a gate body. Run() reports the verdict through a sentinel
+# line printed AFTER the body, and `exit` terminates the job before that line is
+# written -- Run() then sees no sentinel and calls the gate RED. Every gate read
+# red on the first live run because of exactly this. Leave $LASTEXITCODE set by
+# the last native command and let Run() read it.
+#
+# Kept as its own function so the test can exercise the REAL bodies. When the
+# test used stand-in commands instead, it passed while all seven gates were
+# broken.
+function GateSpecs {
+  @(
+    @{ n = 'go-build';   c = 'cd daemon; go build ./... 2>&1' },
+    @{ n = 'go-vet';     c = 'cd daemon; go vet ./... 2>&1' },
+    @{ n = 'go-test';    c = 'cd daemon; go test ./... 2>&1' },
+    @{ n = 'py-tests';   c = 'cd tools; $f=0; foreach($m in "test_accuracy_registry","test_audit_register","test_deployment_drift","test_schema_contract_check","test_research_liveness"){ python -m unittest $m 2>&1; if($LASTEXITCODE -ne 0){$f=1} }; $global:LASTEXITCODE = $f' },
+    @{ n = 'web-types';  c = 'cd web; npx tsc --noEmit 2>&1' },
+    @{ n = 'web-lint';   c = 'cd web; npx eslint . --max-warnings 0 2>&1' },
+    @{ n = 'web-build';  c = 'cd web; npx next build 2>&1' }
+  )
+}
+
 # Each returns $true when it passes. Output is what the worker gets briefed on,
 # so it must be the real compiler/test text, not a summary.
 function Gates {
   $g = @()
-  foreach ($spec in @(
-      @{ n = 'go-build';   c = 'cd daemon; go build ./... 2>&1; exit $LASTEXITCODE' },
-      @{ n = 'go-vet';     c = 'cd daemon; go vet ./... 2>&1; exit $LASTEXITCODE' },
-      @{ n = 'go-test';    c = 'cd daemon; go test ./... 2>&1; exit $LASTEXITCODE' },
-      @{ n = 'py-tests';   c = 'cd tools; $f=0; foreach($m in "test_accuracy_registry","test_audit_register","test_deployment_drift","test_schema_contract_check","test_research_liveness"){ python -m unittest $m 2>&1; if($LASTEXITCODE -ne 0){$f=1} }; exit $f' },
-      @{ n = 'web-types';  c = 'cd web; npx tsc --noEmit 2>&1; exit $LASTEXITCODE' },
-      @{ n = 'web-lint';   c = 'cd web; npx eslint . --max-warnings 0 2>&1; exit $LASTEXITCODE' },
-      @{ n = 'web-build';  c = 'cd web; npx next build 2>&1; exit $LASTEXITCODE' }
-    )) {
+  foreach ($spec in (GateSpecs)) {
     $r = Run $spec.n $spec.c
     $g += $r
     if (-not $r.Ok) { Note 'gate-red' @{ gate = $spec.n } }

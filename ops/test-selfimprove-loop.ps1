@@ -20,7 +20,7 @@ function Check($label, $actual, $expect) {
 # If Run() fails to load, every Check below throws while evaluating its argument
 # and never increments the counter -- the run then ends with "0 failures" and
 # reports success having tested nothing. The expected count is the guard.
-$EXPECTED_CHECKS = 9
+$EXPECTED_CHECKS = 11
 
 Check 'native non-zero exit is RED'    (Run t 'cmd /c "exit 3"').Ok             $false
 Check 'native zero exit is GREEN'      (Run t 'cmd /c "exit 0"').Ok             $true
@@ -41,6 +41,18 @@ Check 'every open backlog item verifiable' $withVerify $open.Count
 # the parser silently returned null while work remained, the loop would declare
 # GOAL-MET and quit having done nothing. Work remains, so this must not be null.
 Check 'backlog still has work to hand out' ($null -ne (NextBacklogItem)) $true
+
+# The bug this exists to catch: a gate body calling `exit` terminates the job
+# before Run() prints its sentinel, so Run() sees no verdict and reports RED.
+# The whole battery read red on its first live run and the loop would have spent
+# a day "fixing" code that was already correct. Stand-in commands did not catch
+# it, so exercise the REAL bodies.
+Check 'no gate body calls exit' (@(GateSpecs | Where-Object { $_.c -match '(^|;|\s)exit\s' }).Count) 0
+
+# go-build is the cheapest real gate and is known green right now. If the gate
+# plumbing breaks again, this goes red without waiting for a full sweep.
+$goBuild = GateSpecs | Where-Object { $_.n -eq 'go-build' }
+Check 'real go-build gate body is GREEN' (Run 'go-build' $goBuild.c).Ok $true
 
 if ($ran -ne $EXPECTED_CHECKS) {
   "`nONLY $ran OF $EXPECTED_CHECKS CHECKS RAN -- the rest errored out, so this run proves nothing"
