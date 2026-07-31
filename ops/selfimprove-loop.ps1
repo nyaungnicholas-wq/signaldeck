@@ -141,8 +141,11 @@ function Gates {
 
 # --- worker briefing -------------------------------------------------------
 # Vague in, slop out. Name the gate, paste its real output, state the rule.
+# Returns the list of files it changed and verified, or $null. The caller commits
+# exactly those -- never `git add -A`, which in a tree shared with another agent
+# sweeps up that agent's unreviewed work. That happened once already.
 function BriefWorker([string]$task, [string]$evidence, [string]$verifyCmd, [string]$lane = 'code') {
-  if (-not (Test-Path $omni)) { Note 'omni-missing'; return $false }
+  if (-not (Test-Path $omni)) { Note 'omni-missing'; return $null }
   $prompt = @"
 You are fixing the SignalDeck repository at $repo. You are a worker with no
 tools and no memory: this brief is everything you get.
@@ -167,20 +170,32 @@ The change is accepted only if this command then exits zero:
   $patch = Join-Path $env:TEMP "sd-worker-$([guid]::NewGuid().ToString('N').Substring(0,8)).patch"
   try {
     & powershell -NoProfile -File $omni -Prompt $prompt -Task $lane -Out $patch -TimeoutSec 900 2>&1 | Out-Null
-  } catch { Note 'worker-error' @{ err = "$_" }; return $false }
-  if (-not (Test-Path $patch) -or (Get-Item $patch).Length -lt 20) { Note 'worker-empty'; return $false }
+  } catch { Note 'worker-error' @{ err = "$_" }; return $null }
+  if (-not (Test-Path $patch) -or (Get-Item $patch).Length -lt 20) { Note 'worker-empty'; return $null }
+
+  # Revert ONLY what this patch touched. `git checkout -- .` would also wipe any
+  # uncommitted edit made by anything else sharing this working tree, and this
+  # repo is edited by more than one agent.
+  $touched = @(git apply --numstat $patch 2>$null | ForEach-Object { ($_ -split "`t")[2] } | Where-Object { $_ })
+  function RevertTouched {
+    if ($touched.Count -eq 0) { Note 'revert-skipped-unknown-files'; return }
+    foreach ($f in $touched) { git checkout -- $f 2>&1 | Out-Null }
+    Note 'reverted' @{ files = ($touched -join ',') }
+  }
+
+  if ($touched.Count -eq 0) { Note 'patch-touches-nothing'; return $null }
 
   git apply --3way $patch 2>&1 | Out-Null
-  if ($LASTEXITCODE -ne 0) { Note 'patch-rejected'; git checkout -- . 2>&1 | Out-Null; return $false }
+  if ($LASTEXITCODE -ne 0) { Note 'patch-rejected'; RevertTouched; return $null }
 
   $v = Run 'verify' $verifyCmd 1800
   if (-not $v.Ok) {
     Note 'verify-failed' @{ tail = ($v.Output -split "`n" | Select-Object -Last 3) -join ' ' }
-    git checkout -- . 2>&1 | Out-Null   # a fix that does not verify is not a fix
-    return $false
+    RevertTouched   # a fix that does not verify is not a fix
+    return $null
   }
-  Note 'verify-passed'
-  $true
+  Note 'verify-passed' @{ files = ($touched -join ',') }
+  return $touched
 }
 
 function NextBacklogItem {
@@ -278,14 +293,14 @@ while ((Get-Date) -lt $deadline) {
     }
   }
 
-  if ($worked -and (git status --porcelain)) {
+  if ($worked -and $worked.Count -gt 0) {
     # Re-run every gate before committing: a fix that repairs its own check and
     # breaks another one is a net loss, and only the full battery can see that.
     $after = Gates
     if (@($after | Where-Object { -not $_.Ok }).Count -eq 0) {
-      git add -A 2>&1 | Out-Null
-      git commit -q -m "selfimprove cycle ${cycle}: all gates green" 2>&1 | Out-Null
-      Note 'committed' @{ cycle = $cycle }
+      foreach ($f in $worked) { git add -- $f 2>&1 | Out-Null }
+      git commit -q -m "selfimprove cycle ${cycle}: $($worked -join ', ')" 2>&1 | Out-Null
+      Note 'committed' @{ cycle = $cycle; files = ($worked -join ',') }
       if ($Push) {
         git push -u origin $branch 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) { Note 'pushed' } else { Note 'push-failed' }
@@ -293,7 +308,7 @@ while ((Get-Date) -lt $deadline) {
     }
     else {
       Note 'regression-reverted' @{ broke = (@($after | Where-Object { -not $_.Ok }).Name -join ',') }
-      git checkout -- . 2>&1 | Out-Null
+      foreach ($f in $worked) { git checkout -- $f 2>&1 | Out-Null }
     }
   }
 
