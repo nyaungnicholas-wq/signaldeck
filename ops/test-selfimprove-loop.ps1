@@ -37,10 +37,16 @@ $open = [regex]::Matches($text, '(?ms)^## \[ \] (.+?)$(.*?)(?=^## |\z)')
 $withVerify = @($open | Where-Object { $_.Groups[2].Value -match '(?m)^verify: `(.+)`\s*$' }).Count
 Check 'every open backlog item verifiable' $withVerify $open.Count
 
-# -UntilGoal stops the loop when gates are green AND NextBacklogItem is null. If
-# the parser silently returned null while work remained, the loop would declare
-# GOAL-MET and quit having done nothing. Work remains, so this must not be null.
-Check 'backlog still has work to hand out' ($null -ne (NextBacklogItem)) $true
+# -UntilGoal stops when gates are green AND NextBacklogItem is null, so a parser
+# that lied in EITHER direction would be serious: null while work remains makes
+# the loop declare GOAL-MET having done nothing; non-null when the backlog is
+# clear makes it grind on phantom work forever.
+#
+# This asserted "not null" while six items were open. All six are now closed, so
+# that assertion had started failing for the best possible reason. What actually
+# needs pinning is that the parser AGREES WITH THE FILE, whichever state it is in.
+$openInFile = @([regex]::Matches($text, '(?m)^## \[ \] ')).Count
+Check 'parser agrees with the backlog file' ($null -eq (NextBacklogItem)) ($openInFile -eq 0)
 
 # The bug this exists to catch: a gate body calling `exit` terminates the job
 # before Run() prints its sentinel, so Run() sees no verdict and reports RED.
