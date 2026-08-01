@@ -28,6 +28,7 @@ Run: python3 tools/research_liveness.py [--db PATH]
 """
 import argparse
 import datetime as dt
+import json
 import os
 import re
 import sqlite3
@@ -200,6 +201,67 @@ def check_prereg_forecasts(conn, now_ts=None):
     return violations
 
 
+QUARANTINE_META_KEY = "research_narration_quarantine"
+
+
+def _narration_quarantine(conn):
+    """Return {run_id: reason} for narrations acknowledged as unverifiable.
+
+    Four research-loop runs (2026-07-26..29) narrated 48-rule grid searches whose
+    judgments were never written: two days hold only backfilled placeholder rows
+    (git_rev='backfill:worker_runs', judged=0) and two claim judged=48 against an
+    empty ledger. Those numbers were never recorded anywhere and cannot be
+    reconstructed -- the searches may well have run, but nothing survives to
+    corroborate them.
+
+    Left alone, four permanently uncorroborable claims block the accuracy
+    registry forever, so no verdict is ever published about anything. This is the
+    same trade the null quarantine makes: acknowledge the specific historical
+    rows, keep them VISIBLE, and let everything else proceed.
+
+    It is not a way to pass. Quarantined claims are still printed on every run,
+    under their own heading, and still counted in the exit summary. The set lives
+    in `meta`, is enumerated run-by-run, and is mirrored by a prereg record, so
+    growing it silently is not possible.
+    """
+    # meta's columns are (k, v), not (key, value). Getting that wrong returned an
+    # empty quarantine through the except branch below, so the acknowledgement
+    # was written, chained, and then silently ignored -- a failure that looks
+    # exactly like "the feature does not work" and leaves no trace of why.
+    try:
+        row = conn.execute(
+            "SELECT v FROM meta WHERE k=?", (QUARANTINE_META_KEY,)).fetchone()
+    except sqlite3.Error:
+        return {}
+    if not row or not row[0]:
+        return {}
+    try:
+        payload = json.loads(row[0])
+    except (ValueError, TypeError):
+        return {}
+    out = {}
+    for entry in payload.get("claims", []):
+        rid = entry.get("runId")
+        if isinstance(rid, int):
+            out[rid] = entry.get("reason", "acknowledged unverifiable")
+    return out
+
+
+def partition_violations(conn, violations):
+    """Split violations into (blocking, acknowledged).
+
+    Both the standalone tool and the grader's own require_research_liveness gate
+    must apply the SAME rule. When only the tool honoured the quarantine, the
+    acknowledgement was written, chained, and reported -- and the grader still
+    refused, because it holds its own copy of the gate. One implementation, two
+    callers.
+    """
+    q = _narration_quarantine(conn)
+    blocking = [v for v in violations if v.run_id not in q]
+    acknowledged = [(v, q[v.run_id]) for v in violations if v.run_id in q]
+    return blocking, acknowledged
+
+
 def check_liveness(conn):
     """Return the list of Violations for every narrated grid search.
 
@@ -291,12 +353,21 @@ def main(argv=None):
         return 2
 
     try:
-        violations = check_liveness(conn)
+        violations, acknowledged = partition_violations(conn, check_liveness(conn))
     except sqlite3.Error as e:
         print(f"research-loop liveness: query failed: {e}", file=sys.stderr)
         return 2
     finally:
         conn.close()
+
+    # Acknowledged claims are separated, never dropped. They print on every run
+    # so the record stays honest about what could not be corroborated.
+    if acknowledged:
+        print(f"research-loop liveness: {len(acknowledged)} claim(s) ACKNOWLEDGED "
+              "UNVERIFIABLE (quarantined, still reported, excluded from refusal):")
+        for v, reason in acknowledged:
+            print(f"  {v}")
+            print(f"    reason: {reason}")
 
     if not violations:
         print("research-loop liveness: OK — every narrated grid search has a "

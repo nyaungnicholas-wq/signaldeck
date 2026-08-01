@@ -234,6 +234,112 @@ func (s *Store) FreezeNullQuarantine(ctx context.Context, now int64) (Quarantine
 	return m, true, nil
 }
 
+// ExtendNullQuarantine admits a NAMED set of already-written rows into the
+// exempt set and re-freezes the manifest over the new membership.
+//
+// FreezeNullQuarantine is one-shot on purpose: a freely growable exemption is
+// the guard switched off on a delay. But that design assumed divergence is
+// transient — deploy the correct binary and no new unmatched rows appear. It has
+// no remedy for rows ALREADY written during a divergence window, and eight of
+// them (vol21/liquidity21, 2026-07-28..29, from a binary predating revision
+// stamping) permanently blocked regime-outcome-runner. Blocked forever means no
+// structural call is ever graded, which is the entire point of the system.
+//
+// The safety property is that the caller must name every row EXACTLY. If the
+// live unmatched set differs from expectIDs in either direction — one row more,
+// one row fewer, one different id — this refuses and changes nothing. So it
+// cannot be used to wave through "whatever is currently broken": the operator
+// has to enumerate the damage, and any drift between deciding and executing
+// aborts the amendment. Nothing is relabelled or backfilled; the rows keep their
+// NULL naive_label and keep grading NO BASELINE.
+func (s *Store) ExtendNullQuarantine(ctx context.Context, now int64, expectIDs []int64) (QuarantineManifest, error) {
+	if len(expectIDs) == 0 {
+		return QuarantineManifest{}, errors.New("extend null quarantine: no ids named; " +
+			"an amnesty must enumerate exactly what it forgives")
+	}
+	if _, ok, err := s.NullQuarantineManifest(ctx); err != nil {
+		return QuarantineManifest{}, err
+	} else if !ok {
+		return QuarantineManifest{}, errors.New("extend null quarantine: nothing frozen yet; " +
+			"call FreezeNullQuarantine first")
+	}
+
+	actual, err := s.unmatchedNullIDs(ctx)
+	if err != nil {
+		return QuarantineManifest{}, err
+	}
+	want := append([]int64(nil), expectIDs...)
+	sort.Slice(want, func(i, j int) bool { return want[i] < want[j] })
+	if len(actual) != len(want) {
+		return QuarantineManifest{}, fmt.Errorf("extend null quarantine: named %d row(s) but %d are "+
+			"unmatched right now; refusing to amend a set that moved since it was reviewed",
+			len(want), len(actual))
+	}
+	for i := range actual {
+		if actual[i] != want[i] {
+			return QuarantineManifest{}, fmt.Errorf("extend null quarantine: named id %d where the "+
+				"live set holds %d; the exempt set must be enumerated exactly", want[i], actual[i])
+		}
+	}
+
+	for _, id := range actual {
+		if _, err := s.w.ExecContext(ctx, `
+			INSERT OR IGNORE INTO regime_outcome_quarantine (outcome_id, symbol_id, kind, day, frozen_ts)
+			SELECT id, symbol_id, kind, day, ? FROM regime_outcomes WHERE id = ?`, now, id); err != nil {
+			return QuarantineManifest{}, err
+		}
+	}
+	members, err := s.quarantineMembers(ctx)
+	if err != nil {
+		return QuarantineManifest{}, err
+	}
+	m := QuarantineManifest{
+		Digest: quarantineDigest(members, len(members)), NRows: len(members), FrozenTs: now,
+	}
+	if _, err := s.w.ExecContext(ctx, `
+		UPDATE regime_outcome_quarantine_manifest SET digest=?, n_rows=?, frozen_ts=? WHERE id=1`,
+		m.Digest, m.NRows, m.FrozenTs); err != nil {
+		return QuarantineManifest{}, err
+	}
+	return m, nil
+}
+
+// unmatchedNullIDs lists, ascending, the post-epoch rows of a guarded kind that
+// carry no baseline and are not already exempt — the exact set UnmatchedNullCount
+// counts.
+func (s *Store) unmatchedNullIDs(ctx context.Context) ([]int64, error) {
+	kinds := make([]string, 0, len(structuralNullKinds))
+	for k := range structuralNullKinds {
+		kinds = append(kinds, string(k))
+	}
+	sort.Strings(kinds)
+	args := make([]any, 0, len(kinds)+1)
+	args = append(args, NullAmendmentEpoch)
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT o.id FROM regime_outcomes o
+		WHERE o.ts >= ? AND o.naive_label IS NULL
+		  AND o.kind IN (`+ph+`)
+		  AND o.id NOT IN (SELECT outcome_id FROM regime_outcome_quarantine)
+		ORDER BY o.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // VerifyNullQuarantine recomputes the digest over the quarantine table's current
 // contents and compares it to the frozen manifest. Any extension, deletion or
 // edit of the exempt set changes the digest and fails here — which is what makes

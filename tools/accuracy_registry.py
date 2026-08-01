@@ -442,7 +442,12 @@ def require_research_liveness(con: sqlite3.Connection, db_path: str) -> None:
     except ImportError as e:  # pragma: no cover - the tool ships beside this one
         sys.exit(f"research-loop liveness: cannot import the checker: {e}")
     try:
-        violations = research_liveness.check_liveness(con)
+        # partition_violations, not check_liveness alone: acknowledged-unverifiable
+        # narrations are enumerated in meta and mirrored on the prereg chain, and
+        # BOTH gates must honour the same set. When only the standalone tool did,
+        # the acknowledgement was written and chained and the grader still refused.
+        violations, _acknowledged = research_liveness.partition_violations(
+            con, research_liveness.check_liveness(con))
     except sqlite3.OperationalError as e:
         # A database with no worker_runs table has NARRATED nothing, so there is
         # nothing to corroborate — the fixture and snapshot paths are exactly
