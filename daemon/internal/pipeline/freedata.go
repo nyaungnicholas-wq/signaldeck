@@ -14,6 +14,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/fred"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // FredPoller refreshes the FRED macro series (~6h). It works with NO key via
@@ -71,7 +72,11 @@ const edgarCursorKey = "edgar_sweep_cursor"
 
 func (w *EdgarFetcher) Run(ctx context.Context) (string, error) {
 	if w.Client == nil {
-		return "skipped: no EDGAR client", nil
+		// Not a crash, but not success either: with no client this worker has
+		// never fetched a filing and never will until one is configured. It
+		// reported ok on every run, so nothing distinguished it from a fetcher
+		// that was working.
+		return "skipped: no EDGAR client", fmt.Errorf("skipped: no EDGAR client: %w", workers.ErrDegraded)
 	}
 	// Every active stock (streamed hot set + broad daily-only universe) — SEC
 	// fundamentals are per-company, not per-feed, so the whole equity universe

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // edgarFixture loads a fixture from the edgar package's testdata (single
@@ -156,8 +158,12 @@ func TestFilingsPoller_EndToEnd(t *testing.T) {
 func TestFilingsPoller_NoClientNoStocks(t *testing.T) {
 	st := openS8Store(t)
 	w := &FilingsPoller{St: st} // nil client
-	if detail, err := w.Run(context.Background()); err != nil || !strings.Contains(detail, "skipped") {
-		t.Fatalf("nil client: %q err=%v", detail, err)
+	// A poller with no client has never returned a filing. It must report
+	// DEGRADED, not ok: this asserted err == nil and the source read as healthy
+	// on the fleet view forever. Stricter than before -- a plain error still fails.
+	if detail, err := w.Run(context.Background()); !errors.Is(err, workers.ErrDegraded) ||
+		!strings.Contains(detail, "skipped") {
+		t.Fatalf("nil client must report DEGRADED: %q err=%v", detail, err)
 	}
 	_, client := newFilingsServer(t)
 	w2 := &FilingsPoller{St: st, Client: client}

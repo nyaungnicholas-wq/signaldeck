@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/fred"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 func TestFredPoller_NoClientNoOp(t *testing.T) {
@@ -49,8 +51,11 @@ func TestEdgarFetcher_NoClientNoOp(t *testing.T) {
 	st := openStore(t)
 	w := &EdgarFetcher{St: st, Client: nil}
 	msg, err := w.Run(context.Background())
-	if err != nil {
-		t.Fatalf("run: %v", err)
+	// A fetcher with no client has never fetched a filing and never will. It
+	// must not crash the fleet, and it must not read as success either -- this
+	// asserted err == nil, so it filed status=ok on every run forever.
+	if !errors.Is(err, workers.ErrDegraded) {
+		t.Fatalf("no client must report DEGRADED, not %v", err)
 	}
 	if !strings.Contains(msg, "skipped") {
 		t.Fatalf("want skipped, got %q", msg)

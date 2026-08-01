@@ -34,6 +34,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // ── filings-poller ────────────────────────────────────────────────────────
@@ -76,7 +77,11 @@ func (w *FilingsPoller) now() time.Time {
 
 func (w *FilingsPoller) Run(ctx context.Context) (string, error) {
 	if w.Client == nil {
-		return "skipped: no EDGAR filings client", nil
+		// Degraded, not ok: with no client this poller has never returned a
+		// filing, and reporting success made a permanently dead source
+		// indistinguishable from a live one on the fleet view.
+		return "skipped: no EDGAR filings client",
+			fmt.Errorf("skipped: no EDGAR filings client: %w", workers.ErrDegraded)
 	}
 	all, err := w.St.ListSymbols(ctx, true)
 	if err != nil {

@@ -10,18 +10,67 @@ import (
 	"strings"
 )
 
+// projectRoot returns the directory CONTAINING signaldeck/ — the anchor for the
+// daemon's .env, its database and its MCP audit log.
+//
+// This used to be filepath.Join(home, "claude code") outright. On any machine
+// where the checkout lives somewhere else — $HOME/Desktop/claude code, a work
+// directory, CI, a colleague's laptop — every derived path pointed at nothing,
+// and the failure was SILENT. Load() read no .env at all, so the LLM key was
+// ignored, the Alpaca keys were never found, and the security toggles an
+// operator had written in .env (SIGNALDECK_PUBLIC_READS, SIGNALDECK_OPEN_SIGNUP,
+// SIGNALDECK_API_TOKEN, SIGNALDECK_TRUST_PROXY) never applied. A daemon quietly
+// ignoring its own security configuration is worse than one that refuses to
+// start, because nothing in the logs says so.
+//
+// Resolution order, first hit wins:
+//  1. SIGNALDECK_ROOT, used verbatim. An operator who states the root is obeyed.
+//  2. The nearest ancestor of the executable, then of the working directory,
+//     that actually contains signaldeck/daemon. This is what makes a clone work
+//     wherever it is put.
+//  3. $HOME/claude code — the historical default, kept last so the existing
+//     macOS launchd deployment keeps resolving exactly as it did before.
+func projectRoot() string {
+	if r := strings.TrimSpace(os.Getenv("SIGNALDECK_ROOT")); r != "" {
+		return r
+	}
+	// Probe the executable's directory first: under launchd the working
+	// directory is not the checkout, but the binary always sits inside it.
+	var starts []string
+	if exe, err := os.Executable(); err == nil {
+		starts = append(starts, filepath.Dir(exe))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		starts = append(starts, wd)
+	}
+	for _, start := range starts {
+		for dir := start; ; {
+			if fi, err := os.Stat(filepath.Join(dir, "signaldeck", "daemon")); err == nil && fi.IsDir() {
+				return dir
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir { // filesystem root; nothing above to search
+				break
+			}
+			dir = parent
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "claude code")
+}
+
 // Config is the daemon configuration.
 type Config struct {
-	DBPath        string
-	HTTPAddr      string
-	AlpacaKey     string
-	AlpacaSecret  string
+	DBPath       string
+	HTTPAddr     string
+	AlpacaKey    string
+	AlpacaSecret string
 	// AlpacaFeed overrides the REST bars feed (SIGNALDECK_ALPACA_FEED). Empty →
 	// the client default "sip" (full-market historical, already requested on the
 	// free tier with a 16-min guarded tail). On a paid Algo Trader Plus upgrade
 	// nothing else changes — Alpaca simply serves the full real-time SIP the code
 	// already asks for; set this to "iex" only to force the free real-time feed.
-	AlpacaFeed string
+	AlpacaFeed    string
 	HudURL        string // trader-hud summary endpoint
 	TickstreamURL string // tickstream dashboard snapshot endpoint
 	GeminiKey     string // optional: LLM polish for insights ("" = rule-based only)
@@ -39,22 +88,22 @@ type Config struct {
 	TVWebhookSecret string
 
 	// Multi-user + exposure controls.
-	OpenSignup  bool // SIGNALDECK_OPEN_SIGNUP (default true): allow POST /api/auth/register
+	OpenSignup     bool // SIGNALDECK_OPEN_SIGNUP (default true): allow POST /api/auth/register
 	AllowRawExport bool // SIGNALDECK_ALLOW_RAW_EXPORT (default false): serve raw licensed bars
-	PublicReads bool // SIGNALDECK_PUBLIC_READS (default true): read-only endpoints work without auth (localhost compatibility)
-	TrustProxy  bool // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
-	RateRPS     int  // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
-	RateBurst   int  // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
+	PublicReads    bool // SIGNALDECK_PUBLIC_READS (default true): read-only endpoints work without auth (localhost compatibility)
+	TrustProxy     bool // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
+	RateRPS        int  // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
+	RateBurst      int  // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
 
 	// MCP server (internal/mcp) — advisory methodology + current regime
 	// verdicts for AI clients. OFF unless explicitly enabled, because it is
 	// the one surface designed to be consumed by a third party's agent and a
 	// default-on third-party interface is not a default anyone chose.
-	MCPEnabled      bool     // SIGNALDECK_MCP_ENABLED (default false)
-	MCPSecret       string   // SIGNALDECK_MCP_SECRET: HMAC key signing client keys; empty = no key can verify
-	MCPAuditPath    string   // SIGNALDECK_MCP_AUDIT: append-only JSONL audit sink
-	MCPDailyCalls   int      // SIGNALDECK_MCP_DAILY_CALLS: per-client daily call cap (0 = default)
-	MCPRevoked      []string // SIGNALDECK_MCP_REVOKED: comma-separated revoked client ids
+	MCPEnabled    bool     // SIGNALDECK_MCP_ENABLED (default false)
+	MCPSecret     string   // SIGNALDECK_MCP_SECRET: HMAC key signing client keys; empty = no key can verify
+	MCPAuditPath  string   // SIGNALDECK_MCP_AUDIT: append-only JSONL audit sink
+	MCPDailyCalls int      // SIGNALDECK_MCP_DAILY_CALLS: per-client daily call cap (0 = default)
+	MCPRevoked    []string // SIGNALDECK_MCP_REVOKED: comma-separated revoked client ids
 
 	// LLM layer (OpenAI-compatible; NVIDIA by default). Empty key = the AI
 	// agents stay in safe no-op mode.
@@ -72,10 +121,9 @@ func (c Config) LLMEnabled() bool { return c.LLMKey != "" || len(c.LLMKeys) > 0 
 
 // Load builds the config. Precedence: environment > project .env files > default.
 func Load() Config {
-	home, _ := os.UserHomeDir()
 	// The daemon runs under launchd, which does NOT auto-load a .env, so we
 	// read the daemon's own .env here (owner-only file holding the LLM key).
-	dotenv := parseDotEnv(filepath.Join(home, "claude code", "signaldeck", "daemon", ".env"))
+	dotenv := parseDotEnv(filepath.Join(projectRoot(), "signaldeck", "daemon", ".env"))
 	// Export EVERY key from .env into the process env before anything reads it.
 	// The daemon runs under launchd, which does not load .env, and much of the
 	// codebase reads settings straight from os.Getenv rather than through pick()
@@ -120,9 +168,9 @@ func Load() Config {
 		LLMBaseURL:      pick("SIGNALDECK_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
 		LLMModel:        pick("SIGNALDECK_LLM_MODEL", "qwen/qwen3.5-122b-a10b"),                        // MoE: 122B knowledge / ~10B active → strong + ~4s on NVIDIA free tier
 		LLMModelDeep:    pick("SIGNALDECK_LLM_MODEL_DEEP", "nvidia/llama-3.3-nemotron-super-49b-v1.5"), // reasoning-tuned; on-demand only (~30s)
-		LLMModelFast:    pick("SIGNALDECK_LLM_MODEL_FAST", "meta/llama-3.1-8b-instruct"),              // ultra-fast for high-frequency low-stakes calls
+		LLMModelFast:    pick("SIGNALDECK_LLM_MODEL_FAST", "meta/llama-3.1-8b-instruct"),               // ultra-fast for high-frequency low-stakes calls
 		LLMDailyCap:     atoiOr(pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
-		DBPath:          envOr("SIGNALDECK_DB", filepath.Join(home, "claude code", "signaldeck", "data", "signaldeck.db")),
+		DBPath:          envOr("SIGNALDECK_DB", filepath.Join(projectRoot(), "signaldeck", "data", "signaldeck.db")),
 		HTTPAddr:        envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"),
 		HudURL:          envOr("SIGNALDECK_HUD_URL", "http://127.0.0.1:8787/api/summary"),
 		TickstreamURL:   envOr("SIGNALDECK_TICKSTREAM_URL", "http://127.0.0.1:8321/api/snapshot"),
@@ -136,26 +184,26 @@ func Load() Config {
 		// convenience. On a reachable deployment it lets any stranger create an
 		// account and spend the LLM budget, so it follows the bind address for
 		// the same reason PublicReads does.
-		OpenSignup:      boolEnv("SIGNALDECK_OPEN_SIGNUP", reachablePrivately(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
+		OpenSignup: boolEnv("SIGNALDECK_OPEN_SIGNUP", reachablePrivately(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
 		// SAFE BY DEFAULT (2026-07-25): unauthenticated reads are a localhost
 		// convenience, not a deployment posture. The default now follows the
 		// BIND ADDRESS — true on loopback, false the moment the daemon listens
 		// anywhere reachable — so exposing it can no longer silently publish
 		// every read endpoint. An explicit env var still wins either way.
-		PublicReads:     boolEnv("SIGNALDECK_PUBLIC_READS", reachablePrivately(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
+		PublicReads: boolEnv("SIGNALDECK_PUBLIC_READS", reachablePrivately(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
 		// Asserting you hold redistribution rights for the stored price data.
 		// The flag records the operator's assertion; it does not grant a right.
-		AllowRawExport:  boolEnv("SIGNALDECK_ALLOW_RAW_EXPORT", false),
-		TrustProxy:      boolEnv("SIGNALDECK_TRUST_PROXY", false),
-		RateRPS:         atoiOr(os.Getenv("SIGNALDECK_RATE_RPS"), 0),
-		RateBurst:       atoiOr(os.Getenv("SIGNALDECK_RATE_BURST"), 0),
+		AllowRawExport: boolEnv("SIGNALDECK_ALLOW_RAW_EXPORT", false),
+		TrustProxy:     boolEnv("SIGNALDECK_TRUST_PROXY", false),
+		RateRPS:        atoiOr(os.Getenv("SIGNALDECK_RATE_RPS"), 0),
+		RateBurst:      atoiOr(os.Getenv("SIGNALDECK_RATE_BURST"), 0),
 		// The MCP server never inherits an "open on loopback" default the way
 		// PublicReads does. Exposing an interface built for someone else's AI
 		// agent is a decision with compliance implications, so it is made once,
 		// explicitly, by setting this.
 		MCPEnabled:    boolEnv("SIGNALDECK_MCP_ENABLED", false),
 		MCPSecret:     pick("SIGNALDECK_MCP_SECRET", ""),
-		MCPAuditPath:  pick("SIGNALDECK_MCP_AUDIT", filepath.Join(home, "claude code", "signaldeck", "logs", "mcp_audit.jsonl")),
+		MCPAuditPath:  pick("SIGNALDECK_MCP_AUDIT", filepath.Join(projectRoot(), "signaldeck", "logs", "mcp_audit.jsonl")),
 		MCPDailyCalls: atoiOr(os.Getenv("SIGNALDECK_MCP_DAILY_CALLS"), 0),
 		MCPRevoked:    splitList(pick("SIGNALDECK_MCP_REVOKED", "")),
 	}
@@ -163,7 +211,7 @@ func Load() Config {
 	cfg.AlpacaSecret = os.Getenv("ALPACA_SECRET")
 	if cfg.AlpacaKey == "" || cfg.AlpacaSecret == "" {
 		// Reuse the stock-trader keys (paper account; market data works with it).
-		env := parseDotEnv(filepath.Join(home, "claude code", "stock-trader", ".env"))
+		env := parseDotEnv(filepath.Join(projectRoot(), "stock-trader", ".env"))
 		if cfg.AlpacaKey == "" {
 			cfg.AlpacaKey = env["ALPACA_KEY"]
 		}

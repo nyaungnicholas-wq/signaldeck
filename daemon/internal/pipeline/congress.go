@@ -26,6 +26,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/congress"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // congressStatusKey is the meta key holding the per-chamber mirror status
@@ -91,8 +92,13 @@ func (w *CongressPoller) Run(ctx context.Context) (string, error) {
 
 	if !status.Senate.OK && !status.House.OK {
 		// Both mirrors dead — the CURRENT real-world state. Honest skip, dq
-		// recorded per chamber, fleet marches on.
-		return "congress mirrors unavailable (dq recorded; stored history still served)", nil
+		// recorded per chamber, fleet marches on. Reported as DEGRADED rather
+		// than ok: this branch ran on every poll for seven days while
+		// congress_trades held zero rows, and filing it as success is what let
+		// 94 dq events pile up behind a green fleet view.
+		return "congress mirrors unavailable (dq recorded; stored history still served)",
+			fmt.Errorf("congress mirrors unavailable (dq recorded; stored history still served): %w",
+				workers.ErrDegraded)
 	}
 	return fmt.Sprintf("congress: senate %d new/%d fetched, house %d new/%d fetched",
 		status.Senate.New, status.Senate.Fetched, status.House.New, status.House.Fetched), nil

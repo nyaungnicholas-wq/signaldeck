@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/congress"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // congressFixture loads a fixture from the congress package's testdata
@@ -129,8 +131,13 @@ func TestCongressPollerDeadMirrorsDegradeGracefully(t *testing.T) {
 
 	w := &CongressPoller{St: st, Client: newCongressMirror(t, false, false)}
 	msg, err := w.Run(ctx)
-	if err != nil {
-		t.Fatalf("dead mirrors must NEVER fail the fleet: %v", err)
+	// Dead mirrors must NEVER fail the fleet -- but they must not read as
+	// SUCCESS either. This asserted err == nil, and the run was therefore filed
+	// status=ok on every poll for seven days while congress_trades held zero
+	// rows. The requirement is now stricter, not looser: the error must be
+	// exactly ErrDegraded, so a plain failure here still fails this test.
+	if !errors.Is(err, workers.ErrDegraded) {
+		t.Fatalf("dead mirrors must report DEGRADED, not %v", err)
 	}
 	if !strings.Contains(msg, "unavailable") {
 		t.Errorf("message should say the mirrors are down: %q", msg)

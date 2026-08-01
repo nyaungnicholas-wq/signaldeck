@@ -7,6 +7,7 @@ package workers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
@@ -18,6 +19,18 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
+
+// ErrDegraded marks a run that completed without breaking and without
+// delivering. Return it wrapped — fmt.Errorf("congress mirrors unavailable: %w",
+// ErrDegraded) — and the run is filed as status "degraded" rather than "ok".
+//
+// It exists because the only way a worker could previously signal trouble was to
+// return an error, and pollers with a dead upstream deliberately do not: a dead
+// mirror is not a crash. The result was congress-poller reporting ok on every
+// run while congress_trades held zero rows, and edgar-fetcher reporting ok with
+// "skipped: no EDGAR client" forever. A source that never delivers must not read
+// as a source that works.
+var ErrDegraded = errors.New("degraded: completed without delivering")
 
 // Worker is one in-app agent.
 type Worker interface {
@@ -310,6 +323,20 @@ func (r *Runner) runOnce(ctx context.Context, w Worker) {
 			}
 			detail = fmt.Sprintf("%s after %s: %v", reason, time.Since(in.since).Round(time.Second), runErr)
 			slog.Warn("worker run timed out", "worker", w.Name(), "after", time.Since(in.since), "err", runErr)
+		// The run finished without breaking and without delivering. A poller whose
+		// upstream is dead returns nil today, because a dead mirror is not a crash
+		// and nobody wants to be paged for it — so congress-poller filed status=ok
+		// on every run while congress_trades held ZERO rows, and 94
+		// congress_mirror_error dq events accumulated over seven days behind a
+		// uniformly green fleet view. Recorded as its own status for the same
+		// reason "timeout" is: a source that delivered nothing has a different
+		// cause and a different fix than one that failed, and neither is "ok".
+		//
+		// Deliberately LAST before default: a shutdown or a blown deadline that
+		// happens to wrap ErrDegraded is still a shutdown or a timeout.
+		case errors.Is(runErr, ErrDegraded):
+			status, detail = "degraded", runErr.Error()
+			slog.Warn("worker degraded", "worker", w.Name(), "err", runErr)
 		default:
 			status, detail = "error", runErr.Error()
 			slog.Warn("worker failed", "worker", w.Name(), "err", runErr)
