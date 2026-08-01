@@ -140,6 +140,54 @@ function Gates {
 }
 
 # --- worker briefing -------------------------------------------------------
+# Apply SEARCH/REPLACE blocks to $text. Returns the new text, or $null (having
+# logged the reason) if anything is off.
+#
+# Every rejection here is deliberate. A block whose SEARCH text appears twice is
+# ambiguous, and picking one is a coin flip that silently corrupts the other
+# site; a block that matches nothing means the model retyped the anchor from
+# memory instead of copying it, so its idea of the file is already wrong. Both
+# are refused outright. Guessing is how a "successful" edit lands in the wrong
+# place and still passes a narrow verify.
+#
+# Two things this must NOT do, both of which the first draft did:
+#   - Trim() the search or replacement text. These anchors are source code and
+#     the leading whitespace IS the match. Trimming breaks Go and Python edits
+#     and silently re-indents whatever it does land on.
+#   - Check for ambiguity after replacing. The count has to be known before the
+#     text is touched, or the first site is already gone when the second is found.
+function ApplyEdits([string]$text, [string]$reply, [string]$label) {
+  $blocks = [regex]::Matches($reply,
+    '(?s)<{3,}\s*SEARCH\s*\n(.*?)\n={3,}\s*\n(.*?)\n?>{3,}\s*REPLACE')
+  if ($blocks.Count -eq 0) {
+    Note 'no-edit-blocks' @{ file = $label; replyLen = $reply.Length }
+    return $null
+  }
+
+  $applied = 0
+  foreach ($b in $blocks) {
+    $search = $b.Groups[1].Value
+    $replace = $b.Groups[2].Value
+    if ([string]::IsNullOrWhiteSpace($search)) {
+      Note 'empty-search-block' @{ file = $label }
+      return $null
+    }
+    $first = $text.IndexOf($search, [StringComparison]::Ordinal)
+    if ($first -lt 0) {
+      Note 'search-not-found' @{ file = $label; snippet = ($search -split "`n")[0] }
+      return $null
+    }
+    if ($text.IndexOf($search, $first + 1, [StringComparison]::Ordinal) -ge 0) {
+      Note 'search-ambiguous' @{ file = $label; snippet = ($search -split "`n")[0] }
+      return $null
+    }
+    $text = $text.Substring(0, $first) + $replace + $text.Substring($first + $search.Length)
+    $applied++
+  }
+  Note 'edits-applied' @{ file = $label; blocks = $applied }
+  return $text
+}
+
 # Vague in, slop out. Name the gate, paste its real output, state the rule.
 # Returns the list of files it changed and verified, or $null. The caller commits
 # exactly those -- never `git add -A`, which in a tree shared with another agent
@@ -175,11 +223,23 @@ function TargetFiles([string]$text, [string]$verifyCmd = '') {
 # exactly those -- never `git add -A`, which in a tree shared with another agent
 # sweeps up that agent's unreviewed work. That happened once already.
 #
-# WHOLE FILE IN, WHOLE FILE OUT. The first design asked for a unified diff and
-# never showed the worker the code: 41 consecutive cycles produced diffs, 0 of
-# which applied. A local model cannot invent matching context for a file it has
-# never read, and a diff is unusable the moment one context line is wrong. So the
-# file goes in via -File and the complete rewritten file comes back via -Out.
+# WHOLE FILE IN, SMALL ANCHORED EDITS OUT. Three protocols were tried:
+#
+#   unified diff, file not shown  -> 41 cycles, 0 applied. A model cannot invent
+#                                    matching context for code it never read.
+#   whole file in, whole file out -> works under ~8KB. Above that a local model
+#                                    truncates or derails: one 16KB attempt
+#                                    declared the input "copy-paste duplication",
+#                                    deleted Load() and offered to help.
+#   whole file in, EDITS out      -> this. The same 7B that failed the 16KB
+#                                    rewrite produced a correct sentinel + switch
+#                                    case in seconds when asked for the snippet.
+#
+# The bottleneck was never model capability, it was output length. So the worker
+# reads the whole file and returns only the lines it wants changed, anchored by
+# exact text. Application is deterministic string replacement here -- no line
+# numbers, no fuzzy context, and a block that does not match EXACTLY ONCE is
+# rejected rather than guessed at.
 function BriefWorker([string]$task, [string]$evidence, [string]$verifyCmd, [string]$lane = 'code', [string]$explicitFile = '') {
   if (-not (Test-Path $omni)) { Note 'omni-missing'; return $null }
 
@@ -214,11 +274,25 @@ RULES THAT ARE NOT NEGOTIABLE
 - Change as little as possible. Keep every unrelated line byte-identical.
 - Match the surrounding style. Add no dependencies.
 
-OUTPUT FORMAT -- follow exactly:
-Return the COMPLETE contents of $target after your fix. Start at the very first
-line of the file and end at the very last. No markdown fences, no ``` markers,
-no commentary, no diff, no ellipses, no "rest of file unchanged". The raw file
-and nothing else. Your output will be written directly over $target.
+OUTPUT FORMAT -- follow exactly. Do NOT return the whole file.
+Return ONLY the lines you are changing, as one or more edit blocks:
+
+<<<<<<< SEARCH
+(exact text to find, copied character-for-character from the file above,
+ including indentation. Long enough to appear EXACTLY ONCE in the file.)
+=======
+(the replacement text)
+>>>>>>> REPLACE
+
+Rules for the blocks:
+- SEARCH text must match the file byte-for-byte. Copy it, do not retype it.
+- It must be unique in the file. If the snippet is short, include the line
+  above and below to make it unique.
+- To INSERT new code, SEARCH for the line you want to insert after, and
+  REPLACE with that same line followed by your new lines.
+- Emit as many blocks as you need. Keep each one minimal.
+- Nothing outside the blocks. No markdown fences, no commentary, no diff, no
+  explanation before or after.
 
 It is accepted only if this command then exits zero:
   $verifyCmd
@@ -235,18 +309,12 @@ It is accepted only if this command then exits zero:
   if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
     $bytes = $bytes[3..($bytes.Length - 1)]
   }
-  $new = ([Text.Encoding]::UTF8.GetString($bytes) -replace "`r`n", "`n")
-  $new = (($new -split "`n") | Where-Object { $_ -notmatch '^\s*```' }) -join "`n"
-  $new = $new.TrimEnd() + "`n"
+  $reply = ([Text.Encoding]::UTF8.GetString($bytes) -replace "`r`n", "`n")
+  $reply = (($reply -split "`n") | Where-Object { $_ -notmatch '^\s*```' }) -join "`n"
 
-  # Truncation is the failure mode that matters: a model that stops early hands
-  # back a file that still parses but has lost its tail. Anything under 60% of
-  # the original is refused rather than written.
   $old = ([IO.File]::ReadAllText($full) -replace "`r`n", "`n")
-  if ($new.Length -lt ($old.Length * 0.6)) {
-    Note 'output-truncated' @{ file = $target; oldLen = $old.Length; newLen = $new.Length }
-    return $null
-  }
+  $new = ApplyEdits $old $reply $target
+  if ($null -eq $new) { return $null }          # ApplyEdits already logged why
   if ($new -eq $old) { Note 'no-change-produced' @{ file = $target }; return $null }
 
   [IO.File]::WriteAllText($full, $new, (New-Object Text.UTF8Encoding $false))
