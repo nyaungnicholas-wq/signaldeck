@@ -819,6 +819,13 @@ def survivorship_stamp(surv: dict | None) -> dict:
 NULL_AMENDMENT_EPOCH = dt.date(2026, 7, 27)
 NULL_AMENDMENT_EPOCH_TS = int(dt.datetime(2026, 7, 27, tzinfo=dt.timezone.utc).timestamp())
 
+# The kinds whose write path REQUIRES a frozen naive baseline -- byte-identical
+# to structuralNullKinds in daemon/internal/store/regimeoutcomes.go.
+STRUCTURAL_NULL_KINDS = (
+    "trend21", "trend63", "vol21", "liquidity21",
+    "trend21-crypto", "liquidity21-crypto",
+)
+
 
 def null_amendment_probe(con: sqlite3.Connection) -> dict:
     """Read the write-path invariant off the LIVE table, per structural kind.
@@ -833,10 +840,36 @@ def null_amendment_probe(con: sqlite3.Connection) -> dict:
     """
     out = {"count": 0, "newest_ts": None, "kinds": []}
     try:
+        # Mirror the store's guard EXACTLY, on both axes it narrows by:
+        #
+        #   1. Only kinds whose write path requires a baseline. filingsdrift21
+        #      has no resolver that can compute a null for it, so the store
+        #      never demanded one and the registry grades it NO BASELINE.
+        #   2. Not the frozen quarantine -- an enumerated, digest-covered,
+        #      chain-recorded set of historical rows that keep their NULL label
+        #      and stay out of every denominator.
+        #
+        # Without those, this counted 1172 rows -- 1165 already quarantined plus
+        # 7 exempt by kind -- and reported the deployed binary as diverged when
+        # it was not. That is the third independent copy of this rule in the
+        # codebase; each one that drifts invents its own false alarm.
+        # The quarantine table is absent from fixtures and from repro snapshots.
+        # Referencing it unconditionally raised OperationalError, which the
+        # except below turned into count=0 -- silently HIDING divergence instead
+        # of reporting it. A missing exemption list must mean "exempt nothing",
+        # never "there is nothing to report".
+        has_quarantine = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            ("regime_outcome_quarantine",)).fetchone() is not None
+        exclude = ("AND id NOT IN (SELECT outcome_id FROM regime_outcome_quarantine)"
+                   if has_quarantine else "")
         rows = con.execute(
-            """SELECT kind, COUNT(*), MAX(ts) FROM regime_outcomes
-               WHERE ts >= ? AND naive_label IS NULL GROUP BY kind""",
-            (NULL_AMENDMENT_EPOCH_TS,)).fetchall()
+            f"""SELECT kind, COUNT(*), MAX(ts) FROM regime_outcomes
+                WHERE ts >= ? AND naive_label IS NULL
+                  AND kind IN ({','.join('?' * len(STRUCTURAL_NULL_KINDS))})
+                  {exclude}
+                GROUP BY kind""",
+            (NULL_AMENDMENT_EPOCH_TS, *STRUCTURAL_NULL_KINDS)).fetchall()
     except sqlite3.OperationalError:
         # No naive_label column at all: the "NOT FROZEN" path already grades
         # every structural kind NO BASELINE, so there is nothing to add here.
