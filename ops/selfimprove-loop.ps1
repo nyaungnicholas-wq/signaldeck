@@ -376,8 +376,31 @@ Note 'loop-start' @{
 if ($AllowChainWrites) {
   $snap = Join-Path $repo "data\signaldeck.db.loopsnapshot"
   if (-not (Test-Path $snap)) {
-    try { Copy-Item (Join-Path $repo 'data\signaldeck.db') $snap -Force; Note 'db-snapshot' @{ path = $snap } }
-    catch { Note 'db-snapshot-failed' @{ err = "$_" } }
+    # VACUUM INTO, not Copy-Item. A plain file copy of a LIVE SQLite database
+    # omits the -wal and -shm sidecars and races every in-flight write, so the
+    # result is torn: pages from different transactions, and trailing NUL
+    # padding where a page was mid-write. The 2026-07-31 audit copied the
+    # previous Copy-Item snapshot and found JSON in `scores.components` ending
+    # in \x00 -- the production table had ZERO such rows. The "backup" taken
+    # before an irreversible chain append was itself unrestorable, which is the
+    # one thing a safety snapshot may not be.
+    #
+    # VACUUM INTO runs inside a read transaction and writes a consistent,
+    # fully-checkpointed database. It is the only copy worth keeping.
+    $src = (Join-Path $repo 'data\signaldeck.db') -replace '\\', '/'
+    $dst = $snap -replace '\\', '/'
+    $py = "import sqlite3;c=sqlite3.connect(r'$src');c.execute(`"VACUUM INTO '$dst'`");c.close()"
+    $r = Run 'db-snapshot' "python -c `"$py`"" 1800
+    if ($r.Ok -and (Test-Path $snap)) {
+      Note 'db-snapshot' @{ path = $snap; bytes = (Get-Item $snap).Length }
+    }
+    else {
+      # A chain append is irreversible. Without a restorable snapshot the loop
+      # must not take one.
+      Note 'db-snapshot-failed' @{ err = ($r.Output -split "`n" | Select-Object -Last 2) -join ' ' }
+      Note 'chain-writes-disabled' @{ reason = 'no verified snapshot' }
+      $AllowChainWrites = $false
+    }
   }
 }
 
