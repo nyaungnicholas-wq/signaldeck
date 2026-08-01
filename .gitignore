@@ -23,3 +23,6 @@ __pycache__/
 # Pre-migration VACUUM INTO backups. Consistent, restorable, and far too large
 # to track; regenerate with the snippet in ops/IMPROVE_BACKLOG.md.
 *.premigration
+
+# Worker-generated research scripts from ops/eighty-loop.ps1.
+research/eighty/
