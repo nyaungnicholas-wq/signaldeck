@@ -43,7 +43,18 @@
 param(
   [double]$Hours = 0,
   [int]$MaxCycles = 500,
-  [string]$Lane = 'reason',
+  # BOTH stages run on the `code` lane (qwen3.6:27b) deliberately.
+  #
+  # The reason lane (deepseek-r1:32b, 19GB) TIMED OUT after 610 seconds against
+  # a 11.4KB prompt while qwen3.6:27b (18GB) was already resident -- two models
+  # that size cannot coexist, so every lane switch evicts and reloads, and under
+  # that contention the call dies. omni then fell through to the PAID gateway
+  # (mistral-large), which is both the wrong cost profile for a loop meant to run
+  # for days and the reason no local token movement was visible.
+  #
+  # qwen3.6:27b stays resident, handled a 29KB prompt in 78-122s in testing, and
+  # is a perfectly good reasoning model for this. One model, no thrash, no spend.
+  [string]$Lane = 'code',
   [string]$CodeLane = 'code',
   [int]$CyclePauseSec = 30
 )
@@ -86,10 +97,22 @@ $PROTOCOL
 $task
 "@
   $tmp = Join-Path $env:TEMP "eighty-$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
+  # Capture omni's own diagnostics instead of discarding them. Out-Null here
+  # meant 44 consecutive cycles logged a bare "worker-empty" while omni was
+  # printing the actual cause -- a local model timing out and falling through to
+  # the gateway -- to a stream nobody read.
+  $diag = ''
   try {
-    & powershell -NoProfile -File $omni -Prompt $prompt -Task $lane -Out $tmp -TimeoutSec $timeoutSec 2>&1 | Out-Null
+    $diag = (& powershell -NoProfile -File $omni -Prompt $prompt -Task $lane -Out $tmp `
+        -TimeoutSec $timeoutSec 2>&1 | Out-String)
   } catch { Ev 'worker-error' @{ err = "$_" }; return $null }
-  if (-not (Test-Path $tmp) -or (Get-Item $tmp).Length -lt 20) { Ev 'worker-empty'; return $null }
+  if ($diag -match 'via\s+(\S+)') { Ev 'served-by' @{ model = $Matches[1] } }
+
+  if (-not (Test-Path $tmp) -or (Get-Item $tmp).Length -lt 10) {
+    Ev 'worker-empty' @{ diag = (($diag -split "`n" | Where-Object { $_ -match '\S' } |
+          Select-Object -Last 2) -join ' ') }
+    return $null
+  }
 
   # omni writes a UTF-8 BOM and models fence their output despite instructions.
   $bytes = [IO.File]::ReadAllBytes($tmp)
