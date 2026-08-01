@@ -13,7 +13,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 )
@@ -106,13 +108,36 @@ var structuralNullKinds = map[structregime.Kind]bool{
 // FreezeNullQuarantine) — not an escape hatch. It cannot grow, the quarantined
 // rows keep grading as NO BASELINE, and every future row still has to satisfy
 // the guard exactly as before.
+// It counts ONLY the kinds the write guard actually requires a label for. The
+// two disagreed: the guard refuses a label-less row when structuralNullKinds
+// covers its kind, but this counter counted every kind. filingsdrift21 is
+// deliberately outside that set -- no resolver can compute a null for it, and
+// the registry grades it NO BASELINE -- so rows the writer was ENTITLED to write
+// were being read as proof that "the deployed binary differs from source".
+// On the live store that was 7 of 15 unmatched rows, and regime-outcome-runner
+// refused to run because of them, blocking every structural grade indefinitely.
+// A guard that fires on output its own writer is allowed to produce cannot be
+// satisfied by any correct binary; that is a broken guard, not a strict one.
 func (s *Store) UnmatchedNullCount(ctx context.Context) (int, error) {
+	kinds := make([]string, 0, len(structuralNullKinds))
+	for k := range structuralNullKinds {
+		kinds = append(kinds, string(k))
+	}
+	sort.Strings(kinds) // deterministic SQL for stable query plans and logs
+	args := make([]any, 0, len(kinds)+1)
+	args = append(args, NullAmendmentEpoch)
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
+
 	var n int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM regime_outcomes o
 		WHERE o.ts >= ? AND o.naive_label IS NULL
+		  AND o.kind IN (`+ph+`)
 		  AND o.id NOT IN (SELECT outcome_id FROM regime_outcome_quarantine)`,
-		NullAmendmentEpoch).Scan(&n)
+		args...).Scan(&n)
 	return n, err
 }
 

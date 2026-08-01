@@ -69,15 +69,22 @@ func TestStreamBackoffEscalates(t *testing.T) {
 
 // And it must settle. Once capped, further failures must not push the interval
 // toward infinity, or a long outage means the stream never returns on its own.
+//
+// Asserted against the cap's FIXED band, not against another sample's extremes.
+// The first version compared sample(60)'s maximum to sample(40)'s and failed
+// roughly half the time for no reason: once both attempts are capped they draw
+// from the identical distribution, so whichever sample happens to contain the
+// larger draw is a coin flip. Comparing two random samples to each other is not
+// a property test, it is a race.
 func TestStreamBackoffCapHolds(t *testing.T) {
-	lo40, hi40 := sample(40)
-	lo60, hi60 := sample(60)
-	if hi60 > hi40 || lo60 < lo40/2 {
-		t.Errorf("attempt 40 spans [%v,%v] but attempt 60 spans [%v,%v] -- the cap is not holding",
-			lo40, hi40, lo60, hi60)
-	}
-	if hi40 > backoffCap {
-		t.Errorf("capped attempt still reaches %v, above %v", hi40, backoffCap)
+	for _, attempt := range []int{40, 60, 1000} {
+		lo, hi := sample(attempt)
+		if lo < backoffCap/2 || hi > backoffCap {
+			t.Errorf("attempt %d spans [%v,%v]; once capped every draw must sit inside "+
+				"[%v,%v] -- outside that band the cap is not holding and a long outage "+
+				"pushes the retry interval away from any bound",
+				attempt, lo, hi, backoffCap/2, backoffCap)
+		}
 	}
 }
 

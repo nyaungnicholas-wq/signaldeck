@@ -20,3 +20,6 @@ daemon/sdmaint
 
 # Python bytecode from running the tools/tests locally.
 __pycache__/
+# Pre-migration VACUUM INTO backups. Consistent, restorable, and far too large
+# to track; regenerate with the snippet in ops/IMPROVE_BACKLOG.md.
+*.premigration
