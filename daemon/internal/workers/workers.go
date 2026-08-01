@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"math/rand"
 	"os"
 	"runtime/debug"
 	"sort"
@@ -196,16 +197,65 @@ func (r *Runner) stuckWorkers() []string {
 	return names
 }
 
+// streamBackoff returns how long to wait before redialling a long-running
+// stream worker after its session ended, given how many consecutive short
+// sessions preceded it.
+//
+// This replaces a flat 5-second cooldown whose comment claimed the streamer did
+// "finer backoff" internally. It did not, and nothing else did either. Measured
+// on 2026-07-31 with a dependency down: ~60 restarts in 68 seconds, and it would
+// have continued at that rate for as long as the outage lasted. Against a
+// market-data vendor rather than a local service, that is precisely how an
+// outage becomes a rate-limit or an IP ban -- the client hammers hardest at the
+// moment the provider is least able to answer.
+//
+// Full jitter (wait drawn from [half, full] of the capped exponential) rather
+// than a fixed schedule, because every stream worker recovering from a SHARED
+// outage would otherwise redial in the same instant. The cap keeps a recovered
+// provider from waiting hours to be noticed.
+func streamBackoff(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	shift := attempt
+	if shift > 20 { // 2s<<20 is ~24 days; clamp long before int64 overflow
+		shift = 20
+	}
+	window := 2 * time.Second << uint(shift)
+	if window > streamBackoffCap {
+		window = streamBackoffCap
+	}
+	return window/2 + time.Duration(rand.Int63n(int64(window/2)))
+}
+
+// streamBackoffCap bounds the wait so a provider that recovers is retried
+// promptly. Two minutes: long enough to stop hammering, short enough that an
+// unattended daemon reconnects on its own within one bar period.
+const streamBackoffCap = 2 * time.Minute
+
+// healthySession is how long a stream must hold before its next failure is
+// treated as a fresh incident rather than a continuing one. A feed that ran for
+// hours and then dropped should be retried quickly, not at the interval its
+// last bad day ended on.
+const healthySession = 60 * time.Second
+
 func (r *Runner) loop(ctx context.Context, w Worker) {
 	iv := w.Interval()
 	if iv == 0 {
-		// Long-running stream worker: keep it alive, restarting on error
-		// with a fixed cooldown (its own internals do finer backoff).
+		// Long-running stream worker: keep it alive, redialling on error with a
+		// jittered, capped exponential backoff that resets after a healthy run.
+		attempt := 0
 		for ctx.Err() == nil {
+			start := time.Now()
 			r.runOnce(ctx, w)
+			if time.Since(start) >= healthySession {
+				attempt = 0
+			} else {
+				attempt++
+			}
 			select {
 			case <-ctx.Done():
-			case <-time.After(5 * time.Second):
+			case <-time.After(streamBackoff(attempt)):
 			}
 		}
 		return
