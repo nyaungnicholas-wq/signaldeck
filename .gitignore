@@ -26,3 +26,8 @@ __pycache__/
 
 # Worker-generated research scripts from ops/eighty-loop.ps1.
 research/eighty/
+
+# Measurement outputs from the tools/alpha/*.py scripts. Regenerable by rerunning
+# the tracked script that wrote them; untracked so a stale run cannot make the
+# daemon refuse to start on an "unattributable build".
+tools/alpha/*.json

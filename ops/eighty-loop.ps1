@@ -141,7 +141,7 @@ Measurement rules this script must obey:
 # One worker call. $context defaults to the full protocol; the code stage passes
 # the compact rules instead.
 function Ask([string]$task, [string]$lane, [string]$outFile, [int]$timeoutSec = 900,
-  [string]$context = $null) {
+  [string]$context = $null, [string]$verify = '', [int]$samples = 1) {
   if (-not $context) { $context = $PROTOCOL }
   $prompt = @"
 $context
@@ -161,8 +161,20 @@ $task
   $pf = Join-Path $env:TEMP "eighty-prompt-$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
   Set-Content -Path $pf -Value $prompt -Encoding UTF8
   try {
-    $diag = (& powershell -NoProfile -File $omni -PromptFile $pf -Task $lane -Out $tmp `
-        -TimeoutSec $timeoutSec 2>&1 | Out-String)
+    # NOT $args -- that is an automatic variable and assigning it inside a
+    # function with a param block is a footgun that reads as working code.
+    $omniArgs = @('-NoProfile', '-File', $omni, '-PromptFile', $pf, '-Task', $lane, '-TimeoutSec', $timeoutSec)
+    if ($verify -ne '') {
+      # omni.ps1 refuses -Verify without -Out ("it runs against the written
+      # file") and refuses -Samples>1 without -Verify. Omitting -Out here made
+      # every verified call exit 2 before reaching a model.
+      $tmp = $outFile
+      $omniArgs += '-Out', $tmp, '-Verify', $verify, '-Samples', $samples
+    } else {
+      $omniArgs += '-Out', $tmp
+    }
+    $diag = (& powershell $omniArgs 2>&1 | Out-String)
+    $omniExit = $LASTEXITCODE
   } catch { Ev 'worker-error' @{ err = "$_" }; return $null }
   if ($diag -match 'via\s+(\S+)') { Ev 'served-by' @{ model = $Matches[1] } }
 
@@ -170,6 +182,27 @@ $task
     Ev 'worker-empty' @{ diag = (($diag -split "`n" | Where-Object { $_ -match '\S' } |
           Select-Object -Last 2) -join ' ') }
     return $null
+  }
+
+  # omni already stripped fences and BOM and PROVED the artifact runs, so the
+  # post-processing below would only re-mangle a file that is already correct.
+  #
+  # EXCEPT when it proved the opposite. omni calls Write-Artifact BEFORE each
+  # verify, so -Out exists and is non-empty even when every attempt FAILED and
+  # omni exited 1. Sizing the file is therefore not evidence it runs -- the
+  # first version of this branch logged 'implement-verified' over a script that
+  # died on a NameError one second later. The exit code is the only honest
+  # signal, so a failed verify returns null and the cycle dies as 'no-code'
+  # rather than parading an unverified artifact as verified.
+  if ($verify -ne '') {
+    if ($omniExit -ne 0) {
+      Ev 'verify-exhausted' @{ exit = $omniExit
+        diag = (($diag -split "`n" | Where-Object { $_ -match '\S' } |
+                 Select-Object -Last 6) -join ' | ') }
+      return $null
+    }
+    Ev 'implement-verified' @{ bytes = (Get-Item $tmp).Length }
+    return (Get-Content $tmp -Raw)
   }
 
   # omni writes a UTF-8 BOM and models fence their output despite instructions.
@@ -238,6 +271,16 @@ Output the six labelled lines and nothing else.
 
   # --- 2. IMPLEMENT -------------------------------------------------------
   $script = Join-Path $work ("h{0:D4}.py" -f $cycle)
+  # The verify command travels to omni.ps1 as a `powershell -File` ARGUMENT, and
+  # -File re-parses arguments: quotes are stripped and the value is cut at the
+  # first space, so `python "C:\...\Desktop\claude code\...\h0001.py"` arrived as
+  # `python C:\Users\Nicholas_N\Desktop\claude` and every verify died with
+  # "python: can't open file or directory" -- which omni then reported as a
+  # failing artifact rather than a broken command. Same defect class as the
+  # -PromptFile fix. A repo-RELATIVE path has no spaces, so it needs no quotes
+  # and survives the hop intact; omni inherits this process's cwd, which
+  # Set-Location pinned to $repo at startup.
+  $scriptRel = "research\eighty\" + ("h{0:D4}.py" -f $cycle)
   $code = Ask @"
 Write a SELF-CONTAINED Python 3 script that tests exactly this hypothesis:
 
@@ -265,14 +308,15 @@ Hard requirements:
 - Must run to completion in under 10 minutes.
 
 Output the raw Python file only. No markdown fences, no commentary.
-"@ $CodeLane $script 1200 $CODE_RULES
+"@ $CodeLane $script 1200 $CODE_RULES -verify "python $scriptRel" -samples 5
 
   if (-not $code) { Ev 'no-code'; Start-Sleep -Seconds $CyclePauseSec; continue }
 
   # --- 3. VERIFY: it must actually run -----------------------------------
   $r = Run "h$cycle" "python `"$script`"" 900
   if (-not $r.Ok) {
-    Ev 'script-failed' @{ cycle = $cycle; tail = (($r.Output -split "`n" | Select-Object -Last 2) -join ' ') }
+    $tail = ($r.Output -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 12) -join ' | '
+    Ev 'script-failed' @{ cycle = $cycle; tail = $tail }
     Add-Content $journal "`n## Cycle $cycle - KILLED (script did not run)`n`n$hypothesis`n`n``````$(($r.Output -split "`n" | Select-Object -Last 6) -join "`n")```````n"
     Start-Sleep -Seconds $CyclePauseSec
     continue

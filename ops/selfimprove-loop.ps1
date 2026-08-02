@@ -299,8 +299,12 @@ It is accepted only if this command then exits zero:
 "@
 
   $outFile = Join-Path $env:TEMP "sd-worker-$([guid]::NewGuid().ToString('N').Substring(0,8)).out"
+  # Prompt via file, not the command line: PowerShell re-parses `-File` args and
+  # a "-word" in the prompt body binds as a parameter. See omni.ps1 -PromptFile.
+  $pf = Join-Path $env:TEMP "sd-prompt-$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
+  Set-Content -Path $pf -Value $prompt -Encoding UTF8
   try {
-    & powershell -NoProfile -File $omni -Prompt $prompt -File $full -Task $lane -Out $outFile -TimeoutSec 900 2>&1 | Out-Null
+    & powershell -NoProfile -File $omni -PromptFile $pf -File $full -Task $lane -Out $outFile -TimeoutSec 900 2>&1 | Out-Null
   } catch { Note 'worker-error' @{ err = "$_" }; return $null }
   if (-not (Test-Path $outFile) -or (Get-Item $outFile).Length -lt 20) { Note 'worker-empty'; return $null }
 
