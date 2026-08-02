@@ -343,6 +343,121 @@ single highest-leverage fix remaining, and it closes four rows at once.
 
 ---
 
+## ADDENDUM — DELEGATED DEEP PASS OVER `/api/honesty` AND `/api/model-evolution`
+
+These two payloads were pulled but never analysed in the first pass. Three workers were run
+over them with different lenses (leakage, leg attribution, gate integrity); every claim below
+was then re-derived independently, and **two of the three workers' headline findings did not
+survive that check.** Both the worker claim and the measured truth are recorded, because the
+disagreement is the useful part.
+
+### A-1 — REFUTED (worker claim did not hold): no pseudo-replication signature in `/api/honesty`
+
+The worker reported "1,758 points share an identical `fwd`" out of a **total of 880 points** —
+arithmetically impossible — reported "3 distinct days" as raw unix timestamps, and
+"recomputed" the IC to a value matching the stored field in all 16 digits, i.e. it copied it.
+
+Measured directly:
+
+```
+total points: 880
+distinct UTC days: 5   {07-27: 211, 07-28: 330, 07-29: 325, 07-31: 7, 08-01: 7}
+points sharing an fwd with >=1 other: 9 of 880   (all of them fwd = 0.0)
+recomputed pearson: -0.075341   vs stored ic -0.0753412661659693
+```
+
+**The dedup is working.** Nine duplicate values out of 880, all exactly zero, is not the
+40×-inflation signature — it is a handful of genuinely flat returns. And the stored IC
+recomputes honestly from the raw points.
+
+### A-2 — NEW FINDING, MEDIUM: `/api/honesty` publishes IC over 880 obs spanning 5 days, with no day-clustering correction
+
+`independentN: 880` across **5 distinct UTC days**, three of which carry 211/330/325 points.
+`/api/track-record` applies a *measured* design effect of 3.61 to the same class of data and
+publishes an effective N; this payload carries no `cluster` block, no design effect and no
+distinct-day count at all. 880 symbol-days spanning 5 calendar days share 5 market moves.
+
+The correction exists and is good — it is simply not applied on this surface. Note also that
+honesty's IC (**−0.0753**) is materially more negative than track-record's (−0.0200), and both
+are negative, consistent with the inverted calibration curve in F-5.
+
+### B-1 — REFUTED (worker claim did not hold): no leg is earning weight while predicting backwards
+
+The worker's headline was 16 `(regime, leg)` instances of "weight > 0 while IC < 0", built
+from the historical weight series. It also left its own self-corrections in the output
+("No violation. Remove.") and corrupted the file's encoding.
+
+Checked against the **live** adaptive state rather than the weight history:
+
+```
+all        n=40000  days=14  gated=True
+downtrend  n= 9457  days=14  gated=True
+range      n=15454  days=13  gated=True
+squeeze    n= 7258  days=14  gated=True
+uptrend    n= 6897  days=12  gated=True
+EVERY CELL GATED: True      any learned weight emitted? False
+```
+
+Reason, verbatim: *"cell's 40000 row(s) span only 14 distinct UTC day(s), below the 20-day
+floor — same-day rows share one market move, so they are not independent evidence."*
+
+**No leg currently earns a learned weight at all**, because the day-clustering gate refuses
+every cell; the ensemble falls back to `static equal prior`. The worker analysed a historical
+series and inferred a live violation that does not exist. The doctrine holds.
+
+This is arguably the strongest positive result in the whole audit: **the gate that matters
+most is enforced, and is currently refusing the entire adaptive layer** — including cells
+holding 40,000 rows, because 40,000 rows across 14 days is 14 days of evidence.
+
+### B-2 — CONFIRMED, and it is the same fact as F-5
+
+`meanrev` has **0 IC sign changes** across the series, min −0.7596, max −0.0296 — persistently
+and strongly inverse on n=1,315. Combined with the negative headline IC and the downward
+calibration slope, the picture is consistent: several components carry inverse information.
+Because every adaptive cell is gated, none of it is currently being blended.
+
+Still **do not flip any sign.** The track-record CI includes zero (F-5).
+
+### C-1 — CONFIRMED, LOW: a 2-sample calibration bin renders beside a 3,469-sample one
+
+`/api/calibration` publishes:
+
+```
+{"Lo":0.2,"Hi":0.30,"MeanPred":0.2825,"MeanActual":0.5,"N":2}
+```
+
+A bin of **N=2** reports `MeanActual` in the same array, same shape, as a bin of N=3,469.
+
+Characterised honestly: this is **not** a `MinCalibrationPairs` breach. That gate governs
+whether a calibration *map is fit*, and it is holding — the map itself is fit on n=10,000.
+This is a *display* problem: a two-sample cell is rendered as though it were comparable
+evidence. Real, but cosmetic, and it should not be written up as a gate bypass.
+
+### C-2 — CONFIRMED, MEDIUM: two endpoints publish "the live record" with different numbers and no cross-reference
+
+| | `/api/calibration` | `/api/track-record` |
+|---|---|---|
+| independent N | **14,699** | **11,216** |
+| win rate | **48.47%** | **50.01%** |
+| base rate | 0.4837 | 0.4424 |
+| Brier skill | −0.0512 | −0.1378 |
+
+The worker called these contradictions. They are **not** — they are differently scoped:
+calibration reports a *prequential* record ("probabilities were frozen at prediction time"),
+track-record reports *out-of-sample calibrated predictions vs realized outcomes*. Both labels
+say so.
+
+But a reader comparing the two surfaces cannot reconcile them, because neither references the
+other or states the scope difference in the numbers themselves. That is a real reporting
+defect even though no number is wrong. **Both readings agree on the conclusion**: 48.5% and
+50.0% are each below the naive baseline, and both Brier skills are negative.
+
+Worth recording: `/api/calibration`'s own `trackLabel` is exemplary — *"a bad number here is
+the honest product, not a display bug."* That is the posture the rest of the surface should
+copy.
+
+---
+
 ## DISAGREEMENTS WITH THE PRIOR AUDIT
 
 1. Phase count: 5, not 19.
