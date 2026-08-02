@@ -1,5 +1,8 @@
 "use client";
 
+// LAB › MEMORY — lived at /markets/memory until the 2026-08-02 merge folded
+// the duplicate /markets tree away; the old URL still 307s here.
+//
 // MARKET MEMORY — the historical-analog surface. It asks a deliberately humble
 // question: which past SPY days had a market STATE most like today's, and what
 // return actually FOLLOWED them? The daemon (GET /api/market-memory) z-scores

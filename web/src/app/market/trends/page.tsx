@@ -1,5 +1,9 @@
 "use client";
 
+// MARKET › TRENDS — trend classifications + candlestick patterns. Lived at
+// /markets/trends until the 2026-08-02 merge folded the duplicate /markets
+// tree into /market; the old URL still 307s here.
+
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { api, pollMs, POLL_DEFAULT, type Trends, type TrendsMover } from "@/lib/api";

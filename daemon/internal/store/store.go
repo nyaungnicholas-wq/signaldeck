@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -974,6 +975,27 @@ func (s *Store) FinishWorkerRun(ctx context.Context, id int64, status, detail st
 		`UPDATE worker_runs SET finished_at=?, status=?, detail=? WHERE id=?`,
 		time.Now().Unix(), status, detail, id)
 	return err
+}
+
+// LastWorkerRunAt returns when the named worker last STARTED a run, or the zero
+// time if it never has (or the row has been pruned). It is what lets a calendar
+// worker's NextFire survive a daemon restart: without it, every restart looks
+// like a first boot and a weekly job would re-fire on each one.
+//
+// Deliberately "started", not "finished ok": a run that failed still consumed
+// its slot, and the retry policy belongs to the worker's own NextFire, not to a
+// silent re-fire from the scheduler.
+func (s *Store) LastWorkerRunAt(ctx context.Context, worker string) (time.Time, error) {
+	var started sql.NullInt64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT MAX(started_at) FROM worker_runs WHERE worker = ?`, worker).Scan(&started)
+	if err != nil || !started.Valid {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
+		return time.Time{}, err
+	}
+	return time.Unix(started.Int64, 0), nil
 }
 
 // RecentWorkerRuns returns the latest runs per worker (flat list, newest first).

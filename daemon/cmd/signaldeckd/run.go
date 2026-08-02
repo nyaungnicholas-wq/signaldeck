@@ -182,6 +182,12 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	}
 
 	// ── the agent fleet ─────────────────────────────────────────────
+	// Calendar workers: a ScheduledWorker sleeps to its next real publication
+	// instant instead of ticking fast and skipping (see workers.ScheduledWorker).
+	// The interface is satisfied by POINTER receivers, so registering one of
+	// these by value would silently demote it back to interval polling with no
+	// build error and no runtime complaint — hence the assertions in
+	// scheduled_assert.go rather than trust.
 	// The Runner is built FIRST because two members of the fleet act ON the
 	// fleet: the storage governor needs a quiesce window for its WAL TRUNCATE,
 	// and the watchdog needs to cancel runs that have blown their deadline.

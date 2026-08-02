@@ -1,7 +1,7 @@
 // Server layout for /market/trends — route metadata only (the page itself
 // is a client component and cannot export metadata). Carried over from
-// /markets/trends, whose layout stopped applying once the 2026-07-18 hub
-// merge relocated the page by re-export.
+// /markets/trends, which the 2026-08-02 merge folded away (the
+// page component now lives here; the old URL 307s in).
 
 import type { Metadata } from "next";
 

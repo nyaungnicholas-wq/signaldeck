@@ -36,6 +36,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 const (
@@ -64,6 +65,19 @@ type ShortVolPoller struct {
 
 func (w *ShortVolPoller) Name() string            { return "finra-shorts" }
 func (w *ShortVolPoller) Interval() time.Duration { return 6 * time.Hour }
+
+// NextFire implements workers.ScheduledWorker: FINRA publishes the daily
+// short-volume file ONCE per trading day, after the close. Ticking every 6h
+// meant three of every four runs re-derived the same TargetShortVolDay and
+// returned a skip — the gate did the work the schedule should have done.
+//
+// 18:30 ET is deliberately late: the file lands in the evening, and being an
+// hour late costs nothing while being an hour early costs a whole wasted day's
+// wakeups. Non-trading days are skipped outright — there is no file for a day
+// that never traded.
+func (w *ShortVolPoller) NextFire(last, now time.Time) time.Time {
+	return workers.TradingDayAtET(now, 18, 30)
+}
 
 func (w *ShortVolPoller) now() time.Time {
 	if w.Now != nil {

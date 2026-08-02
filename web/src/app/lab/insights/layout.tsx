@@ -1,7 +1,7 @@
 // Server layout for /lab/insights — route metadata only (the page itself is
 // a client component and cannot export metadata). Carried over from
-// /signals/insights, whose layout stopped applying once the 2026-07-18 hub
-// merge relocated the page by re-export.
+// /signals/insights, which the 2026-08-02 merge folded away (the
+// page component now lives here; the old URL 307s in).
 
 import type { Metadata } from "next";
 

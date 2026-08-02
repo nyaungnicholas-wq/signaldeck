@@ -60,6 +60,18 @@ func (w *SignalBTPinWorker) Name() string { return "signalbt-weekly" }
 // Interval implements workers.Worker.
 func (w *SignalBTPinWorker) Interval() time.Duration { return 30 * time.Minute }
 
+// NextFire implements workers.ScheduledWorker: Sunday 18:00 ET, one hour after
+// the weekly self-report, so the two land in order.
+//
+// WHY: this worker ticked every 30 minutes to do a once-a-week job — 336
+// wakeups per useful run, 335 of which wrote a "waiting" row into worker_runs.
+// The week-key gate in Run is UNCHANGED and still authoritative (it is what
+// makes a catch-up idempotent); the schedule now agrees with it instead of
+// hammering it.
+func (w *SignalBTPinWorker) NextFire(last, now time.Time) time.Time {
+	return weeklyNextFire(last, now, time.Sunday, signalBTRunHour)
+}
+
 // Run applies the once-per-NY-week gate, evaluates every horizon, stores the
 // pinned snapshot, and writes the summarizing insight.
 func (w *SignalBTPinWorker) Run(ctx context.Context) (string, error) {

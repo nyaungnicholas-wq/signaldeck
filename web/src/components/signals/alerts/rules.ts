@@ -56,8 +56,8 @@ export const ALERT_RULES: Record<string, AlertRule> = {
       "volume spike: latest volume > 2.5× its own 20-bar average volume",
       "squeeze release: Bollinger(20, 2σ) band width sat in the bottom 20% of the last 90 bars, then expanded above its 20-bar average width",
     ],
-    href: "/markets/regimes",
-    hrefLabel: "see /markets/regimes",
+    href: "/market/regimes",
+    hrefLabel: "see /market/regimes",
     known: true,
   },
   regime_change: {
@@ -67,8 +67,8 @@ export const ALERT_RULES: Record<string, AlertRule> = {
     thresholds: [
       "fires when the stored regime label for a watched symbol flips — a descriptive classification of price history, never a prediction",
     ],
-    href: "/markets/regimes",
-    hrefLabel: "see /markets/regimes",
+    href: "/market/regimes",
+    hrefLabel: "see /market/regimes",
     known: true,
   },
   prediction_high: {
@@ -156,8 +156,8 @@ export const ALERT_RULES: Record<string, AlertRule> = {
       "fires when at least 3 of 5 independent families (smart-money, trend, prediction, relative-strength, breakout) agree on a direction (SIGNALDECK_CONFLUENCE_MIN, default 3) with at most 1 dissenter",
       "an absent family is excluded (never a fabricated neutral); a near-coin-flip prediction is one weak, non-decisive vote — this manufactures no edge and is scored by expected profit, not win rate",
     ],
-    href: "/signals/confluence",
-    hrefLabel: "see /signals/confluence",
+    href: "/lab/confluence",
+    hrefLabel: "see /lab/confluence",
     known: true,
   },
 };

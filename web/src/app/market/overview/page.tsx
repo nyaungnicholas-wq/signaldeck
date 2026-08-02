@@ -1,6 +1,10 @@
 "use client";
 
-// SCREENER — thin composition page (page-split refactor). Data fetching lives
+// MARKET › OVERVIEW — the whole-universe screener + heatmap + movers surface.
+// Lived at /markets/screener until the 2026-08-02 merge folded the duplicate
+// /markets tree into /market; the old URL still 307s here.
+//
+// Thin composition page (page-split refactor). Data fetching lives
 // in hooks/useScreenerData (POLL_DEFAULT tier), filter/sort/view state in
 // hooks/useScreenerFilters, and the panels in components/markets/*. Behavior
 // is identical to the old single-file page, plus a SavedViewsBar that

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -72,6 +73,11 @@ const (
 	minRunTimeout  = 15 * time.Minute
 	maxRunTimeout  = 6 * time.Hour
 	quiesceDrainTO = 30 * time.Second
+	// quiesceDrainWarn is the drain duration above which the pause stops being
+	// free. It is deliberately well under quiesceDrainTO so the trend is visible
+	// BEFORE the drain starts timing out — the point is to know the cost is
+	// rising while worker #94 is still a proposal.
+	quiesceDrainWarn = 5 * time.Second
 )
 
 // defaultRunTimeout is the deadline for a periodic worker with the given
@@ -128,6 +134,8 @@ type Runner struct {
 	running map[string]*inflight // worker name → in-flight Run
 	// quiesce is non-nil while the fleet is quiesced; it is closed on release.
 	quiesce chan struct{}
+	// lastQuiesce is what the most recent pause cost (see QuiesceStat).
+	lastQuiesce QuiesceStat
 }
 
 // NewRunner builds a runner over the given workers.
@@ -260,6 +268,12 @@ func (r *Runner) loop(ctx context.Context, w Worker) {
 		}
 		return
 	}
+	// Calendar worker: sleep to the next real publication instant instead of
+	// ticking fast and skipping. See ScheduledWorker in schedule.go.
+	if _, ok := w.(ScheduledWorker); ok {
+		r.scheduledLoop(ctx, w)
+		return
+	}
 	// Periodic worker: stagger the first run, then hold that phase.
 	//
 	// WHY (measured 2026-07-16): every periodic worker used to call runOnce
@@ -293,6 +307,64 @@ func (r *Runner) loop(ctx context.Context, w Worker) {
 			r.runOnce(ctx, w)
 		}
 	}
+}
+
+// scheduledLoop drives a ScheduledWorker: compute the next real fire instant,
+// sleep to it, run, repeat. There is no ticker and no stagger — a calendar
+// worker's phase IS its schedule, and two of them landing together is a
+// non-event because they fire minutes apart per day, not seconds apart per
+// minute.
+//
+// `last` is seeded from worker_runs so a restart does not re-fire a weekly job:
+// before this loop existed, the internal week-key gate in the store was the only
+// thing preventing exactly that, and a gate is a worse place for the rule than
+// the schedule.
+func (r *Runner) scheduledLoop(ctx context.Context, w Worker) {
+	last := r.lastRunAt(ctx, w.Name())
+	for ctx.Err() == nil {
+		now := time.Now()
+		next, ok := nextFireFor(w, last, now)
+		if !ok {
+			// No calendar opinion right now: fall back to the plain interval.
+			iv := w.Interval()
+			if iv <= 0 {
+				iv = time.Hour
+			}
+			next = now.Add(iv)
+		}
+		wake := next
+		// Never sleep past maxScheduledGap in one hop: a 7-day dead-source
+		// backoff should still notice a clock change or a config reload, and a
+		// week-long unwakeable goroutine is indistinguishable from a hung one.
+		if limit := now.Add(maxScheduledGap); wake.After(limit) {
+			wake = limit
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Until(wake)):
+		}
+		if time.Now().Before(next) {
+			continue // woke early to re-evaluate; not yet due
+		}
+		last = time.Now()
+		r.runOnce(ctx, w)
+	}
+}
+
+// lastRunAt reads a worker's most recent run start, so NextFire survives a
+// restart. A miss (never run, or pruned) returns the zero time, which every
+// NextFire must treat as "run at the next scheduled slot", not "run now".
+func (r *Runner) lastRunAt(ctx context.Context, name string) time.Time {
+	if r.st == nil {
+		return time.Time{}
+	}
+	t, err := r.st.LastWorkerRunAt(ctx, name)
+	if err != nil {
+		slog.Warn("worker: last run lookup", "worker", name, "err", err)
+		return time.Time{}
+	}
+	return t
 }
 
 // maxStartOffset caps the de-phasing delay: long enough to spread the fleet
@@ -474,6 +546,23 @@ func (r *Runner) QuiesceDo(ctx context.Context, d time.Duration, fn func(context
 		close(gate)
 	}()
 
+	// Measure the stall. WHY: quiescing holds 90+ workers still so the WAL can
+	// be TRUNCATE-checkpointed, and the cost of that pause grows with every
+	// worker added to the fleet — but nothing measured it, so "is the governor
+	// still cheap?" was unanswerable and would only surface as unexplained
+	// worker lateness. Drain time is the number that matters (the held window is
+	// a constant the caller chose); blocked is how many runs were still in
+	// flight when the drain began.
+	quiesceStart := time.Now()
+	r.mu.Lock()
+	blocked := 0
+	for name, in := range r.running {
+		if !skip[name] && !in.deadline.IsZero() {
+			blocked++
+		}
+	}
+	r.mu.Unlock()
+
 	drainBy := time.Now().Add(quiesceDrainTO)
 	for {
 		r.mu.Lock()
@@ -499,6 +588,28 @@ func (r *Runner) QuiesceDo(ctx context.Context, d time.Duration, fn func(context
 		}
 	}
 
+	stat := QuiesceStat{
+		At: quiesceStart, Drain: time.Since(quiesceStart),
+		Blocked: blocked, Fleet: len(r.workers),
+		DrainTimedOut: time.Now().After(drainBy),
+	}
+	r.mu.Lock()
+	r.lastQuiesce = stat
+	r.mu.Unlock()
+	slog.Info("worker: fleet quiesced", "drain", stat.Drain, "blocked", stat.Blocked,
+		"fleet", stat.Fleet, "drainTimedOut", stat.DrainTimedOut)
+	// A drain that runs long is the fleet's growth showing up as latency for
+	// every worker at once; a drain that times out means the pause was paid for
+	// and the checkpoint still ran against live readers. Both are worth a dq
+	// event rather than a log line nobody greps.
+	if r.st != nil && (stat.DrainTimedOut || stat.Drain > quiesceDrainWarn) {
+		_ = r.st.InsertDQ(ctx, md.DQEvent{
+			Ts: time.Now().Unix(), Kind: "quiesce_stall",
+			Detail: fmt.Sprintf("fleet drain %s (%d in flight of %d workers, timedOut=%v)",
+				stat.Drain.Round(time.Millisecond), stat.Blocked, stat.Fleet, stat.DrainTimedOut),
+		})
+	}
+
 	if fn != nil {
 		fn(ctx)
 	}
@@ -508,6 +619,26 @@ func (r *Runner) QuiesceDo(ctx context.Context, d time.Duration, fn func(context
 	case <-time.After(d):
 		return nil
 	}
+}
+
+// QuiesceStat is what the last fleet pause actually cost. DrainTimedOut means
+// at least one worker ignored cancellation for the full quiesceDrainTO and the
+// checkpoint proceeded with readers still active — the case where the pause is
+// paid for and the WAL reclaim still fails.
+type QuiesceStat struct {
+	At            time.Time
+	Drain         time.Duration
+	Blocked       int
+	Fleet         int
+	DrainTimedOut bool
+}
+
+// LastQuiesce returns the cost of the most recent fleet pause. The zero value
+// means the fleet has never been quiesced in this process.
+func (r *Runner) LastQuiesce() QuiesceStat {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastQuiesce
 }
 
 // InFlight reports how many runs are currently executing (test/telemetry).

@@ -110,8 +110,8 @@ test.describe("login page", () => {
 // chrome (and its nav) never paints for an anonymous visitor.
 const HUB_ROUTES: { path: string; gated: boolean }[] = [
   { path: "/", gated: true },
-  { path: "/markets/screener", gated: true },
-  { path: "/signals/predictions", gated: true },
+  { path: "/market/overview", gated: true },
+  { path: "/market/signals", gated: true },
   { path: "/intel/filings", gated: true },
   { path: "/lab/backtest", gated: true },
   { path: "/login", gated: false },

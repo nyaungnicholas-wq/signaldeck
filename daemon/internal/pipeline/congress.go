@@ -54,10 +54,40 @@ type CongressPoller struct {
 	Client *congress.Client // nil ⇒ no-op (shouldn't happen; congress needs no key)
 	// Now is a test hook; nil = time.Now.
 	Now func() time.Time
+
+	// deadRuns counts CONSECUTIVE runs where both mirrors were unreachable. It
+	// drives the circuit breaker in NextFire; a single success resets it. It is
+	// in-process only (a restart re-probes once at the base cadence), which is
+	// the right bias: a restart is exactly when a human may have fixed the
+	// source.
+	deadRuns int
 }
 
 func (w *CongressPoller) Name() string            { return "congress-poller" }
 func (w *CongressPoller) Interval() time.Duration { return 12 * time.Hour }
+
+// congressBackoffMax is the widest retry for a dead mirror. A week is long
+// enough to stop paying for a known-403 and short enough that a restored source
+// is picked up without a human noticing it came back.
+const congressBackoffMax = 7 * 24 * time.Hour
+
+// NextFire implements workers.ScheduledWorker as a CIRCUIT BREAKER.
+//
+// WHY: both free mirrors (senatestockwatcher.com, housestockwatcher.com) went
+// dead in 2026-07 — DNS gone, S3 403 — and this poller kept hitting them twice a
+// day purely to write a dq event. Disclosures are also not a live feed: the STOCK
+// Act gives members 45 days to file, so nothing is lost by checking daily instead
+// of twice daily, and nothing at all is lost by backing off a source that is
+// returning 403 to every request.
+//
+// Healthy: once a day at 09:00 ET, after the overnight mirror rebuilds.
+// Failing: exponential from the base cadence out to a week.
+func (w *CongressPoller) NextFire(last, now time.Time) time.Time {
+	if w.deadRuns > 0 {
+		return workers.BackoffAfter(now, w.deadRuns, 12*time.Hour, congressBackoffMax)
+	}
+	return workers.DailyAtET(now, 9, 0)
+}
 
 func (w *CongressPoller) now() time.Time {
 	if w.Now != nil {
@@ -89,6 +119,12 @@ func (w *CongressPoller) Run(ctx context.Context) (string, error) {
 	status.Senate = w.ingestChamber(ctx, congress.ChamberSenate, tickerToID, now)
 	status.House = w.ingestChamber(ctx, congress.ChamberHouse, tickerToID, now)
 	_ = w.St.SetJSON(ctx, congressStatusKey, status)
+
+	if status.Senate.OK || status.House.OK {
+		w.deadRuns = 0 // a live chamber closes the breaker
+	} else {
+		w.deadRuns++
+	}
 
 	if !status.Senate.OK && !status.House.OK {
 		// Both mirrors dead — the CURRENT real-world state. Honest skip, dq

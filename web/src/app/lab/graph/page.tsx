@@ -1,5 +1,8 @@
 "use client";
 
+// LAB › GRAPH — lived at /markets/graph until the 2026-08-02 merge folded the
+// duplicate /markets tree away; the old URL still 307s here.
+//
 // KNOWLEDGE-GRAPH RIPPLE — the neighborhood around ONE symbol: what it
 // co-moves with (price correlation) and who holds it alongside other names
 // (13F co-ownership). A radial <RippleGraph/> shows the shape; the adjacency

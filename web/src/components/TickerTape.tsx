@@ -26,7 +26,7 @@ import { onRetry, requestRetry } from "@/lib/freshness";
 import { fmtPct, fmtPrice } from "@/lib/format";
 
 function itemHref(it: TapeItem): string {
-  if (it.kind === "vix") return "/markets/macro";
+  if (it.kind === "vix") return "/market/macro";
   const market = it.market ?? "stocks";
   return `/s/${market}/${encodeURIComponent(it.symbol)}`;
 }

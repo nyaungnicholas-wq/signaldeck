@@ -128,7 +128,7 @@ export function pickTopInsight(
       freshTs: p2.ts,
       verb: p2.symbol ? "Investigate" : "Monitor",
       actionLabel: p2.symbol ?? "market regimes",
-      href: p2.symbol ? symbolHref(p2.symbol, p2.market) : "/markets/regimes",
+      href: p2.symbol ? symbolHref(p2.symbol, p2.market) : "/market/regimes",
       source: "alert · regime change",
     };
   }
@@ -175,7 +175,7 @@ export function pickTopInsight(
       freshTs: p4.ts,
       verb: p4.symbol ? "Investigate" : "Monitor",
       actionLabel: p4.symbol ?? "unusual activity",
-      href: p4.symbol ? symbolHref(p4.symbol, p4.market) : "/signals/unusual",
+      href: p4.symbol ? symbolHref(p4.symbol, p4.market) : "/market/unusual",
       source: `anomaly${p4.sub ? ` · ${p4.sub}` : ""}`,
     };
   }
@@ -193,7 +193,7 @@ export function pickTopInsight(
       freshTs: p5.ts,
       verb: "Monitor",
       actionLabel: "today's briefing",
-      href: "/signals/insights",
+      href: "/lab/insights",
       source: "daily briefing",
     };
   }
@@ -211,7 +211,7 @@ export function pickTopInsight(
       freshTs: dash.asOf,
       verb: "Compare",
       actionLabel: "the movers",
-      href: "/markets/screener",
+      href: "/market/overview",
       source: "market breadth",
     };
   }
@@ -223,7 +223,7 @@ export function pickTopInsight(
     freshTs: dash.asOf,
     verb: "Monitor",
     actionLabel: "the markets",
-    href: "/markets/screener",
+    href: "/market/overview",
     source: "market breadth",
   };
 }

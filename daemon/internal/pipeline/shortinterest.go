@@ -34,6 +34,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/finra"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 const (
@@ -57,6 +58,16 @@ type ShortInterestPoller struct {
 
 func (w *ShortInterestPoller) Name() string            { return "finra-shortint" }
 func (w *ShortInterestPoller) Interval() time.Duration { return 12 * time.Hour }
+
+// NextFire implements workers.ScheduledWorker: short interest is SEMI-MONTHLY
+// (two settlement dates a month, each published about eight business days
+// later), so a 12h tick was ~60 wakeups per useful one. The lateness gate
+// (ShortIntOverdue) stays exactly as it is — it is the thing that knows whether
+// a file is due — but it only needs to be consulted once a day, after the
+// evening publication window.
+func (w *ShortInterestPoller) NextFire(last, now time.Time) time.Time {
+	return workers.TradingDayAtET(now, 18, 45)
+}
 
 func (w *ShortInterestPoller) now() time.Time {
 	if w.Now != nil {

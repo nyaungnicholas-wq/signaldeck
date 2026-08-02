@@ -31,6 +31,7 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // WeeklyKind is the insight kind stored in the data blob (json data.kind).
@@ -329,6 +330,27 @@ func (w *WeeklyWorker) Name() string { return "weekly-report" }
 
 // Interval implements workers.Worker.
 func (w *WeeklyWorker) Interval() time.Duration { return 30 * time.Minute }
+
+// NextFire implements workers.ScheduledWorker: Sunday 17:00 ET, the hour the
+// report's own gate already required. See weeklyNextFire for the catch-up rule.
+func (w *WeeklyWorker) NextFire(last, now time.Time) time.Time {
+	return weeklyNextFire(last, now, time.Sunday, weeklyRunHour)
+}
+
+// weeklyNextFire is the shared schedule for both once-per-NY-week workers.
+//
+// The catch-up branch is what preserves the behaviour their internal gates were
+// written for: ShouldRunWeekly deliberately fires LATER IN THE WEEK if the
+// daemon was down on Sunday evening, because a missed weekly report is a hole in
+// a forward record whose whole value is completeness. A pure "next Sunday"
+// schedule would silently drop it, so a run that is more than a week overdue
+// fires immediately and lets the week-key gate decide.
+func weeklyNextFire(last, now time.Time, day time.Weekday, hour int) time.Time {
+	if !last.IsZero() && now.Sub(last) > 7*24*time.Hour {
+		return now
+	}
+	return workers.WeeklyAtET(now, day, hour, 0)
+}
 
 // Run applies the once-per-NY-week gate, then composes + stores the report and
 // snapshots the current adaptive weights for next week's diff.

@@ -24,7 +24,6 @@ const NAV: { href: string; label: string; match: string[] }[] = [
     label: "MARKET",
     match: [
       "/market",
-      "/markets",
       "/signals",
       "/screener",
       "/trends",

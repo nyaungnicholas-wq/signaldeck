@@ -26,8 +26,14 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   { source: "/desk/overview", destination: "/lab/desk" },
   { source: "/live", destination: "/lab/live" },
   // 2026-07-18 hub merge: MARKETS + SIGNALS → one MARKET hub; research tabs
-  // → LAB. Old tab URLs land on their new homes (flat legacy URLs below may
-  // chain through these — two 307s, acceptable while the IA settles).
+  // → LAB.
+  //
+  // 2026-08-02: the merge is now COMPLETE in the source tree too. Until then
+  // /market/* pages were re-export stubs of the real components under
+  // src/app/markets/*, so both trees existed and "which one do I edit?" had no
+  // answer. The components now live at their canonical routes and src/app/
+  // markets is gone — these entries are pure bookmark compatibility, and every
+  // in-app link points at the destination directly (no chained 307s).
   { source: "/markets/screener", destination: "/market/overview" },
   { source: "/markets/trends", destination: "/market/trends" },
   { source: "/markets/macro", destination: "/market/macro" },
@@ -42,11 +48,12 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   { source: "/signals/confluence", destination: "/lab/confluence" },
   { source: "/signals/insights", destination: "/lab/insights" },
   { source: "/signals/debate", destination: "/lab/debate" },
-  // MARKETS
-  { source: "/screener", destination: "/markets/screener" },
-  { source: "/trends", destination: "/markets/trends" },
-  { source: "/regime", destination: "/markets/regimes" },
-  { source: "/macro", destination: "/markets/macro" },
+  // MARKETS (flat legacy URLs — point at the FINAL destination, not at
+  // /markets/*, which would chain a second 307 through the block above)
+  { source: "/screener", destination: "/market/overview" },
+  { source: "/trends", destination: "/market/trends" },
+  { source: "/regime", destination: "/market/macro" },
+  { source: "/macro", destination: "/market/macro" },
   // SIGNALS
   { source: "/predict", destination: "/signals/predictions" },
   { source: "/forecast", destination: "/signals/forecasts" },
@@ -70,7 +77,7 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   { source: "/agents", destination: "/lab/system/agents" },
   { source: "/ai", destination: "/lab/system/ai" },
   // Hub indexes → default sub-tab
-  { source: "/markets", destination: "/markets/screener" },
+  { source: "/markets", destination: "/market/overview" },
   { source: "/signals", destination: "/signals/predictions" },
   { source: "/intel", destination: "/intel/news" },
   { source: "/lab", destination: "/lab/backtest" },

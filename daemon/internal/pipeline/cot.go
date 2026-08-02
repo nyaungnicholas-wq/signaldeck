@@ -26,6 +26,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cftc"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 const (
@@ -66,6 +67,27 @@ type COTPoller struct {
 
 func (w *COTPoller) Name() string            { return "cot-poller" }
 func (w *COTPoller) Interval() time.Duration { return 24 * time.Hour }
+
+// cotStaleAfter is how long without a run forces a catch-up poll regardless of
+// weekday. A US federal holiday pushes the COT release from Friday to Monday,
+// and a daemon that was down over a Friday would otherwise wait a full week.
+const cotStaleAfter = 9 * 24 * time.Hour
+
+// NextFire implements workers.ScheduledWorker: the CFTC publishes the
+// Commitments of Traders report ONCE A WEEK, Friday at 15:30 ET, for Tuesday's
+// positions. A daily poll was seven runs for one release.
+//
+// Saturday 09:00 ET rather than Friday 15:31: the release is routinely a few
+// minutes late and is never revised on the same day, so polling the morning
+// after removes an entire class of "fetched the previous week's file" races for
+// the price of ~17 hours of staleness on data that is already three days old
+// when published.
+func (w *COTPoller) NextFire(last, now time.Time) time.Time {
+	if !last.IsZero() && now.Sub(last) > cotStaleAfter {
+		return now // missed a release (holiday shift or downtime) — catch up
+	}
+	return workers.WeeklyAtET(now, time.Saturday, 9, 0)
+}
 
 func (w *COTPoller) now() time.Time {
 	if w.Now != nil {

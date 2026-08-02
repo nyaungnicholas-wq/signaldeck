@@ -463,6 +463,19 @@ type ThirteenFPoller struct {
 func (w *ThirteenFPoller) Name() string            { return "13f-poller" }
 func (w *ThirteenFPoller) Interval() time.Duration { return 24 * time.Hour }
 
+// NextFire implements workers.ScheduledWorker. The run COUNT is already right —
+// the manager list is rotated by a persisted cursor, so a daily pass is how the
+// whole list gets covered — but the run TIME was wherever the daemon happened to
+// boot, which meant the poll could land mid-session and drift on every restart.
+//
+// 20:00 ET pins it to a quiet window: EDGAR's dissemination day is over, the
+// shared SEC rate limiter is not contending with the filings poller's session
+// traffic, and consecutive days are comparable because they are sampled at the
+// same hour.
+func (w *ThirteenFPoller) NextFire(last, now time.Time) time.Time {
+	return workers.DailyAtET(now, 20, 0)
+}
+
 const thirteenFCursorKey = "thirteenf_mgr_cursor"
 
 func (w *ThirteenFPoller) Run(ctx context.Context) (string, error) {
