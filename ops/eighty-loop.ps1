@@ -55,7 +55,17 @@ param(
   # qwen3.6:27b stays resident, handled a 29KB prompt in 78-122s in testing, and
   # is a perfectly good reasoning model for this. One model, no thrash, no spend.
   [string]$Lane = 'code',
-  [string]$CodeLane = 'code',
+  # IMPLEMENT runs on `fast` (qwen2.5-coder:7b), not the 27B.
+  #
+  # Reasoning about a hypothesis and WRITING A SCRIPT are different jobs.
+  # qwen3.6:27b took over ten minutes on the full code spec even after the 11KB
+  # protocol was cut down to a compact rule list -- the bottleneck is generation
+  # length, not context. qwen2.5-coder:7b is built for exactly this and answered
+  # comparable asks in 20-50 seconds.
+  #
+  # At 4.7GB it also coexists with the resident 27B instead of evicting it, so
+  # alternating PROPOSE and IMPLEMENT does not reload a model every stage.
+  [string]$CodeLane = 'fast',
   [int]$CyclePauseSec = 30
 )
 
@@ -87,12 +97,56 @@ function Ev([string]$event, [hashtable]$data = @{}) {
   Write-Host "[$((Get-Date).ToString('HH:mm:ss'))] $event $($data | ConvertTo-Json -Compress -Depth 3)"
 }
 
-# One worker call. The protocol rides along on every single one.
-function Ask([string]$task, [string]$lane, [string]$outFile, [int]$timeoutSec = 900) {
-  $prompt = @"
-$PROTOCOL
+# The measurement rules a CODE-GENERATION call actually needs. The full protocol
+# governs judgment -- which hypotheses are worth testing and which results count
+# as evidence -- and none of that changes a line of Python. Sending all 11KB of
+# it alongside a 1.5KB code spec produced a 17-minute generation that timed out
+# locally and then failed over to a gateway that also refused. Cycle 1 died there.
+# PROPOSE and JUDGE still receive the protocol in full, because that is where it
+# does its work.
+$CODE_RULES = @"
+THE ACTUAL SCHEMA. These are the real columns; there are no others. A generated
+script that invented a column (predicted_class) died on the very first run,
+because a model with no schema writes SQL against the database it imagines.
 
-=== END OF PROTOCOL. YOUR TASK FOLLOWS. ===
+- bars(symbol_id, tf, ts, open, high, low, close, volume)  -- 13.4M rows
+  tf is one of '1d', '1h', '1m'. ts is a unix epoch integer.
+- symbols(id, symbol, market, name, active, added_at, stream, delisted_at)
+  -- 1,080 rows. market is 'stocks' or 'crypto'.
+- regime_outcomes(id, symbol_id, kind, ts, day, horizon_days, regime, conviction,
+  historical_accuracy, rank, resolved_at, actual, correct, naive_label, revision,
+  basis_epoch)  -- 20,787 rows. NOTE: correct and resolved_at are NULL on every
+  row today, so this table cannot supply labels yet.
+- prediction_outcomes(symbol_id, horizon, ts, prob, up, fwd_return, resolved_at,
+  basis_epoch)  -- 280,087 rows. up is the realised direction, prob the
+  model's probability, fwd_return the realised forward return. This is the
+  table with usable labels.
+- scores(symbol_id, horizon, ts, score, components)  -- 1.55M rows.
+
+Derive labels from bars closes or from prediction_outcomes.up / fwd_return.
+Never reference a column not listed above.
+
+Measurement rules this script must obey:
+- Open data/signaldeck.db READ-ONLY. Never write to it.
+- As-of discipline: every input must be computable at the decision timestamp.
+  No value from a bar at or after the label window may inform a call.
+- Hold out the most recent 20% as a sealed era and report it separately.
+- Count independent observations, not rows: one (symbol, UTC day) is one
+  observation, however many forecasts resolve on it.
+- Report the base rate of the predicted class WITHIN the issued subset. A
+  precision at or near that base rate is unskilled classification, not an edge.
+- Never fabricate. If the data is insufficient, print INSUFFICIENT=1 and exit 0.
+"@
+
+# One worker call. $context defaults to the full protocol; the code stage passes
+# the compact rules instead.
+function Ask([string]$task, [string]$lane, [string]$outFile, [int]$timeoutSec = 900,
+  [string]$context = $null) {
+  if (-not $context) { $context = $PROTOCOL }
+  $prompt = @"
+$context
+
+=== END OF CONTEXT. YOUR TASK FOLLOWS. ===
 
 $task
 "@
@@ -102,8 +156,12 @@ $task
   # printing the actual cause -- a local model timing out and falling through to
   # the gateway -- to a stream nobody read.
   $diag = ''
+  # Prompt goes through a file, never the command line: PowerShell re-parses
+  # `-File` arguments and any "-word" in the protocol text binds as a parameter.
+  $pf = Join-Path $env:TEMP "eighty-prompt-$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
+  Set-Content -Path $pf -Value $prompt -Encoding UTF8
   try {
-    $diag = (& powershell -NoProfile -File $omni -Prompt $prompt -Task $lane -Out $tmp `
+    $diag = (& powershell -NoProfile -File $omni -PromptFile $pf -Task $lane -Out $tmp `
         -TimeoutSec $timeoutSec 2>&1 | Out-String)
   } catch { Ev 'worker-error' @{ err = "$_" }; return $null }
   if ($diag -match 'via\s+(\S+)') { Ev 'served-by' @{ model = $Matches[1] } }
@@ -207,7 +265,7 @@ Hard requirements:
 - Must run to completion in under 10 minutes.
 
 Output the raw Python file only. No markdown fences, no commentary.
-"@ $CodeLane $script 1200
+"@ $CodeLane $script 1200 $CODE_RULES
 
   if (-not $code) { Ev 'no-code'; Start-Sleep -Seconds $CyclePauseSec; continue }
 
@@ -220,6 +278,53 @@ Output the raw Python file only. No markdown fences, no commentary.
     continue
   }
   Ev 'script-ran' @{ cycle = $cycle }
+
+  # --- 3b. SANITY: kill structurally impossible output in code -----------
+  # A script that RUNS is not a script that MEASURED. The first generated one
+  # printed OPPORTUNITIES=-113750, PRECISION=0.0000 on 247,360 issued calls, and
+  # EFFECTIVE_N identical to ISSUED -- a negative population, a precision no
+  # rule could produce, and a design effect never applied. Numbers like that are
+  # arithmetically impossible, not merely unpromising, and deciding that costs a
+  # regex rather than a 27B judgment call. Do it here so the judge only ever
+  # sees output that could be real.
+  $out = $r.Output
+  function Num([string]$key) {
+    if ($out -match "(?m)^$key=(-?[\d.]+)\s*$") { return [double]$Matches[1] }
+    return $null
+  }
+  $issued = Num 'ISSUED'; $opps = Num 'OPPORTUNITIES'; $prec = Num 'PRECISION'
+  $effN = Num 'EFFECTIVE_N'; $days = Num 'DISTINCT_DAYS'
+  $insane = @()
+  if ($out -match '(?m)^INSUFFICIENT=1\s*$') { $insane += 'reported INSUFFICIENT' }
+  if ($null -eq $issued -or $null -eq $prec) { $insane += 'did not print ISSUED/PRECISION' }
+  if ($null -ne $opps -and $opps -lt 0) { $insane += "OPPORTUNITIES is negative ($opps)" }
+  if ($null -ne $issued -and $null -ne $opps -and $opps -gt 0 -and $issued -gt $opps) {
+    $insane += "ISSUED ($issued) exceeds OPPORTUNITIES ($opps)"
+  }
+  if ($null -ne $prec -and ($prec -lt 0 -or $prec -gt 1)) { $insane += "PRECISION out of [0,1] ($prec)" }
+  if ($null -ne $issued -and $null -ne $effN -and $issued -gt 0 -and $effN -ge $issued) {
+    $insane += 'EFFECTIVE_N is not below ISSUED, so no design effect was applied'
+  }
+  if ($null -ne $days -and $null -ne $issued -and $days -gt $issued) {
+    $insane += "DISTINCT_DAYS ($days) exceeds ISSUED ($issued)"
+  }
+  if ($insane.Count -gt 0) {
+    Ev 'insane-output' @{ cycle = $cycle; reasons = ($insane -join '; ') }
+    Add-Content $journal @"
+
+## Cycle $cycle - KILLED (output not arithmetically possible)  ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))
+
+$hypothesis
+
+**Rejected before judging:** $($insane -join '; ')
+
+``````
+$(($out -split "`n" | Select-Object -Last 10) -join "`n")
+``````
+"@
+    Start-Sleep -Seconds $CyclePauseSec
+    continue
+  }
 
   # --- 4. JUDGE against the protocol's criteria --------------------------
   $verdict = Ask @"
