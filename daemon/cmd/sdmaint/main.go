@@ -73,6 +73,18 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "repair-added-at" {
+		if err := repairAddedAt(os.Args[2:]); err != nil {
+			log.Fatalf("repair-added-at: %v", err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "import-delisted" {
+		if err := importDelisted(os.Args[2:]); err != nil {
+			log.Fatalf("import-delisted: %v", err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "ledger-verify" {
 		if err := ledgerVerify(os.Args[2:]); err != nil {
 			log.Fatalf("ledger-verify: %v", err)

@@ -33,6 +33,12 @@ type tickstreamDTO struct {
 	PublishUnixNanos  int64   `json:"publishUnixNanos"`
 }
 
+// clockSkewTolerance is how far a publish timestamp may sit in the future
+// before the snapshot is refused. Sub-second differences are ordinary process
+// scheduling; anything past this is a real clock disagreement and the snapshot
+// cannot be trusted to land in the right 1s bucket.
+const clockSkewTolerance = time.Second
+
 // Ingestor is the long-running crypto snapshot worker (Interval 0).
 type Ingestor struct {
 	st       *store.Store
@@ -105,16 +111,37 @@ func (g *Ingestor) poll(ctx context.Context) error {
 	if !dto.Valid {
 		return fmt.Errorf("tickstream: snapshot not valid yet")
 	}
+	if dto.PublishUnixNanos <= 0 {
+		return fmt.Errorf("tickstream: snapshot carries no publish timestamp")
+	}
 	// A publish older than 10s means tickstream is up but its feeds stalled.
-	if age := time.Since(time.Unix(0, dto.PublishUnixNanos)); age > 10*time.Second {
+	//
+	// The age is checked in BOTH directions. `age > 10s` alone fails open: any
+	// skew putting the publish timestamp ahead of this process's clock makes
+	// age negative, which is never > 10s, so a fully stalled feed would read as
+	// perpetually fresh. Today tickstream shares this machine's clock so the
+	// two agree, but a clock resync mid-run — or moving tickstream to another
+	// host — breaks that silently. internal/backup/backup.go:140 already
+	// guards its own age the same way.
+	age := time.Since(time.Unix(0, dto.PublishUnixNanos))
+	if age < -clockSkewTolerance {
+		return fmt.Errorf("tickstream: publish timestamp is %s in the future — "+
+			"clock skew between tickstream and signaldeckd",
+			(-age).Round(time.Millisecond))
+	}
+	if age > 10*time.Second {
 		return fmt.Errorf("tickstream: snapshot stale by %s", age.Round(time.Second))
 	}
 	bid, _ := strconv.ParseFloat(dto.BidPrice, 64)
 	ask, _ := strconv.ParseFloat(dto.AskPrice, 64)
 	spread, _ := strconv.ParseFloat(dto.Spread, 64)
 	err = g.st.InsertSnap1s(ctx, md.Snap1s{
-		SymbolID:   g.symbolID,
-		Ts:         time.Now().Unix(),
+		SymbolID: g.symbolID,
+		// The publisher's timestamp, not local receipt time. Receipt time makes
+		// every row inherit this machine's clock error — a 77s-slow clock (as
+		// measured 2026-08-02) files each 1s snapshot ~77 buckets early and
+		// misaligns it with provider-stamped equity bars.
+		Ts:         time.Unix(0, dto.PublishUnixNanos).Unix(),
 		Bid:        bid,
 		Ask:        ask,
 		Mid:        dto.Mid,

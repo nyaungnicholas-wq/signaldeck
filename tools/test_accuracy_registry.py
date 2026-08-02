@@ -1616,11 +1616,51 @@ class ProtocolDocumentGateTest(unittest.TestCase):
         self.src = open(self.script, encoding="utf-8").read()
 
     def test_publishing_path_recomputes_the_document_digest(self):
-        self.assertIn('shasum -a 256 "$SD/PREREGISTRATION.md"', self.src,
-                      "the publishing path does not recompute PREREGISTRATION.md's digest, so a "
-                      "document that drifted from its chain record could still front a verdict")
+        # The digest must be computed FROM THE FILE on every publish, never read
+        # from a cache or a variable set earlier. This asserted the literal
+        # `shasum -a 256` call until sha256_of replaced it: shasum ships with
+        # macOS and is absent under Git Bash on Windows, where the hardcoded call
+        # made the whole publishing path unrunnable. The requirement is fresh
+        # computation, not one particular hashing binary, so pin the behaviour.
+        self.assertRegex(
+            self.src, r'doc_hash=\$\((?:sha256_of|shasum[^)]*)\s+"\$SD/PREREGISTRATION\.md"',
+            "the publishing path does not recompute PREREGISTRATION.md's digest from the "
+            "file, so a document that drifted from its chain record could still front a verdict")
         self.assertIn("kind = 'prereg-document'", self.src,
                       "the gate does not read the newest prereg-document record to compare against")
+
+    def test_digest_helper_hashes_file_contents(self):
+        """sha256_of must hash the FILE, not echo a name or reuse a cached value.
+
+        Pinning the behaviour above only helps if the helper it now allows
+        actually computes a digest, so run it and compare against hashlib.
+        """
+        import hashlib
+        import shutil
+        import subprocess
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash not available")
+        target = os.path.normpath(
+            os.path.join(os.path.dirname(self.script), "..", "PREREGISTRATION.md"))
+        if not os.path.exists(target):
+            self.skipTest("PREREGISTRATION.md not present")
+        # bash treats backslashes in a double-quoted string as escapes, so a
+        # Windows path must be handed over with forward slashes.
+        target_sh = target.replace("\\", "/")
+        with open(target, "rb") as f:
+            want = hashlib.sha256(f.read()).hexdigest()
+        # Source only the interpreter-detection + helper block, then call it.
+        # Running the whole script would grade the database, and starting the
+        # slice any earlier picks up the SD= line, whose ${BASH_SOURCE[0]} is
+        # unbound under `bash -c` and aborts the prelude under `set -u`.
+        prelude = self.src[self.src.index('PY=""'):self.src.index('LOG="$SD/logs')]
+        got = subprocess.run(
+            [bash, "-c", prelude + f'\nsha256_of "{target_sh}"'],
+            capture_output=True, text=True, timeout=60).stdout.strip()
+        self.assertEqual(want, got,
+                         "sha256_of does not reproduce the file's SHA-256, so the "
+                         "protocol-document gate would compare against a wrong digest")
 
     def test_a_mismatched_document_takes_the_existing_refusal_path(self):
         """It must set refusal_reason — the same fail-closed branch the grader

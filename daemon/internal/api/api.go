@@ -53,6 +53,7 @@ type Deps struct {
 func Serve(ctx context.Context, d Deps) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", d.health)
+	mux.HandleFunc("GET /api/ready", d.ready)     // can it serve CORRECT answers, not just answers
 	mux.HandleFunc("GET /api/version", d.version) // which code is producing these numbers
 	d.registerAuth(mux) // register, login, logout, me
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
@@ -320,6 +321,41 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 		"time":           time.Now().Unix(),
 		"schemaContract": refusals,
 	})
+}
+
+// ready reports whether the daemon can serve CORRECT answers, which is a
+// different question from health's "the process is up". A daemon that is
+// listening but whose store is unreachable, or that refused workers at boot
+// because the schema was missing their tables, will answer requests — it will
+// just answer them wrong or empty. 503 so a load balancer or deploy script can
+// tell the two apart.
+func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
+	reasons := []string{}
+
+	// Store reachable? Any read that touches the DB will do.
+	refusals := map[string][]string{}
+	raw, err := d.St.GetMeta(r.Context(), store.SchemaContractMetaKey)
+	if err != nil {
+		reasons = append(reasons, "store unreachable: "+err.Error())
+	} else if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &refusals)
+	}
+
+	// Workers refused at boot never ran and never will this process lifetime.
+	for worker := range refusals {
+		reasons = append(reasons, "worker refused at boot (schema): "+worker)
+	}
+
+	if !d.Cfg.HasAlpaca() {
+		reasons = append(reasons, "no Alpaca credentials: equity ingestion is inert")
+	}
+
+	if len(reasons) > 0 {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, map[string]any{"ready": false, "reasons": reasons})
+		return
+	}
+	writeJSON(w, map[string]any{"ready": true})
 }
 
 // watchRow is one watchlist/screener entry.

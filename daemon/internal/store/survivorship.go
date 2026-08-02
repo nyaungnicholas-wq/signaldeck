@@ -16,17 +16,119 @@
 // delisting marker so a point-in-time universe can be reconstructed rather
 // than guessed.
 //
-// Honest limit, stated rather than hidden: this recovers names the platform
-// itself once tracked. Companies that died BEFORE they were ever added remain
-// absent, and no free data source fixes that — only a paid point-in-time
-// vendor with delisted coverage does.
+// Honest limit, stated rather than hidden: the accessors below recover names
+// the platform itself once tracked. Companies that died BEFORE they were ever
+// added need an outside source.
+//
+// UPDATE 2026-08-02: that source turned out to be free after all. Alpaca's
+// asset list carries ~19k INACTIVE securities and its bars endpoint still
+// serves their history, so 650 exchange-listed companies that died between
+// 2020 and 2026 were recoverable at no cost (see tools/alpha/fetch_delisted.py
+// and UpsertHistoricalSymbol below). A paid point-in-time vendor is still
+// better — the recovered set skews to 2021-2022 and holds only 33 outright
+// collapses — but "only a paid vendor" was too pessimistic.
+//
+// The SEC route, for anyone tempted: Form 25 records that a delisting happened
+// but NOT which ticker it happened to. company_tickers.json drops delisted
+// names, per-CIK submissions return the post-delisting OTC ticker, and the
+// filing document carries no symbol. Tested 2026-08-02; all three fail.
 package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
+
+// UpsertHistoricalSymbol inserts a company that is ALREADY DEAD: never
+// tradable, never streamed, present so research can see the names that failed.
+//
+// It REFUSES to touch a row that is currently active. Overwriting a live ticker
+// with a dead company's record would delete a real company from every
+// point-in-time universe built afterwards — the same failure the upstream
+// ticker-reuse guard exists to prevent, and worth failing on twice. Exchanges
+// recycle tickers constantly (COHR, CZR and ECHO all trade today under symbols
+// a previous company was delisted from).
+//
+// An existing delisted_at is never overwritten: the live detector watched it
+// happen, this import only inferred it from the last bar.
+//
+// addedAt MUST be when the company started trading (its first bar), not when we
+// imported it. TradableAt filters `added_at <= ts`, so an observation-dated
+// added_at makes a company that died in 2021 look like it was listed in 2026 —
+// invisible to every point-in-time universe before today, which is the exact
+// bias this file exists to remove.
+func (s *Store) UpsertHistoricalSymbol(ctx context.Context, symbol string, market md.Market, name string, addedAt, delistedAt int64) (md.Symbol, error) {
+	if delistedAt <= 0 {
+		return md.Symbol{}, fmt.Errorf("%s: delistedAt is required — a historical symbol with no death date is indistinguishable from a live one", symbol)
+	}
+	if addedAt <= 0 || addedAt > delistedAt {
+		return md.Symbol{}, fmt.Errorf("%s: addedAt (%d) must be positive and predate delistedAt (%d) — a company cannot be listed after it died", symbol, addedAt, delistedAt)
+	}
+
+	var active int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT active FROM symbols WHERE symbol=? AND market=?`,
+		symbol, string(market)).Scan(&active)
+	switch {
+	case err == nil && active == 1:
+		return md.Symbol{}, fmt.Errorf("%s is ACTIVE: refusing to import it as delisted", symbol)
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return md.Symbol{}, err
+	}
+
+	if _, err := s.w.ExecContext(ctx, `
+		INSERT INTO symbols (symbol, market, name, active, added_at, stream, delisted_at)
+		VALUES (?,?,?,0,?,0,?)
+		ON CONFLICT(symbol, market) DO UPDATE SET
+			active=0, stream=0,
+			added_at=MIN(symbols.added_at, excluded.added_at),
+			delisted_at=COALESCE(NULLIF(symbols.delisted_at,0), excluded.delisted_at),
+			name=CASE WHEN excluded.name != '' THEN excluded.name ELSE symbols.name END`,
+		symbol, string(market), name, addedAt, delistedAt); err != nil {
+		return md.Symbol{}, err
+	}
+	return s.GetSymbol(ctx, symbol, market)
+}
+
+// RepairAddedAtFromBars rewrites added_at to each symbol's FIRST daily bar.
+//
+// added_at was being set to time.Now() on insert — the date WE first saw the
+// symbol, not the date it started trading. Since TradableAt filters
+// `added_at <= ts`, that made the point-in-time universe empty for every
+// historical date: measured 2026-08-02, TradableAt returned 0 symbols for
+// 2021, 2023 and 2025 alike. The survivorship accessor was not merely biased,
+// it returned nothing, silently.
+//
+// The first bar is the best listing-date evidence we hold. Symbols with no
+// daily bars are left alone — there is nothing to infer from.
+//
+// Returns (repaired, skipped). Idempotent: re-running changes nothing.
+func (s *Store) RepairAddedAtFromBars(ctx context.Context) (int64, int64, error) {
+	res, err := s.w.ExecContext(ctx, `
+		UPDATE symbols SET added_at = (
+			SELECT MIN(b.ts) FROM bars b WHERE b.symbol_id = symbols.id AND b.tf = '1d')
+		WHERE EXISTS (
+			SELECT 1 FROM bars b WHERE b.symbol_id = symbols.id AND b.tf = '1d')
+		  AND added_at <> (
+			SELECT MIN(b.ts) FROM bars b WHERE b.symbol_id = symbols.id AND b.tf = '1d')`)
+	if err != nil {
+		return 0, 0, err
+	}
+	repaired, _ := res.RowsAffected()
+
+	var skipped int64
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM symbols WHERE NOT EXISTS (
+			SELECT 1 FROM bars b WHERE b.symbol_id = symbols.id AND b.tf = '1d')`).
+		Scan(&skipped); err != nil {
+		return repaired, 0, err
+	}
+	return repaired, skipped, nil
+}
 
 // SurvivorshipEpoch is 2026-07-24T00:00:00Z as Unix seconds: the instant before
 // which every graded row was scored against a survivor-seeded universe.

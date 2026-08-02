@@ -140,6 +140,14 @@ func Evaluate(ctx context.Context, st Store, now time.Time, webhookSecretSet boo
 			// No rows and the source SHOULD be producing now: quietly dead.
 			r.Stale = true
 			r.Note = s.note + " — no rows yet"
+		case r.AgeSecs < 0:
+			// Newest row is in the future. Rows carry the provider's timestamp,
+			// so this means our clock disagrees with theirs. Without this case
+			// a negative age is never > the budget, and the source would read
+			// as fresh forever no matter how long it had been dead. Reached
+			// only when ok, so it cannot collide with the AgeSecs = -1 sentinel.
+			r.Stale = true
+			r.Note = s.note + " — newest row is in the future; check clock skew"
 		case r.AgeSecs > r.StaleBudgetSecs:
 			r.Stale = true
 		}

@@ -827,6 +827,42 @@ STRUCTURAL_NULL_KINDS = (
 )
 
 
+def unmatched_null_clause(con: sqlite3.Connection) -> tuple[str, tuple]:
+    """The ONE definition of "a row whose missing baseline means divergence".
+
+    Returns (sql_fragment, params) to append after `WHERE ts >= ? AND
+    naive_label IS NULL`, narrowing on the two axes the store's own guard uses:
+
+      1. Only kinds whose write path requires a baseline. filingsdrift21 has no
+         resolver that can compute a null for it, so the store never demanded
+         one — 7 such rows are exempt by kind, not evidence of divergence.
+      2. Not the frozen quarantine — 1,165 enumerated, digest-covered,
+         chain-recorded historical rows that keep their NULL label and stay out
+         of every denominator.
+
+    null_amendment_probe already narrowed on both and its comment warned this
+    was "the third independent copy of this rule; each one that drifts invents
+    its own false alarm". fetch_chain_presence was a FOURTH copy that never got
+    narrowed: it counted the raw 1,172, so the grader exited 1 every single run
+    and ops/accuracy-registry.sh withheld the whole table. The alarm designed to
+    catch a diverged binary was firing on rows already formally exempted.
+
+    Rather than narrow the fourth copy and wait for a fifth, both callers now
+    share this one.
+
+    The quarantine table is absent from fixtures and repro snapshots. A missing
+    exemption list must mean "exempt nothing", never "there is nothing to
+    report", so its absence widens the count rather than zeroing it.
+    """
+    has_quarantine = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        ("regime_outcome_quarantine",)).fetchone() is not None
+    frag = f" AND kind IN ({','.join('?' * len(STRUCTURAL_NULL_KINDS))})"
+    if has_quarantine:
+        frag += " AND id NOT IN (SELECT outcome_id FROM regime_outcome_quarantine)"
+    return frag, tuple(STRUCTURAL_NULL_KINDS)
+
+
 def null_amendment_probe(con: sqlite3.Connection) -> dict:
     """Read the write-path invariant off the LIVE table, per structural kind.
 
@@ -858,18 +894,13 @@ def null_amendment_probe(con: sqlite3.Connection) -> dict:
         # except below turned into count=0 -- silently HIDING divergence instead
         # of reporting it. A missing exemption list must mean "exempt nothing",
         # never "there is nothing to report".
-        has_quarantine = con.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            ("regime_outcome_quarantine",)).fetchone() is not None
-        exclude = ("AND id NOT IN (SELECT outcome_id FROM regime_outcome_quarantine)"
-                   if has_quarantine else "")
+        # Both narrowings now live in unmatched_null_clause, shared with
+        # fetch_chain_presence, so the two cannot drift apart again.
+        frag, params = unmatched_null_clause(con)
         rows = con.execute(
-            f"""SELECT kind, COUNT(*), MAX(ts) FROM regime_outcomes
-                WHERE ts >= ? AND naive_label IS NULL
-                  AND kind IN ({','.join('?' * len(STRUCTURAL_NULL_KINDS))})
-                  {exclude}
-                GROUP BY kind""",
-            (NULL_AMENDMENT_EPOCH_TS, *STRUCTURAL_NULL_KINDS)).fetchall()
+            "SELECT kind, COUNT(*), MAX(ts) FROM regime_outcomes "
+            "WHERE ts >= ? AND naive_label IS NULL" + frag + " GROUP BY kind",
+            (NULL_AMENDMENT_EPOCH_TS, *params)).fetchall()
     except sqlite3.OperationalError:
         # No naive_label column at all: the "NOT FROZEN" path already grades
         # every structural kind NO BASELINE, so there is nothing to add here.
@@ -1219,9 +1250,16 @@ def fetch_chain_presence(con: sqlite3.Connection) -> dict:
         # with no baseline cannot exist unless the deployed daemon diverges from
         # source. Counted over ALL such rows, graded or not — a divergence must
         # surface before the rows become due, not after.
+        #
+        # Narrowed by the SHARED rule: unnarrowed this counted 1,172 (1,165
+        # quarantined + 7 exempt by kind) and exited 1 on every run, which made
+        # ops/accuracy-registry.sh withhold the entire accuracy table as though
+        # the grader had refused. See unmatched_null_clause.
+        frag, params = unmatched_null_clause(con)
         out["unmatched_nulls"] = con.execute(
-            "SELECT COUNT(*) FROM regime_outcomes WHERE ts >= ? AND naive_label IS NULL",
-            (NULL_AMENDMENT_EPOCH_TS,)).fetchone()[0]
+            "SELECT COUNT(*) FROM regime_outcomes "
+            "WHERE ts >= ? AND naive_label IS NULL" + frag,
+            (NULL_AMENDMENT_EPOCH_TS, *params)).fetchone()[0]
     try:
         row = con.execute(
             """SELECT seq, spec_hash FROM prereg_records WHERE kind LIKE '%retire%'

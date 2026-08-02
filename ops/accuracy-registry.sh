@@ -7,7 +7,44 @@
 
 set -uo pipefail
 
-SD="/Users/natalienyaung/claude code/signaldeck"
+# Repo root, derived from this script's own location rather than hardcoded.
+#
+# This was "/Users/natalienyaung/claude code/signaldeck" — a path from the Mac
+# this project was developed on. After the move it resolved nowhere, so the
+# grader could not run AT ALL, and the README kept serving the refusal it had
+# recorded on 2026-07-29 as though it were current. A stale refusal is worse
+# than a loud failure: it looks like the honesty machinery working.
+SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# python3 is not on PATH under Git Bash on Windows; shasum is a Perl script that
+# ships with macOS and is often absent elsewhere. Resolve both, or fail loudly.
+#
+# `command -v python3` is NOT sufficient on Windows: there is a Microsoft Store
+# "app execution alias" stub at that name which resolves fine and then prints
+# "Python was not found" to stdout and exits 0. Detection has to RUN the thing.
+PY=""
+for cand in python3 python py; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import sys' >/dev/null 2>&1; then
+    PY="$cand"; break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "accuracy-registry: no working python on PATH (tried python3, python, py)" >&2
+  exit 1
+fi
+
+# Windows Python defaults to cp1252 for file I/O, and every document this script
+# reads (README.md, PREREGISTRATION.md, the registry JSON) is UTF-8 with em
+# dashes and arrows in it. Without this the grader dies in a decode error while
+# reading its own output. Harmless on macOS/Linux, which are already UTF-8.
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+sha256_of() {
+  if command -v shasum   >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then sha256sum   "$1" | awk '{print $1}'
+  else "$PY" -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$1"
+  fi
+}
 LOG="$SD/logs/accuracy-registry.log"
 OUT="$SD/data/accuracy_registry.json"
 PREV="$SD/data/accuracy_registry.prev.json"
@@ -33,12 +70,12 @@ notify_remote() {
   fi
   if [ -n "$disc" ]; then
     curl -sS -m 10 -H 'Content-Type: application/json' \
-      -d "$(python3 -c 'import json,sys; print(json.dumps({"content": sys.argv[1][:1900]}))' "$msg")" \
+      -d "$("$PY" -c 'import json,sys; print(json.dumps({"content": sys.argv[1][:1900]}))' "$msg")" \
       "$disc" >/dev/null 2>&1
   fi
   if [ -n "$hook" ]; then
     curl -sS -m 10 -H 'Content-Type: application/json' \
-      -d "$(python3 -c 'import json,sys,time; print(json.dumps({"title":"SignalDeck accuracy","body":sys.argv[1],"kind":"accuracy","ts":int(time.time())}))' "$msg")" \
+      -d "$("$PY" -c 'import json,sys,time; print(json.dumps({"title":"SignalDeck accuracy","body":sys.argv[1],"kind":"accuracy","ts":int(time.time())}))' "$msg")" \
       "$hook" >/dev/null 2>&1
   fi
 }
@@ -48,7 +85,7 @@ notify_remote() {
 # anything, and republishing its rows would be publishing yesterday's numbers
 # under today's banner.
 generated_of() {
-  python3 -c "
+  "$PY" -c "
 import json,sys
 try:
     print(json.load(open(sys.argv[1])).get('generated') or '')
@@ -76,7 +113,7 @@ refusal_reason=""
 # empty ledger and nothing downstream notices. This is the same reason the grader
 # is pinned rather than trusted. It can only suppress publication — it never
 # writes a judgment row and never repairs a ledger.
-python3 "$SD/tools/research_liveness.py" --db "$SD/data/signaldeck.db" \
+"$PY" "$SD/tools/research_liveness.py" --db "$SD/data/signaldeck.db" \
   > "$STDERR_CAPTURE" 2>&1
 liveness_status=$?
 cat "$STDERR_CAPTURE" >> "$LOG"
@@ -94,8 +131,8 @@ fi
 # publication — it never edits the document, never re-pins either digest, and
 # never alters a verdict.
 if [ -z "$refusal_reason" ]; then
-  doc_hash=$(shasum -a 256 "$SD/PREREGISTRATION.md" | awk '{print $1}')
-  chain_hash=$(python3 - "$SD/data/signaldeck.db" <<'PY'
+  doc_hash=$(sha256_of "$SD/PREREGISTRATION.md")
+  chain_hash=$("$PY" - "$SD/data/signaldeck.db" <<'PY'
 import sqlite3, sys
 try:
     con = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
@@ -121,13 +158,13 @@ if [ -z "$refusal_reason" ]; then
   # JSON. Best-effort by design: it can only ever widen the disclosed bound, so
   # a network failure must not block grading (the grader then reports the bound
   # as stale/absent rather than fabricating one).
-  python3 "$SD/tools/backfill_delistings.py" --survivorship-bound \
+  "$PY" "$SD/tools/backfill_delistings.py" --survivorship-bound \
     > "$STDERR_CAPTURE" 2>&1 || \
     echo "survivorship-bound measurement failed (non-fatal); the grade proceeds" \
       >> "$STDERR_CAPTURE"
   cat "$STDERR_CAPTURE" >> "$LOG"
 
-  python3 "$SD/tools/accuracy_registry.py" --json "$OUT" > "$STDERR_CAPTURE" 2>&1
+  "$PY" "$SD/tools/accuracy_registry.py" --json "$OUT" > "$STDERR_CAPTURE" 2>&1
   grader_status=$?
   cat "$STDERR_CAPTURE" >> "$LOG"
 
@@ -152,7 +189,7 @@ if [ -n "$refusal_reason" ]; then
     rm -f "$PREV"
   fi
 
-  refusal_text=$(python3 - "$SD" "$OUT" "$STDERR_CAPTURE" "$refusal_reason" <<'PY'
+  refusal_text=$("$PY" - "$SD" "$OUT" "$STDERR_CAPTURE" "$refusal_reason" <<'PY'
 import datetime as dt, json, pathlib, re, sys
 
 sd, out_p, err_p, reason = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
@@ -255,7 +292,7 @@ rm -f "$PREV_BACKUP"
 # day-clustered CI, driving baseline and effective n, and the flagship
 # retirement is stated as a permanent fact even though the retired model no
 # longer appears in the post-epoch registry rows.
-python3 - "$SD" <<'PY' >> "$LOG" 2>&1
+"$PY" - "$SD" <<'PY' >> "$LOG" 2>&1
 import json, pathlib, re, sys
 
 sd = pathlib.Path(sys.argv[1])
@@ -360,7 +397,7 @@ PY
 # NO SKILL→SUPPORTED, …) is the page-worthy event; an unchanged state is not.
 # Verdicts are normalized to their leading class so a PENDING first-grade date
 # rolling forward stays quiet.
-transitions=$(python3 - "$PREV" "$OUT" <<'PY'
+transitions=$("$PY" - "$PREV" "$OUT" <<'PY'
 import json, sys
 
 def load(p):
@@ -403,7 +440,7 @@ fi
 # PENDING is normal and must stay quiet, or the alarm stops meaning anything.
 if grep -q "^ACTION REQUIRED" "$LOG" 2>/dev/null && \
    tail -60 "$LOG" | grep -q "^ACTION REQUIRED"; then
-  n=$(python3 -c "
+  n=$("$PY" -c "
 import json
 try:
     d=json.load(open('$OUT'))
