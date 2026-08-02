@@ -1,0 +1,21 @@
+# The build context is uploaded to the daemon before anything runs. data/ holds
+# a 2.5 GB SQLite file plus its WAL; sending that on every build is minutes of
+# pure waste, and it must never end up in an image layer anyway — the database
+# belongs on a mounted volume.
+data/
+logs/
+scratchpad/
+quarantine/
+repro/
+audits/
+
+**/node_modules/
+**/.next/
+**/__pycache__/
+*.db
+*.db-wal
+*.db-shm
+*.bak-*
+
+.git/
+.venv/

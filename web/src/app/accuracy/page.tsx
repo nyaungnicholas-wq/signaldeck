@@ -30,9 +30,21 @@ type RegistryRow = {
   null_prequential: number | null;
   null_acc: number | null;
   skill: number | null;
-  verdict: string;
+  // OPTIONAL on purpose. The grader DROPS this field entirely for rows whose
+  // writing binary cannot be resolved to a commit — "the verdict field is
+  // dropped, not downgraded, an absent verdict cannot be quoted as one". Typing
+  // it as a plain string made every consumer here assume it was present, and
+  // the page died in Array.sort with "Cannot read properties of undefined
+  // (reading 'startsWith')", taking the whole honesty surface down.
+  verdict?: string | null;
   note?: string;
 };
+
+// The row's verdict, or an explicit withheld marker when the grader dropped it.
+// Never defaults to a real verdict value: an absent verdict must read as absent.
+function verdictOf(r: { verdict?: string | null }): string {
+  return r.verdict || "WITHHELD (provenance unresolvable)";
+}
 
 type CalibrationBin = {
   p_lo: number;
@@ -117,8 +129,8 @@ function Cell({ label, value }: { label: string; value: string }) {
 }
 
 function DirectionalRow({ r, minN }: { r: RegistryRow; minN: number }) {
-  const failed = r.verdict.startsWith("FAILED");
-  const tone = verdictTone(r.verdict);
+  const failed = verdictOf(r).startsWith("FAILED");
+  const tone = verdictTone(verdictOf(r));
   // Conviction slices below the evidence floor get NO percentage. The early
   // high-conviction record graded WORSE than the base row — anti-calibrated —
   // and a 6-observation "33.3%" reads as a measurement it is not. The floor is
@@ -140,7 +152,7 @@ function DirectionalRow({ r, minN }: { r: RegistryRow; minN: number }) {
           className={failed ? "text-[1.35rem] font-extrabold" : "text-[1.05rem] font-bold"}
           style={{ color: tone }}
         >
-          {r.verdict}
+          {verdictOf(r)}
         </span>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           <Cell
@@ -257,9 +269,9 @@ export default async function AccuracyPage() {
   const rows = reg?.rows ?? [];
   const directional = rows
     .filter((r) => r.family === "direction")
-    .sort((a, b) => Number(b.verdict.startsWith("FAILED")) - Number(a.verdict.startsWith("FAILED")));
+    .sort((a, b) => Number(verdictOf(b).startsWith("FAILED")) - Number(verdictOf(a).startsWith("FAILED")));
   const structural = rows.filter((r) => r.family === "structure");
-  const pendingCount = structural.filter((r) => r.verdict.startsWith("PENDING")).length;
+  const pendingCount = structural.filter((r) => verdictOf(r).startsWith("PENDING")).length;
 
   return (
     <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
@@ -358,7 +370,7 @@ export default async function AccuracyPage() {
                   <tr key={r.predictor}>
                     <td className="tnum pr-4 py-1">{r.predictor}</td>
                     <td className="tnum pr-4">{pct(r.claimed)}</td>
-                    <td style={{ color: verdictTone(r.verdict) }}>{r.verdict}</td>
+                    <td style={{ color: verdictTone(verdictOf(r)) }}>{verdictOf(r)}</td>
                   </tr>
                 ))}
               </tbody>

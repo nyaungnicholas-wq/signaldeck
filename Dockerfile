@@ -49,6 +49,13 @@ COPY --from=web-build /src/web/public     ./web/public
 COPY --from=web-build /src/web/node_modules ./web/node_modules
 COPY --from=web-build /src/web/package.json ./web/package.json
 
+# The accuracy page is a server component that reads data/accuracy_registry.json
+# relative to the web app's cwd (/app/web), i.e. /app/data. Point that at the
+# volume so whatever the grader writes is what the page renders. Without this
+# the page degrades to "not readable on this deployment" and the honesty
+# surface — the whole point of the project — shows nothing.
+RUN ln -s /data /app/data
+
 # The database lives on a mounted volume, never in the image layer: a 2.5 GB
 # SQLite file baked into an image is both unshippable and immediately stale.
 ENV SIGNALDECK_DB=/data/signaldeck.db \
