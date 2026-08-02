@@ -42,7 +42,7 @@
 
 set -uo pipefail
 
-SD="/Users/natalienyaung/claude code/signaldeck"
+SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCAL_DIR="$SD/data/backups"
 OFFSITE_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups"
 LOG="$SD/logs/restore-rehearsal.log"

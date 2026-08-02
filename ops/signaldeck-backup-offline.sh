@@ -9,7 +9,21 @@
 # script keeps succeeding daily, the worker always sees a fresh backup_last_ts
 # and skips.
 set -u
-SD="/Users/natalienyaung/claude code/signaldeck"
+# Repo root, derived from this script's own location rather than hardcoded.
+# This was "/Users/natalienyaung/claude code/signaldeck" — same defect already
+# fixed in ops/accuracy-registry.sh and left standing here, so on any machine
+# but the original Mac this script backed up nothing and logged to nowhere.
+SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# python3 on Windows/Git Bash is a Microsoft Store alias stub that resolves,
+# prints "Python was not found", and exits 0 — so `command -v` is not enough,
+# the candidate has to actually run. Same resolution as accuracy-registry.sh.
+PY=""
+for cand in python3 python py; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import sys' >/dev/null 2>&1; then
+    PY="$cand"; break
+  fi
+done
 DB="$SD/data/signaldeck.db"
 DIR="$SD/data/backups"
 OFFSITE="$HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups"
@@ -73,6 +87,27 @@ if [ "$PRUNE_ONLY" != true ]; then
   else
     rm -f "$TARGET"
     log "FAIL: VACUUM INTO error (partial removed)"
+    exit 1
+  fi
+
+  # A zero exit from VACUUM INTO is NOT evidence the copy has the data in it.
+  # The 2026-08-01 backup exited clean, passed PRAGMA quick_check, cleared the
+  # 1000-row bars floor with 3.36M rows -- and carried 14 prediction_ledger rows
+  # against 261,164, with no anchors at all. Structure was perfect and the
+  # accountability record was gone. So verify CONTENT here, before anything
+  # downstream is allowed to call this a backup.
+  #
+  # Quarantine rather than delete: a backup that failed verification is the
+  # evidence for why it failed, and it is the only artifact of that run.
+  if [ -z "$PY" ]; then
+    log "FAIL: no working python3 found — cannot verify $TARGET has its content; refusing to record an unverified backup"
+    exit 1
+  fi
+  if ! "$PY" "$SD/tools/verify_backup.py" "$TARGET" --live "$DB" >>"$LOG" 2>&1; then
+    QDIR="$SD/quarantine/backups-$(date +%Y%m%d)"
+    mkdir -p "$QDIR"
+    mv "$TARGET" "$QDIR/" 2>>"$LOG"
+    log "FAIL: $TARGET failed content verification (see above) — quarantined in $QDIR, NOT recorded as a backup"
     exit 1
   fi
 

@@ -6,7 +6,7 @@
 # own the week the data supports one, instead of waiting for someone to remember
 # to ask.
 set -uo pipefail
-SD="/Users/natalienyaung/claude code/signaldeck"
+SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG="$SD/logs/phase2-sentiment.log"
 {
   echo "──────── $(date '+%Y-%m-%dT%H:%M:%S') ────────"

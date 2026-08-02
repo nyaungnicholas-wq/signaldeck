@@ -11,7 +11,7 @@
 # Triggered by com.signaldeck.daily-refresh (weekdays 13:15 PT, coalesced so it
 # also fires on the first wake after close), or manually: `signaldeck refresh`.
 set -u
-SD="/Users/natalienyaung/claude code/signaldeck"
+SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DB="$SD/data/signaldeck.db"
 LOG="$SD/logs/refresh.log"
 DOMAIN="gui/$(id -u)"

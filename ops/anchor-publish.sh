@@ -32,7 +32,11 @@
 
 set -uo pipefail
 
-SD="/Users/natalienyaung/claude code/signaldeck"
+# Repo root, derived from this script's own location rather than hardcoded.
+# Same defect already fixed in ops/accuracy-registry.sh; it was left standing
+# here, so off the original Mac this resolved nowhere and the anchor never
+# published.
+SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG="$SD/logs/anchor-publish.log"
 REPO="${SIGNALDECK_ANCHOR_REPO:-$HOME/.signaldeck/anchor-publish}"
 API="http://127.0.0.1:8322"

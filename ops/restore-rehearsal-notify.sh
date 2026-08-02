@@ -12,7 +12,7 @@
 
 set -uo pipefail
 
-SD="/Users/natalienyaung/claude code/signaldeck"
+SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG="$SD/logs/restore-rehearsal.log"
 ENV_FILE="$SD/daemon/.env"
 

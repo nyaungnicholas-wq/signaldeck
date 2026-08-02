@@ -160,7 +160,7 @@ case "${1:-status}" in
     ;;
   refresh)
     # run the daily full-universe refresh sweep now (ignores the once-per-day guard)
-    exec /bin/bash "/Users/natalienyaung/claude code/signaldeck/ops/signaldeck-refresh.sh" force
+    exec /bin/bash "$REPO/ops/signaldeck-refresh.sh" force
     ;;
   status)
     for s in "$DAEMON" "$TUNNEL" "$WEB"; do

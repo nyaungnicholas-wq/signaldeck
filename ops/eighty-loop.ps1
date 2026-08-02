@@ -169,7 +169,11 @@ $task
       # file") and refuses -Samples>1 without -Verify. Omitting -Out here made
       # every verified call exit 2 before reaching a model.
       $tmp = $outFile
-      $omniArgs += '-Out', $tmp, '-Verify', $verify, '-Samples', $samples
+      # -Attempts is omni's re-brief count (it feeds the failure back into the
+      # next try); -Samples is independent draws within one attempt. 3x5 was
+      # never actually exercised -- the verify command was broken until now --
+      # so this is the first run where retrying can converge on anything.
+      $omniArgs += '-Out', $tmp, '-Verify', $verify, '-Samples', $samples, '-Attempts', 6
     } else {
       $omniArgs += '-Out', $tmp
     }

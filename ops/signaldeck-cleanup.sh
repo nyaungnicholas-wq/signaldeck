@@ -10,7 +10,7 @@
 # StandardOut/ErrorPath redirection never rotates anything on its own, so
 # unbounded growth lands here. Scheduled daily by com.signaldeck.cleanup.plist.
 set -u
-SD="/Users/natalienyaung/claude code/signaldeck"
+SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KEEP="${1:-2}"
 ROTATE_MB=10   # rotate any logs/*.log bigger than this
 ROTATE_KEEP=3  # keep this many gzipped generations (.log.1.gz … .log.3.gz)

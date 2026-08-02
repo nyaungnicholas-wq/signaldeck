@@ -15,4 +15,4 @@ hm="$(date +%H%M)"           # e.g. 0725
 if [ "$dow" -ge 6 ]; then exit 0; fi
 if [ "$hm" -lt 0620 ] || [ "$hm" -ge 1310 ]; then exit 0; fi
 
-exec /bin/bash "/Users/natalienyaung/claude code/signaldeck/ops/signaldeck-ctl.sh" collect
+exec /bin/bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/signaldeck-ctl.sh" collect

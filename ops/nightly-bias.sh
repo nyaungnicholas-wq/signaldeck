@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-SD="/Users/natalienyaung/claude code/signaldeck"
+SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON="$SD/daemon"
 LOG="$SD/logs/nightly-bias.log"
 DB="$SD/data/signaldeck.db"

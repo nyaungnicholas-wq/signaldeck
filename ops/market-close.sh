@@ -3,7 +3,7 @@
 # daily backup OFFLINE — with the daemon down the 2GB+ VACUUM INTO has zero
 # contention with the app (see ops/signaldeck-backup-offline.sh header).
 set -u
-SD="/Users/natalienyaung/claude code/signaldeck"
+SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 /bin/bash "$SD/ops/signaldeck-ctl.sh" stop
 # Graceful daemon shutdown (worker drain + WAL checkpoint) can take a minute —
 # a fixed 8s sleep made the backup's is-daemon-alive safety check skip the run
