@@ -299,6 +299,18 @@ sd = pathlib.Path(sys.argv[1])
 reg = json.load(open(sd / "data" / "accuracy_registry.json"))
 readme_path = sd / "README.md"
 
+def verdict_of(r):
+    """The row's verdict, or WITHHELD when the grader dropped the field.
+
+    Provenance-unattributable rows have no "verdict" key at all — the grader
+    drops it rather than downgrading it, because an absent verdict cannot be
+    quoted as one. Reading it directly raised KeyError here and killed the
+    entire publishing run, so a deliberate withholding upstream turned into a
+    total publication outage downstream.
+    """
+    return r.get("verdict") or "WITHHELD (provenance unresolvable)"
+
+
 def pct(x, dec=1):
     return "—" if x is None else f"{x * 100:.{dec}f}%"
 
@@ -328,7 +340,7 @@ def skill_cell(r):
 rows = reg.get("rows", [])
 directional = sorted(
     (r for r in rows if r.get("family") == "direction"),
-    key=lambda r: 0 if r["verdict"].startswith("FAILED") else 1,
+    key=lambda r: 0 if verdict_of(r).startswith("FAILED") else 1,
 )
 structural = [r for r in rows if r.get("family") == "structure"]
 
@@ -352,7 +364,7 @@ lines = [
     "|---|---|---|---|---|---|---|",
 ]
 for r in directional:
-    v = r["verdict"]
+    v = verdict_of(r)
     verdict_md = f"**{v}**" if v.startswith("FAILED") else v
     lines.append(
         f"| {r['predictor']} | {verdict_md} | {pct(r.get('live_acc'))} | {skill_cell(r)} "
@@ -360,7 +372,7 @@ for r in directional:
     )
 
 if structural:
-    pending = [r for r in structural if r["verdict"].startswith("PENDING")]
+    pending = [r for r in structural if verdict_of(r).startswith("PENDING")]
     lines += [
         "",
         f"**Structural claims (trend/vol/liquidity): {len(pending)}/{len(structural)} PENDING — "
@@ -370,7 +382,7 @@ if structural:
         "|---|---|---|",
     ]
     for r in structural:
-        lines.append(f"| {r['predictor']} | {pct(r.get('claimed'))} | {r['verdict']} |")
+        lines.append(f"| {r['predictor']} | {pct(r.get('claimed'))} | {verdict_of(r)} |")
 
 lines += [
     "",
@@ -417,12 +429,12 @@ def norm(v):
 prev, cur = load(sys.argv[1]), load(sys.argv[2])
 if not prev or not cur:
     sys.exit(0)
-pv = {(r["predictor"], r.get("family", ""), r.get("band", "")): norm(r["verdict"])
+pv = {(r["predictor"], r.get("family", ""), r.get("band", "")): norm(r.get("verdict") or "WITHHELD")
       for r in prev.get("rows", [])}
 lines = []
 for r in cur.get("rows", []):
     k = (r["predictor"], r.get("family", ""), r.get("band", ""))
-    new = norm(r["verdict"])
+    new = norm(r.get("verdict") or "WITHHELD")
     old = pv.get(k)
     if old is not None and old != new:
         lines.append(f"{r['predictor']} [{r.get('band','all')}]: {old} -> {new}")
@@ -444,7 +456,7 @@ if grep -q "^ACTION REQUIRED" "$LOG" 2>/dev/null && \
 import json
 try:
     d=json.load(open('$OUT'))
-    print(sum(1 for r in d['rows'] if r['verdict'].startswith('FAILED')))
+    print(sum(1 for r in d['rows'] if (r.get('verdict') or '').startswith('FAILED')))
 except Exception:
     print(0)
 ")
