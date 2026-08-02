@@ -1,3 +1,16 @@
 # Files whose SHA-256 is pinned in the pre-registration chain must have
 # identical bytes on every platform.
 tools/accuracy_registry.py -text
+
+# PREREGISTRATION.md is hashed by ops/accuracy-registry.sh and compared against
+# the prereg-document record in the chain. A CRLF checkout on Windows changes
+# those bytes, the digests stop matching, and the publishing path refuses with
+# "UNREGISTERED PROTOCOL DOCUMENT" — a failure that reads like tampering and is
+# really just a line ending.
+PREREGISTRATION.md -text
+
+# Shell scripts run inside Linux containers. A CRLF checkout makes the shebang
+# `#!/bin/sh\r`, which the kernel reports as "bad interpreter: No such file or
+# directory" — a confusing way to learn about line endings from an image that
+# built cleanly.
+*.sh -text
