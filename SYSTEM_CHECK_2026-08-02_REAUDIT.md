@@ -274,6 +274,55 @@ Monday's open, and that is the plan for the four rows above that need it.
 
 ---
 
+## PHASE B — DEFINITION-OF-COMPLETE MATRIX (status at checkpoint)
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 1 | `go build` / `go vet` / `go test` | **PASS** | all exit 0; **112 packages, 0 FAIL**, re-run after every change |
+| 2 | `npm run build` | **PASS** | exit 0, full route manifest emitted |
+| 2b | Playwright E2E | **OPEN** | not yet run |
+| 3 | Daemon from `git archive HEAD`, attributable | **PASS** | `{"resolvable":true,"modified":false,"revision":"58e42b0…"}`; health 200, ready 200 |
+| 4 | Live **equity** ticks parsed → DB | **BLOCKED — timing only** | audited Sunday; US equities open **Mon 2026-08-03 06:30 PDT** |
+| 5 | TickStream up, `snapshots_1s` filling, crypto end-to-end | **FAIL** | `snapshots_1s` = **0 rows**; tickstreamd not running; daemon logs `crypto-live: tickstream unreachable for 80s` every ~2 min |
+| 6 | Reconnection, no duplicate subscriptions | **OPEN** | needs a live socket (item 4 or 5 first) |
+| 7 | Graceful shutdown on a real signal | **BLOCKED** | handler verified in code (`daemon/cmd/signaldeckd/main.go:67`, `signal.NotifyContext(…, os.Interrupt, syscall.SIGTERM)`) but Windows refuses non-forced `taskkill` on this process, so the signal cannot be delivered from this shell. **Inferred, not verified.** |
+| 8 | Grader exits 0, README publishes live table | **PASS** | `ops/accuracy-registry.sh` exit 0; README `LIVE-ACCURACY` block regenerated `2026-08-02T01:10:52` |
+| 9 | Zero CRITICAL / zero HIGH open | **PARTIAL** | F-1 CLOSED. F-2 partially closed. F-3/F-4/F-5 open. |
+| 10 | Every matrix row PASS or evidenced | in progress | this table |
+
+### Closed this session
+
+- **F-1 CRITICAL — CLOSED.** `tools/verify_backup.py` + `tools/test_verify_backup.py`.
+  Measured against the real files: Jul 31 backup passes, Aug 1 backup fails with
+  `ledger_anchors table has no rows` and `prediction_ledger count 14 is too stale compared to
+  live count 263431`. Bad file moved to `quarantine/backups-20260802/`. The backup script now
+  runs the verifier after `VACUUM INTO` and quarantines + exits 1 before recording success.
+- **F-2 CRITICAL — PARTIALLY CLOSED.** The hardcoded
+  `SD="/Users/natalienyaung/claude code/signaldeck"` was fixed once in `accuracy-registry.sh`
+  and left standing in **nine** other ops scripts; all nine now derive the root from
+  `BASH_SOURCE`, and both absolute `exec` paths resolve relatively. `bash -n` clean across
+  `ops/*.sh`, no live hardcoded path remains. **Still open**: `offsiteDir` is on the same
+  physical disk, and the ops layer is still launchd-only so nothing runs it here.
+
+### Verified-correct refusals (NOT defects — do not "fix" these)
+
+- **README accuracy rows read `WITHHELD (provenance unresolvable)` — correct.** Each row's
+  `revision_gate` lists the builds that wrote the underlying rows, including `(unstamped)` and
+  `…+dirty`. The grader drops the verdict rather than downgrading it. Independently, those
+  rows have `distinct_days: 8` against a floor of 10. This heals only by accruing days from an
+  attributable build — which is now what is running. **Not to be forced.**
+- **The daemon's dirty-build refusal** fired twice in this session and was right both times.
+
+### Root cause shared by items 4, 5, 7, and F-2
+
+All four trace to the same thing: **the operational layer is macOS launchd and nothing
+supervises anything on this Windows host.** The daemon was down at audit start, tickstreamd is
+down, the backup runs ad-hoc, and provenance is unresolvable because rows were written by
+whatever build someone happened to launch by hand. Porting supervision to this host is the
+single highest-leverage fix remaining, and it closes four rows at once.
+
+---
+
 ## DISAGREEMENTS WITH THE PRIOR AUDIT
 
 1. Phase count: 5, not 19.
