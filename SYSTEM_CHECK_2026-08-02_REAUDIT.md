@@ -418,6 +418,36 @@ Because every adaptive cell is gated, none of it is currently being blended.
 
 Still **do not flip any sign.** The track-record CI includes zero (F-5).
 
+### D-1 — NEW, MEDIUM: `resolvable: true` is baked in at build time and never re-checked
+
+Found by causing it. After a `filter-branch` rewrite of unpushed history, the running daemon
+kept serving:
+
+```
+{"resolvable":true,"revision":"3c096b33c1962cd0e5b771b6df9e6ec130bbcf58", ...}
+```
+
+while the repo answered:
+
+```
+$ git cat-file -t 3c096b33c1962cd0e5b771b6df9e6ec130bbcf58
+fatal: git cat-file: could not get object info
+```
+
+**`resolvable: true` for a commit that does not exist.** The flag records that a revision was
+stamped at build time via `-ldflags`; nothing ever confirms the commit is still reachable in
+the repo. Any history rewrite — or a force-push, or a dropped branch — silently turns the
+attribution surface into a claim about a commit nobody can look up, and every row written
+meanwhile carries that dead `rowStamp`.
+
+This matters because provenance is what the accuracy registry gates on: rows whose build is
+unattributable are withheld from the README (correctly). Here the opposite failure occurs —
+rows are stamped *attributable* to something unresolvable, and nothing notices.
+
+Cheap fix: have the version endpoint (or the prereg registrar) verify the stamped revision
+actually resolves, and report `resolvable:false` when it does not. Resolved for the running
+daemon by rebuilding at the new HEAD; the general defect stands.
+
 ### C-1 — CONFIRMED, LOW: a 2-sample calibration bin renders beside a 3,469-sample one
 
 `/api/calibration` publishes:
