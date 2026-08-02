@@ -348,6 +348,17 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		rankPcts = map[int64]float64{}
 	}
+	// CROSS-SECTIONAL FEATURES, computed ONCE for the whole universe (a
+	// percentile needs the cross-section, so it cannot be built inside the
+	// per-symbol loop below). These are the four factors measured to rank the
+	// cross-section — liquidity, low-vol, 12-1 momentum, 1-day reversal — none
+	// of which existed in the alphax feature set that grades AUC 0.501. See
+	// xsfeatures.go for the measurement and its limits.
+	xsFeats := crossSectionalFeatures(ctx, w.St, syms)
+	if len(xsFeats) == 0 {
+		slog.Info("cross-sectional features unavailable this pass — universe too " +
+			"thin or the batched bar read failed; the alphax leg sees the old feature set")
+	}
 	// Adaptive per-regime weights, loaded ONCE per run. Absent/invalid data
 	// simply means adaptive.Pick falls through to the static equal prior —
 	// the exact pre-flywheel behavior.
@@ -597,7 +608,16 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if pct, ok := rankPcts[s.ID]; ok {
 				rankPct = &pct
 			}
-			vec := buildFeatureVector(sc, c, raw, cal, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap)
+			// xsMap is nil when this symbol had no computable cross-section
+			// (too few peers, or a leg uncomputable for it). buildFeatureVector
+			// skips nil maps, so the feature is ABSENT rather than defaulted —
+			// a fabricated 0.5 would place the symbol at the median of a
+			// cross-section it was never ranked against.
+			var xsMap map[string]float64
+			if f, ok := xsFeats[s.ID]; ok {
+				xsMap = f.vec()
+			}
+			vec := buildFeatureVector(sc, c, raw, cal, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap, xsMap)
 			if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
 				featErrs++
 				slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)
