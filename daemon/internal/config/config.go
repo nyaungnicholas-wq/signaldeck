@@ -352,8 +352,16 @@ func loopbackOnly(addr string) bool {
 // can start at any moment without the daemon being restarted or reconfigured,
 // so a default that is only correct while the tunnel happens to be down is not
 // a default, it is a race.
+// Only INSTALLED agents count, so every entry must be an absolute path to a
+// machine-specific location. "ops/com.signaldeck.tunnel.plist" used to head this
+// list: a relative path to a file committed to the repo, which os.Stat found in
+// every checkout on every machine, forever. tunnelConfigured() was therefore a
+// constant rather than a signal, and the entry below was unreachable — the loop
+// returned true before reaching it. It failed closed, so nothing was exposed,
+// but a repo file says nothing about whether THIS machine publishes the daemon.
+// An operator running a tunnel this list does not know about still has
+// SIGNALDECK_ASSUME_TUNNEL.
 var tunnelAgentPaths = []string{
-	"ops/com.signaldeck.tunnel.plist",
 	os.ExpandEnv("$HOME/Library/LaunchAgents/com.signaldeck.tunnel.plist"),
 }
 
