@@ -26,7 +26,13 @@ for cand in python3 python py; do
 done
 DB="$SD/data/signaldeck.db"
 DIR="$SD/data/backups"
-OFFSITE="$HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups"
+# Where the off-MACHINE copy goes. Overridable, because the hardcoded iCloud
+# path below is only off-machine on the Mac this was written on: on Windows it
+# resolved to ordinary folders under C:\Users\...\Library\Mobile Documents,
+# i.e. the SAME physical disk as the database, while /api/quality happily
+# reported offsiteConfigured:true. Point SIGNALDECK_OFFSITE_DIR at an external
+# drive (or any genuinely separate volume) and this becomes true again.
+OFFSITE="${SIGNALDECK_OFFSITE_DIR:-$HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups}"
 # Retention sized to fit BUDGET_MB (2026-07-26, after data/backups hit 13GB:
 # the compress path shipped 07-25 but market-close.sh — its only trigger —
 # doesn't fire on weekends, so it never ran while the in-daemon failsafe kept

@@ -55,17 +55,20 @@ param(
   # qwen3.6:27b stays resident, handled a 29KB prompt in 78-122s in testing, and
   # is a perfectly good reasoning model for this. One model, no thrash, no spend.
   [string]$Lane = 'code',
-  # IMPLEMENT runs on `fast` (qwen2.5-coder:7b), not the 27B.
+  # IMPLEMENT runs on the SAME lane as PROPOSE (qwen3.6:27b), reversing the
+  # earlier choice of `fast`. Both halves of that choice were measured wrong:
   #
-  # Reasoning about a hypothesis and WRITING A SCRIPT are different jobs.
-  # qwen3.6:27b took over ten minutes on the full code spec even after the 11KB
-  # protocol was cut down to a compact rule list -- the bottleneck is generation
-  # length, not context. qwen2.5-coder:7b is built for exactly this and answered
-  # comparable asks in 20-50 seconds.
+  # 1. "qwen2.5-coder:7b answered comparable asks in 20-50 seconds" was timing a
+  #    harness that could not pass. With verify fixed and a gate that demands a
+  #    real measurement, 60 genuine draws produced zero executable scripts --
+  #    SyntaxError, unclosed parens, undefined cursors. Fast wrong is not fast.
+  # 2. "qwen3.6:27b took over ten minutes" did not reproduce: 79 seconds COLD,
+  #    generating correct working sqlite3 code on the first draw (2026-08-02).
   #
-  # At 4.7GB it also coexists with the resident 27B instead of evicting it, so
-  # alternating PROPOSE and IMPLEMENT does not reload a model every stage.
-  [string]$CodeLane = 'fast',
+  # Sharing one model across both stages also removes the eviction thrash that
+  # made the 27B call fail and silently fall through to the PAID gateway -- the
+  # loop was billing Mistral for PROPOSE while claiming zero spend.
+  [string]$CodeLane = 'code',
   [int]$CyclePauseSec = 30
 )
 
@@ -312,7 +315,7 @@ Hard requirements:
 - Must run to completion in under 10 minutes.
 
 Output the raw Python file only. No markdown fences, no commentary.
-"@ $CodeLane $script 1200 $CODE_RULES -verify "python $scriptRel" -samples 5
+"@ $CodeLane $script 1200 $CODE_RULES -verify "python ops\verify_hypothesis.py $scriptRel" -samples 5
 
   if (-not $code) { Ev 'no-code'; Start-Sleep -Seconds $CyclePauseSec; continue }
 

@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -861,13 +862,31 @@ func (d Deps) backupOps(ctx context.Context) map[string]any {
 	}
 	offsiteDir, _ := d.St.GetMeta(ctx, backup.MetaOffsiteDir)
 	lastFile, _ := d.St.GetMeta(ctx, backup.MetaLastBackupFile)
-	return map[string]any{
+	out := map[string]any{
 		"lastBackupTs":      atoi(backup.MetaLastBackupTs),
 		"lastBackupFile":    lastFile,
 		"lastOffsiteTs":     atoi(backup.MetaLastOffsiteTs),
 		"offsiteConfigured": offsiteDir != "",
 		"offsiteDir":        offsiteDir,
 	}
+	// offsiteConfigured only ever meant "a path string is set", but it reads as
+	// "there is a copy on other hardware". The 2026-08-02 re-audit found it true
+	// while offsiteDir was a macOS iCloud path recreated as ordinary folders on
+	// the SAME physical disk as the database — 2.6 GB of supposedly off-machine
+	// backups one disk failure from zero. VolumeName is the drive letter on
+	// Windows and empty on Unix, so this answers definitively where it can and
+	// reports "unknown" rather than guessing where it cannot; absent evidence of
+	// separation, assume none.
+	if offsiteDir != "" {
+		dbVol := filepath.VolumeName(d.St.Path())
+		offVol := filepath.VolumeName(offsiteDir)
+		if dbVol == "" && offVol == "" {
+			out["offsiteSameVolume"] = "unknown"
+		} else {
+			out["offsiteSameVolume"] = strings.EqualFold(dbVol, offVol)
+		}
+	}
+	return out
 }
 
 func (d Deps) agents(w http.ResponseWriter, r *http.Request) {

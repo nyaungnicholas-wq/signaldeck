@@ -34,9 +34,15 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
-// DefaultDir is the archive root used when SIGNALDECK_ARCHIVE_DIR is unset. It
-// sits next to the live database (…/signaldeck/data/archive).
-const DefaultDir = "/Users/natalienyaung/claude code/signaldeck/data/archive"
+// DefaultDir is the last-resort archive root, used only when
+// SIGNALDECK_ARCHIVE_DIR is unset AND no dbPath is known — Dir otherwise puts
+// the archive beside whatever database the daemon actually opened.
+//
+// This was an absolute path under /Users/natalienyaung, which on any other
+// machine named a directory that does not exist and cannot be created, so the
+// fallback silently wrote nowhere. Relative to the working directory it lands
+// in the repo's own data/archive, which is what the comment always claimed.
+const DefaultDir = "data/archive"
 
 // Dir resolves the archive root: SIGNALDECK_ARCHIVE_DIR if set, else the
 // data-directory default derived from dbPath (…/<dbdir>/archive), else the
