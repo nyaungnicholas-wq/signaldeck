@@ -45,10 +45,14 @@ const selfAuditMinN = 30
 //   - biasThreshold: |mean(cal_prob) − base rate| past this is over/under-confident;
 //   - icSignEpsilon: an IC within ±this of zero is treated as no-signal, so a
 //     jitter across zero is NOT called a sign flip.
+//   - calibrationAtChanceThreshold: reliability AT OR ABOVE this is
+//     indistinguishable from a coin flip, whichever direction it drifted from.
+//     0.50 is exactly what a constant p=0.5 scores.
 const (
-	calibrationDriftThreshold = 0.02
-	biasThreshold             = 0.05
-	icSignEpsilon             = 0.02
+	calibrationDriftThreshold    = 0.02
+	biasThreshold                = 0.05
+	icSignEpsilon                = 0.02
+	calibrationAtChanceThreshold = 0.49
 )
 
 // SelfAuditor is the drift-watchdog worker.
@@ -116,6 +120,25 @@ func (w *SelfAuditor) Run(ctx context.Context) (string, error) {
 			detail += "; baseline recorded (no prior audit)"
 		}
 		if err := write("calibration:"+string(h), reliability, status, detail); err != nil {
+			return "", err
+		}
+
+		// Calibration LEVEL, measured independently of drift. The check above
+		// compares reliability only to its own prior value, so a model that has
+		// been at chance since the day it was born never changes and therefore
+		// never flags: on 2026-08-02 this reported "ok" at reliability 0.4982 —
+		// a coin flip — because it had moved +0.0007 against a 0.020 threshold.
+		// Emitted as its own metric rather than overloading the drift status, so
+		// both answers stay readable.
+		levelStatus := "ok"
+		if reliability >= calibrationAtChanceThreshold {
+			levelStatus = "at_chance"
+		}
+		if err := write("calibration_level:"+string(h), reliability, levelStatus,
+			fmt.Sprintf("reliability %.4f vs at-chance threshold %.4f — LEVEL check, "+
+				"independent of drift: a model that has always been at chance never "+
+				"changes, so the drift check alone can never flag it (%d independent obs)",
+				reliability, calibrationAtChanceThreshold, n)); err != nil {
 			return "", err
 		}
 
