@@ -304,6 +304,26 @@ Monday's open, and that is the plan for the four rows above that need it.
   `ops/*.sh`, no live hardcoded path remains. **Still open**: `offsiteDir` is on the same
   physical disk, and the ops layer is still launchd-only so nothing runs it here.
 
+### Closed later in the session
+
+- **F-3 HIGH — CLOSED.** `tunnelAgentPaths[0]` no longer contains the repo-relative path;
+  pinned by `TestTunnelAgentPathsAreAbsolute`, which failed before the change. **Verified
+  live**: the daemon now serves `/api/ready` 200 with **no `SIGNALDECK_PUBLIC_READS`
+  override**, proving the heuristic actually varies. Posture note: on this host
+  `reachablePrivately()` is now true, so read-only endpoints answer without auth on the
+  127.0.0.1 bind — the documented default. On the Mac, with the LaunchAgent installed, it
+  still closes.
+- **F-4 HIGH — CLOSED (test-verified, not yet observed live).** `calibration_level:<horizon>`
+  now flags `at_chance` at reliability ≥ 0.49, additive to the drift check. Two new tests
+  fail without it. **Not yet seen in `/api/self-audit`**: that worker runs on a 6-hour
+  interval and last ran ~3h before this change shipped, so the endpoint still serves the
+  pre-change findings. Expect `calibration_level:1d = at_chance` at the next run, since live
+  reliability is 0.4982.
+- **F-2 CRITICAL — honesty half CLOSED, physical half OPEN.** `/api/quality.ops` now
+  publishes `offsiteSameVolume`, **verified live as `true`** — the dashboard states plainly
+  that the "off-machine" copy is on the same disk. Destination is now
+  `SIGNALDECK_OFFSITE_DIR`. **Still open**: nothing is yet written to separate hardware.
+
 ### Verified-correct refusals (NOT defects — do not "fix" these)
 
 - **README accuracy rows read `WITHHELD (provenance unresolvable)` — correct.** Each row's
