@@ -27,6 +27,12 @@ __pycache__/
 # Worker-generated research scripts from ops/eighty-loop.ps1.
 research/eighty/
 
+# Quarantined artifacts. These are multi-GB database copies set aside BECAUSE
+# they failed verification — evidence to keep on disk, never history to carry.
+# A 439 MB corrupt backup was committed here on 2026-08-02 and had to be removed
+# with filter-branch; the repo is ignoring the directory so it cannot recur.
+quarantine/
+
 # Measurement outputs from the tools/alpha/*.py scripts. Regenerable by rerunning
 # the tracked script that wrote them; untracked so a stale run cannot make the
 # daemon refuse to start on an "unattributable build".
