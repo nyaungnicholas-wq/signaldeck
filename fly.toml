@@ -1,0 +1,59 @@
+# SignalDeck demo deployment (Fly.io).
+#
+# Why Fly and not Vercel: the daemon is a long-running Go process that owns a
+# SQLite file and runs a worker fleet on a schedule. Vercel's functions are
+# request-scoped and have no persistent disk, so the half of SignalDeck that
+# does the actual work cannot live there. Any host that gives you a persistent
+# volume and a process that stays up will do — Railway, Render, a $5 VPS.
+#
+# Deploy:
+#   fly launch --no-deploy --name <your-app-name>   # once, to create the app
+#   fly volumes create signaldeck_data --size 10 --region <region>
+#   fly secrets set ALPACA_KEY=... ALPACA_SECRET=...
+#   fly deploy --build-arg GIT_REV=$(git rev-parse HEAD)
+#
+# GIT_REV is not optional. The daemon refuses to start from a build it cannot
+# attribute to a commit, because rows it writes could not then be graded.
+
+app = "signaldeck-demo"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  SIGNALDECK_DB = "/data/signaldeck.db"
+  SIGNALDECK_HTTP = "127.0.0.1:8322"
+  SIGNALDECK_DAEMON = "http://127.0.0.1:8322"
+  PORT = "8080"
+  # Read-only endpoints answer without a session so a visitor sees the deck
+  # instead of a login wall. Every mutating route still requires auth — this
+  # widens reads, it does not disable authentication.
+  SIGNALDECK_PUBLIC_READS = "1"
+
+[[mounts]]
+  source = "signaldeck_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false     # see note below
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # DO NOT enable auto_stop. The worker fleet is the product: it ingests bars,
+  # scores symbols, and freezes pre-registered forecasts on a schedule. A
+  # machine that sleeps between visitors silently stops recording, and the
+  # honesty page would then grade gaps it caused itself.
+
+[[http_service.checks]]
+  grace_period = "120s"          # cold volume: schema creation + first backfill
+  interval = "30s"
+  method = "GET"
+  timeout = "10s"
+  path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"                 # SQLite page cache over a multi-GB database
