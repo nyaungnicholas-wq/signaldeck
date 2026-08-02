@@ -79,13 +79,34 @@ func globalCalibration(ctx context.Context, st *store.Store, h md.Horizon) (func
 	if len(raws) == 0 {
 		return nil, false, nil
 	}
+	// ResolvedRawPredictionPairs returns rows ORDER BY ts DESC, so reversing
+	// puts them in chronological order. Ts is stamped ORDINALLY rather than
+	// with wall-clock time — the store query does not return timestamps, and an
+	// ordered split is all CalibrateRanking needs. It must not be read as a
+	// real instant, which is why nothing else consumes it.
 	pairs := make([]ensemble.Pair, len(raws))
 	for i := range raws {
-		pairs[i] = ensemble.Pair{Pred: raws[i], Actual: ups[i]}
+		src := len(raws) - 1 - i // oldest first
+		pairs[i] = ensemble.Pair{Pred: raws[src], Actual: ups[src], Ts: int64(i)}
 	}
-	mapFn, calibrated := ensemble.Calibrate(pairs)
+
+	// CalibrateRanking, not Calibrate: isotonic is only WEAKLY monotone, so its
+	// flat blocks map every raw probability in a range to one identical value.
+	// Measured 2026-08-02, that collapsed seven distinct per-symbol crypto
+	// probabilities to a single 0.4635 and 322 stocks to six distinct values —
+	// a cross-sectional ranking reduced to one market-wide call.
+	//
+	// It only preserves the ranking when doing so costs nothing: isotonic still
+	// ships whenever it is significantly better out-of-sample. `ranked` records
+	// which happened, so the collapse is reportable rather than silent.
+	mapFn, calibrated, ranked := ensemble.CalibrateRanking(pairs)
 	if !calibrated {
 		return nil, false, nil
+	}
+	if !ranked {
+		slog.Info("calibration: ranking not preserved — isotonic beat the "+
+			"strictly-monotone map out-of-sample, so distinct per-symbol scores "+
+			"may share one calibrated probability", "horizon", h)
 	}
 	return mapFn, true, nil
 }

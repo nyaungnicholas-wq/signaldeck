@@ -87,16 +87,23 @@ func TestGlobalCalibrationIsFitOnRawNotCalProb(t *testing.T) {
 			"it was fit on cal_prob and applied to raw", lo, hi)
 	}
 
-	// And it must equal the map fit directly from the raw pairs.
+	// And it must be the fit over the RAW pairs — the property this test exists
+	// to protect. It used to assert exact equality with ensemble.Calibrate,
+	// which pinned one implementation rather than the property: globalCalibration
+	// now uses CalibrateRanking (isotonic is only weakly monotone and collapsed
+	// distinct per-symbol probabilities to one value), so equality with the
+	// isotonic map is no longer the contract. Reproduce the same construction
+	// the caller uses and require the same map.
 	raws, ups, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, calibrationPairLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pairs := make([]ensemble.Pair, len(raws))
 	for i := range raws {
-		pairs[i] = ensemble.Pair{Pred: raws[i], Actual: ups[i]}
+		src := len(raws) - 1 - i // chronological, matching globalCalibration
+		pairs[i] = ensemble.Pair{Pred: raws[src], Actual: ups[src], Ts: int64(i)}
 	}
-	want, wok := ensemble.Calibrate(pairs)
+	want, wok, _ := ensemble.CalibrateRanking(pairs)
 	if !wok {
 		t.Fatal("reference fit on raw pairs failed")
 	}
@@ -104,6 +111,19 @@ func TestGlobalCalibrationIsFitOnRawNotCalProb(t *testing.T) {
 		if got, exp := fn(x), want(x); got != exp {
 			t.Errorf("fn(%.2f)=%v, want %v (map must be the raw-pair fit)", x, got, exp)
 		}
+	}
+
+	// Whichever map won, it must never REORDER its inputs — a more bullish raw
+	// score publishing a lower probability breaks every ranking keyed on the
+	// result. Ties are permitted here (isotonic may legitimately win and tie);
+	// inversions never are.
+	prev := -1.0
+	for i := 0; i <= 100; i++ {
+		v := fn(float64(i) / 100)
+		if v < prev {
+			t.Fatalf("calibration inverted at raw=%.2f: %.6f < %.6f", float64(i)/100, v, prev)
+		}
+		prev = v
 	}
 }
 
