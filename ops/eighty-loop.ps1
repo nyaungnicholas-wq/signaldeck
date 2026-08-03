@@ -69,16 +69,19 @@ param(
   # made the 27B call fail and silently fall through to the PAID gateway -- the
   # loop was billing Mistral for PROPOSE while claiming zero spend.
   [string]$CodeLane = 'code',
-  # Pin the ACTUAL model rather than trusting a lane name. On 2026-08-02 omni.ps1
-  # was changed to try the paid gateway FIRST in every lane, with Ollama reachable
-  # only via -Model. That silently inverted this loop's whole cost premise: the
-  # events log shows cycle 2 of the 03:45 run served by mistral/devstral-latest,
-  # billed, while the comments above still claimed "one model, no thrash, no spend".
+  # Pin the ACTUAL model rather than trusting a lane name -- same reasoning as
+  # before (one model, no thrash), but the target changed. Ollama itself is now
+  # killed and its autostart disabled machine-wide (2026-08-02, memory-hog
+  # cleanup), so pinning a local tag here is no longer viable at all: every
+  # call would just fail. Pin a single OmniRoute gateway model instead. This
+  # loop now costs real router spend for the duration it runs -- that's an
+  # accepted tradeoff of moving off Ollama, not an oversight.
   #
-  # -Model also disables omni's fallback, which is the point. A loop meant to run
-  # for days must fail LOUDLY to worker-empty when the local model is gone, not
-  # quietly start spending. Set to '' to restore lane-based routing.
-  [string]$LocalModel = 'qwen3.6:27b',
+  # -Model still disables omni's fallback, which is still the point: a loop
+  # meant to run for days must fail LOUDLY to worker-empty when the pinned
+  # model errors, not silently drift onto a different (possibly pricier) one.
+  # Set to '' to restore lane-based routing (now gateway-first by default too).
+  [string]$PinnedModel = 'mistral/devstral-latest',
   [int]$CyclePauseSec = 30
 )
 
@@ -180,7 +183,7 @@ $task
     # NOT $args -- that is an automatic variable and assigning it inside a
     # function with a param block is a footgun that reads as working code.
     $omniArgs = @('-NoProfile', '-File', $omni, '-PromptFile', $pf, '-TimeoutSec', $timeoutSec)
-    if ($LocalModel -ne '') { $omniArgs += '-Model', $LocalModel }
+    if ($PinnedModel -ne '') { $omniArgs += '-Model', $PinnedModel }
     else                    { $omniArgs += '-Task', $lane }
     if ($verify -ne '') {
       # omni.ps1 refuses -Verify without -Out ("it runs against the written
@@ -245,7 +248,7 @@ $task
 Ev 'loop-start' @{ protocol = 'EIGHTY_PERCENT_SUPERPROMPT.md'; lane = $Lane; codeLane = $CodeLane
                    deadline = $(if ($Hours -le 0) { 'none' } else { $deadline.ToString('o') })
                    maxCycles = $MaxCycles
-                   model = $(if ($LocalModel -eq '') { "lane:$Lane" } else { $LocalModel })
+                   model = $(if ($PinnedModel -eq '') { "lane:$Lane" } else { $PinnedModel })
                    claudeCalls = 0 }
 
 if (-not (Test-Path $journal)) {
