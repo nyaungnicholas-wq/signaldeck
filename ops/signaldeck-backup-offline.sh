@@ -47,44 +47,82 @@ elif [ "$(uname -s)" = "Darwin" ]; then
 else
   OFFSITE=""
 fi
-# Retention sized to fit BUDGET_MB (2026-07-26, after data/backups hit 13GB:
-# the compress path shipped 07-25 but market-close.sh — its only trigger —
-# doesn't fire on weekends, so it never ran while the in-daemon failsafe kept
-# adding raw ~1.9GB snapshots). At a ~2GB VACUUM'd DB and ~65% gzip shrink:
-# 1 raw (~2GB) + 5 gz (~3.3GB) ≈ 5.3GB, inside the 6GB cap with headroom.
+# Retention exists because data/backups hit 13GB on 2026-07-26: the compress
+# path shipped 07-25 but market-close.sh — its only trigger — doesn't fire on
+# weekends, so it never ran while the in-daemon failsafe kept adding raw ~1.9GB
+# snapshots. The budget is the tripwire that would have caught that.
 KEEP_RAW=1      # newest generation kept as an instantly-restorable plain .db
 KEEP_ZST=5      # older generations kept compressed (zstd -3, gzip fallback)
 KEEP_RAW_MAX=2  # backstop cap on plain .db if compression itself keeps failing
-BUDGET_MB=6144  # hard cap on du -sm "$DIR" — breach logs, pages, exits 1
 LOG="$SD/logs/backup-offline.log"
+
+# GZ_RATIO_PCT: a compressed generation as a percentage of the raw DB it came
+# from. Measured on this repo's own history — 2715MB raw -> 552MB gz (20.3%),
+# 2180MB -> 527MB (24.2%) — and rounded UP, because a budget that is too tight
+# produces false alarms, which is the failure this derivation exists to end.
+GZ_RATIO_PCT=25
+BUDGET_FLOOR_MB=2048  # never derive a budget so small that a tiny DB false-alarms
+
+# derive_budget_mb DB_MB — the largest footprint the retention policy can
+# LEGITIMATELY produce at this database size.
+#
+# The budget used to be the constant 6144, derived by hand when the DB was ~2GB.
+# The DB is now 3.3GB, so the constant went stale and the tripwire fired every
+# weekday — and a check that is always red is not a check, it is training to
+# ignore red. Exactly the failure mode hud-sync and regime-outcome-runner had.
+#
+# The most the policy can legitimately hold AT ANY INSTANT, including the
+# transient moment inside a pass before prune has run:
+#   KEEP_RAW_MAX raw copies      (the backstop cap when compression keeps failing;
+#                                 also covers the new copy sitting beside the old)
+# + (KEEP_ZST + 1) compressed    (the extra one exists between compress and prune)
+#
+# Anything ABOVE that is not the policy working hard, it is the policy broken.
+# Below it, nothing is wrong and the alarm stays quiet — which is the point.
+#
+# Deliberately NOT more generous than that. Budgeting a third raw copy pushed the
+# limit to 14GB, which would have tolerated four stray generations before saying
+# anything; the 2026-07-26 incident was caught at 13GB. A tripwire that only
+# trips after the thing it exists to catch has already happened is decoration.
+derive_budget_mb() {
+  local db_mb="${1:-0}" budget
+  budget=$(( db_mb * KEEP_RAW_MAX + db_mb * (KEEP_ZST + 1) * GZ_RATIO_PCT / 100 ))
+  [ "$budget" -lt "$BUDGET_FLOOR_MB" ] && budget=$BUDGET_FLOOR_MB
+  printf '%s' "$budget"
+}
+
+# Derived from the live DB every run, so growth can never silently invalidate it.
+DB_MB=$(du -m "$DB" 2>/dev/null | cut -f1)
+BUDGET_MB=$(derive_budget_mb "${DB_MB:-0}")
 
 log() { echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> "$LOG"; }
 
 # Hard footprint assertion: retention regressions must page, not silently
 # refill the disk. market-close.sh ignores our exit code, so the banner here
 # (same channel as the H9 silence banner below) is what reaches a human.
+# The budget governs what the ROTATION CONTROLS, not everything in the folder.
+# Only timestamped signaldeck-YYYYmmdd-HHMMSS files are rotated; ad-hoc
+# snapshots (signaldeck-premaint-*, etc.) are deliberately left alone. Judging
+# the policy on a total that includes files it is forbidden to touch means a
+# human dropping one snapshot in the folder makes retention look broken — which
+# is what happened on 2026-08-03: 5776MB managed (fine) + one 583MB ad-hoc file,
+# reported as "compression/prune is not holding".
+#
+# Unmanaged bytes are still REPORTED, because the disk does not care who wrote
+# them — they just cannot fail the retention check.
 assert_budget() {
   local used managed unmanaged
   used=$(du -sm "$DIR" 2>/dev/null | cut -f1)
-  # Split MANAGED from UNMANAGED before blaming retention. Only timestamped
-  # signaldeck-YYYYmmdd-HHMMSS files are rotated; ad-hoc snapshots
-  # (signaldeck-premaint-*, etc.) are deliberately left alone and still count
-  # toward du. On 2026-08-03 the breach was 5776MB managed (under budget, so
-  # prune WAS holding) plus a single 583MB ad-hoc snapshot — while the alert
-  # said "compression/prune is not holding", which points at the wrong thing.
   managed=$(du -cm "$DIR"/signaldeck-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-*.db* 2>/dev/null | tail -1 | cut -f1)
   unmanaged=$(( ${used:-0} - ${managed:-0} ))
-  if [ "${used:-0}" -gt "$BUDGET_MB" ]; then
-    local verdict="retention is not holding"
-    if [ "${managed:-0}" -le "$BUDGET_MB" ]; then
-      verdict="rotation IS holding (${managed}MB managed); ${unmanaged}MB of ad-hoc snapshots pushed it over"
-    fi
-    log "FAIL: backups footprint ${used}MB exceeds budget ${BUDGET_MB}MB — $verdict"
-    sd_notify "SignalDeck: backup footprint over budget" \
-      "data/backups is ${used} MB (budget ${BUDGET_MB} MB) — $verdict."
+  if [ "${managed:-0}" -gt "$BUDGET_MB" ]; then
+    log "FAIL: managed backups ${managed}MB exceed the derived budget ${BUDGET_MB}MB " \
+        "(DB ${DB_MB}MB -> ${KEEP_RAW_MAX} raw + $(( KEEP_ZST + 1 )) gz @ ${GZ_RATIO_PCT}%) — retention is NOT holding"
+    sd_notify "SignalDeck: retention is not holding" \
+      "Managed backups are ${managed} MB against a ${BUDGET_MB} MB budget derived from a ${DB_MB} MB database. Compression or prune has stopped working."
     return 1
   fi
-  log "budget OK: ${used:-0}MB of ${BUDGET_MB}MB"
+  log "budget OK: ${managed:-0}MB managed of ${BUDGET_MB}MB derived (DB ${DB_MB}MB); ${unmanaged}MB ad-hoc, not rotated"
   return 0
 }
 
@@ -93,6 +131,26 @@ assert_budget() {
 # the weekend/failsafe catch-up path the 13GB pile-up proved we need.
 PRUNE_ONLY=false
 [ "${1:-}" = "--prune-only" ] && PRUNE_ONLY=true
+
+# --explain-budget: print the derivation and exit. A self-adjusting limit that
+# nobody can inspect is just a different kind of magic number.
+if [ "${1:-}" = "--explain-budget" ]; then
+  used=$(du -sm "$DIR" 2>/dev/null | cut -f1)
+  managed=$(du -cm "$DIR"/signaldeck-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-*.db* 2>/dev/null | tail -1 | cut -f1)
+  cat <<EOF
+live database          ${DB_MB:-0} MB
+policy                 KEEP_RAW=$KEEP_RAW (max $KEEP_RAW_MAX), KEEP_ZST=$KEEP_ZST, gz ~${GZ_RATIO_PCT}% of raw
+  $KEEP_RAW_MAX raw copies       $(( ${DB_MB:-0} * KEEP_RAW_MAX )) MB   (backstop cap; covers new beside old)
+  $(( KEEP_ZST + 1 )) compressed        $(( ${DB_MB:-0} * (KEEP_ZST + 1) * GZ_RATIO_PCT / 100 )) MB   (extra one exists between compress and prune)
+  ---------------------------------
+  derived budget       $BUDGET_MB MB   (floor $BUDGET_FLOOR_MB MB)
+
+actual managed         ${managed:-0} MB   $([ "${managed:-0}" -le "$BUDGET_MB" ] && echo "OK" || echo "OVER - retention not holding")
+actual ad-hoc          $(( ${used:-0} - ${managed:-0} )) MB   reported, never rotated, cannot fail the check
+actual total           ${used:-0} MB
+EOF
+  exit 0
+fi
 
 [ -f "$DB" ] || { log "SKIP: no db at $DB"; exit 0; }
 
