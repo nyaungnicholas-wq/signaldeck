@@ -284,6 +284,55 @@ Both leave the row unfrozen — **the frozen population is byte-for-byte
 unchanged** — so this is a change to the refusal's accounting, not to what is
 measured. Only a real gap now counts against null coverage.
 
+## Pass 5 — committing, and what committing exposed
+
+Committed on branch `windows-port-remediation-2026-08-03`, then deployed through
+the sanctioned path for the first time.
+
+### The README refusal was self-inflicted
+
+Running `accuracy-registry.sh` during the portability work tripped the grading
+refusal at 22:33:41 and replaced the published tables with a REFUSED banner. The
+stated cause — "research-loop liveness check failed (exit 2)" — was the
+`--emit-dq-event` flag defect fixed twenty minutes later. Re-running the grader
+restored the real tables.
+
+### Every verdict read WITHHELD because of the dirty build
+
+`ops/accuracy-registry.sh:313` falls back to `WITHHELD (provenance
+unresolvable)` when the grader drops the verdict field, which it does for rows it
+cannot attribute to a commit. 1,436 `worker_runs` in 24h carried a `+dirty`
+stamp — **1,436 of which my own three development deploys wrote** — on top of
+259,745 `prediction_ledger` rows predating revision stamping entirely.
+
+### Deploy could not have worked on Windows
+
+`build_from_head` wrote `bin/signaldeckd` with no extension while the Scheduled
+Task launches `bin/signaldeckd.exe`, so a "successful" deploy would have left the
+task running the OLD binary. It also failed at `install(1)` with "File exists",
+because a running daemon holds its own image open on Windows where Unix would
+silently replace the inode.
+
+### The provenance field was answering at random
+
+With a clean tree and an attributable build, `/api/version` still reported
+`resolvable: false` — intermittently. Six consecutive calls against one binary
+and one repository returned **true, false, false, false, true, false**.
+
+`revisionResolvable` spawns `git cat-file` per call under a 2s budget and fails
+closed. Spawning `git.exe` here measures 370–930ms idle, and the daemon runs 97
+workers against the same disk. Failing closed then downgraded a *verified* build
+to unattributable, and the registry withholds verdicts on exactly that field — so
+a published accuracy record turned on a coin flip.
+
+Timeout raised to 10s; a positive answer is cached for 5 minutes, keyed by
+`(revision, dirty, dir)` so one positive cannot answer for a different stamp. A
+negative is never cached.
+
+**Verified after deploy: 10/10 calls `resolvable: true`, `revision` equal to
+HEAD, `modified: false`, and new `worker_runs` rows carrying a clean 40-hex
+commit stamp.** Every row written from here is attributable.
+
 ## Still open
 
 0. **Environment gaps, not code defects.** `go test -race` cannot run: there is
