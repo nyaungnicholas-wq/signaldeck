@@ -138,6 +138,18 @@ var featureKeyCensus = map[string]bool{ // key -> excluded?
 	"tv_reco": false, "tv_webhook_signal": false, // external signals observed, not our outputs
 	"vix_high_vol": false, "vix_level": false, "vix_regime": false,
 	"wiki_z": false,
+
+	// Cross-sectional factor percentiles (pipeline/xsfeatures.go). Classified
+	// 2026-08-03 after the nightly bias regression caught them uncensused —
+	// exactly the "code stands still while the data moves" case that job exists
+	// for. Traced before classifying: crossSectionalFeatures reads ONLY
+	// st.LastBarsBatch(TF1d), never predictions, outcomes or labels; mom121 is
+	// price[t-21d]/price[t-252d], which additionally skips the most recent 21
+	// days; each value is a percentile rank within that same bar cross-section.
+	// Trailing price and volume observations, so trainable — same class as
+	// rank_pct above, not a model output.
+	"xs_liquidity_pct": false, "xs_lowvol_pct": false,
+	"xs_mom121_pct": false, "xs_rev1_pct": false,
 }
 
 func TestSelfReferentialKey_MatchesCensusClassification(t *testing.T) {
