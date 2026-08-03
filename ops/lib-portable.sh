@@ -73,11 +73,23 @@ sd_sqlite() {
   db="$(sd_winpath "$db")"
   if command -v cygpath >/dev/null 2>&1; then
     # Convert quoted absolute MSYS paths appearing inside the SQL.
+    #
+    # Read LINE BY LINE, never `for lit in $(...)`. This repo lives under
+    # "…/claude code/…" and word-splitting cut that path in half, so the
+    # substitution never matched and Python received a raw MSYS path it cannot
+    # open. Measured live 2026-08-03: the 13:10 market-close backup died with
+    #   sqlite3.OperationalError: unable to open database:
+    #   /c/Users/…/claude code/…/signaldeck-20260803-131005.db
+    # which is the same defect class as the -File argument splitting this repo
+    # already fixed once. A path with a space is the normal case here.
     local lit conv
-    for lit in $(printf '%s' "$sql" | grep -oE "'/[^']*'" | tr -d "'"); do
+    while IFS= read -r lit; do
+      [ -z "$lit" ] && continue
       conv="$(cygpath -w "$lit" | sed 's/\\/\\\\/g')"
       sql="${sql//\'$lit\'/\'$conv\'}"
-    done
+    done <<EOF
+$(printf '%s' "$sql" | grep -oE "'/[^']*'" | sed "s/^'//; s/'\$//")
+EOF
   fi
   # VACUUM INTO cannot run inside a transaction, so autocommit is required —
   # isolation_level=None. Without it Python opens an implicit transaction and

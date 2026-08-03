@@ -35,6 +35,25 @@ check "sd_sqlite can run VACUUM INTO (the backup's core statement)" "$rc"
 check "VACUUM INTO produced a non-empty copy" "$([ -s "$VAC" ] && echo 1 || echo 0)"
 rm -f "$TMPDB" "$VAC"
 
+# A path with a SPACE is the normal case here: the repo lives under
+# ".../claude code/...". `for lit in $(...)` word-split that in half, the
+# MSYS->Windows conversion never matched, and the 13:10 market-close backup
+# died with "unable to open database". Same defect class as the -File argument
+# splitting this repo already fixed once.
+SPACEDIR="$(mktemp -d)/dir with space"
+mkdir -p "$SPACEDIR"
+SPACEDB="$SPACEDIR/src.db"
+sd_sqlite "$SPACEDB" "CREATE TABLE t(a INTEGER); INSERT INTO t VALUES(7);" 2>/dev/null && rc=1 || rc=0
+check "sd_sqlite writes to a path containing a space" "$rc"
+SPACEVAC="$SPACEDIR/copy.db"
+sd_sqlite "$SPACEDB" "VACUUM INTO '$SPACEVAC';" 2>/dev/null && rc=1 || rc=0
+check "VACUUM INTO works when the target path has a space" "$rc"
+check "the spaced-path copy is non-empty" "$([ -s "$SPACEVAC" ] && echo 1 || echo 0)"
+got="$(sd_sqlite_read "$SPACEVAC" "SELECT a FROM t;" 2>/dev/null | tr -d '[:space:]')"
+check "sd_sqlite_read reads back through a spaced path (got '$got', want 7)" "$([ "$got" = "7" ] && echo 1 || echo 0)"
+rm -rf "$SPACEDIR"
+
+
 # sd_is_running must be right in both directions; a false NO is the dangerous
 # one, because it lets a heavy job loose on a live database.
 sd_is_running definitely-not-a-real-process-xyz && rc=0 || rc=1
