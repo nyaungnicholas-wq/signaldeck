@@ -136,7 +136,7 @@ export default function EvolutionPage() {
 
       <PagePurpose
         id="lab-evolution"
-        text="The model watches itself: measured factor skill, learned weights, and a deterministic self-audit of calibration drift and bias — evolution you can verify, not marketing."
+        text="How the model has changed. What each factor is measurably worth, the weights it has learned, and a repeatable self-audit of where its confidence has drifted or skewed. Every number here is one you can re-derive — none of it is marketing."
       />
 
       {err && (!audit || !evo) && (

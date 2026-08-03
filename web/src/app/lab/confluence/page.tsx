@@ -464,7 +464,7 @@ export default function ConfluencePage() {
 
       <PagePurpose
         id="signals-confluence"
-        text="A setup is flagged ONLY when several INDEPENDENT signal families — smart money, trend, the model, relative strength, breakout — agree on a direction. Fewer, higher-quality reads. It is scored by EXPECTED PROFIT (expectancy), not win rate, and the record stays gated until enough forward-tracked resolutions exist. This is not a guarantee — a setup is a higher-quality prior, not a promise."
+        text="When signals agree. A setup is flagged ONLY when several independent signals — smart money, trend, the model, relative strength, breakout — point the same way. Fewer reads, better ones. It is scored by expected profit, not win rate, and the record stays hidden until enough of these setups have actually played out. Agreement is a better starting point, not a promise."
       />
 
       <MoneyScoreboard />

@@ -176,7 +176,7 @@ export default function TrackRecordPage() {
       {/* STAGE 3: what this page answers, in plain English */}
       <PagePurpose
         id="lab-track-record"
-        text="Is SignalDeck actually right when it predicts? (measured honestly) — its own frozen predictions graded against what the market really did, with every skill number withheld until there is enough independent evidence."
+        text="Our scorecard. How right have we actually been? Every prediction is frozen when it is made and then graded against what the market really did. Skill numbers stay hidden until there is enough independent evidence to trust them — a number with no sample behind it is worse than no number."
       />
 
       {err && !current && (

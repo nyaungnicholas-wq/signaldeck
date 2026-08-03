@@ -51,7 +51,7 @@ export default function HonestyPage() {
     <div className="page-enter space-y-4">
       <PageHero
         title="HONESTY"
-        subtitle="Were past scores any good? Score buckets graded against the returns that actually followed."
+        subtitle="How wrong have we been? Every score bucket graded against the returns that actually followed. The weak buckets stay on the page."
         right={
           <div className="flex flex-wrap items-center gap-2">
             {err && current && (

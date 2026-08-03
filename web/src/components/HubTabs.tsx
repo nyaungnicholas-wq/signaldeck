@@ -20,6 +20,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
+import { useLabel } from "@/lib/labels";
 
 export interface HubTab {
   href: string;
@@ -59,6 +60,9 @@ export default function HubTabs({
   maxVisible?: number;
 }) {
   const pathname = usePathname();
+  // SIMPLE view speaks English here too — a strip that reads CONFLUENCE ·
+  // EVOLUTION · HONESTY is a wall, whatever the tooltips say.
+  const label = useLabel();
   const isActive = (t: HubTab) => {
     if (t.active !== undefined) return t.active;
     if (t.exact) return pathname === t.href;
@@ -101,7 +105,7 @@ export default function HubTabs({
                 active ? "nav-link-active" : ""
               }`}
             >
-              {t.label}
+              {label(t.label)}
             </Link>
           );
         })}
@@ -117,6 +121,7 @@ export default function HubTabs({
  *  real <Link>, so middle-click / long-press behave like the visible tabs. */
 function MoreMenu({ tabs, pathname }: { tabs: HubTab[]; pathname: string }) {
   const [open, setOpen] = useState(false);
+  const label = useLabel();
   const menuId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -250,7 +255,7 @@ function MoreMenu({ tabs, pathname }: { tabs: HubTab[]; pathname: string }) {
               onClick={() => setOpen(false)}
               className="nav-link flex min-h-[44px] cursor-pointer items-center px-3 py-2 whitespace-nowrap"
             >
-              {t.label}
+              {label(t.label)}
             </Link>
           ))}
         </div>

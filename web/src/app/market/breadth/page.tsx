@@ -66,7 +66,7 @@ export default function MarketBreadthPage() {
     <div className="page-enter space-y-4">
       <PageHero
         title="Breadth"
-        subtitle="How many stocks are participating in the move — one glance tells you if the market is broad or narrow."
+        subtitle="Is the whole market moving, or just a few big names? A rally led by five stocks is a different thing from one led by five hundred."
       />
 
       {firstCounts && (

@@ -8,6 +8,9 @@ import FreshnessBadge from "@/components/FreshnessBadge";
 import OfflineBanner from "@/components/OfflineBanner";
 import CommandPalette, { CMDK_EVENT } from "@/components/CommandPalette";
 import FirstRunTour from "@/components/FirstRunTour";
+import HelpPanel, { HELP_EVENT } from "@/components/HelpPanel";
+import { useLabel } from "@/lib/labels";
+import { noteVisit } from "@/lib/goal";
 
 // Nav consolidation (2026-07-19, user decision): 9 tabs → 5 clean hubs.
 // HOME absorbs the old DASHBOARD + TODAY; WATCHLIST absorbs DECK + COMPARE;
@@ -15,7 +18,11 @@ import FirstRunTour from "@/components/FirstRunTour";
 // sub-tab; `match` lists every pathname prefix that keeps the hub highlighted
 // — INCLUDING the old flat URLs, so the active state is right during the brief
 // moment before a next.config redirect lands.
-const NAV: { href: string; label: string; match: string[] }[] = [
+// `advanced: true` marks a hub that SIMPLE view folds behind the /advanced
+// door (see ADVANCED_DOOR below).
+type NavItem = { href: string; label: string; match: string[]; advanced?: true };
+
+const NAV: NavItem[] = [
   { href: "/", label: "HOME", match: ["/", "/today"] },
   // MARKETS + SIGNALS merged into one MARKET hub. Legacy prefixes stay in
   // `match` so the hub highlights through the redirect.
@@ -43,11 +50,13 @@ const NAV: { href: string; label: string; match: string[] }[] = [
   {
     href: "/intel/news",
     label: "INTEL",
+    advanced: true,
     match: ["/intel", "/news", "/filings", "/insiders", "/institutions", "/congress"],
   },
   {
     href: "/lab/backtest",
     label: "LAB",
+    advanced: true,
     match: [
       "/lab",
       "/backtest",
@@ -69,6 +78,17 @@ const NAV: { href: string; label: string; match: string[] }[] = [
   // the nav — it stays reachable directly at /hud but is personal, not part of
   // the product surface.
 ];
+
+// SIMPLE view folds the two specialist hubs (INTEL + LAB — 35 surfaces between
+// them) behind ONE labelled door at /advanced. Nothing is removed or gated:
+// PRO restores both hubs, and the door inherits their `match` prefixes so it
+// stays lit if a simple-mode user does walk into the lab — the header must
+// never lie about where you are.
+const ADVANCED_DOOR: NavItem = {
+  href: "/advanced",
+  label: "ADVANCED",
+  match: ["/advanced", ...NAV.filter((n) => n.advanced).flatMap((n) => n.match)],
+};
 
 const READING_KEY = "sd-reading-mode";
 const VIEW_KEY = "sd-view-mode";
@@ -300,6 +320,19 @@ function DaemonStatus({ up }: { up: boolean | null }) {
   );
 }
 
+/** Keyboard-only escape hatch past the header — the first tab stop on every
+ *  page, visible only while focused. Both header variants render it. */
+function SkipLink() {
+  return (
+    <a
+      href="#main"
+      className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-[100] focus:rounded-lg focus:border focus:border-[var(--accent)] focus:bg-[var(--panel)] focus:px-3 focus:py-2 focus:text-[0.8rem] focus:text-[var(--accent)]"
+    >
+      Skip to main content
+    </a>
+  );
+}
+
 /** Brand mark: amber signal-bars glyph + mono wordmark (one place, both
  *  header variants). */
 function Brand() {
@@ -322,6 +355,15 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [up, setUp] = useState<boolean | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const pro = useSyncExternalStore(subscribeViewMode, getViewModePro, getServerFalse);
+  const label = useLabel();
+
+  // Setup-checklist milestones are recorded here, from the one place every
+  // navigation already passes through — cheaper and harder to forget than
+  // sprinkling a markStep() call across four different pages.
+  useEffect(() => {
+    noteVisit(pathname);
+  }, [pathname]);
 
   useEffect(() => {
     let alive = true;
@@ -346,7 +388,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     if (menuOpen) setMenuOpen(false);
   }
 
-  const navLinks = NAV.map((n) => {
+  // SIMPLE shows three hubs plus the Advanced door; PRO shows all five.
+  const hubs = pro ? NAV : [...NAV.filter((n) => !n.advanced), ADVANCED_DOOR];
+
+  const navLinks = hubs.map((n) => {
     const active =
       n.href === "/"
         ? pathname === "/"
@@ -360,7 +405,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           active ? "nav-link-active" : ""
         }`}
       >
-        {n.label}
+        {label(n.label)}
       </Link>
     );
   });
@@ -373,12 +418,15 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   if (pathname === "/login" || pathname === "/proof" || pathname === "/accuracy") {
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-3 sm:p-4">
+        <SkipLink />
         <header className="panel px-4 py-3 sm:px-5">
           <Link href="/" className="inline-flex shrink-0 items-center">
             <Brand />
           </Link>
         </header>
-        <main className="flex flex-1 flex-col gap-4">{children}</main>
+        <main id="main" className="flex flex-1 flex-col gap-4">
+          {children}
+        </main>
         <footer
           className="px-2 pb-2 text-[0.75rem] leading-relaxed"
           style={{ color: "var(--faint)" }}
@@ -391,6 +439,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-3 sm:p-4">
+      <SkipLink />
       <OfflineBanner />
       {/* Sticky glass header: translucent panel + backdrop blur so content
           scrolling underneath reads as depth, not clutter. */}
@@ -432,6 +481,20 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             >
               <span className="mono">⌘K</span>
               <span className="hidden sm:inline">search</span>
+            </button>
+            {/* The permanent way back into onboarding. The tour used to be a
+                one-shot modal with no route back once dismissed. */}
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event(HELP_EVENT))}
+              title="help — the tour, the glossary, and what SignalDeck shows you"
+              aria-label="open help"
+              className="chip flex min-h-[40px] cursor-pointer items-center gap-1 px-3 transition-colors duration-150 hover:text-[var(--text)]"
+            >
+              <span aria-hidden="true" className="font-bold">
+                ?
+              </span>
+              <span className="hidden sm:inline">help</span>
             </button>
             <AlertsBell />
             <AuthChip />
@@ -480,7 +543,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       </header>
       <CommandPalette />
       <FirstRunTour />
-      <main className="flex flex-1 flex-col gap-4">{children}</main>
+      <HelpPanel />
+      <main id="main" className="flex flex-1 flex-col gap-4">
+        {children}
+      </main>
       <footer
         className="mt-2 border-t px-2 pt-3 pb-2 text-[0.75rem] leading-relaxed"
         style={{ color: "var(--faint)", borderColor: "var(--border)" }}

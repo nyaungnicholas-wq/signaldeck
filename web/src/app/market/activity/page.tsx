@@ -205,8 +205,13 @@ export default function ActivityPage() {
       )}
       {rows !== null && rows.length === 0 && (
         <EmptyState
-          message={unseenOnly ? "No unread events" : "No activity yet"}
-          detail={unseenOnly ? "You're caught up — switch off “unread only” to see everything." : "The system logs events as they occur — breakouts, signals, scans and anomalies on your watchlist will appear here."}
+          message={unseenOnly ? "No unread events" : "No alerts yet — that is normal"}
+          detail={
+            unseenOnly
+              ? "You're caught up — switch off “unread only” to see everything."
+              : "We only ping you when something actually changes: breakouts, regime shifts, and unusually strong or weak signals on the symbols you track. Nothing to configure."
+          }
+          action={unseenOnly ? undefined : { label: "Add symbols to track →", href: "/welcome" }}
         />
       )}
 

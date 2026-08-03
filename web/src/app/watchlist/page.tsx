@@ -125,10 +125,13 @@ export default function WatchlistPage() {
         </div>
       ) : watchlist.length === 0 ? (
         <div className="hud-panel p-8 text-center" style={{ color: "var(--dim)" }}>
-          <p className="text-lg font-medium mb-2">Your watchlist is empty</p>
+          <p className="mb-2 text-lg font-medium">Nothing on your watchlist yet</p>
           <p className="text-sm">
-            Use the search above to add symbols from the universe. Each one
-            becomes a tracked card here.
+            Search above to add a symbol — each one becomes a tracked card here, with its
+            signals, alerts and news.
+          </p>
+          <p className="mt-1 text-sm" style={{ color: "var(--faint)" }}>
+            Not sure where to start? Try SPY or NVDA.
           </p>
         </div>
       ) : (

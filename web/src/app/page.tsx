@@ -32,7 +32,7 @@ import ErrorState from "@/components/ErrorState";
 import TodaysRead from "@/components/home/TodaysRead";
 import InsightSpotlight from "@/components/home/InsightSpotlight";
 import VolRegimeLead from "@/components/home/VolRegimeLead";
-import WelcomeCard from "@/components/home/WelcomeCard";
+import SetupChecklist from "@/components/home/SetupChecklist";
 import GaugeRow from "@/components/home/GaugeRow";
 import DashFeed from "@/components/home/DashFeed";
 import WatchlistPanel from "@/components/home/WatchlistPanel";
@@ -78,8 +78,13 @@ export default function DashboardPage() {
           hidden while the payload is loading or empty (honest quiet) */}
       <TickerTape items={dash === null ? null : dash.tape.items} note={dash?.tape.note} />
 
-      {/* slim status row */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      {/* slim status row — aria-live so the freshness/error state is announced
+          when the 60s poll swaps it, not only when someone happens to look */}
+      <div
+        className="flex flex-wrap items-center gap-x-3 gap-y-2"
+        aria-live="polite"
+        aria-atomic="false"
+      >
         <h1 className="text-[0.9rem] font-extrabold tracking-[0.14em]">DASHBOARD</h1>
         {dash !== null && (
           <span className="chip tnum" title={dash.note}>
@@ -137,8 +142,10 @@ export default function DashboardPage() {
 
       {dash !== null && (
         <>
-          {/* first-run welcome — dismissible, remembered in sd-onboarded */}
-          <WelcomeCard watchlistEmpty={watchlistEmpty} />
+          {/* Setup progress — replaces the old dismissible welcome card. It
+              tracks real state and removes itself at 4/4, so there is no
+              dismiss button and no stale "remembered" flag. */}
+          <SetupChecklist watchlistEmpty={watchlistEmpty} />
 
           {/* ── THE OPENING VERDICT: the single best-evidenced read, or an
                 honest "No qualified read today" when nothing clears the gate ── */}

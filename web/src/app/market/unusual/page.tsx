@@ -94,7 +94,7 @@ export default function UnusualPage() {
       <PageHero
         title="Unusual Activity"
         live
-        subtitle="Outliers the scanners flagged — volume, moves and behavior outside the normal band."
+        subtitle="Things that look odd today — volume, moves and behaviour outside the normal band. Odd is a place to start looking, not a signal on its own."
         right={
           <div className="flex items-center gap-2">
             {errMsg && resp && (

@@ -161,6 +161,13 @@ html[data-reading-mode="on"] th {
   border-color: var(--border-strong);
   box-shadow: inset 0 -2px 0 var(--accent);
 }
+/* SIMPLE view renders sentence-case plain-English labels (src/lib/labels.ts).
+   The wide terminal letter-spacing set on the strip containers is right for
+   ALL-CAPS tickers and measurably slows down reading of actual words, so drop
+   it here. Matches the SSR default too: no attribute yet == simple. */
+html:not([data-view-mode="pro"]) .nav-link {
+  letter-spacing: 0.01em;
+}
 
 /* Anything with a title tooltip advertises itself with a subtle underline.
    NOTE: this [title] pattern is being replaced by <HelpTip>

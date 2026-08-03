@@ -70,6 +70,8 @@ const PAGES: { label: string; href: string }[] = [
   { label: "Lab — system AI", href: "/lab/system/ai" },
   { label: "Lab — track record", href: "/lab/track-record" },
   { label: "Welcome — product tour", href: "/welcome" },
+  { label: "Glossary — every term explained", href: "/glossary" },
+  { label: "Advanced tools — research, backtests, lab", href: "/advanced" },
   { label: "HUD (personal live-trading sync)", href: "/hud" },
 ];
 

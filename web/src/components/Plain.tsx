@@ -11,7 +11,10 @@
 // on the title tooltip.
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import HelpTip from "@/components/HelpTip";
 import {
+  PLAIN,
   goodnessColor,
   readMetric,
   type MetricKey,
@@ -57,12 +60,34 @@ function GoodnessDot({ g }: { g: number | null }) {
   );
 }
 
+/** The accessible "here's what this means" affordance.
+ *
+ *  The technical detail used to live ONLY in a [title] attribute, which is
+ *  mouse-hover-only: keyboard and touch users could never reach it. HelpTip is
+ *  a real button with a dismissible popover, so now they can. The title stays
+ *  as a mouse convenience, and the popover links on to the full glossary. */
+function DetailTip({ metric, detail }: { metric: MetricKey; detail: string }) {
+  return (
+    <HelpTip label={`what ${PLAIN[metric].label.simple} means`}>
+      <span>{detail}</span>
+      <Link
+        href="/glossary"
+        className="mt-2 block font-medium hover:underline"
+        style={{ color: "var(--accent)" }}
+      >
+        Full glossary →
+      </Link>
+    </HelpTip>
+  );
+}
+
 export default function Plain({
   metric,
   value,
   ctx,
   raw,
   compact = false,
+  help = true,
   className = "",
 }: {
   metric: MetricKey;
@@ -73,11 +98,16 @@ export default function Plain({
   /** Compact: one line only — SIMPLE shows just the sentence+dot, PRO shows
    *  nothing (the host already renders the raw number, e.g. a gauge dial). */
   compact?: boolean;
+  /** Render the "?" detail popover. On by default; pass false in grids dense
+   *  enough that a glyph per cell would cost more than it explains. Compact
+   *  mode never shows it — there is no room, and the row it sits in has one. */
+  help?: boolean;
   className?: string;
 }) {
   const mode = useViewMode();
   const r = readMetric(metric, value, ctx);
   const rawText = raw ?? r.raw;
+  const tip = help && !compact ? <DetailTip metric={metric} detail={r.detail} /> : null;
 
   if (compact) {
     if (mode === "pro") return null;
@@ -96,8 +126,11 @@ export default function Plain({
   if (mode === "pro") {
     return (
       <span className={`inline-flex flex-col ${className}`} title={r.detail}>
-        <span className="tnum font-bold" style={{ color: goodnessColor(r.goodness) === "var(--faint)" && rawText !== "—" ? "var(--text)" : goodnessColor(r.goodness) }}>
-          {rawText}
+        <span className="inline-flex items-center gap-1">
+          <span className="tnum font-bold" style={{ color: goodnessColor(r.goodness) === "var(--faint)" && rawText !== "—" ? "var(--text)" : goodnessColor(r.goodness) }}>
+            {rawText}
+          </span>
+          {tip}
         </span>
         <span className="text-[0.75rem] leading-snug" style={{ color: "var(--faint)" }}>
           {r.plain}
@@ -113,6 +146,7 @@ export default function Plain({
           <GoodnessDot g={r.goodness} />
         </span>
         <span style={{ color: r.raw === "—" && rawText === "—" ? "var(--faint)" : "var(--text)" }}>{r.plain}</span>
+        {tip}
       </span>
       {rawText !== "—" && (
         <span className="tnum pl-3.5 text-[0.75rem]" style={{ color: "var(--faint)" }}>

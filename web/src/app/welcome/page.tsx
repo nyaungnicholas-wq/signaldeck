@@ -1,20 +1,24 @@
 "use client";
 
-// /welcome — a 60-second intent-based onboarding in three steps:
-//   1. pick symbols to watch (REAL api.subscribe calls — on 401 we say "log
+// /welcome — a 60-second intent-based onboarding in four steps:
+//   1. what brings you here — sets the goal, which sets SIMPLE/PRO and how much
+//      surface the nav shows. Reversible from the Help panel at any time.
+//   2. pick symbols to watch (REAL api.subscribe calls — on 401 we say "log
 //      in first" and link /login; success is never faked)
-//   2. how alerts work — the honest rulebook (alerts fire automatically for
+//   3. how alerts work — the honest rulebook (alerts fire automatically for
 //      watched symbols; there is NO per-user alert config to invent)
-//   3. the daily briefing (once per NY day, at/after 7am) → dashboard.
+//   4. the daily briefing (once per NY day, at/after 7am) → dashboard.
 // "Skip" is always visible; both Skip and Finish set sd-onboarded="1".
+//
+// The onboarded flag, the goal and the view-mode coupling all live in
+// lib/goal.ts — this page owns none of that state, it just drives it.
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { api, type Market } from "@/lib/api";
 import { ALERT_RULES } from "@/components/signals/alerts/rules";
-
-const ONBOARDED_KEY = "sd-onboarded";
+import { GOALS, applyGoal, markOnboarded, useGoal } from "@/lib/goal";
 
 const CURATED: { symbol: string; market: Market }[] = [
   { symbol: "SPY", market: "stocks" },
@@ -31,18 +35,11 @@ const CURATED: { symbol: string; market: Market }[] = [
 const ALERT_KINDS = ["breakout", "regime_change", "prediction_high", "prediction_low"];
 
 const STEP_TITLES = [
+  "What brings you here?",
   "What do you want to watch?",
   "How should we alert you?",
   "Your daily briefing",
 ];
-
-function markOnboarded() {
-  try {
-    localStorage.setItem(ONBOARDED_KEY, "1");
-  } catch {
-    /* private mode — nothing to persist */
-  }
-}
 
 /** get() throws "API 401: …", post() throws the daemon's error string. */
 function isAuthError(msg: string): boolean {
@@ -65,6 +62,7 @@ function CheckIcon() {
 
 export default function WelcomePage() {
   const router = useRouter();
+  const goal = useGoal();
   const [step, setStep] = useState(1);
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null); // null = unknown
   const [needLogin, setNeedLogin] = useState(false);
@@ -187,7 +185,7 @@ export default function WelcomePage() {
         </ol>
       </nav>
       <p className="m-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
-        step {step} of 3
+        step {step} of {STEP_TITLES.length}
       </p>
 
       <section className="panel">
@@ -202,7 +200,54 @@ export default function WelcomePage() {
             {STEP_TITLES[step - 1]}
           </h2>
 
+          {/* STEP 1 — intent. Picking a goal sets the view mode (SIMPLE hides
+              the 35 specialist surfaces behind the /advanced door; PRO shows
+              everything) and where "done" lands you. Changeable later from the
+              Help panel, which is why nothing here is a one-way door. */}
           {step === 1 && (
+            <>
+              <p className="m-0 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+                This just decides how much SignalDeck shows you up front. Nothing is locked away —
+                you can change it any time from the ? menu at the top of the screen.
+              </p>
+
+              <ul className="m-0 flex list-none flex-col gap-2 p-0">
+                {GOALS.map((g) => {
+                  const active = goal === g.key;
+                  return (
+                    <li key={g.key}>
+                      <button
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => {
+                          applyGoal(g.key);
+                          setStep(2);
+                        }}
+                        className="chip flex min-h-[44px] w-full cursor-pointer flex-col items-start gap-0.5 px-4 py-3 text-left transition-colors duration-150 hover:border-[var(--accent)]"
+                        style={active ? { borderColor: "var(--accent)" } : undefined}
+                      >
+                        <span
+                          className="inline-flex items-center gap-2 text-sm font-bold"
+                          style={{ color: active ? "var(--accent)" : "var(--text)" }}
+                        >
+                          {g.title}
+                          {active ? <CheckIcon /> : null}
+                        </span>
+                        <span
+                          className="text-[0.75rem] leading-relaxed"
+                          style={{ color: "var(--dim)" }}
+                        >
+                          {g.blurb}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+
+          {step === 2 && (
             <>
               <p className="m-0 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
                 Pick a few symbols and SignalDeck starts recording their data, scoring them and
@@ -309,7 +354,7 @@ export default function WelcomePage() {
             </>
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <>
               <p className="m-0 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
                 Honest answer: you don&apos;t configure anything. Alerts fire automatically for
@@ -351,7 +396,7 @@ export default function WelcomePage() {
             </>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <>
               <p className="m-0 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
                 Once per day — at or after 7:00am New York time — the briefing worker writes a
@@ -399,7 +444,7 @@ export default function WelcomePage() {
               Back
             </button>
           )}
-          {step < 3 && (
+          {step < STEP_TITLES.length && (
             <button
               type="button"
               onClick={() => setStep((s) => Math.min(3, s + 1))}

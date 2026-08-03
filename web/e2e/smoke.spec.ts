@@ -147,7 +147,7 @@ test.describe("offline banner", () => {
     // dismisses it once. This test clicks Retry, so it needs the same guard the
     // other click-driven specs already use — without it the tour dialog
     // intercepts the pointer event and the click never lands.
-    await context.addInitScript(() => localStorage.setItem("sd-tour-done", "1"));
+    await context.addInitScript(() => localStorage.setItem("sd-onboarded", "1"));
     await page.goto("/");
     // Authed: we must stay on the dashboard, not bounce to /login.
     await expect(page.locator("header nav").first()).toBeVisible();
@@ -189,7 +189,7 @@ test.describe("compare page symbol changes", () => {
     await loginAsSmokeUser(context);
     // The first-run tour is a modal overlay that swallows clicks; a real
     // returning user has this flag set.
-    await context.addInitScript(() => localStorage.setItem("sd-tour-done", "1"));
+    await context.addInitScript(() => localStorage.setItem("sd-onboarded", "1"));
 
     // Every refetch the page performs, recorded from the proxied daemon calls.
     const reportCalls: string[] = [];
@@ -284,7 +284,7 @@ test.describe("lab research surfaces", () => {
     // hashing cost), and this test then loads three data-backed pages.
     test.setTimeout(240000);
     await loginAsSmokeUser(context);
-    await context.addInitScript(() => localStorage.setItem("sd-tour-done", "1"));
+    await context.addInitScript(() => localStorage.setItem("sd-onboarded", "1"));
 
     await page.goto("/lab/pairs");
     await expect(
@@ -295,7 +295,9 @@ test.describe("lab research surfaces", () => {
     await expect(page.getByText("DO NOT SHIP", { exact: true })).toBeVisible({ timeout: 30000 });
     await expect(page.getByText("persists across windows")).toBeVisible();
     // The tab is reachable from the hub, not just by URL.
-    await expect(page.getByRole("link", { name: "PAIRS", exact: true })).toBeVisible();
+    // SIMPLE is the default view, so the tab renders its plain-English name
+    // (src/lib/labels.ts). PRO would show "PAIRS".
+    await expect(page.getByRole("link", { name: "Paired trades", exact: true })).toBeVisible();
 
     await page.goto("/lab/sentiment");
     await expect(
@@ -318,7 +320,7 @@ test.describe("market breadth", () => {
   test("renders the breadth panel and the basket tables", async ({ page, context }) => {
     test.setTimeout(240000);
     await loginAsSmokeUser(context);
-    await context.addInitScript(() => localStorage.setItem("sd-tour-done", "1"));
+    await context.addInitScript(() => localStorage.setItem("sd-onboarded", "1"));
 
     await page.goto("/market/breadth");
     await expect(page.getByRole("heading", { name: "Breadth", exact: true })).toBeVisible({
@@ -326,7 +328,10 @@ test.describe("market breadth", () => {
     });
     await expect(page.getByText("SECTOR BREADTH")).toBeVisible({ timeout: 30000 });
     await expect(page.getByText("Indices", { exact: true })).toBeVisible();
-    // The tab is reachable from the Market hub, not only by URL.
-    await expect(page.getByRole("link", { name: "BREADTH", exact: true })).toBeVisible();
+    // The tab is reachable from the Market hub, not only by URL. SIMPLE is the
+    // default view, so it renders the plain-English name (src/lib/labels.ts).
+    await expect(
+      page.getByRole("link", { name: "How broad the move is", exact: true }),
+    ).toBeVisible();
   });
 });
