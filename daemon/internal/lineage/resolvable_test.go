@@ -97,3 +97,41 @@ func TestRevisionResolvableFailsClosedWhenVerificationCannotRun(t *testing.T) {
 		t.Fatal("resolvable reported true although the check could not be performed")
 	}
 }
+
+// TestRevisionResolvableIsStableAcrossCalls pins the non-determinism that made
+// this field unusable: six consecutive /api/version calls against one binary and
+// one repository returned true, false, false, false, true, false. The check
+// fails closed, so a transient git slowdown downgraded a VERIFIED build to
+// unattributable — and the accuracy registry withholds verdicts on this exact
+// field, so a published record turned on a coin flip.
+func TestRevisionResolvableIsStableAcrossCalls(t *testing.T) {
+	dir, sha := gitRepo(t)
+	// Prime through the same path production uses so the cache is exercised.
+	first := revisionResolvableCached(context.Background(), dir, sha, false)
+	if !first {
+		t.Fatal("a commit the repository contains did not resolve even once")
+	}
+	for i := 0; i < 25; i++ {
+		if !revisionResolvableCached(context.Background(), dir, sha, false) {
+			t.Fatalf("call %d disagreed with the first: the answer must not vary "+
+				"for a fixed binary and a fixed repository", i+2)
+		}
+	}
+}
+
+// The cache must never turn a genuinely-unresolvable stamp into a resolvable
+// one — that is the fail-open this field exists to prevent.
+func TestPositiveCacheDoesNotLeakOntoABadStamp(t *testing.T) {
+	dir, sha := gitRepo(t)
+	if !revisionResolvableCached(context.Background(), dir, sha, false) {
+		t.Fatal("a real commit did not resolve")
+	}
+	const gone = "0123456789abcdef0123456789abcdef01234567"
+	if revisionResolvableCached(context.Background(), dir, gone, false) {
+		t.Fatal("a commit the repository does not contain was reported resolvable " +
+			"after a positive result was cached for a different revision")
+	}
+	if revisionResolvableCached(context.Background(), dir, sha, true) {
+		t.Fatal("a dirty build was reported resolvable after a positive cache")
+	}
+}
