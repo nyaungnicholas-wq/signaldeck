@@ -29,6 +29,12 @@ export interface HubTab {
   /** Stage 5: active on the EXACT pathname only — for an "ALL" tab whose href
    *  is the parent of its sibling tabs (prefix matching would keep it lit). */
   exact?: boolean;
+  /** Explicit override, for a strip whose active tab is not derivable from the
+   *  URL at all. The LAB section strip needs it: /lab/pairs must light
+   *  PORTFOLIO, whose href is /lab/portfolio, and membership lives in
+   *  app/lab/sections.ts — not in this component. When set (true or false) it
+   *  wins outright, so the caller owning the rule is the only one applying it. */
+  active?: boolean;
 }
 
 /** Hubs with more tabs than this keep the first N visible and fold the rest
@@ -41,14 +47,20 @@ export default function HubTabs({
   tabs,
   ariaLabel,
   compact = false,
+  maxVisible = MAX_VISIBLE,
 }: {
   tabs: HubTab[];
   ariaLabel: string;
   /** Second-level strips (e.g. LAB → SYSTEM) render slightly quieter. */
   compact?: boolean;
+  /** Fold threshold. Pass Infinity for a strip that must never fold — a
+   *  section-scoped strip is already short, and folding one of its tabs into
+   *  an overflow menu recreates the clutter the sections removed. */
+  maxVisible?: number;
 }) {
   const pathname = usePathname();
   const isActive = (t: HubTab) => {
+    if (t.active !== undefined) return t.active;
     if (t.exact) return pathname === t.href;
     const under = (base: string) => pathname === base || pathname.startsWith(base + "/");
     return under(t.href) || (t.match !== undefined && under(t.match));
@@ -58,14 +70,14 @@ export default function HubTabs({
   // tab order are unchanged — this is presentation only.
   let visible = tabs;
   let folded: HubTab[] = [];
-  if (tabs.length > MAX_VISIBLE) {
-    visible = tabs.slice(0, MAX_VISIBLE);
-    folded = tabs.slice(MAX_VISIBLE);
+  if (tabs.length > maxVisible) {
+    visible = tabs.slice(0, maxVisible);
+    folded = tabs.slice(maxVisible);
     const activeIdx = folded.findIndex(isActive);
     if (activeIdx !== -1) {
       // The active tab must stay visible: swap it into the last visible slot.
-      const displaced = visible[MAX_VISIBLE - 1];
-      visible = [...visible.slice(0, MAX_VISIBLE - 1), folded[activeIdx]];
+      const displaced = visible[maxVisible - 1];
+      visible = [...visible.slice(0, maxVisible - 1), folded[activeIdx]];
       folded = [displaced, ...folded.filter((_, i) => i !== activeIdx)];
     }
   }
