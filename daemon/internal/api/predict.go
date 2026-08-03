@@ -2,7 +2,6 @@ package api
 
 import (
 	"fmt"
-	"math"
 	"net/http"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
@@ -87,11 +86,16 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 		// every bin carries its N, but nothing said what N is too thin to read,
 		// so each consumer had to invent a threshold or ignore the problem.
 		"binMinN": calibrationBinMinN,
+		// The ~9pp figure is a property of the constant, derived once in
+		// calibrationBinMinN's doc comment — not recomputed here. Computing it
+		// per request would hand-roll a binomial kernel, which
+		// TestExactlyOneWilsonImplementationInTree correctly refuses: this tree
+		// keeps exactly one Wilson implementation, in clusterstat.
 		"binNote": fmt.Sprintf(
 			"each bin reports its own N: bins below %d resolved pairs are NOT comparable evidence and must not be "+
 				"read as calibration deviations. At n=%d the binomial standard error on a proportion is already "+
-				"~%.0f percentage points, which is wider than the miscalibration these bins exist to show.",
-			calibrationBinMinN, calibrationBinMinN, 100*0.5/math.Sqrt(float64(calibrationBinMinN))),
+				"~9 percentage points, which is wider than the miscalibration these bins exist to show.",
+			calibrationBinMinN, calibrationBinMinN),
 	}
 	if gradable {
 		out["brierSkill"] = skill
