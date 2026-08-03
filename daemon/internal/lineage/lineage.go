@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -176,6 +177,43 @@ func RevisionStamp() string {
 func BuildRevision() string {
 	readBuild()
 	return rev
+}
+
+// revisionResolveTimeout bounds the git call so a wedged repository cannot hang
+// the version endpoint. Expiry means "could not verify", which fails closed.
+const revisionResolveTimeout = 2 * time.Second
+
+// RevisionResolvable reports whether the revision stamped into this binary still
+// names a commit the repository actually contains — checked NOW, against git.
+//
+// The build-time facts alone cannot answer this. A clean build stamps a real
+// commit, but that commit can later be rebased away, force-pushed over, or left
+// on a deleted branch, and the binary would go on advertising a revision nobody
+// can fetch. A stamp git cannot resolve is worth exactly as much as no stamp.
+//
+// It fails CLOSED, matching tools/accuracy_registry.py's revision_resolvable():
+// when git is absent, the daemon runs outside a checkout, or the check times out,
+// the answer is false. An unverifiable provenance claim must never be reported as
+// a verified one — that is the whole point of the field.
+func RevisionResolvable(ctx context.Context) bool {
+	readBuild()
+	return revisionResolvable(ctx, "", rev, modified)
+}
+
+// revisionResolvable is the testable core. dir is the directory to run git in;
+// "" inherits the process working directory, which git walks up from to find the
+// checkout. Any failure to prove resolvability returns false.
+func revisionResolvable(ctx context.Context, dir, revision string, dirty bool) bool {
+	// A dirty build names source that exists on no commit, and an empty or
+	// malformed stamp names nothing at all. None is resolvable; none needs git.
+	if revision == "" || dirty || !isFullHex(revision) {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, revisionResolveTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "cat-file", "-e", revision+"^{commit}")
+	cmd.Dir = dir
+	return cmd.Run() == nil
 }
 
 // RecordBuildRevision persists the running build's VCS revision into the meta

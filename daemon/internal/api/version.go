@@ -18,12 +18,20 @@ import (
 // row it creates, so a row's stamp can be matched against a live daemon without
 // guessing at the encoding. An empty revision is reported as empty, never as a
 // placeholder that could be mistaken for a real commit.
+//
+// `resolvable` is re-verified against git on every request rather than being
+// inferred from the build. Both build-time facts can be true of a commit that no
+// longer exists — rebased away, force-pushed over, or left on a deleted branch —
+// and the old form reported such a stamp as resolvable forever. It is not cached:
+// a cached true is exactly the stale claim this field exists to rule out, and the
+// endpoint is a diagnostic, not a hot path. Verification that cannot be performed
+// reports false, never true.
 func (d Deps) version(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"version":    d.Version,
 		"revision":   lineage.BuildRevision(),
 		"modified":   lineage.BuildModified(),
 		"rowStamp":   store.CodeRevision(),
-		"resolvable": lineage.BuildRevision() != "" && !lineage.BuildModified(),
+		"resolvable": lineage.RevisionResolvable(r.Context()),
 	})
 }
