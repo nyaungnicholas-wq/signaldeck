@@ -16,6 +16,15 @@
 # inhibitor is fine, Python's bundled sqlite3 replaces the CLI, and a
 # notification always reaches the log even when no desktop channel exists.
 
+# Windows Python defaults to cp1252 for stdout, and every script here prints
+# arrows, em dashes and box-drawing characters. nightly-bias.sh died on a single
+# "→" with UnicodeEncodeError AFTER doing all its work — 32 bias-invariant tests
+# passed and the run still reported failure. accuracy-registry.sh had already
+# learned this and set it locally; setting it here means no script has to
+# remember. Harmless on macOS/Linux, which are already UTF-8.
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+
 # sd_py resolves a working interpreter once. Same resolution as the other
 # scripts use; a candidate has to actually run, not merely be on PATH.
 sd_py() {

@@ -21,7 +21,18 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON="$SD/daemon"
 LOG="$SD/logs/nightly-bias.log"
 DB="$SD/data/signaldeck.db"
-GO="$HOME/.local/go-sdk/go/bin/go"
+# The Mac kept Go in a user-local SDK because it was not on PATH there. That
+# absolute path does not exist on Windows, so every `$GO test` failed with
+# "No such file or directory" and the suite reported "0 bias-invariant tests
+# executed" — a no-lookahead / purge / embargo gate that ran nothing while
+# still printing a verdict. Prefer whatever is on PATH; fall back to the
+# user-local SDK for the Mac.
+GO="$(command -v go 2>/dev/null || true)"
+[ -x "$GO" ] || GO="$HOME/.local/go-sdk/go/bin/go"
+if [ ! -x "$GO" ]; then
+  echo "FAIL: no usable go toolchain (tried PATH and \$HOME/.local/go-sdk)"
+  exit 1
+fi
 
 exec >> "$LOG" 2>&1
 echo "──────── $(date '+%Y-%m-%dT%H:%M:%S') nightly bias regression ────────"
@@ -58,7 +69,7 @@ fi
 # The assumptions the tests encode, checked against what is actually in the DB
 # tonight. These are the ones that rot without any code changing.
 if [ -f "$DB" ]; then
-  python3 - "$DB" <<'PY'
+  "$(sd_py)" - "$DB" <<'PY'
 import sqlite3, sys
 
 db = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
