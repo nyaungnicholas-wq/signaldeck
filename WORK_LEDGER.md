@@ -198,13 +198,94 @@ Forcing this green would mean committing another session's in-flight work, which
 is not mine to commit. Resume once `web/` is quiescent and its owner has
 committed: re-run the build above and confirm `vcs.modified=false`.
 
-## Environment limitation — race detector unavailable
+## Environment — race detector RESOLVED
 
-`go test -race` cannot run on this machine: `-race` requires cgo and there is no
-C compiler on PATH (`gcc`/`clang` both absent). Recorded rather than skipped
-quietly, because **Phase 4 requires `go test -race`** on the scheduler, event bus,
-and integrity orchestrator. Install a C toolchain (mingw-w64 / TDM-GCC) before
-Phase 4, then `CGO_ENABLED=1 go test -race ./...`.
+Was blocked: `-race` requires cgo and no C compiler was on PATH. Installed
+`BrechtSanders.WinLibs.POSIX.UCRT` (gcc 16.1.0) via winget. **winget does not shim
+`gcc` onto PATH** — it lands in the package directory and must be added manually:
+
+```bash
+export PATH="$PATH:/c/Users/Nicholas_N/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin"
+CGO_ENABLED=1 go test -race ./internal/...
+```
+
+Verified working: `internal/lineage` → ok 12.428s, `internal/workers` → ok 20.645s.
+
+## Phase 4 — the snapshot is stale; Steps 1 and 2 are essentially done
+
+### Step 1 (ScheduledWorker + NextFire scheduler) — ALREADY IMPLEMENTED
+
+`daemon/internal/workers/schedule.go` (130 lines) already defines exactly what
+Step 1 asks for, and the runner already drives it:
+
+- `ScheduledWorker` interface embedding `Worker`, with
+  `NextFire(last, now time.Time) time.Time`. The signature takes **`last` as well
+  as `now`** — richer than the prompt's `NextFire(now)`, and necessary: `last` is
+  seeded from `worker_runs` so a restart cannot re-fire a weekly job.
+- `scheduledLoop` (workers.go:312) computes the next real instant, sleeps to it,
+  runs, repeats — no ticker, no stagger.
+- `Interval()` retained as the fallback; returning the zero time from `NextFire`
+  declines and falls back, which is treated as a valid answer rather than an error.
+- Guards already present: `minScheduledGap` (1m) floors a `NextFire` that returns
+  the past forever so a buggy worker cannot hot-loop the fleet; `maxScheduledGap`
+  (24h) caps one sleep hop so a 7-day backoff still re-evaluates daily against
+  clock/config change.
+- Periodic path keeps a measured anti-stampede stagger (rationale dated
+  2026-07-16: phase-locked tickers put 10 heavy workers on a 5.5GB DB at once and
+  produced a 61s `/api/honesty`).
+
+The `WHY` block is dated **2026-08-02 — today**, so this landed in a session
+before or alongside this one. No Step 1 work is needed.
+
+### Step 2 (precise schedules) — ALL SIX NAMED TARGETS ALREADY MIGRATED
+
+`cmd/signaldeckd/scheduled_assert.go` is a compile-time tripwire proving each one
+still implements `ScheduledWorker` (it exists because the interface is optional
+and discovered by type assertion, so a dropped `NextFire` would otherwise fail
+silently). Verified implementations:
+
+| Worker | NextFire at |
+|---|---|
+| finra-shorts | `internal/pipeline/shorts.go:78` |
+| finra-shortint | `internal/pipeline/shortinterest.go:68` |
+| cot-poller | `internal/pipeline/cot.go:85` |
+| 13f-poller | `internal/pipeline/signal8.go:475` |
+| signalbt-weekly | `internal/briefing/signalbtpin.go:71` |
+| weekly-report | `internal/briefing/weekly.go:336` |
+
+### congress-poller — deletion NOT performed; needs the owner's decision
+
+Step 2 says delete it once the upstream mirrors are proven dead. The mirrors *are*
+dead — `internal/pipeline/congress.go:75` records both free mirrors
+(senatestockwatcher.com, housestockwatcher.com) going down in 2026-07, DNS gone
+and S3 403. **But the waste the deletion was meant to remove is already gone.**
+It was deliberately rebuilt as a circuit breaker: healthy → once daily 09:00 ET;
+failing → exponential backoff from 12h out to `congressBackoffMax` = 7 days, with
+the dead-run counter held in-process only so a restart re-probes once ("a restart
+is exactly when a human may have fixed the source").
+
+Deleting it now would discard a documented, measured decision and remove the
+auto-recovery path, to save roughly one request per week. The prompt's own
+precondition — stop paying for a known-403 twice a day — is already satisfied by
+different means. **Left in place pending an explicit decision.** Nothing was
+removed; this is reversible either way.
+
+### Fleet size — the claimed 93 is NOT confirmable by static analysis
+
+The fleet is assembled conditionally in `cmd/signaldeckd/run.go`: a 32-entry
+literal plus 46 `fleet = append(fleet, ...)` sites, several gated on configuration
+(Alpaca credentials present, backup configured, LLM client available). Crude
+name-literal counts land at 79/96/102 depending on the pattern used, and none is
+93. **The count is configuration-dependent, so no single static number is
+honest.** To confirm it, enumerate at runtime from the Agents page / worker
+registry on a configured instance rather than trusting any grep — including these.
+
+### Steps 3–5 — NOT STARTED
+
+Integrity consolidation, event bus, and write-through cache are untouched. Step 3
+must begin by inventorying the actual health workers and tiers; given Steps 1–2
+were already done, the prompt's worker names and counts for Step 3 should be
+verified against the code before any consolidation is designed.
 
 The Item 7 change adds no new shared mutable state — `readBuild()` already
 serialises through `sync.Once`, and `revisionResolvable` is a pure function plus
