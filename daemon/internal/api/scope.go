@@ -27,6 +27,16 @@ package api
 // problem.
 // Both scopes agree on the conclusion, which is the part that matters and the
 // part each note ends on.
+// calibrationBinMinN is the floor below which a calibration bin's MeanActual is
+// not comparable evidence. 30 is not arbitrary: at n=30 the binomial standard
+// error on a proportion is 0.5/sqrt(30) ≈ 9.1 percentage points, already wider
+// than the miscalibration the reliability curve exists to reveal. Below it the
+// bin is noise wearing the same shape as a 3,469-sample cell.
+//
+// It gates READING, never fitting — ensemble.MinCalibrationPairs governs
+// whether the map is fit at all, and that gate is separate and holding.
+const calibrationBinMinN = 30
+
 const (
 	calibrationScopeNote = "SCOPE: this is the PREQUENTIAL record - every probability was frozen at prediction time and graded forward, over all resolved pairs. /api/track-record publishes the same underlying record behind an independent-observation AND distinct-day gate, so its independentN, winRate, baseRate and brierSkill are all legitimately DIFFERENT from these - a smaller, day-declustered sample, not a contradiction and not a bug. Compare verdicts, not figures: both scopes put the win rate at or below the naive baseline and the Brier skill below zero, i.e. no measured probabilistic skill on either reading."
 	trackRecordScopeNote = "SCOPE: this is the live out-of-sample record behind both gates (independent observations AND distinct days), so it is a smaller and day-declustered sample. /api/calibration publishes the PREQUENTIAL record over all resolved pairs; its independentN, winRate, baseRate and brierSkill are all legitimately DIFFERENT from these - a wider ungated sample, not a contradiction and not a bug. Compare verdicts, not figures: both scopes put the win rate at or below the naive baseline and the Brier skill below zero, i.e. no measured probabilistic skill on either reading."

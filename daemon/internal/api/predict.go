@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
@@ -79,6 +80,18 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 		// record at a different scope and therefore different numbers. Naming
 		// that here is what stops the pair reading as a contradiction.
 		"scopeNote": calibrationScopeNote,
+		// C-1 (same re-audit): a bin of N=2 shipped in the same array, same
+		// shape, as a bin of N=3,469 — "MeanActual 0.5 on two samples" reads as
+		// evidence. This is NOT a MinCalibrationPairs breach: that gate governs
+		// whether the map is fit at all and is holding. It is a reporting gap —
+		// every bin carries its N, but nothing said what N is too thin to read,
+		// so each consumer had to invent a threshold or ignore the problem.
+		"binMinN": calibrationBinMinN,
+		"binNote": fmt.Sprintf(
+			"each bin reports its own N: bins below %d resolved pairs are NOT comparable evidence and must not be "+
+				"read as calibration deviations. At n=%d the binomial standard error on a proportion is already "+
+				"~%.0f percentage points, which is wider than the miscalibration these bins exist to show.",
+			calibrationBinMinN, calibrationBinMinN, 100*0.5/math.Sqrt(float64(calibrationBinMinN))),
 	}
 	if gradable {
 		out["brierSkill"] = skill
