@@ -363,6 +363,56 @@ an `exec` call — so no race claim is being made or needed here.
 
 ---
 
+## STOP CONDITION — the concurrent session moved into `daemon/`
+
+At 17:33 the other session was confined to `web/`. It has since committed that
+work (`d0e39b7` "Web v4 Cinematic Terminal redesign") and moved into `daemon/`.
+Working tree at close: **58 changed paths**, including
+
+- `daemon/internal/workers/workers.go` — the scheduler itself
+- `daemon/internal/workers/workers_test.go`, `degraded_test.go`
+- `daemon/cmd/signaldeckd/run.go` — the worker registry
+- `daemon/internal/store/store.go`
+- deletions under `quarantine/incomplete-2026-07-27/` (3 files)
+
+`workers.go` and `run.go` are exactly the files Phase 4 Steps 4–5 must edit.
+Editing them concurrently would conflict and risk clobbering that session's work,
+which the operating rules forbid. **Phase 4 Steps 4–5 are therefore blocked on
+coordination, not on difficulty.**
+
+Verified intact at close: `daemon/internal/lineage/` and
+`daemon/internal/api/version.go` are unmodified by anyone else and
+`RevisionResolvable` is present in both. Item 7 survived.
+
+Worth a look by the owner: the `quarantine/incomplete-2026-07-27/` deletions.
+These appear to be quarantined *source* files, not the null/narration quarantine
+*records* the integrity rules protect — but a deletion inside a quarantine
+directory is worth confirming was intended. Flagged as an observation, not as a
+confirmed violation, and not reverted.
+
+## Where this stands
+
+| Item | State |
+|---|---|
+| 1 offsite backup | BLOCKED — one physical disk |
+| 2 digest helper | PASS — was already green, verified genuine |
+| 3 eslint | Kit.tsx defect fixed; remainder was the other session's, now committed |
+| 4 pre-publish scan | NOT DONE — needs a quiescent tree |
+| 5, 6 live session | BLOCKED — next window Mon 2026-08-03 09:30 ET |
+| 7 revision resolvability | **PASS — `6c1e2b1`** |
+| 7b attributable build | BLOCKED — tree dirty from the other session |
+| 8 service supervision | NOT STARTED |
+| P4 Step 1 scheduler | Already implemented before this session |
+| P4 Step 2 schedules | Already implemented (6/6); congress-poller kept by decision |
+| P4 Step 3 integrity | Inventoried + measured; **net-negative, not implemented** |
+| P4 Steps 4–5 | BLOCKED — concurrent editor in `workers.go` / `run.go` |
+| Phase 5 audit | NOT STARTED |
+| Phase 6 research | NOT STARTED |
+
+Recommended next action when the tree is quiescent: **Step 5 (remove
+`cache-warmer`)** — 1,440 wakeups/day, 13% of the fleet, 14× the entire Step 3
+payoff, with a detectable rather than silent failure mode.
+
 ## Integrity statement
 
 No check, threshold, assertion, refusal, quarantine, or provenance rule was
