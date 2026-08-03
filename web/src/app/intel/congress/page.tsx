@@ -7,7 +7,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
-import { Reveal, PageHero, StatTile, MiniBar } from "@/components/ui/Kit";
+import { Reveal, PageHero, StatTile } from "@/components/ui/Kit";
 
 type ChamberFilter = "all" | "senate" | "house";
 type SortKey = "date" | "size" | "symbol";
@@ -31,6 +31,12 @@ function mirrorsDown(source?: CongressMirrorStatus | null): boolean {
   if (!source) return false;
   return source.senate?.ok === false && source.house?.ok === false;
 }
+
+const SortArrow = ({ active, dir }: { active: boolean; dir: "asc" | "desc" }) => (
+  <svg className={`inline ml-1 w-3 h-3 ${active ? "text-[var(--accent)]" : "text-[var(--dim)]"}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d={dir === "asc" ? "M12 5v14M5 12l7-7 7 7" : "M12 19V5M5 12l7 7 7-7"} />
+  </svg>
+);
 
 export default function CongressPage() {
   const [rows, setRows] = useState<CongressTrade[] | null>(null);
@@ -71,15 +77,14 @@ export default function CongressPage() {
   const list = useMemo(() => rows ?? [], [rows]);
   const down = mirrorsDown(source);
 
-  const { purchases, sales, latestDisclosed, maxDate } = useMemo(() => {
-    let purchases = 0, sales = 0, latestDisclosed = 0, maxDate = 0;
+  const { purchases, sales, latestDisclosed } = useMemo(() => {
+    let purchases = 0, sales = 0, latestDisclosed = 0;
     list.forEach(t => {
       if (t.txType === "purchase") purchases++;
       if (t.txType.startsWith("sale")) sales++;
       if (t.disclosedTs > latestDisclosed) latestDisclosed = t.disclosedTs;
-      if (t.txTs > maxDate) maxDate = t.txTs;
     });
-    return { purchases, sales, latestDisclosed, maxDate };
+    return { purchases, sales, latestDisclosed };
   }, [list]);
 
   const sortedList = useMemo(() => {
@@ -88,22 +93,15 @@ export default function CongressPage() {
       const dir = sortDir === "asc" ? 1 : -1;
       if (sortKey === "date") return (a.disclosedTs - b.disclosedTs) * dir;
       if (sortKey === "symbol") return a.symbol.localeCompare(b.symbol) * dir;
-      // size: approximate by position in list (newer larger) — fallback to date
       return (a.txTs - b.txTs) * dir;
     });
     return sorted;
   }, [list, sortKey, sortDir]);
 
-  function toggleSort(key: SortKey) {
+  const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir(key === "date" ? "desc" : "asc"); }
-  }
-
-  const SortArrow = ({ active, dir }: { active: boolean; dir: "asc" | "desc" }) => (
-    <svg className={`inline ml-1 w-3 h-3 ${active ? "text-[var(--accent)]" : "text-[var(--dim)]"}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d={dir === "asc" ? "M12 5v14M5 12l7-7 7 7" : "M12 19V5M5 12l7 7 7-7"} />
-    </svg>
-  );
+  };
 
   const heroControls = (
     <div className="flex flex-wrap items-center gap-2">

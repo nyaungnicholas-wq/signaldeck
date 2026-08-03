@@ -6,7 +6,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import ProOnly from "@/components/ProOnly";
-import { PageHero, StatTile, Reveal, Gauge, MiniBar, DeltaBadge, AnimatedNumber } from "@/components/ui/Kit";
+import { PageHero, StatTile, Reveal, Gauge } from "@/components/ui/Kit";
 
 function verdictView(verdict: string): { color: string; arrow: string } {
   const v = verdict.toUpperCase();

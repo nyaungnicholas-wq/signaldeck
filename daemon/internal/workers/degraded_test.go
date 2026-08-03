@@ -36,7 +36,7 @@ func TestRunOnce_RecordsDegradedOutcome(t *testing.T) {
 	}}
 	r.runOnce(context.Background(), w)
 
-	status, detail, finished := lastRun(t, st, "degraded-worker")
+	status, detail, finished := lastRun(t, r, "degraded-worker")
 	if !finished {
 		t.Fatal("degraded run was never finished")
 	}
@@ -60,7 +60,7 @@ func TestRunOnce_PlainErrorIsStillError(t *testing.T) {
 	}}
 	r.runOnce(context.Background(), w)
 
-	if status, _, _ := lastRun(t, st, "still-failing"); status != "error" {
+	if status, _, _ := lastRun(t, r, "still-failing"); status != "error" {
 		t.Errorf("status = %q, want \"error\" -- a genuine failure must not be downgraded", status)
 	}
 }

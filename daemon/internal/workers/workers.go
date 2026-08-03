@@ -132,6 +132,8 @@ type Runner struct {
 
 	mu      sync.Mutex
 	running map[string]*inflight // worker name → in-flight Run
+	// jrnl is the never-drop bookkeeping queue for worker_runs; see journal.go.
+	jrnl *runJournal
 	// quiesce is non-nil while the fleet is quiesced; it is closed on release.
 	quiesce chan struct{}
 	// lastQuiesce is what the most recent pause cost (see QuiesceStat).
@@ -399,10 +401,11 @@ func (r *Runner) runOnce(ctx context.Context, w Worker) {
 	if !r.awaitQuiesce(ctx) {
 		return
 	}
-	runID, err := r.st.StartWorkerRun(ctx, w.Name())
-	if err != nil {
-		slog.Error("worker: start record", "worker", w.Name(), "err", err)
-	}
+	// Through the journal, not inline: the single SQLite write connection is
+	// shared by the whole fleet, and an inline write under a deadline silently
+	// dropped the row when the queue was busy. A zero id means the journal could
+	// not record the open before ctx died, and runOnce then skips the close.
+	runID := r.journal().open(ctx, w.Name())
 
 	var (
 		runCtx context.Context
@@ -648,27 +651,23 @@ func (r *Runner) InFlight() int {
 	return len(r.running)
 }
 
-// finishRecord persists the run outcome with its OWN context — never the run
-// context, which may already be expired after a slow/timed-out run (a worker
-// that blew its deadline must still record that failure). The single SQLite
-// write conn can queue for a while when many workers finish together (the
-// startup herd), so the deadline is generous and one retry absorbs a
-// transient "context deadline exceeded"/busy window.
+// finishRecord queues the run outcome on the journal, which owns its OWN
+// context — never the run context, which may already be expired after a
+// slow/timed-out run (a worker that blew its deadline must still record that
+// failure).
+//
+// This used to write inline with a 30s deadline and one retry. Under the fleet
+// sharing a single SQLite write connection that lost 300+ rows a day, each one
+// leaving a run stuck at 'running' and under-counting the multiplicity divisor
+// into a LOOSER Bonferroni correction. The journal retries until the write
+// lands, so submitting can block on back-pressure but can never drop.
 func (r *Runner) finishRecord(worker string, runID int64, status, detail string) {
-	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		if attempt > 0 {
-			time.Sleep(2 * time.Second)
-		}
-		fctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		lastErr = r.st.FinishWorkerRun(fctx, runID, status, detail)
-		cancel()
-		if lastErr == nil {
-			return
-		}
-	}
-	slog.Error("worker: finish record", "worker", worker, "err", lastErr)
+	r.journal().submit(journalOp{worker: worker, runID: runID, status: status, detail: detail})
 }
+
+// CloseRunJournal drains outstanding bookkeeping writes at shutdown, so a clean
+// exit leaves no run non-terminal that this process could have closed itself.
+func (r *Runner) CloseRunJournal(wait time.Duration) { r.journal().close(wait) }
 
 func (r *Runner) safeRun(ctx context.Context, w Worker) (detail string, err error) {
 	defer func() {

@@ -50,8 +50,6 @@ function SortBtn({ label, sortKey, current, asc, onClick }: { label: string; sor
   );
 }
 
-const RATIO_BAR_TITLE = "share of the day's volume sold short — magnitude only, NOT directional";
-
 export default function ShortsPage() {
   const { symbol } = useIntelSymbol();
   const [extremes, setExtremes] = useState<ShortsExtremesResponse | null>(null);

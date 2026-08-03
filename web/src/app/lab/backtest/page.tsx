@@ -1,7 +1,6 @@
 "use client";
 
 import { PageHero, Reveal, StatTile } from "@/components/ui/Kit";
-import PagePurpose from "@/components/PagePurpose";
 import StrategyComposer from "@/components/backtest/StrategyComposer";
 import BacktestResults from "@/components/backtest/BacktestResults";
 import useBacktest from "@/hooks/useBacktest";
@@ -95,7 +94,7 @@ export default function BacktestPage() {
         <div className="panel">
           <div className="panel-h">Methodology</div>
           <div className="px-4 py-4 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-            Signals compute on each bar using only prior data and fill at the NEXT bar's open. Costs are charged per trade. No survivorship beyond what is stored. The number is honest, not flattering.
+            Signals compute on each bar using only prior data and fill at the NEXT bar&rsquo;s open. Costs are charged per trade. No survivorship beyond what is stored. The number is honest, not flattering.
           </div>
         </div>
       </Reveal>

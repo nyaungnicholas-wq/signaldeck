@@ -6,7 +6,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import AllocationBars from "@/components/optimizer/AllocationBars";
-import { Reveal, PageHero, StatTile, DeltaBadge, MiniBar, Spark, Gauge, AnimatedNumber } from "@/components/ui/Kit";
+import { PageHero, StatTile } from "@/components/ui/Kit";
 
 const DEFAULT_SYMBOLS = "NVDA,AAPL,SPY,QQQ,TSLA,AMD";
 const LOOKBACKS = [60, 90, 120, 180, 252, 365];

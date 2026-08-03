@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
 import {
   api,
   pollMs,
@@ -13,10 +12,9 @@ import { fmtPct, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
 import HelpTip from "@/components/HelpTip";
 import CellBar from "@/components/viz/CellBar";
-import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
+import { PageHero, StatTile } from "@/components/ui/Kit";
 
 function retColor(pct: number): string {
   if (!isFinite(pct)) return "var(--dim)";

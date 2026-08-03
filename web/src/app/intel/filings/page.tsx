@@ -8,7 +8,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
-import { Reveal, PageHero, StatTile, MiniBar } from "@/components/ui/Kit";
+import { Reveal, PageHero, StatTile } from "@/components/ui/Kit";
 
 const FORM_FILTERS = ["all", "4", "8-K", "10-Q", "10-K", "S-3", "424B", "SC 13D", "SC 13G"];
 

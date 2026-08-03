@@ -38,13 +38,25 @@ type RegimeCall struct {
 	NaiveLabel string
 }
 
-// RegimeForecastCalls returns every current regime forecast with its symbol id
-// (RegimeForecasts joins for display; this is the grading read).
+// RegimeForecastCalls returns the current regime forecasts for symbols the
+// system still tracks, with their symbol id (RegimeForecasts joins for display;
+// this is the grading read).
+//
+// Restricted to active, non-delisted symbols. Without the join it returned
+// stale forecasts for inactive S&P names whose daily bars stopped updating, and
+// a naive-persistence baseline is not computable from a series that no longer
+// advances. Those 8 rows made the unmatched-null refusal fire on EVERY pass
+// forever — a permanently red worker cannot signal a new gap, which is the only
+// thing that refusal exists to do. Scoring calls for symbols the product no
+// longer covers was the actual defect; the refusal was working correctly.
 func (s *Store) RegimeForecastCalls(ctx context.Context) ([]RegimeCall, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol_id, kind, ts, horizon_days, regime, conviction,
-		       historical_accuracy, rank
-		FROM regime_forecasts ORDER BY symbol_id, kind`)
+		SELECT f.symbol_id, f.kind, f.ts, f.horizon_days, f.regime, f.conviction,
+		       f.historical_accuracy, f.rank
+		FROM regime_forecasts f
+		JOIN symbols sy ON sy.id = f.symbol_id
+		WHERE sy.active = 1 AND sy.delisted_at IS NULL
+		ORDER BY f.symbol_id, f.kind`)
 	if err != nil {
 		return nil, err
 	}

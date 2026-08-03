@@ -16,7 +16,7 @@ import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
 import HelpTip from "@/components/HelpTip";
 import ProOnly from "@/components/ProOnly";
-import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
+import { PageHero } from "@/components/ui/Kit";
 
 /** USD formatter for book values. */
 function usd(v: number): string {

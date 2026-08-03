@@ -562,7 +562,22 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	}()
 
 	runner.Add(fleet...)
+
+	// Close out runs a PREVIOUS process left at 'running'. They are marked
+	// 'orphaned', never deleted — worker_runs feeds the research loop's
+	// multiplicity divisor, so dropping a row refunds a look the fleet actually
+	// spent and loosens the correction. 77 such rows had accumulated.
+	if n, err := st.ReconcileOrphanRuns(ctx, time.Now().Unix()); err != nil {
+		slog.Error("reconcile orphan runs", "err", err)
+	} else if n > 0 {
+		slog.Warn("swept worker runs orphaned by a previous process", "rows", n)
+	}
+
 	runner.Start(ctx)
+
+	// Start returns once the fleet has stopped; drain the bookkeeping queue so a
+	// clean exit leaves no run this process could have closed itself.
+	runner.CloseRunJournal(30 * time.Second)
 }
 
 // bootstrapUsers migrates a pre-multi-user database: when no accounts exist

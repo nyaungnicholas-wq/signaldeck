@@ -17,9 +17,7 @@ import Push20Macro from "@/components/macro/Push20Macro";
 import RankingTable from "@/components/regime/RankingTable";
 import CalendarsCard from "@/components/CalendarsCard";
 import EarningsEstCard from "@/components/EarningsEstCard";
-import {
-  PageHero, StatTile, DeltaBadge, Spark, Gauge, Reveal, AnimatedNumber
-} from "@/components/ui/Kit";
+import { PageHero, StatTile, DeltaBadge, Gauge, Reveal, AnimatedNumber } from "@/components/ui/Kit";
 
 const REGIME_COLORS: Record<string, string> = {
   uptrend: "var(--bid)",

@@ -2,21 +2,9 @@
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
-import {
-  api,
-  type WatchRow,
-  type SymbolInfo,
-  screenerRows,
-} from "@/lib/api";
-import { fmtPct, fmtPrice } from "@/lib/format";
-import {
-  Reveal,
-  AnimatedNumber,
-  Spark,
-  StatTile,
-  PageHero,
-  DeltaBadge,
-} from "@/components/ui/Kit";
+import { api, type WatchRow, screenerRows } from "@/lib/api";
+import { fmtPrice } from "@/lib/format";
+import { Reveal, Spark, StatTile, PageHero, DeltaBadge } from "@/components/ui/Kit";
 
 export default function WatchlistPage() {
   const [watchlist, setWatchlist] = useState<WatchRow[] | null>(null);
@@ -27,21 +15,31 @@ export default function WatchlistPage() {
     timer: ReturnType<typeof setTimeout>;
   } | null>(null);
 
+  // The pending-undo timer lives in a ref as well as in state. The unmount
+  // cleanup below needs the CURRENT timer, but `undo` was never a dependency of
+  // that effect, so the cleanup closed over the initial null and cleared
+  // nothing — unmounting mid-undo left a 5s timer that then called setState on
+  // a dead component. A ref is always current without making the effect re-run
+  // (and re-fetch) on every undo.
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const refetch = useCallback(() => {
     api.watchlist().then(setWatchlist).catch((e) => setError(String(e)));
   }, []);
 
   useEffect(() => {
     refetch();
-    return () => { if (undo) clearTimeout(undo.timer); };
+    return () => { if (undoTimer.current) clearTimeout(undoTimer.current); };
   }, [refetch]);
 
   const remove = useCallback(
     (symbol: string, market: "crypto" | "stocks") => {
       const timer = setTimeout(() => {
+        undoTimer.current = null;
         setUndo(null);
         refetch();
       }, 5000);
+      undoTimer.current = timer;
       setUndo({ symbol, market, timer });
       setWatchlist((prev) =>
         prev ? prev.filter((r) => !(r.symbol === symbol && r.market === market)) : prev
@@ -53,6 +51,7 @@ export default function WatchlistPage() {
   const undoRemove = useCallback(() => {
     if (!undo) return;
     clearTimeout(undo.timer);
+    undoTimer.current = null;
     api.subscribe(undo.symbol, undo.market).then(refetch).catch(refetch);
     setUndo(null);
   }, [undo, refetch]);
@@ -244,10 +243,7 @@ function WatchlistCard({
 
 function AddSymbol({ refetch }: { refetch: () => void }) {
   const [query, setQuery] = useState("");
-  const [matches, setMatches] = useState<
-    { symbol: string; name: string; market: "crypto" | "stocks"; spark?: number[] }[]
-  >([]);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [screenerData, setScreenerData] = useState<Awaited<ReturnType<typeof screenerRows>> | null>(null);
@@ -260,27 +256,27 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
     try {
       const data = await screenerRows();
       setScreenerData(data);
-    } catch (e) {
+    } catch {
       setError("Failed to load universe");
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    if (!query || !screenerData) {
-      setMatches([]);
-      return;
-    }
+  // Derived, not stored. This was an effect that called setMatches during the
+  // effect body, which schedules a second render for every keystroke
+  // (react-hooks/set-state-in-effect) and briefly paints a stale list. Matches
+  // are a pure function of the query and the loaded universe, so compute them.
+  const matches = useMemo(() => {
+    if (!query || !screenerData) return [];
     const q = query.toLowerCase();
-    const filtered = screenerData
+    return screenerData
       .filter(
         (r) =>
           r.symbol.toLowerCase().includes(q) ||
           r.name?.toLowerCase().includes(q)
       )
       .slice(0, 8);
-    setMatches(filtered);
   }, [query, screenerData]);
 
   const add = async (symbol: string, market: "crypto" | "stocks") => {
@@ -288,10 +284,9 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
     setError(null);
     try {
       await api.subscribe(symbol, market);
-      setQuery("");
-      setMatches([]);
+      setQuery(""); // clearing the query empties `matches` — it is derived now
       refetch();
-    } catch (e) {
+    } catch {
       setError("Failed to add symbol");
     } finally {
       setPending(null);

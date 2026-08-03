@@ -37,3 +37,7 @@ quarantine/
 # the tracked script that wrote them; untracked so a stale run cannot make the
 # daemon refuse to start on an "unattributable build".
 tools/alpha/*.json
+
+# scratch / scratch-pad files
+web/scratch_*.mjs
+*.new.tsx

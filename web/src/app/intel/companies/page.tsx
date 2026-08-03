@@ -12,7 +12,21 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
-import { Reveal, StatTile, PageHero, MiniBar } from "@/components/ui/Kit";
+import { StatTile, PageHero, MiniBar } from "@/components/ui/Kit";
+
+// Module scope, not inside CompaniesPage: a component declared in another
+// component's render body is a NEW type on every render, so React unmounts and
+// remounts the subtree instead of updating it (react-hooks/static-components).
+// What it closed over — the active sort — is passed in explicitly.
+const SortArrow = ({ column, sortKey, sortDir }: { column: SortKey; sortKey: SortKey; sortDir: SortDir }) => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="inline ml-1">
+    {sortKey === column ? (
+      <path d={sortDir === "asc" ? "M12 5v14M5 12l7-7 7 7" : "M12 19V5M19 12l-7 7-7-7"} />
+    ) : (
+      <path d="M12 5v14M5 12l7-7 7 7" opacity="0.4" />
+    )}
+  </svg>
+);
 
 type SortKey = "mcap" | "dayChangePct" | "volume";
 type SortDir = "asc" | "desc";
@@ -180,16 +194,6 @@ export default function CompaniesPage() {
     }
   };
 
-  const SortArrow = ({ column }: { column: SortKey }) => (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="inline ml-1">
-      {sortKey === column ? (
-        <path d={sortDir === "asc" ? "M12 5v14M5 12l7-7 7 7" : "M12 19V5M19 12l-7 7-7-7"} />
-      ) : (
-        <path d="M12 5v14M5 12l7-7 7 7" opacity="0.4" />
-      )}
-    </svg>
-  );
-
   return (
     <div className="page-enter space-y-4">
       <PageHero
@@ -340,14 +344,14 @@ export default function CompaniesPage() {
                   <th className="px-3 py-2">EXCH</th>
                   <th className="px-3 py-2 text-right">PRICE</th>
                   <th className="px-3 py-2 text-right cursor-pointer select-none" onClick={() => handleSort("dayChangePct")}>
-                    CHG%<SortArrow column="dayChangePct" />
+                    CHG%<SortArrow column="dayChangePct" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th className="px-3 py-2 text-right cursor-pointer select-none" onClick={() => handleSort("mcap")}>
-                    MKT CAP<SortArrow column="mcap" />
+                    MKT CAP<SortArrow column="mcap" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th className="px-3 py-2">SECTOR (SIC)</th>
                   <th className="px-3 py-2 text-right cursor-pointer select-none" onClick={() => handleSort("volume")}>
-                    VOLUME<SortArrow column="volume" />
+                    VOLUME<SortArrow column="volume" sortKey={sortKey} sortDir={sortDir} />
                   </th>
                   <th className="px-3 py-2 text-right">FLOAT</th>
                   <th className="px-3 py-2 text-right">SHARES</th>

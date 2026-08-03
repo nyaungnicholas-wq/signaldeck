@@ -20,7 +20,7 @@ import PagePurpose from "@/components/PagePurpose";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
 import Skeleton from "@/components/Skeleton";
-import { PageHero, Reveal, StatTile, DeltaBadge, MiniBar, Spark, Gauge, AnimatedNumber } from "@/components/ui/Kit";
+import { PageHero } from "@/components/ui/Kit";
 
 function fmtAge(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));

@@ -8,7 +8,7 @@ import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import HelpTip from "@/components/HelpTip";
 import PatternsExplorer from "@/components/markets/PatternsExplorer";
-import { Reveal, StatTile, PageHero, DeltaBadge, Spark, MiniBar } from "@/components/ui/Kit";
+import { Reveal, StatTile, PageHero, DeltaBadge, MiniBar } from "@/components/ui/Kit";
 
 function MoverCard({ m, maxChange, i }: { m: TrendsMover; maxChange: number; i: number }) {
   const dir = m.dayChangePct > 0 ? "up" : m.dayChangePct < 0 ? "down" : "";

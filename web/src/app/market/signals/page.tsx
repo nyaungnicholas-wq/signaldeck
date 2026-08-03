@@ -3,9 +3,7 @@
 import { useState } from "react";
 import { ago } from "@/lib/format";
 import ErrorState from "@/components/ErrorState";
-import PagePurpose from "@/components/PagePurpose";
 import ProOnly from "@/components/ProOnly";
-import SavedViewsBar from "@/components/SavedViewsBar";
 import CalibrationPanel from "@/components/predict/CalibrationPanel";
 import SignalScoreHero from "@/components/signals/predictions/SignalScoreHero";
 import TVRatingChip from "@/components/signals/predictions/TVRatingChip";
@@ -20,7 +18,7 @@ import {
   usePredictionWatchlist,
   type CalHorizon,
 } from "@/hooks/usePredictions";
-import { Reveal, PageHero, StatTile, DeltaBadge, MiniBar } from "@/components/ui/Kit";
+import { PageHero, StatTile } from "@/components/ui/Kit";
 
 export default function PredictPage() {
   const [retryTick, setRetryTick] = useState(0);

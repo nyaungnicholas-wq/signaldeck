@@ -863,11 +863,10 @@ func (d Deps) backupOps(ctx context.Context) map[string]any {
 	offsiteDir, _ := d.St.GetMeta(ctx, backup.MetaOffsiteDir)
 	lastFile, _ := d.St.GetMeta(ctx, backup.MetaLastBackupFile)
 	out := map[string]any{
-		"lastBackupTs":      atoi(backup.MetaLastBackupTs),
-		"lastBackupFile":    lastFile,
-		"lastOffsiteTs":     atoi(backup.MetaLastOffsiteTs),
-		"offsiteConfigured": offsiteDir != "",
-		"offsiteDir":        offsiteDir,
+		"lastBackupTs":   atoi(backup.MetaLastBackupTs),
+		"lastBackupFile": lastFile,
+		"lastOffsiteTs":  atoi(backup.MetaLastOffsiteTs),
+		"offsiteDir":     offsiteDir,
 	}
 	// offsiteConfigured only ever meant "a path string is set", but it reads as
 	// "there is a copy on other hardware". The 2026-08-02 re-audit found it true
@@ -877,15 +876,23 @@ func (d Deps) backupOps(ctx context.Context) map[string]any {
 	// Windows and empty on Unix, so this answers definitively where it can and
 	// reports "unknown" rather than guessing where it cannot; absent evidence of
 	// separation, assume none.
+	//
+	// offsiteConfigured now REQUIRES that separation. A path string alone made
+	// the field report true against a folder on C: next to the database, which
+	// is the one reading a human is guaranteed to take at face value. A dashboard
+	// that says "configured" when one disk failure loses everything is worse than
+	// one that says nothing.
+	sameVolume := any("unknown")
 	if offsiteDir != "" {
 		dbVol := filepath.VolumeName(d.St.Path())
 		offVol := filepath.VolumeName(offsiteDir)
-		if dbVol == "" && offVol == "" {
-			out["offsiteSameVolume"] = "unknown"
-		} else {
-			out["offsiteSameVolume"] = strings.EqualFold(dbVol, offVol)
+		if dbVol != "" || offVol != "" {
+			sameVolume = strings.EqualFold(dbVol, offVol)
 		}
+		out["offsiteSameVolume"] = sameVolume
 	}
+	same, known := sameVolume.(bool)
+	out["offsiteConfigured"] = offsiteDir != "" && known && !same
 	return out
 }
 

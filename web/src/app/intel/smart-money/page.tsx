@@ -8,7 +8,6 @@ import {
   POLL_SLOW,
   type SmartMoneyResponse,
   type SmartMoneyTopResponse,
-  type SmartMoneyFactor,
 } from "@/lib/api";
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
@@ -17,7 +16,6 @@ import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
 import {
   Reveal,
-  AnimatedNumber,
   StatTile,
   PageHero,
   MiniBar,
@@ -76,6 +74,14 @@ function FactorBar({ value }: { value: number }) {
         }}
       />
     </div>
+  );
+}
+
+function SortIcon({ active, asc }: { active: boolean; asc: boolean }) {
+  return (
+    <svg width="8" height="8" viewBox="0 0 8 8" className="inline ml-1" style={{ opacity: active ? 1 : 0.3 }}>
+      <polygon points={asc ? "4,1 7,6 1,6" : "4,7 7,2 1,2"} fill="currentColor" />
+    </svg>
   );
 }
 
@@ -286,12 +292,6 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
     if (sortKey === key) setSortAsc(!sortAsc);
     else { setSortKey(key); setSortAsc(key === "symbol"); }
   };
-
-  const SortIcon = ({ active, asc }: { active: boolean; asc: boolean }) => (
-    <svg width="8" height="8" viewBox="0 0 8 8" className="inline ml-1" style={{ opacity: active ? 1 : 0.3 }}>
-      <polygon points={asc ? "4,1 7,6 1,6" : "4,7 7,2 1,2"} fill="currentColor" />
-    </svg>
-  );
 
   return (
     <section className="panel">

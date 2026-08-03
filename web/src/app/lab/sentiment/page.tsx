@@ -6,7 +6,7 @@ import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ProOnly from "@/components/ProOnly";
-import { PageHero, StatTile, Reveal, Spark, Gauge, MiniBar, DeltaBadge } from "@/components/ui/Kit";
+import { PageHero, StatTile, Reveal, Spark, MiniBar, DeltaBadge } from "@/components/ui/Kit";
 
 const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
 const ic = (v: number) => (v >= 0 ? "+" : "") + v.toFixed(4);
@@ -72,7 +72,7 @@ export default function SentimentPage() {
       <section className="panel p-4">
         <h2 className="panel-h mb-3">Data Coverage</h2>
         <p className="text-sm leading-relaxed" style={{ color: 'var(--dim)' }}>
-          Sentiment is keyed to the first session on which each headline was already public, not the headline's own calendar day.
+          Sentiment is keyed to the first session on which each headline was already public, not the headline&rsquo;s own calendar day.
         </p>
         {data.alignment && data.alignment.caughtUp === false && (
           <div className="mt-3 p-3 rounded border text-sm leading-relaxed" style={{ borderColor: 'var(--line)', color: 'var(--dim)' }}>

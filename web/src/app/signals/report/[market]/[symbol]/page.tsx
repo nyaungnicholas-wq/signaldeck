@@ -16,26 +16,7 @@ import { ago, fmtPrice, fmtTs } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import CandleChart from "@/components/symbol/CandleChart";
-import {
-  PageHero,
-  StatTile,
-  Gauge,
-  Reveal,
-  MiniBar,
-  AnimatedNumber,
-} from "@/components/ui/Kit";
-
-const KIND_LABEL: Record<string, string> = {
-  trend21: "TREND REGIME (21d)",
-  liquidity21: "LIQUIDITY REGIME (21d)",
-  vol21: "VOLATILITY REGIME (monthly)",
-  vol63: "VOLATILITY REGIME (quarterly)",
-  prediction: "CALIBRATED PREDICTION",
-  composite: "COMPOSITE SIGNAL SCORE",
-  breakout: "BREAKOUT",
-  anomaly: "UNUSUAL ACTIVITY",
-  overview: "SIGNAL OVERVIEW",
-};
+import { PageHero, StatTile, Gauge, Reveal, MiniBar } from "@/components/ui/Kit";
 
 function pct(x: number | undefined, dec = 1): string {
   return x == null ? "—" : `${(x * 100).toFixed(dec)}%`;

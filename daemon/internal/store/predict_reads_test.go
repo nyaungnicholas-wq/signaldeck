@@ -32,17 +32,82 @@ func TestLatestPredictionAndUnresolvedQueue(t *testing.T) {
 		t.Fatalf("LatestPrediction = %+v, %v, %v", p, ok, err)
 	}
 
+	// A row is only offered once a bar exists at/after its target, so give the
+	// symbol forward bars past both predictions' horizons.
+	const hs = int64(100) // horizon seconds used by this test's arithmetic
+	if err := st.UpsertBars(ctx, []md.Bar{
+		{SymbolID: sym.ID, TF: md.TF1d, Ts: 1000 + hs, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1},
+		{SymbolID: sym.ID, TF: md.TF1d, Ts: 2000 + hs, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1},
+	}); err != nil {
+		t.Fatalf("upsert bars: %v", err)
+	}
+
 	// Both rows pend; the cutoff hides the newer one.
-	pend, err := st.UnresolvedPredictions(ctx, md.H1d, 1500, 10)
+	pend, err := st.UnresolvedPredictions(ctx, md.H1d, 1500, hs, 10)
 	if err != nil || len(pend) != 1 || pend[0].Ts != 1000 || pend[0].Prob != 0.60 {
 		t.Fatalf("UnresolvedPredictions cutoff = %+v, %v", pend, err)
 	}
 	if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, 1000, 0.01); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	pend, err = st.UnresolvedPredictions(ctx, md.H1d, 5000, 10)
+	pend, err = st.UnresolvedPredictions(ctx, md.H1d, 5000, hs, 10)
 	if err != nil || len(pend) != 1 || pend[0].Ts != 2000 {
 		t.Fatalf("resolved row still pending: %+v, %v", pend, err)
+	}
+}
+
+// TestUnresolvedPredictionsSkipsSymbolsWithNoForwardBar pins the head-of-line
+// fix: a prediction on a symbol whose bars stopped can never be graded, and it
+// must not occupy a slot in the oldest-first batch. 992 such rows (WBA, PARA,
+// MRO and other delisted tickers) were consuming two thirds of every pass.
+func TestUnresolvedPredictionsSkipsSymbolsWithNoForwardBar(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	const hs = int64(100)
+
+	dead, _ := st.UpsertSymbol(ctx, "WBA", md.Stocks, "Walgreens")
+	live, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+
+	// The dead symbol's prediction is OLDER, so oldest-first ordering would put
+	// it first if it were offered at all.
+	for _, p := range []struct {
+		id int64
+		ts int64
+	}{{dead.ID, 1000}, {live.ID, 2000}} {
+		if err := st.UpsertPrediction(ctx, Prediction{SymbolID: p.id,
+			Horizon: md.H1d, Ts: p.ts, RawProb: 0.5, CalProb: 0.5, NUsed: 1}); err != nil {
+			t.Fatalf("upsert prediction: %v", err)
+		}
+	}
+	// Bars stop BEFORE the dead symbol's target; the live one has a forward bar.
+	if err := st.UpsertBars(ctx, []md.Bar{
+		{SymbolID: dead.ID, TF: md.TF1d, Ts: 1000, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1},
+		{SymbolID: live.ID, TF: md.TF1d, Ts: 2000 + hs, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1},
+	}); err != nil {
+		t.Fatalf("upsert bars: %v", err)
+	}
+
+	pend, err := st.UnresolvedPredictions(ctx, md.H1d, 9000, hs, 10)
+	if err != nil {
+		t.Fatalf("UnresolvedPredictions: %v", err)
+	}
+	if len(pend) != 1 {
+		t.Fatalf("got %d pending rows, want 1 — the ungradable row must be skipped, not queued", len(pend))
+	}
+	if pend[0].SymbolID != live.ID {
+		t.Fatalf("queued symbol %d, want the live one (%d)", pend[0].SymbolID, live.ID)
+	}
+
+	// It is skipped, NOT resolved: the outcome is genuinely unknown and the row
+	// must stay on the books.
+	var n int
+	if err := st.DB().QueryRow(
+		`SELECT COUNT(*) FROM prediction_outcomes WHERE symbol_id=? AND resolved_at IS NULL`,
+		dead.ID).Scan(&n); err != nil {
+		t.Fatalf("count dead rows: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("the ungradable row was altered (%d unresolved rows left); it must be preserved", n)
 	}
 }
 

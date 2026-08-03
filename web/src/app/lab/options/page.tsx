@@ -8,7 +8,7 @@ import {
   type VolEdgeResult,
 } from "@/lib/api";
 import ErrorState from "@/components/ErrorState";
-import { PageHero, StatTile } from "@/components/ui/Kit";
+import { PageHero } from "@/components/ui/Kit";
 
 const pct = (v: number | undefined, digits = 1) =>
   v == null || !isFinite(v) ? "—" : `${(v * 100).toFixed(digits)}%`;

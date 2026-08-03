@@ -10,7 +10,7 @@ import {
 } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
-import { PageHero, StatTile, Reveal, MiniBar } from "@/components/ui/Kit";
+import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
 
 export default function MarketBreadthPage() {
   const [data, setData] = useState<MarketRegimesPayload | null>(null);

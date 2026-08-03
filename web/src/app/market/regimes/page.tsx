@@ -13,14 +13,7 @@ import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ExportMenu from "@/components/ExportMenu";
-import {
-  Reveal,
-  AnimatedNumber,
-  Gauge,
-  StatTile,
-  PageHero,
-  MiniBar,
-} from "@/components/ui/Kit";
+import { Reveal, StatTile, PageHero, MiniBar } from "@/components/ui/Kit";
 
 const KIND_ORDER = ["trend21", "liquidity21", "vol21"] as const;
 
@@ -28,12 +21,6 @@ const KIND_TITLES: Record<string, string> = {
   trend21: "TREND",
   liquidity21: "LIQUIDITY",
   vol21: "VOLATILITY",
-};
-
-const KIND_SUBTITLES: Record<string, string> = {
-  trend21: "Directional regime persistence",
-  liquidity21: "Volume regime classification",
-  vol21: "Monthly volatility regime",
 };
 
 const SHOW_N = 12;

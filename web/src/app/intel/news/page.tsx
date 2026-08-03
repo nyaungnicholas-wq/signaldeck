@@ -259,7 +259,7 @@ export default function NewsPage() {
           ) : (
             <Reveal>
               <div>
-                {visible.map((item, i) => (
+                {visible.map((item) => (
                   <NewsRow key={item.id} item={item} maxScore={maxScore} />
                 ))}
               </div>

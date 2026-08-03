@@ -720,7 +720,7 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 		// identical grading rules is the entire point of tracking the
 		// benchmark as a predictor.
 		for _, hh := range []md.Horizon{h, benchmarkHorizon(h)} {
-			pending, err := w.St.UnresolvedPredictions(ctx, hh, now-horizonSecs(h), 1500)
+			pending, err := w.St.UnresolvedPredictions(ctx, hh, now-horizonSecs(h), horizonSecs(h), 1500)
 			if err != nil {
 				return "", err
 			}

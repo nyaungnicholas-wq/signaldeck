@@ -1,14 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ago } from "@/lib/format";
 import PagePurpose from "@/components/PagePurpose";
 import OpportunityList, { type TopRow } from "@/components/desk/OpportunityList";
 import RecommendationCard, { type Recommendation } from "@/components/desk/RecommendationCard";
 import AgentPanel from "@/components/desk/AgentPanel";
 import AuditTrail from "@/components/desk/AuditTrail";
 import WorldModelPanel from "@/components/desk/WorldModelPanel";
-import { PageHero, StatTile, Reveal, AnimatedNumber, DeltaBadge, Spark } from "@/components/ui/Kit";
+import { PageHero, StatTile } from "@/components/ui/Kit";
 
 interface TopResponse {
   note: string;

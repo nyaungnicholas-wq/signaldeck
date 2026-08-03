@@ -191,6 +191,42 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 			fmt.Sprintf("%s failed integrity check (removed, previous generations kept): %v", filepath.Base(target), verr))
 		return "", fmt.Errorf("backup integrity check failed, corrupt copy removed, no rotation: %w", verr)
 	}
+	// quick_check above proves STRUCTURE. It does not prove the copy still has
+	// the accountability record in it — see verifyContent. Same H8 ordering as
+	// the structural check: fail before prune() and before meta advances, so a
+	// gutted copy never rotates away a good generation or moves
+	// backup_last_ts past the last KNOWN-GOOD backup.
+	//
+	// A failed live count reads as 0, which verifyContent treats as "unknown"
+	// and skips the staleness comparison — not knowing how many rows there
+	// should be is not evidence that the backup is short.
+	var liveLedger int64
+	_ = w.St.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM prediction_ledger`).Scan(&liveLedger)
+	if cerr := verifyContent(ctx, target, liveLedger); cerr != nil {
+		// Quarantine rather than delete: a backup that failed verification is
+		// the evidence for WHY it failed, and it is the only artifact of that
+		// run. Kept outside w.Dir so prune() never sees it.
+		qdir := filepath.Join(filepath.Dir(w.Dir), "quarantine", "backups-"+time.Now().Format("20060102"))
+		moved := "removed"
+		if mkErr := os.MkdirAll(qdir, 0o755); mkErr == nil {
+			dest := filepath.Join(qdir, filepath.Base(target))
+			if os.Rename(target, dest) == nil {
+				moved = "quarantined in " + qdir
+			} else {
+				os.Remove(target) //nolint:errcheck
+			}
+		} else {
+			os.Remove(target) //nolint:errcheck
+		}
+		_ = w.St.InsertDQ(ctx, md.DQEvent{
+			Ts:     time.Now().Unix(),
+			Kind:   "backup_gutted",
+			Detail: fmt.Sprintf("%s passed quick_check but failed CONTENT verification (%s, previous generations NOT rotated): %v", filepath.Base(target), moved, cerr),
+		})
+		w.page(ctx, "SignalDeck backup FAILED — accountability record missing",
+			fmt.Sprintf("%s is structurally valid but substantively empty (%s): %v", filepath.Base(target), moved, cerr))
+		return "", fmt.Errorf("backup content verification failed, copy %s, no rotation: %w", moved, cerr)
+	}
 	pruned, perr := w.prune(w.Dir)
 	detail := fmt.Sprintf("backup %s (%.1f MB), pruned %d old", filepath.Base(target), float64(st.Size())/(1024*1024), pruned)
 	if perr != nil {

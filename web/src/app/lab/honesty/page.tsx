@@ -10,10 +10,9 @@ import Explainer from "@/components/honesty/Explainer";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
 import HelpTip from "@/components/HelpTip";
 import ProOnly from "@/components/ProOnly";
-import { PageHero, StatTile, Reveal, AnimatedNumber, DeltaBadge, Spark, Gauge, MiniBar } from "@/components/ui/Kit";
+import { PageHero, StatTile } from "@/components/ui/Kit";
 
 export default function HonestyPage() {
   const [horizon, setHorizon] = useState<Horizon>("1d");

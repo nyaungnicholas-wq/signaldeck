@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type PairsStudyPayload, type PairsArm, type PairsCostLevel } from "@/lib/api";
+import { api, type PairsStudyPayload, type PairsCostLevel } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
-import HelpTip from "@/components/HelpTip";
 import ProOnly from "@/components/ProOnly";
-import { PageHero, StatTile, Reveal, DeltaBadge, MiniBar, Gauge, Spark, AnimatedNumber } from "@/components/ui/Kit";
+import { PageHero, StatTile, Reveal, DeltaBadge, MiniBar, AnimatedNumber } from "@/components/ui/Kit";
 
 const pct = (v: number) => `${(v * 100 >= 0 ? "+" : "") + (v * 100).toFixed(3)}%`;
 const pctPlain = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -151,7 +150,7 @@ export default function PairsPage() {
                 </tr>
               </thead>
               <tbody>
-                {[zero.coint, zero.random, zero.worst].map((a, i) => (
+                {[zero.coint, zero.random, zero.worst].map((a) => (
                   <tr key={a.arm}>
                     <td className="py-2 mono">{a.arm}</td>
                     <td className="py-2 text-right tnum">{a.trades.toLocaleString()}</td>

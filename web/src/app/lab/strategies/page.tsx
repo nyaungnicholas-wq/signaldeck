@@ -26,7 +26,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useViewMode } from "@/components/Plain";
-import { PageHero, Reveal, StatTile } from "@/components/ui/Kit";
+import { PageHero, Reveal } from "@/components/ui/Kit";
 
 interface Selected {
   symbol: string;

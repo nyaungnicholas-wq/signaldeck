@@ -30,7 +30,7 @@ import { fmtTs } from "@/lib/format";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
 import Skeleton from "@/components/Skeleton";
-import { PageHero, Reveal, DeltaBadge, AnimatedNumber, MiniBar, StatTile } from "@/components/ui/Kit";
+import { PageHero, Reveal, StatTile } from "@/components/ui/Kit";
 
 // ── pure helpers ──────────────────────────────────────────────────────────
 
@@ -390,9 +390,6 @@ export default function ResearchPage() {
     </main>
   );
 }
-
-const PURPOSE =
-  "The engine's beliefs about its own discoveries: every hypothesis carries a fixed prior, an auditable evidence chain (historical era grades, live replications, self-attacks), and a Bayesian posterior. Backtest evidence is survivor-universe history — labeled and penalized, never passed off as a live record.";
 
 function HypRow({
   h,

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { api, notifyStatus, pollMs, POLL_FAST, type AlertRow, type NotifyStatusResponse } from "@/lib/api";
-import { PageHero, StatTile, Reveal, AnimatedNumber } from "@/components/ui/Kit";
+import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
@@ -46,7 +46,9 @@ export default function ActivityPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [unseenOnly, setUnseenOnly] = useState(false);
   const [kindFilter, setKindFilter] = useState<string | null>(null);
-  const [deliveries, setDeliveries] = useState<NotifyStatusResponse | null>(null);
+  // Fetched but not rendered yet — keep the setter so the poll below stays a
+  // real request, and drop the unread binding.
+  const [, setDeliveries] = useState<NotifyStatusResponse | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -210,7 +212,7 @@ export default function ActivityPage() {
 
       {grouped.length > 0 && (
         <div className="relative ml-4 border-l border-[color:var(--dim)] border-opacity-20">
-          {grouped.map(([day, dayRows], gi) => (
+          {grouped.map(([day, dayRows]) => (
             <Reveal key={day} className="mb-6">
               <div className="panel p-3 mb-4 text-xs font-bold uppercase tracking-wider" style={{ color: "var(--hud)" }}>{day}</div>
               {dayRows.map((row, ri) => {

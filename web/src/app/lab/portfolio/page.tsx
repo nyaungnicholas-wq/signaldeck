@@ -3,12 +3,11 @@
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import SummaryBar from "@/components/portfolio/SummaryBar";
 import LogForm from "@/components/portfolio/LogForm";
 import PositionsTable from "@/components/portfolio/PositionsTable";
 import CorrelationPanel from "@/components/portfolio/CorrelationPanel";
 import usePortfolio from "@/hooks/usePortfolio";
-import { PageHero, StatTile, Reveal, AnimatedNumber, DeltaBadge, MiniBar, Spark, Gauge } from "@/components/ui/Kit";
+import { PageHero, StatTile } from "@/components/ui/Kit";
 
 export default function PortfolioPage() {
   const { pf, pfErr, watch, retry, forcePoll, corr, corrErr, corrRefreshing, loadCorr } = usePortfolio();

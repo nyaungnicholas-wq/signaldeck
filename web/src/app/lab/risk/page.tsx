@@ -1,6 +1,6 @@
 "use client";
 
-import { Reveal, PageHero, StatTile, AnimatedNumber, DeltaBadge, MiniBar, Gauge, Spark } from "@/components/ui/Kit";
+import { PageHero, StatTile } from "@/components/ui/Kit";
 import ErrorState from "@/components/ErrorState";
 import PortfolioBuilder from "@/components/risk/PortfolioBuilder";
 import RiskResults from "@/components/risk/RiskResults";

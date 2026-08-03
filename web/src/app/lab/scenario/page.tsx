@@ -5,8 +5,7 @@ import { api, type ScenarioResult } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
-import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
+import { PageHero } from "@/components/ui/Kit";
 
 interface FactorDef {
   id: string;

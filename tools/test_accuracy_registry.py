@@ -17,10 +17,43 @@ import os
 import re
 import random
 import sqlite3
+import subprocess
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def _repo_visible_bash():
+    """Return a bash that can actually read files under this repo, or None.
+
+    On Windows `shutil.which("bash")` finds C:\\Windows\\System32\\bash.exe --
+    the WSL launcher -- before Git Bash, because System32 comes first on PATH.
+    WSL has its own filesystem, so a `C:/Users/...` path does not exist there and
+    a sourced prelude dies before it can hash anything. The symptom was
+    `sha256_of` returning an empty string and the protocol-document gate failing
+    on this machine only, while the shell function itself was correct.
+
+    Candidates are probed, not guessed: whichever bash can stat a file in this
+    repo is the one that can run the script under test.
+    """
+    import shutil
+    probe = os.path.abspath(__file__).replace("\\", "/")
+    candidates = [shutil.which("bash")]
+    for env in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        root = os.environ.get(env)
+        if root:
+            candidates.append(os.path.join(root, "Git", "bin", "bash.exe"))
+    for cand in candidates:
+        if not cand or not os.path.exists(cand):
+            continue
+        try:
+            r = subprocess.run([cand, "-c", f'test -f "{probe}"'], timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode == 0:
+            return cand
+    return None
 
 from accuracy_registry import (  # noqa: E402
     CALIBRATION_BINS,
@@ -1636,11 +1669,10 @@ class ProtocolDocumentGateTest(unittest.TestCase):
         actually computes a digest, so run it and compare against hashlib.
         """
         import hashlib
-        import shutil
         import subprocess
-        bash = shutil.which("bash")
+        bash = _repo_visible_bash()
         if not bash:
-            self.skipTest("bash not available")
+            self.skipTest("no bash that can see the repo path")
         target = os.path.normpath(
             os.path.join(os.path.dirname(self.script), "..", "PREREGISTRATION.md"))
         if not os.path.exists(target):

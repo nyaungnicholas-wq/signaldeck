@@ -19,7 +19,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
-import { PageHero, StatTile as KitStatTile, Reveal } from "@/components/ui/Kit";
+import { PageHero, StatTile as KitStatTile } from "@/components/ui/Kit";
 
 const FAMILY_LABEL: Record<string, string> = {
   smart_money: "Smart money",
@@ -279,7 +279,7 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
         />
       ) : (
         <ul style={{ borderTop: "1px solid var(--border)" }}>
-          {rows.map((r, i) => (
+          {rows.map((r) => (
             <li key={`${r.market}:${r.symbol}`} style={{ borderBottom: "1px solid var(--border)" }}>
               <button
                 type="button"

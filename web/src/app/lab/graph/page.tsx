@@ -1,12 +1,11 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { api, type GraphResult } from "@/lib/api";
-import PagePurpose from "@/components/PagePurpose";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import RippleGraph, { kindColor, kindLabel, otherEndpoint } from "@/components/graph/RippleGraph";
-import { PageHero, StatTile, Reveal, DeltaBadge, MiniBar, Gauge, Spark, AnimatedNumber } from "@/components/ui/Kit";
+import { PageHero, StatTile } from "@/components/ui/Kit";
 
 const MIN_CORR_MIN = 0.3;
 const MIN_CORR_MAX = 0.9;

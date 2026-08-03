@@ -63,9 +63,36 @@ $backlog  = Join-Path $repo 'ops\IMPROVE_BACKLOG.md'
 $bash     = 'C:\Program Files\Git\bin\bash.exe'
 New-Item -ItemType Directory -Force (Split-Path $journal) | Out-Null
 
+# Append one line, retrying while the file is locked.
+#
+# `Add-Content` raises a NON-terminating error when another process holds the
+# handle, so `try { Add-Content ... } catch { }` never caught anything: the
+# error went straight to the error stream and the line was gone. 188 ledger
+# lines were lost that way, and the empty catch made it look handled.
+#
+# FileShare.ReadWrite so a tail/reader cannot block the writer, and a bounded
+# retry so a genuinely stuck file fails loudly instead of silently.
+function AppendLine([string]$path, [string]$line) {
+  for ($attempt = 1; $attempt -le 8; $attempt++) {
+    try {
+      $fs = [IO.FileStream]::new($path, [IO.FileMode]::Append, [IO.FileAccess]::Write,
+                                 [IO.FileShare]::ReadWrite)
+      try {
+        $sw = [IO.StreamWriter]::new($fs, [Text.UTF8Encoding]::new($false))
+        $sw.WriteLine($line); $sw.Flush(); $sw.Dispose()
+      } finally { $fs.Dispose() }
+      return $true
+    } catch {
+      Start-Sleep -Milliseconds (25 * $attempt)
+    }
+  }
+  Write-Warning "AppendLine: gave up writing to $path after 8 attempts; a record was lost"
+  return $false
+}
+
 function Note([string]$event, [hashtable]$data = @{}) {
   $rec = @{ ts = (Get-Date).ToString('o'); event = $event } + $data
-  try { ($rec | ConvertTo-Json -Compress -Depth 6) | Add-Content $journal } catch { }
+  [void](AppendLine $journal ($rec | ConvertTo-Json -Compress -Depth 6))
   Write-Host "[$((Get-Date).ToString('HH:mm:ss'))] $event $($data | ConvertTo-Json -Compress -Depth 3)"
 }
 
@@ -76,13 +103,21 @@ function Note([string]$event, [hashtable]$data = @{}) {
 # a background job leaves State=Completed, so reading job state would have marked
 # every gate green forever and the loop would have "improved" a repo it never
 # actually tested. The sentinel is the only honest channel here.
+# stderr is merged INSIDE the job, at the source. `Receive-Job 2>&1` redirects
+# Receive-Job's own error stream, not the native stderr the job's child process
+# wrote, so a Python SyntaxError reached nobody: 30 consecutive eighty-loop
+# cycles were killed and journalled with an EMPTY diagnostic block while the
+# interpreter was printing the exact line and caret. A loop that cannot see why
+# it failed cannot correct itself, which is the whole point of the loop.
 function Run([string]$name, [string]$body, [int]$timeoutSec = 1800) {
   $out = ''; $code = 1
   $wrapped = [scriptblock]::Create(@"
 param(`$repo)
 Set-Location `$repo
 `$global:LASTEXITCODE = 0
-try { $body } catch { Write-Output "EXCEPTION: `$_"; `$global:LASTEXITCODE = 1 }
+`$ErrorActionPreference = 'Continue'
+try { & { $body } 2>&1 | ForEach-Object { "`$_" } }
+catch { Write-Output "EXCEPTION: `$_"; `$global:LASTEXITCODE = 1 }
 Write-Output "__EXIT__:`$(if (`$null -eq `$global:LASTEXITCODE) { 0 } else { `$global:LASTEXITCODE })"
 "@)
   try {

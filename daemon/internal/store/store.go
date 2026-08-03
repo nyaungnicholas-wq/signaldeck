@@ -977,6 +977,31 @@ func (s *Store) FinishWorkerRun(ctx context.Context, id int64, status, detail st
 	return err
 }
 
+// ReconcileOrphanRuns closes every run left non-terminal by a PREVIOUS process
+// and returns how many it closed. A daemon that dies mid-run leaves its rows at
+// 'running' forever; 77 such rows had accumulated before this existed.
+//
+// They are marked 'orphaned', never 'ok' — the outcome is genuinely unknown —
+// and never deleted: ResearchLoop derives the Bonferroni multiplicity divisor
+// from a max over worker_runs, so dropping a row refunds a look the fleet
+// actually spent and LOOSENS the correction.
+//
+// Only rows started before bootUnix are touched, so this process's own
+// in-flight runs are never mistaken for wreckage.
+func (s *Store) ReconcileOrphanRuns(ctx context.Context, bootUnix int64) (int, error) {
+	res, err := s.w.ExecContext(ctx,
+		`UPDATE worker_runs SET finished_at=?, status='orphaned', detail=?
+		   WHERE status='running' AND started_at < ?`,
+		time.Now().Unix(),
+		fmt.Sprintf("process died mid-run; swept at boot %d", bootUnix),
+		bootUnix)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 // LastWorkerRunAt returns when the named worker last STARTED a run, or the zero
 // time if it never has (or the row has been pruned). It is what lets a calendar
 // worker's NextFire survive a daemon restart: without it, every restart looks

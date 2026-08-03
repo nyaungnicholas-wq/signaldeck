@@ -54,17 +54,35 @@ func (s *Store) LatestPrediction(ctx context.Context, symbolID int64, h md.Horiz
 	return p, err == nil, err
 }
 
-// UnresolvedPredictions returns pending prediction outcomes at/before cutoff.
-func (s *Store) UnresolvedPredictions(ctx context.Context, h md.Horizon, cutoff int64, limit int) ([]struct {
+// UnresolvedPredictions returns pending prediction outcomes at/before cutoff
+// that CAN still be graded — the symbol has at least one daily bar at or after
+// the row's target instant.
+//
+// The existence check is what keeps the queue moving. Rows are ordered oldest
+// first and taken in batches, and 992 rows belonged to symbols whose bars had
+// stopped entirely (WBA, PARA, MRO, JNPR and other delisted tickers). Those can
+// never satisfy the grading predicate, yet being the oldest they occupied two
+// thirds of every batch on every 10-minute pass, so resolvable rows behind them
+// were reached slowly or not at all — classic head-of-line blocking, and the
+// dead set only grows.
+//
+// They are skipped, never resolved and never deleted: the outcome for a symbol
+// that stopped printing bars is genuinely unknown, and inventing one (or
+// dropping the row) would quietly improve the measured record.
+func (s *Store) UnresolvedPredictions(ctx context.Context, h md.Horizon, cutoff, horizonSecs int64, limit int) ([]struct {
 	SymbolID int64
 	Ts       int64
 	Prob     float64
 }, error,
 ) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol_id, ts, prob FROM prediction_outcomes
-		WHERE resolved_at IS NULL AND horizon=? AND ts<=? ORDER BY ts LIMIT ?`,
-		string(h), cutoff, limit)
+		SELECT p.symbol_id, p.ts, p.prob FROM prediction_outcomes p
+		WHERE p.resolved_at IS NULL AND p.horizon=? AND p.ts<=?
+		  AND EXISTS (SELECT 1 FROM bars b
+		              WHERE b.symbol_id = p.symbol_id AND b.tf='1d'
+		                AND b.ts >= p.ts + ?)
+		ORDER BY p.ts LIMIT ?`,
+		string(h), cutoff, horizonSecs, limit)
 	if err != nil {
 		return nil, err
 	}

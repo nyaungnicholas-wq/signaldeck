@@ -96,7 +96,10 @@ $deadline = if ($Hours -le 0) { [datetime]::MaxValue } else { (Get-Date).AddHour
 
 function Ev([string]$event, [hashtable]$data = @{}) {
   $rec = @{ ts = (Get-Date).ToString('o'); event = $event } + $data
-  try { ($rec | ConvertTo-Json -Compress -Depth 6) | Add-Content $events } catch { }
+  # AppendLine comes from selfimprove-loop.ps1 (dot-sourced above): Add-Content
+  # raises a non-terminating error under a file lock, which the empty catch here
+  # never saw, so events vanished into the error stream.
+  [void](AppendLine $events ($rec | ConvertTo-Json -Compress -Depth 6))
   Write-Host "[$((Get-Date).ToString('HH:mm:ss'))] $event $($data | ConvertTo-Json -Compress -Depth 3)"
 }
 

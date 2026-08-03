@@ -17,15 +17,7 @@ import KindChips, {
   type KindOption,
 } from "@/components/signals/insights/KindChips";
 import { evidenceKind, kindLabel, parseEvidence } from "@/components/signals/insights/evidence";
-import {
-  PageHero,
-  StatTile,
-  Reveal,
-  AnimatedNumber,
-  DeltaBadge,
-  Spark,
-  MiniBar,
-} from "@/components/ui/Kit";
+import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
 
 const FEED_LIMIT = 100;
 
@@ -233,7 +225,7 @@ export default function InsightsPage() {
       kinds: kindInfo.counts.size + (kindInfo.unlabeled > 0 ? 1 : 0),
       unlabeled: kindInfo.unlabeled,
     };
-  }, [sorted.length, kindInfo]);
+  }, [insights, sorted.length, kindInfo]);
 
   return (
     <div className="page-enter space-y-4">

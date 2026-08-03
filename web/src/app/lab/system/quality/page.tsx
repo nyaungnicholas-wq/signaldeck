@@ -6,9 +6,8 @@ import { ago, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
 import ProOnly from "@/components/ProOnly";
-import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
+import { PageHero } from "@/components/ui/Kit";
 
 function fmtBytes(n: number): string {
   if (!n) return "0 B";

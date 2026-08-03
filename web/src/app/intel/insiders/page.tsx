@@ -28,6 +28,12 @@ function fmtUSD(v: number): string {
   return `$${v.toFixed(0)}`;
 }
 
+const SortIcon = ({ active, dir }: { active: boolean; dir: SortDir }) => (
+  <svg className={`w-3 h-3 ml-1 inline-block ${active ? "text-[var(--accent)]" : "text-[var(--faint)]"}`} viewBox="0 0 8 8">
+    <polygon points={dir === "asc" ? "4,1 7,6 1,6" : "4,7 7,2 1,2"} fill="currentColor"/>
+  </svg>
+);
+
 export default function InsidersPage() {
   const [rows, setRows] = useState<InsiderTrade[] | null>(null);
   const [note, setNote] = useState("");
@@ -98,12 +104,6 @@ export default function InsidersPage() {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortKey(key); setSortDir("desc"); }
   };
-
-  const SortIcon = ({ active }: { active: boolean }) => (
-    <svg className={`w-3 h-3 ml-1 inline-block ${active ? "text-[var(--accent)]" : "text-[var(--faint)]"}`} viewBox="0 0 8 8">
-      <polygon points={sortDir === "asc" ? "4,1 7,6 1,6" : "4,7 7,2 1,2"} fill="currentColor"/>
-    </svg>
-  );
 
   return (
     <div className="page-enter space-y-4">
@@ -179,12 +179,12 @@ export default function InsidersPage() {
               <table className="v4-table w-full">
                 <thead>
                   <tr className="text-[0.75rem] uppercase tracking-wider" style={{ color: "var(--dim)" }}>
-                    <th onClick={() => toggleSort("symbol")} className="cursor-pointer">Symbol<SortIcon active={sortKey === "symbol"} /></th>
+                    <th onClick={() => toggleSort("symbol")} className="cursor-pointer">Symbol<SortIcon active={sortKey === "symbol"} dir={sortDir} /></th>
                     <th className="text-left">Type</th>
                     <th className="text-left">Insider</th>
                     <th className="text-right">Shares</th>
-                    <th onClick={() => toggleSort("value")} className="cursor-pointer text-right">Value<SortIcon active={sortKey === "value"} /></th>
-                    <th onClick={() => toggleSort("date")} className="cursor-pointer text-right">Filed<SortIcon active={sortKey === "date"} /></th>
+                    <th onClick={() => toggleSort("value")} className="cursor-pointer text-right">Value<SortIcon active={sortKey === "value"} dir={sortDir} /></th>
+                    <th onClick={() => toggleSort("date")} className="cursor-pointer text-right">Filed<SortIcon active={sortKey === "date"} dir={sortDir} /></th>
                   </tr>
                 </thead>
                 <tbody>

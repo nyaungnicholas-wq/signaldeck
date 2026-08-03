@@ -6,7 +6,7 @@ import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import { PageHero, StatTile, Reveal, DeltaBadge, MiniBar } from "@/components/ui/Kit";
+import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
 
 const KNOWN_AGENTS: { name: string; role: string }[] = [
   { name: "crypto-live", role: "streams TickStream's consolidated book at 1Hz" },
@@ -198,7 +198,6 @@ export default function AgentsPage() {
   const nRunning = lastByAgent.filter((r) => r.status === "running").length;
   const nError = lastByAgent.filter((r) => r.status === "error" || r.status === "timeout").length;
   const nOk = lastByAgent.filter((r) => r.status === "ok").length;
-  const lastTs = Math.max(0, ...(runs ?? []).map((r) => r.finishedAt ?? r.startedAt));
 
   return (
     <div className="page-enter space-y-4">

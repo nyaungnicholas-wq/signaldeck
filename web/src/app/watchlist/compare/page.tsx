@@ -5,7 +5,6 @@ import { signalReport, type Market, type SignalReport } from "@/lib/api";
 import { ago, fmtPrice } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
-import { usePeek } from "@/components/CompanyPeek";
 import { Reveal, AnimatedNumber, Spark, PageHero, MiniBar } from "@/components/ui/Kit";
 
 const CONTEXT_ROWS: { label: string; key: string; higherBetter?: boolean; fmt: (c: Record<string, number>) => [number, string] }[] = [

@@ -33,9 +33,17 @@ func (w fakeWorker) Interval() time.Duration                 { return time.Hour 
 func (w fakeWorker) Run(ctx context.Context) (string, error) { return w.fn(ctx) }
 
 // lastRun fetches the newest persisted run for a worker.
-func lastRun(t *testing.T, st *store.Store, name string) (status, detail string, finished bool) {
+//
+// Bookkeeping writes go through the run journal now, so they land shortly AFTER
+// runOnce returns rather than inside it. Every read here waits on a journal
+// barrier first — the same call production code uses for synchronous
+// inspection — so these tests assert on the durable row, not on a race.
+func lastRun(t *testing.T, r *Runner, name string) (status, detail string, finished bool) {
 	t.Helper()
-	runs, err := st.RecentWorkerRuns(context.Background(), 50)
+	if err := r.FlushRunJournal(context.Background()); err != nil {
+		t.Fatalf("flush run journal: %v", err)
+	}
+	runs, err := r.st.RecentWorkerRuns(context.Background(), 50)
 	if err != nil {
 		t.Fatalf("recent runs: %v", err)
 	}
@@ -67,7 +75,7 @@ func TestRunOnce_RecordsFinishAfterRunContextExpired(t *testing.T) {
 	if ctx.Err() == nil {
 		t.Fatal("test setup: run context should be expired")
 	}
-	status, detail, finished := lastRun(t, st, "slow-worker")
+	status, detail, finished := lastRun(t, r, "slow-worker")
 	if !finished {
 		t.Fatal("run was never finished — finish record must survive an expired run context")
 	}
@@ -88,7 +96,7 @@ func TestRunOnce_RecordsErrorOutcome(t *testing.T) {
 	}}
 	r.runOnce(context.Background(), w)
 
-	status, detail, finished := lastRun(t, st, "failing-worker")
+	status, detail, finished := lastRun(t, r, "failing-worker")
 	if !finished || status != "error" || detail != "edgar: status 403" {
 		t.Fatalf("finished=%v status=%q detail=%q, want finished error row", finished, status, detail)
 	}
@@ -104,7 +112,7 @@ func TestRunOnce_RecordsSuccessDetail(t *testing.T) {
 	}}
 	r.runOnce(context.Background(), w)
 
-	status, detail, finished := lastRun(t, st, "ok-worker")
+	status, detail, finished := lastRun(t, r, "ok-worker")
 	if !finished || status != "ok" || detail != "stored 5 holdings" {
 		t.Fatalf("finished=%v status=%q detail=%q, want finished ok row", finished, status, detail)
 	}
@@ -138,7 +146,7 @@ func TestRunOnce_TimeoutIsItsOwnStatus(t *testing.T) {
 	// Parent context stays ALIVE — this is a per-run deadline, not a shutdown.
 	r.runOnce(context.Background(), w)
 
-	status, detail, finished := lastRun(t, st, "hung-worker")
+	status, detail, finished := lastRun(t, r, "hung-worker")
 	if !finished || status != "timeout" {
 		t.Fatalf("finished=%v status=%q, want a finished timeout row (detail=%q)", finished, status, detail)
 	}
@@ -204,7 +212,7 @@ func TestCancelOverdue(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("cancelled run never returned")
 	}
-	status, detail, _ := lastRun(t, st, "overdue-worker")
+	status, detail, _ := lastRun(t, r, "overdue-worker")
 	if status != "timeout" || !strings.Contains(detail, "watchdog") {
 		t.Fatalf("status=%q detail=%q, want a timeout row attributed to the watchdog", status, detail)
 	}
@@ -247,7 +255,7 @@ func TestQuiesceDo_HoldsFleetStill(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("run never resumed after the quiesce window")
 	}
-	if status, _, finished := lastRun(t, st, "gated-worker"); !finished || status != "ok" {
+	if status, _, finished := lastRun(t, r, "gated-worker"); !finished || status != "ok" {
 		t.Fatalf("gated worker status=%q finished=%v, want a normal ok run", status, finished)
 	}
 }

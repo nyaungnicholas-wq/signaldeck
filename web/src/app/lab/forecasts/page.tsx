@@ -19,7 +19,6 @@ import { ago, fmtTs } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
 import ProOnly from "@/components/ProOnly";
 import ReportLink from "@/components/signals/ReportLink";
 import HorizonChips from "@/components/symbol/HorizonChips";
@@ -27,7 +26,7 @@ import ModelRaceCard, { type RaceStats } from "@/components/signals/forecasts/Mo
 import AgreementStrip, { type AgreementEntry } from "@/components/signals/forecasts/AgreementStrip";
 import ModelExplainer from "@/components/signals/forecasts/ModelExplainer";
 import ScoreEvolution from "@/components/signals/forecasts/ScoreEvolution";
-import { PageHero, StatTile } from "@/components/ui/Kit";
+import { PageHero } from "@/components/ui/Kit";
 
 interface Selected {
   symbol: string;
@@ -339,7 +338,7 @@ export default function ForecastPage() {
               <AgreementStrip entries={agreementEntries} horizon={effHorizon} />
 
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                {LANES.map((l, i) => (
+                {LANES.map((l) => (
                   <ModelRaceCard
                     key={`${selKey}:${effHorizon}:${l.key}`}
                     name={l.name}

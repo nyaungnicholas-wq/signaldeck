@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { anomalies, pollMs, POLL_DEFAULT, type AnomaliesResponse, type AnomalyRow, type Market } from "@/lib/api";
-import { useViewMode } from "@/components/Plain";
-import { Reveal, AnimatedNumber, StatTile, PageHero, MiniBar, DeltaBadge } from "@/components/ui/Kit";
+import { Reveal, StatTile, PageHero, MiniBar, DeltaBadge } from "@/components/ui/Kit";
 
 type KindFilter = AnomalyRow["kind"] | undefined;
 type MarketFilter = Market | undefined;
@@ -30,7 +29,6 @@ function getSeverityColor(z: number): string {
 }
 
 export default function UnusualPage() {
-  const mode = useViewMode();
   const [kind, setKind] = useState<KindFilter>(undefined);
   const [market, setMarket] = useState<MarketFilter>(undefined);
   const [searchInput, setSearchInput] = useState("");
@@ -216,7 +214,7 @@ export default function UnusualPage() {
 
       {unknownSymbol && (
         <div className="panel p-6 text-center" style={{ color: "var(--dim)" }}>
-          <p>No symbol "{symbolQ}" in the tracked universe</p>
+          <p>No symbol &ldquo;{symbolQ}&rdquo; in the tracked universe</p>
           <p className="text-[0.75rem] mt-2">Search matches exact tickers only.</p>
         </div>
       )}
