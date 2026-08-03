@@ -1,27 +1,12 @@
 "use client";
-
-// LAB › GRAPH — lived at /markets/graph until the 2026-08-02 merge folded the
-// duplicate /markets tree away; the old URL still 307s here.
-//
-// KNOWLEDGE-GRAPH RIPPLE — the neighborhood around ONE symbol: what it
-// co-moves with (price correlation) and who holds it alongside other names
-// (13F co-ownership). A radial <RippleGraph/> shows the shape; the adjacency
-// table below is the accessible, exact readout (network graphs read poorly to
-// screen readers). Honesty rule: the daemon's caveat is rendered verbatim —
-// co-movement is not causation, pairs need ≥30 shared trading days, and
-// supplier/customer edges aren't in this data.
-
 import { useEffect, useMemo, useState } from "react";
 import { api, type GraphResult } from "@/lib/api";
 import PagePurpose from "@/components/PagePurpose";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import RippleGraph, {
-  kindColor,
-  kindLabel,
-  otherEndpoint,
-} from "@/components/graph/RippleGraph";
+import RippleGraph, { kindColor, kindLabel, otherEndpoint } from "@/components/graph/RippleGraph";
+import { PageHero, StatTile, Reveal, DeltaBadge, MiniBar, Gauge, Spark, AnimatedNumber } from "@/components/ui/Kit";
 
 const MIN_CORR_MIN = 0.3;
 const MIN_CORR_MAX = 0.9;
@@ -32,17 +17,9 @@ interface Query {
 }
 
 export default function GraphPage() {
-  // Draft controls vs. the committed query: the "Map" button (or Enter in the
-  // symbol box) commits BOTH the symbol and the threshold in one go, so the
-  // graph never re-fetches mid-drag on the slider.
   const [draftSymbol, setDraftSymbol] = useState("NVDA");
   const [minCorr, setMinCorr] = useState(0.5);
   const [query, setQuery] = useState<Query>({ symbol: "NVDA", minCorr: 0.5 });
-
-  // Result + error are KEYED to the committed query (same idiom as the
-  // forecasts page): switching symbols/threshold changes queryKey, so the
-  // derived `data`/`err` below fall back to null and the loading state shows —
-  // no setState inside the effect, no cascading renders.
   const [result, setResult] = useState<{ key: string; data: GraphResult } | null>(null);
   const [errState, setErrState] = useState<{ key: string; msg: string } | null>(null);
   const [retryTick, setRetryTick] = useState(0);
@@ -73,25 +50,18 @@ export default function GraphPage() {
     setQuery({ symbol: s, minCorr });
   };
 
-  // Derived: only data/error matching the CURRENT query counts; anything stale
-  // reads as null and the page shows the loading skeleton.
   const data = result && result.key === queryKey ? result.data : null;
   const err = errState && errState.key === queryKey ? errState.msg : null;
 
-  // Guarded reads — the daemon serializes empty Go slices as JSON null.
   const edges = useMemo(() => data?.neighborhood.Edges ?? [], [data]);
   const comparedWith = data?.comparedWith ?? [];
   const center = data?.center || data?.neighborhood.Center || query.symbol;
 
-  // Rows for the adjacency table + the two derived counts the header chips show.
-  // Neighbors are derived from the drawn edges so the count matches the viz.
   const rows = useMemo(() => [...edges].sort((a, b) => b.Weight - a.Weight), [edges]);
   const drawnSet = useMemo(
     () => new Set(edges.map((e) => otherEndpoint(center, e).toUpperCase())),
     [edges, center],
   );
-  // Symbols the daemon lists in the neighborhood but which have no drawn link at
-  // the current threshold — surfaced honestly rather than hidden.
   const belowThreshold = useMemo(() => {
     const nbrs = data?.neighborhood.Neighbors ?? [];
     return nbrs.filter((nb) => !drawnSet.has(nb.toUpperCase())).length;
@@ -102,23 +72,13 @@ export default function GraphPage() {
   const empty = data !== null && edges.length === 0;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* header */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">KNOWLEDGE-GRAPH RIPPLE</h1>
-        <span className="chip mono">{center}</span>
-        <span className="chip tnum" style={{ color: "var(--dim)" }}>
-          min corr ≥ {query.minCorr.toFixed(2)}
-        </span>
-      </div>
-
-      <PagePurpose
-        id="markets-graph"
-        text="The ripple around one symbol — what it co-moves with (correlation) and who holds it alongside others (13F co-ownership)."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Knowledge-Graph Ripple"
+        subtitle="Explore the neighborhood around a symbol: price correlation and 13F co-ownership links."
       />
 
-      {/* controls: symbol + min-correlation + Map */}
-      <section className="panel">
+      <div className="panel">
         <div className="panel-h">MAP A SYMBOL</div>
         <div className="flex flex-wrap items-end gap-x-5 gap-y-3 px-4 py-3 text-[0.75rem]">
           <label className="flex flex-col gap-1">
@@ -172,7 +132,7 @@ export default function GraphPage() {
             higher threshold = fewer, tighter correlation links
           </span>
         </div>
-      </section>
+      </div>
 
       {loading && <Skeleton lines={6} label={`mapping the ripple around ${query.symbol}`} />}
 
@@ -196,8 +156,14 @@ export default function GraphPage() {
 
       {data !== null && !empty && (
         <>
-          {/* the viz */}
-          <section className="panel">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatTile label="LINKS" value={rows.length} i={0} />
+            <StatTile label="NEIGHBORS" value={drawnSet.size} i={1} />
+            {belowThreshold > 0 && <StatTile label="BELOW THRESHOLD" value={belowThreshold} i={2} />}
+            {comparedWith.length > 0 && <StatTile label="COMPARED WITH" value={comparedWith.length} i={3} />}
+          </div>
+
+          <section className="hud-panel">
             <div className="panel-h flex-wrap gap-2">
               RIPPLE
               <span className="chip tnum">
@@ -230,7 +196,6 @@ export default function GraphPage() {
               <RippleGraph center={center} edges={edges} />
             </div>
 
-            {/* legend + edge-kind counts (colour is labelled, never alone) */}
             <div
               className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 text-[0.75rem]"
               style={{ borderTop: "1px solid var(--border)", color: "var(--dim)" }}
@@ -278,7 +243,6 @@ export default function GraphPage() {
             </div>
           </section>
 
-          {/* adjacency table — the accessible source of truth */}
           <section className="panel">
             <div className="panel-h flex-wrap gap-2">
               ADJACENCY
@@ -339,7 +303,6 @@ export default function GraphPage() {
             </div>
           </section>
 
-          {/* honest caveat — rendered verbatim from the daemon */}
           <div
             className="flex flex-col gap-1 px-1 text-[0.75rem] leading-relaxed"
             style={{ color: "var(--faint)" }}

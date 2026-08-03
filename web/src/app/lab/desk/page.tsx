@@ -1,12 +1,5 @@
 "use client";
 
-// AI RESEARCH DESK — OVERVIEW. The desk in one view: the ranked opportunity
-// shortlist re-aims a selected-symbol column holding that symbol's explainable
-// recommendation, its independent multi-agent panel, and its reproducible audit
-// trail; the world model spans the full width beneath. This page only fetches +
-// composes — every panel keeps its own honesty (loading skeletons, inline
-// errors, and available:false reasons rendered verbatim). Polls every 30s.
-
 import { useEffect, useState } from "react";
 import { ago } from "@/lib/format";
 import PagePurpose from "@/components/PagePurpose";
@@ -15,6 +8,7 @@ import RecommendationCard, { type Recommendation } from "@/components/desk/Recom
 import AgentPanel from "@/components/desk/AgentPanel";
 import AuditTrail from "@/components/desk/AuditTrail";
 import WorldModelPanel from "@/components/desk/WorldModelPanel";
+import { PageHero, StatTile, Reveal, AnimatedNumber, DeltaBadge, Spark } from "@/components/ui/Kit";
 
 interface TopResponse {
   note: string;
@@ -34,10 +28,6 @@ export default function DeskOverviewPage() {
   const [activeRaw, setActiveRaw] = useState<{ symbol: string; market: string } | null>(null);
   const [retryTick, setRetryTick] = useState(0);
 
-  // Effective active symbol, derived in render (no setState-in-effect seeding):
-  // an explicit pick wins; otherwise the first opportunity row; otherwise an
-  // MSFT fallback once the shortlist has resolved (or failed), so the detail
-  // column always loads.
   const rows = top?.rows;
   const firstRow = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
   const active =
@@ -48,16 +38,12 @@ export default function DeskOverviewPage() {
         ? { symbol: "MSFT", market: "stocks" }
         : null);
 
-  // Recommendation is keyed to this string so switching picks shows a loading
-  // state without a synchronous setState inside the effect (the app's idiom),
-  // and the fetch effect can depend on the primitive key rather than the object.
   const activeKey = active ? `${active.symbol}|${active.market}` : "";
   const [recoState, setRecoState] = useState<{ key: string; d: Recommendation } | null>(null);
   const [recoErrState, setRecoErrState] = useState<{ key: string; msg: string } | null>(null);
   const reco = recoState && recoState.key === activeKey ? recoState.d : null;
   const recoErr = recoErrState && recoErrState.key === activeKey ? recoErrState.msg : null;
 
-  // Opportunity shortlist — fetch + 30s poll.
   useEffect(() => {
     let alive = true;
     const load = () =>
@@ -79,9 +65,6 @@ export default function DeskOverviewPage() {
     };
   }, []);
 
-  // Recommendation for the active symbol — fetch + 30s poll; retryTick re-kicks.
-  // Depends on the primitive activeKey so it re-runs only when the symbol truly
-  // changes, not on every shortlist poll that hands back a fresh object.
   useEffect(() => {
     if (!activeKey) return;
     let alive = true;
@@ -105,40 +88,64 @@ export default function DeskOverviewPage() {
   }, [activeKey, retryTick]);
 
   const updatedTs = reco?.available ? reco.asOf : 0;
+  const topRows = top?.rows || [];
+  const totalOpportunities = topRows.length;
+  const bestOpportunity = topRows[0];
+  const worstOpportunity = topRows[totalOpportunities - 1];
+  const latestUpdate = updatedTs ? new Date(updatedTs).toLocaleString() : "—";
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* header */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-1">
-        <h1 className="text-sm font-extrabold tracking-[0.18em]">AI RESEARCH DESK</h1>
-        <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          measured research, not advice
-        </span>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {active ? (
-            <span className="chip tnum">
-              {active.symbol} <span style={{ color: "var(--faint)" }}>{active.market}</span>
-            </span>
-          ) : null}
-          <span className="chip tnum">{updatedTs ? `updated ${ago(updatedTs)}` : "—"}</span>
-        </div>
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="AI RESEARCH DESK"
+        subtitle="An always-on research desk: live world model, explainable recommendations, multi-agent panel, and reproducible audit trail — measured, not advice."
+        live={!!updatedTs}
+      />
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile
+          label="Total Opportunities"
+          value={totalOpportunities}
+          glow="hud"
+          i={0}
+        />
+        <StatTile
+          label="Best Opportunity"
+          value={bestOpportunity?.symbol || "—"}
+          sub={bestOpportunity?.score ? `Score: ${bestOpportunity.score.toFixed(2)}` : undefined}
+          glow="up"
+          i={1}
+        />
+        <StatTile
+          label="Worst Opportunity"
+          value={worstOpportunity?.symbol || "—"}
+          sub={worstOpportunity?.score ? `Score: ${worstOpportunity.score.toFixed(2)}` : undefined}
+          glow="down"
+          i={2}
+        />
+        <StatTile
+          label="Last Updated"
+          value={latestUpdate}
+          glow="hud"
+          i={3}
+        />
       </div>
 
-      {/* what this page answers, in plain English */}
       <PagePurpose
         id="desk-overview"
         text="An always-on research desk: a live world model, explainable recommendations, a multi-agent panel, and a reproducible audit trail — measured, not advice."
       />
 
-      {/* opportunity shortlist (top) + the selected-symbol detail column */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)]">
-        <OpportunityList
-          rows={top?.rows ?? null}
-          note={top?.note ?? ""}
-          err={topErr}
-          activeKey={activeKey}
-          onSelect={(symbol, market) => setActiveRaw({ symbol, market })}
-        />
+        <div className="hud-panel">
+          <OpportunityList
+            rows={top?.rows ?? null}
+            note={top?.note ?? ""}
+            err={topErr}
+            activeKey={activeKey}
+            onSelect={(symbol, market) => setActiveRaw({ symbol, market })}
+          />
+        </div>
 
         <div className="flex flex-col gap-4">
           {active ? (
@@ -158,7 +165,6 @@ export default function DeskOverviewPage() {
         </div>
       </div>
 
-      {/* world model — full width */}
       <WorldModelPanel />
     </div>
   );

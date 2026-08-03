@@ -15,6 +15,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
+import { PageHero, StatTile } from "@/components/ui/Kit";
 
 const AMBER = "var(--accent)";
 const AMBER_BG = "rgba(251,191,36,.10)";
@@ -89,7 +90,6 @@ function InlineError({ msg }: { msg: string }) {
 }
 
 /* ─────────────────────────── HEADER ─────────────────────────── */
-
 function StatusHeader({ status }: { status: AIStatus | null }) {
   const enabled = status?.enabled === true;
   const stats = status?.stats;
@@ -98,62 +98,75 @@ function StatusHeader({ status }: { status: AIStatus | null }) {
   const nearCap = cap > 0 && calls > cap * 0.8;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 px-1">
-      <h1 className="text-sm font-bold tracking-[0.18em]">AI AGENTS</h1>
-      {status === null ? (
-        <span className="chip" style={{ color: "var(--faint)" }}>
-          loading…
-        </span>
-      ) : (
-        <>
-          <span
-            className="chip flex items-center gap-1.5"
-            style={{
-              color: enabled ? "var(--ok)" : "var(--bad)",
-              borderColor: enabled ? "var(--ok)" : "var(--bad)",
-            }}
-          >
+    <div className="space-y-4">
+      <PageHero
+        title="AI Agents"
+        live={enabled}
+        subtitle="Read-only agents that answer from your stored market data - grounded, cited, hard-capped on spend."
+        right={
+          <div className="flex items-center gap-2">
             <span
-              aria-hidden="true"
-              className="inline-block h-2 w-2 rounded-full"
+              className="chip flex items-center gap-1.5"
               style={{
-                background: enabled ? "var(--ok)" : "var(--bad)",
-                boxShadow: enabled ? "0 0 8px rgba(52,211,153,.7)" : undefined,
-              }}
-            />
-            {enabled ? "enabled" : "disabled"}
-          </span>
-          {status.model && (
-            <span className="chip tnum" title="active model">
-              {status.model}
-            </span>
-          )}
-          {cap > 0 && (
-            <span
-              className="chip tnum"
-              aria-label={`AI calls today ${calls} of cap ${cap}`}
-              style={{
-                color: nearCap ? "var(--warn)" : undefined,
-                borderColor: nearCap ? "var(--warn)" : undefined,
+                color: enabled ? "var(--ok)" : "var(--bad)",
+                borderColor: enabled ? "var(--ok)" : "var(--bad)",
               }}
             >
-              calls today: {calls} / cap {cap}
+              <span
+                aria-hidden="true"
+                className="inline-block h-2 w-2 rounded-full live-dot"
+                style={{
+                  background: enabled ? "var(--ok)" : "var(--bad)",
+                }}
+              />
+              {enabled ? "enabled" : "disabled"}
             </span>
-          )}
-          {stats && stats.lastCallTs > 0 && (
-            <span className="chip tnum" style={{ color: "var(--faint)" }}>
-              last {ago(stats.lastCallTs)}
-            </span>
-          )}
-          {stats?.lastError ? (
-            <span
-              className="chip"
-              style={{ color: "var(--bad)", borderColor: "var(--bad)" }}
-            >
-              last error: {stats.lastError.slice(0, 48)}
-            </span>
-          ) : null}
-        </>
+            {status === null ? (
+              <span className="chip" style={{ color: "var(--faint)" }}>
+                loading…
+              </span>
+            ) : stats?.lastError ? (
+              <span
+                className="chip"
+                style={{ color: "var(--bad)", borderColor: "var(--bad)" }}
+              >
+                last error: {stats.lastError.slice(0, 48)}
+              </span>
+            ) : null}
+          </div>
+        }
+      />
+      {status !== null && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatTile
+            label="Calls Today"
+            i={0}
+            value={calls}
+            sub={`of cap ${cap}`}
+            glow={nearCap ? "down" : "hud"}
+          />
+          <StatTile
+            label="Cap Used"
+            i={1}
+            value={cap > 0 ? (calls / cap) * 100 : 0}
+            decimals={0}
+            suffix="%"
+            glow={nearCap ? "down" : "up"}
+          />
+          <StatTile
+            label="Model"
+            i={2}
+            value={status.model || "-"}
+            glow="accent"
+            sub="active model"
+          />
+          <StatTile
+            label="Last Call"
+            i={3}
+            value={stats && stats.lastCallTs > 0 ? ago(stats.lastCallTs) : "-"}
+            sub="most recent agent run"
+          />
+        </div>
       )}
     </div>
   );
@@ -182,7 +195,7 @@ function AnalystPanel({ enabled }: { enabled: boolean }) {
   const softError = brief?.error;
 
   return (
-    <section className="panel">
+    <section className="panel hud-panel reveal-item" style={{ "--i": 0 } as React.CSSProperties}>
       <div className="panel-h">
         MARKET ANALYST
         <span className="tnum ml-auto" style={{ color: "var(--faint)" }}>
@@ -318,7 +331,7 @@ function ChatPanel({ enabled }: { enabled: boolean }) {
   const canAsk = input.trim().length > 0 && !awaiting && enabled;
 
   return (
-    <section className="panel">
+    <section className="panel reveal-item" style={{ "--i": 1 } as React.CSSProperties}>
       <div className="panel-h">
         CHAT
         <span className="tnum ml-auto" style={{ color: "var(--faint)" }}>
@@ -493,7 +506,7 @@ function FilingPanel({ enabled }: { enabled: boolean }) {
   const softError = result?.error;
 
   return (
-    <section className="panel">
+    <section className="panel reveal-item" style={{ "--i": 2 } as React.CSSProperties}>
       <div className="panel-h">
         FILINGMIND
         <span className="tnum ml-auto" style={{ color: "var(--faint)" }}>
@@ -580,7 +593,7 @@ function FilingPanel({ enabled }: { enabled: boolean }) {
 function ChartersPanel({ charters }: { charters: Record<string, string> | undefined }) {
   const entries = charters ? Object.entries(charters) : [];
   return (
-    <section className="panel">
+    <section className="panel reveal-item" style={{ "--i": 3 } as React.CSSProperties}>
       <div className="panel-h">
         AGENT CHARTERS
         <span className="tnum ml-auto" style={{ color: "var(--faint)" }}>
@@ -661,7 +674,7 @@ export default function AIPage() {
   const enabled = status?.enabled === true;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="page-enter flex flex-col gap-4">
       <StatusHeader status={status} />
 
       {/* STAGE 3: what this page answers, in plain English */}
@@ -671,7 +684,7 @@ export default function AIPage() {
       />
 
       {/* honesty framing — always visible */}
-      <section className="panel">
+      <section className="panel reveal-item" style={{ "--i": 4 } as React.CSSProperties}>
         <div className="panel-h">HOW THESE AGENTS STAY HONEST</div>
         <p
           className="px-4 py-3 text-[0.75rem] leading-relaxed"

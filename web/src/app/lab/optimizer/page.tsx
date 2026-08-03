@@ -1,31 +1,16 @@
 "use client";
 
-// /lab/optimizer — long-only mean-variance (Markowitz) allocation over a set of
-// symbols, showing the two classic corners side by side: the MINIMUM-VARIANCE
-// mix (lowest wobble, expected return not used) and the MAXIMUM-SHARPE mix (best
-// return-per-unit-risk). Each corner renders as horizontal allocation bars so
-// concentration is obvious at a glance.
-//
-// HONESTY is the brand, so the page refuses to dress up its inputs: expected
-// returns are the DESCRIPTIVE trailing mean daily return — printed as such, in
-// daily units, with the daemon's caveat shown verbatim underneath. Min-variance
-// genuinely never sees an expected return (the engine leaves ExpRet/Sharpe at
-// zero), so this card omits them rather than print a misleading 0. On-demand,
-// not polled: the optimizer is user-scoped (it reads YOUR tracked symbols' daily
-// bars), so signed-out requests 401 and the page says to sign in.
-
 import { useCallback, useMemo, useRef, useState } from "react";
 import { api, type OptimizeResult, type OptWeights } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
 import AllocationBars from "@/components/optimizer/AllocationBars";
+import { Reveal, PageHero, StatTile, DeltaBadge, MiniBar, Spark, Gauge, AnimatedNumber } from "@/components/ui/Kit";
 
 const DEFAULT_SYMBOLS = "NVDA,AAPL,SPY,QQQ,TSLA,AMD";
 const LOOKBACKS = [60, 90, 120, 180, 252, 365];
 
-// ── formatting (all engine stats are DAILY; render them as such) ──────────
 function fmtRetDaily(v: number): string {
   if (!isFinite(v)) return "—";
   const p = v * 100;
@@ -41,7 +26,7 @@ function fmtSharpe(v: number): string {
 }
 function retColor(v: number): string {
   if (!isFinite(v) || v === 0) return "var(--text)";
-  return v > 0 ? "var(--ok)" : "var(--bad)";
+  return v > 0 ? "var(--bid)" : "var(--ask)";
 }
 
 const METHOD_LABEL: Record<string, string> = {
@@ -50,7 +35,6 @@ const METHOD_LABEL: Record<string, string> = {
   equal_weight_fallback: "equal-weight fallback",
 };
 
-/** Parse the comma-separated input into a clean, de-duplicated ticker list. */
 function parseSymbols(raw: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -77,7 +61,6 @@ function Stat({ label, value, color }: { label: string; value: string; color?: s
   );
 }
 
-/** One optimized corner: title + stat row + allocation bars + engine note. */
 function OptCard({
   title,
   subtitle,
@@ -87,7 +70,6 @@ function OptCard({
   title: string;
   subtitle: string;
   result: OptWeights;
-  /** max-Sharpe shows ExpRet + Sharpe; min-variance omits them (never computed). */
   showReturn: boolean;
 }) {
   const fallback = result.Method === "equal_weight_fallback";
@@ -113,7 +95,6 @@ function OptCard({
           {subtitle}
         </p>
 
-        {/* stat row — mono/.tnum, daily units */}
         <div className="flex flex-wrap gap-x-8 gap-y-3">
           {showReturn && (
             <Stat
@@ -128,7 +109,6 @@ function OptCard({
           )}
         </div>
 
-        {/* horizontal allocation bars */}
         <AllocationBars symbols={result.Symbols ?? []} weights={result.Weights ?? []} />
 
         {result.Note ? (
@@ -150,7 +130,6 @@ export default function OptimizerPage() {
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
-  // Bumped on every run so a slow in-flight request can't overwrite a newer one.
   const runIdRef = useRef(0);
 
   const parsed = useMemo(() => parseSymbols(symbolsInput), [symbolsInput]);
@@ -165,7 +144,7 @@ export default function OptimizerPage() {
     setErr(null);
     try {
       const res = await api.optimize(syms.join(","), lookback);
-      if (rid !== runIdRef.current) return; // superseded
+      if (rid !== runIdRef.current) return;
       setData(res);
       setErr(null);
     } catch (e) {
@@ -177,9 +156,6 @@ export default function OptimizerPage() {
     }
   }, [symbolsInput, lookback]);
 
-  // Symbols the daemon actually used vs. what was asked for (it optimizes only
-  // tracked symbols with overlapping history) — surfaced so a silently dropped
-  // ticker never masquerades as if it were in the mix.
   const dropped = useMemo(() => {
     if (!data || data.gated || !data.symbols) return [];
     const used = new Set<string>();
@@ -199,25 +175,21 @@ export default function OptimizerPage() {
   const showResults = data !== null && !gated;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* header row */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">OPTIMIZER</h1>
-        {showResults && (
-          <>
-            <span className="chip tnum">{data.commonDays} common days</span>
-            <span className="chip tnum">{data.lookback}d lookback</span>
-            <span className="chip tnum">{data.symbols.length} symbols</span>
-          </>
-        )}
-      </div>
-
-      <PagePurpose
-        id="lab-optimizer"
-        text="Long-only mean-variance allocation over a set of symbols — minimum-variance vs maximum-Sharpe."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Portfolio Optimizer"
+        subtitle="Compare minimum-variance and maximum-Sharpe allocations over your tracked symbols."
       />
 
-      {/* controls */}
+      {showResults && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatTile label="Common Days" value={data.commonDays} i={0} />
+          <StatTile label="Lookback" value={data.lookback} suffix="d" i={1} />
+          <StatTile label="Symbols" value={data.symbols.length} i={2} />
+          <StatTile label="Min-Variance Vol" value={data.minVariance.Vol * 100} suffix="%" decimals={2} i={3} />
+        </div>
+      )}
+
       <section className="panel">
         <div className="panel-h">UNIVERSE</div>
         <form
@@ -302,7 +274,6 @@ export default function OptimizerPage() {
         </form>
       </section>
 
-      {/* initial — nothing run yet */}
       {!submitted && (
         <EmptyState
           message="Ready to optimize."
@@ -310,10 +281,8 @@ export default function OptimizerPage() {
         />
       )}
 
-      {/* loading */}
       {submitted && loading && <Skeleton lines={6} label="running the optimizer" />}
 
-      {/* error */}
       {submitted && !loading && err !== null && (
         <ErrorState
           message={
@@ -334,7 +303,6 @@ export default function OptimizerPage() {
         />
       )}
 
-      {/* gated — daemon answered but couldn't optimize honestly */}
       {submitted && !loading && err === null && gated && (
         <EmptyState
           message="Not enough overlapping history to optimize."
@@ -345,7 +313,6 @@ export default function OptimizerPage() {
         />
       )}
 
-      {/* results */}
       {showResults && (
         <>
           {dropped.length > 0 && (
@@ -370,7 +337,6 @@ export default function OptimizerPage() {
             />
           </div>
 
-          {/* commonDays + the daemon's caveat, verbatim */}
           <p className="px-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             <span className="tnum">{data.commonDays}</span> common trading days over a{" "}
             <span className="tnum">{data.lookback}</span>-day lookback. {data.note}

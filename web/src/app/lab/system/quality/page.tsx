@@ -1,8 +1,5 @@
 "use client";
 
-// /quality — data-quality coverage + incident log. Polls api.quality().
-// Honest framing: if it's not on this page, we didn't measure it.
-
 import { Fragment, useEffect, useState } from "react";
 import { api, pollMs, POLL_DEFAULT, type Quality, type DQEvent, type DataStats } from "@/lib/api";
 import { ago, fmtDate } from "@/lib/format";
@@ -11,8 +8,8 @@ import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
 import ProOnly from "@/components/ProOnly";
+import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
 
-// fmtBytes renders a byte count in the tightest sensible unit.
 function fmtBytes(n: number): string {
   if (!n) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -27,11 +24,10 @@ function fmtBytes(n: number): string {
 
 const TFS = ["1m", "1h", "1d"] as const;
 
-// Freshness thresholds (seconds) per timeframe: fresher than this = --ok.
 const FRESH_S: Record<string, number> = {
-  "1m": 30 * 60, // 30m for minute bars
+  "1m": 30 * 60,
   "1h": 2 * 3600,
-  "1d": 2 * 3600, // 2h for daily bars
+  "1d": 2 * 3600,
 };
 
 function freshColor(tf: string, to: number): string {
@@ -111,7 +107,6 @@ export default function QualityPage() {
         });
     };
     load();
-    // Coverage/incidents move on ingest cadence — the default tier is plenty.
     const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
@@ -123,26 +118,10 @@ export default function QualityPage() {
   const events = [...(data?.events ?? [])].sort((a, b) => b.ts - a.ts);
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Header row */}
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-sm font-bold tracking-[0.16em]">DATA QUALITY</h1>
-        <span className="chip tnum">{symbols.length} symbols</span>
-        <span
-          className="chip tnum"
-          style={events.length ? { color: "var(--warn)" } : undefined}
-        >
-          {events.length} incidents
-        </span>
-        <span className="text-[0.75rem] italic" style={{ color: "var(--faint)" }}>
-          If it&apos;s not on this page, we didn&apos;t measure it.
-        </span>
-      </div>
-
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="lab-system-quality"
-        text="Is the stored data complete and fresh — and what went wrong lately? If it is not measured on this page, it was not measured."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="DATA QUALITY"
+        subtitle="Is the stored data complete and fresh — and what went wrong lately? If it is not measured on this page, it was not measured."
       />
 
       {err && !data && (
@@ -164,7 +143,6 @@ export default function QualityPage() {
 
       {data && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[3fr_2fr]">
-          {/* Coverage table */}
           <section className="panel">
             <div className="panel-h">BAR COVERAGE — WHAT WE ACTUALLY HAVE</div>
             {symbols.length === 0 ? (
@@ -174,7 +152,7 @@ export default function QualityPage() {
               />
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-[0.75rem]">
+                <table className="v4-table w-full text-[0.75rem]">
                   <thead>
                     <tr
                       className="text-left text-[0.75rem] tracking-wide"
@@ -255,8 +233,6 @@ export default function QualityPage() {
                     ))}
                   </tbody>
                 </table>
-                {/* The freshness threshold is load-bearing — visible caption,
-                    not a hover-only tooltip. */}
                 <p
                   className="px-4 pb-3 pt-2 text-[0.75rem]"
                   style={{ color: "var(--faint)" }}
@@ -268,7 +244,6 @@ export default function QualityPage() {
             )}
           </section>
 
-          {/* Incidents */}
           <section className="panel h-fit">
             <div className="panel-h">
               INCIDENTS
@@ -292,7 +267,6 @@ export default function QualityPage() {
         </div>
       )}
 
-      {/* Data growth — dataset accounting (storage-permanence wave). */}
       <section className="panel">
         <div className="panel-h">
           DATA GROWTH — NOTHING IS THROWN AWAY
@@ -343,11 +317,9 @@ export default function QualityPage() {
         {!statsErr && !stats && <Skeleton lines={3} label="loading data stats" />}
         {stats && (
           <div className="px-4 py-3">
-          {/* Table-by-table accounting is PRO detail — the size chips and
-              retention line above stay visible in both modes. */}
           <ProOnly summary="Show table-by-table detail">
           <div className="overflow-x-auto">
-            <table className="w-full text-[0.75rem]">
+            <table className="v4-table w-full text-[0.75rem]">
               <thead>
                 <tr
                   className="text-left text-[0.75rem] tracking-wide"

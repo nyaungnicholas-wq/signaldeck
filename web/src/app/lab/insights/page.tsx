@@ -1,13 +1,5 @@
 "use client";
 
-// SIGNALS → INSIGHTS — the AI-written feed, rebuilt on the Benzinga-WIIM
-// pattern with SignalDeck honesty: every headline keeps its "not a
-// forecast" line ON the item, and every item exposes the receipts — the
-// stored data blob it was generated from — via the EVIDENCE expander.
-// Kind chips (data.kind) filter SERVER-SIDE through /api/insights?kind=;
-// counts are read from the latest polled window. Malformed/empty evidence
-// blobs simply render no expander (parseEvidence never throws).
-
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { api, pollMs, POLL_DEFAULT, type Insight } from "@/lib/api";
@@ -16,7 +8,6 @@ import ReportLink from "@/components/signals/ReportLink";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
 import { useViewMode } from "@/components/Plain";
 import EvidencePanel from "@/components/signals/insights/EvidencePanel";
 import TrendingTokensStrip from "@/components/signals/insights/TrendingTokensStrip";
@@ -26,11 +17,18 @@ import KindChips, {
   type KindOption,
 } from "@/components/signals/insights/KindChips";
 import { evidenceKind, kindLabel, parseEvidence } from "@/components/signals/insights/evidence";
+import {
+  PageHero,
+  StatTile,
+  Reveal,
+  AnimatedNumber,
+  DeltaBadge,
+  Spark,
+  MiniBar,
+} from "@/components/ui/Kit";
 
 const FEED_LIMIT = 100;
 
-/** Infer the market from the symbol shape — insight rows don't carry it.
-    Pairs like BTC/USD contain "/" → crypto; bare tickers → stocks. */
 function inferMarket(symbol: string): "crypto" | "stocks" {
   return symbol.includes("/") ? "crypto" : "stocks";
 }
@@ -39,15 +37,15 @@ function byTsDesc(a: Insight, b: Insight): number {
   return (b.ts ?? 0) - (a.ts ?? 0);
 }
 
-function InsightCard({ ins }: { ins: Insight }) {
+function InsightCard({ ins, i }: { ins: Insight; i: number }) {
   const mode = useViewMode();
   const isMarket = ins.scope === "market";
   const symbol = ins.symbol ?? "";
   const kind = evidenceKind(parseEvidence(ins.data));
   return (
     <article
-      className="px-4 py-4 transition-colors duration-150 hover:bg-[var(--panel2)]"
-      style={{ borderBottom: "1px solid var(--border)" }}
+      className="panel reveal-item px-4 py-4"
+      style={{ "--i": i } as React.CSSProperties}
     >
       <div className="flex flex-wrap items-center gap-2">
         {isMarket ? (
@@ -94,9 +92,7 @@ function InsightCard({ ins }: { ins: Insight }) {
           {ins.body}
         </p>
       )}
-      {/* the receipts: labeled bullets from the raw evidence blob */}
       <EvidencePanel data={ins.data} />
-      {/* honesty line — stays on EVERY item, chip-visible, never a tooltip */}
       <p className="mt-2 text-[0.75rem]" style={{ color: "var(--faint)" }}>
         {mode === "simple"
           ? "written from stored data — a description, not a forecast"
@@ -107,10 +103,8 @@ function InsightCard({ ins }: { ins: Insight }) {
 }
 
 export default function InsightsPage() {
-  // base feed: unfiltered window — drives header chips + kind counts + "all"
   const [insights, setInsights] = useState<Insight[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // kind feed: server-side ?kind= results when a real kind chip is active
   const [kind, setKind] = useState<string>(ALL_KINDS);
   const [kindRows, setKindRows] = useState<Insight[] | null>(null);
   const [kindErr, setKindErr] = useState<string | null>(null);
@@ -118,8 +112,6 @@ export default function InsightsPage() {
 
   const serverKind = kind !== ALL_KINDS && kind !== UNLABELED;
 
-  // resets live here (event handler), not in the effect — avoids the
-  // set-state-in-effect cascade; the effect below only fetches.
   const selectKind = (k: string) => {
     setKind(k);
     setKindRows(null);
@@ -141,7 +133,6 @@ export default function InsightsPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    // POLL_DEFAULT tier — managed loop (hidden-tab pause, failure backoff).
     const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
@@ -149,7 +140,6 @@ export default function InsightsPage() {
     };
   }, [retryTick]);
 
-  // server-side kind query — re-fetched (and re-polled) per selected kind
   useEffect(() => {
     if (!serverKind) return;
     let alive = true;
@@ -166,7 +156,6 @@ export default function InsightsPage() {
           setKindErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    // POLL_DEFAULT tier — same cadence as the unfiltered window above.
     const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
@@ -176,7 +165,6 @@ export default function InsightsPage() {
 
   const sorted = useMemo(() => [...(insights ?? [])].sort(byTsDesc), [insights]);
 
-  // distinct kinds present in the window, with counts (+ the untagged rest)
   const kindInfo = useMemo(() => {
     const counts = new Map<string, number>();
     let unlabeled = 0;
@@ -216,7 +204,6 @@ export default function InsightsPage() {
         title: "insights whose evidence blob carries no kind tag — filtered locally",
       });
     }
-    // keep the active chip visible even if its kind rolled out of the window
     if (serverKind && !kindInfo.counts.has(kind)) {
       opts.push({
         key: kind,
@@ -228,7 +215,6 @@ export default function InsightsPage() {
     return opts;
   }, [sorted.length, kindInfo, serverKind, kind, kindRows]);
 
-  // null = the active server-side kind query is still loading
   const visible: Insight[] | null = useMemo(() => {
     if (serverKind) return kindRows === null ? null : [...kindRows].sort(byTsDesc);
     if (kind === UNLABELED)
@@ -239,42 +225,70 @@ export default function InsightsPage() {
   const loading = insights === null && err === null;
   const hardError = insights === null && err !== null;
 
-  return (
-    <div className="flex flex-col gap-4">
-      {/* header row */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">INSIGHTS</h1>
-        {insights !== null && (
-          <span className="chip tnum">{sorted.length} stored</span>
-        )}
-        {insights !== null && sorted.length > 0 && (
-          <span className="chip tnum">latest {ago(sorted[0].ts)}</span>
-        )}
-        {err !== null && insights !== null && (
-          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
-            poll failed — showing last data
-          </span>
-        )}
-      </div>
+  const latestTs = sorted.length > 0 ? sorted[0].ts : null;
+  const stats = useMemo(() => {
+    if (!insights) return { total: 0, kinds: 0, unlabeled: 0 };
+    return {
+      total: sorted.length,
+      kinds: kindInfo.counts.size + (kindInfo.unlabeled > 0 ? 1 : 0),
+      unlabeled: kindInfo.unlabeled,
+    };
+  }, [sorted.length, kindInfo]);
 
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="signals-insights"
-        text="What has the AI written about your symbols and the market — daily briefings and notes, grounded only in data the platform actually stored? Expand any item's evidence to see the exact numbers behind the sentence."
+  return (
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Insights"
+        subtitle="AI-generated notes and briefings from stored data, showing measured tendencies — not forecasts."
+        right={
+          <div className="flex items-center gap-2">
+            {insights !== null && (
+              <span className="chip tnum">{stats.total} stored</span>
+            )}
+            {latestTs !== null && (
+              <span className="chip tnum">latest {ago(latestTs)}</span>
+            )}
+            {err !== null && insights !== null && (
+              <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
+                poll failed — showing last data
+              </span>
+            )}
+          </div>
+        }
       />
 
-      {/* what this page is */}
-      <section className="panel">
-        <div className="panel-h">HOW TO READ THIS FEED</div>
-        <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          Every insight is generated from stored data with the numbers inline — headlines state
-          measured tendencies, never forecasts. The evidence expander on each item shows the raw
-          inputs it was written from; kind chips re-query the daemon server-side, never hide rows.
-        </p>
-      </section>
+      {insights !== null && sorted.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-3">
+          <StatTile
+            label="Total Insights"
+            value={stats.total}
+            i={0}
+          />
+          <StatTile
+            label="Distinct Kinds"
+            value={stats.kinds}
+            i={1}
+          />
+          <StatTile
+            label="Unlabeled"
+            value={stats.unlabeled}
+            sub={stats.unlabeled > 0 ? `${Math.round((stats.unlabeled / stats.total) * 100)}% of total` : undefined}
+            i={2}
+          />
+        </div>
+      )}
 
-      {/* fleet-wide headline attention — a context strip above the feed;
-          renders nothing until tokens exist (absent beats a dead panel) */}
+      <Reveal className="grid gap-3">
+        <div className="panel reveal-item" style={{ "--i": 0 } as React.CSSProperties}>
+          <div className="panel-h">HOW TO READ THIS FEED</div>
+          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            Every insight is generated from stored data with the numbers inline — headlines state
+            measured tendencies, never forecasts. The evidence expander on each item shows the raw
+            inputs it was written from; kind chips re-query the daemon server-side, never hide rows.
+          </p>
+        </div>
+      </Reveal>
+
       <TrendingTokensStrip />
 
       {loading && <Skeleton lines={4} label="loading insights" />}
@@ -291,7 +305,7 @@ export default function InsightsPage() {
       )}
 
       {insights !== null && (
-        <section className="panel">
+        <section className="hud-panel">
           <div className="panel-h">
             FEED
             {serverKind && kindRows !== null && (
@@ -340,11 +354,11 @@ export default function InsightsPage() {
               />
             )
           ) : (
-            <div>
-              {visible.map((ins) => (
-                <InsightCard key={ins.id} ins={ins} />
+            <Reveal className="grid gap-3">
+              {visible.map((ins, i) => (
+                <InsightCard key={ins.id} ins={ins} i={i} />
               ))}
-            </div>
+            </Reveal>
           )}
         </section>
       )}

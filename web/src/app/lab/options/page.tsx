@@ -1,21 +1,5 @@
 "use client";
 
-// /lab/options — where SignalDeck's one validated forecast becomes a tradeable
-// number. Direction is a coin flip here (proven six ways); VOLATILITY REGIME is
-// the forecast that measured 69.7-76.0% walk-forward, and options are the only
-// instrument where a volatility view IS the position.
-//
-// Two panels, in the order they matter:
-//   VOL EDGE     — the regime forecast expressed as a vol LEVEL from this
-//                  symbol's own history, compared against a market implied vol
-//                  the USER types in (there is no options feed on this
-//                  platform, and the page says so). Every verdict shows its
-//                  assumed variance risk premium, the premium at which it
-//                  flips, and whether it survives the regime call being wrong.
-//   CALCULATOR   — plain Black-Scholes-Merton value, Greeks, and implied vol.
-//
-// Request-driven: nothing polls, and no number appears until the user runs it.
-
 import { useRef, useState } from "react";
 import {
   optionPrice,
@@ -24,7 +8,7 @@ import {
   type VolEdgeResult,
 } from "@/lib/api";
 import ErrorState from "@/components/ErrorState";
-import PagePurpose from "@/components/PagePurpose";
+import { PageHero, StatTile } from "@/components/ui/Kit";
 
 const pct = (v: number | undefined, digits = 1) =>
   v == null || !isFinite(v) ? "—" : `${(v * 100).toFixed(digits)}%`;
@@ -34,8 +18,8 @@ const money = (v: number | undefined) =>
   v == null || !isFinite(v) ? "—" : `${v < 0 ? "-" : ""}$${Math.abs(v).toFixed(2)}`;
 
 const VERDICT_COLOR: Record<string, string> = {
-  "iv-rich": "var(--ok)",
-  "iv-cheap": "var(--ok)",
+  "iv-rich": "var(--bid)",
+  "iv-cheap": "var(--ask)",
   "in-line": "var(--dim)",
 };
 
@@ -130,7 +114,6 @@ function Caveat({ text }: { text: string }) {
 }
 
 export default function OptionsPage() {
-  // ── vol-edge controls ──
   const [symbol, setSymbol] = useState("NVDA");
   const [iv, setIv] = useState("0.35");
   const [days, setDays] = useState("91");
@@ -140,7 +123,6 @@ export default function OptionsPage() {
   const [edgeErr, setEdgeErr] = useState<string | null>(null);
   const edgeReq = useRef(0);
 
-  // ── calculator controls ──
   const [spot, setSpot] = useState("100");
   const [strike, setStrike] = useState("100");
   const [calcDays, setCalcDays] = useState("30");
@@ -206,20 +188,13 @@ export default function OptionsPage() {
   const trade = edge?.trade;
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">OPTIONS</h1>
-        <span className="chip">vol edge</span>
-        {edge && <span className="chip mono">{edge.symbol}</span>}
-      </div>
-
-      <PagePurpose
-        id="lab-options"
-        text="Price options and Greeks, and compare a market implied volatility against what this symbol's own history says volatility will actually do — the one forecast on this platform with a measured edge."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="OPTIONS"
+        subtitle="Compare your broker's implied volatility against this symbol's own history and price options with Black-Scholes-Merton."
       />
 
-      {/* ───────────────────────── VOL EDGE ───────────────────────── */}
-      <section className="panel">
+      <section className="hud-panel">
         <div className="panel-h">
           VOL EDGE
           <span
@@ -278,7 +253,6 @@ export default function OptionsPage() {
 
         {edge && (
           <>
-            {/* the honest disclosure, always in view with a result */}
             <p
               className="px-4 pb-3 text-[0.72rem] leading-relaxed"
               style={{ color: "var(--dim)" }}
@@ -301,7 +275,7 @@ export default function OptionsPage() {
                   label="regime call"
                   value={f.regime.toUpperCase()}
                   note={f.tier}
-                  color={f.regime === "elevated" ? "var(--bad)" : "var(--ok)"}
+                  color={f.regime === "elevated" ? "var(--ask)" : "var(--bid)"}
                 />
                 <Stat label="conviction" value={num(f.conviction, 2)} note={`vol rank ${num(f.rank, 2)}`} />
                 <Stat
@@ -386,7 +360,7 @@ export default function OptionsPage() {
             {exp?.driftWarning && (
               <p
                 className="mx-4 mb-3 rounded-lg border px-3 py-2 text-[0.74rem] leading-relaxed"
-                style={{ borderColor: "var(--border)", color: "var(--bad)" }}
+                style={{ borderColor: "var(--border)", color: "var(--ask)" }}
               >
                 {exp.driftWarning}
               </p>
@@ -400,7 +374,6 @@ export default function OptionsPage() {
         )}
       </section>
 
-      {/* ───────────────────────── CALCULATOR ───────────────────────── */}
       <section className="panel">
         <div className="panel-h">
           CALCULATOR

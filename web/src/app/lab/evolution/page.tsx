@@ -1,18 +1,5 @@
 "use client";
 
-// MODEL EVOLUTION — how the learned model changes over time. Three honest
-// surfaces from two daemon endpoints: (1) the once-per-day deterministic
-// SELF-AUDIT (calibration drift / prediction bias / factor-IC checks, detail
-// strings rendered verbatim — they carry the thresholds and n); (2) per-leg
-// FACTOR SKILL trend (measured IC over time, "insufficient" points excluded
-// and counted, never plotted); (3) LEARNED WEIGHTS per regime cell (adaptive
-// blend-weight snapshots as step-lines). Most series have a single point
-// today — the page renders a dot and says "trend needs time" instead of
-// faking a line. Gaps are honest gaps: nothing is interpolated.
-//
-// Ages are computed at fetch time (fetchedAt is captured with the payload)
-// so the render body stays pure — no Date.now() during render.
-
 import { useEffect, useState } from "react";
 import {
   modelEvolution,
@@ -33,10 +20,8 @@ import PagePurpose from "@/components/PagePurpose";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
 import Skeleton from "@/components/Skeleton";
+import { PageHero, Reveal, StatTile, DeltaBadge, MiniBar, Spark, Gauge, AnimatedNumber } from "@/components/ui/Kit";
 
-// ── pure helpers (no wall-clock reads — callers pass fetchedAt) ───────────
-
-/** Seconds → "37s ago" / "5m ago" / "3h ago" / "2d ago" (pure). */
 function fmtAge(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   if (s < 60) return `${s}s ago`;
@@ -55,8 +40,6 @@ function icColor(v: number): string {
   return "var(--dim)";
 }
 
-/** Status pill wording + color. "insufficient" reads "withheld" on purpose —
- *  a below-gate check is an honest unknown, not a pass or a failure. */
 const STATUS_UI: Record<AuditStatus, { label: string; color: string }> = {
   ok: { label: "ok", color: "var(--ok)" },
   degrading: { label: "degrading", color: "var(--bad)" },
@@ -72,9 +55,6 @@ const HORIZON_WORD: Record<string, string> = {
   "1w": "1-week",
 };
 
-/** Metric key → mode-aware name: "calibration:1d" reads "1-day calibration"
- *  in SIMPLE mode, the raw key in PRO. Factor legs reuse the composite
- *  ledger's plain-English leg names. */
 function metricName(metric: string, mode: ViewMode): string {
   if (mode === "pro") return metric;
   const i = metric.indexOf(":");
@@ -86,7 +66,6 @@ function metricName(metric: string, mode: ViewMode): string {
   return metric.replace(/[_:]+/g, " ");
 }
 
-/** The three audit families, in display order. */
 const FAMILIES: { prefix: string; title: string; sub: string }[] = [
   {
     prefix: "calibration:",
@@ -128,7 +107,6 @@ export default function EvolutionPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    // The model evolves on worker cadence (daily audit, slow weight moves).
     const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
@@ -139,14 +117,11 @@ export default function EvolutionPage() {
   const loading = (!audit || !evo) && !err;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* header */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <h1 className="text-sm font-extrabold tracking-[0.18em]">MODEL EVOLUTION</h1>
-        <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          how the learned model changes over time — measured, not narrated
-        </span>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="MODEL EVOLUTION"
+        subtitle="How the learned model changes over time — measured, not narrated"
+        right={
           <span className="chip tnum">
             {loading ? (
               <span style={{ color: "var(--faint)" }}>loading…</span>
@@ -156,8 +131,8 @@ export default function EvolutionPage() {
               "—"
             )}
           </span>
-        </div>
-      </div>
+        }
+      />
 
       <PagePurpose
         id="lab-evolution"
@@ -182,7 +157,6 @@ export default function EvolutionPage() {
           <FactorSkillPanel series={evo.factorSkill} days={evo.days} />
           <WeightsPanel series={evo.weights} days={evo.days} />
 
-          {/* HONESTY FOOTER — both API notes verbatim + the track label */}
           <section
             className="panel flex flex-col gap-2 p-4 text-[0.75rem]"
             style={{ color: "var(--faint)" }}
@@ -199,8 +173,6 @@ export default function EvolutionPage() {
     </div>
   );
 }
-
-// ── SELF-AUDIT ────────────────────────────────────────────────────────────
 
 function SelfAuditPanel({ audit, fetchedAt }: { audit: SelfAudit; fetchedAt: number }) {
   const mode = useViewMode();
@@ -272,7 +244,6 @@ function FindingRow({
       <span className="shrink-0 text-[0.75rem]" style={{ color: "var(--text)" }}>
         {metricName(f.metric, mode)}
       </span>
-      {/* detail VERBATIM — it carries the thresholds and the n */}
       <span className="min-w-0 flex-1 basis-60 text-[0.75rem]" style={{ color: "var(--dim)" }}>
         {f.detail}
       </span>
@@ -282,8 +253,6 @@ function FindingRow({
     </div>
   );
 }
-
-// ── FACTOR SKILL TREND ────────────────────────────────────────────────────
 
 function FactorSkillPanel({ series, days }: { series: FactorSkillSeries[]; days: number }) {
   const mode = useViewMode();
@@ -358,13 +327,8 @@ function FactorSkillPanel({ series, days }: { series: FactorSkillSeries[]; days:
   );
 }
 
-// ── LEARNED WEIGHTS ───────────────────────────────────────────────────────
-
 function WeightsPanel({ series, days }: { series: EvolutionWeightSeries[]; days: number }) {
   const mode = useViewMode();
-  // Keyed-state pattern: the selection is only a *preference*; the effective
-  // regime is derived every render from the data, so a regime disappearing
-  // from the payload can never strand the view (no setState in an effect).
   const [picked, setPicked] = useState<string | null>(null);
   const regimes: string[] = [];
   for (const s of series) if (!regimes.includes(s.regime)) regimes.push(s.regime);
@@ -454,11 +418,6 @@ function WeightsPanel({ series, days }: { series: EvolutionWeightSeries[]; days:
   );
 }
 
-// ── tiny inline series (line / step-line / single dot / empty dashes) ─────
-// Sparkline (viz/) is price-shaped: it withholds under 5 points and colors by
-// period direction — wrong semantics for IC/weight series where a single
-// honest dot must render. This local SVG handles 0 / 1 / n points explicitly.
-
 function MiniSeries({
   points,
   step = false,
@@ -469,9 +428,7 @@ function MiniSeries({
   label,
 }: {
   points: { ts: number; v: number }[];
-  /** Step-after line (weights change at snapshots, not continuously). */
   step?: boolean;
-  /** Extend the y-domain to include 0 and draw a dashed zero reference. */
   zero?: boolean;
   width?: number;
   height?: number;

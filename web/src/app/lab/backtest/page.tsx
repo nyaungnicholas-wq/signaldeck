@@ -1,9 +1,6 @@
 "use client";
 
-// /lab/backtest — thin composition page. State/fetching lives in
-// useBacktest(); the composer and result sections live in
-// src/components/backtest/ (pure refactor of the old monolithic page).
-
+import { PageHero, Reveal, StatTile } from "@/components/ui/Kit";
 import PagePurpose from "@/components/PagePurpose";
 import StrategyComposer from "@/components/backtest/StrategyComposer";
 import BacktestResults from "@/components/backtest/BacktestResults";
@@ -13,69 +10,95 @@ export default function BacktestPage() {
   const bt = useBacktest();
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* header row */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">BACKTEST</h1>
-        <span className="chip">CopilotQuant</span>
-        <span className="chip">next-bar fills · no lookahead</span>
-        {bt.ranFor && (
-          <span className="chip tnum">
-            {bt.ranFor.symbol} · {bt.market}
-          </span>
-        )}
-        {bt.watchErr !== null && bt.watch !== null && (
-          <span
-            className="chip"
-            style={{ color: "var(--bad)", borderColor: "var(--bad)" }}
-          >
-            watchlist poll failed
-          </span>
-        )}
-      </div>
-
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="lab-backtest"
-        text="What would a chosen rule have done in the past? A simulation on stored bars with next-bar fills and no lookahead — history, not a promise."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="BACKTEST"
+        subtitle="Simulate a chosen rule on historical bars with next-bar fills and no lookahead — history, not a promise."
+        right={
+          bt.ranFor && (
+            <span className="mono text-sm" style={{ color: "var(--dim)" }}>
+              {bt.ranFor.symbol} · {bt.market}
+            </span>
+          )
+        }
       />
 
-      {/* strategy composer */}
-      <StrategyComposer
-        text={bt.text}
-        setText={bt.setText}
-        watch={bt.watch}
-        watchErr={bt.watchErr}
-        retryWatch={bt.retryWatch}
-        symbol={bt.symbol}
-        market={bt.market}
-        pick={bt.pick}
-        selectedRow={bt.selectedRow}
-        run={bt.run}
-        running={bt.running}
-        canRun={bt.canRun}
-        softErr={bt.softErr}
-        hardErr={bt.hardErr}
-      />
-
-      {/* results — runtime guard on result matches the old page even though
-          the contract type declares it non-null */}
-      {bt.resp && bt.resp.result && bt.ranFor && (
-        <BacktestResults resp={bt.resp} ranFor={bt.ranFor} />
+      {bt.ranFor && bt.resp?.result && (
+        <Reveal>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatTile
+              label="Total Return"
+              value={bt.resp.result.TotalReturn}
+              decimals={2}
+              suffix="%"
+              glow={bt.resp.result.TotalReturn >= 0 ? "up" : "down"}
+              i={0}
+            />
+            <StatTile
+              label="Win Rate"
+              value={bt.resp.result.WinRate}
+              decimals={2}
+              suffix="%"
+              glow="accent"
+              i={1}
+            />
+            <StatTile
+              label="Trades"
+              value={bt.resp.result.NumTrades}
+              glow="hud"
+              i={2}
+            />
+            <StatTile
+              label="Max Drawdown"
+              value={bt.resp.result.MaxDrawdown}
+              decimals={2}
+              suffix="%"
+              glow="down"
+              i={3}
+            />
+          </div>
+        </Reveal>
       )}
 
-      {/* static explainer — always visible so the method is never hidden */}
-      <section className="panel">
-        <div className="panel-h">HOW THIS BACKTEST STAYS HONEST</div>
-        <div
-          className="px-4 py-4 text-[0.75rem] leading-relaxed"
-          style={{ color: "var(--dim)" }}
-        >
-          Signals compute on each bar using only prior data and fill at the NEXT
-          bar&apos;s open. Costs are charged per trade. No survivorship beyond
-          what is stored. The number is honest, not flattering.
+      <Reveal>
+        <div className="panel">
+          <div className="panel-h">Strategy Composer</div>
+          <StrategyComposer
+            text={bt.text}
+            setText={bt.setText}
+            watch={bt.watch}
+            watchErr={bt.watchErr}
+            retryWatch={bt.retryWatch}
+            symbol={bt.symbol}
+            market={bt.market}
+            pick={bt.pick}
+            selectedRow={bt.selectedRow}
+            run={bt.run}
+            running={bt.running}
+            canRun={bt.canRun}
+            softErr={bt.softErr}
+            hardErr={bt.hardErr}
+          />
         </div>
-      </section>
+      </Reveal>
+
+      {bt.resp && bt.resp.result && bt.ranFor && (
+        <Reveal>
+          <div className="panel hud-panel">
+            <div className="panel-h">Backtest Results</div>
+            <BacktestResults resp={bt.resp} ranFor={bt.ranFor} />
+          </div>
+        </Reveal>
+      )}
+
+      <Reveal>
+        <div className="panel">
+          <div className="panel-h">Methodology</div>
+          <div className="px-4 py-4 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            Signals compute on each bar using only prior data and fill at the NEXT bar's open. Costs are charged per trade. No survivorship beyond what is stored. The number is honest, not flattering.
+          </div>
+        </div>
+      </Reveal>
     </div>
   );
 }

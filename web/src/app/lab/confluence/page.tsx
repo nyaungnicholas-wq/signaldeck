@@ -1,13 +1,5 @@
 "use client";
 
-// CONFLUENCE (CONFLUENCE GATE + MONEY SCOREBOARD wave): a setup is flagged ONLY
-// when several INDEPENDENT signal families agree on a direction, shown with full
-// vote transparency. The record is scored by EXPECTED PROFIT (expectancy /
-// profit factor), NOT win rate. HONESTY: fewer, higher-quality reads — never a
-// guarantee; the money scoreboard stays GATED until enough independent,
-// forward-tracked resolutions exist; win rate is deliberately demoted because a
-// high win rate with large losers still loses money.
-
 import { useEffect, useState } from "react";
 import {
   confluence,
@@ -27,6 +19,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
+import { PageHero, StatTile as KitStatTile, Reveal } from "@/components/ui/Kit";
 
 const FAMILY_LABEL: Record<string, string> = {
   smart_money: "Smart money",
@@ -51,8 +44,6 @@ function dirArrow(dir: number): string {
   if (dir < 0) return "▼";
   return "·";
 }
-/** Returns are stored as fractions (0.01 = 1%); fmtPct wants an already-scaled
- *  percent, so scale here. */
 function pct(frac: number, signed = true): string {
   if (!isFinite(frac)) return "—";
   const v = frac * 100;
@@ -88,32 +79,35 @@ function StatTile({
   );
 }
 
-// ── money scoreboard (expectancy, NOT win rate) ─────────────────────────────
 function MoneyTiles({ m }: { m: Money }) {
   return (
     <div className="grid grid-cols-2 gap-2 px-4 py-3 sm:grid-cols-3">
-      <StatTile
+      <KitStatTile
         label="expectancy / trade"
         value={pct(m.expectancy)}
-        hint="avg net profit per trade — what matters"
-        accent={m.expectancy >= 0 ? "var(--bid)" : "var(--ask)"}
+        sub="avg net profit per trade — what matters"
+        glow={m.expectancy >= 0 ? "up" : "down"}
+        i={0}
       />
-      <StatTile
+      <KitStatTile
         label="profit factor"
         value={m.profitFactorValid ? m.profitFactor.toFixed(2) : "—"}
-        hint="Σ wins ÷ Σ losses · >1 profits"
+        sub="Σ wins ÷ Σ losses · >1 profits"
+        i={1}
       />
-      <StatTile
+      <KitStatTile
         label="payoff ratio"
         value={m.payoffRatioValid ? m.payoffRatio.toFixed(2) : "—"}
-        hint="avg win ÷ avg loss"
+        sub="avg win ÷ avg loss"
+        i={2}
       />
-      <StatTile label="avg win" value={pct(m.avgWin)} accent="var(--bid)" />
-      <StatTile label="avg loss" value={pct(-m.avgLoss)} accent="var(--ask)" />
-      <StatTile
+      <KitStatTile label="avg win" value={pct(m.avgWin)} glow="up" i={3} />
+      <KitStatTile label="avg loss" value={pct(-m.avgLoss)} glow="down" i={4} />
+      <KitStatTile
         label="win rate"
         value={pct(m.winRate, false)}
-        hint="descriptive only — NOT profit"
+        sub="descriptive only — NOT profit"
+        i={5}
       />
     </div>
   );
@@ -159,7 +153,7 @@ function MoneyScoreboard() {
 
   const gated = !data.money;
   return (
-    <section className="panel">
+    <section className="hud-panel">
       <div className="panel-h flex-wrap gap-2">
         MONEY SCOREBOARD
         <span className="chip tnum" style={{ color: "var(--faint)" }}>
@@ -213,7 +207,6 @@ function MoneyScoreboard() {
   );
 }
 
-// ── current-setups leaderboard ──────────────────────────────────────────────
 function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
   const [data, setData] = useState<ConfluenceTopResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -286,7 +279,7 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
         />
       ) : (
         <ul style={{ borderTop: "1px solid var(--border)" }}>
-          {rows.map((r) => (
+          {rows.map((r, i) => (
             <li key={`${r.market}:${r.symbol}`} style={{ borderBottom: "1px solid var(--border)" }}>
               <button
                 type="button"
@@ -330,7 +323,6 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
   );
 }
 
-// ── per-symbol vote transparency ────────────────────────────────────────────
 function SymbolDetail({ symbol }: { symbol: string }) {
   const [data, setData] = useState<ConfluenceResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -348,8 +340,6 @@ function SymbolDetail({ symbol }: { symbol: string }) {
         .catch((e: unknown) => {
           if (!alive) return;
           const msg = e instanceof Error ? e.message : String(e);
-          // Exact-ticker API: an unknown/partial symbol 404s — a filter miss,
-          // not an outage. Show an honest "not tracked" empty state.
           if (msg.includes("404")) {
             setData({
               available: false,
@@ -463,11 +453,14 @@ export default function ConfluencePage() {
   const [input, setInput] = useState<string>("");
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">CONFLUENCE</h1>
-        <span className="chip">agreement gate · expected profit</span>
-      </div>
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="CONFLUENCE"
+        subtitle="Independent signal families agree on a direction, gated by expected profit — not win rate."
+        right={
+          <span className="chip">agreement gate · expected profit</span>
+        }
+      />
 
       <PagePurpose
         id="signals-confluence"

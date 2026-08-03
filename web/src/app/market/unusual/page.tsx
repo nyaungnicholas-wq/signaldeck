@@ -1,68 +1,32 @@
 "use client";
 
-// SIGNALS → UNUSUAL — rebuilt as a UW-style two-lane feed on free data
-// (signals-hub overhaul). LEFT: the raw tape — every anomaly event as one
-// dense row with severity lanes (notable/elevated/extreme) badged from the
-// daemon's STRUCTURED {measure,value,proxy} fields, never string-sniffing.
-// RIGHT: compound signals — symbols with 2+ distinct anomaly kinds within
-// 24h, computed client-side from the same rows and labeled "co-occurrence,
-// not causation". Filters: kind chips + symbol search (?symbol=) + market
-// toggle (?market=), all passed to the API. All honesty framing renders:
-// the verbatim header chip, PROXY chips on stock imbalance, the API note in
-// the tape footer, and a collapsible METHODOLOGY quoting the daemon's exact
-// windows and thresholds.
-
 import { useEffect, useState } from "react";
 import { anomalies, pollMs, POLL_DEFAULT, type AnomaliesResponse, type AnomalyRow, type Market } from "@/lib/api";
 import { useViewMode } from "@/components/Plain";
-import PagePurpose from "@/components/PagePurpose";
-import ErrorState from "@/components/ErrorState";
-import EmptyState from "@/components/EmptyState";
-import UnusualTape from "@/components/signals/unusual/UnusualTape";
-import SummaryStrip from "@/components/signals/unusual/SummaryStrip";
-import CompoundLane from "@/components/signals/unusual/CompoundLane";
-import MethodologyPanel from "@/components/signals/unusual/MethodologyPanel";
-import { KIND_ORDER, kindLabel } from "@/components/signals/unusual/measure";
+import { Reveal, AnimatedNumber, StatTile, PageHero, MiniBar, DeltaBadge } from "@/components/ui/Kit";
 
 type KindFilter = AnomalyRow["kind"] | undefined;
 type MarketFilter = Market | undefined;
 
-// One fetch feeds both lanes; generous so the co-occurrence window has depth.
 const FETCH_LIMIT = 150;
 
 const KIND_TITLES: Record<AnomalyRow["kind"], string> = {
-  anomaly_imbalance:
-    "trade imbalance vs own baseline (stocks = volume-side proxy, labeled)",
-  anomaly_vol: "true-range / volatility spikes vs own baseline",
+  anomaly_imbalance: "trade imbalance vs own baseline",
+  anomaly_vol: "volatility spikes vs own baseline",
   anomaly_volume: "volume spikes vs own baseline",
 };
 
-function FilterChip({
-  active,
-  onClick,
-  title,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  title?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-pressed={active}
-      onClick={onClick}
-      className="chip min-h-[40px] cursor-pointer px-3 transition-colors duration-150 hover:bg-[var(--panel3)]"
-      style={{
-        color: active ? "var(--accent)" : "var(--dim)",
-        borderColor: active ? "var(--accent)" : "var(--border)",
-      }}
-    >
-      {children}
-    </button>
-  );
+const KIND_LABELS: Record<AnomalyRow["kind"], string> = {
+  anomaly_imbalance: "Imbalance",
+  anomaly_vol: "Volatility",
+  anomaly_volume: "Volume",
+};
+
+function getSeverityColor(z: number): string {
+  const abs = Math.abs(z);
+  if (abs >= 4) return "var(--ask)";
+  if (abs >= 3) return "var(--accent)";
+  return "var(--hud)";
 }
 
 export default function UnusualPage() {
@@ -70,16 +34,11 @@ export default function UnusualPage() {
   const [kind, setKind] = useState<KindFilter>(undefined);
   const [market, setMarket] = useState<MarketFilter>(undefined);
   const [searchInput, setSearchInput] = useState("");
-  const [symbolQ, setSymbolQ] = useState(""); // debounced, uppercased
-  // `at` = fetch-time unix seconds — the summary timeline's clock anchor
-  // (ages are computed against it, never Date.now() in render).
-  const [data, setData] = useState<{ key: string; resp: AnomaliesResponse; at: number } | null>(
-    null,
-  );
+  const [symbolQ, setSymbolQ] = useState("");
+  const [data, setData] = useState<{ key: string; resp: AnomaliesResponse; at: number } | null>(null);
   const [err, setErr] = useState<{ key: string; msg: string } | null>(null);
   const [retryTick, setRetryTick] = useState(0);
 
-  // Debounce the symbol box — the API wants one exact ticker, not keystrokes.
   useEffect(() => {
     const t = setTimeout(() => setSymbolQ(searchInput.trim().toUpperCase()), 350);
     return () => clearTimeout(t);
@@ -102,73 +61,126 @@ export default function UnusualPage() {
           setErr({ key, msg: e instanceof Error ? e.message : String(e) });
         });
     load();
-    // POLL_DEFAULT tier — the scanner sweeps on minute cadence; the managed
-    // loop pauses hidden tabs and backs off on failures.
     const stop = pollMs(load, POLL_DEFAULT);
-    return () => {
-      alive = false;
-      stop();
-    };
+    return () => { alive = false; stop(); };
   }, [symbolQ, market, kind, retryTick]);
 
   const resp = data && data.key === queryKey ? data.resp : null;
   const errMsg = err && err.key === queryKey ? err.msg : null;
-  // 404 = the searched ticker isn't in the tracked universe — an honest miss,
-  // not a daemon failure (the API only matches exact symbols).
   const unknownSymbol = symbolQ !== "" && errMsg !== null && errMsg.includes("API 404");
 
-  // ?market= is applied server-side when a symbol is present (it scopes the
-  // symbol lookup); the fleet-wide feed returns both markets, so the toggle
-  // also filters on each row's own `market` field — an exact stored field,
-  // never inferred.
   const rows: AnomalyRow[] | null = resp
     ? (resp.anomalies ?? []).filter((r) => !market || r.market === market)
     : null;
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">UNUSUAL ACTIVITY</h1>
-        <span className="chip">
-          descriptive anomaly layer · z-scores vs own baseline · not predictions
-        </span>
-        {errMsg !== null && resp !== null && (
-          <span
-            className="chip px-2 py-[1px] text-[0.75rem]"
-            style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
-          >
-            refresh failed — showing last fetch
-          </span>
-        )}
-      </div>
+  // Compute stats from loaded data
+  const flagCount = rows?.length ?? 0;
+  const sortedRows = rows ? [...rows].sort((a, b) => Math.abs(b.z) - Math.abs(a.z)) : [];
+  const mostExtremeSymbol = sortedRows[0]?.symbol ?? "—";
+  const mostExtremeZ = sortedRows[0]?.z ?? 0;
 
-      <PagePurpose
-        id="signals-unusual"
-        text="Which symbols are behaving unusually versus their own normal? Left: every descriptive flag (volume, volatility, imbalance) as a raw tape with severity lanes. Right: symbols flagging in 2+ distinct ways within 24h — co-occurrence, not causation. Observations, never predictions."
+  // Breakdown by type
+  const typeCounts = rows ? rows.reduce((acc, row) => {
+    acc[row.kind] = (acc[row.kind] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>) : {};
+
+  // Max absolute z for MiniBar scaling
+  const maxAbsZ = sortedRows.length > 0 ? Math.abs(sortedRows[0].z) : 0;
+
+  // Unique kinds for filter chips
+  const uniqueKinds = rows ? [...new Set(rows.map(r => r.kind))] : [];
+
+  return (
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Unusual Activity"
+        live
+        subtitle="Outliers the scanners flagged — volume, moves and behavior outside the normal band."
+        right={
+          <div className="flex items-center gap-2">
+            {errMsg && resp && (
+              <span className="text-[0.75rem] rounded-full border px-2 py-0.5" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>
+                refresh failed
+              </span>
+            )}
+          </div>
+        }
       />
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-1 text-[0.75rem]">
-        <div className="flex items-center gap-1.5" role="group" aria-label="anomaly kind filter">
-          <span style={{ color: "var(--faint)" }}>kind</span>
-          <FilterChip active={kind === undefined} onClick={() => setKind(undefined)} title="every anomaly kind">
+      {/* Hero StatTiles */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile
+          label="FLAGGED"
+          value={flagCount}
+          glow="hud"
+          i={0}
+        />
+        <StatTile
+          label="MOST EXTREME"
+          value={mostExtremeSymbol}
+          sub={`z-score: ${mostExtremeZ.toFixed(2)}`}
+          glow="accent"
+          i={1}
+        />
+        {Object.entries(typeCounts).map(([kind, count], i) => (
+          <StatTile
+            key={kind}
+            label={KIND_LABELS[kind as AnomalyRow["kind"]] ?? kind.toUpperCase()}
+            value={count}
+            glow={i % 2 === 0 ? "up" : "down"}
+            i={i + 2}
+          />
+        ))}
+      </div>
+
+      {/* Filter chips by flag type */}
+      {uniqueKinds.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[0.75rem]" style={{ color: "var(--dim)" }}>Filter by type</span>
+          <button
+            onClick={() => setKind(undefined)}
+            className={`chip cursor-pointer px-3 py-1 transition-colors ${
+              kind === undefined
+                ? "border-[var(--hud)] text-[var(--hud)] bg-[color-mix(in_srgb,var(--hud)_10%,transparent)]"
+                : "border-[var(--border)] text-[var(--dim)] hover:bg-[var(--panel3)]"
+            }`}
+          >
             all
-          </FilterChip>
-          {KIND_ORDER.map((k) => (
-            <FilterChip key={k} active={kind === k} onClick={() => setKind(k)} title={KIND_TITLES[k]}>
-              {kindLabel(k, mode).toLowerCase()}
-            </FilterChip>
+          </button>
+          {uniqueKinds.map((k) => (
+            <button
+              key={k}
+              onClick={() => setKind(k)}
+              className={`chip cursor-pointer px-3 py-1 transition-colors ${
+                kind === k
+                  ? "border-[var(--accent)] text-[var(--accent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]"
+                  : "border-[var(--border)] text-[var(--dim)] hover:bg-[var(--panel3)]"
+              }`}
+              title={KIND_TITLES[k]}
+            >
+              {KIND_LABELS[k] ?? k}
+            </button>
           ))}
         </div>
+      )}
 
-        <div className="flex items-center gap-1.5" role="group" aria-label="market filter">
-          <span style={{ color: "var(--faint)" }}>market</span>
-          <FilterChip active={market === undefined} onClick={() => setMarket(undefined)}>
-            all
-          </FilterChip>
+      {/* Other filters */}
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-2">
+          <span className="text-[0.75rem]" style={{ color: "var(--dim)" }}>Market</span>
           {(["crypto", "stocks"] as Market[]).map((m) => (
-            <FilterChip key={m} active={market === m} onClick={() => setMarket(m)}>
+            <button
+              key={m}
+              onClick={() => setMarket(market === m ? undefined : m)}
+              className={`chip cursor-pointer px-3 py-1 transition-colors ${
+                market === m
+                  ? "border-[var(--hud)] text-[var(--hud)] bg-[color-mix(in_srgb,var(--hud)_10%,transparent)]"
+                  : "border-[var(--border)] text-[var(--dim)] hover:bg-[var(--panel3)]"
+              }`}
+            >
               {m}
-            </FilterChip>
+            </button>
           ))}
         </div>
 
@@ -176,7 +188,7 @@ export default function UnusualPage() {
           type="search"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="symbol (exact, e.g. AAPL or BTC/USD)…"
+          placeholder="symbol (exact, e.g. AAPL)…"
           aria-label="filter by symbol"
           className="mono min-w-52 flex-1 rounded-lg border px-2.5 py-1.5 text-[0.75rem]"
           style={{
@@ -187,39 +199,95 @@ export default function UnusualPage() {
         />
       </div>
 
+      {/* Error/Empty states */}
       {resp === null && errMsg !== null && !unknownSymbol && (
-        <ErrorState message={errMsg} retry={() => setRetryTick((n) => n + 1)} />
-      )}
-
-      {unknownSymbol && (
-        <EmptyState
-          message={`No symbol "${symbolQ}" in the tracked universe`}
-          detail="The search matches exact tickers only (e.g. AAPL, BTC/USD). Clear the box to return to the fleet-wide tape."
-        />
-      )}
-
-      {!(resp === null && errMsg !== null) && (
-        <SummaryStrip rows={rows} nowSec={data?.at ?? 0} />
-      )}
-
-      {!(resp === null && errMsg !== null) && (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-          <UnusualTape
-            rows={rows}
-            note={resp?.note}
-            proxyNote={resp?.proxyNote}
-            emptyMessage={
-              kind
-                ? `No ${kindLabel(kind, mode).toLowerCase()} anomalies in the current view`
-                : "No unusual activity in the current view"
-            }
-            emptyDetail="Nothing is currently outside its own statistical baseline (|z| ≥ 2.5 default threshold applies). Quiet is the honest default state."
-          />
-          <CompoundLane rows={rows} proxyNote={resp?.proxyNote} />
+        <div className="panel p-6 text-center" style={{ color: "var(--dim)" }}>
+          <p className="mb-2">Failed to load data</p>
+          <p className="text-[0.75rem] mb-4">{errMsg}</p>
+          <button
+            onClick={() => setRetryTick((n) => n + 1)}
+            className="cursor-pointer rounded border px-4 py-2 text-[0.75rem] transition-colors hover:bg-[var(--panel3)]"
+            style={{ borderColor: "var(--border)", color: "var(--text)" }}
+          >
+            Retry
+          </button>
         </div>
       )}
 
-      <MethodologyPanel />
+      {unknownSymbol && (
+        <div className="panel p-6 text-center" style={{ color: "var(--dim)" }}>
+          <p>No symbol "{symbolQ}" in the tracked universe</p>
+          <p className="text-[0.75rem] mt-2">Search matches exact tickers only.</p>
+        </div>
+      )}
+
+      {/* Card grid of flagged items */}
+      {rows && rows.length > 0 && (
+        <Reveal className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {sortedRows.slice(0, 12).map((row, i) => {
+            const isExtreme = i === 0;
+            const severityColor = getSeverityColor(row.z);
+            const absZ = Math.abs(row.z);
+            const barColor = row.z > 0 ? "var(--bid)" : "var(--ask)";
+
+            return (
+              <div
+                key={`${row.symbol}-${row.kind}-${row.ts}`}
+                className={`panel reveal-item p-4 ${isExtreme ? "hud-panel glow-hud" : ""}`}
+                style={{ "--i": i } as React.CSSProperties}
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <span className="mono text-lg font-bold" style={{ color: severityColor }}>
+                      {row.symbol}
+                    </span>
+                    <div className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
+                      {KIND_LABELS[row.kind] ?? row.kind}
+                    </div>
+                  </div>
+                  <DeltaBadge value={row.z} decimals={2} />
+                </div>
+
+                <div className="mb-3 text-sm" style={{ color: "var(--faint)" }}>
+                  {row.measure}: {row.value}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[0.75rem]" style={{ color: "var(--dim)" }}>z</span>
+                  <div className="flex-1">
+                    <MiniBar value={absZ} max={maxAbsZ} color={barColor} height={6} />
+                  </div>
+                </div>
+
+                {row.proxy && (
+                  <div className="mt-2 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                    {resp?.proxyNote}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </Reveal>
+      )}
+
+      {/* Footer note */}
+      {rows && rows.length === 0 && (
+        <div className="panel p-6 text-center" style={{ color: "var(--dim)" }}>
+          {kind
+            ? `No ${KIND_LABELS[kind]?.toLowerCase() ?? kind} anomalies in the current view`
+            : "No unusual activity in the current view"
+          }
+          <p className="text-[0.75rem] mt-2" style={{ color: "var(--faint)" }}>
+            Quiet is the honest default state.
+          </p>
+        </div>
+      )}
+
+      {resp?.note && (
+        <div className="text-[0.75rem] px-1" style={{ color: "var(--faint)" }}>
+          {resp.note}
+        </div>
+      )}
     </div>
   );
 }

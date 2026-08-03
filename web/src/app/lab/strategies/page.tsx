@@ -25,8 +25,8 @@ import { fmtPct } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
 import { useViewMode } from "@/components/Plain";
+import { PageHero, Reveal, StatTile } from "@/components/ui/Kit";
 
 interface Selected {
   symbol: string;
@@ -255,25 +255,24 @@ export default function StrategiesPage() {
   const symLoading = selected !== null && symData === null && symErr === null;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* header row */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">STRATEGY LAB</h1>
-        {fleetSorted !== null && (
-          <span className="chip tnum">{fleetSorted.length} strategies</span>
-        )}
-        {selected && <span className="chip mono">{selected.symbol}</span>}
-        {fleetErr !== null && fleet !== null && (
-          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
-            poll failed — showing last data
-          </span>
-        )}
-      </div>
-
-      {/* what this page answers, in plain English */}
-      <PagePurpose
-        id="lab-strategies"
-        text="8 classic published strategies, backtested nightly on our own bars with costs — measured, not marketed. The fleet table says which published rule actually survives our data; pick a symbol to see how each rule did there, honesty flags included."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Strategy Lab"
+        subtitle="8 classic published strategies, backtested nightly on our own bars with costs — measured, not marketed. The fleet table shows which published rule actually survives our data."
+        right={
+          <>
+            {fleetSorted !== null && (
+              <span className="chip tnum">{fleetSorted.length} strategies</span>
+            )}
+            {selected && <span className="chip mono">{selected.symbol}</span>}
+            {fleetErr !== null && fleet !== null && (
+              <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
+                poll failed — showing last data
+              </span>
+            )}
+          </>
+        }
+        live={false}
       />
 
       {fleetLoading && <Skeleton lines={4} label="loading the strategy fleet" />}
@@ -291,256 +290,263 @@ export default function StrategiesPage() {
 
       {/* FLEET — per-strategy medians across every symbol tested */}
       {fleetSorted !== null && (
+        <Reveal>
+          <section className="panel">
+            <div className="panel-h">
+              FLEET
+              <span
+                className="text-[0.75rem] font-normal normal-case tracking-normal"
+                style={{ color: "var(--faint)" }}
+              >
+                per-strategy medians across every symbol tested · sorted by median Sharpe
+              </span>
+            </div>
+            {fleetSorted.length === 0 ? (
+              <EmptyState
+                className="m-4"
+                message="No strategy results yet"
+                detail="The strategy-lab worker runs once per UTC day over the streamed hot set + crypto — check back after its first pass."
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="v4-table w-full text-[0.8rem]">
+                  <thead>
+                    <tr
+                      className="text-left text-[0.7rem] tracking-wider"
+                      style={{ color: "var(--faint)" }}
+                    >
+                      <th className="px-4 py-2 font-normal">STRATEGY</th>
+                      <th className="px-3 py-2 font-normal">MEDIAN SHARPE</th>
+                      <th className="px-3 py-2 font-normal">% PROFITABLE</th>
+                      <th className="px-3 py-2 font-normal">MEDIAN TOTAL RET</th>
+                      <th className="px-3 py-2 font-normal">SYMBOLS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fleetSorted.map((f, i) => (
+                      <tr
+                        key={f.strategy}
+                        className="reveal-item transition-colors duration-150 hover:bg-[var(--panel2)]"
+                        style={{ "--i": i } as React.CSSProperties}
+                      >
+                        <td className="px-4 py-2" title={stratCite(f.strategy)}>
+                          <span className="font-bold">{stratLabel(f.strategy)}</span>
+                          {mode === "pro" && (
+                            <span className="mono ml-2 text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                              {f.strategy}
+                            </span>
+                          )}
+                        </td>
+                        <td className="tnum px-3 py-2" style={{ color: signColor(f.medianSharpe) }}>
+                          {f.medianSharpe.toFixed(2)}
+                        </td>
+                        <td className="px-3 py-2">
+                          <ProfitableBar frac={f.pctProfitable} />
+                        </td>
+                        <td
+                          className="tnum px-3 py-2"
+                          style={{ color: signColor(f.medianTotalRet) }}
+                        >
+                          {fmtPct(f.medianTotalRet * 100)}
+                        </td>
+                        <td className="tnum px-3 py-2" style={{ color: "var(--dim)" }}>
+                          {f.nSymbols}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </Reveal>
+      )}
+
+      {/* SYMBOL picker — same chip pattern as MODEL RACE */}
+      <Reveal>
         <section className="panel">
           <div className="panel-h">
-            FLEET
+            SYMBOL
             <span
               className="text-[0.75rem] font-normal normal-case tracking-normal"
               style={{ color: "var(--faint)" }}
             >
-              per-strategy medians across every symbol tested · sorted by median Sharpe
-            </span>
-          </div>
-          {fleetSorted.length === 0 ? (
-            <EmptyState
-              className="m-4"
-              message="No strategy results yet"
-              detail="The strategy-lab worker runs once per UTC day over the streamed hot set + crypto — check back after its first pass."
-            />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-[0.8rem]">
-                <thead>
-                  <tr
-                    className="text-left text-[0.7rem] tracking-wider"
-                    style={{ color: "var(--faint)" }}
-                  >
-                    <th className="px-4 py-2 font-normal">STRATEGY</th>
-                    <th className="px-3 py-2 font-normal">MEDIAN SHARPE</th>
-                    <th className="px-3 py-2 font-normal">% PROFITABLE</th>
-                    <th className="px-3 py-2 font-normal">MEDIAN TOTAL RET</th>
-                    <th className="px-3 py-2 font-normal">SYMBOLS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fleetSorted.map((f) => (
-                    <tr
-                      key={f.strategy}
-                      className="transition-colors duration-150 hover:bg-[var(--panel2)]"
-                      style={{ borderTop: "1px solid var(--border)" }}
-                    >
-                      <td className="px-4 py-2" title={stratCite(f.strategy)}>
-                        <span className="font-bold">{stratLabel(f.strategy)}</span>
-                        {mode === "pro" && (
-                          <span className="mono ml-2 text-[0.7rem]" style={{ color: "var(--faint)" }}>
-                            {f.strategy}
-                          </span>
-                        )}
-                      </td>
-                      <td className="tnum px-3 py-2" style={{ color: signColor(f.medianSharpe) }}>
-                        {f.medianSharpe.toFixed(2)}
-                      </td>
-                      <td className="px-3 py-2">
-                        <ProfitableBar frac={f.pctProfitable} />
-                      </td>
-                      <td
-                        className="tnum px-3 py-2"
-                        style={{ color: signColor(f.medianTotalRet) }}
-                      >
-                        {fmtPct(f.medianTotalRet * 100)}
-                      </td>
-                      <td className="tnum px-3 py-2" style={{ color: "var(--dim)" }}>
-                        {f.nSymbols}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* SYMBOL picker — same chip pattern as MODEL RACE */}
-      <section className="panel">
-        <div className="panel-h">
-          SYMBOL
-          <span
-            className="text-[0.75rem] font-normal normal-case tracking-normal"
-            style={{ color: "var(--faint)" }}
-          >
-            pick a symbol to see each strategy&apos;s result there
-          </span>
-        </div>
-
-        {rows === null && rowsErr === null && (
-          <Skeleton lines={2} label="loading watchlist" className="m-4" />
-        )}
-
-        {rows === null && rowsErr !== null && (
-          <ErrorState
-            className="m-4"
-            message={rowsErr}
-            hint="Is the daemon running? Start it with signaldeckd."
-            retry={() => {
-              setRowsErr(null);
-              setRetryTick((t) => t + 1);
-            }}
-          />
-        )}
-
-        {rows !== null && activeRows.length === 0 && (
-          <EmptyState
-            className="m-4"
-            message="No active symbols yet"
-            detail="Subscribe to symbols on the watchlist page and the strategy-lab worker will pick them up."
-          />
-        )}
-
-        {activeRows.length > 0 && (
-          <div role="group" aria-label="symbol picker" className="flex flex-wrap gap-2 px-4 py-3">
-            {activeRows.map((r) => {
-              const active = selected?.symbol === r.symbol && selected?.market === r.market;
-              return (
-                <button
-                  key={`${r.market}:${r.symbol}`}
-                  type="button"
-                  onClick={() => setSelected({ symbol: r.symbol, market: r.market })}
-                  aria-pressed={active}
-                  className="chip mono min-h-[40px] cursor-pointer transition-colors duration-150 hover:brightness-125"
-                  style={{
-                    color: active ? "var(--text)" : "var(--dim)",
-                    borderColor: active ? "var(--accent)" : "var(--border)",
-                    background: active ? "rgba(251,191,36,.08)" : "var(--panel2)",
-                  }}
-                >
-                  {r.symbol}
-                  <span className="ml-1.5 text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                    {r.market}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* PER-SYMBOL rows — engine honesty flags honored, /lab/backtest style */}
-      {selected && (
-        <section className="panel">
-          <div className="panel-h">
-            {selected.symbol} — PER-STRATEGY RESULTS
-            <span
-              className="text-[0.75rem] font-normal normal-case tracking-normal"
-              style={{ color: "var(--warn)" }}
-            >
-              backtested / in-sample — not a live track record
+              pick a symbol to see each strategy&apos;s result there
             </span>
           </div>
 
-          {symLoading && (
-            <Skeleton lines={4} label={`loading strategies for ${selected.symbol}`} className="m-4" />
+          {rows === null && rowsErr === null && (
+            <Skeleton lines={2} label="loading watchlist" className="m-4" />
           )}
 
-          {selected !== null && symData === null && symErr !== null && (
+          {rows === null && rowsErr !== null && (
             <ErrorState
               className="m-4"
-              message={symErr}
+              message={rowsErr}
               hint="Is the daemon running? Start it with signaldeckd."
               retry={() => {
-                setSymErrState(null);
+                setRowsErr(null);
                 setRetryTick((t) => t + 1);
               }}
             />
           )}
 
-          {symData !== null && symData.rows.length === 0 && (
+          {rows !== null && activeRows.length === 0 && (
             <EmptyState
               className="m-4"
-              message={`No strategy results for ${selected.symbol} yet`}
-              detail={
-                symData.emptyNote ??
-                "the strategy-lab worker covers the streamed hot set + crypto once per UTC day"
-              }
+              message="No active symbols yet"
+              detail="Subscribe to symbols on the watchlist page and the strategy-lab worker will pick them up."
             />
           )}
 
-          {symData !== null && symData.rows.length > 0 && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-[0.8rem]">
-                <thead>
-                  <tr
-                    className="text-left text-[0.7rem] tracking-wider"
-                    style={{ color: "var(--faint)" }}
+          {activeRows.length > 0 && (
+            <div role="group" aria-label="symbol picker" className="flex flex-wrap gap-2 px-4 py-3">
+              {activeRows.map((r, i) => {
+                const active = selected?.symbol === r.symbol && selected?.market === r.market;
+                return (
+                  <button
+                    key={`${r.market}:${r.symbol}`}
+                    type="button"
+                    onClick={() => setSelected({ symbol: r.symbol, market: r.market })}
+                    aria-pressed={active}
+                    className="reveal-item chip mono min-h-[40px] cursor-pointer transition-colors duration-150 hover:brightness-125"
+                    style={{
+                      color: active ? "var(--text)" : "var(--dim)",
+                      borderColor: active ? "var(--accent)" : "var(--border)",
+                      background: active ? "rgba(251,191,36,.08)" : "var(--panel2)",
+                      "--i": i,
+                    } as React.CSSProperties}
                   >
-                    <th className="px-4 py-2 font-normal">STRATEGY</th>
-                    <th className="px-3 py-2 font-normal">TOTAL RET</th>
-                    <th className="px-3 py-2 font-normal">CAGR</th>
-                    <th className="px-3 py-2 font-normal">SHARPE</th>
-                    <th className="px-3 py-2 font-normal">MAX DD</th>
-                    <th className="px-3 py-2 font-normal">WIN RATE</th>
-                    <th className="px-3 py-2 font-normal">TRADES</th>
-                    <th className="px-3 py-2 font-normal">BARS</th>
-                    <th className="px-3 py-2 font-normal">TESTED</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {symData.rows.map((r) => (
-                    <tr
-                      key={r.strategy}
-                      className="transition-colors duration-150 hover:bg-[var(--panel2)]"
-                      style={{ borderTop: "1px solid var(--border)" }}
-                    >
-                      <td className="px-4 py-2" title={stratCite(r.strategy)}>
-                        <span className="font-bold">{stratLabel(r.strategy)}</span>
-                      </td>
-                      <td className="tnum px-3 py-2" style={{ color: signColor(r.totalReturn) }}>
-                        {fmtPct(r.totalReturn * 100)}
-                      </td>
-                      <td
-                        className="tnum px-3 py-2"
-                        style={{ color: r.cagrReported ? signColor(r.cagr) : "var(--dim)" }}
-                        title={
-                          r.cagrReported
-                            ? "compound annual growth rate"
-                            : `span too short/thin to annualize (${r.nBars} bars, ${r.nTrades} trades)`
-                        }
-                      >
-                        {r.cagrReported ? fmtPct(r.cagr * 100) : "n/a (span too short)"}
-                      </td>
-                      <td className="tnum px-3 py-2" style={{ color: signColor(r.sharpe) }}>
-                        {isFinite(r.sharpe) ? r.sharpe.toFixed(2) : "—"}
-                      </td>
-                      <td className="tnum px-3 py-2" style={{ color: "var(--ask)" }}>
-                        {fmtPct(-r.maxDrawdown * 100)}
-                      </td>
-                      <td
-                        className="tnum px-3 py-2"
-                        style={{ color: r.winRateMeaningful ? undefined : "var(--dim)" }}
-                        title={
-                          r.winRateMeaningful
-                            ? "share of closed trades net-positive"
-                            : "too few closed trades — one trade is not a win rate"
-                        }
-                      >
-                        {r.winRateMeaningful ? fmtPct(r.winRate * 100, false) : "n/a (too few trades)"}
-                      </td>
-                      <td className="tnum px-3 py-2" style={{ color: "var(--dim)" }}>
-                        {r.nTrades}
-                      </td>
-                      <td className="tnum px-3 py-2" style={{ color: "var(--dim)" }}>
-                        {r.nBars}
-                      </td>
-                      <td className="tnum px-3 py-2" style={{ color: "var(--faint)" }}>
-                        {r.testedAgo}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                    {r.symbol}
+                    <span className="ml-1.5 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                      {r.market}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </section>
+      </Reveal>
+
+      {/* PER-SYMBOL rows — engine honesty flags honored, /lab/backtest style */}
+      {selected && (
+        <Reveal>
+          <section className="panel">
+            <div className="panel-h">
+              {selected.symbol} — PER-STRATEGY RESULTS
+              <span
+                className="text-[0.75rem] font-normal normal-case tracking-normal"
+                style={{ color: "var(--warn)" }}
+              >
+                backtested / in-sample — not a live track record
+              </span>
+            </div>
+
+            {symLoading && (
+              <Skeleton lines={4} label={`loading strategies for ${selected.symbol}`} className="m-4" />
+            )}
+
+            {selected !== null && symData === null && symErr !== null && (
+              <ErrorState
+                className="m-4"
+                message={symErr}
+                hint="Is the daemon running? Start it with signaldeckd."
+                retry={() => {
+                  setSymErrState(null);
+                  setRetryTick((t) => t + 1);
+                }}
+              />
+            )}
+
+            {symData !== null && symData.rows.length === 0 && (
+              <EmptyState
+                className="m-4"
+                message={`No strategy results for ${selected.symbol} yet`}
+                detail={
+                  symData.emptyNote ??
+                  "the strategy-lab worker covers the streamed hot set + crypto once per UTC day"
+                }
+              />
+            )}
+
+            {symData !== null && symData.rows.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="v4-table w-full text-[0.8rem]">
+                  <thead>
+                    <tr
+                      className="text-left text-[0.7rem] tracking-wider"
+                      style={{ color: "var(--faint)" }}
+                    >
+                      <th className="px-4 py-2 font-normal">STRATEGY</th>
+                      <th className="px-3 py-2 font-normal">TOTAL RET</th>
+                      <th className="px-3 py-2 font-normal">CAGR</th>
+                      <th className="px-3 py-2 font-normal">SHARPE</th>
+                      <th className="px-3 py-2 font-normal">MAX DD</th>
+                      <th className="px-3 py-2 font-normal">WIN RATE</th>
+                      <th className="px-3 py-2 font-normal">TRADES</th>
+                      <th className="px-3 py-2 font-normal">BARS</th>
+                      <th className="px-3 py-2 font-normal">TESTED</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {symData.rows.map((r, i) => (
+                      <tr
+                        key={r.strategy}
+                        className="reveal-item transition-colors duration-150 hover:bg-[var(--panel2)]"
+                        style={{ "--i": i } as React.CSSProperties}
+                      >
+                        <td className="px-4 py-2" title={stratCite(r.strategy)}>
+                          <span className="font-bold">{stratLabel(r.strategy)}</span>
+                        </td>
+                        <td className="tnum px-3 py-2" style={{ color: signColor(r.totalReturn) }}>
+                          {fmtPct(r.totalReturn * 100)}
+                        </td>
+                        <td
+                          className="tnum px-3 py-2"
+                          style={{ color: r.cagrReported ? signColor(r.cagr) : "var(--dim)" }}
+                          title={
+                            r.cagrReported
+                              ? "compound annual growth rate"
+                              : `span too short/thin to annualize (${r.nBars} bars, ${r.nTrades} trades)`
+                          }
+                        >
+                          {r.cagrReported ? fmtPct(r.cagr * 100) : "n/a (span too short)"}
+                        </td>
+                        <td className="tnum px-3 py-2" style={{ color: signColor(r.sharpe) }}>
+                          {isFinite(r.sharpe) ? r.sharpe.toFixed(2) : "—"}
+                        </td>
+                        <td className="tnum px-3 py-2" style={{ color: "var(--ask)" }}>
+                          {fmtPct(-r.maxDrawdown * 100)}
+                        </td>
+                        <td
+                          className="tnum px-3 py-2"
+                          style={{ color: r.winRateMeaningful ? undefined : "var(--dim)" }}
+                          title={
+                            r.winRateMeaningful
+                              ? "share of closed trades net-positive"
+                              : "too few closed trades — one trade is not a win rate"
+                          }
+                        >
+                          {r.winRateMeaningful ? fmtPct(r.winRate * 100, false) : "n/a (too few trades)"}
+                        </td>
+                        <td className="tnum px-3 py-2" style={{ color: "var(--dim)" }}>
+                          {r.nTrades}
+                        </td>
+                        <td className="tnum px-3 py-2" style={{ color: "var(--dim)" }}>
+                          {r.nBars}
+                        </td>
+                        <td className="tnum px-3 py-2" style={{ color: "var(--faint)" }}>
+                          {r.testedAgo}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </Reveal>
       )}
 
       {/* API note — verbatim footer, the honesty contract in one line */}

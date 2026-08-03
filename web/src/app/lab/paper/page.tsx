@@ -16,6 +16,7 @@ import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
 import HelpTip from "@/components/HelpTip";
 import ProOnly from "@/components/ProOnly";
+import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
 
 /** USD formatter for book values. */
 function usd(v: number): string {
@@ -191,7 +192,7 @@ function MoneyScoreboard({ money, caption }: { money: Money; caption: string }) 
   const downColor = "var(--ask)";
   const expColor = money.expectancy >= 0 ? upColor : downColor;
   return (
-    <section className="panel">
+    <section className="panel hud-panel">
       <div className="panel-h flex-wrap gap-2">
         MONEY SCOREBOARD
         <span className="chip" style={{ color: "var(--faint)" }}>
@@ -288,32 +289,12 @@ export default function PaperPage() {
   const downColor = "var(--ask)";
 
   return (
-    <div className="flex flex-col gap-4">
-      <header className="flex flex-col gap-2">
-        <h1 className="text-[1.1rem] font-bold tracking-wide">PAPER TRADING</h1>
-        <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          An <strong>internal simulation</strong> that trades the platform&apos;s own
-          flagship calibrated prediction: go long when a symbol&apos;s calibrated
-          probability crosses the long threshold, exit when it crosses the flat
-          threshold — filling at the <strong>next bar&apos;s open</strong> (no
-          lookahead) with realistic per-side costs. It is an honest, costed,
-          out-of-sample record of whether the signal would have made money.
-        </p>
-        {/* Non-negotiable honesty label. */}
-        <div
-          className="panel px-3 py-2 text-[0.75rem] font-semibold"
-          role="note"
-          style={{
-            color: "var(--ask)",
-            borderColor: "var(--ask)",
-          }}
-        >
-          {data?.label ??
-            "simulated paper trading — not live money, not advice"}{" "}
-          — no broker is ever contacted; every fill is computed from the
-          daemon&apos;s own stored bars.
-        </div>
-      </header>
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="PAPER TRADING"
+        subtitle="An internal simulation that trades the platform's own flagship calibrated prediction to show whether the signal would have made money."
+        live={true}
+      />
 
       {/* STAGE 3: what this page answers, in plain English */}
       <PagePurpose
@@ -323,18 +304,19 @@ export default function PaperPage() {
 
       {/* Strategy switcher (one simulated portfolio per prediction horizon). */}
       <div className="flex flex-wrap items-center gap-2">
-        {(data?.strategies ?? ["flagship-1d", "flagship-1w"]).map((name) => {
+        {(data?.strategies ?? ["flagship-1d", "flagship-1w"]).map((name, i) => {
           const active = name === strategy;
           return (
             <button
               key={name}
               onClick={() => setStrategy(name)}
-              className="mono cursor-pointer rounded-lg px-3 py-1 text-[0.75rem] font-semibold tracking-wide transition-colors duration-150 hover:brightness-125"
+              className="mono cursor-pointer rounded-lg px-3 py-1 text-[0.75rem] font-semibold tracking-wide transition-colors duration-150 hover:brightness-125 reveal-item"
               style={{
                 border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
                 background: "transparent",
                 color: active ? "var(--accent)" : "var(--dim)",
-              }}
+                "--i": i
+              } as React.CSSProperties}
               aria-pressed={active}
             >
               {name.toUpperCase()}
@@ -443,7 +425,7 @@ export default function PaperPage() {
               <EmptyState message="Flat — no open positions." className="border-0" />
             ) : (
               <div className="overflow-x-auto">
-                <table className="tnum w-full text-[0.75rem]">
+                <table className="v4-table w-full text-[0.75rem]">
                   <thead>
                     <tr style={{ color: "var(--faint)" }}>
                       <th className="px-4 py-2 text-left font-normal">SYMBOL</th>
@@ -483,7 +465,7 @@ export default function PaperPage() {
               />
             ) : (
               <div className="overflow-x-auto">
-                <table className="tnum w-full text-[0.75rem]">
+                <table className="v4-table w-full text-[0.75rem]">
                   <thead>
                     <tr style={{ color: "var(--faint)" }}>
                       <th className="px-4 py-2 text-left font-normal">DATE</th>

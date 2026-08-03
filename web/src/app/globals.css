@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./motion.css"; /* v4 cinematic-terminal motion layer */
 
 /* SignalDeck design tokens — v2 "professional terminal".
    The TickStream terminal heritage (OLED-dark, green/red bid-ask semantics,

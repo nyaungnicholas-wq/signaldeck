@@ -1,35 +1,28 @@
 "use client";
 
-// LAB → SYSTEM (Stage 5) — the "one look at the machine" page: data QUALITY,
-// the AGENTS worker fleet, and the AI surface mounted TOGETHER (user
-// decision: "System sub-tab = quality + agents + AI chat mounted together").
-// Each section is the SAME component as its focused sub-tab (single source
-// of truth — no duplicated fetching logic to drift), so every honesty
-// note/gate renders identically here; the AI chat keeps its own auth gate.
-// The QUALITY / AGENTS / AI tabs above remain as focused deep links.
-
-import PagePurpose from "@/components/PagePurpose";
+import { PageHero, Reveal } from "@/components/ui/Kit";
 import QualityPage from "./quality/page";
 import AgentsPage from "./agents/page";
 import AIPage from "./ai/page";
 
 export default function SystemAllPage() {
   return (
-    <div className="flex flex-col gap-8">
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="lab-system"
-        text="Is the machine itself healthy? Data quality, the background worker fleet, and the AI surface — one look, same honesty gates as the focused tabs."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="System Health"
+        subtitle="One look at the machine: data quality, the background worker fleet, and the AI surface — same honesty gates as the focused tabs."
       />
-      <section aria-label="data quality">
-        <QualityPage />
-      </section>
-      <section aria-label="agent fleet">
-        <AgentsPage />
-      </section>
-      <section aria-label="AI surface">
-        <AIPage />
-      </section>
+      <Reveal>
+        <section aria-label="data quality" className="panel reveal-item" style={{ "--i": 0 } as React.CSSProperties}>
+          <QualityPage />
+        </section>
+        <section aria-label="agent fleet" className="panel reveal-item" style={{ "--i": 1 } as React.CSSProperties}>
+          <AgentsPage />
+        </section>
+        <section aria-label="AI surface" className="panel reveal-item" style={{ "--i": 2 } as React.CSSProperties}>
+          <AIPage />
+        </section>
+      </Reveal>
     </div>
   );
 }

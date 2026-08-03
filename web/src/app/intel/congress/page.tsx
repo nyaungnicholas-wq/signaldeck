@@ -1,11 +1,4 @@
 "use client";
-
-// Congressional trades (Signal8 wave, Stage 2): public STOCK Act disclosures
-// via the free Stock Watcher mirrors. HONESTY, prominently: disclosures lag
-// 30-45 days BY LAW (never real-time), amounts are ranges not exact values,
-// and the mirror-health status is shown when the free source itself is down
-// (which it is as of 2026-07-04 — stored history keeps being served).
-
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { congress, pollMs, POLL_SLOW, type CongressMirrorStatus, type CongressTrade } from "@/lib/api";
@@ -14,35 +7,26 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
-import PagePurpose from "@/components/PagePurpose";
+import { Reveal, PageHero, StatTile, MiniBar } from "@/components/ui/Kit";
 
 type ChamberFilter = "all" | "senate" | "house";
+type SortKey = "date" | "size" | "symbol";
 
-/** BUY green / SELL red / everything else neutral — same palette as insiders. */
 function txColor(txType: string): string {
   if (txType === "purchase") return "var(--bid)";
   if (txType.startsWith("sale")) return "var(--ask)";
   return "var(--dim)";
 }
-
 function txBadge(txType: string): string {
   switch (txType) {
-    case "purchase":
-      return "BUY";
-    case "sale_full":
-      return "SELL (full)";
-    case "sale_partial":
-      return "SELL (partial)";
-    case "sale":
-      return "SELL";
-    case "exchange":
-      return "EXCHANGE";
-    default:
-      return txType.toUpperCase();
+    case "purchase": return "BUY";
+    case "sale_full": return "SELL (full)";
+    case "sale_partial": return "SELL (partial)";
+    case "sale": return "SELL";
+    case "exchange": return "EXCHANGE";
+    default: return txType.toUpperCase();
   }
 }
-
-/** True when the poller has checked and BOTH mirrors were down. */
 function mirrorsDown(source?: CongressMirrorStatus | null): boolean {
   if (!source) return false;
   return source.senate?.ok === false && source.house?.ok === false;
@@ -55,21 +39,16 @@ export default function CongressPage() {
   const [source, setSource] = useState<CongressMirrorStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [chamber, setChamber] = useState<ChamberFilter>("all");
-  // Stage 5: the symbol filter is the hub-wide one (matches the DISCLOSED
-  // ticker text server-side, so it works even for tickers we don't track).
   const { symbol } = useIntelSymbol();
   const [member, setMember] = useState("");
   const [retryTick, setRetryTick] = useState(0);
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     let alive = true;
     const load = () =>
-      congress(
-        symbol || undefined,
-        member || undefined,
-        chamber === "all" ? undefined : chamber,
-        200,
-      )
+      congress(symbol || undefined, member || undefined, chamber === "all" ? undefined : chamber, 200)
         .then((r) => {
           if (!alive) return;
           setRows(r.trades ?? []);
@@ -83,13 +62,8 @@ export default function CongressPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    // POLL_SLOW: the congress-poller sweeps the free mirrors every ~12h, and
-    // the underlying disclosures lag 30-45 days by law anyway.
     const stop = pollMs(load, POLL_SLOW);
-    return () => {
-      alive = false;
-      stop();
-    };
+    return () => { alive = false; stop(); };
   }, [chamber, symbol, member, retryTick]);
 
   const loading = rows === null && err === null;
@@ -97,157 +71,140 @@ export default function CongressPage() {
   const list = useMemo(() => rows ?? [], [rows]);
   const down = mirrorsDown(source);
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">CONGRESS</h1>
-        {/* THE lag note — prominent, always visible, straight from the API. */}
-        <span className="chip" style={{ color: "var(--warn)", borderColor: "var(--warn)" }}>
-          disclosures lag 30–45 days by law
-        </span>
-        {down && (
-          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
-            free mirrors currently unreachable — showing stored history
-          </span>
-        )}
-        {err !== null && rows !== null && (
-          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
-            poll failed — showing last data
-          </span>
-        )}
-      </div>
+  const { purchases, sales, latestDisclosed, maxDate } = useMemo(() => {
+    let purchases = 0, sales = 0, latestDisclosed = 0, maxDate = 0;
+    list.forEach(t => {
+      if (t.txType === "purchase") purchases++;
+      if (t.txType.startsWith("sale")) sales++;
+      if (t.disclosedTs > latestDisclosed) latestDisclosed = t.disclosedTs;
+      if (t.txTs > maxDate) maxDate = t.txTs;
+    });
+    return { purchases, sales, latestDisclosed, maxDate };
+  }, [list]);
 
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="intel-congress"
-        text="Which stocks are members of Congress trading? STOCK Act disclosures lag 30-45 days by law, and amounts are ranges, not exact values."
-      />
+  const sortedList = useMemo(() => {
+    const sorted = [...list];
+    sorted.sort((a, b) => {
+      const dir = sortDir === "asc" ? 1 : -1;
+      if (sortKey === "date") return (a.disclosedTs - b.disclosedTs) * dir;
+      if (sortKey === "symbol") return a.symbol.localeCompare(b.symbol) * dir;
+      // size: approximate by position in list (newer larger) — fallback to date
+      return (a.txTs - b.txTs) * dir;
+    });
+    return sorted;
+  }, [list, sortKey, sortDir]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir(key === "date" ? "desc" : "asc"); }
+  }
+
+  const SortArrow = ({ active, dir }: { active: boolean; dir: "asc" | "desc" }) => (
+    <svg className={`inline ml-1 w-3 h-3 ${active ? "text-[var(--accent)]" : "text-[var(--dim)]"}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d={dir === "asc" ? "M12 5v14M5 12l7-7 7 7" : "M12 19V5M5 12l7 7 7-7"} />
+    </svg>
+  );
+
+  const heroControls = (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="chip" style={{ color: "var(--warn)", borderColor: "var(--warn)" }}>disclosures lag 30–45 days by law</span>
+      {down && <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>free mirrors unreachable</span>}
+      {err !== null && rows !== null && <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>poll failed</span>}
+    </div>
+  );
+
+  return (
+    <div className="page-enter space-y-4">
+      <PageHero title="Congress Trades" subtitle="What lawmakers are buying and selling — disclosed trades, sorted so the signal stands out." right={heroControls} />
+
+      <Reveal>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatTile label="Total Disclosures" value={list.length} glow="hud" i={0} />
+          <StatTile label="Purchases" value={purchases} glow="up" i={1} />
+          <StatTile label="Sales" value={sales} glow="down" i={2} />
+          <StatTile label="Newest Disclosure" value={latestDisclosed > 0 ? fmtDate(latestDisclosed) : "—"} i={3} />
+        </div>
+      </Reveal>
 
       {loading && <Skeleton lines={6} label="loading congressional trades" />}
-      {hardError && (
-        <ErrorState
-          message={err ?? "congressional data unavailable"}
-          hint="Is the daemon running? The congress-poller sweeps the free disclosure mirrors ~12h."
-          retry={() => {
-            setErr(null);
-            setRetryTick((t) => t + 1);
-          }}
-        />
-      )}
+      {hardError && <ErrorState message={err ?? "data unavailable"} hint="Check daemon. Poller sweeps free mirrors ~12h." retry={() => { setErr(null); setRetryTick(t => t + 1); }} />}
 
       {rows !== null && (
         <section className="panel">
           <div className="panel-h flex-wrap gap-2">
-            DISCLOSED STOCK TRANSACTIONS
+            DISCLOSED TRANSACTIONS
             <span className="chip tnum">{list.length} shown</span>
-            {symbol && (
-              <span className="chip" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>
-                {symbol} — from the shared intel filter
-              </span>
-            )}
-            <input
-              value={member}
-              onChange={(e) => setMember(e.target.value)}
-              placeholder="filter member…"
-              aria-label="filter by member"
-              className="chip min-h-[36px] w-36 bg-transparent px-3 outline-none"
-              style={{ color: "var(--text)" }}
-            />
-            <span className="ml-auto flex items-center gap-1" role="tablist" aria-label="chamber filter">
+            {symbol && <span className="chip" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>{symbol}</span>}
+            <input value={member} onChange={(e) => setMember(e.target.value)} placeholder="filter member…" aria-label="filter by member"
+              className="chip min-h-[36px] w-36 bg-transparent px-3 outline-none" style={{ color: "var(--text)" }} />
+            <span className="ml-auto flex items-center gap-1" role="tablist">
               {(["all", "senate", "house"] as ChamberFilter[]).map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  role="tab"
-                  aria-selected={c === chamber}
-                  onClick={() => setChamber(c)}
+                <button key={c} type="button" role="tab" aria-selected={c === chamber} onClick={() => setChamber(c)}
                   className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
-                  style={{
-                    color: c === chamber ? "var(--accent)" : undefined,
-                    borderColor: c === chamber ? "var(--accent)" : undefined,
-                  }}
-                >
+                  style={{ color: c === chamber ? "var(--accent)" : undefined, borderColor: c === chamber ? "var(--accent)" : undefined }}>
                   {c}
                 </button>
               ))}
             </span>
           </div>
 
-          {/* full honesty note: lag + ranges + mirror provenance */}
-          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-            {lagNote} {note}
-          </p>
+          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>{lagNote} {note}</p>
 
-          {list.length === 0 ? (
+          {sortedList.length === 0 ? (
             symbol || member || chamber !== "all" ? (
-              <EmptyState
-                className="m-4"
-                message="No stored disclosures match this filter"
-                detail={
-                  down
-                    ? "Note the source outage below still applies: both free mirrors are down, so only already-stored history is searchable."
-                    : "Clear the shared symbol filter, member, or chamber to widen the search."
-                }
-              />
+              <EmptyState className="m-4" message="No disclosures match filter" detail={down ? "Source outage — stored history only." : "Widen search."} />
             ) : (
-              <EmptyState
-                className="m-4"
-                message="No congressional trades stored"
-                detail={
-                  down
-                    ? "The free Stock Watcher mirrors are currently offline (both chambers), so nothing has been ingested yet. The poller keeps checking every ~12h and will backfill automatically if a mirror revives — or set SIGNALDECK_SENATE_TRADES_URL / SIGNALDECK_HOUSE_TRADES_URL to an alternate mirror."
-                    : "The congress-poller sweeps the free disclosure mirrors every ~12h."
-                }
-              />
+              <EmptyState className="m-4" message="No stored trades" detail={down ? "Free mirrors offline. Poller checks ~12h." : "Poller sweeps mirrors ~12h."} />
             )
           ) : (
-            <ul style={{ borderTop: "1px solid var(--border)" }}>
-              {list.map((t) => (
-                <li
-                  key={t.id}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.75rem]"
-                  style={{ borderBottom: "1px solid var(--border)" }}
-                >
-                  {t.symbolId !== null ? (
-                    <Link
-                      href={`/s/stocks/${encodeURIComponent(t.symbol)}`}
-                      className="tnum w-16 font-bold hover:underline"
-                      style={{ color: "var(--text)" }}
-                    >
-                      {t.symbol}
-                    </Link>
-                  ) : (
-                    // Untracked ticker: the "as disclosed" marker is visible
-                    // text, not a hover-only tooltip.
-                    <>
-                      <span className="tnum w-16 font-bold" style={{ color: "var(--text)" }}>
-                        {t.symbol}
-                      </span>
-                      <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                        as disclosed — not tracked
-                      </span>
-                    </>
-                  )}
-                  <span
-                    className="chip"
-                    style={{ color: txColor(t.txType), borderColor: txColor(t.txType) }}
-                  >
-                    {txBadge(t.txType)}
-                  </span>
-                  <span style={{ color: "var(--text)" }}>{t.member}</span>
-                  <span className="chip" style={{ color: "var(--dim)" }}>
-                    {t.chamber}
-                  </span>
-                  <span className="tnum" style={{ color: "var(--dim)" }} title="range as disclosed — exact amounts are not published">
-                    {t.amountRange || "—"}
-                  </span>
-                  <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                    traded {t.txTs > 0 ? fmtDate(t.txTs) : "n/a"} · disclosed{" "}
-                    {t.disclosedTs > 0 ? fmtDate(t.disclosedTs) : "n/a"}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <Reveal>
+              <div className="overflow-x-auto table-wrap">
+                <table className="w-full text-[0.75rem] v4-table">
+                  <thead>
+                    <tr className="border-b" style={{ borderColor: "var(--border)" }}>
+                      <th className="px-4 py-2 text-left font-medium" style={{ color: "var(--dim)" }}>
+                        <button className="flex items-center cursor-pointer hover:text-[var(--text)]" onClick={() => toggleSort("symbol")}>
+                          Symbol <SortArrow active={sortKey === "symbol"} dir={sortDir} />
+                        </button>
+                      </th>
+                      <th className="px-4 py-2 text-left font-medium" style={{ color: "var(--dim)" }}>Trade</th>
+                      <th className="px-4 py-2 text-left font-medium" style={{ color: "var(--dim)" }}>Member</th>
+                      <th className="px-4 py-2 text-left font-medium" style={{ color: "var(--dim)" }}>Chamber</th>
+                      <th className="px-4 py-2 text-left font-medium" style={{ color: "var(--dim)" }}>Amount</th>
+                      <th className="px-4 py-2 text-right font-medium" style={{ color: "var(--dim)" }}>
+                        <button className="flex items-center justify-end cursor-pointer hover:text-[var(--text)]" onClick={() => toggleSort("date")}>
+                          Disclosed <SortArrow active={sortKey === "date"} dir={sortDir} />
+                        </button>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedList.map((t, i) => {
+                      const isBuy = t.txType === "purchase";
+                      const borderStyle: React.CSSProperties = isBuy ? { borderLeft: "2px solid var(--bid)" } : t.txType.startsWith("sale") ? { borderLeft: "2px solid var(--ask)" } : {};
+                      return (
+                        <tr key={t.id} className="reveal-item hover:bg-[color:rgba(255,255,255,0.03)] transition-colors" style={{ "--i": Math.min(i, 12), ...borderStyle } as React.CSSProperties}>
+                          <td className="px-4 py-2.5 font-bold mono" style={{ color: "var(--text)" }}>
+                            {t.symbolId !== null ? (
+                              <Link href={`/s/stocks/${encodeURIComponent(t.symbol)}`} className="hover:underline">{t.symbol}</Link>
+                            ) : (
+                              <span className="title-attr" title={`${t.symbol} — not tracked`}>{t.symbol}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <span className="chip" style={{ color: txColor(t.txType), borderColor: txColor(t.txType) }}>{txBadge(t.txType)}</span>
+                          </td>
+                          <td className="px-4 py-2.5 truncate max-w-[180px] title-attr" style={{ color: "var(--text)" }}>{t.member}</td>
+                          <td className="px-4 py-2.5" style={{ color: "var(--dim)" }}>{t.chamber}</td>
+                          <td className="px-4 py-2.5 tnum" style={{ color: "var(--text)" }}>{t.amountRange || "—"}</td>
+                          <td className="px-4 py-2.5 text-right tnum" style={{ color: "var(--faint)" }}>{t.disclosedTs > 0 ? fmtDate(t.disclosedTs) : "n/a"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Reveal>
           )}
         </section>
       )}

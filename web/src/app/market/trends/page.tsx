@@ -1,80 +1,55 @@
 "use client";
-
-// MARKET › TRENDS — trend classifications + candlestick patterns. Lived at
-// /markets/trends until the 2026-08-02 merge folded the duplicate /markets
-// tree into /market; the old URL still 307s here.
-
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { api, pollMs, POLL_DEFAULT, type Trends, type TrendsMover } from "@/lib/api";
-import { ago, fmtPct, fmtScore, scoreColor } from "@/lib/format";
-import ScoreGauge from "@/components/ScoreGauge";
+import { ago, fmtPct, scoreColor } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import Gauge from "@/components/viz/Gauge";
 import HelpTip from "@/components/HelpTip";
-import PagePurpose from "@/components/PagePurpose";
 import PatternsExplorer from "@/components/markets/PatternsExplorer";
+import { Reveal, StatTile, PageHero, DeltaBadge, Spark, MiniBar } from "@/components/ui/Kit";
 
-function MoverRow({ m }: { m: TrendsMover }) {
+function MoverCard({ m, maxChange, i }: { m: TrendsMover; maxChange: number; i: number }) {
+  const dir = m.dayChangePct > 0 ? "up" : m.dayChangePct < 0 ? "down" : "";
+  const colorVar = dir === "up" ? "--bid" : dir === "down" ? "--ask" : "--dim";
   return (
-    <li
-      className="flex items-center gap-3 px-4 py-2.5 transition-colors duration-150 hover:bg-[var(--panel2)]"
-      style={{ borderBottom: "1px solid var(--border)" }}
+    <Link
+      href={`/s/${m.market}/${encodeURIComponent(m.symbol)}`}
+      className="panel reveal-item block p-4 transition-colors duration-150 hover:border-[var(--accent)] cursor-pointer"
+      style={{ "--i": Math.min(12, i) } as React.CSSProperties}
     >
-      <Link
-        href={`/s/${m.market}/${encodeURIComponent(m.symbol)}`}
-        className="mono w-24 shrink-0 cursor-pointer text-[0.75rem] font-bold transition-colors duration-150 hover:text-[var(--accent)]"
-      >
-        {m.symbol}
-        <span className="ml-1.5 text-[0.75rem] font-normal" style={{ color: "var(--faint)" }}>
-          {m.market}
-        </span>
-      </Link>
-      <div className="min-w-0 flex-1">
-        <ScoreGauge score={m.score} compact label={`${m.symbol} pressure score`} />
+      <div className="flex justify-between items-start mb-2">
+        <span className="mono text-sm font-bold">{m.symbol}</span>
+        <DeltaBadge value={m.dayChangePct} />
       </div>
-      <span
-        className="tnum w-14 shrink-0 text-right text-[0.75rem]"
-        style={{ color: scoreColor(m.score) }}
-      >
-        {fmtScore(m.score)}
-      </span>
-      <span
-        className="tnum w-16 shrink-0 text-right text-[0.75rem]"
-        style={{ color: scoreColor(m.dayChangePct) }}
-      >
-        {fmtPct(m.dayChangePct)}
-      </span>
-    </li>
-  );
-}
-
-function MoversPanel({ title, movers }: { title: string; movers: TrendsMover[] }) {
-  return (
-    <section className="panel">
-      <div className="panel-h">
-        {title}
-        <HelpTip label="What is the pressure score?">
-          The pressure score blends stored technical components into one number from −1 (sell
-          pressure) to +1 (buy pressure). It describes current conditions from recorded bars —
-          not a forecast, and not financial advice.
-        </HelpTip>
-      </div>
-      {movers.length === 0 ? (
-        <EmptyState
-          message="No scored symbols yet"
-          detail="Scores appear once enough bars are recorded."
+      <div className="flex items-end justify-between gap-2">
+        <div className="flex flex-col gap-1 min-w-0">
+          <span className="text-xs truncate" style={{ color: "var(--dim)" }}>
+            {m.market}
+          </span>
+          <span
+            className="tnum text-2xl font-bold num-hero"
+            style={{ color: `var(${colorVar})` }}
+          >
+            {fmtPct(m.dayChangePct)}
+          </span>
+        </div>
+        <MiniBar
+          value={Math.abs(m.dayChangePct)}
+          max={maxChange || 1}
+          color={`var(${colorVar})`}
+          i={i}
+          height={8}
         />
-      ) : (
-        <ul>
-          {movers.map((m) => (
-            <MoverRow key={`${m.market}:${m.symbol}`} m={m} />
-          ))}
-        </ul>
-      )}
-    </section>
+      </div>
+      <div className="mt-2 text-xs" style={{ color: "var(--faint)" }}>
+        Score:{" "}
+        <span className="tnum" style={{ color: scoreColor(m.score) }}>
+          {m.score.toFixed(2)}
+        </span>
+      </div>
+    </Link>
   );
 }
 
@@ -98,7 +73,6 @@ export default function TrendsPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    // Trend scores move on worker cadence — the default tier is plenty.
     const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
@@ -106,60 +80,56 @@ export default function TrendsPage() {
     };
   }, [retryTick]);
 
-  const { top, bottom } = useMemo(() => {
+  const { top, bottom, topGainer, topLoser, upMovers, downMovers } = useMemo(() => {
     const movers = trends?.movers ?? [];
     const sorted = [...movers]
       .filter((m) => isFinite(m.score))
-      .sort((a, b) => b.score - a.score);
-    return {
-      top: sorted.slice(0, 10),
-      bottom: [...sorted].reverse().slice(0, 10),
-    };
+      .sort((a, b) => b.dayChangePct - a.dayChangePct);
+
+    const top = sorted.slice(0, 12);
+    const bottom = [...sorted].reverse().slice(0, 12);
+
+    const topGainer = sorted[0] || null;
+    const topLoser = sorted[sorted.length - 1] || null;
+
+    const upMovers = movers.filter((m) => m.dayChangePct > 0).length;
+    const downMovers = movers.filter((m) => m.dayChangePct < 0).length;
+
+    return { top, bottom, topGainer, topLoser, upMovers, downMovers };
   }, [trends]);
+
+  const maxTopChange = useMemo(() => {
+    const changes = top.map((m) => Math.abs(m.dayChangePct));
+    return Math.max(...changes, 1);
+  }, [top]);
+
+  const maxBottomChange = useMemo(() => {
+    const changes = bottom.map((m) => Math.abs(m.dayChangePct));
+    return Math.max(...changes, 1);
+  }, [bottom]);
 
   const loading = trends === null && err === null;
   const hardError = trends === null && err !== null;
 
-  const scored = trends?.scored ?? 0;
-  const positive = Math.min(trends?.positive1d ?? 0, scored);
-  const negative = Math.max(0, scored - positive);
-  const posPct = scored > 0 ? (positive / scored) * 100 : 0;
-
   return (
-    <div className="flex flex-col gap-4">
-      {/* header row */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">TRENDS</h1>
-        {trends !== null && (
-          <>
-            <span className="chip tnum">tracked {trends.tracked}</span>
-            <span className="chip tnum">scored {trends.scored}</span>
-            <span className="chip tnum">
-              <span style={{ color: positive > negative ? "var(--bid)" : undefined }}>
-                {positive} of {scored} positive
-              </span>{" "}
-              on 1d
-            </span>
-          </>
-        )}
-        {err !== null && trends !== null && (
-          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
-            poll failed — showing last data
-          </span>
-        )}
-      </div>
-
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="markets-trends"
-        text="Which symbols are trending up or down right now, and how strongly? Descriptive trend state per symbol — what IS happening, not what will."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Trends"
+        subtitle="Who is moving and how persistently — every mover with its recent shape, not just a number."
+        right={
+          trends !== null && (
+            <div className="flex flex-wrap gap-2">
+              <span className="chip tnum">Tracked {trends.tracked}</span>
+              <span className="chip tnum">Scored {trends.scored}</span>
+            </div>
+          )
+        }
       />
 
-      {loading && <Skeleton lines={4} label="loading trends" />}
-
+      {loading && <Skeleton lines={4} label="Loading trends..." />}
       {hardError && (
         <ErrorState
-          message={err ?? "request failed"}
+          message={err ?? "Request failed"}
           hint="Is the daemon running? Start it with signaldeckd and this page will recover."
           retry={() => {
             setErr(null);
@@ -170,82 +140,105 @@ export default function TrendsPage() {
 
       {trends !== null && (
         <>
-          {/* breadth bar */}
+          <Reveal>
+            <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+              <StatTile
+                label="Top Gainer"
+                value={topGainer?.symbol || "—"}
+                sub={topGainer ? `${topGainer.market} • ${fmtPct(topGainer.dayChangePct)}` : ""}
+                glow="up"
+                i={0}
+              />
+              <StatTile
+                label="Top Loser"
+                value={topLoser?.symbol || "—"}
+                sub={topLoser ? `${topLoser.market} • ${fmtPct(topLoser.dayChangePct)}` : ""}
+                glow="down"
+                i={1}
+              />
+              <StatTile
+                label="Up Movers"
+                value={upMovers}
+                sub="symbols with positive 1d change"
+                glow="hud"
+                i={2}
+              />
+              <StatTile
+                label="Down Movers"
+                value={downMovers}
+                sub="symbols with negative 1d change"
+                glow="accent"
+                i={3}
+              />
+            </div>
+          </Reveal>
+
           <section className="panel">
-            <div className="panel-h">
-              1D BREADTH
-              <span className="tnum" style={{ color: "var(--faint)" }}>
-                share of scored symbols with positive 1d pressure
+            <div className="panel-h flex justify-between">
+              <span>
+                Market Breadth
+                <HelpTip label="What is market breadth?">
+                  The ratio of moving symbols that are up versus down, showing overall market direction.
+                </HelpTip>
+              </span>
+              <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                {upMovers + downMovers} moving symbols
               </span>
             </div>
-            <div className="flex flex-wrap items-center gap-x-8 gap-y-4 px-4 py-4">
-              {/* Stage 5: breadth dial — same number as the split bar, at a
-                  glance; the caption carries the honest n. */}
-              <Gauge
-                label="1D BREADTH"
-                value={posPct}
-                min={0}
-                max={100}
-                hasData={scored > 0}
-                caption={
-                  scored > 0
-                    ? `${positive} of ${scored} scored symbols positive on 1d — descriptive, from stored scores`
-                    : "nothing scored yet — the scorer agent fills this in as bar history accrues"
-                }
-                format={(v) => `${v.toFixed(0)}%`}
-                zones={[
-                  { from: 0, to: 45, color: "var(--ask)" },
-                  { from: 45, to: 55, color: "var(--dim)" },
-                  { from: 55, to: 100, color: "var(--bid)" },
-                ]}
-              />
-              <div className="min-w-56 flex-1">
-              {scored === 0 ? (
-                <div className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                  nothing scored yet — the scorer agent fills this in as bar history accrues.
-                </div>
-              ) : (
-                <>
-                  <div
-                    role="meter"
-                    aria-valuemin={0}
-                    aria-valuemax={scored}
-                    aria-valuenow={positive}
-                    aria-label={`market breadth: ${positive} of ${scored} scored symbols positive on 1d`}
-                    className="flex h-4 overflow-hidden rounded-full border"
-                    style={{ borderColor: "var(--border)", background: "var(--panel2)" }}
-                  >
-                    <div
-                      className="transition-[width] duration-300"
-                      style={{ width: `${posPct}%`, background: "var(--bid)" }}
-                    />
-                    <div
-                      className="transition-[width] duration-300"
-                      style={{ width: `${100 - posPct}%`, background: "var(--ask)" }}
-                    />
-                  </div>
-                  <div className="tnum mt-2 flex justify-between text-[0.75rem]">
-                    <span style={{ color: "var(--bid)" }}>
-                      {positive} positive ({posPct.toFixed(0)}%)
-                    </span>
-                    <span style={{ color: "var(--ask)" }}>
-                      {negative} flat / negative ({(100 - posPct).toFixed(0)}%)
-                    </span>
-                  </div>
-                </>
-              )}
+            <div className="px-4 py-3">
+              <div
+                role="meter"
+                aria-valuemin={0}
+                aria-valuemax={upMovers + downMovers}
+                aria-valuenow={upMovers}
+                aria-label={`Market breadth: ${upMovers} up, ${downMovers} down`}
+                className="flex h-3 overflow-hidden rounded-full"
+                style={{ background: "rgba(255,255,255,0.06)" }}
+              >
+                <div
+                  className="bar-animate transition-[width] duration-300"
+                  style={{
+                    width: `${((upMovers / (upMovers + downMovers || 1)) * 100)}%`,
+                    background: "var(--bid)",
+                  }}
+                />
+                <div
+                  className="bar-animate transition-[width] duration-300"
+                  style={{
+                    width: `${((downMovers / (upMovers + downMovers || 1)) * 100)}%`,
+                    background: "var(--ask)",
+                  }}
+                />
+              </div>
+              <div className="flex justify-between mt-2 text-[0.75rem]">
+                <span className="tnum" style={{ color: "var(--bid)" }}>
+                  {upMovers} up
+                </span>
+                <span className="tnum" style={{ color: "var(--ask)" }}>
+                  {downMovers} down
+                </span>
               </div>
             </div>
           </section>
 
-          {/* movers */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <MoversPanel title="TOP MOVERS — HIGHEST SCORE" movers={top} />
-            <MoversPanel title="BOTTOM MOVERS — LOWEST SCORE" movers={bottom} />
-          </div>
+          <Reveal>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {top.map((m, i) => (
+                <MoverCard key={`${m.market}:${m.symbol}`} m={m} maxChange={maxTopChange} i={i} />
+              ))}
+            </div>
+          </Reveal>
 
-          {/* 2026-07-18 upgrade: what kind of candlestick patterns are firing */}
+          <Reveal>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {bottom.map((m, i) => (
+                <MoverCard key={`${m.market}:${m.symbol}`} m={m} maxChange={maxBottomChange} i={i} />
+              ))}
+            </div>
+          </Reveal>
+
           <PatternsExplorer />
+
           <p className="px-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
             <Link
               href="/market/overview"
@@ -256,12 +249,11 @@ export default function TrendsPage() {
             </Link>
           </p>
 
-          {/* market insight */}
           <section className="panel">
-            <div className="panel-h">
-              MARKET INSIGHT
+            <div className="panel-h flex justify-between">
+              <span>Market Insight</span>
               {trends.marketInsight && (
-                <span className="tnum" style={{ color: "var(--faint)" }}>
+                <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
                   {ago(trends.marketInsight.ts)}
                 </span>
               )}

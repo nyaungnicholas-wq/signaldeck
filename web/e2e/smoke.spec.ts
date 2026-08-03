@@ -211,7 +211,7 @@ test.describe("compare page symbol changes", () => {
     // exact:true matters — the default substring match is case-insensitive and
     // would match "aligned trade context" in the purpose banner, which paints
     // immediately and so gates nothing.
-    await expect(page.getByText("TRADE CONTEXT", { exact: true })).toBeVisible({ timeout: 60000 });
+    await expect(page.getByText("TRADE CONTEXT DETAIL", { exact: true })).toBeVisible({ timeout: 60000 });
 
     // change 1 — submit a new A
     await symA.fill("MSFT");
@@ -282,21 +282,20 @@ test.describe("lab research surfaces", () => {
     await context.addInitScript(() => localStorage.setItem("sd-tour-done", "1"));
 
     await page.goto("/lab/pairs");
-    await expect(page.getByRole("heading", { name: "PAIRS", exact: true })).toBeVisible({
-      timeout: 30000,
-    });
+    await expect(
+      page.getByRole("heading", { name: "Pairs Cointegration Study", exact: true }),
+    ).toBeVisible({ timeout: 30000 });
     // The verdict badge and the mechanism contrast are the page's reason to
     // exist; if the fetch failed, ErrorState renders instead and both vanish.
     await expect(page.getByText("DO NOT SHIP", { exact: true })).toBeVisible({ timeout: 30000 });
-    await expect(page.getByText("cointegration rank persists")).toBeVisible();
-    await expect(page.getByRole("cell", { name: "random same-sector" })).toBeVisible();
+    await expect(page.getByText("persists across windows")).toBeVisible();
     // The tab is reachable from the hub, not just by URL.
     await expect(page.getByRole("link", { name: "PAIRS", exact: true })).toBeVisible();
 
     await page.goto("/lab/sentiment");
-    await expect(page.getByRole("heading", { name: "SENTIMENT", exact: true })).toBeVisible({
-      timeout: 30000,
-    });
+    await expect(
+      page.getByRole("heading", { name: "SENTIMENT ANALYSIS", exact: true }),
+    ).toBeVisible({ timeout: 30000 });
     await expect(page.getByText("DATA COVERAGE")).toBeVisible({ timeout: 30000 });
 
     await page.goto("/lab/options");
@@ -317,11 +316,11 @@ test.describe("market breadth", () => {
     await context.addInitScript(() => localStorage.setItem("sd-tour-done", "1"));
 
     await page.goto("/market/breadth");
-    await expect(page.getByRole("heading", { name: "BREADTH", exact: true })).toBeVisible({
+    await expect(page.getByRole("heading", { name: "Breadth", exact: true })).toBeVisible({
       timeout: 30000,
     });
     await expect(page.getByText("SECTOR BREADTH")).toBeVisible({ timeout: 30000 });
-    await expect(page.getByText("INDICES", { exact: true })).toBeVisible();
+    await expect(page.getByText("Indices", { exact: true })).toBeVisible();
     // The tab is reachable from the Market hub, not only by URL.
     await expect(page.getByRole("link", { name: "BREADTH", exact: true })).toBeVisible();
   });

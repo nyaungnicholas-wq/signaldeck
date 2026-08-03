@@ -1,14 +1,6 @@
 "use client";
 
-// SHORTS (Stage 5 — FINRA Reg SHO): daily short sale VOLUME from FINRA's
-// free, registration-less Consolidated NMS files, universe-scoped to tracked
-// symbols. HONESTY, prominently and verbatim from the API: this ratio is NOT
-// short interest — it includes market-maker activity, and a high ratio is
-// NOT directly bearish (the classic retail misread). The sparkline is drawn
-// DIRECTION-NEUTRAL (accent, not green/red) for the same reason: a rising
-// ratio is not "good" or "bad".
-
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import {
   pollMs,
@@ -25,14 +17,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
-import PagePurpose from "@/components/PagePurpose";
-// Stage 4 (tables→charts): inline magnitude bars behind the ratio cells —
-// deliberately ACCENT (direction-neutral), because this ratio is not
-// bullish/bearish and a green/red fill would imply it is.
-import CellBar from "@/components/viz/CellBar";
-
-const RATIO_BAR_TITLE =
-  "share of the day's volume sold short — absolute 0–100% scale; magnitude only, NOT directional (includes market makers)";
+import { Reveal, PageHero, StatTile, MiniBar } from "@/components/ui/Kit";
 
 function fmtVol(v: number): string {
   if (!isFinite(v)) return "—";
@@ -46,36 +31,26 @@ function fmtPct(v: number): string {
   return `${(v * 100).toFixed(1)}%`;
 }
 
-/** Direction-NEUTRAL ratio sparkline: accent stroke on purpose — trend color
- *  would imply a high/rising ratio is directional, which the caveat denies. */
-function RatioSpark({ values }: { values: number[] }) {
-  const w = 110;
-  const h = 26;
-  const pts = (values ?? []).filter((v) => Number.isFinite(v));
-  if (pts.length < 5) {
-    return (
-      <svg width={w} height={h} role="img" aria-label="not enough days for a trend yet (needs 5+)">
-        <title>not enough stored days yet (needs 5+) — the worker ingests one file per trading day</title>
-        <line x1={2} y1={h / 2} x2={w - 2} y2={h / 2} stroke="var(--border)" strokeDasharray="2 4" />
-      </svg>
-    );
-  }
-  const min = Math.min(...pts);
-  const max = Math.max(...pts);
-  const span = max - min || 1;
-  const path = pts
-    .map((v, i) => {
-      const x = 2 + (i / (pts.length - 1)) * (w - 4);
-      const y = h - 3 - ((v - min) / span) * (h - 6);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
+type SortKey = "symbol" | "day" | "shortPct" | "shortVol" | "totalVol";
+
+function SortIcon({ active, asc }: { active: boolean; asc?: boolean }) {
   return (
-    <svg width={w} height={h} role="img" aria-label={`ratio ${fmtPct(pts[0])} → ${fmtPct(pts[pts.length - 1])} over ${pts.length} days (descriptive, not directional)`}>
-      <polyline points={path} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
+    <svg width="10" height="10" viewBox="0 0 10 10" className="inline ml-1" style={{ opacity: active ? 1 : 0.3 }}>
+      <polygon points={asc ? "5,1 9,6 1,6" : "5,9 9,4 1,4"} fill="currentColor" />
     </svg>
   );
 }
+
+function SortBtn({ label, sortKey, current, asc, onClick }: { label: string; sortKey: SortKey; current: SortKey; asc: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="chip text-[0.7rem] cursor-pointer border px-2 py-0.5" style={{ color: current === sortKey ? "var(--hud)" : "var(--dim)", borderColor: current === sortKey ? "var(--hud)" : "var(--border)" }}>
+      {label}
+      <SortIcon active={current === sortKey} asc={asc} />
+    </button>
+  );
+}
+
+const RATIO_BAR_TITLE = "share of the day's volume sold short — magnitude only, NOT directional";
 
 export default function ShortsPage() {
   const { symbol } = useIntelSymbol();
@@ -83,44 +58,27 @@ export default function ShortsPage() {
   const [series, setSeries] = useState<ShortsSymbolResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  const [sortKey, setSortKey] = useState<SortKey>("shortPct");
+  const [sortAsc, setSortAsc] = useState(false);
 
   useEffect(() => {
     let alive = true;
     const load = () => {
       if (symbol) {
-        shortsSymbol(symbol, 30)
-          .then((r) => {
-            if (!alive) return;
-            setSeries(r);
-            setErr(null);
-          })
-          .catch((e: unknown) => {
-            if (!alive) return;
-            setSeries(null);
-            setErr(e instanceof Error ? e.message : String(e));
-          });
+        shortsSymbol(symbol, 30).then((r) => { if (!alive) return; setSeries(r); setErr(null); }).catch((e: unknown) => { if (!alive) return; setSeries(null); setErr(e instanceof Error ? e.message : String(e)); });
       } else {
-        shortsExtremes(20)
-          .then((r) => {
-            if (!alive) return;
-            setExtremes(r);
-            setErr(null);
-          })
-          .catch((e: unknown) => {
-            if (!alive) return;
-            setErr(e instanceof Error ? e.message : String(e));
-          });
+        shortsExtremes(20).then((r) => { if (!alive) return; setExtremes(r); setErr(null); }).catch((e: unknown) => { if (!alive) return; setExtremes(null); setErr(e instanceof Error ? e.message : String(e)); });
       }
     };
     load();
-    // POLL_SLOW: FINRA files land once per trading day — the slowest tier
-    // is still generous here.
     const stop = pollMs(load, POLL_SLOW);
-    return () => {
-      alive = false;
-      stop();
-    };
+    return () => { alive = false; stop(); };
   }, [symbol, retryTick]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortAsc(!sortAsc);
+    else { setSortKey(key); setSortAsc(key === "symbol" || key === "day"); }
+  };
 
   const data = symbol ? series : extremes;
   const loading = data === null && err === null;
@@ -128,162 +86,205 @@ export default function ShortsPage() {
   const caveat = data?.caveat ?? "";
   const note = data?.note ?? "";
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">SHORTS</h1>
-        {/* THE caveat — the whole point of the honesty doctrine here. */}
-        <span className="chip" style={{ color: "var(--warn)", borderColor: "var(--warn)" }}>
-          NOT short interest — volume ratio only
-        </span>
-        {err !== null && data !== null && (
-          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
-            poll failed — showing last data
-          </span>
-        )}
-      </div>
+  const sortedExtremes = useMemo(() => {
+    if (!extremes?.extremes) return [];
+    const arr = [...extremes.extremes];
+    arr.sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "symbol") cmp = a.symbol.localeCompare(b.symbol);
+      else if (sortKey === "day") cmp = a.day.localeCompare(b.day);
+      else if (sortKey === "shortPct") cmp = (a.shortPct ?? 0) - (b.shortPct ?? 0);
+      else if (sortKey === "shortVol") cmp = (a.shortVol ?? 0) - (b.shortVol ?? 0);
+      else cmp = (a.totalVol ?? 0) - (b.totalVol ?? 0);
+      return sortAsc ? cmp : -cmp;
+    });
+    return arr;
+  }, [extremes, sortKey, sortAsc]);
 
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="intel-shorts"
-        text="How much of each stock's daily volume was sold short? This is NOT short interest — it includes market makers, and a high ratio is not automatically bearish."
+  const maxRatio = useMemo(() => {
+    if (!sortedExtremes.length) return 1;
+    return Math.max(...sortedExtremes.map((e) => e.shortPct ?? 0), 0.01);
+  }, [sortedExtremes]);
+
+  const maxShortVol = useMemo(() => {
+    if (!sortedExtremes.length) return 1;
+    return Math.max(...sortedExtremes.map((e) => e.shortVol ?? 0), 1);
+  }, [sortedExtremes]);
+
+  const heroStats = useMemo(() => {
+    if (symbol && series?.series?.length) {
+      const s = series.series;
+      const avgRatio = s.reduce((acc, p) => acc + (p.shortPct ?? 0), 0) / s.length;
+      const totalShort = s.reduce((acc, p) => acc + (p.shortVol ?? 0), 0);
+      return [
+        { label: "Days Tracked", value: s.length },
+        { label: "Avg Ratio", value: avgRatio * 100, decimals: 1, suffix: "%" },
+        { label: "Total Short Vol", value: totalShort, decimals: 0, sub: fmtVol(totalShort) },
+        series?.latestZ != null ? { label: "Latest Z-Score", value: series.latestZ, decimals: 2, glow: "hud" as const } : null,
+      ].filter((x) => x !== null);
+    }
+    if (extremes?.extremes?.length) {
+      const e = extremes.extremes;
+      const avgRatio = e.reduce((acc, x) => acc + (x.shortPct ?? 0), 0) / e.length;
+      const totalShort = e.reduce((acc, x) => acc + (x.shortVol ?? 0), 0);
+      return [
+        { label: "Symbols", value: e.length },
+        { label: "Avg Ratio", value: avgRatio * 100, decimals: 1, suffix: "%" },
+        { label: "Highest Ratio", value: (e[0]?.shortPct ?? 0) * 100, decimals: 1, suffix: "%", glow: "accent" as const },
+        { label: "Total Short Vol", value: totalShort, decimals: 0, sub: fmtVol(totalShort) },
+      ];
+    }
+    return [];
+  }, [symbol, series, extremes]);
+
+  const chipStyle = { color: "var(--warn)", borderColor: "var(--warn)" };
+
+  const controls = (
+    <>
+      <span className="chip" style={chipStyle}>NOT short interest — volume ratio only</span>
+      {err !== null && data !== null && <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>poll failed</span>}
+    </>
+  );
+
+  return (
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Short Interest"
+        subtitle="Who is betting against what — short interest and squeeze pressure, ranked."
+        right={controls}
       />
 
       {loading && <Skeleton lines={6} label="loading short sale volume" />}
       {hardError && (
         <ErrorState
           message={err ?? "short volume data unavailable"}
-          hint={
-            symbol
-              ? "Only tracked stocks have Reg SHO rows (ingestion is universe-scoped) — clear the shared symbol filter or check the daemon."
-              : "Is the daemon running? The finra-shorts worker ingests FINRA's daily file after ~6:30pm ET."
-          }
-          retry={() => {
-            setErr(null);
-            setRetryTick((t) => t + 1);
-          }}
+          hint={symbol ? "Only tracked stocks have Reg SHO rows — clear the shared symbol filter or check the daemon." : "Is the daemon running? The finra-shorts worker ingests FINRA's daily file after ~6:30pm ET."}
+          retry={() => { setErr(null); setRetryTick((t) => t + 1); }}
         />
       )}
 
+      {heroStats.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {heroStats.map((s, i) => (
+            <StatTile key={s.label} label={s.label} value={s.value} decimals={s.decimals} suffix={s.suffix} sub={s.sub} glow={s.glow} i={i} />
+          ))}
+        </div>
+      )}
+
       {data !== null && (
-        <section className="panel">
-          <div className="panel-h flex-wrap gap-2">
-            {symbol ? `DAILY SHORT SALE VOLUME — ${symbol}` : "HIGHEST SHORT VOLUME RATIOS (LATEST DAY)"}
-            {symbol ? (
-              <span className="chip" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>
-                {symbol} — from the shared intel filter
-              </span>
-            ) : (
-              extremes?.day && <span className="chip tnum">{extremes.day}</span>
-            )}
+        <section className="hud-panel">
+          <div className="panel-h flex flex-wrap items-center gap-2">
+            <span>{symbol ? `DAILY SHORT SALE VOLUME — ${symbol}` : "HIGHEST SHORT VOLUME RATIOS"}</span>
+            {extremes?.day && !symbol && <span className="chip tnum">{extremes.day}</span>}
             {symbol && series?.latestZ != null && (
               <span className="flex items-center gap-1">
-                <span className="chip tnum">
-                  latest z {series.latestZ.toFixed(2)} (descriptive)
-                </span>
+                <span className="chip tnum">z {series.latestZ.toFixed(2)}</span>
                 <HelpTip label="what this z-score means">{series.zNote}</HelpTip>
               </span>
             )}
           </div>
 
-          {/* Verbatim caveat + provenance — always visible, never abbreviated. */}
-          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+          <p className="px-4 py-2 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             {caveat}. {note}
-            {!symbol && extremes ? ` ${extremes.floorNote} (minTotalVol ${fmtVol(extremes.minTotalVol)} shares).` : ""}
+            {!symbol && extremes ? ` ${extremes.floorNote} (minTotalVol ${fmtVol(extremes.minTotalVol)}).` : ""}
           </p>
 
           {symbol ? (
-            !series?.series || series.series.length === 0 ? (
-              <EmptyState
-                className="m-4"
-                message={`No Reg SHO rows stored for ${symbol}`}
-                detail="Rows exist only for tracked stocks and accrue one trading day at a time (first run backfills ~30 trading days). Crypto has no Reg SHO data."
-              />
+            !series?.series?.length ? (
+              <EmptyState className="m-4" message={`No Reg SHO rows for ${symbol}`} detail="Rows accrue one trading day at a time." />
             ) : (
-              <div className="table-wrap">
-                <table className="w-full text-[0.75rem]">
-                  <thead>
-                    <tr className="text-left" style={{ color: "var(--dim)" }}>
-                      <th className="px-4 py-2 font-normal">DAY</th>
-                      <th className="px-4 py-2 font-normal">RATIO</th>
-                      <th className="px-4 py-2 font-normal">SHORT VOL</th>
-                      <th className="px-4 py-2 font-normal">EXEMPT</th>
-                      <th className="px-4 py-2 font-normal">TOTAL VOL</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...series.series].reverse().map((p: ShortVolumePoint) => (
-                      <tr key={p.day} style={{ borderTop: "1px solid var(--border)" }}>
-                        <td className="px-4 py-2 tnum">{p.day}</td>
-                        <td className="px-4 py-2">
-                          <CellBar
-                            frac={Number.isFinite(p.shortPct) ? p.shortPct : null}
-                            label={fmtPct(p.shortPct)}
-                            color="var(--accent)"
-                            align="left"
-                            title={RATIO_BAR_TITLE}
-                          />
-                        </td>
-                        <td className="px-4 py-2 tnum">{fmtVol(p.shortVol)}</td>
-                        <td className="px-4 py-2 tnum">{fmtVol(p.shortExempt)}</td>
-                        <td className="px-4 py-2 tnum">{fmtVol(p.totalVol)}</td>
+              <Reveal>
+                <div className="table-wrap">
+                  <table className="v4-table w-full text-[0.75rem]">
+                    <thead>
+                      <tr className="text-left" style={{ color: "var(--dim)" }}>
+                        <th className="px-4 py-2 font-normal">DAY</th>
+                        <th className="px-4 py-2 font-normal">RATIO</th>
+                        <th className="px-4 py-2 font-normal">SHORT VOL</th>
+                        <th className="px-4 py-2 font-normal">EXEMPT</th>
+                        <th className="px-4 py-2 font-normal">TOTAL VOL</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {[...series.series].reverse().map((p: ShortVolumePoint, i) => (
+                        <tr key={p.day} className="reveal-item" style={{ "--i": Math.min(i, 12) } as React.CSSProperties}>
+                          <td className="px-4 py-2 tnum">{p.day}</td>
+                          <td className="px-4 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="tnum" style={{ width: "3.5rem" }}>{fmtPct(p.shortPct)}</span>
+                              <MiniBar value={p.shortPct ?? 0} max={1} color="var(--accent)" height={5} />
+                            </div>
+                          </td>
+                          <td className="px-4 py-2 tnum">{fmtVol(p.shortVol)}</td>
+                          <td className="px-4 py-2 tnum">{fmtVol(p.shortExempt)}</td>
+                          <td className="px-4 py-2 tnum">{fmtVol(p.totalVol)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Reveal>
             )
-          ) : !extremes?.extremes || extremes.extremes.length === 0 ? (
-            <EmptyState
-              className="m-4"
-              message="No Reg SHO data stored yet"
-              detail={extremes?.emptyNote ?? "The finra-shorts worker ingests FINRA's free daily file after ~6:30pm ET and backfills ~30 trading days on first run."}
-            />
+          ) : !extremes?.extremes?.length ? (
+            <EmptyState className="m-4" message="No Reg SHO data stored yet" detail={extremes?.emptyNote ?? "The finra-shorts worker ingests after ~6:30pm ET."} />
           ) : (
-            <div className="table-wrap">
-              <table className="w-full text-[0.75rem]">
-                <thead>
-                  <tr className="text-left" style={{ color: "var(--dim)" }}>
-                    <th className="px-4 py-2 font-normal">SYMBOL</th>
-                    <th className="px-4 py-2 font-normal">DAY</th>
-                    <th className="px-4 py-2 font-normal">RATIO</th>
-                    <th className="px-4 py-2 font-normal">LAST 30D</th>
-                    <th className="px-4 py-2 font-normal">SHORT VOL</th>
-                    <th className="px-4 py-2 font-normal">TOTAL VOL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {extremes.extremes.map((e: ShortsExtreme) => (
-                    <tr key={e.symbolId} style={{ borderTop: "1px solid var(--border)" }}>
-                      <td className="px-4 py-2">
-                        <Link
-                          href={`/s/stocks/${encodeURIComponent(e.symbol)}`}
-                          className="mono font-bold hover:underline"
-                          style={{ color: "var(--accent)" }}
-                        >
-                          {e.symbol}
-                        </Link>
-                      </td>
-                      <td className="px-4 py-2 tnum">{e.day}</td>
-                      <td className="px-4 py-2">
-                        <CellBar
-                          frac={Number.isFinite(e.shortPct) ? e.shortPct : null}
-                          label={fmtPct(e.shortPct)}
-                          color="var(--accent)"
-                          align="left"
-                          title={RATIO_BAR_TITLE}
-                        />
-                      </td>
-                      <td className="px-4 py-2">
-                        <RatioSpark values={e.spark} />
-                      </td>
-                      <td className="px-4 py-2 tnum">{fmtVol(e.shortVol)}</td>
-                      <td className="px-4 py-2 tnum">{fmtVol(e.totalVol)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <div className="px-4 pb-2 flex flex-wrap gap-1.5">
+                {(["shortPct", "shortVol", "totalVol", "day", "symbol"] as SortKey[]).map((k) => (
+                  <SortBtn key={k} label={{ shortPct: "Ratio", shortVol: "Short Vol", totalVol: "Total Vol", day: "Date", symbol: "Symbol" }[k]} sortKey={k} current={sortKey} asc={sortAsc} onClick={() => toggleSort(k)} />
+                ))}
+              </div>
+              <Reveal>
+                <div className="table-wrap">
+                  <table className="v4-table w-full text-[0.75rem]">
+                    <thead>
+                      <tr className="text-left" style={{ color: "var(--dim)" }}>
+                        <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("symbol")}>SYMBOL<SortIcon active={sortKey === "symbol"} asc={sortAsc} /></th>
+                        <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("day")}>DAY<SortIcon active={sortKey === "day"} asc={sortAsc} /></th>
+                        <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("shortPct")}>RATIO<SortIcon active={sortKey === "shortPct"} asc={sortAsc} /></th>
+                        <th className="px-4 py-2 font-normal">LAST 30D</th>
+                        <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("shortVol")}>SHORT VOL<SortIcon active={sortKey === "shortVol"} asc={sortAsc} /></th>
+                        <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("totalVol")}>TOTAL VOL<SortIcon active={sortKey === "totalVol"} asc={sortAsc} /></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedExtremes.map((e: ShortsExtreme, i) => (
+                        <tr key={e.symbolId} className="reveal-item" style={{ "--i": Math.min(i, 12) } as React.CSSProperties}>
+                          <td className="px-4 py-2">
+                            <Link href={`/s/stocks/${encodeURIComponent(e.symbol)}`} className="mono font-bold hover:underline" style={{ color: "var(--accent)" }}>{e.symbol}</Link>
+                          </td>
+                          <td className="px-4 py-2 tnum">{e.day}</td>
+                          <td className="px-4 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="tnum" style={{ width: "3.5rem" }}>{fmtPct(e.shortPct)}</span>
+                              <MiniBar value={e.shortPct ?? 0} max={maxRatio} color="var(--accent)" height={5} />
+                            </div>
+                          </td>
+                          <td className="px-4 py-2">
+                            {e.spark?.length >= 5 ? (
+                              <svg width="110" height="22" role="img" aria-label="30d ratio trend">
+                                <polyline
+                                  points={(() => { const pts = e.spark.filter((v) => Number.isFinite(v)); const min = Math.min(...pts); const max = Math.max(...pts); const span = max - min || 1; return pts.map((v, j) => `${(j / (pts.length - 1)) * 110},${20 - ((v - min) / span) * 16 - 2}`).join(" "); })()}
+                                  fill="none" stroke="var(--accent)" strokeWidth="1.5" className="draw-path" />
+                              </svg>
+                            ) : (
+                              <span className="text-[0.65rem]" style={{ color: "var(--faint)" }}>—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="tnum">{fmtVol(e.shortVol)}</span>
+                              <MiniBar value={e.shortVol ?? 0} max={maxShortVol} color="var(--hud)" height={5} />
+                            </div>
+                          </td>
+                          <td className="px-4 py-2 tnum">{fmtVol(e.totalVol)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Reveal>
+            </>
           )}
         </section>
       )}

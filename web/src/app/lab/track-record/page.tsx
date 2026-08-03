@@ -30,6 +30,7 @@ import Plain, { useViewMode } from "@/components/Plain";
 import GradeMeter from "@/components/viz/GradeMeter";
 import CellBar from "@/components/viz/CellBar";
 import PagePurpose from "@/components/PagePurpose";
+import { StatTile } from "@/components/ui/Kit";
 import StorySection from "@/components/StorySection";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -99,10 +100,10 @@ export default function TrackRecordPage() {
   const gated = current?.gated ?? true;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="page-enter flex flex-col gap-4">
       {/* header */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <h1 className="text-sm font-extrabold tracking-[0.18em]">TRACK RECORD</h1>
+        <h1 className="hero-title text-xl font-extrabold tracking-[0.18em]">TRACK RECORD</h1>
         <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
           live out-of-sample — calibrated predictions vs what the market did
         </span>
@@ -192,6 +193,43 @@ export default function TrackRecordPage() {
 
       {current && (
         <>
+          {/* v4 hero band — headline skill numbers, honest about the gate:
+              anything the daemon withholds renders as "withheld", never 0. */}
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatTile
+              label="Independent N"
+              value={current.independentN ?? 0}
+              sub={`gate floor ${current.minIndependentN ?? 0} · ${(current.rawN ?? 0).toLocaleString("en-US")} raw rows`}
+              glow="hud"
+              i={0}
+            />
+            <StatTile
+              label="Win Rate"
+              value={current.winRate != null ? current.winRate * 100 : "withheld"}
+              decimals={1}
+              suffix={current.winRate != null ? "%" : ""}
+              sub={current.baseRate != null ? `base rate ${(current.baseRate * 100).toFixed(1)}%` : "vs realized outcomes"}
+              glow={current.winRate != null && current.baseRate != null && current.winRate > current.baseRate ? "up" : undefined}
+              i={1}
+            />
+            <StatTile
+              label="Brier Skill"
+              value={current.brierSkill != null ? current.brierSkill : "withheld"}
+              decimals={3}
+              sub="above 0 beats the base-rate constant"
+              glow={current.brierSkill != null && current.brierSkill > 0 ? "up" : current.brierSkill != null ? "down" : undefined}
+              i={2}
+            />
+            <StatTile
+              label="Info Coefficient"
+              value={current.ic != null ? current.ic : "withheld"}
+              decimals={3}
+              sub="rank correlation, prediction vs outcome"
+              glow={current.ic != null && current.ic > 0 ? "up" : undefined}
+              i={3}
+            />
+          </div>
+
           {/* ── CREDIBILITY WAVE: live regime grading + owned misses ── */}
           <RegimesLivePanel regimes={trackRecordRegimes(current)} />
           <RegimeMissesPanel pms={pms} />
@@ -203,7 +241,7 @@ export default function TrackRecordPage() {
             sub="the scoreboard's one honest headline"
           >
           {gated ? (
-            <section className="panel p-5">
+            <section className="panel reveal-item p-5">
               <p className="m-0 text-[1.05rem] font-extrabold tracking-wide" style={{ color: "var(--warn)" }}>
                 TOO EARLY TO GRADE
               </p>
@@ -246,7 +284,7 @@ export default function TrackRecordPage() {
               </p>
             </section>
           ) : (
-            <section className="panel p-5">
+            <section className="panel reveal-item p-5">
               <p className="m-0 text-[1.05rem] font-extrabold tracking-wide" style={{ color: "var(--ok)" }}>
                 MEASURED{current.winRate != null ? `: right ${pct(current.winRate)} of the time` : ""}
               </p>
@@ -267,7 +305,7 @@ export default function TrackRecordPage() {
             sub="what is accruing, what is withheld, and the measured components"
           >
           {gated && (
-            <section className="panel p-5">
+            <section className="panel reveal-item p-5">
               {current.gate && (
                 <p className="mt-2 text-[0.75rem] tnum" style={{ color: "var(--faint)" }}>
                   last 7 days: +{current.gate.accrual7d.independentNew} independent
@@ -395,7 +433,7 @@ export default function TrackRecordPage() {
           >
           {/* RELIABILITY CURVE + COVERAGE */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <section className="panel">
+            <section className="panel reveal-item">
               <div className="panel-h">
                 <span>RELIABILITY (CALIBRATION)</span>
                 {current.reliabilityScore != null && !gated && (
@@ -418,12 +456,12 @@ export default function TrackRecordPage() {
               </div>
             </section>
 
-            <section className="panel">
+            <section className="panel reveal-item">
               <div className="panel-h">
                 <span>RESOLVED COVERAGE · ALL HORIZONS</span>
               </div>
               <div className="table-wrap">
-                <table className="w-full text-[0.75rem]">
+                <table className="v4-table w-full text-[0.75rem]">
                   <thead>
                     <tr style={{ color: "var(--faint)" }}>
                       <th className="px-4 py-2 text-left font-medium">horizon</th>
@@ -465,7 +503,7 @@ export default function TrackRecordPage() {
 
           {/* BY MARKET (descriptive) */}
           {current.byMarket && current.byMarket.length > 0 && (
-            <section className="panel">
+            <section className="panel reveal-item">
               <div className="panel-h">
                 <span>BY MARKET · DESCRIPTIVE</span>
                 <span className="ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
@@ -473,7 +511,7 @@ export default function TrackRecordPage() {
                 </span>
               </div>
               <div className="table-wrap">
-                <table className="w-full text-[0.75rem]">
+                <table className="v4-table w-full text-[0.75rem]">
                   <thead>
                     <tr style={{ color: "var(--faint)" }}>
                       <th className="px-4 py-2 text-left font-medium">market</th>
@@ -522,7 +560,7 @@ export default function TrackRecordPage() {
 
           {/* SELF-VERIFYING LINKS: ledger integrity + paper P&L + turnover/capacity */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <section className="panel">
+            <section className="panel reveal-item">
               <div className="panel-h">
                 <span>SELF-VERIFYING · LEDGER</span>
                 <Link
@@ -568,7 +606,7 @@ export default function TrackRecordPage() {
               </div>
             </section>
 
-            <section className="panel">
+            <section className="panel reveal-item">
               <div className="panel-h">
                 <span>SELF-VERIFYING · PAPER P&amp;L</span>
                 <Link
@@ -658,7 +696,7 @@ function TrackReportCard({
   const brierRead = readMetric("brier", brier, ctx);
   const relRead = readMetric("reliability", reliabilityScore, ctx);
   return (
-    <section className="panel">
+    <section className="panel reveal-item">
       <div className="panel-h">
         REPORT CARD
         <span className="ml-auto text-[0.75rem] font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
@@ -722,7 +760,7 @@ function RegimesLivePanel({
   if (!regimes) return null;
   if (!regimes.available) {
     return (
-      <section className="panel">
+      <section className="panel reveal-item">
         <div className="panel-h">REGIMES — LIVE</div>
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           regime grading unavailable{regimes.error ? ` — ${regimes.error}` : ""}.
@@ -736,7 +774,7 @@ function RegimesLivePanel({
     ...Object.keys(kinds).filter((k) => !REGIME_KIND_ORDER.includes(k)).sort(),
   ];
   return (
-    <section className="panel">
+    <section className="panel reveal-item">
       <div className="panel-h">
         <span>REGIMES — LIVE</span>
         <span
@@ -753,7 +791,7 @@ function RegimesLivePanel({
         </p>
       ) : (
         <div className="table-wrap">
-          <table className="w-full text-[0.75rem]">
+          <table className="v4-table w-full text-[0.75rem]">
             <thead>
               <tr style={{ color: "var(--faint)" }}>
                 <th className="px-4 py-2 text-left font-medium">kind</th>
@@ -809,7 +847,7 @@ function RegimesLivePanel({
 function RegimeMissesPanel({ pms }: { pms: RegimePostmortems | null }) {
   const rows = pms?.postmortems ?? [];
   return (
-    <section className="panel">
+    <section className="panel reveal-item">
       <div className="panel-h">
         <span>WHEN WE WERE WRONG</span>
         <span

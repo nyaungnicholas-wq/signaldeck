@@ -1,12 +1,5 @@
 "use client";
 
-// MARKET › MACRO — the 2026-07-18 merge of the old /markets/macro and
-// /markets/regimes pages into ONE compact read (user: "regime is messy, macro
-// too — combine those two"). Three bands: MARKET STATE stat tiles, the fleet
-// REGIME MAP with recent transitions, and the SECTOR ROTATION strip. Every
-// number keeps its source note; the validated per-symbol regime forecasts
-// stay on the REGIMES tab — this page is the fleet-level weather report.
-
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
@@ -16,15 +9,17 @@ import {
   type RegimeResponse,
   type SectorAgg,
 } from "@/lib/api";
-import { ago, fmtPct } from "@/lib/format";
+import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
-import PagePurpose from "@/components/PagePurpose";
 import ProOnly from "@/components/ProOnly";
 import Push20Macro from "@/components/macro/Push20Macro";
 import RankingTable from "@/components/regime/RankingTable";
 import CalendarsCard from "@/components/CalendarsCard";
 import EarningsEstCard from "@/components/EarningsEstCard";
+import {
+  PageHero, StatTile, DeltaBadge, Spark, Gauge, Reveal, AnimatedNumber
+} from "@/components/ui/Kit";
 
 const REGIME_COLORS: Record<string, string> = {
   uptrend: "var(--bid)",
@@ -32,22 +27,6 @@ const REGIME_COLORS: Record<string, string> = {
   range: "var(--dim)",
   squeeze: "var(--accent)",
 };
-
-function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="panel flex flex-col items-center gap-1 px-4 py-3">
-      <span className="tnum text-[1.5rem] font-bold leading-none">{value}</span>
-      <span className="text-[0.7rem] font-medium tracking-[0.14em]" style={{ color: "var(--dim)" }}>
-        {label}
-      </span>
-      {sub ? (
-        <span className="text-center text-[0.7rem] leading-snug" style={{ color: "var(--faint)" }}>
-          {sub}
-        </span>
-      ) : null}
-    </div>
-  );
-}
 
 export default function MacroCombinedPage() {
   const [macro, setMacro] = useState<Macro | null>(null);
@@ -77,171 +56,162 @@ export default function MacroCombinedPage() {
   for (const s of states) dist[s.label] = (dist[s.label] ?? 0) + 1;
   const changes = (regime?.changes ?? []).slice(0, 10);
 
+  const riskEvidence = macro ? {
+    riskOn: [
+      macro.breadthPct > 50 && `Breadth ${macro.breadthPct.toFixed(1)}% > 50`,
+      macro.volPct < 30 && `Volatility percentile ${macro.volPct.toFixed(0)}% < 30`,
+    ].filter(Boolean) as string[],
+    riskOff: [
+      macro.breadthPct < 50 && `Breadth ${macro.breadthPct.toFixed(1)}% < 50`,
+      macro.volPct > 70 && `Volatility percentile ${macro.volPct.toFixed(0)}% > 70`,
+    ].filter(Boolean) as string[]
+  } : null;
+
+  const riskScore = macro ? (macro.breadthPct + (100 - macro.volPct)) / 2 : 50;
+
   return (
-    <main className="mx-auto max-w-5xl space-y-4 px-4 py-6">
-      <h1 className="text-lg font-semibold">MACRO &amp; REGIME</h1>
-      <PagePurpose
-        id="market-macro"
-        text="The fleet-level weather report: market breadth and volatility state, the regime map across every tracked symbol, and sector rotation — compact by design. Per-symbol validated regime forecasts live on the REGIMES tab."
-      />
+    <main className="page-enter mx-auto max-w-5xl space-y-4 px-4 py-6">
+      <PageHero title="Macro" subtitle="The backdrop every trade lives in — rates, dollar, volatility and risk appetite at a glance." />
+
       {err && !macro ? <ErrorState message={err} /> : null}
       {!macro && !err ? <Skeleton lines={8} /> : null}
 
-      {macro ? (
-        <section aria-label="market state">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <StatTile
-              label="BREADTH"
-              value={`${macro.breadthPct.toFixed(1)}%`}
-              sub={`${macro.positive} of ${macro.scored} scored positive`}
-            />
-            <StatTile
-              label="VOLATILITY"
-              value={macro.volLabel || "—"}
-              sub={`SPY realized-vol percentile ${macro.volPct.toFixed(0)}%`}
-            />
-            <StatTile
-              label="REGIME MAP"
-              value={String(states.length || "—")}
-              sub="symbols classified below"
-            />
-            <StatTile
-              label="AS OF"
-              value={ago(macro.asOf)}
-              sub="stored data, worker cadence"
-            />
-          </div>
-          <p className="mt-1 text-[0.7rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-            {macro.note}
-          </p>
-        </section>
-      ) : null}
-
-      {states.length > 0 ? (
-        <section className="panel" aria-label="regime map">
-          <div className="panel-h">
-            REGIME MAP
-            <span className="font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
-              trend/range/squeeze classification per symbol
-            </span>
-            <Link href="/market/regimes" className="ml-auto text-[0.7rem] hover:text-[var(--accent)]">
-              validated regime forecasts →
-            </Link>
-          </div>
-          <div className="flex flex-wrap gap-2 px-4 py-3">
-            {Object.entries(dist)
-              .sort((a, b) => b[1] - a[1])
-              .map(([label, n]) => (
-                <span
-                  key={label}
-                  className="chip tnum px-3 py-1"
-                  style={{ color: REGIME_COLORS[label] ?? "var(--text)" }}
-                >
-                  {label}: {n}
-                </span>
-              ))}
-          </div>
-          {changes.length > 0 ? (
-            <div className="border-t px-4 py-2" style={{ borderColor: "var(--border)" }}>
-              <span className="text-[0.7rem] tracking-wider" style={{ color: "var(--faint)" }}>
-                RECENT TRANSITIONS
-              </span>
-              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-                {changes.map((c) => (
-                  <span key={`${c.symbol}-${c.ts}`} className="text-[0.75rem]">
-                    <Link
-                      href={`/s/stocks/${encodeURIComponent(c.symbol)}`}
-                      className="mono font-bold hover:text-[var(--accent)]"
-                    >
-                      {c.symbol}
-                    </Link>{" "}
-                    <span style={{ color: "var(--faint)" }}>
-                      {c.from} → {c.to} · {ago(c.ts)}
-                    </span>
-                  </span>
-                ))}
-              </div>
+      {macro && (
+        <Reveal className="space-y-4">
+          <section className="panel p-4">
+            <div className="panel-h">MARKET STATE</div>
+            <p className="mb-3 text-[0.75rem]" style={{ color: 'var(--dim)' }}>Current volatility regime and market breadth readings.</p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <StatTile label="BREADTH" value={macro.breadthPct} decimals={1} suffix="%" sub={`${macro.positive} of ${macro.scored} scored positive`} delta={macro.breadthPct - 50} spark={[macro.breadthPct]} i={0} glow={macro.breadthPct > 50 ? "up" : "down"} />
+              <StatTile label="VOLATILITY" value={macro.volLabel || "—"} sub={`SPY realized-vol percentile ${macro.volPct.toFixed(0)}%`} delta={macro.volPct - 50} i={1} />
+              <StatTile label="REGIME MAP" value={String(states.length || "—")} sub="symbols classified" i={2} />
+              <StatTile label="AS OF" value={new Date(macro.asOf * 1000).toISOString().slice(0, 10)} sub="stored data, worker cadence" i={3} />
             </div>
-          ) : null}
-        </section>
-      ) : null}
+            <p className="mt-2 text-[0.75rem]" style={{ color: 'var(--faint)' }}>{macro.note}</p>
+          </section>
 
-      {sectors && sectors.length > 0 ? (
-        <section className="panel" aria-label="sector rotation">
-          <div className="panel-h">
-            SECTOR ROTATION
-            <span className="font-normal normal-case tracking-normal" style={{ color: "var(--faint)" }}>
-              strongest → weakest by mean score
-            </span>
-          </div>
-          <div className="table-wrap">
-            <table className="w-full text-[0.75rem]">
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  {["SECTOR", "MEAN SCORE", "1M RETURN", "N"].map((h, i) => (
-                    <th
-                      key={h}
-                      className={`px-3 py-1.5 font-medium tracking-wide ${i === 0 ? "text-left" : "text-right"}`}
-                      style={{ color: "var(--faint)" }}
-                    >
-                      {h}
-                    </th>
+          <section className="hud-panel p-4">
+            <div className="panel-h">RISK DIAL</div>
+            <p className="mb-4 text-[0.75rem]" style={{ color: 'var(--dim)' }}>Synthesized risk-on/off signal from breadth and volatility.</p>
+            <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-around">
+              <Gauge value={riskScore} min={0} max={100} label="RISK SCORE" color={riskScore > 60 ? 'var(--bid)' : riskScore < 40 ? 'var(--ask)' : 'var(--accent)'} size={140} />
+              {riskEvidence && (
+                <div className="grid w-full grid-cols-2 gap-4 text-[0.75rem] sm:w-auto sm:min-w-[300px]">
+                  <div className="space-y-1">
+                    <div className="font-semibold uppercase tracking-wider" style={{ color: 'var(--bid)' }}>Risk-On Evidence</div>
+                    {riskEvidence.riskOn.length > 0 ? riskEvidence.riskOn.map((item, i) => (
+                      <div key={i} className="flex items-start gap-2" style={{ color: 'var(--dim)' }}>
+                        <svg width="8" height="8" viewBox="0 0 8 8" className="mt-0.5 flex-shrink-0" style={{ color: 'var(--bid)' }}><polygon points="4,1 7,6 1,6" fill="currentColor"/></svg>
+                        <span>{item}</span>
+                      </div>
+                    )) : <div style={{ color: 'var(--faint)' }}>No strong signals</div>}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="font-semibold uppercase tracking-wider" style={{ color: 'var(--ask)' }}>Risk-Off Evidence</div>
+                    {riskEvidence.riskOff.length > 0 ? riskEvidence.riskOff.map((item, i) => (
+                      <div key={i} className="flex items-start gap-2" style={{ color: 'var(--dim)' }}>
+                        <svg width="8" height="8" viewBox="0 0 8 8" className="mt-0.5 flex-shrink-0" style={{ color: 'var(--ask)' }}><polygon points="4,7 7,2 1,2" fill="currentColor"/></svg>
+                        <span>{item}</span>
+                      </div>
+                    )) : <div style={{ color: 'var(--faint)' }}>No strong signals</div>}
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {states.length > 0 && (
+            <section className="panel p-4">
+              <div className="panel-h">REGIME MAP</div>
+              <p className="mb-3 text-[0.75rem]" style={{ color: 'var(--dim)' }}>Trend, range, and squeeze classifications across all tracked symbols.</p>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {Object.entries(dist)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([label, n]) => (
+                    <span key={label} className="chip tnum px-3 py-1" style={{ color: REGIME_COLORS[label] ?? 'var(--text)' }}>
+                      {label}: {n}
+                    </span>
                   ))}
-                </tr>
-              </thead>
-              <tbody className="tnum">
-                {[...sectors]
-                  .sort((a, b) => b.MeanScore - a.MeanScore)
-                  .map((s) => (
-                    <tr key={s.Sector} style={{ borderBottom: "1px solid var(--border)" }}>
-                      <td className="px-3 py-1.5 font-medium">{s.Sector}</td>
-                      <td className="px-3 py-1.5 text-right">{s.MeanScore.toFixed(3)}</td>
-                      <td
-                        className="px-3 py-1.5 text-right"
-                        style={{ color: s.MeanRet1M >= 0 ? "var(--bid)" : "var(--ask)" }}
-                      >
-                        {fmtPct(s.MeanRet1M * 100)}
-                      </td>
-                      <td className="px-3 py-1.5 text-right" style={{ color: "var(--faint)" }}>
-                        {s.N}
-                      </td>
+              </div>
+              {changes.length > 0 && (
+                <div>
+                  <div className="text-[0.7rem] tracking-wider mb-1" style={{ color: 'var(--faint)' }}>RECENT TRANSITIONS</div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    {changes.map((c) => (
+                      <span key={`${c.symbol}-${c.ts}`} className="text-[0.75rem]">
+                        <Link href={`/s/stocks/${encodeURIComponent(c.symbol)}`} className="mono font-bold hover:text-[var(--accent)]">
+                          {c.symbol}
+                        </Link>{' '}
+                        <span style={{ color: 'var(--faint)' }}>
+                          {c.from} → {c.to} · {ago(c.ts)}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <Link href="/market/regimes" className="inline-block mt-3 text-[0.7rem] hover:text-[var(--accent)]">
+                validated regime forecasts →
+              </Link>
+            </section>
+          )}
+
+          {sectors && sectors.length > 0 && (
+            <section className="panel p-4">
+              <div className="panel-h">SECTOR ROTATION</div>
+              <p className="mb-3 text-[0.75rem]" style={{ color: 'var(--dim)' }}>Mean scores and recent performance from strongest to weakest.</p>
+              <div className="table-wrap">
+                <table className="w-full text-[0.75rem]">
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                      {['SECTOR', 'MEAN SCORE', '1M RETURN', 'N'].map((h, i) => (
+                        <th key={h} className={`px-3 py-1.5 font-medium tracking-wide ${i === 0 ? 'text-left' : 'text-right'}`} style={{ color: 'var(--faint)' }}>
+                          {h}
+                        </th>
+                      ))}
                     </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
+                  </thead>
+                  <tbody className="tnum">
+                    {[...sectors]
+                      .sort((a, b) => b.MeanScore - a.MeanScore)
+                      .map((s) => (
+                        <tr key={s.Sector} style={{ borderBottom: '1px solid var(--border)' }}>
+                          <td className="px-3 py-1.5 font-medium">{s.Sector}</td>
+                          <td className="px-3 py-1.5 text-right">
+                            <AnimatedNumber value={s.MeanScore} decimals={3} />
+                          </td>
+                          <td className="px-3 py-1.5 text-right">
+                            <DeltaBadge value={s.MeanRet1M * 100} />
+                          </td>
+                          <td className="px-3 py-1.5 text-right" style={{ color: 'var(--faint)' }}>
+                            {s.N}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
 
-      {/* Methodology detail, folded in simple mode (never deleted) — the
-          PUSH-20 trader-gate internals and the raw cross-sectional score
-          table, both of which lost their only mount point in the 2026-07-18
-          merge while their endpoints kept serving. Collapsed by default keeps
-          the three bands above the compact read they were trimmed to be. */}
-      {macro ? (
-        <ProOnly summary="Show the PUSH-20 trader-gate detail">
-          <div
-            className="rounded-lg border"
-            style={{ borderColor: "var(--border)", background: "var(--panel2)" }}
-          >
-            <Push20Macro data={macro.push20Macro} />
-          </div>
-        </ProOnly>
-      ) : null}
+          {macro && (
+            <ProOnly summary="Show the PUSH-20 trader-gate detail">
+              <div className="panel p-4">
+                <Push20Macro data={macro.push20Macro} />
+              </div>
+            </ProOnly>
+          )}
 
-      {ranking && ranking.length > 0 ? (
-        <ProOnly summary="Show the relative-strength ranking table">
-          <RankingTable rows={ranking} />
-        </ProOnly>
-      ) : null}
+          {ranking && ranking.length > 0 && (
+            <ProOnly summary="Show the relative-strength ranking table">
+              <RankingTable rows={ranking} />
+            </ProOnly>
+          )}
 
-      {/* The free-data calendars: the econ calendar (latest FRED prints +
-          near-window "reports soon" strip) and, under it, the full
-          filing-cadence earnings ESTIMATE calendar. Both lost their only mount
-          point in the same merge — they are calendars, not regime state, so
-          the "compact by design" trim never meant to drop them. */}
-      <CalendarsCard />
-      <EarningsEstCard />
+          <CalendarsCard />
+          <EarningsEstCard />
+        </Reveal>
+      )}
     </main>
   );
 }

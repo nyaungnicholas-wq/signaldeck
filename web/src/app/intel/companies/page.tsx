@@ -1,22 +1,4 @@
 "use client";
-
-// COMPANIES DIRECTORY (Signal8 wave, Stage 5): the full SEC-registered
-// company table — free EDGAR company_tickers_exchange.json (~10.4k rows,
-// synced daily) joined server-side to OUR tracked data where present.
-//
-// HONESTY RULES (rendered, not implied):
-//   - untracked rows show name/exchange/sector only; every market column is
-//     "—" — never a fabricated price/mcap;
-//   - prices are stored daily closes on worker cadence, not live quotes (the
-//     API note is rendered verbatim below the table);
-//   - sector is the SEC's own SIC industry description; "" means "not
-//     classified by a filings sweep yet", which renders as "—" too;
-//   - a mcap filter excludes unknown-mcap rows AND says how many it excluded.
-//
-// Tracked rows link to /s/stocks/SYM. Untracked rows get a "track" button
-// through the existing POST /api/candidates/add path (respects the stream
-// cap — a 409 shows the daemon's message verbatim).
-
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
@@ -26,23 +8,25 @@ import {
   type CompanyDirRow,
 } from "@/lib/api";
 import { ago, fmtPct, fmtPrice } from "@/lib/format";
-import PagePurpose from "@/components/PagePurpose";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
+import { Reveal, StatTile, PageHero, MiniBar } from "@/components/ui/Kit";
+
+type SortKey = "mcap" | "dayChangePct" | "volume";
+type SortDir = "asc" | "desc";
 
 const PAGE_SIZE = 50;
 
-/** Mcap bucket presets (dollars). 0 = unbounded on that side. */
-const MCAP_BUCKETS: { key: string; label: string; min: number; max: number }[] = [
+const MCAP_BUCKETS = [
   { key: "any", label: "any mcap", min: 0, max: 0 },
   { key: "mega", label: "mega ≥ $200B", min: 200e9, max: 0 },
   { key: "large", label: "large $10–200B", min: 10e9, max: 200e9 },
   { key: "mid", label: "mid $2–10B", min: 2e9, max: 10e9 },
   { key: "small", label: "small $300M–2B", min: 300e6, max: 2e9 },
   { key: "micro", label: "micro < $300M", min: 1, max: 300e6 },
-];
+] as const;
 
 function fmtBig(v: number | null): string {
   if (v === null || !isFinite(v) || v <= 0) return "—";
@@ -69,34 +53,23 @@ function fmtVol(v: number | null): string {
 
 export default function CompaniesPage() {
   const { symbol: intelSym } = useIntelSymbol();
-
-  // filters
   const [search, setSearch] = useState("");
   const [sector, setSector] = useState("");
   const [exchange, setExchange] = useState("");
   const [bucket, setBucket] = useState("any");
   const [trackedOnly, setTrackedOnly] = useState(false);
   const [offset, setOffset] = useState(0);
-
   const [resp, setResp] = useState<CompaniesResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
-
-  // per-row track-button state
   const [busy, setBusy] = useState<string | null>(null);
   const [trackMsg, setTrackMsg] = useState<string | null>(null);
   const [locallyTracked, setLocallyTracked] = useState<Record<string, boolean>>({});
-
-  // The hub-wide symbol filter doubles as the search when the local box is
-  // empty (same UX as the other intel sub-tabs).
+  const [sortKey, setSortKey] = useState<SortKey>("mcap");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  
   const effectiveQ = search.trim() !== "" ? search.trim() : intelSym;
-
-  // Debounced fetch: filters reset the page; the query fires 250ms after the
-  // last keystroke so typing doesn't hammer the daemon.
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Any filter change resets pagination — guarded adjustment during render,
-  // so the fetch effect below already sees offset 0 (no double fetch).
   const filterSig = JSON.stringify([effectiveQ, sector, exchange, bucket, trackedOnly]);
   const [prevFilterSig, setPrevFilterSig] = useState(filterSig);
   if (prevFilterSig !== filterSig) {
@@ -154,7 +127,6 @@ export default function CompaniesPage() {
         setTrackMsg(`${c.ticker} is now monitored — backfill starts now; market data fills in shortly.`);
       })
       .catch((e: unknown) => {
-        // 409 = stream cap; 401 = not logged in — show the daemon's words.
         setTrackMsg(e instanceof Error ? e.message : String(e));
       })
       .finally(() => setBusy(null));
@@ -163,95 +135,152 @@ export default function CompaniesPage() {
   const loading = resp === null && err === null;
   const emptyDirectory = resp !== null && resp.directoryCount === 0;
 
-  return (
-    <div className="flex flex-col gap-3">
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="intel-companies"
-        text="Every SEC-registered company in one directory — and which of them SignalDeck actually tracks. Untracked rows honestly show a dash, never a fabricated price."
-      />
-      {/* header + filters */}
-      <div className="panel flex flex-wrap items-center gap-2 px-3 py-2">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={intelSym ? `search (hub filter: ${intelSym})` : "search ticker or name…"}
-          aria-label="search companies by ticker or name"
-          className="chip min-h-[40px] w-52 bg-transparent px-3 outline-none"
-          style={{ color: "var(--text)" }}
-        />
-        <select
-          value={sector}
-          onChange={(e) => setSector(e.target.value)}
-          aria-label="filter by SIC sector"
-          className="chip min-h-[40px] max-w-64 cursor-pointer bg-transparent px-2"
-          style={{ color: sector ? "var(--text)" : "var(--dim)", background: "var(--panel)" }}
-        >
-          <option value="">all sectors (SIC)</option>
-          {(resp?.sectors ?? []).map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.value} ({s.n})
-            </option>
-          ))}
-        </select>
-        <select
-          value={exchange}
-          onChange={(e) => setExchange(e.target.value)}
-          aria-label="filter by exchange"
-          className="chip min-h-[40px] cursor-pointer bg-transparent px-2"
-          style={{ color: exchange ? "var(--text)" : "var(--dim)", background: "var(--panel)" }}
-        >
-          <option value="">all exchanges</option>
-          {(resp?.exchanges ?? []).map((x) => (
-            <option key={x.value} value={x.value}>
-              {x.value} ({x.n})
-            </option>
-          ))}
-        </select>
-        <select
-          value={bucket}
-          onChange={(e) => setBucket(e.target.value)}
-          aria-label="filter by market-cap bucket"
-          className="chip min-h-[40px] cursor-pointer bg-transparent px-2"
-          style={{ color: bucket !== "any" ? "var(--text)" : "var(--dim)", background: "var(--panel)" }}
-        >
-          {MCAP_BUCKETS.map((b) => (
-            <option key={b.key} value={b.key}>
-              {b.label}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={() => setTrackedOnly((v) => !v)}
-          aria-pressed={trackedOnly}
-          className="chip min-h-[40px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
-          title="Show only symbols we track (have market data for)"
-          style={{
-            color: trackedOnly ? "var(--accent)" : undefined,
-            borderColor: trackedOnly ? "var(--accent)" : undefined,
-          }}
-        >
-          tracked only
-        </button>
-        {resp !== null && (
-          <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
-            {resp.directoryCount.toLocaleString()} SEC registrants
-            {resp.lastSyncTs > 0 ? ` · synced ${ago(resp.lastSyncTs)}` : ""}
-          </span>
-        )}
-      </div>
+  const sortedRows = useMemo(() => {
+    const sorted = [...rows];
+    sorted.sort((a, b) => {
+      const dir = sortDir === "asc" ? 1 : -1;
+      switch (sortKey) {
+        case "mcap":
+          return ((a.mcap ?? 0) - (b.mcap ?? 0)) * dir;
+        case "dayChangePct":
+          return ((a.dayChangePct ?? 0) - (b.dayChangePct ?? 0)) * dir;
+        case "volume":
+          return ((a.volume ?? 0) - (b.volume ?? 0)) * dir;
+        default:
+          return 0;
+      }
+    });
+    return sorted;
+  }, [rows, sortKey, sortDir]);
 
-      {/* track-action feedback (409 cap message etc., verbatim) */}
-      {trackMsg !== null && (
-        <p
-          className="panel px-4 py-2 text-[0.75rem] leading-relaxed"
-          role="status"
-          style={{ color: "var(--dim)" }}
-        >
-          {trackMsg}
-        </p>
+  const maxMcap = useMemo(() => {
+    if (rows.length === 0) return 0;
+    return Math.max(...rows.map((r) => r.mcap ?? 0));
+  }, [rows]);
+
+  const stats = useMemo(() => {
+    if (rows.length === 0) return { totalTracked: 0, avgChange: 0, biggestCompany: "" };
+    const trackedRows = rows.filter((r) => r.tracked || locallyTracked[r.ticker] === true);
+    const changes = rows.filter((r) => r.dayChangePct !== null).map((r) => r.dayChangePct!);
+    const avgChange = changes.length > 0 ? changes.reduce((a, b) => a + b, 0) / changes.length : 0;
+    const biggest = rows.reduce((max, r) => (r.mcap ?? 0) > (max.mcap ?? 0) ? r : max, rows[0]);
+    return {
+      totalTracked: trackedRows.length,
+      avgChange,
+      biggestCompany: biggest.ticker,
+    };
+  }, [rows, locallyTracked]);
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
+
+  const SortArrow = ({ column }: { column: SortKey }) => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="inline ml-1">
+      {sortKey === column ? (
+        <path d={sortDir === "asc" ? "M12 5v14M5 12l7-7 7 7" : "M12 19V5M19 12l-7 7-7-7"} />
+      ) : (
+        <path d="M12 5v14M5 12l7-7 7 7" opacity="0.4" />
       )}
+    </svg>
+  );
+
+  return (
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Companies"
+        subtitle="Every SEC-registered company in one directory — fundamentals and profile at a glance."
+        right={
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={intelSym ? `search (hub filter: ${intelSym})` : "search ticker or name…"}
+              aria-label="search companies by ticker or name"
+              className="chip min-h-[40px] w-52 bg-transparent px-3 outline-none"
+              style={{ color: "var(--text)" }}
+            />
+            <select
+              value={sector}
+              onChange={(e) => setSector(e.target.value)}
+              aria-label="filter by SIC sector"
+              className="chip min-h-[40px] max-w-64 cursor-pointer bg-transparent px-2"
+              style={{ color: sector ? "var(--text)" : "var(--dim)", background: "var(--panel)" }}
+            >
+              <option value="">all sectors (SIC)</option>
+              {(resp?.sectors ?? []).map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.value} ({s.n})
+                </option>
+              ))}
+            </select>
+            <select
+              value={exchange}
+              onChange={(e) => setExchange(e.target.value)}
+              aria-label="filter by exchange"
+              className="chip min-h-[40px] cursor-pointer bg-transparent px-2"
+              style={{ color: exchange ? "var(--text)" : "var(--dim)", background: "var(--panel)" }}
+            >
+              <option value="">all exchanges</option>
+              {(resp?.exchanges ?? []).map((x) => (
+                <option key={x.value} value={x.value}>
+                  {x.value} ({x.n})
+                </option>
+              ))}
+            </select>
+            <select
+              value={bucket}
+              onChange={(e) => setBucket(e.target.value)}
+              aria-label="filter by market-cap bucket"
+              className="chip min-h-[40px] cursor-pointer bg-transparent px-2"
+              style={{ color: bucket !== "any" ? "var(--text)" : "var(--dim)", background: "var(--panel)" }}
+            >
+              {MCAP_BUCKETS.map((b) => (
+                <option key={b.key} value={b.key}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setTrackedOnly((v) => !v)}
+              aria-pressed={trackedOnly}
+              className="chip min-h-[40px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
+              title="Show only symbols we track (have market data for)"
+              style={{
+                color: trackedOnly ? "var(--accent)" : undefined,
+                borderColor: trackedOnly ? "var(--accent)" : undefined,
+              }}
+            >
+              tracked only
+            </button>
+            {resp !== null && (
+              <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                {resp.directoryCount.toLocaleString()} SEC registrants
+                {resp.lastSyncTs > 0 ? ` · synced ${ago(resp.lastSyncTs)}` : ""}
+              </span>
+            )}
+          </div>
+        }
+      />
+
+      {trackMsg !== null && (
+        <div className="panel px-4 py-2 text-[0.75rem] leading-relaxed reveal-item" style={{ "--i": 0 } as React.CSSProperties} role="status">
+          <span style={{ color: "var(--dim)" }}>{trackMsg}</span>
+        </div>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile label="COMPANIES" value={total} i={0} />
+        <StatTile label="TRACKED" value={stats.totalTracked} i={1} />
+        <StatTile label="BIGGEST" value={stats.biggestCompany} sub={fmtBig(rows.find(r => r.ticker === stats.biggestCompany)?.mcap ?? 0)} i={2} glow="hud" />
+        <StatTile label="AVG CHG" value={stats.avgChange} decimals={2} suffix="%" i={3} glow={stats.avgChange >= 0 ? "up" : "down"} />
+      </div>
 
       {loading && <Skeleton lines={8} label="loading company directory" />}
 
@@ -284,7 +313,7 @@ export default function CompaniesPage() {
       )}
 
       {resp !== null && rows.length > 0 && (
-        <section className="panel">
+        <section className="panel hud-panel">
           <div className="panel-h flex-wrap gap-2">
             COMPANIES
             <span className="chip tnum">{total.toLocaleString()} match</span>
@@ -300,7 +329,7 @@ export default function CompaniesPage() {
           </div>
 
           <div className="table-wrap">
-            <table className="w-full text-[0.75rem]">
+            <table className="v4-table w-full text-[0.75rem]">
               <thead>
                 <tr
                   className="text-left text-[0.75rem] tracking-[0.12em]"
@@ -310,36 +339,47 @@ export default function CompaniesPage() {
                   <th className="px-3 py-2">NAME</th>
                   <th className="px-3 py-2">EXCH</th>
                   <th className="px-3 py-2 text-right">PRICE</th>
-                  <th className="px-3 py-2 text-right">CHG%</th>
-                  <th className="px-3 py-2 text-right">MKT CAP</th>
+                  <th className="px-3 py-2 text-right cursor-pointer select-none" onClick={() => handleSort("dayChangePct")}>
+                    CHG%<SortArrow column="dayChangePct" />
+                  </th>
+                  <th className="px-3 py-2 text-right cursor-pointer select-none" onClick={() => handleSort("mcap")}>
+                    MKT CAP<SortArrow column="mcap" />
+                  </th>
                   <th className="px-3 py-2">SECTOR (SIC)</th>
-                  <th className="px-3 py-2 text-right">VOLUME</th>
+                  <th className="px-3 py-2 text-right cursor-pointer select-none" onClick={() => handleSort("volume")}>
+                    VOLUME<SortArrow column="volume" />
+                  </th>
                   <th className="px-3 py-2 text-right">FLOAT</th>
                   <th className="px-3 py-2 text-right">SHARES</th>
                   <th className="px-3 py-2 text-right">STATUS</th>
                 </tr>
               </thead>
               <tbody className="tnum">
-                {rows.map((c) => {
+                {sortedRows.map((c, i) => {
                   const tracked = c.tracked || locallyTracked[c.ticker] === true;
                   const chg = c.dayChangePct;
+                  const rowBorder = chg !== null ? (chg >= 0 ? "var(--bid)" : "var(--ask)") : "transparent";
                   return (
                     <tr
                       key={c.ticker}
-                      className="transition-colors duration-150 hover:bg-[var(--panel2)]"
-                      style={{ borderBottom: "1px solid var(--border)" }}
+                      className="reveal-item transition-colors duration-150 hover:bg-[var(--panel2)]"
+                      style={{ 
+                        "--i": Math.min(i, 12),
+                        borderBottom: "1px solid var(--border)",
+                        borderLeft: `3px solid ${rowBorder}`
+                      } as React.CSSProperties}
                     >
                       <td className="px-3 py-2 font-bold">
                         {tracked ? (
                           <Link
                             href={`/s/stocks/${encodeURIComponent(c.ticker)}`}
-                            className="cursor-pointer transition-colors duration-150 hover:text-[var(--accent)]"
+                            className="mono cursor-pointer transition-colors duration-150 hover:text-[var(--accent)]"
                             title={`Investigate ${c.ticker} — open its symbol page`}
                           >
                             {c.ticker}
                           </Link>
                         ) : (
-                          <span style={{ color: "var(--dim)" }}>{c.ticker}</span>
+                          <span className="mono" style={{ color: "var(--dim)" }}>{c.ticker}</span>
                         )}
                       </td>
                       <td
@@ -364,7 +404,12 @@ export default function CompaniesPage() {
                       >
                         {chg !== null ? fmtPct(chg) : "—"}
                       </td>
-                      <td className="px-3 py-2 text-right">{fmtBig(c.mcap)}</td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <MiniBar value={c.mcap ?? 0} max={maxMcap} color="var(--accent)" i={i} />
+                          <span>{fmtBig(c.mcap)}</span>
+                        </div>
+                      </td>
                       <td
                         className="max-w-56 truncate px-3 py-2"
                         style={{ color: c.sicDesc ? "var(--dim)" : "var(--faint)" }}
@@ -377,7 +422,7 @@ export default function CompaniesPage() {
                       <td className="px-3 py-2 text-right">{fmtShares(c.sharesOutstanding)}</td>
                       <td className="px-3 py-2 text-right">
                         {tracked ? (
-                          <span className="chip" style={{ color: "var(--ok)", borderColor: "var(--ok)" }}>
+                          <span className="chip" style={{ color: "var(--bid)", borderColor: "var(--bid)" }}>
                             tracked
                           </span>
                         ) : (
@@ -400,7 +445,6 @@ export default function CompaniesPage() {
             </table>
           </div>
 
-          {/* pagination */}
           <div className="flex flex-wrap items-center gap-2 px-3 py-2" style={{ borderTop: "1px solid var(--border)" }}>
             <button
               type="button"
@@ -426,7 +470,6 @@ export default function CompaniesPage() {
             </span>
           </div>
 
-          {/* honesty notes, verbatim */}
           <div className="flex flex-col gap-1 px-3 pb-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             <p>{resp.note}</p>
             <p>{resp.mcapNote}</p>

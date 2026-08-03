@@ -1,15 +1,12 @@
 "use client";
 
-// /agents — daemon worker fleet. Polls api.agents() and groups runs by
-// worker name; known agents are always shown, even before their first run.
-
 import { useEffect, useState } from "react";
 import { api, pollMs, POLL_DEFAULT, type WorkerRun } from "@/lib/api";
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
+import { PageHero, StatTile, Reveal, DeltaBadge, MiniBar } from "@/components/ui/Kit";
 
 const KNOWN_AGENTS: { name: string; role: string }[] = [
   { name: "crypto-live", role: "streams TickStream's consolidated book at 1Hz" },
@@ -28,9 +25,8 @@ const KNOWN_AGENTS: { name: string; role: string }[] = [
 ];
 
 function statusColor(status: WorkerRun["status"]): string {
-  if (status === "ok") return "var(--ok)";
-  // A blown per-run deadline is a FAILURE, not an in-progress state.
-  if (status === "error" || status === "timeout") return "var(--bad)";
+  if (status === "ok") return "var(--bid)";
+  if (status === "error" || status === "timeout") return "var(--ask)";
   return "var(--accent)";
 }
 
@@ -46,13 +42,15 @@ function AgentCard({
   name,
   role,
   runs,
+  i,
 }: {
   name: string;
   role: string;
-  runs: WorkerRun[]; // newest first
+  runs: WorkerRun[];
+  i: number;
 }) {
   const last = runs[0];
-  const history = runs.slice(0, 10).reverse(); // oldest → newest, left → right
+  const history = runs.slice(0, 10).reverse();
   const running = last?.status === "running";
   const duration =
     !last || running || !last.finishedAt
@@ -60,7 +58,7 @@ function AgentCard({
       : fmtDur(last.finishedAt - last.startedAt);
 
   return (
-    <div className="panel flex flex-col gap-2 p-4">
+    <div className="panel reveal-item flex flex-col gap-2 p-4" style={{ "--i": i } as React.CSSProperties}>
       <div className="flex items-center gap-2">
         <span
           aria-label={last ? `status: ${last.status}` : "status: no runs yet"}
@@ -168,7 +166,6 @@ export default function AgentsPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    // Worker runs land on minute-scale cadence — the default tier is plenty.
     const stop = pollMs(load, POLL_DEFAULT);
     return () => {
       alive = false;
@@ -200,37 +197,46 @@ export default function AgentsPage() {
   const lastByAgent = cards.map((c) => c.runs[0]).filter(Boolean) as WorkerRun[];
   const nRunning = lastByAgent.filter((r) => r.status === "running").length;
   const nError = lastByAgent.filter((r) => r.status === "error" || r.status === "timeout").length;
+  const nOk = lastByAgent.filter((r) => r.status === "ok").length;
   const lastTs = Math.max(0, ...(runs ?? []).map((r) => r.finishedAt ?? r.startedAt));
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Header row */}
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-sm font-bold tracking-[0.16em]">AGENTS</h1>
-        <span className="chip tnum">{cards.length} workers</span>
-        {nRunning > 0 && (
-          <span className="chip tnum" style={{ color: "var(--accent)" }}>
-            {nRunning} running
-          </span>
-        )}
-        <span
-          className="chip tnum"
-          style={{ color: nError > 0 ? "var(--bad)" : "var(--dim)" }}
-        >
-          {nError} error{nError === 1 ? "" : "s"}
-        </span>
-        {lastTs > 0 && (
-          <span className="text-[0.75rem] tnum" style={{ color: "var(--faint)" }}>
-            last activity {ago(lastTs)}
-          </span>
-        )}
-      </div>
-
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="lab-system-agents"
-        text="Are the background workers running on schedule, and what did each one last do? The machine's own attendance sheet."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Agent Fleet"
+        subtitle="Status and execution history for all background workers in the daemon fleet"
+        live
       />
+
+      {/* Hero band */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile
+          label="Workers"
+          value={cards.length}
+          delta={0}
+          i={0}
+        />
+        <StatTile
+          label="Active"
+          value={nRunning}
+          delta={0}
+          i={1}
+        />
+        <StatTile
+          label="Healthy"
+          value={nOk}
+          delta={0}
+          i={2}
+          spark={lastByAgent.map(r => r.status === "ok" ? 1 : 0)}
+        />
+        <StatTile
+          label="Errors"
+          value={nError}
+          delta={0}
+          i={3}
+          glow={nError > 0 ? "down" : undefined}
+        />
+      </div>
 
       {err && !runs && (
         <ErrorState
@@ -244,7 +250,7 @@ export default function AgentsPage() {
       )}
       {!err && !runs && <Skeleton lines={4} label="loading worker fleet" />}
       {err && runs && (
-        <div className="px-1 text-[0.75rem]" style={{ color: "var(--bad)" }}>
+        <div className="px-1 text-[0.75rem]" style={{ color: "var(--ask)" }}>
           connection lost — showing last known data · {err}
         </div>
       )}
@@ -257,17 +263,18 @@ export default function AgentsPage() {
               detail="The daemon is up but its workers haven't ticked. Cards below show the full fleet and will light up as runs land."
             />
           )}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
-            {cards.map((c) => (
-              <AgentCard key={c.name} name={c.name} role={c.role} runs={c.runs} />
-            ))}
+          <div className="hud-panel p-4">
+            <div className="panel-h mb-3 text-[0.75rem] uppercase tracking-wider" style={{ color: "var(--dim)" }}>
+              Fleet Status
+            </div>
+            <Reveal>
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+                {cards.map((c, i) => (
+                  <AgentCard key={c.name} name={c.name} role={c.role} runs={c.runs} i={i} />
+                ))}
+              </div>
+            </Reveal>
           </div>
-          {/* Stage 5 honesty note: WHY a card can be blank. Run history is
-              pruned globally, so a rare-cadence worker (13f-poller, backup,
-              fred-poller, …) can show nothing between its runs when a chatty
-              worker floods the log; the daemon keeps a per-worker floor of
-              recent runs, so blank cards fill in after the worker's next
-              completed run on the current build. */}
           <p className="px-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             A card with no runs means that worker hasn&apos;t completed a run recently enough to
             survive run-log pruning (rare-cadence workers like 13f-poller / fred-poller / backup

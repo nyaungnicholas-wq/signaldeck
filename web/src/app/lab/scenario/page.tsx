@@ -1,30 +1,17 @@
 "use client";
 
-// /lab/scenario — the MACRO SCENARIO "what-if" surface. Pick a symbol, a macro
-// factor (FRED series), and a shock, and read the estimated move from the
-// symbol's HISTORICAL sensitivity (OLS beta) to that factor. Request-driven —
-// nothing polls; the estimate recomputes only when the user runs it (or, once
-// they've run once, on slider release). Every number is honest: below the
-// history gate the estimate is withheld with its reason, and the API's
-// disclaimer (sensitivity is not a forecast) is always in view with a result.
-
 import { useRef, useState } from "react";
 import { api, type ScenarioResult } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
+import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
 
-// The macro factors, each a FRED series. Shock ranges are in the series' OWN
-// native units — VIX is an index level (points), yields / fed funds / the
-// high-yield spread are all in percentage points (pp) — so each factor carries
-// its own slider bounds + a sensible default shock (VIX's is the one specified;
-// the rest are chosen to span a realistic-but-large move without absurd values
-// like a +20 percentage-point jump in the 10-year yield).
 interface FactorDef {
-  id: string; // FRED series id sent to the API
-  label: string; // short human label
-  unit: string; // native unit of a 1-step shock
+  id: string;
+  label: string;
+  unit: string;
   min: number;
   max: number;
   step: number;
@@ -39,7 +26,6 @@ const FACTORS: FactorDef[] = [
   { id: "BAMLH0A0HYM2", label: "high-yield spread", unit: "pp", min: -5, max: 5, step: 0.25, default: 1 },
 ];
 
-// ── display helpers ──
 const signShock = (v: number) => `${v > 0 ? "+" : ""}${v}`;
 const signPct2 = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
 const signBeta = (v: number) =>
@@ -55,17 +41,12 @@ export default function ScenarioPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Guards: reqId drops stale responses if the user re-runs mid-flight; hasRun
-  // gates the slider-release auto-run so it never fires before the first run.
   const reqId = useRef(0);
   const hasRun = useRef(false);
 
   const factor = FACTORS.find((f) => f.id === factorId) ?? FACTORS[0];
   const canRun = symbol.trim().length > 0 && !loading;
 
-  // Switching factors resets the shock to that factor's default so the slider
-  // range and the value always agree (a VIX +10 makes no sense on the ±2pp
-  // yield slider).
   const selectFactor = (id: string) => {
     const f = FACTORS.find((x) => x.id === id) ?? FACTORS[0];
     setFactorId(f.id);
@@ -81,7 +62,7 @@ export default function ScenarioPage() {
     setErr(null);
     try {
       const res = await api.scenario(sym, factorId, shock);
-      if (reqId.current !== id) return; // superseded by a newer run
+      if (reqId.current !== id) return;
       setResult(res);
     } catch (e) {
       if (reqId.current !== id) return;
@@ -92,15 +73,13 @@ export default function ScenarioPage() {
     }
   };
 
-  // Re-estimate when the user lets go of the slider — but only once they've
-  // already run at least once (so dragging on a fresh page stays quiet).
   const onSliderRelease = () => {
     if (hasRun.current && symbol.trim()) void run();
   };
 
   const impact = result?.impact;
   const move = impact?.ExpectedMovePct ?? 0;
-  const moveColor = move >= 0 ? "var(--ok)" : "var(--bad)";
+  const moveColor = move >= 0 ? "var(--bid)" : "var(--ask)";
   const resFactorLabel = result
     ? (FACTORS.find((f) => f.id === result.factor)?.label ?? result.factor)
     : "";
@@ -109,26 +88,20 @@ export default function ScenarioPage() {
     : "";
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* header row */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">MACRO SCENARIO</h1>
-        <span className="chip">what-if</span>
-        {result && <span className="chip mono">{result.symbol}</span>}
-        {result && (
-          <span className="chip" style={{ color: "var(--dim)" }}>
-            {resFactorLabel}
-          </span>
-        )}
-      </div>
-
-      {/* what this page answers, in plain English */}
-      <PagePurpose
-        id="lab-scenario"
-        text="Estimate how a macro shock would move a symbol, from its historical sensitivity (OLS beta) to that factor."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="MACRO SCENARIO"
+        subtitle="Estimate how a macro shock would move a symbol, from its historical sensitivity (OLS beta) to that factor."
+        right={
+          result && (
+            <div className="flex items-center gap-2">
+              <span className="mono text-sm" style={{ color: 'var(--hud)' }}>{result.symbol}</span>
+              <span className="text-sm" style={{ color: 'var(--dim)' }}>{resFactorLabel}</span>
+            </div>
+          )
+        }
       />
 
-      {/* controls */}
       <section className="panel">
         <div className="panel-h">
           SCENARIO
@@ -141,7 +114,6 @@ export default function ScenarioPage() {
         </div>
 
         <div className="flex flex-wrap items-end gap-x-5 gap-y-4 px-4 py-4">
-          {/* symbol */}
           <div className="flex flex-col gap-1.5">
             <label
               htmlFor="scenario-symbol"
@@ -170,7 +142,6 @@ export default function ScenarioPage() {
             />
           </div>
 
-          {/* factor */}
           <div className="flex flex-col gap-1.5">
             <label
               htmlFor="scenario-factor"
@@ -198,7 +169,6 @@ export default function ScenarioPage() {
             </select>
           </div>
 
-          {/* shock slider — live value in the label, native unit shown */}
           <div className="flex flex-col gap-1.5">
             <label
               htmlFor="scenario-shock"
@@ -234,7 +204,6 @@ export default function ScenarioPage() {
             </div>
           </div>
 
-          {/* run */}
           <button
             type="button"
             onClick={() => void run()}
@@ -251,7 +220,6 @@ export default function ScenarioPage() {
         </div>
       </section>
 
-      {/* states: error > loading > result > initial */}
       {err !== null && (
         <ErrorState
           message={err}
@@ -272,7 +240,7 @@ export default function ScenarioPage() {
       )}
 
       {err === null && !loading && result !== null && impact && (
-        <section className="panel">
+        <section className="hud-panel">
           <div className="panel-h">
             SCENARIO ESTIMATE
             {impact.ShockLabel && (
@@ -283,7 +251,6 @@ export default function ScenarioPage() {
           </div>
 
           <div className="flex flex-col gap-5 px-4 py-5">
-            {/* headline */}
             {impact.Gated ? (
               <p className="text-lg leading-snug sm:text-xl" style={{ color: "var(--dim)" }}>
                 <span className="mono" style={{ color: "var(--text)" }}>
@@ -316,7 +283,6 @@ export default function ScenarioPage() {
                   </span>
                 </p>
 
-                {/* regression stat row */}
                 <div className="flex flex-wrap gap-x-8 gap-y-3">
                   <div className="flex flex-col gap-1">
                     <span
@@ -379,14 +345,12 @@ export default function ScenarioPage() {
               </>
             )}
 
-            {/* the engine's note, verbatim */}
             {impact.Note && (
               <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
                 {impact.Note}
               </p>
             )}
 
-            {/* disclaimer — always in view with a result */}
             {result.disclaimer && (
               <p
                 className="text-[0.75rem] leading-relaxed"

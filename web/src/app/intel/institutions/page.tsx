@@ -1,11 +1,5 @@
 "use client";
 
-// Institutional holdings (Signal8 wave, Stage 1): 13F-HR positions of the
-// curated notable-manager list. HONESTY, prominently: 13F snapshots are
-// QUARTERLY and filed up to 45 days after quarter end — positions may have
-// changed since; the API's lag note is rendered verbatim. Issuer→symbol
-// matching is best-effort by name; unmatched rows honestly keep no ticker.
-
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -20,7 +14,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
-import PagePurpose from "@/components/PagePurpose";
+import { Reveal, StatTile, PageHero, MiniBar } from "@/components/ui/Kit";
 
 function fmtUSD(v: number): string {
   if (!isFinite(v) || v === 0) return "—";
@@ -35,13 +29,39 @@ function fmtShares(v: number): string {
   return v.toLocaleString();
 }
 
-/** Manager drill-down: one manager's latest stored 13F book. */
+function SortArrow({ active, asc }: { active: boolean; asc?: boolean }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" className="inline-block ml-1 opacity-50">
+      <path
+        d={active ? (asc ? "M6 2 L10 7 L2 7 Z" : "M6 10 L2 5 L10 5 Z") : "M6 3 L9 7 L3 7 Z"}
+        fill="currentColor"
+        className={active ? "text-[var(--hud)]" : "text-[var(--dim)]"}
+      />
+    </svg>
+  );
+}
+
+type SortKey = "value" | "shares" | "symbol" | "manager";
+
+function getSortComparator(key: SortKey, asc: boolean) {
+  return (a: InstHolding, b: InstHolding) => {
+    let cmp = 0;
+    if (key === "value") cmp = a.value - b.value;
+    else if (key === "shares") cmp = a.shares - b.shares;
+    else if (key === "symbol") cmp = (a.symbol ?? "zzz").localeCompare(b.symbol ?? "zzz");
+    else if (key === "manager") cmp = a.manager.localeCompare(b.manager);
+    return asc ? cmp : -cmp;
+  };
+}
+
 function ManagerHoldings({ manager }: { manager: string }) {
   const [rows, setRows] = useState<InstHolding[] | null>(null);
   const [note, setNote] = useState("");
   const [cik, setCik] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  const [sortKey, setSortKey] = useState<SortKey>("value");
+  const [sortAsc, setSortAsc] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -57,112 +77,105 @@ function ManagerHoldings({ manager }: { manager: string }) {
         if (!alive) return;
         setErr(e instanceof Error ? e.message : String(e));
       });
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [manager, retryTick]);
 
   const list = useMemo(() => rows ?? [], [rows]);
   const managerName = list.length > 0 ? list[0].manager : manager;
   const period = list.length > 0 ? list[0].period : "";
+  const sortedList = useMemo(() => [...list].sort(getSortComparator(sortKey, sortAsc)), [list, sortKey, sortAsc]);
+  const maxValue = useMemo(() => Math.max(...list.map(h => h.value)), [list]);
+  const maxShares = useMemo(() => Math.max(...list.map(h => h.shares)), [list]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortAsc(!sortAsc);
+    else { setSortKey(key); setSortAsc(key === "symbol" || key === "manager"); }
+  };
 
   if (rows === null && err !== null) {
     return (
-      <ErrorState
-        message={err}
-        hint="Is the daemon running? 13F books are stored by the 13f-poller (24h cadence)."
-        retry={() => {
-          setErr(null);
-          setRetryTick((t) => t + 1);
-        }}
-      />
+      <ErrorState message={err} hint="Is the daemon running? 13F books are stored by the 13f-poller (24h cadence)." retry={() => { setErr(null); setRetryTick(t => t + 1); }} />
     );
   }
   if (rows === null) return <Skeleton lines={6} label="loading manager holdings" />;
 
   return (
-    <section className="panel">
-      <div className="panel-h flex-wrap gap-2">
-        <span>{managerName.toUpperCase()} — LATEST 13F BOOK</span>
-        {period && <span className="chip tnum">quarter end {period}</span>}
-        {cik && <span className="chip tnum">CIK {cik}</span>}
-        <span className="chip tnum">{list.length} positions</span>
-        <Link
-          href="/intel/institutions"
-          className="chip ml-auto min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
-        >
-          ← all managers
-        </Link>
+    <div className="page-enter space-y-4">
+      <PageHero
+        title={managerName.toUpperCase()}
+        subtitle={`Latest 13F book — ${list.length} positions`}
+        right={
+          <Link href="/intel/institutions" className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]">
+            ← all managers
+          </Link>
+        }
+      />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile label="Positions" value={list.length} glow="hud" i={0} />
+        <StatTile label="Total Value" value={fmtUSD(list.reduce((s,h) => s + h.value, 0))} glow="accent" i={1} />
+        <StatTile label="Largest Position" value={fmtUSD(maxValue)} sub={`${list.find(h => h.value === maxValue)?.symbol ?? "?"}`} glow="up" i={2} />
+        <StatTile label="Unmatched" value={list.filter(h => !h.symbol).length} glow="down" i={3} />
       </div>
-
-      {/* the honest quarterly-lag note, verbatim from the API — plus the
-          issuer-matching caveat as visible text, not a hover-only tooltip */}
-      <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-        {note} Rows marked &ldquo;unmatched&rdquo; mean the filed issuer name
-        couldn&rsquo;t be matched to a tracked ticker — no symbol is ever guessed.
-      </p>
-
-      {list.length === 0 ? (
-        <EmptyState
-          className="m-4"
-          message="No holdings stored for this manager yet"
-          detail="The 13f-poller rotates through the curated list daily and stores each manager's latest 13F-HR once per report period."
-        />
-      ) : (
-        <div className="table-wrap">
-          <table className="w-full text-[0.75rem]">
-            <thead>
-              <tr
-                className="text-left text-[0.75rem] tracking-wider"
-                style={{ color: "var(--faint)", borderBottom: "1px solid var(--border)" }}
-              >
-                <th className="px-4 py-2 font-normal">ISSUER (AS FILED)</th>
-                <th className="px-2 py-2 font-normal">SYMBOL</th>
-                <th className="px-2 py-2 font-normal">CUSIP</th>
-                <th className="px-2 py-2 text-right font-normal">SHARES</th>
-                <th className="px-4 py-2 text-right font-normal">VALUE (AS REPORTED)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((h) => (
-                <tr key={h.cusip} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td className="px-4 py-2" style={{ color: "var(--text)" }}>
-                    {h.name}
-                  </td>
-                  <td className="px-2 py-2">
-                    {h.symbol ? (
-                      <Link
-                        href={`/s/stocks/${encodeURIComponent(h.symbol)}`}
-                        className="tnum font-bold text-[var(--text)] transition-colors duration-150 hover:text-[var(--accent)]"
-                      >
-                        {h.symbol}
-                      </Link>
-                    ) : (
-                      <span title="issuer name not matched to a tracked symbol (best-effort matching, honest null)" style={{ color: "var(--faint)" }}>
-                        unmatched
-                      </span>
-                    )}
-                  </td>
-                  <td className="tnum px-2 py-2" style={{ color: "var(--dim)" }}>
-                    {h.cusip}
-                  </td>
-                  <td className="tnum px-2 py-2 text-right" style={{ color: "var(--dim)" }}>
-                    {fmtShares(h.shares)}
-                  </td>
-                  <td className="tnum px-4 py-2 text-right" style={{ color: "var(--text)" }}>
-                    {fmtUSD(h.value)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <section className="panel">
+        <div className="panel-h flex-wrap gap-2">
+          <span className="chip tnum">quarter end {period}</span>
+          <span className="chip tnum">CIK {cik}</span>
+          <span className="chip tnum">{list.length} positions</span>
         </div>
-      )}
-    </section>
+        <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+          {note} Rows marked &ldquo;unmatched&rdquo; mean the filed issuer name couldn&rsquo;t be matched to a tracked ticker — no symbol is ever guessed.
+        </p>
+        {list.length === 0 ? (
+          <EmptyState className="m-4" message="No holdings stored for this manager yet" detail="The 13f-poller rotates through the curated list daily and stores each manager's latest 13F-HR once per report period." />
+        ) : (
+          <div className="table-wrap">
+            <table className="v4-table w-full text-[0.75rem]">
+              <thead>
+                <tr className="text-left tracking-wider" style={{ color: "var(--faint)", borderBottom: "1px solid var(--border)" }}>
+                  <th className="px-4 py-2 font-normal">ISSUER (AS FILED)</th>
+                  <th className="px-2 py-2 font-normal cursor-pointer" onClick={() => toggleSort("symbol")}>SYMBOL <SortArrow active={sortKey === "symbol"} asc={sortAsc} /></th>
+                  <th className="px-2 py-2 font-normal">CUSIP</th>
+                  <th className="px-2 py-2 text-right font-normal cursor-pointer" onClick={() => toggleSort("shares")}>SHARES <SortArrow active={sortKey === "shares"} asc={sortAsc} /></th>
+                  <th className="px-4 py-2 text-right font-normal cursor-pointer" onClick={() => toggleSort("value")}>VALUE <SortArrow active={sortKey === "value"} asc={sortAsc} /></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedList.map((h, i) => (
+                  <tr key={h.cusip} className="reveal-item" style={{ "--i": Math.min(i, 11), borderBottom: "1px solid var(--border)" } as React.CSSProperties}>
+                    <td className="px-4 py-2 truncate max-w-[200px]" title={h.name} style={{ color: "var(--text)" }}>{h.name}</td>
+                    <td className="px-2 py-2">
+                      {h.symbol ? (
+                        <Link href={`/s/stocks/${encodeURIComponent(h.symbol)}`} className="mono font-bold text-[var(--text)] transition-colors duration-150 hover:text-[var(--accent)]">
+                          {h.symbol}
+                        </Link>
+                      ) : (
+                        <span title="issuer name not matched to a tracked symbol" style={{ color: "var(--faint)" }}>unmatched</span>
+                      )}
+                    </td>
+                    <td className="tnum px-2 py-2" style={{ color: "var(--dim)" }}>{h.cusip}</td>
+                    <td className="px-2 py-2 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <span className="tnum" style={{ color: "var(--dim)" }}>{fmtShares(h.shares)}</span>
+                        <div className="w-16"><MiniBar value={h.shares} max={maxShares} color="var(--hud)" i={i} /></div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <span className="tnum" style={{ color: "var(--text)" }}>{fmtUSD(h.value)}</span>
+                        <div className="w-16"><MiniBar value={h.value} max={maxValue} color="var(--accent)" i={i} /></div>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
-/** Overview: managers with stored books + the curated watch list. */
 function ManagersOverview() {
   const [resp, setResp] = useState<InstitutionsOverview | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -171,117 +184,82 @@ function ManagersOverview() {
   useEffect(() => {
     let alive = true;
     institutionsOverview()
-      .then((r) => {
-        if (!alive) return;
-        setResp(r);
-        setErr(null);
-      })
-      .catch((e: unknown) => {
-        if (!alive) return;
-        setErr(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      alive = false;
-    };
+      .then((r) => { if (!alive) return; setResp(r); setErr(null); })
+      .catch((e: unknown) => { if (!alive) return; setErr(e instanceof Error ? e.message : String(e)); });
+    return () => { alive = false; };
   }, [retryTick]);
 
   if (resp === null && err !== null) {
-    return (
-      <ErrorState
-        message={err}
-        hint="Is the daemon running? The 13f-poller needs nothing but SEC EDGAR."
-        retry={() => {
-          setErr(null);
-          setRetryTick((t) => t + 1);
-        }}
-      />
-    );
+    return <ErrorState message={err} hint="Is the daemon running? The 13f-poller needs nothing but SEC EDGAR." retry={() => { setErr(null); setRetryTick(t => t + 1); }} />;
   }
   if (resp === null) return <Skeleton lines={6} label="loading institutional managers" />;
 
   const stored = resp.managers ?? [];
   const storedCiks = new Set(stored.map((m) => m.cik));
   const pending = resp.curated.filter((c) => !storedCiks.has(String(c.cik)));
+  const totalValue = stored.reduce((sum, m) => sum + (m.totalValue || 0), 0);
+  const newestPeriod = stored.length > 0 ? stored[0].period : "";
+  const storedCount = stored.length;
 
   return (
-    <div className="flex flex-col gap-4">
-      <section className="panel">
-        <div className="panel-h flex-wrap gap-2">
-          STORED 13F BOOKS
-          <span className="chip tnum">{stored.length} of {resp.curated.length} curated managers</span>
-        </div>
-
-        {/* the honest quarterly-lag note, verbatim from the API */}
-        <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-          {resp.note}
-        </p>
-
-        {stored.length === 0 ? (
-          <EmptyState
-            className="m-4"
-            message="No 13F books stored yet — SEC sweep in progress"
-            detail="The 13f-poller rotates through the curated managers (rate-limited per SEC policy, runs at daemon boot and daily) — books appear within ~2h of a completed sweep. 13F itself is quarterly and filed up to 45 days after quarter end."
-          />
-        ) : (
-          <ul style={{ borderTop: "1px solid var(--border)" }}>
-            {stored.map((m) => (
-              <li key={m.cik} style={{ borderBottom: "1px solid var(--border)" }}>
-                <Link
-                  href={`/intel/institutions?manager=${encodeURIComponent(m.cik)}`}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 transition-colors duration-150 hover:bg-[var(--panel2)]"
-                >
-                  <span className="font-bold" style={{ color: "var(--text)" }}>
-                    {m.manager}
-                  </span>
-                  <span className="chip tnum">quarter end {m.period}</span>
-                  <span className="tnum text-[0.75rem]" style={{ color: "var(--dim)" }}>
-                    {m.positions} positions
-                  </span>
-                  <span className="tnum ml-auto" style={{ color: "var(--text)" }}>
-                    {fmtUSD(m.totalValue)}
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {pending.length > 0 && (
-        <section className="panel">
+    <div className="page-enter space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile label="Stored Books" value={storedCount} glow="hud" i={0} />
+        <StatTile label="Curated Managers" value={resp.curated.length} glow="accent" i={1} />
+        <StatTile label="Total Value" value={fmtUSD(totalValue)} glow="up" i={2} />
+        <StatTile label="Pending Sweep" value={pending.length} sub={newestPeriod ? `newest: ${newestPeriod}` : ""} glow="down" i={3} />
+      </div>
+      <Reveal className="flex flex-col gap-4">
+        <section className="panel hud-panel">
           <div className="panel-h flex-wrap gap-2">
-            CURATED — NOT YET STORED
-            <span className="chip tnum">{pending.length}</span>
-            <span
-              className="text-[0.75rem] font-normal normal-case tracking-normal"
-              style={{ color: "var(--faint)" }}
-            >
-              watched managers whose latest 13F-HR hasn&rsquo;t been swept in yet
-            </span>
+            STORED 13F BOOKS
+            <span className="chip tnum">{storedCount} of {resp.curated.length}</span>
           </div>
-          <div className="flex flex-wrap gap-2 px-4 py-3">
-            {pending.map((c) => (
-              <Link
-                key={c.cik}
-                href={`/intel/institutions?manager=${encodeURIComponent(String(c.cik))}`}
-                className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
-              >
-                {c.name}
-              </Link>
-            ))}
-          </div>
+          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>{resp.note}</p>
+          {stored.length === 0 ? (
+            <EmptyState className="m-4" message="No 13F books stored yet — SEC sweep in progress" detail="The 13f-poller rotates through the curated managers (rate-limited per SEC policy, runs at daemon boot and daily) — books appear within ~2h of a completed sweep." />
+          ) : (
+            <ul style={{ borderTop: "1px solid var(--border)" }}>
+              {stored.map((m, i) => (
+                <li key={m.cik} className="reveal-item" style={{ "--i": Math.min(i, 11), borderBottom: "1px solid var(--border)" } as React.CSSProperties}>
+                  <Link href={`/intel/institutions?manager=${encodeURIComponent(m.cik)}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 transition-colors duration-150 hover:bg-[var(--panel2)]">
+                    <span className="font-bold" style={{ color: "var(--text)" }}>{m.manager}</span>
+                    <span className="chip tnum">quarter end {m.period}</span>
+                    <span className="tnum text-[0.75rem]" style={{ color: "var(--dim)" }}>{m.positions} positions</span>
+                    <span className="tnum ml-auto" style={{ color: "var(--text)" }}>{fmtUSD(m.totalValue)}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
-      )}
+        {pending.length > 0 && (
+          <section className="panel">
+            <div className="panel-h flex-wrap gap-2">
+              CURATED — NOT YET STORED
+              <span className="chip tnum">{pending.length}</span>
+            </div>
+            <div className="flex flex-wrap gap-2 px-4 py-3">
+              {pending.map((c) => (
+                <Link key={c.cik} href={`/intel/institutions?manager=${encodeURIComponent(String(c.cik))}`} className="chip min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]">
+                  {c.name}
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
+      </Reveal>
     </div>
   );
 }
 
-/** Stage 5: shared-filter view — which curated managers hold one symbol. */
 function SymbolHolders({ symbol }: { symbol: string }) {
   const [rows, setRows] = useState<InstHolding[] | null>(null);
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  const [sortKey, setSortKey] = useState<SortKey>("value");
+  const [sortAsc, setSortAsc] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -295,96 +273,94 @@ function SymbolHolders({ symbol }: { symbol: string }) {
       .catch((e: unknown) => {
         if (!alive) return;
         const msg = e instanceof Error ? e.message : String(e);
-        // Exact-ticker API: unknown/partial symbol 404s — a filter miss.
-        if (msg.includes("404")) {
-          setRows([]);
-          setErr(null);
-          return;
-        }
+        if (msg.includes("404")) { setRows([]); setErr(null); return; }
         setErr(msg);
       });
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [symbol, retryTick]);
 
+  const list = useMemo(() => rows ?? [], [rows]);
+  const sortedList = useMemo(() => [...list].sort(getSortComparator(sortKey, sortAsc)), [list, sortKey, sortAsc]);
+  const maxValue = useMemo(() => Math.max(...list.map(h => h.value)), [list]);
+  const maxShares = useMemo(() => Math.max(...list.map(h => h.shares)), [list]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortAsc(!sortAsc);
+    else { setSortKey(key); setSortAsc(key === "manager"); }
+  };
+
   if (rows === null && err !== null) {
-    return (
-      <ErrorState
-        message={err}
-        hint="Is the daemon running? 13F books are stored by the 13f-poller."
-        retry={() => {
-          setErr(null);
-          setRetryTick((t) => t + 1);
-        }}
-      />
-    );
+    return <ErrorState message={err} hint="Is the daemon running? 13F books are stored by the 13f-poller." retry={() => { setErr(null); setRetryTick(t => t + 1); }} />;
   }
   if (rows === null) return <Skeleton lines={4} label={`loading ${symbol} holders`} />;
 
   return (
-    <section className="panel">
-      <div className="panel-h flex-wrap gap-2">
-        <span>WHO HOLDS {symbol}</span>
-        <span className="chip tnum">{rows.length} curated managers</span>
-        <span className="chip" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>
-          from the shared intel filter
-        </span>
+    <div className="page-enter space-y-4">
+      <PageHero
+        title={`WHO HOLDS ${symbol}`}
+        subtitle={`${rows.length} curated managers`}
+        right={<span className="chip" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>from the shared intel filter</span>}
+      />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile label="Managers" value={rows.length} glow="hud" i={0} />
+        <StatTile label="Total Shares" value={fmtShares(rows.reduce((s,h) => s + h.shares, 0))} glow="accent" i={1} />
+        <StatTile label="Total Value" value={fmtUSD(rows.reduce((s,h) => s + h.value, 0))} glow="up" i={2} />
+        <StatTile label="Largest Holder" value={rows.length > 0 ? rows.sort((a,b) => b.value - a.value)[0].manager : "?"} sub={fmtUSD(maxValue)} glow="down" i={3} />
       </div>
-      {note && (
-        <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-          {note}
-        </p>
-      )}
-      {rows.length === 0 ? (
-        <EmptyState
-          className="m-4"
-          message={`No stored 13F position in ${symbol}`}
-          detail="Either no curated manager reported it last quarter, that ticker isn't tracked, or the 13f-poller hasn't swept the relevant books yet (SEC sweep in progress — books appear within ~2h of a completed sweep)."
-        />
-      ) : (
-        <ul style={{ borderTop: "1px solid var(--border)" }}>
-          {rows.map((h) => (
-            <li
-              key={`${h.manager}:${h.cusip}`}
-              className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.75rem]"
-              style={{ borderBottom: "1px solid var(--border)" }}
-            >
-              <span className="font-bold" style={{ color: "var(--text)" }}>
-                {h.manager}
-              </span>
-              <span className="chip tnum">quarter end {h.period}</span>
-              <span className="tnum" style={{ color: "var(--dim)" }}>
-                {fmtShares(h.shares)} sh
-              </span>
-              <span className="tnum ml-auto" style={{ color: "var(--text)" }}>
-                {fmtUSD(h.value)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+      <section className="panel hud-panel">
+        {note && <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>{note}</p>}
+        {rows.length === 0 ? (
+          <EmptyState className="m-4" message={`No stored 13F position in ${symbol}`} detail="Either no curated manager reported it last quarter, that ticker isn't tracked, or the 13f-poller hasn't swept the relevant books yet." />
+        ) : (
+          <div className="table-wrap">
+            <table className="v4-table w-full text-[0.75rem]">
+              <thead>
+                <tr className="text-left tracking-wider" style={{ color: "var(--faint)", borderBottom: "1px solid var(--border)" }}>
+                  <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("manager")}>MANAGER <SortArrow active={sortKey === "manager"} asc={sortAsc} /></th>
+                  <th className="px-2 py-2 font-normal">PERIOD</th>
+                  <th className="px-2 py-2 text-right font-normal cursor-pointer" onClick={() => toggleSort("shares")}>SHARES <SortArrow active={sortKey === "shares"} asc={sortAsc} /></th>
+                  <th className="px-4 py-2 text-right font-normal cursor-pointer" onClick={() => toggleSort("value")}>VALUE <SortArrow active={sortKey === "value"} asc={sortAsc} /></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedList.map((h, i) => (
+                  <tr key={`${h.manager}:${h.cusip}`} className="reveal-item" style={{ "--i": Math.min(i, 11), borderBottom: "1px solid var(--border)" } as React.CSSProperties}>
+                    <td className="px-4 py-2 font-bold" style={{ color: "var(--text)" }}>{h.manager}</td>
+                    <td className="tnum px-2 py-2" style={{ color: "var(--faint)" }}>{h.period}</td>
+                    <td className="px-2 py-2 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <span className="tnum" style={{ color: "var(--dim)" }}>{fmtShares(h.shares)}</span>
+                        <div className="w-16"><MiniBar value={h.shares} max={maxShares} color="var(--hud)" i={i} /></div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <span className="tnum" style={{ color: "var(--text)" }}>{fmtUSD(h.value)}</span>
+                        <div className="w-16"><MiniBar value={h.value} max={maxValue} color="var(--accent)" i={i} /></div>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
 function InstitutionsInner() {
   const params = useSearchParams();
   const manager = params.get("manager") ?? "";
-  // Stage 5: the hub-wide symbol filter flips this tab to "who holds it".
   const { symbol } = useIntelSymbol();
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">INSTITUTIONS</h1>
-        <span className="chip">SEC 13F-HR · quarterly, filed up to 45 days after quarter end</span>
-      </div>
-
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="intel-institutions"
-        text="What are notable big funds holding? 13F snapshots are quarterly and filed up to 45 days late — positions may already have changed."
+      <PageHero
+        title="Institutions"
+        subtitle="Where the big money moved — 13F position changes sorted by impact."
+        right={<span className="chip">SEC 13F-HR · quarterly, filed up to 45 days after quarter end</span>}
       />
       {symbol ? (
         <SymbolHolders symbol={symbol} />
@@ -398,7 +374,6 @@ function InstitutionsInner() {
 }
 
 export default function InstitutionsPage() {
-  // useSearchParams requires a Suspense boundary for prerendering.
   return (
     <Suspense fallback={<Skeleton lines={6} label="loading institutions" />}>
       <InstitutionsInner />

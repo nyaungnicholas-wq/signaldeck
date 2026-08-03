@@ -1,12 +1,7 @@
 "use client";
 
-// /lab/risk — thin composition page. State lives in useRisk(); the builder
-// and result sections live in src/components/risk/ (pure refactor of the old
-// monolithic page). Request-driven: nothing polls, the report recomputes only
-// when the user runs it.
-
+import { Reveal, PageHero, StatTile, AnimatedNumber, DeltaBadge, MiniBar, Gauge, Spark } from "@/components/ui/Kit";
 import ErrorState from "@/components/ErrorState";
-import PagePurpose from "@/components/PagePurpose";
 import PortfolioBuilder from "@/components/risk/PortfolioBuilder";
 import RiskResults from "@/components/risk/RiskResults";
 import useRisk, { DEFAULT_NOTIONAL } from "@/hooks/useRisk";
@@ -19,54 +14,56 @@ function fmtUSD(v: number): string {
 export default function RiskPage() {
   const r = useRisk();
 
+  const heroStats = [
+    { label: "Holdings", value: r.validHoldings.length, sub: "positions in portfolio" },
+    { label: "Total Weight", value: r.totalWeight, decimals: 0, suffix: "%", sub: r.totalWeight > 0 && r.totalWeight !== 100 ? "normalized" : "raw" },
+    { label: "Confidence", value: r.report?.Confidence ? r.report.Confidence * 100 : 0, decimals: 0, suffix: "%", sub: "model confidence level" },
+    { label: "Notional", value: r.notional > 0 ? r.notional : DEFAULT_NOTIONAL, prefix: "$", sub: "portfolio value" }
+  ];
+
   return (
-    <div className="flex flex-col gap-4">
-      {/* header row */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">RISK</h1>
-        <span className="chip">RiskLens</span>
-        <span className="chip tnum">
-          {r.validHoldings.length} holding{r.validHoldings.length === 1 ? "" : "s"}
-        </span>
-        <span
-          className="chip tnum"
-          style={{ color: r.totalWeight > 0 ? "var(--dim)" : "var(--faint)" }}
-        >
-          weights total {r.totalWeight.toFixed(0)}%
-          {r.totalWeight > 0 && r.totalWeight !== 100 ? " · normalized" : ""}
-        </span>
-        {r.report !== null && (
-          <span className="chip tnum">
-            {(r.report.Confidence * 100).toFixed(0)}% confidence · 1-day
-          </span>
-        )}
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="RiskLens"
+        subtitle="Compute 1-day Value-at-Risk, risk drivers, and stress scenarios for a custom portfolio."
+        live={false}
+      />
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {heroStats.map((s, i) => (
+          <StatTile
+            key={i}
+            label={s.label}
+            value={s.value}
+            decimals={s.decimals}
+            prefix={s.prefix}
+            suffix={s.suffix}
+            sub={s.sub}
+            i={i}
+          />
+        ))}
       </div>
 
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="lab-risk"
-        text="How risky is a given mix of holdings, and what actually diversifies it? Computed from stored history — the past, which is not a guarantee."
-      />
+      <div className="panel">
+        <div className="panel-h">Portfolio Builder</div>
+        <PortfolioBuilder
+          rows={r.rows}
+          setRow={r.setRow}
+          addRow={r.addRow}
+          removeRow={r.removeRow}
+          picker={r.picker}
+          watch={r.watch}
+          watchErr={r.watchErr}
+          addFromWatchlist={r.addFromWatchlist}
+          equalWeightWatchlist={r.equalWeightWatchlist}
+          notional={r.notional}
+          setNotional={r.setNotional}
+          run={r.run}
+          running={r.running}
+          canRun={r.canRun}
+        />
+      </div>
 
-      {/* builder */}
-      <PortfolioBuilder
-        rows={r.rows}
-        setRow={r.setRow}
-        addRow={r.addRow}
-        removeRow={r.removeRow}
-        picker={r.picker}
-        watch={r.watch}
-        watchErr={r.watchErr}
-        addFromWatchlist={r.addFromWatchlist}
-        equalWeightWatchlist={r.equalWeightWatchlist}
-        notional={r.notional}
-        setNotional={r.setNotional}
-        run={r.run}
-        running={r.running}
-        canRun={r.canRun}
-      />
-
-      {/* run error */}
       {r.runErr !== null && (
         <ErrorState
           message={r.runErr}
@@ -75,13 +72,12 @@ export default function RiskPage() {
         />
       )}
 
-      {/* initial / empty state */}
       {r.report === null && r.runErr === null && (
         <section className="panel">
           <div className="px-4 py-10 text-center text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             {r.validHoldings.length === 0 ? (
               <>
-                add at least one holding — a symbol and a weight — then{" "}
+                Add at least one holding — a symbol and a weight — then{" "}
                 <span style={{ color: "var(--dim)" }}>investigate risk</span> to compute 1-day
                 Value-at-Risk, the drivers behind it, and a set of stress scenarios.
               </>
@@ -98,7 +94,6 @@ export default function RiskPage() {
         </section>
       )}
 
-      {/* results */}
       {r.report !== null && (
         <RiskResults
           report={r.report}

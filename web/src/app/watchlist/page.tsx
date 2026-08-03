@@ -1,205 +1,349 @@
 "use client";
 
-// MY DECK — the user's watchlist as glass cards: price + day change, the ~60d
-// sparkline, the symbol's validated regime stack (ONE structuralRegimes()
-// call grouped client-side — never a signalReport per card), and its latest
-// alert. Honest empty state when the watchlist is empty; alerts are
-// session-scoped and degrade to absence when the call fails.
-
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import {
   api,
-  structuralRegimes,
-  type AlertRow,
-  type StructRegimeForecast,
-  type StructRegimes,
   type WatchRow,
+  type SymbolInfo,
+  screenerRows,
 } from "@/lib/api";
-import { ago, fmtPct, fmtPrice } from "@/lib/format";
-import { changeColor } from "@/components/home/helpers";
-import Skeleton from "@/components/Skeleton";
-import ErrorState from "@/components/ErrorState";
-import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
-import Sparkline from "@/components/viz/Sparkline";
-import { usePeek } from "@/components/CompanyPeek";
+import { fmtPct, fmtPrice } from "@/lib/format";
+import {
+  Reveal,
+  AnimatedNumber,
+  Spark,
+  StatTile,
+  PageHero,
+  DeltaBadge,
+} from "@/components/ui/Kit";
 
-function pct(x: number): string {
-  return `${(x * 100).toFixed(1)}%`;
-}
+export default function WatchlistPage() {
+  const [watchlist, setWatchlist] = useState<WatchRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [undo, setUndo] = useState<{
+    symbol: string;
+    market: "crypto" | "stocks";
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
 
-function DeckCard({
-  row,
-  stack,
-  alert,
-}: {
-  row: WatchRow;
-  stack: StructRegimeForecast[];
-  alert: AlertRow | null;
-}) {
-  const peek = usePeek();
-  const sym = encodeURIComponent(row.symbol);
+  const refetch = useCallback(() => {
+    api.watchlist().then(setWatchlist).catch((e) => setError(String(e)));
+  }, []);
+
+  useEffect(() => {
+    refetch();
+    return () => { if (undo) clearTimeout(undo.timer); };
+  }, [refetch]);
+
+  const remove = useCallback(
+    (symbol: string, market: "crypto" | "stocks") => {
+      const timer = setTimeout(() => {
+        setUndo(null);
+        refetch();
+      }, 5000);
+      setUndo({ symbol, market, timer });
+      setWatchlist((prev) =>
+        prev ? prev.filter((r) => !(r.symbol === symbol && r.market === market)) : prev
+      );
+    },
+    [refetch]
+  );
+
+  const undoRemove = useCallback(() => {
+    if (!undo) return;
+    clearTimeout(undo.timer);
+    api.subscribe(undo.symbol, undo.market).then(refetch).catch(refetch);
+    setUndo(null);
+  }, [undo, refetch]);
+
+  const stats = useMemo(() => {
+    if (!watchlist || watchlist.length === 0)
+      return { count: 0, best: null, worst: null };
+    const sorted = [...watchlist].sort(
+      (a, b) => (b.dayChangePct ?? 0) - (a.dayChangePct ?? 0)
+    );
+    return {
+      count: watchlist.length,
+      best: sorted[0],
+      worst: sorted[sorted.length - 1],
+    };
+  }, [watchlist]);
+
+  const removeHandler = (symbol: string, market: "crypto" | "stocks") => {
+    api.unsubscribe(symbol, market).catch(() => {});
+  };
+
   return (
-    <article className="panel flex flex-col gap-2 p-4">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <button
-          type="button"
-          onClick={() => peek.open(row.symbol, row.market)}
-          className="mono cursor-pointer text-base font-bold tracking-wide transition-colors duration-150 hover:text-[var(--accent)]"
-          title={`peek ${row.symbol}`}
-        >
-          {row.symbol}
-        </button>
-        <span className="min-w-0 truncate text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          {row.name}
-        </span>
-        <span className="tnum ml-auto text-[0.85rem]">{fmtPrice(row.lastClose)}</span>
-        <span className="tnum text-[0.75rem]" style={{ color: changeColor(row.dayChangePct) }}>
-          {fmtPct(row.dayChangePct)}
-        </span>
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Watchlist"
+        live
+        subtitle="Your symbols, your radar — add anything from the universe and every signal tracks it for you."
+        right={<AddSymbol refetch={refetch} />}
+      />
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <StatTile
+          label="Symbols Tracked"
+          value={stats.count}
+          glow="hud"
+          i={0}
+        />
+        {stats.best && (
+          <StatTile
+            label="Best 24h"
+            value={stats.best.symbol}
+            sub={fmtPrice(stats.best.lastClose ?? 0)}
+            delta={stats.best.dayChangePct ?? 0}
+            glow="up"
+            i={1}
+          />
+        )}
+        {stats.worst && (
+          <StatTile
+            label="Worst 24h"
+            value={stats.worst.symbol}
+            sub={fmtPrice(stats.worst.lastClose ?? 0)}
+            delta={stats.worst.dayChangePct ?? 0}
+            glow="down"
+            i={2}
+          />
+        )}
       </div>
 
-      <Sparkline closes={row.spark ?? []} width={220} height={40} />
-
-      {stack.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5 text-[0.75rem]">
-          {stack.map((f) => (
-            <Link
-              key={f.kind}
-              href={`/signals/report/${f.market}/${sym}?kind=${f.kind}`}
-              className="chip cursor-pointer px-2 py-[2px] transition-colors duration-150 hover:text-[var(--accent)]"
-              title={`measured accuracy at this conviction band: ${pct(f.historicalAccuracy)}`}
-            >
-              {f.kind}: {f.regime} ({pct(f.historicalAccuracy)} band)
-            </Link>
-          ))}
+      {error && (
+        <div className="panel p-4" style={{ color: "var(--ask)" }}>
+          {error}
         </div>
-      ) : (
-        <p className="m-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          no validated regime forecasts on this symbol yet
-        </p>
       )}
 
-      {alert ? (
-        <p className="m-0 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          <span className="chip mr-1.5 px-2 py-[1px] tracking-wider" style={{ color: "var(--crossed)", borderColor: "var(--crossed)" }}>
-            alert
-          </span>
-          {alert.detail}{" "}
-          <span className="tnum" style={{ color: "var(--faint)" }}>
-            {ago(alert.ts)}
-          </span>
-        </p>
-      ) : null}
+      {!watchlist ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="panel h-32 animate-pulse" />
+          ))}
+        </div>
+      ) : watchlist.length === 0 ? (
+        <div className="hud-panel p-8 text-center" style={{ color: "var(--dim)" }}>
+          <p className="text-lg font-medium mb-2">Your watchlist is empty</p>
+          <p className="text-sm">
+            Use the search above to add symbols from the universe. Each one
+            becomes a tracked card here.
+          </p>
+        </div>
+      ) : (
+        <Reveal>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {watchlist.map((row, i) => (
+              <WatchlistCard
+                key={`${row.market}-${row.symbol}`}
+                row={row}
+                i={i}
+                onRemove={() => remove(row.symbol, row.market)}
+                removeHandler={removeHandler}
+                isUndo={undo?.symbol === row.symbol && undo?.market === row.market}
+                onUndo={undoRemove}
+              />
+            ))}
+          </div>
+        </Reveal>
+      )}
+    </div>
+  );
+}
 
-      <div className="mt-auto flex flex-wrap gap-x-4 pt-1 text-[0.75rem]">
-        <Link
-          href={`/signals/report/${row.market}/${sym}?kind=overview`}
-          className="cursor-pointer text-[var(--faint)] transition-colors duration-150 hover:text-[var(--accent)]"
-        >
-          report →
-        </Link>
-        <Link
-          href={`/s/${row.market}/${sym}`}
-          className="cursor-pointer text-[var(--faint)] transition-colors duration-150 hover:text-[var(--accent)]"
-        >
-          full page →
-        </Link>
-      </div>
+function WatchlistCard({
+  row,
+  i,
+  onRemove,
+  removeHandler,
+  isUndo,
+  onUndo,
+}: {
+  row: WatchRow;
+  i: number;
+  onRemove: () => void;
+  removeHandler: (symbol: string, market: "crypto" | "stocks") => void;
+  isUndo: boolean;
+  onUndo: () => void;
+}) {
+  const [pending, setPending] = useState(false);
+
+  const handleRemove = () => {
+    setPending(true);
+    removeHandler(row.symbol, row.market);
+    onRemove();
+    setPending(false);
+  };
+
+  const sym = encodeURIComponent(row.symbol);
+  return (
+    <article
+      className="panel reveal-item relative p-4 flex flex-col gap-2"
+      style={{ "--i": i } as React.CSSProperties}
+    >
+      {isUndo ? (
+        <div className="flex items-center justify-center h-full gap-2">
+          <span style={{ color: "var(--ask)" }}>removed</span>
+          <button
+            onClick={onUndo}
+            className="chip px-3 py-1 text-[0.75rem] cursor-pointer hover:bg-[rgba(255,255,255,0.06)]"
+            style={{ color: "var(--accent)" }}
+          >
+            undo
+          </button>
+        </div>
+      ) : (
+        <>
+          <button
+            onClick={handleRemove}
+            disabled={pending}
+            className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-full hover:bg-[rgba(255,255,255,0.1)] cursor-pointer"
+            aria-label={`Remove ${row.symbol}`}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12">
+              <line x1="3" y1="3" x2="9" y2="9" stroke="var(--dim)" strokeWidth="1.5" strokeLinecap="round" />
+              <line x1="9" y1="3" x2="3" y2="9" stroke="var(--dim)" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <Link
+              href={`/s/${row.market}/${sym}`}
+              className="mono cursor-pointer text-base font-bold tracking-wide transition-colors duration-150 hover:text-[var(--accent)]"
+            >
+              {row.symbol}
+            </Link>
+            <span className="min-w-0 truncate text-[0.75rem]" style={{ color: "var(--faint)" }}>
+              {row.name}
+            </span>
+            <span className="tnum ml-auto text-[0.85rem]">{fmtPrice(row.lastClose)}</span>
+            {row.dayChangePct != null && <DeltaBadge value={row.dayChangePct} />}
+          </div>
+
+          {row.spark && (
+            <div className="mt-1">
+              <Spark data={row.spark} width={200} height={36} />
+            </div>
+          )}
+
+          <div className="mt-auto pt-2">
+            <Link
+              href={`/signals/report/${row.market}/${sym}?kind=overview`}
+              className="chip inline-flex items-center px-3 py-1 text-[0.75rem] cursor-pointer transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              Report
+            </Link>
+          </div>
+        </>
+      )}
     </article>
   );
 }
 
-export default function DeckPage() {
-  const [watch, setWatch] = useState<WatchRow[] | null>(null);
-  const [watchErr, setWatchErr] = useState<string | null>(null);
-  const [struct, setStruct] = useState<StructRegimes | null>(null);
-  // alerts are session-scoped (401 logged out) — absence is honest, not fatal
-  const [alerts, setAlerts] = useState<AlertRow[] | null>(null);
-  const [tick, setTick] = useState(0);
-  const retry = () => setTick((t) => t + 1);
+function AddSymbol({ refetch }: { refetch: () => void }) {
+  const [query, setQuery] = useState("");
+  const [matches, setMatches] = useState<
+    { symbol: string; name: string; market: "crypto" | "stocks"; spark?: number[] }[]
+  >([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+  const [screenerData, setScreenerData] = useState<Awaited<ReturnType<typeof screenerRows>> | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const loadScreener = async () => {
+    if (screenerData) return;
+    setLoading(true);
+    try {
+      const data = await screenerRows();
+      setScreenerData(data);
+    } catch (e) {
+      setError("Failed to load universe");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let dead = false;
-    api
-      .watchlist()
-      .then((w) => !dead && (setWatch(w ?? []), setWatchErr(null)))
-      .catch((e: unknown) => !dead && setWatchErr(e instanceof Error ? e.message : String(e)));
-    structuralRegimes()
-      .then((s) => !dead && setStruct(s))
-      .catch(() => undefined);
-    api
-      .alerts(false, 100)
-      .then((a) => !dead && setAlerts(a ?? []))
-      .catch(() => !dead && setAlerts(null));
-    return () => {
-      dead = true;
-    };
-  }, [tick]);
-
-  // ONE regimes payload serves every card: group by symbol client-side.
-  const stackBySymbol = new Map<string, StructRegimeForecast[]>();
-  if (struct) {
-    for (const rows of Object.values(struct.forecasts)) {
-      for (const f of rows) {
-        const list = stackBySymbol.get(f.symbol) ?? [];
-        list.push(f);
-        stackBySymbol.set(f.symbol, list);
-      }
+    if (!query || !screenerData) {
+      setMatches([]);
+      return;
     }
-  }
+    const q = query.toLowerCase();
+    const filtered = screenerData
+      .filter(
+        (r) =>
+          r.symbol.toLowerCase().includes(q) ||
+          r.name?.toLowerCase().includes(q)
+      )
+      .slice(0, 8);
+    setMatches(filtered);
+  }, [query, screenerData]);
 
-  const latestAlertFor = (symbol: string): AlertRow | null => {
-    const rows = (alerts ?? []).filter((a) => a.symbol === symbol);
-    if (rows.length === 0) return null;
-    return rows.reduce((best, a) => (a.ts > best.ts ? a : best), rows[0]);
+  const add = async (symbol: string, market: "crypto" | "stocks") => {
+    setPending(symbol);
+    setError(null);
+    try {
+      await api.subscribe(symbol, market);
+      setQuery("");
+      setMatches([]);
+      refetch();
+    } catch (e) {
+      setError("Failed to add symbol");
+    } finally {
+      setPending(null);
+    }
   };
 
   return (
-    <main className="mx-auto max-w-6xl space-y-4 px-4 py-6">
-      <h1 className="mono text-lg font-semibold">MY WATCHLIST</h1>
-      <PagePurpose
-        id="deck"
-        text="your watchlist as one card per symbol: stored last close + day change, the ~60-day sparkline, the validated regime stack with its measured accuracy bands, and the latest alert. Prices are worker-cadence daily closes, never live quotes."
+    <div ref={containerRef} className="relative">
+      <input
+        ref={inputRef}
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onFocus={loadScreener}
+        placeholder="Add symbol..."
+        className="panel w-64 px-3 py-2 text-sm mono focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
+        style={{ backgroundColor: "var(--bg)" }}
       />
-
-      {watchErr ? (
-        <ErrorState
-          message={`Couldn't load your watchlist: ${watchErr}`}
-          retry={retry}
-          hint="The watchlist is per-user — log in and retry. If the daemon is down, start signaldeckd."
-        />
-      ) : null}
-      {!watch && !watchErr ? <Skeleton lines={8} /> : null}
-
-      {watch && watch.length === 0 ? (
-        <>
-          <EmptyState
-            message="Your deck is empty"
-            detail="Nothing is faked in the meantime — add symbols from the screener and each one becomes a card here."
-          />
-          <Link
-            href="/market/overview"
-            className="chip inline-flex min-h-[40px] cursor-pointer items-center px-4 text-[0.75rem] tracking-wider transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)]"
-          >
-            Open the screener →
-          </Link>
-        </>
-      ) : null}
-
-      {watch && watch.length > 0 ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {watch.map((row) => (
-            <DeckCard
-              key={`${row.market}-${row.symbol}`}
-              row={row}
-              stack={stackBySymbol.get(row.symbol) ?? []}
-              alert={latestAlertFor(row.symbol)}
-            />
+      {error && (
+        <div className="absolute top-full mt-1 right-0 panel p-2 text-xs" style={{ color: "var(--ask)" }}>
+          {error}
+        </div>
+      )}
+      {matches.length > 0 && (
+        <div className="absolute top-full mt-1 right-0 panel w-80 max-h-96 overflow-y-auto z-50">
+          {matches.map((m) => (
+            <div
+              key={m.symbol}
+              className="flex items-center justify-between px-3 py-2 border-b border-[rgba(255,255,255,0.06)] last:border-0 hover:bg-[rgba(255,255,255,0.06)]"
+            >
+              <div className="flex-1 min-w-0">
+                <span className="mono text-sm font-medium">{m.symbol}</span>
+                <span className="ml-2 text-[0.75rem] truncate" style={{ color: "var(--faint)" }}>
+                  {m.name}
+                </span>
+              </div>
+              {m.spark && (
+                <div className="mx-2 flex-shrink-0">
+                  <Spark data={m.spark} width={60} height={20} />
+                </div>
+              )}
+              <button
+                onClick={() => add(m.symbol, m.market)}
+                disabled={pending === m.symbol}
+                className="chip px-2 py-1 text-[0.75rem] cursor-pointer hover:bg-[rgba(255,255,255,0.1)] disabled:opacity-50"
+              >
+                {pending === m.symbol ? "..." : "Add"}
+              </button>
+            </div>
           ))}
         </div>
-      ) : null}
-    </main>
+      )}
+    </div>
   );
 }

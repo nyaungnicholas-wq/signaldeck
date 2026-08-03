@@ -27,10 +27,10 @@ import {
   type ResearchLedger,
 } from "@/lib/api";
 import { fmtTs } from "@/lib/format";
-import PagePurpose from "@/components/PagePurpose";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
 import Skeleton from "@/components/Skeleton";
+import { PageHero, Reveal, DeltaBadge, AnimatedNumber, MiniBar, StatTile } from "@/components/ui/Kit";
 
 // ── pure helpers ──────────────────────────────────────────────────────────
 
@@ -77,37 +77,20 @@ function bfColor(bf: number): string {
 function PosteriorBar({ prior, posterior }: { prior: number; posterior: number }) {
   return (
     <div
-      style={{
-        position: "relative",
-        height: 8,
-        borderRadius: 4,
-        background: "var(--panel-2, rgba(128,128,128,.15))",
-        minWidth: 90,
-      }}
+      className="relative h-2 w-full rounded-full bg-white/10"
       aria-label={`prior ${pct(prior)} to posterior ${pct(posterior)}`}
     >
       <div
+        className="absolute inset-y-0 left-0 rounded-full"
         style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          bottom: 0,
           width: `${Math.max(2, posterior * 100)}%`,
-          borderRadius: 4,
           background: posterior >= prior ? "var(--bid)" : "var(--ask)",
           opacity: 0.75,
         }}
       />
       <div
-        style={{
-          position: "absolute",
-          left: `${prior * 100}%`,
-          top: -2,
-          bottom: -2,
-          width: 2,
-          background: "var(--fg)",
-          opacity: 0.6,
-        }}
+        className="absolute top-0 bottom-0 w-0.5 bg-white/60"
+        style={{ left: `${prior * 100}%` }}
         title={`prior ${pct(prior)}`}
       />
     </div>
@@ -118,13 +101,10 @@ function Chip({ text, color, title }: { text: string; color: string; title?: str
   return (
     <span
       title={title}
+      className="inline-block rounded-full border px-2 py-0.5 text-[0.75rem] tnum"
       style={{
-        display: "inline-block",
-        padding: "1px 8px",
-        borderRadius: 10,
-        fontSize: 11,
-        border: `1px solid ${color}`,
-        color,
+        borderColor: color,
+        color: color,
         whiteSpace: "nowrap",
       }}
     >
@@ -159,16 +139,22 @@ export default function ResearchPage() {
 
   if (err && !ledger) {
     return (
-      <main style={{ padding: 16 }}>
-        <PagePurpose id="lab-research" text={PURPOSE} />
+      <main className="page-enter space-y-4" style={{ padding: 16 }}>
+        <PageHero
+          title="Research Ledger"
+          subtitle="The engine's beliefs about its own discoveries: every hypothesis carries a fixed prior, an auditable evidence chain (historical era grades, live replications, self-attacks), and a Bayesian posterior."
+        />
         <ErrorState message={err} retry={() => setRetryTick((t) => t + 1)} />
       </main>
     );
   }
   if (!ledger) {
     return (
-      <main style={{ padding: 16 }}>
-        <PagePurpose id="lab-research" text={PURPOSE} />
+      <main className="page-enter space-y-4" style={{ padding: 16 }}>
+        <PageHero
+          title="Research Ledger"
+          subtitle="The engine's beliefs about its own discoveries: every hypothesis carries a fixed prior, an auditable evidence chain (historical era grades, live replications, self-attacks), and a Bayesian posterior."
+        />
         <Skeleton lines={10} />
       </main>
     );
@@ -180,20 +166,77 @@ export default function ResearchPage() {
     arr.push(e);
     evByHyp.set(e.hypId, arr);
   }
-  const decayById = new Map(ledger.decay.map((d) => [d.id, d]));
+  const decayById = new Map<string, { peak: number; edgeWeakening: boolean; stale: boolean }>();
+  for (const d of ledger.decay) {
+    decayById.set(d.id, d);
+  }
   // gates may be absent on a daemon older than the tradability wave.
-  const gateById = new Map((ledger.gates ?? []).map((g) => [g.id, g]));
+  const gateById = new Map<string, LedgerGate>();
+  for (const g of ledger.gates ?? []) {
+    gateById.set(g.id, g);
+  }
   const weeks = ledger.weeks;
 
   return (
-    <main style={{ padding: 16, display: "grid", gap: 16 }}>
-      <PagePurpose id="lab-research" text={PURPOSE} />
+    <main className="page-enter space-y-4" style={{ padding: 16 }}>
+      <PageHero
+        title="Research Ledger"
+        subtitle="The engine's beliefs about its own discoveries: every hypothesis carries a fixed prior, an auditable evidence chain (historical era grades, live replications, self-attacks), and a Bayesian posterior."
+        right={
+          <div className="flex gap-2 items-center">
+            <span className="live-dot" />
+            <span className="mono text-sm" style={{ color: "var(--hud)" }}>LIVE</span>
+          </div>
+        }
+      />
+
+      {/* ── summary stats ── */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile
+          label="Hypotheses"
+          value={ledger.hypotheses.length}
+          decimals={0}
+          glow="accent"
+          i={0}
+          delta={undefined}
+          spark={undefined}
+          sub="Tracked beliefs"
+        />
+        <StatTile
+          label="Live Replications"
+          value={ledger.liveVsBacktest.live}
+          decimals={0}
+          glow="hud"
+          i={1}
+          delta={undefined}
+          spark={undefined}
+          sub="Forward data grades"
+        />
+        <StatTile
+          label="Backtest Eras"
+          value={ledger.liveVsBacktest.backtest}
+          decimals={0}
+          glow="down"
+          i={2}
+          delta={undefined}
+          spark={undefined}
+          sub="Historical windows"
+        />
+        <StatTile
+          label="Evidence Rows"
+          value={Object.values(ledger.evidenceKinds).reduce((a, b) => a + b, 0)}
+          decimals={0}
+          glow="up"
+          i={3}
+          delta={undefined}
+          spark={undefined}
+          sub="Total evidence items"
+        />
+      </div>
 
       {/* ── coverage: the historical evidence base ── */}
-      <section>
-        <h2 style={{ fontSize: 13, letterSpacing: 1, opacity: 0.8 }}>
-          HISTORICAL EVIDENCE BASE
-        </h2>
+      <section className="panel p-4">
+        <h2 className="panel-h">HISTORICAL EVIDENCE BASE</h2>
         {!weeks || weeks.rows === 0 ? (
           <EmptyState
             message="No historical weeks yet"
@@ -201,7 +244,7 @@ export default function ResearchPage() {
           />
         ) : (
           <>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <div className="flex gap-2 flex-wrap items-center">
               <Chip
                 color="var(--dim)"
                 text={`${weeks.rows.toLocaleString()} symbol-weeks`}
@@ -222,7 +265,7 @@ export default function ResearchPage() {
                   />
                 ))}
             </div>
-            <p style={{ fontSize: 12, color: "var(--dim)", marginTop: 6 }}>
+            <p className="mt-2 text-[0.75rem]" style={{ color: "var(--dim)" }}>
               Survivor-universe backtest base (today&apos;s symbols projected into the
               past) — every grade drawn from it carries a standing survivorship
               penalty in its evidence chain. Stocks only: free crypto history is
@@ -230,7 +273,7 @@ export default function ResearchPage() {
             </p>
           </>
         )}
-        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+        <div className="flex gap-2 mt-3 flex-wrap">
           <Chip
             color="var(--bid)"
             text={`live replications: ${ledger.liveVsBacktest.live}`}
@@ -248,99 +291,100 @@ export default function ResearchPage() {
       </section>
 
       {/* ── the hypothesis ledger ── */}
-      <section>
-        <h2 style={{ fontSize: 13, letterSpacing: 1, opacity: 0.8 }}>
+      <section className="panel hud-panel p-4">
+        <h2 className="panel-h">
           HYPOTHESIS LEDGER — prior → posterior, evidence-weighted
         </h2>
         {ledger.hypotheses.length === 0 ? (
           <EmptyState message="No hypotheses yet" detail="The research-ledger worker seeds on its next pass." />
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ textAlign: "left", color: "var(--dim)", fontSize: 11 }}>
-                  <th style={{ padding: "6px 8px" }}>ID</th>
-                  <th style={{ padding: "6px 8px" }}>BELIEF</th>
-                  <th style={{ padding: "6px 8px" }}>FAMILY</th>
-                  <th style={{ padding: "6px 8px" }}>PRIOR → POSTERIOR</th>
-                  <th style={{ padding: "6px 8px" }}>STATUS</th>
-                  <th style={{ padding: "6px 8px" }} title="independent disjoint-window grades / of them arguing against / volatility regimes covered">
-                    REPS·CONTRA·REGIMES
-                  </th>
-                  <th style={{ padding: "6px 8px" }}>FLAGS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ledger.hypotheses.map((h) => (
-                  <HypRow
-                    key={h.id}
-                    h={h}
-                    chain={evByHyp.get(h.id) ?? []}
-                    decay={decayById.get(h.id)}
-                    gate={gateById.get(h.id)}
-                    open={!!open[h.id]}
-                    onToggle={() => setOpen((o) => ({ ...o, [h.id]: !o[h.id] }))}
-                  />
-                ))}
-              </tbody>
-            </table>
+          <div className="table-wrap">
+            <Reveal>
+              <table className="v4-table">
+                <thead>
+                  <tr className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
+                    <th className="px-2 py-1.5">ID</th>
+                    <th className="px-2 py-1.5">BELIEF</th>
+                    <th className="px-2 py-1.5">FAMILY</th>
+                    <th className="px-2 py-1.5">PRIOR → POSTERIOR</th>
+                    <th className="px-2 py-1.5">STATUS</th>
+                    <th className="px-2 py-1.5" title="independent disjoint-window grades / of them arguing against / volatility regimes covered">
+                      REPS·CONTRA·REGIMES
+                    </th>
+                    <th className="px-2 py-1.5">FLAGS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledger.hypotheses.map((h, i) => (
+                    <HypRow
+                      key={h.id}
+                      h={h}
+                      chain={evByHyp.get(h.id) ?? []}
+                      decay={decayById.get(h.id)}
+                      gate={gateById.get(h.id)}
+                      open={!!open[h.id]}
+                      onToggle={() => setOpen((o) => ({ ...o, [h.id]: !o[h.id] }))}
+                      i={i}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </Reveal>
           </div>
         )}
       </section>
 
       {/* ── meta-analysis ── */}
-      <section style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>
-        <div>
-          <h2 style={{ fontSize: 13, letterSpacing: 1, opacity: 0.8 }}>
-            SIGNAL FAMILIES — what keeps surviving
-          </h2>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <tbody>
-              {(ledger.meta.families ?? []).map((f) => (
-                <tr key={f.family} style={{ borderTop: "1px solid var(--panel-2, rgba(128,128,128,.15))" }}>
-                  <td style={{ padding: "6px 8px" }}>{f.family}</td>
-                  <td style={{ padding: "6px 8px", color: "var(--dim)" }}>{f.n} beliefs</td>
-                  <td style={{ padding: "6px 8px" }}>avg posterior {pct(f.avgPosterior)}</td>
-                  <td style={{ padding: "6px 8px", color: "var(--dim)" }}>
-                    {f.supported > 0 ? `${f.supported} supported · ` : ""}
-                    {f.rejected > 0 ? `${f.rejected} rejected` : ""}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <h2 style={{ fontSize: 13, letterSpacing: 1, opacity: 0.8 }}>
-            ATTACK LETHALITY — what kills research
-          </h2>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <tbody>
-              {(ledger.meta.attacks ?? []).map((a) => (
-                <tr key={a.attack} style={{ borderTop: "1px solid var(--panel-2, rgba(128,128,128,.15))" }}>
-                  <td style={{ padding: "6px 8px" }}>{a.attack}</td>
-                  <td style={{ padding: "6px 8px", color: a.failed > 0 ? "var(--ask)" : "var(--dim)" }}>
-                    {a.failed} failed
-                  </td>
-                  <td style={{ padding: "6px 8px", color: "var(--dim)" }}>of {a.run} run</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <section className="panel p-4">
+          <h2 className="panel-h">SIGNAL FAMILIES — what keeps surviving</h2>
+          <div className="table-wrap">
+            <table className="v4-table">
+              <tbody>
+                {(ledger.meta.families ?? []).map((f, i) => (
+                  <tr key={f.family} className="reveal-item" style={{ "--i": i } as React.CSSProperties}>
+                    <td className="px-2 py-1.5 mono">{f.family}</td>
+                    <td className="px-2 py-1.5 tnum" style={{ color: "var(--dim)" }}>{f.n} beliefs</td>
+                    <td className="px-2 py-1.5">avg posterior <span className="tnum">{pct(f.avgPosterior)}</span></td>
+                    <td className="px-2 py-1.5 tnum" style={{ color: "var(--dim)" }}>
+                      {f.supported > 0 ? `${f.supported} supported · ` : ""}
+                      {f.rejected > 0 ? `${f.rejected} rejected` : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section className="panel p-4">
+          <h2 className="panel-h">ATTACK LETHALITY — what kills research</h2>
+          <div className="table-wrap">
+            <table className="v4-table">
+              <tbody>
+                {(ledger.meta.attacks ?? []).map((a, i) => (
+                  <tr key={a.attack} className="reveal-item" style={{ "--i": i } as React.CSSProperties}>
+                    <td className="px-2 py-1.5 mono">{a.attack}</td>
+                    <td className="px-2 py-1.5 tnum" style={{ color: a.failed > 0 ? "var(--ask)" : "var(--dim)" }}>
+                      {a.failed} failed
+                    </td>
+                    <td className="px-2 py-1.5 tnum" style={{ color: "var(--dim)" }}>of {a.run} run</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
 
       {/* ── evidence graph ── */}
       {graph && graph.nodes.length > 0 && (
-        <section>
-          <h2 style={{ fontSize: 13, letterSpacing: 1, opacity: 0.8 }}>
-            EVIDENCE GRAPH — why each belief stands
-          </h2>
+        <section className="panel p-4">
+          <h2 className="panel-h">EVIDENCE GRAPH — why each belief stands</h2>
           <GraphList graph={graph} />
         </section>
       )}
 
-      <p style={{ fontSize: 11, color: "var(--faint)", whiteSpace: "pre-wrap" }}>
+      <p className="text-[0.75rem] text-[color:var(--faint)]" style={{ whiteSpace: "pre-wrap" }}>
         {ledger.discipline}
       </p>
     </main>
@@ -357,6 +401,7 @@ function HypRow({
   gate,
   open,
   onToggle,
+  i,
 }: {
   h: LedgerHypothesis;
   chain: LedgerEvidence[];
@@ -364,44 +409,43 @@ function HypRow({
   gate?: LedgerGate;
   open: boolean;
   onToggle: () => void;
+  i: number;
 }) {
   const st = STATUS_UI[h.status] ?? { label: h.status, color: "var(--dim)" };
   return (
     <>
       <tr
         onClick={onToggle}
-        style={{
-          borderTop: "1px solid var(--panel-2, rgba(128,128,128,.15))",
-          cursor: "pointer",
-        }}
+        className="reveal-item cursor-pointer"
+        style={{ "--i": i } as React.CSSProperties}
         title={open ? "collapse evidence chain" : `show ${chain.length} evidence rows`}
       >
-        <td style={{ padding: "6px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>
+        <td className="px-2 py-1.5 font-semibold mono whitespace-nowrap">
           {open ? "▾ " : "▸ "}
           {h.id}
         </td>
-        <td style={{ padding: "6px 8px", maxWidth: 420 }}>
+        <td className="px-2 py-1.5 max-w-[420px]">
           {h.statement}
           {h.horizon ? (
-            <span style={{ color: "var(--faint)" }}> · {h.horizon}</span>
+            <span className="text-[color:var(--faint)]"> · {h.horizon}</span>
           ) : null}
         </td>
-        <td style={{ padding: "6px 8px", color: "var(--dim)" }}>{h.family}</td>
-        <td style={{ padding: "6px 8px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: "var(--dim)", fontSize: 12, whiteSpace: "nowrap" }}>
-              {pct(h.prior)} → <b style={{ color: "var(--fg)" }}>{pct(h.posterior)}</b>
+        <td className="px-2 py-1.5" style={{ color: "var(--dim)" }}>{h.family}</td>
+        <td className="px-2 py-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-[0.75rem] tnum whitespace-nowrap" style={{ color: "var(--dim)" }}>
+              {pct(h.prior)} → <b className="font-semibold">{pct(h.posterior)}</b>
             </span>
             <PosteriorBar prior={h.prior} posterior={h.posterior} />
           </div>
         </td>
-        <td style={{ padding: "6px 8px" }}>
+        <td className="px-2 py-1.5">
           <Chip text={st.label} color={st.color} />
         </td>
-        <td style={{ padding: "6px 8px", color: "var(--dim)", whiteSpace: "nowrap" }}>
+        <td className="px-2 py-1.5 tnum whitespace-nowrap" style={{ color: "var(--dim)" }}>
           {h.replications} · {h.contradictions} · {h.regimes}
         </td>
-        <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
+        <td className="px-2 py-1.5 whitespace-nowrap">
           {decay?.edgeWeakening && (
             <Chip
               text={`weakening (peak ${pct(decay.peak)})`}
@@ -425,9 +469,9 @@ function HypRow({
       </tr>
       {open && (
         <tr>
-          <td colSpan={7} style={{ padding: "0 8px 10px 24px" }}>
+          <td colSpan={7} className="px-2 py-2 pl-8">
             {gate && (
-              <p style={{ fontSize: 12, color: "var(--dim)", margin: "6px 0" }}>
+              <p className="text-[0.75rem] mb-1.5" style={{ color: "var(--dim)" }}>
                 <b>tradable form:</b>{" "}
                 {gate.tradableForm || "not stated — this belief has never been written as a position"}
                 {gate.economicTest ? (
@@ -441,35 +485,35 @@ function HypRow({
               </p>
             )}
             {(h.openQuestions ?? []).length > 0 && (
-              <p style={{ fontSize: 12, color: "var(--dim)", margin: "6px 0" }}>
+              <p className="text-[0.75rem] mb-1.5" style={{ color: "var(--dim)" }}>
                 open questions: {(h.openQuestions ?? []).join(" · ")}
               </p>
             )}
             {chain.length === 0 ? (
-              <p style={{ fontSize: 12, color: "var(--faint)" }}>
+              <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
                 No evidence yet — the posterior stands at its prior. That is the
                 honest state, not an error.
               </p>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <table className="v4-table">
                 <tbody>
                   {chain.map((e, i) => {
                     const k = KIND_UI[e.kind] ?? { label: e.kind, color: "var(--dim)" };
                     return (
-                      <tr key={i} style={{ borderTop: "1px dashed var(--panel-2, rgba(128,128,128,.12))" }}>
-                        <td style={{ padding: "4px 8px", whiteSpace: "nowrap", color: "var(--faint)" }}>
+                      <tr key={i} className="border-dashed border-white/10 border-t">
+                        <td className="px-2 py-1 whitespace-nowrap text-[0.75rem]" style={{ color: "var(--faint)" }}>
                           {fmtTs(e.ts)}
                         </td>
-                        <td style={{ padding: "4px 8px" }}>
+                        <td className="px-2 py-1">
                           <Chip text={k.label} color={k.color} />
                         </td>
-                        <td style={{ padding: "4px 8px", whiteSpace: "nowrap", color: "var(--dim)" }}>
+                        <td className="px-2 py-1 whitespace-nowrap text-[0.75rem]" style={{ color: "var(--dim)" }}>
                           {e.n > 0 ? `${e.k}/${e.n} vs p₀ ${e.p0.toFixed(2)}` : ""}
                         </td>
-                        <td style={{ padding: "4px 8px", fontWeight: 600, color: bfColor(e.bf) }}>
+                        <td className="px-2 py-1 font-semibold tnum" style={{ color: bfColor(e.bf) }}>
                           {fmtBF(e.bf)}
                         </td>
-                        <td style={{ padding: "4px 8px", color: "var(--dim)" }}>{e.note}</td>
+                        <td className="px-2 py-1 text-[0.75rem]" style={{ color: "var(--dim)" }}>{e.note}</td>
                       </tr>
                     );
                   })}
@@ -485,8 +529,11 @@ function HypRow({
 
 /** The graph as grouped relationships per hypothesis — legible beats pretty. */
 function GraphList({ graph }: { graph: ResearchGraph }) {
-  const label = new Map(graph.nodes.map((n) => [n.id, n]));
-  const byHyp = new Map<string, typeof graph.edges>();
+  const label = new Map<string, ResearchGraph["nodes"][number]>();
+  for (const n of graph.nodes) {
+    label.set(n.id, n);
+  }
+  const byHyp = new Map<string, ResearchGraph["edges"]>();
   for (const e of graph.edges) {
     const fromNode = label.get(e.from);
     const key = fromNode?.kind === "hypothesis" ? e.from : e.to;
@@ -496,25 +543,22 @@ function GraphList({ graph }: { graph: ResearchGraph }) {
   }
   const hyps = graph.nodes.filter((n) => n.kind === "hypothesis");
   return (
-    <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
-      {hyps.map((h) => {
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {hyps.map((h, i) => {
         const edges = byHyp.get(h.id) ?? [];
         return (
           <div
             key={h.id}
-            style={{
-              border: "1px solid var(--panel-2, rgba(128,128,128,.15))",
-              borderRadius: 8,
-              padding: 10,
-            }}
+            className="panel p-3 reveal-item"
+            style={{ "--i": i } as React.CSSProperties}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-              <b style={{ fontSize: 13 }}>{h.id}</b>
-              <span style={{ fontSize: 11, color: "var(--dim)" }}>
-                posterior {pct(h.posterior)} · {h.status}
+            <div className="flex justify-between items-baseline">
+              <b className="mono text-sm">{h.id}</b>
+              <span className="text-[0.75rem] tnum" style={{ color: "var(--dim)" }}>
+                posterior <span className="tnum">{pct(h.posterior)}</span> · {h.status}
               </span>
             </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+            <div className="flex gap-1.5 flex-wrap mt-2">
               {edges.map((e, i) => {
                 const other = e.from === h.id ? e.to : e.from;
                 const n = label.get(other);
@@ -533,7 +577,7 @@ function GraphList({ graph }: { graph: ResearchGraph }) {
                 );
               })}
               {edges.length === 0 && (
-                <span style={{ fontSize: 12, color: "var(--faint)" }}>no evidence links yet</span>
+                <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>no evidence links yet</span>
               )}
             </div>
           </div>

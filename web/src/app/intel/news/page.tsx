@@ -8,10 +8,10 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
-import PagePurpose from "@/components/PagePurpose";
-import ProOnly from "@/components/ProOnly";
+import { Reveal, StatTile, PageHero, MiniBar } from "@/components/ui/Kit";
 
 type Tone = "all" | "bullish" | "bearish" | "neutral";
+type SortKey = "ts" | "symbol" | "score";
 
 const TONES: { key: Tone; label: string }[] = [
   { key: "all", label: "all" },
@@ -20,106 +20,78 @@ const TONES: { key: Tone; label: string }[] = [
   { key: "neutral", label: "neutral" },
 ];
 
-/** News rows don't always carry a market. Pairs like BTC/USD contain "/" →
-    crypto; bare tickers → stocks. Mirrors the insights page idiom. */
 function inferMarket(symbol: string): Market {
   return symbol.includes("/") ? "crypto" : "stocks";
 }
 
-/** Color + label for a sentiment tag. "skipped" is terminal — the symbol sits
-    outside the news-fetch scope so the tagger deliberately won't rate it —
-    distinct from "unrated" (still pending). Unknown/missing → "unrated". */
-function sentimentStyle(sentiment: string): { color: string; label: string } {
+function sentimentColor(sentiment: string): string {
   switch (sentiment) {
-    case "bullish":
-      return { color: "var(--bid)", label: "bullish" };
-    case "bearish":
-      return { color: "var(--ask)", label: "bearish" };
-    case "neutral":
-      return { color: "var(--dim)", label: "neutral" };
-    case "skipped":
-      return { color: "var(--faint)", label: "skipped" };
-    default:
-      return { color: "var(--faint)", label: "unrated" };
+    case "bullish": return "var(--bid)";
+    case "bearish": return "var(--ask)";
+    case "neutral": return "var(--dim)";
+    default: return "var(--faint)";
   }
 }
 
-function NewsRow({ item }: { item: NewsItem }) {
+function NewsRow({ item, maxScore }: { item: NewsItem; maxScore: number }) {
   const sym = item.symbol ?? "";
-  const s = sentimentStyle(item.sentiment);
+  const sColor = sentimentColor(item.sentiment);
   const rated = item.sentiment === "bullish" || item.sentiment === "bearish" || item.sentiment === "neutral";
+  const scoreVal = rated ? Number(item.score) : 0;
 
   return (
     <article
-      className="px-4 py-3.5 transition-colors duration-150 hover:bg-[var(--panel2)]"
-      style={{ borderBottom: "1px solid var(--border)" }}
+      className="reveal-item px-4 py-3 border-l-2 transition-colors hover:bg-[var(--panel2)]"
+      style={{ borderColor: sColor, borderBottom: "1px solid var(--border)" }}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <span
-          className="chip tnum shrink-0"
-          aria-label={`sentiment ${s.label}${rated ? `, score ${fmtScore(item.score)}` : ""}`}
-          style={{ color: s.color, borderColor: s.color }}
-        >
-          {s.label}
-          {rated && (
-            <span className="ml-1.5" style={{ color: s.color }}>
-              {fmtScore(item.score)}
-            </span>
-          )}
+        <span className="chip tnum shrink-0" style={{ color: sColor, borderColor: sColor }}>
+          {item.sentiment}
+          {rated && <span className="ml-1.5">{fmtScore(item.score)}</span>}
         </span>
-
         {sym && (
           <Link
             href={`/s/${inferMarket(sym)}/${encodeURIComponent(sym)}`}
-            className="chip mono shrink-0 cursor-pointer font-bold transition-colors duration-150 hover:text-[var(--accent)] hover:border-[var(--accent)]"
+            className="chip mono shrink-0 cursor-pointer font-bold hover:text-[var(--accent)] hover:border-[var(--accent)]"
             style={{ color: "var(--text)" }}
-            aria-label={`investigate ${sym} — open its symbol page`}
           >
             {sym}
           </Link>
         )}
-
         {item.source && (
-          <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
+          <span className="text-[0.75rem] truncate max-w-[120px] title-attr" title={item.source} style={{ color: "var(--faint)" }}>
             {item.source}
           </span>
         )}
-
         <span className="tnum ml-auto shrink-0 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           {ago(item.ts)}
         </span>
       </div>
-
-      {item.url ? (
-        <a
-          href={item.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={`Read the original article${item.source ? ` on ${item.source}` : ""} (opens in a new tab)`}
-          className="group mt-2 block cursor-pointer text-sm font-bold leading-snug text-[var(--text)] underline decoration-[var(--border)] decoration-dotted underline-offset-4 transition-colors duration-150 hover:text-[var(--accent)] hover:decoration-[var(--accent)]"
-        >
-          {item.headline || "(untitled headline)"}
-          <span aria-hidden className="ml-1 inline-block text-[var(--faint)] transition-colors duration-150 group-hover:text-[var(--accent)]">
-            ↗
-          </span>
-          <span
-            className="mt-0.5 block text-[0.7rem] font-normal not-italic"
-            style={{ color: "var(--faint)" }}
-          >
-            read the original{item.source ? ` on ${item.source}` : ""} →
-          </span>
-        </a>
-      ) : (
-        <h2 className="mt-2 text-sm font-bold leading-snug" style={{ color: "var(--text)" }}>
-          {item.headline || "(untitled headline)"}
-        </h2>
-      )}
-
-      {item.rationale && (
-        <p className="mt-1.5 text-[0.75rem] italic leading-relaxed" style={{ color: "var(--dim)" }}>
-          {item.rationale}
-        </p>
-      )}
+      <div className="mt-2 flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          {item.url ? (
+            <a href={item.url} target="_blank" rel="noopener noreferrer" className="block group">
+              <h2 className="text-sm font-bold leading-snug truncate title-attr group-hover:text-[var(--accent)]" title={item.headline || "(untitled headline)"}>
+                {item.headline || "(untitled headline)"}
+              </h2>
+            </a>
+          ) : (
+            <h2 className="text-sm font-bold leading-snug truncate title-attr" title={item.headline || "(untitled headline)"}>
+              {item.headline || "(untitled headline)"}
+            </h2>
+          )}
+          {item.rationale && (
+            <p className="mt-1 text-[0.75rem] italic leading-relaxed truncate title-attr" title={item.rationale} style={{ color: "var(--dim)" }}>
+              {item.rationale}
+            </p>
+          )}
+        </div>
+        {rated && (
+          <div className="w-16 shrink-0">
+            <MiniBar value={scoreVal} max={maxScore} height={6} />
+          </div>
+        )}
+      </div>
     </article>
   );
 }
@@ -130,8 +102,8 @@ export default function NewsPage() {
   const [err, setErr] = useState<string | null>(null);
   const [tone, setTone] = useState<Tone>("all");
   const [sym, setSym] = useState<string | null>(null);
-  // Stage 5: hub-wide symbol filter (prefix match — news rows carry exact
-  // tickers, and a prefix keeps it useful while typing).
+  const [sortKey, setSortKey] = useState<SortKey>("ts");
+  const [sortAsc, setSortAsc] = useState(false);
   const { symbol: sharedSym } = useIntelSymbol();
   const [retryTick, setRetryTick] = useState(0);
 
@@ -150,30 +122,39 @@ export default function NewsPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    // POLL_SLOW: the news-fetcher itself only pulls every 20 min and the
-    // tagger runs every 10 — intel moves slowly by nature.
     const stop = pollMs(load, POLL_SLOW);
-    return () => {
-      alive = false;
-      stop();
-    };
+    return () => { alive = false; stop(); };
   }, [retryTick]);
 
-  const sorted = useMemo(
-    () => [...(news ?? [])].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0)),
-    [news],
-  );
+  const stats = useMemo(() => {
+    const rows = news ?? [];
+    let bullish = 0, bearish = 0;
+    for (const n of rows) {
+      if (n.sentiment === "bullish") bullish++;
+      else if (n.sentiment === "bearish") bearish++;
+    }
+    const latest = rows.length > 0 ? rows.reduce((a, b) => (b.ts ?? 0) > (a.ts ?? 0) ? b : a).ts : 0;
+    return { count: rows.length, bullish, bearish, net: bullish - bearish, latest };
+  }, [news]);
 
-  // Watchlist symbols that actually have news, in watchlist order.
+  const sorted = useMemo(() => {
+    const base = [...(news ?? [])].sort((a, b) => {
+      const av = sortKey === "ts" ? (a.ts ?? 0) : sortKey === "symbol" ? (a.symbol ?? "") : Number(a.score ?? 0);
+      const bv = sortKey === "ts" ? (b.ts ?? 0) : sortKey === "symbol" ? (b.symbol ?? "") : Number(b.score ?? 0);
+      if (av < bv) return sortAsc ? -1 : 1;
+      if (av > bv) return sortAsc ? 1 : -1;
+      return 0;
+    });
+    return base;
+  }, [news, sortKey, sortAsc]);
+
   const symbolChips = useMemo(() => {
     const present = new Set(sorted.map((n) => n.symbol).filter(Boolean) as string[]);
     return watch.map((w) => w.symbol).filter((s) => present.has(s));
   }, [watch, sorted]);
 
   const toneCounts = useMemo(() => {
-    let bullish = 0;
-    let bearish = 0;
-    let neutral = 0;
+    let bullish = 0, bearish = 0, neutral = 0;
     for (const n of sorted) {
       if (n.sentiment === "bullish") bullish++;
       else if (n.sentiment === "bearish") bearish++;
@@ -190,176 +171,102 @@ export default function NewsPage() {
     return rows;
   }, [sorted, tone, sym, sharedSym]);
 
+  const maxScore = useMemo(() => {
+    let max = 0;
+    for (const n of visible) {
+      const s = Math.abs(Number(n.score ?? 0));
+      if (s > max) max = s;
+    }
+    return max || 1;
+  }, [visible]);
+
   const loading = news === null && err === null;
   const hardError = news === null && err !== null;
-  const net = toneCounts.bullish - toneCounts.bearish;
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* header row */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">NEWS</h1>
-        {news !== null && (
-          <>
-            <span className="chip tnum">{toneCounts.all} headlines</span>
-            <span className="chip tnum">
-              <span style={{ color: "var(--bid)" }}>{toneCounts.bullish} bullish</span>
-              <span style={{ color: "var(--faint)" }}> · </span>
-              <span style={{ color: "var(--ask)" }}>{toneCounts.bearish} bearish</span>
-            </span>
-            {toneCounts.bullish + toneCounts.bearish > 0 && (
-              <span
-                className="chip tnum"
-                aria-label={`net tone ${net >= 0 ? "positive" : "negative"} ${Math.abs(net)}`}
-                style={{
-                  color: net > 0 ? "var(--bid)" : net < 0 ? "var(--ask)" : "var(--dim)",
-                  borderColor: net > 0 ? "var(--bid)" : net < 0 ? "var(--ask)" : undefined,
-                }}
-              >
-                net {net > 0 ? "+" : ""}{net}
-              </span>
-            )}
-          </>
-        )}
-        {err !== null && news !== null && (
-          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
-            poll failed — showing last data
-          </span>
-        )}
-      </div>
-
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="intel-news"
-        text="What is in the news for tracked stocks? Each story carries a model-rated sentiment tag — a tag, not a recommendation."
-      />
-
-      {/* Methodology detail — folded behind a disclosure in SIMPLE mode
-          (the "a tag, not a recommendation" caveat above stays visible). */}
-      <ProOnly summary="How sentiment is tagged">
-        <section className="panel">
-          <div className="panel-h">HOW SENTIMENT IS TAGGED</div>
-          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-            Sentiment is tagged by the local AI from the headline text only; &ldquo;unrated&rdquo;
-            means it hasn&rsquo;t been processed yet (tagging runs every 10 min).
-            &ldquo;skipped&rdquo; is permanent: the symbol sits outside the news scope
-            (streamed hot set, top-ranked, or watchlisted), so its headline is
-            deliberately never rated and never counts toward sentiment aggregates.
-          </p>
-        </section>
-      </ProOnly>
-
-      {loading && <Skeleton lines={4} label="loading news" />}
-
-      {hardError && (
-        <ErrorState
-          message={err ?? "news unavailable"}
-          hint="Is the daemon running? Start it with signaldeckd."
-          retry={() => {
-            setErr(null);
-            setRetryTick((t) => t + 1);
-          }}
-        />
-      )}
-
-      {news !== null && (
-        <section className="panel">
-          <div className="panel-h flex-wrap">
-            FEED
-            {sharedSym && (
-              <span className="chip" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>
-                {sharedSym} — from the shared intel filter
-              </span>
-            )}
-            <div className="ml-auto flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by sentiment">
-              {TONES.map((t) => {
-                const active = tone === t.key;
-                return (
-                  <button
-                    key={t.key}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => setTone(t.key)}
-                    className="chip min-h-[40px] cursor-pointer transition-colors duration-150 hover:text-[var(--text)]"
-                    style={{
-                      color: active ? "var(--text)" : undefined,
-                      borderColor: active ? "var(--accent)" : undefined,
-                    }}
-                  >
-                    {t.label} <span className="tnum">{toneCounts[t.key]}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* symbol filter chips */}
-          {symbolChips.length > 0 && (
-            <div
-              className="flex flex-wrap items-center gap-1.5 px-4 py-2.5"
-              style={{ borderBottom: "1px solid var(--border)" }}
-              role="group"
-              aria-label="Filter by symbol"
-            >
-              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                symbol
-              </span>
-              <button
-                type="button"
-                aria-pressed={sym === null}
-                onClick={() => setSym(null)}
-                className="chip min-h-[40px] cursor-pointer transition-colors duration-150 hover:text-[var(--text)]"
-                style={{
-                  color: sym === null ? "var(--text)" : undefined,
-                  borderColor: sym === null ? "var(--accent)" : undefined,
-                }}
-              >
-                all
-              </button>
-              {symbolChips.map((s) => {
-                const active = sym === s;
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => setSym(active ? null : s)}
-                    className="chip mono min-h-[40px] cursor-pointer font-bold transition-colors duration-150 hover:text-[var(--text)]"
-                    style={{
-                      color: active ? "var(--text)" : undefined,
-                      borderColor: active ? "var(--accent)" : undefined,
-                    }}
-                  >
-                    {s}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {visible.length === 0 ? (
-            sorted.length === 0 ? (
-              <EmptyState
-                className="m-4"
-                message="No news yet"
-                detail="The news-fetcher pulls headlines every 20 min (stocks only; Alpaca doesn't cover crypto)."
-              />
-            ) : (
-              <EmptyState
-                className="m-4"
-                message="Nothing matches this filter"
-                detail="Try the “all” tone, clear the symbol chips, or clear the shared intel symbol filter above."
-              />
-            )
-          ) : (
-            <div>
-              {visible.map((item) => (
-                <NewsRow key={item.id} item={item} />
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="News"
+        subtitle="Market-moving headlines with sentiment - newest and most relevant first."
+        right={
+          news !== null && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {TONES.map((t) => (
+                <button key={t.key} type="button" aria-pressed={tone === t.key}
+                  onClick={() => setTone(t.key)}
+                  className="chip min-h-[32px] cursor-pointer hover:text-[var(--text)]"
+                  style={{ borderColor: tone === t.key ? "var(--accent)" : undefined }}>
+                  {t.label} <span className="tnum">{toneCounts[t.key]}</span>
+                </button>
               ))}
             </div>
-          )}
-        </section>
-      )}
+          )
+        }
+      />
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile label="Headlines" value={stats.count} i={0} />
+        <StatTile label="Bullish" value={stats.bullish} glow="up" i={1} />
+        <StatTile label="Bearish" value={stats.bearish} glow="down" i={2} />
+        <StatTile label="Net Tone" value={stats.net} delta={stats.net} i={3} />
+      </div>
+
+      <div className="panel hud-panel">
+        <div className="panel-h flex flex-wrap items-center justify-between gap-2">
+          <span>FEED</span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>Sort:</span>
+            {([["ts", "date"], ["symbol", "symbol"], ["score", "sentiment"]] as const).map(([key, label]) => (
+              <button key={key} type="button" onClick={() => { if (sortKey === key) setSortAsc(!sortAsc); else { setSortKey(key); setSortAsc(key === "symbol"); } }}
+                className="chip min-h-[28px] flex items-center gap-1 cursor-pointer hover:text-[var(--text)]"
+                style={{ borderColor: sortKey === key ? "var(--accent)" : undefined }}>
+                {label}
+                {sortKey === key && (
+                  <svg width="10" height="10" viewBox="0 0 10 10" className="inline">
+                    <path d={sortAsc ? "M5 2L8 7H2Z" : "M5 8L8 3H2Z"} fill="currentColor" />
+                  </svg>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {symbolChips.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 px-4 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
+            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>symbol:</span>
+            <button type="button" aria-pressed={sym === null} onClick={() => setSym(null)}
+              className="chip min-h-[28px] cursor-pointer hover:text-[var(--text)]"
+              style={{ borderColor: sym === null ? "var(--accent)" : undefined }}>all</button>
+            {symbolChips.map((s) => (
+              <button key={s} type="button" aria-pressed={sym === s} onClick={() => setSym(sym === s ? null : s)}
+                className="chip mono min-h-[28px] cursor-pointer font-bold hover:text-[var(--text)]"
+                style={{ borderColor: sym === s ? "var(--accent)" : undefined }}>{s}</button>
+            ))}
+          </div>
+        )}
+
+        {loading && <Skeleton lines={4} label="loading news" />}
+
+        {hardError && (
+          <ErrorState message={err ?? "news unavailable"} hint="Is the daemon running? Start it with signaldeckd."
+            retry={() => { setErr(null); setRetryTick((t) => t + 1); }} />
+        )}
+
+        {news !== null && (
+          visible.length === 0 ? (
+            <EmptyState className="m-4" message={sorted.length === 0 ? "No news yet" : "Nothing matches this filter"}
+              detail={sorted.length === 0 ? "The news-fetcher pulls headlines every 20 min." : "Try the 'all' tone, clear symbol chips, or clear the shared intel filter."} />
+          ) : (
+            <Reveal>
+              <div>
+                {visible.map((item, i) => (
+                  <NewsRow key={item.id} item={item} maxScore={maxScore} />
+                ))}
+              </div>
+            </Reveal>
+          )
+        )}
+      </div>
     </div>
   );
 }

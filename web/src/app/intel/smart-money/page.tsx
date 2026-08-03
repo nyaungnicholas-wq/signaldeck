@@ -1,13 +1,5 @@
 "use client";
 
-// SMART MONEY (SMART MONEY FACTS wave): ONE transparent, decomposed per-symbol
-// "Smart Money Score" built from ALREADY-INGESTED positioning data — SEC Form 4
-// open-market insider trades, FINRA short interest / Reg SHO short volume,
-// crypto perp funding, and SEC 13F holdings. HONESTY: this is a read of what
-// INFORMED PARTICIPANTS ARE DOING, NOT a price forecast. The caveat renders
-// verbatim, every factor shows its line + source, and absent sources display
-// "—" rather than an imputed zero.
-
 import { useEffect, useMemo, useState } from "react";
 import {
   smartMoney,
@@ -23,7 +15,13 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
-import PagePurpose from "@/components/PagePurpose";
+import {
+  Reveal,
+  AnimatedNumber,
+  StatTile,
+  PageHero,
+  MiniBar,
+} from "@/components/ui/Kit";
 
 const LABEL_TEXT: Record<string, string> = {
   strong_accumulation: "Strong accumulation",
@@ -60,28 +58,13 @@ function fmtUSD(v: number): string {
   return `$${v.toFixed(0)}`;
 }
 
-/** Null-safe number tile value — honest "—" when the source is absent. */
-function tile(v: number | null | undefined, digits: number, suffix = ""): string {
-  if (v === null || v === undefined || !isFinite(v)) return "—";
-  return `${v.toFixed(digits)}${suffix}`;
-}
-
-/** Funding is a tiny hourly decimal; show it as a signed %/hr. */
-function fmtFunding(v: number | null | undefined): string {
-  if (v === null || v === undefined || !isFinite(v)) return "—";
-  return `${v >= 0 ? "+" : ""}${(v * 100).toFixed(4)}%/hr`;
-}
-
-// A centered [-1,1] bar: fill runs from the middle toward the value, green for
-// accumulation and red for distribution.
 function FactorBar({ value }: { value: number }) {
-  const pct = Math.min(Math.abs(value), 1) * 50; // half-track per unit
+  const pct = Math.min(Math.abs(value), 1) * 50;
   const pos = value >= 0;
   return (
     <div
       className="relative h-2 w-full overflow-hidden rounded"
       style={{ background: "var(--panel3)" }}
-      aria-hidden
     >
       <div className="absolute bottom-0 top-0" style={{ left: "50%", width: 1, background: "var(--border)" }} />
       <div
@@ -96,52 +79,6 @@ function FactorBar({ value }: { value: number }) {
   );
 }
 
-function FactorRow({ f }: { f: SmartMoneyFactor }) {
-  const pos = f.value >= 0;
-  return (
-    <li className="flex flex-col gap-1.5 px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
-      <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="text-[0.8rem] font-bold" style={{ color: "var(--text)" }}>
-          {f.label}
-        </span>
-        <span className="chip" style={{ color: "var(--faint)" }}>
-          {f.source}
-        </span>
-        <span className="tnum ml-auto text-[0.8rem] font-bold" style={{ color: pos ? "var(--bid)" : "var(--ask)" }}>
-          {pos ? "+" : ""}
-          {f.value.toFixed(2)}
-        </span>
-        <span className="tnum text-[0.7rem]" style={{ color: "var(--faint)" }}>
-          {(f.weight * 100).toFixed(0)}% of score
-        </span>
-      </div>
-      <FactorBar value={f.value} />
-      <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-        {f.line}
-      </p>
-    </li>
-  );
-}
-
-function StatTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="panel px-3 py-2.5">
-      <div className="text-[0.65rem] uppercase tracking-wider" style={{ color: "var(--faint)" }}>
-        {label}
-      </div>
-      <div className="tnum text-[0.95rem] font-bold" style={{ color: "var(--text)" }}>
-        {value}
-      </div>
-      {hint ? (
-        <div className="text-[0.65rem]" style={{ color: "var(--dim)" }}>
-          {hint}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-// ── per-symbol decomposition panel ──────────────────────────────────────────
 function SymbolDetail({ symbol }: { symbol: string }) {
   const [data, setData] = useState<SmartMoneyResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -159,8 +96,6 @@ function SymbolDetail({ symbol }: { symbol: string }) {
         .catch((e: unknown) => {
           if (!alive) return;
           const msg = e instanceof Error ? e.message : String(e);
-          // Exact-ticker API: unknown/partial symbol 404s — a filter miss, not
-          // an outage. Show an honest "not tracked" empty state, not an error.
           if (msg.includes("404")) {
             setData({
               available: false,
@@ -187,10 +122,7 @@ function SymbolDetail({ symbol }: { symbol: string }) {
       <ErrorState
         message={err}
         hint="Is the daemon running? The smart-money-scorer refreshes every hour."
-        retry={() => {
-          setErr(null);
-          setRetryTick((t) => t + 1);
-        }}
+        retry={() => { setErr(null); setRetryTick((t) => t + 1); }}
       />
     );
   }
@@ -198,17 +130,14 @@ function SymbolDetail({ symbol }: { symbol: string }) {
     return (
       <EmptyState
         message={`No smart-money score for ${symbol} yet`}
-        detail={
-          data.reason ??
-          "no insider, short, or institutional data for this symbol yet — the scorer stores nothing rather than a fabricated neutral"
-        }
+        detail={data.reason ?? "no insider, short, or institutional data for this symbol yet — the scorer stores nothing rather than a fabricated neutral"}
       />
     );
   }
   if (!data) return null;
 
   return (
-    <section className="panel">
+    <section className="panel hud-panel">
       <div className="panel-h flex-wrap gap-2">
         {data.symbol} SMART MONEY SCORE
         <span
@@ -225,7 +154,6 @@ function SymbolDetail({ symbol }: { symbol: string }) {
         ) : null}
       </div>
 
-      {/* caveat, verbatim + prominent */}
       {data.caveat ? (
         <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--warn)" }}>
           {data.caveat}
@@ -235,7 +163,26 @@ function SymbolDetail({ symbol }: { symbol: string }) {
       {data.factors && data.factors.length > 0 ? (
         <ul style={{ borderTop: "1px solid var(--border)" }}>
           {data.factors.map((f) => (
-            <FactorRow key={f.key} f={f} />
+            <li key={f.key} className="reveal-item flex flex-col gap-1.5 px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className="text-[0.8rem] font-bold" style={{ color: "var(--text)" }}>
+                  {f.label}
+                </span>
+                <span className="chip" style={{ color: "var(--faint)" }}>
+                  {f.source}
+                </span>
+                <span className="tnum ml-auto text-[0.8rem] font-bold" style={{ color: f.value >= 0 ? "var(--bid)" : "var(--ask)" }}>
+                  {f.value >= 0 ? "+" : ""}{f.value.toFixed(2)}
+                </span>
+                <span className="tnum text-[0.7rem]" style={{ color: "var(--faint)" }}>
+                  {(f.weight * 100).toFixed(0)}% of score
+                </span>
+              </div>
+              <FactorBar value={f.value} />
+              <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+                {f.line}
+              </p>
+            </li>
           ))}
         </ul>
       ) : (
@@ -244,32 +191,45 @@ function SymbolDetail({ symbol }: { symbol: string }) {
         </p>
       )}
 
-      {/* raw positioning tiles */}
       <div className="grid grid-cols-2 gap-2 px-4 py-3 sm:grid-cols-3">
         <StatTile
-          label="distinct insider buyers"
-          value={tile(data.insiderCluster?.distinctBuyers, 0)}
-          hint={`net ${fmtUSD(data.insiderCluster?.netValue ?? 0)} over ${data.insiderCluster?.windowDays ?? 90}d`}
+          label="Insider buyers"
+          value={data.insiderCluster?.distinctBuyers ?? 0}
+          sub={`net ${fmtUSD(data.insiderCluster?.netValue ?? 0)} over ${data.insiderCluster?.windowDays ?? 90}d`}
         />
-        <StatTile label="days to cover" value={tile(data.squeeze?.daysToCover, 1)} hint="FINRA short interest" />
         <StatTile
-          label="short-vol z"
-          value={data.squeeze?.shortVolZ != null ? `${data.squeeze.shortVolZ >= 0 ? "+" : ""}${data.squeeze.shortVolZ.toFixed(1)}σ` : "—"}
-          hint="vs own 30d (Reg SHO)"
+          label="Days to cover"
+          value={data.squeeze?.daysToCover ?? 0}
+          decimals={1}
+          sub="FINRA short interest"
+        />
+        <StatTile
+          label="Short-vol z"
+          value={data.squeeze?.shortVolZ ?? 0}
+          decimals={1}
+          suffix="σ"
+          sub="vs own 30d (Reg SHO)"
         />
         {data.market === "crypto" ? (
-          <StatTile label="perp funding" value={fmtFunding(data.squeeze?.funding)} hint="Hyperliquid" />
+          <StatTile
+            label="Perp funding"
+            value={data.squeeze?.funding ?? 0}
+            decimals={4}
+            suffix="%/hr"
+            sub="Hyperliquid"
+          />
         ) : null}
       </div>
     </section>
   );
 }
 
-// ── accumulation leaderboard ────────────────────────────────────────────────
 function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
   const [data, setData] = useState<SmartMoneyTopResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  const [sortKey, setSortKey] = useState<"score" | "symbol" | "ts">("score");
+  const [sortAsc, setSortAsc] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -286,13 +246,22 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
         });
     load();
     const stop = pollMs(load, POLL_SLOW);
-    return () => {
-      alive = false;
-      stop();
-    };
+    return () => { alive = false; stop(); };
   }, [retryTick]);
 
-  const rows = useMemo(() => data?.rows ?? [], [data]);
+  const rows = useMemo(() => {
+    const list = data?.rows ?? [];
+    return [...list].sort((a, b) => {
+      if (sortKey === "symbol") return sortAsc ? a.symbol.localeCompare(b.symbol) : b.symbol.localeCompare(a.symbol);
+      if (sortKey === "ts") return sortAsc ? a.ts - b.ts : b.ts - a.ts;
+      return sortAsc ? a.score - b.score : b.score - a.score;
+    });
+  }, [data, sortKey, sortAsc]);
+
+  const maxScore = useMemo(() => {
+    if (rows.length === 0) return 1;
+    return Math.max(...rows.map((r) => Math.abs(r.score)));
+  }, [rows]);
 
   if (data === null && err === null) return <Skeleton lines={6} label="loading smart-money leaderboard" />;
   if (data === null && err !== null) {
@@ -300,10 +269,7 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
       <ErrorState
         message={err}
         hint="Is the daemon running? The smart-money-scorer refreshes every hour."
-        retry={() => {
-          setErr(null);
-          setRetryTick((t) => t + 1);
-        }}
+        retry={() => { setErr(null); setRetryTick((t) => t + 1); }}
       />
     );
   }
@@ -311,13 +277,21 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
     return (
       <EmptyState
         message="No smart-money scores stored yet"
-        detail={
-          data.reason ??
-          "the smart-money-scorer runs every hour and needs insider/short/institutional data for at least one tracked symbol"
-        }
+        detail={data.reason ?? "the smart-money-scorer runs every hour and needs insider/short/institutional data for at least one tracked symbol"}
       />
     );
   }
+
+  const toggleSort = (key: "score" | "symbol" | "ts") => {
+    if (sortKey === key) setSortAsc(!sortAsc);
+    else { setSortKey(key); setSortAsc(key === "symbol"); }
+  };
+
+  const SortIcon = ({ active, asc }: { active: boolean; asc: boolean }) => (
+    <svg width="8" height="8" viewBox="0 0 8 8" className="inline ml-1" style={{ opacity: active ? 1 : 0.3 }}>
+      <polygon points={asc ? "4,1 7,6 1,6" : "4,7 7,2 1,2"} fill="currentColor" />
+    </svg>
+  );
 
   return (
     <section className="panel">
@@ -325,43 +299,53 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
         ACCUMULATION LEADERBOARD
         <span className="chip tnum">{rows.length} scored</span>
         <span className="chip" style={{ color: "var(--faint)" }}>
-          most accumulation first
+          sorted by {sortKey === "score" ? "score" : sortKey === "symbol" ? "symbol" : "date"} {sortAsc ? "↑" : "↓"}
         </span>
       </div>
-      <ul style={{ borderTop: "1px solid var(--border)" }}>
-        {rows.map((r) => (
-          <li key={`${r.market}:${r.symbol}`} style={{ borderBottom: "1px solid var(--border)" }}>
-            <button
-              type="button"
-              onClick={() => onPick(r.symbol)}
-              className="flex w-full flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-left text-[0.75rem] transition-colors duration-150 hover:bg-[var(--panel3)]"
-            >
-              <span className="tnum w-20 font-bold" style={{ color: "var(--text)" }}>
-                {r.symbol}
-              </span>
-              <span className="chip" style={{ color: "var(--faint)" }}>
-                {r.market}
-              </span>
-              <span
-                className="tnum font-bold"
-                style={{ color: r.score >= 0 ? "var(--bid)" : "var(--ask)" }}
-              >
-                {r.score >= 0 ? "+" : ""}
-                {r.score.toFixed(2)}
-              </span>
-              <span className="chip" style={{ color: labelColor(r.label), borderColor: labelColor(r.label) }}>
-                {labelText(r.label)}
-              </span>
-              {r.topFactor ? (
-                <span style={{ color: "var(--faint)" }}>· {r.topFactor}</span>
-              ) : null}
-              <span className="tnum ml-auto text-[0.7rem]" style={{ color: "var(--faint)" }}>
-                {ago(r.ts)}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+      <div className="table-wrap" style={{ borderTop: "1px solid var(--border)" }}>
+        <table className="v4-table">
+          <thead>
+            <tr>
+              <th onClick={() => toggleSort("symbol")} className="cursor-pointer">
+                Symbol <SortIcon active={sortKey === "symbol"} asc={sortAsc} />
+              </th>
+              <th onClick={() => toggleSort("score")} className="cursor-pointer">
+                Score <SortIcon active={sortKey === "score"} asc={sortAsc} />
+              </th>
+              <th>Label</th>
+              <th>Signal</th>
+              <th onClick={() => toggleSort("ts")} className="cursor-pointer">
+                Updated <SortIcon active={sortKey === "ts"} asc={sortAsc} />
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <Reveal>
+              {rows.map((r, i) => (
+                <tr
+                  key={`${r.market}:${r.symbol}`}
+                  className={`reveal-item cursor-pointer hover:bg-[var(--panel3)] ${r.score >= 0 ? "border-l-2 border-l-[var(--bid)]" : "border-l-2 border-l-[var(--ask)]"}`}
+                  style={{ "--i": Math.min(i, 12) } as React.CSSProperties}
+                  onClick={() => onPick(r.symbol)}
+                >
+                  <td className="mono font-bold">{r.symbol}</td>
+                  <td className="tnum">
+                    <span className="mr-2">{r.score >= 0 ? "+" : ""}{r.score.toFixed(2)}</span>
+                    <MiniBar value={Math.abs(r.score)} max={maxScore} color={r.score >= 0 ? "var(--bid)" : "var(--ask)"} i={i} />
+                  </td>
+                  <td>
+                    <span className="chip" style={{ color: labelColor(r.label), borderColor: labelColor(r.label) }}>
+                      {labelText(r.label)}
+                    </span>
+                  </td>
+                  <td className="truncate max-w-[120px]" title={r.topFactor ?? ""}>{r.topFactor ?? "—"}</td>
+                  <td className="tnum" style={{ color: "var(--faint)" }}>{ago(r.ts)}</td>
+                </tr>
+              ))}
+            </Reveal>
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }
@@ -370,38 +354,41 @@ export default function SmartMoneyPage() {
   const { symbol, setSymbol } = useIntelSymbol();
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">SMART MONEY</h1>
-        <span className="chip">positioning read · not a forecast</span>
-      </div>
-
-      <PagePurpose
-        id="intel-smart-money"
-        text="What are informed participants DOING — buying, shorting, holding? This blends open-market insider buys (Form 4), short interest and short-volume, crypto perp funding, and 13F ownership into ONE decomposed score. It reads POSITIONING, not price: it is NOT a forecast, and every part shows its source and limits."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Smart Money"
+        subtitle="The composite of what informed traders are doing - insiders, institutions and congress in one view."
+        right={
+          <div className="flex items-center gap-2">
+            <span className="chip">positioning read · not a forecast</span>
+            {symbol ? (
+              <button
+                type="button"
+                onClick={() => setSymbol("")}
+                className="chip cursor-pointer hover:text-[var(--text)]"
+              >
+                ← back to leaderboard
+              </button>
+            ) : null}
+          </div>
+        }
       />
 
       {symbol ? (
         <SymbolDetail symbol={symbol} />
       ) : (
-        <p className="px-1 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-          Pick a symbol from the leaderboard below (or the shared intel filter above) to see its full
-          decomposition — insider, squeeze, and institutional factors, each with its evidence line and
-          filing source.
-        </p>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Reveal>
+            <StatTile
+              label="Symbols tracked"
+              value={0}
+              sub="Loading..."
+            />
+          </Reveal>
+        </div>
       )}
 
-      {symbol ? (
-        <button
-          type="button"
-          onClick={() => setSymbol("")}
-          className="chip w-fit min-h-[36px] cursor-pointer px-3 transition-colors duration-150 hover:text-[var(--text)]"
-        >
-          ← back to the leaderboard
-        </button>
-      ) : null}
-
-      <Leaderboard onPick={setSymbol} />
+      {!symbol && <Leaderboard onPick={setSymbol} />}
     </div>
   );
 }

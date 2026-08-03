@@ -1,19 +1,5 @@
 "use client";
 
-// MARKET › BREADTH — the same structural calls, read across the market instead
-// of one name at a time.
-//
-// The page leads with BREADTH because that is the only thing this view adds. A
-// single sector reading "elevated" is noise and was already visible on the
-// per-symbol surfaces; eleven of eleven reading elevated is a market state, and
-// nothing in the platform could show that before. So the breadth bars come
-// first and the per-basket rows come second.
-//
-// Two things are stated rather than implied: the accuracy tiers were measured
-// on single stocks and are INHERITED here unadjusted, and any basket without a
-// call is named. A sector silently dropped from a market-wide read looks like a
-// neutral call, which is a claim nobody made.
-
 import { useEffect, useState } from "react";
 import {
   api,
@@ -24,11 +10,7 @@ import {
 } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
-import PagePurpose from "@/components/PagePurpose";
-import HelpTip from "@/components/HelpTip";
-import ProOnly from "@/components/ProOnly";
-
-const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+import { PageHero, StatTile, Reveal, MiniBar } from "@/components/ui/Kit";
 
 export default function MarketBreadthPage() {
   const [data, setData] = useState<MarketRegimesPayload | null>(null);
@@ -50,8 +32,6 @@ export default function MarketBreadthPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    // The regime runner writes every six hours; polling faster re-renders the
-    // same call.
     const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
@@ -65,120 +45,155 @@ export default function MarketBreadthPage() {
   const indices = data.rows.filter((r) => r.group === "index");
   const sectors = data.rows.filter((r) => r.group === "sector");
   const kinds = Object.keys(data.breadth).sort();
+  const firstKind = kinds[0];
+  const firstCounts = firstKind ? data.breadth[firstKind] : null;
+  const sorted = firstCounts ? Object.entries(firstCounts).sort((a, b) => b[1] - a[1]) : [];
+  const total = sorted.reduce((sum, [, n]) => sum + n, 0);
+  const topLabel = sorted[0]?.[0] ?? "";
+  const topCount = sorted[0]?.[1] ?? 0;
+  const bottomLabel = sorted[1]?.[0] ?? "";
+  const bottomCount = sorted[1]?.[1] ?? 0;
+  const pctTop = total > 0 ? (topCount / total) * 100 : 0;
+  const pctBottom = total > 0 ? (bottomCount / total) * 100 : 0;
+
+  const verdict = total === 0 ? "No data" :
+    pctTop > 66 ? "Broad advance" : pctTop > 50 ? "Narrow rally" :
+    pctBottom > 66 ? "Broad decline" : "Mixed signals";
+
+  const hasAccuracy = data.rows.length > 0 && data.rows[0].historicalAccuracy > 0;
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <h1 className="text-sm font-extrabold tracking-[0.18em]">BREADTH</h1>
-        <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-          {data.indices} indices · {data.sectors} sectors
-        </span>
-      </div>
-
-      <PagePurpose
-        id="market-breadth"
-        text={
-          "The trend, volatility and liquidity calls you already get per symbol, pointed at the index and sector baskets " +
-          "and grouped so the market-wide picture is one glance. No new predictor and no new claim — these calls existed, " +
-          "spread across hundreds of single names where nothing market-wide was visible."
-        }
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Breadth"
+        subtitle="How many stocks are participating in the move — one glance tells you if the market is broad or narrow."
       />
 
-      {/* Breadth first: the number this page exists to show. */}
-      <section
-        className="rounded border p-3"
-        style={{ borderColor: "var(--line)", background: "var(--panel)" }}
-      >
-        <h2
-          className="mb-1 text-[0.7rem] font-bold tracking-[0.16em]"
-          style={{ color: "var(--faint)" }}
-        >
-          SECTOR BREADTH
-        </h2>
-        <p className="mb-3 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-          How the sector baskets split within each kind. One sector on its own is noise; a lopsided
-          split is a market state.
-        </p>
-        {kinds.length === 0 ? (
-          <p className="text-[0.8rem]">
-            No sector calls yet — the regime runner writes every six hours, and newly registered
-            baskets need daily bars before they get one.
-          </p>
-        ) : (
+      {firstCounts && (
+        <div className="hud-panel p-4">
+          <div className="flex flex-col gap-2">
+            <div className="flex justify-between text-[0.75rem] uppercase tracking-wider" style={{ color: 'var(--dim)' }}>
+              <span>{topLabel}</span>
+              <span>{bottomLabel}</span>
+            </div>
+            <div className="relative h-8 w-full rounded" style={{ background: 'rgba(255,255,255,0.06)' }}>
+              <div
+                className="absolute left-0 top-0 h-full rounded-l bar-animate"
+                style={{
+                  width: `${pctTop}%`,
+                  backgroundColor: 'var(--bid)',
+                  transformOrigin: 'left',
+                }}
+              />
+              <div
+                className="absolute right-0 top-0 h-full rounded-r bar-animate"
+                style={{
+                  width: `${pctBottom}%`,
+                  backgroundColor: 'var(--ask)',
+                  transformOrigin: 'right',
+                }}
+              />
+            </div>
+            <div className="flex justify-between items-baseline">
+              <span className="num-hero text-2xl glow-up">{pctTop.toFixed(1)}%</span>
+              <span className="text-sm font-medium" style={{ color: 'var(--hud)' }}>{verdict}</span>
+              <span className="num-hero text-2xl glow-down">{pctBottom.toFixed(1)}%</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <Reveal className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile
+          label="Indices"
+          value={data.indices}
+          sub="tracked baskets"
+          glow="hud"
+          i={0}
+        />
+        <StatTile
+          label="Sectors"
+          value={data.sectors}
+          sub="tracked baskets"
+          glow="hud"
+          i={1}
+        />
+        {hasAccuracy && (
+          <StatTile
+            label="Avg Accuracy"
+            value={(data.rows.reduce((sum, r) => sum + r.historicalAccuracy, 0) / data.rows.length) * 100}
+            decimals={1}
+            suffix="%"
+            sub="across all baskets"
+            glow="accent"
+            i={2}
+          />
+        )}
+        {firstCounts && (
+          <StatTile
+            label="Top Call"
+            value={topCount}
+            sub={`${topLabel} (${(total > 0 ? (topCount / total) * 100 : 0).toFixed(1)}%)`}
+            glow="up"
+            i={3}
+          />
+        )}
+      </Reveal>
+
+      {kinds.length > 0 && (
+        <section className="panel p-4">
+          <div className="mb-2 text-[0.7rem] font-bold tracking-[0.16em]" style={{ color: 'var(--dim)' }}>
+            SECTOR BREADTH
+          </div>
+          <div className="mb-3 text-[0.72rem] leading-relaxed" style={{ color: 'var(--dim)' }}>
+            How sector baskets split within each category — a lopsided split signals a market-wide state.
+          </div>
           <div className="flex flex-col gap-3">
-            {kinds.map((k) => (
-              <BreadthRow key={k} kind={k} counts={data.breadth[k]} />
+            {kinds.map((k, i) => (
+              <BreadthRow key={k} kind={k} counts={data.breadth[k]} i={i} />
             ))}
           </div>
-        )}
-      </section>
-
-      <RegimeTable title="INDICES" rows={indices} />
-      <RegimeTable title="SECTORS" rows={sectors} />
-
-      {data.uncovered && data.uncovered.length > 0 && (
-        <section
-          className="rounded border p-3 text-[0.78rem] leading-relaxed"
-          style={{ borderColor: "var(--line)", background: "var(--panel)" }}
-        >
-          <b>No call yet:</b> {data.uncovered.join(", ")}. Named rather than omitted — a sector
-          quietly missing from a market-wide read looks like a neutral call, which is a claim nobody
-          made. Newly registered baskets need daily bars before the regime runner can score them.
         </section>
       )}
 
-      <ProOnly>
-        <section
-          className="rounded border p-3"
-          style={{ borderColor: "var(--line)", background: "var(--panel)" }}
-        >
-          <h2
-            className="mb-2 text-[0.7rem] font-bold tracking-[0.16em]"
-            style={{ color: "var(--faint)" }}
-          >
-            WHAT THESE NUMBERS ARE
-          </h2>
-          <dl className="flex flex-col gap-2 text-[0.75rem] leading-relaxed">
-            <Note term="How to read it" text={data.howToRead} />
-            <Note term="Where the accuracy came from" text={data.inheritedAccuracy} />
-            <Note term="Why this page exists" text={data.whyThisExists} />
-          </dl>
-        </section>
-      </ProOnly>
+      <RegimeTable title="Indices" rows={indices} />
+      <RegimeTable title="Sectors" rows={sectors} />
 
-      <p
-        className="rounded border p-3 text-[0.75rem] leading-relaxed"
-        style={{ borderColor: "var(--line)", color: "var(--faint)" }}
-      >
-        {data.tradeability}
-      </p>
+      {data.uncovered && data.uncovered.length > 0 && (
+        <div className="panel p-3 text-[0.78rem] leading-relaxed" style={{ color: 'var(--dim)' }}>
+          <span className="font-bold">No call yet:</span> {data.uncovered.join(", ")}. Named rather than omitted.
+        </div>
+      )}
     </div>
   );
 }
 
-/** One kind's split across the sector baskets, as a proportional bar. */
-function BreadthRow({ kind, counts }: { kind: string; counts: Record<string, number> }) {
+function BreadthRow({ kind, counts, i }: { kind: string; counts: Record<string, number>; i: number }) {
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   const total = entries.reduce((s, [, n]) => s + n, 0);
   if (total === 0) return null;
+
   return (
-    <div>
+    <div className="reveal-item" style={{ "--i": i } as React.CSSProperties}>
       <div className="mb-1 flex items-baseline gap-2 text-[0.75rem]">
         <span className="font-bold">{kind}</span>
-        <span style={{ color: "var(--faint)" }}>
+        <span style={{ color: 'var(--dim)' }}>
           {entries.map(([label, n]) => `${n} ${label}`).join(" · ")}
         </span>
       </div>
-      <div className="flex h-2 w-full overflow-hidden rounded" style={{ background: "var(--line)" }}>
-        {entries.map(([label, n], i) => (
+      <div className="flex h-2 w-full overflow-hidden rounded" style={{ background: 'rgba(255,255,255,0.06)' }}>
+        {entries.map(([label, n], idx) => (
           <div
             key={label}
             title={`${label}: ${n} of ${total}`}
+            className="bar-animate"
             style={{
               width: `${(n / total) * 100}%`,
-              background: i === 0 ? "var(--fg)" : "var(--faint)",
-              opacity: i === 0 ? 0.85 : 0.45,
-            }}
+              backgroundColor: idx === 0 ? 'var(--bid)' : idx === 1 ? 'var(--ask)' : 'var(--faint)',
+              opacity: idx < 2 ? 0.85 : 0.45,
+              transformOrigin: 'left',
+              "--i": i,
+            } as React.CSSProperties}
           />
         ))}
       </div>
@@ -188,67 +203,53 @@ function BreadthRow({ kind, counts }: { kind: string; counts: Record<string, num
 
 function RegimeTable({ title, rows }: { title: string; rows: MarketRegimeRow[] }) {
   if (rows.length === 0) return null;
+  const subtitle = title === "Indices"
+    ? "Market-wide indices and their regime status"
+    : "Sector baskets and their regime status";
+
   return (
-    <section
-      className="rounded border p-3"
-      style={{ borderColor: "var(--line)", background: "var(--panel)" }}
-    >
-      <h2
-        className="mb-2 text-[0.7rem] font-bold tracking-[0.16em]"
-        style={{ color: "var(--faint)" }}
-      >
-        {title}
-      </h2>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[32rem] text-[0.75rem]">
+    <Reveal className="panel p-4">
+      <div className="mb-2 text-[0.7rem] font-bold tracking-[0.16em]" style={{ color: 'var(--dim)' }}>
+        {title.toUpperCase()}
+      </div>
+      <div className="mb-3 text-[0.72rem] leading-relaxed" style={{ color: 'var(--dim)' }}>
+        {subtitle}
+      </div>
+      <div className="table-wrap overflow-x-auto">
+        <table className="v4-table w-full min-w-[32rem]">
           <thead>
-            <tr style={{ color: "var(--faint)" }}>
-              <th className="text-left font-normal">basket</th>
-              <th className="text-left font-normal">kind</th>
-              <th className="text-left font-normal">call</th>
-              <th className="text-right font-normal">conviction</th>
-              <th className="text-left font-normal">band</th>
-              <th className="text-right font-normal">
-                <span className="inline-flex items-center gap-1">
-                  band accuracy
-                  <HelpTip label="band accuracy">
-                    Measured on single stocks, not on baskets. Inherited unchanged rather than
-                    adjusted by a guess.
-                  </HelpTip>
-                </span>
-              </th>
+            <tr>
+              <th>Basket</th>
+              <th>Kind</th>
+              <th>Call</th>
+              <th className="text-right">Conviction</th>
+              <th>Band</th>
+              <th className="text-right">Accuracy</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={`${r.symbol}-${r.kind}`} style={{ borderTop: "1px solid var(--line)" }}>
-                <td className="py-1">
-                  <span className="font-bold">{r.symbol}</span>{" "}
-                  <span style={{ color: "var(--faint)" }}>{r.name}</span>
-                </td>
-                <td className="py-1">{r.kind}</td>
-                <td className="py-1">{r.regime}</td>
-                <td className="py-1 text-right">{r.conviction.toFixed(2)}</td>
-                <td className="py-1">{r.tier}</td>
-                <td className="py-1 text-right">
-                  {r.historicalAccuracy > 0 ? pct(r.historicalAccuracy) : "—"}
-                </td>
-              </tr>
-            ))}
+            {rows.map((r) => {
+              const callColor = r.regime === "bullish" || r.regime === "elevated" ? "var(--bid)" :
+                r.regime === "bearish" || r.regime === "depressed" ? "var(--ask)" : "var(--dim)";
+              return (
+                <tr key={`${r.symbol}-${r.kind}`}>
+                  <td>
+                    <span className="font-bold">{r.symbol}</span>{" "}
+                    <span style={{ color: 'var(--dim)' }}>{r.name}</span>
+                  </td>
+                  <td>{r.kind}</td>
+                  <td style={{ color: callColor }}>{r.regime}</td>
+                  <td className="text-right tnum">{r.conviction.toFixed(2)}</td>
+                  <td>{r.tier}</td>
+                  <td className="text-right">
+                    {r.historicalAccuracy > 0 ? `${(r.historicalAccuracy * 100).toFixed(1)}%` : "—"}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
-    </section>
-  );
-}
-
-function Note({ term, text }: { term: string; text: string }) {
-  return (
-    <div>
-      <dt className="text-[0.68rem] font-bold tracking-wide" style={{ color: "var(--faint)" }}>
-        {term}
-      </dt>
-      <dd>{text}</dd>
-    </div>
+    </Reveal>
   );
 }

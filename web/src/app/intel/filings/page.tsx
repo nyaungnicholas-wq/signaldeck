@@ -1,9 +1,5 @@
 "use client";
 
-// SEC filings feed (Signal8 wave, Stage 1): plain-English labels over the raw
-// EDGAR form types, with an honest data-lag note. Public-domain government
-// data — free to show; NOT real-time by law/process.
-
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { filings, pollMs, POLL_SLOW, type Filing } from "@/lib/api";
@@ -12,13 +8,10 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
-import PagePurpose from "@/components/PagePurpose";
+import { Reveal, PageHero, StatTile, MiniBar } from "@/components/ui/Kit";
 
-/** Form families offered as one-tap filters (prefix match server-side). */
 const FORM_FILTERS = ["all", "4", "8-K", "10-Q", "10-K", "S-3", "424B", "SC 13D", "SC 13G"];
 
-/** Badge color per form family: dilution-shaped forms red-ish, insider forms
- *  accent, reports neutral. */
 function formColor(form: string): string {
   const f = form.toUpperCase();
   if (f.startsWith("S-1") || f.startsWith("S-3") || f.startsWith("424B")) return "var(--ask)";
@@ -33,8 +26,6 @@ export default function FilingsPage() {
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [form, setForm] = useState("all");
-  // Stage 5: the symbol filter is the hub-wide one (typed once, follows the
-  // user across News/Filings/Insiders/Institutions/Congress).
   const { symbol } = useIntelSymbol();
   const [retryTick, setRetryTick] = useState(0);
 
@@ -51,9 +42,6 @@ export default function FilingsPage() {
         .catch((e: unknown) => {
           if (!alive) return;
           const msg = e instanceof Error ? e.message : String(e);
-          // Exact-ticker API: an unknown/partial symbol 404s — that is a
-          // filter miss (empty result), not an outage. Never leave a stale
-          // unfiltered list on screen behind an active filter.
           if (symbol && msg.includes("404")) {
             setRows([]);
             setErr(null);
@@ -62,7 +50,6 @@ export default function FilingsPage() {
           setErr(msg);
         });
     load();
-    // POLL_SLOW: the filings-poller only sweeps EDGAR every ~2h.
     const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
@@ -74,22 +61,37 @@ export default function FilingsPage() {
   const hardError = rows === null && err !== null;
   const list = useMemo(() => rows ?? [], [rows]);
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">SEC FILINGS</h1>
-        <span className="chip">plain-English feed</span>
-        {err !== null && rows !== null && (
-          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
-            poll failed — showing last data
-          </span>
-        )}
-      </div>
+  const stats = useMemo(() => {
+    if (!list.length) return { count: 0, latest: "", forms: 0, symbols: 0 };
+    const latest = new Date(Math.max(...list.map(f => new Date(f.filedTs).getTime()))).toISOString().split('T')[0];
+    const forms = new Set(list.map(f => f.form)).size;
+    const symbols = new Set(list.map(f => f.symbolId)).size;
+    return { count: list.length, latest, forms, symbols };
+  }, [list]);
 
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="intel-filings"
-        text="What are companies officially telling the SEC? Public EDGAR filings in plain English — filings lag by law and process, never real-time."
+  return (
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Filings"
+        subtitle="Fresh SEC filings decoded - what was filed, by whom, and why it matters."
+        right={
+          <div className="flex flex-wrap gap-1">
+            {FORM_FILTERS.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setForm(f)}
+                className="chip min-h-[36px] cursor-pointer px-2.5 transition-colors duration-150 hover:text-[var(--text)]"
+                style={{
+                  color: f === form ? "var(--accent)" : undefined,
+                  borderColor: f === form ? "var(--accent)" : undefined,
+                }}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+        }
       />
 
       {loading && <Skeleton lines={6} label="loading filings feed" />}
@@ -105,40 +107,22 @@ export default function FilingsPage() {
       )}
 
       {rows !== null && (
-        <section className="panel">
-          <div className="panel-h flex-wrap gap-2">
-            FILINGS FEED
-            <span className="chip tnum">{list.length} shown</span>
-            {symbol && (
-              <span className="chip" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>
-                {symbol} — from the shared intel filter
-              </span>
-            )}
-            <span className="ml-auto flex flex-wrap items-center gap-1" role="tablist" aria-label="form filter">
-              {FORM_FILTERS.map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  role="tab"
-                  aria-selected={f === form}
-                  onClick={() => setForm(f)}
-                  className="chip min-h-[36px] cursor-pointer px-2.5 transition-colors duration-150 hover:text-[var(--text)]"
-                  style={{
-                    color: f === form ? "var(--accent)" : undefined,
-                    borderColor: f === form ? "var(--accent)" : undefined,
-                  }}
-                >
-                  {f}
-                </button>
-              ))}
-            </span>
+        <div className="hud-panel">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4">
+            <StatTile label="Total Filings" value={stats.count} i={0} glow="hud" />
+            <StatTile label="Latest" value={stats.latest} i={1} />
+            <StatTile label="Form Types" value={stats.forms} i={2} />
+            <StatTile label="Companies" value={stats.symbols} decimals={0} i={3} />
           </div>
-
-          {/* honest lag note, always visible */}
           <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
             {note}
           </p>
+        </div>
+      )}
 
+      {rows !== null && (
+        <section className="panel">
+          <div className="panel-h">FILINGS FEED</div>
           {list.length === 0 ? (
             symbol || form !== "all" ? (
               <EmptyState
@@ -154,43 +138,48 @@ export default function FilingsPage() {
               />
             )
           ) : (
-            <ul style={{ borderTop: "1px solid var(--border)" }}>
-              {list.map((f) => (
-                <li
-                  key={f.id}
-                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5 text-[0.75rem]"
-                  style={{ borderBottom: "1px solid var(--border)" }}
-                >
-                  <Link
-                    href={`/s/stocks/${encodeURIComponent(f.symbol ?? "")}`}
-                    className="tnum w-16 font-bold hover:underline"
-                    style={{ color: "var(--text)" }}
+            <Reveal>
+              <ul className="v4-table">
+                {list.map((f, i) => (
+                  <li
+                    key={f.id}
+                    className="reveal-item grid grid-cols-12 gap-x-3 items-center px-4 py-2.5 text-[0.75rem]"
+                    style={{ "--i": Math.min(i, 11) } as React.CSSProperties}
                   >
-                    {f.symbol}
-                  </Link>
-                  <span
-                    className="chip"
-                    style={{ color: formColor(f.form), borderColor: formColor(f.form) }}
-                  >
-                    {f.form}
-                  </span>
-                  <span style={{ color: "var(--dim)" }}>{f.label}</span>
-                  <span className="tnum ml-auto text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                    {ago(f.filedTs)}
-                  </span>
-                  {f.url && (
-                    <a
-                      href={f.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[0.75rem] text-[var(--faint)] underline transition-colors duration-150 hover:text-[var(--text)]"
+                    <Link
+                      href={`/s/stocks/${encodeURIComponent(f.symbol ?? "")}`}
+                      className="col-span-2 tnum font-bold hover:underline truncate"
+                      title={f.symbol}
+                      style={{ color: "var(--text)" }}
                     >
-                      EDGAR ↗
-                    </a>
-                  )}
-                </li>
-              ))}
-            </ul>
+                      {f.symbol}
+                    </Link>
+                    <span
+                      className="col-span-2 chip justify-self-start"
+                      style={{ color: formColor(f.form), borderColor: formColor(f.form) }}
+                    >
+                      {f.form}
+                    </span>
+                    <span className="col-span-5 truncate" title={f.label} style={{ color: "var(--dim)" }}>
+                      {f.label}
+                    </span>
+                    <span className="col-span-2 tnum text-right" style={{ color: "var(--faint)" }}>
+                      {ago(f.filedTs)}
+                    </span>
+                    {f.url && (
+                      <a
+                        href={f.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="col-span-1 text-[var(--faint)] underline transition-colors duration-150 hover:text-[var(--text)]"
+                      >
+                        ↗
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </Reveal>
           )}
         </section>
       )}

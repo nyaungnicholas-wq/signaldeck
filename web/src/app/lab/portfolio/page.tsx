@@ -1,64 +1,36 @@
 "use client";
 
-// /portfolio — a discretionary trade log graded against what actually happened,
-// plus a correlation heatmap so you can see what actually diversifies.
-//
-// Honesty framing is the product: every logged read carries the pressure score
-// captured at entry, so the same out-of-sample honesty loop the model runs on
-// itself is applied to YOUR calls. Thin composition page: state/fetching lives
-// in usePortfolio(); sections live in src/components/portfolio/ (pure refactor
-// of the old monolithic page).
-
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
 import SummaryBar from "@/components/portfolio/SummaryBar";
 import LogForm from "@/components/portfolio/LogForm";
 import PositionsTable from "@/components/portfolio/PositionsTable";
 import CorrelationPanel from "@/components/portfolio/CorrelationPanel";
 import usePortfolio from "@/hooks/usePortfolio";
+import { PageHero, StatTile, Reveal, AnimatedNumber, DeltaBadge, MiniBar, Spark, Gauge } from "@/components/ui/Kit";
 
 export default function PortfolioPage() {
-  const { pf, pfErr, watch, retry, forcePoll, corr, corrErr, corrRefreshing, loadCorr } =
-    usePortfolio();
-
+  const { pf, pfErr, watch, retry, forcePoll, corr, corrErr, corrRefreshing, loadCorr } = usePortfolio();
   const positions = pf?.positions ?? [];
   const open = positions.filter((p) => p.open);
   const loading = pf === null && pfErr === null;
   const hardError = pf === null && pfErr !== null;
   const corrLoading = corr === null && corrErr === null;
 
+  const stat = pf?.stat;
+  const totalPnL = stat?.TotalPnLAbs ?? 0;
+  const avgScore = stat?.GrossValue ?? 0;
+  const winRate = stat?.Winners ?? 0;
+  const totalPositions = positions.length;
+  const openPositions = open.length;
+
   return (
-    <div className="flex flex-col gap-4">
-      {/* header row */}
-      <div className="flex flex-wrap items-center gap-2 px-1">
-        <h1 className="text-sm font-bold tracking-[0.18em]">PORTFOLIO</h1>
-        {pf !== null && (
-          <>
-            <span className="chip tnum">{positions.length} logged</span>
-            <span className="chip tnum">{open.length} open</span>
-          </>
-        )}
-        {pfErr !== null && pf !== null && (
-          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
-            poll failed — showing last data
-          </span>
-        )}
-      </div>
-
-      {/* STAGE 3: what this page answers, in plain English */}
-      <PagePurpose
-        id="lab-portfolio"
-        text="Are YOUR calls any good? Log discretionary trades and get graded against what actually happened — the same honesty loop the model runs on itself."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Portfolio Honesty Loop"
+        subtitle="Grade your discretionary trades against what actually happened — the same honesty loop the model runs on itself."
       />
-
-      {/* honesty note — the reason this page exists */}
-      <p className="px-1 text-[0.75rem] italic leading-relaxed" style={{ color: "var(--faint)" }}>
-        This grades YOUR discretionary reads against what actually happened — the same honesty
-        loop as the model, applied to you. The score beside each entry is the pressure reading at
-        the moment you logged it; watch whether it was right.
-      </p>
 
       {loading && <Skeleton lines={5} label="loading portfolio" />}
 
@@ -80,9 +52,45 @@ export default function PortfolioPage() {
 
       {pf !== null && (
         <>
-          {positions.length > 0 && <SummaryBar stat={pf.stat} />}
+          {positions.length > 0 && (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <StatTile
+                label="Total PnL"
+                value={totalPnL}
+                decimals={2}
+                prefix="$"
+                delta={stat?.TotalPnLPct}
+                glow={totalPnL > 0 ? "up" : totalPnL < 0 ? "down" : undefined}
+                i={0}
+              />
+              <StatTile
+                label="Avg Score"
+                value={avgScore}
+                decimals={2}
+                glow="accent"
+                i={1}
+              />
+              <StatTile
+                label="Win Rate"
+                value={winRate}
+                decimals={1}
+                suffix="%"
+                glow="hud"
+                i={2}
+              />
+              <StatTile
+                label="Positions"
+                value={totalPositions}
+                sub={`${openPositions} open`}
+                i={3}
+              />
+            </div>
+          )}
 
-          <LogForm watch={watch} onLogged={forcePoll} />
+          <div className="panel hud-panel">
+            <div className="panel-h">Log a Read</div>
+            <LogForm watch={watch} onLogged={forcePoll} />
+          </div>
 
           <section className="panel">
             <div className="panel-h">

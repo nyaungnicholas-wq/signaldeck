@@ -73,6 +73,7 @@ import ShortInterestPanel from "@/components/symbol/ShortInterestPanel";
 import UnusualActivityPanel from "@/components/UnusualActivityPanel";
 import HelpTip from "@/components/HelpTip";
 import PagePurpose from "@/components/PagePurpose";
+import { StatTile } from "@/components/ui/Kit";
 import StorySection from "@/components/StorySection";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
@@ -381,7 +382,7 @@ export default function SymbolPage({
 
   if (!marketOk) {
     return (
-      <section className="panel p-6 text-[0.75rem]">
+      <section className="panel reveal-item p-6 text-[0.75rem]">
         <p style={{ color: "var(--bad)" }}>
           unknown market &ldquo;{p.market}&rdquo; — expected /s/crypto/… or /s/stocks/…
         </p>
@@ -405,10 +406,10 @@ export default function SymbolPage({
   const symbolBreakouts = breakouts?.key === idKey ? breakouts.rows : [];
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="page-enter flex flex-col gap-4">
       {/* Header row: title + identity + contextual chips */}
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="mono text-lg font-extrabold tracking-[0.08em]" style={{ color: "var(--text)" }}>
+        <h1 className="hero-title mono text-2xl font-extrabold tracking-[0.08em]">
           {symbol}
         </h1>
         <span className="chip uppercase tracking-wider">{market}</span>
@@ -492,6 +493,39 @@ export default function SymbolPage({
       )}
       {!detailErr && !detail && <Skeleton lines={5} label={`loading ${symbol}`} />}
 
+      {/* v4 hero band — the symbol's headline numbers from data already loaded. */}
+      {detail && lastBar && (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatTile
+            label="Last Price"
+            value={lastBar.c}
+            decimals={lastBar.c >= 100 ? 2 : 4}
+            prefix="$"
+            sub={detail.symbol?.name ?? symbol}
+            glow="hud"
+            i={0}
+          />
+          <StatTile
+            label="Day Change"
+            value={changePct != null ? Math.abs(changePct) : "—"}
+            decimals={2}
+            suffix={changePct != null ? "%" : ""}
+            delta={changePct ?? undefined}
+            sub="vs previous close"
+            glow={changePct != null ? (changePct >= 0 ? "up" : "down") : undefined}
+            i={1}
+          />
+          <StatTile
+            label="1d Signal"
+            value={score1d ? verdict(score1d.score) : "no read yet"}
+            sub={score1d ? `score ${fmtScore(score1d.score)}` : "honest empty state"}
+            glow={score1d ? (score1d.score > 0 ? "up" : score1d.score < 0 ? "down" : undefined) : undefined}
+            i={2}
+          />
+          <StatTile label="Updated" value={ago(updatedAt)} sub="stored tape, not a live quote" i={3} />
+        </div>
+      )}
+
       {/* ── STORY, SECTION 1 · IDENTITY + PRICE ── */}
       <StorySection
         n={1}
@@ -499,7 +533,7 @@ export default function SymbolPage({
         sub="what this is, and what it costs right now"
       >
       {/* Chart */}
-      <section className="panel">
+      <section className="panel hud-panel reveal-item">
         <div className="panel-h flex-wrap gap-2">
           <span>PRICE · {symbol}</span>
 
@@ -713,7 +747,7 @@ export default function SymbolPage({
       {/* RECENT BREAKOUTS for this symbol, pulled out of the fleet-wide list.
           Descriptive events with their measured strength, never a forecast. */}
       {symbolBreakouts.length > 0 && (
-        <section className="panel" aria-label={`recent breakouts for ${symbol}`}>
+        <section className="panel reveal-item" aria-label={`recent breakouts for ${symbol}`}>
           <div className="panel-h flex-wrap gap-2">
             <span>RECENT BREAKOUTS · {symbol}</span>
             <HelpTip label="what a breakout row is">

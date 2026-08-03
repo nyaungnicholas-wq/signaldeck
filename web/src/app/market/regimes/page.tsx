@@ -1,13 +1,5 @@
 "use client";
 
-// REGIMES — the 2026-07-17 alpha-discovery loop's validated forecasts beyond
-// the quarterly vol regime: trend21 / liquidity21 / vol21 standing regimes and
-// live gap-fill events. House honesty rules: every number shown next to a call
-// is the MEASURED walk-forward accuracy at that conviction tier (served by the
-// daemon in-payload, never invented client-side), and each kind renders its
-// caveat inline — the liquidity "persistence IS the skill" note and the trend
-// survivorship note are part of the product, not footnotes.
-
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
@@ -20,16 +12,28 @@ import {
 import { ago } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
-import EmptyState from "@/components/EmptyState";
-import PagePurpose from "@/components/PagePurpose";
 import ExportMenu from "@/components/ExportMenu";
+import {
+  Reveal,
+  AnimatedNumber,
+  Gauge,
+  StatTile,
+  PageHero,
+  MiniBar,
+} from "@/components/ui/Kit";
 
-const KIND_ORDER = ["trend21", "liquidity21", "vol21"];
+const KIND_ORDER = ["trend21", "liquidity21", "vol21"] as const;
 
 const KIND_TITLES: Record<string, string> = {
-  trend21: "TREND — still on this side of the 200-day average in a month?",
-  liquidity21: "LIQUIDITY — active or quiet dollar volume next month?",
-  vol21: "VOLATILITY (monthly) — elevated or calm next 21 sessions?",
+  trend21: "TREND",
+  liquidity21: "LIQUIDITY",
+  vol21: "VOLATILITY",
+};
+
+const KIND_SUBTITLES: Record<string, string> = {
+  trend21: "Directional regime persistence",
+  liquidity21: "Volume regime classification",
+  vol21: "Monthly volatility regime",
 };
 
 const SHOW_N = 12;
@@ -38,17 +42,24 @@ function pct(x: number): string {
   return `${(x * 100).toFixed(1)}%`;
 }
 
-function regimeTone(regime: string): string {
-  if (/up|active|elevated|fill/.test(regime)) return "text-emerald-400";
-  return "text-sky-400";
+function regimeColor(regime: string): string {
+  if (/up|active|elevated|fill/i.test(regime)) return "var(--bid)";
+  if (/down|quiet|calm|decrease/i.test(regime)) return "var(--ask)";
+  return "var(--dim)";
 }
 
-// Sticky-header background: solid (not translucent) so scrolled rows never
-// bleed through the header text. Matches the section's zinc-950 surface.
-const TH_STICKY = "sticky top-0 z-10 bg-zinc-950 py-1 pr-2 font-normal";
+function regimeChip(regime: string) {
+  const color = regimeColor(regime);
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.75rem] font-medium"
+      style={{ color, borderColor: `color-mix(in srgb, ${color} 40%, transparent)` }}
+    >
+      {regime}
+    </span>
+  );
+}
 
-/** One forecast row + its inline expandable detail strip. The whole row
- *  toggles; inner links stopPropagation so navigation still works. */
 function FragmentRow({
   f,
   isOpen,
@@ -59,7 +70,6 @@ function FragmentRow({
   f: StructRegimeForecast;
   isOpen: boolean;
   onToggle: () => void;
-  /** Earnings-window label for this symbol (credibility wave) — a label, never a filter. */
   ew?: EarningsWindowLabel;
   earningsNote?: string;
 }) {
@@ -67,10 +77,10 @@ function FragmentRow({
   return (
     <>
       <tr
-        className="cursor-pointer border-t border-zinc-900 hover:bg-zinc-900/40"
+        className="cursor-pointer border-t border-white/5 hover:bg-white/[0.02]"
         onClick={onToggle}
       >
-        <td className="w-6 py-1 pr-1">
+        <td className="w-6 py-2 pr-1">
           <button
             type="button"
             aria-expanded={isOpen}
@@ -79,14 +89,14 @@ function FragmentRow({
               e.stopPropagation();
               onToggle();
             }}
-            className="cursor-pointer text-zinc-500 hover:text-zinc-200"
+            className="cursor-pointer text-white/40 hover:text-white/80"
           >
             {isOpen ? "▾" : "▸"}
           </button>
         </td>
-        <td className="py-1 pr-2">
+        <td className="py-2 pr-2">
           <Link
-            className="text-zinc-100 hover:underline"
+            className="text-white hover:underline mono"
             href={`/s/${f.market}/${encodeURIComponent(f.symbol)}`}
             onClick={(e) => e.stopPropagation()}
           >
@@ -94,62 +104,61 @@ function FragmentRow({
           </Link>
           {ew?.withinWindow ? (
             <span
-              className="ml-1.5 rounded border border-amber-400/50 px-1 py-[1px] text-[10px] text-amber-300"
+              className="ml-1.5 rounded border border-amber-400/50 px-1 py-[1px] text-[0.625rem] text-amber-300"
               title={earningsNote ?? "estimated earnings inside the next 7 days"}
             >
               E~{ew.daysUntil}d
             </span>
           ) : null}
         </td>
-        <td className={`py-1 pr-2 ${regimeTone(f.regime)}`}>
+        <td className="py-2 pr-2">
           <Link
             className="hover:underline"
             href={reportHref}
-            title="open the detail report for this signal"
             onClick={(e) => e.stopPropagation()}
           >
-            {f.regime} →
+            {regimeChip(f.regime)}
           </Link>
         </td>
-        <td className="py-1 pr-2 text-zinc-300">{pct(f.conviction)}</td>
-        <td className="py-1 pr-2 text-zinc-100">{pct(f.historicalAccuracy)}</td>
-        <td className="py-1 pr-2 text-zinc-400">{f.tier}</td>
-        <td className="py-1 text-zinc-500">{ago(f.ts)}</td>
+        <td className="py-2 pr-2">
+          <div className="flex items-center gap-2">
+            <MiniBar value={f.conviction} max={1} color={regimeColor(f.regime)} height={4} />
+            <span className="tnum text-white/80">{pct(f.conviction)}</span>
+          </div>
+        </td>
+        <td className="py-2 pr-2">
+          <div className="flex items-center gap-2">
+            <MiniBar value={f.historicalAccuracy} max={1} color="var(--accent)" height={4} />
+            <span className="tnum text-white/80">{pct(f.historicalAccuracy)}</span>
+          </div>
+        </td>
+        <td className="py-2 pr-2 text-white/60">{f.tier}</td>
+        <td className="py-2 text-white/40 tnum">{ago(f.ts)}</td>
       </tr>
       {isOpen ? (
-        <tr className="border-t border-zinc-900/60 bg-zinc-900/30">
-          <td colSpan={7} className="px-2 py-2">
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[0.75rem] text-zinc-400">
+        <tr className="border-t border-white/[0.03] bg-white/[0.01]">
+          <td colSpan={7} className="px-2 py-3">
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[0.75rem] text-white/50">
               <span className="flex items-center gap-2">
                 conviction
-                <span
-                  className="inline-block h-1.5 w-32 overflow-hidden rounded-full bg-zinc-800"
-                  role="img"
-                  aria-label={`conviction ${pct(f.conviction)}`}
-                >
-                  <span
-                    className="block h-full rounded-full bg-amber-400"
-                    style={{ width: `${Math.max(0, Math.min(1, f.conviction)) * 100}%` }}
-                  />
-                </span>
-                <span className="text-zinc-200">{pct(f.conviction)}</span>
+                <span className="tnum text-white/80">{pct(f.conviction)}</span>
               </span>
               <span>
-                rank <span className="text-zinc-200">#{f.rank}</span>
+                rank <span className="tnum text-white/80">#{f.rank}</span>
               </span>
               <span>
-                horizon <span className="text-zinc-200">{f.horizonDays} sessions</span>
+                horizon <span className="tnum text-white/80">{f.horizonDays} sessions</span>
               </span>
               <span>
-                sample n=<span className="text-zinc-200">{f.n}</span>
+                sample n=<span className="tnum text-white/80">{f.n}</span>
               </span>
               <span>
                 as of{" "}
-                <span className="text-zinc-200">
+                <span className="tnum text-white/80">
                   {new Date(f.ts * 1000).toLocaleString()}
                 </span>
               </span>
-              <Link className="text-amber-300/90 hover:underline" href={reportHref}>
+              <Link className="text-amber-300 hover:underline" href={reportHref}>
                 detail report →
               </Link>
             </div>
@@ -160,8 +169,6 @@ function FragmentRow({
   );
 }
 
-/** Serializes the currently-VISIBLE slice of a kind's forecast table to a
- *  markdown table (export unification #23) — what you see is what you copy. */
 function toMarkdown(
   kind: string,
   list: StructRegimeForecast[],
@@ -192,17 +199,25 @@ function KindSection({
   earningsNote?: string;
 }) {
   const [showAll, setShowAll] = useState(false);
-  // Compaction UX: each row expands in place to a detail strip (conviction
-  // bar, rank, horizon, exact as-of, report link) instead of cramming every
-  // column into the dense table.
   const [expanded, setExpanded] = useState<string | null>(null);
   const list = showAll ? rows : rows.slice(0, SHOW_N);
+
+  const topRegime = rows.length > 0
+    ? rows.reduce((best, f) => f.conviction > best.conviction ? f : best, rows[0]).regime
+    : null;
+
   return (
-    <section className="rounded border border-zinc-800 bg-zinc-950/60 p-4">
-      <div className="flex items-start justify-between gap-2">
-        <h2 className="text-sm font-semibold tracking-wide text-zinc-200">
-          {KIND_TITLES[kind] ?? kind.toUpperCase()}
-        </h2>
+    <Reveal className="panel p-4">
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div>
+          <h2 className="panel-h">{KIND_TITLES[kind] ?? kind.toUpperCase()}</h2>
+          {topRegime && (
+            <div className="mt-1 flex items-center gap-2">
+              <span className="text-[0.75rem] text-white/40">Dominant:</span>
+              {regimeChip(topRegime)}
+            </div>
+          )}
+        </div>
         {list.length > 0 ? (
           <ExportMenu
             items={[
@@ -216,46 +231,42 @@ function KindSection({
           />
         ) : null}
       </div>
+
       {doc ? (
-        <>
-          <p className="mt-1 text-xs text-zinc-400">{doc.what}</p>
-          <div className="mt-2 flex flex-wrap gap-2">
+        <div className="mb-4 space-y-2">
+          <p className="text-[0.75rem] text-white/50">{doc.what}</p>
+          <div className="flex flex-wrap gap-2">
             {Object.entries(doc.accuracyTiers).map(([tier, acc]) => (
               <span
                 key={tier}
-                className="rounded bg-zinc-900 px-2 py-0.5 text-[11px] text-zinc-300"
+                className="rounded-full bg-white/[0.05] px-2 py-0.5 text-[0.625rem] text-white/70"
               >
-                {tier}: <span className="text-zinc-100">{acc}</span>
+                {tier}: <span className="text-white/90 tnum">{acc}</span>
               </span>
             ))}
           </div>
-          <p className="mt-2 text-[11px] leading-relaxed text-amber-200/70">
-            {doc.caveat}
-          </p>
-        </>
+          <p className="text-[0.75rem] text-white/40 italic">{doc.caveat}</p>
+        </div>
       ) : null}
+
       {rows.length === 0 ? (
-        <div className="mt-3">
-          <EmptyState
-            message="no forecasts right now"
-            detail="the regime runner writes rows on its 6h cadence; thin history refuses honestly"
-          />
+        <div className="py-6 text-center">
+          <p className="text-[0.75rem] text-white/40">no forecasts right now</p>
+          <p className="text-[0.625rem] text-white/25 mt-1">the regime runner writes rows on its 6h cadence</p>
         </div>
       ) : (
         <>
-          {/* .table-wrap = horizontal scroll on narrow screens; the capped
-              height gives the sticky header something to stick inside. */}
-          <div className="table-wrap mt-3 max-h-[420px] overflow-y-auto">
-            <table className="w-full text-xs leading-tight">
+          <div className="table-wrap max-h-[420px] overflow-y-auto">
+            <table className="v4-table w-full text-[0.75rem]">
               <thead>
-                <tr className="text-left text-zinc-500">
-                  <th className={TH_STICKY} aria-label="expand" />
-                  <th className={TH_STICKY}>symbol</th>
-                  <th className={TH_STICKY}>call</th>
-                  <th className={TH_STICKY}>conviction</th>
-                  <th className={TH_STICKY}>measured accuracy</th>
-                  <th className={TH_STICKY}>tier</th>
-                  <th className="sticky top-0 z-10 bg-zinc-950 py-1 font-normal">as of</th>
+                <tr className="text-left text-white/40">
+                  <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-1 font-normal w-6" aria-label="expand" />
+                  <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">symbol</th>
+                  <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">call</th>
+                  <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">conviction</th>
+                  <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">accuracy</th>
+                  <th className="sticky top-0 z-10 bg-[--bg] py-2 pr-2 font-normal">tier</th>
+                  <th className="sticky top-0 z-10 bg-[--bg] py-2 font-normal">as of</th>
                 </tr>
               </thead>
               <tbody>
@@ -278,7 +289,7 @@ function KindSection({
           </div>
           {rows.length > SHOW_N ? (
             <button
-              className="mt-2 text-[11px] text-zinc-400 hover:text-zinc-200"
+              className="mt-3 text-[0.75rem] text-white/40 hover:text-white/80"
               onClick={() => setShowAll((v) => !v)}
             >
               {showAll ? "show fewer" : `show all ${rows.length}`}
@@ -286,7 +297,7 @@ function KindSection({
           ) : null}
         </>
       )}
-    </section>
+    </Reveal>
   );
 }
 
@@ -322,42 +333,126 @@ export default function RegimesPage() {
     };
   }, []);
 
+  const trendForecasts = data?.forecasts?.trend21 ?? [];
+  const liqForecasts = data?.forecasts?.liquidity21 ?? [];
+  const volForecasts = data?.forecasts?.vol21 ?? [];
+
+  const currentStates = {
+    trend: trendForecasts.length > 0
+      ? trendForecasts.reduce((a, b) => a.conviction > b.conviction ? a : b, trendForecasts[0]).regime
+      : null,
+    liquidity: liqForecasts.length > 0
+      ? liqForecasts.reduce((a, b) => a.conviction > b.conviction ? a : b, liqForecasts[0]).regime
+      : null,
+    volatility: volForecasts.length > 0
+      ? volForecasts.reduce((a, b) => a.conviction > b.conviction ? a : b, volForecasts[0]).regime
+      : null,
+  };
+
+  const avgAccuracy = (forecasts: StructRegimeForecast[]) => {
+    if (forecasts.length === 0) return 0;
+    // historicalAccuracy is a 0-1 fraction; the tile renders with a % suffix.
+    return (forecasts.reduce((sum, f) => sum + f.historicalAccuracy, 0) / forecasts.length) * 100;
+  };
+
   return (
-    <main className="mx-auto max-w-5xl space-y-4 px-4 py-6">
-      <h1 className="text-lg font-semibold text-zinc-100">REGIMES</h1>
-      <PagePurpose
-        id="signals-regimes"
-        text="Market-STRUCTURE predictions with measured, independently re-verified accuracy — the high-conviction tiers clear 70%+ (trend up to 97%), and every forecast reports its own conviction band's number, so a weak call honestly says a weak number. Not price direction: that tops out ~52-55%, re-proven in the same research loop. Each kind carries its caveat inline."
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="Market Regimes"
+        subtitle="The market's current structural state — trend, volatility and liquidity regimes with the measured accuracy of each state."
+        live
       />
+
       {err ? <ErrorState message={err} /> : null}
       {!data && !err ? <Skeleton lines={12} /> : null}
+
       {data ? (
         <>
-          <p className="text-[11px] leading-relaxed text-zinc-500">
-            {data.methodology}{" "}
-            <Link className="text-zinc-300 hover:underline" href="/lab/research">
-              evidence lives in the research ledger →
-            </Link>
-            {volCount != null ? (
-              <>
-                {" "}
-                The quarterly vol regime ({volCount} live forecasts) stays on its own
-                surface: <span className="text-zinc-400">/api/vol-regime</span>.
-              </>
-            ) : null}
-          </p>
-          {KIND_ORDER.map((k) => (
-            <KindSection
-              key={k}
-              kind={k}
-              rows={data.forecasts[k] ?? []}
-              doc={data.kinds[k]}
-              ews={data.earningsWindows}
-              earningsNote={data.earningsNote}
+          {/* Hero Band */}
+          <Reveal className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {currentStates.trend && (
+              <StatTile
+                i={0}
+                label="TREND REGIME"
+                value={currentStates.trend}
+                sub={`${trendForecasts.length} active forecasts`}
+                glow="hud"
+              />
+            )}
+            {currentStates.liquidity && (
+              <StatTile
+                i={1}
+                label="LIQUIDITY REGIME"
+                value={currentStates.liquidity}
+                sub={`${liqForecasts.length} active forecasts`}
+                glow="hud"
+              />
+            )}
+            {currentStates.volatility && (
+              <StatTile
+                i={2}
+                label="VOLATILITY REGIME"
+                value={currentStates.volatility}
+                sub={`${volForecasts.length} active forecasts`}
+                glow="hud"
+              />
+            )}
+            <StatTile
+              i={3}
+              label="AVG ACCURACY"
+              value={avgAccuracy(trendForecasts.concat(liqForecasts).concat(volForecasts))}
+              decimals={1}
+              suffix="%"
+              glow="accent"
             />
-          ))}
+          </Reveal>
+
+          {/* How to read this */}
+          <Reveal className="panel p-4">
+            <h2 className="panel-h mb-2">How to read this</h2>
+            <p className="text-[0.75rem] text-white/50 leading-relaxed">
+              Market regimes classify structural conditions across trend, liquidity, and volatility. 
+              Each regime classification comes with a conviction score (% confidence) and measured historical accuracy
+              from walk-forward testing — these numbers are transparently displayed for each forecast tier.
+              Regimes persist until the underlying data shifts, making persistence itself a signal of market structure stability.
+            </p>
+          </Reveal>
+
+          {/* Regime Sections */}
+          <div className="space-y-3">
+            {KIND_ORDER.map((k) => (
+              <KindSection
+                key={k}
+                kind={k}
+                rows={data.forecasts[k] ?? []}
+                doc={data.kinds?.[k]}
+                ews={data.earningsWindows}
+                earningsNote={data.earningsNote}
+              />
+            ))}
+          </div>
+
+          {/* Methodology note */}
+          <Reveal className="panel p-4">
+            <div className="flex items-start gap-3">
+              <div className="flex-1">
+                <p className="text-[0.75rem] text-white/40 leading-relaxed">
+                  {data.methodology}{" "}
+                  <Link className="text-amber-300/80 hover:underline" href="/lab/research">
+                    evidence lives in the research ledger →
+                  </Link>
+                </p>
+                {volCount != null && (
+                  <p className="text-[0.75rem] text-white/30 mt-1">
+                    The quarterly vol regime ({volCount} live forecasts) stays on its own surface:{" "}
+                    <span className="mono text-white/50">/api/vol-regime</span>.
+                  </p>
+                )}
+              </div>
+            </div>
+          </Reveal>
         </>
       ) : null}
-    </main>
+    </div>
   );
 }

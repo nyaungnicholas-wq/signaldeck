@@ -16,6 +16,7 @@ import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
 import HelpTip from "@/components/HelpTip";
 import ProOnly from "@/components/ProOnly";
+import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
 
 type SignalHorizon = "1d" | "1w";
 const SIGNAL_HORIZONS: SignalHorizon[] = ["1d", "1w"];
@@ -23,11 +24,6 @@ const SIGNAL_HORIZONS: SignalHorizon[] = ["1d", "1w"];
 const upColor = "var(--bid)";
 const downColor = "var(--ask)";
 
-/** The three costed returns arrive as `null` whenever the daemon WITHHELD the
- *  equity block — either the accounting produced a path a capped unlevered book
- *  cannot reach, or there was no gradable equity path at all. `res.note` says
- *  which. Formatting a null as 0.00% would read as "flat", which is exactly the
- *  misreading the null exists to prevent, so say WITHHELD and print the note. */
 function fmtReturn(v: number | null): string {
   return v === null ? "withheld" : fmtPct(v * 100);
 }
@@ -40,10 +36,6 @@ function returnHint(v: number | null, published: string): string {
   return v === null ? "withheld — see note" : published;
 }
 
-/** Two overlaid equity curves — the signal-driven strategy (net of cost) vs the
- *  SPY buy-and-hold benchmark. Both start at 1.0; a faint dashed baseline marks
- *  1.0. Strategy is green above / red below its start; the benchmark is a thin
- *  neutral line so the reader can see edge (or its honest absence) at a glance. */
 function EquityCurve({ curve }: { curve: SignalEquityPoint[] }) {
   const W = 1000;
   const H = 260;
@@ -168,7 +160,6 @@ function Metric({
   value: string;
   color?: string;
   hint?: string;
-  /** Load-bearing explanation — rendered as a click/keyboard HelpTip, not a hover title. */
   help?: string;
 }) {
   return (
@@ -200,9 +191,6 @@ function Metric({
 
 export default function SignalBacktestPage() {
   const [horizon, setHorizon] = useState<SignalHorizon>("1d");
-  // STAGE 2: default to the WEEKLY PINNED Sunday snapshot ("as of Sunday"),
-  // with a one-click live recompute via the existing endpoint. The daemon
-  // falls back to a live compute (labeled via pinnedNote) when no pin exists.
   const [mode, setMode] = useState<"pinned" | "live">("pinned");
   const [data, setData] = useState<SignalBacktestPinnedResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -222,8 +210,6 @@ export default function SignalBacktestPage() {
           setErr(e instanceof Error ? e.message : String(e));
         });
     load();
-    // Pinned weekly snapshot / slow-moving evaluation — no tick-rate polling.
-    // Switching horizon or mode re-runs the effect and fetches immediately.
     const stop = pollMs(load, POLL_SLOW);
     return () => {
       alive = false;
@@ -231,44 +217,22 @@ export default function SignalBacktestPage() {
     };
   }, [horizon, mode, retryTick]);
 
-  // Only trust data tagged for the selected horizon (avoids a stale mix while
-  // switching chips).
   const current =
     data && data.result.horizon === horizon ? data : null;
   const res = current?.result;
 
   return (
-    <div className="flex flex-col gap-4">
-      <header className="flex flex-col gap-2">
-        <h1 className="text-[1.1rem] font-bold tracking-wide">SIGNAL BACKTEST</h1>
-        <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          The platform&apos;s <strong>own</strong> flagship signal, graded out of
-          sample. We replay the <strong>feature store</strong> — every resolved
-          prediction&apos;s calibrated probability joined to what the market
-          actually did afterwards — and measure information coefficient and its
-          decay by lag, the quintile forward-return spread, hit-rate, turnover,
-          and a <strong>costed</strong> equity curve versus SPY buy-and-hold.
-          Every figure is over <strong>independent</strong> (symbol, day)
-          observations, net of per-side cost, with no lookahead.
-        </p>
-        {/* Non-negotiable honesty label. */}
-        <div
-          className="panel px-3 py-2 text-[0.75rem] font-semibold"
-          role="note"
-          style={{ color: "var(--ask)", borderColor: "var(--ask)" }}
-        >
-          {res?.trackLabel ??
-            "backtested — not live (own-signal replay of the feature store, net of cost)"}
-        </div>
-      </header>
+    <div className="page-enter space-y-4">
+      <PageHero
+        title="SIGNAL BACKTEST"
+        subtitle="Does SignalDeck's own flagship signal predict returns out of sample, after costs? Graded on the record it actually made, gates included."
+      />
 
-      {/* STAGE 3: what this page answers, in plain English */}
       <PagePurpose
         id="lab-signal-backtest"
         text="Does SignalDeck's own flagship signal predict returns out of sample, after costs? Graded on the record it actually made, gates included."
       />
 
-      {/* Horizon switcher. */}
       <div className="flex flex-wrap items-center gap-2">
         <div role="group" aria-label="Signal horizon" className="flex items-center gap-1">
           {SIGNAL_HORIZONS.map((h) => {
@@ -299,7 +263,6 @@ export default function SignalBacktestPage() {
             {res.costBps.toFixed(1)}bps/side
           </span>
         )}
-        {/* STAGE 2 — pinned Sunday snapshot vs live recompute. */}
         {current && (
           <span className="ml-auto flex flex-wrap items-center gap-2">
             <span
@@ -339,7 +302,6 @@ export default function SignalBacktestPage() {
         )}
       </div>
 
-      {/* Requested the pin, none stored yet — say so instead of pretending. */}
       {current?.pinnedNote && (
         <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
           {current.pinnedNote}
@@ -351,10 +313,6 @@ export default function SignalBacktestPage() {
       ) : !current ? (
         <Skeleton lines={6} label="loading signal backtest" />
       ) : res && res.gated ? (
-        // HONEST insufficient-data state — the truth today (~0 resolved live
-        // outcomes). We still show sample accounting, never a fabricated number.
-        // The gate also fires with a FULL sample when the equity accounting is
-        // untrustworthy, so don't claim a sample shortfall that isn't there.
         <EmptyState
           message={
             res.independentN < res.minIndependentN
@@ -368,12 +326,9 @@ export default function SignalBacktestPage() {
         />
       ) : res ? (
         <>
-          {/* Costed equity vs SPY. */}
-          <section className="panel">
+          <section className="panel hud-panel">
             <div className="panel-h">COSTED EQUITY — SIGNAL vs SPY BUY &amp; HOLD</div>
             {res.equity === null ? (
-              // Withheld, not empty — the daemon nulls the whole block when the
-              // accounting can't be trusted, and `note` is the reason.
               <EmptyState
                 message="Costed equity withheld."
                 detail={
@@ -393,7 +348,6 @@ export default function SignalBacktestPage() {
             )}
           </section>
 
-          {/* Headline skill + costed returns. */}
           <section
             className="panel grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"
             aria-label="out-of-sample skill and returns"
@@ -424,9 +378,6 @@ export default function SignalBacktestPage() {
               color={res.meanFwd >= 0 ? upColor : downColor}
               hint="avg realized, independent set"
             />
-            {/* The three costed returns are null when the equity block is
-                withheld — narrow via fmtReturn/returnColor rather than leaning
-                on the `gated` branch above to keep them unreachable. */}
             <Metric
               label="STRATEGY RETURN"
               value={fmtReturn(res.strategyReturn)}
@@ -467,8 +418,6 @@ export default function SignalBacktestPage() {
             />
           </section>
 
-          {/* Why the return tiles read "withheld" — the payload's own reason,
-              verbatim. */}
           {res.strategyReturn === null && (
             <p className="text-[0.75rem] leading-relaxed" style={{ color: "var(--faint)" }}>
               {res.note ||
@@ -476,16 +425,12 @@ export default function SignalBacktestPage() {
             </p>
           )}
 
-          {/* IC decay + quintile profile are methodology detail — SIMPLE mode
-              folds them behind one disclosure; the honesty label, equity curve
-              and headline metrics above stay visible in both modes. */}
           <ProOnly summary="Show methodology detail">
           <div className="flex flex-col gap-4">
-          {/* IC decay by lag. */}
           <section className="panel">
             <div className="panel-h">IC DECAY BY LAG</div>
             <div className="overflow-x-auto">
-              <table className="tnum w-full text-[0.75rem]">
+              <table className="v4-table w-full text-[0.75rem]">
                 <thead>
                   <tr style={{ color: "var(--faint)" }}>
                     <th className="px-4 py-2 text-left font-normal">FWD LAG</th>
@@ -494,8 +439,8 @@ export default function SignalBacktestPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {res.icDecay.map((p) => (
-                    <tr key={p.lagDays} style={{ borderTop: "1px solid var(--border)" }}>
+                  {res.icDecay.map((p, i) => (
+                    <tr key={p.lagDays} className="reveal-item" style={{ "--i": Math.min(i, 11) } as React.CSSProperties}>
                       <td className="px-4 py-2 font-semibold">
                         {p.lagDays} {p.lagDays === 1 ? "bar" : "bars"}
                       </td>
@@ -517,11 +462,10 @@ export default function SignalBacktestPage() {
             </div>
           </section>
 
-          {/* Quintile forward-return profile. */}
           <section className="panel">
             <div className="panel-h">SIGNAL QUINTILES — FORWARD-RETURN PROFILE</div>
             <div className="overflow-x-auto">
-              <table className="tnum w-full text-[0.75rem]">
+              <table className="v4-table w-full text-[0.75rem]">
                 <thead>
                   <tr style={{ color: "var(--faint)" }}>
                     <th className="px-4 py-2 text-left font-normal">QUINTILE</th>
@@ -532,8 +476,8 @@ export default function SignalBacktestPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {res.quintiles.map((q) => (
-                    <tr key={q.quintile} style={{ borderTop: "1px solid var(--border)" }}>
+                  {res.quintiles.map((q, i) => (
+                    <tr key={q.quintile} className="reveal-item" style={{ "--i": Math.min(i, 11) } as React.CSSProperties}>
                       <td className="px-4 py-2 font-semibold">
                         Q{q.quintile}
                         {q.quintile === 1
