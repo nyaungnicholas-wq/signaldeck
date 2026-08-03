@@ -58,13 +58,30 @@ build_from_head() {
   # the commit we extracted explicitly — the tree IS that commit by
   # construction. lineage only honours this when no vcs stamp is present.
   LDPKG="github.com/nyaungnicholas-wq/signaldeck/internal/lineage.ldflagsRev"
+  # Windows needs the .exe suffix: the Scheduled Task launches bin/signaldeckd.exe,
+  # and a deploy that wrote an extensionless bin/signaldeckd left the task still
+  # pointing at the OLD binary — a deploy that reports success and changes
+  # nothing is worse than one that fails.
+  local exe=""
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) exe=".exe" ;; esac
   if ! (cd "$tmp/daemon" && PATH="$PATH:$HOME/.local/go-sdk/go/bin" \
-          go build -ldflags "-X $LDPKG=$rev" -o "$tmp/signaldeckd" ./cmd/signaldeckd) >&2; then
+          go build -ldflags "-X $LDPKG=$rev" -o "$tmp/signaldeckd$exe" ./cmd/signaldeckd) >&2; then
     echo "REFUSED: build from the extracted commit failed." >&2
     rm -rf "$tmp"; return 1
   fi
   mkdir -p "$REPO/bin"
-  install -m 755 "$tmp/signaldeckd" "$REPO/bin/signaldeckd" || { rm -rf "$tmp"; return 1; }
+  # A running daemon holds its own image open on Windows, so install(1) fails
+  # with "File exists" (Unix silently replaces the inode instead). Stop first,
+  # and move the old binary aside rather than deleting it so a failed install
+  # leaves something to roll back to.
+  if [ -n "$exe" ] && sd_is_running signaldeckd; then
+    sd_svc_stop com.signaldeck.daemon
+    for _ in $(seq 1 20); do sd_is_running signaldeckd || break; sleep 1; done
+    sd_is_running signaldeckd && sd_kill_hard signaldeckd
+    sleep 1
+  fi
+  [ -f "$REPO/bin/signaldeckd$exe" ] && mv -f "$REPO/bin/signaldeckd$exe" "$REPO/bin/signaldeckd$exe.prev"
+  install -m 755 "$tmp/signaldeckd$exe" "$REPO/bin/signaldeckd$exe" || { rm -rf "$tmp"; return 1; }
   rm -rf "$tmp"
   BUILT_REV="$rev"
   return 0
@@ -171,7 +188,9 @@ case "${1:-status}" in
     BUILT_REV=""
     build_from_head || { echo "launch REFUSED: not starting an unattributable build." >&2; exit 1; }
     echo "launch: exec signaldeckd built from commit $BUILT_REV" >&2
-    exec "$REPO/bin/signaldeckd"
+    exe=""
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) exe=".exe" ;; esac
+    exec "$REPO/bin/signaldeckd$exe"
     ;;
   refresh)
     # run the daily full-universe refresh sweep now (ignores the once-per-day guard)
