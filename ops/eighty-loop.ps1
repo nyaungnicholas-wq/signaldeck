@@ -69,6 +69,16 @@ param(
   # made the 27B call fail and silently fall through to the PAID gateway -- the
   # loop was billing Mistral for PROPOSE while claiming zero spend.
   [string]$CodeLane = 'code',
+  # Pin the ACTUAL model rather than trusting a lane name. On 2026-08-02 omni.ps1
+  # was changed to try the paid gateway FIRST in every lane, with Ollama reachable
+  # only via -Model. That silently inverted this loop's whole cost premise: the
+  # events log shows cycle 2 of the 03:45 run served by mistral/devstral-latest,
+  # billed, while the comments above still claimed "one model, no thrash, no spend".
+  #
+  # -Model also disables omni's fallback, which is the point. A loop meant to run
+  # for days must fail LOUDLY to worker-empty when the local model is gone, not
+  # quietly start spending. Set to '' to restore lane-based routing.
+  [string]$LocalModel = 'qwen3.6:27b',
   [int]$CyclePauseSec = 30
 )
 
@@ -169,7 +179,9 @@ $task
   try {
     # NOT $args -- that is an automatic variable and assigning it inside a
     # function with a param block is a footgun that reads as working code.
-    $omniArgs = @('-NoProfile', '-File', $omni, '-PromptFile', $pf, '-Task', $lane, '-TimeoutSec', $timeoutSec)
+    $omniArgs = @('-NoProfile', '-File', $omni, '-PromptFile', $pf, '-TimeoutSec', $timeoutSec)
+    if ($LocalModel -ne '') { $omniArgs += '-Model', $LocalModel }
+    else                    { $omniArgs += '-Task', $lane }
     if ($verify -ne '') {
       # omni.ps1 refuses -Verify without -Out ("it runs against the written
       # file") and refuses -Samples>1 without -Verify. Omitting -Out here made
@@ -227,8 +239,13 @@ $task
   return $text
 }
 
+# maxCycles and model are logged because their absence made a real diagnosis
+# impossible: every recent run ended at cycles=2 with a 24h deadline and no way
+# to tell from the log whether that was -MaxCycles 2 or a defect in the guard.
 Ev 'loop-start' @{ protocol = 'EIGHTY_PERCENT_SUPERPROMPT.md'; lane = $Lane; codeLane = $CodeLane
                    deadline = $(if ($Hours -le 0) { 'none' } else { $deadline.ToString('o') })
+                   maxCycles = $MaxCycles
+                   model = $(if ($LocalModel -eq '') { "lane:$Lane" } else { $LocalModel })
                    claudeCalls = 0 }
 
 if (-not (Test-Path $journal)) {
