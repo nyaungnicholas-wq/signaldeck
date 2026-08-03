@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sort"
 	"strings"
@@ -1473,15 +1474,26 @@ func confluenceWorkers(st *store.Store) []workers.Worker {
 
 // offsiteBackupDir resolves the OFF-MACHINE backup destination for the nightly
 // backup worker. SIGNALDECK_OFFSITE_BACKUP_DIR overrides; the value "off" (or
-// "none") explicitly disables the offsite copy. Default: the iCloud Drive
-// SignalDeckBackups folder (verified to exist), so a total-loss event — the
-// single SQLite file on the one Mac dying — is survivable out of the box. An
-// unresolvable home dir degrades to disabled (local backup still runs).
+// "none") explicitly disables the offsite copy. An unresolvable home dir
+// degrades to disabled (local backup still runs).
+//
+// The iCloud Drive default is macOS ONLY. That path is a synced volume on a
+// Mac, but on Windows "~/Library/Mobile Documents/com~apple~CloudDocs" is just
+// a name: the process happily created ordinary folders under C:\Users\...\ and
+// copied 2.7 GB of "offsite" backups onto the SAME physical disk as the
+// database, with nothing syncing them anywhere. That is worse than having no
+// offsite copy, because the dashboard then reports one.
+//
+// So off-machine backup is OPT-IN on every other platform. Silence beats a
+// destination that only looks like it leaves the machine.
 func offsiteBackupDir() string {
 	switch v := strings.TrimSpace(os.Getenv("SIGNALDECK_OFFSITE_BACKUP_DIR")); strings.ToLower(v) {
 	case "off", "none", "-":
 		return ""
 	case "":
+		if runtime.GOOS != "darwin" {
+			return ""
+		}
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return ""

@@ -32,7 +32,17 @@ DIR="$SD/data/backups"
 # i.e. the SAME physical disk as the database, while /api/quality happily
 # reported offsiteConfigured:true. Point SIGNALDECK_OFFSITE_DIR at an external
 # drive (or any genuinely separate volume) and this becomes true again.
-OFFSITE="${SIGNALDECK_OFFSITE_DIR:-$HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups}"
+#
+# The iCloud default therefore applies on macOS ONLY. Everywhere else offsite is
+# opt-in: an unset destination copies nothing and says so, which is honest,
+# where the old default copied 2.7GB onto C: and looked like it worked.
+if [ -n "${SIGNALDECK_OFFSITE_DIR:-}" ]; then
+  OFFSITE="$SIGNALDECK_OFFSITE_DIR"
+elif [ "$(uname -s)" = "Darwin" ]; then
+  OFFSITE="$HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups"
+else
+  OFFSITE=""
+fi
 # Retention sized to fit BUDGET_MB (2026-07-26, after data/backups hit 13GB:
 # the compress path shipped 07-25 but market-close.sh — its only trigger —
 # doesn't fire on weekends, so it never ran while the in-daemon failsafe kept
@@ -188,8 +198,17 @@ if [ "$PRUNE_ONLY" = true ]; then
 fi
 
 # Offsite copy (best-effort, atomic tmp+rename).
-if mkdir -p "$OFFSITE" 2>/dev/null; then
-  if caffeinate -i cp "$TARGET" "$OFFSITE/.tmp-$TS" 2>>"$LOG" && mv "$OFFSITE/.tmp-$TS" "$OFFSITE/$(basename "$TARGET")"; then
+#
+# `caffeinate` is macOS-only; on any other platform it is not on PATH and the
+# whole copy silently failed as "command not found". Use it only where it
+# exists, so the copy itself is portable.
+NOSLEEP=""
+command -v caffeinate >/dev/null 2>&1 && NOSLEEP="caffeinate -i"
+
+if [ -z "$OFFSITE" ]; then
+  log "offsite SKIPPED: no destination configured (set SIGNALDECK_OFFSITE_DIR to an external volume)"
+elif mkdir -p "$OFFSITE" 2>/dev/null; then
+  if $NOSLEEP cp "$TARGET" "$OFFSITE/.tmp-$TS" 2>>"$LOG" && mv "$OFFSITE/.tmp-$TS" "$OFFSITE/$(basename "$TARGET")"; then
     sqlite3 "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_offsite','$(date +%s)');" 2>>"$LOG"
     log "offsite OK"
     compress_and_prune "$OFFSITE"
