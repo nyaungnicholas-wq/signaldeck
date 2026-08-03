@@ -174,6 +174,10 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 		// carries no claimable skill, so we still frame it honestly.
 		"live":       true,
 		"trackLabel": "live out-of-sample — calibrated predictions vs realized outcomes",
+		// C-2 (2026-08-02 re-audit): /api/calibration publishes the same record
+		// at a wider, ungated scope and therefore different numbers. Naming that
+		// here is what stops the pair reading as a contradiction.
+		"scopeNote": trackRecordScopeNote,
 		// #20: the predictions record is graded on the currently-tracked
 		// universe's bars — the survivorship label travels with the stats.
 		"survivorship": survivorshipBlock(),

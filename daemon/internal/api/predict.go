@@ -75,6 +75,10 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 		"live":        live,
 		"liveRecord":  map[string]any{"independentN": liveN, "winRate": liveWin},
 		"trackLabel":  trackLabel,
+		// C-2 (2026-08-02 re-audit): /api/track-record publishes the same
+		// record at a different scope and therefore different numbers. Naming
+		// that here is what stops the pair reading as a contradiction.
+		"scopeNote": calibrationScopeNote,
 	}
 	if gradable {
 		out["brierSkill"] = skill
