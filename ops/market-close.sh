@@ -4,19 +4,24 @@
 # contention with the app (see ops/signaldeck-backup-offline.sh header).
 set -u
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# pgrep does not exist under Git Bash, so both liveness checks below read as
+# "already exited": the wait loop broke on its first pass and the escalation
+# never fired, whatever the daemon was doing.
+# shellcheck source=lib-portable.sh
+. "$SD/ops/lib-portable.sh"
 /bin/bash "$SD/ops/signaldeck-ctl.sh" stop
 # Graceful daemon shutdown (worker drain + WAL checkpoint) can take a minute —
 # a fixed 8s sleep made the backup's is-daemon-alive safety check skip the run
 # (seen live 2026-07-24). Wait for the process to actually exit, capped at 3m.
 for _ in $(seq 1 90); do
-  pgrep -x signaldeckd >/dev/null 2>&1 || break
+  sd_is_running signaldeckd || break
   sleep 2
 done
 # Hung-drain escalation (seen live 2026-07-24: daemon sat 30+ min post-TERM,
 # parked at 0% CPU — a stuck worker drain). SQLite under WAL is crash-safe,
 # and a zombie daemon would also break the next morning's kickstart, so after
 # the 3-minute grace we force-kill.
-if pgrep -x signaldeckd >/dev/null 2>&1; then
+if sd_is_running signaldeckd; then
   echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: daemon ignored TERM for 3m — SIGKILL" >> "$SD/logs/backup-offline.log"
   pkill -9 -x signaldeckd
   sleep 5

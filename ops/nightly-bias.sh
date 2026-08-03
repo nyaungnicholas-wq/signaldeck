@@ -16,6 +16,8 @@
 set -uo pipefail
 
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib-portable.sh
+. "$SD/ops/lib-portable.sh"
 DAEMON="$SD/daemon"
 LOG="$SD/logs/nightly-bias.log"
 DB="$SD/data/signaldeck.db"
@@ -132,7 +134,7 @@ fi
 
 if [ "$fail" -ne 0 ]; then
   echo "ACTION REQUIRED: nightly bias regression found a problem (see above)"
-  osascript -e 'display notification "Nightly bias regression failed — see logs/nightly-bias.log" with title "SignalDeck"' 2>/dev/null
+  sd_notify "SignalDeck" "Nightly bias regression failed — see logs/nightly-bias.log" 2>/dev/null
   exit 1
 fi
 echo "nightly bias regression: PASS"

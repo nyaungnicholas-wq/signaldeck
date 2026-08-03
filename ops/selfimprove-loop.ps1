@@ -148,7 +148,24 @@ function GateSpecs {
     @{ n = 'go-build';   c = 'cd daemon; go build ./... 2>&1' },
     @{ n = 'go-vet';     c = 'cd daemon; go vet ./... 2>&1' },
     @{ n = 'go-test';    c = 'cd daemon; go test ./... 2>&1' },
-    @{ n = 'py-tests';   c = 'cd tools; $f=0; foreach($m in "test_accuracy_registry","test_audit_register","test_deployment_drift","test_schema_contract_check","test_research_liveness"){ python -m unittest $m 2>&1; if($LASTEXITCODE -ne 0){$f=1} }; $global:LASTEXITCODE = $f' },
+    # The unittest list was hand-maintained and test_verify_backup.py was never
+    # added to it -- so the checks pinning the 2026-08-01 content-loss defect
+    # (a backup that passed quick_check while holding 14 of 261,164 ledger rows)
+    # ran nowhere. Discover the files instead of naming them, and run the
+    # script-style ones directly: test_verify_backup.py has a main(), not a
+    # TestCase, so `python -m unittest` reported "NO TESTS RAN" and exit 5.
+    @{ n = 'py-tests';   c = @'
+cd tools
+$f = 0
+foreach ($p in Get-ChildItem -Filter 'test_*.py' | Sort-Object Name) {
+  $m = $p.BaseName
+  $src = Get-Content $p.FullName -Raw
+  if ($src -match '(?m)^\s*class\s+\w+\(.*TestCase') { python -m unittest $m 2>&1 }
+  else { python $p.Name 2>&1 }
+  if ($LASTEXITCODE -ne 0) { Write-Output "GATE-FAIL: $m exit $LASTEXITCODE"; $f = 1 }
+}
+$global:LASTEXITCODE = $f
+'@ },
     @{ n = 'web-types';  c = 'cd web; npx tsc --noEmit 2>&1' },
     @{ n = 'web-lint';   c = 'cd web; npx eslint . --max-warnings 0 2>&1' },
     @{ n = 'web-build';  c = 'cd web; npx next build 2>&1' }

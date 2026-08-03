@@ -37,6 +37,8 @@ set -uo pipefail
 # here, so off the original Mac this resolved nowhere and the anchor never
 # published.
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib-portable.sh
+. "$SD/ops/lib-portable.sh"
 LOG="$SD/logs/anchor-publish.log"
 REPO="${SIGNALDECK_ANCHOR_REPO:-$HOME/.signaldeck/anchor-publish}"
 API="http://127.0.0.1:8322"
@@ -74,7 +76,7 @@ AUTH=()
   line=$(curl -sf --max-time 10 -H "X-Signaldeck: 1" ${AUTH[@]+"${AUTH[@]}"} "$API/api/ledger/anchors?limit=1" \
     | jq -r '.anchors[0].publish // empty')
   if [ -z "$line" ]; then
-    line=$(python3 - "$SD/data/signaldeck.db" <<'PY'
+    line=$("$(sd_py)" - "$SD/data/signaldeck.db" <<'PY'
 import hashlib, sqlite3, sys
 con = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
 row = con.execute("SELECT created_at, ledger_seq, ledger_count, head_hash, alg,"
@@ -114,7 +116,7 @@ PY
   #    same construction as the Go side, so this neither needs the daemon up
   #    nor an API credential, and a broken link publishes nothing.
   touch "$REPO/prereg.log"
-  pline=$(python3 - "$SD/data/signaldeck.db" <<'PY'
+  pline=$("$(sd_py)" - "$SD/data/signaldeck.db" <<'PY'
 import hashlib, sqlite3, sys
 con = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
 rows = con.execute("SELECT seq, ts, kind, spec_hash, prev_hash, entry_hash, note"

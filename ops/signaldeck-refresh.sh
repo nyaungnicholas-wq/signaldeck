@@ -12,6 +12,8 @@
 # also fires on the first wake after close), or manually: `signaldeck refresh`.
 set -u
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib-portable.sh
+. "$SD/ops/lib-portable.sh"
 DB="$SD/data/signaldeck.db"
 LOG="$SD/logs/refresh.log"
 DOMAIN="gui/$(id -u)"
@@ -20,15 +22,15 @@ KEEP="${SIGNALDECK_SWEEP_KEEP:-150}"          # broad breadth sample kept after 
 FORCE="${1:-}"                                 # pass "force" to ignore the once-per-day guard
 
 log(){ echo "$(date '+%F %T') $*" >> "$LOG"; }
-q(){ sqlite3 "$DB" "$1" 2>/dev/null; }                 # read
-qw(){ sqlite3 -cmd ".timeout 60000" "$DB" "$1"; }      # write — waits up to 60s for the lock
+q(){ sd_sqlite_read "$DB" "$1" 2>/dev/null; }          # read
+qw(){ sd_sqlite "$DB" "$1"; }                          # write — waits for the lock
 
 # ── 1. target trading day (PT): today if weekday & >=13:05, else prior weekday ──
 dow=$(date +%u); hnow=$((10#$(date +%H)*60 + 10#$(date +%M)))
 target=$(date +%F)
 if [ "$dow" -ge 6 ] || { [ "$dow" -le 5 ] && [ "$hnow" -lt 785 ]; }; then
   d=1; while [ "$d" -le 7 ]; do
-    [ "$(date -v-${d}d +%u)" -le 5 ] && { target=$(date -v-${d}d +%F); break; }
+    [ "$(sd_dow_days_ago $d)" -le 5 ] && { target=$(sd_days_ago $d); break; }
     d=$((d+1))
   done
 fi
@@ -49,14 +51,14 @@ log "=== sweep start (trading day $target, maxwait ${MAXWAIT}s) ==="
 
 # ── 2. reactivate the WHOLE known universe BEFORE (re)starting the daemon, so ──
 #      the daemon's startup universe-poller pass covers the full set.
-was_up=$(pgrep -f 'bin/signaldeckd' >/dev/null && echo yes || echo no)
+was_up=$(sd_is_running signaldeckd && echo yes || echo no)
 q "UPDATE symbols SET active=1 WHERE market='stocks';"
 log "reactivated full universe: $(q 'SELECT count(*) FROM symbols WHERE active=1;') active"
 
 # ── 3. ensure the daemon is running (background priority via its plist) ──
 if [ "$was_up" = "no" ]; then
-  launchctl kickstart "$DOMAIN/com.signaldeck.daemon" 2>/dev/null
-  for i in $(seq 1 30); do pgrep -f 'bin/signaldeckd' >/dev/null && break; sleep 1; done
+  sd_svc_start com.signaldeck.daemon
+  for i in $(seq 1 30); do sd_is_running signaldeckd && break; sleep 1; done
 fi
 react_ts=$(date +%s)
 
@@ -77,9 +79,9 @@ log "processing window: $(($(date +%s)-react_ts))s elapsed"
 #      (the daemon holds the single SQLite writer while backfilling; pruning under
 #      that lock stalls — which is exactly how a past sweep got stuck. SIGKILL
 #      fallback guarantees it's down.) We restart it in step 8 only if it was up.
-launchctl kill TERM "$DOMAIN/com.signaldeck.daemon" 2>/dev/null
-for i in $(seq 1 40); do pgrep -f 'bin/signaldeckd' >/dev/null || break; sleep 1; done
-if pgrep -f 'bin/signaldeckd' >/dev/null; then pkill -9 -f 'bin/signaldeckd'; sleep 1; fi
+sd_svc_stop com.signaldeck.daemon
+for i in $(seq 1 40); do sd_is_running signaldeckd || break; sleep 1; done
+if sd_is_running signaldeckd; then sd_kill_hard signaldeckd; sleep 1; fi
 log "daemon stopped for a clean prune"
 
 # ── 6. prune back to lean kept set; qw() waits for the lock; verify + retry once ──
@@ -118,12 +120,12 @@ notify_remote() {
   fi
   if [ -n "$disc" ]; then
     curl -sS -m 10 -H 'Content-Type: application/json' \
-      -d "$(python3 -c 'import json,sys; print(json.dumps({"content": sys.argv[1][:1900]}))' "$msg")" \
+      -d "$("$(sd_py)" -c 'import json,sys; print(json.dumps({"content": sys.argv[1][:1900]}))' "$msg")" \
       "$disc" >/dev/null 2>&1
   fi
   if [ -n "$hook" ]; then
     curl -sS -m 10 -H 'Content-Type: application/json' \
-      -d "$(python3 -c 'import json,sys,time; print(json.dumps({"title":"SignalDeck storage","body":sys.argv[1],"kind":"storage","ts":int(time.time())}))' "$msg")" \
+      -d "$("$(sd_py)" -c 'import json,sys,time; print(json.dumps({"title":"SignalDeck storage","body":sys.argv[1],"kind":"storage","ts":int(time.time())}))' "$msg")" \
       "$hook" >/dev/null 2>&1
   fi
 }
@@ -142,7 +144,7 @@ if [ -x "$SDMAINT" ]; then
     notify_remote "SignalDeck storage budget exceeded (nightly sweep, $target):
 $over
 Full report in logs/refresh.log"
-    osascript -e "display notification \"A storage surface outgrew its budget — see logs/refresh.log.\" with title \"SignalDeck storage\"" >/dev/null 2>&1
+    sd_notify "SignalDeck storage" "A storage surface outgrew its budget — see logs/refresh.log."
   else
     log "storage report: all surfaces within budget"
   fi
@@ -153,7 +155,7 @@ fi
 # ── 8. restart the daemon only if it was already running before the sweep
 #      (a manual refresh during market hours); otherwise leave it off. ──
 if [ "$was_up" = "yes" ]; then
-  launchctl kickstart "$DOMAIN/com.signaldeck.daemon" 2>/dev/null
+  sd_svc_start com.signaldeck.daemon
   log "daemon restarted (was up before the sweep)"
 fi
 log "=== sweep done for $target (active=$after) ==="

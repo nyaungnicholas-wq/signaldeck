@@ -13,6 +13,8 @@
 set -uo pipefail
 
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib-portable.sh
+. "$SD/ops/lib-portable.sh"
 LOG="$SD/logs/restore-rehearsal.log"
 ENV_FILE="$SD/daemon/.env"
 
@@ -46,7 +48,7 @@ fi
 
 # Local fallback — fires regardless, so the machine's operator sees the
 # failure even when no remote transport is configured yet.
-osascript -e 'display notification "Restore rehearsal FAILED — newest backup may not be restorable. See logs/restore-rehearsal.log." with title "SignalDeck DR"' >/dev/null 2>&1
+sd_notify "SignalDeck DR" "Restore rehearsal FAILED — newest backup may not be restorable. See logs/restore-rehearsal.log."
 
 if [ "$PAGED" -eq 1 ]; then
   echo "$(date '+%Y-%m-%dT%H:%M:%S') PAGE SENT: restore rehearsal failed (exit $RC) — notified via daemon/.env transport" >>"$LOG"

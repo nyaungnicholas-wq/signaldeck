@@ -143,6 +143,11 @@ test.describe("navigation (unauthenticated)", () => {
 test.describe("offline banner", () => {
   test("appears when offline, clears on reconnect + retry", async ({ page, context }) => {
     await loginAsSmokeUser(context);
+    // The first-run tour is a modal overlay that swallows clicks; a real user
+    // dismisses it once. This test clicks Retry, so it needs the same guard the
+    // other click-driven specs already use — without it the tour dialog
+    // intercepts the pointer event and the click never lands.
+    await context.addInitScript(() => localStorage.setItem("sd-tour-done", "1"));
     await page.goto("/");
     // Authed: we must stay on the dashboard, not bounce to /login.
     await expect(page.locator("header nav").first()).toBeVisible();

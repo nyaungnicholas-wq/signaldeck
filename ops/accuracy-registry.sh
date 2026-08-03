@@ -15,6 +15,8 @@ set -uo pipefail
 # recorded on 2026-07-29 as though it were current. A stale refusal is worse
 # than a loud failure: it looks like the honesty machinery working.
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib-portable.sh
+. "$SD/ops/lib-portable.sh"
 
 # python3 is not on PATH under Git Bash on Windows; shasum is a Perl script that
 # ships with macOS and is often absent elsewhere. Resolve both, or fail loudly.
@@ -279,7 +281,7 @@ PY
 )
   { echo "ACCURACY REGISTRY REFUSED:"; echo "$refusal_text"; } >> "$LOG"
   notify_remote "SignalDeck accuracy registry — $refusal_text"
-  osascript -e "display notification \"Grading REFUSED — README accuracy tables removed. See the log.\" with title \"SignalDeck accuracy\"" >/dev/null 2>&1
+  sd_notify "SignalDeck accuracy" "Grading REFUSED — README accuracy tables removed. See the log."
   exit 1
 fi
 
@@ -445,7 +447,7 @@ if [ -n "$transitions" ]; then
   { echo "VERDICT TRANSITIONS:"; echo "$transitions"; } >> "$LOG"
   notify_remote "SignalDeck accuracy registry — verdict transition(s):
 $transitions"
-  osascript -e "display notification \"Verdict transition in the accuracy registry — see the log.\" with title \"SignalDeck accuracy\"" >/dev/null 2>&1
+  sd_notify "SignalDeck accuracy" "Verdict transition in the accuracy registry — see the log."
 fi
 
 # Alert only on a predictor that is actively contradicted by its own live record.
@@ -461,6 +463,6 @@ except Exception:
     print(0)
 ")
   if [ "${n:-0}" -gt 0 ]; then
-    osascript -e "display notification \"$n predictor(s) contradicted by their own live record — see the accuracy registry.\" with title \"SignalDeck accuracy\"" >/dev/null 2>&1
+    sd_notify "SignalDeck accuracy" "$n predictor(s) contradicted by their own live record — see the accuracy registry."
   fi
 fi
