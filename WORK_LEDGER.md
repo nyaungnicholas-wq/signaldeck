@@ -29,7 +29,8 @@ Repo: `C:\Users\Nicholas_N\Desktop\claude code\signaldeck`
 | 4 | Pre-publish scan / untracked paths | **NOT STARTED (gated by 3)** | Depends on a stable `web/` tree. |
 | 5 | Live equity ticks land in DB | **BLOCKED (time)** | Requires Mon–Fri 09:30–16:00 ET. Next window: Mon 2026-08-03 09:30 ET. |
 | 6 | Forced reconnect, no duplicate subs | **BLOCKED (time)** | Same window as Item 5; must run in a live session. |
-| 7 | Reverify revision resolvability | **ROOT CAUSE FOUND, not yet fixed** | `daemon/internal/api/version.go:27` |
+| 7 | Reverify revision resolvability | **PASS** | 5 new tests pass; `go vet` + `go build ./...` clean; committed `6c1e2b1` |
+| 7b | Clean *attributable* daemon build | **BLOCKED on concurrency** | Binary stamps `vcs.modified=true` — see below |
 | 8 | Supervise `tickstreamd` + backups | NOT STARTED | Reboot-survival test needs owner authorization. |
 | 4.1–4.5 | Go daemon refactor (Phases 4) | NOT STARTED | Requires baseline benchmark first. |
 | 5.A–5.E | Quant/data audit (Phase 5) | NOT STARTED | |
@@ -144,11 +145,70 @@ that was rebased away, force-pushed over, or lives only on a deleted branch stil
 reports `true`. That is precisely the "trusts a build-time `resolvable: true`"
 defect.
 
-Next concrete action: verify at request time (or via a freshness-bounded cache
-that preserves truth), with an explicit timeout and a failure mode that degrades
-to *unknown/unresolved* rather than to a false `true`; add a test proving a
-stamped-but-non-resolving revision reports unresolved while a valid one succeeds.
-Must not weaken the dirty-build or publication refusals.
+**FIXED — commit `6c1e2b1`.** `lineage.RevisionResolvable(ctx)` now asks git, per
+request, whether the stamp still names a commit the repository contains. It fails
+closed exactly like the Python precedent it mirrors
+(`tools/accuracy_registry.py:518 revision_resolvable()`): empty stamp, dirty
+build, non-40-hex stamp, absent git, directory that is not a checkout, cancelled
+context, or a 2s timeout all report **false**, never true.
+
+Deliberately **not cached**: a cached `true` is precisely the stale claim the
+field exists to rule out, and `/api/version` is a diagnostic, not a hot path.
+The prompt permitted a freshness-bounded cache; declining it is the stricter and
+simpler option.
+
+Files: `daemon/internal/lineage/lineage.go` (+`RevisionResolvable`, testable core
+`revisionResolvable`, `revisionResolveTimeout`), `daemon/internal/api/version.go`
+(endpoint now calls it with the request context),
+`daemon/internal/lineage/resolvable_test.go` (new).
+
+Verification:
+
+```
+cd daemon && go test ./internal/lineage/... -run TestRevisionResolvable -v   -> exit 0, 5/5 PASS
+cd daemon && go test ./internal/lineage/...                                  -> ok  1.814s
+cd daemon && go test ./internal/api/...                                      -> ok 19.635s
+cd daemon && go vet ./internal/lineage/... ./internal/api/...                -> exit 0
+cd daemon && go build ./...                                                  -> exit 0
+```
+
+The acceptance criterion is `TestRevisionResolvableRejectsAStampThatNoLongerResolves`:
+a clean, well-formed 40-hex stamp that the repository does not contain. Under the
+old build-time form that input returned `true`; it now returns `false`.
+Dirty-build and empty-stamp refusals are preserved and covered by
+`TestRevisionResolvableRejectsDirtyAndEmptyStamps`.
+
+## Item 7b — BLOCKED: cannot produce a clean attributable binary
+
+The post-commit rebuild runs and succeeds, but the binary is **not attributable**:
+
+```
+cd daemon && go build -ldflags "-X ...lineage.ldflagsRev=$(git rev-parse HEAD)" \
+  -o ../bin/signaldeckd.exe ./cmd/signaldeckd      -> exit 0
+go version -m ../bin/signaldeckd.exe
+  build vcs.revision=6c1e2b1e39405370506da1d783a5b225f70d0eaf
+  build vcs.modified=true        <-- dirty
+```
+
+`vcs.modified` reflects the **whole working tree**, and the concurrent session's
+uncommitted `web/` changes keep it dirty. So `RevisionStamp()` yields
+`6c1e2b1e...+dirty` and `RevisionResolvable()` correctly reports **false**.
+
+Forcing this green would mean committing another session's in-flight work, which
+is not mine to commit. Resume once `web/` is quiescent and its owner has
+committed: re-run the build above and confirm `vcs.modified=false`.
+
+## Environment limitation — race detector unavailable
+
+`go test -race` cannot run on this machine: `-race` requires cgo and there is no
+C compiler on PATH (`gcc`/`clang` both absent). Recorded rather than skipped
+quietly, because **Phase 4 requires `go test -race`** on the scheduler, event bus,
+and integrity orchestrator. Install a C toolchain (mingw-w64 / TDM-GCC) before
+Phase 4, then `CGO_ENABLED=1 go test -race ./...`.
+
+The Item 7 change adds no new shared mutable state — `readBuild()` already
+serialises through `sync.Once`, and `revisionResolvable` is a pure function plus
+an `exec` call — so no race claim is being made or needed here.
 
 ---
 
