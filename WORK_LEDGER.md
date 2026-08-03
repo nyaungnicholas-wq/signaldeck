@@ -571,3 +571,82 @@ weakened, suppressed, re-pinned, or bypassed. The one semantics change is argued
 above and makes the check strictly more accurate, not more permissive; the
 failure it exists to catch is still caught, twice. No lint rule was disabled, no
 suppression comment added, no `SIGNALDECK_ALLOW_DIRTY_BUILD` set.
+
+---
+
+# Session 2026-08-02 23:00–23:30 PDT — "fix the rest"
+
+The concurrent session committed `web/` and `daemon/` and moved into `ops/`,
+which freed the surfaces below. It is running its own remediation pass
+(`REMEDIATION_2026-08-03.md`) and is presently building
+`ops/install-windows-tasks.ps1` + `ops/signaldeck-ctl.sh` — i.e. it is doing
+Item 8 and the macOS-only script port. Those are deliberately left to it.
+
+## Closed this session
+
+| # | What | Evidence |
+|---|---|---|
+| **Item 3** | eslint gate | `cd web && npx eslint . --max-warnings 0` → **exit 0** |
+| **C-2** | the two live-record surfaces now name each other | `6082e17`, 2 tests |
+| **A-2** | `/api/honesty` day-declusters its IC interval | `ddde1f7`, 3 tests |
+| **C-1** | calibration states the floor below which a bin is not evidence | `11afe1a` |
+| **F-8** | closed by inspection — no route ever existed, nothing references it | agrees with the other session's finding 6 |
+
+### A-2 — the correction existed; it was never called here
+`/api/honesty` published an IC over 880 independent symbol-days spanning **five**
+market days with no distinct-day count and no interval. Dedup to one row per
+(symbol, UTC-day) kills intraday pseudo-replication and leaves the real problem
+untouched: on one day every symbol shares one move.
+
+The IC is a *correlation*, so `clusterstat.DesignEffect` — defined on
+proportions — would be the wrong instrument, and shipping one anyway is exactly
+the "looks corrected" failure that package warns about. `BootstrapStat`
+resamples **whole days** and recomputes the statistic; its own doc names
+correlations as the case it exists for.
+
+**A real bug the test caught:** `BootstrapStat` accepts any `numDays >= 2` — the
+`MinDistinctDays` refusal lives in `BootstrapDays`, not in it. My first version
+inherited no floor and produced a `[1.0, 1.0]` interval off five market moves.
+The floor is now enforced explicitly at the call site, with a comment saying
+why. Corrected: the interval. Unchanged: the point estimate.
+
+### C-2 — both numbers were right; neither payload admitted the other existed
+Paired `scopeNote` constants defined side by side (the failure mode is the two
+surfaces drifting apart in what they claim about each other). No figure moved.
+Both notes end on the verdict the two scopes agree about — no measured
+probabilistic skill on either reading — because that agreement is what makes the
+difference safe to publish.
+
+### C-1 — a reporting gap, not a gate breach
+A bin of N=2 shipped in the same array, same shape, as one of N=3,469. Every bin
+already carried its `N`; nothing said what `N` is too thin to read. Publishes
+`binMinN=30` — at n=30 the binomial SE on a proportion is ~9.1pp, already wider
+than the miscalibration the curve exists to show — and a note built *from* the
+constant so the two cannot drift. Explicitly **not** a `MinCalibrationPairs`
+breach: that gate governs fitting and is holding. This gates reading.
+
+Worth recording: `web/.../ReliabilityDiagram.tsx` already sizes each dot by `N`,
+so the primary consumer was never treating the bins as equal. The gap was the
+API contract, which is what a *new* consumer reads.
+
+## Still open, with the honest reason
+
+| Item | Why | Resume |
+|---|---|---|
+| **F-2** offsite media | One physical disk. `Get-PhysicalDisk` → DeviceId 0 only. | attach an external drive |
+| **Items 5, 6** live ticks | Market shut. | Mon 2026-08-03 06:30 PDT |
+| **Item 7b** attributable build | Verified again this session: `vcs.modified=true` from the other session's 15 uncommitted paths. | after it commits |
+| **Item 4** pre-publish scan | Fails on exactly one line — `ops/` holds files absent from HEAD (`lib-portable.sh`, `test-lib-portable.sh`, …). Everything else in the scan passes. | after it commits |
+| **F-6** `dataset_revised` | Needs the grading surface in `store.go`/`pipeline`, which the other session is editing now. Nothing consumes the event today. | after it lands |
+| **Item 8** supervision | The other session is writing `ops/install-windows-tasks.ps1`. | its call, not mine |
+| 3 symbols lack a naive baseline | Real in-universe data gap, not a code defect. | — |
+
+## Integrity statement
+No check, threshold, assertion, refusal, quarantine, or provenance rule was
+weakened, suppressed, re-pinned, or bypassed. A-2 and C-1 both ADD refusals.
+No lint rule was disabled, no suppression comment added, no
+`SIGNALDECK_ALLOW_DIRTY_BUILD` set by me — note the running daemon was found
+under it, as the other session records. `gofmt` reports ~48 pre-existing
+unformatted files in `internal/api` (a CRLF artifact present at HEAD); I
+formatted only the files I added and did not reformat the package, which would
+have produced a large diff against an active editor.
