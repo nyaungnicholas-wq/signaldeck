@@ -64,12 +64,24 @@ log() { echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> "$LOG"; }
 # refill the disk. market-close.sh ignores our exit code, so the banner here
 # (same channel as the H9 silence banner below) is what reaches a human.
 assert_budget() {
-  local used
+  local used managed unmanaged
   used=$(du -sm "$DIR" 2>/dev/null | cut -f1)
+  # Split MANAGED from UNMANAGED before blaming retention. Only timestamped
+  # signaldeck-YYYYmmdd-HHMMSS files are rotated; ad-hoc snapshots
+  # (signaldeck-premaint-*, etc.) are deliberately left alone and still count
+  # toward du. On 2026-08-03 the breach was 5776MB managed (under budget, so
+  # prune WAS holding) plus a single 583MB ad-hoc snapshot — while the alert
+  # said "compression/prune is not holding", which points at the wrong thing.
+  managed=$(du -cm "$DIR"/signaldeck-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-*.db* 2>/dev/null | tail -1 | cut -f1)
+  unmanaged=$(( ${used:-0} - ${managed:-0} ))
   if [ "${used:-0}" -gt "$BUDGET_MB" ]; then
-    log "FAIL: backups footprint ${used}MB exceeds budget ${BUDGET_MB}MB — retention is not holding"
+    local verdict="retention is not holding"
+    if [ "${managed:-0}" -le "$BUDGET_MB" ]; then
+      verdict="rotation IS holding (${managed}MB managed); ${unmanaged}MB of ad-hoc snapshots pushed it over"
+    fi
+    log "FAIL: backups footprint ${used}MB exceeds budget ${BUDGET_MB}MB — $verdict"
     sd_notify "SignalDeck: backup footprint over budget" \
-      "data/backups is ${used} MB (budget ${BUDGET_MB} MB) — backup compression/prune is not holding."
+      "data/backups is ${used} MB (budget ${BUDGET_MB} MB) — $verdict."
     return 1
   fi
   log "budget OK: ${used:-0}MB of ${BUDGET_MB}MB"
