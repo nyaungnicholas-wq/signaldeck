@@ -280,12 +280,82 @@ name-literal counts land at 79/96/102 depending on the pattern used, and none is
 honest.** To confirm it, enumerate at runtime from the Agents page / worker
 registry on a configured instance rather than trusting any grep — including these.
 
-### Steps 3–5 — NOT STARTED
+## Phase 4 baseline (reproducible, required before edits)
 
-Integrity consolidation, event bus, and write-through cache are untouched. Step 3
-must begin by inventorying the actual health workers and tiers; given Steps 1–2
-were already done, the prompt's worker names and counts for Step 3 should be
-verified against the code before any consolidation is designed.
+Static extraction pairing each type's `Name()` literal with its `Interval()`:
+
+```
+workers with Name()+Interval(): 91   (+4 whose Interval is not a literal)
+TOTAL periodic wakeups/day:     10,941
+```
+
+So the claimed fleet of **93 is approximately right** (91 parsed + 4 unparsed =
+95 candidates, some conditional on configuration). Top consumers:
+
+| Worker | Interval | wakeups/day |
+|---|---|---:|
+| cache-warmer | 60s | 1,440 |
+| hud-sync | 1m | 1,440 |
+| signal-runner | 1m | 1,440 |
+| tv-quotes | 1m | 1,440 |
+| universe-live | 1m | 1,440 |
+| alert-runner / anomaly-scanner / downsampler / dq-auditor | 5m | 288 each |
+
+Five workers at 1m account for **7,200/day — 66% of all fleet wakeups.**
+
+## Step 3 — inventory done; consolidation MEASURED AS NET-NEGATIVE, not performed
+
+The prompt's list is stale and internally inconsistent, as it warned it might be.
+`honesty-gap` is **not a worker**: `cmd/signaldeckd/run.go:1592 honestyGapWorkers()`
+is a factory returning six workers, and `FeatureHealthGrader` (`feature-health`)
+is **already one of them** — yet the prompt lists `feature-health` separately as an
+addition to "the honesty-gap tiers". The true candidate set is ten workers, not
+the eleven the prompt implies:
+
+| Worker | Interval | wakeups/day |
+|---|---|---:|
+| dq-auditor | 5m | 288 |
+| canary | 1h | 24 |
+| source-audit | 1h | 24 |
+| model-health | 1h | 24 |
+| return-distribution | 2h | 12 |
+| feature-health | 6h | 4 |
+| dataset-version | 6h | 4 |
+| self-audit | 6h | 4 |
+| feature-redundancy | 24h | 1 |
+| price-validator | 24h | 1 |
+| **total** | | **386** |
+
+An `IntegrityOrchestrator` whose `NextFire` returns the earliest matured sub-check
+must still wake at the tightest sub-cadence — dq-auditor's 5m — so it wakes
+**288/day**. The saving is **386 → 288 = 98 wakeups/day, 0.9% of the fleet's
+10,941.**
+
+Against that 0.9%, the orchestrator would have to **reimplement inside one worker**
+everything the runner currently provides per worker for free: panic isolation,
+per-worker `runTimeoutFor` deadlines, independent `worker_runs` history (which the
+Agents page and the watchdog read), independent failure reporting and metrics. The
+prompt itself requires all of these be preserved. The failure mode of getting it
+wrong is *an integrity check silently stopping* — precisely the risk
+`cmd/signaldeckd/scheduled_assert.go` was written to guard against, and precisely
+what this codebase's honesty discipline exists to prevent.
+
+**Verdict: not implemented.** 0.9% wakeup reduction does not justify concentrating
+ten independently-isolated integrity checks behind one point of silent failure.
+This is the prompt's own rule applied — "reject changes that merely move cost or
+weaken semantics."
+
+**The measurement points at a different target.** `dq-auditor` alone is 288/day —
+75% of the whole integrity family — so its cadence is worth more than the entire
+consolidation. And Step 5's `cache-warmer` removal is **1,440/day, 13% of all fleet
+wakeups: 14× the entire Step 3 payoff**, with a detectable failure mode (stale
+cache) rather than a silent one. Recommended order: Step 5 first, then the 1m
+cohort, then revisit Step 3 only if profiling shows the wakeups themselves matter.
+
+### Steps 4–5 — NOT STARTED
+
+Event bus and write-through cache untouched. Step 5 is the highest-value remaining
+Phase 4 item by the baseline above.
 
 The Item 7 change adds no new shared mutable state — `readBuild()` already
 serialises through `sync.Once`, and `revisionResolvable` is a pure function plus
