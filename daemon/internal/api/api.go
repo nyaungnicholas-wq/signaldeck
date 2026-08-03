@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/backup"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
@@ -775,6 +776,68 @@ func (d Deps) honesty(w http.ResponseWriter, r *http.Request) {
 		resp["icNote"] = fmt.Sprintf("insufficient independent resolutions (%d/%d)", indepN, minIndependentN)
 	} else {
 		resp["ic"] = pearson(pts)
+	}
+	// A-2 (2026-08-02 re-audit): this payload published an IC over 880
+	// symbol-days spanning FIVE market days with no day-clustering treatment at
+	// all — no distinct-day count, no interval. Deduplicating to one row per
+	// (symbol, UTC-day) removes intraday pseudo-replication and leaves the
+	// larger problem untouched: on any given day every symbol shares one market
+	// move. /api/track-record already corrects for exactly this; the machinery
+	// was simply never called here.
+	//
+	// The IC is a correlation, not a proportion, so clusterstat.DesignEffect —
+	// which is defined on proportions — would be the wrong instrument, and
+	// publishing one anyway is the "looks corrected" failure the package warns
+	// about. BootstrapStat exists for this case: it resamples WHOLE DAYS and
+	// recomputes the statistic, so the interval resamples the same unit as
+	// every other surface.
+	//
+	// What is corrected is the INTERVAL, never the point estimate. Below the
+	// day floor the interval is withheld (null) with the reason attached — a
+	// withheld interval beats a narrow one.
+	byDay := map[int64][]int{}
+	var days []int64
+	for i, p := range pts {
+		d := p.Ts / 86400
+		if _, seen := byDay[d]; !seen {
+			days = append(days, d)
+		}
+		byDay[d] = append(byDay[d], i)
+	}
+	resp["distinctDays"] = len(days)
+	resp["minDistinctDays"] = clusterstat.MinDistinctDays
+	resp["clusterNote"] = fmt.Sprintf(
+		"%d independent symbol-days span only %d market days, and every symbol on one day shares that day's move. "+
+			"icCI is a percentile interval from resampling WHOLE DAYS with replacement (clusterstat.BootstrapStat), "+
+			"which is the correlation analogue of the design-effect correction /api/track-record applies to its "+
+			"proportion — a row-resampled interval would reproduce the too-narrow figure by a different route. "+
+			"The clustering governs the INTERVAL, not the point estimate: ic itself does not move.",
+		indepN, len(days))
+	// The floor is enforced HERE, deliberately: BootstrapStat is the low-level
+	// resampler and accepts any numDays >= 2, while BootstrapDays is the one
+	// that refuses below clusterstat.MinDistinctDays. Calling the resampler
+	// directly means inheriting that refusal explicitly — five days will
+	// happily produce a tight-looking interval off five market moves.
+	enoughDays := len(days) >= clusterstat.MinDistinctDays
+	if ci, ok := clusterstat.BootstrapStat(len(days), 2000, 0.05, func(idx []int) (float64, bool) {
+		sample := make([]honestyPt, 0, len(pts))
+		for _, di := range idx {
+			for _, pi := range byDay[days[di]] {
+				sample = append(sample, pts[pi])
+			}
+		}
+		if len(sample) < 3 {
+			return 0, false
+		}
+		return pearson(sample), true
+	}); ok && !gated && enoughDays {
+		resp["icCI"] = [2]float64{ci.Lo, ci.Hi}
+	} else {
+		resp["icCI"] = nil
+		resp["icCINote"] = fmt.Sprintf(
+			"interval withheld: %d distinct market days is below the %d-day floor for a cluster-robust interval "+
+				"(or the IC itself is gated) — the point estimate stands, the strength of it is not assertable",
+			len(days), clusterstat.MinDistinctDays)
 	}
 	writeJSON(w, resp)
 }
