@@ -19,12 +19,14 @@ DAEMON="com.signaldeck.daemon"
 TUNNEL="com.signaldeck.tunnel"
 WEB="com.signaldeck.web"
 
-kick() {
-  # ensure loaded, then start (idempotent)
-  launchctl bootstrap "$DOMAIN" "$LA/$1.plist" 2>/dev/null
-  launchctl kickstart "$DOMAIN/$1" 2>/dev/null
-}
-stopsvc() { launchctl kill TERM "$DOMAIN/$1" 2>/dev/null; }
+# launchd on macOS, Scheduled Tasks on Windows — see ops/lib-portable.sh.
+# Without this every start/stop here was a no-op off macOS, which is why
+# market-open and market-close could not drive the daemon on this machine.
+# shellcheck source=lib-portable.sh
+. "$REPO/ops/lib-portable.sh"
+
+kick() { sd_svc_start "$1"; }        # idempotent: loads if needed, then starts
+stopsvc() { sd_svc_stop "$1"; }
 
 # build_from_head — THE single implementation of the provenance-preserving
 # build, shared by `deploy` (interactive) and `launch` (the launchd program).
@@ -67,7 +69,19 @@ build_from_head() {
   BUILT_REV="$rev"
   return 0
 }
-running() { launchctl print "$DOMAIN/$1" 2>/dev/null | awk -F'= ' '/[^a-z]pid = /{print $2; exit}'; }
+running() {
+  if command -v launchctl >/dev/null 2>&1; then
+    launchctl print "$DOMAIN/$1" 2>/dev/null | awk -F'= ' '/[^a-z]pid = /{print $2; exit}'
+    return
+  fi
+  # Windows: report the daemon's own pid rather than the task's, since that is
+  # what every caller here actually wants to know.
+  case "$1" in
+    *.daemon) sd_is_running signaldeckd && echo "up" ;;
+    *.web)    sd_is_running node && echo "up" ;;
+    *)        schtasks //Query //TN "$(sd_task_name "$1")" 2>/dev/null | grep -qi running && echo "up" ;;
+  esac
+}
 
 case "${1:-status}" in
   up)
@@ -124,8 +138,9 @@ case "${1:-status}" in
     BUILT_REV=""
     build_from_head || { echo "deploy REFUSED (see above)."; exit 1; }
     rev="$BUILT_REV"
-    kick "$DAEMON"
-    launchctl kickstart -k "$DOMAIN/$DAEMON" >/dev/null 2>&1
+    # -k means "kill first": deploy must land on the NEW binary, so restart
+    # rather than merely start an already-running daemon.
+    sd_svc_restart "$DAEMON"
     for _ in $(seq 1 60); do
       curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8322/api/health && break
       sleep 1
@@ -164,11 +179,17 @@ case "${1:-status}" in
     ;;
   status)
     for s in "$DAEMON" "$TUNNEL" "$WEB"; do
-      if launchctl print "$DOMAIN/$s" >/dev/null 2>&1; then
-        p="$(running "$s")"
-        [ -n "$p" ] && echo "$s: running (pid $p)" || echo "$s: loaded-idle (stopped)"
+      if command -v launchctl >/dev/null 2>&1; then
+        if launchctl print "$DOMAIN/$s" >/dev/null 2>&1; then
+          p="$(running "$s")"
+          [ -n "$p" ] && echo "$s: running (pid $p)" || echo "$s: loaded-idle (stopped)"
+        else
+          echo "$s: not loaded"
+        fi
+      elif schtasks //Query //TN "$(sd_task_name "$s")" >/dev/null 2>&1; then
+        [ -n "$(running "$s")" ] && echo "$s: running" || echo "$s: registered-idle (stopped)"
       else
-        echo "$s: not loaded"
+        echo "$s: no scheduled task — run ops/install-windows-tasks.ps1"
       fi
     done
     ;;

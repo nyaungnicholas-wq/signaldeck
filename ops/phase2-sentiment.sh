@@ -7,6 +7,8 @@
 # to ask.
 set -uo pipefail
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib-portable.sh
+. "$SD/ops/lib-portable.sh"
 LOG="$SD/logs/phase2-sentiment.log"
 {
   echo "──────── $(date '+%Y-%m-%dT%H:%M:%S') ────────"
@@ -17,5 +19,5 @@ LOG="$SD/logs/phase2-sentiment.log"
 # data" banner is how a real alert gets ignored later.
 if tail -20 "$LOG" | grep -qE "^VERDICT: (REAL SPLIT|NO SPLIT)"; then
   v=$(tail -20 "$LOG" | grep -E "^VERDICT:" | head -1)
-  osascript -e "display notification \"$v\" with title \"SignalDeck Phase 2\"" >/dev/null 2>&1
+  sd_notify "SignalDeck Phase 2" "$v"
 fi

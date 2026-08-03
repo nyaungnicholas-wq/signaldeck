@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -156,14 +157,49 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	frozen, noNull, dropped := 0, 0, 0
+	frozen, noNull, dropped, abstained := 0, 0, 0, 0
+	// WHICH calls lack a baseline, not just how many. The refusal below is a
+	// permanent red until the gap is closed, and "3/1151" gives nobody a handle
+	// on which three — so the gate fired every pass for days with no way to act
+	// on it. A count is an alarm; the identities are the fix.
+	var noNullWho []string
+	// Loaded once, and only if a gap actually appears — the happy path pays
+	// nothing for diagnostics it will not print.
+	var names map[int64]string
+	symName := func(id int64) string {
+		if names == nil {
+			names, _ = w.St.SymbolNameMap(ctx)
+			if names == nil {
+				names = map[int64]string{}
+			}
+		}
+		if s, ok := names[id]; ok && s != "" {
+			return s
+		}
+		return fmt.Sprintf("sym%d", id)
+	}
 	for _, c := range calls {
-		c.NaiveLabel = w.naiveLabel(load(c.SymbolID, c.Ts-int64(volLookbackDays)*86400), c)
+		var degenerate bool
+		c.NaiveLabel, degenerate = w.naiveLabel(load(c.SymbolID, c.Ts-int64(volLookbackDays)*86400), c)
 		if c.NaiveLabel == "" {
 			// The store would refuse this write anyway; skip it here so the pass
 			// still resolves due outcomes and reports the gap at the end rather
 			// than aborting on the first uncomputable baseline.
+			//
+			// A DEGENERATE null is not a gap. A null with no direction cannot
+			// grade anything, so declining to freeze the row is the honest
+			// outcome, not a coverage failure — counting it as one made the
+			// refusal permanent and therefore meaningless.
+			if degenerate {
+				abstained++
+				continue
+			}
 			noNull++
+			if len(noNullWho) < 20 {
+				noNullWho = append(noNullWho, fmt.Sprintf("%s/%s@%s",
+					symName(c.SymbolID), c.Kind,
+					time.Unix(c.Ts, 0).UTC().Format("2006-01-02")))
+			}
 			continue
 		}
 		isNew, err := w.St.InsertRegimeOutcome(ctx, c)
@@ -245,8 +281,8 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	summary := fmt.Sprintf("froze %d regime calls (%d without a naive baseline), resolved %d (%d wrong, %d high-conviction postmortems)",
-		frozen, noNull, resolved, misses, pms)
+	summary := fmt.Sprintf("froze %d regime calls (%d without a naive baseline, %d abstained on a tied null), resolved %d (%d wrong, %d high-conviction postmortems)",
+		frozen, noNull, abstained, resolved, misses, pms)
 	// HARD REFUSAL 2 — partial coverage is not a matched null. If any call in
 	// this pass was frozen without a baseline, the benchmark denominator is a
 	// self-selected subset of the rows the model is scored on. Resolution work
@@ -254,8 +290,16 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 	// lands as a FAILED worker_runs row so the gap is on the record instead of
 	// being tolerated forever.
 	if noNull > 0 {
-		return summary, fmt.Errorf("%d/%d frozen calls carry no naive-persistence baseline: "+
-			"the null is unmatched for this pass", noNull, len(calls))
+		who := strings.Join(noNullWho, ", ")
+		if noNull > len(noNullWho) {
+			who += fmt.Sprintf(", … (%d more)", noNull-len(noNullWho))
+		}
+		// Also on the DQ feed, where a human looking at data quality will find it
+		// without reading worker_runs detail.
+		_ = w.St.InsertDQ(ctx, md.DQEvent{Ts: nowUnix, Kind: "regime_outcome_error",
+			Detail: fmt.Sprintf("no naive baseline for %d/%d calls: %s", noNull, len(calls), who)})
+		return summary, fmt.Errorf("%d/%d frozen calls carry no naive-persistence baseline "+
+			"(%s): the null is unmatched for this pass", noNull, len(calls), who)
 	}
 	return summary, nil
 }
@@ -287,13 +331,22 @@ func barIndexAt(ts []int64, at int64) int {
 // the two are expected to coincide (this package's own caveats say the skill IS
 // persistence), and the grader must be able to observe that rather than assume
 // it.
-func (w *RegimeOutcomeWorker) naiveLabel(sr *series, c store.RegimeCall) string {
+// The second return distinguishes the two reasons for "": a genuine DATA GAP
+// (no series, no bar at or before the call) from a DEGENERATE statistic — the
+// current value sitting exactly on its own trailing median, which has no
+// direction. Both leave the row unfrozen, but only the first is a coverage
+// failure. Measured 2026-08-03: GOOGL/liquidity21 had cur and med equal to the
+// bit (23.012578864499954), because `window = 200` makes the inclusive window
+// 201 elements, so the median IS an element of it and exact ties are
+// structural, not floating-point luck. Counting an undefined null as a missing
+// one kept the worker permanently red for something nobody can fix.
+func (w *RegimeOutcomeWorker) naiveLabel(sr *series, c store.RegimeCall) (string, bool) {
 	if sr == nil {
-		return ""
+		return "", false
 	}
 	t := barIndexAt(sr.ts, c.Ts)
 	if t < 0 {
-		return ""
+		return "", false
 	}
 	var lbl string
 	var ok bool
@@ -306,12 +359,15 @@ func (w *RegimeOutcomeWorker) naiveLabel(sr *series, c store.RegimeCall) string 
 		// return index t-1 aligns to bar index t, exactly as the resolver does
 		lbl, ok = structregime.NaiveVol21At(barReturns2(sr.closes), t-1)
 	default:
-		return ""
+		return "", false // an unknown kind is not a data gap we can close
 	}
 	if !ok {
-		return ""
+		// The series and the call bar were both present, so the inputs were
+		// adequate; the statistic itself is undefined (a tie, or a NaN window).
+		// That is an abstention, not missing data.
+		return "", true
 	}
-	return lbl
+	return lbl, false
 }
 
 // regimePostmortemNarrative is the DETERMINISTIC plain-English miss report:

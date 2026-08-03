@@ -18,6 +18,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 SD="$PWD"
+# shellcheck source=lib-portable.sh
+. "$SD/ops/lib-portable.sh"
 DB="${SIGNALDECK_DB:-$SD/data/signaldeck.db}"
 LOG="${SIGNALDECK_LIVENESS_LOG:-$SD/logs/research-liveness.log}"
 
@@ -25,7 +27,11 @@ mkdir -p "$(dirname "$LOG")"
 out=$(mktemp)
 trap 'rm -f "$out"' EXIT
 
-python3 "$SD/tools/research_liveness.py" --db "$DB" --emit-dq-event > "$out" 2>&1
+# No --emit-dq-event: that flag was never implemented. research_liveness.py
+# only READS dq_events (the daemon is what writes research_sentinel rows), so
+# argparse rejected it and this check exited 2 without ever running — on macOS
+# too. The scheduled job has therefore never produced a verdict.
+"$(sd_py)" "$SD/tools/research_liveness.py" --db "$DB" > "$out" 2>&1
 status=$?
 
 {

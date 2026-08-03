@@ -125,8 +125,15 @@ func Evaluate(ctx context.Context, st Store, now time.Time, webhookSecretSet boo
 		if ok {
 			r.LastTs = maxTs
 			r.AgeSecs = now.Unix() - maxTs
+			// A real age of exactly noRowsAge would be indistinguishable from
+			// the empty sentinel, so nudge it by a second. One second of
+			// reported age is not a number anyone acts on; a source wrongly
+			// labelled "no rows" is.
+			if r.AgeSecs == noRowsAge {
+				r.AgeSecs++
+			}
 		} else {
-			r.AgeSecs = -1
+			r.AgeSecs = noRowsAge
 		}
 
 		switch {
@@ -138,6 +145,11 @@ func Evaluate(ctx context.Context, st Store, now time.Time, webhookSecretSet boo
 			r.Note = "market closed — freshness check suppressed"
 		case !ok:
 			// No rows and the source SHOULD be producing now: quietly dead.
+			r.Stale = true
+			r.Note = s.note + " — no rows yet"
+		case r.AgeSecs == noRowsAge:
+			// Defensive: !ok above already covers the empty case, but if the
+			// sentinel ever arrives another way it must not be read as "future".
 			r.Stale = true
 			r.Note = s.note + " — no rows yet"
 		case r.AgeSecs < 0:
@@ -168,10 +180,20 @@ func StaleCount(reports []Report) int {
 }
 
 // ageString renders a duration in seconds as a compact human string for dq
-// detail lines ("no rows", "42m", "3h", "5d").
+// detail lines ("no rows", "ahead of our clock", "42m", "3h", "5d").
+//
+// Negative used to mean only "no rows", but a row stamped AHEAD of our clock
+// also yields a negative age, and the two are opposite problems. The live feed
+// read "source=crypto_perp newest row NO ROWS old … newest row is in the
+// future; check clock skew" — one sentence claiming the table is both empty
+// and holding a future row, which sends the reader to look for a dead source
+// when the actual issue is a timestamp. Only the exact sentinel means empty.
 func ageString(secs int64) string {
-	if secs < 0 {
+	if secs == noRowsAge {
 		return "no rows"
+	}
+	if secs < 0 {
+		return "ahead of our clock by " + ageString(-secs)
 	}
 	d := time.Duration(secs) * time.Second
 	switch {
@@ -183,6 +205,12 @@ func ageString(secs int64) string {
 		return strconv.Itoa(int(d.Round(24*time.Hour)/(24*time.Hour))) + "d"
 	}
 }
+
+// noRowsAge is the AgeSecs sentinel for "the source has no rows at all". It is
+// deliberately not -1: a row one second ahead of our clock produces an age of
+// -1 too, and conflating an EMPTY source with a FUTURE-stamped one made the
+// live feed contradict itself.
+const noRowsAge int64 = -1 << 40
 
 // DetailLine composes the dq_events detail string for a stale source (source=
 // prefix first so the per-source-per-day dedup LIKE match is cheap).

@@ -14,6 +14,10 @@ set -u
 # fixed in ops/accuracy-registry.sh and left standing here, so on any machine
 # but the original Mac this script backed up nothing and logged to nowhere.
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# caffeinate / sqlite3 / osascript are macOS-only and none exist under Git Bash,
+# which is why this script produced nothing after the 2026-07-31 move.
+# shellcheck source=lib-portable.sh
+. "$SD/ops/lib-portable.sh"
 
 # python3 on Windows/Git Bash is a Microsoft Store alias stub that resolves,
 # prints "Python was not found", and exits 0 — so `command -v` is not enough,
@@ -64,7 +68,8 @@ assert_budget() {
   used=$(du -sm "$DIR" 2>/dev/null | cut -f1)
   if [ "${used:-0}" -gt "$BUDGET_MB" ]; then
     log "FAIL: backups footprint ${used}MB exceeds budget ${BUDGET_MB}MB — retention is not holding"
-    osascript -e "display notification \"data/backups is ${used} MB (budget ${BUDGET_MB} MB) — backup compression/prune is not holding.\" with title \"SignalDeck: backup footprint over budget\"" >/dev/null 2>&1
+    sd_notify "SignalDeck: backup footprint over budget" \
+      "data/backups is ${used} MB (budget ${BUDGET_MB} MB) — backup compression/prune is not holding."
     return 1
   fi
   log "budget OK: ${used:-0}MB of ${BUDGET_MB}MB"
@@ -82,7 +87,7 @@ PRUNE_ONLY=false
 # Refuse to run against a live daemon — that's the exact contention this
 # script exists to avoid. The in-daemon failsafe covers that case. Still
 # assert the budget: failsafe backups pile up raw on exactly this path.
-if [ "$PRUNE_ONLY" != true ] && pgrep -x signaldeckd >/dev/null 2>&1; then
+if [ "$PRUNE_ONLY" != true ] && sd_is_running signaldeckd; then
   log "SKIP: signaldeckd is running (in-daemon worker owns backups while live)"
   assert_budget || exit 1
   exit 0
@@ -97,7 +102,7 @@ if [ "$PRUNE_ONLY" != true ]; then
 
   # caffeinate: don't let the Mac sleep mid-copy (post-close is exactly when it
   # wants to). VACUUM INTO gives a consistent compacted copy even against WAL.
-  if caffeinate -i sqlite3 "$DB" "VACUUM INTO '$TARGET';" 2>>"$LOG"; then
+  if sd_sqlite "$DB" "VACUUM INTO '$TARGET';" 2>>"$LOG"; then
     SIZE=$(du -m "$TARGET" | cut -f1)
     log "OK: $TARGET (${SIZE} MB)"
   else
@@ -130,11 +135,11 @@ if [ "$PRUNE_ONLY" != true ]; then
   # Record success in meta so the in-daemon failsafe worker's restart gate sees
   # it and skips at the next boot. Daemon is down, so writing directly is safe.
   NOW=$(date +%s)
-  sqlite3 "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_ts','$NOW'),('backup_last_file','$(basename "$TARGET")');" 2>>"$LOG" || log "WARN: meta update failed"
+  sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_ts','$NOW'),('backup_last_file','$(basename "$TARGET")');" 2>>"$LOG" || log "WARN: meta update failed"
 
   # The daemon is down, so this is the one uncontended moment the WAL (256MB at
   # last audit — live readers pin it all session) can actually truncate to zero.
-  sqlite3 "$DB" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>>"$LOG" || log "WARN: wal_checkpoint(TRUNCATE) failed"
+  sd_sqlite "$DB" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>>"$LOG" || log "WARN: wal_checkpoint(TRUNCATE) failed"
 fi
 
 # Generation policy: the newest $KEEP_RAW stay plain .db (instant restore),
@@ -153,9 +158,9 @@ EXT="gz"; [ -n "$ZSTD_BIN" ] && EXT="zst"
 
 compress_file() { # removes the source on success
   if [ -n "$ZSTD_BIN" ]; then
-    caffeinate -i "$ZSTD_BIN" -3 -q --rm -f "$1" 2>>"$LOG"
+    sd_nosleep "$ZSTD_BIN" -3 -q --rm -f "$1" 2>>"$LOG"
   else
-    caffeinate -i gzip -f "$1" 2>>"$LOG"
+    sd_nosleep gzip -f "$1" 2>>"$LOG"
   fi
 }
 
@@ -208,8 +213,8 @@ command -v caffeinate >/dev/null 2>&1 && NOSLEEP="caffeinate -i"
 if [ -z "$OFFSITE" ]; then
   log "offsite SKIPPED: no destination configured (set SIGNALDECK_OFFSITE_DIR to an external volume)"
 elif mkdir -p "$OFFSITE" 2>/dev/null; then
-  if $NOSLEEP cp "$TARGET" "$OFFSITE/.tmp-$TS" 2>>"$LOG" && mv "$OFFSITE/.tmp-$TS" "$OFFSITE/$(basename "$TARGET")"; then
-    sqlite3 "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_offsite','$(date +%s)');" 2>>"$LOG"
+  if sd_nosleep cp "$TARGET" "$OFFSITE/.tmp-$TS" 2>>"$LOG" && mv "$OFFSITE/.tmp-$TS" "$OFFSITE/$(basename "$TARGET")"; then
+    sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_offsite','$(date +%s)');" 2>>"$LOG"
     log "offsite OK"
     compress_and_prune "$OFFSITE"
   else
@@ -270,7 +275,8 @@ else
   last=0
   [ -f "$NOTIFY_COOLDOWN_FILE" ] && last=$(cat "$NOTIFY_COOLDOWN_FILE" 2>/dev/null || echo 0)
   if [ $((now - last)) -ge $NOTIFY_COOLDOWN_SECS ]; then
-    osascript -e 'display notification "No Discord/Telegram/webhook transport configured — daemon alerts are macOS-only and go unseen when this Mac is unattended." with title "SignalDeck: alerts are SILENT beyond this Mac"' >/dev/null 2>&1
+    sd_notify "SignalDeck: alerts are SILENT beyond this machine" \
+      "No Discord/Telegram/webhook transport configured — daemon alerts stay local and go unseen when nobody is at the keyboard."
     echo "$now" > "$NOTIFY_COOLDOWN_FILE"
   fi
 fi
