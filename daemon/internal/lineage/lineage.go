@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"time"
 
@@ -181,7 +182,32 @@ func BuildRevision() string {
 
 // revisionResolveTimeout bounds the git call so a wedged repository cannot hang
 // the version endpoint. Expiry means "could not verify", which fails closed.
-const revisionResolveTimeout = 2 * time.Second
+//
+// 2s was too tight on Windows and made the field NON-DETERMINISTIC: six
+// consecutive /api/version calls against the same binary and the same
+// repository returned true, false, false, false, true, false. Spawning
+// git.exe measured 370-930ms idle, and the daemon runs 97 workers against the
+// same disk, so the cold-start spill past 2s is routine rather than rare.
+// Failing closed then silently downgraded a VERIFIED build to unattributable,
+// and the accuracy registry withholds verdicts on exactly that field — so a
+// published record depended on a coin flip.
+const revisionResolveTimeout = 10 * time.Second
+
+// revisionResolveTTL caches a POSITIVE answer. The revision is fixed at build
+// time and can only stop resolving through a history rewrite, so re-spawning
+// git on every request bought nothing and was what exposed the race. A negative
+// is never cached: it may be transient, and persisting it would keep claiming
+// "unattributable" about a build that is fine.
+const revisionResolveTTL = 5 * time.Minute
+
+// The cache is keyed by the exact question asked. A bare boolean would answer
+// "yes" for ANY revision once one had resolved, which is the fail-open this
+// field exists to prevent.
+var (
+	resolveMu   sync.Mutex
+	resolveKey  string
+	resolveWhen time.Time
+)
 
 // RevisionResolvable reports whether the revision stamped into this binary still
 // names a commit the repository actually contains — checked NOW, against git.
@@ -197,7 +223,28 @@ const revisionResolveTimeout = 2 * time.Second
 // a verified one — that is the whole point of the field.
 func RevisionResolvable(ctx context.Context) bool {
 	readBuild()
-	return revisionResolvable(ctx, "", rev, modified)
+	return revisionResolvableCached(ctx, "", rev, modified)
+}
+
+// revisionResolvableCached is revisionResolvable with a positive-only, per-
+// revision cache. Only a proven YES is remembered, and only for the revision
+// that proved it.
+func revisionResolvableCached(ctx context.Context, dir, revision string, dirty bool) bool {
+	key := revision + "|" + strconv.FormatBool(dirty) + "|" + dir
+	resolveMu.Lock()
+	if resolveKey == key && time.Since(resolveWhen) < revisionResolveTTL {
+		resolveMu.Unlock()
+		return true
+	}
+	resolveMu.Unlock()
+
+	if !revisionResolvable(ctx, dir, revision, dirty) {
+		return false
+	}
+	resolveMu.Lock()
+	resolveKey, resolveWhen = key, time.Now()
+	resolveMu.Unlock()
+	return true
 }
 
 // revisionResolvable is the testable core. dir is the directory to run git in;
