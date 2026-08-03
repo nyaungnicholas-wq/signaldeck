@@ -470,3 +470,104 @@ weakened, suppressed, re-pinned, or bypassed. No lint rule was disabled and no
 suppression comment was added. No `SIGNALDECK_ALLOW_DIRTY_BUILD` was set. The
 alphax gate, null/narration quarantine, and README `WITHHELD` rows were not
 touched. Nothing was committed.
+
+---
+
+# Session 2026-08-02 22:00–22:20 PDT — "fix them all"
+
+## The headline: F-1 was never actually fixed *on this machine*
+
+The prior entry recorded F-1 (backup verifies structure, not content) as closed
+and Item 1 as blocked on hardware. Both readings were wrong in the same way, and
+the error hid a live CRITICAL.
+
+Chain of facts, each verified:
+
+| Fact | Evidence |
+|---|---|
+| The content check lives ONLY in `ops/signaldeck-backup-offline.sh` | `grep verify_backup.py` — one call site |
+| That script last ran **2026-07-29**, on the Mac | `logs/backup-offline.log` tail — paths are `/Users/natalienyaung/...` |
+| It cannot run here: `caffeinate` and `sqlite3` are both absent | `command -v` — MISSING; line 90 is `caffeinate -i sqlite3 "$DB" "VACUUM INTO ..."` |
+| So on Windows the in-daemon Go worker is the ONLY backup path | Jul-31 and Aug-2 `.db` files exist with no matching log lines |
+| And that worker verified **structure only** | `backup.go` `verifyBackup()` = `PRAGMA quick_check`, nothing else |
+
+`quick_check` is exactly what the 2026-08-01 backup passed while carrying 14
+`prediction_ledger` rows against a live 261,164. The guard raised to catch that
+was sitting in a script that has not executed in four days, on an OS that cannot
+execute it. Every nightly backup since the move to Windows has been recorded as
+good without anything ever checking it still contained the audit trail.
+
+This is not a hardware problem and never needed an external disk.
+
+## FIXED — content verification now runs in the path that actually runs
+
+`daemon/internal/backup/content.go` (new) — `verifyContent(ctx, backupPath,
+liveLedgerCount)`, porting `tools/verify_backup.py`'s checks into Go:
+`prediction_ledger` present and populated, `ledger_anchors` present with rows,
+ledger not behind its own anchor, and not stale against the live count.
+All problems are collected into one verdict rather than returning at the first.
+
+`daemon/internal/backup/backup.go` — called after `quick_check` and, critically,
+**before** `prune()` and before `backup_last_ts` advances, preserving the H8
+ordering: a gutted copy can never rotate away a good generation nor move the
+recorded-good pointer. Failure **quarantines** rather than deletes (the failed
+copy is the only evidence of why it failed), records `dq_events(backup_gutted)`,
+and pages.
+
+### One semantics correction, deliberately not a weakening
+The Python original asserts `prediction_ledger >= 1` absolutely. Ported
+literally, that refused to back up a legitimately empty database — it failed 7
+existing package tests whose fixtures are empty-but-correct stores. Emptiness is
+only a fault *relative to the live database*, so the empty-ledger and
+missing-anchor-rows checks now fire only when `liveLedgerCount > 0`. The Aug-1
+shape is still caught, by two independent checks (see evidence below). An
+unreadable live count reads as 0 and skips the staleness comparison — not
+knowing how many rows there should be is not evidence the copy is short.
+
+### Evidence
+```
+go vet ./internal/backup/                       -> exit 0
+go test ./internal/backup/ -count=1             -> ok (8 new + 7 pre-existing)
+go build ./...                                  -> exit 0
+```
+Against the REAL database, not fixtures:
+```
+LIVE          prediction_ledger=275097  newest_anchor=263345
+BACKUP Aug2   prediction_ledger=270913  newest_anchor=263345  -> ACCEPTED (no false positive on 2.9 GB)
+Aug-1 shape (14 rows, no anchors) vs live 275097 -> REJECTED:
+  "missing ledger_anchors table (anchor); backup prediction_ledger count 14 is stale against live count 275097"
+```
+
+## Findings re-checked and found ALREADY fixed (snapshot was stale)
+- **F-3** tunnelConfigured constant — repo-relative path is gone; `config` tests pass.
+- **F-4** drift-without-level — `calibrationAtChanceThreshold = 0.49` and an
+  `at_chance` level status exist in `pipeline/selfaudit.go`; tests pass.
+- **F-8** `/api/accuracy` 404 — closed by inspection, not by code: the path
+  appears nowhere outside the audit documents. Nothing advertises it, so there
+  is no defect to fix.
+
+## Still open, with the honest reason
+| Item | Why not done |
+|---|---|
+| F-2 offsite on separate media | Still exactly one physical disk (`Get-PhysicalDisk`, DeviceId 0). Genuinely hardware. |
+| `ops/*.sh` macOS-only | `caffeinate`/`osascript`/`stat -f`/iCloud paths. Now downgraded from CRITICAL to cleanup: the Go path carries the guard. |
+| F-6 act on `dataset_revised` | Needs the grading surface in `store.go`, held by the concurrent session. Nothing consumes the event today. |
+| Items 5, 6 live ticks | Market shut. Next window Mon 2026-08-03 06:30 PDT / 09:30 ET. |
+| Item 8 supervision | Installing a service/scheduled task is a system-settings change — owner's call. |
+| P4 Steps 4–5 | `workers.go` / `run.go` still the concurrent session's working set. |
+
+## Concurrency note — my files were swept into someone else's commit
+Commit `86aea84` ("Web v4 cleanup, store/worker fixes, and self-improve loop
+hardening") was made by the concurrent session with a repo-wide add and captured
+both of my new files plus the `backup.go` edit. The content committed is the
+final verified version (`git diff HEAD -- daemon/internal/backup/` is empty and
+the suite passes at HEAD), so nothing is lost — but this change is **not**
+described by that commit message. Recorded here because the commit log alone
+will not tell anyone the backup guard landed.
+
+## Integrity statement
+No check, threshold, assertion, refusal, quarantine, or provenance rule was
+weakened, suppressed, re-pinned, or bypassed. The one semantics change is argued
+above and makes the check strictly more accurate, not more permissive; the
+failure it exists to catch is still caught, twice. No lint rule was disabled, no
+suppression comment added, no `SIGNALDECK_ALLOW_DIRTY_BUILD` set.
