@@ -352,10 +352,60 @@ wakeups: 14× the entire Step 3 payoff**, with a detectable failure mode (stale
 cache) rather than a silent one. Recommended order: Step 5 first, then the 1m
 cohort, then revisit Step 3 only if profiling shows the wakeups themselves matter.
 
-### Steps 4–5 — NOT STARTED
+### Step 4 — NOT STARTED
 
-Event bus and write-through cache untouched. Step 5 is the highest-value remaining
-Phase 4 item by the baseline above.
+### Step 5 — INVENTORIED; INAPPLICABLE. Warmer NOT removed.
+
+**Correction to this ledger's earlier recommendation.** It ranked Step 5 as the
+highest-value Phase 4 item at "14× the Step 3 payoff" on the strength of
+`cache-warmer`'s 1,440 wakeups/day. That ranking used wakeup count as a proxy for
+cost, and the inventory Step 5 itself demands shows the proxy fails precisely
+here. The wakeups are nearly free; what they prevent is not.
+
+`cache-warmer` is **not a row cache and has no write path.** It is a
+read-through/SWR precompute warmer for expensive *analytical* API builds
+(`internal/api/warm.go`). Measured costs recorded in that file:
+
+| Endpoint | Cold build |
+|---|---|
+| `/api/predictions/latest` | ~45s (latest-per-symbol self-join over 240k rows) |
+| `/api/track-record` | ~22–44s per horizon |
+| `/api/composite/top` | ~40s |
+| `/api/datastats` | >30s |
+| `/api/honesty` | ~22.7s |
+| `/api/calibration` | ~22.6s |
+| `/api/macro` | ~5.9s |
+| `/api/regimes` | ~1.5–4.6s |
+| `/api/xs-factor` | full cross-section from ~300 trailing bars per active symbol |
+
+**Write-through is not implementable against these.** They are whole-database
+aggregates: one ingested bar changes track-record, composite/top, xs-factor and
+predictions/latest at once. There is no bounded mutation → cache-entry mapping to
+write through, and no sane write path performs a 45-second self-join per row.
+
+**Removing the warmer reintroduces a measured regression.** `warm.go:3` records
+the original defect (2026-07-18): the first `/api/dashboard` and `/api/movers`
+after a restart took **30–55s**, then 3ms once hot, because the caches were only
+ever filled *by a request* — so the first visitor always paid. The warmer exists
+to make that never happen.
+
+**The 60s cadence is correct, not arbitrary:** `dashboardTTL = 60s` and
+`respCacheTTL = 60s`, so 60s is the *minimum* cadence that keeps the shortest-TTL
+caches continuously hot. Waking slower lets them lapse onto a visitor. On a hot
+cache a pass "costs two map lookups" (warm.go:39).
+
+There is also **no external cache to write through to** — no Redis; every `redis`
+grep hit is the substring in `redistribution`/`rediscover`. All caches are
+in-process Go maps with TTL/SWR semantics, and several already key on
+`d.St.CacheKey()`, a store-generation token — i.e. generation-based invalidation
+is already present.
+
+**Step 5's own precondition forbids the removal:** "Remove the 60-second
+cache-warmer *only after* all write paths and recovery behavior are covered."
+There are no such write paths to cover, so the gate can never be satisfied.
+**No change made.** Implementing Step 5 as written would trade ~13% of scheduler
+wakeups — which cost two map lookups each when hot — for 22–45s user-facing page
+loads.
 
 The Item 7 change adds no new shared mutable state — `readBuild()` already
 serialises through `sync.Once`, and `revisionResolvable` is a pure function plus
