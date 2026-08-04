@@ -178,10 +178,20 @@ fi
 # signature against the restored copy, through the daemon's own store code
 # (sdmaint ledger-verify). This is also the "can the daemon's store actually
 # open this restore" drill — schema + migrations run against the temp copy.
-SDMAINT="$SD/bin/sdmaint"
+# Windows needs the .exe suffix or the binary is neither -x nor runnable, and
+# the checked-in bin/sdmaint is a macOS build — so on this box the drill failed
+# at "missing and could not be rebuilt" and the backups went unverified. Same
+# suffix idiom ops/signaldeck-ctl.sh already uses.
+SDMAINT_EXE=""
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SDMAINT_EXE=".exe" ;; esac
+SDMAINT="$SD/bin/sdmaint$SDMAINT_EXE"
 if [ ! -x "$SDMAINT" ]; then
-  GO="$HOME/.local/go-sdk/go/bin/go" # launchd's PATH has no go; the user-local SDK does
-  if [ -x "$GO" ]; then
+  # launchd's PATH has no go, so the user-local SDK is the macOS fallback;
+  # on Windows go IS on PATH and that hardcoded path does not exist, which is
+  # why the rebuild never fired here.
+  GO="$HOME/.local/go-sdk/go/bin/go"
+  [ -x "$GO" ] || GO="$(command -v go || true)"
+  if [ -n "$GO" ] && [ -x "$GO" ]; then
     (cd "$SD/daemon" && "$GO" build -o "$SDMAINT" ./cmd/sdmaint) >/dev/null 2>&1
   fi
 fi
