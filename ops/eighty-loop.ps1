@@ -548,9 +548,27 @@ Output the raw Python file only. No markdown fences, no commentary.
   }
   $issued = Num 'ISSUED'; $opps = Num 'OPPORTUNITIES'; $prec = Num 'PRECISION'
   $effN = Num 'EFFECTIVE_N'; $days = Num 'DISTINCT_DAYS'
+  # A script that reports INSUFFICIENT has not produced impossible output; it has
+  # produced a FINDING -- that this database cannot support the hypothesis. Those
+  # were being lumped in with arithmetic that could not occur (the first generated
+  # script printed OPPORTUNITIES=-113750) and journaled under the same heading,
+  # "output not arithmetically possible".
+  #
+  # That mislabel is not cosmetic. PROPOSE reads the journal tail and is told not
+  # to repeat what it finds there, so 238 entries were teaching it "that script
+  # was broken" when the fact was "this data is too thin for that mechanism" --
+  # the one lesson that would stop it proposing the same shape again. The
+  # 2026-08-04 14:02 cycle earned this distinction: it queried insider_trades
+  # correctly, respected the disclosure-date discipline, and found 16 qualifying
+  # symbol-days against a floor of 30. Sixteen is a perfectly possible number.
+  $insufficient = $out -match '(?m)^INSUFFICIENT=1\s*$'
   $insane = @()
-  if ($out -match '(?m)^INSUFFICIENT=1\s*$') { $insane += 'reported INSUFFICIENT' }
-  if ($null -eq $issued -or $null -eq $prec) { $insane += 'did not print ISSUED/PRECISION' }
+  # Only a script CLAIMING to have measured owes us metrics. Demanding them from
+  # one that correctly declined to measure is what produced the doubled reason
+  # string "reported INSUFFICIENT; did not print ISSUED/PRECISION".
+  if (-not $insufficient -and ($null -eq $issued -or $null -eq $prec)) {
+    $insane += 'did not print ISSUED/PRECISION'
+  }
   if ($null -ne $opps -and $opps -lt 0) { $insane += "OPPORTUNITIES is negative ($opps)" }
   if ($null -ne $issued -and $null -ne $opps -and $opps -gt 0 -and $issued -gt $opps) {
     $insane += "ISSUED ($issued) exceeds OPPORTUNITIES ($opps)"
@@ -562,6 +580,8 @@ Output the raw Python file only. No markdown fences, no commentary.
   if ($null -ne $days -and $null -ne $issued -and $days -gt $issued) {
     $insane += "DISTINCT_DAYS ($days) exceeds ISSUED ($issued)"
   }
+  # Impossible arithmetic outranks insufficiency: a script printing INSUFFICIENT
+  # alongside a negative population is broken, not merely short of data.
   if ($insane.Count -gt 0) {
     Ev 'insane-output' @{ cycle = $cycle; reasons = ($insane -join '; ') }
     Add-Content $journal @"
@@ -571,6 +591,30 @@ Output the raw Python file only. No markdown fences, no commentary.
 $hypothesis
 
 **Rejected before judging:** $($insane -join '; ')
+
+``````
+$(($out -split "`n" | Select-Object -Last 10) -join "`n")
+``````
+"@
+    Start-Sleep -Seconds $CyclePauseSec
+    continue
+  }
+
+  # A real finding, recorded as one. The protocol's own line is that a killed
+  # hypothesis is evidence; a mechanism this database demonstrably cannot test is
+  # evidence about the DATA, and it is the kind PROPOSE most needs to read back.
+  if ($insufficient) {
+    Ev 'insufficient-data' @{ cycle = $cycle }
+    Add-Content $journal @"
+
+## Cycle $cycle - KILLED (data cannot support this hypothesis)  ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))
+
+$hypothesis
+
+**Rejected before judging:** the script ran correctly and reported INSUFFICIENT --
+this database does not hold enough of what the mechanism needs. The hypothesis was
+not wrong; it was untestable HERE. Do not propose this shape again without naming
+a data source that would change the answer.
 
 ``````
 $(($out -split "`n" | Select-Object -Last 10) -join "`n")
