@@ -361,6 +361,29 @@ $cycle = 0
 # $MaxConsecutiveEmpty. See the parameter's comment for what it cost not to
 # have this.
 $script:consecutiveEmpty = 0
+
+# WHERE THE NUMBERING STARTS. Scripts were named h{cycle}.py, and $cycle resets
+# to 1 on every run, so each run overwrote the previous one's scripts from h0001
+# up. The 2026-08-04 00:04 run reached cycle 179 and destroyed the entire 58-file
+# corpus from 2026-08-02 in the process; the only reason the loss is partial is
+# that logs/eighty-research.md keeps the hypothesis text and the numbers.
+#
+# What it destroyed is the reproducibility, which is the part that matters here:
+# the protocol's own acceptance criteria require a result to reproduce from a
+# cold clone, and a journal entry citing research/eighty/h0007.py is worth
+# nothing once h0007.py holds a different hypothesis from a later run.
+#
+# Continue from the highest number already on disk instead. Computed ONCE, so a
+# long run numbers contiguously, and D4 pads rather than truncates so passing
+# 9999 widens the name instead of colliding.
+$hBase = 0
+foreach ($f in Get-ChildItem -LiteralPath $work -Filter 'h*.py' -File -ErrorAction SilentlyContinue) {
+  if ($f.BaseName -match '^h(\d+)$') {
+    $n = [int]$Matches[1]
+    if ($n -gt $hBase) { $hBase = $n }
+  }
+}
+Ev 'numbering' @{ startsAfter = $hBase }
 while ((Get-Date) -lt $deadline -and $cycle -lt $MaxCycles) {
   $cycle++
   Ev 'cycle-start' @{ cycle = $cycle }
@@ -444,7 +467,7 @@ Output the six labelled lines and nothing else.
   Ev 'hypothesis' @{ cycle = $cycle; head = (($hypothesis -split "`n")[0]) }
 
   # --- 2. IMPLEMENT -------------------------------------------------------
-  $script = Join-Path $work ("h{0:D4}.py" -f $cycle)
+  $script = Join-Path $work ("h{0:D4}.py" -f ($hBase + $cycle))
   # The verify command travels to omni.ps1 as a `powershell -File` ARGUMENT, and
   # -File re-parses arguments: quotes are stripped and the value is cut at the
   # first space, so `python "C:\...\Desktop\claude code\...\h0001.py"` arrived as
@@ -454,7 +477,7 @@ Output the six labelled lines and nothing else.
   # -PromptFile fix. A repo-RELATIVE path has no spaces, so it needs no quotes
   # and survives the hop intact; omni inherits this process's cwd, which
   # Set-Location pinned to $repo at startup.
-  $scriptRel = "research\eighty\" + ("h{0:D4}.py" -f $cycle)
+  $scriptRel = "research\eighty\" + ("h{0:D4}.py" -f ($hBase + $cycle))
   $code = Ask @"
 Write a SELF-CONTAINED Python 3 script that tests exactly this hypothesis:
 
