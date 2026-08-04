@@ -43,3 +43,9 @@ web/scratch_*.mjs
 *.new.tsx
 
 .venv/
+
+# Runtime maintenance lock (ops/daemon-guard.ps1, market-close.sh,
+# signaldeck-ctl.sh deploy). Present only while downtime is deliberate, but
+# untracked it dirties the tree and build_from_head refuses to deploy during
+# any backup window.
+ops/.maintenance
