@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.signaldeck.structural-liveness</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/natalienyaung/claude code/signaldeck/ops/structural-liveness.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/Users/natalienyaung/claude code/signaldeck/logs/structural-liveness.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/natalienyaung/claude code/signaldeck/logs/structural-liveness.out.log</string>
+	<!-- 08:30 local: after the overnight daily bars have landed and after the
+	     6-hourly regime-outcome worker has had its night ticks, so a call that
+	     came due is judged against a resolver that has already had every
+	     chance to grade it. Before the 14:05 accuracy-registry publish, and
+	     15 minutes after research-liveness, so the two checks land in the same
+	     morning window without contending for the database.
+
+	     Note on paths: these are the macOS originals. ops/install-windows-tasks.ps1
+	     reads this file and rewrites the script path onto whatever repo it is
+	     run from, so the plist stays the single schedule definition for both
+	     platforms rather than drifting into two. -->
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>30</integer></dict>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>/Users/natalienyaung/claude code/signaldeck</string>
+</dict>
+</plist>

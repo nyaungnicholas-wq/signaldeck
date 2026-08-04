@@ -41,3 +41,5 @@ tools/alpha/*.json
 # scratch / scratch-pad files
 web/scratch_*.mjs
 *.new.tsx
+
+.venv/

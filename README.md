@@ -142,6 +142,36 @@ what ran, including failures.
   record.
 - **Data quality is a page, not a footnote.** Coverage spans, freshness, and
   every incident (stale feed, gap, failed backfill) are visible at /quality.
+- **The grader gets a second opinion.** `tools/validate_signals.py` re-grades
+  the same inputs with a stationary bootstrap and Hansen's SPA test instead of
+  the Wilson + design-effect + Bonferroni path the registry publishes, and
+  writes to its own `validation_advisory` table. It is advisory *by
+  construction* — the published protocol is frozen on the pre-registration
+  chain, so a disagreement is a reason to pre-register an amendment, never a
+  reason for a script to quietly re-grade.
+
+```bash
+.venv/Scripts/python.exe tools/validate_signals.py --dry-run --reps 5000
+```
+
+  Needs the local venv (`uv venv && uv pip install numpy scipy pandas
+  statsmodels arch scikit-learn`). Reads the DB read-only; `--dry-run` persists
+  nothing. Reruns append rather than overwrite, so the advisory table is a
+  track record of second opinions, not a cache of the latest one.
+- **Waiting and dead look different.** The regime-outcome worker prints
+  "resolved 0" both while a horizon is still elapsing and if it has stopped
+  grading entirely. `tools/structural_liveness.py` asks the one question that
+  separates them — is any call past BOTH resolution gates with no verdict? —
+  and runs daily at 08:30 (`ops/structural-liveness.sh`). Stdlib only, so it
+  cannot fail to start because an environment drifted.
+
+```bash
+python3 tools/structural_liveness.py
+```
+
+  Exit 0 = waiting or grading normally, 1 = a predictor stopped resolving,
+  2 = the check could not run. Quarantined rows and the odd degenerate window
+  are tolerated on purpose: a check that is always red is a check nobody reads.
 
 ## Flagship research artifact
 
