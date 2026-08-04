@@ -66,5 +66,33 @@ if (Get-Process -Name signaldeckd -ErrorAction SilentlyContinue) {
     exit 0
 }
 
-Start-Process -FilePath $exe -WorkingDirectory $cwd -WindowStyle Hidden
-Write-Output "started signaldeckd"
+# -Wait, deliberately: this script must STAY the task's running process for as
+# long as the daemon lives. Detaching broke `signaldeck-ctl.sh stop`, whose
+# sd_svc_stop is `schtasks /End` on the Daemon task - with the daemon detached,
+# /End ended a guard that had already exited and left the daemon running, so
+# every graceful stop silently degraded into the caller's kill -9 fallback and
+# the daemon never got to drain its workers or checkpoint the WAL.
+#
+# Staying attached also makes the 5-minute keepalive trigger self-limiting:
+# the task is still Running while the daemon is healthy, and MultipleInstances
+# is IgnoreNew, so each tick is a no-op until the daemon actually exits.
+# Start the daemon by running ITS task, rather than launching the binary here.
+#
+# This is the whole reason the guard is a separate task. sd_svc_stop is
+# `schtasks /End` on "SignalDeck Daemon", and /End only terminates the process
+# Task Scheduler itself started for that task - it does not cascade to
+# children. When the guard launched the binary (either detached via
+# Start-Process or as a direct child), the daemon was no longer the task's own
+# process, so /End ended the guard and left the daemon running: every
+# `signaldeck-ctl.sh stop` silently degraded into the caller's kill -9
+# fallback, skipping the worker drain and the WAL checkpoint.
+#
+# Keeping "SignalDeck Daemon" pointed straight at bin/signaldeckd.exe preserves
+# graceful stop; this task only decides WHEN to (re)start it.
+$sd = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+& $sd /Run /TN 'SignalDeck Daemon' | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Output "failed to start SignalDeck Daemon task (schtasks exit $LASTEXITCODE)"
+    exit 1
+}
+Write-Output "started signaldeckd via its scheduled task"
