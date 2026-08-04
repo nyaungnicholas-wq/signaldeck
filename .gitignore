@@ -24,8 +24,19 @@ __pycache__/
 # to track; regenerate with the snippet in ops/IMPROVE_BACKLOG.md.
 *.premigration
 
-# Worker-generated research scripts from ops/eighty-loop.ps1.
-research/eighty/
+# Worker-generated research scripts from ops/eighty-loop.ps1 are TRACKED
+# (un-ignored 2026-08-04). They are generated, but they are also the only
+# executable form of a recorded result: logs/eighty-research.md cites them by
+# name, and the protocol's acceptance criteria require a result to reproduce
+# from a cold clone. Ignoring them meant a journal entry could point at a file
+# nobody outside this machine had, and -- until the numbering fix in 6cd9966 --
+# at a file that had since been overwritten by a later run.
+#
+# COST, so it is not a surprise later: every loop cycle now writes a tracked
+# file, so a running loop leaves the tree dirty and
+# ops/signaldeck-ctl.sh deploy refuses until those scripts are committed.
+# That refusal is correct -- the deploy gate exists so the binary IS the
+# commit -- but it now fires roughly daily instead of never.
 
 # Quarantined artifacts. These are multi-GB database copies set aside BECAUSE
 # they failed verification — evidence to keep on disk, never history to carry.
