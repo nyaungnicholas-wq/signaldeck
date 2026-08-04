@@ -159,22 +159,74 @@ THE ACTUAL SCHEMA. These are the real columns; there are no others. A generated
 script that invented a column (predicted_class) died on the very first run,
 because a model with no schema writes SQL against the database it imagines.
 
-- bars(symbol_id, tf, ts, open, high, low, close, volume)  -- 13.4M rows
-  tf is one of '1d', '1h', '1m'. ts is a unix epoch integer.
+The first version of this block listed five tables and said "there are no
+others". That was false -- the database has 101 -- and it cost 167 consecutive
+cycles: PROPOSE invented mechanisms about insider clusters and earnings
+surprises, IMPLEMENT was forbidden from touching them, and every script bailed
+with INSUFFICIENT while writing comments like "we have no table for that" about
+tables holding thousands of rows. A schema too narrow fails as surely as one
+that is absent; it just fails politely.
+
+PRICES AND LABELS
+- bars(symbol_id, tf, ts, open, high, low, close, volume)  -- 13.2M rows.
+  tf is '1d' | '1h' | '1m'. ts is a unix epoch integer.
+  1d spans 2018-07-26..now over 1,777 symbols; 1h from 2025-06-23; 1m from
+  2026-06-05 only. Anything longer than a few weeks must use 1d.
 - symbols(id, symbol, market, name, active, added_at, stream, delisted_at)
-  -- 1,080 rows. market is 'stocks' or 'crypto'.
+  -- 1,780 rows. market is 'stocks' | 'crypto'. delisted_at is set only from
+  2026-07-24; before that the universe is survivor-seeded.
+- prediction_outcomes(symbol_id, horizon, ts, prob, up, fwd_return, resolved_at,
+  basis_epoch)  -- 397,769 rows. up is the realised direction and fwd_return the
+  realised forward return: THESE ARE LABELS and are the safest label source.
+
+RAW OBSERVATIONS you may use as inputs
+- insider_trades(accession, symbol_id, insider, title, code, shares, price,
+  value, tx_ts, filed_ts)  -- 5,678 rows, 609 symbols, 2008-03..2026-07.
+  code: A=award S=sale P=purchase F=tax M=option-exercise.
+  AS-OF: tx_ts is when the trade happened, filed_ts when it became public.
+  Only filed_ts is knowable at decision time. Using tx_ts is lookahead.
+- filings(id, symbol_id, form, filed_ts, title, url, label)  -- 86,643 rows,
+  903 symbols, but ONLY 2026-02-05..now. form: 424B2, 4, 8-K, 144, 3, 6-K.
+- short_volume(symbol_id, day, short_vol, short_exempt, total_vol, short_pct)
+  -- 25,435 rows, 1,040 symbols, ONLY 2026-05-20..2026-07-31. day is 'YYYY-MM-DD'.
+- news(id, symbol_id, ts, headline, url, source, sentiment, score, rationale,
+  lex_score, lex_ver, lex_polar, lex_hedged)  -- 322,719 rows, 741 symbols,
+  2012-04..now.
+- sentiment_features(symbol_id, day, n_polar, n_all, mean_score, pos, neg,
+  hedged, ver)  -- 41,625 rows, 695 symbols, 2012-04..now. day is 'YYYY-MM-DD'.
+- stocktwits_sentiment(symbol_id, ts, bullish, bearish, untagged, total)
+  -- 41,670 rows.
+- macro_series(series, ts, value)  -- 104,543 rows. FRED series keyed by name.
+- fundamentals(symbol_id, metric, value, as_of, fetched_at)  -- 4,989 rows.
+  KEY/VALUE, not columns: metric is 'EPS' | 'Revenues' | 'SharesOutstanding' |
+  'EntityPublicFloat' | 'CIK' | 'LatestFilingDate'. AS-OF: as_of is the period,
+  fetched_at is when we learned it. Only fetched_at is knowable in advance.
+- inst_holdings(cik, manager, period, symbol_id, cusip, name, value, shares)
+  -- 48,805 rows. 13F. AS-OF: period is the quarter END; 13Fs are filed up to 45
+  days later, and this table does NOT record the filing date. Treating period as
+  knowable is a 45-day lookahead. Prefer another input unless you lag it >=45d.
+- anomalies(id, symbol_id, ts, kind, z, detail, hour_bucket)  -- 3,949 rows.
+
+MODEL OUTPUTS -- self-reference hazard, read this before using them
+scores(symbol_id, horizon, ts, score, components) 1.9M; composite_scores(
+symbol_id, ts, horizon, score, curve_pct, edge, payload) 296k; features(id,
+symbol_id, horizon, ts, version, vec) 324k; expectancy(symbol_id, horizon,
+state_key, n, mean_fwd, median_fwd, hit_rate, stdev, updated_at) 87k;
+rankings(ts, symbol_id, score, rank, ret1m, ret3m) 269k;
+tv_ratings(symbol_id, ts, reco_all, reco_ma, reco_other, rsi, close_px, label)
+626k but ONLY 2026-07-11..now, far too short for most horizons.
+These are THIS SYSTEM'S OWN predictions, not observations. A hypothesis whose
+input is a model output and whose label is that model's outcome measures the
+model against itself. If you use one, say so in the mechanism and expect the
+judge to weigh it accordingly.
 - regime_outcomes(id, symbol_id, kind, ts, day, horizon_days, regime, conviction,
   historical_accuracy, rank, resolved_at, actual, correct, naive_label, revision,
-  basis_epoch)  -- 20,787 rows. NOTE: correct and resolved_at are NULL on every
-  row today, so this table cannot supply labels yet.
-- prediction_outcomes(symbol_id, horizon, ts, prob, up, fwd_return, resolved_at,
-  basis_epoch)  -- 280,087 rows. up is the realised direction, prob the
-  model's probability, fwd_return the realised forward return. This is the
-  table with usable labels.
-- scores(symbol_id, horizon, ts, score, components)  -- 1.55M rows.
+  basis_epoch)  -- 24,957 rows. correct and resolved_at are NULL on EVERY row:
+  nothing has resolved yet, so this cannot supply labels. Do not use it for them.
 
-Derive labels from bars closes or from prediction_outcomes.up / fwd_return.
-Never reference a column not listed above.
+Never reference a table or column not listed above. If the data a hypothesis
+needs genuinely is not here, say so in one line and stop -- but check this list
+first, because the last 167 scripts declared data missing that was present.
 
 Measurement rules this script must obey:
 - Open data/signaldeck.db READ-ONLY. Never write to it.
@@ -321,6 +373,36 @@ while ((Get-Date) -lt $deadline -and $cycle -lt $MaxCycles) {
   $hypothesis = Ask @"
 Propose ONE new hypothesis, in at most 12 lines.
 
+WHAT THIS DATABASE ACTUALLY HOLDS. Propose only what these can test. Until
+2026-08-04 this stage was given no inventory at all, so it proposed mechanisms
+about 13D filings, buyback announcements, lockup expiries and index additions --
+none of which exist here -- and all 167 resulting scripts died without computing
+anything. A hypothesis this data cannot address is not a bold hypothesis, it is
+a wasted cycle.
+
+  daily bars 2018-07..now, 1,777 symbols (hourly only from 2025-06, minute from
+    2026-06 -- so anything beyond a few weeks must be daily)
+  realised labels: direction and forward return per (symbol, horizon)
+  insider transactions 2008..2026, 609 symbols, with BOTH trade and disclosure
+    dates (only the disclosure date is knowable in advance)
+  SEC filings 2026-02..now ONLY, 903 symbols: 8-K, Form 4, 144, 424B2
+  short volume 2026-05-20..2026-07-31 ONLY, 1,040 symbols
+  news headlines + daily sentiment aggregates 2012..now, ~700 symbols
+  StockTwits bullish/bearish counts
+  FRED macro series
+  fundamentals as key/value (EPS, Revenues, SharesOutstanding, public float)
+  13F institutional holdings by quarter (filed up to 45 days after period end)
+  this system's own scores, rankings and expectancy tables -- usable, but a
+    hypothesis built on them is measuring the system against itself
+
+  NOT here: intraday tick/quote data, options, index membership history,
+    analyst estimates, earnings dates, dividends, corporate actions,
+    congressional trades.
+
+Prefer a mechanism whose data spans years over one whose data spans weeks: a
+21-day horizon tested on ten weeks of short-volume data cannot reach the
+independent-observation floor no matter how good the idea is.
+
 Required, in this order:
   MECHANISM:  one sentence naming an economic reason this should work (a
               liquidity constraint, a flow imbalance, a participant behaviour, a
@@ -381,8 +463,9 @@ $hypothesis
 Hard requirements:
 - Read ONLY from the read-only SQLite database at data/signaldeck.db, opened as
   sqlite3.connect('file:data/signaldeck.db?mode=ro', uri=True). Never write to it.
-- Relevant tables: bars(symbol_id, tf, ts, open, high, low, close, volume),
-  symbols(id, symbol, market), regime_outcomes, prediction_outcomes, scores.
+- The full table and column inventory is in the schema block above. Use it as
+  the authority; this line used to name five tables and contradicted it, which
+  is what made 167 scripts declare present data missing.
 - Respect as-of discipline: every input must be computable at the decision
   timestamp. No value from a bar at or after the label window may inform a call.
 - Hold out the most recent 20% of the sample as a sealed era and report it
@@ -395,7 +478,19 @@ Hard requirements:
     DISTINCT_DAYS=<distinct UTC days on which a call was issued>
     EFFECTIVE_N=<issued count divided by the measured design effect>
     SEALED_PRECISION=<precision on the sealed era>
+  Two of those are INVARIANTS, not just definitions, and a run that violates
+  either is discarded before it is judged:
+    DISTINCT_DAYS counts days among the ISSUED calls only, never among the
+      opportunities considered. It therefore can never exceed ISSUED. A draw
+      that reported DISTINCT_DAYS=19 against ISSUED=15 had counted every day it
+      looked at rather than every day it acted.
+    EFFECTIVE_N must be strictly less than ISSUED. Calls clustered in time are
+      not independent, so the design effect is always greater than 1 and the
+      effective sample is always smaller than the raw count. Setting
+      EFFECTIVE_N=ISSUED asserts perfect independence, which is never true here.
 - If there is insufficient data, print INSUFFICIENT=1 and exit 0. Never fabricate.
+  But CHECK THE SCHEMA BLOCK FIRST: 167 consecutive scripts took this exit while
+  declaring data missing that the database actually held.
 - Standard library plus sqlite3 only. No pandas, no numpy, no network.
 - Must run to completion in under 10 minutes.
 
