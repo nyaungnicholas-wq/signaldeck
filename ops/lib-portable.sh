@@ -71,14 +71,21 @@ sd_winpath() {
 # a literal, and that one needs the same conversion as the database path.
 sd_sqlite() {
   local db="$1" sql="$2" py
-  if command -v sqlite3 >/dev/null 2>&1; then
-    sd_nosleep sqlite3 "$db" "$sql"
-    return $?
-  fi
-  py="$(sd_py)"
-  if [ -z "$py" ]; then
-    return 127
-  fi
+  # Path conversion belongs to BOTH backends, so it happens before either is
+  # chosen. Every backend here is a native Windows binary that cannot open a
+  # "/c/..." MSYS path, and the MSYS argument mangler does not help: it
+  # rewrites arguments that are themselves path-like, not a path embedded in a
+  # quoted SQL string such as VACUUM INTO '/c/...'.
+  #
+  # This conversion used to sit inside the Python branch only. The sqlite3-CLI
+  # branch above it was unreachable on this machine because no sqlite3 CLI was
+  # installed — until one was added on 2026-08-04 so the restore rehearsal
+  # could verify a backup. That prerequisite silently switched sd_sqlite onto
+  # the unconverted path and every backup began failing with
+  #   Error in 2nd command line argument: unable to open database: /c/Users/...
+  # while the daily job still reported only a generic "VACUUM INTO error".
+  # A dormant bug that an unrelated install switches on is exactly why the two
+  # backends must not each carry their own copy of this.
   db="$(sd_winpath "$db")"
   if command -v cygpath >/dev/null 2>&1; then
     # Convert quoted absolute MSYS paths appearing inside the SQL.
@@ -99,6 +106,15 @@ sd_sqlite() {
     done <<EOF
 $(printf '%s' "$sql" | grep -oE "'/[^']*'" | sed "s/^'//; s/'\$//")
 EOF
+  fi
+  # Backends, in preference order, both now receiving converted paths.
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sd_nosleep sqlite3 "$db" "$sql"
+    return $?
+  fi
+  py="$(sd_py)"
+  if [ -z "$py" ]; then
+    return 127
   fi
   # VACUUM INTO cannot run inside a transaction, so autocommit is required —
   # isolation_level=None. Without it Python opens an implicit transaction and
