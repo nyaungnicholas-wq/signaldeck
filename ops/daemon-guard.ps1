@@ -27,16 +27,37 @@ $lock = Join-Path $root 'ops\.maintenance'
 $exe  = Join-Path $root 'bin\signaldeckd.exe'
 $cwd  = Join-Path $root 'daemon'
 
-# ponytail: 90m stale-lock ceiling. The offline backup takes single-digit
-# minutes; if the lock outlives that by an order of magnitude the holder is
-# gone, not slow.
+# Deciding whether the lock still has a live holder.
+#
+# A trap in market-close.sh is not enough: that script is killed with
+# STATUS_CONTROL_C_EXIT on this machine (seen 2026-08-03 and again 2026-08-04),
+# and a console-control kill does not run bash EXIT traps, so the lock outlives
+# the holder. The 90m ceiling alone would then leave the daemon down for 90
+# minutes after a two-minute backup died.
+#
+# So: look for an actual holder. The lock is only honoured while a process that
+# takes it is running, with a short grace so we never race a holder that has
+# taken the lock but not yet appeared in the process table.
+$LOCK_HOLDERS = 'market-close', 'backup-offline', 'signaldeck-ctl'
 if (Test-Path $lock) {
     $ageMin = [math]::Round(((Get-Date) - (Get-Item $lock).LastWriteTime).TotalMinutes, 1)
-    if ($ageMin -lt 90) {
-        Write-Output "maintenance lock held ($ageMin min old): leaving daemon down"
+    $holder = Get-CimInstance Win32_Process -Filter "Name='bash.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $c = $_.CommandLine; $c -and ($LOCK_HOLDERS | Where-Object { $c -like "*$_*" }) } |
+        Select-Object -First 1
+
+    if ($ageMin -lt 2) {
+        Write-Output "maintenance lock just taken ($ageMin min): leaving daemon down"
         exit 0
     }
-    Write-Output "maintenance lock is stale ($ageMin min): clearing and starting"
+    if ($holder -and $ageMin -lt 90) {
+        Write-Output "maintenance lock held by pid $($holder.ProcessId) ($ageMin min): leaving daemon down"
+        exit 0
+    }
+    if ($holder) {
+        Write-Output "maintenance lock held past the 90 min ceiling by pid $($holder.ProcessId): clearing anyway"
+    } else {
+        Write-Output "maintenance lock has no live holder ($ageMin min): clearing and starting"
+    }
     Remove-Item $lock -Force -ErrorAction SilentlyContinue
 }
 
