@@ -81,8 +81,39 @@ param(
   # meant to run for days must fail LOUDLY to worker-empty when the pinned
   # model errors, not silently drift onto a different (possibly pricier) one.
   # Set to '' to restore lane-based routing (now gateway-first by default too).
-  [string]$PinnedModel = 'mistral/devstral-latest',
-  [int]$CyclePauseSec = 30
+  #
+  # 2026-08-04: repointed off mistral/devstral-latest, whose credentials are
+  # dead -- it answers 404 to everything. Measured cost of not noticing: 8 runs,
+  # 835 cycles, 827 of them worker-empty, 0 hypotheses judged.
+  #
+  # The replacement is an alias, not a concrete id, and that is a deliberate
+  # reversal of the reasoning above. Every concrete gateway model was tried
+  # against the REAL payload (this protocol, ~11.5KB, as standing context):
+  # mistral/* and moonshot/* and xai/* are 404, gemini/* returns 429 under any
+  # sustained use. Pinning one of those buys nominal reproducibility and zero
+  # hypotheses, which is the trade this loop just made for eight runs.
+  #
+  # BE CLEAR ABOUT WHAT THIS COSTS. `served-by` records what omni was ASKED
+  # for, not what the gateway chose: omni.ps1 line 171 echoes the requested id
+  # ("via auto/coding"), and the response's real model is never surfaced. So
+  # under an alias the concrete model behind a given hypothesis is NOT recorded,
+  # and that is a genuine loss of provenance, not a wash.
+  #
+  # It is still the right trade today. A concrete pin bought exactly zero
+  # hypotheses across 835 cycles, and provenance over nothing is worth nothing.
+  # Revert to a concrete id the moment one is reliably reachable. The proper fix
+  # is upstream -- omni.ps1 could log the `model` field the gateway returns,
+  # which would make an alias fully attributable and this note obsolete.
+  [string]$PinnedModel = 'auto/coding',
+  [int]$CyclePauseSec = 30,
+  # Consecutive empty cycles before the run gives up. "Fail loudly" was already
+  # true -- worker-empty was logged all 827 times -- but loud into a log nobody
+  # reads is indistinguishable from silence, and the loop ground on for ~7 hours
+  # per run regardless. The comment at the diag capture below records the same
+  # shape at 44 cycles; it got better diagnostics and still no brake. This is
+  # the brake: five straight failures is a broken pin or a dead gateway, not a
+  # bad run of luck, and stopping is what makes it visible.
+  [int]$MaxConsecutiveEmpty = 5
 )
 
 $ErrorActionPreference = 'Continue'
@@ -204,8 +235,16 @@ $task
   if ($diag -match 'via\s+(\S+)') { Ev 'served-by' @{ model = $Matches[1] } }
 
   if (-not (Test-Path $tmp) -or (Get-Item $tmp).Length -lt 10) {
-    Ev 'worker-empty' @{ diag = (($diag -split "`n" | Where-Object { $_ -match '\S' } |
-          Select-Object -Last 2) -join ' ') }
+    # Keep the line that NAMES the cause, not just the last two lines. Taking
+    # the tail captured PowerShell's error trailer ("WriteErrorException,
+    # omni.ps1") and dropped omni's own "WARNING: <model> @ <url> failed: ...
+    # (429) Too Many Requests" -- the only line that distinguishes a dead
+    # credential from a rate limit from a timeout. Diagnosing the 827-cycle
+    # outage meant re-running the call by hand purely to see this line.
+    $lines = @($diag -split "`n" | Where-Object { $_ -match '\S' } | ForEach-Object { $_.Trim() })
+    $cause = @($lines | Where-Object { $_ -match 'WARNING:|failed:|\(\d{3}\)' })
+    Ev 'worker-empty' @{ diag = ((@($cause) + @($lines | Select-Object -Last 1) |
+          Select-Object -Unique -First 3) -join ' | ') }
     return $null
   }
 
@@ -266,6 +305,10 @@ that almost everything here is killed.
 }
 
 $cycle = 0
+# Reset by any cycle that produces a hypothesis; trips the abort at
+# $MaxConsecutiveEmpty. See the parameter's comment for what it cost not to
+# have this.
+$script:consecutiveEmpty = 0
 while ((Get-Date) -lt $deadline -and $cycle -lt $MaxCycles) {
   $cycle++
   Ev 'cycle-start' @{ cycle = $cycle }
@@ -296,7 +339,26 @@ $prior
 Output the six labelled lines and nothing else.
 "@ $Lane $null 900
 
-  if (-not $hypothesis) { Ev 'no-hypothesis'; Start-Sleep -Seconds $CyclePauseSec; continue }
+  if (-not $hypothesis) {
+    $script:consecutiveEmpty++
+    Ev 'no-hypothesis' @{ consecutive = $script:consecutiveEmpty; limit = $MaxConsecutiveEmpty }
+    if ($script:consecutiveEmpty -ge $MaxConsecutiveEmpty) {
+      # Stop rather than grind. The worker is not producing hypotheses, which
+      # means the pinned model is unreachable or rejecting the protocol -- and
+      # neither gets better by asking 400 more times.
+      Ev 'aborted-worker-dead' @{
+        consecutive = $script:consecutiveEmpty
+        model       = $(if ($PinnedModel -eq '') { "lane:$Lane" } else { $PinnedModel })
+        hint        = 'check the pinned model answers: omni.ps1 -Model <id> -Prompt "Reply OK"'
+      }
+      Write-Output ("eighty-loop ABORTED: {0} consecutive cycles produced no hypothesis. " -f $script:consecutiveEmpty +
+                    "The pinned model ({0}) is not answering. Verify it, then restart." -f $(if ($PinnedModel -eq '') { "lane:$Lane" } else { $PinnedModel }))
+      exit 1
+    }
+    Start-Sleep -Seconds $CyclePauseSec
+    continue
+  }
+  $script:consecutiveEmpty = 0
   Ev 'hypothesis' @{ cycle = $cycle; head = (($hypothesis -split "`n")[0]) }
 
   # --- 2. IMPLEMENT -------------------------------------------------------
