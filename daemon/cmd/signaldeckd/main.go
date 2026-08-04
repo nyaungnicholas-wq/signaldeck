@@ -114,4 +114,26 @@ func main() {
 
 	// Workers + API are wired in as their packages land (see run.go).
 	run(ctx, cfg, st)
+
+	// Why this is not just `return`: the daemon has two ways to stop and they
+	// mean opposite things, but both used to exit 0 and neither was logged, so
+	// a dead daemon left no evidence of which had happened.
+	//
+	//  1. The shutdown context fired — an operator stop, or on Windows any
+	//     console control event (CTRL_CLOSE/CTRL_LOGOFF are delivered as
+	//     os.Interrupt). Exit 0 is correct.
+	//  2. run() returned while ctx is still live — an internal path bailed out
+	//     (failed user bootstrap, fatal wiring error). Those paths log and
+	//     `return`, so the process exited 0 and Task Scheduler read a fatal
+	//     fault as "completed successfully" — which is why the configured
+	//     restart-on-failure policy (RestartCount=999) had never once fired.
+	//
+	// Exiting non-zero on case 2 is what makes that existing policy work.
+	if ctx.Err() != nil {
+		slog.Info("signaldeckd stopped: shutdown signal received", "cause", ctx.Err())
+		return
+	}
+	slog.Error("signaldeckd stopped WITHOUT a shutdown signal — internal fault; " +
+		"exiting non-zero so the supervisor restarts it")
+	os.Exit(1)
 }

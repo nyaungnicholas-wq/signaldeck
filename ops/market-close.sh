@@ -9,6 +9,23 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # never fired, whatever the daemon was doing.
 # shellcheck source=lib-portable.sh
 . "$SD/ops/lib-portable.sh"
+
+# The daemon is stopped below on purpose, and ops/daemon-guard.ps1 now runs
+# every 5 minutes to restart it whenever it is found down. Without a signal
+# that THIS downtime is deliberate, the guard would restart the daemon in the
+# middle of the VACUUM INTO and signaldeck-backup-offline.sh would skip the
+# run outright (its safety check refuses to back up a live daemon) — we would
+# silently trade a dead daemon for a missing backup.
+#
+# The trap is the load-bearing half. This script was seen dying mid-run
+# (STATUS_CONTROL_C_EXIT, 2026-08-03); without it, that crash would hold the
+# lock and keep the daemon down until someone noticed. daemon-guard.ps1 also
+# expires the lock after 90m as a second net.
+LOCK="$SD/ops/.maintenance"
+release_lock() { rm -f "$LOCK"; }
+trap release_lock EXIT INT TERM
+: > "$LOCK"
+
 /bin/bash "$SD/ops/signaldeck-ctl.sh" stop
 # Graceful daemon shutdown (worker drain + WAL checkpoint) can take a minute —
 # a fixed 8s sleep made the backup's is-daemon-alive safety check skip the run
@@ -27,3 +44,15 @@ if sd_is_running signaldeckd; then
   sleep 5
 fi
 /bin/bash "$SD/ops/signaldeck-backup-offline.sh"
+
+# Bring the stack back up. Before this line the script simply ENDED with the
+# daemon stopped, so the 13:10 backup took SignalDeck down for the rest of the
+# day, every weekday — the daemon exits 0, which Task Scheduler reads as
+# success, so nothing ever restarted it.
+#
+# Drop the lock first, then kick the task (which runs daemon-guard.ps1 with
+# native Windows paths, avoiding Git Bash path mangling). If schtasks is
+# unavailable or fails, the 5-minute keepalive still recovers it — this only
+# shortens the gap from minutes to seconds.
+release_lock
+schtasks //Run //TN "SignalDeck Daemon" >/dev/null 2>&1 || true
