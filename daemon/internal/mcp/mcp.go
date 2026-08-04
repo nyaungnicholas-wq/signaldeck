@@ -167,6 +167,15 @@ type Source interface {
 	ModelHealth(ctx context.Context, model string) (string, error)
 	// Preregistration returns the frozen per-predictor claims plus chain state.
 	Preregistration(ctx context.Context) (PreregSummary, error)
+	// EarliestGradeableOn is the first date an outstanding structural forecast
+	// can actually be graded, DERIVED from the calls on disk rather than
+	// declared. It is reported next to the pre-registered FirstGradableOn, never
+	// instead of it: the frozen date is a commitment and must not be edited, but
+	// it was a forecast about when data would mature, and on 2026-08-04 the two
+	// differed by ten days (frozen 2026-08-07, derived 2026-08-17). Serving only
+	// the frozen one presented a stale date as current fact.
+	// ok=false means nothing structural is outstanding.
+	EarliestGradeableOn(ctx context.Context) (date string, ok bool, err error)
 }
 
 // Verdict is one symbol's structural regime call, already reduced to the

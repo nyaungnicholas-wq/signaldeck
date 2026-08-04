@@ -12,6 +12,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import Link from "next/link";
+import {
+  AccuracyStatusBanner,
+  type AccuracyStatus,
+} from "@/components/accuracy/AccuracyStatusBanner";
 
 export const dynamic = "force-dynamic";
 
@@ -264,7 +268,80 @@ function CalibrationPanel({ cal }: { cal: Calibration }) {
   );
 }
 
+// PUBLICATION GATE (audit F-1, 2026-08-03). Before this, the page rendered a
+// REFUSED registry as a successful one: blank fields, no refusal message, and a
+// visitor with no way to tell a grading outage from a quiet week. The daemon's
+// /api/accuracy is the single authority on whether these numbers may be shown —
+// it applies publication.BuildVerdict, reconciles the registry against
+// evidence_claims and the retirement history, and refuses when the grader is
+// stale. If it refuses, this page shows the refusal AND NOTHING ELSE.
+//
+// This runs server-side deliberately. A client-side gate would paint the stale
+// table first and the refusal a moment later, which is the defect with extra
+// steps.
+async function loadPublicationStatus(): Promise<{
+  status: AccuracyStatus | "REFUSED";
+  reason?: string;
+  rows: PublishedRow[];
+} | null> {
+  const daemon = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
+  try {
+    const res = await fetch(`${daemon}/api/accuracy`, { cache: "no-store" });
+    const body = await res.json();
+    if (!res.ok || body?.status !== "OK") {
+      return { status: (body?.status ?? "REFUSED") as AccuracyStatus | "REFUSED",
+               reason: body?.reason, rows: [] };
+    }
+    return { status: "OK", rows: (body.rows ?? []) as PublishedRow[] };
+  } catch {
+    // Unreachable daemon is not "no news". It is an unknown, and an unknown
+    // about whether these numbers are current resolves to not publishing them.
+    return null;
+  }
+}
+
+type PublishedRow = {
+  predictor: string;
+  horizon: string;
+  variant: string;
+  publication_status: AccuracyStatus;
+  retired: boolean;
+  retirement_sticky: boolean;
+  reasons?: string[];
+  evidence_refs?: string[];
+};
+
 export default async function AccuracyPage() {
+  const pub = await loadPublicationStatus();
+
+  // Fail closed. A refusal, or a daemon that cannot be reached, ends the page.
+  if (!pub || pub.status !== "OK") {
+    return (
+      <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-[1.4rem] font-extrabold tracking-tight">Accuracy registry</h1>
+        </header>
+        <AccuracyStatusBanner
+          status={(pub?.status ?? "REFUSED_STALE") as AccuracyStatus}
+          reasons={[
+            pub?.reason ??
+              "the grading daemon is unreachable, so it cannot be confirmed that these numbers are current",
+          ]}
+        />
+        <p className="m-0 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+          No accuracy figures are shown while publication is refused. This is deliberate: a
+          grading outage must be impossible to mistake for a quiet week. The numbers return on
+          their own once a fresh grade lands.
+        </p>
+      </div>
+    );
+  }
+
+  // Rows the daemon will not publish as healthy. Surfaced ABOVE the tables,
+  // because the whole failure this fixes was a condemned model reading as
+  // merely absent further down the page.
+  const flagged = pub.rows.filter((r) => r.publication_status !== "OK");
+
   const reg = await loadRegistry();
   const rows = reg?.rows ?? [];
   const directional = rows
@@ -283,6 +360,25 @@ export default async function AccuracyPage() {
           failures lead. Descriptive, not advice.
         </p>
       </header>
+
+      {/* Publication status per row, from the daemon's single verdict path.
+          A RETIRED row appears here even when its current window is too thin to
+          publish an interval — retirement does not lapse when evidence thins. */}
+      {flagged.length > 0 ? (
+        <section className="flex flex-col gap-2" aria-label="publication status">
+          {flagged.map((r) => (
+            <AccuracyStatusBanner
+              key={`${r.predictor}-${r.horizon}-${r.variant}`}
+              status={r.publication_status}
+              reasons={[
+                `${r.predictor}${r.horizon ? ` (${r.horizon}${r.variant ? `, ${r.variant}` : ""})` : ""}`,
+                ...(r.reasons ?? []),
+              ]}
+              evidenceRefs={r.evidence_refs}
+            />
+          ))}
+        </section>
+      ) : null}
 
       {/* ── FLAGSHIP RETIREMENT: the disclosure that must not be buried ── */}
       <section className="panel" style={{ borderColor: "var(--bad)" }} aria-label="flagship retirement">
@@ -330,11 +426,15 @@ export default async function AccuracyPage() {
         </div>
       </section>
 
+      {/* data-empty: nothing is here, and it is ours to fix, not the reader's
+          — so this states the cause and offers no button that cannot help. */}
       {!reg && (
-        <section className="panel px-5 py-4" aria-label="registry unavailable">
+        <section data-empty="" className="panel px-5 py-4" aria-label="registry unavailable">
           <span className="text-[0.85rem]" style={{ color: "var(--warn)" }}>
-            data/accuracy_registry.json is not readable on this deployment — the live rows cannot
-            render. The retirement disclosure above still stands.
+            No verdicts to show right now &mdash; the registry file is not readable on this
+            deployment, so the live rows cannot render. Nothing has been hidden: the retirement
+            disclosure above still stands, and the rows return as soon as the daily grade writes
+            the file again.
           </span>
         </section>
       )}
@@ -391,13 +491,25 @@ export default async function AccuracyPage() {
         </p>
       )}
 
+      {/* Verb-first so it reads as the next move, not a way back. This page is
+          a list of verdicts; the useful thing to do after reading it is to go
+          look at the record those verdicts were graded against. */}
       <Link
         href="/proof"
         className="w-fit text-[0.78rem] font-semibold tracking-wide transition-colors duration-150"
         style={{ color: "var(--accent)" }}
       >
-        ← the receipts (ledger + live track record)
+        See the receipts &mdash; the ledger and the live track record &rarr;
       </Link>
+
+      <p className="m-0 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+        <strong style={{ color: "var(--dim)" }}>In plain English:</strong> a claim here is only
+        called good once enough real outcomes have been graded. Backtest numbers are marked
+        PENDING until then, and anything the live record contradicts is shown first, in red.{" "}
+        <Link href="/glossary" style={{ color: "var(--dim)", textDecoration: "underline" }}>
+          Every term on this page is in the glossary.
+        </Link>
+      </p>
     </div>
   );
 }

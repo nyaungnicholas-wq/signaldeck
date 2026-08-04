@@ -1909,3 +1909,75 @@ CREATE TABLE IF NOT EXISTS prediction_attributions (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_pred_attr_symbol
   ON prediction_attributions(symbol_id, horizon, ledger_seq);
+
+-- ── Publication verdicts (2026-08-04 fix pack) ──────────────────────────
+--
+-- One row per (predictor, horizon, variant) per grading evaluation. Append-only
+-- history: the latest row by evaluated_at is the current publication state.
+--
+-- STICKINESS. A model the record has once contradicted stays contradicted. The
+-- obvious implementation — an UPDATE trigger guarding retired 1->0 — protects
+-- nothing here, because nothing updates: every grade INSERTs a new row, so an
+-- un-retire arrives as a fresh retired=0 row the UPDATE trigger never sees. The
+-- guard therefore has to run on INSERT and consult the history, which is what
+-- publication_verdicts_no_unretire does. It is a backstop under
+-- publication.BuildVerdict, not a substitute for it: the builder is what knows
+-- WHY a row is retired, and the trigger is what makes forgetting impossible.
+CREATE TABLE IF NOT EXISTS publication_verdicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  predictor TEXT NOT NULL,
+  horizon   TEXT NOT NULL,
+  variant   TEXT NOT NULL DEFAULT '',
+  publication_status TEXT NOT NULL CHECK (publication_status IN
+    ('OK','INSUFFICIENT','FAILED','RETIRED','REFUSED_STALE','NO_BASELINE','QUARANTINED')),
+  retired           INTEGER NOT NULL DEFAULT 0 CHECK (retired IN (0,1)),
+  retirement_sticky INTEGER NOT NULL DEFAULT 0 CHECK (retirement_sticky IN (0,1)),
+  retire_reason     TEXT,
+  retirement_source TEXT,             -- 'evidence' | 'grader' | 'history' | 'wilson'
+  evidence_claim_id TEXT,
+  current_n_eff           REAL,
+  current_distinct_blocks INTEGER,
+  ci_method TEXT,
+  ci_lower  REAL,
+  ci_upper  REAL,
+  null_rate REAL,
+  skill_pp  REAL,
+  grader_sha256 TEXT,
+  reasons_json       TEXT NOT NULL DEFAULT '[]',
+  evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+  evaluated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (predictor, horizon, variant, evaluated_at)
+);
+CREATE INDEX IF NOT EXISTS idx_publication_verdicts_latest
+  ON publication_verdicts (predictor, horizon, variant, evaluated_at DESC);
+
+-- The only way past this is to delete history, which is itself the loud act.
+CREATE TRIGGER IF NOT EXISTS publication_verdicts_no_unretire
+BEFORE INSERT ON publication_verdicts
+WHEN new.retired = 0 AND EXISTS (
+  SELECT 1 FROM publication_verdicts p
+   WHERE p.predictor = new.predictor
+     AND p.horizon   = new.horizon
+     AND p.variant   = new.variant
+     AND p.retired   = 1
+)
+BEGIN
+  SELECT RAISE(ABORT, 'retirement is sticky and cannot be cleared');
+END;
+
+-- Grader heartbeats. A scheduled task exiting 0 is NOT evidence the grade ran:
+-- on 2026-08-03 the task reported success while the grader had been refusing
+-- for 33 hours. success here means the grader produced a registry, and
+-- finished_at is what staleness is measured against.
+CREATE TABLE IF NOT EXISTS grader_heartbeats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task    TEXT NOT NULL,
+  success INTEGER NOT NULL CHECK (success IN (0,1)),
+  finished_at TEXT NOT NULL,
+  grader_sha256  TEXT,
+  rows_evaluated INTEGER,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_grader_heartbeats_task_finished
+  ON grader_heartbeats (task, finished_at DESC);

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/composite"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/freshness"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/recommendation"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -116,6 +117,29 @@ func (d Deps) deskRecommendation(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// FRESHNESS GATE (audit F-2, 2026-08-03). This endpoint used to stamp
+	// AsOf: time.Now() over a composite row that could be days old, and served
+	// a ten-day-old close as a current recommendation. Nothing was corrupt: the
+	// price was real and the timestamp was real, they were simply not the same
+	// timestamp. generated_at and data_asof are different facts and are now
+	// reported as such — and when the data is too old to present as current the
+	// endpoint refuses rather than dressing it up.
+	dataAsOf := time.Unix(row.Ts, 0).UTC()
+	now := time.Now().UTC()
+	if err := freshness.Check(now, dataAsOf, maxRecommendationAge); err != nil {
+		writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{
+			"available":        false,
+			"status":           "REFUSED_STALE",
+			"symbol":           s.Symbol,
+			"market":           s.Market,
+			"reason":           "recommendation inputs are stale: " + err.Error(),
+			"generatedAt":      now.Unix(),
+			"dataAsOf":         row.Ts,
+			"stalenessSeconds": int64(freshness.Age(now, dataAsOf).Seconds()),
+		})
+		return
+	}
+
 	var p composite.Payload
 	if err := json.Unmarshal([]byte(row.Payload), &p); err != nil {
 		httpErr(w, 500, "stored payload does not parse: "+err.Error())
@@ -136,7 +160,8 @@ func (d Deps) deskRecommendation(w http.ResponseWriter, r *http.Request) {
 		Available:      true,
 		Symbol:         s.Symbol,
 		Market:         string(s.Market),
-		AsOf:           time.Now().Unix(),
+		AsOf:           now.Unix(),
+		DataAsOf:       row.Ts,
 		Recommendation: rec,
 		Audit:          audit,
 	})
@@ -148,10 +173,20 @@ type deskRecResponse struct {
 	Available bool   `json:"available"`
 	Symbol    string `json:"symbol"`
 	Market    string `json:"market"`
-	AsOf      int64  `json:"asOf"`
+	// AsOf is when this RESPONSE was generated; DataAsOf is the timestamp of the
+	// composite row it describes. They are different facts and collapsing them
+	// into one field is what produced audit F-2.
+	AsOf     int64 `json:"asOf"`
+	DataAsOf int64 `json:"dataAsOf"`
 	recommendation.Recommendation
 	Audit map[string]any `json:"audit"`
 }
+
+// maxRecommendationAge bounds how old the composite row behind a recommendation
+// may be. The composite scorer runs every 10 minutes during market hours; 26
+// hours spans a weekend-free gap plus a full session, so a breach means the
+// scorer is down rather than merely between passes.
+const maxRecommendationAge = 26 * time.Hour
 
 // recInputs gathers every stored input the recommendation engine needs. Best-
 // effort: a failed optional read just leaves that leg absent (the engine gates

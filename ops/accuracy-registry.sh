@@ -185,6 +185,14 @@ fi
 # it removes the accuracy tables from README.md and puts the refusal in their
 # place, restores PREV so transition detection survives, and pages.
 if [ -n "$refusal_reason" ]; then
+  # Record the refusal where the DAEMON can see it. Until 2026-08-04 a grading
+  # outage was visible only in this log and in README prose, so /api/accuracy
+  # and every other consumer went on serving the last good numbers with no way
+  # to know they were stale. The rule that decided this is above, and stays
+  # above: this line only reports the decision.
+  "$PY" "$SD/tools/grader_heartbeat.py" --failure --error "$refusal_reason" \
+    >> "$LOG" 2>&1 || echo "heartbeat write failed (non-fatal)" >> "$LOG"
+
   if [ -f "$PREV_BACKUP" ]; then
     mv -f "$PREV_BACKUP" "$PREV"
   else
@@ -286,6 +294,12 @@ PY
 fi
 
 rm -f "$PREV_BACKUP"
+
+# The grade is real: the grader exited 0 AND the registry's timestamp advanced,
+# both checked above. Record it so the daemon can tell a fresh grade from a
+# stale one — /api/accuracy refuses to publish without a recent success here.
+"$PY" "$SD/tools/grader_heartbeat.py" --success \
+  >> "$LOG" 2>&1 || echo "heartbeat write failed (non-fatal)" >> "$LOG"
 
 # Regenerate the "Live accuracy (auto-updated)" section of README.md from the
 # fresh registry, between the LIVE-ACCURACY markers. The point: a FAILED verdict

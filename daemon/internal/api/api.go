@@ -33,6 +33,11 @@ type Deps struct {
 	Cfg     config.Config
 	Version string
 	Started time.Time
+	// RegistryPath overrides where data/accuracy_registry.json is read from
+	// (empty = resolve relative to the working directory, as the daemon does in
+	// production). Mirrors ModelHealthWorker.RegistryPath, and exists for the
+	// same reason: without it a test reads the LIVE registry.
+	RegistryPath string
 	LLM     llm.Client // AI provider (may be disabled when no key is set)
 	// Subscribe validates a new symbol, upserts it into the STREAMED hot set
 	// (stream=1), and kicks off backfill (async). Wired in cmd/signaldeckd.
@@ -178,7 +183,8 @@ func Serve(ctx context.Context, d Deps) error {
 	d.registerOptions(mux) // GET /api/options/price (Black-Scholes-Merton value + Greeks + implied-vol inversion; refuses a vol for quotes with no vega rather than inventing one) + GET /api/options/vol-edge?symbol&market&iv= (the VALIDATED vol-regime forecast turned into a vol LEVEL from this symbol's own walk-forward history, compared against a market implied vol the USER supplies — there is no options feed here); every verdict ships its assumed variance risk premium, the premium at which it flips, and whether it survives the regime call being wrong
 	// ── PAIRS wave (appended — keep new routes at the END of this block so
 	// parallel route edits by other agents never collide) ────────────────────
-	d.registerPrereg(mux) // GET /api/prereg — what each structural predictor CLAIMED, frozen + hash-chained BEFORE its forecasts began resolving (first gradable 2026-08-07). Makes the advertised accuracy tables falsifiable: after the live record arrives the comparison is against a dated, hashed commitment rather than against whatever the code says at that time; the chain turns a later edit into a detectable break instead of a matter of trust, and amendments are appended, never applied in place
+	d.registerAccuracy(mux) // GET /api/accuracy — the registry with an explicit publication_status per row, reconciled against evidence_claims and the retirement history through publication.BuildVerdict (the one copy of those rules). Fail-closed: 503 REFUSED when the registry is unreadable or the grader marked itself refusing, 503 REFUSED_STALE when no successful grade landed inside GraderMaxAge. Referenced by three audits and never implemented until 2026-08-04; until then the path 404d while prose described its behaviour
+	d.registerPrereg(mux)   // GET /api/prereg — what each structural predictor CLAIMED, frozen + hash-chained BEFORE its forecasts began resolving (first gradable 2026-08-07). Makes the advertised accuracy tables falsifiable: after the live record arrives the comparison is against a dated, hashed commitment rather than against whatever the code says at that time; the chain turns a later edit into a detectable break instead of a matter of trust, and amendments are appended, never applied in place
 	d.registerStress(mux) // Layer-4 stress lab: GET /api/stress/scenarios (composable effect-vector catalog) + POST /api/stress/run (auth-required, capped compute — joint scenarios + regime-conditional block bootstrap replayed through the REAL decide→riskgate→papertrade path; reports system behavior, never a PnL claim)
 
 	d.registerMarketRegimes(mux) // GET /api/market-regimes — the SAME structural trend/vol/liquidity calls, grouped for the index and sector baskets (SPY/QQQ/IWM/DIA + all 11 SPDR sectors) instead of buried among ~885 single names; ships sector BREADTH per kind (one elevated sector is noise, eleven of eleven is a market state), names any basket with no call rather than letting absence read as neutral, and states that the accuracy tiers are INHERITED from the stock-universe validation and were never re-measured on baskets

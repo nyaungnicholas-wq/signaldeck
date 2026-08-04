@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
 )
 
 type tool struct {
@@ -360,16 +362,31 @@ func runTrackRecord(ctx context.Context, s *Server, _ *Client, _ toolArgs) (map[
 		})
 	}
 
+	// The frozen date is a hash-chained COMMITMENT and is never edited. The
+	// derived date is what the outstanding calls on disk actually permit. They
+	// were ten days apart on 2026-08-04, and publishing only the frozen one
+	// served a stale date as current fact.
+	structural := map[string]any{
+		"status": "BACKTEST ONLY. Six structural predictors carry outstanding forecasts, none of " +
+			"which has resolved. Every structural accuracy this platform quotes is a backtest " +
+			"measurement until the live record arrives.",
+		"firstGradableOn": prereg.FirstGradableOn,
+		"note": "The claims were frozen and hash-chained before any of them could resolve, so the " +
+			"eventual comparison is a measurement rather than a story. See get_preregistration. " +
+			"firstGradableOn is the PRE-REGISTERED commitment; earliestGradeableOn is derived from " +
+			"the forecasts actually outstanding and is the one that governs when evidence arrives.",
+	}
+	if derived, ok, err := s.src.EarliestGradeableOn(ctx); err == nil && ok {
+		structural["earliestGradeableOn"] = derived
+		if derived != prereg.FirstGradableOn {
+			structural["gradeableDateNote"] = "the derived date differs from the pre-registered one; " +
+				"the commitment is left as registered and the derived date is authoritative for scheduling"
+		}
+	}
+
 	return map[string]any{
 		"directional": directional,
-		"structural": map[string]any{
-			"status": "BACKTEST ONLY. Six structural predictors carry outstanding forecasts, none of " +
-				"which has resolved. Every structural accuracy this platform quotes is a backtest " +
-				"measurement until the live record arrives.",
-			"firstGradableOn": "2026-08-07",
-			"note": "The claims were frozen and hash-chained before any of them could resolve, so the " +
-				"eventual comparison is a measurement rather than a story. See get_preregistration.",
-		},
+		"structural":  structural,
 		"discrimination": map[string]any{
 			"claim":             "Accuracy rises with the model's own stated conviction. That spread, not the average, is the result.",
 			"lowBand":           0.729,
