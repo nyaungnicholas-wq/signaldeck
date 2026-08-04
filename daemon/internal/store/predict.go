@@ -18,6 +18,20 @@ type Prediction struct {
 	CalProb    float64    `json:"calProb"`
 	NUsed      int        `json:"nUsed"`
 	Components string     `json:"components"`
+	// Weights is the per-leg weight map actually used for THIS blend, JSON
+	// encoded. Empty means the blend fell through to the equal-weight prior.
+	//
+	// Components already records what each leg SAID; without the weights
+	// nothing records how much each leg was BELIEVED, so "the ensemble was
+	// weighted by measured skill" and "the ensemble fell back to a static
+	// prior" are indistinguishable after the fact. That distinction is the
+	// difference between a weighting bug and an absent-evidence problem.
+	Weights string `json:"weights,omitempty"`
+	// Basis names WHICH tier supplied those weights — "personal",
+	// "regime:<cell>", "global" or "static". The adaptive layer's fallback
+	// chain is the thing most likely to be silently carrying the fleet, and a
+	// per-leg audit that cannot group by it is reading a mixture.
+	Basis string `json:"basis,omitempty"`
 }
 
 // UpsertPrediction stores a prediction and seeds its outcome row.
@@ -28,9 +42,10 @@ func (s *Store) UpsertPrediction(ctx context.Context, p Prediction) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 	if _, err := tx.ExecContext(ctx, `
-		INSERT OR REPLACE INTO predictions (symbol_id, horizon, ts, raw_prob, cal_prob, n_used, components)
-		VALUES (?,?,?,?,?,?,?)`,
-		p.SymbolID, string(p.Horizon), p.Ts, p.RawProb, p.CalProb, p.NUsed, p.Components); err != nil {
+		INSERT OR REPLACE INTO predictions (symbol_id, horizon, ts, raw_prob, cal_prob, n_used, components, weights, basis)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		p.SymbolID, string(p.Horizon), p.Ts, p.RawProb, p.CalProb, p.NUsed, p.Components,
+		p.Weights, p.Basis); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `

@@ -132,3 +132,13 @@ func (s StoreSource) EarliestGradeableOn(ctx context.Context) (string, bool, err
 	}
 	return t.Format("2006-01-02"), true, nil
 }
+
+// EarliestVerdictOn derives the first date a VERDICT can exist — the block gate
+// plus the resolution wait — from the calls on disk. See store.EarliestVerdictAt.
+func (s StoreSource) EarliestVerdictOn(ctx context.Context) (string, bool, error) {
+	t, ok, err := s.St.EarliestVerdictAt(ctx)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return t.Format("2006-01-02"), true, nil
+}

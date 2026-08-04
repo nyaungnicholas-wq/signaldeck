@@ -1,12 +1,3 @@
-// Package expectancy computes conditional forward-return statistics:
-// "when the symbol looked like THIS, what happened next". It is pure —
-// bars in, marketdata.Expectancy rows out — and never touches the store.
-//
-// The output is the app's honest 'prediction': measured tendencies with
-// sample sizes attached, never point forecasts. To keep thin market states
-// from producing overconfident rows, every historical sample is credited
-// both to its full state key and to every coarser prefix of that key, so
-// rare states roll up into broader (better-sampled) buckets.
 package expectancy
 
 import (
@@ -37,17 +28,46 @@ const (
 
 	// Walk shape. walkStart=60 guarantees every dimension is computable
 	// (RSI 14, ROC up to 60, SMA20 volume) at the first sampled index.
-	walkStart     = 60
-	minDailyBars  = 80  // fewer daily bars → no 1d/1w stats at all
+	walkStart = 60
+	// minDailyBars/minMinuteBars must be able to PRODUCE minSamples, or the
+	// walk floor and the evidence floor contradict each other: the walk would
+	// admit a symbol whose every state cell is then dropped for thinness.
+	//   daily:  walkStart + minSamples          = 60 + 30      =  90
+	//   minute: walkStart + minSamples*minuteStep + 60 forward = 60+450+60 = 570
+	// Both are rounded up for slack. Raised from 80/300 on 2026-08-04 when
+	// minSamples went 5 -> 30; at the old floors a symbol could clear the walk
+	// gate with 20 usable daily samples and emit nothing.
+	minDailyBars  = 95  // fewer daily bars → no 1d/1w stats at all
 	maxDailyBars  = 500 // cap the daily walk to recent history
-	minMinuteBars = 300 // fewer minute bars → no 1h stats at all
+	minMinuteBars = 600 // fewer minute bars → no 1h stats at all
 	minuteStep    = 15  // sample minute states every 15 bars (decorrelates overlap)
 
-	minSamples = 5 // states thinner than this are not emitted
+	// minSamples matches the platform-wide independent-observation floor
+	// (modelhealth.MinObservations, ensemble.MinCalibrationPairs) so one number
+	// governs "is this evidence". It was 5, which let a five-row cell publish a
+	// production probability.
+	minSamples = 30
+	// minDistinctDays: rows are not observations. The 1h walk samples every 15
+	// minute-bars, so a single session can manufacture hundreds of rows that
+	// carry the information of ONE day. Daily bars are one per day, so this
+	// binds only on the minute walk — which is exactly where the inflation was.
+	minDistinctDays = 5
+
+	// expectancyPriorStrength is the pseudocount for shrinking a state's raw
+	// hit rate toward the horizon's pooled base rate. 25 matches
+	// ensemble.calibrationPriorStrength so one number governs shrinkage.
+	expectancyPriorStrength = 25.0
+
 	// Lookup prefers the most specific matching row with at least this many
 	// samples; see Lookup for the full policy.
 	lookupMinN = 8
 )
+
+// cell holds accumulated samples and distinct UTC days for a state key.
+type cell struct {
+	samples []float64
+	days    map[int64]struct{}
+}
 
 // Build walks historical bars and returns per-horizon expectancy rows.
 //
@@ -61,20 +81,33 @@ const (
 //
 // Each sample is credited to its full state key and to every coarser
 // prefix (dimensions dropped right-to-left), so thin states roll up
-// honestly. Only states with N >= 5 are emitted. SymbolID and UpdatedAt are
-// left zero — the caller owns identity and timestamps. The returned map is
-// never nil; a horizon key is present only when it produced rows. Rows are
-// sorted by StateKey for deterministic output.
+// honestly. Only states with N >= 30 and seen on at least 5 distinct UTC
+// days are emitted. Hit rates are shrunk toward the horizon's pooled base
+// rate. SymbolID and UpdatedAt are left zero — the caller owns identity
+// and timestamps. The returned map is never nil; a horizon key is present
+// only when it produced rows. Rows are sorted by StateKey for deterministic output.
 func Build(daily, minute []marketdata.Bar) map[marketdata.Horizon][]marketdata.Expectancy {
-	acc := map[marketdata.Horizon]map[string][]float64{}
-	record := func(h marketdata.Horizon, fullKey string, fwd float64) {
-		m := acc[h]
-		if m == nil {
-			m = map[string][]float64{}
-			acc[h] = m
+	type horizonAcc struct {
+		cells    map[string]*cell
+		samples  []float64
+	}
+	acc := map[marketdata.Horizon]*horizonAcc{}
+
+	record := func(h marketdata.Horizon, fullKey string, fwd float64, day int64) {
+		ha := acc[h]
+		if ha == nil {
+			ha = &horizonAcc{cells: map[string]*cell{}}
+			acc[h] = ha
 		}
+		ha.samples = append(ha.samples, fwd)
 		for _, k := range prefixChain(fullKey) {
-			m[k] = append(m[k], fwd)
+			c := ha.cells[k]
+			if c == nil {
+				c = &cell{days: map[int64]struct{}{}}
+				ha.cells[k] = c
+			}
+			c.samples = append(c.samples, fwd)
+			c.days[day] = struct{}{}
 		}
 	}
 
@@ -87,11 +120,12 @@ func Build(daily, minute []marketdata.Bar) map[marketdata.Horizon][]marketdata.E
 			if !ok || closes[i] == 0 {
 				continue
 			}
+			day := d[i].Ts / 86400
 			if i+1 < len(d) {
-				record(marketdata.H1d, key, closes[i+1]/closes[i]-1)
+				record(marketdata.H1d, key, closes[i+1]/closes[i]-1, day)
 			}
 			if i+5 < len(d) {
-				record(marketdata.H1w, key, closes[i+5]/closes[i]-1)
+				record(marketdata.H1w, key, closes[i+5]/closes[i]-1, day)
 			}
 		}
 	}
@@ -113,22 +147,40 @@ func Build(daily, minute []marketdata.Bar) map[marketdata.Horizon][]marketdata.E
 			if !ok || closes[i] == 0 {
 				continue
 			}
-			record(marketdata.H1h, key, closes[i+60]/closes[i]-1)
+			day := minute[i].Ts / 86400
+			record(marketdata.H1h, key, closes[i+60]/closes[i]-1, day)
 		}
 	}
 
 	out := map[marketdata.Horizon][]marketdata.Expectancy{}
-	for h, states := range acc {
+	for h, ha := range acc {
+		// Compute pooled base rate for this horizon using all samples recorded
+		// for the horizon (via ha.samples). This is a shrinkage target only,
+		// not a published statistic, and is straightforward because ha.samples
+		// contains every sample exactly once (each forward return is appended
+		// exactly once to ha.samples in the record closure).
+		var totalHits int
+		for _, v := range ha.samples {
+			if v > 0 {
+				totalHits++
+			}
+		}
+		pooled := float64(totalHits) / float64(len(ha.samples))
+
 		var rows []marketdata.Expectancy
-		for key, samples := range states {
-			if len(samples) < minSamples {
+		for key, c := range ha.cells {
+			if len(c.samples) < minSamples || len(c.days) < minDistinctDays {
 				continue
 			}
-			mean, median, hit, stdev := summarize(samples)
+			// summarize's raw hit rate is deliberately discarded: a thin cell's
+			// raw rate is the number this leg used to publish, and it saturates
+			// at 0.0/1.0 on small n. Only MeanFwd/MedianFwd/Stdev come from it.
+			mean, median, _, stdev := summarize(c.samples)
+			hit := shrinkHitRate(rawHits(c.samples), len(c.samples), pooled)
 			rows = append(rows, marketdata.Expectancy{
 				Horizon:   h,
 				StateKey:  key,
-				N:         len(samples),
+				N:         len(c.samples),
 				MeanFwd:   mean,
 				MedianFwd: median,
 				HitRate:   hit,
@@ -142,6 +194,27 @@ func Build(daily, minute []marketdata.Bar) map[marketdata.Horizon][]marketdata.E
 		out[h] = rows
 	}
 	return out
+}
+
+// rawHits returns the count of positive forward returns in samples.
+func rawHits(samples []float64) int {
+	var hits int
+	for _, v := range samples {
+		if v > 0 {
+			hits++
+		}
+	}
+	return hits
+}
+
+// shrinkHitRate pulls a cell's raw hit rate toward globalBase with a
+// pseudocount, so a thin cell can never publish a saturated 0.0 or 1.0.
+// Returns globalBase when n <= 0.
+func shrinkHitRate(hits, n int, globalBase float64) float64 {
+	if n <= 0 {
+		return globalBase
+	}
+	return (float64(hits) + expectancyPriorStrength*globalBase) / (float64(n) + expectancyPriorStrength)
 }
 
 // CurrentStateKeys returns the FULL state key describing the most recent

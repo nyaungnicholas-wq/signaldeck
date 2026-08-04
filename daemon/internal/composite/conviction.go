@@ -69,7 +69,22 @@ type ConvictionInputs struct {
 	// directional accuracy (0..1) — the CEILING on conviction.
 	EdgeProvenLive bool
 	WinRate        float64 // measured live accuracy (0 if unknown)
-	SkillNote      string  // one-line reason for the skill state, rendered verbatim
+	// WinRateLB is the LOWER BOUND of the interval around WinRate (Wilson,
+	// day-clustered, multiplicity-corrected — whatever the caller's grading
+	// surface publishes). It, not the point estimate, decides the ceiling.
+	//
+	// A point estimate is a guess about the future; an interval is a statement
+	// about how much the sample can support. The live record makes the
+	// difference concrete: the 1d high-conviction tier posted 55.2% on 297 rows
+	// spanning FIVE distinct days, which reads as a strong edge and is in fact
+	// 5.1pp BELOW its own majority-class null. Reading a ceiling off 0.552
+	// would have called that HIGH.
+	//
+	// Zero means the caller supplied no interval. That is not treated as zero
+	// skill — it caps the ceiling at MODERATE, because HIGH is a claim only an
+	// interval can license.
+	WinRateLB float64
+	SkillNote string // one-line reason for the skill state, rendered verbatim
 }
 
 // ConvictionResult is the assessed conviction with its plain-English drivers and
@@ -90,17 +105,29 @@ const riskNote = "A high score is a RELATIVE rank of today's cross-section, not 
 // skillCeiling returns the highest conviction the MEASURED live accuracy can
 // justify, with a plain-English reason. Nothing else can raise conviction above
 // this.
-func skillCeiling(proven bool, winRate float64) (Band, string) {
+// The ceiling reads the LOWER BOUND, never the point estimate. Without an
+// interval the best available claim is MODERATE: a bare win rate cannot
+// distinguish a real edge from a lucky run of days, and this platform has
+// already measured what that mistake looks like.
+func skillCeiling(proven bool, winRate, winRateLB float64) (Band, string) {
 	if !proven {
 		return BandLow, "model edge not yet proven on live out-of-sample results — conviction capped low"
 	}
+	if winRateLB <= 0 {
+		// No interval supplied. HIGH is unreachable; fall back to the point
+		// estimate for the MODERATE/LOW split and say why the cap is there.
+		if winRate >= modestWinRate {
+			return BandModerate, fmt.Sprintf("model's live accuracy is %.1f%% but no confidence interval was supplied — capped at moderate, because a point estimate cannot license high conviction", winRate*100)
+		}
+		return BandLow, fmt.Sprintf("model's live accuracy is %.1f%% with no confidence interval — marginal and unbounded", winRate*100)
+	}
 	switch {
-	case winRate >= strongWinRate:
-		return BandHigh, fmt.Sprintf("model's proven live accuracy is %.1f%% — a strong measured edge", winRate*100)
-	case winRate >= modestWinRate:
-		return BandModerate, fmt.Sprintf("model's proven live accuracy is only %.1f%% — a real but modest edge (capped below high; you are still wrong ~%.0f%% of the time)", winRate*100, (1-winRate)*100)
+	case winRateLB >= strongWinRate:
+		return BandHigh, fmt.Sprintf("model's proven live accuracy is %.1f%% with the whole interval above %.0f%% (lower bound %.1f%%) — a strong measured edge", winRate*100, strongWinRate*100, winRateLB*100)
+	case winRateLB >= modestWinRate:
+		return BandModerate, fmt.Sprintf("model's live accuracy is %.1f%% and its lower bound %.1f%% clears only %.0f%% — a real but modest edge (capped below high; you are still wrong ~%.0f%% of the time)", winRate*100, winRateLB*100, modestWinRate*100, (1-winRate)*100)
 	default:
-		return BandLow, fmt.Sprintf("model's proven live accuracy is %.1f%% — marginal, barely above a coin flip", winRate*100)
+		return BandLow, fmt.Sprintf("model's live accuracy is %.1f%% but its lower bound is %.1f%% — the sample cannot rule out a coin flip", winRate*100, winRateLB*100)
 	}
 }
 
@@ -109,7 +136,7 @@ func skillCeiling(proven bool, winRate float64) (Band, string) {
 // buys conviction the realized accuracy hasn't earned — an extreme calibrated
 // probability the model can't back up is flagged as overconfidence.
 func Assess(in ConvictionInputs) ConvictionResult {
-	band, ceilNote := skillCeiling(in.EdgeProvenLive, in.WinRate)
+	band, ceilNote := skillCeiling(in.EdgeProvenLive, in.WinRate, in.WinRateLB)
 	drivers := []string{ceilNote}
 	mag := math.Abs(in.Edge)
 

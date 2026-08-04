@@ -5,7 +5,7 @@ import "testing"
 // HIGH requires a PROVEN, STRONG measured edge — and a non-extreme, fresh,
 // multi-leg, agreeing read. The measured accuracy is the ceiling.
 func TestConvictionHighNeedsStrongProvenAccuracy(t *testing.T) {
-	got := Assess(ConvictionInputs{Edge: 0.06, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60})
+	got := Assess(ConvictionInputs{Edge: 0.06, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60, WinRateLB: 0.585})
 	if got.Band != BandHigh {
 		t.Fatalf("strong proven accuracy + clean read → want high, got %q (%v)", got.Band, got.Drivers)
 	}
@@ -53,8 +53,8 @@ func TestConvictionOverconfidentExtremeEdgeIsLow(t *testing.T) {
 
 // A coin-flip-sized OWN edge lowers conviction even when the model is decent.
 func TestConvictionCoinFlipEdgeLowered(t *testing.T) {
-	strong := Assess(ConvictionInputs{Edge: 0.06, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60})
-	flat := Assess(ConvictionInputs{Edge: 0.005, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60})
+	strong := Assess(ConvictionInputs{Edge: 0.06, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60, WinRateLB: 0.585})
+	flat := Assess(ConvictionInputs{Edge: 0.005, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60, WinRateLB: 0.585})
 	if rank(flat.Band) >= rank(strong.Band) {
 		t.Fatalf("coin-flip edge should lower conviction: flat=%q strong=%q", flat.Band, strong.Band)
 	}
@@ -85,7 +85,7 @@ func TestConvictionDiscountsLowerTheBand(t *testing.T) {
 
 // A dominant factor majority is NOT treated as disagreement.
 func TestConvictionDominantMajorityNotPenalized(t *testing.T) {
-	in := ConvictionInputs{Edge: 0.06, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60, Bull: 5, Bear: 1}
+	in := ConvictionInputs{Edge: 0.06, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60, WinRateLB: 0.585, Bull: 5, Bear: 1}
 	if b := Assess(in).Band; b != BandHigh {
 		t.Fatalf("5-1 bullish majority should not penalize → want high, got %q", b)
 	}

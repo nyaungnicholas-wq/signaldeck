@@ -259,6 +259,24 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// leg-audit wave: the blend's WEIGHTS and the tier that supplied them.
+	// predictions.components already records what each leg said; nothing
+	// recorded how much each was believed, so a retired ensemble could not be
+	// diagnosed leg by leg — which is why it had to be retired whole. Existing
+	// rows keep '', which reads as "not recorded", never as "equal weights".
+	for _, col := range []struct{ name, ddl string }{
+		{"weights", `ALTER TABLE predictions ADD COLUMN weights TEXT NOT NULL DEFAULT ''`},
+		{"basis", `ALTER TABLE predictions ADD COLUMN basis TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('predictions') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
 	// multiplicity wave: the corrected divisor a loop hypothesis cleared. Live
 	// DBs already hold rows from before the loop fed PriorSearches, and those
 	// rows keep divisor=0 — the truthful state, meaning "correction unrecorded",

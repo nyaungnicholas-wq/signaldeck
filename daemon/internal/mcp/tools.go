@@ -383,6 +383,20 @@ func runTrackRecord(ctx context.Context, s *Server, _ *Client, _ toolArgs) (map[
 				"the commitment is left as registered and the derived date is authoritative for scheduling"
 		}
 	}
+	// The date that actually governs when a CLAIM can be checked. Resolution is
+	// one data point; a verdict needs MIN_DISTINCT_BLOCKS of them, and on a
+	// 21-day horizon that is another ~189 days of calls. Publishing only
+	// earliestGradeableOn understated the wait by seven months — the same shape
+	// of error as publishing only the frozen date, one level down. See
+	// prereg_records seq 37 (gradability-correction).
+	if verdict, ok, err := s.src.EarliestVerdictOn(ctx); err == nil && ok {
+		structural["earliestVerdictOn"] = verdict
+		structural["verdictDateNote"] = "earliestGradeableOn is when the first forecast RESOLVES; " +
+			"earliestVerdictOn is when a publishable interval can first exist (MIN_DISTINCT_BLOCKS=10 " +
+			"distinct horizon blocks, then those calls must resolve). Only the second one answers " +
+			"'when is the claim checkable'. Rows carrying no frozen naive-persistence baseline are " +
+			"excluded from the block clock, because they cannot enter a benchmark denominator."
+	}
 
 	return map[string]any{
 		"directional": directional,

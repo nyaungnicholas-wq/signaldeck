@@ -155,3 +155,6 @@ func (c *countingSource) Preregistration(ctx context.Context) (PreregSummary, er
 func (c *countingSource) EarliestGradeableOn(ctx context.Context) (string, bool, error) {
 	return c.inner.EarliestGradeableOn(ctx)
 }
+func (c *countingSource) EarliestVerdictOn(ctx context.Context) (string, bool, error) {
+	return c.inner.EarliestVerdictOn(ctx)
+}

@@ -22,6 +22,9 @@ type stubSource struct {
 	// outstanding", which is the honest default for a stub: a test that has not
 	// said when its forecasts mature must not have a date invented for it.
 	gradeableOn string
+	// verdictOn is the DERIVED first date a VERDICT can exist (block gate plus
+	// resolution). Empty means "no benchmark-eligible row yet".
+	verdictOn string
 }
 
 func (s stubSource) Verdicts(context.Context) ([]Verdict, error) {
@@ -35,6 +38,9 @@ func (s stubSource) Preregistration(context.Context) (PreregSummary, error) {
 }
 func (s stubSource) EarliestGradeableOn(context.Context) (string, bool, error) {
 	return s.gradeableOn, s.gradeableOn != "", s.err
+}
+func (s stubSource) EarliestVerdictOn(context.Context) (string, bool, error) {
+	return s.verdictOn, s.verdictOn != "", s.err
 }
 
 func sampleVerdicts() []Verdict {

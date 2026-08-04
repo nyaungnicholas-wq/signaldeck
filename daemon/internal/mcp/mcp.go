@@ -176,6 +176,20 @@ type Source interface {
 	// the frozen one presented a stale date as current fact.
 	// ok=false means nothing structural is outstanding.
 	EarliestGradeableOn(ctx context.Context) (date string, ok bool, err error)
+	// EarliestVerdictOn is the first date a structural claim can produce a
+	// published VERDICT rather than a single resolved row. Resolution is one
+	// data point; the grader refuses to publish an interval below
+	// MIN_DISTINCT_BLOCKS distinct horizon blocks, which on a 21-day horizon is
+	// another ~189 days of calls after the first resolution.
+	//
+	// This is reported ALONGSIDE EarliestGradeableOn, not instead of it, for the
+	// same reason that one is reported alongside the frozen date: the three
+	// answer different questions ("what did we commit to", "when does the first
+	// data point land", "when can a verdict exist") and collapsing them is what
+	// produced the 2026-08-07 error in the first place. See prereg_records
+	// seq 37, the gradability-correction amendment.
+	// ok=false means no benchmark-eligible structural row exists yet.
+	EarliestVerdictOn(ctx context.Context) (date string, ok bool, err error)
 }
 
 // Verdict is one symbol's structural regime call, already reduced to the

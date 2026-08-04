@@ -13,6 +13,16 @@
 // the time". Calibration is measured, and corrected, only against realized
 // history via CalibrationCurve / Calibrate / ReliabilityScore.
 //
+// # Two blend modes
+//
+// In cold-start mode (RequireMeasuredLegs false, the default), a leg whose
+// out-of-sample lift was never measured is KEPT — a dead or erroring trainer
+// cannot blank the platform. In production mode (RequireMeasuredLegs true),
+// EVERY leg must carry a measured positive lift to be admitted; absence of
+// evidence stops meaning evidence of edge. AdmittedProbability returns ok=false
+// when no leg is admitted, so a caller emits "no forecast" instead of a 0.5
+// that reads on a wire exactly like a real coin-flip call.
+//
 // # No lookahead
 //
 // This package computes nothing from future bars. RawProbability is a pure
@@ -192,10 +202,23 @@ type Components struct {
 	// pressure was always-on (PressureLift implicitly nil), so prior behavior is
 	// preserved until a negative grade is measured.
 	PressureLift *float64
+
+	// RequireMeasuredLegs switches the blend from cold-start (fail-safe) to
+	// production (fail-closed). When false — the default, preserving the
+	// historical contract — a leg whose out-of-sample lift was never measured
+	// is KEPT. When true, EVERY leg must carry a measured positive lift to be
+	// admitted, including pressure, expectancy and sentiment. Absence of
+	// evidence stops meaning evidence of edge.
+	RequireMeasuredLegs bool
+
 	// ExpectancyHitRate is the measured fraction of positive forward returns
 	// for the current state, in [0, 1]. nil when no expectancy is available.
 	// Used as-is (it is already an up-probability).
 	ExpectancyHitRate *float64
+	// ExpectancyLift is the expectancy leg's measured out-of-sample lift. Only
+	// consulted when RequireMeasuredLegs is set; nil means never measured.
+	ExpectancyLift *float64
+
 	// ForecastProb is the forecast model's P(up) in [0, 1]. nil when no
 	// forecast is available. It is used ONLY when ForecastLift indicates the
 	// forecast has measured out-of-sample edge (see ForecastLift).
@@ -204,6 +227,7 @@ type Components struct {
 	// <= 0 (or nil) means the forecast has no demonstrated edge, so
 	// ForecastProb is dropped from the blend regardless of its value.
 	ForecastLift *float64
+
 	// SentimentScore is the mean daily news-sentiment score in [-1, +1]
 	// (bearish..bullish), nil when no fresh aggregate exists. Converted via
 	// 0.5 + score*SentimentScale — a deliberately conservative mapping: even
@@ -211,6 +235,9 @@ type Components struct {
 	// flip, because headline tone is a weak, noisy signal until the adaptive
 	// layer measures otherwise.
 	SentimentScore *float64
+	// SentimentLift is the sentiment leg's measured out-of-sample lift. Only
+	// consulted when RequireMeasuredLegs is set; nil means never measured.
+	SentimentLift *float64
 
 	// STAGE 6 gated model legs. Each is a P(up) in [0,1] paired with the
 	// out-of-sample lift that earned it a place in the blend — used ONLY when
@@ -270,10 +297,29 @@ const (
 // equal-weight, exactly as before.
 var LegNames = []string{LegPressure, LegExpectancy, LegForecast, LegSentiment, LegGBM, LegMeanRev, LegAlphaX}
 
-// LegProbabilities converts each AVAILABLE component to its 0..1
-// up-probability leg, keyed by canonical leg name. Exactly the legs that
-// RawProbability would blend are returned (pressure always; expectancy when
-// present; forecast only with demonstrated edge; sentiment when present).
+// admits reports whether a leg with the given measured lift may enter the
+// blend. In strict mode an unmeasured leg (nil) is refused; in the default
+// cold-start mode it is kept, and only a MEASURED non-positive lift benches
+// it. A measured non-positive lift is refused in BOTH modes.
+func admits(lift *float64, strict bool) bool {
+	if lift != nil {
+		return *lift > 0
+	}
+	return !strict
+}
+
+// LegProbabilities converts each ADMITTED component to its 0..1 up-probability
+// leg, keyed by canonical leg name. Exactly the legs that RawProbability would
+// blend are returned.
+//
+// Admission depends on Components.RequireMeasuredLegs:
+//   - false (cold start, the historical default): pressure, expectancy and
+//     sentiment enter on availability alone; only a MEASURED non-positive lift
+//     benches them.
+//   - true (production): every leg must carry a measured positive lift.
+//
+// The forecast, GBM, meanrev and alphax legs always required a measured
+// positive lift and are unaffected by the mode.
 func LegProbabilities(c Components) map[string]float64 {
 	legs := map[string]float64{}
 	// Pressure leg — historically the always-on base leg, now held to an OOS
@@ -284,16 +330,16 @@ func LegProbabilities(c Components) map[string]float64 {
 	// (*PressureLift <= 0) is DROPPED, never down-weighted (honesty doctrine).
 	// The resolved-outcome record shows the fixed-weight pressure score is
 	// anti-predictive at 1d/1w, so once graded it benches fleet-wide.
-	if c.PressureLift == nil || *c.PressureLift > 0 {
+	if admits(c.PressureLift, c.RequireMeasuredLegs) {
 		legs[LegPressure] = clamp01((c.PressureScore + 1) / 2)
 	}
-	if c.ExpectancyHitRate != nil {
+	if c.ExpectancyHitRate != nil && admits(c.ExpectancyLift, c.RequireMeasuredLegs) {
 		legs[LegExpectancy] = clamp01(*c.ExpectancyHitRate)
 	}
 	if c.ForecastProb != nil && c.ForecastLift != nil && *c.ForecastLift > 0 {
 		legs[LegForecast] = clamp01(*c.ForecastProb)
 	}
-	if c.SentimentScore != nil {
+	if c.SentimentScore != nil && admits(c.SentimentLift, c.RequireMeasuredLegs) {
 		legs[LegSentiment] = clamp01(0.5 + *c.SentimentScore*SentimentScale)
 	}
 	// STAGE 6 gated model legs: included ONLY with demonstrated out-of-sample
@@ -378,6 +424,16 @@ func WeightedProbability(c Components, weights map[string]float64) (prob float64
 		return RawProbability(c)
 	}
 	return clamp01(sum / wsum), n
+}
+
+// AdmittedProbability is WeightedProbability with an explicit refusal. It
+// returns ok=false when NO leg was admitted, so a caller emits "no
+// forecast" instead of a 0.5 that reads on a wire exactly like a real
+// coin-flip call. When ok is true the returned values are identical to
+// WeightedProbability's, so the two can never disagree.
+func AdmittedProbability(c Components, weights map[string]float64) (prob float64, nUsed int, ok bool) {
+	prob, nUsed = WeightedProbability(c, weights)
+	return prob, nUsed, nUsed > 0
 }
 
 // Pair is one graded prediction: a raw predicted up-probability (Pred, in
