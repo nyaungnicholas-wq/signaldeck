@@ -87,8 +87,8 @@ func TestLimiterOverheadIsSubMillisecond(t *testing.T) {
 		b.admit("bench-client")
 	}
 	per := time.Since(start) / n
-	if per > time.Microsecond {
-		t.Fatalf("admission costs %v per call, over the 1µs budget", per)
+	if per > admissionBudget {
+		t.Fatalf("admission costs %v per call, over the %v budget", per, admissionBudget)
 	}
 	t.Logf("admission overhead: %v/call over %d calls", per, n)
 }

@@ -80,7 +80,14 @@ jobs:
       # so this is not expected to be flaky — it was simply never wired in.
       # Coverage is collected in the same invocation so this stays one test
       # run instead of two (a -race run is materially slower).
-      - run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      # -timeout 30m, up from the 10m default. The race detector makes this
+      # suite genuinely slow rather than hung: internal/store takes 580s under
+      # it and passes, while internal/api and internal/pipeline were killed at
+      # exactly 600s. Both panics named a test that had been running 2-3s, so
+      # both packages were still making progress when the alarm fired — a
+      # deadlock parks on one test for the full window. Raising the ceiling
+      # does not hide a hang; it stops truncating a slow suite.
+      - run: go test -race -timeout 30m -coverprofile=coverage.out -covermode=atomic ./...
       - run: go tool cover -func=coverage.out | tail -1
       # Coverage gate — the step above only *printed* the total, so coverage
       # could silently decay. The floor is the measured total minus 2pp;
