@@ -51,11 +51,12 @@ package alphax
 
 import (
 	"errors"
-	"math"
 	"sort"
 	"strings"
 	"time"
 
+	// clusterstat owns the prequential null shared by every grading surface.
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/gbm"
 )
 
@@ -332,6 +333,11 @@ type blockPreds struct {
 	Block   dayBlock
 	Preds   []float64
 	Actuals []float64
+	// Ts is each scored row's timestamp, index-aligned with Preds/Actuals. It
+	// carries the day clustering through to gradeFrom, whose prequential
+	// baseline has to know which class led BEFORE each day to score a
+	// hindsight-free constant guess.
+	Ts      []int64
 	Skipped bool // train slice below MinTrainRows — block not scored
 	// MaxTrainDayIdx is the largest day index that entered this block's train
 	// set (-1 when empty) — lets tests PROVE the embargo purge held.
@@ -386,6 +392,7 @@ func evalBlocks(ds Dataset, blocks []dayBlock, embargo int, p gbm.Params) []bloc
 		for _, s := range test {
 			bp.Preds = append(bp.Preds, m.Predict(s.Feat))
 			bp.Actuals = append(bp.Actuals, s.Y)
+			bp.Ts = append(bp.Ts, s.Ts)
 		}
 		out = append(out, bp)
 	}
@@ -418,14 +425,16 @@ func Evaluate(ds Dataset, folds, embargoDays int, p gbm.Params) (Grade, bool, st
 	// The first block is never tested (no earlier days to train on).
 	results := evalBlocks(ds, blocks[1:], embargoDays, p)
 	var preds, actuals []float64
+	var scoredTs []int64
 	for _, r := range results {
 		preds = append(preds, r.Preds...)
 		actuals = append(actuals, r.Actuals...)
+		scoredTs = append(scoredTs, r.Ts...)
 	}
 	if len(preds) < MinTestRows {
 		return Grade{}, false, "insufficient out-of-sample test rows after purged folds (train slices below the 1000-row floor)"
 	}
-	return gradeFrom(preds, actuals), true, ""
+	return gradeFrom(scoredTs, preds, actuals), true, ""
 }
 
 // TrainFull fits one gbm model on the ENTIRE dataset (for scoring the live
@@ -448,24 +457,35 @@ func TrainFull(ds Dataset, p gbm.Params) (*gbm.Model, error) {
 // ── metric helpers (same math as gbm's unexported gradeFrom/aucRank, kept
 // local so the grades are directly comparable without exporting gbm internals) ──
 
-func gradeFrom(preds, actuals []float64) Grade {
+// gradeFrom scores the pooled out-of-sample rows, with `ts` index-aligned to
+// preds/actuals so the baseline can cluster by UTC day.
+//
+// BaseRate is the PREQUENTIAL majority (each day guessed from the days strictly
+// before it), not the hindsight floor max(pPos, 1-pPos) this used to compute.
+// The hindsight version scored a constant predictor with foreknowledge of the
+// winning class, so Lift > 0 — the gate that admits this leg to the live blend —
+// demanded beating an oracle. This leg has never once been admitted in
+// production; a baseline that cannot be beaten in principle is a large part of
+// why. Shared implementation in clusterstat, so the registry, the canary and
+// this gate all replay one null.
+//
+// NOTE the label here is RELATIVE (beat the same-day universe median), so a
+// balanced day sits near 0.5 by construction and the prequential baseline lands
+// near 0.5 too. That is the honest bar for this target, and it is the bar the
+// hindsight floor was inflating away from.
+func gradeFrom(ts []int64, preds, actuals []float64) Grade {
 	n := len(preds)
 	correct := 0
 	brier := 0.0
-	pos := 0
 	for i := range preds {
 		if (preds[i] >= 0.5) == (actuals[i] >= 0.5) {
 			correct++
 		}
 		d := preds[i] - actuals[i]
 		brier += d * d
-		if actuals[i] >= 0.5 {
-			pos++
-		}
 	}
 	acc := float64(correct) / float64(n)
-	pPos := float64(pos) / float64(n)
-	baseRate := math.Max(pPos, 1-pPos)
+	baseRate := clusterstat.PrequentialBaselineVsModel(clusterstat.DayGradesFrom(ts, preds, actuals))
 	return Grade{
 		N:          n,
 		Accuracy:   acc,

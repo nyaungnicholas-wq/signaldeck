@@ -222,6 +222,18 @@ func CalibrateRanking(pairs []Pair) (mapFn func(float64) float64, calibrated, ra
 	copy(ordered, pairs)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Ts < ordered[j].Ts })
 	cut := len(ordered) * 3 / 4
+	// SNAP THE CUT TO A Ts BOUNDARY. Callers that stamp Ts with a real period
+	// (the fleet-wide fit stamps the UTC day) put many rows on one Ts, and those
+	// rows share one market move. A cut at a raw index lands mid-period and puts
+	// the SAME move on both sides of the train/test line, so the held-out Brier
+	// comparison below scores a map partly on data it was fitted on — which
+	// silently disarms the one gate that is supposed to catch a bad map.
+	//
+	// Advance to the first row of the next Ts. Harmless when Ts is a pure
+	// ordinal (every Ts is unique, so the cut does not move).
+	for cut < len(ordered) && ordered[cut].Ts == ordered[cut-1].Ts {
+		cut++
+	}
 	train, test := ordered[:cut], ordered[cut:]
 	if len(train) < MinCalibrationPairs || len(test) == 0 {
 		// Not enough history to hold anything out; fall back rather than fit on

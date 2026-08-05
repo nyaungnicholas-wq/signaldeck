@@ -61,6 +61,14 @@ import (
 	"errors"
 	"math"
 	"sort"
+
+	// The ONE exception to this package's dependency-free rule, and it is here
+	// on purpose: clusterstat owns the prequential null. A local copy would be
+	// a fourth implementation of the baseline that decides whether this leg is
+	// admitted to the live blend, and four nulls is four answers to one
+	// question — the exact drift that let the live gate keep using a hindsight
+	// oracle for weeks after the registry retired it.
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 )
 
 // Errors returned by this package.
@@ -147,8 +155,15 @@ type Grade struct {
 	Accuracy   float64 `json:"accuracy"`   // fraction correct at a 0.5 threshold
 	BrierScore float64 `json:"brierScore"` // mean (p - y)^2 (lower better)
 	AUC        float64 `json:"auc"`        // ROC AUC via rank statistic (0.5 = no skill)
-	BaseRate   float64 `json:"baseRate"`   // majority-class accuracy floor
+	BaseRate   float64 `json:"baseRate"`   // prequential majority-class floor
 	Lift       float64 `json:"lift"`       // Accuracy - BaseRate (<=0 => no edge)
+
+	// DistinctDays is how many UTC days the out-of-sample record spans — the
+	// count that says how much INDEPENDENT evidence stands behind Lift, since
+	// every row inside one day shares one market move. A large N over a handful
+	// of days is one observation wearing a crowd's clothes, and a gate that
+	// reads N alone will admit noise (see MinGradeDays).
+	DistinctDays int `json:"distinctDays"`
 
 	// The purge is reported, not assumed: LabelSpan is the horizon Evaluate read
 	// off the data, EmbargoSpan the extra gap it held in front of each test
@@ -575,7 +590,7 @@ func evaluateFolds(samples []Sample, folds int, p Params, span, embargo int64, p
 	if len(preds) == 0 {
 		return Grade{}, ErrInsufficientData
 	}
-	g := gradeFrom(preds, actuals)
+	g := gradeFrom(scoredTs, preds, actuals)
 	g.DayTallies = dayTallies(scoredTs, preds, actuals)
 	if purge {
 		g.LabelSpan, g.EmbargoSpan, g.PurgedTrainRows = span, embargo, purged
@@ -617,34 +632,46 @@ func Run(samples []Sample, latest []float64, folds int, p Params) (prob float64,
 
 // ── shared metric helpers (kept local so the package has no dependency) ──
 
-// gradeFrom computes the Grade from paired out-of-sample predictions + labels.
-// BaseRate is the majority-class floor max(pPos, 1-pPos), so Lift is measured
-// against the strongest no-skill constant predictor — identical to forecast.
-func gradeFrom(preds, actuals []float64) Grade {
+// gradeFrom computes the Grade from paired out-of-sample predictions + labels,
+// with `ts` the prediction timestamps (index-aligned) that fix the day clusters.
+//
+// BaseRate is the PREQUENTIAL majority — on each UTC day, the majority class of
+// the days strictly before it — not the hindsight floor max(pPos, 1-pPos).
+//
+// The hindsight floor was an ORACLE: it scored a constant predictor that already
+// knew which class would end up in the majority. Measured live 2026-08-05, it
+// sat at 0.966 for this leg, so admission (Lift > 0) demanded 96.6% accuracy on
+// 1-day direction. Nothing can do that, and nothing did: 0 of 43 graded gbm legs
+// were ever admitted, at a mean out-of-sample accuracy of 0.647. Every model
+// added to the platform was benched on arrival by arithmetic rather than by
+// evidence, which is the single reason adding features stopped moving accuracy.
+//
+// The registry retired that null months ago (null_policy: "prequential-majority
+// only ... the hindsight null was retired"). This is the live gate catching up,
+// against the one shared implementation in clusterstat so a leg's admission and
+// its published grade can never be judged by two different nulls.
+func gradeFrom(ts []int64, preds, actuals []float64) Grade {
 	n := len(preds)
 	correct := 0
 	brier := 0.0
-	pos := 0
 	for i := range preds {
 		if (preds[i] >= 0.5) == (actuals[i] >= 0.5) {
 			correct++
 		}
 		d := preds[i] - actuals[i]
 		brier += d * d
-		if actuals[i] >= 0.5 {
-			pos++
-		}
 	}
 	acc := float64(correct) / float64(n)
-	pPos := float64(pos) / float64(n)
-	baseRate := math.Max(pPos, 1-pPos)
+	dayGrades := clusterstat.DayGradesFrom(ts, preds, actuals)
+	baseRate := clusterstat.PrequentialBaselineVsModel(dayGrades)
 	return Grade{
-		N:          n,
-		Accuracy:   acc,
-		BrierScore: brier / float64(n),
-		AUC:        aucRank(preds, actuals),
-		BaseRate:   baseRate,
-		Lift:       acc - baseRate,
+		N:            n,
+		Accuracy:     acc,
+		BrierScore:   brier / float64(n),
+		AUC:          aucRank(preds, actuals),
+		BaseRate:     baseRate,
+		Lift:         acc - baseRate,
+		DistinctDays: len(dayGrades),
 	}
 }
 

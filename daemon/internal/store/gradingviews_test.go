@@ -33,11 +33,19 @@ func TestResolvedPairs_PublishedVsRawViews(t *testing.T) {
 	ctx := context.Background()
 
 	sym, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
-	seedResolvedPred(t, st, sym.ID, md.H1d, 1000, 0.55, 0.62, 0.01)
-	seedResolvedPred(t, st, sym.ID, md.H1d, 2000, 0.48, 0.51, -0.02)
+	// SEPARATE UTC DAYS ON PURPOSE. The raw view now returns one row per
+	// (symbol, UTC day), so the original fixture — ts=1000 and ts=2000, both
+	// inside UTC day 0 — collapsed to a single pair and this test read as a
+	// dedup failure when the dedup was the point. Two days keeps the property
+	// this test actually guards (raw column vs published column, newest first)
+	// separable from the dedup, which TestResolvedRawPairs_OnePerSymbolDay owns.
+	const day100 = 100*86400 + 3600
+	const day101 = 101*86400 + 3600
+	seedResolvedPred(t, st, sym.ID, md.H1d, day100, 0.55, 0.62, 0.01)
+	seedResolvedPred(t, st, sym.ID, md.H1d, day101, 0.48, 0.51, -0.02)
 	// Unresolved row: excluded from both views.
 	if err := st.UpsertPrediction(ctx, Prediction{SymbolID: sym.ID, Horizon: md.H1d,
-		Ts: 3000, RawProb: 0.7, CalProb: 0.75, NUsed: 10, Components: "{}"}); err != nil {
+		Ts: 102*86400 + 3600, RawProb: 0.7, CalProb: 0.75, NUsed: 10, Components: "{}"}); err != nil {
 		t.Fatalf("upsert prediction: %v", err)
 	}
 
@@ -50,13 +58,68 @@ func TestResolvedPairs_PublishedVsRawViews(t *testing.T) {
 		t.Fatalf("published view wrong: probs=%v ups=%v", probs, ups)
 	}
 
-	raws, ups2, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 10)
+	raws, ups2, _, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 10)
 	if err != nil || len(raws) != 2 {
 		t.Fatalf("raw pairs = %d, %v; want 2", len(raws), err)
 	}
 	// Same outcomes, but the RAW blend probability — never the map's output.
 	if raws[0] != 0.48 || ups2[0] != 0 || raws[1] != 0.55 || ups2[1] != 1 {
 		t.Fatalf("raw view wrong: raws=%v ups=%v", raws, ups2)
+	}
+}
+
+// The calibration fit must see ONE observation per (symbol, UTC day), newest
+// wins — the same unit the accuracy registry grades with.
+//
+// This is the property whose absence cost 17 accuracy points (raw 53% ->
+// calibrated 36%): the runner re-scores a symbol ~48 times a day, every row
+// predicting the same forward move, so undeduped rows made the newest 3,000
+// pairs span two calendar days and the map memorised their direction. The
+// returned day numbers are asserted too — the caller splits its holdout on a
+// day boundary and counts distinct days, so an ordinal masquerading as a day
+// would silently put one market move on both sides of the train/test line.
+func TestResolvedRawPairs_OnePerSymbolDay(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+
+	a, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	b, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "Microsoft")
+
+	// Three re-scores of AAPL inside ONE UTC day; only the newest may survive.
+	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+1*3600, 0.10, 0.11, 0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+9*3600, 0.20, 0.21, 0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+17*3600, 0.30, 0.31, 0.01)
+	// A different symbol on the SAME day is an independent observation.
+	seedResolvedPred(t, st, b.ID, md.H1d, 200*86400+5*3600, 0.40, 0.41, -0.01)
+	// The same symbol on the NEXT day is also independent.
+	seedResolvedPred(t, st, a.ID, md.H1d, 201*86400+5*3600, 0.60, 0.61, -0.01)
+
+	raws, ups, days, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raws) != 3 {
+		t.Fatalf("got %d pairs (raws=%v days=%v); want 3 — one per (symbol, UTC day)", len(raws), raws, days)
+	}
+	if len(ups) != 3 || len(days) != 3 {
+		t.Fatalf("ragged result: %d raws / %d ups / %d days", len(raws), len(ups), len(days))
+	}
+	// Newest day first, and real UTC day numbers rather than ordinals.
+	if days[0] != 201 || days[1] != 200 || days[2] != 200 {
+		t.Fatalf("days = %v; want [201 200 200] (ts/86400, newest first)", days)
+	}
+	// Day 201 holds only AAPL's 0.60. Within day 200 the surviving AAPL row must
+	// be the 17:00 re-score (0.30), never the 01:00 one that the runner
+	// superseded — "newest wins" is what keeps fit and grade on the same row.
+	if raws[0] != 0.60 {
+		t.Fatalf("newest day = %v; want 0.60", raws[0])
+	}
+	got := map[float64]bool{raws[1]: true, raws[2]: true}
+	if !got[0.30] || !got[0.40] {
+		t.Fatalf("day-200 survivors = %v; want AAPL 0.30 (newest re-score) and MSFT 0.40", raws[1:])
+	}
+	if got[0.10] || got[0.20] {
+		t.Fatalf("a superseded intraday re-score survived: %v", raws)
 	}
 }
 
@@ -67,9 +130,11 @@ func TestBenchmarkSeedAndPrequentialMajority(t *testing.T) {
 	a, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
 	b, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "Microsoft")
 
-	// Empty record: honest coin flip.
-	if p, err := st.PrequentialMajorityProb(ctx, md.H1d, 1000, 0); err != nil || p != 0.5 {
-		t.Fatalf("empty majority = %v, %v; want 0.5", p, err)
+	// Empty record: NO majority to follow, so ok=false and the caller must
+	// publish nothing. It must not report a committable 0.5 — the graders
+	// threshold at `prob > 0.5` and would score that as a constant DOWN call.
+	if p, ok, err := st.PrequentialMajorityProb(ctx, md.H1d, 1000, 0); err != nil || ok {
+		t.Fatalf("empty majority = %v, ok=%v, %v; want ok=false", p, ok, err)
 	}
 
 	day := int64(86400)
@@ -79,16 +144,16 @@ func TestBenchmarkSeedAndPrequentialMajority(t *testing.T) {
 	seedResolvedPred(t, st, b.ID, md.H1d, 101*day+60, 0.6, 0.6, -0.02)
 
 	// Majority-up record → committed constant 1.
-	if p, err := st.PrequentialMajorityProb(ctx, md.H1d, 102, 0); err != nil || p != 1 {
-		t.Fatalf("majority-up = %v, %v; want 1", p, err)
+	if p, ok, err := st.PrequentialMajorityProb(ctx, md.H1d, 102, 0); err != nil || !ok || p != 1 {
+		t.Fatalf("majority-up = %v, ok=%v, %v; want 1, ok=true", p, ok, err)
 	}
 	// beforeDay is exclusive: only day 100 (1 up, 0 down) → still 1; and the
 	// evidence window floor can exclude everything → 0.5 again.
-	if p, _ := st.PrequentialMajorityProb(ctx, md.H1d, 101, 0); p != 1 {
-		t.Fatalf("beforeDay slice = %v; want 1", p)
+	if p, ok, _ := st.PrequentialMajorityProb(ctx, md.H1d, 101, 0); !ok || p != 1 {
+		t.Fatalf("beforeDay slice = %v, ok=%v; want 1, ok=true", p, ok)
 	}
-	if p, _ := st.PrequentialMajorityProb(ctx, md.H1d, 102, 200*day); p != 0.5 {
-		t.Fatalf("sinceTs floor = %v; want 0.5", p)
+	if _, ok, _ := st.PrequentialMajorityProb(ctx, md.H1d, 102, 200*day); ok {
+		t.Fatalf("sinceTs floor: got a committable guess; want ok=false")
 	}
 
 	// A namespaced benchmark horizon stays out of the real horizon's record.
@@ -104,12 +169,12 @@ func TestBenchmarkSeedAndPrequentialMajority(t *testing.T) {
 		t.Fatalf("resolve benchmark: %v", err)
 	}
 	// The benchmark row grades under its own horizon (1 down → 0)…
-	if p, _ := st.PrequentialMajorityProb(ctx, bh, 102, 0); p != 0 {
-		t.Fatalf("benchmark horizon majority = %v; want 0", p)
+	if p, ok, _ := st.PrequentialMajorityProb(ctx, bh, 102, 0); !ok || p != 0 {
+		t.Fatalf("benchmark horizon majority = %v, ok=%v; want 0, ok=true", p, ok)
 	}
 	// …and the real horizon's majority is untouched by it.
-	if p, _ := st.PrequentialMajorityProb(ctx, md.H1d, 102, 0); p != 1 {
-		t.Fatalf("benchmark leaked into real horizon: %v", p)
+	if p, ok, _ := st.PrequentialMajorityProb(ctx, md.H1d, 102, 0); !ok || p != 1 {
+		t.Fatalf("benchmark leaked into real horizon: %v ok=%v", p, ok)
 	}
 }
 

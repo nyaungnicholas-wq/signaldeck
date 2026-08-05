@@ -36,20 +36,51 @@ func (s *Store) LabeledFeaturesBySymbolVersion(ctx context.Context, symbolID int
 }
 
 // labeledFeaturesBySymbol implements both variants; version 0 = all versions.
+//
+// ONE ROW PER UTC DAY, newest wins. The prediction runner re-scores a symbol
+// many times a day and writes a feature row each time, but a 1d/1w label is a
+// property of the DAY, not of the scoring instant: every row inside one day
+// carries the identical outcome. Measured 2026-08-05 on the live v12 corpus,
+// each symbol's labeled set was ~310 rows over 8 distinct days — 39 same-label
+// copies per day — so the honest sample was 8 observations, not 310.
+//
+// Returning those copies corrupted BOTH things this query feeds:
+//
+//   - TRAINING: 39 near-identical vectors sharing one label let a model fit the
+//     handful of days that happened to be re-scored most, which is a sampling
+//     artifact of the runner's schedule and nothing about the market.
+//   - GRADING: the out-of-sample lift that admits a leg to the live blend was
+//     computed over the same duplicated rows. A window of 8 days where one day
+//     dominates the row count is wildly class-imbalanced (measured up-rates of
+//     0.029 and 0.971 on real symbols), which drove the majority-class floor to
+//     0.966 and benched every leg by arithmetic — 0 of 43 gbm legs admitted, 0
+//     alphax ever — no matter how good the model was.
+//
+// Deduping here fixes both at the source, and uses the SAME independence rule
+// the accuracy registry already grades with, so the surface that TRAINS a leg
+// and the surface that JUDGES it finally agree about what one observation is.
 func (s *Store) labeledFeaturesBySymbol(ctx context.Context, symbolID int64, h md.Horizon, version, limit int) ([]LabeledFeature, error) {
 	q := `
-		SELECT f.ts, f.version, f.vec, o.up, o.fwd_return
-		FROM features f
-		JOIN prediction_outcomes o
-		  ON o.symbol_id=f.symbol_id AND o.horizon=f.horizon AND o.ts=f.ts
-		WHERE f.symbol_id=? AND f.horizon=? AND o.resolved_at IS NOT NULL
-		  AND o.up IS NOT NULL AND o.fwd_return IS NOT NULL`
+		SELECT ts, version, vec, up, fwd_return FROM (
+			SELECT f.ts AS ts, f.version AS version, f.vec AS vec,
+			       o.up AS up, o.fwd_return AS fwd_return,
+			       ROW_NUMBER() OVER (
+			         PARTITION BY f.ts/86400 ORDER BY f.ts DESC
+			       ) AS rn
+			FROM features f
+			JOIN prediction_outcomes o
+			  ON o.symbol_id=f.symbol_id AND o.horizon=f.horizon AND o.ts=f.ts
+			WHERE f.symbol_id=? AND f.horizon=? AND o.resolved_at IS NOT NULL
+			  AND o.up IS NOT NULL AND o.fwd_return IS NOT NULL`
 	args := []any{symbolID, string(h)}
 	if version > 0 {
 		q += ` AND f.version=?`
 		args = append(args, version)
 	}
-	q += ` ORDER BY f.ts DESC LIMIT ?`
+	q += `
+		)
+		WHERE rn=1
+		ORDER BY ts DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {

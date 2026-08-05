@@ -43,6 +43,9 @@ import (
 	"math"
 	"sort"
 
+	// clusterstat owns the prequential null every grading surface in this tree
+	// shares. See gradeFrom for why a local majority-class floor was wrong.
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
@@ -579,6 +582,12 @@ func evaluateFolds(samples []sample, folds, span, embargo int, purge bool) (Grad
 	n := len(samples)
 	preds := make([]float64, 0, n)
 	actuals := make([]float64, 0, n)
+	// scoredIdx carries each scored row's source BAR index, which is this
+	// package's clustering unit: samples are one-per-bar for one symbol, so a
+	// bar index is a day and every cluster holds exactly one observation. The
+	// prequential baseline needs that ordering to know which class was in the
+	// majority BEFORE each row — see gradeFrom.
+	scoredIdx := make([]int64, 0, n)
 	purged := 0
 
 	// Contiguous fold boundaries over the time-ordered samples.
@@ -612,13 +621,14 @@ func evaluateFolds(samples []sample, folds, span, embargo int, purge bool) (Grad
 			p := predictLogit(w, b, std.apply(s.feat))
 			preds = append(preds, p)
 			actuals = append(actuals, s.y)
+			scoredIdx = append(scoredIdx, int64(s.idx))
 		}
 	}
 
 	if len(preds) == 0 {
 		return Grade{}, ErrInsufficientData
 	}
-	g := gradeFrom(preds, actuals)
+	g := gradeFrom(scoredIdx, preds, actuals)
 	if purge {
 		g.LabelSpan, g.EmbargoSpan, g.PurgedTrainRows = span, embargo, purged
 	}
@@ -626,14 +636,24 @@ func evaluateFolds(samples []sample, folds, span, embargo int, purge bool) (Grad
 }
 
 // gradeFrom computes the Grade metrics from paired out-of-sample predictions
-// and actual labels. BaseRate is the majority-class accuracy floor:
-// max(pPos, 1-pPos), so Lift is honestly measured against the strongest
-// no-skill constant predictor.
-func gradeFrom(preds, actuals []float64) Grade {
+// and actual labels, with `clusters` the index-aligned ordering key (this
+// package passes the source bar index; one bar = one day = one observation).
+//
+// BaseRate is the PREQUENTIAL majority — on each step, the majority class of
+// everything strictly before it — NOT the hindsight floor max(pPos, 1-pPos).
+//
+// The hindsight floor scored a constant predictor that already knew which class
+// would win the window, which is a choice no forecaster can make in advance. It
+// therefore set an admission bar that rises with the window's imbalance rather
+// than with the difficulty of forecasting, and Lift > 0 is the gate that decides
+// whether this leg reaches the live blend at all. The accuracy registry retired
+// that null (null_policy: "prequential-majority only"); this is the live gate
+// being brought onto the same one, via the shared clusterstat implementation so
+// no two surfaces can disagree about the baseline.
+func gradeFrom(clusters []int64, preds, actuals []float64) Grade {
 	n := len(preds)
 	correct := 0
 	brier := 0.0
-	pos := 0
 	for i := range preds {
 		pred1 := preds[i] >= 0.5
 		act1 := actuals[i] >= 0.5
@@ -642,13 +662,15 @@ func gradeFrom(preds, actuals []float64) Grade {
 		}
 		d := preds[i] - actuals[i]
 		brier += d * d
-		if act1 {
-			pos++
-		}
 	}
 	acc := float64(correct) / float64(n)
-	pPos := float64(pos) / float64(n)
-	baseRate := math.Max(pPos, 1-pPos)
+	// One cluster per row: multiply by 86400 so DayLabelsFrom's ts/86400 folding
+	// keeps each bar in its own cluster instead of collapsing 86,400 of them.
+	ts := make([]int64, len(clusters))
+	for i, c := range clusters {
+		ts[i] = c * 86400
+	}
+	baseRate := clusterstat.PrequentialBaselineVsModel(clusterstat.DayGradesFrom(ts, preds, actuals))
 	return Grade{
 		N:          n,
 		Accuracy:   acc,

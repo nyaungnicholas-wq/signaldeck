@@ -113,6 +113,45 @@ func ValidateKnots(kx, ky []float64) error {
 // mean, far below any difference a published percentage could show.
 const monotoneEps = 1e-12
 
+// discriminationEps is the smallest spread in fitted frequencies that still
+// counts as a map telling symbols apart. Well under a tenth of a percentage
+// point: below this, every symbol receives the same published probability to
+// three decimal places.
+const discriminationEps = 1e-4
+
+// KnotsDiscriminate reports whether a fitted calibration map can still tell two
+// inputs apart — that is, whether its output range is wider than a rounding
+// error.
+//
+// It exists because ValidateKnots CANNOT catch this, by construction. That
+// function rejects INVERSIONS (a more bullish input publishing a lower
+// probability) and a flat map has none: ties are not inversions, so a map whose
+// every knot carries the identical frequency passes validation cleanly and is
+// then served. The isotonic fits this codebase stores are exactly the shape that
+// produces one — pool-adjacent-violators emits flat blocks, and on thin
+// financial data the whole map can become one block.
+//
+// A flat map is not a weak forecast, it is a DIFFERENT KIND of object: every
+// symbol receives one identical probability, so a batch of N "independent"
+// per-symbol predictions is one prediction counted N times, and when it is
+// wrong it is wrong N times. Callers must refuse it and fall back rather than
+// publish a market-wide constant as a per-symbol forecast.
+func KnotsDiscriminate(ky []float64) bool {
+	if len(ky) < 2 {
+		return false
+	}
+	lo, hi := ky[0], ky[0]
+	for _, v := range ky[1:] {
+		if v < lo {
+			lo = v
+		}
+		if v > hi {
+			hi = v
+		}
+	}
+	return hi-lo > discriminationEps
+}
+
 // MinCalibrationPairs is the minimum number of (prediction, outcome) pairs
 // required before Calibrate will fit a recalibration map. Below this, there is
 // not enough evidence to distinguish a real miscalibration from noise, so

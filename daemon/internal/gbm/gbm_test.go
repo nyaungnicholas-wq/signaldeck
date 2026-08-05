@@ -37,7 +37,7 @@ func makeLearnable(n int, seed int64) []Sample {
 		if rng.Float64() < 0.05 { // 5% label flips
 			y = 1 - y
 		}
-		out[i] = Sample{Ts: int64(i), LabelEnd: int64(i) + 1, Feat: []float64{x0, x1, x2}, Y: y}
+		out[i] = Sample{Ts: int64(i) * 86400, LabelEnd: int64(i+1) * 86400, Feat: []float64{x0, x1, x2}, Y: y}
 	}
 	return out
 }
@@ -92,7 +92,7 @@ func TestEvaluate_NoiseReportsNoEdge(t *testing.T) {
 			y = 1
 		}
 		samples[i] = Sample{
-			Ts:       int64(i),
+			Ts:       int64(i) * 86400,
 			LabelEnd: int64(i) + 1,
 			Feat:     []float64{rng.NormFloat64(), rng.NormFloat64(), rng.NormFloat64()},
 			Y:        y,
@@ -146,7 +146,7 @@ func TestEvaluate_NoLeakage(t *testing.T) {
 	// Append 300 later-dated samples with WILD labels — if any leaked into an
 	// earlier fold, predictions would shift.
 	for i := 600; i < 900; i++ {
-		appended = append(appended, Sample{Ts: int64(i), LabelEnd: int64(i) + 1, Feat: full[i].Feat, Y: 1})
+		appended = append(appended, Sample{Ts: int64(i) * 86400, LabelEnd: int64(i+1) * 86400, Feat: full[i].Feat, Y: 1})
 	}
 	pred1b := firstFoldPreds(appended[:600], 3)
 

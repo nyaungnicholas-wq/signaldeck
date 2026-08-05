@@ -237,12 +237,21 @@ func TestPerSymbolLearner_ClusteredRowsDoNotGraduate(t *testing.T) {
 	if !ok {
 		t.Fatal("a still-learning symbol should still get a model row")
 	}
-	if m.NSamples <= symbolagent.MinPersonal {
-		t.Fatalf("fixture must clear the row floor to isolate the day floor: n=%d", m.NSamples)
+	// The 60 seeded rows are 5 UTC days of intraday re-scores, and the labeled
+	// reader now COLLAPSES them to one row per day before the learner ever sees
+	// them. So the clustering is caught at the source: what used to arrive as 60
+	// "samples" (clearing the 40-row floor and leaning on the day floor to be
+	// stopped) now arrives as the 5 independent observations it always was.
+	//
+	// Asserting the collapse is the stronger guard. A regression that restored
+	// the duplicate rows would show up here as n=60 rather than silently
+	// re-arming the pseudo-replication downstream.
+	if m.NSamples != 5 {
+		t.Fatalf("5 days x 12 intraday rows must collapse to 5 independent samples, got n=%d", m.NSamples)
 	}
 	if m.Tier == symbolagent.TierPersonal {
-		t.Fatalf("%d rows over 5 distinct days must NOT be personal (floor is %d days)",
-			m.NSamples, symbolagent.MinPersonalDays)
+		t.Fatalf("%d independent samples over 5 distinct days must NOT be personal (floors are %d rows / %d days)",
+			m.NSamples, symbolagent.MinPersonal, symbolagent.MinPersonalDays)
 	}
 	if m.Weights != "{}" {
 		t.Fatalf("no personal weights may be stored on 5 days of evidence, got %q", m.Weights)

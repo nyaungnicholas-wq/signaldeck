@@ -181,6 +181,27 @@ func flatten(vec map[string]float64, keys []string) []float64 {
 	return out
 }
 
+// minGradeDays is how many DISTINCT UTC days an out-of-sample record must span
+// before its Lift may be published and used to admit a leg to the live blend.
+//
+// N is not evidence here — days are. Every row inside one day resolves to the
+// same forward move, so a 300-row grade over 8 days holds 8 independent
+// observations, and a Lift computed on it is a reading of eight coin flips
+// dressed up as three hundred. Measured 2026-08-05, that was every per-symbol
+// grade in production.
+//
+// 10 is the same evidence floor the accuracy registry (min_distinct_blocks) and
+// canary.ReadmitMinDistinctDays already enforce, so no surface gets to ADMIT a
+// leg on less evidence than another surface needs to BELIEVE it.
+const minGradeDays = 10
+
+// gradeHasEvidence reports whether a grade spans enough independent days to be
+// published at all. A grade below the floor is not published as a negative lift
+// — that would be indistinguishable from a measured anti-predictive verdict.
+// Nothing is written, and the leg stays UNMEASURED, which the ensemble's
+// fail-safe admission treats as "no evidence yet" rather than "no edge".
+func gradeHasEvidence(distinctDays int) bool { return distinctDays >= minGradeDays }
+
 // gbmSamplesFromLabeled builds time-ASCENDING gbm.Samples from labeled feature
 // rows (which arrive newest-first). The caller passes the canonical key order so
 // every sample — and the latest live vector — share one feature layout.
@@ -333,7 +354,7 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 				// resolved, so it's a legitimate labeled example); Run grades
 				// out-of-sample via walk-forward before predicting it.
 				latest := flatten(rows[0].Vec, keys)
-				if prob, g, ok := gbm.Run(samples, latest, gbmFolds, gbm.Defaults()); ok {
+				if prob, g, ok := gbm.Run(samples, latest, gbmFolds, gbm.Defaults()); ok && gradeHasEvidence(g.DistinctDays) {
 					if err := w.St.UpsertModelForecast(ctx, store.ModelForecast{
 						SymbolID: s.ID, Horizon: h, Model: store.ModelGBM, Ts: now,
 						Prob: prob, Accuracy: g.Accuracy, Brier: g.BrierScore, AUC: g.AUC,
@@ -352,7 +373,7 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 			mrSamples := meanRevSamplesFromLabeled(rows)
 			latestRaw, hasRaw := meanRevLatestInput(rows)
 			if hasRaw {
-				if prob, g, ok := meanrev.Run(mrSamples, latestRaw, meanRevFolds, meanrev.DefaultStrength, meanRevCost); ok {
+				if prob, g, ok := meanrev.Run(mrSamples, latestRaw, meanRevFolds, meanrev.DefaultStrength, meanRevCost); ok && gradeHasEvidence(g.DistinctDays) {
 					if err := w.St.UpsertModelForecast(ctx, store.ModelForecast{
 						SymbolID: s.ID, Horizon: h, Model: store.ModelMeanRev, Ts: now,
 						Prob: prob, Accuracy: g.Accuracy, Brier: g.BrierScore, AUC: g.AUC,

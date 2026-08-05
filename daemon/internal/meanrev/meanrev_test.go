@@ -65,7 +65,7 @@ func buildMeanReverting(n int) []Sample {
 			fwd = 0.03 // momentum said down, price rose
 			up = 1
 		}
-		out[i] = Sample{Ts: int64(i), RawProb: raw, Up: up, FwdReturn: fwd}
+		out[i] = Sample{Ts: int64(i) * 86400, RawProb: raw, Up: up, FwdReturn: fwd}
 	}
 	return out
 }
@@ -103,7 +103,7 @@ func buildMomentumContinuation(n int) []Sample {
 			fwd = -0.03
 			up = 0
 		}
-		out[i] = Sample{Ts: int64(i), RawProb: raw, Up: up, FwdReturn: fwd}
+		out[i] = Sample{Ts: int64(i) * 86400, RawProb: raw, Up: up, FwdReturn: fwd}
 	}
 	return out
 }
@@ -140,7 +140,7 @@ func TestEvaluate_CostGatesMarginalEdge(t *testing.T) {
 			fwd = 0.002
 			up = 1
 		}
-		samples[i] = Sample{Ts: int64(i), RawProb: raw, Up: up, FwdReturn: fwd}
+		samples[i] = Sample{Ts: int64(i) * 86400, RawProb: raw, Up: up, FwdReturn: fwd}
 	}
 	// With a 1% cost, a 0.2% reversion never covers cost => no net edge.
 	g, err := Evaluate(samples, 5, DefaultStrength, 0.01)
@@ -170,7 +170,7 @@ func TestEvaluate_NoLeakage(t *testing.T) {
 	appended := make([]Sample, 0, 900)
 	appended = append(appended, base...)
 	for i := 600; i < 900; i++ {
-		appended = append(appended, Sample{Ts: int64(i), RawProb: 0.9, Up: 1, FwdReturn: 0.5})
+		appended = append(appended, Sample{Ts: int64(i) * 86400, RawProb: 0.9, Up: 1, FwdReturn: 0.5})
 	}
 	pred1b := firstFoldPreds(appended[:600], 3)
 

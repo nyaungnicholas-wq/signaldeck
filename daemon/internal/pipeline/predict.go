@@ -47,9 +47,28 @@ func decodeCalibration(blob string) (symbolagent.Calibration, bool) {
 	return c, true
 }
 
-// calibrationPairLimit caps how many of the newest RESOLVED outcomes train the
-// fleet-wide recalibration map for one horizon.
-const calibrationPairLimit = 3000
+// calibrationPairLimit caps how many of the newest INDEPENDENT resolved
+// outcomes train the fleet-wide recalibration map for one horizon.
+// ResolvedRawPredictionPairs now returns one row per (symbol, UTC day), so this
+// is a memory guard rather than the statistical window: at ~1,000 symbols a day
+// it admits roughly 40 trading days. The old value of 3,000 was chosen when the
+// query returned every intraday re-score, and it bought TWO calendar days.
+const calibrationPairLimit = 40000
+
+// calibrationMinDays is the number of DISTINCT UTC days the fit must see before
+// it is allowed to correct anything.
+//
+// Rows inside one day share one market move, so days — not rows — are the unit
+// of evidence here. A three-parameter map fit on two days has ~two independent
+// observations behind it: it cannot learn a probability map, it can only
+// memorise which way the market went, and applying that to a fresh day injects
+// a large confident bias with no forecasting content. That is exactly what the
+// live record caught (see ResolvedRawPredictionPairs).
+//
+// 10 matches the evidence floor the rest of the platform already uses — the
+// accuracy registry's min_distinct_blocks and canary.ReadmitMinDistinctDays —
+// so no surface has a laxer bar for FITTING a map than for BELIEVING one.
+const calibrationMinDays = 10
 
 // globalCalibration fits the fleet-wide recalibration map for one horizon from
 // RESOLVED outcomes, and is the fallback for every symbol without a personal
@@ -72,22 +91,39 @@ const calibrationPairLimit = 3000
 // history, or ensemble.Calibrate refused the fit) — the caller then publishes
 // the raw probability uncorrected rather than an invented one.
 func globalCalibration(ctx context.Context, st *store.Store, h md.Horizon) (func(float64) float64, bool, error) {
-	raws, ups, err := st.ResolvedRawPredictionPairs(ctx, h, calibrationPairLimit)
+	raws, ups, days, err := st.ResolvedRawPredictionPairs(ctx, h, calibrationPairLimit)
 	if err != nil {
 		return nil, false, err
 	}
 	if len(raws) == 0 {
 		return nil, false, nil
 	}
-	// ResolvedRawPredictionPairs returns rows ORDER BY ts DESC, so reversing
-	// puts them in chronological order. Ts is stamped ORDINALLY rather than
-	// with wall-clock time — the store query does not return timestamps, and an
-	// ordered split is all CalibrateRanking needs. It must not be read as a
-	// real instant, which is why nothing else consumes it.
+	// EVIDENCE FLOOR, counted in days rather than rows. The pairs are already
+	// deduped to one per (symbol, UTC day) by the store, but a handful of days
+	// can still carry thousands of rows, and it is the day count that says how
+	// much independent evidence is behind the fit. Below the floor, publish the
+	// raw probability uncorrected: an uncorrected number is honestly
+	// uncalibrated, whereas a map fit on two market moves is confidently wrong.
+	distinctDays := map[int64]struct{}{}
+	for _, d := range days {
+		distinctDays[d] = struct{}{}
+	}
+	if len(distinctDays) < calibrationMinDays {
+		slog.Info("calibration: refusing to fit — too few independent days",
+			"horizon", h, "days", len(distinctDays), "need", calibrationMinDays,
+			"rows", len(raws))
+		return nil, false, nil
+	}
+	// ResolvedRawPredictionPairs returns rows ORDER BY day DESC, so reversing
+	// puts them in chronological order. Ts carries the REAL UTC day number, not
+	// an ordinal: CalibrateRanking splits its holdout on a Ts boundary, and a
+	// split that lands mid-day would put the same market move on both sides of
+	// the train/test line — which is how a Brier gate that exists to catch a bad
+	// map ends up measuring in-sample.
 	pairs := make([]ensemble.Pair, len(raws))
 	for i := range raws {
 		src := len(raws) - 1 - i // oldest first
-		pairs[i] = ensemble.Pair{Pred: raws[src], Actual: ups[src], Ts: int64(i)}
+		pairs[i] = ensemble.Pair{Pred: raws[src], Actual: ups[src], Ts: days[src]}
 	}
 
 	// CalibrateRanking, not Calibrate: isotonic is only WEAKLY monotone, so its
@@ -104,9 +140,39 @@ func globalCalibration(ctx context.Context, st *store.Store, h md.Horizon) (func
 		return nil, false, nil
 	}
 	if !ranked {
-		slog.Info("calibration: ranking not preserved — isotonic beat the "+
-			"strictly-monotone map out-of-sample, so distinct per-symbol scores "+
-			"may share one calibrated probability", "horizon", h)
+		// A MAP THAT COLLAPSED THE RANKING IS REFUSED, not merely logged.
+		//
+		// ranked=false means isotonic won the held-out Brier comparison, and
+		// isotonic's pool-adjacent-violators blocks map whole ranges of raw
+		// scores onto one identical value. Applied across the fleet, that turns
+		// N per-symbol probabilities into a handful of distinct numbers — in
+		// practice ONE, sitting a hair below 0.5 — and the `prob > 0.5` rule
+		// every reader thresholds at then converts it into a UNANIMOUS
+		// directional call.
+		//
+		// Measured over the live resolved record (31 UTC days, 15,998
+		// independent symbol-days), a rank-collapsing map shipped on 21 of the
+		// 21 days it could be fitted, and its up-call rate was 0.0%-0.4% while
+		// 48%-70% of symbols actually rose. What the platform was publishing was
+		// not a thousand forecasts: it was ONE market-direction bet, inferred
+		// from the trailing base rate, replicated across every symbol and graded
+		// as a thousand independent predictions. When the regime matched the
+		// trailing rate it scored well; when the regime flipped it scored 29.4%
+		// against a 70.6% up-day, and the registry duly recorded "significantly
+		// worse than the naive baseline".
+		//
+		// Publishing the RAW probability uncorrected costs measured accuracy on
+		// the pooled record (-0.8pp at 1d, -2.5pp at 1w) and it is still the
+		// right call, for the reason the rest of this codebase already accepts:
+		// the collapsed map earns those points by silently BECOMING the naive
+		// majority baseline while presenting itself as a per-symbol forecaster.
+		// An uncalibrated number that varies per symbol is honestly uncertain; a
+		// calibrated number identical for every symbol is a market call wearing
+		// a forecast's clothes, and it costs 17pp the day the market turns.
+		slog.Warn("calibration: refusing a rank-collapsing map — publishing raw "+
+			"probabilities uncorrected rather than one market-wide call replicated "+
+			"across every symbol", "horizon", h)
+		return nil, false, nil
 	}
 	return mapFn, true, nil
 }
@@ -413,13 +479,20 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	benchProb := map[md.Horizon]float64{}
 	todayUTC := time.Now().UTC().Unix() / 86400
 	for _, h := range predHorizons {
-		if p, err := w.St.PrequentialMajorityProb(ctx, h, todayUTC, benchmarkMajorityEpoch); err == nil {
-			benchProb[h] = p
-		} else {
+		p, ok, err := w.St.PrequentialMajorityProb(ctx, h, todayUTC, benchmarkMajorityEpoch)
+		switch {
+		case err != nil:
 			slog.Warn("prequential-majority benchmark: majority read failed — skipping this pass", "horizon", h, "err", err)
+		case !ok:
+			// Empty or exactly tied prior: the majority-follower has no side to
+			// take, so it commits nothing this pass rather than a 0.5 that the
+			// graders would score as a confident DOWN call.
+			slog.Info("prequential-majority benchmark: no majority in the prior record — no benchmark row this pass", "horizon", h)
+		default:
+			benchProb[h] = p
 		}
 	}
-	n, featErrs, staleCals := 0, 0, 0
+	n, featErrs, staleCals, noLegs := 0, 0, 0, 0
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
@@ -576,14 +649,43 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				// reason (it would otherwise emit an UNcalibrated prob while a
 				// still-learning symbol gets the global map).
 				if cal, ok := decodeCalibration(pm.Calibration); ok && cal.Fitted {
-					if fn, err := ensemble.MapFromKnotsChecked(cal.KX, cal.KY); err == nil {
-						personalCal, usePersonalCal = fn, true
-					} else {
+					fn, err := ensemble.MapFromKnotsChecked(cal.KX, cal.KY)
+					switch {
+					case err != nil:
 						staleCals++
+					case !ensemble.KnotsDiscriminate(cal.KY):
+						// COLLAPSED PERSONAL MAP. The monotonicity check above
+						// passes a fully flat map — ties are not inversions — so
+						// a symbol whose stored isotonic fit degenerated to one
+						// block would publish the same probability regardless of
+						// what its legs computed. That is the per-symbol twin of
+						// the fleet-wide collapse refused in globalCalibration,
+						// and it is counted with the other refused maps so the
+						// detail line already reports it.
+						staleCals++
+					default:
+						personalCal, usePersonalCal = fn, true
 					}
 				}
 			}
-			raw, nUsed := ensemble.WeightedProbability(c, wts)
+			raw, nUsed, admitted := ensemble.AdmittedProbability(c, wts)
+			if !admitted {
+				// NO LEG SURVIVED ADMISSION — publish nothing.
+				//
+				// WeightedProbability returns 0.5 for an empty blend, and on the
+				// wire a stored 0.5 is indistinguishable from a real coin-flip
+				// call: it inherits the calibration map, lands on one side of the
+				// 0.5 threshold, and is graded as a confident directional
+				// prediction. Measured on live rows, 1,202 predictions carried
+				// raw_prob=0.5 with nUsed=0 — pure absence of evidence, published
+				// and then scored as if it were a forecast.
+				//
+				// ensemble.AdmittedProbability exists precisely to refuse this and
+				// was simply never called here. Skipping the upsert is the honest
+				// output: no forecast, rather than a forecast that means nothing.
+				noLegs++
+				continue
+			}
 			cal := raw
 			if usePersonalCal {
 				// Personal tier: recalibrate with the symbol's OWN isotonic map.
@@ -718,6 +820,12 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// assertion. The count must fall to 0 as the per-symbol learner refits.
 		detail += fmt.Sprintf(" (%d stale non-monotone per-symbol map(s) refused — using global calibration until refit)", staleCals)
 		slog.Warn("calibration: refused stale per-symbol maps", "count", staleCals)
+	}
+	if noLegs > 0 {
+		// Reported, never silent. A rising count is the honest signal that the
+		// legs have gone cold fleet-wide — which is exactly the condition that
+		// used to be laundered into thousands of 0.5 "predictions".
+		detail += fmt.Sprintf(" (%d symbol-horizon(s) had no admitted leg — no forecast published)", noLegs)
 	}
 	return detail, nil
 }

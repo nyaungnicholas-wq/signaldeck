@@ -48,8 +48,10 @@ package meanrev
 
 import (
 	"errors"
-	"math"
 	"sort"
+
+	// clusterstat owns the prequential null shared by every grading surface.
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 )
 
 // Errors returned by this package.
@@ -81,8 +83,13 @@ type Grade struct {
 	Accuracy   float64 `json:"accuracy"`   // fraction of COST-COVERED correct calls
 	BrierScore float64 `json:"brierScore"` // mean (pMR - y)^2 on raw direction
 	AUC        float64 `json:"auc"`        // ROC AUC of pMR vs raw direction
-	BaseRate   float64 `json:"baseRate"`   // majority-class floor of the costed target
+	BaseRate   float64 `json:"baseRate"`   // prequential constant-call floor of the costed target
 	Lift       float64 `json:"lift"`       // Accuracy - BaseRate (net of cost); <=0 => drop
+
+	// DistinctDays is how many UTC days the graded record spans — the count of
+	// INDEPENDENT observations behind Lift, since every row inside one day
+	// resolves to one move. A caller must gate on this, not on N.
+	DistinctDays int `json:"distinctDays"`
 }
 
 // Invert reflects a momentum probability about 0.5 by the given strength,
@@ -133,6 +140,10 @@ func Evaluate(samples []Sample, folds int, strength, cost float64) (Grade, error
 
 	n := len(ordered)
 	var preds, dirTargets, costLabels []float64
+	// scoredTs carries each scored row's timestamp so the baseline can cluster
+	// by UTC day — rows inside one day share one move, and a constant strategy
+	// has to be graded day by day to stay hindsight-free.
+	var scoredTs []int64
 	for f := 1; f < folds; f++ {
 		trainEnd := n * f / folds
 		testEnd := n * (f + 1) / folds
@@ -151,12 +162,13 @@ func Evaluate(samples []Sample, folds int, strength, cost float64) (Grade, error
 			// too small to trade profitably either way. This is the ground truth a
 			// costed directional call is graded against.
 			costLabels = append(costLabels, costLabel(s.FwdReturn, cost))
+			scoredTs = append(scoredTs, s.Ts)
 		}
 	}
 	if len(preds) == 0 {
 		return Grade{}, ErrInsufficientData
 	}
-	return gradeFrom(preds, dirTargets, costLabels), nil
+	return gradeFrom(scoredTs, preds, dirTargets, costLabels), nil
 }
 
 // costLabel returns the cost-net directional label of a realized move: +1 when
@@ -191,16 +203,24 @@ const (
 //     (pMR != 0.5) but no tradeable move existed, so it counts as a loss for both
 //     the signal AND the constant benchmarks — it cannot inflate lift.
 //
+// WHICH constant call is PREQUENTIAL, not hindsight. The benchmark used to be
+// max(longWins, shortWins)/n — the better of the two decided AFTER seeing the
+// whole window, which is a side no trader could have picked in advance. Over a
+// window of a few days that oracle sat as high as 0.95 here, so Lift > 0 (the
+// gate that admits this leg to the live blend) demanded an impossible accuracy
+// and the leg was benched by arithmetic: 0 of 7 graded 1w legs admitted, 8 of 43
+// at 1d. Now the constant call is chosen from the days STRICTLY BEFORE each day,
+// via the one shared implementation in clusterstat, so it is a strategy someone
+// could actually have run and beating it is a real claim.
+//
 // Brier/AUC use the raw realized direction so they stay comparable to the other
 // legs' probability calibration diagnostics.
-func gradeFrom(preds, dirTargets, costLabels []float64) Grade {
+func gradeFrom(ts []int64, preds, dirTargets, costLabels []float64) Grade {
 	n := len(preds)
 
 	// Signal accuracy: its directional call matches a tradeable cost-net move.
 	signalWins := 0
-	// Constant-benchmark wins: always-long wins on every +1 label; always-short
-	// wins on every -1 label. The base rate is the better of the two.
-	longWins, shortWins := 0, 0
+	correct := make([]bool, n)
 	for i := range preds {
 		call := 0
 		if preds[i] > 0.5 {
@@ -208,19 +228,18 @@ func gradeFrom(preds, dirTargets, costLabels []float64) Grade {
 		} else if preds[i] < 0.5 {
 			call = -1
 		}
-		lbl := int(costLabels[i])
-		if call != 0 && call == lbl {
+		if lbl := int(costLabels[i]); call != 0 && call == lbl {
 			signalWins++
-		}
-		switch lbl {
-		case 1:
-			longWins++
-		case -1:
-			shortWins++
+			correct[i] = true
 		}
 	}
 	acc := float64(signalWins) / float64(n)
-	baseRate := math.Max(float64(longWins), float64(shortWins)) / float64(n)
+	// Three-way folding: a 0 label is a win for NEITHER constant call, so it must
+	// not be handed to whichever side did not win it. Days where no constant call
+	// is defined yet are credited the signal's own hits, so they contribute zero
+	// lift instead of handing it free edge — see PrequentialBaselineVsModel.
+	dayGrades := clusterstat.DayGradesFromWins(ts, costLabels, correct)
+	baseRate := clusterstat.PrequentialBaselineVsModel(dayGrades)
 
 	// Brier + AUC on raw direction (diagnostic, not the gate).
 	brier := 0.0
@@ -229,12 +248,13 @@ func gradeFrom(preds, dirTargets, costLabels []float64) Grade {
 		brier += d * d
 	}
 	return Grade{
-		N:          n,
-		Accuracy:   acc,
-		BrierScore: brier / float64(n),
-		AUC:        aucRank(preds, dirTargets),
-		BaseRate:   baseRate,
-		Lift:       acc - baseRate,
+		N:            n,
+		Accuracy:     acc,
+		BrierScore:   brier / float64(n),
+		AUC:          aucRank(preds, dirTargets),
+		BaseRate:     baseRate,
+		Lift:         acc - baseRate,
+		DistinctDays: len(dayGrades),
 	}
 }
 
