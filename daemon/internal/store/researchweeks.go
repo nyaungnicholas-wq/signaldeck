@@ -524,6 +524,35 @@ func (s *Store) LoopRunForDay(ctx context.Context, day string) (LoopRun, bool, e
 	return r, true, nil
 }
 
+// LastSearchedRun returns the most recent run that actually took a look —
+// grid_size > 0, i.e. a night the grid was graded and multiplicity was charged.
+// Refusal rows (grid_size 0) are skipped by construction, so the corpus this
+// returns is the one the standing Bonferroni divisor was already paid against.
+//
+// The loop uses it to decide whether tonight's corpus is materially new. Re-running
+// a deterministic grid over an unchanged corpus yields the identical verdicts —
+// it is the same test, not a second chance to be fooled — and charging a look for
+// it inflates the divisor without buying any error control.
+func (s *Store) LastSearchedRun(ctx context.Context) (LoopRun, bool, error) {
+	var r LoopRun
+	err := s.db.QueryRowContext(ctx, `
+		SELECT day, ran_at, grid_size, divisor, corrected_alpha, obs_count,
+		       obs_ts_from, obs_ts_to, survivors, judged, refusal_reason, git_rev,
+		       corpus_coverage
+		FROM research_loop_runs WHERE grid_size > 0
+		ORDER BY day DESC LIMIT 1`).Scan(&r.Day, &r.RanAt,
+		&r.GridSize, &r.Divisor, &r.CorrectedAlpha, &r.ObsCount, &r.ObsTsFrom,
+		&r.ObsTsTo, &r.Survivors, &r.Judged, &r.RefusalReason, &r.GitRev,
+		&r.CorpusCoverage)
+	if errors.Is(err, sql.ErrNoRows) {
+		return r, false, nil
+	}
+	if err != nil {
+		return r, false, err
+	}
+	return r, true, nil
+}
+
 // MarkLoopDayFromRun sets the loop's same-day gate key, but DERIVES it from the
 // durable pass row instead of writing it alongside one.
 //

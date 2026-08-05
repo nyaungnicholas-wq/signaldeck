@@ -9,6 +9,8 @@ import OfflineBanner from "@/components/OfflineBanner";
 import CommandPalette, { CMDK_EVENT } from "@/components/CommandPalette";
 import FirstRunTour from "@/components/FirstRunTour";
 import HelpPanel, { HELP_EVENT } from "@/components/HelpPanel";
+import UxProbe from "@/components/UxProbe";
+import NextStep from "@/components/NextStep";
 import { useLabel } from "@/lib/labels";
 import { noteVisit } from "@/lib/goal";
 
@@ -544,6 +546,8 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       <CommandPalette />
       <FirstRunTour />
       <HelpPanel />
+      <UxProbe />
+      <NextStep />
       <main id="main" className="flex flex-1 flex-col gap-4">
         {children}
       </main>
@@ -553,7 +557,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
       >
         SignalDeck measures and stores; it does not advise. Every score decomposes into its
         components; every tendency ships with its sample size; the Honesty page grades the
-        scores against what actually happened. Not financial advice.
+        scores against what actually happened. Not financial advice.{" "}
+        <Link href="/health" className="hover:underline" style={{ color: "var(--dim)" }}>
+          We grade how usable this is, too &rarr;
+        </Link>
       </footer>
     </div>
   );

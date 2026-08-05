@@ -34,6 +34,17 @@ init_repo() {
   mkdir -p "$dir/ops"
   cp "$SCAN" "$dir/ops/pre-publish-scan.sh"
   chmod +x "$dir/ops/pre-publish-scan.sh"
+  # The scan runs ops/manifest-check.sh (section 5) and treats a non-zero exit
+  # as "load-bearing paths are missing". A fixture is a three-file throwaway
+  # repo, not this repository, so the real manifest can never pass here — and
+  # when the script was simply absent, bash's "No such file or directory" was
+  # read as a manifest FAILURE. That made every clean-tree expectation below
+  # fail for a reason that had nothing to do with secrets, which is what this
+  # file exists to test. A stub keeps section 5 structurally intact and scoped
+  # out; the REAL manifest gate is unaffected and still runs in CI and in
+  # ops/pre-publish-scan.sh against this repository.
+  printf '#!/bin/bash\nexit 0\n' > "$dir/ops/manifest-check.sh"
+  chmod +x "$dir/ops/manifest-check.sh"
   git -C "$dir" add -A
   git -C "$dir" commit -q -m "init"
 }

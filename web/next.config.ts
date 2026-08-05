@@ -112,6 +112,14 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  // Dev only. The dev server's origin is localhost, so opening the app at
+  // http://127.0.0.1:8323 made Next refuse to serve dev assets to that origin:
+  // React never hydrated, the page sat on the server-rendered "checking
+  // session…" shell forever, and it is indistinguishable from a real app bug
+  // (it cost time during the AuthGate fix, and ops/docs reference 127.0.0.1
+  // throughout). Both loopback spellings are the same machine here. Production
+  // builds do not consult this.
+  allowedDevOrigins: ["127.0.0.1"],
   async headers() {
     return [{ source: "/(.*)", headers: SECURITY_HEADERS }];
   },

@@ -1,0 +1,19 @@
+# Commits the evidence ledger references. GENERATED — do not hand-edit.
+#
+# Every sha below is named by at least one row in prediction_ledger or
+# regime_outcomes. If one stops being reachable, tools/accuracy_registry.py
+# can no longer attribute those rows and strips the verdict from the whole
+# predictor family, permanently. ops/ledger-provenance.sh --check enforces
+# that in CI; the git hooks in ops/githooks enforce it locally.
+#
+# Regenerate on the machine holding data/signaldeck.db:
+#   bash ops/ledger-provenance.sh --write
+#
+# recorded=7 unpushed=2 unresolvable=3 dirty-stamped=5
+1a8c67ea9ee43fc329d90fcea5ee180fad955770
+2da96fb01f682556f5e787840ea04c07afaaf875
+32fb93d4de7587d4cffec346ca86d3d96d8e2910
+4e2e84e2b32731f22aa6ec30f77949bb9dcea173
+502c8b7007f1c772dc53cc3f8639f1c0becbdf37
+58e42b04f4129a582a53288f32716b56f2745bc5
+65c865f4ebff2aed8ca298726a5b5403f5ddc14e

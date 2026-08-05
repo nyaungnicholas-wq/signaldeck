@@ -21,13 +21,13 @@ func TestRetiredFromRegistryMapsFlaggedRowsToHorizons(t *testing.T) {
 	if err := os.WriteFile(path, []byte(blob), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := retiredFromRegistry(path)
-	if !got["directional-ensemble-1d"] {
+	got := registryFlagsFrom(path)
+	if !got["directional-ensemble-1d"].Retire {
 		t.Error("a FAILED 1d row did not retire directional-ensemble-1d")
 	}
 	// A FAILED high-conviction tier retires its horizon — the horizon is the
 	// unit that publishes, and its actionable tier just lost its evidence.
-	if !got["directional-ensemble-1w"] {
+	if !got["directional-ensemble-1w"].Retire {
 		t.Error("a FAILED 1w high-conviction row did not retire directional-ensemble-1w")
 	}
 	// Structural rows are governed by the DECAYED path against their frozen
@@ -40,10 +40,10 @@ func TestRetiredFromRegistryMapsFlaggedRowsToHorizons(t *testing.T) {
 
 func TestRetiredFromRegistryFailsSafe(t *testing.T) {
 	// Missing file: the kill switch must never fire on evidence nobody can read.
-	if got := retiredFromRegistry(filepath.Join(t.TempDir(), "absent.json")); len(got) != 0 {
+	if got := registryFlagsFrom(filepath.Join(t.TempDir(), "absent.json")); len(got) != 0 {
 		t.Errorf("missing registry retired %v", got)
 	}
-	if got := retiredFromRegistry(""); len(got) != 0 {
+	if got := registryFlagsFrom(""); len(got) != 0 {
 		t.Errorf("empty path retired %v", got)
 	}
 	// Malformed JSON: same posture.
@@ -51,7 +51,7 @@ func TestRetiredFromRegistryFailsSafe(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := retiredFromRegistry(path); len(got) != 0 {
+	if got := registryFlagsFrom(path); len(got) != 0 {
 		t.Errorf("malformed registry retired %v", got)
 	}
 }

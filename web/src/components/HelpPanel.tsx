@@ -151,6 +151,12 @@ export default function HelpPanel(): React.ReactElement | null {
           <Link href="/advanced" onClick={close} className={ROW}>
             <RowText title="Advanced tools" sub="Research, backtests, and the experimental model lab." />
           </Link>
+          <Link href="/health" onClick={close} className={ROW}>
+            <RowText
+              title="Is this actually easy to use?"
+              sub="We grade ourselves on that too, and show the score."
+            />
+          </Link>
         </div>
 
         <div className="mb-4">

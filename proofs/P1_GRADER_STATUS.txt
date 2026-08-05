@@ -1,0 +1,102 @@
+SIGNALDECK — GRADER REGISTRATION STATUS
+Generated 2026-08-04T17:2x-07:00 (P1, remediation plan) — FINAL
+
+STATUS: RESOLVED. GRADER ACCEPTED.
+        All three P1 done-when criteria MET.
+
+PROOF OF ACCEPTANCE (read-only; no grade was run, no numbers published)
+  python -> require_registered_grader(con)
+  GRADER ACCEPTED — returned without refusing
+    graderSha256      bcb722562f0b4d91a78e879d75f6da16cef9489b370e83d13922dc00d75da8b3
+    graderCommit      328d8c41a48192a8810d1baf37e970448a8e7a3c
+    minIndependentN   30      <- UNCHANGED
+    minDistinctBlocks 10      <- UNCHANGED
+    maxAlpha          0.05    <- UNCHANGED
+
+  The three floors above are the proof that no gate was widened to achieve this.
+
+HASH TIMELINE
+  pinned at start (seq 28)  6908c6f9446ab44000e4a1fd3f8e6c325f4300e22d8bf7949deba3732ad8c28f
+                            at commit 1a8c67ea9ee43fc329d90fcea5ee180fad955770
+  verified   git show 1a8c67ea:tools/accuracy_registry.py -> 6908c6f9...
+             (the pin was CORRECT; the refusal was the machinery working)
+  running file (settled 14:17)  bcb722562f0b4d91a78e879d75f6da16cef9489b370e83d13922dc00d75da8b3
+  pinned now (seq 39)           bcb722562f0b4d91a78e879d75f6da16cef9489b370e83d13922dc00d75da8b3
+                                at commit 328d8c41a48192a8810d1baf37e970448a8e7a3c
+  MATCH: True
+
+ROOT CAUSE (resolved)
+  pipeline.PreregRegistrar refuses to register a grader it cannot resolve to a
+  commit:
+    "grader has uncommitted changes; a working-tree digest is not reproducible
+     from any commit (tools/accuracy_registry.py)"
+  tools/accuracy_registry.py was modified but never committed. The chain kept
+  pinning the committed version, the grader kept hashing the working-tree
+  version, and the registrar kept refusing to reconcile them. Three components
+  each behaving correctly, deadlocked. Recorded in dq_events at 20:46:57Z and
+  20:57:07Z on 2026-08-04, and as far back as 2026-07-31T06:29Z.
+
+ACTIONS TAKEN
+  1. commit 328d8c4 — path-scoped: grader + tests + prereg-amend + lineage +
+     signaldeckd startup gate. 7 files, +433/-14.
+     internal/riskgate DELIBERATELY EXCLUDED: it does not compile.
+  2. prereg-amend -kind revision-epoch-correction -commit  -> chain seq 38
+  3. daemon restart -> registrar pass 00:20:00Z -> chain seq 39
+     "appended 1 AMENDMENT record(s) — a registered claim changed in code"
+
+CHAIN AFTER P1
+  seq 39  grading-protocol            <- AMENDMENT, re-pins the grader
+  seq 38  revision-epoch-correction   <- filed this phase
+  seq 37  gradability-correction
+  seq 36  grading-look
+
+AMENDMENT AS FILED (seq 38)
+  specHash   38d0fce325229ddf022a1ed0ebb19c2649ae49b25f3c2d302e69817ce8ebb321
+  prevHash   33802e0a57e9ac0bdc7b18e6e06b883db98523adda69617d658e1e03ac31afba
+  entryHash  88ce0683249e1d45ab7328a8ff35e6b1be7c9fb66d574988962f087aaaed5114
+  pre-flight   chain verified INTACT
+  post-write   chain verified INTACT
+
+PRE-FLIGHT MEASUREMENT (live, at filing)
+  attributable post-epoch ledger rows      59515
+  unattributable post-epoch ledger rows     3255   (5.19% of window)
+  distinct days touched                        4
+  newest unattributable day           2026-08-03
+  unattributable on/after new epoch            0   <- GUARD PASSED
+  offending builds                             9   (3 clean, naming absent commits)
+
+TEST EVIDENCE
+  python tools/test_accuracy_registry.py                 103 passed, 4 skipped, exit 0
+  go test ./internal/prereg/... ./internal/lineage/...    ok, exit 0
+  go build ./cmd/signaldeckd ./cmd/prereg-amend           exit 0
+    (built against HEAD + the 7 changed files in an ISOLATED git worktree,
+     proving the prospective commit builds BEFORE it was made)
+
+DONE-WHEN
+  the grader can run                      MET  (require_registered_grader accepted)
+  the amendment is chained                MET  (seq 38, and seq 39 re-pin)
+  no one can claim the grader was bypassed MET  (no pin hand-edited, no gate
+                                                widened — floors still 30/10/0.05,
+                                                nothing published, every step hashed)
+
+PROHIBITED REMEDIES (Rule 2) — none used
+  hand-editing graderSha256                                    NOT DONE
+  widening MIN_INDEPENDENT_N / MIN_DISTINCT_DAYS /
+    MIN_DISTINCT_BLOCKS / MAX_ALPHA                            NOT DONE
+  reprinting the 2026-08-03T23:06 snapshot as live             NOT DONE
+
+OPERATIONAL NOTE — daemon restart incident, recorded in full
+  The daemon was restarted to trigger a registrar pass. It flapped and was DOWN
+  for roughly four minutes before being brought back up and confirmed stable
+  through 60s of polling. The cause was pre-existing SQLITE_BUSY contention:
+  "worker journal: write failed, retrying" appears from 17:13:41 local, BEFORE
+  the restart, and ~100 concurrent python/powershell processes from the
+  research "eighty loop" were holding the database. The restart did not create
+  the contention but did expose it. No data was lost; the daemon is up.
+
+REMAINING BLOCKER (not P1; blocks P4/P5 and any redeploy)
+  daemon/internal/riskgate/riskgate.go does not compile in the working tree
+  (undefined: req, edge; uncommitted, +152/-12, plus +107 lines of new tests).
+  ops/signaldeck-ctl.sh build_from_head refuses any dirty tree, so no deploy is
+  possible until this is finished or reverted. It is the risk-sizing package -
+  the same one ALPHA_WORKFLOW.md marks "Kelly sizing - Exists".

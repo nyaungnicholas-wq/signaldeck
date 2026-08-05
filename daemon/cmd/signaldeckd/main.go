@@ -96,6 +96,29 @@ func main() {
 			"revision_stamp", lineage.RevisionStamp())
 	}
 
+	// REFUSE a build whose commit no longer exists. The check above asks "was
+	// my tree dirty"; this one asks "is my commit still here", and they are
+	// different failures. A clean build stamps a real 40-hex commit, and then a
+	// rebase or amend removes it — from that moment the daemon writes rows
+	// naming source nobody can produce, and the grader's revision gate refuses
+	// the whole predictor forever. Three such stamps put 946 rows into the
+	// ledger on 2026-08-02, and nothing noticed until an audit read the gate.
+	// Only a PROVEN absence stops startup: when git cannot be consulted the
+	// question is unanswerable here, and an unanswerable question must not be
+	// read as a refusal.
+	if ok, checked := lineage.BuildReachable(ctx, ""); checked && !ok {
+		if _, dev := os.LookupEnv("SIGNALDECK_ALLOW_DIRTY_BUILD"); !dev {
+			slog.Error("refusing to start: this build's commit is not in the repository — "+
+				"history was rewritten under it, so rows it writes cannot be graded",
+				"revision", lineage.BuildRevision(),
+				"fix", "rebuild from a commit that exists: ops/signaldeck-ctl.sh deploy",
+				"override", "SIGNALDECK_ALLOW_DIRTY_BUILD=1 for development only")
+			os.Exit(1)
+		}
+		slog.Warn("SIGNALDECK_ALLOW_DIRTY_BUILD set: this build's commit is absent from the repository; rows it writes are ungradable",
+			"revision", lineage.BuildRevision())
+	}
+
 	// Manual one-shot: SIC bulk sync (Stage 4). Runs the sic-bulk-sync worker
 	// once with the gate forced, prints its honest detail line, and exits —
 	// the fleet is never started.
@@ -114,4 +137,26 @@ func main() {
 
 	// Workers + API are wired in as their packages land (see run.go).
 	run(ctx, cfg, st)
+
+	// Why this is not just `return`: the daemon has two ways to stop and they
+	// mean opposite things, but both used to exit 0 and neither was logged, so
+	// a dead daemon left no evidence of which had happened.
+	//
+	//  1. The shutdown context fired — an operator stop, or on Windows any
+	//     console control event (CTRL_CLOSE/CTRL_LOGOFF are delivered as
+	//     os.Interrupt). Exit 0 is correct.
+	//  2. run() returned while ctx is still live — an internal path bailed out
+	//     (failed user bootstrap, fatal wiring error). Those paths log and
+	//     `return`, so the process exited 0 and Task Scheduler read a fatal
+	//     fault as "completed successfully" — which is why the configured
+	//     restart-on-failure policy (RestartCount=999) had never once fired.
+	//
+	// Exiting non-zero on case 2 is what makes that existing policy work.
+	if ctx.Err() != nil {
+		slog.Info("signaldeckd stopped: shutdown signal received", "cause", ctx.Err())
+		return
+	}
+	slog.Error("signaldeckd stopped WITHOUT a shutdown signal — internal fault; " +
+		"exiting non-zero so the supervisor restarts it")
+	os.Exit(1)
 }

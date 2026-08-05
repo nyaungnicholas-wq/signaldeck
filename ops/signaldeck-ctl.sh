@@ -74,6 +74,14 @@ build_from_head() {
   # with "File exists" (Unix silently replaces the inode instead). Stop first,
   # and move the old binary aside rather than deleting it so a failed install
   # leaves something to roll back to.
+  # ops/daemon-guard.ps1 restarts the daemon whenever it finds it down, every
+  # 5 minutes. That is what keeps a stopped daemon from staying stopped all
+  # day, but it also races THIS function: the guard can re-launch the daemon
+  # between the stop below and the install, and Windows then fails the install
+  # with "File exists" because the running image is held open. Hold the same
+  # maintenance lock the backup uses so the guard stands down for the swap.
+  local lock="$REPO/ops/.maintenance"
+  : > "$lock"
   if [ -n "$exe" ] && sd_is_running signaldeckd; then
     sd_svc_stop com.signaldeck.daemon
     for _ in $(seq 1 20); do sd_is_running signaldeckd || break; sleep 1; done
@@ -81,7 +89,8 @@ build_from_head() {
     sleep 1
   fi
   [ -f "$REPO/bin/signaldeckd$exe" ] && mv -f "$REPO/bin/signaldeckd$exe" "$REPO/bin/signaldeckd$exe.prev"
-  install -m 755 "$tmp/signaldeckd$exe" "$REPO/bin/signaldeckd$exe" || { rm -rf "$tmp"; return 1; }
+  install -m 755 "$tmp/signaldeckd$exe" "$REPO/bin/signaldeckd$exe" || { rm -f "$lock"; rm -rf "$tmp"; return 1; }
+  rm -f "$lock"
   rm -rf "$tmp"
   BUILT_REV="$rev"
   return 0

@@ -121,3 +121,24 @@ func (s StoreSource) Preregistration(ctx context.Context) (PreregSummary, error)
 	}
 	return sum, nil
 }
+
+// EarliestGradeableOn derives the first gradable date from the outstanding
+// structural calls themselves. See the Source interface for why this is
+// reported alongside the frozen prereg.FirstGradableOn rather than replacing it.
+func (s StoreSource) EarliestGradeableOn(ctx context.Context) (string, bool, error) {
+	t, ok, err := s.St.EarliestGradeableAt(ctx)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return t.Format("2006-01-02"), true, nil
+}
+
+// EarliestVerdictOn derives the first date a VERDICT can exist — the block gate
+// plus the resolution wait — from the calls on disk. See store.EarliestVerdictAt.
+func (s StoreSource) EarliestVerdictOn(ctx context.Context) (string, bool, error) {
+	t, ok, err := s.St.EarliestVerdictAt(ctx)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return t.Format("2006-01-02"), true, nil
+}

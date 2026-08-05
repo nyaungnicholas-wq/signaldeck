@@ -9,6 +9,9 @@ import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
 import { Reveal, PageHero, StatTile } from "@/components/ui/Kit";
+import GoalBanner from "@/components/home/GoalBanner";
+import ShowAllBar from "@/components/ShowAllBar";
+import { listLimitFor, useGoal } from "@/lib/goal";
 
 const FORM_FILTERS = ["all", "4", "8-K", "10-Q", "10-K", "S-3", "424B", "SC 13D", "SC 13G"];
 
@@ -28,6 +31,9 @@ export default function FilingsPage() {
   const [form, setForm] = useState("all");
   const { symbol } = useIntelSymbol();
   const [retryTick, setRetryTick] = useState(0);
+  const goal = useGoal();
+  // Per-visit override of the goal's default length, not a stored preference.
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -61,6 +67,11 @@ export default function FilingsPage() {
   const hardError = rows === null && err !== null;
   const list = useMemo(() => rows ?? [], [rows]);
 
+  // Filings are one-line rows, so the cap is the "compact" one — 25/50/all.
+  // The API already returns up to 200; this bounds what lands on screen.
+  const limit = listLimitFor(goal, "compact");
+  const drawn = limit === null || expanded ? list : list.slice(0, limit);
+
   const stats = useMemo(() => {
     if (!list.length) return { count: 0, latest: "", forms: 0, symbols: 0 };
     const latest = new Date(Math.max(...list.map(f => new Date(f.filedTs).getTime()))).toISOString().split('T')[0];
@@ -75,13 +86,20 @@ export default function FilingsPage() {
         title="Filings"
         subtitle="Fresh SEC filings decoded - what was filed, by whom, and why it matters."
         right={
-          <div className="flex flex-wrap gap-1">
+          // A filter group whose selected state was carried by colour alone:
+          // invisible to a screen reader, and invisible to the UX audit, which
+          // is why this page reported one interactive control while showing
+          // nine. aria-pressed says which one is on; 40px meets the target
+          // budget the audit measures.
+          <div role="group" aria-label="Filter by form type" className="flex flex-wrap gap-1">
             {FORM_FILTERS.map((f) => (
               <button
                 key={f}
                 type="button"
                 onClick={() => setForm(f)}
-                className="chip min-h-[36px] cursor-pointer px-2.5 transition-colors duration-150 hover:text-[var(--text)]"
+                aria-pressed={f === form}
+                title={f === "all" ? "Every form type" : `Show only form ${f}`}
+                className="chip min-h-[40px] cursor-pointer px-2.5 transition-colors duration-150 hover:text-[var(--text)]"
                 style={{
                   color: f === form ? "var(--accent)" : undefined,
                   borderColor: f === form ? "var(--accent)" : undefined,
@@ -91,6 +109,14 @@ export default function FilingsPage() {
               </button>
             ))}
           </div>
+        }
+      />
+
+      <GoalBanner
+        note={
+          limit === null
+            ? "Every stored filing, uncapped."
+            : `The ${limit} most recent filings. Open the full list any time.`
         }
       />
 
@@ -140,7 +166,7 @@ export default function FilingsPage() {
           ) : (
             <Reveal>
               <ul className="v4-table">
-                {list.map((f, i) => (
+                {drawn.map((f, i) => (
                   <li
                     key={f.id}
                     className="reveal-item grid grid-cols-12 gap-x-3 items-center px-4 py-2.5 text-[0.75rem]"
@@ -179,6 +205,14 @@ export default function FilingsPage() {
                   </li>
                 ))}
               </ul>
+              <ShowAllBar
+                shown={drawn.length}
+                total={list.length}
+                limit={limit}
+                expanded={expanded}
+                onToggle={setExpanded}
+                noun="filings"
+              />
             </Reveal>
           )}
         </section>

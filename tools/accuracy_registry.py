@@ -511,8 +511,24 @@ def require_registered_grader(con: sqlite3.Connection) -> dict:
 # from the epoch onward, and a post-epoch row whose stamp is missing, "+dirty"
 # (vcs.modified=true), or names a commit this repository does not contain
 # blocks the verdict for its predictor and prints the offending revision.
-REVISION_EPOCH = dt.date(2026, 7, 27)
-REVISION_EPOCH_TS = int(dt.datetime(2026, 7, 27, tzinfo=dt.timezone.utc).timestamp())
+#
+# ADVANCED 2026-08-04 from 2026-07-27, chained as prereg kind
+# "revision-epoch-correction". The 07-27 window opened attribution enforcement
+# on the GRADER side while the daemon-side guard still only refused DIRTY and
+# UNSTAMPED builds. A clean build whose commit was later rebased away passed
+# that guard, so between 07-31 and 08-03 eight unresolvable builds wrote 3,255
+# post-epoch ledger rows (5.3% of the window) and the gate stripped the verdict
+# from every directional row. Fixed-epoch rows never age out, so that was
+# permanent: the flagship could never be graded again.
+#
+# The epoch moves FORWARD only, and only past the last contaminated row. What
+# it changes is the date from which attribution is ENFORCED — not one accuracy
+# figure, null, threshold or verdict rule. The runtime hole is closed
+# separately by lineage.BuildReachable, wired into the daemon's startup gate;
+# without that, advancing the epoch would only buy time before the same
+# contamination recurred.
+REVISION_EPOCH = dt.date(2026, 8, 4)
+REVISION_EPOCH_TS = int(dt.datetime(2026, 8, 4, tzinfo=dt.timezone.utc).timestamp())
 
 
 def revision_resolvable(rev: str) -> bool:
@@ -609,6 +625,16 @@ def apply_revision_gate(rows: list[dict], gate: dict) -> list[str]:
     Returns the human-readable refusals, for printing. Dropping the field
     entirely (rather than downgrading its text) is deliberate and matches the
     legacy-snapshot path: an absent verdict cannot be quoted, a reworded one can.
+
+    `retire` goes with it. That flag is computed in emit() as
+    `v.startswith("FAILED")` — it is a READING of the verdict, not an
+    independent measurement — and it is what the daemon's model-health worker
+    consumes to stop publishing. Leaving it behind published a machine-actionable
+    claim sourced from a verdict this function had just refused to stand behind,
+    so the kill switch decided on evidence the grader had disowned: silently
+    fail-open while the flag reads false, and silently auto-retire the flagship
+    on an unattributable FAILED the moment it read true. The row still carries
+    `revision_gate`, which is what the daemon reads instead.
     """
     refusals = []
     for r in rows:
@@ -628,6 +654,7 @@ def apply_revision_gate(rows: list[dict], gate: dict) -> list[str]:
         r["revision_gate"] = offenders
         r.pop("verdict", None)
         r.pop("claim_verdict", None)
+        r.pop("retire", None)
         if offenders == [GATE_NO_COLUMN]:
             refusals.append(f"  * {r['predictor']}: this database carries no per-row "
                             "revision column, so no contributing row can be attributed "

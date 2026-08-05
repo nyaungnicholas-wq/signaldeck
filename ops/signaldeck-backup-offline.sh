@@ -202,6 +202,28 @@ if [ "$PRUNE_ONLY" != true ]; then
     exit 1
   fi
 
+  # SHA-256 sidecar. verify_backup.py already proves the file is a coherent
+  # SQLite database with plausible contents AT THIS MOMENT; the digest is what
+  # proves the bytes have not changed SINCE — bit-rot at rest, a truncated copy
+  # to another volume, an edit. It also lets a copy be validated wherever it
+  # lands without opening it or having the live DB to compare against.
+  if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$(dirname "$TARGET")" && sha256sum "$(basename "$TARGET")" > "$(basename "$TARGET").sha256") \
+      2>>"$LOG" || log "WARN: sha256 sidecar failed"
+  else
+    "$PY" - "$TARGET" >"$TARGET.sha256" 2>>"$LOG" <<'PY' || log "WARN: sha256 sidecar failed"
+import hashlib, os, sys
+p = sys.argv[1]
+h = hashlib.sha256()
+with open(p, "rb") as f:
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        h.update(chunk)
+# sha256sum's own format, so `sha256sum -c` validates it unchanged.
+print(f"{h.hexdigest()}  {os.path.basename(p)}")
+PY
+  fi
+  [ -s "$TARGET.sha256" ] && log "sha256: $(cut -d' ' -f1 < "$TARGET.sha256")"
+
   # Record success in meta so the in-daemon failsafe worker's restart gate sees
   # it and skips at the next boot. Daemon is down, so writing directly is safe.
   NOW=$(date +%s)

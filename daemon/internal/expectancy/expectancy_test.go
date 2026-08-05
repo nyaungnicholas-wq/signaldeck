@@ -30,6 +30,36 @@ func mkBars(closes, vols []float64) []marketdata.Bar {
 	return bars
 }
 
+// mkDailyBars is mkBars for DAILY fixtures: one bar per UTC day. mkBars spaces
+// every bar 60s apart, which is right for minute fixtures and wrong for daily
+// ones — 1440 "daily" bars would share a single UTC day and be refused by the
+// minDistinctDays floor. Real daily bars are one per day, so these are too.
+func mkDailyBars(closes, vols []float64) []marketdata.Bar {
+	bars := mkBars(closes, vols)
+	for i := range bars {
+		bars[i].Ts = int64(i) * 86400
+	}
+	return bars
+}
+
+// mkMinuteDays lays minute bars out as `days` contiguous sessions of `perDay`
+// bars, 60s apart within a session and starting on successive UTC days. This is
+// what real minute data looks like, and it is the only way a minute fixture can
+// clear minDistinctDays. Build's own >3h gap guard drops the samples whose
+// 60-bar forward window would straddle a session boundary, exactly as it does
+// in production.
+func mkMinuteDays(days, perDay int, start, rate, vol float64) []marketdata.Bar {
+	n := days * perDay
+	bars := mkBars(geom(n, start, rate), constVol(n, vol))
+	for d := 0; d < days; d++ {
+		dayStart := int64(d) * 86400
+		for k := 0; k < perDay; k++ {
+			bars[d*perDay+k].Ts = dayStart + int64(k)*60
+		}
+	}
+	return bars
+}
+
 // geom returns n closes growing (or shrinking) by rate each bar.
 func geom(n int, start, rate float64) []float64 {
 	out := make([]float64, n)
@@ -100,7 +130,7 @@ func TestBuildDailyBucketing(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Build(mkBars(tt.closes, tt.vols), nil)
+			got := Build(mkDailyBars(tt.closes, tt.vols), nil)
 
 			r1d := findRow(t, got[marketdata.H1d], tt.wantKey)
 			if r1d.N != tt.wantN1d {
@@ -130,8 +160,10 @@ func TestBuildDailyBucketing(t *testing.T) {
 }
 
 func TestBuildMinuteHorizon(t *testing.T) {
-	closes := geom(400, 100, 0.01)
-	got := Build(nil, mkBars(closes, constVol(400, 5)))
+	// Six sessions of 200 bars. A single 400-bar run would be ONE UTC day and
+	// is now refused by minDistinctDays — which is the whole point of that floor.
+	minute := mkMinuteDays(6, 200, 100, 0.01, 5)
+	got := Build(nil, minute)
 
 	rows, ok := got[marketdata.H1h]
 	if !ok {
@@ -144,9 +176,24 @@ func TestBuildMinuteHorizon(t *testing.T) {
 		}
 	}
 	r := findRow(t, rows, "rsi:high|mom:up|rvol:normal")
-	if want := 19; r.N != want { // i = 60,75,...,330 with i+60 < 400
-		t.Errorf("N = %d, want %d", r.N, want)
+	// Recompute the walk's sample count by Build's own rules rather than
+	// hardcoding it: step minuteStep from walkStart, require the 60-bar forward
+	// window to exist and not straddle a session gap.
+	wantN := 0
+	for i := walkStart; i+60 < len(minute); i += minuteStep {
+		if minute[i+60].Ts-minute[i].Ts > 3*3600 {
+			continue
+		}
+		wantN++
 	}
+	if wantN < minSamples {
+		t.Fatalf("fixture produces only %d samples, below the %d floor — fix the fixture, not the floor", wantN, minSamples)
+	}
+	if r.N != wantN {
+		t.Errorf("N = %d, want %d", r.N, wantN)
+	}
+	// Every forward return is positive, so the horizon's pooled base rate is
+	// 1.0 and shrinking toward it is the identity: HitRate stays exactly 1.
 	if r.HitRate != 1 {
 		t.Errorf("HitRate = %v, want 1", r.HitRate)
 	}
@@ -169,16 +216,19 @@ func TestBuildInsufficientData(t *testing.T) {
 		wantHorizons int
 	}{
 		{"empty", 0, 0, 0},
-		{"daily one short of minimum", 79, 0, 0},
-		{"minute one short of minimum", 0, 299, 0},
-		{"daily at minimum", 80, 0, 2}, // 1d + 1w
-		{"minute at minimum", 0, 300, 1},
+		{"daily one short of minimum", minDailyBars - 1, 0, 0},
+		{"minute one short of minimum", 0, minMinuteBars - 1, 0},
+		{"daily at minimum", minDailyBars, 0, 2}, // 1d + 1w
+		// A minute run AT the bar minimum but confined to one UTC day emits
+		// nothing: the bar floor and the distinct-day floor are independent
+		// gates, and rows from a single session are one observation.
+		{"minute at bar minimum but single day", 0, minMinuteBars, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var daily, minute []marketdata.Bar
 			if tt.daily > 0 {
-				daily = mkBars(geom(tt.daily, 100, 0.01), constVol(tt.daily, 1))
+				daily = mkDailyBars(geom(tt.daily, 100, 0.01), constVol(tt.daily, 1))
 			}
 			if tt.min > 0 {
 				minute = mkBars(geom(tt.min, 100, 0.001), constVol(tt.min, 1))
@@ -192,6 +242,15 @@ func TestBuildInsufficientData(t *testing.T) {
 			}
 		})
 	}
+
+	// The same bar count spread across enough sessions DOES emit — proving the
+	// refusal above is the day floor, not the bar floor.
+	t.Run("minute across enough days", func(t *testing.T) {
+		got := Build(nil, mkMinuteDays(6, 200, 100, 0.001, 1))
+		if len(got[marketdata.H1h]) == 0 {
+			t.Error("6 sessions of 200 bars emitted no 1h rows")
+		}
+	})
 }
 
 // ── fallback rollup ─────────────────────────────────────────────────────
@@ -199,23 +258,27 @@ func TestBuildInsufficientData(t *testing.T) {
 // Volume spikes split the walk into rvol:high and rvol:normal children that
 // share every coarser prefix; the parents must count BOTH children's samples.
 func TestBuildFallbackRollup(t *testing.T) {
-	const n = 120
+	// n raised from 120 and the spikes made periodic so BOTH children clear
+	// minSamples. The old fixture gave rvol:high only 5 samples, which the
+	// evidence floor now (correctly) refuses to emit at all — a five-sample
+	// cell was exactly the thing that floor exists to stop.
+	const n = 400
 	closes := geom(n, 100, 0.01)
 	vols := constVol(n, 1)
-	for _, i := range []int{70, 80, 90, 100, 110} {
-		vols[i] = 100 // >1.5x the SMA20 even with two spikes in window
+	for i := 70; i < n; i += 4 {
+		vols[i] = 100 // SMA20 holds ~5 spikes -> mean ~25.75, so 100 is ~3.9x
 	}
-	got := Build(mkBars(closes, vols), nil)
+	got := Build(mkDailyBars(closes, vols), nil)
 	rows := got[marketdata.H1d]
 
 	base := "rsi:high|trend:above|mom:up"
 	high := findRow(t, rows, base+"|rvol:high")
 	normal := findRow(t, rows, base+"|rvol:normal")
-	if high.N != 5 {
-		t.Errorf("rvol:high N = %d, want 5", high.N)
+	if high.N < minSamples {
+		t.Errorf("rvol:high N = %d, below the %d floor", high.N, minSamples)
 	}
-	if normal.N != 54 {
-		t.Errorf("rvol:normal N = %d, want 54", normal.N)
+	if normal.N < minSamples {
+		t.Errorf("rvol:normal N = %d, below the %d floor", normal.N, minSamples)
 	}
 	for _, parent := range []string{base, "rsi:high|trend:above", "rsi:high"} {
 		p := findRow(t, rows, parent)
@@ -256,7 +319,7 @@ func TestBuildStatsMatchHandComputedWalk(t *testing.T) {
 			closes[i] = closes[i-1] * 0.99
 		}
 	}
-	got := Build(mkBars(closes, constVol(n, 7)), nil)
+	got := Build(mkDailyBars(closes, constVol(n, 7)), nil)
 	rows := got[marketdata.H1d]
 
 	var full []marketdata.Expectancy
@@ -363,8 +426,8 @@ func TestSummarize(t *testing.T) {
 // ── current state keys ──────────────────────────────────────────────────
 
 func TestCurrentStateKeys(t *testing.T) {
-	upDaily := mkBars(geom(120, 100, 0.01), constVol(120, 1))
-	upMinute := mkBars(geom(400, 100, 0.001), constVol(400, 1))
+	upDaily := mkDailyBars(geom(120, 100, 0.01), constVol(120, 1))
+	upMinute := mkMinuteDays(6, 200, 100, 0.001, 1)
 
 	spikeVols := constVol(120, 1)
 	spikeVols[119] = 100 // RVOL = 100/5.95 ≈ 16.8 → high
@@ -381,7 +444,7 @@ func TestCurrentStateKeys(t *testing.T) {
 			regime[i] = 100 + 0.2*float64(i-200)
 		}
 	}
-	regimeBars := mkBars(regime, constVol(250, 1))
+	regimeBars := mkDailyBars(regime, constVol(250, 1))
 
 	tests := []struct {
 		name      string
@@ -399,7 +462,7 @@ func TestCurrentStateKeys(t *testing.T) {
 		},
 		{
 			name:      "volume spike on the last bar reads rvol high",
-			daily:     mkBars(geom(120, 100, 0.01), spikeVols),
+			daily:     mkDailyBars(geom(120, 100, 0.01), spikeVols),
 			wantDaily: "rsi:high|trend:above|mom:up|rvol:high",
 		},
 		{
@@ -414,7 +477,7 @@ func TestCurrentStateKeys(t *testing.T) {
 		},
 		{
 			name:   "insufficient bars yield empty keys",
-			daily:  mkBars(geom(60, 100, 0.01), constVol(60, 1)),
+			daily:  mkDailyBars(geom(60, 100, 0.01), constVol(60, 1)),
 			minute: mkBars(geom(60, 100, 0.01), constVol(60, 1)),
 		},
 		{name: "nil inputs yield empty keys"},
@@ -449,7 +512,7 @@ func TestCurrentStateKeys(t *testing.T) {
 // The current key must resolve against rows Build produced from the same
 // history — the round trip the daemon actually performs.
 func TestCurrentKeyResolvesAgainstBuild(t *testing.T) {
-	daily := mkBars(geom(120, 100, 0.01), constVol(120, 3))
+	daily := mkDailyBars(geom(120, 100, 0.01), constVol(120, 3))
 	rows := Build(daily, nil)
 	key := CurrentStateKeys(daily, nil)[marketdata.H1d]
 	if key == "" {

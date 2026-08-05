@@ -1,5 +1,29 @@
 # Pairs Trading — and the resolution of H018 (CORR63)
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** AUTHORITATIVE — freeze lifted 2026-08-04
+> **Scope:** Pairs-trading study and the resolution of H018 (CORR63). The DO NOT SHIP verdict is unaffected by the frozen classes.
+> **Frozen claim classes:** FC3 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** PUBLISHABLE — caveats are the frozen classes above
+
+> **Backtest data: `pre-survivorship-fix`.** Every historical figure below was
+> computed on the universe as it stood BEFORE the 2026-08-04 survivorship
+> backfill (`proofs/P3A_SURVIVORSHIP_BACKFILL.md`) and the point-in-time
+> universe rebuild (`proofs/P3B_PIT_UNIVERSE.md`). It has not been re-run on
+> the repaired universe. Read the numbers as a record of what was measured
+> then, not as what the repaired data would produce now.
+
+> ## ⚠ P0 freeze (2026-08-04) — LIFTED 2026-08-04 by `proofs/P10_FREEZE_LIFT.md`
+> Remediation complete; freeze lifted. **Do not attach capital.** Figures below are historical unless generated.
+> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **backtest returns · intervals · Sharpe · survivorship.**
+> Open defects in this file: the 2019→2026 universe is measured survivor-seeded
+> (`ALPHA_WORKFLOW.md` §B2), and borrow cost is not modelled although every trade
+> shorts one leg. Block count is stated three ways (26 / 24 / 26-of-26).
+> The **DO NOT SHIP** verdict is unaffected by all three and stands.
+> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
+
 **Date:** 2026-07-25
 **Tool:** `tools/pairs_trading.py`
 **Verdict: DO NOT SHIP.** H018's persistence is real and strong. It is also not harvestable.

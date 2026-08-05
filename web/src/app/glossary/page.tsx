@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import { PLAIN, type MetricKey } from "@/lib/plain";
+import Link from "next/link";
+import { type MetricKey } from "@/lib/plain";
+import GlossaryList from "@/components/GlossaryList";
 
 // Bare page name — the root layout appends " — SignalDeck" via its template.
 export const metadata: Metadata = { title: "Glossary" };
@@ -10,6 +12,7 @@ export const metadata: Metadata = { title: "Glossary" };
 const ORDER: readonly MetricKey[] = [
   "cal_prob",
   "regime",
+  "vol_regime",
   "pressure",
   "vix",
   "zscore",
@@ -38,41 +41,17 @@ export default function GlossaryPage() {
         defined here.
       </p>
 
-      <dl className="panel flex flex-col">
-        {ORDER.map((key, i) => {
-          const def = PLAIN[key];
-          const reading = def.read(null);
-          const showProLabel = def.label.simple !== def.label.pro;
-          return (
-            <div
-              key={key}
-              className={`px-4 py-3 sm:px-5 ${
-                i > 0 ? "border-t" : ""
-              }`}
-              style={{ borderColor: "var(--border)" }}
-            >
-              <dt className="flex items-baseline gap-2 text-[0.85rem] font-bold" style={{ color: "var(--text)" }}>
-                <span>{def.label.simple}</span>
-                {showProLabel && (
-                  <span className="chip mono text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                    {def.label.pro}
-                  </span>
-                )}
-              </dt>
-              <dd
-                className="m-0 text-[0.85rem] leading-relaxed"
-                style={{ color: "var(--dim)" }}
-              >
-                {reading.detail}
-              </dd>
-            </div>
-          );
-        })}
-      </dl>
+      {/* The list holds filter state, so it is a client component. The
+          definitions still come from PLAIN, so they cannot drift from the
+          tooltips. */}
+      <GlossaryList order={ORDER} />
 
       <p className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
         These definitions are generated from the same dictionary the tooltips
-        use, so they cannot drift apart.
+        use, so they cannot drift apart. Still stuck on something?{" "}
+        <Link href="/health" style={{ color: "var(--dim)", textDecoration: "underline" }}>
+          Tell us &mdash; we grade how understandable this is.
+        </Link>
       </p>
     </div>
   );

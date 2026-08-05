@@ -18,6 +18,8 @@
 //
 //	sdmaint [flags]                     — the compaction pass above (default)
 //	sdmaint apply-delistings [flags]    — apply a delisted_at backfill plan
+//	sdmaint build-universe [flags]      — materialise the point-in-time
+//	                                      universe_membership from daily bars
 //	                                      emitted by tools/backfill_delistings.py
 //	sdmaint ledger-verify [flags]       — recompute the prediction-ledger chain
 //	                                      and re-verify every signed anchor on an
@@ -56,6 +58,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -79,6 +82,18 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "split-reused-tickers" {
+		if err := splitReusedTickers(os.Args[2:]); err != nil {
+			log.Fatalf("split-reused-tickers: %v", err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "build-universe" {
+		if err := buildUniverse(os.Args[2:]); err != nil {
+			log.Fatalf("build-universe: %v", err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "import-delisted" {
 		if err := importDelisted(os.Args[2:]); err != nil {
 			log.Fatalf("import-delisted: %v", err)
@@ -97,6 +112,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "paper-epochs" {
+		if err := paperEpochs(os.Args[2:]); err != nil {
+			log.Fatalf("paper-epochs: %v", err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "storage-report" {
 		over, err := storageReport(os.Args[2:])
 		if err != nil {
@@ -106,6 +127,36 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+
+	// UNKNOWN SUBCOMMAND IS FATAL, and this guard is not decoration.
+	//
+	// The dispatch above is a chain of `if os.Args[1] == "..."` with no else, so
+	// an unmatched token used to FALL THROUGH to the default compaction pass —
+	// which strips score blobs and VACUUMs. Worse, flag.Parse() stops at the
+	// first non-flag argument, so every flag after the unknown token was
+	// silently discarded and -db kept its default: the run targeted
+	// data/signaldeck.db no matter which database the operator named.
+	//
+	// This is not hypothetical. On 2026-08-04 a reviewer ran
+	//   sdmaint split-reused-tickers -db <a snapshot> -plan <plan> -dry-run
+	// against a bin/sdmaint.exe built before that subcommand existed. It
+	// compacted and VACUUMed the LIVE database while the daemon was running,
+	// took it from 4.54 GB to 4.26 GB, never opened the snapshot named in -db,
+	// and honoured neither -plan nor -dry-run. Nothing was lost — the
+	// archive-before-strip fail-safe held and quick_check stayed ok — but a
+	// stale binary plus a typo should never be able to reach a destructive
+	// default. A bare first argument is always a subcommand; if it matched
+	// nothing, the operator meant something this binary cannot do.
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		log.Fatalf("unknown subcommand %q.\n"+
+			"This binary knows: apply-delistings, repair-added-at, build-universe,\n"+
+			"split-reused-tickers, import-delisted, ledger-verify, research-loop,\n"+
+			"paper-epochs, storage-report.\n"+
+			"If you expected one of these to exist, rebuild: go build -o bin/sdmaint ./cmd/sdmaint\n"+
+			"Refusing to fall through to the default compaction pass, which would\n"+
+			"strip blobs and VACUUM data/signaldeck.db and ignore every flag you passed.",
+			os.Args[1])
 	}
 
 	dbPath := flag.String("db", "data/signaldeck.db", "path to signaldeck.db")

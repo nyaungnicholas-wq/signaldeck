@@ -20,7 +20,7 @@ var wantRoles = []string{
 // four bullish tiles, one bearish, one context regime, EPS + price present.
 func bullishHigh() Inputs {
 	conv := composite.Assess(composite.ConvictionInputs{
-		Edge: 0.06, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60, Bull: 4, Bear: 1,
+		Edge: 0.06, NUsed: 4, EdgeProvenLive: true, WinRate: 0.60, WinRateLB: 0.585, Bull: 4, Bear: 1,
 	})
 	return Inputs{
 		Symbol: "AAPL", Market: "stocks",
@@ -197,19 +197,28 @@ func TestBuildDecisionGrid(t *testing.T) {
 		edge    float64
 		proven  bool
 		winRate float64
-		want    string
+		// winRateLB is the LOWER BOUND of the interval around winRate. The
+		// conviction ceiling reads it, not the point estimate, so a HIGH band
+		// now requires an interval clearing 0.58 rather than a bare rate.
+		winRateLB float64
+		want      string
 	}{
-		{"bull high → buy", 0.06, true, 0.60, DecisionBuy},
-		{"bull moderate → accumulate", 0.06, true, 0.54, DecisionAccumulate},
-		{"bull low → watch", 0.06, false, 0.0, DecisionWatch},
-		{"bear high → avoid", -0.06, true, 0.60, DecisionAvoid},
-		{"bear moderate → reduce", -0.06, true, 0.54, DecisionReduce},
-		{"bear low → watch", -0.06, false, 0.0, DecisionWatch},
+		{"bull high → buy", 0.06, true, 0.60, 0.585, DecisionBuy},
+		{"bull moderate → accumulate", 0.06, true, 0.54, 0.535, DecisionAccumulate},
+		{"bull low → watch", 0.06, false, 0.0, 0.0, DecisionWatch},
+		{"bear high → avoid", -0.06, true, 0.60, 0.585, DecisionAvoid},
+		{"bear moderate → reduce", -0.06, true, 0.54, 0.535, DecisionReduce},
+		{"bear low → watch", -0.06, false, 0.0, 0.0, DecisionWatch},
+		// A flattering point estimate with a wide interval must NOT reach the
+		// strongest action: this is the live 1d high-conviction tier's shape
+		// (55.2% on 297 rows over five days). It falls all the way to Watch,
+		// because an interval that cannot rule out a coin flip is not an edge.
+		{"bull high point, wide interval → watch", 0.06, true, 0.60, 0.44, DecisionWatch},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			conv := composite.Assess(composite.ConvictionInputs{
-				Edge: c.edge, NUsed: 4, EdgeProvenLive: c.proven, WinRate: c.winRate,
+				Edge: c.edge, NUsed: 4, EdgeProvenLive: c.proven, WinRate: c.winRate, WinRateLB: c.winRateLB,
 			})
 			in := Inputs{HasScore: true, Edge: c.edge, Conviction: conv}
 			if got := Build(in).Decision; got != c.want {

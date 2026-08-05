@@ -2,10 +2,14 @@
 
 // DASHBOARD — the decisive home page, thin composition only. The old
 // ~1,190-line monolith is split into src/components/home/* (view pieces) and
-// src/hooks/useDashboard*.ts (state + polling); behavior is unchanged except
-// the NEW top-of-page order: Insight Spotlight hero → market mood band →
-// gauges → feed + watchlist → proof. Everything still runs off ONE
+// src/hooks/useDashboard*.ts (state + polling); everything still runs off ONE
 // api.dashboard() roundup (server caches shared sections 60s and says so).
+//
+// ORDER IS NO LONGER FIXED. The page is a map of named blocks; which ones lead
+// and which fold into the bottom disclosure comes from the reader's goal via
+// lib/goal.ts. See DASHBOARD_LAYOUTS there for what each goal changes and why.
+// Nothing is ever removed — a goal only demotes, so switching is not
+// destructive and needs no warning.
 //
 // HONESTY: nothing is fabricated to fill a panel — gauges keep their gate
 // captions in BOTH simple and pro modes, every price is a stored daily close on
@@ -20,6 +24,7 @@ import { useMemo } from "react";
 import type { Market } from "@/lib/api";
 import { ago } from "@/lib/format";
 import useDashboard from "@/hooks/useDashboard";
+import { foldedBlocks, layoutFor, useGoal, type BlockId } from "@/lib/goal";
 import PagePurpose from "@/components/PagePurpose";
 import StorySection from "@/components/StorySection";
 import TickerTape from "@/components/TickerTape";
@@ -33,6 +38,7 @@ import TodaysRead from "@/components/home/TodaysRead";
 import InsightSpotlight from "@/components/home/InsightSpotlight";
 import VolRegimeLead from "@/components/home/VolRegimeLead";
 import SetupChecklist from "@/components/home/SetupChecklist";
+import GoalBanner from "@/components/home/GoalBanner";
 import GaugeRow from "@/components/home/GaugeRow";
 import DashFeed from "@/components/home/DashFeed";
 import WatchlistPanel from "@/components/home/WatchlistPanel";
@@ -42,6 +48,8 @@ import ProofStrip from "@/components/home/ProofStrip";
 
 export default function DashboardPage() {
   const { dash, error, alerts, featured, refresh } = useDashboard();
+  const goal = useGoal();
+  const layout = layoutFor(goal);
 
   // Heatmap items from the roundup (stocks universe; ETFs already excluded).
   const heatItems: HeatmapItem[] = useMemo(
@@ -72,97 +80,27 @@ export default function DashboardPage() {
   const watchlistEmpty =
     dash !== null && (dash.watchlist === null || (dash.watchlist.sparks ?? []).length === 0);
 
-  return (
-    <div className="flex flex-col gap-3">
-      {/* ticker tape — fed from the roundup (no second /api/tape call);
-          hidden while the payload is loading or empty (honest quiet) */}
-      <TickerTape items={dash === null ? null : dash.tape.items} note={dash?.tape.note} />
+  // Every block the dashboard can show, keyed by id. Built only when there is
+  // data; the loading and error branches below return before this is used.
+  const blocks: Record<BlockId, React.ReactNode> = dash === null
+    ? ({} as Record<BlockId, React.ReactNode>)
+    : {
+        // THE OPENING VERDICT: the single best-evidenced read, or an honest
+        // "No qualified read today" when nothing clears the gate.
+        read: <TodaysRead dash={dash} />,
 
-      {/* slim status row — aria-live so the freshness/error state is announced
-          when the 60s poll swaps it, not only when someone happens to look */}
-      <div
-        className="flex flex-wrap items-center gap-x-3 gap-y-2"
-        aria-live="polite"
-        aria-atomic="false"
-      >
-        <h1 className="text-[0.9rem] font-extrabold tracking-[0.14em]">DASHBOARD</h1>
-        {dash !== null && (
-          <span className="chip tnum" title={dash.note}>
-            as of {ago(dash.asOf)} · cached ≤{dash.cacheTtlS}s
-          </span>
-        )}
-        <FreshnessBadge />
-        {error && dash !== null && (
-          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
-            refresh failed — retrying
-          </span>
-        )}
-      </div>
+        // THE VALIDATED FORECAST: promoted out of the tile grid on 2026-07-25.
+        // The volatility regime is the only claim here that has been re-tested
+        // and independently re-implemented, and the options surface is built
+        // on it — presenting it alongside unvalidated signals understated the
+        // one thing that holds up.
+        vol: <VolRegimeLead />,
 
-      {/* what this page answers, in plain English */}
-      <PagePurpose
-        id="dashboard"
-        text="What is the market doing right now, and where do your symbols stand? Read top to bottom: today's top signal → market mood → gauges → what changed today (with your watchlist) → proof it works."
-      />
+        // Secondary hero: what else is notable right now (alerts, regime
+        // changes, anomalies) via the deterministic ladder.
+        spotlight: <InsightSpotlight dash={dash} alerts={alerts} />,
 
-      {/* first-load states: full-width skeleton band / recoverable error */}
-      {dash === null && !error && (
-        <>
-          <div className="panel p-3">
-            <Skeleton lines={3} label="loading top insight" />
-          </div>
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            <div className="panel p-3">
-              <Skeleton lines={8} label="loading market heatmap" />
-            </div>
-            <div className="panel p-3">
-              <Skeleton lines={8} label="loading featured chart" />
-            </div>
-          </div>
-          <div className="panel p-3">
-            <Skeleton lines={3} label="loading gauges" />
-          </div>
-          <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-3">
-            <div className="panel p-3 lg:col-span-2">
-              <Skeleton lines={6} label="loading feed" />
-            </div>
-            <div className="panel p-3">
-              <Skeleton lines={4} label="loading sidebar" />
-            </div>
-          </div>
-        </>
-      )}
-      {dash === null && error && (
-        <ErrorState
-          message={error}
-          hint="The SignalDeck daemon looks offline — start signaldeckd (:8322) and this page will recover on its own. (If the daemon predates /api/dashboard, restart it on the current build.)"
-          retry={refresh}
-        />
-      )}
-
-      {dash !== null && (
-        <>
-          {/* Setup progress — replaces the old dismissible welcome card. It
-              tracks real state and removes itself at 4/4, so there is no
-              dismiss button and no stale "remembered" flag. */}
-          <SetupChecklist watchlistEmpty={watchlistEmpty} />
-
-          {/* ── THE OPENING VERDICT: the single best-evidenced read, or an
-                honest "No qualified read today" when nothing clears the gate ── */}
-          <TodaysRead dash={dash} />
-
-          {/* ── THE VALIDATED FORECAST: promoted out of the tile grid on
-                2026-07-25. The volatility regime is the only claim here that
-                has been re-tested and independently re-implemented, and the
-                options surface is built on it — presenting it alongside
-                unvalidated signals understated the one thing that holds up. ── */}
-          <VolRegimeLead />
-
-          {/* ── secondary hero: what else is notable right now (alerts,
-                regime changes, anomalies) via the deterministic ladder ── */}
-          <InsightSpotlight dash={dash} alerts={alerts} />
-
-          {/* ── SECTION 1: the big picture ── */}
+        mood: (
           <StorySection
             n={1}
             title="MARKET MOOD"
@@ -207,8 +145,9 @@ export default function DashboardPage() {
               )}
             </div>
           </StorySection>
+        ),
 
-          {/* ── SECTION 2: the dials (simple mode: plain words first) ── */}
+        gauges: (
           <StorySection
             n={2}
             title="MARKET GAUGES"
@@ -216,8 +155,9 @@ export default function DashboardPage() {
           >
             <GaugeRow dash={dash} />
           </StorySection>
+        ),
 
-          {/* ── SECTION 3: the day's events + your symbols ── */}
+        changed: (
           <StorySection
             n={3}
             title="WHAT CHANGED TODAY"
@@ -253,8 +193,9 @@ export default function DashboardPage() {
               </div>
             </div>
           </StorySection>
+        ),
 
-          {/* ── SECTION 4: the honest scoreboard, compact ── */}
+        proof: (
           <StorySection
             n={4}
             title="PROOF IT WORKS"
@@ -262,6 +203,118 @@ export default function DashboardPage() {
           >
             <ProofStrip />
           </StorySection>
+        ),
+      };
+
+  const folded = foldedBlocks(layout);
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* ticker tape — fed from the roundup (no second /api/tape call);
+          hidden while the payload is loading or empty (honest quiet) */}
+      <TickerTape items={dash === null ? null : dash.tape.items} note={dash?.tape.note} />
+
+      {/* slim status row — aria-live so the freshness/error state is announced
+          when the 60s poll swaps it, not only when someone happens to look */}
+      <div
+        className="flex flex-wrap items-center gap-x-3 gap-y-2"
+        aria-live="polite"
+        aria-atomic="false"
+      >
+        <h1 className="text-[0.9rem] font-extrabold tracking-[0.14em]">DASHBOARD</h1>
+        {dash !== null && (
+          <span className="chip tnum" title={dash.note}>
+            as of {ago(dash.asOf)} · cached ≤{dash.cacheTtlS}s
+          </span>
+        )}
+        <FreshnessBadge />
+        {error && dash !== null && (
+          <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>
+            refresh failed — retrying
+          </span>
+        )}
+      </div>
+
+      {/* what this page answers, in plain English */}
+      <PagePurpose
+        id="dashboard"
+        text="What is the market doing right now, and where do your symbols stand? The order below is arranged around what you told us you're here for — change it any time on the strip beneath."
+      />
+
+      {/* first-load states: full-width skeleton band / recoverable error */}
+      {dash === null && !error && (
+        <>
+          <div className="panel p-3">
+            <Skeleton lines={3} label="loading top insight" />
+          </div>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <div className="panel p-3">
+              <Skeleton lines={8} label="loading market heatmap" />
+            </div>
+            <div className="panel p-3">
+              <Skeleton lines={8} label="loading featured chart" />
+            </div>
+          </div>
+          <div className="panel p-3">
+            <Skeleton lines={3} label="loading gauges" />
+          </div>
+          <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-3">
+            <div className="panel p-3 lg:col-span-2">
+              <Skeleton lines={6} label="loading feed" />
+            </div>
+            <div className="panel p-3">
+              <Skeleton lines={4} label="loading sidebar" />
+            </div>
+          </div>
+        </>
+      )}
+      {dash === null && error && (
+        <ErrorState
+          message={error}
+          hint="The SignalDeck daemon looks offline — start signaldeckd (:8322) and this page will recover on its own. (If the daemon predates /api/dashboard, restart it on the current build.)"
+          retry={refresh}
+        />
+      )}
+
+      {dash !== null && (
+        <>
+          {/* Setup progress — replaces the old dismissible welcome card. It
+              tracks real state and removes itself at 4/4, so there is no
+              dismiss button and no stale "remembered" flag. */}
+          <SetupChecklist watchlistEmpty={watchlistEmpty} />
+
+          {/* Who this arrangement is for, and the control that changes it. */}
+          <GoalBanner />
+
+          {layout.lead.map((id) => (
+            <div key={id} data-block={id}>
+              {blocks[id]}
+            </div>
+          ))}
+
+          {/* Demoted, never deleted. Native <details>: keyboard- and
+              screen-reader-correct with no JavaScript and no state to keep. */}
+          {folded.length > 0 && (
+            <details className="panel">
+              <summary
+                className="flex min-h-[44px] cursor-pointer list-none items-center px-4 py-2 text-[0.8rem] sm:px-5"
+                style={{ color: "var(--dim)" }}
+              >
+                Show the rest of the dashboard ({folded.length}{" "}
+                {folded.length === 1 ? "panel" : "panels"})
+              </summary>
+              <div
+                className="flex flex-col gap-3 border-t p-3"
+                style={{ borderColor: "var(--border)" }}
+              >
+                {folded.map((id) => (
+                  <div key={id} data-block={id}>
+                    {blocks[id]}
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </>
       )}
     </div>

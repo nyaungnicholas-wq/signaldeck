@@ -7,9 +7,16 @@ import SavedViewsBar from "@/components/SavedViewsBar";
 import DiscoverPanel from "@/components/markets/DiscoverPanel";
 import ScreenerFilters from "@/components/markets/ScreenerFilters";
 import ScreenerResults from "@/components/markets/ScreenerResults";
+import GoalBanner from "@/components/home/GoalBanner";
 import { useScreenerData } from "@/hooks/useScreenerData";
 import { useScreenerFilters } from "@/hooks/useScreenerFilters";
 import { PageHero, Reveal, StatTile } from "@/components/ui/Kit";
+import {
+  foldedOverviewBlocks,
+  overviewLayoutFor,
+  useGoal,
+  type OverviewBlockId,
+} from "@/lib/goal";
 
 const PRESETS = [
   {
@@ -43,6 +50,9 @@ const PRESETS = [
 export default function ScreenerPage() {
   const { rows, err, ranking, regimes, retry } = useScreenerData();
   const f = useScreenerFilters(rows, ranking, regimes);
+  const goal = useGoal();
+  const layout = overviewLayoutFor(goal);
+  const folded = foldedOverviewBlocks(layout);
   const top = f.filtered[0]?.row;
   const exportItems = top
     ? [
@@ -56,6 +66,71 @@ export default function ScreenerPage() {
         },
       ]
     : [];
+
+  // Every block this page can show, keyed by id. Which of these lead and which
+  // fold comes from the reader's goal — see OVERVIEW_LAYOUTS in lib/goal.ts.
+  const blocks: Record<OverviewBlockId, React.ReactNode> = {
+    movers: (
+      <Reveal>
+        <div className="panel">
+          <MoversPanel limit={20} />
+        </div>
+      </Reveal>
+    ),
+    discover: (
+      <Reveal>
+        <div className="panel">
+          <DiscoverPanel />
+        </div>
+      </Reveal>
+    ),
+    views: (
+      <Reveal>
+        <div className="panel">
+          <div className="px-1">
+            <SavedViewsBar pageKey="screener" currentState={f.currentState} onApply={f.applyState} presets={PRESETS} />
+          </div>
+        </div>
+      </Reveal>
+    ),
+    filters: (
+      <Reveal>
+        <div className="panel">
+          <ScreenerFilters
+            horizon={f.horizon}
+            onHorizon={f.setHorizon}
+            minScore={f.minScore}
+            onMinScore={f.setMinScore}
+            direction={f.direction}
+            onDirection={f.setDirection}
+            market={f.market}
+            onMarket={f.setMarket}
+            search={f.search}
+            onSearch={f.setSearch}
+          />
+        </div>
+      </Reveal>
+    ),
+    results: (
+      <Reveal>
+        <div className="panel">
+          <ScreenerResults
+            rows={rows}
+            err={err}
+            filtered={f.filtered}
+            horizon={f.horizon}
+            effView={f.effView}
+            onView={f.setView}
+            sortKey={f.sortKey}
+            sortDir={f.sortDir}
+            onSort={f.onSort}
+            onRetry={retry}
+            limit={layout.rowLimit}
+          />
+        </div>
+      </Reveal>
+    ),
+  };
 
   return (
     <div className="page-enter space-y-4">
@@ -74,59 +149,34 @@ export default function ScreenerPage() {
         </div>
       </Reveal>
 
-      <Reveal>
-        <div className="panel">
-          <MoversPanel limit={20} />
-        </div>
-      </Reveal>
+      <GoalBanner note={layout.note} />
 
-      <Reveal>
-        <div className="panel">
-          <DiscoverPanel />
+      {layout.lead.map((id) => (
+        <div key={id} data-block={id}>
+          {blocks[id]}
         </div>
-      </Reveal>
+      ))}
 
-      <Reveal>
-        <div className="panel">
-          <div className="px-1">
-            <SavedViewsBar pageKey="screener" currentState={f.currentState} onApply={f.applyState} presets={PRESETS} />
+      {/* Demoted, never deleted — same doctrine as the dashboard. Native
+          <details>: keyboard- and screen-reader-correct with no state. */}
+      {folded.length > 0 && (
+        <details className="panel">
+          <summary
+            className="flex min-h-[44px] cursor-pointer list-none items-center px-4 py-2 text-[0.8rem] sm:px-5"
+            style={{ color: "var(--dim)" }}
+          >
+            Show the rest of this page ({folded.length}{" "}
+            {folded.length === 1 ? "panel" : "panels"})
+          </summary>
+          <div className="flex flex-col gap-3 border-t p-3" style={{ borderColor: "var(--border)" }}>
+            {folded.map((id) => (
+              <div key={id} data-block={id}>
+                {blocks[id]}
+              </div>
+            ))}
           </div>
-        </div>
-      </Reveal>
-
-      <Reveal>
-        <div className="panel">
-          <ScreenerFilters
-            horizon={f.horizon}
-            onHorizon={f.setHorizon}
-            minScore={f.minScore}
-            onMinScore={f.setMinScore}
-            direction={f.direction}
-            onDirection={f.setDirection}
-            market={f.market}
-            onMarket={f.setMarket}
-            search={f.search}
-            onSearch={f.setSearch}
-          />
-        </div>
-      </Reveal>
-
-      <Reveal>
-        <div className="panel">
-          <ScreenerResults
-            rows={rows}
-            err={err}
-            filtered={f.filtered}
-            horizon={f.horizon}
-            effView={f.effView}
-            onView={f.setView}
-            sortKey={f.sortKey}
-            sortDir={f.sortDir}
-            onSort={f.onSort}
-            onRetry={retry}
-          />
-        </div>
-      </Reveal>
+        </details>
+      )}
     </div>
   );
 }

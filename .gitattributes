@@ -14,3 +14,15 @@ PREREGISTRATION.md -text
 # directory" — a confusing way to learn about line endings from an image that
 # built cleanly.
 *.sh -text
+
+# Generated partials are compared byte-for-byte against a fresh render to prove
+# no document drifted from the single source. A CRLF checkout on Windows makes
+# every line differ from the LF the generators write, so the comparison reports
+# "stale" for a file nobody touched — a false failure, which is how a real check
+# gets switched off. tools/docs_gate.py normalises newlines defensively; this
+# keeps the bytes right in the first place, for every tool that reads them.
+partials/* -text
+
+# The committed answer to the questions CI cannot ask the 4 GB database
+# (grader status, PIT universe rows, delisting rate). Same reasoning.
+ops/data-integrity.json -text

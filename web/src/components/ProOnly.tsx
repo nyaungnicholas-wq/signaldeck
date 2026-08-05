@@ -41,7 +41,8 @@ export default function ProOnly({
   if (mode === "pro") return <>{children}</>;
 
   return (
-    <div className="flex flex-col gap-2">
+    // data-pro-only marks mode-dependent content for the UX audit — see Plain.
+    <div data-pro-only="" className="flex flex-col gap-2">
       <button
         type="button"
         aria-expanded={open}

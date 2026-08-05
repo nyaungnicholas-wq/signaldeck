@@ -1,0 +1,11 @@
+arch==8.0.0
+edgartools==5.45.1
+numba==0.66.0
+numpy==2.4.6
+openbb==4.7.2
+pandas==3.0.5
+quantstats-lumi==1.1.5
+scikit-learn==1.9.0
+scipy==1.18.0
+statsmodels==0.14.6
+vectorbt==1.1.0

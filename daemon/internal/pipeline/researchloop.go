@@ -82,6 +82,18 @@ const (
 	// instead of searching. A grid search over a thin sample finds structure in
 	// noise every single time.
 	minObsForLoop = 2000
+	// loopCorpusGrowthMin is the fraction of NEW observations, measured against
+	// the last corpus actually searched, below which tonight's corpus is treated
+	// as the same evidence and no look is charged. The window advancing past the
+	// last searched obs_ts_to always counts as new evidence regardless of size,
+	// so a genuinely fresh week is never dismissed as noise-sized growth.
+	//
+	// 1% is deliberately low: it lets a real week of data through (the corpus
+	// gains ~1300 rows a week against ~326k, plus a new obs_ts_to) while
+	// rejecting the 15-row and 82-row no-ops the live ledger charged full looks
+	// for. Raise it and real evidence starts arriving free; lower it toward 0 and
+	// the runaway divisor comes back.
+	loopCorpusGrowthMin = 0.01
 )
 
 func (w *ResearchLoop) Run(ctx context.Context) (string, error) {
@@ -148,6 +160,59 @@ func (w *ResearchLoop) Run(ctx context.Context) (string, error) {
 		}
 		return fmt.Sprintf("skip — %d observations, need %d before a grid search "+
 			"is anything but noise-fitting; %s", len(obs), minObsForLoop, drift), nil
+	}
+
+	// UNCHANGED CORPUS IS NOT A NEW LOOK. researchx.Discover is deterministic:
+	// "the same obs always yield the same survivors". Re-grading an unchanged
+	// corpus therefore reproduces last night's verdicts exactly — it is the same
+	// test re-read, not a second chance to be fooled — yet the old unconditional
+	// charge still added a full grid to the divisor for it. Measured on the live
+	// ledger 2026-08-04: the 08-04 pass added ZERO observations and still took
+	// the divisor 384 -> 432; 08-02 added 15 rows out of 296,712 and cost the
+	// same 48. Compounding +48/night regardless of data, the bar stops being a
+	// function of the evidence and the loop becomes arithmetically incapable of
+	// ever promoting anything.
+	//
+	// So the look is skipped, not merely uncharged: the refusal row carries
+	// grid_size 0 and writes no judgments, which is precisely what
+	// DurableLoopSearches (grid_size > 0) and the judgments day-count already
+	// filter on. The counter stays monotone — it simply stops rising on nights
+	// that learned nothing. A materially grown corpus still charges in full.
+	if last, ok, lerr := w.St.LastSearchedRun(ctx); lerr == nil && ok {
+		grown := len(obs) - last.ObsCount
+		frac := 0.0
+		if last.ObsCount > 0 {
+			frac = float64(grown) / float64(last.ObsCount)
+		}
+		// Either genuinely new history (the window advanced) or a materially
+		// larger corpus counts as new evidence. A backfill that widens the panel
+		// is as much a new chance to be fooled as a fresh week is.
+		if obsTo(obs) <= last.ObsTsTo && frac < loopCorpusGrowthMin {
+			reason := fmt.Sprintf("corpus unchanged since %s: %d obs (%+d, %.3f%%), "+
+				"window end %d; a deterministic grid over the same obs is the same "+
+				"test, and costs no look", last.Day, len(obs), grown, frac*100, obsTo(obs))
+			if err := w.St.UpsertLoopRun(ctx, store.LoopRun{
+				Day: today, RanAt: time.Now().Unix(), ObsCount: len(obs),
+				ObsTsFrom: obsFrom(obs), ObsTsTo: obsTo(obs),
+				RefusalReason: reason, GitRev: lineage.BuildRevision(),
+				CorpusCoverage: corpusCoverage,
+			}); err != nil {
+				return "", fmt.Errorf("record unchanged-corpus run row: %w", err)
+			}
+			// Same read-back discipline as the thin-corpus refusal: a skip no
+			// table holds is not a recorded result.
+			if row, ok, rerr := w.St.LoopRunForDay(ctx, today); rerr != nil || !ok ||
+				row.RefusalReason == "" {
+				return "", fmt.Errorf("unchanged-corpus run row for %s did not read "+
+					"back (found=%v reason=%q err=%v)", today, ok, row.RefusalReason, rerr)
+			}
+			if err := w.St.MarkLoopDayFromRun(ctx, loopMetaDay, today); err != nil {
+				return "", fmt.Errorf("record unchanged-corpus day gate: %w", err)
+			}
+			return fmt.Sprintf("skip — corpus unchanged since %s (%d obs, %+d), so "+
+				"tonight's grid would reproduce the same verdicts; no look charged, "+
+				"divisor stays %d; %s", last.Day, len(obs), grown, last.Divisor, drift), nil
+		}
 	}
 
 	// PREFLIGHT. A search whose verdicts cannot be written must not be taken at

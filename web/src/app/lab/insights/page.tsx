@@ -18,6 +18,9 @@ import KindChips, {
 } from "@/components/signals/insights/KindChips";
 import { evidenceKind, kindLabel, parseEvidence } from "@/components/signals/insights/evidence";
 import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
+import GoalBanner from "@/components/home/GoalBanner";
+import ShowAllBar from "@/components/ShowAllBar";
+import { insightsLayoutFor, useGoal } from "@/lib/goal";
 
 const FEED_LIMIT = 100;
 
@@ -101,6 +104,11 @@ export default function InsightsPage() {
   const [kindRows, setKindRows] = useState<Insight[] | null>(null);
   const [kindErr, setKindErr] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  const goal = useGoal();
+  const layout = insightsLayoutFor(goal);
+  // Lifting the cap is a per-visit choice, not a stored preference — the goal
+  // owns the default and this only overrides it while you are here.
+  const [expanded, setExpanded] = useState(false);
 
   const serverKind = kind !== ALL_KINDS && kind !== UNLABELED;
 
@@ -214,6 +222,13 @@ export default function InsightsPage() {
     return sorted;
   }, [serverKind, kindRows, kind, sorted]);
 
+  // The cap is applied AFTER the kind filter, so switching kinds always shows
+  // the newest matching cards rather than an arbitrary slice of the old set.
+  const drawn: Insight[] =
+    visible === null || layout.cardLimit === null || expanded
+      ? (visible ?? [])
+      : visible.slice(0, layout.cardLimit);
+
   const loading = insights === null && err === null;
   const hardError = insights === null && err !== null;
 
@@ -270,16 +285,40 @@ export default function InsightsPage() {
         </div>
       )}
 
-      <Reveal className="grid gap-3">
-        <div className="panel reveal-item" style={{ "--i": 0 } as React.CSSProperties}>
-          <div className="panel-h">HOW TO READ THIS FEED</div>
-          <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+      <GoalBanner note={layout.note} />
+
+      {/* The primer is exactly what a newcomer needs and exactly what someone
+          on their fiftieth visit scrolls past. It leads for two goals and
+          folds for the third — demoted, never deleted. */}
+      {layout.showPrimer ? (
+        <Reveal className="grid gap-3">
+          <div className="panel reveal-item" style={{ "--i": 0 } as React.CSSProperties}>
+            <div className="panel-h">HOW TO READ THIS FEED</div>
+            <p className="px-4 py-3 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+              Every insight is generated from stored data with the numbers inline — headlines state
+              measured tendencies, never forecasts. The evidence expander on each item shows the raw
+              inputs it was written from; kind chips re-query the daemon server-side, never hide rows.
+            </p>
+          </div>
+        </Reveal>
+      ) : (
+        <details className="panel">
+          <summary
+            className="flex min-h-[44px] cursor-pointer list-none items-center px-4 py-2 text-[0.8rem] sm:px-5"
+            style={{ color: "var(--dim)" }}
+          >
+            How to read this feed
+          </summary>
+          <p
+            className="border-t px-4 py-3 text-[0.75rem] leading-relaxed"
+            style={{ borderColor: "var(--border)", color: "var(--dim)" }}
+          >
             Every insight is generated from stored data with the numbers inline — headlines state
             measured tendencies, never forecasts. The evidence expander on each item shows the raw
             inputs it was written from; kind chips re-query the daemon server-side, never hide rows.
           </p>
-        </div>
-      </Reveal>
+        </details>
+      )}
 
       <TrendingTokensStrip />
 
@@ -346,11 +385,21 @@ export default function InsightsPage() {
               />
             )
           ) : (
-            <Reveal className="grid gap-3">
-              {visible.map((ins, i) => (
-                <InsightCard key={ins.id} ins={ins} i={i} />
-              ))}
-            </Reveal>
+            <>
+              <Reveal className="grid gap-3">
+                {drawn.map((ins, i) => (
+                  <InsightCard key={ins.id} ins={ins} i={i} />
+                ))}
+              </Reveal>
+              <ShowAllBar
+                shown={drawn.length}
+                total={visible.length}
+                limit={layout.cardLimit}
+                expanded={expanded}
+                onToggle={setExpanded}
+                noun="insights"
+              />
+            </>
           )}
         </section>
       )}

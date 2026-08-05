@@ -1,0 +1,39 @@
+{
+  "cohorts": {
+    "collapse": 165,
+    "ordinary": 155,
+    "spac_shell": 52,
+    "spac_named": 1
+  },
+  "dropped_too_short": 0,
+  "usable_symbols": 373,
+  "usable_bars": 241567,
+  "by_year_cohort": {
+    "2021": {
+      "ordinary": 1
+    },
+    "2022": {
+      "ordinary": 1
+    },
+    "2023": {
+      "collapse": 17,
+      "spac_shell": 14
+    },
+    "2024": {
+      "collapse": 143,
+      "ordinary": 139,
+      "spac_named": 1,
+      "spac_shell": 38
+    },
+    "2025": {
+      "collapse": 4,
+      "ordinary": 8
+    },
+    "2026": {
+      "collapse": 1,
+      "ordinary": 6
+    }
+  },
+  "non_spac_usable": 320,
+  "note": "cohort='spac_shell'/'spac_named' should be held out or down-weighted; 'collapse' is the bankruptcy signal."
+}

@@ -71,6 +71,13 @@ func (d Deps) buildStructuralRegimes(ctx context.Context) (map[string]any, error
 		// number must never end up labelling a trend63 or crypto row. Kinds whose
 		// forward return was never measured get "" and the field is omitted.
 		f.Tradeability = structregime.TradeabilityFor(f.Kind, f.Conviction)
+		// Same shape, same reason: the sample size behind an accuracy tier is a
+		// pure function of kind + conviction and is not stored, so derive it per
+		// row rather than migrating the table. Crypto rows get the measured n and
+		// quarter-cluster count; the equity loop never recorded theirs, so those
+		// rows carry nothing and the fields drop out of the JSON. A 98.5% built on
+		// 68 rows across 4 quarters should not look like a ~900-stock number.
+		f.EvidenceRows, f.EvidenceClusters = structregime.EvidenceSizeFor(f.Kind, f.Conviction)
 		byKind[string(f.Kind)] = append(byKind[string(f.Kind)], f)
 		forecastSyms[f.Symbol] = true
 	}

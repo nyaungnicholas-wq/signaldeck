@@ -1454,6 +1454,41 @@ class TestRevisionGate(unittest.TestCase):
         # Kept for diagnostics, but it no longer buys anyone a verdict.
         self.assertFalse(gate["checked"])
 
+    def test_retire_flag_does_not_outlive_the_verdict_it_was_read_from(self):
+        """The flag the DAEMON acts on must die with the verdict it came from.
+
+        `retire` is computed in emit() as `v.startswith("FAILED")` — a reading
+        of the verdict, not an independent measurement. Leaving it in the row
+        after this gate deleted that verdict published a machine-actionable
+        claim sourced from evidence the grader had just disowned, and the
+        daemon's kill switch read exactly that field and nothing else. It broke
+        both ways: retire=false let a model with no standing verdict keep
+        publishing, and retire=true would auto-retire the flagship on an
+        unattributable FAILED. `revision_gate` stays on the row — that is what
+        the daemon reads now.
+        """
+        gate = revision_gate(self._con("a" * 40 + "+dirty"))
+        rows = [{"family": "structure", "predictor": "trend21",
+                 "verdict": "FAILED", "retire": True},
+                {"family": "structure", "predictor": "trend21#persist",
+                 "verdict": "HOLDING", "retire": False}]
+        apply_revision_gate(rows, gate)
+        for r in rows:
+            self.assertNotIn("verdict", r)
+            self.assertNotIn("retire", r)
+            self.assertTrue(r["revision_gate"])
+
+    def test_ungated_rows_keep_their_retire_flag(self):
+        """The gate must not become a blanket amnesty: a row whose evidence IS
+        attributable keeps both its verdict and the flag derived from it."""
+        gate = revision_gate(self._con("a" * 40 + "+dirty"))
+        rows = [{"family": "structure", "predictor": "vol21",
+                 "verdict": "FAILED", "retire": True}]
+        apply_revision_gate(rows, gate)
+        self.assertEqual(rows[0]["verdict"], "FAILED")
+        self.assertTrue(rows[0]["retire"])
+        self.assertNotIn("revision_gate", rows[0])
+
 
 class TestNullAmendmentProbe(unittest.TestCase):
     """The store is supposed to refuse a post-amendment write with no frozen

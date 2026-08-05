@@ -25,6 +25,14 @@ export default function AlertsPanel({
 }) {
   return (
     <section className="panel" aria-label="unread alerts">
+      {/* Alerts arrive on a poll, with no action from the reader — the one
+          place on the dashboard where content genuinely appears out of
+          nowhere, and therefore the one that owes a screen reader a word.
+          The count is announced, not the rows: reading out every new alert
+          would bury the page under itself. */}
+      <span className="sr-only" role="status">
+        {unseen > 0 ? `${unseen} unread ${unseen === 1 ? "alert" : "alerts"}` : ""}
+      </span>
       <div className="panel-h">
         <span>ALERTS</span>
         {unseen > 0 && (

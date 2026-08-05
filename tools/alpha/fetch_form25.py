@@ -10,27 +10,52 @@ filing -- the official, free, complete record of US delistings. This tool reads
 EDGAR's quarterly form index, extracts every Form 25, maps CIK to ticker, and
 then pulls bars from Alpaca for any delisting we do not already hold.
 
+WHY company_tickers.json ALONE COULD NEVER WORK
+-----------------------------------------------
+company_tickers.json is SEC's map of CURRENTLY-LISTED companies. A Form 25
+filer is, by definition, a company being removed from listing -- so it is
+absent from that file by construction. The first version of this tool used it
+as the only resolver and lost 592 of 841 CIKs (70%). data.sec.gov's
+submissions JSON does not rescue them either: measured on 20 sampled delisted
+CIKs, its "tickers" array was empty 20/20 and "exchanges" empty 20/20, because
+it is fed from the same current-listings table. "formerNames" carries prior
+company NAMES, never a symbol; the Form 25 document itself carries issuer name,
+CIK and file number but no ticker; and the XBRL companyconcept API returns 404
+for dei:TradingSymbol (it does not serve string facts).
+
+What does work is the issuer's own paperwork: EDGAR renders dei:TradingSymbol
+onto the cover page (R1.htm) of every inline-XBRL filing, and a dead company's
+last 8-K still names the symbol it was trading under. submissions JSON is used
+only as an INDEX of those filings, never as a source of tickers. Measured over
+all 445 unique CIKs in 2024 H1: 130 resolve from company_tickers.json, 250 more
+from the R1 route, 65 residual -- and 43 of those 65 are fund/ETF trusts, 15
+are debt/LP co-issuers and 5 are the exchanges themselves, none of which ever
+had an equity ticker to find.
+
 Caveats recorded rather than smoothed over:
   * The Form 25 FILING date precedes actual removal by ~10 days. Where we have
     bars, the last bar is better evidence and is preferred.
   * Not every Form 25 is a company death -- share-class consolidations and
-    voluntary exchange transfers file one too. Bars are the arbiter: a symbol
-    still printing after the filing was not removed.
-  * CIK->ticker uses SEC's current mapping, so companies that delisted and
-    later changed identity may not resolve. Unresolved CIKs are reported.
+    voluntary exchange transfers file one too. 150 of 378 resolved 2024-H1
+    tickers are still listed today.
+  * Alpaca pads a dead security with flat zero-volume carry-forward bars, so
+    bars[-1] lies about the date of death. Only volume-bearing bars count.
+  * R1.htm is a rendered artifact of EDGAR's viewer, not a documented API. It
+    held on ~600 fetches with zero failures, but if SEC changes the markup
+    SYM_RE stops matching. test_form25_resolve.py fails loudly if that happens.
 
-Read-only with respect to the production database. Writes to the same staging
-DB fetch_delisted.py produced.
+Read-only with respect to the production database -- it is never opened. All
+writes go to the staging DB passed via --staging, for review before any merge.
 
 Usage:
-  python fetch_form25.py --staging <path> [--from-year 2023]
+  python fetch_form25.py --staging <path> [--from-year 2023] [--to-year 2026]
 """
 import argparse
 import gzip
-import io
 import json
+import os
+import re
 import sqlite3
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -40,11 +65,32 @@ ENV = r"C:\Users\Nicholas_N\Desktop\claude code\stock-trader\.env"
 UA = "SignalDeck Research (dimples.n3fam@gmail.com)"   # SEC requires a real contact
 IDX = "https://www.sec.gov/Archives/edgar/full-index/{y}/QTR{q}/form.idx"
 TICKERS = "https://www.sec.gov/files/company_tickers.json"
+SUBS = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+R1 = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/R1.htm"
 BARS = ("https://data.alpaca.markets/v2/stocks/{sym}/bars"
         "?timeframe=1Day&start=2020-01-01&end={end}&limit=10000"
         "&feed=iex&adjustment=all")
 SEC_SLEEP = 0.15    # SEC asks for <=10 req/s; this is well under
 ALPACA_SLEEP = 0.32
+CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache_edgar")
+
+# Cover-page forms that carry dei:TradingSymbol. Fund forms (485BPOS, N-CSR,
+# 497) are excluded ON PURPOSE: a fund trust files one Form 25 per ETF share
+# class, and its cover page names one arbitrary member fund -- Exchange Listed
+# Funds Trust resolved to "TDSB", which is not the delisted security.
+COVER_FORMS = {"8-K", "8-K/A", "10-K", "10-K/A", "10-Q", "10-Q/A",
+               "20-F", "20-F/A", "40-F", "6-K", "10-KT", "10-QT"}
+R1_BUDGET = 10          # 4 was not enough: Sonic Foundry needed the 7th filing back
+
+SYM_RE = re.compile(
+    r"defref_dei_TradingSymbol[^>]*>\s*Trading Symbol\s*</a>\s*</td>\s*"
+    r"<td[^>]*>\s*([A-Za-z0-9.\-/]+)", re.S)
+EXCH_RE = re.compile(
+    r"defref_dei_SecurityExchangeName[^>]*>[^<]*</a>\s*</td>\s*"
+    r"<td[^>]*>\s*([A-Za-z ]+?)\s*<", re.S)
+# A suspended registrant's later covers say "N/A" -- Agile Therapeutics' three
+# most recent covers do, and only the 2024-03-25 8-K still says AGRX.
+NO_SYMBOL = {"NONE", "N", "NA", "N/A"}
 
 
 def alpaca_headers():
@@ -60,8 +106,10 @@ def alpaca_headers():
 
 
 def sec_get(url, binary=False):
+    # No Host header: it was hardcoded to www.sec.gov, which broke every
+    # data.sec.gov call. urllib derives the right one from the URL.
     req = urllib.request.Request(url, headers={
-        "User-Agent": UA, "Accept-Encoding": "gzip", "Host": "www.sec.gov"})
+        "User-Agent": UA, "Accept-Encoding": "gzip"})
     with urllib.request.urlopen(req, timeout=120) as r:
         data = r.read()
         if r.headers.get("Content-Encoding") == "gzip":
@@ -69,29 +117,175 @@ def sec_get(url, binary=False):
     return data if binary else data.decode("utf-8", "replace")
 
 
+def cache_read(name):
+    """EDGAR history is append-only, so a cached past response never goes
+    stale. The one exception -- the in-progress quarter's form.idx, which grows
+    daily -- is never written here; see form25_filings()."""
+    p = os.path.join(CACHE, name)
+    if not os.path.exists(p):
+        return None
+    with open(p, encoding="utf-8") as f:
+        return f.read()
+
+
+def cache_write(name, text):
+    os.makedirs(CACHE, exist_ok=True)
+    with open(os.path.join(CACHE, name), "w", encoding="utf-8") as f:
+        f.write(text)
+
+
 def cik_to_ticker():
-    """SEC's official CIK -> ticker map."""
+    """SEC's official CIK -> ticker map, plus the set of tickers listed TODAY.
+
+    The second return value is the ticker-reuse guard and it is free: it is the
+    same file, already parsed.
+    """
     raw = json.loads(sec_get(TICKERS))
-    out = {}
+    out, listed = {}, set()
     for row in raw.values():
         out.setdefault(int(row["cik_str"]), row["ticker"])
-    return out
+        listed.add(row["ticker"].upper())
+    return out, listed
+
+
+def submissions(cik):
+    """Raw submissions JSON text, disk-cached so a re-run costs SEC nothing."""
+    name = f"sub_{cik}.json"
+    text = cache_read(name)
+    if text is None:
+        text = sec_get(SUBS.format(cik=cik))
+        cache_write(name, text)
+        time.sleep(SEC_SLEEP)
+    return text
+
+
+def ticker_from_edgar(cik, filed):
+    """Recover a DELISTED issuer's ticker from its own last cover page.
+
+    See the module docstring for why every cheaper route fails. submissions is
+    used purely as an index of filings; the ticker comes from dei:TradingSymbol
+    as EDGAR renders it into R1.htm.
+
+    Only filings FILED ON OR BEFORE the Form 25 are considered. A company that
+    drops to OTC re-tickers, and the newest cover carries the NEW symbol: Casa
+    Systems' latest cover says CASSQ, but CASA is the Nasdaq listing whose bars
+    we want. Newest-first over the whole history disagreed with newest-before-
+    Form-25 on 3 of 20 sampled CIKs, and was wrong on all 3.
+
+    Returns (ticker, exchange) or (None, None). Costs 1 + <=R1_BUDGET requests,
+    zero on a cache hit.
+    """
+    key = f"res_{cik}_{filed}.json"
+    hit = cache_read(key)
+    if hit is not None:
+        d = json.loads(hit)
+        return d["t"], d["x"]
+
+    try:
+        r = json.loads(submissions(cik))["filings"]["recent"]
+        cand = sorted(
+            ((r["filingDate"][i], r["form"][i], r["accessionNumber"][i])
+             for i in range(len(r["form"]))
+             if r["isInlineXBRL"][i] == 1
+             and r["form"][i] in COVER_FORMS
+             and r["filingDate"][i] <= filed),
+            reverse=True)
+    except Exception:
+        return None, None       # network/parse failure: not cached, retry next run
+
+    t = x = None
+    fetch_failed = False
+    for _date, _form, acc in cand[:R1_BUDGET]:
+        try:
+            html = sec_get(R1.format(cik=cik, acc=acc.replace("-", "")))
+        except Exception:
+            # A fetch that never returned proves nothing about this CIK. SEC
+            # throttles with 403, which lands here, so treating this as "no
+            # ticker" would let one rate-limit burst write a permanent negative
+            # for every CIK in it — and the cache never expires, so those CIKs
+            # would be silently lost from every future run with nothing in the
+            # report to show it. Remember it and refuse to cache below.
+            fetch_failed = True
+            time.sleep(SEC_SLEEP)
+            continue
+        time.sleep(SEC_SLEEP)
+        m = SYM_RE.search(html)
+        if m and m.group(1).upper() not in NO_SYMBOL:
+            e = EXCH_RE.search(html)
+            t, x = m.group(1).upper(), (e.group(1).strip() if e else "")
+            break
+    # Cache a HIT always (it is immutable — a filed cover page cannot change),
+    # and a MISS only when every candidate was actually read and none named a
+    # ticker. That is a structural fact about the filings; a transport failure
+    # is not.
+    if t is not None or not fetch_failed:
+        cache_write(key, json.dumps({"t": t, "x": x}))
+    return t, x
+
+
+def trades_after_delisting(bars, filed, grace_days=30):
+    """True when this ticker was still really trading long after its Form 25.
+
+    The second half of the ticker-reuse guard, and the half that catches funds.
+    A delisted security's tape stops within days of the filing; a ticker that is
+    still printing VOLUME a month later is a different security wearing the same
+    symbol. Grace is 30 days so a settlement tail, a late final print, or a
+    filing that precedes the actual last trade cannot trip it -- the five
+    measured leaks ran 589-755 days past their filing, nowhere near the edge.
+
+    Volume-bearing bars only: Alpaca pads dead securities with flat zero-volume
+    carry-forward rows, and those would make every delisting look like it never
+    stopped trading.
+    """
+    live = live_bars(bars)
+    if not live:
+        return False
+    try:
+        filed_d = datetime.fromisoformat(filed).date()
+        last_d = datetime.fromisoformat(live[-1]["t"][:10]).date()
+    except (ValueError, TypeError, KeyError):
+        # An unparseable date must not silently disarm the guard, but it also
+        # must not invent a reuse. Refusing to judge is the honest answer; the
+        # first guard still applies.
+        return False
+    return (last_d - filed_d).days > grace_days
+
+
+def live_bars(bars):
+    """Alpaca carries a dead security forward with flat, zero-volume bars --
+    SBNY prints close=70 v=0 for 201 sessions after Signature Bank was seized,
+    two years past its last real trade -- so bars[-1] is not the last trade and
+    a naive last-bar rule mis-dates or discards the delisting. 75 of 191
+    recoverable 2024-H1 delistings (39%) turn on this. The padding must not
+    reach the training set either, so this list is what gets stored.
+    """
+    return [b for b in bars if b["v"] > 0]
 
 
 def form25_filings(from_year, to_year):
     """Every Form 25 / 25-NSE in EDGAR's quarterly index, streamed."""
     now = datetime.now(timezone.utc)
+    cur_q = (now.month - 1) // 3 + 1
     seen = []
     for y in range(from_year, to_year + 1):
         for q in (1, 2, 3, 4):
-            if y == now.year and q > (now.month - 1) // 3 + 1:
+            if y == now.year and q > cur_q:
                 continue
-            try:
-                text = sec_get(IDX.format(y=y, q=q))
-            except urllib.error.HTTPError as e:
-                print(f"  {y} QTR{q}: HTTP {e.code}, skipped", flush=True)
-                continue
-            time.sleep(SEC_SLEEP)
+            # 2024 QTR1's index alone is 57,767,881 bytes; a 2023-2026 run
+            # pulls 15 of them. Past quarters are immutable, so cache them --
+            # this is the single largest cost in the tool. The in-progress
+            # quarter grows daily and is always re-fetched.
+            name = f"form_{y}_Q{q}.idx"
+            text = None if (y == now.year and q == cur_q) else cache_read(name)
+            if text is None:
+                try:
+                    text = sec_get(IDX.format(y=y, q=q))
+                except urllib.error.HTTPError as e:
+                    print(f"  {y} QTR{q}: HTTP {e.code}, skipped", flush=True)
+                    continue
+                if not (y == now.year and q == cur_q):
+                    cache_write(name, text)
+                time.sleep(SEC_SLEEP)
             n = 0
             for line in text.splitlines():
                 if not (line.startswith("25 ") or line.startswith("25-NSE ")):
@@ -119,8 +313,9 @@ def main():
     args = ap.parse_args()
 
     print("fetching SEC CIK->ticker map...", flush=True)
-    c2t = cik_to_ticker()
-    print(f"  {len(c2t):,} CIKs mapped", flush=True)
+    c2t, listed_today = cik_to_ticker()
+    print(f"  {len(c2t):,} CIKs mapped, {len(listed_today):,} tickers listed today",
+          flush=True)
 
     print(f"scanning EDGAR form index {args.from_year}-{args.to_year}...", flush=True)
     filings = form25_filings(args.from_year, args.to_year)
@@ -132,19 +327,46 @@ def main():
         if cik not in by_cik or date < by_cik[cik][1]:
             by_cik[cik] = (company, date)
 
-    resolved, unresolved = {}, 0
-    for cik, (company, date) in by_cik.items():
-        t = c2t.get(cik)
+    print(f"resolving {len(by_cik):,} CIKs...", flush=True)
+    resolved, via_map, via_edgar, unresolved = {}, 0, 0, 0
+    t0 = time.time()
+    for i, (cik, (company, date)) in enumerate(sorted(by_cik.items()), 1):
+        t = c2t.get(cik)                      # free, but only ever hits survivors
+        if t:
+            via_map += 1
+        else:
+            t = ticker_from_edgar(cik, date)[0]
+            via_edgar += 1 if t else 0
         if t:
             resolved[t.upper()] = (company, date)
         else:
             unresolved += 1
-    print(f"resolved to tickers: {len(resolved):,}  unresolved CIKs: {unresolved:,}")
+        if i % 50 == 0:
+            print(f"  {i}/{len(by_cik)} map={via_map} edgar={via_edgar} "
+                  f"unresolved={unresolved} ({time.time()-t0:.0f}s)", flush=True)
+    print(f"resolved to tickers: {len(resolved):,} "
+          f"(company_tickers {via_map:,} + EDGAR R1 {via_edgar:,})  "
+          f"unresolved CIKs: {unresolved:,}", flush=True)
 
     db = sqlite3.connect(args.staging)
-    db.execute("""CREATE TABLE IF NOT EXISTS form25(
-        symbol TEXT PRIMARY KEY, company TEXT, filed TEXT,
-        had_bars INT DEFAULT 0, n_bars INT DEFAULT 0, last_bar TEXT)""")
+    # form25 is a staging REPORT table, rebuilt each run -- it gained a verdict
+    # column, and a stale row from a previous schema would be unreadable.
+    # delisted_symbol / delisted_bar accumulate and are only created if this is
+    # a fresh staging DB (normally fetch_delisted.py made them first).
+    db.executescript("""
+        DROP TABLE IF EXISTS form25;
+        CREATE TABLE form25(
+            symbol TEXT PRIMARY KEY, company TEXT, filed TEXT,
+            had_bars INT DEFAULT 0, n_bars INT DEFAULT 0, last_bar TEXT,
+            verdict TEXT);
+        CREATE TABLE IF NOT EXISTS delisted_symbol(
+            symbol TEXT PRIMARY KEY, name TEXT, exchange TEXT,
+            first_bar TEXT, last_bar TEXT, n_bars INT, last_close REAL,
+            reused INT DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS delisted_bar(
+            symbol TEXT, ts INT, open REAL, high REAL, low REAL,
+            close REAL, volume REAL, PRIMARY KEY(symbol, ts));
+    """)
     have = {r[0] for r in db.execute("SELECT symbol FROM delisted_symbol")}
     missing = sorted(set(resolved) - have)
     print(f"already in staging: {len(set(resolved) & have):,}   "
@@ -152,7 +374,7 @@ def main():
 
     h = alpaca_headers()
     end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    added = added_bars = nodata = 0
+    added = added_bars = nodata = still_listed = thin = 0
 
     for i, sym in enumerate(missing, 1):
         company, filed = resolved[sym]
@@ -165,35 +387,68 @@ def main():
             pass
         time.sleep(ALPACA_SLEEP)
 
-        if bars:
-            last = bars[-1]["t"][:10]
-            # A symbol still printing well after its Form 25 was not removed --
-            # share-class change, transfer, or a reused ticker. Record, skip.
-            still_trading = last > filed and (
-                datetime.fromisoformat(last) - datetime.fromisoformat(filed)).days > 30
-            db.execute("INSERT OR REPLACE INTO form25 VALUES(?,?,?,?,?,?)",
-                       (sym, company, filed, 1, len(bars), last))
-            if not still_trading and len(bars) >= 60:
+        if not bars:
+            db.execute("INSERT OR REPLACE INTO form25 VALUES(?,?,?,?,?,?,?)",
+                       (sym, company, filed, 0, 0, "", "no-bars"))
+            nodata += 1
+        elif sym in listed_today or trades_after_delisting(bars, filed):
+            # TWO reuse guards, because either one alone leaks.
+            #
+            # company_tickers.json catches a ticker recycled onto another
+            # REGISTRANT (DOC: Physicians Realty delisted 2024-03, Healthpeak
+            # took the symbol). It also covers the common non-death case, a
+            # Form 25 for warrants/units/notes or an exchange change, which is
+            # 150 of 378 resolved 2024-H1 tickers.
+            #
+            # But that file is a REGISTRANT->ticker map: it contains no ETFs and
+            # no closed-end funds. Measured, 6,208 of Alpaca's 13,324 active
+            # tradable symbols are absent from it -- and funds are the dominant
+            # reuser of a freed 3-4 letter ticker. Relying on it alone let five
+            # symbols through whose series splice a dead company onto a live
+            # ETF: HLTH ran Cue Health to close=0.0502 on 2024-06-05, then a
+            # 778-day gap, then close=25.40 (Tema Healthcare AI ETF) -- a single
+            # step of +50,498% written straight into the training set. CONX
+            # +149% over 565 days, EGLE -55% over 512, GRIN +79% over 354.
+            #
+            # So the second guard is the bars themselves, and it is the one the
+            # earlier version of this tool had. An earlier note here claimed no
+            # bar threshold could separate reuse from a clean delisting because
+            # "the largest inter-bar gap in a clean delisting was 14 days and
+            # DOC's recycle shows a gap of 4". That is true of the GAP but false
+            # of the test that matters: what separates them is trading that
+            # continues WELL PAST THE FORM 25 DATE. All five leaks print 589-755
+            # days after their filing; a genuine delisting stops within days of
+            # it. DOC is still caught by the first guard, which is what that
+            # guard is for.
+            db.execute("INSERT OR REPLACE INTO form25 VALUES(?,?,?,?,?,?,?)",
+                       (sym, company, filed, 1, len(bars), "", "still-listed"))
+            still_listed += 1
+        else:
+            live = live_bars(bars)
+            if len(live) < 60:
+                db.execute("INSERT OR REPLACE INTO form25 VALUES(?,?,?,?,?,?,?)",
+                           (sym, company, filed, 1, len(live), "", "too-few-bars"))
+                thin += 1
+            else:
+                last = live[-1]["t"][:10]
+                db.execute("INSERT OR REPLACE INTO form25 VALUES(?,?,?,?,?,?,?)",
+                           (sym, company, filed, 1, len(live), last, "kept"))
                 db.executemany(
                     "INSERT OR REPLACE INTO delisted_bar VALUES(?,?,?,?,?,?,?)",
                     [(sym, int(datetime.fromisoformat(
                         b["t"].replace("Z", "+00:00")).timestamp()),
-                      b["o"], b["h"], b["l"], b["c"], b["v"]) for b in bars])
+                      b["o"], b["h"], b["l"], b["c"], b["v"]) for b in live])
                 db.execute(
                     "INSERT OR REPLACE INTO delisted_symbol VALUES(?,?,?,?,?,?,?,?)",
-                    (sym, company, "SEC-FORM25", bars[0]["t"][:10], last,
-                     len(bars), bars[-1]["c"], 0))
+                    (sym, company, "SEC-FORM25", live[0]["t"][:10], last,
+                     len(live), live[-1]["c"], 0))
                 added += 1
-                added_bars += len(bars)
-        else:
-            db.execute("INSERT OR REPLACE INTO form25 VALUES(?,?,?,?,?,?)",
-                       (sym, company, filed, 0, 0, ""))
-            nodata += 1
+                added_bars += len(live)
 
         if i % 100 == 0:
             db.commit()
-            print(f"  {i}/{len(missing)} added={added} no-data={nodata} "
-                  f"bars={added_bars:,}", flush=True)
+            print(f"  {i}/{len(missing)} added={added} still-listed={still_listed} "
+                  f"thin={thin} no-data={nodata} bars={added_bars:,}", flush=True)
 
     db.commit()
     years = {}
@@ -203,11 +458,16 @@ def main():
 
     report = {
         "form25_filings": len(filings),
+        "unique_ciks": len(by_cik),
         "resolved_tickers": len(resolved),
+        "resolved_via_company_tickers": via_map,
+        "resolved_via_edgar_r1": via_edgar,
         "unresolved_ciks": unresolved,
         "new_fetched": len(missing),
         "added_delistings": added,
         "added_bars": added_bars,
+        "skipped_still_listed": still_listed,
+        "skipped_too_few_bars": thin,
         "no_alpaca_data": nodata,
         "delistings_by_year_after_merge": dict(sorted(years.items())),
         "note": "Staging only. Production database untouched.",

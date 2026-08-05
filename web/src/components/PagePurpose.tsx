@@ -67,6 +67,10 @@ export default function PagePurpose({ id, text }: { id: string; text: string }) 
         type="button"
         onClick={toggle}
         aria-expanded={false}
+        // data-purpose marks "this page states its purpose" for the UX audit
+        // crawler. It rides on the collapsed button too: a purpose line the
+        // reader chose to hide is still a purpose line the page provides.
+        data-purpose={id}
         className="min-h-[32px] cursor-pointer self-start text-left text-[0.75rem] tracking-wider text-[var(--faint)] transition-colors duration-150 hover:text-[var(--accent)]"
       >
         ? what is this page for
@@ -78,6 +82,7 @@ export default function PagePurpose({ id, text }: { id: string; text: string }) 
     <div
       role="note"
       aria-label="what this page answers"
+      data-purpose={id}
       className="flex items-baseline gap-2 rounded-lg border px-3 py-1.5 text-[0.75rem] leading-relaxed"
       style={{ borderColor: "var(--border)", background: "var(--panel2)", color: "var(--dim)" }}
     >

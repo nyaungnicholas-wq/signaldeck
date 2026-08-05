@@ -167,6 +167,29 @@ type Source interface {
 	ModelHealth(ctx context.Context, model string) (string, error)
 	// Preregistration returns the frozen per-predictor claims plus chain state.
 	Preregistration(ctx context.Context) (PreregSummary, error)
+	// EarliestGradeableOn is the first date an outstanding structural forecast
+	// can actually be graded, DERIVED from the calls on disk rather than
+	// declared. It is reported next to the pre-registered FirstGradableOn, never
+	// instead of it: the frozen date is a commitment and must not be edited, but
+	// it was a forecast about when data would mature, and on 2026-08-04 the two
+	// differed by ten days (frozen 2026-08-07, derived 2026-08-17). Serving only
+	// the frozen one presented a stale date as current fact.
+	// ok=false means nothing structural is outstanding.
+	EarliestGradeableOn(ctx context.Context) (date string, ok bool, err error)
+	// EarliestVerdictOn is the first date a structural claim can produce a
+	// published VERDICT rather than a single resolved row. Resolution is one
+	// data point; the grader refuses to publish an interval below
+	// MIN_DISTINCT_BLOCKS distinct horizon blocks, which on a 21-day horizon is
+	// another ~189 days of calls after the first resolution.
+	//
+	// This is reported ALONGSIDE EarliestGradeableOn, not instead of it, for the
+	// same reason that one is reported alongside the frozen date: the three
+	// answer different questions ("what did we commit to", "when does the first
+	// data point land", "when can a verdict exist") and collapsing them is what
+	// produced the 2026-08-07 error in the first place. See prereg_records
+	// seq 37, the gradability-correction amendment.
+	// ok=false means no benchmark-eligible structural row exists yet.
+	EarliestVerdictOn(ctx context.Context) (date string, ok bool, err error)
 }
 
 // Verdict is one symbol's structural regime call, already reduced to the

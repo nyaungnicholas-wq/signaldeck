@@ -92,6 +92,14 @@ type Limits struct {
 	// MinTicketFrac is the smallest position, as a share of equity, worth
 	// opening at all. Below it the gate REFUSES rather than filling a remnant.
 	MinTicketFrac float64
+	// MaxCorrToBook refuses a candidate whose measured correlation to the book
+	// it would join is at or above it. The position, sector and count caps all
+	// measure concentration by LABEL; this one measures it by BEHAVIOUR, which
+	// is the only version that survives a regime where the labels stop meaning
+	// anything.
+	MaxCorrToBook float64
+	// MaxGrossExposure caps total deployed notional as a share of equity.
+	MaxGrossExposure float64
 }
 
 // Defaults returns the standard envelope.
@@ -124,6 +132,18 @@ type Limits struct {
 //     two spreads, occupies a slot, and cannot move the book. Half a percent of
 //     equity is a twentieth of the largest allowed position, which is the point
 //     below which a fill is bookkeeping rather than a bet.
+//   - MaxCorrToBook 0.80. Ten names at 0.8 correlation are not ten bets; they
+//     are one bet with ten commissions and a diversification story. 0.80 rather
+//     than something tighter because equities are correlated by construction —
+//     a market factor runs through all of them — and a cap that fires on the
+//     ordinary market beta would refuse the whole universe. It is set to catch
+//     the pathological case (a second share class, a sector twin, an ETF and
+//     its largest holding), not to enforce statistical independence, which is
+//     not available in this asset class at any price.
+//   - MaxGrossExposure 1.00. No leverage. The book may deploy every dollar it
+//     holds and not one more. This is a floor on honesty as much as on risk:
+//     a simulated book that quietly runs at 1.3x gross has been reporting the
+//     returns of a different, riskier strategy than the one described.
 func Defaults() Limits {
 	return Limits{
 		MaxDrawdown:       envFrac("SIGNALDECK_RISK_MAX_DRAWDOWN", 0.20),
@@ -134,6 +154,8 @@ func Defaults() Limits {
 		KellyFraction:     envFrac("SIGNALDECK_RISK_KELLY_FRACTION", 0.25),
 		MinEdgeTrips:      envInt("SIGNALDECK_RISK_MIN_EDGE_TRIPS", 20),
 		MinTicketFrac:     envFrac("SIGNALDECK_RISK_MIN_TICKET_FRAC", 0.005),
+		MaxCorrToBook:     envFrac("SIGNALDECK_RISK_MAX_CORR_TO_BOOK", 0.80),
+		MaxGrossExposure:  envFrac("SIGNALDECK_RISK_MAX_GROSS_EXPOSURE", 1.00),
 	}
 }
 
@@ -164,6 +186,13 @@ type Book struct {
 	// missing sector reads as zero exposure, which is correct: the gate caps
 	// concentration it can see, and an unclassified name concentrates nothing.
 	ExposureBySector map[string]float64
+
+	// GrossExposure is total deployed notional right now, unsigned. GrossKnown
+	// follows the DrawdownKnown doctrine: a caller that did not measure it
+	// leaves the cap UNARMED and is told so, rather than passing a zero that
+	// reads as an empty book with a full cap of headroom.
+	GrossExposure float64
+	GrossKnown    bool
 }
 
 // Edge is the realized round-trip record the Kelly fraction is derived from —
@@ -181,6 +210,12 @@ type Request struct {
 	Symbol string
 	Sector string // "" is fine — an unclassified name is capped by position, not sector
 	Action Action
+
+	// CorrToBook is this candidate's measured return correlation to the book it
+	// would join. HasCorr distinguishes "measured as zero" from "not measured",
+	// because only the first is a reason to allow.
+	CorrToBook float64
+	HasCorr    bool
 }
 
 // Decision is the gate's answer. Notional is the dollar size the caller may
@@ -197,25 +232,25 @@ type Decision struct {
 	Breaches []string `json:"breaches,omitempty"`
 }
 
-// Evaluate applies the envelope to one candidate trade.
-//
 // The order of checks is itself a design choice: the book-wide circuit breakers
 // (drawdown, daily loss) run BEFORE any sizing, because when they are tripped the
 // answer is "not this trade, nor any other entry today", and computing a size
 // first would invite a caller to use it.
-func Evaluate(b Book, req Request, edge Edge, lim Limits) Decision {
+// Admit answers a question that is logically PRIOR to any candidate: is this
+// book open for new risk at all?
+//
+// WHY THIS IS A SEPARATE FUNCTION. The book-wide breakers do not depend on
+// which candidate is asking, so evaluating them per-candidate — after some
+// other component has already decided the candidate is worth trading — makes
+// risk look like a property of the trade rather than a precondition for
+// trading. A caller must be able to ask "may I trade at all today?" and get a
+// refusal it cannot route around by finding a better candidate. Evaluate calls
+// this first, so the two can never disagree about what a halted book is.
+//
+// A permitting Decision carries Notional 0 and SizingNone: admission is not a
+// size, and nothing here may be mistaken for one.
+func Admit(b Book, lim Limits) Decision {
 	lim = lim.withDefaults()
-
-	// EXITS ARE NEVER GATED. Stated first so it cannot be reordered behind a
-	// check that might refuse.
-	if req.Action == Exit {
-		return Decision{
-			Allow:   true,
-			Sizing:  SizingNone,
-			Reasons: []string{"exit — reducing risk is never gated"},
-		}
-	}
-
 	d := Decision{Sizing: SizingNone}
 
 	if b.Equity <= 0 || math.IsNaN(b.Equity) || math.IsInf(b.Equity, 0) {
@@ -257,6 +292,65 @@ func Evaluate(b Book, req Request, edge Edge, lim Limits) Decision {
 		return d
 	}
 
+	// Gross exposure EXHAUSTED is book-wide: a fully deployed book has no room
+	// for any candidate, so the answer is "no entries", not "not this one".
+	// The partial case is a trim and belongs with the other trims in Evaluate.
+	if b.GrossKnown && lim.MaxGrossExposure > 0 {
+		if allowed := lim.MaxGrossExposure * b.Equity; b.GrossExposure >= allowed {
+			d.Reasons = append(d.Reasons, fmt.Sprintf(
+				"gross exposure is %.1f%% of equity, at or past the %.1f%% cap — the book has no unlevered room left",
+				b.GrossExposure/b.Equity*100, lim.MaxGrossExposure*100))
+			d.Breaches = append(d.Breaches, "max-gross-exposure")
+			return d
+		}
+	}
+	if !b.GrossKnown {
+		d.Reasons = append(d.Reasons, "gross-exposure cap unarmed: total deployed notional was not measurable")
+	}
+
+	d.Allow = true
+	return d
+}
+
+// Evaluate applies the FULL envelope to one candidate trade: admission first,
+// then the candidate-specific refusals, then sizing.
+func Evaluate(b Book, req Request, edge Edge, lim Limits) Decision {
+	lim = lim.withDefaults()
+
+	// EXITS ARE NEVER GATED. Stated first so it cannot be reordered behind a
+	// check that might refuse.
+	if req.Action == Exit {
+		return Decision{
+			Allow:   true,
+			Sizing:  SizingNone,
+			Reasons: []string{"exit — reducing risk is never gated"},
+		}
+	}
+
+	// Book-wide admission. A refusal here is final and carries its own reasons.
+	d := Admit(b, lim)
+	if !d.Allow {
+		return d
+	}
+	// Admitted, but nothing is allowed YET — every check below can still refuse,
+	// and a lingering Allow from admission would be read as one.
+	d.Allow = false
+
+	// Correlation to the book. This is an ADMISSION question, not a sizing one:
+	// a name that moves with the book is not a smaller version of a good idea,
+	// it is more of the idea already owned, so trimming it would just buy the
+	// same exposure in a less honest package. Refuse or admit; never trim.
+	if req.HasCorr && req.CorrToBook >= lim.MaxCorrToBook {
+		d.Reasons = append(d.Reasons, fmt.Sprintf(
+			"%s correlates %.2f to the book it would join, at or past the %.2f cap — this is not a new bet, it is more of the one already held",
+			req.Symbol, req.CorrToBook, lim.MaxCorrToBook))
+		d.Breaches = append(d.Breaches, "max-corr-to-book")
+		return d
+	}
+	if !req.HasCorr {
+		d.Reasons = append(d.Reasons, "correlation cap unarmed: this candidate's correlation to the book was not measurable")
+	}
+
 	// ── Sizing ──────────────────────────────────────────────────────────────
 	frac, sizing, reason, ok := sizeFraction(edge, lim)
 	if !ok {
@@ -295,6 +389,18 @@ func Evaluate(b Book, req Request, edge Edge, lim Limits) Decision {
 			d.Reasons = append(d.Reasons, fmt.Sprintf(
 				"trimmed to the remaining %s sector headroom under the %.1f%% cap", req.Sector, lim.MaxSectorWeight*100))
 			d.Breaches = append(d.Breaches, "max-sector-weight")
+		}
+	}
+
+	// Gross exposure: the leverage cap, expressed as headroom the same way the
+	// sector cap is. Admit already refused the exhausted case, so the only
+	// question left here is whether THIS size fits in the room that remains.
+	if b.GrossKnown && lim.MaxGrossExposure > 0 {
+		if headroom := lim.MaxGrossExposure*b.Equity - b.GrossExposure; notional > headroom {
+			notional = headroom
+			d.Reasons = append(d.Reasons, fmt.Sprintf(
+				"trimmed to the remaining headroom under the %.1f%% gross-exposure cap", lim.MaxGrossExposure*100))
+			d.Breaches = append(d.Breaches, "max-gross-exposure")
 		}
 	}
 
@@ -422,6 +528,12 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MinTicketFrac <= 0 {
 		l.MinTicketFrac = d.MinTicketFrac
+	}
+	if l.MaxCorrToBook <= 0 {
+		l.MaxCorrToBook = d.MaxCorrToBook
+	}
+	if l.MaxGrossExposure <= 0 {
+		l.MaxGrossExposure = d.MaxGrossExposure
 	}
 	return l
 }

@@ -1,5 +1,27 @@
 # SignalDeck — Honest Plan to a Real Edge
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** AUTHORITATIVE — freeze lifted 2026-08-04
+> **Scope:** Plan and ablation record for reaching a measurable edge.
+> **Frozen claim classes:** FC3 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** PUBLISHABLE — caveats are the frozen classes above
+
+> **Backtest data: `pre-survivorship-fix`.** Every historical figure below was
+> computed on the universe as it stood BEFORE the 2026-08-04 survivorship
+> backfill (`proofs/P3A_SURVIVORSHIP_BACKFILL.md`) and the point-in-time
+> universe rebuild (`proofs/P3B_PIT_UNIVERSE.md`). It has not been re-run on
+> the repaired universe. Read the numbers as a record of what was measured
+> then, not as what the repaired data would produce now.
+
+> ## ⚠ P0 freeze (2026-08-04) — LIFTED 2026-08-04 by `proofs/P10_FREEZE_LIFT.md`
+> Remediation complete; freeze lifted. **Do not attach capital.** Figures below are historical unless generated.
+> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · intervals · survivorship · point-in-time data.**
+> The 2026-07-27 ablation tables are computed over a bar history measured
+> survivor-seeded in `ALPHA_WORKFLOW.md` §B2 and are frozen pending P3.
+> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
+
 ## The target, reset to reality
 - **80% directional win rate is not achievable by anyone.** World-class quant funds run 52–56% and get rich on it via leverage + scale + risk management.
 - The number that matters is **cost-adjusted EXPECTANCY** (win% × avg win − loss% × avg loss − fees/slippage/taxes), not win rate. You can hit 80% win rate with negative expectancy (win +1% often, lose −10% rarely) — that loses money.

@@ -499,6 +499,31 @@ CREATE TABLE IF NOT EXISTS paper_cursor (
   started_ts  INTEGER NOT NULL
 ) WITHOUT ROWID;
 
+-- paper_epochs: the STRATEGY-CHANGE history of a simulated book.
+--
+-- A track record is a record OF something. When the rules change, the numbers
+-- before and after describe two different strategies, and averaging across the
+-- change reports a strategy that was never run. This table is the boundary that
+-- makes that impossible to do by accident: an epoch runs from from_ts until the
+-- next epoch's from_ts, and every published statistic is computed WITHIN one.
+--
+-- The book itself is CONTINUOUS across an epoch boundary — same cash, same open
+-- positions. Only the measurement is split. That is why the boundary lives here
+-- rather than in a new strategy id: the capital did not reset, so the ledger
+-- must not pretend it did.
+--
+-- Append-only in spirit: epochs are upserted from a schedule declared in code
+-- (pipeline.paperEpochSchedule) so a rebuilt database reconstructs the same
+-- boundaries, and a past epoch's from_ts is history that must not move.
+CREATE TABLE IF NOT EXISTS paper_epochs (
+  strategy TEXT    NOT NULL,
+  epoch    INTEGER NOT NULL,   -- 1-based, ascending in time
+  from_ts  INTEGER NOT NULL,   -- inclusive; epoch 1 uses 0 = "since inception"
+  label    TEXT    NOT NULL,   -- short name, e.g. 'triple-barrier'
+  reason   TEXT    NOT NULL,   -- what changed and why the record splits here
+  PRIMARY KEY (strategy, epoch)
+) WITHOUT ROWID;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- STAGE 6 — GATED MODEL FORECAST LEGS (append-only block).
 -- model_forecasts stores each NAMED model leg (currently 'gbm' and 'meanrev')
@@ -1516,6 +1541,27 @@ CREATE INDEX IF NOT EXISTS idx_split_repairs_at
 -- can be reconstructed (store.TradableAt) instead of guessed.
 -- Added via the idempotent ALTER path in migrate() — see store.go.
 
+-- ── POINT-IN-TIME UNIVERSE (2026-08-04) ──────────────────────────────────────
+-- The MATERIALISED denominator every cross-sectional feature ranks against:
+-- one row per (UTC day, symbol) the symbol actually traded. TradableAt answers
+-- the same question from added_at/delisted_at, but those are stamps about when
+-- WE noticed something; this is evidence about what the market did, and the two
+-- can be compared precisely because both exist.
+--
+-- This table existed in the operator's database from the day it was designed
+-- and was ABSENT from schema.sql, so every cold clone — every reviewer, every
+-- restore, every deployment — got a database without it while the operator's
+-- own copy had it (empty). It is here now so the cold case is the tested case.
+-- store.RebuildUniverseMembership fills it; see internal/store/pituniverse.go.
+CREATE TABLE IF NOT EXISTS universe_membership (
+  day       INTEGER NOT NULL,   -- UTC midnight, unix secs, of the OBSERVATION day
+  symbol_id INTEGER NOT NULL,
+  source    TEXT    NOT NULL,   -- the EVIDENCE, e.g. 'bars-1d'
+  PRIMARY KEY (day, symbol_id)
+);
+CREATE INDEX IF NOT EXISTS idx_universe_membership_sym
+  ON universe_membership (symbol_id, day);
+
 -- ── AUTONOMOUS RESEARCH LOOP (2026-07-25) ────────────────────────────────────
 -- Every rule the loop tests, including the ones it kills. A search that records
 -- only its winners cannot be audited, and the rejections are what stop the same
@@ -1909,3 +1955,75 @@ CREATE TABLE IF NOT EXISTS prediction_attributions (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_pred_attr_symbol
   ON prediction_attributions(symbol_id, horizon, ledger_seq);
+
+-- ── Publication verdicts (2026-08-04 fix pack) ──────────────────────────
+--
+-- One row per (predictor, horizon, variant) per grading evaluation. Append-only
+-- history: the latest row by evaluated_at is the current publication state.
+--
+-- STICKINESS. A model the record has once contradicted stays contradicted. The
+-- obvious implementation — an UPDATE trigger guarding retired 1->0 — protects
+-- nothing here, because nothing updates: every grade INSERTs a new row, so an
+-- un-retire arrives as a fresh retired=0 row the UPDATE trigger never sees. The
+-- guard therefore has to run on INSERT and consult the history, which is what
+-- publication_verdicts_no_unretire does. It is a backstop under
+-- publication.BuildVerdict, not a substitute for it: the builder is what knows
+-- WHY a row is retired, and the trigger is what makes forgetting impossible.
+CREATE TABLE IF NOT EXISTS publication_verdicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  predictor TEXT NOT NULL,
+  horizon   TEXT NOT NULL,
+  variant   TEXT NOT NULL DEFAULT '',
+  publication_status TEXT NOT NULL CHECK (publication_status IN
+    ('OK','INSUFFICIENT','FAILED','RETIRED','REFUSED_STALE','NO_BASELINE','QUARANTINED')),
+  retired           INTEGER NOT NULL DEFAULT 0 CHECK (retired IN (0,1)),
+  retirement_sticky INTEGER NOT NULL DEFAULT 0 CHECK (retirement_sticky IN (0,1)),
+  retire_reason     TEXT,
+  retirement_source TEXT,             -- 'evidence' | 'grader' | 'history' | 'wilson'
+  evidence_claim_id TEXT,
+  current_n_eff           REAL,
+  current_distinct_blocks INTEGER,
+  ci_method TEXT,
+  ci_lower  REAL,
+  ci_upper  REAL,
+  null_rate REAL,
+  skill_pp  REAL,
+  grader_sha256 TEXT,
+  reasons_json       TEXT NOT NULL DEFAULT '[]',
+  evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+  evaluated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (predictor, horizon, variant, evaluated_at)
+);
+CREATE INDEX IF NOT EXISTS idx_publication_verdicts_latest
+  ON publication_verdicts (predictor, horizon, variant, evaluated_at DESC);
+
+-- The only way past this is to delete history, which is itself the loud act.
+CREATE TRIGGER IF NOT EXISTS publication_verdicts_no_unretire
+BEFORE INSERT ON publication_verdicts
+WHEN new.retired = 0 AND EXISTS (
+  SELECT 1 FROM publication_verdicts p
+   WHERE p.predictor = new.predictor
+     AND p.horizon   = new.horizon
+     AND p.variant   = new.variant
+     AND p.retired   = 1
+)
+BEGIN
+  SELECT RAISE(ABORT, 'retirement is sticky and cannot be cleared');
+END;
+
+-- Grader heartbeats. A scheduled task exiting 0 is NOT evidence the grade ran:
+-- on 2026-08-03 the task reported success while the grader had been refusing
+-- for 33 hours. success here means the grader produced a registry, and
+-- finished_at is what staleness is measured against.
+CREATE TABLE IF NOT EXISTS grader_heartbeats (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task    TEXT NOT NULL,
+  success INTEGER NOT NULL CHECK (success IN (0,1)),
+  finished_at TEXT NOT NULL,
+  grader_sha256  TEXT,
+  rows_evaluated INTEGER,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_grader_heartbeats_task_finished
+  ON grader_heartbeats (task, finished_at DESC);

@@ -173,7 +173,7 @@ func TestTradedEdgeIsWithheldOnAYoungBook(t *testing.T) {
 	ctx := context.Background()
 	w := &PaperTrader{St: st}
 
-	edge, err := w.tradedEdge(ctx, "flagship-1d")
+	edge, err := w.tradedEdge(ctx, "flagship-1d", 9*86400)
 	if err != nil {
 		t.Fatalf("tradedEdge: %v", err)
 	}

@@ -56,6 +56,20 @@ func (w *PaperTrader) riskBook(
 			Ts: r.Ts, Cash: r.Cash, PositionsValue: r.PositionsValue, Equity: r.Equity,
 		})
 	}
+	// DRAWDOWN IS DELIBERATELY *NOT* EPOCH-SCOPED, unlike the sizing edge.
+	//
+	// The two measure different things. The edge is a property of the STRATEGY —
+	// "what payoff shape do these rules produce?" — so it must be re-measured
+	// when the rules change. Drawdown is a property of the CAPITAL — "how far is
+	// this book below its high-water mark?" — and under an epoch boundary the
+	// capital is explicitly carried across unchanged: same cash, same positions.
+	//
+	// Re-basing the peak at a boundary would let the book lose MaxDrawdown in
+	// epoch 1 and MaxDrawdown again in epoch 2 without the breaker ever firing,
+	// which is a larger hole than the attribution problem scoping it would fix.
+	// A strategy change is not a reason to forgive the losses that preceded it.
+	// The epoch-scoped drawdown is still reported, for attribution, beside this
+	// one — see the paper API's per-epoch segments.
 	if dd, ok := papertrade.CurrentDrawdown(curve); ok {
 		b.CurrentDrawdown = dd
 		b.DrawdownKnown = true
@@ -79,6 +93,11 @@ func (w *PaperTrader) riskBook(
 	if err != nil {
 		return b, err
 	}
+	// Gross exposure is only KNOWN if every open position could be marked. One
+	// unmarked name makes the total an understatement, and an understated gross
+	// hands out headroom the book may not have — so the cap goes unarmed rather
+	// than arming on a number that is wrong in the permissive direction.
+	allMarked := true
 	for _, p := range stored {
 		if p.Qty <= 0 {
 			continue
@@ -89,12 +108,16 @@ func (w *PaperTrader) riskBook(
 			return b, err
 		}
 		if !ok || bar.Close <= 0 {
+			allMarked = false
 			continue // no mark: counted as a position, contributes no measurable exposure
 		}
+		notional := p.Qty * bar.Close
+		b.GrossExposure += notional
 		if sec := riskSector(symByID[p.SymbolID]); sec != "" {
-			b.ExposureBySector[sec] += p.Qty * bar.Close
+			b.ExposureBySector[sec] += notional
 		}
 	}
+	b.GrossKnown = allMarked
 	return b, nil
 }
 
@@ -125,10 +148,36 @@ func riskSector(symbol string) string {
 // probability is a forecast; a Kelly fraction has to be paid for out of realized
 // P&L, and the fill log net of modelled execution cost is the only record of that
 // in the system.
-func (w *PaperTrader) tradedEdge(ctx context.Context, strategy string) (riskgate.Edge, error) {
+//
+// EPOCH-SCOPED, and this is the whole reason epochs exist. The edge answers
+// "what payoff shape does THIS strategy produce?", so it may only be measured
+// over round trips this strategy actually made. Sizing today's trade from a
+// previous rule set's win rate is the most expensive form of the cross-regime
+// error: it does not merely misreport the past, it stakes real position size on
+// a number the current strategy never earned.
+//
+// A round trip that STRADDLES a boundary — bought under the old rules, sold
+// under the new — is counted by NEITHER epoch. Filtering to trades at or after
+// the boundary leaves its sell with no matching buy, and MatchRoundTrips drops
+// an unmatched sell. That is the honest outcome: a trip whose entry and exit
+// were decided by different strategies is evidence about neither.
+func (w *PaperTrader) tradedEdge(ctx context.Context, strategy string, asof int64) (riskgate.Edge, error) {
 	trades, err := w.St.AllPaperTradesAsc(ctx, strategy)
 	if err != nil {
 		return riskgate.Edge{}, err
+	}
+	from, to, err := w.epochWindow(ctx, strategy, asof)
+	if err != nil {
+		return riskgate.Edge{}, err
+	}
+	if from > 0 || to > 0 {
+		scoped := trades[:0]
+		for _, t := range trades {
+			if store.InEpoch(t.Ts, from, to) {
+				scoped = append(scoped, t)
+			}
+		}
+		trades = scoped
 	}
 	matched := papertrade.MatchRoundTrips(toFillRecords(trades))
 	p := papertrade.Payoffs(matched.Closed)

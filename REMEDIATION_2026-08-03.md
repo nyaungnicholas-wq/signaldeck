@@ -1,4 +1,16 @@
 # Remediation — 2026-08-03
+<!-- SUPERSEDED-SNAPSHOT -->
+> ## 📛 SUPERSEDED LIVE RECORD — HISTORICAL
+> **Marked 2026-08-04 by P2.** Any live accuracy, baseline or sample size quoted
+> below is the record **as it stood when this document was written**, not the
+> current one. It is kept because a dated record is evidence; it is labelled
+> because four such records were once in circulation with nothing to tell them
+> apart (FC1).
+>
+> **The one authoritative live record is `partials/live_accuracy.md`**, generated
+> from `data/accuracy_registry.json` by `tools/live_accuracy.py`. Reconciliation:
+> `proofs/P2_LIVE_RECORD_RECONCILIATION.md`.
+
 
 Two passes: fix everything found in the 2026-08-02 deep check, then re-audit and
 fix what that turned up. Every claim below was reproduced before the fix and

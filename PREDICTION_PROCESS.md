@@ -1,5 +1,55 @@
 # The prediction process, and the gate every prediction must pass
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** SUPERSEDED — historical record; current status is `STRATEGY_DECK.md`
+> **Scope:** How a prediction is produced and the gates it must pass before publication.
+> **Frozen claim classes:** FC3 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** PUBLISHABLE as a record, NOT as a current statement — see `STRATEGY_DECK.md`
+
+> **Backtest data: `pre-survivorship-fix`.** Every historical figure below was
+> computed on the universe as it stood BEFORE the 2026-08-04 survivorship
+> backfill (`proofs/P3A_SURVIVORSHIP_BACKFILL.md`) and the point-in-time
+> universe rebuild (`proofs/P3B_PIT_UNIVERSE.md`). It has not been re-run on
+> the repaired universe. Read the numbers as a record of what was measured
+> then, not as what the repaired data would produce now.
+
+> ## ⛔ SUPERSEDED — publishable as a record, not as current status
+> **P0 freeze 2026-08-04, lifted 2026-08-04** (`proofs/P10_FREEZE_LIFT.md`). Remediation
+> is complete. This document is publishable as a record of what was measured and when;
+> it **must not be quoted as *current* status** — quote `STRATEGY_DECK.md` for that.
+>
+> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · confidence-interval verdicts ·
+> survivorship control · point-in-time data · structural forecast counts.**
+>
+> **FC1 CLOSED in P2 (2026-08-04).** Layer 6 used to state one live record while
+> three other documents stated three others. No document types the record now:
+> every one of them includes the same generated block from
+> `partials/live_accuracy.md`, rendered from `data/accuracy_registry.json` by
+> `tools/live_accuracy.py`, and CI fails on a superseded literal. See
+> `proofs/P2_LIVE_RECORD_RECONCILIATION.md`.
+>
+> **Known defect remaining (FC3):** point 5 asserts survivorship control that
+> `ALPHA_WORKFLOW.md` §B2 measured open. `proofs/P3A_SURVIVORSHIP_BACKFILL.md`
+> re-measured it and closed 2019–2022, quantifying a 2023–2025 residual rather
+> than declaring it shut. Read point 5 against that window.
+>
+> **FC8 CLOSED in P6 (2026-08-04).** Part 3 used to state one outstanding structural
+> forecast count where the per-kind table summed to another. Neither is typed now;
+> both come from the generated block, by the same mechanism that closed FC1.
+>
+> **Interval language, corrected twice.** Layer 6 originally claimed "the whole
+> confidence interval below the null" and read that as significant negative skill,
+> at a time when the platform withheld every interval for this claim (distinct-day
+> counts 9/5/4/4 against the `min_distinct_blocks = 10` floor). P6 removed both the
+> interval claim and the verdict. The 1d sample has since crossed the floor and the
+> registry now publishes an interval for it, in the generated block — so the verdict
+> is once again available, but from the registry, not from this prose. See
+> `proofs/P6_GOVERNANCE_CLEANUP.md` §3 and `proofs/P10_FREEZE_LIFT.md` §3.
+>
+> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
+
 Two things live in this file. First, exactly how a number gets from a bar to a
 displayed forecast — the layers, in order. Second, the standing checklist that
 each layer is answerable to: the eighteen ways a quant system silently produces
@@ -84,7 +134,9 @@ displayed 0.85.
 
 Every prediction writes a row to `prediction_outcomes` with the probability
 frozen at prediction time, and a hash-chained entry to `prediction_ledger`
-(235k rows, tamper-evident). The resolver fills the forward return later.
+(tamper-evident against a third party without the signing key, and
+not evidence against the operator, who holds both the key and the database — see
+`proofs/P10_FREEZE_LIFT.md` §5). The resolver fills the forward return later.
 `internal/modelhealth` grades hourly on five components (skill, calibration,
 drift, freshness, stability) and returns a verdict that can stop emission.
 `tools/accuracy_registry.py` re-grades daily against the majority-class
@@ -92,26 +144,75 @@ baseline on independent (symbol, horizon, UTC-day) observations.
 
 ### Layer 6 — What it does with a failure
 
-This is the part most systems skip. The directional ensemble was graded at
-**48.1% on 13,044 independent observations against a 54.6% baseline** — the
-whole confidence interval below the null, which is significant *negative* skill,
-not merely no edge. `modelhealth` set `verdict: retired, emitting: false`. It is
-off. The structural predictors (trend21, vol21, liquidity21) are correctly
-`PENDING` — 12,529 forecasts recorded, 0 resolvable before **2026-08-07**,
-because a 21-day horizon cannot be graded sooner.
+This is the part most systems skip. The directional ensemble graded below its
+own baseline. The record is not typed here — it is the generated block below,
+and it is the same block every other document in this repository carries:
+
+<!-- BEGIN GENERATED live_accuracy -->
+
+Generated from `data/accuracy_registry.json` (grade of 2026-08-04T20:34:19) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+
+### Live record
+
+| Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
+|---|---|---|---|---|---|---|---|
+| directional-ensemble (1d) | all | 2,911 | 43.1% | 56.8% | -13.7pp | 10 | [31.1%, 55.9%] |
+| prequential-majority (1d) | all | 2,298 | 59.8% | 56.6% | +3.2pp | 7 | withheld |
+| directional-ensemble (1w) | all | 938 | 45.6% | 52.2% | -6.6pp | 5 | withheld |
+| prequential-majority (1w) | all | 332 | 57.2% | 49.8% | +7.4pp | 2 | withheld |
+| directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 300 | 55.3% | 60.0% | -4.7pp | 6 | withheld |
+| directional-ensemble (1w, high conviction) | \|p-0.5\|>=0.15 | 62 | 45.2% | 44.4% | +0.8pp | 4 | withheld |
+
+Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
+
+- `directional-ensemble (1d)` — FAILED — significantly worse than the naive baseline
+- `prequential-majority (1d)` — INSUFFICIENT DAYS (7/10 distinct days) — no interval, so no verdict
+- `directional-ensemble (1w)` — INSUFFICIENT DAYS (5/10 distinct days) — no interval, so no verdict
+- `prequential-majority (1w)` — INSUFFICIENT DAYS (2/10 distinct days) — no interval, so no verdict
+- `directional-ensemble (1d, high conviction)` — INSUFFICIENT DAYS (6/10 distinct days) — no interval, so no verdict
+- `directional-ensemble (1w, high conviction)` — INSUFFICIENT DAYS (4/10 distinct days) — no interval, so no verdict
+
+### Backtested claims with no live record yet
+
+- `filingsdrift21` — registered claim 50.0%, 77 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21` — registered claim 59.5%, 3,624 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21-crypto` — registered claim 79.5%, 66 forecasts recorded, 0 graded. Not a live result.
+- `trend21` — registered claim 73.1%, 3,649 forecasts recorded, 0 graded. Not a live result.
+- `trend21-crypto` — registered claim 93.4%, 66 forecasts recorded, 0 graded. Not a live result.
+- `trend63` — registered claim 70.0%, 3,649 forecasts recorded, 0 graded. Not a live result.
+- `vol21` — registered claim 55.8%, 3,665 forecasts recorded, 0 graded. Not a live result.
+
+**Multiplicity:** family_size=13, looks=9, divisor=117, corrected_alpha=0.00042735042735042735.
+
+**Survivorship:** epoch 2026-07-24; listing status resolvable for 326/335 graded symbols (97.3%): 9 inactive symbol(s) with no delisted_at.
+
+<!-- END GENERATED live_accuracy -->
+
+> No interval verdict is available: the platform withholds every interval for this claim (distinct-day blocks below `min_distinct_blocks = 10`).
+
+The operational consequence is what stands: `modelhealth` set
+`verdict: retired, emitting: false`. It is off. The structural predictors
+(trend21, vol21, liquidity21) are correctly `PENDING`, with 0 resolvable before
+**2026-08-07**, because a 21-day horizon cannot be graded sooner. The outstanding
+forecast counts are not typed here: they change daily and were previously stated
+two ways in this file. Read them per predictor from the generated block above,
+which is regenerated from `data/accuracy_registry.json`.
 
 ### Why inversion is not a rescue
 
 The registry's failure menu ("retire, invert, or relabel as experimental")
-invites a tempting arithmetic mistake, so the arithmetic goes on record here.
-Inverting the retired ensemble's 48.1% produces a 51.9% predictor — still
-**2.7 points below the 54.6% majority-class null**. The honest competing model
-was never a coin flip; it is the constant majority-class guess, and an
-inverted signal clears that bar only when the original sits below
-1 − 54.6% = **45.4%**. At 48.1% the ensemble is not anti-predictive enough to
-be useful upside down — it is noise around the base rate — and no sign flip or
-relabeling of a below-null signal beats the constant guess. Relabeling changes
-the badge, not the record.
+invites a tempting arithmetic mistake, so the arithmetic goes on record here —
+as a RULE rather than as a number, because numbers typed into prose are what
+produced FC1.
+
+Inverting an accuracy `a` produces `1 − a`. The honest competing model was never
+a coin flip; it is the constant majority-class guess at the null `p`. So an
+inverted signal clears the bar only when `1 − a > p`, i.e. only when the
+original sits **below `1 − p`**. Read the live table above: every directional
+row sits above its own `1 − null`, which is the arithmetic statement that the
+ensemble is not anti-predictive enough to be useful upside down. It is noise
+around the base rate. No sign flip or relabeling of a below-null signal beats
+the constant guess — relabeling changes the badge, not the record.
 
 This is enforced in code, not just prose: `daemon/internal/api/modelhealth.go`
 refuses `emitting: true` for any model key marked as an inverted or relabeled
@@ -184,7 +285,9 @@ by ~63× and lie), quarter-block-clustered confidence intervals over ~30
 independent quarters.
 
 **9. Class imbalance.** Skill is measured against the **majority-class
-baseline**, never 50%. This is why 48.1% reads as failure against a 54.6% null.
+baseline**, never 50%. This is why a directional accuracy in the high forties
+reads as failure here: the null it is measured against is the majority-class
+rate in the live table above, not a coin flip.
 
 **11. Wrong objective.** `internal/moneymetrics` leads every money surface with
 cost-adjusted expectancy, profit factor and payoff ratio; win rate is kept but
@@ -286,9 +389,11 @@ run: PASS — 20 invariant tests, 151,924 raw outcomes → 19,128 independent
 
 ## Part 3 — Pre-registration of the 2026-08-07 structural grading
 
-**Registered 2026-07-26.** As of this date the structural predictors carry
-~12,529 outstanding forecasts and **0 of 30 required observations have
-resolved** — nothing below was written with any knowledge of the outcome. That
+**Registered 2026-07-26.** As of that date the structural predictors carried
+outstanding forecasts and **0 of 30 required observations had
+resolved** — nothing below was written with any knowledge of the outcome. The
+count is deliberately not restated here; it was previously given two ways in this
+file, and the per-predictor figures are generated into the block in Part 1. That
 is the entire value of this section: after 2026-08-07 it can only be checked,
 never rewritten. The machine-readable twin of this section lives in the
 hash-chained `prereg_records` table (`internal/prereg`, served at

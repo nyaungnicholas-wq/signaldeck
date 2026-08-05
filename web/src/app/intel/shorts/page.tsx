@@ -13,6 +13,7 @@ import {
   type ShortVolumePoint,
 } from "@/lib/api";
 import HelpTip from "@/components/HelpTip";
+import SortHeader from "@/components/SortHeader";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
@@ -236,13 +237,17 @@ export default function ShortsPage() {
                 <div className="table-wrap">
                   <table className="v4-table w-full text-[0.75rem]">
                     <thead>
+                      {/* These were onClick on the <th> itself: sortable with
+                          a mouse, unreachable by keyboard, and never announced.
+                          SortHeader puts aria-sort on the cell and a real
+                          button inside it. */}
                       <tr className="text-left" style={{ color: "var(--dim)" }}>
-                        <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("symbol")}>SYMBOL<SortIcon active={sortKey === "symbol"} asc={sortAsc} /></th>
-                        <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("day")}>DAY<SortIcon active={sortKey === "day"} asc={sortAsc} /></th>
-                        <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("shortPct")}>RATIO<SortIcon active={sortKey === "shortPct"} asc={sortAsc} /></th>
+                        <SortHeader label="Symbol" active={sortKey === "symbol"} dir={sortAsc ? "asc" : "desc"} onSort={() => toggleSort("symbol")} className="px-4 py-2 font-normal" />
+                        <SortHeader label="Day" active={sortKey === "day"} dir={sortAsc ? "asc" : "desc"} onSort={() => toggleSort("day")} className="px-4 py-2 font-normal" />
+                        <SortHeader label="Ratio" active={sortKey === "shortPct"} dir={sortAsc ? "asc" : "desc"} onSort={() => toggleSort("shortPct")} className="px-4 py-2 font-normal" />
                         <th className="px-4 py-2 font-normal">LAST 30D</th>
-                        <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("shortVol")}>SHORT VOL<SortIcon active={sortKey === "shortVol"} asc={sortAsc} /></th>
-                        <th className="px-4 py-2 font-normal cursor-pointer" onClick={() => toggleSort("totalVol")}>TOTAL VOL<SortIcon active={sortKey === "totalVol"} asc={sortAsc} /></th>
+                        <SortHeader label="Short vol" active={sortKey === "shortVol"} dir={sortAsc ? "asc" : "desc"} onSort={() => toggleSort("shortVol")} className="px-4 py-2 font-normal" />
+                        <SortHeader label="Total vol" active={sortKey === "totalVol"} dir={sortAsc ? "asc" : "desc"} onSort={() => toggleSort("totalVol")} className="px-4 py-2 font-normal" />
                       </tr>
                     </thead>
                     <tbody>

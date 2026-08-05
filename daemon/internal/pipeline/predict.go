@@ -549,11 +549,20 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// no leakage introduced (the personal calibration was fit only on
 			// this symbol's already-resolved pairs, never on the live point).
 			wts := regimeWts
+			// basis names the tier these weights came from. Recorded per
+			// prediction because the fallback chain is the most likely thing to
+			// be silently carrying the fleet: a blend running on the static
+			// prior looks identical, after the fact, to one weighted by
+			// measured skill.
+			basis := "static"
+			if len(regimeWts) > 0 {
+				basis = "regime"
+			}
 			usePersonalCal := false
 			var personalCal func(float64) float64
 			if pm, ok, err := w.St.SymbolModel(ctx, s.ID, h); err == nil && ok && pm.Tier == symbolagent.TierPersonal {
 				if pw := decodeWeights(pm.Weights); len(pw) > 0 {
-					wts = pw
+					wts, basis = pw, "personal"
 				}
 				// Only take the personal calibration when it actually FITTED
 				// (>=MinCalibrationPairs, real spread) AND its persisted knots
@@ -585,9 +594,19 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				cal = fn(raw)
 			}
 			comps, _ := json.Marshal(c)
+			// WeightedProbability falls through to the equal-weight mean when
+			// the weight map carries no positive mass over the AVAILABLE legs,
+			// so a non-empty map is not proof the weights were used. Record the
+			// map that was PASSED and let the audit compare it against the legs
+			// that were actually present.
+			wjson, _ := json.Marshal(wts)
+			if len(wts) == 0 {
+				wjson = []byte("{}")
+			}
 			if err := w.St.UpsertPrediction(ctx, store.Prediction{
 				SymbolID: s.ID, Horizon: h, Ts: ts,
 				RawProb: raw, CalProb: cal, NUsed: nUsed, Components: string(comps),
+				Weights: string(wjson), Basis: basis,
 			}); err != nil {
 				return "", err
 			}

@@ -50,6 +50,14 @@ const (
 	VerdictRetired Verdict = "retired"
 	// VerdictProvisional — not enough evidence to judge either way.
 	VerdictProvisional Verdict = "provisional"
+	// VerdictUnattributable — STOP emitting, but claim nothing about the
+	// record. The grader's revision gate found contributing rows written by
+	// builds this repository does not contain, so the live record cannot be
+	// tied to any released code. That disqualifies the evidence in BOTH
+	// directions: it is not a FAILED verdict (no claim survives the gate) and
+	// it is not a clean bill of health either. A model nobody can reproduce
+	// does not get to keep publishing while the question is open.
+	VerdictUnattributable Verdict = "unattributable"
 )
 
 // Inputs is one model's measured state. Every field is an observation, never

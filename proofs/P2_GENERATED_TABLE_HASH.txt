@@ -1,0 +1,18 @@
+b251842c71425b43d671aadbb4882cb322ea205915e157a5450c86a0402422fe *partials/live_accuracy.md
+c323dc387e3483ebf311754f828be89ff9b93d6e8eec17e4735f10373ddaed47 *tools/live_accuracy.py
+1212441c04d60598fead7b843606e5912050101cf6a9bd3a8eb5d6d3ed7a21f3 *tools/test_live_accuracy.py
+
+Rendered 2026-08-04 from data/accuracy_registry.json, whose authoritative
+snapshot is the last successful grade at 2026-08-03T23:06:30 (the top-level
+registry is status=REFUSED with zero published rows, so the generator falls
+back to stale_last_registry and says so in the block itself).
+
+Reproduce:
+  python3 tools/live_accuracy.py --write
+  sha256sum partials/live_accuracy.md
+
+Verify no document has drifted from it:
+  python3 tools/live_accuracy.py --check --inject $(cat partials/INCLUDES.txt)
+
+Verify no document hand-types a live-record figure:
+  python3 tools/live_accuracy.py --scan $(git ls-files '*.md')

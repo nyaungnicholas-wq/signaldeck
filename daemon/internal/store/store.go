@@ -259,6 +259,24 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// leg-audit wave: the blend's WEIGHTS and the tier that supplied them.
+	// predictions.components already records what each leg said; nothing
+	// recorded how much each was believed, so a retired ensemble could not be
+	// diagnosed leg by leg — which is why it had to be retired whole. Existing
+	// rows keep '', which reads as "not recorded", never as "equal weights".
+	for _, col := range []struct{ name, ddl string }{
+		{"weights", `ALTER TABLE predictions ADD COLUMN weights TEXT NOT NULL DEFAULT ''`},
+		{"basis", `ALTER TABLE predictions ADD COLUMN basis TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('predictions') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
 	// multiplicity wave: the corrected divisor a loop hypothesis cleared. Live
 	// DBs already hold rows from before the loop fed PriorSearches, and those
 	// rows keep divisor=0 — the truthful state, meaning "correction unrecorded",
@@ -419,9 +437,25 @@ func (s *Store) DB() *sql.DB { return s.db }
 // UpsertSymbol inserts or reactivates a symbol and returns its row.
 func (s *Store) UpsertSymbol(ctx context.Context, symbol string, market md.Market, name string) (md.Symbol, error) {
 	now := time.Now().Unix()
+	// A row carrying delisted_at is NOT reactivated. That column records a
+	// MARKET fact: this ticker's company stopped trading. When an exchange
+	// recycles the ticker, the new company's data arrives addressed to the same
+	// string, and an unguarded `DO UPDATE SET active=1` silently resurrects the
+	// dead row and splices two securities into one price series — measured on
+	// ATC, which held Atotech's 2021-22 tape and a 2026 GraniteShares ETF on
+	// one row with a 1,365-day hole in the middle. 716 rows carry a delisting
+	// stamp today and every one of them was reachable this way, so the guard
+	// belongs here, at the single point every caller routes through, rather
+	// than in whichever caller happens to notice.
+	//
+	// A genuine re-listing under the same ticker therefore needs an operator to
+	// clear delisted_at deliberately. That is the intended cost: resurrection
+	// should be a decision, not a side effect of a poll.
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO symbols (symbol, market, name, active, added_at) VALUES (?,?,?,1,?)
-		ON CONFLICT(symbol, market) DO UPDATE SET active=1, name=CASE WHEN excluded.name != '' THEN excluded.name ELSE symbols.name END`,
+		ON CONFLICT(symbol, market) DO UPDATE SET
+		  active = CASE WHEN symbols.delisted_at IS NULL OR symbols.delisted_at = 0 THEN 1 ELSE symbols.active END,
+		  name   = CASE WHEN excluded.name != '' THEN excluded.name ELSE symbols.name END`,
 		symbol, string(market), name, now)
 	if err != nil {
 		return md.Symbol{}, err
@@ -547,6 +581,34 @@ func (s *Store) LastBars(ctx context.Context, symbolID int64, tf md.Timeframe, n
 		SELECT ts, open, high, low, close, volume FROM
 		  (SELECT * FROM bars WHERE symbol_id=? AND tf=? ORDER BY ts DESC LIMIT ?)
 		ORDER BY ts`, symbolID, string(tf), n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []md.Bar
+	for rows.Next() {
+		b := md.Bar{SymbolID: symbolID, TF: tf}
+		if err := rows.Scan(&b.Ts, &b.Open, &b.High, &b.Low, &b.Close, &b.Volume); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// BarsBefore returns the most recent n bars STRICTLY BEFORE t, ascending.
+//
+// The strictness is the point. This exists for measurements that must not see
+// the bar they are about to act on — a barrier level sized from volatility at
+// entry may only use bars that had already closed when the entry filled, and
+// the entry fills at the open of bar t, whose own high, low and close are still
+// unknown at that moment. `ts < t` is that rule expressed in SQL, where it
+// cannot be forgotten by a caller.
+func (s *Store) BarsBefore(ctx context.Context, symbolID int64, tf md.Timeframe, t int64, n int) ([]md.Bar, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT ts, open, high, low, close, volume FROM
+		  (SELECT * FROM bars WHERE symbol_id=? AND tf=? AND ts<? ORDER BY ts DESC LIMIT ?)
+		ORDER BY ts`, symbolID, string(tf), t, n)
 	if err != nil {
 		return nil, err
 	}

@@ -152,3 +152,9 @@ func (c *countingSource) ModelHealth(ctx context.Context, m string) (string, err
 func (c *countingSource) Preregistration(ctx context.Context) (PreregSummary, error) {
 	return c.inner.Preregistration(ctx)
 }
+func (c *countingSource) EarliestGradeableOn(ctx context.Context) (string, bool, error) {
+	return c.inner.EarliestGradeableOn(ctx)
+}
+func (c *countingSource) EarliestVerdictOn(ctx context.Context) (string, bool, error) {
+	return c.inner.EarliestVerdictOn(ctx)
+}

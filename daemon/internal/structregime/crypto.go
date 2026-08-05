@@ -86,11 +86,56 @@ func PredictTrendCrypto(closes []float64) (Forecast, bool) {
 	}
 	f.Kind = KindTrendCrypto21
 	f.HistoricalAccuracy = cryptoAccuracyFor(KindTrendCrypto21, f.Conviction)
+	f.EvidenceRows, f.EvidenceClusters = EvidenceSizeFor(KindTrendCrypto21, f.Conviction)
 	// PredictTrend already stamped the US-STOCK forward-return disclosure; this
 	// is a crypto row, where forward return was never measured, so re-derive it
 	// for this kind (empty) rather than inheriting a number from another market.
 	f.Tradeability = TradeabilityFor(KindTrendCrypto21, f.Conviction)
 	return f, true
+}
+
+// EvidenceSizeFor reports how much measurement stands behind the accuracy
+// cryptoAccuracyFor serves at this conviction: rows is the sample the TIER was
+// measured on, clusters the independent quarter blocks behind its CI. Values
+// come verbatim from the 2026-07-18 loop recorded in this file's package doc.
+//
+// Only the crypto kinds populate this. The 2026-07-17 equity loop did not
+// record per-tier sample sizes, and trend63 explicitly did not record band
+// shares at all, so those kinds report NOTHING rather than a plausible number.
+// Inventing one here would be the same class of error the rest of this package
+// refuses.
+//
+// Why this ships. The crypto tiers are 98.5% on 68 rows and 96.4% on 28 rows,
+// across 4 and 6 quarter clusters, against ~900 stocks and 7.5 years for the
+// equity tables. The 2026-08-03 geometry control put a date-clustered CI of
+// [84.48, 100.00] on the crypto trend number and found every sample sitting at
+// z>=1.5, where the driftless null alone predicts 91.41%. The claim itself is
+// deliberately NOT changed: it is hash-chained in internal/prereg and the
+// 2026-08-07 grade is the honest test of it. Editing a pre-registered claim
+// days before it is graded is the exact move that record exists to prevent.
+// What was missing was never a different number, it was the size of the one
+// already being served. That is what this adds.
+func EvidenceSizeFor(k Kind, conv float64) (rows, clusters int) {
+	switch k {
+	case KindTrendCrypto21:
+		// Tiers at or above 0.5 all serve the >0.5 cumulative 98.5% (n=68); the
+		// 100% bands above it were measured on 3 clusters and are never quoted.
+		if conv >= 0.5 {
+			return 68, 4
+		}
+		return 106, 4
+	case KindLiquidityCrypto21:
+		switch {
+		case conv >= 0.9:
+			return 28, 6
+		case conv >= 0.8:
+			return 46, 6
+		case conv >= 0.5:
+			return 91, 6
+		}
+		return 161, 6
+	}
+	return 0, 0
 }
 
 // PredictLiquidityCrypto forecasts whether a CRYPTO symbol's mean daily
@@ -104,6 +149,7 @@ func PredictLiquidityCrypto(closes, volumes []float64) (Forecast, bool) {
 	}
 	f.Kind = KindLiquidityCrypto21
 	f.HistoricalAccuracy = cryptoAccuracyFor(KindLiquidityCrypto21, f.Conviction)
+	f.EvidenceRows, f.EvidenceClusters = EvidenceSizeFor(KindLiquidityCrypto21, f.Conviction)
 	// Same reason as PredictTrendCrypto: never inherit another market's measured
 	// forward return onto a crypto row.
 	f.Tradeability = TradeabilityFor(KindLiquidityCrypto21, f.Conviction)

@@ -1,5 +1,39 @@
 # Building a market-research system that refuses to lie to me
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** SUPERSEDED — historical record; current status is `STRATEGY_DECK.md`
+> **Scope:** Narrative account of how the platform was built and what it measured.
+> **Frozen claim classes:** FC3 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** PUBLISHABLE as a record, NOT as a current statement — see `STRATEGY_DECK.md`
+
+> **Backtest data: `pre-survivorship-fix`.** Every historical figure below was
+> computed on the universe as it stood BEFORE the 2026-08-04 survivorship
+> backfill (`proofs/P3A_SURVIVORSHIP_BACKFILL.md`) and the point-in-time
+> universe rebuild (`proofs/P3B_PIT_UNIVERSE.md`). It has not been re-run on
+> the repaired universe. Read the numbers as a record of what was measured
+> then, not as what the repaired data would produce now.
+
+> ## ⛔ SUPERSEDED — publishable as a record, not as current status
+> **P0 freeze 2026-08-04, lifted 2026-08-04** (`proofs/P10_FREEZE_LIFT.md`). Remediation
+> is complete. This document is publishable as a record of what was measured and when;
+> it **must not be quoted as *current* status** — quote `STRATEGY_DECK.md` for that.
+>
+> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · confidence-interval verdicts ·
+> survivorship control · point-in-time data · "already built / verified" status.**
+>
+> Known defects: it prints a live-record snapshot that three other documents state
+> differently; and it narrates survivorship as closed while `ALPHA_WORKFLOW.md` §B2
+> measures it open.
+>
+> **Closed in P6:** this document previously asserted "the entire day-clustered
+> interval below the baseline" while the platform withholds every interval for
+> insufficient distinct blocks. The interval verdict was removed — see
+> `proofs/P6_GOVERNANCE_CLEANUP.md` §3.
+>
+> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
+
 SignalDeck is a market-intelligence platform I built to answer one question
 honestly: **does any of this actually predict anything?**
 
@@ -98,15 +132,56 @@ not a live number.
 The flagship directional ensemble — the thing the whole project was built
 around — **graded FAILED and was retired**. Its full live record:
 
-| Horizon | Live accuracy | Baseline | Skill |
-|---|---|---|---|
-| 1d | 48.1% | 54.6% | **−6.5pp** |
-| 1w | 46.2% | 54.4% | **−8.2pp** |
-| 1d high-conviction | 48.6% | 56.2% | **−7.6pp** |
+<!-- BEGIN GENERATED live_accuracy -->
 
-Worse than guessing the majority class, with the entire day-clustered interval
-below the baseline. An auto-retire rule — pre-registered *before* the numbers
-came in — fired and stopped it publishing.
+Generated from `data/accuracy_registry.json` (grade of 2026-08-04T20:34:19) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+
+### Live record
+
+| Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
+|---|---|---|---|---|---|---|---|
+| directional-ensemble (1d) | all | 2,911 | 43.1% | 56.8% | -13.7pp | 10 | [31.1%, 55.9%] |
+| prequential-majority (1d) | all | 2,298 | 59.8% | 56.6% | +3.2pp | 7 | withheld |
+| directional-ensemble (1w) | all | 938 | 45.6% | 52.2% | -6.6pp | 5 | withheld |
+| prequential-majority (1w) | all | 332 | 57.2% | 49.8% | +7.4pp | 2 | withheld |
+| directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 300 | 55.3% | 60.0% | -4.7pp | 6 | withheld |
+| directional-ensemble (1w, high conviction) | \|p-0.5\|>=0.15 | 62 | 45.2% | 44.4% | +0.8pp | 4 | withheld |
+
+Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
+
+- `directional-ensemble (1d)` — FAILED — significantly worse than the naive baseline
+- `prequential-majority (1d)` — INSUFFICIENT DAYS (7/10 distinct days) — no interval, so no verdict
+- `directional-ensemble (1w)` — INSUFFICIENT DAYS (5/10 distinct days) — no interval, so no verdict
+- `prequential-majority (1w)` — INSUFFICIENT DAYS (2/10 distinct days) — no interval, so no verdict
+- `directional-ensemble (1d, high conviction)` — INSUFFICIENT DAYS (6/10 distinct days) — no interval, so no verdict
+- `directional-ensemble (1w, high conviction)` — INSUFFICIENT DAYS (4/10 distinct days) — no interval, so no verdict
+
+### Backtested claims with no live record yet
+
+- `filingsdrift21` — registered claim 50.0%, 77 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21` — registered claim 59.5%, 3,624 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21-crypto` — registered claim 79.5%, 66 forecasts recorded, 0 graded. Not a live result.
+- `trend21` — registered claim 73.1%, 3,649 forecasts recorded, 0 graded. Not a live result.
+- `trend21-crypto` — registered claim 93.4%, 66 forecasts recorded, 0 graded. Not a live result.
+- `trend63` — registered claim 70.0%, 3,649 forecasts recorded, 0 graded. Not a live result.
+- `vol21` — registered claim 55.8%, 3,665 forecasts recorded, 0 graded. Not a live result.
+
+**Multiplicity:** family_size=13, looks=9, divisor=117, corrected_alpha=0.00042735042735042735.
+
+**Survivorship:** epoch 2026-07-24; listing status resolvable for 326/335 graded symbols (97.3%): 9 inactive symbol(s) with no delisted_at.
+
+<!-- END GENERATED live_accuracy -->
+
+That table used to be typed here, and three other documents typed three
+different versions of it — **FC1**. It is now generated from the registry into
+`partials/live_accuracy.md` and included identically everywhere; CI fails if a
+superseded figure reappears. See `proofs/P2_LIVE_RECORD_RECONCILIATION.md`.
+
+> No interval verdict is available: the platform withholds every interval for this claim (distinct-day blocks below `min_distinct_blocks = 10`).
+
+What stands without an interval is the point estimates above, each at or below
+its baseline, and the operational outcome: an auto-retire rule — pre-registered
+*before* the numbers came in — fired and stopped it publishing.
 
 The research loop tells the same story. It searches a 48-rule grid daily and
 reports, most days:

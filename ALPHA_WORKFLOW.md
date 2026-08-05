@@ -1,5 +1,47 @@
 # SignalDeck Alpha Workflow — merged spec
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** AUTHORITATIVE — freeze lifted 2026-08-04
+> **Scope:** Merged alpha-workflow spec. §B2/§B3 are the corroborated authority on the two open data-integrity defects.
+> **Frozen claim classes:** FC3, FC6 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** PUBLISHABLE — caveats are the frozen classes above
+
+> **Backtest data: `pre-survivorship-fix`.** Every historical figure below was
+> computed on the universe as it stood BEFORE the 2026-08-04 survivorship
+> backfill (`proofs/P3A_SURVIVORSHIP_BACKFILL.md`) and the point-in-time
+> universe rebuild (`proofs/P3B_PIT_UNIVERSE.md`). It has not been re-run on
+> the repaired universe. Read the numbers as a record of what was measured
+> then, not as what the repaired data would produce now.
+
+> ## ⚠ P0 freeze (2026-08-04) — LIFTED 2026-08-04 by `proofs/P10_FREEZE_LIFT.md`
+> Remediation complete; freeze lifted. **Do not attach capital.** Figures below are historical unless generated.
+> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · intervals · survivorship · point-in-time data ·
+> kill switch · position sizing · "already built / verified".**
+>
+> **This file is the corroborated authority on the two data-integrity defects.**
+> Its §B2/§B3 measurements were never in dispute — they are what other documents
+> contradicted — and **both have since been re-derived and moved**, so read the
+> UPDATE blocks inside §B2 and §B3 rather than the numbers in this header:
+>
+> - **§B2 survivorship** — the "21 delistings / 1,077 names ≈ 2% cumulative"
+>   figure is the **pre-import** state, confirmed against
+>   `data/signaldeck.db.bak-preimport-20260802`. Now 723 / 1,777 with 716
+>   `delisted_at` stamps. **Materially closed 2019–2022, residual 2023–2025 gap
+>   quantified** — not closed. `proofs/P3A_SURVIVORSHIP_BACKFILL.md`.
+> - **§B3 point-in-time universe** — `universe_membership` now holds **1,854,228
+>   rows over 2,146 days**, not zero. The predicted look-ahead in the
+>   cross-sectional denominators was **measured and is not there**; the one
+>   active-set-applied-to-history path is documented and non-default.
+>   `proofs/P3B_PIT_UNIVERSE.md`.
+>
+> Its status table remains frozen: "Kelly sizing — Exists" is contradicted by
+> `ARCHITECTURE_EV.md` (riskgate sizes only *after* go/no-go; portopt not wired
+> to allocation).
+>
+> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
+
 One pipeline combining the three specs: **ensemble stacking & calibration**
 (spec 1), **system audit** (spec 2), and **PIT data → triple-barrier →
 meta-labeling → Kelly** (spec 3).
@@ -94,6 +136,25 @@ go to zero and learns to buy falling knives.
 
 `tools/backfill_delistings.py` exists but has not closed this gap.
 
+> **UPDATE — P3A, 2026-08-04 (`proofs/P3A_SURVIVORSHIP_BACKFILL.md`).** The
+> measurement above is the **pre-import** state and is confirmed as such against
+> `data/signaldeck.db.bak-preimport-20260802`. An import ran 2026-08-02 and was
+> never re-derived until now: **21 → 723** symbols that stopped trading,
+> **16 → 716** `delisted_at` stamps, **1,077 → 1,777** symbols with daily bars.
+>
+> **Substantially closed for 2019–2022; NOT closed for 2023–2025.** The vendor's
+> own candidate counts for those years were 16 / 12 / 23, so the recent window is
+> thin at the source, not at the filter. Rate by year: 3.4% (2020), 25.1% (2021,
+> the de-SPAC wave), 20.8% (2022), then 2.6% / 2.7% / 4.3%.
+>
+> **Effect measured, not assumed:** re-deriving the cross-sectional factor edge on
+> the 706 added confirmed-dead names moved every leg by less than 0.55pp and
+> changed no verdict. `trend21` re-validated survivorship-clean: 74% of its
+> conviction spread is barrier geometry, survivorship effect +0.8pp.
+>
+> A3 may be marked *"materially closed 2019–2022, residual 2023–2025 gap
+> quantified"* — not *"closed"*.
+
 *Blocks:* cross-sectional ranking, any long-horizon backtest, all profit claims.
 
 ### B3 — `universe_membership` is empty (CRITICAL)
@@ -103,6 +164,32 @@ point-in-time membership design — and holds **zero rows**. There is no PIT
 universe definition, so any cross-sectional Z-score or rank is computed against
 today's membership applied to historical dates. That is lookahead bias in the
 denominator of every cross-sectional feature.
+
+> **UPDATE — P3B, 2026-08-04 (`proofs/P3B_PIT_UNIVERSE.md`). CLOSED, and the
+> second sentence above was wrong.**
+>
+> `universe_membership` now holds **1,854,228** rows over **2,146** days
+> (2018-07-26 → 2026-08-05, 1,777 symbols), derived from daily-bar evidence by
+> `store.RebuildUniverseMembership` / `sdmaint build-universe`. Four production
+> queries and seven Go regression tests prove no symbol appears before its first
+> print or survives past its last.
+>
+> But the lookahead this section predicted was **measured and is not there**.
+> Every cross-sectional denominator in the repository was already
+> same-day-evidence-derived: `internal/alphax` builds its median from the
+> **recorded feature rows** of that day (its cross-section is 1,077 against a PIT
+> universe of 1,059 over the month `features` covers — agreement within 1.7%),
+> and `tools/xsfactor_edge.py --universe all` and
+> `tools/revalidate_structural.py` both select on same-day bars. The only
+> active-set-applied-to-history path is `xsfactor_edge.py --universe active`,
+> which the tool documents and does not default to. **No feature was rebuilt and
+> no model re-run, because none had the defect.**
+>
+> Two real defects fell out of doing it anyway: `universe_membership` was missing
+> from `schema.sql` (present only in the operator's own database, absent from
+> every cold clone), and symbol row 1122 `ATC` holds **two different securities** —
+> Atotech to 2022-08-16 and a GraniteShares ETF from 2026-05-12 on a recycled
+> ticker. 61 symbol-days are excluded and counted; the row still needs splitting.
 
 *Blocks:* spec 3 Phase 2.1 entirely.
 
