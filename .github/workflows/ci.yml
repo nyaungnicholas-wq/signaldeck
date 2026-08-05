@@ -253,6 +253,25 @@ jobs:
             exit 0
           fi
           python3 tools/live_accuracy.py --check --inject $(cat partials/INCLUDES.txt)
+      # §8 stated universe_membership, the delisted_at windows and bar-history
+      # completeness as hand-typed figures with a date stamp. On 2026-08-05, one
+      # day after they were typed, every one was already stale — universe by
+      # 0.8M rows, delisted_at by a factor of 2.6, and the window ratio by enough
+      # to invert its conclusion (15.7% typed, 180% measured). That is FC1's
+      # lesson a second time, so §8's figures are generated the same way.
+      #
+      # Also an operator gate: this reads the 4.9 GB database, which is
+      # gitignored and can never exist on a runner. The arithmetic itself IS
+      # covered on a clean checkout — tools/test_deck_facts.py builds a fixture
+      # whose answers are known by construction and runs in the unittest
+      # discovery above, including an assertion that the deck carries the block.
+      - name: Deck facts — §8's figures still match the database (needs data/)
+        run: |
+          if [ ! -f data/signaldeck.db ]; then
+            echo "no database in this checkout (data/ is gitignored) — deck-vs-database is the operator gate; the arithmetic and the deck's marker pair are covered by tools/test_deck_facts.py above"
+            exit 0
+          fi
+          python3 tools/deck_facts.py --check --inject STRATEGY_DECK.md
       # The snapshot is the ONLY grading path an outside reader can run, and it
       # is worthless if a file REPRODUCE.md tells them to check is missing from
       # the clone. This asserts completeness, per-file re-hash, and git-tracked

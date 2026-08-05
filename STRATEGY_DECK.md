@@ -166,13 +166,15 @@ defect that actually happened here:
 | `TestFlatten_ClosesAPositionNothingElseWouldClose` (`internal/pipeline/paperflatten_test.go`) | The terminal drawdown rung being decided but not wired |
 
 **Bar-history completeness — MEASURED, with a stated shortfall.**
-`tools/bars_completeness.py` (added 2026-08-04): stocks **96.49%** coverage over
-1,916,310 symbol-days against an SPY-derived 1,907-session calendar; crypto
-100%. A third of the shortfall is rights, warrants and units, which trade
-sporadically by construction — **common stock alone is 97.36%**. Ten symbols of
-1,770 stop printing early with no `delisted_at`, nine of them warrants. See
-`proofs/P11_BARS_COMPLETENESS.md`. This bounds the foundation under every
-point-in-time claim; it does not repair the 43,857 missing common-stock
+`tools/bars_completeness.py` (added 2026-08-04) measures stock and crypto
+coverage against a calendar derived from the most-printed stock symbol; the
+current figures are in §8's generated block, which reads them from that same
+tool rather than restating them here. `proofs/P11_BARS_COMPLETENESS.md` analyses
+the composition of the shortfall as of 2026-08-04: about a third of it is
+rights, warrants and units, which trade sporadically by construction, so common
+stock alone measured roughly a point higher, and the handful of symbols that
+stop printing early with no `delisted_at` were almost all warrants. This bounds
+the foundation under every point-in-time claim; it does not repair the missing
 symbol-days.
 
 **CI:** `.github/workflows/ci.yml` runs `go build`, `go vet`, `go test -race ./...`
@@ -184,14 +186,42 @@ lint and build.
 ## 8. Open data defects
 These are the reasons nothing here is finished.
 
-> **READ THIS BEFORE ANY NUMBER BELOW.** Every measurement in this section is
+> **READ THIS BEFORE ANY NUMBER BELOW.** These measurements used to be
 > hand-typed with a date stamp. On 2026-08-05, one day after v1.1 was written,
 > **every one of them was already stale** — `universe_membership` by 0.8M rows,
-> the `delisted_at` count by a factor of 2.6, and the survivorship residual by
-> enough to invert its conclusion. FC1 taught this exact lesson about the
-> accuracy record and the fix was applied only to the accuracy record. Until
-> these are generated too (§14.4), treat every figure here as *as-of its stamp*
-> and re-measure before relying on one.
+> the `delisted_at` count by a factor of 2.6, and the survivorship window ratio
+> by enough to invert its conclusion. FC1 taught this exact lesson about the
+> accuracy record and the fix was applied only to the accuracy record. It is
+> applied here now: `tools/deck_facts.py` measures them from
+> `data/signaldeck.db` into the generated block below, and CI fails when the
+> block no longer matches the database. **A figure restated in the prose of this
+> section is still hand-typed — the block is the measurement, the prose is the
+> argument about it.**
+
+<!-- BEGIN GENERATED deck_facts -->
+
+Measured from `data/signaldeck.db` by `tools/deck_facts.py`. Do not edit by hand — CI fails when this block no longer matches the database. The universe reaches **2026-08-05**, the last observation day it holds.
+
+| Measurement | Value |
+|---|---|
+| `universe_membership` rows | 2,642,060 |
+| — observation days | 2,146 |
+| — distinct symbols | 2,947 |
+| — `source` values present | `bars-1d` |
+| `symbols.delisted_at` stamps | 1,886 |
+| — delisted 2020-2022 | 622 |
+| — delisted 2023-2025 | 1,122 |
+| — recent window against earlier | **180.4%** of the 2020-2022 count |
+| Daily-bar calendar (from `SPY`) | 1,908 sessions |
+| Stock bar coverage | 90.65% — 2,637,147 of 2,909,163 symbol-days over 2,940 symbols |
+| — still-listed names only | 99.66% over 1,054 symbols |
+| — names carrying `delisted_at` only | 79.36% over 1,886 symbols |
+| — symbols that stop printing early with no `delisted_at` | 10 |
+| Crypto bar coverage | 100.00% over 7 symbols |
+
+The membership derives entirely from the daily-bar history, so it is point-in-time only to the extent that history is complete: the stock coverage row is the bound under every point-in-time claim in this deck. **Read the two cohort rows before the blended one.** They answer different questions — the still-listed row is whether the live universe has holes, the delisted row is how densely the imported dead names were ever sampled — and while dead names are being imported the blended figure moves with the import rather than with data quality. The symbols that stop printing with no `delisted_at` are the survivorship-relevant ones: they leave the universe without being recorded as dead, which is indistinguishable from having stopped looking.
+
+<!-- END GENERATED deck_facts -->
 
 ### 8.1 FC1 — closed in documents 2026-08-04, closed in code 2026-08-05
 
@@ -214,7 +244,7 @@ The gate scanned `*.md` only. The shipped surfaces were never covered, and each 
 
 v1.1 stated: `delisted_at` on 716 symbols; 600 delistings for 2020–2022 against 94 for 2023–2025 (15.7%); Form 25 closure work "not yet ingested".
 
-**Re-measured 2026-08-05 against `data/signaldeck.db`:** 1,886 symbols carry `delisted_at`; **2020–2022 holds 622 and 2023–2025 holds 1,122 — the recent window is now 180% of the earlier one, not 15.7%.** The registry's survivorship bound cites `edgar:form-25` as its source, so the ingest has landed. The under-coverage that FC3 was narrowed to no longer appears in the data.
+**The current counts are in the generated block above, and they invert that conclusion:** the recent window no longer holds a small fraction of the earlier one, it holds substantially more. The registry's survivorship bound cites `edgar:form-25` as its source, so the ingest has landed. The under-coverage that FC3 was narrowed to no longer appears in the data. *(The three figures that used to sit in this paragraph are the reason this section is generated: they were re-measured by hand on 2026-08-05 and would have gone stale on the next ingest exactly as their predecessors did.)*
 
 **FC3 should not be lifted on this measurement alone.** Two things must be confirmed first: that the STAGING review step `proofs/P3A_SURVIVORSHIP_BACKFILL.md` requires actually happened before these rows reached `symbols.delisted_at`, and that `P3A` is amended to record the new counts. Until both, FC3 stays frozen and this paragraph is the disclosure.
 
@@ -222,7 +252,13 @@ v1.1 stated: `delisted_at` on 716 symbols; 600 delistings for 2020–2022 agains
 
 ### 8.3 Point-in-time universe (FC4)
 
-`universe_membership` held 0 rows and now holds **2,642,060** across 2,146 days and **2,947** symbols (re-measured 2026-08-05; v1.1 said 1,854,228 / 1,777). Every row carries `source = 'bars-1d'`, so the membership is only as point-in-time as the retained daily-bar history is complete — and §7 bounds that below 100%. FC4 stays frozen for that narrower claim; the derivation has not been audited.
+`universe_membership` held 0 rows when FC4 was raised and is now populated; its row, day and symbol counts, and the `source` values every row carries, are in the generated block above (v1.1 typed 1,854,228 rows over 1,777 symbols, which was already 0.8M rows behind the database a day later). The membership derives entirely from the daily-bar history, so it is only as point-in-time as that history is complete — the block bounds that below 100% in the same measurement. FC4 stays frozen for that narrower claim; the derivation has not been audited.
+
+**The blended coverage figure is not a data-loss measurement, and reading it as one is a mistake this deck has already made once.** The block splits it by listing status because the two cohorts answer different questions. Still-listed names are close to complete: the live universe has no meaningful holes. The shortfall is almost entirely in names carrying `delisted_at`, and it is not damage — it is how sparsely those names were ever sampled. `tools/bars_completeness.py` counts every session between a symbol's own first and last bar as expected, so a dead name whose retained history runs at a weekly cadence scores near 20% while having lost nothing it once had.
+
+**That is a point-in-time defect in its own right, and it is newly worse.** Membership is derived from bars, so a name sampled weekly is recorded as a universe member on roughly one day in five of the days it was actually listed. The survivorship import reduced the bias FC3 names — dead companies are in the historical universe now — and in the same motion introduced flicker in exactly the names it added: they appear and disappear on the sampling cadence rather than on the market's. **A point-in-time universe reconstructed over the imported era therefore under-counts dead names on most days, in a pattern that correlates with how thinly each was covered.** No study on this platform has been re-run against that.
+
+**Coverage is a moving number while the import runs, and was one when it was last published.** The daily-bar symbol count went 1,070 → 1,770 → 2,940 over three days as the import landed in batches. §7's previously published bound was measured in the middle of that, at 1,770 symbols, and was already describing a population that no longer existed when it was filed. This is why the figure is generated: any hand-typed statement of it is a snapshot of an import in progress, presented as a property of the data.
 
 ### 8.4 Cost, capacity and liquidity — NOT BUILT
 
@@ -348,5 +384,5 @@ Single operator, single machine. There is no independent reviewer.
 3. Create the public anchors repository, schedule `ops/anchor-publish.sh` daily, and treat a push failure as an alert rather than a log line.
 4. Add third-party timestamping over the chain head, weekly. Steps 3 and 4 differ: step 3 moves evidence to a host whose credentials the operator still holds.
 5. Configure `SIGNALDECK_OFFSITE_DIR` to a volume that is not the machine's own.
-6. ~~Audit the completeness of the `bars-1d` history itself.~~ **DONE 2026-08-04** — `tools/bars_completeness.py`, `proofs/P11_BARS_COMPLETENESS.md`. Stocks 96.49% (common stock alone 97.36%); crypto 100%; 10 of 1,770 symbols stop early with no `delisted_at`, nine of them warrants. The foundation is now bounded rather than assumed. The residual 43,857 missing common-stock symbol-days are sized, not repaired.
+6. ~~Audit the completeness of the `bars-1d` history itself.~~ **DONE 2026-08-04** — `tools/bars_completeness.py`, `proofs/P11_BARS_COMPLETENESS.md`. The foundation is now bounded rather than assumed, and the bound is **generated into §8** rather than recorded here: the figures P11 filed on 2026-08-04 (stocks 96.49%, common stock alone 97.36%, over 1,770 symbols) are already well behind the database, because the symbol count has since grown by two-thirds and the new names carry shorter histories. That is the same staleness this line would have kept reproducing. The shortfall is sized, not repaired.
 7. ~~File the remaining phase artefacts.~~ **DONE 2026-08-04** — P1 through P11 are filed in `proofs/`. P2 and P3A, the two this line was waiting on, are among them.

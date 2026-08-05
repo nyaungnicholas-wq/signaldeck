@@ -20,11 +20,14 @@
 //
 // The load-bearing part is the guard, not the rule. Our own ingestion failing
 // looks EXACTLY like the whole market delisting at once, so before marking
-// anything the worker checks fleet liveness: a healthy majority of stocks must
-// have printed a bar recently. If they have not, the pipeline is broken, and the
-// worker marks NOTHING and says so. Without that check the first Alpaca outage
-// would have declared the entire universe dead and permanently corrupted every
-// point-in-time universe built afterwards.
+// anything the worker checks fleet liveness: a healthy majority of the stocks
+// NOT ALREADY RECORDED AS DEAD must have printed a bar recently. If they have
+// not, the pipeline is broken, and the worker marks NOTHING and says so.
+// Without that check the first Alpaca outage would have declared the entire
+// universe dead and permanently corrupted every point-in-time universe built
+// afterwards. The qualifier is load-bearing too: judged over all rows instead,
+// the guard reads a warehouse of imported dead names as an outage and disables
+// itself, which is what happened for three days after the 2026-08-02 import.
 //
 // # Delisting is reversible
 //
@@ -52,11 +55,14 @@ const (
 	// register, and a false positive costs more than a late detection because it
 	// removes a tradable name from every historical universe.
 	staleSessions = 25
-	// fleetLiveFraction is the share of stocks that must have printed a bar
-	// within staleSessions before ANY symbol may be marked. Below it the fault
-	// is ours, not the market's.
+	// fleetLiveFraction is the share of the NOT-YET-DELISTED stocks that must
+	// have printed a bar within staleSessions before ANY symbol may be marked.
+	// Below it the fault is ours, not the market's. Already-dead names are
+	// excluded from the denominator: they are silent by definition, so counting
+	// them measures how many corpses we hold, not whether ingestion works.
 	fleetLiveFraction = 0.60
 	// minFleetSize is the floor below which fleet liveness cannot be judged.
+	// Counted over the same not-yet-delisted population as fleetLiveFraction.
 	minFleetSize = 50
 	// sessionsPerCalendarDay converts trading sessions to calendar days (5
 	// trading days per 7 calendar days), plus slack for holidays.
@@ -93,24 +99,39 @@ func (w *DelistingDetector) Run(ctx context.Context) (string, error) {
 
 	// Fleet liveness FIRST. Marking on a broken pipeline is the one failure this
 	// worker must never commit, so the check runs before any decision is taken.
-	live := 0
+	//
+	// Judged over the symbols NOT already recorded as dead. A name carrying
+	// delisted_at has no recent bar BY DEFINITION, so counting it as evidence
+	// about our ingestion makes every dead name look like a symptom of our own
+	// outage. That is not hypothetical: the bulk import of 1,869 delisted
+	// symbols on 2026-08-02 drove the all-rows fraction from 98% to 36%, and the
+	// detector marked nothing for the three days that followed while ingestion
+	// was healthy. The guard was right about its own arithmetic and wrong about
+	// the world. The marking loop below still walks EVERY row, delisted ones
+	// included — that is what clears the marker when a name resumes printing.
+	judgeable, live := 0, 0
 	for _, r := range rows {
+		if r.DelistedAt != 0 {
+			continue
+		}
+		judgeable++
 		if r.LastTs >= cutoff {
 			live++
 		}
 	}
-	if len(rows) < minFleetSize {
-		return fmt.Sprintf("fleet too small to judge liveness (%d < %d) — nothing marked", len(rows), minFleetSize), nil
+	if judgeable < minFleetSize {
+		return fmt.Sprintf("fleet too small to judge liveness (%d not-yet-delisted < %d) — nothing marked",
+			judgeable, minFleetSize), nil
 	}
-	frac := float64(live) / float64(len(rows))
+	frac := float64(live) / float64(judgeable)
 	if frac < fleetLiveFraction {
 		// This is the honest reading: our ingestion is behind, not the market.
 		_ = w.St.InsertDQ(ctx, md.DQEvent{
 			Ts:   now.Unix(),
 			Kind: "delisting_check_skipped",
-			Detail: fmt.Sprintf("only %.0f%% of %d stocks printed a bar within %d sessions — "+
-				"treating this as an ingestion fault, not %d delistings; nothing marked",
-				frac*100, len(rows), staleSessions, len(rows)-live),
+			Detail: fmt.Sprintf("only %.0f%% of %d not-yet-delisted stocks printed a bar within "+
+				"%d sessions — treating this as an ingestion fault, not %d delistings; nothing marked",
+				frac*100, judgeable, staleSessions, judgeable-live),
 		})
 		return fmt.Sprintf("fleet liveness %.0f%% below %.0f%% — ingestion fault suspected, nothing marked",
 			frac*100, fleetLiveFraction*100), nil

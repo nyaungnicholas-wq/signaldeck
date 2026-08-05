@@ -16,6 +16,14 @@ raw = DECK.read_text(encoding="utf-8")
 # where none is published, and inside this block the interval IS the published thing.
 t = re.sub(r"<!-- BEGIN GENERATED live_accuracy -->.*?<!-- END GENERATED live_accuracy -->",
            "", raw, flags=re.S)
+# Same reasoning for §8's data measurements, generated from data/signaldeck.db by
+# tools/deck_facts.py and guarded by its own --check. The allowlist below is the
+# wrong instrument for them twice over: the figures are the database's rather than
+# the author's, and no hand-maintained list of numeric tokens can stay current with
+# a database that moves every day -- the previous attempt to keep one ("measured at
+# the close of P6") was stale within 24 hours.
+t = re.sub(r"<!-- BEGIN GENERATED deck_facts -->.*?<!-- END GENERATED deck_facts -->",
+           "", t, flags=re.S)
 low = t.lower()
 fail = []
 

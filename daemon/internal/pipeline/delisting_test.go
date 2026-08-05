@@ -125,6 +125,84 @@ func TestBrokenIngestionMarksNothing(t *testing.T) {
 	}
 }
 
+// A warehouse of already-marked dead names is not a broken pipeline. The bulk
+// delisted-symbol import made that the normal state — 1,869 imported corpses
+// against ~1,050 live names — and because the guard counted every row, raw
+// liveness fell to 36% and the detector marked NOTHING for three days while
+// ingestion was perfectly healthy. Liveness is judged over the not-yet-delisted
+// population for exactly this reason.
+func TestImportedDeadNamesDoNotDisableTheDetector(t *testing.T) {
+	st := newDelistStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+
+	// 60 live names plus one straggler that stopped while they kept printing.
+	ids := seedFleet(t, st, now, 60, map[string]int{"GONE": 200})
+	// 200 already-recorded-dead names, silent for years: the imported cohort.
+	dead := map[string]int{}
+	for i := 0; i < 200; i++ {
+		dead[fmt.Sprintf("DEAD%03d", i)] = 900
+	}
+	for sym, id := range seedFleet(t, st, now, 0, dead) {
+		if err := st.MarkDelisted(ctx, id, now.AddDate(0, 0, -900).Unix()); err != nil {
+			t.Fatalf("MarkDelisted %s: %v", sym, err)
+		}
+	}
+	// Over all rows liveness is 60/261 = 23%, well under the 60% floor. Over the
+	// not-yet-delisted fleet it is 60/61 = 98%, which is the truth.
+
+	w := &DelistingDetector{St: st, Now: func() time.Time { return now }}
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rows, _ := st.StockLastBars(ctx)
+	var deadStillMarked int
+	for _, r := range rows {
+		if r.SymbolID == ids["GONE"] && r.DelistedAt == 0 {
+			t.Fatalf("GONE stopped printing while the fleet kept printing but was not marked — "+
+				"imported dead names dragged the liveness guard down (detail: %s)", detail)
+		}
+		if strings.HasPrefix(r.Symbol, "DEAD") {
+			if r.DelistedAt == 0 {
+				t.Fatalf("%s lost its delisting marker; a silent dead name must stay marked", r.Symbol)
+			}
+			deadStillMarked++
+		}
+	}
+	if deadStillMarked != 200 {
+		t.Fatalf("expected all 200 imported dead names to stay marked, got %d", deadStillMarked)
+	}
+}
+
+// The guard must still fire on the failure it exists for. Same shape as the
+// test above — a mostly-silent fleet — but the silent names are NOT marked
+// dead, which is what an ingestion outage actually looks like.
+func TestUnmarkedSilentFleetStillTripsTheGuard(t *testing.T) {
+	st := newDelistStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+
+	stale := map[string]int{}
+	for i := 0; i < 200; i++ {
+		stale[fmt.Sprintf("SILENT%03d", i)] = 900
+	}
+	seedFleet(t, st, now, 60, stale) // 60/260 = 23% live, none marked
+
+	w := &DelistingDetector{St: st, Now: func() time.Time { return now }}
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rows, _ := st.StockLastBars(ctx)
+	for _, r := range rows {
+		if r.DelistedAt != 0 {
+			t.Fatalf("%s marked during an ingestion outage — excluding delisted rows from the "+
+				"denominator must not weaken the guard (detail: %s)", r.Symbol, detail)
+		}
+	}
+}
+
 // Delisting must be REVERSIBLE. A halted name that resumes printing was never
 // delisted, and a one-way marker turns every false positive into a permanent
 // market "fact".
