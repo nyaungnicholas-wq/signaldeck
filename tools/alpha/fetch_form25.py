@@ -251,6 +251,41 @@ def trades_after_delisting(bars, filed, grace_days=30):
     return (last_d - filed_d).days > grace_days
 
 
+def has_spliced_gap(bars, max_gap_days=90, max_step=0.5):
+    """True when the series jumps across a long hole — two securities, one row.
+
+    The third guard, for the case the other two structurally cannot see: a
+    ticker recycled onto a company that ALSO later delisted. Its last bar sits
+    near its own Form 25, so trades_after_delisting() is silent, and neither
+    issuer is listed today, so company_tickers.json is silent. What gives it
+    away is inside the series: a months-long hole with a different price on the
+    far side. Measured on the 2023-2026 population, 10 of 1,231 kept symbols —
+    RDUS is Radius Global Infrastructure at 9.42 followed by Radius Recycling at
+    30.83 (+227%), ALTM is Altus Midstream at 62.34 followed by Arcadium Lithium
+    at 6.80 (-89%).
+
+    BOTH conditions are required, because the gap alone is not evidence. 108 of
+    1,231 have a >90d hole and most are SPAC units that simply did not trade for
+    a year — MLACU sits at 10.46 before its 562-day gap and 10.00 after. One
+    thinly-traded security, not two, and excluding it would throw away a real
+    delisting. The price step is what separates them.
+
+    Cause-agnostic on purpose: a >50% step across a >90-day hole is untrustworthy
+    whether it is ticker reuse, an unadjusted split, or a vendor error. None of
+    the three belongs in a return series.
+    """
+    live = live_bars(bars)
+    for a, b in zip(live, live[1:]):
+        try:
+            gap = (datetime.fromisoformat(b["t"][:10]).date()
+                   - datetime.fromisoformat(a["t"][:10]).date()).days
+        except (ValueError, TypeError, KeyError):
+            continue
+        if gap > max_gap_days and a.get("c") and abs(b["c"] / a["c"] - 1) > max_step:
+            return True
+    return False
+
+
 def live_bars(bars):
     """Alpaca carries a dead security forward with flat, zero-volume bars --
     SBNY prints close=70 v=0 for 201 sessions after Signature Bank was seized,
@@ -258,8 +293,15 @@ def live_bars(bars):
     a naive last-bar rule mis-dates or discards the delisting. 75 of 191
     recoverable 2024-H1 delistings (39%) turn on this. The padding must not
     reach the training set either, so this list is what gets stored.
+
+    A bar must also carry a PRICE. Alpaca returns volume-bearing bars with OHLC
+    all zero for some pre-merger SPAC shells -- LeddarTech (LDTC) has 373 of
+    them from 2021-03 to 2023-12, with real volume and close=0.0, and its
+    genuine series only starts at 6.08 on 2023-12-22. A zero close is not a
+    trade at zero; it is an absent price, and it detonates any return
+    computation that divides by the previous close.
     """
-    return [b for b in bars if b["v"] > 0]
+    return [b for b in bars if b["v"] > 0 and b.get("c", 0) > 0]
 
 
 def form25_filings(from_year, to_year):
@@ -374,7 +416,7 @@ def main():
 
     h = alpaca_headers()
     end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    added = added_bars = nodata = still_listed = thin = 0
+    added = added_bars = nodata = still_listed = thin = spliced = 0
 
     for i, sym in enumerate(missing, 1):
         company, filed = resolved[sym]
@@ -429,6 +471,16 @@ def main():
                 db.execute("INSERT OR REPLACE INTO form25 VALUES(?,?,?,?,?,?,?)",
                            (sym, company, filed, 1, len(live), "", "too-few-bars"))
                 thin += 1
+            elif has_spliced_gap(bars):
+                # Two securities on one ticker where BOTH eventually delisted,
+                # so neither of the other guards can see it. Recorded with its
+                # own verdict rather than folded into still-listed: these are
+                # real delistings we are declining to import because the series
+                # cannot be trusted, and that is a different fact.
+                db.execute("INSERT OR REPLACE INTO form25 VALUES(?,?,?,?,?,?,?)",
+                           (sym, company, filed, 1, len(live), live[-1]["t"][:10],
+                            "spliced-series"))
+                spliced += 1
             else:
                 last = live[-1]["t"][:10]
                 db.execute("INSERT OR REPLACE INTO form25 VALUES(?,?,?,?,?,?,?)",
@@ -468,6 +520,7 @@ def main():
         "added_bars": added_bars,
         "skipped_still_listed": still_listed,
         "skipped_too_few_bars": thin,
+        "skipped_spliced_series": spliced,
         "no_alpaca_data": nodata,
         "delistings_by_year_after_merge": dict(sorted(years.items())),
         "note": "Staging only. Production database untouched.",

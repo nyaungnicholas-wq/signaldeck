@@ -1,0 +1,28 @@
+  2200/2409 added=1113 still-listed=740 thin=189 no-data=148 bars=760,556
+  2300/2409 added=1166 still-listed=773 thin=196 no-data=155 bars=793,499
+  2400/2409 added=1217 still-listed=809 thin=204 no-data=160 bars=832,304
+
+{
+  "form25_filings": 7294,
+  "unique_ciks": 2750,
+  "resolved_tickers": 2409,
+  "resolved_via_company_tickers": 787,
+  "resolved_via_edgar_r1": 1638,
+  "unresolved_ciks": 325,
+  "new_fetched": 2409,
+  "added_delistings": 1221,
+  "added_bars": 835615,
+  "skipped_still_listed": 813,
+  "skipped_too_few_bars": 204,
+  "skipped_spliced_series": 10,
+  "no_alpaca_data": 161,
+  "delistings_by_year_after_merge": {
+    "2021": 1,
+    "2022": 23,
+    "2023": 465,
+    "2024": 333,
+    "2025": 273,
+    "2026": 126
+  },
+  "note": "Staging only. Production database untouched."
+}

@@ -134,7 +134,107 @@ symbol, so the ticker-reuse guard has nothing to refuse. **165 `collapse`**
 (died cheap, or below a fifth of peak) is the bankruptcy cohort — precisely the
 population whose absence makes a model learn to buy falling knives.
 
-## 7. Status and what remains
+## 7. Applied to production — and the result CORRECTS P3A
+
+Full 2023-2026 run: 7,294 Form 25 filings → 2,750 CIKs → **2,409 resolved
+(87.6%)**, of which **1,638 came from the R1 route** that `company_tickers.json`
+structurally cannot reach. 1,221 kept after all three guards; **1,216 imported**
+(5 refused, §7.1).
+
+| | session start | after |
+|---|---|---|
+| symbols | 1,780 | **2,950** |
+| `delisted_at` stamped | 716 | **1,886** |
+| `universe_membership` rows | 0 | **2,642,060** |
+| delistings 2023 / 2024 / 2025 | 25 / 26 / 43 | **477 / 348 / 297** |
+
+Measured against a realistic 5,500-name US market the recovered deaths are
+**8.7% / 6.3% / 5.4%** for 2023-2025 — at or just above the real-world 4-8%
+band. The record is close to complete.
+
+The clearest evidence the repair is real is the PIT universe per trading day:
+
+| year | before | after |
+|---|---|---|
+| 2021 | 1,161 | **1,906** (+64%) |
+| 2022 | 1,003 | **1,808** (+80%) |
+| 2023 | 973 | **1,641** (+69%) |
+| 2025 | 1,015 | **1,228** (+21%) |
+| 2026 | 1,039 | **1,089** (+5%) |
+
+Survivor-seeded data is flat at ~1,000 every year. Survivorship-clean data is
+larger in the past and converges to the live set today. That gradient is the fix.
+
+### 7.1 Five refusals, and a guard that could not see them
+
+`import-delisted` refused ACTIVE symbols only. But `active` is a SUBSCRIPTION
+flag — of the 52 staging symbols already in the database, **all 52 were
+active=0**, so the guard would have refused none. Five held daily bars past the
+delisting the import would stamp:
+
+```
+BRKL   231 later bars to 2026-08-04   Brookline Bancorp -> "Corgi BRKB 2x Daily ETF"
+LCAHU   66 · TBCPU 19 · ACACU 18 · SAMAU 13   SPAC units whose Form 25 preceded the real last trade
+```
+
+BRKL is the ATC splice rebuilt by another route. The guard now refuses any
+staging row whose live counterpart trades past the stamp.
+
+### 7.2 THE CORRECTION TO P3A — the effect is NOT small
+
+P3A concluded, from adding 706 names, that "the survivorship defect was real as
+a defect and small as an effect on this particular study — every leg moved less
+than 0.55pp and no verdict changed." **That was true of that increment and is
+false now.** Re-derived on each successive universe:
+
+| horizon · leg | PRE (1,059) | +706 (1,765) | +Form25 (2,935) | Bonferroni |
+|---|---|---|---|---|
+| 21d liquidity | −1.65 | −1.70 | **−2.71** | survives |
+| 21d lowVol | +1.99 | +1.77 | **+3.59** | survives |
+| 21d mom12_1 | +1.35 | +1.08 | **+2.32** | survives |
+| 63d liquidity | −1.92 | −1.47 | **−3.53** | survives |
+| 63d lowVol | +1.84 | +1.32 | **+4.54** | — |
+| 5d lowVol | +1.10 | +1.18 | **+2.19** | survives |
+
+Every magnitude is larger on the repaired universe than on the pre-repair one,
+but NOT monotonically: four of the six dip at the +706 increment before growing,
+which is exactly why that increment measured a small effect and P3A read it as
+stability. Five of the six survive Bonferroni over the 9 leg×horizon tests;
+63d lowVol does not.
+
+### 7.3 This is an UPPER BOUND, not a discovered edge
+
+**Do not quote +3.59pp as an edge.** The enlarged universe is not a market
+sample — it is a near-complete death record bolted onto a ~6% sample of the
+living. Share of each day's cross-section that eventually delisted:
+
+| day | universe | eventually dead |
+|---|---|---|
+| 2020-06-15 | 729 | **2.1%** |
+| 2021-06-15 | 1,898 | **58.5%** |
+| 2022-06-15 | 1,811 | **52.8%** |
+| 2023-06-15 | 1,655 | **46.6%** |
+
+A real cross-section is a few percent per year. At ~50% eventually-dead,
+"low volatility beats the same-day median" is close to tautological: dead names
+are disproportionately volatile, so the leg is partly measuring *avoided the
+ones that died*. The measured edge tracks the death-share, which is the
+signature of that mechanism rather than of alpha.
+
+Worse for time-series work, the share **swings by year** — 2.1% in 2020 against
+58.5% in 2021 — because the Form 25 recovery covers 2023-2026 *filings*, so a
+company alive in 2020 is only present if it died later and filed in that window.
+That is a composition artifact, not a market regime.
+
+**What the numbers do establish:** the earlier survivor-seeded results were
+biased, the direction of that bias is now known (it SUPPRESSED the low-vol and
+momentum legs and understated liquidity's inversion), and no cross-sectional
+claim from either universe should be published as an unbiased estimate. The
+honest next step is to define the study universe per-day from
+`universe_membership` and sample or weight so the live/dead ratio matches the
+real market — which is now possible for the first time, and was not before P3B.
+
+## 8. Status and what remains
 
 - **Resolver: fixed and verified.** `tools/alpha/test_form25_resolve.py` passes
   5/5 and is the tripwire for `R1.htm` being a *rendered artifact* rather than a
