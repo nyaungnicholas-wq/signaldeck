@@ -99,7 +99,7 @@ func TestDeleteMetaPrefixExceptKeepsOnlyTheLiveKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer st.Close()
+	t.Cleanup(func() { _ = st.Close() })
 
 	ctx := context.Background()
 
