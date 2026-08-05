@@ -1,12 +1,13 @@
 // Model-health worker (2026-07-24): grade every emitting model against its own
 // live record and switch off the ones the record no longer supports.
 //
-// The directional ensemble is why this exists. It accumulated 18,762
-// independent symbol-days at 48.0% accuracy — significantly BELOW its
-// majority-class baseline — and never stopped shipping predictions, because no
-// component had the authority to disable a model. Health scoring without an
-// off-switch is just a nicer way to describe the same failure, so this worker
-// writes a verdict the prediction path is required to honour.
+// The directional ensemble is why this exists. It accumulated a live record
+// significantly BELOW its majority-class baseline and never stopped shipping
+// predictions, because no component had the authority to disable a model. Health
+// scoring without an off-switch is just a nicer way to describe the same failure,
+// so this worker writes a verdict the prediction path is required to honour.
+//
+// Figures are not typed here: data/accuracy_registry.json is the one source.
 package pipeline
 
 import (

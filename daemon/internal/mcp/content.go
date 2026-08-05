@@ -256,8 +256,10 @@ var survivedFindings = []survivedFinding{
 	{
 		Name:  "automatic model retirement fires",
 		Claim: "The health gate switched off the platform's own flagship directional model on live evidence.",
-		Evidence: "18,762 independent symbol-days at 48.0%, below its own majority-class baseline; the " +
-			"retirement rule had been chained before the verdict existed.",
+		Evidence: "The graded live record came in below its own majority-class baseline with the " +
+			"entire day-clustered interval under the null; the retirement rule had been chained " +
+			"before the verdict existed. Figures are not restated here — the registry is the one " +
+			"source and GET /api/accuracy serves it with interval, verdict and staleness attached.",
 		Caveat: "This is evidence about the platform's discipline, not about the market. The correct " +
 			"reading is that the model failed, and the machinery noticed.",
 	},
@@ -289,7 +291,7 @@ var killedFindings = []killedFinding{
 	{
 		Name:           "directional ensemble (1d and 1w)",
 		WhatWasClaimed: "Next-day and next-week price direction.",
-		WhyKilled: "Live prequential record 46.7% over 8,191 independent symbol-days with NEGATIVE " +
+		WhyKilled: "Live prequential record graded below its own baseline with NEGATIVE " +
 			"Brier skill and IC -0.02 — worse than its own naive baseline. Auto-retired by the health gate.",
 		KilledOn: "retired on live evidence; the record remains retrievable through get_track_record",
 	},

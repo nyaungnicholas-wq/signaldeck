@@ -912,7 +912,9 @@ func CalibrateKnots(pairs []Pair) (kx, ky []float64, calibrated bool) {
 	}
 	// DISTINCT-DAY FLOOR (2026-07-26 review, H5). The pair floor counts rows,
 	// and the predictor writes ~12 rows per symbol-day, so 30 pairs is about
-	// three market moves — measured live, 158,204 resolved rows were 13,058
+	// three market moves — SUPERSEDED-SNAPSHOT, the dated 2026-07-26 measurement
+	// that sized this floor rather than the current record: 158,204 resolved
+	// rows were 13,058
 	// symbol-days, with one case of 153 rows inside a single day. A map fitted
 	// on three days encodes those three days' moves and then rewrites every
 	// published probability for the symbol. Refusing is the honest failure: the

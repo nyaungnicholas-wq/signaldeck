@@ -4,9 +4,14 @@
 // signed weights, and a real historical analog with its realized outcome.
 //
 // Built ONLY over the structural regime forecasts. The directional model was
-// auto-retired by the model-health gate (48.0% against a 54.4% baseline), and
-// giving a rejected model an explanation UI would make it look more credible,
-// not less — so this endpoint refuses to decorate it and says why.
+// auto-retired by the model-health gate on its graded live record, and giving a
+// rejected model an explanation UI would make it look more credible, not less —
+// so this endpoint refuses to decorate it and says why.
+//
+// No graded figure is typed into this file. The registry is the one source and
+// GET /api/accuracy serves it with its interval and its staleness attached;
+// hand-copying a number here is exactly how this repository grew four
+// disagreeing copies of one live record (FC1).
 package api
 
 import (
@@ -91,9 +96,12 @@ func (d Deps) explain(w http.ResponseWriter, r *http.Request) {
 		"analog":         ex.Analog,
 		"caveat":         ex.Caveat,
 		"whyNotDirection": "No BUY/SELL or expected-return field is offered. The directional " +
-			"model was automatically retired after scoring 48.0% against a 54.4% naive " +
-			"baseline over 12,696 independent observations; presenting it with contributors " +
-			"and a confidence interval would make a rejected model look more credible.",
+			"model was automatically retired by the pre-registered health gate once its " +
+			"graded live record fell below its own majority-class baseline; presenting it " +
+			"with contributors and a confidence interval would make a rejected model look " +
+			"more credible. The graded figures are deliberately not restated here — " +
+			"GET /api/accuracy serves them from the registry with their interval, their " +
+			"verdict and their staleness attached.",
 		"survivorship": survivorshipBlock(),
 	})
 }

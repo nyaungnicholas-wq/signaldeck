@@ -59,6 +59,8 @@ const MinCellSamples = 30
 //
 // Rows are not observations. The predictor runs every 10 minutes against DAILY
 // labels and roughly a thousand symbols share each day's market move, so the
+// SUPERSEDED-SNAPSHOT figures below are the dated 2026-07-25 measurement that
+// sized this floor, not the current record:
 // live labeled set is 158,204 rows over 13,058 symbol-days over 23 DISTINCT
 // DAYS — 12.1 rows per symbol-day, and one measured case of 153 rows inside a
 // single symbol-day. Under the old row-only floor a cell cleared n>=30 on

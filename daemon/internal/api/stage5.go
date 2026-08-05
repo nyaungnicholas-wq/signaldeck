@@ -77,8 +77,10 @@ func (d Deps) buildPredictionsLatest(ctx context.Context, h md.Horizon) (map[str
 
 	// Model-health gate (2026-07-24). A model the live record has condemned
 	// must stop presenting itself as a forecast — the failure this closes is
-	// exactly that the directional ensemble kept emitting through 18,762
-	// observations of negative skill because nothing could switch it off.
+	// exactly that the directional ensemble kept emitting through a long run of
+	// negative skill because nothing could switch it off. SUPERSEDED-SNAPSHOT:
+	// that run measured 18,762 observations when the gate was written; the
+	// figure dates the failure, it is not the current record.
 	// Rows are still returned (retiring the model must not blank the page or
 	// hide the evidence), but the payload declares it retired and non-emitting
 	// so no consumer can read a P(up) as actionable.

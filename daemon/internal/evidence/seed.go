@@ -43,6 +43,11 @@ func SeedClaims() []Claim {
 				Assets: []string{"stocks", "crypto"}, Regimes: []string{"all"},
 				Horizons: []string{"1d"}, DateFrom: "2026-07-01", DateTo: "2026-07-26",
 			},
+			// SUPERSEDED-SNAPSHOT — a seeded evidence row is a DATED claim, fixed
+			// to the DateFrom/DateTo window above and carrying TierRefuted. Its
+			// figures are the record as it stood in that window; they are not the
+			// current grade and must not be refreshed to match it, or the claim
+			// stops being the thing that was actually refuted.
 			Items: []Item{{
 				Kind:       "live-record",
 				Value:      0.48123755552151937,
@@ -65,6 +70,8 @@ func SeedClaims() []Claim {
 				Assets: []string{"stocks", "crypto"}, Regimes: []string{"all"},
 				Horizons: []string{"1w"}, DateFrom: "2026-07-01", DateTo: "2026-07-26",
 			},
+			// SUPERSEDED-SNAPSHOT — as above: a dated, refuted claim fixed to its
+			// own window. Not the current grade, and not to be refreshed into one.
 			Items: []Item{{
 				Kind:       "live-record",
 				Value:      0.46235268441728505,

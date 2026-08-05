@@ -220,6 +220,29 @@ jobs:
         run: python3 tools/live_accuracy.py --check-includes $(cat partials/INCLUDES.txt)
       - name: Live record — no hand-typed accuracy figures in any document
         run: python3 tools/live_accuracy.py --scan $(git ls-files '*.md')
+      # The markdown-only gate reported clean while the API, the MCP surface and
+      # the web UI each carried their own hand-typed copy of this record, three of
+      # them disagreeing on the sample size. FC1 was closed for the documents
+      # nobody reads and open in the surfaces a reader actually consumes, so the
+      # same gate now runs over shipped source. A block that is genuinely a dated
+      # record labels itself SUPERSEDED-SNAPSHOT and is exempt; everything else
+      # reads the registry at runtime.
+      - name: Live record — no hand-typed accuracy figures in shipped code
+        run: python3 tools/live_accuracy.py --scan-code $(git ls-files '*.go' '*.ts' '*.tsx' | grep -v '_test')
+      # A control documented IN FORCE with a blank evidence cell is the construct
+      # that let TradableAt return empty for its entire life and MarkDelisted sit
+      # with no callers. The deck's evidence table is now measured from the source
+      # rather than typed, and a control with no tests or no non-test importer
+      # fails here rather than being published as a control.
+      - name: Controls evidence — every documented control is tested and wired
+        run: python3 tools/controls_evidence.py --check
+      - name: Controls evidence — the deck's table matches the source
+        run: |
+          python3 tools/controls_evidence.py --inject STRATEGY_DECK.md
+          git diff --exit-code -- STRATEGY_DECK.md || {
+            echo "STRATEGY_DECK.md's controls table is stale — run tools/controls_evidence.py --inject STRATEGY_DECK.md"
+            exit 1
+          }
       # This one needs data/, which is gitignored, so it is the operator/publish
       # gate rather than a clean-checkout gate: it proves the PARTIAL still
       # matches the registry it was generated from.

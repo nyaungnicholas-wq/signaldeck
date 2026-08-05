@@ -295,9 +295,10 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	fleet = append(fleet, &pipeline.SplitRepair{St: st, Alpaca: alpacaClient})
 	// Model-health gate (2026-07-24, 1h) — grades every emitting model against
 	// its own live record and writes a verdict the prediction path honours. The
-	// directional ensemble is why this exists: it shipped through 18,762
-	// independent observations of NEGATIVE skill because nothing in the system
-	// had the authority to switch a model off.
+	// directional ensemble is why this exists: it shipped through a long run of
+	// NEGATIVE skill because nothing in the system had the authority to switch a
+	// model off. SUPERSEDED-SNAPSHOT: 18,762 independent observations when the
+	// gate was written — a date stamp on the failure, not the current record.
 	fleet = append(fleet, &pipeline.ModelHealthWorker{St: st})
 	// Autonomous research loop (2026-07-25, 24h) — generate -> test -> judge ->
 	// ledger -> kill, without a human starting it. Hypotheses tested per week was

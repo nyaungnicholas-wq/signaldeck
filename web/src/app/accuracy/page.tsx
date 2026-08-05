@@ -74,9 +74,12 @@ type Registry = {
   rows: RegistryRow[];
 };
 
-// The flagship's full-record grade and retirement are permanent facts. The
-// post-epoch registry rows restart the count, so without this block the page
-// would quietly forget the one verdict a visitor most needs to see.
+// SUPERSEDED-SNAPSHOT — the flagship's PRE-EPOCH full-record grade. It is a
+// permanent, dated fact, deliberately kept because the post-epoch registry rows
+// restart the count and without this block the page would quietly forget the one
+// verdict a visitor most needs to see. It is NOT the current record: the live
+// rows further down are, and they come from the registry. Do not refresh these
+// figures to match a later grade — that would erase the record being disclosed.
 const FLAGSHIP_RETIREMENT = {
   date: "2026-07-24",
   rows: [
@@ -391,11 +394,13 @@ export default async function AccuracyPage() {
             FAILED — significantly worse than the naive baseline
           </span>
           <p className="m-0 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            {/* SUPERSEDED-SNAPSHOT: prose describing the dated pre-epoch grade above. */}
             On its full live record every directional row graded FAILED — the entire day-clustered
             confidence interval below the majority-class baseline — so the model was automatically
-            retired and stopped emitting. Inverting or relabeling it is not a rescue (48.1% inverts
-            to 51.9%, still below the null). The directional rows below are its post-retirement
-            shadow record, restarted at the survivorship epoch.
+            retired and stopped emitting. Inverting or relabeling it is not a rescue: the competing
+            model is the constant majority guess, whose rate is above 50%, so flipping the sign
+            relabels the call without creating an edge. The directional rows below are its
+            post-retirement shadow record, restarted at the survivorship epoch.
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[0.78rem]">

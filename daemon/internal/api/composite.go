@@ -282,8 +282,9 @@ func (d Deps) computeFleetEdgeSkill(ctx context.Context) (fleetSkill, bool) {
 //
 // C4 — the accuracy floor that decides "proven" is CLUSTER-ROBUST, never Wilson
 // at the raw independent count. indepN counts (symbol, UTC-day) rows, and the
-// ~1,000 symbols sharing a day share ONE market move: measured on the live 1d
-// record this endpoint reads, the design effect is 14.7x, so 13,058 rows carry
+// ~1,000 symbols sharing a day share ONE market move: on the SUPERSEDED-SNAPSHOT
+// 2026-07-25 measurement that sized this floor (a dated example, not the current
+// record), the design effect is 14.7x, so 13,058 rows carry
 // the information of 887. The raw-N floor is 3.8x too tight, and a too-tight
 // floor is what UNLOCKS "edge proven live" — it lifts the conviction ceiling on
 // every row of the SIGNALS leaderboard on evidence that cannot carry it. The

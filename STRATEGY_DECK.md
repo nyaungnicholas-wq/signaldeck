@@ -1,13 +1,22 @@
 # SignalDeck — Strategy Deck
 
 <!-- DOCUMENT CONTROL -->
-> **Owner:** Nicholas Nyaung · **Version:** 1.1 · **Last reviewed:** 2026-08-04 · **Revalidate by:** 2026-09-04
+> **Owner:** Nicholas Nyaung · **Version:** 1.2 · **Last reviewed:** 2026-08-05 · **Revalidate by:** 2026-09-04
 > **Revalidation trigger:** any re-grade, or any phase artefact filed in `proofs/`. A status document with no expiry drifts silently; §2's live record is generated so it cannot, but the prose around it can.
 > **Status:** ACTIVE — supersedes prior summary decks
 > **Scope:** The single current status document for the platform. Where it disagrees with an older document, this one wins: the others are publishable as a record of what was measured when, not as current status.
-> **Frozen claim classes:** FC3, FC6 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Frozen claim classes:** FC3 (survivorship, 2023–2025 — see §8.2, the residual has since been re-measured), FC4 (point-in-time membership, narrow claim), FC6 (`portopt` not bound to allocation). Set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4. **v1.1 omitted FC4 from this line and stated no status at all for FC2 or FC7; §13.4 now carries all eight.**
 > **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
 > **Publication:** PUBLISHABLE — current statement of record
+
+## 0. Disclaimers
+
+- **Past performance is not indicative of future results.**
+- **Trading involves risk of loss, including total loss of capital.**
+- **Nothing here is financial advice, an offer, or a solicitation.**
+- **Every performance figure in this document is HISTORICAL (backtested/simulated) or PENDING (awaiting sufficient live data). None represents realised returns on capital.** The platform holds no capital and has no broker connection.
+- Simulated results carry the limitations inherent in hypothetical performance: they do not reflect the impact of a real order on the market and are not subject to the financial risk of actual trading.
+- **This platform has not demonstrated predictive skill on live data.** See §3 and §12.
 
 ## 1. What the system is, and what it is not
 SignalDeck is a market-measurement and research-record platform. It records live market data into SQLite, computes per-symbol scores, and grades its own scores against realised returns.
@@ -16,15 +25,25 @@ The Go daemon lives in `daemon/`. The web UI lives in `web/`.
 
 ## 2. Current grader status
 The directional ensemble is RETIRED. The `modelhealth` component set `verdict: retired, emitting: false`. It is off and does not publish.
-The structural predictors are trend21, vol21 and liquidity21. All are PENDING.
-First resolvable structural evidence: 2026-08-07. First grading under the pre-registered protocol: 2026-08-14. A 21-day horizon cannot be graded sooner.
+The headline structural predictors are trend21, vol21 and liquidity21, but the registry carries **seven** registered backtested claims — those three plus `trend63`, `filingsdrift21`, `trend21-crypto` and `liquidity21-crypto`. All seven are PENDING with zero graded forecasts. *(v1.1 named only three here while its own generated block listed seven.)*
+First resolvable structural evidence: 2026-08-07. **First grading dates differ per predictor and are carried per-row in the registry, not summarised here:** the structural trio grades 2026-08-14, `filingsdrift21` a day earlier, and `trend63` materially later. A 21-day horizon cannot be graded sooner than its horizon allows.
 Outstanding structural forecast counts are not typed in this corpus any more. They were previously stated two ways in one document; they now come from the generated block below, per predictor. That closed FC8.
 
-The live record is not typed into this deck. It is generated from `data/accuracy_registry.json` by `tools/live_accuracy.py` and injected into every document listed in `partials/INCLUDES.txt`, this one included; CI fails on a superseded literal. That mechanism closed FC1 — the corpus previously carried four hand-typed versions of the same record. Intervals appear only where the sample clears `min_distinct_blocks = 10`; every other row reads `withheld`, and a withheld interval carries no verdict.
+The live record is not typed into this deck. It is generated from `data/accuracy_registry.json` by `tools/live_accuracy.py` and injected into every document listed in `partials/INCLUDES.txt`, this one included; CI fails on a superseded literal. Intervals appear only where the sample clears `min_distinct_blocks = 10`; every other row reads `withheld`, and a withheld interval carries no verdict.
+
+**FC1 was closed for the documents and left open in the product until 2026-08-05.** v1.1 claimed FC1 "resolved by mechanism". The mechanism scanned markdown only (`--scan $(git ls-files '*.md')`), and the API, the MCP surface and the web UI each carried their own hand-typed copy of this record — disagreeing with each other on the sample size, one of them by a factor of ten — while the gate reported clean. The gate now also runs over shipped source (`--scan-code`), and it found **36 hand-typed live-record literals across 15 files**, including one *current* figure typed into Go. See §8.1.
+
+**Three qualifications a reviewer must apply to the block below:**
+
+1. **Overlapping observations are corrected for, and the correction is load-bearing.** `n` counts symbol-days, which overlap heavily; `Distinct days` is the effective sample. Intervals are day-clustered effective-N Wilson, Bonferroni-corrected across BOTH multiplicities this surface pays — family (rows in one cycle) and looks (cycles over the same accruing rows), `divisor = family_size × looks` — with both counters ratcheted by `max()` so publishing fewer rows or rotating a log cannot refund multiplicity already spent. **Do not read `n` as an independent sample size.**
+2. **The retire rule and the published interval use different widths.** The pre-registered auto-retire criterion is written against a *95%* day-clustered Wilson interval; the published interval is Bonferroni-corrected and therefore wider. The retired row's corrected interval still excludes the null, so retirement holds *a fortiori* — but the wording must be reconciled. **Needs verification.**
+3. **A strategy boundary runs through this record** at 2026-08-04 (§10). Whether accuracy rows are affected, or only P&L, needs an explicit ruling.
 
 <!-- BEGIN GENERATED live_accuracy -->
 
 Generated from `data/accuracy_registry.json` (grade of 2026-08-04T20:34:19) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+
+> **STALE — this is not a current grade.** The registry is `REFUSED` (research-loop liveness check failed (exit 1) — a narrated grid search left no verifiable judgment record, or a pre-registered forecast kind has never frozen a forecast and gave no refusal; the grader was not run), and the last successful grade is 17.5h old. The numbers below are that last successful grade, taken at 2026-08-04T20:34:19. Nothing here has been re-graded since.
 
 ### Live record
 
@@ -58,7 +77,7 @@ Sample-size notices carried by the registry itself (statements about the sample,
 
 **Multiplicity:** family_size=13, looks=9, divisor=117, corrected_alpha=0.00042735042735042735.
 
-**Survivorship:** epoch 2026-07-24; listing status resolvable for 326/335 graded symbols (97.3%): 9 inactive symbol(s) with no delisted_at.
+**Survivorship:** epoch 2026-07-24; listing status resolvable for 326/335 graded symbols (97.3%): 9 inactive symbol(s) with no delisted_at; measured effect +0.53pp (active-only 83.58% minus survivorship-clean 83.05%, n=57,490 clean vs 17,876 active, revalidation of 2026-08-05T03:27:32+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
 
 <!-- END GENERATED live_accuracy -->
 
@@ -94,26 +113,48 @@ in a *different repository*, and claimed survivorship and point-in-time control
 that measurement later contradicted. So it now carries the same evidence
 treatment `RISK_POLICY.md` §5 gives its rules.
 
-**Tests** is the package's own test count. **Wired** is the number of
-**non-test** callers of the package — a control nothing imports in production is
-not a control, which is exactly how `TradableAt` returned empty for its entire
-life and `MarkDelisted` sat with no callers. All figures measured 2026-08-04.
+**Tests** is the package's own test-function count. **Wired** is the number of
+**non-test** files outside the package that import it — a control nothing imports
+in production is not a control, which is exactly how `TradableAt` returned empty
+for its entire life and `MarkDelisted` sat with no callers.
 
-| Control | Package | Tests | Wired | Status |
-|---|---|---:|---:|---|
-| Model registry, health grading, retirement | `internal/modelhealth` | 20 | 2 | **IN FORCE** |
-| Drift monitoring (two-sample KS, n-adjusted) | `internal/modelhealth/drift.go` | *(above)* | 2 | **IN FORCE** |
-| Canary / staged model rollout | `internal/canary` | 26 | 3 | **IN FORCE** |
-| Multi-source price validation | `internal/pricecheck` | 9 | 1 | **IN FORCE** |
-| Dataset versioning and checksums | `internal/datasetver` | 10 | 1 | **IN FORCE** |
-| Corporate actions / split repair | `internal/splitfix` | 11 | 1 | **IN FORCE** |
-| Data licensing + HTTP 451 export guard | `internal/datalicense` | 6 | 2 | **IN FORCE** |
-| No look-ahead, purge/embargo (cross-sectional) | `internal/alphax` | 11 | — | **IN FORCE** |
-| No look-ahead, fill timing (backtest) | `internal/backtest` | 31 | — | **IN FORCE** |
-| Data quality, freshness, `dq-auditor` | `internal/maintain` | 29 | — | **IN FORCE** |
-| Calibration monitoring, `GET /api/calibration` | `internal/api` | 255 | — | **IN FORCE** |
-| Pre-trade risk admission | `internal/riskgate` | — | 5 | **IN FORCE — paper** |
-| Kill switch | `internal/killswitch` | — | 2 | **IN FORCE — paper** |
+**This table is now GENERATED** by `tools/controls_evidence.py` from the Go
+source, and `--check` fails if any control measures zero on either column. v1.1
+typed it by hand and left `—` in six cells while marking every row **IN FORCE**
+anyway — which contradicts the sentence above it, and was unnecessary: all six
+had real, measurable values. An unmeasured cell can no longer be published as
+evidence, because it can no longer be typed.
+
+<!-- BEGIN GENERATED controls_evidence -->
+
+Generated by `tools/controls_evidence.py` from the Go source. Do not edit by hand.
+**Tests** is the package's own test-function count. **Wired** is the number of non-test files outside the package that import it — a control nothing imports in production is not a control.
+
+| Control | Package | Tests | Wired |
+|---|---|---:|---:|
+| Model registry, health grading, retirement | `internal/modelhealth` | 20 | 2 |
+| Canary / staged model rollout | `internal/canary` | 26 | 3 |
+| Multi-source price validation | `internal/pricecheck` | 9 | 1 |
+| Dataset versioning and checksums | `internal/datasetver` | 10 | 1 |
+| Corporate actions / split repair | `internal/splitfix` | 11 | 1 |
+| Data licensing + HTTP 451 export guard | `internal/datalicense` | 6 | 2 |
+| No look-ahead, purge/embargo (cross-sectional) | `internal/alphax` | 11 | 2 |
+| No look-ahead, fill timing (backtest) | `internal/backtest` | 31 | 2 |
+| Data quality, freshness, dq-auditor | `internal/maintain` | 29 | 4 |
+| Pre-trade risk admission | `internal/riskgate` | 39 | 5 |
+| Kill switch | `internal/killswitch` | 6 | 2 |
+| Portfolio optimiser (NOT bound to allocation) | `internal/portopt` | 13 | 1 |
+
+<!-- END GENERATED controls_evidence -->
+
+**Status is the one column that stays human-authored**, because it encodes a
+judgement the source cannot make: `internal/riskgate` and `internal/killswitch`
+are **IN FORCE — paper** (their blast radius is a simulated book), `portopt` is
+**FROZEN, not bound to allocation** (FC6), and every other row above is **IN
+FORCE**. `internal/api` is a process entrypoint rather than an imported library,
+so a caller count is the wrong evidence form for it and it is deliberately not
+in the generated table; its calibration monitoring is covered by the package's
+own tests and by `GET /api/calibration` responding.
 
 Three named guards are worth citing individually, because each exists to catch a
 defect that actually happened here:
@@ -142,16 +183,89 @@ lint and build.
 
 ## 8. Open data defects
 These are the reasons nothing here is finished.
-- `universe_membership` held 0 rows and now holds 1,854,228, across 2,146 days and 1,777 symbols (measured 2026-08-04). Every row carries `source = 'bars-1d'`, so the membership is only as point-in-time as the retained daily-bar history is complete.
-- Survivorship control is **partially closed, with a quantified residual**. Symbols carrying a `delisted_at` stamp went from 16 to 716. `proofs/P3A_SURVIVORSHIP_BACKFILL.md` records the verdict as substantially closed for 2019–2022 and states the residual plainly: 2023–2025 is under-covered because the upstream delisted-companies endpoint under-reports recent years, and the live detector only began watching in 2026. Treat HISTORICAL results over 2023–2025 as still survivor-seeded. FC3 is narrowed to that window rather than lifted. **The residual is now sized, not just named** (measured 2026-08-04): 600 delistings are recorded for 2020–2022 against 94 for 2023–2025 — the recent window holds 15.7% of the de-SPAC era's count. Real US delisting rates do not fall six-fold after 2022, so the shortfall is coverage, not the market. Closure work exists and is not yet ingested: `tools/alpha/fetch_form25.py` reads SEC Form 25 / 25-NSE — the exchange's official Notification of Removal from Listing, and the free complete record — resolving CIK to ticker through issuers' own filings because SEC's current-listings map cannot by construction contain a company being delisted. It passes 12/12 of its resolver tests and writes to a STAGING database for review before any of it reaches `symbols.delisted_at`. Until that ingest lands, this bullet stands.
-- Remediation phases were landing while this deck was written. Every phase status here is a snapshot taken 2026-08-04; read `proofs/` directly before relying on one.
-- ~~Walk-forward validation runs on demand only.~~ **CLOSED 2026-08-04.** `ops/com.signaldeck.revalidation.plist` schedules it monthly via `ops/revalidate-structural.sh`, which writes `ops/revalidation-status.json`; `tools/check_revalidation.py` is the gate that reads it and runs in CI, failing on a missing or stale snapshot rather than skipping. The run also publishes the **survivorship effect** — active-only accuracy minus survivorship-clean accuracy — every time, so a drift in it appears in CI output instead of inside a JSON file nobody opens. The current reading is positive, meaning the published claim is INFLATED by excluding dead names; the magnitude is in the snapshot, not typed here.
-- The corpus contained four mutually inconsistent versions of the live directional record. **Closed by P2:** the documents listed in `partials/INCLUDES.txt` now include one generated block instead of typing it, and CI fails on a superseded literal. FC1 is resolved by mechanism rather than by correcting four documents by hand.
+
+> **READ THIS BEFORE ANY NUMBER BELOW.** Every measurement in this section is
+> hand-typed with a date stamp. On 2026-08-05, one day after v1.1 was written,
+> **every one of them was already stale** — `universe_membership` by 0.8M rows,
+> the `delisted_at` count by a factor of 2.6, and the survivorship residual by
+> enough to invert its conclusion. FC1 taught this exact lesson about the
+> accuracy record and the fix was applied only to the accuracy record. Until
+> these are generated too (§14.4), treat every figure here as *as-of its stamp*
+> and re-measure before relying on one.
+
+### 8.1 FC1 — closed in documents 2026-08-04, closed in code 2026-08-05
+
+The corpus carried four mutually inconsistent versions of the live directional record. P2 closed that **for markdown**: the documents in `partials/INCLUDES.txt` include one generated block instead of typing it, and CI fails on a superseded literal.
+
+The gate scanned `*.md` only. The shipped surfaces were never covered, and each had grown its own copy:
+
+| Surface | What it stated | Now |
+|---|---|---|
+| `api/explain.go` (`whyNotDirection`, served JSON) | a superseded pair over a sample ~4× the registry's | states the qualitative fact, points at `GET /api/accuracy` |
+| `mcp/content.go` (served evidence) | the same superseded accuracy over a *different*, larger sample | same |
+| `web/.../TodaysRead.tsx` (home page) | a **fifth** number set, presented as the *current* live record | qualitative, sourced from the registry |
+| `web/app/accuracy/page.tsx` | the pre-epoch full record — correctly labelled and dated in the UI | kept, marked `SUPERSEDED-SNAPSHOT` |
+| `api/modelhealth.go` (served) | an inversion argument pinned to a stale pair, **whose conclusion no longer follows on the current record** | restated as the general argument, which does hold |
+| 10 further files | dated methodology figures in comments | marked `SUPERSEDED-SNAPSHOT` |
+
+`tools/live_accuracy.py --scan-code` now runs the same gate over `*.go`/`*.ts`/`*.tsx` in CI, with `SUPERSEDED-SNAPSHOT` working at block scope so a genuinely dated record can stay. It found **36 literals across 15 files**, one of them a *current* figure typed into Go — the same defect in the opposite direction.
+
+### 8.2 Survivorship (FC3) — the residual has closed; the deck's statement of it had not
+
+v1.1 stated: `delisted_at` on 716 symbols; 600 delistings for 2020–2022 against 94 for 2023–2025 (15.7%); Form 25 closure work "not yet ingested".
+
+**Re-measured 2026-08-05 against `data/signaldeck.db`:** 1,886 symbols carry `delisted_at`; **2020–2022 holds 622 and 2023–2025 holds 1,122 — the recent window is now 180% of the earlier one, not 15.7%.** The registry's survivorship bound cites `edgar:form-25` as its source, so the ingest has landed. The under-coverage that FC3 was narrowed to no longer appears in the data.
+
+**FC3 should not be lifted on this measurement alone.** Two things must be confirmed first: that the STAGING review step `proofs/P3A_SURVIVORSHIP_BACKFILL.md` requires actually happened before these rows reached `symbols.delisted_at`, and that `P3A` is amended to record the new counts. Until both, FC3 stays frozen and this paragraph is the disclosure.
+
+**The effect is now sized and generated, not named.** The monthly revalidation publishes active-only minus survivorship-clean accuracy, and `tools/live_accuracy.py` renders it into the **Survivorship:** line of the generated block in §2 — so it travels with every document instead of sitting in a JSON file. The reading is **positive**, meaning the active-only figure is **inflated** by excluding dead names. *(v1.1 named the direction and withheld the size.)*
+
+### 8.3 Point-in-time universe (FC4)
+
+`universe_membership` held 0 rows and now holds **2,642,060** across 2,146 days and **2,947** symbols (re-measured 2026-08-05; v1.1 said 1,854,228 / 1,777). Every row carries `source = 'bars-1d'`, so the membership is only as point-in-time as the retained daily-bar history is complete — and §7 bounds that below 100%. FC4 stays frozen for that narrower claim; the derivation has not been audited.
+
+### 8.4 Cost, capacity and liquidity — NOT BUILT
+
+See §10. No capacity analysis, no ADV or participation constraint, no borrow-cost model, no market-impact model, no tax treatment. **No claim about the scale at which any result here would survive is supported.**
+
+### 8.5 Risk-limit provenance — CLOSED 2026-08-05
+
+Every limit resolves through a `SIGNALDECK_RISK_*` environment variable, and nothing recorded which values a pass ran under, so a past paper result could not be tied to its envelope; an out-of-range override was discarded in silence. `riskgate.DescribeLimits()` now records the resolved envelope with per-limit provenance, `pipeline/paper.go` logs it every pass, and a rejected override is logged as a WARNING instead of swallowed. A test pins the provenance table to `Defaults()` so the two copies cannot drift.
+
+### 8.6 Snapshot caveat
+
+Remediation phases were landing while this deck was written. Read `proofs/` directly before relying on a phase status.
+
+### 8.7 Closed
+
+- ~~Walk-forward validation runs on demand only.~~ **CLOSED 2026-08-04.** `ops/com.signaldeck.revalidation.plist` schedules it monthly via `ops/revalidate-structural.sh`, which writes `ops/revalidation-status.json`; `tools/check_revalidation.py` gates it in CI, failing on a missing or stale snapshot rather than skipping.
 
 ## 9. Risk policy specification
 `daemon/internal/riskgate` is the pre-trade check: it can refuse or shrink a trade. It holds no state, performs no I/O, and reads no clock.
-It is BUILT AND IN FORCE for the PAPER book only: importers are `daemon/internal/pipeline/paper.go`, `paperrisk.go`, `daemon/internal/stresslab/replay.go`, `daemon/internal/api/stress.go`.
+It is BUILT AND IN FORCE for the PAPER book only. Its five non-test importers are `pipeline/paper.go`, `pipeline/paperev.go`, `pipeline/paperrisk.go`, `stresslab/replay.go` and `api/stress.go` — the count is measured in §7's generated table, and v1.1's prose listed four of the five.
 No real capital is attached to any of them.
+
+### 9.1 The envelope actually in force
+
+*(v1.1 disclosed three of these eleven. A reader of v1.1 alone would have concluded that concentration, correlation and leverage controls were absent. They are not.)*
+
+| Limit | Default | Why it is where it is |
+|---|---|---|
+| Max position weight | 10% of equity | Per-name concentration |
+| Max positions | 10 | Slot discipline; matches the `equity/MaxPositions` convention the engine already implied |
+| **Max sector weight** | **30%** | Ten names from one sector are one bet with extra commission |
+| **Max correlation to book** | **0.80** | Catches the pathological case — second share class, sector twin, ETF and its top holding — not ordinary market beta |
+| **Max gross exposure** | **1.00×** | **No leverage.** A simulated book quietly running 1.3× gross is reporting a different, riskier strategy than the one described |
+| Max drawdown (suspend) | 20% | Conventional institutional soft stop |
+| Terminal drawdown (flatten) | 25% | See below |
+| **Max daily loss** | **5%** | A session losing a twentieth of the book is evidence about the day, not one name |
+| Kelly fraction | 0.25 | Full Kelly is growth-optimal only when the edge is known exactly; with estimated `p` and `b` it overbets badly |
+| **Min edge trips** | **20 closed round trips** | A sample too thin to describe a payoff shape is too thin to size on |
+| Min ticket | 0.5% of equity | Caps TRIM rather than refuse and trims compose; filling the remnant pays two spreads and cannot move the book |
+
+**Provenance is now recorded (2026-08-05).** Every limit resolves through a `SIGNALDECK_RISK_*` environment variable. `riskgate.DescribeLimits()` captures the resolved envelope with per-limit attribution, `pipeline/paper.go` logs it on every pass, and an out-of-range override is logged as a WARNING instead of being silently replaced by the default. Fractional limits are hard-clamped to (0,1], so leverage above 1.0× cannot be set by this path.
+
+**Stated limitation of the sizing model.** Kelly is estimated from a short realized record produced by a signal family that has not demonstrated live skill. A 20-trip floor is a weak basis for a Kelly estimate; the quarter-Kelly haircut and the 10% cap are what make this survivable, and the cap should be expected to bind almost always. **Kelly sizing here is not evidence that an edge was measured.**
 The kill switch, `daemon/internal/killswitch/killswitch.go`, is BUILT AND IN FORCE for the PAPER book (P4C, 2026-08-04): file-based (`ops/HALT`), fail-closed, read fresh before every order by `daemon/internal/pipeline/paper.go`, and exercised by an end-to-end halt simulation (`pipeline.TestKillSwitch_HaltsEntriesAndLedgersTheRefusal`) plus `killswitch_test.go`. It refuses ENTRIES; risk-reducing exits still execute, so a halt cannot trap the book. It stops new risk, it does not liquidate. Its blast radius is a simulated book — there is no live order path here to halt.
 A kill switch previously claimed for this platform lived at `stock-trader/trader/risk_gate.py`, in a DIFFERENT repository. It cannot halt this daemon and no claim here rests on it. **FC5 resolved** — see `proofs/P4C_KILL_SWITCH_CORRECTION.md`.
 Risk is an ADMISSION GATE, not a post-hoc sizer (P4B): `riskgate.Admit` gates the book once per pass and `riskgate.Evaluate` gates each candidate BEFORE `ev.Decide` renders a verdict, so a risk-rejected name never consumes an EV rank slot. Every refusal — risk gate and kill switch alike — is ledgered to `ev_decisions`.
@@ -161,7 +275,24 @@ The DRAWDOWN LADDER's terminal rung is BUILT AND IN FORCE for the PAPER book (20
 
 ## 10. Execution specification
 There is no live execution path. No broker connection exists in this repository.
+
+### 10.0 Entry rule (PAPER book)
+
+*(v1.1 titled this section "Execution specification" and stated no entry rule at all. The logic below is what `pipeline/paper.go` and `paperev.go` actually do.)*
+
+One simulated portfolio per horizon — `flagship-1d` and `flagship-1w` — each starting flat with a notional book. Per pass, in order:
+
+1. **Exits execute first**, then entry candidates are collected and sized, so an exit's freed cash and slot are available in the same pass.
+2. **Intent** comes from the calibrated probability: `cal_prob >= LONG` → long, `<= FLAT` → flat, otherwise **HOLD (deadband)**. `cal_prob` alone is *not* the go/no-go.
+3. **The kill switch is checked before a candidate is even assessed**, and a halted pass ledgers the refusal rather than silently not entering.
+4. **Decision engine** (`internal/ev`): `ev.Decide(…, ev.EnterLong, thresholds)` renders the verdict on **net EV and rank**, after the risk gate has already admitted the name.
+5. **Sizing** targets `equity/MaxPositions` dollars, then every §9.1 cap trims it — slot, cash, position weight, sector headroom, correlation.
+6. Every entry ledgers its reason, including net EV, its rank, and `cal_prob` against the long threshold.
+
+**Still unspecified, and required before this is executable with real capital:** order type (fills are modelled at the open, implying market-on-open, but no order type is declared), time-in-force, partial fills, halt/gap/limit-up-down handling, and the universe definition and rebalance calendar.
 Simulated execution, HISTORICAL only: `daemon/internal/backtest/backtest.go` fills at the next bar's OPEN and applies a single `CostBps` round-trip proxy for commission, spread and slippage together. There is no separate slippage model.
+
+**Not modelled anywhere:** market impact, short borrow cost and availability, financing, taxes, and any capacity or ADV constraint. **No statement about the scale at which any result here would survive is supported.** A blended round-trip proxy is defensible for a liquid large-cap universe; it is not defensible for the rights, warrants and units this universe contains, which §7 shows trade sporadically by construction.
 Slippage measurement, an executed-quantity ledger, and broker reconciliation are NOT BUILT here. Documents that claimed them were citing a `stock-trader` artifact in a different repository.
 Alpaca appears here as a MARKET DATA client only (`daemon/internal/ingest/alpaca/client.go`, with 429 backoff), not as an execution client.
 Consequence: any statement about achievable fills is a modelling assumption, not a measurement.
@@ -191,7 +322,20 @@ The publication freeze recorded in `proofs/P0_FREEZE.md` is **LIFTED** (`proofs/
 The lift conditions were P1, P2 and P3, each with its own filed artefact; `proofs/P10_FREEZE_LIFT.md` §2 records them checked rather than assumed — `live_accuracy.py --check` exiting 0 across `partials/INCLUDES.txt`, and `universe_membership` measured at 1,854,228 rows. Meeting the conditions and lifting are separate acts, and the freeze correctly stood between the last condition landing and the successor artefact being filed.
 Two classes remain frozen and travel as named caveats rather than a blanket block: **FC3** (survivorship, 2023–2025 only) and **FC6** (`portopt` not bound to allocation).
 The anchoring restriction is **narrowed, not removed**. Publishing a track record while stating plainly that its anchors are internal is honest; what anchoring protects is one specific claim. **No document may claim or imply that this record cannot have been altered by its operator.** "Tamper-evident" must always carry that qualification, and *unfalsifiable*, *cannot be retouched* and *provably unmodified* must not appear at all.
-The frozen claim set `C` (members FC1-FC8) is defined once, in `proofs/P6_GOVERNANCE_CLEANUP.md` §4.
+### 13.4 Frozen claim set — every member's status
+
+`C` is defined once, in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, members FC1–FC8. **Every member's status must appear here: a member whose status is stated nowhere is indistinguishable from one silently dropped, which is what v1.1 did to FC2, FC4 and FC7.**
+
+| Class | Subject | Status |
+|---|---|---|
+| FC1 | Live accuracy figures | **CLOSED 2026-08-05.** Closed for markdown 2026-08-04; the shipped surfaces were outside the gate until the code scan landed (§8.1) |
+| FC2 | CI verdicts published while intervals were withheld | **SUPERSEDED** — the registry publishes a corrected interval where the block floor is met and withholds the verdict wherever the interval is withheld |
+| FC3 | Survivorship control | **FROZEN**, narrowed to 2023–2025 — but the residual has been re-measured and no longer appears in the data; two confirmations are required before lifting (§8.2) |
+| FC4 | Point-in-time universe | **FROZEN for the narrow claim** — table populated, `bars-1d` derivation unaudited (§8.3) |
+| FC5 | Kill switch existence and enforcement | **RESOLVED** for the paper book (P4C, §9) |
+| FC6 | Portfolio optimiser not bound to allocation | **FROZEN** (§9) |
+| FC7 | Unevidenced "already built" attestations | **SUPERSEDED by §7's generated evidence table** (`tools/controls_evidence.py`, gated in CI) — and §8.1 is a live instance of exactly this failure mode, so FC7 is a standing rule, not a closed item |
+| FC8 | Structural forecast counts | **RESOLVED** — generated per predictor, not typed |
 The prediction ledger is hash-chained and signed. Its anchors live in the same SQLite file the operator controls.
 Anchoring status is INTERNAL — UNANCHORED. `ops/anchor-publish.sh` exists, is invoked by nothing, is not scheduled, and has never succeeded; its log's last entry, dated 2026-07-27, reads `FAIL: no public clone at /nonexistent — nothing was externally timestamped`.
 Therefore the chain is tamper-evident against an actor without the signing key, and is NOT evidence against the operator, who holds both the key and the database.

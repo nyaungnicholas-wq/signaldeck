@@ -352,6 +352,8 @@ hand — that is the whole point of it (FC1; see
 
 Generated from `data/accuracy_registry.json` (grade of 2026-08-04T20:34:19) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
+> **STALE — this is not a current grade.** The registry is `REFUSED` (research-loop liveness check failed (exit 1) — a narrated grid search left no verifiable judgment record, or a pre-registered forecast kind has never frozen a forecast and gave no refusal; the grader was not run), and the last successful grade is 17.5h old. The numbers below are that last successful grade, taken at 2026-08-04T20:34:19. Nothing here has been re-graded since.
+
 ### Live record
 
 | Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
@@ -384,7 +386,7 @@ Sample-size notices carried by the registry itself (statements about the sample,
 
 **Multiplicity:** family_size=13, looks=9, divisor=117, corrected_alpha=0.00042735042735042735.
 
-**Survivorship:** epoch 2026-07-24; listing status resolvable for 326/335 graded symbols (97.3%): 9 inactive symbol(s) with no delisted_at.
+**Survivorship:** epoch 2026-07-24; listing status resolvable for 326/335 graded symbols (97.3%): 9 inactive symbol(s) with no delisted_at; measured effect +0.53pp (active-only 83.58% minus survivorship-clean 83.05%, n=57,490 clean vs 17,876 active, revalidation of 2026-08-05T03:27:32+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
 
 <!-- END GENERATED live_accuracy -->
 

@@ -737,6 +737,10 @@ func (w *ResearchLedgerWorker) seedOnce(ctx context.Context, now int64) (bool, e
 				// as two independent replications.
 				{kind: rl.KindManual, k: 1330, n: 2984, p0: 0.5563, bf: -1, // below-band: BayesFactorBelow
 					note: "transcribed 2026-07-15: 1w pressure+forecast blend 44.6% vs forecast alone 55.6%"},
+				// SUPERSEDED-SNAPSHOT — a transcribed 2026-07-15 experiment, not a
+				// live-record claim. The 43.1% here is this blend's accuracy and
+				// collides by coincidence with a directional-ensemble grade; the
+				// literal gate cannot tell them apart, so the block is labelled.
 				{kind: rl.KindManual, k: 1289, n: 2988, p0: 0.5318, bf: -1,
 					note: "transcribed 2026-07-15: 1w pressure+expectancy blend 43.1% vs expectancy alone 53.2% (same window as the forecast row — correlated evidence)"},
 			},

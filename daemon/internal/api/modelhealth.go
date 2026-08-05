@@ -112,11 +112,13 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 			"is retired automatically and stops emitting, regardless of how it scores " +
 			"on calibration, drift or freshness. Below 30 independent observations no " +
 			"verdict is claimed in either direction.",
-		"inversionRule": "Inverting or relabeling a retired model is not a rescue: " +
-			"48.1% inverts to 51.9%, still below the 54.6% majority-class null, because " +
-			"the honest competing model is the constant majority guess, not a coin flip. " +
-			"A derived variant is a new model and may emit only after passing the full " +
-			"canary re-admission gate.",
+		"inversionRule": "Inverting or relabeling a retired model is not a rescue. The " +
+			"competing model is the constant majority guess, not a coin flip, and that " +
+			"null sits above 50%: flipping an accuracy of a yields 1-a, which clears the " +
+			"majority-class rate only by the margin the original trailed 50% by, not by " +
+			"the margin it trailed the null by. Inversion relabels an edge, it does not " +
+			"create one. A derived variant is a new model and may emit only after passing " +
+			"the full canary re-admission gate on its own shadow record.",
 		"readmissionRule": fmt.Sprintf("Re-admission is a coded threshold, not a judgment "+
 			"call: a retired model's emitting flips back to true only when its shadow "+
 			"record's day-clustered Wilson lower bound (design effect measured from the "+
@@ -134,11 +136,13 @@ func (d Deps) registerModelHealth(mux *http.ServeMux) {
 }
 
 // derivedVariantMarkers flag a model key as a re-signed or re-badged rescue of
-// a retired model — the same below-null signal wearing a new name. Inversion
-// is refuted by arithmetic, not policy: flipping the ensemble's 48.1% yields
-// 51.9%, still below the 54.6% majority-class null, because the honest
-// competing model is the constant majority guess. See PREDICTION_PROCESS.md,
-// "Why inversion is not a rescue".
+// a retired model — the same below-null signal wearing a new name. Inversion is
+// refuted by policy AND by arithmetic: the competing model is the constant
+// majority guess, whose rate is above 50%, so flipping an accuracy of a yields
+// 1-a and clears that null only by the margin the original trailed 50% by. The
+// specific figures are not typed here — they move with every grade, and an
+// argument pinned to a stale pair can quietly stop being true. See
+// PREDICTION_PROCESS.md, "Why inversion is not a rescue".
 var derivedVariantMarkers = []string{"-inverted", "-relabeled", "-flipped"}
 
 // guardDerivedVariant forces an inverted/relabeled variant off unless the
@@ -163,9 +167,9 @@ func guardDerivedVariant(v map[string]any) map[string]any {
 	v["emitting"] = false
 	v["verdict"] = "retired"
 	v["note"] = "inverted/relabeled variant of a retired model — blocked from emitting. " +
-		"Inverting a below-null signal cannot beat the majority-class null (48.1% flips " +
-		"to 51.9%, still under 54.6%). Emission requires passing the canary re-admission " +
-		"gate, which records readmitted=true."
+		"Inverting relabels a signal, it does not create an edge, and the competing " +
+		"model is the constant majority guess rather than a coin flip. Emission requires " +
+		"passing the canary re-admission gate, which records readmitted=true."
 	return v
 }
 

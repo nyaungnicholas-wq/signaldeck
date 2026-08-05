@@ -11,6 +11,11 @@
 // shares ONE market move. A binomial interval over 13,008 such rows asserts
 // 13,008 independent trials when the sample contains roughly 19.
 //
+// SUPERSEDED-SNAPSHOT — the block below is a DATED MEASUREMENT (2026-07-25),
+// not the current live record. It is the evidence that the design effect is
+// real and large; replacing its figures with today's would destroy the worked
+// example without improving it. For the current grade read the registry.
+//
 // Measured on the live 1d directional record (2026-07-25, 13,058 resolved
 // symbol-days spanning 23 days), by the estimator in this file:
 //

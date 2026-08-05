@@ -23,6 +23,11 @@ or fails a build. Three modes, one source, no hand-typed accuracy anywhere.
     --inject DOC...    splice the block into each DOC's marker pair
     --check            fail (1) if the partial or any --inject block has drifted
     --scan DOC...      fail (1) on a SUPERSEDED live-record literal in DOC
+    --scan-code SRC... the same gate over source files (.go/.ts/.tsx). Prose was
+                       never the only place a number could go stale: the API, the
+                       MCP surface and the web UI each carried their own typed
+                       copy of this record, disagreeing with each other on the
+                       sample size, while the markdown-only gate reported clean.
 
 THE REFUSAL PATH IS LOAD-BEARING. The registry can come back REFUSED with zero
 rows — it does that when the grader's hash no longer matches the one pinned on
@@ -49,6 +54,7 @@ Run: python3 tools/live_accuracy.py --write
      python3 tools/live_accuracy.py --check --inject $(cat partials/INCLUDES.txt)
 """
 import argparse
+import io
 import json
 import os
 import sys
@@ -84,7 +90,8 @@ README_END = "<!-- LIVE-ACCURACY:END -->"
 # snapshot twice and either half alone is enough to date it.
 SUPERSEDED_LITERALS = [
     "48.1%", "54.6%", "48.0%", "54.4%", "46.7%", "46.2%", "48.6%", "56.2%",
-    "13,058", "13,044", "12,696", "8,191",
+    "46.3%", "52.9%",
+    "13,058", "13,044", "12,696", "8,191", "18,762", "9,164", "8,272", "2,257",
 ]
 
 # A document carrying this marker is declaring itself a dated record rather than
@@ -228,12 +235,55 @@ def render(snapshot, banner, registry_path):
                    if r.get("survivorship_clean") is False and r.get("survivorship_reason")), None)
     if reason:
         surv.append(reason)
+    effect = survivorship_effect()
+    if effect is not None:
+        # The DIRECTION of this bias was already stated in prose ("the published
+        # claim is inflated by excluding dead names") while its SIZE sat in a
+        # JSON file nobody opens. A known-direction adverse bias that travels
+        # without its magnitude is not disclosed, it is merely admitted, so the
+        # number is rendered here from the revalidation snapshot.
+        surv.append(
+            "measured effect %+.2fpp (active-only %.2f%% minus survivorship-clean "
+            "%.2f%%, n=%s clean vs %s active, revalidation of %s) — POSITIVE means "
+            "the active-only figure is INFLATED by excluding dead names"
+            % (100.0 * (effect["active"] - effect["clean"]),
+               100.0 * effect["active"], 100.0 * effect["clean"],
+               "{:,}".format(effect["n_clean"]), "{:,}".format(effect["n_active"]),
+               effect["generated"]))
     if surv:
         out.append("**Survivorship:** " + "; ".join(surv) + ".")
         out.append("")
 
     out.append(END)
     return "\n".join(out) + "\n"
+
+
+REVALIDATION_STATUS = os.path.join(REPO, "ops", "revalidation-status.json")
+
+
+def survivorship_effect(path=REVALIDATION_STATUS):
+    """Active-only accuracy minus survivorship-clean accuracy, from the snapshot.
+
+    Returns None when the monthly revalidation has not run, or has not written
+    both arms — an absent measurement must read as absent rather than as zero
+    effect, which is the direction that would flatter the record.
+    """
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            snap = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    arms = snap.get("arms") or {}
+    active, clean = arms.get("active_only"), arms.get("survivorship_clean")
+    if not active or not clean:
+        return None
+    if active.get("accuracy") is None or clean.get("accuracy") is None:
+        return None
+    return {
+        "active": active["accuracy"], "clean": clean["accuracy"],
+        "n_active": active.get("n", 0), "n_clean": clean.get("n", 0),
+        "generated": snap.get("generated", "unknown"),
+    }
 
 
 def read(path):
@@ -307,7 +357,12 @@ def current_literals(snapshot):
 def scan(path, extra_literals=()):
     """Report banned live-record literals. Returns a list of (line, literal)."""
     text = read(path)
-    if HISTORICAL_MARKER in text:
+    lines = text.splitlines()
+    # A whole document can declare itself history, and every such document in
+    # this repository does it on line 2. Restricting the whole-file escape to
+    # the header keeps a marker buried at line 900 from silently exempting the
+    # 899 live claims above it — the escape has to be a banner, not a footnote.
+    if HISTORICAL_MARKER in "\n".join(lines[:40]):
         return []
     parts = os.path.abspath(path).replace("\\", "/").split("/")
     # audits/ and proofs/ are the same category: dated evidence about a moment,
@@ -322,7 +377,7 @@ def scan(path, extra_literals=()):
     banned = list(SUPERSEDED_LITERALS) + list(extra_literals)
     hits = []
     inside = False
-    for n, line in enumerate(text.splitlines(), 1):
+    for n, line in enumerate(lines, 1):
         if BEGIN in line or README_BEGIN in line:
             inside = True
             continue
@@ -332,9 +387,23 @@ def scan(path, extra_literals=()):
         if inside:
             continue
         for lit in banned:
-            if lit in line:
+            if lit in line and not _historical_block(lines, n):
                 hits.append((n, lit))
     return hits
+
+
+# Source files cannot carry a whole-file history banner — a package is not a
+# dated record. What they can carry is ONE labelled historical block, which is a
+# legitimate thing to render (the accuracy page's pre-epoch retirement panel is
+# exactly that). So the marker works at block scope here: it exempts the lines
+# beneath it, and only those, so the rest of the file stays under the gate.
+HISTORICAL_BLOCK_LINES = 25
+
+
+def _historical_block(lines, n):
+    """True if a HISTORICAL_MARKER labels the block containing line n."""
+    start = max(0, n - HISTORICAL_BLOCK_LINES - 1)
+    return any(HISTORICAL_MARKER in ln for ln in lines[start:n])
 
 
 def main():
@@ -345,6 +414,8 @@ def main():
     ap.add_argument("--check", action="store_true", help="fail on drift instead of writing")
     ap.add_argument("--inject", nargs="*", default=[], metavar="DOC")
     ap.add_argument("--scan", nargs="*", default=[], metavar="DOC")
+    ap.add_argument("--scan-code", nargs="*", default=[], metavar="SRC",
+                    help="the same gate over source files (.go/.ts/.tsx)")
     # --check compares documents against the REGISTRY, so it needs data/, which
     # is gitignored: on a clean CI checkout that step cannot run at all.
     # --check-includes compares documents against the committed PARTIAL instead.
@@ -363,6 +434,7 @@ def main():
     # correctly and explains nothing.
     args.inject = [p.strip() for p in args.inject if p.strip()]
     args.scan = [p.strip() for p in args.scan if p.strip()]
+    args.scan_code = [p.strip() for p in args.scan_code if p.strip()]
     if args.check_includes is not None:
         args.check_includes = [p.strip() for p in args.check_includes if p.strip()]
 
@@ -373,7 +445,7 @@ def main():
         snapshot, banner = load_snapshot(args.registry)
         block = render(snapshot, banner, args.registry)
         current = current_literals(snapshot)
-    elif args.scan and os.path.exists(args.registry):
+    elif (args.scan or args.scan_code) and os.path.exists(args.registry):
         # --scan alone does not need a rendered block, but the current grade's
         # own figures make it much stronger. When there is no registry (a clean
         # CI checkout — data/ is gitignored) it degrades to the superseded list
@@ -421,6 +493,16 @@ def main():
             kind = "superseded" if lit in SUPERSEDED_LITERALS else "hand-typed current"
             print("%s:%d: %s live-record literal '%s' — include "
                   "partials/live_accuracy.md instead" % (doc, n, kind, lit))
+            rc = 1
+
+    # Source files cannot include the partial, so the remedy differs: read the
+    # registry at runtime, or label the block historical and let it be history.
+    for src in args.scan_code:
+        for n, lit in scan(src, current):
+            kind = "superseded" if lit in SUPERSEDED_LITERALS else "hand-typed current"
+            print("%s:%d: code %s live-record literal '%s' — read it from "
+                  "data/accuracy_registry.json at runtime, or mark the block "
+                  "%s" % (src, n, kind, lit, HISTORICAL_MARKER))
             rc = 1
 
     sys.exit(rc)

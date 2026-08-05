@@ -37,8 +37,10 @@ import (
 //     the intraday pseudo-replication and leaves the LARGER problem untouched —
 //     ~1,000 symbols on one day share ONE market move. Every interval published
 //     here therefore comes from internal/clusterstat with the DAY as the unit of
-//     resampling, corrected by a design effect measured from the data (14.7x on
-//     the live 1d record: effective N 887, not 13,058). The raw count never sets
+//     resampling, corrected by a design effect measured from the data. On the
+//     SUPERSEDED-SNAPSHOT 2026-07-25 measurement that sized this — a dated
+//     example, not the current record — the effect was 14.7x on
+//     the live 1d record: effective N 887, not 13,058. The raw count never sets
 //     an interval's width, and it is never presented alone as a sample size.
 //   - Gate: below trackMinIndependentN independent observations we WITHHOLD every
 //     headline number (winrate/Brier/IC null) and say why. With ~0 resolved live
