@@ -215,6 +215,42 @@ def evaluate(rows):
     return out
 
 
+
+def summarize(label, samples):
+    """The same numbers report() prints, as a dict a gate can read.
+
+    report() writes to a terminal, which means nothing downstream can consume
+    it: STRATEGY_DECK.md §8 recorded that this script "runs on demand only.
+    Nothing schedules it and no gate consumes its output." A validation nobody
+    reads is indistinguishable from one that was never run.
+    """
+    out = {"label": label, "n": len(samples), "bands": [],
+           "distinct_quarters": len({s[2] for s in samples}) if samples else 0}
+    if not samples:
+        return out
+    for lo, hi, name in BANDS:
+        sel = [s for s in samples if lo <= s[0] < hi]
+        if not sel:
+            out["bands"].append({"band": name, "n": 0})
+            continue
+        hits = sum(1 for s in sel if s[1])
+        byq = defaultdict(lambda: [0, 0])
+        for s in sel:
+            byq[s[2]][1] += 1
+            if s[1]:
+                byq[s[2]][0] += 1
+        qlo, qhi = quarter_bootstrap({k: tuple(v) for k, v in byq.items()})
+        wlo, whi = wilson(hits, len(sel))
+        out["bands"].append({
+            "band": name, "n": len(sel), "accuracy": hits / len(sel),
+            "quarter_ci": None if qlo is None else [qlo, qhi],
+            "wilson_ci": [wlo, whi],
+        })
+    hits = sum(1 for s in samples if s[1])
+    out["accuracy"] = hits / len(samples)
+    return out
+
+
 def report(label, samples):
     print(f"\n{'='*78}\n{label}\n{'='*78}")
     if not samples:
@@ -337,6 +373,9 @@ def geometry_control(samples, uncond):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=DEFAULT_DB)
+    ap.add_argument("--json", metavar="PATH",
+                    help="also write a machine-readable summary here, so a gate "
+                         "can consume this run instead of a human reading it")
     args = ap.parse_args()
     con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     c = con.cursor()
@@ -364,6 +403,26 @@ def main():
     report("TREND21 — ACTIVE ONLY (what the published claim was measured on)", live)
     report("TREND21 — DELISTED / INACTIVE ONLY (the survivorship blind spot)", dead)
     report("TREND21 — SURVIVORSHIP-CLEAN (every symbol ever tracked)", live + dead)
+
+    if args.json:
+        import datetime as _dt, json as _json, os as _os
+        payload = {
+            "generated": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+            "db": _os.path.abspath(args.db),
+            "symbols_scanned": scanned,
+            "symbols_skipped_short_history": skipped,
+            "symbols_active": len(live_samples),
+            "symbols_inactive": len(dead_samples),
+            "arms": {
+                "active_only": summarize("active only", live),
+                "inactive_only": summarize("delisted/inactive only", dead),
+                "survivorship_clean": summarize("survivorship-clean", live + dead),
+            },
+        }
+        with open(args.json, "w", encoding="utf-8") as f:
+            _json.dump(payload, f, indent=2)
+        print("")
+        print(f"wrote {args.json}")
 
     if live and dead:
         la = sum(1 for s in live if s[1]) / len(live)

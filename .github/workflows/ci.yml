@@ -186,14 +186,26 @@ jobs:
       # that DOES run on every CI job: it exercises the generator, the refusal
       # fallback, the no-verdict-while-withheld rule and the scan against
       # fixtures, so the mechanism itself cannot regress unnoticed.
-      - name: Live record — one generated source, no hand-typed figures
+      # These two run on EVERY checkout, because both of their inputs are
+      # git-tracked: the committed partial, and the documents that embed it.
+      # This is the half of the guard that must never be skippable — it is what
+      # stops a document's copy of the table drifting from the one source, which
+      # is FC1 itself. It was briefly unenforced on clean checkouts when the
+      # only other check covering it was removed, hence the belt here.
+      - name: Live record — every document's block matches the committed partial
+        run: python3 tools/live_accuracy.py --check-includes $(cat partials/INCLUDES.txt)
+      - name: Live record — no hand-typed accuracy figures in any document
+        run: python3 tools/live_accuracy.py --scan $(git ls-files '*.md')
+      # This one needs data/, which is gitignored, so it is the operator/publish
+      # gate rather than a clean-checkout gate: it proves the PARTIAL still
+      # matches the registry it was generated from.
+      - name: Live record — partial still matches the registry (needs data/)
         run: |
           if [ ! -f data/accuracy_registry.json ]; then
-            echo "no registry in this checkout (data/ is gitignored) — fixture tests above cover the generator"
+            echo "no registry in this checkout (data/ is gitignored) — partial-vs-registry is the operator gate; doc-vs-partial ran above"
             exit 0
           fi
           python3 tools/live_accuracy.py --check --inject $(cat partials/INCLUDES.txt)
-          python3 tools/live_accuracy.py --scan $(git ls-files '*.md')
       # The snapshot is the ONLY grading path an outside reader can run, and it
       # is worthless if a file REPRODUCE.md tells them to check is missing from
       # the clone. This asserts completeness, per-file re-hash, and git-tracked
@@ -308,3 +320,25 @@ jobs:
       # is how "we'll check it locally" becomes "nobody checks it".
       - name: Documents may not contradict the repository's own measurements
         run: python3 tools/docs_gate.py check
+      # STRATEGY_DECK.md §8 carried this defect in one sentence: the structural
+      # walk-forward validation "runs on demand only. Nothing schedules it and no
+      # gate consumes its output." A validation nobody reads is indistinguishable
+      # from one that was never run, which is the same shape as the dead A4 gate
+      # floor and the unwired A13 scan.
+      #
+      # ops/com.signaldeck.revalidation.plist is now the schedule (monthly) and
+      # ops/revalidate-structural.sh writes ops/revalidation-status.json. Same
+      # split as ops/data-integrity.json: the ~4 GB database is gitignored so a
+      # runner cannot re-derive the answer, it verifies the committed one. A
+      # MISSING OR STALE SNAPSHOT IS A VIOLATION, NEVER A SKIP.
+      - name: The structural revalidation has been run, and recently
+        run: python3 tools/check_revalidation.py
+      # DOCS_INDEX.md is RENDERED from ops/docs-registry.json, so it is the one
+      # place a reader sees each document's owner / version / data-as-of /
+      # status. A rendered file that stops matching its source is worse than no
+      # file: it displays a status the registry no longer holds, with a
+      # generated-by header vouching for it. The generator can already detect
+      # that (`--check`); nothing ran it, which is the "existed but never wired"
+      # class this repo has been bitten by twice (A4, A13).
+      - name: The rendered document index still matches the registry
+        run: python3 tools/gen_docs_index.py --check
