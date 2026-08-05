@@ -41,8 +41,13 @@ func main() {
 	var (
 		dbPath = flag.String("db", "data/signaldeck.db", "path to signaldeck.db")
 		commit = flag.Bool("commit", false, "actually append (default is dry-run)")
+		kind   = flag.String("kind", GradabilityKind,
+			"which amendment to file: "+GradabilityKind+" or "+RevisionEpochKind)
 	)
 	flag.Parse()
+	if *kind != GradabilityKind && *kind != RevisionEpochKind {
+		die("unknown -kind %q (want %s or %s)", *kind, GradabilityKind, RevisionEpochKind)
+	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
 		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(15000)&_pragma=foreign_keys(ON)&_txlock=immediate")
@@ -57,25 +62,45 @@ func main() {
 	}
 	fmt.Println("pre-flight: chain verified INTACT")
 
-	m, err := measureState(ctx, db)
-	if err != nil {
-		die("measure state: %v", err)
-	}
-	// A record claiming zero resolutions must not be filed once any exist: the
-	// whole value of this amendment is that it predates every outcome.
-	if m.Resolved != 0 {
-		die("REFUSING to file: %d structural forecast(s) have resolved. This record asserts it was "+
-			"written before any outcome was known, and that is no longer true.", m.Resolved)
+	var spec, note string
+	switch *kind {
+	case GradabilityKind:
+		m, err := measureState(ctx, db)
+		if err != nil {
+			die("measure state: %v", err)
+		}
+		// A record claiming zero resolutions must not be filed once any exist:
+		// the whole value of this amendment is that it predates every outcome.
+		if m.Resolved != 0 {
+			die("REFUSING to file: %d structural forecast(s) have resolved. This record asserts it was "+
+				"written before any outcome was known, and that is no longer true.", m.Resolved)
+		}
+		spec, note = gradabilitySpec(m), amendmentNote
+
+	case RevisionEpochKind:
+		m, err := measureRevisionState(ctx, db)
+		if err != nil {
+			die("measure revision state: %v", err)
+		}
+		// This record's entire defence is that it moves the boundary PAST the
+		// contamination and no further. Filing it while an unattributable row
+		// exists on or after the new epoch would make that false, and would
+		// quietly exempt whatever wrote it.
+		if m.OnOrAfterNewEpoch != 0 {
+			die("REFUSING to file: %d unattributable row(s) exist on or after the new epoch "+
+				"(2026-08-04). This record asserts the boundary clears every contaminated row, "+
+				"and that is not true — fix the build first, then file.", m.OnOrAfterNewEpoch)
+		}
+		spec, note = revisionEpochSpec(m), revisionEpochNote
 	}
 
-	spec := gradabilitySpec(m)
 	rec := prereg.Record{
 		Ts:       time.Now().UTC().Unix(),
 		TsNanos:  int64(time.Now().UTC().Nanosecond()),
-		Kind:     GradabilityKind,
+		Kind:     *kind,
 		SpecJSON: spec,
 		SpecHash: sha256Hex(spec),
-		Note:     amendmentNote,
+		Note:     note,
 	}
 
 	if !*commit {

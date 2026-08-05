@@ -98,6 +98,10 @@ var (
 	revOnce  sync.Once
 	rev      string
 	modified bool
+	// fromLdflags records that the stamp came from the sanctioned deploy
+	// path's -ldflags injection rather than an embedded vcs.revision. That
+	// build has no .git to interrogate and needs none.
+	fromLdflags bool
 )
 
 // ldflagsRev is set with -ldflags "-X ...lineage.ldflagsRev=<commit>" by the
@@ -128,8 +132,45 @@ func readBuild() {
 		if rev == "" && isFullHex(ldflagsRev) {
 			rev = ldflagsRev
 			modified = false
+			fromLdflags = true
 		}
 	})
+}
+
+// BuildReachable reports whether this build's commit still EXISTS in the
+// checkout at dir. It answers a question BuildModified cannot: a build can be
+// clean, carry a real 40-hex commit, and still be unattributable because that
+// commit was rebased, amended, or dropped afterwards. History rewritten under a
+// running daemon silently converts every row it writes into evidence the
+// grader will refuse forever — that is exactly how 946 rows landed on
+// 2026-08-02 under three clean stamps this repository no longer contains.
+//
+// checked reports whether the question could be answered at all. A proven NO
+// (git ran, and the object is absent) is the only result that should stop
+// anything: an unprovable answer must never be read as a refusal, the same
+// posture revisionResolvableCached takes when it caches only a proven YES.
+// Builds from the sanctioned deploy path are skipped outright — that tree is a
+// `git archive HEAD` extraction with no .git, and its provenance is certain by
+// construction rather than by lookup.
+func BuildReachable(ctx context.Context, dir string) (ok, checked bool) {
+	readBuild()
+	if fromLdflags {
+		return true, false
+	}
+	if rev == "" || modified {
+		// Already the other gate's business, and not a question about history.
+		return false, false
+	}
+	// Distinguish "no such commit" from "cannot ask". Without a checkout here
+	// there is nothing to prove either way.
+	probe, cancel := context.WithTimeout(ctx, revisionResolveTimeout)
+	defer cancel()
+	gitDir := exec.CommandContext(probe, "git", "rev-parse", "--git-dir")
+	gitDir.Dir = dir
+	if gitDir.Run() != nil {
+		return false, false
+	}
+	return revisionResolvableCached(ctx, dir, rev, modified), true
 }
 
 // isFullHex reports whether s is a full 40-character lowercase-or-uppercase hex
