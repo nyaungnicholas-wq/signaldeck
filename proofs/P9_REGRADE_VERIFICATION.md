@@ -117,6 +117,50 @@ The `grader-status: MISSING` row is a smaller instance of the same thing: a succ
 grade omits the `status` key entirely, and the snapshot reader records the absence as
 `MISSING` rather than `OK`.
 
+### 5.1 The gate is failing its own specification
+
+`tools/docs_gate.py` does not pass its own suite: **56 tests, 5 failures, 4 errors**,
+static since 18:23:54. The failures are its own false-positive controls:
+
+| failing test | what it asserts |
+|---|---|
+| `test_c1_ignores_a_confidence_level` | "`95% CI` is the interval's confidence, not an accuracy figure" |
+| `test_c1_ignores_the_coin_flip_baseline` | a 50% baseline is not a live-accuracy claim |
+| `test_c1_allows_a_figure_inside_a_generated_region` | "A generated number is the fix, not the defect — it must not fire" |
+| 4 × `GraderStatusTest` | the grader-status helper errors outright |
+
+This is decisive for certification. Take the gate's own reported violation at
+`PREREGISTRATION.md:111`:
+
+```
+With `[lo, hi]` the day-clustered 95% interval on live accuracy and `C` the frozen
+```
+
+That line is **verbatim the fixture in `test_c1_ignores_a_confidence_level`**, the test
+that asserts it must *not* be flagged. The gate is firing on a string its own
+specification exempts.
+
+So the ten violations are not evidence that the corpus is wrong. They are evidence that
+the instrument is wrong, and its author's tests say so explicitly.
+
+Two consequences worth stating:
+
+1. **Certifying P9 through this gate would be certifying with a broken instrument** —
+   the same error as reading a verdict off a grader that refuses to run, which is what
+   P1 existed to prevent.
+2. **Complying with it would damage the repository.** The remedy it prints for
+   `PREREGISTRATION.md:111` is to move the figure into a generated partial or delete the
+   claim. `PREREGISTRATION.md` is digested into the pre-registration chain as
+   `prereg-document`; editing that line to satisfy a false positive changes its digest
+   and forces an unintended chained amendment. The gate is asking for a change that Rule
+   2 exists to forbid.
+
+The CI job wired in `10875b2` runs `python3 tools/test_docs_gate.py` **before**
+`docs_gate.py check`, deliberately — "self-test the gate before trusting it". CI will
+therefore fail at the self-test step and name the gate, not the corpus. That is the
+harness behaving correctly: it is reporting that this gate is not yet trustworthy, which
+is true.
+
 ## 6. Status
 
 | P9 done-when | Status |
