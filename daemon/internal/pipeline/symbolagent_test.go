@@ -65,6 +65,28 @@ func seedLabeledSpreadDays(t *testing.T, st *store.Store, symbolID int64, h md.H
 			}
 		}
 	}
+
+	// PROVE THE FIXTURE, at the fixture. This helper's whole contract is "N
+	// distinct UTC day-clusters", and when it silently broke that contract the
+	// failure surfaced far downstream as an unexplained n=6 from the learner —
+	// a number with no way back to its cause, which cost a full investigation
+	// that could not reproduce it. Asserting the invariant HERE means the next
+	// occurrence names itself, and names it in the fixture rather than in the
+	// pseudo-replication guard it would otherwise look like a regression in.
+	rows, err := st.LabeledFeaturesBySymbol(ctx, symbolID, h, days*perDay*4)
+	if err != nil {
+		t.Fatalf("fixture self-check read: %v", err)
+	}
+	buckets := map[int64]int{}
+	for _, r := range rows {
+		buckets[r.Ts/86400]++
+	}
+	if len(rows) != days || len(buckets) != days {
+		t.Fatalf("fixture seeded %d days x %d rows but the labeled reader collapses them to "+
+			"%d rows over %d UTC day-clusters (want %d and %d) — base=%d (base%%86400=%d), "+
+			"buckets=%v; the fixture is wrong, not the code under test",
+			days, perDay, len(rows), len(buckets), days, days, base, base%86400, buckets)
+	}
 }
 
 // TestPerSymbolLearner_GraduatesAndPersists: a symbol with >= MinPersonal of
@@ -255,7 +277,17 @@ func TestPerSymbolLearner_ClusteredRowsDoNotGraduate(t *testing.T) {
 	// the duplicate rows would show up here as n=60 rather than silently
 	// re-arming the pseudo-replication downstream.
 	if m.NSamples != 5 {
-		t.Fatalf("5 days x 12 intraday rows must collapse to 5 independent samples, got n=%d", m.NSamples)
+		// Dump the evidence. The fixture self-check in seedLabeledSpreadDays has
+		// already proven the seeded rows collapse to 5, so reaching here means
+		// the learner counted something the reader did not return — say what.
+		rows, rerr := st.LabeledFeaturesBySymbol(ctx, sym.ID, md.H1d, 1000)
+		buckets := map[int64]int{}
+		for _, r := range rows {
+			buckets[r.Ts/86400]++
+		}
+		t.Fatalf("5 days x 12 intraday rows must collapse to 5 independent samples, got n=%d "+
+			"(reader now returns %d rows over %d UTC day-clusters %v, err=%v)",
+			m.NSamples, len(rows), len(buckets), buckets, rerr)
 	}
 	if m.Tier == symbolagent.TierPersonal {
 		t.Fatalf("%d independent samples over 5 distinct days must NOT be personal (floors are %d rows / %d days)",
