@@ -42,11 +42,11 @@ func main() {
 		dbPath = flag.String("db", "data/signaldeck.db", "path to signaldeck.db")
 		commit = flag.Bool("commit", false, "actually append (default is dry-run)")
 		kind   = flag.String("kind", GradabilityKind,
-			"which amendment to file: "+GradabilityKind+" or "+RevisionEpochKind)
+			"which amendment to file: "+GradabilityKind+", "+RevisionEpochKind+" or "+ProvenanceKind)
 	)
 	flag.Parse()
-	if *kind != GradabilityKind && *kind != RevisionEpochKind {
-		die("unknown -kind %q (want %s or %s)", *kind, GradabilityKind, RevisionEpochKind)
+	if *kind != GradabilityKind && *kind != RevisionEpochKind && *kind != ProvenanceKind {
+		die("unknown -kind %q (want %s, %s or %s)", *kind, GradabilityKind, RevisionEpochKind, ProvenanceKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -92,6 +92,32 @@ func main() {
 				"and that is not true — fix the build first, then file.", m.OnOrAfterNewEpoch)
 		}
 		spec, note = revisionEpochSpec(m), revisionEpochNote
+
+	case ProvenanceKind:
+		p, err := measureProvenance(ctx, db)
+		if err != nil {
+			die("measure provenance: %v", err)
+		}
+		// The record's premise is that an off-path protocol record exists and is
+		// unexplained. Filing it when none does would put a false statement on the
+		// chain, and the chain is the one thing that cannot be quietly corrected.
+		if p.OffendingSeq == 0 {
+			die("REFUSING to file: every grading-protocol record after the genesis registration " +
+				"already carries an AMENDMENT note. There is no off-path record to explain.")
+		}
+		// The defence of the off-path record is that it TIGHTENED the protocol. If
+		// the database does not show restored floors, that defence is unproven and
+		// this record must not assert it.
+		if len(p.RestoredFields) == 0 {
+			die("REFUSING to file: seq %d restored none of the frozen floors relative to seq %d. "+
+				"This record's whole claim is that the off-path change was strictly tightening, "+
+				"and that is not what the chain shows.", p.OffendingSeq, p.PriorSeq)
+		}
+		if len(p.DroppedFields) != 0 {
+			die("REFUSING to file: seq %d DROPPED %v. That is a loosening, not a repair, and it "+
+				"needs a decision rather than an explanatory record.", p.OffendingSeq, p.DroppedFields)
+		}
+		spec, note = provenanceSpec(p), provenanceNote
 	}
 
 	rec := prereg.Record{
