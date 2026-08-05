@@ -165,6 +165,35 @@ jobs:
       # CI, so the day-resampling discipline could regress silently. This is
       # the discovery command the test file's own header documents.
       - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      # FC1 gate. Four documents once printed four different live directional
+      # records — 48.1%/54.6% over 13,058, 48.0%/54.4% over 12,696, 46.7% over
+      # 8,191, and 46.3%/52.9% over 2,257 — and every one of them was correct on
+      # the day it was typed. Nothing distinguished the current one from the
+      # stale ones, so a reader could not tell and neither could a reviewer.
+      #
+      # The record is now generated once (tools/live_accuracy.py reads
+      # data/accuracy_registry.json into partials/live_accuracy.md) and spliced
+      # into each document in partials/INCLUDES.txt between marker comments.
+      # These two steps are what make that binding rather than a convention:
+      # --check fails when a document's block drifts from the registry, and
+      # --scan fails when any tracked markdown hand-types a live-record figure,
+      # superseded OR current. A document under audits/, or one carrying the
+      # SUPERSEDED-SNAPSHOT marker, is a dated record and is exempt by design.
+      #
+      # data/ is gitignored, so a CI runner has no registry to render — these
+      # steps run only when one is present, and are the local/publish gate.
+      # tools/test_live_accuracy.py (in the discovery run above) is the part
+      # that DOES run on every CI job: it exercises the generator, the refusal
+      # fallback, the no-verdict-while-withheld rule and the scan against
+      # fixtures, so the mechanism itself cannot regress unnoticed.
+      - name: Live record — one generated source, no hand-typed figures
+        run: |
+          if [ ! -f data/accuracy_registry.json ]; then
+            echo "no registry in this checkout (data/ is gitignored) — fixture tests above cover the generator"
+            exit 0
+          fi
+          python3 tools/live_accuracy.py --check --inject $(cat partials/INCLUDES.txt)
+          python3 tools/live_accuracy.py --scan $(git ls-files '*.md')
       # The snapshot is the ONLY grading path an outside reader can run, and it
       # is worthless if a file REPRODUCE.md tells them to check is missing from
       # the clone. This asserts completeness, per-file re-hash, and git-tracked
@@ -209,3 +238,73 @@ jobs:
       # a planted secret, the real scan below is not trustworthy evidence.
       - run: ops/pre-publish-scan-test.sh
       - run: ops/pre-publish-scan.sh
+
+  ledger-provenance:
+    runs-on: ubuntu-latest
+    steps:
+      # Every row the daemon freezes carries the revision of the build that
+      # wrote it, and tools/accuracy_registry.py refuses a verdict whose rows
+      # name a commit this repository cannot resolve — permanently, because its
+      # window is anchored to a fixed epoch. On 2026-08-02 three clean builds
+      # were rewritten out of history, 946 rows were stranded, and recovering
+      # took a chained pre-registration amendment.
+      #
+      # ops/githooks catches that locally, but hooks are local config: a fresh
+      # clone has none until someone sets core.hooksPath, and nothing stops a
+      # force-push from a machine that never did. This job is the backstop for
+      # what actually reaches the remote.
+      #
+      # It cannot ask the ledger — data/ is gitignored and the database is 4 GB
+      # — so the answer is computed where the database lives and committed to
+      # ops/ledger-revisions.txt. This job only verifies the commits recorded
+      # there are still reachable.
+      - uses: actions/checkout@v4
+        with:
+          # Reachability over the whole graph, so the default single-commit
+          # shallow checkout would make every recorded sha look unreachable
+          # and fail this job on its first run. Same reason pre-publish-scan
+          # needs it.
+          fetch-depth: 0
+      # checkout fetches only the triggering ref. A commit legitimately living
+      # on another branch would look orphaned without this, which is exactly
+      # the false positive that gets a check disabled.
+      - name: Fetch every branch so reachability sees all refs
+        run: git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+      - name: Self-test the checker before trusting it
+        run: bash ops/test-ledger-provenance.sh
+      - name: Ledger-referenced commits are still reachable
+        run: bash ops/ledger-provenance.sh --check
+
+  docs-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # WHY THIS JOB EXISTS. On 2026-08-04 a P0 truth-stop froze ten strategy
+      # documents. Four published mutually inconsistent live-accuracy figures,
+      # three asserted survivorship control that ALPHA_WORKFLOW.md §B2 measured
+      # open, and one cited a kill switch living in a DIFFERENT repository.
+      # Every one of those was a number or a status a human typed into markdown,
+      # with nothing in the repository able to contradict it. This job is that
+      # contradicting thing.
+      #
+      # Self-test first: a gate that cannot prove it still detects a planted
+      # violation is not evidence. Same reason pre-publish-scan-test.sh runs
+      # before pre-publish-scan.sh. (These tests also run in the `tools` job's
+      # unittest discovery; running them HERE keeps the failure attached to the
+      # job that owns the gate, so a red X names the right thing.)
+      - name: Self-test the gate before trusting it
+        run: python3 tools/test_docs_gate.py
+      # data/ is gitignored and signaldeck.db is ~4 GB, so this runner can never
+      # ask the database whether the PIT universe is populated or the grader is
+      # refusing. Identical split to ops/ledger-provenance.sh: the answer is
+      # computed where the database lives (`docs_gate.py write-integrity`) and
+      # committed to ops/data-integrity.json; this step only verifies it.
+      #
+      # A MISSING OR STALE SNAPSHOT IS A VIOLATION, NEVER A SKIP. That is the
+      # whole reason the split is safe — it cannot degrade into silence, which
+      # is how "we'll check it locally" becomes "nobody checks it".
+      - name: Documents may not contradict the repository's own measurements
+        run: python3 tools/docs_gate.py check
