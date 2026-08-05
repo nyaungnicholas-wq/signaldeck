@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"os"
 	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -169,7 +168,7 @@ func importDelisted(args []string) error {
 		report["refusals"] = refusals
 	}
 	out, _ := json.MarshalIndent(report, "", "  ")
-	fmt.Fprintln(os.Stdout, string(out))
+	fmt.Println(string(out))
 	return nil
 }
 
@@ -229,7 +228,7 @@ func repairAddedAt(args []string) error {
 		"tradable_at_before":    before,
 		"tradable_at_after":     after,
 	}, "", "  ")
-	fmt.Fprintln(os.Stdout, string(out))
+	fmt.Println(string(out))
 	return nil
 }
 

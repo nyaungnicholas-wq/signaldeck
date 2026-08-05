@@ -157,11 +157,3 @@ func call(t *testing.T, s *Server, cl *Client, tool string, args map[string]any)
 	}
 	return sc, nil
 }
-
-func fixedClock(ts string) func() time.Time {
-	at, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		panic(err)
-	}
-	return func() time.Time { return at }
-}
