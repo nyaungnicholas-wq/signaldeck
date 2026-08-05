@@ -358,3 +358,107 @@ func TestCoverageWeekBucketMatchesHistfeat(t *testing.T) {
 			store.WeekBucketSecs, histfeat.WeekSecs)
 	}
 }
+
+// The detector froze for three days after `sdmaint import-delisted` added 1,869
+// known-dead symbols: liveness read 36% instead of 98% and the guard called a
+// deliberate import an ingestion outage. A name already recorded as dead has no
+// recent bar BY DEFINITION, so it cannot testify about our ingestion and is
+// excluded from the fraction — while still flowing through the marking loop,
+// which needs it for the clear-on-resume path.
+func TestImportedDelistedNamesDoNotTripFleetGuard(t *testing.T) {
+	st := newDelistStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+
+	stale := map[string]int{
+		"DEADCO":  120, // unmarked and silent: must be newly marked
+		"RESUMED": 1,   // marked but printing again: must be cleared
+	}
+	imported := make([]string, 0, 100)
+	for i := 0; i < 100; i++ {
+		sym := fmt.Sprintf("IMPORTED%03d", i)
+		imported = append(imported, sym)
+		stale[sym] = 300
+	}
+	ids := seedFleet(t, st, now, 60, stale)
+
+	// What the bulk import does: the dead names arrive already marked.
+	deadTs := now.AddDate(0, 0, -300).Unix()
+	for _, sym := range imported {
+		if err := st.MarkDelisted(ctx, ids[sym], deadTs); err != nil {
+			t.Fatalf("MarkDelisted %s: %v", sym, err)
+		}
+	}
+	if err := st.MarkDelisted(ctx, ids["RESUMED"], deadTs); err != nil {
+		t.Fatal(err)
+	}
+	// 61 of 162 rows now print recently — 38%, which tripped the old
+	// whole-fleet guard even though every unmarked name is healthy.
+
+	w := &DelistingDetector{St: st, Now: func() time.Time { return now }}
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(detail, "nothing marked") {
+		t.Fatalf("guard tripped on a fleet stocked with already-marked dead names: %s", detail)
+	}
+
+	rows, err := st.StockLastBars(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, r := range rows {
+		got[r.Symbol] = r.DelistedAt
+	}
+	if got["DEADCO"] == 0 {
+		t.Fatalf("DEADCO went silent while the live fleet kept printing and was not marked (detail: %s)", detail)
+	}
+	if got["RESUMED"] != 0 {
+		t.Fatalf("RESUMED printed a fresh bar; its marker must be cleared (detail: %s)", detail)
+	}
+	for _, sym := range imported {
+		if got[sym] == 0 {
+			t.Fatalf("%s lost its imported delisting marker (detail: %s)", sym, detail)
+		}
+	}
+	for i := 0; i < 60; i++ {
+		if sym := fmt.Sprintf("LIVE%03d", i); got[sym] != 0 {
+			t.Fatalf("live symbol %s was marked delisted (detail: %s)", sym, detail)
+		}
+	}
+}
+
+// The other half of the same fix: excluding marked names must not blunt the
+// guard. A fleet of UNMARKED symbols that mostly stopped printing is still our
+// fault, not the market's, and must still mark nothing.
+func TestSilentUnmarkedFleetStillTripsGuard(t *testing.T) {
+	st := newDelistStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+
+	// 55 silent against 5 live, none of them marked: 8% liveness, and the
+	// unmarked cohort is well over minFleetSize so the fraction is judgeable.
+	stale := map[string]int{}
+	for i := 0; i < 55; i++ {
+		stale[fmt.Sprintf("SILENT%03d", i)] = 200
+	}
+	seedFleet(t, st, now, 5, stale)
+
+	w := &DelistingDetector{St: st, Now: func() time.Time { return now }}
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(detail, "nothing marked") {
+		t.Fatalf("guard did not trip on an 8%%-live unmarked fleet: %s", detail)
+	}
+	rows, _ := st.StockLastBars(ctx)
+	for _, r := range rows {
+		if r.DelistedAt != 0 {
+			t.Fatalf("%s marked during an ingestion outage — the guard failed (detail: %s)",
+				r.Symbol, detail)
+		}
+	}
+}
