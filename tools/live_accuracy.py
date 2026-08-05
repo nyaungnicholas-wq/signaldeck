@@ -354,15 +354,29 @@ def current_literals(snapshot):
     return sorted(lits)
 
 
-def scan(path, extra_literals=()):
-    """Report banned live-record literals. Returns a list of (line, literal)."""
+def scan(path, extra_literals=(), allow_whole_file_escape=True):
+    """Report banned live-record literals. Returns a list of (line, literal).
+
+    allow_whole_file_escape=False refuses the file-level HISTORICAL_MARKER and
+    honours only block-scoped ones. SOURCE FILES PASS FALSE, and that is the
+    point: a document can legitimately be history end to end, but a .go file
+    that ships in the running binary never is. Leaving the banner escape
+    available to code let one comment in a package header silence the whole
+    file — verified by injecting `// SUPERSEDED-SNAPSHOT` above a banned
+    literal and watching the violation disappear.
+
+    This gate exists to catch the codebase deceiving itself about its own
+    accuracy. A gate the audited thing can switch off is not a gate; the same
+    lesson already produced UNSUPPRESSIBLE_CHECKS in tools/docs_gate.py, and
+    this is that rule reaching the source scan.
+    """
     text = read(path)
     lines = text.splitlines()
-    # A whole document can declare itself history, and every such document in
+    # A whole DOCUMENT can declare itself history, and every such document in
     # this repository does it on line 2. Restricting the whole-file escape to
     # the header keeps a marker buried at line 900 from silently exempting the
     # 899 live claims above it — the escape has to be a banner, not a footnote.
-    if HISTORICAL_MARKER in "\n".join(lines[:40]):
+    if allow_whole_file_escape and HISTORICAL_MARKER in "\n".join(lines[:40]):
         return []
     parts = os.path.abspath(path).replace("\\", "/").split("/")
     # audits/ and proofs/ are the same category: dated evidence about a moment,
@@ -498,7 +512,9 @@ def main():
     # Source files cannot include the partial, so the remedy differs: read the
     # registry at runtime, or label the block historical and let it be history.
     for src in args.scan_code:
-        for n, lit in scan(src, current):
+        # allow_whole_file_escape=False: a source file may label a BLOCK
+        # historical, never itself. See scan().
+        for n, lit in scan(src, current, allow_whole_file_escape=False):
             kind = "superseded" if lit in SUPERSEDED_LITERALS else "hand-typed current"
             print("%s:%d: code %s live-record literal '%s' — read it from "
                   "data/accuracy_registry.json at runtime, or mark the block "

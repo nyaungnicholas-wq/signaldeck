@@ -31,7 +31,15 @@ func seedLabeledSpread(t *testing.T, st *store.Store, symbolID int64, h md.Horiz
 func seedLabeledSpreadDays(t *testing.T, st *store.Store, symbolID int64, h md.Horizon, days, perDay int) {
 	t.Helper()
 	ctx := context.Background()
+	// ANCHOR TO A UTC MIDNIGHT. The rows for one logical day are spread
+	// perDay*600 seconds apart, so an unaligned base lets a day straddle a UTC
+	// boundary and split into TWO day-clusters — which made the collapse
+	// assertion below pass or fail depending on the wall-clock hour the suite
+	// ran at (seen: n=5 in the morning, n=6 in the afternoon). The labeled
+	// reader dedupes by ts/86400, so a fixture that claims to seed N days has to
+	// land inside N of them deterministically.
 	base := time.Now().Unix() - int64(days+1)*86400
+	base -= base % 86400
 	for d := 0; d < days; d++ {
 		up := d%2 == 0
 		pressure, fwd, raw := 0.5, 0.01, 0.62
