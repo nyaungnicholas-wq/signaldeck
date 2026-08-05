@@ -8,8 +8,8 @@ package alerts
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -128,7 +128,8 @@ type Runner struct {
 	// Hi/Lo override the prediction thresholds; both zero = read
 	// SIGNALDECK_ALERT_HI / SIGNALDECK_ALERT_LO (defaults 0.65 / 0.35).
 	Hi, Lo float64
-	// Notify shows a user-facing alert; nil = osascript display notification.
+	// Notify shows a user-facing alert; nil = notify.Local (the platform's
+	// desktop popup, or an explicit unsupported error).
 	Notify func(msg string) error
 	// Remote fans the same batched sweep message out to the env-configured
 	// remote transports (Discord/Telegram/generic webhook — internal/notify);
@@ -476,9 +477,15 @@ func (r *Runner) Run(ctx context.Context) (string, error) {
 		r.lastNotify = now
 		local := r.Notify
 		if local == nil {
-			local = osascriptNotify
+			local = notify.Local
 		}
-		_ = local(fmt.Sprintf("%d new SignalDeck alert(s)", created))
+		// The error was discarded here (`_ = local(...)`). That is how the
+		// macOS-only osascript path stayed invisible for the whole Windows
+		// migration: the watchdog at least logged its failure, this did not.
+		// Best-effort still means never fatal — it does not mean unobserved.
+		if err := local(fmt.Sprintf("%d new SignalDeck alert(s)", created)); err != nil {
+			slog.Warn("alerts: local notification failed", "err", err)
+		}
 		// Stage 3: ONE batched remote message per sweep (Discord/Telegram/
 		// webhook). Send degrades to dq events internally and never errors,
 		// so a dead webhook can never fail the sweep.
@@ -523,11 +530,7 @@ func (r *Runner) cursor(ctx context.Context, key string) (int64, bool) {
 	return id, false
 }
 
-// osascriptNotify pops a macOS notification (same pattern as internal/health).
-// Best-effort: any failure (no osascript, headless session) is never fatal.
-func osascriptNotify(msg string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	script := fmt.Sprintf("display notification %q with title %q", msg, "SignalDeck alerts")
-	return exec.CommandContext(ctx, "osascript", "-e", script).Run()
-}
+// The local desktop popup now lives in notify.Local (platform-dispatched).
+// The osascriptNotify that stood here was macOS-only, so on Windows every
+// alert notification failed — silently, because its error was discarded.
+// See internal/notify/local.go.

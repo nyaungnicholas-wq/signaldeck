@@ -10,6 +10,7 @@ package api
 
 import (
 	"net/http"
+	"runtime"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 )
@@ -32,15 +33,37 @@ var notifyEnvHints = map[string]string{
 	notify.TransportWebhook:  "SIGNALDECK_WEBHOOK_URL",
 }
 
+// localTransportRow describes the LOCAL desktop channel for the platform this
+// daemon is actually running on.
+//
+// It used to be a hardcoded {name: "macos", configured: true} literal. That was
+// a false claim on any non-Mac: this page told the operator local delivery was
+// working while every attempt died on a missing `osascript`, which is precisely
+// how an unhealthy fleet went unreported. `configured` now means "a channel
+// exists on this platform", never "macOS was assumed".
+func localTransportRow() notifyTransportRow {
+	name := notify.LocalTransport()
+	if name == "" {
+		return notifyTransportRow{
+			Name:       "local-desktop",
+			Configured: false,
+			Env:        "(built-in)",
+			Note: "no desktop notification channel exists on " + runtime.GOOS +
+				" — configure a remote transport below, or local alerts reach nobody",
+		}
+	}
+	note := "osascript display notification — best-effort, delivery not tracked"
+	if name == notify.TransportWindows {
+		note = "Windows toast via PowerShell — best-effort, delivery not tracked " +
+			"(a daemon in a service session has no desktop to draw on)"
+	}
+	return notifyTransportRow{Name: name, Configured: true, Env: "(built-in)", Note: note}
+}
+
 // notifyStatus reports delivery-channel configuration. Works with a nil
 // Notifier (tests / minimal wiring): everything remote shows unconfigured.
 func (d Deps) notifyStatus(w http.ResponseWriter, r *http.Request) {
-	rows := []notifyTransportRow{{
-		Name:       "macos",
-		Configured: true,
-		Env:        "(built-in)",
-		Note:       "osascript display notification on the daemon's Mac — best-effort, delivery not tracked",
-	}}
+	rows := []notifyTransportRow{localTransportRow()}
 	for _, ts := range d.Notifier.Status() { // nil-receiver safe: returns unconfigured rows
 		rows = append(rows, notifyTransportRow{
 			Name:        ts.Name,
