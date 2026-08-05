@@ -2,15 +2,23 @@
 
 <!-- DOCUMENT CONTROL -->
 > **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
-> **Status:** FROZEN — NOT AUTHORITATIVE
+> **Status:** SUPERSEDED — historical record; current status is `STRATEGY_DECK.md`
 > **Scope:** Narrative account of how the platform was built and what it measured.
-> **Frozen claim classes:** FC1, FC2, FC3, FC4, FC7 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
-> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
-> **Publication:** BLOCKED — internal use only
+> **Frozen claim classes:** FC3 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** PUBLISHABLE as a record, NOT as a current statement — see `STRATEGY_DECK.md`
 
-> ## ⛔ NOT AUTHORITATIVE — FROZEN — DO NOT DISTRIBUTE
-> **P0 freeze, 2026-08-04.** This document is under remediation and **must not be
-> published, presented, or quoted externally.**
+> **Backtest data: `pre-survivorship-fix`.** Every historical figure below was
+> computed on the universe as it stood BEFORE the 2026-08-04 survivorship
+> backfill (`proofs/P3A_SURVIVORSHIP_BACKFILL.md`) and the point-in-time
+> universe rebuild (`proofs/P3B_PIT_UNIVERSE.md`). It has not been re-run on
+> the repaired universe. Read the numbers as a record of what was measured
+> then, not as what the repaired data would produce now.
+
+> ## ⛔ SUPERSEDED — publishable as a record, not as current status
+> **P0 freeze 2026-08-04, lifted 2026-08-04** (`proofs/P10_FREEZE_LIFT.md`). Remediation
+> is complete. This document is publishable as a record of what was measured and when;
+> it **must not be quoted as *current* status** — quote `STRATEGY_DECK.md` for that.
 >
 > Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · confidence-interval verdicts ·
 > survivorship control · point-in-time data · "already built / verified" status.**
@@ -24,7 +32,7 @@
 > insufficient distinct blocks. The interval verdict was removed — see
 > `proofs/P6_GOVERNANCE_CLEANUP.md` §3.
 >
-> Authority and scope: `proofs/P0_FREEZE.md`. Lifts only after P1–P3 complete.
+> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
 
 SignalDeck is a market-intelligence platform I built to answer one question
 honestly: **does any of this actually predict anything?**

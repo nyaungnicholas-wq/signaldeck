@@ -2,26 +2,45 @@
 
 <!-- DOCUMENT CONTROL -->
 > **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
-> **Status:** FROZEN — AUTHORITATIVE
+> **Status:** AUTHORITATIVE — freeze lifted 2026-08-04
 > **Scope:** Merged alpha-workflow spec. §B2/§B3 are the corroborated authority on the two open data-integrity defects.
-> **Frozen claim classes:** FC1, FC2, FC3, FC4, FC5, FC6, FC7 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
-> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
-> **Publication:** BLOCKED — internal use only
+> **Frozen claim classes:** FC3, FC6 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** PUBLISHABLE — caveats are the frozen classes above
 
-> ## ⚠ FROZEN — DO NOT DISTRIBUTE (P0 freeze, 2026-08-04)
-> Under remediation. Do not publish or present any figure below. Do not attach capital.
+> **Backtest data: `pre-survivorship-fix`.** Every historical figure below was
+> computed on the universe as it stood BEFORE the 2026-08-04 survivorship
+> backfill (`proofs/P3A_SURVIVORSHIP_BACKFILL.md`) and the point-in-time
+> universe rebuild (`proofs/P3B_PIT_UNIVERSE.md`). It has not been re-run on
+> the repaired universe. Read the numbers as a record of what was measured
+> then, not as what the repaired data would produce now.
+
+> ## ⚠ P0 freeze (2026-08-04) — LIFTED 2026-08-04 by `proofs/P10_FREEZE_LIFT.md`
+> Remediation complete; freeze lifted. **Do not attach capital.** Figures below are historical unless generated.
 > Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · intervals · survivorship · point-in-time data ·
 > kill switch · position sizing · "already built / verified".**
 >
-> **This file is the corroborated authority on two open defects** and its §B2/§B3
-> measurements are *not* in dispute — they are what other documents contradict:
-> §B2 (21 delistings / 1,077 names / 7.5 years ≈ 2% cumulative, survivorship **open**)
-> and §B3 (`universe_membership` holds **zero rows**, look-ahead in every
-> cross-sectional denominator). Its status table remains frozen: "Kelly sizing —
-> Exists" is contradicted by `ARCHITECTURE_EV.md` (riskgate sizes only *after*
-> go/no-go; portopt not wired to allocation).
+> **This file is the corroborated authority on the two data-integrity defects.**
+> Its §B2/§B3 measurements were never in dispute — they are what other documents
+> contradicted — and **both have since been re-derived and moved**, so read the
+> UPDATE blocks inside §B2 and §B3 rather than the numbers in this header:
 >
-> Authority and scope: `proofs/P0_FREEZE.md`.
+> - **§B2 survivorship** — the "21 delistings / 1,077 names ≈ 2% cumulative"
+>   figure is the **pre-import** state, confirmed against
+>   `data/signaldeck.db.bak-preimport-20260802`. Now 723 / 1,777 with 716
+>   `delisted_at` stamps. **Materially closed 2019–2022, residual 2023–2025 gap
+>   quantified** — not closed. `proofs/P3A_SURVIVORSHIP_BACKFILL.md`.
+> - **§B3 point-in-time universe** — `universe_membership` now holds **1,854,228
+>   rows over 2,146 days**, not zero. The predicted look-ahead in the
+>   cross-sectional denominators was **measured and is not there**; the one
+>   active-set-applied-to-history path is documented and non-default.
+>   `proofs/P3B_PIT_UNIVERSE.md`.
+>
+> Its status table remains frozen: "Kelly sizing — Exists" is contradicted by
+> `ARCHITECTURE_EV.md` (riskgate sizes only *after* go/no-go; portopt not wired
+> to allocation).
+>
+> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
 
 One pipeline combining the three specs: **ensemble stacking & calibration**
 (spec 1), **system audit** (spec 2), and **PIT data → triple-barrier →
