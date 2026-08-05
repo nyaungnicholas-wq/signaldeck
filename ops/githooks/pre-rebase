@@ -1,0 +1,115 @@
+#!/bin/sh
+# pre-rebase — refuse to rewrite history that the evidence ledger names.
+#
+# WHAT THIS PREVENTS. Every row the daemon freezes carries the revision of the
+# build that produced it (store.CodeRevision, written onto prediction_ledger and
+# regime_outcomes). tools/accuracy_registry.py then refuses any verdict whose
+# contributing rows name a commit this repository cannot resolve — and that
+# refusal is all-or-nothing and permanent, because the gate's window is anchored
+# to a fixed epoch, so an offending row never ages out.
+#
+# A rebase is therefore a one-way door. Rewriting a commit that the ledger
+# references does not "move" it: the old object becomes unreachable, every row
+# naming it turns into evidence nobody can attribute, and the predictor those
+# rows feed loses its verdict for good. That is not a hypothetical. On
+# 2026-08-02 three CLEAN builds — 3020f058, 3b80a09c, 3c096b33 — wrote 946 rows
+# and were then rewritten out of the repository. Nothing noticed until an audit
+# read the gate two days later, and recovering from it took a chained
+# pre-registration amendment (kind "revision-epoch-correction").
+#
+# The daemon's own startup gate (lineage.BuildReachable) catches this too, but
+# only at the NEXT RESTART, which can be days. This hook catches it at the
+# moment of the rewrite, which is the only moment it is still cheap to undo.
+#
+# POSTURE. Refuse only on a PROVEN collision: a referenced commit that exists
+# now and sits inside the range about to be rewritten. When the question cannot
+# be answered — no database, no sqlite, no rev-list — the hook allows the
+# rebase, because an unprovable answer must never be read as a refusal. That is
+# the same rule revisionResolvableCached and BuildReachable follow.
+#
+# Only CLEAN stamps are protected. A "+dirty" or unstamped row is already
+# unattributable, so rewriting the commit underneath it changes nothing.
+#
+# INSTALL:  git config core.hooksPath ops/githooks
+# OVERRIDE: SIGNALDECK_ALLOW_HISTORY_REWRITE=1 git rebase ...
+set -u
+
+upstream="${1:-}"
+branch="${2:-}"
+[ -n "$upstream" ] || exit 0
+
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+cd "$root" || exit 0
+
+if [ -n "${SIGNALDECK_ALLOW_HISTORY_REWRITE:-}" ]; then
+  echo "pre-rebase: SIGNALDECK_ALLOW_HISTORY_REWRITE set — ledger check skipped." >&2
+  exit 0
+fi
+
+db="${SIGNALDECK_DB:-data/signaldeck.db}"
+if [ ! -f "$db" ]; then
+  exit 0 # No ledger here, so no evidence to strand.
+fi
+
+# shellcheck source=/dev/null
+. "$root/ops/lib-portable.sh" 2>/dev/null || exit 0
+
+# The commits this rebase would rewrite. Empty range or a rev-list failure both
+# mean nothing provable is at stake.
+rewrite="$(git rev-list "$upstream..${branch:-HEAD}" 2>/dev/null)" || exit 0
+[ -n "$rewrite" ] || exit 0
+
+refs="$(sd_sqlite_read "$db" "
+  SELECT DISTINCT revision FROM prediction_ledger WHERE revision IS NOT NULL
+  UNION
+  SELECT DISTINCT revision FROM regime_outcomes  WHERE revision IS NOT NULL;" 2>/dev/null)" || {
+  echo "pre-rebase: WARNING — could not read $db; ledger-reference check SKIPPED." >&2
+  exit 0
+}
+[ -n "$refs" ] || exit 0
+
+doomed="$(mktemp)" || exit 0
+rangefile="$(mktemp)" || { rm -f "$doomed"; exit 0; }
+trap 'rm -f "$doomed" "$rangefile"' EXIT INT TERM
+printf '%s\n' "$rewrite" >"$rangefile"
+
+printf '%s\n' "$refs" | while IFS= read -r rev; do
+  # Already unattributable, or not a commit id at all: nothing to protect.
+  case "$rev" in
+    *+dirty | "") continue ;;
+  esac
+  [ "${#rev}" -eq 40 ] || continue
+  # Only a commit that still resolves can be LOST by this rebase.
+  git cat-file -e "$rev^{commit}" 2>/dev/null || continue
+  grep -qxF "$rev" "$rangefile" || continue
+  printf '%s\n' "$rev" >>"$doomed"
+done
+
+[ -s "$doomed" ] || exit 0
+
+echo "" >&2
+echo "REFUSING TO REBASE: this rewrites commit(s) the evidence ledger references." >&2
+echo "" >&2
+while IFS= read -r rev; do
+  rows="$(sd_sqlite_read "$db" "
+    SELECT COUNT(*) || ' ledger row(s), ' ||
+           MIN(date(predicted_at,'unixepoch')) || ' .. ' ||
+           MAX(date(predicted_at,'unixepoch'))
+      FROM prediction_ledger WHERE revision = '$rev';" 2>/dev/null)"
+  printf '  %s  %s\n' "$rev" "${rows:-(row count unavailable)}" >&2
+done <"$doomed"
+cat >&2 <<'EOF'
+
+Rewriting these orphans every row above: the grader can no longer resolve the
+build that produced them, so it strips the verdict from the whole predictor
+family — permanently, because those rows never leave its window.
+
+Options, in order of preference:
+  1. Rebase a range that stops short of these commits.
+  2. Leave them in history and put your change on top instead.
+  3. If you are certain the evidence is disposable:
+       SIGNALDECK_ALLOW_HISTORY_REWRITE=1 git rebase ...
+     Then file a chained correction, as the 2026-08-02 incident required:
+       go run -C daemon ./cmd/prereg-amend -kind revision-epoch-correction
+EOF
+exit 1

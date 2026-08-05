@@ -15,8 +15,10 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/confidence"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ev"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/killswitch"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/papertrade"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/riskgate"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -298,6 +300,101 @@ func pearson(xs, ys []float64) (float64, bool) {
 		return 0, false
 	}
 	return sxy / math.Sqrt(sxx*syy), true
+}
+
+// minimalAssessment is the honest record for a candidate that was refused
+// BEFORE its inputs were measured — a halted platform does no measuring it
+// would then throw away. Every has-flag stays false, so the snapshot says "this
+// was never assessed" rather than implying a pile of zeroed inputs.
+func minimalAssessment(symbol string, h md.Horizon, calProb float64) ev.Assessment {
+	return ev.Assessment{Inputs: ev.Inputs{
+		Symbol: symbol, Horizon: string(h), CalProb: calProb, HasProb: true,
+	}}
+}
+
+// gateSnapshot is what gets frozen into the ledger's inputs_json for a refusal
+// from OUTSIDE the EV engine. The assessment is embedded anonymously, so its
+// fields stay at the top level exactly as they were before this existed and
+// every current reader keeps working; risk and halt are additive keys.
+type gateSnapshot struct {
+	ev.Assessment
+	Risk    *riskgate.Decision      `json:"risk,omitempty"`
+	Halt    *killswitch.State       `json:"halt,omitempty"`
+	Barrier *papertrade.BarrierExit `json:"barrier,omitempty"`
+	FillTs  int64                   `json:"fillTs,omitempty"`
+}
+
+// ledgerBarrierExit records a SELL, carrying the barrier that caused it when
+// one did.
+//
+// The barrier snapshot holds the trigger timestamp and the fill timestamp as
+// SEPARATE fields on purpose: the no-lookahead guarantee is that the fill is
+// strictly later than the close that confirmed the exit, and a ledger that
+// stored only one of the two could not be used to check it. Anyone auditing
+// this book can assert `fillTs > barrier.triggerTs` over every row.
+func (w *PaperTrader) ledgerBarrierExit(
+	ctx context.Context,
+	strategy string,
+	symbolID int64,
+	a ev.Assessment,
+	d ev.Decision,
+	plan exitPlan,
+	ts int64,
+) error {
+	if !plan.fromBarrier {
+		return w.ledgerEVDecision(ctx, strategy, symbolID, a, d, ts)
+	}
+	b := plan.barrier
+	snap, err := json.Marshal(gateSnapshot{Assessment: a, Barrier: &b, FillTs: plan.fillBar.Ts})
+	if err != nil {
+		return err
+	}
+	return w.St.InsertEVDecision(ctx, store.EVDecision{
+		Ts: ts, Strategy: strategy, SymbolID: symbolID, Symbol: a.Symbol, Horizon: a.Horizon,
+		Decision: string(d.Action), Reason: string(d.Reason), InputsJSON: string(snap),
+	})
+}
+
+// ledgerGateRefusal records a DO_NOTHING that the PRETRADE RISK GATE or the
+// KILL SWITCH produced, into the same ledger the EV engine writes to.
+//
+// One ledger, deliberately. A refusal filed in a table nobody joins against is
+// a refusal nobody reads, and the property worth having — every candidate the
+// book did not trade, with the reason, in one query — is only true if all three
+// gates write to the same place. The full riskgate.Decision (its Reasons AND
+// its Breaches) is snapshotted, so "which limit fired" survives without needing
+// a schema change to hold it.
+func (w *PaperTrader) ledgerGateRefusal(
+	ctx context.Context,
+	strategy string,
+	symbolID int64,
+	a ev.Assessment,
+	reason ev.Reason,
+	risk *riskgate.Decision,
+	halt *killswitch.State,
+	ts int64,
+) error {
+	snap, err := json.Marshal(gateSnapshot{Assessment: a, Risk: risk, Halt: halt})
+	if err != nil {
+		return err
+	}
+	row := store.EVDecision{
+		Ts:         ts,
+		Strategy:   strategy,
+		SymbolID:   symbolID,
+		Symbol:     a.Symbol,
+		Horizon:    a.Horizon,
+		Decision:   string(ev.DO_NOTHING),
+		Reason:     string(reason),
+		Rank:       a.Rank,
+		RankOf:     a.RankOf,
+		InputsJSON: string(snap),
+	}
+	if a.HasNetEV {
+		v := a.NetEV
+		row.NetEV = &v
+	}
+	return w.St.InsertEVDecision(ctx, row)
 }
 
 // ledgerEVDecision appends one verdict to the ev_decisions ledger. The full

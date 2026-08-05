@@ -1,5 +1,22 @@
 # Pairs Trading — and the resolution of H018 (CORR63)
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** FROZEN — AUTHORITATIVE
+> **Scope:** Pairs-trading study and the resolution of H018 (CORR63). The DO NOT SHIP verdict is unaffected by the frozen classes.
+> **Frozen claim classes:** FC2, FC3 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
+> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** BLOCKED — internal use only
+
+> ## ⚠ FROZEN — DO NOT DISTRIBUTE (P0 freeze, 2026-08-04)
+> Under remediation. Do not publish or present any figure below. Do not attach capital.
+> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **backtest returns · intervals · Sharpe · survivorship.**
+> Open defects in this file: the 2019→2026 universe is measured survivor-seeded
+> (`ALPHA_WORKFLOW.md` §B2), and borrow cost is not modelled although every trade
+> shorts one leg. Block count is stated three ways (26 / 24 / 26-of-26).
+> The **DO NOT SHIP** verdict is unaffected by all three and stands.
+> Authority and scope: `proofs/P0_FREEZE.md`.
+
 **Date:** 2026-07-25
 **Tool:** `tools/pairs_trading.py`
 **Verdict: DO NOT SHIP.** H018's persistence is real and strong. It is also not harvestable.

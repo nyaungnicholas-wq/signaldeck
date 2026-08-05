@@ -580,6 +580,34 @@ func (s *Store) LastBars(ctx context.Context, symbolID int64, tf md.Timeframe, n
 	return out, rows.Err()
 }
 
+// BarsBefore returns the most recent n bars STRICTLY BEFORE t, ascending.
+//
+// The strictness is the point. This exists for measurements that must not see
+// the bar they are about to act on — a barrier level sized from volatility at
+// entry may only use bars that had already closed when the entry filled, and
+// the entry fills at the open of bar t, whose own high, low and close are still
+// unknown at that moment. `ts < t` is that rule expressed in SQL, where it
+// cannot be forgotten by a caller.
+func (s *Store) BarsBefore(ctx context.Context, symbolID int64, tf md.Timeframe, t int64, n int) ([]md.Bar, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT ts, open, high, low, close, volume FROM
+		  (SELECT * FROM bars WHERE symbol_id=? AND tf=? AND ts<? ORDER BY ts DESC LIMIT ?)
+		ORDER BY ts`, symbolID, string(tf), t, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []md.Bar
+	for rows.Next() {
+		b := md.Bar{SymbolID: symbolID, TF: tf}
+		if err := rows.Scan(&b.Ts, &b.Open, &b.High, &b.Low, &b.Close, &b.Volume); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // LatestBarTs returns the newest bar open-time, or 0 when none exist.
 func (s *Store) LatestBarTs(ctx context.Context, symbolID int64, tf md.Timeframe) (int64, error) {
 	var ts sql.NullInt64

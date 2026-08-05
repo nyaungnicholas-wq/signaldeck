@@ -73,5 +73,23 @@ sd_notify "TestTitle" "TestBody" 2>/dev/null || true
 check "sd_notify always records the alert" "$(grep -q "TestTitle" "$LOGF" && echo 1 || echo 0)"
 rm -f "$LOGF"
 
+# sd_sqlite_read must return BARE fields. The native-Windows sqlite3 CLI
+# terminates rows with CRLF, so every value it returned used to carry a
+# trailing \r that printed invisibly and compared unequal to everything. It
+# made `[ "${#rev}" -eq 40 ]` false for every commit id, which silently
+# disarmed the pre-rebase hook: it read a ledger of 26,689 rows and reported
+# nothing referenced. A shim whose two backends disagree on line endings is
+# not a shim, so both must emit LF.
+if command -v sqlite3 >/dev/null 2>&1 || [ -n "$(sd_py)" ]; then
+  RDB="$(mktemp -u)"
+  sd_sqlite "$RDB" "CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('abc');" >/dev/null 2>&1
+  RAW="$(sd_sqlite_read "$RDB" "SELECT v FROM t;" 2>/dev/null)"
+  check "sd_sqlite_read returns the value unpadded" "$([ "$RAW" = "abc" ] && echo 1 || echo 0)"
+  check "sd_sqlite_read emits no carriage return" \
+    "$(printf '%s' "$RAW" | tr -d '\r' | cmp -s - <(printf '%s' "$RAW") && echo 1 || echo 0)"
+  check "sd_sqlite_read length is exact" "$([ "${#RAW}" -eq 3 ] && echo 1 || echo 0)"
+  rm -f "$RDB"
+fi
+
 if [ "$fails" -gt 0 ]; then echo "$fails check(s) failed"; exit 1; fi
 echo "all portability shim checks passed"

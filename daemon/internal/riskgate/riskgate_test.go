@@ -366,3 +366,171 @@ func TestWithDefaultsFillsUnsetLimits(t *testing.T) {
 		t.Errorf("want the default drawdown limit enforced, got %v", d.Breaches)
 	}
 }
+
+// ── Correlation cap ────────────────────────────────────────────────────────
+
+// A name that moves with the book is more of the bet already held. It is
+// refused, not trimmed: a smaller slice of the same exposure is the same
+// mistake in a less honest package.
+func TestCorrelationCapRefusesRatherThanTrims(t *testing.T) {
+	d := Evaluate(healthyBook(), Request{
+		Symbol: "AAA", Action: Enter, CorrToBook: 0.85, HasCorr: true,
+	}, goodEdge(), Defaults())
+	if d.Allow {
+		t.Fatalf("0.85 correlation must be refused at the 0.80 cap: %s", reasonsJoined(d))
+	}
+	if d.Notional != 0 {
+		t.Fatalf("a refusal must size nothing, got %.2f", d.Notional)
+	}
+	if !hasBreach(d, "max-corr-to-book") {
+		t.Fatalf("breaches = %v, want max-corr-to-book", d.Breaches)
+	}
+
+	// Just under the cap still trades.
+	if ok := Evaluate(healthyBook(), Request{
+		Symbol: "AAA", Action: Enter, CorrToBook: 0.79, HasCorr: true,
+	}, goodEdge(), Defaults()); !ok.Allow {
+		t.Fatalf("0.79 correlation is under the cap and must trade: %s", reasonsJoined(ok))
+	}
+}
+
+// Unmeasured correlation allows, but says the cap is UNARMED rather than
+// reading as a clean pass — the same doctrine as the drawdown breaker.
+func TestUnmeasuredCorrelationLeavesTheCapUnarmed(t *testing.T) {
+	d := Evaluate(healthyBook(), Request{Symbol: "AAA", Action: Enter}, goodEdge(), Defaults())
+	if !d.Allow {
+		t.Fatalf("unmeasured correlation must not block: %s", reasonsJoined(d))
+	}
+	if !strings.Contains(reasonsJoined(d), "correlation cap unarmed") {
+		t.Fatalf("an unarmed cap must say so, reasons = %s", reasonsJoined(d))
+	}
+}
+
+// The correlation refusal outranks sizing: it must fire before any notional is
+// computed, so no caller can find a number to use on a refused candidate.
+func TestCorrelationRefusalCarriesNoSizing(t *testing.T) {
+	d := Evaluate(healthyBook(), Request{
+		Symbol: "AAA", Action: Enter, CorrToBook: 0.99, HasCorr: true,
+	}, goodEdge(), Defaults())
+	if d.Sizing != SizingNone {
+		t.Fatalf("sizing = %q, want none on a correlation refusal", d.Sizing)
+	}
+}
+
+// ── Gross exposure ─────────────────────────────────────────────────────────
+
+func TestGrossExposureCapRefusesFullAndTrimsPartial(t *testing.T) {
+	// Fully deployed: no unlevered room left.
+	full := healthyBook()
+	full.GrossExposure, full.GrossKnown = 100_000, true
+	d := Evaluate(full, Request{Symbol: "AAA", Action: Enter}, goodEdge(), Defaults())
+	if d.Allow {
+		t.Fatalf("a fully deployed book must refuse: %s", reasonsJoined(d))
+	}
+	if !hasBreach(d, "max-gross-exposure") {
+		t.Fatalf("breaches = %v, want max-gross-exposure", d.Breaches)
+	}
+
+	// Partially deployed: trimmed to the headroom, not refused. $2k of room is
+	// still above the $500 minimum ticket.
+	part := healthyBook()
+	part.GrossExposure, part.GrossKnown = 98_000, true
+	p := Evaluate(part, Request{Symbol: "AAA", Action: Enter}, goodEdge(), Defaults())
+	if !p.Allow {
+		t.Fatalf("$2,000 of headroom must still trade: %s", reasonsJoined(p))
+	}
+	if p.Notional > 2_000+1e-9 {
+		t.Fatalf("notional %.2f exceeds the $2,000 gross headroom", p.Notional)
+	}
+	if !hasBreach(p, "max-gross-exposure") {
+		t.Fatalf("a trim must name the limit that bound it, breaches = %v", p.Breaches)
+	}
+}
+
+func TestUnmeasuredGrossLeavesTheCapUnarmed(t *testing.T) {
+	d := Evaluate(healthyBook(), Request{Symbol: "AAA", Action: Enter}, goodEdge(), Defaults())
+	if !strings.Contains(reasonsJoined(d), "gross-exposure cap unarmed") {
+		t.Fatalf("an unmeasured gross must leave the cap unarmed and say so: %s", reasonsJoined(d))
+	}
+}
+
+// Exits stay ungated with both new caps at their worst possible reading.
+func TestNewCapsNeverBlockAnExit(t *testing.T) {
+	b := healthyBook()
+	b.GrossExposure, b.GrossKnown = 10_000_000, true
+	d := Evaluate(b, Request{Symbol: "AAA", Action: Exit, CorrToBook: 1.0, HasCorr: true}, Edge{}, Defaults())
+	if !d.Allow {
+		t.Fatalf("an exit must never be gated, got refusal: %s", reasonsJoined(d))
+	}
+}
+
+func TestWithDefaultsFillsTheNewLimits(t *testing.T) {
+	got := Limits{MaxDrawdown: 0.1}.withDefaults()
+	if got.MaxCorrToBook != Defaults().MaxCorrToBook {
+		t.Fatalf("MaxCorrToBook = %v, want the default", got.MaxCorrToBook)
+	}
+	if got.MaxGrossExposure != Defaults().MaxGrossExposure {
+		t.Fatalf("MaxGrossExposure = %v, want the default", got.MaxGrossExposure)
+	}
+}
+
+// ── Admit: risk as a precondition, not a property of a candidate ───────────
+
+// A halted book refuses admission regardless of which candidate asks. This is
+// the property that makes risk a GATE: no caller can route around a tripped
+// breaker by finding a better trade.
+func TestAdmitRefusesAHaltedBookForEveryCandidate(t *testing.T) {
+	halted := healthyBook()
+	halted.CurrentDrawdown = 0.25 // past the 0.20 breaker
+
+	a := Admit(halted, Defaults())
+	if a.Allow {
+		t.Fatalf("a book 25%% below peak must not be admitted: %s", reasonsJoined(a))
+	}
+	if !hasBreach(a, "max-drawdown") {
+		t.Fatalf("breaches = %v, want max-drawdown", a.Breaches)
+	}
+
+	// And no candidate, however good, gets past Evaluate either.
+	for _, sym := range []string{"AAA", "BBB", "CCC"} {
+		d := Evaluate(halted, Request{Symbol: sym, Action: Enter, CorrToBook: 0.0, HasCorr: true}, goodEdge(), Defaults())
+		if d.Allow {
+			t.Fatalf("%s was admitted into a halted book", sym)
+		}
+	}
+}
+
+// Admission is not a size, and must never be mistaken for one.
+func TestAdmitCarriesNoSize(t *testing.T) {
+	a := Admit(healthyBook(), Defaults())
+	if !a.Allow {
+		t.Fatalf("a healthy book must be admitted: %s", reasonsJoined(a))
+	}
+	if a.Notional != 0 || a.Sizing != SizingNone {
+		t.Fatalf("admission must carry no size, got notional=%.2f sizing=%q", a.Notional, a.Sizing)
+	}
+}
+
+// Admit and Evaluate must never disagree about what a halted book is: every
+// book-wide breaker refused by Admit is refused by Evaluate with the same
+// breach.
+func TestAdmitAndEvaluateAgreeOnEveryBookWideBreaker(t *testing.T) {
+	cases := map[string]func(Book) Book{
+		"max-drawdown":       func(b Book) Book { b.CurrentDrawdown = 0.30; return b },
+		"max-daily-loss":     func(b Book) Book { b.DailyPnLFrac = -0.10; return b },
+		"max-positions":      func(b Book) Book { b.OpenPositions = 10; return b },
+		"max-gross-exposure": func(b Book) Book { b.GrossExposure, b.GrossKnown = b.Equity, true; return b },
+		"equity":             func(b Book) Book { b.Equity = 0; return b },
+	}
+	for breach, mut := range cases {
+		b := mut(healthyBook())
+		a := Admit(b, Defaults())
+		e := Evaluate(b, Request{Symbol: "AAA", Action: Enter}, goodEdge(), Defaults())
+		if a.Allow || e.Allow {
+			t.Fatalf("%s: admit.Allow=%v evaluate.Allow=%v, want both false", breach, a.Allow, e.Allow)
+		}
+		if !hasBreach(a, breach) || !hasBreach(e, breach) {
+			t.Fatalf("%s: admit=%v evaluate=%v, both must name it", breach, a.Breaches, e.Breaches)
+		}
+	}
+}

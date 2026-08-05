@@ -1,0 +1,133 @@
+#!/bin/sh
+# reference-transaction — refuse ANY ref change that orphans a commit the
+# evidence ledger references.
+#
+# WHY THIS EXISTS ALONGSIDE pre-rebase. pre-rebase covers exactly one verb.
+# `git commit --amend`, `git reset --hard`, a force-push that rewinds a branch,
+# and `git branch -D` all orphan commits without ever calling it — and amend is
+# at least as likely a cause of the 2026-08-02 incident (three clean builds,
+# 946 ledger rows, the directional family's verdict stripped permanently) as
+# rebase was. This hook sits under all of them, because every one of those
+# verbs ultimately moves a ref, and every ref move passes through here.
+#
+# CONTRACT. git calls this with the state as $1 and feeds
+# "<old> <new> <refname>" lines on stdin. Only the "prepared" state can veto:
+# in "committed" and "aborted" the exit code is ignored, and the refs have
+# already moved. So this returns immediately unless it is being asked.
+#
+# COST. This runs on EVERY ref update — every commit, every fetch, every
+# checkout that moves a ref. A hook that is slow here gets deleted, so the
+# common path must not touch the database at all. It does not: an update whose
+# old value is an ancestor of its new value (a fast-forward) can strand
+# nothing, and creations strand nothing, so a transaction made only of those
+# returns before the ledger is ever opened. The ledger read happens only on the
+# rewinds and deletions that can actually lose history, which are rare and
+# interactive.
+#
+# POSTURE. Same as pre-rebase and lineage.BuildReachable: refuse only on a
+# PROVEN orphaning. Anything unprovable — no database, no sqlite, a rev-list
+# that fails — allows the transaction. A commit that is still reachable from
+# ANY surviving ref is not orphaned, so moving a branch whose commits also live
+# on another branch is allowed.
+#
+# INSTALL:  git config core.hooksPath ops/githooks
+# OVERRIDE: SIGNALDECK_ALLOW_HISTORY_REWRITE=1 git commit --amend ...
+set -u
+
+[ "${1:-}" = "prepared" ] || exit 0
+[ -n "${SIGNALDECK_ALLOW_HISTORY_REWRITE:-}" ] && exit 0
+
+# is_zero: git spells "this ref did not/will not exist" as an all-zero oid,
+# whose width differs between sha1 and sha256 repositories. Test the digits,
+# never the length.
+is_zero() { case "$1" in *[!0]*) return 1 ;; *) return 0 ;; esac; }
+
+txn="$(mktemp)" || exit 0
+trap 'rm -f "$txn" "${tips:-}" "${lost:-}"' EXIT INT TERM
+cat >"$txn"
+[ -s "$txn" ] || exit 0
+
+# PASS ONE — the fast path. Decide whether anything here can lose history at
+# all, using only git plumbing. Most transactions stop at this line.
+risky=0
+while read -r old new ref; do
+  [ -n "${ref:-}" ] || continue
+  is_zero "$old" && continue                                   # creation
+  if ! is_zero "$new" && git merge-base --is-ancestor "$old" "$new" 2>/dev/null; then
+    continue                                                   # fast-forward
+  fi
+  risky=1
+  break
+done <"$txn"
+[ "$risky" -eq 1 ] || exit 0
+
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+db="${SIGNALDECK_DB:-$root/data/signaldeck.db}"
+[ -f "$db" ] || exit 0
+# shellcheck source=/dev/null
+. "$root/ops/lib-portable.sh" 2>/dev/null || exit 0
+
+refs="$(sd_sqlite_read "$db" "
+  SELECT DISTINCT revision FROM prediction_ledger WHERE revision IS NOT NULL
+  UNION
+  SELECT DISTINCT revision FROM regime_outcomes  WHERE revision IS NOT NULL;" 2>/dev/null)" || exit 0
+[ -n "$refs" ] || exit 0
+
+# PASS TWO — the ref graph as it will look AFTER this transaction. The hook runs
+# before the refs move, so for-each-ref still shows the old world; overlay the
+# transaction onto it. A ref updated to zero is being deleted and contributes no
+# tip.
+tips="$(mktemp)" || exit 0
+git for-each-ref --format='%(refname) %(objectname)' 2>/dev/null |
+  while read -r name oid; do
+    grep -q " $name\$" "$txn" && continue     # superseded below
+    printf '%s\n' "$oid" >>"$tips"
+  done
+while read -r old new ref; do
+  [ -n "${ref:-}" ] || continue
+  is_zero "$new" || printf '%s\n' "$new" >>"$tips"
+done <"$txn"
+
+tiplist="$(tr '\n' ' ' <"$tips" 2>/dev/null)"
+
+# PASS THREE — a referenced commit is orphaned when it is reachable from NO
+# surviving tip. `rev-list -1 <rev> --not <tips>` prints something only in that
+# case, so one call answers it per revision.
+lost="$(mktemp)" || exit 0
+printf '%s\n' "$refs" | while IFS= read -r rev; do
+  case "$rev" in *+dirty | "") continue ;; esac
+  git cat-file -e "$rev^{commit}" 2>/dev/null || continue
+  # shellcheck disable=SC2086
+  [ -n "$(git rev-list -1 "$rev" --not $tiplist 2>/dev/null)" ] || continue
+  printf '%s\n' "$rev" >>"$lost"
+done
+
+[ -s "$lost" ] || exit 0
+
+echo "" >&2
+echo "REFUSING THIS REF CHANGE: it orphans commit(s) the evidence ledger references." >&2
+echo "" >&2
+while IFS= read -r rev; do
+  rows="$(sd_sqlite_read "$db" "
+    SELECT COUNT(*) || ' ledger row(s), ' ||
+           MIN(date(predicted_at,'unixepoch')) || ' .. ' ||
+           MAX(date(predicted_at,'unixepoch'))
+      FROM prediction_ledger WHERE revision = '$rev';" 2>/dev/null)"
+  printf '  %s  %s\n' "$rev" "${rows:-(row count unavailable)}" >&2
+done <"$lost"
+cat >&2 <<'EOF'
+
+Once these commits are unreachable the grader cannot resolve the build that
+produced those rows, and it strips the verdict from the whole predictor family
+— permanently, because the rows never leave its window. An amend, a hard reset
+and a branch delete all land here for the same reason a rebase does.
+
+Options, in order of preference:
+  1. Leave the commit alone and put a NEW commit on top.
+  2. Keep the old tip alive on a branch:  git branch keep/<name> <old-sha>
+  3. If you are certain the evidence is disposable:
+       SIGNALDECK_ALLOW_HISTORY_REWRITE=1 <your git command>
+     Then file a chained correction, as the 2026-08-02 incident required:
+       go run -C daemon ./cmd/prereg-amend -kind revision-epoch-correction
+EOF
+exit 1

@@ -89,7 +89,28 @@ const (
 	// the same pass. Capital spent here is capital not spent on a higher-EV
 	// name — the opportunity-cost refusal.
 	ReasonOutranked Reason = "outranked-by-better-ev"
+
+	// ReasonRiskRefused is the PRETRADE RISK GATE's refusal (internal/riskgate),
+	// ledgered here rather than in a second table so that "every refusal is one
+	// query" stays true. It is not a verdict of this package — the engine never
+	// reaches an opinion on a candidate risk has already declined — but the
+	// ledger is the complete record of every transition the book did not make,
+	// and a refusal filed somewhere else is a refusal nobody reads.
+	ReasonRiskRefused Reason = "risk-gate-refused"
+	// ReasonHalted is the kill switch (internal/killswitch): the platform was
+	// halted when this entry came up. Exits are never refused for this reason.
+	ReasonHalted Reason = "kill-switch-halted"
 )
+
+// BarrierReason labels a SELL that a position-level barrier caused rather than
+// the signal — "barrier-adverse", "barrier-favorable", "barrier-expiry".
+//
+// These are still exit-never-blocked in substance: no barrier can REFUSE a
+// trade, only cause one. The distinct label exists because "the stop fired" and
+// "the model changed its mind" are different facts about a book, and filing
+// them both under one reason makes the ledger unable to answer which control
+// closed a position.
+func BarrierReason(kind string) Reason { return Reason("barrier-" + kind) }
 
 // Inputs is everything the caller measured about one candidate. Every group
 // carries a has-flag; a false flag means "not measurable", and nothing in this

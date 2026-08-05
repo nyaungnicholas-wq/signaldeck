@@ -1,5 +1,34 @@
 # How every SignalDeck predictor works — inputs, math, gates, output
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** FROZEN — NOT AUTHORITATIVE
+> **Scope:** Per-predictor reference — inputs, math, gates, outputs.
+> **Frozen claim classes:** FC1, FC2, FC3, FC4, FC8 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
+> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** BLOCKED — internal use only
+
+> ## ⛔ NOT AUTHORITATIVE — FROZEN — DO NOT DISTRIBUTE
+> **P0 freeze, 2026-08-04.** This document is under remediation and **must not be
+> published, presented, or quoted externally.**
+>
+> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · structural band tables ·
+> survivorship control · point-in-time data.**
+>
+> Known defects: the Part C live record disagrees with `PREDICTION_PROCESS.md`,
+> `CASE_STUDY.md` and `INSTITUTIONAL_GAP.md`; the §B1–B3 band tables (up to 97.2%)
+> are backtests computed over a bar history measured survivor-seeded in
+> `ALPHA_WORKFLOW.md` §B2, and §B5 already shows ~74% of trend21's conviction spread
+> is barrier geometry and that liquidity21 scores **worse** than its Φ(z) null.
+>
+> **Part C reconciled in P2 (2026-08-04)** — every document now includes the same
+> generated block (`proofs/P2_LIVE_RECORD_RECONCILIATION.md`). **PIT universe
+> closed in P3B (2026-08-04)** — `universe_membership` holds 1,854,228 rows over
+> 2,146 days (`proofs/P3B_PIT_UNIVERSE.md`); the band tables below were computed
+> before that and have not been re-derived against it.
+>
+> Authority and scope: `proofs/P0_FREEZE.md`. Lifts only after P1–P3 complete.
+
 Read from the code on 2026-08-03. Companion to `PREDICTION_PROCESS.md` (which
 covers the pipeline and the 18-point bias gate); this file is the per-predictor
 arithmetic.
@@ -13,7 +42,7 @@ math, horizons, or grading, and only one is currently live.
 
 | family | predicts | horizon | status today |
 |---|---|---|---|
-| **Directional** (7 legs → ensemble → calibration) | P(price up) | 1h / 1d / 1w | **RETIRED — not emitting.** Live 1d accuracy 46.3% vs a 52.9% prequential-majority null (skill −6.6pp) |
+| **Directional** (7 legs → ensemble → calibration) | P(price up) | 1h / 1d / 1w | **RETIRED — not emitting.** Every horizon graded below its prequential-majority null; figures in PART C |
 | **Structural** (trend21, vol21, liquidity21, trend63, 2 crypto twins, filingsdrift21) | which *regime* persists, never price direction | 21d / 63d | **PENDING.** ~11.8k forecasts recorded, 0 resolved. First gradable **2026-08-07** |
 
 ---
@@ -304,19 +333,55 @@ setup and stays.
 
 ---
 
-# PART C — WHAT THE LIVE RECORD SAYS TODAY (2026-08-03 23:06)
+# PART C — WHAT THE LIVE RECORD SAYS TODAY
 
-From `data/accuracy_registry.json`:
+This block is generated from `data/accuracy_registry.json`. It is the same block
+every other document in this repository includes, and nothing below is typed by
+hand — that is the whole point of it (FC1; see
+`proofs/P2_LIVE_RECORD_RECONCILIATION.md`).
 
-| predictor | live n | live acc | prequential-majority null | skill |
-|---|---|---|---|---|
-| directional-ensemble (1d) | 2,257 | 46.3% | 52.9% | **−6.6pp** |
-| directional-ensemble (1d, high conviction ‖p−0.5‖≥0.15) | 297 | 55.2% | 60.3% | **−5.1pp** |
-| directional-ensemble (1w) | 912 | 47.8% | 50.2% | **−2.4pp** |
-| directional-ensemble (1w, high conviction) | 63 | 47.6% | 46.8% | +0.8pp |
+<!-- BEGIN GENERATED live_accuracy -->
 
-Every interval is `withheld` — the distinct-day counts (9, 5, 4, 4) are below
-the `min_distinct_blocks = 10` gate, so **no interval means no verdict**.
+Generated from `data/accuracy_registry.json` (grade of 2026-08-03T23:06:30) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+
+> **STALE — this is not a current grade.** The registry is `REFUSED` (grader exited 1), and the last successful grade is 15.0h old. The numbers below are that last successful grade, taken at 2026-08-03T23:06:30. Nothing here has been re-graded since.
+
+### Live record
+
+| Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
+|---|---|---|---|---|---|---|---|
+| directional-ensemble (1d) | all | 2,257 | 46.3% | 52.9% | -6.6pp | 9 | withheld |
+| prequential-majority (1d) | all | 1,644 | 55.5% | 51.1% | +4.4pp | 6 | withheld |
+| directional-ensemble (1w) | all | 912 | 47.8% | 50.2% | -2.4pp | 4 | withheld |
+| prequential-majority (1w) | all | 7 | 28.6% | 50.0% | -21.4pp | 1 | withheld |
+| directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 297 | 55.2% | 60.3% | -5.1pp | 5 | withheld |
+| directional-ensemble (1w, high conviction) | \|p-0.5\|>=0.15 | 63 | 47.6% | 46.8% | +0.8pp | 4 | withheld |
+
+Intervals are withheld this cycle, so **no pass/fail verdict is published from them**. A point estimate without an interval is not a result; treat every row above as a running tally.
+
+Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
+
+- `prequential-majority (1d)` — INSUFFICIENT DAYS (6/10 distinct days) — no interval, so no verdict
+- `prequential-majority (1w)` — INSUFFICIENT (7/30)
+
+### Backtested claims with no live record yet
+
+- `filingsdrift21` — registered claim 50.0%, 67 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21` — registered claim 59.5%, 2,903 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21-crypto` — registered claim 79.5%, 60 forecasts recorded, 0 graded. Not a live result.
+- `trend21` — registered claim 73.1%, 2,918 forecasts recorded, 0 graded. Not a live result.
+- `trend21-crypto` — registered claim 93.4%, 60 forecasts recorded, 0 graded. Not a live result.
+- `trend63` — registered claim 70.0%, 2,917 forecasts recorded, 0 graded. Not a live result.
+- `vol21` — registered claim 55.8%, 2,928 forecasts recorded, 0 graded. Not a live result.
+
+**Multiplicity:** family_size=13, looks=8, divisor=104, corrected_alpha=0.0004807692307692308.
+
+**Survivorship:** epoch 2026-07-24; listing status resolvable for 328/335 graded symbols (97.9%): 7 inactive symbol(s) with no delisted_at.
+
+<!-- END GENERATED live_accuracy -->
+
+Every interval is `withheld` — the distinct-day counts are below the
+`min_distinct_blocks = 10` gate, so **no interval means no verdict**.
 
 Structural predictors, all `live_n = 0`:
 
@@ -336,9 +401,10 @@ published per cycle *and* the number of grading looks taken over the same
 accruing rows — and both counters are monotone (folded with `max()` against the
 chain), so re-cutting a snapshot cannot refund a look already spent.
 
-**Inversion is not a rescue** and the arithmetic is on record: inverting a 48.1%
-predictor gives 51.9%, still below the 54.6% majority-class null. An inverted
-signal only clears the bar if the original sits below 1 − 0.546 = 45.4%.
+**Inversion is not a rescue** and the arithmetic is on record as a rule rather
+than a number: inverting accuracy `a` gives `1 − a`, so an inverted signal clears
+a majority-class null `p` only when the original sits **below `1 − p`**. Every
+directional row in the generated live table sits above its own `1 − null`.
 `internal/api/modelhealth.go` refuses `emitting: true` for any `-inverted`,
 `-relabeled` or `-flipped` model key unless it passes the full canary
 re-admission gate.

@@ -93,10 +93,13 @@ or dates. A test asserts the surface is exactly the six above.
   extended names mean-revert. `tradeability` says so on every trend row.
 - **Every structural number is a backtest** until the first gradable date,
   2026-08-07. `evidence` and `evidenceCaveat` say so on every verdict.
-- **The one live result is a failure.** 46.7% over 8,191 independent
-  symbol-days with negative Brier skill, auto-retired by the health gate.
-  Anyone quoting SignalDeck as predictive of price is quoting the part that was
-  already switched off.
+- **The one live result is a failure.** Every directional horizon grades below
+  its own majority-class null with negative Brier skill, auto-retired by the
+  health gate. The figures live in `partials/live_accuracy.md`, generated from
+  the registry — this document deliberately does not restate them, because four
+  documents restating them from memory is what produced FC1. Anyone quoting
+  SignalDeck as predictive of price is quoting the part that was already
+  switched off.
 
 ---
 

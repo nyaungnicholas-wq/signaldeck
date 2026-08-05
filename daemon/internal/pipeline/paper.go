@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ev"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/killswitch"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/papertrade"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/riskgate"
@@ -184,15 +185,32 @@ func (w *PaperTrader) buildStep(
 		return apply, refused, err
 	}
 
+	// KILL SWITCH (internal/killswitch). Fail-closed, file-based, read fresh
+	// before EVERY order rather than cached for the pass, so tripping it part
+	// way through a run stops the very next entry instead of the next restart.
+	// Entries refuse; EXITS still proceed — a halt that traps the book inside
+	// the position it was tripped by is a larger risk than the one it controls.
+	halt := killswitch.Check()
+
 	// DECISION ENGINE (internal/ev — ARCHITECTURE_EV.md Layer 1). The entry
 	// go/no-go is no longer the bare cal_prob threshold: every candidate is
 	// ASSESSED (net EV, no-trade zone, tail, cost, liquidity, correlation, all
 	// with explicit has-flags), the pass's candidates are RANKED by net EV —
 	// replacing the old arbitrary symbol-order capital allocation — and only a
-	// BUY proceeds to riskgate for sizing. Every verdict, especially every
-	// DO_NOTHING, is ledgered to ev_decisions so refusals stay auditable.
+	// BUY proceeds to riskgate for its final size. Every verdict, especially
+	// every DO_NOTHING, is ledgered to ev_decisions so refusals stay auditable.
 	// cal_prob still picks the INTENT (long/flat/hold deadband, unchanged);
 	// the engine decides whether the long is WORTH ITS COST.
+	//
+	// ORDERING, and it is load-bearing: RISK RUNS BEFORE EV ADMISSION. The book
+	// must be admitted for new risk at all (riskgate.Admit) before any candidate
+	// is considered, and each candidate must clear the gate before it is ranked
+	// or decided. Sizing a trade that a go/no-go already approved is not risk
+	// control — it is a decorator on a decision already made, and it leaves the
+	// gate arguing about how much of something the book should never have been
+	// doing. A risk-rejected name must not even consume an EV rank slot, because
+	// rank IS the opportunity cost: capital denied to rank 1 by an untradeable
+	// rank 8 is capital misallocated by the accounting, not by the market.
 	forecasts, err := w.returnForecastsByID(ctx, h)
 	if err != nil {
 		return apply, refused, err
@@ -219,17 +237,64 @@ func (w *PaperTrader) buildStep(
 		if err != nil {
 			return apply, refused, err
 		}
+
+		// ── EXIT PATH ────────────────────────────────────────────────────────
+		// An OPEN position is evaluated for exit on every pass, whether or not a
+		// fresh prediction exists and whatever it says. Barriers are risk
+		// controls; a stop that only fires when the model happens to have an
+		// opinion is not a stop. planExit weighs the barrier against the
+		// probability flip and returns whichever CLOSE came first in time.
+		if hasPos {
+			plan, wantExit, err := w.planExit(ctx, s, h, pos, pred, okP, asof)
+			if err != nil {
+				return apply, refused, err
+			}
+			if !wantExit {
+				continue // still holding
+			}
+			adv, err := w.advUSD(ctx, s.ID, plan.fillBar.Ts)
+			if err != nil {
+				return apply, refused, err
+			}
+			in := papertrade.ExecInputs{Bar: plan.fillBar, Market: marketByID[s.ID], ADVUSD: adv}
+
+			// Deliberately NOT gated — by the EV engine, by riskgate, or by the
+			// kill switch. All three state the same doctrine: routing a de-risking
+			// trade through a component that can refuse is how a book ends up
+			// trapped in the position a breaker was tripped by. The engine still
+			// LEDGERS the SELL so the decision log is the complete record of every
+			// transition.
+			f, ok := papertrade.ExitLong(pos.Qty, in)
+			if !ok {
+				continue
+			}
+			exitAssess := ev.Assessment{Inputs: ev.Inputs{
+				Symbol: s.Symbol, Horizon: string(h), CalProb: pred.CalProb, HasProb: okP,
+			}}
+			exitDecision := ev.Decide(exitAssess, ev.ExitLong, thresholds)
+			if plan.fromBarrier {
+				// The barrier is the reason, so the ledger says so rather than
+				// filing every exit under the signal's name.
+				exitDecision.Reason = ev.BarrierReason(string(plan.barrier.Kind))
+			}
+			if err := w.ledgerBarrierExit(ctx, strategy, s.ID, exitAssess, exitDecision, plan, asof); err != nil {
+				return apply, refused, err
+			}
+			cash += f.CashDelta
+			apply.CloseSymbolIDs = append(apply.CloseSymbolIDs, s.ID)
+			apply.Trades = append(apply.Trades, store.PaperTrade{
+				Strategy: strategy, SymbolID: s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost,
+				Ts: plan.fillBar.Ts, Reason: plan.reason,
+			})
+			continue
+		}
+
+		// ── ENTRY PATH ───────────────────────────────────────────────────────
 		if !okP {
 			continue // no signal for this symbol/horizon yet
 		}
-		target := papertrade.DecideTarget(pred.CalProb)
-
-		// Transition? Enter when flat+GoLong; exit when long+GoFlat. HOLD (and a
-		// target that matches the current state) changes nothing.
-		wantEnter := !hasPos && target == papertrade.GoLong
-		wantExit := hasPos && target == papertrade.GoFlat
-		if !wantEnter && !wantExit {
-			continue
+		if papertrade.DecideTarget(pred.CalProb) != papertrade.GoLong {
+			continue // HOLD or flat — nothing to open
 		}
 
 		// NO LOOKAHEAD: fill at the OPEN of the first DAILY bar STRICTLY AFTER the
@@ -256,29 +321,17 @@ func (w *PaperTrader) buildStep(
 		}
 		in := papertrade.ExecInputs{Bar: fillBar, Market: marketByID[s.ID], ADVUSD: adv}
 
-		if wantExit {
-			// Deliberately NOT gated — by the EV engine or by riskgate. Both state
-			// the same doctrine: routing a de-risking trade through a component
-			// that can refuse is how a book ends up trapped in the position a
-			// breaker was tripped by. The engine still LEDGERS the SELL so the
-			// decision log is the complete record of every transition.
-			f, ok := papertrade.ExitLong(pos.Qty, in)
-			if !ok {
-				continue
-			}
-			exitAssess := ev.Assessment{Inputs: ev.Inputs{
-				Symbol: s.Symbol, Horizon: string(h), CalProb: pred.CalProb, HasProb: true,
-			}}
-			exitDecision := ev.Decide(exitAssess, ev.ExitLong, thresholds)
-			if err := w.ledgerEVDecision(ctx, strategy, s.ID, exitAssess, exitDecision, asof); err != nil {
+		// KILL SWITCH, checked before this entry is even assessed. A halted
+		// platform does no measuring it would then have to throw away, but the
+		// refusal is still ledgered: "the switch was down" has to be a queryable
+		// record, not an entry that silently never happened.
+		if halt.Halted {
+			refused++
+			if err := w.ledgerGateRefusal(ctx, strategy, s.ID,
+				minimalAssessment(s.Symbol, h, pred.CalProb),
+				ev.ReasonHalted, nil, &halt, asof); err != nil {
 				return apply, refused, err
 			}
-			cash += f.CashDelta
-			apply.CloseSymbolIDs = append(apply.CloseSymbolIDs, s.ID)
-			apply.Trades = append(apply.Trades, store.PaperTrade{
-				Strategy: strategy, SymbolID: s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost, Ts: fillBar.Ts,
-				Reason: fmt.Sprintf("cal_prob %.3f <= flat %.2f", pred.CalProb, papertrade.FlatThreshold()),
-			})
 			continue
 		}
 
@@ -295,7 +348,45 @@ func (w *PaperTrader) buildStep(
 		cands = append(cands, entryCand{s: s, pred: pred, bar: fillBar, in: in, assess: a})
 	}
 
-	// Phase 2: rank the pass's candidates by net EV — the rank IS the
+	// Phase 2: RISK ADMISSION — before any EV verdict is rendered.
+	//
+	// Step one asks the question that is logically prior to every candidate: is
+	// this book open for new risk at all? A tripped breaker admits NOTHING, and
+	// no candidate can route around it by being a better trade.
+	book.Cash = cash
+	if admit := riskgate.Admit(book, limits); !admit.Allow {
+		for _, c := range cands {
+			refused++
+			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, c.assess,
+				ev.ReasonRiskRefused, &admit, nil, asof); err != nil {
+				return apply, refused, err
+			}
+		}
+		cands = nil
+	}
+
+	// Step two gates each candidate individually. Survivors — and only
+	// survivors — go on to be ranked and decided, so a name the gate would
+	// never fund cannot displace one it would.
+	admitted := cands[:0]
+	for _, c := range cands {
+		gate := riskgate.Evaluate(book, riskgate.Request{
+			Symbol: c.s.Symbol, Sector: riskSector(c.s.Symbol), Action: riskgate.Enter,
+			CorrToBook: c.assess.CorrToBook, HasCorr: c.assess.HasCorr,
+		}, edge, limits)
+		if !gate.Allow {
+			refused++
+			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, c.assess,
+				ev.ReasonRiskRefused, &gate, nil, asof); err != nil {
+				return apply, refused, err
+			}
+			continue
+		}
+		admitted = append(admitted, c)
+	}
+	cands = admitted
+
+	// Phase 3: rank the RISK-ADMITTED candidates by net EV — the rank IS the
 	// opportunity-cost input — then decide each in rank order, so capital goes
 	// to the best measured EV first instead of the alphabetically luckiest.
 	byName := make(map[string]entryCand, len(cands))
@@ -315,18 +406,40 @@ func (w *PaperTrader) buildStep(
 			continue
 		}
 
-		// Only a BUY reaches the pretrade risk gate, which still owns sizing:
-		// fractional Kelly on the realized round-trip record when that record
-		// can support it, the old equal-slice budget when it cannot, and a
-		// REFUSAL when the measured expectancy is non-positive or a limit is
-		// breached.
+		// KILL SWITCH, re-read immediately before the order. The pass-level read
+		// above is not enough: a halt tripped while this pass was ranking must
+		// stop the next fill, not the next run.
+		if h := killswitch.Check(); h.Halted {
+			refused++
+			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, a, ev.ReasonHalted, nil, &h, asof); err != nil {
+				return apply, refused, err
+			}
+			continue
+		}
+
+		// SIZING. The candidate already cleared the gate in Phase 2; this second
+		// call is not a re-litigation of admission but a measurement against the
+		// book AS IT NOW STANDS — cash, slots and sector headroom all move
+		// within a pass as earlier entries consume them. It can still refuse,
+		// and that refusal is a different fact from the admission one: not "this
+		// name is untradeable" but "there is no longer room for it today".
+		//
+		// riskgate owns the size: fractional Kelly on the realized round-trip
+		// record when that record can support it, the old equal-slice budget
+		// when it cannot, and a REFUSAL when the measured expectancy is
+		// non-positive or a limit is breached.
 		book.Cash = cash
 		sector := riskSector(c.s.Symbol)
 		gate := riskgate.Evaluate(book, riskgate.Request{
 			Symbol: c.s.Symbol, Sector: sector, Action: riskgate.Enter,
+			CorrToBook: a.CorrToBook, HasCorr: a.HasCorr,
 		}, edge, limits)
 		if !gate.Allow {
 			refused++
+			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, a,
+				ev.ReasonRiskRefused, &gate, nil, asof); err != nil {
+				return apply, refused, err
+			}
 			continue
 		}
 		budget := gate.Notional
@@ -343,6 +456,7 @@ func (w *PaperTrader) buildStep(
 		// took, so the next candidate in this same step is judged against the
 		// book as it now stands.
 		book.OpenPositions++
+		book.GrossExposure += f.Qty * f.Px
 		if sector != "" {
 			book.ExposureBySector[sector] += f.Qty * f.Px
 		}

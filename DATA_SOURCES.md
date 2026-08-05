@@ -1,5 +1,22 @@
 # Data sources and what may be done with them
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** FROZEN — AUTHORITATIVE
+> **Scope:** Data-source inventory, licensing classification, and raw-export controls. The licensing table and the HTTP 451 guard are not frozen and remain in force.
+> **Frozen claim classes:** FC3, FC4 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
+> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** BLOCKED — internal use only
+
+> ## ⚠ FROZEN — DO NOT DISTRIBUTE (P0 freeze, 2026-08-04)
+> Under remediation. Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **survivorship boundary · point-in-time data.**
+> The licensing table and the HTTP 451 guard are **not** frozen and remain in force.
+> Open defect: the "Survivorship boundary" section describes `SURVIVORSHIP_EPOCH`
+> protecting *published registry claims*, which is correct — but it does **not**
+> protect any backtest, and every headline structural band table in this repository
+> is a backtest. See `ALPHA_WORKFLOW.md` §B2.
+> Authority and scope: `proofs/P0_FREEZE.md`.
+
 Authoritative classification lives in code at
 `daemon/internal/datalicense/datalicense.go`, next to the guard that enforces
 it — this file is the readable mirror, not the source of truth. Tests fail if a

@@ -1,11 +1,38 @@
 # EV-Centric Architecture — gap map and roadmap (2026-07-26)
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** FROZEN — AUTHORITATIVE
+> **Scope:** EV-centric architecture gap map and roadmap.
+> **Frozen claim classes:** FC5, FC6, FC7 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
+> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** BLOCKED — internal use only
+
+> ## ⚠ FROZEN — DO NOT DISTRIBUTE (P0 freeze, 2026-08-04)
+> Under remediation. Do not attach capital. Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **layer status
+> ("EXISTS" / "STRONG" / "BUILT") · kill switch · position sizing · correlation control.**
+> Every `EXISTS` in the scorecard is frozen pending re-verification in P6: a function
+> that compiles is not a control that binds. Confirmed in this file and not in dispute:
+> the live entry trigger is a bare probability threshold, `riskgate.Evaluate` sizes only
+> *after* go/no-go, and correlation is display-only.
+> Authority and scope: `proofs/P0_FREEZE.md`.
+
 Target pipeline: Data → Feature Store → Prediction → Uncertainty → Risk →
 **Expected Value** → Portfolio Optimization → Execution → Post-Trade Attribution.
 Prediction is one module, not the spine. This doc maps the ten missing layers
-onto what already exists (file:line verified 2026-07-26) and orders the work.
+onto what already exists and orders the work. The file:line references were
+checked on 2026-07-26 and have not been re-checked since; treat them as a
+snapshot of that date, not a current attestation.
 
 ## Scorecard
+
+**P6 re-verification.** `EXISTS` in this table means *the code is present*. It
+does **not** mean the control binds anything, and P0 froze every one of these
+labels for exactly that reason. Read each `EXISTS` against the three statuses
+in `proofs/P6_GOVERNANCE_CLEANUP.md` §1: several are **BUILT BUT NOT IN FORCE**,
+and the Verdict column already says which — "riskgate is a pure function",
+"portopt not wired to allocation", "shadow-only". Where the Verdict column and
+the Status column disagree, the Verdict column is the honest one.
 
 | # | Layer | Status | Verdict |
 |---|-------|--------|---------|
@@ -106,9 +133,12 @@ missing-candle scenarios reuse the e2e harness.
 - **7 Allocator:** wire `portopt` into sizing (it currently only feeds
   /api/quant); Kelly edge is book-wide realized payoff (paperrisk.go:128) —
   move to per-signal expectancy with shrinkage toward the book prior.
-- **9 Self-critique:** registry scheduling verified (com.signaldeck.accuracy,
-  plist now versioned in ops/); add the decision-layer
-  audit (cost of refusals) once Layer 1 ledgers DO_NOTHINGs.
+- **9 Self-critique:** registry scheduling is in force on this host as the
+  `SignalDeck Accuracy` scheduled task (state Ready, 2026-08-04). The versioned
+  `ops/com.signaldeck.accuracy.plist` is the macOS source that
+  `ops/install-windows-tasks.ps1` translates from — it does not itself run
+  anything here. Add the decision-layer audit (cost of refusals) once Layer 1
+  ledgers DO_NOTHINGs.
 
 ## Order of work
 

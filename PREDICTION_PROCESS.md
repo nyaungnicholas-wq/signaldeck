@@ -1,5 +1,41 @@
 # The prediction process, and the gate every prediction must pass
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** FROZEN — NOT AUTHORITATIVE
+> **Scope:** How a prediction is produced and the gates it must pass before publication.
+> **Frozen claim classes:** FC1, FC2, FC3, FC4, FC8 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
+> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** BLOCKED — internal use only
+
+> ## ⛔ NOT AUTHORITATIVE — FROZEN — DO NOT DISTRIBUTE
+> **P0 freeze, 2026-08-04.** This document is under remediation and **must not be
+> published, presented, or quoted externally.**
+>
+> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · confidence-interval verdicts ·
+> survivorship control · point-in-time data · structural forecast counts.**
+>
+> **FC1 CLOSED in P2 (2026-08-04).** Layer 6 used to state one live record while
+> three other documents stated three others. No document types the record now:
+> every one of them includes the same generated block from
+> `partials/live_accuracy.md`, rendered from `data/accuracy_registry.json` by
+> `tools/live_accuracy.py`, and CI fails on a superseded literal. See
+> `proofs/P2_LIVE_RECORD_RECONCILIATION.md`.
+>
+> Known defects remaining: point 5 asserts survivorship control that
+> `ALPHA_WORKFLOW.md` §B2 measured open — re-measured and substantially closed in
+> `proofs/P3A_SURVIVORSHIP_BACKFILL.md`, with a residual 2023–2025 gap that is
+> quantified there rather than claimed shut; and Part 3 states ~12,529 outstanding
+> structural forecasts where the per-kind table sums to 11,853.
+>
+> **Closed in P6:** Layer 6 previously claimed "the whole confidence interval below
+> the null" and read that as significant negative skill, while the platform withholds
+> every interval for this claim (distinct-day counts 9/5/4/4 against the
+> `min_distinct_blocks = 10` floor). Both the interval claim and the significance
+> verdict were removed — see `proofs/P6_GOVERNANCE_CLEANUP.md` §3.
+>
+> Authority and scope: `proofs/P0_FREEZE.md`. Lifts only after P1–P3 complete.
+
 Two things live in this file. First, exactly how a number gets from a bar to a
 displayed forecast — the layers, in order. Second, the standing checklist that
 each layer is answerable to: the eighteen ways a quant system silently produces
@@ -92,26 +128,74 @@ baseline on independent (symbol, horizon, UTC-day) observations.
 
 ### Layer 6 — What it does with a failure
 
-This is the part most systems skip. The directional ensemble was graded at
-**48.1% on 13,044 independent observations against a 54.6% baseline** — the
-whole confidence interval below the null, which is significant *negative* skill,
-not merely no edge. `modelhealth` set `verdict: retired, emitting: false`. It is
-off. The structural predictors (trend21, vol21, liquidity21) are correctly
-`PENDING` — 12,529 forecasts recorded, 0 resolvable before **2026-08-07**,
-because a 21-day horizon cannot be graded sooner.
+This is the part most systems skip. The directional ensemble graded below its
+own baseline. The record is not typed here — it is the generated block below,
+and it is the same block every other document in this repository carries:
+
+<!-- BEGIN GENERATED live_accuracy -->
+
+Generated from `data/accuracy_registry.json` (grade of 2026-08-03T23:06:30) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+
+> **STALE — this is not a current grade.** The registry is `REFUSED` (grader exited 1), and the last successful grade is 15.0h old. The numbers below are that last successful grade, taken at 2026-08-03T23:06:30. Nothing here has been re-graded since.
+
+### Live record
+
+| Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
+|---|---|---|---|---|---|---|---|
+| directional-ensemble (1d) | all | 2,257 | 46.3% | 52.9% | -6.6pp | 9 | withheld |
+| prequential-majority (1d) | all | 1,644 | 55.5% | 51.1% | +4.4pp | 6 | withheld |
+| directional-ensemble (1w) | all | 912 | 47.8% | 50.2% | -2.4pp | 4 | withheld |
+| prequential-majority (1w) | all | 7 | 28.6% | 50.0% | -21.4pp | 1 | withheld |
+| directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 297 | 55.2% | 60.3% | -5.1pp | 5 | withheld |
+| directional-ensemble (1w, high conviction) | \|p-0.5\|>=0.15 | 63 | 47.6% | 46.8% | +0.8pp | 4 | withheld |
+
+Intervals are withheld this cycle, so **no pass/fail verdict is published from them**. A point estimate without an interval is not a result; treat every row above as a running tally.
+
+Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
+
+- `prequential-majority (1d)` — INSUFFICIENT DAYS (6/10 distinct days) — no interval, so no verdict
+- `prequential-majority (1w)` — INSUFFICIENT (7/30)
+
+### Backtested claims with no live record yet
+
+- `filingsdrift21` — registered claim 50.0%, 67 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21` — registered claim 59.5%, 2,903 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21-crypto` — registered claim 79.5%, 60 forecasts recorded, 0 graded. Not a live result.
+- `trend21` — registered claim 73.1%, 2,918 forecasts recorded, 0 graded. Not a live result.
+- `trend21-crypto` — registered claim 93.4%, 60 forecasts recorded, 0 graded. Not a live result.
+- `trend63` — registered claim 70.0%, 2,917 forecasts recorded, 0 graded. Not a live result.
+- `vol21` — registered claim 55.8%, 2,928 forecasts recorded, 0 graded. Not a live result.
+
+**Multiplicity:** family_size=13, looks=8, divisor=104, corrected_alpha=0.0004807692307692308.
+
+**Survivorship:** epoch 2026-07-24; listing status resolvable for 328/335 graded symbols (97.9%): 7 inactive symbol(s) with no delisted_at.
+
+<!-- END GENERATED live_accuracy -->
+
+> No interval verdict is available: the platform withholds every interval for this claim (distinct-day blocks below `min_distinct_blocks = 10`).
+
+The operational consequence is what stands: `modelhealth` set
+`verdict: retired, emitting: false`. It is off. The structural predictors
+(trend21, vol21, liquidity21) are correctly `PENDING` — forecast count
+**frozen under FC8** (12,529 stated where the per-kind table sums to 11,853),
+0 resolvable before **2026-08-07**, because a 21-day horizon cannot be graded
+sooner.
 
 ### Why inversion is not a rescue
 
 The registry's failure menu ("retire, invert, or relabel as experimental")
-invites a tempting arithmetic mistake, so the arithmetic goes on record here.
-Inverting the retired ensemble's 48.1% produces a 51.9% predictor — still
-**2.7 points below the 54.6% majority-class null**. The honest competing model
-was never a coin flip; it is the constant majority-class guess, and an
-inverted signal clears that bar only when the original sits below
-1 − 54.6% = **45.4%**. At 48.1% the ensemble is not anti-predictive enough to
-be useful upside down — it is noise around the base rate — and no sign flip or
-relabeling of a below-null signal beats the constant guess. Relabeling changes
-the badge, not the record.
+invites a tempting arithmetic mistake, so the arithmetic goes on record here —
+as a RULE rather than as a number, because numbers typed into prose are what
+produced FC1.
+
+Inverting an accuracy `a` produces `1 − a`. The honest competing model was never
+a coin flip; it is the constant majority-class guess at the null `p`. So an
+inverted signal clears the bar only when `1 − a > p`, i.e. only when the
+original sits **below `1 − p`**. Read the live table above: every directional
+row sits above its own `1 − null`, which is the arithmetic statement that the
+ensemble is not anti-predictive enough to be useful upside down. It is noise
+around the base rate. No sign flip or relabeling of a below-null signal beats
+the constant guess — relabeling changes the badge, not the record.
 
 This is enforced in code, not just prose: `daemon/internal/api/modelhealth.go`
 refuses `emitting: true` for any model key marked as an inverted or relabeled
@@ -184,7 +268,9 @@ by ~63× and lie), quarter-block-clustered confidence intervals over ~30
 independent quarters.
 
 **9. Class imbalance.** Skill is measured against the **majority-class
-baseline**, never 50%. This is why 48.1% reads as failure against a 54.6% null.
+baseline**, never 50%. This is why a directional accuracy in the high forties
+reads as failure here: the null it is measured against is the majority-class
+rate in the live table above, not a coin flip.
 
 **11. Wrong objective.** `internal/moneymetrics` leads every money surface with
 cost-adjusted expectancy, profit factor and payoff ratio; win rate is kept but

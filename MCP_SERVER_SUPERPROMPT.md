@@ -1,4 +1,16 @@
 # SignalDeck MCP Server — Superprompt
+<!-- SUPERSEDED-SNAPSHOT -->
+> ## 📛 SUPERSEDED LIVE RECORD — HISTORICAL
+> **Marked 2026-08-04 by P2.** Any live accuracy, baseline or sample size quoted
+> below is the record **as it stood when this document was written**, not the
+> current one. It is kept because a dated record is evidence; it is labelled
+> because four such records were once in circulation with nothing to tell them
+> apart (FC1).
+>
+> **The one authoritative live record is `partials/live_accuracy.md`**, generated
+> from `data/accuracy_registry.json` by `tools/live_accuracy.py`. **If you are following this document as a brief, take every accuracy figure from that partial and include it rather than restating it — do not copy the numbers below into anything you produce.** Reconciliation:
+> `proofs/P2_LIVE_RECORD_RECONCILIATION.md`.
+
 
 Build an MCP server that lets any AI client (Claude Code, Codex, Cursor, or a third party's own agent) consult SignalDeck for **methodology guidance and current regime verdicts**, while making the underlying dataset and research machinery non-extractable.
 

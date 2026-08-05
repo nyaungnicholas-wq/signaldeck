@@ -1,5 +1,20 @@
 # SignalDeck — Honest Plan to a Real Edge
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** FROZEN — AUTHORITATIVE
+> **Scope:** Plan and ablation record for reaching a measurable edge.
+> **Frozen claim classes:** FC1, FC2, FC3, FC4 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
+> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** BLOCKED — internal use only
+
+> ## ⚠ FROZEN — DO NOT DISTRIBUTE (P0 freeze, 2026-08-04)
+> Under remediation. Do not publish or present any figure below. Do not attach capital.
+> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · intervals · survivorship · point-in-time data.**
+> The 2026-07-27 ablation tables are computed over a bar history measured
+> survivor-seeded in `ALPHA_WORKFLOW.md` §B2 and are frozen pending P3.
+> Authority and scope: `proofs/P0_FREEZE.md`.
+
 ## The target, reset to reality
 - **80% directional win rate is not achievable by anyone.** World-class quant funds run 52–56% and get rich on it via leverage + scale + risk management.
 - The number that matters is **cost-adjusted EXPECTANCY** (win% × avg win − loss% × avg loss − fees/slippage/taxes), not win rate. You can hit 80% win rate with negative expectancy (win +1% often, lose −10% rarely) — that loses money.

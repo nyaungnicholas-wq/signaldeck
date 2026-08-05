@@ -79,6 +79,11 @@ func (w *PaperTrader) riskBook(
 	if err != nil {
 		return b, err
 	}
+	// Gross exposure is only KNOWN if every open position could be marked. One
+	// unmarked name makes the total an understatement, and an understated gross
+	// hands out headroom the book may not have — so the cap goes unarmed rather
+	// than arming on a number that is wrong in the permissive direction.
+	allMarked := true
 	for _, p := range stored {
 		if p.Qty <= 0 {
 			continue
@@ -89,12 +94,16 @@ func (w *PaperTrader) riskBook(
 			return b, err
 		}
 		if !ok || bar.Close <= 0 {
+			allMarked = false
 			continue // no mark: counted as a position, contributes no measurable exposure
 		}
+		notional := p.Qty * bar.Close
+		b.GrossExposure += notional
 		if sec := riskSector(symByID[p.SymbolID]); sec != "" {
-			b.ExposureBySector[sec] += p.Qty * bar.Close
+			b.ExposureBySector[sec] += notional
 		}
 	}
+	b.GrossKnown = allMarked
 	return b, nil
 }
 

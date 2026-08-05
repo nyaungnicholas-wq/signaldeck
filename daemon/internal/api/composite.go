@@ -21,6 +21,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/composite"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/modelhealth"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -86,6 +87,19 @@ const (
 	compositeTopMaxLimit     = 500
 )
 
+// haltReason renders WHY a model stopped emitting, because the two reasons are
+// not the same claim. A RETIRED model has a live record that condemns it. An
+// UNATTRIBUTABLE one has a record the grader refused to stand behind, because
+// rows behind it name builds this repository does not contain — so "the live
+// record does not support this model" would assert exactly the finding the
+// revision gate declined to make. Both stop publishing; only one is a verdict.
+func haltReason(verdict string) (tag, why string) {
+	if verdict == string(modelhealth.VerdictUnattributable) {
+		return "NOT TRADEABLE", "the live record cannot be attributed to a released build, so no graded claim stands either way"
+	}
+	return "RETIRED", "the live record does not support this model"
+}
+
 func compositeHorizon(r *http.Request) md.Horizon {
 	switch md.Horizon(r.URL.Query().Get("horizon")) {
 	case md.H1w:
@@ -142,6 +156,8 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 	})
 	edgeLine := honestEdgeLine(p.CalProb, proven, winRate)
 	trackLabel := "backtested / in-sample — not a live track record"
+	// See haltReason: a stopped model is not always a condemned one.
+	//
 	// Model-health gate (mirrors /api/predictions/latest, 2026-07-24): the
 	// composite score's edge leg is fed by this same directional ensemble, so
 	// a symbol the model-health worker has RETIRED must say so here too — the
@@ -149,8 +165,9 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 	// that already carries the retirement notice.
 	emitting, hVerdict := pipeline.ModelEmitting(r.Context(), d.St, "directional-ensemble-"+string(horizon))
 	if !emitting {
-		edgeLine = fmt.Sprintf("MODEL RETIRED (%s) — the live record does not support this model; %s shown for audit only, not tradeable", hVerdict, edgeLine)
-		trackLabel = fmt.Sprintf("RETIRED (%s): the live record does not support this model — %s", hVerdict, trackLabel)
+		tag, why := haltReason(hVerdict)
+		edgeLine = fmt.Sprintf("MODEL %s (%s) — %s; %s shown for audit only, not tradeable", tag, hVerdict, why, edgeLine)
+		trackLabel = fmt.Sprintf("%s (%s): %s — %s", tag, hVerdict, why, trackLabel)
 	}
 	writeJSON(w, map[string]any{
 		"available":     true,
@@ -442,7 +459,8 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 	trackLabel := "backtested / in-sample — not a live track record"
 	emitting, hVerdict := pipeline.ModelEmitting(ctx, d.St, "directional-ensemble-"+string(horizon))
 	if !emitting {
-		trackLabel = fmt.Sprintf("RETIRED (%s): the live record does not support this model — %s", hVerdict, trackLabel)
+		tag, why := haltReason(hVerdict)
+		trackLabel = fmt.Sprintf("%s (%s): %s — %s", tag, hVerdict, why, trackLabel)
 	}
 	writeJSON(w, map[string]any{
 		"horizon":        string(horizon),

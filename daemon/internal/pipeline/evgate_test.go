@@ -110,6 +110,14 @@ func TestEVGate_RefusesWhenDistributionMissing(t *testing.T) {
 // A clean entry is ledgered as a BUY, and an exit — never blocked — as a SELL,
 // so the decision log is the complete record of every transition.
 func TestEVGate_LedgersBuyAndExit(t *testing.T) {
+	// BARRIERS OFF for this test, on purpose. This is a Decision Engine test:
+	// it covers the probability-FLIP exit and its ledger row. With barriers on,
+	// a flagship-1d position reaches its 1-bar horizon expiry before any flip
+	// can matter (see TestBarrier_HorizonExpiryDominatesTheOneDayBook), so the
+	// flip path would be unreachable here and this test would silently stop
+	// testing what it names.
+	t.Setenv("SIGNALDECK_PAPER_BARRIERS", "false")
+
 	st := openStore(t)
 	ctx := context.Background()
 	sym, _ := st.UpsertSymbol(ctx, "CCC", md.Stocks, "")

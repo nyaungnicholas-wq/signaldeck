@@ -1516,6 +1516,27 @@ CREATE INDEX IF NOT EXISTS idx_split_repairs_at
 -- can be reconstructed (store.TradableAt) instead of guessed.
 -- Added via the idempotent ALTER path in migrate() — see store.go.
 
+-- ── POINT-IN-TIME UNIVERSE (2026-08-04) ──────────────────────────────────────
+-- The MATERIALISED denominator every cross-sectional feature ranks against:
+-- one row per (UTC day, symbol) the symbol actually traded. TradableAt answers
+-- the same question from added_at/delisted_at, but those are stamps about when
+-- WE noticed something; this is evidence about what the market did, and the two
+-- can be compared precisely because both exist.
+--
+-- This table existed in the operator's database from the day it was designed
+-- and was ABSENT from schema.sql, so every cold clone — every reviewer, every
+-- restore, every deployment — got a database without it while the operator's
+-- own copy had it (empty). It is here now so the cold case is the tested case.
+-- store.RebuildUniverseMembership fills it; see internal/store/pituniverse.go.
+CREATE TABLE IF NOT EXISTS universe_membership (
+  day       INTEGER NOT NULL,   -- UTC midnight, unix secs, of the OBSERVATION day
+  symbol_id INTEGER NOT NULL,
+  source    TEXT    NOT NULL,   -- the EVIDENCE, e.g. 'bars-1d'
+  PRIMARY KEY (day, symbol_id)
+);
+CREATE INDEX IF NOT EXISTS idx_universe_membership_sym
+  ON universe_membership (symbol_id, day);
+
 -- ── AUTONOMOUS RESEARCH LOOP (2026-07-25) ────────────────────────────────────
 -- Every rule the loop tests, including the ones it kills. A search that records
 -- only its winners cannot be audited, and the rejections are what stop the same

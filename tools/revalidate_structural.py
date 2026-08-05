@@ -27,6 +27,46 @@ Method, matching the engine's own rules
   * quarter-block bootstrap CIs, because days inside a quarter are correlated
   * contaminated windows refused exactly as the engine refuses them
 
+THE GEOMETRY CONTROL (added 2026-08-03 — read this before quoting any number)
+----------------------------------------------------------------------------
+This report used to end by calling the conviction spread "THE ACTUAL EDGE".
+That was wrong, and the control below is why.
+
+Conviction ranks |close/SMA200 - 1|. The forecast asks whether close is still
+on the same side of SMA200 in 21 sessions. A price far from the line needs a
+large move to cross it; a price sitting on the line crosses on noise. So high
+conviction predicts "correct" for a reason that has nothing to do with markets.
+It is distance to a barrier. It is arithmetic.
+
+The control measures the barrier distance directly, in units the horizon can
+actually move:
+
+    z = |close/SMA200 - 1| / (sigma_60d * sqrt(21))
+
+and compares realised accuracy to Phi(z), the probability that a DRIFTLESS
+RANDOM WALK ends the horizon on the side it started. Phi(z) has no free
+parameters and no knowledge of anything. It is the pure-geometry null.
+
+Measured 2026-08-03 on the survivorship-clean universe (57,158 non-overlapping
+samples, 1,305 days, 1,090 symbols):
+
+  * realised accuracy tracks Phi(z) to within ~2pp in EVERY z band
+    (55.10% vs 54.99%, 64.76% vs 64.51%, 81.07% vs 80.82%, ...)
+  * the +24.58pp conviction spread collapses to +6.31pp inside z bands,
+    so roughly three quarters of it is barrier distance
+  * out-of-sample (Hansen SPA, stationary block bootstrap over dates,
+    expanding-window refits): conviction does NOT add over z, p=0.204.
+    z DOES add over conviction, p<0.001. Brier: z 0.1165, conviction 0.1225.
+
+CONCLUSION: trend21 has no demonstrated forecasting skill. It is a
+barrier-distance calculator, and conviction is a worse-parameterised proxy for
+z. The 82% headline is the base rate (this report already refused to call that
+skill) and the band spread is geometry. Neither is an edge.
+
+This does not make the number useless. Knowing how reliable a call is remains
+worth having for SIZING. It is not worth having as a PREDICTION, and the two
+must not be quoted interchangeably.
+
 Usage:  python3 tools/revalidate_structural.py [--db PATH]
 """
 from __future__ import annotations
@@ -46,12 +86,17 @@ DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 SMA_LEN = 200
 HORIZON = 21
 RANK_WINDOW = 200
+VOL_WINDOW = 60             # trailing window for realised vol, for the z control
 MIN_BARS = SMA_LEN + RANK_WINDOW + HORIZON + 5
 MAX_SANE_RETURN = 0.65      # the engine's wild-move guard
 BOOTSTRAP = 2000
 
 BANDS = [(0.0, 0.5, "low (<0.5)"), (0.5, 0.8, "moderate (0.5-0.8)"),
          (0.8, 0.9, "high (0.8-0.9)"), (0.9, 1.01, "very-high (>=0.9)")]
+
+# Barrier distance in 21-day sigma units. Fixed before looking at any outcome.
+Z_BANDS = [(0.0, 0.25), (0.25, 0.5), (0.5, 0.75), (0.75, 1.0), (1.0, 1.5),
+           (1.5, 2.0), (2.0, 3.0), (3.0, 4.0), (4.0, 6.0), (6.0, float("inf"))]
 
 
 def sma(vals, n):
@@ -62,6 +107,25 @@ def sma(vals, n):
             run -= vals[i - n]
         out[i] = run / n if i >= n - 1 else None
     return out
+
+
+def phi(x):
+    """Standard normal CDF. Stdlib only: this tool has no numpy dependency and
+    should not grow one just to run its own control."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def trailing_vol(closes, i, n=VOL_WINDOW):
+    """Population sd of daily log returns over the n bars ending at i.
+    Uses no data after i."""
+    if i < n:
+        return None
+    rets = []
+    for j in range(i - n + 1, i + 1):
+        if closes[j - 1] <= 0 or closes[j] <= 0:
+            return None
+        rets.append(math.log(closes[j] / closes[j - 1]))
+    return statistics.pstdev(rets) if len(rets) == n else None
 
 
 def wilson(k, n, z=1.96):
@@ -98,7 +162,12 @@ def quarter_bootstrap(by_quarter, iters=BOOTSTRAP):
 
 
 def evaluate(rows):
-    """rows: list of (ts, close). Returns list of (conviction, correct, quarter)."""
+    """rows: list of (ts, close).
+
+    Returns list of (conviction, correct, quarter, z), where z is the barrier
+    distance in 21-day sigma units and is None when trailing vol is unusable.
+    z is what the geometry control in report() tests conviction against.
+    """
     closes = [r[1] for r in rows]
     ts = [r[0] for r in rows]
     n = len(closes)
@@ -135,9 +204,14 @@ def evaluate(rows):
         up_then = closes[j] > s[j]
         correct = (up_now == up_then)
 
+        # Geometry control input: how far is the barrier, in units the horizon
+        # can actually move? sigma uses only bars at or before i.
+        sig = trailing_vol(closes, i)
+        z = absd[i] / (sig * math.sqrt(HORIZON)) if sig and sig > 0 else None
+
         import datetime
         d = datetime.datetime.utcfromtimestamp(ts[i])
-        out.append((conv, correct, f"{d.year}Q{(d.month - 1) // 3 + 1}"))
+        out.append((conv, correct, f"{d.year}Q{(d.month - 1) // 3 + 1}", z))
     return out
 
 
@@ -155,7 +229,8 @@ def report(label, samples):
             continue
         hits = sum(1 for s in sel if s[1])
         byq = defaultdict(lambda: [0, 0])
-        for c, ok, q in sel:
+        for s in sel:
+            q, ok = s[2], s[1]
             byq[q][1] += 1
             if ok:
                 byq[q][0] += 1
@@ -186,12 +261,77 @@ def report(label, samples):
           % ("NAIVE BASELINE", "", 100 * persist))
     lows = [s for s in samples if s[0] < 0.5]
     highs = [s for s in samples if s[0] >= 0.9]
+    uncond = None
     if lows and highs:
         la = sum(1 for s in lows if s[1]) / len(lows)
         ha = sum(1 for s in highs if s[1]) / len(highs)
-        print("%-22s %8s %8.1fpp  <- THE ACTUAL EDGE: low-conviction %.1f%% vs "
-              "very-high %.1f%%" % ("DISCRIMINATION", "", (ha - la) * 100,
-                                    la * 100, ha * 100))
+        uncond = ha - la
+        print("%-22s %8s %8.1fpp  <- spread only. NOT an edge until the geometry "
+              "control below\n%-22s %8s          says how much of it survives "
+              "(low %.1f%% vs very-high %.1f%%)"
+              % ("DISCRIMINATION", "", uncond * 100, "", "", la * 100, ha * 100))
+    geometry_control(samples, uncond)
+
+
+def geometry_control(samples, uncond):
+    """Is the conviction spread anything more than distance to the barrier?
+
+    Two checks, both cheap and both decisive enough to belong in the same report
+    as the claim they qualify:
+
+      1. Compare realised accuracy to Phi(z), the driftless-random-walk
+         probability of ending the horizon on the starting side. Phi(z) has zero
+         free parameters. If accuracy tracks it, the model is measuring geometry.
+      2. Re-measure the conviction spread WITHIN z bands. Whatever survives is
+         the part conviction contributes that barrier distance does not.
+
+    A full out-of-sample test (Hansen SPA against a z-only benchmark) lives
+    outside this stdlib tool; see the module docstring for its 2026-08-03 result.
+    """
+    with_z = [s for s in samples if len(s) > 3 and s[3] is not None]
+    if len(with_z) < 500:
+        print("\n  GEOMETRY CONTROL: too few samples with usable trailing vol")
+        return
+
+    print("\n  " + "-" * 74)
+    print("  GEOMETRY CONTROL - conviction vs barrier distance z = dist/(sigma*sqrt(21))")
+    print("  " + "-" * 74)
+    print("  %-14s %7s %9s %9s %11s %10s" %
+          ("z band", "n", "actual", "Phi(z)", "act-Phi", "conv spread"))
+
+    num = den = 0.0
+    for lo, hi in Z_BANDS:
+        sel = [s for s in with_z if lo <= s[3] < hi]
+        if len(sel) < 200:
+            continue
+        acc = sum(1 for s in sel if s[1]) / len(sel)
+        pred = sum(phi(s[3]) for s in sel) / len(sel)
+        bl = [s for s in sel if s[0] < 0.5]
+        bh = [s for s in sel if s[0] >= 0.9]
+        if len(bl) >= 50 and len(bh) >= 50:
+            sp = (sum(1 for s in bh if s[1]) / len(bh)
+                  - sum(1 for s in bl if s[1]) / len(bl))
+            num += len(sel) * sp
+            den += len(sel)
+            sp_s = "%+.2fpp" % (sp * 100)
+        else:
+            sp_s = "-"
+        label = f"[{lo:.2f},{hi:.2f})" if hi != float("inf") else f">={lo:.2f}"
+        print("  %-14s %7d %8.2f%% %8.2f%% %10.2fpp %10s" %
+              (label, len(sel), acc * 100, pred * 100, (acc - pred) * 100, sp_s))
+
+    print("  " + "-" * 74)
+    allacc = sum(1 for s in with_z if s[1]) / len(with_z)
+    allphi = sum(phi(s[3]) for s in with_z) / len(with_z)
+    print("  overall actual %.2f%%  vs  Phi(z) %.2f%%   (gap %+.2fpp)"
+          % (allacc * 100, allphi * 100, (allacc - allphi) * 100))
+    if den and uncond is not None:
+        within = num / den
+        kept = 100 * within / uncond if uncond else float("nan")
+        print("  conviction spread: unconditional %+.2fpp  ->  within-z %+.2fpp"
+              "   (%.0f%% survives)" % (uncond * 100, within * 100, kept))
+        print("  => %.0f%% of the 'discrimination' is barrier distance, not forecasting."
+              % (100 - kept))
 
 
 def main():

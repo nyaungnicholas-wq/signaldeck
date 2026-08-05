@@ -18,6 +18,8 @@
 //
 //	sdmaint [flags]                     — the compaction pass above (default)
 //	sdmaint apply-delistings [flags]    — apply a delisted_at backfill plan
+//	sdmaint build-universe [flags]      — materialise the point-in-time
+//	                                      universe_membership from daily bars
 //	                                      emitted by tools/backfill_delistings.py
 //	sdmaint ledger-verify [flags]       — recompute the prediction-ledger chain
 //	                                      and re-verify every signed anchor on an
@@ -76,6 +78,12 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "repair-added-at" {
 		if err := repairAddedAt(os.Args[2:]); err != nil {
 			log.Fatalf("repair-added-at: %v", err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "build-universe" {
+		if err := buildUniverse(os.Args[2:]); err != nil {
+			log.Fatalf("build-universe: %v", err)
 		}
 		return
 	}

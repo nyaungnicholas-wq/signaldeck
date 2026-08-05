@@ -1,0 +1,208 @@
+{
+  "_why": [
+    "Single source of truth for WHO owns each strategy document, WHAT version it",
+    "is, AS OF WHEN its data is true, and WHETHER it may be published.",
+    "",
+    "It exists because of the P0 truth-stop of 2026-08-04: four documents",
+    "published mutually inconsistent live-accuracy figures, three asserted",
+    "survivorship control that ALPHA_WORKFLOW.md §B2 measured open, and one cited",
+    "a kill switch living in a different repository. Every one of those was a",
+    "status a human typed into markdown with nothing able to contradict it.",
+    "",
+    "tools/docs_gate.py reads this file and fails the build when a registered",
+    "document is missing metadata, when a root-level .md appears that is neither",
+    "registered nor exempt, and when a pre-survivorship-fix backtest is unlabelled.",
+    "",
+    "VERSION CONVENTION. The major version encodes fitness to publish, so a",
+    "reader can tell from the number alone: 0.1.x = NOT AUTHORITATIVE (known to",
+    "contain contradicted claims), 0.2.x = FROZEN (banner applied, authority",
+    "retained), 1.x = cleared for external reading. Bump on material change.",
+    "",
+    "DATA_AS_OF is the date of the most recent DATA the document's claims rest",
+    "on -- not the date the prose was edited. Documents citing the live record",
+    "carry 2026-08-03, the last successful grade."
+  ],
+
+  "thresholds": {
+    "min_delist_rate_per_year": 0.02
+  },
+
+  "partials": [],
+
+  "strategy_docs": {
+    "ALPHA_WORKFLOW.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.2.0",
+      "data_as_of": "2026-08-03",
+      "status": "FROZEN",
+      "backtest_data": "pre-survivorship-fix"
+    },
+    "ARCHITECTURE_EV.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.2.0",
+      "data_as_of": "2026-07-26",
+      "status": "FROZEN",
+      "backtest_data": "none"
+    },
+    "CASE_STUDY.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.1.0",
+      "data_as_of": "2026-08-03",
+      "status": "NOT_AUTHORITATIVE",
+      "backtest_data": "pre-survivorship-fix"
+    },
+    "DATA_SOURCES.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.2.0",
+      "data_as_of": "2026-07-27",
+      "status": "FROZEN",
+      "backtest_data": "none"
+    },
+    "EDGE_PLAN.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.2.0",
+      "data_as_of": "2026-07-27",
+      "status": "FROZEN",
+      "backtest_data": "pre-survivorship-fix"
+    },
+    "EXECUTION_SPEC.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "1.0.0",
+      "data_as_of": "2026-08-04",
+      "status": "ACTIVE",
+      "backtest_data": "none"
+    },
+    "HOW_PREDICTORS_WORK.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.1.0",
+      "data_as_of": "2026-08-03",
+      "status": "NOT_AUTHORITATIVE",
+      "backtest_data": "pre-survivorship-fix"
+    },
+    "INSTITUTIONAL_GAP.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.1.0",
+      "data_as_of": "2026-08-03",
+      "status": "NOT_AUTHORITATIVE",
+      "backtest_data": "none"
+    },
+    "PAIRS_TRADING.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.2.0",
+      "data_as_of": "2026-07-25",
+      "status": "FROZEN",
+      "backtest_data": "pre-survivorship-fix"
+    },
+    "PREDICTION_PROCESS.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.1.0",
+      "data_as_of": "2026-08-03",
+      "status": "NOT_AUTHORITATIVE",
+      "backtest_data": "pre-survivorship-fix"
+    },
+    "PREREGISTRATION.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "1.0.0",
+      "data_as_of": "2026-07-27",
+      "status": "ACTIVE",
+      "backtest_data": "none"
+    },
+    "README.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.2.0",
+      "data_as_of": "2026-08-03",
+      "status": "FROZEN",
+      "backtest_data": "none"
+    },
+    "RISK_POLICY.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "1.0.0",
+      "data_as_of": "2026-08-04",
+      "status": "ACTIVE",
+      "backtest_data": "none"
+    },
+    "SHIP_READINESS.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "0.2.0",
+      "data_as_of": "2026-08-03",
+      "status": "FROZEN",
+      "backtest_data": "none"
+    },
+    "STRATEGY_DECK.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "1.0.0",
+      "data_as_of": "2026-08-04",
+      "status": "ACTIVE",
+      "backtest_data": "post-survivorship-fix"
+    }
+  },
+
+  "exempt": [
+    "AUDIT_SUPERPROMPT.md",
+    "DEEP_REPORT_2026-08-03.md",
+    "DEPLOY.md",
+    "EIGHTY_PERCENT_SUPERPROMPT.md",
+    "FIX_EVERYTHING_SUPERPROMPT.md",
+    "HANDOFF_2026-08-02.md",
+    "HANDOFF_PROMPT.md",
+    "HOSTILE_REVIEW_FIX_SUPERPROMPT.md",
+    "IMPROVEMENT_PLAN.md",
+    "INTEGRATION_PLAN.md",
+    "LANDING_PAGE_SUPERPROMPT.md",
+    "LEG_MEASUREMENT_2026-08-02.md",
+    "LOOP_SUPERPROMPT.md",
+    "MCP_SERVER.md",
+    "MCP_SERVER_SUPERPROMPT.md",
+    "PIPELINE.md",
+    "REMEDIATION_2026-08-03.md",
+    "REMEDIATION_SYNTHESIS_2026-08-04.md",
+    "REPAIR_LOOP_SUPERPROMPT.md",
+    "REPRODUCE.md",
+    "ROADMAP.md",
+    "SCORE_LOOP_SUPERPROMPT.md",
+    "SIGNAL8_WAVE.md",
+    "STORAGE.md",
+    "SUPERPROMPT_visual_compact.md",
+    "SYSTEM_CHECK_2026-08-02.md",
+    "SYSTEM_CHECK_2026-08-02_REAUDIT.md",
+    "UX_OVERHAUL_SUPERPROMPT.md",
+    "VERIFY_SUPERPROMPT.md",
+    "WORK_LEDGER.md"
+  ],
+
+  "_why_allow": [
+    "Each entry below was adjudicated against the actual line on 2026-08-04 and",
+    "kept only because the line states something OTHER than a claim about this",
+    "system's live accuracy. Every entry is scoped by line_contains, never to a",
+    "whole file, so a genuine claim appearing later in the same document still",
+    "fails the build. An entry without a `reason` suppresses nothing — the gate",
+    "enforces that, so this list cannot rot into a silent bypass."
+  ],
+
+  "allow": {
+    "no-hardcoded-live-accuracy": [
+      {
+        "file": "EDGE_PLAN.md",
+        "line_contains": "not achievable by anyone",
+        "reason": "States what world-class funds achieve (52-56%) in order to argue 80% is impossible. Industry context and a deflationary argument, not a claim about this system."
+      },
+      {
+        "file": "EDGE_PLAN.md",
+        "line_contains": "negative expectancy",
+        "reason": "Uses a hypothetical 80% win rate to show win rate can be high while expectancy is negative. A counterexample, not a measured result."
+      },
+      {
+        "file": "EDGE_PLAN.md",
+        "line_contains": "honest destination",
+        "reason": "States a TARGET range (53-56%) the document argues toward. A goal, not a live figure. If this ever becomes a claimed result it must move into the generated partial."
+      }
+    ],
+    "forbidden-claims": [
+      {
+        "file": "EXECUTION_SPEC.md",
+        "line_contains": "guaranteed levy",
+        "reason": "Describes a guaranteed COST — a crossed spread is charged on every entry — which is the opposite of a promotional guarantee. The word is on the forbidden list because of return claims; this is a cost argument for using limit orders."
+      }
+    ]
+  }
+}

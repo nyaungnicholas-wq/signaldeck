@@ -52,6 +52,135 @@
 //   - TREND: the predictor is trend persistence + distance; base rate 54-57%.
 //     Universe is currently-tracked stocks, so delisted names are absent
 //     (survivorship) — persistence of downtrends into delisting is unobserved.
+//   - GEOMETRY (2026-08-03, the strongest caveat here — read it before quoting
+//     any conviction tier). Both trend21 and liquidity21 ask the same question:
+//     does a value stay on the same side of a slow reference line over 21 days?
+//     Conviction is distance from that line. A value far from a line needs a
+//     large move to cross it. So conviction predicts correctness for a reason
+//     that is arithmetic, not market. Controlling for barrier distance measured
+//     in units the horizon can actually move,
+//
+//         z = |value - reference| / sigma_of_the_21d_change
+//
+//     against Phi(z), the DRIFTLESS-RANDOM-WALK probability of ending on the
+//     starting side (zero free parameters):
+//
+//       trend21    (57,158 samples, 1,305 days, survivorship-clean): accuracy
+//                  tracks Phi(z) to within ~2pp in EVERY z band. The +24.5pp
+//                  conviction spread falls to +6.3pp within z bands, so ~74% of
+//                  it is distance. Hansen SPA out-of-sample: conviction adds
+//                  NOTHING over z (p=0.204); z adds over conviction (p<0.001).
+//       liquidity21 (64,847 samples, 1,419 days): WORSE. Accuracy is 5.3pp
+//                  BELOW Phi(z) overall (71.1% vs 76.4%) and 6-8pp below through
+//                  the middle bands, because log dollar volume mean-reverts and
+//                  therefore crosses its median MORE often than a random walk
+//                  would. The +28.1pp conviction spread does not merely vanish
+//                  inside z bands, it INVERTS to -5.1pp: at a fixed distance,
+//                  high conviction means an extreme RANK in a compressed
+//                  distribution, which is a mean-reversion candidate. SPA:
+//                  conviction adds nothing over z (p=0.511); z beats conviction
+//                  (p<0.001). Brier: z 0.1542, conviction 0.1630.
+//       vol21      (64,305 samples, 1,440 days): THE EXCEPTION, and the one
+//                  worth reading carefully. 51% of the +15.7pp conviction spread
+//                  survives inside z bands (+7.9pp), and NEITHER side dominates:
+//                  conviction does not beat geometry (SPA p=0.073) and geometry
+//                  does not beat conviction (p=0.200). Brier actually favours
+//                  conviction slightly (0.2318 vs 0.2324, both 0.2315). So vol21
+//                  alone carries information barrier distance does not.
+//                  BUT SIZE IT HONESTLY: the pure geometric rule
+//                  ("sign(rv - median) persists") scores 61.62% and the full
+//                  model scores 62.16%. The entire edge is +0.54pp, and SPA
+//                  cannot establish it at 5%. Note also vol21 is the furthest
+//                  BELOW the driftless null of the three (-8.5pp), because vol
+//                  mean-reverts hardest. Phi(z) is a poor null here; the 61.62%
+//                  geometric rule is the null that matters.
+//
+//     The +0.54pp was then RESOLVED (same day). Holding the shipped outcome
+//     fixed and varying ONLY the estimator that forms the prediction, accuracy
+//     traces a smooth hump in effective window length:
+//
+//       ewma0.85 ~7d  61.43% | ewma0.90 ~10d 62.00% | ewma0.94 ~17d 62.16%
+//       ewma0.97 ~33d 61.96% | ewma0.99 ~100d 58.87%
+//       flat5d 59.36% | flat10d 60.96% | flat21d 61.62% | flat42d 60.67%
+//       flat63d 61.43% | flat126d 59.69%
+//
+//     EWMA beats the flat window of comparable length EVERYWHERE (+1.0 to
+//     +1.3pp), and 0.94 is simply nearest the optimum. That is exponential
+//     weighting being a better vol nowcast than a rectangular one, which is why
+//     RiskMetrics exists. It is estimation, not prediction. SPA over all 10
+//     estimators against rv21: p=0.089, so nothing beats the geometric rule
+//     once the search is charged for.
+//
+//     DO NOT "FIX" THE ESTIMATOR MISMATCH. PredictVol21 ranks EWMA(0.94) while
+//     ResolveVol21At grades against flat 21d realised vol, and the signs
+//     disagree 13.1% of the time. Matching the barrier to the predictor makes
+//     the SAME model score 71.65% instead of 62.16%: a +9.50pp inflation, 17x
+//     the entire disputed edge, bought by grading a forecast against a barrier
+//     built from its own estimator. The mismatch is the CONSERVATIVE setup and
+//     is deliberate. Changing it would also break comparability between the
+//     backtest and the live record starting 2026-08-07.
+//
+//     The remaining three kinds, controlled the same day:
+//
+//       trend63    (18,489 samples, 1,091 dates; replicates at 69.35% vs the
+//                  shipped 70.0%): GEOMETRY, same as trend21, once the null is
+//                  specified correctly. Under Phi(z) it looked like the strongest
+//                  kind, keeping 62% of its +26.2pp spread. That was the NULL
+//                  failing, not the predictor winning: Phi(z) holds SMA200 fixed,
+//                  but over H sessions the average rolls off H of its 200 points
+//                  and walks toward price. See the moving-barrier null below.
+//
+//     THE MOVING-BARRIER NULL (2026-08-03). Same idea as Phi(z) and still zero
+//     free parameters, but the barrier is allowed to move: take the real trailing
+//     closes, simulate the forward window as a ZERO-DRIFT log random walk at the
+//     sample's own 60d sigma, rebuild SMA200 at the horizon from (surviving real
+//     closes + simulated closes), and ask whether the simulated close is on the
+//     starting side. 400 paths per sample. It contains no market information and,
+//     unlike Phi(z), it is a calibrated probability that can be Brier-scored and
+//     used as an SPA benchmark with no fitting at all.
+//
+//       barrier motion is worth 1.74pp of persistence at H=21 and 7.27pp at
+//       H=63 — the 21/200 vs 63/200 window turnover, exactly as predicted.
+//
+//                           actual   Phi(z)    gap   MOVING   gap    Brier(mov/stat)
+//         trend21           82.98%   83.68%  -0.70   81.95%  +1.04   .12034 / .12072
+//         trend63           69.35%   75.26%  -5.91   67.99%  +1.36   .19755 / .20095
+//
+//     The static null's error blows out with horizon (-0.70 -> -5.91). The moving
+//     null's does not (+1.04 -> +1.36). That is the whole explanation for
+//     trend63's apparent strength, and it is now measured rather than asserted.
+//     Re-run against the correct null, the conviction spread collapses on both:
+//     trend21 keeps 17% (+4.14pp), trend63 keeps 37% (+9.61pp), and SPA says
+//     conviction adds nothing to the null in either case (p=0.198, p=0.237).
+//     The zero-parameter null also out-Briers the fitted conviction model
+//     (.1152 vs .1225 at 21d, .1947 vs .1970 at 63d).
+//
+//     Residual: actual sits ~1.0-1.4pp ABOVE the moving null, concentrated at
+//     low p_moving. The null is driftless and equities drift up, so that is the
+//     expected sign and size. It is not being claimed as an edge.
+//       trend21-crypto     : n=110 rows over 32 DATE CLUSTERS, 7 correlated
+//                  assets. Overall 93.64%, date-clustered 95% CI
+//                  [84.48, 100.00]. EVERY sample sits at z >= 1.5, where the
+//                  driftless null alone already predicts 91.41%. The shipped
+//                  0.985 tier rests on 30 rows; the 100% bands on 15 each.
+//       liquidity21-crypto : n=161 over 46 date clusters. Overall 81.37%, CI
+//                  [72.67, 88.17]. Phi(z) predicts 79.30% of it. The shipped
+//                  0.964 tier rests on 31 rows.
+//
+//     For both crypto kinds the binding problem is not geometry, it is n.
+//     cryptoAccuracyFor still SERVES 0.985 and 0.964 into live payloads while
+//     the comment above it concedes the top tiers "rest on 3 clusters - never
+//     quoted". Serving them is quoting them. Those two tables should be
+//     withdrawn or floored at the all-decisions rate until the crypto universe
+//     is wider than 7 names.
+//
+//     CONCLUSION: none of the three has demonstrated forecasting skill.
+//     trend21 reproduces the geometry, liquidity21 underperforms it, and vol21
+//     beats a geometric rule by +0.54pp that does not reach significance and is
+//     explainable as an estimator choice. Conviction remains usable as a
+//     RELIABILITY estimate for sizing. It must never be quoted as evidence of
+//     PREDICTION. Reproduce with tools/revalidate_structural.py (trend21 control
+//     is built in).
 //   - ACCURACY IS NOT RETURN, and at the top band they are INVERTED. The
 //     2026-07-24 independent re-validation (fresh reimplementation, 968 stocks,
 //     1900 trading days 2019-2026, NON-OVERLAPPING 21d/63d windows,
@@ -141,6 +270,17 @@ type Forecast struct {
 	Tier           string  `json:"tier"`
 	Rank           float64 `json:"rank"`
 	N              int     `json:"n"`
+	// EvidenceRows and EvidenceClusters say how much measurement stands behind
+	// HistoricalAccuracy: the sample THIS conviction tier was measured on, and
+	// the independent quarter blocks behind its CI. Both zero (and omitted from
+	// the JSON) when the loop did not record them — see EvidenceSizeFor, which
+	// refuses to invent a number for the kinds that did not.
+	//
+	// The point is that 0.985 on 68 rows across 4 quarters and 0.972 on the
+	// ~900-stock / 7.5-year equity table are not the same kind of number, and
+	// nothing in this payload previously let a reader tell them apart.
+	EvidenceRows     int `json:"evidenceRows,omitempty"`
+	EvidenceClusters int `json:"evidenceClusters,omitempty"`
 	// Tradeability states the MEASURED mean forward return of THIS conviction
 	// band in plain English — including the case the accuracy number hides, a
 	// top band that is the most accurate and the least profitable (package doc,

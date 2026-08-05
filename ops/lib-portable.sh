@@ -219,9 +219,17 @@ sd_kill_hard() {
 # instead. Callers parse the output as text, so the format has to match exactly.
 sd_sqlite_read() {
   local db="$1" sql="$2" py
+  # STRIP CR. The sqlite3 CLI installed here (WinGet, a native Windows build)
+  # terminates rows with CRLF, so every field a caller reads ends in \r while
+  # LOOKING correct in any output you print. That is a silent-wrong-answer bug,
+  # not a cosmetic one: `[ "${#rev}" -eq 40 ]` failed on every 40-hex commit id,
+  # string compares against literals never matched, and the pre-rebase hook
+  # built on this helper reported "nothing referenced" for a ledger holding
+  # 26,689 rows. The Python fallback already emits bare LF, so normalising here
+  # makes the two backends agree — which is this file's whole purpose.
   if command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$db" "$sql"
-    return $?
+    sqlite3 "$db" "$sql" | tr -d '\r'
+    return "${PIPESTATUS[0]}"
   fi
   py="$(sd_py)"
   [ -z "$py" ] && return 127

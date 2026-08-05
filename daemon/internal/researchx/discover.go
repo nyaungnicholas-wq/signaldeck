@@ -141,6 +141,14 @@ func (c DiscoverConfig) withDefaults() DiscoverConfig {
 // Divisor is the Bonferroni divisor: every rule in the grid, once per search
 // conducted over this data including this one. It is derived, never supplied —
 // widening the grid and re-running the search both RAISE it.
+//
+// The grid holds each condition set TWICE, once per direction in discoverCalls,
+// and the two arms are exact negations (rank of their return correlation matrix
+// is half the grid). That is not double counting: each arm is judged with a
+// ONE-SIDED Wilson bound, so a pair spends CorrectedAlpha in each tail, and
+// 2n arms at MaxAlpha/2n equals n condition sets tested two-sided at MaxAlpha/n.
+// Do NOT halve this to "remove the mirrors" without also halving the per-tail
+// alpha — that doubles the false-positive rate. TestMirrorPairEquivalence pins it.
 func (c DiscoverConfig) Divisor() int {
 	d := c.withDefaults()
 	n := len(discoverGrid(d.MaxCandidates)) * (1 + d.PriorSearches)

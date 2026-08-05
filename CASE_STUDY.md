@@ -1,5 +1,31 @@
 # Building a market-research system that refuses to lie to me
 
+<!-- DOCUMENT CONTROL -->
+> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
+> **Status:** FROZEN — NOT AUTHORITATIVE
+> **Scope:** Narrative account of how the platform was built and what it measured.
+> **Frozen claim classes:** FC1, FC2, FC3, FC4, FC7 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
+> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** BLOCKED — internal use only
+
+> ## ⛔ NOT AUTHORITATIVE — FROZEN — DO NOT DISTRIBUTE
+> **P0 freeze, 2026-08-04.** This document is under remediation and **must not be
+> published, presented, or quoted externally.**
+>
+> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · confidence-interval verdicts ·
+> survivorship control · point-in-time data · "already built / verified" status.**
+>
+> Known defects: it prints a live-record snapshot that three other documents state
+> differently; and it narrates survivorship as closed while `ALPHA_WORKFLOW.md` §B2
+> measures it open.
+>
+> **Closed in P6:** this document previously asserted "the entire day-clustered
+> interval below the baseline" while the platform withholds every interval for
+> insufficient distinct blocks. The interval verdict was removed — see
+> `proofs/P6_GOVERNANCE_CLEANUP.md` §3.
+>
+> Authority and scope: `proofs/P0_FREEZE.md`. Lifts only after P1–P3 complete.
+
 SignalDeck is a market-intelligence platform I built to answer one question
 honestly: **does any of this actually predict anything?**
 
@@ -98,15 +124,56 @@ not a live number.
 The flagship directional ensemble — the thing the whole project was built
 around — **graded FAILED and was retired**. Its full live record:
 
-| Horizon | Live accuracy | Baseline | Skill |
-|---|---|---|---|
-| 1d | 48.1% | 54.6% | **−6.5pp** |
-| 1w | 46.2% | 54.4% | **−8.2pp** |
-| 1d high-conviction | 48.6% | 56.2% | **−7.6pp** |
+<!-- BEGIN GENERATED live_accuracy -->
 
-Worse than guessing the majority class, with the entire day-clustered interval
-below the baseline. An auto-retire rule — pre-registered *before* the numbers
-came in — fired and stopped it publishing.
+Generated from `data/accuracy_registry.json` (grade of 2026-08-03T23:06:30) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+
+> **STALE — this is not a current grade.** The registry is `REFUSED` (grader exited 1), and the last successful grade is 15.0h old. The numbers below are that last successful grade, taken at 2026-08-03T23:06:30. Nothing here has been re-graded since.
+
+### Live record
+
+| Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
+|---|---|---|---|---|---|---|---|
+| directional-ensemble (1d) | all | 2,257 | 46.3% | 52.9% | -6.6pp | 9 | withheld |
+| prequential-majority (1d) | all | 1,644 | 55.5% | 51.1% | +4.4pp | 6 | withheld |
+| directional-ensemble (1w) | all | 912 | 47.8% | 50.2% | -2.4pp | 4 | withheld |
+| prequential-majority (1w) | all | 7 | 28.6% | 50.0% | -21.4pp | 1 | withheld |
+| directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 297 | 55.2% | 60.3% | -5.1pp | 5 | withheld |
+| directional-ensemble (1w, high conviction) | \|p-0.5\|>=0.15 | 63 | 47.6% | 46.8% | +0.8pp | 4 | withheld |
+
+Intervals are withheld this cycle, so **no pass/fail verdict is published from them**. A point estimate without an interval is not a result; treat every row above as a running tally.
+
+Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
+
+- `prequential-majority (1d)` — INSUFFICIENT DAYS (6/10 distinct days) — no interval, so no verdict
+- `prequential-majority (1w)` — INSUFFICIENT (7/30)
+
+### Backtested claims with no live record yet
+
+- `filingsdrift21` — registered claim 50.0%, 67 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21` — registered claim 59.5%, 2,903 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21-crypto` — registered claim 79.5%, 60 forecasts recorded, 0 graded. Not a live result.
+- `trend21` — registered claim 73.1%, 2,918 forecasts recorded, 0 graded. Not a live result.
+- `trend21-crypto` — registered claim 93.4%, 60 forecasts recorded, 0 graded. Not a live result.
+- `trend63` — registered claim 70.0%, 2,917 forecasts recorded, 0 graded. Not a live result.
+- `vol21` — registered claim 55.8%, 2,928 forecasts recorded, 0 graded. Not a live result.
+
+**Multiplicity:** family_size=13, looks=8, divisor=104, corrected_alpha=0.0004807692307692308.
+
+**Survivorship:** epoch 2026-07-24; listing status resolvable for 328/335 graded symbols (97.9%): 7 inactive symbol(s) with no delisted_at.
+
+<!-- END GENERATED live_accuracy -->
+
+That table used to be typed here, and three other documents typed three
+different versions of it — **FC1**. It is now generated from the registry into
+`partials/live_accuracy.md` and included identically everywhere; CI fails if a
+superseded figure reappears. See `proofs/P2_LIVE_RECORD_RECONCILIATION.md`.
+
+> No interval verdict is available: the platform withholds every interval for this claim (distinct-day blocks below `min_distinct_blocks = 10`).
+
+What stands without an interval is the point estimates above, each at or below
+its baseline, and the operational outcome: an auto-retire rule — pre-registered
+*before* the numbers came in — fired and stopped it publishing.
 
 The research loop tells the same story. It searches a 48-rule grid daily and
 reports, most days:

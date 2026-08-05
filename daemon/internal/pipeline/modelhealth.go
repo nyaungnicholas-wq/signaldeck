@@ -60,8 +60,8 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 	// verdict was still INSUFFICIENT). A flag here outranks the composite
 	// score below: a row whose whole effective-N interval sits below the
 	// prequential null is retired the grade it happens, not when the score
-	// catches up.
-	regRetired := w.registryRetired()
+	// catches up. The registry's revision gate outranks BOTH — see regFlag.
+	regFlags := w.registryFlags()
 
 	for _, h := range []md.Horizon{md.H1d, md.H1w} {
 		model := "directional-ensemble-" + string(h)
@@ -122,7 +122,20 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 			// is not a meaningful axis for it; leaving it zero scores freshness
 			// full rather than inventing a retrain date.
 		})
-		if regRetired[model] {
+		// Attribution first. A gated row means the grader deleted its own
+		// verdict because contributing rows name builds this repo does not
+		// contain, so there is no graded claim left to act on — not FAILED,
+		// and not clean. Stop emitting without asserting a record: a model
+		// whose grade nobody can reproduce must not keep publishing while the
+		// question is open, and must not be recorded as condemned either.
+		if f := regFlags[model]; f.Unattributable {
+			score.Verdict = modelhealth.VerdictUnattributable
+			score.Emitting = false
+			score.Reasons = append(score.Reasons,
+				"accuracy-registry revision gate: contributing rows written by "+
+					strings.Join(f.Offenders, ", ")+" — not commits in this repository, "+
+					"so the grader stripped this row's verdict and no graded claim stands")
+		} else if f.Retire {
 			score.Verdict = modelhealth.VerdictRetired
 			score.Emitting = false
 			score.Reasons = append(score.Reasons,
@@ -144,7 +157,9 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 			"observations":   score.Observations,
 			"accuracy":       full.Accuracy,
 			"baseline":       full.BaselineAcc,
-			"registryRetire": regRetired[model],
+			"registryRetire":         regFlags[model].Retire,
+			"registryUnattributable": regFlags[model].Unattributable,
+			"registryRevisionGate":   regFlags[model].Offenders,
 			// The tracked benchmark's own record plus the ensemble re-graded
 			// over the benchmark's window — same days, same rules, one number
 			// (skillVsBenchmark) that says whether the ensemble is beating a
@@ -281,10 +296,10 @@ func (w *ModelHealthWorker) featureDrift(ctx context.Context) float64 {
 	return modelhealth.DriftFraction(results)
 }
 
-// registryRetired resolves the registry path and returns the retire flags.
+// registryFlags resolves the registry path and returns the kill switch state.
 // Candidates mirror PreregRegistrar.fileDigest: launchd runs the daemon from
 // <repo>/daemon, and tools run from the repo root.
-func (w *ModelHealthWorker) registryRetired() map[string]bool {
+func (w *ModelHealthWorker) registryFlags() map[string]regFlag {
 	path := w.RegistryPath
 	if path == "" {
 		for _, p := range []string{
@@ -297,18 +312,44 @@ func (w *ModelHealthWorker) registryRetired() map[string]bool {
 			}
 		}
 	}
-	return retiredFromRegistry(path)
+	return registryFlagsFrom(path)
 }
 
-// retiredFromRegistry maps model name -> true for every directional registry
-// row carrying the pre-registered FAILED-forward retire flag (the auto-retire
-// rule chained under prereg kind "auto-retire-rule"). An unreadable file or
-// malformed JSON returns an empty map — the kill switch must never fire on
-// evidence nobody can read, the same posture featureDrift takes — and the
-// opposite failure is guarded by Grade's own skill gate, which still retires
-// on the store's record without the registry.
-func retiredFromRegistry(path string) map[string]bool {
-	out := map[string]bool{}
+// regFlag is what one directional registry row tells the kill switch.
+type regFlag struct {
+	// Retire is the pre-registered FAILED-forward flag. Only meaningful when
+	// Unattributable is false: retire is derived from a verdict, and a verdict
+	// the revision gate deleted cannot leave a live flag behind it.
+	Retire bool
+	// Unattributable means the grader's revision gate found contributing rows
+	// written by builds this repository does not contain, and therefore
+	// stripped the row's verdict. The rows that produced the record cannot be
+	// tied to any released code, so neither the retire flag nor its absence
+	// carries information.
+	Unattributable bool
+	// Offenders are the unresolvable build stamps, for the operator reason
+	// line. Empty when Unattributable is false.
+	Offenders []string
+}
+
+// registryFlagsFrom maps model name -> the directional registry row's kill
+// switch state. An unreadable file or malformed JSON returns an empty map —
+// the kill switch must never fire on evidence nobody can read, the same
+// posture featureDrift takes — and the opposite failure is guarded by Grade's
+// own skill gate, which still retires on the store's record without the
+// registry.
+//
+// Both fields matter, and for opposite reasons. `retire` is the pre-registered
+// FAILED-forward flag (auto-retire rule, chained under prereg kind
+// "auto-retire-rule"). `revision_gate` is the grader refusing to stand behind
+// the row at all: apply_revision_gate in tools/accuracy_registry.py DELETES
+// the verdict when a contributing row names a build that is not a commit here,
+// while leaving `retire` — a value computed from that same now-deleted verdict
+// — sitting in the file. Reading `retire` alone therefore acts on evidence the
+// grader has formally disowned, in whichever direction the stale flag happens
+// to point. So the gate is read too, and it outranks the flag.
+func registryFlagsFrom(path string) map[string]regFlag {
+	out := map[string]regFlag{}
 	if path == "" {
 		return out
 	}
@@ -318,21 +359,24 @@ func retiredFromRegistry(path string) map[string]bool {
 	}
 	var reg struct {
 		Rows []struct {
-			Predictor string `json:"predictor"`
-			Family    string `json:"family"`
-			Retire    bool   `json:"retire"`
+			Predictor    string   `json:"predictor"`
+			Family       string   `json:"family"`
+			Retire       bool     `json:"retire"`
+			RevisionGate []string `json:"revision_gate"`
 		} `json:"rows"`
 	}
 	if json.Unmarshal(raw, &reg) != nil {
 		return out
 	}
 	for _, r := range reg.Rows {
-		if r.Family != "direction" || !r.Retire {
+		gated := len(r.RevisionGate) > 0
+		if r.Family != "direction" || (!r.Retire && !gated) {
 			continue
 		}
 		// "directional-ensemble (1d)" / "directional-ensemble (1w, high
 		// conviction)" -> directional-ensemble-1d / -1w. A FAILED tier retires
-		// its horizon: the horizon is the unit that publishes.
+		// its horizon: the horizon is the unit that publishes. A gated tier
+		// disqualifies its horizon for the same reason.
 		i := strings.IndexByte(r.Predictor, '(')
 		if i < 0 {
 			continue
@@ -341,9 +385,23 @@ func retiredFromRegistry(path string) map[string]bool {
 		if j := strings.IndexAny(h, ",)"); j >= 0 {
 			h = h[:j]
 		}
-		if h = strings.TrimSpace(h); h != "" {
-			out["directional-ensemble-"+h] = true
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
 		}
+		key := "directional-ensemble-" + h
+		f := out[key]
+		if gated {
+			// A gate on ANY tier of a horizon disqualifies the horizon, and it
+			// also voids the retire flag the same row carries: that flag was
+			// computed from the verdict the gate deleted.
+			f.Unattributable = true
+			f.Offenders = r.RevisionGate
+			f.Retire = false
+		} else if r.Retire && !f.Unattributable {
+			f.Retire = true
+		}
+		out[key] = f
 	}
 	return out
 }
