@@ -310,6 +310,19 @@ jobs:
         run: bash ops/test-ledger-provenance.sh
       - name: Ledger-referenced commits are still reachable
         run: bash ops/ledger-provenance.sh --check
+      # The hooks this job exists to backstop were committed mode 644, and git
+      # skips a non-executable hook SILENTLY — so pre-rebase, the guard written
+      # after 946 rows were stranded on 2026-08-02, could never have fired on a
+      # Linux or macOS clone. Nothing said so, because nothing checked.
+      - name: Hooks are executable, or git ignores them without a word
+        run: |
+          rc=0
+          for h in ops/githooks/*; do
+            [ -x "$h" ] || { echo "NOT EXECUTABLE: $h — git will skip it"; rc=1; }
+          done
+          exit $rc
+      - name: Self-test the pre-push hook
+        run: bash ops/test-pre-push-hook.sh
 
   docs-gate:
     runs-on: ubuntu-latest
