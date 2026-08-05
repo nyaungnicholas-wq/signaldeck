@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -31,6 +32,21 @@ func (w *AnalystWorker) Run(ctx context.Context) (string, error) {
 	}
 	b, err := analyst.Run(ctx, w.LLM, w.St)
 	if err != nil {
+		// A SPENT DAILY BUDGET IS NOT A FAILURE. The cap is a control that is
+		// working when it fires, and this worker ticks hourly, so once the day's
+		// calls are gone every remaining tick filed status=error — 10+ error
+		// rows a day, the worker counted as failing on the Agents page, and the
+		// watchdog holding the fleet unhealthy over a budget doing its job.
+		// Measured 2026-08-05: llm_spend hit 2,162 against a 2,000 cap and
+		// ai-analyst had errored on every hourly tick since.
+		//
+		// Reported as a skip, alongside the two skips already above it: no key
+		// and AI-disabled are the same category — a reason there is no brief
+		// that says nothing is broken. It resets at the UTC day boundary on its
+		// own. A REAL failure still returns an error.
+		if errors.Is(err, llm.ErrCapReached) {
+			return "skipped: daily LLM call cap reached — resets at the UTC day boundary", nil
+		}
 		return "", err
 	}
 	if b.Disabled {
