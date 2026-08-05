@@ -1,23 +1,41 @@
-=== tools/test_docs_gate.py (gate self-test) ===
-test_explicit_refusal_wins (__main__.GraderStatusTest.test_explicit_refusal_wins) ... ok
-test_zero_rows_is_not_success (__main__.GraderStatusTest.test_zero_rows_is_not_success)
-A grade that graded nothing must not read as OK by declining to complain. ... ok
+P8 PROOF — automated docs gate
+generated: 2026-08-05T00:59:56Z
 
-----------------------------------------------------------------------
-Ran 56 tests in 17.124s
-
+=== 1. gate self-test: python tools/test_docs_gate.py ===
+Ran 56 tests in 18.215s
 OK
 
-=== full tools discovery (the command CI runs) ===
-         3       1  2026-12-05         26        10
-         4       1  2026-12-05         26        10
-         5       1  2026-12-05         26        10
-         6       1  2026-12-05         26        10
-         7       1  2026-12-05         26        10
-         8       1  2026-12-05         26        10
-         9       1  2026-12-05         26        10
-        10       1  2026-12-05         26        10
+=== 2. full tools discovery (the command CI runs) ===
+Ran 276 tests in 29.699s
+OK (skipped=4)
 
-=== docs_gate.py check (real repository) ===
+=== 3. docs_gate.py check — real repository ===
 docs-gate: clean
 exit=0
+
+=== 4. committed integrity snapshot (ops/data-integrity.json) ===
+{
+  "generated": "2026-08-05T00:57:25.116820Z",
+  "source_db": "data/signaldeck.db",
+  "grader": {
+    "status": "OK",
+    "graded_at": "2026-08-04T17:55:59",
+    "refused_since": null,
+    "refusal_reason": null,
+    "rows": 13
+  },
+  "universe_membership_rows": 1854228,
+  "delisting": {
+    "stocks_total": 1773,
+    "stocks_delisted": 716,
+    "span_years": 8.027,
+    "rate_per_year": 0.0503
+  },
+  "survivorship_fix_date": "2026-08-05"
+}
+
+=== 5. docs build log ===
+docs_gate build 2026-08-05T01:00:46.851781Z
+source: ops/data-integrity.json (generated 2026-08-05T00:57:25.116820Z)
+grader status: OK
+no partials declared in ops/docs-registry.json
