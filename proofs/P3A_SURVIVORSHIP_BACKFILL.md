@@ -149,10 +149,30 @@ negative at 5d and 21d and still survives Bonferroni over the 9 leg×horizon
 tests. `lowVol` remains positive-but-fragile with an interval touching zero.
 Every composite remains indistinguishable from zero.
 
-The honest reading: the survivorship defect was **real as a defect and small as
-an effect on this particular study** — 706 confirmed-dead names did not rescue
-or destroy any cross-sectional conclusion. That is a result worth having, and it
-is the opposite of the result the contamination warning implied.
+The reading at the time: the survivorship defect was real as a defect and small
+as an effect on this study — 706 confirmed-dead names did not rescue or destroy
+any cross-sectional conclusion.
+
+> ### ⚠ SUPERSEDED THE SAME DAY — the effect is NOT small
+>
+> That conclusion was drawn from a 706-name increment and **does not survive the
+> full repair.** `proofs/P3D_DELISTING_GAP_2023_2025.md` §7.2 added 1,216 more
+> confirmed-dead names (universe 1,765 → 2,935) and every leg moved
+> substantially — though not monotonically: `lowVol` and `mom12_1` dip at the
+> +706 increment before growing, which is why that increment read as stability:
+>
+> | 21d leg | PRE | +706 | +Form25 |
+> |---|---|---|---|
+> | liquidity | −1.65 | −1.70 | **−2.71** |
+> | lowVol | +1.99 | +1.77 | **+3.59** |
+> | mom12_1 | +1.35 | +1.08 | **+2.32** |
+>
+> Legs that were indistinguishable from zero now clear Bonferroni — five of the
+> six in P3D §7.2; 63d `lowVol` does not. **Do not
+> quote the +0.55pp stability claim, and do not quote the new figures as an edge
+> either** — P3D §7.3 shows the enlarged universe is ~50% eventually-dead, so
+> they are an upper bound. The lesson stands on its own: a small increment
+> measured a small effect and that did not extrapolate.
 
 ## 6. Studies by backfill status
 

@@ -1,0 +1,32 @@
+  mom12_1                   360832    330    +1.80 [+0.93, +2.66]       [+0.57, +2.99] *     replicates (shipped +1.47pp [+0.67, +2.30])
+  composite_as_audited      464333    376    +1.19 [+0.46, +1.92]       [+0.16, +2.22] *     unpublished leg, positive
+  composite_lowvol_only     463356    376    +2.19 [+1.20, +3.18]       [+0.82, +3.58] *     unpublished leg, positive
+  composite_all3            464333    376    +1.19 [+0.46, +1.92]       [+0.16, +2.22] *     unpublished leg, positive
+
+HORIZON 21d  (stride 21 sessions, NON-OVERLAPPING)  calendar days: 1908
+  formation days used 89 of 90 tried   thin cross-sections skipped 1
+  dropped: trailing split-guard 7999 | forward split-guard 584 | no forward bar 4969 | tied at median 39
+  LEG                            n   days   edge pp 95% CI (day-clust)   Bonferroni CI        VERDICT vs shipped
+  ----------------------------------------------------------------------------------------------------------------------
+  liquidity                 107226     89    -2.71 [-3.85, -1.54]       [-4.32, -1.06] *     *** SIGN INVERTED *** (shipped +2.50pp [+1.61, +3.37])
+  lowVol                    108032     88    +3.59 [+1.75, +5.40]       [+0.91, +6.14] *     replicates (shipped +2.80pp [+0.81, +4.66])
+  mom12_1                    83951     77    +2.32 [+0.71, +3.75]       [+0.01, +4.31] *     unpublished leg, positive
+  composite_as_audited      108785     89    +0.32 [-0.72, +1.36]       [-1.14, +1.76]       indistinguishable from zero
+  composite_lowvol_only     108032     88    +3.59 [+1.75, +5.40]       [+0.91, +6.14] *     unpublished leg, positive
+  composite_all3            108791     89    +1.88 [+0.48, +3.23]       [-0.14, +3.75]       unpublished leg, positive
+
+HORIZON 63d  (stride 63 sessions, NON-OVERLAPPING)  calendar days: 1908
+  formation days used 29 of 30 tried   thin cross-sections skipped 1
+  dropped: trailing split-guard 2616 | forward split-guard 500 | no forward bar 2437 | tied at median 24
+  LEG                            n   days   edge pp 95% CI (day-clust)   Bonferroni CI        VERDICT vs shipped
+  ----------------------------------------------------------------------------------------------------------------------
+  liquidity                  34178     29    -3.53 [-5.32, -1.67]       [-6.01, -0.87] *     *** SIGN INVERTED *** (shipped +3.04pp [+1.85, +4.27])
+  lowVol                     34631     29    +4.54 [+0.86, +7.97]       [-0.61, +9.30]       replicates (shipped +3.56pp [+0.14, +7.00])
+  mom12_1                    26512     25    +2.84 [+0.61, +4.89]       [-0.31, +5.68]       unpublished leg, positive
+  composite_as_audited       34655     29    +0.89 [-1.11, +2.78]       [-2.07, +3.55]       indistinguishable from zero
+  composite_lowvol_only      34631     29    +4.54 [+0.86, +7.97]       [-0.61, +9.30]       unpublished leg, positive
+  composite_all3             34655     29    +2.79 [+0.36, +5.15]       [-0.69, +6.05]       unpublished leg, positive
+
+  * = also survives Bonferroni over the 9 leg x horizon tests this script runs at once.
+
+wrote C:/Users/NICHOL~1/AppData/Local/Temp/claude/C--Users-Nicholas-N-Desktop-claude-code/033e93b2-65c0-4cdb-9204-298288740c12/scratchpad/xsfactor_postform25.json

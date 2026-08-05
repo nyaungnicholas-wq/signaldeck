@@ -48,6 +48,9 @@ quarantine/
 # the tracked script that wrote them; untracked so a stale run cannot make the
 # daemon refuse to start on an "unattributable build".
 tools/alpha/*.json
+# fetch_form25.py writes its report to the CWD, so running it from the repo root
+# drops a copy here that the rule above cannot see. Same regenerable artifact.
+/form25_report.json
 
 # scratch / scratch-pad files
 web/scratch_*.mjs

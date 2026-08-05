@@ -147,13 +147,28 @@ go to zero and learns to buy falling knives.
 > thin at the source, not at the filter. Rate by year: 3.4% (2020), 25.1% (2021,
 > the de-SPAC wave), 20.8% (2022), then 2.6% / 2.7% / 4.3%.
 >
-> **Effect measured, not assumed:** re-deriving the cross-sectional factor edge on
-> the 706 added confirmed-dead names moved every leg by less than 0.55pp and
-> changed no verdict. `trend21` re-validated survivorship-clean: 74% of its
-> conviction spread is barrier geometry, survivorship effect +0.8pp.
+> **UPDATE — P3D, 2026-08-04 (`proofs/P3D_DELISTING_GAP_2023_2025.md`). The
+> 2023–2025 gap is now CLOSED, and the root cause was not a thin source.**
+> `fetch_form25.py` resolved CIKs through `company_tickers.json`, which lists
+> only CURRENTLY-LISTED companies — a Form 25 filer is absent from it by
+> construction, losing 592 of 841 CIKs. Recovering the ticker from the issuer's
+> own last cover page (`dei:TradingSymbol` in `R1.htm`) lifted resolution to
+> 87.6% and imported **1,216 delistings / 835k bars**: 2023 25→**477**,
+> 2024 26→**348**, 2025 43→**297**. Against a realistic 5,500-name market that is
+> 8.7% / 6.3% / 5.4% — the real-world band.
 >
-> A3 may be marked *"materially closed 2019–2022, residual 2023–2025 gap
-> quantified"* — not *"closed"*.
+> **Effect measured, and the earlier estimate was WRONG.** On the 706-name
+> increment every leg moved <0.55pp, which is what this note used to say. With
+> the full repair (universe 1,059→2,935) the 21d legs move to liquidity −2.71,
+> lowVol +3.59, mom12_1 +2.32, several now clearing Bonferroni. The growth is
+> not monotone — most legs dip at the +706 increment before growing, which is
+> why that increment read as stability. **Neither set is publishable as an edge:** the
+> repaired universe is ~50% eventually-dead (P3D §7.3), so it is an upper bound.
+> Cross-sectional studies must now define their universe per-day from
+> `universe_membership` and match the live/dead ratio to reality.
+>
+> A3 may be marked *"delisting record materially complete 2020–2026; cross-
+> sectional results pending a representative universe"* — not *"closed"*.
 
 *Blocks:* cross-sectional ranking, any long-horizon backtest, all profit claims.
 
