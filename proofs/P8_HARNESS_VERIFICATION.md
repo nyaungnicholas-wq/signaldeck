@@ -133,7 +133,17 @@ a true positive in the *scanner*.
 - **CI has never actually run any of this.** Every result above is a local run on one
   machine. The `pre-publish-scan` job was red until §3; whether it now passes on a
   hosted runner is unverified, and that is the single largest remaining unknown in P8.
-- **`freeze/` remains untracked.** The manifest does not require it.
+- **The local frozen-evidence capture is deliberately not in git** — 4.7 GB across 12
+  files, because it contains a copy of the database. It is now ignored explicitly.
+
+  Worth recording *why* that line exists: naming that directory as a bare path in this
+  very document made `ops/manifest-check.sh` demand it, because the manifest reads
+  tracked markdown for referenced paths and cannot tell a shippable path from a
+  forensic one. The gate's own advice — *"fix by tracking them; never by deleting the
+  reference"* — is right for a source path and catastrophic for a multi-gigabyte
+  snapshot. Ignoring it is the third option the message does not offer, and the
+  proof of a freeze belongs in `proofs/` while the freeze itself stays on the machine
+  that took it.
 
 ### Closed during this phase — the docs gate is now wired
 

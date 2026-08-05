@@ -60,3 +60,16 @@ web/scratch_*.mjs
 # untracked it dirties the tree and build_from_head refuses to deploy during
 # any backup window.
 ops/.maintenance
+
+# Kill switch (daemon/internal/killswitch). A file here HALTS new entries.
+# Runtime state, never committed: a halt is local and must not travel in git.
+ops/HALT
+
+# Frozen evidence captures (ops/freeze-corpus.sh). These are local forensic
+# snapshots — the 2026-08-04 remediation capture alone is 4.7 GB because it
+# includes a copy of the database. Evidence about a moment, not part of the
+# published system, and far past anything git should carry. The PROOF of a
+# freeze belongs in proofs/; the freeze itself stays on the machine that took
+# it. Ignored explicitly so ops/manifest-check.sh does not read a mention of
+# this directory in a tracked document as a load-bearing path a clone lacks.
+freeze/
