@@ -31,7 +31,12 @@ func seedLabeledSpread(t *testing.T, st *store.Store, symbolID int64, h md.Horiz
 func seedLabeledSpreadDays(t *testing.T, st *store.Store, symbolID int64, h md.Horizon, days, perDay int) {
 	t.Helper()
 	ctx := context.Background()
-	base := time.Now().Unix() - int64(days+1)*86400
+	// Anchor on UTC midnight, not on now-minus-N-days: rows within a seeded day
+	// span perDay*600s, so an unaligned anchor lets the last rows of a day cross
+	// midnight into the next UTC bucket and report days+1 distinct days. With
+	// perDay=12 that fires whenever the suite runs at/after 22:10 UTC (~7.6% of
+	// the day). Midnight alignment holds for any perDay < 144.
+	base := (time.Now().Unix()/86400 - int64(days+1)) * 86400
 	for d := 0; d < days; d++ {
 		up := d%2 == 0
 		pressure, fwd, raw := 0.5, 0.01, 0.62
