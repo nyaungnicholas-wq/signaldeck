@@ -243,6 +243,16 @@ jobs:
             echo "STRATEGY_DECK.md's controls table is stale — run tools/controls_evidence.py --inject STRATEGY_DECK.md"
             exit 1
           }
+      # tools/check_strategy_deck.py polices the deck's HAND-WRITTEN prose: the
+      # section structure, the banned marketing vocabulary, the required status
+      # labels, the FC2 ban on interval verdicts, and an allowlist of every
+      # numeric token an author supplied. It has existed for weeks and NOTHING
+      # RAN IT — the same "built but never wired" shape as the dead A4 floor and
+      # the unwired A13 scan, and it was failing when this step was added.
+      #
+      # It reads only git-tracked files, so it belongs on every checkout.
+      - name: Deck prose — structure, vocabulary and no unsourced number
+        run: python3 tools/check_strategy_deck.py
       # This one needs data/, which is gitignored, so it is the operator/publish
       # gate rather than a clean-checkout gate: it proves the PARTIAL still
       # matches the registry it was generated from.
