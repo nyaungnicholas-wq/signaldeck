@@ -13,6 +13,13 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
+// liveTailGrace is how far past a claimed delisting a live row may still print
+// before the import treats it as a different security. Five days absorbs the
+// settlement tail and the daily-bar alignment offsets (bars carry 00:00/04:00/
+// 05:00 UTC stamps); the five real cases run 13 to 231 bars past it, so nothing
+// sits near the boundary.
+const liveTailGrace = 5 * 86400
+
 // importDelisted merges the delisted-company staging DB built by
 // tools/alpha/fetch_delisted.py + tag_delisted.py into signaldeck.db.
 //
@@ -113,6 +120,41 @@ func importDelisted(args []string) error {
 		addedAt, err := time.Parse("2006-01-02", c.firstBar)
 		if err != nil {
 			refusals = append(refusals, c.symbol+": unparseable first_bar "+c.firstBar)
+			continue
+		}
+
+		// THE LIVE ROW MAY ALREADY BE TRADING PAST THIS DELISTING.
+		//
+		// active=1 is not the only way a live security hides behind a Form 25
+		// ticker, and it is not even the common one. `active` is a SUBSCRIPTION
+		// flag; a security we stopped watching reads active=0 while its bars
+		// keep arriving. Measured on the 2023-2026 import, 52 staging symbols
+		// already existed in the database and every one of them was active=0 —
+		// so the existing guard would have refused NONE of them.
+		//
+		// Five of those 52 hold daily bars well past the delisting this import
+		// would stamp. BRKL is the dangerous shape: Brookline Bancorp filed its
+		// Form 25 in 2025 and the ticker now carries the Corgi BRKB 2x Daily
+		// ETF, which has 231 later bars running to 2026-08-04. Importing would
+		// merge the bank's tape into the ETF's row and stamp the pair dead in
+		// August 2025 — the ATC splice, rebuilt by a different route. The other
+		// four (LCAHU, TBCPU, ACACU, SAMAU) are SPAC units whose Form 25
+		// preceded the real end of trading, where the live row simply holds the
+		// better series and an early stamp would orphan real bars.
+		//
+		// Either way the live row knows more than the staging row does, so the
+		// staging row is refused. Five of 1,221 is a trivial price for not
+		// re-creating the defect this whole pass exists to remove.
+		var laterBars int
+		if err := st.DB().QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM bars
+			WHERE tf='1d' AND ts > ?
+			  AND symbol_id = (SELECT id FROM symbols WHERE symbol=? AND market=?)`,
+			delistedAt.Unix()+liveTailGrace, c.symbol, string(md.Stocks)).Scan(&laterBars); err == nil && laterBars > 0 {
+			refusedActive++
+			refusals = append(refusals, fmt.Sprintf(
+				"%s: live row holds %d daily bars after %s — importing would splice two securities",
+				c.symbol, laterBars, c.lastBar))
 			continue
 		}
 
