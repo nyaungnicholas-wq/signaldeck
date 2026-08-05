@@ -4,6 +4,7 @@
 **Phase:** P0 (blocking)
 **Status:** COMPLETE
 **Authority:** Remediation & Proof Plan, Rule 1 (freeze all external presentation)
+**LIFTED 2026-08-04 by `proofs/P10_FREEZE_LIFT.md`.** Read this document as the record of what was frozen and why, not as a restriction in force.
 
 ---
 

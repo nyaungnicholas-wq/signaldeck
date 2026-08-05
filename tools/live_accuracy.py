@@ -345,14 +345,41 @@ def main():
     ap.add_argument("--check", action="store_true", help="fail on drift instead of writing")
     ap.add_argument("--inject", nargs="*", default=[], metavar="DOC")
     ap.add_argument("--scan", nargs="*", default=[], metavar="DOC")
+    # --check compares documents against the REGISTRY, so it needs data/, which
+    # is gitignored: on a clean CI checkout that step cannot run at all.
+    # --check-includes compares documents against the committed PARTIAL instead.
+    # Both inputs are git-tracked, so this is the half of the FC1 guard that
+    # runs everywhere — and the half that matters most, because it is what stops
+    # a document's copy of the table drifting from the one source.
+    ap.add_argument("--check-includes", nargs="*", default=None, metavar="DOC",
+                    help="verify each DOC's generated block matches --out; needs no registry")
     args = ap.parse_args()
+
+    # partials/INCLUDES.txt is a shared manifest written by more than one tool on
+    # a Windows box, so `--inject $(cat partials/INCLUDES.txt)` hands us paths
+    # with a trailing CR. Stripping here rather than demanding one line-ending
+    # discipline across every writer: the alternative failed with
+    # `OSError: Invalid argument: 'CASE_STUDY.md\r'`, which names the file
+    # correctly and explains nothing.
+    args.inject = [p.strip() for p in args.inject if p.strip()]
+    args.scan = [p.strip() for p in args.scan if p.strip()]
+    if args.check_includes is not None:
+        args.check_includes = [p.strip() for p in args.check_includes if p.strip()]
 
     rc = 0
     block = None
     current = []
-    if args.write or args.check or args.inject or args.scan:
+    if args.write or args.check or args.inject:
         snapshot, banner = load_snapshot(args.registry)
         block = render(snapshot, banner, args.registry)
+        current = current_literals(snapshot)
+    elif args.scan and os.path.exists(args.registry):
+        # --scan alone does not need a rendered block, but the current grade's
+        # own figures make it much stronger. When there is no registry (a clean
+        # CI checkout — data/ is gitignored) it degrades to the superseded list
+        # rather than refusing to run: half a scan that runs everywhere beats a
+        # whole one that runs nowhere.
+        snapshot, _ = load_snapshot(args.registry)
         current = current_literals(snapshot)
 
     if args.write and not args.check:
@@ -375,6 +402,19 @@ def main():
         for doc in args.inject:
             if not inject(doc, block):
                 rc = 1
+
+    if args.check_includes is not None:
+        if not os.path.exists(args.out):
+            print("%s does not exist — nothing to check documents against" % args.out,
+                  file=sys.stderr)
+            rc = 1
+        else:
+            partial = read(args.out)
+            for doc in args.check_includes:
+                if not block_matches(doc, partial):
+                    print("DRIFT: %s's generated block does not match %s — run --inject"
+                          % (doc, args.out), file=sys.stderr)
+                    rc = 1
 
     for doc in args.scan:
         for n, lit in scan(doc, current):

@@ -76,6 +76,21 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 	closed, numFills, tradedNotional := reconstructRoundTrips(all)
 	summary := papertrade.Summarize(curve, closed, numFills, tradedNotional)
 
+	// EPOCH SPLIT. `summary` and `money` above span the whole book, which is
+	// correct as a description of the CAPITAL and wrong as a description of any
+	// STRATEGY once the rules have changed. The segments recompute both inside
+	// each epoch, and `epochCaption` tells a reader which number answers which
+	// question rather than leaving them to assume the headline is the strategy's.
+	segments, err := paperEpochSegments(r.Context(), d.St, strategy, curve, all)
+	if err != nil {
+		httpErr(w, 500, err.Error())
+		return
+	}
+	var currentEpoch *EpochSegment
+	if n := len(segments); n > 0 {
+		currentEpoch = &segments[n-1]
+	}
+
 	// FILL FIDELITY: re-derive every logged fill from the bar it names, on every
 	// read. A verified-by-assumption trade log is how 21 of 44 fills sat in a
 	// "track record" while differing from their own bars by up to 90.3 bps —
@@ -102,6 +117,12 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		"positions":  positions,
 		"trades":     recent,
 		"summary":    summary,
+		// Per-epoch record. `summary`/`money` above are BOOK-WIDE and therefore
+		// span every strategy this book has run; `epochs` is where the
+		// single-strategy numbers live, and `epoch` is the one in force now.
+		"epochs":       segments,
+		"epoch":        currentEpoch,
+		"epochCaption": paperEpochCaption,
 		// The equity curve is only as good as the fills under it. Ship the
 		// reconciliation beside the summary so a reader never has to assume it.
 		"fillFidelity": fidelity,

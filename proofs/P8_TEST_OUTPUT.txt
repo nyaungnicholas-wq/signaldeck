@@ -1,41 +1,41 @@
 P8 PROOF — automated docs gate
-generated: 2026-08-05T00:59:56Z
+generated: 2026-08-05T03:28:32Z
 
-=== 1. gate self-test: python tools/test_docs_gate.py ===
-Ran 56 tests in 18.215s
+=== 1. gate self-test ===
+Ran 62 tests in 19.899s
 OK
 
 === 2. full tools discovery (the command CI runs) ===
-Ran 276 tests in 29.699s
+Ran 285 tests in 26.774s
 OK (skipped=4)
 
 === 3. docs_gate.py check — real repository ===
 docs-gate: clean
 exit=0
 
-=== 4. committed integrity snapshot (ops/data-integrity.json) ===
+=== 4. rendered index matches the registry ===
+matches  exit=0
+
+=== 5. prereg-amend (chain writer) ===
+ok  	github.com/nyaungnicholas-wq/signaldeck/cmd/prereg-amend	(cached)
+
+=== 6. committed integrity snapshot ===
 {
-  "generated": "2026-08-05T00:57:25.116820Z",
+  "generated": "2026-08-05T03:28:32.218284Z",
   "source_db": "data/signaldeck.db",
   "grader": {
     "status": "OK",
-    "graded_at": "2026-08-04T17:55:59",
+    "graded_at": "2026-08-04T20:26:24",
     "refused_since": null,
     "refusal_reason": null,
     "rows": 13
   },
-  "universe_membership_rows": 1854228,
+  "universe_membership_rows": 1854289,
   "delisting": {
-    "stocks_total": 1773,
+    "stocks_total": 1774,
     "stocks_delisted": 716,
     "span_years": 8.027,
     "rate_per_year": 0.0503
   },
-  "survivorship_fix_date": "2026-08-05"
+  "survivorship_fix_date": "2026-08-04"
 }
-
-=== 5. docs build log ===
-docs_gate build 2026-08-05T01:00:46.851781Z
-source: ops/data-integrity.json (generated 2026-08-05T00:57:25.116820Z)
-grader status: OK
-no partials declared in ops/docs-registry.json

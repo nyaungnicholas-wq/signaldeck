@@ -208,6 +208,48 @@ class TestInject(unittest.TestCase):
             self.assertEqual(t.gen("--check", "--inject", doc).returncode, 0)
 
 
+class TestCheckIncludesRunsWithoutARegistry(unittest.TestCase):
+    """The half of the FC1 guard that survives a clean CI checkout.
+
+    data/ is gitignored, so --check (document vs REGISTRY) cannot run on a fresh
+    clone and the CI step early-exits. --check-includes compares the document
+    against the committed PARTIAL instead — both git-tracked — so doc-vs-partial
+    drift is caught everywhere. This exists because a parallel session deleted
+    the only other check covering that, leaving it unenforced.
+    """
+
+    def test_passes_on_a_faithful_copy_with_no_registry_present(self):
+        with TmpRepo() as t:
+            t.gen("--write")
+            doc = t.doc("DOC.md", "intro\n%s\n%s\ntail\n" % (BEGIN, END))
+            t.gen("--inject", doc)
+            os.remove(t.registry)  # the clean-checkout condition
+            r = run("--out", t.partial, "--check-includes", doc)
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_fails_on_a_drifted_copy_with_no_registry_present(self):
+        with TmpRepo() as t:
+            t.gen("--write")
+            doc = t.doc("DOC.md", "intro\n%s\n%s\ntail\n" % (BEGIN, END))
+            t.gen("--inject", doc)
+            with open(doc, encoding="utf-8") as f:
+                text = f.read()
+            with open(doc, "w", encoding="utf-8") as f:
+                f.write(text.replace("46.3%", "48.1%"))
+            os.remove(t.registry)
+            r = run("--out", t.partial, "--check-includes", doc)
+            self.assertEqual(r.returncode, 1,
+                             "a document whose block drifted from the partial must fail")
+
+    def test_scan_still_runs_without_a_registry(self):
+        with TmpRepo() as t:
+            doc = t.doc("CLAIMS.md", "retired at 48.1% against 54.6%\n")
+            os.remove(t.registry)
+            r = run("--scan", doc)
+            self.assertEqual(r.returncode, 1,
+                             "the superseded-literal scan must still work with no registry")
+
+
 class TestSupersededScan(unittest.TestCase):
     """The CI gate: a superseded live-record literal in a live-claim doc fails."""
 

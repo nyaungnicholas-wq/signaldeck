@@ -499,6 +499,31 @@ CREATE TABLE IF NOT EXISTS paper_cursor (
   started_ts  INTEGER NOT NULL
 ) WITHOUT ROWID;
 
+-- paper_epochs: the STRATEGY-CHANGE history of a simulated book.
+--
+-- A track record is a record OF something. When the rules change, the numbers
+-- before and after describe two different strategies, and averaging across the
+-- change reports a strategy that was never run. This table is the boundary that
+-- makes that impossible to do by accident: an epoch runs from from_ts until the
+-- next epoch's from_ts, and every published statistic is computed WITHIN one.
+--
+-- The book itself is CONTINUOUS across an epoch boundary — same cash, same open
+-- positions. Only the measurement is split. That is why the boundary lives here
+-- rather than in a new strategy id: the capital did not reset, so the ledger
+-- must not pretend it did.
+--
+-- Append-only in spirit: epochs are upserted from a schedule declared in code
+-- (pipeline.paperEpochSchedule) so a rebuilt database reconstructs the same
+-- boundaries, and a past epoch's from_ts is history that must not move.
+CREATE TABLE IF NOT EXISTS paper_epochs (
+  strategy TEXT    NOT NULL,
+  epoch    INTEGER NOT NULL,   -- 1-based, ascending in time
+  from_ts  INTEGER NOT NULL,   -- inclusive; epoch 1 uses 0 = "since inception"
+  label    TEXT    NOT NULL,   -- short name, e.g. 'triple-barrier'
+  reason   TEXT    NOT NULL,   -- what changed and why the record splits here
+  PRIMARY KEY (strategy, epoch)
+) WITHOUT ROWID;
+
 -- ─────────────────────────────────────────────────────────────────────────
 -- STAGE 6 — GATED MODEL FORECAST LEGS (append-only block).
 -- model_forecasts stores each NAMED model leg (currently 'gbm' and 'meanrev')

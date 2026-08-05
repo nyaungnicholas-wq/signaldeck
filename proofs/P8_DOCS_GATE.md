@@ -53,6 +53,7 @@ percentage stated in live-accuracy context and cannot tell stale from current.
 | `ops/data-integrity.json` | the committed answer to what CI cannot ask the 4 GB database |
 | `.github/workflows/ci.yml` → job `docs-gate` | self-test, then enforce |
 | `.gitattributes` | LF pinned for `partials/*` and the snapshot |
+| `DOCS_INDEX.md` + `tools/gen_docs_index.py` | the registry rendered for humans; `--check` wired into CI |
 
 ## 4. The CI split, and why it is not a hole
 
@@ -117,6 +118,33 @@ A defect the *contract* had, found by running it: the clean fixture declared a
 partial it never built, so "clean" and "a partial is missing" were the same state
 and neither could be tested. Fixed by building in the fixture.
 
+### 6a. Second pass — 46 adversarial agents, 41 candidates, 19 confirmed
+
+The gate was then attacked by four independent lenses (bypasses; false positives
+and determinism; CI wiring on a runner with no `data/`; and whether P9's
+conclusions overstate their evidence), each candidate defect handed to a fresh
+skeptic instructed to refute it. 41 candidates, 22 refuted, 19 confirmed. Five
+reproduced independently before being fixed:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| **The allowlist could suppress `grader-status` and `data-integrity`.** A REFUSED grader and an empty point-in-time universe both passed clean with one annotated entry. | **CRITICAL** | `UNSUPPRESSIBLE_CHECKS` — the allowlist is for editorial judgement about prose and can never override a measurement |
+| **Hand-typed markers laundered any figure.** `Our live accuracy is 91%` wrapped in a marker pair naming a partial that does not exist passed clean; the identical sentence without markers failed. | **CRITICAL** | `_region_is_anchored` — an exemption is earned by matching a partial a generator actually wrote, and by naming a declared partial. Fails closed. |
+| **The scrubber had become a one-word bypass.** `Live accuracy over the interval was 91%` was silently exempted — the 20-character gap let any nearby statistics word delete the figure. | **HIGH** | confidence percentages must now be a *canonical level* (80/90/95/98/99) bound *directly* to the confidence word |
+| Violations printed absolute machine-specific paths, so output differed per machine | MEDIUM | repo-relative paths |
+| `DOCS_INDEX.md` was committed without a registry entry, so the commit failed its own gate | MEDIUM | registered as exempt; `gen_docs_index.py --check` wired into CI |
+
+**The most valuable finding was against the gate's own test suite.** A passing
+test, `test_c1_allows_a_figure_inside_a_generated_region`, asserted that a figure
+inside hand-typed markers must NOT fire — and it was *encoding the bypass*. It
+had been green the entire time. Syntax is not provenance; the test now embeds a
+faithful copy of a real partial and a second assertion proves that one spliced
+line inside the region fails the build.
+
+That is the argument for adversarial verification in one example: every check was
+green, the gate looked finished, and it would have shipped a forgeable exemption
+in the one place a motivated author would look.
+
 ## 7. A correctness trap worth recording
 
 `tools/accuracy_registry.py` writes **no `status` key at all** on a clean grade —
@@ -163,13 +191,24 @@ survivorship_fix_date      2026-08-04
 
 ## 10. Known limitations, stated rather than hidden
 
-1. **The metadata lives in `ops/docs-registry.json`, not in the documents.**
-   Adding front-matter to the ten frozen documents would change the SHA-256
-   hashes `proofs/P0_FREEZE.md` §3–§4 recorded, invalidating that proof artifact,
-   and `PREREGISTRATION.md` is digested into the hash-chained pre-registration
-   record — editing it forces an unintended amendment. The gate accepts in-document
-   metadata too, so this can move into the documents through the amendment path
-   without changing the gate.
+1. ~~**The metadata lives in `ops/docs-registry.json`, not in the documents.**~~
+   **RESOLVED.** Adding front-matter to the ten frozen documents would have
+   changed the SHA-256 hashes `proofs/P0_FREEZE.md` §3–§4 recorded, invalidating
+   that proof artifact, and `PREREGISTRATION.md` is digested into the
+   hash-chained pre-registration record — editing it would force an unintended
+   amendment. The resolution avoids both: `tools/gen_docs_index.py` **renders**
+   the registry into `DOCS_INDEX.md`, so every document's owner / version /
+   data-as-of / status is visible to a reader without a single frozen byte
+   changing.
+
+   That rendering introduced its own failure mode — a generated file that stops
+   matching its source displays a status the registry no longer holds, with a
+   generated-by header vouching for it. `gen_docs_index.py --check` detects it
+   and is now wired into the `docs-gate` job. It was **not** wired when written,
+   which is the same "existed but never wired" class this repository was bitten
+   by twice before (A4 dead gate floor, A13 unwired scan). It proved itself
+   immediately: the first run after a one-line registry edit reported
+   `DOCS_INDEX.md is stale: 33 line(s) differ`.
 2. **`docs_gate.py` declares no partials of its own** (`"partials": []`). The live
    record's partial is owned by `tools/live_accuracy.py`. C5's generic machinery
    is tested and live but currently guards an empty set here; it engages the moment

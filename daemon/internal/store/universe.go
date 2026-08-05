@@ -24,7 +24,10 @@ func (s *Store) UpsertDailyUniverseSymbol(ctx context.Context, symbol string, na
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO symbols (symbol, market, name, active, added_at, stream) VALUES (?,?,?,1,?,0)
 		ON CONFLICT(symbol, market) DO UPDATE SET
-		  active = 1,
+		  -- Same guard as UpsertSymbol: a row carrying delisted_at is a company
+		  -- the market retired, and re-seeding the broad universe must not
+		  -- resurrect it onto a recycled ticker. See store.go's UpsertSymbol.
+		  active = CASE WHEN symbols.delisted_at IS NULL OR symbols.delisted_at = 0 THEN 1 ELSE symbols.active END,
 		  name   = CASE WHEN excluded.name != '' THEN excluded.name ELSE symbols.name END`,
 		symbol, string(md.Stocks), name, now)
 	if err != nil {

@@ -1,16 +1,16 @@
 {
-  "generated": "2026-08-05T01:38:50.800634Z",
+  "generated": "2026-08-05T03:28:32.218284Z",
   "source_db": "data/signaldeck.db",
   "grader": {
     "status": "OK",
-    "graded_at": "2026-08-04T18:23:15",
+    "graded_at": "2026-08-04T20:26:24",
     "refused_since": null,
     "refusal_reason": null,
     "rows": 13
   },
-  "universe_membership_rows": 1854228,
+  "universe_membership_rows": 1854289,
   "delisting": {
-    "stocks_total": 1773,
+    "stocks_total": 1774,
     "stocks_delisted": 716,
     "span_years": 8.027,
     "rate_per_year": 0.0503

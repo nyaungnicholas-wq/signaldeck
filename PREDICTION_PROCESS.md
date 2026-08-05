@@ -150,7 +150,7 @@ and it is the same block every other document in this repository carries:
 
 <!-- BEGIN GENERATED live_accuracy -->
 
-Generated from `data/accuracy_registry.json` (grade of 2026-08-04T18:23:15) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+Generated from `data/accuracy_registry.json` (grade of 2026-08-04T20:34:19) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
 ### Live record
 

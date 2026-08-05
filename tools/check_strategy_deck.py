@@ -97,6 +97,10 @@ ALLOWED = {
     # symbol-days; 96.49% overall and 97.36% common-stock coverage; 100% crypto;
     # 43,857 missing common-stock symbol-days.
     "1907", "1770", "1916310", "96.49", "97.36", "100", "43857",
+    # survivorship residual sized 2026-08-04 against data/signaldeck.db:
+    # 600 delistings recorded 2020-2022 vs 94 for 2023-2025 (15.7%);
+    # tools/alpha/fetch_form25.py passes 12/12 resolver tests.
+    "600", "94", "15.7", "2020", "2024",
 }
 bad = set()
 for tok in re.findall(r"[0-9a-f]{16,}|\d+(?:[.,]\d+)*", t):

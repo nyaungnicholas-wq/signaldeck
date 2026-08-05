@@ -73,3 +73,12 @@ ops/HALT
 # it. Ignored explicitly so ops/manifest-check.sh does not read a mention of
 # this directory in a tracked document as a load-bearing path a clone lacks.
 freeze/
+
+# EDGAR fetch cache (tools/alpha/fetch_form25.py). Raw SEC responses keyed by
+# CIK and quarter, so a re-run costs no requests and the SEC is not hammered
+# for data that cannot change: a filed Form 25 index and a company's rendered
+# cover page are immutable once published. ~230 MB for 2024 alone, dominated by
+# four form.idx files (QTR1 is 57.8 MB by itself). Safe to delete at any time —
+# the next run just refetches. Never a build input, so it is ignored explicitly
+# rather than left for someone to discover as a 1 GB surprise in git status.
+tools/alpha/.cache_edgar/

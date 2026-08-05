@@ -136,8 +136,14 @@ The rebuild **excludes** the post-delisting segment and **counts** it
 would put a spliced series into the cross-sectional denominator as one
 continuous name, which is worse than dropping 61 symbol-days.
 
-**Not fixed here.** The real repair is splitting row 1122 into two symbols and
-moving the 2026 bars, which is a data migration.
+**Fixed 2026-08-04 in `proofs/P3C_TICKER_REUSE_SPLIT.md`.** Row 1122 was split:
+the dead company moved to `ATC.220816` with its 383 bars, the live ETF kept the
+ticker its feed addresses, and the 58 suppressed days returned to the universe
+(membership 1,854,228 → 1,854,289, which is those 58 plus 3 recovered from
+delisting stamps that were a settlement day or two early). The root cause was
+fixed where every caller routes through: `UpsertSymbol` and
+`UpsertDailyUniverseSymbol` no longer reactivate a row carrying `delisted_at`,
+which had left all 716 delisted rows open to the same splice.
 
 ## 6. Cross-sectional features: measured, not assumed
 
@@ -190,18 +196,32 @@ populating the table bought is different and still worth having:
 
 ## 8. Open
 
-- **`sdmaint build-universe` is written but was not the binary that ran.** The
-  working tree currently does not compile: `internal/riskgate` and
-  `internal/pipeline/paper.go` carry an unfinished uncommitted change from a
-  parallel session (`undefined: req`, `w.ledgerGateRefusal undefined`), and
-  `cmd/sdmaint` imports `internal/pipeline`. The production rebuild was run
-  through a throwaway `main` importing only `internal/store` — the same
-  `store.RebuildUniverseMembership` call, which is where all the logic lives —
-  and the throwaway was deleted afterwards. **`sdmaint build-universe` cannot be
-  built until that change is finished or reverted.**
+- ~~`sdmaint build-universe` is written but was not the binary that ran.~~
+  **CLOSED, same day.** The first production rebuild had to go through a
+  throwaway `main` importing only `internal/store`, because `internal/riskgate`
+  and `internal/pipeline/paper.go` were mid-edit (`undefined: req`,
+  `w.ledgerGateRefusal undefined`) and `cmd/sdmaint` imports `internal/pipeline`.
+  That change has since been finished; `go build ./...` and `go vet ./...` are
+  clean and both packages' tests pass. The real command has now been run:
+
+  ```
+  $ sdmaint build-universe -dry-run
+  before: 1854228 rows over 2146 days (2018-07-26 .. 2026-08-05), 1777 symbols
+  dry-run: nothing written
+
+  $ sdmaint build-universe
+  before: 1854228 rows over 2146 days (2018-07-26 .. 2026-08-05), 1777 symbols
+  after : 1854228 rows over 2146 days (2018-07-26 .. 2026-08-05), 1777 symbols  [1m36.807s]
+  TICKER REUSE: 61 symbol-days print AFTER a recorded delisting and were EXCLUDED.
+  One symbol row is holding two securities; splitting it is a separate repair.
+  ```
+
+  Identical row count across two independent code paths, which is the
+  idempotence property `TestRebuildIsIdempotentAndFollowsCorrections` pins in
+  miniature, confirmed at production scale.
 - Nothing yet **reads** `universe_membership` in the daemon. It is a measurement
   and an audit surface today. The natural next step is to make `TradableAt`'s
   callers cross-check against `UniverseAt` and refuse on disagreement, which
   would turn the `ATC` class of defect into a startup failure instead of a query
   somebody happens to run.
-- The `ATC` row still needs splitting (§5).
+- ~~The `ATC` row still needs splitting.~~ **CLOSED** — `proofs/P3C_TICKER_REUSE_SPLIT.md`.

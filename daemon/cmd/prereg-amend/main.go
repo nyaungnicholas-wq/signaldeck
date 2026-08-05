@@ -18,9 +18,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"crypto/sha256"
 	"flag"
 	"fmt"
 	"os"
@@ -42,11 +42,14 @@ func main() {
 		dbPath = flag.String("db", "data/signaldeck.db", "path to signaldeck.db")
 		commit = flag.Bool("commit", false, "actually append (default is dry-run)")
 		kind   = flag.String("kind", GradabilityKind,
-			"which amendment to file: "+GradabilityKind+", "+RevisionEpochKind+" or "+ProvenanceKind)
+			"which amendment to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
+				ProvenanceKind+" or "+DataIntegrityKind)
 	)
 	flag.Parse()
-	if *kind != GradabilityKind && *kind != RevisionEpochKind && *kind != ProvenanceKind {
-		die("unknown -kind %q (want %s, %s or %s)", *kind, GradabilityKind, RevisionEpochKind, ProvenanceKind)
+	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
+		*kind != ProvenanceKind && *kind != DataIntegrityKind {
+		die("unknown -kind %q (want %s, %s, %s or %s)",
+			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind, DataIntegrityKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -118,6 +121,44 @@ func main() {
 				"needs a decision rather than an explanatory record.", p.OffendingSeq, p.DroppedFields)
 		}
 		spec, note = provenanceSpec(p), provenanceNote
+
+	case DataIntegrityKind:
+		m, err := measureDataIntegrity(ctx, db)
+		if err != nil {
+			die("measure corpus state: %v", err)
+		}
+		// Each guard below refuses to put a FALSE statement on the chain. The
+		// chain is the one artifact that cannot be quietly corrected, so a record
+		// whose premise is untrue is worse than no record at all.
+
+		// Premise one: the point-in-time repair happened. Filing a record that
+		// describes a populated PIT universe while the table is empty would assert
+		// the exact defect it claims to have closed.
+		if m.UniverseRows == 0 {
+			die("REFUSING to file: universe_membership holds zero rows. This record asserts the " +
+				"point-in-time universe was populated (P3B), and that is not true of this database.")
+		}
+		// Premise two: the survivorship repair happened. The pre-repair corpus ran
+		// ~0.26%/yr; anything under the plausibility floor means the backfill did
+		// not land here, and the record would be describing someone else's database.
+		if m.DelistRate < minPlausibleDelistRate {
+			die("REFUSING to file: delisting rate %.4f/year is below the %.4f plausibility floor "+
+				"(%d delisted of %d over %.2f years). This record asserts the survivorship backfill "+
+				"(P3A) landed, and that is not what this database shows.",
+				m.DelistRate, minPlausibleDelistRate, m.StocksDelisted, m.StocksTotal, m.SpanYears)
+		}
+		// Premise three, and the one that gives the record its force: it commits to
+		// the repaired corpus BEFORE any outcome is known. Once a structural
+		// forecast has resolved, "we changed the corpus, claims unchanged" stops
+		// being a commitment and starts being a choice made with a result in hand.
+		// That needs a decision and a differently-worded record, not this one.
+		if m.Resolved != 0 {
+			die("REFUSING to file: %d structural forecast(s) have resolved. This record asserts it "+
+				"was written before any structural outcome was known, and that is no longer true. "+
+				"File a record that states plainly it was written with knowledge of an outcome, as "+
+				"%s does.", m.Resolved, RevisionEpochKind)
+		}
+		spec, note = dataIntegritySpec(m), dataIntegrityNote
 	}
 
 	rec := prereg.Record{

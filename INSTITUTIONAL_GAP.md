@@ -2,15 +2,16 @@
 
 <!-- DOCUMENT CONTROL -->
 > **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
-> **Status:** FROZEN — NOT AUTHORITATIVE
+> **Status:** SUPERSEDED — historical record; current status is `STRATEGY_DECK.md`
 > **Scope:** Coverage assessment against an institutional quant-platform specification. Its status table is superseded by `proofs/P6_GOVERNANCE_CLEANUP.md` §1.
-> **Frozen claim classes:** FC1, FC5, FC6, FC7 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
-> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
-> **Publication:** BLOCKED — internal use only
+> **Frozen claim classes:** FC6 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** PUBLISHABLE as a record, NOT as a current statement — see `STRATEGY_DECK.md`
 
-> ## ⛔ NOT AUTHORITATIVE — FROZEN — DO NOT DISTRIBUTE
-> **P0 freeze, 2026-08-04.** This document is under remediation and **must not be
-> published, presented, or quoted externally.**
+> ## ⛔ SUPERSEDED — publishable as a record, not as current status
+> **P0 freeze 2026-08-04, lifted 2026-08-04** (`proofs/P10_FREEZE_LIFT.md`). Remediation
+> is complete. This document is publishable as a record of what was measured and when;
+> it **must not be quoted as *current* status** — quote `STRATEGY_DECK.md` for that.
 >
 > Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **"Already built (verified, not claimed)" —
 > every row · survivorship control · point-in-time data · kill switch · live accuracy.**
@@ -35,7 +36,7 @@
 > its evidence are in `proofs/P6_GOVERNANCE_CLEANUP.md` §1, which is the authority
 > on what this document used to attest.
 >
-> Authority and scope: `proofs/P0_FREEZE.md`. Lifts only after P1–P3 complete.
+> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
 
 Audited 2026-07-25 against a full institutional quant-platform specification.
 Split three ways, because the honest answer is not "build all of it": a spec
@@ -108,7 +109,7 @@ measured count on 2026-08-04 is 322,515.
 
 <!-- BEGIN GENERATED live_accuracy -->
 
-Generated from `data/accuracy_registry.json` (grade of 2026-08-04T18:23:15) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+Generated from `data/accuracy_registry.json` (grade of 2026-08-04T20:34:19) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
 ### Live record
 

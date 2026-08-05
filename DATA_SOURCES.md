@@ -2,20 +2,20 @@
 
 <!-- DOCUMENT CONTROL -->
 > **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
-> **Status:** FROZEN — AUTHORITATIVE
+> **Status:** AUTHORITATIVE — freeze lifted 2026-08-04
 > **Scope:** Data-source inventory, licensing classification, and raw-export controls. The licensing table and the HTTP 451 guard are not frozen and remain in force.
-> **Frozen claim classes:** FC3, FC4 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
-> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
-> **Publication:** BLOCKED — internal use only
+> **Frozen claim classes:** FC3 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** PUBLISHABLE — caveats are the frozen classes above
 
-> ## ⚠ FROZEN — DO NOT DISTRIBUTE (P0 freeze, 2026-08-04)
-> Under remediation. Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **survivorship boundary · point-in-time data.**
+> ## ⚠ P0 freeze (2026-08-04) — LIFTED 2026-08-04 by `proofs/P10_FREEZE_LIFT.md`
+> Remediation complete; freeze lifted. Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **survivorship boundary · point-in-time data.**
 > The licensing table and the HTTP 451 guard are **not** frozen and remain in force.
 > Open defect: the "Survivorship boundary" section describes `SURVIVORSHIP_EPOCH`
 > protecting *published registry claims*, which is correct — but it does **not**
 > protect any backtest, and every headline structural band table in this repository
 > is a backtest. See `ALPHA_WORKFLOW.md` §B2.
-> Authority and scope: `proofs/P0_FREEZE.md`.
+> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
 
 Authoritative classification lives in code at
 `daemon/internal/datalicense/datalicense.go`, next to the guard that enforces

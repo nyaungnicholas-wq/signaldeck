@@ -29,6 +29,16 @@
 
   "partials": [],
 
+  "_why_external_partials": [
+    "Partials produced by a SIBLING generator, not by docs_gate.py. A generated",
+    "region in a document may only claim one of these names (or one from",
+    "`partials` above); any other name earns no exemption from the",
+    "live-accuracy check, even if a matching file is dropped into partials/ by",
+    "hand. tools/live_accuracy.py writes partials/live_accuracy.md and owns its",
+    "drift contract via `--check --inject`."
+  ],
+  "external_partials": ["live_accuracy", "live_accuracy.md"],
+
   "strategy_docs": {
     "ALPHA_WORKFLOW.md": {
       "owner": "Nicholas Nyaung",
@@ -138,6 +148,7 @@
   },
 
   "exempt": [
+    "DOCS_INDEX.md",
     "AUDIT_SUPERPROMPT.md",
     "DEEP_REPORT_2026-08-03.md",
     "DEPLOY.md",

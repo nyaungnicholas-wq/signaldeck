@@ -321,7 +321,50 @@ For those two reasons the full `riskgate.Decision` — its `Reasons` **and** its
 The assessment is embedded anonymously, so its fields stay at the top level
 exactly as before and every existing reader keeps working.
 
-### 5.3 Append-only
+### 5.3 The record is split at every strategy change — **[IN FORCE — paper]**
+
+`paper_epochs`. A track record is a record *of* something, and when the rules
+change the numbers before and after describe two different strategies. One
+average across the change reports a strategy nobody ran.
+
+| Epoch | From | Label | What it is |
+|---|---|---|---|
+| 1 | inception | `flip-exit` | Open-ended holds; exit only on a `cal_prob` flip. No stop, no target, no time stop |
+| 2 | **2026-08-04** | `triple-barrier` | Stop / target / horizon expiry, next-open fills (§3.2). On `flagship-1d` a 1-bar hold |
+
+**The book is continuous; the record is not.** Cash and open positions carry
+across the boundary unchanged — nothing is closed out, reset or re-based. Only
+the measurement splits, which is why an epoch is not a new strategy id: the
+capital did not restart, and a ledger that pretended it did would be inventing a
+fact to make a chart tidier.
+
+Three consequences, all enforced rather than documented:
+
+- **The sizing edge is epoch-scoped.** `tradedEdge` measures round trips inside
+  the current epoch only. Staking a quarter-Kelly position size on a *previous*
+  rule set's win rate is the expensive form of the cross-regime error — it does
+  not merely misreport the past, it sizes today's trade on a number this
+  strategy never earned. Epoch 2 therefore has **no measured edge** until it
+  produces round trips of its own, and sizing falls back to the equal-slice
+  budget. Proven by `TestEpochScopedEdgeIgnoresThePreviousStrategy`.
+- **The drawdown breaker is deliberately NOT epoch-scoped.** Drawdown is a
+  property of the *capital*, which is explicitly continuous here, not of the
+  strategy. Re-basing the peak at a boundary would let the book lose
+  `MaxDrawdown` in epoch 1 and `MaxDrawdown` again in epoch 2 without the
+  breaker ever firing. A strategy change is not a reason to forgive the losses
+  that preceded it.
+- **Straddling round trips count for neither epoch.** A trip bought under the
+  old rules and sold under the new is evidence about neither strategy. It is
+  reported as `straddlingRoundTrips` so the omission is visible rather than
+  silent.
+
+`GET /api/paper` returns `epochs` (per-epoch summary, money metrics, marks,
+fills, straddlers) and `epoch` (the one in force). The top-level `summary` and
+`money` remain **book-wide** and describe the capital, not any strategy — the
+payload's `epochCaption` says which is which. Inspect or apply the boundaries
+with `sdmaint paper-epochs [-apply]`.
+
+### 5.4 Append-only
 
 Every `DO_NOTHING` is therefore **auditable**: the reason, the rank it held, the
 inputs the gate had, and the specific limit that fired are all recoverable from

@@ -2,20 +2,22 @@
 
 <!-- DOCUMENT CONTROL -->
 > **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
-> **Status:** FROZEN — AUTHORITATIVE
+> **Status:** AUTHORITATIVE — freeze lifted 2026-08-04
 > **Scope:** EV-centric architecture gap map and roadmap.
-> **Frozen claim classes:** FC5, FC6, FC7 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4
-> **Authority:** `proofs/P0_FREEZE.md` (freeze) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
-> **Publication:** BLOCKED — internal use only
+> **Frozen claim classes:** FC6 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
+> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
+> **Publication:** PUBLISHABLE — caveats are the frozen classes above
 
-> ## ⚠ FROZEN — DO NOT DISTRIBUTE (P0 freeze, 2026-08-04)
-> Under remediation. Do not attach capital. Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **layer status
+> ## ⚠ P0 freeze (2026-08-04) — LIFTED 2026-08-04 by `proofs/P10_FREEZE_LIFT.md`
+> Remediation complete; freeze lifted. **Do not attach capital.** Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **layer status
 > ("EXISTS" / "STRONG" / "BUILT") · kill switch · position sizing · correlation control.**
-> Every `EXISTS` in the scorecard is frozen pending re-verification in P6: a function
-> that compiles is not a control that binds. Confirmed in this file and not in dispute:
+> Every `EXISTS` in the scorecard was frozen pending re-verification in P6, on the
+> principle that a function which compiles is not a control that binds. P6 did that
+> re-verification; read the scorecard against `proofs/P6_GOVERNANCE_CLEANUP.md` §1 and
+> the note below it. Confirmed in this file and not in dispute:
 > the live entry trigger is a bare probability threshold, `riskgate.Evaluate` sizes only
 > *after* go/no-go, and correlation is display-only.
-> Authority and scope: `proofs/P0_FREEZE.md`.
+> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
 
 Target pipeline: Data → Feature Store → Prediction → Uncertainty → Risk →
 **Expected Value** → Portfolio Optimization → Execution → Post-Trade Attribution.

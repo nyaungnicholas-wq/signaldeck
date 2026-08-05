@@ -437,9 +437,25 @@ func (s *Store) DB() *sql.DB { return s.db }
 // UpsertSymbol inserts or reactivates a symbol and returns its row.
 func (s *Store) UpsertSymbol(ctx context.Context, symbol string, market md.Market, name string) (md.Symbol, error) {
 	now := time.Now().Unix()
+	// A row carrying delisted_at is NOT reactivated. That column records a
+	// MARKET fact: this ticker's company stopped trading. When an exchange
+	// recycles the ticker, the new company's data arrives addressed to the same
+	// string, and an unguarded `DO UPDATE SET active=1` silently resurrects the
+	// dead row and splices two securities into one price series — measured on
+	// ATC, which held Atotech's 2021-22 tape and a 2026 GraniteShares ETF on
+	// one row with a 1,365-day hole in the middle. 716 rows carry a delisting
+	// stamp today and every one of them was reachable this way, so the guard
+	// belongs here, at the single point every caller routes through, rather
+	// than in whichever caller happens to notice.
+	//
+	// A genuine re-listing under the same ticker therefore needs an operator to
+	// clear delisted_at deliberately. That is the intended cost: resurrection
+	// should be a decision, not a side effect of a poll.
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO symbols (symbol, market, name, active, added_at) VALUES (?,?,?,1,?)
-		ON CONFLICT(symbol, market) DO UPDATE SET active=1, name=CASE WHEN excluded.name != '' THEN excluded.name ELSE symbols.name END`,
+		ON CONFLICT(symbol, market) DO UPDATE SET
+		  active = CASE WHEN symbols.delisted_at IS NULL OR symbols.delisted_at = 0 THEN 1 ELSE symbols.active END,
+		  name   = CASE WHEN excluded.name != '' THEN excluded.name ELSE symbols.name END`,
 		symbol, string(market), name, now)
 	if err != nil {
 		return md.Symbol{}, err
