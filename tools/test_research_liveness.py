@@ -123,9 +123,21 @@ class TestMismatchModes(LivenessCase):
 SPEC = ('{"kind":"%s","question":"…","horizonDays":21,'
         '"resolution":"…","registeredAt":"2026-07-27"}')
 
+# The shape of prereg_records seq 37, a schedule-only amendment: it changes no
+# claim, forecasts nothing, and names horizonDays only inside a table of the
+# OTHER kinds whose dates it corrects. A substring test over the blob read that
+# as a forecast commitment of kind "gradability-correction" — a kind nothing
+# writes a regime_outcomes row for — so one grace day later the obligation was
+# unsatisfiable and the publishing path refused every night.
+AMENDMENT_SPEC = (
+    '{"kind":"%s","correctionType":"schedule-only","claimsChanged":false,'
+    '"correctedDates":[{"kind":"trend21","horizonDays":21,'
+    '"firstPossibleVerdict":"2027-02-22"}]}')
+
 
 def make_prereg_db(path, *, kind="filingsdrift21", outcomes=0, refusal=False,
-                   dq=False, process_only=False, no_horizon=False, reregister=False):
+                   dq=False, process_only=False, no_horizon=False,
+                   amendment=False, reregister=False):
     """A database holding only the pre-registration surface of the check."""
     conn = sqlite3.connect(path)
     conn.executescript("""
@@ -159,6 +171,9 @@ def make_prereg_db(path, *, kind="filingsdrift21", outcomes=0, refusal=False,
     elif no_horizon:
         conn.execute("INSERT INTO prereg_records (ts, kind, spec_json) VALUES (?,?,?)",
                      (TS, kind, '{"kind":"%s","question":"…"}' % kind))
+    elif amendment:
+        conn.execute("INSERT INTO prereg_records (ts, kind, spec_json) VALUES (?,?,?)",
+                     (TS, kind, AMENDMENT_SPEC % kind))
     else:
         conn.execute("INSERT INTO prereg_records (ts, kind, spec_json) VALUES (?,?,?)",
                      (TS, kind, SPEC % kind))
@@ -224,6 +239,23 @@ class TestPreregMustForecast(PreregCase):
         """grading-protocol / prereg-document name no horizon and freeze nothing."""
         self.assertEqual(self.violations(process_only=True), [])
         self.assertEqual(self.violations(no_horizon=True), [])
+
+    def test_an_amendment_that_tabulates_other_horizons_forecasts_nothing(self):
+        """seq 37: a schedule-only correction is not a forecast commitment.
+
+        It carries horizonDays deep inside correctedDates, never at the top
+        level, because the horizons it lists belong to the kinds it corrects.
+        Reading that as its own commitment made the check unsatisfiable and took
+        the accuracy registry offline; a kind nothing forecasts can never clear
+        an obligation to have forecast.
+        """
+        self.assertEqual(
+            self.violations(kind="gradability-correction", amendment=True), [])
+
+    def test_a_genuine_registration_is_still_caught(self):
+        """The stricter predicate must not blunt the check it belongs to."""
+        v = self.violations()
+        self.assertEqual([x.mode for x in v], ["prereg-never-forecast"])
 
     def test_reregistration_does_not_restart_the_clock(self):
         v = self.violations(reregister=True, after_days=PREREG_GRACE_DAYS + 1)

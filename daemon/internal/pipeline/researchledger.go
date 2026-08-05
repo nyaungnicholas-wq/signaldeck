@@ -1029,6 +1029,13 @@ func (w *ResearchLedgerWorker) seedWave2(ctx context.Context, now int64) (bool, 
 
 	// Evidence for the pre-existing frontier hypotheses, guarded per-hypothesis
 	// against duplication by the alphaLoopTag in the note.
+	//
+	// SUPERSEDED-SNAPSHOT — the percentages in these notes are FROZEN EVIDENCE
+	// from the alpha-discovery run named by alphaLoopTag: gap-fill and retrace
+	// rates, matched nulls, squeeze-expansion frequencies. None is a live
+	// accuracy record. The marker is required because --scan-code matches the
+	// literal and cannot see which quantity a number is; a collision with
+	// today's live record must never be resolved by editing recorded evidence.
 	frontier := []struct {
 		hypID   string
 		e       ev
