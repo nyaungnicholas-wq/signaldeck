@@ -65,6 +65,7 @@ export default function VolRegimeLead() {
         <span className="chip px-2 py-[1px] text-[0.75rem]">the validated forecast</span>
         <HelpTip label="Why this one leads">
           {data.whyHonest || data.what}
+          {data.what && data.whyHonest ? ` ${data.what}` : ""}
         </HelpTip>
         <span className="ml-auto text-[0.75rem] font-normal normal-case tracking-normal">
           <Link href="/market/breadth" style={{ color: "var(--faint)" }}>
@@ -74,12 +75,14 @@ export default function VolRegimeLead() {
       </div>
 
       <div className="p-3">
+        {/* Plain lead, precise detail one tap away. The daemon's own wording is
+            exact but reads like a spec; it now lives in the HelpTip above,
+            where someone who wants it can get it without everyone reading it. */}
         <p className="mb-3 text-[0.8rem] leading-relaxed">
-          {data.what || "Will realized volatility over the coming window be elevated or calm?"}{" "}
+          Will this stock move around more than usual over the next three months, or less?{" "}
           <span style={{ color: "var(--faint)" }}>
-            This is the most re-tested claim on the platform — measured walk-forward, re-verified by
-            a second implementation, and the only forecast the options surface is allowed to build
-            on.
+            This is about how much it moves, not which way. It is our most-tested call &mdash;
+            checked against history, then checked again by a second build.
           </span>
         </p>
 
@@ -127,12 +130,18 @@ export default function VolRegimeLead() {
           </div>
         )}
 
+        {/* The caveat is not optional, but it does not have to be a paragraph.
+            Plain sentence first; the daemon's full wording stays available on
+            the tip rather than being dropped. */}
         <p className="mt-3 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
-          {data.tradeability ||
-            data.caveat ||
-            "A regime call is situational awareness with a measured hit rate, not a trade."}{" "}
+          This tells you what to expect, not what to buy.{" "}
+          <HelpTip label="the full caveat">
+            {data.tradeability ||
+              data.caveat ||
+              "A regime call is situational awareness with a measured hit rate, not a trade."}
+          </HelpTip>{" "}
           <Link href="/lab/options" style={{ textDecoration: "underline" }}>
-            Turn it into a vol-edge assessment →
+            See how to trade it &rarr;
           </Link>
         </p>
       </div>

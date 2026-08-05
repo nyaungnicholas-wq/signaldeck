@@ -142,7 +142,10 @@ export function PageHero({ title, subtitle, right, live }: { title: string; subt
           {title}
           {live && <span className="mono text-sm font-normal" style={{ color: 'var(--hud)' }}>LIVE</span>}
         </h1>
-        {subtitle && <p className="mt-1 text-sm max-w-3xl" style={{ color: 'var(--dim)' }}>{subtitle}</p>}
+        {/* A hero subtitle IS the page's purpose line — it says what the page
+            is for, above the fold, in the reader's language. Marked so the UX
+            audit counts it instead of only counting <PagePurpose>. */}
+        {subtitle && <p data-purpose="hero" className="mt-1 text-sm max-w-3xl" style={{ color: 'var(--dim)' }}>{subtitle}</p>}
       </div>
       {right && <div className="flex-shrink-0">{right}</div>}
     </div>

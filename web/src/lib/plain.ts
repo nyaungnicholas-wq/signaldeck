@@ -224,6 +224,7 @@ export type MetricKey =
   | "base_rate"
   | "lift"
   | "regime"
+  | "vol_regime"
   | "pressure"
   | "zscore"
   | "vix"
@@ -378,6 +379,33 @@ export const PLAIN: Record<MetricKey, MetricDef> = {
     },
   },
 
+  // Volatility regime — elevated / calm over the forward window. This is the
+  // platform's most re-tested claim and it had no glossary entry at all until
+  // the glossary gained a search box and someone typed "vol". Distinct from
+  // `regime` above, which is the market-mood label, and from `vix`, which is
+  // market-wide rather than per-symbol.
+  vol_regime: {
+    label: { simple: "how much it moves", pro: "volatility regime" },
+    read(v, ctx) {
+      const detail =
+        "Whether a symbol's own price swings over the next stretch are likely to be ELEVATED (bigger than its recent normal) or CALM (smaller). It says nothing about direction — an elevated call is not a call that the price goes up or down, only that it moves more. This is the most re-tested forecast on the platform.";
+      if (ctx?.gated === true || typeof v !== "string" || v.trim() === "") return noRead(detail);
+      const key = v.toLowerCase().trim();
+      const elevated = key.startsWith("elev");
+      return {
+        plain: elevated
+          ? "bigger swings than usual expected — direction not implied"
+          : "quieter than usual expected — direction not implied",
+        detail,
+        // Neither state is "good": a calm market is not a profitable one, and
+        // colouring it as such would be the exact misreading the caption warns
+        // against.
+        goodness: null,
+        raw: String(v),
+      };
+    },
+  },
+
   // Pressure score −1..+1 (matches the daemon's insight-writer buckets).
   pressure: {
     label: { simple: "buying/selling pressure", pro: "pressure score" },
@@ -467,12 +495,19 @@ export const PLAIN: Record<MetricKey, MetricDef> = {
 
   // Reliability / calibration error (mean |predicted − realized| over bins).
   reliability: {
-    label: { simple: "honesty of the %s", pro: "reliability" },
+    // "%s" was a format placeholder that leaked into the UI — it rendered
+    // literally as "honesty of the %s" everywhere this label appeared.
+    label: { simple: "honesty of the percentages", pro: "reliability" },
     read(v, ctx) {
       const detail =
         "Calibration error — average gap between predicted probability and realized frequency across bins. Lower is better; 0 = when it says 70%, it happens 70% of the time.";
       if (bad(v, ctx) || typeof v !== "number") return noRead(detail);
-      const word = v < 0.05 ? "the stated %s closely match reality" : v < 0.12 ? "the stated %s roughly match reality" : "the stated %s drift from reality";
+      const word =
+        v < 0.05
+          ? "the stated percentages closely match reality"
+          : v < 0.12
+            ? "the stated percentages roughly match reality"
+            : "the stated percentages drift from reality";
       return {
         plain: `${word} (error ${v.toFixed(3)}, lower is better)${smallSample(ctx)}`,
         detail,

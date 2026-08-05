@@ -7,6 +7,8 @@
 // here: a HelpTip covers how to read the columns, and the calibration caveat
 // is a visible caption in every view and both SIMPLE/PRO modes.
 
+import { useState } from "react";
+import ShowAllBar from "@/components/ShowAllBar";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
@@ -28,6 +30,7 @@ export default function ScreenerResults({
   sortDir,
   onSort,
   onRetry,
+  limit = null,
 }: {
   rows: WatchRow[] | null;
   err: string | null;
@@ -39,9 +42,22 @@ export default function ScreenerResults({
   sortDir: SortDir;
   onSort: (key: SortKey, numericDefaultDesc: boolean) => void;
   onRetry: () => void;
+  /**
+   * Rows to draw before the "show everything" control. `null` = all of them,
+   * which is what this component always did — and why the page ran to 147
+   * screens. The cap never removes a row: the control to lift it is directly
+   * under the last one, and lifting it is remembered for the rest of the visit.
+   */
+  limit?: number | null;
 }) {
   const loading = rows === null && err === null;
   const hardError = rows === null && err !== null;
+
+  const [expanded, setExpanded] = useState(false);
+  // Sorting and filtering re-rank the list, so a cap applied after them always
+  // shows the TOP rows by the reader's own ordering — never an arbitrary slice.
+  const capped = limit !== null && !expanded && filtered.length > limit;
+  const shown = capped ? filtered.slice(0, limit) : filtered;
 
   return (
     <section className="panel">
@@ -116,16 +132,16 @@ export default function ScreenerResults({
         />
       )}
 
-      {effView === "cards" && filtered.length > 0 && <ScreenerCards filtered={filtered} />}
+      {effView === "cards" && shown.length > 0 && <ScreenerCards filtered={shown} />}
 
       {/* Stage 5: HEATMAP view — same filtered set as color tiles. Rows
           without any stored daily bar are OMITTED and counted (a tile needs
           a real close; nothing is faked to fill the grid). mcap is not part
           of the screener payload, so tiles are uniform and say so. */}
-      {effView === "heatmap" && filtered.length > 0 && (
+      {effView === "heatmap" && shown.length > 0 && (
         <div className="px-4 py-3">
           <Heatmap
-            items={filtered
+            items={shown
               .filter((d) => d.row.latestBarTs > 0)
               .map<HeatmapItem>((d) => ({
                 symbol: d.row.symbol,
@@ -135,18 +151,29 @@ export default function ScreenerResults({
                 market: d.row.market,
               }))}
           />
-          {filtered.some((d) => d.row.latestBarTs === 0) && (
+          {shown.some((d) => d.row.latestBarTs === 0) && (
             <p className="mt-2 text-[0.75rem]" style={{ color: "var(--faint)" }}>
-              {filtered.filter((d) => d.row.latestBarTs === 0).length} filtered symbols have no
-              stored daily bar yet and are omitted from the grid — bars accrue on worker cadence.
+              {shown.filter((d) => d.row.latestBarTs === 0).length} shown symbols have no stored
+              daily bar yet and are omitted from the grid — bars accrue on worker cadence.
             </p>
           )}
         </div>
       )}
 
-      {effView === "table" && filtered.length > 0 && (
-        <ScreenerTable filtered={filtered} sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+      {effView === "table" && shown.length > 0 && (
+        <ScreenerTable filtered={shown} sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
       )}
+
+      {/* Says what is hidden and undoes it in one click. Shared with the
+          insights feed so the wording cannot drift between the two. */}
+      <ShowAllBar
+        shown={shown.length}
+        total={filtered.length}
+        limit={limit}
+        expanded={expanded}
+        onToggle={setExpanded}
+        noun="symbols"
+      />
     </section>
   );
 }

@@ -3252,6 +3252,14 @@ export interface StructRegimeForecast {
   /** Whether an accurate call is actually TRADEABLE (measured forward return).
    *  Optional — the daemon is still growing this field; absent ⇒ don't claim. */
   tradeability?: string;
+  /** How much measurement stands behind historicalAccuracy: the sample THIS
+   *  conviction tier was measured on, and the independent quarter blocks behind
+   *  its CI. Present for the crypto kinds, whose tiers rest on 28-161 rows over
+   *  4-6 quarters. Absent for the equity kinds — the 2026-07-17 loop never
+   *  recorded per-tier sizes, and an invented n is worse than no n. Absent ⇒
+   *  render nothing, never a default. */
+  evidenceRows?: number;
+  evidenceClusters?: number;
 }
 
 export interface StructRegimeKindDoc {

@@ -113,6 +113,10 @@ export default function Plain({
     if (mode === "pro") return null;
     return (
       <span
+        // data-plain marks mode-dependent content for the UX audit: a page
+        // carrying one of these genuinely renders differently in SIMPLE and
+        // PRO, which is what "personalized" is supposed to mean.
+        data-plain=""
         className={`inline-flex items-center gap-1.5 text-[0.75rem] leading-snug ${className}`}
         style={{ color: "var(--dim)" }}
         title={r.detail}
@@ -125,7 +129,7 @@ export default function Plain({
 
   if (mode === "pro") {
     return (
-      <span className={`inline-flex flex-col ${className}`} title={r.detail}>
+      <span data-plain="" className={`inline-flex flex-col ${className}`} title={r.detail}>
         <span className="inline-flex items-center gap-1">
           <span className="tnum font-bold" style={{ color: goodnessColor(r.goodness) === "var(--faint)" && rawText !== "—" ? "var(--text)" : goodnessColor(r.goodness) }}>
             {rawText}

@@ -14,6 +14,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
+import SortHeader from "@/components/SortHeader";
 import {
   Reveal,
   StatTile,
@@ -77,13 +78,7 @@ function FactorBar({ value }: { value: number }) {
   );
 }
 
-function SortIcon({ active, asc }: { active: boolean; asc: boolean }) {
-  return (
-    <svg width="8" height="8" viewBox="0 0 8 8" className="inline ml-1" style={{ opacity: active ? 1 : 0.3 }}>
-      <polygon points={asc ? "4,1 7,6 1,6" : "4,7 7,2 1,2"} fill="currentColor" />
-    </svg>
-  );
-}
+// SortIcon removed — SortHeader owns the arrow now.
 
 function SymbolDetail({ symbol }: { symbol: string }) {
   const [data, setData] = useState<SmartMoneyResponse | null>(null);
@@ -305,18 +300,28 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
       <div className="table-wrap" style={{ borderTop: "1px solid var(--border)" }}>
         <table className="v4-table">
           <thead>
+            {/* onClick on the <th> made sorting mouse-only and silent. */}
             <tr>
-              <th onClick={() => toggleSort("symbol")} className="cursor-pointer">
-                Symbol <SortIcon active={sortKey === "symbol"} asc={sortAsc} />
-              </th>
-              <th onClick={() => toggleSort("score")} className="cursor-pointer">
-                Score <SortIcon active={sortKey === "score"} asc={sortAsc} />
-              </th>
+              <SortHeader
+                label="Symbol"
+                active={sortKey === "symbol"}
+                dir={sortAsc ? "asc" : "desc"}
+                onSort={() => toggleSort("symbol")}
+              />
+              <SortHeader
+                label="Score"
+                active={sortKey === "score"}
+                dir={sortAsc ? "asc" : "desc"}
+                onSort={() => toggleSort("score")}
+              />
               <th>Label</th>
               <th>Signal</th>
-              <th onClick={() => toggleSort("ts")} className="cursor-pointer">
-                Updated <SortIcon active={sortKey === "ts"} asc={sortAsc} />
-              </th>
+              <SortHeader
+                label="Updated"
+                active={sortKey === "ts"}
+                dir={sortAsc ? "asc" : "desc"}
+                onSort={() => toggleSort("ts")}
+              />
             </tr>
           </thead>
           <tbody>
@@ -328,7 +333,23 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
                   style={{ "--i": Math.min(i, 12) } as React.CSSProperties}
                   onClick={() => onPick(r.symbol)}
                 >
-                  <td className="mono font-bold">{r.symbol}</td>
+                  {/* The row click is a mouse convenience; the real control is
+                      this button. Before it existed the row was the ONLY way
+                      to pick a symbol here, so the whole table was unusable
+                      without a mouse. */}
+                  <td className="mono font-bold">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPick(r.symbol);
+                      }}
+                      aria-label={`Filter to ${r.symbol}`}
+                      className="inline-flex min-h-[40px] cursor-pointer items-center font-bold transition-colors duration-150 hover:text-[var(--accent)]"
+                    >
+                      {r.symbol}
+                    </button>
+                  </td>
                   <td className="tnum">
                     <span className="mr-2">{r.score >= 0 ? "+" : ""}{r.score.toFixed(2)}</span>
                     <MiniBar value={Math.abs(r.score)} max={maxScore} color={r.score >= 0 ? "var(--bid)" : "var(--ask)"} i={i} />

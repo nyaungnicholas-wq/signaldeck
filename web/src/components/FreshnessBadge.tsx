@@ -46,6 +46,18 @@ export default function FreshnessBadge({ className = "" }: { className?: string 
         updated {ageLabel(staleSeconds)} ago
         {stale && " — stale"}
       </span>
+      {/* The visible chip re-renders every second. Making THAT a live region
+          would read "updated 1s ago, updated 2s ago…" forever, which is worse
+          than silence. A screen reader gets only the transition that changes
+          what you should believe: the data stopped arriving. Going healthy
+          again clears the region silently — there is nothing to say.
+
+          Silent while offline: OfflineBanner is already a live region saying
+          exactly that, and announcing it twice is worse than announcing it
+          once. */}
+      <span className="sr-only" role="status">
+        {stale && !offline ? "These numbers have stopped updating." : ""}
+      </span>
     </span>
   );
 }

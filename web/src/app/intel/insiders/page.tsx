@@ -9,6 +9,10 @@ import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
 import { PageHero, StatTile, Reveal, MiniBar } from "@/components/ui/Kit";
+import GoalBanner from "@/components/home/GoalBanner";
+import ShowAllBar from "@/components/ShowAllBar";
+import SortHeader from "@/components/SortHeader";
+import { listLimitFor, useGoal } from "@/lib/goal";
 
 type SortKey = "value" | "date" | "symbol";
 type SortDir = "asc" | "desc";
@@ -28,11 +32,7 @@ function fmtUSD(v: number): string {
   return `$${v.toFixed(0)}`;
 }
 
-const SortIcon = ({ active, dir }: { active: boolean; dir: SortDir }) => (
-  <svg className={`w-3 h-3 ml-1 inline-block ${active ? "text-[var(--accent)]" : "text-[var(--faint)]"}`} viewBox="0 0 8 8">
-    <polygon points={dir === "asc" ? "4,1 7,6 1,6" : "4,7 7,2 1,2"} fill="currentColor"/>
-  </svg>
-);
+// SortHeader now lives in @/components/SortHeader — three tables needed it.
 
 export default function InsidersPage() {
   const [rows, setRows] = useState<InsiderTrade[] | null>(null);
@@ -43,6 +43,9 @@ export default function InsidersPage() {
   const [retryTick, setRetryTick] = useState(0);
   const [sortKey, setSortKey] = useState<SortKey>("value");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const goal = useGoal();
+  // Per-visit override of the goal's default length, not a stored preference.
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -105,6 +108,11 @@ export default function InsidersPage() {
     else { setSortKey(key); setSortDir("desc"); }
   };
 
+  // Table rows, so the "compact" cap — 25 / 50 / all. Applied AFTER the sort,
+  // so a trimmed table always shows the top of the reader's own ordering.
+  const limit = listLimitFor(goal, "compact");
+  const drawn = limit === null || expanded ? sortedList : sortedList.slice(0, limit);
+
   return (
     <div className="page-enter space-y-4">
       <PageHero
@@ -133,6 +141,14 @@ export default function InsidersPage() {
         <StatTile label="Sells" value={stats.sells} glow="down" i={2} />
         <StatTile label="Largest" value={stats.biggest} prefix="$" decimals={0} sub={stats.newest && `newest ${stats.newest}`} i={3} />
       </Reveal>
+
+      <GoalBanner
+        note={
+          limit === null
+            ? "Every parsed trade, uncapped."
+            : `The ${limit} largest trades by value. Sort or open the full table any time.`
+        }
+      />
 
       {loading && <Skeleton lines={6} label="loading insider trades" />}
       {hardError && (
@@ -178,17 +194,40 @@ export default function InsidersPage() {
             <div className="table-wrap">
               <table className="v4-table w-full">
                 <thead>
+                  {/* Sorting used to be onClick on the <th> itself: a table
+                      header is not focusable, so the sort was unreachable by
+                      keyboard entirely, and with no aria-sort a screen reader
+                      could not tell the table was sortable or which way it
+                      was ordered. The control is now a real button and the
+                      header carries the state. */}
                   <tr className="text-[0.75rem] uppercase tracking-wider" style={{ color: "var(--dim)" }}>
-                    <th onClick={() => toggleSort("symbol")} className="cursor-pointer">Symbol<SortIcon active={sortKey === "symbol"} dir={sortDir} /></th>
+                    <SortHeader
+                      label="Symbol"
+                      active={sortKey === "symbol"}
+                      dir={sortDir}
+                      onSort={() => toggleSort("symbol")}
+                    />
                     <th className="text-left">Type</th>
                     <th className="text-left">Insider</th>
                     <th className="text-right">Shares</th>
-                    <th onClick={() => toggleSort("value")} className="cursor-pointer text-right">Value<SortIcon active={sortKey === "value"} dir={sortDir} /></th>
-                    <th onClick={() => toggleSort("date")} className="cursor-pointer text-right">Filed<SortIcon active={sortKey === "date"} dir={sortDir} /></th>
+                    <SortHeader
+                      label="Value"
+                      active={sortKey === "value"}
+                      dir={sortDir}
+                      onSort={() => toggleSort("value")}
+                      align="right"
+                    />
+                    <SortHeader
+                      label="Filed"
+                      active={sortKey === "date"}
+                      dir={sortDir}
+                      onSort={() => toggleSort("date")}
+                      align="right"
+                    />
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedList.map((t, i) => (
+                  {drawn.map((t, i) => (
                     <tr
                       key={t.accession}
                       className={`reveal-item ${t.code === "P" ? "border-l-2 border-l-[--bid]" : t.code === "S" ? "border-l-2 border-l-[--ask]" : ""}`}
@@ -210,6 +249,14 @@ export default function InsidersPage() {
                   ))}
                 </tbody>
               </table>
+              <ShowAllBar
+                shown={drawn.length}
+                total={sortedList.length}
+                limit={limit}
+                expanded={expanded}
+                onToggle={setExpanded}
+                noun="trades"
+              />
             </div>
           )}
         </section>

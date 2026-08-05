@@ -16,7 +16,14 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { trackRecord, ledgerVerify, type TrackRecord, type LedgerVerifyResponse } from "@/lib/api";
+import {
+  trackRecord,
+  ledgerVerify,
+  HORIZONS,
+  type Horizon,
+  type TrackRecord,
+  type LedgerVerifyResponse,
+} from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 
@@ -46,28 +53,62 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
 }
 
 export default function ProofPage() {
-  const [tr, setTr] = useState<TrackRecord | null>(null);
+  // The horizon is the one thing a sceptic actually wants to vary here: a
+  // record that only holds at one horizon is not much of a record. The API
+  // already took this argument; the page just never let anyone change it.
+  const [horizon, setHorizon] = useState<Horizon>("1d");
+
+  // The track-record result is stored WITH the horizon it belongs to, and the
+  // displayed value is derived from whether those match. That is what makes a
+  // horizon change show the loading state without resetting state inside an
+  // effect — and it also means a slow response for an abandoned horizon can
+  // never paint under the wrong label.
+  const [trState, setTrState] = useState<{
+    horizon: Horizon;
+    data: TrackRecord | null;
+    err: string | null;
+  } | null>(null);
   const [lv, setLv] = useState<LedgerVerifyResponse | null>(null);
-  const [trErr, setTrErr] = useState<string | null>(null);
   const [lvErr, setLvErr] = useState<string | null>(null);
 
-  // Fetch INDEPENDENTLY — the ledger recompute is fast, the track record can be
-  // slow under load; the fast one must not wait on the slow one.
+  const settled = trState?.horizon === horizon ? trState : null;
+  const tr = settled?.data ?? null;
+  const trErr = settled?.err ?? null;
+
+  // The ledger recompute is independent of the horizon, so it is fetched once
+  // and never re-fetched when the selector moves.
   useEffect(() => {
     let alive = true;
     const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
     ledgerVerify().then((l) => alive && setLv(l)).catch((e) => alive && setLvErr(msg(e)));
-    trackRecord("1d").then((t) => alive && setTr(t)).catch((e) => alive && setTrErr(msg(e)));
     return () => {
       alive = false;
     };
   }, []);
 
+  // Re-reads on every horizon change. Nothing is reset here — the derived
+  // `settled` above already treats a result for a different horizon as
+  // "still loading".
+  useEffect(() => {
+    let alive = true;
+    const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    trackRecord(horizon)
+      .then((t) => alive && setTrState({ horizon, data: t, err: null }))
+      .catch((e) => alive && setTrState({ horizon, data: null, err: msg(e) }));
+    return () => {
+      alive = false;
+    };
+  }, [horizon]);
+
   return (
     <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
       <header className="flex flex-col gap-2">
         <h1 className="text-[1.4rem] font-extrabold tracking-tight">The receipts</h1>
-        <p className="m-0 max-w-[68ch] text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+        <p
+          data-purpose="proof"
+          className="m-0 max-w-[68ch] text-[0.85rem] leading-relaxed"
+          style={{ color: "var(--dim)" }}
+        >
           Most signal products claim a win rate you can&rsquo;t check. SignalDeck commits every
           prediction to a tamper-evident hash chain and grades itself against what actually
           happened — and withholds any skill claim until the sample is real. This page is that
@@ -127,6 +168,36 @@ export default function ProofPage() {
         </section>
       )}
 
+      {/* The horizon picker lives ABOVE the three track-record states, not
+          inside the loaded one — changing horizon clears `tr`, and a control
+          that disappears the moment you use it is worse than no control. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span className="text-[0.78rem] font-semibold tracking-wide" style={{ color: "var(--dim)" }}>
+          Grade the record over
+        </span>
+        <div role="group" aria-label="Outcome horizon" className="flex items-center gap-1">
+          {HORIZONS.map((h) => {
+            const active = h === horizon;
+            return (
+              <button
+                key={h}
+                type="button"
+                onClick={() => setHorizon(h)}
+                aria-pressed={active}
+                title={`Grade predictions against realized ${h} outcomes`}
+                className="chip min-h-[40px] cursor-pointer px-3 text-[0.78rem] transition-colors duration-150 hover:text-[var(--text)]"
+                style={active ? { color: "var(--accent)", borderColor: "var(--accent)" } : undefined}
+              >
+                {h}
+              </button>
+            );
+          })}
+        </div>
+        <span className="text-[0.72rem]" style={{ color: "var(--faint)" }}>
+          A record that only holds at one horizon is not much of a record.
+        </span>
+      </div>
+
       {/* track-record loading / error (independent of the ledger) */}
       {!tr && !trErr && (
         <div className="panel p-4">
@@ -143,12 +214,15 @@ export default function ProofPage() {
       {/* ── LIVE TRACK RECORD (gated honest) ── */}
       {tr && (
         <section className="panel" aria-label="live track record">
-          <div className="panel-h">
-            <span style={{ color: "var(--accent)" }}>LIVE TRACK RECORD · 1d</span>
+          <div className="panel-h flex-wrap gap-2">
+            <span style={{ color: "var(--accent)" }}>LIVE TRACK RECORD · {horizon}</span>
             <span className="chip px-2 py-[1px] text-[0.7rem]">{tr.trackLabel || "live — prob frozen at prediction time"}</span>
           </div>
           {tr.gated ? (
-            <div className="flex flex-col gap-2 px-5 py-5">
+            // data-empty marks a "there is deliberately nothing here yet"
+            // state for the UX audit — a withheld number is an empty state,
+            // and this one is the most important on the site.
+            <div data-empty="" className="flex flex-col gap-2 px-5 py-5">
               <span className="text-[1.05rem] font-bold" style={{ color: "var(--dim)" }}>
                 Still accruing — no skill claimed yet.
               </span>
@@ -177,7 +251,11 @@ export default function ProofPage() {
               <Stat
                 label="IC"
                 value={tr.ic != null ? tr.ic.toFixed(3) : "—"}
-                sub={tr.icCI ? `CI ${tr.icCI[0].toFixed(2)}–${tr.icCI[1].toFixed(2)}` : undefined}
+                sub={
+                  tr.icCI
+                    ? `how well ranking tracked outcome · CI ${tr.icCI[0].toFixed(2)}–${tr.icCI[1].toFixed(2)}`
+                    : "how well ranking tracked outcome"
+                }
               />
               <Stat
                 label="INDEPENDENT N"
@@ -205,13 +283,22 @@ export default function ProofPage() {
         accuracy registry — every verdict, failures first (flagship retired 2026-07-24) →
       </Link>
 
+      {/* Verb-first, so it reads as the next thing to do rather than a link
+          back. This is the one shareable page: most people arrive here first
+          and need somewhere to go. */}
       <Link
         href="/"
         className="w-fit text-[0.78rem] font-semibold tracking-wide transition-colors duration-150"
         style={{ color: "var(--accent)" }}
       >
-        ← open the full workspace
+        Open the full workspace &rarr;
       </Link>
+      <p className="m-0 text-[0.72rem]" style={{ color: "var(--faint)" }}>
+        Unfamiliar with a term above?{" "}
+        <Link href="/glossary" style={{ color: "var(--dim)", textDecoration: "underline" }}>
+          Every one of them is in the glossary, in plain English.
+        </Link>
+      </p>
     </div>
   );
 }

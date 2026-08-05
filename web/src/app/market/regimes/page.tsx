@@ -118,6 +118,20 @@ function FragmentRow({
             <MiniBar value={f.historicalAccuracy} max={1} color="var(--accent)" height={4} />
             <span className="tnum text-white/80">{pct(f.historicalAccuracy)}</span>
           </div>
+          {/* The sample the tier was measured on, shown wherever the daemon
+              recorded it. A crypto 98.5% rests on 68 rows across 4 quarters and
+              should not read like the ~900-stock equity tables. Absent for the
+              equity kinds because that loop never recorded per-tier sizes —
+              render nothing rather than imply a number we do not have. */}
+          {f.evidenceRows ? (
+            <div
+              className="tnum text-[10px] text-white/35"
+              title={`This tier was measured on ${f.evidenceRows} samples across ${f.evidenceClusters} independent quarter blocks. Small samples move a lot on one new quarter.`}
+            >
+              n={f.evidenceRows}
+              {f.evidenceClusters ? ` · ${f.evidenceClusters}q` : ""}
+            </div>
+          ) : null}
         </td>
         <td className="py-2 pr-2 text-white/60">{f.tier}</td>
         <td className="py-2 text-white/40 tnum">{ago(f.ts)}</td>

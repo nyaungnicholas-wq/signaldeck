@@ -19,7 +19,14 @@ export default function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={`panel px-4 py-6 text-[0.75rem] ${className}`} style={{ color: "var(--dim)" }}>
+    // data-empty is the audit's contract for "this panel is deliberately
+    // showing nothing" — more reliable than pattern-matching the copy, and it
+    // keeps the crawler from being tuned to this app's exact wording.
+    <div
+      data-empty=""
+      className={`panel px-4 py-6 text-[0.75rem] ${className}`}
+      style={{ color: "var(--dim)" }}
+    >
       {message}
       {detail ? (
         <div className="mt-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
