@@ -180,6 +180,43 @@ merged a half-written module with a hand-patched one and produced a gate nobody 
 reason about. The decision it needs is a design decision (**which partial is canonical**)
 and it belongs to whoever is writing it.
 
+### 5.3 The actual blocker, isolated to one line — and it is already being fixed
+
+Running **HEAD's** committed `docs_gate.py` (52 tests, OK) against the current repository
+gives **one** violation, not ten:
+
+```
+docs-gate: grader-status: ops/data-integrity.json:
+           Grader status is 'None', not OK.
+```
+
+The cause is a round-trip inconsistency inside the gate:
+
+| function | behaviour |
+|---|---|
+| `check_grader_status` | `status = str(grader.get("status","")).strip().upper()` → violation unless it is exactly `OK` |
+| `write-integrity` | copies the registry's `status` verbatim, defaulting to `MISSING` |
+
+**A successful grade omits the `status` key entirely.** Only a refusal sets it
+(`status: REFUSED`). So the round trip is:
+
+- refused grade → `REFUSED` → check fails ✓ *correct*
+- **successful grade → key absent → `None`/`MISSING` → check fails ✗ *wrong***
+
+**This gate cannot pass on a successful grade.** It has only ever been exercised against
+refused registries, because until 2026-08-04T18:23:15 this repository had no successful
+grade for it to see. The first real success is what exposed it.
+
+That is also the explanation for the concurrent rewrite. HEAD carries **52** tests; the
+working tree carries **56**. The four added are `GraderStatusTest`, including
+`test_clean_registry_without_a_status_key_is_ok` — a test asserting exactly the case
+above. The other author found this same bug and is mid-fix on it.
+
+**So the single line blocking P9 certification is the single line already being
+repaired.** Patching it here would collide head-on with that work, and the collision
+would be in the function that decides whether the repository may publish a number.
+Holding is not deference; it is the only way the fix lands once instead of twice.
+
 **Recommendation, unambiguous:** `partials/live_accuracy.md` should be canonical. It
 exists, is deterministic, carries 15 passing tests, is injected into all five documents
 in `partials/INCLUDES.txt`, and is enforced by both a drift gate and a scan gate that
