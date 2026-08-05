@@ -88,6 +88,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "purge-bad-bars" {
+		if err := purgeBadBars(os.Args[2:]); err != nil {
+			log.Fatalf("purge-bad-bars: %v", err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "build-universe" {
 		if err := buildUniverse(os.Args[2:]); err != nil {
 			log.Fatalf("build-universe: %v", err)
@@ -151,7 +157,8 @@ func main() {
 	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
 		log.Fatalf("unknown subcommand %q.\n"+
 			"This binary knows: apply-delistings, repair-added-at, build-universe,\n"+
-			"split-reused-tickers, import-delisted, ledger-verify, research-loop,\n"+
+			"split-reused-tickers, purge-bad-bars, import-delisted, ledger-verify,\n"+
+			"research-loop, "+
 			"paper-epochs, storage-report.\n"+
 			"If you expected one of these to exist, rebuild: go build -o bin/sdmaint ./cmd/sdmaint\n"+
 			"Refusing to fall through to the default compaction pass, which would\n"+
