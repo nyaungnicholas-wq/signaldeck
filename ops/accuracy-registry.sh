@@ -369,12 +369,21 @@ lines = [
     f"never point estimates · survivorship epoch {reg.get('survivorship_epoch', '?')} "
     "(earlier rows were graded against a survivor-seeded universe and are excluded)._",
     "",
-    "**The flagship directional ensemble is RETIRED (2026-07-24).** On its full live record",
-    "every directional row graded **FAILED** — the entire day-clustered CI below the",
-    "majority-class baseline: 1d 48.1% vs 54.6% over 13,058 independent obs (skill **−6.5pp**),",
-    "1w 46.2% vs 54.4% over 9,164 (skill **−8.2pp**), 1d high-conviction 48.6% vs 56.2% over",
-    "8,272 (skill **−7.6pp**). It no longer emits; the rows below are its post-retirement",
-    "shadow record, restarted at the survivorship epoch.",
+    # This preamble used to hardcode the pre-retirement figures (1d 48.1% vs
+    # 54.6% over 13,058, and two more) and assert that "the entire day-clustered
+    # CI" sat below the baseline for every row. Both were wrong to print here.
+    # The figures were a superseded PRE-EPOCH population, restated inside a
+    # block whose whole purpose is to be generated from the current registry —
+    # a hand-typed live record sitting on top of the generated one, which is the
+    # exact contradiction partials/live_accuracy.md exists to end. And the
+    # interval claim covered rows whose intervals are WITHHELD for insufficient
+    # distinct days, so it asserted evidence the grader refuses to publish.
+    # The retirement is a fact and stays; the numbers behind it belong to the
+    # generated table below and to the reconciliation, not to a static string.
+    "**The flagship directional ensemble is RETIRED.** It no longer emits; the rows below",
+    "are its post-retirement shadow record, restarted at the survivorship epoch. The",
+    "pre-retirement figures behind that decision are a superseded pre-epoch population and",
+    "are deliberately not restated here — see `proofs/P2_LIVE_RECORD_RECONCILIATION.md`.",
     "",
     "| Predictor | Verdict | Live acc | Skill vs baseline | Baseline (stricter null) | 95% CI (day-clustered) | Effective n |",
     "|---|---|---|---|---|---|---|",

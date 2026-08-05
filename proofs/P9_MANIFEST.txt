@@ -1,6 +1,6 @@
 P9 EVIDENCE PACK — MANIFEST
-generated: 2026-08-05T01:03:33Z
-repo: signaldeck   HEAD: e513ac3b6bde15e2d4dcefd06ad4bb2acf9099df
+generated: 2026-08-05T01:05:25Z
+repo: signaldeck   HEAD: 61836cc7c1a1bbb03497d1022e71643030c27c79
 
 --- proof artifacts (P0-P9) ---
 0e176260e8230b6e12989140584a13b9a4f5e0fab8c0de9dc2c71bf06cbff4f4  proofs/P0_FREEZE.md
@@ -23,16 +23,14 @@ c1ba17be8f5ce1e2476249652e3d63b9435708a344b246487166a250f540a57b  proofs/P5_EV_E
 d6e6820df2c25cf88c5128e3ac9a4bfc496ed874a04d645f731e5a661f452da6  proofs/P7_CORRECTED_DECK.md
 32265688452a868410ba92da0d24402bb05e163d00997fb65f48eadf42a2866e  proofs/P8_DOCS_GATE.md
 aa081d453bc8b004e41dc6350d0c2ed2d878162bb5bfeaba4c13da2d20cbd5ea  proofs/P8_TEST_OUTPUT.txt
-4c2c56a57a528a7528a74f20a54f60751009bb68a7cfb5a194888e95a00ea188  proofs/P9_MANIFEST.txt
+b2d8936868690fdc1d58066944d50d6b221b7fdceab4f5f60862173f2d52604e  proofs/P9_EVIDENCE_PACK.md
 
 --- gate + generator sources ---
 2837906c3606ac92825c9f1d029cfb4311f00818b4f375f1e58afd990ee3b278  tools/docs_gate.py
 98e6917ae36f5ddbd5569a7c27f2fef4ef99076b2a8c1cbe9f70f4f35251069a  tools/test_docs_gate.py
 c323dc387e3483ebf311754f828be89ff9b93d6e8eec17e4735f10373ddaed47  tools/live_accuracy.py
-1212441c04d60598fead7b843606e5912050101cf6a9bd3a8eb5d6d3ed7a21f3  tools/test_live_accuracy.py
 bcb722562f0b4d91a78e879d75f6da16cef9489b370e83d13922dc00d75da8b3  tools/accuracy_registry.py
 131fe78cea1e0d0bccecd92f5e2697a4b04848006b2d8df6ca916b964c16bb16  ops/docs-registry.json
 7d9ccd34cb171b6903de65ea43a9458d17c6527d95640b88c7ecbb9aa3b89826  ops/data-integrity.json
 b251842c71425b43d671aadbb4882cb322ea205915e157a5450c86a0402422fe  partials/live_accuracy.md
-e3e294f4cb190f68c58b2da5bc0155502204e8dba3b3fbcefc9320240288869e  partials/INCLUDES.txt
 a38ec3f25edb67f1500f68e27b44f1d17cb553a0da15d9b957b49e0d704d929e  .github/workflows/ci.yml
