@@ -1,0 +1,563 @@
+{
+  "panel": {
+    "n_weeks": 342,
+    "n_rules": 48,
+    "ts_from": 1578459600,
+    "ts_to": 1784692800,
+    "n_observations": 326043
+  },
+  "rules": [
+    {
+      "id": "AD-01ebfc57",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when price_accel (week-pct) <= 0.15 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.05034232085167215,
+      "mean_weekly_return": 0.00512187189137379,
+      "t_stat": 2.999843966745883,
+      "p_value": 0.0027011794184623717
+    },
+    {
+      "id": "AD-047b5b2a",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when ext_score >= 0.7 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.11813163464473862,
+      "mean_weekly_return": 0.002539583476599107,
+      "t_stat": 1.3832855731226472,
+      "p_value": 0.16657731985623236
+    },
+    {
+      "id": "AD-0d2c5564",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 and ext_score >= 0.7 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.1054187123632609,
+      "mean_weekly_return": -0.0017979349649590204,
+      "t_stat": -0.8826031156654295,
+      "p_value": 0.3774507445940053
+    },
+    {
+      "id": "AD-19a70fe8",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when vix_high_vol >= 1 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 70,
+      "ledger_weeks": 68,
+      "ledger_wilson_lower": 0.006970316978455168,
+      "mean_weekly_return": 0.0006365715462541627,
+      "t_stat": 0.8596183484852237,
+      "p_value": 0.3899994572708716
+    },
+    {
+      "id": "AD-1ce5625a",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.9 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.11813163464473862,
+      "mean_weekly_return": 0.0017636164488436302,
+      "t_stat": 0.9549440111744667,
+      "p_value": 0.3396060114880255
+    },
+    {
+      "id": "AD-292f6150",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 and rsi_pct <= 0.2 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 297,
+      "ledger_wilson_lower": 0.007955750035130361,
+      "mean_weekly_return": 0.009190804458801447,
+      "t_stat": 3.4931522780197315,
+      "p_value": 0.0004773542153050359
+    },
+    {
+      "id": "AD-2ee0f12c",
+      "descr": "Auto-discovered weekly rule: follow_pressure when ext_score >= 0.7 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.09789769355220868,
+      "mean_weekly_return": -0.002539583476599107,
+      "t_stat": -1.3832855731226472,
+      "p_value": 0.16657731985623236
+    },
+    {
+      "id": "AD-357109d1",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 and consec_dir >= 0.4 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 329,
+      "ledger_weeks": 217,
+      "ledger_wilson_lower": 0.02268870873964103,
+      "mean_weekly_return": 0.0019572684437281574,
+      "t_stat": 0.7206564994027188,
+      "p_value": 0.47112088276573927
+    },
+    {
+      "id": "AD-383dbf90",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when consec_dir <= -0.4 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 265,
+      "ledger_wilson_lower": 0.051772817988463615,
+      "mean_weekly_return": 0.003299994266589256,
+      "t_stat": 1.6629418544953352,
+      "p_value": 0.09632407518662153
+    },
+    {
+      "id": "AD-3c1a12f3",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 and rsi_pct >= 0.8 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 341,
+      "ledger_weeks": 298,
+      "ledger_wilson_lower": 0.01835210563699475,
+      "mean_weekly_return": 0.0013124979632514494,
+      "t_stat": 0.6589946752105208,
+      "p_value": 0.5098991879846244
+    },
+    {
+      "id": "AD-40a3f748",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 and vol_pct >= 0.8 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 307,
+      "ledger_wilson_lower": 0.1075383032987946,
+      "mean_weekly_return": -0.0017725314109063822,
+      "t_stat": -0.918827215727305,
+      "p_value": 0.358185954765476
+    },
+    {
+      "id": "AD-4c04c046",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 and price_accel (week-pct) <= 0.15 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 312,
+      "ledger_wilson_lower": 0.08096108398332542,
+      "mean_weekly_return": -0.008824892941090689,
+      "t_stat": -2.824409211927892,
+      "p_value": 0.00473678656489697
+    },
+    {
+      "id": "AD-4d1cf619",
+      "descr": "Auto-discovered weekly rule: follow_pressure when vix_high_vol >= 1 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 70,
+      "ledger_weeks": 68,
+      "ledger_wilson_lower": 0.035277179573764306,
+      "mean_weekly_return": -0.0006365715462541627,
+      "t_stat": -0.8596183484852237,
+      "p_value": 0.3899994572708716
+    },
+    {
+      "id": "AD-5274a432",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 and vol_anomaly (week-pct) >= 0.85 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.13626902635962818,
+      "mean_weekly_return": 0.0006227063745875171,
+      "t_stat": 0.31750501391451397,
+      "p_value": 0.7508604355917685
+    },
+    {
+      "id": "AD-5dbda8dc",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 and price_accel (week-pct) >= 0.85 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.11557208658075735,
+      "mean_weekly_return": -0.0010866809242753074,
+      "t_stat": -0.48983155189961886,
+      "p_value": 0.6242531017970336
+    },
+    {
+      "id": "AD-64641ba3",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when vol_anomaly (week-pct) >= 0.85 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.052588262200683314,
+      "mean_weekly_return": 7.220692014701009e-05,
+      "t_stat": 0.057855619863561004,
+      "p_value": 0.953863634089887
+    },
+    {
+      "id": "AD-69808589",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.9 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.1441531901047074,
+      "mean_weekly_return": -0.0017636164488436302,
+      "t_stat": -0.9549440111744667,
+      "p_value": 0.3396060114880255
+    },
+    {
+      "id": "AD-745f8093",
+      "descr": "Auto-discovered weekly rule: follow_pressure when vol_pct >= 0.8 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.07828248206943733,
+      "mean_weekly_return": -0.0025715398804678326,
+      "t_stat": -1.8825098300382375,
+      "p_value": 0.05976682647016042
+    },
+    {
+      "id": "AD-76ec3888",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.9 and rsi_pct >= 0.8 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 339,
+      "ledger_weeks": 283,
+      "ledger_wilson_lower": 0.0016683701138261522,
+      "mean_weekly_return": 0.005266170219778089,
+      "t_stat": 2.4046671887621454,
+      "p_value": 0.016187199991789823
+    },
+    {
+      "id": "AD-7a1a53e7",
+      "descr": "Auto-discovered weekly rule: follow_pressure when rsi_pct <= 0.2 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.04154056738430763,
+      "mean_weekly_return": -0.004947901380826922,
+      "t_stat": -2.7947122266142523,
+      "p_value": 0.0051945932615580365
+    },
+    {
+      "id": "AD-80a4a47d",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.13626902635962818,
+      "mean_weekly_return": -0.0018516876510815878,
+      "t_stat": -1.323774995823633,
+      "p_value": 0.1855777827056414
+    },
+    {
+      "id": "AD-81370980",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.9 and ext_score >= 0.7 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 300,
+      "ledger_wilson_lower": 0.1048698038367598,
+      "mean_weekly_return": -0.0018669678718212122,
+      "t_stat": -0.7835571782130567,
+      "p_value": 0.4332999907284403
+    },
+    {
+      "id": "AD-8af599b4",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when rsi_pct <= 0.2 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.06874765527511603,
+      "mean_weekly_return": 0.004947901380826922,
+      "t_stat": 2.7947122266142523,
+      "p_value": 0.0051945932615580365
+    },
+    {
+      "id": "AD-8cb19b0d",
+      "descr": "Auto-discovered weekly rule: follow_pressure when price_accel (week-pct) >= 0.85 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.08800541692002563,
+      "mean_weekly_return": -0.0016569510986699765,
+      "t_stat": -0.9827535664206377,
+      "p_value": 0.32572873998433416
+    },
+    {
+      "id": "AD-9420f788",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 and price_accel (week-pct) <= 0.15 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 312,
+      "ledger_wilson_lower": 0.0957234963217706,
+      "mean_weekly_return": 0.008824892941090689,
+      "t_stat": 2.824409211927892,
+      "p_value": 0.00473678656489697
+    },
+    {
+      "id": "AD-9959acfa",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when rsi_pct >= 0.8 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 311,
+      "ledger_wilson_lower": 0.04842830709975659,
+      "mean_weekly_return": -0.0011214493775108779,
+      "t_stat": -0.7078743764101835,
+      "p_value": 0.47902327326407357
+    },
+    {
+      "id": "AD-9959ebed",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 and rsi_pct <= 0.2 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 297,
+      "ledger_wilson_lower": 0.02845204978878376,
+      "mean_weekly_return": -0.009190804458801447,
+      "t_stat": -3.4931522780197315,
+      "p_value": 0.0004773542153050359
+    },
+    {
+      "id": "AD-9e9e958f",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.9 and ext_score >= 0.7 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 300,
+      "ledger_wilson_lower": 0.11276191157139981,
+      "mean_weekly_return": 0.0018669678718212122,
+      "t_stat": 0.7835571782130567,
+      "p_value": 0.4332999907284403
+    },
+    {
+      "id": "AD-b0217901",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 and price_accel (week-pct) >= 0.85 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.10290243794492991,
+      "mean_weekly_return": 0.0010866809242753074,
+      "t_stat": 0.48983155189961886,
+      "p_value": 0.6242531017970336
+    },
+    {
+      "id": "AD-b07989c2",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 and vol_anomaly (week-pct) >= 0.85 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.09293141468243744,
+      "mean_weekly_return": -0.0006227063745875171,
+      "t_stat": -0.31750501391451397,
+      "p_value": 0.7508604355917685
+    },
+    {
+      "id": "AD-b0bb4020",
+      "descr": "Auto-discovered weekly rule: follow_pressure when consec_dir <= -0.4 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 265,
+      "ledger_wilson_lower": 0.07871440828682069,
+      "mean_weekly_return": -0.003299994266589256,
+      "t_stat": -1.6629418544953352,
+      "p_value": 0.09632407518662153
+    },
+    {
+      "id": "AD-b570e3e3",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when consec_dir >= 0.4 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 341,
+      "ledger_weeks": 277,
+      "ledger_wilson_lower": 0.051975828069743935,
+      "mean_weekly_return": -0.0014204347101445611,
+      "t_stat": -0.6306507050757227,
+      "p_value": 0.5282689373359324
+    },
+    {
+      "id": "AD-b64b64b5",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 and vol_pct >= 0.8 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 307,
+      "ledger_wilson_lower": 0.08727181222087345,
+      "mean_weekly_return": 0.0017725314109063822,
+      "t_stat": 0.918827215727305,
+      "p_value": 0.358185954765476
+    },
+    {
+      "id": "AD-b9e3474a",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 and vix_high_vol >= 1 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 70,
+      "ledger_weeks": 68,
+      "ledger_wilson_lower": 0.07417154409801371,
+      "mean_weekly_return": 0.0012426800169614437,
+      "t_stat": 1.1258978344914625,
+      "p_value": 0.26020876608359156
+    },
+    {
+      "id": "AD-c3040965",
+      "descr": "Auto-discovered weekly rule: follow_pressure when price_accel (week-pct) <= 0.15 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.03938969396707484,
+      "mean_weekly_return": -0.00512187189137379,
+      "t_stat": -2.999843966745883,
+      "p_value": 0.0027011794184623717
+    },
+    {
+      "id": "AD-cb90ef97",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 and consec_dir >= 0.4 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 329,
+      "ledger_weeks": 217,
+      "ledger_wilson_lower": 0.066679428296302,
+      "mean_weekly_return": -0.0019572684437281574,
+      "t_stat": -0.7206564994027188,
+      "p_value": 0.47112088276573927
+    },
+    {
+      "id": "AD-ce0779ba",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 and rsi_pct >= 0.8 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 341,
+      "ledger_weeks": 298,
+      "ledger_wilson_lower": 0.024242816522244852,
+      "mean_weekly_return": -0.0013124979632514494,
+      "t_stat": -0.6589946752105208,
+      "p_value": 0.5098991879846244
+    },
+    {
+      "id": "AD-d13dd4aa",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.9 and rsi_pct >= 0.8 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 339,
+      "ledger_weeks": 283,
+      "ledger_wilson_lower": 0.023430084612257554,
+      "mean_weekly_return": -0.005266170219778089,
+      "t_stat": -2.4046671887621454,
+      "p_value": 0.016187199991789823
+    },
+    {
+      "id": "AD-dc46e993",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 and consec_dir <= -0.4 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 335,
+      "ledger_weeks": 143,
+      "ledger_wilson_lower": 0.06432387152641122,
+      "mean_weekly_return": -0.006454806278164357,
+      "t_stat": -1.6384294653146032,
+      "p_value": 0.10133213672966034
+    },
+    {
+      "id": "AD-dc477bda",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when price_accel (week-pct) >= 0.85 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.052588262200683314,
+      "mean_weekly_return": 0.0016569510986699765,
+      "t_stat": 0.9827535664206377,
+      "p_value": 0.32572873998433416
+    },
+    {
+      "id": "AD-dc4bd53e",
+      "descr": "Auto-discovered weekly rule: follow_pressure when vol_anomaly (week-pct) >= 0.85 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.08312170139476771,
+      "mean_weekly_return": -7.220692014701009e-05,
+      "t_stat": -0.057855619863561004,
+      "p_value": 0.953863634089887
+    },
+    {
+      "id": "AD-dd9dc58e",
+      "descr": "Auto-discovered weekly rule: follow_pressure when rsi_pct >= 0.8 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 311,
+      "ledger_wilson_lower": 0.15044009962149515,
+      "mean_weekly_return": 0.0011214493775108779,
+      "t_stat": 0.7078743764101835,
+      "p_value": 0.47902327326407357
+    },
+    {
+      "id": "AD-e0d366ed",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.06874765527511603,
+      "mean_weekly_return": 0.0018516876510815878,
+      "t_stat": 1.323774995823633,
+      "p_value": 0.1855777827056414
+    },
+    {
+      "id": "AD-e375ecc7",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 and consec_dir <= -0.4 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 335,
+      "ledger_weeks": 143,
+      "ledger_wilson_lower": 0.042667197882833255,
+      "mean_weekly_return": 0.006454806278164357,
+      "t_stat": 1.6384294653146032,
+      "p_value": 0.10133213672966034
+    },
+    {
+      "id": "AD-e6314be3",
+      "descr": "Auto-discovered weekly rule: follow_pressure when pressure_abs (week-pct) >= 0.75 and vix_high_vol >= 1 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 70,
+      "ledger_weeks": 68,
+      "ledger_wilson_lower": 0.04239178698949875,
+      "mean_weekly_return": -0.0012426800169614437,
+      "t_stat": -1.1258978344914625,
+      "p_value": 0.26020876608359156
+    },
+    {
+      "id": "AD-f13adff9",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when pressure_abs (week-pct) >= 0.75 and ext_score >= 0.7 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.11557208658075735,
+      "mean_weekly_return": 0.0017979349649590204,
+      "t_stat": 0.8826031156654295,
+      "p_value": 0.3774507445940053
+    },
+    {
+      "id": "AD-f98dfe62",
+      "descr": "Auto-discovered weekly rule: inverse_pressure when vol_pct >= 0.8 (week-trial graded)",
+      "direction": "inverse_pressure",
+      "weeks_fired": 342,
+      "ledger_weeks": 313,
+      "ledger_wilson_lower": 0.07349021847333655,
+      "mean_weekly_return": 0.0025715398804678326,
+      "t_stat": 1.8825098300382375,
+      "p_value": 0.05976682647016042
+    },
+    {
+      "id": "AD-ffd6f9c4",
+      "descr": "Auto-discovered weekly rule: follow_pressure when consec_dir >= 0.4 (week-trial graded)",
+      "direction": "follow_pressure",
+      "weeks_fired": 341,
+      "ledger_weeks": 277,
+      "ledger_wilson_lower": 0.10255924082478117,
+      "mean_weekly_return": 0.0014204347101445611,
+      "t_stat": 0.6306507050757227,
+      "p_value": 0.5282689373359324
+    }
+  ],
+  "bonferroni": {
+    "divisor": 384,
+    "corrected_alpha": 0.00013020833333333333,
+    "survivors": []
+  },
+  "spa": {
+    "pvalue_lower": 0.0164,
+    "pvalue_consistent": 0.0252,
+    "pvalue_upper": 0.0276,
+    "bootstrap": "stationary",
+    "reps": 5000,
+    "better_models": [
+      "5",
+      "24"
+    ]
+  },
+  "stepm": {
+    "survivors": [
+      "AD-292f6150",
+      "AD-9420f788"
+    ],
+    "size": 0.05,
+    "reps": 5000
+  }
+}
