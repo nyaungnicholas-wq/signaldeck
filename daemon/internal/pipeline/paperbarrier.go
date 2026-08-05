@@ -52,6 +52,11 @@ type exitPlan struct {
 // whose symbol has stopped producing predictions must still be exitable, and
 // treating "no opinion" as "hold forever" is how a book acquires positions
 // nothing is watching.
+// flattenReason, when non-empty, is the book-wide terminal rung firing
+// (riskgate.ShouldFlatten). It closes a position that no barrier and no
+// probability flip would have closed. It is the WEAKEST candidate on purpose: a
+// barrier or a flip that already fired is both earlier and more specific, and a
+// liquidation must not overwrite the reason a position was already leaving for.
 func (w *PaperTrader) planExit(
 	ctx context.Context,
 	s md.Symbol,
@@ -60,6 +65,7 @@ func (w *PaperTrader) planExit(
 	pred store.Prediction,
 	hasPred bool,
 	asof int64,
+	flattenReason string,
 ) (exitPlan, bool, error) {
 	// ── Candidate 1: barriers ────────────────────────────────────────────
 	var barrier papertrade.BarrierExit
@@ -86,7 +92,40 @@ func (w *PaperTrader) planExit(
 			hasBarrier = false
 		}
 	case !hasBarrier && !hasFlip:
-		return exitPlan{}, false, nil
+		if flattenReason == "" {
+			return exitPlan{}, false, nil
+		}
+	}
+
+	// FORCED FLATTEN fills at the OPEN of the most recent bar at or before the
+	// as-of clock, and returns here rather than joining the trigger/fill path
+	// below.
+	//
+	// Why that is not lookahead, and why the obvious alternative was wrong. The
+	// first draft treated this bar's CLOSE as the trigger and looked for a fill
+	// on the next bar, mirroring the barrier path. That can never fill: the
+	// trigger is always the latest bar, so the fill bar is always in the future
+	// relative to asof, and every pass re-derives the same unfillable plan as
+	// asof advances. A test caught it — the rung was wired and would have
+	// liquidated nothing, forever.
+	//
+	// The correct rule follows from WHERE the drawdown comes from. riskBook
+	// reads the stored equity CURVE, whose points were marked on previous
+	// passes from previous closes. So the decision to flatten is already fully
+	// determined by information older than this bar, and filling at this bar's
+	// OPEN consumes nothing the bar itself produced. It is the same discipline
+	// entries obey: decide on closed information, fill at an open.
+	if !hasBarrier && !hasFlip {
+		fb, ok, err := w.St.BarAtOrBefore(ctx, s.ID, md.TF1d, asof)
+		if err != nil {
+			return exitPlan{}, false, err
+		}
+		// A position cannot be liquidated at the open it was opened at, and a
+		// bar with no usable open cannot fill anything.
+		if !ok || fb.Open <= 0 || fb.Ts <= pos.OpenedTs {
+			return exitPlan{}, false, nil
+		}
+		return exitPlan{fillBar: fb, reason: flattenReason}, true, nil
 	}
 
 	triggerTs := pred.Ts

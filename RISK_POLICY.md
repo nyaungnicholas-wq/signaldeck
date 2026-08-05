@@ -73,11 +73,41 @@ a horizon has nothing to do with volatility.
 stop — at most 10% of equity × 2.0 ATR/entry.**
 
 Now measurable, because §1.2 gives it a denominator. It is bounded rather than
-targeted: sizing is still driven by quarter Kelly (§1.5), not solved backwards
-from a 1% risk budget. **A fixed 1.0%-of-equity risk target remains
-[SPEC ONLY — NOT IN FORCE]** — implementing it means letting the stop distance
-determine position size, which would override the Kelly fraction, and those two
-sizing philosophies need reconciling before either is trusted.
+targeted: sizing is driven by quarter Kelly (§1.5), not solved backwards from a
+1% risk budget.
+
+**The reconciliation (decided 2026-08-04).** This policy previously said the two
+sizing philosophies "need reconciling before either is trusted," which left the
+book with two answers to *how much* and no rule for which wins. They are now
+assigned different jobs, and the ordering is the whole reconciliation:
+
+> **Kelly sizes. Risk-per-trade caps. Kelly never sizes past the cap.**
+
+- **Quarter Kelly (§1.5) is the sizer.** It answers "how much does the measured
+  edge justify," from the realized fill log. It is the only thing that may
+  *propose* a size.
+- **Risk-per-trade is a ceiling, never a target.** It answers "what is the most
+  this position may lose if the stop fills as modelled." It may only ever
+  *reduce* Kelly's proposal, never raise it.
+
+That ordering resolves the conflict without either philosophy overriding the
+other, because they are no longer both sizers. Solving backwards from a fixed
+1% risk budget would let a tight stop *inflate* a position beyond what the edge
+supports — which is the failure the original objection was pointing at, and it
+is avoided by making the risk rule one-directional.
+
+A stop-derived cap is also the direction that stays safe when it is wrong: an
+underestimated edge produces a position too small, an underestimated stop
+distance produces one too large, and only the second can hurt.
+
+**Status.** The cap in force today is the bound at the head of this section
+(notional ≤ 10% of equity, so risk ≤ 10% × 2.0 ATR/entry), which `riskgate`
+enforces through the position-weight limit. **An explicit 1.0%-of-equity
+per-trade ceiling remains [SPEC ONLY — NOT IN FORCE]**: it needs
+`riskgate.Evaluate` to read the candidate's ATR, which it does not currently
+receive. What has changed is that this is now a missing *input*, not an
+unresolved *philosophy* — the rule it would feed is decided, one-directional,
+and cannot fight the Kelly fraction when it lands.
 
 ### 1.2 Hard stop — **[IN FORCE — paper]**
 
@@ -267,14 +297,40 @@ Two rungs exist; three do not.
 |---|---|---|
 | −5% peak-to-trough | New position size **halved** | **[SPEC ONLY — NOT IN FORCE]** — `riskgate` has no size-attenuation rung; sizing is quarter-Kelly or equal-slice, and drawdown does not scale it |
 | −8% peak-to-trough | **Suspend new entries** | **[SPEC ONLY — NOT IN FORCE]** — the only suspend rung in force is at −20% |
-| −12% peak-to-trough | **Flatten and halt** | **[SPEC ONLY — NOT IN FORCE]** — nothing in this repository can flatten a book. The kill switch stops *new entries*; it does not liquidate |
+| −12% peak-to-trough | Flatten and halt | **[SPEC ONLY — NOT IN FORCE at this level]** — see the level note below; the rung now EXISTS, at 25% |
 | −20% peak-to-trough | Suspend new entries | **[IN FORCE — paper]** — `MaxDrawdown` 0.20, `SIGNALDECK_RISK_MAX_DRAWDOWN` |
+| −25% peak-to-trough | **Flatten: close every open position** | **[IN FORCE — paper]** — `riskgate.ShouldFlatten`, `DefaultFlattenDrawdown` 0.25, `SIGNALDECK_RISK_FLATTEN_DRAWDOWN` |
 | −5% in one marking period | Suspend new entries for the session | **[IN FORCE — paper]** — `MaxDailyLoss` 0.05, `SIGNALDECK_RISK_MAX_DAILY_LOSS` |
 
-Read that table honestly: the ladder this policy wants is a graduated de-risking
-from −5%, and what is enforced is a single cliff at −20% plus a per-session
-brake. The specified ladder is strictly tighter than the enforced one at every
-rung. **The gap is real and this document does not minimise it.**
+**The terminal rung now exists (2026-08-04).** This document previously said
+"nothing in this repository can flatten a book", which made the ladder's last
+and most important rung a sentence rather than a control. `riskgate.ShouldFlatten`
+decides it and `pipeline.planExit` executes it, closing every open position at
+the next available open. Wired and proved end to end by
+`TestFlatten_ClosesAPositionNothingElseWouldClose`, which disables barriers and
+holds the signal bullish so that nothing *except* the rung could have closed the
+position.
+
+**On the level, because it is not the −12% the ladder above asks for.** The
+enforced suspend rung is −20%. A flatten at −12% would liquidate the book while
+it was still opening new positions — not a ladder but a contradiction. A
+liquidation rung must sit at or beyond the suspend rung, so it is set at 25%:
+suspend at 20, flatten at 25. `FlattenLimit` floors the configured value at
+`MaxDrawdown` so a misconfiguration cannot invert the order. Moving to the
+tighter specified pair (−8 suspend / −12 flatten) means moving **both** rungs
+together; that pair stays SPEC ONLY.
+
+**It fails the opposite way to the halt, deliberately.** An unknown drawdown
+does NOT flatten. Halting entries on bad data costs opportunity and reverses
+instantly; liquidating on bad data realises losses, pays spread and impact, and
+cannot be undone by discovering the data was wrong. The safe default for a brake
+is ON and for a liquidation is OFF. `Book.DrawdownKnown` is false only when
+there is no equity curve yet — no peak to be below — so this is a book that
+*cannot* be in drawdown, not one whose drawdown was lost.
+
+Read the rest of the table honestly: the graduated de-risking this policy wants
+from −5% is still not there. Two of five rungs are enforced, plus the session
+brake. **The remaining gap is real and this document does not minimise it.**
 
 Four properties of the enforced rungs are worth stating:
 
@@ -348,8 +404,14 @@ state the same doctrine first in their own decision functions so it cannot be
 reordered behind a check that might refuse.
 
 Note the consequence honestly: this switch **stops new risk, it does not
-liquidate**. The −12% "flatten and halt" rung in §3 is unimplemented precisely
-because flattening is a different and more dangerous operation than halting.
+liquidate**. That remains true and is deliberate — flattening is a different
+and more dangerous operation than halting, and routing it through the same
+control would make one operator action mean two things.
+
+Liquidation is a SEPARATE rung and it now exists: §3's flatten fires from
+`riskgate.ShouldFlatten` on drawdown, not from this file. The two are
+independent on purpose — tripping the halt never liquidates, and a flatten
+does not require the halt to have been tripped.
 
 ### 4.5 How it is tested
 
@@ -387,13 +449,14 @@ because flattening is a different and more dangerous operation than halting.
 | Correlation cap | 0.80 to book | `riskgate.Evaluate` | **IN FORCE — paper** |
 | Drawdown −5% → size halved | — | — | SPEC ONLY |
 | Drawdown −8% → suspend | — | — | SPEC ONLY |
-| Drawdown −12% → flatten and halt | — | — | SPEC ONLY |
+| Drawdown −12% → flatten (at that level) | — | — | SPEC ONLY — see §3 level note |
+| Drawdown −25% → **flatten, close every position** | 0.25 | `riskgate.ShouldFlatten` + `pipeline.planExit` | **IN FORCE — paper** |
 | Drawdown −20% → suspend entries | 0.20 | `riskgate.Admit` | **IN FORCE — paper** |
 | Daily loss → suspend session | 0.05 | `riskgate.Admit` | **IN FORCE — paper** |
 | Kill switch | `ops/HALT`, fail-closed | `killswitch.Check` | **IN FORCE — paper** |
 | Every refusal ledgered | — | `ev_decisions` | **IN FORCE — paper** |
 
-Fifteen rules in force, five specified only.
+Sixteen rules in force, five specified only.
 
 ---
 
@@ -415,8 +478,14 @@ preconditions, not aspirations:
 3. **An execution layer exists at all** — order placement, acknowledgement,
    reconciliation, and a real broker-side position to compare the book against.
    None of it exists. The kill switch currently halts a simulation.
-4. **The kill switch gains a flatten path**, or §3's −12% rung is formally
-   withdrawn. A ladder whose final rung cannot execute is not a ladder.
+4. ~~**The kill switch gains a flatten path**, or §3's −12% rung is formally
+   withdrawn.~~ **DONE 2026-08-04** — `riskgate.ShouldFlatten` decides the
+   terminal rung and `pipeline.planExit` executes it, closing every open
+   position at the next available open. It sits at 25%, beyond the 20%
+   suspend rung, because a liquidation that fires while the book is still
+   entering is a contradiction rather than a ladder; the tighter −8/−12
+   pair stays SPEC ONLY and would have to move both rungs together.
+   The remaining live-money work is that this flattens a SIMULATION.
 5. **Slippage is measured against real fills**, not modelled. The current cost
    model is a defensible estimate that has never been checked against a fill
    that actually happened.

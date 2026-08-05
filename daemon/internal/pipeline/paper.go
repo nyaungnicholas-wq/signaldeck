@@ -175,12 +175,27 @@ func (w *PaperTrader) buildStep(
 	for _, s := range syms {
 		symByID[s.ID] = s.Symbol
 	}
+	// EPOCH BOUNDARIES. Declared from code every pass so they exist on any
+	// database, including a fresh one, without a migration anybody has to
+	// remember. See paperepoch.go for what an epoch is and why the record splits.
+	if err := w.ensureEpochs(ctx, strategy); err != nil {
+		return apply, refused, err
+	}
 	limits := riskgate.Defaults()
 	book, err := w.riskBook(ctx, strategy, equity, cash, symByID, asof)
 	if err != nil {
 		return apply, refused, err
 	}
-	edge, err := w.tradedEdge(ctx, strategy)
+	// The terminal rung, decided ONCE per pass. riskgate.Admit below stops the
+	// book growing; this closes it. Computed here, before any position is
+	// examined, so every name in the pass is judged against one book-wide
+	// measurement rather than a drawdown that shifts as the loop fills.
+	flatten := riskgate.ShouldFlatten(book, limits)
+
+	// The sizing edge is measured over the CURRENT EPOCH only: a Kelly fraction
+	// staked on a previous rule set's win rate is the cross-regime error that
+	// costs money rather than merely misreporting.
+	edge, err := w.tradedEdge(ctx, strategy, asof)
 	if err != nil {
 		return apply, refused, err
 	}
@@ -245,7 +260,7 @@ func (w *PaperTrader) buildStep(
 		// opinion is not a stop. planExit weighs the barrier against the
 		// probability flip and returns whichever CLOSE came first in time.
 		if hasPos {
-			plan, wantExit, err := w.planExit(ctx, s, h, pos, pred, okP, asof)
+			plan, wantExit, err := w.planExit(ctx, s, h, pos, pred, okP, asof, flatten.Reason)
 			if err != nil {
 				return apply, refused, err
 			}
