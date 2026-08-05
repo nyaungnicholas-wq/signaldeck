@@ -155,10 +155,27 @@ jobs:
   tools:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 is REQUIRED, same trap as pre-publish-scan below.
+      # test_deployment_drift.py builds its negative cases from
+      # `git rev-list --max-parents=0 HEAD` — the repo's first commit, which
+      # cannot contain a constant added later, which is precisely the drift the
+      # gate exists to catch. On the default depth-1 checkout the grafted root
+      # has no parents, so that command returns HEAD itself: the "old code"
+      # case became the current code, the gate correctly passed, and the two
+      # tests asserting it must FAIL failed instead. The tests were right.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # tools/test_validate_signals.py imports validate_signals, which imports
+      # numpy and arch.bootstrap at module scope, so discovery died on
+      # ModuleNotFoundError before running a single test in that file. Pinned to
+      # requirements-quant.txt rather than floating, so a release of either
+      # cannot change what CI measured. Only these two: nothing under
+      # tools/test_*.py reaches the rest of that file.
+      - run: pip install "numpy==2.4.6" "arch==8.0.0"
       # A16 regression channel — tools/test_accuracy_registry.py holds 18
       # tests guarding the script that grades every shipped claim (including
       # test_one_market_day_cannot_validate_a_claim), but nothing ran them in
