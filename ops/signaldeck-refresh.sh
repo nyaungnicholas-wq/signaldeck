@@ -129,12 +129,31 @@ notify_remote() {
       "$hook" >/dev/null 2>&1
   fi
 }
-SDMAINT="$SD/daemon/bin/sdmaint"
+# Same suffix + rebuild idiom as ops/restore-rehearsal.sh, and for the same
+# reason: this pointed at $SD/daemon/bin/sdmaint, which is neither where the
+# binary is built (bin/ at the repo root) nor runnable on Windows without the
+# .exe suffix. A stale macOS build does sit at daemon/bin/sdmaint, and it is
+# not -x here — so from the move to Windows onward every sweep logged
+# "sdmaint not built ... skipping storage report" and the nightly storage
+# budget went unchecked. data/ reached 27 GB against a 12 GB backups budget
+# with nothing paging about it, which is precisely the "13GB surprise" the
+# block above says it exists to prevent.
+SDMAINT_EXE=""
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SDMAINT_EXE=".exe" ;; esac
+SDMAINT="$SD/bin/sdmaint$SDMAINT_EXE"
+if [ ! -x "$SDMAINT" ]; then
+  GO="$HOME/.local/go-sdk/go/bin/go"
+  [ -x "$GO" ] || GO="$(command -v go || true)"
+  if [ -n "$GO" ] && [ -x "$GO" ]; then
+    (cd "$SD/daemon" && "$GO" build -o "$SDMAINT" ./cmd/sdmaint) >/dev/null 2>&1
+  fi
+fi
 if [ -x "$SDMAINT" ]; then
   report=$(cd "$SD" && "$SDMAINT" storage-report -db "$DB" \
     -budget-db-mb "${SIGNALDECK_BUDGET_DB_MB:-4096}" \
     -budget-wal-mb "${SIGNALDECK_BUDGET_WAL_MB:-512}" \
     -budget-backups-mb "${SIGNALDECK_BUDGET_BACKUPS_MB:-12288}" \
+    -budget-sidecars-mb "${SIGNALDECK_BUDGET_SIDECARS_MB:-4096}" \
     -budget-logs-mb "${SIGNALDECK_BUDGET_LOGS_MB:-512}" 2>&1)
   rc=$?
   printf '%s\n' "$report" >> "$LOG"
@@ -149,7 +168,7 @@ Full report in logs/refresh.log"
     log "storage report: all surfaces within budget"
   fi
 else
-  log "sdmaint not built at $SDMAINT — skipping storage report (build: cd daemon && go build -o bin/sdmaint ./cmd/sdmaint)"
+  log "sdmaint missing at $SDMAINT and could not be rebuilt — skipping storage report (build: cd daemon && go build -o ../bin/sdmaint ./cmd/sdmaint)"
 fi
 
 # ── 8. restart the daemon only if it was already running before the sweep

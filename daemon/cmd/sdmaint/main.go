@@ -254,6 +254,9 @@ func storageReport(args []string) (over bool, err error) {
 	budWAL := fs.Int64("budget-wal-mb", 512, "WAL file budget, MB")
 	budBak := fs.Int64("budget-backups-mb", 12288, "backup directory budget, MB")
 	budLog := fs.Int64("budget-logs-mb", 512, "log directory budget, MB")
+	// One rollback copy beside the live database is normal before a migration;
+	// five that nobody deleted is the defect. Budget is one DB's worth.
+	budSide := fs.Int64("budget-sidecars-mb", 4096, "budget for ad-hoc .bak/.premigration copies beside the db, MB")
 	if err := fs.Parse(args); err != nil {
 		return false, err
 	}
@@ -303,6 +306,7 @@ func storageReport(args []string) (over bool, err error) {
 	walBytes := fileSize(*dbPath + "-wal")
 	bakBytes := dirSize(*backupsDir)
 	logBytes := dirSize(*logsDir)
+	sideBytes := sidecarSize(*dbPath)
 
 	fmt.Printf("storage report — %s\n", *dbPath)
 	fmt.Printf("%-28s %10s %6s\n", "table (incl. indexes)", "MB", "%")
@@ -331,6 +335,7 @@ func storageReport(args []string) (over bool, err error) {
 	check("db", dbBytes, *budDB)
 	check("wal", walBytes, *budWAL)
 	check("backups", bakBytes, *budBak)
+	check("sidecars", sideBytes, *budSide)
 	check("logs", logBytes, *budLog)
 	if over {
 		fmt.Println("RESULT: OVER BUDGET — a storage surface outgrew its declared budget")
@@ -346,6 +351,38 @@ func fileSize(path string) int64 {
 		return 0
 	}
 	return fi.Size()
+}
+
+// sidecarSize sums the ad-hoc copies that accumulate BESIDE the live database
+// — signaldeck.db.bak-presplit-20260804, .premigration, .loopsnapshot and the
+// -wal/-shm each drags along. They are made by hand and by ops scripts before
+// a risky migration, and nothing ever removes them.
+//
+// This surface existed unmeasured. `db` reports only the live file and
+// `backups` only <dbdir>/backups, so 15 GB of siblings sat in data/ counted by
+// neither, which is how data/ reached 27 GB while the nightly report said
+// "backups 6914MB / 12288MB ok". A budget that cannot see the thing that grew
+// is not a budget.
+//
+// The predicate is the "<dbname>." prefix: the live triple is signaldeck.db,
+// signaldeck.db-wal and signaldeck.db-shm (hyphen), so it excludes them
+// without a special case, and picks up every sibling copy plus its journals.
+func sidecarSize(dbPath string) int64 {
+	dir, base := filepath.Dir(dbPath), filepath.Base(dbPath)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), base+".") {
+			continue
+		}
+		if fi, err := e.Info(); err == nil {
+			total += fi.Size()
+		}
+	}
+	return total
 }
 
 // dirSize sums regular-file sizes under root, best-effort: a vanished file or
