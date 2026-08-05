@@ -1,0 +1,58 @@
+#!/bin/sh
+# pre-push — refuse a direct push to main. Changes reach it through a PR.
+#
+# WHAT THIS PREVENTS. On 2026-08-05 main was found red across its last five
+# runs, and a test broken by 0ab0ab7 ("Checkpoint working tree", 2026-07-30)
+# had sat failing for five days behind an unrelated lint failure. Nothing
+# noticed because nothing had to: a push to main lands whatever it carries, and
+# a merge lands whether the checks passed or not.
+#
+# WHAT THIS IS NOT. This is not branch protection. GitHub refuses both classic
+# protection and rulesets on a private repository on the Free plan, so the
+# remote will accept anything it is sent. This hook only stops the accident on
+# a machine that has core.hooksPath set — the same limit ledger-provenance
+# already documents: "hooks are local config: a fresh clone has none until
+# someone sets core.hooksPath, and nothing stops a force-push from a machine
+# that never did."
+#
+# Real enforcement needs required status checks on the remote, which needs
+# GitHub Pro or a public repository. Until then this is a seatbelt, not a lock.
+#
+# INSTALL:  git config core.hooksPath ops/githooks
+# OVERRIDE: SIGNALDECK_ALLOW_DIRECT_MAIN_PUSH=1 git push origin main
+set -u
+
+if [ -n "${SIGNALDECK_ALLOW_DIRECT_MAIN_PUSH:-}" ]; then
+  echo "pre-push: SIGNALDECK_ALLOW_DIRECT_MAIN_PUSH set — direct push allowed." >&2
+  exit 0
+fi
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
+# No pipe, so the loop runs in this shell and the flag survives it.
+blocked=''
+while read -r _lref _lsha rref _rsha; do
+  case "$rref" in
+    refs/heads/main) blocked=yes ;;
+  esac
+done
+
+[ -n "$blocked" ] || exit 0
+
+cat >&2 <<'EOF'
+
+REFUSING TO PUSH DIRECTLY TO main.
+
+main is the branch every published number is attributed to, and a push here
+skips the only place the checks are read. Open a pull request instead:
+
+  git switch -c <branch>
+  git push -u origin <branch>
+  gh pr create
+
+Then merge once `gh pr checks <n>` is green — note that `gh pr merge` will
+NOT stop you merging a red PR, so read it before you merge.
+
+If you are certain this push is safe:
+  SIGNALDECK_ALLOW_DIRECT_MAIN_PUSH=1 git push origin main
+EOF
+exit 1
