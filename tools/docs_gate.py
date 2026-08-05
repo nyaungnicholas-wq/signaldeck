@@ -661,8 +661,19 @@ def mode_write_integrity(repo: Path) -> int:
         try:
             with reg_path.open("r", encoding="utf-8") as f:
                 reg = json.load(f)
+            # A SUCCESSFUL grade omits `status` entirely -- only a refusal sets
+            # it (status: REFUSED). Copying the absent key verbatim recorded
+            # None, while check_grader_status demands exactly "OK", so a
+            # successful grade failed this gate identically to a refused one.
+            # The gate could never pass on a success; it had only ever been run
+            # against refusals, because until 2026-08-04T18:23:15 there was no
+            # successful grade for it to see. Derive the status the registry
+            # implies instead of copying a key that is absent by design.
+            status = reg.get("status")
+            if status is None:
+                status = "OK" if (reg.get("rows") and not reg.get("refusal_reason")) else "MISSING"
             grader = {
-                "status": reg.get("status"),
+                "status": status,
                 "graded_at": reg.get("graded_at"),
                 "refused_since": reg.get("refused_since"),
                 "refusal_reason": reg.get("refusal_reason"),
