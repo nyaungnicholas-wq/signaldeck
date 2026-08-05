@@ -98,8 +98,30 @@ func fitBeta(pairs []Pair) (betaParams, error) {
 		}
 	}
 
+	// logLik is the objective the Newton step is supposed to increase. It exists
+	// so the step can be VALIDATED rather than trusted — see the step-halving
+	// below.
+	logLik := func(b [3]float64) float64 {
+		var ll float64
+		for i := 0; i < n; i++ {
+			z := b[0] + b[1]*x1[i] + b[2]*x2[i]
+			z = math.Max(-500, math.Min(500, z))
+			// log(1+e^z) via the numerically stable form: for large z this is
+			// z + log(1+e^-z), which does not overflow.
+			var soft float64
+			if z > 0 {
+				soft = z + math.Log1p(math.Exp(-z))
+			} else {
+				soft = math.Log1p(math.Exp(z))
+			}
+			ll += y[i]*z - soft
+		}
+		return ll
+	}
+
 	// beta = [c, a, b]; design row is [1, x1, x2].
 	beta := [3]float64{0, 1, 1} // start at the identity-ish map
+	cur := logLik(beta)
 	for iter := 0; iter < 50; iter++ {
 		var grad [3]float64
 		var hess [3][3]float64
@@ -129,10 +151,55 @@ func fitBeta(pairs []Pair) (betaParams, error) {
 		if !ok {
 			return betaParams{}, errors.New("singular Hessian")
 		}
+
+		// STEP-HALVING. THE UNDAMPED STEP IS WHY THIS FIT WAS DEAD.
+		//
+		// Newton's direction is only guaranteed to improve the likelihood for a
+		// SMALL ENOUGH step. Taking the full step unconditionally is fine on
+		// well-separated data and catastrophic on the near-separable data this
+		// fleet produces: raw scores reach exactly 0 and 1, so the logistic MLE
+		// sits at infinity and the iteration walks toward it.
+		//
+		// Measured on the live record 2026-08-05 (16,316 resolved 1d symbol-days),
+		// the undamped loop converged to
+		//
+		//	a = 654,443,937.9   b = -154,898,475.2   c = -2,147,998,287.5
+		//
+		// and b < 0 tripped the not-strictly-increasing guard below, so fitBeta
+		// returned an error on EVERY fleet-wide fit. CalibrateRanking then fell
+		// back to isotonic with ranked=false, and the caller logged "refusing a
+		// rank-collapsing map" — a message that implies a held-out comparison
+		// chose isotonic when in truth the comparison never ran. Beta calibration
+		// had been silently absent, not outvoted.
+		//
+		// Backtracking until the objective actually improves is the standard
+		// safeguard and needs no tuning knob. With it, the same data converges to
+		// a=0.0895 b=0.0892 c=-0.1734 and the map emits 417 distinct values where
+		// isotonic emits 9. A ridge does NOT fix this — measured across
+		// lambda 0..1000 the fitted parameters were identical to 3dp; damping is
+		// the fix, so no penalty strength is introduced here.
+		step, improved := 1.0, false
+		var cand [3]float64
+		for h := 0; h < 40; h++ {
+			for j := 0; j < 3; j++ {
+				cand[j] = beta[j] + step*delta[j]
+			}
+			if v := logLik(cand); !math.IsNaN(v) && v > cur {
+				beta, cur, improved = cand, v, true
+				break
+			}
+			step /= 2
+		}
+		if !improved {
+			// No downhill step of any size improves the likelihood: this is the
+			// optimum (or a numerically flat region). Stop at the last GOOD beta
+			// rather than stepping anyway.
+			break
+		}
+
 		var maxStep float64
 		for j := 0; j < 3; j++ {
-			beta[j] += delta[j]
-			maxStep = math.Max(maxStep, math.Abs(delta[j]))
+			maxStep = math.Max(maxStep, math.Abs(step*delta[j]))
 		}
 		if maxStep < 1e-8 {
 			break
@@ -259,13 +326,53 @@ func CalibrateRanking(pairs []Pair) (mapFn func(float64) float64, calibrated, ra
 	// delta of +0.001 that is pure noise, and the ranking was discarded over
 	// it. Isotonic must be SIGNIFICANTLY better to justify collapsing a
 	// ranking, not merely luckier on the third decimal.
-	diffs := make([]float64, len(test))
-	var mean float64
-	for i, p := range test {
+	// CLUSTERED BY Ts, NOT PER ROW. The rows in this holdout are not independent
+	// observations: callers that stamp Ts with a real period put many symbols on
+	// one Ts, and every row sharing a Ts also shares one market move. Treating
+	// them as independent understates the standard error by roughly
+	// sqrt(rows/periods) and turns noise into significance.
+	//
+	// This is the same correction the cut-snapping above already applies to the
+	// train/test boundary; leaving the SE per-row while snapping the cut was
+	// half the fix. Measured on the live 1d record 2026-08-05 (3,942 holdout rows
+	// spanning 14 UTC days), the per-row statistic read t=5.32 while the
+	// day-clustered one read t=2.45 — a 2.2x inflation. At 1w it flipped the
+	// verdict outright: t=-0.34 per row vs t=0.35 per day, on 9 days.
+	//
+	// One period contributes ONE number: the mean of its per-row squared-error
+	// differences. When Ts is a pure ordinal (every Ts unique) each cluster holds
+	// one row and this reduces exactly to the per-row statistic.
+	clusters := map[int64]*struct{ sum, n float64 }{}
+	order := make([]int64, 0, len(test))
+	for _, p := range test {
 		db := bp.apply(p.Pred) - p.Actual
 		di := isoTrain(p.Pred) - p.Actual
-		diffs[i] = db*db - di*di // >0 means beta did worse on this row
-		mean += diffs[i]
+		d := db*db - di*di // >0 means beta did worse on this row
+		c, ok := clusters[p.Ts]
+		if !ok {
+			c = &struct{ sum, n float64 }{}
+			clusters[p.Ts] = c
+			order = append(order, p.Ts)
+		}
+		c.sum += d
+		c.n++
+	}
+	diffs := make([]float64, 0, len(order))
+	var mean float64
+	for _, ts := range order {
+		c := clusters[ts]
+		m := c.sum / c.n
+		diffs = append(diffs, m)
+		mean += m
+	}
+	// A single cluster carries no spread, so no comparison is possible. Keep the
+	// ranking rather than collapse it on the strength of one market move.
+	if len(diffs) < 2 {
+		full, err := fitBeta(pairs)
+		if err != nil {
+			return iso, isoOK, false
+		}
+		return func(v float64) float64 { return full.apply(v) }, true, true
 	}
 	mean /= float64(len(diffs))
 
