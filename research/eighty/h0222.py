@@ -1,270 +1,278 @@
+#!/usr/bin/env python3
 import sqlite3
-import math
-from datetime import datetime, timedelta
 from collections import defaultdict
 import sys
 
 def main():
     try:
         conn = sqlite3.connect('file:data/signaldeck.db?mode=ro', uri=True)
-        c = conn.cursor()
-        
-        # Check for required data
-        required_tables = ['bars', 'symbols', 'insider_trades']
-        for table in required_tables:
-            c.execute(f"SELECT count(*) FROM {table}")
-            if c.fetchone()[0] == 0:
-                print("INSUFFICIENT=1")
-                return
-        
-        # Load daily bars
-        c.execute("SELECT symbol_id, ts, close, volume FROM bars WHERE tf='1d' ORDER BY symbol_id, ts")
-        bar_data = defaultdict(list)
-        for sym, ts, close, volume in c.fetchall():
-            if close is not None and volume is not None:
-                bar_data[sym].append((ts, close, volume))
-        
-        # Load insider trades (only purchases, code='P')
-        c.execute("""SELECT symbol_id, filed_ts, shares, price 
-                     FROM insider_trades WHERE code='P' AND shares IS NOT NULL AND price IS NOT NULL""")
-        insider_data = defaultdict(list)
-        for sym, filed_ts, shares, price in c.fetchall():
-            insider_data[sym].append((filed_ts, shares, price))
-        
-        # Load symbols
-        c.execute("SELECT id FROM symbols")
-        symbol_ids = set(row[0] for row in c.fetchall())
-        
+    except Exception as e:
+        print("INSUFFICIENT=1")
+        return
+    
+    c = conn.cursor()
+    
+    # Load trading days (daily bars)
+    c.execute("SELECT DISTINCT ts FROM bars WHERE tf='1d' ORDER BY ts")
+    trading_days = [row[0] for row in c.fetchall()]
+    
+    if len(trading_days) < 30:
+        print("INSUFFICIENT=1")
         conn.close()
+        return
+    
+    # Load symbols with basic info
+    c.execute("SELECT id, symbol, market, delisted_at FROM symbols")
+    symbol_info = {}
+    for row in c.fetchall():
+        symbol_info[row[0]] = {'symbol': row[1], 'market': row[2], 'delisted_at': row[3]}
+    
+    # Load daily bars for all symbols
+    c.execute("""
+        SELECT symbol_id, ts, open, high, low, close, volume 
+        FROM bars WHERE tf='1d'
+        ORDER BY symbol_id, ts
+    """)
+    
+    bars_by_symbol = defaultdict(list)
+    for row in c.fetchall():
+        symbol_id, ts, open_, high, low, close, volume = row
+        bars_by_symbol[symbol_id].append({
+            'ts': ts, 'open': open_, 'high': high, 'low': low, 
+            'close': close, 'volume': volume
+        })
+    
+    # Load insider trades (code='P' for purchases)
+    c.execute("""
+        SELECT symbol_id, filed_ts, shares, price 
+        FROM insider_trades 
+        WHERE code='P' AND value IS NOT NULL
+    """)
+    
+    insider_purchases = defaultdict(list)
+    for row in c.fetchall():
+        symbol_id, filed_ts, shares, price = row
+        insider_purchases[symbol_id].append({
+            'filed_ts': filed_ts,
+            'shares': shares,
+            'price': price,
+            'value': shares * price if shares and price else 0
+        })
+    
+    # Load prediction outcomes for labels
+    c.execute("""
+        SELECT symbol_id, ts, up 
+        FROM prediction_outcomes 
+        WHERE horizon=20
+    """)
+    
+    outcomes = {}
+    for row in c.fetchall():
+        symbol_id, ts, up = row
+        outcomes[(symbol_id, ts)] = up
+    
+    conn.close()
+    
+    # Prepare data structures
+    calls = []  # list of (symbol_id, ts, prediction, label)
+    opportunities = 0
+    days_with_calls = set()
+    
+    # Process each trading day
+    for t_idx, t in enumerate(trading_days):
+        if t_idx < 252:  # Need 252 prior sessions
+            continue
         
-        # Process data into trading days per symbol
-        symbol_days = {}
-        for sym in bar_data:
-            days = []
-            for ts, close, volume in bar_data[sym]:
-                # Convert ts to date string for easier comparison
-                dt = datetime.utcfromtimestamp(ts)
-                days.append((ts, dt.strftime('%Y-%m-%d'), close, volume))
-            days.sort(key=lambda x: x[0])
-            symbol_days[sym] = days
+        # Get prior 252 trading days for volume/price checks
+        prior_days = trading_days[t_idx-252:t_idx]
+        prior_60_days = trading_days[t_idx-60:t_idx]
+        prior_5_days = trading_days[t_idx-5:t_idx]
+        prior_20_days = trading_days[t_idx-20:t_idx]
         
-        # Process insider trades per symbol: store (filed_date, shares, price)
-        insider_by_sym = {}
-        for sym in insider_data:
-            trades = []
-            for filed_ts, shares, price in insider_data[sym]:
-                dt = datetime.utcfromtimestamp(filed_ts)
-                trades.append((dt.strftime('%Y-%m-%d'), shares, price))
-            insider_by_sym[sym] = trades
-        
-        # Get all unique trading dates across symbols
-        all_dates = set()
-        for sym in symbol_days:
-            for _, date_str, _, _ in symbol_days[sym]:
-                all_dates.add(date_str)
-        all_dates = sorted(all_dates)
-        
-        if len(all_dates) < 100:
-            print("INSUFFICIENT=1")
-            return
-        
-        # Split into training (80%) and sealed (20%)
-        split_idx = int(len(all_dates) * 0.8)
-        train_dates = all_dates[:split_idx]
-        sealed_dates = all_dates[split_idx:]
-        
-        # Helper: find index of date in symbol's data
-        def get_index(sym, target_date):
-            if sym not in symbol_days:
-                return -1
-            for i, (_, date_str, _, _) in enumerate(symbol_days[sym]):
-                if date_str == target_date:
-                    return i
-            return -1
-        
-        # Helper: get close price on date
-        def get_close(sym, target_date):
-            if sym not in symbol_days:
-                return None
-            for _, date_str, close, _ in symbol_days[sym]:
-                if date_str == target_date:
-                    return close
-            return None
-        
-        # Helper: get volume on date
-        def get_volume(sym, target_date):
-            if sym not in symbol_days:
-                return None
-            for _, date_str, _, volume in symbol_days[sym]:
-                if date_str == target_date:
-                    return volume
-            return None
-        
-        # Helper: check if a date is a trading day for symbol
-        def is_trading_day(sym, target_date):
-            return get_close(sym, target_date) is not None
-        
-        # Process an era (train or sealed)
-        def process_era(dates, is_sealed=False):
-            issued_calls = []  # (symbol, t_date, outcome)
-            opportunities = 0
-            last_call_date = {}  # symbol -> last call date index in all_dates
+        # Check each symbol
+        for symbol_id, bars in bars_by_symbol.items():
+            # Check if symbol has bars on all required days
+            bar_dict = {bar['ts']: bar for bar in bars}
             
-            # Precompute volatility cross-sectional decile per date
-            # We'll compute 20-day realized volatility for each symbol-date
-            vol_by_date = defaultdict(list)  # date -> list of (sym, vol)
+            if t not in bar_dict:
+                continue
             
-            for sym in symbol_days:
-                days = symbol_days[sym]
-                for i in range(len(days)):
-                    ts, date_str, close, _ = days[i]
-                    if i < 19:  # need 20 days of returns
-                        continue
-                    # Get last 20 days' closes
-                    closes = [days[j][2] for j in range(i-19, i+1)]
-                    # Compute daily returns
-                    returns = []
-                    for j in range(1, len(closes)):
-                        if closes[j-1] and closes[j] and closes[j-1] > 0:
-                            returns.append((closes[j] - closes[j-1]) / closes[j-1])
-                    if len(returns) >= 19:
-                        mean_r = sum(returns) / len(returns)
-                        var_r = sum((r - mean_r) ** 2 for r in returns) / (len(returns) - 1)
-                        vol = math.sqrt(var_r) if var_r > 0 else 0
-                        vol_by_date[date_str].append((sym, vol))
+            current_bar = bar_dict[t]
             
-            # For each date, compute 90th percentile volatility
-            vol_threshold = {}
-            for date_str, vols in vol_by_date.items():
-                vols_sorted = sorted(vols, key=lambda x: x[1])
-                idx = int(len(vols_sorted) * 0.9)
-                vol_threshold[date_str] = vols_sorted[idx][1] if idx < len(vols_sorted) else float('inf')
+            # Filter conditions
+            if current_bar['close'] < 5:
+                continue
             
-            # Process each date in the era
-            for t_date in dates:
-                # Get symbols present on this date
-                syms_on_date = []
-                for sym in symbol_days:
-                    if is_trading_day(sym, t_date):
-                        syms_on_date.append(sym)
-                
-                # Check volatility threshold for this date
-                threshold = vol_threshold.get(t_date, float('inf'))
-                
-                for sym in syms_on_date:
-                    opportunities += 1
-                    
-                    idx = get_index(sym, t_date)
-                    if idx < 0:
-                        continue
-                    
-                    # Need at least 252 prior sessions
-                    if idx < 251:
-                        continue
-                    
-                    # Get current close
-                    close = get_close(sym, t_date)
-                    if close is None or close < 5:
-                        continue
-                    
-                    # Check 60-day average dollar volume
-                    if idx >= 59:
-                        total_dollar_vol = 0
-                        count_vol = 0
-                        for j in range(idx-59, idx+1):
-                            vol = get_volume(sym, symbol_days[sym][j][1])
-                            cl = symbol_days[sym][j][2]
-                            if vol is not None and cl is not None:
-                                total_dollar_vol += vol * cl
-                                count_vol += 1
-                        if count_vol > 0:
-                            avg_dollar_vol = total_dollar_vol / count_vol
-                            if avg_dollar_vol < 5_000_000:
-                                continue
-                        else:
-                            continue
-                    else:
-                        continue
-                    
-                    # Check 50-session SMA
-                    if idx >= 49:
-                        sma_sum = 0
-                        for j in range(idx-49, idx+1):
-                            cl = symbol_days[sym][j][2]
-                            if cl is not None:
-                                sma_sum += cl
-                        sma = sma_sum / 50
-                        if close <= sma:
-                            continue
-                    else:
-                        continue
-                    
-                    # Check close-to-close return
-                    if idx >= 1:
-                        prev_close = symbol_days[sym][idx-1][2]
-                        if prev_close is None or prev_close <= 0:
-                            continue
-                        ret = (close - prev_close) / prev_close
-                        if ret < -0.01 or ret > 0.01:
-                            continue
-                    else:
-                        continue
-                    
-                    # Check volatility decile
-                    if t_date in vol_threshold and close > 0:
-                        # Check if this symbol's volatility is in top decile
-                        # We need to compute vol for this symbol on this date
-                        # Use precomputed vol_by_date
-                        vol_list = vol_by_date.get(t_date, [])
-                        sym_vol = None
-                        for s, v in vol_list:
-                            if s == sym:
-                                sym_vol = v
-                                break
-                        if sym_vol is not None and threshold is not None and sym_vol >= threshold:
-                            continue
-                    
-                    # Check last call date for this symbol (within 20 trading days)
-                    if sym in last_call_date:
-                        last_idx = last_call_date[sym]
-                        last_date_str = all_dates[last_idx]
-                        # Calculate number of trading days between last_date and t_date
-                        last_date_pos = all_dates.index(last_date_str)
-                        current_pos = all_dates.index(t_date)
-                        trading_days_diff = current_pos - last_date_pos
-                        if trading_days_diff <= 20:
-                            continue
-                    
-                    # Check insider purchases in last 5 trading days ending at t_date
-                    # Get last 5 trading days for this symbol up to t_date
-                    last_5_dates = []
-                    for j in range(max(0, idx-4), idx+1):
-                        last_5_dates.append(symbol_days[sym][j][1])
-                    
-                    found_insider = False
-                    if sym in insider_by_sym:
-                        for insider_date, shares, price in insider_by_sym[sym]:
-                            if insider_date in last_5_dates:
-                                # Check value: shares * T's close >= 100000
-                                value = shares * close
-                                if value >= 100_000:
-                                    found_insider = True
-                                    break
-                    
-                    if not found_insider:
-                        continue
-                    
-                    # Issue UP call
-                    # Look forward 20 trading days for outcome
-                    if idx + 20 < len(symbol_days[sym]):
-                        future_date = symbol_days[sym][idx+20][1]
-                        future_close = get_close(sym, future_date)
-                        if future_close is not None:
-                            outcome = future_close > close
-                        else:
-                            outcome = None
-                    else:
-                        outcome = None
-                    
-                    issued_calls.append((sym, t_date, outcome))
-                    last_call_date[sym] = all
+            # Check for 252 prior sessions
+            if not all(day in bar_dict for day in prior_days):
+                continue
+            
+            # Check average daily dollar volume over prior 60 sessions
+            total_volume = 0
+            valid_days = 0
+            for day in prior_60_days:
+                if day in bar_dict:
+                    total_volume += bar_dict[day]['close'] * bar_dict[day]['volume']
+                    valid_days += 1
+            
+            if valid_days < 60:
+                continue
+            
+            avg_daily_dollar_volume = total_volume / valid_days
+            if avg_daily_dollar_volume < 5_000_000:
+                continue
+            
+            # Check close above 50-session SMA
+            closes = []
+            for day in prior_50_days := trading_days[t_idx-50:t_idx]:
+                if day in bar_dict:
+                    closes.append(bar_dict[day]['close'])
+            
+            if len(closes) < 50:
+                continue
+            
+            sma_50 = sum(closes) / 50
+            if current_bar['close'] <= sma_50:
+                continue
+            
+            # Check close-to-close return between -1% and +1%
+            prev_day = trading_days[t_idx-1]
+            if prev_day not in bar_dict:
+                continue
+            
+            prev_close = bar_dict[prev_day]['close']
+            if prev_close == 0:
+                continue
+            
+            ret = (current_bar['close'] / prev_close) - 1
+            if ret < -0.01 or ret > 0.01:
+                continue
+            
+            # Check 20-session realized volatility in top cross-sectional decile
+            # (We'll compute this after gathering all eligible symbols for the day)
+            # For now, collect eligible symbols
+            eligible_symbols = []
+            
+            # Check insider purchases
+            has_insider_purchase = False
+            if symbol_id in insider_purchases:
+                for purchase in insider_purchases[symbol_id]:
+                    if purchase['filed_ts'] in prior_5_days:
+                        # Value is shares * current close (not trade price)
+                        purchase_value = purchase['shares'] * current_bar['close']
+                        if purchase_value >= 100_000:
+                            has_insider_purchase = True
+                            break
+            
+            if not has_insider_purchase:
+                continue
+            
+            eligible_symbols.append({
+                'symbol_id': symbol_id,
+                'current_bar': current_bar,
+                'bars': bar_dict,
+                'prior_20_days': prior_20_days
+            })
+        
+        # Compute cross-sectional volatility for eligible symbols
+        if len(eligible_symbols) < 10:  # Need enough symbols for decile calculation
+            continue
+        
+        # Calculate 20-day volatility for each eligible symbol
+        volatilities = []
+        for sym_data in eligible_symbols:
+            symbol_id = sym_data['symbol_id']
+            bar_dict = sym_data['bars']
+            prior_20 = sym_data['prior_20_days']
+            
+            returns = []
+            for i in range(1, len(prior_20)):
+                if prior_20[i] in bar_dict and prior_20[i-1] in bar_dict:
+                    prev_close = bar_dict[prior_20[i-1]]['close']
+                    curr_close = bar_dict[prior_20[i]]['close']
+                    if prev_close > 0:
+                        returns.append(curr_close / prev_close - 1)
+            
+            if len(returns) >= 20:
+                mean_ret = sum(returns) / len(returns)
+                variance = sum((r - mean_ret)**2 for r in returns) / (len(returns) - 1)
+                vol = variance ** 0.5
+                volatilities.append((symbol_id, vol))
+        
+        if len(volatilities) < 10:
+            continue
+        
+        # Sort by volatility to find top decile
+        volatilities.sort(key=lambda x: x[1])
+        decile_idx = len(volatilities) // 10
+        top_decile = set(sym_id for sym_id, vol in volatilities[decile_idx*9:])
+        
+        # Process remaining eligible symbols
+        for sym_data in eligible_symbols:
+            symbol_id = sym_data['symbol_id']
+            current_bar = sym_data['current_bar']
+            
+            # Skip if volatility in top decile
+            if symbol_id in top_decile:
+                continue
+            
+            # Check cooldown: no call in prior 20 trading days for this symbol
+            prior_call_exists = False
+            for call in calls:
+                if call[0] == symbol_id:
+                    call_ts = call[1]
+                    if call_ts in prior_20_days:
+                        prior_call_exists = True
+                        break
+            
+            if prior_call_exists:
+                continue
+            
+            opportunities += 1
+            
+            # Check label availability
+            label = outcomes.get((symbol_id, t))
+            if label is None:
+                continue
+            
+            # Issue UP call
+            calls.append((symbol_id, t, 1, label))
+            days_with_calls.add(t)
+    
+    # Calculate metrics
+    if not calls:
+        print("INSUFFICIENT=1")
+        return
+    
+    # Count hits
+    hits = sum(1 for call in calls if call[3] == 1)
+    precision = hits / len(calls)
+    base_rate = hits / len(calls)  # Same as precision for UP calls only
+    
+    # Split into sealed era (last 20% of trading days)
+    cutoff_idx = int(len(trading_days) * 0.8)
+    sealed_days = set(trading_days[cutoff_idx:])
+    
+    sealed_calls = [call for call in calls if call[1] in sealed_days]
+    non_sealed_calls = [call for call in calls if call[1] not in sealed_days]
+    
+    # Design effect calculation
+    # Group calls by day
+    calls_by_day = defaultdict(list)
+    for call in calls:
+        calls_by_day[call[1]].append(call[3])
+    
+    total_calls = len(calls)
+    num_days = len(calls_by_day)
+    
+    if num_days == 0:
+        print("INSUFFICIENT=1")
+        return
+    
+    # Calculate ICC (intra-class correlation)
+    overall_mean = sum(call[3] for call in calls) / total_calls
+    
+    between_variance = 0
+    within_variance = 0
+    
+    for
