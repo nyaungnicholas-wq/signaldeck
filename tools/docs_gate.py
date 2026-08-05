@@ -74,6 +74,20 @@ def make_violation(check: str, file: str, line: int, message: str, **extra: Any)
     v.update(extra)
     return v
 
+# Checks whose finding is a MEASUREMENT, not an editorial judgement about prose.
+# The allowlist exists so a human can say "this sentence is industry context, not
+# a claim about us". It must never be able to say "the grader is refusing, but
+# publish anyway" or "the point-in-time universe is empty, but publish anyway" —
+# that is a human assertion overriding a measurement, which is the exact
+# mechanism the P0 truth-stop existed to destroy. Rebuilding it inside the gate
+# would be the funniest possible way to lose.
+UNSUPPRESSIBLE_CHECKS = frozenset({
+    "grader-status",
+    "data-integrity",
+    "integrity-snapshot",
+})
+
+
 def apply_allowlist(violations: list[dict], allow: dict[str, list[dict]]) -> list[dict]:
     """Suppress violations that match an allowlist entry with a non-empty reason."""
     if not allow:
@@ -84,6 +98,9 @@ def apply_allowlist(violations: list[dict], allow: dict[str, list[dict]]) -> lis
         file_path = v["file"]
         line_text = v.get("line_text", "")
         suppressed = False
+        if check_id in UNSUPPRESSIBLE_CHECKS:
+            kept.append(v)
+            continue
         for entry in allow.get(check_id, []):
             if entry.get("file") != file_path:
                 continue
@@ -158,6 +175,14 @@ def check_integrity_snapshot(repo: Path, registry: dict) -> tuple[list[dict], di
     violations = []
     snapshot_path = repo / "ops" / "data-integrity.json"
     snapshot, snap_violations = read_json(snapshot_path)
+    # Report the path RELATIVE TO THE REPO. An absolute path makes the gate's
+    # output machine-specific, so two runs of identical content disagree and no
+    # saved output can be diffed against a later one — the same class of defect
+    # the determinism rules elsewhere in this file exist to prevent.
+    rel = "ops/data-integrity.json"
+    for v in snap_violations:
+        v["file"] = rel
+        v["message"] = v["message"].replace(str(snapshot_path), rel)
     violations.extend(snap_violations)
     return violations, snapshot
 
@@ -236,9 +261,20 @@ def check_docs_index(repo: Path, registry: dict) -> list[dict]:
 # gate someone switches off, so these are scrubbed BEFORE the accuracy rule
 # looks at the line. Scrubbing is per-token, never per-line: a real figure
 # sitting beside a confidence level on the same line still counts.
+#
+# TIGHTENED 2026-08-05 after adversarial review. The first version allowed any
+# gap of up to 20 characters between the statistics word and the number, which
+# made it a ONE-WORD BYPASS: `Live accuracy over the interval was 91%` had its
+# 91% deleted and passed the gate silently. A scrubber written to prevent false
+# positives had become a hole bigger than the false positives it prevented.
+#
+# Now a confidence percentage must be BOTH a canonical confidence level AND
+# bound directly to the confidence word. An accuracy figure that merely shares a
+# line with statistics vocabulary is still an accuracy figure.
+CONF_LEVEL = r"(?:80|90|95|98|99(?:\.\d+)?)"
 CONFIDENCE_PCT_RE = re.compile(
-    r"\d+(?:\.\d+)?\s*%\s*(?:CI\b|confidence|credible|interval)"
-    r"|(?:\bCI\b|confidence|credible|interval)[^%]{0,20}?\d+(?:\.\d+)?\s*%",
+    rf"{CONF_LEVEL}\s*%\s*(?:CI\b|confidence|credible|interval|band)"
+    rf"|(?:\bCI\b|confidence|credible|interval)\s*(?:level\s*)?(?:of|at|=)?\s*{CONF_LEVEL}\s*%",
     re.IGNORECASE)
 COIN_FLIP_NULL_RE = re.compile(r"\b50(?:\.0+)?\s*%")
 NULL_CONTEXT_WORDS = ("baseline", "null", "never", "coin", "chance", "random")
@@ -250,6 +286,86 @@ def scrub_non_accuracy_percentages(line: str) -> str:
     if any(w in line.lower() for w in NULL_CONTEXT_WORDS):
         scrubbed = COIN_FLIP_NULL_RE.sub(" ", scrubbed)
     return scrubbed
+
+
+def _partial_body(repo: Path, name: str) -> list[str] | None:
+    """The inner lines of a generated partial, or None if there is no such file.
+
+    Accepts `<name>` and `<name>.md` because the generators in this repository
+    disagree about whether the suffix belongs in the marker.
+
+    Outer marker lines are stripped from BOTH sides before comparison. The
+    document's markers and the partial file's markers use different conventions
+    (`BEGIN GENERATED: x` vs `LIVE-ACCURACY-PARTIAL:BEGIN`), so comparing whole
+    regions would report drift for two byte-identical payloads.
+    """
+    for candidate in (name, f"{name}.md"):
+        path = repo / "partials" / candidate
+        if path.exists():
+            body = read_text_lines(path)
+            while body and _is_marker_line(body[0]):
+                body = body[1:]
+            while body and _is_marker_line(body[-1]):
+                body = body[:-1]
+            return body
+    return None
+
+
+def _is_marker_line(line: str) -> bool:
+    return bool(GENERATED_BEGIN_RE.match(line) or GENERATED_END_RE.match(line)
+                or LIVE_ACCURACY_PARTIAL_BEGIN_RE.match(line)
+                or LIVE_ACCURACY_PARTIAL_END_RE.match(line))
+
+
+def _anchorable_names(registry: dict) -> set[str]:
+    """Partial names a document is allowed to claim in a generated region.
+
+    `partials` are the ones this tool generates and staleness-checks itself.
+    `external_partials` are produced by a sibling generator — today
+    `tools/live_accuracy.py` writes partials/live_accuracy.md, and
+    `live_accuracy.py --check --inject` owns its drift contract. Naming them
+    explicitly keeps the allowance reviewable: a name that appears in neither
+    list cannot exempt anything, even if someone drops a matching file into
+    partials/ by hand.
+    """
+    names = set(registry.get("partials") or [])
+    names |= set(registry.get("external_partials") or [])
+    return {n for n in names} | {n[:-3] for n in names if n.endswith(".md")} \
+        | {f"{n}.md" for n in names if not n.endswith(".md")}
+
+
+def _region_is_anchored(repo: Path, registry: dict, name: str, body: list[str]) -> tuple[bool, str]:
+    """Has this region EARNED its exemption from the live-accuracy check?
+
+    WHY THIS EXISTS. Marker comments are prose — anyone can type them. Until
+    2026-08-05 the gate exempted any region whose markers merely parsed, with no
+    check that the name referred to a real partial or that the contents matched
+    what a generator produced. An adversarial review demonstrated the
+    consequence: wrapping `Our live accuracy is 91%` in a hand-typed marker pair
+    passed the gate clean, while the identical sentence without markers failed.
+    The exemption was forgeable, which made it worthless exactly where it
+    mattered.
+
+    An exemption is now earned by matching a partial that a generator actually
+    wrote. Anything else fails CLOSED: not exempt, and reported.
+    """
+    if name not in _anchorable_names(registry):
+        return False, (f"names '{name}', which is not a declared partial "
+                       "(ops/docs-registry.json `partials` / `external_partials`).")
+    expected = _partial_body(repo, name)
+    if expected is None:
+        return False, (f"names no partial this repository generates "
+                       f"(no partials/{name} or partials/{name}.md).")
+    def norm(ls: list[str]) -> list[str]:
+        out = [normalize_newlines(x).rstrip() for x in ls]
+        while out and not out[0]:
+            out = out[1:]
+        while out and not out[-1]:
+            out = out[:-1]
+        return out
+    if norm(body) != norm(expected):
+        return False, f"does not match partials/{name} (it has drifted or was hand-edited)."
+    return True, ""
 
 
 def check_no_hardcoded_live_accuracy(repo: Path, registry: dict) -> list[dict]:
@@ -290,8 +406,18 @@ def check_no_hardcoded_live_accuracy(repo: Path, registry: dict) -> list[dict]:
                 if current_begin == "generated" and end_match:
                     end_name = end_match.group(1)
                     if end_name == current_name:
-                        # Well-formed region
-                        wellformed_regions.append((current_begin_line, i))
+                        # Well-formed SYNTAX is not enough — see anchor check.
+                        ok, why = _region_is_anchored(
+                            repo, registry, current_name, lines[current_begin_line:i - 1])
+                        if ok:
+                            wellformed_regions.append((current_begin_line, i))
+                        else:
+                            violations.append(make_violation(
+                                "single-source-of-truth", filename, current_begin_line,
+                                f"Generated region '{current_name}' opened on line "
+                                f"{current_begin_line} {why} Its contents are NOT exempt "
+                                "from the live-accuracy check. Regenerate the partial and "
+                                "re-inject it, or delete the markers."))
                         current_begin = None
                         current_name = None
                     else:
@@ -301,7 +427,17 @@ def check_no_hardcoded_live_accuracy(repo: Path, registry: dict) -> list[dict]:
                         current_begin = None
                         current_name = None
                 elif current_begin == "live_accuracy" and live_end_match:
-                    wellformed_regions.append((current_begin_line, i))
+                    ok, why = _region_is_anchored(
+                        repo, registry, "live_accuracy", lines[current_begin_line:i - 1])
+                    if ok:
+                        wellformed_regions.append((current_begin_line, i))
+                    else:
+                        violations.append(make_violation(
+                            "single-source-of-truth", filename, current_begin_line,
+                            f"Live-accuracy region opened on line {current_begin_line} "
+                            f"{why} Its contents are NOT exempt from the live-accuracy "
+                            "check. Re-inject it with "
+                            "`python tools/live_accuracy.py --write --inject <doc>`."))
                     current_begin = None
                     current_name = None
                 else:
@@ -531,6 +667,32 @@ def check_data_integrity(repo: Path, registry: dict, snapshot: dict) -> list[dic
 # Registry loading
 # ──────────────────────────────────────────────────────────────────────────────
 
+def grader_status_of(reg: dict) -> str:
+    """Derive a grader status from a registry that only records the bad case.
+
+    A CLEAN registry has no `status` key at all: ops/accuracy-registry.sh writes
+    `status: REFUSED` when it refuses, and the grader itself never writes a
+    success marker. Reading a missing key as "not OK" would report a permanent
+    refusal on a perfectly healthy repository — the same shape as the defect
+    where a stale 2026-07-29 refusal was served as current, which is worse than
+    a loud failure because it looks like the honesty machinery working.
+
+    Zero published rows is NOT success. A grade that graded nothing must not
+    read as OK by merely declining to complain.
+
+    This lives in one named function, rather than inline at the call site, so it
+    can be tested against a registry shape without a 4 GB database present.
+    """
+    status = reg.get("status")
+    if isinstance(status, str) and status.strip():
+        return status.strip()
+    if reg.get("refusal_reason") or reg.get("refused_since"):
+        return "REFUSED"
+    if not (reg.get("rows") or []):
+        return "EMPTY"
+    return "OK"
+
+
 class GateError(Exception):
     """The gate itself cannot run. Exit 2, never exit 0.
 
@@ -669,11 +831,8 @@ def mode_write_integrity(repo: Path) -> int:
             # against refusals, because until 2026-08-04T18:23:15 there was no
             # successful grade for it to see. Derive the status the registry
             # implies instead of copying a key that is absent by design.
-            status = reg.get("status")
-            if status is None:
-                status = "OK" if (reg.get("rows") and not reg.get("refusal_reason")) else "MISSING"
             grader = {
-                "status": status,
+                "status": grader_status_of(reg),
                 "graded_at": reg.get("graded_at"),
                 "refused_since": reg.get("refused_since"),
                 "refusal_reason": reg.get("refusal_reason"),

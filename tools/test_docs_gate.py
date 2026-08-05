@@ -263,15 +263,27 @@ class GateTest(unittest.TestCase):
             "D.md", "# D\n\nOur live accuracy is 62.5% (95% CI [58, 67]).\n")
         self.assertFires("no-hardcoded-live-accuracy")
 
-    def test_c1_allows_a_figure_inside_a_generated_region(self):
-        """A generated number is the fix, not the defect — it must not fire."""
-        self.fx.add_strategy_doc(
-            "GEN.md",
-            "# Generated\n\n"
-            "<!-- BEGIN GENERATED: live_record.md -->\n"
-            "Live accuracy 46.3% (n=2,257).\n"
-            "<!-- END GENERATED: live_record.md -->\n")
+    def test_c1_allows_a_figure_inside_an_anchored_generated_region(self):
+        """A generated number is the fix, not the defect — it must not fire.
+
+        SUPERSEDED FORM, kept as a warning. This test used to embed a figure
+        inside hand-typed markers naming `live_record.md`, with contents that
+        matched no generator output, and assert the gate stayed clean. It passed
+        — and it was encoding a bypass: an adversarial review showed the same
+        markers would launder ANY fabricated figure. Syntax is not provenance.
+        The exemption is now earned by matching a partial a generator wrote.
+        """
+        with open(self.fx.path("partials/live_record.md"), encoding="utf-8") as f:
+            faithful = f.read()
+        self.fx.add_strategy_doc("GEN.md", f"# Generated\n\n{faithful}")
         self.assertClean()
+
+        # The same document with one fabricated line spliced INSIDE the region
+        # must fail. This is the laundering attempt the anchor exists to stop.
+        lines = faithful.rstrip("\n").split("\n")
+        tampered = "\n".join(lines[:-1] + ["Live accuracy is 91%.", lines[-1]])
+        self.fx.write_doc("GEN.md", f"# Generated\n\n{tampered}\n")
+        self.assertFires("single-source-of-truth")
 
     def test_c1_allowlist_requires_a_reason(self):
         """An escape hatch with no stated reason is how a gate rots."""
@@ -591,6 +603,115 @@ class GateTest(unittest.TestCase):
     # defect this gate exists to prevent, reproduced inside the gate itself.
     # C5 below covers only partials this tool itself declares and generates.
 
+    # ------------------- adversarial-review findings (2026-08-05, 19 confirmed)
+    #
+    # A 46-agent adversarial pass over the finished gate found four defects that
+    # reproduced independently. Each is locked here so it cannot come back.
+
+    def test_allowlist_cannot_suppress_a_measured_fact(self):
+        """CRITICAL. The allowlist is for EDITORIAL judgement about prose.
+
+        `grader-status` and `data-integrity` are not judgements — they are facts
+        the database reported. A repository that can annotate away "the grader is
+        refusing" or "the point-in-time universe is empty" has rebuilt, in its own
+        gate, precisely the mechanism P0 existed to destroy: a human assertion
+        overriding a measurement.
+        """
+        for check, mutate in (
+            ("grader-status",
+             lambda s: s["grader"].update(status="REFUSED", refusal_reason="grader exited 1")),
+            ("data-integrity",
+             lambda s: s.update(universe_membership_rows=0)),
+        ):
+            with self.subTest(check=check):
+                fx = GateFixture()
+                fx.owner = self
+                self.addCleanup(fx.cleanup)
+                reg = fx.read_registry()
+                reg["allow"] = {check: [{"file": "ops/data-integrity.json",
+                                         "reason": "known, tracked elsewhere"}]}
+                fx.write_registry(reg)
+                snap = json.loads(json.dumps(CLEAN_INTEGRITY))
+                mutate(snap)
+                fx.write_integrity(snap)
+                r = fx.check()
+                self.assertEqual(r.returncode, 1,
+                                 f"{check} was suppressed by an allowlist entry:\n{r.stdout}")
+                self.assertIn(check, {v["check"] for v in json.loads(r.stdout)["violations"]})
+
+    def test_a_generated_region_must_be_anchored_to_a_real_partial(self):
+        """CRITICAL. Markers are six words of prose; anyone can type them.
+
+        Exempting a region purely because it LOOKS generated lets an author wrap
+        a fabricated figure in a marker pair and publish it. The exemption must
+        be earned by matching a partial that a generator actually produced.
+        """
+        self.fx.add_strategy_doc(
+            "FAKE.md",
+            "# Fake\n\n"
+            "<!-- BEGIN GENERATED: totally_made_up.md -->\n"
+            "Our live accuracy is 91%.\n"
+            "<!-- END GENERATED: totally_made_up.md -->\n")
+        r = self.fx.check()
+        self.assertEqual(r.returncode, 1,
+                         f"a hand-typed marker pair exempted a fabricated figure:\n{r.stdout}")
+        codes = {v["check"] for v in json.loads(r.stdout)["violations"]}
+        self.assertIn("single-source-of-truth", codes,
+                      "an unanchored generated region must itself be reported")
+
+    def test_a_region_naming_a_real_partial_must_still_match_it(self):
+        """The subtler form: borrow a REAL partial's name, put anything inside."""
+        self.fx.add_strategy_doc(
+            "FAKE.md",
+            "# Fake\n\n"
+            "<!-- BEGIN GENERATED: live_record.md -->\n"
+            "Live accuracy is 91%. Grader status: PERFECT.\n"
+            "<!-- END GENERATED: live_record.md -->\n")
+        self.assertFires("single-source-of-truth")
+
+    def test_a_faithful_embedded_partial_is_still_exempt(self):
+        """The legitimate case must keep working, or the fix is a regression."""
+        with open(self.fx.path("partials/live_record.md"), encoding="utf-8") as f:
+            partial = f.read()
+        self.fx.add_strategy_doc("REAL.md", f"# Real\n\n{partial}")
+        self.assertClean()
+
+    def test_scrubber_does_not_swallow_a_real_figure_near_a_stats_word(self):
+        """HIGH. `interval` anywhere near the number deleted the number.
+
+        `Live accuracy over the interval was 91%` passed the gate silently — the
+        scrubber added to stop false positives had become a one-word bypass.
+        A confidence LEVEL is a canonical level bound to a confidence word; an
+        accuracy figure that merely shares a line with statistics vocabulary is
+        still an accuracy figure.
+        """
+        for line in ("Live accuracy over the interval was 91%.",
+                     "Our live accuracy, CI aside, is 91%.",
+                     "Live accuracy 91% (95% CI [88, 94])."):
+            with self.subTest(line=line):
+                fx = GateFixture()
+                fx.owner = self
+                self.addCleanup(fx.cleanup)
+                fx.add_strategy_doc("D.md", f"# D\n\n{line}\n")
+                r = fx.check()
+                self.assertEqual(r.returncode, 1, f"{line!r} was silently exempted")
+
+    def test_violation_paths_are_repo_relative(self):
+        """MEDIUM. An absolute path makes output differ per machine.
+
+        CI logs, diffs of saved output, and any comparison between two runs all
+        break when the gate prints `C:\\Users\\...\\ops\\data-integrity.json`.
+        """
+        os.remove(self.fx.path("ops/data-integrity.json"))
+        r = self.fx.check()
+        blob = r.stdout + r.stderr
+        self.assertNotIn(self.fx.root, blob,
+                         "violation output leaked the absolute fixture path")
+        hits = [v for v in json.loads(r.stdout)["violations"]
+                if v["check"] == "integrity-snapshot"]
+        self.assertTrue(hits)
+        self.assertEqual(hits[0]["file"], "ops/data-integrity.json")
+
     # ------------------------------------------------------------ reporting
     def test_every_violation_names_file_line_and_remedy(self):
         """A gate nobody can act on gets disabled. Each row must be actionable."""
@@ -614,6 +735,41 @@ class GateTest(unittest.TestCase):
         """Exit 2 keeps 'the gate broke' distinguishable from 'the docs are wrong'."""
         r = self.fx.run("frobnicate")
         self.assertEqual(r.returncode, 2)
+
+
+class GraderStatusTest(unittest.TestCase):
+    """A clean accuracy registry records no status at all — only refusals.
+
+    Read naively, a missing key looks like "not OK", which would publish a
+    permanent false refusal. This is the exact shape of the defect where a stale
+    refusal was served as current, so it gets its own tests.
+    """
+
+    def setUp(self) -> None:
+        sys.path.insert(0, HERE)
+        import docs_gate
+        self.status = docs_gate.grader_status_of
+
+    def test_clean_registry_without_a_status_key_is_ok(self):
+        self.assertEqual(
+            self.status({"graded_at": "2026-08-04T17:55:59",
+                         "refused_since": None, "rows": [1, 2, 3]}), "OK")
+
+    def test_explicit_refusal_wins(self):
+        self.assertEqual(
+            self.status({"status": "REFUSED", "refusal_reason": "grader exited 1",
+                         "rows": []}), "REFUSED")
+
+    def test_a_refusal_reason_alone_is_a_refusal(self):
+        self.assertEqual(
+            self.status({"refusal_reason": "unregistered grader", "rows": []}),
+            "REFUSED")
+
+    def test_zero_rows_is_not_success(self):
+        """A grade that graded nothing must not read as OK by declining to complain."""
+        self.assertEqual(
+            self.status({"graded_at": "2026-08-04", "refused_since": None,
+                         "rows": []}), "EMPTY")
 
 
 if __name__ == "__main__":
