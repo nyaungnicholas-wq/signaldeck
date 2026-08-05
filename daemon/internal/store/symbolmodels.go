@@ -102,6 +102,33 @@ func (s *Store) labeledFeaturesBySymbol(ctx context.Context, symbolID int64, h m
 	return out, rows.Err()
 }
 
+// StockFeatureDayFold counts the same stock feature rows two ways: folded on a
+// UTC-midnight boundary (what the PARTITION BY above and every other
+// day-clustered statistic currently uses) and folded on the trading-day
+// boundary (md.TradingDay). Only rows at or after `since` are counted.
+//
+// The gap between the two IS the pseudo-replication the day fold is supposed to
+// remove. A US extended session closes at 20:00 ET — 00:00Z under EDT, 01:00Z
+// under EST — so its tail lands in the NEXT UTC day and is counted as a second
+// independent observation of the same session. Every published interval divides
+// by that count, so the excess overstates effective N and narrows intervals in
+// the direction that flatters the platform.
+//
+// Returned as raw counts rather than a rate so the caller can state both
+// numbers in the finding — "15,976 real days, 630 phantom" is auditable in a
+// way that "3.9%" is not.
+func (s *Store) StockFeatureDayFold(ctx context.Context, since int64) (utcDays, tradingDays int, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT f.symbol_id || ':' || (f.ts/?)),
+		       COUNT(DISTINCT f.symbol_id || ':' || ((f.ts-?)/?))
+		FROM features f
+		JOIN symbols s ON s.id=f.symbol_id
+		WHERE s.market='stocks' AND f.ts >= ?`,
+		md.SecondsPerDay, md.TradingDayOffsetSecs, md.SecondsPerDay, since).
+		Scan(&utcDays, &tradingDays)
+	return utcDays, tradingDays, err
+}
+
 // SymbolModelRow is one persisted per-symbol agent. The JSON blob columns are
 // carried as raw strings here — the symbolagent package owns their shape and
 // (un)marshals them, so this layer stays free of the learning types.
