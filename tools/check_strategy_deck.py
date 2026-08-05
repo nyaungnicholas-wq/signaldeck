@@ -6,9 +6,21 @@ statistic, but an allowlist of every numeric token I supplied can.
 import re, sys, pathlib
 
 DECK = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "STRATEGY_DECK.md")
-t = DECK.read_text(encoding="utf-8")
+raw = DECK.read_text(encoding="utf-8")
+
+# The live-record block is generated from data/accuracy_registry.json by
+# tools/live_accuracy.py and guarded by its own --check in CI. Its figures and its
+# verdicts are the registry's, not the author's, so the checks below -- which exist
+# to police hand-written prose -- must not run over it. Checking it here would also
+# be wrong in substance: the ban on interval verdicts protects against asserting one
+# where none is published, and inside this block the interval IS the published thing.
+t = re.sub(r"<!-- BEGIN GENERATED live_accuracy -->.*?<!-- END GENERATED live_accuracy -->",
+           "", raw, flags=re.S)
 low = t.lower()
 fail = []
+
+if "<!-- BEGIN GENERATED live_accuracy -->" not in raw:
+    fail.append("deck no longer includes the generated live-record block")
 
 HEADINGS = [
     "# SignalDeck — Strategy Deck",
@@ -31,15 +43,28 @@ for h in HEADINGS:
     if h not in t:
         fail.append(f"missing heading: {h}")
 
-BANNED = ["verified", "guaranteed", "proven", "moat", "best-in-class",
-          "world-class", "revolutionary", "cutting-edge", "seamless",
-          "state-of-the-art", "unlock", "game-chang", "industry-leading"]
-for w in BANNED:
-    if w in low:
-        for n, line in enumerate(t.split("\n"), 1):
-            if w in line.lower():
-                fail.append(f"banned word {w!r} at line {n}: {line.strip()[:90]}")
-                break
+# Whole words. A substring test flagged "ledger-provenance" as the marketing word
+# "proven", which is the failure mode that gets a checker switched off: it was
+# right about the letters and wrong about the claim, and the only fix available
+# to the author would have been to rename a real thing.
+BANNED_WORDS = ["verified", "guaranteed", "proven", "moat", "best-in-class",
+                "world-class", "revolutionary", "cutting-edge", "seamless",
+                "state-of-the-art", "unlock", "industry-leading"]
+# Prefixes, where the tail genuinely varies ("game-changing", "game-changer").
+BANNED_PREFIXES = ["game-chang"]
+
+for w in BANNED_WORDS:
+    pat = re.compile(r"\b" + re.escape(w) + r"\b")
+    for n, line in enumerate(t.split("\n"), 1):
+        if pat.search(line.lower()):
+            fail.append(f"banned word {w!r} at line {n}: {line.strip()[:90]}")
+            break
+for w in BANNED_PREFIXES:
+    pat = re.compile(r"\b" + re.escape(w))
+    for n, line in enumerate(t.split("\n"), 1):
+        if pat.search(line.lower()):
+            fail.append(f"banned word {w!r} at line {n}: {line.strip()[:90]}")
+            break
 
 # Numbers I actually supplied, plus structural tokens (section numbers, FC ids,
 # ordinals, HTTP codes) that legitimately appear in any rendering of the brief.
@@ -48,6 +73,8 @@ ALLOWED = {
     "21", "9", "5", "4", "10", "12529", "11853", "2026", "08", "07", "14",
     "1077", "7.5", "451", "0", "429", "48", "018", "63", "1", "2", "3",
     "6", "8", "11", "12", "13", "1.0", "04", "27", "5322",
+    # "09" is the month in the header's Revalidate by: 2026-09-04.
+    "09", "1.1",
     "01d6bcdfe1451b6f2c84185478f9c8f3c405ef3ae845a11a937d865eacf2a724",
     # structural / ordinal
     "7", "3.6", "256", "128",
@@ -59,6 +86,17 @@ ALLOWED = {
     # from proofs/P4D_BARRIER_EXITS.md: the triple-barrier envelope —
     # adverse 2.0xATR, favorable 3.0xATR, ATR period 20 bars
     "2.0", "3.0", "20",
+    # §7 evidence table, measured 2026-08-04 by `go test -list` and by counting
+    # non-test importers of each package. Test counts:
+    "26", "29", "31", "255",
+    # riskgate sizing envelope (RISK_POLICY.md §1.5): 10% max position weight,
+    # 0.5% minimum ticket; drawdown ladder rungs 20% suspend / 25% flatten.
+    "0.5", "25",
+    # from proofs/P11_BARS_COMPLETENESS.md, measured by tools/bars_completeness.py:
+    # 1,907-session SPY calendar; 1,770 stock symbols; 1,916,310 expected
+    # symbol-days; 96.49% overall and 97.36% common-stock coverage; 100% crypto;
+    # 43,857 missing common-stock symbol-days.
+    "1907", "1770", "1916310", "96.49", "97.36", "100", "43857",
 }
 bad = set()
 for tok in re.findall(r"[0-9a-f]{16,}|\d+(?:[.,]\d+)*", t):
