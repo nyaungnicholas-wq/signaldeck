@@ -161,6 +161,33 @@ therefore fail at the self-test step and name the gate, not the corpus. That is 
 harness behaving correctly: it is reporting that this gate is not yet trustworthy, which
 is true.
 
+### 5.2 Why the repair was not attempted — the file is still being written
+
+`tools/docs_gate.py` was unparseable **three separate times** during this phase, each
+time caught within minutes of the edit:
+
+| observed | error |
+|---|---|
+| 17:42 | `SyntaxError: '{' was never closed` (line 721) |
+| 18:23 | `SyntaxError: unterminated string literal` (line 454) |
+| 18:31 | `SyntaxError: expected 'except' or 'finally' block` (line 776) — file ends inside an open `try` |
+
+The last was observed 90 seconds after the file's mtime. This is not a settled module
+with nine known bugs; it is a module mid-rewrite by a concurrent author.
+
+Repairing it would have been overwritten, would have conflicted, or — worst — would have
+merged a half-written module with a hand-patched one and produced a gate nobody could
+reason about. The decision it needs is a design decision (**which partial is canonical**)
+and it belongs to whoever is writing it.
+
+**Recommendation, unambiguous:** `partials/live_accuracy.md` should be canonical. It
+exists, is deterministic, carries 15 passing tests, is injected into all five documents
+in `partials/INCLUDES.txt`, and is enforced by both a drift gate and a scan gate that
+currently pass. `partials/live_record.md` does not exist. Point `docs_gate`'s
+`single-source-of-truth` rule at the former and delete the latter's contract — the same
+resolution applied earlier in this remediation when a duplicate generator and a duplicate
+checker were deleted rather than reconciled.
+
 ## 6. Status
 
 | P9 done-when | Status |
