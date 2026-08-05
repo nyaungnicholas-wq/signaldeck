@@ -92,9 +92,9 @@ func getAccuracy(t *testing.T, url string) (int, map[string]any) {
 
 // THE 2026-08-03 DEFECT, end to end.
 func TestAccuracy_RefutedModelReadsRetiredNotInsufficient(t *testing.T) {
-	srv, st, d := newTestServer(t, nil)
+	_, st, d := newTestServer(t, nil)
 	d.RegistryPath = writeRegistry(t, thinWindowRegistry)
-	srv = restartWith(t, d)
+	srv := restartWith(t, d)
 	freshHeartbeat(t, st)
 
 	if err := st.PutEvidenceClaim(t.Context(), store.EvidenceClaimRow{

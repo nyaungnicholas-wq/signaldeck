@@ -62,13 +62,43 @@ func TestPreregRegistrarIsIdempotentWhenNothingChanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("records: %v", err)
 	}
-	// One record per claim spec, plus the filings-drift hypothesis, the grading
-	// protocol, the protocol document (PREREGISTRATION.md), the directional
-	// auto-retire rule, and the null-quarantine manifest — the frozen set of
-	// outcome rows exempt from the unmatched-null invariant, which is registered
-	// precisely so the exemption cannot be extended quietly.
-	if want := len(prereg.Specs()) + 5; len(first) != want {
-		t.Fatalf("registered %d records, want %d", len(first), want)
+	// EXACTLY one record per claim spec, plus the four unconditional extras
+	// asserted individually below. Checked as a SET, not a total.
+	//
+	// A total cannot be asserted here, because two of Run()'s records are
+	// conditional on state this fixture does not control. `grading-look` appears
+	// only once a look has been charged, and `null-quarantine-manifest` only once
+	// the outcome worker has frozen an exempt set ("absent a manifest there is
+	// nothing exempt and nothing to register", prereg.go). A clean checkout
+	// registers neither; a working tree that has graded registers the look. That
+	// is why the hardcoded total was wrong in CI and simultaneously right on the
+	// machine it was written on — `+5` was committed 2026-07-30 without the test
+	// being run, and it had to be wrong in one environment or the other.
+	//
+	// So: every spec exactly once, and nothing registered that is not a spec or a
+	// known extra. That still catches a record sneaking in unregistered, which is
+	// what the count was for, and it does not move between machines.
+	counts := map[string]int{}
+	for _, r := range first {
+		counts[r.Kind]++
+	}
+	known := map[string]bool{
+		FilingsDriftKind: true, prereg.ProtocolKind: true, docKind: true,
+		prereg.RetireRuleKind: true, prereg.LookKind: true,
+		prereg.NullQuarantineKind: true,
+	}
+	for _, s := range prereg.Specs() {
+		known[s.Kind] = true
+		if counts[s.Kind] != 1 {
+			t.Errorf("claim spec %q registered %d times, want exactly 1",
+				s.Kind, counts[s.Kind])
+		}
+	}
+	for kind, n := range counts {
+		if !known[kind] {
+			t.Errorf("unregistered record kind %q appeared %d time(s) — a claim reached "+
+				"the chain without a spec behind it", kind, n)
+		}
 	}
 	var haveProtocol, haveDoc, haveDrift, haveRule bool
 	for _, r := range first {

@@ -645,7 +645,9 @@ func (g *StorageGovernor) Interval() time.Duration {
 
 // Run checkpoints the WAL and, when warranted, vacuums.
 func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
-	dbBytes, walBytes := g.St.FileSizes()
+	// Only the WAL size is read before the checkpoint; the db size that matters
+	// is the one AFTER it, measured below.
+	_, walBytes := g.St.FileSizes()
 
 	// MARKET-HOURS GATE: a TRUNCATE checkpoint needs a reader-free moment, and
 	// during the US session the worker fleet reads constantly — the attempt
@@ -655,7 +657,7 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 	// contention (journal_size_limit only bounds the file AFTER a successful
 	// truncate, so an untried checkpoint reclaims nothing).
 	walNote, reclaimed := g.checkpointLadder(ctx, walBytes)
-	dbBytes, walBytes = g.St.FileSizes()
+	dbBytes, walBytes := g.St.FileSizes()
 	g.trackEffectiveness(ctx, reclaimed, walBytes)
 
 	threshold := g.VacuumThreshold

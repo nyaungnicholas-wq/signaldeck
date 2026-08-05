@@ -80,7 +80,14 @@ jobs:
       # so this is not expected to be flaky — it was simply never wired in.
       # Coverage is collected in the same invocation so this stays one test
       # run instead of two (a -race run is materially slower).
-      - run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      # -timeout 30m, up from the 10m default. The race detector makes this
+      # suite genuinely slow rather than hung: internal/store takes 580s under
+      # it and passes, while internal/api and internal/pipeline were killed at
+      # exactly 600s. Both panics named a test that had been running 2-3s, so
+      # both packages were still making progress when the alarm fired — a
+      # deadlock parks on one test for the full window. Raising the ceiling
+      # does not hide a hang; it stops truncating a slow suite.
+      - run: go test -race -timeout 30m -coverprofile=coverage.out -covermode=atomic ./...
       - run: go tool cover -func=coverage.out | tail -1
       # Coverage gate — the step above only *printed* the total, so coverage
       # could silently decay. The floor is the measured total minus 2pp;
@@ -155,10 +162,27 @@ jobs:
   tools:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 is REQUIRED, same trap as pre-publish-scan below.
+      # test_deployment_drift.py builds its negative cases from
+      # `git rev-list --max-parents=0 HEAD` — the repo's first commit, which
+      # cannot contain a constant added later, which is precisely the drift the
+      # gate exists to catch. On the default depth-1 checkout the grafted root
+      # has no parents, so that command returns HEAD itself: the "old code"
+      # case became the current code, the gate correctly passed, and the two
+      # tests asserting it must FAIL failed instead. The tests were right.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # tools/test_validate_signals.py imports validate_signals, which imports
+      # numpy and arch.bootstrap at module scope, so discovery died on
+      # ModuleNotFoundError before running a single test in that file. Pinned to
+      # requirements-quant.txt rather than floating, so a release of either
+      # cannot change what CI measured. Only these two: nothing under
+      # tools/test_*.py reaches the rest of that file.
+      - run: pip install "numpy==2.4.6" "arch==8.0.0"
       # A16 regression channel — tools/test_accuracy_registry.py holds 18
       # tests guarding the script that grades every shipped claim (including
       # test_one_market_day_cannot_validate_a_claim), but nothing ran them in
