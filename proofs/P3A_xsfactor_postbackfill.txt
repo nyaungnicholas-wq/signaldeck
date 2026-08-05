@@ -1,0 +1,40 @@
+
+HORIZON 5d  (stride 5 sessions, NON-OVERLAPPING)  calendar days: 1908
+  formation days used 380 of 381 tried   thin cross-sections skipped 1
+  dropped: trailing split-guard 20100 | forward split-guard 307 | no forward bar 3935 | tied at median 421
+  LEG                            n   days   edge pp 95% CI (day-clust)   Bonferroni CI        VERDICT vs shipped
+  ----------------------------------------------------------------------------------------------------------------------
+  liquidity                 330664    376    -1.33 [-1.80, -0.87]       [-1.98, -0.69] *     *** SIGN INVERTED *** (shipped +1.46pp [+1.01, +1.86])
+  lowVol                    336954    376    +1.18 [+0.24, +2.14]       [-0.13, +2.54]       replicates (shipped +1.56pp [+0.67, +2.54])
+  mom12_1                   272812    330    +1.23 [+0.34, +2.09]       [-0.02, +2.44]       replicates (shipped +1.47pp [+0.67, +2.30])
+  composite_as_audited      337464    376    +0.62 [-0.08, +1.32]       [-0.36, +1.60]       indistinguishable from zero
+  composite_lowvol_only     336954    376    +1.18 [+0.24, +2.14]       [-0.13, +2.54]       unpublished leg, positive
+  composite_all3            337464    376    +0.62 [-0.08, +1.32]       [-0.36, +1.60]       indistinguishable from zero
+
+HORIZON 21d  (stride 21 sessions, NON-OVERLAPPING)  calendar days: 1908
+  formation days used 89 of 90 tried   thin cross-sections skipped 1
+  dropped: trailing split-guard 4644 | forward split-guard 296 | no forward bar 1375 | tied at median 64
+  LEG                            n   days   edge pp 95% CI (day-clust)   Bonferroni CI        VERDICT vs shipped
+  ----------------------------------------------------------------------------------------------------------------------
+  liquidity                  77682     89    -1.70 [-2.73, -0.66]       [-3.17, -0.26] *     *** SIGN INVERTED *** (shipped +2.50pp [+1.61, +3.37])
+  lowVol                     78482     88    +1.77 [+0.00, +3.52]       [-0.76, +4.28]       replicates (shipped +2.80pp [+0.81, +4.66])
+  mom12_1                    63424     77    +1.08 [-0.46, +2.56]       [-1.16, +3.11]       indistinguishable from zero
+  composite_as_audited       79216     89    +0.09 [-1.05, +1.24]       [-1.53, +1.69]       indistinguishable from zero
+  composite_lowvol_only      78482     88    +1.77 [+0.00, +3.52]       [-0.76, +4.28]       unpublished leg, positive
+  composite_all3             79222     89    +0.81 [-0.53, +2.12]       [-1.12, +2.58]       indistinguishable from zero
+
+HORIZON 63d  (stride 63 sessions, NON-OVERLAPPING)  calendar days: 1908
+  formation days used 29 of 30 tried   thin cross-sections skipped 1
+  dropped: trailing split-guard 1512 | forward split-guard 258 | no forward bar 780 | tied at median 12
+  LEG                            n   days   edge pp 95% CI (day-clust)   Bonferroni CI        VERDICT vs shipped
+  ----------------------------------------------------------------------------------------------------------------------
+  liquidity                  24917     29    -1.47 [-3.06, +0.13]       [-3.69, +0.85]       indistinguishable from zero — CONTRADICTS shipped (shipped +3.04pp [+1.85, +4.27])
+  lowVol                     25375     29    +1.32 [-2.37, +4.83]       [-3.90, +6.11]       indistinguishable from zero — CONTRADICTS shipped (shipped +3.56pp [+0.14, +7.00])
+  mom12_1                    20301     25    +0.97 [-1.18, +2.94]       [-2.10, +3.70]       indistinguishable from zero
+  composite_as_audited       25393     29    +0.60 [-1.61, +2.78]       [-2.57, +3.69]       indistinguishable from zero
+  composite_lowvol_only      25375     29    +1.32 [-2.37, +4.83]       [-3.90, +6.11]       indistinguishable from zero
+  composite_all3             25393     29    +1.09 [-1.40, +3.44]       [-2.45, +4.33]       indistinguishable from zero
+
+  * = also survives Bonferroni over the 9 leg x horizon tests this script runs at once.
+
+wrote C:/Users/NICHOL~1/AppData/Local/Temp/claude/C--Users-Nicholas-N-Desktop-claude-code/033e93b2-65c0-4cdb-9204-298288740c12/scratchpad/xsfactor_postbackfill.json

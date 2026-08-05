@@ -1,0 +1,45 @@
+  [3.00,4.00)       2111    98.44%    99.95%      -1.52pp    -1.50pp
+  [4.00,6.00)       1121    99.11%   100.00%      -0.89pp    +0.51pp
+  >=6.00             204    98.53%   100.00%      -1.47pp          -
+  --------------------------------------------------------------------------
+  overall actual 82.72%  vs  Phi(z) 83.30%   (gap -0.57pp)
+  conviction spread: unconditional +24.62pp  ->  within-z +7.10pp   (29% survives)
+  => 71% of the 'discrimination' is barrier distance, not forecasting.
+
+==============================================================================
+TREND21 — SURVIVORSHIP-CLEAN (every symbol ever tracked)
+==============================================================================
+CONVICTION BAND               n  accuracy 95% CI (quarter)       Wilson
+------------------------------------------------------------------------------
+low (<0.5)                29263     73.1% [0.716, 0.746]         [0.725, 0.736]
+moderate (0.5-0.8)        14486     90.4% [0.891, 0.916]         [0.899, 0.909]
+high (0.8-0.9)             5203     95.1% [0.939, 0.962]         [0.945, 0.957]
+very-high (>=0.9)          8539     97.5% [0.969, 0.982]         [0.972, 0.978]
+------------------------------------------------------------------------------
+ALL                       57491     83.1%   distinct quarters: 25
+NAIVE BASELINE                      83.1%   <- ALWAYS-PERSISTS baseline == the overall figure.
+DISCRIMINATION                      24.5pp  <- spread only. NOT an edge until the geometry control below
+                                         says how much of it survives (low 73.1% vs very-high 97.5%)
+
+  --------------------------------------------------------------------------
+  GEOMETRY CONTROL - conviction vs barrier distance z = dist/(sigma*sqrt(21))
+  --------------------------------------------------------------------------
+  z band               n    actual    Phi(z)     act-Phi conv spread
+  [0.00,0.25)       6104    55.13%    54.98%       0.14pp          -
+  [0.25,0.50)       6288    64.76%    64.51%       0.24pp          -
+  [0.50,0.75)       6099    74.44%    73.31%       1.13pp          -
+  [0.75,1.00)       6004    81.08%    80.82%       0.26pp   +16.17pp
+  [1.00,1.50)      10369    87.55%    89.01%      -1.46pp    +7.92pp
+  [1.50,2.00)       7986    94.28%    95.72%      -1.45pp    +4.81pp
+  [2.00,3.00)       8716    97.03%    99.02%      -1.99pp    +3.30pp
+  [3.00,4.00)       3432    98.48%    99.95%      -1.47pp    -1.12pp
+  [4.00,6.00)       1841    99.13%   100.00%      -0.87pp    +0.26pp
+  >=6.00             319    99.06%   100.00%      -0.94pp          -
+  --------------------------------------------------------------------------
+  overall actual 82.98%  vs  Phi(z) 83.68%   (gap -0.70pp)
+  conviction spread: unconditional +24.49pp  ->  within-z +6.33pp   (26% survives)
+  => 74% of the 'discrimination' is barrier distance, not forecasting.
+
+VERDICT: active 83.6%  vs  delisted 82.8%  => survivorship effect +0.8pp
+  positive => the published claim was INFLATED by excluding dead names
+  negative => dead names were EASIER; the claim was conservative
