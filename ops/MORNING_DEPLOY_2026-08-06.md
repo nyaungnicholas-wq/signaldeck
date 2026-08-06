@@ -19,8 +19,27 @@ CODE backward while the SCHEMA stays forward — a daemon with no `superseded_by
 handling against a table that has the column. That is a downgrade into a
 mismatch, not a deploy.
 
-Merging PR #8 is what makes `main` correct. Only then is the deploy safe, and
-by then it is a no-op relabel: same code, tidier provenance.
+Merging PR #8 is what makes `main` correct. Only then is the deploy safe.
+
+**Correction (post-merge).** This is no longer a no-op relabel. That framing was
+written when `main` lacked only `0499416` and `a78ed92`. PR #8 merged all 11
+commits, and the daemon is still on `0499416` — so this deploy ships the
+cross-section gate, breadth reporting, the fleet-veto evidence floor and the
+cost disclaimer into production for real. Treat it as a behaviour change, not a
+provenance tidy-up.
+
+**Known failing test.** `TestStorageGovernorCheckpointLadder` in
+`internal/maintain` fails on Windows, and `TestTunnelAgentPathsAreAbsolute` in
+`internal/config` fails because a macOS `/Library/LaunchAgents` path is not
+absolute there. Both were confirmed failing at baseline `46a2375` before any of
+this work, so neither is introduced by it. If you deploy with either still red,
+record that in the deploy notes rather than letting a green-looking run imply
+they passed.
+
+**`go` on PATH.** `ops/signaldeck-ctl.sh` runs under Git Bash, where `go` is not
+on PATH by default — the test step then fails on a missing binary rather than on
+real results. Export `C:\Program Files\Go\bin` before running it. A green that
+came from a missing binary is worse than a red.
 
 ## Order
 
