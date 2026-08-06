@@ -89,6 +89,26 @@ if (Get-Process -Name signaldeckd -ErrorAction SilentlyContinue) {
 #
 # Keeping "SignalDeck Daemon" pointed straight at bin/signaldeckd.exe preserves
 # graceful stop; this task only decides WHEN to (re)start it.
+
+# Provenance preflight. The Windows Daemon task execs bin\signaldeckd.exe
+# directly, so unlike the launchd path (ops/com.signaldeck.daemon.plist ->
+# signaldeck-ctl.sh launch -> build_from_head) a restart never rebuilds, and a
+# binary can outlive the commit it was built from indefinitely. The daemon's own
+# gate refuses an UNATTRIBUTABLE build but says nothing about a stale one, which
+# is how bin\signaldeckd.exe came to sit 22 commits behind HEAD on 2026-08-06
+# across two restarts that changed nothing.
+#
+# The check belongs here and not in the Daemon task's action, for the reason
+# spelled out just above: this script must keep starting the daemon THROUGH its
+# own task, or schtasks /End stops reaching it. Default is warn-and-start; it
+# only refuses when SIGNALDECK_ON_STALE_BINARY=refuse says an operator has
+# chosen an outage over stale data.
+$prov = Join-Path $root 'ops\run-daemon-with-provenance.ps1'
+if (Test-Path $prov) {
+    & $prov -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }   # it has already said why
+}
+
 $sd = Join-Path $env:SystemRoot 'System32\schtasks.exe'
 & $sd /Run /TN 'SignalDeck Daemon' | Out-Null
 if ($LASTEXITCODE -ne 0) {

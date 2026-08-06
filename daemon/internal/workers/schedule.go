@@ -101,7 +101,13 @@ func WeeklyAtET(now time.Time, day time.Weekday, hour, min int) time.Time {
 func TradingDayAtET(now time.Time, hour, min int) time.Time {
 	fire := DailyAtET(now, hour, min)
 	for i := 0; i < 10; i++ {
-		if marketcal.OpenForBars(fire) {
+		// IsTradingDay, NOT OpenForBars: this asks whether the DATE traded, and
+		// must stay independent of hour/min. OpenForBars additionally requires
+		// the instant to sit inside 9:45–16:00 ET, so every evening fire time
+		// (FINRA short volume 18:30, short interest 18:45) was false on every
+		// day, the loop exhausted all 10 iterations, and the fall-through put
+		// the next fire ~10 days out — permanently, on every reschedule.
+		if marketcal.IsTradingDay(fire) {
 			return fire
 		}
 		fire = fire.AddDate(0, 0, 1)

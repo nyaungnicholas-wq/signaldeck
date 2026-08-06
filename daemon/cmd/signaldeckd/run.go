@@ -1153,6 +1153,15 @@ func weeklyProofWorkers(st *store.Store, llmClient llm.Client) []workers.Worker 
 // measure the gap between two consecutive scheduled fires. A worker that
 // declines to schedule (zero time, the documented "no calendar opinion") falls
 // back to Interval(), exactly as the runner does.
+// maxDerivedCadence bounds what stalenessInterval will believe a schedule when
+// it asks the schedule how often it fires. The longest cadence this fleet
+// actually runs is weekly (WeeklyAtET — briefing/weekly.go, pipeline/cot.go), so
+// 8 days clears every real schedule while refusing to hand an unbounded silence
+// budget to a broken one. It is the ceiling that health.minThreshold's floor was
+// always missing: without it, the more thoroughly a schedule breaks, the longer
+// the watchdog waits before saying so.
+const maxDerivedCadence = 8 * 24 * time.Hour
+
 func stalenessInterval(w workers.Worker) time.Duration {
 	sw, ok := w.(workers.ScheduledWorker)
 	if !ok {
@@ -1170,7 +1179,28 @@ func stalenessInterval(w workers.Worker) time.Duration {
 	// Never report a cadence TIGHTER than the poll tick: a schedule that fires
 	// more often than the worker wakes cannot be met, and shortening the
 	// threshold below the tick would re-create the false positive.
-	if gap := second.Sub(first); gap > w.Interval() {
+	gap := second.Sub(first)
+	if gap > maxDerivedCadence {
+		// A derived cadence longer than any schedule this fleet actually has is
+		// not a cadence — it is a broken schedule reporting itself as healthy.
+		//
+		// Measured 2026-08-02..08-06: TradingDayAtET tested OpenForBars (true
+		// only 09:45-16:00 ET) against evening fire times, so finra-shorts
+		// (18:30) and finra-shortint (18:45) matched on no day, exhausted the
+		// 10-day loop and fell through ~10 days out on every reschedule. This
+		// function faithfully derived that 10-day gap, StaleWorkers tripled it,
+		// and the two dead feeds bought themselves a ~30-day silence budget.
+		// The watchdog was fed its threshold by the very schedule it polices,
+		// so the deader the schedule the looser the alarm.
+		//
+		// Clamping alone would only shorten that budget. The cadence is also
+		// LOGGED, because the implausible number is itself the bug signal and
+		// silence is precisely how this hid for four days.
+		slog.Warn("implausible derived worker cadence — clamping; the schedule is probably broken",
+			"worker", w.Name(), "derived", gap, "clampedTo", maxDerivedCadence)
+		gap = maxDerivedCadence
+	}
+	if gap > w.Interval() {
 		return gap
 	}
 	return w.Interval()

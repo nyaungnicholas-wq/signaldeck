@@ -507,15 +507,42 @@ func (a *DQAuditor) Name() string { return "dq-auditor" }
 // Interval implements workers.Worker.
 func (a *DQAuditor) Interval() time.Duration { return 5 * time.Minute }
 
-// Run checks freshness for every active symbol.
+// Run checks freshness for every active symbol that is still listed.
+//
+// THE DELISTED SKIP BELOW IS A SYMPTOM MASK, AND NAMING IT AS ONE IS THE POINT.
+// The root fault is that 1,868 permanently-delisted rows carry active=1 at all:
+// the delisting detector writes symbols.delisted_at but never clears `active`
+// (store.MarkDelisted via pipeline/delisting.go), so roughly 45 callers of
+// ListSymbols(ctx, true) — every scorer, poller and trainer in the fleet, not
+// only this auditor — iterate the dead. Repairing the universe is the real fix
+// and it does not live in this function.
+//
+// The guard earns its place anyway, on two grounds that survive that repair:
+// freshness is UNDEFINED for a security that stopped trading, so an auditor
+// that alarms on delisted names reports a tautology even on a perfectly groomed
+// universe; and delisting is detected only once every 24h, so a name is
+// legitimately delisted-and-still-active for up to a day however the universe
+// bug is resolved. Defence in depth for the one monitor whose entire value is
+// its signal-to-noise ratio.
 func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 	syms, err := a.St.ListSymbols(ctx, true)
 	if err != nil {
 		return "", err
 	}
+	// Delisted names the paper book still holds, or that still carry an
+	// unresolved graded outcome, are NOT in this set: a feed fault on those is
+	// real and actionable. See store.DQSilencedSymbols.
+	silenced, err := a.St.DQSilencedSymbols(ctx)
+	if err != nil {
+		return "", err
+	}
 	now := time.Now()
-	flagged := 0
+	flagged, skipped := 0, 0
 	for _, s := range syms {
+		if silenced[s.ID] {
+			skipped++
+			continue
+		}
 		latest, err := a.St.LatestBarTs(ctx, s.ID, md.TF1m)
 		if err != nil {
 			return "", err
@@ -572,7 +599,8 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 		}
 		flagged++
 	}
-	return fmt.Sprintf("checked %d active symbols, flagged %d", len(syms), flagged), nil
+	return fmt.Sprintf("checked %d live symbols, flagged %d (%d delisted skipped)",
+		len(syms)-skipped, flagged, skipped), nil
 }
 
 // ── StorageGovernor ─────────────────────────────────────────────────────

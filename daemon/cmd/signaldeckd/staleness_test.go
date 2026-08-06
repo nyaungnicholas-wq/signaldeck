@@ -106,6 +106,56 @@ func TestStalenessInterval(t *testing.T) {
 			t.Errorf("scheduled worker with second NextFire equal to first: got %v, want 20m", got)
 		}
 	})
+
+	// Case 6: a BROKEN schedule must not buy itself an unbounded silence budget.
+	//
+	// This reproduces the real 2026-08-02 failure: TradingDayAtET tested
+	// OpenForBars (true only 09:45-16:00 ET) against an 18:30 fire time, matched
+	// on no day, exhausted its 10-day loop and fell through ~10 days out on every
+	// reschedule. stalenessInterval faithfully derived 10 days, StaleWorkers
+	// tripled it, and finra-shorts/finra-shortint went silent for four days
+	// against a ~30-day alarm threshold. The watchdog was taking its threshold
+	// from the schedule it was supposed to police.
+	t.Run("pathological schedule is clamped", func(t *testing.T) {
+		w := &stalenessFakeScheduled{
+			interval: 30 * time.Minute,
+			nextFire: func(last, now time.Time) time.Time {
+				if last.IsZero() {
+					return now.Add(10 * 24 * time.Hour)
+				}
+				return last.Add(10 * 24 * time.Hour)
+			},
+		}
+		got := stalenessInterval(w)
+		if got != maxDerivedCadence {
+			t.Errorf("a 10-day derived cadence must clamp to %v, got %v — an unclamped "+
+				"derivation hands a broken schedule a 3x-longer silence budget the "+
+				"worse it breaks", maxDerivedCadence, got)
+		}
+	})
+
+	// Case 7: the clamp must not touch the longest LEGITIMATE cadence. Weekly is
+	// the real ceiling in this fleet (WeeklyAtET), so 7 days must pass through
+	// unmodified — otherwise the clamp re-creates the weekly false positive that
+	// stalenessInterval exists to prevent.
+	t.Run("legitimate weekly cadence is not clamped", func(t *testing.T) {
+		w := &stalenessFakeScheduled{
+			interval: 30 * time.Minute,
+			nextFire: func(last, now time.Time) time.Time {
+				if last.IsZero() {
+					return now.Add(7 * 24 * time.Hour)
+				}
+				return last.Add(7 * 24 * time.Hour)
+			},
+		}
+		if got := stalenessInterval(w); got != 7*24*time.Hour {
+			t.Errorf("weekly cadence must survive the clamp intact: got %v, want 168h", got)
+		}
+		if maxDerivedCadence <= 7*24*time.Hour {
+			t.Fatalf("maxDerivedCadence (%v) must exceed the weekly cadence or every "+
+				"weekly worker false-positives", maxDerivedCadence)
+		}
+	})
 }
 
 // Ensure the fake types satisfy the required interfaces at compile time.

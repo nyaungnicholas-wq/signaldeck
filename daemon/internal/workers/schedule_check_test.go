@@ -80,6 +80,59 @@ func TestTradingDayAtETSkipsWeekend(t *testing.T) {
 	}
 }
 
+// TestTradingDayAtETLandsOnTheNextTradingDay pins the DATE, not just "not a
+// weekend". TestTradingDayAtETSkipsWeekend above passed for four days while
+// TradingDayAtET was returning ~10 days out on every call: the fall-through
+// date simply happened not to be a Saturday. Any assertion weak enough to
+// accept a 10-day slip cannot protect an evening schedule, so assert the exact
+// fire instant.
+func TestTradingDayAtETLandsOnTheNextTradingDay(t *testing.T) {
+	loc := marketcal.Loc()
+	for _, tc := range []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{
+			// Slot still ahead on a normal trading day → fires TODAY.
+			// Pre-fix this returned 2026-08-14: OpenForBars is false at 18:30
+			// on every date, so all 10 iterations missed.
+			name: "midweek before the slot fires same day",
+			now:  time.Date(2026, 8, 4, 12, 0, 0, 0, loc),
+			want: time.Date(2026, 8, 4, 18, 30, 0, 0, loc),
+		},
+		{
+			// Friday past the slot → rolls over the weekend to Monday.
+			name: "friday past the slot rolls to monday",
+			now:  time.Date(2026, 8, 7, 20, 0, 0, 0, loc),
+			want: time.Date(2026, 8, 10, 18, 30, 0, 0, loc),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := TradingDayAtET(tc.now, 18, 30)
+			if !got.Equal(tc.want) {
+				t.Fatalf("TradingDayAtET(%s, 18, 30) = %s, want %s (slip of %s)",
+					tc.now, got, tc.want, got.Sub(tc.want))
+			}
+			if got.Hour() != 18 || got.Minute() != 30 {
+				t.Fatalf("fire time mangled: %s", got)
+			}
+			if !marketcal.IsTradingDay(got) {
+				t.Fatalf("landed on a non-trading day: %s (%s)", got, got.Weekday())
+			}
+			// The trap, pinned: an evening fire instant is NOT "open for bars",
+			// and never can be. If someone widens OpenForBars to make this true
+			// they have broken the feed-liveness question it answers; the two
+			// predicates must stay distinct.
+			if marketcal.OpenForBars(got) {
+				t.Fatalf("OpenForBars is true at %s — the session-hours predicate "+
+					"must not accept an evening instant; TradingDayAtET must keep "+
+					"using IsTradingDay", got)
+			}
+		})
+	}
+}
+
 func TestBackoffAfter(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	base, max := 12*time.Hour, 7*24*time.Hour

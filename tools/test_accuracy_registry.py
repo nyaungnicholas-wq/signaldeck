@@ -1893,3 +1893,106 @@ class TradingDayFoldTest(unittest.TestCase):
         base = 20000 * 86400
         for pre, close in ((8 * 3600, 24 * 3600), (9 * 3600, 25 * 3600)):
             self.assertEqual(trading_day(base + pre), trading_day(base + close))
+
+
+# Imported here rather than in the module import list at the top: this block is
+# appended whole, and keeping it self-contained keeps the diff to one hunk.
+from accuracy_registry import (  # noqa: E402
+    fetch_directional_days,
+    measure_stale_feed_exclusion,
+)
+
+
+class TestStaleFeedQuarantine(unittest.TestCase):
+    """A prediction minted on a day the daemon had that symbol's own feed
+    flagged stale is evidence about the outage, not about the predictor.
+
+    dq_events(kind='stale') is the per-symbol writer (internal/maintain's
+    DQAuditor). kind='source_stale' is srchealth's SOURCE-wide event and carries
+    symbol_id NULL, so it names no symbol and must exclude nothing.
+    """
+
+    @staticmethod
+    def _db(with_dq=True):
+        con = sqlite3.connect(":memory:")
+        con.execute("""CREATE TABLE prediction_outcomes (
+            symbol_id INTEGER, horizon TEXT, prob REAL, up INTEGER,
+            ts INTEGER, resolved_at INTEGER)""")
+        con.execute("""CREATE TABLE regime_outcomes (
+            symbol_id INTEGER, kind TEXT, horizon_days INTEGER, day INTEGER,
+            ts INTEGER, resolved_at INTEGER, correct INTEGER,
+            historical_accuracy REAL)""")
+        con.execute("CREATE TABLE symbols (id INTEGER PRIMARY KEY, symbol TEXT,"
+                    " active INTEGER, delisted_at INTEGER)")
+        if with_dq:
+            con.execute("CREATE TABLE dq_events (id INTEGER PRIMARY KEY,"
+                        " symbol_id INTEGER, ts INTEGER, kind TEXT,"
+                        " detail TEXT NOT NULL DEFAULT '')")
+        return con
+
+    @staticmethod
+    def _pred(con, sid, ts, up=1):
+        con.execute("INSERT INTO symbols VALUES (?,?,1,NULL)", (sid, f"S{sid}"))
+        con.execute("INSERT INTO prediction_outcomes VALUES (?,'1d',0.8,?,?,?)",
+                    (sid, up, ts, ts + 86400))
+
+    @staticmethod
+    def _dq(con, sid, ts, kind="stale", detail="last 1m bar 40m old"):
+        con.execute("INSERT INTO dq_events (symbol_id, ts, kind, detail)"
+                    " VALUES (?,?,?,?)", (sid, ts, kind, detail))
+
+    @staticmethod
+    def _n(con):
+        return [d[1] for d in fetch_directional_days(con).get("1d", [])]
+
+    def test_a_day_flagged_stale_leaves_the_graded_population(self):
+        con = self._db()
+        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
+        self._pred(con, 1, ts)
+        self._pred(con, 2, ts)
+        # Symbol 2's feed is flagged stale LATER the same trading day. The key is
+        # (symbol, trading-day), so the observation goes whatever the mint time:
+        # a feed found dead at noon was already dead when the call was computed.
+        self._dq(con, 2, ts + 3600)
+        self.assertEqual(self._n(con), [1])
+        m = measure_stale_feed_exclusion(con)
+        self.assertTrue(m["applied"])
+        self.assertEqual(m["excluded_rows"], 1)
+        self.assertEqual(m["excluded_symbols"], 1)
+
+    def test_a_stale_flag_on_another_day_keeps_the_observation(self):
+        con = self._db()
+        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
+        self._pred(con, 1, ts)
+        self._dq(con, 1, ts + 86400)
+        self.assertEqual(self._n(con), [1])
+        self.assertEqual(measure_stale_feed_exclusion(con)["excluded_rows"], 0)
+
+    def test_a_symbolless_stale_event_cannot_empty_the_population(self):
+        # A NULL symbol_id names no symbol. Under a NOT IN formulation one such
+        # row silently deletes the ENTIRE graded population; the guard is why
+        # the exclusion is written as NOT EXISTS over a symbol_id-filtered set.
+        con = self._db()
+        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
+        self._pred(con, 1, ts)
+        self._dq(con, None, ts)
+        self._dq(con, None, ts, kind="source_stale", detail="source=news")
+        self.assertEqual(self._n(con), [1])
+        self.assertEqual(measure_stale_feed_exclusion(con)["excluded_rows"], 0)
+
+    def test_a_source_without_dq_events_reports_unmeasured_not_clean(self):
+        # Snapshots and fixtures carry no data-quality table. The filter cannot
+        # run there, and an absent filter must never read as a clean feed.
+        con = self._db(with_dq=False)
+        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
+        self._pred(con, 1, ts)
+        self.assertEqual(self._n(con), [1])
+        m = measure_stale_feed_exclusion(con)
+        self.assertFalse(m["applied"])
+        self.assertIsNone(m["excluded_rows"])
+        self.assertIn("unmeasured", m["reason"])
+
+    def test_a_snapshot_grade_reports_the_filter_as_unmeasured(self):
+        m = measure_stale_feed_exclusion(None)
+        self.assertFalse(m["applied"])
+        self.assertIn("snapshot", m["reason"])

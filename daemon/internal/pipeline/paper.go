@@ -90,6 +90,50 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 		return "no daily bars yet — nothing to simulate", nil
 	}
 
+	// POSITIONS OUTLIVE THE UNIVERSE. A symbol can leave the active set (delisting,
+	// universe rotation, a failed data source) while the book still holds it.
+	// buildStep walks `syms`, and every exit — stop, take-profit, horizon expiry,
+	// probability flip, kill-switch flatten, the -25% liquidation rung — is
+	// evaluated inside that walk. A held name missing from the slice is therefore
+	// never examined at all: the position cannot be closed by any risk control and
+	// is stranded until a human notices. A position the system can open but cannot
+	// close defeats every control the book has at once.
+	//
+	// Re-admit held-but-inactive symbols as EXIT-ONLY. Active stays false, which is
+	// exactly what gates the entry path in buildStep, so re-admission restores the
+	// barriers' reach without letting the universe's own decision be undone.
+	// asof is computed above from the ACTIVE universe only, so a stale bar on a
+	// delisted name cannot drag the as-of clock.
+	held := map[int64]bool{}
+	for _, strat := range paperStrategies {
+		positions, err := w.St.PaperPositions(ctx, strat.Name)
+		if err != nil {
+			return "", err
+		}
+		for _, p := range positions {
+			// marketByID holds exactly the active set at this point.
+			if _, isActive := marketByID[p.SymbolID]; !isActive {
+				held[p.SymbolID] = true
+			}
+		}
+	}
+	if len(held) > 0 {
+		all, err := w.St.ListSymbols(ctx, false)
+		if err != nil {
+			return "", err
+		}
+		for _, s := range all {
+			if !held[s.ID] {
+				continue
+			}
+			// Invariant, stated in code rather than assumed: anything re-admitted
+			// here is exit-only. buildStep refuses entries on !Active.
+			s.Active = false
+			syms = append(syms, s)
+			marketByID[s.ID] = s.Market
+		}
+	}
+
 	startCash := papertrade.StartingCash()
 	acted := 0
 	refused := 0 // entries the EV engine or the pretrade risk gate refused, across all strategies
@@ -319,6 +363,15 @@ func (w *PaperTrader) buildStep(
 		}
 
 		// ── ENTRY PATH ───────────────────────────────────────────────────────
+		// Exit-only re-admission (see Run): a symbol that is no longer in the
+		// active universe is carried into this walk ONLY so its open position
+		// stays reachable by the barriers above. It must never become a NEW
+		// position — the universe already ruled it out, and buying a delisted or
+		// dropped name because the book happened to hold it is how an exit-path
+		// fix turns into an entry-path bug.
+		if !s.Active {
+			continue
+		}
 		if !okP {
 			continue // no signal for this symbol/horizon yet
 		}

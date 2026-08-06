@@ -24,14 +24,35 @@ import (
 // start, because nothing in the logs says so.
 //
 // Resolution order, first hit wins:
-//  1. SIGNALDECK_ROOT, used verbatim. An operator who states the root is obeyed.
+//  1. SIGNALDECK_ROOT, used verbatim whenever it is SET. An operator — or a
+//     test harness — who states the root is obeyed and the tree is NEVER
+//     walked. Rung 2 below is a security boundary as much as a convenience:
+//     the probe starts from the WORKING DIRECTORY, so any process running from
+//     inside a checkout resolves that checkout. daemon/e2e relied on a fake
+//     HOME for credential isolation and got none, because rung 3 is where HOME
+//     applies and rung 2 always answered first. Setting this variable is the
+//     only thing that actually isolates a process from the checkout it runs in.
 //  2. The nearest ancestor of the executable, then of the working directory,
 //     that actually contains signaldeck/daemon. This is what makes a clone work
 //     wherever it is put.
 //  3. $HOME/claude code — the historical default, kept last so the existing
 //     macOS launchd deployment keeps resolving exactly as it did before.
+//
+// A stated root that contains no .env is fine: Load() proceeds with NO
+// credentials rather than aborting. Aborting would make an isolated test noisy
+// to run and would teach people to unset SIGNALDECK_ROOT, which reopens the
+// leak — the failure mode is worse than the one it would catch.
 func projectRoot() string {
-	if r := strings.TrimSpace(os.Getenv("SIGNALDECK_ROOT")); r != "" {
+	if r, ok := os.LookupEnv("SIGNALDECK_ROOT"); ok {
+		if r = strings.TrimSpace(r); r == "" {
+			// Set but blank names no root at all. Falling through to the probe
+			// here is exactly how a process that believed it was isolated
+			// silently re-acquires the surrounding checkout's daemon/.env and
+			// stock-trader/.env, so refuse instead. Only reachable when a
+			// caller set the variable to an empty value, which is always a bug
+			// in that caller.
+			panic("config: SIGNALDECK_ROOT is set but blank; refusing to probe for a project root")
+		}
 		return r
 	}
 	// Probe the executable's directory first: under launchd the working

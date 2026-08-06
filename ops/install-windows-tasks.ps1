@@ -100,7 +100,48 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
       $h = if ($it.ContainsKey('Hour')) { [int](ConvertTo-Value $it['Hour']) } else { 0 }
       $m = if ($it.ContainsKey('Minute')) { [int](ConvertTo-Value $it['Minute']) } else { 0 }
       $at = (Get-Date -Hour $h -Minute $m -Second 0)
-      if ($it.ContainsKey('Weekday')) {
+      # launchd fires on every field a StartCalendarInterval dict OMITS, so a
+      # dict carrying only Minute means "every hour at :MM", not "daily at
+      # 00:MM". No plist in ops/ does that today; say so rather than silently
+      # registering a schedule 24x slower than the plist asks for.
+      if (-not $it.ContainsKey('Hour')) {
+        Write-Output ("WARN   {0,-34} no Hour in StartCalendarInterval (launchd runs this HOURLY); registered daily {1:HH:mm}" -f $task, $at)
+      }
+      $untranslated = @($it.Keys | Where-Object { $_ -notin @('Day', 'Hour', 'Minute', 'Weekday') })
+      if ($untranslated.Count) {
+        Write-Output ("WARN   {0,-34} StartCalendarInterval key(s) ignored: {1}" -f $task, ($untranslated -join ', '))
+      }
+      if ($it.ContainsKey('Day')) {
+        # Day-of-month. Until 2026-08-06 there was no branch for it, so a
+        # monthly plist fell through to -Daily: com.signaldeck.revalidation asks
+        # for the 1st at 03:20 and the live task ran every night (LastRunTime
+        # 08-06 03:20, NextRunTime 08-07 03:20).
+        #
+        # New-ScheduledTaskTrigger has no -Monthly, so the trigger is built as a
+        # CIM instance. The property shapes are load-bearing and are NOT the ones
+        # most examples use: MSFT_TaskMonthlyTrigger declares MonthOfYear
+        # (singular) and a scalar UInt16 DaysOfMonth BITMASK -- day N is
+        # 1 shl (N-1), confirmed against IMonthlyTrigger, which renders
+        # DaysOfMonth=32768 as <Day>16</Day>. The copied-everywhere
+        # MonthsOfYear/uint32[] form fails to bind. A UInt16 mask stops at 16.
+        $day = [int](ConvertTo-Value $it['Day'])
+        if ($day -lt 1 -or $day -gt 16) {
+          Write-Output ("WARN   {0,-34} Day {1} is outside the 1-16 a UInt16 day mask can carry; no trigger registered for it" -f $task, $day)
+          continue
+        }
+        $mt = New-CimInstance -ClassName MSFT_TaskMonthlyTrigger `
+          -Namespace Root/Microsoft/Windows/TaskScheduler -ClientOnly -Property @{
+            DaysOfMonth   = [uint16](1 -shl ($day - 1))
+            MonthOfYear   = [uint16]4095   # every month
+            StartBoundary = $at.ToString('yyyy-MM-ddTHH:mm:ss')
+            Enabled       = $true
+          }
+        # -Trigger binds on PSTypeName, and a ClientOnly instance of a subclass
+        # does not advertise the base type on its own.
+        $mt.PSTypeNames.Insert(0, 'Microsoft.Management.Infrastructure.CimInstance#MSFT_TaskTrigger')
+        $triggers += $mt
+        $when += ('monthly day {0} {1:HH:mm}' -f $day, $at)
+      } elseif ($it.ContainsKey('Weekday')) {
         $dow = [System.DayOfWeek]([int](ConvertTo-Value $it['Weekday']) % 7)
         $triggers += New-ScheduledTaskTrigger -Weekly -DaysOfWeek $dow -At $at
         $when += ('{0} {1:HH:mm}' -f $dow, $at)
@@ -135,6 +176,16 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
       -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::FromHours(6))
     Register-ScheduledTask -TaskName $task -Action $action -Trigger $triggers `
       -Settings $set -RunLevel Limited -Force | Out-Null
+    # The monthly trigger is assembled by hand from a CIM class whose property
+    # shapes are not documented alongside the cmdlet, and a wrong shape can
+    # register quietly as something else -- the exact failure this branch exists
+    # to end. Read it back rather than trust it.
+    if (($when -join ',') -like '*monthly*') {
+      $kinds = @((Get-ScheduledTask -TaskName $task).Triggers.CimClass.CimClassName)
+      if ($kinds -notcontains 'MSFT_TaskMonthlyTrigger') {
+        Write-Output ("FAIL   {0,-34} monthly trigger did not survive registration (got: {1})" -f $task, ($kinds -join ', '))
+      }
+    }
     Write-Output ("{0} {1,-34} {2}" -f $(if ($exists) { 'UPDATE' } else { 'CREATE' }), $task, ($when -join ', '))
   } else {
     Write-Output ("{0,-21} {1,-34} {2}" -f $(if ($exists) { 'exists (would update)' } else { 'would create' }), $task, ($when -join ', '))

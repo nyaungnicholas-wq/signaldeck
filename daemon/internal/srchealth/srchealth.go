@@ -55,6 +55,21 @@ var registry = []spec{
 	{source: "tv_ratings", query: `SELECT MAX(ts) FROM tv_ratings`,
 		budget: 6 * time.Hour, gated: true,
 		note: "TradingView TA ratings (15m worker, market hours)"},
+	{source: "short_volume", query: `SELECT CAST(strftime('%s', MAX(day)) AS INTEGER) FROM short_volume`,
+		// 6d, gated. FINRA publishes this file EVERY session at 18:30 ET, so the
+		// budget is set by the longest legitimate gap between consecutive trade
+		// dates, not by a worker interval. Measured over the live table's full
+		// history (49 trading days), that gap is 4 calendar days and occurs on
+		// long holiday weekends (2026-05-26 Memorial Day, 2026-07-06 after the
+		// July 4 observance). Gated to 9:45-16:00 ET caps the intraday term at
+		// ~7h on top of it, so the worst honest age is ~4d21h; allowing one
+		// missed publication on top of a holiday weekend puts the ceiling at
+		// ~5d21h. 6d clears that and still catches a feed that has stopped:
+		// short_interest cannot cover this failure for us, because ITS honest
+		// age reaches ~28d and no budget that tolerates that can see a
+		// week-old daily-feed outage (SD-H35).
+		budget: 6 * 24 * time.Hour, gated: true,
+		note: "FINRA Reg SHO daily short-sale volume (per-session file, published 18:30 ET)"},
 	{source: "short_interest", query: `SELECT CAST(strftime('%s', MAX(settlement_date)) AS INTEGER) FROM short_interest`,
 		// 35d, not 20d: settlement is bi-monthly (~15d apart) AND publication
 		// lags ~9 business days (~13 calendar), so the freshest POSSIBLE cycle is

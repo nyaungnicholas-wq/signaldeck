@@ -97,8 +97,16 @@ type daemon struct {
 	logs   *safeBuffer
 }
 
-// startDaemon launches the binary with an isolated HOME (so no real .env,
-// Alpaca, or LLM keys leak in), the given DB path, and a fixed port.
+// startDaemon launches the binary with an isolated project root (so no real
+// .env, Alpaca, or LLM keys leak in), the given DB path, and a fixed port.
+//
+// HOME alone never isolated anything. config.projectRoot() walks the WORKING
+// DIRECTORY upward for an ancestor holding signaldeck/daemon, and this suite's
+// cwd is daemon/e2e inside the real checkout — so the walk found the real root
+// and the daemon read the operator's real daemon/.env (LLM key) and
+// stock-trader/.env (Alpaca keys). The os.UserHomeDir() rung that HOME
+// controls is the LAST resort and was never reached. SIGNALDECK_ROOT is the
+// FIRST rung and stops the walk outright; it is what actually isolates this.
 func startDaemon(t *testing.T, bin, home, dbPath string, port int) *daemon {
 	t.Helper()
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -107,7 +115,14 @@ func startDaemon(t *testing.T, bin, home, dbPath string, port int) *daemon {
 	cmd.Stdout = logs
 	cmd.Stderr = logs
 	cmd.Env = []string{
-		"HOME=" + home, // isolates config.Load's .env lookups → no keys
+		// The real isolation: an empty temp dir stated as the project root.
+		// config.projectRoot() takes it verbatim and never walks the tree, so
+		// neither <root>/signaldeck/daemon/.env nor <root>/stock-trader/.env
+		// exists and the daemon runs with NO Alpaca and NO LLM credentials.
+		// Must be non-blank — the loader refuses a blank value rather than
+		// falling back to the probe. See the comment on startDaemon.
+		"SIGNALDECK_ROOT=" + home,
+		"HOME=" + home, // still isolated, but it is NOT what stops the .env lookups
 		"PATH=" + os.Getenv("PATH"),
 		"TMPDIR=" + os.TempDir(),
 		// The daemon refuses to start from an unattributable build, because rows
@@ -225,7 +240,9 @@ func TestDaemonEndToEnd(t *testing.T) {
 		t.Skip("e2e: graceful-SIGTERM shutdown is not expressible on Windows; run this suite on Unix")
 	}
 	bin := buildDaemon(t)
-	home := t.TempDir() // fake HOME: no .env files → no Alpaca/LLM keys
+	// An empty dir used as BOTH the stated project root and HOME. The root is
+	// what makes "no .env files → no Alpaca/LLM keys" true; HOME never did.
+	home := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "e2e.db")
 	port := freePort(t)
 

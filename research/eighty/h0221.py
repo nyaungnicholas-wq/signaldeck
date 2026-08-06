@@ -129,51 +129,56 @@ def percentile(sorted_vals, p):
     return sorted_vals[f] + (sorted_vals[c] - sorted_vals[f]) * (k - f)
 
 def compute_design_effect(calls):
-    if len(calls) < 2:
-        return 1.0
-    
-    monthly = defaultdict(list)
+    """Measured clustering penalty over per-MONTH (n, hits) tallies.
+
+    This is the survey-linearization ("ultimate cluster") variance of the ratio
+    estimator p = sum(hits) / sum(n), divided by the binomial variance an
+    independence assumption would have used. It is a deliberate MIRROR of
+    tools/accuracy_registry.py:design_effect and daemon/internal/clusterstat
+    DesignEffect (byte-for-byte the same arithmetic and the same two guards,
+    over months instead of days) — a third estimator here would let this file
+    disagree with the grader about the same data.
+
+    The ANOVA/ICC form this replaced returned 1.0 at MAXIMAL clustering: its
+    within-cluster sum of squares `m * p_cluster * (1 - p_cluster)` is exactly
+    0 when every month is unanimous, and the `if wss == 0: return 1.0` guard
+    then reported NO clustering for the single most pseudoreplicated sample
+    possible. Both guards below exist to stop that:
+
+      * a degenerate pooled p (every call right, or every call wrong) carries
+        no between-cluster variance to measure but is perfectly clustered, so
+        the honest reading is the WORST case — one independent observation per
+        month, n / k — not the flattering 1.0 the arithmetic would give;
+      * the result is floored at 1.0, because a value under 1 is sampling noise
+        in a small number of clusters and using it would make the interval
+        NARROWER than the independence assumption it was brought in to correct.
+
+    Returns 1.0 (not None) when clustering cannot be measured, because the
+    caller divides by it: effective_n = issued / deff.
+    """
+    monthly = defaultdict(lambda: [0, 0])
     for c in calls:
-        key = (c['date'].year, c['date'].month)
-        monthly[key].append(c['hit'])
-    
-    cluster_sizes = [len(v) for v in monthly.values()]
-    k = len(cluster_sizes)
-    n = sum(cluster_sizes)
-    
-    if k <= 1:
+        t = monthly[(c['date'].year, c['date'].month)]
+        t[0] += 1
+        t[1] += 1 if c['hit'] else 0
+    months = list(monthly.values())
+
+    k = len(months)
+    if k < 2:
         return 1.0
-    
-    mean_size = n / k
-    p_overall = sum(1 for c in calls if c['hit']) / n
-    
-    if p_overall == 0 or p_overall == 1:
+    n = sum(mn for mn, _ in months)
+    hits = sum(mh for _, mh in months)
+    if n <= 0:
         return 1.0
-    
-    # Between and within sum of squares for binary data
-    bss = 0.0
-    wss = 0.0
-    for hits in monthly.values():
-        m = len(hits)
-        if m == 0:
-            continue
-        p_cluster = sum(hits) / m
-        bss += m * (p_cluster - p_overall) ** 2
-        wss += m * p_cluster * (1 - p_cluster)
-    
-    if wss == 0:
+    p = hits / n
+    if p <= 0 or p >= 1:
+        return n / k
+    s = sum((mh - mn * p) ** 2 for mn, mh in months)
+    cluster_var = k / ((k - 1) * n * n) * s
+    binom_var = p * (1 - p) / n
+    if binom_var <= 0 or cluster_var <= 0:
         return 1.0
-    
-    msb = bss / (k - 1)
-    msw = wss / (n - k)
-    
-    if msb <= msw:
-        return 1.0
-    
-    icc = (msb - msw) / (msb + (mean_size - 1) * msw)
-    icc = max(0.0, min(1.0, icc))
-    deff = 1 + (mean_size - 1) * icc
-    return max(1.0, deff)
+    return max(1.0, cluster_var / binom_var)
 
 def main():
     conn = sqlite3.connect('file:data/signaldeck.db?mode=ro', uri=True)

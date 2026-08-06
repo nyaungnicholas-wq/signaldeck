@@ -72,7 +72,19 @@ func TestHTTPTransportOnAReachableBind(t *testing.T) {
 	}
 	expired, _ := MintKey(testSecret, "partner-b", allScopes, time.Nanosecond)
 	forged, _ := MintKey("another-secret-long-enough-to-mint-x", "partner-c", allScopes, time.Hour)
+	// Tamper the signature in a way that is GUARANTEED to change it. Overwriting
+	// the last two characters with a fixed literal is a no-op whenever the freshly
+	// minted key already ends in that literal — roughly 1 run in 256 for a hex
+	// signature. On those runs `tampered` WAS the valid key, the server correctly
+	// answered 200 with the tool list, and this case failed looking exactly like a
+	// fail-open on signature tampering: alarming, security-shaped, and impossible
+	// to reproduce because the next run minted a different key. Observed once on
+	// 2026-08-06 during a full-suite run; ~10 reruns, including under -race, were
+	// all clean.
 	tampered := good[:len(good)-2] + "00"
+	if tampered == good {
+		tampered = good[:len(good)-2] + "11"
+	}
 
 	cases := []struct {
 		name       string

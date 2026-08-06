@@ -112,22 +112,99 @@ func TestBetaMapIsStrictlyIncreasing(t *testing.T) {
 	}
 }
 
-// The map must not manufacture confidence it has not earned: a raw score with
-// no signal should still land near the base rate, just without ties.
-func TestNoEdgeStaysNearBaseRateWhileKeepingOrder(t *testing.T) {
-	const base = 0.42
-	pairs := pairsFrom(800, 11, func(float64) float64 { return base })
-	fn, _, ranked := CalibrateRanking(pairs)
-	if !ranked {
-		t.Skip("isotonic won on Brier for this sample; ranking not claimed")
+// noEdgeSpreadCeiling separates "published the base rate" from "published a
+// ranking". It is ONE constant used in both directions below on purpose: a
+// bound only a no-edge sample can satisfy is worthless unless an informative
+// sample demonstrably breaks it. Measured on this file's own generator at
+// 800 pairs: no-edge tops out at 0.138 across 5 base rates x 6 seeds, an
+// informative ordering bottoms out at 0.243 across 4 seeds.
+const noEdgeSpreadCeiling = 0.20
+
+// REPLACES TestNoEdgeStaysNearBaseRateWhileKeepingOrder, which was dead.
+//
+// That test read:
+//
+//	fn, _, ranked := CalibrateRanking(pairs)
+//	if !ranked {
+//	    t.Skip("isotonic won on Brier for this sample; ranking not claimed")
+//	}
+//
+// and it skipped on every run. Its stated reason was also wrong. Isotonic never
+// won a Brier comparison there, because no comparison was reached: on a sample
+// with no edge the maximum-likelihood a and b of the beta map are noise around
+// zero, so fitBeta's own "fitted map is not strictly increasing" guard fires
+// (beta.go:82 doc, returned at beta.go:311-314) and CalibrateRanking returns
+// isotonic with ranked=false before the held-out Brier test at beta.go:345.
+// Measured on 800-pair no-edge samples, fitBeta refuses on 37 of 40 seeds and
+// ranked came back false on 38 of 40 — the guarded body proved nothing, ever.
+//
+// The "keeping order" half was not repairable at this layer either. When beta
+// is refused the SHIPPED map is isotonic, and isotonic ties by construction —
+// that collapse is the entire reason beta.go exists (beta.go:9-29). Order
+// preservation is a property of the MAP, and it is already asserted directly by
+// TestBetaMapIsStrictlyIncreasing and TestBetaMapPreservesPerSymbolRanking.
+//
+// What survives, and is asserted here, is the property that actually reaches a
+// published number: a model with no edge must be REPORTED as having no edge.
+// Whatever map is selected must publish this sample's base rate, must not
+// manufacture discrimination out of noise, and must never invert.
+func TestNoEdgeIsPublishedAsTheBaseRate(t *testing.T) {
+	// Sweep the base rate. A calibrator that ignored the outcomes — or pinned
+	// the level at 0.5, or at whatever the last fit produced — passes a
+	// single-base-rate check and fails this one.
+	for _, base := range []float64{0.20, 0.42, 0.65, 0.80} {
+		for _, seed := range []int64{1, 4, 7, 11, 19, 27} {
+			pairs := pairsFrom(800, seed, func(float64) float64 { return base })
+			fn, calibrated, _ := CalibrateRanking(pairs)
+			if !calibrated {
+				t.Fatalf("base %.2f seed %d: 800 pairs must be enough to calibrate", base, seed)
+			}
+
+			// Grade against the sample's OWN realized rate, not the generating
+			// parameter: 800 Bernoulli draws land ~1.7pp off `base` by chance and
+			// that sampling error is not the calibrator's to answer for.
+			var wins float64
+			for _, p := range pairs {
+				wins += p.Actual
+			}
+			realized := wins / float64(len(pairs))
+
+			prev := math.Inf(-1)
+			for _, x := range []float64{0.25, 0.35, 0.45, 0.55, 0.65, 0.75} {
+				v := fn(x)
+				if v < prev {
+					t.Fatalf("base %.2f seed %d: published map inverted at raw=%.2f "+
+						"(%.6f after %.6f) — a more bullish input must never publish less",
+						base, seed, x, v, prev)
+				}
+				prev = v
+				if math.Abs(v-realized) > 0.12 {
+					t.Errorf("base %.2f seed %d: raw=%.2f published %.4f but the sample's "+
+						"realized rate is %.4f — a no-edge model must be reported at its base rate",
+						base, seed, x, v, realized)
+				}
+			}
+			if spread := fn(0.75) - fn(0.25); spread > noEdgeSpreadCeiling {
+				t.Errorf("base %.2f seed %d: manufactured %.4f of spread from a sample with "+
+					"no edge (ceiling %.2f) — noise dressed as a ranking",
+					base, seed, spread, noEdgeSpreadCeiling)
+			}
+		}
 	}
-	lo, hi := fn(0.30), fn(0.60)
-	if math.Abs(lo-base) > 0.12 || math.Abs(hi-base) > 0.12 {
-		t.Errorf("no-edge inputs drifted far from the %.2f base rate: %.3f..%.3f — "+
-			"preserving order must not invent discrimination", base, lo, hi)
-	}
-	if hi <= lo {
-		t.Errorf("order not preserved: fn(0.60)=%.6f <= fn(0.30)=%.6f", hi, lo)
+
+	// The other direction, without which the ceiling above is satisfiable by any
+	// constant map: a genuinely informative ordering must clear the same bar.
+	for _, seed := range []int64{1, 5, 12, 15} {
+		pairs := pairsFrom(1500, seed, func(p float64) float64 { return 0.15 + 0.7*p })
+		fn, calibrated, _ := CalibrateRanking(pairs)
+		if !calibrated {
+			t.Fatalf("signal seed %d: expected a calibration", seed)
+		}
+		if spread := fn(0.75) - fn(0.25); spread <= noEdgeSpreadCeiling {
+			t.Errorf("signal seed %d: flattened a real ordering to %.4f spread (must exceed "+
+				"%.2f) — the no-edge ceiling in this test would be vacuous",
+				seed, spread, noEdgeSpreadCeiling)
+		}
 	}
 }
 
