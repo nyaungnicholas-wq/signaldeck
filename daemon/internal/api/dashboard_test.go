@@ -134,7 +134,7 @@ func TestDashboardEndpoint(t *testing.T) {
 	_ = st.InsertMacro(ctx, "VIXCLS", now-86400, 18.5)
 	_, _ = st.InsertAnomaly(ctx, store.AnomalyRow{SymbolID: aaa.ID, Ts: now - 3600, Kind: "anomaly_vol", Z: 3.5, Detail: "vol z=3.5 vs 30d baseline"})
 	_, _ = st.InsertAnomaly(ctx, store.AnomalyRow{SymbolID: aaa.ID, Ts: now - 3*86400, Kind: "anomaly_vol", Z: 3.1, Detail: "old"})
-	_ = st.UpsertPrediction(ctx, store.Prediction{SymbolID: aaa.ID, Horizon: md.H1d, Ts: now - 60, RawProb: 0.8, CalProb: 0.8})
+	_ = st.UpsertPrediction(ctx, store.Prediction{SymbolID: aaa.ID, Horizon: md.H1d, Ts: now - 60, RawProb: 0.8, CalProb: 0.8, NUsed: 1})
 
 	// Feed sources: news + filing + briefing (anomaly seeded above).
 	_ = st.InsertNews(ctx, store.NewsItem{ID: "n1", SymbolID: aaa.ID, Ts: now - 100, Headline: "Alpha beats", URL: "http://x", Source: "test"})

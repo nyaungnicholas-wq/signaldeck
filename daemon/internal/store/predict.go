@@ -48,10 +48,26 @@ func (s *Store) UpsertPrediction(ctx context.Context, p Prediction) error {
 		p.Weights, p.Basis); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob)
-		VALUES (?,?,?,?)`, p.SymbolID, string(p.Horizon), p.Ts, p.CalProb); err != nil {
-		return err
+	// NUsed==0 means NO leg was admitted, so this row is EVIDENCE, not a
+	// forecast: its components record what each leg said, and nothing else
+	// about it is a prediction. It therefore gets no outcome row.
+	//
+	// prediction_outcomes is the population every grader reads — the accuracy
+	// registry, the calibration fit, the live record — and the grader is
+	// SHA-pinned on the pre-registration chain. Seeding a legless 0.5 there
+	// would land it on one side of the 0.5 threshold and be scored as a
+	// confident directional call; 1,202 live rows already carried exactly that
+	// shape. Enforcing it HERE rather than at the caller makes it structural: a
+	// legless row cannot reach the graded population by any code path.
+	//
+	// Readers of the predictions table filter on n_used > 0 for the same
+	// reason, so an evidence row is never served as a forecast either.
+	if p.NUsed > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob)
+			VALUES (?,?,?,?)`, p.SymbolID, string(p.Horizon), p.Ts, p.CalProb); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -61,7 +77,8 @@ func (s *Store) LatestPrediction(ctx context.Context, symbolID int64, h md.Horiz
 	p := Prediction{SymbolID: symbolID, Horizon: h}
 	err := s.db.QueryRowContext(ctx, `
 		SELECT ts, raw_prob, cal_prob, n_used, components FROM predictions
-		WHERE symbol_id=? AND horizon=? ORDER BY ts DESC LIMIT 1`,
+		WHERE symbol_id=? AND horizon=? AND n_used > 0
+		ORDER BY ts DESC LIMIT 1`,
 		symbolID, string(h)).Scan(&p.Ts, &p.RawProb, &p.CalProb, &p.NUsed, &p.Components)
 	if err == sql.ErrNoRows {
 		return p, false, nil
@@ -502,4 +519,91 @@ func (s *Store) LastBreakoutTs(ctx context.Context, symbolID int64, kind string)
 	err := s.db.QueryRowContext(ctx,
 		`SELECT MAX(ts) FROM breakouts WHERE symbol_id=? AND kind=?`, symbolID, kind).Scan(&ts)
 	return ts.Int64, err
+}
+
+// LegValuesBySymbol returns ONE SYMBOL's stored values for a single ensemble
+// leg, read out of the frozen predictions.components snapshot. Newest first,
+// one row per (symbol, TRADING day) via trading_day() — the runner re-scores
+// each symbol ~138 times a day and every one of those rows carries the same
+// day's leg reading, so grading them as independent is the pseudo-replication
+// that has cost this project twice.
+//
+// UNLABELED, deliberately. It does NOT join prediction_outcomes, for two
+// reasons. First, an EVIDENCE row (n_used=0, no leg admitted) has no outcome
+// row by design, and those are exactly the symbol-days a benched leg produces —
+// joining outcomes would narrow a leg's grade to the symbols that still emit,
+// which is the leg grading itself only where it already won. Second, the frozen
+// labels and a recomputation from today's bars are different vintages: measured
+// over 3,000 resolved rows they agree on the SIGN 99.80% of the time at 1w but
+// only 94.17% at 1d (median drift 9bps, the shape of a daily bar that was still
+// forming when the label was frozen). Mixing vintages inside one AUC would put
+// two different label definitions in one estimate. The caller labels every row
+// itself, from final bars, by the resolver's own rule.
+//
+// legKey is a components JSON key (e.g. "ExpectancyHitRate"). A row whose key is
+// absent or non-numeric is skipped rather than defaulted — an absent leg value
+// is not a zero.
+func (s *Store) LegValuesBySymbol(ctx context.Context, symbolID int64, h md.Horizon, legKey string, limit int) (tss []int64, vals []float64, err error) {
+	rows, qerr := s.db.QueryContext(ctx, `
+		SELECT ts, val FROM (
+			SELECT p.ts AS ts, json_extract(p.components, '$.'||?) AS val,
+			       ROW_NUMBER() OVER (
+			         PARTITION BY trading_day(p.ts)
+			         ORDER BY p.ts DESC
+			       ) AS rn
+			FROM predictions p
+			WHERE p.symbol_id=? AND p.horizon=?
+		)
+		WHERE rn=1 AND val IS NOT NULL
+		ORDER BY ts DESC LIMIT ?`,
+		legKey, symbolID, string(h), limit)
+	if qerr != nil {
+		return nil, nil, qerr
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var ts int64
+		var v sql.NullFloat64
+		if err := rows.Scan(&ts, &v); err != nil {
+			return nil, nil, err
+		}
+		if !v.Valid {
+			continue
+		}
+		tss = append(tss, ts)
+		vals = append(vals, v.Float64)
+	}
+	return tss, vals, rows.Err()
+}
+
+// EvidenceDayBySymbol returns, per symbol, the newest TRADING DAY on which an
+// evidence row (n_used=0 — no leg admitted, see UpsertPrediction) was recorded
+// for one horizon.
+//
+// The runner uses it to write at most ONE evidence row per symbol per trading
+// day. Every consumer of these rows dedups to one row per (symbol, trading day)
+// anyway — that is the independence unit this whole project grades on — so the
+// other ~137 passes a day would add nothing but rows. Measured on the live
+// table that is ~40,200 rows a day at 1d against a predictions table holding
+// 363,355 in total, into a database already sitting at its storage floor.
+//
+// One query per horizon per pass, not one per symbol: the same
+// no-N+1 rule the rest of PredictionRunner.Run follows.
+func (s *Store) EvidenceDayBySymbol(ctx context.Context, h md.Horizon) (map[int64]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol_id, MAX(trading_day(ts)) FROM predictions
+		WHERE horizon=? AND n_used=0 GROUP BY symbol_id`, string(h))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[int64]int64{}
+	for rows.Next() {
+		var id, day int64
+		if err := rows.Scan(&id, &day); err != nil {
+			return nil, err
+		}
+		out[id] = day
+	}
+	return out, rows.Err()
 }

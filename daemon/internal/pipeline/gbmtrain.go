@@ -431,3 +431,20 @@ func modelLegProbLift(models []store.ModelForecast, h md.Horizon, name string, n
 	}
 	return 0, 0, false
 }
+
+// modelLegRankEdge is modelLegProbLift's companion for the RANKING gate: it
+// returns clusterstat.RankEdge of the same stored row's out-of-sample AUC.
+// The AUC has been graded, stored and displayed since the model legs shipped;
+// only the admission decision was still being taken on threshold-dependent
+// lift. Same staleness rule — an old row vouches for nothing.
+func modelLegRankEdge(fleet map[string]float64, models []store.ModelForecast, h md.Horizon, name string, now int64) (float64, bool) {
+	for _, m := range models {
+		if m.Horizon == h && m.Model == name {
+			if now-m.Ts > maxModelForecastAgeSecs {
+				return 0, false
+			}
+			return rankGate(fleet, name, h, m.AUC, m.NEval)
+		}
+	}
+	return 0, false
+}

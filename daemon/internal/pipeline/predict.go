@@ -437,6 +437,20 @@ type PredictionRunner struct {
 func (w *PredictionRunner) Name() string            { return "prediction-runner" }
 func (w *PredictionRunner) Interval() time.Duration { return 10 * time.Minute }
 
+// rankGate resolves one leg's admission edge for a symbol: the per-symbol
+// Wilson lower bound on its out-of-sample AUC, VETOED to a bench whenever the
+// leg's FLEET AUC is at or below chance. The veto is one-directional by design
+// — a good fleet never promotes a bad symbol, only a bad fleet demotes a good
+// one — because at ~1,000 symbols the tail of a null leg clears a 90% bound
+// about 100 times by chance, and that tail is exactly what a per-symbol gate
+// would otherwise admit.
+func rankGate(fleet map[string]float64, leg string, h md.Horizon, auc float64, nEval int) (float64, bool) {
+	if a, ok := fleet[leg+"|"+string(h)]; ok && a <= 0.5 {
+		return -1, true
+	}
+	return clusterstat.RankEdge(auc, nEval)
+}
+
 func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {
@@ -453,6 +467,25 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	rankPcts, err := w.St.RankingPercentiles(ctx)
 	if err != nil {
 		rankPcts = map[int64]float64{}
+	}
+	// FLEET RANKING GRADES, read once. Used only to VETO a leg whose measured
+	// ranking is at or below chance across every symbol the trainers graded —
+	// see store.FleetLegAUC for why a per-symbol bound alone is not enough at
+	// fleet width. Best-effort: an error leaves the per-symbol gate in charge.
+	fleetAUC, err := w.St.FleetLegAUC(ctx)
+	if err != nil {
+		fleetAUC = map[string]float64{}
+	}
+	// Newest trading day already carrying an EVIDENCE row per symbol, so a
+	// legless blend is recorded once a day rather than on all ~138 passes. One
+	// query per horizon, mutated in place as this pass writes.
+	evidenceDay := map[md.Horizon]map[int64]int64{}
+	for _, h := range predHorizons {
+		m, err := w.St.EvidenceDayBySymbol(ctx, h)
+		if err != nil {
+			m = map[int64]int64{}
+		}
+		evidenceDay[h] = m
 	}
 	// CROSS-SECTIONAL FEATURES, computed ONCE for the whole universe (a
 	// percentile needs the cross-section, so it cannot be built inside the
@@ -663,12 +696,19 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					c.ExpectancyHitRate = &hr
 				}
 			}
+			// The expectancy leg's grade lives in model_forecasts like the model
+			// legs, written by ExpectancyTrainer. Without it this leg is admitted
+			// on availability alone — and with pressure and alphax now benched on
+			// measured ranking, it would be the leg carrying most of the blend.
+			if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelExpectancy, ts); ok {
+				c.RankEdge[ensemble.LegExpectancy] = e
+			}
 			// Forecast prob + lift (lift gates whether it is trusted).
 			for _, f := range forecasts {
 				if f.Horizon == h {
 					p, l := f.Prob, f.Lift
 					c.ForecastProb, c.ForecastLift = &p, &l
-					if e, ok := clusterstat.RankEdge(f.AUC, f.NEval); ok {
+					if e, ok := rankGate(fleetAUC, ensemble.LegForecast, h, f.AUC, f.NEval); ok {
 						c.RankEdge[ensemble.LegForecast] = e
 					}
 				}
@@ -681,7 +721,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelGBM, ts); ok {
 				c.GBMProb, c.GBMLift = &p, &l
 
-				if e, ok := modelLegRankEdge(modelFcs, h, store.ModelGBM, ts); ok {
+				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelGBM, ts); ok {
 
 					c.RankEdge[ensemble.LegGBM] = e
 
@@ -690,7 +730,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelMeanRev, ts); ok {
 				c.MeanRevProb, c.MeanRevLift = &p, &l
 
-				if e, ok := modelLegRankEdge(modelFcs, h, store.ModelMeanRev, ts); ok {
+				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelMeanRev, ts); ok {
 
 					c.RankEdge[ensemble.LegMeanRev] = e
 
@@ -705,7 +745,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelAlphaX, ts); ok {
 				c.AlphaXProb, c.AlphaXLift = &p, &l
 
-				if e, ok := modelLegRankEdge(modelFcs, h, store.ModelAlphaX, ts); ok {
+				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelAlphaX, ts); ok {
 
 					c.RankEdge[ensemble.LegAlphaX] = e
 
@@ -721,7 +761,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if _, l, ok := modelLegProbLift(modelFcs, h, store.ModelPressure, ts); ok {
 				c.PressureLift = &l
 
-				if e, ok := modelLegRankEdge(modelFcs, h, store.ModelPressure, ts); ok {
+				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelPressure, ts); ok {
 
 					c.RankEdge[ensemble.LegPressure] = e
 
@@ -784,19 +824,45 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			}
 			raw, nUsed, admitted := ensemble.AdmittedProbability(c, wts)
 			if !admitted {
-				// NO LEG SURVIVED ADMISSION — publish nothing.
+				// NO LEG SURVIVED ADMISSION — record the EVIDENCE, publish nothing.
 				//
-				// WeightedProbability returns 0.5 for an empty blend, and on the
-				// wire a stored 0.5 is indistinguishable from a real coin-flip
-				// call: it inherits the calibration map, lands on one side of the
-				// 0.5 threshold, and is graded as a confident directional
-				// prediction. Measured on live rows, 1,202 predictions carried
-				// raw_prob=0.5 with nUsed=0 — pure absence of evidence, published
-				// and then scored as if it were a forecast.
+				// The row is written with nUsed=0, which store.UpsertPrediction
+				// reads as "not a forecast": it writes no prediction_outcomes row,
+				// so this can never be graded, never enter a calibration fit and
+				// never reach the live record. Every reader of the predictions
+				// table filters n_used > 0, so it is never served either.
 				//
-				// ensemble.AdmittedProbability exists precisely to refuse this and
-				// was simply never called here. Skipping the upsert is the honest
-				// output: no forecast, rather than a forecast that means nothing.
+				// What it DOES keep is components — what each leg said at this
+				// instant. That is the only surface the leg graders read (the
+				// expectancy leg has no other one at all), so skipping the write
+				// entirely would have made the gate self-sealing: bench a leg,
+				// stop recording it, and the evidence that could ever re-admit it
+				// stops accruing with it. A withheld forecast must not also
+				// withhold the measurement that reopens the question.
+				// ONE evidence row per symbol per trading day. Consumers dedup
+				// to that unit regardless, so the rest would be pure volume —
+				// ~40,200 rows a day at 1d against a 363,355-row table.
+				day := md.TradingDay(ts)
+				if prev, seen := evidenceDay[h][s.ID]; !seen || prev < day {
+					comps, _ := json.Marshal(c)
+					if err := w.St.UpsertPrediction(ctx, store.Prediction{
+						SymbolID: s.ID, Horizon: h, Ts: ts,
+						RawProb: raw, CalProb: raw, NUsed: 0, Components: string(comps),
+						Weights: "{}", Basis: basis,
+					}); err != nil {
+						return "", err
+					}
+					evidenceDay[h][s.ID] = day
+				}
+				// The 0.5 stored here is NOT calibrated and NOT a call. An empty
+				// blend returns 0.5 from WeightedProbability, and on the wire a
+				// stored 0.5 is indistinguishable from a real coin-flip forecast:
+				// it would inherit the calibration map, land on one side of the
+				// 0.5 threshold and be graded as a confident directional call.
+				// 1,202 live rows carried exactly that shape. So the calibration
+				// map is deliberately NOT applied and cal_prob is left equal to
+				// raw — the column has to hold something, and an uncalibrated
+				// number that no surface reads is the honest thing to put there.
 				noLegs++
 				continue
 			}
@@ -1021,6 +1087,36 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 					return "", err
 				}
 				if !okF || base.Close <= 0 || fwd.Ts-target > 3*horizonSecs(h) {
+					continue
+				}
+				// SETTLEMENT GUARD — the forward bar must be FINISHED.
+				//
+				// `now < target` was the only time check, and target is the next
+				// session's bar STAMP (ET midnight). Ingest creates that bar at
+				// the open, so any resolver pass during the session found a bar
+				// whose Close was the live price, froze it as a close-to-close
+				// label, and never revisited it.
+				//
+				// Measured on 4,000 resolved 1d stock rows: 37.8% were frozen
+				// before their forward bar's 16:00 ET close, and those disagree
+				// with the FINAL close 9.7% of the time against 2.9% for rows
+				// frozen afterwards — about 3.7% of the whole 1d record labeled
+				// against a price that had not happened yet. 1w freezes
+				// mid-session only 0.9% of the time, which is exactly why it
+				// agrees with a recomputation 99.8% of the time and 1d only 94.2%.
+				//
+				// The test is "a LATER bar exists", not a clock offset: a
+				// successor bar can only appear once the next session has begun,
+				// so it settles the previous one without this code needing to
+				// know exchange hours, half-days, DST or crypto's 24h day.
+				//
+				// Cost: a label lands one session later, and the final bar of a
+				// symbol that stops printing never resolves — the same answer
+				// UnresolvedPredictions already gives for dead symbols, and an
+				// unknown outcome is better than a confident wrong one.
+				if _, settled, err := w.St.BarAtOrAfter(ctx, p.SymbolID, md.TF1d, fwd.Ts+1); err != nil {
+					return "", err
+				} else if !settled {
 					continue
 				}
 				if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, fwd.Close/base.Close-1); err != nil {

@@ -42,11 +42,11 @@ func (s *Store) LatestPredictionsAll(ctx context.Context, h md.Horizon) ([]Lates
 		       m.tier, m.n_samples
 		FROM predictions p
 		JOIN (SELECT symbol_id, MAX(ts) AS mx FROM predictions
-		      WHERE horizon=? GROUP BY symbol_id) t
+		      WHERE horizon=? AND n_used > 0 GROUP BY symbol_id) t
 		  ON t.symbol_id = p.symbol_id AND t.mx = p.ts
 		JOIN symbols sy ON sy.id = p.symbol_id AND sy.active = 1
 		LEFT JOIN symbol_models m ON m.symbol_id = p.symbol_id AND m.horizon = p.horizon
-		WHERE p.horizon=?
+		WHERE p.horizon=? AND p.n_used > 0
 		ORDER BY ABS(p.cal_prob - 0.5) DESC, sy.symbol`, string(h), string(h))
 	if err != nil {
 		return nil, err
