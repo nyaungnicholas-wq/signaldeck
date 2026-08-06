@@ -67,6 +67,11 @@ type WeekTrial struct {
 	Ups     int
 	HighVol int
 	Win     bool
+	// MeanRet is this week's mean DIRECTION-SIGNED forward return. The Win flag
+	// above throws away magnitude by construction (a week is one Bernoulli
+	// trial), so a rule that is right often on small moves and wrong on large
+	// ones grades identically to its opposite. This keeps the magnitude.
+	MeanRet float64
 }
 
 // EraGrade aggregates week trials within one era.
@@ -83,8 +88,29 @@ type WeekGrade struct {
 	WinWeeks   int
 	TotalObs   int
 	HighVolObs int
-	Trials     []WeekTrial // chronological
-	ByEra      []EraGrade  // chronological era order (order of first trial)
+	// MeanRet / MeanRetSD summarise the week-mean signed returns in Trials:
+	// mean and sample sd ACROSS WEEKS. The week is already the unit of
+	// observation, so these two plus Weeks are everything a caller needs to
+	// form a correctly clustered t — see MeanRetT. The sd is stored rather
+	// than a finished t statistic because the null to test against is the
+	// caller's business (the measured counterfactual, not an assumed zero).
+	MeanRet   float64
+	MeanRetSD float64
+	Trials    []WeekTrial // chronological
+	ByEra     []EraGrade  // chronological era order (order of first trial)
+}
+
+// MeanRetT is the week-clustered t statistic of g's mean signed return against
+// a reference rate. No further clustering correction is needed or wanted here:
+// each week contributes exactly ONE number to the mean, so the within-week
+// cross-sectional correlation that inflates row-counted statistics has already
+// been collapsed away. Returns 0 when the statistic cannot be formed, which
+// every caller must read as "no evidence", never as "no effect".
+func MeanRetT(g WeekGrade, null float64) float64 {
+	if g.Weeks < 2 || g.MeanRetSD <= 0 {
+		return 0
+	}
+	return (g.MeanRet - null) / (g.MeanRetSD / math.Sqrt(float64(g.Weeks)))
 }
 
 // GradeWeeks grades a rule with the week-trial discipline exactly as the live
@@ -115,12 +141,24 @@ type CFReport struct {
 	// NullMatched grades the SAME matched obs as Full, but with direction =
 	// deterministic hash parity of (SymbolID, Week) — the random-baseline arm.
 	// Because a week trial is won only by beating that week's own folded
-	// majority max(upRate, 1-upRate), the no-skill week-win rate is NOT 0.5;
-	// this arm is where it is actually measured, and Discover gates on it
-	// (floored at 0.5) rather than on the 0.5 literal.
+	// majority max(upRate, 1-upRate), the no-skill week-win rate is NOT 0.5.
+	// This arm was intended to measure that and CANNOT: drawing an independent
+	// coin per (symbol, week) destroys the within-week direction correlation
+	// the rate depends on, so it reads 0.0000 on pure noise where the real arm
+	// reads 0.4348. Kept for AddsValue, which only needs a relative arm, and
+	// because NullDirLong is shared with the live ledger grader. Discover gates
+	// on NullCoherent instead.
 	NullMatched CFArm
-	AddsValue   bool    // Full beats EVERY ablation AND Base AND NullMatched
-	Margin      float64 // Full winrate − best competing arm winrate
+	// NullCoherent grades the same matched obs with the week's whole direction
+	// vector flipped on one coin (see nullDirWeek). NullMatched is kept because
+	// the live ledger grader shares its rule via NullDirLong and because
+	// AddsValue is a relative comparison that it serves fine — but it is NOT a
+	// usable bar: it destroys the within-week direction correlation that sets
+	// the no-skill rate, and scores 0.0000 on pure noise where the real arm
+	// scores 0.4348. This arm is what Discover gates on.
+	NullCoherent CFArm
+	AddsValue    bool    // Full beats EVERY ablation AND Base AND NullMatched
+	Margin       float64 // Full winrate − best competing arm winrate
 }
 
 // Counterfactual grades a rule against its ablation/base/null arms.
@@ -137,6 +175,7 @@ func Counterfactual(obs []Obs, r Rule, minWeekObs, minWeeks int) CFReport {
 	}
 	rep.Base = cfArm("base", gradeArm(obs, nil, dir, minWeekObs))
 	rep.NullMatched = cfArm("null-matched", gradeArm(obs, r.Conds, nullDir(dir), minWeekObs))
+	rep.NullCoherent = cfArm("null-coherent", gradeArm(obs, r.Conds, nullDirWeek(dir), minWeekObs))
 
 	best := math.Inf(-1)
 	for _, a := range rep.Ablations {
@@ -257,6 +296,38 @@ func nullDir(real dirFunc) dirFunc {
 	}
 }
 
+// nullDirWeek flips the WHOLE week's direction vector on a single coin instead
+// of each observation's independently.
+//
+// This is the null the week-trial gate needs, and nullDir is not it. A week is
+// won only by beating that week's folded majority max(upRate, 1-upRate), so what
+// decides the no-skill rate is how much a rule's WEEKLY cross-sectional accuracy
+// varies — and that variance comes from the directions being correlated across
+// symbols within the week (every symbol with positive pressure goes long
+// together). nullDir draws an independent coin per (symbol, week), which
+// destroys exactly that correlation: its weekly accuracy concentrates at 0.5 and
+// it then essentially never clears a strict bar sitting at 0.5 or above.
+// Measured on the pure-noise fixture, same matched obs and the same 69 weeks:
+// real arm 0.4348, nullDir arm 0.0000. A null that scores zero on data with no
+// signal in it is not measuring chance, and gating on it would admit noise.
+//
+// Flipping per week preserves the within-week structure exactly — same relative
+// directions among symbols, same weekly upRate, so the same folded baseline —
+// while breaking any systematic link to the outcomes. It reuses NullDirLong with
+// the symbol pinned to 0 rather than inventing a second hash rule.
+func nullDirWeek(real dirFunc) dirFunc {
+	return func(o Obs) int {
+		d := real(o)
+		if d == 0 {
+			return 0
+		}
+		if NullDirLong(0, o.Week) {
+			return d
+		}
+		return -d
+	}
+}
+
 // NullDirLong is THE null-arm direction rule, exported so graders outside this
 // package (the live ledger grader) randomize direction the same deterministic
 // way the counterfactual null arm does instead of inventing a second one:
@@ -352,6 +423,7 @@ func weekPctRanks(obs []Obs, key string) []float64 {
 type weekAgg struct {
 	week             int64
 	n, wins, ups, hi int
+	retSum           float64 // sum of direction-signed forward returns
 	maxTs            int64
 	era              string
 }
@@ -381,6 +453,7 @@ func gradeArm(obs []Obs, conds []Cond, dir dirFunc, minWeekObs int) WeekGrade {
 			byWeek[o.Week] = wa
 		}
 		wa.n++
+		wa.retSum += float64(d) * o.FwdRet
 		if (d > 0) == o.Up {
 			wa.wins++
 		}
@@ -416,6 +489,7 @@ func gradeArm(obs []Obs, conds []Cond, dir dirFunc, minWeekObs int) WeekGrade {
 		g.HighVolObs += wa.hi
 		g.Trials = append(g.Trials, WeekTrial{
 			Week: wa.week, N: wa.n, Wins: wa.wins, Ups: wa.ups, HighVol: wa.hi, Win: win,
+			MeanRet: wa.retSum / float64(wa.n),
 		})
 		k, ok := eraIdx[wa.era]
 		if !ok {
@@ -428,6 +502,21 @@ func gradeArm(obs []Obs, conds []Cond, dir dirFunc, minWeekObs int) WeekGrade {
 			g.ByEra[k].WinWeeks++
 		}
 		g.ByEra[k].Obs += wa.n
+	}
+	if g.Weeks > 0 {
+		var sum float64
+		for _, t := range g.Trials {
+			sum += t.MeanRet
+		}
+		g.MeanRet = sum / float64(g.Weeks)
+		if g.Weeks > 1 {
+			var ss float64
+			for _, t := range g.Trials {
+				d := t.MeanRet - g.MeanRet
+				ss += d * d
+			}
+			g.MeanRetSD = math.Sqrt(ss / float64(g.Weeks-1))
+		}
 	}
 	return g
 }

@@ -386,7 +386,76 @@ func migrate(w *sql.DB) error {
 	if _, err := w.Exec(`CREATE INDEX IF NOT EXISTS idx_news_lex_pending ON news (lex_ver)`); err != nil {
 		return err
 	}
+	if err := migrateRegimeOutcomesToTradingDay(w); err != nil {
+		return err
+	}
 	return nil
+}
+
+// migrateRegimeOutcomesToTradingDay re-folds regime_outcomes.day from the old
+// UTC-midnight cut onto the trading day, WITHOUT deleting anything.
+//
+// The problem it repairs: a US extended session closes 20:00 ET, which is 00:00Z
+// under EDT and 01:00Z under EST, so under ts/86400 the tail of one trading day
+// was frozen as a second call on the next day. Measured on the live corpus,
+// 2,817 pairs — one row near 21:00Z and its partner between 01:00Z and 05:00Z,
+// agreeing on the regime 98.2% of the time. Under the corrected fold they are
+// one observation, and re-folding `day` therefore collides them on the dedup
+// key.
+//
+// The repair keeps BOTH rows. This table is the pre-registration audit trail
+// (ts, regime, conviction and historical_accuracy are all stamped frozen at call
+// time) and every loser is UNRESOLVED, so deleting them would drop ungraded
+// forecasts because the key that admitted them was wrong — a file drawer, and a
+// worse defect than the one being fixed. The loser is marked superseded_by and
+// the unique index becomes partial.
+//
+// The winner is the EARLIEST call in the trading day: had the fold been correct
+// from the start, INSERT OR IGNORE would have kept that row and rejected its
+// partner, so this reproduces the history the right key would have written.
+//
+// Idempotent: guarded on the column's absence, and runs as one transaction so a
+// crash midway leaves the old shape intact rather than a half-folded table.
+func migrateRegimeOutcomesToTradingDay(w *sql.DB) error {
+	var n int
+	if err := w.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('regime_outcomes') WHERE name='superseded_by'`).
+		Scan(&n); err != nil {
+		return err
+	}
+	if n != 0 {
+		return nil
+	}
+	tx, err := w.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+	stmts := []string{
+		`ALTER TABLE regime_outcomes ADD COLUMN superseded_by INTEGER REFERENCES regime_outcomes(id)`,
+		// Drop first: re-folding `day` collides pairs under the old total index.
+		`DROP INDEX IF EXISTS idx_regime_outcomes_dedup`,
+		`UPDATE regime_outcomes SET day = trading_day(ts)`,
+		// Earliest call of the trading day wins; ties break on the lower id so
+		// the choice is total and reproducible.
+		`UPDATE regime_outcomes AS r
+		    SET superseded_by = (
+		          SELECT w.id FROM regime_outcomes w
+		           WHERE w.symbol_id = r.symbol_id AND w.kind = r.kind AND w.day = r.day
+		           ORDER BY w.ts ASC, w.id ASC LIMIT 1)
+		  WHERE EXISTS (
+		          SELECT 1 FROM regime_outcomes w
+		           WHERE w.symbol_id = r.symbol_id AND w.kind = r.kind AND w.day = r.day
+		             AND (w.ts < r.ts OR (w.ts = r.ts AND w.id < r.id)))`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_regime_outcomes_dedup
+		   ON regime_outcomes (symbol_id, kind, day) WHERE superseded_by IS NULL`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("regime_outcomes trading-day fold: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // ReaderClone returns a Store that READS through its own private connection

@@ -80,7 +80,7 @@ func (s *Store) LatestPredictionStats(ctx context.Context, h md.Horizon) (avgCon
 		SELECT COALESCE(AVG(ABS(cal_prob - 0.5) * 2), 0), COUNT(*)
 		FROM (
 			SELECT (SELECT p.cal_prob FROM predictions p
-			        WHERE p.horizon=? AND p.symbol_id=s.id
+			        WHERE p.horizon=? AND p.symbol_id=s.id AND p.n_used > 0
 			        ORDER BY p.ts DESC LIMIT 1) AS cal_prob
 			FROM symbols s
 		) WHERE cal_prob IS NOT NULL`, string(h)).Scan(&avgConf, &n)

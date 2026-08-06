@@ -140,6 +140,10 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		regimeLbls = map[int64]string{}
 	}
+	hmmLbls, err := w.St.HMMRegimeLabels(ctx)
+	if err != nil {
+		hmmLbls = map[int64]string{}
+	}
 	rankPcts, err := w.St.RankingPercentiles(ctx)
 	if err != nil {
 		rankPcts = map[int64]float64{}
@@ -177,16 +181,19 @@ func (w *CompositeScorer) Run(ctx context.Context) (string, error) {
 		}
 
 		in := composite.Inputs{
-			Components:  e.comp,
-			RegimeLabel: regimeLbls[p.SymbolID],
+			Components:     e.comp,
+			RegimeLabel:    regimeLbls[p.SymbolID],
+			HMMRegimeLabel: hmmLbls[p.SymbolID],
 		}
 		if pct, ok := rankPcts[p.SymbolID]; ok {
 			in.RankPct = &pct
 		}
 		// Skill chips from the symbol's regime cell, falling back to the
 		// pooled "all" cell — the same tiering adaptive.Pick applies to
-		// weights, here applied to the EVIDENCE shown on the tiles.
-		cell, ok := learned.Cells[regimeLbls[p.SymbolID]]
+		// weights, here applied to the EVIDENCE shown on the tiles. The cell
+		// key has to match the one the PredictionRunner learned under, or the
+		// chips would describe a different cell than the weights came from.
+		cell, ok := learned.Cells[cellKey(regimeLbls[p.SymbolID], hmmLbls[p.SymbolID])]
 		if !ok || len(cell.LegN) == 0 {
 			cell = learned.Cells[adaptive.AllCell]
 		}

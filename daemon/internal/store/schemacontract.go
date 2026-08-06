@@ -207,6 +207,7 @@ var SchemaContract = map[string][]string{
 	"regime-outcome-runner": {
 		"regime_outcomes.naive_label",
 		"regime_outcomes.revision",
+		"regime_outcomes.superseded_by",
 		"regime_outcome_quarantine",
 		"regime_outcome_quarantine_manifest",
 	},

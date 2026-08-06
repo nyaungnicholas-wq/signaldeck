@@ -158,10 +158,10 @@ func (s *Store) LatestPredictionsForScoring(ctx context.Context, h md.Horizon) (
 		SELECT p.symbol_id, sy.symbol, sy.market, sy.stream, p.ts, p.raw_prob, p.cal_prob, p.n_used, p.components
 		FROM predictions p
 		JOIN (SELECT symbol_id, MAX(ts) AS mx FROM predictions
-		      WHERE horizon=? GROUP BY symbol_id) t
+		      WHERE horizon=? AND n_used > 0 GROUP BY symbol_id) t
 		  ON t.symbol_id = p.symbol_id AND t.mx = p.ts
 		JOIN symbols sy ON sy.id = p.symbol_id AND sy.active = 1
-		WHERE p.horizon=?
+		WHERE p.horizon=? AND p.n_used > 0
 		ORDER BY sy.symbol`, string(h), string(h))
 	if err != nil {
 		return nil, err

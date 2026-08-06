@@ -78,6 +78,7 @@ const (
 	FactorAlphaX     = "alphax"
 	FactorRanking    = "ranking"
 	FactorRegime     = "regime"
+	FactorHMMRegime  = "hmmregime"
 	FactorInsiders   = "insiders"
 	FactorShortVol   = "shortvol"
 	FactorBreakout   = "breakout"
@@ -306,6 +307,10 @@ type Inputs struct {
 
 	RankPct     *float64 // latest cross-sectional ranking percentile, 0..100
 	RegimeLabel string   // "" = never classified
+	// HMMRegimeLabel is internal/hmmregime's fitted VOLATILITY state
+	// ("" = not fitted yet). Like RegimeLabel it is context only: it describes
+	// how big the next move is likely to be, never which way.
+	HMMRegimeLabel string
 
 	// Form 4 open-market activity (codes P/S only) over the last 90d.
 	InsiderBuys, InsiderSells   float64 // dollar values
@@ -416,6 +421,22 @@ func BuildFactors(in Inputs) []Factor {
 			Key:      FactorRegime,
 			Verdict:  0,
 			Evidence: fmt.Sprintf("regime %q — context only, never scored", in.RegimeLabel),
+		})
+	}
+
+	// hmmregime — CONTEXT ONLY, same standing as regime. This is a fitted
+	// VOLATILITY state: it says how big the next move is likely to be, not
+	// which way, so it frames the directional factors and is never one of
+	// them. Measured out-of-sample it separates next-day absolute return
+	// 1.59x highest-to-lowest label (rule-based labeller: 1.14x).
+	if in.HMMRegimeLabel == "" {
+		out = append(out, gatedFactor(FactorHMMRegime, "no HMM volatility state fitted yet"))
+	} else {
+		out = append(out, Factor{
+			Key:     FactorHMMRegime,
+			Verdict: 0,
+			Evidence: fmt.Sprintf("HMM volatility state %q — expected move SIZE, not direction; context only, never scored",
+				in.HMMRegimeLabel),
 		})
 	}
 

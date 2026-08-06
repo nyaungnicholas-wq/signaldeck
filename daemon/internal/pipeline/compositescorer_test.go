@@ -112,8 +112,8 @@ func TestCompositeScorerEmitsForcedCurve(t *testing.T) {
 		if err := json.Unmarshal([]byte(row.Payload), &p); err != nil {
 			t.Fatalf("symbol %d: payload does not parse: %v", id, err)
 		}
-		if len(p.Factors) != 13 {
-			t.Fatalf("symbol %d: %d factor tiles, want 13", id, len(p.Factors))
+		if len(p.Factors) != 14 {
+			t.Fatalf("symbol %d: %d factor tiles, want 14", id, len(p.Factors))
 		}
 		if math.Abs(p.Ledger.SumPP-(p.CalProb-0.5)*100) > 1e-9 {
 			t.Fatalf("symbol %d: ledger sums to %.6f, want %.6f", id, p.Ledger.SumPP, (p.CalProb-0.5)*100)

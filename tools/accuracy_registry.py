@@ -1235,6 +1235,22 @@ def register_fold(con: sqlite3.Connection) -> sqlite3.Connection:
     return con
 
 
+def superseded_clause(con: sqlite3.Connection) -> str:
+    """SQL fragment excluding regime_outcomes rows that are not observations.
+
+    The trading-day fold merged the straddling pairs this table froze under the
+    old UTC-midnight key — a 21:00Z call and its 01:00Z partner are one trading
+    day. Nothing was deleted (the table is the pre-registration audit trail);
+    the later call carries superseded_by and is excluded from counts instead.
+
+    Guarded on the column's existence because the grader also runs against
+    snapshots exported before the fold, where its absence is correct rather than
+    an error.
+    """
+    cols = [r[0] for r in con.execute("SELECT name FROM pragma_table_info('regime_outcomes')")]
+    return " AND superseded_by IS NULL" if "superseded_by" in cols else ""
+
+
 def connect(path: str) -> sqlite3.Connection:
     if not os.path.exists(path):
         sys.exit(f"database not found: {path}")
@@ -1347,13 +1363,85 @@ def fetch_chain_presence(con: sqlite3.Connection) -> dict:
 # Directional ensemble — the one predictor with a real live record
 # --------------------------------------------------------------------------- #
 
+def breadth_block(days: list[tuple[int, int, int]]) -> dict | None:
+    """How many independent BETS the day tallies actually represent.
+
+    days is [(n, pred_ups, actual_ups)] per trading day.
+
+    design_effect() already widens the interval for the fact that symbols on one
+    day share a market move. It cannot answer a different question: whether the
+    day's calls were a genuine cross-section or one call repeated. Both look
+    identical to a variance estimator — the between-day scatter of the HIT rate
+    is all it sees — so a day on which every symbol was called the same way and
+    a day of 330 distinct judgements can produce the same design effect.
+
+    Measured on the live record 2026-07-24..08-04 the distinction was not
+    academic: mean daily agreement ran 0.861 at 1d and 0.966 at 1w, because the
+    fleet-wide calibration map had collapsed the cross-section onto a handful of
+    values (5-14 distinct probabilities across 329 symbols) and the 0.5
+    threshold turned that into a near-unanimous market call. The registry
+    published effective_n = 245.6 for what was 10 market calls.
+
+    Both numbers here are DESCRIPTIVE. They set no verdict and no retire flag —
+    the auto-retire rule is pre-registered and digest-chained, and re-reading it
+    against a new statistic after the evidence arrived is exactly the
+    re-windowing that rule forbids. They exist so a reader can see how much
+    evidence the headline rests on, not to change what the headline says.
+
+    Mirrors clusterstat.meanDailyAgreement / clusterstat.dayBet in the Go
+    daemon, which already had this framing and no counterpart on this surface.
+    Returns None when the caller's tallies predate the pred_ups column.
+    """
+    usable = [(n, pu, au) for n, pu, au in days if n > 0 and pu is not None]
+    if not usable:
+        return None
+    agree, correct = [], 0
+    for n, pu, au in usable:
+        f = pu / n
+        agree.append(max(f, 1 - f))
+        # The day's majority call against the day's majority realized direction.
+        correct += (f > 0.5) == ((au / n) > 0.5)
+    k = len(usable)
+    acc = correct / k
+    mean_agreement = sum(agree) / k
+    return {
+        "mean_daily_agreement": mean_agreement,
+        "day_bet": {
+            "days": k,
+            "correct": correct,
+            "accuracy": acc,
+            # One day is one observation here, so the effective N passed to the
+            # Wilson interval IS the day count. z carries the cycle's family-
+            # and look-correction like every other interval on this surface.
+            "ci": list(wilson_eff(acc, float(k))),
+        },
+        "note": (
+            "DESCRIPTIVE, sets no verdict. mean_daily_agreement is the mean "
+            "fraction of a day's calls pointing the same way; above ~0.8 the "
+            "day is the honest unit and day_bet is the grade that framing "
+            "supports. A high agreement with a large live_n means the row's "
+            "evidence is the day count, not the row count."
+        ),
+    }
+
+
 def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
     """Per-day tallies behind every directional grade, keyed by horizon.
 
-    Each value is (day, n, correct, up_days, hc_n, hc_correct, hc_up_days) —
-    exactly what the reproducibility snapshot (tools/make_repro_snapshot.py)
-    exports, so a grade from the DB and a grade from the committed snapshot
-    start from identical inputs.
+    Each value is (day, n, correct, up_days, hc_n, hc_correct, hc_up_days,
+    pred_up_days, hc_pred_up_days) — exactly what the reproducibility snapshot
+    (tools/make_repro_snapshot.py) exports, so a grade from the DB and a grade
+    from the committed snapshot start from identical inputs.
+
+    The two pred_up_* counts are APPENDED, never inserted, because snapshots
+    committed before they existed carry the 7-wide shape and must keep grading
+    identically. Every consumer reads them positionally with a length check and
+    reports breadth as unavailable rather than failing on an older snapshot.
+
+    They count the day's CALLS, not its outcomes, and nothing else here does.
+    Without them the grade cannot tell 1,000 independent per-symbol forecasts
+    from one market call republished 1,000 times — the two produce the same n,
+    the same accuracy, and wildly different amounts of evidence.
     """
     register_fold(con)
     # Per-DAY tallies, not per-horizon totals. The dedup below still collapses
@@ -1374,12 +1462,16 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
            SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
            SUM(CASE WHEN ABS(prob - 0.5) >= 0.15 THEN 1 ELSE 0 END),
            SUM(CASE WHEN ABS(prob - 0.5) >= 0.15 AND (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
-           SUM(CASE WHEN ABS(prob - 0.5) >= 0.15 AND up = 1 THEN 1 ELSE 0 END)
+           SUM(CASE WHEN ABS(prob - 0.5) >= 0.15 AND up = 1 THEN 1 ELSE 0 END),
+           SUM(CASE WHEN prob >= 0.5 THEN 1 ELSE 0 END),
+           SUM(CASE WHEN ABS(prob - 0.5) >= 0.15 AND prob >= 0.5 THEN 1 ELSE 0 END)
     FROM dedup WHERE rn = 1 GROUP BY horizon, day ORDER BY horizon, day
     """
     by_h: dict[str, list] = {}
-    for horizon, day, n, hits, ups, hc_n, hc_hits, hc_ups in con.execute(q, (SURVIVORSHIP_EPOCH_TS,)):
-        by_h.setdefault(horizon, []).append((day, n, hits, ups, hc_n, hc_hits, hc_ups))
+    for (horizon, day, n, hits, ups, hc_n, hc_hits, hc_ups,
+         pred_ups, hc_pred_ups) in con.execute(q, (SURVIVORSHIP_EPOCH_TS,)):
+        by_h.setdefault(horizon, []).append(
+            (day, n, hits, ups, hc_n, hc_hits, hc_ups, pred_ups, hc_pred_ups))
     return by_h
 
 
@@ -1445,13 +1537,34 @@ def grade_directional(con: sqlite3.Connection) -> list[dict]:
         measure_universe_completeness(con, "prediction_outcomes"))
 
 
+def pred_all(per_day: list[tuple]) -> list[tuple[int, int, int]] | None:
+    """(n, pred_ups, actual_ups) per day for the ALL band, or None.
+
+    Snapshots committed before the pred_up columns existed are 7 wide. Returning
+    None there makes breadth absent rather than wrong — a reproducibility
+    snapshot must keep regrading to the same verdict it was cut against, and a
+    fabricated call count would silently change what the row says about itself.
+    """
+    if any(len(d) < 8 for d in per_day):
+        return None
+    return [(d[1], d[7], d[3]) for d in per_day]
+
+
+def pred_hc(per_day: list[tuple]) -> list[tuple[int, int, int]] | None:
+    """(n, pred_ups, actual_ups) per day for the high-conviction band, or None."""
+    if any(len(d) < 9 for d in per_day):
+        return None
+    return [(d[4], d[8], d[6]) for d in per_day if d[4] > 0]
+
+
 def grade_directional_days(by_h: dict[str, list[tuple]],
                            surv: dict | None = None) -> list[dict]:
     """Grade directional per-day tallies from either the DB or a snapshot."""
     rows = []
 
     def emit(name: str, band: str, days: list[tuple[int, int, int]], note: str,
-             family: str = "direction", retirable: bool = True) -> None:
+             family: str = "direction", retirable: bool = True,
+             pred_days: list[tuple[int, int, int]] | None = None) -> None:
         g = clustered_ci([(n, hits) for n, hits, _ in days])
         if not g["n"]:
             return
@@ -1495,6 +1608,12 @@ def grade_directional_days(by_h: dict[str, list[tuple]],
             # for the directional ensemble alone, and a majority-follower that
             # fails its own null is a market observation, not a model to kill.
             "retire": retirable and v.startswith("FAILED"),
+            # Descriptive only, and deliberately placed AFTER retire: nothing
+            # above this line reads it. How much evidence the row rests on is a
+            # separate question from what the pre-registered rule decides, and
+            # merging them would let a statistic added today reopen a verdict
+            # frozen in July.
+            "breadth": breadth_block(pred_days) if pred_days else None,
             "note": note,
             **survivorship_stamp(surv),
         })
@@ -1513,11 +1632,13 @@ def grade_directional_days(by_h: dict[str, list[tuple]],
                  [(d[1], d[2], d[3]) for d in per_day],
                  "live-committed running-majority benchmark; graded under the "
                  "identical dedup/survivorship rules as the ensemble",
-                 family="benchmark", retirable=False)
+                 family="benchmark", retirable=False,
+                 pred_days=pred_all(per_day))
             continue
         emit(f"directional-ensemble ({horizon})", "all",
              [(d[1], d[2], d[3]) for d in per_day],
-             "live forward record; independent symbol-days, day-resampled interval")
+             "live forward record; independent symbol-days, day-resampled interval",
+             pred_days=pred_all(per_day))
 
     # High-conviction slice — the tier a user would actually act on. Graded PER
     # HORIZON: the same symbol on the same day appears in both the 1d and the 1w
@@ -1529,7 +1650,8 @@ def grade_directional_days(by_h: dict[str, list[tuple]],
         if not days:
             continue
         emit(f"directional-ensemble ({horizon}, high conviction)", "|p-0.5|>=0.15",
-             days, "the tier a user would actually trade")
+             days, "the tier a user would actually trade",
+             pred_days=pred_hc(per_day))
     return rows
 
 
@@ -1554,18 +1676,18 @@ def fetch_structural(con: sqlite3.Connection):
     # Totals and first-call time per predictor.
     q = """
     SELECT kind, horizon_days, COUNT(*), AVG(historical_accuracy), MIN(ts)
-    FROM regime_outcomes WHERE ts >= ?
+    FROM regime_outcomes WHERE ts >= ?{sup}
     GROUP BY kind, horizon_days ORDER BY kind
-    """
-    # Resolved outcomes tallied PER CALL-DAY. regime_outcomes is already unique
-    # on (symbol_id, kind, day), so each row is one symbol-day — but ~870
+    """.format(sup=superseded_clause(con))
+    # Resolved outcomes tallied PER CALL-DAY. regime_outcomes is unique on
+    # (symbol_id, kind, day) among rows that count, so each row is one symbol-day — but ~870
     # symbols share each call day, and grading those as 870 independent trials
     # is how a single market day becomes a confident verdict on a 82% claim.
     qd = """
     SELECT kind, horizon_days, day, COUNT(*), SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END)
-    FROM regime_outcomes WHERE resolved_at IS NOT NULL AND ts >= ?
+    FROM regime_outcomes WHERE resolved_at IS NOT NULL AND ts >= ?{sup}
     GROUP BY kind, horizon_days, day ORDER BY kind, day
-    """
+    """.format(sup=superseded_clause(con))
     per_day: dict[tuple, list[tuple[int, int, int]]] = {}
     for kind, hd, day, n, hits in con.execute(qd, (SURVIVORSHIP_EPOCH_TS,)):
         per_day.setdefault((kind, hd), []).append((day, n, hits or 0))

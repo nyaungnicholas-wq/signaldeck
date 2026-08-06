@@ -110,11 +110,14 @@ func TestLatestPredictionStatsAndResolvedCount(t *testing.T) {
 
 	// AAA: stale 0.9 then latest 0.7 (|0.7-0.5|*2 = 0.4 must win);
 	// BBB: single 0.4 (conf 0.2). A 1w row must not leak into the 1d stats.
+	// NUsed>0 on every row: these are real forecasts. A row with NUsed==0 is an
+	// evidence-only record of what the legs said and is excluded from every
+	// published surface, this one included.
 	seed := []Prediction{
-		{SymbolID: a.ID, Horizon: md.H1d, Ts: 100, RawProb: 0.9, CalProb: 0.9},
-		{SymbolID: a.ID, Horizon: md.H1d, Ts: 200, RawProb: 0.7, CalProb: 0.7},
-		{SymbolID: b.ID, Horizon: md.H1d, Ts: 150, RawProb: 0.4, CalProb: 0.4},
-		{SymbolID: b.ID, Horizon: md.H1w, Ts: 300, RawProb: 0.99, CalProb: 0.99},
+		{SymbolID: a.ID, Horizon: md.H1d, Ts: 100, RawProb: 0.9, CalProb: 0.9, NUsed: 1},
+		{SymbolID: a.ID, Horizon: md.H1d, Ts: 200, RawProb: 0.7, CalProb: 0.7, NUsed: 1},
+		{SymbolID: b.ID, Horizon: md.H1d, Ts: 150, RawProb: 0.4, CalProb: 0.4, NUsed: 1},
+		{SymbolID: b.ID, Horizon: md.H1w, Ts: 300, RawProb: 0.99, CalProb: 0.99, NUsed: 1},
 	}
 	for _, p := range seed {
 		if err := st.UpsertPrediction(ctx, p); err != nil {

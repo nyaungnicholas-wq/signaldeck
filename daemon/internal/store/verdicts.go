@@ -61,7 +61,7 @@ func (s *Store) VerdictStats(ctx context.Context, symbolIDs []int64, h md.Horizo
 		SELECT symbol_id, ts, cal_prob, n_used FROM (
 			SELECT symbol_id, ts, cal_prob, n_used,
 			       ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY ts DESC) AS rn
-			FROM predictions WHERE horizon=? AND symbol_id IN (`+ph+`)
+			FROM predictions WHERE horizon=? AND n_used > 0 AND symbol_id IN (`+ph+`)
 		) WHERE rn = 1`, args...)
 	if err != nil {
 		return nil, err

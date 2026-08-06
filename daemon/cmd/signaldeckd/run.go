@@ -212,6 +212,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		&pipeline.PredictionRunner{St: st},
 		&pipeline.PredictionResolver{St: st},
 		&pipeline.RegimeRunner{St: st},
+		&pipeline.HMMRegimeRunner{St: st},
 		&pipeline.RankingRunner{St: st},
 		&pipeline.BreakoutRunner{St: st},
 		&pipeline.SentimentTagger{St: st, LLM: llmClient},
@@ -946,6 +947,12 @@ func edgeModelWorkers(st *store.Store) []workers.Worker {
 		// model leg, so the PredictionRunner benches the leg when its measured
 		// lift is <=0 — the same honesty gate the model legs pass.
 		&pipeline.PressureTrainer{St: st},
+		// expectancy-trainer (1h): grades the expectancy leg against the live
+		// prequential record and stores a FLEET AUC, so the leg that would
+		// otherwise carry most of the blend by default is admitted on measured
+		// ranking like every other leg. See ExpectancyTrainer for why the grade
+		// is fleet-level rather than per-symbol.
+		&pipeline.ExpectancyTrainer{St: st},
 		// vol-regime-runner (6h): the platform's ONE validated-edge forecast —
 		// per-stock next-quarter volatility regime (elevated/calm) with MEASURED
 		// walk-forward accuracy (74-76% high-conviction). NOT price direction.

@@ -1402,7 +1402,7 @@ CREATE TABLE IF NOT EXISTS regime_outcomes (
   symbol_id           INTEGER NOT NULL REFERENCES symbols(id),
   kind                TEXT    NOT NULL,
   ts                  INTEGER NOT NULL,   -- call time (unix s), frozen
-  day                 INTEGER NOT NULL,   -- ts/86400 (UTC day) — dedup key part
+  day                 INTEGER NOT NULL,   -- trading_day(ts) — dedup key part
   horizon_days        INTEGER NOT NULL,
   regime              TEXT    NOT NULL,   -- the call, frozen
   conviction          REAL    NOT NULL,   -- frozen at call time
@@ -1427,10 +1427,31 @@ CREATE TABLE IF NOT EXISTS regime_outcomes (
   -- truthful state — the code behind them is not recoverable and cannot be
   -- invented. The grader refuses to publish a verdict from post-epoch rows whose
   -- stamp is dirty, empty, or names a commit this repository does not contain.
-  revision            TEXT
+  revision            TEXT,
+  -- SUPERSEDED BY (2026-08-06, the trading-day fold). NULL = this row is the
+  -- independent observation for its (symbol, kind, day); non-NULL = it names the
+  -- row that is, and this one does not count.
+  --
+  -- `day` used to be ts/86400, a UTC-midnight cut. A US extended session closes
+  -- 20:00 ET — 00:00Z under EDT, 01:00Z under EST — so the tail of one trading
+  -- day landed on the next UTC day and was frozen as a SECOND call. Measured on
+  -- the live corpus: 2,817 such pairs, one row at ~21:00Z and its partner at
+  -- 01:00–05:00Z, 98.2% agreeing on the regime. They are one observation.
+  --
+  -- Re-folding `day` collides those pairs on the dedup key, and the obvious
+  -- repair — delete the loser — is the wrong one: this table is the
+  -- pre-registration audit trail, every column stamped frozen at call time, and
+  -- all 2,817 losers are UNRESOLVED. Deleting ungraded forecasts because the
+  -- key that admitted them was wrong is a file drawer. So nothing is deleted;
+  -- the loser is marked and the dedup index goes partial. The winner is the
+  -- EARLIEST call of the trading day, which is exactly the row the INSERT OR
+  -- IGNORE would have kept had the fold been right from the start.
+  superseded_by       INTEGER REFERENCES regime_outcomes(id)
 );
+-- PARTIAL: only rows that still count are unique on the key. Superseded rows
+-- keep their frozen bytes and sit outside the constraint.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_regime_outcomes_dedup
-  ON regime_outcomes (symbol_id, kind, day);
+  ON regime_outcomes (symbol_id, kind, day) WHERE superseded_by IS NULL;
 CREATE INDEX IF NOT EXISTS idx_regime_outcomes_unresolved
   ON regime_outcomes (resolved_at) WHERE resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_regime_outcomes_resolved
@@ -2027,3 +2048,22 @@ CREATE TABLE IF NOT EXISTS grader_heartbeats (
 );
 CREATE INDEX IF NOT EXISTS idx_grader_heartbeats_task_finished
   ON grader_heartbeats (task, finished_at DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- HMM VOLATILITY REGIME (appended block — do not merge into the sections
+-- above). internal/hmmregime's fitted label per symbol, written by the
+-- hmm-regime-runner. This is a VOLATILITY state (how big the next move is
+-- likely to be), NOT a directional call — it is stored beside regime_state
+-- rather than replacing it, and the two are graded against each other by
+-- cmd/hmmbakeoff. prob is the filtered posterior of the winning state at the
+-- last bar; sd_low/sd_high are the fitted per-state standard deviations of
+-- daily log returns, so a label is always auditable against its own model.
+CREATE TABLE IF NOT EXISTS hmm_regime_state (
+  symbol_id INTEGER PRIMARY KEY REFERENCES symbols(id),
+  ts        INTEGER NOT NULL,
+  label     TEXT    NOT NULL,
+  prob      REAL    NOT NULL,
+  n_states  INTEGER NOT NULL,
+  sd_low    REAL    NOT NULL,
+  sd_high   REAL    NOT NULL
+);

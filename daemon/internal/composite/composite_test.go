@@ -173,12 +173,12 @@ func TestBuildFactors(t *testing.T) {
 
 	t.Run("everything absent gates with reasons", func(t *testing.T) {
 		fs := BuildFactors(Inputs{Components: ensemble.Components{PressureScore: 0}})
-		if len(fs) != 13 {
-			t.Fatalf("got %d factors, want 13", len(fs))
+		if len(fs) != 14 {
+			t.Fatalf("got %d factors, want 14", len(fs))
 		}
 		for _, key := range []string{FactorExpectancy, FactorForecast, FactorSentiment,
-			FactorGBM, FactorMeanRev, FactorAlphaX, FactorRanking, FactorRegime, FactorInsiders,
-			FactorShortVol, FactorBreakout, FactorTVRating} {
+			FactorGBM, FactorMeanRev, FactorAlphaX, FactorRanking, FactorRegime, FactorHMMRegime,
+			FactorInsiders, FactorShortVol, FactorBreakout, FactorTVRating} {
 			f := byKey(fs, key)
 			if !f.Gated || f.GateReason == "" || f.Verdict != 0 {
 				t.Errorf("%s: gated=%v reason=%q verdict=%d — want explicit gate", key, f.Gated, f.GateReason, f.Verdict)
@@ -213,8 +213,8 @@ func TestBuildFactors(t *testing.T) {
 			SkillICs:      map[string]float64{ensemble.LegAlphaX: 0.09},
 			SkillLegN:     map[string]int{ensemble.LegAlphaX: 51},
 		})
-		if len(fs) != 13 {
-			t.Fatalf("got %d factors, want 13", len(fs))
+		if len(fs) != 14 {
+			t.Fatalf("got %d factors, want 14", len(fs))
 		}
 		f := byKey(fs, FactorAlphaX)
 		if f.Gated || f.Verdict != 1 {

@@ -42,6 +42,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -244,7 +245,19 @@ func (w *ResearchLoop) Run(ctx context.Context) (string, error) {
 	// before it can reach "shadow". It can only remove survivors, never add
 	// one, and the era is a frozen constant chained in PREREGISTRATION.md so
 	// it cannot be retargeted after a result is seen.
-	cfg := researchx.DiscoverConfig{MaxCandidates: maxC, PriorSearches: prior, HoldoutEra: researchx.PreregHoldoutEra}
+	// SELECTION CRITERION. Defaults to the Wilson lower bound on the weekly hit
+	// rate, which is what this loop has always selected on. SIGNALDECK_SELECT_BY
+	// =meanret switches both the in-sample gate and the blind-era confirmation
+	// to the week-clustered t of mean signed return against the same measured
+	// null, at the same corrected alpha — a different question, not an easier
+	// one. Off by default because switching it changes which rules reach shadow,
+	// and that belongs to a prereg amendment rather than an env var; the
+	// comparison it enables is what cmd/seldiff reports.
+	cfg := researchx.DiscoverConfig{
+		MaxCandidates: maxC, PriorSearches: prior,
+		HoldoutEra: researchx.PreregHoldoutEra,
+		SelectBy:   os.Getenv("SIGNALDECK_SELECT_BY"),
+	}
 	divisor := cfg.Divisor()
 	cands := researchx.Discover(obs, cfg)
 	// The look has been taken; charge for it whether or not anything survived.
