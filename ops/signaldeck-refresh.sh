@@ -154,6 +154,7 @@ if [ -x "$SDMAINT" ]; then
     -budget-wal-mb "${SIGNALDECK_BUDGET_WAL_MB:-512}" \
     -budget-backups-mb "${SIGNALDECK_BUDGET_BACKUPS_MB:-12288}" \
     -budget-sidecars-mb "${SIGNALDECK_BUDGET_SIDECARS_MB:-4096}" \
+    -budget-archive-mb "${SIGNALDECK_BUDGET_ARCHIVE_MB:-2048}" \
     -budget-logs-mb "${SIGNALDECK_BUDGET_LOGS_MB:-512}" 2>&1)
   rc=$?
   printf '%s\n' "$report" >> "$LOG"

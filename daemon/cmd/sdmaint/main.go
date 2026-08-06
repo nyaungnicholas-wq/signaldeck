@@ -246,19 +246,60 @@ func storageReport(args []string) (over bool, err error) {
 	logsDir := fs.String("logs", "", "log directory (default: <db dir>/../logs)")
 	top := fs.Int("top", 12, "show this many largest tables")
 	// Budgets (MB). Declared here so "what is normal" lives in one place:
-	// DB floor is ~2.2GB after compaction, WAL settles at journal_size_limit
-	// (64MB) but a reader-pinned WAL was observed at 256MB, backups are
-	// KEEP=2 x ~2GB plus a premaint copy under ops/signaldeck-cleanup.sh, and
-	// logs rotate well under 100MB.
-	budDB := fs.Int64("budget-db-mb", 4096, "database file budget, MB")
+	// WAL settles at journal_size_limit (64MB) but a reader-pinned WAL was
+	// observed at 256MB, backups are KEEP=2 x ~2GB plus a premaint copy under
+	// ops/signaldeck-cleanup.sh, and logs rotate well under 100MB.
+	//
+	// THE DB BUDGET WAS RAISED 4096 -> 6144 ON 2026-08-05, and the reason has to
+	// be on the record because raising a budget is otherwise indistinguishable
+	// from silencing a gate.
+	//
+	// The old comment read "DB floor is ~2.2GB after compaction". That was
+	// measured against a ~1,070-symbol universe; the universe is now 2,940
+	// symbols carrying 15.4M daily bars, and the floor moved with it. A full
+	// offline pass was run — daemon stopped, uncontended — precisely to find
+	// out whether 4,762MB was bloat or data:
+	//
+	//	compaction: stripped 516 scores + 86 composite blobs;
+	//	            daily-downsampled 3456 + 0 intraday rows
+	//	after:  db=4604MB wal=0MB  (freed 158MB)
+	//
+	// 158MB. There is no bloat to reclaim: scores 1,408MB and bars 1,149MB are
+	// retained data, not garbage. So 4096 was a threshold the system could not
+	// meet even in its best possible state, and a budget that can only ever
+	// report OVER is not a budget — it is a nightly page that teaches the reader
+	// to ignore red, the same failure internal/hud documents for the fleet.
+	//
+	// 6144 = the measured post-compaction floor (4,606MB) plus ~1.5GB. The
+	// headroom is sized on OBSERVED inter-compaction accumulation, which is
+	// 158MB (this run) and 280MB (the 2026-08-04 pass, 4.54 -> 4.26GB) — so a
+	// surface that genuinely runs away still trips it with an order of magnitude
+	// to spare.
+	//
+	// What this does NOT settle: whether 1.4GB of `scores` and 15.4M bars are
+	// worth keeping. That is a retention question for a human, and moving the
+	// threshold does not answer it — it just stops the alert from drowning it.
+	budDB := fs.Int64("budget-db-mb", 6144, "database file budget, MB")
 	budWAL := fs.Int64("budget-wal-mb", 512, "WAL file budget, MB")
 	budBak := fs.Int64("budget-backups-mb", 12288, "backup directory budget, MB")
 	budLog := fs.Int64("budget-logs-mb", 512, "log directory budget, MB")
 	// One rollback copy beside the live database is normal before a migration;
 	// five that nobody deleted is the defect. Budget is one DB's worth.
 	budSide := fs.Int64("budget-sidecars-mb", 4096, "budget for ad-hoc .bak/.premigration copies beside the db, MB")
+	// data/archive is where the compactor writes blobs BEFORE stripping them —
+	// the archive-before-strip fail-safe. It therefore grows every time this
+	// tool reclaims space, which makes "the DB got smaller" and "the disk got
+	// smaller" different statements. It was in no budget at all (384MB at the
+	// 2026-08-05 pass), the same unmeasured-surface hole the sidecars line was
+	// added to close. Budgeted generously: it is cold, compressed, and the
+	// point is to notice a runaway, not to police it.
+	archiveDir := fs.String("archive", "", "archive directory (default: <db dir>/archive)")
+	budArc := fs.Int64("budget-archive-mb", 2048, "cold-archive directory budget, MB")
 	if err := fs.Parse(args); err != nil {
 		return false, err
+	}
+	if *archiveDir == "" {
+		*archiveDir = filepath.Join(filepath.Dir(*dbPath), "archive")
 	}
 	if *backupsDir == "" {
 		*backupsDir = filepath.Join(filepath.Dir(*dbPath), "backups")
@@ -307,6 +348,7 @@ func storageReport(args []string) (over bool, err error) {
 	bakBytes := dirSize(*backupsDir)
 	logBytes := dirSize(*logsDir)
 	sideBytes := sidecarSize(*dbPath)
+	arcBytes := dirSize(*archiveDir)
 
 	fmt.Printf("storage report — %s\n", *dbPath)
 	fmt.Printf("%-28s %10s %6s\n", "table (incl. indexes)", "MB", "%")
@@ -336,6 +378,7 @@ func storageReport(args []string) (over bool, err error) {
 	check("wal", walBytes, *budWAL)
 	check("backups", bakBytes, *budBak)
 	check("sidecars", sideBytes, *budSide)
+	check("archive", arcBytes, *budArc)
 	check("logs", logBytes, *budLog)
 	if over {
 		fmt.Println("RESULT: OVER BUDGET — a storage surface outgrew its declared budget")
