@@ -464,6 +464,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		regimeLbls = map[int64]string{}
 	}
+	// HMM volatility labels, recorded alongside the rule-based ones. These go
+	// into the feature vector unconditionally so a graded comparison against
+	// regime_state accumulates from today, but they only KEY the adaptive
+	// weight cells when hmmCellsEnabled() says so — see that function.
+	hmmLbls, err := w.St.HMMRegimeLabels(ctx)
+	if err != nil {
+		hmmLbls = map[int64]string{}
+	}
 	rankPcts, err := w.St.RankingPercentiles(ctx)
 	if err != nil {
 		rankPcts = map[int64]float64{}
@@ -671,7 +679,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		}
 		// Global learned weights for THIS symbol's regime cell (the fallback
 		// when the symbol has no personal model of its own).
-		regimeWts, _ := adaptive.Pick(learned, regimeLbls[s.ID])
+		regimeWts, _ := adaptive.Pick(learned, cellKey(regimeLbls[s.ID], hmmLbls[s.ID]))
 		for _, h := range predHorizons {
 			sc, ok, err := w.St.LatestScore(ctx, s.ID, h)
 			if err != nil {
@@ -936,7 +944,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if f, ok := xsFeats[s.ID]; ok {
 				xsMap = f.vec()
 			}
-			vec := buildFeatureVector(sc, c, raw, cal, regimeLbls[s.ID], rankPct, sentN, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap, xsMap)
+			// hmm_<label>=1 rides in as one more cross-cutting feature map, so
+			// the vector records what the HMM said at prediction time whether
+			// or not it currently keys the weight cells.
+			var hmmMap map[string]float64
+			if l := hmmLbls[s.ID]; l != "" {
+				hmmMap = map[string]float64{"hmm_" + l: 1}
+			}
+			vec := buildFeatureVector(sc, c, raw, cal, cellKey(regimeLbls[s.ID], hmmLbls[s.ID]), rankPct, sentN, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap, xsMap, hmmMap)
 			if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
 				featErrs++
 				slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)

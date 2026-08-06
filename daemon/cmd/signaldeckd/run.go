@@ -212,6 +212,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		&pipeline.PredictionRunner{St: st},
 		&pipeline.PredictionResolver{St: st},
 		&pipeline.RegimeRunner{St: st},
+		&pipeline.HMMRegimeRunner{St: st},
 		&pipeline.RankingRunner{St: st},
 		&pipeline.BreakoutRunner{St: st},
 		&pipeline.SentimentTagger{St: st, LLM: llmClient},

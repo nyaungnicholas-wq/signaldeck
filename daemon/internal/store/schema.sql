@@ -2048,3 +2048,22 @@ CREATE TABLE IF NOT EXISTS grader_heartbeats (
 );
 CREATE INDEX IF NOT EXISTS idx_grader_heartbeats_task_finished
   ON grader_heartbeats (task, finished_at DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- HMM VOLATILITY REGIME (appended block — do not merge into the sections
+-- above). internal/hmmregime's fitted label per symbol, written by the
+-- hmm-regime-runner. This is a VOLATILITY state (how big the next move is
+-- likely to be), NOT a directional call — it is stored beside regime_state
+-- rather than replacing it, and the two are graded against each other by
+-- cmd/hmmbakeoff. prob is the filtered posterior of the winning state at the
+-- last bar; sd_low/sd_high are the fitted per-state standard deviations of
+-- daily log returns, so a label is always auditable against its own model.
+CREATE TABLE IF NOT EXISTS hmm_regime_state (
+  symbol_id INTEGER PRIMARY KEY REFERENCES symbols(id),
+  ts        INTEGER NOT NULL,
+  label     TEXT    NOT NULL,
+  prob      REAL    NOT NULL,
+  n_states  INTEGER NOT NULL,
+  sd_low    REAL    NOT NULL,
+  sd_high   REAL    NOT NULL
+);

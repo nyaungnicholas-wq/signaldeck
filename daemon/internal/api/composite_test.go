@@ -98,8 +98,8 @@ func TestCompositeDetailEndpoint(t *testing.T) {
 	if !body.Available || body.Score != 8 || body.Ts != now || body.CurvePct != 78.3 {
 		t.Fatalf("latest row: %+v", body)
 	}
-	if len(body.Factors) != 13 {
-		t.Fatalf("factor tiles = %d, want 13", len(body.Factors))
+	if len(body.Factors) != 14 {
+		t.Fatalf("factor tiles = %d, want 14", len(body.Factors))
 	}
 	if len(body.Ledger.Entries) == 0 || body.Ledger.Method == "" {
 		t.Fatalf("ledger = %+v", body.Ledger)
