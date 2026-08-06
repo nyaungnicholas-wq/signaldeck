@@ -150,7 +150,7 @@ and it is the same block every other document in this repository carries:
 
 <!-- BEGIN GENERATED live_accuracy -->
 
-Generated from `data/accuracy_registry.json` (grade of 2026-08-05T21:23:28) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+Generated from `data/accuracy_registry.json` (grade of 2026-08-05T23:00:53) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
 ### Live record
 
@@ -175,14 +175,14 @@ Sample-size notices carried by the registry itself (statements about the sample,
 ### Backtested claims with no live record yet
 
 - `filingsdrift21` — registered claim 50.0%, 98 forecasts recorded, 0 graded. Not a live result.
-- `liquidity21` — registered claim 59.5%, 4,192 forecasts recorded, 0 graded. Not a live result.
-- `liquidity21-crypto` — registered claim 79.5%, 80 forecasts recorded, 0 graded. Not a live result.
-- `trend21` — registered claim 73.1%, 4,217 forecasts recorded, 0 graded. Not a live result.
-- `trend21-crypto` — registered claim 93.4%, 80 forecasts recorded, 0 graded. Not a live result.
-- `trend63` — registered claim 70.0%, 4,217 forecasts recorded, 0 graded. Not a live result.
-- `vol21` — registered claim 55.8%, 4,234 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21` — registered claim 59.5%, 3,721 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21-crypto` — registered claim 79.5%, 65 forecasts recorded, 0 graded. Not a live result.
+- `trend21` — registered claim 73.1%, 3,746 forecasts recorded, 0 graded. Not a live result.
+- `trend21-crypto` — registered claim 93.4%, 65 forecasts recorded, 0 graded. Not a live result.
+- `trend63` — registered claim 70.0%, 3,746 forecasts recorded, 0 graded. Not a live result.
+- `vol21` — registered claim 55.8%, 3,762 forecasts recorded, 0 graded. Not a live result.
 
-**Multiplicity:** family_size=13, looks=12, divisor=156, corrected_alpha=0.0003205128205128205.
+**Multiplicity:** family_size=13, looks=13, divisor=169, corrected_alpha=0.0002958579881656805.
 
 **Survivorship:** epoch 2026-07-24; listing status resolvable for 326/335 graded symbols (97.3%): 9 inactive symbol(s) with no delisted_at; measured effect +0.36pp (active-only 83.58% minus survivorship-clean 83.22%, n=74,513 clean vs 17,876 active, revalidation of 2026-08-05T23:37:08+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
 
