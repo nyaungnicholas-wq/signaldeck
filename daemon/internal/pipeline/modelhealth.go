@@ -143,6 +143,26 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 				"accuracy-registry retire flag: effective-N Wilson upper bound below the "+
 					"prequential null at the pre-registered evidence floors (auto-retire rule)")
 		}
+		// CROSS-SECTION GATE, surfaced. The prediction runner already refuses to
+		// publish a horizon whose cross-section collapsed, but it says so only in
+		// its log line. An operator watching /api/fleethealth would have seen a
+		// model reporting healthy while nothing it produced reached the wire.
+		//
+		// This does not re-decide anything: the runner owns the refusal, and this
+		// reports the same record the runner acted on. Emitting goes false because
+		// that is the literal truth for the horizon while the gate holds.
+		if rec, err := loadCrossSection(ctx, w.St, h); err == nil && rec != nil {
+			if ok, reason := rec.CrossSection.Usable(); !ok {
+				score.Emitting = false
+				if score.Verdict == modelhealth.VerdictHealthy ||
+					score.Verdict == modelhealth.VerdictWatch {
+					score.Verdict = modelhealth.VerdictDegraded
+				}
+				score.Reasons = append(score.Reasons,
+					"cross-section gate ("+rec.Day+"): "+reason+
+						" — predictions are being withheld for this horizon")
+			}
+		}
 		graded++
 		if !score.Emitting {
 			retired++
