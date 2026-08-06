@@ -70,6 +70,27 @@ const fleetSkillTTL = 60 * time.Second
 const (
 	compositeCurveNote = "score 1-10 is a FORCED cross-sectional curve over all symbols scored in the pass (top 5% = 10 … bottom 5% = 1) — a rank on today's cross-section, not a probability; below 30 usable predictions no scores are emitted at all"
 	compositeEdgeNote  = "edge = calibrated P(up,1d) − 0.5 from the latest stored ensemble prediction — never recomputed here"
+
+	// compositeTradeability is the DIRECTIONAL twin of
+	// structregime.TradeabilityFor, and it is served unconditionally.
+	//
+	// The structural surface has carried a per-forecast tradeability field since
+	// the 2026-07-24 re-validation found trend21's most accurate conviction band
+	// has a NEGATIVE mean forward return. The directional surface never got one:
+	// the no-costs fact lived in a Go package comment (ensemble.go) and in the
+	// halt path below, which only fires when the model has ALREADY stopped
+	// emitting. A healthy directional forecast was served with no statement that
+	// its outcomes are gross of costs — the one state where a reader is most
+	// likely to act on it.
+	//
+	// Unconditional on purpose. A disclaimer that appears only once something is
+	// broken teaches readers that its absence means "safe to trade".
+	compositeTradeability = "NOT A TRADE. Outcomes behind this probability are raw close-to-close " +
+		"direction with NO transaction costs, spread, slippage or latency — P(up) > 0.5 is a " +
+		"directional lean, and costs must be subtracted before any P&L claim. Accuracy is also a " +
+		"separate axis from return: on this platform's own structural record the HIGHEST-accuracy " +
+		"conviction band has a NEGATIVE mean forward return. One-day direction has a measured " +
+		"~52-55% ceiling, re-confirmed six times; treat this as situational awareness, not a signal to act on."
 )
 
 // compositeDetail serves one symbol's latest SignalScore with its full
@@ -188,6 +209,7 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 		"conviction":    conv,
 		"curveNote":     compositeCurveNote,
 		"edgeNote":      compositeEdgeNote,
+		"tradeability":  compositeTradeability,
 		"trackLabel":    trackLabel,
 		"modelEmitting": emitting,
 		"modelVerdict":  hVerdict,

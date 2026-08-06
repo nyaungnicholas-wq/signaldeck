@@ -3,6 +3,7 @@ package adaptive
 import (
 	"math"
 	"math/rand"
+	"sort"
 	"strings"
 	"testing"
 
@@ -35,9 +36,21 @@ func clusteredPanel(rnd *rand.Rand, days, perDay int, cells []string, trueEdge m
 		}
 		// One call per (leg, cell, day) — repeated by every row that day.
 		call := map[string]map[string]float64{}
+		// SORTED, because this loop draws from rnd. Go randomises map iteration
+		// order, so ranging trueEdge directly assigned each draw to a different
+		// leg on every run — a fixed seed still produced a different panel, and
+		// TestCompute_PureNoisePanelEarnsNoWeight failed whenever no leg
+		// happened to reach its 0.60 winner's-curse precondition (~2 runs in 3
+		// for the whole package). A test whose fixture is random is not a test.
+		legNames := make([]string, 0, len(trueEdge))
+		for leg := range trueEdge {
+			legNames = append(legNames, leg)
+		}
+		sort.Strings(legNames)
 		for _, cell := range cells {
 			call[cell] = map[string]float64{}
-			for leg, edge := range trueEdge {
+			for _, leg := range legNames {
+				edge := trueEdge[leg]
 				agrees := rnd.Float64() < edge
 				callUp := (up == 1) == agrees
 				p := 0.35
@@ -162,8 +175,8 @@ func TestCompute_CellNeedsDistinctDays(t *testing.T) {
 	var exs []Example
 	for i := 0; i < 600; i++ {
 		exs = append(exs, Example{
-			Legs:      map[string]float64{ensemble.LegPressure: 0.7},
-			Regime:    "uptrend",
+			Legs:   map[string]float64{ensemble.LegPressure: 0.7},
+			Regime: "uptrend",
 			// 06:00Z + 10h of rows: 600 rows wholly inside ONE trading day.
 			Ts:        6*3600 + int64(i)*60,
 			Up:        1,

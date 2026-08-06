@@ -51,9 +51,9 @@
 package ensemble
 
 import (
-	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"errors"
 	"fmt"
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"math"
 	"sort"
 )
@@ -251,6 +251,19 @@ type Components struct {
 	// evidence stops meaning evidence of edge.
 	RequireMeasuredLegs bool
 
+	// RankEdge carries each leg's measured RANKING edge, keyed by canonical leg
+	// name (see LegNames): clusterstat.RankEdge of the leg's out-of-sample AUC,
+	// which is positive only when the leg is demonstrated — net of its own
+	// sampling error — to order symbols better than chance.
+	//
+	// When a leg has an entry here it OVERRIDES the *Lift gate for that leg,
+	// because lift is threshold-dependent and a blend consumes order, not
+	// thresholded calls: on this repo's live record the lift gate benched the
+	// forecast leg on 80% of rows and the benched rows were precisely the ones
+	// that ranked. A leg with no entry falls back to its historical *Lift
+	// behaviour, so an ungraded leg behaves exactly as before.
+	RankEdge map[string]float64
+
 	// ExpectancyHitRate is the measured fraction of positive forward returns
 	// for the current state, in [0, 1]. nil when no expectancy is available.
 	// Used as-is (it is already an up-probability).
@@ -348,6 +361,29 @@ func admits(lift *float64, strict bool) bool {
 	return !strict
 }
 
+// admitsLeg is admits() with the ranking gate in front of it. A leg that has
+// been GRADED for ranking is judged on that grade alone — the threshold-
+// dependent lift no longer gets a vote, in either direction. A leg with no
+// ranking grade falls through to the historical lift behaviour unchanged, so
+// this is additive: nothing that was ungraded changes.
+func admitsLeg(c Components, leg string, lift *float64) bool {
+	if e, ok := c.RankEdge[leg]; ok {
+		return e > 0
+	}
+	return admits(lift, c.RequireMeasuredLegs)
+}
+
+// admitsOptIn is admitsLeg for the legs that were ALWAYS opt-in (forecast, gbm,
+// meanrev, alphax): absent evidence has never admitted them and still does not,
+// in either mode. Only the measured quantity changes — ranking where it has
+// been graded, lift where it has not.
+func admitsOptIn(c Components, leg string, lift *float64) bool {
+	if e, ok := c.RankEdge[leg]; ok {
+		return e > 0
+	}
+	return lift != nil && *lift > 0
+}
+
 // LegProbabilities converts each ADMITTED component to its 0..1 up-probability
 // leg, keyed by canonical leg name. Exactly the legs that RawProbability would
 // blend are returned.
@@ -370,31 +406,31 @@ func LegProbabilities(c Components) map[string]float64 {
 	// (*PressureLift <= 0) is DROPPED, never down-weighted (honesty doctrine).
 	// The resolved-outcome record shows the fixed-weight pressure score is
 	// anti-predictive at 1d/1w, so once graded it benches fleet-wide.
-	if admits(c.PressureLift, c.RequireMeasuredLegs) {
+	if admitsLeg(c, LegPressure, c.PressureLift) {
 		legs[LegPressure] = clamp01((c.PressureScore + 1) / 2)
 	}
-	if c.ExpectancyHitRate != nil && admits(c.ExpectancyLift, c.RequireMeasuredLegs) {
+	if c.ExpectancyHitRate != nil && admitsLeg(c, LegExpectancy, c.ExpectancyLift) {
 		legs[LegExpectancy] = clamp01(*c.ExpectancyHitRate)
 	}
-	if c.ForecastProb != nil && c.ForecastLift != nil && *c.ForecastLift > 0 {
+	if c.ForecastProb != nil && admitsOptIn(c, LegForecast, c.ForecastLift) {
 		legs[LegForecast] = clamp01(*c.ForecastProb)
 	}
-	if c.SentimentScore != nil && admits(c.SentimentLift, c.RequireMeasuredLegs) {
+	if c.SentimentScore != nil && admitsLeg(c, LegSentiment, c.SentimentLift) {
 		legs[LegSentiment] = clamp01(0.5 + *c.SentimentScore*SentimentScale)
 	}
 	// STAGE 6 gated model legs: included ONLY with demonstrated out-of-sample
 	// edge (*Lift > 0), the same rule the forecast leg obeys. An edgeless or
 	// absent model leg is dropped, never down-weighted — honesty doctrine.
-	if c.GBMProb != nil && c.GBMLift != nil && *c.GBMLift > 0 {
+	if c.GBMProb != nil && admitsOptIn(c, LegGBM, c.GBMLift) {
 		legs[LegGBM] = clamp01(*c.GBMProb)
 	}
-	if c.MeanRevProb != nil && c.MeanRevLift != nil && *c.MeanRevLift > 0 {
+	if c.MeanRevProb != nil && admitsOptIn(c, LegMeanRev, c.MeanRevLift) {
 		legs[LegMeanRev] = clamp01(*c.MeanRevProb)
 	}
 	// Cross-sectional alpha leg: identical gate. Its prob is RELATIVE (beat
 	// the same-day universe median), entering the directional blend as a tilt
 	// — see the Components.AlphaXProb comment for the category nuance.
-	if c.AlphaXProb != nil && c.AlphaXLift != nil && *c.AlphaXLift > 0 {
+	if c.AlphaXProb != nil && admitsOptIn(c, LegAlphaX, c.AlphaXLift) {
 		legs[LegAlphaX] = clamp01(*c.AlphaXProb)
 	}
 	return legs

@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/adaptive"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/breakout"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
@@ -20,6 +23,43 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
 )
+
+// crossSectionRecord is one pass's measured cross-section, stamped with the UTC
+// day it describes. Stored in meta rather than derived from the predictions
+// table because a withheld pass writes no predictions, and a gate that can only
+// read published rows can never observe its own release.
+type crossSectionRecord struct {
+	Day string `json:"day"`
+	ensemble.CrossSection
+}
+
+const crossSectionMetaPrefix = "crosssection:"
+
+func loadCrossSection(ctx context.Context, st *store.Store, h md.Horizon) (*crossSectionRecord, error) {
+	raw, err := st.GetMeta(ctx, crossSectionMetaPrefix+string(h))
+	if err != nil || raw == "" {
+		return nil, err
+	}
+	var rec crossSectionRecord
+	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+// saveCrossSection records what this pass would publish. Best-effort: failing to
+// store the shape must never fail the pass that produced it, and a missing
+// record reads as "nothing to gate on" rather than as a collapse.
+func saveCrossSection(ctx context.Context, st *store.Store, h md.Horizon, day string, cs ensemble.CrossSection) {
+	blob, err := json.Marshal(crossSectionRecord{Day: day, CrossSection: cs})
+	if err != nil {
+		return
+	}
+	if err := st.SetMeta(ctx, crossSectionMetaPrefix+string(h), string(blob)); err != nil {
+		slog.Warn("cross-section gate: could not record this pass's shape",
+			"horizon", h, "err", err)
+	}
+}
 
 // decodeWeights parses a stored symbol_models.weights blob (component->weight).
 // A malformed/empty blob yields nil, so the caller falls back to global weights.
@@ -397,6 +437,20 @@ type PredictionRunner struct {
 func (w *PredictionRunner) Name() string            { return "prediction-runner" }
 func (w *PredictionRunner) Interval() time.Duration { return 10 * time.Minute }
 
+// rankGate resolves one leg's admission edge for a symbol: the per-symbol
+// Wilson lower bound on its out-of-sample AUC, VETOED to a bench whenever the
+// leg's FLEET AUC is at or below chance. The veto is one-directional by design
+// — a good fleet never promotes a bad symbol, only a bad fleet demotes a good
+// one — because at ~1,000 symbols the tail of a null leg clears a 90% bound
+// about 100 times by chance, and that tail is exactly what a per-symbol gate
+// would otherwise admit.
+func rankGate(fleet map[string]float64, leg string, h md.Horizon, auc float64, nEval int) (float64, bool) {
+	if a, ok := fleet[leg+"|"+string(h)]; ok && a <= 0.5 {
+		return -1, true
+	}
+	return clusterstat.RankEdge(auc, nEval)
+}
+
 func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {
@@ -414,12 +468,68 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		rankPcts = map[int64]float64{}
 	}
+	// FLEET RANKING GRADES, read once. Used only to VETO a leg whose measured
+	// ranking is at or below chance across every symbol the trainers graded —
+	// see store.FleetLegAUC for why a per-symbol bound alone is not enough at
+	// fleet width. Best-effort: an error leaves the per-symbol gate in charge.
+	fleetAUC, err := w.St.FleetLegAUC(ctx)
+	if err != nil {
+		fleetAUC = map[string]float64{}
+	}
+	// Newest trading day already carrying an EVIDENCE row per symbol, so a
+	// legless blend is recorded once a day rather than on all ~138 passes. One
+	// query per horizon, mutated in place as this pass writes.
+	evidenceDay := map[md.Horizon]map[int64]int64{}
+	for _, h := range predHorizons {
+		m, err := w.St.EvidenceDayBySymbol(ctx, h)
+		if err != nil {
+			m = map[int64]int64{}
+		}
+		evidenceDay[h] = m
+	}
 	// CROSS-SECTIONAL FEATURES, computed ONCE for the whole universe (a
 	// percentile needs the cross-section, so it cannot be built inside the
 	// per-symbol loop below). These are the four factors measured to rank the
 	// cross-section — liquidity, low-vol, 12-1 momentum, 1-day reversal — none
 	// of which existed in the alphax feature set that grades AUC 0.501. See
 	// xsfeatures.go for the measurement and its limits.
+	// CROSS-SECTION DISPERSION GATE. Measured on the PREVIOUS pass's published
+	// probabilities, per horizon, before anything is written this pass.
+	//
+	// Between 2026-07-27 and 2026-08-04 the fleet-wide calibration map collapsed
+	// and 329 symbols were handed 5-14 distinct probabilities; the 0.5 threshold
+	// turned that into a near-unanimous market call which was then stored,
+	// resolved and graded as ~330 independent per-symbol forecasts. The registry
+	// published FAILED/retire=true on what was really 11 market calls.
+	//
+	// A degenerate cross-section carries no usable call AND no usable ranking —
+	// that is what "no dispersion" means — so this refuses the upsert outright,
+	// the same answer AdmittedProbability already gives for a legless blend: no
+	// forecast, rather than a forecast that means nothing.
+	//
+	// It lags by one DAY, measured on the prior day's deduped cross-section —
+	// the same unit the registry grades. Every observed episode ran 6-8
+	// consecutive days, so the lag still gates them from the second day on. On
+	// an empty table there is nothing to measure and the pass publishes: a cold
+	// start must not be indistinguishable from a collapse.
+	today := time.Now().UTC().Format("2006-01-02")
+	gated := map[md.Horizon]string{}
+	for _, h := range predHorizons {
+		rec, err := loadCrossSection(ctx, w.St, h)
+		// Only a PRIOR day may gate: reading a record this pass wrote would let
+		// the gate judge the sweep it is in the middle of producing.
+		if err != nil || rec == nil || rec.Day == "" || rec.Day >= today {
+			continue
+		}
+		if ok, reason := rec.CrossSection.Usable(); !ok {
+			gated[h] = reason
+			slog.Warn("cross-section gate: refusing to publish this horizon",
+				"horizon", h, "priorDay", rec.Day, "reason", reason,
+				"n", rec.N, "distinct", rec.Distinct, "spread", rec.Spread,
+				"agreement", rec.Agreement)
+		}
+	}
+
 	xsFeats := crossSectionalFeatures(ctx, w.St, syms)
 	if len(xsFeats) == 0 {
 		slog.Info("cross-sectional features unavailable this pass — universe too " +
@@ -492,7 +602,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			benchProb[h] = p
 		}
 	}
-	n, featErrs, staleCals, noLegs := 0, 0, 0, 0
+	n, featErrs, staleCals, noLegs, gatedRows := 0, 0, 0, 0, 0
+	// This pass's emitted probabilities per horizon, published or withheld.
+	runProbs := map[md.Horizon][]float64{}
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
@@ -569,6 +681,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				continue
 			}
 			c := ensemble.Components{PressureScore: sc.Score, SentimentScore: sentScore}
+			// RANKING GATE. Every leg below already carries a graded
+			// out-of-sample AUC; until now admission was decided on
+			// Lift = Accuracy - BaseRate, which is threshold-dependent and so
+			// tracks the grading window's base rate rather than the leg's
+			// information. See clusterstat.RankEdge for the measurement that
+			// motivated the change. A leg with no graded AUC gets no entry and
+			// keeps its historical lift behaviour exactly.
+			c.RankEdge = map[string]float64{}
 			// Expectancy hit rate for the current state.
 			if rows, err := w.St.Expectancy(ctx, s.ID, h); err == nil {
 				if row, ok := expectancy.Lookup(rows, states[h]); ok {
@@ -576,11 +696,21 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					c.ExpectancyHitRate = &hr
 				}
 			}
+			// The expectancy leg's grade lives in model_forecasts like the model
+			// legs, written by ExpectancyTrainer. Without it this leg is admitted
+			// on availability alone — and with pressure and alphax now benched on
+			// measured ranking, it would be the leg carrying most of the blend.
+			if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelExpectancy, ts); ok {
+				c.RankEdge[ensemble.LegExpectancy] = e
+			}
 			// Forecast prob + lift (lift gates whether it is trusted).
 			for _, f := range forecasts {
 				if f.Horizon == h {
 					p, l := f.Prob, f.Lift
 					c.ForecastProb, c.ForecastLift = &p, &l
+					if e, ok := rankGate(fleetAUC, ensemble.LegForecast, h, f.AUC, f.NEval); ok {
+						c.RankEdge[ensemble.LegForecast] = e
+					}
 				}
 			}
 			// STAGE 6 gated model legs. Each carries its stored OOS lift; the
@@ -590,9 +720,21 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// the blend is exactly the pre-Stage-6 blend.
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelGBM, ts); ok {
 				c.GBMProb, c.GBMLift = &p, &l
+
+				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelGBM, ts); ok {
+
+					c.RankEdge[ensemble.LegGBM] = e
+
+				}
 			}
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelMeanRev, ts); ok {
 				c.MeanRevProb, c.MeanRevLift = &p, &l
+
+				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelMeanRev, ts); ok {
+
+					c.RankEdge[ensemble.LegMeanRev] = e
+
+				}
 			}
 			// Cross-sectional alpha leg (alphax-leg wave): rows exist in
 			// model_forecasts ONLY while the pooled model's OOS lift > 0 (the
@@ -602,6 +744,12 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// a directional tilt — see ensemble.Components.AlphaXProb.
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelAlphaX, ts); ok {
 				c.AlphaXProb, c.AlphaXLift = &p, &l
+
+				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelAlphaX, ts); ok {
+
+					c.RankEdge[ensemble.LegAlphaX] = e
+
+				}
 			}
 			// PRESSURE LEG GATE: the pressure score is the platform's oldest base
 			// leg, but the resolved record shows its fixed-weight directional call
@@ -612,6 +760,12 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// leg (no fresh row) is kept — fail-safe against a cold trainer.
 			if _, l, ok := modelLegProbLift(modelFcs, h, store.ModelPressure, ts); ok {
 				c.PressureLift = &l
+
+				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelPressure, ts); ok {
+
+					c.RankEdge[ensemble.LegPressure] = e
+
+				}
 			}
 			// PER-SYMBOL AGENTS: pick weights + calibration by tier order
 			//   personal(symbol) -> global-regime -> global -> static.
@@ -670,19 +824,45 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			}
 			raw, nUsed, admitted := ensemble.AdmittedProbability(c, wts)
 			if !admitted {
-				// NO LEG SURVIVED ADMISSION — publish nothing.
+				// NO LEG SURVIVED ADMISSION — record the EVIDENCE, publish nothing.
 				//
-				// WeightedProbability returns 0.5 for an empty blend, and on the
-				// wire a stored 0.5 is indistinguishable from a real coin-flip
-				// call: it inherits the calibration map, lands on one side of the
-				// 0.5 threshold, and is graded as a confident directional
-				// prediction. Measured on live rows, 1,202 predictions carried
-				// raw_prob=0.5 with nUsed=0 — pure absence of evidence, published
-				// and then scored as if it were a forecast.
+				// The row is written with nUsed=0, which store.UpsertPrediction
+				// reads as "not a forecast": it writes no prediction_outcomes row,
+				// so this can never be graded, never enter a calibration fit and
+				// never reach the live record. Every reader of the predictions
+				// table filters n_used > 0, so it is never served either.
 				//
-				// ensemble.AdmittedProbability exists precisely to refuse this and
-				// was simply never called here. Skipping the upsert is the honest
-				// output: no forecast, rather than a forecast that means nothing.
+				// What it DOES keep is components — what each leg said at this
+				// instant. That is the only surface the leg graders read (the
+				// expectancy leg has no other one at all), so skipping the write
+				// entirely would have made the gate self-sealing: bench a leg,
+				// stop recording it, and the evidence that could ever re-admit it
+				// stops accruing with it. A withheld forecast must not also
+				// withhold the measurement that reopens the question.
+				// ONE evidence row per symbol per trading day. Consumers dedup
+				// to that unit regardless, so the rest would be pure volume —
+				// ~40,200 rows a day at 1d against a 363,355-row table.
+				day := md.TradingDay(ts)
+				if prev, seen := evidenceDay[h][s.ID]; !seen || prev < day {
+					comps, _ := json.Marshal(c)
+					if err := w.St.UpsertPrediction(ctx, store.Prediction{
+						SymbolID: s.ID, Horizon: h, Ts: ts,
+						RawProb: raw, CalProb: raw, NUsed: 0, Components: string(comps),
+						Weights: "{}", Basis: basis,
+					}); err != nil {
+						return "", err
+					}
+					evidenceDay[h][s.ID] = day
+				}
+				// The 0.5 stored here is NOT calibrated and NOT a call. An empty
+				// blend returns 0.5 from WeightedProbability, and on the wire a
+				// stored 0.5 is indistinguishable from a real coin-flip forecast:
+				// it would inherit the calibration map, land on one side of the
+				// 0.5 threshold and be graded as a confident directional call.
+				// 1,202 live rows carried exactly that shape. So the calibration
+				// map is deliberately NOT applied and cal_prob is left equal to
+				// raw — the column has to hold something, and an uncalibrated
+				// number that no surface reads is the honest thing to put there.
 				noLegs++
 				continue
 			}
@@ -694,6 +874,24 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				// Fleet-wide fallback, fit on raw_prob against realized
 				// outcomes — the SAME variable it is applied to here.
 				cal = fn(raw)
+			}
+			// SHADOW MEASUREMENT — recorded whether or not this row is published.
+			//
+			// The gate reads what the fleet WOULD publish, never what it did. If it
+			// read stored rows instead, withholding a horizon would erase the only
+			// evidence that could ever reopen it: the newest day carrying rows
+			// would stay the collapsed one forever and the gate would latch shut.
+			// Measuring here, after calibration and before the write, is what makes
+			// the refusal self-releasing — the pass keeps reporting its own shape
+			// while publishing nothing.
+			runProbs[h] = append(runProbs[h], cal)
+
+			if _, isGated := gated[h]; isGated {
+				// Yesterday's cross-section was degenerate. Skip the upsert exactly
+				// as a legless blend does: the row that would be written here is the
+				// one that gets graded as an independent forecast, and it is not one.
+				gatedRows++
+				continue
 			}
 			comps, _ := json.Marshal(c)
 			// WeightedProbability falls through to the equal-weight mean when
@@ -827,6 +1025,27 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// used to be laundered into thousands of 0.5 "predictions".
 		detail += fmt.Sprintf(" (%d symbol-horizon(s) had no admitted leg — no forecast published)", noLegs)
 	}
+	// Record every horizon's shape, INCLUDING the withheld ones. This is the
+	// only write a gated horizon makes, and it is what lets the next pass see
+	// that the cross-section recovered.
+	for _, h := range predHorizons {
+		if probs := runProbs[h]; len(probs) > 0 {
+			saveCrossSection(ctx, w.St, h, today, ensemble.MeasureCrossSection(probs))
+		}
+	}
+	if gatedRows > 0 {
+		// A horizon whose previous cross-section had collapsed. Loud on purpose:
+		// this is the counter that would have been non-zero for eight straight
+		// trading days in the 2026-07-27..08-04 episode, and nothing at the time
+		// was counting it.
+		hs := make([]string, 0, len(gated))
+		for h, reason := range gated {
+			hs = append(hs, fmt.Sprintf("%s: %s", h, reason))
+		}
+		sort.Strings(hs)
+		detail += fmt.Sprintf(" (%d row(s) withheld by the cross-section gate — %s)",
+			gatedRows, strings.Join(hs, "; "))
+	}
 	return detail, nil
 }
 
@@ -868,6 +1087,36 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 					return "", err
 				}
 				if !okF || base.Close <= 0 || fwd.Ts-target > 3*horizonSecs(h) {
+					continue
+				}
+				// SETTLEMENT GUARD — the forward bar must be FINISHED.
+				//
+				// `now < target` was the only time check, and target is the next
+				// session's bar STAMP (ET midnight). Ingest creates that bar at
+				// the open, so any resolver pass during the session found a bar
+				// whose Close was the live price, froze it as a close-to-close
+				// label, and never revisited it.
+				//
+				// Measured on 4,000 resolved 1d stock rows: 37.8% were frozen
+				// before their forward bar's 16:00 ET close, and those disagree
+				// with the FINAL close 9.7% of the time against 2.9% for rows
+				// frozen afterwards — about 3.7% of the whole 1d record labeled
+				// against a price that had not happened yet. 1w freezes
+				// mid-session only 0.9% of the time, which is exactly why it
+				// agrees with a recomputation 99.8% of the time and 1d only 94.2%.
+				//
+				// The test is "a LATER bar exists", not a clock offset: a
+				// successor bar can only appear once the next session has begun,
+				// so it settles the previous one without this code needing to
+				// know exchange hours, half-days, DST or crypto's 24h day.
+				//
+				// Cost: a label lands one session later, and the final bar of a
+				// symbol that stops printing never resolves — the same answer
+				// UnresolvedPredictions already gives for dead symbols, and an
+				// unknown outcome is better than a confident wrong one.
+				if _, settled, err := w.St.BarAtOrAfter(ctx, p.SymbolID, md.TF1d, fwd.Ts+1); err != nil {
+					return "", err
+				} else if !settled {
 					continue
 				}
 				if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, fwd.Close/base.Close-1); err != nil {

@@ -180,18 +180,24 @@ func TestRegimeOutcomes_DedupDropsBaseline(t *testing.T) {
 
 	// A pre-guard row: post-epoch, structural kind, no baseline. Written
 	// directly because the write path now (correctly) refuses to produce one.
-	day := (NullAmendmentEpoch + 86400) / 86400
+	//
+	// Both stamps sit at 14:00Z / 15:00Z of one session so they share a trading
+	// day. The seeded `day` must be computed the way the write path computes it
+	// — a hand-rolled ts/86400 lands on a different key and the two calls stop
+	// colliding, which is the collision this test exists to observe.
+	ts0 := (NullAmendmentEpoch/86400+1)*86400 + 14*3600
+	day := md.TradingDay(ts0)
 	if _, err := st.w.ExecContext(ctx, `
 		INSERT INTO regime_outcomes (symbol_id, kind, ts, day, horizon_days, regime,
 		  conviction, historical_accuracy, rank, naive_label)
 		VALUES (?,?,?,?,?,?,?,?,?,NULL)`,
-		sym.ID, string(structregime.KindTrend21), day*86400, day, 21, "uptrend",
+		sym.ID, string(structregime.KindTrend21), ts0, day, 21, "uptrend",
 		0.9, 0.97, 0.8); err != nil {
 		t.Fatalf("seed pre-guard row: %v", err)
 	}
 
 	c := RegimeCall{
-		SymbolID: sym.ID, Kind: structregime.KindTrend21, Ts: day*86400 + 3600,
+		SymbolID: sym.ID, Kind: structregime.KindTrend21, Ts: ts0 + 3600,
 		HorizonDays: 21, Regime: "uptrend", Conviction: 0.9,
 		HistoricalAccuracy: 0.97, Rank: 0.8, NaiveLabel: "uptrend",
 	}

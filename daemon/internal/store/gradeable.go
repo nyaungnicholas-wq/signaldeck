@@ -46,6 +46,7 @@ func (s *Store) EarliestGradeableByKind(ctx context.Context) ([]EarliestGradeabl
 		       MIN(CASE WHEN resolved_at IS NULL
 		                THEN ts + CAST(horizon_days * ? * 86400 AS INTEGER) END)
 		  FROM regime_outcomes
+		 WHERE superseded_by IS NULL
 		 GROUP BY kind
 		 ORDER BY kind`, tradingToCalendar)
 	if err != nil {
@@ -85,7 +86,8 @@ func (s *Store) EarliestGradeableAt(ctx context.Context) (t time.Time, ok bool, 
 	var due sql.NullInt64
 	err = s.db.QueryRowContext(ctx, `
 		SELECT MIN(ts + CAST(horizon_days * ? * 86400 AS INTEGER))
-		  FROM regime_outcomes WHERE resolved_at IS NULL`, tradingToCalendar).Scan(&due)
+		  FROM regime_outcomes
+		 WHERE resolved_at IS NULL AND superseded_by IS NULL`, tradingToCalendar).Scan(&due)
 	if err != nil || !due.Valid {
 		return time.Time{}, false, err
 	}
@@ -120,6 +122,7 @@ func (s *Store) EarliestVerdictAt(ctx context.Context) (t time.Time, ok bool, er
 		SELECT horizon_days, MIN(day)
 		  FROM regime_outcomes
 		 WHERE naive_label IS NOT NULL AND horizon_days > 0
+		   AND superseded_by IS NULL
 		 GROUP BY kind`)
 	if err != nil {
 		return time.Time{}, false, err
