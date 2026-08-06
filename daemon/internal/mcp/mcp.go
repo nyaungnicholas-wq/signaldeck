@@ -22,9 +22,10 @@
 //     stronger claim is DISCRIMINATION: ~72.9% at low conviction against
 //     ~97.6% at very-high, a 24.7pp spread that held across 24 quarters on a
 //     survivorship-clean universe of 54,969 observations.
-//   - The live directional record (46.7%, negative Brier skill) is
-//     retrievable through get_track_record and cannot be hidden — a test
-//     asserts it survives even when the store has nothing to say.
+//   - The live directional record (graded below its own baseline, negative
+//     Brier skill) is retrievable through get_track_record and cannot be
+//     hidden — a test asserts it survives even when the store has nothing to
+//     say. The figures come from the registry, never from this file.
 //
 // # What this design does NOT guarantee
 //

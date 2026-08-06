@@ -24,6 +24,19 @@ The pre-import database was preserved as `data/signaldeck.db.bak-preimport-20260
 so before/after is a measurement rather than a recollection. Both columns are
 produced by the same query against the two files:
 
+> **That copy was RETIRED on 2026-08-05** (2.4 GB, deleted at the operator's
+> instruction along with four sibling copies — see `REMEDIATION_2026-08-03.md`
+> §"Still open" item 0, which had left the decision to them). Before it was
+> deleted, every figure in the BEFORE column below was re-derived from it one
+> last time and committed to `proofs/P3_RETIRED_COPY_EVIDENCE.json`. **All seven
+> matched this table exactly** — 1,077 / 16 / 0 / 1,070 / 322 / 748 / 16, bar
+> span 2019-01-02 → 2026-08-01. The BEFORE column is therefore still attested by
+> a machine-readable artifact rather than by prose alone; what is gone is the
+> ability to ask this table a NEW question about the pre-import state. No
+> managed backup covers 2026-08-02 (the nearest predates it by 13 days), so that
+> loss is permanent and is recorded here rather than left for a reader to
+> discover.
+
 | metric | BEFORE (`.bak-preimport-20260802`) | AFTER (current) |
 |---|---|---|
 | symbols with `tf='1d'` bars | 1,077 | 1,777 |

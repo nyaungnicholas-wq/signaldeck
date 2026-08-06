@@ -7,11 +7,13 @@
 // SCOPE, deliberately narrow
 // --------------------------
 // Explanations are built ONLY for the structural regime forecasts. The obvious
-// thing to build — "BUY NVDA · 82.7% · +3.4% expected" — cannot be built
-// honestly here: the directional model measured 48.0% against a 54.4%
+// thing to build — a BUY call with a headline percentage and an expected return
+// — cannot be built honestly here: the directional model graded below its own
 // baseline and was auto-retired, so dressing it in contributors and confidence
 // intervals would make a model the evidence rejected look MORE credible. The
 // format is only as honest as the number it decorates.
+//
+// Figures are not typed here: data/accuracy_registry.json is the one source.
 //
 // The analog is a real lookup, not an illustration: the historical bar whose
 // state most resembles today, together with what actually happened next. When

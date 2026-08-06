@@ -1,4 +1,13 @@
 # SignalDeck — Independent Re-Audit, 2026-08-02
+<!-- SUPERSEDED-SNAPSHOT -->
+> ## 📛 SUPERSEDED LIVE RECORD — HISTORICAL
+> **Marked 2026-08-05.** Any live accuracy, baseline or sample size quoted below
+> is the record **as it stood on 2026-08-02**, not the current one. This finding
+> compares two surfaces that each reported the record of that day; the point it
+> makes about scope is unchanged by later grading, but the figures are not live.
+>
+> **The one authoritative live record is `partials/live_accuracy.md`**, generated
+> from `data/accuracy_registry.json` by `tools/live_accuracy.py`.
 
 Second, independent pass over `AUDIT_SUPERPROMPT.md`, run without reference to the
 conclusions in `SYSTEM_CHECK_2026-08-02.md`. Every number below was re-measured in this

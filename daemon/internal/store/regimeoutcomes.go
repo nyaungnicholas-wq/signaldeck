@@ -389,6 +389,25 @@ func (s *Store) InsertRegimeOutcome(ctx context.Context, c RegimeCall) (bool, er
 		return false, fmt.Errorf("refusing to freeze %s call for symbol %d at ts %d with no "+
 			"naive-persistence baseline: the null would be unmatched", c.Kind, c.SymbolID, c.Ts)
 	}
+	// DELIBERATE HOLDOUT from the trading-day fold (md.TradingDay). Everywhere
+	// else the day fold moved off UTC midnight so an extended session's tail
+	// stops counting as a second observation; this one column did not, and the
+	// reason is that it is PERSISTED and carries a UNIQUE index on
+	// (symbol_id, kind, day).
+	//
+	// Re-folding it means rewriting stored `day` values, and on the live corpus
+	// 2,815 of 28,424 rows would collide onto an existing key — the same-session
+	// pairs the new fold correctly merges. Resolving those collisions means
+	// DELETING frozen rows: ts, regime, conviction and historical_accuracy in
+	// this table are all stamped "frozen at call time" because the table is the
+	// pre-registration audit trail. Destroying part of that record to tidy a
+	// dedup key trades away the thing the table exists for.
+	//
+	// The cost of holding out is bounded and local: at most one extra row per
+	// (symbol, kind) around a session boundary, in a dedup key — it feeds no
+	// published interval, because those are computed by the readers that DID
+	// move. Re-folding it is a data migration to run deliberately, with the
+	// colliding rows reviewed rather than silently dropped.
 	res, err := s.w.ExecContext(ctx, `
 		INSERT OR IGNORE INTO regime_outcomes
 		  (symbol_id, kind, ts, day, horizon_days, regime, conviction,

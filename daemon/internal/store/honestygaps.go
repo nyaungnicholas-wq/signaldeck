@@ -285,7 +285,7 @@ func (s *Store) VersionedOutcomes(ctx context.Context, h md.Horizon, limit int, 
 		JOIN prediction_outcomes o
 		  ON o.symbol_id=f.symbol_id AND o.horizon=f.horizon AND o.ts=f.ts
 		JOIN (
-		  SELECT symbol_id, o2.ts/86400 AS day, MAX(o2.ts) AS mts
+		  SELECT symbol_id, trading_day(o2.ts) AS day, MAX(o2.ts) AS mts
 		  FROM prediction_outcomes o2
 		  WHERE o2.horizon=? AND o2.resolved_at IS NOT NULL AND o2.up IS NOT NULL
 		    AND o2.ts >= ?

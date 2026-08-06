@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -268,7 +269,26 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 		model = c.model
 	}
 	now := time.Now()
-	if !c.reserve(ctx, now) {
+	reserved := c.reserve(ctx, now)
+	// ATTRIBUTE THE SPEND. The daily counter is a single integer, so when the
+	// 2,000-call budget was exhausted on 2026-08-05 there was no way to ask
+	// WHICH caller spent it — the scheduled fleet accounts for at most ~121
+	// calls/day, and the remaining ~1,880 could only be narrowed to "one of the
+	// four request-driven endpoints" by reading code. A budget you cannot
+	// attribute is one you cannot manage.
+	//
+	// The charter already identifies the caller uniquely (every agent has its
+	// own constant), so a fingerprint of it needs no signature change and no new
+	// interface — and cannot drift out of sync with a hand-maintained registry
+	// of caller names. Logged rather than counted in a table on purpose: this
+	// answers "who spent it" by grep, and adding a second persisted counter
+	// alongside llm_spend risks the two disagreeing about the cap.
+	//
+	// Refusals are logged too. They are the cheap signal that a caller is still
+	// hammering a spent budget, which is exactly what you want to see.
+	slog.Info("llm call", "caller", callerFingerprint(sys), "model", model,
+		"reserved", reserved, "spendToday", c.Stats().Calls)
+	if !reserved {
 		return "", ErrCapReached
 	}
 	if maxTokens <= 0 {
@@ -454,6 +474,35 @@ func sanitize(s string) string {
 	}
 	if len(s) > 200 {
 		s = s[:200]
+	}
+	return s
+}
+
+// callerFingerprint identifies which agent made an LLM call, for spend
+// attribution, using the charter it passed.
+//
+// The charter is a per-agent constant, so it is already a unique caller id and
+// costs nothing to derive one from. The alternative — threading an explicit
+// caller name through Complete/CompleteWith and every call site — is a wider
+// change whose registry would then need to be kept in sync by hand, and a
+// caller that forgot to update it would be attributed to whoever it copied.
+//
+// The first line is used because every charter in this tree opens by naming the
+// role ("You are a markets analyst writing a SHORT, factual company snapshot").
+// Truncated because the point is to tell callers APART in a log, not to
+// reproduce the prompt.
+func callerFingerprint(sys string) string {
+	const max = 60
+	s := strings.TrimSpace(sys)
+	if i := strings.IndexAny(s, ".\n"); i > 0 {
+		s = s[:i]
+	}
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return "(no charter)"
+	}
+	if len(s) > max {
+		return s[:max]
 	}
 	return s
 }

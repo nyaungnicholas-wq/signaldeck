@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"time"
@@ -99,7 +98,8 @@ type Watchdog struct {
 	// (the pre-2026-07-27 behaviour). The staleness rule itself is unchanged —
 	// this only changes what happens after a worker is judged stale.
 	Runner Actuator
-	// Notify shows a user-facing alert; nil = osascript display notification.
+	// Notify shows a user-facing alert; nil = notify.Local (the platform's
+	// desktop popup, or an explicit unsupported error).
 	Notify func(msg string) error
 	// Remote fans the unhealthy-transition message out to the env-configured
 	// remote transports (Discord/Telegram/webhook — internal/notify); nil or
@@ -168,7 +168,7 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		w.lastNotify = now
 		local := w.Notify
 		if local == nil {
-			local = osascriptNotify
+			local = notify.Local
 		}
 		if err := local(fmt.Sprintf("SignalDeck: %d stale worker(s): %v", len(stale), stale)); err != nil {
 			slog.Warn("watchdog: notification failed", "err", err) // never fatal
@@ -260,11 +260,8 @@ func (w *Watchdog) writeStatus(s Status) error {
 	return os.Rename(tmp, w.StatusPath)
 }
 
-// osascriptNotify pops a macOS notification. Best-effort: any failure (no
-// osascript, headless session) is returned for logging but never fatal.
-func osascriptNotify(msg string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	script := fmt.Sprintf("display notification %q with title %q", msg, "SignalDeck watchdog")
-	return exec.CommandContext(ctx, "osascript", "-e", script).Run()
-}
+// The local desktop popup now lives in notify.Local, which dispatches on the
+// running platform. The osascriptNotify that stood here was macOS-only and
+// unguarded, so after the move to Windows every watchdog alert died as
+// `exec: "osascript": executable file not found in %PATH%`. See
+// internal/notify/local.go.

@@ -36,20 +36,51 @@ func (s *Store) LabeledFeaturesBySymbolVersion(ctx context.Context, symbolID int
 }
 
 // labeledFeaturesBySymbol implements both variants; version 0 = all versions.
+//
+// ONE ROW PER TRADING DAY, newest wins. The prediction runner re-scores a symbol
+// many times a day and writes a feature row each time, but a 1d/1w label is a
+// property of the DAY, not of the scoring instant: every row inside one day
+// carries the identical outcome. Measured 2026-08-05 on the live v12 corpus,
+// each symbol's labeled set was ~310 rows over 8 distinct days — 39 same-label
+// copies per day — so the honest sample was 8 observations, not 310.
+//
+// Returning those copies corrupted BOTH things this query feeds:
+//
+//   - TRAINING: 39 near-identical vectors sharing one label let a model fit the
+//     handful of days that happened to be re-scored most, which is a sampling
+//     artifact of the runner's schedule and nothing about the market.
+//   - GRADING: the out-of-sample lift that admits a leg to the live blend was
+//     computed over the same duplicated rows. A window of 8 days where one day
+//     dominates the row count is wildly class-imbalanced (measured up-rates of
+//     0.029 and 0.971 on real symbols), which drove the majority-class floor to
+//     0.966 and benched every leg by arithmetic — 0 of 43 gbm legs admitted, 0
+//     alphax ever — no matter how good the model was.
+//
+// Deduping here fixes both at the source, and uses the SAME independence rule
+// the accuracy registry already grades with, so the surface that TRAINS a leg
+// and the surface that JUDGES it finally agree about what one observation is.
 func (s *Store) labeledFeaturesBySymbol(ctx context.Context, symbolID int64, h md.Horizon, version, limit int) ([]LabeledFeature, error) {
 	q := `
-		SELECT f.ts, f.version, f.vec, o.up, o.fwd_return
-		FROM features f
-		JOIN prediction_outcomes o
-		  ON o.symbol_id=f.symbol_id AND o.horizon=f.horizon AND o.ts=f.ts
-		WHERE f.symbol_id=? AND f.horizon=? AND o.resolved_at IS NOT NULL
-		  AND o.up IS NOT NULL AND o.fwd_return IS NOT NULL`
+		SELECT ts, version, vec, up, fwd_return FROM (
+			SELECT f.ts AS ts, f.version AS version, f.vec AS vec,
+			       o.up AS up, o.fwd_return AS fwd_return,
+			       ROW_NUMBER() OVER (
+			         PARTITION BY trading_day(f.ts) ORDER BY f.ts DESC
+			       ) AS rn
+			FROM features f
+			JOIN prediction_outcomes o
+			  ON o.symbol_id=f.symbol_id AND o.horizon=f.horizon AND o.ts=f.ts
+			WHERE f.symbol_id=? AND f.horizon=? AND o.resolved_at IS NOT NULL
+			  AND o.up IS NOT NULL AND o.fwd_return IS NOT NULL`
 	args := []any{symbolID, string(h)}
 	if version > 0 {
 		q += ` AND f.version=?`
 		args = append(args, version)
 	}
-	q += ` ORDER BY f.ts DESC LIMIT ?`
+	q += `
+		)
+		WHERE rn=1
+		ORDER BY ts DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -69,6 +100,38 @@ func (s *Store) labeledFeaturesBySymbol(ctx context.Context, symbolID int64, h m
 		out = append(out, lf)
 	}
 	return out, rows.Err()
+}
+
+// StockFeatureDayFold counts the same stock feature rows two ways: on the naive
+// UTC-midnight boundary and on the trading-day boundary the platform now folds
+// with (md.TradingDay). Only rows at or after `since` are counted.
+//
+// The gap between the two is the pseudo-replication a UTC-midnight fold admits.
+// A US extended session closes at 20:00 ET — 00:00Z under EDT, 01:00Z under EST
+// — so its tail lands in the NEXT UTC day and would be counted as a second
+// independent observation of the same session. Measured 2026-08-05 before the
+// fold moved: 16,606 UTC buckets against 15,976 real trading days, 630 phantom
+// days, 3.94% of effective N.
+//
+// The fold has since moved, so this is no longer measuring a live defect — it
+// is the WATCHDOG on that fix. It answers "how much would we be overstating if
+// the boundary slipped back", which is the number to watch if the writer's
+// schedule changes or extended-hours coverage widens. A rising value means the
+// margin protecting the day count is being eaten.
+//
+// Returned as raw counts rather than a rate so the caller can state both
+// numbers in the finding — "15,976 real days, 630 phantom" is auditable in a
+// way that "3.9%" is not.
+func (s *Store) StockFeatureDayFold(ctx context.Context, since int64) (utcDays, tradingDays int, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT f.symbol_id || ':' || (f.ts/?)),
+		       COUNT(DISTINCT f.symbol_id || ':' || ((f.ts-?)/?))
+		FROM features f
+		JOIN symbols s ON s.id=f.symbol_id
+		WHERE s.market='stocks' AND f.ts >= ?`,
+		md.SecondsPerDay, md.TradingDayOffsetSecs, md.SecondsPerDay, since).
+		Scan(&utcDays, &tradingDays)
+	return utcDays, tradingDays, err
 }
 
 // SymbolModelRow is one persisted per-symbol agent. The JSON blob columns are

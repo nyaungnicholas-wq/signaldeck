@@ -17,7 +17,7 @@ while the daemon is writing.
 
 Discipline enforced here, learned from the failures this repo already found:
   * INDEPENDENT observations only. Intraday predictions that map to the same forward
-    move are collapsed to one row per (symbol, horizon, UTC-day), keeping the latest.
+    move are collapsed to one row per (symbol, horizon, trading-day), keeping the latest.
     Pooling them inflates n by ~60x and produces confident nonsense.
   * Per-BAND accuracy, never the population average. A low-conviction forecast quoting
     the all-decisions number is how "83%" ends up attached to a coin flip.
@@ -79,7 +79,7 @@ DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 # Below this many independent observations no verdict is claimed either way.
 MIN_INDEPENDENT_N = 30
 
-# Below this many DISTINCT UTC days no interval is published at all. Mirrors
+# Below this many DISTINCT trading days no interval is published at all. Mirrors
 # clusterstat.MinDistinctDays in the Go daemon, and exists for the same reason:
 # a between-day variance estimated from three days is not a correction, it is a
 # different way to be overconfident.
@@ -696,7 +696,7 @@ CALIBRATION_BINS = 10
 # NOW, before the data can argue back:
 #
 #   FAILED-forward. The first time a directional row reaches MIN_INDEPENDENT_N
-#   independent observations over MIN_DISTINCT_DAYS distinct UTC days with the
+#   independent observations over MIN_DISTINCT_DAYS distinct trading days with the
 #   upper bound of its effective-N Wilson 95% interval below the prequential
 #   null, the verdict is FAILED, the row publishes retire=true in the registry
 #   JSON, and the daemon's model-health worker (pipeline/modelhealth.go) stops
@@ -712,8 +712,8 @@ AUTO_RETIRE_MODEL = "directional-ensemble"
 AUTO_RETIRE_REGISTERED = "2026-07-26"
 AUTO_RETIRE_CRITERION = (
     f"The first time a directional row reaches {MIN_INDEPENDENT_N} independent "
-    "(symbol, horizon, UTC-day) observations spread over "
-    f"{MIN_DISTINCT_DAYS} distinct UTC days, if the upper bound of its "
+    "(symbol, horizon, trading-day) observations spread over "
+    f"{MIN_DISTINCT_DAYS} distinct trading days, if the upper bound of its "
     "effective-N day-clustered Wilson 95% interval is below the "
     "prequential-majority null, the verdict is FAILED and the row carries "
     "retire=true. No grace period, no re-window, no threshold revision after "
@@ -999,7 +999,7 @@ def wilson(k: int, n: int, z: float | None = None) -> tuple[float, float]:
 def design_effect(days: list[tuple[int, int]]) -> float | None:
     """Measured clustering penalty over per-day (n, hits) tallies.
 
-    Deduplicating to one row per (symbol, UTC-day) removes intraday
+    Deduplicating to one row per (symbol, trading-day) removes intraday
     pseudo-replication and leaves the larger problem untouched: on any given day
     ~1,000 symbols share ONE market move. A binomial interval over those rows
     asserts thousands of independent trials in a sample that holds a handful of
@@ -1068,8 +1068,8 @@ def horizon_blocks(day_rows: list[tuple[int, int, int]],
                    horizon_days: int) -> list[tuple[int, int, int]]:
     """Fold per-CALL-DAY tallies into non-overlapping forward-horizon blocks.
 
-    day_rows are (utc_day, n, hits) with utc_day the integer ts//86400 the
-    daemon writes. Two call days inside the same block share nearly all of their
+    day_rows are (day, n, hits) with day the trading-day index the daemon
+    folds on (md.TradingDay / trading_day above). Two call days inside the same block share nearly all of their
     forward window, so they are pooled into ONE cluster rather than counted as
     two. Returns (anchor_day, n, hits) sorted by anchor; horizon 1 is identity.
 
@@ -1195,10 +1195,52 @@ def prequential_null(days: list[tuple[int, int]]) -> dict:
     return clustered_ci(null_days)
 
 
+# The day fold, mirroring daemon/internal/marketdata/tradingday.go.
+#
+# The grader and the daemon must agree about what ONE independent observation
+# is, or the surface that publishes a number and the surface that produced it
+# are counting different things. The daemon folds on md.TradingDay; this is the
+# same fold, and test_trading_day_offset_matches_go pins the two constants
+# together so a change on one side fails on the other.
+#
+# The boundary is off UTC midnight because the US extended session closes at
+# 20:00 ET — 00:00Z under EDT, 01:00Z under EST — so a midnight cut puts the
+# tail of a session in the NEXT day and counts it as a second observation of the
+# same move. Measured on the live corpus before the fold moved: 630 phantom
+# stock-days, 3.94% of effective N.
+TRADING_DAY_OFFSET_SECS = 5 * 3600
+SECONDS_PER_DAY = 86400
+
+
+def trading_day(ts: int) -> int:
+    """Fold a unix timestamp to its trading-day index.
+
+    Python's // is already floor division, so this matches the Go side's
+    explicit floor without further work.
+    """
+    if ts is None:
+        return None
+    return (ts - TRADING_DAY_OFFSET_SECS) // SECONDS_PER_DAY
+
+
+def register_fold(con: sqlite3.Connection) -> sqlite3.Connection:
+    """Make trading_day() callable from SQL on `con`.
+
+    Called at every point of USE rather than only in connect(), because the
+    grader is handed connections it did not open — snapshots, in-memory test
+    fixtures — and a fold that silently is not registered would fail loudly on
+    some paths and not others. Re-registering is a harmless overwrite.
+    """
+    con.create_function("trading_day", 1, trading_day)
+    return con
+
+
 def connect(path: str) -> sqlite3.Connection:
     if not os.path.exists(path):
         sys.exit(f"database not found: {path}")
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    # Same trick the Go store uses: register the fold as a SQL function rather
+    # than restating it as inline arithmetic, so SQL and Python cannot drift.
+    return register_fold(sqlite3.connect(f"file:{path}?mode=ro", uri=True))
 
 
 # --------------------------------------------------------------------------- #
@@ -1313,19 +1355,20 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
     exports, so a grade from the DB and a grade from the committed snapshot
     start from identical inputs.
     """
+    register_fold(con)
     # Per-DAY tallies, not per-horizon totals. The dedup below still collapses
-    # intraday repeats to one row per (symbol, horizon, UTC-day); the day
+    # intraday repeats to one row per (symbol, horizon, trading-day); the day
     # grouping is what lets the interval resample days instead of rows.
     q = """
     WITH dedup AS (
       SELECT symbol_id, horizon, prob, up, ts,
-             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, ts/86400
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
         AND ts >= ?  -- survivorship boundary: pre-epoch rows are survivor-seeded
     )
-    SELECT horizon, ts/86400 AS day,
+    SELECT horizon, trading_day(ts) AS day,
            COUNT(*),
            SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
            SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
@@ -1346,17 +1389,18 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
     The graded rows above can only say the high-conviction slice is doing worse
     than the base row; they cannot say WHERE the probabilities are wrong. These
     bins can: each holds (mean predicted probability, realized up-frequency, n)
-    over the same independent (symbol, horizon, UTC-day) observations, post-epoch
+    over the same independent (symbol, horizon, trading-day) observations, post-epoch
     only, so an anti-calibrated conviction tier is visible per-bin — and
     correctable — before the auto-retire gate ever fires.
 
     n and distinct_days are published beside every bin because a three-row bin
     is noise, not a calibration measurement.
     """
+    register_fold(con)
     q = f"""
     WITH dedup AS (
       SELECT symbol_id, horizon, prob, up, ts,
-             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, ts/86400
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
@@ -1367,7 +1411,7 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
            COUNT(*),
            AVG(prob),
            SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
-           COUNT(DISTINCT ts / 86400)
+           COUNT(DISTINCT trading_day(ts))
     FROM dedup WHERE rn = 1
     GROUP BY horizon, bin ORDER BY horizon, bin
     """
@@ -1388,14 +1432,14 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
         })
     return {
         "method": (f"{CALIBRATION_BINS} fixed-width bins over predicted P(up); one "
-                   "observation per (symbol, horizon, UTC-day), post-epoch only"),
+                   "observation per (symbol, horizon, trading-day), post-epoch only"),
         "conviction_threshold": 0.15,
         "horizons": horizons,
     }
 
 
 def grade_directional(con: sqlite3.Connection) -> list[dict]:
-    """Grade prediction_outcomes on independent (symbol, horizon, UTC-day) rows."""
+    """Grade prediction_outcomes on independent (symbol, horizon, trading-day) rows."""
     return grade_directional_days(
         fetch_directional_days(con),
         measure_universe_completeness(con, "prediction_outcomes"))
@@ -2079,9 +2123,9 @@ def main() -> int:
               "over regime_outcomes — as a DIAGNOSTIC. It is not the target; a gap between "
               "it and C is mix drift, which is exactly what the freeze is meant to survive.")
         print()
-    print(f"Independence rule: one observation per (symbol, horizon, UTC-day).")
+    print(f"Independence rule: one observation per (symbol, horizon, trading-day).")
     print(f"Verdict threshold: {MIN_INDEPENDENT_N} independent observations minimum, "
-          f"on at least {MIN_DISTINCT_DAYS} distinct UTC days.")
+          f"on at least {MIN_DISTINCT_DAYS} distinct trading days.")
     print(f"Survivorship boundary: rows before {SURVIVORSHIP_EPOCH.isoformat()} were graded "
           "against a survivor-seeded universe and are excluded from every tally above.")
     print("Intervals resample DAYS, not rows: on any one day ~1,000 symbols share one")

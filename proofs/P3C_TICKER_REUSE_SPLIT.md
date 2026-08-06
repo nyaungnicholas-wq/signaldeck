@@ -160,7 +160,24 @@ Rows were **re-pointed, not deleted** for everything that moved, so the inverse
 is one `UPDATE` per table from symbol id 1781 back to 1122 plus restoring
 `delisted_at`. The 71 deleted rows are the only non-invertible part, and
 `data/signaldeck.db.bak-presplit-20260804` was taken immediately before the
-change specifically to cover them. Note that the new symbol id is not
+change specifically to cover them.
+
+> **UPDATED 2026-08-05 — that copy has been retired, and the cover replaced.**
+> The 4.3 GB presplit copy was deleted at the operator's instruction. Before it
+> went, symbol 1122's rows were dumped from it into
+> `proofs/P3_RETIRED_COPY_EVIDENCE.json`: **137 rows across the six tables this
+> proof records deletions in** — `expectancy` 54, `research_weeks` 77 (of which
+> §3 deletes 11), `symbol_models` 2, `forecasts` 2, `regime_state` 1,
+> `confluence_setups` 1 — plus the `symbols` row itself with `delisted_at`
+> intact. That is a superset of the 71, so the sentence above still holds with a
+> 111 KB tracked artifact standing where a 4.3 GB untracked file stood.
+>
+> Independently, `data/backups/signaldeck-20260804-134451.db.gz` was written at
+> 13:45 on 2026-08-04 and the presplit copy at 19:26, so the managed backup line
+> also predates the split. Its bytes verify against the recorded digest and
+> `ops/restore-rehearsal.sh` restores it clean. Note this is a compressed
+> generation on a rotation, so it is a second line, not the record — the JSON is
+> the record. Note that the new symbol id is not
 reproducible — `symbols.id` is a plain INTEGER PRIMARY KEY, so an
 undo-then-redo yields a different id and any record naming 1781 must be
 rewritten rather than replayed.

@@ -101,7 +101,7 @@ func (s *Store) StructuralRecords(ctx context.Context, minConviction float64) ([
 		FROM (
 		  SELECT kind, ts, correct, historical_accuracy,
 		         ROW_NUMBER() OVER (
-		           PARTITION BY symbol_id, kind, ts/86400 ORDER BY ts DESC) rn
+		           PARTITION BY symbol_id, kind, trading_day(ts) ORDER BY ts DESC) rn
 		  FROM regime_outcomes
 		  WHERE resolved_at IS NOT NULL AND correct IN (0,1)
 		    AND conviction >= ?
@@ -143,7 +143,7 @@ func (s *Store) StructuralRecords(ctx context.Context, minConviction float64) ([
 			FROM (
 			  SELECT regime, actual,
 			         ROW_NUMBER() OVER (
-			           PARTITION BY symbol_id, kind, ts/86400 ORDER BY ts DESC) rn
+			           PARTITION BY symbol_id, kind, trading_day(ts) ORDER BY ts DESC) rn
 			  FROM regime_outcomes
 			  WHERE kind = ? AND resolved_at IS NOT NULL AND correct IN (0,1)
 			    AND conviction >= ?

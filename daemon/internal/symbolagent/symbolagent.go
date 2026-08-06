@@ -66,7 +66,8 @@ const MinPersonal = 40
 //
 // MinPersonal counts ROWS, and rows are not observations: the predictor runs
 // every 10 minutes against daily labels, so a symbol accumulates ~12 rows per
-// symbol-day (measured live: 158,204 resolved rows are 13,058 symbol-days).
+// symbol-day. SUPERSEDED-SNAPSHOT, the dated measurement that sized this floor
+// and not the current record: 158,204 resolved rows are 13,058 symbol-days.
 // 1,045 of 1,050 symbols cleared the 40-ROW floor for the 1d horizon on a
 // median of 12 distinct days — a personal model, the strongest per-symbol
 // claim this platform makes, bought with about a fortnight of evidence.

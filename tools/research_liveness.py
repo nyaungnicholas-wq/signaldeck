@@ -118,11 +118,46 @@ def _registered_forecast_kinds(conn):
     first = {}
     for seq, ts, kind, spec in conn.execute(
             f"SELECT seq, ts, kind, spec_json FROM {PREREG_TABLE} ORDER BY seq"):
-        if PREREG_HORIZON_KEY not in (spec or ""):
+        if not _commits_to_a_horizon(spec):
             continue
         if kind not in first:
             first[kind] = (seq, int(ts))
     return [(k, s, t) for k, (s, t) in first.items()]
+
+
+def _commits_to_a_horizon(spec):
+    """True when the record's OWN spec names the horizon it forecasts over.
+
+    The test is the TOP-LEVEL horizonDays key, not the substring anywhere in the
+    blob. Substring matching read the wrong thing and cost a real outage: seq 37
+    is a `gradability-correction`, a schedule-only amendment that says
+    "claimsChanged": false and corrects the date on which OTHER kinds become
+    checkable. It tabulates their horizons in `correctedDates`, so the substring
+    was present and the record was classified as a forecast commitment of kind
+    `gradability-correction` — a kind nothing in this repository writes a
+    regime_outcomes row for, and nothing ever could. One grace day later the
+    obligation became unsatisfiable and the whole publishing path refused:
+    `ACCURACY GRADING REFUSED`, README accuracy tables removed, and the nightly
+    ops/accuracy-registry.sh exiting 1 every night with no number published.
+
+    A process record naming another kind's horizon is exactly what the class
+    exclusion in this module's docstring already intends to exclude; it just was
+    not what the code tested. Every genuine forecast registration (seq 1-7, 10)
+    carries horizonDays at the top level beside kind/question/resolution/bands,
+    so the stricter predicate keeps every one of them — including seq 10
+    filingsdrift21, the violation this check was built to catch.
+
+    An unparseable spec falls back to the old substring test: malformed JSON is
+    an anomaly, and it must not become a way to register a forecast that this
+    check cannot see.
+    """
+    if not spec:
+        return False
+    try:
+        doc = json.loads(spec)
+    except (ValueError, TypeError):
+        return PREREG_HORIZON_KEY in spec
+    return isinstance(doc, dict) and PREREG_HORIZON_KEY in doc
 
 
 def _refusal_on_record(conn, kind, since_ts):

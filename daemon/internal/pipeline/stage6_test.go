@@ -98,9 +98,14 @@ func TestGBMTrainer_StoresGradedLeg(t *testing.T) {
 	// each ts so LabeledFeaturesBySymbol returns them.
 	h := md.H1d
 	n := 300
-	base := time.Now().Add(-time.Duration(n) * time.Hour).Unix()
+	// ONE ROW PER UTC DAY. The labeled-feature reader collapses intraday
+	// re-scores to the day's latest, because every row inside a day resolves to
+	// the same forward move — so an hourly fixture would arrive at the trainer
+	// as ~13 rows, not 300, and grade nothing. Daily spacing is also what the
+	// live runner's labeled set looks like after dedup.
+	base := time.Now().Add(-time.Duration(n) * 24 * time.Hour).Unix()
 	for i := 0; i < n; i++ {
-		ts := base + int64(i)*3600
+		ts := base + int64(i)*86400
 		x := -1.0
 		fwd := -0.02
 		if i%2 == 0 {

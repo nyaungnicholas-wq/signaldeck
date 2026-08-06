@@ -164,9 +164,9 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 	return probs, ups, rows.Err()
 }
 
-// ResolvedRawPredictionPairs returns (RAW blend prob, realized up) pairs for
-// fitting the recalibration map — the newest `limit` resolved outcomes for one
-// horizon.
+// ResolvedRawPredictionPairs returns (RAW blend prob, realized up, UTC day)
+// triples for fitting the recalibration map — the newest `limit` INDEPENDENT
+// resolved outcomes for one horizon, one row per (symbol, UTC day).
 //
 // It exists because ResolvedPredictionPairs returns prediction_outcomes.prob,
 // which UpsertPrediction seeds from CalProb: fitting a map on that column and
@@ -178,29 +178,66 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 // Only resolved, non-voided rows are returned (resolved_at and up both NOT
 // NULL), so a still-open prediction can never train the map that will be
 // applied to it.
-func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, limit int) (raws []float64, ups []float64, err error) {
+//
+// ONE ROW PER (SYMBOL, TRADING DAY) — the row-count fix that mattered most.
+// The prediction runner re-scores the same symbol many times a day (measured
+// 2026-08-04: 15,781 rows across 329 symbols and 149 timestamps = 48 rows per
+// symbol per day). Every one of those rows predicts the SAME forward move and
+// resolves to the SAME label, so counting them as separate training pairs
+// inflates the apparent sample by the re-score rate and by the cross-section at
+// once. Measured consequence: the newest 3,000 raw pairs spanned TWO calendar
+// days, so the fleet-wide map was fit on ~2 independent market moves, memorised
+// their direction, and was then applied to a fresh day. Live cost was 17
+// accuracy points (raw 53% -> calibrated 36%) and up-calls collapsing to 1-19%
+// of symbols on days when 65-74% of symbols rose.
+//
+// The dedup rule is deliberately the SAME one the accuracy registry already
+// grades with — one observation per (symbol, horizon, day), newest wins — so the
+// surface that FITS the map and the surface that GRADES it can never disagree
+// about what one observation is. That mismatch was the whole bug: the registry
+// had already been corrected, the calibration fit had not.
+//
+// The day is md.TradingDay via the trading_day() SQLite function, NOT ts/86400.
+// A US extended session closes at 20:00 ET — 00:00Z under EDT — so a UTC-midnight
+// fold splits one session in two and counts its tail as a second independent
+// observation. Measured across the graded record: 16,323 UTC-day buckets against
+// 15,394 trading-day buckets, so 929 were phantoms.
+//
+// The returned days are real trading-day numbers, not ordinals, so the caller can
+// split a holdout on a day boundary and count distinct days before deciding it
+// has enough evidence to fit anything.
+func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, limit int) (raws []float64, ups []float64, days []int64, err error) {
 	rows, qerr := s.db.QueryContext(ctx, `
-		SELECT p.raw_prob, o.up
-		FROM prediction_outcomes o
-		JOIN predictions p
-		  ON p.symbol_id=o.symbol_id AND p.horizon=o.horizon AND p.ts=o.ts
-		WHERE o.resolved_at IS NOT NULL AND o.up IS NOT NULL AND o.horizon=?
-		ORDER BY o.ts DESC LIMIT ?`,
+		SELECT raw_prob, up, day FROM (
+			SELECT p.raw_prob AS raw_prob, o.up AS up, trading_day(o.ts) AS day,
+			       ROW_NUMBER() OVER (
+			         PARTITION BY o.symbol_id, trading_day(o.ts)
+			         ORDER BY o.ts DESC
+			       ) AS rn
+			FROM prediction_outcomes o
+			JOIN predictions p
+			  ON p.symbol_id=o.symbol_id AND p.horizon=o.horizon AND p.ts=o.ts
+			WHERE o.resolved_at IS NOT NULL AND o.up IS NOT NULL AND o.horizon=?
+		)
+		WHERE rn=1
+		ORDER BY day DESC LIMIT ?`,
 		string(h), limit)
 	if qerr != nil {
-		return nil, nil, qerr
+		return nil, nil, nil, qerr
 	}
 	defer rows.Close() //nolint:errcheck
 	for rows.Next() {
 		var p float64
 		var u int
-		if err := rows.Scan(&p, &u); err != nil {
-			return nil, nil, err
+		var d int64
+		if err := rows.Scan(&p, &u, &d); err != nil {
+			return nil, nil, nil, err
 		}
 		raws = append(raws, p)
 		ups = append(ups, float64(u))
+		days = append(days, d)
 	}
-	return raws, ups, rows.Err()
+	return raws, ups, days, rows.Err()
 }
 
 // ── prequential-majority benchmark ──────────────────────────────────────
@@ -222,32 +259,51 @@ func (s *Store) SeedBenchmarkOutcome(ctx context.Context, symbolID int64, h md.H
 // PrequentialMajorityProb returns the hindsight-free constant guess a
 // majority-follower would commit RIGHT NOW for horizon h: 1 when the
 // deduplicated resolved record over UTC days strictly before beforeDay runs
-// majority-up, 0 when majority-down, 0.5 when empty or tied. (0.5 grades as a
-// constant "up" guess under the >=0.5 rule — the closest committable analog
-// of the registry null's expected coin flip.) Dedup mirrors DirectionalRecord
-// and the accuracy registry: one row per (symbol, UTC-day), keeping the day's
-// latest. sinceTs bounds the evidence window (the survivorship epoch — a
-// majority learned from survivor-seeded rows would be a null in name only).
-func (s *Store) PrequentialMajorityProb(ctx context.Context, h md.Horizon, beforeDay, sinceTs int64) (float64, error) {
+// majority-up, 0 when majority-down. ok=false when the record is empty or
+// exactly tied — there is no majority to follow, so the caller commits NOTHING.
+//
+// ok exists because the previous contract returned a bare 0.5 for that case and
+// documented it as grading like a constant "up" guess under a >= 0.5 rule. The
+// graders actually threshold at `prob > 0.5`, so 0.5 was scored as a constant
+// DOWN call — the opposite of the documented behaviour, and a directional claim
+// the null never made. An abstention has no honest encoding on a [0,1]
+// probability axis that every reader thresholds; the only correct move is not to
+// write the row.
+//
+// Dedup mirrors DirectionalRecord and the accuracy registry: one row per
+// (symbol, UTC-day), keeping the day's latest. sinceTs bounds the evidence
+// window (the survivorship epoch — a majority learned from survivor-seeded rows
+// would be a null in name only).
+func (s *Store) PrequentialMajorityProb(ctx context.Context, h md.Horizon, beforeDay, sinceTs int64) (float64, bool, error) {
 	q := `
 	WITH dedup AS (
-	  SELECT up, ROW_NUMBER() OVER (PARTITION BY symbol_id, ts/86400 ORDER BY ts DESC) rn
+	  SELECT up, ROW_NUMBER() OVER (PARTITION BY symbol_id, trading_day(ts) ORDER BY ts DESC) rn
 	  FROM prediction_outcomes
 	  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
-	    AND ts >= ? AND ts/86400 < ?
+	    AND ts >= ? AND trading_day(ts) < ?
 	)
 	SELECT COUNT(*), COALESCE(SUM(up),0) FROM dedup WHERE rn = 1`
 	var n, ups int
 	if err := s.db.QueryRowContext(ctx, q, string(h), sinceTs, beforeDay).Scan(&n, &ups); err != nil {
-		return 0.5, err
+		return 0.5, false, err
 	}
 	switch {
 	case n == 0 || ups*2 == n:
-		return 0.5, nil
+		// NO MAJORITY TO FOLLOW — ok=false, and the caller must publish nothing.
+		//
+		// This used to return 0.5 and the caller stored it as a benchmark row.
+		// Every grader in the tree calls a prediction at `prob > 0.5`, so an
+		// exact 0.5 is scored as a confident DOWN call, not as an abstention.
+		// Measured live: all 4,004 "1w#pm" rows carried prob=0.5 — the 1w
+		// majority-follower had never once found a majority — and the registry
+		// duly graded the platform's NAIVE BASELINE as a unanimous always-short
+		// strategy scoring 48.75%. The number the ensemble was being compared
+		// against was measuring something nobody had implemented.
+		return 0.5, false, nil
 	case ups*2 > n:
-		return 1, nil
+		return 1, true, nil
 	default:
-		return 0, nil
+		return 0, true, nil
 	}
 }
 

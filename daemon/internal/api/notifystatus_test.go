@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -48,19 +49,39 @@ func getNotifyStatus(t *testing.T, srv *httptest.Server) notifyStatusBody {
 }
 
 // TestNotifyStatusNilNotifier: minimal wiring (nil notifier) must still be
-// honest — macOS listed with its untracked note, all remote transports
-// unconfigured with their enabling env vars, and the no-email note present.
+// honest — the LOCAL desktop row describes the platform the daemon is actually
+// running on, all remote transports unconfigured with their enabling env vars,
+// and the no-email note present.
+//
+// This used to assert a hardcoded macos row. That assertion is what let the
+// endpoint keep claiming local delivery worked after the move to Windows, where
+// `osascript` does not exist and every alert died in the log — the test was
+// pinning the bug. It now asserts the invariant that actually matters: the row
+// names this platform's real channel, and `configured` is true only where one
+// exists.
 func TestNotifyStatusNilNotifier(t *testing.T) {
 	body := getNotifyStatus(t, newNotifyServer(t, nil))
 	if len(body.Transports) != 4 {
-		t.Fatalf("transports = %d, want 4 (macos + discord + telegram + webhook)", len(body.Transports))
+		t.Fatalf("transports = %d, want 4 (local desktop + discord + telegram + webhook)", len(body.Transports))
 	}
 	byName := map[string]notifyTransportRow{}
 	for _, tr := range body.Transports {
 		byName[tr.Name] = tr
 	}
-	if !byName["macos"].Configured || byName["macos"].Note == "" {
-		t.Errorf("macos row = %+v, want configured + honest untracked note", byName["macos"])
+	wantLocal := notify.LocalTransport()
+	if wantLocal == "" {
+		wantLocal = "local-desktop"
+	}
+	local, ok := byName[wantLocal]
+	if !ok {
+		t.Fatalf("no %q row for GOOS=%s; rows = %+v", wantLocal, runtime.GOOS, body.Transports)
+	}
+	if local.Configured != notify.LocalSupported() {
+		t.Errorf("%s configured = %v, want %v (a channel must claim configured only where it exists)",
+			wantLocal, local.Configured, notify.LocalSupported())
+	}
+	if local.Note == "" {
+		t.Errorf("%s row = %+v, want an honest note about untracked delivery", wantLocal, local)
 	}
 	for _, name := range []string{"discord", "telegram", "webhook"} {
 		tr := byName[name]

@@ -20,11 +20,14 @@
 //
 // The load-bearing part is the guard, not the rule. Our own ingestion failing
 // looks EXACTLY like the whole market delisting at once, so before marking
-// anything the worker checks fleet liveness: a healthy majority of stocks must
-// have printed a bar recently. If they have not, the pipeline is broken, and the
-// worker marks NOTHING and says so. Without that check the first Alpaca outage
-// would have declared the entire universe dead and permanently corrupted every
-// point-in-time universe built afterwards.
+// anything the worker checks fleet liveness: a healthy majority of the stocks
+// NOT ALREADY RECORDED AS DEAD must have printed a bar recently. If they have
+// not, the pipeline is broken, and the worker marks NOTHING and says so.
+// Without that check the first Alpaca outage would have declared the entire
+// universe dead and permanently corrupted every point-in-time universe built
+// afterwards. The qualifier is load-bearing too: judged over all rows instead,
+// the guard reads a warehouse of imported dead names as an outage and disables
+// itself, which is what happened for three days after the 2026-08-02 import.
 //
 // That liveness fraction counts only symbols not ALREADY marked delisted. The
 // guard asks "is our ingestion broken?", and a name we have already recorded as
@@ -57,11 +60,14 @@ const (
 	// register, and a false positive costs more than a late detection because it
 	// removes a tradable name from every historical universe.
 	staleSessions = 25
-	// fleetLiveFraction is the share of stocks that must have printed a bar
-	// within staleSessions before ANY symbol may be marked. Below it the fault
-	// is ours, not the market's.
+	// fleetLiveFraction is the share of the NOT-YET-DELISTED stocks that must
+	// have printed a bar within staleSessions before ANY symbol may be marked.
+	// Below it the fault is ours, not the market's. Already-dead names are
+	// excluded from the denominator: they are silent by definition, so counting
+	// them measures how many corpses we hold, not whether ingestion works.
 	fleetLiveFraction = 0.60
 	// minFleetSize is the floor below which fleet liveness cannot be judged.
+	// Counted over the same not-yet-delisted population as fleetLiveFraction.
 	minFleetSize = 50
 	// sessionsPerCalendarDay converts trading sessions to calendar days (5
 	// trading days per 7 calendar days), plus slack for holidays.

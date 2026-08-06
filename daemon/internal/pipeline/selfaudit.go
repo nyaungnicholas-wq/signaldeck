@@ -16,9 +16,9 @@
 //     flagged systematic over/under-confidence.
 //
 // Independence: resolved predictions are collapsed to one observation per
-// (symbol, UTC-day) before any statistic, mirroring the /honesty + track-record
-// dedup — the minute-cadence pipeline otherwise pseudo-replicates the same daily
-// move.
+// (symbol, trading-day) before any statistic, mirroring the /honesty +
+// track-record dedup — the minute-cadence pipeline otherwise pseudo-replicates
+// the same daily move. md.TradingDay owns where that day boundary falls.
 package pipeline
 
 import (
@@ -54,6 +54,19 @@ const (
 	icSignEpsilon                = 0.02
 	calibrationAtChanceThreshold = 0.49
 )
+
+// dayFoldInflationThreshold is the share of phantom day-buckets — days that
+// exist only because a trading session was cut at UTC midnight — above which
+// the independence unit is called inflated. Any phantom day is a real
+// overstatement of effective N, so this is deliberately near zero; 1% leaves
+// room for a stray after-hours print without excusing a systematic split.
+// Measured 3.94% on the live corpus 2026-08-05, so this flags today by design.
+const dayFoldInflationThreshold = 0.01
+
+// dayFoldAuditWindowDays bounds the fold measurement to recent history: the
+// question is whether the CURRENT writer is splitting sessions, and a full-table
+// scan of every feature row ever written is neither cheap nor relevant to that.
+const dayFoldAuditWindowDays = 90
 
 // SelfAuditor is the drift-watchdog worker.
 type SelfAuditor struct {
@@ -189,6 +202,55 @@ func (w *SelfAuditor) Run(ctx context.Context) (string, error) {
 		}
 	}
 
+	// ── day-fold inflation: is the independence unit itself still honest? ───
+	//
+	// Every statistic above divides by a count of independent (symbol, day)
+	// observations, so all of them inherit whatever the day fold gets wrong.
+	// The fold now cuts at md.TradingDay rather than UTC midnight, because the
+	// US extended session closes at 20:00 ET — 00:00Z under EDT, 01:00Z under
+	// EST — so a midnight cut put the tail of a session in the NEXT day and
+	// counted it as a second observation of the same move.
+	//
+	// This measures what that cut WOULD still be costing, on real stored rows,
+	// and is a watchdog rather than a live defect report: it goes back above
+	// the threshold if the writer's schedule or extended-hours coverage moves
+	// enough to eat the margin the boundary currently has. It measures rather
+	// than assumes because the gap was assumed to be zero once — on the
+	// reasoning that the predictor only writes during regular hours — and the
+	// corpus disagreed by 630 days.
+	{
+		since := now.Unix() - dayFoldAuditWindowDays*md.SecondsPerDay
+		utcDays, tradingDays, err := w.St.StockFeatureDayFold(ctx, since)
+		if err != nil {
+			return "", err
+		}
+		if tradingDays == 0 {
+			if err := write("day_fold_inflation", 0, "insufficient",
+				fmt.Sprintf("no stock feature rows in the last %d days — nothing to fold",
+					dayFoldAuditWindowDays)); err != nil {
+				return "", err
+			}
+		} else {
+			phantom := utcDays - tradingDays
+			rate := float64(phantom) / float64(tradingDays)
+			status := "ok"
+			if rate > dayFoldInflationThreshold {
+				status = "inflated"
+			}
+			if err := write("day_fold_inflation", rate, status, fmt.Sprintf(
+				"%d (symbol, UTC-day) buckets vs %d (symbol, trading-day) buckets over the last "+
+					"%d days — %d phantom days, %.2f%% overstatement of effective N (flags above "+
+					"%.2f%%). A US extended session closes 20:00 ET = 00:00Z (EDT) / 01:00Z (EST), "+
+					"so its tail folds into the next UTC day and is counted twice. Every published "+
+					"interval divides by this count, so the excess narrows intervals in the "+
+					"direction that flatters the platform",
+				utcDays, tradingDays, dayFoldAuditWindowDays, phantom,
+				rate*100, dayFoldInflationThreshold*100)); err != nil {
+				return "", err
+			}
+		}
+	}
+
 	if err := w.St.InsertInsight(ctx, selfAuditInsight(now, findings)); err != nil {
 		return "", err
 	}
@@ -215,7 +277,7 @@ func independentPreds(outs []store.ResolvedPredictionOutcome) []predObs {
 	seen := make(map[key]struct{}, len(outs))
 	out := make([]predObs, 0, len(outs))
 	for _, o := range outs {
-		k := key{sym: o.SymbolID, day: o.Ts / 86400}
+		k := key{sym: o.SymbolID, day: md.TradingDay(o.Ts)}
 		if _, dup := seen[k]; dup {
 			continue
 		}

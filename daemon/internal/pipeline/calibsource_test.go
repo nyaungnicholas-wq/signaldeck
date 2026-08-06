@@ -94,14 +94,19 @@ func TestGlobalCalibrationIsFitOnRawNotCalProb(t *testing.T) {
 	// distinct per-symbol probabilities to one value), so equality with the
 	// isotonic map is no longer the contract. Reproduce the same construction
 	// the caller uses and require the same map.
-	raws, ups, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, calibrationPairLimit)
+	raws, ups, days, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, calibrationPairLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pairs := make([]ensemble.Pair, len(raws))
 	for i := range raws {
 		src := len(raws) - 1 - i // chronological, matching globalCalibration
-		pairs[i] = ensemble.Pair{Pred: raws[src], Actual: ups[src], Ts: int64(i)}
+		// Ts is the REAL UTC day, not an ordinal — globalCalibration switched to
+		// days[src] so CalibrateRanking's holdout split cannot land mid-day. This
+		// reference construction has to track it, or the test compares the fit
+		// against a map built on a different train/test boundary and the
+		// "same map" contract it exists to protect is not being checked.
+		pairs[i] = ensemble.Pair{Pred: raws[src], Actual: ups[src], Ts: days[src]}
 	}
 	want, wok, _ := ensemble.CalibrateRanking(pairs)
 	if !wok {
@@ -139,7 +144,7 @@ func TestResolvedRawPredictionPairsReturnsRawProb(t *testing.T) {
 	defer st.Close() //nolint:errcheck
 	seedCalibrationHistory(t, st, md.H1d)
 
-	raws, ups, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 500)
+	raws, ups, _, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 500)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +174,7 @@ func TestResolvedRawPredictionPairsReturnsRawProb(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	raws2, _, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 500)
+	raws2, _, _, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 500)
 	if err != nil {
 		t.Fatal(err)
 	}

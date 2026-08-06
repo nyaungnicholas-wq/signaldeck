@@ -464,6 +464,10 @@ func TestGradeFromMetrics(t *testing.T) {
 		wantAUC  float64
 	}{
 		{
+			// Prequential baseline over [1,1,0,0], one cluster per row. Row 0
+			// has no prior, so the null is credited the model's own hit there
+			// (a day it cannot call contributes zero lift); row 1 follows "up"
+			// and wins; rows 2-3 still follow "up" and lose. (1+1+0+0)/4 = 0.5.
 			name:     "perfect",
 			preds:    []float64{0.9, 0.8, 0.2, 0.1},
 			actuals:  []float64{1, 1, 0, 0},
@@ -476,10 +480,15 @@ func TestGradeFromMetrics(t *testing.T) {
 			preds:    []float64{0.1, 0.2, 0.8, 0.9},
 			actuals:  []float64{1, 1, 0, 0},
 			wantAcc:  0.0,
-			wantBase: 0.5,
+			wantBase: 0.25,
 			wantAUC:  0.0,
 		},
 		{
+			// An all-up window with an always-up model has NO edge, and the
+			// grade must say so: baseline 1.0, lift exactly 0. The hindsight
+			// floor got this case right by accident. What it got wrong was every
+			// PARTIALLY imbalanced window, where it charged the model for
+			// imbalance the model could not have known about in advance.
 			name:     "all one class base rate",
 			preds:    []float64{0.6, 0.7, 0.9, 0.55},
 			actuals:  []float64{1, 1, 1, 1},
@@ -490,7 +499,12 @@ func TestGradeFromMetrics(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			g := gradeFrom(tc.preds, tc.actuals)
+			// One cluster per row, matching how evaluateFolds passes bar indices.
+			idx := make([]int64, len(tc.preds))
+			for i := range idx {
+				idx[i] = int64(i)
+			}
+			g := gradeFrom(idx, tc.preds, tc.actuals)
 			if math.Abs(g.Accuracy-tc.wantAcc) > 1e-9 {
 				t.Errorf("Accuracy = %v, want %v", g.Accuracy, tc.wantAcc)
 			}

@@ -77,6 +77,11 @@ def measure(con: sqlite3.Connection) -> dict:
          GROUP BY b.symbol_id""", (DAY, DAY, DAY)).fetchall()
 
     tot_expected = tot_actual = 0
+    # Split by listing status. A blended coverage number is uninterpretable once
+    # dead names are imported in bulk: their retained history is sparse by
+    # construction, so they move the headline without anything having been lost
+    # from the live universe. The two cohorts answer different questions.
+    dl_expected = dl_actual = dl_n = 0
     interior = []
     trailing = []
     for _sid, sym, delisted, first, last, actual in rows:
@@ -85,6 +90,10 @@ def measure(con: sqlite3.Connection) -> dict:
             continue
         tot_expected += expected
         tot_actual += min(actual, expected)
+        if delisted:
+            dl_n += 1
+            dl_expected += expected
+            dl_actual += min(actual, expected)
         missing = expected - actual
         if missing > 0:
             interior.append((sym, missing, expected, round(100.0 * actual / expected, 2)))
@@ -101,6 +110,13 @@ def measure(con: sqlite3.Connection) -> dict:
         "actual_symbol_days": tot_actual,
         "coverage_pct": round(100.0 * tot_actual / tot_expected, 4) if tot_expected else 0.0,
         "symbols_with_any_interior_gap": len(interior),
+        "delisted_symbols": dl_n,
+        "delisted_coverage_pct": (round(100.0 * dl_actual / dl_expected, 4)
+                                  if dl_expected else 0.0),
+        "live_symbols": len(rows) - dl_n,
+        "live_coverage_pct": (
+            round(100.0 * (tot_actual - dl_actual) / (tot_expected - dl_expected), 4)
+            if tot_expected - dl_expected else 0.0),
     }
     out["worst_interior"] = [
         {"symbol": s, "missing": m, "expected": e, "coverage_pct": c}

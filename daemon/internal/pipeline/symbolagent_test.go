@@ -31,7 +31,15 @@ func seedLabeledSpread(t *testing.T, st *store.Store, symbolID int64, h md.Horiz
 func seedLabeledSpreadDays(t *testing.T, st *store.Store, symbolID int64, h md.Horizon, days, perDay int) {
 	t.Helper()
 	ctx := context.Background()
+	// ANCHOR TO A UTC MIDNIGHT. The rows for one logical day are spread
+	// perDay*600 seconds apart, so an unaligned base lets a day straddle a UTC
+	// boundary and split into TWO day-clusters — which made the collapse
+	// assertion below pass or fail depending on the wall-clock hour the suite
+	// ran at (seen: n=5 in the morning, n=6 in the afternoon). The labeled
+	// reader dedupes by ts/86400, so a fixture that claims to seed N days has to
+	// land inside N of them deterministically.
 	base := time.Now().Unix() - int64(days+1)*86400
+	base -= base % 86400
 	for d := 0; d < days; d++ {
 		up := d%2 == 0
 		pressure, fwd, raw := 0.5, 0.01, 0.62
@@ -56,6 +64,28 @@ func seedLabeledSpreadDays(t *testing.T, st *store.Store, symbolID int64, h md.H
 				t.Fatalf("resolve: %v", err)
 			}
 		}
+	}
+
+	// PROVE THE FIXTURE, at the fixture. This helper's whole contract is "N
+	// distinct UTC day-clusters", and when it silently broke that contract the
+	// failure surfaced far downstream as an unexplained n=6 from the learner —
+	// a number with no way back to its cause, which cost a full investigation
+	// that could not reproduce it. Asserting the invariant HERE means the next
+	// occurrence names itself, and names it in the fixture rather than in the
+	// pseudo-replication guard it would otherwise look like a regression in.
+	rows, err := st.LabeledFeaturesBySymbol(ctx, symbolID, h, days*perDay*4)
+	if err != nil {
+		t.Fatalf("fixture self-check read: %v", err)
+	}
+	buckets := map[int64]int{}
+	for _, r := range rows {
+		buckets[r.Ts/86400]++
+	}
+	if len(rows) != days || len(buckets) != days {
+		t.Fatalf("fixture seeded %d days x %d rows but the labeled reader collapses them to "+
+			"%d rows over %d UTC day-clusters (want %d and %d) — base=%d (base%%86400=%d), "+
+			"buckets=%v; the fixture is wrong, not the code under test",
+			days, perDay, len(rows), len(buckets), days, days, base, base%86400, buckets)
 	}
 }
 
@@ -237,12 +267,31 @@ func TestPerSymbolLearner_ClusteredRowsDoNotGraduate(t *testing.T) {
 	if !ok {
 		t.Fatal("a still-learning symbol should still get a model row")
 	}
-	if m.NSamples <= symbolagent.MinPersonal {
-		t.Fatalf("fixture must clear the row floor to isolate the day floor: n=%d", m.NSamples)
+	// The 60 seeded rows are 5 UTC days of intraday re-scores, and the labeled
+	// reader now COLLAPSES them to one row per day before the learner ever sees
+	// them. So the clustering is caught at the source: what used to arrive as 60
+	// "samples" (clearing the 40-row floor and leaning on the day floor to be
+	// stopped) now arrives as the 5 independent observations it always was.
+	//
+	// Asserting the collapse is the stronger guard. A regression that restored
+	// the duplicate rows would show up here as n=60 rather than silently
+	// re-arming the pseudo-replication downstream.
+	if m.NSamples != 5 {
+		// Dump the evidence. The fixture self-check in seedLabeledSpreadDays has
+		// already proven the seeded rows collapse to 5, so reaching here means
+		// the learner counted something the reader did not return — say what.
+		rows, rerr := st.LabeledFeaturesBySymbol(ctx, sym.ID, md.H1d, 1000)
+		buckets := map[int64]int{}
+		for _, r := range rows {
+			buckets[r.Ts/86400]++
+		}
+		t.Fatalf("5 days x 12 intraday rows must collapse to 5 independent samples, got n=%d "+
+			"(reader now returns %d rows over %d UTC day-clusters %v, err=%v)",
+			m.NSamples, len(rows), len(buckets), buckets, rerr)
 	}
 	if m.Tier == symbolagent.TierPersonal {
-		t.Fatalf("%d rows over 5 distinct days must NOT be personal (floor is %d days)",
-			m.NSamples, symbolagent.MinPersonalDays)
+		t.Fatalf("%d independent samples over 5 distinct days must NOT be personal (floors are %d rows / %d days)",
+			m.NSamples, symbolagent.MinPersonal, symbolagent.MinPersonalDays)
 	}
 	if m.Weights != "{}" {
 		t.Fatalf("no personal weights may be stored on 5 days of evidence, got %q", m.Weights)

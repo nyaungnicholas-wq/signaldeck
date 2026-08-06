@@ -3,12 +3,15 @@
 //
 // WHY THIS EXISTS
 // ---------------
-// SignalDeck already proves the need empirically. Its directional ensemble has
-// accumulated 18,762 independent symbol-days at 48.0% accuracy — an interval
-// entirely BELOW the majority-class baseline, i.e. significantly negative skill
-// — and it kept shipping predictions the whole time, because nothing in the
-// system had the authority to switch a model off. An accuracy number that no
-// process acts on is decoration.
+// SignalDeck already proves the need empirically. Its directional ensemble
+// accumulated a live record whose day-clustered interval sat entirely BELOW the
+// majority-class baseline — significantly negative skill — and it kept shipping
+// predictions the whole time, because nothing in the system had the authority to
+// switch a model off. An accuracy number that no process acts on is decoration.
+//
+// The figures are deliberately not typed here. data/accuracy_registry.json is
+// the one source and GET /api/accuracy serves it; a number copied into a comment
+// is a number that goes stale silently, which is how FC1 happened.
 //
 // So health here is not a dashboard metric. It is a GATE with one job: a model
 // whose live record no longer supports its claims stops emitting, automatically,

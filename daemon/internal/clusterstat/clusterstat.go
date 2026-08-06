@@ -5,11 +5,16 @@
 // # The defect this package exists to prevent
 //
 // Every skill number here is measured across ~1,000 symbols on a handful of
-// market days. Deduplicating to one row per (symbol, UTC-day) — which this
+// market days. Deduplicating to one row per (symbol, trading-day) — which this
 // platform already does — removes the intraday pseudo-replication (~60x) and
 // leaves the larger problem entirely untouched: on any given day every symbol
 // shares ONE market move. A binomial interval over 13,008 such rows asserts
 // 13,008 independent trials when the sample contains roughly 19.
+//
+// SUPERSEDED-SNAPSHOT — the block below is a DATED MEASUREMENT (2026-07-25),
+// not the current live record. It is the evidence that the design effect is
+// real and large; replacing its figures with today's would destroy the worked
+// example without improving it. For the current grade read the registry.
 //
 // Measured on the live 1d directional record (2026-07-25, 13,058 resolved
 // symbol-days spanning 23 days), by the estimator in this file:
@@ -91,7 +96,7 @@ const (
 	DirDown Direction = -1
 )
 
-// Obs is ONE already-deduplicated observation — one (symbol, UTC-day) row. This
+// Obs is ONE already-deduplicated observation — one (symbol, trading-day) row. This
 // package does not deduplicate: collapsing intraday repeats is the caller's
 // job and is a different defect from the one fixed here. Handing in raw
 // minute-cadence rows will produce a design effect that absorbs both, which is

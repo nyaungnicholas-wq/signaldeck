@@ -16,6 +16,22 @@ raw = DECK.read_text(encoding="utf-8")
 # where none is published, and inside this block the interval IS the published thing.
 t = re.sub(r"<!-- BEGIN GENERATED live_accuracy -->.*?<!-- END GENERATED live_accuracy -->",
            "", raw, flags=re.S)
+# Same reasoning for §8's data measurements, generated from data/signaldeck.db by
+# tools/deck_facts.py and guarded by its own --check. The allowlist below is the
+# wrong instrument for them twice over: the figures are the database's rather than
+# the author's, and no hand-maintained list of numeric tokens can stay current with
+# a database that moves every day -- the previous attempt to keep one ("measured at
+# the close of P6") was stale within 24 hours.
+t = re.sub(r"<!-- BEGIN GENERATED deck_facts -->.*?<!-- END GENERATED deck_facts -->",
+           "", t, flags=re.S)
+# Third generated block, same reasoning as the two above and the same defect it
+# was meant to prevent: §7's evidence table is INJECTED by
+# tools/controls_evidence.py --inject, whose CI step re-derives it from the
+# source and fails on drift. Policing those cells against a hand-typed allowlist
+# means every package that gains a test breaks this checker for a number no
+# human wrote — `internal/riskgate` reaching 39 tests is exactly what happened.
+t = re.sub(r"<!-- BEGIN GENERATED controls_evidence -->.*?<!-- END GENERATED controls_evidence -->",
+           "", t, flags=re.S)
 low = t.lower()
 fail = []
 
@@ -101,9 +117,37 @@ ALLOWED = {
     # 600 delistings recorded 2020-2022 vs 94 for 2023-2025 (15.7%);
     # tools/alpha/fetch_form25.py passes 12/12 resolver tests.
     "600", "94", "15.7", "2020", "2024",
+    # riskgate defaults, read from internal/riskgate/provenance.go and matching
+    # RISK_POLICY.md: SIGNALDECK_RISK_KELLY_FRACTION 0.25 (§169),
+    # SIGNALDECK_RISK_MAX_CORR_TO_BOOK 0.80 (§267-268). "01" is the (0,1]
+    # fractional clamp those two limits are bounded by — interval notation, not
+    # a quantity, and the comma makes it one token to this scan.
+    "0.25", "0.80", "01",
+    # 95 is the width of the pre-registered auto-retire criterion's Wilson
+    # interval (internal/prereg/prereg.go); the published interval is
+    # Bonferroni-corrected and wider, which is the reconciliation §3 flags.
+    "95",
+    # The daily-bar symbol count as the import landed in batches: 1,070 ->
+    # 1,770 -> 2,940 over three days. 2,940 is the same figure the generated
+    # deck_facts block carries; 1,070 and 1,770 are the earlier snapshots, and
+    # the paragraph exists to say why a hand-typed one was wrong.
+    "1070", "2940",
+    # "36 hand-typed live-record literals across 15 files" — the count
+    # --scan-code returned when it was first run over shipped source.
+    "15",
 }
+# Section numbers are structure, not statistics, and the token regex reads them
+# as decimals — a cross-reference (§8.1) and a heading's own ordinal ("### 13.4
+# Frozen claim set") both arrive here looking like measurements. This is the
+# "ledger-provenance"/"proven" failure in numeric form: right about the
+# characters, wrong about the claim, and the only fix available to the author
+# would have been to stop numbering sections. Stripped for the NUMBER scan only
+# — the HEADINGS check above still reads the deck's real headings.
+nums_src = re.sub(r"§\s*\d+(?:\.\d+)*", "", t)
+nums_src = re.sub(r"(?m)^(#+\s*)\d+(?:\.\d+)*", r"\1", nums_src)
+
 bad = set()
-for tok in re.findall(r"[0-9a-f]{16,}|\d+(?:[.,]\d+)*", t):
+for tok in re.findall(r"[0-9a-f]{16,}|\d+(?:[.,]\d+)*", nums_src):
     norm = tok.replace(",", "")
     if norm in ALLOWED or norm.replace(".", "") in {n.replace(".", "") for n in ALLOWED}:
         continue

@@ -98,7 +98,7 @@ func (s *Store) DirectionalAccuracyBySymbol(ctx context.Context, h md.Horizon) (
 		       SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END) AS correct
 		FROM (
 		  SELECT symbol_id, prob, up,
-		         ROW_NUMBER() OVER (PARTITION BY symbol_id, ts/86400 ORDER BY ts DESC) AS rn
+		         ROW_NUMBER() OVER (PARTITION BY symbol_id, trading_day(ts) ORDER BY ts DESC) AS rn
 		  FROM prediction_outcomes
 		  WHERE resolved_at IS NOT NULL AND horizon = ? AND up IS NOT NULL
 		)

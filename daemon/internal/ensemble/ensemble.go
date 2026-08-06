@@ -51,6 +51,7 @@
 package ensemble
 
 import (
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"errors"
 	"fmt"
 	"math"
@@ -113,6 +114,45 @@ func ValidateKnots(kx, ky []float64) error {
 // mean, far below any difference a published percentage could show.
 const monotoneEps = 1e-12
 
+// discriminationEps is the smallest spread in fitted frequencies that still
+// counts as a map telling symbols apart. Well under a tenth of a percentage
+// point: below this, every symbol receives the same published probability to
+// three decimal places.
+const discriminationEps = 1e-4
+
+// KnotsDiscriminate reports whether a fitted calibration map can still tell two
+// inputs apart — that is, whether its output range is wider than a rounding
+// error.
+//
+// It exists because ValidateKnots CANNOT catch this, by construction. That
+// function rejects INVERSIONS (a more bullish input publishing a lower
+// probability) and a flat map has none: ties are not inversions, so a map whose
+// every knot carries the identical frequency passes validation cleanly and is
+// then served. The isotonic fits this codebase stores are exactly the shape that
+// produces one — pool-adjacent-violators emits flat blocks, and on thin
+// financial data the whole map can become one block.
+//
+// A flat map is not a weak forecast, it is a DIFFERENT KIND of object: every
+// symbol receives one identical probability, so a batch of N "independent"
+// per-symbol predictions is one prediction counted N times, and when it is
+// wrong it is wrong N times. Callers must refuse it and fall back rather than
+// publish a market-wide constant as a per-symbol forecast.
+func KnotsDiscriminate(ky []float64) bool {
+	if len(ky) < 2 {
+		return false
+	}
+	lo, hi := ky[0], ky[0]
+	for _, v := range ky[1:] {
+		if v < lo {
+			lo = v
+		}
+		if v > hi {
+			hi = v
+		}
+	}
+	return hi-lo > discriminationEps
+}
+
 // MinCalibrationPairs is the minimum number of (prediction, outcome) pairs
 // required before Calibrate will fit a recalibration map. Below this, there is
 // not enough evidence to distinguish a real miscalibration from noise, so
@@ -136,14 +176,14 @@ const MinCalibrationPairs = 30
 // NOT YET ENFORCED ON THE FLEET-WIDE MAP — see Calibrate.
 const MinCalibrationDays = 20
 
-// DistinctPairDays counts the distinct UTC days a set of graded pairs spans —
+// DistinctPairDays counts the distinct trading days a set of graded pairs spans —
 // the honest sample size behind anything fitted from them. Unstamped pairs
 // (Ts==0) all collapse onto day 0, so a caller that supplies no timestamps
 // reports one day and is refused rather than silently trusted.
 func DistinctPairDays(pairs []Pair) int {
 	days := make(map[int64]struct{}, len(pairs))
 	for _, p := range pairs {
-		days[p.Ts/86400] = struct{}{}
+		days[md.TradingDay(p.Ts)] = struct{}{}
 	}
 	return len(days)
 }
@@ -443,7 +483,7 @@ func AdmittedProbability(c Components, weights map[string]float64) (prob float64
 type Pair struct {
 	Pred   float64 // predicted P(up), [0,1]
 	Actual float64 // realized outcome in {0,1}
-	// Ts is the prediction's unix timestamp. Its UTC day is the independence
+	// Ts is the prediction's unix timestamp. Its trading day is the independence
 	// unit: the predictor runs every 10 minutes against daily labels, so a
 	// dozen pairs can share one symbol-day and a thousand symbols share one
 	// market move. Grading helpers (BrierScore, CalibrationCurve) ignore it;
@@ -577,7 +617,7 @@ func BrierSkill(pairs []Pair) (skill, baseRate float64, ok bool) {
 // (pipeline.globalCalibration) reads store.ResolvedRawPredictionPairs, which
 // returns the newest calibrationPairLimit=3000 ROWS with no timestamp. Measured
 // live 2026-07-26: that window spans 5 distinct days for 1d and 1 for 1w, and
-// reaching 20 would require deduping to one pair per (symbol, UTC-day) across
+// reaching 20 would require deduping to one pair per (symbol, trading-day) across
 // the full history — a change to the store query and the predictor's window,
 // not to this function. Enforcing the floor here without that change would
 // disable fleet calibration for a reason the code could not honestly state
@@ -873,7 +913,9 @@ func CalibrateKnots(pairs []Pair) (kx, ky []float64, calibrated bool) {
 	}
 	// DISTINCT-DAY FLOOR (2026-07-26 review, H5). The pair floor counts rows,
 	// and the predictor writes ~12 rows per symbol-day, so 30 pairs is about
-	// three market moves — measured live, 158,204 resolved rows were 13,058
+	// three market moves — SUPERSEDED-SNAPSHOT, the dated 2026-07-26 measurement
+	// that sized this floor rather than the current record: 158,204 resolved
+	// rows were 13,058
 	// symbol-days, with one case of 153 rows inside a single day. A map fitted
 	// on three days encodes those three days' moves and then rewrites every
 	// published probability for the symbol. Refusing is the honest failure: the

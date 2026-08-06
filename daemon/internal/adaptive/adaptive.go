@@ -42,6 +42,7 @@
 package adaptive
 
 import (
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"fmt"
 	"math"
 	"sort"
@@ -59,6 +60,8 @@ const MinCellSamples = 30
 //
 // Rows are not observations. The predictor runs every 10 minutes against DAILY
 // labels and roughly a thousand symbols share each day's market move, so the
+// SUPERSEDED-SNAPSHOT figures below are the dated 2026-07-25 measurement that
+// sized this floor, not the current record:
 // live labeled set is 158,204 rows over 13,058 symbol-days over 23 DISTINCT
 // DAYS — 12.1 rows per symbol-day, and one measured case of 153 rows inside a
 // single symbol-day. Under the old row-only floor a cell cleared n>=30 on
@@ -87,7 +90,7 @@ const MetaKey = "adaptive_weights:v1"
 type Example struct {
 	Legs   map[string]float64 // leg name -> P(up) leg, only legs present
 	Regime string             // regime label ("" = unknown)
-	// Ts is the prediction's unix timestamp. Its UTC day is the independence
+	// Ts is the prediction's unix timestamp. Its trading day is the independence
 	// unit every floor in this package counts: an example with Ts==0 lands on
 	// day 0 with every other unstamped example, so a caller that forgets to
 	// stamp gets ONE day of evidence and the honesty gate refuses — the
@@ -188,16 +191,16 @@ func Compute(examples []Example, nowTs int64) Weights {
 	return out
 }
 
-// utcDay maps a unix timestamp to its UTC day index. This is the house unit:
-// one observation per (symbol, UTC-day), never a raw row.
-func utcDay(ts int64) int64 { return ts / 86400 }
+// foldDay maps a unix timestamp to its trading-day index. This is the house
+// unit: one observation per (symbol, trading-day), never a raw row.
+func foldDay(ts int64) int64 { return md.TradingDay(ts) }
 
-// DistinctDays counts the distinct UTC days a set of examples spans — the
+// DistinctDays counts the distinct trading days a set of examples spans — the
 // honest sample size for anything measured over them.
 func DistinctDays(exs []Example) int {
 	days := make(map[int64]struct{}, len(exs))
 	for _, ex := range exs {
-		days[utcDay(ex.Ts)] = struct{}{}
+		days[foldDay(ex.Ts)] = struct{}{}
 	}
 	return len(days)
 }
@@ -235,7 +238,7 @@ func measureCell(exs []Example) Cell {
 			// Days are counted over DIRECTIONAL rows only, because the days a
 			// leg abstained on carry no information about its hit rate and
 			// must not inflate the denominator of its standard error.
-			dirDays[utcDay(ex.Ts)] = struct{}{}
+			dirDays[foldDay(ex.Ts)] = struct{}{}
 			if (p > 0.5 && ex.Up == 1) || (p < 0.5 && ex.Up == 0) {
 				hits++
 			}
@@ -263,7 +266,7 @@ func measureCell(exs []Example) Cell {
 	case c.Days < MinCellDays:
 		c.Gated = true
 		c.Reason = fmt.Sprintf(
-			"cell's %d row(s) span only %d distinct UTC day(s), below the %d-day floor — "+
+			"cell's %d row(s) span only %d distinct trading day(s), below the %d-day floor — "+
 				"same-day rows share one market move, so they are not independent evidence",
 			c.N, c.Days, MinCellDays)
 	}
@@ -419,7 +422,7 @@ func annotateNoCandidates(cells map[string]Cell) {
 			continue
 		}
 		c.Reason = fmt.Sprintf(
-			"no leg in this cell cleared its own floors (%d row(s) and %d distinct UTC day(s) each) "+
+			"no leg in this cell cleared its own floors (%d row(s) and %d distinct trading day(s) each) "+
 				"— the cell keeps the static equal prior",
 			MinCellSamples, MinCellDays)
 		cells[name] = c

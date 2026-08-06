@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -295,9 +295,10 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	fleet = append(fleet, &pipeline.SplitRepair{St: st, Alpaca: alpacaClient})
 	// Model-health gate (2026-07-24, 1h) — grades every emitting model against
 	// its own live record and writes a verdict the prediction path honours. The
-	// directional ensemble is why this exists: it shipped through 18,762
-	// independent observations of NEGATIVE skill because nothing in the system
-	// had the authority to switch a model off.
+	// directional ensemble is why this exists: it shipped through a long run of
+	// NEGATIVE skill because nothing in the system had the authority to switch a
+	// model off. SUPERSEDED-SNAPSHOT: 18,762 independent observations when the
+	// gate was written — a date stamp on the failure, not the current record.
 	fleet = append(fleet, &pipeline.ModelHealthWorker{St: st})
 	// Autonomous research loop (2026-07-25, 24h) — generate -> test -> judge ->
 	// ledger -> kill, without a human starting it. Hypotheses tested per week was
@@ -502,9 +503,13 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 
 	// Snapshot the fleet's specs BEFORE appending the watchdog, so it never
 	// audits itself; its own health shows on the Agents page like any worker.
+	//
+	// The interval fed to the watchdog is the worker's REAL cadence, which for
+	// a ScheduledWorker is its calendar and not its poll tick — see
+	// stalenessInterval.
 	specs := make([]health.WorkerSpec, 0, len(fleet))
 	for _, w := range fleet {
-		specs = append(specs, health.WorkerSpec{Name: w.Name(), Interval: w.Interval()})
+		specs = append(specs, health.WorkerSpec{Name: w.Name(), Interval: stalenessInterval(w)})
 	}
 	fleet = append(fleet, &health.Watchdog{
 		St:         st,
@@ -1117,6 +1122,53 @@ func weeklyProofWorkers(st *store.Store, llmClient llm.Client) []workers.Worker 
 // the watchdog; with nothing configured every Send is a no-op and alerts stay
 // macOS-only. The same instance backs the alert-runner's batched sweep
 // message, the watchdog's unhealthy-transition ping, and the read-only
+// stalenessInterval is the cadence the WATCHDOG should judge a worker by, which
+// is not always the cadence the RUNNER ticks it at.
+//
+// health.StaleWorkers flags a worker whose last success is older than 3x its
+// interval. For a plain worker, Interval() is both the tick and the real
+// cadence, so that is right. For a ScheduledWorker it is neither: Interval() is
+// only how often the worker WAKES UP to ask whether its calendar says go.
+//
+// Measured 2026-08-05: SignalBTPinWorker and WeeklyWorker both return
+// Interval() = 30m, but actually fire once a week (Sunday 17:00 / 18:00 ET via
+// NextFire). The watchdog therefore judged them against a 90-minute threshold
+// and reported both as stale from Monday onward — every week, for six days out
+// of seven, for a fleet that was working exactly as designed. Both appeared in
+// data/health.json under staleWorkers, which is how the file came to read
+// ok:false while nothing was wrong with them.
+//
+// That is not a cosmetic complaint. A watchdog that is red most of the time is
+// one nobody reads, and it had just been wired to a desktop notifier that now
+// actually fires.
+//
+// The fix keeps health.StaleWorkers pure and simply hands it the right number:
+// measure the gap between two consecutive scheduled fires. A worker that
+// declines to schedule (zero time, the documented "no calendar opinion") falls
+// back to Interval(), exactly as the runner does.
+func stalenessInterval(w workers.Worker) time.Duration {
+	sw, ok := w.(workers.ScheduledWorker)
+	if !ok {
+		return w.Interval()
+	}
+	now := time.Now()
+	first := sw.NextFire(time.Time{}, now)
+	if first.IsZero() {
+		return w.Interval()
+	}
+	second := sw.NextFire(first, first)
+	if second.IsZero() || !second.After(first) {
+		return w.Interval()
+	}
+	// Never report a cadence TIGHTER than the poll tick: a schedule that fires
+	// more often than the worker wakes cannot be met, and shortening the
+	// threshold below the tick would re-create the false positive.
+	if gap := second.Sub(first); gap > w.Interval() {
+		return gap
+	}
+	return w.Interval()
+}
+
 // GET /api/notify-status. Email is deliberately NOT a transport — it needs
 // SMTP credentials or a provider account (documented as future work).
 func remoteNotifier(st *store.Store) *notify.Notifier {
@@ -1124,8 +1176,24 @@ func remoteNotifier(st *store.Store) *notify.Notifier {
 	if n.Enabled() {
 		slog.Info("remote notify enabled", "transports", n.ConfiguredNames())
 	} else {
-		slog.Info("remote notify: no transports configured — alerts stay macOS-only " +
-			"(set SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, or SIGNALDECK_WEBHOOK_URL in daemon/.env)")
+		// Name the LOCAL fallback that actually exists on THIS machine. The
+		// line used to say "alerts stay macOS-only" unconditionally, which was
+		// the same false claim /api/notify-status was making: on Windows the
+		// local channel was not macOS, it was nothing at all, and every alert
+		// died on a missing osascript. Now local.Local dispatches per platform,
+		// so state which channel is carrying alerts — or say plainly that none
+		// is, because that is the case where configuring a remote transport
+		// stops being optional.
+		if local := notify.LocalTransport(); local != "" {
+			slog.Info("remote notify: no transports configured — alerts stay local-only "+
+				"(set SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, or SIGNALDECK_WEBHOOK_URL in daemon/.env)",
+				"localTransport", local)
+		} else {
+			slog.Warn("remote notify: no transports configured AND this platform has no local "+
+				"desktop channel — ALERTS REACH NOBODY "+
+				"(set SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, or SIGNALDECK_WEBHOOK_URL in daemon/.env)",
+				"platform", runtime.GOOS)
+		}
 	}
 	return n
 }
@@ -1813,7 +1881,7 @@ func enforceSchemaContract(ctx context.Context, st *store.Store, fleet []workers
 		fmt.Fprintf(os.Stderr, "FATAL: audit-record schema contract unmet: %s\n", strings.Join(fatal, "; "))
 		os.Exit(1)
 	}
-	kept :=make([]workers.Worker, 0, len(fleet))
+	kept := make([]workers.Worker, 0, len(fleet))
 	for _, w := range fleet {
 		if _, refused := bad[w.Name()]; refused {
 			continue

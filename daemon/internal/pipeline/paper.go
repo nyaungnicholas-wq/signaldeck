@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ev"
@@ -181,7 +182,20 @@ func (w *PaperTrader) buildStep(
 	if err := w.ensureEpochs(ctx, strategy); err != nil {
 		return apply, refused, err
 	}
-	limits := riskgate.Defaults()
+	// RISK-LIMIT PROVENANCE. Every limit resolves through a SIGNALDECK_RISK_*
+	// environment variable with a default behind it, and until this line nothing
+	// recorded which values a pass actually ran under — so a past paper result
+	// could not be tied to the envelope that produced it, and an out-of-range
+	// override was discarded in silence. Both are now on the record: the resolved
+	// envelope is logged every pass, and a rejected override is logged as a
+	// WARNING rather than swallowed. This observes; it does not change the limits.
+	prov := riskgate.DescribeLimits()
+	limits := prov.Limits
+	log.Printf("paper-trader[%s] %s", strategy, prov)
+	for _, r := range prov.Rejected() {
+		log.Printf("paper-trader[%s] WARNING %s=%q rejected (%s) — running the default %v",
+			strategy, r.Key, r.RawEnv, r.RejectReason, r.Value)
+	}
 	book, err := w.riskBook(ctx, strategy, equity, cash, symByID, asof)
 	if err != nil {
 		return apply, refused, err

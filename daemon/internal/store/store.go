@@ -1253,6 +1253,20 @@ func (s *Store) GetMeta(ctx context.Context, k string) (string, error) {
 	return v, err
 }
 
+// DeleteMetaPrefixExcept removes every meta row whose key starts with prefix,
+// except the one key to keep. It is the pruning half of a content-addressed
+// cache: the writer stores under a NEW key each time its inputs change, so
+// without this the superseded rows accumulate forever.
+//
+// The prefix is matched with LIKE, so it must not contain the wildcards % or _
+// unless the caller means them. Callers here build prefixes from a namespace
+// and a symbol, which contain neither.
+func (s *Store) DeleteMetaPrefixExcept(ctx context.Context, prefix, keep string) error {
+	_, err := s.w.ExecContext(ctx,
+		`DELETE FROM meta WHERE k LIKE ? || '%' AND k <> ?`, prefix, keep)
+	return err
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // TIERED-STORAGE WAVE (appended block — keep at END of store.go so parallel
 // edits by other agents never collide). Read helpers that feed the cold

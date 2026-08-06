@@ -372,6 +372,12 @@ func (p Protocol) Hash() string {
 	return hex.EncodeToString(h[:])
 }
 
+// SUPERSEDED-SNAPSHOT — the live figures quoted in the next comment are the
+// record AS IT STOOD on 2026-07-26, quoted to date the registration. They are
+// not current; partials/live_accuracy.md is. Kept verbatim because rewriting
+// the state a pre-registration was made against would destroy the only thing
+// that makes it a pre-registration.
+//
 // RetireRuleKind is the chain kind under which the directional AUTO-RETIRE
 // rule is registered. Registered 2026-07-26, while both live directional rows
 // were still INSUFFICIENT (1d: 42.9% vs a 75.0% prequential null over 18 obs;
@@ -431,7 +437,7 @@ func AutoRetireRule() RetireRule {
 		MinIndependentN: 30,
 		MinDistinctDays: 10,
 		Criterion: "The first time a directional row reaches 30 independent (symbol, horizon, " +
-			"UTC-day) observations spread over 10 distinct UTC days, if the upper bound of its " +
+			"trading-day) observations spread over 10 distinct trading days, if the upper bound of its " +
 			"effective-N day-clustered Wilson 95% interval is below the prequential-majority null, " +
 			"the verdict is FAILED and the row carries retire=true. No grace period, no re-window, " +
 			"no threshold revision after the evidence arrives.",

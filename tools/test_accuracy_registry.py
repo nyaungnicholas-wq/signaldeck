@@ -56,6 +56,8 @@ def _repo_visible_bash():
     return None
 
 from accuracy_registry import (  # noqa: E402
+    TRADING_DAY_OFFSET_SECS,
+    trading_day,
     CALIBRATION_BINS,
     MIN_DISTINCT_BLOCKS as _MDB,
     REVISION_EPOCH_TS,
@@ -852,7 +854,11 @@ class TestAutoRetireRule(unittest.TestCase):
     # sha256 of the canonical rule string, frozen at registration. Changing the
     # rule legitimately requires updating this pin AND the Go pin in the same
     # commit — and the prereg chain appends an AMENDMENT for the new hash.
-    FROZEN_DIGEST = "d02c33740989cde5be82ffce1cec4e1b25fdec41f06dc8a669ac2a79d00bccd5"
+    # Moved 2026-08-06 from d02c3374…: the wording named UTC days while the
+    # code folds on trading days, so the chained rule and the enforced rule
+    # had stopped being one rule. Unit label only — thresholds untouched, and
+    # the trading-day fold makes the 10-day floor HARDER to clear.
+    FROZEN_DIGEST = "353450b995a52bcea9257a8520369d8841e7fa71c70295aae925dc7cf03b429f"
 
     def test_digest_matches_the_chained_constant(self):
         self.assertEqual(auto_retire_rule_digest(), self.FROZEN_DIGEST)
@@ -1851,3 +1857,39 @@ class TestGraderRefusesWithoutResearchLiveness(unittest.TestCase):
         """
         con = sqlite3.connect(":memory:")
         require_research_liveness(con, ":memory:")  # must not raise
+
+
+class TradingDayFoldTest(unittest.TestCase):
+    """The grader and the daemon must fold days identically.
+
+    Two implementations of one definition is the drift risk this whole change
+    exists to remove; a cross-language constant can only be pinned by reading
+    the other side, so that is what this does.
+    """
+
+    GO_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "daemon", "internal", "marketdata", "tradingday.go")
+
+    def test_offset_matches_go(self):
+        with open(self.GO_SRC, encoding="utf-8") as fh:
+            src = fh.read()
+        m = re.search(r"TradingDayOffsetSecs\s*=\s*(\d+)\s*\*\s*(\d+)", src)
+        self.assertIsNotNone(m, "could not read TradingDayOffsetSecs from " + self.GO_SRC)
+        go_offset = int(m.group(1)) * int(m.group(2))
+        self.assertEqual(
+            go_offset, TRADING_DAY_OFFSET_SECS,
+            "the grader folds days at %ds but the daemon folds at %ds — the surface "
+            "that PUBLISHES a number and the surface that PRODUCED it would be "
+            "counting different observations" % (TRADING_DAY_OFFSET_SECS, go_offset))
+
+    def test_fold_is_floor_across_the_epoch(self):
+        # Distinct days must stay distinct below the offset, where a
+        # truncating division would fold days -1 and 0 together.
+        for ts in range(-3 * 86400, 3 * 86400 + 1, 3600):
+            self.assertEqual(trading_day(ts) + 1, trading_day(ts + 86400))
+
+    def test_regular_hours_session_does_not_straddle(self):
+        # 04:00 ET pre-market to the 20:00 ET extended close, both DST regimes.
+        base = 20000 * 86400
+        for pre, close in ((8 * 3600, 24 * 3600), (9 * 3600, 25 * 3600)):
+            self.assertEqual(trading_day(base + pre), trading_day(base + close))

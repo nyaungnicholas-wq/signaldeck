@@ -243,7 +243,7 @@ func (s *Store) TVRatingSkill(ctx context.Context) (TVSkill, error) {
 			continue // no base bar, or no next-day bar to resolve against yet
 		}
 		fwd := sr.closes[idx+1]/sr.closes[idx] - 1
-		obs[key{sym: r.symbolID, day: r.ts / 86400}] = pair{reco: r.reco, fwd: fwd}
+		obs[key{sym: r.symbolID, day: md.TradingDay(r.ts)}] = pair{reco: r.reco, fwd: fwd}
 	}
 
 	recos := make([]float64, 0, len(obs))

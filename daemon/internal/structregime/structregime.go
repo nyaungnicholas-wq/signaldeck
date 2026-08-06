@@ -15,6 +15,15 @@
 //
 // # The three validated targets (measured 2026-07-17)
 //
+// Every percentage in the three tables below is a BACKTEST figure measured on
+// 2026-07-17 by the run described above. None is a live record and none is
+// graded — all seven structural claims read PENDING until their first grade,
+// and README's structural table (from data/accuracy_registry.json) is the
+// authority on that. tools/live_accuracy.py --scan-code matches the literal and
+// cannot tell a backtest percentage from a live one, so a collision resolves
+// here, as dated evidence, and never by editing a measured number:
+// SUPERSEDED-SNAPSHOT.
+//
 // TREND (21d): will the stock still be on its current side of the 200-day SMA
 // in 21 trading days? Conviction = trailing 200d percentile of |close/SMA-1|.
 //

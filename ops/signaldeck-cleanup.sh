@@ -15,12 +15,28 @@ KEEP="${1:-2}"
 ROTATE_MB=10   # rotate any logs/*.log bigger than this
 ROTATE_KEEP=3  # keep this many gzipped generations (.log.1.gz … .log.3.gz)
 
-echo "== DB backups: keeping $KEEP newest, moving older to Trash =="
-if cd "$SD/data/backups" 2>/dev/null; then
+# The destination was a bare ~/.Trash, which exists on macOS and NOWHERE on
+# Windows. `mv` failed, `&&` swallowed the failure, and the loop printed nothing
+# — so from the move to Windows this daily task reported a clean run while
+# retiring no backup at all, which is the same silent-no-op shape as the alert
+# path and the skipped storage report. The directory is created first, and a
+# failed move is now reported rather than hidden by the `&&`.
+TRASH="${SIGNALDECK_TRASH:-$HOME/.Trash}"
+mkdir -p "$TRASH" 2>/dev/null || true
+echo "== DB backups: keeping $KEEP newest, moving older to $TRASH =="
+if [ ! -d "$TRASH" ]; then
+  echo "  SKIP: cannot create $TRASH — refusing to hard-delete a backup instead"
+elif cd "$SD/data/backups" 2>/dev/null; then
   i=0
   for f in $(ls -t *.db 2>/dev/null); do
     i=$((i+1))
-    if [ "$i" -le "$KEEP" ]; then echo "  keep   $f"; else mv "$f" ~/.Trash/ && echo "  trash  $f"; fi
+    if [ "$i" -le "$KEEP" ]; then
+      echo "  keep   $f"
+    elif mv "$f" "$TRASH/"; then
+      echo "  trash  $f"
+    else
+      echo "  FAILED to move $f to $TRASH — left in place"
+    fi
   done
 else
   echo "  (no data/backups directory)"

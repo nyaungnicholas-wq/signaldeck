@@ -26,7 +26,9 @@ import (
 func seedShadowDay(t *testing.T, st *store.Store, sym int64, day int64, prob float64, up bool) {
 	t.Helper()
 	ctx := context.Background()
-	ts := day*86400 + 3600
+	// 14:00Z — mid regular session, so md.TradingDay(ts) == day. An 01:00Z
+	// stamp folds into the PREVIOUS trading day and shifts every seeded day.
+	ts := day*86400 + 14*3600
 	if err := st.InsertFeatures(ctx, sym, md.H1d, ts, 1, map[string]float64{"x": 1}); err != nil {
 		t.Fatal(err)
 	}

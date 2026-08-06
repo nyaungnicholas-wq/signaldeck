@@ -193,7 +193,7 @@ func metaLabelSamples(rows []store.LabeledFeature, labelSpan int64) ([]metalabel
 	}
 	best := map[key]store.LabeledFeature{}
 	for _, r := range rows {
-		k := key{sym: r.SymbolID, day: r.Ts / 86400}
+		k := key{sym: r.SymbolID, day: md.TradingDay(r.Ts)}
 		if cur, ok := best[k]; !ok || r.Ts > cur.Ts {
 			best[k] = r
 		}

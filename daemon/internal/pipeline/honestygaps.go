@@ -629,7 +629,7 @@ func (w *CanaryRunner) Run(ctx context.Context) (string, error) {
 			if r.Ts > a.last {
 				a.last = r.Ts
 			}
-			d := r.Ts / 86400
+			d := md.TradingDay(r.Ts)
 			t := a.days[d]
 			if t == nil {
 				t = &canary.DayTally{Day: d}

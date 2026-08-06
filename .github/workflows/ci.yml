@@ -220,6 +220,39 @@ jobs:
         run: python3 tools/live_accuracy.py --check-includes $(cat partials/INCLUDES.txt)
       - name: Live record — no hand-typed accuracy figures in any document
         run: python3 tools/live_accuracy.py --scan $(git ls-files '*.md')
+      # The markdown-only gate reported clean while the API, the MCP surface and
+      # the web UI each carried their own hand-typed copy of this record, three of
+      # them disagreeing on the sample size. FC1 was closed for the documents
+      # nobody reads and open in the surfaces a reader actually consumes, so the
+      # same gate now runs over shipped source. A block that is genuinely a dated
+      # record labels itself SUPERSEDED-SNAPSHOT and is exempt; everything else
+      # reads the registry at runtime.
+      - name: Live record — no hand-typed accuracy figures in shipped code
+        run: python3 tools/live_accuracy.py --scan-code $(git ls-files '*.go' '*.ts' '*.tsx' | grep -v '_test')
+      # A control documented IN FORCE with a blank evidence cell is the construct
+      # that let TradableAt return empty for its entire life and MarkDelisted sit
+      # with no callers. The deck's evidence table is now measured from the source
+      # rather than typed, and a control with no tests or no non-test importer
+      # fails here rather than being published as a control.
+      - name: Controls evidence — every documented control is tested and wired
+        run: python3 tools/controls_evidence.py --check
+      - name: Controls evidence — the deck's table matches the source
+        run: |
+          python3 tools/controls_evidence.py --inject STRATEGY_DECK.md
+          git diff --exit-code -- STRATEGY_DECK.md || {
+            echo "STRATEGY_DECK.md's controls table is stale — run tools/controls_evidence.py --inject STRATEGY_DECK.md"
+            exit 1
+          }
+      # tools/check_strategy_deck.py polices the deck's HAND-WRITTEN prose: the
+      # section structure, the banned marketing vocabulary, the required status
+      # labels, the FC2 ban on interval verdicts, and an allowlist of every
+      # numeric token an author supplied. It has existed for weeks and NOTHING
+      # RAN IT — the same "built but never wired" shape as the dead A4 floor and
+      # the unwired A13 scan, and it was failing when this step was added.
+      #
+      # It reads only git-tracked files, so it belongs on every checkout.
+      - name: Deck prose — structure, vocabulary and no unsourced number
+        run: python3 tools/check_strategy_deck.py
       # This one needs data/, which is gitignored, so it is the operator/publish
       # gate rather than a clean-checkout gate: it proves the PARTIAL still
       # matches the registry it was generated from.
@@ -230,6 +263,25 @@ jobs:
             exit 0
           fi
           python3 tools/live_accuracy.py --check --inject $(cat partials/INCLUDES.txt)
+      # §8 stated universe_membership, the delisted_at windows and bar-history
+      # completeness as hand-typed figures with a date stamp. On 2026-08-05, one
+      # day after they were typed, every one was already stale — universe by
+      # 0.8M rows, delisted_at by a factor of 2.6, and the window ratio by enough
+      # to invert its conclusion (15.7% typed, 180% measured). That is FC1's
+      # lesson a second time, so §8's figures are generated the same way.
+      #
+      # Also an operator gate: this reads the 4.9 GB database, which is
+      # gitignored and can never exist on a runner. The arithmetic itself IS
+      # covered on a clean checkout — tools/test_deck_facts.py builds a fixture
+      # whose answers are known by construction and runs in the unittest
+      # discovery above, including an assertion that the deck carries the block.
+      - name: Deck facts — §8's figures still match the database (needs data/)
+        run: |
+          if [ ! -f data/signaldeck.db ]; then
+            echo "no database in this checkout (data/ is gitignored) — deck-vs-database is the operator gate; the arithmetic and the deck's marker pair are covered by tools/test_deck_facts.py above"
+            exit 0
+          fi
+          python3 tools/deck_facts.py --check --inject STRATEGY_DECK.md
       # The snapshot is the ONLY grading path an outside reader can run, and it
       # is worthless if a file REPRODUCE.md tells them to check is missing from
       # the clone. This asserts completeness, per-file re-hash, and git-tracked

@@ -12,10 +12,10 @@
 //   stable in 4 of 5 market eras. Balanced median-split label, so accuracy
 //   genuinely IS skill here.
 //
-//   DIRECTION (P(up) 1d) — PROVEN NEGATIVE live skill: 48.1% directional
-//   accuracy against a 54.5% majority-class null over 12,931 independent
-//   symbol-days, the whole CI below the null, and raising conviction makes it
-//   WORSE. It is not a read; it is an experiment.
+//   DIRECTION (P(up) 1d) — PROVEN NEGATIVE live skill: graded below its own
+//   majority-class null with the whole CI under it, and raising conviction makes
+//   it WORSE. It is not a read; it is an experiment. Figures come from the
+//   registry, never from this file — see /accuracy.
 //
 // So the headline is the structural call and the directional probability is
 // demoted to a clearly-labelled footnote that states its own negative record.
@@ -241,11 +241,13 @@ export default function TodaysRead({ dash }: { dash: DashboardResponse }) {
             >
               <span className="font-bold tracking-wide">EXPERIMENTAL · not a read:</span> the
               direction model currently puts {dir.symbol} at{" "}
-              <span className="tnum">{pct(dir.calProb1d)}</span> P(up, 1d). Its live forward
-              record is <span className="tnum">48.1%</span> directional accuracy against a{" "}
-              <span className="tnum">54.5%</span> always-guess-the-majority baseline over
-              12,931 independent symbol-days — measurably worse than guessing, and raising
-              its conviction makes it worse still. Shown for transparency, not to act on.{" "}
+              <span className="tnum">{pct(dir.calProb1d)}</span> P(up, 1d). Its graded live
+              record came in below its own always-guess-the-majority baseline — measurably
+              worse than guessing — and raising its conviction did not rescue it, so the
+              model was automatically retired. The figures are deliberately not restated
+              here: they move with every grade, and a number typed into this page is a
+              number that goes stale without anyone noticing. Shown for transparency, not
+              to act on.{" "}
               <Link
                 href="/lab/track-record"
                 className="cursor-pointer font-semibold underline transition-colors duration-150"
