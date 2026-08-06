@@ -179,7 +179,7 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 // NULL), so a still-open prediction can never train the map that will be
 // applied to it.
 //
-// ONE ROW PER (SYMBOL, UTC DAY) — the row-count fix that mattered most.
+// ONE ROW PER (SYMBOL, TRADING DAY) — the row-count fix that mattered most.
 // The prediction runner re-scores the same symbol many times a day (measured
 // 2026-08-04: 15,781 rows across 329 symbols and 149 timestamps = 48 rows per
 // symbol per day). Every one of those rows predicts the SAME forward move and
@@ -192,14 +192,20 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 // of symbols on days when 65-74% of symbols rose.
 //
 // The dedup rule is deliberately the SAME one the accuracy registry already
-// grades with — one observation per (symbol, horizon, UTC day), newest wins —
-// so the surface that FITS the map and the surface that GRADES it can never
-// disagree about what one observation is. That mismatch was the whole bug: the
-// registry had already been corrected, the calibration fit had not.
+// grades with — one observation per (symbol, horizon, day), newest wins — so the
+// surface that FITS the map and the surface that GRADES it can never disagree
+// about what one observation is. That mismatch was the whole bug: the registry
+// had already been corrected, the calibration fit had not.
 //
-// The returned days are real UTC day numbers (ts/86400), not ordinals, so the
-// caller can split a holdout on a day boundary and count distinct days before
-// deciding it has enough evidence to fit anything.
+// The day is md.TradingDay via the trading_day() SQLite function, NOT ts/86400.
+// A US extended session closes at 20:00 ET — 00:00Z under EDT — so a UTC-midnight
+// fold splits one session in two and counts its tail as a second independent
+// observation. Measured across the graded record: 16,323 UTC-day buckets against
+// 15,394 trading-day buckets, so 929 were phantoms.
+//
+// The returned days are real trading-day numbers, not ordinals, so the caller can
+// split a holdout on a day boundary and count distinct days before deciding it
+// has enough evidence to fit anything.
 func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, limit int) (raws []float64, ups []float64, days []int64, err error) {
 	rows, qerr := s.db.QueryContext(ctx, `
 		SELECT raw_prob, up, day FROM (

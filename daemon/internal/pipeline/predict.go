@@ -49,13 +49,13 @@ func decodeCalibration(blob string) (symbolagent.Calibration, bool) {
 
 // calibrationPairLimit caps how many of the newest INDEPENDENT resolved
 // outcomes train the fleet-wide recalibration map for one horizon.
-// ResolvedRawPredictionPairs now returns one row per (symbol, UTC day), so this
+// ResolvedRawPredictionPairs now returns one row per (symbol, trading day), so this
 // is a memory guard rather than the statistical window: at ~1,000 symbols a day
 // it admits roughly 40 trading days. The old value of 3,000 was chosen when the
 // query returned every intraday re-score, and it bought TWO calendar days.
 const calibrationPairLimit = 40000
 
-// calibrationMinDays is the number of DISTINCT UTC days the fit must see before
+// calibrationMinDays is the number of DISTINCT TRADING days the fit must see before
 // it is allowed to correct anything.
 //
 // Rows inside one day share one market move, so days — not rows — are the unit
@@ -99,7 +99,7 @@ func globalCalibration(ctx context.Context, st *store.Store, h md.Horizon) (func
 		return nil, false, nil
 	}
 	// EVIDENCE FLOOR, counted in days rather than rows. The pairs are already
-	// deduped to one per (symbol, UTC day) by the store, but a handful of days
+	// deduped to one per (symbol, trading day) by the store, but a handful of days
 	// can still carry thousands of rows, and it is the day count that says how
 	// much independent evidence is behind the fit. Below the floor, publish the
 	// raw probability uncorrected: an uncorrected number is honestly
@@ -115,7 +115,7 @@ func globalCalibration(ctx context.Context, st *store.Store, h md.Horizon) (func
 		return nil, false, nil
 	}
 	// ResolvedRawPredictionPairs returns rows ORDER BY day DESC, so reversing
-	// puts them in chronological order. Ts carries the REAL UTC day number, not
+	// puts them in chronological order. Ts carries the REAL trading-day number, not
 	// an ordinal: CalibrateRanking splits its holdout on a Ts boundary, and a
 	// split that lands mid-day would put the same market move on both sides of
 	// the train/test line — which is how a Brier gate that exists to catch a bad
