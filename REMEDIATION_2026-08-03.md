@@ -350,10 +350,21 @@ commit stamp.** Every row written from here is attributable.
 0. **Environment gaps, not code defects.** `go test -race` cannot run: there is
    no C compiler on this machine (`CGO_ENABLED=0`, no gcc/clang), which is why
    the ledger already recorded the race detector as blocked. Installing a
-   mingw-w64 or MSVC toolchain would unblock it. Separately, `data/` holds
+   mingw-w64 or MSVC toolchain would unblock it. ~~Separately, `data/` holds
    **6.77 GB of stale database copies** (`bak-preimport`, `bak-prereg20`,
    `premigration`, plus two orphaned `loopsnapshot` WAL sidecars with no parent
-   `.db`). Left in place: they are yours to delete, not mine.
+   `.db`). Left in place: they are yours to delete, not mine.~~
+   **CLOSED 2026-08-05 — the operator said delete.** By then the pile had grown
+   to **15.0 GB / 11 files**, the two 2026-08-04 copies (`bak-presplit`,
+   `bak-preimport-...-form25`) having landed after this was written. Deleted
+   after: today's backup was proved to restore clean (integrity_check ok,
+   15,388,398 bars rows, ledger chain + 5/5 anchors verified); the only state
+   living nowhere else was extracted to `proofs/P3_RETIRED_COPY_EVIDENCE.json`
+   (see `proofs/P3A` §2 and `proofs/P3C` §8, both updated); and the backup
+   retention bug that would have pruned the substitute inside 48 hours was fixed
+   first. `data/` is now 12.1 GB. **Note the storage report still pages: the
+   live DB is 4,760 MB against a declared 4,096 MB budget, which is a real
+   growth regression these copies were masking, not fixing.**
 
 1. **No off-machine backup exists.** Unchanged and unfixable from here — it
    needs physical hardware. With an external drive attached:
