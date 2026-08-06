@@ -1068,8 +1068,8 @@ def horizon_blocks(day_rows: list[tuple[int, int, int]],
                    horizon_days: int) -> list[tuple[int, int, int]]:
     """Fold per-CALL-DAY tallies into non-overlapping forward-horizon blocks.
 
-    day_rows are (utc_day, n, hits) with utc_day the integer ts//86400 the
-    daemon writes. Two call days inside the same block share nearly all of their
+    day_rows are (day, n, hits) with day the trading-day index the daemon
+    folds on (md.TradingDay / trading_day above). Two call days inside the same block share nearly all of their
     forward window, so they are pooled into ONE cluster rather than counted as
     two. Returns (anchor_day, n, hits) sorted by anchor; horizon 1 is identity.
 
@@ -1195,10 +1195,52 @@ def prequential_null(days: list[tuple[int, int]]) -> dict:
     return clustered_ci(null_days)
 
 
+# The day fold, mirroring daemon/internal/marketdata/tradingday.go.
+#
+# The grader and the daemon must agree about what ONE independent observation
+# is, or the surface that publishes a number and the surface that produced it
+# are counting different things. The daemon folds on md.TradingDay; this is the
+# same fold, and test_trading_day_offset_matches_go pins the two constants
+# together so a change on one side fails on the other.
+#
+# The boundary is off UTC midnight because the US extended session closes at
+# 20:00 ET — 00:00Z under EDT, 01:00Z under EST — so a midnight cut puts the
+# tail of a session in the NEXT day and counts it as a second observation of the
+# same move. Measured on the live corpus before the fold moved: 630 phantom
+# stock-days, 3.94% of effective N.
+TRADING_DAY_OFFSET_SECS = 5 * 3600
+SECONDS_PER_DAY = 86400
+
+
+def trading_day(ts: int) -> int:
+    """Fold a unix timestamp to its trading-day index.
+
+    Python's // is already floor division, so this matches the Go side's
+    explicit floor without further work.
+    """
+    if ts is None:
+        return None
+    return (ts - TRADING_DAY_OFFSET_SECS) // SECONDS_PER_DAY
+
+
+def register_fold(con: sqlite3.Connection) -> sqlite3.Connection:
+    """Make trading_day() callable from SQL on `con`.
+
+    Called at every point of USE rather than only in connect(), because the
+    grader is handed connections it did not open — snapshots, in-memory test
+    fixtures — and a fold that silently is not registered would fail loudly on
+    some paths and not others. Re-registering is a harmless overwrite.
+    """
+    con.create_function("trading_day", 1, trading_day)
+    return con
+
+
 def connect(path: str) -> sqlite3.Connection:
     if not os.path.exists(path):
         sys.exit(f"database not found: {path}")
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    # Same trick the Go store uses: register the fold as a SQL function rather
+    # than restating it as inline arithmetic, so SQL and Python cannot drift.
+    return register_fold(sqlite3.connect(f"file:{path}?mode=ro", uri=True))
 
 
 # --------------------------------------------------------------------------- #
@@ -1313,19 +1355,20 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
     exports, so a grade from the DB and a grade from the committed snapshot
     start from identical inputs.
     """
+    register_fold(con)
     # Per-DAY tallies, not per-horizon totals. The dedup below still collapses
-    # intraday repeats to one row per (symbol, horizon, UTC-day); the day
+    # intraday repeats to one row per (symbol, horizon, trading-day); the day
     # grouping is what lets the interval resample days instead of rows.
     q = """
     WITH dedup AS (
       SELECT symbol_id, horizon, prob, up, ts,
-             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, ts/86400
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
         AND ts >= ?  -- survivorship boundary: pre-epoch rows are survivor-seeded
     )
-    SELECT horizon, ts/86400 AS day,
+    SELECT horizon, trading_day(ts) AS day,
            COUNT(*),
            SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
            SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
@@ -1346,17 +1389,18 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
     The graded rows above can only say the high-conviction slice is doing worse
     than the base row; they cannot say WHERE the probabilities are wrong. These
     bins can: each holds (mean predicted probability, realized up-frequency, n)
-    over the same independent (symbol, horizon, UTC-day) observations, post-epoch
+    over the same independent (symbol, horizon, trading-day) observations, post-epoch
     only, so an anti-calibrated conviction tier is visible per-bin — and
     correctable — before the auto-retire gate ever fires.
 
     n and distinct_days are published beside every bin because a three-row bin
     is noise, not a calibration measurement.
     """
+    register_fold(con)
     q = f"""
     WITH dedup AS (
       SELECT symbol_id, horizon, prob, up, ts,
-             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, ts/86400
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
@@ -1367,7 +1411,7 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
            COUNT(*),
            AVG(prob),
            SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
-           COUNT(DISTINCT ts / 86400)
+           COUNT(DISTINCT trading_day(ts))
     FROM dedup WHERE rn = 1
     GROUP BY horizon, bin ORDER BY horizon, bin
     """
