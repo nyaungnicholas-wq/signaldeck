@@ -11,6 +11,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/adaptive"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/breakout"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
@@ -22,6 +23,43 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/symbolagent"
 )
+
+// crossSectionRecord is one pass's measured cross-section, stamped with the UTC
+// day it describes. Stored in meta rather than derived from the predictions
+// table because a withheld pass writes no predictions, and a gate that can only
+// read published rows can never observe its own release.
+type crossSectionRecord struct {
+	Day string `json:"day"`
+	ensemble.CrossSection
+}
+
+const crossSectionMetaPrefix = "crosssection:"
+
+func loadCrossSection(ctx context.Context, st *store.Store, h md.Horizon) (*crossSectionRecord, error) {
+	raw, err := st.GetMeta(ctx, crossSectionMetaPrefix+string(h))
+	if err != nil || raw == "" {
+		return nil, err
+	}
+	var rec crossSectionRecord
+	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+// saveCrossSection records what this pass would publish. Best-effort: failing to
+// store the shape must never fail the pass that produced it, and a missing
+// record reads as "nothing to gate on" rather than as a collapse.
+func saveCrossSection(ctx context.Context, st *store.Store, h md.Horizon, day string, cs ensemble.CrossSection) {
+	blob, err := json.Marshal(crossSectionRecord{Day: day, CrossSection: cs})
+	if err != nil {
+		return
+	}
+	if err := st.SetMeta(ctx, crossSectionMetaPrefix+string(h), string(blob)); err != nil {
+		slog.Warn("cross-section gate: could not record this pass's shape",
+			"horizon", h, "err", err)
+	}
+}
 
 // decodeWeights parses a stored symbol_models.weights blob (component->weight).
 // A malformed/empty blob yields nil, so the caller falls back to global weights.
@@ -441,19 +479,21 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// consecutive days, so the lag still gates them from the second day on. On
 	// an empty table there is nothing to measure and the pass publishes: a cold
 	// start must not be indistinguishable from a collapse.
+	today := time.Now().UTC().Format("2006-01-02")
 	gated := map[md.Horizon]string{}
 	for _, h := range predHorizons {
-		probs, prevDay, err := w.St.PriorDayCrossSection(ctx, h)
-		if err != nil || len(probs) == 0 {
+		rec, err := loadCrossSection(ctx, w.St, h)
+		// Only a PRIOR day may gate: reading a record this pass wrote would let
+		// the gate judge the sweep it is in the middle of producing.
+		if err != nil || rec == nil || rec.Day == "" || rec.Day >= today {
 			continue
 		}
-		cs := ensemble.MeasureCrossSection(probs)
-		if ok, reason := cs.Usable(); !ok {
+		if ok, reason := rec.CrossSection.Usable(); !ok {
 			gated[h] = reason
 			slog.Warn("cross-section gate: refusing to publish this horizon",
-				"horizon", h, "priorDay", prevDay, "reason", reason,
-				"n", cs.N, "distinct", cs.Distinct, "spread", cs.Spread,
-				"agreement", cs.Agreement)
+				"horizon", h, "priorDay", rec.Day, "reason", reason,
+				"n", rec.N, "distinct", rec.Distinct, "spread", rec.Spread,
+				"agreement", rec.Agreement)
 		}
 	}
 
@@ -530,6 +570,8 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		}
 	}
 	n, featErrs, staleCals, noLegs, gatedRows := 0, 0, 0, 0, 0
+	// This pass's emitted probabilities per horizon, published or withheld.
+	runProbs := map[md.Horizon][]float64{}
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
@@ -606,6 +648,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				continue
 			}
 			c := ensemble.Components{PressureScore: sc.Score, SentimentScore: sentScore}
+			// RANKING GATE. Every leg below already carries a graded
+			// out-of-sample AUC; until now admission was decided on
+			// Lift = Accuracy - BaseRate, which is threshold-dependent and so
+			// tracks the grading window's base rate rather than the leg's
+			// information. See clusterstat.RankEdge for the measurement that
+			// motivated the change. A leg with no graded AUC gets no entry and
+			// keeps its historical lift behaviour exactly.
+			c.RankEdge = map[string]float64{}
 			// Expectancy hit rate for the current state.
 			if rows, err := w.St.Expectancy(ctx, s.ID, h); err == nil {
 				if row, ok := expectancy.Lookup(rows, states[h]); ok {
@@ -618,6 +668,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				if f.Horizon == h {
 					p, l := f.Prob, f.Lift
 					c.ForecastProb, c.ForecastLift = &p, &l
+					if e, ok := clusterstat.RankEdge(f.AUC, f.NEval); ok {
+						c.RankEdge[ensemble.LegForecast] = e
+					}
 				}
 			}
 			// STAGE 6 gated model legs. Each carries its stored OOS lift; the
@@ -627,9 +680,21 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// the blend is exactly the pre-Stage-6 blend.
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelGBM, ts); ok {
 				c.GBMProb, c.GBMLift = &p, &l
+
+				if e, ok := modelLegRankEdge(modelFcs, h, store.ModelGBM, ts); ok {
+
+					c.RankEdge[ensemble.LegGBM] = e
+
+				}
 			}
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelMeanRev, ts); ok {
 				c.MeanRevProb, c.MeanRevLift = &p, &l
+
+				if e, ok := modelLegRankEdge(modelFcs, h, store.ModelMeanRev, ts); ok {
+
+					c.RankEdge[ensemble.LegMeanRev] = e
+
+				}
 			}
 			// Cross-sectional alpha leg (alphax-leg wave): rows exist in
 			// model_forecasts ONLY while the pooled model's OOS lift > 0 (the
@@ -639,6 +704,12 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// a directional tilt — see ensemble.Components.AlphaXProb.
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelAlphaX, ts); ok {
 				c.AlphaXProb, c.AlphaXLift = &p, &l
+
+				if e, ok := modelLegRankEdge(modelFcs, h, store.ModelAlphaX, ts); ok {
+
+					c.RankEdge[ensemble.LegAlphaX] = e
+
+				}
 			}
 			// PRESSURE LEG GATE: the pressure score is the platform's oldest base
 			// leg, but the resolved record shows its fixed-weight directional call
@@ -649,6 +720,12 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// leg (no fresh row) is kept — fail-safe against a cold trainer.
 			if _, l, ok := modelLegProbLift(modelFcs, h, store.ModelPressure, ts); ok {
 				c.PressureLift = &l
+
+				if e, ok := modelLegRankEdge(modelFcs, h, store.ModelPressure, ts); ok {
+
+					c.RankEdge[ensemble.LegPressure] = e
+
+				}
 			}
 			// PER-SYMBOL AGENTS: pick weights + calibration by tier order
 			//   personal(symbol) -> global-regime -> global -> static.
@@ -705,14 +782,6 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					}
 				}
 			}
-			if _, isGated := gated[h]; isGated {
-				// The previous pass's cross-section for this horizon was
-				// degenerate. Skip the upsert exactly as a legless blend does:
-				// the row that would be written here is the one that gets
-				// graded as an independent forecast, and it is not one.
-				gatedRows++
-				continue
-			}
 			raw, nUsed, admitted := ensemble.AdmittedProbability(c, wts)
 			if !admitted {
 				// NO LEG SURVIVED ADMISSION — publish nothing.
@@ -739,6 +808,24 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				// Fleet-wide fallback, fit on raw_prob against realized
 				// outcomes — the SAME variable it is applied to here.
 				cal = fn(raw)
+			}
+			// SHADOW MEASUREMENT — recorded whether or not this row is published.
+			//
+			// The gate reads what the fleet WOULD publish, never what it did. If it
+			// read stored rows instead, withholding a horizon would erase the only
+			// evidence that could ever reopen it: the newest day carrying rows
+			// would stay the collapsed one forever and the gate would latch shut.
+			// Measuring here, after calibration and before the write, is what makes
+			// the refusal self-releasing — the pass keeps reporting its own shape
+			// while publishing nothing.
+			runProbs[h] = append(runProbs[h], cal)
+
+			if _, isGated := gated[h]; isGated {
+				// Yesterday's cross-section was degenerate. Skip the upsert exactly
+				// as a legless blend does: the row that would be written here is the
+				// one that gets graded as an independent forecast, and it is not one.
+				gatedRows++
+				continue
 			}
 			comps, _ := json.Marshal(c)
 			// WeightedProbability falls through to the equal-weight mean when
@@ -871,6 +958,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// legs have gone cold fleet-wide — which is exactly the condition that
 		// used to be laundered into thousands of 0.5 "predictions".
 		detail += fmt.Sprintf(" (%d symbol-horizon(s) had no admitted leg — no forecast published)", noLegs)
+	}
+	// Record every horizon's shape, INCLUDING the withheld ones. This is the
+	// only write a gated horizon makes, and it is what lets the next pass see
+	// that the cross-section recovered.
+	for _, h := range predHorizons {
+		if probs := runProbs[h]; len(probs) > 0 {
+			saveCrossSection(ctx, w.St, h, today, ensemble.MeasureCrossSection(probs))
+		}
 	}
 	if gatedRows > 0 {
 		// A horizon whose previous cross-section had collapsed. Loud on purpose:

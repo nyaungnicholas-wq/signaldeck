@@ -11,11 +11,28 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
-// The gate reads store.PriorDayCrossSection, so the wiring that matters is:
-// it must take the most recent COMPLETE day (never today), dedup to one row per
-// symbol the way the accuracy registry does, prefer cal_prob, and hand back
-// something MeasureCrossSection classifies the way the live day behaved.
-func TestPriorDayCrossSectionDrivesTheGate(t *testing.T) {
+func vec(n, distinct int, lo, hi float64) []float64 {
+	out := make([]float64, n)
+	for i := range out {
+		if distinct == 1 {
+			out[i] = lo
+			continue
+		}
+		out[i] = lo + (hi-lo)*float64(i%distinct)/float64(distinct-1)
+	}
+	return out
+}
+
+// THE PROPERTY THIS GATE LIVES OR DIES ON: a withheld horizon must be able to
+// reopen.
+//
+// The first version read the prior day out of the predictions table. Withholding
+// writes no predictions, so the newest day carrying rows stayed the collapsed one
+// and the gate latched shut permanently — a refusal that could never be
+// discharged by any code path, which is the shape this repo keeps getting bitten
+// by. The measurement is now recorded whether or not the row is published, so a
+// gated pass still reports its own shape.
+func TestGateReleasesAfterTheCrossSectionRecovers(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "gate.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -24,86 +41,105 @@ func TestPriorDayCrossSectionDrivesTheGate(t *testing.T) {
 	ctx := context.Background()
 	h := md.Horizon("1d")
 
-	// Days relative to now, so the `< date('now')` clause behaves as in prod.
-	day := func(back int, hour int) int64 {
-		return time.Now().UTC().AddDate(0, 0, -back).
-			Truncate(24 * time.Hour).Add(time.Duration(hour) * time.Hour).Unix()
-	}
-	write := func(ts int64, probs []float64) {
+	today := time.Now().UTC().Format("2006-01-02")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+
+	// gatesNow mirrors the runner's decision: only a record stamped with a PRIOR
+	// day may gate.
+	gatesNow := func() (bool, string) {
 		t.Helper()
-		for i, p := range probs {
-			if err := st.UpsertPrediction(ctx, store.Prediction{
-				SymbolID: int64(i + 1), Horizon: h, Ts: ts,
-				RawProb: 0.5, CalProb: p, NUsed: 3,
-				Components: "{}", Weights: "{}", Basis: "test",
-			}); err != nil {
-				t.Fatal(err)
-			}
+		rec, err := loadCrossSection(ctx, st, h)
+		if err != nil || rec == nil || rec.Day == "" || rec.Day >= today {
+			return false, "no prior-day record"
 		}
+		ok, reason := rec.CrossSection.Usable()
+		return !ok, reason
 	}
 
-	// Two days back — the 2026-08-03 shape: 5 distinct values across 300 symbols.
-	collapsed := make([]float64, 300)
-	for i := range collapsed {
-		collapsed[i] = 0.515 + 0.0165*float64(i%5)
+	// Nothing recorded yet: a cold start must not read as a collapse.
+	if gated, _ := gatesNow(); gated {
+		t.Fatal("an empty meta store must not gate — cold start is not collapse")
 	}
-	write(day(2, 14), collapsed)
 
-	got, d, err := st.PriorDayCrossSection(ctx, h)
+	// Yesterday collapsed (the 2026-08-03 shape: 5 values across 329 symbols).
+	saveCrossSection(ctx, st, h, yesterday, ensemble.MeasureCrossSection(vec(329, 5, 0.515, 0.581)))
+	gated, reason := gatesNow()
+	if !gated {
+		t.Fatal("a collapsed prior day must gate")
+	}
+	if reason == "" {
+		t.Fatal("a refusal must carry a reason")
+	}
+
+	// The gated pass still records its shape, and the shape has RECOVERED (the
+	// 2026-08-05 repair: 326 distinct over a 0.296 spread). This is the write
+	// that the first version never made.
+	saveCrossSection(ctx, st, h, yesterday, ensemble.MeasureCrossSection(vec(329, 326, 0.360, 0.656)))
+	if gated, reason := gatesNow(); gated {
+		t.Fatalf("gate must RELEASE once the recorded cross-section recovers, still refusing: %s", reason)
+	}
+}
+
+// A record stamped today must never gate: it describes the sweep currently being
+// written, and judging that would make the gate a function of its own output.
+func TestTodaysRecordCannotGate(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "gate.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 300 || d == "" {
-		t.Fatalf("PriorDayCrossSection = %d rows on %q, want 300 on the prior day", len(got), d)
-	}
-	if cs := ensemble.MeasureCrossSection(got); func() bool { ok, _ := cs.Usable(); return ok }() {
-		t.Fatalf("collapsed cross-section must gate (distinct=%d spread=%.4f)", cs.Distinct, cs.Spread)
-	}
+	defer st.Close()
+	ctx := context.Background()
+	h := md.Horizon("1w")
+	today := time.Now().UTC().Format("2006-01-02")
 
-	// ONE day back, and written TWICE — an earlier degenerate pass then a later
-	// healthy one. The registry keeps the last row per symbol per day, so this
-	// must read the repaired sweep, not a pool of both.
-	write(day(1, 10), collapsed)
-	repaired := make([]float64, 300)
-	for i := range repaired {
-		repaired[i] = 0.36 + 0.296*float64(i)/299.0
+	// Maximally degenerate, stamped TODAY.
+	saveCrossSection(ctx, st, h, today, ensemble.MeasureCrossSection(vec(300, 1, 0.47, 0.47)))
+	rec, err := loadCrossSection(ctx, st, h)
+	if err != nil || rec == nil {
+		t.Fatalf("record must round-trip, got %v %v", rec, err)
 	}
-	write(day(1, 20), repaired)
+	if rec.Day < today {
+		t.Fatalf("stamped %q, want today %q", rec.Day, today)
+	}
+	if ok, _ := rec.CrossSection.Usable(); ok {
+		t.Fatal("fixture should be degenerate — the point is that the DAY guard, not Usable(), spares it")
+	}
+	// The runner's guard is rec.Day >= today, so this record cannot gate despite
+	// being unusable.
+	if !(rec.Day >= today) {
+		t.Fatal("today's record must be excluded by the day guard")
+	}
+}
 
-	got, d, err = st.PriorDayCrossSection(ctx, h)
+// The record must survive the round trip with every field the log and the health
+// row report, or a refusal becomes unexplainable after a restart.
+func TestCrossSectionRecordRoundTrips(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "gate.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 300 {
-		t.Fatalf("got %d rows, want 300 — must dedup to one row per symbol, not pool passes", len(got))
-	}
-	cs := ensemble.MeasureCrossSection(got)
-	if cs.Distinct != 300 {
-		t.Fatalf("distinct=%d, want 300 — the LAST pass of the day must win the dedup", cs.Distinct)
-	}
-	if ok, reason := cs.Usable(); !ok {
-		t.Fatalf("repaired cross-section must publish, refused: %s", reason)
-	}
+	defer st.Close()
+	ctx := context.Background()
+	h := md.Horizon("1d")
 
-	// Today's rows must never be measured: the gate would then read the pass it
-	// is in the middle of writing.
-	write(day(0, 1), collapsed)
-	got, _, err = st.PriorDayCrossSection(ctx, h)
-	if err != nil {
-		t.Fatal(err)
+	want := ensemble.MeasureCrossSection(vec(329, 5, 0.515, 0.581))
+	saveCrossSection(ctx, st, h, "2026-08-03", want)
+	rec, err := loadCrossSection(ctx, st, h)
+	if err != nil || rec == nil {
+		t.Fatalf("load: %v %v", rec, err)
 	}
-	if cs := ensemble.MeasureCrossSection(got); cs.Distinct != 300 {
-		t.Fatalf("distinct=%d after writing today — today must be excluded", cs.Distinct)
+	if rec.Day != "2026-08-03" {
+		t.Errorf("day = %q, want 2026-08-03", rec.Day)
 	}
-
-	// A horizon never written must not read as collapsed. A cold start and a
-	// degenerate fleet have to be distinguishable, or the gate wedges itself shut
-	// on an empty database and nothing is ever published again.
-	empty, d, err := st.PriorDayCrossSection(ctx, md.Horizon("1w"))
-	if err != nil {
-		t.Fatal(err)
+	if rec.N != want.N || rec.Distinct != want.Distinct {
+		t.Errorf("n/distinct = %d/%d, want %d/%d", rec.N, rec.Distinct, want.N, want.Distinct)
 	}
-	if len(empty) != 0 || d != "" {
-		t.Fatalf("unwritten horizon returned %d rows on %q, want 0 and empty", len(empty), d)
+	if rec.Spread != want.Spread || rec.Agreement != want.Agreement {
+		t.Errorf("spread/agreement = %.6f/%.6f, want %.6f/%.6f",
+			rec.Spread, rec.Agreement, want.Spread, want.Agreement)
+	}
+	// Horizons must not share a slot.
+	if other, _ := loadCrossSection(ctx, st, md.Horizon("1w")); other != nil {
+		t.Error("1w must not read 1d's record")
 	}
 }
