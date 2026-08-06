@@ -164,7 +164,8 @@ func TestCompute_CellNeedsDistinctDays(t *testing.T) {
 		exs = append(exs, Example{
 			Legs:      map[string]float64{ensemble.LegPressure: 0.7},
 			Regime:    "uptrend",
-			Ts:        int64(i) * 60, // 600 rows, all inside one UTC day
+			// 06:00Z + 10h of rows: 600 rows wholly inside ONE trading day.
+			Ts:        6*3600 + int64(i)*60,
 			Up:        1,
 			FwdReturn: 0.01,
 		})

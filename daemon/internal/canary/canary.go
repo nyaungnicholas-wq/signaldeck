@@ -16,7 +16,7 @@
 //
 // BOTH arms must first clear the same floors, measured the same way: at least
 // MinObservations graded observations, falling on at least MinWindowDays
-// distinct UTC days, spanning at least MinWindowDays. Until they do there is
+// distinct trading days, spanning at least MinWindowDays. Until they do there is
 // nothing to compare and the verdict says so — "no comparison possible —
 // holding" — rather than issuing a decision that reads as considered.
 //
@@ -52,6 +52,7 @@
 package canary
 
 import (
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"fmt"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
@@ -72,7 +73,7 @@ const (
 	// challenger's Wilson lower bound must clear the incumbent by. Small but
 	// non-zero: promoting on a hairline win invites promoting on noise.
 	MinMarginPp = 0.5
-	// ReadmitMinDistinctDays is the distinct-UTC-day floor of the RE-ADMISSION
+	// ReadmitMinDistinctDays is the distinct-trading-day floor of the RE-ADMISSION
 	// threshold — the one coded door back to emitting for a retired model, and
 	// identically the day floor a successor must clear to be promoted, so the
 	// canary gate and the re-admission gate can never disagree about the same
@@ -104,7 +105,7 @@ type Record struct {
 	N int `json:"n"`
 	// Correct among N.
 	Correct int `json:"correct"`
-	// Days is how many DISTINCT UTC days those observations fall on. It is
+	// Days is how many DISTINCT trading days those observations fall on. It is
 	// required, and it cannot be derived from N or from the span: 1,046
 	// observations spread across four hours span 0.174 days and touch 2 days.
 	// A record that leaves it zero is not graded at all — an unchecked floor is
@@ -114,7 +115,7 @@ type Record struct {
 	// FirstTs / LastTs bound the observation window (Unix seconds).
 	FirstTs int64 `json:"firstTs"`
 	LastTs  int64 `json:"lastTs"`
-	// DayTallies is the record broken out per UTC day: the unit this platform
+	// DayTallies is the record broken out per trading day: the unit this platform
 	// resamples on. It is REQUIRED for a promotion, because the interval that
 	// decides a promotion has to be a day-count interval and there is no way to
 	// recover the between-day variance from N and Correct alone. Fill it with
@@ -130,7 +131,7 @@ type Record struct {
 	BaselineAccuracy float64 `json:"baselineAccuracy"`
 }
 
-// DayTally is one UTC day's graded observations. It mirrors clusterstat.Day so
+// DayTally is one trading day's graded observations. It mirrors clusterstat.Day so
 // a Record can be handed to the platform's cluster-robust estimator without the
 // caller reshaping it.
 type DayTally struct {
@@ -149,7 +150,7 @@ func TallyDays(ts []int64, correct []bool) []DayTally {
 	idx := map[int64]int{}
 	var out []DayTally
 	for i, t := range ts {
-		d := t / 86400
+		d := md.TradingDay(t)
 		j, ok := idx[d]
 		if !ok {
 			idx[d] = len(out)
@@ -214,13 +215,13 @@ func (r Record) Gradable() (ok bool, lack string, obsNeeded int, daysNeeded floa
 	return true, "", 0, 0
 }
 
-// DistinctDays counts the distinct UTC days covered by observation timestamps
+// DistinctDays counts the distinct trading days covered by observation timestamps
 // (Unix seconds) — the days-not-rows unit the rest of the platform resamples
 // on, and the only correct way to fill Record.Days.
 func DistinctDays(ts []int64) int {
 	seen := make(map[int64]struct{}, len(ts))
 	for _, t := range ts {
-		seen[t/86400] = struct{}{}
+		seen[md.TradingDay(t)] = struct{}{}
 	}
 	return len(seen)
 }
@@ -389,7 +390,7 @@ func Evaluate(incumbent, challenger Record) Verdict {
 	// baseline". That reason would be a statement about the challenger; the
 	// true statement is about the platform's own bookkeeping.
 	if v.IntervalMethod == "withheld" {
-		v.Reason = "holding: the challenger does not report its observations per UTC day, " +
+		v.Reason = "holding: the challenger does not report its observations per trading day, " +
 			"so no day-resampled interval can be computed — and a row-count interval over " +
 			"one market move per day is the overstatement this gate exists to avoid"
 		return v
@@ -438,7 +439,7 @@ type Readmission struct {
 	Upper float64 `json:"upper"`
 	// Null is the prequential baseline the LOWER bound must clear.
 	Null float64 `json:"null"`
-	// DistinctDays is the shadow record's distinct-UTC-day count, judged
+	// DistinctDays is the shadow record's distinct-trading-day count, judged
 	// against MinDistinctDays (= ReadmitMinDistinctDays).
 	DistinctDays    int    `json:"distinctDays"`
 	MinDistinctDays int    `json:"minDistinctDays"`
@@ -485,7 +486,7 @@ func Readmit(shadow Record) Readmission {
 }
 
 // PrequentialBaseline grades the hindsight-free constant guess over an arm's
-// day sequence (chronological): for each UTC day the guess is the majority
+// day sequence (chronological): for each trading day the guess is the majority
 // class over the days strictly before it — expected accuracy 0.5 on day one or
 // on a tied prior — and the return is that guess-sequence's pooled accuracy.
 // It mirrors prequential_null in tools/accuracy_registry.py deliberately, and

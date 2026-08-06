@@ -477,7 +477,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// the benchmark never sees the move it will be graded on. A failed read
 	// skips the benchmark this pass rather than inventing a guess.
 	benchProb := map[md.Horizon]float64{}
-	todayUTC := time.Now().UTC().Unix() / 86400
+	todayUTC := md.TradingDay(time.Now().UTC().Unix())
 	for _, h := range predHorizons {
 		p, ok, err := w.St.PrequentialMajorityProb(ctx, h, todayUTC, benchmarkMajorityEpoch)
 		switch {

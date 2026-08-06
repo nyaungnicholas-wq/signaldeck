@@ -71,7 +71,7 @@ func measureRevisionState(ctx context.Context, db *sql.DB) (revisionMeasured, er
 	var m revisionMeasured
 	rows, err := db.QueryContext(ctx, `
 		SELECT COALESCE(revision,''), COUNT(*),
-		       COUNT(DISTINCT predicted_at/86400),
+		       COUNT(DISTINCT trading_day(predicted_at)),
 		       MAX(date(predicted_at,'unixepoch')),
 		       SUM(CASE WHEN predicted_at >= ? THEN 1 ELSE 0 END)
 		  FROM prediction_ledger WHERE predicted_at >= ? GROUP BY 1`,
@@ -98,7 +98,7 @@ func measureRevisionState(ctx context.Context, db *sql.DB) (revisionMeasured, er
 			m.NewestBadDay = newest
 		}
 		dayRows, err := db.QueryContext(ctx, `
-			SELECT DISTINCT predicted_at/86400 FROM prediction_ledger
+			SELECT DISTINCT trading_day(predicted_at) FROM prediction_ledger
 			 WHERE predicted_at >= ? AND COALESCE(revision,'') = ?`,
 			oldRevisionEpochTS, rev)
 		if err != nil {

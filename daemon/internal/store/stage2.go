@@ -32,7 +32,7 @@ func (s *Store) ResolutionsSince(ctx context.Context, since int64) (map[md.Horiz
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT horizon,
 		       COUNT(*),
-		       COUNT(DISTINCT symbol_id || ':' || CAST(ts/86400 AS INTEGER))
+		       COUNT(DISTINCT symbol_id || ':' || CAST(trading_day(ts) AS INTEGER))
 		FROM prediction_outcomes
 		WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND resolved_at >= ?
 		GROUP BY horizon`, since)

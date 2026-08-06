@@ -85,21 +85,23 @@ func TestResolvedRawPairs_OnePerSymbolDay(t *testing.T) {
 	a, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
 	b, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "Microsoft")
 
-	// Three re-scores of AAPL inside ONE UTC day; only the newest may survive.
-	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+1*3600, 0.10, 0.11, 0.01)
-	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+9*3600, 0.20, 0.21, 0.01)
-	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+17*3600, 0.30, 0.31, 0.01)
+	// Three re-scores of AAPL inside ONE trading day; only the newest may
+	// survive. All stamps sit in regular hours so none folds into a
+	// neighbouring day.
+	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+14*3600, 0.10, 0.11, 0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+16*3600, 0.20, 0.21, 0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+20*3600, 0.30, 0.31, 0.01)
 	// A different symbol on the SAME day is an independent observation.
-	seedResolvedPred(t, st, b.ID, md.H1d, 200*86400+5*3600, 0.40, 0.41, -0.01)
+	seedResolvedPred(t, st, b.ID, md.H1d, 200*86400+15*3600, 0.40, 0.41, -0.01)
 	// The same symbol on the NEXT day is also independent.
-	seedResolvedPred(t, st, a.ID, md.H1d, 201*86400+5*3600, 0.60, 0.61, -0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, 201*86400+14*3600, 0.60, 0.61, -0.01)
 
 	raws, ups, days, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(raws) != 3 {
-		t.Fatalf("got %d pairs (raws=%v days=%v); want 3 — one per (symbol, UTC day)", len(raws), raws, days)
+		t.Fatalf("got %d pairs (raws=%v days=%v); want 3 — one per (symbol, trading day)", len(raws), raws, days)
 	}
 	if len(ups) != 3 || len(days) != 3 {
 		t.Fatalf("ragged result: %d raws / %d ups / %d days", len(raws), len(ups), len(days))

@@ -1,5 +1,7 @@
 package clusterstat
 
+import md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+
 // PREQUENTIAL NULL — the constant-guess baseline a model must actually beat.
 //
 // # Why this exists
@@ -206,7 +208,7 @@ func DayGradesFrom(ts []int64, preds, actuals []float64) []DayGrade {
 	idx := map[int64]int{}
 	out := make([]DayGrade, 0, 8)
 	for i, t := range ts {
-		day := t / 86400
+		day := md.TradingDay(t)
 		j, seen := idx[day]
 		if !seen {
 			j = len(out)
@@ -241,7 +243,7 @@ func DayGradesFromWins(ts []int64, labels []float64, correct []bool) []DayGrade 
 	idx := map[int64]int{}
 	out := make([]DayGrade, 0, 8)
 	for i, t := range ts {
-		day := t / 86400
+		day := md.TradingDay(t)
 		j, seen := idx[day]
 		if !seen {
 			j = len(out)
@@ -282,7 +284,7 @@ func DayWinsFrom(ts []int64, labels []float64) []DayWins {
 	out := make([]DayWins, 0, 8)
 	order := make([]int64, 0, 8)
 	for i, t := range ts {
-		day := t / 86400
+		day := md.TradingDay(t)
 		j, seen := idx[day]
 		if !seen {
 			j = len(out)
@@ -327,7 +329,7 @@ func DayLabelsFrom(ts []int64, actuals []float64) []DayLabel {
 	idx := map[int64]int{}
 	out := make([]DayLabel, 0, 8)
 	for i, t := range ts {
-		day := t / 86400
+		day := md.TradingDay(t)
 		j, seen := idx[day]
 		if !seen {
 			j = len(out)

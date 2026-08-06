@@ -203,9 +203,9 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, limit int) (raws []float64, ups []float64, days []int64, err error) {
 	rows, qerr := s.db.QueryContext(ctx, `
 		SELECT raw_prob, up, day FROM (
-			SELECT p.raw_prob AS raw_prob, o.up AS up, o.ts/86400 AS day,
+			SELECT p.raw_prob AS raw_prob, o.up AS up, trading_day(o.ts) AS day,
 			       ROW_NUMBER() OVER (
-			         PARTITION BY o.symbol_id, o.ts/86400
+			         PARTITION BY o.symbol_id, trading_day(o.ts)
 			         ORDER BY o.ts DESC
 			       ) AS rn
 			FROM prediction_outcomes o
@@ -271,10 +271,10 @@ func (s *Store) SeedBenchmarkOutcome(ctx context.Context, symbolID int64, h md.H
 func (s *Store) PrequentialMajorityProb(ctx context.Context, h md.Horizon, beforeDay, sinceTs int64) (float64, bool, error) {
 	q := `
 	WITH dedup AS (
-	  SELECT up, ROW_NUMBER() OVER (PARTITION BY symbol_id, ts/86400 ORDER BY ts DESC) rn
+	  SELECT up, ROW_NUMBER() OVER (PARTITION BY symbol_id, trading_day(ts) ORDER BY ts DESC) rn
 	  FROM prediction_outcomes
 	  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
-	    AND ts >= ? AND ts/86400 < ?
+	    AND ts >= ? AND trading_day(ts) < ?
 	)
 	SELECT COUNT(*), COALESCE(SUM(up),0) FROM dedup WHERE rn = 1`
 	var n, ups int

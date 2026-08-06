@@ -301,7 +301,7 @@ func gradeFleetEdge(rows []store.ResolvedPredictionOutcome) fleetSkill {
 	obs := make([]clusterstat.Obs, 0, len(rows))
 	correct, ups, indepN := 0, 0, 0
 	for _, o := range rows {
-		day := o.Ts / 86400
+		day := md.TradingDay(o.Ts)
 		key := [2]int64{o.SymbolID, day}
 		if seen[key] {
 			continue

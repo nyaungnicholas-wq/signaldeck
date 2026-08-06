@@ -53,6 +53,7 @@
 package metalabel
 
 import (
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"errors"
 	"fmt"
 	"math"
@@ -308,12 +309,12 @@ func Evaluate(samples []Sample, folds int, cost, threshold float64) (Grade, erro
 	allDays := map[int64]struct{}{}
 	for _, i := range scored {
 		c := cands[i]
-		allDays[c.Ts/86400] = struct{}{}
+		allDays[md.TradingDay(c.Ts)] = struct{}{}
 		if probs[i] < threshold {
 			continue
 		}
 		g.TakenN++
-		takenDays[c.Ts/86400] = struct{}{}
+		takenDays[md.TradingDay(c.Ts)] = struct{}{}
 		takenSum += costNetReturn(c, cost)
 		if metaLabel(c, cost) == 1 {
 			takenHits++

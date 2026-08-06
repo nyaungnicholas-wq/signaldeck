@@ -227,7 +227,7 @@ func (d Deps) directionalShadow(ctx context.Context, h md.Horizon) (canary.Recor
 		if r.Ts > rec.LastTs {
 			rec.LastTs = r.Ts
 		}
-		day := r.Ts / 86400
+		day := md.TradingDay(r.Ts)
 		t := byDay[day]
 		if t == nil {
 			t = &canary.DayTally{Day: day}

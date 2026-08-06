@@ -51,6 +51,7 @@
 package ensemble
 
 import (
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"errors"
 	"fmt"
 	"math"
@@ -175,14 +176,14 @@ const MinCalibrationPairs = 30
 // NOT YET ENFORCED ON THE FLEET-WIDE MAP — see Calibrate.
 const MinCalibrationDays = 20
 
-// DistinctPairDays counts the distinct UTC days a set of graded pairs spans —
+// DistinctPairDays counts the distinct trading days a set of graded pairs spans —
 // the honest sample size behind anything fitted from them. Unstamped pairs
 // (Ts==0) all collapse onto day 0, so a caller that supplies no timestamps
 // reports one day and is refused rather than silently trusted.
 func DistinctPairDays(pairs []Pair) int {
 	days := make(map[int64]struct{}, len(pairs))
 	for _, p := range pairs {
-		days[p.Ts/86400] = struct{}{}
+		days[md.TradingDay(p.Ts)] = struct{}{}
 	}
 	return len(days)
 }
@@ -482,7 +483,7 @@ func AdmittedProbability(c Components, weights map[string]float64) (prob float64
 type Pair struct {
 	Pred   float64 // predicted P(up), [0,1]
 	Actual float64 // realized outcome in {0,1}
-	// Ts is the prediction's unix timestamp. Its UTC day is the independence
+	// Ts is the prediction's unix timestamp. Its trading day is the independence
 	// unit: the predictor runs every 10 minutes against daily labels, so a
 	// dozen pairs can share one symbol-day and a thousand symbols share one
 	// market move. Grading helpers (BrierScore, CalibrationCurve) ignore it;
@@ -616,7 +617,7 @@ func BrierSkill(pairs []Pair) (skill, baseRate float64, ok bool) {
 // (pipeline.globalCalibration) reads store.ResolvedRawPredictionPairs, which
 // returns the newest calibrationPairLimit=3000 ROWS with no timestamp. Measured
 // live 2026-07-26: that window spans 5 distinct days for 1d and 1 for 1w, and
-// reaching 20 would require deduping to one pair per (symbol, UTC-day) across
+// reaching 20 would require deduping to one pair per (symbol, trading-day) across
 // the full history — a change to the store query and the predictor's window,
 // not to this function. Enforcing the floor here without that change would
 // disable fleet calibration for a reason the code could not honestly state

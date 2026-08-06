@@ -1,6 +1,7 @@
 package canary
 
 import (
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"math"
 	"strings"
 	"testing"
@@ -315,8 +316,13 @@ func TestDistinctDays(t *testing.T) {
 	if got := DistinctDays(nil); got != 0 {
 		t.Fatalf("DistinctDays(nil) = %d, want 0", got)
 	}
-	// Four hours of observations straddling a UTC midnight: two days, 0.17 span.
-	ts := []int64{86400 - 3600, 86400 - 60, 86400 + 60, 86400 + 3600}
+	// Four hours of observations straddling the trading-day boundary: two
+	// days, 0.17 span. Anchored on the constant so that moving the boundary
+	// keeps this a straddle instead of silently making it one day.
+	ts := []int64{
+		md.TradingDayOffsetSecs - 3600, md.TradingDayOffsetSecs - 60,
+		md.TradingDayOffsetSecs + 60, md.TradingDayOffsetSecs + 3600,
+	}
 	if got := DistinctDays(ts); got != 2 {
 		t.Fatalf("DistinctDays(straddling midnight) = %d, want 2", got)
 	}

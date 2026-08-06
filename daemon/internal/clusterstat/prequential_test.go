@@ -94,10 +94,11 @@ func TestDayLabelsFromMismatchedLengths(t *testing.T) {
 }
 
 func TestDayLabelsFromReverseOrder(t *testing.T) {
-	// Two days, but fed in reverse chronological order.
-	// Day 0: timestamp 100 (day 0), actual 0.6 -> up
-	// Day 1: timestamp 86500 (day 1), actual 0.4 -> down
-	ts := []int64{86500, 100}
+	// Two days, but fed in reverse chronological order. Both stamps sit at
+	// 12:00Z so each lands mid trading day rather than near the fold.
+	// Day 0: 43200, actual 0.6 -> up
+	// Day 1: 129600, actual 0.4 -> down
+	ts := []int64{86400 + 43200, 43200}
 	actuals := []float64{0.4, 0.6}
 	got := DayLabelsFrom(ts, actuals)
 	if len(got) != 2 {
@@ -112,10 +113,10 @@ func TestDayLabelsFromReverseOrder(t *testing.T) {
 }
 
 func TestDayLabelsFromSameDayCollapse(t *testing.T) {
-	// Three timestamps in the same 86400-second day (day 0).
-	// Timestamps: 0, 43200, 86399 -> all day 0.
+	// Three timestamps in the same trading day (day 0): 06:00Z, 12:00Z and
+	// 23:59:59Z all fold together once the boundary is off UTC midnight.
 	// Actuals: 0.5 (up), 0.49 (down), 0.6 (up) -> two ups, one down.
-	ts := []int64{0, 43200, 86399}
+	ts := []int64{21600, 43200, 86399}
 	actuals := []float64{0.5, 0.49, 0.6}
 	got := DayLabelsFrom(ts, actuals)
 	if len(got) != 1 {

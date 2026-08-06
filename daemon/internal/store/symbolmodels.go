@@ -37,7 +37,7 @@ func (s *Store) LabeledFeaturesBySymbolVersion(ctx context.Context, symbolID int
 
 // labeledFeaturesBySymbol implements both variants; version 0 = all versions.
 //
-// ONE ROW PER UTC DAY, newest wins. The prediction runner re-scores a symbol
+// ONE ROW PER TRADING DAY, newest wins. The prediction runner re-scores a symbol
 // many times a day and writes a feature row each time, but a 1d/1w label is a
 // property of the DAY, not of the scoring instant: every row inside one day
 // carries the identical outcome. Measured 2026-08-05 on the live v12 corpus,
@@ -65,7 +65,7 @@ func (s *Store) labeledFeaturesBySymbol(ctx context.Context, symbolID int64, h m
 			SELECT f.ts AS ts, f.version AS version, f.vec AS vec,
 			       o.up AS up, o.fwd_return AS fwd_return,
 			       ROW_NUMBER() OVER (
-			         PARTITION BY f.ts/86400 ORDER BY f.ts DESC
+			         PARTITION BY trading_day(f.ts) ORDER BY f.ts DESC
 			       ) AS rn
 			FROM features f
 			JOIN prediction_outcomes o
@@ -102,17 +102,22 @@ func (s *Store) labeledFeaturesBySymbol(ctx context.Context, symbolID int64, h m
 	return out, rows.Err()
 }
 
-// StockFeatureDayFold counts the same stock feature rows two ways: folded on a
-// UTC-midnight boundary (what the PARTITION BY above and every other
-// day-clustered statistic currently uses) and folded on the trading-day
-// boundary (md.TradingDay). Only rows at or after `since` are counted.
+// StockFeatureDayFold counts the same stock feature rows two ways: on the naive
+// UTC-midnight boundary and on the trading-day boundary the platform now folds
+// with (md.TradingDay). Only rows at or after `since` are counted.
 //
-// The gap between the two IS the pseudo-replication the day fold is supposed to
-// remove. A US extended session closes at 20:00 ET — 00:00Z under EDT, 01:00Z
-// under EST — so its tail lands in the NEXT UTC day and is counted as a second
-// independent observation of the same session. Every published interval divides
-// by that count, so the excess overstates effective N and narrows intervals in
-// the direction that flatters the platform.
+// The gap between the two is the pseudo-replication a UTC-midnight fold admits.
+// A US extended session closes at 20:00 ET — 00:00Z under EDT, 01:00Z under EST
+// — so its tail lands in the NEXT UTC day and would be counted as a second
+// independent observation of the same session. Measured 2026-08-05 before the
+// fold moved: 16,606 UTC buckets against 15,976 real trading days, 630 phantom
+// days, 3.94% of effective N.
+//
+// The fold has since moved, so this is no longer measuring a live defect — it
+// is the WATCHDOG on that fix. It answers "how much would we be overstating if
+// the boundary slipped back", which is the number to watch if the writer's
+// schedule changes or extended-hours coverage widens. A rising value means the
+// margin protecting the day count is being eaten.
 //
 // Returned as raw counts rather than a rate so the caller can state both
 // numbers in the finding — "15,976 real days, 630 phantom" is auditable in a

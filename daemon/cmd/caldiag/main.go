@@ -121,9 +121,9 @@ func countDays(ps []ensemble.Pair) int {
 func pairs(db *sql.DB, h string, limit int) (raws, ups []float64, days []int64, err error) {
 	rows, err := db.QueryContext(context.Background(), `
 		SELECT raw_prob, up, day FROM (
-			SELECT p.raw_prob AS raw_prob, o.up AS up, o.ts/86400 AS day,
+			SELECT p.raw_prob AS raw_prob, o.up AS up, trading_day(o.ts) AS day,
 			       ROW_NUMBER() OVER (
-			         PARTITION BY o.symbol_id, o.ts/86400
+			         PARTITION BY o.symbol_id, trading_day(o.ts)
 			         ORDER BY o.ts DESC
 			       ) AS rn
 			FROM prediction_outcomes o

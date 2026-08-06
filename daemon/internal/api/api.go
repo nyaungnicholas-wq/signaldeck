@@ -804,7 +804,7 @@ func (d Deps) honesty(w http.ResponseWriter, r *http.Request) {
 	byDay := map[int64][]int{}
 	var days []int64
 	for i, p := range pts {
-		d := p.Ts / 86400
+		d := md.TradingDay(p.Ts)
 		if _, seen := byDay[d]; !seen {
 			days = append(days, d)
 		}

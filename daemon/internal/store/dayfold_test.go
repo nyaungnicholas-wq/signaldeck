@@ -7,6 +7,37 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
+// TestTradingDaySQL_MatchesGo pins the two sides of the wall together. Every
+// day-folded statistic is computed partly in Go and partly in SQL, so if these
+// two disagree the surface that trains a leg and the surface that judges it are
+// once again counting different things.
+func TestTradingDaySQL_MatchesGo(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	for _, ts := range []int64{
+		0, 1, md.TradingDayOffsetSecs - 1, md.TradingDayOffsetSecs, md.TradingDayOffsetSecs + 1,
+		86399, 86400, 86401, 1_700_000_000, 1_700_000_000 + 43200,
+		20000*86400 + 24*3600, // an EDT extended close
+	} {
+		var got int64
+		if err := st.db.QueryRowContext(ctx, `SELECT trading_day(?)`, ts).Scan(&got); err != nil {
+			t.Fatalf("trading_day(%d): %v", ts, err)
+		}
+		if want := md.TradingDay(ts); got != want {
+			t.Fatalf("trading_day(%d) = %d in SQL but %d in Go — the two folds have drifted",
+				ts, got, want)
+		}
+	}
+	// A NULL timestamp must not fold onto the epoch.
+	var nullDay any
+	if err := st.db.QueryRowContext(ctx, `SELECT trading_day(NULL)`).Scan(&nullDay); err != nil {
+		t.Fatalf("trading_day(NULL): %v", err)
+	}
+	if nullDay != nil {
+		t.Fatalf("trading_day(NULL) = %v, want NULL", nullDay)
+	}
+}
+
 // seedStockFeature writes one stock feature row at ts.
 func seedStockFeature(t *testing.T, st *Store, symbolID, ts int64) {
 	t.Helper()

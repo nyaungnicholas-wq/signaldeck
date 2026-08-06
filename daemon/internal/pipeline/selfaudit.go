@@ -16,9 +16,9 @@
 //     flagged systematic over/under-confidence.
 //
 // Independence: resolved predictions are collapsed to one observation per
-// (symbol, UTC-day) before any statistic, mirroring the /honesty + track-record
-// dedup — the minute-cadence pipeline otherwise pseudo-replicates the same daily
-// move.
+// (symbol, trading-day) before any statistic, mirroring the /honesty +
+// track-record dedup — the minute-cadence pipeline otherwise pseudo-replicates
+// the same daily move. md.TradingDay owns where that day boundary falls.
 package pipeline
 
 import (
@@ -206,14 +206,18 @@ func (w *SelfAuditor) Run(ctx context.Context) (string, error) {
 	//
 	// Every statistic above divides by a count of independent (symbol, day)
 	// observations, so all of them inherit whatever the day fold gets wrong.
-	// The fold is a bare ts/86400 — a UTC-midnight cut — and the US extended
-	// session closes at 20:00 ET, which is 00:00Z under EDT and 01:00Z under
-	// EST. The tail of a session therefore lands in the NEXT UTC day and is
-	// counted as a second independent observation of the same day's move.
+	// The fold now cuts at md.TradingDay rather than UTC midnight, because the
+	// US extended session closes at 20:00 ET — 00:00Z under EDT, 01:00Z under
+	// EST — so a midnight cut put the tail of a session in the NEXT day and
+	// counted it as a second observation of the same move.
 	//
-	// This check measures the gap on real stored rows rather than assuming it
-	// is zero — it was assumed to be zero once, on the reasoning that the
-	// predictor only writes during regular hours, and the corpus disagreed.
+	// This measures what that cut WOULD still be costing, on real stored rows,
+	// and is a watchdog rather than a live defect report: it goes back above
+	// the threshold if the writer's schedule or extended-hours coverage moves
+	// enough to eat the margin the boundary currently has. It measures rather
+	// than assumes because the gap was assumed to be zero once — on the
+	// reasoning that the predictor only writes during regular hours — and the
+	// corpus disagreed by 630 days.
 	{
 		since := now.Unix() - dayFoldAuditWindowDays*md.SecondsPerDay
 		utcDays, tradingDays, err := w.St.StockFeatureDayFold(ctx, since)
@@ -273,7 +277,7 @@ func independentPreds(outs []store.ResolvedPredictionOutcome) []predObs {
 	seen := make(map[key]struct{}, len(outs))
 	out := make([]predObs, 0, len(outs))
 	for _, o := range outs {
-		k := key{sym: o.SymbolID, day: o.Ts / 86400}
+		k := key{sym: o.SymbolID, day: md.TradingDay(o.Ts)}
 		if _, dup := seen[k]; dup {
 			continue
 		}

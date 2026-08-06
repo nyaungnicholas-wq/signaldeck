@@ -5,7 +5,7 @@
 // # The defect this package exists to prevent
 //
 // Every skill number here is measured across ~1,000 symbols on a handful of
-// market days. Deduplicating to one row per (symbol, UTC-day) — which this
+// market days. Deduplicating to one row per (symbol, trading-day) — which this
 // platform already does — removes the intraday pseudo-replication (~60x) and
 // leaves the larger problem entirely untouched: on any given day every symbol
 // shares ONE market move. A binomial interval over 13,008 such rows asserts
@@ -96,7 +96,7 @@ const (
 	DirDown Direction = -1
 )
 
-// Obs is ONE already-deduplicated observation — one (symbol, UTC-day) row. This
+// Obs is ONE already-deduplicated observation — one (symbol, trading-day) row. This
 // package does not deduplicate: collapsing intraday repeats is the caller's
 // job and is a different defect from the one fixed here. Handing in raw
 // minute-cadence rows will produce a design effect that absorbs both, which is

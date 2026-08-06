@@ -120,7 +120,7 @@ func Build(daily, minute []marketdata.Bar) map[marketdata.Horizon][]marketdata.E
 			if !ok || closes[i] == 0 {
 				continue
 			}
-			day := d[i].Ts / 86400
+			day := marketdata.TradingDay(d[i].Ts)
 			if i+1 < len(d) {
 				record(marketdata.H1d, key, closes[i+1]/closes[i]-1, day)
 			}
@@ -147,7 +147,7 @@ func Build(daily, minute []marketdata.Bar) map[marketdata.Horizon][]marketdata.E
 			if !ok || closes[i] == 0 {
 				continue
 			}
-			day := minute[i].Ts / 86400
+			day := marketdata.TradingDay(minute[i].Ts)
 			record(marketdata.H1h, key, closes[i+60]/closes[i]-1, day)
 		}
 	}

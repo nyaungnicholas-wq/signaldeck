@@ -58,6 +58,7 @@
 package gbm
 
 import (
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"errors"
 	"math"
 	"sort"
@@ -683,7 +684,7 @@ func dayTallies(ts []int64, preds, actuals []float64) []DayTally {
 	idx := map[int64]int{}
 	var out []DayTally
 	for i, t := range ts {
-		day := t / 86400
+		day := md.TradingDay(t)
 		j, seen := idx[day]
 		if !seen {
 			j = len(out)
