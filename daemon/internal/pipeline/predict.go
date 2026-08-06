@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/adaptive"
@@ -420,6 +422,41 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// cross-section — liquidity, low-vol, 12-1 momentum, 1-day reversal — none
 	// of which existed in the alphax feature set that grades AUC 0.501. See
 	// xsfeatures.go for the measurement and its limits.
+	// CROSS-SECTION DISPERSION GATE. Measured on the PREVIOUS pass's published
+	// probabilities, per horizon, before anything is written this pass.
+	//
+	// Between 2026-07-27 and 2026-08-04 the fleet-wide calibration map collapsed
+	// and 329 symbols were handed 5-14 distinct probabilities; the 0.5 threshold
+	// turned that into a near-unanimous market call which was then stored,
+	// resolved and graded as ~330 independent per-symbol forecasts. The registry
+	// published FAILED/retire=true on what was really 11 market calls.
+	//
+	// A degenerate cross-section carries no usable call AND no usable ranking —
+	// that is what "no dispersion" means — so this refuses the upsert outright,
+	// the same answer AdmittedProbability already gives for a legless blend: no
+	// forecast, rather than a forecast that means nothing.
+	//
+	// It lags by one DAY, measured on the prior day's deduped cross-section —
+	// the same unit the registry grades. Every observed episode ran 6-8
+	// consecutive days, so the lag still gates them from the second day on. On
+	// an empty table there is nothing to measure and the pass publishes: a cold
+	// start must not be indistinguishable from a collapse.
+	gated := map[md.Horizon]string{}
+	for _, h := range predHorizons {
+		probs, prevDay, err := w.St.PriorDayCrossSection(ctx, h)
+		if err != nil || len(probs) == 0 {
+			continue
+		}
+		cs := ensemble.MeasureCrossSection(probs)
+		if ok, reason := cs.Usable(); !ok {
+			gated[h] = reason
+			slog.Warn("cross-section gate: refusing to publish this horizon",
+				"horizon", h, "priorDay", prevDay, "reason", reason,
+				"n", cs.N, "distinct", cs.Distinct, "spread", cs.Spread,
+				"agreement", cs.Agreement)
+		}
+	}
+
 	xsFeats := crossSectionalFeatures(ctx, w.St, syms)
 	if len(xsFeats) == 0 {
 		slog.Info("cross-sectional features unavailable this pass — universe too " +
@@ -492,7 +529,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			benchProb[h] = p
 		}
 	}
-	n, featErrs, staleCals, noLegs := 0, 0, 0, 0
+	n, featErrs, staleCals, noLegs, gatedRows := 0, 0, 0, 0, 0
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
@@ -668,6 +705,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					}
 				}
 			}
+			if _, isGated := gated[h]; isGated {
+				// The previous pass's cross-section for this horizon was
+				// degenerate. Skip the upsert exactly as a legless blend does:
+				// the row that would be written here is the one that gets
+				// graded as an independent forecast, and it is not one.
+				gatedRows++
+				continue
+			}
 			raw, nUsed, admitted := ensemble.AdmittedProbability(c, wts)
 			if !admitted {
 				// NO LEG SURVIVED ADMISSION — publish nothing.
@@ -826,6 +871,19 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// legs have gone cold fleet-wide — which is exactly the condition that
 		// used to be laundered into thousands of 0.5 "predictions".
 		detail += fmt.Sprintf(" (%d symbol-horizon(s) had no admitted leg — no forecast published)", noLegs)
+	}
+	if gatedRows > 0 {
+		// A horizon whose previous cross-section had collapsed. Loud on purpose:
+		// this is the counter that would have been non-zero for eight straight
+		// trading days in the 2026-07-27..08-04 episode, and nothing at the time
+		// was counting it.
+		hs := make([]string, 0, len(gated))
+		for h, reason := range gated {
+			hs = append(hs, fmt.Sprintf("%s: %s", h, reason))
+		}
+		sort.Strings(hs)
+		detail += fmt.Sprintf(" (%d row(s) withheld by the cross-section gate — %s)",
+			gatedRows, strings.Join(hs, "; "))
 	}
 	return detail, nil
 }

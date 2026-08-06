@@ -69,6 +69,65 @@ func (s *Store) LatestPrediction(ctx context.Context, symbolID int64, h md.Horiz
 	return p, err == nil, err
 }
 
+// PriorDayCrossSection returns the probabilities published on the most recent
+// COMPLETE UTC day before today, one row per symbol — the same unit the accuracy
+// registry grades.
+//
+// NOT the last pass. The runner stamps one ts per sweep, but a sweep does not
+// reach every symbol: measured over the live record the final pass of a day held
+// 3, 43 and 324 rows on different days, because symbols drop out on absent legs
+// and thin features. Gating on a partial sweep measures how much of the fleet
+// happened to finish, not whether the cross-section collapsed.
+//
+// Deduping to one row per symbol over a whole day removes that, and it lines the
+// gate up with the thing that actually suffers the harm: the registry keeps the
+// LAST row per (symbol, day), so the day is the unit that gets graded as N
+// independent forecasts. Publication and grading now disagree about nothing.
+//
+// Strictly the PRIOR day, so the measurement can never include the pass being
+// written. Every collapse episode on the live record ran 6-8 consecutive days,
+// so a one-day lag still gates them from the second day on.
+//
+// cal_prob is preferred over raw_prob because the calibration map is what
+// collapsed in the 2026-07-27..08-04 episode: grading the raw input would have
+// found a healthy spread and missed the degenerate output entirely.
+func (s *Store) PriorDayCrossSection(ctx context.Context, h md.Horizon) ([]float64, string, error) {
+	var day string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT MAX(date(ts,'unixepoch')) FROM predictions
+		WHERE horizon=? AND date(ts,'unixepoch') < date('now')`,
+		string(h)).Scan(&day)
+	if err == sql.ErrNoRows || day == "" {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	// One row per symbol: the LAST prediction standing on that day, matching the
+	// registry's dedup exactly.
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT COALESCE(cal_prob, raw_prob) FROM (
+		  SELECT symbol_id, cal_prob, raw_prob,
+		         ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY ts DESC) rn
+		  FROM predictions
+		  WHERE horizon=? AND date(ts,'unixepoch')=?
+		) WHERE rn=1 AND COALESCE(cal_prob, raw_prob) IS NOT NULL`,
+		string(h), day)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	var probs []float64
+	for rows.Next() {
+		var p float64
+		if err := rows.Scan(&p); err != nil {
+			return nil, "", err
+		}
+		probs = append(probs, p)
+	}
+	return probs, day, rows.Err()
+}
+
 // UnresolvedPredictions returns pending prediction outcomes at/before cutoff
 // that CAN still be graded — the symbol has at least one daily bar at or after
 // the row's target instant.
