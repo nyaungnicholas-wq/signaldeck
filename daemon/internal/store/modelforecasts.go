@@ -99,6 +99,12 @@ func (s *Store) ModelForecasts(ctx context.Context, symbolID int64) ([]ModelFore
 	return out, rows.Err()
 }
 
+// FleetLegMinSymbols is the fewest symbols that must carry a graded row before
+// that leg's fleet AUC is allowed to veto anything. 30 mirrors the accuracy
+// registry's own min_independent_n, so no surface here has a laxer bar for
+// ACTING on evidence than the registry has for PUBLISHING it.
+const FleetLegMinSymbols = 30
+
 // FleetLegAUC returns each leg's FLEET-WIDE out-of-sample AUC, keyed
 // "<leg>|<horizon>", as the evaluation-weighted mean over every symbol the
 // trainers have graded. Legs live in two tables — the model legs in
@@ -120,6 +126,7 @@ func (s *Store) FleetLegAUC(ctx context.Context) (map[string]float64, error) {
 	out := map[string]float64{}
 	sums := map[string]float64{}
 	wts := map[string]float64{}
+	syms := map[string]int{}
 	add := func(leg, h string, auc float64, n int) {
 		// Exactly 0 or 1 is degenerate and excluded, matching
 		// clusterstat.RankEdge so the fleet number and the per-symbol bound
@@ -132,6 +139,7 @@ func (s *Store) FleetLegAUC(ctx context.Context) (map[string]float64, error) {
 		k := leg + "|" + h
 		sums[k] += auc * float64(n)
 		wts[k] += float64(n)
+		syms[k]++
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT model, horizon, auc, n_eval FROM model_forecasts`)
 	if err != nil {
@@ -166,7 +174,19 @@ func (s *Store) FleetLegAUC(ctx context.Context) (map[string]float64, error) {
 		add("forecast", h, auc, n)
 	}
 	for k, w := range wts {
-		if w > 0 {
+		// EVIDENCE FLOOR. A veto benches a leg for EVERY symbol, so it must not
+		// fire on a handful of them. Symbols — not rows — are the unit that
+		// varies here: per-symbol grades are built from heavily overlapping
+		// market days, so summing n_eval overstates independence badly (alphax
+		// reads 1,661,004 across 333 symbols). A leg graded on too few symbols
+		// is simply omitted; rankGate then finds no entry, casts no veto, and
+		// the per-symbol bound decides with its own RankEdgeMinEval floor.
+		//
+		// Measured need: grading the sentiment leg returns fleet AUC 0.3934 —
+		// but on 12 symbols and 202 symbol-days. That is not a fleet claim.
+		// Every leg currently vetoing clears this comfortably (thinnest is
+		// meanrev|1w at 34 symbols), so the floor costs no real bench today.
+		if w > 0 && syms[k] >= FleetLegMinSymbols {
 			out[k] = sums[k] / w
 		}
 	}

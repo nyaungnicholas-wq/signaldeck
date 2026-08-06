@@ -70,8 +70,11 @@ func seedExpectancyFixture(t *testing.T, st *store.Store, ctx context.Context, n
 func TestExpectancyTrainerGradesEvidenceRowsThatHaveNoOutcome(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
+	// store.FleetLegMinSymbols symbols, not a token 3: a fleet AUC is only
+	// allowed to veto once enough symbols carry a graded row, so a fixture below
+	// that floor would exercise a path the runner never takes.
 	var syms []md.Symbol
-	for i := 0; i < 3; i++ {
+	for i := 0; i < store.FleetLegMinSymbols; i++ {
 		syms = append(syms, seedExpectancyFixture(t, st, ctx, fmt.Sprintf("SYM%d", i)))
 	}
 
@@ -112,8 +115,11 @@ func TestExpectancyTrainerGradesEvidenceRowsThatHaveNoOutcome(t *testing.T) {
 			if f.NEval != 20 {
 				t.Errorf("NEval = %d, want 20 — the row stores this SYMBOL's contribution, not the fleet total", f.NEval)
 			}
-			if f.AUC != auc {
-				t.Errorf("row AUC = %f, want the fleet estimate %f", f.AUC, auc)
+			// Tolerance, not equality: the trainer divides once, FleetLegAUC
+			// re-accumulates the same number over every stored row, so the two
+			// agree to within a rounding step rather than bit-for-bit.
+			if d := f.AUC - auc; d > 1e-12 || d < -1e-12 {
+				t.Errorf("row AUC = %v, want the fleet estimate %v", f.AUC, auc)
 			}
 		}
 	}
