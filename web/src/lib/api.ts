@@ -2198,17 +2198,17 @@ export function signalBacktestLive(horizon: "1d" | "1w") {
 // ─────────────────────────────────────────────────────────────────────────
 // STAGE 3 — ALERT DELIVERY BEYOND THE MAC (appended block; keep at END).
 // GET /api/notify-status reports which outbound delivery transports are
-// configured — macOS (always attempted, honestly labeled untracked) plus the
-// three optional env-configured remotes (Discord webhook, Telegram bot,
-// generic webhook) — with last delivery ts and last SECRET-REDACTED error per
-// transport. The payload never contains webhook URLs or tokens. Email is
-// deliberately absent: it needs SMTP creds/provider (noted as future).
+// configured — the LOCAL desktop channel for whatever platform the daemon runs
+// on (always attempted, honestly labeled untracked) plus the five optional
+// env-configured remotes (Discord webhook, Telegram bot, generic webhook,
+// Slack webhook, SMTP) — with last delivery ts and last SECRET-REDACTED error
+// per transport. The payload never contains webhook URLs, tokens or passwords.
 
 /** One delivery transport's honest status + the env var(s) that enable it. */
 export interface NotifyTransport {
-  name: string; // "macos" | "discord" | "telegram" | "webhook"
+  name: string; // "macos" | "windows" | "local-desktop" | "discord" | "telegram" | "webhook" | "slack" | "smtp"
   configured: boolean;
-  env: string; // env var(s) to set in daemon/.env ("(built-in)" for macos)
+  env: string; // env var(s) to set in daemon/.env ("(built-in)" for the local desktop row)
   note?: string; // honest caveat (e.g. macOS delivery untracked)
   lastOk?: number; // unix seconds of last successful delivery
   lastError?: string; // redacted — never contains secrets
@@ -2218,7 +2218,7 @@ export interface NotifyTransport {
 /** GET /api/notify-status payload. */
 export interface NotifyStatusResponse {
   transports: NotifyTransport[];
-  email: string; // honest "not supported — needs SMTP/provider (future)" note
+  email: string; // how to enable the SMTP transport; the smtp row carries its real status
   note: string; // how remote transports are configured + degrade
 }
 

@@ -3,9 +3,9 @@
 // configured (never the secrets themselves), the last successful delivery,
 // and the last (secret-redacted) error per transport. macOS is listed too:
 // always attempted via osascript, but with an explicit note that delivery is
-// best-effort and untracked (no receipt exists). Email is intentionally
-// absent — it needs SMTP credentials or a provider account (future), and we
-// don't pretend otherwise.
+// best-effort and untracked (no receipt exists). Email is an SMTP transport
+// now (notify/slack_smtp.go) and appears in the same table, with the same
+// honest configured/lastOk/lastError columns as the rest.
 package api
 
 import (
@@ -31,6 +31,8 @@ var notifyEnvHints = map[string]string{
 	notify.TransportDiscord:  "SIGNALDECK_DISCORD_WEBHOOK",
 	notify.TransportTelegram: "SIGNALDECK_TELEGRAM_BOT_TOKEN + SIGNALDECK_TELEGRAM_CHAT_ID",
 	notify.TransportWebhook:  "SIGNALDECK_WEBHOOK_URL",
+	notify.TransportSlack:    "SIGNALDECK_SLACK_WEBHOOK",
+	notify.TransportSMTP:     "SIGNALDECK_SMTP_HOST + _FROM + _TO (optional _PORT, _USER, _PASS)",
 }
 
 // localTransportRow describes the LOCAL desktop channel for the platform this
@@ -76,7 +78,7 @@ func (d Deps) notifyStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"transports": rows,
-		"email":      "not supported — needs SMTP credentials or a provider account (future)",
+		"email":      "supported — set SIGNALDECK_SMTP_HOST + _FROM + _TO in daemon/.env; see the smtp row for whether it is configured and whether it last delivered",
 		"note":       "remote transports are env-configured in daemon/.env (see .env.example); delivery failures degrade to dq events and never block alerts",
 	})
 }
@@ -98,8 +100,9 @@ func (d Deps) notifyTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
 			"sent": false,
 			"reason": "no remote transport is configured — set SIGNALDECK_DISCORD_WEBHOOK, " +
-				"SIGNALDECK_TELEGRAM_BOT_TOKEN + SIGNALDECK_TELEGRAM_CHAT_ID, or " +
-				"SIGNALDECK_WEBHOOK_URL in daemon/.env and restart the daemon",
+				"SIGNALDECK_TELEGRAM_BOT_TOKEN + SIGNALDECK_TELEGRAM_CHAT_ID, " +
+				"SIGNALDECK_WEBHOOK_URL, SIGNALDECK_SLACK_WEBHOOK, or " +
+				"SIGNALDECK_SMTP_HOST + _FROM + _TO in daemon/.env and restart the daemon",
 			"transports": d.Notifier.ConfiguredNames(),
 		})
 		return

@@ -1206,8 +1206,9 @@ func stalenessInterval(w workers.Worker) time.Duration {
 	return w.Interval()
 }
 
-// GET /api/notify-status. Email is deliberately NOT a transport — it needs
-// SMTP credentials or a provider account (documented as future work).
+// GET /api/notify-status. Email IS a transport now (SMTP, see
+// notify/slack_smtp.go); like every remote transport it stays dark until the
+// operator supplies credentials in daemon/.env.
 func remoteNotifier(st *store.Store) *notify.Notifier {
 	n := notify.NewFromEnv(st)
 	if n.Enabled() {
@@ -1223,12 +1224,12 @@ func remoteNotifier(st *store.Store) *notify.Notifier {
 		// stops being optional.
 		if local := notify.LocalTransport(); local != "" {
 			slog.Info("remote notify: no transports configured — alerts stay local-only "+
-				"(set SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, or SIGNALDECK_WEBHOOK_URL in daemon/.env)",
+				"(set SIGNALDECK_SLACK_WEBHOOK, SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, SIGNALDECK_WEBHOOK_URL, or SIGNALDECK_SMTP_HOST+SIGNALDECK_SMTP_FROM+SIGNALDECK_SMTP_TO in daemon/.env)",
 				"localTransport", local)
 		} else {
 			slog.Warn("remote notify: no transports configured AND this platform has no local "+
 				"desktop channel — ALERTS REACH NOBODY "+
-				"(set SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, or SIGNALDECK_WEBHOOK_URL in daemon/.env)",
+				"(set SIGNALDECK_SLACK_WEBHOOK, SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, SIGNALDECK_WEBHOOK_URL, or SIGNALDECK_SMTP_HOST+SIGNALDECK_SMTP_FROM+SIGNALDECK_SMTP_TO in daemon/.env)",
 				"platform", runtime.GOOS)
 		}
 	}
