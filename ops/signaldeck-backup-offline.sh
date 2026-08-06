@@ -271,14 +271,38 @@ compress_and_prune() {
       fi
     done
   fi
-  # single .db.* glob so a mixed .gz/.zst history (gzip era before zstd got
-  # installed) is pruned as one chronological sequence
-  n=$(ls "$dir"/signaldeck-[0-9]*.db.* 2>/dev/null | wc -l | tr -d ' ')
+  # One list across .gz and .zst so a mixed history (the gzip era before zstd
+  # got installed) prunes as a single chronological sequence — but ONLY those
+  # two extensions. The glob here was signaldeck-[0-9]*.db.*, which also matched
+  # the .sha256 digest written beside each backup, so digests occupied KEEP_ZST
+  # slots: with 5 names matching and 2 of them digests, the retained depth was
+  # 3 real backups, not 5. Depth is the whole point of the setting, and it was
+  # silently 40% short.
+  #
+  # A digest is not a generation, so it is not counted — and when its backup is
+  # pruned it goes with it, rather than lingering to describe a file that is
+  # gone.
+  compressed_list() { ls "$dir"/signaldeck-[0-9]*.db.gz "$dir"/signaldeck-[0-9]*.db.zst 2>/dev/null | sort; }
+  n=$(compressed_list | wc -l | tr -d ' ')
   if [ "$n" -gt "$KEEP_ZST" ]; then
-    ls "$dir"/signaldeck-[0-9]*.db.* 2>/dev/null | sort | head -n $((n - KEEP_ZST)) | while read -r f; do
+    compressed_list | head -n $((n - KEEP_ZST)) | while read -r f; do
       rm -f "$f" && log "pruned $f"
+      # ...db.gz -> ...db.sha256, the digest recorded for the pre-compression
+      # file. Guarded by -e so the log never claims a removal that did not
+      # happen: `rm -f` succeeds on a missing path.
+      d="${f%.*}.sha256"
+      [ -e "$d" ] && rm -f "$d" && log "pruned $d (digest of a pruned backup)"
     done
   fi
+  # A digest whose backup never existed or was removed by hand is not evidence
+  # of anything; sweep the orphans so they cannot be mistaken for one.
+  for s in "$dir"/signaldeck-[0-9]*.db.sha256; do
+    [ -e "$s" ] || continue          # the glob itself when nothing matches
+    b="${s%.sha256}"                 # ...db.sha256 -> ...db
+    [ -e "$b" ] || [ -e "$b.gz" ] || [ -e "$b.zst" ] || {
+      rm -f "$s" && log "pruned orphan digest $s"
+    }
+  done
   n=$(ls "$dir"/signaldeck-[0-9]*.db 2>/dev/null | wc -l | tr -d ' ')
   if [ "$n" -gt "$KEEP_RAW_MAX" ]; then
     ls "$dir"/signaldeck-[0-9]*.db | sort | head -n $((n - KEEP_RAW_MAX)) | while read -r f; do
