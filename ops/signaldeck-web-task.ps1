@@ -1,12 +1,19 @@
 <#
 ================================================================================
- DRAFT — NOT REGISTERED.  BLOCKED-3: requires human approval before it is run.
+ APPROVED AND REGISTERED 2026-08-06. BLOCKED-3 is closed.
 ================================================================================
 
  TARGET: replaces ops/com.signaldeck.web.plist on Windows.
- INTENDED DESTINATION once approved: ops/signaldeck-web-task.ps1
- This file lives under drafts/pending-approval/devops/ and has never been
- executed. Registering it is a human action, described under "TO INSTALL".
+ Promoted from drafts/pending-approval/devops/ to ops/ and run with -Install.
+ Verified live the same day: task "SignalDeck Web" Running, node.exe listening
+ on :8323, GET / -> HTTP 200 text/html (10738 bytes), and /api/version proxying
+ through to the daemon on :8322 (revision e97fc91, modified:false).
+ Re-running with -Install is idempotent (-Force replaces in place).
+
+ NOTE: `next start` with no -H binds the wildcard address, so the UI is reachable
+ from the LAN (verified: http://192.168.4.49:8323/ -> 200), not just localhost.
+ That matches the plist, which also passed no -H. Add `-H 127.0.0.1` to $argLine
+ if it should be loopback-only -- that is a behaviour change, so it is not done here.
 
 --------------------------------------------------------------------------------
  WHY THIS EXISTS
@@ -70,11 +77,11 @@
  2. Dry run -- prints the exact action and registers nothing:
 
         cd "C:\Users\Nicholas_N\Desktop\claude code\signaldeck"
-        powershell -ExecutionPolicy Bypass -File ".\drafts\pending-approval\devops\signaldeck-web-task.ps1"
+        powershell -ExecutionPolicy Bypass -File ".\ops\signaldeck-web-task.ps1"
 
  3. Register it:
 
-        powershell -ExecutionPolicy Bypass -File ".\drafts\pending-approval\devops\signaldeck-web-task.ps1" -Install
+        powershell -ExecutionPolicy Bypass -File ".\ops\signaldeck-web-task.ps1" -Install
 
  4. Start it and confirm the UI answers:
 
@@ -95,7 +102,7 @@
 
  or equivalently:
 
-        powershell -ExecutionPolicy Bypass -File ".\drafts\pending-approval\devops\signaldeck-web-task.ps1" -Remove
+        powershell -ExecutionPolicy Bypass -File ".\ops\signaldeck-web-task.ps1" -Remove
 
  Confirm it is gone:
 

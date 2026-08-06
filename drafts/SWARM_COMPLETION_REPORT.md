@@ -124,7 +124,7 @@ New files (copy rather than patch): `drafts/e2e/daemon/internal/testharness/*`,
 | `data-ops/verify_quarantine_1d_labels.sql` | Proves the quarantine took effect | Read-only | — |
 | `data-ops/prune_universe.sql` | Restores `active=0` outside the intended set, in a transaction | Medium — derived from the script's own criterion, not hardcoded | BLOCKED-6 |
 | `data-ops/companies-index-NOT-REQUIRED.md` | Concludes no index is needed for the 19s `/api/companies` | — | — |
-| `devops/signaldeck-web-task.ps1` | Registers a Windows task for the web app | Medium | BLOCKED-3 |
+| ~~`devops/signaldeck-web-task.ps1`~~ → `ops/signaldeck-web-task.ps1` | Registers a Windows task for the web app | Medium | **BLOCKED-3 CLOSED 2026-08-06** — approved, promoted to `ops/`, registered and started. Verified live: :8323 serves HTTP 200 HTML, `/api/version` proxies to the daemon |
 | `devops/strip-sandbox-acl.ps1` | Removes `CodexSandboxUsers` read access from `.env` and the DB | **Header states any exposed secret must be treated as COMPROMISED and ROTATED — removing an ACL does not un-disclose it** | BLOCKED-5 |
 | `docs-gate/RUNBOOK.md` + `STRATEGY_DECK.expected.diff` + `ops-docs-registry.patch` | Regenerate both partials and re-inject | Medium — rewrites a governed ACTIVE doc | BLOCKED-4 |
 
