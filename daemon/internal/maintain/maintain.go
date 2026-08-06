@@ -605,6 +605,23 @@ type StorageGovernor struct {
 	// Nil = the top rung of the ladder is attempted unquiesced, exactly as
 	// before — the ladder's lower rungs still run.
 	Quiescer Quiescer
+	// Now supplies the wall clock the market-hours gate reads. Nil ⇒ time.Now.
+	//
+	// The TRUNCATE rung is gated on marketcal.OpenForBars, so for roughly a
+	// third of every weekday the ladder returns before TRUNCATE and no test
+	// could reach the rung it exists to cover — TestStorageGovernorCheckpointLadder
+	// silently asserted nothing during market hours, and additionally misread
+	// the deferral message as a run. A seam here is the smallest way to make the
+	// gated branch reachable on purpose rather than by the hour the suite ran.
+	Now func() time.Time
+}
+
+// now reads the governor's clock, defaulting to the real one.
+func (g *StorageGovernor) now() time.Time {
+	if g.Now != nil {
+		return g.Now()
+	}
+	return time.Now()
 }
 
 // Quiescer manufactures a brief fleet-wide pause. Declared here (not imported
@@ -764,7 +781,7 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 	// original market-hours gate — it governs WHEN the expensive rung is worth
 	// contending for, not whether the WAL is checkpointed at all (the two rungs
 	// above just ran regardless, which is the actual fix).
-	if marketcal.OpenForBars(time.Now()) && walBefore < walBusyAlertBytes {
+	if marketcal.OpenForBars(g.now()) && walBefore < walBusyAlertBytes {
 		parts = append(parts, "TRUNCATE deferred (market hours)")
 		return "wal checkpoint: " + strings.Join(parts, "; "), reclaimed
 	}
