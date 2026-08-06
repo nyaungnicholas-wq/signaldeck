@@ -1235,6 +1235,22 @@ def register_fold(con: sqlite3.Connection) -> sqlite3.Connection:
     return con
 
 
+def superseded_clause(con: sqlite3.Connection) -> str:
+    """SQL fragment excluding regime_outcomes rows that are not observations.
+
+    The trading-day fold merged the straddling pairs this table froze under the
+    old UTC-midnight key — a 21:00Z call and its 01:00Z partner are one trading
+    day. Nothing was deleted (the table is the pre-registration audit trail);
+    the later call carries superseded_by and is excluded from counts instead.
+
+    Guarded on the column's existence because the grader also runs against
+    snapshots exported before the fold, where its absence is correct rather than
+    an error.
+    """
+    cols = [r[0] for r in con.execute("SELECT name FROM pragma_table_info('regime_outcomes')")]
+    return " AND superseded_by IS NULL" if "superseded_by" in cols else ""
+
+
 def connect(path: str) -> sqlite3.Connection:
     if not os.path.exists(path):
         sys.exit(f"database not found: {path}")
@@ -1554,18 +1570,18 @@ def fetch_structural(con: sqlite3.Connection):
     # Totals and first-call time per predictor.
     q = """
     SELECT kind, horizon_days, COUNT(*), AVG(historical_accuracy), MIN(ts)
-    FROM regime_outcomes WHERE ts >= ?
+    FROM regime_outcomes WHERE ts >= ?{sup}
     GROUP BY kind, horizon_days ORDER BY kind
-    """
-    # Resolved outcomes tallied PER CALL-DAY. regime_outcomes is already unique
-    # on (symbol_id, kind, day), so each row is one symbol-day — but ~870
+    """.format(sup=superseded_clause(con))
+    # Resolved outcomes tallied PER CALL-DAY. regime_outcomes is unique on
+    # (symbol_id, kind, day) among rows that count, so each row is one symbol-day — but ~870
     # symbols share each call day, and grading those as 870 independent trials
     # is how a single market day becomes a confident verdict on a 82% claim.
     qd = """
     SELECT kind, horizon_days, day, COUNT(*), SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END)
-    FROM regime_outcomes WHERE resolved_at IS NOT NULL AND ts >= ?
+    FROM regime_outcomes WHERE resolved_at IS NOT NULL AND ts >= ?{sup}
     GROUP BY kind, horizon_days, day ORDER BY kind, day
-    """
+    """.format(sup=superseded_clause(con))
     per_day: dict[tuple, list[tuple[int, int, int]]] = {}
     for kind, hd, day, n, hits in con.execute(qd, (SURVIVORSHIP_EPOCH_TS,)):
         per_day.setdefault((kind, hd), []).append((day, n, hits or 0))

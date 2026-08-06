@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 )
 
@@ -146,7 +147,7 @@ func (s *Store) UnmatchedNullCount(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM regime_outcomes o
-		WHERE o.ts >= ? AND o.naive_label IS NULL
+		WHERE o.ts >= ? AND o.naive_label IS NULL AND o.superseded_by IS NULL
 		  AND o.kind IN (`+ph+`)
 		  AND o.id NOT IN (SELECT outcome_id FROM regime_outcome_quarantine)`,
 		args...).Scan(&n)
@@ -333,7 +334,7 @@ func (s *Store) unmatchedNullIDs(ctx context.Context) ([]int64, error) {
 	ph := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT o.id FROM regime_outcomes o
-		WHERE o.ts >= ? AND o.naive_label IS NULL
+		WHERE o.ts >= ? AND o.naive_label IS NULL AND o.superseded_by IS NULL
 		  AND o.kind IN (`+ph+`)
 		  AND o.id NOT IN (SELECT outcome_id FROM regime_outcome_quarantine)
 		ORDER BY o.id`, args...)
@@ -389,31 +390,20 @@ func (s *Store) InsertRegimeOutcome(ctx context.Context, c RegimeCall) (bool, er
 		return false, fmt.Errorf("refusing to freeze %s call for symbol %d at ts %d with no "+
 			"naive-persistence baseline: the null would be unmatched", c.Kind, c.SymbolID, c.Ts)
 	}
-	// DELIBERATE HOLDOUT from the trading-day fold (md.TradingDay). Everywhere
-	// else the day fold moved off UTC midnight so an extended session's tail
-	// stops counting as a second observation; this one column did not, and the
-	// reason is that it is PERSISTED and carries a UNIQUE index on
-	// (symbol_id, kind, day).
+	// Folded on the TRADING day like everything else. This column was the last
+	// holdout, because it is persisted under a unique dedup key and re-folding it
+	// collides the 2,817 straddling pairs the corrected fold merges.
 	//
-	// Re-folding it means rewriting stored `day` values, and on the live corpus
-	// 2,815 of 28,424 rows would collide onto an existing key — the same-session
-	// pairs the new fold correctly merges. Resolving those collisions means
-	// DELETING frozen rows: ts, regime, conviction and historical_accuracy in
-	// this table are all stamped "frozen at call time" because the table is the
-	// pre-registration audit trail. Destroying part of that record to tidy a
-	// dedup key trades away the thing the table exists for.
-	//
-	// The cost of holding out is bounded and local: at most one extra row per
-	// (symbol, kind) around a session boundary, in a dedup key — it feeds no
-	// published interval, because those are computed by the readers that DID
-	// move. Re-folding it is a data migration to run deliberately, with the
-	// colliding rows reviewed rather than silently dropped.
+	// It is no longer a holdout, and nothing was deleted to get here:
+	// migrateRegimeOutcomesToTradingDay re-folds `day`, marks the LATER call of
+	// each pair with superseded_by, and makes the dedup index partial. Every
+	// frozen row keeps its bytes; only one of a pair counts as an observation.
 	res, err := s.w.ExecContext(ctx, `
 		INSERT OR IGNORE INTO regime_outcomes
 		  (symbol_id, kind, ts, day, horizon_days, regime, conviction,
 		   historical_accuracy, rank, naive_label, revision)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		c.SymbolID, string(c.Kind), c.Ts, c.Ts/86400, c.HorizonDays, c.Regime,
+		c.SymbolID, string(c.Kind), c.Ts, md.TradingDay(c.Ts), c.HorizonDays, c.Regime,
 		c.Conviction, c.HistoricalAccuracy, c.Rank, nullString(c.NaiveLabel),
 		nullString(CodeRevision()))
 	if err != nil {
@@ -435,14 +425,15 @@ func (s *Store) InsertRegimeOutcome(ctx context.Context, c RegimeCall) (bool, er
 	// downstream can tell a dedup from a dropped baseline. Make it loud instead.
 	var stored sql.NullString
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT naive_label FROM regime_outcomes WHERE symbol_id=? AND kind=? AND day=?`,
-		c.SymbolID, string(c.Kind), c.Ts/86400).Scan(&stored); err != nil {
+		`SELECT naive_label FROM regime_outcomes
+		   WHERE symbol_id=? AND kind=? AND day=? AND superseded_by IS NULL`,
+		c.SymbolID, string(c.Kind), md.TradingDay(c.Ts)).Scan(&stored); err != nil {
 		return false, err
 	}
 	if !stored.Valid && c.NaiveLabel != "" {
 		return false, fmt.Errorf("%w: %s call for symbol %d on day %d is stored with a NULL "+
 			"naive_label and this freeze carries baseline %q; the dedup would drop it",
-			ErrNaiveLabelDropped, c.Kind, c.SymbolID, c.Ts/86400, c.NaiveLabel)
+			ErrNaiveLabelDropped, c.Kind, c.SymbolID, md.TradingDay(c.Ts), c.NaiveLabel)
 	}
 	return false, nil
 }
@@ -491,7 +482,7 @@ func (s *Store) DueRegimeOutcomes(ctx context.Context, now int64, limit int) ([]
 		SELECT id, symbol_id, kind, ts, horizon_days, regime, conviction,
 		       historical_accuracy, rank, COALESCE(naive_label, '')
 		FROM regime_outcomes
-		WHERE resolved_at IS NULL
+		WHERE resolved_at IS NULL AND superseded_by IS NULL
 		  AND ts + CAST(horizon_days * 1.45 * 86400 AS INTEGER) <= ?
 		ORDER BY ts ASC LIMIT ?`, now, limit)
 	if err != nil {
