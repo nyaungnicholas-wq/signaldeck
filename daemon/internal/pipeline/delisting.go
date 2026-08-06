@@ -29,6 +29,11 @@
 // the guard reads a warehouse of imported dead names as an outage and disables
 // itself, which is what happened for three days after the 2026-08-02 import.
 //
+// That liveness fraction counts only symbols not ALREADY marked delisted. The
+// guard asks "is our ingestion broken?", and a name we have already recorded as
+// dead cannot answer it — it is silent by definition. Counting it made a
+// deliberate import of dead names look like an outage.
+//
 // # Delisting is reversible
 //
 // A symbol that prints a bar again was never delisted — it was halted, or our
@@ -100,38 +105,33 @@ func (w *DelistingDetector) Run(ctx context.Context) (string, error) {
 	// Fleet liveness FIRST. Marking on a broken pipeline is the one failure this
 	// worker must never commit, so the check runs before any decision is taken.
 	//
-	// Judged over the symbols NOT already recorded as dead. A name carrying
-	// delisted_at has no recent bar BY DEFINITION, so counting it as evidence
-	// about our ingestion makes every dead name look like a symptom of our own
-	// outage. That is not hypothetical: the bulk import of 1,869 delisted
-	// symbols on 2026-08-02 drove the all-rows fraction from 98% to 36%, and the
-	// detector marked nothing for the three days that followed while ingestion
-	// was healthy. The guard was right about its own arithmetic and wrong about
-	// the world. The marking loop below still walks EVERY row, delisted ones
-	// included — that is what clears the marker when a name resumes printing.
-	judgeable, live := 0, 0
+	// Only symbols NOT already marked delisted may testify. A known-dead name has
+	// no recent bar by definition, so counting it as evidence of an ingestion
+	// fault inverts the question: importing 1,869 delisted symbols dropped
+	// liveness from 98% to 36% and froze the worker on a fleet that was fine.
+	// They stay in rows — the clear-on-resume path below still needs them.
+	live, judged := 0, 0
 	for _, r := range rows {
 		if r.DelistedAt != 0 {
 			continue
 		}
-		judgeable++
+		judged++
 		if r.LastTs >= cutoff {
 			live++
 		}
 	}
-	if judgeable < minFleetSize {
-		return fmt.Sprintf("fleet too small to judge liveness (%d not-yet-delisted < %d) — nothing marked",
-			judgeable, minFleetSize), nil
+	if judged < minFleetSize {
+		return fmt.Sprintf("fleet too small to judge liveness (%d < %d) — nothing marked", judged, minFleetSize), nil
 	}
-	frac := float64(live) / float64(judgeable)
+	frac := float64(live) / float64(judged)
 	if frac < fleetLiveFraction {
 		// This is the honest reading: our ingestion is behind, not the market.
 		_ = w.St.InsertDQ(ctx, md.DQEvent{
 			Ts:   now.Unix(),
 			Kind: "delisting_check_skipped",
-			Detail: fmt.Sprintf("only %.0f%% of %d not-yet-delisted stocks printed a bar within "+
-				"%d sessions — treating this as an ingestion fault, not %d delistings; nothing marked",
-				frac*100, judgeable, staleSessions, judgeable-live),
+			Detail: fmt.Sprintf("only %.0f%% of %d unmarked stocks printed a bar within %d sessions — "+
+				"treating this as an ingestion fault, not %d delistings; nothing marked",
+				frac*100, judged, staleSessions, judged-live),
 		})
 		return fmt.Sprintf("fleet liveness %.0f%% below %.0f%% — ingestion fault suspected, nothing marked",
 			frac*100, fleetLiveFraction*100), nil
@@ -164,6 +164,6 @@ func (w *DelistingDetector) Run(ctx context.Context) (string, error) {
 		}
 	}
 
-	return fmt.Sprintf("fleet %.0f%% live; marked %d delisted, cleared %d resumed (of %d stocks)",
-		frac*100, marked, cleared, len(rows)), nil
+	return fmt.Sprintf("fleet %.0f%% live (%d unmarked); marked %d delisted, cleared %d resumed (of %d stocks)",
+		frac*100, judged, marked, cleared, len(rows)), nil
 }
