@@ -81,8 +81,15 @@ FILES = {
 }
 
 HEADERS = {
+    # pred_up_days / hc_pred_up_days are APPENDED at the end. They count the
+    # day's CALLS (prob >= 0.5), which is what accuracy_registry.breadth_block
+    # needs to tell a genuine cross-section from one market call republished per
+    # symbol. Appending keeps the column order of every earlier snapshot intact;
+    # a snapshot cut before these existed reads 8 wide and grades with breadth
+    # absent rather than wrong.
     "directional_days.csv": ["horizon", "day", "n", "correct", "up_days",
-                             "hc_n", "hc_correct", "hc_up_days"],
+                             "hc_n", "hc_correct", "hc_up_days",
+                             "pred_up_days", "hc_pred_up_days"],
     "structural_days.csv": ["kind", "horizon_days", "day", "n", "correct"],
     "structural_naive_days.csv": ["kind", "horizon_days", "day", "n", "correct"],
     "structural_claims.csv": ["kind", "horizon_days", "forecasts_recorded",
@@ -123,9 +130,8 @@ def directional_records(con: sqlite3.Connection) -> list[list[str]]:
     recs = []
     by_h = reg.fetch_directional_days(con)
     for horizon in sorted(by_h):
-        for day, n, hits, ups, hc_n, hc_hits, hc_ups in by_h[horizon]:
-            recs.append([str(horizon)] + [str(int(x)) for x in
-                                          (day, n, hits, ups, hc_n, hc_hits, hc_ups)])
+        for row in by_h[horizon]:
+            recs.append([str(horizon)] + [str(int(x)) for x in row])
     return recs
 
 
