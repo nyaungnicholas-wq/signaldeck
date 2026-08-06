@@ -854,7 +854,11 @@ class TestAutoRetireRule(unittest.TestCase):
     # sha256 of the canonical rule string, frozen at registration. Changing the
     # rule legitimately requires updating this pin AND the Go pin in the same
     # commit — and the prereg chain appends an AMENDMENT for the new hash.
-    FROZEN_DIGEST = "d02c33740989cde5be82ffce1cec4e1b25fdec41f06dc8a669ac2a79d00bccd5"
+    # Moved 2026-08-06 from d02c3374…: the wording named UTC days while the
+    # code folds on trading days, so the chained rule and the enforced rule
+    # had stopped being one rule. Unit label only — thresholds untouched, and
+    # the trading-day fold makes the 10-day floor HARDER to clear.
+    FROZEN_DIGEST = "353450b995a52bcea9257a8520369d8841e7fa71c70295aae925dc7cf03b429f"
 
     def test_digest_matches_the_chained_constant(self):
         self.assertEqual(auto_retire_rule_digest(), self.FROZEN_DIGEST)

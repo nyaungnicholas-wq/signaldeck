@@ -14,7 +14,14 @@ import "testing"
 // constant AND the Python pin in the same commit — and the chain will append
 // an AMENDMENT record for the changed hash, which is the visibility the
 // freeze exists to buy.
-const frozenRetireRuleDigest = "d02c33740989cde5be82ffce1cec4e1b25fdec41f06dc8a669ac2a79d00bccd5"
+// Moved 2026-08-06 from d02c3374…: the rule's wording named UTC days while the
+// code had been migrated to fold on trading days, so the chained rule and the
+// enforced rule had stopped being one rule — the exact failure the pin exists to
+// catch. Only the UNIT LABEL changed; the thresholds (30 observations, 10
+// distinct days, upper bound below the prequential null) are untouched, and
+// folding on trading days merges the phantom days a UTC-midnight cut invented,
+// so clearing the 10-day floor gets HARDER, never easier.
+const frozenRetireRuleDigest = "353450b995a52bcea9257a8520369d8841e7fa71c70295aae925dc7cf03b429f"
 
 func TestAutoRetireRuleDigestIsFrozen(t *testing.T) {
 	if got := AutoRetireRule().Hash(); got != frozenRetireRuleDigest {

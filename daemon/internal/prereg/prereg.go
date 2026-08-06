@@ -437,7 +437,7 @@ func AutoRetireRule() RetireRule {
 		MinIndependentN: 30,
 		MinDistinctDays: 10,
 		Criterion: "The first time a directional row reaches 30 independent (symbol, horizon, " +
-			"UTC-day) observations spread over 10 distinct UTC days, if the upper bound of its " +
+			"trading-day) observations spread over 10 distinct trading days, if the upper bound of its " +
 			"effective-N day-clustered Wilson 95% interval is below the prequential-majority null, " +
 			"the verdict is FAILED and the row carries retire=true. No grace period, no re-window, " +
 			"no threshold revision after the evidence arrives.",

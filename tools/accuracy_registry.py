@@ -17,7 +17,7 @@ while the daemon is writing.
 
 Discipline enforced here, learned from the failures this repo already found:
   * INDEPENDENT observations only. Intraday predictions that map to the same forward
-    move are collapsed to one row per (symbol, horizon, UTC-day), keeping the latest.
+    move are collapsed to one row per (symbol, horizon, trading-day), keeping the latest.
     Pooling them inflates n by ~60x and produces confident nonsense.
   * Per-BAND accuracy, never the population average. A low-conviction forecast quoting
     the all-decisions number is how "83%" ends up attached to a coin flip.
@@ -79,7 +79,7 @@ DEFAULT_DB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 # Below this many independent observations no verdict is claimed either way.
 MIN_INDEPENDENT_N = 30
 
-# Below this many DISTINCT UTC days no interval is published at all. Mirrors
+# Below this many DISTINCT trading days no interval is published at all. Mirrors
 # clusterstat.MinDistinctDays in the Go daemon, and exists for the same reason:
 # a between-day variance estimated from three days is not a correction, it is a
 # different way to be overconfident.
@@ -696,7 +696,7 @@ CALIBRATION_BINS = 10
 # NOW, before the data can argue back:
 #
 #   FAILED-forward. The first time a directional row reaches MIN_INDEPENDENT_N
-#   independent observations over MIN_DISTINCT_DAYS distinct UTC days with the
+#   independent observations over MIN_DISTINCT_DAYS distinct trading days with the
 #   upper bound of its effective-N Wilson 95% interval below the prequential
 #   null, the verdict is FAILED, the row publishes retire=true in the registry
 #   JSON, and the daemon's model-health worker (pipeline/modelhealth.go) stops
@@ -712,8 +712,8 @@ AUTO_RETIRE_MODEL = "directional-ensemble"
 AUTO_RETIRE_REGISTERED = "2026-07-26"
 AUTO_RETIRE_CRITERION = (
     f"The first time a directional row reaches {MIN_INDEPENDENT_N} independent "
-    "(symbol, horizon, UTC-day) observations spread over "
-    f"{MIN_DISTINCT_DAYS} distinct UTC days, if the upper bound of its "
+    "(symbol, horizon, trading-day) observations spread over "
+    f"{MIN_DISTINCT_DAYS} distinct trading days, if the upper bound of its "
     "effective-N day-clustered Wilson 95% interval is below the "
     "prequential-majority null, the verdict is FAILED and the row carries "
     "retire=true. No grace period, no re-window, no threshold revision after "
@@ -999,7 +999,7 @@ def wilson(k: int, n: int, z: float | None = None) -> tuple[float, float]:
 def design_effect(days: list[tuple[int, int]]) -> float | None:
     """Measured clustering penalty over per-day (n, hits) tallies.
 
-    Deduplicating to one row per (symbol, UTC-day) removes intraday
+    Deduplicating to one row per (symbol, trading-day) removes intraday
     pseudo-replication and leaves the larger problem untouched: on any given day
     ~1,000 symbols share ONE market move. A binomial interval over those rows
     asserts thousands of independent trials in a sample that holds a handful of
@@ -1432,14 +1432,14 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
         })
     return {
         "method": (f"{CALIBRATION_BINS} fixed-width bins over predicted P(up); one "
-                   "observation per (symbol, horizon, UTC-day), post-epoch only"),
+                   "observation per (symbol, horizon, trading-day), post-epoch only"),
         "conviction_threshold": 0.15,
         "horizons": horizons,
     }
 
 
 def grade_directional(con: sqlite3.Connection) -> list[dict]:
-    """Grade prediction_outcomes on independent (symbol, horizon, UTC-day) rows."""
+    """Grade prediction_outcomes on independent (symbol, horizon, trading-day) rows."""
     return grade_directional_days(
         fetch_directional_days(con),
         measure_universe_completeness(con, "prediction_outcomes"))
@@ -2123,9 +2123,9 @@ def main() -> int:
               "over regime_outcomes — as a DIAGNOSTIC. It is not the target; a gap between "
               "it and C is mix drift, which is exactly what the freeze is meant to survive.")
         print()
-    print(f"Independence rule: one observation per (symbol, horizon, UTC-day).")
+    print(f"Independence rule: one observation per (symbol, horizon, trading-day).")
     print(f"Verdict threshold: {MIN_INDEPENDENT_N} independent observations minimum, "
-          f"on at least {MIN_DISTINCT_DAYS} distinct UTC days.")
+          f"on at least {MIN_DISTINCT_DAYS} distinct trading days.")
     print(f"Survivorship boundary: rows before {SURVIVORSHIP_EPOCH.isoformat()} were graded "
           "against a survivor-seeded universe and are excluded from every tally above.")
     print("Intervals resample DAYS, not rows: on any one day ~1,000 symbols share one")
