@@ -1,0 +1,33 @@
+diff --git a/ops/docs-registry.json b/ops/docs-registry.json
+index a8cd14f..a11a3cd 100644
+--- a/ops/docs-registry.json
++++ b/ops/docs-registry.json
+@@ -34,10 +34,25 @@
+     "region in a document may only claim one of these names (or one from",
+     "`partials` above); any other name earns no exemption from the",
+     "live-accuracy check, even if a matching file is dropped into partials/ by",
+-    "hand. tools/live_accuracy.py writes partials/live_accuracy.md and owns its",
+-    "drift contract via `--check --inject`."
++    "hand. Three sibling generators write here, and each owns its own drift",
++    "contract, re-derived in CI: tools/live_accuracy.py (from",
++    "data/accuracy_registry.json) via `--check --inject`; tools/deck_facts.py",
++    "(from data/signaldeck.db, opened read-only) via `--check --inject`; and",
++    "tools/controls_evidence.py (from the Go source) via `--inject` plus",
++    "`git diff --exit-code`.",
++    "",
++    "Declaring a name here is NOT on its own an exemption. A region is exempt",
++    "only when partials/<name>.md also exists AND the document's region is",
++    "equal to it, so regenerate the partial and re-inject the document in ONE",
++    "invocation -- `--write partials/<name>.md --inject <doc>` renders the",
++    "block once and writes the same bytes to both. Declaring a name without",
++    "writing the file changes only the gate's failure message."
++  ],
++  "external_partials": [
++    "live_accuracy", "live_accuracy.md",
++    "controls_evidence", "controls_evidence.md",
++    "deck_facts", "deck_facts.md"
+   ],
+-  "external_partials": ["live_accuracy", "live_accuracy.md"],
+ 
+   "strategy_docs": {
+     "ALPHA_WORKFLOW.md": {

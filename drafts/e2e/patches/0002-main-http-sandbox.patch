@@ -1,0 +1,33 @@
+# TARGET FILE : signaldeck/daemon/cmd/signaldeckd/main.go   (5-line insertion)
+#
+# HOW TO APPLY, from the signaldeck repo root:
+#     copy drafts/e2e/daemon/cmd/signaldeckd/httpsandbox.go -> daemon/cmd/signaldeckd/
+#     git apply -p1 drafts/e2e/patches/0002-main-http-sandbox.patch
+#
+# WHAT IT CHANGES
+#   Calls installHTTPSandbox(cfg.DBPath) immediately after config.Load(), before
+#   any upstream client exists. The function is a no-op unless
+#   SIGNALDECK_HTTP_SANDBOX is set, and refuses to start at all unless the
+#   database is a throwaway under the OS temp dir. See httpsandbox.go for why the
+#   hook lives at the transport rather than in per-client env overrides.
+#
+# NOTE: daemon/cmd/signaldeckd/run.go is NOT touched by this patch (it carries
+#       uncommitted work in this engagement). The hook needs no run.go change,
+#       because every upstream client in the tree leaves http.Client.Transport nil.
+#
+diff --git a/daemon/cmd/signaldeckd/main.go b/daemon/cmd/signaldeckd/main.go
+index cb7371d..e4b5ea2 100644
+--- a/daemon/cmd/signaldeckd/main.go
++++ b/daemon/cmd/signaldeckd/main.go
+@@ -34,6 +34,11 @@ func main() {
+ 
+ 	cfg := config.Load()
+ 
++	// Test-only egress control: no-op unless SIGNALDECK_HTTP_SANDBOX is set, and
++	// it refuses to run against anything but a throwaway database (httpsandbox.go).
++	// Must run before any upstream client or worker is constructed.
++	installHTTPSandbox(cfg.DBPath)
++
+ 	// Log slog to BOTH stderr and a size-capped rotating file (20 MB x 3).
+ 	// SIGNALDECK_LOG_FILE overrides the path; set it to "" to disable file
+ 	// logging entirely (stderr only, e.g. when launchd redirection is enough).

@@ -1,0 +1,394 @@
+SWARM 5b / BLOCKED-5 — remote alert transports: Slack + SMTP
+============================================================
+
+TARGETS (6 existing files, edits only — the two NEW files ship whole, see below)
+  daemon/internal/notify/notify.go            struct fields, env load, dispatch,
+                                              redaction, status rows, send budget
+  daemon/internal/api/notifystatus.go         env hints + the honest email line
+  daemon/internal/api/notifystatus_test.go    row count 4 -> 6; email assertion
+  daemon/internal/api/api.go                  one stale route comment
+  .env.example                                operator docs for the new vars
+  web/src/lib/api.ts                          stale type comments only
+
+NEW FILES (not in this diff — copy them in, they are whole files):
+  drafts/patches/notify/slack_smtp.go       -> daemon/internal/notify/slack_smtp.go
+  drafts/patches/notify/slack_smtp_test.go  -> daemon/internal/notify/slack_smtp_test.go
+
+HOW TO APPLY (from the repo root, C:/Users/Nicholas_N/Desktop/claude code/signaldeck)
+
+  git -c core.autocrlf=false apply --check -p1 drafts/patches/notify-slack-smtp.patch
+  git -c core.autocrlf=false apply         -p1 drafts/patches/notify-slack-smtp.patch
+  cp drafts/patches/notify/slack_smtp.go       daemon/internal/notify/
+  cp drafts/patches/notify/slack_smtp_test.go  daemon/internal/notify/
+  cd daemon && go build ./internal/... && go test ./internal/notify/ ./internal/api/
+
+  core.autocrlf=false is NOT optional. notify.go / notifystatus.go / api.go /
+  api.ts are CRLF in this checkout and .env.example is LF; this diff carries the
+  real bytes of both. With the machine's global autocrlf=true, `git apply` rewrites
+  the line endings and the CRLF hunks stop matching. Measured both ways.
+
+VERIFIED (in a scratch copy of the module under the system temp — daemon/ was
+never written to)
+  go build ./internal/...                     clean
+  go vet ./internal/notify/                   clean
+  go test ./internal/notify/ -count=1         ok (18 tests: 14 pre-existing + 4 new)
+  go test ./internal/notify/ -race -count=1   ok
+  go test ./internal/api/ -run Notify         ok (both notify-status tests)
+  patch round-trip: applying this diff to pristine copies reproduces the tested
+  tree byte-for-byte (diff -r, no differences)
+
+NOT DONE HERE — needs a human
+  daemon/cmd/signaldeckd/run.go is LOCKED for this engagement, and two of its
+  comments are now false:
+    line 1209  "GET /api/notify-status. Email is deliberately NOT a transport —
+                it needs SMTP credentials or a provider account (documented as
+                future work)."
+    line 1226/1231  the two operator hints list only the three old env vars.
+  tools/docs_gate.py exists to catch exactly this class of contradiction. Update
+  those comments in the same commit or the gate will be right to complain.
+
+KNOWN NEIGHBOUR
+  drafts/patches/env-example-token-leak.patch (another swarm task) also edits
+  .env.example, at lines 14-21. This one edits lines 37-52. The regions do not
+  overlap, so both apply in either order: git apply absorbs the line-offset
+  shift. Run --check on the second one anyway.
+
+WHAT THIS DOES NOT DO
+  It does not configure anything. After applying, /api/notify-status still reports
+  five unconfigured remote transports until the operator sets env vars in
+  daemon/.env and restarts the daemon (a restart is out of scope here too). The
+  code change removes the excuse; it does not deliver an alert by itself.
+
+diff --git a/.env.example b/.env.example
+index 4641d86..68af7b5 100644
+--- a/.env.example
++++ b/.env.example
+@@ -39,7 +39,9 @@
+ # below. Contract: 5s timeout + 1 retry per delivery; failures become
+ # dq_events (kind notify_failed, secrets redacted) and NEVER block the fleet.
+ # Check GET /api/notify-status (or the note on /signals/alerts) to see what's
+-# live. NO email transport — that needs SMTP creds/provider (future).
++# live. NOTHING SET = alerts reach nobody but a local desktop toast whose
++# delivery is not tracked (and which draws nothing at all from a service
++# session) — set at least one transport below.
+ # Discord: server → channel → Edit Channel → Integrations → Webhooks → copy URL.
+ # SIGNALDECK_DISCORD_WEBHOOK=
+ # Telegram: create a bot via @BotFather (gives the token), then message the
+@@ -48,8 +50,24 @@
+ # SIGNALDECK_TELEGRAM_BOT_TOKEN=
+ # SIGNALDECK_TELEGRAM_CHAT_ID=
+ # Generic webhook: POSTs JSON {"title","body","kind","ts"} to this URL
+-# (point it at ntfy/Slack-bridge/your own receiver).
++# (point it at ntfy/your own receiver). NOT Slack-compatible — Slack
++# answers that shape with 400 invalid_payload; use the Slack var below.
+ # SIGNALDECK_WEBHOOK_URL=
++# Slack: Slack app → Incoming Webhooks → Add New Webhook to Workspace.
++# POSTs {"text"} to the URL, which is itself the credential (redacted
++# from every log line, dq detail and status string).
++# SIGNALDECK_SLACK_WEBHOOK=
++# Email (SMTP). HOST + FROM + TO are required; the rest are optional.
++# PORT defaults to 587 (STARTTLS); 465 dials implicit TLS. USER/PASS
++# enable AUTH — and the daemon REFUSES to send them over an unencrypted
++# connection, so a server that offers no STARTTLS fails the delivery
++# instead of leaking the password. ONE attempt, 15s, no retry.
++# SIGNALDECK_SMTP_HOST=
++# SIGNALDECK_SMTP_PORT=
++# SIGNALDECK_SMTP_USER=
++# SIGNALDECK_SMTP_PASS=
++# SIGNALDECK_SMTP_FROM=
++# SIGNALDECK_SMTP_TO=
+ #
+ # VERIFY IT AFTER SETTING ONE. Restart the daemon, then:
+ #   curl -X POST -H 'X-Signaldeck: 1' http://127.0.0.1:8322/api/notify/test
+diff --git a/daemon/internal/api/api.go b/daemon/internal/api/api.go
+index a61ee76..900767b 100644
+--- a/daemon/internal/api/api.go
++++ b/daemon/internal/api/api.go
+@@ -116,7 +116,7 @@ func Serve(ctx context.Context, d Deps) error {
+ 	d.registerDashboard(mux)                                      // Visual-kit Stage 3: ONE-call GET /api/dashboard (tape + heatmap + gauges w/ honesty captions + movers + merged feed; 60s cache; per-user watchlist sparks only with a session)
+ 	d.registerStage5(mux)                                         // Visual-hub Stage 5: GET /api/predictions/latest — SIGNALS hub predictions table in one batched read (latest calibrated prediction per active symbol; independent-N gate + backtested-not-live label carried in the payload)
+ 	d.registerCompanies(mux)                                      // Signal8 wave Stage 5: COMPANIES DIRECTORY (free EDGAR company map joined to our tracked bars/fundamentals; untracked rows honest "—") + GET /api/earnings-est (filing-cadence estimate, labeled — never a confirmed date)
+-	d.registerNotify(mux)                                         // Stage 3 alert delivery: GET /api/notify-status — which remote transports (Discord/Telegram/webhook) are configured + last delivery/redacted error; macOS listed with an honest "untracked" note; email honestly absent (needs SMTP/provider — future)
++	d.registerNotify(mux)                                         // Stage 3 alert delivery: GET /api/notify-status — which remote transports (Discord/Telegram/webhook/Slack/SMTP) are configured + last delivery/redacted error; the LOCAL desktop row names this platform's real channel with an honest "untracked" note
+ 	d.registerTVWebhook(mux)                                      // TradingView wave: POST /api/tv-webhook (shared-secret inbound Pine alerts) + GET /api/tv-signals (received signals, newest first)
+ 	d.registerTVStatus(mux)                                       // TradingView wave: GET /api/tv-status — webhook ops (secret set? public tunnel host + best-effort reachability, received-signal totals, per-streamed-symbol fired counts); never echoes the secret
+ 	d.registerShorts(mux)                                         // Stage 5 FINRA Reg SHO: GET /api/shorts — daily short sale VOLUME ratio (per-symbol series + fleet-wide latest extremes w/ stated min-volume floor); caveat verbatim in every payload: NOT short interest, includes market makers, high ratio NOT directly bearish
+diff --git a/daemon/internal/api/notifystatus.go b/daemon/internal/api/notifystatus.go
+index 4fddaa2..631284d 100644
+--- a/daemon/internal/api/notifystatus.go
++++ b/daemon/internal/api/notifystatus.go
+@@ -3,9 +3,9 @@
+ // configured (never the secrets themselves), the last successful delivery,
+ // and the last (secret-redacted) error per transport. macOS is listed too:
+ // always attempted via osascript, but with an explicit note that delivery is
+-// best-effort and untracked (no receipt exists). Email is intentionally
+-// absent — it needs SMTP credentials or a provider account (future), and we
+-// don't pretend otherwise.
++// best-effort and untracked (no receipt exists). Email is an SMTP transport
++// now (notify/slack_smtp.go) and appears in the same table, with the same
++// honest configured/lastOk/lastError columns as the rest.
+ package api
+ 
+ import (
+@@ -31,6 +31,8 @@ var notifyEnvHints = map[string]string{
+ 	notify.TransportDiscord:  "SIGNALDECK_DISCORD_WEBHOOK",
+ 	notify.TransportTelegram: "SIGNALDECK_TELEGRAM_BOT_TOKEN + SIGNALDECK_TELEGRAM_CHAT_ID",
+ 	notify.TransportWebhook:  "SIGNALDECK_WEBHOOK_URL",
++	notify.TransportSlack:    "SIGNALDECK_SLACK_WEBHOOK",
++	notify.TransportSMTP:     "SIGNALDECK_SMTP_HOST + _FROM + _TO (optional _PORT, _USER, _PASS)",
+ }
+ 
+ // localTransportRow describes the LOCAL desktop channel for the platform this
+@@ -76,7 +78,7 @@ func (d Deps) notifyStatus(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	writeJSON(w, map[string]any{
+ 		"transports": rows,
+-		"email":      "not supported — needs SMTP credentials or a provider account (future)",
++		"email":      "supported — set SIGNALDECK_SMTP_HOST + _FROM + _TO in daemon/.env; see the smtp row for whether it is configured and whether it last delivered",
+ 		"note":       "remote transports are env-configured in daemon/.env (see .env.example); delivery failures degrade to dq events and never block alerts",
+ 	})
+ }
+@@ -98,8 +100,9 @@ func (d Deps) notifyTest(w http.ResponseWriter, r *http.Request) {
+ 		writeJSON(w, map[string]any{
+ 			"sent": false,
+ 			"reason": "no remote transport is configured — set SIGNALDECK_DISCORD_WEBHOOK, " +
+-				"SIGNALDECK_TELEGRAM_BOT_TOKEN + SIGNALDECK_TELEGRAM_CHAT_ID, or " +
+-				"SIGNALDECK_WEBHOOK_URL in daemon/.env and restart the daemon",
++				"SIGNALDECK_TELEGRAM_BOT_TOKEN + SIGNALDECK_TELEGRAM_CHAT_ID, " +
++				"SIGNALDECK_WEBHOOK_URL, SIGNALDECK_SLACK_WEBHOOK, or " +
++				"SIGNALDECK_SMTP_HOST + _FROM + _TO in daemon/.env and restart the daemon",
+ 			"transports": d.Notifier.ConfiguredNames(),
+ 		})
+ 		return
+diff --git a/daemon/internal/api/notifystatus_test.go b/daemon/internal/api/notifystatus_test.go
+index 118be1b..c03f60c 100644
+--- a/daemon/internal/api/notifystatus_test.go
++++ b/daemon/internal/api/notifystatus_test.go
+@@ -61,8 +61,8 @@ func getNotifyStatus(t *testing.T, srv *httptest.Server) notifyStatusBody {
+ // exists.
+ func TestNotifyStatusNilNotifier(t *testing.T) {
+ 	body := getNotifyStatus(t, newNotifyServer(t, nil))
+-	if len(body.Transports) != 4 {
+-		t.Fatalf("transports = %d, want 4 (local desktop + discord + telegram + webhook)", len(body.Transports))
++	if len(body.Transports) != 6 {
++		t.Fatalf("transports = %d, want 6 (local desktop + discord + telegram + webhook + slack + smtp)", len(body.Transports))
+ 	}
+ 	byName := map[string]notifyTransportRow{}
+ 	for _, tr := range body.Transports {
+@@ -83,7 +83,7 @@ func TestNotifyStatusNilNotifier(t *testing.T) {
+ 	if local.Note == "" {
+ 		t.Errorf("%s row = %+v, want an honest note about untracked delivery", wantLocal, local)
+ 	}
+-	for _, name := range []string{"discord", "telegram", "webhook"} {
++	for _, name := range []string{"discord", "telegram", "webhook", "slack", "smtp"} {
+ 		tr := byName[name]
+ 		if tr.Configured {
+ 			t.Errorf("%s configured with nil notifier", name)
+@@ -92,8 +92,11 @@ func TestNotifyStatusNilNotifier(t *testing.T) {
+ 			t.Errorf("%s missing env hint: %+v", name, tr)
+ 		}
+ 	}
+-	if !strings.Contains(body.Email, "not supported") {
+-		t.Errorf("email note = %q, want an honest not-supported note", body.Email)
++	// Email IS a transport now (SMTP). The honest note names the env vars
++	// that enable it, so assert that rather than a stale "not supported" —
++	// pinning the old string would pin the gap the SMTP transport closes.
++	if !strings.Contains(body.Email, "SIGNALDECK_SMTP_HOST") {
++		t.Errorf("email note = %q, want it to name the SMTP env vars", body.Email)
+ 	}
+ }
+ 
+diff --git a/daemon/internal/notify/notify.go b/daemon/internal/notify/notify.go
+index 6af4f26..af03fe5 100644
+--- a/daemon/internal/notify/notify.go
++++ b/daemon/internal/notify/notify.go
+@@ -1,19 +1,25 @@
+ // Package notify fans daemon notifications out BEYOND the local Mac (Stage 3
+-// alert delivery). Three optional, env-configured outbound transports:
++// alert delivery). Five optional, env-configured outbound transports:
+ //
+ //   - Discord   — SIGNALDECK_DISCORD_WEBHOOK (webhook URL; JSON {content})
+ //   - Telegram  — SIGNALDECK_TELEGRAM_BOT_TOKEN + SIGNALDECK_TELEGRAM_CHAT_ID
+ //     (Bot API sendMessage)
+ //   - Webhook   — SIGNALDECK_WEBHOOK_URL (generic POST JSON {title,body,kind,ts})
++//   - Slack     — SIGNALDECK_SLACK_WEBHOOK (incoming webhook; JSON {text} —
++//     the generic webhook's {title,body,kind,ts} is a 400 invalid_payload there)
++//   - SMTP      — SIGNALDECK_SMTP_HOST + _FROM + _TO (plus optional _PORT,
++//     _USER, _PASS); see slack_smtp.go
+ //
+ // Design contract (mirrors the fleet's graceful-degradation doctrine):
+ // every delivery attempt has a 5s timeout and exactly 1 retry; a transport
+ // that still fails records a dq event + a redacted per-transport error and
+ // NEVER blocks or fails the caller. Secrets (webhook URLs, bot token) are
+ // redacted from every log line, dq detail, and status string. With no
+-// transport configured, Send is a pure no-op. There is deliberately NO email
+-// transport — email needs SMTP credentials or a provider account; noted as
+-// future work, never faked.
++// transport configured, Send is a pure no-op. Email is no longer absent: the
++// SMTP transport (slack_smtp.go) takes the credentials it always needed as
++// named env vars, is allowed ONE attempt rather than two, and records delivery
++// through the same status + dq path as every other transport. The whole
++// fan-out is capped by sendBudget so no transport can hold the watchdog.
+ package notify
+ 
+ import (
+@@ -99,6 +105,15 @@ type Notifier struct {
+ 	TelegramChatID string // Telegram chat id (numeric or @channel)
+ 	WebhookURL     string // generic webhook URL (treated as secret too)
+ 
++	// Slack + SMTP (slack_smtp.go). Loaded by NewFromEnv via loadExtEnv.
++	SlackWebhook string // Slack incoming-webhook URL (secret — always redacted)
++	SMTPHost     string // SIGNALDECK_SMTP_HOST
++	SMTPPort     string // SIGNALDECK_SMTP_PORT ("" = 587; "465" = implicit TLS)
++	SMTPUser     string // SIGNALDECK_SMTP_USER ("" = no AUTH)
++	SMTPPass     string // SIGNALDECK_SMTP_PASS (secret — always redacted)
++	SMTPFrom     string // envelope + From: address
++	SMTPTo       string // comma-separated recipients
++
+ 	TelegramAPIBase string        // test hook; "" = https://api.telegram.org
+ 	HTTP            *http.Client  // test hook; nil = default client
+ 	DQ              DQ            // failure sink; nil = log-only
+@@ -111,13 +126,15 @@ type Notifier struct {
+ // NewFromEnv builds the notifier from the SIGNALDECK_* env vars (config.Load
+ // exports daemon/.env into the process env before run() constructs this).
+ func NewFromEnv(dq DQ) *Notifier {
+-	return &Notifier{
++	n := &Notifier{
+ 		DiscordWebhook: strings.TrimSpace(os.Getenv("SIGNALDECK_DISCORD_WEBHOOK")),
+ 		TelegramToken:  strings.TrimSpace(os.Getenv("SIGNALDECK_TELEGRAM_BOT_TOKEN")),
+ 		TelegramChatID: strings.TrimSpace(os.Getenv("SIGNALDECK_TELEGRAM_CHAT_ID")),
+ 		WebhookURL:     strings.TrimSpace(os.Getenv("SIGNALDECK_WEBHOOK_URL")),
+ 		DQ:             dq,
+ 	}
++	n.loadExtEnv() // slack + smtp, same env-name-only rule (slack_smtp.go)
++	return n
+ }
+ 
+ func (n *Notifier) discordOn() bool  { return n.DiscordWebhook != "" }
+@@ -129,7 +146,7 @@ func (n *Notifier) Enabled() bool {
+ 	if n == nil {
+ 		return false
+ 	}
+-	return n.discordOn() || n.telegramOn() || n.webhookOn()
++	return n.discordOn() || n.telegramOn() || n.webhookOn() || n.extOn()
+ }
+ 
+ // ConfiguredNames lists the configured transports in stable order.
+@@ -147,17 +164,28 @@ func (n *Notifier) ConfiguredNames() []string {
+ 	if n.webhookOn() {
+ 		out = append(out, TransportWebhook)
+ 	}
++	if n.slackOn() {
++		out = append(out, TransportSlack)
++	}
++	if n.smtpOn() {
++		out = append(out, TransportSMTP)
++	}
+ 	return out
+ }
+ 
+ // Send delivers msg to every configured transport, best-effort and
+-// sequentially (worst case ~3 transports x 2 attempts x 5s — callers are
++// sequentially, under a hard sendBudget for the WHOLE fan-out (callers are
+ // periodic workers, never request handlers). It never returns an error and
+ // never panics: failures become dq events + status entries.
+ func (n *Notifier) Send(ctx context.Context, m Message) {
+ 	if n == nil || !n.Enabled() {
+ 		return
+ 	}
++	// Cap the whole fan-out. Sequential delivery means every transport added
++	// extends the worst case, and the watchdog must never be held by a wedged
++	// notification host — see sendBudget (slack_smtp.go).
++	ctx, cancel := context.WithTimeout(ctx, sendBudget)
++	defer cancel()
+ 	if m.Ts == 0 {
+ 		m.Ts = n.now().Unix()
+ 	}
+@@ -181,6 +209,7 @@ func (n *Notifier) Send(ctx context.Context, m Message) {
+ 		payload, _ := json.Marshal(m)
+ 		n.attempt(ctx, TransportWebhook, n.WebhookURL, payload)
+ 	}
++	n.sendExt(ctx, m) // slack + smtp (slack_smtp.go)
+ }
+ 
+ // attempt POSTs payload to url with the 5s-timeout + 1-retry contract and
+@@ -225,10 +254,12 @@ func (n *Notifier) post(ctx context.Context, url string, payload []byte) error {
+ 	return nil
+ }
+ 
+-// Redact strips every configured secret (webhook URLs, bot token) from s —
+-// applied to ALL error strings before they reach logs, dq events, or status.
++// Redact strips every configured secret (webhook URLs, bot token, Slack
++// webhook, SMTP password) from s — applied to ALL error strings before they
++// reach logs, dq events, or status.
+ func (n *Notifier) Redact(s string) string {
+-	for _, secret := range []string{n.DiscordWebhook, n.TelegramToken, n.WebhookURL} {
++	secrets := append([]string{n.DiscordWebhook, n.TelegramToken, n.WebhookURL}, n.extSecrets()...)
++	for _, secret := range secrets {
+ 		if secret != "" {
+ 			s = strings.ReplaceAll(s, secret, "[redacted]")
+ 		}
+@@ -270,13 +301,15 @@ func (n *Notifier) recordErr(ctx context.Context, name string, err error) {
+ 	}
+ }
+ 
+-// Status snapshots all three remote transports in stable order (configured
++// Status snapshots every remote transport in stable order (configured
+ // flag + last delivery/error), for /api/notify-status. Secrets never appear.
+ func (n *Notifier) Status() []TransportStatus {
+ 	out := []TransportStatus{
+ 		{Name: TransportDiscord},
+ 		{Name: TransportTelegram},
+ 		{Name: TransportWebhook},
++		{Name: TransportSlack},
++		{Name: TransportSMTP},
+ 	}
+ 	if n == nil {
+ 		return out
+@@ -285,6 +318,8 @@ func (n *Notifier) Status() []TransportStatus {
+ 		TransportDiscord:  n.discordOn(),
+ 		TransportTelegram: n.telegramOn(),
+ 		TransportWebhook:  n.webhookOn(),
++		TransportSlack:    n.slackOn(),
++		TransportSMTP:     n.smtpOn(),
+ 	}
+ 	n.mu.Lock()
+ 	defer n.mu.Unlock()
+diff --git a/web/src/lib/api.ts b/web/src/lib/api.ts
+index 32f8229..1d2875a 100644
+--- a/web/src/lib/api.ts
++++ b/web/src/lib/api.ts
+@@ -2198,17 +2198,17 @@ export function signalBacktestLive(horizon: "1d" | "1w") {
+ // ─────────────────────────────────────────────────────────────────────────
+ // STAGE 3 — ALERT DELIVERY BEYOND THE MAC (appended block; keep at END).
+ // GET /api/notify-status reports which outbound delivery transports are
+-// configured — macOS (always attempted, honestly labeled untracked) plus the
+-// three optional env-configured remotes (Discord webhook, Telegram bot,
+-// generic webhook) — with last delivery ts and last SECRET-REDACTED error per
+-// transport. The payload never contains webhook URLs or tokens. Email is
+-// deliberately absent: it needs SMTP creds/provider (noted as future).
++// configured — the LOCAL desktop channel for whatever platform the daemon runs
++// on (always attempted, honestly labeled untracked) plus the five optional
++// env-configured remotes (Discord webhook, Telegram bot, generic webhook,
++// Slack webhook, SMTP) — with last delivery ts and last SECRET-REDACTED error
++// per transport. The payload never contains webhook URLs, tokens or passwords.
+ 
+ /** One delivery transport's honest status + the env var(s) that enable it. */
+ export interface NotifyTransport {
+-  name: string; // "macos" | "discord" | "telegram" | "webhook"
++  name: string; // "macos" | "windows" | "local-desktop" | "discord" | "telegram" | "webhook" | "slack" | "smtp"
+   configured: boolean;
+-  env: string; // env var(s) to set in daemon/.env ("(built-in)" for macos)
++  env: string; // env var(s) to set in daemon/.env ("(built-in)" for the local desktop row)
+   note?: string; // honest caveat (e.g. macOS delivery untracked)
+   lastOk?: number; // unix seconds of last successful delivery
+   lastError?: string; // redacted — never contains secrets
+@@ -2218,7 +2218,7 @@ export interface NotifyTransport {
+ /** GET /api/notify-status payload. */
+ export interface NotifyStatusResponse {
+   transports: NotifyTransport[];
+-  email: string; // honest "not supported — needs SMTP/provider (future)" note
++  email: string; // how to enable the SMTP transport; the smtp row carries its real status
+   note: string; // how remote transports are configured + degrade
+ }
+ 

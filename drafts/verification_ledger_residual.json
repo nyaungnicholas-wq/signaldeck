@@ -1,0 +1,320 @@
+{
+  "schema": "signaldeck.verification_ledger/1",
+  "task": "SWARM 1a — verify the residual (unadjudicated) audit tail",
+  "generated_at_utc": "2026-08-06T22:30:00Z",
+  "repo": "C:/Users/Nicholas_N/Desktop/claude code/signaldeck",
+  "branch": "hmm-regime-and-pbo",
+  "head_sha": "0b1f73b",
+  "running_daemon_rev": "0499416",
+  "source_journal": "C:/Users/Nicholas_N/.claude/projects/C--Users-Nicholas-N-Desktop-claude-code/5158a334-eaab-47d0-aad1-941dced1894b/subagents/workflows/wf_bf818366-06a/journal.jsonl",
+  "selection_rule": {
+    "journal_totals": {"result_records": 38, "string_results_skipped": 2, "findings_total": 181, "Critical": 14, "High": 58, "Medium": 68, "Low": 29, "Informational": 12},
+    "prior_round_adjudicated": "first 85 Medium/Low in journal order",
+    "selected": "union of (Medium/Low tail from index 85) + (Medium/Low/Informational tail from index 85) + (every Informational regardless of index) = 31 findings",
+    "note": "the two index interpretations were unioned because the brief was ambiguous; the union is a superset of either reading"
+  },
+  "evidence_sources": {
+    "db_readonly_live": "file:.../data/signaldeck.db?mode=ro",
+    "db_readonly_backup": "file:.../data/backups/signaldeck-20260806-131007.db?mode=ro (13:10 PT snapshot; used for heavy scans)",
+    "code": "working tree at HEAD 0b1f73b plus the 13 uncommitted LOCKED repairs",
+    "head_delta_checked": "git diff 0499416..HEAD — relevant changed files: pipeline/predict.go, store/predict.go, store/schema.sql, maintain/maintain.go"
+  },
+  "tally": {"CONFIRMED": 30, "PLAUSIBLE": 1, "REFUTED": 0, "ALREADY_FIXED_IN_SOURCE": 0, "BLOCKED": 0, "escalated": 7,
+    "note": "three CONFIRMED findings carry a documented sub-claim correction: idx 8 (causal mechanism refuted, impact confirmed), idx 13 (coverage-shortfall attribution refuted, error + symbol-state confirmed), idx 21 (corpus age off by 9 days, conclusion unaffected). Zero findings were fully refuted and zero were already fixed at HEAD."},
+  "findings": [
+    {
+      "idx": 0, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "Daily bars are stamped at exchange midnight (DST-varying) while md.TradingDay folds on a fixed 05:00Z offset",
+      "file_line": "daemon/internal/marketdata/tradingday.go:32,51-58; daemon/internal/expectancy/expectancy.go:123,150",
+      "evidence_class": "COMPUTED",
+      "verification": "TradingDayOffsetSecs = 5*3600 at tradingday.go:32; floor-division TradingDay at :51-58. Anchor census on the backup reproduced EXACTLY: stocks|14400|1734891, stocks|18000|909757, crypto|0|5239. Fold check on SPY 1d: 2026-03-06 05:00:00Z (EST) -> 20518; 2026-03-09 04:00:00Z (EDT) -> 20520, while a same-session intraday row (03-09 14:30Z) -> 20521. So under EDT the daily bar folds one index BELOW its own session's intraday rows; under EST they agree.",
+      "mitigation_verified": "expectancy.go:118-128 and :145-153 fold daily (d[i].Ts) and minute (minute[i].Ts) into SEPARATE horizon accumulators, so no consumer cross-joins the two grids today.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 1, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "tickstream outages are DQ-rate-limited to one event per 5 minutes and tolerate 60 consecutive failures",
+      "file_line": "daemon/internal/ingest/cryptolive/cryptolive.go:83-86,162-165",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "cryptolive.go:83-86 `if g.consecFails >= 60 { return ..., fmt.Errorf(\"tickstream unreachable for %ds: %w\", ...) }`; :162-165 `if time.Since(g.lastDQEmit) < 5*time.Minute { return }`. Both exact.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 2, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "93,847 zero-volume bars are stored with no constraint and no data-quality signal",
+      "file_line": "daemon/internal/store/schema.sql:15-22; daemon/internal/store/badbars.go:26,39; daemon/cmd/sdmaint/badbars.go:44",
+      "evidence_class": "COMPUTED",
+      "verification": "backup: volume=0 -> 1d|51953, 1h|4003, 1m|37891 (sum 93,847, exact). volume<0 -> 0. close<=0 -> 0. schema.sql bars CHECK constrains only tf IN ('1m','1h','1d'); `volume REAL NOT NULL DEFAULT 0` carries no constraint. PurgeNonPositiveBars has exactly one non-test caller: cmd/sdmaint/badbars.go:44 (manual). No volume-quality check exists anywhere in internal/maintain.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 3, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "The daemon is deliberately taken down every weekday at 13:10 PT for the offline backup",
+      "file_line": "ops/market-close.sh:2-4,24,29; ops/daemon-guard.ps1:41-60",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "market-close.sh:2-4 header states the 13:10 PT stop-then-VACUUM sequence; :24 LOCK=\"$SD/ops/.maintenance\"; :29 signaldeck-ctl.sh stop. daemon-guard.ps1:48-51 `if ($ageMin -lt 2) { ... leaving daemon down }` and :53-55 honours a live holder up to 90 min. Backup artifact for today exists: data/backups/signaldeck-20260806-131007.db (5,112,651,776 B, written 13:11).",
+      "note": "NOT re-observed live — the daemon answered /api/health 200 at verification time. The downtime window itself is DIRECT_EVIDENCE from the scripts + the backup artifact; the 13:13 connection-refused observation is the original auditor's, not re-run.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 4, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "/mcp is exempted from the auth gate even when the MCP server is disabled",
+      "file_line": "daemon/internal/api/mcpmount.go:69; daemon/internal/api/security.go:90,137-140",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "mcpmount.go:38-40 `if !d.Cfg.MCPEnabled { return nil }` mounts nothing; mcpmount.go:69 `func mcpExempt(path string) bool { return path == mcpPath }` is a pure path compare with no flag check; security.go requiresAuth returns false for it unconditionally, and the CSRF guard at :90 also steps aside. config.go:204 defaults MCPEnabled false; SIGNALDECK_MCP_ENABLED does not appear in daemon/.env (name-only grep, count 0). Live probe: GET http://127.0.0.1:8322/mcp -> 404 (control: /api/health -> 200).",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 5, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "requestIsLoopback denies on ngrok/XFF headers but not on Cloudflare's Cf-Connecting-Ip",
+      "file_line": "daemon/internal/api/api.go:1277 (header list), api.go:605 (rawDataRefused)",
+      "evidence_class": "DIRECT_EVIDENCE for the code fact; UNVERIFIED for exploitability",
+      "verification": "api.go:1277 revokes loopback on exactly {X-Forwarded-For, X-Real-Ip, Forwarded, Ngrok-Skip-Browser-Warning}. Cf-Connecting-Ip / Cf-Ray / True-Client-Ip are absent. api.go:604-606 gates raw licensed-bar export on `!d.Cfg.AllowRawExport && !requestIsLoopback(r) && !datalicense.BarsRedistributable()`; config.go:196 defaults AllowRawExport false.",
+      "note": "The bypass itself was NOT reproduced (no tunnel to :8322 was started, and starting one would change system state). cloudflared does set X-Forwarded-For in practice, so this is a defense-in-depth gap, not a demonstrated live bypass.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 6, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "Adaptive per-regime weights have never been live — every cell is gated and the blend runs on the static equal prior",
+      "file_line": "meta key adaptive_weights:v1; daemon/internal/adaptive/adaptive.go:258-267,466-475",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "live meta adaptive_weights:v1 (computedTs 1786048510) cell `all`: n=40000, days=13, gated=true, reason \"cell's 40000 row(s) span only 13 distinct trading day(s), below the 20-day floor\"; no weights emitted. Hit rates reproduce the finding exactly (pressure 0.49345, forecast 0.51128, meanrev 0.42637, sentiment 0.45601, expectancy 0.47524). Live predictions for 2026-08-06: basis='static' 13,609 at 1d + 13,613 at 1w, no other basis. 3-day window: static 56,298, personal 99, '' 34,799 (pre-restart binary).",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 7, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "Dead duplicate route file web/src/app/intel/companies/page.new.tsx ships in the tree",
+      "file_line": "web/src/app/intel/companies/page.new.tsx",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "directory listing: page.new.tsx (20,826 B, 2026-08-02 22:02) alongside page.tsx (21,621 B, 2026-08-02 22:24) and layout.tsx. Next.js routes only page.tsx, so page.new.tsx is unreachable but still type-checked/linted.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 8, "severity": "Medium", "verdict": "CONFIRMED", "escalate": true,
+      "escalation_class": "published-metric contamination + stated-invariant break on the money path",
+      "title": "Paper cash goes negative and dust fills of ~1e-15 shares are counted as full-weight trades in the published win rate and expectancy",
+      "file_line": "daemon/internal/pipeline/paper.go:356,536 (cash accumulation), :182 (the invariant); daemon/internal/papertrade/execution.go:171-173,192-194; daemon/internal/api/paper.go:175-197; daemon/internal/moneymetrics/moneymetrics.go:74-75",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "backup: 16 paper_equity marks carry cash = -1.8189894035458565e-12, spanning 2026-07-23 04:00 through 2026-08-05 00:00 — MORE than the 6 the finding reported. 4 dust paper_trades rows: SYK buy/sell 5.7691429693008491e-15 sh, ABCL buy/sell 1.2478211389965437e-15 sh. flagship-1d: 18 buys / 16 sells = 16 closed round trips, so 2 of 16 (12.5%) of the published denominator are ~7e-15-dollar trips. api/paper.go:175-197 roundTripReturns appends proceeds/outlay-1 UNWEIGHTED; moneymetrics.go:74-75 takes a plain arithmetic mean and an unweighted win rate. The invariant text 'fully funded and never negative' is at pipeline/paper.go:182; `cash += f.CashDelta` at :356 and :536 with no clamp or epsilon.",
+      "mechanism_correction": "The finding's causal chain (negative-cash residue becomes an EnterLong budget) is REFUTED for the current code path. pipeline/paper.go:515-528 calls riskgate.Evaluate FIRST and passes `budget := gate.Notional`; Evaluate clamps notional to b.Cash (riskgate.go:407-410) and then REFUSES anything below MinTicketFrac*equity (riskgate.go:416-421, default 0.005), so a ~1e-15 or negative budget is refused before EnterLong is reached. The 4 dust rows are dated 2026-07-22..07-24 and their Reason strings ('cal_prob 0.687 >= long 0.60') lack the current path's 'net_ev … gate.Sizing' format — they predate the gated entry path (paper_epochs epoch 2 begins 1785801600 = 2026-08-02). The CONTAMINATED PUBLISHED SAMPLE and the NEGATIVE-CASH INVARIANT BREAK are both still live and unfixed; only the production mechanism is closed.",
+      "residual_gap": "papertrade.EnterLong still has no notional floor (execution.go:171-173 rejects only budget<=0; :192-194 only qty<=0). The second caller, internal/stresslab/replay.go:201, computes `budget := math.Min(d.Notional, cash)` — a small POSITIVE cash there still reaches EnterLong with no min-ticket recheck.",
+      "head_status": "unchanged 0499416..HEAD; the uncommitted paper.go repair addressed orphan positions, not this"
+    },
+    {
+      "idx": 9, "severity": "Medium", "verdict": "CONFIRMED", "escalate": true,
+      "escalation_class": "risk-control reachability",
+      "title": "The kill switch has no API, no CLI and no runbook-reachable trigger inside the daemon, resolves a RELATIVE path, and the macOS launchd definition points it at the wrong directory",
+      "file_line": "daemon/internal/killswitch/killswitch.go:47; ops/com.signaldeck.daemon.plist:34-35; ops/install-windows-tasks.ps1:20,133",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "killswitch.go:47 `DefaultPath = \"ops/HALT\"` with the doc comment 'relative to the daemon's working directory'. `grep -rn killswitch daemon/internal/api/ daemon/cmd/` -> ZERO matches (no endpoint, no sdmaint subcommand, no way to read halt state over HTTP). Only consumers: pipeline/paper.go:266 and :494 (Check()) plus pipeline/paperev.go:322,374 (the State in the decision record). plist:34-35 WorkingDirectory=/Users/natalienyaung/claude code/signaldeck/daemon -> ops/HALT would resolve to signaldeck/daemon/ops/HALT, which does not exist in the tree. install-windows-tasks.ps1:20 `$repo = Split-Path $PSScriptRoot -Parent` and :133 `-WorkingDirectory $repo` -> the Windows path resolves correctly. `ls ops/HALT` -> absent, so the book is RUNNING.",
+      "note": "Switch NOT tripped — doing so would change system state.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 10, "severity": "Medium", "verdict": "CONFIRMED", "escalate": true,
+      "escalation_class": "risk-control bypass (fail-open)",
+      "title": "riskgate fails OPEN on every unmeasurable input except equity",
+      "file_line": "daemon/internal/riskgate/riskgate.go:256-260,270-276,284-286,307-309,311,350-352; daemon/internal/pipeline/paperrisk.go:83-89,96-120",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "Admit returns with Allow=false ONLY on the equity guard (riskgate.go:256-260). Every other unmeasurable input appends an 'unarmed' Reason and falls through to `d.Allow = true` at :311 — drawdown :270-276, daily loss :284-286, gross exposure :307-309; in Evaluate the correlation cap :350-352 does the same. paperrisk.go:96-120 confirms the compound path: `allMarked` is cleared by a SINGLE open position with no bar at the as-of clock (`if !ok || bar.Close <= 0 { allMarked = false; continue }`) and `b.GrossKnown = allMarked`, so one stale symbol disarms the leverage cap for every candidate in the pass. DailyKnown needs >=2 curve points with prev>0 (:83-89).",
+      "note": "Documented deliberate doctrine, and the asymmetry with flatten.go (an unknown drawdown does NOT liquidate) is argued in-file. The gross-exposure cap is the one where fail-open is hard to defend: 'I cannot tell how levered I am' currently reads as 'proceed'.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 11, "severity": "Low", "verdict": "CONFIRMED", "escalate": false,
+      "title": "The risk envelope a paper result ran under is written only to a rotating log file, never to the database",
+      "file_line": "daemon/internal/pipeline/paper.go:236-241; daemon/internal/riskgate/provenance.go (whole file)",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "paper.go:236 `prov := riskgate.DescribeLimits()`, :238 `log.Printf(\"paper-trader[%s] %s\", strategy, prov)`, :239-241 a WARNING Printf per rejected override. `grep -n 'Store|Insert|log\\.' internal/riskgate/provenance.go` -> no matches; the file has no persistence at all. Ten limits are env-overridable (provenance.go:48-59: MAX_DRAWDOWN, MAX_DAILY_LOSS, MAX_POSITION_WEIGHT, MAX_SECTOR_WEIGHT, MAX_POSITIONS, KELLY_FRACTION, MIN_EDGE_TRIPS, MIN_TICKET_FRAC, MAX_CORR_TO_BOOK, MAX_GROSS_EXPOSURE). Mitigation re-verified by NAME-ONLY grep (no values read): SIGNALDECK_(RISK|PAPER)_ occurs 0 times in daemon/.env, ops/com.signaldeck.daemon.plist, ops/install-windows-tasks.ps1, and no ops/*.sh or ops/*.ps1 matches — every limit is at its default today.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 12, "severity": "Informational", "verdict": "CONFIRMED", "escalate": true,
+      "escalation_class": "silent permanent data loss (latent, currently unreachable)",
+      "title": "Retention's archive-before-prune has one degenerate branch that would delete rows it did not archive",
+      "file_line": "daemon/internal/maintain/maintain.go:1264-1284; archiveBatch at :64",
+      "evidence_class": "COMPUTED",
+      "verification": "maintain.go:1264-1279 read verbatim at HEAD: on a full batch it trims the trailing max-ts group so archived == pruned, but the `cut == 0` branch sets `upper = maxTs + 1` while `toArchive` remains the FULL `rows` slice. prune(ctx, upper) at :1284 then deletes every row with ts <= maxTs, including any rows at maxTs beyond the archiveBatch limit that were never written to the cold archive. archiveBatch = 50000 (maintain.go:64). Measured headroom on the backup: `SELECT MAX(c) FROM (SELECT ts,COUNT(*) c FROM scores GROUP BY ts)` -> 3144, i.e. ~16x below the batch size.",
+      "reachability": "unreachable on current data; the rest of the helper is genuinely fail-safe (archive error returns before prune at :1279-1282, nil sink skips at :1249-1252).",
+      "head_status": "maintain.go changed 0499416..HEAD (19 lines) but this branch is present and unaltered at HEAD"
+    },
+    {
+      "idx": 13, "severity": "Medium", "verdict": "CONFIRMED", "escalate": true,
+      "escalation_class": "data integrity / survivorship contamination",
+      "title": "universe-poller is failing on a ticker-reuse artifact symbol, and 1,868 symbols are simultaneously active=1 and delisted",
+      "file_line": "daemon/internal/universe/poller.go:135,157-159; daemon/internal/ingest/alpaca/client.go:428-432; live worker_runs + symbols",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "LIVE worker_runs: universe-poller | 2026-08-06 20:35:10 | error | `alpaca: multi bars: status 400: {\"message\":\"invalid symbol: ATC.220816\"}` — still the most recent run for that worker; 1 error / 11 ok in the trailing 24h. symbols: id 1122 ATC stocks active=1 delisted_at NULL; id 1781 ATC.220816 stocks active=1 delisted_at=1660608000 (2022-08-16). `active=1 AND delisted_at>0` -> 1868 of 2950; `active=0 AND (delisted_at IS NULL OR =0)` -> 0. 1d bars dated after their symbol's delisting: 3898 distinct (day, symbol) pairs (finding said 3,781 — it has GROWN). Batch-abort mechanism CONFIRMED in code: alpaca/client.go:428-432 returns a hard error on any non-200, and universe/poller.go:157-159 does `return \"\", err`, aborting the daily, hourly and minute legs together.",
+      "partial_refutation": "The causal link to the 2026-08-05 coverage shortfall is REFUTED AS STATED. The shortfall is real (611 distinct stock symbols with a 1d bar on 08-05 vs 1,041-1,045 on 07-27..08-04), but universe-poller's universe is only ~286 symbols ('refreshed 285/286' in every ok run), so it cannot account for a ~430-symbol gap. Another worker owns that shortfall.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 14, "severity": "Medium", "verdict": "CONFIRMED", "escalate": true,
+      "escalation_class": "tamper-evidence / provenance integrity",
+      "title": "4,583 predictions are absent from the tamper-evident hash chain, and 335 chain identities are duplicated",
+      "file_line": "daemon/internal/pipeline/predict.go:964-972 (AppendLedger, best-effort, outside the prediction write); idx_prediction_ledger_ident (non-UNIQUE)",
+      "evidence_class": "COMPUTED",
+      "verification": "backup: LEFT JOIN predictions->prediction_ledger on (symbol_id,horizon,bar_ts=ts) WHERE seq IS NULL -> 4583, against 384,333 predictions (1.19%). Duplicate identities: 335. Chain itself gap-free: MIN/MAX/COUNT seq = 1 / 380085 / 380085. Index DDL confirmed NON-UNIQUE: `CREATE INDEX idx_prediction_ledger_ident ON prediction_ledger (symbol_id, horizon, bar_ts)`. Code at HEAD: predict.go:964-971 comment states the append 'MUST NOT fail the prediction'; the AppendLedger call is at :972, outside UpsertPrediction's transaction.",
+      "note": "A prediction in the graded population but absent from the chain cannot be shown to have been committed before its outcome existed — the chain's entire purpose. Not exactly reconstructable: a chain entry appended now would carry a prev_hash and predicted_at that misrepresent when the commitment happened. QUARANTINE is the correct remedy, not backfill.",
+      "head_status": "pipeline/predict.go changed 0499416..HEAD (292 lines) but the best-effort append is present and unaltered at HEAD"
+    },
+    {
+      "idx": 15, "severity": "Medium", "verdict": "PLAUSIBLE", "escalate": false,
+      "title": "Four Python tools open the live production database read-write outside the daemon's single-writer discipline; three execute DDL that verifySchema can never see",
+      "file_line": "tools/spa_ledger.py:122-126; tools/validate_signals.py:430,271-273; tools/grader_heartbeat.py:45,87; tools/schema_contract_check.py:108-110,182-185; daemon/internal/store/schemacontract.go:162-185",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "CONFIRMED core: production carries four live-only tables — research_ledger_runs (0 rows), research_loop_spa (1), symbol_bars_epoch (0), validation_advisory (8) — plus an undeclared basis_epoch column on prediction_outcomes, score_outcomes and regime_outcomes. verifySchema (schemacontract.go:162-185) iterates parseDeclaredSchema(schemaSQL) and reports only declared-but-absent objects; there is no live->declared direction, so undeclared production objects are invisible to it forever.",
+      "corrections": [
+        "THREE tools, not four, open the production DB read-write. tools/schema_contract_check.py:110 connects to a TEMPORARY file: :182-185 `with tempfile.TemporaryDirectory() as tmp: db_path = os.path.join(tmp, 'fresh.db'); conn = apply_schema(schema_sql, db_path)`. It never touches data/signaldeck.db.",
+        "TWO tools, not three, create tables verifySchema cannot see. tools/grader_heartbeat.py:45 creates `grader_heartbeats`, which IS declared in schema.sql, so the contract does cover it. Only spa_ledger.py:126 (research_loop_spa) and validate_signals.py:273 (validation_advisory) create undeclared tables.",
+        "The bare-connect / no-busy_timeout hazard is specific to tools/validate_signals.py:430 (`sqlite3.connect(args.db)`, Python's 5 s default). tools/spa_ledger.py:123 sets `PRAGMA busy_timeout=30000` and grader_heartbeat.py:87 passes timeout=30."
+      ],
+      "unattributed": "research_ledger_runs and symbol_bars_epoch have ZERO references anywhere in the repo, so neither can be attributed to any surviving tool.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 16, "severity": "Medium", "verdict": "CONFIRMED", "escalate": false,
+      "title": "The partial index built for the calibration/grading read is unusable by that read, so ResolvedPredictionPairs full-scans prediction_outcomes",
+      "file_line": "daemon/internal/store/predict.go:163-167; idx_predoutcomes_resolved_hts",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "Query at HEAD verbatim: `SELECT prob, up FROM prediction_outcomes WHERE resolved_at IS NOT NULL AND horizon=? ORDER BY ts DESC LIMIT ?` (predict.go:164-167) — no `up IS NOT NULL`. Index DDL carries `WHERE resolved_at IS NOT NULL AND up IS NOT NULL`. EQP as-written -> `SCAN prediction_outcomes` + `USE TEMP B-TREE FOR ORDER BY`. EQP with `AND up IS NOT NULL` added -> `SEARCH prediction_outcomes USING INDEX idx_predoutcomes_resolved_hts (horizon=?)`. Results-identical: `resolved_at IS NOT NULL AND up IS NULL` -> 0 rows.",
+      "head_status": "store/predict.go changed 0499416..HEAD (114 lines) but this query is unaltered"
+    },
+    {
+      "idx": 17, "severity": "Medium", "verdict": "CONFIRMED", "escalate": false,
+      "title": "/api/honesty full-scans score_outcomes: the only index on it is the exact complement of the query's predicate",
+      "file_line": "daemon/internal/api/api.go:711; daemon/internal/store/store.go:954-966; idx_outcomes_unresolved",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "ResolvedOutcomes at store.go:955-966 builds `... WHERE resolved_at IS NOT NULL AND horizon=? ... ORDER BY ts DESC LIMIT ?` with no fwd_return predicate. sqlite_master shows exactly ONE index on score_outcomes: `CREATE INDEX idx_outcomes_unresolved ON score_outcomes (resolved_at) WHERE resolved_at IS NULL` — the exact complement. EQP -> `SCAN score_outcomes` + `USE TEMP B-TREE FOR ORDER BY`. dbstat: score_outcomes = 85,155,840 B. The sibling table prediction_outcomes DOES have a resolved-side partial index, so the pattern was fixed on one table and not the other.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 18, "severity": "Medium", "verdict": "CONFIRMED", "escalate": true,
+      "escalation_class": "label leakage (forward return recorded before its window closed)",
+      "title": "859 score_outcomes at horizon 1d were graded before their forward window closed",
+      "file_line": "daemon/internal/store/store.go:936-941 (ResolveOutcome)",
+      "evidence_class": "COMPUTED",
+      "verification": "backup: `SELECT horizon, COUNT(*) FROM score_outcomes WHERE resolved_at IS NOT NULL AND fwd_return IS NOT NULL AND resolved_at < ts + <horizon secs> GROUP BY horizon` -> 1d|859, exact; 1h and 1w return no rows. The identical check on prediction_outcomes — the population the accuracy registry grades — returns ZERO rows. ResolveOutcome (store.go:936-941) issues `UPDATE score_outcomes SET fwd_return=?, resolved_at=?` with time.Now() and the caller's value, and has no elapsed-horizon assertion of any kind.",
+      "note": "Blast radius bounded to the corpus's first day and 8 symbols per the original evidence. The clean prediction_outcomes population is what keeps this off the published accuracy path. QUARANTINE is the right remedy — the resolver's price basis is unrecorded, so a recomputed value would be a NEW label, not the original.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 19, "severity": "Low", "verdict": "CONFIRMED", "escalate": false,
+      "title": "Two live tables have no reference anywhere in the tree; verifySchema cannot see them",
+      "file_line": "daemon/internal/store/schemacontract.go:162-185; daemon/internal/store/schema.sql:2061",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "set-diff of schema.sql CREATE TABLE names against sqlite_master: live-only = research_ledger_runs, research_loop_spa, symbol_bars_epoch, validation_advisory; declared-only = hmm_regime_state (schema.sql:2061 — added in 0499416..HEAD, so the running binary predates it and CREATE TABLE IF NOT EXISTS will create it on the next restart). Repo-wide grep across *.go/*.sql/*.py/*.sh/*.ps1/*.ts/*.tsx (excluding .claude/) for `research_ledger_runs` and `symbol_bars_epoch` -> ZERO matches. Row counts: research_ledger_runs=0, symbol_bars_epoch=0. verifySchema at schemacontract.go:162-185 loops only over parseDeclaredSchema(schemaSQL) and reports declared-but-absent — no live->declared walk exists. basis_epoch confirmed live on prediction_outcomes, score_outcomes and regime_outcomes and absent from schema.sql.",
+      "head_status": "schema.sql changed 0499416..HEAD (+19 lines, hmm_regime_state); verifySchema unchanged"
+    },
+    {
+      "idx": 20, "severity": "Low", "verdict": "CONFIRMED", "escalate": false,
+      "title": "idx_universe_membership_day (34.6 MB) is fully redundant with the primary key's implicit index and is never chosen",
+      "file_line": "schema index idx_universe_membership_day; universe_membership PRIMARY KEY (day, symbol_id)",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "EQP `SELECT symbol_id FROM universe_membership WHERE day=1785888000` -> `SEARCH universe_membership USING COVERING INDEX sqlite_autoindex_universe_membership_1 (day=?)` — the planner picks the PK autoindex. dbstat: idx_universe_membership_day = 34,590,720 B (exact match to the finding), universe_membership table = 61,648,896 B, sqlite_autoindex_universe_membership_1 = 42,373,120 B, idx_universe_membership_sym = 42,381,312 B. DDL confirms the table is a ROWID table with PRIMARY KEY (day, symbol_id), unlike bars which is WITHOUT ROWID.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 21, "severity": "Medium", "verdict": "CONFIRMED", "escalate": false,
+      "title": "Retention doctrine leaves ~700 MB of permanently-growing tables with no age tier, and half the tiered tables have never fired",
+      "file_line": "daemon/internal/store/retention.go:12-32; daemon/internal/maintain/maintain.go:1012-1054",
+      "evidence_class": "COMPUTED",
+      "verification": "dbstat on the backup reproduces the size profile within ~3%: scores 1,457,000,448; bars 844,865,536; features 517,287,936; research_weeks 478,842,880; idx_bars_tf_sym_ts 372,920,320; composite_scores 329,854,976; predictions 138,383,360; news 117,166,080; prediction_ledger 101,801,984; score_outcomes 85,155,840; insights 73,383,936; universe_membership 61,648,896; tv_ratings 44,834,816; prediction_postmortems 40,714,240. Permanence doctrine explicit at retention.go:12-32 ('no helper for them may be added') and maintain.go:1021-1044. Grep across maintain.go and retention.go for prune/retention references to news, tv_ratings, universe_membership, regime_outcomes, dq_events, prediction_attributions -> NO tier for any of them. news spans MIN(ts)=1334688593 (2012-04-17) with 431,469 rows. predictions accrue 26,018-31,561 rows/day over the last four days.",
+      "correction": "Corpus age is ~36 days, not ~46. MIN(ts) FROM scores = 1782950340 = 2026-07-01 (the original finding rendered this as 2026-06-22). The conclusion is unaffected: no 90d/180d/7y tier has ever fired.",
+      "head_status": "maintain.go changed 0499416..HEAD (19 lines); the tier list is unaltered"
+    },
+    {
+      "idx": 22, "severity": "Low", "verdict": "CONFIRMED", "escalate": false,
+      "title": "Half a million resolved 1h score_outcomes are voids with no distinguishing column; ResolvedOutcomes returns them unfiltered",
+      "file_line": "daemon/internal/store/store.go:944-951 (ResolveOutcomeVoid), :954-966 (ResolvedOutcomes)",
+      "evidence_class": "COMPUTED",
+      "verification": "backup: resolved with fwd_return NULL -> 1h|498840, 1d|64, 1w|64. Resolved totals -> 1h|780310, 1d|709878, 1w|516434, so 63.9% of the resolved 1h population is void (finding said 64.0% on its slightly later snapshot). ResolveOutcomeVoid sets only resolved_at, leaving fwd_return NULL. ResolvedOutcomes' predicate is `resolved_at IS NOT NULL AND horizon=?` with no fwd_return filter; the scan handles NULL correctly via sql.NullFloat64 and the single production consumer (api.go:717-721) filters on `o.FwdReturn != nil`, so nothing is wrong today — but the LIMIT is silently consumed by voids.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 23, "severity": "Low", "verdict": "CONFIRMED", "escalate": false,
+      "title": "16,103 regime_outcomes rows carry a NULL naive_label and produced 8,416 dq_events over five days; 19,056 carry no revision stamp",
+      "file_line": "live regime_outcomes; contract at daemon/internal/store/schemacontract.go:203-209",
+      "evidence_class": "COMPUTED",
+      "verification": "backup, single aggregate: total 30,746; naive_label IS NULL -> 16,103 (52.4%); of those, resolved -> 0; revision NULL or '' -> 19,056; superseded_by NOT NULL -> 2,817. All four figures match the finding EXACTLY. dq_events kind='regime_outcome_error': MIN(ts)=1785471308, MAX(ts)=1785875175, COUNT=8,416 — exact.",
+      "note": "Zero null-label rows are resolved, so nothing graded is contaminated today; this is a coverage gap, not a wrong number. The open question the finding raises — whether the 8,416-event burst ending 2026-08-04 was FIXED or merely SILENCED — remains UNVERIFIED here.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 24, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "Daily bars carry three intraday anchors and predictions are graded on a fixed 86,400 s offset that does not match the bar grid",
+      "file_line": "daemon/internal/pipeline/predict.go:249-253 (horizonSecs), :1096,:1104 (target + 3x acceptance window)",
+      "evidence_class": "DIRECT_EVIDENCE for the mechanism; UNVERIFIED for the magnitude",
+      "verification": "horizonSecs at predict.go:249-253 returns a flat 7*86400 or 86400 with no calendar awareness. predict.go:1096 `target := base.Ts + horizonSecs(h)`; :1104 accepts a forward bar when `fwd.Ts-target <= 3*horizonSecs(h)`, so a nominal 1-day forward return can in fact span a long weekend. Anchor census reproduced exactly (stocks 14400 / 18000, crypto 0). No leakage in prediction_outcomes: 0 rows resolved before ts+horizon (independently re-measured, see idx 18).",
+      "not_measured": "The distribution of (fwd bar ts - base bar ts) for resolved 1d rows was NOT computed here either — the magnitude of the drift stays UNVERIFIED.",
+      "head_status": "pipeline/predict.go changed 0499416..HEAD but horizonSecs is unaltered"
+    },
+    {
+      "idx": 25, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "311,370 orphaned outcome rows across two tables — both fully explained, neither a defect",
+      "file_line": "daemon/internal/store/scoresretention.go:113-128; daemon/internal/store/predict.go:262-274",
+      "evidence_class": "COMPUTED",
+      "verification": "backup: prediction_outcomes with no matching predictions row -> 133,308, which equals EXACTLY 1d#pm (66,676) + 1w#pm (66,632) = 133,308 — the benchmark horizons that bypass the predictions table by design. score_outcomes with no matching scores row -> 176,918, the downsampled window. Reverse direction clean: predictions with no outcome row -> 0. Counts differ from the finding only by the ~2 h between snapshots.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 26, "severity": "Medium", "verdict": "CONFIRMED", "escalate": false,
+      "title": "Total coverage has decayed and now sits at or below the enforced floor",
+      "file_line": ".github/workflows/ci.yml:101 (COVERAGE_FLOOR \"70.1\"), :104-109 (awk comparison)",
+      "evidence_class": "COMPUTED",
+      "verification": "Re-measured independently at HEAD on windows/amd64: `cd daemon && go test -short -count=1 -coverprofile=<scratch>/cov_short.out -covermode=atomic ./...` exit 0, ZERO FAIL lines, then `go tool cover -func` tail -> `total: (statements) 70.0%`. ci.yml:101 sets COVERAGE_FLOOR \"70.1\"; the gate at :105 is `awk 'BEGIN { exit (t+0 < f+0) ? 1 : 0 }'`, so 70.0 < 70.1 FAILS.",
+      "note": "The CI outcome itself remains UNVERIFIED — CI runs on linux and the windows-vs-linux delta (~0.1pp per the original controlled pair) was not re-measured. The local 70.0% is direct.",
+      "head_status": "measured at HEAD"
+    },
+    {
+      "idx": 27, "severity": "Medium", "verdict": "CONFIRMED", "escalate": false,
+      "title": "A calibration test disarms itself deterministically — its core assertion has never run",
+      "file_line": "daemon/internal/ensemble/beta_test.go:118-134 (skip at :122)",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "Executed: `cd daemon && go test -v -count=1 -run TestNoEdgeStaysNearBaseRateWhileKeepingOrder ./internal/ensemble/` -> `=== RUN`, `beta_test.go:122: isotonic won on Brier for this sample; ranking not claimed`, `--- SKIP (0.00s)`, `ok`. Source confirms the fixed seed: `pairs := pairsFrom(800, 11, func(float64) float64 { return base })`, so the skip is deterministic, not sample-dependent. The guarded assertions are the load-bearing ones ('no-edge inputs drifted far from the base rate … preserving order must not invent discrimination' and the order-preservation check).",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 28, "severity": "Low", "verdict": "CONFIRMED", "escalate": false,
+      "title": "55 Go files are genuinely unformatted and no CI job checks formatting",
+      "file_line": "daemon/.golangci.yml:15-20; .github/workflows/ci.yml (no gofmt step)",
+      "evidence_class": "COMPUTED",
+      "verification": "Reproduced the exact separation: `gofmt -l .` in daemon/ -> 387 files (CRLF artifact, core.autocrlf=true). Copied each flagged file through `tr -d '\\r'` into a scratch tree and re-ran gofmt -> 55 files still fail. Both numbers match the finding EXACTLY. .golangci.yml enables only errcheck, staticcheck, ineffassign, unused — no formatter. `grep -n 'gofmt|gofumpt' .github/workflows/ci.yml daemon/.golangci.yml` -> no matches.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 29, "severity": "Low", "verdict": "CONFIRMED", "escalate": false,
+      "title": "Two real internal packages ship with no test files at all",
+      "file_line": "daemon/internal/freshness; daemon/internal/pairsstudy",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "Directory listing: internal/freshness contains only freshness.go; internal/pairsstudy contains only pairsstudy.go and result.json. No _test.go in either.",
+      "head_status": "unchanged 0499416..HEAD"
+    },
+    {
+      "idx": 30, "severity": "Informational", "verdict": "CONFIRMED", "escalate": false,
+      "title": "No fuzz targets and no benchmarks anywhere in the daemon",
+      "file_line": "daemon/ (repo-wide grep over *_test.go)",
+      "evidence_class": "DIRECT_EVIDENCE",
+      "verification": "`grep -rh '^func Fuzz' --include='*_test.go' daemon/ | wc -l` -> 0. `grep -rh '^func Benchmark' --include='*_test.go' daemon/ | wc -l` -> 0.",
+      "head_status": "unchanged 0499416..HEAD"
+    }
+  ],
+  "escalations": [
+    {"idx": 18, "class": "label leakage", "one_line": "859 score_outcomes at 1d carry a forward return stamped before the forward window closed; ResolveOutcome has no elapsed-horizon guard so the class can recur. prediction_outcomes is clean, which is what keeps it off the published accuracy path."},
+    {"idx": 12, "class": "silent data loss", "one_line": "archivePruneDerived's cut==0 branch prunes ts<=maxTs while archiving only the first archiveBatch rows — permanent loss of un-archived rows if any single timestamp ever exceeds 50,000 rows. Headroom today is 16x (3,144)."},
+    {"idx": 10, "class": "risk-control bypass", "one_line": "riskgate.Admit fails CLOSED only on equity; an unmeasurable drawdown, daily P&L, gross exposure or correlation leaves that breaker unarmed and ALLOWS the trade. GrossKnown is cleared by a single unmarked position."},
+    {"idx": 9, "class": "risk-control reachability", "one_line": "The kill switch has no HTTP/CLI trigger or readback, resolves ops/HALT against the process cwd, and the launchd plist anchors that cwd at signaldeck/daemon — an operator following the macOS runbook would touch a file the daemon never reads, with no error."},
+    {"idx": 14, "class": "provenance integrity", "one_line": "4,583 graded predictions (1.19%) are absent from the tamper-evident hash chain and 335 chain identities are duplicated; the append is best-effort by design, so the gap is architectural and not exactly reconstructable."},
+    {"idx": 13, "class": "data integrity / survivorship", "one_line": "1,868 of 2,950 symbols are simultaneously active=1 and delisted, 3,898 (day,symbol) pairs carry 1d bars dated after their symbol's delisting, and one such artifact ticker aborts the whole universe-poller batch."},
+    {"idx": 8, "class": "published-metric contamination", "one_line": "2 of the 16 closed round trips in the published flagship-1d win rate and expectancy are ~7e-15-dollar dust fills counted at full weight, and 16 paper_equity marks carry negative cash against a stated never-negative invariant."}
+  ],
+  "not_proven": [
+    "No claim here rests on a green test alone. Coverage (idx 26) is the one place a test run IS the evidence, and its CI-platform outcome is explicitly left UNVERIFIED.",
+    "The Cf-Connecting-Ip bypass (idx 5) was NOT reproduced — no tunnel to :8322 was started.",
+    "The kill switch (idx 9) was NOT tripped.",
+    "The 13:10 PT outage (idx 3) was NOT re-observed live; it is attributed from the scripts plus today's backup artifact.",
+    "The horizon-drift MAGNITUDE (idx 24) was not measured, only the mechanism.",
+    "Whether the regime_outcome_error burst (idx 23) was fixed or silenced was not determined.",
+    "Heavy scans ran against the 13:10 PT backup, not the live file, so counts drift by hours against the live DB. Every count reconciles with the original finding to within that window."
+  ]
+}

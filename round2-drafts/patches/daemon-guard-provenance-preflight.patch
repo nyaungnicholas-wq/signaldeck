@@ -1,0 +1,70 @@
+# SWARM 4a / PART A -- provenance preflight, wired where it does not cost
+# graceful stop.
+#
+# TARGET   : ops/daemon-guard.ps1   (SignalDeck repo root)
+# DEPENDS  : ops/run-daemon-with-provenance.ps1 must be copied from
+#            round2-drafts/devops/ first. The patch is safe to apply before
+#            that -- the insert is guarded by Test-Path, so until the wrapper
+#            exists the guard behaves exactly as it does today.
+#
+# WHY HERE AND NOT ON THE TASK
+#   Export-ScheduledTask -TaskName "SignalDeck Daemon" shows
+#     <Command>C:\...\signaldeck\bin\signaldeckd.exe</Command>
+#   i.e. the Windows start path execs the binary directly and never runs the
+#   build_from_head provenance gate the plist routes launchd through. But the
+#   fix is NOT to point that task at a wrapper: daemon-guard.ps1:79-91 records
+#   that `schtasks /End` does not cascade to children, so a PowerShell wrapper
+#   in the task's action turns every `signaldeck-ctl.sh stop` back into a
+#   kill -9, skipping the worker drain and the WAL checkpoint. daemon-guard.ps1
+#   is the only thing that starts the daemon on this box and it already runs
+#   every 5 minutes, so the check goes there and the daemon stays a direct
+#   child of Task Scheduler.
+#
+# BEHAVIOUR  Default is warn-and-start: a stale binary is loud but the
+#            collector keeps collecting. It refuses only when an operator sets
+#            SIGNALDECK_ON_STALE_BINARY=refuse. The reasoning is argued in the
+#            wrapper's header.
+#
+# APPLY    : from the repo root
+#              git apply --check round2-drafts/patches/daemon-guard-provenance-preflight.patch
+#              git apply         round2-drafts/patches/daemon-guard-provenance-preflight.patch
+#            No task is registered, restarted or modified by this.
+#
+# NOT EXERCISED IN THE LIVE PATH: the inserted block sits after the
+# "signaldeckd already running" early exit, and the daemon was up throughout
+# the drafting session, so the guard could not be run end to end without
+# stopping it. What was verified: the patched file parses clean under both
+# Windows PowerShell 5.1 and PowerShell 7, and the wrapper's exit codes (0
+# warn / 3 refuse) are covered by
+# round2-drafts/devops/test-run-daemon-with-provenance.ps1 (11/11 pass).
+diff --git a/ops/daemon-guard.ps1 b/ops/daemon-guard.ps1
+index 47e4a91..2a36abf 100644
+--- a/ops/daemon-guard.ps1
++++ b/ops/daemon-guard.ps1
+@@ -89,6 +89,26 @@ if (Get-Process -Name signaldeckd -ErrorAction SilentlyContinue) {
+ #
+ # Keeping "SignalDeck Daemon" pointed straight at bin/signaldeckd.exe preserves
+ # graceful stop; this task only decides WHEN to (re)start it.
++
++# Provenance preflight. The Windows Daemon task execs bin\signaldeckd.exe
++# directly, so unlike the launchd path (ops/com.signaldeck.daemon.plist ->
++# signaldeck-ctl.sh launch -> build_from_head) a restart never rebuilds, and a
++# binary can outlive the commit it was built from indefinitely. The daemon's own
++# gate refuses an UNATTRIBUTABLE build but says nothing about a stale one, which
++# is how bin\signaldeckd.exe came to sit 22 commits behind HEAD on 2026-08-06
++# across two restarts that changed nothing.
++#
++# The check belongs here and not in the Daemon task's action, for the reason
++# spelled out just above: this script must keep starting the daemon THROUGH its
++# own task, or schtasks /End stops reaching it. Default is warn-and-start; it
++# only refuses when SIGNALDECK_ON_STALE_BINARY=refuse says an operator has
++# chosen an outage over stale data.
++$prov = Join-Path $root 'ops\run-daemon-with-provenance.ps1'
++if (Test-Path $prov) {
++    & $prov -CheckOnly
++    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }   # it has already said why
++}
++
+ $sd = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+ & $sd /Run /TN 'SignalDeck Daemon' | Out-Null
+ if ($LASTEXITCODE -ne 0) {

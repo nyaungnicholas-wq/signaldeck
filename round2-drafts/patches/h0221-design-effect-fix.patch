@@ -1,0 +1,260 @@
+# PATCH: h0221-design-effect-fix.patch
+# SWARM 3, PART B — SignalDeck Remediation Round 2 (branch hmm-regime-and-pbo, HEAD 0b1f73b)
+#
+# TARGET FILES
+#   research/eighty/h0221.py                              (modified: compute_design_effect)
+#   drafts/research_tests/test_h0221_design_effect.py      (new file: the check that guards it)
+#
+# APPLY (from the repo root, C:/Users/Nicholas_N/Desktop/claude code/signaldeck):
+#     git apply --check round2-drafts/patches/h0221-design-effect-fix.patch   # verified clean
+#     git apply         round2-drafts/patches/h0221-design-effect-fix.patch
+# REVERT:
+#     git apply -R      round2-drafts/patches/h0221-design-effect-fix.patch
+# TEST (from the repo root, after applying):
+#     .venv/Scripts/python.exe -m pytest drafts/research_tests/test_h0221_design_effect.py -q
+#     .venv/Scripts/python.exe -m pytest drafts/research_tests/test_research_math.py -q -k design_effect
+#
+# WHAT IT FIXES
+#   compute_design_effect used an ANOVA/ICC estimator whose within-cluster sum of
+#   squares (m * p_cluster * (1 - p_cluster)) is exactly 0 when every month is
+#   unanimous. The `if wss == 0: return 1.0` guard on the next line then reported
+#   NO clustering for the most pseudoreplicated sample possible, so deff PEAKED at
+#   90% within-month agreement and COLLAPSED at 100%:
+#
+#       agreement   OLD deff   NEW deff
+#             70%      3.441      3.491
+#             90%     13.196     13.964
+#            100%      1.000     21.818     <- the collapse
+#        all-hit      1.000     20.000     <- degenerate p == 1
+#
+#   The replacement is a MIRROR of tools/accuracy_registry.py:design_effect (and of
+#   daemon/internal/clusterstat.DesignEffect, which SWARM 3 PART A verified is the
+#   same estimator) over months instead of days — not a third estimator. Both of the
+#   grader's guards come with it: degenerate p returns the worst case n/k, and the
+#   result is floored at 1.0.
+#
+# CHANGES NO PUBLISHED NUMBER.
+#   Nothing imports h0221 (grep over the tree: only drafts/research_tests reference it).
+#   research/eighty/h0221.py is a standalone script whose compute_design_effect feeds
+#   only its own EFFECTIVE_N stdout line. The published intervals come from
+#   tools/accuracy_registry.py and daemon/internal/clusterstat, neither of which is
+#   touched here and neither of which ever had this defect.
+#
+# SAFETY: read-only with respect to the live DB, the daemon and git state. The file
+#   is NOT in the preserved research/eighty/h026[5-9].py range and is not on the
+#   locked-file list.
+diff --git b/drafts/research_tests/test_h0221_design_effect.py b/drafts/research_tests/test_h0221_design_effect.py
+new file mode 100644
+index 0000000..3a526c1
+--- /dev/null
++++ b/drafts/research_tests/test_h0221_design_effect.py
+@@ -0,0 +1,107 @@
++# TARGETS: new file -> drafts/research_tests/test_h0221_design_effect.py
++# APPLY:   git apply round2-drafts/patches/h0221-design-effect-fix.patch
++#          (from the repo root; this file ships with the h0221.py fix it guards)
++# RUN:     .venv/Scripts/python.exe -m pytest drafts/research_tests/test_h0221_design_effect.py -q
++#
++# WHAT THIS GUARDS
++#   research/eighty/h0221.py:compute_design_effect used an ANOVA/ICC form whose
++#   within-cluster sum of squares is exactly 0 when every month is unanimous, so
++#   `if wss == 0: return 1.0` handed the MOST pseudoreplicated sample possible
++#   the MINIMAL correction. The fix mirrors tools/accuracy_registry.design_effect
++#   instead of inventing a third estimator, and test_matches_the_grader below is
++#   what keeps "mirror" true rather than aspirational.
++#
++#   These tests import nothing from research/ directly -- the `hyp` fixture in
++#   conftest.py execs only the file's defs, so the function under test is
++#   byte-for-byte the one in research/eighty/h0221.py.
++
++import datetime as dt
++
++import pytest
++
++# conftest.py puts tools/ on sys.path.
++from accuracy_registry import design_effect as grader_design_effect
++
++
++def _calls(months, per_month, hits_per_month):
++    """One call per (month, day). hits_per_month(m) -> how many of that month's
++    calls are hits, so pooled p and cluster sizes are both exactly controlled."""
++    out = []
++    for m in range(1, months + 1):
++        h = hits_per_month(m)
++        for d in range(1, per_month + 1):
++            out.append({"date": dt.date(2024, m, d), "hit": 1 if d <= h else 0})
++    return out
++
++
++def _agreement_ladder(agree, months=12, per_month=20):
++    """Pooled p pinned at 0.5, within-month agreement = `agree`. Half the months
++    lean up, half lean down, so only the INTRA-cluster correlation varies."""
++    hi = round(per_month * agree)
++    return _calls(months, per_month, lambda m: hi if m % 2 else per_month - hi)
++
++
++def test_monotone_non_decreasing_in_intra_cluster_correlation(hyp):
++    """The whole job of a design effect: rise as calls inside a cluster stop
++    being independent. The old estimator peaked at 90% agreement and COLLAPSED
++    to 1.0 at 100% -- maximal clustering, minimal correction."""
++    f = hyp("h0221").compute_design_effect
++    ladder = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
++    deffs = [f(_agreement_ladder(a)) for a in ladder]
++    for (a0, d0), (a1, d1) in zip(zip(ladder, deffs), zip(ladder[1:], deffs[1:])):
++        assert d1 >= d0 - 1e-9, (
++            f"deff fell from {d0:.4f} at {a0:.0%} agreement to {d1:.4f} at "
++            f"{a1:.0%}: more clustering must never buy a smaller correction. "
++            f"ladder={list(zip(ladder, deffs))}")
++    # and it must actually MOVE -- a constant 1.0 would pass monotonicity.
++    assert deffs[-1] > 10 * deffs[0], deffs
++
++
++def test_unanimous_clusters_score_about_the_mean_cluster_size(hyp):
++    """20 calls a month, every month unanimous => each month carries the
++    information of ~1 observation, so deff ~ 20, not 1."""
++    f = hyp("h0221").compute_design_effect
++    deff = f(_agreement_ladder(1.0, months=12, per_month=20))
++    assert deff == pytest.approx(20 * 12 / 11, rel=1e-9), deff
++
++
++def test_degenerate_all_same_label_is_the_worst_case_not_the_best(hyp):
++    """p == 0 or p == 1 leaves no between-cluster variance to measure, but it is
++    the most perfectly clustered sample there is. The honest reading is one
++    independent observation per cluster (n / k), not 1.0."""
++    f = hyp("h0221").compute_design_effect
++    for label in (0, 1):
++        calls = _calls(12, 20, lambda m: 20 if label else 0)
++        assert f(calls) == pytest.approx(240 / 12), label
++    # single-call months are the one case where n / k really is 1.0
++    assert f([{"date": dt.date(2024, m, 1), "hit": 1} for m in range(1, 13)]) == 1.0
++
++
++def test_never_below_one(hyp, rng):
++    """deff < 1 NARROWS the interval -- the failure mode that manufactures
++    significance out of correlated data."""
++    f = hyp("h0221").compute_design_effect
++    for _ in range(300):
++        calls = [{"date": dt.date(2024, int(rng.integers(1, 13)), int(rng.integers(1, 29))),
++                  "hit": int(rng.integers(0, 2))}
++                 for _ in range(int(rng.integers(0, 120)))]
++        assert f(calls) >= 1.0
++
++
++def test_matches_the_grader(hyp, rng):
++    """The mirror claim, made executable: on the SAME (n, hits) tallies this
++    function and tools/accuracy_registry.design_effect must return the same
++    number. A registry verdict and a research verdict may not disagree about
++    the same data."""
++    f = hyp("h0221").compute_design_effect
++    for _ in range(300):
++        months = int(rng.integers(2, 13))
++        sizes = [int(rng.integers(1, 29)) for _ in range(months)]  # <= 28: real calendar days
++        hits = [int(rng.integers(0, s + 1)) for s in sizes]
++        calls = []
++        for i, (s, h) in enumerate(zip(sizes, hits), start=1):
++            calls += [{"date": dt.date(2024, i, d + 1), "hit": 1 if d < h else 0}
++                      for d in range(s)]
++        expected = grader_design_effect(list(zip(sizes, hits)))
++        assert expected is not None
++        assert f(calls) == pytest.approx(expected, rel=1e-12, abs=1e-12)
+diff --git a/research/eighty/h0221.py b/research/eighty/h0221.py
+index a8780ef..76b3342 100644
+--- a/research/eighty/h0221.py
++++ b/research/eighty/h0221.py
+@@ -129,51 +129,56 @@ def percentile(sorted_vals, p):
+     return sorted_vals[f] + (sorted_vals[c] - sorted_vals[f]) * (k - f)
+ 
+ def compute_design_effect(calls):
+-    if len(calls) < 2:
+-        return 1.0
+-    
+-    monthly = defaultdict(list)
++    """Measured clustering penalty over per-MONTH (n, hits) tallies.
++
++    This is the survey-linearization ("ultimate cluster") variance of the ratio
++    estimator p = sum(hits) / sum(n), divided by the binomial variance an
++    independence assumption would have used. It is a deliberate MIRROR of
++    tools/accuracy_registry.py:design_effect and daemon/internal/clusterstat
++    DesignEffect (byte-for-byte the same arithmetic and the same two guards,
++    over months instead of days) — a third estimator here would let this file
++    disagree with the grader about the same data.
++
++    The ANOVA/ICC form this replaced returned 1.0 at MAXIMAL clustering: its
++    within-cluster sum of squares `m * p_cluster * (1 - p_cluster)` is exactly
++    0 when every month is unanimous, and the `if wss == 0: return 1.0` guard
++    then reported NO clustering for the single most pseudoreplicated sample
++    possible. Both guards below exist to stop that:
++
++      * a degenerate pooled p (every call right, or every call wrong) carries
++        no between-cluster variance to measure but is perfectly clustered, so
++        the honest reading is the WORST case — one independent observation per
++        month, n / k — not the flattering 1.0 the arithmetic would give;
++      * the result is floored at 1.0, because a value under 1 is sampling noise
++        in a small number of clusters and using it would make the interval
++        NARROWER than the independence assumption it was brought in to correct.
++
++    Returns 1.0 (not None) when clustering cannot be measured, because the
++    caller divides by it: effective_n = issued / deff.
++    """
++    monthly = defaultdict(lambda: [0, 0])
+     for c in calls:
+-        key = (c['date'].year, c['date'].month)
+-        monthly[key].append(c['hit'])
+-    
+-    cluster_sizes = [len(v) for v in monthly.values()]
+-    k = len(cluster_sizes)
+-    n = sum(cluster_sizes)
+-    
+-    if k <= 1:
+-        return 1.0
+-    
+-    mean_size = n / k
+-    p_overall = sum(1 for c in calls if c['hit']) / n
+-    
+-    if p_overall == 0 or p_overall == 1:
++        t = monthly[(c['date'].year, c['date'].month)]
++        t[0] += 1
++        t[1] += 1 if c['hit'] else 0
++    months = list(monthly.values())
++
++    k = len(months)
++    if k < 2:
+         return 1.0
+-    
+-    # Between and within sum of squares for binary data
+-    bss = 0.0
+-    wss = 0.0
+-    for hits in monthly.values():
+-        m = len(hits)
+-        if m == 0:
+-            continue
+-        p_cluster = sum(hits) / m
+-        bss += m * (p_cluster - p_overall) ** 2
+-        wss += m * p_cluster * (1 - p_cluster)
+-    
+-    if wss == 0:
++    n = sum(mn for mn, _ in months)
++    hits = sum(mh for _, mh in months)
++    if n <= 0:
+         return 1.0
+-    
+-    msb = bss / (k - 1)
+-    msw = wss / (n - k)
+-    
+-    if msb <= msw:
++    p = hits / n
++    if p <= 0 or p >= 1:
++        return n / k
++    s = sum((mh - mn * p) ** 2 for mn, mh in months)
++    cluster_var = k / ((k - 1) * n * n) * s
++    binom_var = p * (1 - p) / n
++    if binom_var <= 0 or cluster_var <= 0:
+         return 1.0
+-    
+-    icc = (msb - msw) / (msb + (mean_size - 1) * msw)
+-    icc = max(0.0, min(1.0, icc))
+-    deff = 1 + (mean_size - 1) * icc
+-    return max(1.0, deff)
++    return max(1.0, cluster_var / binom_var)
+ 
+ def main():
+     conn = sqlite3.connect('file:data/signaldeck.db?mode=ro', uri=True)

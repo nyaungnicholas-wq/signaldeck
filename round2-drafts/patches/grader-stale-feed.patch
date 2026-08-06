@@ -1,0 +1,398 @@
+SWARM 1b — STALE-FEED QUARANTINE for the accuracy registry
+==========================================================
+
+TARGET FILES  tools/accuracy_registry.py
+              tools/test_accuracy_registry.py
+BASE          branch hmm-regime-and-pbo, HEAD 0b1f73b, both files clean at HEAD
+
+APPLY         from the repository root:
+                  git apply --check round2-drafts/patches/grader-stale-feed.patch
+                  git apply         round2-drafts/patches/grader-stale-feed.patch
+REVERT            git apply -R      round2-drafts/patches/grader-stale-feed.patch
+
+CONFLICTS WITH round2-drafts/patches/grader-quarantine.patch (swarm 1a). Both
+edit the same three regions of accuracy_registry.py (the helper block before
+connect(), the fetch_directional_days SQL, the fetch_calibration_bins SQL) and
+the same JSON payload anchor, and 1a aliases the table as `po` while this one
+would introduce the same alias itself. Apply ONE of the two, or apply
+round2-drafts/patches/grader-quarantine-stale.patch, which carries both.
+
+WHAT IT DOES
+  Drops from every directional tally and every reliability bin any graded
+  observation minted on a trading day the daemon had already flagged that
+  SYMBOL's own feed stale — dq_events(kind='stale'), written per symbol per hour
+  by internal/maintain/maintain.go's DQAuditor. The call was computed from
+  inputs the daemon had itself declared unfit, so grading it measures the
+  outage, not the predictor.
+
+  Nothing is written and nothing is relabelled. Every row stays in
+  prediction_outcomes exactly as frozen; only the tally changes.
+
+WHY dq_events AND NOT srchealth
+  internal/srchealth writes dq_events(kind='source_stale') — 52 rows, ALL with
+  symbol_id NULL, because it grades SOURCES (tv_quotes, news, bars_1m_hot), not
+  symbols. It names no symbol and therefore cannot key a per-prediction
+  exclusion. kind='stale' is the only per-symbol staleness writer in the tree
+  (maintain.go:570).
+
+THE DELISTING FLOOD IS INERT — MEASURED, NOT ASSUMED
+  Live DB, post-epoch: 7,486 kind='stale' events, of which 6,346 sit on the
+  1,868 symbols carrying delisted_at. Those 1,868 symbols intersect the 336
+  symbols in the graded population in ZERO symbols, so the (symbol, trading-day)
+  join drops nothing on their account: 296 observations are excluded whether or
+  not delisted tickers are carved out (both counts measured). No carve-out is
+  added, deliberately — delisted_at is a property of the SYMBOL, not of a day,
+  so carving it out would also stop excluding the days after a mid-window feed
+  death, which are exactly the days that must go.
+
+MEASURED EFFECT (live DB read-only and the 20260806-131007 backup, identical)
+  graded observations   8,567 -> 8,271   (296 excluded, 3.5%, 44 symbols, 11 days)
+  directional-ensemble (1d)   44.01% (n=3,322) -> 43.79% (n=3,227)   -0.22 pp
+  directional-ensemble (1w)   41.06% (n=1,656) -> 40.67% (n=1,591)   -0.39 pp
+  1d high conviction          48.63% (n=621)   -> 48.27% (n=607)     -0.36 pp
+  prequential-majority (1d)   57.74%           -> 58.01%
+  NO verdict changes. The 1d ensemble stays FAILED; every other row stays
+  INSUFFICIENT DAYS.
+
+HONESTY SURFACE
+  measure_stale_feed_exclusion() is run on every DB grade and its result is
+  printed beside universe completeness and carried in the JSON payload as
+  stale_feed_exclusion. On a snapshot grade (no dq_events table) it publishes
+  applied=false with a reason: an absent filter must never read as a clean feed.
+
+PERFORMANCE
+  The stale keys are folded once in a CTE. trading_day() is a Python callback,
+  so the obvious correlated-subquery form calls it per (outcome row x dq row)
+  pair: measured 245.21s on the live corpus, against 0.12s for the CTE form and
+  0.10s unfiltered. All three forms return the identical 8,271-row population.
+
+TESTS  python3 -m unittest discover -s tools -p 'test_*.py'
+  119 pass (114 before + 5 added). Mutation-checked: disabling the clause while
+  leaving the helper in place fails 3 of the 5 new tests.
+
+PRECONDITION THIS PATCH DOES NOT SATISFY
+  prereg_records seq 50 pins graderSha256
+  b826f39775b972ab28115ca1ae2ab76be157213f880316871083d8f80dbd12e4, which is the
+  byte-for-byte digest of tools/accuracy_registry.py at HEAD. ANY edit to that
+  file — this one, 1a's, or both — re-hashes the grader off the pin, and
+  require_registered_grader() then refuses to grade. A new grading-protocol
+  chain record naming the new digest must be written before the registry can
+  publish again. That write is a daemon/chain operation and is deliberately NOT
+  part of this patch.
+
+diff --git a/tools/accuracy_registry.py b/tools/accuracy_registry.py
+index f14367b..d89cce7 100644
+--- a/tools/accuracy_registry.py
++++ b/tools/accuracy_registry.py
+@@ -1251,6 +1251,109 @@ def superseded_clause(con: sqlite3.Connection) -> str:
+     return " AND superseded_by IS NULL" if "superseded_by" in cols else ""
+ 
+ 
++# ── stale-feed quarantine ───────────────────────────────────────────────
++
++# dq_events(kind='stale') is the daemon's own recorded verdict that a SYMBOL's
++# feed had stopped. internal/maintain/maintain.go's DQAuditor writes one per
++# symbol per hour when the 1m tape is >20m old while the market is open
++# (streamed hot set), the daily tape is >4d old (the daily-only universe), or a
++# crypto pair is >45m stale. It is the only PER-SYMBOL staleness writer:
++# internal/srchealth's dq_events(kind='source_stale') is source-WIDE and carries
++# symbol_id NULL, so it names no symbol and cannot key a per-prediction
++# exclusion at all.
++#
++# A prediction minted on such a day was computed from inputs the daemon itself
++# had already declared unfit; grading it measures the outage, not the predictor.
++# The key is (symbol, trading-day), which is exactly the dedup fold — every row
++# inside one (symbol, horizon, trading-day) partition therefore shares the
++# verdict, so filtering inside the dedup cannot change which row wins
++# ROW_NUMBER(), and the count of dropped rows equals the count of dropped keys.
++# Mint time within the day is deliberately not compared: a feed found dead at
++# noon was already dead when the morning call was computed.
++#
++# NO delisted-symbol carve-out, deliberately. The auditor floods stale events at
++# permanently-delisted tickers — measured 2026-08-06 against the live DB, 6,346
++# of 7,486 post-epoch stale events sit on symbols with delisted_at set — but
++# those symbols contribute ZERO rows to the graded population (measured: the
++# 1,868 delisted symbols intersect the 336 graded symbols in 0 symbols), so the
++# day-keyed join drops nothing on their account. Carving them out would be
++# strictly WORSE than leaving them in: delisted_at is a property of the SYMBOL,
++# not of a day, so the carve-out would also stop excluding the days after a
++# mid-window feed death — the days that most need excluding.
++#
++# The stale keys are folded ONCE in a CTE rather than correlated straight into
++# dq_events. trading_day() is a Python callback, so the correlated form calls it
++# per (outcome row x dq row) pair: measured on the live corpus that query takes
++# 245s, against 0.12s for the CTE form below and 0.10s unfiltered. All three
++# forms return the identical population.
++STALE_FEED_CTE = """stale_feed AS (
++      SELECT DISTINCT symbol_id, trading_day(ts) AS d FROM dq_events
++      WHERE kind = 'stale' AND symbol_id IS NOT NULL
++    ),
++    """
++STALE_FEED_PREDICATE = """AND NOT EXISTS (SELECT 1 FROM stale_feed f
++                        WHERE f.symbol_id = po.symbol_id
++                          AND f.d = trading_day(po.ts))"""
++
++
++def stale_feed_sql(con: sqlite3.Connection) -> tuple[str, str]:
++    """(CTE, predicate) implementing the quarantine, or ("", "") without it.
++
++    Guarded on the dq_events table existing, for the same reason
++    superseded_clause is guarded on a column: this grader is handed connections
++    it did not open — in-memory fixtures, and any source cut without the
++    daemon's data-quality table. An absent table makes the exclusion
++    UNMEASURABLE, which measure_stale_feed_exclusion() reports rather than
++    passing off as a clean feed.
++    """
++    got = con.execute("SELECT 1 FROM sqlite_master "
++                      "WHERE type='table' AND name='dq_events'").fetchone()
++    return (STALE_FEED_CTE, STALE_FEED_PREDICATE) if got else ("", "")
++
++
++def measure_stale_feed_exclusion(con: sqlite3.Connection | None) -> dict:
++    """How many graded observations the stale-feed quarantine drops. MEASURED.
++
++    Counted as distinct (symbol, horizon, trading-day) keys, which IS the graded
++    row count: the dedup collapses each key to exactly one row and the exclusion
++    is constant across a key.
++
++    Published beside the grade because a filter whose size is not reported is
++    indistinguishable from cherry-picking — the graded population may only
++    shrink in public.
++    """
++    if con is None:
++        return {"applied": False, "excluded_rows": None,
++                "reason": ("unmeasured — graded from a snapshot, which carries "
++                           "per-day tallies but no data-quality table")}
++    register_fold(con)
++    if not stale_feed_sql(con)[0]:
++        return {"applied": False, "excluded_rows": None,
++                "reason": "unmeasured — this source carries no dq_events table"}
++    q = f"""
++    WITH {STALE_FEED_CTE}excluded AS (
++      SELECT DISTINCT po.symbol_id, po.horizon, trading_day(po.ts) AS d
++      FROM prediction_outcomes po
++      WHERE po.resolved_at IS NOT NULL AND po.up IS NOT NULL AND po.prob IS NOT NULL
++        AND po.ts >= ?
++        AND EXISTS (SELECT 1 FROM stale_feed f
++                    WHERE f.symbol_id = po.symbol_id
++                      AND f.d = trading_day(po.ts))
++    )
++    SELECT COUNT(*), COUNT(DISTINCT symbol_id), COUNT(DISTINCT d) FROM excluded
++    """
++    rows, syms, days = con.execute(q, (SURVIVORSHIP_EPOCH_TS,)).fetchone()
++    return {"applied": True,
++            "excluded_rows": rows or 0,
++            "excluded_symbols": syms or 0,
++            "excluded_days": days or 0,
++            "source": "dq_events(kind='stale') — the per-symbol feed auditor",
++            "method": ("a graded (symbol, horizon, trading-day) observation is "
++                       "dropped when that symbol's own feed was flagged stale on "
++                       "that trading day"),
++            "reason": None}
++
++
+ def connect(path: str) -> sqlite3.Connection:
+     if not os.path.exists(path):
+         sys.exit(f"database not found: {path}")
+@@ -1447,14 +1550,20 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
+     # Per-DAY tallies, not per-horizon totals. The dedup below still collapses
+     # intraday repeats to one row per (symbol, horizon, trading-day); the day
+     # grouping is what lets the interval resample days instead of rows.
+-    q = """
+-    WITH dedup AS (
++    #
++    # The stale-feed quarantine drops observations minted on a trading day the
++    # daemon had already flagged that symbol's own feed stale. Its size is
++    # measured and printed by measure_stale_feed_exclusion() — the graded
++    # population may only shrink in public.
++    q = f"""
++    WITH {stale_feed_sql(con)[0]}dedup AS (
+       SELECT symbol_id, horizon, prob, up, ts,
+              ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
+                                 ORDER BY ts DESC) rn
+-      FROM prediction_outcomes
++      FROM prediction_outcomes po
+       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
+         AND ts >= ?  -- survivorship boundary: pre-epoch rows are survivor-seeded
++        {stale_feed_sql(con)[1]}
+     )
+     SELECT horizon, trading_day(ts) AS day,
+            COUNT(*),
+@@ -1490,13 +1599,14 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
+     """
+     register_fold(con)
+     q = f"""
+-    WITH dedup AS (
++    WITH {stale_feed_sql(con)[0]}dedup AS (
+       SELECT symbol_id, horizon, prob, up, ts,
+              ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
+                                 ORDER BY ts DESC) rn
+-      FROM prediction_outcomes
++      FROM prediction_outcomes po
+       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
+         AND ts >= ?  -- survivorship boundary, same as the graded rows
++        {stale_feed_sql(con)[1]}  -- stale-feed quarantine, same as the graded rows
+     )
+     SELECT horizon,
+            CAST(MIN(prob * {CALIBRATION_BINS}, {CALIBRATION_BINS} - 1) AS INTEGER) AS bin,
+@@ -2126,6 +2236,9 @@ def main() -> int:
+             "direction": measure_universe_completeness(None, "prediction_outcomes"),
+             "structure": measure_universe_completeness(None, "regime_outcomes"),
+         }
++        # A snapshot carries no dq_events either, so the stale-feed quarantine is
++        # reported UNMEASURED here rather than silently skipped.
++        stale_feed = measure_stale_feed_exclusion(None)
+         source = f"snapshot {args.snapshot} (manifest hashes verified)"
+     else:
+         con = connect(args.db)
+@@ -2157,6 +2270,9 @@ def main() -> int:
+             "direction": measure_universe_completeness(con, "prediction_outcomes"),
+             "structure": measure_universe_completeness(con, "regime_outcomes"),
+         }
++        # How much of the population the stale-feed quarantine removed, measured
++        # before the connection closes.
++        stale_feed = measure_stale_feed_exclusion(con)
+         source = f"database {args.db}"
+         con.close()
+ 
+@@ -2327,6 +2443,18 @@ def main() -> int:
+             print(f"Universe completeness ({fam}): NOT CLEAN — {m['reason']}. "
+                   "Rows carry survivorship_clean=false.")
+ 
++    if stale_feed.get("applied"):
++        print(f"Stale-feed quarantine: {stale_feed['excluded_rows']:,} graded "
++              f"observation(s) over {stale_feed['excluded_symbols']:,} symbol(s) "
++              f"and {stale_feed['excluded_days']:,} trading day(s) EXCLUDED - "
++              "minted on a day this symbol's own feed was flagged stale "
++              "(dq_events kind='stale'), so the inputs behind the call had "
++              "already been declared unfit. Grading them would measure the "
++              "outage, not the predictor.")
++    else:
++        print(f"Stale-feed quarantine: NOT APPLIED - {stale_feed['reason']}. "
++              "Absence of the filter is not evidence of a live feed.")
++
+     # Post-epoch attrition is MEASURED, not declared unmeasurable: the bound is
+     # computed against an external delistings record (SEC EDGAR Form 25) by
+     # tools/backfill_delistings.py --survivorship-bound, which owns this field
+@@ -2379,6 +2507,10 @@ def main() -> int:
+                    # symbols whose listing status is resolvable. Every row's
+                    # survivorship_clean flag is read off this, never asserted.
+                    "survivorship_completeness": survivorship_completeness,
++                   # Measured size of the stale-feed quarantine: how many graded
++                   # observations were dropped because the daemon had flagged
++                   # that symbol's feed stale on the day they were minted.
++                   "stale_feed_exclusion": stale_feed,
+                    "null_policy": ("prequential-majority only: each day's constant guess "
+                                    "is the majority class over days strictly before it. "
+                                    "The hindsight null was retired after the dual-null "
+diff --git a/tools/test_accuracy_registry.py b/tools/test_accuracy_registry.py
+index 2c7cff6..2c9191d 100644
+--- a/tools/test_accuracy_registry.py
++++ b/tools/test_accuracy_registry.py
+@@ -1893,3 +1893,106 @@ class TradingDayFoldTest(unittest.TestCase):
+         base = 20000 * 86400
+         for pre, close in ((8 * 3600, 24 * 3600), (9 * 3600, 25 * 3600)):
+             self.assertEqual(trading_day(base + pre), trading_day(base + close))
++
++
++# Imported here rather than in the module import list at the top: this block is
++# appended whole, and keeping it self-contained keeps the diff to one hunk.
++from accuracy_registry import (  # noqa: E402
++    fetch_directional_days,
++    measure_stale_feed_exclusion,
++)
++
++
++class TestStaleFeedQuarantine(unittest.TestCase):
++    """A prediction minted on a day the daemon had that symbol's own feed
++    flagged stale is evidence about the outage, not about the predictor.
++
++    dq_events(kind='stale') is the per-symbol writer (internal/maintain's
++    DQAuditor). kind='source_stale' is srchealth's SOURCE-wide event and carries
++    symbol_id NULL, so it names no symbol and must exclude nothing.
++    """
++
++    @staticmethod
++    def _db(with_dq=True):
++        con = sqlite3.connect(":memory:")
++        con.execute("""CREATE TABLE prediction_outcomes (
++            symbol_id INTEGER, horizon TEXT, prob REAL, up INTEGER,
++            ts INTEGER, resolved_at INTEGER)""")
++        con.execute("""CREATE TABLE regime_outcomes (
++            symbol_id INTEGER, kind TEXT, horizon_days INTEGER, day INTEGER,
++            ts INTEGER, resolved_at INTEGER, correct INTEGER,
++            historical_accuracy REAL)""")
++        con.execute("CREATE TABLE symbols (id INTEGER PRIMARY KEY, symbol TEXT,"
++                    " active INTEGER, delisted_at INTEGER)")
++        if with_dq:
++            con.execute("CREATE TABLE dq_events (id INTEGER PRIMARY KEY,"
++                        " symbol_id INTEGER, ts INTEGER, kind TEXT,"
++                        " detail TEXT NOT NULL DEFAULT '')")
++        return con
++
++    @staticmethod
++    def _pred(con, sid, ts, up=1):
++        con.execute("INSERT INTO symbols VALUES (?,?,1,NULL)", (sid, f"S{sid}"))
++        con.execute("INSERT INTO prediction_outcomes VALUES (?,'1d',0.8,?,?,?)",
++                    (sid, up, ts, ts + 86400))
++
++    @staticmethod
++    def _dq(con, sid, ts, kind="stale", detail="last 1m bar 40m old"):
++        con.execute("INSERT INTO dq_events (symbol_id, ts, kind, detail)"
++                    " VALUES (?,?,?,?)", (sid, ts, kind, detail))
++
++    @staticmethod
++    def _n(con):
++        return [d[1] for d in fetch_directional_days(con).get("1d", [])]
++
++    def test_a_day_flagged_stale_leaves_the_graded_population(self):
++        con = self._db()
++        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
++        self._pred(con, 1, ts)
++        self._pred(con, 2, ts)
++        # Symbol 2's feed is flagged stale LATER the same trading day. The key is
++        # (symbol, trading-day), so the observation goes whatever the mint time:
++        # a feed found dead at noon was already dead when the call was computed.
++        self._dq(con, 2, ts + 3600)
++        self.assertEqual(self._n(con), [1])
++        m = measure_stale_feed_exclusion(con)
++        self.assertTrue(m["applied"])
++        self.assertEqual(m["excluded_rows"], 1)
++        self.assertEqual(m["excluded_symbols"], 1)
++
++    def test_a_stale_flag_on_another_day_keeps_the_observation(self):
++        con = self._db()
++        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
++        self._pred(con, 1, ts)
++        self._dq(con, 1, ts + 86400)
++        self.assertEqual(self._n(con), [1])
++        self.assertEqual(measure_stale_feed_exclusion(con)["excluded_rows"], 0)
++
++    def test_a_symbolless_stale_event_cannot_empty_the_population(self):
++        # A NULL symbol_id names no symbol. Under a NOT IN formulation one such
++        # row silently deletes the ENTIRE graded population; the guard is why
++        # the exclusion is written as NOT EXISTS over a symbol_id-filtered set.
++        con = self._db()
++        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
++        self._pred(con, 1, ts)
++        self._dq(con, None, ts)
++        self._dq(con, None, ts, kind="source_stale", detail="source=news")
++        self.assertEqual(self._n(con), [1])
++        self.assertEqual(measure_stale_feed_exclusion(con)["excluded_rows"], 0)
++
++    def test_a_source_without_dq_events_reports_unmeasured_not_clean(self):
++        # Snapshots and fixtures carry no data-quality table. The filter cannot
++        # run there, and an absent filter must never read as a clean feed.
++        con = self._db(with_dq=False)
++        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
++        self._pred(con, 1, ts)
++        self.assertEqual(self._n(con), [1])
++        m = measure_stale_feed_exclusion(con)
++        self.assertFalse(m["applied"])
++        self.assertIsNone(m["excluded_rows"])
++        self.assertIn("unmeasured", m["reason"])
++
++    def test_a_snapshot_grade_reports_the_filter_as_unmeasured(self):
++        m = measure_stale_feed_exclusion(None)
++        self.assertFalse(m["applied"])
++        self.assertIn("snapshot", m["reason"])

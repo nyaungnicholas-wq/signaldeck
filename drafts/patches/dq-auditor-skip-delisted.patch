@@ -1,0 +1,114 @@
+# SWARM 1b — dq-auditor alarms forever on delisted tickers
+#
+# TARGETS (apply from the repo root, C:/Users/Nicholas_N/Desktop/claude code/signaldeck):
+#   daemon/internal/marketdata/types.go   (+8 lines: md.Symbol gains Delisted)
+#   daemon/internal/store/store.go        (ListSymbols selects delisted_at)
+#   daemon/internal/maintain/maintain.go  (DQAuditor skips delisted symbols)
+#
+# HOW TO APPLY:
+#   git apply -p1 drafts/patches/dq-auditor-skip-delisted.patch
+#   (verified 2026-08-06: `git apply --check -p1` returns clean against HEAD 0b1f73b)
+#
+# WHY: DQAuditor grades every ListSymbols(active=true) row on feed freshness.
+# The survivorship wave keeps 1,868 DELISTED tickers at active=1 on purpose.
+# A historical daily-bar backfill landed between 13:10 and 20:18 UTC on
+# 2026-08-06 (backup DB: 0 daily bars for those symbols; live DB: 1,007,382),
+# flipping the auditor's `latestD > 0` precondition true for all of them. Their
+# last bar is years old by definition, so `ageD > 4*86400` is now permanently
+# true and the auditor emits ~1,897 stale events every hour, forever.
+#
+# TEST: drafts/daemon/internal/maintain/dqdelisted_test.go
+#   copy to daemon/internal/maintain/dqdelisted_test.go, then
+#   cd daemon && go test ./internal/maintain/ -run 'TestDQAuditor'
+#   It FAILS on HEAD and PASSES with this patch.
+#
+# NOT VERIFIED BY ME: this patch was never compiled or run (the engagement
+# forbids building into daemon/). `git apply --check` passing is the only
+# mechanical evidence. Compile + `go test ./internal/...` before accepting.
+--- a/daemon/internal/marketdata/types.go
++++ b/daemon/internal/marketdata/types.go
+@@ -56,6 +56,14 @@
+ 	// as opposed to the BROAD DAILY-ONLY universe (REST daily bars only).
+ 	// Broad-universe wave; legacy/daily-only symbols are false.
+ 	Stream bool `json:"stream"`
++	// Delisted is true when symbols.delisted_at records a MARKET fact: this
++	// ticker stopped trading. It is INDEPENDENT of Active — the survivorship
++	// wave deliberately keeps delisted rows active=1 so point-in-time universe
++	// reconstruction can still see them, which means every caller of
++	// ListSymbols(active=true) receives dead tickers unless it checks this.
++	// Without it a delisted symbol's frozen feed is indistinguishable from a
++	// broken one, and freshness checks alarm on it forever.
++	Delisted bool `json:"delisted"`
+ }
+ 
+ // Bar is one OHLCV bar. Ts is the bar OPEN time, unix seconds UTC.
+--- a/daemon/internal/store/store.go
++++ b/daemon/internal/store/store.go
+@@ -558,7 +558,8 @@
+ 
+ // ListSymbols returns all symbols (activeOnly filters to live subscriptions).
+ func (s *Store) ListSymbols(ctx context.Context, activeOnly bool) ([]md.Symbol, error) {
+-	q := `SELECT id, symbol, market, name, active, added_at, stream FROM symbols`
++	q := `SELECT id, symbol, market, name, active, added_at, stream,
++	             COALESCE(delisted_at,0) FROM symbols`
+ 	if activeOnly {
+ 		q += ` WHERE active=1`
+ 	}
+@@ -572,11 +573,16 @@
+ 	for rows.Next() {
+ 		var sym md.Symbol
+ 		var active, stream int
++		var delistedAt int64
+ 		var mkt string
+-		if err := rows.Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt, &stream); err != nil {
++		if err := rows.Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt, &stream,
++			&delistedAt); err != nil {
+ 			return nil, err
+ 		}
+ 		sym.Market, sym.Active, sym.Stream = md.Market(mkt), active == 1, stream == 1
++		// 0 and NULL both mean "still trading" everywhere else in this file
++		// (see UpsertSymbol's resurrection guard), so treat them alike here.
++		sym.Delisted = delistedAt > 0
+ 		out = append(out, sym)
+ 	}
+ 	return out, rows.Err()
+--- a/daemon/internal/maintain/maintain.go
++++ b/daemon/internal/maintain/maintain.go
+@@ -515,7 +515,27 @@
+ 	}
+ 	now := time.Now()
+ 	flagged := 0
++	skippedDelisted := 0
+ 	for _, s := range syms {
++		// A DELISTED ticker's feed is frozen by definition: no exchange will
++		// ever print another bar for it. The survivorship wave keeps those
++		// rows active=1 on purpose (point-in-time universe reconstruction
++		// needs them), so ListSymbols(active=true) hands us 1,868 permanently
++		// dead names alongside the live ones. Grading them on freshness makes
++		// every one of them stale FOREVER: measured 2026-08-06, the historical
++		// daily-bar backfill flipped latestD from 0 to non-zero for all of
++		// them and the auditor began emitting ~1,897 stale events per hour
++		// (~45,500/day) — 99 of the 100 rows /api/quality can show, and 50 of
++		// the 50 the risk watcher reads, drowning every real incident.
++		//
++		// This is the same guard regimeoutcomes.go:59 already applies for the
++		// same reason. Delisting is NOT a data-quality defect; if a delisted
++		// symbol should stop being polled at all, that is the universe
++		// worker's decision, not the auditor's.
++		if s.Delisted {
++			skippedDelisted++
++			continue
++		}
+ 		latest, err := a.St.LatestBarTs(ctx, s.ID, md.TF1m)
+ 		if err != nil {
+ 			return "", err
+@@ -572,7 +592,8 @@
+ 		}
+ 		flagged++
+ 	}
+-	return fmt.Sprintf("checked %d active symbols, flagged %d", len(syms), flagged), nil
++	return fmt.Sprintf("checked %d active symbols (%d skipped: delisted), flagged %d",
++		len(syms)-skippedDelisted, skippedDelisted, flagged), nil
+ }
+ 
+ // ── StorageGovernor ─────────────────────────────────────────────────────

@@ -1,0 +1,693 @@
+# SignalDeck Remediation Round 2 — SWARM 5
+# test-coverage-calibration.patch
+#
+# TARGET FILES (all test-only; no production code is changed by this patch):
+#   MODIFIED  daemon/internal/ensemble/beta_test.go
+#             replaces the permanently-skipping TestNoEdgeStaysNearBaseRateWhileKeepingOrder
+#             with TestNoEdgeIsPublishedAsTheBaseRate, which runs.
+#   NEW       daemon/internal/clusterstat/rankauc_test.go
+#   NEW       daemon/internal/freshness/freshness_test.go
+#   NEW       daemon/internal/structregime/naivebaseline_test.go
+#
+# APPLY (from the repository root, C:/Users/Nicholas_N/Desktop/claude code/signaldeck):
+#   git apply --check round2-drafts/patches/test-coverage-calibration.patch
+#   git apply         round2-drafts/patches/test-coverage-calibration.patch
+# The paths in this patch are repo-root-relative with the standard one-level
+# a/ b/ prefix, so the default -p1 is correct.
+#
+# REVERT:
+#   git apply -R round2-drafts/patches/test-coverage-calibration.patch
+#
+# MEASURED, on a scratch copy of the tree (daemon/ plus the repo-root files the
+# suite reads: *.md, tools/, ops/, research/), command exactly as specified:
+#   go test -short -count=1 -coverprofile=... -covermode=atomic ./...
+#   BEFORE  total 70.0%   (27925 / 39890 statements)   0 failures
+#   AFTER   total 70.2%   (28013 / 39890 statements)   0 failures
+# ci.yml COVERAGE_FLOOR is 70.1. Coverage movement here is a by-product: every
+# test below was chosen because a wrong answer in the function it covers reaches
+# a published number or a risk control, and every one of them was mutation-
+# checked (the function was deliberately broken and the test observed to fail).
+diff --git b/daemon/internal/clusterstat/rankauc_test.go b/daemon/internal/clusterstat/rankauc_test.go
+new file mode 100644
+index 0000000..2c44e65
+--- /dev/null
++++ b/daemon/internal/clusterstat/rankauc_test.go
+@@ -0,0 +1,166 @@
++package clusterstat
++
++import (
++	"math"
++	"math/rand"
++	"testing"
++)
++
++// RankAUC had no test. It is the statistic RankEdge consumes, and RankEdge is
++// the gate that decides whether a leg is allowed to move a published
++// probability — so an error here is not a wrong number in a report, it is the
++// wrong legs in the blend. The comment on RankEdge records what that already
++// cost once: an admission gate measured on the wrong quantity benched the only
++// leg that ranked.
++
++// A leg that orders every winner above every loser scores 1; the same leg read
++// backwards scores 0. Catches a sign inversion in the Mann-Whitney sum, which
++// would admit anti-signal legs and bench the good ones.
++func TestRankAUCIsOneWhenPerfectAndZeroWhenReversed(t *testing.T) {
++	preds := []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6}
++	up := []float64{0, 0, 0, 1, 1, 1}
++	down := []float64{1, 1, 1, 0, 0, 0}
++
++	if got := RankAUC(preds, up); got != 1 {
++		t.Errorf("perfect ordering scored %v, want 1", got)
++	}
++	if got := RankAUC(preds, down); got != 0 {
++		t.Errorf("exactly-reversed ordering scored %v, want 0", got)
++	}
++}
++
++// The textbook Mann-Whitney case, computed by hand so the U correction is
++// pinned to an outside number rather than to whatever the code does.
++//
++// preds 0.1(neg) 0.35(pos) 0.4(neg) 0.8(pos); the four cross-class pairs are
++// 0.35>0.1 win, 0.35<0.4 loss, 0.8>0.1 win, 0.8>0.4 win = 3/4.
++// Catches an off-by-one in nPos*(nPos+1)/2 — which shifts every leg's grade by
++// a constant and silently re-draws the admission line.
++func TestRankAUCMatchesTheHandComputedMannWhitney(t *testing.T) {
++	preds := []float64{0.1, 0.4, 0.35, 0.8}
++	actuals := []float64{0, 0, 1, 1}
++	if got := RankAUC(preds, actuals); math.Abs(got-0.75) > 1e-12 {
++		t.Errorf("RankAUC = %v, want 0.75", got)
++	}
++}
++
++// A leg that emits ONE number for every symbol has no ordering at all, and must
++// score exactly 0.5 — at every class balance, not just a balanced one.
++//
++// This is the load-bearing case. RankAUC sorts with sort.Slice, which is NOT
++// stable, so on an all-ties input the row order after sorting is arbitrary.
++// Average ranks are the only reason that arbitrariness cannot leak into the
++// answer. Drop the tie-averaging and a no-information leg scores anywhere from
++// 0 to 1 depending on how the sort happened to land — and a leg that measured
++// nothing gets admitted.
++func TestRankAUCIsExactlyHalfForAConstantLeg(t *testing.T) {
++	for _, nPos := range []int{1, 3, 5, 9} {
++		preds := make([]float64, 10)
++		actuals := make([]float64, 10)
++		for i := range preds {
++			preds[i] = 0.42
++			if i < nPos {
++				actuals[i] = 1
++			}
++		}
++		if got := RankAUC(preds, actuals); got != 0.5 {
++			t.Errorf("constant leg with %d/10 positives scored %v, want exactly 0.5", nPos, got)
++		}
++	}
++}
++
++// A tie ACROSS classes is half a win, not a whole one. Two rows, same score,
++// opposite outcomes: the only defensible answer is 0.5.
++func TestRankAUCSplitsACrossClassTie(t *testing.T) {
++	if got := RankAUC([]float64{0.5, 0.5}, []float64{1, 0}); got != 0.5 {
++		t.Errorf("one tied pair scored %v, want 0.5", got)
++	}
++	// And a tie must not be worth more than a clean win.
++	clean := RankAUC([]float64{0.6, 0.4}, []float64{1, 0})
++	tied := RankAUC([]float64{0.5, 0.5}, []float64{1, 0})
++	if !(clean > tied) {
++		t.Errorf("a tie (%v) scored as well as a clean win (%v)", tied, clean)
++	}
++}
++
++// The answer must not depend on the order rows arrive in. sort.Slice is
++// unstable, so this is the property that keeps a grade reproducible across
++// runs: the same leg, the same rows, a different iteration order, one number.
++func TestRankAUCIsInvariantToInputOrder(t *testing.T) {
++	rng := rand.New(rand.NewSource(4))
++	preds := make([]float64, 200)
++	actuals := make([]float64, 200)
++	for i := range preds {
++		// Heavy tie structure on purpose: 8 distinct score levels over 200 rows.
++		preds[i] = float64(rng.Intn(8)) / 8
++		if rng.Float64() < preds[i]+0.2 {
++			actuals[i] = 1
++		}
++	}
++	want := RankAUC(preds, actuals)
++
++	for trial := 0; trial < 25; trial++ {
++		p := append([]float64(nil), preds...)
++		a := append([]float64(nil), actuals...)
++		rng.Shuffle(len(p), func(i, j int) { p[i], p[j] = p[j], p[i]; a[i], a[j] = a[j], a[i] })
++		if got := RankAUC(p, a); got != want {
++			t.Fatalf("shuffle %d changed the grade: %v != %v — the statistic is not "+
++				"reproducible and neither is any admission decision made from it", trial, got, want)
++		}
++	}
++}
++
++// One class only means nothing about ranking was observed. The documented
++// answer is 0.5, and 0.5 is what makes RankEdge refuse to admit — asserted
++// below. A silent 0 or 1 here would be a fabricated grade.
++func TestRankAUCReportsNoEvidenceWhenOneClassIsEmpty(t *testing.T) {
++	if got := RankAUC([]float64{0.1, 0.9, 0.5}, []float64{1, 1, 1}); got != 0.5 {
++		t.Errorf("all-positive sample scored %v, want 0.5 (no ranking observable)", got)
++	}
++	if got := RankAUC([]float64{0.1, 0.9, 0.5}, []float64{0, 0, 0}); got != 0.5 {
++		t.Errorf("all-negative sample scored %v, want 0.5 (no ranking observable)", got)
++	}
++}
++
++// The reason any of the above matters: RankAUC feeds RankEdge, and RankEdge
++// decides admission. This pins the composition, not the pieces — a leg with no
++// ordering must not be admitted, and a leg that orders well must be, at the
++// same evaluation count.
++func TestRankAUCFeedsRankEdgeSoANoOrderingLegIsNotAdmitted(t *testing.T) {
++	const n = 400
++	rng := rand.New(rand.NewSource(9))
++
++	flatPreds := make([]float64, n)
++	flatActuals := make([]float64, n)
++	sharpPreds := make([]float64, n)
++	sharpActuals := make([]float64, n)
++	for i := 0; i < n; i++ {
++		flatPreds[i] = 0.5
++		sharpPreds[i] = rng.Float64()
++		if rng.Float64() < 0.5 {
++			flatActuals[i] = 1
++		}
++		// A genuinely informative ordering: P(win) rises with the score.
++		if rng.Float64() < 0.1+0.8*sharpPreds[i] {
++			sharpActuals[i] = 1
++		}
++	}
++
++	flatEdge, flatOK := RankEdge(RankAUC(flatPreds, flatActuals), n)
++	if !flatOK {
++		t.Fatalf("%d evaluations is above RankEdgeMinEval=%d; the grade must be usable", n, RankEdgeMinEval)
++	}
++	if flatEdge > 0 {
++		t.Errorf("a leg with no ordering was credited with edge %+.4f — it would reach the blend", flatEdge)
++	}
++
++	sharpAUC := RankAUC(sharpPreds, sharpActuals)
++	sharpEdge, sharpOK := RankEdge(sharpAUC, n)
++	if !sharpOK {
++		t.Fatalf("informative leg (AUC %.4f) produced no usable grade", sharpAUC)
++	}
++	if sharpEdge <= 0 {
++		t.Errorf("a leg measured at AUC %.4f over %d evaluations was benched (edge %+.4f) — "+
++			"this is the failure mode RankEdge was written to end", sharpAUC, n, sharpEdge)
++	}
++}
+diff --git a/daemon/internal/ensemble/beta_test.go b/daemon/internal/ensemble/beta_test.go
+index ad76694..db0fc48 100644
+--- a/daemon/internal/ensemble/beta_test.go
++++ b/daemon/internal/ensemble/beta_test.go
+@@ -112,22 +112,99 @@ func TestBetaMapIsStrictlyIncreasing(t *testing.T) {
+ 	}
+ }
+ 
+-// The map must not manufacture confidence it has not earned: a raw score with
+-// no signal should still land near the base rate, just without ties.
+-func TestNoEdgeStaysNearBaseRateWhileKeepingOrder(t *testing.T) {
+-	const base = 0.42
+-	pairs := pairsFrom(800, 11, func(float64) float64 { return base })
+-	fn, _, ranked := CalibrateRanking(pairs)
+-	if !ranked {
+-		t.Skip("isotonic won on Brier for this sample; ranking not claimed")
+-	}
+-	lo, hi := fn(0.30), fn(0.60)
+-	if math.Abs(lo-base) > 0.12 || math.Abs(hi-base) > 0.12 {
+-		t.Errorf("no-edge inputs drifted far from the %.2f base rate: %.3f..%.3f — "+
+-			"preserving order must not invent discrimination", base, lo, hi)
++// noEdgeSpreadCeiling separates "published the base rate" from "published a
++// ranking". It is ONE constant used in both directions below on purpose: a
++// bound only a no-edge sample can satisfy is worthless unless an informative
++// sample demonstrably breaks it. Measured on this file's own generator at
++// 800 pairs: no-edge tops out at 0.138 across 5 base rates x 6 seeds, an
++// informative ordering bottoms out at 0.243 across 4 seeds.
++const noEdgeSpreadCeiling = 0.20
++
++// REPLACES TestNoEdgeStaysNearBaseRateWhileKeepingOrder, which was dead.
++//
++// That test read:
++//
++//	fn, _, ranked := CalibrateRanking(pairs)
++//	if !ranked {
++//	    t.Skip("isotonic won on Brier for this sample; ranking not claimed")
++//	}
++//
++// and it skipped on every run. Its stated reason was also wrong. Isotonic never
++// won a Brier comparison there, because no comparison was reached: on a sample
++// with no edge the maximum-likelihood a and b of the beta map are noise around
++// zero, so fitBeta's own "fitted map is not strictly increasing" guard fires
++// (beta.go:82 doc, returned at beta.go:311-314) and CalibrateRanking returns
++// isotonic with ranked=false before the held-out Brier test at beta.go:345.
++// Measured on 800-pair no-edge samples, fitBeta refuses on 37 of 40 seeds and
++// ranked came back false on 38 of 40 — the guarded body proved nothing, ever.
++//
++// The "keeping order" half was not repairable at this layer either. When beta
++// is refused the SHIPPED map is isotonic, and isotonic ties by construction —
++// that collapse is the entire reason beta.go exists (beta.go:9-29). Order
++// preservation is a property of the MAP, and it is already asserted directly by
++// TestBetaMapIsStrictlyIncreasing and TestBetaMapPreservesPerSymbolRanking.
++//
++// What survives, and is asserted here, is the property that actually reaches a
++// published number: a model with no edge must be REPORTED as having no edge.
++// Whatever map is selected must publish this sample's base rate, must not
++// manufacture discrimination out of noise, and must never invert.
++func TestNoEdgeIsPublishedAsTheBaseRate(t *testing.T) {
++	// Sweep the base rate. A calibrator that ignored the outcomes — or pinned
++	// the level at 0.5, or at whatever the last fit produced — passes a
++	// single-base-rate check and fails this one.
++	for _, base := range []float64{0.20, 0.42, 0.65, 0.80} {
++		for _, seed := range []int64{1, 4, 7, 11, 19, 27} {
++			pairs := pairsFrom(800, seed, func(float64) float64 { return base })
++			fn, calibrated, _ := CalibrateRanking(pairs)
++			if !calibrated {
++				t.Fatalf("base %.2f seed %d: 800 pairs must be enough to calibrate", base, seed)
++			}
++
++			// Grade against the sample's OWN realized rate, not the generating
++			// parameter: 800 Bernoulli draws land ~1.7pp off `base` by chance and
++			// that sampling error is not the calibrator's to answer for.
++			var wins float64
++			for _, p := range pairs {
++				wins += p.Actual
++			}
++			realized := wins / float64(len(pairs))
++
++			prev := math.Inf(-1)
++			for _, x := range []float64{0.25, 0.35, 0.45, 0.55, 0.65, 0.75} {
++				v := fn(x)
++				if v < prev {
++					t.Fatalf("base %.2f seed %d: published map inverted at raw=%.2f "+
++						"(%.6f after %.6f) — a more bullish input must never publish less",
++						base, seed, x, v, prev)
++				}
++				prev = v
++				if math.Abs(v-realized) > 0.12 {
++					t.Errorf("base %.2f seed %d: raw=%.2f published %.4f but the sample's "+
++						"realized rate is %.4f — a no-edge model must be reported at its base rate",
++						base, seed, x, v, realized)
++				}
++			}
++			if spread := fn(0.75) - fn(0.25); spread > noEdgeSpreadCeiling {
++				t.Errorf("base %.2f seed %d: manufactured %.4f of spread from a sample with "+
++					"no edge (ceiling %.2f) — noise dressed as a ranking",
++					base, seed, spread, noEdgeSpreadCeiling)
++			}
++		}
+ 	}
+-	if hi <= lo {
+-		t.Errorf("order not preserved: fn(0.60)=%.6f <= fn(0.30)=%.6f", hi, lo)
++
++	// The other direction, without which the ceiling above is satisfiable by any
++	// constant map: a genuinely informative ordering must clear the same bar.
++	for _, seed := range []int64{1, 5, 12, 15} {
++		pairs := pairsFrom(1500, seed, func(p float64) float64 { return 0.15 + 0.7*p })
++		fn, calibrated, _ := CalibrateRanking(pairs)
++		if !calibrated {
++			t.Fatalf("signal seed %d: expected a calibration", seed)
++		}
++		if spread := fn(0.75) - fn(0.25); spread <= noEdgeSpreadCeiling {
++			t.Errorf("signal seed %d: flattened a real ordering to %.4f spread (must exceed "+
++				"%.2f) — the no-edge ceiling in this test would be vacuous",
++				seed, spread, noEdgeSpreadCeiling)
++		}
+ 	}
+ }
+ 
+diff --git b/daemon/internal/freshness/freshness_test.go b/daemon/internal/freshness/freshness_test.go
+new file mode 100644
+index 0000000..cfeb224
+--- /dev/null
++++ b/daemon/internal/freshness/freshness_test.go
+@@ -0,0 +1,88 @@
++package freshness
++
++import (
++	"strings"
++	"testing"
++	"time"
++)
++
++// This package had no test file at all, while being the gate that decides
++// whether /api/desk/recommendation serves a number or refuses (api/desk.go:129).
++// The defect it was written for — audit F-2, a ten-day-old close served under
++// AsOf: time.Now() — is a MISSING-timestamp and a BOUNDARY defect, so those are
++// what is pinned here.
++
++var now = time.Date(2026, 8, 6, 15, 0, 0, 0, time.UTC)
++
++// The F-2 defect itself. A zero timestamp means "we do not know when this data
++// is from", and the tempting repair — treat unknown as now — is exactly what
++// served week-old prices as current. Catches any change that lets an absent
++// timestamp through the gate.
++func TestZeroTimestampIsRefusedRatherThanTreatedAsNow(t *testing.T) {
++	err := Check(now, time.Time{}, time.Hour)
++	if err == nil {
++		t.Fatal("a missing data_asof passed the freshness gate — this is audit F-2 exactly: " +
++			"unknown provenance published as current")
++	}
++	if !strings.Contains(err.Error(), "missing") {
++		t.Errorf("refusal does not say the timestamp is missing: %q", err)
++	}
++}
++
++// The boundary. maxAge is inclusive: data exactly at the limit is still
++// current, one nanosecond past it is not. Catches a > / >= flip, which either
++// serves stale data for one extra window or refuses data the policy allows.
++func TestFreshnessBoundaryIsInclusiveAtExactlyMaxAge(t *testing.T) {
++	const maxAge = 2 * time.Hour
++	if err := Check(now, now.Add(-maxAge), maxAge); err != nil {
++		t.Errorf("data at exactly maxAge was refused: %v", err)
++	}
++	if err := Check(now, now.Add(-maxAge-time.Nanosecond), maxAge); err == nil {
++		t.Error("data one nanosecond past maxAge passed the gate")
++	}
++	if err := Check(now, now.Add(-maxAge+time.Nanosecond), maxAge); err != nil {
++		t.Errorf("data one nanosecond inside maxAge was refused: %v", err)
++	}
++}
++
++// The refusal is copied verbatim into the HTTP body (api/desk.go:135). An
++// operator reading it must be able to see WHICH timestamp was rejected and by
++// how much; a bare "stale data" is an alert nobody can act on.
++func TestRefusalNamesTheTimestampAndTheAge(t *testing.T) {
++	asOf := now.Add(-72 * time.Hour)
++	err := Check(now, asOf, time.Hour)
++	if err == nil {
++		t.Fatal("three-day-old data passed a one-hour freshness gate")
++	}
++	msg := err.Error()
++	for _, want := range []string{asOf.UTC().Format(time.RFC3339), "72h0m0s", "1h0m0s"} {
++		if !strings.Contains(msg, want) {
++			t.Errorf("refusal %q does not carry %q", msg, want)
++		}
++	}
++}
++
++// Clock skew. A data timestamp marginally in the future is a clock problem, not
++// a staleness problem: the gate must pass it, and the reported age must be 0.
++// desk.go casts Age to int64 seconds straight into the JSON body, so a negative
++// duration here publishes a negative stalenessSeconds.
++func TestFutureTimestampPassesAndReportsZeroAgeNotNegative(t *testing.T) {
++	ahead := now.Add(30 * time.Second)
++	if err := Check(now, ahead, time.Hour); err != nil {
++		t.Errorf("a timestamp 30s in the future was called stale: %v", err)
++	}
++	if got := Age(now, ahead); got != 0 {
++		t.Errorf("Age = %v for future data, want 0 — a negative age is published verbatim", got)
++	}
++	if got := Age(now, now); got != 0 {
++		t.Errorf("Age = %v for data stamped exactly now, want 0", got)
++	}
++}
++
++// Age must be the real staleness when the data IS old — a floor at zero that
++// swallowed every value would hide the very number the refusal reports.
++func TestAgeReportsRealStalenessWhenDataIsOld(t *testing.T) {
++	if got := Age(now, now.Add(-90*time.Minute)); got != 90*time.Minute {
++		t.Errorf("Age = %v, want 1h30m0s", got)
++	}
++}
+diff --git b/daemon/internal/structregime/naivebaseline_test.go b/daemon/internal/structregime/naivebaseline_test.go
+new file mode 100644
+index 0000000..7f8ff1c
+--- /dev/null
++++ b/daemon/internal/structregime/naivebaseline_test.go
+@@ -0,0 +1,273 @@
++package structregime
++
++import (
++	"math"
++	"testing"
++)
++
++// The three Naive*At helpers had zero coverage. They are the NULL a structural
++// verdict is graded against — resolve.go's own header says "the only baseline
++// that can falsify one is the 'nothing changes' guess" and that the package
++// "tests assert truncation invariance". No test did. Nothing about a published
++// "the model beat naive persistence" claim is checkable if the naive side is
++// wrong, and a baseline that peeks at the future is the way it goes wrong
++// silently: it makes the null look better than it was and the model look worse,
++// or the reverse, with no symptom anywhere.
++
++// ── generators ───────────────────────────────────────────────────────────
++
++// stepCloses is a flat series that steps to `to` from index `at` onward.
++func stepCloses(n int, from, to float64, at int) []float64 {
++	out := make([]float64, n)
++	for i := range out {
++		if i >= at {
++			out[i] = to
++		} else {
++			out[i] = from
++		}
++	}
++	return out
++}
++
++func constSeries(n int, v float64) []float64 {
++	out := make([]float64, n)
++	for i := range out {
++		out[i] = v
++	}
++	return out
++}
++
++// altReturns alternates +/-a so the realized vol of any 21-bar window is ~a.
++func altReturns(n int, a func(i int) float64) []float64 {
++	out := make([]float64, n)
++	for i := range out {
++		s := 1.0
++		if i%2 == 1 {
++			s = -1
++		}
++		out[i] = s * a(i)
++	}
++	return out
++}
++
++// ── NaiveTrendAt ─────────────────────────────────────────────────────────
++
++func TestNaiveTrendAtReadsTheSideOfTheSMA200(t *testing.T) {
++	const at = 250
++
++	up, ok := NaiveTrendAt(stepCloses(300, 100, 120, 240), at)
++	if !ok || up != "uptrend" {
++		t.Errorf("price above its SMA200 gave (%q, %v), want (uptrend, true)", up, ok)
++	}
++	down, ok := NaiveTrendAt(stepCloses(300, 100, 80, 240), at)
++	if !ok || down != "downtrend" {
++		t.Errorf("price below its SMA200 gave (%q, %v), want (downtrend, true)", down, ok)
++	}
++}
++
++// Exactly on the average is not a side. Catches a change that resolves the tie
++// to "uptrend" — which would hand the null a free directional call and score it
++// against a coin flip, quietly inflating or deflating the benchmark.
++func TestNaiveTrendAtAbstainsWhenPriceSitsExactlyOnTheAverage(t *testing.T) {
++	if side, ok := NaiveTrendAt(constSeries(300, 100), 250); ok {
++		t.Errorf("a perfectly flat series produced side %q — there is no side to call", side)
++	}
++}
++
++// Before 200 bars the average does not exist. It arrives as NaN, and NaN fails
++// every ordering comparison in Go, so the `sma[t] <= 0` guard above it does NOT
++// catch this case — only the finite(d) check below does. Delete that check and
++// the function starts emitting "downtrend" for every young symbol.
++func TestNaiveTrendAtRefusesBeforeTheAverageExists(t *testing.T) {
++	// A steady ramp, so index 199 is genuinely off its own 200-bar mean and the
++	// only thing that can refuse it is the missing window.
++	closes := make([]float64, 300)
++	for i := range closes {
++		closes[i] = 100 + 0.1*float64(i)
++	}
++	for _, at := range []int{0, 1, 100, 198} {
++		if side, ok := NaiveTrendAt(closes, at); ok {
++			t.Errorf("t=%d has only %d bars of history but produced (%q, true)", at, at+1, side)
++		}
++	}
++	if side, ok := NaiveTrendAt(closes, 199); !ok || side != "uptrend" {
++		t.Errorf("t=199 is the first bar with a full 200-bar window; got (%q, %v), want (uptrend, true)", side, ok)
++	}
++}
++
++func TestNaiveTrendAtRejectsOutOfRangeIndices(t *testing.T) {
++	closes := stepCloses(300, 100, 120, 240)
++	for _, at := range []int{-1, 300, 1000} {
++		if _, ok := NaiveTrendAt(closes, at); ok {
++			t.Errorf("t=%d is outside the series but was answered", at)
++		}
++	}
++	if _, ok := NaiveTrendAt(nil, 0); ok {
++		t.Error("an empty series was answered")
++	}
++}
++
++// ── NaiveLiquidityAt ─────────────────────────────────────────────────────
++
++func TestNaiveLiquidityAtComparesTheRolling21ToItsTrailingMedian(t *testing.T) {
++	const at = 260
++	closes := constSeries(300, 100)
++
++	rising := append(constSeries(230, 1000), constSeries(70, 2000)...)
++	side, ok := NaiveLiquidityAt(closes, rising, at)
++	if !ok || side != "active" {
++		t.Errorf("dollar volume above its trailing median gave (%q, %v), want (active, true)", side, ok)
++	}
++
++	falling := append(constSeries(230, 2000), constSeries(70, 1000)...)
++	side, ok = NaiveLiquidityAt(closes, falling, at)
++	if !ok || side != "quiet" {
++		t.Errorf("dollar volume below its trailing median gave (%q, %v), want (quiet, true)", side, ok)
++	}
++}
++
++func TestNaiveLiquidityAtRefusesOnDegenerateInput(t *testing.T) {
++	closes := constSeries(300, 100)
++	if side, ok := NaiveLiquidityAt(closes, constSeries(300, 1000), 260); ok {
++		t.Errorf("a series whose current level EQUALS its median produced %q — there is no side", side)
++	}
++	if _, ok := NaiveLiquidityAt(closes, constSeries(299, 1000), 260); ok {
++		t.Error("mismatched closes/volumes lengths were answered instead of refused")
++	}
++	for _, at := range []int{-1, 300} {
++		if _, ok := NaiveLiquidityAt(closes, constSeries(300, 1000), at); ok {
++			t.Errorf("t=%d is outside the series but was answered", at)
++		}
++	}
++	// Non-positive dollar volume becomes NaN and must not be silently averaged in.
++	halted := constSeries(300, 1000)
++	for i := 255; i <= 260; i++ {
++		halted[i] = 0
++	}
++	if _, ok := NaiveLiquidityAt(closes, halted, 260); ok {
++		t.Error("a window containing zero-volume bars produced a liquidity side")
++	}
++}
++
++// ── NaiveVol21At ─────────────────────────────────────────────────────────
++
++func TestNaiveVol21AtComparesRealizedVolToItsTrailingMedian(t *testing.T) {
++	const at = 360
++
++	burst := altReturns(400, func(i int) float64 {
++		if i >= 340 {
++			return 0.01
++		}
++		return 0.001
++	})
++	side, ok := NaiveVol21At(burst, at)
++	if !ok || side != "elevated" {
++		t.Errorf("vol above its trailing median gave (%q, %v), want (elevated, true)", side, ok)
++	}
++
++	settling := altReturns(400, func(i int) float64 {
++		if i >= 340 {
++			return 0.001
++		}
++		return 0.01
++	})
++	side, ok = NaiveVol21At(settling, at)
++	if !ok || side != "calm" {
++		t.Errorf("vol below its trailing median gave (%q, %v), want (calm, true)", side, ok)
++	}
++}
++
++func TestNaiveVol21AtRefusesWithoutAFullWindow(t *testing.T) {
++	rets := altReturns(400, func(i int) float64 {
++		if i >= 340 {
++			return 0.01
++		}
++		return 0.001
++	})
++	// horizon is 21, so index 19 cannot have a full realized-vol window.
++	for _, at := range []int{-1, 0, 19, 400, 1000} {
++		if _, ok := NaiveVol21At(rets, at); ok {
++			t.Errorf("t=%d cannot carry a full 21-bar window but was answered", at)
++		}
++	}
++	// A single missing return poisons the whole window rather than being skipped:
++	// a 20-of-21 vol is not the statistic the forward side is graded on.
++	holed := append([]float64(nil), rets...)
++	holed[355] = math.NaN()
++	if _, ok := NaiveVol21At(holed, 360); ok {
++		t.Error("a window containing a NaN return produced a vol side")
++	}
++}
++
++// ── the causality contract ───────────────────────────────────────────────
++
++// resolve.go:7 states the contract in prose: "everything 'at call time' ... is
++// computed from indices <= t only ... (tests assert truncation invariance)".
++// This is that test. Truncating the series immediately after t, or replacing
++// everything after t with values that would flip any answer that looked at
++// them, must leave the baseline at t byte-identical.
++//
++// A lookahead here is invisible in every other check: the labels still look
++// plausible, the accuracy tally still runs, and the published "the model beats
++// naive persistence" verdict is graded against a null that knew the answer.
++// The series run FAR past the call bar and the poisoned tail is extreme in the
++// direction that flips each answer. Both matter: a lookahead that reaches for a
++// full-sample median is only detectable when the future outnumbers the past and
++// sits on the other side of the comparison. A short, mildly-perturbed tail
++// leaves a full-sample statistic looking exactly like the trailing one, and the
++// test passes while the lookahead is right there — verified by mutating each
++// trailing window into a full-sample one and watching this fail.
++func TestNaiveBaselinesNeverReadPastTheCallBar(t *testing.T) {
++	const priceAt, volAt = 260, 360
++
++	closes := stepCloses(900, 100, 120, 240)
++	volumes := append(constSeries(230, 1000), constSeries(670, 2000)...)
++	rets := altReturns(1200, func(i int) float64 {
++		if i >= 340 {
++			return 0.01
++		}
++		return 0.001
++	})
++
++	poisonedCloses := append([]float64(nil), closes...)
++	poisonedVolumes := append([]float64(nil), volumes...)
++	poisonedRets := append([]float64(nil), rets...)
++	for i := priceAt + 1; i < len(poisonedCloses); i++ {
++		poisonedCloses[i] = 1e6 // above any trailing average -> would flip trend
++		poisonedVolumes[i] = 1e9
++	}
++	for i := volAt + 1; i < len(poisonedRets); i++ {
++		poisonedRets[i] = 5.0 // vol far above the call bar's -> would flip elevated/calm
++	}
++
++	trendSide, trendOK := NaiveTrendAt(closes, priceAt)
++	liqSide, liqOK := NaiveLiquidityAt(closes, volumes, priceAt)
++	volSide, volOK := NaiveVol21At(rets, volAt)
++	if !trendOK || !liqOK || !volOK {
++		t.Fatalf("fixture does not produce all three baselines (trend=%v liq=%v vol=%v) — "+
++			"the invariance check below would be vacuous", trendOK, liqOK, volOK)
++	}
++
++	check := func(name string, gotSide string, gotOK bool, wantSide string) {
++		t.Helper()
++		if !gotOK || gotSide != wantSide {
++			t.Errorf("%s: baseline changed to (%q, %v), want (%q, true) — "+
++				"the at-call-time baseline read data from after the call", name, gotSide, gotOK, wantSide)
++		}
++	}
++
++	s, ok := NaiveTrendAt(poisonedCloses, priceAt)
++	check("trend/poisoned-future", s, ok, trendSide)
++	s, ok = NaiveTrendAt(closes[:priceAt+1], priceAt)
++	check("trend/truncated", s, ok, trendSide)
++
++	s, ok = NaiveLiquidityAt(poisonedCloses, poisonedVolumes, priceAt)
++	check("liquidity/poisoned-future", s, ok, liqSide)
++	s, ok = NaiveLiquidityAt(closes[:priceAt+1], volumes[:priceAt+1], priceAt)
++	check("liquidity/truncated", s, ok, liqSide)
++
++	s, ok = NaiveVol21At(poisonedRets, volAt)
++	check("vol/poisoned-future", s, ok, volSide)
++	s, ok = NaiveVol21At(rets[:volAt+1], volAt)
++	check("vol/truncated", s, ok, volSide)
++}
