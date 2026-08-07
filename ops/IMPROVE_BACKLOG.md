@@ -24,42 +24,34 @@ because dropping coverage raises accuracy for free.
 
 ---
 
-## [ ] 1d forecasts collapse onto a single market call
+## [x] 1d forecasts collapse onto a single market call
 
-The 1d cross-section is not a per-symbol forecaster. Measured 2026-08-07 over the
-last 10 graded days, the fraction of the ~328-symbol cross-section called "up":
+ALREADY FIXED before this item was written — `d1a9c28` "Refuse to publish a
+collapsed cross-section" (2026-08-06) wired `ensemble.MeasureCrossSection` /
+`CrossSection.Usable` into `pipeline/predict.go:566`. Every collapsed day quoted
+below predates it, so the measurement that motivated this item is a record of a
+defect that no longer exists. Measured 2026-08-07, distinct probability values
+across ~328 symbols: 08-01 **10**, 08-02 **10**, 08-05 254, and on the first
+post-guard day 08-06 **288**, with the up-call rate back to 0.572 from extremes
+of 0.012-0.991.
 
-    2026-08-05  0.991      2026-08-02  0.015      2026-07-31  0.015
-    2026-08-04  0.129      2026-08-01  0.012      2026-07-29  0.018
+Consequence for the goal: the -11.05pp lift is dominated by pre-08-06 days and
+will improve as they age out of the window WITHOUT any code change. Do not
+re-open this against the historical number.
 
-Five of ten days sit outside [0.05, 0.95] — every symbol gets the same side, so
-one daily market call is published as ~328 independent forecasts and graded as
-328 observations. It also lands inverted: on the days it called 1-2% up, the
-market rose 63-70%, scoring 32-37%. This single defect is the whole -11.05pp
-deficit; the surface is otherwise a coin flip.
-
-`globalCalibration` already DETECTS this (`ranked=false`) and only `slog.Info`s
-it. Make the detection fail closed at the publish boundary: when a day's
-cross-section carries no dispersion, refuse the map and publish raw uncorrected
-probabilities rather than writing a replicated market call. Refusing costs ~0.8pp
-on the pooled record and is still right — those points were earned by silently
-becoming the majority baseline while presenting as a per-symbol forecast, and
-they cost -17pp the day the market turned.
-
-Do NOT satisfy this by widening the band, by dropping the collapsed days from
-grading, or by abstaining. The forecasts must still be issued at full coverage.
-
-verify: `cd daemon && go test ./... -run TestRefusesCollapsedCrossSection -v 2>&1 | grep -q "^--- PASS: TestRefusesCollapsedCrossSection"`
-files: `daemon/internal/ensemble/calibration.go`
+verify: `cd daemon && go test ./internal/ensemble/... -run TestCrossSection -count=1`
+files: `daemon/internal/pipeline/predict.go`
 
 ## [ ] 1d cross-section stays dispersed on live data
 
-Live confirmation of the item above, on forecasts written AFTER the guard ships.
-This cannot go green tonight — it measures new forecast days as they accrue, so
-expect it to stay red until the daemon has written a few clean days.
+Live confirmation that the 08-06 guard holds. One post-guard day exists so far
+(08-06: 288 distinct probabilities across 313 symbols, up-call rate 0.572), which
+is not enough to conclude anything. This CANNOT go green from a code change — it
+measures new forecast days as they accrue, and the default 10-day window still
+reaches back into the collapsed era. Expect red until roughly 2026-08-16.
 
 verify: `python ops/accuracy_gates.py xsection --horizon 1d`
-files: `daemon/internal/ensemble/calibration.go`
+files: `daemon/internal/pipeline/predict.go`
 
 ## [ ] 1d accuracy beats its own naive baseline
 
@@ -69,7 +61,7 @@ Beating the baseline is the floor, not the goal — but a forecaster losing to
 checked in the same command; an improvement bought by issuing fewer calls fails.
 
 verify: `python ops/accuracy_gates.py beats-naive --horizon 1d`
-files: `daemon/internal/ensemble/calibration.go`
+files: `daemon/internal/pipeline/predict.go`
 
 ## [ ] 1w accuracy beats its own naive baseline
 
@@ -80,7 +72,7 @@ is the real win; the hard 0.5 threshold against a base rate near 0.466 is the
 defect. Fix the threshold, not the ranking.
 
 verify: `python ops/accuracy_gates.py beats-naive --horizon 1w`
-files: `daemon/internal/ensemble/calibration.go`
+files: `daemon/internal/pipeline/predict.go`
 
 ---
 
