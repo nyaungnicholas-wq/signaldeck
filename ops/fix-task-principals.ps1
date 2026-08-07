@@ -52,13 +52,25 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Always leave evidence of what this run did. `Start-Process -Verb RunAs` opens
+# a window that closes the instant the script ends, so on 2026-08-06 a refusal
+# scrolled past unseen and the run was reported as done when nothing had been
+# applied. A transcript makes "did it actually run?" answerable afterwards
+# instead of inferred from side effects.
+$logDir = Join-Path $env:LOCALAPPDATA 'SignalDeck\logs'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$transcript = Join-Path $logDir ("fix-task-principals-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+try { Start-Transcript -Path $transcript -ErrorAction Stop | Out-Null } catch { }
+Write-Host "transcript: $transcript"
+
 function Assert-Elevated {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $pr = New-Object Security.Principal.WindowsPrincipal($id)
     if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Write-Host "REFUSED: not elevated. Both operations need admin." -ForegroundColor Red
         Write-Host "Re-run from an elevated PowerShell:" -ForegroundColor Yellow
-        Write-Host "  Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile','-File','$PSCommandPath'"
+        Write-Host "  Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile','-NoExit','-File','$PSCommandPath'"
+        try { Stop-Transcript | Out-Null } catch { }
         exit 1
     }
     Write-Host "elevated as $($id.Name)" -ForegroundColor Green
@@ -133,6 +145,7 @@ Get-ScheduledTask | Where-Object { $_.TaskName -match $Match } |
 
 if ($failed.Count) {
     Write-Host "FAILED tasks (restore from $backup if needed): $($failed -join ', ')" -ForegroundColor Red
+    try { Stop-Transcript | Out-Null } catch { }
     exit 1
 }
 
@@ -163,6 +176,7 @@ if (-not $NoRestart) {
             Write-Host "daemon healthy on 127.0.0.1:8322" -ForegroundColor Green
         } else {
             Write-Host "daemon did NOT answer /api/health within 60s - check logs\signaldeckd.log" -ForegroundColor Red
+            try { Stop-Transcript | Out-Null } catch { }
             exit 1
         }
     }
@@ -172,3 +186,5 @@ Write-Host ""
 Write-Host "done. Watch for recurrence with ops\check-task-health.ps1" -ForegroundColor Cyan
 Write-Host "Any fresh 0xC000013A after this means something is killing tasks by a route"
 Write-Host "other than the console session - and the operational log will now show it."
+
+try { Stop-Transcript | Out-Null } catch { }
