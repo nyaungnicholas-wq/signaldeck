@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
   Detach the SignalDeck scheduled-task fleet from the interactive console
-  session, and turn on the log that records what happens to it.
+  session, turn on the log that records what happens to it, and give the Web
+  task a trigger so it can recover on its own.
 
 .DESCRIPTION
   Fixes the cause of the 0xC000013A (STATUS_CONTROL_C_EXIT) task failures.
@@ -147,6 +148,52 @@ if ($failed.Count) {
     Write-Host "FAILED tasks (restore from $backup if needed): $($failed -join ', ')" -ForegroundColor Red
     try { Stop-Transcript | Out-Null } catch { }
     exit 1
+}
+
+# -- 4b. give SignalDeck Web a self-healing trigger -------------------------
+# Web had NO trigger at all: on-demand only. So when a console event killed it
+# on 2026-08-06 nothing was ever going to bring it back, and the UI stayed down
+# until someone noticed and started it by hand. Every other task in the fleet
+# recovers on a schedule; this one could not.
+#
+# AtStartup + a 5-minute repetition is the whole fix, and it needs no second
+# task and no guard script: MultipleInstances=IgnoreNew means a firing while the
+# server is already up is discarded, so the repetition is a no-op until the
+# moment the server is gone, and then it is a restart. Same effect the daemon
+# gets from its separate Keepalive task, with nothing extra to maintain.
+#
+# The IgnoreNew check below is a HARD PRECONDITION, not decoration. Under
+# Parallel or Queue, a 5-minute repetition would launch a new `next start -p
+# 8323` every 5 minutes forever - a pile of node processes fighting over one
+# port. Refuse rather than create that.
+$webName = 'SignalDeck Web'
+$web = Get-ScheduledTask -TaskName $webName -ErrorAction SilentlyContinue
+if (-not $web) {
+    Write-Host "'$webName' not found - skipping trigger step" -ForegroundColor Yellow
+} elseif ($web.Settings.MultipleInstances -ne 'IgnoreNew') {
+    Write-Host "REFUSED to add a repeating trigger: '$webName' is MultipleInstances=$($web.Settings.MultipleInstances), not IgnoreNew." -ForegroundColor Red
+    Write-Host "  A repetition under that policy would stack node servers on port 8323." -ForegroundColor Red
+} elseif (@($web.Triggers).Where({ $_ }).Count -gt 0) {
+    Write-Host "'$webName' already has a trigger - leaving it alone" -ForegroundColor Green
+} else {
+    try {
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $rep = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+                  -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
+        # Duration must be ABSENT for "repeat indefinitely". [TimeSpan]::MaxValue
+        # serialises to P99999999DT23H59M59S, which Task Scheduler rejects.
+        $rep.Duration          = $null
+        $rep.StopAtDurationEnd = $false
+        $trigger.Repetition    = $rep
+
+        Set-ScheduledTask -TaskName $webName -Trigger $trigger | Out-Null
+
+        $check = (Get-ScheduledTask -TaskName $webName).Triggers | Select-Object -First 1
+        if (-not $check) { throw "trigger did not persist" }
+        Write-Host ("  + {0,-34} AtStartup, repeating every {1}" -f $webName, $check.Repetition.Interval) -ForegroundColor Green
+    } catch {
+        Write-Host "  ! $webName trigger FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    }
 }
 
 # -- 5. restart the daemon so it runs under the new principal ---------------
