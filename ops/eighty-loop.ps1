@@ -389,8 +389,34 @@ while ((Get-Date) -lt $deadline -and $cycle -lt $MaxCycles) {
   Ev 'cycle-start' @{ cycle = $cycle }
 
   # --- 1. PROPOSE ---------------------------------------------------------
+  # Dedup context. This used to be the last 120 RAW lines of the journal, and a
+  # journal entry is ~10 lines, so it reached 5 of 321 entries -- 1.6% of the
+  # corpus. That is why 32 of 262 hypotheses proposed news sentiment: anything
+  # older than five cycles was invisible, including a refutation the daemon had
+  # already recorded at IC -0.0051 over 22,755 observations.
+  #
+  # One line per past hypothesis instead: verdict plus the mechanism head. The
+  # mechanism is what a duplicate is recognisable BY, and the compact form fits
+  # the entire corpus in less prompt than 120 raw lines cost. Budget-capped at
+  # ~24KB (the loop is tested to 29KB) by dropping the OLDEST entries first,
+  # because a recent proposal is the one most likely to be repeated.
   $prior = if (Test-Path $journal) {
-    (Get-Content $journal -Raw) -split "`n" | Select-Object -Last 120 | Out-String
+    $digest = New-Object System.Collections.Generic.List[string]
+    $pending = ''
+    foreach ($line in (Get-Content -LiteralPath $journal)) {
+      if ($line -match '^##\s*Cycle\s*(\d+)\s*-\s*([A-Z]+)') {
+        $pending = '{0}/{1}' -f $Matches[1], $Matches[2]
+      } elseif ($pending -and $line -match '^MECHANISM:\s*(.+)$') {
+        $m = $Matches[1].Trim()
+        if ($m.Length -gt 90) { $m = $m.Substring(0, 90) }
+        $digest.Add("[$pending] $m")
+        $pending = ''
+      }
+    }
+    while ((($digest -join "`n").Length -gt 24000) -and $digest.Count -gt 1) {
+      $digest.RemoveAt(0)
+    }
+    if ($digest.Count) { $digest -join "`n" } else { '(none yet)' }
   } else { '(none yet)' }
 
   $hypothesis = Ask @"
@@ -625,6 +651,24 @@ $(($out -split "`n" | Select-Object -Last 10) -join "`n")
   }
 
   # --- 4. JUDGE against the protocol's criteria --------------------------
+  # The judge saw the protocol and this run's numbers and nothing else, so it
+  # could not tell a fresh idea from one this corpus had already killed. Reuse
+  # the same digest the proposer gets, filtered to KILLED, rather than building
+  # a second source of truth that can drift from it.
+  # Budget separately from $prior. Measured 2026-08-06: 232 of 232 retained
+  # entries are KILLED, so an unbounded filter hands the judge the WHOLE ~24KB
+  # digest on top of the 11.5KB protocol, the hypothesis and the run output --
+  # past the ~29KB this loop is tested at. The proposer needs breadth to avoid
+  # repeating anything; the judge only needs enough to recognise THIS mechanism,
+  # so give it the most recent kills and cap hard.
+  $refutedList = @($prior -split "`n" | Where-Object { $_ -match '^\[\d+/KILL' })
+  $refuted = ($refutedList | Select-Object -Last 90) -join "`n"
+  while ($refuted.Length -gt 8000 -and $refutedList.Count -gt 1) {
+    $refutedList = $refutedList | Select-Object -Skip 1
+    $refuted = ($refutedList | Select-Object -Last 90) -join "`n"
+  }
+  if (-not $refuted) { $refuted = '(nothing killed yet)' }
+
   $verdict = Ask @"
 Here is a hypothesis and the REAL measured output of the script that tested it.
 
@@ -647,11 +691,43 @@ Answer in at most 10 lines:
 Remember: precision alone is never evidence. A precision at or near the issued
 subset base rate is unskilled classification and must be KILLED however high it
 looks.
+
+PRIOR VERDICTS ON THIS CORPUS. This is a SEPARATE test from the numeric criteria
+above -- do not let it change how you read the numbers. If this hypothesis's
+MECHANISM was already killed below, that is an independent KILL reason, and you
+should name the earlier cycle. A mechanism that keeps being re-proposed and
+re-killed costs a cycle every time and inflates the search this corpus has run.
+Judge the numbers on the numbers; judge the novelty on this list.
+$refuted
 "@ $Lane $null 900
 
   if (-not $verdict) { $verdict = '(judge produced nothing - treated as KILL)' }
   $kept = $verdict -match 'VERDICT:\s*KEEP'
   Ev $(if ($kept) { 'KEPT' } else { 'killed' }) @{ cycle = $cycle }
+
+  # SELECTION HISTORY. Stamp the artifact with how many hypotheses this corpus
+  # had already tried when this one was written. A KEEP promoted out of here
+  # otherwise arrives in the strategy grid looking like one candidate among 48,
+  # when it actually survived a search of several hundred -- the divisor would be
+  # wrong by roughly 5x, in the direction that makes things look significant.
+  # The grid lane corrects multiplicity properly (SPA, StepM, Bonferroni over a
+  # 528 divisor); it can only do that if the number travels with the candidate.
+  if (Test-Path -LiteralPath $script) {
+    $stamp = @"
+# SELECTION HISTORY -- written by ops/eighty-loop.ps1, do not edit by hand.
+# corpus_size_at_generation: $($hBase + $cycle - 1)
+# cycle_index: $cycle
+# verdict: $(if ($verdict -match 'VERDICT:\s*(KEEP|KILL)') { $Matches[1] } else { 'UNKNOWN' })
+# This hypothesis was selected from the corpus above. Any multiplicity
+# correction applied downstream MUST use corpus_size_at_generation, not the
+# size of whatever family it is promoted into.
+
+"@
+    $body = [IO.File]::ReadAllText($script)
+    if ($body -notmatch '(?m)^# SELECTION HISTORY') {
+      [IO.File]::WriteAllText($script, $stamp + $body, (New-Object Text.UTF8Encoding $false))
+    }
+  }
 
   # --- 5. RECORD, kept or killed -----------------------------------------
   Add-Content $journal @"
