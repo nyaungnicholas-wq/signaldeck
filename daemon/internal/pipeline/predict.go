@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -451,6 +452,36 @@ func rankGate(fleet map[string]float64, leg string, h md.Horizon, auc float64, n
 	return clusterstat.RankEdge(auc, nEval)
 }
 
+// requireMeasuredLegs reports whether the blend runs in PRODUCTION mode, where
+// every leg must carry a measured positive edge, rather than COLD-START mode,
+// where an ungraded leg is kept so a cold or erroring trainer cannot blank the
+// platform.
+//
+// Default ON, which INVERTS the historical default. Cold start was the right
+// contract while the trainers were new and most legs were ungraded. It is the
+// wrong one now that they are graded, because the only legs it still admits on
+// absence of evidence are precisely the ones no trainer has ever managed to
+// grade. On the live record that is the sentiment leg: numeric on ~3% of rows,
+// measured within-day AUC 0.3805 — ranking BACKWARDS — and admitted on ~25% of
+// the current day's rows for no reason but that nothing assigns SentimentLift.
+//
+// The graded legs are unaffected either way. Pressure and expectancy carry
+// RankEdge entries, and RankEdge overrides the lift gate, so this flag reaches
+// only the ungraded remainder. That is the whole point: it closes the door that
+// says absence of evidence is evidence of edge, and touches nothing else.
+//
+// SIGNALDECK_COLD_START_LEGS=1 restores the old fail-safe without a rebuild.
+// That is deliberately the rollback path for this change: if a trainer outage
+// ever does thin emission, recovery is one environment variable and a restart
+// rather than a revert, rebuild and redeploy.
+func requireMeasuredLegs() bool {
+	switch os.Getenv("SIGNALDECK_COLD_START_LEGS") {
+	case "1", "true", "TRUE", "yes":
+		return false
+	}
+	return true
+}
+
 func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {
@@ -484,6 +515,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		fleetAUC = map[string]float64{}
 	}
+	// Read once per pass, not per symbol: the mode is a deploy-time decision and
+	// re-reading it mid-sweep could split one pass across two contracts.
+	strictLegs := requireMeasuredLegs()
 	// Newest trading day already carrying an EVIDENCE row per symbol, so a
 	// legless blend is recorded once a day rather than on all ~138 passes. One
 	// query per horizon, mutated in place as this pass writes.
@@ -688,7 +722,11 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if !ok {
 				continue
 			}
-			c := ensemble.Components{PressureScore: sc.Score, SentimentScore: sentScore}
+			c := ensemble.Components{
+				PressureScore:       sc.Score,
+				SentimentScore:      sentScore,
+				RequireMeasuredLegs: strictLegs,
+			}
 			// RANKING GATE. Every leg below already carries a graded
 			// out-of-sample AUC; until now admission was decided on
 			// Lift = Accuracy - BaseRate, which is threshold-dependent and so
@@ -831,6 +869,54 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				}
 			}
 			raw, nUsed, admitted := ensemble.AdmittedProbability(c, wts)
+			// persistFeatures writes the INPUT VECTOR this pass saw and returns it
+			// for the ledger's feature hash. Failure must NOT fail the prediction —
+			// log + dq metric.
+			//
+			// Called on EVERY path, including the two that publish nothing. The
+			// vector records what the inputs WERE, which is true whether or not a
+			// forecast was emitted from them, and it is what the leg trainers read
+			// to produce the grades that decide admission. Skipping it on a
+			// withheld row is the same self-sealing trap the evidence row exists to
+			// avoid, one surface over: bench a leg (or gate a horizon), stop
+			// recording the inputs, and the trainers starve of exactly the data
+			// that could re-admit it. Measured 2026-08-07: the 1d cross-section
+			// gate had already driven that day's 1d feature corpus to 23 of 329
+			// symbols while 1w, ungated, kept 328.
+			persistFeatures := func(cal float64) map[string]float64 {
+				var rankPct *float64
+				if pct, ok := rankPcts[s.ID]; ok {
+					rankPct = &pct
+				}
+				// xsMap is nil when this symbol had no computable cross-section
+				// (too few peers, or a leg uncomputable for it). buildFeatureVector
+				// skips nil maps, so the feature is ABSENT rather than defaulted —
+				// a fabricated 0.5 would place the symbol at the median of a
+				// cross-section it was never ranked against.
+				var xsMap map[string]float64
+				if f, ok := xsFeats[s.ID]; ok {
+					xsMap = f.vec()
+				}
+				// hmm_<label>=1 rides in as one more cross-cutting feature map, so
+				// the vector records what the HMM said at prediction time whether
+				// or not it currently keys the weight cells.
+				var hmmMap map[string]float64
+				if l := hmmLbls[s.ID]; l != "" {
+					hmmMap = map[string]float64{"hmm_" + l: 1}
+				}
+				vec := buildFeatureVector(sc, c, raw, cal, cellKey(regimeLbls[s.ID], hmmLbls[s.ID]), rankPct, sentN, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap, xsMap, hmmMap)
+				if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
+					featErrs++
+					slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)
+					sid := s.ID
+					_ = w.St.InsertDQ(ctx, md.DQEvent{
+						SymbolID: &sid, Ts: time.Now().Unix(),
+						Kind: "feature_store_error", Detail: fmt.Sprintf("horizon %s: %v", h, err),
+					})
+				}
+				return vec
+			}
+
 			if !admitted {
 				// NO LEG SURVIVED ADMISSION — record the EVIDENCE, publish nothing.
 				//
@@ -871,6 +957,10 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				// map is deliberately NOT applied and cal_prob is left equal to
 				// raw — the column has to hold something, and an uncalibrated
 				// number that no surface reads is the honest thing to put there.
+				// cal is deliberately raw here, matching the CalProb stored above:
+				// no calibration map was applied to a legless blend, so the vector
+				// must not claim one was.
+				persistFeatures(raw)
 				noLegs++
 				continue
 			}
@@ -898,6 +988,12 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				// Yesterday's cross-section was degenerate. Skip the upsert exactly
 				// as a legless blend does: the row that would be written here is the
 				// one that gets graded as an independent forecast, and it is not one.
+				//
+				// The INPUTS are still recorded. Withholding the forecast is the
+				// point; withholding the feature vector too would make the gate
+				// latch shut, since the trainers whose grades reopen the horizon
+				// read exactly this table.
+				persistFeatures(cal)
 				gatedRows++
 				continue
 			}
@@ -929,38 +1025,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					slog.Warn("prequential-majority benchmark: seed failed", "symbol", s.Symbol, "horizon", h, "err", err)
 				}
 			}
-			// Feature store: persist the full input vector this prediction
-			// used. Failure must NOT fail the prediction — log + dq metric.
-			var rankPct *float64
-			if pct, ok := rankPcts[s.ID]; ok {
-				rankPct = &pct
-			}
-			// xsMap is nil when this symbol had no computable cross-section
-			// (too few peers, or a leg uncomputable for it). buildFeatureVector
-			// skips nil maps, so the feature is ABSENT rather than defaulted —
-			// a fabricated 0.5 would place the symbol at the median of a
-			// cross-section it was never ranked against.
-			var xsMap map[string]float64
-			if f, ok := xsFeats[s.ID]; ok {
-				xsMap = f.vec()
-			}
-			// hmm_<label>=1 rides in as one more cross-cutting feature map, so
-			// the vector records what the HMM said at prediction time whether
-			// or not it currently keys the weight cells.
-			var hmmMap map[string]float64
-			if l := hmmLbls[s.ID]; l != "" {
-				hmmMap = map[string]float64{"hmm_" + l: 1}
-			}
-			vec := buildFeatureVector(sc, c, raw, cal, cellKey(regimeLbls[s.ID], hmmLbls[s.ID]), rankPct, sentN, microMap, vixMap, macroMap, newsMap, alphaSymMap, alphaMktMap, idxMap, trendMap, xsMap, hmmMap)
-			if err := w.St.InsertFeatures(ctx, s.ID, h, ts, featureVersion, vec); err != nil {
-				featErrs++
-				slog.Warn("feature store: persist failed", "symbol", s.Symbol, "horizon", h, "err", err)
-				sid := s.ID
-				_ = w.St.InsertDQ(ctx, md.DQEvent{
-					SymbolID: &sid, Ts: time.Now().Unix(),
-					Kind: "feature_store_error", Detail: fmt.Sprintf("horizon %s: %v", h, err),
-				})
-			}
+			vec := persistFeatures(cal)
 			// STAGE 3 — append-only, hash-chained prediction ledger. Commit the
 			// prediction's identity to the tamper-evident chain AFTER the
 			// prediction + feature vector are persisted, and BEFORE any outcome

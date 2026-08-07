@@ -123,6 +123,7 @@ func TestPredictionRunnerBlendsAlphaXLeg(t *testing.T) {
 		}
 	}
 
+	seedGradedPressureLeg(t, st, sym.ID, now)
 	if _, err := (&PredictionRunner{St: st}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
