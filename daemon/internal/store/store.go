@@ -277,6 +277,24 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// basis-marker wave: which label-and-signal basis produced an outcome row.
+	// The live DB already carries this column (it was added out of band and left
+	// 100% NULL on 525,301 rows), so the guard below is what makes the schema
+	// file and the live schema agree instead of drifting. Pre-existing rows stay
+	// NULL, which reads as "basis predates the marker" — the honest answer, since
+	// nothing can retroactively know which build wrote them. See BasisEpoch.
+	for _, col := range []struct{ name, ddl string }{
+		{"basis_epoch", `ALTER TABLE prediction_outcomes ADD COLUMN basis_epoch INTEGER`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('prediction_outcomes') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
 	// multiplicity wave: the corrected divisor a loop hypothesis cleared. Live
 	// DBs already hold rows from before the loop fed PriorSearches, and those
 	// rows keep divisor=0 — the truthful state, meaning "correction unrecorded",

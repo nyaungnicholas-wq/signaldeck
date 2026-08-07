@@ -34,6 +34,30 @@ type Prediction struct {
 	Basis string `json:"basis,omitempty"`
 }
 
+// BasisEpoch identifies the LABEL-AND-SIGNAL BASIS that produced an outcome
+// row. Every row this build seeds carries it, so a grader can tell two
+// populations apart instead of pooling them and reporting the mixture.
+//
+// It is a hand-bumped constant, NOT time.Now(). A per-row timestamp would give
+// every row a distinct value and group nothing; the whole point is that rows
+// sharing a basis share a number. Bump it when — and only when — a change makes
+// new rows non-comparable with old ones. The resolver settlement guard is the
+// worked example: it stopped labeling 1d rows against a forward bar whose
+// session had not closed, so rows written after it are not the same measurement
+// as rows written before it, and 44% vs anything across that line is a mixture.
+//
+// The value is the UTC instant this basis took effect (2026-08-07 00:00Z) — the
+// first full UTC day under the settlement-guarded resolver and the ranking gate.
+// Rows written by earlier builds stay NULL, which reads as "basis predates the
+// marker" and is the honest answer: nothing retroactively knows which build
+// wrote them.
+//
+// Stamping alone EXCLUDES NOTHING. There is no reader yet, so every grader still
+// sees every row; a grader that wants one basis must say so itself. That is
+// deliberate — changing what the SHA-pinned grader counts is a pre-registration
+// change, not a code change.
+const BasisEpoch int64 = 1786060800
+
 // UpsertPrediction stores a prediction and seeds its outcome row.
 func (s *Store) UpsertPrediction(ctx context.Context, p Prediction) error {
 	tx, err := s.w.BeginTx(ctx, nil)
@@ -64,8 +88,8 @@ func (s *Store) UpsertPrediction(ctx context.Context, p Prediction) error {
 	// reason, so an evidence row is never served as a forecast either.
 	if p.NUsed > 0 {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob)
-			VALUES (?,?,?,?)`, p.SymbolID, string(p.Horizon), p.Ts, p.CalProb); err != nil {
+			INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob, basis_epoch)
+			VALUES (?,?,?,?,?)`, p.SymbolID, string(p.Horizon), p.Ts, p.CalProb, BasisEpoch); err != nil {
 			return err
 		}
 	}
@@ -268,8 +292,8 @@ func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, li
 // while the registry's per-horizon grouping picks them up automatically.
 func (s *Store) SeedBenchmarkOutcome(ctx context.Context, symbolID int64, h md.Horizon, ts int64, prob float64) error {
 	_, err := s.w.ExecContext(ctx, `
-		INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob)
-		VALUES (?,?,?,?)`, symbolID, string(h), ts, prob)
+		INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob, basis_epoch)
+		VALUES (?,?,?,?,?)`, symbolID, string(h), ts, prob, BasisEpoch)
 	return err
 }
 
