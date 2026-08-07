@@ -384,6 +384,51 @@ foreach ($f in Get-ChildItem -LiteralPath $work -Filter 'h*.py' -File -ErrorActi
   }
 }
 Ev 'numbering' @{ startsAfter = $hBase }
+
+# Commit-Draft — put each cycle's script into git as soon as it is journaled.
+#
+# The drafts have to BE in git: the protocol's acceptance criteria require a
+# result to reproduce from a cold clone, and a journal entry citing
+# research/eighty/h0007.py is worth nothing if a clone does not contain it.
+# Leaving them untracked also blocks deploys outright — build_from_head refuses
+# a dirty tree and manifest-check refuses untracked paths under research/, so an
+# uncommitted draft stops `signaldeck-ctl.sh deploy` for everyone.
+#
+# Per CYCLE, not at loop-end: this loop is killed often (2026-08-06 alone it
+# exited 0xC000013A at 21:02 and 0x00000001 at 23:02), and an end-of-run commit
+# is exactly the code a kill skips. Committing here means the worst a kill costs
+# is the cycle in flight.
+#
+# CONCURRENCY. Other sessions work in this tree, so this must never sweep their
+# work into its commit. `git commit -- <path>` is the pathspec form: it commits
+# the working-tree content of THAT path only and ignores whatever else is
+# staged, so a colleague's half-staged index cannot ride along. A plain
+# `git commit` here would silently author their changes.
+#
+# Best-effort throughout: index.lock contention with a concurrent git process is
+# expected, and losing a commit costs one retry next cycle, while throwing would
+# kill a research run. Never let git failure escape.
+function Commit-Draft {
+  param([string] $Path)
+  if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
+  try {
+    $rel = [IO.Path]::GetRelativePath($repo, $Path) -replace '\\', '/'
+
+    & git -C $repo add -- $rel 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { Ev 'commit-skip' @{ path = $rel; why = 'add failed' }; return }
+
+    # Nothing staged for this path (unchanged re-run) => nothing to commit.
+    & git -C $repo diff --cached --quiet -- $rel 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { return }
+
+    & git -C $repo commit -q -m "Capture $rel from the Eighty Loop" -- $rel 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { Ev 'committed' @{ path = $rel } }
+    else                     { Ev 'commit-skip' @{ path = $rel; why = "commit exit $LASTEXITCODE" } }
+  } catch {
+    Ev 'commit-skip' @{ path = $Path; why = $_.Exception.Message }
+  }
+}
+
 while ((Get-Date) -lt $deadline -and $cycle -lt $MaxCycles) {
   $cycle++
   Ev 'cycle-start' @{ cycle = $cycle }
@@ -747,6 +792,8 @@ $verdict
 
 Script: ``research/eighty/$(Split-Path $script -Leaf)``
 "@
+
+  Commit-Draft $script
 
   Start-Sleep -Seconds $CyclePauseSec
 }
