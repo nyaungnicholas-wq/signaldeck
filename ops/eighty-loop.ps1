@@ -548,6 +548,31 @@ Output the raw Python file only. No markdown fences, no commentary.
 
   if (-not $code) { Ev 'no-code'; Start-Sleep -Seconds $CyclePauseSec; continue }
 
+  # SELECTION HISTORY. Stamp at WRITE time, not after the judge. The first
+  # version of this stamped after stage 4 and h0276 came out bare, because the
+  # cycle exited at 'insufficient-data' in stage 3 and never reached the judge --
+  # and most cycles do exactly that. The artifact is written either way, so the
+  # stamp has to live where the artifact does.
+  #
+  # Why it matters: a KEEP promoted out of here otherwise arrives in the strategy
+  # grid looking like one candidate among 48, when it survived a search of several
+  # hundred. The grid corrects multiplicity properly (SPA, StepM, Bonferroni over
+  # a 528 divisor) but can only do so if the number travels with the candidate.
+  # Verdict is deliberately NOT stamped: it is unknown at write time for most
+  # cycles, and a field that usually reads UNKNOWN is worse than no field.
+  if (Test-Path -LiteralPath $script) {
+    $body = [IO.File]::ReadAllText($script)
+    if ($body -notmatch '(?m)^# SELECTION HISTORY') {
+      $stamp = "# SELECTION HISTORY -- written by ops/eighty-loop.ps1, do not edit by hand.`n" +
+               "# corpus_size_at_generation: $($hBase + $cycle - 1)`n" +
+               "# cycle_index: $cycle`n" +
+               "# Any multiplicity correction applied downstream MUST use`n" +
+               "# corpus_size_at_generation, not the size of the family this is`n" +
+               "# promoted into.`n`n"
+      [IO.File]::WriteAllText($script, $stamp + $body, (New-Object Text.UTF8Encoding $false))
+    }
+  }
+
   # --- 3. VERIFY: it must actually run -----------------------------------
   $r = Run "h$cycle" "python `"$script`"" 900
   if (-not $r.Ok) {
@@ -704,30 +729,6 @@ $refuted
   if (-not $verdict) { $verdict = '(judge produced nothing - treated as KILL)' }
   $kept = $verdict -match 'VERDICT:\s*KEEP'
   Ev $(if ($kept) { 'KEPT' } else { 'killed' }) @{ cycle = $cycle }
-
-  # SELECTION HISTORY. Stamp the artifact with how many hypotheses this corpus
-  # had already tried when this one was written. A KEEP promoted out of here
-  # otherwise arrives in the strategy grid looking like one candidate among 48,
-  # when it actually survived a search of several hundred -- the divisor would be
-  # wrong by roughly 5x, in the direction that makes things look significant.
-  # The grid lane corrects multiplicity properly (SPA, StepM, Bonferroni over a
-  # 528 divisor); it can only do that if the number travels with the candidate.
-  if (Test-Path -LiteralPath $script) {
-    $stamp = @"
-# SELECTION HISTORY -- written by ops/eighty-loop.ps1, do not edit by hand.
-# corpus_size_at_generation: $($hBase + $cycle - 1)
-# cycle_index: $cycle
-# verdict: $(if ($verdict -match 'VERDICT:\s*(KEEP|KILL)') { $Matches[1] } else { 'UNKNOWN' })
-# This hypothesis was selected from the corpus above. Any multiplicity
-# correction applied downstream MUST use corpus_size_at_generation, not the
-# size of whatever family it is promoted into.
-
-"@
-    $body = [IO.File]::ReadAllText($script)
-    if ($body -notmatch '(?m)^# SELECTION HISTORY') {
-      [IO.File]::WriteAllText($script, $stamp + $body, (New-Object Text.UTF8Encoding $false))
-    }
-  }
 
   # --- 5. RECORD, kept or killed -----------------------------------------
   Add-Content $journal @"
