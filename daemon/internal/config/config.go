@@ -382,9 +382,21 @@ func loopbackOnly(addr string) bool {
 // but a repo file says nothing about whether THIS machine publishes the daemon.
 // An operator running a tunnel this list does not know about still has
 // SIGNALDECK_ASSUME_TUNNEL.
-var tunnelAgentPaths = []string{
-	os.ExpandEnv("$HOME/Library/LaunchAgents/com.signaldeck.tunnel.plist"),
-}
+// HOME is not a Windows environment variable, so os.ExpandEnv("$HOME/...")
+// expanded to nothing there and left a bare "/Library/LaunchAgents/..." — not
+// absolute on Windows, which is a path this machine can never hold. It also
+// meant the value differed by SHELL: git-bash exports a path-converted HOME and
+// PowerShell exports none, so the same check passed from one terminal and failed
+// from the other. os.UserHomeDir reads USERPROFILE on Windows and HOME elsewhere.
+var tunnelAgentPaths = func() []string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil // unknown home — no agent can be confirmed, so fail closed
+	}
+	return []string{
+		filepath.Join(home, "Library", "LaunchAgents", "com.signaldeck.tunnel.plist"),
+	}
+}()
 
 // tunnelConfigured reports whether a reverse-tunnel LaunchAgent exists on this
 // machine. Overridable by SIGNALDECK_ASSUME_TUNNEL for testing and for an
