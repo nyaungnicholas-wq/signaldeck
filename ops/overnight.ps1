@@ -32,12 +32,13 @@
 #>
 param(
   [double]$Hours = 0,                              # 0 = run until stopped
-  [int]$CycleMinutes = 45,
+  [int]$CycleMinutes = 20,        # bounds kill latency even if the poll misses
   [string]$KillFile = 'ops/STOP-OVERNIGHT',
   [string]$Backlog = 'ops/IMPROVE_BACKLOG.md',
   [string]$Journal = 'logs/overnight.md',
   [string]$Events = 'logs/overnight.jsonl',
   [string]$Db = 'data/signaldeck.db',
+  [int]$MaxNoopRounds = 3,
   [switch]$SelfTest
 )
 
@@ -167,6 +168,15 @@ if (Test-Path $KillFile) { Remove-Item $KillFile -Force }
 
 $start = Get-Date
 $round = 0
+
+# A loop that changes nothing looks EXACTLY like a loop that is working: same
+# cadence, same log volume, no errors. The first run spent 11.7 hours and 150
+# cycles emitting 'no-target-file' and committing nothing, and nothing in the
+# system said so. HEAD is the only honest evidence that a round did work, so
+# watch it and stop loudly rather than spinning until morning.
+function Head { try { (git rev-parse HEAD 2>$null).Trim() } catch { '' } }
+$lastHead = Head
+$noopRounds = 0
 Note 'start' "overnight loop up; kill with: New-Item $KillFile"
 Journal "`n# Overnight run $(Get-Date -Format 'yyyy-MM-dd HH:mm')`n"
 
@@ -191,13 +201,47 @@ while ($true) {
 
   $chunk = [math]::Max(0.05, $CycleMinutes / 60.0)
   if ($Hours -gt 0) { $chunk = [math]::Min($chunk, [math]::Max(0.05, $Hours - $elapsed)) }
+  # Start-Process + poll, NOT a blocking call. Invoked with `&`, the child owned
+  # the round: the kill file was only read between rounds, so stopping the
+  # supervisor left the child running. That is exactly what happened -- the first
+  # run's supervisor and its selfimprove child were still alive 12.5 hours later,
+  # writing OLD code's events into the same log as a fresh run and briefing a
+  # worker against a stale gate verdict. Poll every 5s so the kill file lands
+  # within seconds instead of within a cycle.
   Note 'work' "handing ${CycleMinutes}m to selfimprove-loop"
+  $childLog = 'logs/selfimprove-child.log'
   try {
-    & powershell -NoProfile -File 'ops/selfimprove-loop.ps1' -Hours $chunk -CyclePauseSec 30 2>&1 |
-      ForEach-Object { Write-Host "    $_" }
+    $proc = Start-Process -FilePath 'powershell.exe' -PassThru -NoNewWindow `
+      -ArgumentList '-NoProfile', '-File', 'ops/selfimprove-loop.ps1',
+                    '-Hours', $chunk, '-CyclePauseSec', '30' `
+      -RedirectStandardOutput $childLog -RedirectStandardError "$childLog.err"
+    while (-not $proc.HasExited) {
+      if (Test-Path $KillFile) {
+        Note 'stop' "kill file appeared mid-round -- stopping child PID $($proc.Id)"
+        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+        break
+      }
+      Start-Sleep -Seconds 5
+    }
   } catch {
     Note 'work-error' "selfimprove-loop failed: $_"
     Start-Sleep -Seconds 120
+  }
+
+  $head = Head
+  if ($head -and $head -eq $lastHead) {
+    $noopRounds++
+    Note 'noop' "round $round committed nothing ($noopRounds/$MaxNoopRounds consecutive)"
+    if ($noopRounds -ge $MaxNoopRounds) {
+      Note 'ABORT' "$noopRounds rounds in a row changed nothing -- stopping instead of spinning. Check logs/overnight.jsonl for 'no-target-file' or a red gate that cannot be repaired."
+      Journal "`n**ABORTED** after $noopRounds consecutive rounds with no commit. HEAD never moved from $lastHead.`n"
+      break
+    }
+  }
+  else {
+    if ($noopRounds -gt 0) { Note 'progress' "HEAD moved to $head after $noopRounds idle round(s)" }
+    $noopRounds = 0
+    $lastHead = $head
   }
 }
 
