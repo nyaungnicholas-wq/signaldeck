@@ -445,8 +445,18 @@ func (w *PredictionRunner) Interval() time.Duration { return 10 * time.Minute }
 // one — because at ~1,000 symbols the tail of a null leg clears a 90% bound
 // about 100 times by chance, and that tail is exactly what a per-symbol gate
 // would otherwise admit.
-func rankGate(fleet map[string]float64, leg string, h md.Horizon, auc float64, nEval int) (float64, bool) {
-	if a, ok := fleet[leg+"|"+string(h)]; ok && a <= 0.5 {
+// MEASURED THE WAY THE LEG IS USED. `vetoed` carries the day-clustered
+// WITHIN-DAY cross-sectional AUC verdict (fleetveto.go) rather than an
+// n-weighted mean of per-symbol AUCs. The old statistic answered a different
+// question and answered it noisily: on the live 1d pressure record the two
+// disagreed enough to flip the verdict — 0.3614, vetoed outright, versus 0.4636
+// with a 95% interval of [0.4113, 0.5158] that contains chance.
+//
+// A leg is vetoed only when the WHOLE interval sits at or below 0.5. One that
+// straddles chance, or has too few days to measure, falls through to the
+// per-symbol Wilson bound below and is judged there.
+func rankGate(vetoed map[string]bool, leg string, h md.Horizon, auc float64, nEval int) (float64, bool) {
+	if vetoed[leg+"|"+string(h)] {
 		return -1, true
 	}
 	return clusterstat.RankEdge(auc, nEval)
@@ -507,14 +517,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		rankPcts = map[int64]float64{}
 	}
-	// FLEET RANKING GRADES, read once. Used only to VETO a leg whose measured
-	// ranking is at or below chance across every symbol the trainers graded —
-	// see store.FleetLegAUC for why a per-symbol bound alone is not enough at
-	// fleet width. Best-effort: an error leaves the per-symbol gate in charge.
-	fleetAUC, err := w.St.FleetLegAUC(ctx)
-	if err != nil {
-		fleetAUC = map[string]float64{}
-	}
+	// FLEET RANKING VETO, read once. Measured as the day-clustered WITHIN-DAY
+	// cross-sectional AUC — the ranking a leg is actually asked to perform —
+	// rather than an n-weighted mean of per-symbol AUCs, which answers "does
+	// this symbol's score predict its own moves over time" and answers it with
+	// per-symbol estimates whose standard error is near 0.1. See fleetveto.go.
+	// Best-effort: on an unreadable cross-section nothing is vetoed and the
+	// per-symbol bound stays in charge.
+	vetoed := fleetVetoes(ctx, w.St, predHorizons)
 	// Read once per pass, not per symbol: the mode is a deploy-time decision and
 	// re-reading it mid-sweep could split one pass across two contracts.
 	strictLegs := requireMeasuredLegs()
@@ -766,7 +776,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// legs, written by ExpectancyTrainer. Without it this leg is admitted
 			// on availability alone — and with pressure and alphax now benched on
 			// measured ranking, it would be the leg carrying most of the blend.
-			if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelExpectancy, ts); ok {
+			if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelExpectancy, ts); ok {
 				c.RankEdge[ensemble.LegExpectancy] = e
 			}
 			// Forecast prob + lift (lift gates whether it is trusted).
@@ -774,7 +784,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				if f.Horizon == h {
 					p, l := f.Prob, f.Lift
 					c.ForecastProb, c.ForecastLift = &p, &l
-					if e, ok := rankGate(fleetAUC, ensemble.LegForecast, h, f.AUC, f.NEval); ok {
+					if e, ok := rankGate(vetoed, ensemble.LegForecast, h, f.AUC, f.NEval); ok {
 						c.RankEdge[ensemble.LegForecast] = e
 					}
 				}
@@ -787,7 +797,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelGBM, ts); ok {
 				c.GBMProb, c.GBMLift = &p, &l
 
-				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelGBM, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelGBM, ts); ok {
 
 					c.RankEdge[ensemble.LegGBM] = e
 
@@ -796,7 +806,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelMeanRev, ts); ok {
 				c.MeanRevProb, c.MeanRevLift = &p, &l
 
-				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelMeanRev, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelMeanRev, ts); ok {
 
 					c.RankEdge[ensemble.LegMeanRev] = e
 
@@ -811,7 +821,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelAlphaX, ts); ok {
 				c.AlphaXProb, c.AlphaXLift = &p, &l
 
-				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelAlphaX, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelAlphaX, ts); ok {
 
 					c.RankEdge[ensemble.LegAlphaX] = e
 
@@ -827,7 +837,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if _, l, ok := modelLegProbLift(modelFcs, h, store.ModelPressure, ts); ok {
 				c.PressureLift = &l
 
-				if e, ok := modelLegRankEdge(fleetAUC, modelFcs, h, store.ModelPressure, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelPressure, ts); ok {
 
 					c.RankEdge[ensemble.LegPressure] = e
 
