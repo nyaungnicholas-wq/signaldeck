@@ -26,6 +26,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/discovery"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/evidence"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/forecastmon"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/hud"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
@@ -810,6 +811,17 @@ func learningWorkers(st *store.Store) []workers.Worker {
 		// windows; every grade runs a self-attack battery whose failures enter
 		// the same evidence chain. Audit surface only — mutates nothing live.
 		pipeline.NewResearchLedgerWorker(st),
+		// Forecast integrity monitor: forecast-monitor (24h) is the only thing
+		// watching for the two SILENT deaths this forecaster has actually
+		// suffered — a collapsed cross-section (6 distinct probabilities across
+		// 328 symbols for eight straight days, 2026-07-27..08-04, with every
+		// dashboard green throughout) and a calibration inversion (the >=70%
+		// bucket realizing BELOW the base rate). It returns an ERROR when either
+		// trips, which is the delivery mechanism: /api/health reports any worker
+		// whose latest run did not deliver, so a collapse turns the daemon
+		// degraded within a day and needs no alert transport — this machine has
+		// none configured. It measures and reports; it never adjusts a forecast.
+		&forecastmon.Monitor{Src: forecastmon.NewStoreSource(st)},
 		// Pre-registration registrar: freezes what each structural predictor
 		// CLAIMS into a hash-chained record BEFORE its forecasts resolve
 		// (first gradable 2026-08-07). The value of a pre-registration is
