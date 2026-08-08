@@ -217,3 +217,47 @@ func (s *Store) AdmittedLegHistogram(ctx context.Context, horizon string, since 
 	}
 	return out, rows.Err()
 }
+
+// PublishedCrossSection returns the calibrated probabilities actually PUBLISHED
+// for one horizon on one trading day, deduplicated to one per symbol.
+//
+// This exists because the publication gate used to judge a day from a single
+// pass's in-memory slice, recorded to meta and overwritten every ~10 minutes.
+// The stored record was therefore whatever the LAST pass of the day happened to
+// emit, and a thin pass silently disarmed the gate: measured 2026-08-08, the
+// record read n=12 on a 329-symbol day, where the distinct rule needs only 6 and
+// the spread cleared its floor by 0.00002. Both collapsed days that followed
+// sailed through a gate that would have caught them on the real cross-section.
+//
+// Reading the PRIOR day from the table has none of that fragility. It is the
+// complete cross-section rather than a sample of it, it is the same unit the
+// accuracy registry grades, and because the day is finished there is no risk of
+// the gate judging the sweep it is in the middle of producing — which is the
+// reason the one-pass record existed in the first place.
+//
+// n_used > 0 filters the evidence-only rows that a legless blend writes: those
+// are deliberately not forecasts and must not count toward the shape of what was
+// published.
+func (s *Store) PublishedCrossSection(ctx context.Context, horizon, day string) ([]float64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		WITH dedup AS (
+		  SELECT cal_prob,
+		         ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY ts DESC) rn
+		  FROM predictions
+		  WHERE horizon = ? AND n_used > 0 AND date(ts,'unixepoch') = ?
+		)
+		SELECT cal_prob FROM dedup WHERE rn = 1`, horizon, day)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []float64
+	for rows.Next() {
+		var p float64
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

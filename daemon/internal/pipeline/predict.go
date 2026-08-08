@@ -557,13 +557,33 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	today := time.Now().UTC().Format("2006-01-02")
 	gated := map[md.Horizon]string{}
 	for _, h := range predHorizons {
+		// MEASURED FROM THE TABLE, NOT FROM A STORED SAMPLE.
+		//
+		// This used to read a meta record that saveCrossSection overwrote once
+		// per pass, so the gate judged a whole day from whatever the LAST pass
+		// of that day happened to emit. Measured 2026-08-08 the record read
+		// n=12 on a 329-symbol day: the distinct rule then needs only 6, and
+		// the spread cleared its floor by 0.00002. A thin pass silently
+		// disarmed the gate, and the collapses of 08-06 and 08-07 — both of
+		// which the spread rule catches on the real cross-section — published.
+		//
+		// The prior day is COMPLETE, so reading it from the table carries none
+		// of the risk the one-pass record existed to avoid (a gate judging the
+		// sweep it is producing), while measuring the whole cross-section
+		// instead of a sample of it.
 		rec, err := loadCrossSection(ctx, w.St, h)
-		// Only a PRIOR day may gate: reading a record this pass wrote would let
-		// the gate judge the sweep it is in the middle of producing.
 		if err != nil || rec == nil || rec.Day == "" || rec.Day >= today {
 			continue
 		}
-		if ok, reason := rec.CrossSection.Usable(); !ok {
+		probs, perr := w.St.PublishedCrossSection(ctx, string(h), rec.Day)
+		if perr != nil || len(probs) == 0 {
+			// Nothing published that day is not evidence of a collapse; a cold
+			// start must not be indistinguishable from one.
+			continue
+		}
+		measured := ensemble.MeasureCrossSection(probs)
+		if ok, reason := measured.Usable(); !ok {
+			rec.CrossSection = measured
 			gated[h] = reason
 			slog.Warn("cross-section gate: refusing to publish this horizon",
 				"horizon", h, "priorDay", rec.Day, "reason", reason,
