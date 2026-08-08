@@ -2,9 +2,12 @@ package forecastmon
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // stubSource replays a measured record without a database.
@@ -152,6 +155,14 @@ func TestThinWindowWithholdsRatherThanPasses(t *testing.T) {
 	if !strings.Contains(err.Error(), "WITHHELD") {
 		t.Errorf("error should say the verdict was withheld, got: %v", err)
 	}
+	// WITHHELD must file as DEGRADED, not as a failure. Post-collapse there are
+	// two clean days and ten are needed, so erroring would hold the daemon red
+	// for a fortnight on a condition that resolves by itself — and a monitor
+	// that cries wolf for two weeks has trained everyone to dismiss it by the
+	// time it means something.
+	if !errors.Is(err, workers.ErrDegraded) {
+		t.Errorf("a withheld verdict must wrap workers.ErrDegraded, got: %v", err)
+	}
 	if strings.Contains(err.Error(), "INVERSION in bucket") {
 		t.Errorf("a withheld window must not also assert an inversion: %v", err)
 	}
@@ -168,5 +179,24 @@ func TestDesignEffect(t *testing.T) {
 	}
 	if got := DesignEffect(days[:1], []float64{0.5}); got != 1 {
 		t.Errorf("a single day gave deff %.2f, want 1 (unmeasurable)", got)
+	}
+}
+
+// A real failure must NOT be softened to degraded just because the window is
+// also too thin to judge inversion. A collapse is actionable today.
+func TestCollapseStaysAHardFailureEvenWhenInversionIsWithheld(t *testing.T) {
+	_, err := run(t, stubSource{
+		days:  []DayStat{{Day: "2026-08-03", Symbols: 328, DistinctProbs: 6}},
+		base:  0.583,
+		nDays: 1,
+	})
+	if err == nil {
+		t.Fatal("a collapsed day returned no error")
+	}
+	if errors.Is(err, workers.ErrDegraded) {
+		t.Errorf("a CROSS-SECTION COLLAPSE was filed as merely degraded: %v", err)
+	}
+	if !strings.Contains(err.Error(), "CROSS-SECTION COLLAPSE") {
+		t.Errorf("error does not name the collapse: %v", err)
 	}
 }

@@ -42,6 +42,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // MinDistinctRatio is the collapse threshold: distinct probability values as a
@@ -201,11 +203,12 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 	}
 
 	// 2. Inversion — only once the window can support a verdict.
+	withheld := ""
 	switch {
 	case nDays < MinDaysForInversion:
-		problems = append(problems, fmt.Sprintf(
+		withheld = fmt.Sprintf(
 			"inversion check WITHHELD: %d/%d distinct days. Not a pass — there is not enough "+
-				"record to say either way", nDays, MinDaysForInversion))
+				"record to say either way", nDays, MinDaysForInversion)
 	default:
 		var inverted []Bucket
 		for _, b := range buckets {
@@ -223,13 +226,30 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 
 	detail := fmt.Sprintf("%d day(s) checked, %d bucket(s), base rate %.1f%%",
 		len(days), len(buckets), baseRate*100)
-	if len(problems) == 0 {
-		return detail + "; no collapse, no inversion", nil
+
+	// A tripped check is an ERROR: the daemon's health endpoint reports any
+	// worker whose latest run did not deliver, so a collapse turns the daemon
+	// degraded within a day. That is the whole delivery mechanism — it needs no
+	// alert transport, and this machine has none configured.
+	if len(problems) > 0 {
+		if withheld != "" {
+			problems = append(problems, withheld)
+		}
+		return detail, fmt.Errorf("%s", strings.Join(problems, " | "))
 	}
-	// Returned as an ERROR so the daemon's health endpoint reports this worker as
-	// not delivering. That is the whole delivery mechanism: it needs no alert
-	// transport, and this machine has none configured.
-	return detail, fmt.Errorf("%s", strings.Join(problems, " | "))
+
+	// A WITHHELD verdict is degraded, NOT failed, and the distinction is the
+	// difference between a monitor people read and one they learn to ignore.
+	// Post-collapse there are two clean days; ten are needed. Erroring here
+	// would hold the daemon red for a fortnight on a condition that resolves by
+	// itself, and a monitor that cries wolf for two weeks has taught everyone to
+	// dismiss it by the time it means something. ErrDegraded files the run as
+	// "degraded" — visible on the Agents page and in the run log, and it still
+	// keeps health honest, without claiming a failure that has not happened.
+	if withheld != "" {
+		return detail, fmt.Errorf("%s: %w", withheld, workers.ErrDegraded)
+	}
+	return detail + "; no collapse, no inversion", nil
 }
 
 // DesignEffect measures how much of a row count is one market move counted many
