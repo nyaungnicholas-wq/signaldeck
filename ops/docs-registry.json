@@ -117,6 +117,13 @@
       "status": "NOT_AUTHORITATIVE",
       "backtest_data": "none"
     },
+    "INVERSION_INVESTIGATION_2026-08-08.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "1.0.0",
+      "data_as_of": "2026-08-08",
+      "status": "FROZEN",
+      "backtest_data": "none"
+    },
     "PAIRS_TRADING.md": {
       "owner": "Nicholas Nyaung",
       "version": "0.2.0",
