@@ -285,6 +285,22 @@ func migrate(w *sql.DB) error {
 	// nothing can retroactively know which build wrote them. See BasisEpoch.
 	for _, col := range []struct{ name, ddl string }{
 		{"basis_epoch", `ALTER TABLE prediction_outcomes ADD COLUMN basis_epoch INTEGER`},
+		// settle_ts is the BASE BAR this row was graded from, and it is the true
+		// independence unit — two predictions share an outcome exactly when they
+		// share a base bar.
+		//
+		// trading_day(ts) is not that unit off a 24/7 market. base is
+		// BarAtOrBefore(ts), so a Saturday prediction takes Friday's base and
+		// Monday's forward, identical to Friday's own. Measured 2026-08-08:
+		// 32.9% of consecutive stock symbol-day pairs carried an IDENTICAL
+		// label (Sun 84.7%, Sat 64.9%, crypto 0.0%) while every day-clustered
+		// statistic counted them as separate observations. Folding weekends into
+		// trading_day() would be wrong in the other direction — for crypto,
+		// Saturday IS an independent session.
+		//
+		// NULL on pre-existing rows, which reads as "unknown settle bar" rather
+		// than as a claim; BackfillSettleTs fills them from the bars table.
+		{"settle_ts", `ALTER TABLE prediction_outcomes ADD COLUMN settle_ts INTEGER`},
 	} {
 		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('prediction_outcomes') WHERE name=?`, col.name).Scan(&n); err != nil {
 			return err

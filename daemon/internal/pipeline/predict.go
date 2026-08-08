@@ -525,6 +525,19 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// Best-effort: on an unreadable cross-section nothing is vetoed and the
 	// per-symbol bound stays in charge.
 	vetoed := fleetVetoes(ctx, w.St, predHorizons)
+
+	// Fill the settled-move key on rows that predate the column, a bounded batch
+	// per pass so it converges without a migration framework and never stalls a
+	// sweep. settle_ts is the true independence unit — two predictions share an
+	// outcome exactly when they share a base bar — and trading_day(ts) is not
+	// that unit off a 24/7 market: measured 2026-08-08, folding the stock record
+	// on the settled move instead of the calendar day removes 27.9% phantom
+	// observations (10,722 -> 7,732) while leaving crypto at 0.0%.
+	if n, err := w.St.BackfillSettleTs(ctx, settleBackfillBatch); err != nil {
+		slog.Warn("settle_ts backfill failed; day-clustered counts stay on the calendar day", "err", err)
+	} else if n > 0 {
+		slog.Info("settle_ts backfilled", "rows", n)
+	}
 	// Read once per pass, not per symbol: the mode is a deploy-time decision and
 	// re-reading it mid-sweep could split one pass across two contracts.
 	strictLegs := requireMeasuredLegs()

@@ -144,3 +144,8 @@ func fleetVetoes(ctx context.Context, st *store.Store, horizons []md.Horizon) ma
 // minCrossSectionForAUC is the smallest same-day cross-section worth ranking.
 // Below it an AUC is dominated by which handful of symbols happened to report.
 const minCrossSectionForAUC = 30
+
+// settleBackfillBatch bounds the per-pass settle_ts backfill. Large enough that
+// the ~500k-row live table converges in a few hours of ordinary passes, small
+// enough that no single pass is delayed by it.
+const settleBackfillBatch = 20000
