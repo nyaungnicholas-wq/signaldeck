@@ -71,9 +71,6 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 	// floor -> how many symbol-horizons it holds, and the CLOSEST one to
 	// clearing it. "nearest 34/40" is actionable; a histogram of every
 	// shortfall is not.
-	type blockStat struct {
-		n, best, need int
-	}
 	blockers := map[string]*blockStat{}
 	for _, s := range syms {
 		// Does the symbol's CURRENT regime cell yield global weights? (Used only
@@ -158,24 +155,8 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 	// being empty (cells carrying 14-16 distinct days against a floor of 20),
 	// and that took tracing the learner, the tier gate, the adaptive panel and
 	// the stored weights blob to discover.
-	if len(blockers) > 0 {
-		keys := make([]string, 0, len(blockers))
-		for k := range blockers {
-			keys = append(keys, k)
-		}
-		sort.Slice(keys, func(i, j int) bool {
-			if blockers[keys[i]].n != blockers[keys[j]].n {
-				return blockers[keys[i]].n > blockers[keys[j]].n
-			}
-			return keys[i] < keys[j]
-		})
-		parts := make([]string, 0, len(keys))
-		for _, k := range keys {
-			b := blockers[k]
-			parts = append(parts, fmt.Sprintf("%s (%d symbol-horizon(s), nearest %d/%d)",
-				k, b.n, b.best, b.need))
-		}
-		detail += "; blocked on: " + strings.Join(parts, ", ")
+	if b := formatBlockers(blockers); b != "" {
+		detail += "; blocked on: " + b
 	}
 	return detail, nil
 }
@@ -229,4 +210,41 @@ func graduationInsight(symbolID int64, symbol, horizon string, m symbolagent.Mod
 			symbol, m.NDays, horizon, m.NSamples, m.Personality),
 		Data: string(data),
 	}
+}
+
+// blockStat is one floor's hold on the personal tier: how many symbol-horizons
+// it blocks, and the CLOSEST any of them came to clearing it.
+type blockStat struct {
+	n, best, need int
+}
+
+// formatBlockers renders the tally worst-first, one entry PER FLOOR.
+//
+// Split out and pure because the first version was wrong in a way only reading
+// its output revealed: keying the tally on a formatted per-symbol string
+// produced twenty-odd buckets — "rows 20/40 (87), rows 14/40 (84), rows 24/40
+// (82)…" — a histogram of shortfalls rather than an answer to which floor
+// binds. One line per floor, with the nearest miss, is what tells an operator
+// "six more days" instead of "never".
+func formatBlockers(blockers map[string]*blockStat) string {
+	if len(blockers) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(blockers))
+	for k := range blockers {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if blockers[keys[i]].n != blockers[keys[j]].n {
+			return blockers[keys[i]].n > blockers[keys[j]].n
+		}
+		return keys[i] < keys[j]
+	})
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		b := blockers[k]
+		parts = append(parts, fmt.Sprintf("%s (%d symbol-horizon(s), nearest %d/%d)",
+			k, b.n, b.best, b.need))
+	}
+	return strings.Join(parts, ", ")
 }
