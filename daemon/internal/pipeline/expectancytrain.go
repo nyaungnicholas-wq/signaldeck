@@ -164,7 +164,25 @@ func (w *ExpectancyTrainer) Run(ctx context.Context) (string, error) {
 		acc := float64(hits) / float64(n)
 		base := math.Max(float64(ups), float64(n-ups)) / float64(n)
 
-		// PASS 2 — persist the fleet grade against every symbol that contributed.
+		// PASS 2 — persist EACH SYMBOL'S OWN grade.
+		//
+		// The AUC column used to receive fleetAUC, the pooled number, written
+		// identically to every contributing symbol. Measured 2026-08-08 on the
+		// live 1d record that produced 654 rows whose AUC spanned 0.430 to
+		// 0.439 — a fleet aggregate wearing a per-symbol column.
+		//
+		// It matters because rankGate feeds this column to
+		// clusterstat.RankEdge together with the SYMBOL'S OWN NEval, to build a
+		// Wilson lower bound on that symbol's ranking. Pairing a fleet AUC with
+		// a per-symbol n makes that bound a statement about nothing: every
+		// symbol inherits the fleet's verdict while appearing to have been
+		// judged on its own evidence.
+		//
+		// sp.auc is that symbol's own measurement and was already computed —
+		// it was simply not persisted. The pooled accuracy/Brier/base rate stay
+		// pooled deliberately: they describe the population the fleet verdict is
+		// drawn from, they are not fed to a per-symbol bound, and the run detail
+		// reports them as fleet figures.
 		written := 0
 		for _, sp := range all {
 			if !sp.graded {
@@ -173,7 +191,7 @@ func (w *ExpectancyTrainer) Run(ctx context.Context) (string, error) {
 			latest := sp.vals[0] // newest-first from the store
 			if err := w.St.UpsertModelForecast(ctx, store.ModelForecast{
 				SymbolID: sp.id, Horizon: h, Model: store.ModelExpectancy, Ts: now,
-				Prob: latest, Accuracy: acc, Brier: brier / float64(n), AUC: fleetAUC,
+				Prob: latest, Accuracy: acc, Brier: brier / float64(n), AUC: sp.auc,
 				BaseRate: base, Lift: acc - base, NTrain: 0, NEval: len(sp.vals),
 			}); err != nil {
 				return "", fmt.Errorf("upsert expectancy %d %s: %w", sp.id, h, err)
