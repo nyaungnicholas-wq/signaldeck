@@ -152,6 +152,13 @@
       "status": "ACTIVE",
       "backtest_data": "none"
     },
+    "ROOTCAUSE_COLLAPSE_2026-08-08.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "1.0.0",
+      "data_as_of": "2026-08-08",
+      "status": "FROZEN",
+      "backtest_data": "none"
+    },
     "SHIP_READINESS.md": {
       "owner": "Nicholas Nyaung",
       "version": "0.2.0",
