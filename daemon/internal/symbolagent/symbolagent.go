@@ -125,6 +125,21 @@ type Model struct {
 	Calibration Calibration        `json:"calibration"` // personal calibration (identity unless personal)
 	Skill       map[string]Skill   `json:"skill"`       // per-component measured edge
 	Personality string             `json:"personality"` // deterministic plain-English read
+	// TierBlocker names the FIRST unmet condition keeping this symbol off the
+	// personal tier, empty when it reached it.
+	//
+	// It exists because "0 personal" was reported every hour for weeks with no
+	// indication of WHY, and finding out took tracing four layers: the learner,
+	// the tier gate, the adaptive panel, and finally the stored weights blob,
+	// where every regime cell held EMPTY weights because it carried 14-16
+	// distinct days against adaptive.MinCellDays of 20. Every symbol therefore
+	// fell through to the fleet-wide calibration map, which is the mechanism
+	// behind the 2026-07-27..08-04 cross-section collapse.
+	//
+	// A floor that blocks silently is indistinguishable from a broken feature.
+	// This is not persisted as a column; the worker aggregates it into its run
+	// detail so the binding constraint is legible from the Agents page.
+	TierBlocker string `json:"-"`
 }
 
 // Learn computes a symbol's model from its OWN labeled examples plus the tier
@@ -185,6 +200,22 @@ func Learn(examples []adaptive.Example, rawPairs []ensemble.Pair, regimeLearned,
 	// three market moves. It is also not redundant with adaptive.MinCellDays —
 	// that floor (20) qualifies the WEIGHTS; this one (30) qualifies the claim
 	// that this symbol needs its own model at all.
+	// Record the FIRST unmet condition, in the same order the gate tests them,
+	// so the count of blockers a run reports sums to the symbols it refused.
+	switch {
+	case len(examples) < MinPersonal:
+		m.TierBlocker = fmt.Sprintf("rows %d/%d", len(examples), MinPersonal)
+	case m.NDays < MinPersonalDays:
+		m.TierBlocker = fmt.Sprintf("distinct days %d/%d", m.NDays, MinPersonalDays)
+	case len(cell.Weights) == 0:
+		// The adaptive panel produced no weights that survived its shrinkage and
+		// multiplicity correction. Measured 2026-08-08 this was the binding
+		// constraint for EVERY symbol: cells carried 14-16 days against
+		// adaptive.MinCellDays of 20.
+		m.TierBlocker = fmt.Sprintf("adaptive weights empty (cell days %d/%d)",
+			cell.Days, adaptive.MinCellDays)
+	}
+
 	switch {
 	case len(examples) >= MinPersonal && m.NDays >= MinPersonalDays && len(cell.Weights) > 0:
 		m.Tier = TierPersonal

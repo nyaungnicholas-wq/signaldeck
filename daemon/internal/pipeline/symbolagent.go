@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/adaptive"
@@ -62,6 +64,11 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 
 	now := time.Now().Unix()
 	upserts, personalCount, graduated := 0, 0, 0
+	// Which floor is keeping symbols off the personal tier, and how many each
+	// is holding. "0 personal" alone was reported every hour for weeks and
+	// said nothing about why; the binding constraint turned out to be four
+	// layers down.
+	blockers := map[string]int{}
 	for _, s := range syms {
 		// Does the symbol's CURRENT regime cell yield global weights? (Used only
 		// to label the fallback tier for a still-learning symbol.)
@@ -112,6 +119,9 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 				return "", fmt.Errorf("upsert %s %s: %w", s.Symbol, h, err)
 			}
 			upserts++
+			if m.TierBlocker != "" {
+				blockers[m.TierBlocker]++
+			}
 			if m.Tier == symbolagent.TierPersonal {
 				personalCount++
 				if !wasPersonal {
@@ -125,9 +135,33 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 	}
 	// The day floors are reported beside the count so a drop in `personal` is
 	// legible as a change of UNIT, not a loss of data.
-	return fmt.Sprintf("modeled %d symbol×horizon(s) over %d symbols; %d personal, %d newly graduated (personal needs %d rows over %d distinct days)",
+	detail := fmt.Sprintf("modeled %d symbol×horizon(s) over %d symbols; %d personal, %d newly graduated (personal needs %d rows over %d distinct days)",
 		upserts, len(syms), personalCount, graduated,
-		symbolagent.MinPersonal, symbolagent.MinPersonalDays), nil
+		symbolagent.MinPersonal, symbolagent.MinPersonalDays)
+
+	// Name the binding floor, worst-first. Without this, "0 personal" is a
+	// number nobody can act on: every symbol was blocked by adaptive weights
+	// being empty (cells carrying 14-16 distinct days against a floor of 20),
+	// and that took tracing the learner, the tier gate, the adaptive panel and
+	// the stored weights blob to discover.
+	if len(blockers) > 0 {
+		keys := make([]string, 0, len(blockers))
+		for k := range blockers {
+			keys = append(keys, k)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if blockers[keys[i]] != blockers[keys[j]] {
+				return blockers[keys[i]] > blockers[keys[j]]
+			}
+			return keys[i] < keys[j]
+		})
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("%s (%d)", k, blockers[k]))
+		}
+		detail += "; blocked on: " + strings.Join(parts, ", ")
+	}
+	return detail, nil
 }
 
 // marshalSymbolModel serializes a learned model into a storable row. The JSON
