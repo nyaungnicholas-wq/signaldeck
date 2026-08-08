@@ -363,6 +363,29 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	// It counts toward `degraded` because an alerting system that cannot reach
 	// you is a real degradation, not a preference.
 	remoteAlerts := d.Notifier.Enabled() // nil-receiver safe
+
+	// An anonymous caller gets the SIGNAL, not the internals. This endpoint has
+	// to stay reachable without a credential (see requiresAuth), so on a
+	// tunnel-exposed daemon everything here is world-readable — and the fleet
+	// detail added for observability is exactly the wrong thing to publish:
+	// worker names map the internal architecture and the revision names the
+	// exact source a reader can go and audit for holes. `degraded` alone is
+	// enough for a monitor to alert on, and an operator who signs in sees why.
+	if userID(r) == 0 {
+		writeJSON(w, map[string]any{
+			"degraded": len(failing) > 0 || len(refusals) > 0 || werr != nil || !remoteAlerts,
+			"time":     time.Now().Unix(),
+			// openSignup STAYS in the anonymous payload: the login page reads it
+			// before anyone has a credential, to decide whether to offer
+			// registration at all. Withholding it would hide the button on a
+			// deployment where signup is genuinely open. It discloses nothing —
+			// POSTing to /api/auth/register reveals the same thing.
+			"openSignup": d.Cfg.OpenSignup,
+			"detail":     "sign in or send the API token for the full breakdown",
+		})
+		return
+	}
+
 	body := map[string]any{
 		"version": d.Version,
 		// The human version string is a compile-time constant ("0.1.0-dev") and
@@ -477,6 +500,17 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 
 	if len(reasons) > 0 {
 		w.WriteHeader(http.StatusServiceUnavailable)
+		// The STATUS CODE is the probe's answer and it is the same either way —
+		// a load balancer acts on 503, not on the prose. The reasons name
+		// workers, schema gaps and missing credentials, so they go only to a
+		// caller who has identified themselves.
+		if userID(r) == 0 {
+			writeJSON(w, map[string]any{
+				"ready":  false,
+				"detail": "sign in or send the API token for the reasons",
+			})
+			return
+		}
 		writeJSON(w, map[string]any{"ready": false, "reasons": reasons})
 		return
 	}

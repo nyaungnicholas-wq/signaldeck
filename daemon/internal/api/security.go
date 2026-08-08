@@ -199,7 +199,15 @@ func (s *statusWriter) Flush() {
 //   - the remaining read-only endpoints (shared market data) are public when
 //     SIGNALDECK_PUBLIC_READS=true (the localhost-friendly default).
 func (d Deps) requiresAuth(path string) bool {
-	if path == "/api/health" || strings.HasPrefix(path, "/api/auth/") {
+	// /api/health and /api/ready are PROBES: a monitor, a load balancer or a
+	// deploy script has to reach them before it holds any credential, which is
+	// the whole reason they exist. /api/ready was omitted here and started
+	// 401-ing the moment PublicReads closed — a readiness endpoint nothing can
+	// probe. Both answer a SUMMARY ONLY to an anonymous caller (see health/
+	// ready): the detail behind it — worker names, the build revision, the
+	// specific reasons — is for an authenticated operator, not for whoever
+	// finds the tunnel.
+	if path == "/api/health" || path == "/api/ready" || strings.HasPrefix(path, "/api/auth/") {
 		return false
 	}
 	// The TradingView webhook is authenticated by its own shared secret, not by

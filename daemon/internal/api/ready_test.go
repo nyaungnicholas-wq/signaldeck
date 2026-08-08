@@ -30,7 +30,13 @@ func readyDeps(t *testing.T) (Deps, *store.Store) {
 func callReady(t *testing.T, d Deps) (int, map[string]any) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	d.ready(rec, httptest.NewRequest(http.MethodGet, "/api/ready", nil))
+	// Authenticated: the REASONS these tests assert on are the operator view.
+	// An anonymous probe gets the same 503 with the detail withheld, because
+	// the reasons name workers, schema gaps and missing credentials, and
+	// /api/ready must stay reachable without a credential. See
+	// TestAnonymousReadyWithholdsTheReasons.
+	req := withUser(httptest.NewRequest(http.MethodGet, "/api/ready", nil), 1)
+	d.ready(rec, req)
 	var body map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("ready body is not JSON: %v (%s)", err, rec.Body.String())
@@ -112,4 +118,34 @@ func toStrings(v any) []string {
 		}
 	}
 	return out
+}
+
+// The probe answer is the STATUS CODE, and it is identical either way. What an
+// anonymous caller must not get is the prose: reasons name refused workers,
+// schema gaps and which provider credentials are missing, and this endpoint is
+// world-reachable on a tunnel-exposed daemon by design.
+func TestAnonymousReadyWithholdsTheReasons(t *testing.T) {
+	d, st := readyDeps(t)
+	if err := st.SetMeta(context.Background(), store.SchemaContractMetaKey,
+		`{"pressure-agent":["bars.vwap missing"]}`); err != nil {
+		t.Fatalf("SetMeta: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	d.ready(rec, httptest.NewRequest(http.MethodGet, "/api/ready", nil)) // no identity
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 — an anonymous probe must still get the real answer", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if body["ready"] != false {
+		t.Errorf("ready = %v, want false", body["ready"])
+	}
+	if _, leaked := body["reasons"]; leaked {
+		t.Errorf("reasons exposed to an anonymous caller: %v", body["reasons"])
+	}
+	if !strings.Contains(rec.Body.String(), "sign in") {
+		t.Errorf("no pointer to how an operator gets the detail: %s", rec.Body.String())
+	}
 }
