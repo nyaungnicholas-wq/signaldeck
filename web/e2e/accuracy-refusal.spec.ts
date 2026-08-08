@@ -1,28 +1,47 @@
-// Publication-refusal contract for /accuracy and /api/accuracy.
-//
-// WHAT THESE PIN. Audit F-1 (2026-08-03): the /accuracy page rendered a REFUSED
-// registry as a successful one — blank fields, no refusal message — so a
-// grading outage was indistinguishable from a quiet week. And the 2026-08-03
-// registry/evidence split: a model the record had condemned read as merely
-// INSUFFICIENT once its window thinned below the 10-block floor.
-//
-// WHY THESE DO NOT STUB /api/accuracy. The page's publication gate is a SERVER
-// component fetch, deliberately — a client-side gate would paint the stale
-// table first and the refusal a moment later, which is the same defect with
-// extra steps. Playwright's page.route intercepts browser traffic only, so a
-// route stub here would silently test nothing at all. These therefore assert
-// INVARIANTS that must hold in whichever state the stack is really in, and the
-// row-level verdict rules are covered hermetically in Go
-// (internal/publication/verdict_test.go, internal/store/publication_test.go).
-
 import { test, expect } from "@playwright/test";
+import type { BrowserContext } from "@playwright/test";
 
 const REFUSED = new Set(["REFUSED", "REFUSED_STALE"]);
 
-test("/api/accuracy either publishes with a grade stamp or refuses with a reason", async ({
-  request,
-}) => {
-  const res = await request.get("/api/accuracy");
+const SMOKE_USER = "e2e-smoke";
+const SMOKE_PASS = "E2eSmoke!2026";
+
+// These specs used to call /api/accuracy anonymously, which worked only while
+// SIGNALDECK_PUBLIC_READS defaulted OPEN. It no longer does — daemon/.env
+// allowlists a public tunnel hostname, so unauthenticated reads are refused and
+// the endpoint answers {"error":"authentication required"}. That turned the
+// first assertion (body.status is a string) into a failure and made the other
+// three skip on `!res.ok()`, so the publication-refusal contract silently
+// stopped being checked at all.
+//
+// Every request below goes through page.request, NOT the standalone `request`
+// fixture: they are separate contexts, so authenticating one leaves the other
+// anonymous — and signing in to both doubled the write-tier requests straight
+// into the daemon's rate limiter (burst 5, refill 2/s), which answered 429.
+async function signIn(context: BrowserContext): Promise<void> {
+  const headers = { "X-Signaldeck": "1" };
+  const data = { username: SMOKE_USER, password: SMOKE_PASS };
+  // One retry: the limiter is shared across every anonymous caller, and the
+  // suite's other specs sign in at the same moment. A 429 here is the limiter
+  // working, not a broken credential.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await context.request.post("/api/auth/login", { headers, data });
+    if (res.ok()) return;
+    if (res.status() !== 429) {
+      expect(res.ok(), `sign in as ${SMOKE_USER} failed: ${res.status()}`).toBe(true);
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  const final = await context.request.post("/api/auth/login", { headers, data });
+  expect(final.ok(), `sign in as ${SMOKE_USER} failed after retries: ${final.status()}`).toBe(true);
+}
+
+test.beforeEach(async ({ context }) => {
+  await signIn(context);
+});
+
+test("/api/accuracy either publishes with a grade stamp or refuses with a reason", async ({ page }) => {
+  const res = await page.request.get("/api/accuracy");
   const body = await res.json();
 
   expect(typeof body.status).toBe("string");
@@ -44,8 +63,8 @@ test("/api/accuracy either publishes with a grade stamp or refuses with a reason
   }
 });
 
-test("a refused registry shows the refusal and no accuracy figures", async ({ page, request }) => {
-  const refused = !(await request.get("/api/accuracy")).ok();
+test("a refused registry shows the refusal and no accuracy figures", async ({ page }) => {
+  const refused = !(await page.request.get("/api/accuracy")).ok();
   test.skip(!refused, "the grader is currently fresh; the refusal path is exercised when it is not");
 
   await page.goto("/accuracy");
@@ -59,8 +78,8 @@ test("a refused registry shows the refusal and no accuracy figures", async ({ pa
   await expect(page.locator("body")).not.toContainText(/\d+\.\d%/);
 });
 
-test("a condemned model is never downgraded to INSUFFICIENT", async ({ page, request }) => {
-  const res = await request.get("/api/accuracy");
+test("a condemned model is never downgraded to INSUFFICIENT", async ({ page }) => {
+  const res = await page.request.get("/api/accuracy");
   test.skip(!res.ok(), "publication is refused; there are no rows to check");
 
   const { rows = [] } = await res.json();
@@ -83,8 +102,8 @@ test("a condemned model is never downgraded to INSUFFICIENT", async ({ page, req
   await expect(page.locator('[data-status="RETIRED"]').first()).toBeVisible();
 });
 
-test("every non-OK row states why", async ({ request }) => {
-  const res = await request.get("/api/accuracy");
+test("every non-OK row states why", async ({ page }) => {
+  const res = await page.request.get("/api/accuracy");
   test.skip(!res.ok(), "publication is refused; covered by the refusal test");
 
   const { rows = [] } = await res.json();
