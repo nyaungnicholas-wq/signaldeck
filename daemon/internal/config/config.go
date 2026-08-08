@@ -183,6 +183,14 @@ func Load() Config {
 	if len(llmKeys) > 0 {
 		llmFirst = llmKeys[0]
 	}
+	// Resolved ONCE and shared: the Host allowlist is both a config field and
+	// the evidence tunnelConfigured() uses to decide whether this daemon is
+	// published. Computing it twice invites the two to drift, which is how the
+	// open-by-default flags got their value from a signal that disagreed with
+	// the allowlist sitting next to them.
+	allowedHostsRaw := pick("SIGNALDECK_ALLOWED_HOSTS", defaultAllowedHosts)
+	httpAddr := envOr("SIGNALDECK_HTTP", "127.0.0.1:8322")
+	private := reachablePrivately(httpAddr, allowedHostsRaw)
 	cfg := Config{
 		LLMKey:          llmFirst,
 		LLMKeys:         llmKeys,
@@ -192,26 +200,26 @@ func Load() Config {
 		LLMModelFast:    pick("SIGNALDECK_LLM_MODEL_FAST", "meta/llama-3.1-8b-instruct"),               // ultra-fast for high-frequency low-stakes calls
 		LLMDailyCap:     atoiOr(pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
 		DBPath:          envOr("SIGNALDECK_DB", filepath.Join(projectRoot(), "signaldeck", "data", "signaldeck.db")),
-		HTTPAddr:        envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"),
+		HTTPAddr:        httpAddr,
 		HudURL:          envOr("SIGNALDECK_HUD_URL", "http://127.0.0.1:8787/api/summary"),
 		TickstreamURL:   envOr("SIGNALDECK_TICKSTREAM_URL", "http://127.0.0.1:8321/api/snapshot"),
 		GeminiKey:       os.Getenv("SIGNALDECK_GEMINI_KEY"),
 		CryptoSymbol:    "BTC/USD",
 		WebOrigins:      splitList(pick("SIGNALDECK_WEB_ORIGINS", "http://localhost:8323,http://127.0.0.1:8323,http://localhost:3000,http://127.0.0.1:3000")),
-		AllowedHosts:    splitList(pick("SIGNALDECK_ALLOWED_HOSTS", "127.0.0.1:8322,localhost:8322")),
+		AllowedHosts:    splitList(allowedHostsRaw),
 		APIToken:        os.Getenv("SIGNALDECK_API_TOKEN"),
 		TVWebhookSecret: pick("SIGNALDECK_TV_WEBHOOK_SECRET", ""),
 		// SAFE BY DEFAULT (2026-07-25): open registration is a localhost
 		// convenience. On a reachable deployment it lets any stranger create an
 		// account and spend the LLM budget, so it follows the bind address for
 		// the same reason PublicReads does.
-		OpenSignup: boolEnv("SIGNALDECK_OPEN_SIGNUP", reachablePrivately(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
+		OpenSignup: boolEnv("SIGNALDECK_OPEN_SIGNUP", private),
 		// SAFE BY DEFAULT (2026-07-25): unauthenticated reads are a localhost
 		// convenience, not a deployment posture. The default now follows the
 		// BIND ADDRESS — true on loopback, false the moment the daemon listens
 		// anywhere reachable — so exposing it can no longer silently publish
 		// every read endpoint. An explicit env var still wins either way.
-		PublicReads: boolEnv("SIGNALDECK_PUBLIC_READS", reachablePrivately(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
+		PublicReads: boolEnv("SIGNALDECK_PUBLIC_READS", private),
 		// Asserting you hold redistribution rights for the stored price data.
 		// The flag records the operator's assertion; it does not grant a right.
 		AllowRawExport: boolEnv("SIGNALDECK_ALLOW_RAW_EXPORT", false),
@@ -343,6 +351,11 @@ func parseDotEnv(path string) map[string]string {
 	return out
 }
 
+// defaultAllowedHosts is the Host-header allowlist when the operator sets none.
+// Named rather than inlined because tunnelConfigured() reads the same setting to
+// decide whether this daemon is published, and the two must not drift.
+const defaultAllowedHosts = "127.0.0.1:8322,localhost:8322"
+
 // loopbackOnly reports whether addr binds only to the local machine.
 //
 // IT IS NOT SUFFICIENT ON ITS OWN, and the reason is the whole point of
@@ -402,9 +415,31 @@ var tunnelAgentPaths = func() []string {
 // machine. Overridable by SIGNALDECK_ASSUME_TUNNEL for testing and for an
 // operator running a tunnel this list does not know about — set it to true, and
 // the defaults close.
-func tunnelConfigured() bool {
+// allowedHosts is the RESOLVED allowlist string (already through pick, so it
+// includes values set in daemon/.env — which is exactly where the ngrok
+// hostname lives; reading os.Getenv here would have missed it).
+func tunnelConfigured(allowedHosts string) bool {
 	if v := strings.TrimSpace(os.Getenv("SIGNALDECK_ASSUME_TUNNEL")); v != "" {
 		return v == "1" || strings.EqualFold(v, "true")
+	}
+	// A non-loopback entry in the operator's OWN host allowlist is the signal
+	// that needs no per-OS knowledge, and it is the one that was missing.
+	//
+	// tunnelAgentPaths below can only ever confirm a macOS LaunchAgent. When
+	// this machine moved to Windows that check became a constant false — so
+	// reachablePrivately() answered "private" while daemon/.env allowlisted
+	// `spearfish-dwindle-module.ngrok-free.dev`, and PublicReads/OpenSignup
+	// both defaulted OPEN on a box one `ngrok start` away from being served to
+	// the internet. The A9 fix from the 2026-07-26 re-audit was correct and
+	// silently un-fixed itself by changing operating system.
+	//
+	// Serving a host you cannot reach from loopback IS publication, on every
+	// platform and every tunnel implementation. Deriving it from the allowlist
+	// cannot rot the way a hardcoded path does.
+	for _, h := range splitList(allowedHosts) {
+		if h != "" && !loopbackOnly(h) {
+			return true
+		}
 	}
 	for _, p := range tunnelAgentPaths {
 		if p == "" {
@@ -428,8 +463,8 @@ func tunnelConfigured() bool {
 // agree before anything opens; when they disagree the answer is closed, because
 // an operator who wants reads open can say so in one env var, and a stranger
 // who gets them by accident cannot be un-given them.
-func reachablePrivately(addr string) bool {
-	return loopbackOnly(addr) && !tunnelConfigured()
+func reachablePrivately(addr, allowedHosts string) bool {
+	return loopbackOnly(addr) && !tunnelConfigured(allowedHosts)
 }
 
 // ReachablePrivately is the exported form of the safe-by-default signal, for
@@ -437,4 +472,6 @@ func reachablePrivately(addr string) bool {
 // server, which permits an anonymous caller only when this is true. Exported as
 // a function over the ADDRESS rather than as a stored bool so a caller cannot
 // hold a stale copy taken before the tunnel agent appeared.
-func (c Config) ReachablePrivately() bool { return reachablePrivately(c.HTTPAddr) }
+func (c Config) ReachablePrivately() bool {
+	return reachablePrivately(c.HTTPAddr, strings.Join(c.AllowedHosts, ","))
+}

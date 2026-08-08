@@ -16,12 +16,12 @@ import (
 func (d Deps) universe(w http.ResponseWriter, r *http.Request) {
 	streamed, err := d.St.StreamedSymbolCount(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	daily, err := d.St.DailyUniverseCount(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{

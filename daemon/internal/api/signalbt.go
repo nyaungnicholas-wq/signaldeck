@@ -96,7 +96,7 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 
 	rawObs, err := d.St.SignalBacktestObs(ctx, h, signalBTDecayLags, signalBTMaxObs)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 
@@ -117,7 +117,7 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 	// still returned (BenchmarkReturn=0).
 	spyTs, spyClose, err := d.St.SPYDailyCloses(ctx, signalBTMaxObs)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	benchmark := signalbt.BenchmarkCurve(obs, spyTs, spyClose)

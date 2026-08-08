@@ -30,17 +30,17 @@ func (d Deps) newsTrends(w http.ResponseWriter, r *http.Request) {
 	}
 	series, err := d.St.NewsVolumeByDay(ctx, s.ID, 30)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	day, n, z, ok, reason, err := d.St.NewsVolumeZ(ctx, s.ID)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	toks, err := d.St.FleetTrendingTokens(ctx, time.Now().Add(-24*time.Hour).Unix(), 10)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{

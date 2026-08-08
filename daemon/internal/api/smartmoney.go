@@ -55,7 +55,7 @@ func (d Deps) smartMoney(w http.ResponseWriter, r *http.Request) {
 	}
 	row, ok, err := d.St.LatestSmartMoneyScore(r.Context(), s.ID)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if !ok {
@@ -119,7 +119,7 @@ func (d Deps) smartMoneyTop(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := d.St.TopSmartMoneyScores(r.Context(), market, limitParam(r, 50, 500))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if len(rows) == 0 {

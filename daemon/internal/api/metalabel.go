@@ -27,7 +27,7 @@ const metaLabelHowToRead = "Meta-labeling splits the job in two: the primary mod
 func (d Deps) metaLabel(w http.ResponseWriter, r *http.Request) {
 	raw, err := d.St.GetMeta(r.Context(), store.MetaMetaLabel)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// An absent report is an honest "not computed yet", never an empty grade

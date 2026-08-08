@@ -59,7 +59,7 @@ func (d Deps) fleetHealth(w http.ResponseWriter, r *http.Request) {
 	for _, strat := range fleetHealthStrategies {
 		t, err := d.tradingHealth(ctx, strat)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		trading = append(trading, t)
@@ -74,7 +74,7 @@ func (d Deps) fleetHealth(w http.ResponseWriter, r *http.Request) {
 
 	sys, err := d.systemHealth(ctx)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 

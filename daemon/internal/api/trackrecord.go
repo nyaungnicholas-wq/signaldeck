@@ -88,7 +88,7 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := d.buildTrackRecord(r.Context(), h)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, resp)
@@ -109,7 +109,7 @@ func (d Deps) trackRecordCached(w http.ResponseWriter, r *http.Request) {
 			return d.buildTrackRecord(ctx, h)
 		})
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, resp)

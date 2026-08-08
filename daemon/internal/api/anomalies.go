@@ -63,7 +63,7 @@ func (d Deps) anomaliesList(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := d.St.Anomalies(r.Context(), symbolID, kind, limitParam(r, 50, 500))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{

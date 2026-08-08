@@ -13,12 +13,12 @@ import (
 func (d Deps) researchGraph(w http.ResponseWriter, r *http.Request) {
 	hyps, err := d.St.LedgerHypotheses(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	evidence, err := d.St.LedgerEvidence(r.Context(), "")
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"graph": researchx.BuildGraph(hyps, evidence)})

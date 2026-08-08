@@ -11,8 +11,9 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"strconv"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
@@ -38,7 +40,7 @@ type Deps struct {
 	// production). Mirrors ModelHealthWorker.RegistryPath, and exists for the
 	// same reason: without it a test reads the LIVE registry.
 	RegistryPath string
-	LLM     llm.Client // AI provider (may be disabled when no key is set)
+	LLM          llm.Client // AI provider (may be disabled when no key is set)
 	// Subscribe validates a new symbol, upserts it into the STREAMED hot set
 	// (stream=1), and kicks off backfill (async). Wired in cmd/signaldeckd.
 	Subscribe func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error)
@@ -62,7 +64,7 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/health", d.health)
 	mux.HandleFunc("GET /api/ready", d.ready)     // can it serve CORRECT answers, not just answers
 	mux.HandleFunc("GET /api/version", d.version) // which code is producing these numbers
-	d.registerAuth(mux) // register, login, logout, me
+	d.registerAuth(mux)                           // register, login, logout, me
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
 	mux.HandleFunc("GET /api/symbol", d.symbolDetail)
 	mux.HandleFunc("GET /api/bars", d.bars)
@@ -97,7 +99,7 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/postmortems", d.postmortems)         // Research Lab: clustered failure attribution over resolved WRONG predictions
 	mux.HandleFunc("GET /api/research", d.research)               // Research Lab: hypothesis registry (shadow/promoted/rejected) + advisory feedback
 	mux.HandleFunc("GET /api/research-ledger", d.researchLedger)  // Bayesian Research Ledger: program-level hypotheses w/ prior→posterior evidence chains + meta-analysis
-	mux.HandleFunc("GET /api/research-loop", d.researchLoop)       // autonomous research loop: every pass (incl. refusals), judged rules, append-only per-(day,rule) judgments, rejection tally by gate
+	mux.HandleFunc("GET /api/research-loop", d.researchLoop)      // autonomous research loop: every pass (incl. refusals), judged rules, append-only per-(day,rule) judgments, rejection tally by gate
 	mux.HandleFunc("GET /api/vol-regime", d.volRegime)            // the validated-edge forecast: per-stock volatility regime (elevated/calm) + MEASURED walk-forward accuracy tiers
 	mux.HandleFunc("GET /api/regimes", d.structuralRegimesCached) // 2026-07-17 alpha-loop winners: trend21/liquidity21/vol21 regimes, measured per-band tiers + caveats in-payload
 	mux.HandleFunc("GET /api/signal-report", d.signalReport)      // per-signal detail report: why it fired (raw inputs), walk-forward history on THIS symbol, full signal stack, trade context
@@ -185,7 +187,7 @@ func Serve(ctx context.Context, d Deps) error {
 	// parallel route edits by other agents never collide) ────────────────────
 	d.registerAccuracy(mux) // GET /api/accuracy — the registry with an explicit publication_status per row, reconciled against evidence_claims and the retirement history through publication.BuildVerdict (the one copy of those rules). Fail-closed: 503 REFUSED when the registry is unreadable or the grader marked itself refusing, 503 REFUSED_STALE when no successful grade landed inside GraderMaxAge. Referenced by three audits and never implemented until 2026-08-04; until then the path 404d while prose described its behaviour
 	d.registerPrereg(mux)   // GET /api/prereg — what each structural predictor CLAIMED, frozen + hash-chained BEFORE its forecasts began resolving (first gradable 2026-08-07). Makes the advertised accuracy tables falsifiable: after the live record arrives the comparison is against a dated, hashed commitment rather than against whatever the code says at that time; the chain turns a later edit into a detectable break instead of a matter of trust, and amendments are appended, never applied in place
-	d.registerStress(mux) // Layer-4 stress lab: GET /api/stress/scenarios (composable effect-vector catalog) + POST /api/stress/run (auth-required, capped compute — joint scenarios + regime-conditional block bootstrap replayed through the REAL decide→riskgate→papertrade path; reports system behavior, never a PnL claim)
+	d.registerStress(mux)   // Layer-4 stress lab: GET /api/stress/scenarios (composable effect-vector catalog) + POST /api/stress/run (auth-required, capped compute — joint scenarios + regime-conditional block bootstrap replayed through the REAL decide→riskgate→papertrade path; reports system behavior, never a PnL claim)
 
 	d.registerMarketRegimes(mux) // GET /api/market-regimes — the SAME structural trend/vol/liquidity calls, grouped for the index and sector baskets (SPY/QQQ/IWM/DIA + all 11 SPDR sectors) instead of buried among ~885 single names; ships sector BREADTH per kind (one elevated sector is noise, eleven of eleven is a market state), names any basket with no call rather than letting absence read as neutral, and states that the accuracy tiers are INHERITED from the stock-universe validation and were never re-measured on baskets
 	d.registerPairsStudy(mux)    // GET /api/pairs-study — the cointegration pairs-trading test that resolved ledger hypothesis H018 (CORR63) DO-NOT-SHIP: a frozen walk-forward backtest (252d formation -> 63d traded, 26 non-overlapping blocks, 918 SIC-sectored symbols, frozen hedge ratio + spread z, Engle-Granger critical values, block bootstrap, cost sweep) whose selected arm is INDISTINGUISHABLE from random same-sector pairs. Published because the mechanism is the finding — correlation rank persists (rho +0.73) while cointegration rank does not (rho -0.004), so the persistent quantity is shared market beta that no dollar-neutral spread can monetize
@@ -288,7 +290,7 @@ func withDeadlines(next http.Handler) http.Handler {
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Warn("api: encode", "err", err)
@@ -296,9 +298,27 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func httpErr(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// httpInternal is the 500 path: log the real error, return an opaque one.
+//
+// 190 handlers used to answer `httpInternal(w, err)`. On this codebase
+// that string is a modernc.org/sqlite message, and it carries the absolute
+// database path, the failing table, and often the statement — handed to whoever
+// asked, on endpoints that are anonymously readable whenever PublicReads is on.
+// The caller cannot act on any of it; only the operator can, and the operator
+// reads the log.
+//
+// Deliberately NOT a wrapper that takes a message: a per-site string is how the
+// leak came back last time. There is one 500 body and it says nothing. Use
+// httpErr directly for 4xx, where the text is the point — a client CAN act on
+// "need symbol= and market=crypto|stocks".
+func httpInternal(w http.ResponseWriter, err error) {
+	slog.Error("request failed", "err", err)
+	httpErr(w, http.StatusInternalServerError, "internal error")
 }
 
 // symbolFromQuery resolves ?symbol=&market= to a stored symbol.
@@ -322,13 +342,86 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	if raw, err := d.St.GetMeta(r.Context(), store.SchemaContractMetaKey); err == nil && raw != "" {
 		_ = json.Unmarshal([]byte(raw), &refusals)
 	}
-	writeJSON(w, map[string]any{
-		"version":        d.Version,
-		"uptimeS":        int(time.Since(d.Started).Seconds()),
-		"alpaca":         d.Cfg.HasAlpaca(),
-		"time":           time.Now().Unix(),
-		"schemaContract": refusals,
-	})
+	// Worker fleet. Without this, health was a liveness probe wearing a health
+	// probe's name: it answered 200 with {"alpaca":true,...} while crypto-live
+	// had failed 43 times that day (tickstream down) and hud-sync 26 (trader-hud
+	// down). Any monitor pointed here reported 100% uptime through both. A
+	// health endpoint that cannot go unhealthy is decoration.
+	failing, werr := d.failingWorkers(r.Context())
+
+	// Off-machine alert delivery. A local Windows toast is built in and always
+	// available, but it only reaches someone sitting at this desk — and the
+	// warning that nothing else was configured appeared ONLY in
+	// logs/backup-offline.log, which is exactly where an unread warning goes to
+	// die. It read, correctly, every night since the migration:
+	//
+	//   NOTIFY: SignalDeck: alerts are SILENT beyond this machine …
+	//   daemon alerts stay local and go unseen when nobody is at the keyboard.
+	//
+	// Reporting it here makes the gap self-announcing: any monitor, the
+	// dashboard, and `signaldeck status` all see it without reading a log.
+	// It counts toward `degraded` because an alerting system that cannot reach
+	// you is a real degradation, not a preference.
+	remoteAlerts := d.Notifier.Enabled() // nil-receiver safe
+	body := map[string]any{
+		"version": d.Version,
+		// The human version string is a compile-time constant ("0.1.0-dev") and
+		// says nothing about WHICH build is running. The deploy already stamps
+		// the commit via -ldflags, so report it here too: "0.1.0-dev" alone on a
+		// shipped binary is not an identity anyone can act on.
+		"revision":        lineage.RevisionStamp(),
+		"uptimeS":         int(time.Since(d.Started).Seconds()),
+		"alpaca":          d.Cfg.HasAlpaca(),
+		"time":            time.Now().Unix(),
+		"schemaContract":  refusals,
+		"workers":         failing,
+		"remoteAlerts":    remoteAlerts,
+		"alertTransports": d.Notifier.ConfiguredNames(),
+		"degraded":        len(failing) > 0 || len(refusals) > 0 || werr != nil || !remoteAlerts,
+		// So the login page can stop advertising "no account? register →" on a
+		// deployment where registration is closed. Not a disclosure: anyone can
+		// learn the same thing by POSTing to /api/auth/register and reading the
+		// 403. Health is the right home because it is the one endpoint that is
+		// reachable before you have any credential.
+		"openSignup": d.Cfg.OpenSignup,
+	}
+	if werr != nil {
+		// Not being able to READ fleet state is itself unhealthy — say so rather
+		// than omitting the key and reading as "nothing wrong".
+		body["workersError"] = "fleet state unreadable"
+		slog.Error("health: worker fleet unreadable", "err", werr)
+	}
+	writeJSON(w, body)
+}
+
+// failingWorkers maps worker name → the status of its most recent COMPLETED
+// run, for every worker whose latest run did not succeed.
+//
+// In-flight runs ("running") are skipped rather than treated as healthy: a
+// worker that is currently retrying should still report the failure it is
+// retrying from, or a fast-cycling worker would show green in the gap between
+// its error and its next error. "orphaned" (a run whose process died) counts as
+// failing for the same reason.
+func (d Deps) failingWorkers(ctx context.Context) (map[string]string, error) {
+	// worker_runs is pruned to a bounded size (store.PruneWorkerRuns keeps the
+	// newest 20 PER worker), so a few hundred rows reliably covers one run of
+	// every worker including the rare-cadence ones.
+	runs, err := d.St.RecentWorkerRuns(ctx, 400)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	out := map[string]string{}
+	for _, run := range runs { // newest first
+		if run.Status == "running" || seen[run.Worker] {
+			continue
+		}
+		seen[run.Worker] = true
+		if run.Status != "ok" {
+			out[run.Worker] = run.Status
+		}
+	}
+	return out, nil
 }
 
 // ready reports whether the daemon can serve CORRECT answers, which is a
@@ -356,6 +449,30 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 
 	if !d.Cfg.HasAlpaca() {
 		reasons = append(reasons, "no Alpaca credentials: equity ingestion is inert")
+	}
+
+	// A missing alert transport is deliberately NOT a readiness reason. This
+	// endpoint answers "can the daemon serve CORRECT answers", and unreachable
+	// alerting does not make an answer wrong — it means nobody is told when one
+	// goes wrong. That is a health/`degraded` concern, and it is reported there.
+	// Putting it here 503'd TestReadyWhenEverythingIsWired and would have made
+	// the deploy script's readiness wait fail on a notification preference.
+
+	// A worker whose latest run failed is not writing the rows its surfaces
+	// read, so those surfaces answer from stale data — which is exactly the
+	// "listening but answering wrong" state this endpoint exists to separate
+	// from "up". Sorted so the reason list is stable across polls.
+	if failing, err := d.failingWorkers(r.Context()); err != nil {
+		reasons = append(reasons, "worker fleet state unreadable")
+	} else {
+		names := make([]string, 0, len(failing))
+		for name := range failing {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			reasons = append(reasons, "worker not delivering ("+failing[name]+"): "+name)
+		}
 	}
 
 	if len(reasons) > 0 {
@@ -393,7 +510,7 @@ type watchRow struct {
 func (d Deps) watchlist(w http.ResponseWriter, r *http.Request) {
 	syms, err := d.St.ListUserSymbols(r.Context(), userID(r))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	d.writeWatchRows(w, r, syms)
@@ -419,7 +536,7 @@ func (d Deps) screener(w http.ResponseWriter, r *http.Request) {
 		return d.buildWatchRows(ctx, syms)
 	})
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, rows)
@@ -428,7 +545,7 @@ func (d Deps) screener(w http.ResponseWriter, r *http.Request) {
 func (d Deps) writeWatchRows(w http.ResponseWriter, r *http.Request, syms []md.Symbol) {
 	rows, err := d.buildWatchRows(r.Context(), syms)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, rows)
@@ -504,7 +621,7 @@ func (d Deps) symbolDetail(w http.ResponseWriter, r *http.Request) {
 	for _, tf := range []md.Timeframe{md.TF1m, md.TF1h, md.TF1d} {
 		n, mn, mx, err := d.St.BarCount(ctx, s.ID, tf)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		coverage[string(tf)] = map[string]int64{"bars": n, "from": mn, "to": mx}
@@ -531,7 +648,7 @@ func (d Deps) symbolDetail(w http.ResponseWriter, r *http.Request) {
 	for _, h := range md.Horizons {
 		rows, err := d.St.Expectancy(ctx, s.ID, h)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		expect[h] = rows
@@ -587,7 +704,7 @@ func (d Deps) bars(w http.ResponseWriter, r *http.Request) {
 	}
 	bars, err := d.St.LastBars(r.Context(), s.ID, tf, limit)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, bars)
@@ -626,7 +743,7 @@ func (d Deps) scoreHistory(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	scores, err := d.St.ScoreHistory(r.Context(), s.ID, h, now-int64(days)*86400, now+1)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, scores)
@@ -645,7 +762,7 @@ func (d Deps) snaps(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	snaps, err := d.St.Snaps(r.Context(), s.ID, now-int64(secs), now+1, secs+1)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, snaps)
@@ -657,7 +774,7 @@ func (d Deps) trends(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	syms, err := d.St.ListSymbols(ctx, false)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	type mover struct {
@@ -710,7 +827,7 @@ func (d Deps) honesty(w http.ResponseWriter, r *http.Request) {
 	}
 	outcomes, err := d.St.ResolvedOutcomes(ctx, 0, h, 5000)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// Raw resolved (score, realized fwd) pairs, newest-first.
@@ -889,7 +1006,7 @@ func (d Deps) quality(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	syms, err := d.St.ListSymbols(ctx, false)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	type cov struct {
@@ -904,7 +1021,7 @@ func (d Deps) quality(w http.ResponseWriter, r *http.Request) {
 		for _, tf := range []md.Timeframe{md.TF1m, md.TF1h, md.TF1d} {
 			n, mn, mx, err := d.St.BarCount(ctx, s.ID, tf)
 			if err != nil {
-				httpErr(w, 500, err.Error())
+				httpInternal(w, err)
 				return
 			}
 			c.Coverage[string(tf)] = map[string]int64{"bars": n, "from": mn, "to": mx}
@@ -913,7 +1030,7 @@ func (d Deps) quality(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := d.St.RecentDQ(ctx, 100)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"symbols": out, "events": events, "ops": d.backupOps(ctx)})
@@ -968,7 +1085,7 @@ func (d Deps) backupOps(ctx context.Context) map[string]any {
 func (d Deps) agents(w http.ResponseWriter, r *http.Request) {
 	runs, err := d.St.RecentWorkerRuns(r.Context(), 200)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, runs)
@@ -977,14 +1094,14 @@ func (d Deps) agents(w http.ResponseWriter, r *http.Request) {
 func (d Deps) hud(w http.ResponseWriter, r *http.Request) {
 	payload, fetchedAt, ok, err := d.St.GetHud(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if !ok {
 		writeJSON(w, map[string]any{"available": false})
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = fmt.Fprintf(w, `{"available":true,"fetchedAt":%d,"summary":%s}`, fetchedAt, payload)
 }
@@ -1007,7 +1124,7 @@ func (d Deps) insights(w http.ResponseWriter, r *http.Request) {
 	if kind := r.URL.Query().Get("kind"); kind != "" {
 		ins, err := d.St.InsightsByKind(r.Context(), kind, limit)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		writeJSON(w, ins)
@@ -1015,7 +1132,7 @@ func (d Deps) insights(w http.ResponseWriter, r *http.Request) {
 	}
 	ins, err := d.St.RecentInsights(r.Context(), symbolID, limit)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, ins)
@@ -1048,7 +1165,7 @@ func (d Deps) subscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	// Put it on the caller's watchlist (ingestion itself is global).
 	if err := d.St.AddUserSymbol(r.Context(), userID(r), sym.ID); err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, sym)
@@ -1071,17 +1188,17 @@ func (d Deps) unsubscribe(w http.ResponseWriter, r *http.Request) {
 	// Remove from the caller's watchlist; ingestion stays on while ANY other
 	// user still watches the symbol.
 	if err := d.St.RemoveUserSymbol(r.Context(), userID(r), s.ID); err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	watchers, err := d.St.SymbolWatcherCount(r.Context(), s.ID)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if watchers == 0 {
 		if err := d.St.SetSymbolActive(r.Context(), s.ID, false); err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		s.Active = false
@@ -1127,7 +1244,7 @@ func (d Deps) exportBars(w http.ResponseWriter, r *http.Request) {
 	}
 	bars, err := d.St.LastBars(r.Context(), s.ID, tf, exportLimit(r))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	csvStart(w, fmt.Sprintf("%s_%s_bars.csv", sanitize(s.Symbol), tf))
@@ -1157,7 +1274,7 @@ func (d Deps) exportScores(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 	scores, err := d.St.ScoreHistory(r.Context(), s.ID, h, now-365*86400, now+1)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	csvStart(w, fmt.Sprintf("%s_%s_scores.csv", sanitize(s.Symbol), h))
@@ -1186,7 +1303,7 @@ func (d Deps) exportOutcomes(w http.ResponseWriter, r *http.Request) {
 	}
 	outcomes, err := d.St.ResolvedOutcomes(r.Context(), s.ID, h, exportLimit(r))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	csvStart(w, fmt.Sprintf("%s_outcomes_%s.csv", sanitize(s.Symbol), h))

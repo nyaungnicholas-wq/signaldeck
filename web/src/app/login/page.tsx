@@ -14,6 +14,28 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const errorRef = useRef<HTMLDivElement | null>(null);
+  // Whether this deployment accepts new accounts. The page used to offer
+  // "no account? register →" unconditionally, directly under copy calling
+  // SignalDeck "a private workspace" — so on a closed deployment it advertised
+  // a door that answers 403, and on an open one it advertised a real door to
+  // anyone who reached the tunnel. Starts null (unknown) so nothing flashes in
+  // and then disappears.
+  const [openSignup, setOpenSignup] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    fetch("/api/health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h) => {
+        if (live) setOpenSignup(h?.openSignup === true);
+      })
+      // Health unreachable: assume closed. Offering registration we cannot
+      // confirm is the worse of the two guesses.
+      .catch(() => live && setOpenSignup(false));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   // On a failed submit the error box appears; move focus to it so keyboard
   // and screen-reader users land on the message.
@@ -41,7 +63,11 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <PagePurpose
           id="login"
-          text="SignalDeck is a private workspace — sign in to open your dashboard, signals, and research, or create an account to get started. Everything inside is descriptive market analysis, not financial advice."
+          text={
+            "SignalDeck is a private workspace — sign in to open your dashboard, signals, and research." +
+            (openSignup ? " No account? Create one to get started." : "") +
+            " Everything inside is descriptive market analysis, not financial advice."
+          }
         />
       </div>
       <form onSubmit={submit} className="panel w-full max-w-sm">
@@ -122,18 +148,20 @@ export default function LoginPage() {
             {busy ? "…" : mode === "login" ? "SIGN IN" : "REGISTER"}
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              setMode(mode === "login" ? "register" : "login");
-              setError(null);
-            }}
-            className="mt-4 w-full cursor-pointer text-center text-xs text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]"
-          >
-            {mode === "login"
-              ? "no account? register →"
-              : "have an account? sign in →"}
-          </button>
+          {openSignup && (
+            <button
+              type="button"
+              onClick={() => {
+                setMode(mode === "login" ? "register" : "login");
+                setError(null);
+              }}
+              className="mt-4 w-full cursor-pointer text-center text-xs text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]"
+            >
+              {mode === "login"
+                ? "no account? register →"
+                : "have an account? sign in →"}
+            </button>
+          )}
         </div>
       </form>
     </div>

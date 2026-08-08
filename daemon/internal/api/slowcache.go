@@ -334,7 +334,7 @@ func (c *swrBodyCache) serve(key string, w http.ResponseWriter, r *http.Request,
 			}()
 		}
 		c.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("X-Cache", "hit")
 		_, _ = w.Write(body)
 		return
@@ -357,7 +357,7 @@ func (c *swrBodyCache) serve(key string, w http.ResponseWriter, r *http.Request,
 			httpErr(w, 500, "cache build failed; retry")
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("X-Cache", "coalesced")
 		_, _ = w.Write(body)
 		return

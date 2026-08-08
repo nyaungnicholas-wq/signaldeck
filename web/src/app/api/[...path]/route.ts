@@ -14,12 +14,20 @@ export const dynamic = "force-dynamic";
 const DAEMON = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
 
 // Allowlists — nothing else crosses the boundary in either direction.
+// x-forwarded-for: without it the daemon saw 127.0.0.1 for every browser
+// request, so SIGNALDECK_TRUST_PROXY was a knob that could not work — turning
+// it on changed nothing because the header never arrived, and every
+// unauthenticated visitor shared one rate-limit bucket keyed "ip:127.0.0.1".
+// The daemon still ignores this header unless TRUST_PROXY is explicitly set,
+// which is correct: a spoofable header must only be believed when the daemon
+// is unreachable except through this proxy.
 const REQUEST_HEADERS = [
   "content-type",
   "x-signaldeck",
   "cookie",
   "origin",
   "accept",
+  "x-forwarded-for",
 ] as const;
 // location: fetch() runs with redirect:"manual", so an upstream 3xx must
 // carry its Location through or the browser gets an unfollowable redirect.

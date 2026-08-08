@@ -30,6 +30,14 @@ CREATE TABLE IF NOT EXISTS snapshots_1s (
   PRIMARY KEY (symbol_id, ts)
 ) WITHOUT ROWID;
 
+-- The (symbol_id, ts) primary key already serves every per-symbol read. It
+-- cannot serve a ts-ONLY predicate, because ts is the second column — so the
+-- retention sweep (DELETE ... WHERE ts<?) and SnapsBelow (WHERE ts<? ORDER BY
+-- ts) both fell back to a full scan plus a temp b-tree for the sort. Verified
+-- with EXPLAIN QUERY PLAN: "SCAN snapshots_1s / USE TEMP B-TREE FOR ORDER BY".
+-- Cheap at today's ~17k rows; this is the hot window growing, not a fire.
+CREATE INDEX IF NOT EXISTS idx_snapshots_1s_ts ON snapshots_1s (ts);
+
 CREATE TABLE IF NOT EXISTS scores (
   symbol_id  INTEGER NOT NULL,
   horizon    TEXT NOT NULL CHECK (horizon IN ('1h','1d','1w')),

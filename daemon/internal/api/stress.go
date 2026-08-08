@@ -161,7 +161,7 @@ func (d Deps) stressRun(w http.ResponseWriter, r *http.Request) {
 		}
 		sigs, err := d.St.CommittedSignals(ctx, sym.ID, h, bars[0].Ts, bars[len(bars)-1].Ts, stressMaxSignals)
 		if err != nil {
-			httpErr(w, http.StatusInternalServerError, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		if len(sigs) == 0 {

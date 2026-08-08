@@ -38,7 +38,7 @@ func (d Deps) signalReport(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	bars, err := d.St.LastBars(ctx, s.ID, md.TF1d, reportBars)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if len(bars) == 0 {
@@ -115,7 +115,7 @@ func (d Deps) signalReport(w http.ResponseWriter, r *http.Request) {
 		// history = this symbol's slice of the LIVE forward record
 		rows, correct, total, err := d.St.PredictionOutcomesForSymbol(ctx, s.ID, "1d", 50)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		h := map[string]any{"rows": rows, "correct": correct, "total": total,
@@ -129,7 +129,7 @@ func (d Deps) signalReport(w http.ResponseWriter, r *http.Request) {
 	case "anomaly":
 		rows, err := d.St.Anomalies(ctx, s.ID, "", 50)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		out["history"] = map[string]any{"anomalies": withFwd(rowsToEvents(rows), ts, closes),

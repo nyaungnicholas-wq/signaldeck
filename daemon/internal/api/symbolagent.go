@@ -64,7 +64,7 @@ func (d Deps) symbolAgent(w http.ResponseWriter, r *http.Request) {
 
 	pm, ok, err := d.St.SymbolModel(r.Context(), s.ID, h)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if !ok {

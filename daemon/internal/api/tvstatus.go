@@ -64,18 +64,18 @@ func (d Deps) tvStatus(w http.ResponseWriter, r *http.Request) {
 
 	total, last24h, lastAt, lastTicker, err := d.St.TVSignalTotals(ctx, now-86400)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 
 	streamed, err := d.St.StreamedSymbols(ctx)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	aggs, err := d.St.TVSignalAggregates(ctx)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 

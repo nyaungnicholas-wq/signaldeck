@@ -21,7 +21,7 @@ import (
 func (d Deps) datastats(w http.ResponseWriter, r *http.Request) {
 	stats, err := d.St.DataStats(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if bytes, err := archive.DirSize(archive.Dir(d.Cfg.DBPath)); err == nil {

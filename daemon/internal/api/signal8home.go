@@ -116,19 +116,19 @@ func (d Deps) movers(w http.ResponseWriter, r *http.Request) {
 
 	syms, err := d.St.ActiveStockSymbols(ctx, nil)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	shares, err := d.St.LatestMetricAll(ctx, "SharesOutstanding")
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// ONE batched query for every symbol's last two daily closes — the old
 	// per-symbol LastBars walk was ~2 queries per active stock per request.
 	closes, err := d.St.LastTwoDailyCloses(ctx)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 
@@ -227,7 +227,7 @@ func (d Deps) calendar(w http.ResponseWriter, r *http.Request) {
 	// Econ: latest observed print of each tracked FRED series, stable order.
 	latest, err := d.St.LatestMacroAll(ctx)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	econ := make([]econPrint, 0, len(fred.DefaultSeries))
@@ -247,7 +247,7 @@ func (d Deps) calendar(w http.ResponseWriter, r *http.Request) {
 	// [-14d overdue … +21d upcoming]. Quarterly-filer heuristic, labeled.
 	filings, err := d.St.LatestMetricAll(ctx, "LatestFilingDate")
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	now := time.Now().Unix()
@@ -256,7 +256,7 @@ func (d Deps) calendar(w http.ResponseWriter, r *http.Request) {
 	if len(filings) > 0 {
 		syms, serr := d.St.ActiveStockSymbols(ctx, nil)
 		if serr != nil {
-			httpErr(w, 500, serr.Error())
+			httpInternal(w, serr)
 			return
 		}
 		for _, s := range syms {

@@ -10,7 +10,7 @@ import "net/http"
 func (d Deps) volRegime(w http.ResponseWriter, r *http.Request) {
 	fcs, err := d.St.VolForecasts(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	high := 0

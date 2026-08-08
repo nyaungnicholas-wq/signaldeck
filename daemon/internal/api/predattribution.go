@@ -52,7 +52,7 @@ func (d Deps) predAttribution(w http.ResponseWriter, r *http.Request) {
 	if seq == 0 {
 		latest, ok, err := d.St.LatestAttributedSeq(r.Context(), s.ID, h)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		if !ok {
@@ -66,7 +66,7 @@ func (d Deps) predAttribution(w http.ResponseWriter, r *http.Request) {
 	}
 	parts, err := d.St.PredictionAttributions(r.Context(), seq)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if len(parts) == 0 {

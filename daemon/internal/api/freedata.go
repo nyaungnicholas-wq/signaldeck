@@ -23,7 +23,7 @@ func (d Deps) macroSeries(w http.ResponseWriter, r *http.Request) {
 	if series == "" {
 		latest, err := d.St.LatestMacroAll(ctx)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		writeJSON(w, map[string]any{
@@ -41,7 +41,7 @@ func (d Deps) macroSeries(w http.ResponseWriter, r *http.Request) {
 	}
 	pts, err := d.St.MacroSeries(ctx, series, limit)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	latest, ok, _ := d.St.LatestMacro(ctx, series)
@@ -78,7 +78,7 @@ func (d Deps) fundamentals(w http.ResponseWriter, r *http.Request) {
 	}
 	latest, err := d.St.LatestFundamentals(ctx, s.ID)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// attach the resolved symbol string for the UI
@@ -93,7 +93,7 @@ func (d Deps) fundamentals(w http.ResponseWriter, r *http.Request) {
 	if metric := strings.TrimSpace(r.URL.Query().Get("history")); metric != "" {
 		hist, err := d.St.FundamentalHistory(ctx, s.ID, metric)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		for i := range hist {

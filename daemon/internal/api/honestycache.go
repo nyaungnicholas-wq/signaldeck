@@ -88,7 +88,7 @@ func (c *respCache) serve(key string, w http.ResponseWriter, r *http.Request, h 
 	if e, ok := c.ent[key]; ok && time.Since(e.builtAt) < c.ttl {
 		e.usedSeq = lruTick()
 		c.ent[key] = e
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("X-Cache", "hit")
 		_, _ = w.Write(e.body)
 		return

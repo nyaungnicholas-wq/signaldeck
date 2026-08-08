@@ -241,7 +241,7 @@ func (d Deps) dashboardHandler(c *dashCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		global, err := c.get(r.Context(), d)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		// Shallow-copy the cached map; nested sections are read-only once built.
@@ -253,7 +253,7 @@ func (d Deps) dashboardHandler(c *dashCache) http.HandlerFunc {
 		if uid := userID(r); uid != 0 {
 			wl, werr := d.buildDashWatchlist(r.Context(), uid)
 			if werr != nil {
-				httpErr(w, 500, werr.Error())
+				httpInternal(w, werr)
 				return
 			}
 			out["watchlist"] = wl

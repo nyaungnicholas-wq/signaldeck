@@ -15,7 +15,7 @@ import (
 func (d Deps) adaptiveWeights(w http.ResponseWriter, r *http.Request) {
 	raw, err := d.St.GetMeta(r.Context(), adaptive.MetaKey)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	resp := map[string]any{

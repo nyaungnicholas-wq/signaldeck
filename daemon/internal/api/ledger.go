@@ -250,7 +250,7 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 			httpErr(w, http.StatusServiceUnavailable, "ledger verification exceeded "+ledgerVerifyTimeout.String()+" — retry, or use the incremental path (no ?full=1)")
 			return
 		}
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	anchoring := d.maybeAnchor(r, v)
@@ -268,7 +268,7 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 			httpErr(w, http.StatusServiceUnavailable, "ledger verification exceeded "+ledgerVerifyTimeout.String()+" — retry, or use the incremental path (no ?full=1)")
 			return
 		}
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{
@@ -330,7 +330,7 @@ func (d Deps) ledgerAnchors(w http.ResponseWriter, r *http.Request) {
 			httpErr(w, http.StatusServiceUnavailable, "anchor verification exceeded "+ledgerVerifyTimeout.String()+" — retry without ?full=1")
 			return
 		}
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{
@@ -367,7 +367,7 @@ func (d Deps) ledger(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := d.St.LedgerFor(r.Context(), s.ID, h, limit)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{

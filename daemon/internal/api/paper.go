@@ -46,7 +46,7 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 
 	rawCurve, err := d.St.PaperEquityCurve(r.Context(), strategy, 5000)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	curve := make([]papertrade.EquityPoint, len(rawCurve))
@@ -56,12 +56,12 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 
 	positions, err := d.St.PaperPositions(r.Context(), strategy)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	recent, err := d.St.PaperTrades(r.Context(), strategy, tradeLimit)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 
@@ -70,7 +70,7 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 	// exceed the buy net outlay). This is how win-rate + turnover stay honest.
 	all, err := d.St.AllPaperTradesAsc(r.Context(), strategy)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	closed, numFills, tradedNotional := reconstructRoundTrips(all)
@@ -83,7 +83,7 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 	// question rather than leaving them to assume the headline is the strategy's.
 	segments, err := paperEpochSegments(r.Context(), d.St, strategy, curve, all)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	var currentEpoch *EpochSegment

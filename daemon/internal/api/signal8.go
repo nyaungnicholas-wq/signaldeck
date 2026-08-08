@@ -59,7 +59,7 @@ func (d Deps) filingsFeed(w http.ResponseWriter, r *http.Request) {
 	form := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("form")))
 	rows, err := d.St.Filings(r.Context(), symbolID, form, limitParam(r, 100, 500))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{
@@ -86,7 +86,7 @@ func (d Deps) insiders(w http.ResponseWriter, r *http.Request) {
 	code := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("code")))
 	rows, err := d.St.InsiderTrades(r.Context(), symbolID, code, limitParam(r, 100, 500))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// Attach the honest per-code reading so the UI never invents one.
@@ -123,7 +123,7 @@ func (d Deps) institutions(w http.ResponseWriter, r *http.Request) {
 		}
 		rows, err := d.St.InstHoldingsByManager(ctx, cik, limitParam(r, 100, 500))
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		// Resolve ticker strings for matched holdings (cheap: distinct IDs).
@@ -155,7 +155,7 @@ func (d Deps) institutions(w http.ResponseWriter, r *http.Request) {
 		}
 		rows, herr := d.St.InstHoldingsBySymbol(ctx, s.ID, limitParam(r, 50, 200))
 		if herr != nil {
-			httpErr(w, 500, herr.Error())
+			httpInternal(w, herr)
 			return
 		}
 		for i := range rows {
@@ -168,7 +168,7 @@ func (d Deps) institutions(w http.ResponseWriter, r *http.Request) {
 	}
 	managers, err := d.St.InstManagers(ctx)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// The curated watchlist (even before any data lands) so the UI can show
@@ -210,7 +210,7 @@ func (d Deps) dilution(w http.ResponseWriter, r *http.Request) {
 		}
 		flag, ok, ferr := d.St.DilutionFlag(ctx, s.ID)
 		if ferr != nil {
-			httpErr(w, 500, ferr.Error())
+			httpInternal(w, ferr)
 			return
 		}
 		out := map[string]any{
@@ -231,7 +231,7 @@ func (d Deps) dilution(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := d.St.DilutionFlagged(ctx, limitParam(r, 100, 500))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	type flagged struct {

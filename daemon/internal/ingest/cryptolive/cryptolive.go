@@ -47,6 +47,9 @@ type Ingestor struct {
 	http     *http.Client
 
 	consecFails int
+	// outageStart is when the CURRENT run of failures began, so the run log can
+	// report a real duration instead of a poll count wearing a seconds suffix.
+	outageStart time.Time
 	lastDQEmit  time.Time
 	written     int64
 }
@@ -78,15 +81,32 @@ func (g *Ingestor) Run(ctx context.Context) (string, error) {
 			return fmt.Sprintf("stopped; %d snapshots written", g.written), nil
 		case <-t.C:
 			if err := g.poll(ctx); err != nil {
+				if g.consecFails == 0 {
+					g.outageStart = time.Now()
+				}
 				g.consecFails++
 				g.maybeEmitDQ(ctx, err)
 				if g.consecFails >= 60 {
+					// Report the REAL outage duration, and reset the counter so
+					// the next run counts its own 60.
+					//
+					// consecFails is a per-poll COUNT that survived the return,
+					// because the runner restarts this same Ingestor. It
+					// therefore accumulated across every restart of one outage
+					// while being printed with a "%ds" suffix — the log read
+					// "unreachable for 84s" then "95s" across 16 minutes of wall
+					// clock, understating a 95-minute outage by ~60x. Anyone
+					// triaging from that number was reading it wrong through no
+					// fault of their own.
+					down := time.Since(g.outageStart).Round(time.Second)
+					g.consecFails = 0
 					return fmt.Sprintf("%d snapshots written this run", g.written),
-						fmt.Errorf("tickstream unreachable for %ds: %w", g.consecFails, err)
+						fmt.Errorf("tickstream unreachable for %s: %w", down, err)
 				}
 				continue
 			}
 			g.consecFails = 0
+			g.outageStart = time.Time{}
 		}
 	}
 }

@@ -37,7 +37,7 @@ func (d Deps) predictionsLatestCached(w http.ResponseWriter, r *http.Request) {
 			return d.buildPredictionsLatest(ctx, h)
 		})
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, resp)

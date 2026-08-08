@@ -25,7 +25,7 @@ func (d Deps) strategyLab(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	fleet, err := d.St.StrategyFleetAggs(ctx)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{
@@ -40,7 +40,7 @@ func (d Deps) strategyLab(w http.ResponseWriter, r *http.Request) {
 		}
 		rows, err := d.St.StrategyResultsBySymbol(ctx, s.ID)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		out["symbol"] = s.Symbol

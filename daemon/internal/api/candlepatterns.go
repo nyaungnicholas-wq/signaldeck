@@ -69,7 +69,7 @@ func (d Deps) candlePatterns(w http.ResponseWriter, r *http.Request) {
 	// still has prior bars for pattern trend-context.
 	bars, err := d.St.LastBars(ctx, s.ID, md.TF1d, candlePatternBars+60)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 
