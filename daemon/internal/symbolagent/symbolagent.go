@@ -140,6 +140,10 @@ type Model struct {
 	// This is not persisted as a column; the worker aggregates it into its run
 	// detail so the binding constraint is legible from the Agents page.
 	TierBlocker string `json:"-"`
+	// TierShortfall/TierNeed are what that floor HAS and what it NEEDS, so a
+	// caller can report the closest symbol to passing rather than a histogram.
+	TierShortfall int `json:"-"`
+	TierNeed      int `json:"-"`
 }
 
 // Learn computes a symbol's model from its OWN labeled examples plus the tier
@@ -200,20 +204,32 @@ func Learn(examples []adaptive.Example, rawPairs []ensemble.Pair, regimeLearned,
 	// three market moves. It is also not redundant with adaptive.MinCellDays —
 	// that floor (20) qualifies the WEIGHTS; this one (30) qualifies the claim
 	// that this symbol needs its own model at all.
-	// Record the FIRST unmet condition, in the same order the gate tests them,
-	// so the count of blockers a run reports sums to the symbols it refused.
+	// Record the FIRST unmet condition as a CATEGORY, in the gate's own test
+	// order. The category is deliberately free of the per-symbol count: keying
+	// on the shortfall produced twenty-odd buckets ("rows 20/40 (87), rows 14/40
+	// (84), rows 24/40 (82)…") which is a histogram, not an answer. The caller
+	// reports how many symbols each floor holds and how close the nearest one
+	// is, which is what says "four more days" or "never".
+	//
+	// NOTE ON THE ROW FLOOR: examples arrive DEDUPED to one row per trading day
+	// (store.labeledFeaturesBySymbol), so MinPersonal is effectively a 40-DAY
+	// floor and strictly dominates MinPersonalDays of 30. That is why the row
+	// condition is the one that binds in practice, and why the day condition
+	// below is currently unreachable.
 	switch {
 	case len(examples) < MinPersonal:
-		m.TierBlocker = fmt.Sprintf("rows %d/%d", len(examples), MinPersonal)
+		m.TierBlocker = "rows"
+		m.TierShortfall, m.TierNeed = len(examples), MinPersonal
 	case m.NDays < MinPersonalDays:
-		m.TierBlocker = fmt.Sprintf("distinct days %d/%d", m.NDays, MinPersonalDays)
+		m.TierBlocker = "distinct days"
+		m.TierShortfall, m.TierNeed = m.NDays, MinPersonalDays
 	case len(cell.Weights) == 0:
 		// The adaptive panel produced no weights that survived its shrinkage and
 		// multiplicity correction. Measured 2026-08-08 this was the binding
 		// constraint for EVERY symbol: cells carried 14-16 days against
 		// adaptive.MinCellDays of 20.
-		m.TierBlocker = fmt.Sprintf("adaptive weights empty (cell days %d/%d)",
-			cell.Days, adaptive.MinCellDays)
+		m.TierBlocker = "adaptive weights empty"
+		m.TierShortfall, m.TierNeed = cell.Days, adaptive.MinCellDays
 	}
 
 	switch {

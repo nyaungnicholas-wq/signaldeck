@@ -68,7 +68,13 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 	// is holding. "0 personal" alone was reported every hour for weeks and
 	// said nothing about why; the binding constraint turned out to be four
 	// layers down.
-	blockers := map[string]int{}
+	// floor -> how many symbol-horizons it holds, and the CLOSEST one to
+	// clearing it. "nearest 34/40" is actionable; a histogram of every
+	// shortfall is not.
+	type blockStat struct {
+		n, best, need int
+	}
+	blockers := map[string]*blockStat{}
 	for _, s := range syms {
 		// Does the symbol's CURRENT regime cell yield global weights? (Used only
 		// to label the fallback tier for a still-learning symbol.)
@@ -120,7 +126,15 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 			}
 			upserts++
 			if m.TierBlocker != "" {
-				blockers[m.TierBlocker]++
+				b := blockers[m.TierBlocker]
+				if b == nil {
+					b = &blockStat{need: m.TierNeed}
+					blockers[m.TierBlocker] = b
+				}
+				b.n++
+				if m.TierShortfall > b.best {
+					b.best = m.TierShortfall
+				}
 			}
 			if m.Tier == symbolagent.TierPersonal {
 				personalCount++
@@ -150,14 +164,16 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 			keys = append(keys, k)
 		}
 		sort.Slice(keys, func(i, j int) bool {
-			if blockers[keys[i]] != blockers[keys[j]] {
-				return blockers[keys[i]] > blockers[keys[j]]
+			if blockers[keys[i]].n != blockers[keys[j]].n {
+				return blockers[keys[i]].n > blockers[keys[j]].n
 			}
 			return keys[i] < keys[j]
 		})
 		parts := make([]string, 0, len(keys))
 		for _, k := range keys {
-			parts = append(parts, fmt.Sprintf("%s (%d)", k, blockers[k]))
+			b := blockers[k]
+			parts = append(parts, fmt.Sprintf("%s (%d symbol-horizon(s), nearest %d/%d)",
+				k, b.n, b.best, b.need))
 		}
 		detail += "; blocked on: " + strings.Join(parts, ", ")
 	}

@@ -48,15 +48,29 @@ func TestTierBlockerNamesTheBindingFloor(t *testing.T) {
 	}
 }
 
-// The blocker must never be a bare "blocked" with no number: the whole value is
-// knowing how far short the evidence is, so an operator can tell "two more days"
-// from "this will never happen".
+// The blocker must carry HOW FAR SHORT the evidence is, so an operator can tell
+// "four more days" from "this will never happen".
+//
+// The shortfall lives in fields rather than in the label on purpose: keying the
+// caller's tally on a formatted string produced twenty-odd buckets — "rows 20/40
+// (87), rows 14/40 (84), rows 24/40 (82)…" — which is a histogram, not an
+// answer. The label is the FLOOR; the numbers are separate so the caller can
+// report the nearest symbol to passing.
 func TestTierBlockerCarriesTheShortfall(t *testing.T) {
 	m := Learn(nil, []ensemble.Pair{}, false, false)
 	if m.TierBlocker == "" {
 		t.Fatal("no blocker recorded for an empty history")
 	}
-	if !strings.Contains(m.TierBlocker, "/") {
-		t.Errorf("blocker %q carries no have/need shortfall", m.TierBlocker)
+	if m.TierNeed <= 0 {
+		t.Errorf("blocker %q reports no requirement (need=%d)", m.TierBlocker, m.TierNeed)
+	}
+	if m.TierShortfall >= m.TierNeed {
+		t.Errorf("blocker %q says have=%d need=%d, which would not block",
+			m.TierBlocker, m.TierShortfall, m.TierNeed)
+	}
+	// The label must be a stable CATEGORY, not a formatted count.
+	if strings.ContainsAny(m.TierBlocker, "0123456789/") {
+		t.Errorf("blocker label %q embeds a count; the caller keys its tally on this "+
+			"and would produce one bucket per shortfall", m.TierBlocker)
 	}
 }
