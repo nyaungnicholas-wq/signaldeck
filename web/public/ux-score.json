@@ -1,5 +1,5 @@
 {
-  "overall": 81.67415482202983,
+  "overall": 81.75017839105338,
   "level": {
     "key": "good",
     "label": "Good",
@@ -17,8 +17,8 @@
         "question": "Can I tell what this does?",
         "weight": 0.15
       },
-      "score": 8.417712842712843,
-      "fromPages": 8.417712842712843,
+      "score": 8.434235209235208,
+      "fromPages": 8.434235209235208,
       "fromSignals": null,
       "worstRoutes": [
         "/market/regimes",
@@ -33,8 +33,8 @@
         "question": "Can I find my way around?",
         "weight": 0.13
       },
-      "score": 8.63813492063492,
-      "fromPages": 8.63813492063492,
+      "score": 8.638452380952382,
+      "fromPages": 8.638452380952382,
       "fromSignals": null,
       "worstRoutes": [
         "/lab/paper",
@@ -97,8 +97,8 @@
         "question": "Does it work however I browse?",
         "weight": 0.1
       },
-      "score": 7.707671957671956,
-      "fromPages": 7.707671957671956,
+      "score": 7.734126984126982,
+      "fromPages": 7.734126984126982,
       "fromSignals": null,
       "worstRoutes": [
         "/intel/companies",
@@ -113,8 +113,8 @@
         "question": "Is this calm enough to read?",
         "weight": 0.1
       },
-      "score": 8.695655663780663,
-      "fromPages": 8.695655663780663,
+      "score": 8.720027958152958,
+      "fromPages": 8.720027958152958,
       "fromSignals": null,
       "worstRoutes": [
         "/intel/news",
@@ -178,7 +178,7 @@
         "title": "Dashboard — SignalDeck",
         "words": 522,
         "screens": 2.55,
-        "links": 105,
+        "links": 103,
         "buttons": 337,
         "inputs": 2,
         "viewControls": 22,
@@ -195,7 +195,7 @@
         ],
         "unnamedControls": 0,
         "headingSkips": 0,
-        "smallTargets": 114,
+        "smallTargets": 112,
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
         "liveRegions": 4,
@@ -607,7 +607,7 @@
     {
       "measurement": {
         "title": "Macro",
-        "words": 946,
+        "words": 943,
         "screens": 5.93,
         "links": 63,
         "buttons": 4,
@@ -635,17 +635,17 @@
         "advanced": false
       },
       "scores": {
-        "clarity": 7.095454545454547,
+        "clarity": 7.1045454545454545,
         "friendliness": 6.796666666666667,
         "helpfulness": 6.666666666666667,
         "interactivity": 5,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 6.071079545454546,
+        "layout": 6.0778977272727275,
         "feedback": 6.666666666666667,
         "personalization": 10
       },
-      "overall": 71.38326136363636
+      "overall": 71.40371590909092
     },
     {
       "measurement": {
@@ -692,13 +692,13 @@
     {
       "measurement": {
         "title": "Trends",
-        "words": 1086,
-        "screens": 4.24,
+        "words": 1073,
+        "screens": 4.22,
         "links": 32,
         "buttons": 8,
         "inputs": 1,
         "viewControls": 7,
-        "numbers": 159,
+        "numbers": 157,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
@@ -719,17 +719,17 @@
         "advanced": false
       },
       "scores": {
-        "clarity": 7.087878787878789,
-        "friendliness": 8.34,
+        "clarity": 7.127272727272728,
+        "friendliness": 8.353333333333333,
         "helpfulness": 10,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 7.222222222222221,
-        "layout": 7.525454545454545,
+        "layout": 7.580151515151515,
         "feedback": 10,
         "personalization": 0
       },
-      "overall": 83.22149494949494
+      "overall": 83.35261616161617
     },
     {
       "measurement": {
@@ -858,7 +858,7 @@
     {
       "measurement": {
         "title": "Companies",
-        "words": 2029,
+        "words": 2030,
         "screens": 3.72,
         "links": 57,
         "buttons": 4,
@@ -1018,13 +1018,13 @@
     {
       "measurement": {
         "title": "SEC Filings",
-        "words": 428,
+        "words": 426,
         "screens": 2.93,
         "links": 57,
         "buttons": 14,
         "inputs": 1,
         "viewControls": 13,
-        "numbers": 127,
+        "numbers": 126,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [],
@@ -1042,17 +1042,17 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 9.915151515151514,
+        "clarity": 9.921212121212122,
         "friendliness": 10,
         "helpfulness": 10,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 9.695833333333333,
+        "layout": 9.707954545454546,
         "feedback": 10,
         "personalization": 10
       },
-      "overall": 96.23522727272727
+      "overall": 96.2564393939394
     },
     {
       "measurement": {
@@ -1727,19 +1727,19 @@
     {
       "measurement": {
         "title": "Insights",
-        "words": 1339,
-        "screens": 4.71,
-        "links": 28,
-        "buttons": 6,
+        "words": 1084,
+        "screens": 4.43,
+        "links": 16,
+        "buttons": 7,
         "inputs": 0,
-        "viewControls": 13,
-        "numbers": 218,
+        "viewControls": 11,
+        "numbers": 134,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [],
         "unnamedControls": 0,
         "headingSkips": 0,
-        "smallTargets": 16,
+        "smallTargets": 4,
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
         "liveRegions": 0,
@@ -1751,28 +1751,28 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 7.154545454545455,
+        "clarity": 7.927272727272727,
         "friendliness": 10,
         "helpfulness": 10,
         "interactivity": 10,
         "guidance": 10,
-        "accessibility": 6.666666666666667,
-        "layout": 6.2684848484848485,
+        "accessibility": 7.777777777777778,
+        "layout": 7.624393939393939,
         "feedback": 10,
         "personalization": 10
       },
-      "overall": 88.66696969696969
+      "overall": 92.29308080808082
     },
     {
       "measurement": {
         "title": "Live",
-        "words": 719,
-        "screens": 4.22,
+        "words": 763,
+        "screens": 4.65,
         "links": 10,
         "buttons": 2,
         "inputs": 0,
         "viewControls": 0,
-        "numbers": 195,
+        "numbers": 207,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [],
@@ -1790,17 +1790,17 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 9.033333333333333,
+        "clarity": 8.9,
         "friendliness": 10,
         "helpfulness": 6.666666666666667,
         "interactivity": 5,
         "guidance": 10,
         "accessibility": 8.055555555555555,
-        "layout": 8.096818181818183,
+        "layout": 7.6909090909090905,
         "feedback": 6.666666666666667,
         "personalization": 0
       },
-      "overall": 76.86904040404042
+      "overall": 76.26313131313131
     },
     {
       "measurement": {
@@ -1932,5 +1932,5 @@
   "signalCoverage": 0,
   "pagesCrawled": 42,
   "pagesFailed": 0,
-  "generatedAt": "2026-08-08T03:04:52.156Z"
+  "generatedAt": "2026-08-08T03:49:18.332Z"
 }

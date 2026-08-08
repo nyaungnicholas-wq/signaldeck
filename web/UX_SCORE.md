@@ -1,7 +1,7 @@
 # SignalDeck UX Self-Grade
 
-Generated 2026-08-08T03:04:52.156Z.
-Overall score: 81.7/100 — Good
+Generated 2026-08-08T03:49:18.332Z.
+Overall score: 81.8/100 — Good
 Mostly useful. People succeed, but a few rough edges cost them time.
 
 ## Categories
@@ -28,18 +28,18 @@ Metrics pages show a beginner exactly what they show a quant. Make the goal chan
 | /lab/paper | 41.6 | 0 | 0 | 0 | 0 | 0 |
 | /accuracy | 63.8 | 1036 | 6.33 | 2 | 4 | 2 |
 | /market/regimes | 64.5 | 1018 | 4.12 | 123 | 6 | 115 |
-| /market/macro | 71.4 | 946 | 5.93 | 67 | 3 | 56 |
+| /market/macro | 71.4 | 943 | 5.93 | 67 | 3 | 56 |
 | /lab/pairs | 72.1 | 847 | 3.59 | 13 | 7 | 0 |
 | /market/breadth | 72.7 | 814 | 3.55 | 8 | 3 | 0 |
-| /intel/companies | 72.9 | 2029 | 3.72 | 66 | 0 | 50 |
+| /intel/companies | 72.9 | 2030 | 3.72 | 66 | 0 | 50 |
 | /glossary | 75.5 | 470 | 2.09 | 2 | 4 | 1 |
+| /lab/live | 76.3 | 763 | 4.65 | 12 | 0 | 2 |
 | /hud | 76.3 | 305 | 3.62 | 1 | 1 | 1 |
-| /lab/live | 76.9 | 719 | 4.22 | 12 | 0 | 2 |
 | /lab/sentiment | 77.3 | 680 | 3.67 | 13 | 4 | 0 |
 | /market/unusual | 79.0 | 189 | 1.72 | 15 | 2 | 7 |
 | /intel/news | 79.9 | 1794 | 9.52 | 136 | 0 | 127 |
 | /intel/institutions | 80.4 | 377 | 3.12 | 40 | 1 | 0 |
-| / | 80.7 | 522 | 2.55 | 444 | 6 | 114 |
+| / | 80.7 | 522 | 2.55 | 442 | 6 | 112 |
 | /watchlist | 81.0 | 60 | 1 | 3 | 0 | 1 |
 | /lab/options | 81.8 | 104 | 1.11 | 25 | 3 | 13 |
 | /lab/track-record | 82.1 | 447 | 2.07 | 19 | 2 | 5 |
