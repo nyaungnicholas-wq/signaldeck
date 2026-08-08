@@ -46,10 +46,10 @@ func TestSelfReferentialKey_CoversEveryBlendAndLegOutput(t *testing.T) {
 // LABELS has no business being an input at all.
 func TestSelfReferentialKey_CoversLegOutputsAndLabelDerivedStats(t *testing.T) {
 	for _, k := range []string{
-		"forecast_prob",        // the walk-forward logistic leg's own output
-		"forecast_lift",        // that leg's OOS accuracy — computed from labels
-		"expectancy_hit_rate",  // the expectancy leg's output, also a label statistic
-		"n_used",               // how many legs cleared their (label-graded) gates
+		"forecast_prob",                           // the walk-forward logistic leg's own output
+		"forecast_lift",                           // that leg's OOS accuracy — computed from labels
+		"expectancy_hit_rate",                     // the expectancy leg's output, also a label statistic
+		"n_used",                                  // how many legs cleared their (label-graded) gates
 		"gbm_lift", "meanrev_lift", "alphax_lift", // class rule, not yet stored
 		"pressure_hit_rate", // class rule: any hit rate is a label statistic
 	} {

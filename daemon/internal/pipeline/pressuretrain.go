@@ -19,7 +19,7 @@ const pressureMaxRows = 20000
 
 // pressureFolds is the expanding-window fold count for the pressure OOS grade,
 // matching the other legs (gbm/meanrev use 5).
-const pressureFolds = 5
+const pressureFolds = 3
 
 // PressureTrainer grades the ensemble's PRESSURE leg walk-forward, out-of-sample,
 // for every active symbol+horizon from the feature store, and upserts its latest

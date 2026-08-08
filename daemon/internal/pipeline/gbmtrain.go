@@ -27,8 +27,8 @@ const meanRevCost = 0.001
 // gbmFolds / meanRevFolds are the walk-forward fold counts (mirrors
 // forecast.defaultFolds = 5).
 const (
-	gbmFolds     = 5
-	meanRevFolds = 5
+	gbmFolds     = 3
+	meanRevFolds = 3
 )
 
 // presenceSuffix marks a DERIVED per-feature presence indicator: for base key
