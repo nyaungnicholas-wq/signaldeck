@@ -54,14 +54,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "day stats: %v\n", err)
 		os.Exit(2)
 	}
-	fmt.Printf("%-12s %8s %10s %8s  %s\n", "DAY", "SYMBOLS", "DISTINCT", "RATIO", "")
-	for _, d := range stats {
-		flag := ""
-		if d.Collapsed() {
-			flag = "  <-- COLLAPSED"
-		}
-		fmt.Printf("%-12s %8d %10d %8.3f%s\n", d.Day, d.Symbols, d.DistinctProbs, d.DistinctRatio(), flag)
+	rawStats, err := src.RawDayStats(context.Background(), *horizon, since)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "raw day stats: %v\n", err)
+		os.Exit(2)
 	}
+	show := func(title string, rows []forecastmon.DayStat) {
+		fmt.Println(title)
+		fmt.Printf("%-12s %8s %10s %8s\n", "DAY", "SYMBOLS", "DISTINCT", "RATIO")
+		for _, d := range rows {
+			flag := ""
+			if d.Collapsed() {
+				flag = "  <-- COLLAPSED"
+			}
+			fmt.Printf("%-12s %8d %10d %8.3f%s\n", d.Day, d.Symbols, d.DistinctProbs, d.DistinctRatio(), flag)
+		}
+		fmt.Println()
+	}
+	// RAW first: it is the earlier signal (visible the day it happens) and the
+	// more fundamental failure -- no calibration fix helps a model that has
+	// stopped discriminating.
+	show("RAW model output  (emitted -- visible same day):", rawStats)
+	show("PUBLISHED, resolved  (calibrated -- a full horizon behind):", stats)
 
 	m := &forecastmon.Monitor{Src: src, Horizon: *horizon, Window: time.Duration(*days) * 24 * time.Hour}
 	detail, err := m.Run(context.Background())

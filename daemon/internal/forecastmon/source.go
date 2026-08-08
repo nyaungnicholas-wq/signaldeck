@@ -40,3 +40,15 @@ func (s storeSource) Buckets(ctx context.Context, horizon string, since time.Tim
 	}
 	return out, base, days, nil
 }
+
+func (s storeSource) RawDayStats(ctx context.Context, horizon string, since time.Time) ([]DayStat, error) {
+	rows, err := s.st.ForecastDayStatsRaw(ctx, horizon, since)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DayStat, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, DayStat{Day: r.Day, Symbols: r.Symbols, DistinctProbs: r.DistinctProbs})
+	}
+	return out, nil
+}

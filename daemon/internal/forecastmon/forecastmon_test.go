@@ -13,6 +13,7 @@ import (
 // stubSource replays a measured record without a database.
 type stubSource struct {
 	days    []DayStat
+	rawDays []DayStat
 	buckets []Bucket
 	base    float64
 	nDays   int
@@ -23,6 +24,9 @@ func (s stubSource) DayStats(context.Context, string, time.Time) ([]DayStat, err
 }
 func (s stubSource) Buckets(context.Context, string, time.Time) ([]Bucket, float64, int, error) {
 	return s.buckets, s.base, s.nDays, nil
+}
+func (s stubSource) RawDayStats(context.Context, string, time.Time) ([]DayStat, error) {
+	return s.rawDays, nil
 }
 
 func run(t *testing.T, src Source) (string, error) {
@@ -59,7 +63,7 @@ func TestCatchesTheRealCollapse(t *testing.T) {
 	if err == nil {
 		t.Fatalf("eight collapsed days returned no error; detail=%q", detail)
 	}
-	if !strings.Contains(err.Error(), "CROSS-SECTION COLLAPSE") {
+	if !strings.Contains(err.Error(), "PUBLISHED CROSS-SECTION COLLAPSE") {
 		t.Errorf("error does not name the failure: %v", err)
 	}
 	// It must name the worst day so an operator knows where to look.
@@ -194,9 +198,47 @@ func TestCollapseStaysAHardFailureEvenWhenInversionIsWithheld(t *testing.T) {
 		t.Fatal("a collapsed day returned no error")
 	}
 	if errors.Is(err, workers.ErrDegraded) {
-		t.Errorf("a CROSS-SECTION COLLAPSE was filed as merely degraded: %v", err)
+		t.Errorf("a collapse was filed as merely degraded: %v", err)
 	}
-	if !strings.Contains(err.Error(), "CROSS-SECTION COLLAPSE") {
+	if !strings.Contains(err.Error(), "PUBLISHED CROSS-SECTION COLLAPSE") {
 		t.Errorf("error does not name the collapse: %v", err)
+	}
+}
+
+// THE DAY-LATE GAP. prediction_outcomes only carries RESOLVED rows, so at a 1d
+// horizon a collapse starting today is invisible there until tomorrow. Measured:
+// on 2026-08-07 raw_prob fell from 1,475 distinct values across 329 symbols to
+// 78, while the resolved-side view still showed two healthy days — the monitor
+// would have reported all-clear on a fleet that had already stopped
+// discriminating. The raw side closes that gap.
+func TestCatchesTheLiveRawCollapseTheResolvedSideCannotSee(t *testing.T) {
+	_, err := run(t, stubSource{
+		// Resolved side: the last two days that HAVE resolved, both healthy.
+		days: []DayStat{
+			{Day: "2026-08-05", Symbols: 327, DistinctProbs: 179},
+			{Day: "2026-08-06", Symbols: 322, DistinctProbs: 174},
+		},
+		// Raw side: what the model emitted since, which has not resolved yet.
+		rawDays: []DayStat{
+			{Day: "2026-08-06", Symbols: 329, DistinctProbs: 1475},
+			{Day: "2026-08-07", Symbols: 329, DistinctProbs: 78},
+			{Day: "2026-08-08", Symbols: 329, DistinctProbs: 31},
+		},
+		base: 0.3914, nDays: 2,
+	})
+	if err == nil {
+		t.Fatal("a live raw collapse went unreported because nothing had resolved yet")
+	}
+	if !strings.Contains(err.Error(), "RAW MODEL COLLAPSE") {
+		t.Errorf("error does not name the raw collapse: %v", err)
+	}
+	// It must point at the NEWEST collapsed day: that is what is happening now.
+	if !strings.Contains(err.Error(), "2026-08-08") {
+		t.Errorf("error should name the most recent collapsed day, got: %v", err)
+	}
+	// And a raw collapse is a hard failure, never softened to degraded by the
+	// thin-window withholding that applies to the inversion check.
+	if errors.Is(err, workers.ErrDegraded) {
+		t.Errorf("a raw model collapse was filed as merely degraded: %v", err)
 	}
 }

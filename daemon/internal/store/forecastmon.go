@@ -141,3 +141,79 @@ func sqlPct(q string) string {
 	}
 	return string(out)
 }
+
+// ForecastDayStatsRaw is ForecastDayStats against the PREDICTIONS table rather
+// than resolved outcomes, and it exists because the outcome-side view is a full
+// horizon late.
+//
+// prediction_outcomes only carries a row once it has RESOLVED, so at a 1d
+// horizon a collapse that starts today is invisible until tomorrow. That is
+// exactly how the 2026-08-07 collapse was still running unseen: raw_prob fell
+// from 1,475 distinct values across 329 symbols to 78, and nothing could report
+// it because none of those rows had resolved yet.
+//
+// This reads what the model EMITTED, so the same collapse is visible the day it
+// happens. It measures raw_prob — upstream of calibration — so it separates "the
+// model stopped discriminating" from "the calibrator flattened a good score",
+// which are different failures with different fixes and were genuinely both
+// present in the same fortnight.
+func (s *Store) ForecastDayStatsRaw(ctx context.Context, horizon string, since time.Time) ([]ForecastDayStat, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		WITH dedup AS (
+		  SELECT symbol_id, date(ts,'unixepoch') AS d, raw_prob,
+		         ROW_NUMBER() OVER (PARTITION BY symbol_id, date(ts,'unixepoch')
+		                            ORDER BY ts DESC) rn
+		  FROM predictions
+		  WHERE horizon = ? AND ts >= ?
+		)
+		SELECT d, COUNT(*), COUNT(DISTINCT ROUND(raw_prob, 3))
+		FROM dedup WHERE rn = 1 GROUP BY d ORDER BY d`,
+		horizon, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var out []ForecastDayStat
+	for rows.Next() {
+		var d ForecastDayStat
+		if err := rows.Scan(&d.Day, &d.Symbols, &d.DistinctProbs); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// AdmittedLegHistogram reports how many legs the ensemble actually ADMITTED per
+// prediction, per day: n_used -> row count.
+//
+// This is the mechanism behind a raw-side collapse rather than a symptom of it.
+// With one admitted leg the blend has nothing to vary across the cross-section,
+// so raw_prob necessarily degenerates. Measured 2026-08-06 the fleet ran 2-5
+// legs on 13,188 of 14,032 rows; by 2026-08-07 it ran 0-1 on 2,565 of 3,043,
+// because every leg had failed its out-of-sample admission bar (expectancy fleet
+// AUC 0.4303 - anti-predictive; pressure OOS lift <= 0; gbm 0 legs with edge).
+// The gates were right. Publishing a forecast from what survived was not.
+func (s *Store) AdmittedLegHistogram(ctx context.Context, horizon string, since time.Time) (map[string]map[int]int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT date(ts,'unixepoch') AS d, n_used, COUNT(*)
+		FROM predictions WHERE horizon = ? AND ts >= ?
+		GROUP BY d, n_used ORDER BY d, n_used`, horizon, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[string]map[int]int{}
+	for rows.Next() {
+		var day string
+		var nUsed, n int
+		if err := rows.Scan(&day, &nUsed, &n); err != nil {
+			return nil, err
+		}
+		if out[day] == nil {
+			out[day] = map[int]int{}
+		}
+		out[day][nUsed] = n
+	}
+	return out, rows.Err()
+}

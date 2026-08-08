@@ -129,6 +129,13 @@ type Source interface {
 	// Buckets returns the per-confidence-band record over the same window,
 	// along with the window's realized base rate and its distinct day count.
 	Buckets(ctx context.Context, horizon string, since time.Time) (buckets []Bucket, baseRate float64, days int, err error)
+	// RawDayStats is DayStats measured on what the model EMITTED rather than on
+	// what has RESOLVED. At a 1d horizon the resolved view is a full day late,
+	// so a collapse starting today is invisible to DayStats until tomorrow —
+	// which is how the 2026-08-07 collapse was still running unreported. This
+	// is also upstream of calibration, so it separates "the model stopped
+	// discriminating" from "the calibrator flattened a good score".
+	RawDayStats(ctx context.Context, horizon string, since time.Time) ([]DayStat, error)
 }
 
 // Monitor is the worker.
@@ -179,7 +186,33 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 
 	var problems []string
 
-	// 1. Collapse.
+	// 1a. Collapse on the RAW side, checked FIRST because it is both the earlier
+	// signal and the more fundamental failure: if the model itself stopped
+	// discriminating, no calibration fix can help and the published probability
+	// is a single market-wide call however it is post-processed.
+	rawDays, err := m.Src.RawDayStats(ctx, horizon, since)
+	if err != nil {
+		return "", fmt.Errorf("raw day stats: %w", err)
+	}
+	var rawCollapsed []DayStat
+	for _, d := range rawDays {
+		if d.Collapsed() {
+			rawCollapsed = append(rawCollapsed, d)
+		}
+	}
+	if len(rawCollapsed) > 0 {
+		sort.Slice(rawCollapsed, func(i, j int) bool { return rawCollapsed[i].Day < rawCollapsed[j].Day })
+		w := rawCollapsed[len(rawCollapsed)-1] // newest: what is happening NOW
+		problems = append(problems, fmt.Sprintf(
+			"RAW MODEL COLLAPSE on %d/%d day(s), most recently %s: %d distinct raw scores "+
+				"across %d symbols (ratio %.3f, floor %.2f). This is UPSTREAM of calibration — "+
+				"the ensemble itself has stopped discriminating, which happens when its legs "+
+				"fail their admission bar and the blend runs on one leg or none",
+			len(rawCollapsed), len(rawDays), w.Day, w.DistinctProbs, w.Symbols,
+			w.DistinctRatio(), MinDistinctRatio))
+	}
+
+	// 1b. Collapse on the published (calibrated, resolved) side.
 	var collapsed []DayStat
 	for _, d := range days {
 		if d.Collapsed() {
@@ -195,7 +228,7 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 			}
 		}
 		problems = append(problems, fmt.Sprintf(
-			"CROSS-SECTION COLLAPSE on %d/%d day(s): worst %s emitted %d distinct probabilities "+
+			"PUBLISHED CROSS-SECTION COLLAPSE on %d/%d day(s): worst %s emitted %d distinct probabilities "+
 				"across %d symbols (ratio %.3f, floor %.2f). Every statistic covering these days "+
 				"grades one market-wide call repeated per symbol, not %d independent trials",
 			len(collapsed), len(days), worst.Day, worst.DistinctProbs, worst.Symbols,
