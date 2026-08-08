@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // expectancyLegKey is the predictions.components key holding the expectancy
@@ -95,6 +97,9 @@ func (w *ExpectancyTrainer) Run(ctx context.Context) (string, error) {
 	}
 	now := time.Now().Unix()
 	var msg string
+	// Horizons whose leg graded anti-predictive this run, named in the degraded
+	// error so the operator sees WHICH leg died, not merely that one did.
+	var antiPredictive []string
 	for _, h := range predHorizons {
 		// PASS 1 — collect every symbol's pairs and its own AUC estimate.
 		var all []symbolPairs
@@ -178,12 +183,23 @@ func (w *ExpectancyTrainer) Run(ctx context.Context) (string, error) {
 		verdict := "passes the ranking gate"
 		if fleetAUC <= 0.5 {
 			verdict = "ANTI-PREDICTIVE — benched fleet-wide"
+			antiPredictive = append(antiPredictive, fmt.Sprintf("%s AUC %.4f", h, fleetAUC))
 		}
 		msg += fmt.Sprintf("%s: fleet AUC %.4f over %d symbols / %d symbol-days (%s); ",
 			h, fleetAUC, written, n, verdict)
 	}
 	if msg == "" {
 		return "expectancy leg: no resolved pairs yet — leg stays on its historical gate", nil
+	}
+	// A leg graded ANTI-PREDICTIVE and benched fleet-wide has delivered a
+	// measurement but no usable leg, and the run log said "ok" while fleet AUC
+	// sat at 0.4303 across 8,220 symbol-days. Surfacing it is the whole point:
+	// an anti-predictive leg is the strongest evidence available that the
+	// ensemble has nothing to blend.
+	if len(antiPredictive) > 0 {
+		return "graded expectancy leg — " + msg,
+			fmt.Errorf("anti-predictive and benched fleet-wide (%s): %w",
+				strings.Join(antiPredictive, ", "), workers.ErrDegraded)
 	}
 	return "graded expectancy leg — " + msg, nil
 }

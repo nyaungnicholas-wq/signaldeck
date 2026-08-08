@@ -73,7 +73,7 @@ func TestAlphaXTrainer_IntradayDuplicatesCollapse(t *testing.T) {
 	// Anchor at UTC midday: the intraday repeat offsets (≤ ~21 min) must
 	// never straddle a UTC-day boundary, or the trainer correctly counts the
 	// spilled rows as next-day rows rather than duplicates.
-	base := time.Now().UTC().Truncate(24*time.Hour).Add(12*time.Hour - nDays*24*time.Hour).Unix()
+	base := time.Now().UTC().Truncate(24 * time.Hour).Add(12*time.Hour - nDays*24*time.Hour).Unix()
 	for s := 0; s < nSyms; s++ {
 		sym, err := st.UpsertSymbol(ctx, fmt.Sprintf("DUP%02d", s), md.Stocks, "")
 		if err != nil {

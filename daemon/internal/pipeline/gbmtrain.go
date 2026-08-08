@@ -11,6 +11,7 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/meanrev"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // gbmMaxRows caps how many of a symbol's own labeled examples one training pass
@@ -400,6 +401,16 @@ func (w *GBMTrainer) Run(ctx context.Context) (string, error) {
 		}
 		sort.Strings(names)
 		msg += fmt.Sprintf("; feature-health retired %d input(s): %s", len(names), strings.Join(names, ","))
+	}
+	// TRAINING NOTHING IS NOT SUCCEEDING. This reported status "ok" on every run
+	// while admitting zero legs, and had never admitted a non-zero count in the
+	// retained run window. The GBM leg's absence is what dropped the ensemble to
+	// one leg on 2026-08-07 and collapsed the raw cross-section from 1,475
+	// distinct values across 329 symbols to 78 — and the run log said "ok"
+	// throughout. ErrDegraded is exactly "completed without breaking and without
+	// delivering", which is what this is.
+	if trained == 0 {
+		return msg, fmt.Errorf("no model leg cleared its OOS edge bar: %w", workers.ErrDegraded)
 	}
 	return msg, nil
 }
