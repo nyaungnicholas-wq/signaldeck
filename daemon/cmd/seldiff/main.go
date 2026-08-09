@@ -33,15 +33,15 @@ func main() {
 	flag.Parse()
 	conn, err := sql.Open("sqlite", "file:"+*dbPath+"?mode=ro&_pragma=busy_timeout(10000)")
 	if err != nil {
-		fmt.Fprintf(os.Stdout, "open db: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stdout, "open db: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	// Load corpus
 	var maxTs int64
 	if err := conn.QueryRow("SELECT MAX(ts) FROM research_weeks").Scan(&maxTs); err != nil {
-		fmt.Fprintf(os.Stdout, "maxTs: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stdout, "maxTs: %v\n", err)
 		os.Exit(1)
 	}
 	toWeek := maxTs / histfeat.WeekSecs
@@ -62,10 +62,10 @@ func main() {
 		toWeek,
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stdout, "query research_weeks: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stdout, "query research_weeks: %v\n", err)
 		os.Exit(1)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var (
 		obs      []researchx.Obs
@@ -88,7 +88,7 @@ func main() {
 			highVol   int64
 		)
 		if err := rows.Scan(&symbolID, &week, &ts, &vecJSON, &fwdReturn, &up, &era, &highVol); err != nil {
-			fmt.Fprintf(os.Stdout, "scan research_weeks: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stdout, "scan research_weeks: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -110,7 +110,7 @@ func main() {
 
 		var vec map[string]float64
 		if err := json.Unmarshal(vecJSON, &vec); err != nil {
-			fmt.Fprintf(os.Stdout, "unmarshal vec: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stdout, "unmarshal vec: %v\n", err)
 			os.Exit(1)
 		}
 		// Project to allowed keys
@@ -136,7 +136,7 @@ func main() {
 		})
 	}
 	if err := rows.Err(); err != nil {
-		fmt.Fprintf(os.Stdout, "rows err: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stdout, "rows err: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -148,7 +148,7 @@ func main() {
 		var val string
 		if err := conn.QueryRow("SELECT v FROM meta WHERE k='research_loop_searches'").Scan(&val); err != nil {
 			if err != sql.ErrNoRows {
-				fmt.Fprintf(os.Stdout, "meta query: %v\n", err)
+				_, _ = fmt.Fprintf(os.Stdout, "meta query: %v\n", err)
 				os.Exit(1)
 			}
 			p = 0
@@ -164,7 +164,7 @@ func main() {
 	if p < 0 {
 		p = 0
 	}
-	fmt.Fprintf(os.Stdout, "PriorSearches: %d (source: %s)\n", p, priorSource)
+	_, _ = fmt.Fprintf(os.Stdout, "PriorSearches: %d (source: %s)\n", p, priorSource)
 
 	cfg := researchx.DiscoverConfig{
 		PriorSearches: p,
@@ -191,13 +191,13 @@ func main() {
 	// a) Header
 	divisor := cfg.Divisor()
 	alpha := cfg.CorrectedAlpha()
-	fmt.Fprintf(os.Stdout, "\n=== seldiff Report ===\n")
-	fmt.Fprintf(os.Stdout, "Rows scanned: %d\n", scanned)
-	fmt.Fprintf(os.Stdout, "Rows dropped (sentinel): %d\n", dropped)
-	fmt.Fprintf(os.Stdout, "Obs kept: %d\n", len(obs))
-	fmt.Fprintf(os.Stdout, "Distinct rules judged: %d\n", len(wilsonResults))
-	fmt.Fprintf(os.Stdout, "Divisor: %d\n", divisor)
-	fmt.Fprintf(os.Stdout, "Corrected alpha: %.4f\n", alpha)
+	_, _ = fmt.Fprintf(os.Stdout, "\n=== seldiff Report ===\n")
+	_, _ = fmt.Fprintf(os.Stdout, "Rows scanned: %d\n", scanned)
+	_, _ = fmt.Fprintf(os.Stdout, "Rows dropped (sentinel): %d\n", dropped)
+	_, _ = fmt.Fprintf(os.Stdout, "Obs kept: %d\n", len(obs))
+	_, _ = fmt.Fprintf(os.Stdout, "Distinct rules judged: %d\n", len(wilsonResults))
+	_, _ = fmt.Fprintf(os.Stdout, "Divisor: %d\n", divisor)
+	_, _ = fmt.Fprintf(os.Stdout, "Corrected alpha: %.4f\n", alpha)
 
 	// b) Survivors
 	var wilsonSurv, meanRetSurv []string
@@ -213,13 +213,13 @@ func main() {
 	}
 	sort.Strings(wilsonSurv)
 	sort.Strings(meanRetSurv)
-	fmt.Fprintf(os.Stdout, "\nSurvivors under Wilson: %d\n", len(wilsonSurv))
+	_, _ = fmt.Fprintf(os.Stdout, "\nSurvivors under Wilson: %d\n", len(wilsonSurv))
 	for _, id := range wilsonSurv {
-		fmt.Fprintf(os.Stdout, "  %s\n", id)
+		_, _ = fmt.Fprintf(os.Stdout, "  %s\n", id)
 	}
-	fmt.Fprintf(os.Stdout, "Survivors under MeanRet: %d\n", len(meanRetSurv))
+	_, _ = fmt.Fprintf(os.Stdout, "Survivors under MeanRet: %d\n", len(meanRetSurv))
 	for _, id := range meanRetSurv {
-		fmt.Fprintf(os.Stdout, "  %s\n", id)
+		_, _ = fmt.Fprintf(os.Stdout, "  %s\n", id)
 	}
 
 	// c) Diff
@@ -246,11 +246,11 @@ func main() {
 	sort.Strings(onlyWilson)
 	sort.Strings(onlyMeanRet)
 
-	fmt.Fprintf(os.Stdout, "\n=== THE DIFF ===\n")
+	_, _ = fmt.Fprintf(os.Stdout, "\n=== THE DIFF ===\n")
 	if len(wilsonSurv) == 0 && len(meanRetSurv) == 0 {
-		fmt.Fprintf(os.Stdout, "Both survivor sets are empty: no rules survive under either criterion.\n")
+		_, _ = fmt.Fprintf(os.Stdout, "Both survivor sets are empty: no rules survive under either criterion.\n")
 	} else {
-		fmt.Fprintf(os.Stdout, "Only Wilson: %d rules\n", len(onlyWilson))
+		_, _ = fmt.Fprintf(os.Stdout, "Only Wilson: %d rules\n", len(onlyWilson))
 		for _, id := range onlyWilson {
 			// Find Wilson candidate
 			var wCand researchx.Candidate
@@ -269,11 +269,11 @@ func main() {
 			if len(desc) > 46 {
 				desc = desc[:46]
 			}
-			fmt.Fprintf(os.Stdout, "%-30s WilsonLower=%.4f NullP0=%.4f MeanRet=%.4f MeanRetT=%.2f weeks=%d winWeeks=%d rejectedBy=%s %s\n",
+			_, _ = fmt.Fprintf(os.Stdout, "%-30s WilsonLower=%.4f NullP0=%.4f MeanRet=%.4f MeanRetT=%.2f weeks=%d winWeeks=%d rejectedBy=%s %s\n",
 				id, wCand.WilsonLower, wCand.NullP0, wCand.MeanRet, wCand.MeanRetT,
 				wCand.Grade.Weeks, wCand.Grade.WinWeeks, rejectGate, desc)
 		}
-		fmt.Fprintf(os.Stdout, "Only MeanRet: %d rules\n", len(onlyMeanRet))
+		_, _ = fmt.Fprintf(os.Stdout, "Only MeanRet: %d rules\n", len(onlyMeanRet))
 		for _, id := range onlyMeanRet {
 			mc := meanRetByID[id]
 			// Find Wilson candidate for RejectedBy
@@ -288,7 +288,7 @@ func main() {
 			if len(desc) > 46 {
 				desc = desc[:46]
 			}
-			fmt.Fprintf(os.Stdout, "%-30s WilsonLower=%.4f NullP0=%.4f MeanRet=%.4f MeanRetT=%.2f weeks=%d winWeeks=%d rejectedBy=%s %s\n",
+			_, _ = fmt.Fprintf(os.Stdout, "%-30s WilsonLower=%.4f NullP0=%.4f MeanRet=%.4f MeanRetT=%.2f weeks=%d winWeeks=%d rejectedBy=%s %s\n",
 				id, mc.WilsonLower, mc.NullP0, mc.MeanRet, mc.MeanRetT,
 				mc.Grade.Weeks, mc.Grade.WinWeeks, wReject, desc)
 		}
@@ -298,11 +298,11 @@ func main() {
 				both++
 			}
 		}
-		fmt.Fprintf(os.Stdout, "Both: %d rules\n", both)
+		_, _ = fmt.Fprintf(os.Stdout, "Both: %d rules\n", both)
 	}
 
 	// d) Rejection-gate histogram
-	fmt.Fprintf(os.Stdout, "\n=== REJECTION-GATE HISTOGRAM ===\n")
+	_, _ = fmt.Fprintf(os.Stdout, "\n=== REJECTION-GATE HISTOGRAM ===\n")
 	histogram := func(results []researchx.Candidate, label string) {
 		gateCounts := make(map[string]int)
 		for _, c := range results {
@@ -328,18 +328,18 @@ func main() {
 			}
 			return sorted[i].gate < sorted[j].gate
 		})
-		fmt.Fprintf(os.Stdout, "%s:\n", label)
+		_, _ = fmt.Fprintf(os.Stdout, "%s:\n", label)
 		for _, gc := range sorted {
-			fmt.Fprintf(os.Stdout, "  %-20s %d\n", gc.gate, gc.count)
+			_, _ = fmt.Fprintf(os.Stdout, "  %-20s %d\n", gc.gate, gc.count)
 		}
 	}
 	histogram(wilsonResults, "Wilson")
 	histogram(meanRetResults, "MeanRet")
 
 	// e) Full table
-	fmt.Fprintf(os.Stdout, "\n=== FULL TABLE ===\n")
+	_, _ = fmt.Fprintf(os.Stdout, "\n=== FULL TABLE ===\n")
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(tw, "ID\tweeks\twinWeeks\twinRate\twilsonLower\tnullP0\tmeanRet(bp/wk)\tmeanRetT\tverdict\n")
+	_, _ = fmt.Fprintf(tw, "ID\tweeks\twinWeeks\twinRate\twilsonLower\tnullP0\tmeanRet(bp/wk)\tmeanRetT\tverdict\n")
 
 	// Index both for quick lookup
 	wilsonByID := make(map[string]researchx.Candidate, len(wilsonResults))
@@ -400,12 +400,12 @@ func main() {
 		}
 
 		meanRetBP := meanRet * 10000
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%.4f\t%.4f\t%.4f\t%.4f\t%.2f\t%s",
+		_, _ = fmt.Fprintf(tw, "%s\t%d\t%d\t%.4f\t%.4f\t%.4f\t%.4f\t%.2f\t%s",
 			id, weeks, winWeeks, winRate, wilsonLower, nullP0, meanRetBP, meanRetT, verdict)
 		if vW != vM {
-			fmt.Fprintf(tw, "  <-- DISAGREES")
+			_, _ = fmt.Fprintf(tw, "  <-- DISAGREES")
 		}
-		fmt.Fprintln(tw)
+		_, _ = fmt.Fprintln(tw)
 	}
-	tw.Flush()
+	_ = tw.Flush()
 }

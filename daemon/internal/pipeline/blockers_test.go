@@ -48,7 +48,7 @@ func TestFormatBlockersOrdersWorstFirst(t *testing.T) {
 	ri := strings.Index(got, "rows")
 	di := strings.Index(got, "distinct days")
 	ai := strings.Index(got, "adaptive weights")
-	if !(ri < di && di < ai) {
+	if ri >= di || di >= ai {
 		t.Errorf("not ordered worst-first (rows=%d, days=%d, adaptive=%d): %s", ri, di, ai, got)
 	}
 	if n := strings.Count(got, "nearest"); n != 3 {

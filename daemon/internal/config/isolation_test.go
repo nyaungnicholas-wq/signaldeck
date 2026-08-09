@@ -85,7 +85,7 @@ func TestHomeAloneDoesNotIsolateTheDaemonFromItsCheckout(t *testing.T) {
 	workdir := decoyCheckout(t)
 	isolate(t)
 	t.Setenv("SIGNALDECK_ROOT", "unused") // registers restore
-	os.Unsetenv("SIGNALDECK_ROOT")
+	_ = os.Unsetenv("SIGNALDECK_ROOT")
 	t.Chdir(workdir) // == cwd of `go test ./e2e`
 
 	cfg, refused := loadConfig()
