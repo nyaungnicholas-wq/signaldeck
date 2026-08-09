@@ -147,7 +147,11 @@ PY
   # 3. The honest track record, regenerated now and copied verbatim. If regen
   #    fails the last good copy still publishes — a stale-but-real registry
   #    beats a gap, and the gap would be invisible externally.
-  python3 "$SD/tools/accuracy_registry.py" --json "$REG" >/dev/null 2>&1 \
+  #    sd_py, not `python3`: under Git Bash `python3` is a Microsoft Store alias
+  #    stub that resolves on PATH and exits non-zero, so this regeneration had
+  #    NEVER run on Windows — every publish silently took the WARN branch and
+  #    shipped whatever copy was already on disk.
+  "$(sd_py)" "$SD/tools/accuracy_registry.py" --json "$REG" >/dev/null 2>&1 \
     || echo "WARN: registry regeneration failed — publishing the last good copy"
   jq -e '.rows | length > 0' "$REG" >/dev/null 2>&1 \
     || { echo "ABORT: $REG unreadable or empty — nothing published"; exit 1; }
