@@ -8,6 +8,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -275,18 +276,74 @@ func streamPath(path string) bool { return strings.HasPrefix(path, "/api/stream/
 
 // withDeadlines applies per-request read/write deadlines to every route except
 // the streaming ones. See httpServer for why this is not a Server-wide setting.
+//
+// The READ deadline is armed only while there is a body to read, and cleared the
+// moment that body is done. It used to be armed unconditionally, for the whole
+// request, on every non-streaming route — and a read deadline is not confined to
+// the handler's own reads. Go runs a background read on the connection to notice
+// a client hanging up; when THAT read hits the deadline the server cancels the
+// request context, so any handler still working after requestReadTimeout lost
+// its request with err="context canceled" and the client got an opaque 500.
+//
+// Measured 2026-08-09: GET /api/ledger/verify returned 500 at exactly ms=20000
+// on the cold-cache build and 200 in 1.1s once warm. The constant block above
+// says the slowest cold cache builds measured 22-45s and sets a 90s WRITE
+// deadline to allow them; the 20s read deadline silently overrode that budget.
+// ledgerVerify even carries a correct 503 path for its own 30s timeout that
+// could never be reached. This is the same trap httpServer documents for a
+// server-wide ReadTimeout, one layer down.
+//
+// The slow-body case the deadline exists for (2026-07-26 review: a connection
+// held open for 60s having sent 15 bytes) is unaffected — that request HAS a
+// body, so it is still bounded, and the bound is released only once the body is
+// fully read or closed.
 func withDeadlines(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !streamPath(r.URL.Path) {
 			rc := http.NewResponseController(w)
-			// Both may fail on a wrapped ResponseWriter that does not expose
-			// the connection (httptest, TimeoutHandler). A missing deadline is
-			// the pre-existing behaviour, so there is nothing to report.
-			_ = rc.SetReadDeadline(time.Now().Add(requestReadTimeout))
+			// May fail on a wrapped ResponseWriter that does not expose the
+			// connection (httptest, TimeoutHandler). A missing deadline is the
+			// pre-existing behaviour, so there is nothing to report.
 			_ = rc.SetWriteDeadline(time.Now().Add(responseWriteTimeout))
+			if r.Body != nil && r.Body != http.NoBody {
+				_ = rc.SetReadDeadline(time.Now().Add(requestReadTimeout))
+				r.Body = &bodyDeadline{ReadCloser: r.Body, rc: rc}
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// bodyDeadline clears the connection read deadline once the request body is
+// finished, so the bound covers reading the body and nothing after it.
+//
+// Both triggers are needed. Close alone is too late for a handler that decodes
+// the body and then does slow work: net/http closes the body only after the
+// handler returns. EOF alone misses a handler that stops reading early.
+type bodyDeadline struct {
+	io.ReadCloser
+	rc      *http.ResponseController
+	cleared bool
+}
+
+func (b *bodyDeadline) clear() {
+	if !b.cleared {
+		b.cleared = true
+		_ = b.rc.SetReadDeadline(time.Time{}) // zero == no deadline
+	}
+}
+
+func (b *bodyDeadline) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil { // io.EOF, or a real read error — the body is over either way
+		b.clear()
+	}
+	return n, err
+}
+
+func (b *bodyDeadline) Close() error {
+	b.clear()
+	return b.ReadCloser.Close()
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
