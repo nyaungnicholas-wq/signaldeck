@@ -12,13 +12,16 @@
 | [DATA_SOURCES.md](DATA_SOURCES.md) | Nicholas Nyaung | 0.2.0 | 2026-07-27 | FROZEN | none |
 | [EDGE_PLAN.md](EDGE_PLAN.md) | Nicholas Nyaung | 0.2.0 | 2026-07-27 | FROZEN | pre-survivorship-fix |
 | [EXECUTION_SPEC.md](EXECUTION_SPEC.md) | Nicholas Nyaung | 1.0.0 | 2026-08-04 | ACTIVE | none |
+| [GATE0_FINDING_2026-08-08.md](GATE0_FINDING_2026-08-08.md) | Nicholas Nyaung | 1.0.0 | 2026-08-08 | FROZEN | none |
 | [HOW_PREDICTORS_WORK.md](HOW_PREDICTORS_WORK.md) | Nicholas Nyaung | 0.1.0 | 2026-08-03 | NOT_AUTHORITATIVE | pre-survivorship-fix |
 | [INSTITUTIONAL_GAP.md](INSTITUTIONAL_GAP.md) | Nicholas Nyaung | 0.1.0 | 2026-08-03 | NOT_AUTHORITATIVE | none |
+| [INVERSION_INVESTIGATION_2026-08-08.md](INVERSION_INVESTIGATION_2026-08-08.md) | Nicholas Nyaung | 1.0.0 | 2026-08-08 | FROZEN | none |
 | [PAIRS_TRADING.md](PAIRS_TRADING.md) | Nicholas Nyaung | 0.2.0 | 2026-07-25 | FROZEN | pre-survivorship-fix |
 | [PREDICTION_PROCESS.md](PREDICTION_PROCESS.md) | Nicholas Nyaung | 0.1.0 | 2026-08-03 | NOT_AUTHORITATIVE | pre-survivorship-fix |
 | [PREREGISTRATION.md](PREREGISTRATION.md) | Nicholas Nyaung | 1.0.0 | 2026-07-27 | ACTIVE | none |
 | [README.md](README.md) | Nicholas Nyaung | 0.2.0 | 2026-08-03 | FROZEN | none |
 | [RISK_POLICY.md](RISK_POLICY.md) | Nicholas Nyaung | 1.0.0 | 2026-08-04 | ACTIVE | none |
+| [ROOTCAUSE_COLLAPSE_2026-08-08.md](ROOTCAUSE_COLLAPSE_2026-08-08.md) | Nicholas Nyaung | 1.0.0 | 2026-08-08 | FROZEN | none |
 | [SHIP_READINESS.md](SHIP_READINESS.md) | Nicholas Nyaung | 0.2.0 | 2026-08-03 | FROZEN | none |
 | [STRATEGY_DECK.md](STRATEGY_DECK.md) | Nicholas Nyaung | 1.0.0 | 2026-08-04 | ACTIVE | post-survivorship-fix |
 
@@ -60,4 +63,4 @@ The following files are excluded from the publication gate by explicit registrat
 
 ## Counts
 
-15 governed document(s), 31 exempt.
+18 governed document(s), 31 exempt.
