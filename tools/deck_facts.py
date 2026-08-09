@@ -32,6 +32,10 @@ DB = os.path.join(REPO, "data", "signaldeck.db")
 
 BEGIN = "<!-- BEGIN GENERATED deck_facts -->"
 END = "<!-- END GENERATED deck_facts -->"
+# The canonical rendering. tools/docs_gate.py enforces that every document's
+# generated region equals this file, so it is not an optional convenience: a
+# stale partial makes docs_gate fail and blame a hand-edit that never happened.
+PARTIAL = os.path.join(REPO, "partials", "deck_facts.md")
 
 # The two windows §8.2 compares: FC3 was narrowed to under-coverage in the
 # recent one, and the comparison between them is the disclosure.
@@ -175,6 +179,19 @@ def inject(path, block):
     return True
 
 
+def partial_matches(block):
+    """True when PARTIAL already holds this exact block.
+
+    A missing partial reads as drift, not as a crash: --inject creates it, and
+    --check must say so rather than dying on the operator's first run.
+    """
+    try:
+        with io.open(PARTIAL, encoding="utf-8") as fh:
+            return fh.read().rstrip("\n") == block.rstrip("\n")
+    except OSError:
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser(description="Generate §8's measured figures.")
     ap.add_argument("--db", default=DB, help="database (default: %s)" % DB)
@@ -204,6 +221,11 @@ def main():
 
     if args.check:
         rc = 0
+        if docs and not partial_matches(block):
+            print("%s: no longer matches the database — run "
+                  "python3 tools/deck_facts.py --inject %s" % (PARTIAL, " ".join(docs)),
+                  file=sys.stderr)
+            rc = 1
         for doc in docs:
             with io.open(doc, encoding="utf-8") as fh:
                 cur = current_block(fh.read())
@@ -220,6 +242,15 @@ def main():
 
     if args.write:
         with io.open(args.write, "w", encoding="utf-8", newline="") as fh:
+            fh.write(block + "\n")
+    if docs:
+        # The partial is refreshed by the SAME command that injects, so the two
+        # cannot diverge. They did: --inject updated STRATEGY_DECK.md and left
+        # partials/deck_facts.md stale, --check reported clean because it only
+        # ever compared documents, and tools/docs_gate.py was the only thing that
+        # noticed — with a message blaming a hand-edit. tools/live_accuracy.py
+        # already binds its partial this way; this is that behaviour, here.
+        with io.open(PARTIAL, "w", encoding="utf-8", newline="") as fh:
             fh.write(block + "\n")
     for doc in docs:
         if not inject(doc, block):
