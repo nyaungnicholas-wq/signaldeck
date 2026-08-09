@@ -163,13 +163,29 @@ func (s *Store) UnresolvedPredictions(ctx context.Context, h md.Horizon, cutoff,
 }
 
 // ResolvePrediction records the realized up/down outcome.
+//
+// settle_ts — the base bar this row is graded from, and the unit of independent
+// evidence every day-clustered statistic folds on (md.SettleDay) — is stamped
+// HERE, at the moment the row is graded, rather than being left for
+// BackfillSettleTs to fill on a later pass. Leaving it NULL was not a
+// correctness bug (the fold falls back to the calendar day) but it was a
+// permanent lag: the newest rows are exactly the ones the live published numbers
+// lean on, and they were the ones still folding on the wrong unit. The
+// derivation is deliberately identical to BackfillSettleTs's — newest 1d bar at
+// or before the prediction — so the two agree by construction; if no such bar
+// exists it stays NULL and the fold degrades honestly.
 func (s *Store) ResolvePrediction(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) error {
 	up := 0
 	if fwdReturn > 0 {
 		up = 1
 	}
 	_, err := s.w.ExecContext(ctx, `
-		UPDATE prediction_outcomes SET up=?, fwd_return=?, resolved_at=?
+		UPDATE prediction_outcomes SET up=?, fwd_return=?, resolved_at=?,
+		  settle_ts = (
+		    SELECT MAX(b.ts) FROM bars b
+		    WHERE b.symbol_id = prediction_outcomes.symbol_id
+		      AND b.tf = '1d' AND b.ts <= prediction_outcomes.ts
+		  )
 		WHERE symbol_id=? AND horizon=? AND ts=?`,
 		up, fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
 	return err

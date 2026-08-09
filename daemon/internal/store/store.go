@@ -311,6 +311,34 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// settled-move wave, part 2: the SAME independence key on the other two
+	// outcome tables whose day-clustered statistics feed a published surface.
+	// The reasoning is identical to prediction_outcomes above and is not repeated
+	// here — see that comment and md.SettleDay.
+	//
+	// Deliberately NOT extended to two tables that also fold by day:
+	//   - prediction_ledger is an append-only HASH CHAIN (prev_hash/entry_hash)
+	//     backing the pre-registration record. Its day counts are a reporting
+	//     convenience; churning its schema to improve them trades a real
+	//     integrity guarantee for a cosmetic one.
+	//   - regime_outcomes stores `day` as part of a UNIQUE dedup index
+	//     (symbol_id, kind, day), so redefining it changes which rows are
+	//     WRITTEN, not merely how they are counted. That needs its own staged
+	//     change with an index rebuild, not a column bolted on beside it.
+	for _, t := range []struct{ table, ddl string }{
+		{"score_outcomes", `ALTER TABLE score_outcomes ADD COLUMN settle_ts INTEGER`},
+		{"confluence_outcomes", `ALTER TABLE confluence_outcomes ADD COLUMN settle_ts INTEGER`},
+	} {
+		if err := w.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name='settle_ts'`, t.table).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(t.ddl); err != nil {
+				return err
+			}
+		}
+	}
 	// multiplicity wave: the corrected divisor a loop hypothesis cleared. Live
 	// DBs already hold rows from before the loop fed PriorSearches, and those
 	// rows keep divisor=0 — the truthful state, meaning "correction unrecorded",
@@ -967,9 +995,20 @@ func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, c
 }
 
 // ResolveOutcome records the realized forward return for one score.
+//
+// settle_ts is stamped here for the same reason as in ResolvePrediction: it is
+// the unit of independent evidence (md.SettleDay), and leaving it for the
+// periodic backfill meant the newest rows — the ones live statistics lean on —
+// were the last to carry the right key. Derivation identical to
+// BackfillScoreSettleTs, so the two agree by construction.
 func (s *Store) ResolveOutcome(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) error {
 	_, err := s.w.ExecContext(ctx, `
-		UPDATE score_outcomes SET fwd_return=?, resolved_at=?
+		UPDATE score_outcomes SET fwd_return=?, resolved_at=?,
+		  settle_ts = (
+		    SELECT MAX(b.ts) FROM bars b
+		    WHERE b.symbol_id = score_outcomes.symbol_id
+		      AND b.tf = '1d' AND b.ts <= score_outcomes.ts
+		  )
 		WHERE symbol_id=? AND horizon=? AND ts=?`,
 		fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
 	return err

@@ -68,9 +68,10 @@ func (s *Store) ResolvedPredictionOutcomes(ctx context.Context, h md.Horizon, li
 }
 
 // DirectionalAccuracy is one symbol's realized directional record over its
-// INDEPENDENT observations (at most one per UTC day).
+// INDEPENDENT observations (at most one per SETTLED MOVE — see md.SettleDay;
+// a Fri/Sat/Sun cluster resolving against one Friday bar is ONE observation).
 type DirectionalAccuracy struct {
-	N       int // independent (symbol, UTC-day) observations
+	N       int // independent (symbol, settled-move) observations
 	Correct int // of those, how many had predUp == actualUp
 }
 
@@ -86,8 +87,8 @@ type DirectionalAccuracy struct {
 // 120k rows scan in ~1.2s — so the win here is SQLite doing one partitioned
 // pass instead of a join, not the smaller result set.
 //
-// Semantics match the loop it replaces: the newest row of each (symbol, UTC
-// day) is that day's single independent observation (the PK makes (symbol_id,
+// Semantics: the newest row of each (symbol, SETTLED MOVE) is that move's single
+// independent observation (the PK makes (symbol_id,
 // horizon, ts) unique, so the ROW_NUMBER pick is deterministic), and it scores
 // DIRECTION — predUp == actualUp — not the up-rate. It grades the FULL ledger
 // rather than the newest 120k rows; 1d is already at 120,055 resolved rows, so
@@ -98,7 +99,7 @@ func (s *Store) DirectionalAccuracyBySymbol(ctx context.Context, h md.Horizon) (
 		       SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END) AS correct
 		FROM (
 		  SELECT symbol_id, prob, up,
-		         ROW_NUMBER() OVER (PARTITION BY symbol_id, trading_day(ts) ORDER BY ts DESC) AS rn
+		         ROW_NUMBER() OVER (PARTITION BY symbol_id, settle_day(settle_ts, ts) ORDER BY ts DESC) AS rn
 		  FROM prediction_outcomes
 		  WHERE resolved_at IS NOT NULL AND horizon = ? AND up IS NOT NULL
 		)

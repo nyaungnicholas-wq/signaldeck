@@ -181,7 +181,7 @@ func (d Deps) confluenceTrack(w http.ResponseWriter, r *http.Request) {
 	dayset := map[int64]bool{}
 	var all, long, short []confluenceTrade
 	for _, o := range rows {
-		day := md.TradingDay(o.Ts)
+		day := md.SettleDay(o.SettleTs, o.Ts)
 		key := [2]int64{o.SymbolID, day}
 		if seen[key] {
 			continue

@@ -60,7 +60,7 @@ func (s *Store) DirectionalRecord(ctx context.Context, h md.Horizon, since int64
 	q := `
 	WITH dedup AS (
 	  SELECT symbol_id, prob, up,
-	         ROW_NUMBER() OVER (PARTITION BY symbol_id, trading_day(ts) ORDER BY ts DESC) rn
+	         ROW_NUMBER() OVER (PARTITION BY symbol_id, settle_day(settle_ts, ts) ORDER BY ts DESC) rn
 	  FROM prediction_outcomes
 	  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
 	    AND prob IS NOT NULL AND resolved_at >= ?
@@ -107,8 +107,8 @@ func (s *Store) DirectionalRecord(ctx context.Context, h md.Horizon, since int64
 	// is one market move counted many times.
 	qDays := `
 	WITH dedup AS (
-	  SELECT trading_day(ts) AS day, prob, up,
-	         ROW_NUMBER() OVER (PARTITION BY symbol_id, trading_day(ts) ORDER BY ts DESC) rn
+	  SELECT settle_day(settle_ts, ts) AS day, prob, up,
+	         ROW_NUMBER() OVER (PARTITION BY symbol_id, settle_day(settle_ts, ts) ORDER BY ts DESC) rn
 	  FROM prediction_outcomes
 	  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
 	    AND prob IS NOT NULL AND resolved_at >= ?

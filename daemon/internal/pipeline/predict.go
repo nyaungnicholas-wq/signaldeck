@@ -533,10 +533,24 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// that unit off a 24/7 market: measured 2026-08-08, folding the stock record
 	// on the settled move instead of the calendar day removes 27.9% phantom
 	// observations (10,722 -> 7,732) while leaving crypto at 0.0%.
-	if n, err := w.St.BackfillSettleTs(ctx, settleBackfillBatch); err != nil {
-		slog.Warn("settle_ts backfill failed; day-clustered counts stay on the calendar day", "err", err)
-	} else if n > 0 {
-		slog.Info("settle_ts backfilled", "rows", n)
+	// All three outcome tables that carry the key are drained on the same pass and
+	// the same budget: they share one derivation, so letting one lag behind would
+	// mean two surfaces disagreeing about what one observation is — the exact
+	// drift the shared md.SettleDay implementation exists to prevent.
+	for _, bf := range []struct {
+		name string
+		fn   func(context.Context, int) (int64, error)
+	}{
+		{"prediction_outcomes", w.St.BackfillSettleTs},
+		{"score_outcomes", w.St.BackfillScoreSettleTs},
+		{"confluence_outcomes", w.St.BackfillConfluenceSettleTs},
+	} {
+		if n, err := bf.fn(ctx, settleBackfillBatch); err != nil {
+			slog.Warn("settle_ts backfill failed; day-clustered counts stay on the calendar day",
+				"table", bf.name, "err", err)
+		} else if n > 0 {
+			slog.Info("settle_ts backfilled", "table", bf.name, "rows", n)
+		}
 	}
 	// Read once per pass, not per symbol: the mode is a deploy-time decision and
 	// re-reading it mid-sweep could split one pass across two contracts.

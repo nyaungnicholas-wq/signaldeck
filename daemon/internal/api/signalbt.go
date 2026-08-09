@@ -109,6 +109,7 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 			Ts:       o.Ts,
 			Signal:   o.Signal,
 			FwdByLag: o.FwdByLag,
+			SettleTs: o.SettleTs,
 		}
 	}
 
@@ -176,7 +177,7 @@ func signalBTCluster(obs []signalbt.Observation, primaryLag int) (clusterstat.Re
 	type key struct{ sym, day int64 }
 	best := make(map[key]signalbt.Observation, len(obs))
 	for _, o := range obs {
-		k := key{sym: o.SymbolID, day: md.TradingDay(o.Ts)}
+		k := key{sym: o.SymbolID, day: md.SettleDay(o.SettleTs, o.Ts)}
 		if cur, ok := best[k]; !ok || o.Ts > cur.Ts {
 			best[k] = o
 		}
