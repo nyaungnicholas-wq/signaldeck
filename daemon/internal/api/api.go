@@ -433,18 +433,49 @@ func (d Deps) failingWorkers(ctx context.Context) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return failingFromRuns(runs, time.Now().Unix()), nil
+}
+
+// failingFromRuns is the decision itself, split out so the rule can be tested
+// without a database. runs must be newest-first.
+//
+// An in-flight run that has OUTLIVED the run it replaced is recovery, not a
+// retry. Skipping every "running" row was right for a fast-cycling worker — it
+// would otherwise show green in the gap between its error and its next error —
+// but wrong for a stream ingestor: crypto-live errored every 60s while tickstream
+// was down, then connected and stayed in ONE run that never finishes. Reporting
+// its last COMPLETED run left it permanently red while it streamed healthily, and
+// a status that cannot clear is a status nobody can act on.
+//
+// The threshold is the failed run's OWN duration rather than a constant, so it
+// calibrates per worker: a 60s-cycling worker must stay up past 60s to count as
+// recovered, and one that fails fast is never credited for a brief gap.
+func failingFromRuns(runs []md.WorkerRun, now int64) map[string]string {
+	inFlight := map[string]int64{} // worker → newest in-flight start
 	seen := map[string]bool{}
 	out := map[string]string{}
 	for _, run := range runs { // newest first
-		if run.Status == "running" || seen[run.Worker] {
+		if run.Status == "running" {
+			if _, dup := inFlight[run.Worker]; !dup {
+				inFlight[run.Worker] = run.StartedAt
+			}
+			continue
+		}
+		if seen[run.Worker] {
 			continue
 		}
 		seen[run.Worker] = true
-		if run.Status != "ok" {
-			out[run.Worker] = run.Status
+		if run.Status == "ok" {
+			continue
 		}
+		if start, ok := inFlight[run.Worker]; ok && run.FinishedAt != nil {
+			if lasted := *run.FinishedAt - run.StartedAt; now-start > lasted {
+				continue // the current run has outlasted the failure it followed
+			}
+		}
+		out[run.Worker] = run.Status
 	}
-	return out, nil
+	return out
 }
 
 // ready reports whether the daemon can serve CORRECT answers, which is a
