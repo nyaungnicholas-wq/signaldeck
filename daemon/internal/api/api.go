@@ -1430,10 +1430,8 @@ func sanitize(s string) string {
 // IC/skill number is withheld (shown as "insufficient independent resolutions").
 const minIndependentN = 30
 
-const secondsPerDay = 86400
-
 // dedupeIndependent collapses per-minute resolved pairs to ONE observation per
-// (symbol, UTC-day): the LATEST score for that symbol on that day. Input is
+// (symbol, SETTLED MOVE): the LATEST score for that symbol on that move. Input is
 // expected newest-first (ResolvedOutcomes orders ts DESC); the output preserves
 // that order and keeps the first (newest) row seen for each key. This is the
 // effective independent sample for IC/quintile/Brier — computing skill stats on
