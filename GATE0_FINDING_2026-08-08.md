@@ -56,6 +56,13 @@ Brier        0.2653       baseline 0.2382   skill -0.114
 log loss     0.7280       ECE 0.1527
 ```
 
+<!-- SUPERSEDED-SNAPSHOT — the figures in the table below are this holdout's
+     own calibration buckets over 2 trading days (2026-08-05..06), not the live
+     record. Its `[29.8%, 46.5%]` interval bound collides by coincidence with a
+     directional-ensemble null figure from the 2026-08-08 regrade; the literal
+     gate cannot tell a bucket's CI bound from a published accuracy, so the
+     block is labelled. The marker exempts only the table beneath it. -->
+
 | bucket | n | said | actual | 95% CI | vs base |
 |---|---|---|---|---|---|
 | <30% | 11 | 24.4% | 54.5% | [28.0%, 78.7%] | +15.4pp |

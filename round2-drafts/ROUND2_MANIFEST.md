@@ -156,6 +156,12 @@ BLOCKED-3 (web task), BLOCKED-4 (governed doc), BLOCKED-5 (alert transport), BLO
 | directional-ensemble (1w) | 1,656 → 1,649 | 41.063% → 40.934% |
 | prequential-majority (1d) baseline | 2,622 → 1,376 | 57.742% → **59.084%** |
 
+<!-- SUPERSEDED-SNAPSHOT — the two `48.6%` figures below are a SHARE OF
+     OBSERVATIONS LOST (1,613/3,322 = 48.6%), not an accuracy. The literal
+     collides with a superseded live-record figure the gate bans, and the gate
+     cannot tell a loss-fraction from a published accuracy, so the block is
+     labelled. The marker exempts only the lines beneath it. -->
+
 Rows excluded: **16,726 of 101,302** resolved post-epoch (16.5%), 0 unverifiable.
 Independent observations lost: 2,866 of 8,567 symbol-days — **for 1d alone, 1,613 of 3,322 (48.6%)**.
 
