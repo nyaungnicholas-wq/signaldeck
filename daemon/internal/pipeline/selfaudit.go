@@ -267,8 +267,11 @@ type predObs struct {
 }
 
 // independentPreds collapses resolved predictions to ONE observation per
-// (symbol, UTC-day), keeping the newest (outs is newest-first). This is the
-// effective independent sample the self-audit statistics are computed over.
+// (symbol, SETTLED MOVE), keeping the newest (outs is newest-first). This is the
+// effective independent sample the self-audit statistics are computed over, so
+// it must fold on the same unit the surfaces it audits do — a self-audit that
+// counts observations differently from the record it is auditing reports on a
+// population that does not exist anywhere else.
 func independentPreds(outs []store.ResolvedPredictionOutcome) []predObs {
 	type key struct {
 		sym int64
@@ -277,7 +280,7 @@ func independentPreds(outs []store.ResolvedPredictionOutcome) []predObs {
 	seen := make(map[key]struct{}, len(outs))
 	out := make([]predObs, 0, len(outs))
 	for _, o := range outs {
-		k := key{sym: o.SymbolID, day: md.TradingDay(o.Ts)}
+		k := key{sym: o.SymbolID, day: md.SettleDay(o.SettleTs, o.Ts)}
 		if _, dup := seen[k]; dup {
 			continue
 		}
