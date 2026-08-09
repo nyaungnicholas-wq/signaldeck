@@ -49,6 +49,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -110,29 +111,127 @@ def quarantine_digest(members: list[str]) -> str:
     return h.hexdigest()
 
 
-def check_null_coverage(con: sqlite3.Connection) -> dict:
-    """(a) Matched-baseline coverage over the rows the amendment governs."""
+# The Go declarations this check must agree with. Read, never retyped.
+REGIMEOUTCOMES_PATH = os.path.join("daemon", "internal", "store", "regimeoutcomes.go")
+STRUCTREGIME_DIR = os.path.join("daemon", "internal", "structregime")
+NULL_KINDS_VAR = "structuralNullKinds"
+
+
+def structural_null_kinds(repo: str) -> list[str]:
+    """The kind strings store.structuralNullKinds covers, READ FROM THE GO SOURCE.
+
+    A second hand-maintained copy of this set is exactly the defect
+    check_null_coverage below exists to undo, so the same rule as the imported
+    epoch applies: one source, or two places to disagree. check_deployed_revision
+    already reads Go source for its constant; this is that precedent, not a new
+    mechanism.
+
+    Every failure to resolve RAISES. A silently-empty set would make the SQL match
+    no rows and the check pass forever while measuring nothing — the dead-gate
+    failure mode this whole file was written to catch.
+    """
+    with open(os.path.join(repo, REGIMEOUTCOMES_PATH), encoding="utf-8") as fh:
+        src = fh.read()
+    m = re.search(r"var\s+%s\s*=\s*map\[[^\]]+\]bool\s*\{(.*?)\n\}" % NULL_KINDS_VAR,
+                  src, re.S)
+    if not m:
+        raise RuntimeError(
+            f"cannot find `var {NULL_KINDS_VAR} = map[...]bool{{...}}` in "
+            f"{REGIMEOUTCOMES_PATH} — the write guard's kind set moved or was "
+            "renamed, and this check will not mirror a set it cannot read")
+    idents = re.findall(r"structregime\.(Kind\w+)\s*:\s*true", m.group(1))
+    if not idents:
+        raise RuntimeError(
+            f"{NULL_KINDS_VAR} in {REGIMEOUTCOMES_PATH} yielded no kind identifiers")
+    values: dict[str, str] = {}
+    srcdir = os.path.join(repo, STRUCTREGIME_DIR)
+    for fn in sorted(os.listdir(srcdir)):
+        if not fn.endswith(".go"):
+            continue
+        with open(os.path.join(srcdir, fn), encoding="utf-8") as fh:
+            for name, val in re.findall(r"\b(Kind\w+)\s+Kind\s*=\s*\"([^\"]+)\"", fh.read()):
+                values[name] = val
+    missing = [i for i in idents if i not in values]
+    if missing:
+        raise RuntimeError(
+            f"cannot resolve {', '.join(missing)} to a kind string under "
+            f"{STRUCTREGIME_DIR} — refusing to guess")
+    return sorted(values[i] for i in idents)
+
+
+def check_null_coverage(con: sqlite3.Connection, repo: str) -> dict:
+    """(a) Matched-baseline coverage over the rows the amendment governs.
+
+    "The rows the amendment governs" is narrower than "every post-epoch row", and
+    this function used to conflate the two. The authoritative definition is the Go
+    counter store.UnmatchedNullCount, whose own comment records why: the write
+    guard refuses a label-less row only when structuralNullKinds covers its kind,
+    while the counter counted EVERY kind — so rows the writer was ENTITLED to write
+    were read as proof that "the deployed binary differs from source". On the live
+    store that false alarm blocked all structural grading until Go was fixed.
+
+    This Python copy never got that fix, and reproduced the identical false alarm
+    one layer up where the consequence is worse: it prints "Publication must be
+    refused". Measured 2026-08-09 on the live database — 1,297 post-epoch rows
+    carry no naive_label, 1,165 of them frozen in the quarantine manifest, and all
+    132 remaining are kind filingsdrift21, which has no null resolver and is
+    deliberately outside the guard. Go returned 0; this returned FAIL.
+
+    The predicate is now UnmatchedNullCount's, condition for condition: the kind
+    restriction, the superseded_by exclusion, and the frozen quarantine. The
+    quarantine is not an escape hatch — it is a fixed, hash-chained set that check
+    (c) independently verifies against its digest, its members still grade as
+    NO BASELINE, and a new label-less row of a governed kind still fails here.
+    """
+    try:
+        kinds = structural_null_kinds(repo)
+    except (OSError, RuntimeError) as e:
+        return {"name": "matched-null-baseline", "ok": False,
+                "evidence": f"cannot read the write guard's kind set from the Go source "
+                            f"({e}) — this check will not guess which kinds it governs"}
+    ph = ",".join("?" * len(kinds))
+    governed = (f"FROM regime_outcomes o WHERE o.ts >= ? AND o.superseded_by IS NULL "
+                f"AND o.kind IN ({ph})")
+    unquarantined = " AND o.naive_label IS NULL"
+    # Whether the quarantine EXISTS is check (c)'s question, not this one. When
+    # the table is absent there is simply nothing exempted, so the clause is
+    # dropped rather than raising — otherwise a missing quarantine would fail two
+    # checks and this one would report it as a schema error it is not.
+    if table_exists(con, QUARANTINE_TABLE):
+        unquarantined += (f" AND o.id NOT IN (SELECT outcome_id FROM {QUARANTINE_TABLE})")
+    args = [NULL_AMENDMENT_EPOCH_TS, *kinds]
     try:
         total, matched = con.execute(
-            "SELECT COUNT(*), COALESCE(SUM(naive_label IS NOT NULL), 0) "
-            "FROM regime_outcomes WHERE ts >= ?", (NULL_AMENDMENT_EPOCH_TS,)).fetchone()
+            "SELECT COUNT(*), COALESCE(SUM(o.naive_label IS NOT NULL), 0) " + governed,
+            args).fetchone()
+        unmatched = con.execute(
+            "SELECT COUNT(*) " + governed + unquarantined, args).fetchone()[0]
     except sqlite3.OperationalError as e:
         return {"name": "matched-null-baseline", "ok": False,
-                "evidence": f"regime_outcomes has no naive_label column at all ({e}) — "
+                "evidence": f"regime_outcomes is missing a column this check needs ({e}) — "
                             "the deployed schema predates the null amendment"}
     all_rows = con.execute("SELECT COUNT(*) FROM regime_outcomes").fetchone()[0]
+    quarantined = total - matched - unmatched
     cov = (matched / total) if total else None
-    ok = total == 0 or matched == total
-    ev = (f"naive_label present on {matched}/{total} regime_outcomes rows at/after "
-          f"{NULL_AMENDMENT_EPOCH.isoformat()} "
+    ok = unmatched == 0
+    ev = (f"naive_label present on {matched}/{total} GOVERNED regime_outcomes rows "
+          f"at/after {NULL_AMENDMENT_EPOCH.isoformat()} "
           f"({'n/a' if cov is None else f'{cov * 100:.1f}%'}); "
+          f"{quarantined} frozen in the quarantine manifest; {unmatched} unmatched "
+          f"outside it; kinds governed: {', '.join(kinds)}; "
           f"{all_rows} rows in the table overall")
     if not ok:
-        ev += (" — the store's write guard (store.NullAmendmentEpoch) refuses such a "
+        by_kind = con.execute(
+            "SELECT o.kind, COUNT(*) " + governed + unquarantined +
+            " GROUP BY o.kind ORDER BY COUNT(*) DESC", args).fetchall()
+        ev += (" — " + ", ".join(f"{k}:{n}" for k, n in by_kind) +
+               "; the store's write guard (store.NullAmendmentEpoch) refuses such a "
                "row, so the binary that wrote them is not the binary at HEAD")
     return {"name": "matched-null-baseline", "ok": ok, "evidence": ev,
-            "measured": {"post_epoch_rows": total, "with_baseline": matched,
-                         "coverage": cov, "rows_total": all_rows}}
+            "measured": {"governed_rows": total, "with_baseline": matched,
+                         "quarantined": quarantined,
+                         "unmatched_outside_quarantine": unmatched,
+                         "coverage": cov, "rows_total": all_rows, "kinds": kinds}}
 
 
 def check_judgment_ledger(con: sqlite3.Connection) -> dict:
@@ -308,7 +407,7 @@ def run(db: str, repo: str) -> tuple[int, list[dict]]:
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         checks = [
-            check_null_coverage(con),
+            check_null_coverage(con, repo),
             check_judgment_ledger(con),
             check_quarantine(con),
             check_deployed_revision(con, repo),
