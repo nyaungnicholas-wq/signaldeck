@@ -146,6 +146,19 @@ func fleetVetoes(ctx context.Context, st *store.Store, horizons []md.Horizon) ma
 const minCrossSectionForAUC = 30
 
 // settleBackfillBatch bounds the per-pass settle_ts backfill. Large enough that
-// the ~500k-row live table converges in a few hours of ordinary passes, small
-// enough that no single pass is delayed by it.
-const settleBackfillBatch = 20000
+// the live tables converge in a couple of hours of ordinary passes, small enough
+// that no single pass is delayed by it.
+//
+// Raised 20k -> 200k on 2026-08-08 when the key was extended to score_outcomes.
+// The old value was sized for the ~500k-row prediction_outcomes table;
+// score_outcomes is 2.2M rows, where 20k/pass is a ~18-hour drain and the fold
+// falls back to the calendar day for every row still waiting.
+//
+// MEASURED on a copy of the live DB rather than guessed, because this holds the
+// single SQLite write lock and a busy fleet is behind it: the correlated bar
+// lookup is free (200k in 0.14s, indexed) and the UPDATE is linear at ~2.9us/row
+// — 200k in 0.617s, 500k in 1.438s. 200k buys the 10x drain (18h -> ~2h) while
+// keeping the lock hold under a second. 500k was rejected: it saves ~70min on a
+// ONE-TIME drain for 2.3x the lock hold, and after convergence this costs
+// nothing either way.
+const settleBackfillBatch = 200000
