@@ -468,9 +468,20 @@ func failingFromRuns(runs []md.WorkerRun, now int64) map[string]string {
 		if run.Status == "ok" {
 			continue
 		}
-		if start, ok := inFlight[run.Worker]; ok && run.FinishedAt != nil {
-			if lasted := *run.FinishedAt - run.StartedAt; now-start > lasted {
-				continue // the current run has outlasted the failure it followed
+		if start, ok := inFlight[run.Worker]; ok {
+			// "orphaned" is not a fault the worker reported — it is a run the boot
+			// sweep found abandoned when the process died, so its duration measures
+			// how long the worker was HEALTHY before being killed, not a failure
+			// timescale. Using it as the recovery bar would mean the healthier a
+			// worker was before a restart, the longer it must prove itself after.
+			// A successor in flight IS the recovery signal: the process came back.
+			if run.Status == "orphaned" {
+				continue
+			}
+			if run.FinishedAt != nil {
+				if lasted := *run.FinishedAt - run.StartedAt; now-start > lasted {
+					continue // the current run has outlasted the failure it followed
+				}
 			}
 		}
 		out[run.Worker] = run.Status

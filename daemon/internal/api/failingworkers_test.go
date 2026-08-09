@@ -72,3 +72,31 @@ func TestFailingFromRuns_PlainStatuses(t *testing.T) {
 		t.Fatalf("degraded-one = %q, want degraded", got["degraded-one"])
 	}
 }
+
+// TestFailingFromRuns_OrphanClearsOnRestart pins the orphan case. A boot sweep
+// marks an abandoned run "orphaned", and its duration measures how long the
+// worker was HEALTHY before the process died — not a failure timescale. Gating
+// recovery on that duration would mean the healthier a worker was before a
+// restart, the longer it must prove itself after. A successor in flight is the
+// recovery signal.
+func TestFailingFromRuns_OrphanClearsOnRestart(t *testing.T) {
+	const now = int64(10_000)
+	runs := []md.WorkerRun{
+		run("crypto-live", 9_990, -1, "running"), // 10s old
+		run("crypto-live", 8_700, 1260, "orphaned"),
+	}
+	if s, bad := failingFromRuns(runs, now)["crypto-live"]; bad {
+		t.Fatalf("crypto-live reported %q: a restarted worker must not have to "+
+			"out-survive how long it was healthy before being killed", s)
+	}
+}
+
+// TestFailingFromRuns_OrphanWithNoSuccessorStaysRed: an orphan with nothing in
+// flight is still unknown, and unknown is not ok.
+func TestFailingFromRuns_OrphanWithNoSuccessorStaysRed(t *testing.T) {
+	const now = int64(10_000)
+	runs := []md.WorkerRun{run("dead", 8_700, 1260, "orphaned")}
+	if got := failingFromRuns(runs, now)["dead"]; got != "orphaned" {
+		t.Fatalf("dead = %q, want orphaned: nothing restarted it", got)
+	}
+}
