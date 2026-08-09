@@ -16,6 +16,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
@@ -33,6 +34,12 @@ type ResolvedPredictionOutcome struct {
 	Prob      float64    `json:"prob"`      // calibrated P(up) recorded at prediction time
 	Up        int        `json:"up"`        // realized 1/0
 	FwdReturn float64    `json:"fwdReturn"` // realized forward return over the horizon
+	// SettleTs is the base bar this row was graded from — the independence unit
+	// (md.SettleDay). 0 means unknown and folds back to the calendar day. Carried
+	// so the Go-side dedup in the API agrees with the SQL-side dedup in
+	// DirectionalRecord; two halves of one record folding differently is the
+	// defect this column exists to prevent.
+	SettleTs int64 `json:"-"`
 }
 
 // ResolvedPredictionOutcomes returns every RESOLVED calibrated prediction for a
@@ -44,7 +51,7 @@ func (s *Store) ResolvedPredictionOutcomes(ctx context.Context, h md.Horizon, li
 		limit = 20000
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT po.symbol_id, sym.symbol, sym.market, po.ts, po.prob, po.up, po.fwd_return
+		SELECT po.symbol_id, sym.symbol, sym.market, po.ts, po.prob, po.up, po.fwd_return, po.settle_ts
 		FROM prediction_outcomes po
 		JOIN symbols sym ON sym.id = po.symbol_id
 		WHERE po.resolved_at IS NOT NULL AND po.horizon = ? AND po.up IS NOT NULL
@@ -58,9 +65,11 @@ func (s *Store) ResolvedPredictionOutcomes(ctx context.Context, h md.Horizon, li
 	for rows.Next() {
 		o := ResolvedPredictionOutcome{Horizon: h}
 		var mkt string
-		if err := rows.Scan(&o.SymbolID, &o.Symbol, &mkt, &o.Ts, &o.Prob, &o.Up, &o.FwdReturn); err != nil {
+		var settle sql.NullInt64
+		if err := rows.Scan(&o.SymbolID, &o.Symbol, &mkt, &o.Ts, &o.Prob, &o.Up, &o.FwdReturn, &settle); err != nil {
 			return nil, err
 		}
+		o.SettleTs = settle.Int64 // 0 when NULL — md.SettleDay reads that as unknown
 		o.Market = md.Market(mkt)
 		out = append(out, o)
 	}

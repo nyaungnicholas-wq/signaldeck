@@ -260,15 +260,19 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 // observation. Measured across the graded record: 16,323 UTC-day buckets against
 // 15,394 trading-day buckets, so 929 were phantoms.
 //
-// The returned days are real trading-day numbers, not ordinals, so the caller can
-// split a holdout on a day boundary and count distinct days before deciding it
-// has enough evidence to fit anything.
+// The returned days are real SETTLED-MOVE numbers, not ordinals, so the caller
+// can split a holdout on a day boundary and count distinct days before deciding
+// it has enough evidence to fit anything. They are settled moves rather than
+// calendar days so that "enough distinct days to fit" counts independent
+// evidence: a weekend cluster describing one Friday move is one day here, and
+// counting it as three would let a calibration map fit on repeats of itself.
 func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, limit int) (raws []float64, ups []float64, days []int64, err error) {
 	rows, qerr := s.db.QueryContext(ctx, `
 		SELECT raw_prob, up, day FROM (
-			SELECT p.raw_prob AS raw_prob, o.up AS up, trading_day(o.ts) AS day,
+			SELECT p.raw_prob AS raw_prob, o.up AS up,
+			       settle_day(o.settle_ts, o.ts) AS day,
 			       ROW_NUMBER() OVER (
-			         PARTITION BY o.symbol_id, trading_day(o.ts)
+			         PARTITION BY o.symbol_id, settle_day(o.settle_ts, o.ts)
 			         ORDER BY o.ts DESC
 			       ) AS rn
 			FROM prediction_outcomes o
@@ -328,13 +332,22 @@ func (s *Store) SeedBenchmarkOutcome(ctx context.Context, symbolID int64, h md.H
 // write the row.
 //
 // Dedup mirrors DirectionalRecord and the accuracy registry: one row per
-// (symbol, UTC-day), keeping the day's latest. sinceTs bounds the evidence
-// window (the survivorship epoch — a majority learned from survivor-seeded rows
-// would be a null in name only).
+// (symbol, SETTLED MOVE), keeping the group's latest. If this folded more
+// coarsely than the record it benchmarks, the naive majority would be computed
+// over a different observation count than the accuracy it is compared against.
+// sinceTs bounds the evidence window (the survivorship epoch — a majority
+// learned from survivor-seeded rows would be a null in name only).
+//
+// beforeDay stays a CALENDAR trading day and is applied BEFORE the dedup. It
+// answers "has today happened yet", which is a wall-clock question and not an
+// independence one, so it is deliberately not folded onto the settled move: a
+// Saturday row shares Friday's settled move but was not committed until
+// Saturday, and the leakage guard cares about the latter.
 func (s *Store) PrequentialMajorityProb(ctx context.Context, h md.Horizon, beforeDay, sinceTs int64) (float64, bool, error) {
 	q := `
 	WITH dedup AS (
-	  SELECT up, ROW_NUMBER() OVER (PARTITION BY symbol_id, trading_day(ts) ORDER BY ts DESC) rn
+	  SELECT up, ROW_NUMBER() OVER (
+	           PARTITION BY symbol_id, settle_day(settle_ts, ts) ORDER BY ts DESC) rn
 	  FROM prediction_outcomes
 	  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
 	    AND ts >= ? AND trading_day(ts) < ?

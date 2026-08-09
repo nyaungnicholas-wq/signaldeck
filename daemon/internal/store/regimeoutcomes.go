@@ -376,7 +376,7 @@ func (s *Store) VerifyNullQuarantine(ctx context.Context) (QuarantineManifest, b
 }
 
 // InsertRegimeOutcome freezes one call as an ungraded outcome row, at most once
-// per (symbol, kind, UTC-day of ts) — INSERT OR IGNORE on the dedup unique
+// per (symbol, kind, SETTLED MOVE of ts) — INSERT OR IGNORE on the dedup unique
 // index. Returns whether a new row was written.
 //
 // HARD REFUSAL at the WRITE path: a structural-kind call with no frozen naive
@@ -390,20 +390,33 @@ func (s *Store) InsertRegimeOutcome(ctx context.Context, c RegimeCall) (bool, er
 		return false, fmt.Errorf("refusing to freeze %s call for symbol %d at ts %d with no "+
 			"naive-persistence baseline: the null would be unmatched", c.Kind, c.SymbolID, c.Ts)
 	}
-	// Folded on the TRADING day like everything else. This column was the last
-	// holdout, because it is persisted under a unique dedup key and re-folding it
-	// collides the 2,817 straddling pairs the corrected fold merges.
+	// Folded on the SETTLED MOVE like every other outcome table. `day` is the
+	// dedup key, so the fold decides what gets WRITTEN, not merely what gets
+	// counted: under the calendar fold a Friday-evening, Saturday and Sunday call
+	// all describing the same Friday base bar were admitted as three observations.
+	// migrateRegimeOutcomesToSettleDay re-folded the history the same way and
+	// superseded the losers rather than deleting them.
 	//
-	// It is no longer a holdout, and nothing was deleted to get here:
-	// migrateRegimeOutcomesToTradingDay re-folds `day`, marks the LATER call of
-	// each pair with superseded_by, and makes the dedup index partial. Every
-	// frozen row keeps its bytes; only one of a pair counts as an observation.
+	// settle_ts is resolved here rather than left NULL so the row carries the key
+	// it was deduped under. A call with no 1d bar at or before it keeps settle_ts
+	// NULL and md.SettleDay falls back to the trading day — the honest
+	// degradation, and measured as never occurring on the live corpus.
+	settleTs, err := s.settleBarFor(ctx, c.SymbolID, c.Ts)
+	if err != nil {
+		return false, err
+	}
+	// Resolved ONCE and reused by the dedup-collision probe below. Recomputing it
+	// there is how the trading-day fold broke: the probe looked the stored row up
+	// under a different fold than the INSERT wrote it with, found nothing, and
+	// turned every ordinary dedup into "sql: no rows in result set".
+	day := md.SettleDay(settleTs, c.Ts)
 	res, err := s.w.ExecContext(ctx, `
 		INSERT OR IGNORE INTO regime_outcomes
-		  (symbol_id, kind, ts, day, horizon_days, regime, conviction,
+		  (symbol_id, kind, ts, day, settle_ts, horizon_days, regime, conviction,
 		   historical_accuracy, rank, naive_label, revision)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		c.SymbolID, string(c.Kind), c.Ts, md.TradingDay(c.Ts), c.HorizonDays, c.Regime,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		c.SymbolID, string(c.Kind), c.Ts, day, nullInt64(settleTs),
+		c.HorizonDays, c.Regime,
 		c.Conviction, c.HistoricalAccuracy, c.Rank, nullString(c.NaiveLabel),
 		nullString(CodeRevision()))
 	if err != nil {
@@ -427,13 +440,13 @@ func (s *Store) InsertRegimeOutcome(ctx context.Context, c RegimeCall) (bool, er
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT naive_label FROM regime_outcomes
 		   WHERE symbol_id=? AND kind=? AND day=? AND superseded_by IS NULL`,
-		c.SymbolID, string(c.Kind), md.TradingDay(c.Ts)).Scan(&stored); err != nil {
+		c.SymbolID, string(c.Kind), day).Scan(&stored); err != nil {
 		return false, err
 	}
 	if !stored.Valid && c.NaiveLabel != "" {
 		return false, fmt.Errorf("%w: %s call for symbol %d on day %d is stored with a NULL "+
 			"naive_label and this freeze carries baseline %q; the dedup would drop it",
-			ErrNaiveLabelDropped, c.Kind, c.SymbolID, md.TradingDay(c.Ts), c.NaiveLabel)
+			ErrNaiveLabelDropped, c.Kind, c.SymbolID, day, c.NaiveLabel)
 	}
 	return false, nil
 }
@@ -459,6 +472,11 @@ type RegimeOutcomeRow struct {
 	Actual             string
 	Correct            int    // -1 unresolved, else 0/1
 	NaiveLabel         string // frozen naive-persistence baseline ("" = none frozen)
+	// Day is the STORED settled-move key this row was deduped under. Read rather
+	// than recomputed from Ts: the dedup index is built on this column, so a
+	// consumer that re-derives the fold can disagree with the table about which
+	// rows are the same observation.
+	Day int64
 }
 
 // nullString stores "" as SQL NULL — an absent naive baseline must read as
@@ -479,7 +497,7 @@ func (s *Store) DueRegimeOutcomes(ctx context.Context, now int64, limit int) ([]
 		limit = 5000
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, symbol_id, kind, ts, horizon_days, regime, conviction,
+		SELECT id, symbol_id, kind, ts, day, horizon_days, regime, conviction,
 		       historical_accuracy, rank, COALESCE(naive_label, '')
 		FROM regime_outcomes
 		WHERE resolved_at IS NULL AND superseded_by IS NULL
@@ -493,7 +511,7 @@ func (s *Store) DueRegimeOutcomes(ctx context.Context, now int64, limit int) ([]
 	for rows.Next() {
 		var r RegimeOutcomeRow
 		var kind string
-		if err := rows.Scan(&r.ID, &r.SymbolID, &kind, &r.Ts, &r.HorizonDays,
+		if err := rows.Scan(&r.ID, &r.SymbolID, &kind, &r.Ts, &r.Day, &r.HorizonDays,
 			&r.Regime, &r.Conviction, &r.HistoricalAccuracy, &r.Rank,
 			&r.NaiveLabel); err != nil {
 			return nil, err
@@ -525,7 +543,7 @@ func (s *Store) ResolvedRegimeOutcomes(ctx context.Context, limit int) ([]Regime
 		limit = 50000
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, symbol_id, kind, ts, horizon_days, regime, conviction,
+		SELECT id, symbol_id, kind, ts, day, horizon_days, regime, conviction,
 		       historical_accuracy, rank, resolved_at, actual, correct,
 		       COALESCE(naive_label, '')
 		FROM regime_outcomes
@@ -539,7 +557,7 @@ func (s *Store) ResolvedRegimeOutcomes(ctx context.Context, limit int) ([]Regime
 	for rows.Next() {
 		var r RegimeOutcomeRow
 		var kind string
-		if err := rows.Scan(&r.ID, &r.SymbolID, &kind, &r.Ts, &r.HorizonDays,
+		if err := rows.Scan(&r.ID, &r.SymbolID, &kind, &r.Ts, &r.Day, &r.HorizonDays,
 			&r.Regime, &r.Conviction, &r.HistoricalAccuracy, &r.Rank,
 			&r.ResolvedAt, &r.Actual, &r.Correct, &r.NaiveLabel); err != nil {
 			return nil, err

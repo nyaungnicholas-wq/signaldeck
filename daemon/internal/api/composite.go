@@ -323,7 +323,10 @@ func gradeFleetEdge(rows []store.ResolvedPredictionOutcome) fleetSkill {
 	obs := make([]clusterstat.Obs, 0, len(rows))
 	correct, ups, indepN := 0, 0, 0
 	for _, o := range rows {
-		day := md.TradingDay(o.Ts)
+		// Settled move, not calendar day: this is the fleet EDGE record and it
+		// reads the same rows DirectionalRecord grades, so folding them
+		// differently would publish two independent-N counts for one population.
+		day := md.SettleDay(o.SettleTs, o.Ts)
 		key := [2]int64{o.SymbolID, day}
 		if seen[key] {
 			continue

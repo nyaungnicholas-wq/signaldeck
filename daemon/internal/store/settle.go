@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -30,6 +31,33 @@ func (s *Store) BackfillScoreSettleTs(ctx context.Context, limit int) (int64, er
 // derivation to BackfillSettleTs so all three agree by construction.
 func (s *Store) BackfillConfluenceSettleTs(ctx context.Context, limit int) (int64, error) {
 	return s.backfillSettleFor(ctx, "confluence_outcomes", []string{"symbol_id", "ts", "horizon"}, limit)
+}
+
+// settleBarFor resolves the settled move for one (symbol, ts): the newest 1d bar
+// at or before ts, or 0 when none exists. Same derivation as the backfills and
+// the resolvers, so a row written through this path and a row filled by a
+// backfill land on the same key.
+//
+// 0 rather than an error for "no bar": an unknown settle bar is a legitimate
+// state that md.SettleDay handles by falling back to the calendar day, and a
+// caller freezing a forecast should not be blocked because history is thin.
+func (s *Store) settleBarFor(ctx context.Context, symbolID, ts int64) (int64, error) {
+	var v sql.NullInt64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT MAX(b.ts) FROM bars b WHERE b.symbol_id=? AND b.tf='1d' AND b.ts<=?`,
+		symbolID, ts).Scan(&v); err != nil {
+		return 0, err
+	}
+	return v.Int64, nil
+}
+
+// nullInt64 renders a zero settle bar as SQL NULL: "unknown" is the honest
+// stored value, and 0 would read as the epoch.
+func nullInt64(v int64) any {
+	if v == 0 {
+		return nil
+	}
+	return v
 }
 
 func (s *Store) backfillSettleFor(ctx context.Context, table string, keyCols []string, limit int) (int64, error) {

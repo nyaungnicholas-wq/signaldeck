@@ -868,7 +868,7 @@ func (d Deps) honesty(w http.ResponseWriter, r *http.Request) {
 	var raw []honestyPt
 	for _, o := range outcomes {
 		if o.FwdReturn != nil {
-			raw = append(raw, honestyPt{o.Score, *o.FwdReturn, o.Ts, o.SymbolID})
+			raw = append(raw, honestyPt{o.Score, *o.FwdReturn, o.Ts, o.SymbolID, o.SettleTs})
 		}
 	}
 	// IC PSEUDO-REPLICATION FIX (honesty doctrine): the minute-cadence scoring
@@ -955,7 +955,7 @@ func (d Deps) honesty(w http.ResponseWriter, r *http.Request) {
 	byDay := map[int64][]int{}
 	var days []int64
 	for i, p := range pts {
-		d := md.TradingDay(p.Ts)
+		d := md.SettleDay(p.SettleTs, p.Ts)
 		if _, seen := byDay[d]; !seen {
 			days = append(days, d)
 		}
@@ -1007,6 +1007,9 @@ type honestyPt struct {
 	Fwd      float64 `json:"fwd"`
 	Ts       int64   `json:"ts"`
 	SymbolID int64   `json:"-"`
+	// SettleTs is the base bar the score resolved against. Carried so the
+	// independent dedup and the bootstrap day buckets fold on the settled move.
+	SettleTs int64 `json:"-"`
 }
 
 func pearson(pts []honestyPt) float64 {
@@ -1404,7 +1407,7 @@ func dedupeIndependent(pts []honestyPt) []honestyPt {
 	seen := make(map[key]struct{}, len(pts))
 	out := make([]honestyPt, 0, len(pts))
 	for _, p := range pts {
-		k := key{sym: p.SymbolID, day: p.Ts / secondsPerDay}
+		k := key{sym: p.SymbolID, day: md.SettleDay(p.SettleTs, p.Ts)}
 		if _, dup := seen[k]; dup {
 			continue
 		}

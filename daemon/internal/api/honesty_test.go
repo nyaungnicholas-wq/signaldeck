@@ -21,7 +21,11 @@ import (
 func TestDedupeIndependent_CollapsesToSymbolDay(t *testing.T) {
 	const day = int64(86400)
 	base := int64(1_700_000_000)
-	base -= base % day // align to a UTC-day boundary
+	// Align to the FOLD boundary, not UTC midnight. The independence fold cuts at
+	// 05:00Z (md.TradingDayOffsetSecs), so a fixture aligned to UTC midnight puts
+	// its "same day" rows on either side of the cut and the dedup correctly
+	// reports more observations than the fixture intends.
+	base = base - base%day + md.TradingDayOffsetSecs
 	newest := base + 8*3600
 
 	// Symbol 1: 5 rows on day D (varied ts within the day) + 2 rows on day D+1.
@@ -50,7 +54,7 @@ func TestDedupeIndependent_CollapsesToSymbolDay(t *testing.T) {
 	// The (sym1, day D) keeper must be the LATEST that day (score 0.5 @ newest).
 	var found bool
 	for _, p := range out {
-		if p.SymbolID == 1 && p.Ts/day == base/day {
+		if p.SymbolID == 1 && md.SettleDay(p.SettleTs, p.Ts) == md.SettleDay(0, base) {
 			found = true
 			if p.Score != 0.5 || p.Ts != newest {
 				t.Fatalf("sym1 day-D keeper should be the latest (score 0.5 @ %d), got score %.2f @ %d",
@@ -143,7 +147,10 @@ func seedOutcomes(t *testing.T, st *store.Store, symbolID int64, h md.Horizon, d
 	ctx := context.Background()
 	const day = int64(86400)
 	base := int64(1_600_000_000)
-	base -= base % day
+	// Fold-boundary aligned (see TestDedupeIndependent_CollapsesToSymbolDay):
+	// 40 rows at 10-minute spacing span ~6.7h, which straddles the 05:00Z cut if
+	// the day starts at UTC midnight, turning 3 seeded days into 4 observations.
+	base = base - base%day + md.TradingDayOffsetSecs
 	for di := 0; di < days; di++ {
 		dayStart := base + int64(di)*day
 		for ri := 0; ri < perDay; ri++ {

@@ -91,22 +91,28 @@ func (s *Store) StructuralPending(ctx context.Context) ([]StructuralPendingRow, 
 // StructuralRecords grades every resolved structural forecast by kind.
 // `minConviction` restricts to a conviction band; 0 includes everything.
 func (s *Store) StructuralRecords(ctx context.Context, minConviction float64) ([]StructuralRecordRow, error) {
+	// `day` is the stored settled-move key the dedup index is built on, and it is
+	// used for BOTH the row dedup and the distinct-day count. Those were two
+	// different folds: the partition used trading_day(ts) while the effective-N
+	// count used a raw ts/86400 UTC day, so the reported day count did not
+	// describe the rows it was counting.
+	//
+	// superseded_by IS NULL is the row filter rather than a ROW_NUMBER pick. A
+	// superseded row is not an independent observation, and ordering by ts DESC
+	// inside the partition actively preferred one: the stored dedup keeps the
+	// EARLIEST call of a settled move, so the newest-wins pick could return a row
+	// the table had already retired.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT kind,
 		       COUNT(*),
 		       SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END),
 		       AVG(historical_accuracy),
 		       MIN(ts), MAX(ts),
-		       COUNT(DISTINCT ts/86400)
-		FROM (
-		  SELECT kind, ts, correct, historical_accuracy,
-		         ROW_NUMBER() OVER (
-		           PARTITION BY symbol_id, kind, trading_day(ts) ORDER BY ts DESC) rn
-		  FROM regime_outcomes
-		  WHERE resolved_at IS NOT NULL AND correct IN (0,1)
-		    AND conviction >= ?
-		)
-		WHERE rn = 1
+		       COUNT(DISTINCT day)
+		FROM regime_outcomes
+		WHERE resolved_at IS NOT NULL AND correct IN (0,1)
+		  AND conviction >= ?
+		  AND superseded_by IS NULL
 		GROUP BY kind ORDER BY kind`, minConviction)
 	if err != nil {
 		return nil, err
@@ -140,15 +146,10 @@ func (s *Store) StructuralRecords(ctx context.Context, minConviction float64) ([
 		var n, persisted int
 		err := s.db.QueryRowContext(ctx, `
 			SELECT COUNT(*), SUM(CASE WHEN actual = regime THEN 1 ELSE 0 END)
-			FROM (
-			  SELECT regime, actual,
-			         ROW_NUMBER() OVER (
-			           PARTITION BY symbol_id, kind, trading_day(ts) ORDER BY ts DESC) rn
-			  FROM regime_outcomes
-			  WHERE kind = ? AND resolved_at IS NOT NULL AND correct IN (0,1)
-			    AND conviction >= ?
-			)
-			WHERE rn = 1`, out[i].Kind, minConviction).Scan(&n, &persisted)
+			FROM regime_outcomes
+			WHERE kind = ? AND resolved_at IS NOT NULL AND correct IN (0,1)
+			  AND conviction >= ?
+			  AND superseded_by IS NULL`, out[i].Kind, minConviction).Scan(&n, &persisted)
 		if err == nil && n > 0 {
 			out[i].PersistenceBase = float64(persisted) / float64(n)
 		}
