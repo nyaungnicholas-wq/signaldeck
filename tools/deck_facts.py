@@ -219,9 +219,18 @@ def main():
 
     docs = [p.strip() for p in args.inject if p.strip()]
 
+    # The partial is the canonical rendering of the CANONICAL database, so only
+    # a run against that database may write or police it. Without this guard
+    # tools/test_deck_facts.py — which injects five times from a fixture db —
+    # overwrote partials/deck_facts.md with fixture-scale numbers (6 membership
+    # rows, a universe reaching 1970-01-03) and docs_gate then failed on a repo
+    # that had merely run its own test suite. A test may not edit the artifact
+    # it is testing.
+    canonical = os.path.abspath(args.db) == os.path.abspath(DB)
+
     if args.check:
         rc = 0
-        if docs and not partial_matches(block):
+        if docs and canonical and not partial_matches(block):
             print("%s: no longer matches the database — run "
                   "python3 tools/deck_facts.py --inject %s" % (PARTIAL, " ".join(docs)),
                   file=sys.stderr)
@@ -243,7 +252,7 @@ def main():
     if args.write:
         with io.open(args.write, "w", encoding="utf-8", newline="") as fh:
             fh.write(block + "\n")
-    if docs:
+    if docs and canonical:
         # The partial is refreshed by the SAME command that injects, so the two
         # cannot diverge. They did: --inject updated STRATEGY_DECK.md and left
         # partials/deck_facts.md stale, --check reported clean because it only

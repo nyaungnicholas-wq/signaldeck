@@ -93,6 +93,28 @@ class DeckFactsTest(unittest.TestCase):
             fh.write(body)
         return path
 
+    def test_a_fixture_run_never_writes_the_canonical_partial(self):
+        """--inject from a fixture db must leave partials/deck_facts.md alone.
+
+        --inject refreshes the partial so a document's generated region and the
+        partial cannot diverge (docs_gate enforces that they match). But the
+        partial is the canonical rendering of the CANONICAL database, and every
+        test here runs --inject against a tiny fixture db. Unguarded, this suite
+        rewrote partials/deck_facts.md with fixture-scale numbers — 6 membership
+        rows, a universe reaching 1970-01-03 — and docs_gate then failed on a
+        repository whose only crime was running its own tests. A test may not
+        edit the artifact it is testing.
+        """
+        if not os.path.exists(deck_facts.PARTIAL):
+            self.skipTest("no canonical partial in this checkout")
+        with open(deck_facts.PARTIAL, "rb") as fh:
+            before = fh.read()
+        path = self.doc("x\n%s\n%s\ny\n" % (deck_facts.BEGIN, deck_facts.END))
+        self.assertEqual(self.run_cli("--inject", path).returncode, 0)
+        with open(deck_facts.PARTIAL, "rb") as fh:
+            self.assertEqual(fh.read(), before,
+                             "a fixture run rewrote the canonical partial")
+
     # --- measurement -----------------------------------------------------
 
     def test_universe_counts_rows_days_and_distinct_symbols(self):
