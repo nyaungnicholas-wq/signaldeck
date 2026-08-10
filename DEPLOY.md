@@ -25,7 +25,7 @@ Suitable: Fly.io, Railway, Render, or any small VPS. Budget ~$5–15/month for
 ## Build and run locally first
 
 ```bash
-docker build --build-arg GIT_REV=$(git rev-parse HEAD) -t signaldeck:demo .
+ops/docker-build.sh signaldeck:demo
 docker run --rm -p 8080:8080 \
   -v signaldeck_data:/data \
   -e ALPACA_KEY=... -e ALPACA_SECRET=... \

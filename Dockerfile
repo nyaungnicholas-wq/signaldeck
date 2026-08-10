@@ -10,7 +10,17 @@
 # (rows it writes could not otherwise be graded), so the revision is passed in
 # at build time and baked via ldflags. Build with:
 #
-#   docker build --build-arg GIT_REV=$(git rev-parse HEAD) -t signaldeck .
+#   ops/docker-build.sh                 # or: ops/docker-build.sh <tag> [flags]
+#
+# Use that wrapper, not `docker build` directly. It supplies GIT_REV and — the
+# part a raw invocation cannot do — refuses a dirty tree first. GIT_REV is
+# TRUSTED, never checked: internal/lineage sets modified=false whenever it falls
+# back to ldflagsRev, because a container cannot see the tree it was built from.
+# So `docker build --build-arg GIT_REV=$(git rev-parse HEAD) .` against
+# uncommitted code yields an image stamped with HEAD's SHA, reporting
+# modified=false, whose provenance claim is false and undetectable downstream.
+# ops/signaldeck-ctl.sh already refuses that on the native path; the wrapper is
+# the same refusal here. ops/test-docker-build.sh is its self-test.
 #
 # Without GIT_REV the image builds fine and then refuses to serve, loudly. That
 # is deliberate — a demo publishing ungradable numbers is worse than no demo.

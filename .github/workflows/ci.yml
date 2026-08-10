@@ -37,6 +37,17 @@ jobs:
       - name: Manifest — load-bearing paths are tracked by git
         working-directory: .
         run: bash ops/manifest-check.sh
+      # Same provenance rule as the step above, for the OTHER build path. The
+      # Dockerfile bakes the commit through --build-arg GIT_REV because
+      # .dockerignore excludes .git/, and internal/lineage asserts
+      # modified=false on that path since a container cannot see the tree it
+      # was built from. A dirty tree stamped with HEAD therefore ships a false
+      # provenance claim nothing downstream can catch. ops/docker-build.sh
+      # refuses it; this proves the refusal still fires. No engine needed — it
+      # stubs docker and asserts on the DECISION, so it runs on any runner.
+      - name: Docker build guard still refuses a dirty tree
+        working-directory: .
+        run: bash ops/test-docker-build.sh
       # A build must not mutate the tree. Two failure modes this catches, both
       # of which have bitten this repo's class of change: a generated file
       # (go.mod/go.sum tidy drift, a checked-in generated source) that was
