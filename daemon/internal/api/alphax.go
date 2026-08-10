@@ -40,7 +40,7 @@ func (d Deps) alphaX(w http.ResponseWriter, r *http.Request) {
 	for _, h := range alphaXHorizons {
 		m, found, err := d.St.AlphaXModel(ctx, h)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		if !found {
@@ -69,7 +69,7 @@ func (d Deps) alphaX(w http.ResponseWriter, r *http.Request) {
 		} else {
 			scores, err := d.St.TopModelForecastsByModel(ctx, store.ModelAlphaX, h, 20)
 			if err != nil {
-				httpErr(w, 500, err.Error())
+				httpInternal(w, err)
 				return
 			}
 			hOut["topScores"] = scores // highest P(top half) first, ≤20

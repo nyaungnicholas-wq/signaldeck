@@ -95,14 +95,14 @@ func (d Deps) companies(w http.ResponseWriter, r *http.Request) {
 	// 1. Directory rows (SQL-pushable filters; bounded by the ~10.4k-row map).
 	comps, err := d.St.ListCompanies(ctx, qp.Get("q"), qp.Get("sector"), qp.Get("exchange"))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 
 	// 2. Tracked-data maps — built ONCE per request (no N+1 over companies).
 	syms, err := d.St.ActiveStockSymbols(ctx, nil)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	symByTicker := make(map[string]md.Symbol, len(syms))
@@ -111,17 +111,17 @@ func (d Deps) companies(w http.ResponseWriter, r *http.Request) {
 	}
 	daily, err := d.St.LatestDailyAll(ctx)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	shares, err := d.St.LatestMetricAll(ctx, "SharesOutstanding")
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	floats, err := d.St.LatestMetricAll(ctx, "EntityPublicFloat")
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 
@@ -255,12 +255,12 @@ func (d Deps) earningsEstimates(w http.ResponseWriter, r *http.Request) {
 	// Batched: one fleet-wide latest-periodic-filing map + one symbol list.
 	periodic, err := d.St.LatestPeriodicFilingAll(ctx)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	syms, err := d.St.ActiveStockSymbols(ctx, nil)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 

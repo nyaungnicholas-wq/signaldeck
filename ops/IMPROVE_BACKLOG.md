@@ -10,6 +10,70 @@ Each item needs a `verify:` line holding a shell command that exits non-zero
 until the item is genuinely done. An item without a runnable verification is a
 wish, not a task — the loop skips it and says so.
 
+**Accuracy goal (set 2026-08-07).** Baseline in `ops/accuracy_baseline.json`:
+1d acc 46.41% vs naive 57.46% (lift **-11.05pp**, 16,652 independent symbol-days);
+1w acc 49.20% vs naive 51.41% (lift -2.21pp). Target is +10% RELATIVE at fixed
+coverage — 1d 46.4%→51.1%, 1w 49.2%→54.1%. Progress: `python ops/accuracy_baseline.py --report`.
+
+Two things this goal is NOT. It is not +10 percentage points on 1d direction: the
+arcsin law puts 56% at IC≈0.21 and 60% at IC≈0.31, against a measured system IC
+of ~0.05 and a hedge-fund range of 0.10-0.17, and four independent measurements
+on this data put the directional ceiling at ~55%. And it is not reachable by
+abstaining — every accuracy gate below checks coverage in the same command,
+because dropping coverage raises accuracy for free.
+
+---
+
+## [x] 1d forecasts collapse onto a single market call
+
+ALREADY FIXED before this item was written — `d1a9c28` "Refuse to publish a
+collapsed cross-section" (2026-08-06) wired `ensemble.MeasureCrossSection` /
+`CrossSection.Usable` into `pipeline/predict.go:566`. Every collapsed day quoted
+below predates it, so the measurement that motivated this item is a record of a
+defect that no longer exists. Measured 2026-08-07, distinct probability values
+across ~328 symbols: 08-01 **10**, 08-02 **10**, 08-05 254, and on the first
+post-guard day 08-06 **288**, with the up-call rate back to 0.572 from extremes
+of 0.012-0.991.
+
+Consequence for the goal: the -11.05pp lift is dominated by pre-08-06 days and
+will improve as they age out of the window WITHOUT any code change. Do not
+re-open this against the historical number.
+
+verify: `cd daemon && go test ./internal/ensemble/... -run TestCrossSection -count=1`
+files: `daemon/internal/pipeline/predict.go`
+
+## [ ] 1d cross-section stays dispersed on live data
+
+Live confirmation that the 08-06 guard holds. One post-guard day exists so far
+(08-06: 288 distinct probabilities across 313 symbols, up-call rate 0.572), which
+is not enough to conclude anything. This CANNOT go green from a code change — it
+measures new forecast days as they accrue, and the default 10-day window still
+reaches back into the collapsed era. Expect red until roughly 2026-08-16.
+
+verify: `python ops/accuracy_gates.py xsection --horizon 1d`
+files: `daemon/internal/pipeline/predict.go`
+
+## [ ] 1d accuracy beats its own naive baseline
+
+Currently 46.41% against a folded majority baseline of 57.46% at coverage 1.0000.
+Beating the baseline is the floor, not the goal — but a forecaster losing to
+"always call the majority side" has a defect, not a weak edge. Coverage is
+checked in the same command; an improvement bought by issuing fewer calls fails.
+
+verify: `python ops/accuracy_gates.py beats-naive --horizon 1d`
+files: `daemon/internal/pipeline/predict.go`
+
+## [ ] 1w accuracy beats its own naive baseline
+
+49.20% against 51.41% at coverage 0.9977. The 1w map ships a rank-preserving
+calibration whose outputs all sit below 0.5, so the directional CALL is
+unanimously "down" even though the ranking discriminates. The preserved ranking
+is the real win; the hard 0.5 threshold against a base rate near 0.466 is the
+defect. Fix the threshold, not the ranking.
+
+verify: `python ops/accuracy_gates.py beats-naive --horizon 1w`
+files: `daemon/internal/pipeline/predict.go`
+
 ---
 
 ## [x] Research-loop liveness: judgments missing for 2026-07-26..29

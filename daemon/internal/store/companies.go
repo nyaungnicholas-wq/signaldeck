@@ -194,17 +194,52 @@ type DailyLast struct {
 }
 
 // LatestDailyAll returns, for EVERY symbol with daily bars, its latest daily
-// close/volume/ts and the previous close — in ONE window-function query (the
-// LastTwoDailyCloses pattern plus volume, so the directory endpoint never
-// issues a per-symbol bar query over 10k companies).
+// close/volume/ts and the previous close, in ONE query (so the directory
+// endpoint never issues a per-symbol bar query over 10k companies).
+//
+// PERF 2026-08-06 — this was the whole cost of /api/companies. The previous
+// form evaluated LAG() + ROW_NUMBER() window functions across EVERY tf='1d'
+// row (2,655,104 on the live DB) and then threw away all but the newest row
+// per symbol. Because idx_bars_tf_sym_ts orders ts ASCENDING and the
+// ROW_NUMBER() wanted DESC, SQLite materialised TWO temp B-trees over those
+// 2.65M rows ("USE TEMP B-TREE FOR ORDER BY" twice in the plan). Measured
+// read-only against data/signaldeck.db: 6.734s of pure CPU, per request —
+// /api/companies has no response cache, unlike /api/screener, so every caller
+// paid it and the endpoint intermittently died at the 20s mark with
+// {"error":"context canceled"}.
+//
+// This form drives from symbols (~2,950 rows) and lets the WITHOUT ROWID
+// primary key (symbol_id, tf, ts) plus idx_bars_tf_sym_ts answer each symbol
+// with three b-tree SEARCHes — newest ts, that row, the close before it.
+// O(symbols · log n) with no sort, instead of O(all 1d bars) plus two sorts.
+//
+// The CROSS JOIN is load-bearing and must not be "cleaned up" to a plain JOIN:
+// in SQLite, CROSS JOIN is the documented way to pin the join order. Written
+// as a plain JOIN the planner drives from bars, re-walks all 2.65M rows and
+// evaluates the correlated MAX per row — measured 0.864s instead of 0.026s.
+//
+// Joining symbols also narrows the result to symbol_ids that exist in symbols.
+// That is safe by construction, not just by luck: the only caller indexes this
+// map by IDs from ActiveStockSymbols(), which selects FROM symbols, so a bar
+// row orphaned from symbols could never have been looked up. Verified equal
+// anyway — SELECT old EXCEPT SELECT new and the reverse both return 0 rows on
+// the live DB and on the 2026-08-06 backup.
+//
+// Measured, live DB, read-only: 6.734s -> 0.026s (259x). No schema change: a
+// covering index on (tf,symbol_id,ts,close,volume) was benchmarked on a scratch
+// copy and moved this query 0.029s -> 0.025s, i.e. nothing, so none is added.
 func (s *Store) LatestDailyAll(ctx context.Context) (map[int64]DailyLast, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol_id, ts, close, COALESCE(prev_close, 0), volume FROM (
-			SELECT symbol_id, ts, close, volume,
-			       LAG(close) OVER (PARTITION BY symbol_id ORDER BY ts) AS prev_close,
-			       ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY ts DESC) AS rn
-			FROM bars WHERE tf='1d'
-		) WHERE rn = 1`)
+		SELECT b.symbol_id, b.ts, b.close,
+		       COALESCE((SELECT p.close FROM bars p
+		                 WHERE p.symbol_id = b.symbol_id AND p.tf = '1d'
+		                   AND p.ts < b.ts
+		                 ORDER BY p.ts DESC LIMIT 1), 0),
+		       b.volume
+		FROM symbols sy
+		CROSS JOIN bars b ON b.symbol_id = sy.id AND b.tf = '1d'
+		     AND b.ts = (SELECT MAX(m.ts) FROM bars m
+		                 WHERE m.symbol_id = sy.id AND m.tf = '1d')`)
 	if err != nil {
 		return nil, err
 	}

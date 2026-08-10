@@ -7,8 +7,11 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -138,7 +141,7 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, exists, err := d.St.GetUserByName(r.Context(), body.Username); err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	} else if exists {
 		httpErr(w, 409, "username taken")
@@ -146,20 +149,112 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	n, err := d.St.CountUsers(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	uid, err := d.St.CreateUser(r.Context(), body.Username, string(hash), n == 0)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	d.startSession(w, r, uid, body.Username, n == 0)
+}
+
+// loginFailures throttles repeated password failures PER USERNAME.
+//
+// The request rate limiter alone did not cover this: it keys on client (user
+// id / token / IP), so an attacker rotating source addresses got a fresh write
+// budget per address, and a single address still had ~170k attempts/day at the
+// write tier. bcrypt at cost 10 makes that slow rather than impossible, and
+// nothing anywhere counted the failures.
+//
+// Keyed on the SUBMITTED username whether or not that user exists, so the
+// lockout cannot be used to enumerate accounts — an unknown name locks out
+// exactly like a real one.
+var loginFailures = &failCounter{fails: map[string]*failState{}}
+
+type failCounter struct {
+	mu    sync.Mutex
+	fails map[string]*failState
+}
+
+type failState struct {
+	n     int
+	until time.Time
+	last  time.Time
+}
+
+// loginLockoutAfter is how many consecutive failures are tolerated before the
+// backoff starts. Five is high enough that a person mistyping a password never
+// meets it and low enough that guessing does immediately.
+const loginLockoutAfter = 5
+
+// loginLockoutBase is the FIRST wait once the threshold is crossed.
+//
+// It started at 1s, which measured out to roughly one guess per second — barely
+// better than the write-tier request limiter it was meant to reinforce, and the
+// message rounded down to the nonsense "try again in 0s". Five seconds is
+// invisible to a person who mistyped their password five times and compounds
+// immediately against anything guessing.
+const loginLockoutBase = 5 * time.Second
+
+// loginLockoutMax caps the backoff. Unbounded growth would let an attacker lock
+// a real user out permanently by failing on their behalf — the cap keeps this a
+// slowdown rather than a denial of service against the account owner.
+const loginLockoutMax = 15 * time.Minute
+
+// retryAfter reports how long the caller must wait, 0 when they may proceed.
+func (f *failCounter) retryAfter(key string, now time.Time) time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sweep(now)
+	st, ok := f.fails[key]
+	if !ok || now.After(st.until) {
+		return 0
+	}
+	return st.until.Sub(now)
+}
+
+func (f *failCounter) fail(key string, now time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sweep(now)
+	st, ok := f.fails[key]
+	if !ok {
+		st = &failState{}
+		f.fails[key] = st
+	}
+	st.n++
+	st.last = now
+	if st.n >= loginLockoutAfter {
+		// Double each failure past the threshold: 5s, 10s, 20s … capped.
+		backoff := loginLockoutBase << min(st.n-loginLockoutAfter, 20)
+		if backoff > loginLockoutMax || backoff <= 0 {
+			backoff = loginLockoutMax
+		}
+		st.until = now.Add(backoff)
+	}
+}
+
+func (f *failCounter) succeed(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.fails, key)
+}
+
+// sweep drops entries idle past the maximum backoff — they can no longer be
+// holding anyone out, so keeping them only grows the map. Called under mu.
+func (f *failCounter) sweep(now time.Time) {
+	for k, st := range f.fails {
+		if now.Sub(st.last) > loginLockoutMax {
+			delete(f.fails, k)
+		}
+	}
 }
 
 // authLogin verifies credentials and issues a session cookie.
@@ -169,9 +264,30 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "bad json: "+err.Error())
 		return
 	}
-	u, ok, err := d.St.GetUserByName(r.Context(), strings.TrimSpace(body.Username))
+	name := strings.TrimSpace(body.Username)
+
+	// Check the lockout BEFORE bcrypt: the whole point is to stop spending a
+	// ~100ms hash on an attacker, and answering fast here is not an oracle
+	// because the lockout key exists for unknown usernames too.
+	now := time.Now()
+	if wait := loginFailures.retryAfter(strings.ToLower(name), now); wait > 0 {
+		// Round UP, and never below a second. Rounding to nearest produced
+		// "try again in 0s" for any sub-500ms remainder — an instruction to
+		// wait no time at all, on a request that was just refused.
+		secs := int((wait + time.Second - 1) / time.Second)
+		if secs < 1 {
+			secs = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		httpErr(w, http.StatusTooManyRequests,
+			"too many failed sign-in attempts — try again in "+
+				(time.Duration(secs) * time.Second).String())
+		return
+	}
+
+	u, ok, err := d.St.GetUserByName(r.Context(), name)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// Constant-shape failure path: run bcrypt either way.
@@ -180,9 +296,12 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		hash = string(dummyHash)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password)) != nil || !ok {
+		loginFailures.fail(strings.ToLower(name), now)
+		slog.Warn("login failed", "username", name)
 		httpErr(w, 401, "invalid username or password")
 		return
 	}
+	loginFailures.succeed(strings.ToLower(name))
 	d.startSession(w, r, u.ID, u.Username, u.IsAdmin)
 }
 
@@ -200,7 +319,7 @@ func (d Deps) startSession(w http.ResponseWriter, r *http.Request, uid int64, us
 	}
 	// Only the digest of token reaches the database.
 	if err := d.St.CreateSession(r.Context(), token, uid, time.Now().Add(sessionTTL).Unix()); err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	d.setSessionCookie(w, r, token, int(sessionTTL.Seconds()))

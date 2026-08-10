@@ -23,7 +23,7 @@ import (
 func (d Deps) sourceHealth(w http.ResponseWriter, r *http.Request) {
 	reports, err := srchealth.Evaluate(r.Context(), d.St, time.Now(), d.Cfg.TVWebhookSecret != "")
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{

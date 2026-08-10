@@ -117,6 +117,7 @@ func TestPredictionRunnerPersistsFeatures(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	seedGradedPressureLeg(t, st, sym.ID, now)
 	if _, err := (&PredictionRunner{St: st}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +193,7 @@ func TestPredictionRunnerAppendsLedger(t *testing.T) {
 		}
 	}
 
+	seedGradedPressureLeg(t, st, sym.ID, now)
 	if _, err := (&PredictionRunner{St: st}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}

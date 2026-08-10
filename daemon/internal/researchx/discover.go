@@ -21,14 +21,21 @@ type Candidate struct {
 	CF          CFReport
 	Survival    SurvivalReport
 	WilsonLower float64 // lower bound at the corrected alpha below
+	// MeanRet / MeanRetT are always RECORDED, whichever criterion SelectBy
+	// gates on, so a row carries both readings and the two can be compared
+	// after the fact on the same corpus. MeanRetT is measured against the
+	// counterfactual null's own mean return, floored at 0 — and 0 IS the
+	// chance level for a signed return, which is exactly why that floor is
+	// sound where the Wilson gate's old 0.5 floor was not.
+	MeanRet  float64
+	MeanRetT float64
 	// NullP0 is the win rate the Wilson lower bound was actually compared
-	// against: max(0.5, CF.NullMatched.WinRate). A week trial is scored a win
-	// against that week's OWN folded majority max(upRate, 1-upRate), so the
-	// no-skill week-win rate is not 0.5 and assuming it was understated the
-	// bar. The null arm keeps the same matched observations and only
-	// randomizes direction, so its realised week-win rate is the null this
-	// rule faced. The max(0.5, …) floor makes the substitution strictly
-	// one-directional: the bar can rise, never fall.
+	// against: the 95% upper bound on CF.NullCoherent's own week-win rate (see
+	// nullBar). A week trial is scored a win against that week's OWN folded
+	// majority max(upRate, 1-upRate), so the no-skill week-win rate is not 0.5
+	// — it depends on how coherent the rule's directions are within a week and
+	// on how lopsided that week was, which is why it is measured per rule
+	// rather than assumed.
 	NullP0 float64
 	// NullWeeks is how many week-trials the null arm was measured over —
 	// without it NullP0 is a number of unknown precision.
@@ -64,10 +71,32 @@ type Candidate struct {
 const (
 	RejectMinWeeks       = "min_weeks"
 	RejectWilson         = "wilson_lower"
+	RejectMeanRet        = "mean_return"
 	RejectRegimeSurvival = "regime_survival"
 	RejectFragile        = "fragile_threshold"
 	RejectCounterfactual = "counterfactual"
 	RejectHoldout        = "holdout"
+)
+
+// Selection criteria for DiscoverConfig.SelectBy.
+//
+// These change WHICH STATISTIC the screen selects on, never how hard it is to
+// clear: both run at the same corrected alpha, derived from the same divisor,
+// via the same z. That is deliberate and is the only reason SelectBy is a
+// config field at all while MaxAlpha is a constant — an operator can ask a
+// different question here, but cannot make the answer easier.
+//
+// SelectMeanRet exists because SelectWilson measures the wrong thing for a
+// trading rule: a hit rate counts how OFTEN a rule is right and is blind to
+// how MUCH, so it ranks a rule that wins 60% of weeks by a basis point above
+// one that wins 45% of weeks and makes money. Measured 2026-08-06 by CSCV
+// (tools/pbo_ledger.py): selecting on the Wilson bound rather than on mean
+// return carries 3.8x the probability of backtest overfitting, 5x the
+// probability the pick loses money out of sample, and a 3.9x steeper
+// in-sample-to-out-of-sample degradation slope.
+const (
+	SelectWilson  = "wilson"
+	SelectMeanRet = "meanret"
 )
 
 // PreregHoldoutEra is the pre-registered blind era: the discovery grid never
@@ -94,6 +123,11 @@ type DiscoverConfig struct {
 	MinWeeks       int // default 30
 	MinWeeksPerEra int // default 8
 	MaxCandidates  int // hard cap on the grid, default 48
+
+	// SelectBy names the statistic the in-sample and holdout gates select on:
+	// SelectWilson (default, and what the loop has always used) or
+	// SelectMeanRet. It cannot widen the corrected alpha — see the constants.
+	SelectBy string
 	// PriorSearches is how many times this grid has ALREADY been run over
 	// (largely) this data — every prior night of a scheduled loop is another
 	// look, and looks are what multiplicity corrects for. Zero is a CLAIM that
@@ -131,6 +165,12 @@ func (c DiscoverConfig) withDefaults() DiscoverConfig {
 	}
 	if c.PriorSearches < 0 {
 		c.PriorSearches = 0
+	}
+	// An unrecognised name falls back to the live criterion rather than
+	// erroring: a typo in an operator's env var must not silently swap which
+	// statistic the screen gates on.
+	if c.SelectBy != SelectMeanRet {
+		c.SelectBy = SelectWilson
 	}
 	if c.MinHoldoutWeeks <= 0 {
 		c.MinHoldoutWeeks = c.MinWeeksPerEra
@@ -256,6 +296,8 @@ func Discover(obs []Obs, cfg DiscoverConfig) []Candidate {
 		return Candidate{
 			ID: ruleID(r), Rule: r, Desc: ruleDesc(r), Grade: g, CF: cf,
 			Survival: sv, WilsonLower: wl, NullP0: p0, NullWeeks: nw,
+			MeanRet:  g.MeanRet,
+			MeanRetT: MeanRetT(g, math.Max(0, cf.NullMatched.Grade.MeanRet)),
 			HoldoutEra: cfg.HoldoutEra, HoldoutWeeks: h.weeks,
 			HoldoutWilsonLower: h.wilsonLower, HoldoutNullP0: h.nullP0,
 			Divisor: divisor, Survives: gate == "", RejectedBy: gate,
@@ -273,13 +315,23 @@ func Discover(obs []Obs, cfg DiscoverConfig) []Candidate {
 		// MEASURED null, not an assumed one. The counterfactual is computed
 		// here rather than after the Wilson gate so the null arm it already
 		// grades — same matched obs, direction randomized — can supply the
-		// rate this rule is judged against. Floored at 0.5 so no rule ever
-		// becomes easier to clear than under the old literal.
+		// rate this rule is judged against. See nullBar for why that rate is
+		// the null's own upper confidence bound and not a flat 0.5.
 		cf := Counterfactual(inSample, r, cfg.MinWeekObs, cfg.MinWeeks)
-		p0 := math.Max(0.5, cf.NullMatched.WinRate)
+		p0 := nullBar(cf.NullCoherent)
 		nullWeeks := cf.NullMatched.Grade.Weeks
 		wl := wilsonLower(winRate(g), g.Weeks, z)
-		if wl <= p0 {
+		// THE SELECTION GATE. Both arms are judged against the SAME measured
+		// null on the SAME matched obs at the SAME corrected alpha; only the
+		// statistic differs. The mean-return null is floored at 0 for the same
+		// reason the Wilson null is floored at 0.5 — the substitution may only
+		// ever raise the bar, never lower it.
+		if cfg.SelectBy == SelectMeanRet {
+			if MeanRetT(g, math.Max(0, cf.NullMatched.Grade.MeanRet)) <= z {
+				reject(r, RejectMeanRet, g, wl, p0, nullWeeks, SurvivalReport{}, cf)
+				continue
+			}
+		} else if wl <= p0 {
 			reject(r, RejectWilson, g, wl, p0, nullWeeks, SurvivalReport{}, cf)
 			continue
 		}
@@ -347,6 +399,7 @@ type holdoutResult struct {
 	weeks       int
 	wilsonLower float64
 	nullP0      float64
+	meanRetT    float64
 	ok          bool
 }
 
@@ -367,12 +420,22 @@ func judgeHoldout(holdout []Obs, r Rule, cfg DiscoverConfig, z float64) holdoutR
 	}
 	// The null is measured on the blind era's own matched observations —
 	// importing the in-sample null would reintroduce exactly the dependence
-	// this gate exists to break. Floored at 0.5 as everywhere else, so the
-	// substitution can only raise the bar.
+	// this gate exists to break. Same bar as in-sample (see nullBar), and the
+	// blind era is short, so its null carries a wide interval and therefore a
+	// high bar — which is the correct way for a thin holdout to be strict.
 	hcf := Counterfactual(holdout, r, cfg.MinWeekObs, cfg.MinHoldoutWeeks)
-	res.nullP0 = math.Max(0.5, hcf.NullMatched.WinRate)
+	res.nullP0 = nullBar(hcf.NullCoherent)
 	res.wilsonLower = wilsonLower(winRate(hg), hg.Weeks, z)
-	res.ok = res.wilsonLower > res.nullP0
+	res.meanRetT = MeanRetT(hg, math.Max(0, hcf.NullMatched.Grade.MeanRet))
+	// The blind era must be cleared on the SAME statistic the in-sample gate
+	// selected on. Selecting on one and confirming on the other would let a
+	// rule be chosen for a property it was never re-tested on, which is not a
+	// weaker holdout so much as a different rule's holdout.
+	if cfg.SelectBy == SelectMeanRet {
+		res.ok = res.meanRetT > z
+	} else {
+		res.ok = res.wilsonLower > res.nullP0
+	}
 	return res
 }
 
@@ -424,6 +487,57 @@ func wilsonLower(phat float64, n int, z float64) float64 {
 		return 0
 	}
 	return clusterstat.WilsonEffAt(phat, float64(n), z).Lo
+}
+
+// wilsonUpper is the top of the interval wilsonLower gives the bottom of. With
+// no trials it returns 1: a null nobody could measure is not a low bar, it is
+// an unclearable one.
+func wilsonUpper(phat float64, n int, z float64) float64 {
+	if n <= 0 {
+		return 1
+	}
+	return clusterstat.WilsonEffAt(phat, float64(n), z).Hi
+}
+
+// nullBar is the rate a rule must clear: the UPPER end of the corrected Wilson
+// interval on the matched null arm's own win rate.
+//
+// It replaces a flat max(0.5, nullWinRate) floor that had made this gate
+// unreachable. The statistic on both sides is a WEEK-TRIAL win rate — a week
+// counts only when the rule's cross-sectional accuracy strictly beats that
+// week's folded naive baseline max(upRate, 1-upRate) — and the chance level of
+// THAT is nowhere near 0.5. Measured 2026-08-06 over 486,599 obs: the 48-rule
+// grid scored 0.0104-0.2460, every rule's floored p0 came back exactly 0.5000
+// so the measured null was never once used, and because the grid is 24 exact
+// negation pairs whose per-week accuracies sum to 1 — at most one arm can win
+// any week — the pair win-rate sums ran 0.072 to 0.403, meaning in roughly 60%
+// of weeks NEITHER direction beat the baseline. A 0.5 bar on a statistic that
+// tops out at 0.25 is not conservatism, it is a closed door, and it closed
+// before RegimeSurvival, FragileThreshold, Counterfactual or the holdout ever
+// ran. The literal almost certainly predates the week-trial grader, when the
+// statistic really was a directional accuracy and 0.5 really was chance.
+//
+// The floor did have a real job — an unmeasurable null must not wave a rule
+// through — and the upper bound does that job properly rather than bluntly:
+// the bar rises on its own when the null rests on few weeks (five null weeks
+// demand ~0.74) and relaxes toward the measured rate as evidence accumulates.
+// It is also the honest comparison. The null is ESTIMATED, so judging a rule's
+// lower bound against the null's point estimate handed the rule an interval
+// and the null none; both sides now carry one, at the same corrected alpha.
+// nullConfZ is the confidence the NULL's own bound is taken at: a plain 95%
+// z, deliberately NOT the family-wise corrected z the rule is held to.
+//
+// The multiplicity correction exists because the SEARCH ranges over the grid
+// once per night ever run. The null is not searched over — it is a nuisance
+// rate estimated once per rule — so charging it the same correction penalises
+// the comparison twice, and measured, that closes the holdout gate on a
+// genuinely repeating edge (TestHoldoutEraKeepsAnEdgeThatRepeats). The rule
+// still faces the full corrected bound; only the guard against a badly
+// measured null is priced at ordinary confidence.
+const nullConfZ = 1.96
+
+func nullBar(null CFArm) float64 {
+	return wilsonUpper(null.WinRate, null.Grade.Weeks, nullConfZ)
 }
 
 // normalQuantile is the inverse standard-normal CDF (probit) via Acklam's

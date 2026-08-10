@@ -14,7 +14,7 @@ import "net/http"
 func (d Deps) regimePostmortems(w http.ResponseWriter, r *http.Request) {
 	rows, err := d.St.RecentRegimePostmortems(r.Context(), 50)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{

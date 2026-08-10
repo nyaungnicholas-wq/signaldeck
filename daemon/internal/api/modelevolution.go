@@ -29,7 +29,7 @@ func (d Deps) modelEvolution(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
 	data, err := d.St.ModelEvolution(r.Context(), since)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{

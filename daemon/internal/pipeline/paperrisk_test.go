@@ -42,7 +42,7 @@ func TestRiskGateEnforcesSectorCapAcrossOneStep(t *testing.T) {
 			{3, 100, 100},
 		})
 		seedPrediction(t, st, sym.ID, md.H1d, 2*86400, 0.90)
-	seedGoodForecast(t, st, sym.ID, md.H1d, 2*86400)
+		seedGoodForecast(t, st, sym.ID, md.H1d, 2*86400)
 	}
 
 	w := &PaperTrader{St: st}

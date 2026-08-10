@@ -107,7 +107,7 @@ func (d Deps) deskRecommendation(w http.ResponseWriter, r *http.Request) {
 	}
 	row, ok, err := d.St.LatestCompositeScore(ctx, s.ID, string(md.H1d))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if !ok {
@@ -321,7 +321,7 @@ func (d Deps) deskTop(w http.ResponseWriter, r *http.Request) {
 	limit := limitParam(r, 12, 50)
 	rows, err := d.St.TopCompositeScores(ctx, 0, "", string(md.H1d))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	proven, winRate, skillNote := d.fleetEdgeSkill(ctx)

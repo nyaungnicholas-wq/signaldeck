@@ -20,7 +20,7 @@ const selfAuditNote = "Deterministic self-audit of the platform's own honesty (n
 func (d Deps) selfAudit(w http.ResponseWriter, r *http.Request) {
 	findings, err := d.St.LatestSelfAudit(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if findings == nil {

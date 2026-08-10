@@ -567,7 +567,6 @@ func (w *PreregRegistrar) fileDigest(rel, override string) (string, error) {
 	return "", lastErr
 }
 
-
 // chargeLook appends a grading-look record when the registry artifact carries a
 // graded_at this chain has not already charged for. Returns 1 if a look was
 // appended, 0 if the grade was already counted.

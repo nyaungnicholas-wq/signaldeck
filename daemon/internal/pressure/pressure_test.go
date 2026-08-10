@@ -56,8 +56,21 @@ func TestEvaluateAntiPredictiveHasNegativeLift(t *testing.T) {
 }
 
 func TestEvaluateInsufficientData(t *testing.T) {
-	if _, err := Evaluate(predictiveSamples(50, false), 5); !errors.Is(err, ErrInsufficientData) {
-		t.Errorf("50 samples: err = %v, want ErrInsufficientData", err)
+	// Expressed in terms of the CONSTANTS, not a magic number. This asserted 50
+	// samples against a 60-row floor; when 7afccf6 deduplicated the feature
+	// store to one row per trading day the floor's unit changed from rows to
+	// days underneath it, and a literal here would have to be found and edited
+	// by hand every time — which is precisely how the unit change went unnoticed
+	// for three days while every leg starved.
+	if _, err := Evaluate(predictiveSamples(minSamples-1, false), 3); !errors.Is(err, ErrInsufficientData) {
+		t.Errorf("%d samples (one below minSamples): err = %v, want ErrInsufficientData",
+			minSamples-1, err)
+	}
+	// The per-fold gate must refuse independently of the sample floor: enough
+	// samples overall, too few to fill each fold.
+	if _, err := Evaluate(predictiveSamples(minSamples, false), minSamples); !errors.Is(err, ErrInsufficientData) {
+		t.Errorf("%d samples across %d folds: err = %v, want ErrInsufficientData",
+			minSamples, minSamples, err)
 	}
 }
 

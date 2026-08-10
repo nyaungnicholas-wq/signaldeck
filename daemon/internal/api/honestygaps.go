@@ -39,7 +39,7 @@ func (d Deps) returnForecast(w http.ResponseWriter, r *http.Request) {
 	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
 	rows, err := d.St.ReturnForecasts(r.Context(), horizon, symbol, 500)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// Descriptive split so a reader can see at a glance how much of the fleet
@@ -72,7 +72,7 @@ const featureRedundancyHowToRead = "fieldCount is how many features the vector c
 func (d Deps) featureRedundancy(w http.ResponseWriter, r *http.Request) {
 	raw, err := d.St.GetMeta(r.Context(), store.MetaFeatureRedundancy)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	var payload any
@@ -94,7 +94,7 @@ const canaryHowToRead = "A new model version does not inherit production. Before
 func (d Deps) canaryTrials(w http.ResponseWriter, r *http.Request) {
 	rows, err := d.St.CanaryTrials(r.Context())
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{
@@ -120,7 +120,7 @@ const datasetVersionsHowToRead = "Each row is a content hash of the exact daily 
 func (d Deps) datasetVersions(w http.ResponseWriter, r *http.Request) {
 	rows, err := d.St.DatasetVersions(r.Context(), 500)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	var revised int
@@ -142,7 +142,7 @@ const priceValidationHowToRead = "Every other data check here is internal consis
 func (d Deps) priceValidation(w http.ResponseWriter, r *http.Request) {
 	raw, err := d.St.GetMeta(r.Context(), store.MetaPriceValidation)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	var payload any

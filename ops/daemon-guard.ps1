@@ -61,6 +61,47 @@ if (Test-Path $lock) {
     Remove-Item $lock -Force -ErrorAction SilentlyContinue
 }
 
+# UNIVERSE FAIL-SAFE. This must run BEFORE the "daemon is up, nothing to do"
+# exit below, because the failure it repairs happens while the daemon is
+# perfectly healthy - and is in fact worst then.
+#
+# ops/signaldeck-refresh.sh widens symbols.active from ~328 to ~2950 for up to
+# an hour a day, then prunes back. A kill inside that window leaves the universe
+# MAXIMALLY OPEN, which is the fail-DANGEROUS direction, and nothing else on the
+# box notices: on 2026-08-06 at 13:15 the sweep died with STATUS_CONTROL_C_EXIT
+# and every worker afterwards ran against 2950 symbols instead of 328.
+#
+# It lives in this script because this is the only 5-minute tick on the machine,
+# so it is where an unowned dangerous state gets found soonest. That is the same
+# reason the maintenance-lock logic above lives here.
+#
+# Detection is a DB marker, not a heuristic: the sweep writes meta 'sweep_open'
+# in the same transaction that widens the universe, so the marker is present
+# exactly when the universe is wide. Repair is delegated to the sweep's own
+# `prune-only` mode rather than reimplemented in SQL here - the keep criterion
+# must exist once, in one language, or recovery and a normal sweep will
+# eventually disagree about which symbols survive.
+#
+# Same holder-plus-expiry shape as the maintenance lock, for the same reason: a
+# live sweep must not be pruned out from under itself, and a hung one must not
+# hold the universe open forever. A live sweep raises the bar to 2h (MAXWAIT is
+# 1h, so this is well clear of a healthy run); with no sweep alive the marker is
+# repaired immediately.
+$refresh = Join-Path $root 'ops\signaldeck-refresh.sh'
+$bash    = 'C:\Program Files\Git\bin\bash.exe'
+if ((Test-Path $refresh) -and (Test-Path $bash)) {
+    $sweeping = Get-CimInstance Win32_Process -Filter "Name='bash.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like '*signaldeck-refresh*' } |
+        Select-Object -First 1
+    $minAge = if ($sweeping) { 7200 } else { 0 }
+    # Never fatal: a universe check must not be able to stop the daemon guard.
+    try {
+        & $bash ($refresh -replace '\\', '/') 'prune-only' $minAge 2>&1 | ForEach-Object { Write-Output $_ }
+    } catch {
+        Write-Output "universe fail-safe check failed: $_"
+    }
+}
+
 if (Get-Process -Name signaldeckd -ErrorAction SilentlyContinue) {
     Write-Output "signaldeckd already running: nothing to do"
     exit 0
@@ -89,6 +130,26 @@ if (Get-Process -Name signaldeckd -ErrorAction SilentlyContinue) {
 #
 # Keeping "SignalDeck Daemon" pointed straight at bin/signaldeckd.exe preserves
 # graceful stop; this task only decides WHEN to (re)start it.
+
+# Provenance preflight. The Windows Daemon task execs bin\signaldeckd.exe
+# directly, so unlike the launchd path (ops/com.signaldeck.daemon.plist ->
+# signaldeck-ctl.sh launch -> build_from_head) a restart never rebuilds, and a
+# binary can outlive the commit it was built from indefinitely. The daemon's own
+# gate refuses an UNATTRIBUTABLE build but says nothing about a stale one, which
+# is how bin\signaldeckd.exe came to sit 22 commits behind HEAD on 2026-08-06
+# across two restarts that changed nothing.
+#
+# The check belongs here and not in the Daemon task's action, for the reason
+# spelled out just above: this script must keep starting the daemon THROUGH its
+# own task, or schtasks /End stops reaching it. Default is warn-and-start; it
+# only refuses when SIGNALDECK_ON_STALE_BINARY=refuse says an operator has
+# chosen an outage over stale data.
+$prov = Join-Path $root 'ops\run-daemon-with-provenance.ps1'
+if (Test-Path $prov) {
+    & $prov -CheckOnly
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }   # it has already said why
+}
+
 $sd = Join-Path $env:SystemRoot 'System32\schtasks.exe'
 & $sd /Run /TN 'SignalDeck Daemon' | Out-Null
 if ($LASTEXITCODE -ne 0) {

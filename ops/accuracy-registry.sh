@@ -430,6 +430,23 @@ if new != text:
     print("README.md live-accuracy section regenerated")
 PY
 
+# README is NOT the only surface carrying this grade. partials/live_accuracy.md
+# and every document in partials/INCLUDES.txt embed the same record, and §8 of
+# STRATEGY_DECK.md embeds figures measured from the same database. Regenerating
+# README alone left all of them a grade behind, so the three gates that police
+# exactly that — live_accuracy --check, deck_facts --check and docs_gate — went
+# RED at 14:05 every day and stayed red until a human ran these commands by hand.
+# Observed twice on 2026-08-09: once as the overnight state, and again the moment
+# this job re-graded. A daily job that predictably breaks the publish gate is the
+# gate's problem, not the operator's, so the same run now refreshes every surface.
+"$PY" "$SD/tools/live_accuracy.py" --write \
+  || echo "WARN: partials/live_accuracy.md not regenerated"
+"$PY" "$SD/tools/live_accuracy.py" --inject $(cat "$SD/partials/INCLUDES.txt") \
+  || echo "WARN: live-accuracy blocks not re-injected"
+# deck_facts reads the 4.9 GB database; a failure here is not fatal to grading.
+"$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md" \
+  || echo "WARN: STRATEGY_DECK.md §8 not re-injected"
+
 # H9: page on VERDICT TRANSITIONS — a predictor changing state (PENDING→FAILED,
 # NO SKILL→SUPPORTED, …) is the page-worthy event; an unchanged state is not.
 # Verdicts are normalized to their leading class so a PENDING first-grade date

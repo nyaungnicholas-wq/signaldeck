@@ -1,19 +1,25 @@
 // Package notify fans daemon notifications out BEYOND the local Mac (Stage 3
-// alert delivery). Three optional, env-configured outbound transports:
+// alert delivery). Five optional, env-configured outbound transports:
 //
 //   - Discord   — SIGNALDECK_DISCORD_WEBHOOK (webhook URL; JSON {content})
 //   - Telegram  — SIGNALDECK_TELEGRAM_BOT_TOKEN + SIGNALDECK_TELEGRAM_CHAT_ID
 //     (Bot API sendMessage)
 //   - Webhook   — SIGNALDECK_WEBHOOK_URL (generic POST JSON {title,body,kind,ts})
+//   - Slack     — SIGNALDECK_SLACK_WEBHOOK (incoming webhook; JSON {text} —
+//     the generic webhook's {title,body,kind,ts} is a 400 invalid_payload there)
+//   - SMTP      — SIGNALDECK_SMTP_HOST + _FROM + _TO (plus optional _PORT,
+//     _USER, _PASS); see slack_smtp.go
 //
 // Design contract (mirrors the fleet's graceful-degradation doctrine):
 // every delivery attempt has a 5s timeout and exactly 1 retry; a transport
 // that still fails records a dq event + a redacted per-transport error and
 // NEVER blocks or fails the caller. Secrets (webhook URLs, bot token) are
 // redacted from every log line, dq detail, and status string. With no
-// transport configured, Send is a pure no-op. There is deliberately NO email
-// transport — email needs SMTP credentials or a provider account; noted as
-// future work, never faked.
+// transport configured, Send is a pure no-op. Email is no longer absent: the
+// SMTP transport (slack_smtp.go) takes the credentials it always needed as
+// named env vars, is allowed ONE attempt rather than two, and records delivery
+// through the same status + dq path as every other transport. The whole
+// fan-out is capped by sendBudget so no transport can hold the watchdog.
 package notify
 
 import (
@@ -99,6 +105,15 @@ type Notifier struct {
 	TelegramChatID string // Telegram chat id (numeric or @channel)
 	WebhookURL     string // generic webhook URL (treated as secret too)
 
+	// Slack + SMTP (slack_smtp.go). Loaded by NewFromEnv via loadExtEnv.
+	SlackWebhook string // Slack incoming-webhook URL (secret — always redacted)
+	SMTPHost     string // SIGNALDECK_SMTP_HOST
+	SMTPPort     string // SIGNALDECK_SMTP_PORT ("" = 587; "465" = implicit TLS)
+	SMTPUser     string // SIGNALDECK_SMTP_USER ("" = no AUTH)
+	SMTPPass     string // SIGNALDECK_SMTP_PASS (secret — always redacted)
+	SMTPFrom     string // envelope + From: address
+	SMTPTo       string // comma-separated recipients
+
 	TelegramAPIBase string        // test hook; "" = https://api.telegram.org
 	HTTP            *http.Client  // test hook; nil = default client
 	DQ              DQ            // failure sink; nil = log-only
@@ -111,13 +126,15 @@ type Notifier struct {
 // NewFromEnv builds the notifier from the SIGNALDECK_* env vars (config.Load
 // exports daemon/.env into the process env before run() constructs this).
 func NewFromEnv(dq DQ) *Notifier {
-	return &Notifier{
+	n := &Notifier{
 		DiscordWebhook: strings.TrimSpace(os.Getenv("SIGNALDECK_DISCORD_WEBHOOK")),
 		TelegramToken:  strings.TrimSpace(os.Getenv("SIGNALDECK_TELEGRAM_BOT_TOKEN")),
 		TelegramChatID: strings.TrimSpace(os.Getenv("SIGNALDECK_TELEGRAM_CHAT_ID")),
 		WebhookURL:     strings.TrimSpace(os.Getenv("SIGNALDECK_WEBHOOK_URL")),
 		DQ:             dq,
 	}
+	n.loadExtEnv() // slack + smtp, same env-name-only rule (slack_smtp.go)
+	return n
 }
 
 func (n *Notifier) discordOn() bool  { return n.DiscordWebhook != "" }
@@ -129,7 +146,7 @@ func (n *Notifier) Enabled() bool {
 	if n == nil {
 		return false
 	}
-	return n.discordOn() || n.telegramOn() || n.webhookOn()
+	return n.discordOn() || n.telegramOn() || n.webhookOn() || n.extOn()
 }
 
 // ConfiguredNames lists the configured transports in stable order.
@@ -147,17 +164,28 @@ func (n *Notifier) ConfiguredNames() []string {
 	if n.webhookOn() {
 		out = append(out, TransportWebhook)
 	}
+	if n.slackOn() {
+		out = append(out, TransportSlack)
+	}
+	if n.smtpOn() {
+		out = append(out, TransportSMTP)
+	}
 	return out
 }
 
 // Send delivers msg to every configured transport, best-effort and
-// sequentially (worst case ~3 transports x 2 attempts x 5s — callers are
+// sequentially, under a hard sendBudget for the WHOLE fan-out (callers are
 // periodic workers, never request handlers). It never returns an error and
 // never panics: failures become dq events + status entries.
 func (n *Notifier) Send(ctx context.Context, m Message) {
 	if n == nil || !n.Enabled() {
 		return
 	}
+	// Cap the whole fan-out. Sequential delivery means every transport added
+	// extends the worst case, and the watchdog must never be held by a wedged
+	// notification host — see sendBudget (slack_smtp.go).
+	ctx, cancel := context.WithTimeout(ctx, sendBudget)
+	defer cancel()
 	if m.Ts == 0 {
 		m.Ts = n.now().Unix()
 	}
@@ -181,6 +209,7 @@ func (n *Notifier) Send(ctx context.Context, m Message) {
 		payload, _ := json.Marshal(m)
 		n.attempt(ctx, TransportWebhook, n.WebhookURL, payload)
 	}
+	n.sendExt(ctx, m) // slack + smtp (slack_smtp.go)
 }
 
 // attempt POSTs payload to url with the 5s-timeout + 1-retry contract and
@@ -225,10 +254,12 @@ func (n *Notifier) post(ctx context.Context, url string, payload []byte) error {
 	return nil
 }
 
-// Redact strips every configured secret (webhook URLs, bot token) from s —
-// applied to ALL error strings before they reach logs, dq events, or status.
+// Redact strips every configured secret (webhook URLs, bot token, Slack
+// webhook, SMTP password) from s — applied to ALL error strings before they
+// reach logs, dq events, or status.
 func (n *Notifier) Redact(s string) string {
-	for _, secret := range []string{n.DiscordWebhook, n.TelegramToken, n.WebhookURL} {
+	secrets := append([]string{n.DiscordWebhook, n.TelegramToken, n.WebhookURL}, n.extSecrets()...)
+	for _, secret := range secrets {
 		if secret != "" {
 			s = strings.ReplaceAll(s, secret, "[redacted]")
 		}
@@ -270,13 +301,15 @@ func (n *Notifier) recordErr(ctx context.Context, name string, err error) {
 	}
 }
 
-// Status snapshots all three remote transports in stable order (configured
+// Status snapshots every remote transport in stable order (configured
 // flag + last delivery/error), for /api/notify-status. Secrets never appear.
 func (n *Notifier) Status() []TransportStatus {
 	out := []TransportStatus{
 		{Name: TransportDiscord},
 		{Name: TransportTelegram},
 		{Name: TransportWebhook},
+		{Name: TransportSlack},
+		{Name: TransportSMTP},
 	}
 	if n == nil {
 		return out
@@ -285,6 +318,8 @@ func (n *Notifier) Status() []TransportStatus {
 		TransportDiscord:  n.discordOn(),
 		TransportTelegram: n.telegramOn(),
 		TransportWebhook:  n.webhookOn(),
+		TransportSlack:    n.slackOn(),
+		TransportSMTP:     n.smtpOn(),
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()

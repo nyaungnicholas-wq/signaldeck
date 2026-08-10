@@ -23,16 +23,20 @@ type ResolutionAccrual struct {
 }
 
 // ResolutionsSince counts, per horizon, the prediction_outcomes rows whose
-// resolved_at falls at/after since: raw rows and distinct (symbol, UTC-day)
+// resolved_at falls at/after since: raw rows and distinct (symbol, SETTLED-MOVE)
 // observations. This is the accrual-rate input for the gate countdown and the
-// weekly self-report ("resolutions added this week"). Note the independent
-// count keys on the PREDICTION's day (ts/86400) — the same dedup rule the
-// track record itself uses — not on when the resolver happened to run.
+// weekly self-report ("resolutions added this week"). The independent count keys
+// on the PREDICTION's settled move — the same dedup rule the track record itself
+// uses — not on when the resolver happened to run.
+//
+// It must stay the same rule as the track record's: this number is the accrual
+// the gate counts down, so folding it more coarsely than the record it feeds
+// would let the gate open on observations the record does not credit.
 func (s *Store) ResolutionsSince(ctx context.Context, since int64) (map[md.Horizon]ResolutionAccrual, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT horizon,
 		       COUNT(*),
-		       COUNT(DISTINCT symbol_id || ':' || CAST(trading_day(ts) AS INTEGER))
+		       COUNT(DISTINCT symbol_id || ':' || CAST(settle_day(settle_ts, ts) AS INTEGER))
 		FROM prediction_outcomes
 		WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND resolved_at >= ?
 		GROUP BY horizon`, since)

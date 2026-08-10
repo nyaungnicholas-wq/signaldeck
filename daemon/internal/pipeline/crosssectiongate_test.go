@@ -37,7 +37,7 @@ func TestGateReleasesAfterTheCrossSectionRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer st.Close() //nolint:errcheck
 	ctx := context.Background()
 	h := md.Horizon("1d")
 
@@ -52,7 +52,7 @@ func TestGateReleasesAfterTheCrossSectionRecovers(t *testing.T) {
 		if err != nil || rec == nil || rec.Day == "" || rec.Day >= today {
 			return false, "no prior-day record"
 		}
-		ok, reason := rec.CrossSection.Usable()
+		ok, reason := rec.Usable()
 		return !ok, reason
 	}
 
@@ -87,7 +87,7 @@ func TestTodaysRecordCannotGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer st.Close() //nolint:errcheck
 	ctx := context.Background()
 	h := md.Horizon("1w")
 	today := time.Now().UTC().Format("2006-01-02")
@@ -101,12 +101,12 @@ func TestTodaysRecordCannotGate(t *testing.T) {
 	if rec.Day < today {
 		t.Fatalf("stamped %q, want today %q", rec.Day, today)
 	}
-	if ok, _ := rec.CrossSection.Usable(); ok {
+	if ok, _ := rec.Usable(); ok {
 		t.Fatal("fixture should be degenerate — the point is that the DAY guard, not Usable(), spares it")
 	}
 	// The runner's guard is rec.Day >= today, so this record cannot gate despite
 	// being unusable.
-	if !(rec.Day >= today) {
+	if rec.Day < today {
 		t.Fatal("today's record must be excluded by the day guard")
 	}
 }
@@ -118,7 +118,7 @@ func TestCrossSectionRecordRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer st.Close() //nolint:errcheck
 	ctx := context.Background()
 	h := md.Horizon("1d")
 

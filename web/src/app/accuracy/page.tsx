@@ -11,6 +11,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { cookies } from "next/headers";
 import Link from "next/link";
 import {
   AccuracyStatusBanner,
@@ -289,7 +290,25 @@ async function loadPublicationStatus(): Promise<{
 } | null> {
   const daemon = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
   try {
-    const res = await fetch(`${daemon}/api/accuracy`, { cache: "no-store" });
+    // FORWARD THE VIEWER'S SESSION COOKIE. This fetch is server-side, so it
+    // carries no browser credential of its own — which was invisible while
+    // SIGNALDECK_PUBLIC_READS defaulted open, and broke this page outright when
+    // it closed: the daemon answered 401, body.status was undefined, and the
+    // page rendered a permanent REFUSED for every visitor including a signed-in
+    // one. A grading outage and a working grader became indistinguishable,
+    // which is the exact F-1 defect this page exists to prevent.
+    //
+    // The viewer's own cookie is used rather than SIGNALDECK_API_TOKEN on
+    // purpose. That token maps to the ADMIN user, so attaching it here would
+    // serve the accuracy record to anonymous visitors and quietly defeat
+    // PublicReads=false — the same inversion the /api/[...path] proxy documents
+    // and deliberately avoids. Not signed in => 401 => the refusal path, which
+    // is the honest answer.
+    const cookie = (await cookies()).toString();
+    const res = await fetch(`${daemon}/api/accuracy`, {
+      cache: "no-store",
+      headers: cookie ? { cookie } : undefined,
+    });
     const body = await res.json();
     if (!res.ok || body?.status !== "OK") {
       return { status: (body?.status ?? "REFUSED") as AccuracyStatus | "REFUSED",

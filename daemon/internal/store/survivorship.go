@@ -281,3 +281,60 @@ func (s *Store) ClearDelisted(ctx context.Context, symbolID int64) error {
 		`UPDATE symbols SET delisted_at=NULL WHERE id=?`, symbolID)
 	return err
 }
+
+// DQSilencedSymbols returns the symbol ids whose FRESHNESS checks carry no
+// information: names recorded as delisted that nothing downstream still needs.
+//
+// Why this exists. A delisted ticker stops printing bars because the company
+// stopped trading, so "last daily bar is old" is a tautology on it, not an
+// incident. Measured on the live DB 2026-08-06: 5,599 of the 5,719 `stale`
+// dq_events in a trailing 24h window (97.9%) named a delisted symbol, arriving
+// at ~1,868/hour — one per delisted row per rate-limit bucket — against ~31/hour
+// from the live universe. The one data-quality signal this platform has was
+// reading 98% noise.
+//
+// Two populations are DELIBERATELY NOT silenced, because a feed fault on them
+// is still actionable:
+//
+//   - Names the paper book still HOLDS. A position outlives the universe
+//     (pipeline.PaperTrader re-admits held-but-inactive symbols exit-only), and
+//     an exit needs a price. A dead feed under an open position IS the incident.
+//   - Names still inside the GRADED population — an unresolved score_outcomes
+//     or prediction_outcomes row. Those are pending accuracy measurements, so a
+//     feed fault there corrupts a published number rather than merely a chart.
+//     prediction_outcomes is the table tools/accuracy_registry.py grades, which
+//     is why it gets its own clause instead of riding on score_outcomes: the
+//     two happen to name the same 16 symbols today, but they are written by
+//     different paths (InsertScore vs UpsertPrediction) and a guard on the
+//     published number must not depend on that coincidence holding.
+//
+// Measured 2026-08-06 on the live DB: 0 delisted symbols held in the paper book
+// and 16 carrying unresolved outcomes, so the exemption costs at most 16
+// events/hour against the ~1,868 it removes.
+//
+// ponytail: paper_positions is keyed (strategy, symbol_id), so the NOT EXISTS
+// scans it rather than seeking — it holds 2 rows today. Add an index on
+// symbol_id if the book ever carries thousands of open positions.
+func (s *Store) DQSilencedSymbols(ctx context.Context) (map[int64]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT sy.id FROM symbols sy
+		WHERE COALESCE(sy.delisted_at, 0) > 0
+		  AND NOT EXISTS (SELECT 1 FROM paper_positions p WHERE p.symbol_id = sy.id)
+		  AND NOT EXISTS (SELECT 1 FROM score_outcomes o
+		                  WHERE o.symbol_id = sy.id AND o.resolved_at IS NULL)
+		  AND NOT EXISTS (SELECT 1 FROM prediction_outcomes po
+		                  WHERE po.symbol_id = sy.id AND po.resolved_at IS NULL)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}

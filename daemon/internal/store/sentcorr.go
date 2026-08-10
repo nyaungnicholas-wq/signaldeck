@@ -279,7 +279,7 @@ type SentimentFeatureStats struct {
 	PolarRows  int    `json:"polarRows"`
 	Headlines  int    `json:"headlinesScored"`
 	NewsRows   int    `json:"newsRowsTotal"`
-	NewsPolar  int     `json:"newsRowsPolar"`
+	NewsPolar  int    `json:"newsRowsPolar"`
 	NewsFirst  string `json:"newsFirstDay"`
 	NewsLast   string `json:"newsLastDay"`
 	LexVersion int    `json:"lexiconVersion"`

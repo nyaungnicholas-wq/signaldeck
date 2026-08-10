@@ -43,6 +43,10 @@ type ConfluenceOutcome struct {
 	EntryPx   float64
 	FwdReturn float64
 	Win       int
+	// SettleTs is the base bar this outcome was graded from — the unit of
+	// independent evidence. 0 means unknown (not yet backfilled, or no bar at or
+	// before it); md.SettleDay falls back to the calendar day for those.
+	SettleTs int64
 }
 
 // ConfluenceEvent is one "confluence setup" detection to persist (day-deduped).
@@ -179,8 +183,15 @@ func (s *Store) UnresolvedConfluenceOutcomes(ctx context.Context, before int64, 
 // ResolveConfluenceOutcome records the realized forward return + win flag for a
 // matured setup (called only once the forward bar exists — no lookahead).
 func (s *Store) ResolveConfluenceOutcome(ctx context.Context, symbolID, ts int64, horizon string, fwdReturn float64, win bool) error {
+	// settle_ts stamped at grade time — the independence unit (md.SettleDay).
+	// Derivation identical to BackfillConfluenceSettleTs so the two agree.
 	_, err := s.w.ExecContext(ctx, `
-		UPDATE confluence_outcomes SET fwd_return=?, win=?, resolved_at=strftime('%s','now')
+		UPDATE confluence_outcomes SET fwd_return=?, win=?, resolved_at=strftime('%s','now'),
+		  settle_ts = (
+		    SELECT MAX(b.ts) FROM bars b
+		    WHERE b.symbol_id = confluence_outcomes.symbol_id
+		      AND b.tf = '1d' AND b.ts <= confluence_outcomes.ts
+		  )
 		WHERE symbol_id=? AND ts=? AND horizon=?`,
 		fwdReturn, boolToInt(win), symbolID, ts, horizon)
 	return err
@@ -190,7 +201,7 @@ func (s *Store) ResolveConfluenceOutcome(ctx context.Context, symbolID, ts int64
 // newest first — the money scoreboard's source. limit <= 0 means all.
 func (s *Store) ResolvedConfluenceOutcomes(ctx context.Context, limit int) ([]ConfluenceOutcome, error) {
 	q := `
-		SELECT o.symbol_id, sy.symbol, sy.market, o.ts, o.horizon, o.direction, o.agree, o.entry_px, o.fwd_return, o.win
+		SELECT o.symbol_id, sy.symbol, sy.market, o.ts, o.horizon, o.direction, o.agree, o.entry_px, o.fwd_return, o.win, o.settle_ts
 		FROM confluence_outcomes o
 		JOIN symbols sy ON sy.id = o.symbol_id
 		WHERE o.resolved_at IS NOT NULL
@@ -210,12 +221,14 @@ func (s *Store) ResolvedConfluenceOutcomes(ctx context.Context, limit int) ([]Co
 		var o ConfluenceOutcome
 		var fwd sql.NullFloat64
 		var win sql.NullInt64
+		var settle sql.NullInt64
 		if err := rows.Scan(&o.SymbolID, &o.Symbol, &o.Market, &o.Ts, &o.Horizon,
-			&o.Direction, &o.Agree, &o.EntryPx, &fwd, &win); err != nil {
+			&o.Direction, &o.Agree, &o.EntryPx, &fwd, &win, &settle); err != nil {
 			return nil, err
 		}
 		o.FwdReturn = fwd.Float64
 		o.Win = int(win.Int64)
+		o.SettleTs = settle.Int64 // 0 when NULL — md.SettleDay reads that as unknown
 		out = append(out, o)
 	}
 	return out, rows.Err()

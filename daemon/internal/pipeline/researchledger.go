@@ -735,12 +735,18 @@ func (w *ResearchLedgerWorker) seedOnce(ctx context.Context, now int64) (bool, e
 				// KindManual: same window, two partner pairings — correlated
 				// (the same pressure calls drive both), so they must not read
 				// as two independent replications.
+				//
+				// SUPERSEDED-SNAPSHOT — BOTH rows below are transcribed
+				// 2026-07-15 experiments, not live-record claims. Each note's
+				// percentage is k/n for that row (1330/2984 = 44.6%,
+				// 1289/2988 = 43.1%), and each collides by coincidence with a
+				// directional-ensemble grade — 44.6% became the (1d, high
+				// conviction) live accuracy in the 2026-08-08 regrade, exactly
+				// as 43.1% had already collided. The literal gate cannot tell a
+				// transcribed blend from a live grade, so the block is
+				// labelled. The marker exempts only the lines beneath it.
 				{kind: rl.KindManual, k: 1330, n: 2984, p0: 0.5563, bf: -1, // below-band: BayesFactorBelow
 					note: "transcribed 2026-07-15: 1w pressure+forecast blend 44.6% vs forecast alone 55.6%"},
-				// SUPERSEDED-SNAPSHOT — a transcribed 2026-07-15 experiment, not a
-				// live-record claim. The 43.1% here is this blend's accuracy and
-				// collides by coincidence with a directional-ensemble grade; the
-				// literal gate cannot tell them apart, so the block is labelled.
 				{kind: rl.KindManual, k: 1289, n: 2988, p0: 0.5318, bf: -1,
 					note: "transcribed 2026-07-15: 1w pressure+expectancy blend 43.1% vs expectancy alone 53.2% (same window as the forecast row — correlated evidence)"},
 			},

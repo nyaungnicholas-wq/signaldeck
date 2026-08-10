@@ -21,13 +21,16 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/forecastmon"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/prereg"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/publication"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -141,6 +144,30 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED_STALE", GraderFresh: false, GeneratedAt: now,
 			GradedAt: reg.GradedAt, Reason: why,
+		})
+		return
+	}
+
+	// COLLAPSE GATE. Refuse to publish figures computed over a window whose
+	// cross-section had collapsed.
+	//
+	// On a collapsed day the model hands the whole universe a handful of
+	// distinct probabilities, so the record is one market-wide call repeated per
+	// symbol while n reads as hundreds of independent trials. Measured
+	// 2026-07-27..08-04: 5-12 distinct values across ~329 symbols, with a
+	// day-clustered design effect of 27.9 — 2,626 rows carrying the information
+	// of 94. Every figure covering those days grades a dead configuration, and
+	// the registry published FAILED/retire=true on what were really 11 market
+	// calls.
+	//
+	// The registry already reports distinct_days per row, so the window is
+	// known rather than assumed. This refuses on the SAME evidence
+	// internal/forecastmon uses, so the publication surface and the monitor
+	// cannot disagree about whether a day was usable.
+	if reason, collapsed, err := d.collapsedGradingWindow(ctx, reg, now); err == nil && collapsed {
+		writeAccuracyRefusal(w, accuracyResponse{
+			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+			GradedAt: reg.GradedAt, Reason: reason,
 		})
 		return
 	}
@@ -313,4 +340,59 @@ func writeJSONStatus(w http.ResponseWriter, code int, body any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// collapsedGradingWindow reports whether the days the registry graded include a
+// collapsed cross-section.
+//
+// The window is taken from the registry's own max distinct_days rather than a
+// fixed lookback: a fixed one would either miss a collapse just outside it or
+// refuse forever because of a collapse the grader never touched. An unreadable
+// window is NOT treated as a collapse — the caller ignores the error and
+// publishes, because refusing on a failed read would wedge the surface shut on
+// a transient database error rather than on evidence.
+func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now time.Time) (string, bool, error) {
+	days := 0
+	for _, r := range reg.Rows {
+		if r.DistinctDays != nil && *r.DistinctDays > days {
+			days = *r.DistinctDays
+		}
+	}
+	if days <= 0 {
+		return "", false, nil
+	}
+	// Trading days are sparser than calendar days; widen so the calendar window
+	// actually contains `days` sessions rather than stopping short of them.
+	since := now.AddDate(0, 0, -(days*2 + 7))
+	stats, err := d.St.ForecastDayStats(ctx, "1d", since)
+	if err != nil {
+		return "", false, err
+	}
+	if len(stats) > days {
+		stats = stats[len(stats)-days:] // the newest `days` sessions
+	}
+	var bad []string
+	for _, st := range stats {
+		fd := forecastmon.DayStat{Day: st.Day, Symbols: st.Symbols, DistinctProbs: st.DistinctProbs}
+		if fd.Collapsed() {
+			bad = append(bad, fmt.Sprintf("%s (%d distinct across %d symbols)",
+				st.Day, st.DistinctProbs, st.Symbols))
+		}
+	}
+	if len(bad) == 0 {
+		return "", false, nil
+	}
+	return buildCollapseReason(bad, len(stats)), true, nil
+}
+
+// buildCollapseReason is split out so the wording is assertable without a
+// database: a refusal nobody can act on is barely better than silence.
+func buildCollapseReason(bad []string, total int) string {
+	return fmt.Sprintf(
+		"the graded window contains %d collapsed cross-section(s) of %d day(s): %s. "+
+			"On a collapsed day the whole universe receives a handful of distinct "+
+			"probabilities, so these rows grade one market-wide call repeated per symbol, "+
+			"not independent per-symbol forecasts. Figures over this window are withheld "+
+			"until it clears.",
+		len(bad), total, strings.Join(bad, ", "))
 }

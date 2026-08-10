@@ -139,7 +139,7 @@ func (d Deps) compositeDetail(w http.ResponseWriter, r *http.Request) {
 	horizon := compositeHorizon(r)
 	row, ok, err := d.St.LatestCompositeScore(r.Context(), s.ID, string(horizon))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if !ok {
@@ -323,7 +323,10 @@ func gradeFleetEdge(rows []store.ResolvedPredictionOutcome) fleetSkill {
 	obs := make([]clusterstat.Obs, 0, len(rows))
 	correct, ups, indepN := 0, 0, 0
 	for _, o := range rows {
-		day := md.TradingDay(o.Ts)
+		// Settled move, not calendar day: this is the fleet EDGE record and it
+		// reads the same rows DirectionalRecord grades, so folding them
+		// differently would publish two independent-N counts for one population.
+		day := md.SettleDay(o.SettleTs, o.Ts)
 		key := [2]int64{o.SymbolID, day}
 		if seen[key] {
 			continue
@@ -429,7 +432,7 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 	// change anyone's rank.
 	rows, err := d.St.TopCompositeScores(ctx, 0, market, string(horizon))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// Previous PASS: 1d compares vs the start of today (UTC); 1w compares vs 7
@@ -441,7 +444,7 @@ func (d Deps) compositeTop(w http.ResponseWriter, r *http.Request) {
 	}
 	prev, err := d.St.CompositeScoresBefore(ctx, cutoff, market, string(horizon))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	prevRank := make(map[int64]int, len(prev))

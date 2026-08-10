@@ -124,7 +124,7 @@ func (d Deps) xsFactor(w http.ResponseWriter, r *http.Request) {
 
 	syms, err := d.St.ListSymbols(ctx, true) // ACTIVE tracked universe
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	ids := make([]int64, 0, len(syms))
@@ -141,7 +141,7 @@ func (d Deps) xsFactor(w http.ResponseWriter, r *http.Request) {
 	// per-symbol query — the screener learned that lesson at ~1,300 round-trips.
 	bars, err := d.St.LastBarsBatch(ctx, ids, md.TF1d, xsfactor.TrailingBars)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 
@@ -168,7 +168,7 @@ func (d Deps) xsFactor(w http.ResponseWriter, r *http.Request) {
 
 	res, err := xsfactor.Rank(horizon, inputs)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 

@@ -1,0 +1,85 @@
+{
+  "captured_at": "2026-08-07T07:49:20.642531+00:00",
+  "db": "data/signaldeck.db",
+  "stats": {
+    "coverage_1d": {
+      "value": 1.0,
+      "higher_is_better": true,
+      "unit": ""
+    },
+    "n_1d": {
+      "value": 16652.0,
+      "higher_is_better": true,
+      "unit": ""
+    },
+    "acc_1d": {
+      "value": 0.4641484506365602,
+      "higher_is_better": true,
+      "unit": "",
+      "guard_by": "coverage_1d"
+    },
+    "naive_1d": {
+      "value": 0.5746456882056209,
+      "higher_is_better": true,
+      "unit": ""
+    },
+    "lift_1d": {
+      "value": -0.11049723756906071,
+      "higher_is_better": true,
+      "unit": "",
+      "guard_by": "coverage_1d"
+    },
+    "brier_1d": {
+      "value": 0.29976014458484074,
+      "higher_is_better": false,
+      "unit": ""
+    },
+    "coverage_1w": {
+      "value": 0.9977327378907592,
+      "higher_is_better": true,
+      "unit": ""
+    },
+    "n_1w": {
+      "value": 14522.0,
+      "higher_is_better": true,
+      "unit": ""
+    },
+    "acc_1w": {
+      "value": 0.4920121195427627,
+      "higher_is_better": true,
+      "unit": "",
+      "guard_by": "coverage_1w"
+    },
+    "naive_1w": {
+      "value": 0.5141165128770142,
+      "higher_is_better": true,
+      "unit": ""
+    },
+    "lift_1w": {
+      "value": -0.022104393334251515,
+      "higher_is_better": true,
+      "unit": "",
+      "guard_by": "coverage_1w"
+    },
+    "brier_1w": {
+      "value": 0.26853783060262,
+      "higher_is_better": false,
+      "unit": ""
+    },
+    "structural_graded_frac": {
+      "value": 0.0,
+      "higher_is_better": true,
+      "unit": ""
+    },
+    "structural_acc": {
+      "value": null,
+      "higher_is_better": true,
+      "unit": ""
+    },
+    "structural_lift": {
+      "value": null,
+      "higher_is_better": true,
+      "unit": ""
+    }
+  }
+}

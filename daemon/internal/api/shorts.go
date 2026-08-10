@@ -90,7 +90,7 @@ func (d Deps) shorts(w http.ResponseWriter, r *http.Request) {
 		}
 		series, err := d.St.ShortVolumeSeries(ctx, sym.ID, days)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		out["symbol"] = symbol
@@ -112,7 +112,7 @@ func (d Deps) shorts(w http.ResponseWriter, r *http.Request) {
 
 	day, err := d.St.LatestShortVolumeDay(ctx)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out["day"] = day
@@ -127,7 +127,7 @@ func (d Deps) shorts(w http.ResponseWriter, r *http.Request) {
 	}
 	ext, err := d.St.ShortVolumeExtremes(ctx, day, shortsMinTotalVol, limitParam(r, 20, 100))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	type extreme struct {

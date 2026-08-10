@@ -1,8 +1,10 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // maxBodyBytes caps every request body. The largest legitimate payload is a
@@ -40,7 +42,7 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 	allowedOrigins := d.Cfg.WebOrigins
 	allowedHosts := d.Cfg.AllowedHosts
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Host allowlist — the request's Host must be one we serve.
 		if !hostAllowed(r.Host, allowedHosts) {
 			httpErr(w, http.StatusForbidden, "forbidden host: "+r.Host+" is not in the daemon's allowed-hosts list")
@@ -54,6 +56,10 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			// GET/POST/OPTIONS is the whole surface: every mutation is a POST.
+			// The Next proxy also exports PUT/DELETE/PATCH, but no daemon route
+			// registers them, so advertising them here would promise a method
+			// the mux answers with 405.
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, "+csrfHeader+", Authorization")
 			w.Header().Set("Access-Control-Max-Age", "600")
@@ -73,6 +79,14 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// equivalent alternative for scripts, mapped to the admin user.
 		uid := d.resolveUser(r)
 		r = withUser(r, uid)
+		// Hand the identity out to the access log. withUser returns a NEW
+		// request, so the log wrapper outside this closure cannot see the
+		// context we just built — and resolving a second time out there would
+		// mean a second session lookup per request. Resolution also has to stay
+		// BELOW the host check so a rejected host costs no database work.
+		if sw, ok := w.(*statusWriter); ok {
+			sw.uid = uid
+		}
 
 		// 4. Rate limit per client key (user id / token / IP), two tiers.
 		writeTier := (r.Method != http.MethodGet && r.Method != http.MethodHead) ||
@@ -103,7 +117,7 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 
 		// 6. Auth enforcement per endpoint.
 		if uid == 0 && d.requiresAuth(r.URL.Path) {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"authentication required"}` + "\n"))
 			return
@@ -114,6 +128,69 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+
+	return d.withAccessLog(guarded)
+}
+
+// withAccessLog records every request that reaches the daemon.
+//
+// It wraps the guard chain rather than sitting inside it, and that is the whole
+// point: the requests worth having a log for are the ones the guards REJECT — a
+// 403 from the host allowlist is someone probing the tunnel, a 429 is abuse or
+// a runaway client, a 401 is a credential that stopped working. Logging from
+// inside secureWith's handler recorded none of them, because every guard
+// returns early.
+//
+// Until this existed there was NO record that a request had ever been served:
+// 2.5 MB of daemon log held 5207 "llm call" lines and not one HTTP request, so
+// "was anything read while the tunnel was up?" had no answer.
+//
+// Path only, never r.URL.RawQuery. A misconfigured TradingView alert puts the
+// shared secret in the query string (which is why tvWebhook rejects that form
+// outright), and an access log is precisely the durable place it must not land.
+func (d Deps) withAccessLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
+		next.ServeHTTP(sw, r)
+		slog.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", sw.code,
+			"uid", sw.uid,
+			"ms", time.Since(start).Milliseconds())
+	})
+}
+
+// statusWriter records the status code on its way out so the access log can
+// report it. WriteHeader may legitimately never be called (an implicit 200 from
+// the first Write), which is why code is seeded to 200 rather than 0.
+type statusWriter struct {
+	http.ResponseWriter
+	code    int
+	written bool
+	uid     int64 // filled by the guard chain once identity is resolved
+}
+
+func (s *statusWriter) WriteHeader(code int) {
+	if !s.written {
+		s.code, s.written = code, true
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusWriter) Write(b []byte) (int, error) {
+	s.written = true
+	return s.ResponseWriter.Write(b)
+}
+
+// Flush keeps streaming handlers (SSE) working through the wrapper — without
+// it the embedded ResponseWriter's Flush is hidden and a stream buffers until
+// the handler returns.
+func (s *statusWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // requiresAuth reports whether an anonymous request to path must be rejected.
@@ -122,7 +199,15 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 //   - the remaining read-only endpoints (shared market data) are public when
 //     SIGNALDECK_PUBLIC_READS=true (the localhost-friendly default).
 func (d Deps) requiresAuth(path string) bool {
-	if path == "/api/health" || strings.HasPrefix(path, "/api/auth/") {
+	// /api/health and /api/ready are PROBES: a monitor, a load balancer or a
+	// deploy script has to reach them before it holds any credential, which is
+	// the whole reason they exist. /api/ready was omitted here and started
+	// 401-ing the moment PublicReads closed — a readiness endpoint nothing can
+	// probe. Both answer a SUMMARY ONLY to an anonymous caller (see health/
+	// ready): the detail behind it — worker names, the build revision, the
+	// specific reasons — is for an authenticated operator, not for whoever
+	// finds the tunnel.
+	if path == "/api/health" || path == "/api/ready" || strings.HasPrefix(path, "/api/auth/") {
 		return false
 	}
 	// The TradingView webhook is authenticated by its own shared secret, not by

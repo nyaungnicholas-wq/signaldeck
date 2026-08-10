@@ -384,13 +384,84 @@ foreach ($f in Get-ChildItem -LiteralPath $work -Filter 'h*.py' -File -ErrorActi
   }
 }
 Ev 'numbering' @{ startsAfter = $hBase }
+
+# Commit-Draft — put each cycle's script into git as soon as it is journaled.
+#
+# The drafts have to BE in git: the protocol's acceptance criteria require a
+# result to reproduce from a cold clone, and a journal entry citing
+# research/eighty/h0007.py is worth nothing if a clone does not contain it.
+# Leaving them untracked also blocks deploys outright — build_from_head refuses
+# a dirty tree and manifest-check refuses untracked paths under research/, so an
+# uncommitted draft stops `signaldeck-ctl.sh deploy` for everyone.
+#
+# Per CYCLE, not at loop-end: this loop is killed often (2026-08-06 alone it
+# exited 0xC000013A at 21:02 and 0x00000001 at 23:02), and an end-of-run commit
+# is exactly the code a kill skips. Committing here means the worst a kill costs
+# is the cycle in flight.
+#
+# CONCURRENCY. Other sessions work in this tree, so this must never sweep their
+# work into its commit. `git commit -- <path>` is the pathspec form: it commits
+# the working-tree content of THAT path only and ignores whatever else is
+# staged, so a colleague's half-staged index cannot ride along. A plain
+# `git commit` here would silently author their changes.
+#
+# Best-effort throughout: index.lock contention with a concurrent git process is
+# expected, and losing a commit costs one retry next cycle, while throwing would
+# kill a research run. Never let git failure escape.
+function Commit-Draft {
+  param([string] $Path)
+  if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
+  try {
+    $rel = [IO.Path]::GetRelativePath($repo, $Path) -replace '\\', '/'
+
+    & git -C $repo add -- $rel 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { Ev 'commit-skip' @{ path = $rel; why = 'add failed' }; return }
+
+    # Nothing staged for this path (unchanged re-run) => nothing to commit.
+    & git -C $repo diff --cached --quiet -- $rel 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { return }
+
+    & git -C $repo commit -q -m "Capture $rel from the Eighty Loop" -- $rel 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { Ev 'committed' @{ path = $rel } }
+    else                     { Ev 'commit-skip' @{ path = $rel; why = "commit exit $LASTEXITCODE" } }
+  } catch {
+    Ev 'commit-skip' @{ path = $Path; why = $_.Exception.Message }
+  }
+}
+
 while ((Get-Date) -lt $deadline -and $cycle -lt $MaxCycles) {
   $cycle++
   Ev 'cycle-start' @{ cycle = $cycle }
 
   # --- 1. PROPOSE ---------------------------------------------------------
+  # Dedup context. This used to be the last 120 RAW lines of the journal, and a
+  # journal entry is ~10 lines, so it reached 5 of 321 entries -- 1.6% of the
+  # corpus. That is why 32 of 262 hypotheses proposed news sentiment: anything
+  # older than five cycles was invisible, including a refutation the daemon had
+  # already recorded at IC -0.0051 over 22,755 observations.
+  #
+  # One line per past hypothesis instead: verdict plus the mechanism head. The
+  # mechanism is what a duplicate is recognisable BY, and the compact form fits
+  # the entire corpus in less prompt than 120 raw lines cost. Budget-capped at
+  # ~24KB (the loop is tested to 29KB) by dropping the OLDEST entries first,
+  # because a recent proposal is the one most likely to be repeated.
   $prior = if (Test-Path $journal) {
-    (Get-Content $journal -Raw) -split "`n" | Select-Object -Last 120 | Out-String
+    $digest = New-Object System.Collections.Generic.List[string]
+    $pending = ''
+    foreach ($line in (Get-Content -LiteralPath $journal)) {
+      if ($line -match '^##\s*Cycle\s*(\d+)\s*-\s*([A-Z]+)') {
+        $pending = '{0}/{1}' -f $Matches[1], $Matches[2]
+      } elseif ($pending -and $line -match '^MECHANISM:\s*(.+)$') {
+        $m = $Matches[1].Trim()
+        if ($m.Length -gt 90) { $m = $m.Substring(0, 90) }
+        $digest.Add("[$pending] $m")
+        $pending = ''
+      }
+    }
+    while ((($digest -join "`n").Length -gt 24000) -and $digest.Count -gt 1) {
+      $digest.RemoveAt(0)
+    }
+    if ($digest.Count) { $digest -join "`n" } else { '(none yet)' }
   } else { '(none yet)' }
 
   $hypothesis = Ask @"
@@ -522,6 +593,31 @@ Output the raw Python file only. No markdown fences, no commentary.
 
   if (-not $code) { Ev 'no-code'; Start-Sleep -Seconds $CyclePauseSec; continue }
 
+  # SELECTION HISTORY. Stamp at WRITE time, not after the judge. The first
+  # version of this stamped after stage 4 and h0276 came out bare, because the
+  # cycle exited at 'insufficient-data' in stage 3 and never reached the judge --
+  # and most cycles do exactly that. The artifact is written either way, so the
+  # stamp has to live where the artifact does.
+  #
+  # Why it matters: a KEEP promoted out of here otherwise arrives in the strategy
+  # grid looking like one candidate among 48, when it survived a search of several
+  # hundred. The grid corrects multiplicity properly (SPA, StepM, Bonferroni over
+  # a 528 divisor) but can only do so if the number travels with the candidate.
+  # Verdict is deliberately NOT stamped: it is unknown at write time for most
+  # cycles, and a field that usually reads UNKNOWN is worse than no field.
+  if (Test-Path -LiteralPath $script) {
+    $body = [IO.File]::ReadAllText($script)
+    if ($body -notmatch '(?m)^# SELECTION HISTORY') {
+      $stamp = "# SELECTION HISTORY -- written by ops/eighty-loop.ps1, do not edit by hand.`n" +
+               "# corpus_size_at_generation: $($hBase + $cycle - 1)`n" +
+               "# cycle_index: $cycle`n" +
+               "# Any multiplicity correction applied downstream MUST use`n" +
+               "# corpus_size_at_generation, not the size of the family this is`n" +
+               "# promoted into.`n`n"
+      [IO.File]::WriteAllText($script, $stamp + $body, (New-Object Text.UTF8Encoding $false))
+    }
+  }
+
   # --- 3. VERIFY: it must actually run -----------------------------------
   $r = Run "h$cycle" "python `"$script`"" 900
   if (-not $r.Ok) {
@@ -625,6 +721,24 @@ $(($out -split "`n" | Select-Object -Last 10) -join "`n")
   }
 
   # --- 4. JUDGE against the protocol's criteria --------------------------
+  # The judge saw the protocol and this run's numbers and nothing else, so it
+  # could not tell a fresh idea from one this corpus had already killed. Reuse
+  # the same digest the proposer gets, filtered to KILLED, rather than building
+  # a second source of truth that can drift from it.
+  # Budget separately from $prior. Measured 2026-08-06: 232 of 232 retained
+  # entries are KILLED, so an unbounded filter hands the judge the WHOLE ~24KB
+  # digest on top of the 11.5KB protocol, the hypothesis and the run output --
+  # past the ~29KB this loop is tested at. The proposer needs breadth to avoid
+  # repeating anything; the judge only needs enough to recognise THIS mechanism,
+  # so give it the most recent kills and cap hard.
+  $refutedList = @($prior -split "`n" | Where-Object { $_ -match '^\[\d+/KILL' })
+  $refuted = ($refutedList | Select-Object -Last 90) -join "`n"
+  while ($refuted.Length -gt 8000 -and $refutedList.Count -gt 1) {
+    $refutedList = $refutedList | Select-Object -Skip 1
+    $refuted = ($refutedList | Select-Object -Last 90) -join "`n"
+  }
+  if (-not $refuted) { $refuted = '(nothing killed yet)' }
+
   $verdict = Ask @"
 Here is a hypothesis and the REAL measured output of the script that tested it.
 
@@ -647,6 +761,14 @@ Answer in at most 10 lines:
 Remember: precision alone is never evidence. A precision at or near the issued
 subset base rate is unskilled classification and must be KILLED however high it
 looks.
+
+PRIOR VERDICTS ON THIS CORPUS. This is a SEPARATE test from the numeric criteria
+above -- do not let it change how you read the numbers. If this hypothesis's
+MECHANISM was already killed below, that is an independent KILL reason, and you
+should name the earlier cycle. A mechanism that keeps being re-proposed and
+re-killed costs a cycle every time and inflates the search this corpus has run.
+Judge the numbers on the numbers; judge the novelty on this list.
+$refuted
 "@ $Lane $null 900
 
   if (-not $verdict) { $verdict = '(judge produced nothing - treated as KILL)' }
@@ -670,6 +792,8 @@ $verdict
 
 Script: ``research/eighty/$(Split-Path $script -Leaf)``
 "@
+
+  Commit-Draft $script
 
   Start-Sleep -Seconds $CyclePauseSec
 }

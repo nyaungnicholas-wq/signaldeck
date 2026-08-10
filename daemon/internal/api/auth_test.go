@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -106,4 +107,63 @@ func getMeStatus(t *testing.T, c *http.Client, base string) int {
 	}
 	drain(t, resp)
 	return resp.StatusCode
+}
+
+// Login had no lockout: the request limiter keys on client, so rotating source
+// addresses bought a fresh budget each time, and one address still had ~170k
+// write-tier attempts a day. Nothing counted failures anywhere.
+func TestLoginLockoutBacksOffAndClearsOnSuccess(t *testing.T) {
+	f := &failCounter{fails: map[string]*failState{}}
+	now := time.Now()
+
+	// Under the threshold a person mistyping their password is never delayed.
+	for i := 0; i < loginLockoutAfter-1; i++ {
+		f.fail("alice", now)
+		if w := f.retryAfter("alice", now); w != 0 {
+			t.Fatalf("locked out after %d failures (threshold is %d): wait=%v", i+1, loginLockoutAfter, w)
+		}
+	}
+
+	// The threshold failure starts the backoff, and the FIRST wait is already
+	// long enough to matter. At the old 1s base the gate cleared between two
+	// ordinary requests and the message rounded down to "try again in 0s".
+	f.fail("alice", now)
+	first := f.retryAfter("alice", now)
+	if first < loginLockoutBase {
+		t.Fatalf("first lockout was %v, want at least %v — too short to slow guessing", first, loginLockoutBase)
+	}
+
+	// Each further failure at least doubles the wait, up to the cap.
+	f.fail("alice", now)
+	if second := f.retryAfter("alice", now); second < first*2 {
+		t.Errorf("backoff did not grow: %v then %v", first, second)
+	}
+
+	// The cap holds, so an attacker cannot lock a real user out indefinitely.
+	for i := 0; i < 40; i++ {
+		f.fail("alice", now)
+	}
+	if w := f.retryAfter("alice", now); w > loginLockoutMax {
+		t.Errorf("backoff %v exceeded the %v cap", w, loginLockoutMax)
+	}
+
+	// Waiting it out clears the gate.
+	if w := f.retryAfter("alice", now.Add(loginLockoutMax+time.Second)); w != 0 {
+		t.Errorf("still locked out past the cap: %v", w)
+	}
+
+	// A success wipes the counter rather than leaving it primed.
+	f.succeed("alice")
+	if w := f.retryAfter("alice", now); w != 0 {
+		t.Errorf("still locked out after a successful sign-in: %v", w)
+	}
+
+	// An unknown username locks out exactly like a real one, so the lockout is
+	// not an account-enumeration oracle.
+	for i := 0; i <= loginLockoutAfter; i++ {
+		f.fail("nosuchuser", now)
+	}
+	if f.retryAfter("nosuchuser", now) <= 0 {
+		t.Error("unknown username did not lock out — the response now distinguishes real accounts from fake ones")
+	}
 }

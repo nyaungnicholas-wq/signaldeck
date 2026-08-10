@@ -85,3 +85,5 @@ freeze/
 # the next run just refetches. Never a build input, so it is ignored explicitly
 # rather than left for someone to discover as a 1 GB surprise in git status.
 tools/alpha/.cache_edgar/
+ops/accuracy_progress.json
+ops/STOP-OVERNIGHT

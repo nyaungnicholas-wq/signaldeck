@@ -29,12 +29,12 @@ func (d Deps) postmortems(w http.ResponseWriter, r *http.Request) {
 
 	clusters, total, err := d.St.PostmortemClusters(r.Context(), sinceTs)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	recent, err := d.St.RecentPostmortems(r.Context(), 100)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 

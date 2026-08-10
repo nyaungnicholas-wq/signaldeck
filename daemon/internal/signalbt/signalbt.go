@@ -63,6 +63,10 @@ type Observation struct {
 	Ts       int64           // prediction bar ts (unix seconds, UTC)
 	Signal   float64         // calibrated P(up) in [0,1] emitted at Ts
 	FwdByLag map[int]float64 // lag(days) -> realized forward return
+	// SettleTs is the base bar this observation was graded from — the unit of
+	// independent evidence the day-cluster folds on. 0 means unknown, which
+	// md.SettleDay reads as "fall back to the calendar day".
+	SettleTs int64
 }
 
 // Params configure the backtest. Zero values are filled with honest defaults by

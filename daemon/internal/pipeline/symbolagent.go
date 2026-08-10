@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/adaptive"
@@ -62,6 +64,14 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 
 	now := time.Now().Unix()
 	upserts, personalCount, graduated := 0, 0, 0
+	// Which floor is keeping symbols off the personal tier, and how many each
+	// is holding. "0 personal" alone was reported every hour for weeks and
+	// said nothing about why; the binding constraint turned out to be four
+	// layers down.
+	// floor -> how many symbol-horizons it holds, and the CLOSEST one to
+	// clearing it. "nearest 34/40" is actionable; a histogram of every
+	// shortfall is not.
+	blockers := map[string]*blockStat{}
 	for _, s := range syms {
 		// Does the symbol's CURRENT regime cell yield global weights? (Used only
 		// to label the fallback tier for a still-learning symbol.)
@@ -112,6 +122,17 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 				return "", fmt.Errorf("upsert %s %s: %w", s.Symbol, h, err)
 			}
 			upserts++
+			if m.TierBlocker != "" {
+				b := blockers[m.TierBlocker]
+				if b == nil {
+					b = &blockStat{need: m.TierNeed}
+					blockers[m.TierBlocker] = b
+				}
+				b.n++
+				if m.TierShortfall > b.best {
+					b.best = m.TierShortfall
+				}
+			}
 			if m.Tier == symbolagent.TierPersonal {
 				personalCount++
 				if !wasPersonal {
@@ -125,9 +146,19 @@ func (w *PerSymbolLearner) Run(ctx context.Context) (string, error) {
 	}
 	// The day floors are reported beside the count so a drop in `personal` is
 	// legible as a change of UNIT, not a loss of data.
-	return fmt.Sprintf("modeled %d symbol×horizon(s) over %d symbols; %d personal, %d newly graduated (personal needs %d rows over %d distinct days)",
+	detail := fmt.Sprintf("modeled %d symbol×horizon(s) over %d symbols; %d personal, %d newly graduated (personal needs %d rows over %d distinct days)",
 		upserts, len(syms), personalCount, graduated,
-		symbolagent.MinPersonal, symbolagent.MinPersonalDays), nil
+		symbolagent.MinPersonal, symbolagent.MinPersonalDays)
+
+	// Name the binding floor, worst-first. Without this, "0 personal" is a
+	// number nobody can act on: every symbol was blocked by adaptive weights
+	// being empty (cells carrying 14-16 distinct days against a floor of 20),
+	// and that took tracing the learner, the tier gate, the adaptive panel and
+	// the stored weights blob to discover.
+	if b := formatBlockers(blockers); b != "" {
+		detail += "; blocked on: " + b
+	}
+	return detail, nil
 }
 
 // marshalSymbolModel serializes a learned model into a storable row. The JSON
@@ -179,4 +210,41 @@ func graduationInsight(symbolID int64, symbol, horizon string, m symbolagent.Mod
 			symbol, m.NDays, horizon, m.NSamples, m.Personality),
 		Data: string(data),
 	}
+}
+
+// blockStat is one floor's hold on the personal tier: how many symbol-horizons
+// it blocks, and the CLOSEST any of them came to clearing it.
+type blockStat struct {
+	n, best, need int
+}
+
+// formatBlockers renders the tally worst-first, one entry PER FLOOR.
+//
+// Split out and pure because the first version was wrong in a way only reading
+// its output revealed: keying the tally on a formatted per-symbol string
+// produced twenty-odd buckets — "rows 20/40 (87), rows 14/40 (84), rows 24/40
+// (82)…" — a histogram of shortfalls rather than an answer to which floor
+// binds. One line per floor, with the nearest miss, is what tells an operator
+// "six more days" instead of "never".
+func formatBlockers(blockers map[string]*blockStat) string {
+	if len(blockers) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(blockers))
+	for k := range blockers {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if blockers[keys[i]].n != blockers[keys[j]].n {
+			return blockers[keys[i]].n > blockers[keys[j]].n
+		}
+		return keys[i] < keys[j]
+	})
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		b := blockers[k]
+		parts = append(parts, fmt.Sprintf("%s (%d symbol-horizon(s), nearest %d/%d)",
+			k, b.n, b.best, b.need))
+	}
+	return strings.Join(parts, ", ")
 }

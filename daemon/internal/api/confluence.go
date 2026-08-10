@@ -74,7 +74,7 @@ func (d Deps) confluence(w http.ResponseWriter, r *http.Request) {
 	}
 	row, ok, err := d.St.LatestConfluenceSetup(r.Context(), s.ID)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if !ok {
@@ -133,7 +133,7 @@ func (d Deps) confluenceTop(w http.ResponseWriter, r *http.Request) {
 	onlySetups := boolParam(r, "onlySetups")
 	rows, err := d.St.TopConfluenceSetups(r.Context(), market, limitParam(r, 50, 500), onlySetups)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if len(rows) == 0 {
@@ -169,7 +169,7 @@ func (d Deps) confluenceTop(w http.ResponseWriter, r *http.Request) {
 func (d Deps) confluenceTrack(w http.ResponseWriter, r *http.Request) {
 	rows, err := d.St.ResolvedConfluenceOutcomes(r.Context(), confluenceTrackWindow)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 
@@ -181,7 +181,7 @@ func (d Deps) confluenceTrack(w http.ResponseWriter, r *http.Request) {
 	dayset := map[int64]bool{}
 	var all, long, short []confluenceTrade
 	for _, o := range rows {
-		day := md.TradingDay(o.Ts)
+		day := md.SettleDay(o.SettleTs, o.Ts)
 		key := [2]int64{o.SymbolID, day}
 		if seen[key] {
 			continue

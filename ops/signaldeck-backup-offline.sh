@@ -44,6 +44,23 @@ if [ -n "${SIGNALDECK_OFFSITE_DIR:-}" ]; then
   OFFSITE="$SIGNALDECK_OFFSITE_DIR"
 elif [ "$(uname -s)" = "Darwin" ]; then
   OFFSITE="$HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups"
+elif [ -n "${OneDrive:-}" ] && [ -d "$OneDrive" ]; then
+  # The Windows counterpart of the iCloud default above, and the reason offsite
+  # went from "never ran" to "runs".
+  #
+  # Every line of logs/backup-offline.log since the migration read "offsite
+  # SKIPPED: no destination configured" — so the database AND every backup of it
+  # lived on one disk, and this machine has exactly one volume (C:). A synced
+  # OneDrive folder is genuinely off-machine in the way that matters: the copy
+  # survives losing this disk. It is NOT a second physical volume, so an
+  # external drive in SIGNALDECK_OFFSITE_DIR still beats it and still wins.
+  #
+  # QUOTA: a generation is ~5GB raw and compresses to ~20%. Check the OneDrive
+  # plan has room before trusting this — a sync that silently stops uploading is
+  # the one failure this whole file exists to prevent. compress_and_prune runs
+  # against the destination too, so the folder stays bounded rather than growing
+  # a generation a night.
+  OFFSITE="$OneDrive/SignalDeckBackups"
 else
   OFFSITE=""
 fi

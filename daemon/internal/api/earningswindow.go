@@ -55,7 +55,7 @@ func (d Deps) earningsWindow(w http.ResponseWriter, r *http.Request) {
 	}
 	p, ok, err := d.St.LatestPeriodicFiling(r.Context(), s.ID)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if ok && p.FiledTs > 0 {

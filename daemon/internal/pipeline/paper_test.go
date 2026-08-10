@@ -98,6 +98,149 @@ func TestPaperTrader_NextBarFillNoLookahead(t *testing.T) {
 	}
 }
 
+// TestPaperTrader_ExitsPositionInDeactivatedSymbol: a position held in a symbol
+// that later leaves the ACTIVE universe must still be reachable by the exit path.
+//
+// Before the fix, Run walked only ListSymbols(ctx, true) and buildStep evaluated
+// every exit inside that walk, so a pruned-but-held name was never examined:
+// no stop, no take-profit, no horizon expiry, no probability flip, no kill-switch
+// flatten could close it. The book could open a position it was structurally
+// unable to exit. This test fails (position still open) without the exit-only
+// re-admission in Run.
+func TestPaperTrader_ExitsPositionInDeactivatedSymbol(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	keep, _ := st.UpsertSymbol(ctx, "AAA", md.Stocks, "") // stays active: holds the as-of clock up
+	drop, _ := st.UpsertSymbol(ctx, "BBB", md.Stocks, "") // gets pruned while held
+
+	// Both names need bars on the same days so the as-of clock covers the exit bar.
+	for _, id := range []int64{keep.ID, drop.ID} {
+		seedDailyPx(t, st, id, [][3]float64{
+			{1, 100, 101},
+			{2, 102, 103}, // entry prediction stamped here
+			{3, 110, 111}, // entry fills at this open
+		})
+	}
+	seedPrediction(t, st, drop.ID, md.H1d, 2*86400, 0.90) // strong long -> open a position
+	seedGoodForecast(t, st, drop.ID, md.H1d, 2*86400)
+
+	w := &PaperTrader{St: st}
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if _, ok, _ := st.PaperPosition(ctx, "flagship-1d", drop.ID); !ok {
+		t.Fatal("setup failed: expected an open position in BBB after a strong-long prediction")
+	}
+
+	// BBB leaves the universe while the book still holds it — the exact situation
+	// a delisting or a universe rotation produces.
+	if err := st.SetSymbolActive(ctx, drop.ID, false); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+
+	// A new day arrives, and the signal flips hard to the downside. Every risk
+	// control in the book agrees this position should close.
+	for _, id := range []int64{keep.ID, drop.ID} {
+		seedDailyPx(t, st, id, [][3]float64{{4, 60, 59}}) // -46% gap: flip AND stop
+	}
+	seedPrediction(t, st, drop.ID, md.H1d, 3*86400, 0.02) // decisive short
+	seedGoodForecast(t, st, drop.ID, md.H1d, 3*86400)
+
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+
+	_, stillOpen, err := st.PaperPosition(ctx, "flagship-1d", drop.ID)
+	if err != nil {
+		t.Fatalf("position: %v", err)
+	}
+	if stillOpen {
+		t.Fatal("position in a DEACTIVATED symbol was never exited: buildStep only " +
+			"walks the active universe, so a held name pruned from it is unreachable " +
+			"by every barrier, the probability flip and the kill-switch flatten alike")
+	}
+
+	// And the exit must be a real, ledgered sell — not a silently dropped position.
+	trades, _ := st.PaperTrades(ctx, "flagship-1d", 10)
+	var sold bool
+	for _, tr := range trades {
+		if tr.SymbolID == drop.ID && tr.Side == "sell" {
+			sold = true
+		}
+	}
+	if !sold {
+		t.Fatalf("expected a ledgered SELL closing BBB; trades=%+v", trades)
+	}
+}
+
+// TestPaperTrader_DeactivatedSymbolNeverEntered: the exit-only re-admission must
+// not become an entry-path bug. A symbol outside the active universe may be
+// walked so its OPEN position stays reachable, but it must never be bought.
+//
+// THE PATH THIS MUST EXERCISE IS CROSS-STRATEGY, and getting that wrong makes the
+// test vacuous. `syms` is built once in Run and shared by every strategy, while
+// PaperPositions is per-strategy. A symbol held by flagship-1d is re-admitted into
+// that shared slice, and flagship-1w then walks it with hasPos == FALSE — which is
+// the only way execution reaches the entry path for an inactive symbol at all
+// (a held symbol always `continue`s out of the exit block first).
+//
+// An earlier version of this test seeded an inactive, UNHELD symbol. That symbol
+// was never re-admitted, so the loop never saw it and the test passed with the
+// `!s.Active` guard deleted — vacuous, and exactly the defect this file's
+// TestTradingDayAtET-style guards exist to prevent. Verified: with the guard
+// removed, this version FAILS and the old one PASSED.
+func TestPaperTrader_DeactivatedSymbolNeverEntered(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	keep, _ := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
+	gone, _ := st.UpsertSymbol(ctx, "ZZZ", md.Stocks, "")
+
+	for _, id := range []int64{keep.ID, gone.ID} {
+		seedDailyPx(t, st, id, [][3]float64{{1, 100, 101}, {2, 102, 103}, {3, 110, 111}})
+	}
+
+	// Step 1: ZZZ is ACTIVE and flagship-1d opens a position in it.
+	seedPrediction(t, st, gone.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, gone.ID, md.H1d, 2*86400)
+	w := &PaperTrader{St: st}
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if _, ok, _ := st.PaperPosition(ctx, "flagship-1d", gone.ID); !ok {
+		t.Fatal("setup failed: flagship-1d should hold ZZZ before it is dropped")
+	}
+
+	// Step 2: the universe drops ZZZ. It is now held by flagship-1d, so Run
+	// re-admits it into the SHARED syms slice — where flagship-1w will meet it
+	// holding no position of its own.
+	if err := st.SetSymbolActive(ctx, gone.ID, false); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+
+	// Step 3: a screaming-long 1w signal on the dropped name. flagship-1w has no
+	// position in it, so without the !s.Active guard the entry path buys it.
+	for _, id := range []int64{keep.ID, gone.ID} {
+		seedDailyPx(t, st, id, [][3]float64{{4, 112, 113}})
+	}
+	seedPrediction(t, st, gone.ID, md.H1w, 3*86400, 0.99)
+	seedGoodForecast(t, st, gone.ID, md.H1w, 3*86400)
+
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+
+	if _, ok, _ := st.PaperPosition(ctx, "flagship-1w", gone.ID); ok {
+		t.Fatal("flagship-1w opened a NEW position in a symbol the universe had already " +
+			"dropped: exit-only re-admission leaked into the entry path across strategies")
+	}
+	trades, _ := st.PaperTrades(ctx, "flagship-1w", 20)
+	for _, tr := range trades {
+		if tr.SymbolID == gone.ID && tr.Side == "buy" {
+			t.Fatalf("flagship-1w BOUGHT a dropped symbol: %+v", tr)
+		}
+	}
+}
+
 // TestPaperTrader_CostChargedOnEntry: after entering, equity < starting cash by
 // exactly the entry cost (marked at the same fill bar's close == open here so
 // there's no price move to confound the cost).

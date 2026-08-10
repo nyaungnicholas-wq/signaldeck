@@ -44,7 +44,7 @@ func (d Deps) trendRead(w http.ResponseWriter, r *http.Request) {
 
 	bars, err := d.St.LastBars(ctx, s.ID, md.TF1d, trendVisibleBars)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 

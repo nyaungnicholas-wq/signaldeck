@@ -42,9 +42,40 @@ var (
 	ErrBadParams        = errors.New("pressure: invalid parameters")
 )
 
+// FLOORS ARE DENOMINATED IN TRADING DAYS, NOT ROWS.
+//
+// This is the correction for a silent unit change. Until 7afccf6 (2026-08-05,
+// "Fold every independence count on the trading day") the feature store returned
+// EVERY re-scoring of a symbol — measured ~39 rows per symbol-day — so a floor of
+// 60 rows was about a day and a half of evidence. That commit deduplicated the
+// same query to ONE ROW PER TRADING DAY, which was correct and necessary: the
+// duplicates were pseudo-replication that let a model fit whichever days were
+// re-scored most.
+//
+// But it changed what these constants COUNT without changing them. 60 rows became
+// 60 trading days, roughly three months, against a live record whose best-covered
+// symbol carries 34. Evaluate has therefore returned ErrInsufficientData for every
+// symbol since that commit landed:
+//
+//	pressure  1,048 symbols graded, last written 2026-08-05 12:15:06
+//	gbm/meanrev  43 symbols graded, last written 2026-08-05 12:15:04
+//
+// With no fresh grade the legs were vetoed, the blend fell to one leg, and the raw
+// cross-section collapsed from 1,475 distinct values across 329 symbols to 78 on
+// 08-07 and 31 on 08-08.
+//
+// The numbers below are NOT a relaxation of the evidence bar. They restore the
+// bar's INTENT — the pre-dedup floor was ~1.5 days of evidence, and 30 trading days
+// is far stricter than that — while making it reachable by a record that actually
+// exists. Grading resumes per symbol AS evidence accrues rather than all at once,
+// and the fleet-AUC veto in predict.go still guards the aggregate, so a leg that
+// grades on thin evidence still cannot enter the blend unless the whole fleet
+// clears chance.
 const (
-	minSamples = 60
-	minPerFold = 12
+	// minSamples is the floor in TRADING DAYS of labeled history.
+	minSamples = 30
+	// minPerFold is the days each walk-forward fold must hold.
+	minPerFold = 10
 )
 
 // Sample is one labeled row: the composite pressure score in [-1,+1] at

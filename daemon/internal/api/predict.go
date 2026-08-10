@@ -34,7 +34,7 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 	}
 	probs, ups, err := d.St.ResolvedPredictionPairs(r.Context(), h, 10000)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	pairs := make([]ensemble.Pair, len(probs))
@@ -47,7 +47,7 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 	// the honest label — the live record is, whatever it says.
 	liveN, liveWin, err := d.St.LiveDirectionalRecord(r.Context(), h)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	live := liveN >= minIndependentN
@@ -123,12 +123,12 @@ func (d Deps) calibration(w http.ResponseWriter, r *http.Request) {
 func (d Deps) regimes(w http.ResponseWriter, r *http.Request) {
 	states, err := d.St.Regimes(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	changes, err := d.St.RecentRegimeChanges(r.Context(), 50)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"states": states, "changes": changes})
@@ -138,7 +138,7 @@ func (d Deps) regimes(w http.ResponseWriter, r *http.Request) {
 func (d Deps) ranking(w http.ResponseWriter, r *http.Request) {
 	rows, err := d.St.LatestRanking(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, rows)
@@ -148,7 +148,7 @@ func (d Deps) ranking(w http.ResponseWriter, r *http.Request) {
 func (d Deps) breakouts(w http.ResponseWriter, r *http.Request) {
 	rows, err := d.St.RecentBreakouts(r.Context(), 80)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, rows)

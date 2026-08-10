@@ -75,6 +75,10 @@ type trackPt struct {
 	up       float64 // realized 1/0
 	fwd      float64 // realized forward return
 	ts       int64
+	// settleTs is the base bar this row was graded from. Carried alongside ts so
+	// the dedup key, the cluster-resampling unit and the IC day buckets all fold
+	// on the SAME thing; they drifted apart the moment one of them moved.
+	settleTs int64
 	market   md.Market
 }
 
@@ -88,7 +92,7 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := d.buildTrackRecord(r.Context(), h)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, resp)
@@ -109,7 +113,7 @@ func (d Deps) trackRecordCached(w http.ResponseWriter, r *http.Request) {
 			return d.buildTrackRecord(ctx, h)
 		})
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, resp)
@@ -132,7 +136,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	seen := map[[2]int64]bool{}
 	var pts []trackPt
 	for _, o := range rows {
-		key := [2]int64{o.SymbolID, md.TradingDay(o.Ts)}
+		key := [2]int64{o.SymbolID, md.SettleDay(o.SettleTs, o.Ts)}
 		if seen[key] {
 			continue
 		}
@@ -143,6 +147,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 			up:       float64(o.Up),
 			fwd:      o.FwdReturn,
 			ts:       o.Ts,
+			settleTs: o.SettleTs,
 			market:   o.Market,
 		})
 	}
@@ -359,7 +364,7 @@ func (d Deps) paperSummaryForTrackRecord(ctx context.Context) map[string]any {
 
 // trackClusterObs projects the independent record into the one shape
 // internal/clusterstat grades: an outcome plus the DAY that clusters it. The
-// day index is md.TradingDay — the same key the (symbol, trading-day) dedup
+// day index is md.SettleDay — the same key the (symbol, settled-move) dedup
 // above uses, so the resampling unit and the dedup unit cannot drift apart.
 func trackClusterObs(pts []trackPt) []clusterstat.Obs {
 	out := make([]clusterstat.Obs, len(pts))
@@ -370,7 +375,7 @@ func trackClusterObs(pts []trackPt) []clusterstat.Obs {
 			dir = clusterstat.DirUp
 		}
 		out[i] = clusterstat.Obs{
-			Day: md.TradingDay(p.ts),
+			Day: md.SettleDay(p.settleTs, p.ts),
 			Hit: bullish == (p.up > 0.5), // same rule as the winRate loop above
 			Dir: dir,
 		}
@@ -404,7 +409,7 @@ func icDayClusteredCI(pts []trackPt) (lo, hi float64, ok bool) {
 	type xy struct{ x, y float64 }
 	byDay := map[int64][]xy{}
 	for _, p := range pts {
-		d := md.TradingDay(p.ts)
+		d := md.SettleDay(p.settleTs, p.ts)
 		byDay[d] = append(byDay[d], xy{x: p.prob - 0.5, y: p.fwd})
 	}
 	days := make([]int64, 0, len(byDay))
@@ -800,7 +805,7 @@ func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
 	byKind := map[string]*agg{}
 	for _, r := range rows {
 		k := string(r.Kind)
-		dk := [3]int64{r.SymbolID, kindOrdinal(k), md.TradingDay(r.Ts)}
+		dk := [3]int64{r.SymbolID, kindOrdinal(k), r.Day}
 		if seen[dk] {
 			continue
 		}
@@ -817,7 +822,7 @@ func (d Deps) regimeTrackRecord(ctx context.Context) map[string]any {
 		a.sumClaimed += r.HistoricalAccuracy
 		// Dir is DirNone: "was this regime call right" is not a directional bet,
 		// so the market-breadth diagnostic must not be computed for it.
-		a.obs = append(a.obs, clusterstat.Obs{Day: md.TradingDay(r.Ts), Hit: r.Correct == 1})
+		a.obs = append(a.obs, clusterstat.Obs{Day: r.Day, Hit: r.Correct == 1})
 	}
 	kinds := map[string]any{}
 	for k, a := range byKind {

@@ -21,7 +21,7 @@ func (d Deps) news(w http.ResponseWriter, r *http.Request) {
 		}
 		items, err := d.St.SymbolNews(r.Context(), s.ID, 30)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		writeJSON(w, items)
@@ -29,7 +29,7 @@ func (d Deps) news(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := d.St.RecentNews(r.Context(), 60)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, items)
@@ -39,10 +39,10 @@ func (d Deps) news(w http.ResponseWriter, r *http.Request) {
 func (d Deps) sectors(w http.ResponseWriter, r *http.Request) {
 	raw, err := d.St.GetJSONRaw(r.Context(), "sector_agg")
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if raw == "" {
 		_, _ = w.Write([]byte("[]"))
@@ -61,7 +61,7 @@ func (d Deps) regimeConditioned(w http.ResponseWriter, r *http.Request) {
 	}
 	daily, err := d.St.LastBars(r.Context(), s.ID, md.TF1d, 800)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{}
@@ -83,7 +83,7 @@ func (d Deps) macro(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	syms, err := d.St.ListSymbols(ctx, false)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// Breadth: fraction of tracked symbols with a positive 1d score.

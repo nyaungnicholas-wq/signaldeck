@@ -43,9 +43,12 @@ export function edgePp(edge: number): string {
   return fmtPp(edge * 100);
 }
 
-/** The 11 fixed-order factor legs: plain-English tile names for SIMPLE mode
+/** The fixed-order factor legs: plain-English tile names for SIMPLE mode
  *  (PRO shows the raw key), plus which legs are CONTEXT (always-neutral —
- *  regime + shortvol inform the read but never vote a direction). */
+ *  regime, hmmregime + shortvol inform the read but never vote a direction).
+ *  A key missing here still renders, but as a NON-context tile under its raw
+ *  name — so any context leg added on the daemon side has to be added here
+ *  too, or the UI shows it as if it voted on direction. */
 export const FACTOR_META: Record<string, { plain: string; context?: boolean }> = {
   technical: { plain: "chart signals" },
   expectancy: { plain: "similar-setup payoff" },
@@ -55,6 +58,7 @@ export const FACTOR_META: Record<string, { plain: string; context?: boolean }> =
   meanrev: { plain: "snap-back model" },
   ranking: { plain: "fleet ranking" },
   regime: { plain: "market regime", context: true },
+  hmmregime: { plain: "volatility state", context: true },
   insiders: { plain: "insider trades" },
   shortvol: { plain: "short-sale volume", context: true },
   breakout: { plain: "breakout watch" },

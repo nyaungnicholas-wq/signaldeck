@@ -17,12 +17,12 @@ func (d Deps) research(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	list, err := d.St.HypothesesByStatus(r.Context(), status, 500)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	counts, err := d.St.HypothesisStatusCounts(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 

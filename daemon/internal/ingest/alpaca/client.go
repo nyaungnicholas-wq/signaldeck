@@ -9,8 +9,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -174,7 +177,9 @@ func (c *Client) backfill(ctx context.Context, st *store.Store, symbolID int64, 
 	}
 }
 
-// fetchBarsPage GETs one page of bars.
+// fetchBarsPage GETs one page of bars, retrying on HTTP 429 via getRetrying
+// (Retry-After when the server sends one, jittered exponential back-off
+// otherwise, bounded by maxBackfillRetries).
 func (c *Client) fetchBarsPage(ctx context.Context, symbol, timeframe string, start time.Time, pageToken string) (barsPage, error) {
 	var page barsPage
 	q := url.Values{}
@@ -188,12 +193,7 @@ func (c *Client) fetchBarsPage(ctx context.Context, symbol, timeframe string, st
 		q.Set("page_token", pageToken)
 	}
 	u := fmt.Sprintf("%s/stocks/%s/bars?%s", c.baseData(), url.PathEscape(symbol), q.Encode())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return page, err
-	}
-	c.auth(req)
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.getRetrying(ctx, u, "bars "+symbol)
 	if err != nil {
 		return page, err
 	}
@@ -386,7 +386,7 @@ func (c *Client) backfillMultiBatch(ctx context.Context, st *store.Store, batch 
 }
 
 // fetchMultiBarsPage GETs one page of the multi-symbol bars endpoint, retrying
-// with exponential back-off on HTTP 429 (up to maxBackfillRetries).
+// on HTTP 429 via getRetrying (up to maxBackfillRetries).
 func (c *Client) fetchMultiBarsPage(ctx context.Context, symbols []string, timeframe string, start time.Time, pageToken string) (multiBarsPage, error) {
 	q := url.Values{}
 	q.Set("symbols", strings.Join(symbols, ","))
@@ -401,41 +401,113 @@ func (c *Client) fetchMultiBarsPage(ctx context.Context, symbols []string, timef
 	}
 	u := fmt.Sprintf("%s/stocks/bars?%s", c.baseData(), q.Encode())
 
+	var page multiBarsPage
+	resp, err := c.getRetrying(ctx, u, "multi bars")
+	if err != nil {
+		return page, err
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return page, fmt.Errorf("alpaca: multi bars: status %d: %s", resp.StatusCode, body)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return page, fmt.Errorf("alpaca: decode multi bars: %w", err)
+	}
+	return page, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// SHARED 429 BACK-OFF (appended block — see the placement note above).
+//
+// Both bars paths route every GET through getRetrying, so throttling is
+// handled once, identically, and VISIBLY. Before this, only the multi-symbol
+// path retried: fetchBarsPage turned a 429 straight into an error and its
+// caller re-drove the whole symbol, producing an unpaced retry storm against
+// an endpoint that was already telling us to slow down.
+
+// maxRetryAfter caps a server-supplied Retry-After so an absurd or hostile
+// header cannot wedge a worker for hours; beyond it we use our own back-off.
+const maxRetryAfter = 60 * time.Second
+
+// parseRetryAfter reads an RFC 9110 Retry-After header in either accepted
+// form — delay-seconds ("30") or HTTP-date — relative to now. ok is false when
+// the header is absent, unparseable, negative, or already in the past, and the
+// caller then falls back to jittered exponential back-off.
+func parseRetryAfter(h string, now time.Time) (time.Duration, bool) {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(h); err == nil {
+		if secs < 0 {
+			return 0, false
+		}
+		return min(time.Duration(secs)*time.Second, maxRetryAfter), true
+	}
+	t, err := http.ParseTime(h)
+	if err != nil {
+		return 0, false
+	}
+	d := t.Sub(now)
+	if d < 0 {
+		return 0, false
+	}
+	return min(d, maxRetryAfter), true
+}
+
+// jitter spreads a back-off uniformly over [d/2, d] so several workers that
+// hit the limit on the same tick do not all retry on the same tick.
+func jitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
+}
+
+// getRetrying performs an authenticated GET, retrying ONLY on HTTP 429 —
+// honouring Retry-After when the server sends one and using jittered
+// exponential back-off (backoff429, doubling) when it does not — bounded by
+// maxBackfillRetries. Every sleep is ctx-aware, so shutdown is never delayed
+// by a back-off. Each throttle is logged at WARN and exhaustion returns an
+// error logged at ERROR: throttling is never silent and the final failure is
+// never swallowed.
+//
+// On a nil error the caller owns resp.Body and must close it. Non-429 statuses
+// (including other non-200s) are returned as-is for the caller to interpret.
+func (c *Client) getRetrying(ctx context.Context, u, what string) (*http.Response, error) {
 	wait := backoff429
 	for attempt := 0; ; attempt++ {
-		var page multiBarsPage
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
-			return page, err
+			return nil, err
 		}
 		c.auth(req)
 		resp, err := c.httpClient().Do(req)
 		if err != nil {
-			return page, err
+			return nil, err
 		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			resp.Body.Close() //nolint:errcheck
-			if attempt >= maxBackfillRetries {
-				return page, fmt.Errorf("alpaca: multi bars: rate limited after %d retries", attempt)
-			}
-			select {
-			case <-ctx.Done():
-				return page, ctx.Err()
-			case <-time.After(wait):
-			}
-			wait *= 2
-			continue
+		if resp.StatusCode != http.StatusTooManyRequests {
+			return resp, nil
 		}
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			resp.Body.Close() //nolint:errcheck
-			return page, fmt.Errorf("alpaca: multi bars: status %d: %s", resp.StatusCode, body)
-		}
-		err = json.NewDecoder(resp.Body).Decode(&page)
+		hdr := resp.Header.Get("Retry-After")
 		resp.Body.Close() //nolint:errcheck
-		if err != nil {
-			return page, fmt.Errorf("alpaca: decode multi bars: %w", err)
+		if attempt >= maxBackfillRetries {
+			slog.Error("alpaca rate limited, giving up",
+				"what", what, "requests", attempt+1, "retries", attempt)
+			return nil, fmt.Errorf("alpaca: %s: rate limited after %d retries", what, attempt)
 		}
-		return page, nil
+		d, fromHeader := parseRetryAfter(hdr, time.Now())
+		if !fromHeader {
+			d = jitter(wait)
+		}
+		slog.Warn("alpaca rate limited, backing off",
+			"what", what, "attempt", attempt+1, "wait", d.String(), "retry_after_honoured", fromHeader)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(d):
+		}
+		wait *= 2
 	}
 }

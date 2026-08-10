@@ -19,7 +19,7 @@ func (d Deps) digest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	text, err := d.St.GetMeta(ctx, briefing.MetaDigestLastText)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if text == "" {

@@ -5,7 +5,7 @@
     "",
     "It exists because of the P0 truth-stop of 2026-08-04: four documents",
     "published mutually inconsistent live-accuracy figures, three asserted",
-    "survivorship control that ALPHA_WORKFLOW.md §B2 measured open, and one cited",
+    "survivorship control that ALPHA_WORKFLOW.md Â§B2 measured open, and one cited",
     "a kill switch living in a different repository. Every one of those was a",
     "status a human typed into markdown with nothing able to contradict it.",
     "",
@@ -22,23 +22,37 @@
     "on -- not the date the prose was edited. Documents citing the live record",
     "carry 2026-08-03, the last successful grade."
   ],
-
   "thresholds": {
     "min_delist_rate_per_year": 0.02
   },
-
   "partials": [],
-
   "_why_external_partials": [
     "Partials produced by a SIBLING generator, not by docs_gate.py. A generated",
     "region in a document may only claim one of these names (or one from",
     "`partials` above); any other name earns no exemption from the",
     "live-accuracy check, even if a matching file is dropped into partials/ by",
-    "hand. tools/live_accuracy.py writes partials/live_accuracy.md and owns its",
-    "drift contract via `--check --inject`."
+    "hand. Three sibling generators write here, and each owns its own drift",
+    "contract, re-derived in CI: tools/live_accuracy.py (from",
+    "data/accuracy_registry.json) via `--check --inject`; tools/deck_facts.py",
+    "(from data/signaldeck.db, opened read-only) via `--check --inject`; and",
+    "tools/controls_evidence.py (from the Go source) via `--inject` plus",
+    "`git diff --exit-code`.",
+    "",
+    "Declaring a name here is NOT on its own an exemption. A region is exempt",
+    "only when partials/<name>.md also exists AND the document's region is",
+    "equal to it, so regenerate the partial and re-inject the document in ONE",
+    "invocation -- `--write partials/<name>.md --inject <doc>` renders the",
+    "block once and writes the same bytes to both. Declaring a name without",
+    "writing the file changes only the gate's failure message."
   ],
-  "external_partials": ["live_accuracy", "live_accuracy.md"],
-
+  "external_partials": [
+    "live_accuracy",
+    "live_accuracy.md",
+    "controls_evidence",
+    "controls_evidence.md",
+    "deck_facts",
+    "deck_facts.md"
+  ],
   "strategy_docs": {
     "ALPHA_WORKFLOW.md": {
       "owner": "Nicholas Nyaung",
@@ -82,6 +96,13 @@
       "status": "ACTIVE",
       "backtest_data": "none"
     },
+    "GATE0_FINDING_2026-08-08.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "1.0.0",
+      "data_as_of": "2026-08-08",
+      "status": "FROZEN",
+      "backtest_data": "none"
+    },
     "HOW_PREDICTORS_WORK.md": {
       "owner": "Nicholas Nyaung",
       "version": "0.1.0",
@@ -94,6 +115,13 @@
       "version": "0.1.0",
       "data_as_of": "2026-08-03",
       "status": "NOT_AUTHORITATIVE",
+      "backtest_data": "none"
+    },
+    "INVERSION_INVESTIGATION_2026-08-08.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "1.0.0",
+      "data_as_of": "2026-08-08",
+      "status": "FROZEN",
       "backtest_data": "none"
     },
     "PAIRS_TRADING.md": {
@@ -131,6 +159,13 @@
       "status": "ACTIVE",
       "backtest_data": "none"
     },
+    "ROOTCAUSE_COLLAPSE_2026-08-08.md": {
+      "owner": "Nicholas Nyaung",
+      "version": "1.0.0",
+      "data_as_of": "2026-08-08",
+      "status": "FROZEN",
+      "backtest_data": "none"
+    },
     "SHIP_READINESS.md": {
       "owner": "Nicholas Nyaung",
       "version": "0.2.0",
@@ -146,7 +181,6 @@
       "backtest_data": "post-survivorship-fix"
     }
   },
-
   "exempt": [
     "DOCS_INDEX.md",
     "AUDIT_SUPERPROMPT.md",
@@ -180,16 +214,14 @@
     "VERIFY_SUPERPROMPT.md",
     "WORK_LEDGER.md"
   ],
-
   "_why_allow": [
     "Each entry below was adjudicated against the actual line on 2026-08-04 and",
     "kept only because the line states something OTHER than a claim about this",
     "system's live accuracy. Every entry is scoped by line_contains, never to a",
     "whole file, so a genuine claim appearing later in the same document still",
-    "fails the build. An entry without a `reason` suppresses nothing — the gate",
+    "fails the build. An entry without a `reason` suppresses nothing â€” the gate",
     "enforces that, so this list cannot rot into a silent bypass."
   ],
-
   "allow": {
     "no-hardcoded-live-accuracy": [
       {
@@ -212,7 +244,7 @@
       {
         "file": "EXECUTION_SPEC.md",
         "line_contains": "guaranteed levy",
-        "reason": "Describes a guaranteed COST — a crossed spread is charged on every entry — which is the opposite of a promotional guarantee. The word is on the forbidden list because of return claims; this is a cost argument for using limit orders."
+        "reason": "Describes a guaranteed COST â€” a crossed spread is charged on every entry â€” which is the opposite of a promotional guarantee. The word is on the forbidden list because of return claims; this is a cost argument for using limit orders."
       }
     ]
   }

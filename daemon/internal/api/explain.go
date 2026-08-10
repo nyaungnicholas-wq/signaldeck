@@ -31,7 +31,7 @@ func (d Deps) explain(w http.ResponseWriter, r *http.Request) {
 	}
 	bars, err := d.St.Bars(r.Context(), s.ID, md.TF1d, 0, 1<<62, 0)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if len(bars) < explainMinBars {

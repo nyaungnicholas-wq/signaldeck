@@ -47,7 +47,7 @@ func (d Deps) featureHealth(w http.ResponseWriter, r *http.Request) {
 	for _, h := range []md.Horizon{md.H1d, md.H1w} {
 		rep, ok, err := pipeline.FeatureHealthFor(ctx, d.St, h)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		if !ok {

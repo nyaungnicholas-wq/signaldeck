@@ -25,6 +25,18 @@ WEB="com.signaldeck.web"
 # shellcheck source=lib-portable.sh
 . "$REPO/ops/lib-portable.sh"
 
+# API credential for this script's own calls.
+#
+# These curls used to be anonymous, which only worked because PublicReads
+# defaulted OPEN. It no longer does: daemon/.env allowlists a public ngrok
+# hostname, and tunnelConfigured() now reads that allowlist as proof of
+# publication (config.go), so reads are closed by default and `up` / `deploy`
+# would 401 without this. Same pattern as ops/anchor-publish.sh.
+# ${SD_AUTH[@]+...} keeps `set -u` happy on bash 3.2.
+SD_TOKEN=$(grep -m1 '^SIGNALDECK_API_TOKEN=' "$REPO/daemon/.env" 2>/dev/null | cut -d= -f2-)
+SD_AUTH=()
+[ -n "$SD_TOKEN" ] && SD_AUTH=(-H "Authorization: Bearer $SD_TOKEN")
+
 kick() { sd_svc_start "$1"; }        # idempotent: loads if needed, then starts
 stopsvc() { sd_svc_stop "$1"; }
 
@@ -122,7 +134,7 @@ case "${1:-status}" in
       curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8322/api/health && break
       sleep 1
     done
-    curl -sf -o /dev/null --max-time 120 -H "X-Signaldeck: 1" http://127.0.0.1:8322/api/dashboard || true
+    curl -sf -o /dev/null --max-time 120 -H "X-Signaldeck: 1" ${SD_AUTH[@]+"${SD_AUTH[@]}"} http://127.0.0.1:8322/api/dashboard || true
     open "http://127.0.0.1:8323" 2>/dev/null || true
     ;;
   collect)
@@ -171,7 +183,7 @@ case "${1:-status}" in
       curl -sf -o /dev/null --max-time 2 http://127.0.0.1:8322/api/health && break
       sleep 1
     done
-    ver="$(curl -sf --max-time 5 -H 'X-Signaldeck: 1' http://127.0.0.1:8322/api/version)" || {
+    ver="$(curl -sf --max-time 5 -H 'X-Signaldeck: 1' ${SD_AUTH[@]+"${SD_AUTH[@]}"} http://127.0.0.1:8322/api/version)" || {
       echo "deploy UNVERIFIED: /api/version did not answer. Do not treat this as deployed."
       exit 1
     }

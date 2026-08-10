@@ -198,6 +198,7 @@ func TestPredictionRunner_UsesLearnedWeightsForRegimeCell(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	seedGradedPressureLeg(t, st, sym.ID, now)
 	if _, err := (&PredictionRunner{St: st}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -275,6 +276,7 @@ func TestSentimentAggregatorWorker_FeedsThePredictionFeature(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	seedGradedPressureLeg(t, st, sym.ID, now)
 	if _, err := (&PredictionRunner{St: st}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -286,15 +288,23 @@ func TestSentimentAggregatorWorker_FeedsThePredictionFeature(t *testing.T) {
 	if math.Abs(vec["sentiment_score"]-0.6) > 1e-9 || vec["sentiment_n"] != 3 {
 		t.Fatalf("sentiment feature not captured: %+v", vec)
 	}
-	// The blend actually consumed it: pressure leg 0.5 + sentiment leg
-	// 0.5+0.6*scale, equal-weight mean.
+	// The FEATURE is captured but the LEG is not blended, and the split is the
+	// point of this test now that the runner defaults to production mode.
+	//
+	// Nothing assigns SentimentLift and the leg is graded on too few symbols to
+	// clear the fleet evidence floor, so it carries no measured edge — and an
+	// unmeasured leg is benched rather than blended in at a conservative weight.
+	// Its measured within-day AUC on the live record is 0.3805, i.e. it ranks
+	// backwards, so blending it in weakly was not the harmless default it looked
+	// like. Capturing the feature regardless is what lets a trainer eventually
+	// grade it and earn the leg back; that is the whole re-admission path, which
+	// is why the vector assertion above still stands.
 	p, ok, err := st.LatestPrediction(ctx, sym.ID, md.H1d)
 	if err != nil || !ok {
 		t.Fatal("prediction missing")
 	}
-	wantRaw := (0.5 + (0.5 + 0.6*ensemble.SentimentScale)) / 2
-	if math.Abs(p.RawProb-wantRaw) > 1e-9 || p.NUsed != 2 {
-		t.Fatalf("raw=%v nUsed=%d, want %v / 2", p.RawProb, p.NUsed, wantRaw)
+	if p.NUsed != 1 || math.Abs(p.RawProb-0.5) > 1e-9 {
+		t.Fatalf("raw=%v nUsed=%d, want 0.5 / 1 (pressure only; ungraded sentiment benched)", p.RawProb, p.NUsed)
 	}
 }
 
@@ -334,6 +344,7 @@ func TestPredictionRunner_ThinSentimentIsAbsent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	seedGradedPressureLeg(t, st, sym.ID, now)
 	if _, err := (&PredictionRunner{St: st}).Run(ctx); err != nil {
 		t.Fatal(err)
 	}

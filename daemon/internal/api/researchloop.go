@@ -29,22 +29,22 @@ func (d Deps) researchLoop(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	runs, err := d.St.LoopRuns(ctx, 200)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	hyps, err := d.St.LoopHypotheses(ctx, 200)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	judgments, err := d.St.LoopJudgments(ctx, 500)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	byGate, err := d.St.LoopRejectionsByGate(ctx)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// Survivors are keyed under "" in the gate map (no gate killed them); lift
@@ -66,7 +66,7 @@ func (d Deps) researchLoop(w http.ResponseWriter, r *http.Request) {
 	// reader can never mistake the second for the first.
 	health, err := d.St.LoopEngineHealth(ctx, researchLoopMinObs, time.Now())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 

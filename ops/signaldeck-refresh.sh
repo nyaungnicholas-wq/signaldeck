@@ -19,11 +19,128 @@ LOG="$SD/logs/refresh.log"
 DOMAIN="gui/$(id -u)"
 MAXWAIT="${SIGNALDECK_SWEEP_MAXWAIT:-3600}"   # cap the active window, seconds (default 60m)
 KEEP="${SIGNALDECK_SWEEP_KEEP:-150}"          # broad breadth sample kept after the sweep
-FORCE="${1:-}"                                 # pass "force" to ignore the once-per-day guard
+FORCE="${1:-}"                                 # "force" ignores the once-per-day guard;
+                                               # "prune-only" runs the fail-safe repair and exits
+MINAGE="${2:-0}"                               # prune-only: only repair a marker at least this old (s)
 
 log(){ echo "$(date '+%F %T') $*" >> "$LOG"; }
 q(){ sd_sqlite_read "$DB" "$1" 2>/dev/null; }          # read
 qw(){ sd_sqlite "$DB" "$1"; }                          # write — waits for the lock
+
+# ── ATOMICITY ────────────────────────────────────────────────────────────────
+# This sweep widens symbols.active from ~328 to ~2950 and narrows it back up to
+# an hour later. For that hour the machine sits in the FAIL-DANGEROUS state:
+# every worker scans 9x the intended set. Nothing here used to make that state
+# recoverable, so when the 13:15 run on 2026-08-06 was killed
+# (LastTaskResult 3221225786 = 0xC000013A, STATUS_CONTROL_C_EXIT) it left
+# 2950/2950 active with no owner — dq-auditor "checked 2950 active symbols",
+# downsampler "rolled up 2950 symbols" — and nothing noticed.
+#
+# Reordering cannot fix this. The prune ranks by 60-day dollar volume, and a
+# symbol only HAS recent bars because it was active; ranking before reactivating
+# ranks stale data. Nor can one SQL transaction fix it: the window spans an hour
+# of work by a SEPARATE process (signaldeckd) that must SEE active=1 committed,
+# so the widening must commit, and an hour-long write lock would deadlock the
+# daemon it is waiting for. The widening is necessarily durable and visible.
+#
+# What is achievable is making the dangerous state self-healing. That needs
+# three properties, and no one of them is sufficient:
+#
+#   1. DETECTABLE — "universe is wide" must be readable from the DB by any
+#      process. Hence meta 'sweep_open', written in the SAME transaction as the
+#      reactivation. Two atomic commits (open, close) mean the invariant
+#      `universe wide  <=>  sweep_open present` cannot be broken by a kill at
+#      any instruction: there is no interleaving that widens without marking.
+#   2. REPAIRABLE WITHOUT THIS PROCESS — the keep criterion is a pure function
+#      of the DB, so recovery must not need anything the dead run held in
+#      memory. prune_sql() reads nothing from the run; react_ts, was_up and
+#      $target are all irrelevant to it.
+#   3. REPAIRED ON A SHORT CLOCK — a marker only inspected by tomorrow's sweep
+#      still leaves ~24h of exposure, which is the incident we are fixing, just
+#      slower. ops/daemon-guard.ps1 already ticks every 5 minutes and already
+#      exists to self-heal STATUS_CONTROL_C_EXIT kills; it now calls
+#      `signaldeck-refresh.sh prune-only`. Exposure: <=5 min, not <=24h.
+#
+# A trap is added as well, and is deliberately NOT the mechanism. daemon-guard.ps1's
+# own header records why, from this same repo's experience: "a console-control
+# kill does not run bash EXIT traps, so the lock outlives the holder". The trap
+# only shortens the signal case from <=5 min to ~1s; correctness rests on 1-3.
+BUSY="PRAGMA busy_timeout=120000;"
+
+# prune_sql — the lean-set criterion, and the ONLY copy of it. Also clears the
+# marker, in the same transaction as the narrowing, closing the window the same
+# way opening it was closed. Note what it does NOT touch: last_full_sweep. A
+# recovery prune must not claim the day was swept, because it was not.
+prune_sql(){
+  local cut=$(( $(date +%s) - 60*86400 ))
+  cat <<SQL
+$BUSY
+BEGIN IMMEDIATE;
+WITH broad AS (SELECT id FROM symbols WHERE active=1 AND market='stocks' AND id NOT IN (SELECT symbol_id FROM user_symbols)),
+   liq AS (SELECT b.id, AVG(bar.close*bar.volume) dv FROM broad b JOIN bars bar ON bar.symbol_id=b.id AND bar.tf='1d' AND bar.ts>=$cut GROUP BY b.id),
+   keep AS (SELECT id FROM liq ORDER BY dv DESC, id ASC LIMIT $KEEP)
+   UPDATE symbols SET active=0 WHERE id IN (SELECT id FROM broad WHERE id NOT IN (SELECT id FROM keep));
+DELETE FROM meta WHERE k='sweep_open';
+COMMIT;
+SQL
+}
+
+# prune_now REASON — run it, verify, retry once. Reports through the LOG only
+# and deliberately prints nothing: the leading `PRAGMA busy_timeout` makes the
+# sqlite3 CLI emit a result row ("120000") on stdout, so a caller writing
+# `after=$(prune_now ...)` would capture "120000328". Callers re-read the count.
+#
+# Safe to call at ANY point in the sweep: if today's bars were never pulled,
+# `liq` simply ranks on the previous 60 days, and if `liq` is empty the result
+# is the user set alone — too LEAN, which is the harmless direction.
+prune_now(){
+  local reason="$1" after
+  qw "$(prune_sql)" >/dev/null
+  after=$(q 'SELECT count(*) FROM symbols WHERE active=1;')
+  if [ "${after:-9999}" -gt 500 ]; then
+    log "prune ($reason) returned $after active (DB busy?) — retrying in 5s"; sleep 5
+    qw "$(prune_sql)" >/dev/null; after=$(q 'SELECT count(*) FROM symbols WHERE active=1;')
+  fi
+  log "prune ($reason): $after active"
+}
+
+# on_interrupt — FAST PATH ONLY. Armed just before the widening and left armed
+# afterwards, where it is a no-op because the marker is gone. Do not mistake
+# this for the safety mechanism: a taskkill /F, a STATUS_CONTROL_C_EXIT console
+# kill, a power loss or a bluescreen all skip it, and the incident this fixes
+# was exactly such a kill. It exists only so the ordinary Ctrl-C costs one
+# second of exposure instead of five minutes.
+on_interrupt(){
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [ -n "$(q "SELECT v FROM meta WHERE k='sweep_open';")" ]; then
+    log "exiting (rc=$rc) with the universe wide open — pruning on the way out"
+    prune_now "interrupt rc=$rc"
+  fi
+  exit "$rc"
+}
+
+# ── 0. FAIL-SAFE REPAIR, before anything else can exit past it. A marker left
+#      in the DB means a previous run died with the universe wide open. This
+#      block must sit ABOVE the once-per-day guard: the killed run of
+#      2026-08-06 would otherwise be skipped by that guard for the rest of the
+#      day while 2950 symbols stayed active.
+stale=$(q "SELECT v FROM meta WHERE k='sweep_open';")
+if [ -n "$stale" ]; then
+  # The marker is the epoch the sweep opened. Anything non-numeric is treated
+  # as ancient, so a corrupt value repairs rather than blocks.
+  case "$stale" in ''|*[!0-9]*) age=999999999 ;; *) age=$(( $(date +%s) - stale )) ;; esac
+  if [ "$age" -ge "$MINAGE" ]; then
+    log "sweep_open set ${age}s ago — a sweep died with the universe wide open; repairing"
+    prune_now "recovery, marker ${age}s old"
+  else
+    log "sweep_open set ${age}s ago, under the ${MINAGE}s ceiling — a sweep is still working"
+  fi
+fi
+if [ "$FORCE" = "prune-only" ]; then
+  [ -z "$stale" ] && log "prune-only: universe not open — nothing to do"
+  exit 0
+fi
 
 # ── 1. target trading day (PT): today if weekday & >=13:05, else prior weekday ──
 dow=$(date +%u); hnow=$((10#$(date +%H)*60 + 10#$(date +%M)))
@@ -51,8 +168,40 @@ log "=== sweep start (trading day $target, maxwait ${MAXWAIT}s) ==="
 
 # ── 2. reactivate the WHOLE known universe BEFORE (re)starting the daemon, so ──
 #      the daemon's startup universe-poller pass covers the full set.
+#
+#      Three changes here, all load-bearing:
+#
+#      (a) qw, not q. `q` is sd_sqlite_read — the READ helper, with stderr
+#          discarded — and it was being used to perform the single most
+#          consequential WRITE in the file. On its Python backend that write is
+#          NEVER COMMITTED (default isolation_level opens an implicit
+#          transaction and con.close() discards it); on its sqlite3-CLI backend
+#          it carries no busy_timeout and simply loses to the daemon, which is
+#          still running at this point and holds the writer. Either way it fails
+#          in silence. logs/refresh.log:
+#             2026-08-03 13:15:04 reactivated full universe: 329 active
+#             2026-08-05 13:15:03 reactivated full universe: 329 active
+#          329 is the LEAN set. On those days the "full-universe refresh" did
+#          not refresh the full universe, and the log said so without anyone
+#          reading it that way.
+#      (b) the marker commits WITH the widening. See ATOMICITY above.
+#      (c) the result is CHECKED. A step whose failure mode is "silently does
+#          nothing" must not also be a step nobody verifies.
 was_up=$(sd_is_running signaldeckd && echo yes || echo no)
-q "UPDATE symbols SET active=1 WHERE market='stocks';"
+trap on_interrupt EXIT INT TERM HUP
+qw "$BUSY
+BEGIN IMMEDIATE;
+INSERT INTO meta(k,v) VALUES('sweep_open', CAST(strftime('%s','now') AS TEXT))
+  ON CONFLICT(k) DO UPDATE SET v=excluded.v;
+UPDATE symbols SET active=1 WHERE market='stocks';
+COMMIT;" >/dev/null
+if [ -z "$(q "SELECT v FROM meta WHERE k='sweep_open';")" ]; then
+  # Nothing committed, so nothing was widened either — that is the whole point
+  # of putting them in one transaction. The universe is still lean; leave it.
+  trap - EXIT INT TERM HUP
+  log "reactivation did not commit (DB locked?) — sweep aborted, universe left lean at $(q 'SELECT count(*) FROM symbols WHERE active=1;') active"
+  exit 1
+fi
 log "reactivated full universe: $(q 'SELECT count(*) FROM symbols WHERE active=1;') active"
 
 # ── 3. ensure the daemon is running (background priority via its plist) ──
@@ -84,21 +233,17 @@ for i in $(seq 1 40); do sd_is_running signaldeckd || break; sleep 1; done
 if sd_is_running signaldeckd; then sd_kill_hard signaldeckd; sleep 1; fi
 log "daemon stopped for a clean prune"
 
-# ── 6. prune back to lean kept set; qw() waits for the lock; verify + retry once ──
-NOW=$(date +%s); CUT=$((NOW-60*86400))
-reprune="WITH broad AS (SELECT id FROM symbols WHERE active=1 AND market='stocks' AND id NOT IN (SELECT symbol_id FROM user_symbols)),
-   liq AS (SELECT b.id, AVG(bar.close*bar.volume) dv FROM broad b JOIN bars bar ON bar.symbol_id=b.id AND bar.tf='1d' AND bar.ts>=$CUT GROUP BY b.id),
-   keep AS (SELECT id FROM liq ORDER BY dv DESC, id ASC LIMIT $KEEP)
-   UPDATE symbols SET active=0 WHERE id IN (SELECT id FROM broad WHERE id NOT IN (SELECT id FROM keep));"
-qw "$reprune"
+# ── 6. prune back to the lean kept set. The criterion now lives in prune_sql()
+#      and nowhere else, because the recovery paths (step 0, the trap, and
+#      ops/daemon-guard.ps1) must narrow to the SAME set this does — a second
+#      copy that drifts would make recovery a different universe than a
+#      completed sweep. The marker clears inside that same transaction.
+prune_now "end of sweep"
 after=$(q 'SELECT count(*) FROM symbols WHERE active=1;')
-if [ "${after:-9999}" -gt 500 ]; then
-  log "re-prune returned $after active (DB busy?) — retrying in 5s"; sleep 5
-  qw "$reprune"; after=$(q 'SELECT count(*) FROM symbols WHERE active=1;')
-fi
-log "pruned back to $after active"
 
-# ── 7. mark this trading day done ──
+# ── 7. mark this trading day done. Deliberately NOT part of prune_sql: the
+#      recovery paths share the prune but must not claim the day was swept,
+#      or a run killed at 13:16 would suppress the retry that repairs it.
 qw "INSERT INTO meta(k,v) VALUES('last_full_sweep','$target') ON CONFLICT(k) DO UPDATE SET v='$target';"
 
 # ── 7b. nightly storage budget report — sdmaint storage-report prints per-table

@@ -113,6 +113,9 @@ type ScoreOutcome struct {
 	Score      float64  `json:"score"`
 	FwdReturn  *float64 `json:"fwdReturn"` // nil until resolved
 	ResolvedAt *int64   `json:"resolvedAt"`
+	// SettleTs is the base bar this outcome was graded from — the unit of
+	// independent evidence (SettleDay). 0 = unknown, folds back to the day.
+	SettleTs int64 `json:"-"`
 }
 
 // Expectancy is a conditional forward-return statistic: "when this symbol was

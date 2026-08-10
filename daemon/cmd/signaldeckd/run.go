@@ -26,6 +26,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/discovery"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/evidence"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/forecastmon"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/hud"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
@@ -212,6 +213,7 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		&pipeline.PredictionRunner{St: st},
 		&pipeline.PredictionResolver{St: st},
 		&pipeline.RegimeRunner{St: st},
+		&pipeline.HMMRegimeRunner{St: st},
 		&pipeline.RankingRunner{St: st},
 		&pipeline.BreakoutRunner{St: st},
 		&pipeline.SentimentTagger{St: st, LLM: llmClient},
@@ -809,6 +811,17 @@ func learningWorkers(st *store.Store) []workers.Worker {
 		// windows; every grade runs a self-attack battery whose failures enter
 		// the same evidence chain. Audit surface only — mutates nothing live.
 		pipeline.NewResearchLedgerWorker(st),
+		// Forecast integrity monitor: forecast-monitor (24h) is the only thing
+		// watching for the two SILENT deaths this forecaster has actually
+		// suffered — a collapsed cross-section (6 distinct probabilities across
+		// 328 symbols for eight straight days, 2026-07-27..08-04, with every
+		// dashboard green throughout) and a calibration inversion (the >=70%
+		// bucket realizing BELOW the base rate). It returns an ERROR when either
+		// trips, which is the delivery mechanism: /api/health reports any worker
+		// whose latest run did not deliver, so a collapse turns the daemon
+		// degraded within a day and needs no alert transport — this machine has
+		// none configured. It measures and reports; it never adjusts a forecast.
+		&forecastmon.Monitor{Src: forecastmon.NewStoreSource(st)},
 		// Pre-registration registrar: freezes what each structural predictor
 		// CLAIMS into a hash-chained record BEFORE its forecasts resolve
 		// (first gradable 2026-08-07). The value of a pre-registration is
@@ -1152,6 +1165,15 @@ func weeklyProofWorkers(st *store.Store, llmClient llm.Client) []workers.Worker 
 // measure the gap between two consecutive scheduled fires. A worker that
 // declines to schedule (zero time, the documented "no calendar opinion") falls
 // back to Interval(), exactly as the runner does.
+// maxDerivedCadence bounds what stalenessInterval will believe a schedule when
+// it asks the schedule how often it fires. The longest cadence this fleet
+// actually runs is weekly (WeeklyAtET — briefing/weekly.go, pipeline/cot.go), so
+// 8 days clears every real schedule while refusing to hand an unbounded silence
+// budget to a broken one. It is the ceiling that health.minThreshold's floor was
+// always missing: without it, the more thoroughly a schedule breaks, the longer
+// the watchdog waits before saying so.
+const maxDerivedCadence = 8 * 24 * time.Hour
+
 func stalenessInterval(w workers.Worker) time.Duration {
 	sw, ok := w.(workers.ScheduledWorker)
 	if !ok {
@@ -1169,14 +1191,36 @@ func stalenessInterval(w workers.Worker) time.Duration {
 	// Never report a cadence TIGHTER than the poll tick: a schedule that fires
 	// more often than the worker wakes cannot be met, and shortening the
 	// threshold below the tick would re-create the false positive.
-	if gap := second.Sub(first); gap > w.Interval() {
+	gap := second.Sub(first)
+	if gap > maxDerivedCadence {
+		// A derived cadence longer than any schedule this fleet actually has is
+		// not a cadence — it is a broken schedule reporting itself as healthy.
+		//
+		// Measured 2026-08-02..08-06: TradingDayAtET tested OpenForBars (true
+		// only 09:45-16:00 ET) against evening fire times, so finra-shorts
+		// (18:30) and finra-shortint (18:45) matched on no day, exhausted the
+		// 10-day loop and fell through ~10 days out on every reschedule. This
+		// function faithfully derived that 10-day gap, StaleWorkers tripled it,
+		// and the two dead feeds bought themselves a ~30-day silence budget.
+		// The watchdog was fed its threshold by the very schedule it polices,
+		// so the deader the schedule the looser the alarm.
+		//
+		// Clamping alone would only shorten that budget. The cadence is also
+		// LOGGED, because the implausible number is itself the bug signal and
+		// silence is precisely how this hid for four days.
+		slog.Warn("implausible derived worker cadence — clamping; the schedule is probably broken",
+			"worker", w.Name(), "derived", gap, "clampedTo", maxDerivedCadence)
+		gap = maxDerivedCadence
+	}
+	if gap > w.Interval() {
 		return gap
 	}
 	return w.Interval()
 }
 
-// GET /api/notify-status. Email is deliberately NOT a transport — it needs
-// SMTP credentials or a provider account (documented as future work).
+// GET /api/notify-status. Email IS a transport now (SMTP, see
+// notify/slack_smtp.go); like every remote transport it stays dark until the
+// operator supplies credentials in daemon/.env.
 func remoteNotifier(st *store.Store) *notify.Notifier {
 	n := notify.NewFromEnv(st)
 	if n.Enabled() {
@@ -1192,12 +1236,12 @@ func remoteNotifier(st *store.Store) *notify.Notifier {
 		// stops being optional.
 		if local := notify.LocalTransport(); local != "" {
 			slog.Info("remote notify: no transports configured — alerts stay local-only "+
-				"(set SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, or SIGNALDECK_WEBHOOK_URL in daemon/.env)",
+				"(set SIGNALDECK_SLACK_WEBHOOK, SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, SIGNALDECK_WEBHOOK_URL, or SIGNALDECK_SMTP_HOST+SIGNALDECK_SMTP_FROM+SIGNALDECK_SMTP_TO in daemon/.env)",
 				"localTransport", local)
 		} else {
 			slog.Warn("remote notify: no transports configured AND this platform has no local "+
 				"desktop channel — ALERTS REACH NOBODY "+
-				"(set SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, or SIGNALDECK_WEBHOOK_URL in daemon/.env)",
+				"(set SIGNALDECK_SLACK_WEBHOOK, SIGNALDECK_DISCORD_WEBHOOK, SIGNALDECK_TELEGRAM_BOT_TOKEN+SIGNALDECK_TELEGRAM_CHAT_ID, SIGNALDECK_WEBHOOK_URL, or SIGNALDECK_SMTP_HOST+SIGNALDECK_SMTP_FROM+SIGNALDECK_SMTP_TO in daemon/.env)",
 				"platform", runtime.GOOS)
 		}
 	}

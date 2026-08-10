@@ -42,7 +42,7 @@ func (d Deps) shortInterest(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := d.St.ShortInterestRecent(ctx, s.ID, 8)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{
@@ -83,7 +83,7 @@ func (d Deps) cryptoPerp(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().Add(-time.Duration(hours) * time.Hour).Unix()
 	series, err := d.St.CryptoPerpSeries(ctx, s.ID, since)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{
@@ -108,7 +108,7 @@ func (d Deps) cot(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().AddDate(-1, 0, 0).Format("2006-01-02")
 	rows, err := d.St.COTSince(ctx, since)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	type contractOut struct {
@@ -153,7 +153,7 @@ func (d Deps) stocktwitsSentiment(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().Add(-time.Duration(hours) * time.Hour).Unix()
 	series, err := d.St.StocktwitsSeries(ctx, s.ID, since)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{
@@ -189,7 +189,7 @@ func (d Deps) wikiAttention(w http.ResponseWriter, r *http.Request) {
 	}
 	series, err := d.St.WikiViewsSeries(ctx, s.ID, days)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{
@@ -235,7 +235,7 @@ func (d Deps) cboePC(w http.ResponseWriter, r *http.Request) {
 	}
 	series, err := d.St.CboePCSeries(ctx, days)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{
@@ -267,7 +267,7 @@ func (d Deps) tvQuote(w http.ResponseWriter, r *http.Request) {
 	}
 	q, ok, err := d.St.LatestTVQuote(ctx, s.ID)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if !ok {

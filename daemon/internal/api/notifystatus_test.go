@@ -61,8 +61,8 @@ func getNotifyStatus(t *testing.T, srv *httptest.Server) notifyStatusBody {
 // exists.
 func TestNotifyStatusNilNotifier(t *testing.T) {
 	body := getNotifyStatus(t, newNotifyServer(t, nil))
-	if len(body.Transports) != 4 {
-		t.Fatalf("transports = %d, want 4 (local desktop + discord + telegram + webhook)", len(body.Transports))
+	if len(body.Transports) != 6 {
+		t.Fatalf("transports = %d, want 6 (local desktop + discord + telegram + webhook + slack + smtp)", len(body.Transports))
 	}
 	byName := map[string]notifyTransportRow{}
 	for _, tr := range body.Transports {
@@ -83,7 +83,7 @@ func TestNotifyStatusNilNotifier(t *testing.T) {
 	if local.Note == "" {
 		t.Errorf("%s row = %+v, want an honest note about untracked delivery", wantLocal, local)
 	}
-	for _, name := range []string{"discord", "telegram", "webhook"} {
+	for _, name := range []string{"discord", "telegram", "webhook", "slack", "smtp"} {
 		tr := byName[name]
 		if tr.Configured {
 			t.Errorf("%s configured with nil notifier", name)
@@ -92,8 +92,11 @@ func TestNotifyStatusNilNotifier(t *testing.T) {
 			t.Errorf("%s missing env hint: %+v", name, tr)
 		}
 	}
-	if !strings.Contains(body.Email, "not supported") {
-		t.Errorf("email note = %q, want an honest not-supported note", body.Email)
+	// Email IS a transport now (SMTP). The honest note names the env vars
+	// that enable it, so assert that rather than a stale "not supported" —
+	// pinning the old string would pin the gap the SMTP transport closes.
+	if !strings.Contains(body.Email, "SIGNALDECK_SMTP_HOST") {
+		t.Errorf("email note = %q, want it to name the SMTP env vars", body.Email)
 	}
 }
 

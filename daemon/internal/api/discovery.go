@@ -42,19 +42,19 @@ func (d Deps) candidatesList(w http.ResponseWriter, r *http.Request) {
 	}
 	cands, err := d.St.Candidates(r.Context(), status)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// Broad-universe wave: the STREAM cap governs the streamed hot set only.
 	active, err := d.St.StreamedSymbolCount(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// The MONITOR budget: streamed + daily-only universe, bounded by UniverseCap.
 	universeActive, err := d.St.DailyUniverseCount(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if cands == nil {
@@ -118,7 +118,7 @@ func (d Deps) candidateAdd(w http.ResponseWriter, r *http.Request) {
 	streamCap := discovery.SymbolCap()
 	active, err := d.St.StreamedSymbolCount(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// Adding an already-streamed symbol doesn't grow the hot set (only touches
@@ -141,7 +141,7 @@ func (d Deps) candidateAdd(w http.ResponseWriter, r *http.Request) {
 		if body.Market == md.Stocks {
 			uCount, uErr := d.St.DailyUniverseCount(r.Context())
 			if uErr != nil {
-				httpErr(w, 500, uErr.Error())
+				httpInternal(w, uErr)
 				return
 			}
 			if active+uCount >= universe.UniverseCap() {
@@ -158,11 +158,11 @@ func (d Deps) candidateAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.St.AddUserSymbol(r.Context(), userID(r), sym.ID); err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if err := d.St.SetCandidateStatus(r.Context(), body.Symbol, body.Market, "added"); err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	// streaming = it got a live-ws tick slot (crypto always streams via Kraken).
@@ -192,17 +192,17 @@ func (d Deps) candidateMonitorAll(w http.ResponseWriter, r *http.Request) {
 
 	cands, err := d.St.Candidates(r.Context(), "new")
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	streamed, err := d.St.StreamedSymbolCount(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	uCount, err := d.St.DailyUniverseCount(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	cap := universe.UniverseCap()
@@ -226,11 +226,11 @@ func (d Deps) candidateMonitorAll(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err := d.St.AddUserSymbol(r.Context(), uid, sym.ID); err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		if err := d.St.SetCandidateStatus(r.Context(), c.Symbol, c.Market, "added"); err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		if c.Market == md.Stocks {
@@ -266,7 +266,7 @@ func (d Deps) candidateDismiss(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.St.SetCandidateStatus(r.Context(), body.Symbol, body.Market, "dismissed"); err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})

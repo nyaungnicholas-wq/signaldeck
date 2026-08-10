@@ -1251,6 +1251,315 @@ def superseded_clause(con: sqlite3.Connection) -> str:
     return " AND superseded_by IS NULL" if "superseded_by" in cols else ""
 
 
+# --------------------------------------------------------------------------- #
+# SETTLEMENT QUARANTINE — outcomes graded against a bar that had not finished
+# --------------------------------------------------------------------------- #
+#
+# PredictionResolver.Run froze a label as soon as a forward bar EXISTED. Its
+# only clock check was `now < target -> skip`, and `target` is the next
+# session's bar STAMP — ET midnight for stocks, UTC midnight for crypto — which
+# ingest creates at the OPEN. So a resolver pass running during that session
+# read a bar whose Close was the live price, wrote it in as a close-to-close
+# outcome, and never revisited it. The SETTLEMENT GUARD at
+# daemon/internal/pipeline/predict.go:1107 closes that forward by refusing to
+# resolve until a bar STRICTLY AFTER the forward bar exists.
+#
+# The guard is NOT in the deployed binary, so this is not a closed window and a
+# resolved_at CUTOFF would be a lie with a shelf life: it would stop excluding
+# rows that are still being minted. The predicate below is STRUCTURAL and
+# per-row. It reconstructs the same base / target / forward bars the resolver
+# used and asks whether the label was frozen before that forward bar's session
+# had actually closed, so it keeps selecting correctly while contamination
+# continues. It does NOT read prediction_outcomes.basis_epoch: that column has
+# no reader in the daemon or in this grader, so stamping it excludes nothing
+# from any published number.
+#
+# EXCLUDED, NEVER RELABELLED — and that distinction is the whole answer to
+# audits/2026-08-06-1d-label-disagreements.md, which rejects "a resolved_at-
+# selected subset". That audit is right about the operation it rejects.
+# REWRITING such a subset would restate ~1,557 rows whose disagreement with a
+# recomputation is ordinary bar revision rather than the partial-bar defect, and
+# no query can tell those two apart row by row. Quarantine makes no such claim
+# and needs no such separation: it does not select rows that DISAGREE with
+# anything, it selects rows whose grading INPUT was not final when the grader
+# read it — which is knowable exactly, per row, from the bar stamps alone. A
+# quarantined row is not "known wrong"; it is ungradable, and the ones whose
+# label happens to match are matching by luck. Nothing is written, nothing is
+# restated, every row stays in the table exactly as frozen, and the prequential
+# property the audit protects is untouched — an observation is dropped from a
+# tally, not given a new answer.
+#
+# What it does NOT buy: the surviving population is free of the partial-bar
+# defect, not of ordinary bar revision, which the same audit measures at 2.83%
+# among after-close rows. Quarantine removes one mechanism; it does not make
+# the record vintage-independent.
+
+# Wall clock from a forward bar's STAMP to the instant its close is final.
+# Stock 1d bars are stamped at ET midnight (bars.ts % 86400 is 14400 under EDT,
+# 18000 under EST), so +16h is 16:00 ET on every trading day — the DST
+# transitions that would break the offset land on Sundays, which are not
+# sessions. Crypto 1d bars are stamped at UTC midnight and the day is complete a
+# full 24h later.
+SETTLEMENT_CLOSE_SECS = {"stocks": 16 * 3600, "crypto": 24 * 3600}
+
+# horizonSecs from daemon/internal/pipeline/predict.go:249. The "<horizon>#pm"
+# benchmark rows resolve on the BASE horizon's clock (the resolver loops over h
+# and passes horizonSecs(h) for both hh values), which is why the match is a
+# prefix and not an equality.
+_HORIZON_SECS = "(CASE WHEN po.horizon LIKE '1w%' THEN 604800 ELSE 86400 END)"
+_BASE_TS = ("(SELECT MAX(b.ts) FROM bars b WHERE b.symbol_id = po.symbol_id"
+            " AND b.tf = '1d' AND b.ts <= po.ts)")
+_FWD_TS = ("(SELECT MIN(f.ts) FROM bars f WHERE f.symbol_id = po.symbol_id"
+           " AND f.tf = '1d' AND f.ts >= " + _BASE_TS + " + " + _HORIZON_SECS + ")")
+_CLOSE_OFFSET = (
+    "(CASE WHEN (SELECT sy.market FROM symbols sy WHERE sy.id = po.symbol_id) = 'crypto'"
+    f" THEN {SETTLEMENT_CLOSE_SECS['crypto']} ELSE {SETTLEMENT_CLOSE_SECS['stocks']} END)")
+
+# The instant the row's forward bar became final, or NULL when the resolver's
+# own reconstruction no longer holds — no base bar, no forward bar, or a forward
+# bar further out than the 3x-horizon gap the resolver itself refuses. NULL is
+# UNVERIFIABLE, which is not the same as settled: `resolved_at >= NULL` is NULL,
+# so such a row is quarantined too, and counted under its own name below rather
+# than folded into the defect count.
+SETTLEMENT_AT = (
+    f"(SELECT CASE WHEN {_FWD_TS} - ({_BASE_TS} + {_HORIZON_SECS}) > 3 * {_HORIZON_SECS}"
+    f" THEN NULL ELSE {_FWD_TS} + {_CLOSE_OFFSET} END)")
+
+SETTLEMENT_PREDICATE = f"AND po.resolved_at >= {SETTLEMENT_AT}"
+
+
+def settlement_clause(con: sqlite3.Connection) -> str:
+    """The ONE definition of "this outcome was graded against an unfinished bar".
+
+    Empty when the source carries nothing to reconstruct against — a snapshot,
+    an in-memory fixture. That is a NON-exclusion, and measure_settlement_
+    quarantine reports it as unapplied so the absence of a filter can never read
+    as a clean population.
+    """
+    have = {r[0] for r in con.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND name IN ('bars', 'symbols')")}
+    return SETTLEMENT_PREDICATE if {"bars", "symbols"} <= have else ""
+
+
+def measure_settlement_quarantine(con: sqlite3.Connection | None) -> dict:
+    """How many rows the settlement filter keeps out, and what that costs the grade.
+
+    Two counts, because they answer different questions and only reporting the
+    first would understate the filter:
+
+      * rows_excluded — resolved post-epoch outcome rows removed from the
+        candidate population.
+      * graded_dropped — INDEPENDENT observations lost, after the one-per-
+        (symbol, horizon, trading-day) dedup. This is the number that moves a
+        published accuracy, and it is not proportional to the first: the dedup
+        keeps the LAST call of each symbol-day, so a symbol-day survives at full
+        weight whenever any earlier call of the same day is clean, and vanishes
+        entirely when none is.
+
+    A silent exclusion is as dishonest as a silent inclusion, so this runs on
+    every DB grade and its result is published whether or not it is flattering.
+    """
+    # ONE refusal string for every source that cannot be checked — a snapshot,
+    # a DB with no bars, an in-memory fixture. They are the same fact, and
+    # test_snapshot_grades_identically_to_db is right to demand the two paths
+    # publish byte-identical rows: a reason that varies with the source would
+    # make a snapshot grade differ from its DB for a difference that carries no
+    # information.
+    clause = settlement_clause(con) if con is not None else ""
+    if not clause:
+        return {"applied": False,
+                "reason": ("unmeasured — this source carries no bars to rebuild the "
+                           "forward bar from (a committed snapshot, or a database "
+                           "without bars/symbols), so no row's settlement can be "
+                           "verified")}
+    base = """
+      FROM prediction_outcomes po
+      WHERE po.resolved_at IS NOT NULL AND po.up IS NOT NULL AND po.prob IS NOT NULL
+        AND po.ts >= ?
+    """
+    census = f"""
+    SELECT po.horizon, COUNT(*),
+           SUM(CASE WHEN po.resolved_at < {SETTLEMENT_AT} THEN 1 ELSE 0 END),
+           SUM(CASE WHEN {SETTLEMENT_AT} IS NULL THEN 1 ELSE 0 END)
+    {base} GROUP BY po.horizon
+    """
+    graded = f"""
+    SELECT po.horizon, COUNT(DISTINCT po.symbol_id || ':' || trading_day(po.ts))
+    {base} GROUP BY po.horizon
+    """
+    register_fold(con)
+    by_h: dict[str, dict] = {}
+    try:
+        for horizon, n, unsettled, unverifiable in con.execute(
+                census, (SURVIVORSHIP_EPOCH_TS,)):
+            by_h[horizon] = {"considered": n,
+                             "unsettled": unsettled or 0,
+                             "unverifiable": unverifiable or 0,
+                             "excluded": (unsettled or 0) + (unverifiable or 0)}
+        for q, key in ((graded, "graded_before"),
+                       (graded.replace("AND po.ts >= ?",
+                                       "AND po.ts >= ?\n        " + clause),
+                        "graded_after")):
+            for horizon, n in con.execute(q, (SURVIVORSHIP_EPOCH_TS,)):
+                by_h.setdefault(horizon, {})[key] = n
+    except sqlite3.OperationalError as e:
+        return {"applied": False,
+                "reason": f"unmeasured — settlement not reconstructable ({e})"}
+    total = sum(h.get("considered", 0) for h in by_h.values())
+    excluded = sum(h.get("excluded", 0) for h in by_h.values())
+    gb = sum(h.get("graded_before", 0) for h in by_h.values())
+    ga = sum(h.get("graded_after", 0) for h in by_h.values())
+    return {
+        "applied": True,
+        "rows_considered": total,
+        "rows_excluded": excluded,
+        "rows_unsettled": sum(h.get("unsettled", 0) for h in by_h.values()),
+        "rows_unverifiable": sum(h.get("unverifiable", 0) for h in by_h.values()),
+        "excluded_fraction": (excluded / total) if total else None,
+        "graded_observations_before": gb,
+        "graded_observations_after": ga,
+        "graded_observations_dropped": gb - ga,
+        "by_horizon": by_h,
+        "method": ("structural, per row: resolved_at must be at or after the forward "
+                   "bar's true session close, where the base/target/forward bars are "
+                   "reconstructed exactly as PredictionResolver.Run selects them "
+                   "(daemon/internal/pipeline/predict.go). Session close is the bar "
+                   "stamp + 16h for stocks (ET midnight -> 16:00 ET) and + 24h for "
+                   "crypto. No timestamp cutoff and no basis_epoch: the deployed "
+                   "resolver still carries the defect, so the window is open."),
+        "disposition": ("EXCLUDED from every tally, never relabelled — see "
+                        "audits/2026-08-06-1d-label-disagreements.md; the rows stay "
+                        "frozen in prediction_outcomes exactly as written"),
+        "residual": ("removes the partial-bar defect only; ordinary bar revision "
+                     "(~2.83% of after-close rows, same audit) is still present"),
+        "reason": None,
+    }
+
+
+def settlement_stamp(quar: dict | None) -> dict:
+    """Row fields carrying the measured (never assumed) quarantine state."""
+    # No measurement supplied means the caller had no bars to reconstruct
+    # against — the snapshot path. Unmeasured, never assumed filtered: a
+    # snapshot cut before this filter existed carries contaminated tallies and
+    # must not be readable as though it did not.
+    quar = quar or measure_settlement_quarantine(None)
+    stamp = {"settlement_filtered": bool(quar.get("applied"))}
+    if stamp["settlement_filtered"]:
+        stamp["settlement_excluded"] = quar.get("rows_excluded")
+    else:
+        stamp["settlement_reason"] = quar.get("reason") or "unmeasured"
+    return stamp
+
+
+# ── stale-feed quarantine ───────────────────────────────────────────────
+
+# dq_events(kind='stale') is the daemon's own recorded verdict that a SYMBOL's
+# feed had stopped. internal/maintain/maintain.go's DQAuditor writes one per
+# symbol per hour when the 1m tape is >20m old while the market is open
+# (streamed hot set), the daily tape is >4d old (the daily-only universe), or a
+# crypto pair is >45m stale. It is the only PER-SYMBOL staleness writer:
+# internal/srchealth's dq_events(kind='source_stale') is source-WIDE and carries
+# symbol_id NULL, so it names no symbol and cannot key a per-prediction
+# exclusion at all.
+#
+# A prediction minted on such a day was computed from inputs the daemon itself
+# had already declared unfit; grading it measures the outage, not the predictor.
+# The key is (symbol, trading-day), which is exactly the dedup fold — every row
+# inside one (symbol, horizon, trading-day) partition therefore shares the
+# verdict, so filtering inside the dedup cannot change which row wins
+# ROW_NUMBER(), and the count of dropped rows equals the count of dropped keys.
+# Mint time within the day is deliberately not compared: a feed found dead at
+# noon was already dead when the morning call was computed.
+#
+# NO delisted-symbol carve-out, deliberately. The auditor floods stale events at
+# permanently-delisted tickers — measured 2026-08-06 against the live DB, 6,346
+# of 7,486 post-epoch stale events sit on symbols with delisted_at set — but
+# those symbols contribute ZERO rows to the graded population (measured: the
+# 1,868 delisted symbols intersect the 336 graded symbols in 0 symbols), so the
+# day-keyed join drops nothing on their account. Carving them out would be
+# strictly WORSE than leaving them in: delisted_at is a property of the SYMBOL,
+# not of a day, so the carve-out would also stop excluding the days after a
+# mid-window feed death — the days that most need excluding.
+#
+# The stale keys are folded ONCE in a CTE rather than correlated straight into
+# dq_events. trading_day() is a Python callback, so the correlated form calls it
+# per (outcome row x dq row) pair: measured on the live corpus that query takes
+# 245s, against 0.12s for the CTE form below and 0.10s unfiltered. All three
+# forms return the identical population.
+STALE_FEED_CTE = """stale_feed AS (
+      SELECT DISTINCT symbol_id, trading_day(ts) AS d FROM dq_events
+      WHERE kind = 'stale' AND symbol_id IS NOT NULL
+    ),
+    """
+STALE_FEED_PREDICATE = """AND NOT EXISTS (SELECT 1 FROM stale_feed f
+                        WHERE f.symbol_id = po.symbol_id
+                          AND f.d = trading_day(po.ts))"""
+
+
+def stale_feed_sql(con: sqlite3.Connection) -> tuple[str, str]:
+    """(CTE, predicate) implementing the quarantine, or ("", "") without it.
+
+    Guarded on the dq_events table existing, for the same reason
+    superseded_clause is guarded on a column: this grader is handed connections
+    it did not open — in-memory fixtures, and any source cut without the
+    daemon's data-quality table. An absent table makes the exclusion
+    UNMEASURABLE, which measure_stale_feed_exclusion() reports rather than
+    passing off as a clean feed.
+    """
+    got = con.execute("SELECT 1 FROM sqlite_master "
+                      "WHERE type='table' AND name='dq_events'").fetchone()
+    return (STALE_FEED_CTE, STALE_FEED_PREDICATE) if got else ("", "")
+
+
+def measure_stale_feed_exclusion(con: sqlite3.Connection | None) -> dict:
+    """How many graded observations the stale-feed quarantine drops. MEASURED.
+
+    Counted as distinct (symbol, horizon, trading-day) keys, which IS the graded
+    row count: the dedup collapses each key to exactly one row and the exclusion
+    is constant across a key.
+    In the combined build the settlement quarantine is applied first, so this
+    count is MARGINAL: observations this filter removes from what would
+    otherwise have been published, not the gross size of the stale-feed
+    problem.
+
+    Published beside the grade because a filter whose size is not reported is
+    indistinguishable from cherry-picking — the graded population may only
+    shrink in public.
+    """
+    if con is None:
+        return {"applied": False, "excluded_rows": None,
+                "reason": ("unmeasured — graded from a snapshot, which carries "
+                           "per-day tallies but no data-quality table")}
+    register_fold(con)
+    if not stale_feed_sql(con)[0]:
+        return {"applied": False, "excluded_rows": None,
+                "reason": "unmeasured — this source carries no dq_events table"}
+    q = f"""
+    WITH {STALE_FEED_CTE}excluded AS (
+      SELECT DISTINCT po.symbol_id, po.horizon, trading_day(po.ts) AS d
+      FROM prediction_outcomes po
+      WHERE po.resolved_at IS NOT NULL AND po.up IS NOT NULL AND po.prob IS NOT NULL
+        AND po.ts >= ?
+        {settlement_clause(con)}
+        AND EXISTS (SELECT 1 FROM stale_feed f
+                    WHERE f.symbol_id = po.symbol_id
+                      AND f.d = trading_day(po.ts))
+    )
+    SELECT COUNT(*), COUNT(DISTINCT symbol_id), COUNT(DISTINCT d) FROM excluded
+    """
+    rows, syms, days = con.execute(q, (SURVIVORSHIP_EPOCH_TS,)).fetchone()
+    return {"applied": True,
+            "excluded_rows": rows or 0,
+            "excluded_symbols": syms or 0,
+            "excluded_days": days or 0,
+            "source": "dq_events(kind='stale') — the per-symbol feed auditor",
+            "method": ("a graded (symbol, horizon, trading-day) observation is "
+                       "dropped when that symbol's own feed was flagged stale on "
+                       "that trading day"),
+            "reason": None}
+
+
 def connect(path: str) -> sqlite3.Connection:
     if not os.path.exists(path):
         sys.exit(f"database not found: {path}")
@@ -1447,14 +1756,26 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
     # Per-DAY tallies, not per-horizon totals. The dedup below still collapses
     # intraday repeats to one row per (symbol, horizon, trading-day); the day
     # grouping is what lets the interval resample days instead of rows.
-    q = """
-    WITH dedup AS (
+    #
+    # The settlement clause is applied INSIDE the dedup, not after it: an
+    # unsettled last-call-of-the-day is dropped and the latest CLEAN call of the
+    # same symbol-day is promoted in its place, so a symbol-day is lost only
+    # when every call it made was graded against an unfinished bar.
+    #
+    # The stale-feed quarantine drops observations minted on a trading day the
+    # daemon had already flagged that symbol's own feed stale. Its size is
+    # measured and printed by measure_stale_feed_exclusion() — the graded
+    # population may only shrink in public.
+    q = f"""
+    WITH {stale_feed_sql(con)[0]}dedup AS (
       SELECT symbol_id, horizon, prob, up, ts,
              ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
                                 ORDER BY ts DESC) rn
-      FROM prediction_outcomes
+      FROM prediction_outcomes po
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
         AND ts >= ?  -- survivorship boundary: pre-epoch rows are survivor-seeded
+        {settlement_clause(con)}
+        {stale_feed_sql(con)[1]}
     )
     SELECT horizon, trading_day(ts) AS day,
            COUNT(*),
@@ -1490,13 +1811,15 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
     """
     register_fold(con)
     q = f"""
-    WITH dedup AS (
+    WITH {stale_feed_sql(con)[0]}dedup AS (
       SELECT symbol_id, horizon, prob, up, ts,
              ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
                                 ORDER BY ts DESC) rn
-      FROM prediction_outcomes
+      FROM prediction_outcomes po
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
         AND ts >= ?  -- survivorship boundary, same as the graded rows
+        {settlement_clause(con)}  -- settlement quarantine, same as the graded rows
+        {stale_feed_sql(con)[1]}  -- stale-feed quarantine, same as the graded rows
     )
     SELECT horizon,
            CAST(MIN(prob * {CALIBRATION_BINS}, {CALIBRATION_BINS} - 1) AS INTEGER) AS bin,
@@ -1530,11 +1853,13 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
     }
 
 
-def grade_directional(con: sqlite3.Connection) -> list[dict]:
+def grade_directional(con: sqlite3.Connection,
+                     quar: dict | None = None) -> list[dict]:
     """Grade prediction_outcomes on independent (symbol, horizon, trading-day) rows."""
     return grade_directional_days(
         fetch_directional_days(con),
-        measure_universe_completeness(con, "prediction_outcomes"))
+        measure_universe_completeness(con, "prediction_outcomes"),
+        quar if quar is not None else measure_settlement_quarantine(con))
 
 
 def pred_all(per_day: list[tuple]) -> list[tuple[int, int, int]] | None:
@@ -1558,7 +1883,8 @@ def pred_hc(per_day: list[tuple]) -> list[tuple[int, int, int]] | None:
 
 
 def grade_directional_days(by_h: dict[str, list[tuple]],
-                           surv: dict | None = None) -> list[dict]:
+                           surv: dict | None = None,
+                           quar: dict | None = None) -> list[dict]:
     """Grade directional per-day tallies from either the DB or a snapshot."""
     rows = []
 
@@ -1616,6 +1942,12 @@ def grade_directional_days(by_h: dict[str, list[tuple]],
             "breadth": breadth_block(pred_days) if pred_days else None,
             "note": note,
             **survivorship_stamp(surv),
+            # Measured, never assumed: whether the settlement quarantine was
+            # actually applied to the population behind this row. A snapshot cut
+            # before the filter existed publishes false plus a reason, because
+            # an unfiltered tally that looks filtered is the failure this whole
+            # block exists to prevent.
+            **settlement_stamp(quar),
         })
 
     for horizon, per_day in sorted(by_h.items()):
@@ -2080,8 +2412,12 @@ def main() -> int:
             args.snapshot, allow_legacy=args.allow_legacy_snapshot)
         looks = max(1, (protocol or {}).get("_looks") or 0,
                     published_looks(reg_path))
+        # A snapshot carries tallies, not bars, so settlement cannot be
+        # reconstructed from one. Whether these tallies were cut with the filter
+        # in force is UNKNOWN here, and unknown is published as unknown.
+        settlement = measure_settlement_quarantine(None)
         rows = grade_with_multiplicity(
-            lambda: (grade_directional_days(by_h)
+            lambda: (grade_directional_days(by_h, None, settlement)
                      + grade_structural_days(totals, per_day, pre, naive_per_day)),
             looks)
         if protocol is None:
@@ -2126,6 +2462,9 @@ def main() -> int:
             "direction": measure_universe_completeness(None, "prediction_outcomes"),
             "structure": measure_universe_completeness(None, "regime_outcomes"),
         }
+        # A snapshot carries no dq_events either, so the stale-feed quarantine is
+        # reported UNMEASURED here rather than silently skipped.
+        stale_feed = measure_stale_feed_exclusion(None)
         source = f"snapshot {args.snapshot} (manifest hashes verified)"
     else:
         con = connect(args.db)
@@ -2142,8 +2481,11 @@ def main() -> int:
         # been taken at these rows, and how many rows this cycle publishes.
         looks = max(1, chain_looks(con), published_looks(reg_path))
         set_family_floor(max(chain_families(con), published_family(reg_path)))
+        # Measured ONCE, before grading: grade_with_multiplicity re-grades to
+        # price the family, and a census re-run per pass would be pure cost.
+        settlement = measure_settlement_quarantine(con)
         rows = grade_with_multiplicity(
-            lambda: grade_directional(con) + grade_structural(con), looks)
+            lambda: grade_directional(con, settlement) + grade_structural(con), looks)
         null_refusals = apply_null_amendment_probe(rows, probe)
         chain = fetch_chain_presence(con)
         chain["grading_protocol_seq"] = protocol["_seq"]
@@ -2157,6 +2499,9 @@ def main() -> int:
             "direction": measure_universe_completeness(con, "prediction_outcomes"),
             "structure": measure_universe_completeness(con, "regime_outcomes"),
         }
+        # How much of the population the stale-feed quarantine removed, measured
+        # before the connection closes.
+        stale_feed = measure_stale_feed_exclusion(con)
         source = f"database {args.db}"
         con.close()
 
@@ -2250,6 +2595,41 @@ def main() -> int:
           f"on at least {MIN_DISTINCT_DAYS} distinct trading days.")
     print(f"Survivorship boundary: rows before {SURVIVORSHIP_EPOCH.isoformat()} were graded "
           "against a survivor-seeded universe and are excluded from every tally above.")
+    if settlement.get("applied"):
+        print(f"Settlement quarantine: {settlement['rows_excluded']:,} of "
+              f"{settlement['rows_considered']:,} resolved post-epoch outcome rows "
+              f"({settlement['excluded_fraction']:.1%}) are EXCLUDED from every "
+              "directional tally and every reliability bin above. Their label was "
+              "frozen before the forward bar's session had closed, so the resolver "
+              "graded a partial bar as a close — "
+              f"{settlement['rows_unsettled']:,} of those, plus "
+              f"{settlement['rows_unverifiable']:,} whose forward bar can no longer be "
+              "reconstructed and whose settlement is therefore unverifiable.")
+        print(f"  Independent observations lost to it: "
+              f"{settlement['graded_observations_dropped']:,} of "
+              f"{settlement['graded_observations_before']:,} symbol-days "
+              f"({settlement['graded_observations_after']:,} remain). That is the "
+              "number that moves the accuracies above, and it is larger in proportion "
+              "than the row count because the dedup keeps the last call of each "
+              "symbol-day and that call is the one most often frozen mid-session.")
+        for h in sorted(settlement["by_horizon"]):
+            c = settlement["by_horizon"][h]
+            print(f"    {h}: {c['excluded']:,}/{c['considered']:,} rows excluded, "
+                  f"{c.get('graded_before', 0) - c.get('graded_after', 0):,}/"
+                  f"{c.get('graded_before', 0):,} symbol-days lost")
+        print("  EXCLUDED, NOT RELABELLED. Every row stays in prediction_outcomes "
+              "exactly as frozen; only the tally changes. The predicate is structural "
+              "(resolved_at vs the forward bar's true session close), NOT a timestamp "
+              "cutoff — the deployed resolver has no settlement guard, so the window "
+              "is still open and a cutoff would silently stop excluding. See "
+              "audits/2026-08-06-1d-label-disagreements.md, whose objection is to "
+              "RELABELLING such a subset, not to declining to grade it.")
+        print(f"  Residual: {settlement['residual']}.")
+    else:
+        print(f"Settlement quarantine: NOT VERIFIABLE FROM THIS SOURCE — "
+              f"{settlement['reason']}. Rows carry settlement_filtered=false, which "
+              "means UNCONFIRMED, not confirmed-absent: a tally whose settlement "
+              "cannot be checked must not be read as a filtered one.")
     print("Intervals resample DAYS, not rows: on any one day ~1,000 symbols share one")
     print("market move, so the row count overstates the evidence. Each graded row below")
     print("reports its measured design effect and effective n in the JSON output.")
@@ -2327,6 +2707,18 @@ def main() -> int:
             print(f"Universe completeness ({fam}): NOT CLEAN — {m['reason']}. "
                   "Rows carry survivorship_clean=false.")
 
+    if stale_feed.get("applied"):
+        print(f"Stale-feed quarantine: {stale_feed['excluded_rows']:,} graded "
+              f"observation(s) over {stale_feed['excluded_symbols']:,} symbol(s) "
+              f"and {stale_feed['excluded_days']:,} trading day(s) EXCLUDED - "
+              "minted on a day this symbol's own feed was flagged stale "
+              "(dq_events kind='stale'), so the inputs behind the call had "
+              "already been declared unfit. Grading them would measure the "
+              "outage, not the predictor.")
+    else:
+        print(f"Stale-feed quarantine: NOT APPLIED - {stale_feed['reason']}. "
+              "Absence of the filter is not evidence of a live feed.")
+
     # Post-epoch attrition is MEASURED, not declared unmeasurable: the bound is
     # computed against an external delistings record (SEC EDGAR Form 25) by
     # tools/backfill_delistings.py --survivorship-bound, which owns this field
@@ -2379,6 +2771,16 @@ def main() -> int:
                    # symbols whose listing status is resolvable. Every row's
                    # survivorship_clean flag is read off this, never asserted.
                    "survivorship_completeness": survivorship_completeness,
+                   # Measured, per graded sample: how many resolved rows were
+                   # kept out because their label was frozen against a forward
+                   # bar that had not finished, and how many independent
+                   # observations that cost. Published whether or not the
+                   # exclusion flatters the record.
+                   "settlement_quarantine": settlement,
+                   # Measured size of the stale-feed quarantine: how many graded
+                   # observations were dropped because the daemon had flagged
+                   # that symbol's feed stale on the day they were minted.
+                   "stale_feed_exclusion": stale_feed,
                    "null_policy": ("prequential-majority only: each day's constant guess "
                                    "is the majority class over days strictly before it. "
                                    "The hindsight null was retired after the dual-null "

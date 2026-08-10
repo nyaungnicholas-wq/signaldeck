@@ -26,7 +26,6 @@
 package api
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -98,7 +97,11 @@ func (d Deps) tvWebhook(w http.ResponseWriter, r *http.Request) {
 	if provided == "" {
 		provided = r.Header.Get(tvSecretHeader)
 	}
-	if subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) != 1 {
+	// tokenEqual, not subtle.ConstantTimeCompare directly: the latter returns
+	// early on a LENGTH mismatch, so a caller can time the secret's length one
+	// probe at a time. tokenEqual hashes both sides to a fixed 32 bytes first,
+	// which is why auth.go already uses it for the bearer token.
+	if !tokenEqual(provided, secret) {
 		httpErr(w, http.StatusForbidden, "invalid secret")
 		return
 	}
@@ -127,7 +130,7 @@ func (d Deps) tvWebhook(w http.ResponseWriter, r *http.Request) {
 
 	id, err := d.St.InsertTVSignal(r.Context(), sig)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "id": id})
@@ -157,7 +160,7 @@ func (d Deps) tvSignalsList(w http.ResponseWriter, r *http.Request) {
 	unseen := r.URL.Query().Get("unseen") == "1"
 	rows, err := d.St.TVSignals(r.Context(), unseen, limit)
 	if err != nil {
-		httpErr(w, http.StatusInternalServerError, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, rows)

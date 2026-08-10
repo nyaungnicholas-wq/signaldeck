@@ -48,18 +48,18 @@ type gateRow struct {
 func (d Deps) researchLedger(w http.ResponseWriter, r *http.Request) {
 	hyps, err := d.St.LedgerHypotheses(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	idFilter := r.URL.Query().Get("id")
 	evidence, err := d.St.LedgerEvidence(r.Context(), idFilter)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	weeks, err := d.St.ResearchWeeksStats(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 

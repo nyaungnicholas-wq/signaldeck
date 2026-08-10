@@ -53,6 +53,24 @@ func OpenForBars(t time.Time) bool {
 	return mins >= 9*60+45 && mins <= closeMin
 }
 
+// IsTradingDay reports whether the calendar DAY of t is one the US equity
+// market traded: not a weekend, not a full holiday. It deliberately ignores the
+// time of day — it answers "did this date have a session at all", which is the
+// right question for anything scheduled off a session but published after the
+// close (FINRA short volume at 18:30 ET, short interest at 18:45 ET).
+//
+// OpenForBars cannot answer that question: it also requires the instant to fall
+// inside 9:45–16:00 ET, so every evening timestamp is false for it no matter
+// which day it lands on. Callers that walked the calendar with OpenForBars
+// looking for the next trading day therefore never terminated on a real day.
+func IsTradingDay(t time.Time) bool {
+	et := t.In(nyLoc)
+	if wd := et.Weekday(); wd == time.Saturday || wd == time.Sunday {
+		return false
+	}
+	return !fullHolidays(et.Year())[ymd(et)]
+}
+
 // IsFullHoliday reports whether the calendar day of t is a full NYSE closure
 // (weekend NOT included — use OpenForBars for the full picture).
 func IsFullHoliday(t time.Time) bool {

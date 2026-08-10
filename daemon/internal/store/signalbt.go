@@ -19,6 +19,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
@@ -33,6 +34,9 @@ type SignalBTObs struct {
 	Ts       int64
 	Signal   float64         // calibrated P(up) emitted at Ts (prediction_outcomes.prob)
 	FwdByLag map[int]float64 // lag (trading-day bars) -> realized forward return
+	// SettleTs is the base bar this row was graded from — the independence unit
+	// the day-cluster folds on. 0 = unknown; md.SettleDay falls back to the day.
+	SettleTs int64
 }
 
 // primaryLagForHorizon returns the primary forward window in trading-day BARS
@@ -65,7 +69,7 @@ func (s *Store) SignalBacktestObs(ctx context.Context, h md.Horizon, extraLags [
 	// no lookahead (same join as LabeledFeatures but we read prob directly from
 	// prediction_outcomes, which is the calibrated signal at prediction time).
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT symbol_id, ts, prob, fwd_return
+		SELECT symbol_id, ts, prob, fwd_return, settle_ts
 		FROM prediction_outcomes
 		WHERE horizon=? AND resolved_at IS NOT NULL
 		  AND up IS NOT NULL AND fwd_return IS NOT NULL
@@ -79,6 +83,7 @@ func (s *Store) SignalBacktestObs(ctx context.Context, h md.Horizon, extraLags [
 	type base struct {
 		symbolID  int64
 		ts        int64
+		settleTs  int64
 		signal    float64
 		primaryFR float64
 	}
@@ -86,9 +91,11 @@ func (s *Store) SignalBacktestObs(ctx context.Context, h md.Horizon, extraLags [
 	symSet := map[int64]struct{}{}
 	for rows.Next() {
 		var b base
-		if err := rows.Scan(&b.symbolID, &b.ts, &b.signal, &b.primaryFR); err != nil {
+		var settle sql.NullInt64
+		if err := rows.Scan(&b.symbolID, &b.ts, &b.signal, &b.primaryFR, &settle); err != nil {
 			return nil, err
 		}
+		b.settleTs = settle.Int64 // 0 when NULL
 		bases = append(bases, b)
 		symSet[b.symbolID] = struct{}{}
 	}
@@ -144,6 +151,7 @@ func (s *Store) SignalBacktestObs(ctx context.Context, h md.Horizon, extraLags [
 			Ts:       b.ts,
 			Signal:   b.signal,
 			FwdByLag: map[int]float64{primary: b.primaryFR},
+			SettleTs: b.settleTs,
 		}
 		if len(wantExtra) > 0 {
 			sr, err := loadSeries(b.symbolID)

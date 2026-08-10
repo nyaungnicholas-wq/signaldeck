@@ -57,7 +57,18 @@ GENERIC_PATTERN='(api[_-]?key|apikey|secret|password|passwd|token|authtoken|auth
 # templates, and test/e2e fixtures with fake credentials (e.g. "hunter2secret"
 # in daemon/internal/api/auth_test.go, daemon/e2e/e2e_test.go) — those are
 # real, deliberately fake test data, not a leak.
-EXCLUDE_PATTERN='os\.Getenv|process\.env|\.env\.example|placeholder|example|_test\.go|e2e/|csrf'
+#
+# `decoy` joins placeholder/example for the same reason, and it is what closes
+# the one remaining history hit: round2-drafts/patches/e2e-credential-isolation.patch
+# is a DIFF of daemon/internal/config/isolation_test.go, so its hunk carries
+#   []byte("ALPACA_KEY="+decoyAlpacaKey+…)
+# verbatim. The live file is excluded by `_test.go`; the patch recording the same
+# bytes is not, because the exclusion matches the PATH and a .patch is not a
+# _test.go. The value is the named constant decoyAlpacaKey
+# ("decoy-alpaca-key-must-never-be-loaded") — a string whose entire purpose is to
+# fail if it is ever loaded. Matching on the decoy NAME keeps this narrow: it
+# exempts the reference, not the path, so a real key in that same file still fails.
+EXCLUDE_PATTERN='os\.Getenv|process\.env|\.env\.example|placeholder|example|decoy|_test\.go|e2e/|csrf'
 # The scanner's OWN self-test fixture plants synthetic, never-live secrets
 # (nvapi-, whsec_, a fake password) on purpose — that is how it proves the
 # detector still detects. Scanning it meant this script reported

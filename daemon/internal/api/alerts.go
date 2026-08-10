@@ -23,7 +23,7 @@ func (d Deps) alertsList(w http.ResponseWriter, r *http.Request) {
 	unseen := r.URL.Query().Get("unseen") == "1"
 	rows, err := d.St.Alerts(r.Context(), userID(r), unseen, limit)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, rows)
@@ -34,7 +34,7 @@ func (d Deps) alertsList(w http.ResponseWriter, r *http.Request) {
 func (d Deps) alertsSeen(w http.ResponseWriter, r *http.Request) {
 	n, err := d.St.MarkAlertsSeen(r.Context(), userID(r))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "marked": n})
@@ -67,7 +67,7 @@ func (d Deps) alertOutcomes(w http.ResponseWriter, r *http.Request) {
 	sinceTs := time.Now().Unix() - int64(days)*86400
 	kinds, err := d.St.AlertKindOutcomes(r.Context(), sinceTs)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if kinds == nil {

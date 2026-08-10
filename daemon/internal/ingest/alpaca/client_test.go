@@ -24,12 +24,14 @@ func openTestStore(t *testing.T) *store.Store {
 	return st
 }
 
-// fastPages shrinks the inter-page pause for tests.
+// fastPages shrinks the inter-page pause AND the 429 back-off. The back-off
+// matters here too now that the single-symbol path retries 429s: without it
+// TestBackfillHTTPError (permanent 429) would sleep out the real ~30s ladder.
 func fastPages(t *testing.T) {
 	t.Helper()
-	old := pagePause
-	pagePause = time.Millisecond
-	t.Cleanup(func() { pagePause = old })
+	oldP, oldB := pagePause, backoff429
+	pagePause, backoff429 = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { pagePause, backoff429 = oldP, oldB })
 }
 
 func TestBackfillPaging(t *testing.T) {

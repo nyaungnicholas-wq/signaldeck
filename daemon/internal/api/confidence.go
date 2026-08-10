@@ -46,7 +46,7 @@ func (d Deps) confidenceRead(w http.ResponseWriter, r *http.Request) {
 
 	pred, okPred, err := d.St.LatestPrediction(ctx, sym.ID, h)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if !okPred {
@@ -62,7 +62,7 @@ func (d Deps) confidenceRead(w http.ResponseWriter, r *http.Request) {
 
 	ev, err := d.confidenceEvidence(ctx, h)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	condRet := d.conditionalReturn(ctx, sym.ID, h)

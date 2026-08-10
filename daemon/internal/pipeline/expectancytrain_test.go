@@ -3,11 +3,13 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // barBase is a Thursday-ish anchor; the fixture spaces bars exactly one
@@ -87,7 +89,12 @@ func TestExpectancyTrainerGradesEvidenceRowsThatHaveNoOutcome(t *testing.T) {
 		t.Fatalf("fixture created %d outcome rows; evidence rows must create none", len(ups))
 	}
 
-	if _, err := (&ExpectancyTrainer{St: st}).Run(ctx); err != nil {
+	// ErrDegraded is EXPECTED here and is not a failure. This fixture is a
+	// deliberate perfect inversion (see seedExpectancyFixture), so the leg
+	// grades anti-predictive — which the trainer now reports instead of filing
+	// as "ok". What these tests assert is that the rows were GRADED, and that
+	// happens on the degraded path too. A hard error still fails.
+	if _, err := (&ExpectancyTrainer{St: st}).Run(ctx); err != nil && !errors.Is(err, workers.ErrDegraded) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -153,7 +160,12 @@ func TestExpectancyTrainerSkipsSymbolsBelowTheContributionFloor(t *testing.T) {
 			t.Fatalf("UpsertPrediction: %v", err)
 		}
 	}
-	if _, err := (&ExpectancyTrainer{St: st}).Run(ctx); err != nil {
+	// ErrDegraded is EXPECTED here and is not a failure. This fixture is a
+	// deliberate perfect inversion (see seedExpectancyFixture), so the leg
+	// grades anti-predictive — which the trainer now reports instead of filing
+	// as "ok". What these tests assert is that the rows were GRADED, and that
+	// happens on the degraded path too. A hard error still fails.
+	if _, err := (&ExpectancyTrainer{St: st}).Run(ctx); err != nil && !errors.Is(err, workers.ErrDegraded) {
 		t.Fatalf("Run: %v", err)
 	}
 	rows, err := st.ModelForecasts(ctx, sym.ID)

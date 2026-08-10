@@ -124,7 +124,7 @@ func (d Deps) optionsVolEdge(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	bars, err := d.St.LastBars(ctx, s.ID, md.TF1d, optionBars)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if len(bars) == 0 {

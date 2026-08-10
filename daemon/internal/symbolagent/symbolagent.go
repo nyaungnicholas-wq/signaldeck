@@ -125,6 +125,25 @@ type Model struct {
 	Calibration Calibration        `json:"calibration"` // personal calibration (identity unless personal)
 	Skill       map[string]Skill   `json:"skill"`       // per-component measured edge
 	Personality string             `json:"personality"` // deterministic plain-English read
+	// TierBlocker names the FIRST unmet condition keeping this symbol off the
+	// personal tier, empty when it reached it.
+	//
+	// It exists because "0 personal" was reported every hour for weeks with no
+	// indication of WHY, and finding out took tracing four layers: the learner,
+	// the tier gate, the adaptive panel, and finally the stored weights blob,
+	// where every regime cell held EMPTY weights because it carried 14-16
+	// distinct days against adaptive.MinCellDays of 20. Every symbol therefore
+	// fell through to the fleet-wide calibration map, which is the mechanism
+	// behind the 2026-07-27..08-04 cross-section collapse.
+	//
+	// A floor that blocks silently is indistinguishable from a broken feature.
+	// This is not persisted as a column; the worker aggregates it into its run
+	// detail so the binding constraint is legible from the Agents page.
+	TierBlocker string `json:"-"`
+	// TierShortfall/TierNeed are what that floor HAS and what it NEEDS, so a
+	// caller can report the closest symbol to passing rather than a histogram.
+	TierShortfall int `json:"-"`
+	TierNeed      int `json:"-"`
 }
 
 // Learn computes a symbol's model from its OWN labeled examples plus the tier
@@ -185,6 +204,34 @@ func Learn(examples []adaptive.Example, rawPairs []ensemble.Pair, regimeLearned,
 	// three market moves. It is also not redundant with adaptive.MinCellDays —
 	// that floor (20) qualifies the WEIGHTS; this one (30) qualifies the claim
 	// that this symbol needs its own model at all.
+	// Record the FIRST unmet condition as a CATEGORY, in the gate's own test
+	// order. The category is deliberately free of the per-symbol count: keying
+	// on the shortfall produced twenty-odd buckets ("rows 20/40 (87), rows 14/40
+	// (84), rows 24/40 (82)…") which is a histogram, not an answer. The caller
+	// reports how many symbols each floor holds and how close the nearest one
+	// is, which is what says "four more days" or "never".
+	//
+	// NOTE ON THE ROW FLOOR: examples arrive DEDUPED to one row per trading day
+	// (store.labeledFeaturesBySymbol), so MinPersonal is effectively a 40-DAY
+	// floor and strictly dominates MinPersonalDays of 30. That is why the row
+	// condition is the one that binds in practice, and why the day condition
+	// below is currently unreachable.
+	switch {
+	case len(examples) < MinPersonal:
+		m.TierBlocker = "rows"
+		m.TierShortfall, m.TierNeed = len(examples), MinPersonal
+	case m.NDays < MinPersonalDays:
+		m.TierBlocker = "distinct days"
+		m.TierShortfall, m.TierNeed = m.NDays, MinPersonalDays
+	case len(cell.Weights) == 0:
+		// The adaptive panel produced no weights that survived its shrinkage and
+		// multiplicity correction. Measured 2026-08-08 this was the binding
+		// constraint for EVERY symbol: cells carried 14-16 days against
+		// adaptive.MinCellDays of 20.
+		m.TierBlocker = "adaptive weights empty"
+		m.TierShortfall, m.TierNeed = cell.Days, adaptive.MinCellDays
+	}
+
 	switch {
 	case len(examples) >= MinPersonal && m.NDays >= MinPersonalDays && len(cell.Weights) > 0:
 		m.Tier = TierPersonal

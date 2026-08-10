@@ -96,7 +96,7 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 
 	rawObs, err := d.St.SignalBacktestObs(ctx, h, signalBTDecayLags, signalBTMaxObs)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 
@@ -109,6 +109,7 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 			Ts:       o.Ts,
 			Signal:   o.Signal,
 			FwdByLag: o.FwdByLag,
+			SettleTs: o.SettleTs,
 		}
 	}
 
@@ -117,7 +118,7 @@ func (d Deps) signalBacktest(w http.ResponseWriter, r *http.Request) {
 	// still returned (BenchmarkReturn=0).
 	spyTs, spyClose, err := d.St.SPYDailyCloses(ctx, signalBTMaxObs)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	benchmark := signalbt.BenchmarkCurve(obs, spyTs, spyClose)
@@ -176,7 +177,7 @@ func signalBTCluster(obs []signalbt.Observation, primaryLag int) (clusterstat.Re
 	type key struct{ sym, day int64 }
 	best := make(map[key]signalbt.Observation, len(obs))
 	for _, o := range obs {
-		k := key{sym: o.SymbolID, day: md.TradingDay(o.Ts)}
+		k := key{sym: o.SymbolID, day: md.SettleDay(o.SettleTs, o.Ts)}
 		if cur, ok := best[k]; !ok || o.Ts > cur.Ts {
 			best[k] = o
 		}

@@ -34,6 +34,30 @@ type Prediction struct {
 	Basis string `json:"basis,omitempty"`
 }
 
+// BasisEpoch identifies the LABEL-AND-SIGNAL BASIS that produced an outcome
+// row. Every row this build seeds carries it, so a grader can tell two
+// populations apart instead of pooling them and reporting the mixture.
+//
+// It is a hand-bumped constant, NOT time.Now(). A per-row timestamp would give
+// every row a distinct value and group nothing; the whole point is that rows
+// sharing a basis share a number. Bump it when — and only when — a change makes
+// new rows non-comparable with old ones. The resolver settlement guard is the
+// worked example: it stopped labeling 1d rows against a forward bar whose
+// session had not closed, so rows written after it are not the same measurement
+// as rows written before it, and 44% vs anything across that line is a mixture.
+//
+// The value is the UTC instant this basis took effect (2026-08-07 00:00Z) — the
+// first full UTC day under the settlement-guarded resolver and the ranking gate.
+// Rows written by earlier builds stay NULL, which reads as "basis predates the
+// marker" and is the honest answer: nothing retroactively knows which build
+// wrote them.
+//
+// Stamping alone EXCLUDES NOTHING. There is no reader yet, so every grader still
+// sees every row; a grader that wants one basis must say so itself. That is
+// deliberate — changing what the SHA-pinned grader counts is a pre-registration
+// change, not a code change.
+const BasisEpoch int64 = 1786060800
+
 // UpsertPrediction stores a prediction and seeds its outcome row.
 func (s *Store) UpsertPrediction(ctx context.Context, p Prediction) error {
 	tx, err := s.w.BeginTx(ctx, nil)
@@ -64,8 +88,8 @@ func (s *Store) UpsertPrediction(ctx context.Context, p Prediction) error {
 	// reason, so an evidence row is never served as a forecast either.
 	if p.NUsed > 0 {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob)
-			VALUES (?,?,?,?)`, p.SymbolID, string(p.Horizon), p.Ts, p.CalProb); err != nil {
+			INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob, basis_epoch)
+			VALUES (?,?,?,?,?)`, p.SymbolID, string(p.Horizon), p.Ts, p.CalProb, BasisEpoch); err != nil {
 			return err
 		}
 	}
@@ -139,13 +163,29 @@ func (s *Store) UnresolvedPredictions(ctx context.Context, h md.Horizon, cutoff,
 }
 
 // ResolvePrediction records the realized up/down outcome.
+//
+// settle_ts — the base bar this row is graded from, and the unit of independent
+// evidence every day-clustered statistic folds on (md.SettleDay) — is stamped
+// HERE, at the moment the row is graded, rather than being left for
+// BackfillSettleTs to fill on a later pass. Leaving it NULL was not a
+// correctness bug (the fold falls back to the calendar day) but it was a
+// permanent lag: the newest rows are exactly the ones the live published numbers
+// lean on, and they were the ones still folding on the wrong unit. The
+// derivation is deliberately identical to BackfillSettleTs's — newest 1d bar at
+// or before the prediction — so the two agree by construction; if no such bar
+// exists it stays NULL and the fold degrades honestly.
 func (s *Store) ResolvePrediction(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) error {
 	up := 0
 	if fwdReturn > 0 {
 		up = 1
 	}
 	_, err := s.w.ExecContext(ctx, `
-		UPDATE prediction_outcomes SET up=?, fwd_return=?, resolved_at=?
+		UPDATE prediction_outcomes SET up=?, fwd_return=?, resolved_at=?,
+		  settle_ts = (
+		    SELECT MAX(b.ts) FROM bars b
+		    WHERE b.symbol_id = prediction_outcomes.symbol_id
+		      AND b.tf = '1d' AND b.ts <= prediction_outcomes.ts
+		  )
 		WHERE symbol_id=? AND horizon=? AND ts=?`,
 		up, fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
 	return err
@@ -220,15 +260,19 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 // observation. Measured across the graded record: 16,323 UTC-day buckets against
 // 15,394 trading-day buckets, so 929 were phantoms.
 //
-// The returned days are real trading-day numbers, not ordinals, so the caller can
-// split a holdout on a day boundary and count distinct days before deciding it
-// has enough evidence to fit anything.
+// The returned days are real SETTLED-MOVE numbers, not ordinals, so the caller
+// can split a holdout on a day boundary and count distinct days before deciding
+// it has enough evidence to fit anything. They are settled moves rather than
+// calendar days so that "enough distinct days to fit" counts independent
+// evidence: a weekend cluster describing one Friday move is one day here, and
+// counting it as three would let a calibration map fit on repeats of itself.
 func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, limit int) (raws []float64, ups []float64, days []int64, err error) {
 	rows, qerr := s.db.QueryContext(ctx, `
 		SELECT raw_prob, up, day FROM (
-			SELECT p.raw_prob AS raw_prob, o.up AS up, trading_day(o.ts) AS day,
+			SELECT p.raw_prob AS raw_prob, o.up AS up,
+			       settle_day(o.settle_ts, o.ts) AS day,
 			       ROW_NUMBER() OVER (
-			         PARTITION BY o.symbol_id, trading_day(o.ts)
+			         PARTITION BY o.symbol_id, settle_day(o.settle_ts, o.ts)
 			         ORDER BY o.ts DESC
 			       ) AS rn
 			FROM prediction_outcomes o
@@ -268,8 +312,8 @@ func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, li
 // while the registry's per-horizon grouping picks them up automatically.
 func (s *Store) SeedBenchmarkOutcome(ctx context.Context, symbolID int64, h md.Horizon, ts int64, prob float64) error {
 	_, err := s.w.ExecContext(ctx, `
-		INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob)
-		VALUES (?,?,?,?)`, symbolID, string(h), ts, prob)
+		INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob, basis_epoch)
+		VALUES (?,?,?,?,?)`, symbolID, string(h), ts, prob, BasisEpoch)
 	return err
 }
 
@@ -288,13 +332,22 @@ func (s *Store) SeedBenchmarkOutcome(ctx context.Context, symbolID int64, h md.H
 // write the row.
 //
 // Dedup mirrors DirectionalRecord and the accuracy registry: one row per
-// (symbol, UTC-day), keeping the day's latest. sinceTs bounds the evidence
-// window (the survivorship epoch — a majority learned from survivor-seeded rows
-// would be a null in name only).
+// (symbol, SETTLED MOVE), keeping the group's latest. If this folded more
+// coarsely than the record it benchmarks, the naive majority would be computed
+// over a different observation count than the accuracy it is compared against.
+// sinceTs bounds the evidence window (the survivorship epoch — a majority
+// learned from survivor-seeded rows would be a null in name only).
+//
+// beforeDay stays a CALENDAR trading day and is applied BEFORE the dedup. It
+// answers "has today happened yet", which is a wall-clock question and not an
+// independence one, so it is deliberately not folded onto the settled move: a
+// Saturday row shares Friday's settled move but was not committed until
+// Saturday, and the leakage guard cares about the latter.
 func (s *Store) PrequentialMajorityProb(ctx context.Context, h md.Horizon, beforeDay, sinceTs int64) (float64, bool, error) {
 	q := `
 	WITH dedup AS (
-	  SELECT up, ROW_NUMBER() OVER (PARTITION BY symbol_id, trading_day(ts) ORDER BY ts DESC) rn
+	  SELECT up, ROW_NUMBER() OVER (
+	           PARTITION BY symbol_id, settle_day(settle_ts, ts) ORDER BY ts DESC) rn
 	  FROM prediction_outcomes
 	  WHERE horizon = ? AND resolved_at IS NOT NULL AND up IS NOT NULL
 	    AND ts >= ? AND trading_day(ts) < ?

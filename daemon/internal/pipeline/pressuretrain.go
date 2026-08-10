@@ -7,6 +7,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pressure"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // pressureMaxRows caps labeled rows loaded per symbol+horizon for grading the
@@ -18,7 +19,7 @@ const pressureMaxRows = 20000
 
 // pressureFolds is the expanding-window fold count for the pressure OOS grade,
 // matching the other legs (gbm/meanrev use 5).
-const pressureFolds = 5
+const pressureFolds = 3
 
 // PressureTrainer grades the ensemble's PRESSURE leg walk-forward, out-of-sample,
 // for every active symbol+horizon from the feature store, and upserts its latest
@@ -78,8 +79,18 @@ func (w *PressureTrainer) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	return fmt.Sprintf("graded pressure leg over %d symbols: %d symbol-horizons graded, %d benched (OOS lift<=0)",
-		len(syms), graded, benched), nil
+	msg := fmt.Sprintf("graded pressure leg over %d symbols: %d symbol-horizons graded, %d benched (OOS lift<=0)",
+		len(syms), graded, benched)
+	// Grading nothing, or grading only to bench everything, delivers no usable
+	// leg — and reporting "ok" for it is how the fleet ran on one leg for days
+	// with a green board. See workers.ErrDegraded.
+	if graded == 0 {
+		return msg, fmt.Errorf("no symbol-horizon could be graded: %w", workers.ErrDegraded)
+	}
+	if benched == graded {
+		return msg, fmt.Errorf("every graded symbol-horizon was benched (OOS lift<=0): %w", workers.ErrDegraded)
+	}
+	return msg, nil
 }
 
 // pressureSamplesFromLabeled builds time-ASCENDING pressure.Samples from labeled

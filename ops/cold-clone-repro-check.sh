@@ -26,6 +26,20 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
+# `python3` is a Microsoft Store alias STUB under Git Bash: it resolves on PATH,
+# prints "Python was not found", and exits non-zero. Both grader invocations
+# below used it directly, so this check could never pass on Windows — it died at
+# the first run_grade with exit 49 while reporting nothing about reproducibility.
+# The other ops scripts already resolve an interpreter that actually runs;
+# sd_py is that resolver, and it belongs here for the same reason.
+# shellcheck source=lib-portable.sh
+. "$(dirname "$0")/lib-portable.sh"
+PY="$(sd_py)"
+if [ -z "$PY" ]; then
+  echo "  ✗ no working python on PATH (tried python3, python, py) — cannot grade" >&2
+  exit 2
+fi
+
 SNAP_REQUIRED=(repro/grading_protocol.csv repro/MANIFEST.json)
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/sd-coldclone.XXXXXX") || exit 2
@@ -57,7 +71,7 @@ done
 # --json) and neither leaves an artifact behind.
 run_grade() {
   local tree="$1" tag="$2"
-  ( cd "$tree" && python3 tools/accuracy_registry.py --snapshot repro \
+  ( cd "$tree" && "$PY" tools/accuracy_registry.py --snapshot repro \
       --json "$work/$tag.json" ) >"$work/$tag.out" 2>"$work/$tag.err"
   echo "$?" >"$work/$tag.status"
 }
@@ -66,7 +80,7 @@ echo "── grading repro/ in the cold clone and in the worktree ────�
 run_grade "$cold" cold
 run_grade "." worktree
 
-python3 - "$work" <<'PY'
+"$PY" - "$work" <<'PY'
 import json, os, re, sys
 
 work = sys.argv[1]

@@ -63,7 +63,7 @@ func (d Deps) chartOverlays(w http.ResponseWriter, r *http.Request) {
 	// We annotate the FIRST bar of each strong run (crossing edge) to stay legible.
 	scores, err := d.St.ScoreHistory(ctx, s.ID, md.H1d, from, now+1)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	prevExtreme := 0 // -1 strong-sell, 0 neutral, +1 strong-buy
@@ -92,7 +92,7 @@ func (d Deps) chartOverlays(w http.ResponseWriter, r *http.Request) {
 	// ── regime changes: the transition is the signal ──
 	rcs, err := d.St.RegimeChangesForSymbol(ctx, s.ID, from, now+1)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	for _, rc := range rcs {
@@ -106,7 +106,7 @@ func (d Deps) chartOverlays(w http.ResponseWriter, r *http.Request) {
 	// ── breakouts ──
 	bks, err := d.St.BreakoutsForSymbol(ctx, s.ID, from, now+1)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	for _, b := range bks {

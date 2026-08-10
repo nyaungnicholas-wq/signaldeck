@@ -24,14 +24,35 @@ import (
 // start, because nothing in the logs says so.
 //
 // Resolution order, first hit wins:
-//  1. SIGNALDECK_ROOT, used verbatim. An operator who states the root is obeyed.
+//  1. SIGNALDECK_ROOT, used verbatim whenever it is SET. An operator — or a
+//     test harness — who states the root is obeyed and the tree is NEVER
+//     walked. Rung 2 below is a security boundary as much as a convenience:
+//     the probe starts from the WORKING DIRECTORY, so any process running from
+//     inside a checkout resolves that checkout. daemon/e2e relied on a fake
+//     HOME for credential isolation and got none, because rung 3 is where HOME
+//     applies and rung 2 always answered first. Setting this variable is the
+//     only thing that actually isolates a process from the checkout it runs in.
 //  2. The nearest ancestor of the executable, then of the working directory,
 //     that actually contains signaldeck/daemon. This is what makes a clone work
 //     wherever it is put.
 //  3. $HOME/claude code — the historical default, kept last so the existing
 //     macOS launchd deployment keeps resolving exactly as it did before.
+//
+// A stated root that contains no .env is fine: Load() proceeds with NO
+// credentials rather than aborting. Aborting would make an isolated test noisy
+// to run and would teach people to unset SIGNALDECK_ROOT, which reopens the
+// leak — the failure mode is worse than the one it would catch.
 func projectRoot() string {
-	if r := strings.TrimSpace(os.Getenv("SIGNALDECK_ROOT")); r != "" {
+	if r, ok := os.LookupEnv("SIGNALDECK_ROOT"); ok {
+		if r = strings.TrimSpace(r); r == "" {
+			// Set but blank names no root at all. Falling through to the probe
+			// here is exactly how a process that believed it was isolated
+			// silently re-acquires the surrounding checkout's daemon/.env and
+			// stock-trader/.env, so refuse instead. Only reachable when a
+			// caller set the variable to an empty value, which is always a bug
+			// in that caller.
+			panic("config: SIGNALDECK_ROOT is set but blank; refusing to probe for a project root")
+		}
 		return r
 	}
 	// Probe the executable's directory first: under launchd the working
@@ -162,6 +183,14 @@ func Load() Config {
 	if len(llmKeys) > 0 {
 		llmFirst = llmKeys[0]
 	}
+	// Resolved ONCE and shared: the Host allowlist is both a config field and
+	// the evidence tunnelConfigured() uses to decide whether this daemon is
+	// published. Computing it twice invites the two to drift, which is how the
+	// open-by-default flags got their value from a signal that disagreed with
+	// the allowlist sitting next to them.
+	allowedHostsRaw := pick("SIGNALDECK_ALLOWED_HOSTS", defaultAllowedHosts)
+	httpAddr := envOr("SIGNALDECK_HTTP", "127.0.0.1:8322")
+	private := reachablePrivately(httpAddr, allowedHostsRaw)
 	cfg := Config{
 		LLMKey:          llmFirst,
 		LLMKeys:         llmKeys,
@@ -171,26 +200,26 @@ func Load() Config {
 		LLMModelFast:    pick("SIGNALDECK_LLM_MODEL_FAST", "meta/llama-3.1-8b-instruct"),               // ultra-fast for high-frequency low-stakes calls
 		LLMDailyCap:     atoiOr(pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
 		DBPath:          envOr("SIGNALDECK_DB", filepath.Join(projectRoot(), "signaldeck", "data", "signaldeck.db")),
-		HTTPAddr:        envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"),
+		HTTPAddr:        httpAddr,
 		HudURL:          envOr("SIGNALDECK_HUD_URL", "http://127.0.0.1:8787/api/summary"),
 		TickstreamURL:   envOr("SIGNALDECK_TICKSTREAM_URL", "http://127.0.0.1:8321/api/snapshot"),
 		GeminiKey:       os.Getenv("SIGNALDECK_GEMINI_KEY"),
 		CryptoSymbol:    "BTC/USD",
 		WebOrigins:      splitList(pick("SIGNALDECK_WEB_ORIGINS", "http://localhost:8323,http://127.0.0.1:8323,http://localhost:3000,http://127.0.0.1:3000")),
-		AllowedHosts:    splitList(pick("SIGNALDECK_ALLOWED_HOSTS", "127.0.0.1:8322,localhost:8322")),
+		AllowedHosts:    splitList(allowedHostsRaw),
 		APIToken:        os.Getenv("SIGNALDECK_API_TOKEN"),
 		TVWebhookSecret: pick("SIGNALDECK_TV_WEBHOOK_SECRET", ""),
 		// SAFE BY DEFAULT (2026-07-25): open registration is a localhost
 		// convenience. On a reachable deployment it lets any stranger create an
 		// account and spend the LLM budget, so it follows the bind address for
 		// the same reason PublicReads does.
-		OpenSignup: boolEnv("SIGNALDECK_OPEN_SIGNUP", reachablePrivately(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
+		OpenSignup: boolEnv("SIGNALDECK_OPEN_SIGNUP", private),
 		// SAFE BY DEFAULT (2026-07-25): unauthenticated reads are a localhost
 		// convenience, not a deployment posture. The default now follows the
 		// BIND ADDRESS — true on loopback, false the moment the daemon listens
 		// anywhere reachable — so exposing it can no longer silently publish
 		// every read endpoint. An explicit env var still wins either way.
-		PublicReads: boolEnv("SIGNALDECK_PUBLIC_READS", reachablePrivately(envOr("SIGNALDECK_HTTP", "127.0.0.1:8322"))),
+		PublicReads: boolEnv("SIGNALDECK_PUBLIC_READS", private),
 		// Asserting you hold redistribution rights for the stored price data.
 		// The flag records the operator's assertion; it does not grant a right.
 		AllowRawExport: boolEnv("SIGNALDECK_ALLOW_RAW_EXPORT", false),
@@ -322,6 +351,11 @@ func parseDotEnv(path string) map[string]string {
 	return out
 }
 
+// defaultAllowedHosts is the Host-header allowlist when the operator sets none.
+// Named rather than inlined because tunnelConfigured() reads the same setting to
+// decide whether this daemon is published, and the two must not drift.
+const defaultAllowedHosts = "127.0.0.1:8322,localhost:8322"
+
 // loopbackOnly reports whether addr binds only to the local machine.
 //
 // IT IS NOT SUFFICIENT ON ITS OWN, and the reason is the whole point of
@@ -361,17 +395,51 @@ func loopbackOnly(addr string) bool {
 // but a repo file says nothing about whether THIS machine publishes the daemon.
 // An operator running a tunnel this list does not know about still has
 // SIGNALDECK_ASSUME_TUNNEL.
-var tunnelAgentPaths = []string{
-	os.ExpandEnv("$HOME/Library/LaunchAgents/com.signaldeck.tunnel.plist"),
-}
+// HOME is not a Windows environment variable, so os.ExpandEnv("$HOME/...")
+// expanded to nothing there and left a bare "/Library/LaunchAgents/..." — not
+// absolute on Windows, which is a path this machine can never hold. It also
+// meant the value differed by SHELL: git-bash exports a path-converted HOME and
+// PowerShell exports none, so the same check passed from one terminal and failed
+// from the other. os.UserHomeDir reads USERPROFILE on Windows and HOME elsewhere.
+var tunnelAgentPaths = func() []string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil // unknown home — no agent can be confirmed, so fail closed
+	}
+	return []string{
+		filepath.Join(home, "Library", "LaunchAgents", "com.signaldeck.tunnel.plist"),
+	}
+}()
 
 // tunnelConfigured reports whether a reverse-tunnel LaunchAgent exists on this
 // machine. Overridable by SIGNALDECK_ASSUME_TUNNEL for testing and for an
 // operator running a tunnel this list does not know about — set it to true, and
 // the defaults close.
-func tunnelConfigured() bool {
+// allowedHosts is the RESOLVED allowlist string (already through pick, so it
+// includes values set in daemon/.env — which is exactly where the ngrok
+// hostname lives; reading os.Getenv here would have missed it).
+func tunnelConfigured(allowedHosts string) bool {
 	if v := strings.TrimSpace(os.Getenv("SIGNALDECK_ASSUME_TUNNEL")); v != "" {
 		return v == "1" || strings.EqualFold(v, "true")
+	}
+	// A non-loopback entry in the operator's OWN host allowlist is the signal
+	// that needs no per-OS knowledge, and it is the one that was missing.
+	//
+	// tunnelAgentPaths below can only ever confirm a macOS LaunchAgent. When
+	// this machine moved to Windows that check became a constant false — so
+	// reachablePrivately() answered "private" while daemon/.env allowlisted
+	// `spearfish-dwindle-module.ngrok-free.dev`, and PublicReads/OpenSignup
+	// both defaulted OPEN on a box one `ngrok start` away from being served to
+	// the internet. The A9 fix from the 2026-07-26 re-audit was correct and
+	// silently un-fixed itself by changing operating system.
+	//
+	// Serving a host you cannot reach from loopback IS publication, on every
+	// platform and every tunnel implementation. Deriving it from the allowlist
+	// cannot rot the way a hardcoded path does.
+	for _, h := range splitList(allowedHosts) {
+		if h != "" && !loopbackOnly(h) {
+			return true
+		}
 	}
 	for _, p := range tunnelAgentPaths {
 		if p == "" {
@@ -395,8 +463,8 @@ func tunnelConfigured() bool {
 // agree before anything opens; when they disagree the answer is closed, because
 // an operator who wants reads open can say so in one env var, and a stranger
 // who gets them by accident cannot be un-given them.
-func reachablePrivately(addr string) bool {
-	return loopbackOnly(addr) && !tunnelConfigured()
+func reachablePrivately(addr, allowedHosts string) bool {
+	return loopbackOnly(addr) && !tunnelConfigured(allowedHosts)
 }
 
 // ReachablePrivately is the exported form of the safe-by-default signal, for
@@ -404,4 +472,6 @@ func reachablePrivately(addr string) bool {
 // server, which permits an anonymous caller only when this is true. Exported as
 // a function over the ADDRESS rather than as a stored bool so a caller cannot
 // hold a stale copy taken before the tunnel agent appeared.
-func (c Config) ReachablePrivately() bool { return reachablePrivately(c.HTTPAddr) }
+func (c Config) ReachablePrivately() bool {
+	return reachablePrivately(c.HTTPAddr, strings.Join(c.AllowedHosts, ","))
+}

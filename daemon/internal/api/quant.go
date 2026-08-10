@@ -52,7 +52,7 @@ func (d Deps) forecast(w http.ResponseWriter, r *http.Request) {
 	}
 	fs, err := d.St.Forecasts(r.Context(), s.ID)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, fs)
@@ -86,7 +86,7 @@ func (d Deps) backtestRun(w http.ResponseWriter, r *http.Request) {
 	}
 	bars, err := d.St.LastBars(r.Context(), s.ID, md.TF1d, 1000)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if len(bars) < 60 {
@@ -172,7 +172,7 @@ func (d Deps) risk(w http.ResponseWriter, r *http.Request) {
 		}
 		bs, err := d.dailySeries(r, s.Symbol, s.ID, 400)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		if len(bs.Closes) < 60 {
@@ -220,7 +220,7 @@ func (d Deps) risk(w http.ResponseWriter, r *http.Request) {
 func (d Deps) correlation(w http.ResponseWriter, r *http.Request) {
 	syms, err := d.St.ListSymbols(r.Context(), false)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	var series []portfolio.Series
@@ -228,7 +228,7 @@ func (d Deps) correlation(w http.ResponseWriter, r *http.Request) {
 	for _, s := range syms {
 		bs, err := d.dailySeries(r, s.Symbol, s.ID, 250)
 		if err != nil {
-			httpErr(w, 500, err.Error())
+			httpInternal(w, err)
 			return
 		}
 		if len(bs.Closes) < 30 {
@@ -271,7 +271,7 @@ func (d Deps) correlation(w http.ResponseWriter, r *http.Request) {
 func (d Deps) portfolioGet(w http.ResponseWriter, r *http.Request) {
 	positions, err := d.St.Positions(r.Context(), userID(r), false)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	last := map[string]float64{}
@@ -342,7 +342,7 @@ func (d Deps) portfolioAdd(w http.ResponseWriter, r *http.Request) {
 		EntryTs: time.Now().Unix(), Note: body.Note, ScoreAtEntry: scoreAtEntry,
 	})
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"id": id, "entryPrice": entry, "scoreAtEntry": scoreAtEntry})
@@ -370,7 +370,7 @@ func (d Deps) portfolioClose(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, err := d.St.ClosePosition(r.Context(), body.ID, userID(r), price)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	if !ok {
@@ -406,7 +406,7 @@ func (d Deps) modelForecasts(w http.ResponseWriter, r *http.Request) {
 	}
 	fs, err := d.St.ModelForecasts(r.Context(), s.ID)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, fs)

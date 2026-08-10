@@ -39,7 +39,7 @@ func (d Deps) congressTrades(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := d.St.CongressTrades(ctx, symbol, member, chamber, limitParam(r, 100, 500))
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	out := map[string]any{

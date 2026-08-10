@@ -54,8 +54,18 @@ FORBIDDEN_PHRASES = [
 ]
 
 PERCENTAGE_RE = re.compile(r"\d+(?:\.\d+)?\s*%")
-GENERATED_BEGIN_RE = re.compile(r"^<!--\s*BEGIN GENERATED:\s*(\S+)\s*-->$")
-GENERATED_END_RE = re.compile(r"^<!--\s*END GENERATED:\s*(\S+)\s*-->$")
+# Two marker conventions exist and both must parse. `build` below writes
+# `BEGIN GENERATED: name` (colon); tools/live_accuracy.py, tools/deck_facts.py
+# and tools/controls_evidence.py all write `BEGIN GENERATED name` (space), and
+# the space form is the ONLY one present in the repository's documents —
+# `grep -rn "BEGIN GENERATED:" --include=*.md .` matches nothing. Requiring the
+# colon meant _region_is_anchored never ran on a real document: a legitimately
+# generated region earned no exemption, and the gate stayed green only because
+# no line inside those blocks happens to pair a percentage with a live-accuracy
+# phrase. The separator is required (colon or whitespace) so a typo'd
+# `BEGIN GENERATEDname` still opens nothing.
+GENERATED_BEGIN_RE = re.compile(r"^<!--\s*BEGIN GENERATED(?::\s*|\s+)(\S+)\s*-->$")
+GENERATED_END_RE = re.compile(r"^<!--\s*END GENERATED(?::\s*|\s+)(\S+)\s*-->$")
 LIVE_ACCURACY_PARTIAL_BEGIN_RE = re.compile(r"^<!--\s*LIVE-ACCURACY-PARTIAL:BEGIN\s*-->$")
 LIVE_ACCURACY_PARTIAL_END_RE = re.compile(r"^<!--\s*LIVE-ACCURACY-PARTIAL:END\s*-->$")
 TABLE_ROW_RE = re.compile(r"^\s*\|")

@@ -671,8 +671,13 @@ func TestStorageGovernorCheckpointLadder(t *testing.T) {
 		_ = st.UpsertBars(ctx, []md.Bar{{SymbolID: sym.ID, TF: md.TF1m, Ts: int64(60 * i), Close: float64(i)}})
 	}
 
+	// CLOSED market, pinned. The TRUNCATE rung is gated on marketcal.OpenForBars,
+	// so with the real clock this test reached the rung it exists to cover only
+	// outside trading hours and asserted nothing during them. A Saturday is the
+	// simplest instant the calendar calls closed for every venue.
+	closed := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC) // Saturday
 	q := &fakeQuiescer{}
-	g := &StorageGovernor{St: st, Quiescer: q}
+	g := &StorageGovernor{St: st, Quiescer: q, Now: func() time.Time { return closed }}
 	msg, err := g.Run(ctx)
 	if err != nil {
 		t.Fatalf("governor run: %v", err)
@@ -682,14 +687,63 @@ func TestStorageGovernorCheckpointLadder(t *testing.T) {
 			t.Fatalf("ladder report %q missing %q", msg, want)
 		}
 	}
+	// The report names BOTH TRUNCATE outcomes with the same word — "TRUNCATE
+	// n/m frames" when it ran, "TRUNCATE deferred (market hours)" when the gate
+	// held it back. Testing for the bare substring conflated them, so during
+	// market hours this read a deferral as a run and demanded a quiesce window
+	// that had correctly never opened. Discriminate, do not soften.
+	deferred := contains(msg, "TRUNCATE deferred")
+	ran := contains(msg, "TRUNCATE") && !deferred
+	if deferred {
+		t.Fatalf("market pinned CLOSED yet TRUNCATE was deferred: %q", msg)
+	}
 	// PASSIVE may empty the WAL outright on a quiet temp DB, in which case the
 	// upper rungs are correctly skipped; otherwise TRUNCATE must have run inside
 	// the quiesce window.
-	if contains(msg, "TRUNCATE") && q.calls != 1 {
+	if ran && q.calls != 1 {
 		t.Errorf("TRUNCATE ran with %d quiesce windows, want exactly 1", q.calls)
 	}
 	if q.calls > 0 && (len(q.except) != 1 || q.except[0] != g.Name()) {
 		t.Errorf("quiesce except=%v, want the governor itself (else it waits on its own run)", q.except)
+	}
+}
+
+// The other half of the gate, which nothing covered: during market hours with a
+// WAL under the alert threshold, TRUNCATE must be DEFERRED and the fleet must
+// NOT be held still. Holding a 3s quiesce window for a rung that then does not
+// run is a pure availability cost, and it is the failure the bare-substring
+// assertion would have hidden in either direction.
+func TestStorageGovernorDefersTruncateDuringMarketHours(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	sym, _ := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
+	for i := 0; i < 50; i++ {
+		_ = st.UpsertBars(ctx, []md.Bar{{SymbolID: sym.ID, TF: md.TF1m, Ts: int64(60 * i), Close: float64(i)}})
+	}
+
+	// Wednesday 15:00 UTC = 11:00 ET, unambiguously inside the session.
+	open := time.Date(2026, 8, 5, 15, 0, 0, 0, time.UTC)
+	q := &fakeQuiescer{}
+	g := &StorageGovernor{St: st, Quiescer: q, Now: func() time.Time { return open }}
+	msg, err := g.Run(ctx)
+	if err != nil {
+		t.Fatalf("governor run: %v", err)
+	}
+	// A WAL that PASSIVE empties outright returns before the gate is consulted;
+	// that is a legitimate early exit and not what this test is about.
+	if contains(msg, "wal empty") {
+		t.Skip("PASSIVE emptied the WAL before the market-hours gate was reached")
+	}
+	if !contains(msg, "TRUNCATE deferred") {
+		t.Errorf("market pinned OPEN with a small WAL, want TRUNCATE deferred, got %q", msg)
+	}
+	if q.calls != 0 {
+		t.Errorf("deferred TRUNCATE opened %d quiesce window(s) — the fleet must not be "+
+			"held still for a rung that does not run", q.calls)
+	}
+	// The lower rungs are the entire point of the ladder: they run regardless.
+	if !contains(msg, "PASSIVE") {
+		t.Errorf("PASSIVE must run even when TRUNCATE is deferred, got %q", msg)
 	}
 }
 

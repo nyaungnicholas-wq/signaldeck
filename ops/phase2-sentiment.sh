@@ -12,7 +12,9 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG="$SD/logs/phase2-sentiment.log"
 {
   echo "──────── $(date '+%Y-%m-%dT%H:%M:%S') ────────"
-  python3 "$SD/tools/sentiment_conditioning.py"
+  # sd_py, not `python3`: the latter is a Store alias stub under Git Bash, so
+  # the weekly run died before the test and the VERDICT grep below saw nothing.
+  "$(sd_py)" "$SD/tools/sentiment_conditioning.py"
 } >> "$LOG" 2>&1
 
 # Notify only when the test actually produced a verdict — a weekly "still no

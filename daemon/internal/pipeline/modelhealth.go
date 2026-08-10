@@ -152,7 +152,7 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		// reports the same record the runner acted on. Emitting goes false because
 		// that is the literal truth for the horizon while the gate holds.
 		if rec, err := loadCrossSection(ctx, w.St, h); err == nil && rec != nil {
-			if ok, reason := rec.CrossSection.Usable(); !ok {
+			if ok, reason := rec.Usable(); !ok {
 				score.Emitting = false
 				if score.Verdict == modelhealth.VerdictHealthy ||
 					score.Verdict == modelhealth.VerdictWatch {
@@ -169,15 +169,15 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		}
 
 		blob, err := json.Marshal(map[string]any{
-			"model":          model,
-			"verdict":        score.Verdict,
-			"emitting":       score.Emitting,
-			"overall":        score.Overall,
-			"components":     score.Components,
-			"reasons":        score.Reasons,
-			"observations":   score.Observations,
-			"accuracy":       full.Accuracy,
-			"baseline":       full.BaselineAcc,
+			"model":                  model,
+			"verdict":                score.Verdict,
+			"emitting":               score.Emitting,
+			"overall":                score.Overall,
+			"components":             score.Components,
+			"reasons":                score.Reasons,
+			"observations":           score.Observations,
+			"accuracy":               full.Accuracy,
+			"baseline":               full.BaselineAcc,
 			"registryRetire":         regFlags[model].Retire,
 			"registryUnattributable": regFlags[model].Unattributable,
 			"registryRevisionGate":   regFlags[model].Offenders,

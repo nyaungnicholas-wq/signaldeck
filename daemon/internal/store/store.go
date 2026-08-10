@@ -277,6 +277,68 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// basis-marker wave: which label-and-signal basis produced an outcome row.
+	// The live DB already carries this column (it was added out of band and left
+	// 100% NULL on 525,301 rows), so the guard below is what makes the schema
+	// file and the live schema agree instead of drifting. Pre-existing rows stay
+	// NULL, which reads as "basis predates the marker" — the honest answer, since
+	// nothing can retroactively know which build wrote them. See BasisEpoch.
+	for _, col := range []struct{ name, ddl string }{
+		{"basis_epoch", `ALTER TABLE prediction_outcomes ADD COLUMN basis_epoch INTEGER`},
+		// settle_ts is the BASE BAR this row was graded from, and it is the true
+		// independence unit — two predictions share an outcome exactly when they
+		// share a base bar.
+		//
+		// trading_day(ts) is not that unit off a 24/7 market. base is
+		// BarAtOrBefore(ts), so a Saturday prediction takes Friday's base and
+		// Monday's forward, identical to Friday's own. Measured 2026-08-08:
+		// 32.9% of consecutive stock symbol-day pairs carried an IDENTICAL
+		// label (Sun 84.7%, Sat 64.9%, crypto 0.0%) while every day-clustered
+		// statistic counted them as separate observations. Folding weekends into
+		// trading_day() would be wrong in the other direction — for crypto,
+		// Saturday IS an independent session.
+		//
+		// NULL on pre-existing rows, which reads as "unknown settle bar" rather
+		// than as a claim; BackfillSettleTs fills them from the bars table.
+		{"settle_ts", `ALTER TABLE prediction_outcomes ADD COLUMN settle_ts INTEGER`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('prediction_outcomes') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	// settled-move wave, part 2: the SAME independence key on the other two
+	// outcome tables whose day-clustered statistics feed a published surface.
+	// The reasoning is identical to prediction_outcomes above and is not repeated
+	// here — see that comment and md.SettleDay.
+	//
+	// Deliberately NOT extended to two tables that also fold by day:
+	//   - prediction_ledger is an append-only HASH CHAIN (prev_hash/entry_hash)
+	//     backing the pre-registration record. Its day counts are a reporting
+	//     convenience; churning its schema to improve them trades a real
+	//     integrity guarantee for a cosmetic one.
+	//   - regime_outcomes stores `day` as part of a UNIQUE dedup index
+	//     (symbol_id, kind, day), so redefining it changes which rows are
+	//     WRITTEN, not merely how they are counted. That needs its own staged
+	//     change with an index rebuild, not a column bolted on beside it.
+	for _, t := range []struct{ table, ddl string }{
+		{"score_outcomes", `ALTER TABLE score_outcomes ADD COLUMN settle_ts INTEGER`},
+		{"confluence_outcomes", `ALTER TABLE confluence_outcomes ADD COLUMN settle_ts INTEGER`},
+	} {
+		if err := w.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name='settle_ts'`, t.table).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(t.ddl); err != nil {
+				return err
+			}
+		}
+	}
 	// multiplicity wave: the corrected divisor a loop hypothesis cleared. Live
 	// DBs already hold rows from before the loop fed PriorSearches, and those
 	// rows keep divisor=0 — the truthful state, meaning "correction unrecorded",
@@ -389,7 +451,123 @@ func migrate(w *sql.DB) error {
 	if err := migrateRegimeOutcomesToTradingDay(w); err != nil {
 		return err
 	}
+	// Strictly after the trading-day fold: this one re-folds the SAME column a
+	// second time and relies on superseded_by and the partial dedup index that
+	// migration introduces.
+	if err := migrateRegimeOutcomesToSettleDay(w); err != nil {
+		return err
+	}
 	return nil
+}
+
+// migrateRegimeOutcomesToSettleDay re-folds regime_outcomes.day a second time,
+// from the trading day onto the SETTLED MOVE, WITHOUT deleting anything.
+//
+// The trading-day fold fixed the after-close tail but not the weekend: a regime
+// call frozen on Friday evening, Saturday and Sunday all describe the same
+// Friday base bar and the same Friday->Monday move, yet the calendar fold
+// admitted three. Measured on the live corpus before this ran: 32,688 live rows
+// folding to 23,698 distinct (symbol, kind, settled-move) observations — 8,990
+// rows, 27.5%, were the same call counted again. Every one of them had a 1d bar
+// at or before it, so the fold is fully determined here and never falls back.
+//
+// Same repair shape as the trading-day migration above, and for the same reason:
+// this table is the pre-registration audit trail with ts, regime, conviction and
+// historical_accuracy frozen at call time, so a loser is marked superseded_by
+// rather than deleted. Deleting would drop ungraded forecasts because the key
+// that admitted them was wrong, which is a file drawer and a worse defect than
+// the one being repaired. The EARLIEST call of the settled move wins, ties on
+// the lower id, reproducing what INSERT OR IGNORE would have written had the key
+// been right from the start.
+//
+// Two things it deliberately does NOT touch:
+//   - regime_outcome_quarantine.day. Its rows are a frozen snapshot of what was
+//     quarantined under the fold in force at freeze time, and quarantineMembers
+//     digests outcome_id:symbol_id:kind:day into a pinned manifest. Rewriting
+//     them would invalidate that digest to make a historical record agree with a
+//     fold it predates. It reads only its own table, so leaving it alone keeps
+//     the manifest verifiable.
+//   - rows already carrying superseded_by. They lost an earlier dedup and stay
+//     lost; re-examining them could resurrect a row the previous fold retired.
+//
+// Idempotent: guarded on settle_ts's absence, and one transaction so a crash
+// midway leaves the trading-day shape intact rather than a half-folded table.
+func migrateRegimeOutcomesToSettleDay(w *sql.DB) error {
+	var n int
+	if err := w.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('regime_outcomes') WHERE name='settle_ts'`).
+		Scan(&n); err != nil {
+		return err
+	}
+	if n != 0 {
+		return nil
+	}
+	tx, err := w.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+	stmts := []string{
+		`ALTER TABLE regime_outcomes ADD COLUMN settle_ts INTEGER`,
+		// The base bar the call describes. Derived exactly as every other
+		// settle_ts on the platform is, so all four tables agree by construction.
+		`UPDATE regime_outcomes SET settle_ts = (
+		   SELECT MAX(b.ts) FROM bars b
+		    WHERE b.symbol_id = regime_outcomes.symbol_id
+		      AND b.tf = '1d' AND b.ts <= regime_outcomes.ts)`,
+		// Drop first: re-folding `day` collides the weekend clusters under the
+		// existing unique index.
+		`DROP INDEX IF EXISTS idx_regime_outcomes_dedup`,
+		`UPDATE regime_outcomes SET day = settle_day(settle_ts, ts)`,
+		// Winners are materialised BEFORE any supersede write. Deciding the winner
+		// inside the UPDATE would read superseded_by while the same statement is
+		// setting it, so a row's fate could depend on how far the scan had got.
+		`CREATE TEMP TABLE regime_settle_keep AS
+		   SELECT id FROM (
+		     SELECT id, ROW_NUMBER() OVER (
+		              PARTITION BY symbol_id, kind, day ORDER BY ts ASC, id ASC) rn
+		       FROM regime_outcomes WHERE superseded_by IS NULL)
+		    WHERE rn = 1`,
+		`UPDATE regime_outcomes AS r
+		    SET superseded_by = (
+		          SELECT k.id FROM regime_settle_keep k
+		            JOIN regime_outcomes kw ON kw.id = k.id
+		           WHERE kw.symbol_id = r.symbol_id AND kw.kind = r.kind
+		             AND kw.day = r.day)
+		  WHERE r.superseded_by IS NULL
+		    AND r.id NOT IN (SELECT id FROM regime_settle_keep)`,
+		// Collapse supersede CHAINS. A row retired by the earlier trading-day fold
+		// points at the winner of THAT fold, and this fold can retire that winner
+		// in turn — leaving the first row pointing at a row which is itself no
+		// longer the representative. Measured on the live corpus: 4 such chains.
+		// superseded_by is meant to answer "which row represents this observation
+		// now", so it is repointed at the surviving winner of the group.
+		//
+		// Guarded on a live winner EXISTING: without that, a group with no live row
+		// would have its members' superseded_by set to NULL, silently resurrecting
+		// rows the dedup retired. Writes only to rows that are already superseded
+		// and reads only rows that are not, so the read set cannot shift underneath
+		// the statement.
+		`UPDATE regime_outcomes AS r
+		    SET superseded_by = (
+		          SELECT w.id FROM regime_outcomes w
+		           WHERE w.superseded_by IS NULL
+		             AND w.symbol_id = r.symbol_id AND w.kind = r.kind AND w.day = r.day)
+		  WHERE r.superseded_by IS NOT NULL
+		    AND EXISTS (
+		          SELECT 1 FROM regime_outcomes w
+		           WHERE w.superseded_by IS NULL
+		             AND w.symbol_id = r.symbol_id AND w.kind = r.kind AND w.day = r.day)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_regime_outcomes_dedup
+		   ON regime_outcomes (symbol_id, kind, day) WHERE superseded_by IS NULL`,
+		`DROP TABLE regime_settle_keep`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("regime_outcomes settled-move fold: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // migrateRegimeOutcomesToTradingDay re-folds regime_outcomes.day from the old
@@ -933,9 +1111,20 @@ func (s *Store) UnresolvedOutcomesByHorizon(ctx context.Context, h md.Horizon, c
 }
 
 // ResolveOutcome records the realized forward return for one score.
+//
+// settle_ts is stamped here for the same reason as in ResolvePrediction: it is
+// the unit of independent evidence (md.SettleDay), and leaving it for the
+// periodic backfill meant the newest rows — the ones live statistics lean on —
+// were the last to carry the right key. Derivation identical to
+// BackfillScoreSettleTs, so the two agree by construction.
 func (s *Store) ResolveOutcome(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) error {
 	_, err := s.w.ExecContext(ctx, `
-		UPDATE score_outcomes SET fwd_return=?, resolved_at=?
+		UPDATE score_outcomes SET fwd_return=?, resolved_at=?,
+		  settle_ts = (
+		    SELECT MAX(b.ts) FROM bars b
+		    WHERE b.symbol_id = score_outcomes.symbol_id
+		      AND b.tf = '1d' AND b.ts <= score_outcomes.ts
+		  )
 		WHERE symbol_id=? AND horizon=? AND ts=?`,
 		fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
 	return err
@@ -954,7 +1143,7 @@ func (s *Store) ResolveOutcomeVoid(ctx context.Context, symbolID int64, h md.Hor
 // ResolvedOutcomes returns resolved (score, fwd_return) pairs for the honesty
 // page; symbolID 0 = all symbols.
 func (s *Store) ResolvedOutcomes(ctx context.Context, symbolID int64, h md.Horizon, limit int) ([]md.ScoreOutcome, error) {
-	q := `SELECT symbol_id, horizon, ts, score, fwd_return, resolved_at
+	q := `SELECT symbol_id, horizon, ts, score, fwd_return, resolved_at, settle_ts
 	      FROM score_outcomes WHERE resolved_at IS NOT NULL AND horizon=?`
 	args := []any{string(h)}
 	if symbolID != 0 {
@@ -974,9 +1163,11 @@ func (s *Store) ResolvedOutcomes(ctx context.Context, symbolID int64, h md.Horiz
 		var hz string
 		var fwd sql.NullFloat64
 		var res sql.NullInt64
-		if err := rows.Scan(&o.SymbolID, &hz, &o.Ts, &o.Score, &fwd, &res); err != nil {
+		var settle sql.NullInt64
+		if err := rows.Scan(&o.SymbolID, &hz, &o.Ts, &o.Score, &fwd, &res, &settle); err != nil {
 			return nil, err
 		}
+		o.SettleTs = settle.Int64 // 0 when NULL
 		o.Horizon = md.Horizon(hz)
 		if fwd.Valid {
 			o.FwdReturn = &fwd.Float64

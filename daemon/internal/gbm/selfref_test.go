@@ -46,10 +46,10 @@ func TestSelfReferentialKey_CoversEveryBlendAndLegOutput(t *testing.T) {
 // LABELS has no business being an input at all.
 func TestSelfReferentialKey_CoversLegOutputsAndLabelDerivedStats(t *testing.T) {
 	for _, k := range []string{
-		"forecast_prob",        // the walk-forward logistic leg's own output
-		"forecast_lift",        // that leg's OOS accuracy — computed from labels
-		"expectancy_hit_rate",  // the expectancy leg's output, also a label statistic
-		"n_used",               // how many legs cleared their (label-graded) gates
+		"forecast_prob",                           // the walk-forward logistic leg's own output
+		"forecast_lift",                           // that leg's OOS accuracy — computed from labels
+		"expectancy_hit_rate",                     // the expectancy leg's output, also a label statistic
+		"n_used",                                  // how many legs cleared their (label-graded) gates
 		"gbm_lift", "meanrev_lift", "alphax_lift", // class rule, not yet stored
 		"pressure_hit_rate", // class rule: any hit rate is a label statistic
 	} {
@@ -130,6 +130,21 @@ var featureKeyCensus = map[string]bool{ // key -> excluded?
 	"news_vol_z": false, "pattern_bias": false, "pc_total": false,
 	"pressure_score": false, "rank_pct": false,
 	"regime_downtrend": false, "regime_range": false, "regime_squeeze": false, "regime_uptrend": false,
+	// HMM volatility-regime posteriors (internal/hmmregime, shipped by c27f5cf).
+	// Classified 2026-08-06 after this census caught them uncensused — the guard
+	// working exactly as its comment promises. TRACED BEFORE CLASSIFYING, and the
+	// only question that matters is whether the posterior at bar i can see bar
+	// i+1: hmmregime.Fit learns from log returns alone
+	// (rets[i-1] = log(bars[i].Close / bars[i-1].Close), hmmregime.go:106-111) and
+	// touches no prediction, outcome or label. The package splits Fit from Filter
+	// precisely because smoothed/Viterbi decoding WOULD be non-causal: Fit runs
+	// forward-backward EM over a training prefix, then Filter runs the causal
+	// forward recursion with those parameters frozen, so "the label at bar i is a
+	// function of bars[0..i] and nothing else" (hmmregime.go:18-27). Trailing
+	// price observations, so trainable — same class as regime_* above, not a
+	// model output. A label-derived regime tag would have to be excluded here AND
+	// refused by SelfReferentialKey.
+	"hmm_calm": false, "hmm_turbulent": false,
 	"sentiment_n": false, "sentiment_score": false,
 	"short_int_dtc": false, "short_vol_z": false, "stoch_k": false,
 	"stocktwits_bull_ratio": false, "supertrend_dir": false,

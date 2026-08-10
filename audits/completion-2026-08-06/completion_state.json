@@ -1,0 +1,171 @@
+{
+  "_note": "Machine-readable state for the SignalDeck completion engagement. Every value here was observed, not assumed. Status vocabulary: VERIFIED | FIXED | BLOCKED | NOT_APPLICABLE | UNVERIFIED | FAILING.",
+
+  "run": {
+    "date": "2026-08-06",
+    "director": "SignalDeck Omni Route Completion Director",
+    "rounds": 3,
+    "final_status": "NOT_COMPLETE",
+    "final_status_reason": "5 items blocked on user approval; adversarial review and Medium/Low verification of round 2 still in flight at time of writing; e2e and web verification structurally blocked."
+  },
+
+  "repository": {
+    "path": "C:/Users/Nicholas_N/Desktop/claude code/signaldeck",
+    "branch": "hmm-regime-and-pbo",
+    "head": "0b1f73ba254891037571af019824d0e43e10c867",
+    "remote": "github.com/nyaungnicholas-wq/signaldeck (private)",
+    "working_tree_dirty": true,
+    "uncommitted_by_this_engagement": [
+      "daemon/internal/marketcal/marketcal.go",
+      "daemon/internal/workers/schedule.go",
+      "daemon/internal/workers/schedule_check_test.go",
+      "daemon/cmd/signaldeckd/run.go",
+      "daemon/cmd/signaldeckd/staleness_test.go",
+      "daemon/internal/pipeline/paper.go",
+      "daemon/internal/pipeline/paper_test.go",
+      "daemon/internal/mcp/attack_test.go",
+      "daemon/internal/srchealth/srchealth.go",
+      "daemon/internal/srchealth/srchealth_test.go",
+      "tools/docs_gate.py",
+      "tools/test_docs_gate_anchor.py (new)",
+      "audits/completion-2026-08-06/ (new)"
+    ],
+    "uncommitted_by_others_PRESERVED_UNTOUCHED": [
+      "README.md (rewritten by the SignalDeck Accuracy task at 14:05)",
+      "research/eighty/h0265.py",
+      "research/eighty/h0266.py",
+      "research/eighty/h0267.py",
+      "research/eighty/h0268.py",
+      "research/eighty/h0269.py"
+    ],
+    "git_state_changes_made": "none — no add, commit, checkout, stash, reset, clean, pull or push"
+  },
+
+  "runtime": {
+    "os": "Windows 11 Pro 10.0.26200",
+    "go": "1.26.5 windows/amd64",
+    "python": "3.12.10",
+    "node": "24.18.0",
+    "sqlite3": "3.53.4",
+    "daemon_pid_at_start": 22220,
+    "daemon_pid_now": 33844,
+    "daemon_restarted_during_engagement": true,
+    "daemon_running_revision": "049941691d847455c7921a879bbe0651339bcd4e",
+    "commits_behind_head": 22,
+    "binary_mtime": "2026-08-05T22:58",
+    "critical_note": "The daemon restarted mid-engagement and STILL serves 0499416, because the binary was never rebuilt. Restarting does not close the deploy gap; only a rebuild does."
+  },
+
+  "services": {
+    "signaldeck_daemon_8322": "RUNNING",
+    "tickstream_8321": "RUNNING",
+    "signaldeck_web_8323": "DOWN — no listener, no Windows scheduled task, and install-windows-tasks.ps1 structurally skips its plist",
+    "trader_hud_8787": "DOWN since ~2026-07-29; /api/hud still serves the stale payload as available:true",
+    "ngrok_tunnel": "NOT RUNNING — plist exists, no Windows task",
+    "scheduled_tasks_total": 13,
+    "scheduled_tasks_nonzero_result": 0
+  },
+
+  "credentials": {
+    "_policy": "Names only. No value was read, printed, or logged at any point.",
+    "present": ["ALPACA_KEY", "ALPACA_SECRET", "SIGNALDECK_NVIDIA_KEY"],
+    "absent_or_unset": ["SMTP / remote alert transport credentials"],
+    "exposure_findings": "SIGNALDECK_PUBLIC_READS and SIGNALDECK_OPEN_SIGNUP default OPEN on this Windows host (agent-verified at config.go:187,193 -> :398 -> :372/:363). Daemon bind is loopback-only (REFUTED the off-host-reachability claim), so this is latent, not live."
+  },
+
+  "tests": {
+    "baseline": { "command": "go test -short ./...", "exit": 0, "ok": 119, "fail": 0, "no_test_files": 10 },
+    "post_repair": { "command": "go test -short ./...", "exit": 1, "ok": 118, "fail": 1, "failing_package": "internal/mcp", "resolution": "root-caused to a test fixture defect (NEW-1), not a product defect; fixed" },
+    "final": { "command": "go build && go vet && go test -short -count=1 ./...", "build_exit": 0, "vet_exit": 0, "test_exit": 0, "ok": 119, "fail": 0, "no_test_files": 10 },
+    "caveat": "-short skips the e2e suite BY DEFINITION. No end-to-end test ran in this engagement.",
+    "e2e": "BLOCKED — binds a real port / touches a real DB while the live daemon is running"
+  },
+
+  "database": {
+    "path": "data/signaldeck.db",
+    "size_bytes": 5284560896,
+    "wal_bytes": 67108864,
+    "integrity_check": {
+      "status": "ok",
+      "target": "data/backups/signaldeck-20260806-131007.db (static, 5.11 GB, VACUUM INTO at 13:11)",
+      "duration_s": 32.1,
+      "backup_sha256_matches_manifest": true,
+      "note": "Run against the backup to avoid contending with the live daemon. Proves no page/B-tree corruption in that image; the live DB has advanced since."
+    },
+    "logical_checks": { "clean": 4, "defects": 3, "bars_duplicate_symbol_tf_ts": 0 },
+    "open_paper_positions": 2,
+    "stranded_positions_in_inactive_symbols": 0
+  },
+
+  "model_status": {
+    "verdict": "FAILED",
+    "retired": true,
+    "retirement_sticky": true,
+    "predictor": "directional-ensemble (1d)",
+    "live_n": 3322,
+    "live_acc": 0.44009632751354605,
+    "null_acc": 0.5760,
+    "skill": -0.136,
+    "effective_n": 319.9,
+    "graded_at": "2026-08-06T14:05:06",
+    "independent_reproduction": {
+      "source": "orchestrator, read-only over the full prediction_outcomes table",
+      "h1d": { "n": 164332, "acc": 0.4815, "base_rate": 0.4964, "brier": 0.2998, "constant_brier": 0.2500 },
+      "h1w": { "n": 130960, "acc": 0.4792, "base_rate": 0.4331, "brier": 0.2801, "constant_brier": 0.2455 },
+      "confidence_buckets_1d": [0.4842, 0.4708, 0.4668, 0.4865, 0.5002],
+      "conclusion": "No directional edge. Confidence carries no information. Naive baseline wins 6/6 weekly cohorts (1d) and 5/5 (1w)."
+    },
+    "predictors_never_graded": 7,
+    "note": "This is a research result, not a defect. No repair in this engagement could change it, and none claimed to."
+  },
+
+  "repairs": [
+    { "id": "R2",     "component": "scheduler",     "status": "FIXED", "verified": true,  "negative_control": false, "approval_required": false },
+    { "id": "R3",     "component": "watchdog",      "status": "FIXED", "verified": true,  "negative_control": false, "approval_required": false },
+    { "id": "R5",     "component": "paper risk",    "status": "FIXED", "verified": true,  "negative_control": true,  "approval_required": false },
+    { "id": "SD-H35", "component": "source-health", "status": "FIXED", "verified": true,  "negative_control": true,  "approval_required": false },
+    { "id": "SD-012", "component": "docs gate",     "status": "FIXED", "verified": true,  "negative_control": true,  "approval_required": false,
+      "side_effect": "gate now correctly FAILS on 2 pre-existing violations in STRATEGY_DECK.md; CI red until BLOCKED-4 is resolved" },
+    { "id": "NEW-1",  "component": "mcp test",      "status": "FIXED", "verified": true,  "negative_control": false, "approval_required": false,
+      "note": "security test failed OPEN ~1 run in 256; root-caused to the fixture, not the auth path" }
+  ],
+
+  "repairs_attempted_and_reverted": [
+    {
+      "what": "declare deck_facts + controls_evidence in ops/docs-registry.json external_partials",
+      "why_reverted": "It only changed the gate's failure message (it then demanded partial FILES that do not exist) without fixing anything. Leaving a half-measure in a file that grants accuracy-check exemptions is worse than leaving it clean.",
+      "state": "fully reverted via git checkout -- ops/docs-registry.json; verified back to original"
+    }
+  ],
+
+  "blocked": [
+    { "id": "BLOCKED-1", "what": "rebuild + redeploy daemon on HEAD", "category": "live-state change", "priority": "HIGHEST" },
+    { "id": "BLOCKED-2", "what": "quarantine contaminated 1d labels + paper equity curve", "category": "database write" },
+    { "id": "BLOCKED-3", "what": "schedule or retire the web app", "category": "external/system" },
+    { "id": "BLOCKED-4", "what": "resolve 2 generated regions in STRATEGY_DECK.md", "category": "governed document rewrite" },
+    { "id": "BLOCKED-5", "what": "configure a real alert transport", "category": "external service + credentials" }
+  ],
+
+  "findings": {
+    "total_raw": 170,
+    "severity_raw": { "Critical": 14, "High": 52, "Medium": 66, "Low": 27, "Informational": 11 },
+    "verified_round1": 36,
+    "confirmed_round1": 34,
+    "refuted_round1": 2,
+    "downgraded_on_reverification": ["SD-012 Critical->Medium (impact inverted)", "SD-010 Critical->Medium (no cross-sectional volume consumer exists)"],
+    "medium_low_verified": "IN FLIGHT (round 2)",
+    "still_unverified_estimate": 120
+  },
+
+  "safety_invariants_held": {
+    "database_writes": 0,
+    "services_restarted_by_engagement": 0,
+    "binaries_rebuilt": 0,
+    "git_state_changes": 0,
+    "data_deleted": 0,
+    "secrets_printed": 0,
+    "backfills_invented": 0,
+    "unrelated_user_changes_modified": 0,
+    "write_write_conflicts": 0
+  }
+}

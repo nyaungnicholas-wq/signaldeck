@@ -36,7 +36,7 @@ const highConvictionFloor = 0.8
 func (d Deps) structuralRegimes(w http.ResponseWriter, r *http.Request) {
 	resp, err := d.buildStructuralRegimes(r.Context())
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, resp)
@@ -50,7 +50,7 @@ func (d Deps) structuralRegimes(w http.ResponseWriter, r *http.Request) {
 func (d Deps) structuralRegimesCached(w http.ResponseWriter, r *http.Request) {
 	resp, err := sharedRegimesCache.get(r.Context(), "regimes", d.buildStructuralRegimes)
 	if err != nil {
-		httpErr(w, 500, err.Error())
+		httpInternal(w, err)
 		return
 	}
 	writeJSON(w, resp)
