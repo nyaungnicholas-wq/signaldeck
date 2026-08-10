@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api, type Me } from "@/lib/api";
 import FreshnessBadge from "@/components/FreshnessBadge";
@@ -250,7 +250,6 @@ function AlertsBell() {
  *  out. Logged out / daemon unreachable → links to /login instead. */
 function AuthChip() {
   const pathname = usePathname();
-  const router = useRouter();
   const [me, setMe] = useState<Me | null | undefined>(undefined); // undefined = unknown
 
   useEffect(() => {
@@ -288,7 +287,14 @@ function AuthChip() {
         api
           .logout()
           .catch(() => {})
-          .finally(() => router.replace("/login"));
+          // A FULL navigation, not router.replace. AuthGate's `ready` flag is
+          // mount-scoped and deliberately latches true so protected pages never
+          // re-flash; a client-side replace does not remount it, so after a
+          // logout the gate stayed open and a back-navigation painted the whole
+          // app chrome to a signed-out user. (The data itself was safe — the
+          // daemon 401s — but the flash-of-dashboard is the exact thing AuthGate
+          // exists to prevent.) A hard load remounts the gate and re-checks.
+          .finally(() => window.location.assign("/login"));
       }}
       title={`signed in as ${me.username} — click to log out`}
       aria-label={`signed in as ${me.username} — log out`}

@@ -225,8 +225,12 @@ function KindSection({
               {
                 label: "copy as markdown",
                 doneLabel: "copied",
+                // `?.` — navigator.clipboard is undefined on a non-secure
+                // origin, and a bare property access threw synchronously inside
+                // the menu's click handler. ExportMenu now catches and reports,
+                // but returning a rejected promise beats throwing.
                 onClick: () =>
-                  navigator.clipboard.writeText(toMarkdown(kind, list, ews)),
+                  navigator.clipboard?.writeText(toMarkdown(kind, list, ews)),
               },
             ]}
           />

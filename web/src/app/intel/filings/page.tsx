@@ -74,7 +74,10 @@ export default function FilingsPage() {
 
   const stats = useMemo(() => {
     if (!list.length) return { count: 0, latest: "", forms: 0, symbols: 0 };
-    const latest = new Date(Math.max(...list.map(f => new Date(f.filedTs).getTime()))).toISOString().split('T')[0];
+    // filedTs is unix SECONDS — ago() at line 193 divides Date.now() by 1000 to
+    // compare against it. Feeding it raw to new Date() read it as milliseconds,
+    // so the LATEST tile showed 1970-01-21 next to rows correctly saying "2h ago".
+    const latest = new Date(Math.max(...list.map(f => f.filedTs * 1000))).toISOString().split('T')[0];
     const forms = new Set(list.map(f => f.form)).size;
     const symbols = new Set(list.map(f => f.symbolId)).size;
     return { count: list.length, latest, forms, symbols };

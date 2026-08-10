@@ -134,12 +134,19 @@ export default function ScreenerPage() {
 
   return (
     <div className="page-enter space-y-4">
-      <PageHero title="Market Overview" live subtitle="The whole tape in one screen — indices, movers and market state." right={<ExportMenu items={exportItems} />} />
+      {/* No `live`. This page has no polling of any kind, and its own
+          PagePurpose ten lines below says "stored daily data on worker cadence,
+          not live quotes" — the pulsing dot contradicted the page's own
+          disclosure. */}
+      <PageHero title="Market Overview" subtitle="The whole tape in one screen — indices, movers and market state." right={<ExportMenu items={exportItems} />} />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile label="Total Symbols" value={rows?.length ?? "—"} i={0} glow="hud" />
         <StatTile label="Filtered" value={f.filtered.length} i={1} glow="hud" />
-        <StatTile label="Top Score" value={top?.scores?.[f.horizon]?.score ?? 0} decimals={2} i={2} glow="accent" />
+        {/* scores is Partial<Record<Horizon, Score>>, so `?? 0` rendered "0.00"
+            — a real neutral-pressure reading — for a horizon that simply has no
+            stored score. The two tiles either side of this one already use "—". */}
+        <StatTile label="Top Score" value={top?.scores?.[f.horizon]?.score} decimals={2} i={2} glow="accent" />
         <StatTile label="Regime" value={regimes?.[0]?.label ?? "—"} i={3} glow="hud" />
       </div>
 

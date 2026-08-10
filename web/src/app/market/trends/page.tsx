@@ -86,8 +86,14 @@ export default function TrendsPage() {
       .filter((m) => isFinite(m.score))
       .sort((a, b) => b.dayChangePct - a.dayChangePct);
 
-    const top = sorted.slice(0, 12);
-    const bottom = [...sorted].reverse().slice(0, 12);
+    // Split at the midpoint so the two grids are disjoint. `slice(0,12)` plus a
+    // reversed `slice(0,12)` overlap whenever fewer than 24 movers are scored —
+    // with 15, nine symbols appeared in BOTH the gainers and the losers grid.
+    // ceil, so a lone mover lands in the gainers half rather than being shown
+    // only as a loser.
+    const half = Math.ceil(sorted.length / 2);
+    const top = sorted.slice(0, Math.min(12, half));
+    const bottom = [...sorted].reverse().slice(0, Math.min(12, sorted.length - half));
 
     const topGainer = sorted[0] || null;
     const topLoser = sorted[sorted.length - 1] || null;

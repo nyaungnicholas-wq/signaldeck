@@ -207,31 +207,35 @@ export default function AgentsPage() {
         live
       />
 
-      {/* Hero band */}
+      {/* Hero band. Every value is gated on `runs`, because KNOWN_AGENTS is a
+          13-entry client-side constant and `cards` is seeded from it: with
+          /api/agents down, this band rendered "Workers 13 · Active 0 · Healthy
+          0 · Errors 0" — a complete, real-looking fleet census sourced entirely
+          from a literal, sitting above the error state that correctly said the
+          fleet could not be read. The per-agent cards below already degrade
+          honestly; this band did not.
+          `delta={0}` is also gone: DeltaBadge treats 0 as a value, so all four
+          tiles carried a green ▲0.0% that no comparison produced. */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
           label="Workers"
-          value={cards.length}
-          delta={0}
+          value={runs ? cards.length : null}
           i={0}
         />
         <StatTile
           label="Active"
-          value={nRunning}
-          delta={0}
+          value={runs ? nRunning : null}
           i={1}
         />
         <StatTile
           label="Healthy"
-          value={nOk}
-          delta={0}
+          value={runs ? nOk : null}
           i={2}
-          spark={lastByAgent.map(r => r.status === "ok" ? 1 : 0)}
+          spark={runs ? lastByAgent.map(r => r.status === "ok" ? 1 : 0) : undefined}
         />
         <StatTile
           label="Errors"
-          value={nError}
-          delta={0}
+          value={runs ? nError : null}
           i={3}
           glow={nError > 0 ? "down" : undefined}
         />

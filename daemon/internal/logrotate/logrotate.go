@@ -25,6 +25,12 @@ type Writer struct {
 	keep     int
 	f        *os.File
 	size     int64
+	// closed is set only by Close, and is what separates "the caller shut this
+	// writer down" from "a rotation closed the file and could not reopen it".
+	// Before it existed both states read as f == nil, so Write refused forever
+	// on the second one and the daemon's file log died silently for the rest of
+	// the process lifetime.
+	closed bool
 }
 
 // New opens (creating/appending) the log file at path, rotating at maxMB
@@ -64,14 +70,24 @@ func (w *Writer) open() error {
 func (w *Writer) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.f == nil {
+	if w.closed {
 		return 0, os.ErrClosed
+	}
+	// Reopen if a previous rotation left us without a file. rotate() closes and
+	// RENAMES the old file before it can fail, so the comment below — "keep
+	// logging to the current file" — was unachievable: there was no current
+	// file left, and nothing anywhere retried open(). One transient failure
+	// (log dir briefly gone, a Windows AV/indexer lock) killed the file log for
+	// good, while stderr kept flowing and the process looked healthy.
+	if err := w.ensureOpen(); err != nil {
+		return 0, err
 	}
 	if w.size > 0 && w.size+int64(len(p)) > w.maxBytes {
 		if err := w.rotate(); err != nil {
-			// Rotation failed (e.g. permissions): keep logging to the current
-			// file rather than dropping output.
 			fmt.Fprintf(os.Stderr, "logrotate: rotate %s: %v\n", w.path, err)
+		}
+		if err := w.ensureOpen(); err != nil {
+			return 0, err
 		}
 	}
 	n, err := w.f.Write(p)
@@ -82,8 +98,11 @@ func (w *Writer) Write(p []byte) (int, error) {
 // rotate shifts path.(k-1)→path.k … path→path.1 and reopens a fresh file.
 // Caller holds the mutex.
 func (w *Writer) rotate() error {
+	// A failed Close does not hand back a usable handle, so returning here left
+	// w.f pointing at a closed file that every subsequent Write tried to rotate
+	// again, failing identically forever. Report it and rotate anyway.
 	if err := w.f.Close(); err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "logrotate: close %s: %v\n", w.path, err)
 	}
 	w.f = nil
 	// Drop the oldest, shift the rest up.
@@ -101,10 +120,20 @@ func (w *Writer) rotate() error {
 	return w.open()
 }
 
+// ensureOpen reopens the log file when a rotation left it closed. Caller holds
+// the mutex.
+func (w *Writer) ensureOpen() error {
+	if w.f != nil {
+		return nil
+	}
+	return w.open()
+}
+
 // Close closes the underlying file. Further Writes return os.ErrClosed.
 func (w *Writer) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.closed = true
 	if w.f == nil {
 		return nil
 	}

@@ -116,8 +116,18 @@ export function DeltaBadge({ value, decimals = 2, className }: { value: number; 
   </span>;
 }
 
-export function StatTile({ label, value, decimals = 0, prefix = "", suffix = "", sub, delta, spark, glow, i = 0 }: { label: string; value: number | string; decimals?: number; prefix?: string; suffix?: string; sub?: string; delta?: number; spark?: number[]; glow?: "up" | "down" | "accent" | "hud"; i?: number }) {
+// StatTile accepts null/undefined and renders an em-dash for it, the same
+// no-data contract <Gauge> already honours. WHY it has to live here: the tile
+// only took `number | string`, so every call site with a nullable metric wrote
+// `?? 0` to satisfy the type — and a 0 in a hero tile is not "no data", it is a
+// measurement. That produced "Days to cover 0.0 — FINRA short interest" for
+// symbols with no short-interest row at all, and "Best Quintile 0.00%" on the
+// honesty page, whose whole purpose is not inventing forward returns. Widening
+// the type is what lets those call sites stop lying; a `?? 0` reaching this
+// component is now a bug with a fix rather than the only way to compile.
+export function StatTile({ label, value, decimals = 0, prefix = "", suffix = "", sub, delta, spark, glow, i = 0 }: { label: string; value: number | string | null | undefined; decimals?: number; prefix?: string; suffix?: string; sub?: string; delta?: number; spark?: number[]; glow?: "up" | "down" | "accent" | "hud"; i?: number }) {
   const glowClass = glow === 'up' ? 'glow-up' : glow === 'down' ? 'glow-down' : glow === 'accent' ? 'glow-text' : glow === 'hud' ? 'glow-hud' : '';
+  const hasData = value != null && value !== '';
   return (
     <div className="panel reveal-item relative p-4" style={{ "--i": i } as React.CSSProperties}>
       <div className="flex justify-between items-start mb-2">
@@ -125,7 +135,10 @@ export function StatTile({ label, value, decimals = 0, prefix = "", suffix = "",
         {delta != null && <DeltaBadge value={delta} />}
       </div>
       <div className="flex items-baseline gap-2">
-        {typeof value === 'number' ? <AnimatedNumber value={value} decimals={decimals} prefix={prefix} suffix={suffix} className={`num-hero text-2xl ${glowClass}`} /> : <span className={`num-hero text-2xl tnum ${glowClass}`}>{prefix}{value}{suffix}</span>}
+        {/* prefix/suffix are dropped with the value: "$—" and "—%" read as a
+            formatted zero, which is the thing this branch exists to avoid. */}
+        {!hasData ? <span className="num-hero text-2xl tnum" style={{ color: 'var(--faint)' }}>—</span>
+          : typeof value === 'number' ? <AnimatedNumber value={value} decimals={decimals} prefix={prefix} suffix={suffix} className={`num-hero text-2xl ${glowClass}`} /> : <span className={`num-hero text-2xl tnum ${glowClass}`}>{prefix}{value}{suffix}</span>}
       </div>
       {sub && <div className="mt-1 text-[0.75rem]" style={{ color: 'var(--faint)' }}>{sub}</div>}
       {spark && <div className="absolute bottom-2 right-2"><Spark data={spark} width={100} height={28} /></div>}

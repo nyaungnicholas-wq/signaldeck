@@ -172,8 +172,17 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
 
   if ($Install) {
     $action = New-ScheduledTaskAction -Execute $bash -Argument $argLine -WorkingDirectory $repo
+    # The 6-hour ExecutionTimeLimit is for BATCH jobs. The daemon is a long-lived
+    # service — the live "SignalDeck Daemon" task carries PT0S (unlimited) and was
+    # created by another route — so applying the batch cap to it would have Task
+    # Scheduler terminate the daemon every six hours. Following this file's own
+    # documented recovery path (`.\install-windows-tasks.ps1 -Install`) would
+    # therefore have converted a healthy daemon into one that dies four times a
+    # day, with the restart looking like an ordinary crash.
+    $isService = $label -like 'com.signaldeck.daemon'
+    $limit = if ($isService) { [TimeSpan]::Zero } else { [TimeSpan]::FromHours(6) }
     $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
-      -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::FromHours(6))
+      -DontStopIfGoingOnBatteries -ExecutionTimeLimit $limit
     Register-ScheduledTask -TaskName $task -Action $action -Trigger $triggers `
       -Settings $set -RunLevel Limited -Force | Out-Null
     # The monthly trigger is assembled by hand from a CIM class whose property

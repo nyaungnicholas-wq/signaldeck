@@ -162,7 +162,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # 24, matching Dockerfile's node:24-alpine and the machine that runs
+          # the web task (v24.18.0). CI on 22 meant the only automated build of
+          # the Next app ran on a major version nothing else uses, so a
+          # 24-specific break would ship green.
+          node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci

@@ -1604,8 +1604,19 @@ func confluenceWorkers(st *store.Store) []workers.Worker {
 //
 // So off-machine backup is OPT-IN on every other platform. Silence beats a
 // destination that only looks like it leaves the machine.
+// TWO SPELLINGS, ONE DESTINATION. ops/signaldeck-backup-offline.sh reads
+// SIGNALDECK_OFFSITE_DIR and this read SIGNALDECK_OFFSITE_BACKUP_DIR, while
+// .env.example documented only the first. An operator following the documented
+// example therefore configured the shell backup and left the DAEMON's own
+// nightly offsite copy disabled, with nothing anywhere saying so. Accepting the
+// documented name as a fallback makes one setting configure both; the daemon's
+// own key still wins so an existing split configuration keeps its meaning.
 func offsiteBackupDir() string {
-	switch v := strings.TrimSpace(os.Getenv("SIGNALDECK_OFFSITE_BACKUP_DIR")); strings.ToLower(v) {
+	v := strings.TrimSpace(os.Getenv("SIGNALDECK_OFFSITE_BACKUP_DIR"))
+	if v == "" {
+		v = strings.TrimSpace(os.Getenv("SIGNALDECK_OFFSITE_DIR"))
+	}
+	switch strings.ToLower(v) {
 	case "off", "none", "-":
 		return ""
 	case "":

@@ -304,7 +304,11 @@ export default function PaperPage() {
 
       {/* Strategy switcher (one simulated portfolio per prediction horizon). */}
       <div className="flex flex-wrap items-center gap-2">
-        {(data?.strategies ?? ["flagship-1d", "flagship-1w"]).map((name, i) => {
+        {/* No hardcoded fallback list. Before the first response — or after a
+            failed one — this offered two strategy names the daemon had never
+            confirmed exist, and clicking one queried a portfolio that might not
+            be there. An empty switcher is the honest state. */}
+        {(data?.strategies ?? []).map((name, i) => {
           const active = name === strategy;
           return (
             <button

@@ -14,7 +14,15 @@ one state this check must never report is "fine, probably".
   .\check-grader-health.ps1 -MaxAgeMinutes 180
 #>
 param(
-    [int]$MaxAgeMinutes = 120,
+    # 26 hours, not 2. The accuracy grader runs ONCE A DAY (14:05 PT, task
+    # "SignalDeck Accuracy"), so a 120-minute ceiling reported "unhealthy" for
+    # roughly 22 hours out of every 24 — including right now, with a clean
+    # daily success on 08-06/07/08/09 in grader_heartbeats. A check that is red
+    # almost all the time cannot be wired to alerting, which is why nothing
+    # invokes this script and why the 33-hour silent refusal it was written to
+    # catch would still go unnoticed. 26h = one full cadence plus two hours of
+    # slack for a late or long run; a genuinely skipped day still trips it.
+    [int]$MaxAgeMinutes = 1560,
     [int]$WalWarnMB = 128,
     [int]$WalCritMB = 256
 )

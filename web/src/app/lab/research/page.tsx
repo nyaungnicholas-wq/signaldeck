@@ -135,7 +135,15 @@ export default function ResearchPage() {
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
   }, []);
 
-  useEffect(() => pollMs(load, POLL_SLOW), [load, retryTick]);
+  // load() first, THEN poll. pollMs opens with schedule(), not tick(), so on
+  // its own it leaves the page on <Skeleton> for a full POLL_SLOW (2 minutes,
+  // up to 5 under failure backoff) on every visit — and the ErrorState "Retry"
+  // below only bumps retryTick, which re-arms the same silent timer. Every
+  // other pollMs call site in the app already calls load() before polling.
+  useEffect(() => {
+    load();
+    return pollMs(load, POLL_SLOW);
+  }, [load, retryTick]);
 
   if (err && !ledger) {
     return (

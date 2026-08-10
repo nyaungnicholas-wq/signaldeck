@@ -29,13 +29,13 @@ export default function DeskOverviewPage() {
 
   const rows = top?.rows;
   const firstRow = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+  // No hardcoded fallback symbol. `topErr` — the opportunity feed FAILING — used
+  // to select MSFT, so an outage produced a full RecommendationCard, AgentPanel
+  // and AuditTrail for a symbol the user never picked and that was in no list,
+  // on a page whose subtitle promises "measured, not advice". An empty selection
+  // is the honest state; the panels below already handle it.
   const active =
-    activeRaw ??
-    (firstRow
-      ? { symbol: firstRow.symbol, market: firstRow.market }
-      : top || topErr
-        ? { symbol: "MSFT", market: "stocks" }
-        : null);
+    activeRaw ?? (firstRow ? { symbol: firstRow.symbol, market: firstRow.market } : null);
 
   const activeKey = active ? `${active.symbol}|${active.market}` : "";
   const [recoState, setRecoState] = useState<{ key: string; d: Recommendation } | null>(null);

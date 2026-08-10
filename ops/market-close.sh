@@ -40,7 +40,16 @@ done
 # the 3-minute grace we force-kill.
 if sd_is_running signaldeckd; then
   echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: daemon ignored TERM for 3m — SIGKILL" >> "$SD/logs/backup-offline.log"
-  pkill -9 -x signaldeckd
+  # sd_kill_hard, not a raw `pkill -9`. pkill is absent under the Git Bash the
+  # scheduled task runs (verified: `command -v pkill` fails there), so this line
+  # was a `command not found` — the same class of defect the header above says
+  # was fixed for pgrep, missed one call site down. The escalation therefore
+  # no-opped, the daemon stayed up, and signaldeck-backup-offline.sh's
+  # is-daemon-alive check then refused the run: the day's backup vanished with
+  # the task still exiting 0. sd_kill_hard falls back to taskkill, which exists.
+  if ! sd_kill_hard signaldeckd; then
+    echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: force-kill FAILED (no pkill, no taskkill) — backup will be skipped" >> "$SD/logs/backup-offline.log"
+  fi
   sleep 5
 fi
 /bin/bash "$SD/ops/signaldeck-backup-offline.sh"

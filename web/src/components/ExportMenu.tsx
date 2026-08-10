@@ -21,6 +21,9 @@ export interface ExportItem {
 export default function ExportMenu({ items }: { items: ExportItem[] }) {
   const [open, setOpen] = useState(false);
   const [flashIdx, setFlashIdx] = useState<number | null>(null);
+  // A failed action has to say so. Silence is indistinguishable from a click
+  // that did not register, which is what a rejected clipboard write looked like.
+  const [failedIdx, setFailedIdx] = useState<number | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -80,18 +83,35 @@ export default function ExportMenu({ items }: { items: ExportItem[] }) {
                 type="button"
                 role="menuitem"
                 onClick={() => {
-                  Promise.resolve(it.onClick?.()).then(() => {
-                    setFlashIdx(i);
+                  // try/catch AND .catch. Menu actions are mostly clipboard
+                  // writes: navigator.clipboard is undefined on a non-secure
+                  // origin (the handler then throws synchronously, before any
+                  // promise exists) and rejects when the document is not
+                  // focused or permission is denied. Either way the old code
+                  // never ran .then, so the "✓ copied" confirmation never fired
+                  // and the menu never closed — the user clicked and nothing at
+                  // all happened, with no way to tell success from failure.
+                  const done = (ok: boolean) => {
+                    setFlashIdx(ok ? i : null);
+                    if (!ok) setFailedIdx(i);
                     setTimeout(() => {
                       setFlashIdx((cur) => (cur === i ? null : cur));
+                      setFailedIdx((cur) => (cur === i ? null : cur));
                       setOpen(false);
                     }, 900);
-                  });
+                  };
+                  try {
+                    Promise.resolve(it.onClick?.()).then(() => done(true), () => done(false));
+                  } catch {
+                    done(false);
+                  }
                 }}
                 className="cursor-pointer rounded px-3 py-2 text-left text-[0.75rem] hover:bg-[rgba(255,255,255,0.07)]"
               >
                 {flashIdx === i ? (
                   <span style={{ color: "var(--ok)" }}>✓ {it.doneLabel ?? "done"}</span>
+                ) : failedIdx === i ? (
+                  <span style={{ color: "var(--bad)" }}>✕ failed</span>
                 ) : (
                   it.label
                 )}

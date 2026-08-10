@@ -34,6 +34,16 @@ elif cd "$SD/data/backups" 2>/dev/null; then
       echo "  keep   $f"
     elif mv "$f" "$TRASH/"; then
       echo "  trash  $f"
+      # The .sha256 sidecar goes with its artifact. Retiring the .db alone left
+      # data/backups holding a 96-byte checksum for a file that is no longer
+      # there — a chain of custody pointing at nothing, which reads as evidence
+      # until someone tries to verify it. Observed live: a stray
+      # signaldeck-20260807-131013.db.sha256 with no matching .db or .db.gz.
+      for side in "$f.sha256" "${f%.db}.sha256"; do
+        if [ -f "$side" ]; then
+          mv "$side" "$TRASH/" || echo "  FAILED to move sidecar $side to $TRASH — left in place"
+        fi
+      done
     else
       echo "  FAILED to move $f to $TRASH — left in place"
     fi
