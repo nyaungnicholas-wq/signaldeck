@@ -340,7 +340,7 @@ in. I would rather ship that than a number I can't defend.
 ## Try it
 
 ```bash
-docker build --build-arg GIT_REV=$(git rev-parse HEAD) -t signaldeck .
+ops/docker-build.sh
 docker run -p 8080:8080 -v signaldeck_data:/data \
   -e ALPACA_KEY=... -e ALPACA_SECRET=... signaldeck
 ```
