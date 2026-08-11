@@ -57,3 +57,33 @@ python research/xsdirection.py --shuffle-labels --json noise.json
 ```
 
 NO DIRECTIONAL PRODUCT.
+
+## The target is wrong, not the modelling
+
+Volatility is predictable in a way daily direction is not, and this repository
+already contains a model that beats its baseline out of sample. `go run
+./cmd/hmmbakeoff`, measured 2026-08-10 over 400 symbols and 305,328 labelled
+bars, grading each label on the NEXT day's absolute move, normalised per symbol
+so the score cannot come from separating quiet symbols from wild ones:
+
+| labeller | separation (highest/lowest label) |
+|---|---|
+| HMM (`internal/hmmregime`, fitted out-of-sample) | **1.39x** |
+| trailing 20d realized-vol tercile (naive baseline) | 1.25x |
+| incumbent rule-based (`internal/regime`) | 1.14x |
+
+The HMM beats both the naive baseline and the incumbent, on a 60/40 split whose
+parameters never see the test window, with every label computed from bars[0..i]
+and the target strictly forward of it.
+
+Three things this does NOT mean. It is a separation ratio, not an accuracy, so
+it is not comparable to the 55% directional null. It says nothing about
+direction — a volatility regime is not a directional forecast, and grading it as
+one is the error this document exists to avoid. And the bakeoff reports no
+confidence interval and clusters on nothing, so "1.39x beats 1.25x" is a point
+estimate on 305,328 observations, not a verdict; it needs day- or
+symbol-clustered inference before it earns one.
+
+What it does mean is that the honest route to a product that beats its baseline
+runs through volatility, not through daily direction.
+
