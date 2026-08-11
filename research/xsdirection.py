@@ -108,10 +108,12 @@ def compute_observations(rows):
 
         # Label: next available bar after t
         up = 1 if close[i + 1] > close[i] else 0
+        fwd_ret = float(close[i + 1] / close[i] - 1.0)
 
         yield {
             "ts": int(ts[i]),
             "up": up,
+            "fwd_ret": fwd_ret,
             "r1": r1,
             "r5": r5,
             "r21": r21,
@@ -186,7 +188,7 @@ def rank_cross_sectional(values):
     return ranks / (n - 1) - 0.5
 
 
-def build_dataset(day_obs, shuffle_labels=False, seed=0):
+def build_dataset(day_obs, shuffle_labels=False, seed=0, target="absolute"):
     """Build feature matrix X, labels y, and day indices from day_obs.
 
     Cross-sectional ranking is applied within each day.
@@ -215,6 +217,7 @@ def build_dataset(day_obs, shuffle_labels=False, seed=0):
         # Build raw feature matrix for this day
         raw = np.empty((n, len(FEATURE_NAMES)), dtype=np.float64)
         labels = np.empty(n, dtype=np.int64)
+        fwd = np.empty(n, dtype=np.float64)
         for j, obs in enumerate(obs_list):
             raw[j, 0] = obs["r1"]
             raw[j, 1] = obs["r5"]
@@ -223,6 +226,18 @@ def build_dataset(day_obs, shuffle_labels=False, seed=0):
             raw[j, 4] = obs["vol21"]
             raw[j, 5] = obs["dvol"]
             labels[j] = obs["up"]
+            fwd[j] = obs["fwd_ret"]
+
+        # RELATIVE target: did this symbol beat the day's own median forward
+        # return? A cross-sectional model ranks symbols against each other on
+        # one day (INVERSION_INVESTIGATION_2026-08-08 makes the same point), so
+        # that is the target it is actually built for. It is also the honest one
+        # to score: the split is balanced by construction, the null is a real
+        # 50%, and the drift-hedging artifact that inflated the absolute test
+        # cannot arise. It uses no information the absolute label did not.
+        if target == "relative" and n > 1:
+            med = float(np.median(fwd))
+            labels = (fwd > med).astype(np.int64)
 
         # Shuffle labels within day if requested (leakage canary)
         if shuffle_labels:
@@ -518,6 +533,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="Cross-sectional directional model vs majority-class baseline"
     )
+    parser.add_argument("--target", choices=["absolute", "relative"],
+                        default="absolute",
+                        help="absolute = will it rise; relative = will it beat "
+                             "the day's median forward return (null is 50%%)")
     parser.add_argument("--shuffle-labels", action="store_true",
                         help="Randomly permute up labels within each day (leakage canary)")
     parser.add_argument("--seed", type=int, default=0,
@@ -544,7 +563,8 @@ def main():
     # Step 2: Build dataset with cross-sectional ranking
     eprint("\nStep 2: Building dataset with cross-sectional ranking...")
     X, y, days, sorted_day_keys = build_dataset(
-        day_obs, shuffle_labels=args.shuffle_labels, seed=args.seed
+        day_obs, shuffle_labels=args.shuffle_labels, seed=args.seed,
+        target=args.target
     )
 
     n_obs = X.shape[0]

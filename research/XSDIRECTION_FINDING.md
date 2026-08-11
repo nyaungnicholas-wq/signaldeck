@@ -87,3 +87,57 @@ symbol-clustered inference before it earns one.
 What it does mean is that the honest route to a product that beats its baseline
 runs through volatility, not through daily direction.
 
+## The same features DO beat the baseline on the target they are built for
+
+The absolute test above asks "will this stock rise", where the null is drift and
+drift at one day is close to unbeatable. A cross-sectional model does not rank a
+symbol against zero; it ranks symbols against each other on one day. Scored on
+that target — did this symbol beat the day's own median forward return — the
+same six features, the same walk-forward, the same embargo:
+
+| year | model | noise control | model − noise |
+|------|-------|---------------|---------------|
+| 2022 | +2.27 | +0.01 | +2.26 |
+| 2023 | +1.73 | -0.02 | +1.75 |
+| 2024 | +1.91 | -0.02 | +1.93 |
+| 2025 | +1.41 | -0.02 | +1.43 |
+| 2026 | +1.47 | -0.02 | +1.49 |
+| **overall** | **+1.83** | **-0.01** | **+1.84** |
+
+Accuracy 0.5207 against a baseline of 0.5024, lift **+1.83pp, 95% CI [+1.35,
++2.22]** day-clustered over 1,153 test days. Five years out of five positive,
+including the bear year.
+
+Why this one survives the objection that killed the absolute test. The target is
+balanced by construction, so the null is a real 50% rather than a committed
+directional bet — there is no drift to hedge, and the noise control proves it:
+shuffled labels score **-0.01pp, CI [-0.06, +0.03]**, every fold within 0.02pp
+of zero. The artifact that produced a spurious +2.35pp in 2022 cannot occur
+here, and does not.
+
+### What this does not establish
+
+- **Transaction costs are untested, and they are the live question.** A
+  one-day cross-sectional signal turns the book over daily. A 1.83pp hit-rate
+  edge is the size that spread and slippage routinely erase. Nothing here is a
+  claim about profit after costs.
+- **The universe is survivor-seeded before 2026-07-24**, which is when
+  `delisted_at` starts being set. A within-day relative rank is far less exposed
+  to that than an absolute return would be, but "less exposed" is not "immune".
+- It is a **relative** product — a ranking, the input to a long-short book — and
+  not the directional forecast the accuracy registry grades. It does not rescue
+  the directional ensemble, which remains FAILED.
+- Two targets were tested, not a search over many. No multiplicity correction is
+  applied because none is owed yet; one would be the moment this is tuned.
+
+Reproduce:
+
+```
+python research/xsdirection.py --target relative --json rel.json
+python research/xsdirection.py --target relative --shuffle-labels --json noise.json
+```
+
+Status: NO DIRECTIONAL PRODUCT. A cross-sectional ranking signal, measured at
++1.83pp over a 50% null with a clean noise control, is the first thing here that
+has beaten its baseline out of sample — costs unexamined.
+
