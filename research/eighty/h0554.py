@@ -1,252 +1,253 @@
+# SELECTION HISTORY -- written by ops/eighty-loop.ps1, do not edit by hand.
+# corpus_size_at_generation: 553
+# cycle_index: 11
+# Any multiplicity correction applied downstream MUST use
+# corpus_size_at_generation, not the size of the family this is
+# promoted into.
+
 import sqlite3
 from datetime import datetime, timedelta
 from collections import defaultdict
 import math
 
-def main():
-    conn = sqlite3.connect('file:data/signaldeck.db?mode=ro', uri=True)
-    conn.row_factory = sqlite3.Row
-    
-    # Get all active insider purchases (code='P')
-    insider_sql = """
-        SELECT symbol_id, tx_ts, filed_ts
-        FROM insider_trades
-        WHERE code='P'
-        AND symbol_id IN (SELECT id FROM symbols WHERE active=1 AND market='stocks')
-        ORDER BY filed_ts
-    """
-    insider_trades = conn.execute(insider_sql).fetchall()
-    
-    if len(insider_trades) < 10:
-        print("INSUFFICIENT=1")
-        return
-    
-    # Get unemployment macro data (UNRATE)
-    unemp_sql = """
-        SELECT ts, value
-        FROM macro_series
-        WHERE series='UNRATE'
-        ORDER BY ts
-    """
-    unemp_rows = conn.execute(unemp_sql).fetchall()
-    
-    # Build unemployment change indicator (current < previous month)
-    unemp_months = {}
-    for row in unemp_rows:
+def get_monthly_unemployment(conn):
+    """Return dict mapping (year, month) to unemployment rate value."""
+    rows = conn.execute("""
+        SELECT ts, value FROM macro_series WHERE series = 'UNRATE' ORDER BY ts
+    """).fetchall()
+    if not rows:
+        return None
+    monthly = {}
+    for row in rows:
         dt = datetime.utcfromtimestamp(row['ts']).date()
         ym = (dt.year, dt.month)
-        unemp_months[ym] = row['value']
-    
-    # Sort months and compute changes
-    sorted_months = sorted(unemp_months.items())
-    unemp_down = {}
-    for i in range(1, len(sorted_months)):
-        prev_ym, prev_val = sorted_months[i-1]
-        curr_ym, curr_val = sorted_months[i]
-        # Store for first day of current month
-        dt = datetime(curr_ym[0], curr_ym[1], 1).date()
-        unemp_down[dt] = curr_val < prev_val
-    
-    # Process each insider trade
-    issued = []
-    opportunities = 0
-    
-    for trade in insider_trades:
-        symbol_id = trade['symbol_id']
-        filed_ts = trade['filed_ts']
-        tx_ts = trade['tx_ts']
-        
-        # Convert to dates
-        filed_dt = datetime.utcfromtimestamp(filed_ts).date()
-        tx_dt = datetime.utcfromtimestamp(tx_ts).date()
-        
-        # Condition: trade within 2 days of disclosure
-        if abs((filed_dt - tx_dt).days) > 2:
-            continue
-        
-        opportunities += 1
-        
-        # Check symbol has sufficient data
-        has_bars = conn.execute(
-            "SELECT COUNT(*) FROM bars WHERE symbol_id=? AND tf='1d' AND ts<=?",
-            (symbol_id, int(filed_dt.strftime('%s')))
-        ).fetchone()[0] > 0
-        
-        has_sentiment = conn.execute(
-            "SELECT COUNT(*) FROM sentiment_features WHERE symbol_id=? AND day<=?",
-            (symbol_id, filed_dt.isoformat())
-        ).fetchone()[0] > 0
-        
-        if not (has_bars and has_sentiment):
-            continue
-        
-        # Condition: traded in last 10 days
-        recent_sql = """
-            SELECT ts FROM bars 
-            WHERE symbol_id=? AND tf='1d' AND ts<=?
-            ORDER BY ts DESC LIMIT 1
-        """
-        recent = conn.execute(recent_sql, (symbol_id, int(filed_dt.strftime('%s')))).fetchone()
-        if not recent:
-            continue
-        latest_ts = recent['ts']
-        days_since = (filed_dt - datetime.utcfromtimestamp(latest_ts).date()).days
-        if days_since > 10:
-            continue
-        
-        # Condition: unemployment down
-        # Find most recent month <= filed_dt
-        current_ym = (filed_dt.year, filed_dt.month)
-        unemp_condition = False
-        for dt, is_down in unemp_down.items():
-            if dt <= filed_dt:
-                unemp_condition = is_down
-                # Keep checking for most recent
-        if not unemp_condition:
-            continue
-        
-        # Condition: sentiment 5-day MA < 20-day MA
-        sent_sql = """
-            SELECT day, mean_score FROM sentiment_features
-            WHERE symbol_id=? AND day<=?
-            ORDER BY day DESC
-        """
-        sent_rows = conn.execute(sent_sql, (symbol_id, filed_dt.isoformat())).fetchall()
-        if len(sent_rows) < 20:
-            continue
-        
-        scores = [row['mean_score'] for row in sent_rows]
-        ma5 = sum(scores[:5]) / 5
-        ma20 = sum(scores[:20]) / 20
-        if not (ma5 < ma20):
-            continue
-        
-        # Get current price (on or before filed_dt)
-        price_sql = """
-            SELECT close FROM bars
-            WHERE symbol_id=? AND tf='1d' AND ts<=?
-            ORDER BY ts DESC LIMIT 1
-        """
-        current_row = conn.execute(price_sql, (symbol_id, int(filed_dt.strftime('%s')))).fetchone()
-        if not current_row:
-            continue
-        current_close = current_row['close']
-        if current_close <= 0:
-            continue
-        
-        # Get forward price (21 trading days later)
-        # First get the current bar timestamp
-        current_bar_sql = """
-            SELECT ts FROM bars
-            WHERE symbol_id=? AND tf='1d' AND ts<=?
-            ORDER BY ts DESC LIMIT 1
-        """
-        current_bar = conn.execute(current_bar_sql, (symbol_id, int(filed_dt.strftime('%s')))).fetchone()
-        if not current_bar:
-            continue
-        current_ts = current_bar['ts']
-        
-        # Get 21st bar after current
-        forward_sql = """
-            SELECT close FROM bars
-            WHERE symbol_id=? AND tf='1d' AND ts>?
-            ORDER BY ts ASC LIMIT 1 OFFSET 20
-        """
-        forward_row = conn.execute(forward_sql, (symbol_id, current_ts)).fetchone()
-        if not forward_row:
-            continue
-        forward_close = forward_row['close']
-        if forward_close <= 0:
-            continue
-        
-        up = 1 if forward_close > current_close else 0
-        
-        issued.append({
-            'symbol_id': symbol_id,
-            'date': filed_dt,
-            'up': up
-        })
-    
-    if not issued:
-        print("INSUFFICIENT=1")
-        return
-    
-    # Split into train and sealed (most recent 20% of distinct dates)
-    all_dates = sorted(set(call['date'] for call in issued))
-    split_idx = int(len(all_dates) * 0.8)
-    sealed_start = all_dates[split_idx]
-    
-    train_calls = [c for c in issued if c['date'] < sealed_start]
-    sealed_calls = [c for c in issued if c['date'] >= sealed_start]
-    
-    if not train_calls or not sealed_calls:
-        print("INSUFFICIENT=1")
-        return
-    
-    # Calculate metrics
-    issued_count = len(issued)
-    train_hits = sum(c['up'] for c in train_calls)
-    sealed_hits = sum(c['up'] for c in sealed_calls)
-    
-    precision = train_hits / len(train_calls)
-    base_rate = sum(c['up'] for c in issued) / issued_count
-    
-    distinct_days = len(set(c['date'] for c in issued))
-    
-    # Design effect calculation (cluster by date)
-    day_groups = defaultdict(list)
-    for call in issued:
-        day_groups[call['date']].append(call['up'])
-    
-    k = len(day_groups)  # number of clusters
-    n = issued_count
-    
-    if k == 1:
-        design_effect = n
-    else:
-        overall_mean = sum(c['up'] for c in issued) / n
-        
-        # Between-cluster variance
-        ss_between = 0
-        for date, outcomes in day_groups.items():
-            m_j = len(outcomes)
-            p_j = sum(outcomes) / m_j
-            ss_between += m_j * (p_j - overall_mean) ** 2
-        
-        # Within-cluster variance
-        ss_within = 0
-        for date, outcomes in day_groups.items():
-            m_j = len(outcomes)
-            p_j = sum(outcomes) / m_j
-            for y in outcomes:
-                ss_within += (y - p_j) ** 2
-        
-        ms_between = ss_between / (k - 1)
-        ms_within = ss_within / (n - k)
-        
-        # Average cluster size (excluding self)
-        total_sq = sum(len(day_groups[d]) ** 2 for d in day_groups)
-        m0 = (n - total_sq / n) / (k - 1)
-        
-        # ICC
-        if ms_between + (m0 - 1) * ms_within == 0:
-            icc = 0
+        monthly[ym] = row['value']
+    return monthly
+
+def falling_unemployment_on_date(monthly_unemp, date):
+    """Check if the month containing date has lower unemployment than the previous month."""
+    ym = (date.year, date.month)
+    prev_month = ym[1] - 1
+    prev_year = ym[0]
+    if prev_month == 0:
+        prev_month = 12
+        prev_year -= 1
+    prev_ym = (prev_year, prev_month)
+    if ym in monthly_unemp and prev_ym in monthly_unemp:
+        return monthly_unemp[ym] < monthly_unemp[prev_ym]
+    return False
+
+def get_candidate_symbols(conn):
+    """Get symbols with insider purchases, daily bars, and sentiment."""
+    insider = conn.execute("""
+        SELECT DISTINCT symbol_id FROM insider_trades WHERE code = 'P'
+    """).fetchall()
+    bars = conn.execute("""
+        SELECT DISTINCT symbol_id FROM bars WHERE tf = '1d'
+    """).fetchall()
+    sentiment = conn.execute("""
+        SELECT DISTINCT symbol_id FROM sentiment_features
+    """).fetchall()
+    insider_set = {r[0] for r in insider}
+    bars_set = {r[0] for r in bars}
+    sentiment_set = {r[0] for r in sentiment}
+    return insider_set & bars_set & sentiment_set
+
+def main():
+    try:
+        conn = sqlite3.connect('file:data/signaldeck.db?mode=ro', uri=True)
+        conn.row_factory = sqlite3.Row
+
+        # Check unemployment data
+        monthly_unemp = get_monthly_unemployment(conn)
+        if monthly_unemp is None or len(monthly_unemp) < 24:
+            print("INSUFFICIENT=1")
+            return
+
+        candidate_symbols = get_candidate_symbols(conn)
+        if len(candidate_symbols) < 10:
+            print("INSUFFICIENT=1")
+            return
+
+        # Precompute insider trades for candidate symbols: (symbol_id, filed_ts, tx_ts)
+        # Only trades where code='P' (open-market purchase) and trade within 2 days of filing.
+        insider_rows = conn.execute("""
+            SELECT symbol_id, tx_ts, filed_ts
+            FROM insider_trades
+            WHERE code = 'P'
+            ORDER BY filed_ts
+        """).fetchall()
+        # Group by symbol and for each trade, store (filed_ts, tx_ts)
+        insider_by_symbol = defaultdict(list)
+        for row in insider_rows:
+            if row['symbol_id'] in candidate_symbols:
+                tx_dt = datetime.utcfromtimestamp(row['tx_ts']).date()
+                filed_dt = datetime.utcfromtimestamp(row['filed_ts']).date()
+                if abs((filed_dt - tx_dt).days) <= 2:
+                    insider_by_symbol[row['symbol_id']].append((filed_dt, tx_dt))
+
+        if not insider_by_symbol:
+            print("INSUFFICIENT=1")
+            return
+
+        # For each candidate symbol, load sentiment and bar data
+        # We'll process symbol by symbol to avoid memory issues
+        issued_calls = []  # list of (symbol_id, decision_day, hit)
+        opportunities = 0  # count of decision points considered (days we checked conditions)
+
+        for sym in candidate_symbols:
+            # Load sentiment for this symbol: day -> mean_score
+            sent_rows = conn.execute("""
+                SELECT day, mean_score FROM sentiment_features
+                WHERE symbol_id = ? ORDER BY day
+            """, (sym,)).fetchall()
+            if not sent_rows:
+                continue
+            sent_by_day = {}
+            for r in sent_rows:
+                # day is 'YYYY-MM-DD'
+                d = datetime.strptime(r['day'], '%Y-%m-%d').date()
+                sent_by_day[d] = r['mean_score']
+
+            # Load daily bars for this symbol: date -> close
+            bar_rows = conn.execute("""
+                SELECT ts, close FROM bars
+                WHERE symbol_id = ? AND tf = '1d' ORDER BY ts
+            """, (sym,)).fetchall()
+            if not bar_rows:
+                continue
+            bar_by_day = {}
+            for r in bar_rows:
+                d = datetime.utcfromtimestamp(r['ts']).date()
+                bar_by_day[d] = r['close']
+
+            # Get insider trades for this symbol
+            trades = insider_by_symbol.get(sym, [])
+            if not trades:
+                continue
+
+            # For each trade, check if we can enter on filed_dt
+            for filed_dt, _ in trades:
+                opportunities += 1
+
+                # Check if symbol traded in last 10 days relative to filed_dt
+                last_10_days = [d for d in bar_by_day.keys() if (filed_dt - d).days <= 10 and d <= filed_dt]
+                if not last_10_days:
+                    continue
+
+                # Check unemployment condition for filed_dt
+                if not falling_unemployment_on_date(monthly_unemp, filed_dt):
+                    continue
+
+                # Check sentiment moving averages on filed_dt
+                # Need at least 20 days of sentiment up to filed_dt
+                sent_days = sorted([d for d in sent_by_day.keys() if d <= filed_dt])
+                if len(sent_days) < 20:
+                    continue
+                # Compute 5-day MA and 20-day MA on the last day (filed_dt)
+                # Use the 5 most recent days and 20 most recent days
+                sent_5 = [sent_by_day[d] for d in sent_days[-5:]]
+                sent_20 = [sent_by_day[d] for d in sent_days[-20:]]
+                ma5 = sum(sent_5) / len(sent_5)
+                ma20 = sum(sent_20) / len(sent_20)
+                if ma5 >= ma20:
+                    continue
+
+                # All conditions met: issue a call for this symbol on filed_dt
+                # Find the close on filed_dt
+                if filed_dt not in bar_by_day:
+                    continue
+                close_t = bar_by_day[filed_dt]
+
+                # Look forward 21 trading days
+                future_days = sorted([d for d in bar_by_day.keys() if d > filed_dt])
+                if len(future_days) < 21:
+                    continue
+                # The 21st trading day after filed_dt
+                forward_day = future_days[20]
+                close_forward = bar_by_day[forward_day]
+                hit = 1 if close_forward > close_t else 0
+                issued_calls.append((sym, filed_dt, hit))
+
+        if not issued_calls:
+            print("INSUFFICIENT=1")
+            return
+
+        # Now we have issued_calls. We must split into training and sealed (last 20% by date)
+        issued_calls.sort(key=lambda x: x[1])  # sort by decision day
+        n_total = len(issued_calls)
+        n_sealed = math.ceil(0.2 * n_total)
+        sealed_calls = issued_calls[-n_sealed:]
+        training_calls = issued_calls[:-n_sealed]
+
+        # Compute metrics for training set
+        hits_training = sum(hit for _, _, hit in training_calls)
+        issued_training = len(training_calls)
+        if issued_training == 0:
+            print("INSUFFICIENT=1")
+            return
+        precision_training = hits_training / issued_training
+
+        # Base rate within issued subset (training)
+        base_rate = hits_training / issued_training
+
+        # Distinct days in training set
+        distinct_days_training = len(set(day for _, day, _ in training_calls))
+
+        # Design effect for training set: cluster by day
+        day_clusters = defaultdict(list)
+        for _, day, hit in training_calls:
+            day_clusters[day].append(hit)
+        k = len(day_clusters)
+        n = issued_training
+        if k <= 1:
+            # Only one day, set DEFF to >1
+            deff = 1.0 + 1e-9
         else:
-            icc = (ms_between - ms_within) / (ms_between + (m0 - 1) * ms_within)
-        
-        design_effect = 1 + (m0 - 1) * icc
-    
-    effective_n = n / design_effect
-    sealed_precision = sealed_hits / len(sealed_calls) if sealed_calls else 0
-    
-    # Print results
-    print(f"ISSUED={issued_count}")
-    print(f"OPPORTUNITIES={opportunities}")
-    print(f"PRECISION={precision}")
-    print(f"BASE_RATE={base_rate}")
-    print(f"DISTINCT_DAYS={distinct_days}")
-    print(f"EFFECTIVE_N={effective_n}")
-    print(f"SEALED_PRECISION={sealed_precision}")
+            # Compute ICC using one-way ANOVA
+            grand_mean = base_rate
+            # Compute between-cluster sum of squares
+            ssb = 0
+            for day, hits in day_clusters.items():
+                m_i = len(hits)
+                mean_i = sum(hits) / m_i
+                ssb += m_i * (mean_i - grand_mean) ** 2
+            # Compute within-cluster sum of squares
+            ssw = 0
+            for day, hits in day_clusters.items():
+                mean_i = sum(hits) / len(hits)
+                for h in hits:
+                    ssw += (h - mean_i) ** 2
+            msb = ssb / (k - 1)
+            msw = ssw / (n - k)
+            m = n / k  # average cluster size
+            if msb == 0 or msw == 0:
+                deff = 1.0 + 1e-9
+            else:
+                icc = (msb - msw) / (msb + (m - 1) * msw)
+                deff = 1 + (m - 1) * icc
+        effective_n = n / deff
+
+        # SEALED_PRECISION
+        hits_sealed = sum(hit for _, _, hit in sealed_calls)
+        issued_sealed = len(sealed_calls)
+        if issued_sealed > 0:
+            sealed_precision = hits_sealed / issued_sealed
+        else:
+            sealed_precision = 0.0
+
+        # Print required lines
+        print(f"ISSUED={n}")
+        print(f"OPPORTUNITIES={opportunities}")
+        print(f"PRECISION={precision_training:.6f}")
+        print(f"BASE_RATE={base_rate:.6f}")
+        print(f"DISTINCT_DAYS={distinct_days_training}")
+        print(f"EFFECTIVE_N={effective_n:.6f}")
+        print(f"SEALED_PRECISION={sealed_precision:.6f}")
+
+    except Exception as e:
+        # If any error occurs, treat as insufficient data
+        print("INSUFFICIENT=1")
 
 if __name__ == "__main__":
     main()
