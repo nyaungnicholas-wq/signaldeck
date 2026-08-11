@@ -348,7 +348,7 @@ def ci_mean(values):
     return m - t * se, m + t * se
 
 
-def walk_forward_evaluate(X, y, fwd, days, sorted_day_keys, hold=1):
+def walk_forward_evaluate(X, y, fwd, days, sorted_day_keys, hold=1, winsor=0.0):
     """Walk-forward by calendar year.
 
     For each test year Y from the 4th year onward:
@@ -439,13 +439,29 @@ def walk_forward_evaluate(X, y, fwd, days, sorted_day_keys, hold=1):
             ic = spearman_rankcorr(p_day, fwd_day)
             fold_ics.append(ic)
 
+            # WINSORIZE within the day, before the decile means and AFTER the
+            # IC. This is the estimator question cell B raised: IC is a rank
+            # statistic and outlier-robust, a decile MEAN is neither, and a
+            # handful of microcap five-day returns can flip that mean's sign
+            # while the ranking is unchanged. Clipping at the p/100-p
+            # percentiles of THAT DAY's realised returns bounds the tails
+            # without reordering anything, so the decile membership is
+            # identical and only the averaging changes. IC is computed above on
+            # unclipped returns deliberately — winsorising it would be
+            # pointless, since rank correlation already ignores magnitude.
+            fwd_day_eff = fwd_day
+            if winsor > 0.0 and n_day >= 20:
+                lo = float(np.percentile(fwd_day, winsor))
+                hi = float(np.percentile(fwd_day, 100.0 - winsor))
+                fwd_day_eff = np.clip(fwd_day, lo, hi)
+
             # DECILE SPREAD: top decile minus bottom decile forward return,
             # equal-weighted, per day.
             order = np.argsort(p_day, kind="mergesort")
             decile_size = max(1, n_day // 10)
             bot_idx = order[:decile_size]
             top_idx = order[-decile_size:]
-            spread = float(np.mean(fwd_day[top_idx]) - np.mean(fwd_day[bot_idx]))
+            spread = float(np.mean(fwd_day_eff[top_idx]) - np.mean(fwd_day_eff[bot_idx]))
             spread_bp = spread * 1e4
             fold_spreads.append(spread_bp)
 
@@ -550,6 +566,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Cross-sectional value model: IC, decile spread, turnover, net spread"
     )
+    parser.add_argument("--winsor", type=float, default=0.0,
+                        help="clip forward returns at this percentile and its "
+                             "complement WITHIN each day before the decile "
+                             "means (e.g. 1 = 1st/99th). 0 = off. Does not "
+                             "affect IC or decile membership.")
     parser.add_argument("--hold", type=int, default=1,
                         help="Holding period in trading days (default 1)")
     parser.add_argument("--liquid-top", type=int, default=0,
@@ -594,7 +615,7 @@ def main():
 
     eprint("\nStep 3: Walk-forward evaluation by calendar year...")
     folds, overall = walk_forward_evaluate(
-        X, y, fwd, days, sorted_day_keys, hold=args.hold
+        X, y, fwd, days, sorted_day_keys, hold=args.hold, winsor=args.winsor
     )
 
     if not folds:
