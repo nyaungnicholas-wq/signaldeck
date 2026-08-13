@@ -875,3 +875,37 @@ scheduled daily as of ROUND 5, so it runs unattended.
 
 So the remaining web work is exactly one elevated command, and the condition can
 no longer go unnoticed while waiting for it.
+
+## ROUND 6f — re-derived the backlog from the code, not from my notes
+
+Continuing past "the backlog is exhausted" was right twice more.
+
+**Untriaged live observations from §2, now closed.** Round 1 recorded several
+worker anomalies and never chased them:
+
+| observation | verdict |
+|---|---|
+| `13f-poller`: "0 positions stored" daily | **Not a defect.** 52,982 holdings across 31 managers exist; 13F filings are quarterly, so 0 new per day is correct. |
+| `cot-poller` 111 h since last run | Weekly-published data; cadence is appropriate. |
+| `price-validator`: "second-source validation disabled", `status=ok` | **Deliberately left alone.** It is an opt-in diagnostic, the detail string states exactly what happened, and `ErrDegraded` would suppress `lastSuccess` and eventually raise staleness alarms for a config choice — the cry-wolf direction, and inconsistent with the `APIProbe` precedent set this session. |
+
+**O19 was already fixed — by a concurrent session, not by me.** The institutions
+"Total Value" now switches to `Value of Top N` with "book is larger than the
+fetch cap" when the cap binds. Found only because I re-derived from the code
+instead of trusting my own tracking.
+
+**A real defect found by that sweep and fixed.** `lab/pairs` said the numbers
+were "NOT restatements of the ledgered 73.1%, **which measured SPY-correlation
+tiering**". The whole purpose of that sentence is to separate two quantities,
+and it misdescribed the one it separates from: `0.731` is **trend21**'s
+registered claim, defined in the prereg spec as *"will the stock still be on its
+current side of its 200-day moving average in 21 trading sessions?"* — SMA200
+side persistence. A reader was being told these pair numbers are not a
+correlation-tiering figure that never existed. "Ledgered" also oversold it; the
+registry row says "claim is backtested, not yet a live record". Both corrected;
+the figure itself is real.
+
+**Systematic sweep for the recurring pattern.** Every hard-coded
+`NN.N%` literal in `web/src` was checked: the remainder are the dated
+`FLAGSHIP_RETIREMENT` snapshot (static by design, documented) and figures inside
+code comments. No further hard-coded live claims.
