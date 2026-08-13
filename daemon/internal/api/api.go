@@ -13,6 +13,7 @@ import (
 	"math"
 	"net/http"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -263,11 +264,56 @@ func (d Deps) httpServer(mux http.Handler) *http.Server {
 // mount and the HTTP middleware share one bucket.
 func (d Deps) httpServerWith(mux http.Handler, limiter *rateLimiter) *http.Server {
 	return &http.Server{
-		Addr:              d.Cfg.HTTPAddr,
-		Handler:           withDeadlines(d.secureWith(mux, limiter)),
+		Addr:    d.Cfg.HTTPAddr,
+		Handler: withRecover(withDeadlines(d.secureWith(mux, limiter))),
+		// net/http writes its own faults — handler panics, bad TLS handshakes,
+		// dropped connections — through the STDLIB log package, which main.go
+		// never redirected: it points slog at io.MultiWriter(os.Stderr, lw) and
+		// leaves `log` alone. So those lines went to stderr only, and under Task
+		// Scheduler (which captures no stdout/stderr for these tasks) they were
+		// simply lost. Route them through slog so they reach logs/signaldeckd.log
+		// like everything else.
+		ErrorLog:          slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       idleTimeout,
 	}
+}
+
+// withRecover turns a handler panic into a 500 and a logged stack instead of a
+// silently truncated response.
+//
+// net/http already recovers per-connection so one panic cannot take the daemon
+// down, but its recovery is invisible at the application layer: the client sees
+// a dropped/te-truncated response and the only record is a stack on stderr.
+// recover() appeared exactly once in this tree — internal/workers safeRun, for
+// worker goroutines — so every HTTP handler was unprotected. A panic on one
+// malformed row is now a 500 the caller can act on and a log line an operator
+// can find.
+//
+// It wraps OUTSIDE withDeadlines and the guard chain so a panic anywhere in
+// them is caught too, and it re-panics on http.ErrAbortHandler, which is the
+// stdlib's documented way to abandon a response deliberately.
+func withRecover(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			rec := recover()
+			if rec == nil {
+				return
+			}
+			if rec == http.ErrAbortHandler {
+				panic(rec) // deliberate abort, not a fault
+			}
+			slog.Error("panic in http handler",
+				"panic", rec, "method", r.Method, "path", r.URL.Path,
+				"stack", string(debug.Stack()))
+			// Best-effort: if the handler already wrote a header this is a
+			// no-op, which is correct — the response is already committed.
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"internal error"}` + "\n"))
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // streamPath reports whether a path is a long-lived streaming response, which

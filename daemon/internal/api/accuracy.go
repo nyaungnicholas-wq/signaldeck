@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -213,6 +214,45 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 			},
 			now,
 		)
+
+		// ARM THE STICKINESS. publication_verdicts had ZERO rows and
+		// PutPublicationVerdict had no production caller, so RetirementHistory
+		// always answered "never retired", PriorVerdict.Retired was always
+		// false, and BuildVerdict's SourceHistory branch — the one whose own
+		// comment says "retirement is sticky: this row was retired by an earlier
+		// grade and cannot be un-retired by a later one" — could never fire.
+		// The layer this route exists for (see the header: the 2026-08-03 defect
+		// where the registry carried retire=false on every directional row once
+		// its window shrank below the block floor) was inert.
+		//
+		// Write only on the FALSE->TRUE transition: once per retirement, not
+		// once per GET, and never a not-retired row on top of a retired one
+		// (the table's trigger refuses that as ErrUnretireRefused, correctly).
+		// Failure to persist must not fail the response — the verdict being
+		// served is still right — but it must not be silent either, because a
+		// verdict that did not stick is a verdict that will not be sticky next
+		// time.
+		if v.Retired && !priorRetired {
+			if err := d.St.PutPublicationVerdict(ctx, store.PublicationVerdictRow{
+				Predictor: predictor, Horizon: horizon, Variant: variant,
+				PublicationStatus: v.PublicationStatus,
+				Retired:           true,
+				RetirementSticky:  v.RetirementSticky,
+				RetireReason:      strings.Join(v.Reasons, "; "),
+				RetirementSource:  v.RetirementSource,
+				CurrentNEff:       rr.EffectiveN,
+				CurrentBlocks:     rr.DistinctDays,
+				CIMethod:          rr.CIMethod,
+				NullRate:          rr.NullAcc,
+				SkillPP:           rr.Skill,
+				Reasons:           v.Reasons,
+				EvidenceRefs:      v.EvidenceRefs,
+			}); err != nil {
+				slog.Error("accuracy: could not persist retirement verdict — "+
+					"retirement will NOT be sticky for this row",
+					"predictor", predictor, "horizon", horizon, "variant", variant, "err", err)
+			}
+		}
 
 		rows = append(rows, accuracyRow{
 			Predictor: predictor, Horizon: horizon, Variant: variant,

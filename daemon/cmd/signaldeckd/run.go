@@ -196,6 +196,25 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 				slog.Warn("broad-universe seed", "err", err, "registered", registered)
 				return
 			}
+			// universe.Seed returns (registered, 0, nil) when there is no Alpaca
+			// client: the symbols are registered "for later" and NOTHING is
+			// backfilled. That is a success as far as err is concerned, so the
+			// one-shot key was set and the ~2y deep backfill for hundreds of
+			// symbols NEVER RAN — not on this boot, and not on any later boot
+			// after the operator added credentials. Booting without keys is a
+			// documented state (see the warning ~90 lines up), so this is the
+			// expected path into a permanently half-seeded universe: registered
+			// but empty, with the boot log recording it as seeded.
+			//
+			// Leave the key unset so the next boot WITH credentials completes
+			// the job. Seed is idempotent on the registration half.
+			if alpacaClient == nil {
+				slog.Warn("first boot: broad universe REGISTERED but not backfilled "+
+					"(no Alpaca credentials) — leaving seeded_universe_v1 unset so a "+
+					"later boot with credentials runs the deep backfill",
+					"symbols", registered)
+				return
+			}
 			_ = st.SetMeta(context.Background(), "seeded_universe_v1", time.Now().Format(time.RFC3339))
 			slog.Info("first boot: seeded broad daily universe",
 				"symbols", registered, "cap", universe.UniverseCap(), "backfilledBars", bars)
