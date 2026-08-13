@@ -707,3 +707,42 @@ its own prereg amendment — not a bolt-on.
 
 Grader SHA re-pinned the sanctioned way again: chain **seq 64,
 `grading-protocol: AMENDMENT`**, then the grader accepted its own hash.
+
+## ROUND 6b — Q8: the gate is not a threshold tweak, and here is the proof
+
+I went back and tried to wire the gate rather than leave it staged. The third
+attempt is the one worth keeping — as a finding, not as code.
+
+Attempt 3 filtered in `grade_directional_days`, the single point every
+downstream statistic derives from. That genuinely fixes both earlier problems:
+it does not amputate the population for other callers, and n, accuracy,
+`distinct_days` and the interval all come from one set. It still fails, and the
+failure **condemns the threshold, not the fixture**:
+
+> `TestSurvivorshipBoundary` builds a deliberate THREE-SYMBOL universe and
+> asserts `survivorship_coverage == 2/3`. In a 3-symbol universe a
+> 3-observation day IS the whole cross-section. An absolute row floor calls that
+> complete day thin — and widening the fixture to 30 symbols does not preserve
+> the test, it changes the exact ratio under test.
+
+So an absolute observation floor conflates *few observations* with *thin
+cross-section*, and those coincide only when the universe is large. The correct
+predicate is coverage RELATIVE to that day's universe.
+
+`forecastmon.DayStat.CoverageRatio` is that predicate and cannot be reused:
+its own doc says *"Zero on the resolved-outcome side, so Forecast == Symbols
+there"* — coverage is identically 1.0 on the graded side, because a withheld
+forecast leaves no resolved row to count. The denominator must come from OUTSIDE
+the graded population (forecast-side day stats, or the active-symbol count for
+that day). **That is a data-path change, not a threshold tweak.**
+
+**This corrects something I wrote earlier today.** I first said the blocker was a
+missing per-day denominator, then talked myself out of it because `DayStat`
+carries one. The first assessment was right; the test suite demonstrated it
+three times before I accepted it.
+
+Net: the measurement ships and keeps publishing (a third of the block count,
+under 1.5% of rows). The gate is reverted, no verdict moves, and the next
+attempt starts from a correct problem statement instead of repeating three dead
+ends. Grader re-pinned via chain **seq 66**; registry regenerated; anchors
+republished.
