@@ -18,8 +18,14 @@ What keeps the run NOT COMPLETE — two items, both verified external blockers:
   assumed:** one physical disk (Kingston 1.9 TB), only `C:` plus a 1.3 GB
   Recovery partition, no mapped network drives, OneDrive present but not signed
   in. The guard already refuses to claim otherwise. **Hardware.**
-- **Web restart** — Q1's code is committed and built, but the running process
-  returns `Access is denied` to `taskkill /F`. **Needs an elevated shell.**
+- **Web restart** — Q1's code is committed and built. All three stop routes are
+  exhausted and PROVEN (ROUND 6e): `Stop-ScheduledTask` does not cascade,
+  `schtasks /End` returns SUCCESS while the socket stays held (its parent had
+  already exited, leaving a session-0 orphan), and `taskkill /F` /
+  `Stop-Process` return `Access is denied`. **One elevated command.** The
+  related defect — the fleet gate staying green with the UI dead — IS fixed:
+  `check-task-health.ps1` now asks the ports, pinned both directions, and runs
+  daily.
 
 Two earlier findings were WRONG and are corrected in place: **O-i** (the daemon
 guard IS running on its 5-minute cadence) and **O-g** (grading failures were
