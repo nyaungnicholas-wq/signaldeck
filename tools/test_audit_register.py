@@ -37,7 +37,7 @@ class TreeCase(unittest.TestCase):
             for name, text in files.items():
                 with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
                     fh.write(text)
-            return ar.check(ar.load(d))
+            return ar.all_violations(*ar.load(d))
 
 
 class TestNormalizeStatus(TreeCase):
@@ -61,12 +61,71 @@ class TestCleanTree(TreeCase):
         }
         self.assertEqual(self.run_on(files), [])
 
-    def test_non_reaudit_files_are_ignored(self):
+    def test_research_notes_without_findings_are_ignored(self):
+        """A narrative or research note in audits/ is not an audit table.
+
+        This fixture used to hand the note a full findings table with a bogus
+        status and assert it was skipped anyway, purely because its name did not
+        end in `-reaudit.md`. That is the exact hole that hid
+        `2026-08-03-adversarial-reaudit.md` and its five findings for nine days,
+        so the note is now what a real one looks like: prose, no table.
+        """
         files = {
             "2026-01-01-reaudit.md": audit(row("A1", "**fixed**")),
-            "2026-04-01-null-transition.md": audit(row("A1", "banana")),
+            "2026-04-01-null-transition.md": (
+                "# Null transition study\n\nProse only. A table of measurements:\n\n"
+                "| symbol | before | after |\n|---|---|---|\n| SPY | 0.41 | 0.44 |\n"
+            ),
         }
         self.assertEqual(self.run_on(files), [])
+
+    def test_findings_table_under_an_unmatched_name_is_reported_not_skipped(self):
+        """The A27 regression: a real findings table must never be skipped for
+        its filename alone."""
+        files = {
+            "2026-01-01-reaudit.md": audit(row("A1", "**fixed**")),
+            "2026-04-01-something-else.md": audit(row("A1", "banana")),
+        }
+        v = self.run_on(files)
+        self.assertTrue(any("UNTRACKED AUDIT" in x for x in v), v)
+        self.assertTrue(any("2026-04-01-something-else.md" in x for x in v), v)
+
+    def test_descriptive_infix_in_the_filename_is_parsed(self):
+        """`<date>-adversarial-reaudit.md` must be read like `<date>-reaudit.md`."""
+        files = {"2026-04-01-adversarial-reaudit.md": audit(row("A1", "**fixed**"))}
+        with tempfile.TemporaryDirectory() as d:
+            for name, text in files.items():
+                with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            findings, unreadable = ar.load(d)
+        self.assertEqual([f.fid for f in findings], ["A1"])
+        self.assertEqual(unreadable, [])
+
+    def test_heading_style_findings_are_reported_not_silently_dropped(self):
+        """Headings carry no status, so such a file cannot be tracked — it must
+        say so loudly instead of registering as clean."""
+        files = {
+            "2026-01-01-reaudit.md": audit(row("A1", "**fixed**")),
+            "2026-04-01-adversarial-reaudit.md": (
+                "# Adversarial re-audit\n\nScope: refute, not validate.\n\n"
+                "## F-1 (HIGH) — a thing broke\n\nDetail.\n\n"
+                "## F-2 (MEDIUM) — another thing\n\nDetail.\n"
+            ),
+        }
+        v = self.run_on(files)
+        self.assertTrue(any("UNTRACKED AUDIT" in x for x in v), v)
+        self.assertTrue(any("F-1, F-2" in x for x in v), v)
+
+    def test_f_style_ids_are_parsed_from_a_table(self):
+        """The 2026-08-03 audit numbers its findings F-N; the register must keep
+        the ids an audit's own prose cites rather than force a rename."""
+        files = {"2026-04-01-adversarial-reaudit.md": audit(row("F-2", "**fixed**"))}
+        with tempfile.TemporaryDirectory() as d:
+            for name, text in files.items():
+                with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            findings, _ = ar.load(d)
+        self.assertEqual([f.fid for f in findings], ["F-2"])
 
     def test_tables_without_the_findings_header_are_ignored(self):
         text = (
@@ -204,7 +263,7 @@ class TestMainExitCodes(TreeCase):
         )
         if not os.path.isdir(repo_audits):
             self.skipTest("audits/ not present")
-        violations = ar.check(ar.load(repo_audits))
+        violations = ar.all_violations(*ar.load(repo_audits))
         self.assertEqual(violations, [], "the audit register must stay clean: "
                          + "; ".join(violations))
 
