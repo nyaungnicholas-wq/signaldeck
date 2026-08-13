@@ -151,13 +151,35 @@ MIN_DISTINCT_BLOCKS = 10
 # cross-section", and those are the same thing only when the universe is large.
 # The correct predicate is coverage RELATIVE to the universe that day.
 #
-# forecastmon.DayStat.CoverageRatio is exactly that predicate, and it cannot be
-# reused here: its own doc says "Zero on the resolved-outcome side, so
-# Forecast == Symbols there", i.e. coverage is identically 1.0 on the graded
-# side, because a withheld forecast leaves no resolved row to count. So the
-# denominator has to come from OUTSIDE the graded population — the forecast-side
-# day stats, or the active-symbol count for that day — and plumbing it here is a
-# data-path change, not a threshold tweak.
+# COVERAGE IS ALSO THE WRONG PREDICATE, and this was MEASURED rather than
+# reasoned. The denominator does exist outside the graded population: withheld
+# forecasts ARE persisted in `predictions` (n_used = 0 AND raw_prob = 0.5 is an
+# exact filter for them — see store.ForecastDayStatsRaw), so call-day coverage
+# is computable. Computed on 2026-08-12 for every graded day, it does not track
+# thinness at all:
+#
+#   1d day 20660: graded n=1    call-day coverage 0.982 (325 of 331 forecast)
+#   1d day 20659: graded n=6    call-day coverage 0.982
+#   1w day 20665: graded n=1    call-day coverage 0.985
+#   1d day 20671: graded n=43   call-day coverage 0.169
+#
+# A day on which the model spoke about 98% of the universe yields ONE graded
+# observation. Thin graded days are produced by RESOLUTION AND SETTLEMENT
+# ATTRITION — outcomes not yet resolved, or quarantined — not by the ensemble
+# declining to forecast. So gating on coverage would drop the wrong days and
+# keep the degenerate ones.
+#
+# WHERE THAT LEAVES IT. Two candidate predicates are now refuted with data:
+# an absolute observation floor (wrong: conflates a small universe with a thin
+# one) and call-day coverage (wrong: uncorrelated with graded thinness). What
+# remains defensible is narrower than either — the interval's design_effect
+# ALREADY prices unequal cluster sizes correctly, so the only real defect is
+# that MIN_DISTINCT_BLOCKS can be satisfied by degenerate one-observation days.
+# The fix belongs at the ADMISSION test, not the population, and it still needs
+# a size predicate that does not misfire on a small universe. Unresolved on
+# purpose: three implementations and two predicates have been tried, and
+# shipping a gate that drops the wrong days is worse than publishing the
+# measurement and saying so.
 #
 # Until then this constant measures and does not gate. The measurement is the
 # honest half: it sizes the padding (a third of the block count) without
