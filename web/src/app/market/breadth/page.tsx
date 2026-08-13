@@ -65,7 +65,12 @@ export default function MarketBreadthPage() {
     pctTop > 66 ? "Broad advance" : pctTop > 50 ? "Narrow rally" :
     pctBottom > 66 ? "Broad decline" : "Mixed signals";
 
-  const hasAccuracy = data.rows.length > 0 && data.rows[0].historicalAccuracy > 0;
+  // Every row that actually carries a number. Testing only rows[0] let a single
+  // measured first row unlock a tile that then averaged EVERY row — including
+  // rows the table below renders as "—" because historicalAccuracy === 0 means
+  // not measured. A row shown as no-data upstairs cannot count as 0% downstairs.
+  const measuredRows = data.rows.filter((r) => r.historicalAccuracy > 0);
+  const hasAccuracy = measuredRows.length > 0;
 
   return (
     <div className="page-enter space-y-4">
@@ -128,11 +133,15 @@ export default function MarketBreadthPage() {
         />
         {hasAccuracy && (
           <StatTile
-            label="Avg Accuracy"
-            value={(data.rows.reduce((sum, r) => sum + r.historicalAccuracy, 0) / data.rows.length) * 100}
+            label="Avg Backtested Accuracy"
+            value={
+              (measuredRows.reduce((sum, r) => sum + r.historicalAccuracy, 0) /
+                measuredRows.length) *
+              100
+            }
             decimals={1}
             suffix="%"
-            sub="across all baskets"
+            sub={`across ${measuredRows.length} of ${data.rows.length} baskets`}
             glow="accent"
             i={2}
           />
