@@ -3,18 +3,29 @@
 **Overall status: NOT COMPLETE — one item BLOCKED on elevation, the rest
 evidenced and open. Everything repaired is DEPLOYED and serving.**
 
-Rounds 1–4. All four originally-blocked items are closed and verified; Q4 landed
-in Go and Python together and is live; 13 further backlog items are fixed.
+Rounds 1–5. All four originally-blocked items are closed and verified; Q4 landed
+in Go and Python together and is live; **21 further backlog items are fixed and
+deployed**.
 
-What keeps the run NOT COMPLETE:
-- ten evidenced-but-unrepaired findings: `Q8 Q9 Q10 O-b O-c O-d O-h O-j D-a D-i`
-  (listed with evidence at the foot of ROUND 4);
-- **one blocked item:** the web restart needs an elevated shell. Its code is
-  committed and built; only the running process is stale.
+What keeps the run NOT COMPLETE — three items, each for a stated reason:
+- **Q8** — no forecast-coverage gate in the grader, so a day the model barely
+  spoke on weighs as a full cluster. Real, and a deliberate quant change: it
+  moves published numbers and needs a prereg amendment, as Q4 did.
+- **O-h** — "offsite" backup is on the same physical volume. The guard already
+  refuses to claim otherwise; making it true needs an external drive.
+  **Hardware, not code.**
+- **Web restart** — Q1's code is committed and built, but the running process
+  cannot be killed without elevation. **Needs an elevated shell.**
 
 Two earlier findings were WRONG and are corrected in place: **O-i** (the daemon
 guard IS running on its 5-minute cadence) and **O-g** (grading failures were
 never silent — the refusal path already exited 1).
+
+**One regression I caused, flagged in full at ROUND 5:** running the task
+installer converted 11 batch tasks from S4U to Interactive, re-exposing them to
+console-control kills. Prevented from recurring; I cannot undo it without
+elevation. The four long-running services are unaffected. Remedy:
+`powershell -File ops\fix-task-principals.ps1` (elevated).
 
 Repo: `C:\Users\Nicholas_N\Desktop\claude code\signaldeck`
 Branch `hmm-regime-and-pbo`. Entered at HEAD `1b8b876` with ~110 uncommitted
