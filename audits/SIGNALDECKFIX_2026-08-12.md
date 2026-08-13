@@ -7,15 +7,17 @@ Rounds 1–5. All four originally-blocked items are closed and verified; Q4 land
 in Go and Python together and is live; **21 further backlog items are fixed and
 deployed**.
 
-What keeps the run NOT COMPLETE — three items, each for a stated reason:
-- **Q8** — no forecast-coverage gate in the grader, so a day the model barely
-  spoke on weighs as a full cluster. Real, and a deliberate quant change: it
-  moves published numbers and needs a prereg amendment, as Q4 did.
+What keeps the run NOT COMPLETE — two blocked, one deliberately staged:
 - **O-h** — "offsite" backup is on the same physical volume. The guard already
   refuses to claim otherwise; making it true needs an external drive.
   **Hardware, not code.**
 - **Web restart** — Q1's code is committed and built, but the running process
   cannot be killed without elevation. **Needs an elevated shell.**
+- **Q8 gate** — the padding is now MEASURED and PUBLISHED (ROUND 6); wiring the
+  gate itself moves both directional verdicts from FAILED to INSUFFICIENT DAYS
+  and needs its own prereg amendment. Two implementations were tried and both
+  were wrong; the reasons are recorded in the constant's comment so the next
+  attempt does not repeat them.
 
 Two earlier findings were WRONG and are corrected in place: **O-i** (the daemon
 guard IS running on its 5-minute cadence) and **O-g** (grading failures were
