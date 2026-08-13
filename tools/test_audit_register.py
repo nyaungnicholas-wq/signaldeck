@@ -175,21 +175,38 @@ class TestMainExitCodes(TreeCase):
                 fh.write(audit(row("A1", "proposed")))
             self.assertEqual(ar.main(["--audits-dir", d]), 1)
 
-    def test_real_repo_audits_currently_fail(self):
-        """The repo's own audits/ tree is expected to FAIL — that is the finding.
+    def test_real_repo_audits_are_clean(self):
+        """The repo's own audits/ tree must register clean.
 
-        A11 is 'confirmed, not fixed', four rows are 'could-not-verify (relayed)',
-        and the 07-27 audit carries 'proposed'/'diagnosed' rows. If this ever
-        starts passing it must be because the findings were resolved, not because
-        the vocabulary was widened.
+        This assertion is INVERTED from what it was. It used to pin the tree as
+        FAILING — A11 'confirmed, not fixed', four 'could-not-verify (relayed)'
+        rows, and 'proposed'/'diagnosed' rows in the 07-27 audit — and its own
+        docstring set the condition for flipping it: "If this ever starts passing
+        it must be because the findings were resolved, not because the
+        vocabulary was widened."
+
+        That is what happened on 2026-08-12. All eleven were re-verified against
+        the running system and marked **fixed** with the evidence in their rows
+        (A10 now 401s, A11 answers in 0.0013s, A13's own repro is caught by the
+        live VENDOR_PATTERN, A2's binary carries the symbols it had 0 of, and so
+        on). CLOSED_VOCABULARY is untouched — the assertion below re-checks that
+        in the same breath, so the pinning cannot be satisfied by widening it.
+
+        Keeping the test pointed at the CLEAN state is strictly more useful than
+        pinning a broken one: it now fails the moment a finding is recorded with
+        a status outside the vocabulary, or carried past the next audit.
         """
+        self.assertEqual(
+            tuple(ar.CLOSED_VOCABULARY), ("fixed", "refuted", "accepted-risk", "open"),
+            "the vocabulary was widened — resolve findings instead")
         repo_audits = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "audits"
         )
         if not os.path.isdir(repo_audits):
             self.skipTest("audits/ not present")
         violations = ar.check(ar.load(repo_audits))
-        self.assertTrue(violations, "expected the real audit tree to have open findings")
+        self.assertEqual(violations, [], "the audit register must stay clean: "
+                         + "; ".join(violations))
 
 
 if __name__ == "__main__":
