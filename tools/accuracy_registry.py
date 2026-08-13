@@ -186,6 +186,19 @@ MIN_DISTINCT_BLOCKS = 10
 # pretending a number it cannot yet compute correctly.
 MIN_DAY_OBSERVATIONS = 30
 
+# DEGENERATE_BLOCK_FRACTION is the share of the sample's OWN median day below
+# which a cluster is not credible evidence. See the admission test in
+# clustered_ci for why this is relative rather than absolute: both absolute
+# predicates were refuted with data (a fixed row floor calls a complete day thin
+# in a small universe; call-day coverage is uncorrelated with graded thinness).
+#
+# A fraction of the median needs no external denominator and self-scales, so it
+# separates the live populations (1d 10/14, 1w 7/11 credible) while keeping ALL
+# blocks on every test fixture shape — 3-symbol universes included. 10% is "an
+# order of magnitude below typical", the same calibration idiom
+# forecastmon.MinDistinctRatio uses.
+DEGENERATE_BLOCK_FRACTION = 0.10
+
 # --------------------------------------------------------------------------- #
 # MULTIPLICITY — what the published interval's error rate actually is
 # --------------------------------------------------------------------------- #
@@ -1240,9 +1253,42 @@ def clustered_ci(days: list[tuple[int, int]], min_clusters: int = MIN_DISTINCT_D
     }
     if n <= 0:
         return out
-    if len(days) < min_clusters:
-        out["ci_reason"] = (f"withheld: {len(days)}/{min_clusters} {unit} — "
-                            "too few to measure between-cluster variance")
+    # ADMISSION COUNTS CREDIBLE CLUSTERS, NOT ROWS IN A GROUP BY.
+    #
+    # min_clusters exists to refuse an interval built on too few independent
+    # samples, but it counted any day that produced a row — so a day carrying
+    # ONE observation satisfied it exactly as much as a day carrying 320.
+    # Measured 2026-08-12: 1d had 14 "days" of which 4 carried 1, 2, 4 and 6
+    # observations; 1w had 11 of which 4 carried 1, 4, 5 and 7. Under 1.5% of the
+    # rows, a third of the count that authorised publishing.
+    #
+    # The predicate is RELATIVE to this sample's own typical day, which is what
+    # makes it safe. Two absolute predicates were tried and both misfire: a fixed
+    # row floor calls a complete day thin in a small universe (a 3-symbol
+    # universe has 3-row days), and call-day coverage turned out to be
+    # uncorrelated with graded thinness — a day the model forecast 98% of the
+    # universe on still yields one graded row, because thinness comes from
+    # resolution and settlement attrition, not abstention. A fraction of the
+    # median needs no external denominator and self-scales: on the live corpus it
+    # separates 1d 10/14 and 1w 7/11, and on every test fixture shape it keeps
+    # ALL blocks. An order of magnitude below typical is the same calibration
+    # idiom MinDistinctRatio uses.
+    #
+    # ONLY THE ADMISSION DECISION CHANGES. n, hits, acc, design_effect and the
+    # interval are all still computed over EVERY cluster, so a published number
+    # and its published CI keep describing the same population — the failure mode
+    # that killed an earlier attempt at this.
+    sizes = [dn for dn, _ in days]
+    floor = statistics.median(sizes) * DEGENERATE_BLOCK_FRACTION if sizes else 0
+    credible = [d for d in days if d[0] >= floor]
+    out["credible_blocks"] = len(credible)
+    if len(credible) < min_clusters:
+        detail = ""
+        if len(credible) != len(days):
+            detail = (f" ({len(days) - len(credible)} of {len(days)} were degenerate: "
+                      f"under {DEGENERATE_BLOCK_FRACTION:.0%} of the median day)")
+        out["ci_reason"] = (f"withheld: {len(credible)}/{min_clusters} credible {unit}"
+                            f"{detail} — too few to measure between-cluster variance")
         return out
     deff = design_effect(days)
     if deff is None:
@@ -2099,7 +2145,8 @@ def grade_directional_days(by_h: dict[str, list[tuple]],
         null_acc = null_g["acc"]
         lo, hi = (g["ci"] if g["ci"] else (None, None))
         v = verdict_for(g["acc"], lo, hi, g["n"], null_acc, None,
-                        distinct_days=g["distinct_days"])
+                        distinct_days=g["distinct_days"],
+                        credible_blocks=g.get("credible_blocks"))
         rows.append({
             "predictor": name,
             "family": family,
@@ -2519,7 +2566,8 @@ VERDICT_EPS = 1e-12
 
 
 def verdict_for(acc, lo, hi, n, null_acc, claimed, distinct_days=None,
-                null_coverage=None, distinct_blocks=None) -> str:
+                null_coverage=None, distinct_blocks=None,
+                credible_blocks=None) -> str:
     """Verdicts come from the interval, never the point estimate.
 
     The [lo, hi] handed in is the MULTIPLICITY-CORRECTED interval — priced for
@@ -2545,6 +2593,16 @@ def verdict_for(acc, lo, hi, n, null_acc, claimed, distinct_days=None,
             return (f"INSUFFICIENT BLOCKS ({distinct_blocks}/{MIN_DISTINCT_BLOCKS} "
                     "non-overlapping horizon blocks) — no interval, so no verdict")
         if distinct_days is not None:
+            # Report the count that ACTUALLY withheld the interval. When
+            # degenerate days were excluded by the admission test the raw day
+            # count can clear the floor while the credible one does not, and
+            # printing "11/10 distinct days" beside a refusal states a passing
+            # ratio as the reason for failing — a number nobody measured.
+            if credible_blocks is not None and credible_blocks < MIN_DISTINCT_DAYS:
+                dropped = distinct_days - credible_blocks
+                extra = (f", {dropped} degenerate" if dropped > 0 else "")
+                return (f"INSUFFICIENT DAYS ({credible_blocks}/{MIN_DISTINCT_DAYS} credible "
+                        f"days of {distinct_days}{extra}) — no interval, so no verdict")
             return (f"INSUFFICIENT DAYS ({distinct_days}/{MIN_DISTINCT_DAYS} distinct days) — "
                     "no interval, so no verdict")
         return "NO INTERVAL — no verdict"
