@@ -639,6 +639,16 @@ Output the raw Python file only. No markdown fences, no commentary.
     $tail = ($r.Output -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 12) -join ' | '
     Ev 'script-failed' @{ cycle = $cycle; tail = $tail }
     Add-Content $journal "`n## Cycle $cycle - KILLED (script did not run)`n`n$hypothesis`n`n``````$(($r.Output -split "`n" | Select-Object -Last 6) -join "`n")```````n"
+    # Commit the draft on the KILL paths too. Commit-Draft at the bottom of the
+    # loop was reached only by cycles that got as far as a judged verdict, so
+    # every cycle that died here left its script sitting in the working tree --
+    # and this file's own header says why that matters: "Leaving them untracked
+    # also blocks deploys outright -- build_from_head refuses". Measured
+    # 2026-08-12: research/eighty/h0626.py sat modified for hours after an
+    # insufficient-data cycle and blocked every deploy until it was stashed by
+    # hand. A killed hypothesis is evidence the protocol wants kept anyway, and
+    # the journal entry just written already references the file by name.
+    Commit-Draft $script
     Start-Sleep -Seconds $CyclePauseSec
     continue
   }
@@ -707,6 +717,8 @@ $hypothesis
 $(($out -split "`n" | Select-Object -Last 10) -join "`n")
 ``````
 "@
+    # Same reason as the script-failed path above: never leave the draft dirty.
+    Commit-Draft $script
     Start-Sleep -Seconds $CyclePauseSec
     continue
   }
@@ -731,6 +743,8 @@ a data source that would change the answer.
 $(($out -split "`n" | Select-Object -Last 10) -join "`n")
 ``````
 "@
+    # Same reason as the script-failed path above: never leave the draft dirty.
+    Commit-Draft $script
     Start-Sleep -Seconds $CyclePauseSec
     continue
   }
