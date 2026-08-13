@@ -909,3 +909,45 @@ the figure itself is real.
 `NN.N%` literal in `web/src` was checked: the remainder are the dated
 `FLAGSHIP_RETIREMENT` snapshot (static by design, documented) and figures inside
 code comments. No further hard-coded live claims.
+
+## ROUND 6g — a check that said OK beneath its own contradiction
+
+Swept the script-style Python checks I had never actually run (they reported
+"NO TESTS RAN" under `python -m unittest` because they carry a `main()`, not a
+`TestCase` — the exact shape `GateSpecs` documents). Run correctly:
+`test_anchor_liveness`, `test_pbo` (13/13) and `test_verify_backup` all pass.
+
+Then ran the liveness TOOLS against the live database, which the tests do not
+do. `research_liveness.py` printed this, in this order:
+
+```
+research-loop liveness: 4 claim(s) ACKNOWLEDGED UNVERIFIABLE ...
+  worker_runs id=145573 ... run row claims judged=48 but
+  research_loop_judgments holds 0 rows for the day; the judgments were never
+  persisted
+  ... three more ...
+research-loop liveness: OK — every narrated grid search has a matching
+judgment ledger.
+```
+
+The last line is how a daily log is read, and it is **false** — four narrated
+grid searches provably do not have a matching judgment ledger, which is what the
+lines above it say.
+
+Not the quarantine misbehaving: acknowledging four permanently uncorroborable
+historical rows, so they cannot block the accuracy registry forever, is a
+deliberate chained trade. The defect is that the SUMMARY overclaimed past it —
+and `partition_violations`' own docstring already promised otherwise:
+*"Quarantined claims are still printed on every run, under their own heading,
+and still counted in the exit summary."* They were not counted in it.
+
+Now reads: `OK — no UNACKNOWLEDGED claims. 4 acknowledged unverifiable claim(s)
+remain (listed above, excluded from refusal by the quarantine); NOT every
+narrated grid search has a matching judgment ledger.` Exit code unchanged (0),
+refusal policy unchanged.
+
+**Checked the siblings for the same shape**, which is where this class usually
+repeats: `structural_liveness.py` is honest (per-kind WAITING/OK/DEAD-ARM/
+STALLED plus "Nothing is due yet — first graded on 2026-08-17") and
+`anchor_liveness.py` reports real timestamps. The overclaim was specific to one
+file.
