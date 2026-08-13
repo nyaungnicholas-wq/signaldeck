@@ -951,3 +951,58 @@ repeats: `structural_liveness.py` is honest (per-kind WAITING/OK/DEAD-ARM/
 STALLED plus "Nothing is due yet — first graded on 2026-08-17") and
 `anchor_liveness.py` reports real timestamps. The overclaim was specific to one
 file.
+
+## ROUND 6h — running the TOOLS against live data (the method that keeps working)
+
+Two more found, both by the same method that produced the headline finding:
+execute the checks against the live database instead of trusting that their
+tests pass.
+
+**A measurement error of mine, corrected first.** I initially reported
+`deployment_drift` as "prints [FAIL] and exits 0". It does not — my
+`echo "exit=$?"` came after a `tail`, so it read TAIL's status. That is the
+exact trap this repo's own notes warn about (`${PIPESTATUS[0]}`). Re-run
+correctly, `deployment_drift` exits 1 and `prereg_readiness` exits 1; the rest
+exit 0.
+
+**Finding 1 — `research_liveness` said OK beneath its own contradiction.**
+Covered in ROUND 6g.
+
+**Finding 2 — `deployment_drift` refused publication on a FALSE diagnosis.**
+`newest_boot_ts` infers a boot as "the newest worker start after a quiet stretch"
+of `BOOT_QUIET_SECS`. Deploys closer together than that are invisible to it, so
+the window spans several binaries. During this session's rapid deploys it
+returned a boot of **18:42** while the running revision had only begun writing at
+**21:10** — twelve binaries inside the window, stamp ratio 4.7%, and the verdict:
+
+> `[FAIL] row-revision-stamp: … the deployed binary is not stamping the rows it
+> writes, so no row here can be attributed to the code the certificate names`
+
+False. Verified directly: `worker_runs` grouped by revision shows each deploy's
+own window, and `prediction_ledger`'s newest rows carry the current revision.
+The binary was stamping perfectly.
+
+This one has teeth, because the check **refuses publication** on that finding. A
+false refusal is not a safe failure — it blocks the honest scoreboard and,
+repeated, teaches an operator to route around the gate.
+
+A revision CHANGE is an exact boot signal rather than a guess: a row stamped with
+a different revision is positive evidence a different binary was running.
+`newest_boot_ts` now takes the later of that and the quiet-gap value, keeping the
+heuristic for the one case the revision signal cannot see (a redeploy producing
+the same revision). After: **worker_runs 125/125, prediction_ledger 8/8, exit 0**,
+13 existing tests unchanged.
+
+**Honest note on provenance of the trigger:** the false FAIL was provoked by my
+own twelve deploys in 45 minutes. The weakness is real regardless — any operator
+deploying twice inside `BOOT_QUIET_SECS` hits it — but I would not have seen it
+without causing it.
+
+**Also swept, clean:** `test_anchor_liveness`, `test_pbo` (13/13) and
+`test_verify_backup` all pass when run as scripts (they carry `main()`, not a
+`TestCase`, which is why `python -m unittest` reports "NO TESTS RAN").
+`schema_contract_check`, `check_revalidation`, `bars_completeness`,
+`structural_liveness` and `anchor_liveness` all exit 0 with honest output.
+`prereg_readiness` exits 1 and says why ("on the claimed date, no call is even
+resolvable") — that is the tool working, and it was already repaired in a prior
+audit.
