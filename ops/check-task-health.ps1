@@ -179,8 +179,41 @@ if ($stale.Count -gt 0) {
     $stale | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
     $bad = $true
 }
+# SERVICE PORTS. The two long-running services are deliberately exempt from the
+# task-result and next-run checks above ($onDemandStoppable): they are stopped
+# on demand, so 0x00041306 and an empty NextRunTime are normal for them and
+# flagging those would cry wolf. But that exemption left NOTHING here watching
+# them at all, and the comment 50 lines up already names the honest signal --
+# "that is what signaldeck-ctl.sh now asks (sd_port_listening 8323)" -- without
+# this script ever asking it.
+#
+# Measured 2026-08-12: port 8323 had been dead since 08-07 and this gate
+# reported "OK - no console-kill signature in the fleet" every time it was run.
+# A fleet gate that is green while the product's own UI is unreachable is the
+# defect it exists to prevent, one level up.
+#
+# Asking the PORT rather than the task is the whole point: the web process
+# outlives the task that started it (schtasks /End does not cascade to the
+# child holding the socket), so task state cannot answer this question.
+$portsDown = @()
+foreach ($svc in @(@{n = 'daemon (API)'; p = 8322 }, @{n = 'web (UI)'; p = 8323 })) {
+    $listening = @(Get-NetTCPConnection -State Listen -LocalPort $svc.p -ErrorAction SilentlyContinue).Count -gt 0
+    if ($listening) {
+        Write-Host ("  = {0,-14} listening on {1}" -f $svc.n, $svc.p)
+    }
+    else {
+        $portsDown += ("{0} - nothing listening on {1}" -f $svc.n, $svc.p)
+    }
+}
+if ($portsDown.Count -gt 0) {
+    Write-Host ""
+    Write-Host "WARNING - service port(s) not listening:" -ForegroundColor Red
+    $portsDown | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    $bad = $true
+}
+
 if ($bad) { exit 1 }
 
 Write-Host ""
-Write-Host "OK - no console-kill signature in the fleet" -ForegroundColor Green
+Write-Host "OK - no console-kill signature, and both service ports are listening" -ForegroundColor Green
 exit 0
