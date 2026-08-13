@@ -586,3 +586,56 @@ have no scheduler entry) · `O-h` (offsite is one volume — a hardware decision
 killed — `taskkill /F` returns `Access is denied`, and `Stop-ScheduledTask`
 leaves it alive because `schtasks /End` does not cascade to the child holding
 port 8323. Everything else in this report is live.
+
+---
+
+# ROUND 5 — remaining backlog
+
+Fixed and deployed: **O-b, O-c, O-d, O-j, Q9, Q10, D-a, D-i**. Daemon at
+`98e29f5`+; 122 Go packages and 271 Python tests green throughout.
+
+| ID | What | Verified by |
+|---|---|---|
+| **D-i** | `api.Serve` is not a Worker, so it had NO `worker_runs` row and `FailingWorkers`/`StaleWorkers` were STRUCTURALLY blind to it — with the listener down, health.Check still said "healthy: N workers checked", health.json still wrote ok:true, and the cache-warmer stayed green because it calls its build funcs in-process. New `api-probe` worker probes over real TCP. | **Live**: `api-probe｜ok｜api listener answering on 127.0.0.1:8322 (HTTP 200)`. 5 tests: live passes, dead port errors, 500 errors, no-address is explicitly not a failure, wildcard binds rewritten. |
+| **D-a** | ShutdownGrace 75s vs minRunTimeout 15min, so a worker mid-VACUUM at SIGTERM blew the grace and `forceExit(1)` — which main.go defines as "internal fault, supervisor restarts" — so `signaldeck-ctl.sh stop` restarted the daemon underneath the operator. | Both exit codes pinned in both directions (0 for an operator stop with a stuck worker; the existing test still demands 1 with no `OperatorStop`). |
+| **O-b** | The plist→Task translator read NEITHER `StandardOutPath` nor `StandardErrorPath`. Cleanup reported `0x0` daily for 14 days with its log last written 07-29. | **Proved both shapes**: the old argument form created no log at all; `bash -lc "… >> log 2>&1"` created it with content. Then end-to-end: `logs/check-task-health.log` did not exist before the scheduled run and held the output after. |
+| **O-c** | `-Install` — this file's own documented recovery path — would have repointed the live Daemon task through bash, breaking graceful stop (`schtasks /End` does not cascade). Now refused, with the guard placed BEFORE trigger translation (my first placement sat after it, where it would never have run). | Dry run shows the explicit refusal. |
+| **O-d** | Both fleet health gates had no scheduler entry AND could not have one: the translator only accepted `.sh`. `.ps1` is now first-class; both registered, daily 09:05 / 09:20. | `Get-ScheduledTask` shows both with correct exec/args/trigger. |
+| **O-j** | Three KILL paths in the eighty loop hit `continue` before `Commit-Draft`, so a died cycle left its script modified forever — blocking every deploy, which is exactly what happened to `h0626.py` in this session. | All three now commit. (A fourth insertion was made and REMOVED: that path runs before `$script` is assigned and would have committed the previous cycle's file.) |
+| **Q9** | The collapse gate took one global max `distinct_days` and probed `"1d"` only, so 1w rows were gated by 1d evidence in both directions. Now per-horizon. The window reconstruction stays an approximation and now SAYS so — it fails open, and closing it needs the grader to emit its graded day list. | api tests pass. |
+| **Q10** | `quarantine/` implies a data quarantine that does not exist — it holds non-compiling Go and retired backups; `prediction_outcomes` has no quarantine table, and the real mechanisms are two query-time PREDICATES plus one table. | Every claim in the new README verified against the live DB and source. |
+
+## A regression I caused, could not undo, and am flagging loudly
+
+`Register-ScheduledTask` with `-RunLevel` and **no `-Principal` registers the
+task Interactive**. This fleet had been deliberately converted to S4U because
+Interactive tasks sit in the console session and are killable by console control
+events — `0xC000013A`, the signature `ops/fix-task-principals.ps1` exists to end.
+
+Running `-Install` took the fleet from **Interactive=0/S4U=14 to
+Interactive=11/S4U=5**. The newly-scheduled health gate caught it on its very
+first run, which is the one good thing about it.
+
+- **Prevented from recurring:** the principal is now set explicitly on every
+  registration.
+- **NOT undone:** `Set-ScheduledTask -Principal` returns `Access is denied`
+  without elevation, so I cannot restore the 11.
+- **Blast radius is batch jobs only.** The four long-running tasks — Daemon,
+  Web, Daemon Keepalive, Eighty Loop — are all still S4U.
+- **Remedy, one elevated command:** `powershell -File ops\fix-task-principals.ps1`
+
+My pre-flight checked that no managed task was running and that the daemon was
+excluded. It did not check that re-registration preserves the principal. That
+gap is the whole finding.
+
+## Still open (3)
+
+- **Q8** — days on which the model forecast 0.6–12% of the cross-section enter
+  the day-resampled interval as full clusters; there is no forecast-coverage gate
+  in the grader. Real, and a deliberate quant change: it moves published numbers
+  and needs another prereg amendment, like Q4 did.
+- **O-h** — "offsite" backup is on the same physical volume. The guard already
+  refuses to claim otherwise; making it true needs an external drive. **Hardware,
+  not code.**
+- **Web restart** — Q1's code is committed and built; PID 29984 still serves the
+  old bundle and `taskkill /F` returns `Access is denied`. **Needs elevation.**
