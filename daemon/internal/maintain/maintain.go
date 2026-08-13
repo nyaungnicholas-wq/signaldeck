@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/archive"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -377,13 +378,31 @@ func Retention1hDays() int     { return envIntOr("SIGNALDECK_1H_RETENTION_D", 3*
 func RetentionAnomDays() int   { return envIntOr("SIGNALDECK_ANOM_RETENTION_D", 90) }
 
 // envIntOr parses an integer env var, returning def on empty/invalid input.
+// envIntOr reads a positive integer override, falling back to def.
+//
+// Every key that reaches this helper governs RETENTION — how long rows survive
+// before a sweep deletes them — so a rejected override here is recorded as
+// CRITICAL rather than merely logged. The dangerous direction is not a bad
+// value that keeps too much data: it is an operator LENGTHENING a window to
+// protect data, mistyping it, silently getting the shorter default, and having
+// the sweep delete rows they meant to keep. That deletion is irreversible, and
+// until 2026-08-11 nothing anywhere recorded that the override had been
+// refused.
+//
+// The runtime behaviour is deliberately unchanged — the default still applies
+// and the daemon still runs. Only the silence is fixed.
 func envIntOr(k string, def int) int {
 	v := os.Getenv(k)
 	if v == "" {
 		return def
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
+	if err != nil {
+		envcfg.RejectCritical(k, v, "not an integer", strconv.Itoa(def))
+		return def
+	}
+	if n <= 0 {
+		envcfg.RejectCritical(k, v, "must be > 0", strconv.Itoa(def))
 		return def
 	}
 	return n

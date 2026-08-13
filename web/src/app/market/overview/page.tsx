@@ -48,7 +48,7 @@ const PRESETS = [
 ];
 
 export default function ScreenerPage() {
-  const { rows, err, ranking, regimes, retry } = useScreenerData();
+  const { rows, err, ranking, regimes, rankingFailed, retry } = useScreenerData();
   const f = useScreenerFilters(rows, ranking, regimes);
   const goal = useGoal();
   const layout = overviewLayoutFor(goal);
@@ -115,6 +115,7 @@ export default function ScreenerPage() {
       <Reveal>
         <div className="panel">
           <ScreenerResults
+            rankingFailed={rankingFailed}
             rows={rows}
             err={err}
             filtered={f.filtered}

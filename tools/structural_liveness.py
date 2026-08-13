@@ -93,6 +93,15 @@ def overdue_rows(con: sqlite3.Connection, now: int) -> list[dict]:
                    AND b.ts > ro.ts) AS forward_bars
         FROM regime_outcomes ro
         WHERE ro.resolved_at IS NULL
+          -- Mirror the grader's own admission filter (regimeoutcomes.go:503):
+          -- "resolved_at IS NULL AND superseded_by IS NULL AND ...". Without it,
+          -- superseded-and-unresolved rows are 32.4% of every structural kind
+          -- (measured 2026-08-11: trend21 2933/9055, vol21 2953/9118, trend63
+          -- 2933/9055, liquidity21 2920/8989). The grader will never touch them,
+          -- so they would accumulate as phantom overdue at a ratio of ~0.32
+          -- against STALL_RATIO=0.20 and pin this check to a permanent STALLED
+          -- verdict on a resolver that is working correctly.
+          AND ro.superseded_by IS NULL
           AND ro.ts + CAST(ro.horizon_days * 1.45 * 86400 AS INTEGER)
               + {GRACE_DAYS * 86400} <= ?
           AND (SELECT COUNT(*) FROM bars b
@@ -183,7 +192,12 @@ def _print_report(con: sqlite3.Connection, status: dict[str, dict],
     if not overdue and all(s["verdict"] == "WAITING" for s in status.values()):
         row = con.execute("""
             SELECT MIN(ts + CAST(horizon_days * 1.45 * 86400 AS INTEGER))
-            FROM regime_outcomes WHERE resolved_at IS NULL""").fetchone()
+            FROM regime_outcomes WHERE resolved_at IS NULL
+            -- Same filter as overdue_rows: this line reports the earliest
+            -- unresolved call that can still be GRADED, and a superseded row
+            -- never will be, so including one would advertise a date the grader
+            -- will never act on.
+            AND superseded_by IS NULL""").fetchone()
         if row and row[0]:
             days = (row[0] - now) / 86400.0
             print(f"\nNothing is due yet. The earliest unresolved call can first"

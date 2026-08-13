@@ -37,6 +37,83 @@ func run(t *testing.T, src Source) (string, error) {
 	return m.Run(context.Background())
 }
 
+// THE OTHER REGRESSION THAT MATTERS, and the one that fired for four days
+// while every dashboard stayed green.
+//
+// These are the real measured raw cross-sections from 2026-08-05..2026-08-10.
+// On 2026-08-06 leg admission tightened (906310c) and the ensemble began
+// declining most of the universe; a withheld prediction is still persisted, with
+// raw_prob = 0.5 exactly. Counting those identical 0.5s as forecasts dragged the
+// distinct-ratio to 0.058-0.097 and tripped RAW MODEL COLLAPSE every single run,
+// asserting "the ensemble itself has stopped discriminating" — while among the
+// rows that CARRIED a forecast the ratio those same days was 0.947-1.000.
+//
+// The statistic moved in the opposite direction to the thing it measured: the
+// more honestly the ensemble abstained, the more collapsed it was reported to
+// be. So the two failures are asserted apart here. If a withheld row is ever
+// folded back into the discrimination count, the first loop fails; if the
+// coverage cliff is ever left unreported, the second does.
+func TestWithheldRowsDoNotReadAsCollapse(t *testing.T) {
+	// Symbols = whole cross-section, Withheld = declined. Measured.
+	measured := []DayStat{
+		{Day: "2026-08-05", Symbols: 329, DistinctProbs: 179, Withheld: 4},
+		{Day: "2026-08-06", Symbols: 329, DistinctProbs: 152, Withheld: 24},
+		{Day: "2026-08-07", Symbols: 329, DistinctProbs: 31, Withheld: 298},
+		{Day: "2026-08-09", Symbols: 329, DistinctProbs: 18, Withheld: 310},
+		{Day: "2026-08-10", Symbols: 329, DistinctProbs: 20, Withheld: 308},
+	}
+	for _, d := range measured {
+		if d.Collapsed() {
+			t.Errorf("%s: %d distinct across %d FORECAST symbols (ratio %.3f) was called a "+
+				"collapse; %d withheld rows are not evidence the model stopped discriminating",
+				d.Day, d.DistinctProbs, d.Forecast(), d.DistinctRatio(), d.Withheld)
+		}
+	}
+
+	// The starvation IS real and must be reported — as itself.
+	starved := measured[2:] // 08-07 onward: coverage 0.094, 0.058, 0.064
+	for _, d := range starved {
+		if !d.Starved() {
+			t.Errorf("%s: only %d of %d symbols forecast (coverage %.3f) did NOT trip the "+
+				"starvation test", d.Day, d.Forecast(), d.Symbols, d.CoverageRatio())
+		}
+	}
+	for _, d := range measured[:2] { // 08-05, 08-06: coverage 0.988, 0.927
+		if d.Starved() {
+			t.Errorf("%s: coverage %.3f is healthy but tripped the starvation test",
+				d.Day, d.CoverageRatio())
+		}
+	}
+
+	detail, err := run(t, stubSource{rawDays: measured, base: 0.5, nDays: 5})
+	if err == nil {
+		t.Fatalf("three starved days returned no error; detail=%q", detail)
+	}
+	if strings.Contains(err.Error(), "RAW MODEL COLLAPSE") {
+		t.Errorf("starvation was reported as a collapse — the wrong diagnosis is the bug: %v", err)
+	}
+	if !strings.Contains(err.Error(), "FORECAST COVERAGE STARVED") {
+		t.Errorf("error does not name the failure: %v", err)
+	}
+	// It must name the newest day and the real coverage so an operator can act.
+	if !strings.Contains(err.Error(), "2026-08-10") || !strings.Contains(err.Error(), "3/5 day(s)") {
+		t.Errorf("error does not locate the failure in time: %v", err)
+	}
+}
+
+// A genuine raw collapse — many symbols forecast, almost no variety among them —
+// must still trip, and must NOT be renamed to starvation.
+func TestRealRawCollapseStillTrips(t *testing.T) {
+	measured := []DayStat{{Day: "2026-07-27", Symbols: 330, DistinctProbs: 6, Withheld: 2}}
+	if !measured[0].Collapsed() {
+		t.Fatalf("328 forecast symbols sharing 6 values did not trip the collapse test")
+	}
+	if measured[0].Starved() {
+		t.Errorf("coverage %.3f is healthy; this is a collapse, not starvation",
+			measured[0].CoverageRatio())
+	}
+}
+
 // THE REGRESSION THAT MATTERS. These are the real measured cross-sections from
 // 2026-07-27..2026-08-04, when the model emitted 6-13 distinct probabilities
 // across ~328 symbols for eight consecutive days and every dashboard reported a

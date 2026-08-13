@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/aiagents/sentiment"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/news"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -20,7 +21,13 @@ import (
 // malformed. Used for operator tunables that don't warrant config plumbing.
 func envInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			envcfg.Reject(key, v, "not an integer", strconv.Itoa(def))
+		case n <= 0:
+			envcfg.Reject(key, v, "must be > 0", strconv.Itoa(def))
+		default:
 			return n
 		}
 	}

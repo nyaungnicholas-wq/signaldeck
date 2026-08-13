@@ -38,12 +38,12 @@ func DescribeLimits() Provenance {
 	p := Provenance{}
 
 	type limitDef struct {
-		key      string
-		frac     bool // true for fraction, false for integer
-		def      float64
-		min      float64 // inclusive lower bound (exclusive for >0 case)
-		max      float64 // inclusive upper bound
-		apply    func(l *Limits, v float64)
+		key   string
+		frac  bool // true for fraction, false for integer
+		def   float64
+		min   float64 // inclusive lower bound (exclusive for >0 case)
+		max   float64 // inclusive upper bound
+		apply func(l *Limits, v float64)
 	}
 
 	defs := []limitDef{

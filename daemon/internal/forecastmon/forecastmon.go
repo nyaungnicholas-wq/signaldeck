@@ -72,24 +72,72 @@ const MinDaysForInversion = 10
 // MinBucketN is the per-bucket row floor for the inversion check.
 const MinBucketN = 100
 
+// MinCoverageRatio is the starvation threshold: the share of the day's
+// cross-section that actually received a forecast rather than an abstention.
+//
+// Calibrated from the real record the same way MinDistinctRatio was. Healthy
+// days measured 0.927-0.988 (e.g. 325 forecast of 329 symbols); starved days
+// measured 0.058-0.094 (19-31 of 329, once leg admission tightened on
+// 2026-08-06). 0.50 sits five times above every starved day and roughly half
+// of every healthy one, so it separates the populations without sitting near
+// either.
+//
+// Starvation is NOT presumed to be a bug. Withholding when no leg clears its
+// admission bar is the honest answer, and this check does not argue otherwise.
+// It exists because the honest answer was previously INVISIBLE: the
+// cross-section went from 322 forecasts to 20 overnight and the only thing that
+// noticed described it as a different failure entirely.
+const MinCoverageRatio = 0.5
+
 // DayStat is one trading day's forecast cross-section.
 type DayStat struct {
-	Day           string
-	Symbols       int // symbols forecast that day (after dedup)
-	DistinctProbs int // distinct probability values emitted that day
+	Day string
+	// Symbols is the whole cross-section that day (after dedup): symbols that
+	// received a forecast PLUS those the ensemble declined to forecast.
+	Symbols int
+	// DistinctProbs counts distinct probability values among the rows that
+	// carry a forecast. Abstentions are excluded — every one emits the same
+	// 0.5, so counting them made this number fall as the ensemble abstained
+	// more. See store.ForecastDayStatsRaw.
+	DistinctProbs int
+	// Withheld is how many of Symbols carried no forecast (zero admitted legs).
+	// Zero on the resolved-outcome side, so Forecast == Symbols there and every
+	// ratio below is unchanged for that caller.
+	Withheld int
 }
 
-// DistinctRatio reports how much cross-sectional variety the day carried.
+// Forecast is how many symbols actually received a forecast that day.
+func (d DayStat) Forecast() int { return d.Symbols - d.Withheld }
+
+// DistinctRatio reports how much cross-sectional variety the day carried,
+// measured over the symbols that were actually forecast.
 func (d DayStat) DistinctRatio() float64 {
+	if d.Forecast() <= 0 {
+		return 0
+	}
+	return float64(d.DistinctProbs) / float64(d.Forecast())
+}
+
+// CoverageRatio reports how much of the cross-section was forecast at all.
+func (d DayStat) CoverageRatio() float64 {
 	if d.Symbols == 0 {
 		return 0
 	}
-	return float64(d.DistinctProbs) / float64(d.Symbols)
+	return float64(d.Forecast()) / float64(d.Symbols)
 }
 
 // Collapsed reports whether this day's forecasts had no meaningful spread.
+//
+// The floor is applied to Forecast, not Symbols: a day on which four symbols
+// were forecast and 325 were withheld is a coverage failure, and calling it a
+// collapse would put the wrong name on it. Starved covers that case.
 func (d DayStat) Collapsed() bool {
-	return d.Symbols >= MinSymbolsForCollapse && d.DistinctRatio() < MinDistinctRatio
+	return d.Forecast() >= MinSymbolsForCollapse && d.DistinctRatio() < MinDistinctRatio
+}
+
+// Starved reports whether the ensemble declined most of the cross-section.
+func (d DayStat) Starved() bool {
+	return d.Symbols >= MinSymbolsForCollapse && d.CoverageRatio() < MinCoverageRatio
 }
 
 // Bucket is one confidence band's claim measured against its outcome.
@@ -205,11 +253,34 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 		w := rawCollapsed[len(rawCollapsed)-1] // newest: what is happening NOW
 		problems = append(problems, fmt.Sprintf(
 			"RAW MODEL COLLAPSE on %d/%d day(s), most recently %s: %d distinct raw scores "+
-				"across %d symbols (ratio %.3f, floor %.2f). This is UPSTREAM of calibration — "+
-				"the ensemble itself has stopped discriminating, which happens when its legs "+
-				"fail their admission bar and the blend runs on one leg or none",
-			len(rawCollapsed), len(rawDays), w.Day, w.DistinctProbs, w.Symbols,
+				"across %d forecast symbols (ratio %.3f, floor %.2f). This is UPSTREAM of "+
+				"calibration — the ensemble itself has stopped discriminating on the names it "+
+				"did call, which is a different failure from declining to call them",
+			len(rawCollapsed), len(rawDays), w.Day, w.DistinctProbs, w.Forecast(),
 			w.DistinctRatio(), MinDistinctRatio))
+	}
+
+	// 1a-ii. COVERAGE STARVATION, the failure the collapse test used to be
+	// mistaken for. An ensemble that withholds most of the cross-section is not
+	// discriminating badly — it is not answering. Both are worth knowing and
+	// they have different fixes, so they are reported as different problems.
+	var starved []DayStat
+	for _, d := range rawDays {
+		if d.Starved() {
+			starved = append(starved, d)
+		}
+	}
+	if len(starved) > 0 {
+		sort.Slice(starved, func(i, j int) bool { return starved[i].Day < starved[j].Day })
+		w := starved[len(starved)-1] // newest: what is happening NOW
+		problems = append(problems, fmt.Sprintf(
+			"FORECAST COVERAGE STARVED on %d/%d day(s), most recently %s: only %d of %d "+
+				"symbols received a forecast (coverage %.3f, floor %.2f); the other %d were "+
+				"withheld with zero admitted legs. The published record thins out to that "+
+				"many names a day — check leg admission before reading any accuracy number "+
+				"over this window",
+			len(starved), len(rawDays), w.Day, w.Forecast(), w.Symbols,
+			w.CoverageRatio(), MinCoverageRatio, w.Withheld))
 	}
 
 	// 1b. Collapse on the published (calibrated, resolved) side.

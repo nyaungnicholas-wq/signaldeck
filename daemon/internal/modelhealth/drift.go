@@ -109,7 +109,20 @@ func DriftFor(name string, reference, live []float64) DriftResult {
 // data are excluded from the denominator rather than counted as clean, so a
 // mostly-empty feature store cannot dilute a real drift signal into nothing.
 func DriftFraction(results []DriftResult) float64 {
-	judged, drifted := 0, 0
+	frac, _ := DriftFractionJudged(results)
+	return frac
+}
+
+// DriftFractionJudged is DriftFraction plus the denominator it used, and it
+// exists because the fraction alone cannot distinguish "no feature drifted"
+// from "no feature had enough data to judge" — both are 0.
+//
+// That is the same conflation this package was written to remove one layer up:
+// a caller that reads the 0 and scores stability at 1.0 has awarded full marks
+// for a question nobody answered. Callers that must tell the two apart check
+// judged == 0 and withhold.
+func DriftFractionJudged(results []DriftResult) (frac float64, judged int) {
+	drifted := 0
 	for _, r := range results {
 		if r.RefN < MinDriftSample || r.LiveN < MinDriftSample {
 			continue
@@ -120,7 +133,7 @@ func DriftFraction(results []DriftResult) float64 {
 		}
 	}
 	if judged == 0 {
-		return 0
+		return 0, 0
 	}
-	return float64(drifted) / float64(judged)
+	return float64(drifted) / float64(judged), judged
 }

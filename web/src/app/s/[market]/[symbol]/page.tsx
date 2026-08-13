@@ -12,11 +12,14 @@
 //   3 · WHY IT'S MOVING    /api/explain attribution, this symbol's headlines,
 //                          recent breakouts + unusual activity, then the score
 //                          components / expectancy / agent / AI insights
-//   4 · EXPERIMENTAL P(UP) the directional read, DEMOTED: it measured 48.08%
-//                          directional accuracy against a 54.50% majority-class
-//                          null over 12,931 independent symbol-days, its whole
-//                          CI sits below the null, and raising conviction makes
-//                          it WORSE. It stays visible and stays labeled.
+//   4 · EXPERIMENTAL P(UP) the directional read, DEMOTED: it graded below its own
+//                          majority-class null, its whole CI sits below that null,
+//                          and raising conviction makes it WORSE. It stays visible
+//                          and stays labeled. The figures are NOT restated here or
+//                          in the panel — they moved with every grade and the ones
+//                          hard-coded here (48.08/54.50/12,931) matched no source in
+//                          the repo; data/accuracy_registry.json now reports acc:null
+//                          for this row. /accuracy is the canonical record.
 //   5 · THE DETAILS        raw records: financials, filings, short volume AND
 //                          real short interest, retail sentiment/attention,
 //                          congress, microstructure, coverage.
@@ -822,12 +825,21 @@ export default function SymbolPage({
         className="m-0 border-l-2 pl-3 text-[0.75rem] leading-relaxed"
         style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
       >
-        Treat the number below as experimental. Over 12,931 independent
-        symbol-days the directional model scored 48.08% accuracy against a 54.50%
-        majority-class null — its entire confidence interval sits BELOW the null,
-        and raising its conviction makes it WORSE, not better. Nothing here should
-        be traded on. The validated read for this symbol is the regime stack in
-        section 2.
+        Treat the number below as experimental. The directional model graded BELOW
+        its own always-guess-the-majority baseline — measurably worse than guessing
+        — its whole confidence interval sat under that null, and raising its
+        conviction made it WORSE, not better. The figures are deliberately not
+        restated here: they move with every grade, and a number typed into this page
+        is a number that goes stale without anyone noticing. Nothing here should be
+        traded on. The validated read for this symbol is the regime stack in
+        section 2.{" "}
+        <Link
+          href="/accuracy"
+          className="cursor-pointer font-semibold underline transition-colors duration-150"
+          style={{ color: "var(--accent)" }}
+        >
+          the graded record
+        </Link>
       </p>
       {/* the hero VERDICT card, now demoted: real calibrated 1d P(up) or
           "NO READ YET", with the evidence-tier badge always visible. */}

@@ -34,6 +34,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -61,6 +62,10 @@ func UniverseCap() int {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
+		// Report rather than swallow: an operator who capped the universe and
+		// got the default instead had no way to tell. See internal/envcfg.
+		envcfg.Reject("SIGNALDECK_UNIVERSE_CAP", v, "not a positive integer",
+			strconv.Itoa(DefaultUniverseCap))
 	}
 	return DefaultUniverseCap
 }

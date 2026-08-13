@@ -20,6 +20,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 )
 
 const (
@@ -272,6 +274,8 @@ func minAgree() int {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
+		envcfg.Reject("SIGNALDECK_CONFLUENCE_MIN", v, "not a positive integer",
+			strconv.Itoa(defaultMinAgree))
 	}
 	return defaultMinAgree
 }

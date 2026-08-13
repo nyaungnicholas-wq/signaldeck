@@ -105,12 +105,20 @@ export default function ProofStrip() {
               promise of future returns.
             </HelpTip>
           </span>
-          {paper?.available ? (
+          {/* `available` does not imply totalReturn was computed (it is optional on
+              the wire). The old `?? 0` rendered a missing figure as "0.00%" in the
+              GREEN branch — a flat-performance claim invented from absence. Match
+              the winRate treatment a few lines up: absent reads as an em-dash. */}
+          {paper?.available && paper.totalReturn != null ? (
             <span
               className="tnum text-[0.85rem] font-semibold"
-              style={{ color: (paper.totalReturn ?? 0) >= 0 ? "var(--bid)" : "var(--ask)" }}
+              style={{ color: paper.totalReturn >= 0 ? "var(--bid)" : "var(--ask)" }}
             >
-              {fmtPct((paper.totalReturn ?? 0) * 100)}
+              {fmtPct(paper.totalReturn * 100)}
+            </span>
+          ) : paper?.available ? (
+            <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
+              —
             </span>
           ) : (
             <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>

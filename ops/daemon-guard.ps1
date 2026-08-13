@@ -144,10 +144,26 @@ if (Get-Process -Name signaldeckd -ErrorAction SilentlyContinue) {
 # own task, or schtasks /End stops reaching it. Default is warn-and-start; it
 # only refuses when SIGNALDECK_ON_STALE_BINARY=refuse says an operator has
 # chosen an outage over stale data.
+# A Test-Path guard around a check FAILS OPEN, and this one has been failing
+# open since it was written: measured 2026-08-11,
+# ops\run-daemon-with-provenance.ps1 does not exist - the only copy in the repo
+# is round2-drafts\devops\run-daemon-with-provenance.ps1, never moved into ops\.
+# So `Test-Path` was false on every run, the whole block was skipped, and the
+# stale-binary check the comment above describes as the fix for the 22-commits-
+# behind incident HAS NEVER EXECUTED. Nothing logged the skip, which is why it
+# looked correct in source for five days.
+#
+# Now the absence is reported rather than silently tolerated. It still starts
+# the daemon - an unavailable preflight is not a reason to leave the platform
+# down, and that matches the block's documented warn-and-start default - but it
+# says so every run, so "the check is missing" cannot go on looking like "the
+# check passed".
 $prov = Join-Path $root 'ops\run-daemon-with-provenance.ps1'
 if (Test-Path $prov) {
     & $prov -CheckOnly
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }   # it has already said why
+} else {
+    Write-Output "WARNING: provenance preflight NOT RUN - $prov is missing (a copy exists at round2-drafts\devops\). The daemon is starting WITHOUT a stale-binary check."
 }
 
 $sd = Join-Path $env:SystemRoot 'System32\schtasks.exe'

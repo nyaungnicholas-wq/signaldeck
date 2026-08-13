@@ -25,6 +25,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/confluence"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // confluenceHorizon is the single forward-tracking horizon of this wave.
@@ -181,6 +182,17 @@ func (w *ConfluenceScorer) Run(ctx context.Context) (string, error) {
 	}
 	if writeErrs > 0 {
 		detail += fmt.Sprintf("; %d write error(s)", writeErrs)
+	}
+	// scored counts SUCCESSFUL upserts, so scored==0 with write errors means
+	// every write failed and this pass persisted nothing — yet the run was
+	// still filed as status "ok", which is the shape that let 94 congress dq
+	// events pile up behind a green fleet view. ErrDegraded is the honest
+	// filing: it does NOT count toward FailingWorkers (only "error" does, and
+	// only on a streak), but it suppresses lastSuccess so staleness reports a
+	// worker that keeps delivering nothing. A PARTIAL failure stays "ok" —
+	// degrading on one transient write error would cry wolf.
+	if writeErrs > 0 && scored == 0 {
+		return detail, fmt.Errorf("%s: %w", detail, workers.ErrDegraded)
 	}
 	return detail, nil
 }

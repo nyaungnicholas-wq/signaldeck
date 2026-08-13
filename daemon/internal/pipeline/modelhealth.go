@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/modelhealth"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // ModelHealthWorker grades models and persists their verdicts.
@@ -53,7 +55,10 @@ const (
 const structuralHighConviction = 0.9
 
 func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
-	var graded, retired int
+	// graded counts verdicts actually WRITTEN; failed counts those that were
+	// computed and then lost on the way to the store. Reported separately so a
+	// pass that persisted nothing cannot read as a pass that graded everything.
+	var graded, retired, failed int
 	var summary []string
 
 	// The pre-registered FAILED-forward retire flags from the accuracy
@@ -163,11 +168,6 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 						" — predictions are being withheld for this horizon")
 			}
 		}
-		graded++
-		if !score.Emitting {
-			retired++
-		}
-
 		blob, err := json.Marshal(map[string]any{
 			"model":                  model,
 			"verdict":                score.Verdict,
@@ -195,11 +195,26 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 			"skillVsBenchmark": skillVsBenchmark,
 			"gradedAt":         time.Now().Unix(),
 		})
+		// COUNT THE OUTCOME, NOT THE INTENT. graded++ used to run before this
+		// marshal/persist pair, and both failure paths `continue` — so a
+		// contended meta write (a hazard this codebase documents at
+		// internal/workers/workers.go:404-407) had the worker report
+		// "graded 5, retired 2" with status=ok while zero verdicts reached the
+		// store and /api/modelhealth kept serving the PREVIOUS pass. A model
+		// retired this pass would have gone on publishing.
 		if err != nil {
+			failed++
+			slog.Warn("model-health: verdict not persisted (marshal)", "model", model, "err", err)
 			continue
 		}
 		if err := w.St.SetMeta(ctx, MetaKeyPrefix+model, string(blob)); err != nil {
+			failed++
+			slog.Warn("model-health: verdict not persisted (store)", "model", model, "err", err)
 			continue
+		}
+		graded++
+		if !score.Emitting {
+			retired++
 		}
 		line := fmt.Sprintf("%s=%s(%.2f)", h, score.Verdict, score.Overall)
 		if bench.N > 0 && aligned.N > 0 {
@@ -220,19 +235,30 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 	// against that. This is the same correction the survivorship re-validation
 	// forced — the 83% headline was the base rate, and only the spread between
 	// conviction bands was ever the product.
-	sg, sr := w.gradeStructural(ctx)
+	sg, sr, sf := w.gradeStructural(ctx)
 	graded += sg
 	retired += sr
+	failed += sf
 
+	if failed > 0 {
+		// DEGRADED, not ok. A verdict that never reached the store is a verdict
+		// the API will not serve, so the pass did not do what its name says —
+		// and a worker reporting ok here is exactly how a model retired this
+		// pass would have kept publishing.
+		return fmt.Sprintf("graded %d, retired %d, %d verdict(s) NOT PERSISTED — %v",
+				graded, retired, failed, summary),
+			fmt.Errorf("%d model verdict(s) computed but not written to the store: %w",
+				failed, workers.ErrDegraded)
+	}
 	return fmt.Sprintf("graded %d, retired %d — %v", graded, retired, summary), nil
 }
 
 // gradeStructural grades each structural predictor against its own live record
 // and its own shipped claim, and persists a verdict the API can honour.
-func (w *ModelHealthWorker) gradeStructural(ctx context.Context) (graded, retired int) {
+func (w *ModelHealthWorker) gradeStructural(ctx context.Context) (graded, retired, failed int) {
 	recs, err := w.St.StructuralRecords(ctx, 0)
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	// High-conviction slice: the tier a user would actually act on, and the one
 	// carrying the biggest claim (97%+ for trend21).
@@ -256,11 +282,6 @@ func (w *ModelHealthWorker) gradeStructural(ctx context.Context) (graded, retire
 			// of case.
 			CalibrationErr: 0,
 		})
-		graded++
-		if !score.Emitting {
-			retired++
-		}
-
 		h := hiByKind[r.Kind]
 		blob, err := json.Marshal(map[string]any{
 			"model":           "structural-" + r.Kind,
@@ -283,22 +304,47 @@ func (w *ModelHealthWorker) gradeStructural(ctx context.Context) (graded, retire
 			"highConviction": map[string]any{"n": h.N, "accuracy": h.Accuracy, "claimed": h.ClaimedAccuracy},
 			"gradedAt":       time.Now().Unix(),
 		})
+		// Same rule as the directional path: count what was PERSISTED. This one
+		// also discarded the SetMeta error outright (`_ =`), so a failed write
+		// left no trace at all behind a count that had already been incremented.
 		if err != nil {
+			failed++
+			slog.Warn("model-health: structural verdict not persisted (marshal)",
+				"kind", r.Kind, "err", err)
 			continue
 		}
-		_ = w.St.SetMeta(ctx, MetaKeyPrefix+"structural-"+r.Kind, string(blob))
+		if err := w.St.SetMeta(ctx, MetaKeyPrefix+"structural-"+r.Kind, string(blob)); err != nil {
+			failed++
+			slog.Warn("model-health: structural verdict not persisted (store)",
+				"kind", r.Kind, "err", err)
+			continue
+		}
+		graded++
+		if !score.Emitting {
+			retired++
+		}
 	}
-	return graded, retired
+	return graded, retired, failed
 }
 
 // featureDrift returns the fraction of features whose distribution has moved
-// materially between an older reference window and the recent one. Returns 0
-// on any failure — a drift number nobody can compute must not retire a model,
-// and the observation floor in Grade guards the opposite direction.
-func (w *ModelHealthWorker) featureDrift(ctx context.Context) float64 {
+// materially between an older reference window and the recent one.
+//
+// Returns nil — NOT 0 — when it cannot be computed. A drift number nobody can
+// compute must not retire a model, which is why the old code returned 0; but 0
+// means "nothing drifted" and scores stability at a perfect 1.0, so the guard
+// against a false retirement was silently awarding full marks on the axis meant
+// to catch exactly this. That is the defect internal/modelhealth/drift.go was
+// written to close, re-entered through the fix's own error path. Grade now
+// WITHHOLDS the component for a nil, which condemns nothing and claims nothing.
+func (w *ModelHealthWorker) featureDrift(ctx context.Context) *float64 {
 	version, err := w.St.LatestFeatureVersion(ctx)
-	if err != nil || version == 0 {
-		return 0
+	if err != nil {
+		slog.Warn("model-health: feature version unreadable — stability withheld", "err", err)
+		return nil
+	}
+	if version == 0 {
+		return nil // no feature store yet: unmeasured, not stable
 	}
 	now := time.Now()
 	liveTo := now.Unix()
@@ -308,13 +354,21 @@ func (w *ModelHealthWorker) featureDrift(ctx context.Context) float64 {
 
 	ref, live, err := w.St.FeatureWindows(ctx, version, refFrom, refTo, liveFrom, liveTo, 0)
 	if err != nil {
-		return 0
+		slog.Warn("model-health: feature windows unreadable — stability withheld", "err", err)
+		return nil
 	}
 	var results []modelhealth.DriftResult
 	for name, refVals := range ref {
 		results = append(results, modelhealth.DriftFor(name, refVals, live[name]))
 	}
-	return modelhealth.DriftFraction(results)
+	// DriftFraction also collapses "too little data to judge" to 0 (it returns 0
+	// when judged == 0), so ask it how many features it actually judged rather
+	// than reading a 0 that could mean either thing.
+	frac, judged := modelhealth.DriftFractionJudged(results)
+	if judged == 0 {
+		return nil
+	}
+	return &frac
 }
 
 // registryFlags resolves the registry path and returns the kill switch state.

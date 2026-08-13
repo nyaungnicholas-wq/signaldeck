@@ -16,9 +16,15 @@ import (
 // ForecastDayStat is one trading day's forecast cross-section: how many symbols
 // were forecast, and how many DISTINCT probabilities they received between them.
 type ForecastDayStat struct {
-	Day           string
-	Symbols       int
+	Day     string
+	Symbols int // whole cross-section that day: forecast + withheld
+	// DistinctProbs counts distinct values among rows that CARRY a forecast.
+	// Withheld rows are excluded — see ForecastDayStatsRaw for why counting
+	// them made the statistic move backwards.
 	DistinctProbs int
+	// Withheld is how many of Symbols the ensemble declined to forecast
+	// (n_used = 0). Zero on the resolved-outcome side, which has no such rows.
+	Withheld int
 }
 
 // ForecastDayStats returns the per-day cross-section since `since`, oldest first.
@@ -158,15 +164,40 @@ func sqlPct(q string) string {
 // which are different failures with different fixes and were genuinely both
 // present in the same fortnight.
 func (s *Store) ForecastDayStatsRaw(ctx context.Context, horizon string, since time.Time) ([]ForecastDayStat, error) {
+	// WITHHELD ROWS ARE NOT FORECASTS, AND COUNTING THEM INVERTS THE CHECK.
+	// A prediction the ensemble declined to make is still persisted (since
+	// 906310c, "Require measured legs, and keep recording inputs on withheld
+	// rows") with n_used = 0 and raw_prob = 0.5 exactly. Verified 2026-08-11
+	// across the whole table: 4442 rows have n_used = 0 AND raw_prob = 0.5, and
+	// ZERO have n_used = 0 with any other raw_prob, so n_used > 0 is an exact
+	// filter for "carries a forecast".
+	//
+	// Those abstentions all share one value, so folding them into
+	// COUNT(DISTINCT raw_prob) makes the ratio fall as the ensemble abstains
+	// MORE — the statistic moved in the opposite direction to the thing it
+	// measures. When leg admission tightened on 2026-08-06, abstentions went
+	// 7/day -> 308/day and the measured ratio fell to 0.058, tripping RAW MODEL
+	// COLLAPSE every run for four days with the diagnosis "the ensemble itself
+	// has stopped discriminating". Among rows that actually carried a forecast
+	// the ratio those same days was 0.947-1.000 — the opposite of collapse.
+	//
+	// So: discrimination is measured over forecasts only, while Symbols keeps
+	// counting the whole cross-section and Withheld reports how much of it was
+	// declined. That preserves the real signal — coverage — instead of
+	// destroying it, and leaves the healthy-day numbers essentially unchanged
+	// (2026-08-05 went 0.544 -> 0.551).
 	rows, err := s.db.QueryContext(ctx, `
 		WITH dedup AS (
-		  SELECT symbol_id, date(ts,'unixepoch') AS d, raw_prob,
+		  SELECT symbol_id, date(ts,'unixepoch') AS d, raw_prob, n_used,
 		         ROW_NUMBER() OVER (PARTITION BY symbol_id, date(ts,'unixepoch')
 		                            ORDER BY ts DESC) rn
 		  FROM predictions
 		  WHERE horizon = ? AND ts >= ?
 		)
-		SELECT d, COUNT(*), COUNT(DISTINCT ROUND(raw_prob, 3))
+		SELECT d,
+		       COUNT(*),
+		       COUNT(DISTINCT CASE WHEN n_used > 0 THEN ROUND(raw_prob, 3) END),
+		       SUM(CASE WHEN n_used = 0 THEN 1 ELSE 0 END)
 		FROM dedup WHERE rn = 1 GROUP BY d ORDER BY d`,
 		horizon, since.Unix())
 	if err != nil {
@@ -176,7 +207,7 @@ func (s *Store) ForecastDayStatsRaw(ctx context.Context, horizon string, since t
 	var out []ForecastDayStat
 	for rows.Next() {
 		var d ForecastDayStat
-		if err := rows.Scan(&d.Day, &d.Symbols, &d.DistinctProbs); err != nil {
+		if err := rows.Scan(&d.Day, &d.Symbols, &d.DistinctProbs, &d.Withheld); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

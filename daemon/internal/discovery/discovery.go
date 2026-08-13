@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/tvscanner"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -64,6 +65,7 @@ func SymbolCap() int {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
 				return n
 			}
+			envcfg.Reject(k, v, "not a positive integer", strconv.Itoa(DefaultSymbolCap))
 		}
 	}
 	return DefaultSymbolCap

@@ -172,7 +172,22 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, _ := d.St.EvidenceClaims(ctx, "", "")
+	// Refuse rather than publish, for the same reason RetirementHistory does
+	// twelve lines below: an unreadable evidence ledger must not read as "no
+	// evidence against this model". `claims` is the ONLY input that can set
+	// retired=true from SourceEvidence (publication/verdict.go:155-164), so
+	// swallowing this error meant a transient DB failure could silently
+	// UN-RETIRE a model a historical claim had already refuted — and publish it
+	// as live, with HTTP 200 and nothing in the payload saying the read failed.
+	claims, err := d.St.EvidenceClaims(ctx, "", "")
+	if err != nil {
+		writeAccuracyRefusal(w, accuracyResponse{
+			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+			GradedAt: reg.GradedAt,
+			Reason:   "evidence claims unreadable: " + err.Error(),
+		})
+		return
+	}
 
 	rows := make([]accuracyRow, 0, len(reg.Rows))
 	for _, rr := range reg.Rows {

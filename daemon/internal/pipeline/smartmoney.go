@@ -21,9 +21,11 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/smartmoney"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // SmartMoneyScorer computes and persists the per-symbol Smart Money Score.
@@ -194,6 +196,14 @@ func (w *SmartMoneyScorer) Run(ctx context.Context) (string, error) {
 	if writeErrs > 0 {
 		detail += fmt.Sprintf("; %d write error(s)", writeErrs)
 	}
+	// See the identical guard in confluence.go: scored counts SUCCESSFUL
+	// upserts, so scored==0 alongside write errors is a pass that persisted
+	// nothing while filing itself as "ok". Degraded does not count toward
+	// FailingWorkers, but it suppresses lastSuccess so staleness can see it.
+	// Partial failures stay "ok" on purpose.
+	if writeErrs > 0 && scored == 0 {
+		return detail, fmt.Errorf("%s: %w", detail, workers.ErrDegraded)
+	}
 	return detail, nil
 }
 
@@ -203,6 +213,8 @@ func smEnvFloat(key string, def float64) float64 {
 	if v := os.Getenv(key); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			return f
+		} else {
+			envcfg.Reject(key, v, "not a number", strconv.FormatFloat(def, 'g', -1, 64))
 		}
 	}
 	return def

@@ -114,6 +114,45 @@ BUDGET_MB=$(derive_budget_mb "${DB_MB:-0}")
 
 log() { echo "$(date '+%Y-%m-%dT%H:%M:%S') $*" >> "$LOG"; }
 
+# volume_of PATH — the mount point PATH lives on, or "" when it cannot be told.
+#
+# `df -P` is the portable answer and the only one that works on BOTH sides of
+# this repo's platforms: it prints /c or /d under the Git Bash these tasks run
+# on Windows, and / or /mnt/... on Unix. `stat -c %d` is NOT usable here —
+# measured 2026-08-11 under Git Bash it returned the identical device id
+# (2585421839) for every path on the machine, so it cannot distinguish volumes
+# at all and would silently answer "same" forever.
+volume_of() {
+  df -P "$1" 2>/dev/null | tail -1 | awk '{print $NF}'
+}
+
+# same_volume A B — true when both live on one volume. UNKNOWN COUNTS AS
+# DIFFERENT on purpose: this gates whether a copy is CALLED offsite, and the
+# caller keeps the copy either way, so an unanswerable question must not
+# downgrade a genuinely-external destination. The Go side takes the opposite
+# default for the opposite reason (api.go treats unknown as "not configured",
+# because there it gates a claim rather than a label).
+same_volume() {
+  local a b
+  a="$(volume_of "$1")"
+  b="$(volume_of "$2")"
+  [ -n "$a" ] && [ -n "$b" ] && [ "$a" = "$b" ]
+}
+
+# file_size PATH — size in bytes, or 0. GNU first, then BSD; the VALUE is
+# validated rather than the exit status, because `stat -f` on GNU prints a
+# filesystem report AND exits 0 (see ops/restore-rehearsal.sh:file_mtime).
+file_size() {
+  local v
+  v="$(stat -c %s "$1" 2>/dev/null)"
+  case "$v" in ''|*[!0-9]*) v="" ;; esac
+  if [ -z "$v" ]; then
+    v="$(stat -f %z "$1" 2>/dev/null)"
+    case "$v" in ''|*[!0-9]*) v="" ;; esac
+  fi
+  printf '%s' "${v:-0}"
+}
+
 # Hard footprint assertion: retention regressions must page, not silently
 # refill the disk. market-close.sh ignores our exit code, so the banner here
 # (same channel as the H9 silence banner below) is what reaches a human.
@@ -347,9 +386,47 @@ if [ -z "$OFFSITE" ]; then
   log "offsite SKIPPED: no destination configured (set SIGNALDECK_OFFSITE_DIR to an external volume)"
 elif mkdir -p "$OFFSITE" 2>/dev/null; then
   if sd_nosleep cp "$TARGET" "$OFFSITE/.tmp-$TS" 2>>"$LOG" && mv "$OFFSITE/.tmp-$TS" "$OFFSITE/$(basename "$TARGET")"; then
-    sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_offsite','$(date +%s)');" 2>>"$LOG"
-    log "offsite OK"
-    compress_and_prune "$OFFSITE"
+    COPY="$OFFSITE/$(basename "$TARGET")"
+    SRC_BYTES="$(file_size "$TARGET")"
+    DST_BYTES="$(file_size "$COPY")"
+    if [ "$SRC_BYTES" = "0" ] || [ "$SRC_BYTES" != "$DST_BYTES" ]; then
+      # cp reporting success is not the same as the bytes arriving. A
+      # destination that fills mid-write, or a sync client that truncates,
+      # leaves a short file behind a zero exit status.
+      log "WARN: offsite copy is SHORT ($DST_BYTES of $SRC_BYTES bytes) — not recording an offsite backup"
+      rm -f "$COPY"
+    elif same_volume "$DB" "$OFFSITE"; then
+      # THE COPY LANDED, BUT IT IS NOT OFFSITE, AND SAYING SO IS THE WHOLE JOB.
+      #
+      # Writing backup_last_offsite here is what made a same-disk copy read as
+      # disaster recovery. The Go side already refuses to call this configured
+      # (api.go: offsiteConfigured requires volume separation), so recording a
+      # fresh timestamp produced a contradictory pair — offsiteConfigured:false
+      # beside a lastOffsiteTs from minutes ago — and the timestamp is the more
+      # persuasive of the two.
+      #
+      # Measured 2026-08-11 on this machine: OFFSITE resolved to
+      # $OneDrive/SignalDeckBackups, NO OneDrive account is signed in (every
+      # account's UserFolder/cid/UserEmail is empty), the folder is an ordinary
+      # directory with no sync-placeholder attributes, exactly 3 files exist
+      # under the whole OneDrive tree, and it sits on C: — the SAME physical
+      # disk (one drive, PHYSICALDRIVE0) as the database. Nothing was uploading
+      # anywhere, and the log said "offsite OK" every night.
+      #
+      # That is verbatim the defect this file's own header says the OneDrive
+      # default was added to fix ("the old default copied 2.7GB onto C: and
+      # looked like it worked"), reintroduced by the replacement.
+      #
+      # The copy is KEPT — a second copy still survives an accidental delete —
+      # but it is recorded as what it is.
+      log "offsite NOT OFFSITE: $OFFSITE is on the same volume as the database — kept as a LOCAL second copy; backup_last_offsite NOT updated. Point SIGNALDECK_OFFSITE_DIR at an external volume for real DR."
+      sd_sqlite "$DB" "INSERT INTO dq_events(ts,kind,detail) VALUES($(date +%s),'backup_offsite_same_volume','offsite destination $OFFSITE shares a volume with the database; no off-machine copy exists');" 2>>"$LOG"
+      compress_and_prune "$OFFSITE"
+    else
+      sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_offsite','$(date +%s)');" 2>>"$LOG"
+      log "offsite OK ($DST_BYTES bytes verified)"
+      compress_and_prune "$OFFSITE"
+    fi
   else
     rm -f "$OFFSITE/.tmp-$TS"
     log "WARN: offsite copy failed (local backup kept)"

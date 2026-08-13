@@ -13,8 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -70,11 +72,78 @@ func StaleWorkers(specs []WorkerSpec, lastOK map[string]time.Time, fallback, now
 	return stale
 }
 
+// MinConsecutiveFailures is how many failed runs in a row make a worker
+// FAILING. Three, so a single bad tick or a transient upstream blip is not an
+// alarm, but a worker that is simply broken cannot hide behind its own cadence.
+const MinConsecutiveFailures = 3
+
+// FailingWorkers is the second pure rule, and it exists because StaleWorkers
+// alone cannot see the failure mode that actually happened.
+//
+// Measured 2026-08-11: forecast-monitor had status='error' on 15 of 15 recorded
+// runs — it had NEVER once succeeded — and appeared in neither health surface.
+// Staleness could not catch it because staleness asks "has it run lately", and
+// this worker ran punctually every 24h. It failed punctually too. Worse, the
+// boot grace in StaleWorkers substitutes daemon boot for a worker that has never
+// succeeded, and 3 x 24h = 72h against a MEASURED mean daemon uptime of 9.67h
+// (18 of 19 recorded boots were shorter than 72h) means the grace clock resets
+// before the threshold can ever be reached. The alarm was unreachable by
+// construction.
+//
+// So: run ON TIME and FAIL EVERY TIME, and both surfaces called it healthy. The
+// four days of false RAW MODEL COLLAPSE that this daemon dutifully recorded, and
+// nobody saw, is what that costs.
+//
+// statusesNewestFirst maps worker → its recent run statuses, newest first.
+// Only "error" counts as a failure:
+//   - "degraded" is a worker honestly reporting it had nothing to deliver
+//     (expectancy-trainer and gbm-trainer do this by design, and degraded
+//     already suppresses lastSuccess, so staleness reports them);
+//   - "orphaned" is the boot sweep marking a run the process did not outlive,
+//     which is the daemon's fault and not the worker's;
+//   - "running" is in flight and carries no verdict yet, so it is SKIPPED
+//     rather than treated as a success — otherwise an in-flight run would reset
+//     the streak of a worker that is failing underneath it.
+//
+// The result is sorted by name.
+func FailingWorkers(statusesNewestFirst map[string][]string) []string {
+	var failing []string
+	for name, statuses := range statusesNewestFirst {
+		streak := 0
+		for _, s := range statuses {
+			if s == "running" {
+				continue // no verdict yet — neither breaks nor extends the streak
+			}
+			if s != "error" {
+				break
+			}
+			streak++
+			if streak >= MinConsecutiveFailures {
+				break
+			}
+		}
+		if streak >= MinConsecutiveFailures {
+			failing = append(failing, name)
+		}
+	}
+	sort.Strings(failing)
+	return failing
+}
+
 // Status is the shape of data/health.json.
 type Status struct {
 	OK           bool     `json:"ok"`
 	StaleWorkers []string `json:"staleWorkers"`
-	Ts           int64    `json:"ts"`
+	// FailingWorkers ran on time and errored anyway — a distinct failure from
+	// stale, and deliberately a separate field so a consumer that only knew
+	// about staleness does not silently start counting these as the same thing.
+	FailingWorkers []string `json:"failingWorkers,omitempty"`
+	// RejectedEnv lists operator overrides the daemon refused to use, so a
+	// config the operator wrote but is NOT running is visible instead of silent.
+	// See internal/envcfg. Only a rejection on a key that governs DELETION makes
+	// the fleet unhealthy; the rest are reported without paging anyone.
+	RejectedEnv []envcfg.Rejection `json:"rejectedEnv,omitempty"`
+	Ts          int64              `json:"ts"`
 }
 
 // Actuator is the half of the watchdog that can actually DO something about a
@@ -132,10 +201,44 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("query worker_runs: %w", err)
 	}
 	stale := StaleWorkers(w.Specs, lastOK, w.started, now)
-	ok := len(stale) == 0
 
-	if err := w.writeStatus(Status{OK: ok, StaleWorkers: append([]string{}, stale...), Ts: now.Unix()}); err != nil {
+	// A failing worker is unhealthy even when it is perfectly punctual. An error
+	// reading the streaks must not read as "nothing is failing", so it degrades
+	// the run rather than being swallowed — the whole point of this check is
+	// that an unnoticed failure is the expensive kind.
+	recent, err := w.recentStatuses(ctx)
+	if err != nil {
+		return "", fmt.Errorf("query worker_runs statuses: %w", err)
+	}
+	failing := FailingWorkers(recent)
+
+	// A refused override means the daemon is running a configuration the
+	// operator did not choose. Reported always; unhealthy ONLY when it governs
+	// deletion, because that consequence is irreversible and a typo in a
+	// retention window silently deletes rows someone meant to keep. Making every
+	// rejected knob page an operator would be the red-by-construction mistake.
+	rejected := envcfg.Rejected()
+	ok := len(stale) == 0 && len(failing) == 0 && !envcfg.HasCritical()
+
+	if err := w.writeStatus(Status{
+		OK:             ok,
+		StaleWorkers:   append([]string{}, stale...),
+		FailingWorkers: append([]string{}, failing...),
+		RejectedEnv:    rejected,
+		Ts:             now.Unix(),
+	}); err != nil {
 		slog.Warn("watchdog: write health.json", "err", err)
+	}
+
+	for _, name := range failing {
+		if err := w.St.InsertDQ(ctx, md.DQEvent{
+			Ts:   now.Unix(),
+			Kind: "worker_failing",
+			Detail: fmt.Sprintf("worker=%s has failed its last %d consecutive runs — it is running on schedule and erroring every time, which staleness cannot see",
+				name, MinConsecutiveFailures),
+		}); err != nil {
+			slog.Warn("watchdog: record failing dq", "worker", name, "err", err)
+		}
 	}
 
 	var recovered []string
@@ -170,7 +273,7 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		if local == nil {
 			local = notify.Local
 		}
-		if err := local(fmt.Sprintf("SignalDeck: %d stale worker(s): %v", len(stale), stale)); err != nil {
+		if err := local(unhealthyMsg(stale, failing)); err != nil {
 			slog.Warn("watchdog: notification failed", "err", err) // never fatal
 		}
 		// Stage 3: same transition + 6h cooldown, delivered beyond the Mac.
@@ -178,7 +281,7 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		if w.Remote != nil {
 			w.Remote.Send(ctx, notify.Message{
 				Title: "SignalDeck watchdog: fleet unhealthy",
-				Body:  fmt.Sprintf("%d stale worker(s): %v", len(stale), stale),
+				Body:  unhealthyMsg(stale, failing),
 				Kind:  "watchdog",
 				Ts:    now.Unix(),
 			})
@@ -190,9 +293,41 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		return fmt.Sprintf("healthy: %d workers checked", len(w.Specs)), nil
 	}
 	if len(recovered) > 0 {
-		return fmt.Sprintf("UNHEALTHY: stale %v (cancelled overdue runs: %v)", stale, recovered), nil
+		return fmt.Sprintf("UNHEALTHY: %s (cancelled overdue runs: %v)", unhealthyMsg(stale, failing), recovered), nil
 	}
-	return fmt.Sprintf("UNHEALTHY: stale %v", stale), nil
+	return "UNHEALTHY: " + unhealthyMsg(stale, failing), nil
+}
+
+// unhealthyMsg names both conditions separately. "Stale" and "failing" have
+// different causes and different fixes — a stale worker is not running, a
+// failing one is running and erroring — so collapsing them into one word would
+// send an operator looking for the wrong thing.
+func unhealthyMsg(stale, failing []string) string {
+	var parts []string
+	if len(stale) > 0 {
+		parts = append(parts, fmt.Sprintf("%d stale worker(s): %v", len(stale), stale))
+	}
+	if len(failing) > 0 {
+		parts = append(parts, fmt.Sprintf("%d worker(s) failing every run: %v", len(failing), failing))
+	}
+	// Named separately from the worker conditions: this one is a CONFIG fault,
+	// not a runtime one, and it is fixed by correcting an environment variable
+	// rather than by looking at a worker.
+	var crit []string
+	for _, r := range envcfg.Rejected() {
+		if r.Critical {
+			crit = append(crit, r.Key)
+		}
+	}
+	if len(crit) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"%d rejected override(s) governing DATA DELETION — the default retention is in force, not yours: %v",
+			len(crit), crit))
+	}
+	if len(parts) == 0 {
+		return "unhealthy"
+	}
+	return strings.Join(parts, "; ")
 }
 
 // lastSuccess maps worker → time of most recent successful run (read pool).
@@ -211,6 +346,44 @@ func (w *Watchdog) lastSuccess(ctx context.Context) (map[string]time.Time, error
 			return nil, err
 		}
 		out[name] = time.Unix(ts, 0)
+	}
+	return out, rows.Err()
+}
+
+// statusWindow is how many recent runs per worker recentStatuses fetches.
+//
+// Deliberately WIDER than MinConsecutiveFailures. FailingWorkers skips rows with
+// status "running", and a stream ingestor always has one in flight, so a window
+// of exactly MinConsecutiveFailures would let an in-flight run shrink the
+// evidence below the threshold and hide a worker that is failing underneath it.
+// The slack absorbs that.
+const statusWindow = MinConsecutiveFailures + 2
+
+// recentStatuses maps worker → its most recent run statuses, newest first,
+// capped at statusWindow per worker so no worker's history outweighs another's.
+//
+// The window function is evaluated over worker_runs' (started_at DESC, id DESC)
+// ordering, matching RecentWorkerRuns, so "newest first" means the same thing in
+// both health surfaces.
+func (w *Watchdog) recentStatuses(ctx context.Context) (map[string][]string, error) {
+	rows, err := w.St.DB().QueryContext(ctx, `
+		SELECT worker, status FROM (
+		  SELECT worker, status,
+		         ROW_NUMBER() OVER (PARTITION BY worker
+		                            ORDER BY started_at DESC, id DESC) rn
+		  FROM worker_runs
+		) WHERE rn <= ? ORDER BY worker, rn`, statusWindow)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[string][]string{}
+	for rows.Next() {
+		var name, status string
+		if err := rows.Scan(&name, &status); err != nil {
+			return nil, err
+		}
+		out[name] = append(out[name], status)
 	}
 	return out, rows.Err()
 }

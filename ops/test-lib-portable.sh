@@ -91,5 +91,42 @@ if command -v sqlite3 >/dev/null 2>&1 || [ -n "$(sd_py)" ]; then
   rm -f "$RDB"
 fi
 
+# sd_port_listening must answer about the PORT, not about a process name.
+#
+# signaldeck-ctl.sh judged the web app with `sd_is_running node`, and node is
+# the most common process name on a dev box. Measured 2026-08-11: 3 unrelated
+# node processes were running (Claude Code, the OmniRoute gateway) and NOTHING
+# was listening on 8323 — `signaldeck-ctl.sh status` printed
+# "com.signaldeck.web: running" while `curl http://localhost:8323/` was refused
+# outright. The check could not report the web as down while any node existed,
+# which on this machine is always.
+#
+# The daemon's own port is used as the live positive case when it is up, so
+# this test asserts against real kernel state rather than a mock.
+UNUSED_PORT=59137
+check "sd_port_listening is false for a port nobody is on" \
+  "$(sd_port_listening "$UNUSED_PORT" && echo 0 || echo 1)"
+if sd_is_running signaldeckd; then
+  check "sd_port_listening is true for the live daemon port 8322" \
+    "$(sd_port_listening 8322 && echo 1 || echo 0)"
+fi
+
+# sd_svc_start must REPORT what happened, and must tell "absent" apart from
+# "broken".
+#
+# It used to end in `schtasks //Run ... >/dev/null 2>&1` (macOS branch: an
+# unconditional `return 0`) with every call site discarding the status, so
+# `signaldeck-ctl.sh up` printed a fixed success string. Measured 2026-08-11:
+# the SignalDeck Tunnel task did not exist, //Run on it exits 1, and every start
+# path still reported success — which is how an unregistered service went
+# unnoticed. The two failure modes need different answers from the caller
+# (absent may be deliberate; broken never is), and //Run returns 1 for BOTH, so
+# existence is probed separately.
+NOSUCH="$(sd_svc_start com.signaldeck.definitelynotregistered >/dev/null 2>&1; echo $?)"
+check "sd_svc_start reports 2 (NOT REGISTERED) for a service that does not exist" \
+  "$([ "$NOSUCH" = "2" ] && echo 1 || echo 0)"
+check "sd_svc_start does not report success for a service that does not exist" \
+  "$([ "$NOSUCH" != "0" ] && echo 1 || echo 0)"
+
 if [ "$fails" -gt 0 ]; then echo "$fails check(s) failed"; exit 1; fi
 echo "all portability shim checks passed"

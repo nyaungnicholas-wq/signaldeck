@@ -123,7 +123,22 @@ Set-Location $repo
 # Reuse the harness that is already tested rather than writing a second one:
 # Run() reports exit codes honestly through a sentinel, which is the single
 # property this loop cannot do without.
+#
+# Dot-sourcing runs the target's param() block IN THIS SCOPE, so selfimprove-
+# loop.ps1's own defaults (Hours=24, CyclePauseSec=60) OVERWRITE whatever this
+# script was invoked with, before $deadline is computed below. Measured: passing
+# -Hours 0 ("run until stopped", per the param doc) silently became a 24h
+# deadline, and every -CyclePauseSec 30 pause ran 60s — visible in
+# logs/eighty-events.jsonl as a 60.03s gap between cycle-end and cycle-start.
+# It went unnoticed because the scheduled task passes -Hours 24, which happens
+# to equal the value that was clobbering it.
+#
+# Hours and CyclePauseSec are the only two names the two param blocks share.
+$callerHours = $Hours
+$callerCyclePauseSec = $CyclePauseSec
 . "$PSScriptRoot\selfimprove-loop.ps1" -SelfTestOnly
+$Hours = $callerHours
+$CyclePauseSec = $callerCyclePauseSec
 
 $protocolPath = Join-Path $repo 'EIGHTY_PERCENT_SUPERPROMPT.md'
 if (-not (Test-Path $protocolPath)) { throw "protocol missing: $protocolPath" }

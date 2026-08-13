@@ -571,7 +571,13 @@ while ((Get-Date) -lt $deadline) {
     $after = Gates
     if (@($after | Where-Object { -not $_.Ok -and -not $_.Advisory }).Count -eq 0) {
       foreach ($f in $worked) { git add -- $f 2>&1 | Out-Null }
-      git commit -q -m "selfimprove cycle ${cycle}: $($worked -join ', ')" 2>&1 | Out-Null
+      # Commit EXACTLY the paths this cycle worked on. A bare `git commit`
+      # commits the whole INDEX, so in a tree shared with another agent it
+      # authors that agent's staged, unreviewed work under this loop's message
+      # — the failure this file's own header (lines ~256, ~327) forbids, and
+      # which eighty-loop.ps1:424 already avoids with the pathspec form.
+      # The tree routinely carries 100+ modified paths from concurrent sessions.
+      git commit -q -m "selfimprove cycle ${cycle}: $($worked -join ', ')" -- $worked 2>&1 | Out-Null
       Note 'committed' @{ cycle = $cycle; files = ($worked -join ',') }
       if ($Push) {
         git push -u origin $branch 2>&1 | Out-Null

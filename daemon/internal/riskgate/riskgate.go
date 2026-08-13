@@ -43,6 +43,8 @@ import (
 	"math"
 	"os"
 	"strconv"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 )
 
 // Action is what the caller wants to do.
@@ -559,7 +561,13 @@ func envFrac(key string, def float64) float64 {
 
 func envInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			envcfg.Reject(key, v, "not an integer", strconv.Itoa(def))
+		case n <= 0:
+			envcfg.Reject(key, v, "must be > 0", strconv.Itoa(def))
+		default:
 			return n
 		}
 	}

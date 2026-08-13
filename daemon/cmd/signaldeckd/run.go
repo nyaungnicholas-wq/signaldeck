@@ -75,6 +75,16 @@ const apiReadConns = 4
 
 // run wires the whole daemon: store-backed agents + the JSON API.
 func run(ctx context.Context, cfg config.Config, st *store.Store) {
+	// A CANCELLABLE child of the shutdown context, so a fatal failure inside
+	// this function can stop the fleet instead of only logging.
+	//
+	// The API bind is the case this exists for — see the goroutine that starts
+	// api.Serve below. Cancelling the CHILD leaves the parent's Err() nil, which
+	// is exactly what main() keys on to exit non-zero and let the supervisor
+	// restart us; cancelling the parent would look like an operator stop.
+	ctx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
 	// ── clients ─────────────────────────────────────────────────────
 	var alpacaClient *alpaca.Client
 	if cfg.HasAlpaca() {
@@ -563,9 +573,32 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// warms the SAME shared api caches these deps serve from, on the same
 	// isolated reader pool.
 	warmTarget = deps.WarmCaches
+	// A DAEMON WITH NO API IS NOT SERVING, so this must stop the process rather
+	// than log and let the goroutine die.
+	//
+	// It used to only log. api.Serve returns nil on a graceful shutdown
+	// (http.ErrServerClosed is filtered inside it), so a non-nil error here is
+	// always a real fault — most commonly the bind failing because a crashed
+	// predecessor still holds :8322. When that happened the goroutine exited,
+	// run() carried on to runner.Start, and the daemon sat there with EVERY
+	// worker green, worker_runs uniformly 'ok', health.json written, backups
+	// succeeding — and the entire web surface down. Nothing self-probes the
+	// listener, so the only way to notice was to try the site.
+	//
+	// Cancelling stops the fleet, which drains workers and checkpoints the WAL,
+	// then run() returns with the PARENT context still live — the condition
+	// main() already treats as an internal fault and exits 1 for. That makes the
+	// task's RestartCount policy fire and shows a non-zero LastResult, which
+	// ops/check-task-health.ps1 now reports.
+	//
+	// A port held permanently will restart-loop rather than run headless. That
+	// is the intended trade: a visibly failing service gets fixed, a silently
+	// headless one does not.
 	go func() {
 		if err := api.Serve(ctx, deps); err != nil {
-			slog.Error("api server exited", "err", err)
+			slog.Error("api server exited — the daemon cannot serve; shutting down the fleet",
+				"err", err, "addr", cfg.HTTPAddr)
+			cancelRun()
 		}
 	}()
 

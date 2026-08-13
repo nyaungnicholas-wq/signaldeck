@@ -354,8 +354,12 @@ export default function RegimesPage() {
       : null,
   };
 
-  const avgAccuracy = (forecasts: StructRegimeForecast[]) => {
-    if (forecasts.length === 0) return 0;
+  // null, not 0 — StatTile renders null as an em-dash. "0.0%" under a tile
+  // labelled AVG ACCURACY on a page promising "the measured accuracy of each
+  // state" reads as a model measured to be never right, when in fact nothing
+  // has been measured at all.
+  const avgAccuracy = (forecasts: StructRegimeForecast[]): number | null => {
+    if (forecasts.length === 0) return null;
     // historicalAccuracy is a 0-1 fraction; the tile renders with a % suffix.
     return (forecasts.reduce((sum, f) => sum + f.historicalAccuracy, 0) / forecasts.length) * 100;
   };

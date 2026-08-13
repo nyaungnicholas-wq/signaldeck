@@ -33,6 +33,8 @@ import (
 	"os"
 	"sort"
 	"strconv"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 )
 
 // Action is the engine's verdict on one candidate.
@@ -316,6 +318,10 @@ func envFloat(key string, def float64) float64 {
 	}
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		// Report rather than swallow: a rejected override means the daemon is
+		// running a threshold the operator did not choose, and nothing used to
+		// say so. See internal/envcfg.
+		envcfg.Reject(key, s, "not a finite number", strconv.FormatFloat(def, 'g', -1, 64))
 		return def
 	}
 	return v
@@ -328,6 +334,7 @@ func envInt(key string, def int) int {
 	}
 	v, err := strconv.Atoi(s)
 	if err != nil {
+		envcfg.Reject(key, s, "not an integer", strconv.Itoa(def))
 		return def
 	}
 	return v

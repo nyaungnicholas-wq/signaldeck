@@ -25,9 +25,17 @@ export default function BacktestPage() {
       {bt.ranFor && bt.resp?.result && (
         <Reveal>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {/* The daemon emits these as FRACTIONS (backtest.go:92-98:
+                TotalReturn = equity-1, MaxDrawdown a positive fraction, WinRate
+                = wins/closedTrades), so they must be scaled by 100 before a "%"
+                suffix. Until 2026-08-11 these four tiles rendered the raw
+                fraction: a +37% backtest read "0.37%" and a 62% win rate read
+                "0.62%" — while <BacktestResults> sixty lines below rendered the
+                identical fields correctly. Kept deliberately in the same form
+                as that component so the two cannot drift again. */}
             <StatTile
               label="Total Return"
-              value={bt.resp.result.TotalReturn}
+              value={bt.resp.result.TotalReturn * 100}
               decimals={2}
               suffix="%"
               glow={bt.resp.result.TotalReturn >= 0 ? "up" : "down"}
@@ -35,9 +43,21 @@ export default function BacktestPage() {
             />
             <StatTile
               label="Win Rate"
-              value={bt.resp.result.WinRate}
+              // null (em-dash), never a number, when the daemon says the rate is
+              // not meaningful — it is undefined below 2 closed trades, and one
+              // closed trade rendering "100%" is a measurement nobody made.
+              value={
+                bt.resp.result.WinRateMeaningful === false
+                  ? null
+                  : bt.resp.result.WinRate * 100
+              }
               decimals={2}
-              suffix="%"
+              suffix={bt.resp.result.WinRateMeaningful === false ? "" : "%"}
+              sub={
+                bt.resp.result.WinRateMeaningful === false
+                  ? "needs 2+ closed trades"
+                  : undefined
+              }
               glow="accent"
               i={1}
             />
@@ -49,7 +69,10 @@ export default function BacktestPage() {
             />
             <StatTile
               label="Max Drawdown"
-              value={bt.resp.result.MaxDrawdown}
+              // Negated to match BacktestResults: the daemon reports drawdown as
+              // a POSITIVE fraction, and a drawdown shown as a positive number
+              // under a red "down" glow reads as a gain.
+              value={-bt.resp.result.MaxDrawdown * 100}
               decimals={2}
               suffix="%"
               glow="down"

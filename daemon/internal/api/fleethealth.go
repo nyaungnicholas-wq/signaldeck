@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/fleetmon"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/health"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/papertrade"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
@@ -220,10 +221,20 @@ func (d Deps) systemHealth(ctx context.Context) (fleetmon.System, error) {
 	// RecentWorkerRuns returns newest-first. Group start times per worker,
 	// preserving that order.
 	starts := map[string][]int64{}
+	// ...and the STATUSES in the same order, because a start time alone cannot
+	// tell a working worker from a broken one. This handler judged staleness on
+	// ts[0] — the newest run's START, whatever it did — so a worker that ran
+	// exactly on cadence and errored every single time was healthy by
+	// construction. Measured 2026-08-11: forecast-monitor, 15 of 15 runs
+	// status='error', never once successful, reported healthy here and absent
+	// from data/health.json at the same time.
+	statuses := map[string][]string{}
 	for _, run := range runs {
 		starts[run.Worker] = append(starts[run.Worker], run.StartedAt)
+		statuses[run.Worker] = append(statuses[run.Worker], run.Status)
 	}
 	sys.TotalWorkers = len(starts)
+	sys.FailingWorkers = health.FailingWorkers(statuses)
 
 	now := time.Now().Unix()
 	for name, ts := range starts {

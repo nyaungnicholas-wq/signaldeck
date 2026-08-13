@@ -197,9 +197,19 @@ func (c *dashCache) get(ctx context.Context, d Deps) (map[string]any, error) {
 		if time.Since(c.builtAt) >= c.ttl && !c.rebuilding {
 			c.rebuilding = true
 			go func() {
-				// Detached from the request: the rebuild must outlive the
-				// caller that happened to trigger it.
-				ng, err := d.buildDashGlobal(context.Background())
+				// Detached from the request — the rebuild must outlive the
+				// caller that happened to trigger it — but NOT unbounded.
+				//
+				// This cache takes no cold-build slot, so a wedged rebuild here
+				// cannot starve the others; what it does instead is freeze
+				// ITSELF. `rebuilding` is only ever cleared on this line, so a
+				// build that never returns leaves it true for the life of the
+				// process: no further rebuild is ever kicked, `builtAt` never
+				// advances, and c.global is served forever — while the payload
+				// keeps advertising `cacheTtlS: 60`.
+				bctx, cancel := detachedCtx()
+				defer cancel()
+				ng, err := d.buildDashGlobal(bctx)
 				c.mu.Lock()
 				c.rebuilding = false
 				if err == nil {
@@ -207,6 +217,9 @@ func (c *dashCache) get(ctx context.Context, d Deps) (map[string]any, error) {
 					c.builtAt = time.Now()
 				}
 				c.mu.Unlock()
+				if err != nil {
+					noteRebuildFailure("dashboard:global", err)
+				}
 			}()
 		}
 		c.mu.Unlock()

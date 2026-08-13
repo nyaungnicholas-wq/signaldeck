@@ -17,6 +17,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import CandleChart from "@/components/symbol/CandleChart";
 import { PageHero, StatTile, Gauge, Reveal, MiniBar } from "@/components/ui/Kit";
+import HelpTip from "@/components/HelpTip";
 
 function pct(x: number | undefined, dec = 1): string {
   return x == null ? "—" : `${(x * 100).toFixed(dec)}%`;
@@ -71,12 +72,20 @@ export default function SignalReportPage({
     };
   }, [symbol, market, kind]);
 
+  // This hand-written structural cast is the second half of why evidenceCaveat
+  // had zero render sites in web/src: even once lib/api.ts declares the field,
+  // a narrowing cast that omits it puts it back out of reach. Any honesty field
+  // the daemon ships beside historicalAccuracy belongs in this list — dropping
+  // one here silently turns a disclosed number into an undisclosed one.
   const sig = report?.signal as
     | {
         regime?: string;
         conviction?: number;
         historicalAccuracy?: number;
         tier?: string;
+        evidence?: string;
+        firstGradableOn?: string;
+        evidenceCaveat?: string;
       }
     | undefined;
 
@@ -133,9 +142,15 @@ export default function SignalReportPage({
               )}
 
               <div className="flex-1 min-w-[200px] grid grid-cols-2 gap-2">
+                {/* NOT "MEASURED": historicalAccuracy is a walk-forward BACKTEST
+                    lookup, frozen and hash-chained before any of this predictor's
+                    forecasts resolved. The daemon says so on every payload via
+                    evidenceCaveat (structregime.go:275-278) and that string used
+                    to be dropped at the type layer, so this tile called a backtest
+                    a measurement. The caveat is rendered verbatim below. */}
                 {sig?.historicalAccuracy != null && (
                   <StatTile
-                    label="MEASURED ACCURACY"
+                    label="BACKTEST ACCURACY"
                     value={sig.historicalAccuracy * 100}
                     decimals={1}
                     suffix="%"
@@ -170,6 +185,16 @@ export default function SignalReportPage({
                 )}
               </div>
             </div>
+            {/* Rendered VERBATIM — a paraphrased caveat is a broken caveat. The
+                daemon ships this sentence precisely so no reader has to infer
+                what kind of number sits above it. Absent ⇒ render nothing. */}
+            {sig?.evidenceCaveat && (
+              <p className="mt-3 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+                The accuracy above is a backtest claim, not a live track record.{" "}
+                <HelpTip label="the full caveat">{sig.evidenceCaveat}</HelpTip>
+                {sig.firstGradableOn ? ` First gradable on ${sig.firstGradableOn}.` : ""}
+              </p>
+            )}
           </section>
 
           {sig?.regime && report.whyFired?.length ? (
@@ -237,9 +262,13 @@ export default function SignalReportPage({
                 </span>
                 {report.history.total != null && report.history.total > 0 && (
                   <div className="flex gap-2">
+                    {/* total>0 does not imply hitRate was computed: ReportHistory
+                        types them independently. `?? 0` here published "right 0.0%
+                        of the time" for a signal that simply has no rate yet.
+                        StatTile renders null as an em-dash — see Kit.tsx. */}
                     <StatTile
                       label="HIT RATE"
-                      value={(report.history.hitRate ?? 0) * 100}
+                      value={report.history.hitRate != null ? report.history.hitRate * 100 : null}
                       decimals={1}
                       suffix="%"
                       i={0}

@@ -140,9 +140,14 @@ function CompareInner() {
                   {side.rep.regimeStack?.map(f => (
                     <div key={f.kind} className="chip text-xs px-2 py-0.5">{f.kind}: {f.regime}</div>
                   ))}
+                  {/* A missing calProb is not 0.0% — that reads as near-certainty of a
+                      DOWN move, an inversion rather than a blank. The daemon sends null
+                      for "no prediction stored yet" (see api.ts calProb1d: NO READ YET). */}
                   {side.rep.predictionNow && (
                     <div className="text-xs tnum">
-                      P(up) {((side.rep.predictionNow.calProb ?? 0) * 100).toFixed(1)}%
+                      {side.rep.predictionNow.calProb != null
+                        ? `P(up) ${(side.rep.predictionNow.calProb * 100).toFixed(1)}%`
+                        : "NO READ YET"}
                     </div>
                   )}
                 </div>

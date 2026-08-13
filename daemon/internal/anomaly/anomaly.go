@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
@@ -46,7 +47,12 @@ const proxyLabel = "volume-side proxy (no order-book on free stock data)"
 // a nonsensical threshold).
 func Threshold(s string) float64 {
 	v, err := strconv.ParseFloat(s, 64)
-	if s == "" || err != nil || v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+	if s == "" {
+		return DefaultZ
+	}
+	if err != nil || v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		envcfg.Reject("SIGNALDECK_ANOM_Z", s, "not a positive finite number",
+			strconv.FormatFloat(DefaultZ, 'g', -1, 64))
 		return DefaultZ
 	}
 	return v

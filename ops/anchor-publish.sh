@@ -43,6 +43,9 @@ LOG="$SD/logs/anchor-publish.log"
 REPO="${SIGNALDECK_ANCHOR_REPO:-$HOME/.signaldeck/anchor-publish}"
 API="http://127.0.0.1:8322"
 REG="$SD/data/accuracy_registry.json"
+# Same spelling as ops/research-liveness.sh so the two cannot end up reading
+# different databases. Written to only on a successful push (see the end).
+DB="${SIGNALDECK_DB:-$SD/data/signaldeck.db}"
 
 # The A9 tunnel fix (2026-07-26) closed anonymous loopback reads, so API calls
 # authenticate WHEN the operator has provisioned SIGNALDECK_API_TOKEN in
@@ -192,6 +195,17 @@ PY
   fi
   git commit -q -m "anchor + accuracy registry $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   git push -q origin HEAD || { echo "PUSH FAILED — commit exists locally only"; exit 1; }
+  # RECORD THE PUSH, NOT THE COMMIT. This is the only durable evidence that
+  # anything actually LEFT the machine, and it is deliberately written after
+  # `git push` succeeds rather than after `git commit`: a local commit provides
+  # none of the third-party-timestamp guarantee this script exists to create.
+  #
+  # Nothing recorded a successful publish before, which is why the 16-day
+  # outage from 2026-07-27 was invisible — anchors kept being SIGNED locally
+  # (ledger_anchors held 10 rows, newest 2026-08-10) while none of them were
+  # ever externally timestamped, and no check could tell the difference.
+  # tools/anchor_liveness.py reads this key.
+  sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('anchor_last_published','$(date +%s)');" 2>>"$LOG"
   echo "published $(git rev-parse --short HEAD)"
   exit $fail
 } >> "$LOG" 2>&1

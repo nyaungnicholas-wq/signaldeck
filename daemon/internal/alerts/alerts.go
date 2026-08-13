@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -96,11 +97,25 @@ func Thresholds(hiStr, loStr string) (hi, lo float64) {
 	l, errL := strconv.ParseFloat(loStr, 64)
 	if hiStr != "" && errH == nil {
 		hi = h
+	} else if hiStr != "" {
+		envcfg.Reject("SIGNALDECK_ALERT_HI", hiStr, "not a number",
+			strconv.FormatFloat(DefaultHi, 'g', -1, 64))
 	}
 	if loStr != "" && errL == nil {
 		lo = l
+	} else if loStr != "" {
+		envcfg.Reject("SIGNALDECK_ALERT_LO", loStr, "not a number",
+			strconv.FormatFloat(DefaultLo, 'g', -1, 64))
 	}
 	if !(lo > 0 && hi < 1 && lo < hi) {
+		// Both are reported: the pair is rejected as a pair, and naming only one
+		// would send an operator to fix a value that was individually fine.
+		if hiStr != "" || loStr != "" {
+			envcfg.Reject("SIGNALDECK_ALERT_HI", hiStr, "alert band invalid (need 0 < lo < hi < 1)",
+				strconv.FormatFloat(DefaultHi, 'g', -1, 64))
+			envcfg.Reject("SIGNALDECK_ALERT_LO", loStr, "alert band invalid (need 0 < lo < hi < 1)",
+				strconv.FormatFloat(DefaultLo, 'g', -1, 64))
+		}
 		return DefaultHi, DefaultLo
 	}
 	return hi, lo

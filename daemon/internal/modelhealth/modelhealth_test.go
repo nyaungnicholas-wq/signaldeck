@@ -29,7 +29,7 @@ func TestHealthyModelKeepsEmitting(t *testing.T) {
 	s := Grade(Inputs{
 		Observations: 500, Accuracy: 0.72, BaselineAcc: 0.55,
 		RecentAcc: 0.73, RecentN: 200, BrierSkill: 0.18,
-		CalibrationErr: 0.02, AgeDays: 5, FeatureDriftPct: 0.03,
+		CalibrationErr: 0.02, AgeDays: 5, FeatureDriftPct: Ptr(0.03),
 	})
 	if s.Verdict != VerdictHealthy || !s.Emitting {
 		t.Fatalf("healthy model graded %s (score %.3f, comps %+v)", s.Verdict, s.Overall, s.Components)
@@ -67,7 +67,7 @@ func TestStrongComponentsCannotRescueNegativeEdge(t *testing.T) {
 	s := Grade(Inputs{
 		Observations: 5000, Accuracy: 0.50, BaselineAcc: 0.51,
 		RecentAcc: 0.50, RecentN: 1000, BrierSkill: 0.30,
-		CalibrationErr: 0.0, AgeDays: 0, FeatureDriftPct: 0.0,
+		CalibrationErr: 0.0, AgeDays: 0, FeatureDriftPct: Ptr(0.0),
 	})
 	if s.Emitting {
 		t.Fatalf("negative edge must stop emission regardless of other components: %+v", s)
@@ -98,7 +98,7 @@ func TestStaleAndDriftedInputsPenalised(t *testing.T) {
 	s := Grade(Inputs{
 		Observations: 1000, Accuracy: 0.60, BaselineAcc: 0.55,
 		RecentAcc: 0.60, RecentN: 500, BrierSkill: 0.05, CalibrationErr: 0.03,
-		AgeDays: 200, MaxAgeDays: 90, FeatureDriftPct: 0.5,
+		AgeDays: 200, MaxAgeDays: 90, FeatureDriftPct: Ptr(0.5),
 	})
 	if s.Components["freshness"] != 0 {
 		t.Fatalf("a model 200d past a 90d horizon should score 0 freshness, got %.3f",
@@ -127,7 +127,7 @@ func TestScoreAndComponentsStayInRange(t *testing.T) {
 	extremes := []Inputs{
 		{Observations: 100, Accuracy: 1, BaselineAcc: 0, BrierSkill: 5, CalibrationErr: 0, RecentN: 100, RecentAcc: 1},
 		{Observations: 100, Accuracy: 0, BaselineAcc: 1, BrierSkill: -5, CalibrationErr: 10,
-			AgeDays: 10000, FeatureDriftPct: 5, RecentN: 100},
+			AgeDays: 10000, FeatureDriftPct: Ptr(5), RecentN: 100},
 	}
 	for i, in := range extremes {
 		s := Grade(in)

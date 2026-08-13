@@ -67,8 +67,8 @@ func bar(ts int64, o, h, l, c, v float64) md.Bar {
 
 func TestSignedVolumeShare(t *testing.T) {
 	bars := []md.Bar{
-		bar(0, 10, 11, 9, 11, 300), // up 300
-		bar(60, 11, 12, 10, 10, 100), // down 100
+		bar(0, 10, 11, 9, 11, 300),    // up 300
+		bar(60, 11, 12, 10, 10, 100),  // down 100
 		bar(120, 10, 10, 10, 10, 999), // doji excluded
 	}
 	share, ok := SignedVolumeShare(bars)

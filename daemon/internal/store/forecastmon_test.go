@@ -120,11 +120,20 @@ func TestForecastDayStatsRawSeesUnresolvedAndEvidenceRows(t *testing.T) {
 	}
 	// The raw view reads predictions, not outcomes: that is the whole point —
 	// a collapse starting today is invisible in the outcome view for a full
-	// horizon. So DDD counts here even though it has no outcome row, and AAA is
-	// still deduped to its latest raw_prob (0.55, not 0.50).
+	// horizon. So DDD is still SEEN here even though it has no outcome row, and
+	// AAA is still deduped to its latest raw_prob (0.55, not 0.50).
+	//
+	// DDD (n_used=0) is counted in Symbols and in Withheld, but its raw_prob is
+	// excluded from DistinctProbs — the fixture comment above has always said
+	// "the published cross-section must not count it as a forecast", and until
+	// 2026-08-11 nothing enforced it. The assertion passed by COINCIDENCE:
+	// DDD's 0.10 duplicated CCC's, so including or excluding it gave 2 either
+	// way. Withheld is what makes the distinction observable, and
+	// TestWithheldRowsDoNotReadAsCollapse below is what makes it load-bearing.
 	want := []ForecastDayStat{
-		{Day: "2026-03-02", Symbols: 4, DistinctProbs: 2}, // {0.55, 0.55, 0.10, 0.10}
-		{Day: "2026-03-03", Symbols: 1, DistinctProbs: 1},
+		// forecast {0.55, 0.55, 0.10} = 2 distinct; DDD withheld.
+		{Day: "2026-03-02", Symbols: 4, DistinctProbs: 2, Withheld: 1},
+		{Day: "2026-03-03", Symbols: 1, DistinctProbs: 1, Withheld: 0},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("ForecastDayStatsRaw = %+v; want %+v", got, want)

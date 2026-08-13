@@ -59,15 +59,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "raw day stats: %v\n", err)
 		os.Exit(2)
 	}
+	// WITHHELD and FORECAST are printed, not just SYMBOLS, because RATIO is
+	// measured over the symbols that actually got a forecast. Printing 329
+	// beside 18 distinct and a ratio of 0.947 reads as an arithmetic error; the
+	// missing column IS the story — 311 of those names were declined.
 	show := func(title string, rows []forecastmon.DayStat) {
 		fmt.Println(title)
-		fmt.Printf("%-12s %8s %10s %8s\n", "DAY", "SYMBOLS", "DISTINCT", "RATIO")
+		fmt.Printf("%-12s %8s %9s %9s %10s %8s\n",
+			"DAY", "SYMBOLS", "WITHHELD", "FORECAST", "DISTINCT", "RATIO")
 		for _, d := range rows {
 			flag := ""
-			if d.Collapsed() {
+			switch {
+			case d.Collapsed():
 				flag = "  <-- COLLAPSED"
+			case d.Starved():
+				flag = fmt.Sprintf("  <-- STARVED (coverage %.3f)", d.CoverageRatio())
 			}
-			fmt.Printf("%-12s %8d %10d %8.3f%s\n", d.Day, d.Symbols, d.DistinctProbs, d.DistinctRatio(), flag)
+			fmt.Printf("%-12s %8d %9d %9d %10d %8.3f%s\n",
+				d.Day, d.Symbols, d.Withheld, d.Forecast(), d.DistinctProbs, d.DistinctRatio(), flag)
 		}
 		fmt.Println()
 	}

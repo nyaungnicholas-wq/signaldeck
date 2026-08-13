@@ -3245,7 +3245,21 @@ export interface StructRegimeForecast {
   horizonDays: number;
   regime: string;
   conviction: number;
+  /** A BACKTEST lookup, not a live measurement. Never label it "measured" —
+   *  render evidenceCaveat next to it. See structregime.go:256-278. */
   historicalAccuracy: number;
+  /** What historicalAccuracy IS — "backtest" for everything shipping today.
+   *  Reserved so a future "live" value can never be mistaken for this one. */
+  evidence?: string;
+  /** Earliest date a structural claim here can have a resolved live outcome.
+   *  Before it, every historicalAccuracy is a backtest claim however labeled. */
+  firstGradableOn?: string;
+  /** The daemon's own disclosure sentence, to be rendered VERBATIM beside
+   *  historicalAccuracy — a paraphrased caveat is a broken caveat (see the
+   *  note at the foot of this file). These three fields were absent from this
+   *  interface, so the string arrived over the wire and was silently dropped:
+   *  zero render sites existed in web/src because none could compile. */
+  evidenceCaveat?: string;
   tier: string;
   rank: number;
   n: number;
@@ -3297,7 +3311,11 @@ export interface VolRegimeForecast {
   ts: number;
   regime: string;
   conviction: number;
+  /** BACKTEST lookup, not a live measurement — see StructRegimeForecast. */
   historicalAccuracy: number;
+  /** See StructRegimeForecast. volregime deliberately ships no firstGradableOn. */
+  evidence?: string;
+  evidenceCaveat?: string;
   tier: string;
   rank: number;
   n: number;

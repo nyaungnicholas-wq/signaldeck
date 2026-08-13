@@ -123,6 +123,34 @@ if [ "$liveness_status" -ne 0 ]; then
   refusal_reason="research-loop liveness check failed (exit $liveness_status) — a narrated grid search left no verifiable judgment record, or a pre-registered forecast kind has never frozen a forecast and gave no refusal; the grader was not run"
 fi
 
+# EXTERNAL-TIMESTAMP LIVENESS. Anchors are SIGNED locally by the daemon and are
+# supposed to be PUBLISHED to a third-party git repo — "a digest sitting in a
+# third party's git history is the only evidence an operator who holds the
+# signing key cannot fabricate after the fact" (ops/anchor-publish.sh).
+#
+# Measured 2026-08-12: the signing half worked (ledger_anchors held 10 rows,
+# newest 2026-08-10) while anchor-publish.sh had not run since 2026-07-27 —
+# nothing invokes it from anywhere — and NOTHING measured the gap. Sixteen days
+# of anchors existed only on this machine, carrying none of the guarantee the
+# project publicly claims for them.
+#
+# It runs HERE because this is the daily task that already exists and already
+# runs the sibling liveness check, so the finding lands without waiting for a
+# new scheduled task to be registered. --emit-dq-event puts it in the
+# data-quality stream on the day it happens.
+#
+# DELIBERATELY NON-BLOCKING: it does NOT set refusal_reason. Unpublished anchors
+# make the record less externally verifiable, but they do not make the graded
+# numbers wrong, and suppressing the registry over it would withhold an honest
+# track record to punish a missing git push.
+"$PY" "$SD/tools/anchor_liveness.py" --db "$SD/data/signaldeck.db" --emit-dq-event \
+  > "$STDERR_CAPTURE" 2>&1
+anchor_liveness_status=$?
+cat "$STDERR_CAPTURE" >> "$LOG"
+if [ "$anchor_liveness_status" -ne 0 ]; then
+  echo "WARN: external anchor timestamping is not current (exit $anchor_liveness_status) — see above; registry still published" >> "$LOG"
+fi
+
 # PROTOCOL-DOCUMENT REGISTRATION — the same fail-closed shape
 # require_registered_grader() already has, applied to the protocol DOCUMENT
 # instead of the grader. PREREGISTRATION.md §0 makes the chain authoritative over

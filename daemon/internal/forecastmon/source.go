@@ -48,7 +48,9 @@ func (s storeSource) RawDayStats(ctx context.Context, horizon string, since time
 	}
 	out := make([]DayStat, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, DayStat{Day: r.Day, Symbols: r.Symbols, DistinctProbs: r.DistinctProbs})
+		out = append(out, DayStat{
+			Day: r.Day, Symbols: r.Symbols, DistinctProbs: r.DistinctProbs, Withheld: r.Withheld,
+		})
 	}
 	return out, nil
 }
