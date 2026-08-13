@@ -3,15 +3,20 @@
 **Overall status: NOT COMPLETE — but NO LONGER BLOCKED.**
 
 All four blocked items were authorized in Round 2 and are closed and verified
-(see ROUND 2 at the foot of this file). What keeps the run NOT COMPLETE is the
-evidenced-but-unrepaired backlog in §3 — Q1, Q6–Q10, O-a…O-i, D-a…D-i — plus
-Q4, which is deliberately deferred because it must land in Go and Python
-together.
+(ROUND 2). Round 3 then landed **Q4 in Go and Python together** and **Q1**.
+
+What keeps the run NOT COMPLETE:
+- the evidenced-but-unrepaired backlog in §3 — Q6–Q10, O-a…O-h, D-a…D-i;
+- **two deploys are pending, not two fixes.** Q4 and Q1 are committed, verified
+  and green, but not yet serving: the daemon deploy waits on one in-flight file
+  from a concurrent session, and the web server process cannot be restarted
+  without elevation. Neither is in a divergent state while it waits (see
+  ROUND 3).
 
 Repo: `C:\Users\Nicholas_N\Desktop\claude code\signaldeck`
 Branch `hmm-regime-and-pbo`. Entered at HEAD `1b8b876` with ~110 uncommitted
 paths from concurrent sessions (preserved, none reverted). Ends at HEAD
-`d09162c`, tree CLEAN, daemon running that exact commit.
+`90cc2c1`; daemon serving `d09162c`.
 
 ---
 
@@ -388,3 +393,95 @@ the published registry. That is one deliberate change, not a leftover.
   preflight installed in Round 1 — contains only the two manual invocations.
   The daemon sat down until manually restarted. The log is now the cheap way to
   confirm the guard is alive; it should have entries every 5 minutes.
+
+---
+
+# ROUND 3 — Q4 in both, plus Q1
+
+## Q4 — settled-move fold, Go AND Python. CODE COMPLETE + VERIFIED, deploy pending.
+
+Both sides now fold on `settle_day(settle_ts, ts)`. Verified by calling the
+grader's REAL `fetch_directional_days()` and comparing it to the SQL the
+compiled Go emits, on the live corpus:
+
+| | 1d | 1w |
+|---|---|---|
+| before (calendar fold) | n=2399 acc=0.41517 | n=3186 acc=0.37916 |
+| after (settled move) | **n=2380 acc=0.429412** | **n=2247 acc=0.381397** |
+| Go vs Python after | identical | identical |
+
+1w loses 29% of its observations — the change can only REDUCE claimed evidence,
+so it cannot be read as moving the goalposts. Commit `82b2a2a`.
+
+`settle_ts_expr()` degrades rather than exploding: fixtures build a
+`prediction_outcomes` with no `settle_ts`, and `settle_day(NULL, ts)` falls back
+to the calendar day instead of raising `no such column`. Same doctrine as
+`settlement_clause()`. **Caught by 25 test errors, not by inspection** — the
+fixtures were the thing that noticed.
+
+The stale-feed CTEs deliberately keep `trading_day()`: `dq_events` records which
+CALENDAR day a feed was stale on and carries no `settle_ts`.
+
+**Why it is not live yet, and why that is SAFE.** Regenerating the registry is
+refused by design:
+
+```
+UNREGISTERED GRADER: the grading protocol ... pins graderSha256 7b6ddc86…
+Refusing to grade: the pinned grader and the running grader are different code
+```
+
+That is the SHA pin doing its job, and I did not bypass it. The sanctioned path
+is `prereg-registrar`, which appends an **AMENDMENT** record when the grader
+digest changes (`pipeline/prereg.go:181-189`); it needs the grader committed
+(done) and fires on daemon start or its 12h interval.
+
+Crucially there is **no live divergence in the meantime**: the deployed daemon
+is `d09162c`, which predates the Go fold change, and the Python grader refuses
+to run — so both sides are consistently PRE-Q4 and the published registry is
+unchanged. Q4 lands on both sides in one deploy, or neither.
+
+**What blocks the deploy:** `research/eighty/h0626.py`, an in-flight Eighty Loop
+script from a concurrent session. `build_from_head` refuses a dirty tree and I
+will not weaken that gate or commit another session's work. Waited 4 minutes;
+the loop was still mid-cycle. The deploy is a one-liner once it commits:
+
+```
+bash ops/signaldeck-ctl.sh deploy     # then prereg-registrar amends on start
+python tools/accuracy_registry.py --db data/signaldeck.db --json data/accuracy_registry.json
+```
+
+## Q1 — ungraded backtest constants labelled "measured". FIXED. Commit `90cc2c1`.
+
+`resolved_at` is NULL on **all 37,857** structural rows, for every kind — not one
+structural call has ever been graded — while four surfaces called the number
+"measured": TodaysRead ("Measured accuracy … 97.2%"), the `/market/regimes` hero
+tile under a `live` PageHero, the regimes **markdown export** (where the figure
+leaves the app and the column header is the only caveat that travels with it),
+and `/market/breadth`. All four now say BACKTESTED, and the regimes subtitle
+states plainly that nothing structural has been graded.
+
+Two averaging bugs went with the labels: `historicalAccuracy === 0` is this
+app's "not measured" sentinel, yet both hero tiles summed those zeros into the
+mean — so a row rendered as "—" in the table was simultaneously counted as 0% in
+the tile above it. Breadth also gated on `rows[0]` alone, letting one measured
+row unlock an average over every row. Both now average only measured rows and
+print the contributing count.
+
+## Round 3 blockers (both need elevation or another session)
+
+- **Web restart.** The Q1 fixes are committed and `next build` succeeded, but
+  the running server (PID 29984) still serves the OLD bundle and **cannot be
+  killed**: `taskkill /F` → `Access is denied`, and `Stop-ScheduledTask` leaves
+  it alive because `schtasks /End` does not cascade to the child holding the
+  port. Needs an elevated shell or a reboot. The code is correct and built; only
+  the process is stale.
+- **Daemon deploy** — blocked on the dirty path above.
+
+## Verified green at the end of Round 3
+
+`go build` / `go vet` clean; **122 Go packages pass**; **271 Python tests pass**
+(`OK (skipped=4)`); `tsc --noEmit` and `eslint src/` both exit 0.
+
+Incidental confirmation that an earlier fix is live: `logs/eighty-events.jsonl`
+now shows a **30.0s** cycle gap where it showed 60.03s before — the A2
+dot-source parameter clobber is genuinely fixed in the running loop.
