@@ -40,10 +40,20 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 	// honesty gates sooner without changing what is measured. Pooling adds
 	// rows, not days — the gates count days, so this cannot buy a gate pass.
 	var examples []adaptive.Example
+	// capBound records that at least one horizon's read came back FULL. The day
+	// floor cannot be reached by waiting when the input to a day count is capped
+	// by rows: at ~15,700 labeled rows/day the cap buys single-digit days no
+	// matter how much history accumulates, so a cell gated for "too few days"
+	// while this is true is starved, not young. Reported, never acted on — the
+	// weights themselves are unchanged.
+	capBound := false
 	for _, h := range predHorizons {
 		rows, err := w.St.LabeledFeatures(ctx, h, adaptiveMaxRows)
 		if err != nil {
 			return "", fmt.Errorf("labeled features %s: %w", h, err)
+		}
+		if len(rows) >= adaptiveMaxRows {
+			capBound = true
 		}
 		for _, r := range rows {
 			legs, regime := adaptive.FromVector(r.Vec)
@@ -102,10 +112,24 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 	// Report the DAY count beside the row count on every surface: a row total
 	// with no day total is the number that made three days of evidence look
 	// like a sample of 40,000.
-	return fmt.Sprintf("attributed %d labeled row(s) spanning %d distinct day(s) across %d cell(s); %d cell(s) yielded learned weights (floors: %d rows AND %d days; %d panel test(s) at family-wise alpha %.2f; max weight shift %.2f)",
+	msg := fmt.Sprintf("attributed %d labeled row(s) spanning %d distinct day(s) across %d cell(s); %d cell(s) yielded learned weights (floors: %d rows AND %d days; %d panel test(s) at family-wise alpha %.2f; max weight shift %.2f)",
 		len(examples), days, len(next.Cells), learned,
 		adaptive.MinCellSamples, adaptive.MinCellDays,
-		next.Panel.Tests, next.Panel.Alpha, shift), nil
+		next.Panel.Tests, next.Panel.Alpha, shift)
+	return msg + capBindingNote(capBound, learned, days), nil
+}
+
+// capBindingNote names the one state in which "below the N-day floor" is
+// misleading: every cell gated on days while the read came back truncated.
+// Read plainly, the floor message sends an operator away to wait for history
+// that is already there — a row cap is hiding it. Empty string when the day
+// count is honest, so the normal detail line is unchanged.
+func capBindingNote(capBound bool, learned, days int) string {
+	if !capBound || learned > 0 || days >= adaptive.MinCellDays {
+		return ""
+	}
+	return fmt.Sprintf("; ROW CAP BINDING — the per-horizon read returned its full %d-row limit, so %d day(s) is what the cap ALLOWED, not what exists. A day floor cannot be reached by waiting while its input is capped by rows; widen the read to a day window before reading this as insufficient history",
+		adaptiveMaxRows, days)
 }
 
 // weightHistoryRows flattens a computed weight set into append-only history
