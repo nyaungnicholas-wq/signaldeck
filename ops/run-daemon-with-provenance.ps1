@@ -228,6 +228,7 @@ if (-not $stamp) {
 $head = ''
 $behind = -1
 $dirtyPaths = 0
+$codeBehind = 0
 if (-not $git) {
   Say 'SIGNALDECK PROVENANCE: UNKNOWN - no git.exe found, cannot compare the binary to HEAD; starting'
 } elseif ($stamp -and $stamp.Revision -ne '') {
@@ -250,11 +251,38 @@ if (-not $git) {
   } else {
     $behind = [int]$countRaw
     $dirtyPaths = @(Invoke-Git @('status', '--porcelain')).Count
+    # Of those commits, how many could actually change the BINARY?
+    #
+    # A check that cries wolf gets routed around, and this one is guarding the
+    # exact failure it would then hide -- a genuinely stale collector. Measured
+    # 2026-08-12: a run of documentation commits left this reporting
+    # "STALE BINARY, 6 commits behind" while the Go tree was byte-identical to
+    # the deployed revision, so every run said STALE and none of them meant it.
+    #
+    # STRICTLY NARROWER, NEVER WIDER: anything touching the daemon tree or the
+    # module files still counts as stale exactly as before. Only a delta that
+    # provably cannot reach the binary is downgraded, and if git cannot answer
+    # the question at all the count stays at $behind so the doubt falls toward
+    # REPORTING staleness.
+    $codeBehind = $behind
+    $codeFiles = @(Invoke-Git @('diff', '--name-only', ('{0}..HEAD' -f $stamp.Revision),
+        '--', 'daemon/', '*.go', 'go.mod', 'go.sum'))
+    if ($LASTEXITCODE -eq 0) {
+      $codeBehind = @($codeFiles | Where-Object { $_ -and $_.Trim() }).Count
+    }
   }
 }
 
 # --- 4. the staleness verdict ---------------------------------------------
-if ($behind -gt 0) {
+if ($behind -gt 0 -and $codeBehind -eq 0) {
+  # Behind, but only by commits that cannot reach the binary. Say so plainly
+  # rather than raising the same alarm a real stale binary would raise.
+  Say ('SIGNALDECK PROVENANCE: OK - binary is current in substance ({0} commit(s) ahead, none touching the daemon)' -f $behind)
+  Say ('  stamp    {0}  (built {1:yyyy-MM-dd HH:mm})' -f (Short $stamp.Revision), $built)
+  Say ('  HEAD     {0}' -f (Short $head))
+  Say '  note     the delta is documentation/tooling only; a single Go change makes this STALE again'
+}
+elseif ($behind -gt 0) {
   $refusing = ($OnStale -eq 'Refuse')
   $verdict = 'WARNING'
   if ($refusing) { $verdict = 'REFUSED' }
