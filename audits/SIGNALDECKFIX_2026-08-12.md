@@ -13,11 +13,13 @@ What keeps the run NOT COMPLETE — two blocked, one deliberately staged:
   **Hardware, not code.**
 - **Web restart** — Q1's code is committed and built, but the running process
   cannot be killed without elevation. **Needs an elevated shell.**
-- **Q8 gate** — the padding is now MEASURED and PUBLISHED (ROUND 6); wiring the
-  gate itself moves both directional verdicts from FAILED to INSUFFICIENT DAYS
-  and needs its own prereg amendment. Two implementations were tried and both
-  were wrong; the reasons are recorded in the constant's comment so the next
-  attempt does not repeat them.
+- **Q8 gate** — the padding is MEASURED and PUBLISHED (ROUND 6). The gate itself
+  needs a **data-path change, not a threshold**: three implementations were
+  tried and the third proved that an absolute observation floor is the WRONG
+  predicate (it calls a complete day thin in a small universe). The right one is
+  coverage relative to that day's universe, and that denominator does not exist
+  in the graded population — a withheld forecast leaves no resolved row. Proof
+  and dead ends are recorded in the constant's comment (ROUND 6b).
 
 Two earlier findings were WRONG and are corrected in place: **O-i** (the daemon
 guard IS running on its 5-minute cadence) and **O-g** (grading failures were
