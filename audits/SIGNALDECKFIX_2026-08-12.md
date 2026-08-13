@@ -7,24 +7,19 @@ Rounds 1–5. All four originally-blocked items are closed and verified; Q4 land
 in Go and Python together and is live; **21 further backlog items are fixed and
 deployed**.
 
-What keeps the run NOT COMPLETE — two blocked, one deliberately staged:
-- **O-h** — "offsite" backup is on the same physical volume. The guard already
-  refuses to claim otherwise; making it true needs an external drive.
-  **Hardware, not code.**
+**Q8 is now SOLVED and published** (ROUND 6d) — the admission test counts
+CREDIBLE blocks, using a predicate relative to the sample's own median day after
+two absolute predicates were refuted with data. `directional-ensemble (1w)`
+moves FAILED → INSUFFICIENT DAYS (7 credible days of 11); the platform now
+claims less than it did this morning.
+
+What keeps the run NOT COMPLETE — two items, both verified external blockers:
+- **O-h** — "offsite" backup is on the same physical volume. **Verified, not
+  assumed:** one physical disk (Kingston 1.9 TB), only `C:` plus a 1.3 GB
+  Recovery partition, no mapped network drives, OneDrive present but not signed
+  in. The guard already refuses to claim otherwise. **Hardware.**
 - **Web restart** — Q1's code is committed and built, but the running process
-  cannot be killed without elevation. **Needs an elevated shell.**
-- **Q8 gate** — the padding is MEASURED and PUBLISHED (ROUND 6). The gate is
-  UNRESOLVED, and deliberately so: **two candidate predicates are now refuted
-  with data.** An absolute observation floor conflates a small universe with a
-  thin one (ROUND 6b), and call-day coverage turns out to be uncorrelated with
-  graded thinness — a day the model forecast 98% of the universe on yields ONE
-  graded observation, because thinness comes from resolution/settlement
-  attrition, not from abstention (ROUND 6c, measured). What survives is
-  narrower: `design_effect` already prices unequal clusters, so the real defect
-  is only that `MIN_DISTINCT_BLOCKS` accepts degenerate days — a fix belonging
-  at the admission test, still needing a size predicate that does not misfire on
-  a small universe. Shipping a gate that drops the wrong days would be worse
-  than publishing the measurement and naming what is unknown.
+  returns `Access is denied` to `taskkill /F`. **Needs an elevated shell.**
 
 Two earlier findings were WRONG and are corrected in place: **O-i** (the daemon
 guard IS running on its 5-minute cadence) and **O-g** (grading failures were
