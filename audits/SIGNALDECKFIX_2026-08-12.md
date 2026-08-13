@@ -793,3 +793,48 @@ Left unresolved deliberately. Three implementations and two predicates in, the
 measurement is the part that is certainly right; shipping a gate that drops the
 wrong days would be worse than publishing the size of the problem and naming
 what is still unknown.
+
+## ROUND 6d — Q8 SOLVED: gate the admission on CREDIBLE blocks
+
+My own previous round named the surviving fix — "admission test, still needing a
+size predicate that does not misfire on a small universe" — and then didn't build
+it. It is built, deployed and published.
+
+**The predicate is relative to the sample's own median day.** That is precisely
+what makes it work where both absolute predicates failed:
+
+| predicate | why it failed |
+|---|---|
+| fixed row floor | calls a COMPLETE day thin in a small universe (3-symbol fixture, 3-row days) |
+| call-day coverage | uncorrelated with graded thinness — 98% coverage still yields 1 graded row |
+| **fraction of the median** | **no external denominator, self-scales** |
+
+Measured: it separates the live populations (1d 10/14 credible, 1w 7/11) and
+keeps **ALL** blocks on every fixture shape — which is why 119 grader tests pass
+untouched. 10% is "an order of magnitude below typical", the same calibration
+idiom `MinDistinctRatio` uses.
+
+**Only the admission decision changes.** `n`, `hits`, `acc`, `design_effect` and
+the interval are still computed over every cluster, so a published number and its
+CI keep describing the same population — the mismatch that killed the earlier
+attempt.
+
+**A second defect, in my own change, caught before shipping.** The refusal read
+`INSUFFICIENT DAYS (11/10 distinct days)` — stating a *passing* ratio as the
+reason for failing, a number nobody measured. The verdict text now names the
+count that actually withheld the interval.
+
+**Published consequence, stated plainly:**
+
+```
+directional-ensemble (1d)        FAILED                                    (unchanged)
+directional-ensemble (1w)        INSUFFICIENT DAYS (7/10 credible of 11, 4 degenerate)
+directional-ensemble (1d, hc)    INSUFFICIENT DAYS (5/10 credible of 7, 2 degenerate)
+directional-ensemble (1w, hc)    INSUFFICIENT DAYS (9/10 credible of 9)
+```
+
+1w moves FAILED → INSUFFICIENT. That is not the model escaping a bad verdict: it
+is the platform admitting it never had ten credible days to judge it on. Every
+move is conservative — the platform now claims less than it did this morning.
+
+Grader re-pinned via chain **seq 69**; registry regenerated; anchors republished.
