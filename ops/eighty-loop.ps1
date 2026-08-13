@@ -128,7 +128,7 @@ Set-Location $repo
 # loop.ps1's own defaults (Hours=24, CyclePauseSec=60) OVERWRITE whatever this
 # script was invoked with, before $deadline is computed below. Measured: passing
 # -Hours 0 ("run until stopped", per the param doc) silently became a 24h
-# deadline, and every -CyclePauseSec 30 pause ran 60s — visible in
+# deadline, and every -CyclePauseSec 30 pause ran 60s -- visible in
 # logs/eighty-events.jsonl as a 60.03s gap between cycle-end and cycle-start.
 # It went unnoticed because the scheduled task passes -Hours 24, which happens
 # to equal the value that was clobbering it.
@@ -400,12 +400,12 @@ foreach ($f in Get-ChildItem -LiteralPath $work -Filter 'h*.py' -File -ErrorActi
 }
 Ev 'numbering' @{ startsAfter = $hBase }
 
-# Commit-Draft — put each cycle's script into git as soon as it is journaled.
+# Commit-Draft -- put each cycle's script into git as soon as it is journaled.
 #
 # The drafts have to BE in git: the protocol's acceptance criteria require a
 # result to reproduce from a cold clone, and a journal entry citing
 # research/eighty/h0007.py is worth nothing if a clone does not contain it.
-# Leaving them untracked also blocks deploys outright — build_from_head refuses
+# Leaving them untracked also blocks deploys outright -- build_from_head refuses
 # a dirty tree and manifest-check refuses untracked paths under research/, so an
 # uncommitted draft stops `signaldeck-ctl.sh deploy` for everyone.
 #

@@ -141,20 +141,43 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	}
 	if seeded, _ := st.GetMeta(ctx, "seeded_v1"); seeded == "" {
 		_ = backfiller.Enqueue(cryptoSym)
+		created, failedSeeds := 0, 0
 		if alpacaClient != nil {
 			for _, s := range seedStocks {
 				sym, err := st.UpsertSymbol(ctx, s, md.Stocks, "")
-				if err == nil {
-					// The seed stocks are the initial STREAMED hot set (live ws
-					// + full 1m pipeline); mark them stream=1 so the streamer
-					// and the stream-cap accounting pick them up.
-					_ = st.SetSymbolStream(ctx, sym.ID, true)
-					_ = backfiller.Enqueue(sym)
+				if err != nil {
+					// Was silently swallowed by `if err == nil`, so a failed
+					// upsert left no trace anywhere.
+					failedSeeds++
+					slog.Warn("first boot: seed stock failed", "symbol", s, "err", err)
+					continue
 				}
+				// The seed stocks are the initial STREAMED hot set (live ws
+				// + full 1m pipeline); mark them stream=1 so the streamer
+				// and the stream-cap accounting pick them up.
+				_ = st.SetSymbolStream(ctx, sym.ID, true)
+				_ = backfiller.Enqueue(sym)
+				created++
 			}
 		}
-		_ = st.SetMeta(ctx, "seeded_v1", time.Now().Format(time.RFC3339))
-		slog.Info("first boot: seeded watchlist", "crypto", cfg.CryptoSymbol, "stocks", seedStocks)
+		// seeded_v1 is PERMANENT, so writing it after a wholly failed pass
+		// blocks the retry forever: transient DB contention on first boot would
+		// register zero stocks and mark the watchlist seeded for good. The
+		// broad-universe seed 20 lines below already refuses to set its own key
+		// on failure ("retry on the next boot") — the two paths disagreed inside
+		// one function, and this was the wrong half.
+		//
+		// The log line also reported seedStocks VERBATIM, i.e. what was
+		// intended, so a boot that created nothing still logged "seeded
+		// watchlist" naming every symbol. Report what was CREATED.
+		if alpacaClient != nil && created == 0 && failedSeeds > 0 {
+			slog.Error("first boot: every seed stock failed — NOT marking seeded_v1, will retry next boot",
+				"attempted", failedSeeds)
+		} else {
+			_ = st.SetMeta(ctx, "seeded_v1", time.Now().Format(time.RFC3339))
+			slog.Info("first boot: seeded watchlist", "crypto", cfg.CryptoSymbol,
+				"stocksCreated", created, "stocksFailed", failedSeeds)
+		}
 	}
 
 	// ── broad-universe wave: seed the BROAD DAILY-ONLY universe once ────
@@ -1947,7 +1970,12 @@ func enforceSchemaContract(ctx context.Context, st *store.Store, fleet []workers
 		return fleet
 	}
 	if len(bad) == 0 {
-		_ = st.SetMeta(ctx, store.SchemaContractMetaKey, "{}")
+		// Failing to CLEAR the key leaves a stale violation on display, which
+		// over-reports — the safe direction — so this one only logs.
+		if err := st.SetMeta(ctx, store.SchemaContractMetaKey, "{}"); err != nil {
+			slog.Error("schema contract: could not clear the contract key; "+
+				"a previous boot's violations may still be displayed", "err", err)
+		}
 		return fleet
 	}
 	now := time.Now().Unix()
@@ -1960,8 +1988,22 @@ func enforceSchemaContract(ctx context.Context, st *store.Store, fleet []workers
 			fatal = append(fatal, worker+" requires "+strings.Join(missing, ", "))
 		}
 	}
-	if b, err := json.Marshal(bad); err == nil {
-		_ = st.SetMeta(ctx, store.SchemaContractMetaKey, string(b))
+	// THE DANGEROUS DIRECTION. This write is what /api/health and /api/ready
+	// read to say which workers were refused at boot. Both the marshal and the
+	// write were swallowed, so under DB contention the key kept the PREVIOUS
+	// boot's "{}" and every health surface reported no contract violations
+	// while these workers were silently absent from the fleet — the dq events
+	// above are `_ =` too, so both surfaces could miss it at once. It cannot be
+	// made fatal here (refusing to boot over a meta write would take the
+	// platform down for a transient lock), but it must never be silent.
+	if b, err := json.Marshal(bad); err != nil {
+		slog.Error("schema contract: cannot marshal violations for publication — "+
+			"health surfaces will NOT show these de-registered workers",
+			"err", err, "workers", len(bad))
+	} else if err := st.SetMeta(ctx, store.SchemaContractMetaKey, string(b)); err != nil {
+		slog.Error("schema contract: cannot publish violations — health surfaces "+
+			"will report ALL CLEAR while these workers are de-registered",
+			"err", err, "workers", len(bad))
 	}
 	// An audit-record worker (research-loop, regime-outcome-runner) produces
 	// NOTHING BUT the record it cannot write. Quietly de-registering it leaves

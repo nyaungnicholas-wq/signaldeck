@@ -537,17 +537,29 @@ while ((Get-Date) -lt $deadline) {
   $worked = $false
   if ($red.Count -gt 0) {
     $g = $red[0]
-    $cmd = switch ($g.Name) {
-      'go-build'     { 'cd daemon; go build ./...' }
-      'go-vet'       { 'cd daemon; go vet ./...' }
-      'go-test'      { 'cd daemon; go test ./...' }
-      'py-tests'     { 'cd tools; python -m unittest test_accuracy_registry test_audit_register test_deployment_drift test_schema_contract_check test_research_liveness' }
-      'web-types'    { 'cd web; npx tsc --noEmit' }
-      'web-lint'     { 'cd web; npx eslint . --max-warnings 0' }
-      'web-build'    { 'cd web; npx next build' }
-      'publish-scan' { "& '$bash' -lc ""cd '/c/Users/Nicholas_N/Desktop/claude code/signaldeck' && bash ops/pre-publish-scan.sh""" }
-      default        { 'exit 1' }
+    # The verify command handed to the worker IS the accept gate, so it must be
+    # the gate's OWN command. These were hand-copied from GateSpecs and drifted:
+    #
+    #   py-tests re-briefed 'python -m unittest <five named modules>' -- the
+    #   exact hand-maintained list GateSpecs' own comment says it REPLACED with
+    #   discovery, after test_verify_backup.py was never added to it and the
+    #   checks pinning the 2026-08-01 content-loss defect ran nowhere. So a
+    #   py-tests failure in any file outside those five could be "verified
+    #   fixed" by five unrelated modules passing, and the loop would commit it.
+    #
+    #   publish-scan carried an absolute path to one machine, thirty lines after
+    #   the same path is computed correctly at the call site.
+    #
+    # Look the command up instead of restating it. A gate that gains a check now
+    # gains it here too, and the two cannot drift again.
+    $spec = GateSpecs | Where-Object { $_.n -eq $g.Name } | Select-Object -First 1
+    $cmd = if ($spec) { $spec.c }
+    elseif ($g.Name -eq 'publish-scan') {
+      # Not in GateSpecs -- it runs separately, advisory-only. Derive the path.
+      $posixRepo = ($repo -replace '\\', '/' -replace '^([A-Za-z]):', '/$1').ToLower()
+      "& '$bash' -lc ""cd '$posixRepo' && bash ops/pre-publish-scan.sh"""
     }
+    else { 'exit 1' }
     $tail = ($g.Output -split "`n" | Select-Object -Last 80) -join "`n"
     $worked = BriefWorker "The '$($g.Name)' gate is failing. Make it pass." $tail $cmd $GateLane
   }
@@ -574,7 +586,7 @@ while ((Get-Date) -lt $deadline) {
       # Commit EXACTLY the paths this cycle worked on. A bare `git commit`
       # commits the whole INDEX, so in a tree shared with another agent it
       # authors that agent's staged, unreviewed work under this loop's message
-      # — the failure this file's own header (lines ~256, ~327) forbids, and
+      # -- the failure this file's own header (lines ~256, ~327) forbids, and
       # which eighty-loop.ps1:424 already avoids with the pathspec form.
       # The tree routinely carries 100+ modified paths from concurrent sessions.
       git commit -q -m "selfimprove cycle ${cycle}: $($worked -join ', ')" -- $worked 2>&1 | Out-Null

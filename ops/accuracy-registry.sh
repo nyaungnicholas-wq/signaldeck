@@ -534,3 +534,17 @@ except Exception:
     sd_notify "SignalDeck accuracy" "$n predictor(s) contradicted by their own live record — see the accuracy registry."
   fi
 fi
+
+# EXPLICIT EXIT. Everything above that can invalidate a grade already exits 1 on
+# its own (the REFUSAL PATH, which covers both a non-zero grader and a grader
+# that exited 0 without advancing the registry's timestamp). What was missing is
+# only that the script ENDED on the notification `if` above, so its status was
+# whatever that branch happened to leave behind -- incidental, not a statement.
+# Say it deliberately instead: reaching here means the grade was real and
+# published.
+#
+# The two liveness probes (research, anchor) stay ADVISORY on purpose and are
+# not folded in: they measure freshness, not correctness. Unpublished anchors or
+# a stale research loop do not make a graded number wrong, and failing this task
+# for them would train the operator to ignore a red accuracy job.
+exit 0

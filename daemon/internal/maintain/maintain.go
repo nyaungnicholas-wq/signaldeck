@@ -251,6 +251,14 @@ func (d *Downsampler) archivePruneBars(ctx context.Context, tf md.Timeframe, cut
 		}
 		n, err := d.St.PruneBars(ctx, tf, upper)
 		if err != nil {
+			// Every OTHER failure path in this function calls dqSkip, which logs
+			// and inserts an archive_skip DQ event. This one returned skipped=true
+			// silently, so the caller emitted "SOME PRUNES SKIPPED - archive failed,
+			// data retained; see dq" for a run where the ARCHIVE SUCCEEDED and the
+			// PRUNE failed, and pointed the operator at a dq record that was never
+			// written. Wrong cause, missing evidence, and retention quietly stops
+			// reclaiming.
+			d.dqSkip(ctx, now, string(tf), "prune failed after a successful archive: "+err.Error())
 			return pruned, true
 		}
 		pruned += n
@@ -298,6 +306,8 @@ func (d *Downsampler) archivePruneSnaps(ctx context.Context, cutoff int64, names
 		}
 		n, err := d.St.PruneSnaps(ctx, upper)
 		if err != nil {
+			// See archivePruneBars: a silent skipped=true misreports the cause.
+			d.dqSkip(ctx, now, "snapshots", "prune failed after a successful archive: "+err.Error())
 			return pruned, true
 		}
 		pruned += n
@@ -348,6 +358,8 @@ func (d *Downsampler) archivePruneAnomalies(ctx context.Context, cutoff int64, n
 		}
 		n, err := d.St.PruneAnomalies(ctx, upper)
 		if err != nil {
+			// See archivePruneBars: a silent skipped=true misreports the cause.
+			d.dqSkip(ctx, now, "anomalies", "prune failed after a successful archive: "+err.Error())
 			return pruned, true
 		}
 		pruned += n

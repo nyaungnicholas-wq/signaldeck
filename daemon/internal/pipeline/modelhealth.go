@@ -74,6 +74,15 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 
 		full, err := w.St.DirectionalRecord(ctx, h, 0)
 		if err != nil {
+			// A DB read failure is not "this horizon had nothing to grade": the
+			// verdict for it is simply MISSING, and /api/modelhealth keeps
+			// serving the previous pass's answer for a model that may have been
+			// retired since. Bare `continue` made that indistinguishable from a
+			// clean empty horizon and left the failed>0 gate below unarmed, so
+			// the worker filed status=ok. Same doctrine as the persist paths
+			// twenty lines down: COUNT THE OUTCOME, NOT THE INTENT.
+			failed++
+			slog.Warn("model-health: directional record unreadable", "horizon", h, "err", err)
 			continue
 		}
 		if full.N == 0 {
@@ -258,7 +267,12 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 func (w *ModelHealthWorker) gradeStructural(ctx context.Context) (graded, retired, failed int) {
 	recs, err := w.St.StructuralRecords(ctx, 0)
 	if err != nil {
-		return 0, 0, 0
+		// (0,0,0) reads to the caller as "no structural predictors to grade",
+		// which is what a healthy empty fleet returns — so an unreadable table
+		// produced status=ok and the API went on serving the prior pass's
+		// structural verdicts. Report it as a failure so the caller degrades.
+		slog.Warn("model-health: structural records unreadable", "err", err)
+		return 0, 0, 1
 	}
 	// High-conviction slice: the tier a user would actually act on, and the one
 	// carrying the biggest claim (97%+ for trend21).

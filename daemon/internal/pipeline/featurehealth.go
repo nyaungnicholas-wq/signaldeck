@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/featureredundancy"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // ── FEATURE HEALTH GRADER ───────────────────────────────────────────────────
@@ -66,7 +68,7 @@ func (w *FeatureHealthGrader) Run(ctx context.Context) (string, error) {
 	}
 
 	var summary []string
-	graded := 0
+	graded, failed := 0, 0
 	for _, h := range []md.Horizon{md.H1d, md.H1w} {
 		rows, err := w.St.LabeledFeaturesAll(ctx, h, 0, featureHealthSampleCap)
 		if err != nil {
@@ -108,7 +110,6 @@ func (w *FeatureHealthGrader) Run(ctx context.Context) (string, error) {
 		cfg.Redundant = redundant
 
 		report := featurehealth.Analyze(featurehealth.FromSamples(samples, cfg))
-		graded++
 
 		blob, err := json.Marshal(map[string]any{
 			"horizon":         string(h),
@@ -122,15 +123,32 @@ func (w *FeatureHealthGrader) Run(ctx context.Context) (string, error) {
 			"gradedAt":        now.Unix(),
 		})
 		if err != nil {
+			// COUNT THE OUTCOME, NOT THE INTENT — the fix
+			// internal/pipeline/modelhealth.go:198 documents, which this
+			// sibling never got. graded++ used to run BEFORE this marshal and
+			// the failure path was a bare `continue`: no log, no counter, no
+			// summary line, nil returned. A horizon that persisted nothing
+			// still counted itself graded and the run filed status=ok.
+			failed++
+			slog.Warn("feature-health: marshal report", "horizon", h, "err", err)
 			continue
 		}
 		if err := w.St.SetMeta(ctx, FeatureHealthMetaPrefix+string(h), string(blob)); err != nil {
 			return "", err
 		}
+		graded++
 		summary = append(summary, fmt.Sprintf("%s: %d kept, %d retired of %d rows",
 			h, len(report.Keep), len(report.Retire), len(rows)))
 	}
 
+	if failed > 0 {
+		// A horizon whose report never reached the store is a horizon the
+		// enforcement helper and the API will read stale, so the pass did not
+		// do what its name says.
+		return fmt.Sprintf("%s (%d horizon(s) NOT PERSISTED)", strings.Join(summary, "; "), failed),
+			fmt.Errorf("%d feature-health report(s) computed but not written: %w",
+				failed, workers.ErrDegraded)
+	}
 	if graded == 0 {
 		return "no labeled features yet — nothing to grade", nil
 	}
