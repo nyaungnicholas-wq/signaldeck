@@ -98,6 +98,55 @@ MIN_DISTINCT_DAYS = 10
 # auto-retire rule's frozen digest still pins MIN_DISTINCT_DAYS.
 MIN_DISTINCT_BLOCKS = 10
 
+# MIN_DAY_OBSERVATIONS is the per-day size below which a graded day is not a
+# credible cross-sectional block.
+#
+# MEASUREMENT ONLY — IT DOES NOT GATE ANYTHING YET, deliberately. See
+# measure_thin_day_exclusion, which publishes what it would cost, and the note
+# at the foot of this comment for why the gate itself is a separate change.
+#
+# The day-resampled interval treats each graded day as one cluster, and
+# MIN_DISTINCT_BLOCKS gates publication on how many clusters exist. Nothing
+# checks how much cross-section a day actually held, so a day on which the
+# ensemble spoke about ONE symbol counts toward that gate exactly as much as a
+# day covering the whole universe. Measured 2026-08-12, the graded populations
+# were bimodal with nothing in between:
+#
+#   1d  [1, 2, 4, 6, 23, 40, 43, 320, 322, 323, 323, 323, 324, 326]
+#   1w  [1, 4, 5, 7, 314, 317, 319, 320, 321, 324, 324]
+#
+# Four of 14 (1d) and four of 11 (1w) "days" carried under 1% of the
+# observations between them while supplying a third of the block count that
+# authorised publishing an interval.
+#
+# The value is NOT invented here: it mirrors forecastmon.MinSymbolsForCollapse,
+# which the daemon already defines as "the universe size below which the
+# distinct-ratio test is not meaningful — a handful of symbols legitimately
+# share a forecast". A day too thin to test for collapse is too thin to be a
+# cross-sectional block, and 30 sits in the empty gap between the two
+# populations above rather than near either.
+#
+# WHY THE GATE IS NOT WIRED HERE. Two implementations were tried and both were
+# wrong in a way worth recording, because the obvious fix is the trap:
+#
+#   1. Dropping thin days from the graded population (a HAVING on the day
+#      tally) broke 12 tests of UNRELATED behaviour — stale-feed, survivorship,
+#      retire flags — because it amputates the population for every caller, not
+#      just the interval. Making those pass would have meant rewriting a dozen
+#      fixtures that are not about this, i.e. fitting the tests to the code.
+#   2. Filtering only inside clustered_ci_blocks fixes the block count but
+#      leaves the POINT ESTIMATE over all days while the INTERVAL covers only
+#      thick ones, so the published accuracy and its published CI would describe
+#      different populations.
+#
+# Doing it properly means choosing one population and routing n, accuracy,
+# distinct_days and the interval through it together — a deliberate change that
+# moves published verdicts (on the 2026-08-12 corpus it takes both directional
+# rows from FAILED to INSUFFICIENT DAYS, because the honest block counts are 9
+# and 7 against a floor of 10). That belongs in its own change with its own
+# prereg amendment, not bolted onto a measurement.
+MIN_DAY_OBSERVATIONS = 30
+
 # --------------------------------------------------------------------------- #
 # MULTIPLICITY — what the published interval's error rate actually is
 # --------------------------------------------------------------------------- #
@@ -1561,6 +1610,56 @@ def stale_feed_sql(con: sqlite3.Connection) -> tuple[str, str]:
     return (STALE_FEED_CTE, STALE_FEED_PREDICATE) if got else ("", "")
 
 
+def measure_thin_day_exclusion(con: sqlite3.Connection | None) -> dict:
+    """How many graded observations the per-day block floor drops. MEASURED.
+
+    Reports the same shape as the other exclusions so a reader can see the cost
+    of every filter in one place. A day below MIN_DAY_OBSERVATIONS is not a
+    cross-sectional block (see that constant), and counting it as one inflated
+    the distinct_days figure that MIN_DISTINCT_BLOCKS gates publication on.
+
+    The exclusion is reported per horizon because the two populations differ,
+    and it reports days as well as rows: the ROW cost is negligible (<1.5%) and
+    the BLOCK cost is not, which is the entire point.
+    """
+    if con is None:
+        return {"applied": False, "reason": "unmeasured - no source connection"}
+    register_fold(con)
+    stale_cte, stale_pred = stale_feed_sql(con)
+    q = f"""
+    WITH {stale_cte}dedup AS (
+      SELECT symbol_id, horizon, ts, {settle_ts_expr(con)} AS settle_ts,
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon,
+                                settle_day({settle_ts_expr(con)}, ts)
+                                ORDER BY ts DESC) rn
+      FROM prediction_outcomes po
+      WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
+        AND ts >= ? {settlement_clause(con)} {stale_pred}
+    ), days AS (
+      SELECT horizon, settle_day(settle_ts, ts) AS day, COUNT(*) AS n
+      FROM dedup WHERE rn = 1 GROUP BY horizon, day
+    )
+    SELECT horizon,
+           SUM(CASE WHEN n <  {MIN_DAY_OBSERVATIONS} THEN 1 ELSE 0 END),
+           SUM(CASE WHEN n >= {MIN_DAY_OBSERVATIONS} THEN 1 ELSE 0 END),
+           SUM(CASE WHEN n <  {MIN_DAY_OBSERVATIONS} THEN n ELSE 0 END),
+           SUM(n)
+    FROM days GROUP BY horizon
+    """
+    by_h: dict[str, dict] = {}
+    try:
+        for horizon, dropped_days, kept_days, dropped_rows, all_rows in con.execute(
+                q, (SURVIVORSHIP_EPOCH_TS,)):
+            by_h[horizon] = {"days_dropped": dropped_days or 0,
+                             "days_kept": kept_days or 0,
+                             "rows_dropped": dropped_rows or 0,
+                             "rows_considered": all_rows or 0}
+    except sqlite3.Error as e:
+        return {"applied": False, "reason": f"unmeasured - {e}"}
+    return {"applied": True, "min_day_observations": MIN_DAY_OBSERVATIONS,
+            "by_horizon": by_h}
+
+
 def measure_stale_feed_exclusion(con: sqlite3.Connection | None) -> dict:
     """How many graded observations the stale-feed quarantine drops. MEASURED.
 
@@ -2518,6 +2617,9 @@ def main() -> int:
         # A snapshot carries no dq_events either, so the stale-feed quarantine is
         # reported UNMEASURED here rather than silently skipped.
         stale_feed = measure_stale_feed_exclusion(None)
+        # Same for the per-day block floor: reported UNMEASURED on a snapshot
+        # rather than left undefined, which would NameError at dict assembly.
+        thin_days = measure_thin_day_exclusion(None)
         source = f"snapshot {args.snapshot} (manifest hashes verified)"
     else:
         con = connect(args.db)
@@ -2555,6 +2657,7 @@ def main() -> int:
         # How much of the population the stale-feed quarantine removed, measured
         # before the connection closes.
         stale_feed = measure_stale_feed_exclusion(con)
+        thin_days = measure_thin_day_exclusion(con)
         source = f"database {args.db}"
         con.close()
 
@@ -2834,6 +2937,11 @@ def main() -> int:
                    # observations were dropped because the daemon had flagged
                    # that symbol's feed stale on the day they were minted.
                    "stale_feed_exclusion": stale_feed,
+                   # Measured size of the per-day block floor: days too thin
+                   # to be a cross-sectional block, and what dropping them
+                   # cost in rows. The ROW cost is small and the BLOCK cost
+                   # is not, which is why it is published as both.
+                   "thin_day_exclusion": thin_days,
                    "null_policy": ("prequential-majority only: each day's constant guess "
                                    "is the majority class over days strictly before it. "
                                    "The hindsight null was retired after the dual-null "
