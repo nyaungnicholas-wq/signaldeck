@@ -138,6 +138,12 @@ type Runner struct {
 	quiesce chan struct{}
 	// lastQuiesce is what the most recent pause cost (see QuiesceStat).
 	lastQuiesce QuiesceStat
+
+	// OperatorStop reports whether the shutdown now under way was REQUESTED
+	// from outside (SIGTERM, `signaldeck-ctl.sh stop`) rather than triggered by
+	// an internal fault. It decides the exit code when ShutdownGrace expires —
+	// see Start. nil keeps the old always-1 behaviour.
+	OperatorStop func() bool
 }
 
 // NewRunner builds a runner over the given workers.
@@ -175,9 +181,26 @@ func (r *Runner) Start(ctx context.Context) {
 	select {
 	case <-done:
 	case <-time.After(ShutdownGrace):
+		// EXIT CODE MUST MATCH THE CAUSE. main.go defines exit 1 as "internal
+		// fault; exiting non-zero so the supervisor restarts it", and the Daemon
+		// task carries RestartCount=999 x PT5M. But ShutdownGrace is 75s while
+		// minRunTimeout is 15 MINUTES, so any worker legitimately mid-run at
+		// SIGTERM — a multi-minute VACUUM INTO, a prune, an HTTP call — blows the
+		// grace. An operator running `signaldeck-ctl.sh stop` during one of those
+		// therefore got exit 1, and Task Scheduler restarted the daemon they had
+		// just deliberately stopped. Two correct mechanisms colliding, with the
+		// exit code unable to tell "drained slowly" from "faulted".
+		//
+		// The stuck workers are still logged at Error either way: exiting 0 here
+		// records that the STOP succeeded, not that nothing was wrong.
+		code := 1
+		if r.OperatorStop != nil && r.OperatorStop() {
+			code = 0
+		}
 		slog.Error("shutdown deadline exceeded — forcing exit",
-			"grace", ShutdownGrace, "stuckWorkers", r.stuckWorkers())
-		forceExit(1)
+			"grace", ShutdownGrace, "stuckWorkers", r.stuckWorkers(),
+			"operatorRequested", code == 0, "exitCode", code)
+		forceExit(code)
 	}
 }
 

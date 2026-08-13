@@ -82,6 +82,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// api.Serve below. Cancelling the CHILD leaves the parent's Err() nil, which
 	// is exactly what main() keys on to exit non-zero and let the supervisor
 	// restart us; cancelling the parent would look like an operator stop.
+	// Keep a handle on the PARENT before shadowing it. Its Err() is the only
+	// thing that distinguishes "the operator stopped us" from "we cancelled
+	// ourselves over an internal fault", and the shutdown-grace exit code needs
+	// exactly that distinction (see Runner.OperatorStop).
+	signalCtx := ctx
 	ctx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 
@@ -655,6 +660,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	} else if n > 0 {
 		slog.Warn("swept worker runs orphaned by a previous process", "rows", n)
 	}
+
+	// A stop the OPERATOR asked for must not come back as a restart just because
+	// a worker took longer than ShutdownGrace (75s) to drain — minRunTimeout is
+	// 15 minutes, so that is ordinary, not a fault. See Runner.OperatorStop.
+	runner.OperatorStop = func() bool { return signalCtx.Err() != nil }
 
 	runner.Start(ctx)
 
