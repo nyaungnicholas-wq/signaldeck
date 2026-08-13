@@ -17,6 +17,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strconv"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
@@ -46,6 +47,23 @@ type ResolvedPredictionOutcome struct {
 // horizon, newest-first, joined to its symbol + market. limit caps the row
 // count. Only rows whose resolved_at is set are returned (no lookahead — an
 // unresolved row has no realized outcome to grade against yet).
+//
+// The survivorship-epoch floor (2026-07-24 00:00:00 UTC) is CONCATENATED into
+// the query, not bound, because it is a schema constant, not a user value.
+// Without it the endpoint fed /api/track-record — "THE honest scoreboard the
+// whole project exists to earn" per its file header — and fleetEdgeSkill with
+// every resolved row ever under ORDER BY ts DESC LIMIT 120000. On 2026-08-12
+// 198,002 resolved 1d rows existed so ~39% were silently dropped while the
+// payload still published rawN: 120000 as the record size. The surviving
+// window began NINE DAYS BEFORE the 2026-07-24 survivorship boundary, so it
+// graded survivor-seeded rows from a 1,059-symbol universe that no longer
+// exists, and it rolled forward every day with no start date in the payload.
+// It therefore published 48.8% where the registry published 41.5% for the same
+// predictor. The epoch also makes the cap NON-BINDING again: 77,904 post-epoch
+// 1d rows and 33,175 1w against a 120,000 limit, so the truncation is gone
+// rather than merely smaller. Forward-looking: if those counts approach the
+// cap the truncation returns silently; len(result) == limit is the signal, and
+// the fix is to page, not to raise the number.
 func (s *Store) ResolvedPredictionOutcomes(ctx context.Context, h md.Horizon, limit int) ([]ResolvedPredictionOutcome, error) {
 	if limit <= 0 {
 		limit = 20000
@@ -55,6 +73,7 @@ func (s *Store) ResolvedPredictionOutcomes(ctx context.Context, h md.Horizon, li
 		FROM prediction_outcomes po
 		JOIN symbols sym ON sym.id = po.symbol_id
 		WHERE po.resolved_at IS NOT NULL AND po.horizon = ? AND po.up IS NOT NULL
+		  AND po.ts >= `+strconv.Itoa(SurvivorshipEpochTS)+`
 		ORDER BY po.ts DESC
 		LIMIT ?`, string(h), limit)
 	if err != nil {

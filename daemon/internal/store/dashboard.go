@@ -100,19 +100,26 @@ func (s *Store) ResolvedPredictionCount(ctx context.Context, h md.Horizon) (int,
 }
 
 // LiveDirectionalRecord summarizes the LIVE forward record of the calibrated
-// directional predictions for one horizon over INDEPENDENT (symbol, UTC-day)
-// resolutions — one obs per symbol-day (latest ts wins), the same dedup
-// discipline as /honesty and /track-record. Cheap aggregate (ms on ~100k
-// rows), so label surfaces can carry the live verdict on every request.
+// directional predictions for one horizon over the SAME population the
+// published grader grades — see gradeablepop.go for the definition and for the
+// measurement that forced this.
+//
+// It used to fold on date(ts,'unixepoch') over every resolved row, with none of
+// the grader's filters: no survivorship epoch, no settlement quarantine, no
+// stale-feed exclusion. That published 17,099 observations at 47.7% on symbol
+// pages while /accuracy published 2,399 at 41.5% and a FAILED verdict for the
+// same predictor — the app overstating its own evidence 7.1x and its accuracy
+// by 6.1pp against its own scoreboard. Two populations meant two truths; there
+// is now one.
 func (s *Store) LiveDirectionalRecord(ctx context.Context, h md.Horizon) (independentN int, winRate float64, err error) {
+	applicable, err := s.SettlementApplicable(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
 	err = s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*), COALESCE(AVG(CASE WHEN (prob>=0.5)=(up=1) THEN 1.0 ELSE 0.0 END),0)
-		FROM (
-		  SELECT symbol_id, date(ts,'unixepoch') AS d, prob, up, MAX(ts)
-		  FROM prediction_outcomes
-		  WHERE horizon=? AND resolved_at IS NOT NULL AND up IS NOT NULL
-		  GROUP BY symbol_id, d
-		)`, string(h)).Scan(&independentN, &winRate)
+		FROM (`+gradeableDedupSQL(applicable)+`) WHERE rn = 1 AND horizon = ?`,
+		string(h)).Scan(&independentN, &winRate)
 	return independentN, winRate, err
 }
 
