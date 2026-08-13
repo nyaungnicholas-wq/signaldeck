@@ -99,17 +99,36 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
 
 
   $pargs = if ($d.ContainsKey('ProgramArguments')) { @(ConvertTo-Value $d['ProgramArguments']) } else { @() }
-  $sh = $pargs | Where-Object { $_ -is [string] -and $_ -match '\.sh$' } | Select-Object -First 1
+  # .ps1 is a first-class job here, not an oddity. The fleet's two health gates
+  # (check-task-health.ps1, check-grader-health.ps1) are PowerShell, and this
+  # translator accepted only .sh -- so they had no plist worth writing, no task,
+  # and ran ONLY when a human remembered. fix-task-principals.ps1:233 even tells
+  # the operator to "watch for recurrence with ops\check-task-health.ps1" as a
+  # manual instruction. Correct scripts that never run unattended are the same
+  # blind spot as a check that always passes.
+  $sh = $pargs | Where-Object { $_ -is [string] -and $_ -match '\.(sh|ps1)$' } | Select-Object -First 1
   if (-not $sh) {
     Write-Output ("SKIP   {0,-34} no shell script in ProgramArguments" -f $task)
     $skipped++; continue
   }
+  $isPs = $sh -match '\.ps1$'
   # Rewrite any absolute macOS path onto THIS repo.
   $scriptPosix = "$repoPosix/ops/" + (Split-Path $sh -Leaf)
+  $scriptWin = Join-Path $repo ('ops\' + (Split-Path $sh -Leaf))
   $rest = @($pargs | Where-Object {
-      $_ -is [string] -and $_ -ne $sh -and $_ -notmatch '\.sh$' -and $_ -notmatch '(^|/)(bash|sh)$'
+      $_ -is [string] -and $_ -ne $sh -and $_ -notmatch '\.(sh|ps1)$' -and
+      $_ -notmatch '(^|/)(bash|sh)$' -and $_ -notmatch '(?i)(^|\\|/)(pwsh|powershell)(\.exe)?$' -and
+      $_ -notmatch '^-(NoProfile|ExecutionPolicy|File)$' -and $_ -ne 'Bypass'
     })
-  $argLine = ('"{0}"' -f $scriptPosix) + $(if ($rest.Count) { ' ' + ($rest -join ' ') } else { '' })
+  # The exec differs by kind: bash for .sh, PowerShell for .ps1.
+  $exeForTask = if ($isPs) { 'powershell.exe' } else { $bash }
+  $argLine = if ($isPs) {
+    '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $scriptWin
+  }
+  else {
+    ('"{0}"' -f $scriptPosix)
+  }
+  if ($rest.Count) { $argLine += ' ' + ($rest -join ' ') }
 
   # LOG REDIRECTION. Every plist declares StandardOutPath/StandardErrorPath and
   # this translator read NEITHER, so launchd's redirection was silently dropped
@@ -133,10 +152,20 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
     }
   }
   if ($logLeaf) {
-    $logPosix = "$repoPosix/logs/$logLeaf"
-    $inner = "'$scriptPosix'" + $(if ($rest.Count) { ' ' + ($rest -join ' ') } else { '' }) +
-    " >> '$logPosix' 2>&1"
-    $argLine = '-lc "' + $inner + '"'
+    if ($isPs) {
+      # PowerShell needs -Command for a redirect too; *>> captures every stream
+      # (5.1 supports it), which is the -File equivalent of `>> log 2>&1`.
+      $logWin = Join-Path $repo ('logs\' + $logLeaf)
+      $inner = "& '$scriptWin'" + $(if ($rest.Count) { ' ' + ($rest -join ' ') } else { '' }) +
+      " *>> '$logWin'"
+      $argLine = '-NoProfile -ExecutionPolicy Bypass -Command "' + $inner + '"'
+    }
+    else {
+      $logPosix = "$repoPosix/logs/$logLeaf"
+      $inner = "'$scriptPosix'" + $(if ($rest.Count) { ' ' + ($rest -join ' ') } else { '' }) +
+      " >> '$logPosix' 2>&1"
+      $argLine = '-lc "' + $inner + '"'
+    }
   }
 
   # --- triggers -----------------------------------------------------------
@@ -219,7 +248,7 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
   if ($exists) { $updated++ } else { $created++ }
 
   if ($Install) {
-    $action = New-ScheduledTaskAction -Execute $bash -Argument $argLine -WorkingDirectory $repo
+    $action = New-ScheduledTaskAction -Execute $exeForTask -Argument $argLine -WorkingDirectory $repo
     # The 6-hour ExecutionTimeLimit is for BATCH jobs. The daemon is a long-lived
     # service -- the live "SignalDeck Daemon" task carries PT0S (unlimited) and was
     # created by another route -- so applying the batch cap to it would have Task
@@ -231,8 +260,19 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
     $limit = if ($isService) { [TimeSpan]::Zero } else { [TimeSpan]::FromHours(6) }
     $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
       -DontStopIfGoingOnBatteries -ExecutionTimeLimit $limit
+    # S4U, NOT the Interactive default. Register-ScheduledTask with -RunLevel
+    # and no -Principal registers the task Interactive, which puts it inside the
+    # console session and therefore reachable by console control events --
+    # 0xC000013A, the kill signature ops/fix-task-principals.ps1 exists to end.
+    # That whole fleet had already been converted to S4U; re-running THIS script
+    # silently converted them back. Measured 2026-08-12: one -Install run took
+    # the fleet from Interactive=0/S4U=14 to Interactive=11/S4U=5, and
+    # check-task-health caught it immediately. Registering the principal
+    # explicitly is what stops the recovery path from undoing the fix.
+    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+      -LogonType S4U -RunLevel Limited
     Register-ScheduledTask -TaskName $task -Action $action -Trigger $triggers `
-      -Settings $set -RunLevel Limited -Force | Out-Null
+      -Settings $set -Principal $principal -Force | Out-Null
     # The monthly trigger is assembled by hand from a CIM class whose property
     # shapes are not documented alongside the cmdlet, and a wrong shape can
     # register quietly as something else -- the exact failure this branch exists
