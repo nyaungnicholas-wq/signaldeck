@@ -748,3 +748,43 @@ under 1.5% of rows). The gate is reverted, no verdict moves, and the next
 attempt starts from a correct problem statement instead of repeating three dead
 ends. Grader re-pinned via chain **seq 66**; registry regenerated; anchors
 republished.
+
+## ROUND 6c — Q8: coverage refuted too, and this one was measured
+
+The previous round concluded the right predicate was coverage relative to that
+day's universe, and that the denominator lived outside the graded population.
+**The denominator does exist** — withheld forecasts are persisted in
+`predictions` with `n_used = 0 AND raw_prob = 0.5` as an exact filter
+(`store.ForecastDayStatsRaw` documents it). So rather than reason further I
+computed call-day coverage for every graded day:
+
+| horizon | graded day | graded n | call-day coverage |
+|---|---|--:|--:|
+| 1d | 20660 | **1** | **0.982** (325 of 331 forecast) |
+| 1d | 20659 | 6 | 0.982 |
+| 1w | 20665 | **1** | **0.985** |
+| 1d | 20671 | 43 | 0.169 |
+
+**It does not track thinness at all.** A day the model spoke about 98% of the
+universe on yields ONE graded observation. Thin graded days are produced by
+RESOLUTION AND SETTLEMENT ATTRITION — outcomes not yet resolved, or quarantined
+— not by the ensemble declining to forecast. Gating on coverage would drop the
+wrong days and keep the degenerate ones.
+
+**Two predicates are now refuted with data, not argument:**
+
+1. **Absolute observation floor** — conflates a small universe with a thin one.
+   Proven by a 3-symbol fixture in which a 3-row day is the entire
+   cross-section.
+2. **Call-day coverage** — uncorrelated with graded thinness, measured above.
+
+**What survives is narrower than both.** `clustered_ci`'s `design_effect`
+already prices unequal cluster sizes correctly, so the only genuine defect is
+that `MIN_DISTINCT_BLOCKS` can be satisfied by degenerate one-observation days.
+That fix belongs at the **admission test**, not the population — and it still
+needs a size predicate that does not misfire on a small universe.
+
+Left unresolved deliberately. Three implementations and two predicates in, the
+measurement is the part that is certainly right; shipping a gate that drops the
+wrong days would be worse than publishing the size of the problem and naming
+what is still unknown.
