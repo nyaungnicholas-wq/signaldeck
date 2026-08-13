@@ -13,13 +13,18 @@ What keeps the run NOT COMPLETE — two blocked, one deliberately staged:
   **Hardware, not code.**
 - **Web restart** — Q1's code is committed and built, but the running process
   cannot be killed without elevation. **Needs an elevated shell.**
-- **Q8 gate** — the padding is MEASURED and PUBLISHED (ROUND 6). The gate itself
-  needs a **data-path change, not a threshold**: three implementations were
-  tried and the third proved that an absolute observation floor is the WRONG
-  predicate (it calls a complete day thin in a small universe). The right one is
-  coverage relative to that day's universe, and that denominator does not exist
-  in the graded population — a withheld forecast leaves no resolved row. Proof
-  and dead ends are recorded in the constant's comment (ROUND 6b).
+- **Q8 gate** — the padding is MEASURED and PUBLISHED (ROUND 6). The gate is
+  UNRESOLVED, and deliberately so: **two candidate predicates are now refuted
+  with data.** An absolute observation floor conflates a small universe with a
+  thin one (ROUND 6b), and call-day coverage turns out to be uncorrelated with
+  graded thinness — a day the model forecast 98% of the universe on yields ONE
+  graded observation, because thinness comes from resolution/settlement
+  attrition, not from abstention (ROUND 6c, measured). What survives is
+  narrower: `design_effect` already prices unequal clusters, so the real defect
+  is only that `MIN_DISTINCT_BLOCKS` accepts degenerate days — a fix belonging
+  at the admission test, still needing a size predicate that does not misfire on
+  a small universe. Shipping a gate that drops the wrong days would be worse
+  than publishing the measurement and naming what is unknown.
 
 Two earlier findings were WRONG and are corrected in place: **O-i** (the daemon
 guard IS running on its 5-minute cadence) and **O-g** (grading failures were
