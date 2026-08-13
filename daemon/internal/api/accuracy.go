@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -407,37 +408,69 @@ func writeJSONStatus(w http.ResponseWriter, code int, body any) {
 // publishes, because refusing on a failed read would wedge the surface shut on
 // a transient database error rather than on evidence.
 func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now time.Time) (string, bool, error) {
-	days := 0
+	// Per-horizon windows. This used to take ONE global max distinct_days and
+	// probe horizon "1d" only, so the 1w rows were gated by 1d evidence: a
+	// collapse confined to the 1w cross-section could not refuse anything, and
+	// a 1d collapse refused rows it had not measured. Each horizon present in
+	// the registry is now checked against its OWN day stats and its own depth.
+	depth := map[string]int{}
 	for _, r := range reg.Rows {
-		if r.DistinctDays != nil && *r.DistinctDays > days {
-			days = *r.DistinctDays
+		if r.DistinctDays == nil || *r.DistinctDays <= 0 {
+			continue
+		}
+		_, horizon, _ := splitPredictor(r.Predictor)
+		if horizon == "" {
+			continue
+		}
+		if *r.DistinctDays > depth[horizon] {
+			depth[horizon] = *r.DistinctDays
 		}
 	}
-	if days <= 0 {
+	if len(depth) == 0 {
 		return "", false, nil
 	}
-	// Trading days are sparser than calendar days; widen so the calendar window
-	// actually contains `days` sessions rather than stopping short of them.
-	since := now.AddDate(0, 0, -(days*2 + 7))
-	stats, err := d.St.ForecastDayStats(ctx, "1d", since)
-	if err != nil {
-		return "", false, err
+	// Sorted so the refusal text is stable across polls.
+	horizons := make([]string, 0, len(depth))
+	for h := range depth {
+		horizons = append(horizons, h)
 	}
-	if len(stats) > days {
-		stats = stats[len(stats)-days:] // the newest `days` sessions
-	}
+	sort.Strings(horizons)
+
 	var bad []string
-	for _, st := range stats {
-		fd := forecastmon.DayStat{Day: st.Day, Symbols: st.Symbols, DistinctProbs: st.DistinctProbs}
-		if fd.Collapsed() {
-			bad = append(bad, fmt.Sprintf("%s (%d distinct across %d symbols)",
-				st.Day, st.DistinctProbs, st.Symbols))
+	total := 0
+	for _, h := range horizons {
+		days := depth[h]
+		// Trading days are sparser than calendar days; widen so the calendar
+		// window actually contains `days` sessions rather than stopping short.
+		//
+		// KNOWN APPROXIMATION, stated rather than papered over: the registry
+		// publishes how MANY days it graded, not WHICH ones, so this reproduces
+		// the window as "the newest `days` sessions". A collapsed day that sits
+		// inside the graded window but outside that newest-N slice is missed.
+		// The miss FAILS OPEN (publishes when it should refuse), which is the
+		// wrong direction — closing it needs the grader to emit its graded day
+		// list, not a smarter guess here.
+		since := now.AddDate(0, 0, -(days*2 + 7))
+		stats, err := d.St.ForecastDayStats(ctx, h, since)
+		if err != nil {
+			return "", false, err
+		}
+		if len(stats) > days {
+			stats = stats[len(stats)-days:] // the newest `days` sessions
+		}
+		total += len(stats)
+		for _, st := range stats {
+			fd := forecastmon.DayStat{Day: st.Day, Symbols: st.Symbols, DistinctProbs: st.DistinctProbs}
+			if fd.Collapsed() {
+				bad = append(bad, fmt.Sprintf("%s %s (%d distinct across %d symbols)",
+					h, st.Day, st.DistinctProbs, st.Symbols))
+			}
 		}
 	}
 	if len(bad) == 0 {
 		return "", false, nil
 	}
-	return buildCollapseReason(bad, len(stats)), true, nil
+	return buildCollapseReason(bad, total), true, nil
 }
 
 // buildCollapseReason is split out so the wording is assertable without a
