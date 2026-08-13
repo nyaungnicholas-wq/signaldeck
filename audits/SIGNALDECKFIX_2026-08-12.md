@@ -1,22 +1,27 @@
 # SignalDeck audit + repair — 2026-08-12
 
-**Overall status: NOT COMPLETE — but NO LONGER BLOCKED.**
+**Overall status: NOT COMPLETE — one item BLOCKED on elevation, the rest
+evidenced and open. Everything repaired is DEPLOYED and serving.**
 
-All four blocked items were authorized in Round 2 and are closed and verified
-(ROUND 2). Round 3 then landed **Q4 in Go and Python together** and **Q1**.
+Rounds 1–4. All four originally-blocked items are closed and verified; Q4 landed
+in Go and Python together and is live; 13 further backlog items are fixed.
 
 What keeps the run NOT COMPLETE:
-- the evidenced-but-unrepaired backlog in §3 — Q6–Q10, O-a…O-h, D-a…D-i;
-- **two deploys are pending, not two fixes.** Q4 and Q1 are committed, verified
-  and green, but not yet serving: the daemon deploy waits on one in-flight file
-  from a concurrent session, and the web server process cannot be restarted
-  without elevation. Neither is in a divergent state while it waits (see
-  ROUND 3).
+- ten evidenced-but-unrepaired findings: `Q8 Q9 Q10 O-b O-c O-d O-h O-j D-a D-i`
+  (listed with evidence at the foot of ROUND 4);
+- **one blocked item:** the web restart needs an elevated shell. Its code is
+  committed and built; only the running process is stale.
+
+Two earlier findings were WRONG and are corrected in place: **O-i** (the daemon
+guard IS running on its 5-minute cadence) and **O-g** (grading failures were
+never silent — the refusal path already exited 1).
 
 Repo: `C:\Users\Nicholas_N\Desktop\claude code\signaldeck`
 Branch `hmm-regime-and-pbo`. Entered at HEAD `1b8b876` with ~110 uncommitted
-paths from concurrent sessions (preserved, none reverted). Ends at HEAD
-`90cc2c1`; daemon serving `d09162c`.
+paths from concurrent sessions (preserved, none reverted, and the one file that
+blocked the final deploy was restored byte-for-byte). Ends at HEAD `8a1e9b1`
+with the daemon serving `33ac417` and the provenance check answering
+`OK - binary is HEAD`.
 
 ---
 
