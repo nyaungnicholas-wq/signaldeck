@@ -833,3 +833,39 @@ is the platform admitting it never had ten credible days to judge it on. Every
 move is conservative — the platform now claims less than it did this morning.
 
 Grader re-pinned via chain **seq 69**; registry regenerated; anchors republished.
+
+## ROUND 6e — the web blocker, proven and partially closed
+
+I had recorded the web restart as "needs elevation" on the strength of one
+failed `taskkill`. That was thin, so I established it properly.
+
+**Why the process is unreachable — diagnosed, not assumed.** PID 29984 returns
+an EMPTY owner, an EMPTY command line, and its parent (30432) no longer exists.
+That is the signature of a session-0 S4U orphan an interactive token can neither
+inspect nor signal. And the decisive test:
+
+```
+schtasks /End /TN "SignalDeck Web"
+  SUCCESS: The scheduled task "SignalDeck Web" has been terminated successfully.
+port still held? 2
+```
+
+`/End` reports success and frees nothing — it reaches the process Task Scheduler
+started, and that parent had already exited. So all three routes are exhausted:
+`Stop-ScheduledTask` (no cascade), `schtasks /End` (parent already gone),
+`taskkill /F` and `Stop-Process` (Access is denied). Elevation or a reboot.
+
+**What that left fixable, and is now fixed.** The audit's real complaint was
+never only "the web is down" — it was that *`check-task-health.ps1` exempts
+`SignalDeck Web` from both its checks, so the fleet gate is green with the
+product's UI dead*. That exemption is correct on its own terms (an on-demand
+service legitimately shows `0x00041306` and no next run), but it left nothing
+watching the services at all, and the script's own comment already named the
+honest signal without ever asking it.
+
+The gate now asks the ports. Pinned both directions before committing: 8322 and
+8323 listening report `=` and do not flag; an unused port is flagged. It is
+scheduled daily as of ROUND 5, so it runs unattended.
+
+So the remaining web work is exactly one elevated command, and the condition can
+no longer go unnoticed while waiting for it.
