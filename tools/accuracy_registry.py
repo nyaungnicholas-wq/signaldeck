@@ -138,13 +138,30 @@ MIN_DISTINCT_BLOCKS = 10
 #      leaves the POINT ESTIMATE over all days while the INTERVAL covers only
 #      thick ones, so the published accuracy and its published CI would describe
 #      different populations.
+#   3. Filtering in grade_directional_days — the ONE point every downstream
+#      statistic derives from, which fixes (1) and (2) — still fails, and the
+#      failure is the useful one. TestSurvivorshipBoundary builds a deliberate
+#      THREE-SYMBOL universe and asserts survivorship_coverage == 2/3. In a
+#      3-symbol universe a 3-observation day IS the entire cross-section, so an
+#      absolute row floor calls a complete day thin. Widening that fixture to 30
+#      symbols does not preserve the test: it changes the very ratio under test.
 #
-# Doing it properly means choosing one population and routing n, accuracy,
-# distinct_days and the interval through it together — a deliberate change that
-# moves published verdicts (on the 2026-08-12 corpus it takes both directional
-# rows from FAILED to INSUFFICIENT DAYS, because the honest block counts are 9
-# and 7 against a floor of 10). That belongs in its own change with its own
-# prereg amendment, not bolted onto a measurement.
+# THAT IS THE REAL FINDING, and it condemns the threshold, not the fixture: an
+# absolute observation floor conflates "few observations" with "thin
+# cross-section", and those are the same thing only when the universe is large.
+# The correct predicate is coverage RELATIVE to the universe that day.
+#
+# forecastmon.DayStat.CoverageRatio is exactly that predicate, and it cannot be
+# reused here: its own doc says "Zero on the resolved-outcome side, so
+# Forecast == Symbols there", i.e. coverage is identically 1.0 on the graded
+# side, because a withheld forecast leaves no resolved row to count. So the
+# denominator has to come from OUTSIDE the graded population — the forecast-side
+# day stats, or the active-symbol count for that day — and plumbing it here is a
+# data-path change, not a threshold tweak.
+#
+# Until then this constant measures and does not gate. The measurement is the
+# honest half: it sizes the padding (a third of the block count) without
+# pretending a number it cannot yet compute correctly.
 MIN_DAY_OBSERVATIONS = 30
 
 # --------------------------------------------------------------------------- #
