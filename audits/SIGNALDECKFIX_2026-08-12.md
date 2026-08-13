@@ -485,3 +485,99 @@ print the contributing count.
 Incidental confirmation that an earlier fix is live: `logs/eighty-events.jsonl`
 now shows a **30.0s** cycle gap where it showed 60.03s before — the A2
 dot-source parameter clobber is genuinely fixed in the running loop.
+
+---
+
+# ROUND 4 — backlog sweep, and everything is now DEPLOYED
+
+Daemon serving `33ac417`; provenance `OK - binary is HEAD`. Registry regenerated
+under the amended grader. Anchors republished. 122 Go packages, 271 Python
+tests, tsc + eslint all green.
+
+## The deploy blocker, resolved without touching another session's work
+
+`research/eighty/h0626.py` had been left MODIFIED since 18:36 by an Eighty Loop
+cycle that ended `insufficient-data`; the loop had since moved on to a different
+hypothesis. Abandoned-dirty, not in flight — and it blocks EVERY deploy
+indefinitely, which is worth recording as its own finding (**O-j**): the loop's
+own comment already notes that untracked scripts block `build_from_head`, but a
+modified-and-abandoned one does the same and nothing cleans it up.
+
+Reading `build_from_head` settled how to proceed honestly: it builds from
+`git archive HEAD` extracted to a temp dir and logs "not the working tree", so
+the binary is byte-identical whether or not that file is dirty. The check guards
+operator expectation, and the script itself names the remedy — "Commit or stash
+first." So: stashed that ONE path, deployed, restored.
+
+The restore did not come back clean on the first try, and that is worth stating.
+`git stash pop` returned the file with CRLF line endings (autocrlf), so its
+SHA-256 differed from what I found. Content was identical — the LF-normalised
+hash matched the original exactly — and I converted it back, verified
+`6df839d7…` byte-for-byte, and confirmed my stash entry was gone and the only
+remaining stash is a pre-existing one from 2026-08-04. The tree is in precisely
+the state I found it.
+
+## Q4 is now LIVE on both sides
+
+The SHA-pinned grader was unblocked the sanctioned way, not bypassed: the daemon
+restart ran `prereg-registrar`, which appended chain **seq 61,
+`grading-protocol: AMENDMENT — the grading protocol or the grader file
+changed`** (registrar logged "1 amendment(s)"). Only then did the grader accept
+its own hash.
+
+Published, and verified identical to the Go selector on the live corpus:
+
+| | 1d | 1w |
+|---|---|---|
+| before (calendar fold) | n=2399 acc=.4152 eff_n=489.9 | n=3186 acc=.3792 eff_n=508.5 |
+| **now (settled move)** | **n=2380 acc=.4294 eff_n=320.5** | **n=2256 acc=.3883 eff_n=190.5** |
+
+Effective N fell 490→320 and 508→190 — the correction for intervals that were
+~13–19% too narrow, entirely in the conservative direction. Verdicts unchanged:
+FAILED. Anchors republished (`7c98193` on GitHub `refs/heads/main`), liveness OK.
+
+## Fixed this round
+
+| ID | What | Status |
+|---|---|---|
+| **Q1** | Four surfaces called an ungraded backtest constant "measured accuracy" while `resolved_at` is NULL on all 37,857 structural rows. Relabelled BACKTESTED, incl. the markdown export where the figure leaves the app. Two hero tiles also summed the not-measured sentinel (0) into their means — a row shown as "—" was simultaneously counted as 0%. | FIXED |
+| **Q6** | Sticky retirement was INERT: `publication_verdicts` had zero rows, `PutPublicationVerdict` had no production caller, so `BuildVerdict`'s SourceHistory branch could never fire. `/api/accuracy` now persists on the FALSE→TRUE transition only. | FIXED |
+| **D-b** | `seeded_v1` written unconditionally; log reported the INTENDED list. A failed first boot marked the watchlist seeded PERMANENTLY. | FIXED |
+| **D-c** | Universe seed set its one-shot key when Alpaca keys were absent, so the ~2y backfill never ran — not then, not after credentials were added. | FIXED |
+| **D-d** | Prune failures returned silently while every sibling calls `dqSkip`; the operator was told the ARCHIVE failed and pointed at a dq record nobody wrote. Fixed at all three sites. | FIXED |
+| **D-e** | `feature-health` counted `graded++` before persisting and swallowed the marshal failure — verbatim the defect `modelhealth.go:198` documents fixing. | FIXED |
+| **D-f** | `model-health` turned DB read failures into a smaller "graded" count with `status=ok`, leaving the degraded gate unarmed. | FIXED |
+| **D-g** | Schema-contract violations published with `_ =` on both marshal and write, so health could report ALL CLEAR while workers were de-registered. | FIXED |
+| **D-h** | No `Server.ErrorLog` (net/http faults went to stderr only, lost under Task Scheduler) and NO panic recovery anywhere in HTTP — `recover()` existed once in the whole tree. Added both. | FIXED |
+| **O-a** | "Reclaim disk" moved backups to `~/.Trash`, a macOS concept; under Git Bash nothing empties it. Measured **10,044 MB** on the SAME volume, outside `assert_budget`'s view. Nothing deleted — size and volume now stated every run. | FIXED |
+| **O-e/O-f** | The worker's verify command IS the accept gate, and it was hand-copied from `GateSpecs` and had drifted: py-tests re-briefed the stale five-module list that GateSpecs' own comment says it replaced with discovery; publish-scan carried one machine's absolute path. Both now look the command up. | FIXED |
+| **O-g** | `accuracy-registry.sh` ended on a notification `if`. (Correction: the REFUSAL PATH already exits 1, so grading failures were never silent — the earlier "exit code carries no information" claim was too strong.) Now an explicit `exit 0`. | FIXED |
+| — | 4 UTF-8 em-dashes removed from `ops/*.ps1` (one mine). Task Scheduler runs these under PS 5.1, which reads ANSI. | FIXED |
+
+## Corrections to earlier rounds
+
+- **O-i was WRONG.** I claimed `daemon-guard.ps1` was not running on its
+  5-minute cadence, inferred from an empty `logs/daemon-provenance.log`. It IS
+  running: `SignalDeck Daemon Keepalive` fires every PT5M (LastRun 19:05:01,
+  result 0x0). daemon-guard exits at line 107 — "signaldeckd already running:
+  nothing to do" — BEFORE it reaches the provenance preflight, so an empty log
+  is the expected steady state. Corrected in memory too.
+- **O-g overstated.** See the table above.
+
+## Still open
+
+`Q8` (collapsed-coverage days weigh as full clusters) · `Q9` (`/api/accuracy`
+collapse gate approximates the window and only checks 1d) · `Q10` (`quarantine/`
+is not a data quarantine) · `O-b` (plist→Task translator drops
+`StandardOutPath`) · `O-c` (`install-windows-tasks -Install` would repoint the
+Daemon task through bash and break graceful stop) · `O-d` (health-check scripts
+have no scheduler entry) · `O-h` (offsite is one volume — a hardware decision) ·
+`O-j` (abandoned-dirty loop scripts block deploys) · `D-a` (75s ShutdownGrace vs
+15min worker timeout → exit 1 → auto-restart of an operator stop) · `D-i`
+(nothing self-probes the API listener).
+
+**BLOCKED, needs elevation:** the web restart. Q1 is committed and
+`next build` succeeded, but PID 29984 still serves the old bundle and cannot be
+killed — `taskkill /F` returns `Access is denied`, and `Stop-ScheduledTask`
+leaves it alive because `schtasks /End` does not cascade to the child holding
+port 8323. Everything else in this report is live.
