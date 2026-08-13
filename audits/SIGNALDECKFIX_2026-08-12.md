@@ -650,3 +650,58 @@ gap is the whole finding.
   not code.**
 - **Web restart** — Q1's code is committed and built; PID 29984 still serves the
   old bundle and `taskkill /F` returns `Access is denied`. **Needs elevation.**
+
+---
+
+# ROUND 6 — Q8
+
+**Measurement landed and published; the gate deliberately deferred, with the
+reason recorded in code rather than in a promise.**
+
+I had said Q8 "deserves a fresh session". That was a judgement, not a blocker, so
+I went back and did the work — and the work is what produced the real answer.
+
+**My stated obstacle was wrong, usefully.** I had claimed the blocker was a
+missing per-day coverage denominator. `forecastmon.DayStat` does carry one, but
+its own doc says *"Zero on the resolved-outcome side, so Forecast == Symbols
+there"* — coverage is always 1.0 on the graded side, because a withheld forecast
+produces no resolved row at all. So Q8 is not a coverage problem. It is thin days
+counting as full blocks.
+
+**Measured first.** The graded populations are bimodal with nothing in between:
+
+```
+1d  [1, 2, 4, 6, 23, 40, 43, 320, 322, 323, 323, 323, 324, 326]
+1w  [1, 4, 5, 7, 314, 317, 319, 320, 321, 324, 324]
+```
+
+`measure_thin_day_exclusion` now sizes it per horizon and publishes it beside the
+settlement and stale-feed exclusions. Live: **1d loses 5 days of 14 for 36 rows
+of 2,380; 1w loses 4 of 11 for 17 of 2,256.** Under 1.5% of the rows, a third of
+the block count that authorises publishing an interval. Verdicts unchanged
+(still FAILED, n and distinct_days untouched) because this changes no
+population — verified after regenerating.
+
+The threshold is not invented: `MIN_DAY_OBSERVATIONS` mirrors
+`forecastmon.MinSymbolsForCollapse`, already defined as the size below which a
+day is too thin to test, and 30 falls in the empty gap above.
+
+**Two implementations were tried and both were wrong.** Recorded in the
+constant's comment so the next attempt does not repeat them:
+
+1. A `HAVING` on the day tally broke **12 tests of unrelated behaviour** —
+   stale-feed, survivorship, retire flags — because it amputates the graded
+   population for every caller. Making them pass would have meant rewriting a
+   dozen fixtures that are not about this, which is fitting the tests to the code.
+2. Filtering only inside `clustered_ci_blocks` fixes the block count but leaves
+   the POINT ESTIMATE over all days while the INTERVAL covers only thick ones —
+   the published accuracy and its CI would describe different populations.
+
+Doing it properly means routing n, accuracy, `distinct_days` and the interval
+through ONE population together. On this corpus that moves both directional rows
+from FAILED to **INSUFFICIENT DAYS** (honest block counts 9 and 7 against a floor
+of 10). That is a real change in published output and deserves its own change and
+its own prereg amendment — not a bolt-on.
+
+Grader SHA re-pinned the sanctioned way again: chain **seq 64,
+`grading-protocol: AMENDMENT`**, then the grader accepted its own hash.
