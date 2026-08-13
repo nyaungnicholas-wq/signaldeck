@@ -58,7 +58,11 @@ $pr = New-Object Security.Principal.WindowsPrincipal($id)
 if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "REFUSED: not elevated. Freeing this port is access-denied without admin." -ForegroundColor Red
     Write-Host "Re-run from an elevated PowerShell:" -ForegroundColor Yellow
-    Write-Host "  powershell -File ops\restart-web.ps1" -ForegroundColor Yellow
+    # Echo this script's OWN resolved path, never a relative one. A refusal that
+    # hands back `ops\restart-web.ps1` only works if the operator already stands
+    # in the repo root - and this exact handover failed that way once, with
+    # "The argument 'ops\fix-task-principals.ps1' ... does not exist".
+    Write-Host ("  powershell -File `"{0}`"" -f $PSCommandPath) -ForegroundColor Yellow
     exit 2
 }
 Write-Host ("elevated as {0}" -f $id.Name) -ForegroundColor Green
