@@ -253,6 +253,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// Workers are attached with Add before Start.
 	runner := workers.NewRunner(st)
 	fleet := []workers.Worker{
+		// api.Serve is not a Worker, so it has NO worker_runs row and both
+		// health.StaleWorkers and health.FailingWorkers are structurally unable
+		// to see it. This is the only thing in the fleet that notices the
+		// product's own surface going unreachable. See internal/pipeline/apiprobe.go.
+		&pipeline.APIProbe{Addr: cfg.HTTPAddr},
 		cryptolive.New(st, cfg.TickstreamURL, cryptoSym.ID),
 		&pipeline.CryptoBars{St: st, Kraken: krakenClient},
 		backfiller,
