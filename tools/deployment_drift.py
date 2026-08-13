@@ -341,7 +341,34 @@ def newest_boot_ts(con: sqlite3.Connection) -> int | None:
         "SELECT MAX(started_at) FROM ("
         "  SELECT started_at, started_at - LAG(started_at) OVER (ORDER BY started_at) AS gap"
         "  FROM worker_runs) WHERE gap IS NULL OR gap >= ?", (BOOT_QUIET_SECS,)).fetchone()
-    return row[0] if row else None
+    quiet_boot = row[0] if row else None
+
+    # A REVISION CHANGE IS A BOOT, EXACTLY -- and it beats the quiet-gap guess.
+    #
+    # The gap heuristic only sees a boot when the fleet went silent for
+    # BOOT_QUIET_SECS. Deploys closer together than that are invisible to it, so
+    # it keeps pointing at an older boot and the window then spans SEVERAL
+    # binaries. Measured 2026-08-12 during a run of rapid deploys: the heuristic
+    # returned 18:42 while the running revision had only started writing at
+    # 21:10, so twelve binaries' rows sat inside the window and the stamp ratio
+    # read 4.7%. The check then reported "the deployed binary is not stamping the
+    # rows it writes" -- which was FALSE. Every one of those rows carried the
+    # stamp of whichever binary actually wrote it, and the running one was
+    # stamping correctly.
+    #
+    # A row stamped with a DIFFERENT revision is positive evidence that a
+    # different binary was running, so the current revision's first row is an
+    # exact lower bound on the current uptime session. Take the LATER of the two:
+    # the heuristic still covers the case the revision signal cannot see, a
+    # redeploy that produces the SAME revision (a rebuild of one commit).
+    cur = con.execute(
+        "SELECT MIN(started_at) FROM worker_runs WHERE revision = ("
+        "  SELECT revision FROM worker_runs WHERE COALESCE(revision,'') <> ''"
+        "  ORDER BY started_at DESC LIMIT 1)").fetchone()
+    rev_boot = cur[0] if cur and cur[0] is not None else None
+
+    candidates = [t for t in (quiet_boot, rev_boot) if t is not None]
+    return max(candidates) if candidates else None
 
 
 def check_row_revision_stamp(con: sqlite3.Connection) -> dict:
