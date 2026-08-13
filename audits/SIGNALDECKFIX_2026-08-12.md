@@ -1,10 +1,17 @@
 # SignalDeck audit + repair — 2026-08-12
 
-**Overall status: NOT COMPLETE (partially BLOCKED).**
+**Overall status: NOT COMPLETE — but NO LONGER BLOCKED.**
+
+All four blocked items were authorized in Round 2 and are closed and verified
+(see ROUND 2 at the foot of this file). What keeps the run NOT COMPLETE is the
+evidenced-but-unrepaired backlog in §3 — Q1, Q6–Q10, O-a…O-i, D-a…D-i — plus
+Q4, which is deliberately deferred because it must land in Go and Python
+together.
 
 Repo: `C:\Users\Nicholas_N\Desktop\claude code\signaldeck`
-Branch `hmm-regime-and-pbo`, HEAD `1b8b876`, working tree carried ~110 uncommitted
-paths from concurrent sessions on entry (preserved, none reverted).
+Branch `hmm-regime-and-pbo`. Entered at HEAD `1b8b876` with ~110 uncommitted
+paths from concurrent sessions (preserved, none reverted). Ends at HEAD
+`d09162c`, tree CLEAN, daemon running that exact commit.
 
 ---
 
@@ -259,3 +266,125 @@ not count toward `FailingWorkers` — *is* pinned, by `health_test.go:186`
   them outright needs the real scheduler.
 - I did not read `daemon/.env` (gitignored). No secret values were printed;
   the only `ops/` secret matches are synthetic decoys in the scanner's self-test.
+
+---
+
+# ROUND 2 — the four blocked items, authorized and completed
+
+Nicholas authorized all four. Status: **all four closed and verified.**
+
+## B1 — Deploy. DONE, VERIFIED.
+
+The blocker dissolved mid-session: a concurrent session committed the whole
+working tree as `f5b5085`, taking it from 138 dirty paths to 8 (all mine) and
+putting the 2026-08-11 audit's repairs into HEAD. My accuracy work committed as
+`d09162c` with an explicit pathspec, leaving the tree **clean** — so
+`ops/signaldeck-ctl.sh deploy` ran its normal path with no workaround and no
+weakening of its clean-tree gate.
+
+```
+MANIFEST OK — a fresh clone contains every load-bearing path.
+build: signaldeckd from the extracted commit d09162c (not the working tree)
+deploy VERIFIED: daemon is running commit d09162c (resolvable).
+```
+
+Verified independently, not taken from the script:
+
+- `ops/run-daemon-with-provenance.ps1 -CheckOnly` → **`OK - binary is HEAD (d09162c)`**.
+  The same check reported `STALE BINARY … behind 19 commit(s)` before.
+- `worker_runs.revision` shows `d09162c…` on 97 runs within ten minutes.
+- **`forecast-monitor` changed message.** It no longer reports the false
+  `RAW MODEL COLLAPSE`; it now reports `FORECAST COVERAGE STARVED on 7/14
+  day(s) … only 286 of 2907 symbols received a forecast`. The L1 fix is live and
+  the L2 coverage monitor is reporting a real, different condition — the known
+  feature-starvation issue, not an artifact.
+
+## B2 — Web UI. DONE, VERIFIED.
+
+`SignalDeck Web` was Ready-but-stopped since 2026-08-07. Started; port 8323
+listening (PID 29984), `/` and `/accuracy` both HTTP 200.
+
+Incidental finding while doing it: **the daemon was also down**, and it died at
+~17:53 — about two minutes BEFORE I started the web task, so the web start did
+not cause it. Exit code `0x00041306` is the `schtasks /End` signature, both
+tasks are S4U (so not the `0xC000013A` console-kill class), and nothing had
+restarted it: `logs/daemon-provenance.log` contains only my two manual runs from
+00:29/00:31, meaning **`ops/daemon-guard.ps1` has not run on its 5-minute
+cadence at all**. That is a live gap — the auto-restart everyone assumes exists
+did not fire. Filed as O-i below.
+
+## B3 — Anchor publishing. DONE, VERIFIED.
+
+Repo did not exist. Created `nyaungnicholas-wq/signaldeck-anchors` — **PRIVATE,
+his explicit choice** over public — and cloned it to the script's DEFAULT path
+`~/.signaldeck/anchor-publish`, so future runs need no env var.
+
+Verified the push actually reached a third party rather than committing locally
+(the precise distinction the 2026-07-27 failure blurred):
+
+```
+git ls-remote → 4f2f251…  refs/heads/main
+remote contents → anchors.log 138B, prereg.log 84B, accuracy_registry.json,
+                  PREREGISTRATION.md, README.md
+tools/anchor_liveness.py → verdict: OK  (last published 2026-08-13T01:28:53Z)
+```
+
+**A defect I caused and corrected.** Rehearsing the publish against a temporary
+local bare repo succeeded, and the script — correctly — recorded
+`meta.anchor_last_published`. That made `anchor_liveness` report anchors as
+externally timestamped when they had only been pushed to a scratch repo on this
+same machine. I deleted the false marker (restoring `NEVER PUBLISHED`) before
+the real push, so the OK above is earned. Left unnoticed it would have been a
+textbook instance of the defect class this audit exists to find.
+
+## B4 — Published accuracy numbers. DONE for Q2/Q3/Q5; Q4 deliberately deferred.
+
+`daemon/internal/store/gradeablepop.go` is now the single Go definition of a
+gradeable row, ported fragment-for-fragment from `tools/accuracy_registry.py`.
+
+**Verified against the live corpus before any Go was written**, then again on
+the SQL the compiled code emits: the port reproduces the canonical grader
+population EXACTLY, both horizons, run back-to-back with the grader.
+
+| | 1d | 1w |
+|---|---|---|
+| grader (canonical) | n=2399 acc=0.41517 | n=3186 acc=0.37916 |
+| Go, new | n=2399 acc=0.41517 | n=3186 acc=0.37916 |
+| Go, before | n=17099 acc=0.4766 | n=16183 acc=0.4749 |
+
+So the app was overstating its evidence **7.1x** and its accuracy by **6.1pp**
+(1w: 5.6x, +11.0pp) against its own published scoreboard. Both surfaces now
+agree by construction.
+
+`ResolvedPredictionOutcomes` gained the same epoch floor, which also makes its
+`LIMIT 120000` **non-binding** (77,904 post-epoch 1d rows, 33,175 1w), so the
+silent 39% truncation is gone rather than merely smaller.
+
+Two things worth recording about the method:
+
+- **A worker got it materially wrong and review caught it.** The delegated draft
+  left `settlementCloseSecs = 0` while its own comment claimed the value was
+  "substituted verbatim" and warned that leaving 0 "would silently re-inflate
+  n". The real values are 16h (stocks) / 24h (crypto). It also collapsed the
+  per-market branch entirely. Rewritten.
+- **Eight test fixtures were grading an empty set** the moment the epoch landed
+  — anchored in 1970/2017/2020/2023/2024. Rebased onto the epoch, which is what
+  made the gap visible rather than silent.
+
+**Q4 (fold on the settled move, not the calendar day) is NOT done, on purpose.**
+`internal/marketdata/settleday.go` measures the calendar fold as a 1.41x
+overstatement of independent N, and `DirectionalRecord` already folds correctly
+(`TestDirectionalRecordFoldsOnTheSettledMove`). But the **Python grader still
+folds on `trading_day(ts)`**. Changing only the Go side would re-open exactly
+the Go/Python divergence this commit closed. Measured effect if both change
+together: 1d n 2399→2380 acc .4152→.4294, 1w n 3186→1934. Verdicts stay FAILED
+either way, so it is safe — but it must land in BOTH or neither, and it changes
+the published registry. That is one deliberate change, not a leftover.
+
+## New finding from Round 2
+
+- **O-i** `ops/daemon-guard.ps1` is not running on its documented 5-minute
+  cadence. `logs/daemon-provenance.log` — which it writes on every run via the
+  preflight installed in Round 1 — contains only the two manual invocations.
+  The daemon sat down until manually restarted. The log is now the cheap way to
+  confirm the guard is alive; it should have entries every 5 minutes.

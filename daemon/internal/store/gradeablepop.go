@@ -52,6 +52,27 @@ func dayFold(tsExpr string) string {
 		strconv.Itoa(secondsPerDay) + ")"
 }
 
+// settleDayFold is the SQL form of md.SettleDay and of the grader's
+// settle_day() — the unit of INDEPENDENT EVIDENCE, which is not the calendar
+// day. Predictions issued Friday, Saturday and Sunday resolve against ONE
+// settled move (Friday→Monday), yet a calendar fold counts three independent
+// observations: measured, a 1.41x overstatement of effective N, which narrows
+// every published interval by ~19% in the flattering direction.
+//
+// settle_ts is the base bar the row was graded from, and two predictions share
+// an outcome exactly when they share a base bar. NULL or <= 0 means the settled
+// move is unknown (column predates the row, or no bar at/before it), and falls
+// back to the calendar day rather than dropping the row — so this improves
+// monotonically as the backfill drains. In SQL, `NULL > 0` is NULL, so a NULL
+// settle_ts takes the ELSE branch, matching the Python guard exactly.
+//
+// The two implementations must not drift: accuracy_registry.py folds the same
+// way, and the Go/Python populations are compared on the live corpus.
+func settleDayFold(settleExpr, tsExpr string) string {
+	return dayFold("(CASE WHEN " + settleExpr + " > 0 THEN " + settleExpr +
+		" ELSE " + tsExpr + " END)")
+}
+
 // Settlement building blocks — accuracy_registry.py _HORIZON_SECS / _BASE_TS /
 // _FWD_TS / _CLOSE_OFFSET / SETTLEMENT_AT, verbatim.
 const (
@@ -94,8 +115,9 @@ func settlementAtSQL() string {
 // takes the same position for the same reason (settlement_clause() returns ""
 // when there is nothing to reconstruct against). See SettlementApplicable.
 func gradeableDedupSQL(withReconstruction bool) string {
-	q := "SELECT symbol_id, horizon, prob, up, ts," +
-		" ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, " + dayFold("po.ts") +
+	q := "SELECT symbol_id, horizon, prob, up, ts, settle_ts," +
+		" ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, " +
+		settleDayFold("po.settle_ts", "po.ts") +
 		" ORDER BY ts DESC) rn" +
 		" FROM prediction_outcomes po" +
 		" WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL" +

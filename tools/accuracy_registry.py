@@ -1223,8 +1223,54 @@ def trading_day(ts: int) -> int:
     return (ts - TRADING_DAY_OFFSET_SECS) // SECONDS_PER_DAY
 
 
+def settle_day(settle_ts: int | None, ts: int) -> int | None:
+    """Fold a RESOLVED row to its unit of independent evidence.
+
+    Mirrors daemon/internal/marketdata/settleday.go exactly; the two must not
+    drift. trading_day(ts) folds on the calendar day, which is the right unit
+    off a 24/7 market but not off one that closes: predictions issued Friday,
+    Saturday and Sunday resolve against ONE settled move (Friday->Monday), yet
+    the calendar fold counts three independent observations. Measured on the
+    live corpus 2026-08-08, stock 1d resolved rows folded to 15,862
+    (symbol, trading-day) buckets but only 11,256 (symbol, settled-move)
+    buckets — a 1.41x overstatement of effective N, which narrows every
+    published interval by ~19% in the direction that flatters the platform.
+
+    settle_ts is the base bar the row was graded from and is the true key: two
+    predictions share an outcome exactly when they share a base bar. It is
+    relabelled through trading_day rather than used raw so the result stays in
+    the same numeric space as every other day key (a raw bar timestamp ~1.7e9
+    and a day index ~2e4 used as the same key is a trap even when they never
+    collide). The relabelling is lossless.
+
+    settle_ts <= 0 or NULL means the settled move is UNKNOWN (the column
+    predates the row, or no bar exists at or before it). An unknown settle bar
+    falls back to the calendar day rather than being dropped, so this function
+    monotonically improves as the backfill drains.
+    """
+    if settle_ts is not None and settle_ts > 0:
+        return trading_day(settle_ts)
+    return trading_day(ts)
+
+
+def settle_ts_expr(con: sqlite3.Connection, alias: str = "") -> str:
+    """`settle_ts` when prediction_outcomes carries it, else the literal NULL.
+
+    Same doctrine as settlement_clause(): a fold that CANNOT be computed must
+    degrade, not explode. Snapshots and in-memory fixtures build a minimal
+    prediction_outcomes without settle_ts, and settle_day(NULL, ts) falls back
+    to trading_day(ts) — the honest calendar-day answer — instead of raising
+    `no such column`. Live sources have the column fully backfilled, so this
+    returns the real one wherever it matters.
+    """
+    cols = {r[1] for r in con.execute("PRAGMA table_info(prediction_outcomes)")}
+    if "settle_ts" not in cols:
+        return "NULL"
+    return f"{alias}settle_ts" if alias else "settle_ts"
+
+
 def register_fold(con: sqlite3.Connection) -> sqlite3.Connection:
-    """Make trading_day() callable from SQL on `con`.
+    """Make trading_day() and settle_day() callable from SQL on `con`.
 
     Called at every point of USE rather than only in connect(), because the
     grader is handed connections it did not open — snapshots, in-memory test
@@ -1232,6 +1278,7 @@ def register_fold(con: sqlite3.Connection) -> sqlite3.Connection:
     some paths and not others. Re-registering is a harmless overwrite.
     """
     con.create_function("trading_day", 1, trading_day)
+    con.create_function("settle_day", 2, settle_day)
     return con
 
 
@@ -1385,7 +1432,9 @@ def measure_settlement_quarantine(con: sqlite3.Connection | None) -> dict:
     {base} GROUP BY po.horizon
     """
     graded = f"""
-    SELECT po.horizon, COUNT(DISTINCT po.symbol_id || ':' || trading_day(po.ts))
+    SELECT po.horizon,
+           COUNT(DISTINCT po.symbol_id || ':' ||
+                 settle_day({settle_ts_expr(con, "po.")}, po.ts))
     {base} GROUP BY po.horizon
     """
     register_fold(con)
@@ -1769,7 +1818,9 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
     q = f"""
     WITH {stale_feed_sql(con)[0]}dedup AS (
       SELECT symbol_id, horizon, prob, up, ts,
-             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
+             {settle_ts_expr(con)} AS settle_ts,
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon,
+                                settle_day({settle_ts_expr(con)}, ts)
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes po
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
@@ -1777,7 +1828,7 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
         {settlement_clause(con)}
         {stale_feed_sql(con)[1]}
     )
-    SELECT horizon, trading_day(ts) AS day,
+    SELECT horizon, settle_day(settle_ts, ts) AS day,
            COUNT(*),
            SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
            SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
@@ -1813,7 +1864,9 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
     q = f"""
     WITH {stale_feed_sql(con)[0]}dedup AS (
       SELECT symbol_id, horizon, prob, up, ts,
-             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
+             {settle_ts_expr(con)} AS settle_ts,
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon,
+                                settle_day({settle_ts_expr(con)}, ts)
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes po
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
@@ -1826,7 +1879,7 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
            COUNT(*),
            AVG(prob),
            SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
-           COUNT(DISTINCT trading_day(ts))
+           COUNT(DISTINCT settle_day(settle_ts, ts))
     FROM dedup WHERE rn = 1
     GROUP BY horizon, bin ORDER BY horizon, bin
     """
