@@ -128,5 +128,68 @@ check "sd_svc_start reports 2 (NOT REGISTERED) for a service that does not exist
 check "sd_svc_start does not report success for a service that does not exist" \
   "$([ "$NOSUCH" != "0" ] && echo 1 || echo 0)"
 
+# THE DORMANT pgrep BRANCH MUST NOT ANSWER "NOT RUNNING" FOR A LIVE DAEMON.
+#
+# pgrep is absent under Git Bash, so sd_is_running takes the powershell.exe
+# branch here and the pgrep branch never executes. Installing procps would
+# activate it — and this file has already been broken exactly that way once,
+# when adding a sqlite3 CLI on 2026-08-04 moved sd_sqlite onto an untested path
+# and every backup began failing. On Windows the process is signaldeckd.exe, so
+# a bare `pgrep -x signaldeckd` misses it and reports a LIVE daemon as down,
+# which lets the offline backup VACUUM INTO against it.
+#
+# Simulate that machine with a fake pgrep that only knows *.exe names.
+FAKEBIN="$(mktemp -d)"
+cat >"$FAKEBIN/pgrep" <<'FAKE'
+#!/bin/sh
+# Windows-shaped process table: only "<name>.exe" exists.
+[ "$2" = "signaldeckd.exe" ] && exit 0
+exit 1
+FAKE
+chmod +x "$FAKEBIN/pgrep"
+PGREP_RC="$(PATH="$FAKEBIN:$PATH"; sd_is_running signaldeckd >/dev/null 2>&1; echo $?)"
+check "sd_is_running finds a Windows .exe process when pgrep IS installed" \
+  "$([ "$PGREP_RC" = "0" ] && echo 1 || echo 0)"
+PGREP_ABSENT_RC="$(PATH="$FAKEBIN:$PATH"; sd_is_running definitelynotaprocess >/dev/null 2>&1; echo $?)"
+check "sd_is_running still reports a genuinely absent process as not running" \
+  "$([ "$PGREP_ABSENT_RC" != "0" ] && echo 1 || echo 0)"
+rm -rf "$FAKEBIN"
+
+# A WRITE THAT RACES A LOCK MUST WAIT, NOT DIE.
+#
+# The sqlite3-CLI branch of sd_sqlite/sd_sqlite_read had no busy timeout while
+# the Python fallback opened with timeout=120, so on this machine — where the
+# CLI is installed and therefore preferred — a write that met a lock failed
+# instantly. Measured 2026-08-12: the offline backup wrote its 4.7GB file while
+# the daemon was down, then lost the `backup_last_ts` meta update to "database
+# is locked" when the daemon came back, and because that failure is only a WARN
+# the backup reported success while the failsafe's gate key went unwritten. The
+# failsafe then took a redundant full VACUUM INTO against the live daemon.
+LOCKDB="$(mktemp -u)-lock.db"
+sd_sqlite "$LOCKDB" "CREATE TABLE t (k TEXT PRIMARY KEY, v TEXT);" >/dev/null 2>&1
+LOCKPY="$(sd_py)"
+if [ -n "$LOCKPY" ]; then
+  # Hold a write lock for ~3s in the background, then release it.
+  "$LOCKPY" -c '
+import sqlite3, sys, time
+con = sqlite3.connect(sys.argv[1], isolation_level=None)
+con.execute("BEGIN IMMEDIATE")
+time.sleep(3)
+con.execute("COMMIT")
+con.close()
+' "$LOCKDB" &
+  LOCKPID=$!
+  sleep 1  # ensure the lock is held before the racing write starts
+  sd_sqlite "$LOCKDB" "INSERT OR REPLACE INTO t(k,v) VALUES('backup_last_ts','1');" >/dev/null 2>&1
+  rc=$?
+  wait "$LOCKPID" 2>/dev/null
+  check "sd_sqlite WAITS OUT a locked database instead of failing instantly" \
+    "$([ "$rc" = "0" ] && echo 1 || echo 0)"
+  GOT="$(sd_sqlite_read "$LOCKDB" "SELECT v FROM t WHERE k='backup_last_ts';" 2>/dev/null | tr -d '[:space:]')"
+  check "the write that waited actually landed" \
+    "$([ "$GOT" = "1" ] && echo 1 || echo 0)"
+  rm -f "$LOCKDB"
+fi
+
 if [ "$fails" -gt 0 ]; then echo "$fails check(s) failed"; exit 1; fi
 echo "all portability shim checks passed"

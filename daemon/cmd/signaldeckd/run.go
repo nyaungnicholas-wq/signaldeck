@@ -609,6 +609,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		CurrentState: func(ctx context.Context, symbolID int64) (map[md.Horizon]string, error) {
 			return pipeline.CurrentState(ctx, st, symbolID)
 		},
+		// The fleet's DECLARED cadences, so /api/fleet-health judges staleness
+		// against the schedule rather than against observed gaps a restart
+		// storm can compress. Read lazily (not snapshotted here) because the
+		// fleet is still being appended to at this point in wiring.
+		WorkerIntervals: runner.Intervals,
 		Subscribe: func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
 			return subscribe(ctx, st, alpacaClient, backfiller, streamer, symbol, market)
 		},

@@ -106,9 +106,29 @@ const MinConsecutiveFailures = 3
 //     the streak of a worker that is failing underneath it.
 //
 // The result is sorted by name.
-func FailingWorkers(statusesNewestFirst map[string][]string) []string {
+func FailingWorkers(statusesNewestFirst map[string][]string, longRunning map[string]bool) []string {
 	var failing []string
 	for name, statuses := range statusesNewestFirst {
+		// A LONG-RUNNING worker (Interval <= 0: the stream ingestors) that is
+		// currently in flight is connected and streaming. Its single Run blocks
+		// until the daemon exits, so it produces NO completed rows that could
+		// ever break an older error streak.
+		//
+		// Without this, skipping the "running" row and counting the errors
+		// beneath it made the verdict unclearable. Measured live 2026-08-13:
+		// crypto-live errored every 60s from 17:59 while tickstream was down,
+		// reconnected at 18:03:50, and was still reported failing at 21:08 —
+		// over three hours of healthy streaming — which also held health.json's
+		// `ok` false for the whole period, since ok requires len(failing)==0.
+		// A status that cannot clear is a status nobody can act on.
+		//
+		// api.failingFromRuns already fixed this for its own surface, using run
+		// DURATIONS to tell recovery from a retry. This function only receives
+		// statuses, so it uses the discriminator it does have — the declared
+		// interval — which is the same one StaleWorkers already skips on.
+		if longRunning[name] && len(statuses) > 0 && statuses[0] == "running" {
+			continue
+		}
 		streak := 0
 		for _, s := range statuses {
 			if s == "running" {
@@ -210,7 +230,15 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("query worker_runs statuses: %w", err)
 	}
-	failing := FailingWorkers(recent)
+	// Long-running workers come from the SAME Specs that StaleWorkers skips on,
+	// so the two rules cannot disagree about which workers are stream ingestors.
+	longRunning := make(map[string]bool, len(w.Specs))
+	for _, s := range w.Specs {
+		if s.Interval <= 0 {
+			longRunning[s.Name] = true
+		}
+	}
+	failing := FailingWorkers(recent, longRunning)
 
 	// A refused override means the daemon is running a configuration the
 	// operator did not choose. Reported always; unhealthy ONLY when it governs

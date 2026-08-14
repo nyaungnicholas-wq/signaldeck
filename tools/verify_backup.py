@@ -67,22 +67,43 @@ def verify(path, live_db=None):
         except sqlite3.Error as e:
             problems.append(f"error checking anchors: {e} (anchor)")
 
-        # 6. Live DB comparison
+        # 6. Live DB comparison — FAILS CLOSED.
+        #
+        # This is the check that catches a backup which copied cleanly but holds
+        # a truncated ledger, so it is the one whose silent absence is most
+        # dangerous: a stale backup that passes verification is worse than no
+        # backup, because nobody goes looking for it.
+        #
+        # It used to end in `except Exception: pass`, which skipped the whole
+        # comparison on any error and left `problems` empty — the backup then
+        # reported VERIFIED having never been compared. The live DB is a
+        # multi-GB SQLite under continuous write load, so "could not read it"
+        # is an ordinary outcome here, not a rare edge. --live is passed by
+        # ops/signaldeck-backup-offline.sh on every run, so a comparison that
+        # was REQUESTED and could not be made is a problem to report, never a
+        # step to skip. Matches checks 3 and 4 above, which already append a
+        # problem rather than swallowing sqlite3.Error.
         if live_db:
+            live_conn = None
             try:
-                if os.path.exists(live_db) and os.access(live_db, os.R_OK):
+                if not os.path.exists(live_db):
+                    problems.append(f"staleness check requested but live db is missing: {live_db}")
+                elif not os.access(live_db, os.R_OK):
+                    problems.append(f"staleness check requested but live db is not readable: {live_db}")
+                else:
                     live_conn = sqlite3.connect("file:" + live_db + "?mode=ro", uri=True)
-                    live_cursor = live_conn.cursor()
-                    live_count = live_cursor.execute("SELECT COUNT(*) FROM prediction_ledger").fetchone()[0]
-                    live_conn.close()
-                    
+                    live_count = live_conn.execute(
+                        "SELECT COUNT(*) FROM prediction_ledger").fetchone()[0]
                     if ledger_count < (live_count * 0.5):
                         problems.append(
                             f"backup prediction_ledger count {ledger_count} is too stale "
                             f"compared to live count {live_count} (ledger)"
                         )
-            except Exception:
-                pass # Skip live_db check silently if unreadable or error occurs
+            except Exception as e:
+                problems.append(f"staleness check against live db {live_db} could not run: {e}")
+            finally:
+                if live_conn:
+                    live_conn.close()
 
     except Exception as e:
         problems.append(f"unexpected error during verification: {str(e)}")

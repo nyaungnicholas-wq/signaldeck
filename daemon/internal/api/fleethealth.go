@@ -214,7 +214,21 @@ func (d Deps) modelHealthFor(ctx context.Context, name string) (fleetmon.Model, 
 func (d Deps) systemHealth(ctx context.Context) (fleetmon.System, error) {
 	var sys fleetmon.System
 
-	runs, err := d.St.RecentWorkerRuns(ctx, 2000)
+	// Per-worker, not a global newest-N read. A fixed ROW cap fed a TIME-based
+	// verdict: at ~3,000 runs/day the newest 2000 rows span only 3.6 hours, so
+	// every daily- or weekly-cadence worker had ZERO rows in the window, was
+	// never entered into `starts`, and could not be reported stale however long
+	// it had been dead — 13f-poller, congress-poller, cot-poller,
+	// finra-shortint, finra-shorts, signalbt-weekly, weekly-report, i.e. exactly
+	// the workers whose death is least self-evident. PruneWorkerRuns already
+	// retains 20 runs per worker, so the history was kept and simply not read
+	// this way.
+	//
+	// This read was deliberately NOT changed until the cadence estimator below
+	// was fixed: on its own it took the flagged set from 41 to 70 of 101
+	// workers, trading silent blindness for noise. It is safe now that staleness
+	// is judged against the DECLARED interval rather than an inferred one.
+	runs, err := d.St.RecentWorkerRunsPerWorker(ctx, 20)
 	if err != nil {
 		return sys, err
 	}
@@ -234,13 +248,39 @@ func (d Deps) systemHealth(ctx context.Context) (fleetmon.System, error) {
 		statuses[run.Worker] = append(statuses[run.Worker], run.Status)
 	}
 	sys.TotalWorkers = len(starts)
-	sys.FailingWorkers = health.FailingWorkers(statuses)
+	// Resolved ONCE and shared by both rules below: the failing check needs it to
+	// recognise stream ingestors, and the staleness check needs it for cadence.
+	// One source, so the two verdicts cannot disagree about what a worker is.
+	var declared map[string]time.Duration
+	if d.WorkerIntervals != nil {
+		declared = d.WorkerIntervals()
+	}
+	longRunning := make(map[string]bool, len(declared))
+	for n, iv := range declared {
+		if iv <= 0 {
+			longRunning[n] = true
+		}
+	}
+	sys.FailingWorkers = health.FailingWorkers(statuses, longRunning)
 
+	// Cadence comes from the worker's DECLARED interval when the fleet is
+	// wired, and only falls back to inferring one from observed gaps when it is
+	// not (tests, minimal wirings, or a name in worker_runs that is no longer a
+	// registered worker).
+	//
+	// Inference alone was wrong here. A restart re-runs workers at boot, so the
+	// 21 revisions deployed on 2026-08-12 left tight boot clusters: measured on
+	// live data, medianGap put a healthy 6-hourly worker at ~0.4h and flagged 41
+	// of 101 workers stale, while internal/health's watchdog — which uses the
+	// declared interval — reported none. Two surfaces disagreeing about the word
+	// "stale" is the defect; the declared interval is the side that is right,
+	// because it is what the schedule promises rather than what interference did
+	// to it.
 	now := time.Now().Unix()
 	for name, ts := range starts {
-		cadence, ok := medianGap(ts)
+		cadence, ok := cadenceFor(name, declared, ts)
 		if !ok {
-			continue // too little history to establish a period — not judged
+			continue // no period can be established — not judged
 		}
 		if now-ts[0] > staleWorkerFactor*cadence {
 			sys.StaleWorkers = append(sys.StaleWorkers, name)
@@ -259,6 +299,36 @@ func (d Deps) systemHealth(ctx context.Context) (fleetmon.System, error) {
 // medianGap is the median spacing between consecutive run starts, in seconds.
 // Median rather than mean so one long outage or a burst of retries does not
 // redefine the worker's normal period. ok is false below minRunsForCadence.
+// cadenceFor picks the period a worker is judged against, in seconds. Split out
+// so the rule can be tested without a database — same reason failingFromRuns is
+// separate from the handler that reads its rows.
+//
+// The DECLARED interval wins whenever the fleet is wired, because it is what the
+// schedule promises. Inference is the fallback for a name with no registered
+// worker (a decommissioned one still holding rows) and for tests or minimal
+// wirings that pass no interval map. ok=false means no period could be
+// established at all, which must leave the worker UNJUDGED rather than
+// manufacture a verdict from one data point.
+func cadenceFor(name string, declared map[string]time.Duration, newestFirst []int64) (int64, bool) {
+	if iv, ok := declared[name]; ok {
+		// Interval <= 0 is not "unknown" — the Worker interface defines it as
+		// LONG-RUNNING: Run is called once and blocks until the daemon exits
+		// (the stream ingestors). Such a worker has no cadence to be late
+		// against, so it is skipped rather than judged. Inferring a period from
+		// its sparse boot-time runs would flag a stream that is healthily
+		// blocked in its single Run. internal/health.StaleWorkers already skips
+		// on exactly this condition; the two surfaces must not disagree about
+		// the word "stale", which is the defect this whole repair exists to end.
+		if iv <= 0 {
+			return 0, false
+		}
+		return int64(iv.Seconds()), true
+	}
+	// Not a registered worker (e.g. a decommissioned name still holding rows):
+	// there is no declared promise, so fall back to what the history shows.
+	return medianGap(newestFirst)
+}
+
 func medianGap(newestFirst []int64) (int64, bool) {
 	if len(newestFirst) < minRunsForCadence {
 		return 0, false
@@ -395,4 +465,3 @@ func (d Deps) layerCoverage(ctx context.Context) []fleetmon.Layer {
 func (d Deps) registerFleetHealth(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/fleet-health", d.fleetHealth)
 }
-

@@ -202,7 +202,16 @@ func TestProtocolHashCoversContent(t *testing.T) {
 
 // graderFloatConst reads a float constant out of the grader source.
 func graderFloatConst(src, name string) (float64, bool) {
-	m := regexp.MustCompile(`(?m)^` + name + ` = ([0-9.]+)$`).FindStringSubmatch(src)
+	// `\r?$`, not `$`: the grader is committed with CRLF line endings and
+	// .gitattributes pins it `-text` so its bytes are identical on every
+	// platform — CRLF everywhere, by design, because its SHA-256 is in the
+	// pre-registration chain. With (?m), `$` matches before the \n but AFTER
+	// the \r, so `([0-9.]+)$` never matched and this reported "the grader no
+	// longer has MAX_ALPHA" about a grader that defines it on line 228. A gate
+	// that cannot read its subject does not enforce anything; it just fails
+	// with the wrong reason. Do NOT "fix" this by normalising the grader to LF
+	// — that rewrites bytes the prereg chain has already hashed.
+	m := regexp.MustCompile(`(?m)^` + name + ` = ([0-9.]+)\r?$`).FindStringSubmatch(src)
 	if m == nil {
 		return 0, false
 	}
@@ -248,7 +257,10 @@ func TestLookHashCoversContent(t *testing.T) {
 
 // graderConst reads an int constant out of the grader source.
 func graderConst(src, name string) (int, bool) {
-	m := regexp.MustCompile(`(?m)^` + name + ` = (\d+)$`).FindStringSubmatch(src)
+	// `\r?$` for the same reason as graderFloatConst above: the grader is
+	// committed CRLF and pinned `-text`, so a bare `$` silently matched nothing
+	// and every integer gate reported as ABSENT rather than compared.
+	m := regexp.MustCompile(`(?m)^` + name + ` = (\d+)\r?$`).FindStringSubmatch(src)
 	if m == nil {
 		return 0, false
 	}

@@ -155,7 +155,15 @@ func NewRunner(st *store.Store, ws ...Worker) *Runner {
 // FIRST and hand it to components that need to act on the fleet (the health
 // watchdog's actuator, the storage governor's quiesce window) before the fleet
 // itself is assembled.
-func (r *Runner) Add(ws ...Worker) { r.workers = append(r.workers, ws...) }
+// Add registers workers. Guarded because Runner.Intervals reads `workers` from
+// an API request goroutine and the HTTP server is started BEFORE the last Add
+// (see the ordering note on Intervals), so the append and that read genuinely
+// overlap.
+func (r *Runner) Add(ws ...Worker) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.workers = append(r.workers, ws...)
+}
 
 // Start launches every worker and blocks until ctx is done and all exit —
 // or until ShutdownGrace after cancellation, at which point it logs which
@@ -209,6 +217,36 @@ func (r *Runner) Start(ctx context.Context) {
 // that needs a HOLDER CENSUS (e.g. a WAL checkpoint that keeps stalling at the
 // same frame) can name the daemon's own candidates instead of guessing.
 func (r *Runner) InFlightNames() []string { return r.stuckWorkers() }
+
+// Intervals reports every registered worker's DECLARED cadence, keyed by name.
+//
+// The fleet-health surface needs this because inferring a period from OBSERVED
+// run gaps is corrupted by restarts: a restart re-runs workers at boot, so a
+// tight cluster of boot runs makes a healthy 6-hourly worker read as ~0.4h and
+// then trip a 3x staleness factor. Measured 2026-08-13, the 21 revisions
+// deployed the previous evening left exactly that residue — an inferred-cadence
+// verdict flagged 41 of 101 workers, while internal/health's watchdog, which
+// uses the declared interval, reported none. The declared interval is what the
+// schedule actually promises; the observed gaps are what interference did to it.
+//
+// TAKES THE LOCK, and Add now does too. An earlier version of this method read
+// `workers` unlocked, on the assumption that Add only runs during startup wiring
+// and the slice is read-only thereafter. That assumption is FALSE: in
+// cmd/signaldeckd/run.go the API server starts at `api.Serve(ctx, deps)` (line
+// ~655) BEFORE the final `runner.Add(fleet...)` (line ~662), so a
+// /api/fleet-health request arriving in that window reads the slice while Add is
+// appending to it. `go test -race` did not catch it because no test exercises
+// the startup window — which is exactly why the invariant had to be checked
+// against the wiring order rather than assumed from it.
+func (r *Runner) Intervals() map[string]time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]time.Duration, len(r.workers))
+	for _, w := range r.workers {
+		out[w.Name()] = w.Interval()
+	}
+	return out
+}
 
 // stuckWorkers names the workers with a Run still in flight, oldest first.
 func (r *Runner) stuckWorkers() []string {

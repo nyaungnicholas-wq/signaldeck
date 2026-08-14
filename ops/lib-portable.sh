@@ -108,8 +108,26 @@ $(printf '%s' "$sql" | grep -oE "'/[^']*'" | sed "s/^'//; s/'\$//")
 EOF
   fi
   # Backends, in preference order, both now receiving converted paths.
+  #
+  # `-cmd ".timeout"` is NOT optional. The Python branch below opens with
+  # timeout=120; the CLI branch had no equivalent, so it failed the instant the
+  # DB was locked instead of waiting. Measured 2026-08-12: the offline backup
+  # wrote its 4.7GB file at 17:53 while the daemon was down, then lost the
+  # `backup_last_ts` meta write at 17:57 to
+  #   Error in 2nd command line argument: database is locked
+  # because the daemon had come back up in between. That failure is downgraded
+  # to a WARN, so the backup reported success while the key the in-daemon
+  # failsafe gates on was never updated — and 5 hours later that failsafe took a
+  # REDUNDANT full VACUUM INTO backup against a live daemon, which is the exact
+  # contention its 30h gate exists to prevent.
+  #
+  # Use a dot-command rather than `PRAGMA busy_timeout=...;` prepended to $sql:
+  # the pragma prints its value on stdout, which would corrupt any caller
+  # reading the result. Same reason this belongs HERE and not at the call sites:
+  # a property only one backend has is precisely the drift this file exists to
+  # stop, as the path-conversion comment above already learned once.
   if command -v sqlite3 >/dev/null 2>&1; then
-    sd_nosleep sqlite3 "$db" "$sql"
+    sd_nosleep sqlite3 -cmd ".timeout 120000" "$db" "$sql"
     return $?
   fi
   py="$(sd_py)"
@@ -175,7 +193,23 @@ sd_port_listening() {
 sd_is_running() {
   local name="$1"
   if command -v pgrep >/dev/null 2>&1; then
+    # Try "$name.exe" too. pgrep is absent under Git Bash today, so this branch
+    # is dormant on Windows — and a dormant branch that an unrelated install
+    # switches on is exactly how this file was broken once before: adding a
+    # sqlite3 CLI on 2026-08-04 for the restore rehearsal silently moved
+    # sd_sqlite onto an untested path and every backup began failing (see the
+    # path-conversion comment above). Installing procps here would activate
+    # this branch, and `pgrep -x signaldeckd` cannot match a Windows process
+    # named signaldeckd.exe — so it would answer "not running" for a LIVE
+    # daemon and let the offline backup VACUUM INTO against it, which is the
+    # precise fail-open direction this function exists to prevent.
+    #
+    # Checking both names is safe on macOS, where nothing is called *.exe and
+    # the second test simply never matches. It must NOT fall through to the
+    # branches below on a miss: on macOS those are all absent and the final
+    # fail-safe `return 0` would then report every dead process as running.
     pgrep -x "$name" >/dev/null 2>&1 && return 0
+    pgrep -x "$name.exe" >/dev/null 2>&1 && return 0
     return 1
   fi
   if command -v powershell.exe >/dev/null 2>&1; then
@@ -291,8 +325,14 @@ sd_sqlite_read() {
   # built on this helper reported "nothing referenced" for a ledger holding
   # 26,689 rows. The Python fallback already emits bare LF, so normalising here
   # makes the two backends agree — which is this file's whole purpose.
+  # `-cmd ".timeout"` for the same reason as sd_sqlite: the Python fallback
+  # opens with timeout=120 and the CLI had no equivalent, so a read racing the
+  # daemon failed instantly rather than waiting. On this path that is a
+  # silent-wrong-answer bug — the pre-rebase and reference-transaction hooks
+  # read through here, and a lock-time failure makes them report "nothing
+  # referenced", which is the same shape as the CRLF defect described above.
   if command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$db" "$sql" | tr -d '\r'
+    sqlite3 -cmd ".timeout 120000" "$db" "$sql" | tr -d '\r'
     return "${PIPESTATUS[0]}"
   fi
   py="$(sd_py)"

@@ -204,6 +204,29 @@ jobs:
       # CI, so the day-resampling discipline could regress silently. This is
       # the discovery command the test file's own header documents.
       - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      # Script-style test files are INVISIBLE to the discovery above. A file
+      # that exposes a main() instead of a TestCase contributes ZERO tests to
+      # `unittest discover` and zero to pytest, so it looks covered and is not:
+      # tools/test_verify_backup.py holds the checks pinning the 2026-08-01
+      # content-loss defect (a backup that passed quick_check while holding 14
+      # of 261,164 ledger rows) and ran in NEITHER runner here.
+      #
+      # ops/selfimprove-loop.ps1 already solved this locally by branching on
+      # whether the source defines a TestCase; that remediation was never
+      # applied to CI. This is the same rule in bash. Discover the files rather
+      # than naming them, so the next script-style test is covered on arrival.
+      - name: Run script-style test files (no TestCase — unittest discovery skips them)
+        run: |
+          set -euo pipefail
+          rc=0
+          for f in tools/test_*.py; do
+            if grep -qE '^[[:space:]]*class[[:space:]]+[A-Za-z_]+\(.*TestCase' "$f"; then
+              continue  # already covered by unittest discover above
+            fi
+            echo "== script-style: $f"
+            python3 "$f" || rc=1
+          done
+          exit $rc
       # FC1 gate. Four documents once printed four different live directional
       # records — 48.1%/54.6% over 13,058, 48.0%/54.4% over 12,696, 46.7% over
       # 8,191, and 46.3%/52.9% over 2,257 — and every one of them was correct on

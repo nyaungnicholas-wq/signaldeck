@@ -54,6 +54,12 @@ type Deps struct {
 	Monitor func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error)
 	// CurrentState returns the live expectancy state keys for a symbol.
 	CurrentState func(ctx context.Context, symbolID int64) (map[md.Horizon]string, error)
+	// WorkerIntervals reports each worker's DECLARED cadence. nil is safe and
+	// means "fall back to inferring a period from observed run gaps", which is
+	// what tests and minimal wirings get. Production wires runner.Intervals so
+	// staleness is judged against the schedule a worker actually promises
+	// rather than against gaps that a restart storm can shrink 15-fold.
+	WorkerIntervals func() map[string]time.Duration
 	// Notifier is the Stage-3 remote-delivery notifier (Discord/Telegram/
 	// webhook), surfaced read-only via GET /api/notify-status. nil is safe
 	// (tests / minimal wiring): every remote transport reads unconfigured.
@@ -529,10 +535,19 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 // its error and its next error. "orphaned" (a run whose process died) counts as
 // failing for the same reason.
 func (d Deps) failingWorkers(ctx context.Context) (map[string]string, error) {
-	// worker_runs is pruned to a bounded size (store.PruneWorkerRuns keeps the
-	// newest 20 PER worker), so a few hundred rows reliably covers one run of
-	// every worker including the rare-cadence ones.
-	runs, err := d.St.RecentWorkerRuns(ctx, 400)
+	// Read the newest runs PER WORKER, not the newest N runs overall.
+	//
+	// This used to be RecentWorkerRuns(ctx, 400), justified by "worker_runs is
+	// pruned to a bounded size (PruneWorkerRuns keeps the newest 20 PER worker),
+	// so a few hundred rows reliably covers one run of every worker including
+	// the rare-cadence ones." That reasoning confuses per-worker RETENTION with
+	// per-worker COVERAGE: pruning decides which rows survive, but a global
+	// newest-first read is dominated by whichever workers cycle fastest.
+	// Measured 2026-08-13 against the live DB: the newest 400 rows span 0.85
+	// hours and contain just 34 of 101 workers, so 67 workers — every trainer,
+	// poller and nightly runner — could fail without ever appearing here, on the
+	// endpoint /api/ready consults.
+	runs, err := d.St.RecentWorkerRunsPerWorker(ctx, 20)
 	if err != nil {
 		return nil, err
 	}
@@ -1004,7 +1019,16 @@ func (d Deps) honesty(w http.ResponseWriter, r *http.Request) {
 	if h != md.H1h && h != md.H1d && h != md.H1w {
 		h = md.H1d
 	}
-	outcomes, err := d.St.ResolvedOutcomes(ctx, 0, h, 5000)
+	// Deduped to one row per (symbol, settle day) IN SQL, so the limit counts
+	// independent observations rather than raw rows. ResolvedOutcomes applied
+	// its 5,000 to raw rows, and at ~19,000 resolved outcomes/day that window
+	// spanned a SINGLE day — so `enoughDays >= clusterstat.MinDistinctDays` (10)
+	// could never pass and the bootstrap interval below was withheld forever,
+	// while `distinctDays` reported 1 against 56 days of real history. Measured
+	// 2026-08-13, same 5,000 rows off the DB: 22 distinct days for 1d, 20 for
+	// 1w. dedupeIndependent still runs below on the same key and is now a
+	// no-op, kept as the guard for anyone who widens this read again.
+	outcomes, rawRows, err := d.St.ResolvedOutcomesIndependent(ctx, h, 5000)
 	if err != nil {
 		httpInternal(w, err)
 		return
@@ -1025,7 +1049,12 @@ func (d Deps) honesty(w http.ResponseWriter, r *http.Request) {
 	// — keeping the LATEST score that day — before computing any skill number.
 	// (Handler is already per-horizon, so the forward-period key is the day.)
 	pts := dedupeIndependent(raw)
-	rawN := len(raw)
+	// rawN comes from the STORE, not len(raw): the collapse now happens in SQL,
+	// so the rows it absorbed never reach Go and len(raw) would equal indepN,
+	// silently erasing the very gap this endpoint exists to report. rawRows is
+	// the count of raw rows the returned observations actually stand for —
+	// stricter than the old figure, which was only "rows this reader fetched".
+	rawN := rawRows
 	indepN := len(pts)
 
 	// Quintile buckets by score — computed over the INDEPENDENT set only.
