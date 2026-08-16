@@ -209,6 +209,7 @@ def render(snapshot, banner, registry_path):
                    "a result; treat every row above as a running tally.")
         out.append("")
 
+    byname = {r.get("predictor"): r for r in live}
     notices = [(r.get("predictor", "?"), r["verdict"]) for r in live if r.get("verdict")]
     if notices:
         out.append("Sample-size notices carried by the registry itself (statements about "
@@ -216,6 +217,15 @@ def render(snapshot, banner, registry_path):
         out.append("")
         for name, v in notices:
             out.append("- `%s` — %s" % (name, v))
+            # A verdict like "significantly worse than the naive baseline" compares
+            # accuracy to a null estimated on the SAME short window, treating the null
+            # as exact. tools/selection_honesty.py re-tests the paired difference
+            # blocking by day; when that interval contains zero the verdict is not
+            # supported and we say so next to it. Disclosure only -- the registry's
+            # own verdict string above is left exactly as the pinned grader wrote it.
+            res = (byname.get(name, {}).get("honesty") or {}).get("resolvability")
+            if res and not res.get("resolvable") and res.get("reason"):
+                out.append("  - **not supported by the day count** — %s" % res["reason"])
         out.append("")
 
     backtested = [r for r in snapshot.get("rows", []) if not is_live(r)]

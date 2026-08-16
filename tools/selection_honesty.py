@@ -32,8 +32,12 @@ import sqlite3
 import sys
 import textwrap
 
+from skillpower import skill_resolvable
+
 ONE_SIDED_AGREEMENT = 0.90   # measured: healthy days 0.75-0.86, broken 0.95-1.00
 SELECTION_TOL = 0.02         # "accuracy IS the null" to within 2pp
+MIN_ROWS_PER_DAY = 20        # a day thinner than this is not a cross-section
+HIGH_CONVICTION_EDGE = 0.15  # the registry's own band: |p-0.5| >= 0.15
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB = os.path.join(HERE, "..", "data", "signaldeck.db")
@@ -105,6 +109,53 @@ def calls_up_by_horizon(db_path):
     return out
 
 
+def day_tallies_by_horizon(db_path, min_edge=0.0):
+    """Per-DAY (n, hits, null_hits) per horizon, for the day-blocked skill test.
+
+    `min_edge` selects the conviction band the registry published: 0.0 is the "all"
+    band, 0.15 is `|p-0.5|>=0.15`. A band row MUST be judged on its own rows - the
+    high-conviction subset is smaller and its interval is wider, so borrowing the
+    full book's tallies would understate exactly the uncertainty being tested.
+
+    Same dedup as calls_up_by_horizon. null_hits uses the registry's own prequential
+    majority: day d is called by the majority over days STRICTLY BEFORE d, so day 0
+    contributes exactly zero lift. Read-only: safe against the running daemon.
+    """
+    out = {}
+    if not os.path.exists(db_path):
+        return out
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        rows = con.execute("""
+            WITH d AS (
+              SELECT horizon, date(settle_ts,'unixepoch') day, prob, up,
+                     ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon,
+                       date(settle_ts,'unixepoch') ORDER BY ts DESC) rn
+              FROM prediction_outcomes
+              WHERE up IS NOT NULL AND prob IS NOT NULL AND settle_ts IS NOT NULL
+            )
+            SELECT horizon, day, COUNT(*),
+                   SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
+                   SUM(up)
+            FROM d WHERE rn = 1 AND ABS(prob - 0.5) >= ?
+            GROUP BY horizon, day ORDER BY horizon, day""", (min_edge,)).fetchall()
+    finally:
+        con.close()
+
+    for h, _day, n, hits, ups in rows:
+        acc = out.setdefault(h, {"tallies": [], "cum_up": 0, "cum_n": 0})
+        if n < MIN_ROWS_PER_DAY:
+            continue
+        if acc["cum_n"] == 0:
+            null_hits = hits          # no prior day: zero lift by construction
+        else:
+            null_hits = ups if (acc["cum_up"] / acc["cum_n"]) >= 0.5 else n - ups
+        acc["tallies"].append((n, float(hits), float(null_hits)))
+        acc["cum_up"] += ups
+        acc["cum_n"] += n
+    return {h: v["tallies"] for h, v in out.items()}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--json", default=DEFAULT_JSON)
@@ -116,17 +167,36 @@ def main(argv=None):
     with open(a.json, encoding="utf-8") as fh:
         reg = json.load(fh)
     ups = calls_up_by_horizon(a.db)
+    # one tally set per published conviction band, keyed the way the rows are
+    tallies = {0.0: day_tallies_by_horizon(a.db, 0.0),
+               HIGH_CONVICTION_EDGE: day_tallies_by_horizon(a.db, HIGH_CONVICTION_EDGE)}
 
     refused = 0
     merged = 0
+    unsupported = 0
     for r in reg.get("rows", []):
         if r.get("family") != "direction":
             continue
         b = r.get("breadth") or {}
         name = r["predictor"]
-        cu = ups.get("1w" if "1w" in name else "1d")
+        horizon = "1w" if "1w" in name else "1d"
+        cu = ups.get(horizon)
         v = verdict(r.get("live_acc"), r.get("null_acc"),
                     b.get("mean_daily_agreement"), cu)
+
+        # A SEPARATE failure from one-sidedness: the row may carry a significance
+        # verdict ("FAILED - significantly worse than the naive baseline") that its
+        # day count cannot support. Rows within a day are one market move, and the
+        # null is estimated on the same short window, so both sides carry sampling
+        # error. Test the PAIRED difference, blocking by day.
+        edge = HIGH_CONVICTION_EDGE if "high conviction" in name else 0.0
+        res = skill_resolvable(tallies[edge].get(horizon, []))
+        if not res["resolvable"]:
+            unsupported += 1
+            print(f"  UNSUPPORTED  {name}: {res['reason']}")
+
+        if a.merge and v is not None:
+            v = dict(v, resolvability=res)
         if a.merge and v is not None:
             # Post-process the ARTIFACT, never the grader. accuracy_registry.py's
             # sha256 is pinned in the prereg chain and it refuses to run when its
@@ -160,6 +230,8 @@ def main(argv=None):
             json.dump(reg, fh, indent=1)
         print(f"merged honesty into {merged} row(s) of {a.json}")
     print(f"\n{refused} row(s) refused: accuracy explained by a one-sided selection")
+    print(f"{unsupported} row(s) carry a significance verdict their day count "
+          f"cannot support")
     return 1 if refused else 0
 
 
