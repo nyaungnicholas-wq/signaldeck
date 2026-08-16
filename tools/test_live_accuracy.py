@@ -119,6 +119,43 @@ class TestGenerator(unittest.TestCase):
     def test_script_exists(self):
         self.assertTrue(os.path.exists(SCRIPT), "tools/live_accuracy.py is missing")
 
+    def test_no_mode_refuses_instead_of_silently_doing_nothing(self):
+        """Exit 0 having done nothing is indistinguishable from success.
+
+        A merge into the registry was once believed to have reached the partial
+        because this exited 0; the file was byte-identical and only a diff caught it.
+        """
+        with TmpRepo() as t:
+            r = t.gen()                                  # --registry/--out, no mode
+            self.assertEqual(r.returncode, 2, "a no-op run must not report success")
+            self.assertIn("no mode selected", r.stderr)
+            self.assertIn("--write", r.stderr, "must name the mode the caller wanted")
+            self.assertFalse(os.path.exists(t.partial),
+                             "nothing may be written when no mode was requested")
+
+    def test_write_says_whether_the_bytes_actually_moved(self):
+        with TmpRepo() as t:
+            first = t.gen("--write")
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertIn("wrote", first.stdout)
+            self.assertIn("new", first.stdout, "a first write should say it is new")
+
+            again = t.gen("--write")
+            self.assertEqual(again.returncode, 0, again.stderr)
+            self.assertIn("unchanged", again.stdout,
+                          "a re-render of identical content must say so, not go silent")
+
+    def test_write_reports_a_real_change_as_a_change(self):
+        with TmpRepo() as t:
+            t.gen("--write")
+            with open(t.partial, "a", encoding="utf-8") as f:
+                f.write("DRIFT\n")
+            r = t.gen("--write")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("wrote", r.stdout)
+            self.assertNotIn("unchanged", r.stdout,
+                             "content that really moved must not be reported unchanged")
+
     def test_falls_back_to_last_successful_grade_and_says_it_is_stale(self):
         with TmpRepo() as t:
             r = t.gen("--write")

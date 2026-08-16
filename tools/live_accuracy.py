@@ -528,6 +528,24 @@ def main():
     if args.check_includes is not None:
         args.check_includes = [p.strip() for p in args.check_includes if p.strip()]
 
+    # Invoked with no mode at all, every branch below is false: nothing is rendered,
+    # nothing is written, nothing is checked, and the process exits 0 in silence. That
+    # reads as "ran fine" to a human and to a shell. It is how a merge into the
+    # registry was believed to have reached partials/live_accuracy.md when the file
+    # was byte-identical afterwards -- only a diff against a backup caught it.
+    # Every real caller (ops/accuracy-registry.sh, .github/workflows/ci.yml) passes a
+    # mode, so a bare invocation is always a caller error, never a legitimate no-op.
+    if not (args.write or args.check or args.inject or args.scan or args.scan_code
+            or args.check_includes is not None):
+        print("live_accuracy.py: no mode selected, so NOTHING was done.\n"
+              "  --write           render the registry into %s\n"
+              "  --check           fail if %s has drifted from the registry\n"
+              "  --inject DOC...   splice the block into DOC between its markers\n"
+              "  --check-includes  verify each DOC matches the committed partial\n"
+              "  --scan / --scan-code  fail on hand-typed live-record figures"
+              % (args.out, args.out), file=sys.stderr)
+        sys.exit(2)
+
     rc = 0
     block = None
     current = []
@@ -551,7 +569,20 @@ def main():
         current = current_literals(snapshot)
 
     if args.write and not args.check:
+        # Say whether the bytes actually moved. A silent --write cannot be told from
+        # a --write that rendered an identical file, and the difference is exactly
+        # what "did my fix ship?" turns on.
+        before = read(args.out) if os.path.exists(args.out) else None
         write(args.out, block)
+        if before is None:
+            print("wrote %s (new, %d bytes)" % (args.out, len(block)))
+        elif before == block:
+            # ASCII hyphen, not an em-dash: this line goes to a Windows console
+            # under cp1252, where a non-ASCII dash prints as a replacement glyph.
+            print("%s unchanged (%d bytes) - registry and partial already agree"
+                  % (args.out, len(block)))
+        else:
+            print("wrote %s (%d -> %d bytes)" % (args.out, len(before), len(block)))
 
     if args.check:
         if not os.path.exists(args.out):

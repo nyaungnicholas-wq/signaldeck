@@ -92,3 +92,47 @@ def test_dq_event_only_on_failure(tmp_path):
     _run(good, "--emit-dq-event")
     n = sqlite3.connect(good).execute("SELECT COUNT(*) FROM dq_events").fetchone()[0]
     assert n == 0, "a passing check must not write a data-quality event"
+
+
+def main():
+    """Runner for CI's script-style step.
+
+    This file defines no unittest.TestCase, so `unittest discover` collects nothing.
+    Without this block CI's fallback loop runs `python3 <file>`, which executes zero
+    assertions and exits 0 -- a green step covering nothing, including
+    test_unreadable_db_is_inconclusive_not_a_pass. tools/test_runner_coverage.py
+    pins the general rule.
+
+    The tests take pytest's `tmp_path` fixture, so supply a real temporary directory
+    per test. Each gets its own, matching pytest's per-test isolation.
+    """
+    import inspect
+    import shutil
+    import tempfile
+
+    failed = 0
+    tests = sorted((n, f) for n, f in globals().items() if n.startswith("test_"))
+    for name, fn in tests:
+        try:
+            if "tmp_path" in inspect.signature(fn).parameters:
+                d = tempfile.mkdtemp()
+                try:
+                    fn(Path(d))
+                finally:
+                    # NOT TemporaryDirectory(): these tests leave sqlite handles open,
+                    # and on Windows an open file cannot be unlinked, so cleanup raises
+                    # WinError 32 AFTER every assertion has already passed. A temp-dir
+                    # janitor must never be able to fail a green test.
+                    shutil.rmtree(d, ignore_errors=True)
+            else:
+                fn()
+            print("ok   %s" % name)
+        except AssertionError as e:
+            failed += 1
+            print("FAIL %s: %s" % (name, e))
+    print("%d passed, %d failed" % (len(tests) - failed, failed))
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
