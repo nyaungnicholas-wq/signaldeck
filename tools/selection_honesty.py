@@ -32,6 +32,9 @@ import sqlite3
 import sys
 import textwrap
 
+import subprocess
+
+import skillschema
 from skillpower import verdict_supported_by_intervals
 
 ONE_SIDED_AGREEMENT = 0.90   # measured: healthy days 0.75-0.86, broken 0.95-1.00
@@ -156,6 +159,20 @@ def day_tallies_by_horizon(db_path, min_edge=0.0):
     return {h: v["tallies"] for h, v in out.items()}
 
 
+def git_head():
+    """The commit the record was produced by, or None off a checkout.
+
+    None rather than a guess: a provenance field that quietly reports the wrong
+    commit is worse than one that admits it does not know.
+    """
+    try:
+        out = subprocess.run(["git", "-C", HERE, "rev-parse", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None if out.returncode == 0 else None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--json", default=DEFAULT_JSON)
@@ -167,6 +184,7 @@ def main(argv=None):
     with open(a.json, encoding="utf-8") as fh:
         reg = json.load(fh)
     ups = calls_up_by_horizon(a.db)
+    commit = git_head()
 
     refused = 0
     merged = 0
@@ -203,7 +221,12 @@ def main(argv=None):
             print(f"  UNSUPPORTED  {name}: {res['reason']}")
 
         if a.merge and v is not None:
-            v = dict(v, resolvability=res)
+            # The typed record is the thing a consumer should read. `resolvability`
+            # stays for the existing readers; `result` carries the whole context the
+            # number needs -- universe, baseline with its own interval, dependence
+            # treatment, population filters, provenance and a schema version.
+            v = dict(v, resolvability=res,
+                     result=skillschema.build(r, reg, code_commit=commit))
         if a.merge and v is not None:
             # Post-process the ARTIFACT, never the grader. accuracy_registry.py's
             # sha256 is pinned in the prereg chain and it refuses to run when its
