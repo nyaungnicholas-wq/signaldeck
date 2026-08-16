@@ -198,6 +198,21 @@ if [ -z "$refusal_reason" ]; then
   grader_status=$?
   cat "$STDERR_CAPTURE" >> "$LOG"
 
+  # One-sided-book disclosure, merged into the artifact the grader just wrote.
+  # It runs AFTER grading and never touches tools/accuracy_registry.py, whose
+  # sha256 is pinned in the pre-registration chain -- that grader refuses to run
+  # when its own hash changes, and the code deciding verdicts must stay the code
+  # the chain froze. This adds a `honesty` block per directional row saying when
+  # an accuracy is just a one-sided selection's own base rate; it changes no
+  # verdict, no threshold and no retire flag.
+  #
+  # Its exit code is DELIBERATELY not propagated: a refused row is a disclosure
+  # about the model, not a grading outage, and folding it into grader_status
+  # would trip the refusal path below and suppress the whole report.
+  if [ "$grader_status" -eq 0 ]; then
+    "$PY" "$SD/tools/selection_honesty.py" --json "$OUT" --merge >> "$LOG" 2>&1 || true
+  fi
+
   after_generated=$(generated_of "$OUT")
   if [ "$grader_status" -ne 0 ]; then
     refusal_reason="grader exited $grader_status"

@@ -16,6 +16,7 @@ import (
 	"database/sql"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/dircall"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
@@ -27,6 +28,24 @@ type DirectionalRecordRow struct {
 	UpRate         float64 `json:"upRate"`
 	BrierSkill     float64 `json:"brierSkill"`
 	CalibrationErr float64 `json:"calibrationErr"`
+
+	// AccuracyAtBase grades the SAME rows at the prevailing base rate instead
+	// of a hard 0.5. Measured 2026-08-15: the calibrator squashed the whole
+	// cross-section into a band below 0.5, so `prob >= 0.5` read "below
+	// average" as SHORT EVERYTHING and Accuracy converged on 1-UpRate by
+	// arithmetic (43.3% against a 56.5% baseline). Accuracy stays at 0.5 so
+	// the historical series is comparable; this is the honest reading beside it.
+	AccuracyAtBase float64 `json:"accuracyAtBase"`
+
+	// Agreement is the mean over days of the fraction of that day's calls
+	// pointing the same way, at the base-rate threshold. 0.5 is a balanced
+	// book; 1.0 is one market call replicated N times.
+	Agreement float64 `json:"agreement"`
+
+	// OneSided is the pathology flag: Agreement above dircall.DefaultMaxAgreement
+	// means N is the day count, not the row count, and the row must not be read
+	// as N independent forecasts.
+	OneSided bool `json:"oneSided"`
 
 	// Days is the per-UTC-day tally behind N — the clusters a consumer needs
 	// to measure the design effect (clusterstat.DesignEffect) and evaluate any
@@ -105,6 +124,10 @@ func (s *Store) DirectionalRecord(ctx context.Context, h md.Horizon, since int64
 
 	// The same dedup, folded per day, so the caller can measure how much of N
 	// is one market move counted many times.
+	// The base-rate threshold is bound as a parameter so the same dedup grades
+	// both readings in one pass: hits at 0.5 (the historical series) and hits
+	// at the base rate, plus the per-day up-call count that Agreement needs.
+	thr := dircall.Threshold(r.UpRate)
 	qDays := `
 	WITH dedup AS (
 	  SELECT settle_day(settle_ts, ts) AS day, prob, up,
@@ -114,19 +137,45 @@ func (s *Store) DirectionalRecord(ctx context.Context, h md.Horizon, since int64
 	    AND prob IS NOT NULL AND resolved_at >= ?
 	)
 	SELECT day, COUNT(*),
-	       SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END)
+	       SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
+	       SUM(CASE WHEN (prob >= ?) = (up = 1) THEN 1 ELSE 0 END),
+	       SUM(CASE WHEN prob >= ? THEN 1 ELSE 0 END)
 	FROM dedup WHERE rn = 1 GROUP BY day ORDER BY day`
-	rows, err := s.db.QueryContext(ctx, qDays, string(h), since)
+	rows, err := s.db.QueryContext(ctx, qDays, string(h), since, thr, thr)
 	if err != nil {
 		return r, err
 	}
 	defer rows.Close() //nolint:errcheck
+	var totalN, totalHitsAtBase int
+	var agreeSum float64
+	var nDays int
 	for rows.Next() {
 		var d clusterstat.Day
-		if err := rows.Scan(&d.Day, &d.N, &d.Hits); err != nil {
+		var hitsAtBase, upCalls int
+		if err := rows.Scan(&d.Day, &d.N, &d.Hits, &hitsAtBase, &upCalls); err != nil {
 			return r, err
 		}
 		r.Days = append(r.Days, d)
+		totalN += d.N
+		totalHitsAtBase += hitsAtBase
+		if d.N > 0 {
+			f := float64(upCalls) / float64(d.N)
+			if f < 0.5 {
+				f = 1 - f
+			}
+			agreeSum += f
+			nDays++
+		}
 	}
-	return r, rows.Err()
+	if err := rows.Err(); err != nil {
+		return r, err
+	}
+	if totalN > 0 {
+		r.AccuracyAtBase = float64(totalHitsAtBase) / float64(totalN)
+	}
+	if nDays > 0 {
+		r.Agreement = agreeSum / float64(nDays)
+		r.OneSided = r.Agreement > dircall.DefaultMaxAgreement
+	}
+	return r, nil
 }

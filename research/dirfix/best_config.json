@@ -1,0 +1,9 @@
+{
+ "h": 10,
+ "target": "extremes10",
+ "model": "ens_lh",
+ "k": 10,
+ "weighting": "conviction",
+ "beta_neutral": false,
+ "vol_target": 0.0
+}

@@ -43,13 +43,14 @@ func main() {
 		commit = flag.Bool("commit", false, "actually append (default is dry-run)")
 		kind   = flag.String("kind", GradabilityKind,
 			"which amendment to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
-				ProvenanceKind+" or "+DataIntegrityKind)
+				ProvenanceKind+", "+DataIntegrityKind+" or "+DuplicateKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
-		*kind != ProvenanceKind && *kind != DataIntegrityKind {
-		die("unknown -kind %q (want %s, %s, %s or %s)",
-			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind, DataIntegrityKind)
+		*kind != ProvenanceKind && *kind != DataIntegrityKind && *kind != DuplicateKind {
+		die("unknown -kind %q (want %s, %s, %s, %s or %s)",
+			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
+			DataIntegrityKind, DuplicateKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -64,6 +65,20 @@ func main() {
 		die("PRE-FLIGHT chain verification failed, refusing to append: %v", err)
 	}
 	fmt.Println("pre-flight: chain verified INTACT")
+
+	// Refuse a second copy before measuring anything. Each kind states a
+	// one-time fact; a duplicate cannot be removed from an append-only chain.
+	if dup, seqs, err := alreadyFiled(ctx, db, *kind); err != nil {
+		die("check for an existing %s record: %v", *kind, err)
+	} else if dup {
+		die("REFUSING to file: the chain already carries %s at seq %s. Each "+
+			"amendment states one specific, one-time fact, and a duplicate adds "+
+			"no information while making the log ambiguous about how many times "+
+			"the underlying event happened — and it can never be removed, only "+
+			"explained by another record. If a second record is genuinely "+
+			"warranted it is warranted for a NEW reason, and belongs under a new "+
+			"kind that says what that reason is.", *kind, seqs)
+	}
 
 	var spec, note string
 	switch *kind {
@@ -95,6 +110,24 @@ func main() {
 				"and that is not true — fix the build first, then file.", m.OnOrAfterNewEpoch)
 		}
 		spec, note = revisionEpochSpec(m), revisionEpochNote
+
+	case DuplicateKind:
+		d, err := measureDuplicates(ctx, db)
+		if err != nil {
+			die("measure duplicates: %v", err)
+		}
+		// This record's entire premise is that duplicates exist. Filing it on a
+		// clean chain would put a false statement on the one log that cannot be
+		// quietly corrected.
+		if d.Total == 0 {
+			die("REFUSING to file: no kind appears on the chain more than once " +
+				"WITH THE SAME STATEMENT. This record's whole claim is that a " +
+				"one-time fact was filed twice.")
+		}
+		// Kinds re-registered with DIFFERENT content are amendments, not repeated
+		// filings; measureDuplicates keeps them separate and the spec discloses
+		// them without claiming they are duplicates.
+		spec, note = duplicateSpec(d), duplicateNote
 
 	case ProvenanceKind:
 		p, err := measureProvenance(ctx, db)
