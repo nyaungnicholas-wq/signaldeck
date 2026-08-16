@@ -1,9 +1,9 @@
 {
  "split": "2025-03-01",
- "sha256": "6f84fdb3262352be21205a20ea55ab19c5c688a31db5c5bc219c3cb66c97a86d",
+ "sha256": "cf133f2489d69423a5282846c93746c5757f87f61e74882a2a098954662189cc",
  "search_days": 1550,
  "holdout_days": 366,
- "search_rows": 2242210,
- "holdout_rows": 427167,
+ "search_rows": 2148327,
+ "holdout_rows": 386932,
  "rule": "holdout graded EXACTLY ONCE, at the end. Any earlier read is a protocol breach."
 }
