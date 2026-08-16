@@ -16,15 +16,12 @@ Generated from `data/accuracy_registry.json` (grade of 2026-08-15T17:08:35) by `
 Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
 
 - `directional-ensemble (1d)` — FAILED — significantly worse than the naive baseline
-  - **not supported by the day count** — skill +0.0009 over 28 day(s) has a 95% day-blocked interval [-0.0512, +0.0562] that contains zero: the day count cannot support a significance verdict
+  - **verdict not supported by its own interval** — accuracy 0.4340 [0.3346, 0.5391] and its null 0.5637 [0.3857, 0.7267] OVERLAP across [0.3857, 0.5391]: the verdict compares the accuracy interval to the null's point estimate and ignores the null's own published interval, so the stated skill of -0.1297 is not resolved by this sample
 - `prequential-majority (1d)` — NO SKILL — indistinguishable from baseline
 - `directional-ensemble (1w)` — INSUFFICIENT DAYS (9/10 credible days of 14, 5 degenerate) — no interval, so no verdict
-  - **not supported by the day count** — skill -0.0067 over 24 day(s) has a 95% day-blocked interval [-0.0611, +0.0487] that contains zero: the day count cannot support a significance verdict
 - `prequential-majority (1w)` — INSUFFICIENT DAYS (8/10 credible days of 11, 3 degenerate) — no interval, so no verdict
 - `directional-ensemble (1d, high conviction)` — INSUFFICIENT DAYS (5/10 credible days of 7, 2 degenerate) — no interval, so no verdict
-  - **not supported by the day count** — skill -0.0139 over 18 day(s) has a 95% day-blocked interval [-0.0826, +0.0703] that contains zero: the day count cannot support a significance verdict
 - `directional-ensemble (1w, high conviction)` — FAILED — significantly worse than the naive baseline
-  - **not supported by the day count** — skill +0.0152 over 13 day(s) has a 95% day-blocked interval [-0.0263, +0.0508] that contains zero: the day count cannot support a significance verdict
 
 ### Backtested claims with no live record yet
 

@@ -32,7 +32,7 @@ import sqlite3
 import sys
 import textwrap
 
-from skillpower import skill_resolvable
+from skillpower import verdict_supported_by_intervals
 
 ONE_SIDED_AGREEMENT = 0.90   # measured: healthy days 0.75-0.86, broken 0.95-1.00
 SELECTION_TOL = 0.02         # "accuracy IS the null" to within 2pp
@@ -167,9 +167,6 @@ def main(argv=None):
     with open(a.json, encoding="utf-8") as fh:
         reg = json.load(fh)
     ups = calls_up_by_horizon(a.db)
-    # one tally set per published conviction band, keyed the way the rows are
-    tallies = {0.0: day_tallies_by_horizon(a.db, 0.0),
-               HIGH_CONVICTION_EDGE: day_tallies_by_horizon(a.db, HIGH_CONVICTION_EDGE)}
 
     refused = 0
     merged = 0
@@ -186,12 +183,22 @@ def main(argv=None):
 
         # A SEPARATE failure from one-sidedness: the row may carry a significance
         # verdict ("FAILED - significantly worse than the naive baseline") that its
-        # day count cannot support. Rows within a day are one market move, and the
-        # null is estimated on the same short window, so both sides carry sampling
-        # error. Test the PAIRED difference, blocking by day.
-        edge = HIGH_CONVICTION_EDGE if "high conviction" in name else 0.0
-        res = skill_resolvable(tallies[edge].get(horizon, []))
-        if not res["resolvable"]:
+        # own published numbers do not support. accuracy_registry.py computes an
+        # interval for the null (`null_ci`) and then compares against `null_acc`,
+        # the point estimate, ignoring it.
+        #
+        # This reads the ROW'S OWN ci/null_ci rather than re-deriving anything from
+        # the database. An earlier version recomputed day tallies from
+        # prediction_outcomes and annotated the row with the result -- but the
+        # registry applies a settlement filter (16,726 rows excluded here) and a
+        # degenerate-day admission test, so that recomputation covered 28 days and
+        # 11,895 rows where the row itself covers 16 days and 2,479. Publishing one
+        # population's statistic beside another population's verdict invites exactly
+        # the comparison it cannot support -- the same mistake as judging a
+        # high-conviction band on the full book's tallies.
+        res = verdict_supported_by_intervals(
+            r.get("live_acc"), r.get("ci"), r.get("null_acc"), r.get("null_ci"))
+        if res["supported"] is False:
             unsupported += 1
             print(f"  UNSUPPORTED  {name}: {res['reason']}")
 
@@ -230,8 +237,8 @@ def main(argv=None):
             json.dump(reg, fh, indent=1)
         print(f"merged honesty into {merged} row(s) of {a.json}")
     print(f"\n{refused} row(s) refused: accuracy explained by a one-sided selection")
-    print(f"{unsupported} row(s) carry a significance verdict their day count "
-          f"cannot support")
+    print(f"{unsupported} row(s) carry a significance verdict that overlaps its own "
+          f"published null interval")
     return 1 if refused else 0
 
 

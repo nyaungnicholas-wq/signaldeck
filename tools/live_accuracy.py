@@ -224,8 +224,12 @@ def render(snapshot, banner, registry_path):
             # supported and we say so next to it. Disclosure only -- the registry's
             # own verdict string above is left exactly as the pinned grader wrote it.
             res = (byname.get(name, {}).get("honesty") or {}).get("resolvability")
-            if res and not res.get("resolvable") and res.get("reason"):
-                out.append("  - **not supported by the day count** — %s" % res["reason"])
+            # `supported is False` only. None means there was no interval to judge --
+            # a row that already withholds its verdict (INSUFFICIENT DAYS) must not be
+            # annotated as if a verdict were being challenged.
+            if res and res.get("supported") is False and res.get("reason"):
+                out.append("  - **verdict not supported by its own interval** — %s"
+                           % res["reason"])
         out.append("")
 
     backtested = [r for r in snapshot.get("rows", []) if not is_live(r)]

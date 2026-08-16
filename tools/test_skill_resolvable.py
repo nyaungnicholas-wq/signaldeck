@@ -54,6 +54,49 @@ def test_degenerate_inputs():
         "one day is never enough"
 
 
+def test_overlapping_intervals_do_not_support_a_verdict():
+    """The live 1d row. Its own published numbers do not carry its own verdict."""
+    r = sh.verdict_supported_by_intervals(
+        0.43404598628479224, [0.3345970431881845, 0.539105266114977],
+        0.563735377168213, [0.3857009819105808, 0.7267293279916269])
+    assert r["supported"] is False, r
+    assert abs(r["overlap_lo"] - 0.3857009819105808) < 1e-9, r
+    assert abs(r["overlap_hi"] - 0.539105266114977) < 1e-9, r
+    assert "OVERLAP" in r["reason"]
+
+
+def test_separated_intervals_DO_support_a_verdict():
+    """The live 1w high-conviction row -- the guard must NOT fire here.
+
+    A guard that refuses every verdict is not a guard. This row's accuracy interval
+    tops out at 0.456 and its null interval starts at 0.485: a clean gap. An earlier
+    pass claimed this row's -27.7pp was really +1.52pp, but that came from a
+    recomputation on a DIFFERENT population (13 days of a broader dedup) than the row
+    grades. On its own population the verdict stands, and this test pins that.
+    """
+    r = sh.verdict_supported_by_intervals(
+        0.3522727272727273, [0.2612, 0.4560], 0.6292613636363636, [0.4850, 0.7540])
+    assert r["supported"] is True, r
+    assert r["reason"] == "", r
+
+
+def test_missing_intervals_withhold_rather_than_accuse():
+    for args in (
+        (0.5, None, 0.5, [0.4, 0.6]),
+        (0.5, [0.4, 0.6], 0.5, None),
+        (None, [0.4, 0.6], 0.5, [0.4, 0.6]),
+    ):
+        r = sh.verdict_supported_by_intervals(*args)
+        assert r["supported"] is None, (args, r)
+        assert "no published interval" in r["reason"]
+
+
+def test_touching_intervals_count_as_overlap():
+    """Exactly abutting is not separation."""
+    r = sh.verdict_supported_by_intervals(0.40, [0.30, 0.50], 0.60, [0.50, 0.70])
+    assert r["supported"] is False, r
+
+
 def test_deterministic():
     d = days([(100, 55, 50)] * 40)
     assert sh.skill_resolvable(d) == sh.skill_resolvable(d), "must be seeded"

@@ -20,7 +20,51 @@ from __future__ import annotations
 
 import random
 
-__all__ = ["skill_resolvable"]
+__all__ = ["skill_resolvable", "verdict_supported_by_intervals"]
+
+
+def verdict_supported_by_intervals(acc, acc_ci, null_acc, null_ci):
+    """Does a skill verdict survive once the NULL's own interval is honored?
+
+    accuracy_registry.py is rigorous about the model's interval: day-clustered
+    Wilson, a measured design effect, an effective_n far below the row count, and a
+    multiplicity-corrected z. It then computes an interval for the null as well and
+    publishes it as `null_ci` -- and `verdict_for` compares against `null_acc`, the
+    null's POINT estimate, ignoring the interval it just computed:
+
+        if hi < null_acc - VERDICT_EPS: return "FAILED ..."
+
+    For directional-ensemble (1d) that is 0.539 < 0.564 -> FAILED, while the two
+    published intervals are acc [0.335, 0.539] and null [0.386, 0.727]. They overlap
+    across [0.386, 0.539]. A difference whose two sides overlap that heavily is not
+    something the sample can resolve in either direction.
+
+    Returns {supported, overlap_lo, overlap_hi, reason}. This works entirely from the
+    row's OWN published numbers, so it always describes the same population, universe
+    and null the verdict was read off -- no re-derivation, nothing to drift.
+
+    Non-overlap is sufficient for a difference, not necessary: two overlapping
+    intervals can still differ significantly under a paired test, because acc and
+    null share rows and are positively correlated. So this refuses a verdict it
+    cannot support and never asserts one -- it can only ever withhold.
+    """
+    if None in (acc, null_acc) or not acc_ci or not null_ci:
+        return {"supported": None, "overlap_lo": None, "overlap_hi": None,
+                "reason": "no published interval for accuracy and/or the null"}
+    a_lo, a_hi = float(acc_ci[0]), float(acc_ci[1])
+    n_lo, n_hi = float(null_ci[0]), float(null_ci[1])
+    lo, hi = max(a_lo, n_lo), min(a_hi, n_hi)
+    if lo > hi:
+        return {"supported": True, "overlap_lo": None, "overlap_hi": None, "reason": ""}
+    return {
+        "supported": False, "overlap_lo": lo, "overlap_hi": hi,
+        "reason": (f"accuracy {acc:.4f} [{a_lo:.4f}, {a_hi:.4f}] and its null "
+                   f"{null_acc:.4f} [{n_lo:.4f}, {n_hi:.4f}] OVERLAP across "
+                   f"[{lo:.4f}, {hi:.4f}]: the verdict compares the accuracy interval "
+                   f"to the null's point estimate and ignores the null's own published "
+                   f"interval, so the stated skill of {acc - null_acc:+.4f} is not "
+                   f"resolved by this sample"),
+    }
 
 
 def _percentile(sorted_vals, q):
