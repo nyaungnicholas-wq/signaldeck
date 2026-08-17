@@ -1,7 +1,25 @@
 <#
 .SYNOPSIS
+  RETIRED 2026-08-17 -- the `SignalDeck Eighty Loop` task is DISABLED. Do not
+  re-enable it without reading .NOTES below.
+
   Drives EIGHTY_PERCENT_SUPERPROMPT.md through OmniRoute, indefinitely, with
   ZERO Claude involvement.
+
+.NOTES
+  Disabled on Nicholas's decision. It cannot run anyway: EIGHTY_PERCENT_SUPERPROMPT.md
+  is in quarantine/, so line ~164 throws before any logging, and that throw escapes
+  the task's `*>>` redirect -- eleven hourly runs (00:02..10:02) exited 0x1 having
+  written zero bytes. The program is refuted, not stalled: CLAUDE.md records IC ~0.02
+  flipping sign per sub-period and 70/80% as UNREACHABLE, which is WHY the protocol
+  was quarantined, and quarantined material must not be executed. It was also a heavy
+  drain on the free router tiers -- measured 2026-08-17, they refilled at midnight and
+  were exhausted by 00:29, leaving every lane 429 for ten hours.
+
+  To revive: restore the protocol from quarantine/ FIRST, then
+  `Enable-ScheduledTask -TaskName 'SignalDeck Eighty Loop'`. Nothing re-registers it
+  on its own -- install-windows-tasks.ps1 only walks ops/com.*.plist and there is none
+  for this loop.
 
 .DESCRIPTION
   Claude's entire role is to have written this file and the protocol it carries.
