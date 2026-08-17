@@ -232,6 +232,41 @@ class DeploymentDriftTest(unittest.TestCase):
         stamp = next(c for c in checks if c["name"] == "row-revision-stamp")
         self.assertFalse(stamp["ok"])
 
+    def test_daemon_code_drift_fails_when_daemon_source_has_moved(self):
+        """A daemon on an old commit is missing every daemon fix landed since it.
+
+        The 2026-08-16 defect: the process ran one revision for 3,086 runs across
+        four days while two commits changed 15 non-test files under daemon/ —
+        among them internal/health/health.go, so the health surface actually
+        running was the unrepaired one. deployed-code-revision reported ok
+        throughout, because the constant it names was already in the old commit.
+        Age is not the predicate. Movement is.
+        """
+        first = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
+                               cwd=REPO, capture_output=True, text=True,
+                               check=True).stdout.split()[0]
+        build_db(self.db, naive_label=True, judgments=True, quarantine=True,
+                 revision=first)
+        status, checks = dd.run(self.db, REPO)
+        drift = next(c for c in checks if c["name"] == "daemon-code-drift")
+        self.assertFalse(drift["ok"])
+        self.assertGreater(drift["measured"]["source_files_changed"], 0)
+        self.assertIn("rebuild and restart", drift["evidence"])
+        self.assertEqual(status, 1)
+
+    def test_daemon_code_drift_passes_when_the_daemon_runs_head(self):
+        """The false-positive guard, and it is not optional here: this gate has
+        refused publication on a wrong diagnosis before (see
+        audits/SIGNALDECKFIX_2026-08-12.md). A daemon that IS current must pass,
+        or the check degrades into noise an operator learns to skip — which is
+        how a real gate gets switched off."""
+        build_db(self.db, naive_label=True, judgments=True, quarantine=True,
+                 revision=head_commit())
+        _status, checks = dd.run(self.db, REPO)
+        drift = next(c for c in checks if c["name"] == "daemon-code-drift")
+        self.assertTrue(drift["ok"], drift["evidence"])
+        self.assertEqual(drift["measured"]["source_files_changed"], 0)
+
     def test_stamped_rows_pass_and_coverage_is_reported(self):
         build_db(self.db, naive_label=True, judgments=True, quarantine=True,
                  revision=head_commit())

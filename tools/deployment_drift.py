@@ -327,6 +327,74 @@ def check_deployed_revision(con: sqlite3.Connection, repo: str) -> dict:
                          "holdout_const_present": present}}
 
 
+def check_daemon_code_drift(con: sqlite3.Connection, repo: str) -> dict:
+    """(f) The running daemon contains every COMMITTED change to daemon/ source.
+
+    check_deployed_revision asks whether one named constant is present in the
+    deployed revision. That is a real question, and it is not this one: a daemon
+    twenty commits stale still contains a constant added thirty commits ago, so
+    it answers 'ok' about a process the repository has already moved past.
+
+    Measured 2026-08-16: the daemon had run revision 1cfa982a for 3,086 runs over
+    four days while two commits changed 25 files under daemon/ — among them
+    internal/health/health.go, whose repair ('16 checks that could not fail') was
+    therefore verified in the tree and absent from the process. The health surface
+    actually running was the one its own comment describes as calling a worker
+    healthy while it ran on time and failed every time. Every deployment gate
+    reported ok, because none of them asked this.
+
+    The predicate is not age, it is movement: commits touching daemon/ between the
+    deployed revision and HEAD are by definition fixes that are not running.
+    Changes under tools/, docs, or research do not implicate the binary and are
+    not counted, and neither are *_test.go changes — a test-only commit does not
+    alter what the daemon executes, and this gate has a history of refusing
+    publication on a false diagnosis (audits/SIGNALDECKFIX_2026-08-12.md).
+    """
+    try:
+        rev = con.execute("SELECT v FROM meta WHERE k = ?", (BUILD_REV_META_KEY,)).fetchone()
+    except sqlite3.OperationalError:
+        rev = None
+    rev = (rev[0] if rev else "")
+    base = rev[:-len("+dirty")] if rev.endswith("+dirty") else rev
+    if not base or base == "unknown":
+        return {"name": "daemon-code-drift", "ok": False,
+                "evidence": "the running daemon recorded no build revision, so the "
+                            "daemon code it is missing cannot be computed at all",
+                "measured": {"revision": rev}}
+    try:
+        files = subprocess.run(["git", "diff", "--name-only", f"{base}..HEAD", "--", "daemon/"],
+                               cwd=repo, capture_output=True, text=True, check=True).stdout
+        log = subprocess.run(["git", "log", "--oneline", f"{base}..HEAD", "--", "daemon/"],
+                             cwd=repo, capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        return {"name": "daemon-code-drift", "ok": False,
+                "evidence": f"cannot compare the deployed revision {base[:8]} against HEAD "
+                            f"({e}) — a revision this repository cannot resolve cannot be "
+                            "shown to be current either",
+                "measured": {"revision": rev}}
+    changed = [p for p in files.splitlines() if p.strip()]
+    source = [p for p in changed if not p.endswith("_test.go")]
+    commits = [c for c in log.splitlines() if c.strip()]
+    if not source:
+        detail = "no daemon commits between it and HEAD" if not changed else (
+            f"the {len(changed)} changed path(s) under daemon/ are all tests")
+        return {"name": "daemon-code-drift", "ok": True,
+                "evidence": f"deployed revision {base[:8]} runs current daemon source "
+                            f"({detail})",
+                "measured": {"revision": rev, "commits": 0, "source_files_changed": 0,
+                             "test_only_files_changed": len(changed)}}
+    named = ", ".join(c.split(" ", 1)[0] for c in commits[:6])
+    return {"name": "daemon-code-drift", "ok": False,
+            "evidence": (f"the running daemon is revision {base[:8]}, and {len(commits)} "
+                         f"commit(s) touching daemon/ have landed since it, changing "
+                         f"{len(source)} non-test source file(s) [{named}]. Those fixes are "
+                         "verified in the tree and NOT in the running process — rebuild and "
+                         "restart the daemon before treating any of them as live"),
+            "measured": {"revision": rev, "commits": len(commits),
+                         "source_files_changed": len(source),
+                         "commit_list": commits[:20], "source_files": source[:40]}}
+
+
 def newest_boot_ts(con: sqlite3.Connection) -> int | None:
     """The start of the current uptime session, read off worker_runs.
 
@@ -438,6 +506,7 @@ def run(db: str, repo: str) -> tuple[int, list[dict]]:
             check_judgment_ledger(con),
             check_quarantine(con),
             check_deployed_revision(con, repo),
+            check_daemon_code_drift(con, repo),
             check_row_revision_stamp(con),
         ]
     finally:
