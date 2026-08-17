@@ -104,7 +104,27 @@ param(
   # Revert to a concrete id the moment one is reliably reachable. The proper fix
   # is upstream -- omni.ps1 could log the `model` field the gateway returns,
   # which would make an alias fully attributable and this note obsolete.
-  [string]$PinnedModel = 'auto/coding',
+  #
+  # 2026-08-16: THE ALIAS NO LONGER RUNS, and the upstream fix above happened.
+  # omni.ps1 now REFUSES any auto/* id outright (omni.ps1:155, "auto/* aliases
+  # are non-deterministic and collapse to a lite model"), so every cycle died at
+  # worker-empty and the scheduled task aborted after 5 of them -- last run
+  # 2026-08-16 23:02, exit 0x1, five cycles, zero hypotheses. The garbled
+  # `worker-empty` diag in eighty-console.log is the tail of that refusal text.
+  #
+  # So this is now '' -- line ~320 then routes by -Task <lane>, which is the
+  # escape hatch line 83 already documented. That is strictly better than the
+  # alias was, on both halves of the trade this note weighed:
+  #   * liveness: the `code` lane is a measured chain across three independent
+  #     accounts (NIM, OpenRouter, gateway), so one dead provider no longer
+  #     empties a cycle -- which is exactly the 404/429 problem that drove the
+  #     move to an alias in the first place.
+  #   * provenance: the loss described above is repaired. A lane call now emits
+  #     `via <concrete model>` naming the model that actually ANSWERED, not the
+  #     one requested, so a hypothesis is attributable again.
+  # Fail-loud is unchanged: a lane that cannot answer still yields worker-empty
+  # and still trips the consecutive-empty abort below.
+  [string]$PinnedModel = '',
   [int]$CyclePauseSec = 30,
   # Consecutive empty cycles before the run gives up. "Fail loudly" was already
   # true -- worker-empty was logged all 827 times -- but loud into a log nobody
