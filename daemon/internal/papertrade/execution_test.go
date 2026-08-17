@@ -297,3 +297,56 @@ func TestCheckFillFidelity_EmptyIsNotVerified(t *testing.T) {
 		t.Error("an empty trade log must not report itself as verified")
 	}
 }
+
+// A failed bar LOOKUP is not a missing bar. api/paper.go used to fold the store
+// error into the has-bar condition (`err == nil && ok && ...`), so an outage was
+// indistinguishable from a fill whose bar is genuinely absent — and the verdict
+// then blamed "no stored bar at all", sending the reader hunting a data gap that
+// did not exist. Same principle as the empty-log case above: "we could not look"
+// is not "we looked and found nothing".
+func TestCheckFillFidelity_LookupFailureIsNotAMissingBar(t *testing.T) {
+	f := CheckFillFidelity([]FillVsBar{
+		{Px: 100, Unchecked: true},
+		{Px: 200, Unchecked: true},
+	})
+	if f.Verified {
+		t.Error("fills that could not be checked must not verify")
+	}
+	if f.Unchecked != 2 {
+		t.Errorf("Unchecked=%d, want 2", f.Unchecked)
+	}
+	if f.NoBar != 0 {
+		t.Errorf("NoBar=%d, want 0 — a failed lookup is not a missing bar", f.NoBar)
+	}
+	if strings.Contains(f.Reason, "no stored bar at all") {
+		t.Errorf("an outage must not be reported as missing bars; reason=%q", f.Reason)
+	}
+	if !strings.Contains(f.Reason, "could not be checked") {
+		t.Errorf("the reason must say the check could not run; reason=%q", f.Reason)
+	}
+}
+
+// Real findings AND an outage together: the counts must stay separable, or the
+// reader cannot tell which half of the verdict is evidence about the book.
+func TestCheckFillFidelity_UncheckedIsReportedApartFromFindings(t *testing.T) {
+	f := CheckFillFidelity([]FillVsBar{
+		{Px: 100, BarOpen: 100, HasBar: true}, // matched
+		{Px: 110, BarOpen: 100, HasBar: true}, // mismatched
+		{Px: 120},                             // genuinely no stored bar
+		{Px: 130, Unchecked: true},            // lookup errored
+	})
+	if f.Verified {
+		t.Error("must not verify")
+	}
+	if f.Matched != 1 || f.Mismatched != 1 || f.NoBar != 1 || f.Unchecked != 1 {
+		t.Errorf("matched=%d mismatched=%d noBar=%d unchecked=%d; want 1/1/1/1",
+			f.Matched, f.Mismatched, f.NoBar, f.Unchecked)
+	}
+	if f.Fills != 4 {
+		t.Errorf("Fills=%d, want 4", f.Fills)
+	}
+	// The mean/max must describe only what was actually compared.
+	if f.MeanAbsBps <= 0 {
+		t.Errorf("MeanAbsBps=%.4f, want >0 from the one compared mismatch", f.MeanAbsBps)
+	}
+}

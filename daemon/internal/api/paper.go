@@ -157,7 +157,18 @@ func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade) paper
 		p := papertrade.FillVsBar{Px: t.Px}
 		// BarAtOrBefore is the exact bar only when its ts matches; an earlier bar
 		// is NOT the one this fill named, so it counts as "no bar".
-		if bar, ok, err := d.St.BarAtOrBefore(ctx, t.SymbolID, md.TF1d, t.Ts); err == nil && ok && bar.Ts == t.Ts {
+		//
+		// A lookup ERROR is kept apart from that. This used to read
+		// `err == nil && ok && bar.Ts == t.Ts`, which folded a store failure into
+		// the same bucket as a fill whose bar is genuinely absent. The fidelity
+		// report then blamed "no stored bar at all" for what was an outage, and
+		// an operator reading it went hunting a data gap that did not exist.
+		// "We could not look" is not "we looked and found nothing".
+		bar, ok, err := d.St.BarAtOrBefore(ctx, t.SymbolID, md.TF1d, t.Ts)
+		switch {
+		case err != nil:
+			p.Unchecked = true
+		case ok && bar.Ts == t.Ts:
 			p.BarOpen = bar.Open
 			p.HasBar = true
 		}
