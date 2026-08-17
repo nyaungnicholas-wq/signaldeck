@@ -736,13 +736,43 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
                          "repro")
 
     # (predictor, band) -> the exact verdict the committed snapshot grades to.
+    #
+    # Re-frozen 2026-08-16, when repro/ was re-cut from the pre-registration
+    # chain. The previous table was frozen against a snapshot last exported
+    # 2026-07-27 that pinned graderSha256 25cd8923… (chain seq 11); the tree's
+    # grader hashes cb3c01e9… (chain seq 69), so load_snapshot refused and these
+    # four tests SKIPPED for three weeks while the suite printed OK. The re-cut
+    # is what woke them.
+    #
+    # Why this movement is data, not rule drift — the distinction the freeze
+    # exists to police: tools/accuracy_registry.py is byte-identical across the
+    # repair (`git diff --stat tools/accuracy_registry.py` empty; sha still
+    # cb3c01e9…), so no grading rule changed. What changed is the exported
+    # record: directional_days 3 -> 58 rows, prereg_claims 6 -> 7, looks 0 -> 32.
+    # Two rows crossed the evidence floor on that data and now carry a live
+    # verdict instead of INSUFFICIENT, and filingsdrift21 (chain seq 10) joined
+    # the structural set. Every string below was read off the re-cut snapshot,
+    # and every one matches what the live database publishes today.
     EXPECTED = {
         ("directional-ensemble (1d)", "all"):
-            "INSUFFICIENT (21/30)",
+            "FAILED — significantly worse than the naive baseline",
+        ("prequential-majority (1d)", "all"):
+            "NO SKILL — indistinguishable from baseline",
+        ("directional-ensemble (1w)", "all"):
+            "INSUFFICIENT DAYS (9/10 credible days of 15, 6 degenerate)"
+            " — no interval, so no verdict",
+        ("prequential-majority (1w)", "all"):
+            "INSUFFICIENT DAYS (8/10 credible days of 13, 5 degenerate)"
+            " — no interval, so no verdict",
         ("directional-ensemble (1d, high conviction)", "|p-0.5|>=0.15"):
-            "INSUFFICIENT (9/30)",
-        # The six structural claims are backtests awaiting their first live
+            "INSUFFICIENT DAYS (5/10 credible days of 7, 2 degenerate)"
+            " — no interval, so no verdict",
+        ("directional-ensemble (1w, high conviction)", "|p-0.5|>=0.15"):
+            "FAILED — significantly worse than the naive baseline",
+        # The seven structural claims are backtests awaiting their first live
         # grade — PENDING until the horizon elapses, never a live verdict.
+        ("filingsdrift21", "all"):
+            "PENDING (first grade 2026-08-13, 0/30 resolved)",
         ("liquidity21", "all"):
             "PENDING (first grade 2026-08-14, 0/30 resolved)",
         ("liquidity21-crypto", "all"):
@@ -806,6 +836,9 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
     # snapshot that recomputed the target from its own tallies would pass the
     # freeze unnoticed. These are the pre-registration chain's values.
     EXPECTED_CLAIMS = {
+        # filingsdrift21 is chain seq 10 — pre-registered before the grading
+        # protocol the old snapshot pinned (seq 11), but absent from that export.
+        "filingsdrift21": (0.5, "prereg chain"),
         "liquidity21": (0.595, "prereg chain"),
         "liquidity21-crypto": (0.795, "prereg chain"),
         "trend21": (0.731, "prereg chain"),
@@ -834,13 +867,40 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
             self.assertIn("prequential", r["null_method"])
             self.assertEqual(r["null_acc"], r["null_prequential"])
 
-    def test_no_frozen_row_slipped_past_the_sample_floor(self):
-        """The snapshot record is below both evidence floors everywhere; if a
-        rule change lets any row publish an interval or a live verdict off
-        this data, the freeze above fails too — this pins the reason why."""
+    def test_no_row_publishes_an_interval_on_insufficient_evidence(self):
+        """An interval and a live verdict are the same privilege: a row may hold
+        them only on evidence that cleared the floor, and a row that declares
+        itself insufficient must hold neither.
+
+        This asserted `ci is None` for EVERY row until 2026-08-16, because the
+        shipped snapshot happened to sit below both floors everywhere. That
+        phrasing tested the rule only while the snapshot stayed thin — the day it
+        accrued enough resolved rows to grade, the assertion went false for an
+        entirely legitimate reason, and the cheap way out would have been to
+        delete it. That is how a real check gets switched off. Restated as the
+        invariant it always meant, it keeps its teeth on any snapshot, thin or
+        thick: a rule change that lets an under-evidenced row publish an interval
+        still fails here, and so does one that labels a row INSUFFICIENT while
+        handing it an interval anyway.
+        """
+        graded = 0
         for r in self._rows():
-            self.assertIsNone(r["ci"], r["predictor"])
-            self.assertLess(r["live_n"], MIN_INDEPENDENT_N, r["predictor"])
+            unproven = r["verdict"].startswith(("INSUFFICIENT", "PENDING"))
+            if unproven:
+                self.assertIsNone(r["ci"], r["predictor"])
+            if r["live_n"] < MIN_INDEPENDENT_N:
+                self.assertIsNone(r["ci"], r["predictor"])
+            if r["ci"] is not None:
+                graded += 1
+                self.assertGreaterEqual(r["live_n"], MIN_INDEPENDENT_N,
+                                        r["predictor"])
+                self.assertFalse(unproven, r["predictor"])
+        # A snapshot where nothing grades would satisfy every branch above
+        # vacuously — the exact shape that let the dead reproduce path look
+        # healthy. Require the freeze to be standing on real graded rows.
+        self.assertGreater(graded, 0,
+                           "no row in the shipped snapshot carries an interval — "
+                           "the freeze is asserting nothing")
 
 
 class TestAutoRetireRule(unittest.TestCase):

@@ -1,6 +1,6 @@
 {
- "generated": "2026-07-27T08:56:53+00:00",
- "git_commit": "82ef4948b17c2421945fd12a811e194ae784d414",
+ "generated": "2026-08-17T04:58:52+00:00",
+ "git_commit": "5fcf73162e4920f1e82f8c53ee07dbe97cec6c77",
  "survivorship_epoch": "2026-07-24",
  "hash_scheme": "datasetver v1 canonical records, sha256, floats %.10g (daemon/internal/datasetver.HashRecords)",
  "note": "grading tallies + input-series versions only; no bar data is redistributed (A10). Regenerate the published numbers with `python3 tools/accuracy_registry.py --snapshot repro` \u2014 see REPRODUCE.md.",
@@ -8,14 +8,20 @@
   {
    "file": "directional_days.csv",
    "kind": "directional-day-tallies",
-   "rows": 3,
-   "sha256": "6520cb305d0f58a73fa8e7fbea270ed6e2de6ca9d681aadaf8824ed1ec8da7c4"
+   "rows": 58,
+   "sha256": "f4a9b86fca7c9208ea31a5b6aea4b1c9c74edc4e27fd04466920c07123fe1126"
   },
   {
    "file": "prereg_claims.csv",
    "kind": "prereg-frozen-claims",
-   "rows": 6,
-   "sha256": "9abb4765b71aa9dd2cf6fa49c80351ab7bdfa1089a62bcd25b0a8cee693266e2"
+   "rows": 7,
+   "sha256": "4bdf625d3aea52e4a34e96a73d970ec0e578daf019b26d48507ba9b518377123"
+  },
+  {
+   "file": "grading_protocol.csv",
+   "kind": "prereg-grading-protocol",
+   "rows": 1,
+   "sha256": "24f18741ba3f6a1edf6bab3640679f47b91043f6753827e936923c4b94f159fd"
   },
   {
    "file": "structural_days.csv",
@@ -32,26 +38,20 @@
   {
    "file": "structural_claims.csv",
    "kind": "structural-claims",
-   "rows": 6,
-   "sha256": "9b8677adb8d7f6f39d91c939499db26e1f37e6e5fde551ffa7c73e0aa7b77e29"
+   "rows": 7,
+   "sha256": "f9518f1df3883c08f7068530a31d1543ef89ae4449d28a66ecedd00df9c76c91"
   },
   {
    "file": "pairs_inputs.csv",
    "kind": "pairs-input-series-versions",
-   "rows": 918,
-   "sha256": "1513bf91fd440d3c54b66de52b0953794f138d2b78b1cad405f22d47dab3a484"
+   "rows": 945,
+   "sha256": "95c8a55a95209a2e92e86e5a79d62298580787b022e85cf248d2e7387e33f94b"
   },
   {
    "file": "xsfactor_inputs.csv",
    "kind": "xsfactor-input-series-versions",
-   "rows": 1059,
-   "sha256": "0b48d32a6d098eddf80d6f2633283511856ed4b0b6558a4a8b22ea6ea7fd3604"
-  },
-  {
-   "file": "grading_protocol.csv",
-   "kind": "prereg-grading-protocol",
-   "rows": 1,
-   "sha256": "9e27987447db873c080c87f5fc52f56ca2283ca4d0321f839df8d7e428f75d62"
+   "rows": 2939,
+   "sha256": "72a7a73504f52c5f576ecdcacd07803e182bc846f69a4b4ba53db6db9995d999"
   }
  ]
 }
