@@ -104,7 +104,9 @@ func (d Deps) macro(w http.ResponseWriter, r *http.Request) {
 	volPct, volLabel := d.spyVolRegime(r)
 	// PUSH-20 macro regime from the synced hud payload (real, from stock-trader).
 	var hudMacro any
-	if payload, _, ok, _ := d.St.GetHud(ctx); ok {
+	var hudFetchedAt int64
+	if payload, fetchedAt, ok, _ := d.St.GetHud(ctx); ok {
+		hudFetchedAt = fetchedAt
 		var hud map[string]any
 		if json.Unmarshal([]byte(payload), &hud) == nil {
 			if m, has := hud["macro"]; has {
@@ -121,6 +123,8 @@ func (d Deps) macro(w http.ResponseWriter, r *http.Request) {
 		"volPct":      volPct,
 		"volLabel":    volLabel,
 		"push20Macro": hudMacro,
+		// F-2 shape: hud is a synced snapshot — publish ITS age, not asOf's.
+		"push20MacroFetchedAt": hudFetchedAt,
 		"note":        "Breadth + volatility are computed from your stored bars. Full per-symbol fundamentals and an economic-event calendar require a paid data feed (not wired). PUSH-20 macro comes from your stock-trader monitor.",
 		"asOf":        time.Now().Unix(),
 	})

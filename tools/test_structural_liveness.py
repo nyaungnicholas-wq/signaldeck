@@ -310,5 +310,42 @@ class TestExitCodes(unittest.TestCase):
         self.assertIn("mode=ro", src)
 
 
+class TestReadmeDateCheck(unittest.TestCase):
+    """The registry publishes first_ts + hd CALENDAR days; the resolver gates
+    on ts + hd*1.45. The check must flag the early date and nothing else."""
+
+    def _readme(self, body):
+        f = tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                        encoding="utf-8")
+        f.write(body)
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    def test_flags_calendar_day_date_as_early(self):
+        con = _db()
+        first = NOW - 5 * DAY
+        _call(con, 1, ts=first, resolved=False)
+        con.commit()
+        # Registry-style date: first_ts + H calendar days — before the gate.
+        early_date = sl._date(first + H * DAY)
+        path = self._readme(
+            f"| trend21 | 73.1% | PENDING (first grade {early_date}, "
+            f"0/30 resolved) |\n")
+        out = sl.readme_date_check(con, NOW, path)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["kind"], "trend21")
+        self.assertEqual(out[0]["gate_date"],
+                         sl._date(first + int(H * 1.45 * DAY)))
+        self.assertEqual(out[0]["days_early"], 9)  # 21*0.45 rounded down
+
+    def test_silent_on_unknown_kind_and_missing_readme(self):
+        con = _db()
+        path = self._readme(
+            "| nosuchkind | 50% | PENDING (first grade 2026-01-01, 0/30) |\n")
+        self.assertEqual(sl.readme_date_check(con, NOW, path), [])
+        self.assertEqual(sl.readme_date_check(con, NOW, path + ".missing"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

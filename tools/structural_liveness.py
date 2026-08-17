@@ -44,6 +44,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -160,6 +161,48 @@ def _date(ts: int) -> str:
     return dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%Y-%m-%d")
 
 
+DEFAULT_README = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "README.md")
+
+
+def readme_date_check(con: sqlite3.Connection, now: int,
+                      readme_path: str) -> list[dict]:
+    """Cross-check README 'first grade' dates against the real resolver gate.
+
+    The registry (sha-pinned, must not be edited) computes the published date
+    as first_ts + horizon_days CALENDAR days; the resolver gates on
+    ts + horizon_days*1.45. The published dates therefore run 9-28 days early
+    and make a healthy resolver look dead. Returns one entry per kind whose
+    published date is earlier than the gate date; kinds absent from
+    regime_outcomes and a missing/unreadable README are skipped silently.
+    """
+    try:
+        with open(readme_path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return []
+
+    out = []
+    for kind, readme_date in re.findall(
+            r"\|\s*([A-Za-z0-9_-]+)\s*\|[^|]*\|\s*"
+            r"PENDING \(first grade (\d{4}-\d{2}-\d{2})", text):
+        row = con.execute(
+            "SELECT MIN(ts), horizon_days FROM regime_outcomes "
+            "WHERE kind = ? AND superseded_by IS NULL", (kind,)).fetchone()
+        if row is None or row[0] is None:
+            continue
+        min_ts, horizon_days = row
+        gate_ts = min_ts + int(horizon_days * 1.45 * 86400)
+        gate_date = dt.datetime.fromtimestamp(
+            gate_ts, dt.timezone.utc).strftime("%Y-%m-%d")
+        if readme_date < gate_date:
+            days_early = (dt.date.fromisoformat(gate_date) -
+                          dt.date.fromisoformat(readme_date)).days
+            out.append({"kind": kind, "readme_date": readme_date,
+                        "gate_date": gate_date, "days_early": days_early})
+    return out
+
+
 def _print_report(con: sqlite3.Connection, status: dict[str, dict],
                   overdue: list[dict], now: int) -> None:
     # ASCII only: this prints to a cp1252 console on Windows.
@@ -234,11 +277,20 @@ def main(argv: list[str] | None = None) -> int:
         overdue = overdue_rows(con, now)
         status = per_kind_status(con, now, overdue)
 
+        early = readme_date_check(con, now, DEFAULT_README)
+
         if args.json:
-            print(json.dumps({"now": now, "kinds": status, "overdue": overdue},
-                             indent=2))
+            print(json.dumps({"now": now, "kinds": status, "overdue": overdue,
+                              "readme_dates_early": early}, indent=2))
         else:
             _print_report(con, status, overdue, now)
+            # Advisory only, never a failure: the misleading date lives in a
+            # sha-pinned tool; this note is the guard beside it.
+            for e in early:
+                print(f"\nNOTE: README publishes first grade {e['readme_date']}"
+                      f" for {e['kind']}, but the resolver gate opens"
+                      f" ~{e['gate_date']} ({e['days_early']} days later)."
+                      f" The README date is calendar-day; trust the gate.")
 
         # Computed from the data, NOT accumulated inside a print loop: the exit
         # code must be identical whether or not the table was rendered.
