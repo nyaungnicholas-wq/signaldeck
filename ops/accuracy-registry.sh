@@ -482,13 +482,20 @@ PY
 # Observed twice on 2026-08-09: once as the overnight state, and again the moment
 # this job re-graded. A daily job that predictably breaks the publish gate is the
 # gate's problem, not the operator's, so the same run now refreshes every surface.
+# A regeneration failure is tracked, not just echoed. Warning into a log that
+# nothing reads is how a stale published number survives: check-grader-health.ps1
+# only watches WAL size, and the two gates that police exactly this drift --
+# live_accuracy --check and deck_facts --check -- sit behind an `exit 0` guard in
+# ci.yml (lines 197-211) for the gitignored data/, so on a runner they never
+# execute at all. That left the WARNs below with no reader anywhere.
+docs_stale=0
 "$PY" "$SD/tools/live_accuracy.py" --write \
-  || echo "WARN: partials/live_accuracy.md not regenerated"
+  || { echo "WARN: partials/live_accuracy.md not regenerated"; docs_stale=1; }
 "$PY" "$SD/tools/live_accuracy.py" --inject $(cat "$SD/partials/INCLUDES.txt") \
-  || echo "WARN: live-accuracy blocks not re-injected"
+  || { echo "WARN: live-accuracy blocks not re-injected"; docs_stale=1; }
 # deck_facts reads the 4.9 GB database; a failure here is not fatal to grading.
 "$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md" \
-  || echo "WARN: STRATEGY_DECK.md §8 not re-injected"
+  || { echo "WARN: STRATEGY_DECK.md §8 not re-injected"; docs_stale=1; }
 
 # H9: page on VERDICT TRANSITIONS — a predictor changing state (PENDING→FAILED,
 # NO SKILL→SUPPORTED, …) is the page-worthy event; an unchanged state is not.
@@ -562,4 +569,18 @@ fi
 # not folded in: they measure freshness, not correctness. Unpublished anchors or
 # a stale research loop do not make a graded number wrong, and failing this task
 # for them would train the operator to ignore a red accuracy job.
+#
+# A failed document regeneration IS folded in, because it is not that kind of
+# event. It does not mean a surface is a little behind; it means the documents a
+# reader actually sees no longer carry the grade this run just computed, while
+# the run reports success. That is a published number being wrong, which is the
+# same class as the REFUSAL PATH above -- and unlike the liveness probes, nothing
+# downstream can catch it (see the docs_stale comment where it is set).
+if [ "${docs_stale:-0}" != "0" ]; then
+  echo "FAILED: the grade was computed and published, but at least one document" \
+       "surface was NOT regenerated from it (see the WARN line above). The" \
+       "published docs are now STALE relative to this grade. Re-run the failing" \
+       "generator before quoting any number from them."
+  exit 1
+fi
 exit 0
