@@ -177,6 +177,13 @@ type Source interface {
 	// Buckets returns the per-confidence-band record over the same window,
 	// along with the window's realized base rate and its distinct day count.
 	Buckets(ctx context.Context, horizon string, since time.Time) (buckets []Bucket, baseRate float64, days int, err error)
+	// ModelEmitting reports whether the directional model for this horizon is
+	// still published, and its verdict. Withholding means different things either
+	// side of that line: a RETIRED model that declines the cross-section is doing
+	// what retirement means, while a LIVE one doing the same is the coverage
+	// failure this monitor exists to catch. Implementations must return true when
+	// the state cannot be read — see the store implementation for why.
+	ModelEmitting(ctx context.Context, horizon string) (emitting bool, verdict string, err error)
 	// RawDayStats is DayStats measured on what the model EMITTED rather than on
 	// what has RESOLVED. At a 1d horizon the resolved view is a full day late,
 	// so a collapse starting today is invisible to DayStats until tomorrow —
@@ -233,6 +240,13 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 	}
 
 	var problems []string
+	// starvedNote carries a starvation that is EXPECTED, so it can be reported
+	// without failing the run. See the coverage branch below.
+	var starvedNote string
+	emitting, verdict, err := m.Src.ModelEmitting(ctx, horizon)
+	if err != nil {
+		emitting, verdict = true, "unreadable"
+	}
 
 	// 1a. Collapse on the RAW side, checked FIRST because it is both the earlier
 	// signal and the more fundamental failure: if the model itself stopped
@@ -273,14 +287,30 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 	if len(starved) > 0 {
 		sort.Slice(starved, func(i, j int) bool { return starved[i].Day < starved[j].Day })
 		w := starved[len(starved)-1] // newest: what is happening NOW
-		problems = append(problems, fmt.Sprintf(
+		msg := fmt.Sprintf(
 			"FORECAST COVERAGE STARVED on %d/%d day(s), most recently %s: only %d of %d "+
 				"symbols received a forecast (coverage %.3f, floor %.2f); the other %d were "+
 				"withheld with zero admitted legs. The published record thins out to that "+
 				"many names a day — check leg admission before reading any accuracy number "+
 				"over this window",
 			len(starved), len(rawDays), w.Day, w.Forecast(), w.Symbols,
-			w.CoverageRatio(), MinCoverageRatio, w.Withheld))
+			w.CoverageRatio(), MinCoverageRatio, w.Withheld)
+		// Same argument the withheld branch at the bottom already makes, applied
+		// to the cause rather than the sample size. A RETIRED model that declines
+		// the cross-section is doing what retirement means; erroring on it every
+		// run holds the daemon red indefinitely on a condition that is not a
+		// fault, and a monitor that is always red is one nobody reads — which
+		// would cost us the day it means something. Measured 2026-08-17: this
+		// fired on 11 of 15 days with both horizons retired and emitting=false.
+		// A model that is still EMITTING and starving is the coverage failure
+		// this check was built for, and that stays an error.
+		if emitting {
+			problems = append(problems, msg)
+		} else {
+			starvedNote = msg + fmt.Sprintf(" — EXPECTED, NOT A FAULT: the %s model is"+
+				" %q and not emitting, so declining is the honest answer. This becomes"+
+				" an ERROR again the moment it emits.", horizon, verdict)
+		}
 	}
 
 	// 1b. Collapse on the published (calibrated, resolved) side.
@@ -339,7 +369,20 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 		if withheld != "" {
 			problems = append(problems, withheld)
 		}
+		// Still say it, even when something else is failing: an expected
+		// starvation is context for whatever else tripped, not noise to drop.
+		if starvedNote != "" {
+			problems = append(problems, starvedNote)
+		}
 		return detail, fmt.Errorf("%s", strings.Join(problems, " | "))
+	}
+	// Expected starvation files the run as degraded, not failed, for exactly the
+	// reason spelled out below for a withheld verdict.
+	if starvedNote != "" {
+		if withheld != "" {
+			starvedNote += " | " + withheld
+		}
+		return detail, fmt.Errorf("%s: %w", starvedNote, workers.ErrDegraded)
 	}
 
 	// A WITHHELD verdict is degraded, NOT failed, and the distinction is the

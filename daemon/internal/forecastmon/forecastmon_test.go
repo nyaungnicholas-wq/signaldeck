@@ -17,6 +17,17 @@ type stubSource struct {
 	buckets []Bucket
 	base    float64
 	nDays   int
+	// retired, not emitting, so the zero value is a LIVE model. Every case
+	// written before this field keeps its original meaning: for a live model a
+	// starvation is a real error, and none of them silently became degraded.
+	retired bool
+}
+
+func (s stubSource) ModelEmitting(context.Context, string) (bool, string, error) {
+	if s.retired {
+		return false, "retired", nil
+	}
+	return true, "live", nil
 }
 
 func (s stubSource) DayStats(context.Context, string, time.Time) ([]DayStat, error) {
@@ -53,6 +64,53 @@ func run(t *testing.T, src Source) (string, error) {
 // be. So the two failures are asserted apart here. If a withheld row is ever
 // folded back into the discrimination count, the first loop fails; if the
 // coverage cliff is ever left unreported, the second does.
+// A RETIRED model that declines the cross-section is doing what retirement
+// means. Reporting that as a failed run every hour is how a monitor becomes
+// wallpaper: measured 2026-08-17, this fired on 11 of 15 days while both
+// horizons carried verdict=retired, emitting=false, so the surface that would
+// have shown a REAL coverage loss had been red for eleven days already.
+//
+// Degraded, not failed — and the message has to say which, or the operator
+// cannot tell the two apart either.
+func TestStarvationUnderARetiredModelIsDegradedNotFailed(t *testing.T) {
+	starved := []DayStat{
+		{Day: "2026-08-16", Symbols: 329, DistinctProbs: 18, Withheld: 310},
+		{Day: "2026-08-17", Symbols: 329, DistinctProbs: 34, Withheld: 293},
+	}
+	_, err := run(t, stubSource{rawDays: starved, base: 0.5, nDays: 2, retired: true})
+	if err == nil {
+		t.Fatal("an expected starvation must still be REPORTED, not swallowed")
+	}
+	if !errors.Is(err, workers.ErrDegraded) {
+		t.Errorf("retired-model starvation filed as a failure, not degraded: %v", err)
+	}
+	if !strings.Contains(err.Error(), "FORECAST COVERAGE STARVED") {
+		t.Errorf("degraded run stopped naming the condition: %v", err)
+	}
+	if !strings.Contains(err.Error(), "EXPECTED, NOT A FAULT") {
+		t.Errorf("message does not tell the reader this is expected: %v", err)
+	}
+}
+
+// The other half, and the one that must never be downgraded: the same coverage
+// cliff while the model is LIVE is the failure this check was built for.
+func TestStarvationWhileEmittingStaysAnError(t *testing.T) {
+	starved := []DayStat{
+		{Day: "2026-08-16", Symbols: 329, DistinctProbs: 18, Withheld: 310},
+		{Day: "2026-08-17", Symbols: 329, DistinctProbs: 34, Withheld: 293},
+	}
+	_, err := run(t, stubSource{rawDays: starved, base: 0.5, nDays: 2})
+	if err == nil {
+		t.Fatal("a live model starving the cross-section returned no error")
+	}
+	if errors.Is(err, workers.ErrDegraded) {
+		t.Errorf("live-model starvation was downgraded to degraded: %v", err)
+	}
+	if strings.Contains(err.Error(), "EXPECTED") {
+		t.Errorf("live starvation was described as expected: %v", err)
+	}
+}
+
 func TestWithheldRowsDoNotReadAsCollapse(t *testing.T) {
 	// Symbols = whole cross-section, Withheld = declined. Measured.
 	measured := []DayStat{
