@@ -72,6 +72,10 @@ type ForecastBucket struct {
 	Days   int
 	Said   float64
 	Actual float64
+	// DayRates is the realized up-rate per contributing day. The caller needs it
+	// to interval the bucket with days as the unit; Actual stays the pooled
+	// figure the report quotes.
+	DayRates []float64
 }
 
 // ForecastBuckets returns the per-confidence-band record since `since`, together
@@ -98,21 +102,39 @@ func (s *Store) ForecastBuckets(ctx context.Context, horizon string, since time.
 	              ELSE '>=70%%' END AS label
 	  FROM dedup WHERE rn = 1
 	)
-	SELECT label, COUNT(*), COUNT(DISTINCT d), AVG(prob), AVG(CAST(up AS REAL))
-	FROM b GROUP BY label`
+	SELECT label, d, COUNT(*), AVG(prob), AVG(CAST(up AS REAL))
+	FROM b GROUP BY label, d ORDER BY label, d`
 
 	rows, err := s.db.QueryContext(ctx, sqlPct(q), horizon, since.Unix())
 	if err != nil {
 		return nil, 0, 0, err
 	}
 	defer rows.Close() //nolint:errcheck
+	// One row per (bucket, day); folded here so Said/Actual stay POOLED — the
+	// figures the report quotes — while DayRates keeps each day separate for the
+	// interval. Doing the fold in SQL would have thrown the per-day record away.
 	var out []ForecastBucket
+	at := map[string]int{}
 	for rows.Next() {
-		var b ForecastBucket
-		if err := rows.Scan(&b.Label, &b.N, &b.Days, &b.Said, &b.Actual); err != nil {
+		var label, day string
+		var n int
+		var said, act float64
+		if err := rows.Scan(&label, &day, &n, &said, &act); err != nil {
 			return nil, 0, 0, err
 		}
-		out = append(out, b)
+		i, seen := at[label]
+		if !seen {
+			i = len(out)
+			at[label] = i
+			out = append(out, ForecastBucket{Label: label})
+		}
+		bk := &out[i]
+		tot := float64(bk.N + n)
+		bk.Said = (bk.Said*float64(bk.N) + said*float64(n)) / tot
+		bk.Actual = (bk.Actual*float64(bk.N) + act*float64(n)) / tot
+		bk.N += n
+		bk.Days++
+		bk.DayRates = append(bk.DayRates, act)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, 0, err

@@ -249,6 +249,23 @@ func TestSmallUniverseIsNotACollapse(t *testing.T) {
 	}
 }
 
+// daysAt builds a k-day realized-rate series centred on rate with a small
+// alternating spread, so a fixture carries a real per-day record instead of a
+// degenerate one. Spread is deliberately tight: these cases exist to test the
+// SIGN rule, and a wide series would fail them for the unrelated reason that the
+// interval swallowed the base rate.
+func daysAt(rate float64, k int) []float64 {
+	out := make([]float64, k)
+	for i := range out {
+		if i%2 == 0 {
+			out[i] = rate + 0.02
+		} else {
+			out[i] = rate - 0.02
+		}
+	}
+	return out
+}
+
 // Inversion is measured against the BASE RATE, not against the claim.
 // Overconfidence still ranks; negative information does not.
 func TestInversionIsAgainstTheBaseRate(t *testing.T) {
@@ -256,19 +273,22 @@ func TestInversionIsAgainstTheBaseRate(t *testing.T) {
 
 	// The real >=70% bucket from the collapsed window: claimed 80.9%, delivered
 	// 42.5% against a 58.3% base rate. Acting on it beat ignoring it — backwards.
-	real := Bucket{Label: ">=70%", N: 3802, Days: 31, Said: 0.809, Actual: 0.425}
+	real := Bucket{Label: ">=70%", N: 3802, Days: 31, Said: 0.809, Actual: 0.425,
+		DayRates: daysAt(0.425, 31)}
 	if !real.Inverted(base) {
 		t.Error("the measured >=70% bucket (said 80.9%, delivered 42.5%, base 58.3%) was not called inverted")
 	}
 
 	// Merely overconfident: claims 80%, delivers 65%, still above the base rate.
 	// Useful for ranking, so it must NOT be flagged.
-	if (Bucket{Label: ">=70%", N: 3802, Days: 31, Said: 0.80, Actual: 0.65}).Inverted(base) {
+	if (Bucket{Label: ">=70%", N: 3802, Days: 31, Said: 0.80, Actual: 0.65,
+		DayRates: daysAt(0.65, 31)}).Inverted(base) {
 		t.Error("an overconfident-but-informative bucket was flagged as inverted")
 	}
 
 	// A down-call that realizes MORE up than the base rate is equally inverted.
-	if !(Bucket{Label: "<30%", N: 3020, Days: 28, Said: 0.234, Actual: 0.70}).Inverted(base) {
+	if !(Bucket{Label: "<30%", N: 3020, Days: 28, Said: 0.234, Actual: 0.70,
+		DayRates: daysAt(0.70, 28)}).Inverted(base) {
 		t.Error("a down-call realizing above the base rate was not called inverted")
 	}
 
@@ -284,6 +304,26 @@ func TestInversionIsAgainstTheBaseRate(t *testing.T) {
 	// which any 14-day window passes, and never to the bucket's own — so on
 	// 2026-08-17 the 55-70% and >=70% buckets (189 and 198 rows, 2 days each)
 	// both published "acting on this bucket is worse than ignoring it".
+	// The OTHER half of the same lesson: enough days, but the gap is inside
+	// noise. This is the live 45-55% bucket of 2026-08-17 — 790 rows over 11
+	// days, claimed 48.7%, realized 49.7% against a 47.8% base. It cleared every
+	// count floor and published "acting on this bucket is worse than ignoring
+	// it" on a 1.9pp difference whose day-clustered z was -0.73. A verdict about
+	// live money needs an interval, not a point estimate.
+	noisy := Bucket{Label: "45-55%", N: 790, Days: 11, Said: 0.487, Actual: 0.497,
+		DayRates: []float64{0.31, 0.62, 0.40, 0.55, 0.38, 0.61, 0.44, 0.52, 0.35, 0.58, 0.46}}
+	if !invertedSign(noisy, 0.478) {
+		t.Fatal("fixture no longer points the wrong way; it tests nothing")
+	}
+	if !noisy.Judgeable() {
+		t.Fatal("fixture must clear the count floors, or it tests the wrong gate")
+	}
+	if noisy.Inverted(0.478) {
+		lo, hi, _ := noisy.clusteredBounds()
+		t.Errorf("a bucket whose day-clustered CI [%.3f,%.3f] straddles the 0.478 base rate "+
+			"still carried an inversion verdict", lo, hi)
+	}
+
 	twoDays := Bucket{Label: ">=70%", N: 198, Days: 2, Said: 0.862, Actual: 0.434}
 	if twoDays.Inverted(0.478) {
 		t.Error("198 rows from TWO days carried an inversion verdict — pseudo-replication")

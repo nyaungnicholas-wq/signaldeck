@@ -156,7 +156,46 @@ type Bucket struct {
 	// than ignoring it" — a claim on ~2 independent observations.
 	Days   int
 	Said   float64 // mean claimed P(up)
-	Actual float64 // realized up-rate
+	Actual float64 // realized up-rate, POOLED over rows
+	// DayRates is the realized up-rate of each contributing day, one entry per
+	// day. Actual answers "what happened"; this answers "could it have been
+	// chance", and only the second can carry a verdict. Pooling hides the
+	// clustering: 790 rows over 11 days has a day-clustered SE ~2.8x the naive
+	// binomial one, measured 2026-08-17.
+	DayRates []float64
+}
+
+// tCrit975 is Student's t at 97.5% for df=9.
+//
+// MinDaysForInversion already requires >=10 days, so df >= 9 always, and 2.262
+// is the WIDEST critical value in that admissible range (it falls to 1.96 as df
+// grows). Using it for every bucket is therefore conservative in the only
+// direction that matters here: the interval can be too wide, never too narrow,
+// so an inversion is never asserted on less evidence than the data supports.
+// A per-df table would buy tighter intervals and more assertions — the opposite
+// of what this check needs.
+const tCrit975 = 2.262
+
+// clusteredBounds is the 95% interval for the realized rate with each DAY as one
+// observation, not each symbol-day row. ok is false when the record cannot
+// support an interval at all.
+func (b Bucket) clusteredBounds() (lo, hi float64, ok bool) {
+	k := len(b.DayRates)
+	if k < 2 {
+		return 0, 0, false
+	}
+	var sum float64
+	for _, r := range b.DayRates {
+		sum += r
+	}
+	mean := sum / float64(k)
+	var ss float64
+	for _, r := range b.DayRates {
+		d := r - mean
+		ss += d * d
+	}
+	se := math.Sqrt(ss/float64(k-1)) / math.Sqrt(float64(k))
+	return mean - tCrit975*se, mean + tCrit975*se, true
 }
 
 // invertedSign is the direction test alone, with no sufficiency floor. Split out
@@ -175,11 +214,24 @@ func invertedSign(b Bucket, baseRate float64) bool {
 // ranking. A bucket claiming 80% and delivering BELOW what you would get by
 // guessing the majority class every time has negative information: acting on it
 // is worse than ignoring it. Only the second is an inversion.
+// It must also survive noise. "Acting on this bucket is worse than ignoring it"
+// is a directional claim about live money, and a point estimate cannot make it:
+// the surviving 45-55% assertion on 2026-08-17 was a 1.9pp gap whose
+// day-clustered z was -0.73. The interval must exclude the base rate on the side
+// the claim needs — an upper bound below it for a bucket claiming UP, a lower
+// bound above it for one claiming DOWN.
 func (b Bucket) Inverted(baseRate float64) bool {
-	if b.N < MinBucketN || b.Days < MinDaysForInversion {
+	if !b.Judgeable() || !invertedSign(b, baseRate) {
 		return false
 	}
-	return invertedSign(b, baseRate)
+	lo, hi, ok := b.clusteredBounds()
+	if !ok {
+		return false
+	}
+	if b.Said > 0.5 {
+		return hi < baseRate
+	}
+	return lo > baseRate
 }
 
 // Judgeable reports whether the bucket has enough INDEPENDENT record to carry a
@@ -366,29 +418,40 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 		// A bucket is judged on ITS OWN record, not the window's. nDays above is
 		// the whole window and passes easily; a single bucket can still be two
 		// days of rows wearing a three-figure n.
-		var thin []Bucket
+		var unproven []Bucket
 		for _, b := range buckets {
 			switch {
 			case b.Inverted(baseRate):
+				lo, hi, _ := b.clusteredBounds()
 				problems = append(problems, fmt.Sprintf(
 					"CALIBRATION INVERSION in bucket %s: claimed %.1f%% up, realized %.1f%% "+
-						"against a %.1f%% base rate (n=%d over %d day(s)). Acting on this bucket "+
-						"is worse than ignoring it",
-					b.Label, b.Said*100, b.Actual*100, baseRate*100, b.N, b.Days))
-			case invertedSign(b, baseRate) && !b.Judgeable():
-				thin = append(thin, b)
+						"against a %.1f%% base rate (n=%d over %d day(s); day-clustered 95%% CI "+
+						"[%.3f, %.3f] excludes it). Acting on this bucket is worse than ignoring it",
+					b.Label, b.Said*100, b.Actual*100, baseRate*100, b.N, b.Days, lo, hi))
+			case invertedSign(b, baseRate):
+				unproven = append(unproven, b)
 			}
 		}
 		// Say what was NOT judged. Dropping these silently would turn "we cannot
 		// tell" into "nothing found", which is the failure this file keeps naming.
-		for _, b := range thin {
-			note := fmt.Sprintf(
-				"inversion WITHHELD for bucket %s: it points the wrong way (claimed %.1f%%, "+
-					"realized %.1f%% vs %.1f%% base) but rests on n=%d across only %d day(s) "+
-					"(floors n>=%d, days>=%d). Every symbol on a day shares one market move, so "+
-					"this is not enough independent record to say either way",
-				b.Label, b.Said*100, b.Actual*100, baseRate*100, b.N, b.Days,
-				MinBucketN, MinDaysForInversion)
+		for _, b := range unproven {
+			var why string
+			lo, hi, ok := b.clusteredBounds()
+			switch {
+			case !b.Judgeable():
+				why = fmt.Sprintf("it rests on n=%d across only %d day(s) (floors n>=%d, days>=%d) "+
+					"and every symbol on a day shares one market move",
+					b.N, b.Days, MinBucketN, MinDaysForInversion)
+			case ok:
+				why = fmt.Sprintf("its day-clustered 95%% CI [%.3f, %.3f] over %d day(s) still "+
+					"straddles the %.3f base rate, so the gap is inside noise",
+					lo, hi, b.Days, baseRate)
+			default:
+				why = "no per-day record was available to put an interval on it"
+			}
+			note := fmt.Sprintf("inversion WITHHELD for bucket %s: it points the wrong way "+
+				"(claimed %.1f%%, realized %.1f%% vs %.1f%% base) but %s — not enough to say "+
+				"either way", b.Label, b.Said*100, b.Actual*100, baseRate*100, why)
 			if withheld == "" {
 				withheld = note
 			} else {
