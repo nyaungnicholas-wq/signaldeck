@@ -19,6 +19,7 @@ import { useEffect, useState } from "react";
 import {
   trackRecord,
   ledgerVerify,
+  ApiError,
   HORIZONS,
   type Horizon,
   type TrackRecord,
@@ -70,6 +71,13 @@ export default function ProofPage() {
   } | null>(null);
   const [lv, setLv] = useState<LedgerVerifyResponse | null>(null);
   const [lvErr, setLvErr] = useState<string | null>(null);
+  // The STATUS, not just the message. ApiError carries it precisely so a caller
+  // can tell "refused" from "unreachable" — its own doc cites a 451 rendered as
+  // "is the daemon running?" about a daemon that had just answered. This page
+  // still made that mistake one code over: a 401 was reported as "the daemon
+  // looks offline" while /api/health returned 200. null means no ApiError at
+  // all, i.e. the request never got an answer.
+  const [lvStatus, setLvStatus] = useState<number | null>(null);
 
   const settled = trState?.horizon === horizon ? trState : null;
   const tr = settled?.data ?? null;
@@ -80,7 +88,13 @@ export default function ProofPage() {
   useEffect(() => {
     let alive = true;
     const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-    ledgerVerify().then((l) => alive && setLv(l)).catch((e) => alive && setLvErr(msg(e)));
+    ledgerVerify()
+      .then((l) => alive && setLv(l))
+      .catch((e) => {
+        if (!alive) return;
+        setLvErr(msg(e));
+        setLvStatus(e instanceof ApiError ? e.status : null);
+      });
     return () => {
       alive = false;
     };
@@ -125,7 +139,13 @@ export default function ProofPage() {
       {lvErr && !lv && (
         <ErrorState
           message={lvErr}
-          hint="The SignalDeck daemon looks offline or this read is gated on this deployment."
+          hint={
+            lvStatus === null
+              ? "The daemon did not answer at all — start signaldeckd (:8322) and this page recovers on its own."
+              : lvStatus === 401 || lvStatus === 403
+                ? `The daemon ANSWERED and refused this read (${lvStatus}). It is gated on this deployment, so restarting it changes nothing — sign in, or open public reads with SIGNALDECK_PUBLIC_READS.`
+                : `The daemon answered ${lvStatus} for this read, so it is running; the refusal is what needs explaining.`
+          }
         />
       )}
 
@@ -207,7 +227,16 @@ export default function ProofPage() {
       {trErr && !tr && (
         <ErrorState
           message={trErr}
-          hint="The track record read timed out or is gated — the ledger above still verifies independently."
+          hint={
+            // Only claim the ledger verified if it actually did. Unconditionally
+            // telling a visitor "the ledger above still verifies independently"
+            // while that panel is ALSO showing an error is the page vouching for
+            // evidence it never obtained — on the one page whose whole purpose is
+            // that the evidence can be checked.
+            lv
+              ? "The track record read failed — the ledger above still verifies independently."
+              : "The track record read failed AND the ledger above did not verify either, so this page is showing no record at all right now."
+          }
         />
       )}
 
