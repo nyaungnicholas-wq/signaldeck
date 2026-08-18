@@ -9,11 +9,14 @@
 //	go run ./cmd/forecastmon --days 30
 //	go run ./cmd/forecastmon --days 3        # the post-collapse holdout only
 //
-// Exit status is 1 when a check trips, so it composes into a shell gate.
+// Exit status is 1 when a real check trips, so it composes into a shell gate.
+// An expected abstention — a retired or starving model declining the
+// cross-section — prints DEGRADED and exits 0.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -23,7 +26,23 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/forecastmon"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
+
+// classify maps a monitor result to the line printed and the exit status. A
+// retired or starving model declining the cross-section arrives here as
+// workers.ErrDegraded; exiting 1 on it would put an expected abstention back
+// behind a red gate, which is the defect fixed one layer down in forecastmon.
+func classify(err error) (string, int) {
+	switch {
+	case errors.Is(err, workers.ErrDegraded):
+		return fmt.Sprintf("DEGRADED (EXPECTED, NOT A FAULT): %v", err), 0
+	case err != nil:
+		return fmt.Sprintf("FAIL: %v", err), 1
+	default:
+		return "OK: no collapse, no inversion.", 0
+	}
+}
 
 func main() {
 	days := flag.Int("days", 14, "lookback window in days")
@@ -89,9 +108,7 @@ func main() {
 	m := &forecastmon.Monitor{Src: src, Horizon: *horizon, Window: time.Duration(*days) * 24 * time.Hour}
 	detail, err := m.Run(context.Background())
 	fmt.Printf("\n%s\n", detail)
-	if err != nil {
-		fmt.Printf("\nFAIL: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("\nOK: no collapse, no inversion.")
+	line, code := classify(err)
+	fmt.Printf("\n%s\n", line)
+	os.Exit(code)
 }
