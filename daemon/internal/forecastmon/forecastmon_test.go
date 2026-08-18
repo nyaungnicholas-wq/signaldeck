@@ -202,8 +202,39 @@ func TestCatchesTheRealCollapse(t *testing.T) {
 		t.Errorf("error does not name the failure: %v", err)
 	}
 	// It must name the worst day so an operator knows where to look.
-	if !strings.Contains(err.Error(), "8/8 day(s)") {
+	if !strings.Contains(err.Error(), "8 of 8 judgeable day(s)") {
 		t.Errorf("error does not report how many days collapsed: %v", err)
+	}
+	// And WHEN it last happened. The worst day alone cannot separate a collapse
+	// running now from one that ended a week ago.
+	if !strings.Contains(err.Error(), "MOST RECENT was 2026-08-04") {
+		t.Errorf("error does not say when the collapse last occurred: %v", err)
+	}
+}
+
+// Days too thin to judge are NOT clean days. Counting them as recovery is how a
+// live collapse hides behind starvation — measured 2026-08-17, 5 of 11 published
+// days carried fewer than 30 forecasts and the ratio is meaningless there.
+func TestCollapseReportsRecencyAndUnjudgeableDays(t *testing.T) {
+	measured := []DayStat{
+		{Day: "2026-08-06", Symbols: 327, DistinctProbs: 34}, // collapsed (0.104)
+		{Day: "2026-08-07", Symbols: 45, DistinctProbs: 29},  // clean, judgeable
+		{Day: "2026-08-09", Symbols: 19, DistinctProbs: 14},  // TOO THIN
+		{Day: "2026-08-13", Symbols: 64, DistinctProbs: 35},  // clean, judgeable
+		{Day: "2026-08-14", Symbols: 18, DistinctProbs: 11},  // TOO THIN
+	}
+	_, err := run(t, stubSource{days: measured, base: 0.478, nDays: 5})
+	if err == nil {
+		t.Fatal("a collapsed day in the window returned no error")
+	}
+	if !strings.Contains(err.Error(), "1 of 3 judgeable day(s)") {
+		t.Errorf("thin days were counted as judgeable: %v", err)
+	}
+	if !strings.Contains(err.Error(), "2 clean judgeable day(s) since") {
+		t.Errorf("does not report the clean run since the last collapse: %v", err)
+	}
+	if !strings.Contains(err.Error(), "2 day(s) in the window carried fewer than 30") {
+		t.Errorf("does not warn that thin days could not be judged: %v", err)
 	}
 }
 

@@ -399,12 +399,31 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 				worst = d
 			}
 		}
+		// The worst day alone cannot separate a collapse running NOW from one
+		// that ended a week ago; the starvation branch reports its newest day for
+		// exactly this reason. thin counts days the ratio cannot judge at all.
+		newest := collapsed[len(collapsed)-1]
+		var judgeable, cleanSince, thin int
+		for _, d := range days {
+			if d.Forecast() < MinSymbolsForCollapse {
+				thin++
+				continue
+			}
+			judgeable++
+			if d.Day > newest.Day && !d.Collapsed() {
+				cleanSince++
+			}
+		}
 		problems = append(problems, fmt.Sprintf(
-			"PUBLISHED CROSS-SECTION COLLAPSE on %d/%d day(s): worst %s emitted %d distinct probabilities "+
-				"across %d symbols (ratio %.3f, floor %.2f). Every statistic covering these days "+
-				"grades one market-wide call repeated per symbol, not %d independent trials",
-			len(collapsed), len(days), worst.Day, worst.DistinctProbs, worst.Symbols,
-			worst.DistinctRatio(), MinDistinctRatio, worst.Symbols))
+			"PUBLISHED CROSS-SECTION COLLAPSE on %d of %d judgeable day(s): worst %s emitted %d "+
+				"distinct probabilities across %d symbols (ratio %.3f, floor %.2f). Every statistic "+
+				"covering these days grades one market-wide call repeated per symbol, not %d "+
+				"independent trials. MOST RECENT was %s, with %d clean judgeable day(s) since; "+
+				"%d day(s) in the window carried fewer than %d forecasts and could not be judged "+
+				"at all, so quiet days there are not evidence it ended",
+			len(collapsed), judgeable, worst.Day, worst.DistinctProbs, worst.Symbols,
+			worst.DistinctRatio(), MinDistinctRatio, worst.Symbols,
+			newest.Day, cleanSince, thin, MinSymbolsForCollapse))
 	}
 
 	// 2. Inversion — only once the window can support a verdict.
