@@ -205,7 +205,22 @@ PY
   # (ledger_anchors held 10 rows, newest 2026-08-10) while none of them were
   # ever externally timestamped, and no check could tell the difference.
   # tools/anchor_liveness.py reads this key.
-  sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('anchor_last_published','$(date +%s)');" 2>>"$LOG"
+  # ...and CHECK that it was written. This exit status was unread, so the line
+  # below printed "published" whatever happened. Measured 2026-08-12: both the
+  # 20:27 and 20:48 runs logged "Error in 2nd command line argument: database is
+  # locked" from this very statement and then reported success — after the 18:02
+  # commit that gave sd_sqlite a 120s busy timeout, so the timeout is not always
+  # enough against the live daemon. The push had already left the machine and the
+  # durable evidence of it had not, which is precisely the blindness the comment
+  # above describes, reintroduced one line below the warning about it.
+  if ! sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('anchor_last_published','$(date +%s)');" 2>>"$LOG"; then
+    echo "PUSHED $(git rev-parse --short HEAD) BUT DID NOT RECORD IT: the anchor_last_published"
+    echo "stamp failed (see the error just above — 'database is locked' is the usual cause)."
+    echo "The commit LEFT the machine; the only durable evidence that it did was not written,"
+    echo "so tools/anchor_liveness.py will keep reporting STALE until this is re-run against"
+    echo "an unlocked database. Refusing to report a publish that cannot be demonstrated."
+    exit 1
+  fi
   echo "published $(git rev-parse --short HEAD)"
   exit $fail
 } >> "$LOG" 2>&1
