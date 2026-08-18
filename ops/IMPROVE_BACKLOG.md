@@ -11,16 +11,20 @@ until the item is genuinely done. An item without a runnable verification is a
 wish, not a task — the loop skips it and says so.
 
 **Accuracy goal (set 2026-08-07).** Baseline in `ops/accuracy_baseline.json`:
-1d acc 46.41% vs naive 57.46% (lift **-11.05pp**, 16,652 independent symbol-days);
-1w acc 49.20% vs naive 51.41% (lift -2.21pp). Target is +10% RELATIVE at fixed
-coverage — 1d 46.4%→51.1%, 1w 49.2%→54.1%. Progress: `python ops/accuracy_baseline.py --report`.
+1d acc 46.41% vs naive 57.46% (lift **-11.05pp**, 16,652 symbol-days — which are NOT
+independent: every symbol on a day shares one market move, so the evidence is the DAY
+count, and `beats-naive` now prints it);
+1w acc 49.20% vs naive 51.41% (lift -2.21pp). Target is +10% RELATIVE at a fixed
+ISSUE RATE — 1d 46.4%→51.1%, 1w 49.2%→54.1%. Progress: `python ops/accuracy_baseline.py --report`.
 
 Two things this goal is NOT. It is not +10 percentage points on 1d direction: the
 arcsin law puts 56% at IC≈0.21 and 60% at IC≈0.31, against a measured system IC
 of ~0.05 and a hedge-fund range of 0.10-0.17, and four independent measurements
 on this data put the directional ceiling at ~55%. And it is not reachable by
-abstaining — every accuracy gate below checks coverage in the same command,
-because dropping coverage raises accuracy for free.
+abstaining — every accuracy gate below checks the ISSUE RATE in the same command,
+because dropping the issue rate raises accuracy for free. Note the issue rate (share
+of deduplicated observations given a non-0.5 call, ~1.0) is NOT forecast coverage
+(share of the universe forecast at all, ~0.109); forecastmon reports that one.
 
 ---
 
@@ -55,7 +59,7 @@ files: `daemon/internal/pipeline/predict.go`
 
 ## [ ] 1d accuracy beats its own naive baseline
 
-Currently 46.41% against a folded majority baseline of 57.46% at coverage 1.0000.
+Currently 46.41% against a folded majority baseline of 57.46% at issue rate 1.0000.
 Beating the baseline is the floor, not the goal — but a forecaster losing to
 "always call the majority side" has a defect, not a weak edge. Coverage is
 checked in the same command; an improvement bought by issuing fewer calls fails.
@@ -65,7 +69,7 @@ files: `daemon/internal/pipeline/predict.go`
 
 ## [ ] 1w accuracy beats its own naive baseline
 
-49.20% against 51.41% at coverage 0.9977. The 1w map ships a rank-preserving
+49.20% against 51.41% at issue rate 0.9977. The 1w map ships a rank-preserving
 calibration whose outputs all sit below 0.5, so the directional CALL is
 unanimously "down" even though the ranking discriminates. The preserved ranking
 is the real win; the hard 0.5 threshold against a base rate near 0.466 is the
