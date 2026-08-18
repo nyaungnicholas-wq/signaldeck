@@ -66,7 +66,7 @@ func (s storeSource) Buckets(ctx context.Context, horizon string, since time.Tim
 	}
 	out := make([]Bucket, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, Bucket{Label: r.Label, N: r.N, Said: r.Said, Actual: r.Actual})
+		out = append(out, Bucket{Label: r.Label, N: r.N, Days: r.Days, Said: r.Said, Actual: r.Actual})
 	}
 	return out, base, days, nil
 }

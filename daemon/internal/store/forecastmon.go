@@ -63,8 +63,13 @@ func (s *Store) ForecastDayStats(ctx context.Context, horizon string, since time
 
 // ForecastBucket is one confidence band's claim measured against its outcome.
 type ForecastBucket struct {
-	Label  string
-	N      int
+	Label string
+	N     int
+	// Days is the bucket's own distinct-trading-day count. Rows dedup to one per
+	// symbol per day above, which removes the intra-day duplication but NOT the
+	// clustering: every symbol on a day still shares one market move. A verdict
+	// on this bucket needs its own day count, not the window's.
+	Days   int
 	Said   float64
 	Actual float64
 }
@@ -93,7 +98,8 @@ func (s *Store) ForecastBuckets(ctx context.Context, horizon string, since time.
 	              ELSE '>=70%%' END AS label
 	  FROM dedup WHERE rn = 1
 	)
-	SELECT label, COUNT(*), AVG(prob), AVG(CAST(up AS REAL)) FROM b GROUP BY label`
+	SELECT label, COUNT(*), COUNT(DISTINCT d), AVG(prob), AVG(CAST(up AS REAL))
+	FROM b GROUP BY label`
 
 	rows, err := s.db.QueryContext(ctx, sqlPct(q), horizon, since.Unix())
 	if err != nil {
@@ -103,7 +109,7 @@ func (s *Store) ForecastBuckets(ctx context.Context, horizon string, since time.
 	var out []ForecastBucket
 	for rows.Next() {
 		var b ForecastBucket
-		if err := rows.Scan(&b.Label, &b.N, &b.Said, &b.Actual); err != nil {
+		if err := rows.Scan(&b.Label, &b.N, &b.Days, &b.Said, &b.Actual); err != nil {
 			return nil, 0, 0, err
 		}
 		out = append(out, b)

@@ -256,26 +256,45 @@ func TestInversionIsAgainstTheBaseRate(t *testing.T) {
 
 	// The real >=70% bucket from the collapsed window: claimed 80.9%, delivered
 	// 42.5% against a 58.3% base rate. Acting on it beat ignoring it — backwards.
-	real := Bucket{Label: ">=70%", N: 3802, Said: 0.809, Actual: 0.425}
+	real := Bucket{Label: ">=70%", N: 3802, Days: 31, Said: 0.809, Actual: 0.425}
 	if !real.Inverted(base) {
 		t.Error("the measured >=70% bucket (said 80.9%, delivered 42.5%, base 58.3%) was not called inverted")
 	}
 
 	// Merely overconfident: claims 80%, delivers 65%, still above the base rate.
 	// Useful for ranking, so it must NOT be flagged.
-	if (Bucket{Label: ">=70%", N: 3802, Said: 0.80, Actual: 0.65}).Inverted(base) {
+	if (Bucket{Label: ">=70%", N: 3802, Days: 31, Said: 0.80, Actual: 0.65}).Inverted(base) {
 		t.Error("an overconfident-but-informative bucket was flagged as inverted")
 	}
 
 	// A down-call that realizes MORE up than the base rate is equally inverted.
-	if !(Bucket{Label: "<30%", N: 3020, Said: 0.234, Actual: 0.70}).Inverted(base) {
+	if !(Bucket{Label: "<30%", N: 3020, Days: 28, Said: 0.234, Actual: 0.70}).Inverted(base) {
 		t.Error("a down-call realizing above the base rate was not called inverted")
 	}
 
 	// Thin buckets never trip: post-collapse the <30% bucket holds 11 rows, and
 	// an alert built on that is exactly the overfitting this session forbids.
-	if (Bucket{Label: "<30%", N: 11, Said: 0.244, Actual: 0.545}).Inverted(0.3914) {
+	if (Bucket{Label: "<30%", N: 11, Days: 9, Said: 0.244, Actual: 0.545}).Inverted(0.3914) {
 		t.Error("an 11-row bucket tripped the inversion test")
+	}
+
+	// THE DEFECT THIS FIELD EXISTS FOR. A three-figure n drawn from two trading
+	// days is ~2 independent observations, because every symbol on a day shares
+	// one market move. MinDaysForInversion was applied to the WINDOW's day count,
+	// which any 14-day window passes, and never to the bucket's own — so on
+	// 2026-08-17 the 55-70% and >=70% buckets (189 and 198 rows, 2 days each)
+	// both published "acting on this bucket is worse than ignoring it".
+	twoDays := Bucket{Label: ">=70%", N: 198, Days: 2, Said: 0.862, Actual: 0.434}
+	if twoDays.Inverted(0.478) {
+		t.Error("198 rows from TWO days carried an inversion verdict — pseudo-replication")
+	}
+	if twoDays.Judgeable() {
+		t.Error("a 2-day bucket reported itself judgeable")
+	}
+	// It must still be recognised as pointing the wrong way, so the caller can
+	// report it as WITHHELD rather than drop it into silence.
+	if !invertedSign(twoDays, 0.478) {
+		t.Error("the sign test stopped seeing a wrong-way bucket; it would vanish entirely")
 	}
 }
 

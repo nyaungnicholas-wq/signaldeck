@@ -142,10 +142,29 @@ func (d DayStat) Starved() bool {
 
 // Bucket is one confidence band's claim measured against its outcome.
 type Bucket struct {
-	Label  string
-	N      int
+	Label string
+	N     int
+	// Days is how many DISTINCT trading days contributed rows to this bucket.
+	//
+	// N alone cannot support an inversion verdict and never could: every symbol
+	// on one day shares one market move, so rows cluster by day exactly as
+	// directionalrecord.go and store/forecastmon.go already say. MinDaysForInversion
+	// was being applied to the WINDOW's day count, which the window passes easily,
+	// and never to the bucket's own. Measured 2026-08-17: the 55-70% and >=70%
+	// buckets carried 189 and 198 rows drawn from TWO trading days each, and both
+	// were published as hard inversions reading "acting on this bucket is worse
+	// than ignoring it" — a claim on ~2 independent observations.
+	Days   int
 	Said   float64 // mean claimed P(up)
 	Actual float64 // realized up-rate
+}
+
+// invertedSign is the direction test alone, with no sufficiency floor. Split out
+// so the caller can tell "inverted and provable" from "inverted-looking on a
+// sample that cannot carry the claim" — the second must be reported as withheld,
+// never silently dropped.
+func invertedSign(b Bucket, baseRate float64) bool {
+	return (b.Said > 0.5 && b.Actual < baseRate) || (b.Said < 0.5 && b.Actual > baseRate)
 }
 
 // Inverted reports whether this bucket's realized rate sits on the wrong side of
@@ -157,17 +176,17 @@ type Bucket struct {
 // guessing the majority class every time has negative information: acting on it
 // is worse than ignoring it. Only the second is an inversion.
 func (b Bucket) Inverted(baseRate float64) bool {
-	if b.N < MinBucketN {
+	if b.N < MinBucketN || b.Days < MinDaysForInversion {
 		return false
 	}
-	switch {
-	case b.Said > 0.5 && b.Actual < baseRate:
-		return true // claimed up, realized rarer than the base rate
-	case b.Said < 0.5 && b.Actual > baseRate:
-		return true // claimed down, realized MORE up than the base rate
-	}
-	return false
+	return invertedSign(b, baseRate)
 }
+
+// Judgeable reports whether the bucket has enough INDEPENDENT record to carry a
+// verdict either way — rows AND distinct days. A bucket that fails this is not
+// evidence of calibration health; it is an absence of evidence, and the caller
+// says so out loud.
+func (b Bucket) Judgeable() bool { return b.N >= MinBucketN && b.Days >= MinDaysForInversion }
 
 // Source supplies the measured record. An interface so the checks are testable
 // without a database — the arithmetic is the part that must be right.
@@ -344,17 +363,37 @@ func (m *Monitor) Run(ctx context.Context) (string, error) {
 			"inversion check WITHHELD: %d/%d distinct days. Not a pass — there is not enough "+
 				"record to say either way", nDays, MinDaysForInversion)
 	default:
-		var inverted []Bucket
+		// A bucket is judged on ITS OWN record, not the window's. nDays above is
+		// the whole window and passes easily; a single bucket can still be two
+		// days of rows wearing a three-figure n.
+		var thin []Bucket
 		for _, b := range buckets {
-			if b.Inverted(baseRate) {
-				inverted = append(inverted, b)
+			switch {
+			case b.Inverted(baseRate):
+				problems = append(problems, fmt.Sprintf(
+					"CALIBRATION INVERSION in bucket %s: claimed %.1f%% up, realized %.1f%% "+
+						"against a %.1f%% base rate (n=%d over %d day(s)). Acting on this bucket "+
+						"is worse than ignoring it",
+					b.Label, b.Said*100, b.Actual*100, baseRate*100, b.N, b.Days))
+			case invertedSign(b, baseRate) && !b.Judgeable():
+				thin = append(thin, b)
 			}
 		}
-		for _, b := range inverted {
-			problems = append(problems, fmt.Sprintf(
-				"CALIBRATION INVERSION in bucket %s: claimed %.1f%% up, realized %.1f%% "+
-					"against a %.1f%% base rate (n=%d). Acting on this bucket is worse than ignoring it",
-				b.Label, b.Said*100, b.Actual*100, baseRate*100, b.N))
+		// Say what was NOT judged. Dropping these silently would turn "we cannot
+		// tell" into "nothing found", which is the failure this file keeps naming.
+		for _, b := range thin {
+			note := fmt.Sprintf(
+				"inversion WITHHELD for bucket %s: it points the wrong way (claimed %.1f%%, "+
+					"realized %.1f%% vs %.1f%% base) but rests on n=%d across only %d day(s) "+
+					"(floors n>=%d, days>=%d). Every symbol on a day shares one market move, so "+
+					"this is not enough independent record to say either way",
+				b.Label, b.Said*100, b.Actual*100, baseRate*100, b.N, b.Days,
+				MinBucketN, MinDaysForInversion)
+			if withheld == "" {
+				withheld = note
+			} else {
+				withheld += " | " + note
+			}
 		}
 	}
 

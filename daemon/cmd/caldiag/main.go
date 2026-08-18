@@ -26,6 +26,15 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ensemble"
+	// Imported for its init(), which registers the trading_day() SQLite function
+	// (internal/store/tradingdayfn.go). The queries below PARTITION BY
+	// trading_day(), and this tool opens the database itself rather than through
+	// store.Open -- deliberately, because store.Open applies the schema and
+	// migrates, which a mode=ro diagnostic promises never to do. Without this
+	// import every query dies with "no such function: trading_day", which is how
+	// the one command built to answer "did beta lose fairly or never run?" could
+	// not itself run.
+	_ "github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 func main() {
