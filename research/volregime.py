@@ -68,7 +68,14 @@ def _forward_backward(x, mu, var, A, pi):
         denom = _logsumexp(alpha[t, :, None] + logA + logB[t + 1, None, :] + beta[t + 1, None, :])
         logxi_sum += np.exp(alpha[t, :, None] + logA + logB[t + 1, None, :] + beta[t + 1, None, :] - denom)
     loglik = -np.sum(c)
-    return gamma, logxi_sum, loglik
+    # `alpha` is the SCALED forward variable, normalised at every step by c[t],
+    # so exp(alpha[t]) is exactly the FILTERED posterior P(state_t | x_0..x_t) --
+    # it conditions on the past and the present and nothing else. `gamma` is the
+    # SMOOTHED posterior P(state_t | x_0..x_{N-1}) and conditions on the whole
+    # series. Baum-Welch below wants the smoothed one; anything that assigns a
+    # label to be graded against a FUTURE bar must use the filtered one.
+    filtered = np.exp(alpha)
+    return gamma, logxi_sum, loglik, filtered
 
 
 def _logsumexp(v):
@@ -94,7 +101,7 @@ def fit_hmm(x, n_states=2, n_iter=100, tol=1e-5, seed=0):
     pi = np.full(n_states, 1.0 / n_states)
     prev_ll = -np.inf
     for _ in range(n_iter):
-        gamma, xi_sum, ll = _forward_backward(x, mu, var, A, pi)
+        gamma, xi_sum, ll, _ = _forward_backward(x, mu, var, A, pi)
         # M-step
         pi = gamma[0] / gamma[0].sum()
         for k in range(n_states):
@@ -112,23 +119,27 @@ def fit_hmm(x, n_states=2, n_iter=100, tol=1e-5, seed=0):
 
 
 def hmm_label_path(x, mu, var, A, pi):
-    """Return per-bar state labels for x[0..i] at each i (online, no lookahead).
+    """Per-bar state labels using the FILTERED posterior: label i sees x[0..i].
 
-    We refit-or-filter incrementally: for bar i we run forward over x[0..i] and
-    take argmax gamma at i. This is O(N^2) but correct and matches the no-lookahead
-    constraint. For speed we refit every 50 bars and forward-filter in between,
-    but the label at i never sees x[i+1..].
+    This function used to take argmax of `gamma` -- the SMOOTHED posterior -- over
+    50-bar chunks, while asserting in its own docstring that "the label at i never
+    sees x[i+1..]". It did. `_forward_backward` runs a backward recursion and
+    returns P(state_t | x_0..x_{end-1}), so for 49 of every 50 bars the label
+    conditioned on bars AFTER i.
+
+    That is not a subtle violation here, because of what the label is graded
+    against: fwd_abs(closes, i) = |log(C[i+1]/C[i])| is exactly the next bar's
+    move, which sat INSIDE the smoothing window. The label could see the answer.
+    Measured 2026-08-13: perturbing x[1201] shifted gamma[1200] by 0.222, and
+    249/8754 test-window labels (2.84%) differed from a causal filter -- against a
+    strictly-causal vol_tercile_labels baseline, which made the comparison
+    asymmetric in precisely the quantity being scored.
+
+    The filtered posterior is what "online" meant, and one forward pass gives it
+    for every bar, so this is also O(N) rather than N/50 full passes.
     """
-    N = len(x)
-    labels = np.zeros(N, dtype=int)
-    # incremental forward with periodic refit
-    step = 50
-    for start in range(0, N, step):
-        end = min(start + step, N)
-        seg = x[:end]
-        g, _, _ = _forward_backward(seg, mu, var, A, pi)
-        labels[start:end] = np.argmax(g[start:end], axis=1)
-    return labels
+    _, _, _, filtered = _forward_backward(x, mu, var, A, pi)
+    return np.argmax(filtered, axis=1)
 
 
 def fwd_abs(closes, i):
