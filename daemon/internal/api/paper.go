@@ -65,6 +65,23 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A nil Go slice marshals to JSON `null`, NOT `[]`. A book with no open
+	// positions and no closed trades — every fresh install, and any strategy
+	// between round trips — therefore shipped {"positions":null,"trades":null},
+	// while the web client's type declares them as arrays and calls
+	// `data.positions.length`. That threw "Cannot read properties of null
+	// (reading 'length')" and took the WHOLE /lab/paper page down to a blank
+	// error boundary: measured 2026-08-14, the page rendered 70 characters.
+	// Normalising at the JSON boundary fixes every consumer at once (web, MCP,
+	// any API client) instead of asking each to guard a shape the API should
+	// never have sent. "No rows" is an empty list, not the absence of a list.
+	if positions == nil {
+		positions = []store.PaperPosition{}
+	}
+	if recent == nil {
+		recent = []store.PaperTrade{}
+	}
+
 	// Reconstruct closed round-trips + turnover from the FULL ordered trade log
 	// (per symbol: a buy opens, the matching sell closes; won = sell net proceeds
 	// exceed the buy net outlay). This is how win-rate + turnover stay honest.
