@@ -30,11 +30,10 @@
 The following files are excluded from the publication gate by explicit registration:
 
 - [AUDIT_SUPERPROMPT.md](AUDIT_SUPERPROMPT.md)
+- [CLAUDE.md](CLAUDE.md)
 - [DEEP_REPORT_2026-08-03.md](DEEP_REPORT_2026-08-03.md)
 - [DEPLOY.md](DEPLOY.md)
 - [DOCS_INDEX.md](DOCS_INDEX.md)
-- [EIGHTY_PERCENT_SUPERPROMPT.md](EIGHTY_PERCENT_SUPERPROMPT.md)
-- [FIX_EVERYTHING_SUPERPROMPT.md](FIX_EVERYTHING_SUPERPROMPT.md)
 - [HANDOFF_2026-08-02.md](HANDOFF_2026-08-02.md)
 - [HANDOFF_PROMPT.md](HANDOFF_PROMPT.md)
 - [HOSTILE_REVIEW_FIX_SUPERPROMPT.md](HOSTILE_REVIEW_FIX_SUPERPROMPT.md)
@@ -63,4 +62,4 @@ The following files are excluded from the publication gate by explicit registrat
 
 ## Counts
 
-18 governed document(s), 31 exempt.
+18 governed document(s), 30 exempt.

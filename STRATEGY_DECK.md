@@ -41,41 +41,43 @@ The live record is not typed into this deck. It is generated from `data/accuracy
 
 <!-- BEGIN GENERATED live_accuracy -->
 
-Generated from `data/accuracy_registry.json` (grade of 2026-08-12T21:33:12) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+Generated from `data/accuracy_registry.json` (grade of 2026-08-18T18:25:41) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
 ### Live record
 
 | Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
 |---|---|---|---|---|---|---|---|
-| directional-ensemble (1d) | all | 2,380 | 42.9% | 56.9% | -13.9pp | 14 | [33.0%, 53.5%] |
-| prequential-majority (1d) | all | 2,051 | 58.1% | 55.7% | +2.4pp | 12 | withheld |
-| directional-ensemble (1w) | all | 2,256 | 38.8% | 62.6% | -23.8pp | 11 | withheld |
-| prequential-majority (1w) | all | 1,895 | 65.3% | 63.9% | +1.4pp | 9 | withheld |
+| directional-ensemble (1d) | all | 2,518 | 43.7% | 56.1% | -12.4pp | 17 | [33.7%, 54.3%] |
+| prequential-majority (1d) | all | 2,189 | 57.1% | 54.9% | +2.3pp | 15 | [37.4%, 74.9%] |
+| directional-ensemble (1w) | all | 3,249 | 42.3% | 62.4% | -20.1pp | 16 | [30.5%, 55.0%] |
+| prequential-majority (1w) | all | 2,888 | 64.1% | 63.2% | +0.9pp | 14 | withheld |
 | directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 454 | 45.2% | 48.6% | -3.4pp | 7 | withheld |
-| directional-ensemble (1w, high conviction) | \|p-0.5\|>=0.15 | 344 | 34.9% | 62.9% | -28.1pp | 9 | withheld |
+| directional-ensemble (1w, high conviction) | \|p-0.5\|>=0.15 | 374 | 35.8% | 62.7% | -26.9pp | 13 | [26.0%, 47.0%] |
 
 Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
 
 - `directional-ensemble (1d)` — FAILED — significantly worse than the naive baseline
-- `prequential-majority (1d)` — INSUFFICIENT DAYS (9/10 credible days of 12, 3 degenerate) — no interval, so no verdict
-- `directional-ensemble (1w)` — INSUFFICIENT DAYS (7/10 credible days of 11, 4 degenerate) — no interval, so no verdict
-- `prequential-majority (1w)` — INSUFFICIENT DAYS (6/10 credible days of 9, 3 degenerate) — no interval, so no verdict
+  - **verdict not supported by its own interval** — accuracy 0.4373 [0.3372, 0.5427] and its null 0.5610 [0.3842, 0.7235] OVERLAP across [0.3842, 0.5427]: the verdict compares the accuracy interval to the null's point estimate and ignores the null's own published interval, so the stated skill of -0.1237 is not resolved by this sample
+- `prequential-majority (1d)` — NO SKILL — indistinguishable from baseline
+- `directional-ensemble (1w)` — FAILED — significantly worse than the naive baseline
+  - **verdict not supported by its own interval** — accuracy 0.4229 [0.3050, 0.5503] and its null 0.6236 [0.5233, 0.7143] OVERLAP across [0.5233, 0.5503]: the verdict compares the accuracy interval to the null's point estimate and ignores the null's own published interval, so the stated skill of -0.2007 is not resolved by this sample
+- `prequential-majority (1w)` — INSUFFICIENT DAYS (9/10 credible days of 14, 5 degenerate) — no interval, so no verdict
 - `directional-ensemble (1d, high conviction)` — INSUFFICIENT DAYS (5/10 credible days of 7, 2 degenerate) — no interval, so no verdict
-- `directional-ensemble (1w, high conviction)` — INSUFFICIENT DAYS (9/10 credible days of 9) — no interval, so no verdict
+- `directional-ensemble (1w, high conviction)` — FAILED — significantly worse than the naive baseline
 
 ### Backtested claims with no live record yet
 
-- `filingsdrift21` — registered claim 50.0%, 162 forecasts recorded, 0 graded. Not a live result.
-- `liquidity21` — registered claim 59.5%, 4,751 forecasts recorded, 0 graded. Not a live result.
-- `liquidity21-crypto` — registered claim 79.5%, 114 forecasts recorded, 0 graded. Not a live result.
-- `trend21` — registered claim 73.1%, 4,797 forecasts recorded, 0 graded. Not a live result.
-- `trend21-crypto` — registered claim 93.4%, 114 forecasts recorded, 0 graded. Not a live result.
-- `trend63` — registered claim 70.0%, 4,797 forecasts recorded, 0 graded. Not a live result.
-- `vol21` — registered claim 55.8%, 4,816 forecasts recorded, 0 graded. Not a live result.
+- `filingsdrift21` — registered claim 50.0%, 177 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21` — registered claim 59.5%, 5,935 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21-crypto` — registered claim 79.5%, 149 forecasts recorded, 0 graded. Not a live result.
+- `trend21` — registered claim 73.1%, 5,997 forecasts recorded, 0 graded. Not a live result.
+- `trend21-crypto` — registered claim 93.4%, 149 forecasts recorded, 0 graded. Not a live result.
+- `trend63` — registered claim 70.0%, 5,997 forecasts recorded, 0 graded. Not a live result.
+- `vol21` — registered claim 55.8%, 6,019 forecasts recorded, 0 graded. Not a live result.
 
-**Multiplicity:** family_size=13, looks=27, divisor=351, corrected_alpha=0.00014245014245014247.
+**Multiplicity:** family_size=13, looks=34, divisor=442, corrected_alpha=0.00011312217194570136.
 
-**Survivorship:** epoch 2026-07-24; listing status resolvable for 325/336 graded symbols (96.7%): 11 inactive symbol(s) with no delisted_at; measured effect +0.31pp (active-only 83.58% minus survivorship-clean 83.27%, n=75,118 clean vs 17,860 active, revalidation of 2026-08-12T10:20:18+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
+**Survivorship:** epoch 2026-07-24; unmeasured — no graded post-epoch symbols; measured effect +0.36pp (active-only 83.67% minus survivorship-clean 83.31%, n=75,792 clean vs 18,084 active, revalidation of 2026-08-18T10:20:23+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
 
 <!-- END GENERATED live_accuracy -->
 
@@ -206,15 +208,15 @@ Measured from `data/signaldeck.db` by `tools/deck_facts.py`. Do not edit by hand
 | — observation days | 2,146 |
 | — distinct symbols | 2,947 |
 | — `source` values present | `bars-1d` |
-| `symbols.delisted_at` stamps | 1,870 |
+| `symbols.delisted_at` stamps | 1,869 |
 | — delisted 2020-2022 | 622 |
-| — delisted 2023-2025 | 1,120 |
-| — recent window against earlier | **180.1%** of the 2020-2022 count |
-| Daily-bar calendar (from `SPY`) | 1,913 sessions |
-| Stock bar coverage | 90.72% — 2,663,435 of 2,935,969 symbol-days over 2,940 symbols |
-| — still-listed names only | 99.61% over 1,070 symbols |
-| — names carrying `delisted_at` only | 79.29% over 1,870 symbols |
-| — symbols that stop printing early with no `delisted_at` | 25 |
+| — delisted 2023-2025 | 1,118 |
+| — recent window against earlier | **179.7%** of the 2020-2022 count |
+| Daily-bar calendar (from `SPY`) | 1,917 sessions |
+| Stock bar coverage | 90.76% — 2,671,948 of 2,944,041 symbol-days over 2,940 symbols |
+| — still-listed names only | 99.61% over 1,071 symbols |
+| — names carrying `delisted_at` only | 79.37% over 1,869 symbols |
+| — symbols that stop printing early with no `delisted_at` | 422 |
 | Crypto bar coverage | 100.00% over 7 symbols |
 
 The membership derives entirely from the daily-bar history, so it is point-in-time only to the extent that history is complete: the stock coverage row is the bound under every point-in-time claim in this deck. **Read the two cohort rows before the blended one.** They answer different questions — the still-listed row is whether the live universe has holes, the delisted row is how densely the imported dead names were ever sampled — and while dead names are being imported the blended figure moves with the import rather than with data quality. The symbols that stop printing with no `delisted_at` are the survivorship-relevant ones: they leave the universe without being recorded as dead, which is indistinguishable from having stopped looking.
