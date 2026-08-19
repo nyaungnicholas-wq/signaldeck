@@ -43,7 +43,9 @@ func TestValidRetentionIsSilent(t *testing.T) {
 // Unset is not a rejection either.
 func TestUnsetRetentionIsSilent(t *testing.T) {
 	envcfg.Reset()
-	os.Unsetenv("SIGNALDECK_SCORES_RETENTION_D")
+	// errcheck: the return is deliberately ignored - "already unset" is the
+	// state this test wants, so the only error it can report is not a failure.
+	_ = os.Unsetenv("SIGNALDECK_SCORES_RETENTION_D")
 	if got := envIntOr("SIGNALDECK_SCORES_RETENTION_D", 90); got != 90 {
 		t.Fatalf("got %d", got)
 	}
