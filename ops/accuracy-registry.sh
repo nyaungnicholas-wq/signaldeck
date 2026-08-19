@@ -123,6 +123,34 @@ if [ "$liveness_status" -ne 0 ]; then
   refusal_reason="research-loop liveness check failed (exit $liveness_status) — a narrated grid search left no verifiable judgment record, or a pre-registered forecast kind has never frozen a forecast and gave no refusal; the grader was not run"
 fi
 
+# EXTERNAL-TIMESTAMP LIVENESS. Anchors are SIGNED locally by the daemon and are
+# supposed to be PUBLISHED to a third-party git repo — "a digest sitting in a
+# third party's git history is the only evidence an operator who holds the
+# signing key cannot fabricate after the fact" (ops/anchor-publish.sh).
+#
+# Measured 2026-08-12: the signing half worked (ledger_anchors held 10 rows,
+# newest 2026-08-10) while anchor-publish.sh had not run since 2026-07-27 —
+# nothing invokes it from anywhere — and NOTHING measured the gap. Sixteen days
+# of anchors existed only on this machine, carrying none of the guarantee the
+# project publicly claims for them.
+#
+# It runs HERE because this is the daily task that already exists and already
+# runs the sibling liveness check, so the finding lands without waiting for a
+# new scheduled task to be registered. --emit-dq-event puts it in the
+# data-quality stream on the day it happens.
+#
+# DELIBERATELY NON-BLOCKING: it does NOT set refusal_reason. Unpublished anchors
+# make the record less externally verifiable, but they do not make the graded
+# numbers wrong, and suppressing the registry over it would withhold an honest
+# track record to punish a missing git push.
+"$PY" "$SD/tools/anchor_liveness.py" --db "$SD/data/signaldeck.db" --emit-dq-event \
+  > "$STDERR_CAPTURE" 2>&1
+anchor_liveness_status=$?
+cat "$STDERR_CAPTURE" >> "$LOG"
+if [ "$anchor_liveness_status" -ne 0 ]; then
+  echo "WARN: external anchor timestamping is not current (exit $anchor_liveness_status) — see above; registry still published" >> "$LOG"
+fi
+
 # PROTOCOL-DOCUMENT REGISTRATION — the same fail-closed shape
 # require_registered_grader() already has, applied to the protocol DOCUMENT
 # instead of the grader. PREREGISTRATION.md §0 makes the chain authoritative over
@@ -169,6 +197,21 @@ if [ -z "$refusal_reason" ]; then
   "$PY" "$SD/tools/accuracy_registry.py" --json "$OUT" > "$STDERR_CAPTURE" 2>&1
   grader_status=$?
   cat "$STDERR_CAPTURE" >> "$LOG"
+
+  # One-sided-book disclosure, merged into the artifact the grader just wrote.
+  # It runs AFTER grading and never touches tools/accuracy_registry.py, whose
+  # sha256 is pinned in the pre-registration chain -- that grader refuses to run
+  # when its own hash changes, and the code deciding verdicts must stay the code
+  # the chain froze. This adds a `honesty` block per directional row saying when
+  # an accuracy is just a one-sided selection's own base rate; it changes no
+  # verdict, no threshold and no retire flag.
+  #
+  # Its exit code is DELIBERATELY not propagated: a refused row is a disclosure
+  # about the model, not a grading outage, and folding it into grader_status
+  # would trip the refusal path below and suppress the whole report.
+  if [ "$grader_status" -eq 0 ]; then
+    "$PY" "$SD/tools/selection_honesty.py" --json "$OUT" --merge >> "$LOG" 2>&1 || true
+  fi
 
   after_generated=$(generated_of "$OUT")
   if [ "$grader_status" -ne 0 ]; then
@@ -439,13 +482,20 @@ PY
 # Observed twice on 2026-08-09: once as the overnight state, and again the moment
 # this job re-graded. A daily job that predictably breaks the publish gate is the
 # gate's problem, not the operator's, so the same run now refreshes every surface.
+# A regeneration failure is tracked, not just echoed. Warning into a log that
+# nothing reads is how a stale published number survives: check-grader-health.ps1
+# only watches WAL size, and the two gates that police exactly this drift --
+# live_accuracy --check and deck_facts --check -- sit behind an `exit 0` guard in
+# ci.yml (lines 197-211) for the gitignored data/, so on a runner they never
+# execute at all. That left the WARNs below with no reader anywhere.
+docs_stale=0
 "$PY" "$SD/tools/live_accuracy.py" --write \
-  || echo "WARN: partials/live_accuracy.md not regenerated"
+  || { echo "WARN: partials/live_accuracy.md not regenerated"; docs_stale=1; }
 "$PY" "$SD/tools/live_accuracy.py" --inject $(cat "$SD/partials/INCLUDES.txt") \
-  || echo "WARN: live-accuracy blocks not re-injected"
+  || { echo "WARN: live-accuracy blocks not re-injected"; docs_stale=1; }
 # deck_facts reads the 4.9 GB database; a failure here is not fatal to grading.
 "$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md" \
-  || echo "WARN: STRATEGY_DECK.md §8 not re-injected"
+  || { echo "WARN: STRATEGY_DECK.md §8 not re-injected"; docs_stale=1; }
 
 # H9: page on VERDICT TRANSITIONS — a predictor changing state (PENDING→FAILED,
 # NO SKILL→SUPPORTED, …) is the page-worthy event; an unchanged state is not.
@@ -506,3 +556,31 @@ except Exception:
     sd_notify "SignalDeck accuracy" "$n predictor(s) contradicted by their own live record — see the accuracy registry."
   fi
 fi
+
+# EXPLICIT EXIT. Everything above that can invalidate a grade already exits 1 on
+# its own (the REFUSAL PATH, which covers both a non-zero grader and a grader
+# that exited 0 without advancing the registry's timestamp). What was missing is
+# only that the script ENDED on the notification `if` above, so its status was
+# whatever that branch happened to leave behind -- incidental, not a statement.
+# Say it deliberately instead: reaching here means the grade was real and
+# published.
+#
+# The two liveness probes (research, anchor) stay ADVISORY on purpose and are
+# not folded in: they measure freshness, not correctness. Unpublished anchors or
+# a stale research loop do not make a graded number wrong, and failing this task
+# for them would train the operator to ignore a red accuracy job.
+#
+# A failed document regeneration IS folded in, because it is not that kind of
+# event. It does not mean a surface is a little behind; it means the documents a
+# reader actually sees no longer carry the grade this run just computed, while
+# the run reports success. That is a published number being wrong, which is the
+# same class as the REFUSAL PATH above -- and unlike the liveness probes, nothing
+# downstream can catch it (see the docs_stale comment where it is set).
+if [ "${docs_stale:-0}" != "0" ]; then
+  echo "FAILED: the grade was computed and published, but at least one document" \
+       "surface was NOT regenerated from it (see the WARN line above). The" \
+       "published docs are now STALE relative to this grade. Re-run the failing" \
+       "generator before quoting any number from them."
+  exit 1
+fi
+exit 0

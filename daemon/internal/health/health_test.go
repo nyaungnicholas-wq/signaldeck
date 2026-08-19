@@ -21,9 +21,9 @@ func TestStaleWorkers(t *testing.T) {
 	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
 	boot := now.Add(-2 * time.Hour)
 	specs := []WorkerSpec{
-		{Name: "fast", Interval: time.Minute},        // threshold floors at 30m
-		{Name: "hourly", Interval: time.Hour},        // threshold 3h
-		{Name: "stream", Interval: 0},                // skipped
+		{Name: "fast", Interval: time.Minute},          // threshold floors at 30m
+		{Name: "hourly", Interval: time.Hour},          // threshold 3h
+		{Name: "stream", Interval: 0},                  // skipped
 		{Name: "never-ran", Interval: 5 * time.Minute}, // falls back to boot
 	}
 	cases := []struct {
@@ -150,6 +150,156 @@ func TestStaleWorkersSleepGrace(t *testing.T) {
 // TestWatchdogEndToEnd runs the worker against a throwaway store: a stale
 // worker must produce health.json ok=false, exactly one dq_event (dedup on
 // the second run), and one notification on the transition.
+// THE REGRESSION THAT MATTERS FOR THIS RULE — the exact scenario that ran unseen
+// for four days. A worker on a 24h cadence that fires punctually and ERRORS every
+// single time. Staleness cannot reach it: it is never late. And the boot grace
+// hands a never-successful worker the daemon's boot time, against a 3x24h = 72h
+// threshold, while the measured mean daemon uptime is 9.67h (18 of 19 recorded
+// boots were shorter than 72h) — so the grace clock resets before the alarm can
+// fire, forever. If this test ever passes with FailingWorkers empty, both health
+// surfaces have gone blind again.
+// TestFailingWorkers_RecoveredStreamIngestorClears pins the one verdict this
+// rule could not previously retract.
+//
+// A long-running worker's Run blocks until the daemon exits, so once it
+// reconnects it produces NO further completed rows — nothing can ever break an
+// older error streak. Measured live 2026-08-13: crypto-live errored every 60s
+// from 17:59 while tickstream was down, reconnected at 18:03:50, and was still
+// named in health.json's failingWorkers at 21:08. Because `ok` requires
+// len(failing)==0, that held the whole file's ok=false for over three hours of
+// healthy streaming.
+func TestFailingWorkers_RecoveredStreamIngestorClears(t *testing.T) {
+	statuses := map[string][]string{
+		// Newest first: in flight now, errors from before the reconnect.
+		"crypto-live": {"running", "error", "error", "error", "error"},
+	}
+	longRunning := map[string]bool{"crypto-live": true}
+
+	if got := FailingWorkers(statuses, longRunning); len(got) != 0 {
+		t.Fatalf("a reconnected stream ingestor must clear; got %v", got)
+	}
+
+	// The exemption is ONLY for long-running workers. The same record on a
+	// periodic worker is a worker failing underneath an in-flight retry, which
+	// is exactly what the "running is skipped" rule exists to catch.
+	if got := FailingWorkers(statuses, nil); len(got) != 1 || got[0] != "crypto-live" {
+		t.Fatalf("a PERIODIC worker with the same record must still be failing; got %v", got)
+	}
+}
+
+// TestFailingWorkers_LongRunningStillFailsWhenNotInFlight keeps the exemption
+// narrow: it is the IN-FLIGHT run that means "connected", not the mere fact of
+// being a stream ingestor. A streamer whose newest row is an error has dropped
+// and is not streaming, so it must still be reported.
+func TestFailingWorkers_LongRunningStillFailsWhenNotInFlight(t *testing.T) {
+	got := FailingWorkers(map[string][]string{
+		"crypto-live": {"error", "error", "error"},
+	}, map[string]bool{"crypto-live": true})
+	if len(got) != 1 || got[0] != "crypto-live" {
+		t.Fatalf("a stream ingestor that is NOT in flight must still fail; got %v", got)
+	}
+}
+
+func TestFailingWorkersCatchesThePunctualFailure(t *testing.T) {
+	// forecast-monitor's real record: 15 of 15 status='error'.
+	// nil longRunning: forecast-monitor is a periodic worker, so the
+	// stream-ingestor exemption must not apply to it.
+	got := FailingWorkers(map[string][]string{
+		"forecast-monitor": {"error", "error", "error", "error", "error"},
+	}, nil)
+	if len(got) != 1 || got[0] != "forecast-monitor" {
+		t.Fatalf("a worker that has NEVER succeeded was not reported failing: %v", got)
+	}
+}
+
+func TestFailingWorkersDoesNotCryWolf(t *testing.T) {
+	cases := map[string]struct {
+		statuses []string
+		want     bool
+	}{
+		// A run in flight carries no verdict — it must not RESET a real streak...
+		"running above a failing streak": {[]string{"running", "error", "error", "error"}, true},
+		// ...nor manufacture one.
+		"running above a healthy worker": {[]string{"running", "ok", "ok"}, false},
+		"recovered on the newest run":    {[]string{"ok", "error", "error", "error"}, false},
+		"two failures is not three":      {[]string{"error", "error", "ok"}, false},
+		"intermittent, not broken":       {[]string{"error", "ok", "error", "ok"}, false},
+		// degraded is a worker honestly reporting it had nothing to deliver.
+		// expectancy-trainer and gbm-trainer do this by design and are already
+		// reported via staleness; counting them here would be double noise.
+		"degraded is not failing": {[]string{"degraded", "degraded", "degraded"}, false},
+		// orphaned is the boot sweep — the daemon died, not the worker.
+		"orphaned is not failing": {[]string{"orphaned", "orphaned", "orphaned"}, false},
+		"no history":              {nil, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := FailingWorkers(map[string][]string{"w": tc.statuses}, nil)
+			if (len(got) > 0) != tc.want {
+				t.Errorf("statuses %v → failing=%v, want %v", tc.statuses, got, tc.want)
+			}
+		})
+	}
+}
+
+// A punctual failure must reach data/health.json and flip ok, end to end —
+// through the real store, not just the pure rule.
+func TestWatchdogReportsFailingWorker(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close() //nolint:errcheck
+	ctx := context.Background()
+
+	// Punctual: every run is recent, so staleness has nothing to say. Broken:
+	// every run errored.
+	for i := 0; i < MinConsecutiveFailures; i++ {
+		id, err := st.StartWorkerRun(ctx, "punctual-but-broken")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.FinishWorkerRun(ctx, id, "error", "boom"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w := &Watchdog{
+		St:         st,
+		Specs:      []WorkerSpec{{Name: "punctual-but-broken", Interval: 24 * time.Hour}},
+		StatusPath: filepath.Join(dir, "health.json"),
+		Notify:     func(string) error { return nil },
+	}
+	w.started, w.wasOK, w.inited = time.Now().Add(-time.Minute), true, true
+
+	detail, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(detail, "failing every run") {
+		t.Errorf("detail does not name the failure: %q", detail)
+	}
+
+	var got Status
+	blob, err := os.ReadFile(filepath.Join(dir, "health.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(blob, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.OK {
+		t.Error("health.json reports ok:true while a worker fails every run")
+	}
+	if len(got.StaleWorkers) != 0 {
+		t.Errorf("worker is punctual; it must not be reported stale: %v", got.StaleWorkers)
+	}
+	if len(got.FailingWorkers) != 1 || got.FailingWorkers[0] != "punctual-but-broken" {
+		t.Errorf("failingWorkers = %v; want [punctual-but-broken]", got.FailingWorkers)
+	}
+}
+
 func TestWatchdogEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "test.db"))

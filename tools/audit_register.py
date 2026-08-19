@@ -37,8 +37,21 @@ CLOSED_VOCABULARY = ("fixed", "refuted", "accepted-risk", "open")
 RESOLVED = frozenset({"fixed", "refuted", "accepted-risk"})
 
 HEADER_CELLS = ["id", "area", "severity", "impact", "evidence (measured)", "status"]
-ROW_RE = re.compile(r"^\|\s*\*\*(A\d+)\*\*\s*\|")
-FILE_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})-reaudit\.md$")
+# Finding ids are `A12` in the table audits and `F-2` in the 2026-08-03
+# adversarial one. Both are matched so an audit keeps the ids its own prose
+# cites — renaming them to suit the parser would break every cross-reference.
+ROW_RE = re.compile(r"^\|\s*\*\*([A-Z]+-?\d+)\*\*\s*\|")
+# An optional descriptive infix is allowed: `2026-08-03-adversarial-reaudit.md`
+# went untracked for nine days purely because this pattern demanded the date sit
+# flush against `-reaudit`.
+FILE_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:-[a-z0-9]+(?:-[a-z0-9]+)*?)?-reaudit\.md$")
+# A file that STATES findings must be parsable. These are the two ways this repo
+# has ever declared them: the pipe table, and `## F-N (SEVERITY) — …` headings.
+# Files matching neither are narrative or research notes and are skipped on
+# purpose; files matching one but yielding no rows are a silent-coverage hole
+# and are reported, never skipped.
+DECLARES_TABLE_RE = re.compile(r"^\|\s*id\s*\|\s*area\s*\|\s*severity\s*\|", re.M | re.I)
+DECLARES_HEADINGS_RE = re.compile(r"^#{2,3}\s+([A-Z]+-?\d+)\s*\(", re.M)
 
 # Evidence that a "fixed" row is anchored in something checkable.
 TEST_NAME_RE = re.compile(r"\b(?:test_\w+|Test[A-Z]\w+)\b")
@@ -149,18 +162,52 @@ def check(findings: list[Finding]) -> list[str]:
     return violations
 
 
-def load(audits_dir: str) -> list[Finding]:
+def all_violations(findings: list[Finding], unreadable: list[str]) -> list[str]:
+    """Every reason the register should fail. An audit nobody can read is a
+    coverage hole, not a clean bill of health, so it counts alongside the
+    per-finding checks."""
+    return check(findings) + [f"UNTRACKED AUDIT {u}" for u in unreadable]
+
+
+def load(audits_dir: str) -> tuple[list[Finding], list[str]]:
+    """Parse every audit in the directory.
+
+    Returns (findings, unreadable). `unreadable` names files that DECLARE
+    findings but yielded none — the silent-coverage hole that let the five
+    2026-08-03 findings go untracked for nine days. Reporting beats skipping:
+    a register that quietly ignores an audit is indistinguishable from one that
+    found nothing wrong in it.
+    """
     findings: list[Finding] = []
+    unreadable: list[str] = []
     if not os.path.isdir(audits_dir):
-        return findings
+        return findings, unreadable
     for name in sorted(os.listdir(audits_dir)):
-        m = FILE_DATE_RE.search(name)
-        if not m:
+        if not name.endswith(".md"):
             continue
         path = os.path.join(audits_dir, name)
         with open(path, encoding="utf-8") as fh:
-            findings.extend(parse_findings(fh.read(), name, m.group(1)))
-    return findings
+            text = fh.read()
+        m = FILE_DATE_RE.search(name)
+        rows = parse_findings(text, name, m.group(1)) if m else []
+        if rows:
+            findings.extend(rows)
+            continue
+        # No rows. Only a complaint if the file actually states findings.
+        if DECLARES_TABLE_RE.search(text):
+            why = "its findings table did not parse"
+        elif DECLARES_HEADINGS_RE.search(text):
+            ids = sorted(set(DECLARES_HEADINGS_RE.findall(text)))
+            why = (
+                f"it states {len(ids)} finding(s) as headings ({', '.join(ids)}) with no "
+                f"status table - headings carry no status, so none of them can be tracked"
+            )
+        else:
+            continue  # narrative or research note, legitimately not an audit table
+        if not m:
+            why += "; its name also does not match <date>[-infix]-reaudit.md"
+        unreadable.append(f"{name}: {why}")
+    return findings, unreadable
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -169,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--audits-dir", default=os.path.join(repo_root, "audits"))
     args = ap.parse_args(argv)
 
-    findings = load(args.audits_dir)
+    findings, unreadable = load(args.audits_dir)
     if not findings:
         print(f"audit_register: no findings tables found in {args.audits_dir}", file=sys.stderr)
         return 1
@@ -181,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         unresolved = [f.fid for f in rows if f.status not in RESOLVED]
         print(f"  {a}: {len(rows)} findings, unresolved: {', '.join(unresolved) or 'none'}")
 
-    violations = check(findings)
+    violations = all_violations(findings, unreadable)
     if violations:
         print("\naudit_register: FAIL", file=sys.stderr)
         for v in violations:

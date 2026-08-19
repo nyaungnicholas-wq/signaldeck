@@ -22,6 +22,13 @@ export function useScreenerData() {
   const [ranking, setRanking] = useState<RankedRow[] | null>(null);
   const [regimes, setRegimes] = useState<RegimeState[] | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  // A FAILED ranking fetch is not an empty ranking. Swallowing it left `ranking`
+  // null, screenerModel read it as `ranking ?? []`, every row came back with
+  // rank === null, and ScreenerTable rendered "—" under the tooltip "not in the
+  // latest ranking pass" — a factual assertion that the pass RAN and excluded
+  // the symbol. The rows path in this same hook already splits loading/error/
+  // empty correctly, which is exactly why the enricher columns leaked.
+  const [rankingFailed, setRankingFailed] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -38,8 +45,14 @@ export function useScreenerData() {
         });
       api
         .ranking()
-        .then((r) => alive && setRanking(r ?? []))
-        .catch(() => {});
+        .then((r) => {
+          if (!alive) return;
+          setRanking(r ?? []);
+          setRankingFailed(false);
+        })
+        .catch(() => {
+          if (alive) setRankingFailed(true);
+        });
       api
         .regime()
         .then((r) => alive && setRegimes(r.states ?? []))
@@ -59,5 +72,5 @@ export function useScreenerData() {
     setRetryTick((t) => t + 1);
   }, []);
 
-  return { rows, err, ranking, regimes, retry };
+  return { rows, err, ranking, regimes, rankingFailed, retry };
 }

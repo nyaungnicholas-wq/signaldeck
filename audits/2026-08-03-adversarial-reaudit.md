@@ -10,6 +10,32 @@ The six items in that doc's "Still open" list are **not** repeated here.
 
 ---
 
+## Status register
+
+Added 2026-08-12, nine days after this audit was written, because it was never
+tracked. `tools/audit_register.py` skipped this file for two independent
+reasons, either alone sufficient: its filename carries an `-adversarial-` infix
+the discovery regex did not allow, and it states findings as headings, which
+carry no status for the register to read. Only 3 of the 9 files in `audits/`
+were being parsed. Nine days untracked meant nine days unaudited — nobody
+re-checked these, and F-2 was still live when it was finally read.
+
+Both causes are fixed: the regex now allows an infix, and a file that declares
+findings but yields no parsable rows is now REPORTED rather than skipped, so no
+audit can go silently unread again. This table is what makes the five findings
+below trackable; every status was re-verified against live code on 2026-08-12,
+not inherited from the prose.
+
+| id | area | severity | impact | evidence (measured) | status |
+|---|---|---|---|---|---|
+| **F-1** | honesty / web | HIGH | `/accuracy` rendered a REFUSED registry as a successful one — blank fields, no refusal message. | Re-verified 2026-08-12: `web/src/app/accuracy/page.tsx:287` types the status as `AccuracyStatus \| "REFUSED"`, `:326` defaults a missing body to `REFUSED`, and `:366` renders the explicit "No accuracy figures are shown while publication is refused" copy. The fix cites this finding in-comment at `:276`. | **fixed** |
+| **F-2** | quant / api | HIGH | `/api/recommendation` served a stale price under a current timestamp. `Inputs` had `HasPrice`+`Price` and no age field, so the engine could not gate on price age even in principle, while every other leg was gated. Build()'s own comment already promised expected return was "only defensible when BOTH a heuristic fair value and a live price exist"; the code only checked that one existed. | STILL OPEN when re-read on 2026-08-12, nine days later — fixed that day in commit 58a11e0. Exposure measured first: across 329 active symbols the newest 1d bar is median 1.0 days old and only 3 exceed 2 days, but EA's was 9 days old and MVO's 20. `Inputs` gains `PriceAgeSec`, gated at `priceStaleAgeSec` (5 days, clear of a long weekend); both API call sites populate it from the bar timestamp. Proven end-to-end against the real database, not a fixture: exactly EA (9.1d) and MVO (20.1d) withheld, 327 kept, no false positives, `CurrentPrice` still shown with the age disclosed. Pinned by `TestExpectedReturnRefusedOnStalePrice`, `TestExpectedReturnSurvivesLongWeekend` and `TestUnsuppliedPriceAgeIsNotStale`; RED on the absent field before the change, 122 Go packages green after. | **fixed** |
+| **F-3** | honesty / web | MEDIUM | `/accuracy` hardcoded a verdict table its own header said could not exist. | Re-verified 2026-08-12: verdicts are data-driven off `r.verdict` (`page.tsx:50`), with `verdictOf` returning an explicit `WITHHELD (provenance unresolvable)` rather than defaulting to a real verdict, and the file header now records that there is "no second copy of the verdict logic here to drift". | **fixed** |
+| **F-4** | storage | MEDIUM | Claimed WAL checkpoint starvation, and named it "the likely cause of the standing grading refusal". | REFUTED on measurement 2026-08-12. Grading runs (registry `generated=2026-08-12T21:33:12`) and the WAL sits FLAT at 64.0MB, max 65.5, across all 20 recorded governor passes — 1.3% of a 4.9GB database. TRUNCATE is denied on all 20 and each still reports `ok`, which reads like a false success but is not: that is the case the ladder is built for, the lower rungs reclaim 900–2000 frames a pass, and the pass genuinely did work. The size alarm is calibrated, not blind — `wal_checkpoint_busy` fired 136 times between 07-17 and 08-11 when the WAL really did run away (peak 141.5MB) and 0 times in the last 24h. The frame-stall detector cannot fire here because the frame index moves every pass (940, 2037, 1184, 1671, 902), but nothing is being missed. | **refuted** |
+| **F-5** | ops | MEDIUM | The grader had never run on this machine; the refusal had been frozen 33 hours. | Re-verified 2026-08-12: the grader runs, `data/accuracy_registry.json` carries `generated=2026-08-12T21:33:12`, and the prior registry `generated=2026-08-12T20:48:19` shows repeated execution rather than a one-off. | **fixed** |
+
+---
+
 ## F-1 (HIGH) — `/accuracy` renders a REFUSED registry as a successful one
 
 **Where:** `web/src/app/accuracy/page.tsx:64-71` (the `Registry` type),

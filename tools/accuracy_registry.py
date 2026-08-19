@@ -98,6 +98,107 @@ MIN_DISTINCT_DAYS = 10
 # auto-retire rule's frozen digest still pins MIN_DISTINCT_DAYS.
 MIN_DISTINCT_BLOCKS = 10
 
+# MIN_DAY_OBSERVATIONS is the per-day size below which a graded day is not a
+# credible cross-sectional block.
+#
+# MEASUREMENT ONLY — IT DOES NOT GATE ANYTHING YET, deliberately. See
+# measure_thin_day_exclusion, which publishes what it would cost, and the note
+# at the foot of this comment for why the gate itself is a separate change.
+#
+# The day-resampled interval treats each graded day as one cluster, and
+# MIN_DISTINCT_BLOCKS gates publication on how many clusters exist. Nothing
+# checks how much cross-section a day actually held, so a day on which the
+# ensemble spoke about ONE symbol counts toward that gate exactly as much as a
+# day covering the whole universe. Measured 2026-08-12, the graded populations
+# were bimodal with nothing in between:
+#
+#   1d  [1, 2, 4, 6, 23, 40, 43, 320, 322, 323, 323, 323, 324, 326]
+#   1w  [1, 4, 5, 7, 314, 317, 319, 320, 321, 324, 324]
+#
+# Four of 14 (1d) and four of 11 (1w) "days" carried under 1% of the
+# observations between them while supplying a third of the block count that
+# authorised publishing an interval.
+#
+# The value is NOT invented here: it mirrors forecastmon.MinSymbolsForCollapse,
+# which the daemon already defines as "the universe size below which the
+# distinct-ratio test is not meaningful — a handful of symbols legitimately
+# share a forecast". A day too thin to test for collapse is too thin to be a
+# cross-sectional block, and 30 sits in the empty gap between the two
+# populations above rather than near either.
+#
+# WHY THE GATE IS NOT WIRED HERE. Two implementations were tried and both were
+# wrong in a way worth recording, because the obvious fix is the trap:
+#
+#   1. Dropping thin days from the graded population (a HAVING on the day
+#      tally) broke 12 tests of UNRELATED behaviour — stale-feed, survivorship,
+#      retire flags — because it amputates the population for every caller, not
+#      just the interval. Making those pass would have meant rewriting a dozen
+#      fixtures that are not about this, i.e. fitting the tests to the code.
+#   2. Filtering only inside clustered_ci_blocks fixes the block count but
+#      leaves the POINT ESTIMATE over all days while the INTERVAL covers only
+#      thick ones, so the published accuracy and its published CI would describe
+#      different populations.
+#   3. Filtering in grade_directional_days — the ONE point every downstream
+#      statistic derives from, which fixes (1) and (2) — still fails, and the
+#      failure is the useful one. TestSurvivorshipBoundary builds a deliberate
+#      THREE-SYMBOL universe and asserts survivorship_coverage == 2/3. In a
+#      3-symbol universe a 3-observation day IS the entire cross-section, so an
+#      absolute row floor calls a complete day thin. Widening that fixture to 30
+#      symbols does not preserve the test: it changes the very ratio under test.
+#
+# THAT IS THE REAL FINDING, and it condemns the threshold, not the fixture: an
+# absolute observation floor conflates "few observations" with "thin
+# cross-section", and those are the same thing only when the universe is large.
+# The correct predicate is coverage RELATIVE to the universe that day.
+#
+# COVERAGE IS ALSO THE WRONG PREDICATE, and this was MEASURED rather than
+# reasoned. The denominator does exist outside the graded population: withheld
+# forecasts ARE persisted in `predictions` (n_used = 0 AND raw_prob = 0.5 is an
+# exact filter for them — see store.ForecastDayStatsRaw), so call-day coverage
+# is computable. Computed on 2026-08-12 for every graded day, it does not track
+# thinness at all:
+#
+#   1d day 20660: graded n=1    call-day coverage 0.982 (325 of 331 forecast)
+#   1d day 20659: graded n=6    call-day coverage 0.982
+#   1w day 20665: graded n=1    call-day coverage 0.985
+#   1d day 20671: graded n=43   call-day coverage 0.169
+#
+# A day on which the model spoke about 98% of the universe yields ONE graded
+# observation. Thin graded days are produced by RESOLUTION AND SETTLEMENT
+# ATTRITION — outcomes not yet resolved, or quarantined — not by the ensemble
+# declining to forecast. So gating on coverage would drop the wrong days and
+# keep the degenerate ones.
+#
+# WHERE THAT LEAVES IT. Two candidate predicates are now refuted with data:
+# an absolute observation floor (wrong: conflates a small universe with a thin
+# one) and call-day coverage (wrong: uncorrelated with graded thinness). What
+# remains defensible is narrower than either — the interval's design_effect
+# ALREADY prices unequal cluster sizes correctly, so the only real defect is
+# that MIN_DISTINCT_BLOCKS can be satisfied by degenerate one-observation days.
+# The fix belongs at the ADMISSION test, not the population, and it still needs
+# a size predicate that does not misfire on a small universe. Unresolved on
+# purpose: three implementations and two predicates have been tried, and
+# shipping a gate that drops the wrong days is worse than publishing the
+# measurement and saying so.
+#
+# Until then this constant measures and does not gate. The measurement is the
+# honest half: it sizes the padding (a third of the block count) without
+# pretending a number it cannot yet compute correctly.
+MIN_DAY_OBSERVATIONS = 30
+
+# DEGENERATE_BLOCK_FRACTION is the share of the sample's OWN median day below
+# which a cluster is not credible evidence. See the admission test in
+# clustered_ci for why this is relative rather than absolute: both absolute
+# predicates were refuted with data (a fixed row floor calls a complete day thin
+# in a small universe; call-day coverage is uncorrelated with graded thinness).
+#
+# A fraction of the median needs no external denominator and self-scales, so it
+# separates the live populations (1d 10/14, 1w 7/11 credible) while keeping ALL
+# blocks on every test fixture shape — 3-symbol universes included. 10% is "an
+# order of magnitude below typical", the same calibration idiom
+# forecastmon.MinDistinctRatio uses.
+DEGENERATE_BLOCK_FRACTION = 0.10
+
 # --------------------------------------------------------------------------- #
 # MULTIPLICITY — what the published interval's error rate actually is
 # --------------------------------------------------------------------------- #
@@ -1152,9 +1253,42 @@ def clustered_ci(days: list[tuple[int, int]], min_clusters: int = MIN_DISTINCT_D
     }
     if n <= 0:
         return out
-    if len(days) < min_clusters:
-        out["ci_reason"] = (f"withheld: {len(days)}/{min_clusters} {unit} — "
-                            "too few to measure between-cluster variance")
+    # ADMISSION COUNTS CREDIBLE CLUSTERS, NOT ROWS IN A GROUP BY.
+    #
+    # min_clusters exists to refuse an interval built on too few independent
+    # samples, but it counted any day that produced a row — so a day carrying
+    # ONE observation satisfied it exactly as much as a day carrying 320.
+    # Measured 2026-08-12: 1d had 14 "days" of which 4 carried 1, 2, 4 and 6
+    # observations; 1w had 11 of which 4 carried 1, 4, 5 and 7. Under 1.5% of the
+    # rows, a third of the count that authorised publishing.
+    #
+    # The predicate is RELATIVE to this sample's own typical day, which is what
+    # makes it safe. Two absolute predicates were tried and both misfire: a fixed
+    # row floor calls a complete day thin in a small universe (a 3-symbol
+    # universe has 3-row days), and call-day coverage turned out to be
+    # uncorrelated with graded thinness — a day the model forecast 98% of the
+    # universe on still yields one graded row, because thinness comes from
+    # resolution and settlement attrition, not abstention. A fraction of the
+    # median needs no external denominator and self-scales: on the live corpus it
+    # separates 1d 10/14 and 1w 7/11, and on every test fixture shape it keeps
+    # ALL blocks. An order of magnitude below typical is the same calibration
+    # idiom MinDistinctRatio uses.
+    #
+    # ONLY THE ADMISSION DECISION CHANGES. n, hits, acc, design_effect and the
+    # interval are all still computed over EVERY cluster, so a published number
+    # and its published CI keep describing the same population — the failure mode
+    # that killed an earlier attempt at this.
+    sizes = [dn for dn, _ in days]
+    floor = statistics.median(sizes) * DEGENERATE_BLOCK_FRACTION if sizes else 0
+    credible = [d for d in days if d[0] >= floor]
+    out["credible_blocks"] = len(credible)
+    if len(credible) < min_clusters:
+        detail = ""
+        if len(credible) != len(days):
+            detail = (f" ({len(days) - len(credible)} of {len(days)} were degenerate: "
+                      f"under {DEGENERATE_BLOCK_FRACTION:.0%} of the median day)")
+        out["ci_reason"] = (f"withheld: {len(credible)}/{min_clusters} credible {unit}"
+                            f"{detail} — too few to measure between-cluster variance")
         return out
     deff = design_effect(days)
     if deff is None:
@@ -1223,8 +1357,54 @@ def trading_day(ts: int) -> int:
     return (ts - TRADING_DAY_OFFSET_SECS) // SECONDS_PER_DAY
 
 
+def settle_day(settle_ts: int | None, ts: int) -> int | None:
+    """Fold a RESOLVED row to its unit of independent evidence.
+
+    Mirrors daemon/internal/marketdata/settleday.go exactly; the two must not
+    drift. trading_day(ts) folds on the calendar day, which is the right unit
+    off a 24/7 market but not off one that closes: predictions issued Friday,
+    Saturday and Sunday resolve against ONE settled move (Friday->Monday), yet
+    the calendar fold counts three independent observations. Measured on the
+    live corpus 2026-08-08, stock 1d resolved rows folded to 15,862
+    (symbol, trading-day) buckets but only 11,256 (symbol, settled-move)
+    buckets — a 1.41x overstatement of effective N, which narrows every
+    published interval by ~19% in the direction that flatters the platform.
+
+    settle_ts is the base bar the row was graded from and is the true key: two
+    predictions share an outcome exactly when they share a base bar. It is
+    relabelled through trading_day rather than used raw so the result stays in
+    the same numeric space as every other day key (a raw bar timestamp ~1.7e9
+    and a day index ~2e4 used as the same key is a trap even when they never
+    collide). The relabelling is lossless.
+
+    settle_ts <= 0 or NULL means the settled move is UNKNOWN (the column
+    predates the row, or no bar exists at or before it). An unknown settle bar
+    falls back to the calendar day rather than being dropped, so this function
+    monotonically improves as the backfill drains.
+    """
+    if settle_ts is not None and settle_ts > 0:
+        return trading_day(settle_ts)
+    return trading_day(ts)
+
+
+def settle_ts_expr(con: sqlite3.Connection, alias: str = "") -> str:
+    """`settle_ts` when prediction_outcomes carries it, else the literal NULL.
+
+    Same doctrine as settlement_clause(): a fold that CANNOT be computed must
+    degrade, not explode. Snapshots and in-memory fixtures build a minimal
+    prediction_outcomes without settle_ts, and settle_day(NULL, ts) falls back
+    to trading_day(ts) — the honest calendar-day answer — instead of raising
+    `no such column`. Live sources have the column fully backfilled, so this
+    returns the real one wherever it matters.
+    """
+    cols = {r[1] for r in con.execute("PRAGMA table_info(prediction_outcomes)")}
+    if "settle_ts" not in cols:
+        return "NULL"
+    return f"{alias}settle_ts" if alias else "settle_ts"
+
+
 def register_fold(con: sqlite3.Connection) -> sqlite3.Connection:
-    """Make trading_day() callable from SQL on `con`.
+    """Make trading_day() and settle_day() callable from SQL on `con`.
 
     Called at every point of USE rather than only in connect(), because the
     grader is handed connections it did not open — snapshots, in-memory test
@@ -1232,6 +1412,7 @@ def register_fold(con: sqlite3.Connection) -> sqlite3.Connection:
     some paths and not others. Re-registering is a harmless overwrite.
     """
     con.create_function("trading_day", 1, trading_day)
+    con.create_function("settle_day", 2, settle_day)
     return con
 
 
@@ -1385,7 +1566,9 @@ def measure_settlement_quarantine(con: sqlite3.Connection | None) -> dict:
     {base} GROUP BY po.horizon
     """
     graded = f"""
-    SELECT po.horizon, COUNT(DISTINCT po.symbol_id || ':' || trading_day(po.ts))
+    SELECT po.horizon,
+           COUNT(DISTINCT po.symbol_id || ':' ||
+                 settle_day({settle_ts_expr(con, "po.")}, po.ts))
     {base} GROUP BY po.horizon
     """
     register_fold(con)
@@ -1510,6 +1693,56 @@ def stale_feed_sql(con: sqlite3.Connection) -> tuple[str, str]:
     got = con.execute("SELECT 1 FROM sqlite_master "
                       "WHERE type='table' AND name='dq_events'").fetchone()
     return (STALE_FEED_CTE, STALE_FEED_PREDICATE) if got else ("", "")
+
+
+def measure_thin_day_exclusion(con: sqlite3.Connection | None) -> dict:
+    """How many graded observations the per-day block floor drops. MEASURED.
+
+    Reports the same shape as the other exclusions so a reader can see the cost
+    of every filter in one place. A day below MIN_DAY_OBSERVATIONS is not a
+    cross-sectional block (see that constant), and counting it as one inflated
+    the distinct_days figure that MIN_DISTINCT_BLOCKS gates publication on.
+
+    The exclusion is reported per horizon because the two populations differ,
+    and it reports days as well as rows: the ROW cost is negligible (<1.5%) and
+    the BLOCK cost is not, which is the entire point.
+    """
+    if con is None:
+        return {"applied": False, "reason": "unmeasured - no source connection"}
+    register_fold(con)
+    stale_cte, stale_pred = stale_feed_sql(con)
+    q = f"""
+    WITH {stale_cte}dedup AS (
+      SELECT symbol_id, horizon, ts, {settle_ts_expr(con)} AS settle_ts,
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon,
+                                settle_day({settle_ts_expr(con)}, ts)
+                                ORDER BY ts DESC) rn
+      FROM prediction_outcomes po
+      WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
+        AND ts >= ? {settlement_clause(con)} {stale_pred}
+    ), days AS (
+      SELECT horizon, settle_day(settle_ts, ts) AS day, COUNT(*) AS n
+      FROM dedup WHERE rn = 1 GROUP BY horizon, day
+    )
+    SELECT horizon,
+           SUM(CASE WHEN n <  {MIN_DAY_OBSERVATIONS} THEN 1 ELSE 0 END),
+           SUM(CASE WHEN n >= {MIN_DAY_OBSERVATIONS} THEN 1 ELSE 0 END),
+           SUM(CASE WHEN n <  {MIN_DAY_OBSERVATIONS} THEN n ELSE 0 END),
+           SUM(n)
+    FROM days GROUP BY horizon
+    """
+    by_h: dict[str, dict] = {}
+    try:
+        for horizon, dropped_days, kept_days, dropped_rows, all_rows in con.execute(
+                q, (SURVIVORSHIP_EPOCH_TS,)):
+            by_h[horizon] = {"days_dropped": dropped_days or 0,
+                             "days_kept": kept_days or 0,
+                             "rows_dropped": dropped_rows or 0,
+                             "rows_considered": all_rows or 0}
+    except sqlite3.Error as e:
+        return {"applied": False, "reason": f"unmeasured - {e}"}
+    return {"applied": True, "min_day_observations": MIN_DAY_OBSERVATIONS,
+            "by_horizon": by_h}
 
 
 def measure_stale_feed_exclusion(con: sqlite3.Connection | None) -> dict:
@@ -1769,7 +2002,9 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
     q = f"""
     WITH {stale_feed_sql(con)[0]}dedup AS (
       SELECT symbol_id, horizon, prob, up, ts,
-             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
+             {settle_ts_expr(con)} AS settle_ts,
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon,
+                                settle_day({settle_ts_expr(con)}, ts)
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes po
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
@@ -1777,7 +2012,7 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
         {settlement_clause(con)}
         {stale_feed_sql(con)[1]}
     )
-    SELECT horizon, trading_day(ts) AS day,
+    SELECT horizon, settle_day(settle_ts, ts) AS day,
            COUNT(*),
            SUM(CASE WHEN (prob >= 0.5) = (up = 1) THEN 1 ELSE 0 END),
            SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
@@ -1813,7 +2048,9 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
     q = f"""
     WITH {stale_feed_sql(con)[0]}dedup AS (
       SELECT symbol_id, horizon, prob, up, ts,
-             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, trading_day(ts)
+             {settle_ts_expr(con)} AS settle_ts,
+             ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon,
+                                settle_day({settle_ts_expr(con)}, ts)
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes po
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
@@ -1826,7 +2063,7 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
            COUNT(*),
            AVG(prob),
            SUM(CASE WHEN up = 1 THEN 1 ELSE 0 END),
-           COUNT(DISTINCT trading_day(ts))
+           COUNT(DISTINCT settle_day(settle_ts, ts))
     FROM dedup WHERE rn = 1
     GROUP BY horizon, bin ORDER BY horizon, bin
     """
@@ -1908,7 +2145,8 @@ def grade_directional_days(by_h: dict[str, list[tuple]],
         null_acc = null_g["acc"]
         lo, hi = (g["ci"] if g["ci"] else (None, None))
         v = verdict_for(g["acc"], lo, hi, g["n"], null_acc, None,
-                        distinct_days=g["distinct_days"])
+                        distinct_days=g["distinct_days"],
+                        credible_blocks=g.get("credible_blocks"))
         rows.append({
             "predictor": name,
             "family": family,
@@ -2119,7 +2357,16 @@ def grade_structural_days(totals: list[tuple], per_day: dict[tuple, list[tuple]]
             }
         else:
             # A horizon-day forecast cannot be graded before its horizon elapses.
-            eligible = dt.date.fromtimestamp(first_ts) + dt.timedelta(days=hd)
+            # UTC, not local. dt.date.fromtimestamp() renders in the MACHINE's
+            # timezone, and these timestamps are UTC-anchored trading days, so a
+            # box at UTC-7 read a UTC-midnight anchor as the PREVIOUS day and
+            # published a first-grade date one day early. Measured 2026-08-18:
+            # filingsdrift21 graded 2026-08-13 on a PDT laptop and 2026-08-14 in
+            # UTC CI from identical inputs, so the published claim depended on
+            # who ran it. Line 2808 already converts with dt.timezone.utc; this
+            # is the one place that did not.
+            first_day = dt.datetime.fromtimestamp(first_ts, dt.timezone.utc).date()
+            eligible = first_day + dt.timedelta(days=hd)
             v = f"PENDING (first grade {eligible.isoformat()}, {resolved}/{MIN_INDEPENDENT_N} resolved)"
             note = "claim is backtested, not yet a live record"
             # Evidence accrual is visible while still PENDING: how many
@@ -2328,7 +2575,8 @@ VERDICT_EPS = 1e-12
 
 
 def verdict_for(acc, lo, hi, n, null_acc, claimed, distinct_days=None,
-                null_coverage=None, distinct_blocks=None) -> str:
+                null_coverage=None, distinct_blocks=None,
+                credible_blocks=None) -> str:
     """Verdicts come from the interval, never the point estimate.
 
     The [lo, hi] handed in is the MULTIPLICITY-CORRECTED interval — priced for
@@ -2354,6 +2602,16 @@ def verdict_for(acc, lo, hi, n, null_acc, claimed, distinct_days=None,
             return (f"INSUFFICIENT BLOCKS ({distinct_blocks}/{MIN_DISTINCT_BLOCKS} "
                     "non-overlapping horizon blocks) — no interval, so no verdict")
         if distinct_days is not None:
+            # Report the count that ACTUALLY withheld the interval. When
+            # degenerate days were excluded by the admission test the raw day
+            # count can clear the floor while the credible one does not, and
+            # printing "11/10 distinct days" beside a refusal states a passing
+            # ratio as the reason for failing — a number nobody measured.
+            if credible_blocks is not None and credible_blocks < MIN_DISTINCT_DAYS:
+                dropped = distinct_days - credible_blocks
+                extra = (f", {dropped} degenerate" if dropped > 0 else "")
+                return (f"INSUFFICIENT DAYS ({credible_blocks}/{MIN_DISTINCT_DAYS} credible "
+                        f"days of {distinct_days}{extra}) — no interval, so no verdict")
             return (f"INSUFFICIENT DAYS ({distinct_days}/{MIN_DISTINCT_DAYS} distinct days) — "
                     "no interval, so no verdict")
         return "NO INTERVAL — no verdict"
@@ -2465,6 +2723,9 @@ def main() -> int:
         # A snapshot carries no dq_events either, so the stale-feed quarantine is
         # reported UNMEASURED here rather than silently skipped.
         stale_feed = measure_stale_feed_exclusion(None)
+        # Same for the per-day block floor: reported UNMEASURED on a snapshot
+        # rather than left undefined, which would NameError at dict assembly.
+        thin_days = measure_thin_day_exclusion(None)
         source = f"snapshot {args.snapshot} (manifest hashes verified)"
     else:
         con = connect(args.db)
@@ -2502,6 +2763,7 @@ def main() -> int:
         # How much of the population the stale-feed quarantine removed, measured
         # before the connection closes.
         stale_feed = measure_stale_feed_exclusion(con)
+        thin_days = measure_thin_day_exclusion(con)
         source = f"database {args.db}"
         con.close()
 
@@ -2781,6 +3043,11 @@ def main() -> int:
                    # observations were dropped because the daemon had flagged
                    # that symbol's feed stale on the day they were minted.
                    "stale_feed_exclusion": stale_feed,
+                   # Measured size of the per-day block floor: days too thin
+                   # to be a cross-sectional block, and what dropping them
+                   # cost in rows. The ROW cost is small and the BLOCK cost
+                   # is not, which is why it is published as both.
+                   "thin_day_exclusion": thin_days,
                    "null_policy": ("prequential-majority only: each day's constant guess "
                                    "is the majority class over days strictly before it. "
                                    "The hindsight null was retired after the dual-null "

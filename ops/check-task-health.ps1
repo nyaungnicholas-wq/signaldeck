@@ -28,6 +28,11 @@ $ErrorActionPreference = 'Stop'
 # silently reads as an all-clear on a broken fleet.
 $tasks = @(Get-ScheduledTask | Where-Object { $_.TaskName -match 'SignalDeck' } | Sort-Object TaskName)
 
+# This script runs AS one of the tasks it inspects, so its own LastTaskResult is
+# its own previous verdict. See the SELF-LATCH note below for why that one check
+# is skipped for this task and no other.
+$SelfTaskName = 'SignalDeck Check-Task-Health'
+
 if ($tasks.Count -eq 0) {
     Write-Host "no SignalDeck scheduled tasks found - is this the right machine?" -ForegroundColor Red
     exit 1
@@ -35,6 +40,16 @@ if ($tasks.Count -eq 0) {
 
 $rows = @()
 $troubled = @()
+$failed = @()
+$stale = @()
+$disabled = @()
+
+# Tasks that are started by something OTHER than their own trigger, and are
+# stopped on purpose. Declared once, used by both the result check and the
+# no-next-run check below. Explicit rather than inferred: "meant to be started
+# by something else" is a design fact, and guessing it from a missing trigger is
+# exactly how a trigger that got LOST would be excused.
+$onDemandStoppable = @('SignalDeck Web', 'SignalDeck Daemon')
 
 foreach ($task in $tasks) {
     try {
@@ -53,6 +68,92 @@ foreach ($task in $tasks) {
             Result    = $hex
         }
         if ($hex -eq '0xC000013A') { $troubled += $task.TaskName }
+
+        # BEYOND THE CONSOLE-KILL SIGNATURE. 0xC000013A was the only condition
+        # that could ever set a non-zero exit, so this script reported "OK - no
+        # console-kill signature in the fleet" over a table that measured
+        # 2026-08-11 contained `SignalDeck Web` terminated (0x00041306) with a
+        # LastRun three days stale, and `SignalDeck Eighty Loop` refused
+        # (0x800710E0). A fleet health gate that renders the failures and then
+        # says OK is one nobody reads.
+        #
+        # Benign codes are enumerated rather than guessed: 0x0 success,
+        # 0x00041301 currently running, 0x00041303 has never run, 0x00041325
+        # queued. Everything else is a real result worth a human.
+        #
+        # 0x800710E0 ("the operator or administrator has refused the request")
+        # is benign ONLY while the task is Running: that is MultipleInstances=
+        # IgnoreNew declining a trigger because the previous instance is still
+        # going, which is exactly how the long-lived Daemon and Eighty Loop
+        # tasks are meant to behave. Measured 2026-08-11, both sat in that state
+        # legitimately. On a task that is NOT running, the same code means a
+        # start was genuinely refused, and that is worth a human.
+        $benign = @('0x00000000', '0x00041301', '0x00041303', '0x00041325')
+        if ($hex -eq '0x800710E0' -and $task.State -eq 'Running') { $benign += $hex }
+        # 0x00041306 is SCHED_S_TASK_TERMINATED - "someone ended this task",
+        # which is the NORMAL terminal state for the services that are stopped
+        # on purpose: signaldeck-ctl.sh stop and market-close.sh both end the
+        # Web and Daemon tasks with `schtasks /End`. Benign for those two only;
+        # on a batch job it still means something killed it mid-run.
+        #
+        # NOTE this is why task state cannot judge whether the web is UP: an
+        # on-demand task that was stopped normally is indistinguishable here
+        # from one that died. The liveness signal for the web is the PORT, and
+        # that is what signaldeck-ctl.sh now asks (sd_port_listening 8323).
+        if ($hex -eq '0x00041306' -and $onDemandStoppable -contains $task.TaskName) { $benign += $hex }
+        # SELF-LATCH. This script's own task matches the 'SignalDeck' filter on
+        # line 29, so its LastTaskResult is its OWN previous verdict: `exit 1`
+        # below sets 0x00000001, which is not benign, so the next run flags
+        # itself and exits 1 again -- forever, regardless of the fleet. Measured
+        # 2026-08-13: `SignalDeck Check-Task-Health` was the ONLY task at 0x1;
+        # the real fault it first caught (`SignalDeck Web`, 8/12 19:59) had long
+        # since cleared, but the gate stayed red and a permanently-red alarm is
+        # indistinguishable from a real one.
+        #
+        # Judging its own exit code is circular by construction, so skip only
+        # THAT check for itself. The non-circular checks below (missing trigger,
+        # NO NEXT RUN, console-kill signature, port liveness) still cover this
+        # task, so a genuinely dead health checker is still caught.
+        $isSelf = $task.TaskName -eq $SelfTaskName
+        # DISABLED tasks: LastTaskResult is history, not a live verdict. Nothing
+        # will ever run them again, so an old non-zero exit can never clear.
+        # `SignalDeck Eighty Loop` was disabled on purpose (the 80%-accuracy
+        # program is refuted, see the memory note) and its final 0x1 has held
+        # this gate red ever since - the same permanently-red-alarm failure the
+        # SELF-LATCH note above describes. The NO NEXT RUN check below already
+        # exempts Disabled for exactly this reason; this makes the result check
+        # agree with it. Disabled tasks are still listed in the table and named
+        # in their own line below, so one disabled BY ACCIDENT stays visible.
+        $isDisabled = $task.State -eq 'Disabled'
+        if ($isDisabled) { $disabled += "$($task.TaskName) (last result $hex, last ran $($info.LastRunTime))" }
+        if (-not $isSelf -and -not $isDisabled -and $hex -ne 'N/A' -and $benign -notcontains $hex -and $hex -ne '0xC000013A') {
+            $failed += "$($task.TaskName) (result $hex)"
+        }
+
+        # NO NEXT RUN is the honest test for "this will never run again", and it
+        # is the one that catches `SignalDeck Web`: measured 2026-08-11 it had
+        # NO TRIGGERS AT ALL, an empty NextRunTime, and a LastRun 95h stale, so
+        # nothing would ever have restarted it - while its recorded result
+        # (0x00041306, terminated) looks like an ordinary stop.
+        #
+        # An elapsed-time threshold cannot do this job: `SignalDeck Restore` is
+        # WEEKLY and legitimately idles ~7 days, so a 48h rule flags a perfectly
+        # healthy task. Asking whether the scheduler still intends to run it is
+        # cadence-independent, and a check that cries wolf at a weekly task is
+        # one nobody reads.
+        # ON-DEMAND tasks legitimately have no NextRunTime and must be exempt,
+        # or this check cries wolf forever at a correct configuration:
+        #   SignalDeck Web    - registered trigger-less ON PURPOSE by
+        #                       ops\signaldeck-web-task.ps1, which prints
+        #                       "Start it with: Start-ScheduledTask" and carries
+        #                       the weekly trigger as an explicitly-NOT-wired
+        #                       optional block. Started by signaldeck-ctl.sh up.
+        #   SignalDeck Daemon - started by ops\daemon-guard.ps1 (the Keepalive
+        #                       task's 5-minute tick), never by its own trigger.
+        if (-not $info.NextRunTime -and $task.State -ne 'Running' -and $task.State -ne 'Disabled' `
+                -and $onDemandStoppable -notcontains $task.TaskName) {
+            $stale += "$($task.TaskName) (state $($task.State), last ran $($info.LastRunTime)) - no NextRunTime and not a known on-demand task: nothing will start this again"
+        }
     } catch {
         # One unreadable task must not abort the whole report.
         $rows += [PSCustomObject]@{
@@ -90,13 +191,65 @@ try {
     Write-Host "task history: DISABLED (no forensic record)" -ForegroundColor Yellow
 }
 
+$bad = $false
 if ($troubled.Count -gt 0) {
     Write-Host ""
     Write-Host "WARNING - terminated by a console control event (0xC000013A):" -ForegroundColor Red
     $troubled | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-    exit 1
+    $bad = $true
+}
+if ($failed.Count -gt 0) {
+    Write-Host ""
+    Write-Host "WARNING - task(s) whose last result was not success:" -ForegroundColor Red
+    $failed | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    $bad = $true
+}
+if ($disabled.Count -gt 0) {
+    Write-Host ""
+    Write-Host "note - disabled task(s), not judged on their last result:" -ForegroundColor Yellow
+    $disabled | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
+}
+if ($stale.Count -gt 0) {
+    Write-Host ""
+    Write-Host "WARNING - task(s) with no scheduled next run (nothing will start them again):" -ForegroundColor Red
+    $stale | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    $bad = $true
+}
+# SERVICE PORTS. The two long-running services are deliberately exempt from the
+# task-result and next-run checks above ($onDemandStoppable): they are stopped
+# on demand, so 0x00041306 and an empty NextRunTime are normal for them and
+# flagging those would cry wolf. But that exemption left NOTHING here watching
+# them at all, and the comment 50 lines up already names the honest signal --
+# "that is what signaldeck-ctl.sh now asks (sd_port_listening 8323)" -- without
+# this script ever asking it.
+#
+# Measured 2026-08-12: port 8323 had been dead since 08-07 and this gate
+# reported "OK - no console-kill signature in the fleet" every time it was run.
+# A fleet gate that is green while the product's own UI is unreachable is the
+# defect it exists to prevent, one level up.
+#
+# Asking the PORT rather than the task is the whole point: the web process
+# outlives the task that started it (schtasks /End does not cascade to the
+# child holding the socket), so task state cannot answer this question.
+$portsDown = @()
+foreach ($svc in @(@{n = 'daemon (API)'; p = 8322 }, @{n = 'web (UI)'; p = 8323 })) {
+    $listening = @(Get-NetTCPConnection -State Listen -LocalPort $svc.p -ErrorAction SilentlyContinue).Count -gt 0
+    if ($listening) {
+        Write-Host ("  = {0,-14} listening on {1}" -f $svc.n, $svc.p)
+    }
+    else {
+        $portsDown += ("{0} - nothing listening on {1}" -f $svc.n, $svc.p)
+    }
+}
+if ($portsDown.Count -gt 0) {
+    Write-Host ""
+    Write-Host "WARNING - service port(s) not listening:" -ForegroundColor Red
+    $portsDown | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    $bad = $true
 }
 
+if ($bad) { exit 1 }
+
 Write-Host ""
-Write-Host "OK - no console-kill signature in the fleet" -ForegroundColor Green
+Write-Host "OK - no console-kill signature, and both service ports are listening" -ForegroundColor Green
 exit 0

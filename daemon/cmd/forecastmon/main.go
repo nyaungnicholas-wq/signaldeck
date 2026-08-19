@@ -9,11 +9,14 @@
 //	go run ./cmd/forecastmon --days 30
 //	go run ./cmd/forecastmon --days 3        # the post-collapse holdout only
 //
-// Exit status is 1 when a check trips, so it composes into a shell gate.
+// Exit status is 1 when a real check trips, so it composes into a shell gate.
+// An expected abstention — a retired or starving model declining the
+// cross-section — prints DEGRADED and exits 0.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -23,7 +26,23 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/forecastmon"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
+
+// classify maps a monitor result to the line printed and the exit status. A
+// retired or starving model declining the cross-section arrives here as
+// workers.ErrDegraded; exiting 1 on it would put an expected abstention back
+// behind a red gate, which is the defect fixed one layer down in forecastmon.
+func classify(err error) (string, int) {
+	switch {
+	case errors.Is(err, workers.ErrDegraded):
+		return fmt.Sprintf("DEGRADED (EXPECTED, NOT A FAULT): %v", err), 0
+	case err != nil:
+		return fmt.Sprintf("FAIL: %v", err), 1
+	default:
+		return "OK: no collapse, no inversion.", 0
+	}
+}
 
 func main() {
 	days := flag.Int("days", 14, "lookback window in days")
@@ -59,15 +78,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "raw day stats: %v\n", err)
 		os.Exit(2)
 	}
+	// WITHHELD and FORECAST are printed, not just SYMBOLS, because RATIO is
+	// measured over the symbols that actually got a forecast. Printing 329
+	// beside 18 distinct and a ratio of 0.947 reads as an arithmetic error; the
+	// missing column IS the story — 311 of those names were declined.
 	show := func(title string, rows []forecastmon.DayStat) {
 		fmt.Println(title)
-		fmt.Printf("%-12s %8s %10s %8s\n", "DAY", "SYMBOLS", "DISTINCT", "RATIO")
+		fmt.Printf("%-12s %8s %9s %9s %10s %8s\n",
+			"DAY", "SYMBOLS", "WITHHELD", "FORECAST", "DISTINCT", "RATIO")
 		for _, d := range rows {
 			flag := ""
-			if d.Collapsed() {
+			switch {
+			case d.Collapsed():
 				flag = "  <-- COLLAPSED"
+			case d.Starved():
+				flag = fmt.Sprintf("  <-- STARVED (coverage %.3f)", d.CoverageRatio())
 			}
-			fmt.Printf("%-12s %8d %10d %8.3f%s\n", d.Day, d.Symbols, d.DistinctProbs, d.DistinctRatio(), flag)
+			fmt.Printf("%-12s %8d %9d %9d %10d %8.3f%s\n",
+				d.Day, d.Symbols, d.Withheld, d.Forecast(), d.DistinctProbs, d.DistinctRatio(), flag)
 		}
 		fmt.Println()
 	}
@@ -80,9 +108,7 @@ func main() {
 	m := &forecastmon.Monitor{Src: src, Horizon: *horizon, Window: time.Duration(*days) * 24 * time.Hour}
 	detail, err := m.Run(context.Background())
 	fmt.Printf("\n%s\n", detail)
-	if err != nil {
-		fmt.Printf("\nFAIL: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("\nOK: no collapse, no inversion.")
+	line, code := classify(err)
+	fmt.Printf("\n%s\n", line)
+	os.Exit(code)
 }

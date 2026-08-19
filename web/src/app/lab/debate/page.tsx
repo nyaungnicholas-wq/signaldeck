@@ -6,7 +6,7 @@ import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import ProOnly from "@/components/ProOnly";
-import { PageHero, StatTile, Reveal, Gauge } from "@/components/ui/Kit";
+import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
 
 function verdictView(verdict: string): { color: string; arrow: string } {
   const v = verdict.toUpperCase();
@@ -22,12 +22,10 @@ function confColor(confidence: string): string {
   return "var(--faint)";
 }
 
-function confNumber(confidence: string): number {
-  const c = confidence.toLowerCase();
-  if (c === "high") return 80;
-  if (c === "medium") return 50;
-  return 20;
-}
+// confNumber() lived here and mapped high/medium/low to 80/50/20. It is gone
+// rather than unused: both call sites rendered its output as a percentage, and
+// a helper that manufactures precision the judge never reported is the kind of
+// thing that gets re-adopted by the next tile that needs "a number".
 
 function ActionButton({
   onClick,
@@ -162,12 +160,12 @@ export default function DebatePage() {
             sub={result.symbol}
             i={0}
           />
+          {/* The judge returns a WORD — high/medium/low. The 80/50/20 that used
+              to render here with a % sign were invented by the client and read
+              as a measured probability. Show what was actually returned. */}
           <StatTile
             label="Confidence"
-            value={confNumber(result.confidence)}
-            decimals={0}
-            suffix="%"
-            sub={result.confidence}
+            value={result.confidence}
             i={1}
           />
           <StatTile
@@ -297,14 +295,22 @@ export default function DebatePage() {
               </div>
 
               <div className="flex items-center justify-between">
-                <Gauge
-                  value={confNumber(result.confidence)}
-                  min={0}
-                  max={100}
-                  label="Confidence"
-                  color={view.color}
-                  size={120}
-                />
+                {/* Was a <Gauge value={confNumber(...)} min={0} max={100} />.
+                    The judge returns the WORD high/medium/low; 80/50/20 were
+                    invented here, and Kit's Gauge prints its value in the dial,
+                    so the page showed "80 / CONFIDENCE" — an unmeasured number
+                    with two significant figures. The word is the whole finding. */}
+                <div
+                  className="flex flex-col items-center justify-center"
+                  style={{ width: 120, height: 120 }}
+                >
+                  <span className="num-hero text-xl uppercase" style={{ color: view.color }}>
+                    {result.confidence}
+                  </span>
+                  <span className="text-[0.75rem] uppercase tracking-wider" style={{ color: "var(--dim)" }}>
+                    Confidence
+                  </span>
+                </div>
                 {result.cruxes && result.cruxes.length > 0 && (
                   <div className="flex flex-col gap-1.5 flex-1 ml-4">
                     <span className="text-[0.75rem] tracking-wide" style={{ color: "var(--faint)" }}>

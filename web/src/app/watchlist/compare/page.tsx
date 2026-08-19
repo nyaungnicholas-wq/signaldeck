@@ -28,7 +28,13 @@ function TugWarRow({ label, aVal, aFmt, bVal, bFmt, higherBetter, idx }: { label
   else if (higherBetter === false) { aColor = aNum < bNum ? "var(--bid)" : aNum > bNum ? "var(--ask)" : "var(--hud)"; bColor = bNum < aNum ? "var(--bid)" : bNum > aNum ? "var(--ask)" : "var(--hud)"; }
   return (
     <div className="reveal-item" style={{ "--i": idx } as React.CSSProperties}>
-      <div className="grid grid-cols-[minmax(64px,1fr)_minmax(120px,1.5fr)_minmax(96px,auto)_minmax(120px,1.5fr)_minmax(64px,1fr)] items-center gap-2 px-4 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
+      {/* The desktop track list has a HARD 528px minimum (64+120+96+120+64,
+          plus 32px of gaps and 32px of padding), so on a 375px phone it forced
+          the document to 594px and the whole app scrolled sideways. The floors
+          shrink below sm and the generous desktop layout is restored at sm:
+          248+32+32 = 312px, which fits 375 with room to spare. Bars are the
+          compressible part — the numbers either side keep their width. */}
+      <div className="grid grid-cols-[minmax(40px,1fr)_minmax(48px,1.5fr)_minmax(72px,auto)_minmax(48px,1.5fr)_minmax(40px,1fr)] sm:grid-cols-[minmax(64px,1fr)_minmax(120px,1.5fr)_minmax(96px,auto)_minmax(120px,1.5fr)_minmax(64px,1fr)] items-center gap-2 px-4 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
         <span className="tnum text-right" style={{ color: aColor }}>{aNum > 0 ? aFmt : "—"}</span>
         <MiniBar value={aNum} max={max} color={aColor} i={idx} />
         <div className="text-center px-2 text-[0.75rem] font-medium truncate" style={{ color: "var(--text)" }}>{label}</div>
@@ -112,18 +118,32 @@ function CompareInner() {
       {!bothLoaded && !errA && !errB && <Skeleton lines={12} />}
       {bothLoaded && (
         <>
-          <section className="hud-panel relative p-6">
+          {/* p-4 below sm: two text-4xl prices side by side in a 2-col grid have
+              an unshrinkable ~372px minimum once 48px of padding is added, which
+              is what kept this page scrolling sideways on a 375px phone after
+              the metric rows were fixed. Padding and type step down together. */}
+          <section className="hud-panel relative p-4 sm:p-6">
             <div className="grid grid-cols-2 gap-4">
               {[{ sym: aSymbol, mkt: aMarket, val: aHeadline, spark: aSpark, color: COLORS[0], asOf: repA!.asOf }, { sym: bSymbol, mkt: bMarket, val: bHeadline, spark: bSpark, color: COLORS[1], asOf: repB!.asOf }].map((side, i) => (
                 <div key={i} className="flex flex-col items-center gap-2">
                   <span className="mono text-sm font-bold" style={{ color: side.color }}>{side.sym}</span>
-                  <AnimatedNumber value={side.val} decimals={2} prefix="$" className={`num-hero text-4xl ${Number.isFinite(side.val) && side.val > 0 ? (i === (aHeadline > bHeadline ? 0 : 1) ? 'glow-up' : 'glow-down') : ''}`} />
+                  <AnimatedNumber value={side.val} decimals={2} prefix="$" className={`num-hero text-2xl sm:text-4xl ${Number.isFinite(side.val) && side.val > 0 ? (i === (aHeadline > bHeadline ? 0 : 1) ? 'glow-up' : 'glow-down') : ''}`} />
                   <div className="w-32 h-8"><Spark data={side.spark} width={128} height={32} color={side.color} /></div>
                   <span className="text-xs" style={{ color: "var(--faint)" }}>as of {ago(side.asOf)}</span>
                 </div>
               ))}
             </div>
           </section>
+          {/* Scroll container, not a narrower grid. A grid ITEM defaults to
+              min-width:auto, so each track's real floor is its content's
+              min-content — and these cells hold unbreakable figures like
+              "1,935,446,000" (Avg $ Vol). Shrinking the minmax() floors alone
+              could not get below ~409px on a 375px phone. The tempting fix is
+              `truncate` on the numeric cells, and it is the wrong one: a
+              silently clipped financial figure is a WRONG figure, which is
+              exactly what this product must never render. So the numbers keep
+              their full width and the reader scrolls to them instead. */}
+          <div className="table-wrap">
           <Reveal className="space-y-1">
             {CONTEXT_ROWS.map((row, i) => {
               const aVal = repA?.tradeContext ? row.fmt(repA.tradeContext)[0] : NaN;
@@ -131,6 +151,7 @@ function CompareInner() {
               return <TugWarRow key={row.key} label={row.label} aVal={aVal} aFmt={repA?.tradeContext ? row.fmt(repA.tradeContext)[1] : "—"} bVal={bVal} bFmt={repB?.tradeContext ? row.fmt(repB.tradeContext)[1] : "—"} higherBetter={row.higherBetter} idx={i} />;
             })}
           </Reveal>
+          </div>
           <section className="panel p-4">
             <div className="panel-h">REGIME STACK & PREDICTIONS</div>
             <div className="grid grid-cols-2 gap-4 mt-2">
@@ -140,17 +161,30 @@ function CompareInner() {
                   {side.rep.regimeStack?.map(f => (
                     <div key={f.kind} className="chip text-xs px-2 py-0.5">{f.kind}: {f.regime}</div>
                   ))}
+                  {/* A missing calProb is not 0.0% — that reads as near-certainty of a
+                      DOWN move, an inversion rather than a blank. The daemon sends null
+                      for "no prediction stored yet" (see api.ts calProb1d: NO READ YET). */}
                   {side.rep.predictionNow && (
                     <div className="text-xs tnum">
-                      P(up) {((side.rep.predictionNow.calProb ?? 0) * 100).toFixed(1)}%
+                      {side.rep.predictionNow.calProb != null
+                        ? `P(up) ${(side.rep.predictionNow.calProb * 100).toFixed(1)}%`
+                        : "NO READ YET"}
                     </div>
                   )}
                 </div>
               ))}
             </div>
           </section>
-          <section className="panel overflow-x-auto">
+          {/* overflow-x-auto CANNOT live on .panel: globals.css gives .panel
+              `overflow: hidden` for its rounded corners, and that later rule
+              won — so this table was CLIPPED on a phone, not scrollable, and the
+              second symbol's column was unreachable with no scrollbar to hint
+              at it. The repo's convention is a .table-wrap INSIDE the panel
+              (see market/macro), which pairs with the global
+              `table { min-width: max-content }`. */}
+          <section className="panel">
             <div className="panel-h">TRADE CONTEXT DETAIL</div>
+            <div className="table-wrap">
             <table className="v4-table w-full text-xs">
               <thead><tr className="text-left text-[var(--faint)]"><th className="px-4 py-2">metric</th><th className="px-4 py-2 mono">{aSymbol}</th><th className="px-4 py-2 mono">{bSymbol}</th></tr></thead>
               <tbody>
@@ -163,6 +197,7 @@ function CompareInner() {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
         </>
       )}
@@ -172,10 +207,10 @@ function CompareInner() {
 
 export default function ComparePage() {
   return (
-    <main className="mx-auto max-w-6xl px-4 py-6">
+    <div className="mx-auto w-full max-w-6xl px-4 py-6">
       <Suspense fallback={<Skeleton lines={12} />}>
         <CompareInner />
       </Suspense>
-    </main>
+    </div>
   );
 }

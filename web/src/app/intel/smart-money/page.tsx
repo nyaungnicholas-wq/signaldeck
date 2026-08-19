@@ -16,7 +16,6 @@ import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
 import SortHeader from "@/components/SortHeader";
 import {
-  Reveal,
   StatTile,
   PageHero,
   MiniBar,
@@ -193,20 +192,29 @@ function SymbolDetail({ symbol }: { symbol: string }) {
       )}
 
       <div className="grid grid-cols-2 gap-2 px-4 py-3 sm:grid-cols-3">
+        {/* No `?? 0` on any of these. The types say what the nulls mean —
+            daysToCover is "no short-interest row", shortVolZ is "below the z
+            gate", funding is "no fresh perp snapshot" — and this grid renders
+            whenever data.available is true, which a symbol reaches on insider
+            or institutional data alone. So a symbol with no short-interest row
+            at all was showing "Days to cover 0.0 · FINRA short interest": a
+            specific reading, attributed to a named regulator, that no regulator
+            published. Line 134 of this file says the scorer "stores nothing
+            rather than a fabricated neutral" — this is the display half of it. */}
         <StatTile
           label="Insider buyers"
-          value={data.insiderCluster?.distinctBuyers ?? 0}
-          sub={`net ${fmtUSD(data.insiderCluster?.netValue ?? 0)} over ${data.insiderCluster?.windowDays ?? 90}d`}
+          value={data.insiderCluster?.distinctBuyers}
+          sub={data.insiderCluster ? `net ${fmtUSD(data.insiderCluster.netValue)} over ${data.insiderCluster.windowDays}d` : undefined}
         />
         <StatTile
           label="Days to cover"
-          value={data.squeeze?.daysToCover ?? 0}
+          value={data.squeeze?.daysToCover}
           decimals={1}
           sub="FINRA short interest"
         />
         <StatTile
           label="Short-vol z"
-          value={data.squeeze?.shortVolZ ?? 0}
+          value={data.squeeze?.shortVolZ}
           decimals={1}
           suffix="σ"
           sub="vs own 30d (Reg SHO)"
@@ -214,7 +222,7 @@ function SymbolDetail({ symbol }: { symbol: string }) {
         {data.market === "crypto" ? (
           <StatTile
             label="Perp funding"
-            value={data.squeeze?.funding ?? 0}
+            value={data.squeeze?.funding}
             decimals={4}
             suffix="%/hr"
             sub="Hyperliquid"
@@ -325,7 +333,12 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
             </tr>
           </thead>
           <tbody>
-            <Reveal>
+            {/* No <Reveal> here. Its wrapper is a <div>, and a <div> is not a
+                legal child of <tbody> (nor is <tr> a legal child of a <div>) —
+                React reported a hydration error and the browser hoists the div
+                out of the table. Each <tr> already carries `reveal-item`, whose
+                CSS keyframes stagger the rows on their own, so the wrapper was
+                buying nothing here anyway. */}
               {rows.map((r, i) => (
                 <tr
                   key={`${r.market}:${r.symbol}`}
@@ -363,7 +376,6 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
                   <td className="tnum" style={{ color: "var(--faint)" }}>{ago(r.ts)}</td>
                 </tr>
               ))}
-            </Reveal>
           </tbody>
         </table>
       </div>
@@ -398,15 +410,12 @@ export default function SmartMoneyPage() {
       {symbol ? (
         <SymbolDetail symbol={symbol} />
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Reveal>
-            <StatTile
-              label="Symbols tracked"
-              value={0}
-              sub="Loading..."
-            />
-          </Reveal>
-        </div>
+        // Removed: a static <StatTile label="Symbols tracked" value={0}
+        // sub="Loading…" />. Nothing ever wrote to it, so the landing view
+        // permanently read "SYMBOLS TRACKED 0 / Loading…" directly above a
+        // leaderboard listing real scored symbols. A count nobody computes is
+        // better absent than wrong.
+        null
       )}
 
       {!symbol && <Leaderboard onPick={setSymbol} />}

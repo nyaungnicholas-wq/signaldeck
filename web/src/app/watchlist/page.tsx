@@ -41,9 +41,12 @@ export default function WatchlistPage() {
       }, 5000);
       undoTimer.current = timer;
       setUndo({ symbol, market, timer });
-      setWatchlist((prev) =>
-        prev ? prev.filter((r) => !(r.symbol === symbol && r.market === market)) : prev
-      );
+      // The row STAYS in the list for the 5-second window. It used to be
+      // filtered out here, and `isUndo` is computed inside watchlist.map() —
+      // so the only row that could ever match had just been unmounted, and the
+      // entire "removed · undo" card below was unreachable dead code. The
+      // 5-second undo the timer and state exist to provide could never once be
+      // taken. The refetch when the timer expires is what actually drops it.
     },
     [refetch]
   );
@@ -75,9 +78,11 @@ export default function WatchlistPage() {
 
   return (
     <div className="page-enter space-y-4">
+      {/* No `live` badge. This page fetches once on mount and has no polling at
+          all, so the pulsing dot and the word LIVE described a stream that does
+          not exist. */}
       <PageHero
         title="Watchlist"
-        live
         subtitle="Your symbols, your radar — add anything from the universe and every signal tracks it for you."
         right={<AddSymbol refetch={refetch} />}
       />
@@ -117,13 +122,18 @@ export default function WatchlistPage() {
         </div>
       )}
 
-      {!watchlist ? (
+      {/* `&& !error`: this page has no polling, so on a failed load watchlist
+          stayed null forever and six skeleton panels pulsed underneath the
+          error message for as long as the tab was open, implying work that was
+          not happening. With an error the skeleton stops and the message above
+          stands alone. */}
+      {!watchlist && !error ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="panel h-32 animate-pulse" />
           ))}
         </div>
-      ) : watchlist.length === 0 ? (
+      ) : !watchlist ? null : watchlist.length === 0 ? (
         <div className="hud-panel p-8 text-center" style={{ color: "var(--dim)" }}>
           <p className="mb-2 text-lg font-medium">Nothing on your watchlist yet</p>
           <p className="text-sm">

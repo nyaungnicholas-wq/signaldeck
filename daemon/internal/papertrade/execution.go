@@ -287,16 +287,28 @@ type FillVsBar struct {
 	Px      float64
 	BarOpen float64
 	HasBar  bool
+	// Unchecked means the bar LOOKUP failed — the store errored, so we do not
+	// know whether a bar exists. Distinct from HasBar=false, which is the
+	// positive finding that no bar is stored. Folding the two together reports
+	// an outage as a data gap and sends the reader hunting missing bars that are
+	// not missing.
+	Unchecked bool
 }
 
 // Fidelity is the verdict on whether a trade log still reconciles against the
 // bars it was built from. It exists because the alternative — trusting the log
 // — is what let 21 unreproducible fills sit in a "track record" for weeks.
 type Fidelity struct {
-	Fills      int     `json:"fills"`
-	Matched    int     `json:"matched"`
-	Mismatched int     `json:"mismatched"`
-	NoBar      int     `json:"noBar"`
+	Fills      int `json:"fills"`
+	Matched    int `json:"matched"`
+	Mismatched int `json:"mismatched"`
+	NoBar      int `json:"noBar"`
+	// Unchecked counts fills whose bar lookup ERRORED. It is reported apart from
+	// NoBar on the same principle the empty-log case above rests on: "we could
+	// not look" and "we looked and found nothing" are different statements, and
+	// reporting the first as the second turns a store outage into a fabricated
+	// finding about the book.
+	Unchecked  int     `json:"unchecked"`
 	MaxAbsBps  float64 `json:"maxAbsBps"`
 	MeanAbsBps float64 `json:"meanAbsBps"`
 
@@ -320,6 +332,10 @@ func CheckFillFidelity(pairs []FillVsBar) Fidelity {
 	var sumAbs float64
 	var compared int
 	for _, p := range pairs {
+		if p.Unchecked {
+			f.Unchecked++
+			continue
+		}
 		if !p.HasBar || p.BarOpen <= 0 {
 			f.NoBar++
 			continue
@@ -339,11 +355,25 @@ func CheckFillFidelity(pairs []FillVsBar) Fidelity {
 	if compared > 0 {
 		f.MeanAbsBps = sumAbs / float64(compared)
 	}
-	f.Verified = f.Mismatched == 0 && f.NoBar == 0
-	if !f.Verified {
+	f.Verified = f.Mismatched == 0 && f.NoBar == 0 && f.Unchecked == 0
+	switch {
+	case f.Verified:
+		// nothing to explain
+	case f.Mismatched == 0 && f.NoBar == 0:
+		// Only lookups that failed. Nothing whatsoever was learned about the
+		// book, so say that instead of borrowing the language of a finding.
+		f.Reason = fmt.Sprintf(
+			"%d of %d fills could not be checked: the bar lookup itself failed, so this is an unavailable store, NOT a finding about the book. Nothing here says the fills are wrong or right — re-run once the store is healthy",
+			f.Unchecked, f.Fills)
+	default:
 		f.Reason = fmt.Sprintf(
 			"%d of %d fills do not reproduce from the bar they name (worst %.1f bps, mean %.1f bps) and %d have no stored bar at all. Fills are written at the bar open, so a mismatch means the bar was revised after the fill (the bars table is written INSERT OR REPLACE) — the equity curve derived from those fills cannot be re-derived from the data now in the database",
 			f.Mismatched, f.Fills, f.MaxAbsBps, f.MeanAbsBps, f.NoBar)
+		if f.Unchecked > 0 {
+			f.Reason += fmt.Sprintf(
+				". Separately, %d fill(s) could not be checked at all because the bar lookup failed; that count is an unavailable store, not evidence about the book, and the counts above are drawn from the remainder",
+				f.Unchecked)
+		}
 	}
 	return f
 }

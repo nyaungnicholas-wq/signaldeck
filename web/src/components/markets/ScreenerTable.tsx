@@ -18,11 +18,14 @@ export default function ScreenerTable({
   sortKey,
   sortDir,
   onSort,
+  rankingFailed = false,
 }: {
   filtered: Derived[];
   sortKey: SortKey;
   sortDir: SortDir;
   onSort: (key: SortKey, numericDefaultDesc: boolean) => void;
+  /** The ranking fetch failed, so a blank rank means UNKNOWN, not excluded. */
+  rankingFailed?: boolean;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -123,7 +126,18 @@ export default function ScreenerTable({
                 {/* Stage 5: relative-strength rank (1 = strongest) */}
                 <td className="px-3 py-2 text-right">
                   {d.rank === null ? (
-                    <span style={{ color: "var(--faint)" }} title="not in the latest ranking pass">
+                    // "not in the latest ranking pass" is a claim that the pass
+                    // RAN and excluded this symbol. When the ranking fetch
+                    // failed we know nothing of the sort, and every row would
+                    // have carried that assertion.
+                    <span
+                      style={{ color: "var(--faint)" }}
+                      title={
+                        rankingFailed
+                          ? "ranking unavailable — this request failed, so the rank is UNKNOWN, not absent"
+                          : "not in the latest ranking pass"
+                      }
+                    >
                       —
                     </span>
                   ) : (

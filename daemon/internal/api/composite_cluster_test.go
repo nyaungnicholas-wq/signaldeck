@@ -76,8 +76,11 @@ func seedCompositeClusteredRecord(t *testing.T, st *store.Store, days, symbolsPe
 		if day%2 == 1 {
 			mix = bad
 		}
-		// Mid-day UTC so ts/86400 is unambiguous.
-		base := int64(20000+day)*86400 + 43200
+		// Mid-day UTC so ts/86400 is unambiguous. Day index 20000 (2024-10) sat
+		// BEFORE the 2026-07-24 survivorship epoch that
+		// ResolvedPredictionOutcomes now floors on, which emptied the fixture;
+		// 20658 is the epoch's own day index.
+		base := int64(20658+day)*86400 + 43200
 		i := 0
 		for _, c := range mix {
 			n := c.per100 * symbolsPerDay / 100

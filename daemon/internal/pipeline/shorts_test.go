@@ -191,11 +191,72 @@ func TestShortVolPoller_UnavailableIsHonestSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if !strings.Contains(detail, "not available yet") {
+	if !strings.Contains(detail, "unavailable") {
 		t.Fatalf("detail = %q, want honest not-available skip", detail)
+	}
+	// The message must not promise a retry it cannot make. It used to say
+	// "will retry" unconditionally, which stopped being true when this worker
+	// moved to a once-per-trading-day schedule with no catch-up: the next fire
+	// targeted a NEW day and the missed one was never requested again.
+	if !strings.Contains(detail, "catch-up window") {
+		t.Fatalf("detail = %q, want the retry claim bounded by the catch-up window", detail)
 	}
 	if lastDay, _ := st.GetMeta(ctx, finraShortsLastDayKey); lastDay != "" {
 		t.Fatalf("day key set to %q on an unavailable day — retry would be lost", lastDay)
+	}
+}
+
+// THE REGRESSION THAT MATTERS FOR O11: a day that was unavailable when it was
+// due must actually be INGESTED once it appears, not skipped forever.
+//
+// Before the catch-up sweep, the cursor simply advanced to whatever day was
+// current on the next run and the missed day was never requested again — the
+// one-time backfill is gated shut, and srchealth tracks this source by MAX(day)
+// so the hole was invisible the moment the NEXT day landed.
+func TestShortVolPoller_MissedDayIsBackfilledOnALaterRun(t *testing.T) {
+	st := openShortsStore(t)
+	ctx := context.Background()
+	if _, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := st.SetMeta(ctx, finraShortsBackfillKey, "done"); err != nil {
+		t.Fatalf("meta: %v", err)
+	}
+
+	// Day one (2026-07-06) is NOT published when it is due.
+	avail := map[string]bool{}
+	var hits int64
+	srv := newShortsServer(t, avail, &hits)
+	defer srv.Close()
+
+	day1 := nyTime(t, 2026, 7, 6, 20, 0)
+	w := newShortsWorker(st, srv.URL, day1, 3)
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run day1: %v", err)
+	}
+	if has, _ := st.HasShortVolumeDay(ctx, "2026-07-06"); has {
+		t.Fatal("fixture wrong: 2026-07-06 should not be stored yet")
+	}
+
+	// FINRA posts it late — by the time day two runs, BOTH files exist.
+	// Keys are the wire form (YYYYMMDD), matching newShortsServer's path parse.
+	avail["20260706"] = true
+	avail["20260707"] = true
+	day2 := nyTime(t, 2026, 7, 7, 20, 0)
+	w2 := newShortsWorker(st, srv.URL, day2, 3)
+	detail, err := w2.Run(ctx)
+	if err != nil {
+		t.Fatalf("run day2: %v", err)
+	}
+
+	if has, _ := st.HasShortVolumeDay(ctx, "2026-07-06"); !has {
+		t.Fatalf("the missed day was never re-requested — it is lost forever; detail=%q", detail)
+	}
+	if has, _ := st.HasShortVolumeDay(ctx, "2026-07-07"); !has {
+		t.Fatalf("the current day was not ingested; detail=%q", detail)
+	}
+	if lastDay, _ := st.GetMeta(ctx, finraShortsLastDayKey); lastDay != "2026-07-07" {
+		t.Fatalf("cursor = %q, want it advanced to the target day 2026-07-07", lastDay)
 	}
 }
 

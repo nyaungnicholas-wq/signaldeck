@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/archive"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -250,6 +251,14 @@ func (d *Downsampler) archivePruneBars(ctx context.Context, tf md.Timeframe, cut
 		}
 		n, err := d.St.PruneBars(ctx, tf, upper)
 		if err != nil {
+			// Every OTHER failure path in this function calls dqSkip, which logs
+			// and inserts an archive_skip DQ event. This one returned skipped=true
+			// silently, so the caller emitted "SOME PRUNES SKIPPED - archive failed,
+			// data retained; see dq" for a run where the ARCHIVE SUCCEEDED and the
+			// PRUNE failed, and pointed the operator at a dq record that was never
+			// written. Wrong cause, missing evidence, and retention quietly stops
+			// reclaiming.
+			d.dqSkip(ctx, now, string(tf), "prune failed after a successful archive: "+err.Error())
 			return pruned, true
 		}
 		pruned += n
@@ -297,6 +306,8 @@ func (d *Downsampler) archivePruneSnaps(ctx context.Context, cutoff int64, names
 		}
 		n, err := d.St.PruneSnaps(ctx, upper)
 		if err != nil {
+			// See archivePruneBars: a silent skipped=true misreports the cause.
+			d.dqSkip(ctx, now, "snapshots", "prune failed after a successful archive: "+err.Error())
 			return pruned, true
 		}
 		pruned += n
@@ -347,6 +358,8 @@ func (d *Downsampler) archivePruneAnomalies(ctx context.Context, cutoff int64, n
 		}
 		n, err := d.St.PruneAnomalies(ctx, upper)
 		if err != nil {
+			// See archivePruneBars: a silent skipped=true misreports the cause.
+			d.dqSkip(ctx, now, "anomalies", "prune failed after a successful archive: "+err.Error())
 			return pruned, true
 		}
 		pruned += n
@@ -377,13 +390,31 @@ func Retention1hDays() int     { return envIntOr("SIGNALDECK_1H_RETENTION_D", 3*
 func RetentionAnomDays() int   { return envIntOr("SIGNALDECK_ANOM_RETENTION_D", 90) }
 
 // envIntOr parses an integer env var, returning def on empty/invalid input.
+// envIntOr reads a positive integer override, falling back to def.
+//
+// Every key that reaches this helper governs RETENTION — how long rows survive
+// before a sweep deletes them — so a rejected override here is recorded as
+// CRITICAL rather than merely logged. The dangerous direction is not a bad
+// value that keeps too much data: it is an operator LENGTHENING a window to
+// protect data, mistyping it, silently getting the shorter default, and having
+// the sweep delete rows they meant to keep. That deletion is irreversible, and
+// until 2026-08-11 nothing anywhere recorded that the override had been
+// refused.
+//
+// The runtime behaviour is deliberately unchanged — the default still applies
+// and the daemon still runs. Only the silence is fixed.
 func envIntOr(k string, def int) int {
 	v := os.Getenv(k)
 	if v == "" {
 		return def
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
+	if err != nil {
+		envcfg.RejectCritical(k, v, "not an integer", strconv.Itoa(def))
+		return def
+	}
+	if n <= 0 {
+		envcfg.RejectCritical(k, v, "must be > 0", strconv.Itoa(def))
 		return def
 	}
 	return n
@@ -683,9 +714,41 @@ func (g *StorageGovernor) Name() string { return "storage-governor" }
 
 // Interval implements workers.Worker. Env-tunable (SIGNALDECK_WAL_CHECKPOINT_MIN,
 // minutes, default 60) so the checkpoint cadence can be tightened or relaxed
-// without a rebuild.
+// without a rebuild. When the WAL is ALREADY past walBusyAlertBytes at the
+// moment this is asked, the next pass is scheduled at SIGNALDECK_WAL_PRESSURE_MIN
+// (default 10) instead, so a pass whose TRUNCATE lost tries again in ten minutes
+// rather than sitting out the hour with a large file on disk.
+//
+// KNOW WHAT THIS CANNOT DO. The runner computes a worker's next fire ONCE, when
+// the previous run ends, and then sleeps (maxScheduledGap is 24h, so nothing
+// re-reads this mid-sleep). A boot storm that arrives while the governor is
+// asleep therefore does NOT pull the next pass forward — measured 2026-08-18, a
+// deploy took the WAL from 38 MB to 861 MB in four minutes and this method was
+// never consulted; the file was reclaimed by SQLite's own autocheckpoint
+// achieving a reset, which truncates to journal_size_limit (64 MB), not by the
+// governor. This shortens the cadence AFTER a pass that ended with pressure,
+// which is the case worth having: the alternative was an hour of a known-large
+// WAL after a known-failed TRUNCATE.
+//
+// And be honest about the budget: a storm writes ~50 MB/min, so ANY cadence of
+// ten minutes or more can transiently exceed the 512 MB WAL budget. What was
+// actually broken was a WAL that sat at 1.34 GB indefinitely because nothing
+// ever won a reset. Prompt recovery is the goal here, not a file that never
+// crosses the line.
 func (g *StorageGovernor) Interval() time.Duration {
-	return time.Duration(envIntOr("SIGNALDECK_WAL_CHECKPOINT_MIN", 60)) * time.Minute
+	base := time.Duration(envIntOr("SIGNALDECK_WAL_CHECKPOINT_MIN", 60)) * time.Minute
+	if g.St == nil {
+		return base
+	}
+	_, walBytes := g.St.FileSizes()
+	if walBytes < walBusyAlertBytes {
+		return base
+	}
+	pressure := time.Duration(envIntOr("SIGNALDECK_WAL_PRESSURE_MIN", 10)) * time.Minute
+	if pressure <= 0 || pressure >= base {
+		return base
+	}
+	return pressure
 }
 
 // Run checkpoints the WAL and, when warranted, vacuums.
@@ -831,10 +894,72 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 	if err != nil {
 		return "wal checkpoint: " + strings.Join(parts, "; ") + "; TRUNCATE failed: " + err.Error(), reclaimed
 	}
-	reclaimed += trunc.Checkpointed
+
+	// A single TRUNCATE attempt per pass is structurally starved: measured live
+	// against the running fleet, 25 consecutive PRAGMA wal_checkpoint(RESTART)
+	// attempts one second apart returned BUSY 24 times and succeeded exactly
+	// once, and that one success collapsed a 153 MB WAL to 64 MB. The
+	// reader-free instant DOES occur, it is just rare — so when the first
+	// attempt comes back Busy, retry the same call once per second UNQUIESCED
+	// (the fleet must keep running; the measurement above was taken with it
+	// running) until it succeeds or the env-tunable budget expires. A value of
+	// 0 disables retrying entirely, keeping the old single-shot behaviour.
+	// Frames moved by earlier attempts are NOT re-moved by a later one, so the
+	// pass reclaimed their sum. Counting only the last attempt would report a
+	// pass that did real work as having reclaimed nothing, which is exactly the
+	// input walIneffectiveRuns escalates on.
+	attempts, prior := 1, 0
+	if trunc.Busy {
+		// 300s, not 60s, because a blocked attempt does not fail fast: the store
+		// opens its connections with busy_timeout(15000), so each denied
+		// TRUNCATE sits in SQLite's busy handler for up to 15 seconds. Measured
+		// on the first live pass after this shipped, a 60-second budget bought
+		// 14 attempts, not 60, and lost - 1-0.96^14 is only ~43%. 300 seconds
+		// buys ~70 attempts (~94%) and still costs a fraction of this worker's
+		// 180-minute deadline, and the retries run UNQUIESCED so nothing else
+		// is held up while it waits.
+		retrySec := envIntOr("SIGNALDECK_WAL_TRUNCATE_RETRY_SEC", 300)
+		if retrySec > 0 {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			deadline := time.NewTimer(time.Duration(retrySec) * time.Second)
+			defer deadline.Stop()
+		retryLoop:
+			for {
+				select {
+				case <-ctx.Done():
+					break retryLoop
+				case <-deadline.C:
+					break retryLoop
+				case <-ticker.C:
+					attempts++
+					prior += trunc.Checkpointed
+					trunc, err = g.St.WALCheckpointTruncate(ctx)
+					if err != nil {
+						break retryLoop
+					}
+					if !trunc.Busy {
+						break retryLoop
+					}
+				}
+			}
+		}
+	}
+
+	if err != nil {
+		return "wal checkpoint: " + strings.Join(parts, "; ") +
+			fmt.Sprintf("; TRUNCATE failed after %d attempts: ", attempts) + err.Error(), reclaimed + prior
+	}
+	reclaimed += prior + trunc.Checkpointed
 	tn := fmt.Sprintf("TRUNCATE %d/%d frames", trunc.Checkpointed, trunc.LogFrames)
 	if quiesced {
-		tn += " (quiesced)"
+		tn += " (quiesced"
+		if attempts > 1 {
+			tn += fmt.Sprintf(", %d attempts", attempts)
+		}
+		tn += ")"
+	} else if attempts > 1 {
+		tn += fmt.Sprintf(" (%d attempts)", attempts)
 	}
 	if trunc.Busy {
 		tn += " BUSY — WAL NOT truncated"

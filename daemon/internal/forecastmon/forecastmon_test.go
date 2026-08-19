@@ -17,6 +17,17 @@ type stubSource struct {
 	buckets []Bucket
 	base    float64
 	nDays   int
+	// retired, not emitting, so the zero value is a LIVE model. Every case
+	// written before this field keeps its original meaning: for a live model a
+	// starvation is a real error, and none of them silently became degraded.
+	retired bool
+}
+
+func (s stubSource) ModelEmitting(context.Context, string) (bool, string, error) {
+	if s.retired {
+		return false, "retired", nil
+	}
+	return true, "live", nil
 }
 
 func (s stubSource) DayStats(context.Context, string, time.Time) ([]DayStat, error) {
@@ -35,6 +46,130 @@ func run(t *testing.T, src Source) (string, error) {
 		return time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC)
 	}}
 	return m.Run(context.Background())
+}
+
+// THE OTHER REGRESSION THAT MATTERS, and the one that fired for four days
+// while every dashboard stayed green.
+//
+// These are the real measured raw cross-sections from 2026-08-05..2026-08-10.
+// On 2026-08-06 leg admission tightened (906310c) and the ensemble began
+// declining most of the universe; a withheld prediction is still persisted, with
+// raw_prob = 0.5 exactly. Counting those identical 0.5s as forecasts dragged the
+// distinct-ratio to 0.058-0.097 and tripped RAW MODEL COLLAPSE every single run,
+// asserting "the ensemble itself has stopped discriminating" — while among the
+// rows that CARRIED a forecast the ratio those same days was 0.947-1.000.
+//
+// The statistic moved in the opposite direction to the thing it measured: the
+// more honestly the ensemble abstained, the more collapsed it was reported to
+// be. So the two failures are asserted apart here. If a withheld row is ever
+// folded back into the discrimination count, the first loop fails; if the
+// coverage cliff is ever left unreported, the second does.
+// A RETIRED model that declines the cross-section is doing what retirement
+// means. Reporting that as a failed run every hour is how a monitor becomes
+// wallpaper: measured 2026-08-17, this fired on 11 of 15 days while both
+// horizons carried verdict=retired, emitting=false, so the surface that would
+// have shown a REAL coverage loss had been red for eleven days already.
+//
+// Degraded, not failed — and the message has to say which, or the operator
+// cannot tell the two apart either.
+func TestStarvationUnderARetiredModelIsDegradedNotFailed(t *testing.T) {
+	starved := []DayStat{
+		{Day: "2026-08-16", Symbols: 329, DistinctProbs: 18, Withheld: 310},
+		{Day: "2026-08-17", Symbols: 329, DistinctProbs: 34, Withheld: 293},
+	}
+	_, err := run(t, stubSource{rawDays: starved, base: 0.5, nDays: 2, retired: true})
+	if err == nil {
+		t.Fatal("an expected starvation must still be REPORTED, not swallowed")
+	}
+	if !errors.Is(err, workers.ErrDegraded) {
+		t.Errorf("retired-model starvation filed as a failure, not degraded: %v", err)
+	}
+	if !strings.Contains(err.Error(), "FORECAST COVERAGE STARVED") {
+		t.Errorf("degraded run stopped naming the condition: %v", err)
+	}
+	if !strings.Contains(err.Error(), "EXPECTED, NOT A FAULT") {
+		t.Errorf("message does not tell the reader this is expected: %v", err)
+	}
+}
+
+// The other half, and the one that must never be downgraded: the same coverage
+// cliff while the model is LIVE is the failure this check was built for.
+func TestStarvationWhileEmittingStaysAnError(t *testing.T) {
+	starved := []DayStat{
+		{Day: "2026-08-16", Symbols: 329, DistinctProbs: 18, Withheld: 310},
+		{Day: "2026-08-17", Symbols: 329, DistinctProbs: 34, Withheld: 293},
+	}
+	_, err := run(t, stubSource{rawDays: starved, base: 0.5, nDays: 2})
+	if err == nil {
+		t.Fatal("a live model starving the cross-section returned no error")
+	}
+	if errors.Is(err, workers.ErrDegraded) {
+		t.Errorf("live-model starvation was downgraded to degraded: %v", err)
+	}
+	if strings.Contains(err.Error(), "EXPECTED") {
+		t.Errorf("live starvation was described as expected: %v", err)
+	}
+}
+
+func TestWithheldRowsDoNotReadAsCollapse(t *testing.T) {
+	// Symbols = whole cross-section, Withheld = declined. Measured.
+	measured := []DayStat{
+		{Day: "2026-08-05", Symbols: 329, DistinctProbs: 179, Withheld: 4},
+		{Day: "2026-08-06", Symbols: 329, DistinctProbs: 152, Withheld: 24},
+		{Day: "2026-08-07", Symbols: 329, DistinctProbs: 31, Withheld: 298},
+		{Day: "2026-08-09", Symbols: 329, DistinctProbs: 18, Withheld: 310},
+		{Day: "2026-08-10", Symbols: 329, DistinctProbs: 20, Withheld: 308},
+	}
+	for _, d := range measured {
+		if d.Collapsed() {
+			t.Errorf("%s: %d distinct across %d FORECAST symbols (ratio %.3f) was called a "+
+				"collapse; %d withheld rows are not evidence the model stopped discriminating",
+				d.Day, d.DistinctProbs, d.Forecast(), d.DistinctRatio(), d.Withheld)
+		}
+	}
+
+	// The starvation IS real and must be reported — as itself.
+	starved := measured[2:] // 08-07 onward: coverage 0.094, 0.058, 0.064
+	for _, d := range starved {
+		if !d.Starved() {
+			t.Errorf("%s: only %d of %d symbols forecast (coverage %.3f) did NOT trip the "+
+				"starvation test", d.Day, d.Forecast(), d.Symbols, d.CoverageRatio())
+		}
+	}
+	for _, d := range measured[:2] { // 08-05, 08-06: coverage 0.988, 0.927
+		if d.Starved() {
+			t.Errorf("%s: coverage %.3f is healthy but tripped the starvation test",
+				d.Day, d.CoverageRatio())
+		}
+	}
+
+	detail, err := run(t, stubSource{rawDays: measured, base: 0.5, nDays: 5})
+	if err == nil {
+		t.Fatalf("three starved days returned no error; detail=%q", detail)
+	}
+	if strings.Contains(err.Error(), "RAW MODEL COLLAPSE") {
+		t.Errorf("starvation was reported as a collapse — the wrong diagnosis is the bug: %v", err)
+	}
+	if !strings.Contains(err.Error(), "FORECAST COVERAGE STARVED") {
+		t.Errorf("error does not name the failure: %v", err)
+	}
+	// It must name the newest day and the real coverage so an operator can act.
+	if !strings.Contains(err.Error(), "2026-08-10") || !strings.Contains(err.Error(), "3/5 day(s)") {
+		t.Errorf("error does not locate the failure in time: %v", err)
+	}
+}
+
+// A genuine raw collapse — many symbols forecast, almost no variety among them —
+// must still trip, and must NOT be renamed to starvation.
+func TestRealRawCollapseStillTrips(t *testing.T) {
+	measured := []DayStat{{Day: "2026-07-27", Symbols: 330, DistinctProbs: 6, Withheld: 2}}
+	if !measured[0].Collapsed() {
+		t.Fatalf("328 forecast symbols sharing 6 values did not trip the collapse test")
+	}
+	if measured[0].Starved() {
+		t.Errorf("coverage %.3f is healthy; this is a collapse, not starvation",
+			measured[0].CoverageRatio())
+	}
 }
 
 // THE REGRESSION THAT MATTERS. These are the real measured cross-sections from
@@ -67,8 +202,39 @@ func TestCatchesTheRealCollapse(t *testing.T) {
 		t.Errorf("error does not name the failure: %v", err)
 	}
 	// It must name the worst day so an operator knows where to look.
-	if !strings.Contains(err.Error(), "8/8 day(s)") {
+	if !strings.Contains(err.Error(), "8 of 8 judgeable day(s)") {
 		t.Errorf("error does not report how many days collapsed: %v", err)
+	}
+	// And WHEN it last happened. The worst day alone cannot separate a collapse
+	// running now from one that ended a week ago.
+	if !strings.Contains(err.Error(), "MOST RECENT was 2026-08-04") {
+		t.Errorf("error does not say when the collapse last occurred: %v", err)
+	}
+}
+
+// Days too thin to judge are NOT clean days. Counting them as recovery is how a
+// live collapse hides behind starvation — measured 2026-08-17, 5 of 11 published
+// days carried fewer than 30 forecasts and the ratio is meaningless there.
+func TestCollapseReportsRecencyAndUnjudgeableDays(t *testing.T) {
+	measured := []DayStat{
+		{Day: "2026-08-06", Symbols: 327, DistinctProbs: 34}, // collapsed (0.104)
+		{Day: "2026-08-07", Symbols: 45, DistinctProbs: 29},  // clean, judgeable
+		{Day: "2026-08-09", Symbols: 19, DistinctProbs: 14},  // TOO THIN
+		{Day: "2026-08-13", Symbols: 64, DistinctProbs: 35},  // clean, judgeable
+		{Day: "2026-08-14", Symbols: 18, DistinctProbs: 11},  // TOO THIN
+	}
+	_, err := run(t, stubSource{days: measured, base: 0.478, nDays: 5})
+	if err == nil {
+		t.Fatal("a collapsed day in the window returned no error")
+	}
+	if !strings.Contains(err.Error(), "1 of 3 judgeable day(s)") {
+		t.Errorf("thin days were counted as judgeable: %v", err)
+	}
+	if !strings.Contains(err.Error(), "2 clean judgeable day(s) since") {
+		t.Errorf("does not report the clean run since the last collapse: %v", err)
+	}
+	if !strings.Contains(err.Error(), "2 day(s) in the window carried fewer than 30") {
+		t.Errorf("does not warn that thin days could not be judged: %v", err)
 	}
 }
 
@@ -114,6 +280,23 @@ func TestSmallUniverseIsNotACollapse(t *testing.T) {
 	}
 }
 
+// daysAt builds a k-day realized-rate series centred on rate with a small
+// alternating spread, so a fixture carries a real per-day record instead of a
+// degenerate one. Spread is deliberately tight: these cases exist to test the
+// SIGN rule, and a wide series would fail them for the unrelated reason that the
+// interval swallowed the base rate.
+func daysAt(rate float64, k int) []float64 {
+	out := make([]float64, k)
+	for i := range out {
+		if i%2 == 0 {
+			out[i] = rate + 0.02
+		} else {
+			out[i] = rate - 0.02
+		}
+	}
+	return out
+}
+
 // Inversion is measured against the BASE RATE, not against the claim.
 // Overconfidence still ranks; negative information does not.
 func TestInversionIsAgainstTheBaseRate(t *testing.T) {
@@ -121,26 +304,68 @@ func TestInversionIsAgainstTheBaseRate(t *testing.T) {
 
 	// The real >=70% bucket from the collapsed window: claimed 80.9%, delivered
 	// 42.5% against a 58.3% base rate. Acting on it beat ignoring it — backwards.
-	real := Bucket{Label: ">=70%", N: 3802, Said: 0.809, Actual: 0.425}
+	real := Bucket{Label: ">=70%", N: 3802, Days: 31, Said: 0.809, Actual: 0.425,
+		DayRates: daysAt(0.425, 31)}
 	if !real.Inverted(base) {
 		t.Error("the measured >=70% bucket (said 80.9%, delivered 42.5%, base 58.3%) was not called inverted")
 	}
 
 	// Merely overconfident: claims 80%, delivers 65%, still above the base rate.
 	// Useful for ranking, so it must NOT be flagged.
-	if (Bucket{Label: ">=70%", N: 3802, Said: 0.80, Actual: 0.65}).Inverted(base) {
+	if (Bucket{Label: ">=70%", N: 3802, Days: 31, Said: 0.80, Actual: 0.65,
+		DayRates: daysAt(0.65, 31)}).Inverted(base) {
 		t.Error("an overconfident-but-informative bucket was flagged as inverted")
 	}
 
 	// A down-call that realizes MORE up than the base rate is equally inverted.
-	if !(Bucket{Label: "<30%", N: 3020, Said: 0.234, Actual: 0.70}).Inverted(base) {
+	if !(Bucket{Label: "<30%", N: 3020, Days: 28, Said: 0.234, Actual: 0.70,
+		DayRates: daysAt(0.70, 28)}).Inverted(base) {
 		t.Error("a down-call realizing above the base rate was not called inverted")
 	}
 
 	// Thin buckets never trip: post-collapse the <30% bucket holds 11 rows, and
 	// an alert built on that is exactly the overfitting this session forbids.
-	if (Bucket{Label: "<30%", N: 11, Said: 0.244, Actual: 0.545}).Inverted(0.3914) {
+	if (Bucket{Label: "<30%", N: 11, Days: 9, Said: 0.244, Actual: 0.545}).Inverted(0.3914) {
 		t.Error("an 11-row bucket tripped the inversion test")
+	}
+
+	// THE DEFECT THIS FIELD EXISTS FOR. A three-figure n drawn from two trading
+	// days is ~2 independent observations, because every symbol on a day shares
+	// one market move. MinDaysForInversion was applied to the WINDOW's day count,
+	// which any 14-day window passes, and never to the bucket's own — so on
+	// 2026-08-17 the 55-70% and >=70% buckets (189 and 198 rows, 2 days each)
+	// both published "acting on this bucket is worse than ignoring it".
+	// The OTHER half of the same lesson: enough days, but the gap is inside
+	// noise. This is the live 45-55% bucket of 2026-08-17 — 790 rows over 11
+	// days, claimed 48.7%, realized 49.7% against a 47.8% base. It cleared every
+	// count floor and published "acting on this bucket is worse than ignoring
+	// it" on a 1.9pp difference whose day-clustered z was -0.73. A verdict about
+	// live money needs an interval, not a point estimate.
+	noisy := Bucket{Label: "45-55%", N: 790, Days: 11, Said: 0.487, Actual: 0.497,
+		DayRates: []float64{0.31, 0.62, 0.40, 0.55, 0.38, 0.61, 0.44, 0.52, 0.35, 0.58, 0.46}}
+	if !invertedSign(noisy, 0.478) {
+		t.Fatal("fixture no longer points the wrong way; it tests nothing")
+	}
+	if !noisy.Judgeable() {
+		t.Fatal("fixture must clear the count floors, or it tests the wrong gate")
+	}
+	if noisy.Inverted(0.478) {
+		lo, hi, _ := noisy.clusteredBounds()
+		t.Errorf("a bucket whose day-clustered CI [%.3f,%.3f] straddles the 0.478 base rate "+
+			"still carried an inversion verdict", lo, hi)
+	}
+
+	twoDays := Bucket{Label: ">=70%", N: 198, Days: 2, Said: 0.862, Actual: 0.434}
+	if twoDays.Inverted(0.478) {
+		t.Error("198 rows from TWO days carried an inversion verdict — pseudo-replication")
+	}
+	if twoDays.Judgeable() {
+		t.Error("a 2-day bucket reported itself judgeable")
+	}
+	// It must still be recognised as pointing the wrong way, so the caller can
+	// report it as WITHHELD rather than drop it into silence.
+	if !invertedSign(twoDays, 0.478) {
+		t.Error("the sign test stopped seeing a wrong-way bucket; it would vanish entirely")
 	}
 }
 

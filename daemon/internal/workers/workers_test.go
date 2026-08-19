@@ -376,3 +376,53 @@ func TestStart_ReturnsCleanlyWhenWorkersDrain(t *testing.T) {
 		t.Fatal("Start did not return after clean worker drain")
 	}
 }
+
+// TestStart_OperatorStopExitsZeroDespiteStuckWorker pins the exit CODE, which is
+// what the supervisor acts on.
+//
+// ShutdownGrace is 75s in production but minRunTimeout is 15 MINUTES, so a
+// worker legitimately mid-run at SIGTERM (a VACUUM INTO, a prune) blows the
+// grace as a matter of course. main.go defines exit 1 as "internal fault;
+// exiting non-zero so the supervisor restarts it" and the Daemon task carries
+// RestartCount=999, so before OperatorStop existed an operator running
+// `signaldeck-ctl.sh stop` during one of those runs got the daemon restarted
+// underneath them. Draining slowly is not faulting.
+func TestStart_OperatorStopExitsZeroDespiteStuckWorker(t *testing.T) {
+	st := openTemp(t)
+
+	oldGrace, oldExit := ShutdownGrace, forceExit
+	t.Cleanup(func() { ShutdownGrace, forceExit = oldGrace, oldExit })
+	ShutdownGrace = 100 * time.Millisecond
+	exited := make(chan int, 1)
+	forceExit = func(code int) { exited <- code; select {} }
+
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	stuck := quickWorker{fakeWorker{name: "stuck-worker", fn: func(ctx context.Context) (string, error) {
+		<-block
+		return "", nil
+	}}}
+
+	r := NewRunner(st, stuck)
+	// The operator asked for this stop, so the parent signal context is done.
+	r.OperatorStop = func() bool { return true }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(60 * time.Millisecond); cancel() }()
+	go r.Start(ctx)
+
+	select {
+	case code := <-exited:
+		if code != 0 {
+			t.Fatalf("operator-requested stop force-exited %d, want 0 — a stop the "+
+				"operator asked for must not be restarted by the supervisor", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start never escalated to forceExit with a stuck worker")
+	}
+	// The negative case — no OperatorStop set, so the escalation must still be a
+	// fault (exit 1) — is TestStart_ForceExitsWhenWorkerIgnoresCancellation
+	// above, which builds its Runner without one. Between them the two codes are
+	// pinned in both directions, which is what stops this being "fixed" by
+	// exiting 0 unconditionally.
+}

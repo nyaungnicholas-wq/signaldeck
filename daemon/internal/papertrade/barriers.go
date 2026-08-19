@@ -40,6 +40,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
@@ -101,10 +102,10 @@ func AdverseATRMult() float64 {
 type BarrierExit struct {
 	Kind      BarrierKind `json:"kind"`
 	TriggerTs int64       `json:"triggerTs"`
-	Level     float64     `json:"level"`     // the barrier price (0 for expiry)
-	ClosePx   float64     `json:"closePx"`   // the close that confirmed it
-	ATR       float64     `json:"atr"`       // the volatility the levels were sized from
-	HeldBars  int         `json:"heldBars"`  // bars held when it fired, 1-based
+	Level     float64     `json:"level"`    // the barrier price (0 for expiry)
+	ClosePx   float64     `json:"closePx"`  // the close that confirmed it
+	ATR       float64     `json:"atr"`      // the volatility the levels were sized from
+	HeldBars  int         `json:"heldBars"` // bars held when it fired, 1-based
 }
 
 // Levels returns the two price barriers for an entry at entryPx with volatility
@@ -239,5 +240,6 @@ func envBool(key string, def bool) bool {
 	case "no", "off":
 		return false
 	}
+	envcfg.Reject(key, v, "not a boolean", strconv.FormatBool(def))
 	return def
 }

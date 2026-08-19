@@ -7,7 +7,10 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 )
 
 // projectRoot returns the directory CONTAINING signaldeck/ — the anchor for the
@@ -198,7 +201,7 @@ func Load() Config {
 		LLMModel:        pick("SIGNALDECK_LLM_MODEL", "qwen/qwen3.5-122b-a10b"),                        // MoE: 122B knowledge / ~10B active → strong + ~4s on NVIDIA free tier
 		LLMModelDeep:    pick("SIGNALDECK_LLM_MODEL_DEEP", "nvidia/llama-3.3-nemotron-super-49b-v1.5"), // reasoning-tuned; on-demand only (~30s)
 		LLMModelFast:    pick("SIGNALDECK_LLM_MODEL_FAST", "meta/llama-3.1-8b-instruct"),               // ultra-fast for high-frequency low-stakes calls
-		LLMDailyCap:     atoiOr(pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
+		LLMDailyCap:     atoiOr("SIGNALDECK_LLM_DAILY_CAP", pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
 		DBPath:          envOr("SIGNALDECK_DB", filepath.Join(projectRoot(), "signaldeck", "data", "signaldeck.db")),
 		HTTPAddr:        httpAddr,
 		HudURL:          envOr("SIGNALDECK_HUD_URL", "http://127.0.0.1:8787/api/summary"),
@@ -224,8 +227,8 @@ func Load() Config {
 		// The flag records the operator's assertion; it does not grant a right.
 		AllowRawExport: boolEnv("SIGNALDECK_ALLOW_RAW_EXPORT", false),
 		TrustProxy:     boolEnv("SIGNALDECK_TRUST_PROXY", false),
-		RateRPS:        atoiOr(os.Getenv("SIGNALDECK_RATE_RPS"), 0),
-		RateBurst:      atoiOr(os.Getenv("SIGNALDECK_RATE_BURST"), 0),
+		RateRPS:        atoiOr("SIGNALDECK_RATE_RPS", os.Getenv("SIGNALDECK_RATE_RPS"), 0),
+		RateBurst:      atoiOr("SIGNALDECK_RATE_BURST", os.Getenv("SIGNALDECK_RATE_BURST"), 0),
 		// The MCP server never inherits an "open on loopback" default the way
 		// PublicReads does. Exposing an interface built for someone else's AI
 		// agent is a decision with compliance implications, so it is made once,
@@ -233,7 +236,7 @@ func Load() Config {
 		MCPEnabled:    boolEnv("SIGNALDECK_MCP_ENABLED", false),
 		MCPSecret:     pick("SIGNALDECK_MCP_SECRET", ""),
 		MCPAuditPath:  pick("SIGNALDECK_MCP_AUDIT", filepath.Join(projectRoot(), "signaldeck", "logs", "mcp_audit.jsonl")),
-		MCPDailyCalls: atoiOr(os.Getenv("SIGNALDECK_MCP_DAILY_CALLS"), 0),
+		MCPDailyCalls: atoiOr("SIGNALDECK_MCP_DAILY_CALLS", os.Getenv("SIGNALDECK_MCP_DAILY_CALLS"), 0),
 		MCPRevoked:    splitList(pick("SIGNALDECK_MCP_REVOKED", "")),
 	}
 	cfg.AlpacaKey = os.Getenv("ALPACA_KEY")
@@ -269,13 +272,21 @@ func splitList(v string) []string {
 }
 
 // atoiOr parses s as an int, returning def on empty/invalid input.
-func atoiOr(s string, def int) int {
+// atoiOr takes the KEY as well as the value so a refused override can name
+// itself. It used to take only the string, which is why a rejected value here
+// could not be reported even in principle.
+//
+// The digit loop is stricter than strconv.Atoi on purpose (it rejects "-5",
+// "+5", " 5" and "5 "), so the reasons below are the ones an operator actually
+// hits: a stray sign, a unit suffix, or surrounding whitespace.
+func atoiOr(key, s string, def int) int {
 	if s == "" {
 		return def
 	}
 	n := 0
 	for _, c := range s {
 		if c < '0' || c > '9' {
+			envcfg.Reject(key, s, "not a plain non-negative integer (no sign, unit or spaces)", strconv.Itoa(def))
 			return def
 		}
 		n = n*10 + int(c-'0')
@@ -301,6 +312,11 @@ func boolEnv(k string, def bool) bool {
 	case "0", "false", "no", "off":
 		return false
 	default:
+		// Fails CLOSED on purpose — an unreadable security toggle must not be
+		// read as "on". But failing closed silently is how an operator who
+		// meant to ENABLE something ends up with it off and no way to tell, so
+		// the refusal is now recorded.
+		envcfg.Reject(k, raw, "not a boolean", "false")
 		return false
 	}
 }

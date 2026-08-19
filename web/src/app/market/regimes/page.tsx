@@ -175,7 +175,10 @@ function toMarkdown(
   list: StructRegimeForecast[],
   ews?: Record<string, EarningsWindowLabel>,
 ): string {
-  const head = "| symbol | call | conviction | measured accuracy | tier | earnings | as of |";
+  // "backtested", not "measured" — and it matters most here, because this table
+  // is EXPORTED: the number leaves the app stripped of every surrounding
+  // caveat, so the column header is the only disclosure that travels with it.
+  const head = "| symbol | call | conviction | backtested accuracy | tier | earnings | as of |";
   const sep = "|---|---|---|---|---|---|---|";
   const body = list.map((f) => {
     const ew = ews?.[f.symbol];
@@ -225,8 +228,12 @@ function KindSection({
               {
                 label: "copy as markdown",
                 doneLabel: "copied",
+                // `?.` — navigator.clipboard is undefined on a non-secure
+                // origin, and a bare property access threw synchronously inside
+                // the menu's click handler. ExportMenu now catches and reports,
+                // but returning a rejected promise beats throwing.
                 onClick: () =>
-                  navigator.clipboard.writeText(toMarkdown(kind, list, ews)),
+                  navigator.clipboard?.writeText(toMarkdown(kind, list, ews)),
               },
             ]}
           />
@@ -350,17 +357,33 @@ export default function RegimesPage() {
       : null,
   };
 
-  const avgAccuracy = (forecasts: StructRegimeForecast[]) => {
-    if (forecasts.length === 0) return 0;
+  // null, not 0 — StatTile renders null as an em-dash. "0.0%" under a tile
+  // labelled AVG ACCURACY on a page promising "the measured accuracy of each
+  // state" reads as a model measured to be never right, when in fact nothing
+  // has been measured at all.
+  // Averages only forecasts that carry a number. historicalAccuracy === 0 is
+  // this app's established sentinel for "not measured" — VolRegimeLead and
+  // /market/breadth both render `> 0 ? pct(...) : "—"` on the same field — and
+  // summing those zeros into the mean dragged the headline down with rows that
+  // were never measured at all. Return null (em-dash) when nothing qualifies,
+  // and expose the contributing count so the tile can say what it averaged.
+  const avgAccuracy = (
+    forecasts: StructRegimeForecast[],
+  ): { pct: number | null; n: number } => {
+    const measured = forecasts.filter((f) => f.historicalAccuracy > 0);
+    if (measured.length === 0) return { pct: null, n: 0 };
     // historicalAccuracy is a 0-1 fraction; the tile renders with a % suffix.
-    return (forecasts.reduce((sum, f) => sum + f.historicalAccuracy, 0) / forecasts.length) * 100;
+    return {
+      pct: (measured.reduce((sum, f) => sum + f.historicalAccuracy, 0) / measured.length) * 100,
+      n: measured.length,
+    };
   };
 
   return (
     <div className="page-enter space-y-4">
       <PageHero
         title="Market Regimes"
-        subtitle="The market's current structural state — trend, volatility and liquidity regimes with the measured accuracy of each state."
+        subtitle="The market's current structural state — trend, volatility and liquidity regimes, with the BACKTESTED accuracy of each state. These claims are not yet live records: no structural forecast has been graded."
         live
       />
 
@@ -398,14 +421,26 @@ export default function RegimesPage() {
                 glow="hud"
               />
             )}
-            <StatTile
-              i={3}
-              label="AVG ACCURACY"
-              value={avgAccuracy(trendForecasts.concat(liqForecasts).concat(volForecasts))}
-              decimals={1}
-              suffix="%"
-              glow="accent"
-            />
+            {/* "BACKTESTED", not "MEASURED": these are constants from
+                structregime.go's offline lookup table, and all 37,857
+                structural rows have resolved_at NULL — nothing here has ever
+                been graded. sub= says how many forecasts actually carried a
+                number, so an average over 3 of 40 cannot read as an average
+                over 40. */}
+            {(() => {
+              const acc = avgAccuracy(trendForecasts.concat(liqForecasts).concat(volForecasts));
+              return (
+                <StatTile
+                  i={3}
+                  label="AVG BACKTESTED ACCURACY"
+                  value={acc.pct}
+                  decimals={1}
+                  suffix="%"
+                  sub={acc.n > 0 ? `over ${acc.n} measured forecast(s)` : "none measured yet"}
+                  glow="accent"
+                />
+              );
+            })()}
           </Reveal>
 
           {/* How to read this */}

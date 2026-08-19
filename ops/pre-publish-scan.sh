@@ -68,7 +68,21 @@ GENERIC_PATTERN='(api[_-]?key|apikey|secret|password|passwd|token|authtoken|auth
 # ("decoy-alpaca-key-must-never-be-loaded") — a string whose entire purpose is to
 # fail if it is ever loaded. Matching on the decoy NAME keeps this narrow: it
 # exempts the reference, not the path, so a real key in that same file still fails.
-EXCLUDE_PATTERN='os\.Getenv|process\.env|\.env\.example|placeholder|example|decoy|_test\.go|e2e/|csrf'
+#
+# The second history hit, closed the same narrow way. audits/2026-07-26-reaudit.md
+# records finding A13 - that this very scanner missed uppercase env names - and
+# the evidence FOR that finding is the scanner's own synthetic key pasted
+# verbatim: SIGNALDECK_NVIDIA_KEY=nvapi-AAAA1111bbbb2222cccc3333dddd4444. The
+# working tree was already reworded (72169e1) so the live file no longer
+# matches, but `git log -p` replays the original hunk forever, so the audit
+# proving the detector works kept reporting DO NOT PUBLISH.
+#
+# Exempt the exact synthetic VALUE, not the path and not the vendor prefix -
+# same discipline as the decoy above. A real nvapi- key in that same file still
+# fails, because nothing about `audits/` is trusted here; only this one
+# never-live string is. It cannot collide with a real credential: NVIDIA issues
+# no key of the form AAAA1111bbbb2222cccc3333dddd4444.
+EXCLUDE_PATTERN='os\.Getenv|process\.env|\.env\.example|placeholder|example|decoy|_test\.go|e2e/|csrf|nvapi-AAAA1111bbbb2222cccc3333dddd4444'
 # The scanner's OWN self-test fixture plants synthetic, never-live secrets
 # (nvapi-, whsec_, a fake password) on purpose — that is how it proves the
 # detector still detects. Scanning it meant this script reported

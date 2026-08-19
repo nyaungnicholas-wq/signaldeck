@@ -78,7 +78,17 @@ def report(db_path: str, claimed_date: str) -> int:
             """
             SELECT
                 kind,
-                MIN(day) AS first_call_day,
+                -- MIN(ts/86400), NOT MIN(day). `day` is md.SettleDay -- the UTC
+                -- day of the last daily bar at or before the call -- so for a
+                -- stale or delisted symbol it trails the call by however long
+                -- that symbol's data has been dead, and MIN() over the kind
+                -- therefore selects the stalest name rather than the earliest
+                -- call. Measured 2026-08-11: every structural call was made on
+                -- or after 2026-07-18, yet MIN(day) returned 2025-07-15 for
+                -- trend21/trend63/liquidity21 (e.g. id=12256, called
+                -- 2026-07-23, day 2025-07-15 -- a 373-day lag), making every
+                -- date derived from it fiction.
+                MIN(ts / 86400) AS first_call_day,
                 COUNT(*) AS total_calls,
                 MIN(horizon_days) AS horizon_days,
                 SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END) AS resolved,
@@ -151,7 +161,7 @@ def report(db_path: str, claimed_date: str) -> int:
         print(f"  First call date: {day_to_date(f['first_call_day'])}")
         print(f"  Total calls: {f['total_calls']}, resolved: {f['resolved']}")
         print(
-            f"  Null-quarantined: {f['quarantined']} "
+            f"  No naive-persistence baseline: {f['quarantined']} "
             "(NO frozen naive-persistence baseline, excluded from benchmarks, not backfillable)"
         )
         print(

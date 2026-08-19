@@ -40,7 +40,9 @@ export default function SentimentPage() {
     };
   }, [retryTick]);
 
-  if (err) return <ErrorState message={err} retry={() => setRetryTick((t) => t + 1)} />;
+  // `err && !data`: a transient poll failure used to wipe a loaded page for up
+  // to a full POLL_SLOW cycle, because only a successful poll clears err.
+  if (err && !data) return <ErrorState message={err} retry={() => setRetryTick((t) => t + 1)} />;
   if (!data) return <Skeleton lines={8} />;
 
   const studies = [...data.studies].sort((a, b) => a.result.horizon - b.result.horizon);
@@ -55,7 +57,12 @@ export default function SentimentPage() {
       <PageHero 
         title="SENTIMENT ANALYSIS" 
         subtitle="Does news text predict forward returns, or just describe them? This is the raw vs. partial correlation of headline sentiment." 
-        right={fetchedAt > 0 && <span className="mono text-sm" style={{ color: 'var(--hud)' }}>Updated {ago(fetchedAt)}</span>}
+        right={err !== null
+          // Stale data must say so. The page no longer hides itself on a failed
+          // poll, so the "Updated Xm ago" stamp would otherwise keep ticking
+          // beside numbers that stopped refreshing.
+          ? <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>poll failed — showing last data</span>
+          : fetchedAt > 0 && <span className="mono text-sm" style={{ color: 'var(--hud)' }}>Updated {ago(fetchedAt)}</span>}
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

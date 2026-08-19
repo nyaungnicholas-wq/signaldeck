@@ -79,9 +79,19 @@ type Inputs struct {
 	BrierSkill   float64 // 1 - Brier/Brier_baserate; >0 beats the base rate
 	CalibrationErr float64 // mean |predicted - realized| across bins
 
-	AgeDays        float64 // days since last retrain
-	MaxAgeDays     float64 // age at which freshness reaches zero (0 = default)
-	FeatureDriftPct float64 // fraction of features whose distribution moved materially
+	AgeDays    float64 // days since last retrain
+	MaxAgeDays float64 // age at which freshness reaches zero (0 = default)
+	// FeatureDriftPct is the fraction of features whose distribution moved
+	// materially. A POINTER, because "not measured" and "no drift" are different
+	// answers and a float64 cannot tell them apart.
+	//
+	// It used to be a plain float64, and every failure path in the caller
+	// returned 0 — which scores stability at a perfect 1.0. That is precisely
+	// the defect drift.go was written to close ("nothing ever computed it, so it
+	// was always zero and stability always scored a perfect 1.0"), reinstated
+	// through the error path of the fix. nil now withholds the component
+	// instead of awarding full marks for an unanswered question.
+	FeatureDriftPct *float64
 }
 
 // Score is the graded result.
@@ -120,6 +130,11 @@ var weights = map[string]float64{
 }
 
 func clamp01(v float64) float64 { return math.Max(0, math.Min(1, v)) }
+
+// Ptr wraps a measured value for the nilable Inputs fields. Mirrors
+// fleetmon.Ptr, and exists for the same reason: the difference between a
+// measurement of zero and no measurement at all has to survive into the struct.
+func Ptr(v float64) *float64 { return &v }
 
 // Grade scores the inputs and returns the operational verdict.
 func Grade(in Inputs) Score {
@@ -169,14 +184,38 @@ func Grade(in Inputs) Score {
 	}
 
 	// STABILITY — inputs drifting away from the training distribution.
-	comp["stability"] = clamp01(1 - in.FeatureDriftPct)
-	if in.FeatureDriftPct > 0.30 {
-		reasons = append(reasons, "a third or more of features have shifted distribution")
+	// WITHHELD, not scored, when drift could not be measured: a component
+	// missing from the map is visibly absent to every consumer (they all read it
+	// with the comma-ok idiom), whereas a 1.0 is indistinguishable from a
+	// genuinely stable model.
+	if in.FeatureDriftPct != nil {
+		comp["stability"] = clamp01(1 - *in.FeatureDriftPct)
+		if *in.FeatureDriftPct > 0.30 {
+			reasons = append(reasons, "a third or more of features have shifted distribution")
+		}
+	} else {
+		reasons = append(reasons,
+			"feature drift could not be measured — stability is WITHHELD from this "+
+				"grade rather than scored, so the overall figure is a weighted average "+
+				"of the components that were actually measured")
 	}
 
-	overall := 0.0
+	// Renormalise over the components actually present. Summing absent ones as
+	// zero would penalise a model for a measurement the platform failed to take,
+	// which is the mirror of the bug above and just as dishonest. With every
+	// component present the divisor is 1 and this is arithmetically identical to
+	// what it replaced.
+	overall, wsum := 0.0, 0.0
 	for k, w := range weights {
-		overall += comp[k] * w
+		v, ok := comp[k]
+		if !ok {
+			continue
+		}
+		overall += v * w
+		wsum += w
+	}
+	if wsum > 0 {
+		overall /= wsum
 	}
 
 	s := Score{

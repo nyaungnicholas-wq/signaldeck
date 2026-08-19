@@ -34,12 +34,46 @@ elif cd "$SD/data/backups" 2>/dev/null; then
       echo "  keep   $f"
     elif mv "$f" "$TRASH/"; then
       echo "  trash  $f"
+      # The .sha256 sidecar goes with its artifact. Retiring the .db alone left
+      # data/backups holding a 96-byte checksum for a file that is no longer
+      # there — a chain of custody pointing at nothing, which reads as evidence
+      # until someone tries to verify it. Observed live: a stray
+      # signaldeck-20260807-131013.db.sha256 with no matching .db or .db.gz.
+      for side in "$f.sha256" "${f%.db}.sha256"; do
+        if [ -f "$side" ]; then
+          mv "$side" "$TRASH/" || echo "  FAILED to move sidecar $side to $TRASH — left in place"
+        fi
+      done
     else
       echo "  FAILED to move $f to $TRASH — left in place"
     fi
   done
 else
   echo "  (no data/backups directory)"
+fi
+
+# HOW MUCH IS IN THERE, AND IS IT EVEN OFF THIS DISK.
+# The header promises "reclaim disk" and tells the operator to empty the Trash
+# themselves. That instruction is macOS. Under Git Bash $HOME/.Trash is an
+# ordinary hidden folder with no Finder behind it and nothing that ever empties
+# it, so on Windows this task MOVES bytes and reclaims nothing at all. Measured
+# 2026-08-12: 9.9 GB sitting there, including two retired ~5 GB databases.
+#
+# It was unreclaimed AND invisible: assert_budget in signaldeck-backup-offline.sh
+# measures data/backups ONLY, so this pile sits outside the single disk tripwire
+# the project has. Nothing deletes anything here -- retiring a backup is not the
+# same as destroying it -- but the size and the volume are now stated on every
+# run, so "trashed" can no longer read as "reclaimed".
+if [ -d "$TRASH" ]; then
+  trash_mb=$(du -sm "$TRASH" 2>/dev/null | cut -f1)
+  trash_vol=$(df -P "$TRASH" 2>/dev/null | awk 'NR==2{print $6}')
+  data_vol=$(df -P "$SD/data" 2>/dev/null | awk 'NR==2{print $6}')
+  echo "== Retired-backup holding area: ${trash_mb:-unknown} MB in $TRASH =="
+  if [ -n "$trash_vol" ] && [ "$trash_vol" = "$data_vol" ]; then
+    echo "  NOT RECLAIMED: $TRASH is on the SAME volume ($trash_vol) as the data"
+    echo "  directory, so none of the moves above freed a byte. Delete its"
+    echo "  contents to reclaim, or point SIGNALDECK_TRASH at another volume."
+  fi
 fi
 
 echo "== Logs over ${ROTATE_MB} MB: rotating (keep $ROTATE_KEEP gzipped) =="

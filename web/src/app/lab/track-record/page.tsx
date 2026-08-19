@@ -52,18 +52,29 @@ export default function TrackRecordPage() {
   const [err, setErr] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState(0);
   const [retryTick, setRetryTick] = useState(0);
-  // Credibility wave: high-conviction regime misses (its own read; best-effort —
-  // a failed fetch leaves the panel on its honest empty state).
+  // Credibility wave: high-conviction regime misses (its own read).
+  //
+  // The failure MUST be tracked separately from the empty result. This panel's
+  // empty state says "no high-conviction regime misses resolved yet" — an
+  // affirmative claim that we have not been wrong — and until 2026-08-11 a
+  // failed fetch rendered exactly that, on the page whose whole purpose is
+  // owning misses in public. A dropped request is not a clean record.
   const [pms, setPms] = useState<RegimePostmortems | null>(null);
+  const [pmsErr, setPmsErr] = useState(false);
 
   useEffect(() => {
     let alive = true;
     const load = () =>
       regimePostmortems()
         .then((p) => {
-          if (alive) setPms(p);
+          if (alive) {
+            setPms(p);
+            setPmsErr(false);
+          }
         })
-        .catch(() => undefined);
+        .catch(() => {
+          if (alive) setPmsErr(true);
+        });
     load();
     const stop = pollMs(load, POLL_SLOW);
     return () => {
@@ -232,7 +243,7 @@ export default function TrackRecordPage() {
 
           {/* ── CREDIBILITY WAVE: live regime grading + owned misses ── */}
           <RegimesLivePanel regimes={trackRecordRegimes(current)} />
-          <RegimeMissesPanel pms={pms} />
+          <RegimeMissesPanel pms={pms} failed={pmsErr} />
 
           {/* ── STAGE 3 STORY, SECTION 1: the verdict itself ── */}
           <StorySection
@@ -844,7 +855,13 @@ function RegimesLivePanel({
 /** Credibility wave — WHEN WE WERE WRONG: the latest high-conviction regime
  *  misses with their plain-English narratives. Owning misses in public IS the
  *  credibility play; the empty state says why empty is expected early. */
-function RegimeMissesPanel({ pms }: { pms: RegimePostmortems | null }) {
+function RegimeMissesPanel({
+  pms,
+  failed,
+}: {
+  pms: RegimePostmortems | null;
+  failed: boolean;
+}) {
   const rows = pms?.postmortems ?? [];
   return (
     <section className="panel reveal-item">
@@ -858,7 +875,15 @@ function RegimeMissesPanel({ pms }: { pms: RegimePostmortems | null }) {
           high-conviction regime misses, newest first
         </span>
       </div>
-      {rows.length === 0 ? (
+      {failed && rows.length === 0 ? (
+        // NOT the empty state. "No misses yet" is a claim about our record; if
+        // the read failed we have no idea what the record is, and saying so is
+        // the whole point of this page.
+        <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--ask)" }}>
+          could not load the miss record — this is a failed request, NOT an empty
+          one. Nothing here should be read as a clean record.
+        </p>
+      ) : rows.length === 0 ? (
         <p className="px-4 py-3 text-[0.75rem]" style={{ color: "var(--faint)" }}>
           no high-conviction regime misses resolved yet — this list is expected to be
           non-empty over time; a 96% tier is still wrong ~1 in 25 times.

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.signaldeck.check-task-health</string>
+	<!-- Fleet task health. This gate was MANUAL ONLY until 2026-08-12. It had no plist, and
+	     ops/install-windows-tasks.ps1 only ever registered jobs whose
+	     ProgramArguments named a .sh, so a PowerShell check could not be
+	     scheduled at all. A correct check that runs only when a human remembers
+	     is the same blind spot as a check that always passes, and
+	     fix-task-principals.ps1 tells the operator to watch for recurrence with
+	     this script as a manual instruction. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>powershell.exe</string>
+		<string>-NoProfile</string>
+		<string>-ExecutionPolicy</string>
+		<string>Bypass</string>
+		<string>-File</string>
+		<string>ops/check-task-health.ps1</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>logs/check-task-health.log</string>
+	<key>StandardOutPath</key>
+	<string>logs/check-task-health.log</string>
+	<!-- Morning, after the overnight jobs and before the afternoon publish, so a
+	     broken task is dated the morning it broke. -->
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>5</integer></dict>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>.</string>
+</dict>
+</plist>

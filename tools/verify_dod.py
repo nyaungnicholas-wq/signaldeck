@@ -550,10 +550,31 @@ ALL_CHECKS = [
 
 def main():
     parser = argparse.ArgumentParser(description="SignalDeck DoD auditor (read-only)")
-    parser.add_argument("--repo", default=".", type=Path,
-                        help="path to repository root")
+    # The repository this file lives in, not the caller's working directory.
+    # --repo used to default to ".", so the verdict depended on where you stood:
+    # from the repo root this reports 16 passed / 0 failed, and from tools/ the
+    # same command on the same tree reported 1 passed / 16 failed, with NO_HYPE
+    # reading "0 hype phrases" and TABLES_HAVE_STATUS_LABELS reading "0 markdown
+    # tables found" against a repo that has 7 and 145. Those two are the reason
+    # this matters more than the noisy failures: a check that found NOTHING TO
+    # CHECK reports exactly like a check that found nothing wrong. The audit
+    # register runs these as a bare `python tools/verify_dod.py`, with no --repo
+    # and no stated cwd, so the wrong answer was one directory away.
+    parser.add_argument("--repo", default=Path(__file__).resolve().parent.parent,
+                        type=Path, help="path to repository root "
+                                        "(default: the repo containing this file)")
     args = parser.parse_args()
     repo = args.repo.resolve()
+
+    # An auditor pointed at the wrong tree must say so, not audit an empty set
+    # and call it clean. PREREGISTRATION.md is the cheapest thing that is always
+    # present in this repository and never present by accident.
+    if not (repo / "PREREGISTRATION.md").is_file():
+        print(f"verify_dod: {repo} does not look like the SignalDeck repository "
+              "(no PREREGISTRATION.md) — refusing to audit a tree I cannot read, "
+              "because an empty audit is indistinguishable from a clean one",
+              file=sys.stderr)
+        sys.exit(2)
 
     results = []
     for check_fn in ALL_CHECKS:

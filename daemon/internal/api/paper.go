@@ -65,6 +65,23 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A nil Go slice marshals to JSON `null`, NOT `[]`. A book with no open
+	// positions and no closed trades — every fresh install, and any strategy
+	// between round trips — therefore shipped {"positions":null,"trades":null},
+	// while the web client's type declares them as arrays and calls
+	// `data.positions.length`. That threw "Cannot read properties of null
+	// (reading 'length')" and took the WHOLE /lab/paper page down to a blank
+	// error boundary: measured 2026-08-14, the page rendered 70 characters.
+	// Normalising at the JSON boundary fixes every consumer at once (web, MCP,
+	// any API client) instead of asking each to guard a shape the API should
+	// never have sent. "No rows" is an empty list, not the absence of a list.
+	if positions == nil {
+		positions = []store.PaperPosition{}
+	}
+	if recent == nil {
+		recent = []store.PaperTrade{}
+	}
+
 	// Reconstruct closed round-trips + turnover from the FULL ordered trade log
 	// (per symbol: a buy opens, the matching sell closes; won = sell net proceeds
 	// exceed the buy net outlay). This is how win-rate + turnover stay honest.
@@ -157,7 +174,18 @@ func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade) paper
 		p := papertrade.FillVsBar{Px: t.Px}
 		// BarAtOrBefore is the exact bar only when its ts matches; an earlier bar
 		// is NOT the one this fill named, so it counts as "no bar".
-		if bar, ok, err := d.St.BarAtOrBefore(ctx, t.SymbolID, md.TF1d, t.Ts); err == nil && ok && bar.Ts == t.Ts {
+		//
+		// A lookup ERROR is kept apart from that. This used to read
+		// `err == nil && ok && bar.Ts == t.Ts`, which folded a store failure into
+		// the same bucket as a fill whose bar is genuinely absent. The fidelity
+		// report then blamed "no stored bar at all" for what was an outage, and
+		// an operator reading it went hunting a data gap that did not exist.
+		// "We could not look" is not "we looked and found nothing".
+		bar, ok, err := d.St.BarAtOrBefore(ctx, t.SymbolID, md.TF1d, t.Ts)
+		switch {
+		case err != nil:
+			p.Unchecked = true
+		case ok && bar.Ts == t.Ts:
 			p.BarOpen = bar.Open
 			p.HasBar = true
 		}

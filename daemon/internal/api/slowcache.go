@@ -23,6 +23,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -55,6 +56,52 @@ const (
 	// flood of distinct keys is worth memory.
 	maxCacheEntries = 64
 )
+
+// detachedBuildTimeout is the hard ceiling on a rebuild that has been DETACHED
+// from a request context, and it exists because "detached" had come to mean
+// "unbounded".
+//
+// Every background refresh in this package ran on a bare context.Background().
+// A cold build inherits the request context and is bounded by it; a background
+// one had no deadline at all. So a build that never returned — a wedged
+// connection, a query that will not complete — never ran its
+// `defer releaseColdSlot()` and never cleared `rebuilding`. TWO of those exhaust
+// maxConcurrentColdBuilds permanently, and from then on every cold build in the
+// process fails admission while every warm entry serves its stale copy forever
+// with no error and no age. The daemon reports "warmed dashboard + movers
+// caches" every 60s throughout (pipeline/cachewarm.go).
+//
+// Three minutes is roughly four times the slowest build measured when this
+// package was written (~45s for /api/predictions/latest, 22-44s for
+// /api/track-record), so it cannot fire on a merely slow rebuild — only on one
+// that is never coming back.
+// A var, not a const, ONLY so the regression test can shorten it — a test that
+// actually waits out the real ceiling would take three minutes and would
+// therefore never be run.
+var detachedBuildTimeout = 3 * time.Minute
+
+// detachedCtx is the ONLY way a rebuild in this package should leave its
+// request behind: it outlives the caller, and nothing more. Callers must defer
+// the cancel — the timeout bounds a wedged build, the cancel releases the timer
+// for the overwhelming majority that finish normally.
+func detachedCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), detachedBuildTimeout)
+}
+
+// noteRebuildFailure logs a background rebuild that did not produce a payload.
+// Silence is how the wedge above stayed invisible: the stale copy kept serving,
+// so nothing anywhere named the failure. A deadline breach is called out
+// separately because it means the build was still running at the ceiling, which
+// is a different problem from a query that returned an error.
+func noteRebuildFailure(what string, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		slog.Warn("cache rebuild hit the detached-build ceiling and was abandoned; "+
+			"the stale copy keeps serving and the next stale hit will retry",
+			"cache", what, "ceiling", detachedBuildTimeout)
+		return
+	}
+	slog.Warn("cache rebuild failed; serving the stale copy", "cache", what, "err", err)
+}
 
 var coldBuildSlots = make(chan struct{}, maxConcurrentColdBuilds)
 
@@ -156,7 +203,9 @@ func (c *swrCache) get(ctx context.Context, key string,
 				}
 				defer releaseColdSlot()
 
-				np, err := build(context.Background())
+				bctx, cancel := detachedCtx()
+				defer cancel()
+				np, err := build(bctx)
 				c.mu.Lock()
 				e.rebuilding = false
 				if err == nil {
@@ -164,6 +213,9 @@ func (c *swrCache) get(ctx context.Context, key string,
 					e.builtAt = time.Now()
 				}
 				c.mu.Unlock()
+				if err != nil {
+					noteRebuildFailure("swr:"+key, err)
+				}
 			}()
 		}
 		c.mu.Unlock()
@@ -310,8 +362,13 @@ func (c *swrBodyCache) serve(key string, w http.ResponseWriter, r *http.Request,
 		body := e.body
 		if time.Since(e.builtAt) >= c.ttl && !e.rebuilding {
 			e.rebuilding = true
-			bg := r.Clone(context.Background())
+			// The clone carries the DETACHED-WITH-CEILING context, not a bare
+			// Background: a handler re-issued here has no client to disconnect
+			// and would otherwise have nothing at all to stop it.
+			bctx, cancel := detachedCtx()
+			bg := r.Clone(bctx)
 			go func() {
+				defer cancel()
 				// Same ceiling as a cold build: a background refresh reads the
 				// same connections. Losing the slot abandons this refresh and
 				// keeps serving the stale body.
@@ -331,6 +388,9 @@ func (c *swrBodyCache) serve(key string, w http.ResponseWriter, r *http.Request,
 					e.builtAt = time.Now()
 				}
 				c.mu.Unlock()
+				if nb == nil {
+					noteRebuildFailure("swrbody:"+key, bctx.Err())
+				}
 			}()
 		}
 		c.mu.Unlock()

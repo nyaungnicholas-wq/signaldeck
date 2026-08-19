@@ -10,16 +10,25 @@
 #
 # This turns the promise into an invariant a build can fail. It exports HEAD with
 # `git archive` — precisely what a fresh clone contains, index and worktree both
-# invisible to it — and grades the reproducibility snapshot in BOTH trees. The
-# two runs must reach the same terminal state:
+# invisible to it — and grades the reproducibility snapshot in BOTH trees. There
+# is exactly ONE passing terminal state:
 #
-#   * both grade (exit 0), and then agree on every frozen field; or
-#   * both refuse, with the same refusal class.
+#   * both grade (exit 0), and then agree on every frozen field.
 #
 # One grading and one refusing is the divergence, in either direction. A cold
 # clone that publishes MORE than the operator's tree means the gate is missing
 # downstream; a cold clone that publishes LESS means a published number cannot be
 # regenerated from the repository. Both are failures here.
+#
+# Both refusing IDENTICALLY is also a failure, and used not to be. That branch
+# printed "COLD-CLONE OK — a fresh clone of HEAD reproduces the working tree's
+# published state exactly", which is false whenever it fires: while both trees
+# refuse, neither reproduces any published state at all. It made this gate blind
+# to the one failure it is named for. The shipped snapshot spent three weeks
+# pinning a grader nine re-registrations stale — the reproduce path dead the
+# whole time — and this script reported OK on every run. Agreement is not
+# reproduction: the product keeps publishing numbers either way, so a snapshot
+# that grades nothing is a broken promise, not a consensus.
 #
 # One-directional: it can only fail. It never edits, commits, or publishes, and
 # it can never change a number — it compares two runs of an unmodified grader.
@@ -144,12 +153,20 @@ if cold_graded != work_graded:
         "    and a refusal must be too. One of these two states is not shipped.")
 elif not cold_graded:
     cc, wc = refusal_class(cs, cerr, cout), refusal_class(ws, werr, wout)
-    if cc == wc:
-        print(f"  ✓ both trees refuse identically [{cc}]")
-    else:
+    if cc != wc:
         bad.append("DIVERGENT REFUSAL CLASS: both trees refused, for different reasons.\n"
                    f"    cold clone : {cc}\n"
                    f"    worktree   : {wc}")
+    else:
+        bad.append(
+            f"DEAD REPRODUCE PATH: both trees refuse identically [{cc}].\n"
+            "    Agreement is not reproduction. REPRODUCE.md promises every published\n"
+            "    number can be regenerated from this repository alone; while both trees\n"
+            "    refuse, no reader can regenerate any of them — and the product goes on\n"
+            "    publishing those numbers regardless.\n"
+            f"    cold clone : exit {cs} {(cerr.strip().splitlines() or [''])[-1]}\n"
+            f"    worktree   : exit {ws} {(werr.strip().splitlines() or [''])[-1]}\n"
+            "    Re-cut the snapshot:  python3 tools/make_repro_snapshot.py")
 else:
     if cpay is None or wpay is None:
         bad.append("both trees graded but a registry JSON was missing or unparseable")

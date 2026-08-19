@@ -19,3 +19,13 @@ audits/
 
 .git/
 .venv/
+
+# Secrets never enter the build context. `COPY daemon/ ./` in the daemon-build
+# stage was pulling daemon/.env — SIGNALDECK_API_TOKEN, SIGNALDECK_NVIDIA_KEY,
+# SIGNALDECK_TV_WEBHOOK_SECRET — into an intermediate image layer. It does not
+# reach the final image (stage 3 copies only the built binaries), but an
+# intermediate layer is still a copy of the file on whatever host built it, and
+# `docker build --target daemon-build` reaches it directly.
+**/.env
+**/.env.*
+!**/.env.example

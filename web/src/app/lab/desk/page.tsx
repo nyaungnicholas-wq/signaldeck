@@ -8,6 +8,7 @@ import AgentPanel from "@/components/desk/AgentPanel";
 import AuditTrail from "@/components/desk/AuditTrail";
 import WorldModelPanel from "@/components/desk/WorldModelPanel";
 import { PageHero, StatTile } from "@/components/ui/Kit";
+import { fmtTs } from "@/lib/format";
 
 interface TopResponse {
   note: string;
@@ -29,13 +30,13 @@ export default function DeskOverviewPage() {
 
   const rows = top?.rows;
   const firstRow = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+  // No hardcoded fallback symbol. `topErr` — the opportunity feed FAILING — used
+  // to select MSFT, so an outage produced a full RecommendationCard, AgentPanel
+  // and AuditTrail for a symbol the user never picked and that was in no list,
+  // on a page whose subtitle promises "measured, not advice". An empty selection
+  // is the honest state; the panels below already handle it.
   const active =
-    activeRaw ??
-    (firstRow
-      ? { symbol: firstRow.symbol, market: firstRow.market }
-      : top || topErr
-        ? { symbol: "MSFT", market: "stocks" }
-        : null);
+    activeRaw ?? (firstRow ? { symbol: firstRow.symbol, market: firstRow.market } : null);
 
   const activeKey = active ? `${active.symbol}|${active.market}` : "";
   const [recoState, setRecoState] = useState<{ key: string; d: Recommendation } | null>(null);
@@ -88,10 +89,18 @@ export default function DeskOverviewPage() {
 
   const updatedTs = reco?.available ? reco.asOf : 0;
   const topRows = top?.rows || [];
-  const totalOpportunities = topRows.length;
+  // shownOpportunities is the PAGE SIZE, not a universe count: the fetch above
+  // hardcodes limit=12 and the response carries no total, so this can never
+  // exceed 12. Named and labelled for what it is.
+  const shownOpportunities = topRows.length;
   const bestOpportunity = topRows[0];
-  const worstOpportunity = topRows[totalOpportunities - 1];
-  const latestUpdate = updatedTs ? new Date(updatedTs).toLocaleString() : "—";
+  // /api/recommendation/top returns best-score-first over the full set, so the
+  // last row of a top-12 is the 12th BEST, not the worst in the universe.
+  // Labelling it "Worst" and glowing it red inverted its meaning in a trading UI.
+  const lowestShown = topRows[shownOpportunities - 1];
+  // reco.asOf is unix SECONDS; RecommendationCard on this same page already
+  // renders it with ago(). A bare new Date() read it as ms and showed 1970.
+  const latestUpdate = updatedTs ? fmtTs(updatedTs) : "—";
 
   return (
     <div className="page-enter space-y-4">
@@ -103,8 +112,9 @@ export default function DeskOverviewPage() {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
-          label="Total Opportunities"
-          value={totalOpportunities}
+          label="Opportunities Shown"
+          value={shownOpportunities}
+          sub="top 12 by score"
           glow="hud"
           i={0}
         />
@@ -116,10 +126,10 @@ export default function DeskOverviewPage() {
           i={1}
         />
         <StatTile
-          label="Worst Opportunity"
-          value={worstOpportunity?.symbol || "—"}
-          sub={worstOpportunity?.score ? `Score: ${worstOpportunity.score.toFixed(2)}` : undefined}
-          glow="down"
+          label="Lowest of Top 12"
+          value={lowestShown?.symbol || "—"}
+          sub={lowestShown?.score ? `Score: ${lowestShown.score.toFixed(2)}` : undefined}
+          glow="hud"
           i={2}
         />
         <StatTile

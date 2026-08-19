@@ -108,8 +108,26 @@ $(printf '%s' "$sql" | grep -oE "'/[^']*'" | sed "s/^'//; s/'\$//")
 EOF
   fi
   # Backends, in preference order, both now receiving converted paths.
+  #
+  # `-cmd ".timeout"` is NOT optional. The Python branch below opens with
+  # timeout=120; the CLI branch had no equivalent, so it failed the instant the
+  # DB was locked instead of waiting. Measured 2026-08-12: the offline backup
+  # wrote its 4.7GB file at 17:53 while the daemon was down, then lost the
+  # `backup_last_ts` meta write at 17:57 to
+  #   Error in 2nd command line argument: database is locked
+  # because the daemon had come back up in between. That failure is downgraded
+  # to a WARN, so the backup reported success while the key the in-daemon
+  # failsafe gates on was never updated — and 5 hours later that failsafe took a
+  # REDUNDANT full VACUUM INTO backup against a live daemon, which is the exact
+  # contention its 30h gate exists to prevent.
+  #
+  # Use a dot-command rather than `PRAGMA busy_timeout=...;` prepended to $sql:
+  # the pragma prints its value on stdout, which would corrupt any caller
+  # reading the result. Same reason this belongs HERE and not at the call sites:
+  # a property only one backend has is precisely the drift this file exists to
+  # stop, as the path-conversion comment above already learned once.
   if command -v sqlite3 >/dev/null 2>&1; then
-    sd_nosleep sqlite3 "$db" "$sql"
+    sd_nosleep sqlite3 -cmd ".timeout 120000" "$db" "$sql"
     return $?
   fi
   py="$(sd_py)"
@@ -129,6 +147,42 @@ finally:
 ' "$db"
 }
 
+# sd_port_listening PORT — true when something is LISTENING on that TCP port.
+#
+# Exists because "is a process with this name alive" is the wrong question for a
+# server. `sd_is_running node` was how signaldeck-ctl.sh judged the web app, and
+# node is the most common process name on a developer box: measured 2026-08-11
+# there were 3 unrelated node processes running (Claude Code, the OmniRoute
+# gateway) and NOTHING listening on 8323, and `signaldeck-ctl.sh status` printed
+# "com.signaldeck.web: running" while `curl http://localhost:8323/` was refused
+# outright. The check could not report the web as down while any node existed —
+# which, on this machine, is always.
+#
+# ops/signaldeck-web-task.ps1 already asks the correct question with
+# Get-NetTCPConnection; this makes the same answer available to the shell.
+sd_port_listening() {
+  local port="$1"
+  if command -v powershell.exe >/dev/null 2>&1; then
+    [ "$(powershell.exe -NoProfile -NonInteractive -Command \
+        "@(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).Count" \
+        2>/dev/null | tr -d '\r\n ')" != "0" ] && return 0
+    return 1
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+    return 1
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -an 2>/dev/null | grep -qE "[:.]$port[[:space:]].*LISTEN" && return 0
+    return 1
+  fi
+  # No way to tell. Say NO: unlike sd_is_running (whose callers are guarding a
+  # destructive VACUUM and must fail safe by assuming the daemon is UP), the
+  # only caller here is a STATUS report, where the dangerous answer is a
+  # confident "running" for something that is not.
+  return 1
+}
+
 # sd_is_running NAME — true when a process by that name is alive.
 #
 # `pgrep` is absent under Git Bash, so `pgrep -x signaldeckd >/dev/null 2>&1`
@@ -139,7 +193,23 @@ finally:
 sd_is_running() {
   local name="$1"
   if command -v pgrep >/dev/null 2>&1; then
+    # Try "$name.exe" too. pgrep is absent under Git Bash today, so this branch
+    # is dormant on Windows — and a dormant branch that an unrelated install
+    # switches on is exactly how this file was broken once before: adding a
+    # sqlite3 CLI on 2026-08-04 for the restore rehearsal silently moved
+    # sd_sqlite onto an untested path and every backup began failing (see the
+    # path-conversion comment above). Installing procps here would activate
+    # this branch, and `pgrep -x signaldeckd` cannot match a Windows process
+    # named signaldeckd.exe — so it would answer "not running" for a LIVE
+    # daemon and let the offline backup VACUUM INTO against it, which is the
+    # precise fail-open direction this function exists to prevent.
+    #
+    # Checking both names is safe on macOS, where nothing is called *.exe and
+    # the second test simply never matches. It must NOT fall through to the
+    # branches below on a miss: on macOS those are all absent and the final
+    # fail-safe `return 0` would then report every dead process as running.
     pgrep -x "$name" >/dev/null 2>&1 && return 0
+    pgrep -x "$name.exe" >/dev/null 2>&1 && return 0
     return 1
   fi
   if command -v powershell.exe >/dev/null 2>&1; then
@@ -179,13 +249,41 @@ sd_titlecase() {
   printf '%s' "$1" | awk -F- '{for(i=1;i<=NF;i++){$i=toupper(substr($i,1,1)) substr($i,2)}; print}' OFS=-
 }
 
+# sd_svc_start SERVICE — start a service, and REPORT WHETHER IT STARTED.
+#
+# Exit codes, because "absent" and "broken" need different answers from the
+# caller and used to be indistinguishable:
+#   0  started (or already running)
+#   1  the service exists but could not be started
+#   2  the service is NOT REGISTERED on this machine
+#
+# This used to end in `schtasks //Run ... >/dev/null 2>&1` with stdout, stderr
+# and — at every call site — the exit status all discarded, while the macOS
+# branch returned 0 unconditionally whether or not launchctl did anything. So
+# `signaldeck-ctl.sh up` printed "SignalDeck up - daemon :8322, web :8323,
+# tunnel" as a fixed string. Measured 2026-08-11: the `SignalDeck Tunnel` task
+# does not exist on this machine, `schtasks //Run` on it exits 1 with "ERROR:
+# The system cannot find the file specified.", and every start path still
+# reported success. That is how a service nobody had registered went unnoticed.
+#
+# Existence is probed with //Query rather than inferred from //Run's status,
+# because //Run returns 1 for both "no such task" and "task exists but refused"
+# (measured), and those are not the same problem.
 sd_svc_start() {
   if command -v launchctl >/dev/null 2>&1; then
-    launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$1.plist" 2>/dev/null
-    launchctl kickstart "gui/$(id -u)/$1" 2>/dev/null
+    local plist="$HOME/Library/LaunchAgents/$1.plist"
+    [ -f "$plist" ] || return 2
+    launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null
+    # bootstrap fails when already loaded, which is fine; kickstart is the
+    # operation whose status actually says whether the job is running.
+    launchctl kickstart "gui/$(id -u)/$1" >/dev/null 2>&1 || return 1
     return 0
   fi
-  schtasks //Run //TN "$(sd_task_name "$1")" >/dev/null 2>&1
+  local task
+  task="$(sd_task_name "$1")"
+  schtasks //Query //TN "$task" >/dev/null 2>&1 || return 2
+  schtasks //Run //TN "$task" >/dev/null 2>&1 || return 1
+  return 0
 }
 
 sd_svc_stop() {
@@ -227,8 +325,14 @@ sd_sqlite_read() {
   # built on this helper reported "nothing referenced" for a ledger holding
   # 26,689 rows. The Python fallback already emits bare LF, so normalising here
   # makes the two backends agree — which is this file's whole purpose.
+  # `-cmd ".timeout"` for the same reason as sd_sqlite: the Python fallback
+  # opens with timeout=120 and the CLI had no equivalent, so a read racing the
+  # daemon failed instantly rather than waiting. On this path that is a
+  # silent-wrong-answer bug — the pre-rebase and reference-transaction hooks
+  # read through here, and a lock-time failure makes them report "nothing
+  # referenced", which is the same shape as the CRLF defect described above.
   if command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$db" "$sql" | tr -d '\r'
+    sqlite3 -cmd ".timeout 120000" "$db" "$sql" | tr -d '\r'
     return "${PIPESTATUS[0]}"
   fi
   py="$(sd_py)"

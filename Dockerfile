@@ -76,6 +76,18 @@ ENV SIGNALDECK_DB=/data/signaldeck.db \
 VOLUME ["/data"]
 EXPOSE 8080
 
+# The ONLY health probe used to live in fly.toml, and fly.toml itself invites
+# Railway/Render/a plain VPS as alternatives — on any of those the container ran
+# with no probe at all, so a half-dead stack (web up, daemon wedged) would keep
+# serving. Hitting /api/health THROUGH the web app on 8080 exercises both halves:
+# the Next server has to answer and its proxy has to reach the daemon on
+# loopback. /api/health, not /api/ready: readiness is deliberately strict (it
+# 503s when a worker is merely not delivering), and restarting a container over
+# a model with no edge would be a restart loop over a true statement.
+# wget is busybox's, already in the node:24-alpine base.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/api/health || exit 1
+
 COPY ops/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

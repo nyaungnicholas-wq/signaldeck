@@ -40,10 +40,33 @@ done
 # the 3-minute grace we force-kill.
 if sd_is_running signaldeckd; then
   echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: daemon ignored TERM for 3m — SIGKILL" >> "$SD/logs/backup-offline.log"
-  pkill -9 -x signaldeckd
+  # sd_kill_hard, not a raw `pkill -9`. pkill is absent under the Git Bash the
+  # scheduled task runs (verified: `command -v pkill` fails there), so this line
+  # was a `command not found` — the same class of defect the header above says
+  # was fixed for pgrep, missed one call site down. The escalation therefore
+  # no-opped, the daemon stayed up, and signaldeck-backup-offline.sh's
+  # is-daemon-alive check then refused the run: the day's backup vanished with
+  # the task still exiting 0. sd_kill_hard falls back to taskkill, which exists.
+  if ! sd_kill_hard signaldeckd; then
+    echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: force-kill FAILED (no pkill, no taskkill) — backup will be skipped" >> "$SD/logs/backup-offline.log"
+  fi
   sleep 5
 fi
+
+# --- Backup + daemon restart: capture exit codes, do NOT swallow them ---
+# A task that reports 0x00000000 while the day's backup silently vanished is
+# indistinguishable from a healthy night. Measured 2026-08-11: Task Scheduler
+# showed `SignalDeck Market-Close` LastResult 0x00000000 while
+# logs/backup-offline.log had no entries at all for 2026-08-08 or 2026-08-09 —
+# the task was green and the backups were missing. This file's exit code is the
+# only signal Task Scheduler can see, so we propagate the backup's own exit
+# code (1 on VACUUM failure, content-verification failure, missing python, or
+# a backup-budget breach; also 0 after logging "SKIP" when the daemon was
+# still running — the exact 2026-08-08/09 path). We deliberately do NOT add
+# `set -e` here: the script must continue past a backup failure to restart
+# the daemon, so a failed backup never leaves the daemon down.
 /bin/bash "$SD/ops/signaldeck-backup-offline.sh"
+backup_rc=$?
 
 # Bring the stack back up. Before this line the script simply ENDED with the
 # daemon stopped, so the 13:10 backup took SignalDeck down for the rest of the
@@ -55,4 +78,17 @@ fi
 # unavailable or fails, the 5-minute keepalive still recovers it — this only
 # shortens the gap from minutes to seconds.
 release_lock
-schtasks //Run //TN "SignalDeck Daemon" >/dev/null 2>&1 || true
+schtasks //Run //TN "SignalDeck Daemon" >/dev/null 2>&1
+daemon_rc=$?
+
+if [ "$daemon_rc" -ne 0 ]; then
+  echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: daemon restart FAILED (schtasks rc=$daemon_rc) — 5-minute keepalive should still recover it" >> "$SD/logs/backup-offline.log"
+fi
+
+if [ "$backup_rc" -ne 0 ]; then
+  echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: backup FAILED (rc=$backup_rc) — Task Scheduler result will be non-zero" >> "$SD/logs/backup-offline.log"
+  exit "$backup_rc"
+fi
+
+# Backup succeeded. If the daemon restart failed, surface that; otherwise 0.
+exit "$daemon_rc"

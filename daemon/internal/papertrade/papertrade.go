@@ -32,6 +32,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
@@ -340,7 +341,13 @@ func sortInt64(a []int64) {
 // envFloat reads a positive float from env, falling back on empty/invalid/<=0.
 func envFloat(key string, def float64) float64 {
 	if v := os.Getenv(key); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+		f, err := strconv.ParseFloat(v, 64)
+		switch {
+		case err != nil:
+			envcfg.Reject(key, v, "not a number", strconv.FormatFloat(def, 'g', -1, 64))
+		case f <= 0:
+			envcfg.Reject(key, v, "must be > 0", strconv.FormatFloat(def, 'g', -1, 64))
+		default:
 			return f
 		}
 	}

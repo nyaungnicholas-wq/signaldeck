@@ -212,6 +212,15 @@ func ageString(secs int64) string {
 	}
 	d := time.Duration(secs) * time.Second
 	switch {
+	case d < time.Minute:
+		// Sub-minute ages need their own branch. d.Round(time.Minute) collapses
+		// anything under 30s to "0s", and trimming that suffix leaves the EMPTY
+		// string — so the live feed printed "newest row ahead of our clock by
+		// old (budget 10m)" every day for crypto_perp, snapshots_1s and
+		// bars_1m_hot. Clock skew is measured in seconds, so the branch that
+		// rendered it was the one branch that erased it, deleting the single
+		// number the line exists to carry.
+		return strconv.FormatInt(int64(d/time.Second), 10) + "s"
 	case d < time.Hour:
 		return strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
 	case d < 24*time.Hour:

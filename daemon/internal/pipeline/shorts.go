@@ -50,6 +50,17 @@ const (
 	// finraShortsBackfillDays is the default first-run backfill window in
 	// TRADING days.
 	finraShortsBackfillDays = 30
+	// finraShortsStaleAfter: if the last successful run was more than this
+	// long ago, NextFire returns "now" to trigger catch-up. 26h is
+	// comfortably more than one daily cadence (24h) but less than two, so a
+	// single missed 18:30 window (which used to be dropped silently when the
+	// worker ticked 6h) is recovered on the next trading day's fire.
+	finraShortsStaleAfter = 26 * time.Hour
+	// maxCatchUpDays bounds the catch-up sweep in Run to at most this many
+	// TRADING days (oldest-first). After a long outage an unbounded sweep
+	// would hammer FINRA; the one-time backfill already exists for deep
+	// history. 5 trading days covers a Mon–Fri week plus a holiday.
+	maxCatchUpDays = 5
 )
 
 // ShortVolPoller is the finra-shorts worker.
@@ -75,7 +86,15 @@ func (w *ShortVolPoller) Interval() time.Duration { return 6 * time.Hour }
 // hour late costs nothing while being an hour early costs a whole wasted day's
 // wakeups. Non-trading days are skipped outright — there is no file for a day
 // that never traded.
+//
+// Catch-up: if the last run was more than finraShortsStaleAfter ago (e.g. the
+// process was down across the 18:30 window), fire immediately so Run can walk
+// back and ingest any missed trading days. This mirrors the pattern in
+// internal/pipeline/cot.go and internal/briefing/weekly.go.
 func (w *ShortVolPoller) NextFire(last, now time.Time) time.Time {
+	if !last.IsZero() && now.Sub(last) > finraShortsStaleAfter {
+		return now
+	}
 	return workers.TradingDayAtET(now, 18, 30)
 }
 
@@ -159,29 +178,92 @@ func (w *ShortVolPoller) Run(ctx context.Context) (string, error) {
 		return fmt.Sprintf("up to date (%s, day already stored)", key), nil
 	}
 
-	stored, fileRows, skipped, err := w.ingestDay(ctx, target, tickerToID)
-	if errors.Is(err, finra.ErrNotAvailable) {
-		// The gate says this trading day's file should be up by now — record
-		// the gap honestly and retry next tick (day key NOT set).
-		_ = w.St.InsertDQ(ctx, md.DQEvent{
-			Ts: now.Unix(), Kind: "finra_shorts_unavailable",
-			Detail: fmt.Sprintf("Reg SHO daily file for %s not available after publish deadline", key),
-		})
-		return fmt.Sprintf("file for %s not available yet (dq recorded; will retry)", key), nil
+	// Catch-up window: walk back from target up to maxCatchUpDays trading
+	// days, stopping early once we hit a day that is already stored. This
+	// bounds the sweep (the one-time backfill covers deep history) and avoids
+	// re-ingesting days we already have.
+	catchUp := make([]time.Time, 0, maxCatchUpDays)
+	d := target
+	for i := 0; i < maxCatchUpDays; i++ {
+		dayKey := d.Format("2006-01-02")
+		has, err := w.St.HasShortVolumeDay(ctx, dayKey)
+		if err != nil {
+			// If we can't check, assume not stored and include it; the
+			// ingest will be idempotent.
+			catchUp = append(catchUp, d)
+		} else if has {
+			// Already stored — no need to go further back.
+			break
+		} else {
+			catchUp = append(catchUp, d)
+		}
+		d = prevTradingDay(d)
 	}
-	if err != nil {
-		_ = w.St.InsertDQ(ctx, md.DQEvent{
-			Ts: now.Unix(), Kind: "finra_shorts_error",
-			Detail: fmt.Sprintf("%s: %v", key, err),
-		})
-		return fmt.Sprintf("fetch %s failed (dq recorded; will retry): %v", key, err), nil
+	// Reverse to oldest-first so we fill gaps chronologically.
+	for i, j := 0, len(catchUp)-1; i < j; i, j = i+1, j-1 {
+		catchUp[i], catchUp[j] = catchUp[j], catchUp[i]
 	}
-	_ = w.St.SetMeta(ctx, finraShortsLastDayKey, key)
-	detail := fmt.Sprintf("day %s: %d tracked rows upserted (file had %d)", key, stored, fileRows)
-	if skipped > 0 {
-		detail += fmt.Sprintf("; %d malformed line(s) skipped", skipped)
+
+	var (
+		ingestedDays    int
+		totalRows       int
+		failedDays      int
+		targetSucceeded bool
+		details         []string
+	)
+	for _, day := range catchUp {
+		dayKey := day.Format("2006-01-02")
+		stored, fileRows, skipped, err := w.ingestDay(ctx, day, tickerToID)
+		if errors.Is(err, finra.ErrNotAvailable) {
+			failedDays++
+			_ = w.St.InsertDQ(ctx, md.DQEvent{
+				Ts: now.Unix(), Kind: "finra_shorts_unavailable",
+				Detail: fmt.Sprintf("Reg SHO daily file for %s not available after publish deadline", dayKey),
+			})
+			details = append(details, fmt.Sprintf("%s: unavailable (will retry while inside %d-trading-day catch-up window)", dayKey, maxCatchUpDays))
+			continue
+		}
+		if err != nil {
+			failedDays++
+			_ = w.St.InsertDQ(ctx, md.DQEvent{
+				Ts: now.Unix(), Kind: "finra_shorts_error",
+				Detail: fmt.Sprintf("%s: %v", dayKey, err),
+			})
+			details = append(details, fmt.Sprintf("%s: error %v (will retry while inside %d-trading-day catch-up window)", dayKey, err, maxCatchUpDays))
+			continue
+		}
+		ingestedDays++
+		totalRows += stored
+		if dayKey == key {
+			targetSucceeded = true
+		}
+		detail := fmt.Sprintf("%s: %d tracked rows upserted (file had %d)", dayKey, stored, fileRows)
+		if skipped > 0 {
+			detail += fmt.Sprintf("; %d malformed line(s) skipped", skipped)
+		}
+		details = append(details, detail)
 	}
-	return detail, nil
+
+	// Only advance the cursor when the TARGET day itself succeeded (or was
+	// already stored, handled above). A failure on target must not move the
+	// cursor forward — the next run will retry it while it remains in the
+	// catch-up window.
+	if targetSucceeded {
+		_ = w.St.SetMeta(ctx, finraShortsLastDayKey, key)
+	}
+
+	if len(catchUp) == 0 {
+		return fmt.Sprintf("up to date (%s)", key), nil
+	}
+
+	summary := fmt.Sprintf("catch-up: %d day(s) ingested, %d row(s), %d day(s) failed", ingestedDays, totalRows, failedDays)
+	if len(details) > 0 {
+		summary += "; " + strings.Join(details, "; ")
+	}
+	if ingestedDays == 0 && failedDays > 0 {
+		summary += " — all days in window failed; will retry on next run while they remain within the catch-up window"
+	}
+	return summary, nil
 }
 
 // backfill ingests the last BackfillDays TRADING days ending at target, paced

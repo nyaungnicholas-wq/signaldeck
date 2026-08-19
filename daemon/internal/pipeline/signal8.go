@@ -472,9 +472,25 @@ func (w *ThirteenFPoller) Interval() time.Duration { return 24 * time.Hour }
 // shared SEC rate limiter is not contending with the filings poller's session
 // traffic, and consecutive days are comparable because they are sampled at the
 // same hour.
+//
+// Catch-up: DailyAtET pushes any fire time not strictly in the future to
+// TOMORROW, so without this branch a process that was down or restarting across
+// the 20:00 window skipped that day silently and never retried — `last` was
+// accepted and then discarded. Measured 2026-08-13: the last run was 08-11
+// 17:00, 32h against a 24h schedule, because 21 daemon revisions were deployed
+// on 08-12 between 19:27 and 21:10, straddling exactly that window. Mirrors
+// ShortVolPoller and COTPoller, which both carry this branch.
 func (w *ThirteenFPoller) NextFire(last, now time.Time) time.Time {
+	if !last.IsZero() && now.Sub(last) > thirteenFStaleAfter {
+		return now // missed a window (downtime or restart churn) — catch up
+	}
 	return workers.DailyAtET(now, 20, 0)
 }
+
+// thirteenFStaleAfter is the daily interval plus a 2h margin, matching
+// finraShortsStaleAfter: long enough that an on-time run never trips it, short
+// enough that exactly one missed window does.
+const thirteenFStaleAfter = 26 * time.Hour
 
 const thirteenFCursorKey = "thirteenf_mgr_cursor"
 

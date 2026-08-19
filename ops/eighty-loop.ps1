@@ -1,7 +1,25 @@
 <#
 .SYNOPSIS
+  RETIRED 2026-08-17 -- the `SignalDeck Eighty Loop` task is DISABLED. Do not
+  re-enable it without reading .NOTES below.
+
   Drives EIGHTY_PERCENT_SUPERPROMPT.md through OmniRoute, indefinitely, with
   ZERO Claude involvement.
+
+.NOTES
+  Disabled on Nicholas's decision. It cannot run anyway: EIGHTY_PERCENT_SUPERPROMPT.md
+  is in quarantine/, so line ~164 throws before any logging, and that throw escapes
+  the task's `*>>` redirect -- eleven hourly runs (00:02..10:02) exited 0x1 having
+  written zero bytes. The program is refuted, not stalled: CLAUDE.md records IC ~0.02
+  flipping sign per sub-period and 70/80% as UNREACHABLE, which is WHY the protocol
+  was quarantined, and quarantined material must not be executed. It was also a heavy
+  drain on the free router tiers -- measured 2026-08-17, they refilled at midnight and
+  were exhausted by 00:29, leaving every lane 429 for ten hours.
+
+  To revive: restore the protocol from quarantine/ FIRST, then
+  `Enable-ScheduledTask -TaskName 'SignalDeck Eighty Loop'`. Nothing re-registers it
+  on its own -- install-windows-tasks.ps1 only walks ops/com.*.plist and there is none
+  for this loop.
 
 .DESCRIPTION
   Claude's entire role is to have written this file and the protocol it carries.
@@ -104,7 +122,27 @@ param(
   # Revert to a concrete id the moment one is reliably reachable. The proper fix
   # is upstream -- omni.ps1 could log the `model` field the gateway returns,
   # which would make an alias fully attributable and this note obsolete.
-  [string]$PinnedModel = 'auto/coding',
+  #
+  # 2026-08-16: THE ALIAS NO LONGER RUNS, and the upstream fix above happened.
+  # omni.ps1 now REFUSES any auto/* id outright (omni.ps1:155, "auto/* aliases
+  # are non-deterministic and collapse to a lite model"), so every cycle died at
+  # worker-empty and the scheduled task aborted after 5 of them -- last run
+  # 2026-08-16 23:02, exit 0x1, five cycles, zero hypotheses. The garbled
+  # `worker-empty` diag in eighty-console.log is the tail of that refusal text.
+  #
+  # So this is now '' -- line ~320 then routes by -Task <lane>, which is the
+  # escape hatch line 83 already documented. That is strictly better than the
+  # alias was, on both halves of the trade this note weighed:
+  #   * liveness: the `code` lane is a measured chain across three independent
+  #     accounts (NIM, OpenRouter, gateway), so one dead provider no longer
+  #     empties a cycle -- which is exactly the 404/429 problem that drove the
+  #     move to an alias in the first place.
+  #   * provenance: the loss described above is repaired. A lane call now emits
+  #     `via <concrete model>` naming the model that actually ANSWERED, not the
+  #     one requested, so a hypothesis is attributable again.
+  # Fail-loud is unchanged: a lane that cannot answer still yields worker-empty
+  # and still trips the consecutive-empty abort below.
+  [string]$PinnedModel = '',
   [int]$CyclePauseSec = 30,
   # Consecutive empty cycles before the run gives up. "Fail loudly" was already
   # true -- worker-empty was logged all 827 times -- but loud into a log nobody
@@ -123,7 +161,22 @@ Set-Location $repo
 # Reuse the harness that is already tested rather than writing a second one:
 # Run() reports exit codes honestly through a sentinel, which is the single
 # property this loop cannot do without.
+#
+# Dot-sourcing runs the target's param() block IN THIS SCOPE, so selfimprove-
+# loop.ps1's own defaults (Hours=24, CyclePauseSec=60) OVERWRITE whatever this
+# script was invoked with, before $deadline is computed below. Measured: passing
+# -Hours 0 ("run until stopped", per the param doc) silently became a 24h
+# deadline, and every -CyclePauseSec 30 pause ran 60s -- visible in
+# logs/eighty-events.jsonl as a 60.03s gap between cycle-end and cycle-start.
+# It went unnoticed because the scheduled task passes -Hours 24, which happens
+# to equal the value that was clobbering it.
+#
+# Hours and CyclePauseSec are the only two names the two param blocks share.
+$callerHours = $Hours
+$callerCyclePauseSec = $CyclePauseSec
 . "$PSScriptRoot\selfimprove-loop.ps1" -SelfTestOnly
+$Hours = $callerHours
+$CyclePauseSec = $callerCyclePauseSec
 
 $protocolPath = Join-Path $repo 'EIGHTY_PERCENT_SUPERPROMPT.md'
 if (-not (Test-Path $protocolPath)) { throw "protocol missing: $protocolPath" }
@@ -137,6 +190,39 @@ New-Item -ItemType Directory -Force (Split-Path $journal) | Out-Null
 New-Item -ItemType Directory -Force $work | Out-Null
 
 $deadline = if ($Hours -le 0) { [datetime]::MaxValue } else { (Get-Date).AddHours($Hours) }
+
+# THE TABLE INVENTORY IS GENERATED, NOT TYPED. The block below used to be a
+# hand-maintained list of row counts and date ranges, and it drifted -- twice.
+# The first drift ("five tables and there are no others", when there were 101)
+# cost 167 consecutive cycles and is described further down. The second drift is
+# why this exists: measured 2026-08-13, the list still claimed `filings` held
+# "ONLY 2026-02-05..now" when it actually spans 1999-08-10..2026-08-12, and it
+# gave NO date range at all for the four tables whose ranges are the binding
+# constraint on almost every hypothesis:
+#
+#   prediction_outcomes  the documented "safest label source": 41 distinct
+#                        label days, horizons '1d' and '1w' ONLY
+#   fundamentals         ~5 weeks, while cycles asked for 12 quarters of EPS
+#   stocktwits_sentiment ~1 month
+#   anomalies            ~6 weeks
+#
+# So PROPOSE kept inventing 21- and 63-trading-day mechanisms whose labels do
+# not exist at any horizon, IMPLEMENT wrote a script that correctly found
+# nothing, and the cycle died "data cannot support this hypothesis". That was
+# 54 of the last 60 cycles, and 0 of 624 cycles have ever returned KEEP.
+#
+# A hand-typed number is a claim about the database that nothing checks. Ask the
+# database instead. ops/schema_inventory.py is verified against the live DB by
+# a checker that recomputes every count and range independently.
+$inventoryScript = Join-Path $PSScriptRoot 'schema_inventory.py'
+$INVENTORY = & python $inventoryScript 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0 -or $INVENTORY -notmatch '# END SCHEMA INVENTORY') {
+  # Fail loudly. A truncated or missing inventory is the exact condition that
+  # produced the 167-cycle run, and a loop meant to run for days must not spend
+  # them generating scripts against a database it was told nothing true about.
+  throw "schema_inventory.py failed (exit $LASTEXITCODE). Refusing to run with an unverified schema block.`n$INVENTORY"
+}
+Write-Host "schema inventory: $(($INVENTORY -split "`n" | Where-Object { $_ -match '^\- ' }).Count) tables, generated from the live DB"
 
 function Ev([string]$event, [hashtable]$data = @{}) {
   $rec = @{ ts = (Get-Date).ToString('o'); event = $event } + $data
@@ -167,45 +253,45 @@ with INSUFFICIENT while writing comments like "we have no table for that" about
 tables holding thousands of rows. A schema too narrow fails as surely as one
 that is absent; it just fails politely.
 
-PRICES AND LABELS
-- bars(symbol_id, tf, ts, open, high, low, close, volume)  -- 13.2M rows.
-  tf is '1d' | '1h' | '1m'. ts is a unix epoch integer.
-  1d spans 2018-07-26..now over 1,777 symbols; 1h from 2025-06-23; 1m from
-  2026-06-05 only. Anything longer than a few weeks must use 1d.
-- symbols(id, symbol, market, name, active, added_at, stream, delisted_at)
-  -- 1,780 rows. market is 'stocks' | 'crypto'. delisted_at is set only from
-  2026-07-24; before that the universe is survivor-seeded.
-- prediction_outcomes(symbol_id, horizon, ts, prob, up, fwd_return, resolved_at,
-  basis_epoch)  -- 397,769 rows. up is the realised direction and fwd_return the
-  realised forward return: THESE ARE LABELS and are the safest label source.
+THE LIVE INVENTORY. Row counts and date ranges below were read from the
+database moments ago, not typed by hand. Treat the ranges as hard limits: a
+mechanism that needs history a table does not have is untestable HERE, and
+saying so in one line is the correct outcome -- but check the range first,
+because the failure this list exists to prevent is declaring data missing that
+is present, and its mirror image, assuming depth that is not there.
 
-RAW OBSERVATIONS you may use as inputs
-- insider_trades(accession, symbol_id, insider, title, code, shares, price,
-  value, tx_ts, filed_ts)  -- 5,678 rows, 609 symbols, 2008-03..2026-07.
-  code: A=award S=sale P=purchase F=tax M=option-exercise.
-  AS-OF: tx_ts is when the trade happened, filed_ts when it became public.
-  Only filed_ts is knowable at decision time. Using tx_ts is lookahead.
-- filings(id, symbol_id, form, filed_ts, title, url, label)  -- 86,643 rows,
-  903 symbols, but ONLY 2026-02-05..now. form: 424B2, 4, 8-K, 144, 3, 6-K.
-- short_volume(symbol_id, day, short_vol, short_exempt, total_vol, short_pct)
-  -- 25,435 rows, 1,040 symbols, ONLY 2026-05-20..2026-07-31. day is 'YYYY-MM-DD'.
-- news(id, symbol_id, ts, headline, url, source, sentiment, score, rationale,
-  lex_score, lex_ver, lex_polar, lex_hedged)  -- 322,719 rows, 741 symbols,
-  2012-04..now.
-- sentiment_features(symbol_id, day, n_polar, n_all, mean_score, pos, neg,
-  hedged, ver)  -- 41,625 rows, 695 symbols, 2012-04..now. day is 'YYYY-MM-DD'.
-- stocktwits_sentiment(symbol_id, ts, bullish, bearish, untagged, total)
-  -- 41,670 rows.
-- macro_series(series, ts, value)  -- 104,543 rows. FRED series keyed by name.
-- fundamentals(symbol_id, metric, value, as_of, fetched_at)  -- 4,989 rows.
-  KEY/VALUE, not columns: metric is 'EPS' | 'Revenues' | 'SharesOutstanding' |
-  'EntityPublicFloat' | 'CIK' | 'LatestFilingDate'. AS-OF: as_of is the period,
-  fetched_at is when we learned it. Only fetched_at is knowable in advance.
-- inst_holdings(cik, manager, period, symbol_id, cusip, name, value, shares)
-  -- 48,805 rows. 13F. AS-OF: period is the quarter END; 13Fs are filed up to 45
-  days later, and this table does NOT record the filing date. Treating period as
+$INVENTORY
+
+READ THE DATE RANGES BEFORE CHOOSING A HORIZON. The single most common way a
+cycle is wasted: prediction_outcomes is the most convenient label source, but
+it holds only the horizons and the span printed above. A hypothesis with a 21-
+or 63-trading-day horizon has NO label there at any date. For any horizon
+longer than the ones listed, build the label yourself from bars (tf='1d'):
+the forward return over N sessions from the decision bar. bars spans ~8 years
+over 2,263 symbols with >=252 daily bars, so long horizons are testable -- just
+not from prediction_outcomes.
+
+AS-OF AND LOOKAHEAD HAZARDS -- these are NOT derivable from the counts above
+- bars: tf is '1d' | '1h' | '1m'. ts is a unix epoch integer. The 1h and 1m
+  series start far later than 1d; anything longer than a few weeks must use 1d.
+- symbols: market is 'stocks' | 'crypto'. delisted_at is set only from
+  2026-07-24; before that the universe is survivor-seeded.
+- prediction_outcomes: up is the realised direction and fwd_return the realised
+  forward return. THESE ARE LABELS.
+- insider_trades: code is A=award S=sale P=purchase F=tax M=option-exercise.
+  tx_ts is when the trade happened, filed_ts when it became public. Only
+  filed_ts is knowable at decision time. Using tx_ts is lookahead.
+- filings: form is 424B2, 4, 8-K, 144, 3, 6-K.
+- fundamentals: KEY/VALUE, not columns. metric is 'EPS' | 'Revenues' |
+  'SharesOutstanding' | 'EntityPublicFloat' | 'CIK' | 'LatestFilingDate'.
+  as_of is the period, fetched_at is when we learned it. Only fetched_at is
+  knowable in advance. NOTE as_of is 0 on every CIK row -- an unknown-period
+  sentinel, not a 1970 period. Never treat as_of=0 as a real date.
+- inst_holdings: 13F. period is the quarter END; 13Fs are filed up to 45 days
+  later, and this table does NOT record the filing date. Treating period as
   knowable is a 45-day lookahead. Prefer another input unless you lag it >=45d.
-- anomalies(id, symbol_id, ts, kind, z, detail, hour_bucket)  -- 3,949 rows.
+- macro_series: FRED series keyed by name. Reaches back to 1947.
+- short_volume / sentiment_features: day is a 'YYYY-MM-DD' string, not an epoch.
 
 MODEL OUTPUTS -- self-reference hazard, read this before using them
 scores(symbol_id, horizon, ts, score, components) 1.9M; composite_scores(
@@ -221,8 +307,10 @@ model against itself. If you use one, say so in the mechanism and expect the
 judge to weigh it accordingly.
 - regime_outcomes(id, symbol_id, kind, ts, day, horizon_days, regime, conviction,
   historical_accuracy, rank, resolved_at, actual, correct, naive_label, revision,
-  basis_epoch)  -- 24,957 rows. correct and resolved_at are NULL on EVERY row:
-  nothing has resolved yet, so this cannot supply labels. Do not use it for them.
+  basis_epoch). correct and resolved_at are NULL on EVERY row: nothing is DUE
+  yet (the first grades land 2026-08-17), so this cannot supply labels. Do not
+  use it for them. Also note ~29% of rows are superseded: any aggregate over
+  this table must filter superseded_by IS NULL or it double-counts.
 
 Never reference a table or column not listed above. If the data a hypothesis
 needs genuinely is not here, say so in one line and stop -- but check this list
@@ -385,12 +473,12 @@ foreach ($f in Get-ChildItem -LiteralPath $work -Filter 'h*.py' -File -ErrorActi
 }
 Ev 'numbering' @{ startsAfter = $hBase }
 
-# Commit-Draft — put each cycle's script into git as soon as it is journaled.
+# Commit-Draft -- put each cycle's script into git as soon as it is journaled.
 #
 # The drafts have to BE in git: the protocol's acceptance criteria require a
 # result to reproduce from a cold clone, and a journal entry citing
 # research/eighty/h0007.py is worth nothing if a clone does not contain it.
-# Leaving them untracked also blocks deploys outright — build_from_head refuses
+# Leaving them untracked also blocks deploys outright -- build_from_head refuses
 # a dirty tree and manifest-check refuses untracked paths under research/, so an
 # uncommitted draft stops `signaldeck-ctl.sh deploy` for everyone.
 #
@@ -624,6 +712,16 @@ Output the raw Python file only. No markdown fences, no commentary.
     $tail = ($r.Output -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 12) -join ' | '
     Ev 'script-failed' @{ cycle = $cycle; tail = $tail }
     Add-Content $journal "`n## Cycle $cycle - KILLED (script did not run)`n`n$hypothesis`n`n``````$(($r.Output -split "`n" | Select-Object -Last 6) -join "`n")```````n"
+    # Commit the draft on the KILL paths too. Commit-Draft at the bottom of the
+    # loop was reached only by cycles that got as far as a judged verdict, so
+    # every cycle that died here left its script sitting in the working tree --
+    # and this file's own header says why that matters: "Leaving them untracked
+    # also blocks deploys outright -- build_from_head refuses". Measured
+    # 2026-08-12: research/eighty/h0626.py sat modified for hours after an
+    # insufficient-data cycle and blocked every deploy until it was stashed by
+    # hand. A killed hypothesis is evidence the protocol wants kept anyway, and
+    # the journal entry just written already references the file by name.
+    Commit-Draft $script
     Start-Sleep -Seconds $CyclePauseSec
     continue
   }
@@ -692,6 +790,8 @@ $hypothesis
 $(($out -split "`n" | Select-Object -Last 10) -join "`n")
 ``````
 "@
+    # Same reason as the script-failed path above: never leave the draft dirty.
+    Commit-Draft $script
     Start-Sleep -Seconds $CyclePauseSec
     continue
   }
@@ -716,6 +816,8 @@ a data source that would change the answer.
 $(($out -split "`n" | Select-Object -Last 10) -join "`n")
 ``````
 "@
+    # Same reason as the script-failed path above: never leave the draft dirty.
+    Commit-Draft $script
     Start-Sleep -Seconds $CyclePauseSec
     continue
   }

@@ -79,16 +79,48 @@ type FlattenDecision struct {
 // setting.
 func FlattenLimit(lim Limits) float64 {
 	lim = lim.withDefaults()
-	v := DefaultFlattenDrawdown
-	if s := os.Getenv("SIGNALDECK_RISK_FLATTEN_DRAWDOWN"); s != "" {
-		if f, err := strconv.ParseFloat(s, 64); err == nil && f > 0 && f < 1 {
-			v = f
-		}
-	}
+	v, _, _ := resolveFlattenDrawdown()
 	if v < lim.MaxDrawdown {
 		v = lim.MaxDrawdown
 	}
 	return v
+}
+
+// flattenDrawdownKey is the env override for the terminal rung.
+const flattenDrawdownKey = "SIGNALDECK_RISK_FLATTEN_DRAWDOWN"
+
+// resolveFlattenDrawdown is the ONE parse of the flatten override, shared by
+// FlattenLimit (which uses the value) and DescribeLimits (which puts a rejected
+// value on the record). It returns the resolved threshold, the raw env string
+// ("" when unset), and a rejection reason ("" when accepted or unset).
+//
+// WHY IT IS SHARED. This key used to be parsed here and nowhere else, while the
+// other ten SIGNALDECK_RISK_* keys went through DescribeLimits' table — so it
+// was the one risk limit whose rejected override was discarded in total silence.
+// An operator tightening the rung that force-liquidates the entire book, who
+// typed 15 instead of 0.15, ran the 0.25 default while the pass log printed a
+// "risk-limits: N default, M env, R rejected" summary that never mentioned the
+// key. The two parsers also disagreed on domain — the table accepted (0,1] and
+// this accepted (0,1), so =1 was honoured for MAX_DRAWDOWN and dropped here.
+// One function, one domain, one verdict.
+//
+// The domain is (0,1) exclusive at both ends: 0 would flatten a book that has
+// not moved, and 1 is a drawdown the book cannot reach, i.e. a rung spelled as
+// a number that silently means "never" — if the intent is to disable the rung,
+// that has to be said out loud rather than encoded as an unreachable threshold.
+func resolveFlattenDrawdown() (value float64, raw string, rejectReason string) {
+	raw = os.Getenv(flattenDrawdownKey)
+	if raw == "" {
+		return DefaultFlattenDrawdown, "", ""
+	}
+	f, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return DefaultFlattenDrawdown, raw, fmt.Sprintf("parse error: %v", err)
+	}
+	if f <= 0 || f >= 1 {
+		return DefaultFlattenDrawdown, raw, "out of (0,1)"
+	}
+	return f, raw, ""
 }
 
 // ShouldFlatten reports whether every open position must be closed.

@@ -32,14 +32,27 @@ export default function MacroCombinedPage() {
   const [sectors, setSectors] = useState<SectorAgg[] | null>(null);
   const [ranking, setRanking] = useState<RankedRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Which of the SECONDARY feeds failed. Named individually rather than as one
+  // boolean so the banner can say what is missing instead of "something broke".
+  const [failed, setFailed] = useState<string[]>([]);
+
+  // Dedup: the poll re-runs every 2 minutes, so a persistently dead feed must
+  // not grow the list without bound.
+  const addFailed = (current: string[], name: string) =>
+    current.includes(name) ? current : [...current, name];
 
   useEffect(() => {
     let dead = false;
     const pull = () => {
+      // Only api.macro() used to reach `err`; the other three swallowed their
+      // failures, so REGIME MAP rendered "—" under the label "symbols
+      // classified" and the sectors and ranking sections simply ceased to exist
+      // with nothing saying why. A section that vanishes on failure is
+      // indistinguishable from one with nothing to show.
       api.macro().then((m) => !dead && setMacro(m)).catch((e: unknown) => !dead && setErr(String(e)));
-      api.regime().then((r) => !dead && setRegime(r)).catch(() => undefined);
-      api.sectors().then((s) => !dead && setSectors(s)).catch(() => undefined);
-      api.ranking().then((r) => !dead && setRanking(r)).catch(() => undefined);
+      api.regime().then((r) => !dead && setRegime(r)).catch(() => !dead && setFailed((f) => addFailed(f, "regime")));
+      api.sectors().then((s) => !dead && setSectors(s)).catch(() => !dead && setFailed((f) => addFailed(f, "sectors")));
+      api.ranking().then((r) => !dead && setRanking(r)).catch(() => !dead && setFailed((f) => addFailed(f, "ranking")));
     };
     pull();
     const t = setInterval(pull, 120_000);
@@ -67,11 +80,26 @@ export default function MacroCombinedPage() {
 
   const riskScore = macro ? (macro.breadthPct + (100 - macro.volPct)) / 2 : 50;
 
+  // w-full is load-bearing next to mx-auto. The root below is a direct child of
+  // the shell's flex-column <main>, and an auto margin on a flex item's cross
+  // axis DISABLES stretch — the item falls back to fit-content, so it sized
+  // itself to its widest content (402px) inside a 351px column and gave the
+  // page horizontal scroll at 375px. min-width:0 cannot help; the item was
+  // never being stretched in the first place. w-full restores the intended
+  // width and leaves mx-auto to do nothing but centre under max-w-5xl.
   return (
-    <main className="page-enter mx-auto max-w-5xl space-y-4 px-4 py-6">
+    <div className="page-enter mx-auto w-full max-w-5xl space-y-4 px-4 py-6">
       <PageHero title="Macro" subtitle="The backdrop every trade lives in — rates, dollar, volatility and risk appetite at a glance." />
 
       {err && !macro ? <ErrorState message={err} /> : null}
+      {/* A failed secondary feed must not read as an empty one. Without this the
+          sections below just disappear, which looks exactly like having nothing
+          to show. */}
+      {failed.length > 0 ? (
+        <p className="text-[0.72rem]" style={{ color: "var(--ask)" }}>
+          {failed.join(", ")} could not be loaded — those sections are MISSING, not empty.
+        </p>
+      ) : null}
       {!macro && !err ? <Skeleton lines={8} /> : null}
 
       {macro && (
@@ -210,6 +238,6 @@ export default function MacroCombinedPage() {
           <EarningsEstCard />
         </Reveal>
       )}
-    </main>
+    </div>
   );
 }

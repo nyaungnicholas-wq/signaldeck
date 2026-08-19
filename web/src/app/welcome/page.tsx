@@ -447,7 +447,13 @@ export default function WelcomePage() {
           {step < STEP_TITLES.length && (
             <button
               type="button"
-              onClick={() => setStep((s) => Math.min(3, s + 1))}
+              // STEP_TITLES.length, not a literal 3: step is 1-indexed, so the
+              // hardcoded clamp stopped at "How should we alert you?" and made
+              // "Your daily briefing" — the only step carrying finish() and
+              // markOnboarded() — unreachable. Continue rendered on step 3 and
+              // did nothing; the stepper still read "step 3 of 4", and the only
+              // way out of onboarding was Skip.
+              onClick={() => setStep((s) => Math.min(STEP_TITLES.length, s + 1))}
               className="ml-auto inline-flex min-h-[44px] cursor-pointer items-center rounded-lg border px-5 text-[0.85rem] font-bold tracking-wide transition-colors duration-150 hover:bg-[var(--accent-dim)]"
               style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
             >

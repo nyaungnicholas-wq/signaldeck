@@ -648,18 +648,24 @@ func BrierSkill(pairs []Pair) (skill, baseRate float64, ok bool) {
 // The identity map is also returned (calibrated=false) when every prediction is
 // identical (no spread to fit against).
 //
-// KNOWN GAP — MinCalibrationDays is NOT enforced here, only in CalibrateKnots.
-// This entry point fits the FLEET-WIDE map, and its only caller
-// (pipeline.globalCalibration) reads store.ResolvedRawPredictionPairs, which
-// returns the newest calibrationPairLimit=3000 ROWS with no timestamp. Measured
-// live 2026-07-26: that window spans 5 distinct days for 1d and 1 for 1w, and
-// reaching 20 would require deduping to one pair per (symbol, trading-day) across
-// the full history — a change to the store query and the predictor's window,
-// not to this function. Enforcing the floor here without that change would
-// disable fleet calibration for a reason the code could not honestly state
-// ("no timestamps supplied" is not "too few days"). The gap is real and is
-// recorded rather than papered over: the fleet map is still fitted on ~5
-// clustered days.
+// DAY FLOOR — enforced by the CALLER, not here. Calibrate takes bare pairs and
+// so cannot count days; pipeline.globalCalibration does it instead, refusing the
+// fit below calibrationMinDays using the day column the store now returns.
+//
+// The 2026-07-26 note this replaces described a gap that has since been closed,
+// and is corrected rather than deleted because it argued against enforcing the
+// floor — advice that is now wrong. It said ResolvedRawPredictionPairs returned
+// "the newest calibrationPairLimit=3000 ROWS with no timestamp", spanning 5
+// distinct days for 1d and 1 for 1w, and that reaching the floor "would require
+// deduping to one pair per (symbol, trading-day) across the full history — a
+// change to the store query". That change was made: the query now dedupes with
+// ROW_NUMBER() OVER (PARTITION BY symbol_id, settle_day(...)), returns days
+// alongside the pairs, and the cap is 40000.
+//
+// Measured live 2026-08-13, the deduped window is nowhere near the cap and
+// clears both floors: 1d = 11,833 pairs over 38 distinct days, 1w = 11,021 over
+// 34, against calibrationMinDays=10 at the caller and MinCalibrationDays=20
+// here. The fleet map is NOT fitted on ~5 clustered days.
 func Calibrate(pairs []Pair) (mapFn func(float64) float64, calibrated bool) {
 	if len(pairs) < MinCalibrationPairs {
 		return identity, false

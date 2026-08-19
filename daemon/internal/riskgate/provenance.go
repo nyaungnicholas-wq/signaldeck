@@ -38,12 +38,12 @@ func DescribeLimits() Provenance {
 	p := Provenance{}
 
 	type limitDef struct {
-		key      string
-		frac     bool // true for fraction, false for integer
-		def      float64
-		min      float64 // inclusive lower bound (exclusive for >0 case)
-		max      float64 // inclusive upper bound
-		apply    func(l *Limits, v float64)
+		key   string
+		frac  bool // true for fraction, false for integer
+		def   float64
+		min   float64 // inclusive lower bound (exclusive for >0 case)
+		max   float64 // inclusive upper bound
+		apply func(l *Limits, v float64)
 	}
 
 	defs := []limitDef{
@@ -101,6 +101,20 @@ func DescribeLimits() Provenance {
 			p.Rejections++
 		}
 	}
+
+	// The terminal rung. It is not in the defs table because it does not live on
+	// Limits — FlattenLimit resolves it against the book's MaxDrawdown floor at
+	// call time — but leaving it out of the RECORD was the bug: it made the one
+	// limit that force-liquidates the whole book the one limit whose rejected
+	// override was discarded silently. resolveFlattenDrawdown is the same parse
+	// FlattenLimit uses, so the record and the behaviour cannot drift.
+	fv, fraw, freason := resolveFlattenDrawdown()
+	fsrc := LimitSource{Key: flattenDrawdownKey, Value: fv, FromEnv: fraw != "", RawEnv: fraw}
+	if freason != "" {
+		fsrc.Rejected, fsrc.RejectReason = true, freason
+		p.Rejections++
+	}
+	p.Sources = append(p.Sources, fsrc)
 
 	return p
 }

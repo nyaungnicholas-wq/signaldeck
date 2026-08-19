@@ -37,7 +37,12 @@ def _db(path=None):
             day INTEGER, horizon_days INTEGER, regime TEXT, conviction REAL,
             historical_accuracy REAL, rank INTEGER, resolved_at INTEGER,
             actual TEXT, correct INTEGER, naive_label TEXT, revision TEXT,
-            basis_epoch INTEGER);
+            basis_epoch INTEGER,
+            -- The live schema has carried superseded_by all along; this fixture
+            -- simply never mirrored it, so overdue_rows could not be tested
+            -- against the grader's real admission filter. Added 2026-08-11 with
+            -- the filter itself (see test_superseded_rows_are_never_overdue).
+            superseded_by INTEGER);
         CREATE TABLE regime_outcome_quarantine (
             outcome_id INTEGER, symbol_id INTEGER, kind TEXT, day INTEGER,
             frozen_ts INTEGER);
@@ -49,15 +54,16 @@ def _db(path=None):
 
 
 def _call(con, oid, kind="trend21", ts=None, horizon=H, resolved=False,
-          symbol_id=1, naive="downtrend"):
+          symbol_id=1, naive="downtrend", superseded_by=None):
     """Freeze one outcome. Default ts is old enough to clear the calendar gate."""
     if ts is None:
         ts = NOW - int(horizon * 1.45 * DAY) - 10 * DAY
     con.execute(
         "INSERT INTO regime_outcomes (id, symbol_id, kind, ts, day, horizon_days,"
-        " regime, conviction, resolved_at, naive_label) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        " regime, conviction, resolved_at, naive_label, superseded_by)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (oid, symbol_id, kind, ts, ts // DAY, horizon, "uptrend", 0.9,
-         (ts + horizon * DAY) if resolved else None, naive))
+         (ts + horizon * DAY) if resolved else None, naive, superseded_by))
     return ts
 
 
@@ -98,6 +104,28 @@ class TestOverdueDetection(unittest.TestCase):
         ts = _call(con, 1, resolved=True)
         _bars(con, 1, ts, H + 5)
         self.assertEqual(sl.overdue_rows(con, NOW), [])
+
+    def test_superseded_rows_are_never_overdue(self):
+        """A row the GRADER will never touch cannot be evidence the grader stalled.
+
+        RegimeOutcomeWorker admits on `resolved_at IS NULL AND superseded_by IS
+        NULL` (store/regimeoutcomes.go:503). This check omitted the second half,
+        and superseded-and-unresolved rows are 32.4% of every structural kind
+        (measured 2026-08-11 on the live DB: trend21 2933/9055, vol21 2953/9118).
+        They would have accumulated as phantom overdue at a ratio of ~0.32
+        against STALL_RATIO=0.20 from the first due date onward — a permanent
+        STALLED verdict on a resolver doing exactly what it should.
+        """
+        con = _db()
+        ts = _call(con, 1, superseded_by=99)
+        _bars(con, 1, ts, H + 5)
+        self.assertEqual(sl.overdue_rows(con, NOW), [])
+
+        # ...and an otherwise identical LIVE row still is overdue, so the filter
+        # cannot pass by silencing everything.
+        ts2 = _call(con, 2, symbol_id=2, superseded_by=None)
+        _bars(con, 2, ts2, H + 5)
+        self.assertEqual([r["id"] for r in sl.overdue_rows(con, NOW)], [2])
 
     def test_grace_period_suppresses_a_row_that_just_became_due(self):
         """The worker runs every 6h. A row due ten minutes ago is not an outage."""
@@ -280,6 +308,43 @@ class TestExitCodes(unittest.TestCase):
         src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "structural_liveness.py"), encoding="utf-8").read()
         self.assertIn("mode=ro", src)
+
+
+class TestReadmeDateCheck(unittest.TestCase):
+    """The registry publishes first_ts + hd CALENDAR days; the resolver gates
+    on ts + hd*1.45. The check must flag the early date and nothing else."""
+
+    def _readme(self, body):
+        f = tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                        encoding="utf-8")
+        f.write(body)
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    def test_flags_calendar_day_date_as_early(self):
+        con = _db()
+        first = NOW - 5 * DAY
+        _call(con, 1, ts=first, resolved=False)
+        con.commit()
+        # Registry-style date: first_ts + H calendar days — before the gate.
+        early_date = sl._date(first + H * DAY)
+        path = self._readme(
+            f"| trend21 | 73.1% | PENDING (first grade {early_date}, "
+            f"0/30 resolved) |\n")
+        out = sl.readme_date_check(con, NOW, path)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["kind"], "trend21")
+        self.assertEqual(out[0]["gate_date"],
+                         sl._date(first + int(H * 1.45 * DAY)))
+        self.assertEqual(out[0]["days_early"], 9)  # 21*0.45 rounded down
+
+    def test_silent_on_unknown_kind_and_missing_readme(self):
+        con = _db()
+        path = self._readme(
+            "| nosuchkind | 50% | PENDING (first grade 2026-01-01, 0/30) |\n")
+        self.assertEqual(sl.readme_date_check(con, NOW, path), [])
+        self.assertEqual(sl.readme_date_check(con, NOW, path + ".missing"), [])
 
 
 if __name__ == "__main__":

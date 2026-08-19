@@ -87,3 +87,10 @@ freeze/
 tools/alpha/.cache_edgar/
 ops/accuracy_progress.json
 ops/STOP-OVERNIGHT
+
+# Go build output landing beside its package (the release binaries live in
+# the already-ignored bin/). caldiag.exe is rebuilt by `go build ./cmd/caldiag`
+# in seconds, so a 10 MB copy in git status is noise, not an artifact.
+daemon/*.exe
+# Graphify page-graph cache: regenerated on demand, never a build input.
+graphify-out/

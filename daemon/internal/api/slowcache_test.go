@@ -87,6 +87,92 @@ func TestSWRCache_StaleServesOldAndRevalidatesOnce(t *testing.T) {
 	}
 }
 
+// THE REGRESSION THAT MATTERS FOR THE COLD-BUILD CEILING.
+//
+// Background rebuilds used to run on a bare context.Background() — no deadline
+// at all — while holding one of only maxConcurrentColdBuilds slots. A build that
+// never returned therefore never ran its `defer releaseColdSlot()` and never
+// cleared `rebuilding`: TWO of them exhausted the ceiling for the life of the
+// process, after which every cold build in the package failed admission and
+// every warm entry served its stale copy forever, with no error and no age,
+// while cache-warmer reported "warmed" every 60s.
+//
+// This pins the three properties that make that impossible: the wedged build is
+// abandoned at the ceiling, its slot comes back, and the entry is left willing
+// to try again.
+func TestSWRCache_WedgedBackgroundRebuildCannotHoldItsSlotForever(t *testing.T) {
+	orig := detachedBuildTimeout
+	detachedBuildTimeout = 50 * time.Millisecond
+	defer func() { detachedBuildTimeout = orig }()
+
+	c := newSWRCache(1 * time.Millisecond)
+
+	var mu sync.Mutex
+	builds := 0
+	wedgedCtxDone := make(chan struct{})
+	build := func(ctx context.Context) (map[string]any, error) {
+		mu.Lock()
+		builds++
+		n := builds
+		mu.Unlock()
+		if n == 2 {
+			// The wedge: this build never finishes on its own. Only the ceiling
+			// can end it, which is exactly the scenario that used to hang.
+			<-ctx.Done()
+			close(wedgedCtxDone)
+			return nil, ctx.Err()
+		}
+		return map[string]any{"v": n}, nil
+	}
+
+	if _, err := c.get(context.Background(), "k", build); err != nil { // cold: v=1
+		t.Fatalf("cold build: %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if _, err := c.get(context.Background(), "k", build); err != nil { // kicks the wedged rebuild
+		t.Fatalf("stale hit: %v", err)
+	}
+
+	select {
+	case <-wedgedCtxDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wedged background rebuild was never cancelled — it would hold its cold-build slot for the life of the process")
+	}
+
+	// The slot must come back. Fill the ceiling to prove nothing leaked: if the
+	// wedge still held one, the last acquire would time out on coldBuildWait.
+	for i := 0; i < maxConcurrentColdBuilds; i++ {
+		if !acquireColdSlot(context.Background()) {
+			t.Fatalf("cold-build slot %d was never released by the abandoned rebuild", i)
+		}
+	}
+	for i := 0; i < maxConcurrentColdBuilds; i++ {
+		releaseColdSlot()
+	}
+
+	// And the entry must be willing to rebuild again — a wedge that permanently
+	// set rebuilding=true would freeze this key on its stale copy forever.
+	time.Sleep(5 * time.Millisecond)
+	if _, err := c.get(context.Background(), "k", build); err != nil {
+		t.Fatalf("stale hit after the wedge: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := builds
+		mu.Unlock()
+		if n >= 3 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if builds < 3 {
+		t.Fatalf("entry never retried after the abandoned rebuild: builds=%d", builds)
+	}
+}
+
 func TestSWRCache_ErrorIsNotCached(t *testing.T) {
 	c := newSWRCache(time.Minute)
 	calls := 0

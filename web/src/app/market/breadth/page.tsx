@@ -39,7 +39,12 @@ export default function MarketBreadthPage() {
     };
   }, [retryTick]);
 
-  if (err) return <ErrorState message={err} retry={() => setRetryTick((t) => t + 1)} />;
+  // `err && !data`, not bare `err`. The page polls on POLL_SLOW and keeps good
+  // `data` across a failed poll, so one transient failure replaced a fully
+  // loaded page with a full-screen error — and since only a SUCCESSFUL poll
+  // clears err, it stayed that way for up to two minutes (five under backoff).
+  // With data in hand the failure belongs in a chip, not in place of the page.
+  if (err && !data) return <ErrorState message={err} retry={() => setRetryTick((t) => t + 1)} />;
   if (!data) return <Skeleton lines={8} />;
 
   const indices = data.rows.filter((r) => r.group === "index");
@@ -60,13 +65,21 @@ export default function MarketBreadthPage() {
     pctTop > 66 ? "Broad advance" : pctTop > 50 ? "Narrow rally" :
     pctBottom > 66 ? "Broad decline" : "Mixed signals";
 
-  const hasAccuracy = data.rows.length > 0 && data.rows[0].historicalAccuracy > 0;
+  // Every row that actually carries a number. Testing only rows[0] let a single
+  // measured first row unlock a tile that then averaged EVERY row — including
+  // rows the table below renders as "—" because historicalAccuracy === 0 means
+  // not measured. A row shown as no-data upstairs cannot count as 0% downstairs.
+  const measuredRows = data.rows.filter((r) => r.historicalAccuracy > 0);
+  const hasAccuracy = measuredRows.length > 0;
 
   return (
     <div className="page-enter space-y-4">
       <PageHero
         title="Breadth"
         subtitle="Is the whole market moving, or just a few big names? A rally led by five stocks is a different thing from one led by five hundred."
+        // Hiding the page on a failed poll was wrong, but so is showing stale
+        // numbers with nothing saying they are stale. Same chip the intel pages use.
+        right={err !== null ? <span className="chip" style={{ color: "var(--bad)", borderColor: "var(--bad)" }}>poll failed — showing last data</span> : undefined}
       />
 
       {firstCounts && (
@@ -120,11 +133,15 @@ export default function MarketBreadthPage() {
         />
         {hasAccuracy && (
           <StatTile
-            label="Avg Accuracy"
-            value={(data.rows.reduce((sum, r) => sum + r.historicalAccuracy, 0) / data.rows.length) * 100}
+            label="Avg Backtested Accuracy"
+            value={
+              (measuredRows.reduce((sum, r) => sum + r.historicalAccuracy, 0) /
+                measuredRows.length) *
+              100
+            }
             decimals={1}
             suffix="%"
-            sub="across all baskets"
+            sub={`across ${measuredRows.length} of ${data.rows.length} baskets`}
             glow="accent"
             i={2}
           />

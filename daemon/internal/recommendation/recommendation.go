@@ -51,6 +51,10 @@ type Inputs struct {
 	// price + fundamentals.
 	HasPrice bool
 	Price    float64
+	// PriceAgeSec is the age of the bar Price came from. 0 means the caller did
+	// not supply one, which reads as "age unknown" and never as "stale" — every
+	// caller that predates the field must keep its prior behaviour.
+	PriceAgeSec int64
 	HasEPS   bool
 	EPS      float64
 	PeerPE   float64 // P/E multiple assumption for fair value (caller supplies, e.g. 20)
@@ -129,6 +133,18 @@ const (
 	stanceNeutral = "neutral"
 )
 
+// priceStaleAgeSec: a daily bar older than five days is stale. A long weekend
+// or market holiday legitimately ages a bar three to four days, so the gate
+// sits just past that — withholding a defensible number every Monday would be
+// as wrong as quoting a three-week-old close. Mirrors composite's
+// convStaleAgeSec, which already discounts conviction on a stale prediction.
+const priceStaleAgeSec = 5 * 24 * 3600
+
+// priceStale reports whether the price leg is too old to compute a return from.
+// Age 0 means the caller did not supply one: "unknown", never "infinitely
+// stale".
+func priceStale(in Inputs) bool { return in.PriceAgeSec > priceStaleAgeSec }
+
 // disclaimer rides with every recommendation — the persistent not-advice caveat.
 const disclaimer = "SignalDeck measures and stores; it does not advise. Relative ranks + backtested calibration, not a guarantee. Not financial advice."
 
@@ -153,7 +169,10 @@ func Build(in Inputs) Recommendation {
 	}
 	// Expected return is only defensible when BOTH a heuristic fair value and a
 	// live price exist — otherwise it stays unavailable, never zero-as-fact.
-	if rec.FairValue.Available && in.HasPrice && in.Price > 0 {
+	// "Live" is load-bearing and was, until 2026-08-12, unenforced: the leg was
+	// checked for existence only, so a three-week-old close produced a return
+	// quoted under a current timestamp (adversarial re-audit 2026-08-03, F-2).
+	if rec.FairValue.Available && in.HasPrice && in.Price > 0 && !priceStale(in) {
 		rec.ExpectedReturnPct = (rec.FairValue.Value - in.Price) / in.Price * 100
 		rec.HasExpectedReturn = true
 	}
@@ -308,6 +327,12 @@ func risks(in Inputs) []string {
 	}
 	if in.Conviction.RiskNote != "" {
 		out = append(out, in.Conviction.RiskNote)
+	}
+	// The stale price is still the last known price and is still worth showing.
+	// What must not happen is showing it undated.
+	if priceStale(in) {
+		out = append(out, fmt.Sprintf("last traded price is %.0f days old — expected return withheld",
+			float64(in.PriceAgeSec)/86400))
 	}
 	return out
 }

@@ -107,16 +107,36 @@ active retention windows, all served from `/api/datastats`.
 
 ## Capacity math (why SQLite is fine for a long time)
 
-At the current fleet (~30 symbols under `SIGNALDECK_SYMBOL_CAP`):
+> **Measured 2026-08-13 — the estimate below is stale by ~98x, and it is the
+> PREMISE that went stale, not the arithmetic.** It is written for "~30 symbols".
+> The fleet is now **2,950 symbols** (`symbols` table; `bars` covers 2,947), so
+> every per-symbol line below is off by that factor and the conclusion no longer
+> follows. Actual footprint on this machine:
+>
+> | tier | documented expectation | measured |
+> |---|---|---|
+> | hot `data/signaldeck.db` | "low-hundreds-of-MB, stops growing" | **4.8 GB**, still growing |
+> | cold `data/archive/` | grows slowly | **1.1 GB** across 7 table dirs |
+> | `data/backups/` | — | **19 GB** |
+> | `freeze/` snapshots | — | **8.6 GB** |
+> | **total** | — | **~34 GB** |
+>
+> Retention is NOT broken — this is the size *with* tiered retention, cold
+> archiving, and a VACUUM (2026-08-12 11:25 UTC) all working, and
+> `dq_events` records zero `vacuum_skip` rows. The governor does its job; the
+> capacity paragraph simply describes a fleet that no longer exists. Re-derive
+> it against the real symbol count before citing it in any sizing decision.
+
+At a ~30-symbol fleet (the original `SIGNALDECK_SYMBOL_CAP` assumption):
 
 - 1m bars, 60-day hot window ≈ 30 syms × ~390 min/day × 60 d ≈ **0.7M rows** (~tens of MB).
 - 1h bars, 3-year hot window ≈ 30 × ~7 h/day × 750 trading days ≈ **0.16M rows**.
 - daily bars, forever ≈ 30 × ~250/yr — negligible; grows ~7.5k rows/yr.
 - snapshots_1s at 6 h ≈ tiny; the bulk of their history lives in cold archive.
 
-The hot DB stabilizes in the low-hundreds-of-MB range and stops growing without
-bound, while the cold archive grows slowly and compresses ~10× as gzip-CSV. A
-single-Mac SQLite store handles this for **years**.
+At that fleet size the hot DB would stabilize in the low-hundreds-of-MB range,
+while the cold archive grows slowly and compresses ~10× as gzip-CSV. That
+conclusion holds only at that fleet size — see the measured table above.
 
 ---
 

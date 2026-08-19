@@ -54,6 +54,13 @@ function getSortComparator(key: SortKey, asc: boolean) {
   };
 }
 
+// Fetch caps, named so the truncation check below cannot drift from the request
+// that causes it. The API returns only `count` = the number of rows it SENT
+// (daemon/internal/api/signal8.go), never a book total, so a full sum is not
+// available client-side and the tiles must say what they are summing.
+const MANAGER_HOLDINGS_LIMIT = 200;
+const SYMBOL_HOLDERS_LIMIT = 100;
+
 function ManagerHoldings({ manager }: { manager: string }) {
   const [rows, setRows] = useState<InstHolding[] | null>(null);
   const [note, setNote] = useState("");
@@ -65,7 +72,7 @@ function ManagerHoldings({ manager }: { manager: string }) {
 
   useEffect(() => {
     let alive = true;
-    institutionsByManager(manager, 200)
+    institutionsByManager(manager, MANAGER_HOLDINGS_LIMIT)
       .then((r) => {
         if (!alive) return;
         setRows(r.holdings ?? []);
@@ -112,7 +119,18 @@ function ManagerHoldings({ manager }: { manager: string }) {
       />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile label="Positions" value={list.length} glow="hud" i={0} />
-        <StatTile label="Total Value" value={fmtUSD(list.reduce((s,h) => s + h.value, 0))} glow="accent" i={1} />
+        {/* NOT the book's total. The request is capped at MANAGER_HOLDINGS_LIMIT
+            and the API sends no book-wide sum, so this adds up only the rows on
+            screen. A manager with more positions than the cap had the top slice
+            labelled "Total Value" — a number nobody measured, and one that
+            understates by an unknown amount. Say which it is. */}
+        <StatTile
+          label={list.length >= MANAGER_HOLDINGS_LIMIT ? `Value of Top ${MANAGER_HOLDINGS_LIMIT}` : "Total Value"}
+          value={fmtUSD(list.reduce((s, h) => s + h.value, 0))}
+          sub={list.length >= MANAGER_HOLDINGS_LIMIT ? "book is larger than the fetch cap" : undefined}
+          glow="accent"
+          i={1}
+        />
         <StatTile label="Largest Position" value={fmtUSD(maxValue)} sub={`${list.find(h => h.value === maxValue)?.symbol ?? "?"}`} glow="up" i={2} />
         <StatTile label="Unmatched" value={list.filter(h => !h.symbol).length} glow="down" i={3} />
       </div>
@@ -263,7 +281,7 @@ function SymbolHolders({ symbol }: { symbol: string }) {
 
   useEffect(() => {
     let alive = true;
-    institutionsBySymbol(symbol, 100)
+    institutionsBySymbol(symbol, SYMBOL_HOLDERS_LIMIT)
       .then((r) => {
         if (!alive) return;
         setRows(r.holdings ?? []);
@@ -303,8 +321,22 @@ function SymbolHolders({ symbol }: { symbol: string }) {
       />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile label="Managers" value={rows.length} glow="hud" i={0} />
-        <StatTile label="Total Shares" value={fmtShares(rows.reduce((s,h) => s + h.shares, 0))} glow="accent" i={1} />
-        <StatTile label="Total Value" value={fmtUSD(rows.reduce((s,h) => s + h.value, 0))} glow="up" i={2} />
+        {/* Same truncation as the manager view: capped at SYMBOL_HOLDERS_LIMIT
+            with no book-wide sum from the API, so both of these add up only the
+            rows on screen. */}
+        <StatTile
+          label={rows.length >= SYMBOL_HOLDERS_LIMIT ? `Shares in Top ${SYMBOL_HOLDERS_LIMIT}` : "Total Shares"}
+          value={fmtShares(rows.reduce((s, h) => s + h.shares, 0))}
+          glow="accent"
+          i={1}
+        />
+        <StatTile
+          label={rows.length >= SYMBOL_HOLDERS_LIMIT ? `Value of Top ${SYMBOL_HOLDERS_LIMIT}` : "Total Value"}
+          value={fmtUSD(rows.reduce((s, h) => s + h.value, 0))}
+          sub={rows.length >= SYMBOL_HOLDERS_LIMIT ? "more holders than the fetch cap" : undefined}
+          glow="up"
+          i={2}
+        />
         <StatTile label="Largest Holder" value={rows.length > 0 ? rows.sort((a,b) => b.value - a.value)[0].manager : "?"} sub={fmtUSD(maxValue)} glow="down" i={3} />
       </div>
       <section className="panel hud-panel">

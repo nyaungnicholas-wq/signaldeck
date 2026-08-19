@@ -71,7 +71,10 @@ func TestTrackRecord_GatedWhenThin(t *testing.T) {
 	}
 
 	const day = int64(86400)
-	base := int64(1_700_000_000)
+	// Anchored at the survivorship epoch: ResolvedPredictionOutcomes floors on
+	// it (store.SurvivorshipEpochTS), so a fixture dated 2023 — as this was —
+	// is filtered out entirely and the assertions below grade an empty set.
+	base := int64(store.SurvivorshipEpochTS)
 	base -= base % day
 	// 3 distinct days, MANY rows each → rawN large, independentN = 3 (< 30).
 	for di := 0; di < 3; di++ {
@@ -119,7 +122,7 @@ func TestTrackRecord_UngatedMath(t *testing.T) {
 	}
 
 	const day = int64(86400)
-	base := int64(1_600_000_000)
+	base := int64(store.SurvivorshipEpochTS) // must be >= the epoch; see above
 	base -= base % day
 	// 40 distinct symbol-days (one row each), a strong directional signal:
 	// prob=0.8 on up days (fwd>0), prob=0.2 on down days (fwd<0). Alternating,
@@ -197,7 +200,7 @@ func TestTrackRecord_NoLookahead(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 	const day = int64(86400)
-	base := int64(1_500_000_000)
+	base := int64(store.SurvivorshipEpochTS) // must be >= the epoch; see above
 	base -= base % day
 
 	seedRange := func(fromDay, toDay int) {

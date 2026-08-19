@@ -118,8 +118,22 @@ func (s *Store) EarliestGradeableAt(ctx context.Context) (t time.Time, ok bool, 
 // it asks whether a DUE row went ungraded, which keys off resolution. The two
 // have not drifted; they answer different questions.
 func (s *Store) EarliestVerdictAt(ctx context.Context) (t time.Time, ok bool, err error) {
+	// MIN(ts/86400), NOT MIN(day). `day` is md.SettleDay — the UTC day of the
+	// last 1d bar at or before the call (see writeRegimeOutcome) — so for a
+	// stale or delisted symbol it trails the call by however long that symbol's
+	// data has been dead. MIN() over the whole kind therefore selects the single
+	// stalest name in the table, not the earliest call.
+	//
+	// Measured 2026-08-11: every structural call in regime_outcomes was made on
+	// or after 2026-07-18, yet MIN(day) returned 2025-07-15 for trend21/trend63/
+	// liquidity21 (lag 373-393d; e.g. symbol 42, called 2026-07-23, day
+	// 2025-07-15). That fed a firstBlock 373 days early and this function served
+	// 2026-01-31 — a verdict date 191 days IN THE PAST — over MCP, when the
+	// truthful figure was 2027-02-13. Which is precisely the defect the header
+	// above says this function exists to eliminate, re-entered through the
+	// column rather than the arithmetic.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT horizon_days, MIN(day)
+		SELECT horizon_days, MIN(ts / 86400)
 		  FROM regime_outcomes
 		 WHERE naive_label IS NOT NULL AND horizon_days > 0
 		   AND superseded_by IS NULL

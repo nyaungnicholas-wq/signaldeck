@@ -79,9 +79,14 @@ type Model struct {
 // System is the operational layer: is the data arriving and are the workers
 // running.
 type System struct {
-	StaleWorkers  []string `json:"staleWorkers"`
-	TotalWorkers  int      `json:"totalWorkers"`
-	FailingSource []string `json:"failingSources"`
+	StaleWorkers []string `json:"staleWorkers"`
+	// FailingWorkers ran on cadence and errored anyway. Separate from
+	// StaleWorkers because the two have opposite causes — stale means it is not
+	// running, failing means it is — and an operator sent looking for a stopped
+	// worker will not find a punctual broken one.
+	FailingWorkers []string `json:"failingWorkers"`
+	TotalWorkers   int      `json:"totalWorkers"`
+	FailingSource  []string `json:"failingSources"`
 
 	// DataAgeSeconds is how old the freshest market data is, and LatencyMs the
 	// most recent measured request latency. Nil when not measured.
@@ -248,6 +253,15 @@ func Assemble(tr []Trading, models []Model, sys System, layers []Layer, th Thres
 		} else if len(sys.StaleWorkers) > 0 {
 			degraded++
 			s.Breaches = append(s.Breaches, fmt.Sprintf("stale workers: %v", sys.StaleWorkers))
+		}
+		// A worker erroring every run is a breach in its own right, and is NOT
+		// implied by the stale count — it is precisely the case staleness
+		// cannot reach, because the worker is running exactly on time.
+		if len(sys.FailingWorkers) > 0 {
+			degraded++
+			s.Breaches = append(s.Breaches, fmt.Sprintf(
+				"workers failing every run (running on cadence, erroring each time): %v",
+				sys.FailingWorkers))
 		}
 	} else {
 		s.Withheld = append(s.Withheld, "system.workers: no worker registry reading")

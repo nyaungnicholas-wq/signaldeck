@@ -18,9 +18,24 @@ const SMOKE_PASS = "E2eSmoke!2026";
 // fixture: they are separate contexts, so authenticating one leaves the other
 // anonymous — and signing in to both doubled the write-tier requests straight
 // into the daemon's rate limiter (burst 5, refill 2/s), which answered 429.
+// REGISTER FIRST, then fall back to login — the same shape keyboard.spec,
+// personalization.spec, smoke.spec and ux-audit.spec all use.
+//
+// This spec used to log in ONLY, which made it the one spec in the suite that
+// could not create its own user. Specs run in filename order, so
+// accuracy-refusal runs FIRST and against a fresh database `e2e-smoke` does not
+// exist yet: beforeEach failed and all four publication-refusal tests failed
+// with it. On a database where the suite had run before, the user was already
+// there and everything passed — so the checks guarding the product's central
+// honesty contract were green on a developer's machine and red on any clean
+// clone or CI runner. Measured 2026-08-14 against a fresh daemon DB: 4 failed
+// in a full run, 2 passed / 2 skipped when run alone after smoke had created
+// the user.
 async function signIn(context: BrowserContext): Promise<void> {
   const headers = { "X-Signaldeck": "1" };
   const data = { username: SMOKE_USER, password: SMOKE_PASS };
+  const reg = await context.request.post("/api/auth/register", { headers, data });
+  if (reg.ok()) return;
   // One retry: the limiter is shared across every anonymous caller, and the
   // suite's other specs sign in at the same moment. A 429 here is the limiter
   // working, not a broken credential.

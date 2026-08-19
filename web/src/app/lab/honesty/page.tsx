@@ -156,7 +156,10 @@ export default function HonestyPage() {
             />
             <StatTile
               label="Best Quintile"
-              value={current.buckets?.[4]?.meanFwd ?? 0}
+              // A short or empty buckets array rendered "0.00%" — a fabricated
+              // forward return, on the page whose entire purpose is not
+              // fabricating them.
+              value={current.buckets?.[4]?.meanFwd}
               decimals={2}
               suffix="%"
               glow="up"
@@ -164,7 +167,7 @@ export default function HonestyPage() {
             />
             <StatTile
               label="Worst Quintile"
-              value={current.buckets?.[0]?.meanFwd ?? 0}
+              value={current.buckets?.[0]?.meanFwd}
               decimals={2}
               suffix="%"
               glow="down"

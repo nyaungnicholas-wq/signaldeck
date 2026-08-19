@@ -24,9 +24,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -172,7 +174,22 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, _ := d.St.EvidenceClaims(ctx, "", "")
+	// Refuse rather than publish, for the same reason RetirementHistory does
+	// twelve lines below: an unreadable evidence ledger must not read as "no
+	// evidence against this model". `claims` is the ONLY input that can set
+	// retired=true from SourceEvidence (publication/verdict.go:155-164), so
+	// swallowing this error meant a transient DB failure could silently
+	// UN-RETIRE a model a historical claim had already refuted — and publish it
+	// as live, with HTTP 200 and nothing in the payload saying the read failed.
+	claims, err := d.St.EvidenceClaims(ctx, "", "")
+	if err != nil {
+		writeAccuracyRefusal(w, accuracyResponse{
+			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+			GradedAt: reg.GradedAt,
+			Reason:   "evidence claims unreadable: " + err.Error(),
+		})
+		return
+	}
 
 	rows := make([]accuracyRow, 0, len(reg.Rows))
 	for _, rr := range reg.Rows {
@@ -198,6 +215,45 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 			},
 			now,
 		)
+
+		// ARM THE STICKINESS. publication_verdicts had ZERO rows and
+		// PutPublicationVerdict had no production caller, so RetirementHistory
+		// always answered "never retired", PriorVerdict.Retired was always
+		// false, and BuildVerdict's SourceHistory branch — the one whose own
+		// comment says "retirement is sticky: this row was retired by an earlier
+		// grade and cannot be un-retired by a later one" — could never fire.
+		// The layer this route exists for (see the header: the 2026-08-03 defect
+		// where the registry carried retire=false on every directional row once
+		// its window shrank below the block floor) was inert.
+		//
+		// Write only on the FALSE->TRUE transition: once per retirement, not
+		// once per GET, and never a not-retired row on top of a retired one
+		// (the table's trigger refuses that as ErrUnretireRefused, correctly).
+		// Failure to persist must not fail the response — the verdict being
+		// served is still right — but it must not be silent either, because a
+		// verdict that did not stick is a verdict that will not be sticky next
+		// time.
+		if v.Retired && !priorRetired {
+			if err := d.St.PutPublicationVerdict(ctx, store.PublicationVerdictRow{
+				Predictor: predictor, Horizon: horizon, Variant: variant,
+				PublicationStatus: v.PublicationStatus,
+				Retired:           true,
+				RetirementSticky:  v.RetirementSticky,
+				RetireReason:      strings.Join(v.Reasons, "; "),
+				RetirementSource:  v.RetirementSource,
+				CurrentNEff:       rr.EffectiveN,
+				CurrentBlocks:     rr.DistinctDays,
+				CIMethod:          rr.CIMethod,
+				NullRate:          rr.NullAcc,
+				SkillPP:           rr.Skill,
+				Reasons:           v.Reasons,
+				EvidenceRefs:      v.EvidenceRefs,
+			}); err != nil {
+				slog.Error("accuracy: could not persist retirement verdict — "+
+					"retirement will NOT be sticky for this row",
+					"predictor", predictor, "horizon", horizon, "variant", variant, "err", err)
+			}
+		}
 
 		rows = append(rows, accuracyRow{
 			Predictor: predictor, Horizon: horizon, Variant: variant,
@@ -352,37 +408,69 @@ func writeJSONStatus(w http.ResponseWriter, code int, body any) {
 // publishes, because refusing on a failed read would wedge the surface shut on
 // a transient database error rather than on evidence.
 func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now time.Time) (string, bool, error) {
-	days := 0
+	// Per-horizon windows. This used to take ONE global max distinct_days and
+	// probe horizon "1d" only, so the 1w rows were gated by 1d evidence: a
+	// collapse confined to the 1w cross-section could not refuse anything, and
+	// a 1d collapse refused rows it had not measured. Each horizon present in
+	// the registry is now checked against its OWN day stats and its own depth.
+	depth := map[string]int{}
 	for _, r := range reg.Rows {
-		if r.DistinctDays != nil && *r.DistinctDays > days {
-			days = *r.DistinctDays
+		if r.DistinctDays == nil || *r.DistinctDays <= 0 {
+			continue
+		}
+		_, horizon, _ := splitPredictor(r.Predictor)
+		if horizon == "" {
+			continue
+		}
+		if *r.DistinctDays > depth[horizon] {
+			depth[horizon] = *r.DistinctDays
 		}
 	}
-	if days <= 0 {
+	if len(depth) == 0 {
 		return "", false, nil
 	}
-	// Trading days are sparser than calendar days; widen so the calendar window
-	// actually contains `days` sessions rather than stopping short of them.
-	since := now.AddDate(0, 0, -(days*2 + 7))
-	stats, err := d.St.ForecastDayStats(ctx, "1d", since)
-	if err != nil {
-		return "", false, err
+	// Sorted so the refusal text is stable across polls.
+	horizons := make([]string, 0, len(depth))
+	for h := range depth {
+		horizons = append(horizons, h)
 	}
-	if len(stats) > days {
-		stats = stats[len(stats)-days:] // the newest `days` sessions
-	}
+	sort.Strings(horizons)
+
 	var bad []string
-	for _, st := range stats {
-		fd := forecastmon.DayStat{Day: st.Day, Symbols: st.Symbols, DistinctProbs: st.DistinctProbs}
-		if fd.Collapsed() {
-			bad = append(bad, fmt.Sprintf("%s (%d distinct across %d symbols)",
-				st.Day, st.DistinctProbs, st.Symbols))
+	total := 0
+	for _, h := range horizons {
+		days := depth[h]
+		// Trading days are sparser than calendar days; widen so the calendar
+		// window actually contains `days` sessions rather than stopping short.
+		//
+		// KNOWN APPROXIMATION, stated rather than papered over: the registry
+		// publishes how MANY days it graded, not WHICH ones, so this reproduces
+		// the window as "the newest `days` sessions". A collapsed day that sits
+		// inside the graded window but outside that newest-N slice is missed.
+		// The miss FAILS OPEN (publishes when it should refuse), which is the
+		// wrong direction — closing it needs the grader to emit its graded day
+		// list, not a smarter guess here.
+		since := now.AddDate(0, 0, -(days*2 + 7))
+		stats, err := d.St.ForecastDayStats(ctx, h, since)
+		if err != nil {
+			return "", false, err
+		}
+		if len(stats) > days {
+			stats = stats[len(stats)-days:] // the newest `days` sessions
+		}
+		total += len(stats)
+		for _, st := range stats {
+			fd := forecastmon.DayStat{Day: st.Day, Symbols: st.Symbols, DistinctProbs: st.DistinctProbs}
+			if fd.Collapsed() {
+				bad = append(bad, fmt.Sprintf("%s %s (%d distinct across %d symbols)",
+					h, st.Day, st.DistinctProbs, st.Symbols))
+			}
 		}
 	}
 	if len(bad) == 0 {
 		return "", false, nil
 	}
-	return buildCollapseReason(bad, len(stats)), true, nil
+	return buildCollapseReason(bad, total), true, nil
 }
 
 // buildCollapseReason is split out so the wording is assertable without a

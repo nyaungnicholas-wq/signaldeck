@@ -214,6 +214,7 @@ func (d Deps) recInputs(ctx context.Context, s md.Symbol, row store.CompositeSco
 
 	if bars, err := d.St.LastBars(ctx, s.ID, md.TF1d, 1); err == nil && len(bars) > 0 {
 		in.HasPrice, in.Price = true, bars[0].Close
+		in.PriceAgeSec = time.Now().Unix() - bars[0].Ts
 	}
 	if funds, err := d.St.LatestFundamentals(ctx, s.ID); err == nil {
 		for _, f := range funds {
@@ -359,6 +360,7 @@ func (d Deps) deskTop(w http.ResponseWriter, r *http.Request) {
 		// Best-effort expected return (price + EPS).
 		if bars, err := d.St.LastBars(ctx, c.SymbolID, md.TF1d, 1); err == nil && len(bars) > 0 {
 			in.HasPrice, in.Price = true, bars[0].Close
+			in.PriceAgeSec = time.Now().Unix() - bars[0].Ts
 		}
 		if funds, err := d.St.LatestFundamentals(ctx, c.SymbolID); err == nil {
 			for _, f := range funds {

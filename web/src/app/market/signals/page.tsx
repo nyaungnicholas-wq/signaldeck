@@ -66,7 +66,9 @@ export default function PredictPage() {
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile label="Total Signals" value={totalSignals} glow="hud" i={0} />
+        {/* watch is the symbol list this view renders, hard-capped at 24 when
+            signed out (usePredictions.ts) — a watchlist size, not a signal count. */}
+        <StatTile label="Symbols Tracked" value={totalSignals} glow="hud" i={0} />
         <StatTile label="Bullish" value={bullishCount} glow="up" i={1} />
         <StatTile label="Bearish" value={bearishCount} glow="down" i={2} />
         <StatTile label="Strongest" value={strongestSymbol} glow="hud" i={3} />

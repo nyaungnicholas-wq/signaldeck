@@ -75,6 +75,21 @@ const apiReadConns = 4
 
 // run wires the whole daemon: store-backed agents + the JSON API.
 func run(ctx context.Context, cfg config.Config, st *store.Store) {
+	// A CANCELLABLE child of the shutdown context, so a fatal failure inside
+	// this function can stop the fleet instead of only logging.
+	//
+	// The API bind is the case this exists for — see the goroutine that starts
+	// api.Serve below. Cancelling the CHILD leaves the parent's Err() nil, which
+	// is exactly what main() keys on to exit non-zero and let the supervisor
+	// restart us; cancelling the parent would look like an operator stop.
+	// Keep a handle on the PARENT before shadowing it. Its Err() is the only
+	// thing that distinguishes "the operator stopped us" from "we cancelled
+	// ourselves over an internal fault", and the shutdown-grace exit code needs
+	// exactly that distinction (see Runner.OperatorStop).
+	signalCtx := ctx
+	ctx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
 	// ── clients ─────────────────────────────────────────────────────
 	var alpacaClient *alpaca.Client
 	if cfg.HasAlpaca() {
@@ -131,20 +146,43 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	}
 	if seeded, _ := st.GetMeta(ctx, "seeded_v1"); seeded == "" {
 		_ = backfiller.Enqueue(cryptoSym)
+		created, failedSeeds := 0, 0
 		if alpacaClient != nil {
 			for _, s := range seedStocks {
 				sym, err := st.UpsertSymbol(ctx, s, md.Stocks, "")
-				if err == nil {
-					// The seed stocks are the initial STREAMED hot set (live ws
-					// + full 1m pipeline); mark them stream=1 so the streamer
-					// and the stream-cap accounting pick them up.
-					_ = st.SetSymbolStream(ctx, sym.ID, true)
-					_ = backfiller.Enqueue(sym)
+				if err != nil {
+					// Was silently swallowed by `if err == nil`, so a failed
+					// upsert left no trace anywhere.
+					failedSeeds++
+					slog.Warn("first boot: seed stock failed", "symbol", s, "err", err)
+					continue
 				}
+				// The seed stocks are the initial STREAMED hot set (live ws
+				// + full 1m pipeline); mark them stream=1 so the streamer
+				// and the stream-cap accounting pick them up.
+				_ = st.SetSymbolStream(ctx, sym.ID, true)
+				_ = backfiller.Enqueue(sym)
+				created++
 			}
 		}
-		_ = st.SetMeta(ctx, "seeded_v1", time.Now().Format(time.RFC3339))
-		slog.Info("first boot: seeded watchlist", "crypto", cfg.CryptoSymbol, "stocks", seedStocks)
+		// seeded_v1 is PERMANENT, so writing it after a wholly failed pass
+		// blocks the retry forever: transient DB contention on first boot would
+		// register zero stocks and mark the watchlist seeded for good. The
+		// broad-universe seed 20 lines below already refuses to set its own key
+		// on failure ("retry on the next boot") — the two paths disagreed inside
+		// one function, and this was the wrong half.
+		//
+		// The log line also reported seedStocks VERBATIM, i.e. what was
+		// intended, so a boot that created nothing still logged "seeded
+		// watchlist" naming every symbol. Report what was CREATED.
+		if alpacaClient != nil && created == 0 && failedSeeds > 0 {
+			slog.Error("first boot: every seed stock failed — NOT marking seeded_v1, will retry next boot",
+				"attempted", failedSeeds)
+		} else {
+			_ = st.SetMeta(ctx, "seeded_v1", time.Now().Format(time.RFC3339))
+			slog.Info("first boot: seeded watchlist", "crypto", cfg.CryptoSymbol,
+				"stocksCreated", created, "stocksFailed", failedSeeds)
+		}
 	}
 
 	// ── broad-universe wave: seed the BROAD DAILY-ONLY universe once ────
@@ -161,6 +199,25 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 			if err != nil {
 				// Don't set the meta key on failure — retry on the next boot.
 				slog.Warn("broad-universe seed", "err", err, "registered", registered)
+				return
+			}
+			// universe.Seed returns (registered, 0, nil) when there is no Alpaca
+			// client: the symbols are registered "for later" and NOTHING is
+			// backfilled. That is a success as far as err is concerned, so the
+			// one-shot key was set and the ~2y deep backfill for hundreds of
+			// symbols NEVER RAN — not on this boot, and not on any later boot
+			// after the operator added credentials. Booting without keys is a
+			// documented state (see the warning ~90 lines up), so this is the
+			// expected path into a permanently half-seeded universe: registered
+			// but empty, with the boot log recording it as seeded.
+			//
+			// Leave the key unset so the next boot WITH credentials completes
+			// the job. Seed is idempotent on the registration half.
+			if alpacaClient == nil {
+				slog.Warn("first boot: broad universe REGISTERED but not backfilled "+
+					"(no Alpaca credentials) — leaving seeded_universe_v1 unset so a "+
+					"later boot with credentials runs the deep backfill",
+					"symbols", registered)
 				return
 			}
 			_ = st.SetMeta(context.Background(), "seeded_universe_v1", time.Now().Format(time.RFC3339))
@@ -196,6 +253,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// Workers are attached with Add before Start.
 	runner := workers.NewRunner(st)
 	fleet := []workers.Worker{
+		// api.Serve is not a Worker, so it has NO worker_runs row and both
+		// health.StaleWorkers and health.FailingWorkers are structurally unable
+		// to see it. This is the only thing in the fleet that notices the
+		// product's own surface going unreachable. See internal/pipeline/apiprobe.go.
+		&pipeline.APIProbe{Addr: cfg.HTTPAddr},
 		cryptolive.New(st, cfg.TickstreamURL, cryptoSym.ID),
 		&pipeline.CryptoBars{St: st, Kraken: krakenClient},
 		backfiller,
@@ -547,6 +609,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		CurrentState: func(ctx context.Context, symbolID int64) (map[md.Horizon]string, error) {
 			return pipeline.CurrentState(ctx, st, symbolID)
 		},
+		// The fleet's DECLARED cadences, so /api/fleet-health judges staleness
+		// against the schedule rather than against observed gaps a restart
+		// storm can compress. Read lazily (not snapshotted here) because the
+		// fleet is still being appended to at this point in wiring.
+		WorkerIntervals: runner.Intervals,
 		Subscribe: func(ctx context.Context, symbol string, market md.Market) (md.Symbol, error) {
 			return subscribe(ctx, st, alpacaClient, backfiller, streamer, symbol, market)
 		},
@@ -563,9 +630,32 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	// warms the SAME shared api caches these deps serve from, on the same
 	// isolated reader pool.
 	warmTarget = deps.WarmCaches
+	// A DAEMON WITH NO API IS NOT SERVING, so this must stop the process rather
+	// than log and let the goroutine die.
+	//
+	// It used to only log. api.Serve returns nil on a graceful shutdown
+	// (http.ErrServerClosed is filtered inside it), so a non-nil error here is
+	// always a real fault — most commonly the bind failing because a crashed
+	// predecessor still holds :8322. When that happened the goroutine exited,
+	// run() carried on to runner.Start, and the daemon sat there with EVERY
+	// worker green, worker_runs uniformly 'ok', health.json written, backups
+	// succeeding — and the entire web surface down. Nothing self-probes the
+	// listener, so the only way to notice was to try the site.
+	//
+	// Cancelling stops the fleet, which drains workers and checkpoints the WAL,
+	// then run() returns with the PARENT context still live — the condition
+	// main() already treats as an internal fault and exits 1 for. That makes the
+	// task's RestartCount policy fire and shows a non-zero LastResult, which
+	// ops/check-task-health.ps1 now reports.
+	//
+	// A port held permanently will restart-loop rather than run headless. That
+	// is the intended trade: a visibly failing service gets fixed, a silently
+	// headless one does not.
 	go func() {
 		if err := api.Serve(ctx, deps); err != nil {
-			slog.Error("api server exited", "err", err)
+			slog.Error("api server exited — the daemon cannot serve; shutting down the fleet",
+				"err", err, "addr", cfg.HTTPAddr)
+			cancelRun()
 		}
 	}()
 
@@ -580,6 +670,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 	} else if n > 0 {
 		slog.Warn("swept worker runs orphaned by a previous process", "rows", n)
 	}
+
+	// A stop the OPERATOR asked for must not come back as a restart just because
+	// a worker took longer than ShutdownGrace (75s) to drain — minRunTimeout is
+	// 15 minutes, so that is ordinary, not a fault. See Runner.OperatorStop.
+	runner.OperatorStop = func() bool { return signalCtx.Err() != nil }
 
 	runner.Start(ctx)
 
@@ -1604,8 +1699,19 @@ func confluenceWorkers(st *store.Store) []workers.Worker {
 //
 // So off-machine backup is OPT-IN on every other platform. Silence beats a
 // destination that only looks like it leaves the machine.
+// TWO SPELLINGS, ONE DESTINATION. ops/signaldeck-backup-offline.sh reads
+// SIGNALDECK_OFFSITE_DIR and this read SIGNALDECK_OFFSITE_BACKUP_DIR, while
+// .env.example documented only the first. An operator following the documented
+// example therefore configured the shell backup and left the DAEMON's own
+// nightly offsite copy disabled, with nothing anywhere saying so. Accepting the
+// documented name as a fallback makes one setting configure both; the daemon's
+// own key still wins so an existing split configuration keeps its meaning.
 func offsiteBackupDir() string {
-	switch v := strings.TrimSpace(os.Getenv("SIGNALDECK_OFFSITE_BACKUP_DIR")); strings.ToLower(v) {
+	v := strings.TrimSpace(os.Getenv("SIGNALDECK_OFFSITE_BACKUP_DIR"))
+	if v == "" {
+		v = strings.TrimSpace(os.Getenv("SIGNALDECK_OFFSITE_DIR"))
+	}
+	switch strings.ToLower(v) {
 	case "off", "none", "-":
 		return ""
 	case "":
@@ -1903,7 +2009,12 @@ func enforceSchemaContract(ctx context.Context, st *store.Store, fleet []workers
 		return fleet
 	}
 	if len(bad) == 0 {
-		_ = st.SetMeta(ctx, store.SchemaContractMetaKey, "{}")
+		// Failing to CLEAR the key leaves a stale violation on display, which
+		// over-reports — the safe direction — so this one only logs.
+		if err := st.SetMeta(ctx, store.SchemaContractMetaKey, "{}"); err != nil {
+			slog.Error("schema contract: could not clear the contract key; "+
+				"a previous boot's violations may still be displayed", "err", err)
+		}
 		return fleet
 	}
 	now := time.Now().Unix()
@@ -1916,8 +2027,22 @@ func enforceSchemaContract(ctx context.Context, st *store.Store, fleet []workers
 			fatal = append(fatal, worker+" requires "+strings.Join(missing, ", "))
 		}
 	}
-	if b, err := json.Marshal(bad); err == nil {
-		_ = st.SetMeta(ctx, store.SchemaContractMetaKey, string(b))
+	// THE DANGEROUS DIRECTION. This write is what /api/health and /api/ready
+	// read to say which workers were refused at boot. Both the marshal and the
+	// write were swallowed, so under DB contention the key kept the PREVIOUS
+	// boot's "{}" and every health surface reported no contract violations
+	// while these workers were silently absent from the fleet — the dq events
+	// above are `_ =` too, so both surfaces could miss it at once. It cannot be
+	// made fatal here (refusing to boot over a meta write would take the
+	// platform down for a transient lock), but it must never be silent.
+	if b, err := json.Marshal(bad); err != nil {
+		slog.Error("schema contract: cannot marshal violations for publication — "+
+			"health surfaces will NOT show these de-registered workers",
+			"err", err, "workers", len(bad))
+	} else if err := st.SetMeta(ctx, store.SchemaContractMetaKey, string(b)); err != nil {
+		slog.Error("schema contract: cannot publish violations — health surfaces "+
+			"will report ALL CLEAR while these workers are de-registered",
+			"err", err, "workers", len(bad))
 	}
 	// An audit-record worker (research-loop, regime-outcome-runner) produces
 	// NOTHING BUT the record it cannot write. Quietly de-registering it leaves

@@ -311,8 +311,20 @@ async function loadPublicationStatus(): Promise<{
     });
     const body = await res.json();
     if (!res.ok || body?.status !== "OK") {
+      // A 401 carries no `reason` field, so it used to fall through to the
+      // "the grading daemon is unreachable" default below — naming the wrong
+      // cause for a daemon that answered instantly. Observed live 2026-08-09:
+      // anonymous visitor, daemon healthy on :8322, page blamed an outage.
+      // "Not authorised" and "cannot be reached" are opposite problems and send
+      // a reader to opposite places; conflating them is the same defect this
+      // function's own comment describes, one status code over.
+      const reason =
+        body?.reason ??
+        (res.status === 401
+          ? "the accuracy record is not public on this deployment — sign in to see it"
+          : undefined);
       return { status: (body?.status ?? "REFUSED") as AccuracyStatus | "REFUSED",
-               reason: body?.reason, rows: [] };
+               reason, rows: [] };
     }
     return { status: "OK", rows: (body.rows ?? []) as PublishedRow[] };
   } catch {

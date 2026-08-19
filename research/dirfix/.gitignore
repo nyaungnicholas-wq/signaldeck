@@ -1,0 +1,5 @@
+# Generated artifacts, all reproducible from the DB via extract.py + search.py.
+# 2.2GB of parquet has no business in git; the code and the RESULTS do.
+*.parquet
+runs/
+*.log

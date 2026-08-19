@@ -19,8 +19,23 @@ export default function PortfolioPage() {
 
   const stat = pf?.stat;
   const totalPnL = stat?.TotalPnLAbs ?? 0;
-  const avgScore = stat?.GrossValue ?? 0;
-  const winRate = stat?.Winners ?? 0;
+  // These two tiles used to read `stat.GrossValue` and `stat.Winners` straight
+  // out of the response — GrossValue is sum(|qty| * lastPrice) in dollars and
+  // Winners is an integer count, so "Avg Score" showed 42000.00 and "Win Rate"
+  // showed 3.0% for three winning positions. <SummaryBar> renders the same two
+  // fields correctly, forty lines down the same page, which is how a $42,000
+  // gross could sit under a hero tile labelled Avg Score.
+  const scored = positions.map((p) => p.scoreAtEntry).filter((s): s is number => typeof s === "number");
+  const avgScore = scored.length > 0 ? scored.reduce((a, b) => a + b, 0) / scored.length : null;
+  // Winners and Losers count positions with STRICTLY positive / strictly
+  // negative P&L, marked to the latest close (internal/portfolio/portfolio.go:
+  // 68-69, 268-273) — open and closed alike. Break-even and unpriceable
+  // positions fall into neither, so the denominator is "positions currently
+  // showing a non-zero P&L", and a denominator of 0 means nothing is measurable
+  // yet — which is not a 0% win rate. Marked-to-market, so it moves with the
+  // tape; the `sub` says so rather than letting the label imply realised trades.
+  const graded = (stat?.Winners ?? 0) + (stat?.Losers ?? 0);
+  const winRate = graded > 0 ? ((stat?.Winners ?? 0) / graded) * 100 : null;
   const totalPositions = positions.length;
   const openPositions = open.length;
 
@@ -65,6 +80,7 @@ export default function PortfolioPage() {
               <StatTile
                 label="Avg Score"
                 value={avgScore}
+                sub="at entry"
                 decimals={2}
                 glow="accent"
                 i={1}
@@ -72,6 +88,7 @@ export default function PortfolioPage() {
               <StatTile
                 label="Win Rate"
                 value={winRate}
+                sub={graded > 0 ? `${stat?.Winners ?? 0} of ${graded} marked to last close` : undefined}
                 decimals={1}
                 suffix="%"
                 glow="hud"

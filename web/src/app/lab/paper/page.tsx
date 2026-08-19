@@ -290,10 +290,16 @@ export default function PaperPage() {
 
   return (
     <div className="page-enter space-y-4">
+      {/* NO live badge here. PageHero's `live` renders a pulsing dot and the
+          word "LIVE", and this was the only page in the app that set it — the
+          one page where that word is most likely to be read as live TRADING.
+          The daemon disagrees with it too: /api/paper ships `"live": false`
+          beside the label "simulated paper trading — not live money, not
+          advice". On a market product a mistaken belief that real money is
+          moving is the most expensive misreading available, so the badge goes. */}
       <PageHero
         title="PAPER TRADING"
         subtitle="An internal simulation that trades the platform's own flagship calibrated prediction to show whether the signal would have made money."
-        live={true}
       />
 
       {/* STAGE 3: what this page answers, in plain English */}
@@ -304,7 +310,11 @@ export default function PaperPage() {
 
       {/* Strategy switcher (one simulated portfolio per prediction horizon). */}
       <div className="flex flex-wrap items-center gap-2">
-        {(data?.strategies ?? ["flagship-1d", "flagship-1w"]).map((name, i) => {
+        {/* No hardcoded fallback list. Before the first response — or after a
+            failed one — this offered two strategy names the daemon had never
+            confirmed exist, and clicking one queried a portfolio that might not
+            be there. An empty switcher is the honest state. */}
+        {(data?.strategies ?? []).map((name, i) => {
           const active = name === strategy;
           return (
             <button

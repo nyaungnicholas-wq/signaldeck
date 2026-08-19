@@ -353,12 +353,15 @@ def verify_complete(out_dir: str) -> int:
 
     --verify needs the DB, so it can only ever run on the one machine that
     holds it; nothing checked that what a cold clone contains matches what
-    REPRODUCE.md tells a reviewer to check. Three properties, all checkable
+    REPRODUCE.md tells a reviewer to check. Four properties, all checkable
     from the repository alone:
       1. every FILES entry appears in MANIFEST.json AND on disk,
       2. each file re-hashes to its manifest value (canonical scheme),
       3. each file is git-TRACKED — a file present only in the working tree
-         is documented-but-not-shipped, which is the failure this catches.
+         is documented-but-not-shipped, which is the failure this catches,
+      4. the pinned grader IS the running grader — a bundle that is whole,
+         correctly hashed and fully shipped still grades nothing if its
+         grading_protocol.csv names code that is no longer in the tree.
     """
     man_path = os.path.join(out_dir, "MANIFEST.json")
     if not os.path.exists(man_path):
@@ -392,6 +395,44 @@ def verify_complete(out_dir: str) -> int:
             rc = 1
             continue
         print(f"ok: {fname:30s} {len(recs):6d} rows  tracked  hash verified")
+    # 4. the shipped snapshot must register the RUNNING grader.
+    #
+    # Completeness, per-file hashes and git-tracked status all pass on a
+    # snapshot whose grading_protocol.csv pins a grader that no longer exists in
+    # the tree — and such a snapshot cannot grade at all, so every property
+    # above describes a bundle no reader can use. Not hypothetical: the shipped
+    # pin sat nine re-registrations behind the chain for three weeks while this
+    # gate stayed green. It also carried an empty multiplicity rule and looks=0,
+    # so a reader who forced past the refusal would have computed NARROWER
+    # intervals than the ones published. grader_registration_error is the same
+    # rule the grader applies to itself, so the gate and the refusal cannot
+    # drift apart, and it checks the frozen constants too — not just the digest.
+    proto = os.path.join(out_dir, "grading_protocol.csv")
+    if not os.path.exists(proto):
+        print("NO GRADING PROTOCOL: grading_protocol.csv is absent — the snapshot "
+              "registers no grader, so it can produce no verdict")
+        rc = 1
+    else:
+        with open(proto, newline="", encoding="utf-8") as f:
+            proto_rows = list(csv.reader(f))[1:]
+        rec = None
+        if proto_rows:
+            seq, sha, commit, n, days, blocks, alpha, rule, looks = proto_rows[0]
+            num = lambda v: int(v) if v != "" else None  # noqa: E731
+            rec = {"_seq": int(seq), "graderSha256": sha,
+                   "graderCommit": commit or None,
+                   "minIndependentN": num(n), "minDistinctDays": num(days),
+                   "minDistinctBlocks": num(blocks),
+                   "maxAlpha": float(alpha) if alpha != "" else None,
+                   "multiplicityRule": rule or None, "_looks": num(looks) or 0}
+        err = reg.grader_registration_error(rec, proto)
+        if err:
+            print(f"UNUSABLE SNAPSHOT: {err}")
+            print("  Re-cut it:  python3 tools/make_repro_snapshot.py")
+            rc = 1
+        else:
+            label = "grader registration"
+            print(f"ok: {label:30s} seq {rec['_seq']} pins the running grader")
     extra = sorted(set(manifest) - set(FILES))
     if extra:
         print(f"manifest lists files the exporter does not produce: {', '.join(extra)}")

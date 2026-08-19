@@ -405,6 +405,28 @@ def main(argv=None):
             print(f"    reason: {reason}")
 
     if not violations:
+        # THE SUMMARY MUST NOT OVERCLAIM PAST THE LIST IT JUST PRINTED.
+        #
+        # This said "OK — every narrated grid search has a matching judgment
+        # ledger" unconditionally, printed directly beneath the ACKNOWLEDGED
+        # UNVERIFIABLE heading listing searches that provably do NOT have one
+        # ("run row claims judged=48 but research_loop_judgments holds 0 rows for
+        # the day; the judgments were never persisted"). A reader scanning for
+        # the verdict — which is the normal way a daily log is read — saw a clean
+        # bill of health contradicting the four entries above it.
+        #
+        # partition_violations' own docstring already promised better:
+        # "Quarantined claims are still printed on every run, under their own
+        # heading, and still counted in the exit summary." They were not counted
+        # in it. This is that sentence being made true, not a policy change —
+        # acknowledged claims still do not cause refusal, which is the whole
+        # point of the quarantine.
+        if acknowledged:
+            print(f"research-loop liveness: OK — no UNACKNOWLEDGED claims. "
+                  f"{len(acknowledged)} acknowledged unverifiable claim(s) remain "
+                  "(listed above, excluded from refusal by the quarantine); "
+                  "NOT every narrated grid search has a matching judgment ledger.")
+            return 0
         print("research-loop liveness: OK — every narrated grid search has a "
               "matching judgment ledger.")
         return 0

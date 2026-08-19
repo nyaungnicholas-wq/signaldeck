@@ -12,11 +12,14 @@
 //   3 · WHY IT'S MOVING    /api/explain attribution, this symbol's headlines,
 //                          recent breakouts + unusual activity, then the score
 //                          components / expectancy / agent / AI insights
-//   4 · EXPERIMENTAL P(UP) the directional read, DEMOTED: it measured 48.08%
-//                          directional accuracy against a 54.50% majority-class
-//                          null over 12,931 independent symbol-days, its whole
-//                          CI sits below the null, and raising conviction makes
-//                          it WORSE. It stays visible and stays labeled.
+//   4 · EXPERIMENTAL P(UP) the directional read, DEMOTED: it graded below its own
+//                          majority-class null, its whole CI sits below that null,
+//                          and raising conviction makes it WORSE. It stays visible
+//                          and stays labeled. The figures are NOT restated here or
+//                          in the panel — they moved with every grade and the ones
+//                          hard-coded here (48.08/54.50/12,931) matched no source in
+//                          the repo; data/accuracy_registry.json now reports acc:null
+//                          for this row. /accuracy is the canonical record.
 //   5 · THE DETAILS        raw records: financials, filings, short volume AND
 //                          real short interest, retail sentiment/attention,
 //                          congress, microstructure, coverage.
@@ -28,6 +31,8 @@ import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   api,
+  ApiError,
+  LICENCE_REFUSAL_TEXT,
   candlePatterns,
   chartOverlays,
   pollMs,
@@ -113,11 +118,16 @@ export default function SymbolPage({
   // Bars are keyed by "symbol|tf" so switching timeframes shows a loading
   // state without a synchronous setState inside the effect.
   const [barsState, setBarsState] = useState<{ key: string; list: Bar[] } | null>(null);
-  const [barsErrState, setBarsErrState] = useState<{ key: string; msg: string } | null>(null);
+  // status is carried alongside the message: a 451 is the licence guard
+  // REFUSING to redistribute raw bars (the daemon is healthy and every derived
+  // analytic on this page still works), which must not be reported as an
+  // outage. See ApiError in lib/api.ts.
+  const [barsErrState, setBarsErrState] = useState<{ key: string; msg: string; status: number } | null>(null);
   const [horizon, setHorizon] = useState<Horizon>("1d");
   const barsKey = `${symbol}|${market}|${tf}`;
   const bars = barsState && barsState.key === barsKey ? barsState.list : null;
   const barsErr = barsErrState && barsErrState.key === barsKey ? barsErrState.msg : null;
+  const barsRefusedByLicence = barsErrState?.key === barsKey && barsErrState.status === 451;
 
   // Stage 7: chart overlays (score extremes, regime changes, breakouts). Toggled
   // on by default; keyed by symbol so switching symbols refetches.
@@ -284,7 +294,11 @@ export default function SymbolPage({
         })
         .catch((e: unknown) => {
           if (!alive) return;
-          setBarsErrState({ key, msg: e instanceof Error ? e.message : String(e) });
+          setBarsErrState({
+            key,
+            msg: e instanceof Error ? e.message : String(e),
+            status: e instanceof ApiError ? e.status : 0,
+          });
         });
     load();
     const stop = pollMs(load, POLL_DEFAULT);
@@ -639,9 +653,22 @@ export default function SymbolPage({
           </span>
         </div>
         <div className="p-2">
-          {barsErr ? (
-            <div className="flex h-[420px] items-center justify-center text-[0.75rem]" style={{ color: "var(--bad)" }}>
-              {barsErr} — is the daemon running?
+          {barsRefusedByLicence ? (
+            <div
+              className="flex h-[420px] flex-col items-center justify-center gap-2 px-6 text-center text-[0.75rem]"
+              style={{ color: "var(--dim)" }}
+            >
+              <span style={{ color: "var(--text)" }}>Price chart unavailable on this deployment</span>
+              <span className="max-w-[46ch] leading-relaxed">{LICENCE_REFUSAL_TEXT}</span>
+            </div>
+          ) : barsErr ? (
+            <div className="flex h-[420px] flex-col items-center justify-center gap-2 px-6 text-center text-[0.75rem]" style={{ color: "var(--bad)" }}>
+              <span>{barsErr}</span>
+              {/* Only a 5xx or a network failure is evidence the daemon is down. A 4xx means
+                  it answered and declined, so the outage question would mislead. */}
+              {(barsErrState?.status ?? 0) >= 500 || barsErrState?.status === 0 ? (
+                <span style={{ color: "var(--dim)" }}>is the daemon running?</span>
+              ) : null}
             </div>
           ) : bars === null ? (
             <div className="flex h-[420px] items-center justify-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
@@ -822,12 +849,21 @@ export default function SymbolPage({
         className="m-0 border-l-2 pl-3 text-[0.75rem] leading-relaxed"
         style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
       >
-        Treat the number below as experimental. Over 12,931 independent
-        symbol-days the directional model scored 48.08% accuracy against a 54.50%
-        majority-class null — its entire confidence interval sits BELOW the null,
-        and raising its conviction makes it WORSE, not better. Nothing here should
-        be traded on. The validated read for this symbol is the regime stack in
-        section 2.
+        Treat the number below as experimental. The directional model graded BELOW
+        its own always-guess-the-majority baseline — measurably worse than guessing
+        — its whole confidence interval sat under that null, and raising its
+        conviction made it WORSE, not better. The figures are deliberately not
+        restated here: they move with every grade, and a number typed into this page
+        is a number that goes stale without anyone noticing. Nothing here should be
+        traded on. The validated read for this symbol is the regime stack in
+        section 2.{" "}
+        <Link
+          href="/accuracy"
+          className="cursor-pointer font-semibold underline transition-colors duration-150"
+          style={{ color: "var(--accent)" }}
+        >
+          the graded record
+        </Link>
       </p>
       {/* the hero VERDICT card, now demoted: real calibrated 1d P(up) or
           "NO READ YET", with the evidence-tier badge always visible. */}

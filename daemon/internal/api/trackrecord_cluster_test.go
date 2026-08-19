@@ -22,7 +22,9 @@ import (
 func seedClusteredRecord(t *testing.T, st *store.Store, days, symsPerDay int) {
 	t.Helper()
 	ctx := context.Background()
-	base := time.Date(2026, 5, 4, 14, 0, 0, 0, time.UTC).Unix()
+	// AFTER the 2026-07-24 survivorship epoch — ResolvedPredictionOutcomes
+	// floors on it, so the old 2026-05-04 anchor graded to an empty set.
+	base := time.Date(2026, 7, 25, 14, 0, 0, 0, time.UTC).Unix()
 	for s := 0; s < symsPerDay; s++ {
 		sym, err := st.UpsertSymbol(ctx, fmt.Sprintf("CL%03d", s), md.Stocks, "")
 		if err != nil {

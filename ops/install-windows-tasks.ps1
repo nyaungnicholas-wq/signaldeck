@@ -4,8 +4,8 @@ Recreate the launchd schedule as Windows Scheduled Tasks.
 The repo's automation is defined by ops/com.*.plist. On the 2026-07-31 move to
 Windows only ONE of those 14 jobs was recreated (the daemon), so the nightly
 backup, accuracy grading, cleanup, restore rehearsal, research liveness and
-bias regression had not run since. This reads the plists — the same files the
-Mac uses, so the two schedules cannot drift — and registers the equivalents.
+bias regression had not run since. This reads the plists -- the same files the
+Mac uses, so the two schedules cannot drift -- and registers the equivalents.
 
 DEFAULT IS A REPORT. Nothing is registered unless -Install is passed.
 
@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 
 # Git Bash, never WSL. WSL has its own filesystem and cannot see C:\Users\...
-# the way these scripts expect — the same defect that broke test_accuracy_registry.
+# the way these scripts expect -- the same defect that broke test_accuracy_registry.
 $bash = @(
   (Join-Path $env:ProgramFiles 'Git\bin\bash.exe'),
   (Join-Path ${env:ProgramFiles(x86)} 'Git\bin\bash.exe')
@@ -78,18 +78,95 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
   $label = if ($d.ContainsKey('Label')) { ConvertTo-Value $d['Label'] } else { $f.BaseName }
   $task = Get-TaskName $label
 
+  # NEVER REWRITE THE DAEMON'S ACTION. com.signaldeck.daemon.plist routes
+  # launchd through `signaldeck-ctl.sh launch`, so translating it would register
+  # the Daemon task as `bash ... signaldeck-ctl.sh launch` -- but the LIVE task
+  # execs bin\signaldeckd.exe directly, and ops/daemon-guard.ps1:130 records why
+  # that must stay so: sd_svc_stop is `schtasks /End`, /End only terminates the
+  # process Task Scheduler itself started and does NOT cascade to children, so
+  # routing through bash makes the daemon a grandchild and every
+  # `signaldeck-ctl.sh stop` silently degrades to the kill -9 fallback --
+  # skipping the worker drain and the WAL checkpoint. Register-ScheduledTask
+  # here uses -Force, so following this file's own documented recovery path
+  # (`.\install-windows-tasks.ps1 -Install`) would have bought that regression
+  # back. The ExecutionTimeLimit branch below already special-cases the daemon
+  # for an adjacent reason; the action shape needed the same protection and did
+  # not have it.
+  if ($label -like 'com.signaldeck.daemon') {
+    Write-Output ("SKIP   {0,-34} service task: its direct-exec action preserves graceful stop; refusing to repoint it through bash" -f $task)
+    $skipped++; continue
+  }
+
+
   $pargs = if ($d.ContainsKey('ProgramArguments')) { @(ConvertTo-Value $d['ProgramArguments']) } else { @() }
-  $sh = $pargs | Where-Object { $_ -is [string] -and $_ -match '\.sh$' } | Select-Object -First 1
+  # .ps1 is a first-class job here, not an oddity. The fleet's two health gates
+  # (check-task-health.ps1, check-grader-health.ps1) are PowerShell, and this
+  # translator accepted only .sh -- so they had no plist worth writing, no task,
+  # and ran ONLY when a human remembered. fix-task-principals.ps1:233 even tells
+  # the operator to "watch for recurrence with ops\check-task-health.ps1" as a
+  # manual instruction. Correct scripts that never run unattended are the same
+  # blind spot as a check that always passes.
+  $sh = $pargs | Where-Object { $_ -is [string] -and $_ -match '\.(sh|ps1)$' } | Select-Object -First 1
   if (-not $sh) {
     Write-Output ("SKIP   {0,-34} no shell script in ProgramArguments" -f $task)
     $skipped++; continue
   }
+  $isPs = $sh -match '\.ps1$'
   # Rewrite any absolute macOS path onto THIS repo.
   $scriptPosix = "$repoPosix/ops/" + (Split-Path $sh -Leaf)
+  $scriptWin = Join-Path $repo ('ops\' + (Split-Path $sh -Leaf))
   $rest = @($pargs | Where-Object {
-      $_ -is [string] -and $_ -ne $sh -and $_ -notmatch '\.sh$' -and $_ -notmatch '(^|/)(bash|sh)$'
+      $_ -is [string] -and $_ -ne $sh -and $_ -notmatch '\.(sh|ps1)$' -and
+      $_ -notmatch '(^|/)(bash|sh)$' -and $_ -notmatch '(?i)(^|\\|/)(pwsh|powershell)(\.exe)?$' -and
+      $_ -notmatch '^-(NoProfile|ExecutionPolicy|File)$' -and $_ -ne 'Bypass'
     })
-  $argLine = ('"{0}"' -f $scriptPosix) + $(if ($rest.Count) { ' ' + ($rest -join ' ') } else { '' })
+  # The exec differs by kind: bash for .sh, PowerShell for .ps1.
+  $exeForTask = if ($isPs) { 'powershell.exe' } else { $bash }
+  $argLine = if ($isPs) {
+    '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $scriptWin
+  }
+  else {
+    ('"{0}"' -f $scriptPosix)
+  }
+  if ($rest.Count) { $argLine += ' ' + ($rest -join ' ') }
+
+  # LOG REDIRECTION. Every plist declares StandardOutPath/StandardErrorPath and
+  # this translator read NEITHER, so launchd's redirection was silently dropped
+  # on the move to Windows. Scripts that open their own log survived; scripts
+  # that relied on the redirect now write to a console that does not exist.
+  # Measured 2026-08-12: SignalDeck Cleanup reported 0x00000000 daily for 14 days
+  # with logs/cleanup.sched.log last written 07-29, and market-open-guard's
+  # `exit 3` refusal message went nowhere. "Ran and did the work" became
+  # indistinguishable from "ran and did nothing".
+  #
+  # New-ScheduledTaskAction cannot redirect, and `bash script.sh >> log` does NOT
+  # redirect either -- with -Execute bash.exe the operators are passed to the
+  # SCRIPT as arguments, not interpreted. Only a shell performs a redirect, so
+  # when the plist asks for one the action becomes `bash -lc "<script> ... >> log"`.
+  # Paths are rewritten onto THIS repo's logs/ (the plists carry macOS paths).
+  $logLeaf = ''
+  foreach ($k in @('StandardOutPath', 'StandardErrorPath')) {
+    if (-not $logLeaf -and $d.ContainsKey($k)) {
+      $v = ConvertTo-Value $d[$k]
+      if ($v) { $logLeaf = Split-Path $v -Leaf }
+    }
+  }
+  if ($logLeaf) {
+    if ($isPs) {
+      # PowerShell needs -Command for a redirect too; *>> captures every stream
+      # (5.1 supports it), which is the -File equivalent of `>> log 2>&1`.
+      $logWin = Join-Path $repo ('logs\' + $logLeaf)
+      $inner = "& '$scriptWin'" + $(if ($rest.Count) { ' ' + ($rest -join ' ') } else { '' }) +
+      " *>> '$logWin'"
+      $argLine = '-NoProfile -ExecutionPolicy Bypass -Command "' + $inner + '"'
+    }
+    else {
+      $logPosix = "$repoPosix/logs/$logLeaf"
+      $inner = "'$scriptPosix'" + $(if ($rest.Count) { ' ' + ($rest -join ' ') } else { '' }) +
+      " >> '$logPosix' 2>&1"
+      $argLine = '-lc "' + $inner + '"'
+    }
+  }
 
   # --- triggers -----------------------------------------------------------
   $triggers = @(); $when = @()
@@ -171,11 +248,31 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
   if ($exists) { $updated++ } else { $created++ }
 
   if ($Install) {
-    $action = New-ScheduledTaskAction -Execute $bash -Argument $argLine -WorkingDirectory $repo
+    $action = New-ScheduledTaskAction -Execute $exeForTask -Argument $argLine -WorkingDirectory $repo
+    # The 6-hour ExecutionTimeLimit is for BATCH jobs. The daemon is a long-lived
+    # service -- the live "SignalDeck Daemon" task carries PT0S (unlimited) and was
+    # created by another route -- so applying the batch cap to it would have Task
+    # Scheduler terminate the daemon every six hours. Following this file's own
+    # documented recovery path (`.\install-windows-tasks.ps1 -Install`) would
+    # therefore have converted a healthy daemon into one that dies four times a
+    # day, with the restart looking like an ordinary crash.
+    $isService = $label -like 'com.signaldeck.daemon'
+    $limit = if ($isService) { [TimeSpan]::Zero } else { [TimeSpan]::FromHours(6) }
     $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
-      -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::FromHours(6))
+      -DontStopIfGoingOnBatteries -ExecutionTimeLimit $limit
+    # S4U, NOT the Interactive default. Register-ScheduledTask with -RunLevel
+    # and no -Principal registers the task Interactive, which puts it inside the
+    # console session and therefore reachable by console control events --
+    # 0xC000013A, the kill signature ops/fix-task-principals.ps1 exists to end.
+    # That whole fleet had already been converted to S4U; re-running THIS script
+    # silently converted them back. Measured 2026-08-12: one -Install run took
+    # the fleet from Interactive=0/S4U=14 to Interactive=11/S4U=5, and
+    # check-task-health caught it immediately. Registering the principal
+    # explicitly is what stops the recovery path from undoing the fix.
+    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+      -LogonType S4U -RunLevel Limited
     Register-ScheduledTask -TaskName $task -Action $action -Trigger $triggers `
-      -Settings $set -RunLevel Limited -Force | Out-Null
+      -Settings $set -Principal $principal -Force | Out-Null
     # The monthly trigger is assembled by hand from a CIM class whose property
     # shapes are not documented alongside the cmdlet, and a wrong shape can
     # register quietly as something else -- the exact failure this branch exists

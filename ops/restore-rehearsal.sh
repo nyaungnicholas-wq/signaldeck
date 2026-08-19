@@ -44,7 +44,43 @@ set -uo pipefail
 
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCAL_DIR="$SD/data/backups"
-OFFSITE_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups"
+
+# OFFSITE_DIR must resolve the SAME way ops/signaldeck-backup-offline.sh does,
+# or the rehearsal reads a different location than the backup wrote. That script
+# honours SIGNALDECK_OFFSITE_DIR, then $OneDrive/SignalDeckBackups on Windows;
+# this one hardcoded the macOS iCloud path with no override, so after the
+# Windows move the fallback pointed at a directory that does not exist — and if
+# data/backups were ever empty the rehearsal would die at "no backup found"
+# instead of falling back to the copy it had just written.
+if [ -n "${SIGNALDECK_OFFSITE_DIR:-}" ]; then
+  OFFSITE_DIR="$SIGNALDECK_OFFSITE_DIR"
+elif [ -n "${OneDrive:-}" ] && [ -d "$OneDrive" ]; then
+  OFFSITE_DIR="$OneDrive/SignalDeckBackups"
+else
+  OFFSITE_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/SignalDeckBackups"
+fi
+
+# file_mtime FILE — modification time as a unix epoch, portably.
+#
+# `stat -f %m` is a BSD-ism. Under the Git Bash these tasks now run, stat is GNU
+# and -f means --file-system: measured 2026-08-11 it printed a multi-line
+# filesystem report ("ID: 9a1a680f... Namelen: 255 ...") AND EXITED 0, so the
+# old `|| echo 0` fallback never fired and that text was assigned to
+# BACKUP_MTIME. The integer compare on the next line then errored with
+# "integer expected" and evaluated FALSE, making the transitional branch
+# unreachable on Windows — a legitimately pre-anchor backup pages an operator
+# instead of warning. Because the failing command exits 0, only validating the
+# VALUE catches it; `||` cannot.
+file_mtime() {
+  local f="$1" v
+  v="$(stat -c %Y "$f" 2>/dev/null)"        # GNU (Linux, Git Bash)
+  case "$v" in ''|*[!0-9]*) v="" ;; esac
+  if [ -z "$v" ]; then
+    v="$(stat -f %m "$f" 2>/dev/null)"      # BSD (macOS)
+    case "$v" in ''|*[!0-9]*) v="" ;; esac
+  fi
+  printf '%s' "${v:-0}"
+}
 LOG="$SD/logs/restore-rehearsal.log"
 
 # A real production backup has millions of `bars` rows. Four digits is
@@ -163,7 +199,7 @@ else
   # restore is a page. Compare against the LIVE DB's oldest anchor to tell
   # the two apart — this branch self-retires as post-anchor backups rotate in.
   OLDEST_LIVE_ANCHOR="$(sqlite3 -readonly "$SD/data/signaldeck.db" "SELECT MIN(created_at) FROM ledger_anchors;" 2>/dev/null)"
-  BACKUP_MTIME="$(stat -f %m "$SRC" 2>/dev/null || echo 0)"
+  BACKUP_MTIME="$(file_mtime "$SRC")"
   if [[ "$OLDEST_LIVE_ANCHOR" =~ ^[0-9]+$ ]] && [ "$OLDEST_LIVE_ANCHOR" -gt "$BACKUP_MTIME" ]; then
     log "WARN: restored copy has no ledger anchors, but the live DB's oldest anchor (ts $OLDEST_LIVE_ANCHOR) postdates this backup (mtime $BACKUP_MTIME) — transitional, will page once a post-anchor backup is the newest"
     ANCHOR_FLAGS="-allow-no-anchors"

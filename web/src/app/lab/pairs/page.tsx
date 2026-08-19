@@ -229,10 +229,20 @@ export default function PairsPage() {
             {s.why}
           </p>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--faint)' }}>
+            {/* The 73.1% here was described as measuring "SPY-correlation tiering".
+                It does not: 0.731 is trend21's registered claim in
+                data/accuracy_registry.json, and the prereg spec defines trend21 as
+                "will the stock still be on its current side of its 200-day moving
+                average in 21 trading sessions?" — SMA200 side persistence. A
+                sentence whose whole job is to separate two quantities was
+                misdescribing the one it separates FROM. It is also a BACKTESTED
+                claim ("not yet a live record" per the registry), so "ledgered"
+                oversold it. Both corrected; the figure itself is real. */}
             Binary framings of forward co-movement persistence, over{" "}
             {p.pairsEvaluated.toLocaleString()} pairs. They corroborate the mechanism; they are NOT
-            restatements of the ledgered 73.1%, which measured SPY-correlation tiering — a different
-            quantity.
+            restatements of trend21&apos;s registered 73.1% claim, which is a BACKTESTED claim about
+            whether a stock stays on its side of its 200-day moving average — a different quantity,
+            and not a live record.
           </p>
         </Reveal>
       </section>

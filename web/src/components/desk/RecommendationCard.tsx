@@ -125,8 +125,18 @@ function Tile({ label, children }: { label: string; children: React.ReactNode })
 
 /** One Bull/Base/Bear row: a probability-width bar plus prob% and return%. */
 function DistRow({ label, o, color }: { label: string; o?: DistOutcome; color: string }) {
-  const prob = clamp(num(o?.prob ?? 0), 0, 100);
-  const ret = num(o?.ret ?? 0);
+  // The parent's `available` flag does NOT imply these two figures were
+  // computed — the same trap ProofStrip documents, where `?? 0` rendered a
+  // missing return as "0.00%" and invented a flat-performance claim from
+  // absence. It is worse on this row: an absent probability rendered as "0%"
+  // reads as the model RULING OUT that scenario, which is the opposite of "not
+  // measured". `num()` maps a non-finite input to 0, so the rawness has to be
+  // tested BEFORE it is coerced. Absent reads as an em-dash, matching the Gauge
+  // contract (`hasData ? fmt(value) : "—"`).
+  const hasProb = Number.isFinite(o?.prob as number);
+  const hasRet = Number.isFinite(o?.ret as number);
+  const prob = hasProb ? clamp(num(o!.prob), 0, 100) : 0;
+  const ret = hasRet ? num(o!.ret) : 0;
   return (
     <div className="flex items-center gap-2 text-[0.75rem]">
       <span className="w-10 shrink-0" style={{ color: "var(--dim)" }}>
@@ -139,8 +149,8 @@ function DistRow({ label, o, color }: { label: string; o?: DistOutcome; color: s
         />
       </div>
       <span className="tnum w-24 shrink-0 text-right" style={{ color: "var(--faint)" }}>
-        {prob.toFixed(0)}% · {ret >= 0 ? "+" : ""}
-        {ret.toFixed(1)}%
+        {hasProb ? `${prob.toFixed(0)}%` : "—"} ·{" "}
+        {hasRet ? `${ret >= 0 ? "+" : ""}${ret.toFixed(1)}%` : "—"}
       </span>
     </div>
   );
