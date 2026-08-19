@@ -878,7 +878,15 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 	// input walIneffectiveRuns escalates on.
 	attempts, prior := 1, 0
 	if trunc.Busy {
-		retrySec := envIntOr("SIGNALDECK_WAL_TRUNCATE_RETRY_SEC", 60)
+		// 300s, not 60s, because a blocked attempt does not fail fast: the store
+		// opens its connections with busy_timeout(15000), so each denied
+		// TRUNCATE sits in SQLite's busy handler for up to 15 seconds. Measured
+		// on the first live pass after this shipped, a 60-second budget bought
+		// 14 attempts, not 60, and lost - 1-0.96^14 is only ~43%. 300 seconds
+		// buys ~70 attempts (~94%) and still costs a fraction of this worker's
+		// 180-minute deadline, and the retries run UNQUIESCED so nothing else
+		// is held up while it waits.
+		retrySec := envIntOr("SIGNALDECK_WAL_TRUNCATE_RETRY_SEC", 300)
 		if retrySec > 0 {
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
