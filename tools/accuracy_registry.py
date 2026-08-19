@@ -2357,7 +2357,16 @@ def grade_structural_days(totals: list[tuple], per_day: dict[tuple, list[tuple]]
             }
         else:
             # A horizon-day forecast cannot be graded before its horizon elapses.
-            eligible = dt.date.fromtimestamp(first_ts) + dt.timedelta(days=hd)
+            # UTC, not local. dt.date.fromtimestamp() renders in the MACHINE's
+            # timezone, and these timestamps are UTC-anchored trading days, so a
+            # box at UTC-7 read a UTC-midnight anchor as the PREVIOUS day and
+            # published a first-grade date one day early. Measured 2026-08-18:
+            # filingsdrift21 graded 2026-08-13 on a PDT laptop and 2026-08-14 in
+            # UTC CI from identical inputs, so the published claim depended on
+            # who ran it. Line 2808 already converts with dt.timezone.utc; this
+            # is the one place that did not.
+            first_day = dt.datetime.fromtimestamp(first_ts, dt.timezone.utc).date()
+            eligible = first_day + dt.timedelta(days=hd)
             v = f"PENDING (first grade {eligible.isoformat()}, {resolved}/{MIN_INDEPENDENT_N} resolved)"
             note = "claim is backtested, not yet a live record"
             # Evidence accrual is visible while still PENDING: how many
