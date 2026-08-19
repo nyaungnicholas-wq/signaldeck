@@ -714,14 +714,27 @@ func (g *StorageGovernor) Name() string { return "storage-governor" }
 
 // Interval implements workers.Worker. Env-tunable (SIGNALDECK_WAL_CHECKPOINT_MIN,
 // minutes, default 60) so the checkpoint cadence can be tightened or relaxed
-// without a rebuild. When the WAL is already large, the cadence shortens to
-// SIGNALDECK_WAL_PRESSURE_MIN (default 10) so a boot storm that writes roughly
-// 50 MB/min into the WAL (measured reaching 877 MB against a 512 MB budget
-// within minutes of a deploy) gets retried promptly instead of waiting out the
-// hour — the TRUNCATE rung wins when it gets to try (measured: won on attempt
-// 12 of a 300-second budget, collapsing the WAL to 3.8 MB), so the remaining
-// gap is purely WHEN it next gets to try. Steady-state growth is only ~8 KB/s,
-// so the hourly cadence stays correct except while the WAL is already large.
+// without a rebuild. When the WAL is ALREADY past walBusyAlertBytes at the
+// moment this is asked, the next pass is scheduled at SIGNALDECK_WAL_PRESSURE_MIN
+// (default 10) instead, so a pass whose TRUNCATE lost tries again in ten minutes
+// rather than sitting out the hour with a large file on disk.
+//
+// KNOW WHAT THIS CANNOT DO. The runner computes a worker's next fire ONCE, when
+// the previous run ends, and then sleeps (maxScheduledGap is 24h, so nothing
+// re-reads this mid-sleep). A boot storm that arrives while the governor is
+// asleep therefore does NOT pull the next pass forward — measured 2026-08-18, a
+// deploy took the WAL from 38 MB to 861 MB in four minutes and this method was
+// never consulted; the file was reclaimed by SQLite's own autocheckpoint
+// achieving a reset, which truncates to journal_size_limit (64 MB), not by the
+// governor. This shortens the cadence AFTER a pass that ended with pressure,
+// which is the case worth having: the alternative was an hour of a known-large
+// WAL after a known-failed TRUNCATE.
+//
+// And be honest about the budget: a storm writes ~50 MB/min, so ANY cadence of
+// ten minutes or more can transiently exceed the 512 MB WAL budget. What was
+// actually broken was a WAL that sat at 1.34 GB indefinitely because nothing
+// ever won a reset. Prompt recovery is the goal here, not a file that never
+// crosses the line.
 func (g *StorageGovernor) Interval() time.Duration {
 	base := time.Duration(envIntOr("SIGNALDECK_WAL_CHECKPOINT_MIN", 60)) * time.Minute
 	if g.St == nil {
