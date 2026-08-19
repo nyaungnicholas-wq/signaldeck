@@ -848,3 +848,49 @@ func TestStorageGovernorRetriesBlockedTruncate(t *testing.T) {
 		t.Fatalf("expected TRUNCATE to run, got %q", msg)
 	}
 }
+
+// The pressure branch needs a 128 MB WAL, which is too expensive for a unit
+// test, so we cover the cheaply reachable branches instead: the default base
+// interval, the nil-store guard, the base override, the guard that a longer
+// pressure interval can never win, and the pressure-disabled case.
+func TestStorageGovernorIntervalRespondsToPressure(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		g := &StorageGovernor{St: openStore(t)}
+		got := g.Interval()
+		if got != 60*time.Minute {
+			t.Fatalf("Interval() = %v, want 60m", got)
+		}
+	})
+	t.Run("nil store", func(t *testing.T) {
+		g := &StorageGovernor{}
+		got := g.Interval()
+		if got != 60*time.Minute {
+			t.Fatalf("Interval() = %v, want 60m", got)
+		}
+	})
+	t.Run("base override", func(t *testing.T) {
+		t.Setenv("SIGNALDECK_WAL_CHECKPOINT_MIN", "5")
+		g := &StorageGovernor{St: openStore(t)}
+		got := g.Interval()
+		if got != 5*time.Minute {
+			t.Fatalf("Interval() = %v, want 5m", got)
+		}
+	})
+	t.Run("pressure never exceeds base", func(t *testing.T) {
+		t.Setenv("SIGNALDECK_WAL_CHECKPOINT_MIN", "5")
+		t.Setenv("SIGNALDECK_WAL_PRESSURE_MIN", "30")
+		g := &StorageGovernor{St: openStore(t)}
+		got := g.Interval()
+		if got != 5*time.Minute {
+			t.Fatalf("Interval() = %v, want 5m", got)
+		}
+	})
+	t.Run("pressure disabled", func(t *testing.T) {
+		t.Setenv("SIGNALDECK_WAL_PRESSURE_MIN", "0")
+		g := &StorageGovernor{St: openStore(t)}
+		got := g.Interval()
+		if got != 60*time.Minute {
+			t.Fatalf("Interval() = %v, want 60m", got)
+		}
+	})
+}

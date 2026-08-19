@@ -714,9 +714,28 @@ func (g *StorageGovernor) Name() string { return "storage-governor" }
 
 // Interval implements workers.Worker. Env-tunable (SIGNALDECK_WAL_CHECKPOINT_MIN,
 // minutes, default 60) so the checkpoint cadence can be tightened or relaxed
-// without a rebuild.
+// without a rebuild. When the WAL is already large, the cadence shortens to
+// SIGNALDECK_WAL_PRESSURE_MIN (default 10) so a boot storm that writes roughly
+// 50 MB/min into the WAL (measured reaching 877 MB against a 512 MB budget
+// within minutes of a deploy) gets retried promptly instead of waiting out the
+// hour — the TRUNCATE rung wins when it gets to try (measured: won on attempt
+// 12 of a 300-second budget, collapsing the WAL to 3.8 MB), so the remaining
+// gap is purely WHEN it next gets to try. Steady-state growth is only ~8 KB/s,
+// so the hourly cadence stays correct except while the WAL is already large.
 func (g *StorageGovernor) Interval() time.Duration {
-	return time.Duration(envIntOr("SIGNALDECK_WAL_CHECKPOINT_MIN", 60)) * time.Minute
+	base := time.Duration(envIntOr("SIGNALDECK_WAL_CHECKPOINT_MIN", 60)) * time.Minute
+	if g.St == nil {
+		return base
+	}
+	_, walBytes := g.St.FileSizes()
+	if walBytes < walBusyAlertBytes {
+		return base
+	}
+	pressure := time.Duration(envIntOr("SIGNALDECK_WAL_PRESSURE_MIN", 10)) * time.Minute
+	if pressure <= 0 || pressure >= base {
+		return base
+	}
+	return pressure
 }
 
 // Run checkpoints the WAL and, when warranted, vacuums.
