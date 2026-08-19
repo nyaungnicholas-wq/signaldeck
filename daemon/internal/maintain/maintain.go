@@ -862,10 +862,64 @@ func (g *StorageGovernor) checkpointLadder(ctx context.Context, walBefore int64)
 	if err != nil {
 		return "wal checkpoint: " + strings.Join(parts, "; ") + "; TRUNCATE failed: " + err.Error(), reclaimed
 	}
-	reclaimed += trunc.Checkpointed
+
+	// A single TRUNCATE attempt per pass is structurally starved: measured live
+	// against the running fleet, 25 consecutive PRAGMA wal_checkpoint(RESTART)
+	// attempts one second apart returned BUSY 24 times and succeeded exactly
+	// once, and that one success collapsed a 153 MB WAL to 64 MB. The
+	// reader-free instant DOES occur, it is just rare — so when the first
+	// attempt comes back Busy, retry the same call once per second UNQUIESCED
+	// (the fleet must keep running; the measurement above was taken with it
+	// running) until it succeeds or the env-tunable budget expires. A value of
+	// 0 disables retrying entirely, keeping the old single-shot behaviour.
+	// Frames moved by earlier attempts are NOT re-moved by a later one, so the
+	// pass reclaimed their sum. Counting only the last attempt would report a
+	// pass that did real work as having reclaimed nothing, which is exactly the
+	// input walIneffectiveRuns escalates on.
+	attempts, prior := 1, 0
+	if trunc.Busy {
+		retrySec := envIntOr("SIGNALDECK_WAL_TRUNCATE_RETRY_SEC", 60)
+		if retrySec > 0 {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			deadline := time.NewTimer(time.Duration(retrySec) * time.Second)
+			defer deadline.Stop()
+		retryLoop:
+			for {
+				select {
+				case <-ctx.Done():
+					break retryLoop
+				case <-deadline.C:
+					break retryLoop
+				case <-ticker.C:
+					attempts++
+					prior += trunc.Checkpointed
+					trunc, err = g.St.WALCheckpointTruncate(ctx)
+					if err != nil {
+						break retryLoop
+					}
+					if !trunc.Busy {
+						break retryLoop
+					}
+				}
+			}
+		}
+	}
+
+	if err != nil {
+		return "wal checkpoint: " + strings.Join(parts, "; ") +
+			fmt.Sprintf("; TRUNCATE failed after %d attempts: ", attempts) + err.Error(), reclaimed + prior
+	}
+	reclaimed += prior + trunc.Checkpointed
 	tn := fmt.Sprintf("TRUNCATE %d/%d frames", trunc.Checkpointed, trunc.LogFrames)
 	if quiesced {
-		tn += " (quiesced)"
+		tn += " (quiesced"
+		if attempts > 1 {
+			tn += fmt.Sprintf(", %d attempts", attempts)
+		}
+		tn += ")"
+	} else if attempts > 1 {
+		tn += fmt.Sprintf(" (%d attempts)", attempts)
 	}
 	if trunc.Busy {
 		tn += " BUSY — WAL NOT truncated"

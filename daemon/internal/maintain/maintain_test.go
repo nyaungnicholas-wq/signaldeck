@@ -774,3 +774,77 @@ func TestStorageGovernorFlagsIneffectiveCheckpoints(t *testing.T) {
 		t.Errorf("streak = %q after a productive pass, want reset to 0", v)
 	}
 }
+
+// A held read snapshot is what makes TRUNCATE return Busy, so this test
+// manufactures one and releases it mid-run to prove the retry works. The
+// measured justification is that against the live fleet 25 single attempts one
+// second apart won exactly once, so a single-shot pass loses ~96 percent of the
+// time.
+func TestStorageGovernorRetriesBlockedTruncate(t *testing.T) {
+	// SLOW BY NECESSITY, not by sloppiness. The store opens its connections with
+	// busy_timeout(15000), so a blocked checkpoint does not return Busy for a
+	// full 15 seconds - it sits in SQLite's busy handler instead. The pin must
+	// therefore outlast that timeout, or the very first attempt simply waits the
+	// reader out and succeeds, which is precisely what the first two versions of
+	// this test measured: RESTART 840/840, no BUSY, one attempt, nothing proven.
+	if testing.Short() {
+		t.Skip("holds a read snapshot past the 15s busy_timeout")
+	}
+	ctx := context.Background()
+	st := openStore(t)
+	sym, _ := st.UpsertSymbol(ctx, "SPY", md.Stocks, "")
+	for i := 0; i < 25; i++ {
+		_ = st.UpsertBars(ctx, []md.Bar{{SymbolID: sym.ID, TF: md.TF1m, Ts: int64(60 * i), Close: float64(i)}})
+	}
+
+	// PIN A SNAPSHOT, THEN WRITE PAST IT. Order is the whole mechanism. A reader
+	// that opens AFTER the last write holds the newest snapshot and blocks
+	// nothing - measured: the first version of this test did exactly that and
+	// RESTART sailed through 840/840 frames. The checkpoint can only be denied
+	// its reset by a reader pinned to an OLDER frame, so the transaction takes
+	// its snapshot here (a constant `SELECT 1` would not even acquire the read
+	// lock - it must touch real pages) and the next 25 bars land beyond it.
+	tx, err := st.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM bars`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	for i := 25; i < 50; i++ {
+		_ = st.UpsertBars(ctx, []md.Bar{{SymbolID: sym.ID, TF: md.TF1m, Ts: int64(60 * i), Close: float64(i)}})
+	}
+
+	// Release the pin mid-run so a LATER attempt is the one that wins. Against
+	// the live fleet 25 single attempts one second apart won exactly once, so a
+	// single-shot pass loses ~96% of the time; this is that rare instant,
+	// manufactured on purpose.
+	t.Setenv("SIGNALDECK_WAL_TRUNCATE_RETRY_SEC", "45")
+	go func() {
+		time.Sleep(18 * time.Second)
+		_ = tx.Rollback()
+	}()
+
+	// Saturday: the market-hours gate must not defer the rung under test.
+	closed := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	g := &StorageGovernor{St: st, Quiescer: &fakeQuiescer{}, Now: func() time.Time { return closed }}
+	msg, err := g.Run(ctx)
+	if err != nil {
+		t.Fatalf("governor run: %v", err)
+	}
+	if !contains(msg, "attempts") {
+		t.Fatalf("TRUNCATE was pinned BUSY yet only one attempt ran - the retry did not happen: %q", msg)
+	}
+	// Assert on TRUNCATE's OWN verdict, not the bare word BUSY: the RESTART rung
+	// legitimately reports BUSY here (it is blocked by the same pin), and an
+	// assertion that cannot tell the two rungs apart fails on a pass that did
+	// exactly what it should. "WAL NOT truncated" is only ever written by the
+	// rung under test.
+	if contains(msg, "WAL NOT truncated") {
+		t.Fatalf("the pin was released mid-run, so a later TRUNCATE should have won: %q", msg)
+	}
+	if !contains(msg, "TRUNCATE") || contains(msg, "TRUNCATE deferred") {
+		t.Fatalf("expected TRUNCATE to run, got %q", msg)
+	}
+}
