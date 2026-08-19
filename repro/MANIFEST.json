@@ -1,6 +1,6 @@
 {
- "generated": "2026-08-17T04:58:52+00:00",
- "git_commit": "5fcf73162e4920f1e82f8c53ee07dbe97cec6c77",
+ "generated": "2026-08-19T06:39:54+00:00",
+ "git_commit": "6437d4a0e85a842fc93fd10d60367db8bd45fdc3",
  "survivorship_epoch": "2026-07-24",
  "hash_scheme": "datasetver v1 canonical records, sha256, floats %.10g (daemon/internal/datasetver.HashRecords)",
  "note": "grading tallies + input-series versions only; no bar data is redistributed (A10). Regenerate the published numbers with `python3 tools/accuracy_registry.py --snapshot repro` \u2014 see REPRODUCE.md.",
@@ -8,8 +8,8 @@
   {
    "file": "directional_days.csv",
    "kind": "directional-day-tallies",
-   "rows": 58,
-   "sha256": "f4a9b86fca7c9208ea31a5b6aea4b1c9c74edc4e27fd04466920c07123fe1126"
+   "rows": 66,
+   "sha256": "f893a6fd51c892e0f5bafc821cea6776fb866ee081973835cc8f404b4b5f3ff4"
   },
   {
    "file": "prereg_claims.csv",
@@ -21,7 +21,7 @@
    "file": "grading_protocol.csv",
    "kind": "prereg-grading-protocol",
    "rows": 1,
-   "sha256": "24f18741ba3f6a1edf6bab3640679f47b91043f6753827e936923c4b94f159fd"
+   "sha256": "80efd47047eebe36555a5c0304bb30f836937c2fbb0ed6b12135286220271b48"
   },
   {
    "file": "structural_days.csv",
@@ -39,19 +39,19 @@
    "file": "structural_claims.csv",
    "kind": "structural-claims",
    "rows": 7,
-   "sha256": "f9518f1df3883c08f7068530a31d1543ef89ae4449d28a66ecedd00df9c76c91"
+   "sha256": "eefb877df881ca9d07a92389d67f5105fc0ac37353b02d24cc7fc3d0c7814cfb"
   },
   {
    "file": "pairs_inputs.csv",
    "kind": "pairs-input-series-versions",
    "rows": 945,
-   "sha256": "95c8a55a95209a2e92e86e5a79d62298580787b022e85cf248d2e7387e33f94b"
+   "sha256": "20d5a6f899b2b86a1d8268f5d0a22a653657b7eb54878dd6f6927aef891c5564"
   },
   {
    "file": "xsfactor_inputs.csv",
    "kind": "xsfactor-input-series-versions",
    "rows": 2939,
-   "sha256": "72a7a73504f52c5f576ecdcacd07803e182bc846f69a4b4ba53db6db9995d999"
+   "sha256": "d33e72d9e745b07e9d157d5fec520cc88a648fc8d5e260b9cde7fa8f43486568"
   }
  ]
 }

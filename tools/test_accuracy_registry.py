@@ -759,11 +759,17 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         ("prequential-majority (1d)", "all"):
             "NO SKILL — indistinguishable from baseline",
         ("directional-ensemble (1w)", "all"):
-            "INSUFFICIENT DAYS (9/10 credible days of 15, 6 degenerate)"
-            " — no interval, so no verdict",
+        # Moved by EVIDENCE, not by the grader: this row crossed the 10
+        # credible-day floor in the re-cut snapshot, so an interval exists
+        # and a verdict publishes where the freeze still said the row was
+        # unjudgeable. DOCS_INDEX already publishes the same transition.
+            "FAILED — significantly worse than the naive baseline",
         ("prequential-majority (1w)", "all"):
-            "INSUFFICIENT DAYS (8/10 credible days of 13, 5 degenerate)"
-            " — no interval, so no verdict",
+        # Moved by EVIDENCE, not by the grader: this row crossed the 10
+        # credible-day floor in the re-cut snapshot, so an interval exists
+        # and a verdict publishes where the freeze still said the row was
+        # unjudgeable. DOCS_INDEX already publishes the same transition.
+            "NO SKILL — indistinguishable from baseline",
         ("directional-ensemble (1d, high conviction)", "|p-0.5|>=0.15"):
             "INSUFFICIENT DAYS (5/10 credible days of 7, 2 degenerate)"
             " — no interval, so no verdict",
@@ -771,8 +777,17 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
             "FAILED — significantly worse than the naive baseline",
         # The seven structural claims are backtests awaiting their first live
         # grade — PENDING until the horizon elapses, never a live verdict.
+        # 2026-08-14, not 08-13. This row froze one day early because the
+        # grader dated it with dt.date.fromtimestamp(), which renders in the
+        # MACHINE's timezone: its anchor is 1784865600 = 2026-07-24 04:00 UTC,
+        # which a UTC-7 box reads as 07-23. The value was therefore whatever
+        # the operator's clock said, and CI (UTC) and a PDT laptop disagreed
+        # by a day from identical inputs. Corrected in the grader (UTC), which
+        # changed its sha256, so the chain re-registered it: seq 83 pins
+        # cae6821b at commit 6437d4a, and the snapshot was re-cut against it.
+        # The other six rows sit far from the boundary and never moved.
         ("filingsdrift21", "all"):
-            "PENDING (first grade 2026-08-13, 0/30 resolved)",
+            "PENDING (first grade 2026-08-14, 0/30 resolved)",
         ("liquidity21", "all"):
             "PENDING (first grade 2026-08-14, 0/30 resolved)",
         ("liquidity21-crypto", "all"):
