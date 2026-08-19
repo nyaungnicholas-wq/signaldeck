@@ -7,6 +7,38 @@ import { getConsecutiveFailures, onRetry, recordFailure, recordSuccess } from ".
 // only if you want the browser to hit the daemon directly.
 export const API_BASE = process.env.NEXT_PUBLIC_SIGNALDECK_API ?? "";
 
+/** A non-2xx answer FROM the daemon, carrying the status so a caller can tell
+ *  "refused" apart from "unreachable". Components used to receive a bare
+ *  Error and could only guess, which is how a 451 licence refusal was rendered
+ *  as "is the daemon running?" — a question about a daemon that had just
+ *  answered. `message` is the daemon's own `error` string, never a JSON dump. */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+/** The licence guard refusing to redistribute raw bars (daemon returns 451).
+ *  Deterministic for a given deployment — retrying never changes it, so a
+ *  caller must render an explanation rather than a retry button. */
+export function isLicenceRefusal(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 451;
+}
+
+/** ONE user-facing wording for that refusal, shared by every chart surface.
+ *  The daemon's own notice is written for an operator — it names the env var
+ *  to flip — so it must not be shown to a reader; this is the reader's version.
+ *  Kept in one place for the same reason the daemon keeps the guard in one
+ *  function: two copies of a legal explanation drift, one cannot. */
+export const LICENCE_REFUSAL_TEXT =
+  "Raw price bars are licensed by the market-data provider and cannot be " +
+  "redistributed, so this deployment does not serve them. Every derived signal " +
+  "here — regimes, forecasts, risk — is computed from them and is unaffected.";
+
 export type Market = "crypto" | "stocks";
 export type Horizon = "1h" | "1d" | "1w";
 export const HORIZONS: Horizon[] = ["1h", "1d", "1w"];
@@ -226,8 +258,27 @@ async function get<T>(path: string): Promise<T> {
       // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
       // the daemon answered, just not with data.
       if (res.status >= 500) recordFailure();
+      // Use the daemon's `error` STRING, never the raw response text. Dumping
+      // the body put a whole JSON object on screen wherever a component renders
+      // the message — /api/bars' 451 licence notice arrived as
+      // `{"error":"Raw market data is licensed by …"}` complete with braces and
+      // an env-var instruction, in the slot the price chart should occupy.
+      // post() already unwrapped it this way; get() was the door that did not.
       const body = await res.text().catch(() => "");
-      throw new Error(`API ${res.status}: ${body || path}`);
+      // Keep the status IN the message whenever the daemon did not supply a
+      // sentence of its own: a 500 with an empty body used to read "API 500:
+      // /api/dashboard", and reducing that to bare "/api/dashboard" would make
+      // a server fault indistinguishable from a path echo in any log or toast.
+      // A real `error` string replaces it — that sentence is written for a
+      // reader and the status adds nothing to it.
+      let msg = `API ${res.status}: ${body || path}`;
+      try {
+        const parsed = JSON.parse(body) as { error?: string };
+        if (parsed?.error) msg = parsed.error;
+      } catch {
+        /* not JSON — the raw text is the best message available */
+      }
+      throw new ApiError(res.status, msg);
     }
     recordSuccess();
     const data = (await res.json()) as T;

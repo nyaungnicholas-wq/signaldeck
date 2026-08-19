@@ -3,14 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, notifyStatus, pollMs, POLL_FAST, type AlertRow, type NotifyStatusResponse } from "@/lib/api";
 import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
+import { secondsSince } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 
+// AlertRow.ts is unix SECONDS (daemon writes time.Now().Unix()). Passing it to
+// a bare new Date() reads it as milliseconds and lands in Jan 1970 — which is
+// what this page rendered: every age read "20657d", every group header "Jan 21",
+// and the "events today" tile was structurally always 0 because the day compare
+// could never be true. Unit handling lives in lib/format, so use it rather than
+// re-deriving *1000 here.
 function relativeTime(ts: number): string {
-  const now = Date.now();
-  const then = new Date(ts).getTime();
-  const diff = Math.floor((now - then) / 1000);
+  const diff = secondsSince(ts);
+  if (!isFinite(diff)) return "—";
   if (diff < 60) return `${diff}s`;
   if (diff < 3600) return `${Math.floor(diff/60)}m`;
   if (diff < 86400) return `${Math.floor(diff/3600)}h`;
@@ -18,7 +24,7 @@ function relativeTime(ts: number): string {
 }
 
 function dayKey(ts: number): string {
-  const d = new Date(ts);
+  const d = new Date(ts * 1000);
   const now = new Date();
   if (d.toDateString() === now.toDateString()) return "Today";
   const yesterday = new Date(now);
@@ -78,7 +84,7 @@ export default function ActivityPage() {
     if (!rows) return { eventsToday: 0, topSymbol: '', topType: '', errors: 0 };
     const now = new Date();
     const todayStr = now.toDateString();
-    const eventsToday = rows.filter(r => new Date(r.ts).toDateString() === todayStr).length;
+    const eventsToday = rows.filter(r => new Date(r.ts * 1000).toDateString() === todayStr).length;
 
     const symbolCounts: Record<string, number> = {};
     const typeCounts: Record<string, number> = {};

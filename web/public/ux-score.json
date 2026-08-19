@@ -1,5 +1,5 @@
 {
-  "overall": 81.75017839105338,
+  "overall": 79.93968173191544,
   "level": {
     "key": "good",
     "label": "Good",
@@ -17,13 +17,13 @@
         "question": "Can I tell what this does?",
         "weight": 0.15
       },
-      "score": 8.434235209235208,
-      "fromPages": 8.434235209235208,
+      "score": 8.505122655122657,
+      "fromPages": 8.505122655122657,
       "fromSignals": null,
       "worstRoutes": [
         "/market/regimes",
         "/lab/pairs",
-        "/accuracy"
+        "/intel/news"
       ]
     },
     {
@@ -33,13 +33,13 @@
         "question": "Can I find my way around?",
         "weight": 0.13
       },
-      "score": 8.638452380952382,
-      "fromPages": 8.638452380952382,
+      "score": 8.581507936507936,
+      "fromPages": 8.581507936507936,
       "fromSignals": null,
       "worstRoutes": [
-        "/lab/paper",
         "/lab/pairs",
-        "/accuracy"
+        "/lab/paper",
+        "/lab/strategies"
       ]
     },
     {
@@ -49,13 +49,13 @@
         "question": "Did it actually help me do something?",
         "weight": 0.15
       },
-      "score": 7.949735449735452,
-      "fromPages": 7.949735449735452,
+      "score": 7.447089947089948,
+      "fromPages": 7.447089947089948,
       "fromSignals": null,
       "worstRoutes": [
         "/lab/paper",
-        "/glossary",
-        "/watchlist"
+        "/lab/sentiment",
+        "/accuracy"
       ]
     },
     {
@@ -65,13 +65,13 @@
         "question": "Am I doing things, or just reading?",
         "weight": 0.11
       },
-      "score": 7.599206349206348,
-      "fromPages": 7.599206349206348,
+      "score": 7.162698412698412,
+      "fromPages": 7.162698412698412,
       "fromSignals": null,
       "worstRoutes": [
         "/lab/paper",
-        "/hud",
-        "/accuracy"
+        "/lab/strategies",
+        "/lab/sentiment"
       ]
     },
     {
@@ -81,13 +81,13 @@
         "question": "Do I know what to do next?",
         "weight": 0.14
       },
-      "score": 9.761904761904763,
-      "fromPages": 9.761904761904763,
+      "score": 9.166666666666666,
+      "fromPages": 9.166666666666666,
       "fromSignals": null,
       "worstRoutes": [
         "/lab/paper",
-        "/",
-        "/welcome"
+        "/lab/strategies",
+        "/lab/sentiment"
       ]
     },
     {
@@ -97,8 +97,8 @@
         "question": "Does it work however I browse?",
         "weight": 0.1
       },
-      "score": 7.734126984126982,
-      "fromPages": 7.734126984126982,
+      "score": 7.902777777777777,
+      "fromPages": 7.902777777777777,
       "fromSignals": null,
       "worstRoutes": [
         "/intel/companies",
@@ -113,13 +113,13 @@
         "question": "Is this calm enough to read?",
         "weight": 0.1
       },
-      "score": 8.720027958152958,
-      "fromPages": 8.720027958152958,
+      "score": 8.839356962481963,
+      "fromPages": 8.839356962481963,
       "fromSignals": null,
       "worstRoutes": [
         "/intel/news",
-        "/intel/companies",
-        "/market/signals"
+        "/market/signals",
+        "/signals"
       ]
     },
     {
@@ -129,13 +129,13 @@
         "question": "Do I know what just happened?",
         "weight": 0.07
       },
-      "score": 7.857142857142857,
-      "fromPages": 7.857142857142857,
+      "score": 7.7777777777777795,
+      "fromPages": 7.7777777777777795,
       "fromSignals": null,
       "worstRoutes": [
+        "/accuracy",
         "/welcome",
-        "/lab/options",
-        "/lab/research"
+        "/lab/options"
       ]
     },
     {
@@ -145,8 +145,8 @@
         "question": "Does it fit how I work?",
         "weight": 0.05
       },
-      "score": 3.9285714285714284,
-      "fromPages": 3.9285714285714284,
+      "score": 3.9130434782608696,
+      "fromPages": 3.9130434782608696,
       "fromSignals": null,
       "worstRoutes": [
         "/watchlist/compare",
@@ -162,8 +162,8 @@
       "question": "Does it fit how I work?",
       "weight": 0.05
     },
-    "score": 3.9285714285714284,
-    "fromPages": 3.9285714285714284,
+    "score": 3.9130434782608696,
+    "fromPages": 3.9130434782608696,
     "fromSignals": null,
     "worstRoutes": [
       "/watchlist/compare",
@@ -176,13 +176,13 @@
     {
       "measurement": {
         "title": "Dashboard — SignalDeck",
-        "words": 522,
+        "words": 519,
         "screens": 2.55,
-        "links": 103,
-        "buttons": 337,
+        "links": 97,
+        "buttons": 335,
         "inputs": 2,
         "viewControls": 22,
-        "numbers": 75,
+        "numbers": 76,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
@@ -195,10 +195,10 @@
         ],
         "unnamedControls": 0,
         "headingSkips": 0,
-        "smallTargets": 112,
+        "smallTargets": 106,
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
-        "liveRegions": 4,
+        "liveRegions": 3,
         "hasEmptyState": false,
         "hasLoading": true,
         "hasError": true,
@@ -207,17 +207,17 @@
         "advanced": false
       },
       "scores": {
-        "clarity": 7.13030303030303,
+        "clarity": 7.13939393939394,
         "friendliness": 7.5,
         "helpfulness": 6.666666666666667,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 8.333333333333334,
-        "layout": 7.222727272727273,
+        "layout": 7.2295454545454545,
         "feedback": 6.666666666666667,
         "personalization": 10
       },
-      "overall": 80.66818181818184
+      "overall": 80.68863636363638
     },
     {
       "measurement": {
@@ -350,7 +350,7 @@
     {
       "measurement": {
         "title": "Watchlist — SignalDeck",
-        "words": 60,
+        "words": 59,
         "screens": 1,
         "links": 2,
         "buttons": 0,
@@ -431,28 +431,27 @@
     {
       "measurement": {
         "title": "Overview",
-        "words": 486,
+        "words": 485,
         "screens": 2.62,
-        "links": 47,
-        "buttons": 13,
-        "inputs": 0,
-        "viewControls": 11,
-        "numbers": 156,
+        "links": 2154,
+        "buttons": 4238,
+        "inputs": 3,
+        "viewControls": 20,
+        "numbers": 158,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
           "regime",
-          "IC",
           "calibration",
           "backtest"
         ],
         "unnamedControls": 0,
         "headingSkips": 0,
-        "smallTargets": 48,
+        "smallTargets": 2161,
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
         "liveRegions": 1,
-        "hasEmptyState": true,
+        "hasEmptyState": false,
         "hasLoading": true,
         "hasError": true,
         "personalized": true,
@@ -460,34 +459,35 @@
         "advanced": false
       },
       "scores": {
-        "clarity": 8.072727272727272,
-        "friendliness": 8.333333333333334,
-        "helpfulness": 10,
+        "clarity": 8.492424242424242,
+        "friendliness": 8.75,
+        "helpfulness": 6.666666666666667,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 8.333333333333334,
-        "layout": 9.531818181818181,
-        "feedback": 10,
+        "layout": 7.0189393939393945,
+        "feedback": 6.666666666666667,
         "personalization": 10
       },
-      "overall": 92.80757575757576
+      "overall": 84.13257575757576
     },
     {
       "measurement": {
         "title": "Market — SignalDeck",
-        "words": 814,
+        "words": 817,
         "screens": 3.55,
         "links": 7,
         "buttons": 1,
         "inputs": 0,
         "viewControls": 0,
-        "numbers": 210,
+        "numbers": 212,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
           "regime",
           "breadth",
-          "IC"
+          "IC",
+          "backtest"
         ],
         "unnamedControls": 0,
         "headingSkips": 0,
@@ -503,38 +503,37 @@
         "advanced": false
       },
       "scores": {
-        "clarity": 7.495454545454545,
-        "friendliness": 8.383333333333333,
+        "clarity": 7.06969696969697,
+        "friendliness": 7.966666666666666,
         "helpfulness": 6.666666666666667,
         "interactivity": 5,
         "guidance": 10,
         "accessibility": 8.333333333333334,
-        "layout": 8.102272727272727,
+        "layout": 8.08030303030303,
         "feedback": 6.666666666666667,
         "personalization": 0
       },
-      "overall": 72.74378787878788
+      "overall": 71.54151515151517
     },
     {
       "measurement": {
         "title": "Signals",
-        "words": 966,
-        "screens": 4.91,
-        "links": 107,
+        "words": 1006,
+        "screens": 5.39,
+        "links": 127,
         "buttons": 59,
         "inputs": 0,
         "viewControls": 6,
-        "numbers": 247,
+        "numbers": 260,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
-          "IC",
           "backtest",
           "alpha"
         ],
         "unnamedControls": 0,
         "headingSkips": 0,
-        "smallTargets": 107,
+        "smallTargets": 127,
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
         "liveRegions": 0,
@@ -546,28 +545,28 @@
         "advanced": false
       },
       "scores": {
-        "clarity": 7.034848484848485,
-        "friendliness": 7.476666666666667,
+        "clarity": 7.330303030303031,
+        "friendliness": 7.573333333333333,
         "helpfulness": 10,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 5.140265151515152,
+        "layout": 4.398371212121212,
         "feedback": 10,
         "personalization": 10
       },
-      "overall": 84.07887121212121
+      "overall": 83.90582575757577
     },
     {
       "measurement": {
         "title": "Market — SignalDeck",
-        "words": 1018,
+        "words": 1036,
         "screens": 4.12,
         "links": 80,
         "buttons": 43,
         "inputs": 0,
         "viewControls": 0,
-        "numbers": 194,
+        "numbers": 195,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
@@ -576,7 +575,8 @@
           "conviction band",
           "realized volatility",
           "IC",
-          "hit rate"
+          "hit rate",
+          "backtest"
         ],
         "unnamedControls": 0,
         "headingSkips": 0,
@@ -592,22 +592,22 @@
         "advanced": false
       },
       "scores": {
-        "clarity": 5.627272727272728,
-        "friendliness": 6.753333333333333,
+        "clarity": 5.156060606060606,
+        "friendliness": 6.336666666666666,
         "helpfulness": 6.666666666666667,
         "interactivity": 5,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 6.490473484848485,
+        "layout": 6.441988636363636,
         "feedback": 6.666666666666667,
         "personalization": 0
       },
-      "overall": 64.54404924242425
+      "overall": 63.247079545454554
     },
     {
       "measurement": {
         "title": "Macro",
-        "words": 943,
+        "words": 938,
         "screens": 5.93,
         "links": 63,
         "buttons": 4,
@@ -635,22 +635,22 @@
         "advanced": false
       },
       "scores": {
-        "clarity": 7.1045454545454545,
+        "clarity": 7.11969696969697,
         "friendliness": 6.796666666666667,
         "helpfulness": 6.666666666666667,
         "interactivity": 5,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 6.0778977272727275,
+        "layout": 6.089261363636364,
         "feedback": 6.666666666666667,
         "personalization": 10
       },
-      "overall": 71.40371590909092
+      "overall": 71.43780681818183
     },
     {
       "measurement": {
         "title": "Activity",
-        "words": 87,
+        "words": 89,
         "screens": 1,
         "links": 8,
         "buttons": 3,
@@ -692,13 +692,13 @@
     {
       "measurement": {
         "title": "Trends",
-        "words": 1073,
-        "screens": 4.22,
+        "words": 1094,
+        "screens": 4.24,
         "links": 32,
         "buttons": 8,
         "inputs": 1,
         "viewControls": 7,
-        "numbers": 157,
+        "numbers": 170,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
@@ -719,17 +719,17 @@
         "advanced": false
       },
       "scores": {
-        "clarity": 7.127272727272728,
-        "friendliness": 8.353333333333333,
+        "clarity": 7.0636363636363635,
+        "friendliness": 8.34,
         "helpfulness": 10,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 7.222222222222221,
-        "layout": 7.580151515151515,
+        "layout": 7.423939393939394,
         "feedback": 10,
         "personalization": 0
       },
-      "overall": 83.35261616161617
+      "overall": 83.08361616161616
     },
     {
       "measurement": {
@@ -776,23 +776,22 @@
     {
       "measurement": {
         "title": "Signals",
-        "words": 966,
-        "screens": 4.91,
-        "links": 107,
+        "words": 1006,
+        "screens": 5.39,
+        "links": 127,
         "buttons": 59,
         "inputs": 0,
         "viewControls": 6,
-        "numbers": 247,
+        "numbers": 260,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
-          "IC",
           "backtest",
           "alpha"
         ],
         "unnamedControls": 0,
         "headingSkips": 0,
-        "smallTargets": 107,
+        "smallTargets": 127,
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
         "liveRegions": 0,
@@ -804,28 +803,28 @@
         "advanced": false
       },
       "scores": {
-        "clarity": 7.034848484848485,
-        "friendliness": 7.476666666666667,
+        "clarity": 7.330303030303031,
+        "friendliness": 7.573333333333333,
         "helpfulness": 10,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 5.140265151515152,
+        "layout": 4.398371212121212,
         "feedback": 10,
         "personalization": 10
       },
-      "overall": 84.07887121212121
+      "overall": 83.90582575757577
     },
     {
       "measurement": {
         "title": "News",
-        "words": 1794,
-        "screens": 9.52,
+        "words": 1570,
+        "screens": 9.45,
         "links": 127,
         "buttons": 8,
         "inputs": 1,
         "viewControls": 5,
-        "numbers": 190,
+        "numbers": 184,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [],
@@ -849,22 +848,22 @@
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 3.2821969696969697,
+        "layout": 3.327651515151515,
         "feedback": 10,
         "personalization": 0
       },
-      "overall": 79.94886363636365
+      "overall": 79.9943181818182
     },
     {
       "measurement": {
         "title": "Companies",
         "words": 2030,
-        "screens": 3.72,
+        "screens": 3.65,
         "links": 57,
         "buttons": 4,
         "inputs": 5,
         "viewControls": 6,
-        "numbers": 519,
+        "numbers": 518,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [],
@@ -888,11 +887,11 @@
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 5.666666666666667,
-        "layout": 4.54625,
+        "layout": 4.58125,
         "feedback": 6.666666666666667,
         "personalization": 0
       },
-      "overall": 72.87958333333334
+      "overall": 72.91458333333334
     },
     {
       "measurement": {
@@ -938,7 +937,7 @@
     {
       "measurement": {
         "title": "Insiders",
-        "words": 539,
+        "words": 541,
         "screens": 2.3,
         "links": 32,
         "buttons": 11,
@@ -962,17 +961,17 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 9.578787878787878,
+        "clarity": 9.572727272727272,
         "friendliness": 10,
         "helpfulness": 10,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 9.684090909090909,
+        "layout": 9.679545454545455,
         "feedback": 10,
         "personalization": 10
       },
-      "overall": 95.71893939393938
+      "overall": 95.70530303030303
     },
     {
       "measurement": {
@@ -1018,13 +1017,13 @@
     {
       "measurement": {
         "title": "SEC Filings",
-        "words": 426,
+        "words": 472,
         "screens": 2.93,
         "links": 57,
         "buttons": 14,
         "inputs": 1,
         "viewControls": 13,
-        "numbers": 126,
+        "numbers": 100,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [],
@@ -1042,28 +1041,28 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 9.921212121212122,
+        "clarity": 9.781818181818181,
         "friendliness": 10,
         "helpfulness": 10,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 9.707954545454546,
+        "layout": 9.648863636363636,
         "feedback": 10,
         "personalization": 10
       },
-      "overall": 96.2564393939394
+      "overall": 95.98825757575756
     },
     {
       "measurement": {
         "title": "Shorts",
-        "words": 270,
+        "words": 273,
         "screens": 2.19,
         "links": 27,
         "buttons": 11,
         "inputs": 1,
         "viewControls": 6,
-        "numbers": 131,
+        "numbers": 133,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
@@ -1089,22 +1088,22 @@
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 9.916666666666666,
+        "layout": 9.901515151515152,
         "feedback": 10,
         "personalization": 0
       },
-      "overall": 90.14583333333333
+      "overall": 90.13068181818181
     },
     {
       "measurement": {
         "title": "Intel — SignalDeck",
-        "words": 444,
-        "screens": 3.78,
+        "words": 443,
+        "screens": 3.6,
         "links": 7,
         "buttons": 54,
         "inputs": 1,
         "viewControls": 4,
-        "numbers": 102,
+        "numbers": 101,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [],
@@ -1122,17 +1121,17 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 9.866666666666667,
+        "clarity": 9.86969696969697,
         "friendliness": 10,
         "helpfulness": 10,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 6.666666666666667,
-        "layout": 9.47875,
+        "layout": 9.571022727272727,
         "feedback": 10,
         "personalization": 0
       },
-      "overall": 90.94541666666669
+      "overall": 91.04223484848487
     },
     {
       "measurement": {
@@ -1180,7 +1179,7 @@
     {
       "measurement": {
         "title": "Track Record",
-        "words": 447,
+        "words": 449,
         "screens": 2.07,
         "links": 10,
         "buttons": 9,
@@ -1207,17 +1206,17 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 9.024242424242424,
+        "clarity": 9.018181818181818,
         "friendliness": 8.75,
         "helpfulness": 6.666666666666667,
         "interactivity": 10,
         "guidance": 10,
         "accessibility": 7.638888888888889,
-        "layout": 9.893181818181818,
+        "layout": 9.888636363636364,
         "feedback": 6.666666666666667,
         "personalization": 0
       },
-      "overall": 82.11010101010102
+      "overall": 82.09646464646465
     },
     {
       "measurement": {
@@ -1345,13 +1344,13 @@
     {
       "measurement": {
         "title": "Lab — SignalDeck",
-        "words": 847,
+        "words": 867,
         "screens": 3.59,
         "links": 12,
         "buttons": 1,
         "inputs": 0,
         "viewControls": 0,
-        "numbers": 112,
+        "numbers": 114,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
@@ -1361,6 +1360,7 @@
           "regime",
           "IC",
           "decile",
+          "backtest",
           "beta"
         ],
         "unnamedControls": 0,
@@ -1377,17 +1377,17 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 5.728787878787879,
-        "friendliness": 5.625,
+        "clarity": 5.251515151515151,
+        "friendliness": 5,
         "helpfulness": 6.666666666666667,
         "interactivity": 5,
         "guidance": 10,
         "accessibility": 8.333333333333334,
-        "layout": 8.68909090909091,
+        "layout": 8.643636363636364,
         "feedback": 6.666666666666667,
         "personalization": 10
       },
-      "overall": 72.09477272727274
+      "overall": 70.52090909090909
     },
     {
       "measurement": {
@@ -1515,21 +1515,16 @@
     {
       "measurement": {
         "title": "Strategy Lab",
-        "words": 183,
-        "screens": 1.53,
-        "links": 12,
-        "buttons": 24,
+        "words": 0,
+        "screens": 0,
+        "links": 0,
+        "buttons": 0,
         "inputs": 0,
-        "viewControls": 24,
-        "numbers": 41,
-        "hasPurpose": true,
-        "hasNextStep": true,
-        "jargonUncovered": [
-          "walk-forward",
-          "Sharpe",
-          "IC",
-          "backtest"
-        ],
+        "viewControls": 0,
+        "numbers": 0,
+        "hasPurpose": false,
+        "hasNextStep": false,
+        "jargonUncovered": [],
         "unnamedControls": 0,
         "headingSkips": 0,
         "smallTargets": 0,
@@ -1544,28 +1539,28 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 8.333333333333334,
-        "friendliness": 7.5,
-        "helpfulness": 10,
-        "interactivity": 10,
-        "guidance": 10,
+        "clarity": 6.666666666666667,
+        "friendliness": 5,
+        "helpfulness": 3.3333333333333335,
+        "interactivity": 0,
+        "guidance": 0,
         "accessibility": 8.333333333333334,
         "layout": 10,
         "feedback": 10,
-        "personalization": 0
+        "personalization": null
       },
-      "overall": 87.58333333333333
+      "overall": 49.298245614035096
     },
     {
       "measurement": {
         "title": "Lab — SignalDeck",
-        "words": 790,
-        "screens": 4.94,
-        "links": 57,
-        "buttons": 49,
-        "inputs": 2,
-        "viewControls": 2,
-        "numbers": 153,
+        "words": 247,
+        "screens": 1.84,
+        "links": 10,
+        "buttons": 2,
+        "inputs": 1,
+        "viewControls": 1,
+        "numbers": 12,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
@@ -1574,10 +1569,10 @@
         ],
         "unnamedControls": 0,
         "headingSkips": 0,
-        "smallTargets": 51,
+        "smallTargets": 3,
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
-        "liveRegions": 0,
+        "liveRegions": 1,
         "hasEmptyState": true,
         "hasLoading": true,
         "hasError": true,
@@ -1586,22 +1581,22 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 7.984848484848484,
+        "clarity": 9.166666666666666,
         "friendliness": 8.75,
         "helpfulness": 10,
-        "interactivity": 8.333333333333332,
+        "interactivity": 6.666666666666666,
         "guidance": 10,
-        "accessibility": 6.666666666666667,
-        "layout": 7.143636363636364,
+        "accessibility": 9.583333333333334,
+        "layout": 10,
         "feedback": 10,
-        "personalization": 0
+        "personalization": null
       },
-      "overall": 82.32924242424244
+      "overall": 92.67543859649122
     },
     {
       "measurement": {
         "title": "Honesty",
-        "words": 285,
+        "words": 299,
         "screens": 1.78,
         "links": 11,
         "buttons": 5,
@@ -1660,9 +1655,9 @@
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
         "liveRegions": 1,
-        "hasEmptyState": false,
+        "hasEmptyState": true,
         "hasLoading": true,
-        "hasError": false,
+        "hasError": true,
         "personalized": false,
         "route": "/lab/research",
         "advanced": true
@@ -1670,34 +1665,29 @@
       "scores": {
         "clarity": 9.583333333333334,
         "friendliness": 9.375,
-        "helpfulness": 6.666666666666667,
+        "helpfulness": 10,
         "interactivity": 5,
         "guidance": 10,
         "accessibility": 10,
         "layout": 10,
-        "feedback": 3.3333333333333335,
+        "feedback": 10,
         "personalization": null
       },
-      "overall": 82.5219298245614
+      "overall": 92.69736842105262
     },
     {
       "measurement": {
         "title": "Lab — SignalDeck",
-        "words": 680,
-        "screens": 3.67,
-        "links": 12,
-        "buttons": 1,
+        "words": 0,
+        "screens": 0,
+        "links": 0,
+        "buttons": 0,
         "inputs": 0,
         "viewControls": 0,
-        "numbers": 143,
-        "hasPurpose": true,
-        "hasNextStep": true,
-        "jargonUncovered": [
-          "Bonferroni",
-          "IC",
-          "hit rate",
-          "survivorship"
-        ],
+        "numbers": 0,
+        "hasPurpose": false,
+        "hasNextStep": false,
+        "jargonUncovered": [],
         "unnamedControls": 0,
         "headingSkips": 0,
         "smallTargets": 0,
@@ -1707,42 +1697,42 @@
         "hasEmptyState": false,
         "hasLoading": true,
         "hasError": true,
-        "personalized": true,
+        "personalized": false,
         "route": "/lab/sentiment",
         "advanced": true
       },
       "scores": {
-        "clarity": 7.484848484848484,
-        "friendliness": 7.5,
-        "helpfulness": 6.666666666666667,
-        "interactivity": 5,
-        "guidance": 10,
+        "clarity": 6.666666666666667,
+        "friendliness": 5,
+        "helpfulness": 0,
+        "interactivity": 0,
+        "guidance": 0,
         "accessibility": 8.333333333333334,
-        "layout": 8.85439393939394,
+        "layout": 10,
         "feedback": 6.666666666666667,
-        "personalization": 10
+        "personalization": null
       },
-      "overall": 77.33166666666666
+      "overall": 41.578947368421055
     },
     {
       "measurement": {
         "title": "Insights",
-        "words": 1084,
-        "screens": 4.43,
-        "links": 16,
-        "buttons": 7,
+        "words": 120,
+        "screens": 1.11,
+        "links": 12,
+        "buttons": 3,
         "inputs": 0,
-        "viewControls": 11,
-        "numbers": 134,
+        "viewControls": 3,
+        "numbers": 0,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [],
         "unnamedControls": 0,
         "headingSkips": 0,
-        "smallTargets": 4,
+        "smallTargets": 0,
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
-        "liveRegions": 0,
+        "liveRegions": 1,
         "hasEmptyState": true,
         "hasLoading": true,
         "hasError": true,
@@ -1751,28 +1741,28 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 7.927272727272727,
+        "clarity": 10,
         "friendliness": 10,
         "helpfulness": 10,
         "interactivity": 10,
         "guidance": 10,
-        "accessibility": 7.777777777777778,
-        "layout": 7.624393939393939,
+        "accessibility": 10,
+        "layout": 10,
         "feedback": 10,
-        "personalization": 10
+        "personalization": null
       },
-      "overall": 92.29308080808082
+      "overall": 100
     },
     {
       "measurement": {
         "title": "Live",
-        "words": 763,
-        "screens": 4.65,
+        "words": 901,
+        "screens": 5.88,
         "links": 10,
         "buttons": 2,
         "inputs": 0,
         "viewControls": 0,
-        "numbers": 207,
+        "numbers": 244,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [],
@@ -1790,28 +1780,28 @@
         "advanced": true
       },
       "scores": {
-        "clarity": 8.9,
+        "clarity": 8.481818181818182,
         "friendliness": 10,
         "helpfulness": 6.666666666666667,
         "interactivity": 5,
         "guidance": 10,
         "accessibility": 8.055555555555555,
-        "layout": 7.6909090909090905,
+        "layout": 6.481969696969697,
         "feedback": 6.666666666666667,
         "personalization": 0
       },
-      "overall": 76.26313131313131
+      "overall": 74.42691919191918
     },
     {
       "measurement": {
         "title": "Dashboard — SignalDeck",
-        "words": 217,
-        "screens": 1.34,
+        "words": 180,
+        "screens": 1.26,
         "links": 3,
         "buttons": 3,
         "inputs": 0,
         "viewControls": 3,
-        "numbers": 22,
+        "numbers": 17,
         "hasPurpose": true,
         "hasNextStep": true,
         "jargonUncovered": [
@@ -1822,7 +1812,7 @@
         "smallTargets": 6,
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
-        "liveRegions": 0,
+        "liveRegions": 1,
         "hasEmptyState": false,
         "hasLoading": true,
         "hasError": true,
@@ -1836,56 +1826,53 @@
         "helpfulness": 6.666666666666667,
         "interactivity": 10,
         "guidance": 10,
-        "accessibility": 7.5,
+        "accessibility": 9.166666666666666,
         "layout": 10,
         "feedback": 6.666666666666667,
-        "personalization": 0
+        "personalization": null
       },
-      "overall": 84
+      "overall": 90.17543859649125
     },
     {
       "measurement": {
         "title": "Dashboard — SignalDeck",
-        "words": 1036,
-        "screens": 6.33,
-        "links": 2,
+        "words": 203,
+        "screens": 1,
+        "links": 0,
         "buttons": 0,
         "inputs": 0,
         "viewControls": 0,
-        "numbers": 238,
+        "numbers": 104,
         "hasPurpose": true,
-        "hasNextStep": true,
+        "hasNextStep": false,
         "jargonUncovered": [
-          "IC",
-          "calibration",
-          "backtest",
-          "survivorship"
+          "IC"
         ],
         "unnamedControls": 0,
         "headingSkips": 0,
-        "smallTargets": 2,
+        "smallTargets": 0,
         "mouseOnlyControls": 0,
         "imagesNoAlt": 0,
         "liveRegions": 0,
-        "hasEmptyState": true,
+        "hasEmptyState": false,
         "hasLoading": false,
-        "hasError": true,
+        "hasError": false,
         "personalized": false,
         "route": "/accuracy",
         "advanced": false
       },
       "scores": {
-        "clarity": 6.406060606060606,
-        "friendliness": 6.113333333333333,
-        "helpfulness": 7.777777777777778,
-        "interactivity": 1.6666666666666665,
-        "guidance": 10,
-        "accessibility": 8.055555555555555,
-        "layout": 5.995606060606061,
-        "feedback": 6.666666666666667,
+        "clarity": 9.583333333333334,
+        "friendliness": 9.583333333333334,
+        "helpfulness": 0,
+        "interactivity": 0,
+        "guidance": 5,
+        "accessibility": 8.333333333333334,
+        "layout": 10,
+        "feedback": 0,
         "personalization": 0
       },
-      "overall": 63.77425252525253
+      "overall": 52.16666666666667
     },
     {
       "measurement": {
@@ -1932,5 +1919,5 @@
   "signalCoverage": 0,
   "pagesCrawled": 42,
   "pagesFailed": 0,
-  "generatedAt": "2026-08-08T03:49:18.332Z"
+  "generatedAt": "2026-08-17T06:50:42.468Z"
 }

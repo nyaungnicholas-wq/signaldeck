@@ -31,6 +31,8 @@ import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   api,
+  ApiError,
+  LICENCE_REFUSAL_TEXT,
   candlePatterns,
   chartOverlays,
   pollMs,
@@ -116,11 +118,16 @@ export default function SymbolPage({
   // Bars are keyed by "symbol|tf" so switching timeframes shows a loading
   // state without a synchronous setState inside the effect.
   const [barsState, setBarsState] = useState<{ key: string; list: Bar[] } | null>(null);
-  const [barsErrState, setBarsErrState] = useState<{ key: string; msg: string } | null>(null);
+  // status is carried alongside the message: a 451 is the licence guard
+  // REFUSING to redistribute raw bars (the daemon is healthy and every derived
+  // analytic on this page still works), which must not be reported as an
+  // outage. See ApiError in lib/api.ts.
+  const [barsErrState, setBarsErrState] = useState<{ key: string; msg: string; status: number } | null>(null);
   const [horizon, setHorizon] = useState<Horizon>("1d");
   const barsKey = `${symbol}|${market}|${tf}`;
   const bars = barsState && barsState.key === barsKey ? barsState.list : null;
   const barsErr = barsErrState && barsErrState.key === barsKey ? barsErrState.msg : null;
+  const barsRefusedByLicence = barsErrState?.key === barsKey && barsErrState.status === 451;
 
   // Stage 7: chart overlays (score extremes, regime changes, breakouts). Toggled
   // on by default; keyed by symbol so switching symbols refetches.
@@ -287,7 +294,11 @@ export default function SymbolPage({
         })
         .catch((e: unknown) => {
           if (!alive) return;
-          setBarsErrState({ key, msg: e instanceof Error ? e.message : String(e) });
+          setBarsErrState({
+            key,
+            msg: e instanceof Error ? e.message : String(e),
+            status: e instanceof ApiError ? e.status : 0,
+          });
         });
     load();
     const stop = pollMs(load, POLL_DEFAULT);
@@ -642,9 +653,22 @@ export default function SymbolPage({
           </span>
         </div>
         <div className="p-2">
-          {barsErr ? (
-            <div className="flex h-[420px] items-center justify-center text-[0.75rem]" style={{ color: "var(--bad)" }}>
-              {barsErr} — is the daemon running?
+          {barsRefusedByLicence ? (
+            <div
+              className="flex h-[420px] flex-col items-center justify-center gap-2 px-6 text-center text-[0.75rem]"
+              style={{ color: "var(--dim)" }}
+            >
+              <span style={{ color: "var(--text)" }}>Price chart unavailable on this deployment</span>
+              <span className="max-w-[46ch] leading-relaxed">{LICENCE_REFUSAL_TEXT}</span>
+            </div>
+          ) : barsErr ? (
+            <div className="flex h-[420px] flex-col items-center justify-center gap-2 px-6 text-center text-[0.75rem]" style={{ color: "var(--bad)" }}>
+              <span>{barsErr}</span>
+              {/* Only a 5xx or a network failure is evidence the daemon is down. A 4xx means
+                  it answered and declined, so the outage question would mislead. */}
+              {(barsErrState?.status ?? 0) >= 500 || barsErrState?.status === 0 ? (
+                <span style={{ color: "var(--dim)" }}>is the daemon running?</span>
+              ) : null}
             </div>
           ) : bars === null ? (
             <div className="flex h-[420px] items-center justify-center text-[0.75rem]" style={{ color: "var(--faint)" }}>

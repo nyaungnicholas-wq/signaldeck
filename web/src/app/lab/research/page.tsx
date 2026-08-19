@@ -147,24 +147,24 @@ export default function ResearchPage() {
 
   if (err && !ledger) {
     return (
-      <main className="page-enter space-y-4" style={{ padding: 16 }}>
+      <div className="page-enter space-y-4" style={{ padding: 16 }}>
         <PageHero
           title="Research Ledger"
           subtitle="The engine's beliefs about its own discoveries: every hypothesis carries a fixed prior, an auditable evidence chain (historical era grades, live replications, self-attacks), and a Bayesian posterior."
         />
         <ErrorState message={err} retry={() => setRetryTick((t) => t + 1)} />
-      </main>
+      </div>
     );
   }
   if (!ledger) {
     return (
-      <main className="page-enter space-y-4" style={{ padding: 16 }}>
+      <div className="page-enter space-y-4" style={{ padding: 16 }}>
         <PageHero
           title="Research Ledger"
           subtitle="The engine's beliefs about its own discoveries: every hypothesis carries a fixed prior, an auditable evidence chain (historical era grades, live replications, self-attacks), and a Bayesian posterior."
         />
         <Skeleton lines={10} />
-      </main>
+      </div>
     );
   }
 
@@ -186,7 +186,7 @@ export default function ResearchPage() {
   const weeks = ledger.weeks;
 
   return (
-    <main className="page-enter space-y-4" style={{ padding: 16 }}>
+    <div className="page-enter space-y-4" style={{ padding: 16 }}>
       <PageHero
         title="Research Ledger"
         subtitle="The engine's beliefs about its own discoveries: every hypothesis carries a fixed prior, an auditable evidence chain (historical era grades, live replications, self-attacks), and a Bayesian posterior."
@@ -395,7 +395,7 @@ export default function ResearchPage() {
       <p className="text-[0.75rem] text-[color:var(--faint)]" style={{ whiteSpace: "pre-wrap" }}>
         {ledger.discipline}
       </p>
-    </main>
+    </div>
   );
 }
 

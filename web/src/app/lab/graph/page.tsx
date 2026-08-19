@@ -191,7 +191,7 @@ export default function GraphPage() {
               )}
             </div>
 
-            <div className="mx-auto max-w-[720px] px-3 py-4">
+            <div className="mx-auto w-full max-w-[720px] px-3 py-4">
               <RippleGraph center={center} edges={edges} />
             </div>
 

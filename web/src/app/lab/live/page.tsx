@@ -7,6 +7,11 @@ import PipelineStatus from "@/components/live/PipelineStatus";
 import TvFeedPanel from "@/components/live/TvFeedPanel";
 import SystemHealth from "@/components/live/SystemHealth";
 import { PageHero, StatTile, Reveal } from "@/components/ui/Kit";
+// status.lastAt and signal.ts are unix SECONDS. TvFeedPanel on this same page
+// already renders them correctly via ago()/fmtTs(); these tiles used a bare
+// new Date() and read them as milliseconds, so the tile said "Jan 1970" while
+// the table directly below it said "2m ago".
+import { fmtTs, fmtDate } from "@/lib/format";
 
 export default function LivePage() {
   const { status, signals, workers, health, stats, error, loading, refresh } = useLive();
@@ -45,7 +50,7 @@ export default function LivePage() {
             <StatTile
               label="Daemon"
               value={status?.secretConfigured ? "ONLINE" : "OFFLINE"}
-              sub={status?.lastAt ? new Date(status.lastAt).toLocaleString() : undefined}
+              sub={status?.lastAt ? fmtTs(status.lastAt) : undefined}
               glow={status?.secretConfigured ? "hud" : undefined}
               i={0}
             />
@@ -63,8 +68,8 @@ export default function LivePage() {
             />
             <StatTile
               label="Last Signal"
-              value={lastSignal ? new Date(lastSignal).toLocaleTimeString() : "N/A"}
-              sub={lastSignal ? new Date(lastSignal).toLocaleDateString() : undefined}
+              value={lastSignal ? fmtTs(lastSignal) : "N/A"}
+              sub={lastSignal ? fmtDate(lastSignal) : undefined}
               i={3}
             />
           </Reveal>

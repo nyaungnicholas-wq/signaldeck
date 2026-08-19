@@ -16,7 +16,6 @@ import EmptyState from "@/components/EmptyState";
 import { useIntelSymbol } from "@/components/intel/IntelShared";
 import SortHeader from "@/components/SortHeader";
 import {
-  Reveal,
   StatTile,
   PageHero,
   MiniBar,
@@ -334,7 +333,12 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
             </tr>
           </thead>
           <tbody>
-            <Reveal>
+            {/* No <Reveal> here. Its wrapper is a <div>, and a <div> is not a
+                legal child of <tbody> (nor is <tr> a legal child of a <div>) —
+                React reported a hydration error and the browser hoists the div
+                out of the table. Each <tr> already carries `reveal-item`, whose
+                CSS keyframes stagger the rows on their own, so the wrapper was
+                buying nothing here anyway. */}
               {rows.map((r, i) => (
                 <tr
                   key={`${r.market}:${r.symbol}`}
@@ -372,7 +376,6 @@ function Leaderboard({ onPick }: { onPick: (symbol: string) => void }) {
                   <td className="tnum" style={{ color: "var(--faint)" }}>{ago(r.ts)}</td>
                 </tr>
               ))}
-            </Reveal>
           </tbody>
         </table>
       </div>

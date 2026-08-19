@@ -80,8 +80,15 @@ export default function MacroCombinedPage() {
 
   const riskScore = macro ? (macro.breadthPct + (100 - macro.volPct)) / 2 : 50;
 
+  // w-full is load-bearing next to mx-auto. The root below is a direct child of
+  // the shell's flex-column <main>, and an auto margin on a flex item's cross
+  // axis DISABLES stretch — the item falls back to fit-content, so it sized
+  // itself to its widest content (402px) inside a 351px column and gave the
+  // page horizontal scroll at 375px. min-width:0 cannot help; the item was
+  // never being stretched in the first place. w-full restores the intended
+  // width and leaves mx-auto to do nothing but centre under max-w-5xl.
   return (
-    <main className="page-enter mx-auto max-w-5xl space-y-4 px-4 py-6">
+    <div className="page-enter mx-auto w-full max-w-5xl space-y-4 px-4 py-6">
       <PageHero title="Macro" subtitle="The backdrop every trade lives in — rates, dollar, volatility and risk appetite at a glance." />
 
       {err && !macro ? <ErrorState message={err} /> : null}
@@ -231,6 +238,6 @@ export default function MacroCombinedPage() {
           <EarningsEstCard />
         </Reveal>
       )}
-    </main>
+    </div>
   );
 }

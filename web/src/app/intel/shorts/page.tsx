@@ -124,13 +124,18 @@ export default function ShortsPage() {
     }
     if (extremes?.extremes?.length) {
       const e = extremes.extremes;
+      // `e` is shortsExtremes(20) — the 20 HIGHEST short-ratio symbols, not the
+      // market. Summing them and calling it "Total Short Vol" is the recurring
+      // partial-sum-labelled-total defect; the mean over the 20 most extreme
+      // rows is likewise biased far above the market average. Both are labelled
+      // for the subset they actually cover.
       const avgRatio = e.reduce((acc, x) => acc + (x.shortPct ?? 0), 0) / e.length;
       const totalShort = e.reduce((acc, x) => acc + (x.shortVol ?? 0), 0);
       return [
         { label: "Symbols", value: e.length },
-        { label: "Avg Ratio", value: avgRatio * 100, decimals: 1, suffix: "%" },
+        { label: `Avg Ratio (top ${e.length})`, value: avgRatio * 100, decimals: 1, suffix: "%" },
         { label: "Highest Ratio", value: (e[0]?.shortPct ?? 0) * 100, decimals: 1, suffix: "%", glow: "accent" as const },
-        { label: "Total Short Vol", value: totalShort, decimals: 0, sub: fmtVol(totalShort) },
+        { label: `Short Vol (top ${e.length})`, value: totalShort, decimals: 0, sub: fmtVol(totalShort) },
       ];
     }
     return [];

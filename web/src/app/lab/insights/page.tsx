@@ -266,8 +266,10 @@ export default function InsightsPage() {
 
       {insights !== null && sorted.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-3">
+          {/* stats.total is sorted.length, i.e. the FEED_LIMIT=100 window —
+              a page size, not the number stored. */}
           <StatTile
-            label="Total Insights"
+            label="Insights Shown"
             value={stats.total}
             i={0}
           />
@@ -279,7 +281,7 @@ export default function InsightsPage() {
           <StatTile
             label="Unlabeled"
             value={stats.unlabeled}
-            sub={stats.unlabeled > 0 ? `${Math.round((stats.unlabeled / stats.total) * 100)}% of total` : undefined}
+            sub={stats.unlabeled > 0 ? `${Math.round((stats.unlabeled / stats.total) * 100)}% of shown` : undefined}
             i={2}
           />
         </div>

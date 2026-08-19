@@ -117,7 +117,9 @@ export default function CongressPage() {
 
       <Reveal>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <StatTile label="Total Disclosures" value={list.length} glow="hud" i={0} />
+          {/* page size, not a universe count: the fetch caps at 200 and the
+              response carries no total, so this can never exceed 200. */}
+          <StatTile label="Disclosures Shown" value={list.length} glow="hud" i={0} />
           <StatTile label="Purchases" value={purchases} glow="up" i={1} />
           <StatTile label="Sales" value={sales} glow="down" i={2} />
           <StatTile label="Newest Disclosure" value={latestDisclosed > 0 ? fmtDate(latestDisclosed) : "—"} i={3} />

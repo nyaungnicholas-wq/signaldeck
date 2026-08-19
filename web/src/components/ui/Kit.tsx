@@ -1,6 +1,25 @@
 ﻿"use client";
 import { useEffect, useRef, useState, useId, useMemo } from "react";
 
+// Reveal fades its children in when they first scroll into view.
+//
+// TWO RULES HERE ARE LOAD-BEARING, and breaking either one hid real content:
+//
+//  1. children render ALWAYS, never `{visible && children}`. Gating the render
+//     on visibility made the wrapper zero-height until it revealed — and a
+//     zero-AREA target can never report an intersectionRatio above 0, so with
+//     the old `threshold: 0.08` the observer never fired, the box never gained
+//     height, and the panel stayed blank FOREVER. Measured on
+//     /signals/report/stocks/CEG: four panels (incl. "Why this signal fired")
+//     were still height:0/opacity:0 after scrolling to the end of the page.
+//     Always-rendering also puts the content in the server HTML, so Ctrl+F,
+//     screen readers and no-JS clients can reach it.
+//  2. threshold stays 0. Any intersection at all is the trigger; nothing here
+//     needs a fraction of the box on screen, and a fraction is exactly what a
+//     short row cannot supply.
+//
+// prefers-reduced-motion starts visible: the fade is decoration, and a reader
+// who asked for less motion should not have to wait on an animation to read.
 export function Reveal({ children, className }: { children: React.ReactNode; className?: string }) {
   const [visible, setVisible] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -8,13 +27,14 @@ export function Reveal({ children, className }: { children: React.ReactNode; cla
   useEffect(() => {
     if (visible) return;
     const el = ref.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return setVisible(true);
-    const obs = new IntersectionObserver(([e]) => { if (e.isIntersecting) { setVisible(true); obs.disconnect(); } }, { threshold: 0.08 });
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    if (!el || typeof IntersectionObserver === 'undefined' || reducedMotion) return setVisible(true);
+    const obs = new IntersectionObserver(([e]) => { if (e.isIntersecting) { setVisible(true); obs.disconnect(); } }, { threshold: 0 });
     obs.observe(el);
     return () => obs.disconnect();
   }, [visible]);
 
-  return <div ref={ref} className={className} style={{ opacity: visible ? 1 : 0, transition: 'opacity 0.3s' }}>{visible && children}</div>;
+  return <div ref={ref} className={className} style={{ opacity: visible ? 1 : 0, transition: 'opacity 0.3s' }}>{children}</div>;
 }
 
 export function AnimatedNumber({ value, decimals = 0, prefix = "", suffix = "", className }: { value: number; decimals?: number; prefix?: string; suffix?: string; className?: string }) {
@@ -160,7 +180,14 @@ export function PageHero({ title, subtitle, right, live }: { title: string; subt
             audit counts it instead of only counting <PagePurpose>. */}
         {subtitle && <p data-purpose="hero" className="mt-1 text-sm max-w-3xl" style={{ color: 'var(--dim)' }}>{subtitle}</p>}
       </div>
-      {right && <div className="flex-shrink-0">{right}</div>}
+      {/* min-w-0 + shrink, NOT flex-shrink-0. The right slot holds each page's
+          filter bar, and a slot that refuses to shrink cannot fit beside a long
+          title: /intel/companies pushed the DOCUMENT to 1331px in a 1280px
+          viewport (measured 2026-08-14), giving the whole app horizontal scroll
+          on a desktop screen. min-w-0 lets a flex child shrink below its
+          content width so its own flex-wrap can do the wrapping — the page body
+          must never scroll sideways. */}
+      {right && <div className="min-w-0 shrink">{right}</div>}
     </div>
   );
 }

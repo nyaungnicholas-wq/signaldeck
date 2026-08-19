@@ -100,7 +100,12 @@ export default function EarningsEstCard() {
 
       {resp !== null && rows.length > 0 && (
         <>
-          <ul style={{ borderTop: "1px solid var(--border)" }}>
+          {/* list-none + pl-0: this <ul> kept the browser's default list indent,
+              so every full-width row started ~29px in and ran off the right
+              edge — enough to give /market/macro horizontal scroll on a 375px
+              phone (document 414px). The rows are already styled as table-ish
+              lines; the marker and its gutter were never wanted. */}
+          <ul className="list-none pl-0" style={{ borderTop: "1px solid var(--border)" }}>
             {shown.map((r) => (
               <li
                 key={r.symbol}

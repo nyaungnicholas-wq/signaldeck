@@ -17,6 +17,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   api,
   chartOverlays,
+  isLicenceRefusal,
+  LICENCE_REFUSAL_TEXT,
   movers,
   type Bar,
   type ChartOverlayMarker,
@@ -109,7 +111,10 @@ export default function BigCandle({
   // paint under a new header and the loading/error state is DERIVED from the
   // key rather than reset synchronously inside the effect.
   const [barsState, setBarsState] = useState<
-    { key: string; bars: Bar[] } | { key: string; error: string } | null
+    | { key: string; bars: Bar[] }
+    | { key: string; error: string }
+    | { key: string; refused: string }
+    | null
   >(null);
   useEffect(() => {
     let alive = true;
@@ -120,7 +125,11 @@ export default function BigCandle({
         if (alive) setBarsState({ key, bars: b ?? [] });
       })
       .catch((e: unknown) => {
-        if (alive) setBarsState({ key, error: e instanceof Error ? e.message : String(e) });
+        if (!alive) return;
+        // A licence refusal is a permanent property of the deployment, not a
+        // fault: it gets an explanation, never an outage hint or a retry.
+        if (isLicenceRefusal(e)) return setBarsState({ key, refused: LICENCE_REFUSAL_TEXT });
+        setBarsState({ key, error: e instanceof Error ? e.message : String(e) });
       });
     return () => {
       alive = false;
@@ -129,6 +138,7 @@ export default function BigCandle({
   const loaded = barsState && barsState.key === activeKey ? barsState : null;
   const bars = loaded && "bars" in loaded ? loaded.bars : null;
   const barsError = loaded && "error" in loaded ? loaded.error : null;
+  const barsRefused = loaded && "refused" in loaded ? loaded.refused : null;
 
   // Overlay markers — fetched only when signals are ON, also keyed by activeKey.
   // When signals are OFF we simply don't render them (no setState needed).
@@ -213,6 +223,11 @@ export default function BigCandle({
       {loaded === null && (
         <div className="p-3" style={{ height }}>
           <Skeleton lines={6} label={`loading ${active.symbol} bars`} />
+        </div>
+      )}
+      {barsRefused && (
+        <div className="p-3">
+          <EmptyState message="Price chart unavailable on this deployment" detail={barsRefused} />
         </div>
       )}
       {barsError && (
