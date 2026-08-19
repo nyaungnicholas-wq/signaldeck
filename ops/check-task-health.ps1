@@ -28,6 +28,11 @@ $ErrorActionPreference = 'Stop'
 # silently reads as an all-clear on a broken fleet.
 $tasks = @(Get-ScheduledTask | Where-Object { $_.TaskName -match 'SignalDeck' } | Sort-Object TaskName)
 
+# This script runs AS one of the tasks it inspects, so its own LastTaskResult is
+# its own previous verdict. See the SELF-LATCH note below for why that one check
+# is skipped for this task and no other.
+$SelfTaskName = 'SignalDeck Check-Task-Health'
+
 if ($tasks.Count -eq 0) {
     Write-Host "no SignalDeck scheduled tasks found - is this the right machine?" -ForegroundColor Red
     exit 1
@@ -37,6 +42,7 @@ $rows = @()
 $troubled = @()
 $failed = @()
 $stale = @()
+$disabled = @()
 
 # Tasks that are started by something OTHER than their own trigger, and are
 # stopped on purpose. Declared once, used by both the result check and the
@@ -95,7 +101,32 @@ foreach ($task in $tasks) {
         # from one that died. The liveness signal for the web is the PORT, and
         # that is what signaldeck-ctl.sh now asks (sd_port_listening 8323).
         if ($hex -eq '0x00041306' -and $onDemandStoppable -contains $task.TaskName) { $benign += $hex }
-        if ($hex -ne 'N/A' -and $benign -notcontains $hex -and $hex -ne '0xC000013A') {
+        # SELF-LATCH. This script's own task matches the 'SignalDeck' filter on
+        # line 29, so its LastTaskResult is its OWN previous verdict: `exit 1`
+        # below sets 0x00000001, which is not benign, so the next run flags
+        # itself and exits 1 again -- forever, regardless of the fleet. Measured
+        # 2026-08-13: `SignalDeck Check-Task-Health` was the ONLY task at 0x1;
+        # the real fault it first caught (`SignalDeck Web`, 8/12 19:59) had long
+        # since cleared, but the gate stayed red and a permanently-red alarm is
+        # indistinguishable from a real one.
+        #
+        # Judging its own exit code is circular by construction, so skip only
+        # THAT check for itself. The non-circular checks below (missing trigger,
+        # NO NEXT RUN, console-kill signature, port liveness) still cover this
+        # task, so a genuinely dead health checker is still caught.
+        $isSelf = $task.TaskName -eq $SelfTaskName
+        # DISABLED tasks: LastTaskResult is history, not a live verdict. Nothing
+        # will ever run them again, so an old non-zero exit can never clear.
+        # `SignalDeck Eighty Loop` was disabled on purpose (the 80%-accuracy
+        # program is refuted, see the memory note) and its final 0x1 has held
+        # this gate red ever since - the same permanently-red-alarm failure the
+        # SELF-LATCH note above describes. The NO NEXT RUN check below already
+        # exempts Disabled for exactly this reason; this makes the result check
+        # agree with it. Disabled tasks are still listed in the table and named
+        # in their own line below, so one disabled BY ACCIDENT stays visible.
+        $isDisabled = $task.State -eq 'Disabled'
+        if ($isDisabled) { $disabled += "$($task.TaskName) (last result $hex, last ran $($info.LastRunTime))" }
+        if (-not $isSelf -and -not $isDisabled -and $hex -ne 'N/A' -and $benign -notcontains $hex -and $hex -ne '0xC000013A') {
             $failed += "$($task.TaskName) (result $hex)"
         }
 
@@ -172,6 +203,11 @@ if ($failed.Count -gt 0) {
     Write-Host "WARNING - task(s) whose last result was not success:" -ForegroundColor Red
     $failed | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
     $bad = $true
+}
+if ($disabled.Count -gt 0) {
+    Write-Host ""
+    Write-Host "note - disabled task(s), not judged on their last result:" -ForegroundColor Yellow
+    $disabled | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
 }
 if ($stale.Count -gt 0) {
     Write-Host ""

@@ -183,11 +183,10 @@
   },
   "exempt": [
     "DOCS_INDEX.md",
+    "CLAUDE.md",
     "AUDIT_SUPERPROMPT.md",
     "DEEP_REPORT_2026-08-03.md",
     "DEPLOY.md",
-    "EIGHTY_PERCENT_SUPERPROMPT.md",
-    "FIX_EVERYTHING_SUPERPROMPT.md",
     "HANDOFF_2026-08-02.md",
     "HANDOFF_PROMPT.md",
     "HOSTILE_REVIEW_FIX_SUPERPROMPT.md",
