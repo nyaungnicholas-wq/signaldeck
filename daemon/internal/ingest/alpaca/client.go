@@ -29,6 +29,21 @@ const (
 	defaultBasePaper = "https://paper-api.alpaca.markets"
 )
 
+// barAdjustment is the corporate-action adjustment EVERY bar request must use.
+//
+// "split" adjusts price and volume together for splits and leaves dividends
+// alone. Which convention is chosen matters far less than the fact that only ONE
+// is: the bars table holds a single series per symbol, so two ingest paths asking
+// for different modes put two price conventions in one column, and a symbol fed by
+// both gets a discontinuity at the seam that is indistinguishable from a real move.
+//
+// That had happened. tools/alpha/fetch_delisted.py requested adjustment=all (split
+// PLUS dividends) while this client requested split, so anything imported through
+// the delisted staging path followed a different convention from everything
+// backfilled live. Both now request this constant, and TestAdjustmentModesAgree
+// reads the Python file to stop them drifting apart again.
+const barAdjustment = "split"
+
 // pagePause spaces backfill page fetches so a long history pull stays well
 // under the free-tier rate limit (200 req/min). Tests shorten it.
 var pagePause = 300 * time.Millisecond
@@ -215,7 +230,7 @@ func (c *Client) fetchBarsPage(ctx context.Context, symbol, timeframe string, st
 	q.Set("timeframe", timeframe)
 	q.Set("start", start.Format(time.RFC3339))
 	q.Set("limit", "10000")
-	q.Set("adjustment", "split")
+	q.Set("adjustment", barAdjustment)
 	q.Set("feed", c.feed())
 	c.sipEndGuard(q)
 	if pageToken != "" {
@@ -426,7 +441,7 @@ func (c *Client) fetchMultiBarsPage(ctx context.Context, symbols []string, timef
 	q.Set("timeframe", timeframe)
 	q.Set("start", start.Format(time.RFC3339))
 	q.Set("limit", "10000")
-	q.Set("adjustment", "split")
+	q.Set("adjustment", barAdjustment)
 	q.Set("feed", c.feed())
 	c.sipEndGuard(q)
 	if pageToken != "" {

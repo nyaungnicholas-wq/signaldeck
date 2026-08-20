@@ -28,9 +28,15 @@ from datetime import datetime, timezone
 
 ENV = r"C:\Users\Nicholas_N\Desktop\claude code\stock-trader\.env"
 ASSETS = "https://paper-api.alpaca.markets/v2/assets?status=inactive&asset_class=us_equity"
+# adjustment MUST match daemon/internal/ingest/alpaca/client.go's barAdjustment.
+# This requested "all" (split PLUS dividends) while the live backfill requested
+# "split", so every symbol imported through this staging path carried a different
+# price convention from everything else in the bars table -- and a symbol fed by
+# both paths gets a seam that reads like a real move. The Go side has a test
+# (TestAdjustmentModesAgree) that reads THIS file to keep the two in step.
 BARS = ("https://data.alpaca.markets/v2/stocks/{sym}/bars"
         "?timeframe=1Day&start=2020-01-01&end={end}&limit=10000"
-        "&feed=iex&adjustment=all")
+        "&feed=iex&adjustment=split")
 EXCHANGES = {"NASDAQ", "NYSE", "AMEX", "ARCA", "BATS"}
 
 # A symbol still printing bars this recently is a live ticker, not a delisting.

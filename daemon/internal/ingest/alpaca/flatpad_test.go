@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -134,5 +136,39 @@ func TestSyntheticDailyPad(t *testing.T) {
 		if got := syntheticDailyPad(tc.tf, tc.bar); got != tc.want {
 			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// The two ingest paths must request the SAME corporate-action adjustment.
+//
+// The bars table holds one series per symbol, so two paths asking for different
+// modes put two price conventions in one column — and a symbol fed by both gets a
+// seam that reads like a real move. This drifted once already: the Go client asked
+// for split while tools/alpha/fetch_delisted.py asked for all (split PLUS
+// dividends), so everything imported through the delisted staging path followed a
+// different convention from everything backfilled live.
+//
+// Reading a Python file from a Go test is unusual, and deliberate: the two are a
+// pair with no compiler, no import and no type to bind them, so the only thing
+// that can hold them together is an assertion that names both.
+func TestAdjustmentModesAgree(t *testing.T) {
+	const fetcher = "../../../../tools/alpha/fetch_delisted.py"
+	src, err := os.ReadFile(fetcher)
+	if err != nil {
+		t.Fatalf("read %s: %v — if this moved, update the path here rather than "+
+			"deleting the check: it is the only thing keeping the two paths in step", fetcher, err)
+	}
+	want := "adjustment=" + barAdjustment
+	if !strings.Contains(string(src), want) {
+		t.Fatalf("%s does not request %q; the Go client uses barAdjustment=%q and the two "+
+			"must match or the bars table ends up holding two price conventions",
+			fetcher, want, barAdjustment)
+	}
+	// Name the specific wrong value that was there before, so a revert is caught
+	// with a message that explains itself rather than a bare mismatch.
+	if strings.Contains(string(src), "adjustment=all") {
+		t.Fatalf("%s requests adjustment=all again: that is split PLUS dividends, while the "+
+			"live backfill requests %q. Imported bars would follow a different price "+
+			"convention from everything else in the same column", fetcher, barAdjustment)
 	}
 }
