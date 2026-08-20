@@ -200,3 +200,64 @@ func contains(haystack, needle string) bool {
 		return false
 	})()
 }
+
+// An exit must free its SLOT in the same pass, not just its cash.
+//
+// riskBook is measured once, before Phase 1 runs, from the stored positions.
+// Phase 1 sells into apply.CloseSymbolIDs and used to refresh only book.Cash, so
+// the sold name kept its slot in book.OpenPositions while Phase 2 judged entries.
+// At a binding cap that refuses every candidate in the pass and ledgers it
+// risk-gate-refused — with the book in fact flat. buildStep runs once per new
+// daily bar, so the cost is a full trading day.
+//
+// Cap the book at ONE name, fill it, then in the next pass flip that name flat
+// (it exits) while a second name screams long. The second name must get in.
+func TestRiskGateFreesTheSlotAnExitJustVacated(t *testing.T) {
+	t.Setenv("SIGNALDECK_RISK_MAX_POSITIONS", "1")
+
+	st := openStore(t)
+	ctx := context.Background()
+	aaa, err := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
+	if err != nil {
+		t.Fatalf("upsert AAA: %v", err)
+	}
+	bbb, err := st.UpsertSymbol(ctx, "BBB", md.Stocks, "")
+	if err != nil {
+		t.Fatalf("upsert BBB: %v", err)
+	}
+
+	early := [][3]float64{{1, 100, 100}, {2, 100, 100}, {3, 100, 100}}
+	seedDailyPx(t, st, aaa.ID, early)
+	seedDailyPx(t, st, bbb.ID, early)
+
+	// Pass 1 — only AAA is long. It fills at day 3 and takes the single slot.
+	seedPrediction(t, st, aaa.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, aaa.ID, md.H1d, 2*86400)
+
+	w := &PaperTrader{St: st}
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if _, held, _ := st.PaperPosition(ctx, "flagship-1d", aaa.ID); !held {
+		t.Fatal("fixture broken: AAA should hold the only slot after pass 1")
+	}
+
+	// Pass 2 — AAA flips flat (so it exits) and BBB screams long, on day 4.
+	seedDailyPx(t, st, aaa.ID, [][3]float64{{4, 100, 100}})
+	seedDailyPx(t, st, bbb.ID, [][3]float64{{4, 100, 100}})
+	seedPrediction(t, st, aaa.ID, md.H1d, 3*86400, 0.05)
+	seedPrediction(t, st, bbb.ID, md.H1d, 3*86400, 0.90)
+	seedGoodForecast(t, st, bbb.ID, md.H1d, 3*86400)
+
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+
+	if _, stillHeld, _ := st.PaperPosition(ctx, "flagship-1d", aaa.ID); stillHeld {
+		t.Fatal("fixture broken: AAA should have exited on the flip in pass 2")
+	}
+	if _, got, _ := st.PaperPosition(ctx, "flagship-1d", bbb.ID); !got {
+		t.Fatal("BBB was refused the slot AAA vacated in the same pass: " +
+			"the exit freed cash but not headroom (book.OpenPositions never decremented)")
+	}
+}

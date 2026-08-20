@@ -77,18 +77,42 @@ export default function ProofStrip() {
               </span>
             </>
           ) : (
-            <>
-              <span className="text-[0.75rem] font-semibold" style={{ color: "var(--ok)" }}>
-                measured: right{" "}
-                <span className="tnum">
-                  {tr.winRate != null ? `${(tr.winRate * 100).toFixed(1)}%` : "—"}
-                </span>{" "}
-                of the time
-              </span>
-              <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                over {tr.independentN.toLocaleString("en-US")} independent (symbol, UTC-day) resolutions · 1d horizon
-              </span>
-            </>
+            (() => {
+              const beats = tr.winRate != null && tr.naiveBaseline != null && tr.winRate > tr.naiveBaseline;
+              const winRateDisplay = tr.winRate != null ? `${(tr.winRate * 100).toFixed(1)}%` : "—";
+              const naiveBaselineDisplay = tr.naiveBaseline != null ? `${(tr.naiveBaseline * 100).toFixed(1)}%` : null;
+              const edgeDisplay = tr.edgeVsNaive != null ? `${tr.edgeVsNaive >= 0 ? "+" : ""}${(tr.edgeVsNaive * 100).toFixed(1)}pp` : null;
+              const hasPositiveEdge = tr.edgeVsNaive != null && tr.edgeVsNaive > 0;
+              return (
+                <>
+                  <span className="text-[0.75rem] font-semibold" style={{ color: beats ? "var(--ok)" : "var(--warn)" }}>
+                    measured: right{" "}
+                    <span className="tnum">
+                      {winRateDisplay}
+                    </span>{" "}
+                    of the time
+                  </span>
+                  {tr.naiveBaseline != null && (
+                    <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                      {" "}
+                      vs {naiveBaselineDisplay} for always guessing up
+                      {tr.edgeVsNaive != null && (
+                        <>
+                          {" "}
+                          <span className="tnum">
+                            {edgeDisplay}
+                          </span>
+                          {!hasPositiveEdge ? " — does not beat the naive guess" : ""}
+                        </>
+                      )}
+                    </span>
+                  )}
+                  <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                    over {tr.independentN.toLocaleString("en-US")} independent (symbol, trading day) resolutions · 1d horizon
+                  </span>
+                </>
+              );
+            })()
           )}
         </div>
 

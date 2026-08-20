@@ -244,3 +244,59 @@ func TestSummarize_MaxDrawdown(t *testing.T) {
 		t.Fatalf("maxDD=%v want 0.25", s.MaxDrawdown)
 	}
 }
+
+// marksPerYear must never claim a curve that marks MORE often than daily fits
+// FEWER marks in a year than a daily one.
+//
+// The live book stamps two marks per calendar day, so its gaps alternate ~4h and
+// ~20h and the median lands at 72,000s — between the 6.5h session length and a
+// full day. The old session extrapolation, (23400/med)*252, returned 81.9 for
+// that median against an actual ~504, understating the annualization factor 6.6x
+// and pulling every published Sharpe and Sortino toward zero.
+func TestMarksPerYear_TwiceDailyCurveBeatsDaily(t *testing.T) {
+	// 30 days, two marks a day: 04:00 and 00:00 the next day -> gaps 14400/72000.
+	var twice []EquityPoint
+	for d := int64(1); d <= 30; d++ {
+		twice = append(twice,
+			EquityPoint{Ts: d*86400 + 4*3600, Equity: 100},
+			EquityPoint{Ts: d*86400 + 18*3600, Equity: 100},
+		)
+	}
+	got := marksPerYear(twice)
+	if got < 252 {
+		t.Fatalf("twice-daily curve annualized at %.1f marks/year — fewer than a DAILY curve's 252", got)
+	}
+	if want := 504.0; math.Abs(got-want) > 1 {
+		t.Fatalf("twice-daily curve: got %.1f marks/year, want ~%.0f", got, want)
+	}
+
+	// A plain daily curve must still be exactly 252.
+	var daily []EquityPoint
+	for d := int64(1); d <= 30; d++ {
+		daily = append(daily, EquityPoint{Ts: d * 86400, Equity: 100})
+	}
+	if got := marksPerYear(daily); math.Abs(got-252) > 0.001 {
+		t.Fatalf("daily curve: got %.3f marks/year, want 252", got)
+	}
+
+	// Sparser than daily must still scale down: every third day -> 84.
+	var sparse []EquityPoint
+	for d := int64(1); d <= 30; d++ {
+		sparse = append(sparse, EquityPoint{Ts: d * 3 * 86400, Equity: 100})
+	}
+	if got := marksPerYear(sparse); math.Abs(got-84) > 0.001 {
+		t.Fatalf("every-third-day curve: got %.3f marks/year, want 84", got)
+	}
+
+	// Genuinely intraday marks keep the answer the session formula gave:
+	// 5-minute marks over a 6.5h session = 78 a day = 19,656 a year.
+	var intraday []EquityPoint
+	for d := int64(1); d <= 5; d++ {
+		for i := int64(0); i < 78; i++ {
+			intraday = append(intraday, EquityPoint{Ts: d*86400 + 14*3600 + i*300, Equity: 100})
+		}
+	}
+	if got := marksPerYear(intraday); math.Abs(got-19656) > 1 {
+		t.Fatalf("5-minute intraday curve: got %.1f marks/year, want 19656", got)
+	}
+}

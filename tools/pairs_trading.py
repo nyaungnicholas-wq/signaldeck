@@ -61,11 +61,19 @@ Reproducibility — this study is PINNED to a snapshot
 The exact universe the published result was computed from (dates, closes,
 dollar volumes, symbols, SIC sectors) is frozen at repro/pairs_universe_v1.npz
 and content-hashed with SNAPSHOT_SHA256 below. When that file exists it is the
-default data source, so a stranger with the repo but WITHOUT data/signaldeck.db
-reruns the identical study. The hash is over the canonical array bytes, not the
+default data source. The hash is over the canonical array bytes, not the
 container file, so re-zipping cannot silently change what "the same data" means.
-The live DB keeps growing; the snapshot is the citable dataset. See
-PAIRS_TRADING.md for the writeup that carries this hash.
+The live DB keeps growing; the snapshot is the citable dataset.
+
+The snapshot is a LOCAL pin, not a redistributable artifact. The raw bar matrix
+is license-classified (audit finding A10) and repro/.gitignore refuses `*.npz`
+outright, so it has never been committed and a fresh clone does not have it --
+this docstring previously claimed "a stranger with the repo but WITHOUT
+data/signaldeck.db reruns the identical study", and that stranger could in fact
+reproduce nothing. SNAPSHOT_SHA256 below is the only place the digest lives;
+PAIRS_TRADING.md does not carry it. For the redistribution-safe procedure --
+load your own licensed bars, match them against the per-series hashes in
+repro/pairs_inputs.csv, then rerun -- see REPRODUCE.md, section "Pairs study".
 
 Usage:
     python3 tools/pairs_trading.py                    # full run, default costs
@@ -885,7 +893,8 @@ def main():
         print(f"  {close.shape[1]} symbols, {close.shape[0]} sessions, "
               f"{os.path.getsize(args.snapshot) / 1e6:.1f} MB")
         print(f"  content sha256 = {digest}")
-        print("Pin this hash as SNAPSHOT_SHA256 in this file and in PAIRS_TRADING.md.")
+        print("Pin this hash as SNAPSHOT_SHA256 in this file.")
+        print("Do NOT commit the .npz: it is license-classified and repro/.gitignore refuses it.")
         return
 
     if not args.from_db and os.path.exists(args.snapshot):

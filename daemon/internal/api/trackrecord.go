@@ -30,7 +30,7 @@ import (
 //   - No lookahead: prob is frozen at prediction time; only resolved rows count.
 //   - Independent-N: the minute-cadence pipeline can write MANY predictions per
 //     symbol per forward period that all resolve against the SAME move. We
-//     collapse to ONE observation per (symbol, UTC-day) keeping the LATEST
+//     collapse to ONE observation per (symbol, trading day) keeping the LATEST
 //     prediction that day before computing ANY skill number, so a handful of
 //     independent bets can't masquerade as thousands.
 //   - Cluster-robust intervals: deduplicating to one row per symbol-day removes
@@ -54,7 +54,7 @@ import (
 // day-count is the binding measure of time-series evidence.
 const trackMinDistinctDays = 10
 
-// trackMinIndependentN is the floor of independent (symbol, UTC-day) resolutions
+// trackMinIndependentN is the floor of independent (symbol, trading day) resolutions
 // below which a winrate/Brier/IC is noise, so we report no number and a plain
 // "not yet significant" note instead of a figure that overstates skill.
 const trackMinIndependentN = 30
@@ -130,7 +130,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	}
 	rawN := len(rows)
 
-	// Collapse to ONE independent observation per (symbol, UTC-day), keeping the
+	// Collapse to ONE independent observation per (symbol, trading day), keeping the
 	// LATEST prediction that day (rows are ts DESC, so the first seen per key is
 	// the latest). No skill number is computed on the raw, pseudo-replicated set.
 	seen := map[[2]int64]bool{}
@@ -643,7 +643,7 @@ func (d Deps) registerTrackRecord(mux *http.ServeMux) {
 //
 // The independent-N gate used to be a dead-feeling "not yet significant"
 // notice. This block makes the WAIT itself visible: how many independent
-// (symbol, UTC-day) resolutions exist, how many remain to the threshold, and a
+// (symbol, trading day) resolutions exist, how many remain to the threshold, and a
 // LABELED ESTIMATE of when the gate clears — derived only from the measured
 // accrual of the last 7 days (distinct new symbol-days per NYSE trading day).
 // When nothing accrued recently the estimate is null and the payload says why:

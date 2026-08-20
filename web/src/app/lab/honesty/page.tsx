@@ -79,8 +79,8 @@ export default function HonestyPage() {
                 <HelpTip label="What counts as independent?">
                   {(current.rawN ?? current.independentN ?? current.n) !==
                   (current.independentN ?? current.n)
-                    ? `${(current.rawN ?? 0).toLocaleString("en-US")} raw minute-cadence rows collapse to ${(current.independentN ?? current.n).toLocaleString("en-US")} independent (symbol, UTC-day) resolutions — pooling rows that resolve against the same move would overstate confidence.`
-                    : "One observation per (symbol, UTC-day) resolution — pooling rows that resolve against the same move would overstate confidence."}
+                    ? `${(current.rawN ?? 0).toLocaleString("en-US")} raw minute-cadence rows collapse to ${(current.independentN ?? current.n).toLocaleString("en-US")} independent (symbol, trading day) resolutions — pooling rows that resolve against the same move would overstate confidence.`
+                    : "One observation per (symbol, trading day) resolution — pooling rows that resolve against the same move would overstate confidence."}
                 </HelpTip>
               </span>
             )}

@@ -221,6 +221,39 @@ if [ -z "$refusal_reason" ]; then
     # code: nothing was graded, so nothing may be republished.
     refusal_reason="grader exited 0 but the registry's generated timestamp did not advance (still ${before_generated:-absent})"
   fi
+
+  # PUBLICATION GATE -- the same collapsed-cross-section check /api/accuracy
+  # applies before it will serve a single row.
+  #
+  # Without this the two surfaces gave opposite answers about the SAME window:
+  # the HTTP endpoint returned 503 REFUSED with zero rows, while this script
+  # published the identical rows into README.md and the eight INCLUDES
+  # documents -- and README's freeze notice asserted the block "currently reads
+  # GRADING REFUSED" when it in fact carried a full verdict table. Measured on
+  # the live registry at the time this landed: 15 collapsed cross-sections out
+  # of 35 graded days, several with 5-8 distinct probabilities across 328
+  # symbols. Those rows grade one market-wide call repeated per symbol.
+  #
+  # The gate is SHARED code (internal/api.CollapsedGradingWindow), deliberately
+  # not a second implementation in shell or python: the handler's own comment
+  # requires it to refuse "on the SAME evidence internal/forecastmon uses, so
+  # the publication surface and the monitor cannot disagree".
+  #
+  # FAILS OPEN, like the handler. Exit 2 (undetermined) publishes -- refusing on
+  # a failed read would wedge publication shut on a transient database error
+  # rather than on evidence. Only an explicit exit 1, a measured collapse,
+  # refuses. cmd/forecastmon is NOT a substitute: it takes a fixed --days
+  # lookback, and this gate exists precisely because a fixed window misses a
+  # collapse just outside it or refuses forever on one the grader never touched.
+  if [ -z "$refusal_reason" ]; then
+    collapse_out=$(go run -C "$SD/daemon" ./cmd/collapsecheck       --db "$SD/data/signaldeck.db" --registry "$OUT" 2>>"$LOG")
+    collapse_status=$?
+    case "$collapse_status" in
+      1) refusal_reason="publication gate: $collapse_out" ;;
+      0) ;;
+      *) echo "collapse gate undetermined (exit $collapse_status) -- publishing, as /api/accuracy does" >> "$LOG" ;;
+    esac
+  fi
 fi
 
 # REFUSAL PATH — the whole point of this branch is that a grading outage must be

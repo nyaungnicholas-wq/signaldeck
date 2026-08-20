@@ -214,6 +214,13 @@ type PaperApply struct {
 	CloseSymbolIDs []int64
 	// Trades are the fills to append to the log.
 	Trades []PaperTrade
+	// Decisions are the ev_decisions rows this step rendered. They ride the SAME
+	// transaction as the book so the ledger and the book cannot disagree about
+	// whether a step happened. Written directly, they outlived a failed apply as
+	// orphans — and because a failed apply leaves the cursor unadvanced, the next
+	// pass re-rendered the same bar and appended a SECOND full set, with no unique
+	// key on the table to collapse them.
+	Decisions []EVDecision
 	// Equity is the mark for this bar (cash + positions_value).
 	EquityTs             int64
 	EquityCash           float64
@@ -262,6 +269,17 @@ func (s *Store) ApplyPaperStep(ctx context.Context, a PaperApply) (applied bool,
 			INSERT INTO paper_trades (strategy, symbol_id, side, qty, px, cost, ts, reason)
 			VALUES (?,?,?,?,?,?,?,?)`,
 			a.Strategy, t.SymbolID, t.Side, t.Qty, t.Px, t.Cost, t.Ts, t.Reason); err != nil {
+			return false, err
+		}
+	}
+	// After the replay guard above, so a stale bar writes no ledger rows either.
+	for _, d := range a.Decisions {
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO ev_decisions
+			  (ts, strategy, symbol_id, symbol, horizon, decision, reason, net_ev, rank, rank_of, inputs_json)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			d.Ts, d.Strategy, d.SymbolID, d.Symbol, d.Horizon, d.Decision, d.Reason,
+			d.NetEV, d.Rank, d.RankOf, d.InputsJSON); err != nil {
 			return false, err
 		}
 	}

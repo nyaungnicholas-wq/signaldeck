@@ -295,7 +295,7 @@ export default function ProofPage() {
             </div>
           )}
           <div className="border-t px-5 py-3 text-[0.72rem] leading-relaxed" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
-            Graded over INDEPENDENT (symbol, UTC-day) resolutions — the probability was frozen at
+            Graded over INDEPENDENT (symbol, trading day) resolutions — the probability was frozen at
             prediction time, the outcome filled in later, no look-ahead. Descriptive, not a
             forecast. Not financial advice.
           </div>

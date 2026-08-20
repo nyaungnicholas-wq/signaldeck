@@ -8,9 +8,19 @@ in quarantine/ is SUPERSEDED — do not execute it.
 - IC ~0.02 and FLIPS SIGN per sub-period (t=1.73/0.80). 70% (or 80%) directional accuracy is
   UNREACHABLE from this signal; honest ceiling ~61.5%. Config search on it manufactures false
   positives. EIGHTY_PERCENT_SUPERPROMPT is quarantined for this reason.
-- ACCURACY DIVERGES FROM PROFIT: the best-accuracy arm has the worst Sharpe. The real tradeable
-  edge is alpha-Sharpe ~1.0 (2.71 holdout), h=10, k=10/leg, conviction-weighted, beta-neutral.
-  Most "proper" risk controls HURT — inverse-vol is destructive (alpha lives in HIGH-vol names).
+- ACCURACY DIVERGES FROM PROFIT: the best-accuracy arm has the worst Sharpe. THAT part is
+  settled. The specific config that used to sit on this line — alpha-Sharpe ~1.0 (2.71
+  holdout), h=10, k=10/leg, conviction-weighted, beta-neutral — is NOT, and is REFUTED by
+  the repo's own later evidence: it was measured on a universe contaminated with funds and
+  leveraged ETFs. The fund-free rerun (fd63e78, 2026-08-16) says 0 of 27 configs clear the
+  pre-set bar (t_NW >= 2, maxDD >= -35%), best search Sharpe 0.72 at t_NW 1.66 — not
+  significant — and concludes "the tradeable edge on operating companies is not
+  established" (research/dirfix/README.md). research/dirfix/best_config.json is h=21,
+  conviction, beta_neutral=FALSE, so the horizon and the beta-neutral descriptor were wrong
+  too. The collapse chain is on the record: tranche ~0.5 -> portfolio sim 1.06 -> padding
+  bug fixed 1.11 -> funds excluded 0.72. Never quote a tradeable Sharpe from this repo
+  without naming the universe that produced it.
+- Most "proper" risk controls HURT — inverse-vol is destructive (alpha lives in HIGH-vol names).
 - dircall stays OUT of the CALL path (costs 3-11pp) and must NOT be inverted — the book is
   indistinguishable from chance, not anti-predictive. The -13/-23/-28pp directional number is
   an arithmetic IDENTITY (acc = 1 - null), not anti-skill.

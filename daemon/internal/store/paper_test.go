@@ -165,3 +165,57 @@ func TestApplyPaperStep_ClosePosition(t *testing.T) {
 		t.Fatalf("expected flat, got %d positions", len(positions))
 	}
 }
+
+// The decision ledger must ride the book's transaction, not precede it.
+//
+// ev_decisions rows used to be written directly by the worker as it assembled
+// the step, before ApplyPaperStep was even called. Two holes followed. An apply
+// that failed — or merely returned an error — left the rows behind describing a
+// step that never happened; and because a failed apply leaves the cursor
+// unadvanced, the next pass re-rendered the identical bar and appended a SECOND
+// full set. ev_decisions has no unique key and nothing reconciles it against
+// paper_trades, so neither orphans nor duplicates were detectable afterwards.
+func TestApplyPaperStep_ReplayWritesNoLedgerRows(t *testing.T) {
+	st := openPaperStore(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "AAA", "stocks", "")
+	_, _ = st.InitPaperBook(ctx, "flagship-1d", 100_000, 0)
+
+	step := PaperApply{
+		Strategy: "flagship-1d", BarTs: 200000, NewCash: 500,
+		Trades:   []PaperTrade{{Strategy: "flagship-1d", SymbolID: sym.ID, Side: "buy", Qty: 1, Px: 10, Ts: 200000}},
+		Decisions: []EVDecision{{
+			Ts: 200000, Strategy: "flagship-1d", SymbolID: sym.ID, Symbol: "AAA",
+			Horizon: "1d", Decision: "BUY", Reason: "positive-net-ev", InputsJSON: "{}",
+		}},
+		EquityTs: 200000, EquityValue: 100000,
+	}
+	if applied, err := st.ApplyPaperStep(ctx, step); err != nil || !applied {
+		t.Fatalf("first apply: applied=%v err=%v", applied, err)
+	}
+	rows, err := st.EVDecisions(ctx, "", "", 100)
+	if err != nil {
+		t.Fatalf("read decisions: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("after one applied step: %d ledger row(s), want 1", len(rows))
+	}
+
+	// Re-render the SAME bar, as the worker does when a previous apply failed and
+	// left the cursor unadvanced. The guard rejects it, so nothing may be logged.
+	applied, err := st.ApplyPaperStep(ctx, step)
+	if err != nil {
+		t.Fatalf("replay err: %v", err)
+	}
+	if applied {
+		t.Fatal("fixture broken: the replay guard should have rejected this bar")
+	}
+	rows, err = st.EVDecisions(ctx, "", "", 100)
+	if err != nil {
+		t.Fatalf("read decisions after replay: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("a REJECTED step wrote %d ledger row(s), want the original 1 — "+
+			"the ledger is recording decisions for a step the book never applied", len(rows))
+	}
+}

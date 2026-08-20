@@ -390,7 +390,7 @@ export default async function AccuracyPage() {
         <h1 className="text-[1.4rem] font-extrabold tracking-tight">Accuracy registry</h1>
         <p className="m-0 max-w-[68ch] text-[0.85rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           Every predictor, its claim, and what the live record actually supports — regraded daily
-          against the naive baseline on independent (symbol, horizon, UTC-day) observations. The
+          against the naive baseline on independent (symbol, horizon, trading day) observations. The
           failures lead. Descriptive, not advice.
         </p>
       </header>

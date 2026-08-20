@@ -1499,6 +1499,9 @@ export interface TrackRecord {
   winRate: number | null;
   winRateCI?: [number, number];
   baseRate?: number;
+  naiveBaseline?: number; // majority-direction guess, the honest benchmark for winRate
+  edgeVsNaive?: number;   // winRate - naiveBaseline; negative means no measured skill
+  accuracyNote?: string;
   brier: number | null;
   brierSkill?: number; // 1 - Brier/Brier_baserate; >0 beats the base-rate constant
   ic: number | null;

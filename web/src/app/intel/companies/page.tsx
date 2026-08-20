@@ -173,10 +173,10 @@ export default function CompaniesPage() {
   }, [rows]);
 
   const stats = useMemo(() => {
-    if (rows.length === 0) return { totalTracked: 0, avgChange: 0, biggestCompany: "" };
+    if (rows.length === 0) return { totalTracked: null, avgChange: null, biggestCompany: null };
     const trackedRows = rows.filter((r) => r.tracked || locallyTracked[r.ticker] === true);
     const changes = rows.filter((r) => r.dayChangePct !== null).map((r) => r.dayChangePct!);
-    const avgChange = changes.length > 0 ? changes.reduce((a, b) => a + b, 0) / changes.length : 0;
+    const avgChange = changes.length > 0 ? changes.reduce((a, b) => a + b, 0) / changes.length : null;
     const biggest = rows.reduce((max, r) => (r.mcap ?? 0) > (max.mcap ?? 0) ? r : max, rows[0]);
     return {
       totalTracked: trackedRows.length,
@@ -281,9 +281,9 @@ export default function CompaniesPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile label="COMPANIES" value={total} i={0} />
-        <StatTile label="TRACKED" value={stats.totalTracked} i={1} />
-        <StatTile label="BIGGEST" value={stats.biggestCompany} sub={fmtBig(rows.find(r => r.ticker === stats.biggestCompany)?.mcap ?? 0)} i={2} glow="hud" />
-        <StatTile label="AVG CHG" value={stats.avgChange} decimals={2} suffix="%" i={3} glow={stats.avgChange >= 0 ? "up" : "down"} />
+        <StatTile label="TRACKED" value={resp?.trackedCount ?? null} i={1} />
+        <StatTile label="BIGGEST" value={stats.biggestCompany} sub={stats.biggestCompany ? `${fmtBig(rows.find(r => r.ticker === stats.biggestCompany)?.mcap ?? 0)} • current page` : "current page"} i={2} glow="hud" />
+        <StatTile label="AVG CHG" value={stats.avgChange} decimals={2} suffix="%" sub="current page" i={3} glow={stats.avgChange != null ? (stats.avgChange >= 0 ? "up" : "down") : undefined} />
       </div>
 
       {loading && <Skeleton lines={8} label="loading company directory" />}

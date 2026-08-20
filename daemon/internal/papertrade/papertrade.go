@@ -319,10 +319,43 @@ func marksPerYear(curve []EquityPoint) float64 {
 	}
 	const day = int64(86400)
 	if med >= day {
+		// Daily or sparser: the median gap alone fixes the rate.
 		return 252.0 * (float64(day) / float64(med))
 	}
-	const sessionSecs = 6.5 * 3600
-	return (sessionSecs / float64(med)) * 252.0
+	// DENSER THAN DAILY. The old code extrapolated the median gap across a
+	// 6.5-hour session — (sessionSecs/med)*252 — which is really "252 x marks per
+	// session" and is right only when the marks genuinely fall INSIDE one session.
+	// For a median gap between the session length and a full day it returns FEWER
+	// than 252 marks a year, which cannot be true of a curve that marks more often
+	// than daily. The live book marks twice a calendar day (gaps alternating
+	// ~14400s and ~72000s, median 72000s), so that branch returned 81.9 against an
+	// actual ~544 and understated the annualization factor 6.6x — inflating every
+	// published Sharpe and Sortino toward zero.
+	//
+	// Count the marks per trading day from the curve instead of inferring them
+	// from a gap. This agrees with the session formula wherever that one was
+	// valid: 5-minute marks give 78 a day either way.
+	days := distinctDays(curve)
+	if days <= 0 {
+		return fallback
+	}
+	perDay := float64(len(curve)) / float64(days)
+	if perDay < 1 {
+		perDay = 1 // a curve this dense has at least one mark a day by definition
+	}
+	return 252.0 * perDay
+}
+
+// distinctDays counts the distinct UTC days the curve touches. Marks are stamped
+// in epoch seconds, so integer division by a day IS the day key.
+func distinctDays(curve []EquityPoint) int {
+	seen := make(map[int64]struct{}, len(curve))
+	for _, p := range curve {
+		if p.Ts > 0 {
+			seen[p.Ts/86400] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 func sortInt64(a []int64) {

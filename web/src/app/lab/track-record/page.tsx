@@ -157,7 +157,7 @@ export default function TrackRecordPage() {
           {current && (
             <span
               className="chip tnum"
-              title={`${(current.rawN ?? 0).toLocaleString("en-US")} raw resolved rows collapse to ${(current.independentN ?? 0).toLocaleString("en-US")} independent (symbol, UTC-day) observations`}
+              title={`${(current.rawN ?? 0).toLocaleString("en-US")} raw resolved rows collapse to ${(current.independentN ?? 0).toLocaleString("en-US")} independent (symbol, trading day) observations`}
             >
               {(current.independentN ?? 0).toLocaleString("en-US")} independent
             </span>
@@ -261,7 +261,7 @@ export default function TrackRecordPage() {
                   <span className="tnum">
                     {current.independentN}/{current.gate?.threshold ?? current.minIndependentN}
                   </span>{" "}
-                  independent (symbol, UTC-day) resolutions
+                  independent (symbol, trading day) resolutions
                 </p>
                 <p className="m-0 text-[0.75rem] tnum" style={{ color: "var(--dim)" }}>
                   {current.gate == null
@@ -301,7 +301,7 @@ export default function TrackRecordPage() {
               </p>
               <p className="mt-1 text-[0.75rem] tnum" style={{ color: "var(--dim)" }}>
                 over {(current.independentN ?? 0).toLocaleString("en-US")} independent (symbol,
-                UTC-day) resolutions
+                trading day) resolutions
                 {current.winRateCI ? ` · 95% CI ${pct(current.winRateCI[0])}–${pct(current.winRateCI[1])}` : ""}
                 {current.baseRate != null ? ` · vs a ${pct(current.baseRate)} always-up base rate` : ""}
               </p>
@@ -361,7 +361,7 @@ export default function TrackRecordPage() {
                 against realized outcomes and withholds every skill number
                 (win-rate, Brier, IC) until there are at least{" "}
                 <span className="tnum">{current.minIndependentN}</span> independent
-                (symbol, UTC-day) resolutions. The system is young — an honest
+                (symbol, trading day) resolutions. The system is young — an honest
                 &ldquo;no live edge yet&rdquo; is the correct output. It fills in as
                 predictions mature; the bar above is the record accruing.
               </p>
@@ -665,7 +665,7 @@ export default function TrackRecordPage() {
           <section className="panel p-4 text-[0.75rem]" style={{ color: "var(--faint)" }}>
             <p>
               {current.trackLabel}. Numbers are computed over INDEPENDENT (symbol,
-              UTC-day) resolutions — the minute-cadence pipeline writes many
+              trading day) resolutions — the minute-cadence pipeline writes many
               predictions per symbol per day that resolve against the same move, so
               pooling them would overstate confidence. There is no lookahead: a
               prediction&rsquo;s calibrated probability is frozen when it&rsquo;s made and

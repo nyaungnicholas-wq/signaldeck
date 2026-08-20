@@ -51,8 +51,22 @@ func (d Deps) registerAccuracy(mux *http.ServeMux) {
 }
 
 // registryFile is the on-disk shape this handler reads. Only the fields the
-// verdict needs are modelled; the rest of the registry is passed through
-// untouched so the API can never silently drop a field the grader published.
+// verdict needs are modelled.
+//
+// THIS HANDLER DOES NOT PASS THE REST THROUGH, and the comment here used to say
+// it did. The response is the closed accuracyRow struct below, built field by
+// field, so every other registry key — honesty, breadth, design_effect, null_ci,
+// claimed, the survivorship_* and settlement_* blocks, and the grader's own
+// verdict string and CI — is dropped from /api/accuracy. That matters most for
+// honesty and breadth, which the grader publishes specifically to QUALIFY a
+// verdict: an API client gets "FAILED" without the two fields that say how far
+// that verdict reaches.
+//
+// Nothing renders those fields today — web/src/app/accuracy/page.tsx reads
+// data/accuracy_registry.json from disk and uses this endpoint only as the
+// publication gate — so no displayed number is wrong. Read the registry file
+// directly if you need a field that is not modelled here, and widen accuracyRow
+// (not this comment) if a client ever needs one served.
 type registryFile struct {
 	GradedAt          string          `json:"graded_at"`
 	RefusedSince      *string         `json:"refused_since"`
@@ -60,7 +74,6 @@ type registryFile struct {
 	MinIndependentN   float64         `json:"min_independent_n"`
 	MinDistinctBlocks int             `json:"min_distinct_blocks"`
 	Rows              []registryRow   `json:"rows"`
-	Raw               json.RawMessage `json:"-"`
 }
 
 type registryRow struct {
@@ -381,7 +394,6 @@ func loadRegistry(override string) (*registryFile, error) {
 		if err := json.Unmarshal(b, &reg); err != nil {
 			return nil, err
 		}
-		reg.Raw = b
 		return &reg, nil
 	}
 	return nil, lastErr

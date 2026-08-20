@@ -227,9 +227,17 @@ func (s *Store) TVRatingSkill(ctx context.Context) (TVSkill, error) {
 
 	// One independent obs per (symbol, UTC-day): last rating that day (ratings
 	// are ascending, so a later same-day row overwrites the earlier one).
+	// Keyed on the BASE BAR, not the calendar day. A rating stamped on a Saturday,
+	// a Sunday and a Monday holiday all resolve to the SAME Friday base bar and the
+	// same next-bar forward return, so folding on md.TradingDay(r.ts) republished
+	// one observation up to four times and inflated N by ~35% on the live corpus
+	// (22,099 as coded vs 16,391 distinct). N is published verbatim as the factor's
+	// SkillN chip and inside the composite gateReason, and it is the denominator of
+	// the IC the gate reads — so the duplicates were being counted as independent
+	// evidence they are not.
 	type key struct {
-		sym int64
-		day int64
+		sym    int64
+		baseTs int64
 	}
 	type pair struct{ reco, fwd float64 }
 	obs := map[key]pair{}
@@ -243,7 +251,7 @@ func (s *Store) TVRatingSkill(ctx context.Context) (TVSkill, error) {
 			continue // no base bar, or no next-day bar to resolve against yet
 		}
 		fwd := sr.closes[idx+1]/sr.closes[idx] - 1
-		obs[key{sym: r.symbolID, day: md.TradingDay(r.ts)}] = pair{reco: r.reco, fwd: fwd}
+		obs[key{sym: r.symbolID, baseTs: sr.ts[idx]}] = pair{reco: r.reco, fwd: fwd}
 	}
 
 	recos := make([]float64, 0, len(obs))

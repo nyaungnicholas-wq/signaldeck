@@ -137,6 +137,10 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 	startCash := papertrade.StartingCash()
 	acted := 0
 	refused := 0 // entries the EV engine or the pretrade risk gate refused, across all strategies
+	// stranded counts WANTED exits the execution model could not price. Kept apart
+	// from `refused`, which means an entry a gate turned down: a stranded exit is a
+	// position carried PAST its stop, which is the opposite kind of event.
+	stranded := 0
 	for _, strat := range paperStrategies {
 		if _, err := w.St.InitPaperBook(ctx, strat.Name, startCash, asof); err != nil {
 			return "", err
@@ -156,7 +160,7 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 			continue // no new global bar for this strategy — idempotent no-op
 		}
 
-		apply, vetoed, err := w.buildStep(ctx, strat.Name, strat.Horizon, syms, marketByID, cur, asof)
+		apply, vetoed, err := w.buildStep(ctx, strat.Name, strat.Horizon, syms, marketByID, cur, asof, &stranded)
 		if err != nil {
 			return "", err
 		}
@@ -169,10 +173,16 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 			acted++
 		}
 	}
+	status := fmt.Sprintf("marked %d strateg(ies) at asof=%d", acted, asof)
 	if refused > 0 {
-		return fmt.Sprintf("marked %d strateg(ies) at asof=%d — EV/risk gates refused %d entr(ies)", acted, asof, refused), nil
+		status += fmt.Sprintf(" — EV/risk gates refused %d entr(ies)", refused)
 	}
-	return fmt.Sprintf("marked %d strateg(ies) at asof=%d", acted, asof), nil
+	if stranded > 0 {
+		// Loud, and in the status line rather than only the log, because each one is
+		// a position still open after its exit fired.
+		status += fmt.Sprintf(" — %d WANTED exit(s) could not be priced and are STRANDED past their exit", stranded)
+	}
+	return status, nil
 }
 
 // buildStep assembles the atomic PaperApply for one strategy at the as-of clock:
@@ -189,6 +199,7 @@ func (w *PaperTrader) buildStep(
 	marketByID map[int64]md.Market,
 	cur store.PaperCursor,
 	asof int64,
+	stranded *int,
 ) (store.PaperApply, int, error) {
 	cash := cur.Cash
 	apply := store.PaperApply{Strategy: strategy, BarTs: asof, EquityTs: asof}
@@ -339,6 +350,14 @@ func (w *PaperTrader) buildStep(
 			// transition.
 			f, ok := papertrade.ExitLong(pos.Qty, in)
 			if !ok {
+				// The exit was WANTED — a stop, a target, an expiry or a kill-switch
+				// flatten — and the execution model could not price it (no usable ADV
+				// over the 42-bar window at the fill). Dropping it silently leaves the
+				// position open past its own exit with the pass reporting a clean run,
+				// and the only trace being that the position still exists.
+				*stranded++
+				log.Printf("paper-trader[%s] WARNING STRANDED EXIT %s: %q fired at bar %d but could not be priced — position of %.4f held PAST its exit",
+					strategy, s.Symbol, plan.reason, plan.fillBar.Ts, pos.Qty)
 				continue
 			}
 			exitAssess := ev.Assessment{Inputs: ev.Inputs{
@@ -350,7 +369,7 @@ func (w *PaperTrader) buildStep(
 				// filing every exit under the signal's name.
 				exitDecision.Reason = ev.BarrierReason(string(plan.barrier.Kind))
 			}
-			if err := w.ledgerBarrierExit(ctx, strategy, s.ID, exitAssess, exitDecision, plan, asof); err != nil {
+			if err := w.ledgerBarrierExit(&apply, strategy, s.ID, exitAssess, exitDecision, plan, asof); err != nil {
 				return apply, refused, err
 			}
 			cash += f.CashDelta
@@ -359,6 +378,12 @@ func (w *PaperTrader) buildStep(
 				Strategy: strategy, SymbolID: s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost,
 				Ts: plan.fillBar.Ts, Reason: plan.reason,
 			})
+			// The slot, the notional and the sector bucket this name occupied are now
+			// free. Phase 2 judges entries against `book`, so without this an exit
+			// hands back cash but not headroom.
+			if err := w.releasePosition(ctx, &book, s.ID, pos.Qty, symByID, asof); err != nil {
+				return apply, refused, err
+			}
 			continue
 		}
 
@@ -393,6 +418,19 @@ func (w *PaperTrader) buildStep(
 		if fillBar.Ts > asof {
 			continue
 		}
+		// ...and never fill in the PAST relative to the book's own clock. A step
+		// transacts only inside the window it advances over, (LastBarTs, asof].
+		// LatestPrediction returns the newest row with n_used > 0, which during a
+		// starved stretch can be weeks old; its next bar then sits far behind the
+		// cursor. The fill would be booked at that old open while every decision
+		// input below — the return forecast, corrToBook, the riskgate book — is
+		// measured at asof, and markPositions would immediately mark it at the
+		// asof close, booking the whole intervening move as one step's P&L.
+		// ponytail: bounded by the cursor, so a cold-start book (LastBarTs == 0)
+		// can still backfill its first step; tighten to asof only if that matters.
+		if fillBar.Ts <= cur.LastBarTs {
+			continue
+		}
 
 		// Liquidity for the execution model: the name's trailing average daily
 		// DOLLAR volume, measured on bars at or before the fill (never after —
@@ -409,7 +447,7 @@ func (w *PaperTrader) buildStep(
 		// record, not an entry that silently never happened.
 		if halt.Halted {
 			refused++
-			if err := w.ledgerGateRefusal(ctx, strategy, s.ID,
+			if err := w.ledgerGateRefusal(&apply, strategy, s.ID,
 				minimalAssessment(s.Symbol, h, pred.CalProb),
 				ev.ReasonHalted, nil, &halt, asof); err != nil {
 				return apply, refused, err
@@ -439,7 +477,7 @@ func (w *PaperTrader) buildStep(
 	if admit := riskgate.Admit(book, limits); !admit.Allow {
 		for _, c := range cands {
 			refused++
-			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, c.assess,
+			if err := w.ledgerGateRefusal(&apply, strategy, c.s.ID, c.assess,
 				ev.ReasonRiskRefused, &admit, nil, asof); err != nil {
 				return apply, refused, err
 			}
@@ -458,7 +496,7 @@ func (w *PaperTrader) buildStep(
 		}, edge, limits)
 		if !gate.Allow {
 			refused++
-			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, c.assess,
+			if err := w.ledgerGateRefusal(&apply, strategy, c.s.ID, c.assess,
 				ev.ReasonRiskRefused, &gate, nil, asof); err != nil {
 				return apply, refused, err
 			}
@@ -480,7 +518,7 @@ func (w *PaperTrader) buildStep(
 	for _, a := range ev.RankByNetEV(assessments) {
 		c := byName[a.Symbol]
 		decision := ev.Decide(a, ev.EnterLong, thresholds)
-		if err := w.ledgerEVDecision(ctx, strategy, c.s.ID, a, decision, asof); err != nil {
+		if err := w.ledgerEVDecision(&apply, strategy, c.s.ID, a, decision, asof); err != nil {
 			return apply, refused, err
 		}
 		if decision.Action != ev.BUY {
@@ -493,7 +531,7 @@ func (w *PaperTrader) buildStep(
 		// stop the next fill, not the next run.
 		if h := killswitch.Check(); h.Halted {
 			refused++
-			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, a, ev.ReasonHalted, nil, &h, asof); err != nil {
+			if err := w.ledgerGateRefusal(&apply, strategy, c.s.ID, a, ev.ReasonHalted, nil, &h, asof); err != nil {
 				return apply, refused, err
 			}
 			continue
@@ -518,7 +556,7 @@ func (w *PaperTrader) buildStep(
 		}, edge, limits)
 		if !gate.Allow {
 			refused++
-			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, a,
+			if err := w.ledgerGateRefusal(&apply, strategy, c.s.ID, a,
 				ev.ReasonRiskRefused, &gate, nil, asof); err != nil {
 				return apply, refused, err
 			}

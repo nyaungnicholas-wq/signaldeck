@@ -333,7 +333,7 @@ type gateSnapshot struct {
 // stored only one of the two could not be used to check it. Anyone auditing
 // this book can assert `fillTs > barrier.triggerTs` over every row.
 func (w *PaperTrader) ledgerBarrierExit(
-	ctx context.Context,
+	apply *store.PaperApply,
 	strategy string,
 	symbolID int64,
 	a ev.Assessment,
@@ -342,17 +342,18 @@ func (w *PaperTrader) ledgerBarrierExit(
 	ts int64,
 ) error {
 	if !plan.fromBarrier {
-		return w.ledgerEVDecision(ctx, strategy, symbolID, a, d, ts)
+		return w.ledgerEVDecision(apply, strategy, symbolID, a, d, ts)
 	}
 	b := plan.barrier
 	snap, err := json.Marshal(gateSnapshot{Assessment: a, Barrier: &b, FillTs: plan.fillBar.Ts})
 	if err != nil {
 		return err
 	}
-	return w.St.InsertEVDecision(ctx, store.EVDecision{
+	apply.Decisions = append(apply.Decisions, store.EVDecision{
 		Ts: ts, Strategy: strategy, SymbolID: symbolID, Symbol: a.Symbol, Horizon: a.Horizon,
 		Decision: string(d.Action), Reason: string(d.Reason), InputsJSON: string(snap),
 	})
+	return nil
 }
 
 // ledgerGateRefusal records a DO_NOTHING that the PRETRADE RISK GATE or the
@@ -365,7 +366,7 @@ func (w *PaperTrader) ledgerBarrierExit(
 // its Breaches) is snapshotted, so "which limit fired" survives without needing
 // a schema change to hold it.
 func (w *PaperTrader) ledgerGateRefusal(
-	ctx context.Context,
+	apply *store.PaperApply,
 	strategy string,
 	symbolID int64,
 	a ev.Assessment,
@@ -394,19 +395,24 @@ func (w *PaperTrader) ledgerGateRefusal(
 		v := a.NetEV
 		row.NetEV = &v
 	}
-	return w.St.InsertEVDecision(ctx, row)
+	apply.Decisions = append(apply.Decisions, row)
+	return nil
 }
 
 // ledgerEVDecision appends one verdict to the ev_decisions ledger. The full
 // assessment (with its has-flags) is snapshotted as JSON so "what did the gate
 // know when it refused" survives the inputs' own tables moving on.
 //
-// Written directly rather than through the atomic PaperApply: decisions are
-// diagnostics, not book state, and the cursor check that precedes buildStep
-// already makes a same-bar re-run a no-op, so duplicates can only arise from a
-// crash inside the narrow window between this write and the step's apply.
+// Staged on the PaperApply and committed in the SAME transaction as the book.
+// It used to write directly, on the reasoning that decisions are diagnostics
+// rather than book state — but that left two holes. An apply that failed (or
+// merely returned an error) left the rows behind describing a step that never
+// happened; and because a failed apply leaves the cursor unadvanced, the next
+// pass re-rendered the identical bar and appended a second full set. ev_decisions
+// has no unique key, and nothing reconciles it against paper_trades, so neither
+// orphans nor duplicates were detectable after the fact.
 func (w *PaperTrader) ledgerEVDecision(
-	ctx context.Context,
+	apply *store.PaperApply,
 	strategy string,
 	symbolID int64,
 	a ev.Assessment,
@@ -433,5 +439,6 @@ func (w *PaperTrader) ledgerEVDecision(
 		v := a.NetEV
 		row.NetEV = &v
 	}
-	return w.St.InsertEVDecision(ctx, row)
+	apply.Decisions = append(apply.Decisions, row)
+	return nil
 }
