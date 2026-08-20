@@ -255,7 +255,32 @@ func (w *ConfluenceResolver) Run(ctx context.Context) (string, error) {
 		if !ok || o.EntryPx <= 0 || fwd.Ts-target > 3*confluenceHorizonSecs || fwd.Close <= 0 {
 			continue
 		}
-		fwdReturn := fwd.Close/o.EntryPx - 1
+		// SAME-BASIS ENTRY. o.EntryPx was frozen when the setup was flagged, and the
+		// bars underneath it can be REWRITTEN afterwards: a reverse split triggers a
+		// full re-backfill (pipeline/splitrepair.go) that rescales the whole series.
+		// Dividing a live exit close by a frozen PRE-rescale entry does not cancel —
+		// the rescale factor lands whole in the return. DFNS was flagged at 0.0493,
+		// graded against a rescaled exit, and reported +8541% on an entry price no
+		// bar of that symbol has ever carried (its minimum close is 3.90).
+		//
+		// predict.go resolves with fwd.Close/base.Close-1, BOTH legs read live, and
+		// is immune for exactly that reason. Re-read the entry bar here so the two
+		// legs always share one basis. EntryPx stays stored as the audit record of
+		// what the price looked like when the call was made; it is no longer the
+		// denominator.
+		//
+		// o.Ts is the UTC day bucket and US daily bars are stamped 04:00/05:00, so
+		// +86399 selects that day's bar. Measured on the live table this reproduces
+		// the frozen price for 5,258 of 5,304 resolved rows — the 46 it does not are
+		// precisely the rescaled ones this exists to fix.
+		entry, okEntry, err := w.St.BarAtOrBefore(ctx, o.SymbolID, md.TF1d, o.Ts+86399)
+		if err != nil {
+			return "", err
+		}
+		if !okEntry || entry.Close <= 0 {
+			continue // entry bar gone (purged or quarantined) — leave it pending
+		}
+		fwdReturn := fwd.Close/entry.Close - 1
 		win := (o.Direction > 0 && fwdReturn > 0) || (o.Direction < 0 && fwdReturn < 0)
 		if err := w.St.ResolveConfluenceOutcome(ctx, o.SymbolID, o.Ts, o.Horizon, fwdReturn, win); err != nil {
 			return "", err
