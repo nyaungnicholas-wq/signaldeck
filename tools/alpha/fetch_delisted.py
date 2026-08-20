@@ -102,7 +102,7 @@ def main():
             close REAL, volume REAL, PRIMARY KEY(symbol, ts));
     """)
 
-    kept = skipped = reused = 0
+    kept = skipped = reused = padded = 0
     total_bars = 0
     t0 = time.time()
 
@@ -111,6 +111,25 @@ def main():
         d = get(BARS.format(sym=sym, end=end), h)
         time.sleep(RATE_SLEEP)
         bars = (d or {}).get("bars") or []
+        # Drop vendor pads BEFORE anything else reads this list.
+        #
+        # The endpoint is queried with timeframe=1Day, so every bar here is daily,
+        # and a daily bar with volume 0 and open=high=low=close is the vendor
+        # fabricating a session its feed never saw. A US-listed equity that trades
+        # zero shares produces no bar at all.
+        #
+        # Filtering HERE rather than at insert time fixes two things at once. The
+        # pads never reach delisted_bar (sdmaint import-delisted copies that table
+        # verbatim into production), AND bars[-1] below becomes the last REAL bar
+        # — which matters because importdelisted.go derives delisted_at from it,
+        # so a padded tail was inventing the delisting date. PPEM ended up stamped
+        # 2026-06-08 on a series that was 97% synthetic.
+        n_pads = sum(1 for b in bars
+                     if b["v"] == 0 and b["o"] == b["h"] == b["l"] == b["c"])
+        if n_pads:
+            bars = [b for b in bars
+                    if not (b["v"] == 0 and b["o"] == b["h"] == b["l"] == b["c"])]
+            padded += n_pads
         if not bars:
             skipped += 1
         else:
@@ -133,7 +152,7 @@ def main():
         if i % 100 == 0:
             db.commit()
             print(f"  {i}/{len(cand)}  kept={kept} reused={reused} "
-                  f"no-data={skipped} bars={total_bars:,} "
+                  f"no-data={skipped} pads-dropped={padded:,} bars={total_bars:,} "
                   f"({time.time()-t0:.0f}s)", flush=True)
 
     db.commit()

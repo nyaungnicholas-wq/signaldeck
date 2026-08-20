@@ -138,6 +138,31 @@ func (c *Client) BackfillMinute(ctx context.Context, st *store.Store, symbolID i
 	return c.backfill(ctx, st, symbolID, symbol, "1Min", md.TF1m, start)
 }
 
+// syntheticDailyPad reports a vendor pad: a DAILY bar carrying no volume and no
+// range at all.
+//
+// Alpaca fabricates a session when the requested feed saw no trade, carrying a
+// price forward with volume 0 and open=high=low=close. A US-listed equity that
+// genuinely trades zero shares produces no bar from the exchange, so a daily bar
+// shaped like this is the vendor's fill rather than a market fact. Stored, it
+// reads downstream as a real session returning exactly 0.0%: SBNY accumulated 509
+// of them after Signature Bank was seized, and every one sat in the point-in-time
+// universe as a live name. 30,771 such bars were quarantined across 144 symbols
+// before this filter existed; without it they return on the next backfill.
+//
+// DAILY ONLY, and that restriction is load-bearing rather than cautious. A minute
+// with no trades is ordinary — crypto alone holds 58,980 legitimate flat
+// zero-volume 1m bars, and stocks another 248 — so widening this to other
+// timeframes would delete real data. Daily crypto has none at all.
+//
+// Dropping a bar rather than storing a fake one leaves a GAP, which is the honest
+// shape: a close-to-close return across the gap is the real move, where a padded
+// day would have reported no move at all.
+func syntheticDailyPad(tf md.Timeframe, b md.Bar) bool {
+	return tf == md.TF1d && b.Volume == 0 &&
+		b.Open == b.High && b.High == b.Low && b.Low == b.Close
+}
+
 // backfill walks the paginated /stocks/{symbol}/bars endpoint until
 // next_page_token runs out, persisting each page as it arrives so a mid-run
 // failure still leaves everything fetched so far in the store.
@@ -155,10 +180,14 @@ func (c *Client) backfill(ctx context.Context, st *store.Store, symbolID int64, 
 			if err != nil {
 				return total, fmt.Errorf("alpaca: bad bar time %q for %s: %w", rb.T, symbol, err)
 			}
-			bars = append(bars, md.Bar{
+			bar := md.Bar{
 				SymbolID: symbolID, TF: tf, Ts: ts.Unix(),
 				Open: rb.O, High: rb.H, Low: rb.L, Close: rb.C, Volume: rb.V,
-			})
+			}
+			if syntheticDailyPad(tf, bar) {
+				continue // vendor fill, not a session — see syntheticDailyPad
+			}
+			bars = append(bars, bar)
 		}
 		if err := st.UpsertBars(ctx, bars); err != nil {
 			return total, fmt.Errorf("alpaca: upsert %s bars: %w", symbol, err)
@@ -363,10 +392,14 @@ func (c *Client) backfillMultiBatch(ctx context.Context, st *store.Store, batch 
 				if err != nil {
 					return fmt.Errorf("alpaca: bad bar time %q for %s: %w", rb.T, sym, err)
 				}
-				bars = append(bars, md.Bar{
+				bar := md.Bar{
 					SymbolID: id, TF: tf, Ts: ts.Unix(),
 					Open: rb.O, High: rb.H, Low: rb.L, Close: rb.C, Volume: rb.V,
-				})
+				}
+				if syntheticDailyPad(tf, bar) {
+					continue // vendor fill; must not be stored OR counted
+				}
+				bars = append(bars, bar)
 				counts[sym]++
 			}
 		}
