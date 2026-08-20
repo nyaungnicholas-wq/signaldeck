@@ -49,6 +49,27 @@ import (
 //     universe_membership is consulted instead, and a day with no record REFUSES
 //     rather than falling back.
 //
+// AND ONE IDEALIZATION, which makes this an UPPER BOUND rather than a faithful
+// re-run — state it wherever a number from a reconstruction is shown:
+//
+//	FORECAST COVERAGE. The live ReturnDistributionRunner is time-boxed and
+//	ROTATES: distSymbolsPerPass = 60 symbols per pass, sweepBudget = 90s. So at
+//	any instant only part of the universe holds a return distribution — measured
+//	on the live database, 551 symbols carry one while the system was producing
+//	predictions for ~1,048 — and many of those are stale by however long the
+//	rotation takes to come round. This replay re-fits a FRESH distribution for
+//	EVERY symbol at EVERY bar, so it hands the book roughly twice the coverage the
+//	system ever had, none of it stale. That produces more admitted candidates and
+//	therefore more trades: the first partial run took 276 fills in 38 sessions
+//	where the live book took 123 in 78.
+//
+//	It cannot be corrected. The rotation's position at a past bar is not recorded
+//	— metaDistCursor holds one current value, not a history — so which symbols had
+//	a usable distribution on a given past day is unknowable. A reconstruction
+//	therefore answers "what would the fixed code do with COMPLETE forecast
+//	coverage", not "what would the system have done", and the gap between those
+//	two is the rotation.
+//
 // The RETURN DISTRIBUTION is reconstructible and is reconstructed, not read:
 // buildReturnForecast is a pure function of a close series, so the replay re-fits
 // it from bars at or before the bar. The stored table could not have served — it

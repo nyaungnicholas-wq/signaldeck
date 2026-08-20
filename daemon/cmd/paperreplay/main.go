@@ -117,5 +117,10 @@ func main() {
 	for _, s := range rep.Statuses {
 		fmt.Println("  " + s)
 	}
-	fmt.Println("\nRECONSTRUCTION — not a live track record. Label it so wherever it is shown.")
+	fmt.Println("\nRECONSTRUCTION — not a live track record, and an UPPER BOUND.")
+	fmt.Println("The live distribution runner rotates 60 symbols per pass, so only part of the")
+	fmt.Println("universe held a forecast at any past instant (551 of ~1,048 on this database).")
+	fmt.Println("This replay fits a fresh one for EVERY symbol at EVERY bar — more coverage than")
+	fmt.Println("the system ever had, which admits more trades. The rotation's past position is")
+	fmt.Println("not recorded, so it cannot be corrected, only stated.")
 }
