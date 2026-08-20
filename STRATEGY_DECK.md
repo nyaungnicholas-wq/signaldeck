@@ -41,43 +41,44 @@ The live record is not typed into this deck. It is generated from `data/accuracy
 
 <!-- BEGIN GENERATED live_accuracy -->
 
-Generated from `data/accuracy_registry.json` (grade of 2026-08-18T18:25:41) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
+Generated from `data/accuracy_registry.json` (grade of 2026-08-19T14:05:46) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
 ### Live record
 
 | Predictor | Band | n | Live acc | Null | Skill | Distinct days | Interval |
 |---|---|---|---|---|---|---|---|
-| directional-ensemble (1d) | all | 2,518 | 43.7% | 56.1% | -12.4pp | 17 | [33.7%, 54.3%] |
-| prequential-majority (1d) | all | 2,189 | 57.1% | 54.9% | +2.3pp | 15 | [37.4%, 74.9%] |
-| directional-ensemble (1w) | all | 3,249 | 42.3% | 62.4% | -20.1pp | 16 | [30.5%, 55.0%] |
-| prequential-majority (1w) | all | 2,888 | 64.1% | 63.2% | +0.9pp | 14 | withheld |
+| directional-ensemble (1d) | all | 2,538 | 43.9% | 55.9% | -12.0pp | 18 | [33.9%, 54.5%] |
+| prequential-majority (1d) | all | 2,209 | 56.9% | 54.7% | +2.2pp | 16 | [37.3%, 74.6%] |
+| directional-ensemble (1w) | all | 3,572 | 43.3% | 61.9% | -18.6pp | 17 | [31.9%, 55.5%] |
+| prequential-majority (1w) | all | 3,211 | 63.4% | 62.6% | +0.8pp | 15 | [54.7%, 71.3%] |
 | directional-ensemble (1d, high conviction) | \|p-0.5\|>=0.15 | 454 | 45.2% | 48.6% | -3.4pp | 7 | withheld |
-| directional-ensemble (1w, high conviction) | \|p-0.5\|>=0.15 | 374 | 35.8% | 62.7% | -26.9pp | 13 | [26.0%, 47.0%] |
+| directional-ensemble (1w, high conviction) | \|p-0.5\|>=0.15 | 420 | 37.9% | 61.3% | -23.5pp | 14 | [25.0%, 52.7%] |
 
 Sample-size notices carried by the registry itself (statements about the sample, not verdicts about skill):
 
 - `directional-ensemble (1d)` — FAILED — significantly worse than the naive baseline
-  - **verdict not supported by its own interval** — accuracy 0.4373 [0.3372, 0.5427] and its null 0.5610 [0.3842, 0.7235] OVERLAP across [0.3842, 0.5427]: the verdict compares the accuracy interval to the null's point estimate and ignores the null's own published interval, so the stated skill of -0.1237 is not resolved by this sample
+  - **verdict not supported by its own interval** — accuracy 0.4393 [0.3391, 0.5447] and its null 0.5589 [0.3831, 0.7211] OVERLAP across [0.3831, 0.5447]: the verdict compares the accuracy interval to the null's point estimate and ignores the null's own published interval, so the stated skill of -0.1196 is not resolved by this sample
 - `prequential-majority (1d)` — NO SKILL — indistinguishable from baseline
 - `directional-ensemble (1w)` — FAILED — significantly worse than the naive baseline
-  - **verdict not supported by its own interval** — accuracy 0.4229 [0.3050, 0.5503] and its null 0.6236 [0.5233, 0.7143] OVERLAP across [0.5233, 0.5503]: the verdict compares the accuracy interval to the null's point estimate and ignores the null's own published interval, so the stated skill of -0.2007 is not resolved by this sample
-- `prequential-majority (1w)` — INSUFFICIENT DAYS (9/10 credible days of 14, 5 degenerate) — no interval, so no verdict
+  - **verdict not supported by its own interval** — accuracy 0.4331 [0.3191, 0.5546] and its null 0.6190 [0.5264, 0.7037] OVERLAP across [0.5264, 0.5546]: the verdict compares the accuracy interval to the null's point estimate and ignores the null's own published interval, so the stated skill of -0.1859 is not resolved by this sample
+- `prequential-majority (1w)` — NO SKILL — indistinguishable from baseline
 - `directional-ensemble (1d, high conviction)` — INSUFFICIENT DAYS (5/10 credible days of 7, 2 degenerate) — no interval, so no verdict
 - `directional-ensemble (1w, high conviction)` — FAILED — significantly worse than the naive baseline
+  - **verdict not supported by its own interval** — accuracy 0.3786 [0.2498, 0.5271] and its null 0.6131 [0.4582, 0.7480] OVERLAP across [0.4582, 0.5271]: the verdict compares the accuracy interval to the null's point estimate and ignores the null's own published interval, so the stated skill of -0.2345 is not resolved by this sample
 
 ### Backtested claims with no live record yet
 
-- `filingsdrift21` — registered claim 50.0%, 177 forecasts recorded, 0 graded. Not a live result.
-- `liquidity21` — registered claim 59.5%, 5,935 forecasts recorded, 0 graded. Not a live result.
-- `liquidity21-crypto` — registered claim 79.5%, 149 forecasts recorded, 0 graded. Not a live result.
-- `trend21` — registered claim 73.1%, 5,997 forecasts recorded, 0 graded. Not a live result.
-- `trend21-crypto` — registered claim 93.4%, 149 forecasts recorded, 0 graded. Not a live result.
-- `trend63` — registered claim 70.0%, 5,997 forecasts recorded, 0 graded. Not a live result.
-- `vol21` — registered claim 55.8%, 6,019 forecasts recorded, 0 graded. Not a live result.
+- `filingsdrift21` — registered claim 50.0%, 181 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21` — registered claim 59.5%, 6,389 forecasts recorded, 0 graded. Not a live result.
+- `liquidity21-crypto` — registered claim 79.5%, 156 forecasts recorded, 0 graded. Not a live result.
+- `trend21` — registered claim 73.1%, 6,460 forecasts recorded, 0 graded. Not a live result.
+- `trend21-crypto` — registered claim 93.4%, 156 forecasts recorded, 0 graded. Not a live result.
+- `trend63` — registered claim 70.0%, 6,460 forecasts recorded, 0 graded. Not a live result.
+- `vol21` — registered claim 55.8%, 6,480 forecasts recorded, 0 graded. Not a live result.
 
-**Multiplicity:** family_size=13, looks=34, divisor=442, corrected_alpha=0.00011312217194570136.
+**Multiplicity:** family_size=13, looks=35, divisor=455, corrected_alpha=0.00010989010989010989.
 
-**Survivorship:** epoch 2026-07-24; unmeasured — no graded post-epoch symbols; measured effect +0.36pp (active-only 83.67% minus survivorship-clean 83.31%, n=75,792 clean vs 18,084 active, revalidation of 2026-08-18T10:20:23+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
+**Survivorship:** epoch 2026-07-24; listing status resolvable for 325/383 graded symbols (84.9%): 58 inactive symbol(s) with no delisted_at; measured effect +0.27pp (active-only 83.58% minus survivorship-clean 83.31%, n=75,821 clean vs 18,090 active, revalidation of 2026-08-19T10:20:18+00:00) — POSITIVE means the active-only figure is INFLATED by excluding dead names.
 
 <!-- END GENERATED live_accuracy -->
 
@@ -208,15 +209,15 @@ Measured from `data/signaldeck.db` by `tools/deck_facts.py`. Do not edit by hand
 | — observation days | 2,146 |
 | — distinct symbols | 2,947 |
 | — `source` values present | `bars-1d` |
-| `symbols.delisted_at` stamps | 1,869 |
+| `symbols.delisted_at` stamps | 1,870 |
 | — delisted 2020-2022 | 622 |
 | — delisted 2023-2025 | 1,118 |
 | — recent window against earlier | **179.7%** of the 2020-2022 count |
-| Daily-bar calendar (from `SPY`) | 1,917 sessions |
-| Stock bar coverage | 90.76% — 2,671,948 of 2,944,041 symbol-days over 2,940 symbols |
-| — still-listed names only | 99.61% over 1,071 symbols |
-| — names carrying `delisted_at` only | 79.37% over 1,869 symbols |
-| — symbols that stop printing early with no `delisted_at` | 422 |
+| Daily-bar calendar (from `QQQ`) | 1,918 sessions |
+| Stock bar coverage | 90.75% — 2,672,777 of 2,945,108 symbol-days over 2,940 symbols |
+| — still-listed names only | 99.61% over 1,070 symbols |
+| — names carrying `delisted_at` only | 79.40% over 1,870 symbols |
+| — symbols that stop printing early with no `delisted_at` | 421 |
 | Crypto bar coverage | 100.00% over 7 symbols |
 
 The membership derives entirely from the daily-bar history, so it is point-in-time only to the extent that history is complete: the stock coverage row is the bound under every point-in-time claim in this deck. **Read the two cohort rows before the blended one.** They answer different questions — the still-listed row is whether the live universe has holes, the delisted row is how densely the imported dead names were ever sampled — and while dead names are being imported the blended figure moves with the import rather than with data quality. The symbols that stop printing with no `delisted_at` are the survivorship-relevant ones: they leave the universe without being recorded as dead, which is indistinguishable from having stopped looking.
