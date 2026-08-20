@@ -85,8 +85,12 @@ func (w *PaperTrader) assessEntry(
 		}
 	}
 
-	// One bar read serves the expectancy state key AND the tail episodes.
-	bars, err := w.St.LastBars(ctx, s.ID, md.TF1d, evEpisodeCap)
+	// One bar read serves the expectancy state key AND the tail episodes, and it
+	// is bounded to asof so BOTH consumers see only what was knowable then.
+	// LastBars takes a COUNT and no timestamp, so it returned the newest bars
+	// whatever bar was being judged. Live that is the same window; over any past
+	// bar it is the future.
+	bars, err := w.St.BarsBefore(ctx, s.ID, md.TF1d, asof+1, evEpisodeCap)
 	if err != nil {
 		return ev.Assessment{}, err
 	}
@@ -257,7 +261,12 @@ func (w *PaperTrader) corrToBook(ctx context.Context, strategy string, symbolID,
 // dailyReturnsByTs maps bar ts -> that session's close-to-close return, over
 // the trailing evCorrBars sessions at or before asof.
 func (w *PaperTrader) dailyReturnsByTs(ctx context.Context, symbolID, asof int64) (map[int64]float64, error) {
-	bars, err := w.St.LastBars(ctx, symbolID, md.TF1d, evCorrBars+1)
+	// Bounded in SQL. This read is documented as "the trailing evCorrBars
+	// sessions at or before asof", but LastBars ignores asof and returns the
+	// newest bars, leaving the ts guard in the loop below to drop them one at a
+	// time — which over a past asof discards the whole window and yields an
+	// empty map rather than the trailing sessions.
+	bars, err := w.St.BarsBefore(ctx, symbolID, md.TF1d, asof+1, evCorrBars+1)
 	if err != nil {
 		return nil, err
 	}

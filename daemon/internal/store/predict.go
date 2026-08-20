@@ -110,6 +110,39 @@ func (s *Store) LatestPrediction(ctx context.Context, symbolID int64, h md.Horiz
 	return p, err == nil, err
 }
 
+// PredictionBefore returns the newest usable prediction stamped STRICTLY BEFORE
+// `before`, for reconstructing what the book could have known at a past bar.
+//
+// LatestPrediction is deliberately left alone: six production callers legitimately
+// want "newest", and quietly bounding it under them would change live behaviour.
+// This is the replay-only sibling.
+//
+// STRICTLY before, not at-or-before, because the caller's bar is the FILL bar. A
+// prediction stamped at or after the bar it fills on is the same-bar lookahead the
+// paper book's whole no-lookahead rule exists to forbid: the fill anchor is
+// BarAtOrAfter(pred.Ts+1), so a prediction must precede the bar it fills at.
+//
+// maxAge bounds STALENESS as well. As-of-ness alone is not enough — the newest row
+// with n_used > 0 can be weeks old during a starved stretch (that is exactly the
+// defect that back-dated 46 fills), so a replay would otherwise act on a month-old
+// signal and call it point-in-time. maxAge <= 0 disables the staleness bound.
+func (s *Store) PredictionBefore(ctx context.Context, symbolID int64, h md.Horizon, before, maxAge int64) (Prediction, bool, error) {
+	p := Prediction{SymbolID: symbolID, Horizon: h}
+	floor := int64(0)
+	if maxAge > 0 {
+		floor = before - maxAge
+	}
+	err := s.db.QueryRowContext(ctx, `
+		SELECT ts, raw_prob, cal_prob, n_used, components FROM predictions
+		WHERE symbol_id=? AND horizon=? AND n_used > 0 AND ts < ? AND ts >= ?
+		ORDER BY ts DESC LIMIT 1`,
+		symbolID, string(h), before, floor).Scan(&p.Ts, &p.RawProb, &p.CalProb, &p.NUsed, &p.Components)
+	if err == sql.ErrNoRows {
+		return p, false, nil
+	}
+	return p, err == nil, err
+}
+
 // UnresolvedPredictions returns pending prediction outcomes at/before cutoff
 // that CAN still be graded — the symbol has at least one daily bar at or after
 // the row's target instant.

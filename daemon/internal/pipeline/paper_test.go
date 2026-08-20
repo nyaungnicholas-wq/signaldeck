@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 
@@ -622,5 +623,54 @@ func TestPaperTrader_StrandedExitIsReportedNotSwallowed(t *testing.T) {
 	}
 	if !strings.Contains(status, "STRANDED") {
 		t.Fatalf("a wanted exit was dropped silently; status=%q must report it as STRANDED", status)
+	}
+}
+
+// The ADV window must be the trailing bars AT OR BEFORE the fill, and a FULL
+// window — not whatever survives filtering the newest bars after the fact.
+//
+// advUSD used to fetch the newest advLookbackBars*2 bars with LastBars, which
+// takes a count and no timestamp, then drop any that postdated the fill in Go.
+// Whenever the fill was not the newest bar, most of the fetched window was
+// discarded and the estimate was built from too few bars — shrinking ADV, which
+// shrinks capacity and can refuse the fill outright.
+func TestAdvUSD_WindowEndsAtTheFillAndStaysFull(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
+
+	// Day 1-10 thin, 11-30 thicker, 31-60 enormous. The fill is at day 30, so the
+	// enormous tail must not participate — and the window must still reach back
+	// far enough to include the thin days, which is what proves it is full.
+	bars := make([]md.Bar, 0, 60)
+	for d := int64(1); d <= 60; d++ {
+		vol := 1000.0
+		switch {
+		case d > 30:
+			vol = 999_999
+		case d > 10:
+			vol = 3000
+		}
+		bars = append(bars, md.Bar{
+			SymbolID: sym.ID, TF: md.TF1d, Ts: d * 86400,
+			Open: 100, High: 100.1, Low: 99.9, Close: 100, Volume: vol,
+		})
+	}
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	w := &PaperTrader{St: st}
+	got, err := w.advUSD(ctx, sym.ID, 30*86400)
+	if err != nil {
+		t.Fatalf("advUSD: %v", err)
+	}
+
+	// A full 21-bar window ending at day 30 is day 10 (vol 1000) plus days 11-30
+	// (vol 3000), at close 100.
+	want := 100 * (1*1000.0 + 20*3000.0) / 21
+	if math.Abs(got-want) > 1 {
+		t.Fatalf("advUSD=%.2f want %.2f — a truncated window (the old behaviour "+
+			"kept only days 19-30 and gave %.2f), or the future leaked in", got, want, 100*3000.0)
 	}
 }

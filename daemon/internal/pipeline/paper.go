@@ -634,12 +634,20 @@ const advLookbackBars = 21
 // the symbol rather than filling at zero impact. Failing to a skip, rather than
 // to a free fill, is the whole point.
 func (w *PaperTrader) advUSD(ctx context.Context, symbolID, ts int64) (float64, error) {
-	bars, err := w.St.LastBars(ctx, symbolID, md.TF1d, advLookbackBars*2)
+	// Bounded in SQL, not after the fact. LastBars returns the NEWEST bars
+	// regardless of ts and the loop below then skipped any that postdate the
+	// fill — so when ts is not the newest bar, most of the fetched window was
+	// discarded and fewer than advLookbackBars usable bars survived, quietly
+	// shrinking the ADV estimate (or zeroing it, which refuses the fill). Asking
+	// SQL for the newest bars AT OR BEFORE ts returns a full window every time.
+	// Live this is a no-op, because there ts IS the newest bar.
+	bars, err := w.St.BarsBefore(ctx, symbolID, md.TF1d, ts+1, advLookbackBars*2)
 	if err != nil {
 		return 0, err
 	}
-	// LastBars returns ascending by ts; walk backwards so the window is the most
-	// recent advLookbackBars bars at or before ts, not the oldest ones.
+	// Ascending by ts; walk backwards so the window is the most recent
+	// advLookbackBars bars at or before ts, not the oldest ones. The ts guard
+	// below is now redundant with the SQL bound and kept only as a belt.
 	var sum float64
 	var n int
 	for i := len(bars) - 1; i >= 0 && n < advLookbackBars; i-- {
