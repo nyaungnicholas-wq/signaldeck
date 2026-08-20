@@ -1501,6 +1501,38 @@ CREATE TABLE IF NOT EXISTS regime_outcome_quarantine_manifest (
   frozen_ts INTEGER NOT NULL
 );
 
+-- ═══ VENDOR FLAT-PAD QUARANTINE ═══════════════════════════════════════════════
+-- Alpaca emits a synthetic session (open=high=low=close, volume 0) when the
+-- requested feed saw no trade, and both ingest paths store it verbatim. The
+-- result is long constant-price runs that are indistinguishable from a real
+-- series to anything that reads bars: SBNY (Signature Bank) carries 509 sessions
+-- of 70.00/70.00/70.00/70.00 volume 0 after the bank was seized, and all 509 sit
+-- in universe_membership as a live name printing exactly 0.0% return every day.
+--
+-- Rows move HERE rather than being deleted. A run that turns out to be real is
+-- restorable, the count is auditable, and no measurement silently changes shape
+-- because a repair removed rows nobody can inspect afterwards.
+--
+-- NOT keyed on delisted_at, deliberately: it does not bound the problem in
+-- either direction. SBNY's stamp sits at the END of its pad (so a
+-- day <= delisted_at filter ADMITS the whole run), and NVDQ has no stamp at all
+-- while carrying 1,208 padded sessions before its first real trade.
+CREATE TABLE IF NOT EXISTS bars_quarantine (
+  symbol_id      INTEGER NOT NULL,
+  tf             TEXT    NOT NULL,
+  ts             INTEGER NOT NULL,
+  open           REAL    NOT NULL,
+  high           REAL    NOT NULL,
+  low            REAL    NOT NULL,
+  close          REAL    NOT NULL,
+  volume         REAL    NOT NULL,
+  run_id         TEXT    NOT NULL,  -- the quarantine run that moved it
+  reason         TEXT    NOT NULL,
+  quarantined_at INTEGER NOT NULL,
+  PRIMARY KEY (symbol_id, tf, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_bars_quarantine_run ON bars_quarantine (run_id);
+
 -- ═══ REGIME-CALL POSTMORTEMS (credibility wave) ═══════════════════════════════
 -- One deterministic plain-English postmortem per HIGH-conviction (>=0.8) regime
 -- call that resolved WRONG. Shape differs from prediction_postmortems (no
