@@ -18,6 +18,15 @@ package pipeline
 //
 // Appending to this list is a deliberate act. It says: everything after this
 // instant is a different strategy, and no statistic may span it.
+//
+// TWO KINDS OF BOUNDARY LIVE HERE, and the Reason text says which. Most are
+// STRATEGY changes, as above. One is an INTEGRITY boundary: the strategy did not
+// change, but the simulator that produced the earlier rows was wrong, so the
+// record before it is not a record of anything that could have happened. The
+// mechanism is the same — no statistic may span the instant — and putting it
+// here rather than inventing a second one keeps a single answer to "may these
+// two periods be averaged together". Do not read an integrity boundary as
+// evidence that the strategy changed.
 
 import (
 	"context"
@@ -36,6 +45,32 @@ import (
 // change; it is a different strategy wearing the same name.
 const barrierEpochTs int64 = 1785801600
 
+// backdatedFillEpochTs is 2026-07-22T00:00:00Z — the first instant after which
+// no fill in the book is back-dated.
+//
+// INTEGRITY BOUNDARY, NOT A STRATEGY CHANGE. buildStep bounded the fill bar only
+// from above, so a prediction left behind by a starved stretch (LatestPrediction
+// returns the newest row with n_used > 0, weeks old while the model is retired)
+// filled at THAT bar's open — while the return forecast, corrToBook and the
+// riskgate book were all measured at the as-of clock, and markPositions then
+// marked the position at the as-of close. The whole intervening move was booked
+// as one step's P&L.
+//
+// 46 of the book's 123 fills landed that way: 43 of flagship-1d's 77 (2026-07-07
+// to 07-21) and 3 of flagship-1w's 46 (07-14), the worst back-dated by 22 days.
+// flagship-1d equity printed 99,491.93 -> 103,218.71 -> 98,745.79 across one such
+// batch, on what was really a small loss. The last back-dated fill is 2026-07-21
+// 04:00 (paper_trades id 118); the first fill at or after this boundary is
+// 2026-07-22 04:00, so the split is clean.
+//
+// The fix is the fill-window bound in paper.go: a step transacts only inside
+// (cursor.LastBarTs, asof]. Nothing is deleted and the book is continuous here as
+// at every other boundary — the cash and positions carried across are the ones
+// the contaminated period actually left behind, so the equity LEVEL after this
+// instant still inherits that P&L. Only per-epoch RETURNS are clean, which is
+// what the scoping is for.
+const backdatedFillEpochTs int64 = 1784678400
+
 // paperEpochSchedule applies to every simulated book. Both flagship books
 // changed on the same commit, so they share one schedule; a future change that
 // touches only one horizon would key this by strategy.
@@ -47,7 +82,19 @@ var paperEpochSchedule = []store.PaperEpoch{
 			"no take-profit, no time stop; holding period unbounded.",
 	},
 	{
-		Epoch: 2, FromTs: barrierEpochTs, Label: "triple-barrier",
+		Epoch: 2, FromTs: backdatedFillEpochTs, Label: "backdated-fills-fixed",
+		Reason: "INTEGRITY BOUNDARY, not a strategy change: the exit and entry rules " +
+			"either side of this instant are identical. Before it, buildStep placed no " +
+			"lower bound on the fill bar, so a stale prediction filled at a bar the book " +
+			"had already marched past while every decision input was measured at the " +
+			"as-of clock — 46 of 123 fills, back-dated by up to 22 days, each booking the " +
+			"intervening move as one step's P&L. No statistic may span this instant. The " +
+			"book is continuous: cash and open positions carry across unchanged, so the " +
+			"equity LEVEL after it still inherits the earlier fabricated P&L and only " +
+			"per-epoch returns are clean.",
+	},
+	{
+		Epoch: 3, FromTs: barrierEpochTs, Label: "triple-barrier",
 		Reason: "Triple-barrier exits with next-open fills (P4D): hard stop at 2.0xATR(20), " +
 			"take-profit at 3.0xATR(20), horizon expiry at 1 bar (1d) / 5 bars (1w). " +
 			"On flagship-1d the 1-bar horizon dominates, so positions now open at one " +

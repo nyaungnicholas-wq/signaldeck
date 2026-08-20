@@ -53,8 +53,10 @@ func TestEpochScopedEdgeIgnoresThePreviousStrategy(t *testing.T) {
 	}
 
 	// Measured at a time inside EPOCH 1, the edge is there — this is what the
-	// old strategy earned, and epoch 1 is entitled to it.
-	e1, err := w.tradedEdge(ctx, "flagship-1d", barrierEpochTs-86400)
+	// old strategy earned, and epoch 1 is entitled to it. Probe just before the
+	// FIRST boundary, not the barrier: the integrity boundary sits between them,
+	// so barrierEpochTs-86400 is inside epoch 2 and would correctly see nothing.
+	e1, err := w.tradedEdge(ctx, "flagship-1d", backdatedFillEpochTs-86400)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,12 +132,25 @@ func TestEnsureEpochsIsIdempotent(t *testing.T) {
 	if len(got) != len(paperEpochSchedule) {
 		t.Fatalf("got %d epochs, want %d", len(got), len(paperEpochSchedule))
 	}
-	if got[1].FromTs != barrierEpochTs || got[1].Label != "triple-barrier" {
-		t.Fatalf("epoch 2 = %+v, want the barrier boundary", got[1])
+	if got[1].FromTs != backdatedFillEpochTs || got[1].Label != "backdated-fills-fixed" {
+		t.Fatalf("epoch 2 = %+v, want the back-dated-fill integrity boundary", got[1])
 	}
-	// The boundary must be the documented date, not whatever a refactor left.
+	if got[2].FromTs != barrierEpochTs || got[2].Label != "triple-barrier" {
+		t.Fatalf("epoch 3 = %+v, want the barrier boundary", got[2])
+	}
+	// The boundaries must be the documented dates, not whatever a refactor left.
 	if barrierEpochTs != 1785801600 {
 		t.Fatalf("the split date moved: %d — history does not move", barrierEpochTs)
+	}
+	if backdatedFillEpochTs != 1784678400 {
+		t.Fatalf("the integrity boundary moved: %d — history does not move", backdatedFillEpochTs)
+	}
+	// Ascending in time, which EpochBounds' half-open windows depend on.
+	for i := 1; i < len(got); i++ {
+		if got[i].FromTs <= got[i-1].FromTs {
+			t.Fatalf("epoch %d starts at %d, not after epoch %d at %d",
+				got[i].Epoch, got[i].FromTs, got[i-1].Epoch, got[i-1].FromTs)
+		}
 	}
 }
 
