@@ -178,3 +178,47 @@ func TestNoEpochsMeansUnscoped(t *testing.T) {
 		t.Fatal("with no epochs declared the whole log is one record and the edge must be measurable")
 	}
 }
+
+// The schedule must land on a pass that does NOTHING ELSE.
+//
+// ensureEpochs used to be called from buildStep, which Run skips whenever no new
+// daily bar has arrived — so on a quiet day the boundaries were never written,
+// despite the comment promising they are declared "every pass". A boundary added
+// to the code then sat unapplied until the next new bar and had to be written by
+// hand with `sdmaint paper-epochs -apply`. This drives the book's cursor to the
+// as-of clock FIRST, so the pass under test is a guaranteed no-op.
+func TestEnsureEpochsLandsOnANoOpPass(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "AAA", "stocks", "")
+	seedDailyPx(t, st, sym.ID, [][3]float64{{1, 100, 100}, {2, 100, 100}, {3, 100, 100}})
+
+	// Advance the cursor to the newest bar so Run's guard skips buildStep.
+	if _, err := st.InitPaperBook(ctx, "flagship-1d", 100_000, 0); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	applied, err := st.ApplyPaperStep(ctx, store.PaperApply{
+		Strategy: "flagship-1d", BarTs: 3 * 86400, NewCash: 100_000,
+		EquityTs: 3 * 86400, EquityValue: 100_000,
+	})
+	if err != nil || !applied {
+		t.Fatalf("cursor advance: applied=%v err=%v", applied, err)
+	}
+	if got, _ := st.PaperEpochs(ctx, "flagship-1d"); len(got) != 0 {
+		t.Fatalf("fixture broken: %d epoch(s) before the run, want 0", len(got))
+	}
+
+	w := &PaperTrader{St: st}
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got, err := st.PaperEpochs(ctx, "flagship-1d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(paperEpochSchedule) {
+		t.Fatalf("a no-op pass wrote %d epoch(s), want %d — the schedule only lands "+
+			"when the book also trades, so a new boundary sits unapplied", len(got), len(paperEpochSchedule))
+	}
+}

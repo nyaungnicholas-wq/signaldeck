@@ -145,6 +145,19 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 		if _, err := w.St.InitPaperBook(ctx, strat.Name, startCash, asof); err != nil {
 			return "", err
 		}
+		// EPOCH BOUNDARIES. Declared from code every pass so they exist on any
+		// database, including a fresh one, without a migration anybody has to
+		// remember. See paperepoch.go for what an epoch is and why the record splits.
+		//
+		// BEFORE the cursor guard below, not inside buildStep. It used to sit in
+		// buildStep, which the guard skips whenever no new daily bar has arrived —
+		// so on a quiet day, or any day the book had already acted on, the schedule
+		// was never written and the comment above was false. A boundary added to the
+		// code then sat unapplied until the next new bar, and had to be written by
+		// hand with `sdmaint paper-epochs -apply`.
+		if err := w.ensureEpochs(ctx, strat.Name); err != nil {
+			return "", err
+		}
 		cur, ok, err := w.St.PaperCursor(ctx, strat.Name)
 		if err != nil {
 			return "", err
@@ -230,12 +243,6 @@ func (w *PaperTrader) buildStep(
 	symByID := make(map[int64]string, len(syms))
 	for _, s := range syms {
 		symByID[s.ID] = s.Symbol
-	}
-	// EPOCH BOUNDARIES. Declared from code every pass so they exist on any
-	// database, including a fresh one, without a migration anybody has to
-	// remember. See paperepoch.go for what an epoch is and why the record splits.
-	if err := w.ensureEpochs(ctx, strategy); err != nil {
-		return apply, refused, err
 	}
 	// RISK-LIMIT PROVENANCE. Every limit resolves through a SIGNALDECK_RISK_*
 	// environment variable with a default behind it, and until this line nothing
