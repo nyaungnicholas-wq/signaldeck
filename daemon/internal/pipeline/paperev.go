@@ -96,7 +96,15 @@ func (w *PaperTrader) assessEntry(
 	}
 
 	// State-conditional expectancy prior (advisory).
-	if key := expectancy.CurrentStateKeys(bars, nil)[h]; key != "" {
+	//
+	// WITHHELD IN RECONSTRUCTION. The expectancy table is keyed
+	// (symbol_id, horizon, state_key) with no ts and is overwritten in place, so
+	// the values that fed a past decision no longer exist — 99.9% of rows have
+	// been rewritten since the window a replay cares about. Reading it at a past
+	// bar would feed that bar today's answer. Because the prior is advisory and
+	// this branch already has a not-found path, a reconstruction simply decides
+	// without it: a stated, conservative deviation rather than silent lookahead.
+	if key := expectancy.CurrentStateKeys(bars, nil)[h]; key != "" && !w.replaying() {
 		rows, err := w.St.Expectancy(ctx, s.ID, h)
 		if err != nil {
 			return ev.Assessment{}, err

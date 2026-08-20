@@ -59,6 +59,10 @@ var paperStrategies = []struct {
 // PaperTrader runs the internal simulated book(s). Registered like any worker.
 type PaperTrader struct {
 	St *store.Store
+	// Replay, when set, puts the book in RECONSTRUCTION mode: every input is
+	// bounded to the bar being replayed and the output is written under its own
+	// strategy names. Nil is live. See paperreplay.go.
+	Replay *ReplayConfig
 }
 
 func (w *PaperTrader) Name() string { return "paper-trader" }
@@ -68,7 +72,7 @@ func (w *PaperTrader) Name() string { return "paper-trader" }
 func (w *PaperTrader) Interval() time.Duration { return time.Hour }
 
 func (w *PaperTrader) Run(ctx context.Context) (string, error) {
-	syms, err := w.St.ListSymbols(ctx, true)
+	syms, err := w.universeAt(ctx, w.replayAsOf())
 	if err != nil {
 		return "", err
 	}
@@ -85,6 +89,11 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 		if ts > asof {
 			asof = ts
 		}
+	}
+	if w.replaying() {
+		// The driver supplies the bar; the newest-bar scan above only set an upper
+		// bound that a reconstruction must not use.
+		asof = w.Replay.AsOf
 	}
 	if asof == 0 {
 		return "no daily bars yet — nothing to simulate", nil
@@ -106,7 +115,7 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 	// delisted name cannot drag the as-of clock.
 	held := map[int64]bool{}
 	for _, strat := range paperStrategies {
-		positions, err := w.St.PaperPositions(ctx, strat.Name)
+		positions, err := w.St.PaperPositions(ctx, w.strategyName(strat.Name))
 		if err != nil {
 			return "", err
 		}
@@ -142,7 +151,7 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 	// position carried PAST its stop, which is the opposite kind of event.
 	stranded := 0
 	for _, strat := range paperStrategies {
-		if _, err := w.St.InitPaperBook(ctx, strat.Name, startCash, asof); err != nil {
+		if _, err := w.St.InitPaperBook(ctx, w.strategyName(strat.Name), startCash, asof); err != nil {
 			return "", err
 		}
 		// EPOCH BOUNDARIES. Declared from code every pass so they exist on any
@@ -155,16 +164,16 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 		// was never written and the comment above was false. A boundary added to the
 		// code then sat unapplied until the next new bar, and had to be written by
 		// hand with `sdmaint paper-epochs -apply`.
-		if err := w.ensureEpochs(ctx, strat.Name); err != nil {
+		if err := w.ensureEpochs(ctx, w.strategyName(strat.Name)); err != nil {
 			return "", err
 		}
-		cur, ok, err := w.St.PaperCursor(ctx, strat.Name)
+		cur, ok, err := w.St.PaperCursor(ctx, w.strategyName(strat.Name))
 		if err != nil {
 			return "", err
 		}
 		if !ok {
 			// Just initialized above; re-read defensively.
-			cur, _, err = w.St.PaperCursor(ctx, strat.Name)
+			cur, _, err = w.St.PaperCursor(ctx, w.strategyName(strat.Name))
 			if err != nil {
 				return "", err
 			}
@@ -173,7 +182,7 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 			continue // no new global bar for this strategy — idempotent no-op
 		}
 
-		apply, vetoed, err := w.buildStep(ctx, strat.Name, strat.Horizon, syms, marketByID, cur, asof, &stranded)
+		apply, vetoed, err := w.buildStep(ctx, w.strategyName(strat.Name), strat.Horizon, syms, marketByID, cur, asof, &stranded)
 		if err != nil {
 			return "", err
 		}
@@ -302,7 +311,7 @@ func (w *PaperTrader) buildStep(
 	// doing. A risk-rejected name must not even consume an EV rank slot, because
 	// rank IS the opportunity cost: capital denied to rank 1 by an untradeable
 	// rank 8 is capital misallocated by the accounting, not by the market.
-	forecasts, err := w.returnForecastsByID(ctx, h)
+	forecasts, err := w.returnForecastsFor(ctx, h, syms, asof)
 	if err != nil {
 		return apply, refused, err
 	}
@@ -324,7 +333,7 @@ func (w *PaperTrader) buildStep(
 		if err != nil {
 			return apply, refused, err
 		}
-		pred, okP, err := w.St.LatestPrediction(ctx, s.ID, h)
+		pred, okP, err := w.predictionFor(ctx, s.ID, h, asof)
 		if err != nil {
 			return apply, refused, err
 		}
