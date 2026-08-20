@@ -3,9 +3,28 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
+
+// replayBusyRetries is how many times a session is re-attempted when the write
+// lock is held elsewhere.
+//
+// A replay is a long batch job running against a database a live fleet is still
+// writing to. The store already sets busy_timeout(5000), so reaching this code
+// means five seconds of contention, not a missing pragma — the first attempt at
+// this cost the run 0 of 78 sessions. Re-attempting a session is safe because
+// ApplyPaperStep is atomic and its cursor guard makes re-running the same bar a
+// no-op, so a retry can only complete work or do nothing.
+const replayBusyRetries = 10
+
+// busy reports the one error worth retrying. Anything else is a real fault and
+// must stop the run rather than be papered over by a loop.
+func busy(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "database is locked")
+}
 
 // ── THE REPLAY DRIVER ────────────────────────────────────────────────────────
 //
@@ -24,6 +43,7 @@ type ReplayReport struct {
 	FromTs     int64
 	ToTs       int64
 	Bars       int // sessions stepped
+	Retries    int // sessions re-attempted because the write lock was held
 	Acted      int // passes that applied a step
 	Refused    int // entries the EV engine or the risk gate turned down
 	Stranded   int // wanted exits the execution model could not price
@@ -97,10 +117,19 @@ func (w *PaperTrader) ReplayRange(ctx context.Context, from, to int64, cfg Repla
 		step := cfg
 		step.AsOf = ts
 		w.Replay = &step
-		status, err := w.Run(ctx)
+		var status string
+		var err error
+		for attempt := 0; ; attempt++ {
+			status, err = w.Run(ctx)
+			if err == nil || !busy(err) || attempt >= replayBusyRetries {
+				break
+			}
+			rep.Retries++
+			time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+		}
 		if err != nil {
-			return rep, fmt.Errorf("replay stopped at bar %d after %d of %d session(s): %w",
-				ts, rep.Bars, len(bars), err)
+			return rep, fmt.Errorf("replay stopped at bar %d after %d of %d session(s) "+
+				"(%d retr(ies) spent): %w", ts, rep.Bars, len(bars), rep.Retries, err)
 		}
 		rep.Bars++
 		rep.Statuses = append(rep.Statuses, fmt.Sprintf("%d: %s", ts, status))

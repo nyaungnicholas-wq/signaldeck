@@ -113,7 +113,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\nREFUSED: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("replayed %d session(s) into %v\n", rep.Bars, rep.Strategies)
+	fmt.Printf("replayed %d session(s) into %v (%d lock retr(ies))\n", rep.Bars, rep.Strategies, rep.Retries)
 	for _, s := range rep.Statuses {
 		fmt.Println("  " + s)
 	}
