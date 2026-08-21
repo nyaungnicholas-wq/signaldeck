@@ -471,6 +471,11 @@ func (s *Store) MarkUngradableConfluenceOutcomes(ctx context.Context, reason str
 UPDATE confluence_outcomes
    SET ungradable = ?, fwd_return = NULL, win = NULL, resolved_at = NULL, episode_ts = NULL
  WHERE ungradable IS NULL
+   -- NEVER retire the CURRENT bucket. Its session may not have printed yet, and
+   -- a row condemned before its own bar exists can never be released: the
+   -- scorer's INSERT OR IGNORE would then skip the real setup for the rest of
+   -- the day. Only a bucket the calendar has already left is judgeable.
+   AND ts < (strftime('%s','now') / 86400) * 86400
    AND (
      -- (a) the entry leg cannot come from this row's own bucket day.
      COALESCE((SELECT MAX(b.ts) FROM bars b

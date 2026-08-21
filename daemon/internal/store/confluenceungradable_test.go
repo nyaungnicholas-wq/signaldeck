@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
@@ -167,5 +168,65 @@ func TestUngradable_EpisodesSkipRetiredRows(t *testing.T) {
 	}
 	if len(episodes) != 1 {
 		t.Fatalf("%d episode(s) over one real bet, want 1", len(episodes))
+	}
+}
+
+// THE CURRENT BUCKET MUST NEVER BE RETIRED.
+//
+// The bucket is a UTC day; US daily bars are stamped 04:00/05:00 UTC. Between
+// 00:00 and the session's bar the bucket exists and its bar does not, so a
+// retirement that judged the current day would condemn every setup opened in
+// that window — and because the scorer inserts with INSERT OR IGNORE on
+// (symbol, ts, horizon), a condemned row can never be replaced by the real one.
+// The whole trading day would then be silently lost.
+//
+// Measured live on the first pass after the episode work shipped: 59 of 61 rows
+// opened on 2026-08-21 were retired this way before the guard existed.
+//
+// MUTATION CHECK, verified: delete the `ts < today` clause from
+// MarkUngradableConfluenceOutcomes and this test fails with the current
+// bucket retired.
+func TestUngradable_NeverRetiresTheCurrentBucket(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "TODAY", md.Stocks, "")
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// Today's bucket, with NO bar for it yet — the 00:00-to-open window.
+	today := (time.Now().UTC().Unix() / 86400) * 86400
+	if err := st.InsertConfluenceOutcome(ctx, ConfluenceOutcome{
+		SymbolID: sym.ID, Ts: today, Horizon: "1d", Direction: 1, Agree: 3, EntryPx: 10,
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	// And a stale one from a week ago, which SHOULD be retired.
+	stale := today - 7*86400
+	if err := st.InsertConfluenceOutcome(ctx, ConfluenceOutcome{
+		SymbolID: sym.ID, Ts: stale, Horizon: "1d", Direction: 1, Agree: 3, EntryPx: 10,
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	if _, err := st.MarkUngradableConfluenceOutcomes(ctx, "test"); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	var todayRetired, staleRetired bool
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT ungradable IS NOT NULL FROM confluence_outcomes WHERE symbol_id=? AND ts=?`,
+		sym.ID, today).Scan(&todayRetired); err != nil {
+		t.Fatalf("read today: %v", err)
+	}
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT ungradable IS NOT NULL FROM confluence_outcomes WHERE symbol_id=? AND ts=?`,
+		sym.ID, stale).Scan(&staleRetired); err != nil {
+		t.Fatalf("read stale: %v", err)
+	}
+	if todayRetired {
+		t.Fatal("the CURRENT bucket was retired before its own session printed. The scorer inserts " +
+			"OR IGNORE, so this row can never be replaced — the whole trading day is lost silently.")
+	}
+	if !staleRetired {
+		t.Fatal("a week-old bucket with no bar of its own was NOT retired; fail-closed must still close")
 	}
 }

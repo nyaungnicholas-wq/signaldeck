@@ -185,11 +185,24 @@ func (w *ConfluenceScorer) Run(ctx context.Context) (string, error) {
 		// assigns episode_ts in the same statement, so a setup that persists
 		// across consecutive days stays ONE episode rather than becoming one new
 		// bet per day.
+		// AND THE BUCKET'S OWN SESSION MUST HAVE PRINTED.
+		//
+		// The bucket is a UTC day and US daily bars are stamped 04:00/05:00 UTC,
+		// so between 00:00 and the session's bar there is a window in which the
+		// bucket exists and its bar does not. A setup scored there would freeze
+		// the PREVIOUS day's close as its entry, and the resolver — which now
+		// requires the entry bar to be inside the bucket — could never grade it.
+		// Measured on the first pass after this shipped: 59 of 61 rows opened on
+		// 2026-08-21 were dead on arrival for exactly this reason, and because
+		// the insert is INSERT OR IGNORE on (symbol, ts, horizon) they would also
+		// have BLOCKED the real setup once the session opened.
+		//
+		// So the bet is simply not opened until the day it belongs to has a bar.
 		if tradingDay {
 			entryPx, entryTs, okPx, err := w.latestClose(ctx, s.ID, nowUnix)
 			if err != nil {
 				writeErrs++
-			} else if okPx {
+			} else if okPx && entryTs >= dayStart {
 				if err := w.St.InsertConfluenceOutcome(ctx, store.ConfluenceOutcome{
 					SymbolID: s.ID, Ts: dayStart, Horizon: confluenceHorizon,
 					Direction: setup.Direction, Agree: setup.Agree,
