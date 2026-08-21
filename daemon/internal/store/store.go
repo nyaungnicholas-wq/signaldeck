@@ -362,6 +362,12 @@ func migrate(w *sql.DB) error {
 		{"entry_close", `ALTER TABLE confluence_outcomes ADD COLUMN entry_close REAL`},
 		{"exit_low", `ALTER TABLE confluence_outcomes ADD COLUMN exit_low REAL`},
 		{"exit_high", `ALTER TABLE confluence_outcomes ADD COLUMN exit_high REAL`},
+		// Rows that cannot be graded honestly, kept as audit and excluded from
+		// both the resolver queue and every published population. Without the
+		// queue exclusion the resolver would re-examine them on every pass and,
+		// because it selects ORDER BY ts LIMIT 1500, the oldest ungradable rows
+		// would permanently crowd out genuinely pending ones.
+		{"ungradable", `ALTER TABLE confluence_outcomes ADD COLUMN ungradable TEXT`},
 	} {
 		if err := w.QueryRow(
 			`SELECT COUNT(*) FROM pragma_table_info('confluence_outcomes') WHERE name=?`, col.name).Scan(&n); err != nil {

@@ -1240,6 +1240,11 @@ CREATE TABLE IF NOT EXISTS confluence_outcomes (
   -- keying the published population on episode_ts is what stops one sustained
   -- move entering the mean once per calendar day. NULL = not yet classified.
   episode_ts  INTEGER,
+  -- ungradable, when set, names why this row can never carry an honest return.
+  -- The row is KEPT (it is the audit record of a bet that was placed) but is
+  -- excluded from the resolver's queue and from every published population.
+  -- A NULL here means "gradable", not "graded".
+  ungradable  TEXT,
   PRIMARY KEY(symbol_id, ts, horizon)
 );
 CREATE INDEX IF NOT EXISTS idx_confl_out_episode ON confluence_outcomes(symbol_id, direction, ts);

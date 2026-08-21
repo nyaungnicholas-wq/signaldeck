@@ -364,6 +364,30 @@ print(f"ACCURACY GRADING REFUSED ({reason}). Last successful grade {graded_at or
 PY
 )
   { echo "ACCURACY REGISTRY REFUSED:"; echo "$refusal_text"; } >> "$LOG"
+
+  # THE REFUSAL HAS TO REACH EVERY SURFACE, NOT JUST README.
+  #
+  # The block above rewrites README.md and then exits. partials/live_accuracy.md
+  # and the six documents in partials/INCLUDES.txt carry the SAME grade through a
+  # separate generated block, and the regeneration that refreshes them sits far
+  # below this exit — so on a refused cycle it never ran. Measured 2026-08-21:
+  # the registry had been REFUSED since 2026-08-20T14:06:29 with zero rows and
+  # README said "GRADING REFUSED — no accuracy numbers are published", while
+  # CASE_STUDY, HOW_PREDICTORS_WORK, INSTITUTIONAL_GAP, PREDICTION_PROCESS,
+  # SHIP_READINESS and STRATEGY_DECK each still published a full six-row verdict
+  # table stamped 2026-08-19, with nothing on it saying so.
+  #
+  # That is the divergence cmd/collapsecheck was added to end, surviving in the
+  # OTHER direction: the gate fired, and the refusal only reached one document.
+  #
+  # live_accuracy.py already renders a refused registry correctly — it falls back
+  # to stale_last_registry behind a "STALE — this is not a current grade" banner
+  # naming the refusal and its age. It simply was never called here. Failures are
+  # WARNed rather than fatal: a refused cycle already exits non-zero, and losing
+  # the notification below would trade one silent surface for another.
+  "$PY" "$SD/tools/live_accuracy.py" --write     || echo "WARN: partials/live_accuracy.md not regenerated on the refusal path" >> "$LOG"
+  "$PY" "$SD/tools/live_accuracy.py" --inject $(cat "$SD/partials/INCLUDES.txt")     || echo "WARN: live-accuracy blocks not re-injected on the refusal path" >> "$LOG"
+
   notify_remote "SignalDeck accuracy registry — $refusal_text"
   sd_notify "SignalDeck accuracy" "Grading REFUSED — README accuracy tables removed. See the log."
   exit 1

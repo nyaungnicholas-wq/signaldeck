@@ -12,6 +12,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 // ConfluenceSetup is one stored per-symbol confluence assessment (latest only —
@@ -208,7 +209,7 @@ func (s *Store) UnresolvedConfluenceOutcomes(ctx context.Context, before int64, 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT symbol_id, ts, horizon, direction, agree, entry_px
 		FROM confluence_outcomes
-		WHERE resolved_at IS NULL AND ts <= ?
+		WHERE resolved_at IS NULL AND ungradable IS NULL AND ts <= ?
 		ORDER BY ts LIMIT ?`, before, limit)
 	if err != nil {
 		return nil, err
@@ -270,7 +271,7 @@ func (s *Store) ResolvedConfluenceOutcomes(ctx context.Context, limit int) ([]Co
 		       o.entry_ts, o.episode_ts, o.entry_close, o.exit_low, o.exit_high
 		FROM confluence_outcomes o
 		JOIN symbols sy ON sy.id = o.symbol_id
-		WHERE o.resolved_at IS NOT NULL
+		WHERE o.resolved_at IS NOT NULL AND o.ungradable IS NULL
 		ORDER BY o.ts DESC`
 	var args []any
 	if limit > 0 {
@@ -379,7 +380,7 @@ WITH ordered AS (
   SELECT symbol_id, horizon, direction, ts,
          CASE WHEN ts - LAG(ts) OVER (PARTITION BY symbol_id, horizon, direction ORDER BY ts) <= ?
               THEN 0 ELSE 1 END AS is_start
-  FROM confluence_outcomes
+  FROM confluence_outcomes WHERE ungradable IS NULL
 ),
 grp AS (
   SELECT symbol_id, horizon, direction, ts,
@@ -394,7 +395,8 @@ ep AS (
 UPDATE confluence_outcomes AS o
    SET episode_ts = (SELECT e.episode_ts FROM ep e
                       WHERE e.symbol_id = o.symbol_id AND e.horizon = o.horizon
-                        AND e.direction = o.direction AND e.ts = o.ts)`,
+                        AND e.direction = o.direction AND e.ts = o.ts)
+ WHERE o.ungradable IS NULL`,
 		ConfluenceEpisodeGapSecs)
 	if err != nil {
 		return 0, err
@@ -429,4 +431,237 @@ func (s *Store) ConfluenceOutcomesForSymbol(ctx context.Context, symbolID int64,
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// MarkUngradableConfluenceOutcomes retires every row whose entry leg cannot come
+// from its own bucket day, and returns how many it retired.
+//
+// WHY THESE ROWS EXIST. The scorer bucketed outcomes by UTC calendar day and ran
+// every 30 minutes, weekends included, so a setup that persisted over a weekend
+// opened Friday, Saturday and Sunday rows. The resolver then graded all three
+// from the same pair of bars, because its entry read reaches BACKWARD and its
+// forward read reaches FORWARD and there is no bar in between. Measured on the
+// live table: 1,430 of 5,428 resolved rows have an entry bar outside their own
+// bucket, and 1,429 of those are Saturday or Sunday. RNWWW carried the identical
+// +93.33% on three consecutive buckets.
+//
+// They cannot simply be left graded. Collapsing a persistent setup into one
+// episode COMPOUNDS its days, and compounding a duplicated day squares the move
+// that was never made twice — RNWWW's three copies compound to +622%. Nor can
+// they be deleted: a bet that was placed is a fact about what this system did.
+//
+// So the row stays, keeps its entry_px audit value, and is marked ungradable.
+// fwd_return, win and resolved_at are cleared because they were computed from
+// the wrong pair of bars and no reader should be able to find them.
+//
+// It also retires a RESOLVED row with no exit bar inside its grading window. One
+// such row survives on the live table — BURU 2026-07-17, carrying fwd_return 0.0
+// with zero bars in the window, because the bar it was graded against has since
+// been quarantined. A return no bar supports is the same unsupported number as a
+// stale entry, at the other leg.
+//
+// FORWARD-SAFE: the scorer no longer opens a bucket on a non-trading day and the
+// resolver refuses an entry bar from outside the bucket, so this can only ever
+// have historical rows to act on. Re-running it is a no-op.
+func (s *Store) MarkUngradableConfluenceOutcomes(ctx context.Context, reason string) (int64, error) {
+	if reason == "" {
+		return 0, fmt.Errorf("reason must not be empty: an unexplained retirement is indistinguishable from data loss")
+	}
+	res, err := s.w.ExecContext(ctx, `
+UPDATE confluence_outcomes
+   SET ungradable = ?, fwd_return = NULL, win = NULL, resolved_at = NULL, episode_ts = NULL
+ WHERE ungradable IS NULL
+   AND (
+     -- (a) the entry leg cannot come from this row's own bucket day.
+     COALESCE((SELECT MAX(b.ts) FROM bars b
+                WHERE b.symbol_id = confluence_outcomes.symbol_id
+                  AND b.tf = '1d' AND b.ts <= confluence_outcomes.ts + 86399), -1) < confluence_outcomes.ts
+     -- (b) the row is GRADED but no exit bar exists in its window. An unresolved
+     -- row with no exit bar is simply pending and must not be caught here; a
+     -- RESOLVED one is carrying a return no bar of this symbol supports, which
+     -- is the same unsupported-number problem as (a) at the other leg.
+     OR (resolved_at IS NOT NULL AND NOT EXISTS (
+           SELECT 1 FROM bars b
+            WHERE b.symbol_id = confluence_outcomes.symbol_id AND b.tf = '1d'
+              AND b.ts >= confluence_outcomes.ts + 86400
+              AND b.ts <= confluence_outcomes.ts + 4 * 86400))
+   )`,
+		reason)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// UngradableConfluenceCount reports how many rows are currently retired, so the
+// number is published rather than inferred from an absence.
+func (s *Store) UngradableConfluenceCount(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM confluence_outcomes WHERE ungradable IS NOT NULL`).Scan(&n)
+	return n, err
+}
+
+// ConfluencePopulation is the shape of the graded record, published so a reader
+// never has to infer it from an absence.
+type ConfluencePopulation struct {
+	Rows       int `json:"rows"`
+	Resolved   int `json:"resolved"`
+	Ungradable int `json:"ungradable"`
+	Episodes   int `json:"episodes"`
+	// StaleEntry counts resolved rows still graded from a bar outside their own
+	// bucket day. After the repair this must be zero, and it is checked rather
+	// than assumed.
+	StaleEntry int `json:"staleEntry"`
+}
+
+// ConfluencePopulation measures the table in one pass.
+func (s *Store) ConfluencePopulation(ctx context.Context) (ConfluencePopulation, error) {
+	var p ConfluencePopulation
+	err := s.db.QueryRowContext(ctx, `
+SELECT (SELECT COUNT(*) FROM confluence_outcomes),
+       (SELECT COUNT(*) FROM confluence_outcomes WHERE resolved_at IS NOT NULL AND ungradable IS NULL),
+       (SELECT COUNT(*) FROM confluence_outcomes WHERE ungradable IS NOT NULL),
+       (SELECT COUNT(*) FROM (SELECT DISTINCT symbol_id, episode_ts FROM confluence_outcomes
+                               WHERE episode_ts IS NOT NULL AND ungradable IS NULL)),
+       (SELECT COUNT(*) FROM confluence_outcomes o
+         WHERE o.resolved_at IS NOT NULL AND o.ungradable IS NULL
+           AND COALESCE((SELECT MAX(b.ts) FROM bars b
+                          WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
+                            AND b.ts <= o.ts + 86399), -1) < o.ts)`).
+		Scan(&p.Rows, &p.Resolved, &p.Ungradable, &p.Episodes, &p.StaleEntry)
+	return p, err
+}
+
+// BackfillConfluenceGradePrices stamps entry_close, exit_low and exit_high on
+// rows that were graded before those columns existed.
+//
+// WHY IT IS NEEDED. The CONSTRAINED basis needs price LEVELS, not just a ratio:
+// a tradable-minimum test cannot be run on a return, and a stop cannot be placed
+// without knowing how far the position actually traded against itself. Without
+// this backfill the whole historical record reports noPriceLevels and the
+// account-level number is empty — honest, but useless.
+//
+// THE DERIVATION IS THE RESOLVER'S, NOT A NEW ONE. Entry is the last bar inside
+// the row's own bucket day (the same lower-bounded read the resolver now uses).
+// Exit is the first bar at or after ts+86400, refused beyond three horizons —
+// byte-for-byte the same window ConfluenceResolver applies, so a backfilled row
+// and a freshly graded one cannot describe different trades.
+//
+// Rows whose bars have since been quarantined get NULL and stay NULL: the
+// constrained basis then counts them under noPriceLevels rather than guessing.
+// Only rows missing entry_close are touched, so this is idempotent and can never
+// overwrite a value the resolver stamped.
+func (s *Store) BackfillConfluenceGradePrices(ctx context.Context) (int64, error) {
+	res, err := s.w.ExecContext(ctx, `
+UPDATE confluence_outcomes AS o
+   SET entry_close = (SELECT b.close FROM bars b
+                       WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
+                         AND b.ts >= o.ts AND b.ts <= o.ts + 86399
+                       ORDER BY b.ts DESC LIMIT 1),
+       exit_low    = (SELECT b.low FROM bars b
+                       WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
+                         AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+                       ORDER BY b.ts ASC LIMIT 1),
+       exit_high   = (SELECT b.high FROM bars b
+                       WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
+                         AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+                       ORDER BY b.ts ASC LIMIT 1)
+ WHERE o.resolved_at IS NOT NULL AND o.ungradable IS NULL AND o.entry_close IS NULL`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ConfluencePriceLevelCoverage reports how many gradable resolved rows carry the
+// price levels the constrained basis needs, and how many of those reproduce
+// their own stored fwd_return from those levels.
+//
+// The second number is the one that matters: it proves the backfilled entry and
+// exit are the SAME pair the row was graded from, rather than a plausible pair
+// that happens to exist. A mismatch means the bars moved under the row.
+func (s *Store) ConfluencePriceLevelCoverage(ctx context.Context) (withLevels, reproducing, total int, err error) {
+	err = s.db.QueryRowContext(ctx, `
+SELECT COUNT(*),
+       SUM(CASE WHEN entry_close IS NOT NULL THEN 1 ELSE 0 END),
+       SUM(CASE WHEN entry_close IS NOT NULL AND entry_close > 0
+                 AND ABS((SELECT b.close FROM bars b
+                           WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
+                             AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+                           ORDER BY b.ts ASC LIMIT 1) / entry_close - 1 - fwd_return) < 1e-6
+                THEN 1 ELSE 0 END)
+FROM confluence_outcomes o
+WHERE resolved_at IS NOT NULL AND ungradable IS NULL`).Scan(&total, &withLevels, &reproducing)
+	return withLevels, reproducing, total, err
+}
+
+// RegradeConfluenceFromCurrentBars recomputes every gradable resolved row from
+// the bars as they stand, on ONE basis, and returns how many rows changed.
+//
+// WHY 85% OF THE RECORD NEEDED THIS. Commit 72007b3 changed the resolver to
+// divide two prices read from the SAME series, because the previous version
+// divided a live exit close by entry_px — a price frozen when the setup was
+// flagged, on a basis a later re-backfill may have rescaled. That fix applied
+// only to rows graded AFTER it. Measured on the live table 2026-08-21: of 3,998
+// gradable resolved rows, only 590 reproduce their own stored fwd_return from
+// the current bars. The other 3,408 still carry the superseded frozen-entry
+// number, which is the defect DFNS published at +8541%.
+//
+// This is a RECOMPUTATION, not a correction with judgement in it: it applies the
+// shipped resolver's own derivation — last bar inside the bucket day for the
+// entry, first bar at or after one horizon for the exit, refused beyond three
+// horizons — to rows the superseded resolver graded. Running it twice changes
+// nothing.
+//
+// A row whose entry or exit bar no longer exists (quarantined, purged) is left
+// untouched with its old value and shows up in ConfluencePriceLevelCoverage as
+// not reproducing, rather than being silently zeroed.
+func (s *Store) RegradeConfluenceFromCurrentBars(ctx context.Context) (int64, error) {
+	res, err := s.w.ExecContext(ctx, `
+WITH lv AS (
+  SELECT o.symbol_id, o.ts, o.horizon, o.direction,
+         (SELECT b.close FROM bars b
+           WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
+             AND b.ts >= o.ts AND b.ts <= o.ts + 86399
+           ORDER BY b.ts DESC LIMIT 1) AS ec,
+         (SELECT b.close FROM bars b
+           WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
+             AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+           ORDER BY b.ts ASC LIMIT 1) AS xc,
+         (SELECT b.low FROM bars b
+           WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
+             AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+           ORDER BY b.ts ASC LIMIT 1) AS xl,
+         (SELECT b.high FROM bars b
+           WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
+             AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+           ORDER BY b.ts ASC LIMIT 1) AS xh,
+         (SELECT b.ts FROM bars b
+           WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
+             AND b.ts >= o.ts AND b.ts <= o.ts + 86399
+           ORDER BY b.ts DESC LIMIT 1) AS ets
+  FROM confluence_outcomes o
+  WHERE o.resolved_at IS NOT NULL AND o.ungradable IS NULL
+)
+UPDATE confluence_outcomes AS o
+   SET fwd_return  = (SELECT lv.xc / lv.ec - 1 FROM lv
+                       WHERE lv.symbol_id = o.symbol_id AND lv.ts = o.ts AND lv.horizon = o.horizon),
+       win         = (SELECT CASE WHEN (lv.direction > 0 AND lv.xc / lv.ec - 1 > 0)
+                                    OR (lv.direction < 0 AND lv.xc / lv.ec - 1 < 0)
+                                  THEN 1 ELSE 0 END FROM lv
+                       WHERE lv.symbol_id = o.symbol_id AND lv.ts = o.ts AND lv.horizon = o.horizon),
+       entry_close = (SELECT lv.ec FROM lv WHERE lv.symbol_id = o.symbol_id AND lv.ts = o.ts AND lv.horizon = o.horizon),
+       entry_ts    = (SELECT lv.ets FROM lv WHERE lv.symbol_id = o.symbol_id AND lv.ts = o.ts AND lv.horizon = o.horizon),
+       exit_low    = (SELECT lv.xl FROM lv WHERE lv.symbol_id = o.symbol_id AND lv.ts = o.ts AND lv.horizon = o.horizon),
+       exit_high   = (SELECT lv.xh FROM lv WHERE lv.symbol_id = o.symbol_id AND lv.ts = o.ts AND lv.horizon = o.horizon)
+ WHERE o.resolved_at IS NOT NULL AND o.ungradable IS NULL
+   AND EXISTS (SELECT 1 FROM lv
+                WHERE lv.symbol_id = o.symbol_id AND lv.ts = o.ts AND lv.horizon = o.horizon
+                  AND lv.ec IS NOT NULL AND lv.ec > 0 AND lv.xc IS NOT NULL AND lv.xc > 0
+                  AND ABS(lv.xc / lv.ec - 1 - o.fwd_return) >= 1e-9)`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
