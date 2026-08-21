@@ -151,24 +151,68 @@ func TestSyntheticDailyPad(t *testing.T) {
 // Reading a Python file from a Go test is unusual, and deliberate: the two are a
 // pair with no compiler, no import and no type to bind them, so the only thing
 // that can hold them together is an assertion that names both.
+// TestAdjustmentModesAgree scans EVERY Python fetcher in tools/alpha, not one
+// named file.
+//
+// Pinning a single path is what let this rot. fetch_delisted.py was repaired in
+// f56a7fb and this test was pointed at it — while fetch_form25.py and
+// fetch_sp500_removals.py, in the same directory and hitting the same bars
+// endpoint, kept requesting adjustment=all and nothing noticed for as long as
+// they existed. A guard that watches one of three files is a guard that reports
+// green on a two-thirds miss.
+//
+// So the test discovers its own subjects: any file under tools/alpha that names
+// the Alpaca bars endpoint must request barAdjustment. A newly added fetcher is
+// covered the moment it is written, which is the only version of this check that
+// stays true.
 func TestAdjustmentModesAgree(t *testing.T) {
-	const fetcher = "../../../../tools/alpha/fetch_delisted.py"
-	src, err := os.ReadFile(fetcher)
+	const dir = "../../../../tools/alpha"
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read %s: %v — if this moved, update the path here rather than "+
-			"deleting the check: it is the only thing keeping the two paths in step", fetcher, err)
+			"deleting the check: it is the only thing keeping the two languages in step", dir, err)
 	}
+
 	want := "adjustment=" + barAdjustment
-	if !strings.Contains(string(src), want) {
-		t.Fatalf("%s does not request %q; the Go client uses barAdjustment=%q and the two "+
-			"must match or the bars table ends up holding two price conventions",
-			fetcher, want, barAdjustment)
+	checked := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".py") {
+			continue
+		}
+		path := dir + "/" + e.Name()
+		blob, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		src := string(blob)
+		// Only files that actually request bars are subject to the rule.
+		if !strings.Contains(src, "data.alpaca.markets/v2/stocks/") ||
+			!strings.Contains(src, "adjustment=") {
+			continue
+		}
+		checked++
+
+		// Name the specific wrong value, so a revert is caught with a message
+		// that explains itself rather than a bare mismatch.
+		if strings.Contains(src, "adjustment=all") {
+			t.Errorf("%s requests adjustment=all: that is split PLUS dividends, while the live "+
+				"backfill requests %q. Bars fetched here follow a different price convention from "+
+				"everything else in the same column, and a symbol fed by both paths gets a seam "+
+				"that reads like a real move.", e.Name(), barAdjustment)
+			continue
+		}
+		if !strings.Contains(src, want) {
+			t.Errorf("%s requests bars but not %q; the Go client uses barAdjustment=%q and the "+
+				"two must match or the bars table holds two price conventions", e.Name(), want, barAdjustment)
+		}
 	}
-	// Name the specific wrong value that was there before, so a revert is caught
-	// with a message that explains itself rather than a bare mismatch.
-	if strings.Contains(string(src), "adjustment=all") {
-		t.Fatalf("%s requests adjustment=all again: that is split PLUS dividends, while the "+
-			"live backfill requests %q. Imported bars would follow a different price "+
-			"convention from everything else in the same column", fetcher, barAdjustment)
+
+	// A discovery-based check that discovers nothing is a check that passes for
+	// the wrong reason.
+	if checked < 3 {
+		t.Fatalf("only %d bar-fetching python file(s) found under %s; there were 3 "+
+			"(fetch_delisted, fetch_form25, fetch_sp500_removals). If one was removed say so "+
+			"here, but a scan that stops finding its subjects silently stops guarding them.",
+			checked, dir)
 	}
 }

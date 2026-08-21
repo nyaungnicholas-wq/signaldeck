@@ -67,9 +67,14 @@ IDX = "https://www.sec.gov/Archives/edgar/full-index/{y}/QTR{q}/form.idx"
 TICKERS = "https://www.sec.gov/files/company_tickers.json"
 SUBS = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 R1 = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/R1.htm"
+# adjustment MUST match daemon/internal/ingest/alpaca/client.go's barAdjustment.
+# "all" is split PLUS dividends; the live backfill requests "split". Two
+# conventions in one bars column give a symbol fed by both paths a seam that
+# reads exactly like a real move. TestAdjustmentModesAgree reads every fetcher
+# in this directory, so a new one cannot drift either.
 BARS = ("https://data.alpaca.markets/v2/stocks/{sym}/bars"
         "?timeframe=1Day&start=2020-01-01&end={end}&limit=10000"
-        "&feed=iex&adjustment=all")
+        "&feed=iex&adjustment=split")
 SEC_SLEEP = 0.15    # SEC asks for <=10 req/s; this is well under
 ALPACA_SLEEP = 0.32
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache_edgar")
