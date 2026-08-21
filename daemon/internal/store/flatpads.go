@@ -12,9 +12,32 @@ import (
 //	                     real (a stock pinned at one price all session), so flatness
 //	                     alone is not diagnostic
 //	open=high=low=close  a real zero-volume session still has a range
-//	one distinct close   a run at SEVERAL flat prices is illiquidity, not a pad
 //	consecutive run      an isolated flat zero-volume day is an ordinary thin session
 //	length >= minRun     the threshold separating the two
+//	few distinct closes  a pad may DRIFT; illiquidity does not hold one price for
+//	                     months at a time
+//
+// THE DISTINCT-CLOSE CLAUSE WAS TOO STRICT (2026-08-21). It required exactly ONE
+// close across the whole run, so a pad the vendor re-based occasionally survived
+// it. 1,849 bars across 13 symbols did: INFR held open=high=low=close at volume 0
+// for 245 consecutive sessions across FOUR distinct prices; PPEM did it three
+// times (469 bars); INAQU 203; RESI, PXUS, RENW, CA, ACACU, GDVD, EV, GBUY, INDF
+// and KLDW the rest. Every one is a delisted symbol and every one of those 1,849
+// days sat inside universe_membership — ranked in the cross-section printing
+// exactly 0.0%.
+//
+// The replacement ADDS a rate clause beside the original: a run qualifies when it
+// holds one close (as before) OR when its distinct closes are at most one per
+// PadDistinctCloseRatio bars. Written as an OR rather than replacing the count,
+// because a rate alone silently forces run >= PadDistinctCloseRatio even for a
+// single-price pad — it would have made every minRun below ten a no-op, changing
+// this function's contract for callers that never asked for that.
+//
+// The measured separation is wide. Among runs of 20 or more, the highest observed
+// distinct-close share is 8.7% (KLDW and INDF, 2 closes in 23 bars) and the lowest
+// 1.6% (INFR). A genuinely illiquid instrument does not come close: the sub-20
+// residue this deliberately spares is dominated by warrants that print a NEW price
+// every few sessions between no-trade days.
 //
 // The predicate deliberately does NOT use symbols.delisted_at, because it fails in
 // both directions (SBNY's stamp sits at the END of its pad, so a day <= delisted_at
@@ -26,6 +49,17 @@ import (
 //
 // InUniverse is how many of the run's days are materialized in universe_membership,
 // i.e. how much of the run sits inside the cross-sectional denominator right now.
+// PadDistinctCloseRatio is the reciprocal of the largest share of a run's bars
+// that may carry distinct closes and still read as a pad: closes*ratio <= bars,
+// i.e. at most one distinct close per ten bars.
+//
+// Ten is chosen from the measured gap, not from taste. Every run of 20+ bars in
+// this database sits at or below 8.7% distinct closes; the next candidate rule
+// (one in five) would still catch all 18 of them while reaching toward genuinely
+// sparse instruments, and one in twenty would drop KLDW and INDF. Ten sits in the
+// middle of an empty region, which is the only defensible place for a threshold.
+const PadDistinctCloseRatio = 10
+
 type PadRun struct {
 	SymbolID   int64
 	Symbol     string
@@ -68,11 +102,11 @@ SELECT r.symbol_id, COALESCE(s.symbol,''), r.n, r.px, r.from_ts, r.to_ts,
         WHERE um.symbol_id = r.symbol_id
           AND um.day BETWEEN (r.from_ts/86400)*86400 AND (r.to_ts/86400)*86400)
 FROM runs r LEFT JOIN symbols s ON s.id = r.symbol_id
-WHERE r.n >= ? AND r.closes = 1
+WHERE r.n >= ? AND (r.closes = 1 OR r.closes * ? <= r.n)
 ORDER BY r.n DESC
 `
 
-	rows, err := s.db.QueryContext(ctx, sql, tf, minRun)
+	rows, err := s.db.QueryContext(ctx, sql, tf, minRun, PadDistinctCloseRatio)
 	if err != nil {
 		return nil, err
 	}
@@ -141,14 +175,14 @@ JOIN (
   runs AS (
     SELECT symbol_id, grp
     FROM f GROUP BY symbol_id, grp
-    HAVING COUNT(*) >= ? AND COUNT(DISTINCT close) = 1
+    HAVING COUNT(*) >= ? AND (COUNT(DISTINCT close) = 1 OR COUNT(DISTINCT close) * ? <= COUNT(*))
   )
   SELECT f.symbol_id, f.ts FROM f JOIN runs USING (symbol_id, grp)
 ) m ON m.symbol_id = bb.symbol_id AND m.ts = bb.ts
 WHERE bb.tf = ?
 `
 
-	_, err = tx.ExecContext(ctx, insertSQL, runID, reason, now, tf, minRun, tf)
+	_, err = tx.ExecContext(ctx, insertSQL, runID, reason, now, tf, minRun, PadDistinctCloseRatio, tf)
 	if err != nil {
 		return 0, err
 	}

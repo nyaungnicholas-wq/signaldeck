@@ -8,6 +8,7 @@ import {
   type PaperResponse,
   type PaperEquityPoint,
   type Money,
+  isRefused,
 } from "@/lib/api";
 import { fmtPct, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
@@ -284,7 +285,13 @@ export default function PaperPage() {
     };
   }, [strategy, retryTick]);
 
-  const s = data?.summary;
+  // `summary` is a costed summary OR a refusal — see PaperResponse. Reading the
+  // refusal object as a summary renders NaN% in four tiles, which is worse than
+  // saying nothing, so it is narrowed here once.
+  const refusal =
+    data && isRefused(data.summary) ? data.summary : null;
+  const s = data && !isRefused(data.summary) ? data.summary : undefined;
+  const clean = data?.cleanPerformance;
   const upColor = "var(--bid)";
   const downColor = "var(--ask)";
 
@@ -361,15 +368,74 @@ export default function PaperPage() {
             )}
           </section>
 
-          {/* MONEY SCOREBOARD — leads the numeric readout: expectancy / profit
-              factor / payoff, with the verbatim win-rate-≠-profit caption. */}
+          {/* CLEAN PERFORMANCE leads, because it is the only series on this page
+              that may be read as the strategy's record. The equity curve above
+              it is the ACCOUNTING level of a continuous book, and it carries the
+              back-dated P&L from before 2026-07-22. */}
+          {clean?.available ? (
+            <section className="panel" aria-label="clean performance">
+              <div className="text-xs uppercase tracking-wide opacity-70">
+                Performance since the integrity boundary
+              </div>
+              <div className="mt-1 text-sm">
+                Rebased to {clean.indexBase} at {clean.boundaryUtc.slice(0, 10)} ·{" "}
+                {clean.marks} mark{clean.marks === 1 ? "" : "s"} · {clean.fills} fill
+                {clean.fills === 1 ? "" : "s"}
+              </div>
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4">
+                <Metric
+                  label="RETURN SINCE BOUNDARY"
+                  value={fmtPct(clean.summary.totalReturn * 100)}
+                  color={clean.summary.totalReturn >= 0 ? upColor : downColor}
+                  hint={`index ${clean.summary.startEquity.toFixed(1)} → ${clean.summary.lastEquity.toFixed(1)}`}
+                />
+                <Metric
+                  label="MAX DRAWDOWN"
+                  value={fmtPct(-clean.summary.maxDrawdown * 100, false)}
+                  color={downColor}
+                  hint="post-boundary only"
+                />
+                <Metric
+                  label="SHARPE"
+                  value={clean.summary.sharpeValid ? clean.summary.sharpe.toFixed(2) : "n/a"}
+                  hint={clean.summary.sharpeValid ? "annualized, rf=0" : "too few marks yet"}
+                />
+                <Metric
+                  label="CLOSED TRADES"
+                  value={String(clean.summary.closedTrades)}
+                  hint="post-boundary round trips"
+                />
+              </div>
+              <p className="mt-2 text-xs opacity-70">{clean.note}</p>
+            </section>
+          ) : clean ? (
+            <EmptyState
+              message="No clean performance record yet"
+              detail={clean.reason}
+            />
+          ) : null}
+
+          {/* MONEY SCOREBOARD — expectancy / profit factor / payoff, with the
+              verbatim win-rate-≠-profit caption. Withheld, with its reason, when
+              it would span the integrity boundary. */}
           {data.money ? (
             <MoneyScoreboard money={data.money} caption={data.moneyCaption} />
+          ) : data.moneyRefused ? (
+            <EmptyState
+              message="Book-wide money scoreboard withheld"
+              detail={`${data.moneyRefused.reason} Use instead: ${data.moneyRefused.useInstead}`}
+            />
           ) : null}
 
           {/* Costed summary — every stat gated to what the sample supports.
               SIMPLE mode folds the gauge grid; the equity curve + honesty
               label above stay visible in both modes. */}
+          {refusal ? (
+            <EmptyState
+              message="Book-wide summary withheld"
+              detail={`${refusal.reason} Use instead: ${refusal.useInstead}`}
+            />
+          ) : null}
           {s ? (
             <ProOnly summary="Show the numbers">
             <section

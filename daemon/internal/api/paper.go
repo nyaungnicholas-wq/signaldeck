@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/moneymetrics"
@@ -108,6 +109,27 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		currentEpoch = &segments[n-1]
 	}
 
+	// THE INTEGRITY BOUNDARY IS NOT A CAPTION.
+	//
+	// `summary` and `money` were book-wide with a paragraph beside them saying so.
+	// A paragraph beside a number does not stop the number being quoted: these
+	// span 46 back-dated fills that booked up to 22 days of market move as one
+	// step's P&L, so a total return, Sharpe, drawdown or win rate over them is
+	// derived partly from moves that never happened. They are REFUSED when they
+	// would cross, and the clean record is published in their place.
+	//
+	// The equity LEVEL series stays whole and is labelled as accounting, because
+	// what the simulated account is worth is a real fact — it just is not
+	// performance.
+	epochRows, err := d.St.PaperEpochs(r.Context(), strategy)
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	boundary := integrityBoundary(epochRows)
+	spans := SpansIntegrityBoundary(curve, boundary)
+	clean := buildCleanPerformance(epochRows, curve, all)
+
 	// FILL FIDELITY: re-derive every logged fill from the bar it names, on every
 	// read. A verified-by-assumption trade log is how 21 of 44 fills sat in a
 	// "track record" while differing from their own bars by up to 90.3 bps —
@@ -121,7 +143,15 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 	// whether the signal makes money. Returns are already NET of both-side costs.
 	money := moneymetrics.FromReturns(roundTripReturns(all))
 
-	writeJSON(w, map[string]any{
+	// Basis audit for the stored entry prices this book compares against live
+	// bars. Published as a measured zero rather than left as an assumption.
+	staleBasis, err := d.St.StaleBasisPositions(r.Context())
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+
+	payload := map[string]any{
 		"strategy":   strategy,
 		"strategies": paperStrategies,
 		// Honesty framing: this is a self-contained simulation, not a live account.
@@ -130,10 +160,31 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		"startCash":  papertrade.StartingCash(),
 		"longThresh": papertrade.LongThreshold(),
 		"flatThresh": papertrade.FlatThreshold(),
-		"equity":     curve,
-		"positions":  positions,
-		"trades":     recent,
-		"summary":    summary,
+		// ACCOUNTING level across all time, contaminated period included.
+		"equity":             curve,
+		"equityIsAccounting": true,
+		"equityNote": "accounting equity of the simulated book across all time. It carries the pre-2026-07-22 " +
+			"back-dated P&L and is NOT a performance series; use cleanPerformance.index for that.",
+		"positions": positions,
+		"trades":    recent,
+		// Post-boundary record, rebased. This is the strategy's published number.
+		"cleanPerformance": clean,
+		"integrityBoundary": map[string]any{
+			"ts":     boundary,
+			"utc":    boundaryUTC(boundary),
+			"spans":  spans,
+			"label":  integrityEpochLabel,
+			"reason": "46 of 123 fills before this instant were back-dated by up to 22 days",
+		},
+		// Stored-vs-live price basis audit (paper_positions.avg_px against bars a
+		// split repair may have rescaled).
+		"priceBasisAudit": map[string]any{
+			"staleBasisPositions": staleBasis,
+			"clean":               len(staleBasis) == 0,
+			"note": "an open position whose stored entry price predates a SUCCESSFUL re-backfill of its own " +
+				"symbol sits on a dead basis. The barrier path re-reads the entry bar so both legs move together; " +
+				"this is the audit that the stored values themselves are clean.",
+		},
 		// Per-epoch record. `summary`/`money` above are BOOK-WIDE and therefore
 		// span every strategy this book has run; `epochs` is where the
 		// single-strategy numbers live, and `epoch` is the one in force now.
@@ -144,10 +195,27 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		// reconciliation beside the summary so a reader never has to assume it.
 		"fillFidelity": fidelity,
 		"verified":     fidelity.Verified,
-		// Money scoreboard leads the display; the caption reframes win rate.
-		"money":        money,
 		"moneyCaption": paperMoneyCaption,
-	})
+	}
+
+	// A statistic that would span the boundary is replaced by its refusal.
+	if spans {
+		payload["summary"] = refuseAcrossBoundary(boundary)
+		payload["money"] = nil
+		payload["moneyRefused"] = refuseAcrossBoundary(boundary)
+	} else {
+		payload["summary"] = summary
+		payload["money"] = money
+	}
+	writeJSON(w, payload)
+}
+
+// boundaryUTC renders a boundary instant, or empty when none is declared.
+func boundaryUTC(ts int64) string {
+	if ts <= 0 {
+		return ""
+	}
+	return time.Unix(ts, 0).UTC().Format(time.RFC3339)
 }
 
 // maxFidelityChecks bounds how many fills one read reconciles. The paper log is

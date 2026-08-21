@@ -1328,11 +1328,72 @@ export interface PaperResponse {
   equity: PaperEquityPoint[];
   positions: PaperPosition[];
   trades: PaperTrade[];
-  summary: PaperSummary;
+  // `summary` is EITHER the costed summary OR a refusal. It becomes a refusal
+  // when the equity window spans the 2026-07-22 data-integrity boundary: before
+  // that instant 46 of 123 fills were back-dated by up to 22 days, so a total
+  // return, Sharpe, drawdown or win rate computed across it is derived partly
+  // from moves that never happened. Narrow with isRefused() before reading it.
+  summary: PaperSummary | RefusedStat;
   // MONEY SCOREBOARD: closed round-trips scored by expected profit; the caption
-  // reframes the whole page (win rate ≠ profit).
-  money: Money;
+  // reframes the whole page (win rate ≠ profit). NULL when it would span the
+  // boundary; moneyRefused then carries the reason.
+  money: Money | null;
+  moneyRefused?: RefusedStat;
   moneyCaption: string;
+  // The whole-history equity level, contaminated period included. It is what the
+  // simulated account is WORTH; it is not performance.
+  equityIsAccounting: boolean;
+  equityNote: string;
+  // The post-boundary record, rebased to an index. This is the only series that
+  // may be shown as this strategy's performance.
+  cleanPerformance: CleanPerformance;
+  integrityBoundary: {
+    ts: number;
+    utc: string;
+    spans: boolean;
+    label: string;
+    reason: string;
+  };
+  priceBasisAudit: {
+    staleBasisPositions: {
+      strategy: string;
+      symbolId: number;
+      symbol: string;
+      openedTs: number;
+      repairedAt: number;
+    }[];
+    clean: boolean;
+    note: string;
+  };
+}
+
+/** A statistic withheld because computing it would cross an integrity boundary. */
+export interface RefusedStat {
+  refused: true;
+  reason: string;
+  boundaryTs: number;
+  boundaryUtc: string;
+  useInstead: string;
+}
+
+/** Narrows PaperResponse["summary"]. */
+export function isRefused(x: PaperSummary | RefusedStat): x is RefusedStat {
+  return (x as RefusedStat)?.refused === true;
+}
+
+/** The post-integrity-boundary record, rebased to `indexBase`. */
+export interface CleanPerformance {
+  available: boolean;
+  reason?: string;
+  boundaryTs: number;
+  boundaryUtc: string;
+  indexBase: number;
+  marks: number;
+  fills: number;
+  index: PaperEquityPoint[];
+  summary: PaperSummary;
+  money: Money;
+  note: string;
 }
 
 /** Fetch the simulated paper-trading book for a strategy (default flagship-1d). */
@@ -3070,12 +3131,48 @@ export interface ConfluenceTopResponse {
 export interface ConfluenceTrackResponse {
   available: boolean;
   live: boolean; // true — a real forward record
-  resolved: number; // independent (symbol, day) resolutions
+  resolved: number; // independent EPISODES (see `population`)
   gate: { minIndependent: number; distinctDays: number };
+  // `money` is the RAW basis: direction-adjusted, cost-netted, UNCONSTRAINED
+  // per-episode return. A normalised short is unbounded below (CELUW, a warrant
+  // that genuinely rose 533% in a day, contributes -533%), so this describes the
+  // SIGNAL. `constrained` is the one that describes an account.
   money: Money | null; // null while gated
   byDirection: { long: Money; short: Money } | null;
+  population?: {
+    basis: string;
+    episodes: number;
+    gradedRows: number;
+    repeatedRows: number;
+    note: string;
+  };
+  constrained?: {
+    all: ConfluenceConstrained;
+    long: ConfluenceConstrained;
+    short: ConfluenceConstrained;
+    note: string;
+    shortability: string;
+  };
   note: string; // gate countdown or the expectancy-not-winrate note
   caveat: string; // render verbatim
+}
+
+/** Account-level view of one confluence book, under explicit trading constraints. */
+export interface ConfluenceConstrained {
+  trades: number;
+  meanAccountContribution: number;
+  meanCapitalAtRisk: number;
+  totalAccountReturn: number;
+  daysScaled: number;
+  untradable: number;
+  untradablePct: number;
+  untradableWhy: Record<string, number>;
+  liquidated: number;
+  gappedThrough: number;
+  noPriceLevels: number;
+  shortUnverified: number;
+  shortTotal: number;
+  shortUnverifiedPct: number;
 }
 
 /** Fetch one symbol's transparent confluence assessment. */

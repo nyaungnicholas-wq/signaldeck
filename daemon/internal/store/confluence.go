@@ -47,7 +47,30 @@ type ConfluenceOutcome struct {
 	// independent evidence. 0 means unknown (not yet backfilled, or no bar at or
 	// before it); md.SettleDay falls back to the calendar day for those.
 	SettleTs int64
+	// EntryTs is the bar the entry leg of FwdReturn was actually read from.
+	// 0 means unrecorded (graded before the column existed).
+	EntryTs int64
+	// EpisodeTs is the ts of the first outcome in this continuous setup episode.
+	// 0 means unclassified. Rows sharing an EpisodeTs are ONE bet held across
+	// days, not several independent ones.
+	EpisodeTs int64
+	// EntryClose is the graded entry leg's price LEVEL — what EntryPx would be if
+	// it had been read from the same basis as the exit. 0 = unrecorded.
+	// ExitLow/ExitHigh are the exit bar's extremes, the intra-window excursion a
+	// stop would have been hit at. 0 = unrecorded.
+	EntryClose float64
+	ExitLow    float64
+	ExitHigh   float64
 }
+
+// ConfluenceEpisodeGapSecs is the largest gap between two same-direction
+// outcomes that still counts as ONE continuous episode.
+//
+// Four days, because outcomes are bucketed by calendar day but only exist on
+// trading days: Friday to Monday is three, and Friday to Tuesday across a
+// Monday holiday is four. A fifth day means the setup genuinely lapsed for a
+// whole session and re-formed, which is a new bet.
+const ConfluenceEpisodeGapSecs = int64(4 * 86400)
 
 // ConfluenceEvent is one "confluence setup" detection to persist (day-deduped).
 type ConfluenceEvent struct {
@@ -148,13 +171,35 @@ func (s *Store) TopConfluenceSetups(ctx context.Context, market string, limit in
 // InsertConfluenceOutcome forward-tracks a flagged setup; INSERT OR IGNORE on the
 // (symbol_id, ts, horizon) PK makes it idempotent (a re-run of the same pass, or
 // two setups the same rounded ts, never double-inserts).
+// It also assigns episode_ts in the same statement: the episode of the most
+// recent same-direction row within ConfluenceEpisodeGapSecs, or this row's own
+// ts when the setup is newly formed. Doing it in the INSERT rather than in a
+// follow-up UPDATE keeps the classification atomic with the row it describes —
+// a crash between the two would otherwise leave a bet no episode owns, and an
+// unowned row is exactly what the published population must not contain.
 func (s *Store) InsertConfluenceOutcome(ctx context.Context, o ConfluenceOutcome) error {
 	_, err := s.w.ExecContext(ctx, `
 		INSERT OR IGNORE INTO confluence_outcomes
-		  (symbol_id, ts, horizon, direction, agree, entry_px)
-		VALUES (?,?,?,?,?,?)`,
-		o.SymbolID, o.Ts, o.Horizon, o.Direction, o.Agree, o.EntryPx)
+		  (symbol_id, ts, horizon, direction, agree, entry_px, entry_ts, episode_ts)
+		VALUES (?,?,?,?,?,?,?,
+		  COALESCE(
+		    (SELECT COALESCE(p.episode_ts, p.ts) FROM confluence_outcomes p
+		      WHERE p.symbol_id = ? AND p.horizon = ? AND p.direction = ?
+		        AND p.ts < ? AND p.ts >= ?
+		      ORDER BY p.ts DESC LIMIT 1),
+		    ?))`,
+		o.SymbolID, o.Ts, o.Horizon, o.Direction, o.Agree, o.EntryPx, nullableTs(o.EntryTs),
+		o.SymbolID, o.Horizon, o.Direction, o.Ts, o.Ts-ConfluenceEpisodeGapSecs, o.Ts)
 	return err
+}
+
+// nullableTs maps a zero timestamp to SQL NULL. A stored 0 would read as the
+// Unix epoch — "1970" is a value, "we did not record it" is not.
+func nullableTs(ts int64) any {
+	if ts <= 0 {
+		return nil
+	}
+	return ts
 }
 
 // UnresolvedConfluenceOutcomes returns pending outcomes with ts <= before (the
@@ -182,26 +227,47 @@ func (s *Store) UnresolvedConfluenceOutcomes(ctx context.Context, before int64, 
 
 // ResolveConfluenceOutcome records the realized forward return + win flag for a
 // matured setup (called only once the forward bar exists — no lookahead).
-func (s *Store) ResolveConfluenceOutcome(ctx context.Context, symbolID, ts int64, horizon string, fwdReturn float64, win bool) error {
+// px carries the price LEVELS the constrained basis needs; zero fields store NULL.
+func (s *Store) ResolveConfluenceOutcome(ctx context.Context, symbolID, ts int64, horizon string, fwdReturn float64, win bool, entryTs int64, px ConfluenceGradePrices) error {
 	// settle_ts stamped at grade time — the independence unit (md.SettleDay).
 	// Derivation identical to BackfillConfluenceSettleTs so the two agree.
 	_, err := s.w.ExecContext(ctx, `
-		UPDATE confluence_outcomes SET fwd_return=?, win=?, resolved_at=strftime('%s','now'),
+		UPDATE confluence_outcomes SET fwd_return=?, win=?, entry_ts=?,
+		  entry_close=?, exit_low=?, exit_high=?, resolved_at=strftime('%s','now'),
 		  settle_ts = (
 		    SELECT MAX(b.ts) FROM bars b
 		    WHERE b.symbol_id = confluence_outcomes.symbol_id
 		      AND b.tf = '1d' AND b.ts <= confluence_outcomes.ts
 		  )
 		WHERE symbol_id=? AND ts=? AND horizon=?`,
-		fwdReturn, boolToInt(win), symbolID, ts, horizon)
+		fwdReturn, boolToInt(win), nullableTs(entryTs),
+		nullablePx(px.EntryClose), nullablePx(px.ExitLow), nullablePx(px.ExitHigh),
+		symbolID, ts, horizon)
 	return err
+}
+
+// ConfluenceGradePrices are the price levels stamped on a row when it is graded.
+type ConfluenceGradePrices struct {
+	EntryClose float64
+	ExitLow    float64
+	ExitHigh   float64
+}
+
+// nullablePx maps a non-positive price to SQL NULL. A stored 0 would read as a
+// free instrument; "we did not record it" is a different statement.
+func nullablePx(px float64) any {
+	if px <= 0 {
+		return nil
+	}
+	return px
 }
 
 // ResolvedConfluenceOutcomes returns graded outcomes joined to their symbols,
 // newest first — the money scoreboard's source. limit <= 0 means all.
 func (s *Store) ResolvedConfluenceOutcomes(ctx context.Context, limit int) ([]ConfluenceOutcome, error) {
 	q := `
-		SELECT o.symbol_id, sy.symbol, sy.market, o.ts, o.horizon, o.direction, o.agree, o.entry_px, o.fwd_return, o.win, o.settle_ts
+		SELECT o.symbol_id, sy.symbol, sy.market, o.ts, o.horizon, o.direction, o.agree, o.entry_px, o.fwd_return, o.win, o.settle_ts,
+		       o.entry_ts, o.episode_ts, o.entry_close, o.exit_low, o.exit_high
 		FROM confluence_outcomes o
 		JOIN symbols sy ON sy.id = o.symbol_id
 		WHERE o.resolved_at IS NOT NULL
@@ -221,14 +287,19 @@ func (s *Store) ResolvedConfluenceOutcomes(ctx context.Context, limit int) ([]Co
 		var o ConfluenceOutcome
 		var fwd sql.NullFloat64
 		var win sql.NullInt64
-		var settle sql.NullInt64
+		var settle, entryTs, episodeTs sql.NullInt64
+		var entryClose, exitLow, exitHigh sql.NullFloat64
 		if err := rows.Scan(&o.SymbolID, &o.Symbol, &o.Market, &o.Ts, &o.Horizon,
-			&o.Direction, &o.Agree, &o.EntryPx, &fwd, &win, &settle); err != nil {
+			&o.Direction, &o.Agree, &o.EntryPx, &fwd, &win, &settle, &entryTs, &episodeTs,
+			&entryClose, &exitLow, &exitHigh); err != nil {
 			return nil, err
 		}
+		o.EntryClose, o.ExitLow, o.ExitHigh = entryClose.Float64, exitLow.Float64, exitHigh.Float64
 		o.FwdReturn = fwd.Float64
 		o.Win = int(win.Int64)
 		o.SettleTs = settle.Int64 // 0 when NULL — md.SettleDay reads that as unknown
+		o.EntryTs = entryTs.Int64
+		o.EpisodeTs = episodeTs.Int64
 		out = append(out, o)
 	}
 	return out, rows.Err()
@@ -287,4 +358,75 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// BackfillConfluenceEpisodes recomputes episode_ts for EVERY outcome row from
+// the stored (symbol, direction, ts) sequence, and returns how many rows now
+// carry one.
+//
+// It is a pure re-derivation, not a repair with judgement in it: the same table
+// always produces the same assignment, so running it twice changes nothing and
+// running it after new rows arrive re-anchors only the runs those rows extend.
+// That is deliberate — the alternative, stamping episodes only on NULL rows,
+// would let a row inserted out of order split an episode permanently.
+//
+// The gap rule is ConfluenceEpisodeGapSecs. LAG returns NULL on a partition's
+// first row and NULL <= x is NULL, so the CASE falls to ELSE and the first row
+// of every symbol/direction correctly starts an episode.
+func (s *Store) BackfillConfluenceEpisodes(ctx context.Context) (int64, error) {
+	res, err := s.w.ExecContext(ctx, `
+WITH ordered AS (
+  SELECT symbol_id, horizon, direction, ts,
+         CASE WHEN ts - LAG(ts) OVER (PARTITION BY symbol_id, horizon, direction ORDER BY ts) <= ?
+              THEN 0 ELSE 1 END AS is_start
+  FROM confluence_outcomes
+),
+grp AS (
+  SELECT symbol_id, horizon, direction, ts,
+         SUM(is_start) OVER (PARTITION BY symbol_id, horizon, direction ORDER BY ts) AS g
+  FROM ordered
+),
+ep AS (
+  SELECT symbol_id, horizon, direction, ts,
+         MIN(ts) OVER (PARTITION BY symbol_id, horizon, direction, g) AS episode_ts
+  FROM grp
+)
+UPDATE confluence_outcomes AS o
+   SET episode_ts = (SELECT e.episode_ts FROM ep e
+                      WHERE e.symbol_id = o.symbol_id AND e.horizon = o.horizon
+                        AND e.direction = o.direction AND e.ts = o.ts)`,
+		ConfluenceEpisodeGapSecs)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ConfluenceOutcomesForSymbol returns every outcome for one symbol and horizon,
+// oldest first, resolved or not. It exists for episode inspection and for the
+// migration report — the published scoreboard reads ResolvedConfluenceOutcomes.
+func (s *Store) ConfluenceOutcomesForSymbol(ctx context.Context, symbolID int64, horizon string) ([]ConfluenceOutcome, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT symbol_id, ts, horizon, direction, agree, entry_px, fwd_return, win, entry_ts, episode_ts
+		FROM confluence_outcomes
+		WHERE symbol_id = ? AND horizon = ?
+		ORDER BY ts`, symbolID, horizon)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := []ConfluenceOutcome{}
+	for rows.Next() {
+		var o ConfluenceOutcome
+		var fwd sql.NullFloat64
+		var win, entryTs, episodeTs sql.NullInt64
+		if err := rows.Scan(&o.SymbolID, &o.Ts, &o.Horizon, &o.Direction, &o.Agree,
+			&o.EntryPx, &fwd, &win, &entryTs, &episodeTs); err != nil {
+			return nil, err
+		}
+		o.FwdReturn, o.Win = fwd.Float64, int(win.Int64)
+		o.EntryTs, o.EpisodeTs = entryTs.Int64, episodeTs.Int64
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }

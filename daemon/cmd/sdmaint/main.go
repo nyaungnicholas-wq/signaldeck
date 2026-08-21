@@ -124,6 +124,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "adjudicate-delistings" {
+		if err := adjudicateDelistings(os.Args[2:]); err != nil {
+			log.Fatalf("adjudicate-delistings: %v", err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "quarantine-flat-pads" {
 		if err := quarantineFlatPadsCmd(os.Args[2:]); err != nil {
 			log.Fatalf("quarantine-flat-pads: %v", err)

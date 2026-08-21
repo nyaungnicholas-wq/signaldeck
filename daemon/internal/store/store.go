@@ -339,6 +339,44 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// confluence pseudo-replication wave (2026-08-21): two columns that make the
+	// published confluence population defensible.
+	//
+	// entry_ts records WHICH bar the graded return's entry leg came from. The
+	// resolver read the entry with BarAtOrBefore and no lower bound, so a symbol
+	// with no bar in its own bucket day was graded against a bar from days
+	// earlier — and because the forward read has the same fallback, three
+	// calendar buckets could resolve to ONE (entry, exit) pair. RNWWW booked the
+	// identical +93.33% move on 2026-07-17, 07-18 and 07-19: one price
+	// observation entering the mean three times as three "independent bets".
+	//
+	// episode_ts groups consecutive same-direction days into ONE episode. A setup
+	// that persists is one position held, not one new bet per day.
+	for _, col := range []struct{ name, ddl string }{
+		{"entry_ts", `ALTER TABLE confluence_outcomes ADD COLUMN entry_ts INTEGER`},
+		{"episode_ts", `ALTER TABLE confluence_outcomes ADD COLUMN episode_ts INTEGER`},
+		// The CONSTRAINED basis needs price LEVELS, not just the ratio: a
+		// tradable-minimum test cannot be run on a return. These are stamped by
+		// the resolver, which already holds both bars, so the public read costs
+		// no extra lookups and cannot drift if a bar is later revised.
+		{"entry_close", `ALTER TABLE confluence_outcomes ADD COLUMN entry_close REAL`},
+		{"exit_low", `ALTER TABLE confluence_outcomes ADD COLUMN exit_low REAL`},
+		{"exit_high", `ALTER TABLE confluence_outcomes ADD COLUMN exit_high REAL`},
+	} {
+		if err := w.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info('confluence_outcomes') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := w.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_confl_out_episode ON confluence_outcomes(symbol_id, direction, ts)`); err != nil {
+		return err
+	}
 	// multiplicity wave: the corrected divisor a loop hypothesis cleared. Live
 	// DBs already hold rows from before the loop fed PriorSearches, and those
 	// rows keep divisor=0 — the truthful state, meaning "correction unrecorded",

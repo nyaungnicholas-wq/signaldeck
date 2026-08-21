@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/confluence"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
@@ -34,6 +35,18 @@ const confluenceHorizon = "1d"
 // confluenceHorizonSecs is the forward window a setup needs before it can be
 // graded (matches the "1d" horizon; daily bars).
 const confluenceHorizonSecs = int64(86400)
+
+// IsConfluenceBettableDay reports whether a bet may be OPENED at this instant:
+// the US session calendar must have been open on the day it falls in.
+//
+// It is exported and takes a bare unix second so the rule can be exercised
+// directly. The alternative — asserting it through ConfluenceScorer.Run — would
+// need all five independent signal families stood up before the calendar branch
+// is even reached, and a test that expensive to write is a test that stops being
+// written.
+func IsConfluenceBettableDay(unix int64) bool {
+	return marketcal.IsTradingDay(time.Unix(unix, 0).In(marketcal.Loc()))
+}
 
 // ── ConfluenceScorer ─────────────────────────────────────────────────────────
 
@@ -67,6 +80,24 @@ func (w *ConfluenceScorer) Run(ctx context.Context) (string, error) {
 	setupTs := now.Truncate(time.Minute).Unix()
 	dayStart := (nowUnix / 86400) * 86400 // outcome ts bucket: one independent bet per symbol/day
 	dayBucket := now.UTC().Format("2006-01-02")
+
+	// A BET CANNOT BE PLACED ON A DAY THE MARKET IS SHUT.
+	//
+	// The bucket above is a UTC calendar day, and the scorer runs every 30
+	// minutes including weekends. A setup that persisted over a weekend
+	// therefore opened three outcomes — Friday, Saturday, Sunday — and the
+	// resolver graded all three against the SAME pair of bars, because both its
+	// entry and its forward read fall back to the nearest bar in each direction
+	// and there is no bar between Friday and Monday. RNWWW booked the identical
+	// +93.33% move on 2026-07-17, 07-18 and 07-19; NXGLW and AXTI did the same.
+	// One price observation was entering the published mean up to three times as
+	// three "independent bets".
+	//
+	// Refusing to open an outcome on a non-trading day removes the duplicates at
+	// the source. The ASSESSMENT still runs and is still stored for every symbol
+	// — a reader looking at the weekend sees the current confluence state; it
+	// simply does not become a graded bet.
+	tradingDay := IsConfluenceBettableDay(nowUnix)
 
 	scored, setups, events, readErrs, writeErrs := 0, 0, 0, 0, 0
 
@@ -150,16 +181,22 @@ func (w *ConfluenceScorer) Run(ctx context.Context) (string, error) {
 
 		// FORWARD-TRACK the flagged setup: freeze entry_px at the latest close and
 		// store one outcome per (symbol, day, horizon) — the day-bucket ts makes
-		// the PK enforce independence (one bet per symbol per day).
-		entryPx, okPx, err := w.latestClose(ctx, s.ID, nowUnix)
-		if err != nil {
-			writeErrs++
-		} else if okPx {
-			if err := w.St.InsertConfluenceOutcome(ctx, store.ConfluenceOutcome{
-				SymbolID: s.ID, Ts: dayStart, Horizon: confluenceHorizon,
-				Direction: setup.Direction, Agree: setup.Agree, EntryPx: entryPx,
-			}); err != nil {
+		// the PK enforce independence (one bet per symbol per day). The store
+		// assigns episode_ts in the same statement, so a setup that persists
+		// across consecutive days stays ONE episode rather than becoming one new
+		// bet per day.
+		if tradingDay {
+			entryPx, entryTs, okPx, err := w.latestClose(ctx, s.ID, nowUnix)
+			if err != nil {
 				writeErrs++
+			} else if okPx {
+				if err := w.St.InsertConfluenceOutcome(ctx, store.ConfluenceOutcome{
+					SymbolID: s.ID, Ts: dayStart, Horizon: confluenceHorizon,
+					Direction: setup.Direction, Agree: setup.Agree,
+					EntryPx: entryPx, EntryTs: entryTs,
+				}); err != nil {
+					writeErrs++
+				}
 			}
 		}
 
@@ -198,14 +235,14 @@ func (w *ConfluenceScorer) Run(ctx context.Context) (string, error) {
 }
 
 // latestClose returns the symbol's most recent daily close at/before now (the
-// entry reference frozen into a forward-tracked outcome). ok=false when the
-// symbol has no daily bar yet.
-func (w *ConfluenceScorer) latestClose(ctx context.Context, symbolID, now int64) (float64, bool, error) {
+// entry reference frozen into a forward-tracked outcome) together with the ts of
+// the bar it came from. ok=false when the symbol has no daily bar yet.
+func (w *ConfluenceScorer) latestClose(ctx context.Context, symbolID, now int64) (float64, int64, bool, error) {
 	bar, ok, err := w.St.BarAtOrBefore(ctx, symbolID, md.TF1d, now)
 	if err != nil || !ok || bar.Close <= 0 {
-		return 0, false, err
+		return 0, 0, false, err
 	}
-	return bar.Close, true, nil
+	return bar.Close, bar.Ts, true, nil
 }
 
 // confluenceDetail builds the event line: "SYM: N-signal LONG/SHORT confluence
@@ -280,9 +317,30 @@ func (w *ConfluenceResolver) Run(ctx context.Context) (string, error) {
 		if !okEntry || entry.Close <= 0 {
 			continue // entry bar gone (purged or quarantined) — leave it pending
 		}
+		// THE ENTRY BAR MUST BE INSIDE THE BUCKET DAY.
+		//
+		// BarAtOrBefore has no lower bound, so a symbol that did not trade on its
+		// own bucket day was graded from whatever bar came last — days or weeks
+		// earlier. Combined with the forward read, which reaches FORWARD from the
+		// same bucket, several buckets could resolve to one identical (entry,
+		// exit) pair and each was published as a separate independent bet.
+		//
+		// A bet whose entry price is not from the day it was placed is not a bet
+		// this system can honestly grade, so it stays pending rather than being
+		// graded on a stale leg. Non-trading-day buckets no longer arise at all
+		// (see the scorer), so what remains here is the historical residue and
+		// the genuine case of a symbol that simply did not print that day.
+		if entry.Ts < o.Ts {
+			continue
+		}
 		fwdReturn := fwd.Close/entry.Close - 1
 		win := (o.Direction > 0 && fwdReturn > 0) || (o.Direction < 0 && fwdReturn < 0)
-		if err := w.St.ResolveConfluenceOutcome(ctx, o.SymbolID, o.Ts, o.Horizon, fwdReturn, win); err != nil {
+		// Stamp the price LEVELS the constrained basis reads. The exit bar's
+		// extremes stand in for the intra-window excursion: the horizon is one
+		// day and the gap guard above keeps the exit within three of them, so
+		// that bar is where a stop would have been hit.
+		if err := w.St.ResolveConfluenceOutcome(ctx, o.SymbolID, o.Ts, o.Horizon, fwdReturn, win, entry.Ts,
+			store.ConfluenceGradePrices{EntryClose: entry.Close, ExitLow: fwd.Low, ExitHigh: fwd.High}); err != nil {
 			return "", err
 		}
 		resolved++

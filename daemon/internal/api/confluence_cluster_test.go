@@ -58,20 +58,26 @@ func newConfluenceServer(t *testing.T) (*httptest.Server, *store.Store) {
 // days distinct UTC days, all of a day sharing that day's realized move. That is
 // the real shape of this record (every setup on a day rides the same tape), and
 // it is what makes 2,530 rows behave like 11.
+//
+// EACH DAY GETS ITS OWN SYMBOLS. The clustering this fixture exists to measure is
+// CROSS-SECTIONAL — many names on one day riding one tape. Reusing one roster
+// across every day would instead build 40 twelve-session EPISODES, which the
+// scoreboard now correctly collapses to 40 single bets: a different (and also
+// real) defect, measured by its own tests in pipeline/confluenceepisode_test.go.
+// Keeping the two apart is what lets each fixture fail for one reason.
 func seedConfluenceTrack(t *testing.T, st *store.Store, dayReturns []float64, perDay int) {
 	t.Helper()
 	ctx := context.Background()
-	syms := make([]int64, perDay)
-	for i := range syms {
-		s, err := st.UpsertSymbol(ctx, "CF"+string(rune('A'+i/26))+string(rune('A'+i%26)), md.Stocks, "")
-		if err != nil {
-			t.Fatalf("upsert symbol: %v", err)
-		}
-		syms[i] = s.ID
-	}
 	for day, ret := range dayReturns {
 		base := int64(20000+day)*86400 + 43200
-		for i, id := range syms {
+		for i := 0; i < perDay; i++ {
+			n := day*perDay + i
+			s, err := st.UpsertSymbol(ctx,
+				"CF"+string(rune('A'+n/676%26))+string(rune('A'+n/26%26))+string(rune('A'+n%26)), md.Stocks, "")
+			if err != nil {
+				t.Fatalf("upsert symbol: %v", err)
+			}
+			id := s.ID
 			ts := base + int64(i)
 			if err := st.InsertConfluenceOutcome(ctx, store.ConfluenceOutcome{
 				SymbolID: id, Ts: ts, Horizon: "1d", Direction: 1, Agree: 4, EntryPx: 100,
@@ -81,7 +87,7 @@ func seedConfluenceTrack(t *testing.T, st *store.Store, dayReturns []float64, pe
 			// A small per-symbol wobble around the day's move so the sample is not
 			// literally degenerate, but the DAY dominates — as it does live.
 			r := ret + float64(i%5-2)*0.0005
-			if err := st.ResolveConfluenceOutcome(ctx, id, ts, "1d", r, r > 0); err != nil {
+			if err := st.ResolveConfluenceOutcome(ctx, id, ts, "1d", r, r > 0, ts, store.ConfluenceGradePrices{EntryClose: 50, ExitLow: 49, ExitHigh: 51}); err != nil {
 				t.Fatalf("resolve outcome: %v", err)
 			}
 		}
@@ -204,7 +210,7 @@ func TestConfluenceTrack_ThinDirectionWithheld(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if err := st.ResolveConfluenceOutcome(ctx, sh.ID, ts, "1d", -0.02, true); err != nil {
+			if err := st.ResolveConfluenceOutcome(ctx, sh.ID, ts, "1d", -0.02, true, ts, store.ConfluenceGradePrices{EntryClose: 50, ExitLow: 48, ExitHigh: 50.5}); err != nil {
 				t.Fatal(err)
 			}
 		}

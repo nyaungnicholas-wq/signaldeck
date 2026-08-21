@@ -1222,8 +1222,27 @@ CREATE TABLE IF NOT EXISTS confluence_outcomes (
   fwd_return  REAL,
   win         INTEGER,
   resolved_at INTEGER,
+  -- entry_ts is the bar the entry leg was ACTUALLY read from at grade time.
+  -- entry_px stays the audit record of the price at call time; entry_ts says
+  -- which bar the published return was computed against.
+  entry_ts    INTEGER,
+  -- The three prices the CONSTRAINED basis needs, recorded at grade time so a
+  -- public read never re-derives them from bars that may since have moved.
+  -- entry_close is the graded entry leg (entry_px is the call-time audit value
+  -- and may sit on a rescaled basis); exit_low/exit_high are the exit bar's
+  -- extremes, which is where a stop would actually have been hit.
+  entry_close REAL,
+  exit_low    REAL,
+  exit_high   REAL,
+  -- episode_ts is the ts of the FIRST outcome in this continuous setup episode
+  -- (same symbol, same direction, consecutive trading days). A setup that
+  -- persists for a week is ONE bet held for a week, not five independent ones;
+  -- keying the published population on episode_ts is what stops one sustained
+  -- move entering the mean once per calendar day. NULL = not yet classified.
+  episode_ts  INTEGER,
   PRIMARY KEY(symbol_id, ts, horizon)
 );
+CREATE INDEX IF NOT EXISTS idx_confl_out_episode ON confluence_outcomes(symbol_id, direction, ts);
 
 -- confluence_events: append-only "confluence setup" detections. day_bucket (the
 -- setup's UTC day) is the dedup key so a persisting setup becomes ONE event per
