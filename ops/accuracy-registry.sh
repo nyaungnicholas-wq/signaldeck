@@ -15,6 +15,32 @@ set -uo pipefail
 # recorded on 2026-07-29 as though it were current. A stale refusal is worse
 # than a loud failure: it looks like the honesty machinery working.
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# report_uncommitted_docs names the generated files this run left MODIFIED, and
+# says what that costs.
+#
+# It is not housekeeping. Every surface this job regenerates is TRACKED, so a
+# successful run always leaves the worktree dirty -- and both deploy paths refuse
+# a dirty tree ON PURPOSE, because a running daemon must be reproducible from a
+# commit: ops/signaldeck-ctl.sh build_from_head refuses outright, and a hand-built
+# binary gets a "+dirty" vcs stamp that cmd/signaldeckd/main.go refuses to start
+# on. Measured 2026-08-21: this job regenerated nine files at 18:33, a rebuild at
+# 19:09 stamped f5f6b0a+dirty, and the daemon stayed DOWN until they were
+# committed. The task result was 1 and nothing said why.
+#
+# The job cannot commit for the operator -- an unattended commit of published
+# numbers is its own problem -- but it can stop the next deploy being a mystery.
+report_uncommitted_docs() {
+  local dirty
+  dirty="$(cd "$SD" && git status --porcelain --     README.md partials/ CASE_STUDY.md HOW_PREDICTORS_WORK.md INSTITUTIONAL_GAP.md     PREDICTION_PROCESS.md SHIP_READINESS.md STRATEGY_DECK.md ops/revalidation-status.json 2>/dev/null)"
+  [ -n "$dirty" ] || return 0
+  echo "NOTE: this run regenerated tracked documents and left them UNCOMMITTED:"
+  echo "$dirty" | sed 's/^/  /'
+  echo "Commit them before the next daemon rebuild. Both deploy paths refuse a dirty"
+  echo "tree, and a hand-built binary is stamped +dirty and REFUSES TO START --"
+  echo "signaldeckd exited 1 on exactly this on 2026-08-21."
+}
+
 # shellcheck source=lib-portable.sh
 . "$SD/ops/lib-portable.sh"
 
@@ -388,6 +414,7 @@ PY
   "$PY" "$SD/tools/live_accuracy.py" --write     || echo "WARN: partials/live_accuracy.md not regenerated on the refusal path" >> "$LOG"
   "$PY" "$SD/tools/live_accuracy.py" --inject $(cat "$SD/partials/INCLUDES.txt")     || echo "WARN: live-accuracy blocks not re-injected on the refusal path" >> "$LOG"
 
+  report_uncommitted_docs
   notify_remote "SignalDeck accuracy registry — $refusal_text"
   sd_notify "SignalDeck accuracy" "Grading REFUSED — README accuracy tables removed. See the log."
   exit 1
@@ -633,6 +660,8 @@ fi
 # the run reports success. That is a published number being wrong, which is the
 # same class as the REFUSAL PATH above -- and unlike the liveness probes, nothing
 # downstream can catch it (see the docs_stale comment where it is set).
+report_uncommitted_docs
+
 if [ "${docs_stale:-0}" != "0" ]; then
   echo "FAILED: the grade was computed and published, but at least one document" \
        "surface was NOT regenerated from it (see the WARN line above). The" \
