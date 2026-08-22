@@ -36,15 +36,36 @@ const confluenceHorizon = "1d"
 // graded (matches the "1d" horizon; daily bars).
 const confluenceHorizonSecs = int64(86400)
 
-// IsConfluenceBettableDay reports whether a bet may be OPENED at this instant:
-// the US session calendar must have been open on the day it falls in.
+// IsConfluenceBettableDay reports whether a bet may be OPENED at this instant,
+// for a symbol in this market.
+//
+// THE CALENDAR IS PER-MARKET, and getting that wrong is what this signature
+// exists to prevent. Crypto trades every day: BTC/USD and its peers print a
+// daily bar on all 25 weekend days of a 90-day window, and the record already
+// holds 11 weekend crypto setups, 9 of them graded. Gating those on the NYSE
+// calendar would silently stop a 24/7 book two days in seven.
+//
+// For stocks the session calendar is the whole point. The scorer runs every 30
+// minutes including weekends, so a bucket on a day the exchange never opened has
+// no bar of its own; its entry leg then comes from the previous session and the
+// same move is published once per calendar day. That is the pseudo-replication
+// this wave removed — RNWWW's identical +93.33% on three consecutive buckets.
+//
+// This is belt to the braces of the bar-existence check at the call site
+// (entryTs >= dayStart), which is market-agnostic and catches most of the same
+// cases. Both are kept because neither alone is enough: the bar check would
+// still admit a stock whose weekend bucket happened to carry a vendor pad, and
+// this one would still admit a stock on a session whose bar has not arrived yet.
 //
 // It is exported and takes a bare unix second so the rule can be exercised
 // directly. The alternative — asserting it through ConfluenceScorer.Run — would
 // need all five independent signal families stood up before the calendar branch
 // is even reached, and a test that expensive to write is a test that stops being
 // written.
-func IsConfluenceBettableDay(unix int64) bool {
+func IsConfluenceBettableDay(unix int64, market md.Market) bool {
+	if market == md.Crypto {
+		return true
+	}
 	return marketcal.IsTradingDay(time.Unix(unix, 0).In(marketcal.Loc()))
 }
 
@@ -97,7 +118,7 @@ func (w *ConfluenceScorer) Run(ctx context.Context) (string, error) {
 	// the source. The ASSESSMENT still runs and is still stored for every symbol
 	// — a reader looking at the weekend sees the current confluence state; it
 	// simply does not become a graded bet.
-	tradingDay := IsConfluenceBettableDay(nowUnix)
+	// The calendar gate is evaluated PER SYMBOL below: it depends on the market.
 
 	scored, setups, events, readErrs, writeErrs := 0, 0, 0, 0, 0
 
@@ -198,7 +219,7 @@ func (w *ConfluenceScorer) Run(ctx context.Context) (string, error) {
 		// have BLOCKED the real setup once the session opened.
 		//
 		// So the bet is simply not opened until the day it belongs to has a bar.
-		if tradingDay {
+		if IsConfluenceBettableDay(nowUnix, s.Market) {
 			entryPx, entryTs, okPx, err := w.latestClose(ctx, s.ID, nowUnix)
 			if err != nil {
 				writeErrs++

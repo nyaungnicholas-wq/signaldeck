@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"testing"
+	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -115,19 +116,43 @@ func TestConfluenceResolve_RefusesAnEntryBarFromAnEarlierDay(t *testing.T) {
 // TestConfluenceScorer_OpensNoBetOnANonTradingDay is the scorer half: the
 // duplicate rows must never be written in the first place.
 func TestConfluenceScorer_OpensNoBetOnANonTradingDay(t *testing.T) {
-	if IsConfluenceBettableDay(satBucket + 12*3600) {
-		t.Fatal("2026-07-18 is a Saturday; the scorer must not open a bet on it")
+	if IsConfluenceBettableDay(satBucket+12*3600, md.Stocks) {
+		t.Fatal("2026-07-18 is a Saturday; the scorer must not open a STOCK bet on it")
 	}
-	if IsConfluenceBettableDay(sunBucket + 12*3600) {
-		t.Fatal("2026-07-19 is a Sunday; the scorer must not open a bet on it")
+	if IsConfluenceBettableDay(sunBucket+12*3600, md.Stocks) {
+		t.Fatal("2026-07-19 is a Sunday; the scorer must not open a STOCK bet on it")
 	}
-	if !IsConfluenceBettableDay(friBucket + 18*3600) {
+	if !IsConfluenceBettableDay(friBucket+18*3600, md.Stocks) {
 		t.Fatal("2026-07-17 is a Friday session; the scorer must open bets on it")
 	}
 	// A full NYSE closure on a weekday is the case a weekday-only check misses:
 	// 2026-07-03 is the observed Independence Day holiday.
-	if IsConfluenceBettableDay(1783123200 + 12*3600) {
-		t.Fatal("2026-07-03 is an observed NYSE holiday; the scorer must not open a bet on it")
+	if IsConfluenceBettableDay(1783123200+12*3600, md.Stocks) {
+		t.Fatal("2026-07-03 is an observed NYSE holiday; the scorer must not open a STOCK bet on it")
+	}
+}
+
+// CRYPTO TRADES ON THE DAYS THE NYSE DOES NOT, and gating it on the NYSE
+// calendar would silently stop a 24/7 book two days in seven.
+//
+// This was a real regression, caught by reading the live table rather than by a
+// test: BTC/USD and its peers print a daily bar on all 25 weekend days of a
+// 90-day window, and the record already held 11 weekend crypto setups with 9 of
+// them graded. Every one would have stopped being opened.
+//
+// MUTATION CHECK, verified: remove the md.Crypto branch from
+// IsConfluenceBettableDay and this test fails on both weekend days.
+func TestConfluenceScorer_CryptoIsBettableEveryDay(t *testing.T) {
+	for _, ts := range []int64{satBucket + 12*3600, sunBucket + 12*3600, friBucket + 18*3600} {
+		if !IsConfluenceBettableDay(ts, md.Crypto) {
+			t.Fatalf("crypto refused at %s: it trades every calendar day and prints a bar on every "+
+				"one, so the NYSE calendar must not gate it",
+				time.Unix(ts, 0).UTC().Format("2006-01-02 Mon"))
+		}
+	}
+	// The NYSE holiday too: crypto does not observe Independence Day.
+	if !IsConfluenceBettableDay(1783123200+12*3600, md.Crypto) {
+		t.Fatal("crypto refused on an NYSE holiday; it does not observe one")
 	}
 }
 
