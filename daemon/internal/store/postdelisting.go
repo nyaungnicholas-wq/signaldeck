@@ -142,7 +142,28 @@ DELETE FROM bars WHERE tf = ? AND EXISTS (
 //
 // The resulting value is an observational lower bound. No corporate-actions feed
 // is consulted here and none is claimed.
-func (s *Store) RestampDelistedAtFromGenuineBars(ctx context.Context, tf string) (int64, error) {
+// maxGapDays bounds what counts as a CONTINUATION. A genuine print that resumes
+// within the gap says the stamp was early; one that resumes long afterwards may
+// be a different security holding a recycled ticker, and moving the stamp would
+// merge two companies into one row.
+//
+// SIC is the case that forced this parameter. It traded at ~$14.50 through
+// 2021-10-19 — a SPAC at trust value — went silent for 1,762 days, and resumed
+// on 2026-08-17 at ~$49.90. Same ticker, plainly not the same security. Without
+// a bound it would have had its delisted_at dragged 4.8 years forward, splicing
+// the two together, which is precisely the ATC-splice failure the import guard
+// exists to prevent.
+//
+// A symbol beyond the bound is left ALONE and reported as ambiguous. That is the
+// honest outcome without a corporate-actions feed: build-universe already
+// excludes post-delisting prints from the point-in-time universe, so the
+// research path is protected either way; what is refused here is the CLAIM that
+// the two runs are one security.
+func (s *Store) RestampDelistedAtFromGenuineBars(ctx context.Context, tf string, maxGapDays int) (int64, error) {
+	if maxGapDays <= 0 {
+		return 0, fmt.Errorf("maxGapDays must be positive: without a bound a recycled ticker is " +
+			"indistinguishable from a stamp that was merely early")
+	}
 	res, err := s.w.ExecContext(ctx, `
 UPDATE symbols SET delisted_at = (
   SELECT (MAX(b.ts)/86400)*86400 FROM bars b
@@ -151,7 +172,11 @@ WHERE delisted_at IS NOT NULL
   AND EXISTS (
     SELECT 1 FROM bars b
     WHERE b.symbol_id = symbols.id AND b.tf = ? AND b.volume > 0
-      AND date(b.ts,'unixepoch') > date(symbols.delisted_at,'unixepoch'))`, tf, tf)
+      AND date(b.ts,'unixepoch') > date(symbols.delisted_at,'unixepoch'))
+  AND (SELECT MIN(b.ts) FROM bars b
+        WHERE b.symbol_id = symbols.id AND b.tf = ? AND b.volume > 0
+          AND date(b.ts,'unixepoch') > date(symbols.delisted_at,'unixepoch'))
+      <= symbols.delisted_at + ? * 86400`, tf, tf, tf, maxGapDays)
 	if err != nil {
 		return 0, err
 	}

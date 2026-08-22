@@ -49,6 +49,8 @@ func adjudicateDelistings(args []string) error {
 	runID := fs.String("run-id", "", "quarantine run id for padded post-delisting bars (default: postdelist-<unix>)")
 	restore := fs.String("restore", "", "restore a previous quarantine run by id and exit")
 	out := fs.String("out", "", "write the full per-symbol evidence report to this JSON file")
+	maxGap := fs.Int("max-continuation-gap-days", 365,
+		"a genuine print resuming more than this long after the stamp is AMBIGUOUS (possible ticker reuse), not a continuation")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -121,6 +123,17 @@ func adjudicateDelistings(args []string) error {
 			v.Action = "quarantine the padded bars; delisted_at unchanged"
 			v.DelistedAtAfter, v.DelistedDayAfter = c.DelistedAt, utcDay(c.DelistedAt)
 			toQuarantine = append(toQuarantine, c)
+		case c.LastGenuineTs > c.DelistedAt && firstGenuineGapDays(c) > int64(*maxGap):
+			// A long silence followed by genuine prints is not evidence of ONE
+			// security. SIC traded at ~$14.50 to 2021-10-19, went quiet for 1,762
+			// days, and resumed at ~$49.90 — same ticker, different company.
+			// Moving the stamp would splice the two into one row.
+			v.Classification = "ambiguous_possible_reuse"
+			v.Evidence = fmt.Sprintf("%d genuine bar(s) resume %d day(s) after the stamp — beyond the "+
+				"%d-day continuation bound. Without a corporate-actions feed this cannot be told apart "+
+				"from a recycled ticker.", c.GenuineBars, firstGenuineGapDays(c), *maxGap)
+			v.Action = "left untouched; build-universe already excludes these days from the point-in-time universe"
+			v.DelistedAtAfter, v.DelistedDayAfter = c.DelistedAt, utcDay(c.DelistedAt)
 		case c.LastGenuineTs > c.DelistedAt:
 			// Real prints after the stamp: the stamp is early.
 			v.Classification = "still_trading"
@@ -148,8 +161,8 @@ func adjudicateDelistings(args []string) error {
 	fmt.Printf("database        : %s\n", *dbPath)
 	fmt.Printf("post-delisting  : %d symbol(s), %d bar(s) strictly after the stamped day\n",
 		len(cases), totalBars(cases))
-	fmt.Printf("classification  : still_trading=%d vendor_pad=%d ambiguous=%d\n\n",
-		counts["still_trading"], counts["vendor_pad"], counts["ambiguous"])
+	fmt.Printf("classification  : still_trading=%d vendor_pad=%d ambiguous=%d possible_reuse=%d\n\n",
+		counts["still_trading"], counts["vendor_pad"], counts["ambiguous"], counts["ambiguous_possible_reuse"])
 
 	fmt.Printf("%-10s %-14s %6s %8s %8s %12s %12s\n",
 		"SYMBOL", "CLASS", "BARS", "GENUINE", "PADDED", "STAMP", "NEW STAMP")
@@ -196,7 +209,7 @@ func adjudicateDelistings(args []string) error {
 	if err != nil {
 		return fmt.Errorf("quarantine pads: %w", err)
 	}
-	restamped, err := st.RestampDelistedAtFromGenuineBars(ctx, string(md.TF1d))
+	restamped, err := st.RestampDelistedAtFromGenuineBars(ctx, string(md.TF1d), *maxGap)
 	if err != nil {
 		return fmt.Errorf("restamp: %w", err)
 	}
@@ -226,3 +239,13 @@ func utcDay(ts int64) string { return time.Unix(ts, 0).UTC().Format("2006-01-02"
 // dayStart truncates a bar ts to its UTC midnight, which is the convention
 // delisted_at is stored in.
 func dayStart(ts int64) int64 { return (ts / 86400) * 86400 }
+
+// firstGenuineGapDays is how long a symbol was silent before prints resumed
+// after its stamp — the signal that separates "the stamp was early" from "this
+// ticker was recycled".
+func firstGenuineGapDays(c store.PostDelistingCase) int64 {
+	if c.LastGenuineTs <= c.DelistedAt {
+		return 0
+	}
+	return (c.FirstAfterTs - c.DelistedAt) / 86400
+}
