@@ -124,6 +124,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "refetch-cohort" {
+		if err := refetchCohort(os.Args[2:]); err != nil {
+			log.Fatalf("refetch-cohort: %v", err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "confluence-repair" {
 		if err := confluenceRepair(os.Args[2:]); err != nil {
 			log.Fatalf("confluence-repair: %v", err)

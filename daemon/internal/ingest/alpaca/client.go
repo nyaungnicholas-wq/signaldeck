@@ -44,6 +44,10 @@ const (
 // reads the Python file to stop them drifting apart again.
 const barAdjustment = "split"
 
+// BarAdjustment exposes the convention for callers that must REPORT which basis
+// they wrote, rather than restate a literal that could drift from it.
+func BarAdjustment() string { return barAdjustment }
+
 // pagePause spaces backfill page fetches so a long history pull stays well
 // under the free-tier rate limit (200 req/min). Tests shorten it.
 var pagePause = 300 * time.Millisecond
@@ -143,6 +147,20 @@ type barsPage struct {
 // upserts them into st, and returns the number of bars written.
 func (c *Client) BackfillDaily(ctx context.Context, st *store.Store, symbolID int64, symbol string) (int, error) {
 	start := time.Now().UTC().AddDate(-2, 0, 0)
+	return c.backfill(ctx, st, symbolID, symbol, "1Day", md.TF1d, start)
+}
+
+// BackfillDailyFrom pulls split-adjusted daily IEX bars from an explicit start,
+// for callers that must cover a symbol's whole life rather than the rolling
+// two-year window BackfillDaily assumes.
+//
+// It exists for the delisted-cohort re-fetch, where the earliest bar can be six
+// years back and a two-year window would silently replace part of a series and
+// leave the rest on the old price basis — a seam in the middle of the repair.
+//
+// It shares backfill() with the other two, so it inherits the same adjustment
+// constant and the same vendor-pad refusal by construction, not by convention.
+func (c *Client) BackfillDailyFrom(ctx context.Context, st *store.Store, symbolID int64, symbol string, start time.Time) (int, error) {
 	return c.backfill(ctx, st, symbolID, symbol, "1Day", md.TF1d, start)
 }
 
