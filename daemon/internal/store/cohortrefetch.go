@@ -188,11 +188,21 @@ ORDER BY differing DESC`, tf, runID, tf)
 // re-inserts the quarantined ones — replace, not merge. One transaction per run
 // so a crash cannot leave a symbol emptied.
 //
+// onlySymbol, when non-empty, undoes just that one symbol and leaves the rest of
+// the run in place. That is needed because a re-fetch can be right for 649
+// symbols and wrong for one: SIC's fresh bars are real market data, but they
+// belong to whatever security holds the ticker NOW, and appending them to a row
+// whose history is a 2021 SPAC splices two companies across a 4.8-year hole.
+// Undoing the whole run to fix one symbol would discard 649 correct repairs.
+//
 // It is idempotent: a second call finds no quarantine rows and changes nothing.
-func (s *Store) RestoreCohortRefetch(ctx context.Context, tf, runID string) (int64, error) {
+func (s *Store) RestoreCohortRefetch(ctx context.Context, tf, runID, onlySymbol string) (int64, error) {
 	if runID == "" {
 		return 0, fmt.Errorf("runID must not be empty")
 	}
+	// One extra predicate, spelled the same way in all three statements below so
+	// they cannot select different sets: an empty filter matches everything.
+	const symFilter = ` AND (? = '' OR symbol_id = (SELECT id FROM symbols WHERE symbol = ? AND market = 'stocks'))`
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -203,14 +213,15 @@ func (s *Store) RestoreCohortRefetch(ctx context.Context, tf, runID string) (int
 	if _, err := tx.ExecContext(ctx, `
 DELETE FROM bars
  WHERE tf = ?
-   AND symbol_id IN (SELECT DISTINCT symbol_id FROM bars_quarantine WHERE run_id = ? AND tf = ?)`,
-		tf, runID, tf); err != nil {
+   AND symbol_id IN (SELECT DISTINCT symbol_id FROM bars_quarantine
+                      WHERE run_id = ? AND tf = ?`+symFilter+`)`,
+		tf, runID, tf, onlySymbol, onlySymbol); err != nil {
 		return 0, err
 	}
 	res, err := tx.ExecContext(ctx, `
 INSERT OR REPLACE INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
 SELECT symbol_id, tf, ts, open, high, low, close, volume
-FROM bars_quarantine WHERE run_id = ? AND tf = ?`, runID, tf)
+FROM bars_quarantine WHERE run_id = ? AND tf = ?`+symFilter, runID, tf, onlySymbol, onlySymbol)
 	if err != nil {
 		return 0, err
 	}
@@ -219,7 +230,8 @@ FROM bars_quarantine WHERE run_id = ? AND tf = ?`, runID, tf)
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM bars_quarantine WHERE run_id = ? AND tf = ?`, runID, tf); err != nil {
+		`DELETE FROM bars_quarantine WHERE run_id = ? AND tf = ?`+symFilter,
+		runID, tf, onlySymbol, onlySymbol); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

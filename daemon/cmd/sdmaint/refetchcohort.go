@@ -77,7 +77,7 @@ func refetchCohort(args []string) error {
 		// series carries days the old one lacked. Merging the two leaves a union
 		// holding both price conventions in one symbol (measured on the canary:
 		// ACACU restored to 396 bars against an original 248).
-		n, err := st.RestoreCohortRefetch(ctx, string(md.TF1d), *restore)
+		n, err := st.RestoreCohortRefetch(ctx, string(md.TF1d), *restore, strings.TrimSpace(strings.ToUpper(*symbolsCSV)))
 		if err != nil {
 			return fmt.Errorf("restore %s: %w", *restore, err)
 		}

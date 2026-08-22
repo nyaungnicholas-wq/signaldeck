@@ -194,7 +194,7 @@ func TestCohortRefetch_RollbackReplacesRatherThanMerges(t *testing.T) {
 	// old series never had.
 	seedCohortSymbol(t, st, "ACACU", 20000, []float64{7, 7.7, 8.4, 9.1, 9.8})
 
-	n, err := st.RestoreCohortRefetch(ctx, string(md.TF1d), run)
+	n, err := st.RestoreCohortRefetch(ctx, string(md.TF1d), run, "")
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestCohortRefetch_RollbackReplacesRatherThanMerges(t *testing.T) {
 	}
 
 	// Idempotent: the quarantine rows are consumed, so a second call is a no-op.
-	again, err := st.RestoreCohortRefetch(ctx, string(md.TF1d), run)
+	again, err := st.RestoreCohortRefetch(ctx, string(md.TF1d), run, "")
 	if err != nil {
 		t.Fatalf("second restore: %v", err)
 	}
@@ -231,5 +231,66 @@ func TestCohortRefetch_RollbackReplacesRatherThanMerges(t *testing.T) {
 	}
 	if count != 3 {
 		t.Fatalf("a second rollback emptied the symbol to %d bar(s); it must change nothing", count)
+	}
+}
+
+// UNDOING ONE SYMBOL MUST NOT UNDO THE OTHER 649.
+//
+// A re-fetch can be right for almost every symbol and wrong for one. SIC's fresh
+// bars are real market data, but they belong to whatever security holds that
+// ticker now; appending them to a row whose history is a 2021 SPAC splices two
+// companies across a 4.8-year hole. Rolling the whole run back to fix that would
+// discard 649 correct repairs.
+//
+// MUTATION CHECK, verified: drop the symbol filter from the three statements in
+// RestoreCohortRefetch and this test fails with the second symbol reverted too.
+func TestCohortRefetch_RollbackCanTargetOneSymbol(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	keep := seedCohortSymbol(t, st, "CADE", 20000, []float64{10, 11, 12})
+	undo := seedCohortSymbol(t, st, "SIC", 20000, []float64{14, 14.1, 14.2})
+
+	const run = "run-one"
+	for _, id := range []int64{keep, undo} {
+		if _, err := st.QuarantineSymbolBars(ctx, id, string(md.TF1d), run, "test", 1); err != nil {
+			t.Fatalf("quarantine: %v", err)
+		}
+	}
+	// Both "re-fetched" onto a new basis.
+	seedCohortSymbol(t, st, "CADE", 20000, []float64{7, 7.7, 8.4})
+	seedCohortSymbol(t, st, "SIC", 20000, []float64{49, 49.5, 50})
+
+	n, err := st.RestoreCohortRefetch(ctx, string(md.TF1d), run, "SIC")
+	if err != nil {
+		t.Fatalf("targeted restore: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("restored %d row(s), want only SIC's 3", n)
+	}
+
+	var sicMax, cadeMax float64
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT MAX(close) FROM bars WHERE symbol_id=? AND tf='1d'`, undo).Scan(&sicMax); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT MAX(close) FROM bars WHERE symbol_id=? AND tf='1d'`, keep).Scan(&cadeMax); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if sicMax != 14.2 {
+		t.Fatalf("SIC max close %.2f, want the reverted 14.2", sicMax)
+	}
+	if cadeMax != 8.4 {
+		t.Fatalf("CADE max close %.2f, want the REPAIRED 8.4 — a targeted undo must not touch it", cadeMax)
+	}
+
+	// CADE's quarantine rows survive so the run stays resumable and undoable.
+	var left int
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM bars_quarantine WHERE run_id=? AND symbol_id=?`, run, keep).Scan(&left); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if left != 3 {
+		t.Fatalf("CADE has %d quarantine row(s) left, want 3 — a targeted undo must not consume the run", left)
 	}
 }
