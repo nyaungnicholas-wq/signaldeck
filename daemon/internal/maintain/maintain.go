@@ -160,7 +160,12 @@ func (d *Downsampler) Run(ctx context.Context) (string, error) {
 	msg := fmt.Sprintf("rolled up %d symbols; archived+pruned %d 1m, %d 1h bars, %d snaps, %d anomalies",
 		len(syms), prunedMin, pruned1h, prunedSnaps, prunedAnoms)
 	if minSkipped || hourSkipped || snapSkipped || anomSkipped {
-		msg += " (SOME PRUNES SKIPPED — archive failed, data retained; see dq)"
+		// Says "see dq" rather than naming a cause. It used to assert "archive
+		// failed", which is only one of the two ways a prune is skipped — the
+		// other is an archive that SUCCEEDED and a prune that then failed. A
+		// summary that names the wrong cause sends the operator looking for the
+		// wrong evidence; the dq event written at the skip knows which it was.
+		msg += " (SOME PRUNES SKIPPED — data retained; the dq event names the cause)"
 	}
 	return msg, nil
 }
@@ -1436,6 +1441,20 @@ func archivePruneDerived[T any](
 		}
 		n, err := prune(ctx, upper)
 		if err != nil {
+			// Mirrors archivePruneBars exactly, which is what this function's
+			// own doc claims it does. That sibling carries the record of this
+			// bug being FIXED once already; the generic rewrite dropped the
+			// dqSkip and discarded err again, for seven more tables — scores,
+			// score_outcomes, features, filings, insights,
+			// prediction_postmortems, research_weeks.
+			//
+			// Silently returning skipped=true makes the caller report "SOME
+			// PRUNES SKIPPED — archive failed, data retained; see dq" for a run
+			// where the ARCHIVE SUCCEEDED and only the prune failed: wrong
+			// cause, and it points the operator at a dq record that was never
+			// written. Retention then stops reclaiming while the database grows,
+			// and the same rows are re-archived on every hourly pass.
+			d.dqSkip(ctx, now, table, "prune failed after a successful archive: "+err.Error())
 			return pruned, true
 		}
 		pruned += n

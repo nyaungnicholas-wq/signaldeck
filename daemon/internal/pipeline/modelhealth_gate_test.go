@@ -26,7 +26,10 @@ func TestRevisionGateVoidsRetireFlag(t *testing.T) {
 	json := `{"rows":[{"predictor":"directional-ensemble (1d)","family":"direction","retire":true,"revision_gate":["abc123+dirty"]}]}`
 	path := writeTempJSON(t, dir, json)
 
-	result := registryFlagsFrom(path)
+	result, err := registryFlagsFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	f, ok := result["directional-ensemble-1d"]
 	if !ok {
@@ -48,7 +51,10 @@ func TestRevisionGateDisqualifiesWhenRetireIsFalse(t *testing.T) {
 	json := `{"rows":[{"predictor":"directional-ensemble (1d)","family":"direction","retire":false,"revision_gate":["(unstamped)","deadbeef+dirty"]}]}`
 	path := writeTempJSON(t, dir, json)
 
-	result := registryFlagsFrom(path)
+	result, err := registryFlagsFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	f, ok := result["directional-ensemble-1d"]
 	if !ok {
@@ -67,7 +73,10 @@ func TestRevisionGateOnHighConvictionTierDisqualifiesHorizon(t *testing.T) {
 		{"predictor":"directional-ensemble (1w, high conviction)","family":"direction","retire":true,"revision_gate":["gate1"]}
 	]}`
 	path1 := writeTempJSON(t, dir, json1)
-	result1 := registryFlagsFrom(path1)
+	result1, err := registryFlagsFrom(path1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	f1, ok1 := result1["directional-ensemble-1w"]
 	if !ok1 || !f1.Unattributable {
 		t.Error("expected Unattributable true for order 1")
@@ -79,7 +88,10 @@ func TestRevisionGateOnHighConvictionTierDisqualifiesHorizon(t *testing.T) {
 		{"predictor":"directional-ensemble (1w)","family":"direction","retire":false}
 	]}`
 	path2 := writeTempJSON(t, dir, json2)
-	result2 := registryFlagsFrom(path2)
+	result2, err := registryFlagsFrom(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	f2, ok2 := result2["directional-ensemble-1w"]
 	if !ok2 || !f2.Unattributable {
 		t.Error("expected Unattributable true for order 2")
@@ -94,7 +106,11 @@ func TestRevisionGateOnHighConvictionTierDisqualifiesHorizon(t *testing.T) {
 		{"predictor":"directional-ensemble (1w)","family":"direction","retire":true}
 	]}`
 	path3 := writeTempJSON(t, dir, json3)
-	f3, ok3 := registryFlagsFrom(path3)["directional-ensemble-1w"]
+	flags3, err := registryFlagsFrom(path3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f3, ok3 := flags3["directional-ensemble-1w"]
 	if !ok3 {
 		t.Fatal("expected directional-ensemble-1w in map for order 3")
 	}
@@ -114,7 +130,10 @@ func TestUngatedRowsKeepRetireSemantics(t *testing.T) {
 	]}`
 	path := writeTempJSON(t, dir, json)
 
-	result := registryFlagsFrom(path)
+	result, err := registryFlagsFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	f, ok := result["directional-ensemble-1d"]
 	if !ok {
@@ -137,7 +156,10 @@ func TestRevisionGateIgnoresNonDirectionFamilies(t *testing.T) {
 	json := `{"rows":[{"predictor":"structure-ensemble (1d)","family":"structure","retire":true,"revision_gate":["gate1"]}]}`
 	path := writeTempJSON(t, dir, json)
 
-	result := registryFlagsFrom(path)
+	result, err := registryFlagsFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if _, ok := result["structure-ensemble-1d"]; ok {
 		t.Error("expected no entry for non-direction family")

@@ -67,7 +67,13 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 	// score below: a row whose whole effective-N interval sits below the
 	// prequential null is retired the grade it happens, not when the score
 	// catches up. The registry's revision gate outranks BOTH — see regFlag.
-	regFlags := w.registryFlags()
+	// A worker that cannot read the kill switch must not grade. Withholding a
+	// verdict is recoverable; publishing one computed as though nothing were
+	// retired is not.
+	regFlags, err := w.registryFlags()
+	if err != nil {
+		return "", fmt.Errorf("kill switch unreadable, no model graded: %v: %w", err, workers.ErrDegraded)
+	}
 
 	for _, h := range []md.Horizon{md.H1d, md.H1w} {
 		model := "directional-ensemble-" + string(h)
@@ -388,7 +394,7 @@ func (w *ModelHealthWorker) featureDrift(ctx context.Context) *float64 {
 // registryFlags resolves the registry path and returns the kill switch state.
 // Candidates mirror PreregRegistrar.fileDigest: launchd runs the daemon from
 // <repo>/daemon, and tools run from the repo root.
-func (w *ModelHealthWorker) registryFlags() map[string]regFlag {
+func (w *ModelHealthWorker) registryFlags() (map[string]regFlag, error) {
 	path := w.RegistryPath
 	if path == "" {
 		for _, p := range []string{
@@ -437,14 +443,28 @@ type regFlag struct {
 // — sitting in the file. Reading `retire` alone therefore acts on evidence the
 // grader has formally disowned, in whichever direction the stale flag happens
 // to point. So the gate is read too, and it outranks the flag.
-func registryFlagsFrom(path string) map[string]regFlag {
+// It returns an error rather than an empty map on failure. An empty map means
+// NO model is retired and none is unattributable -- an affirmative all-clear --
+// and this returned exactly that on three silent paths: no path resolved, the
+// file could not be read, and the JSON did not parse. The daemon's working
+// directory decides whether the switch is found at all (registryFlags probes two
+// relative candidates), and the grader rewrites this file in place, so a
+// mid-rewrite read is a normal event. A retired model would then be regraded
+// without its flag, come out healthy and emitting, and the prediction path would
+// readmit it -- while /api/modelhealth published registryRetire:false as a
+// positive assertion of a check that never ran.
+//
+// featureDrift, 50 lines up, already handles this class correctly: it returns
+// nil WITH an explicit warning so Grade withholds the component. This is the
+// same rule for the switch that outranks the score.
+func registryFlagsFrom(path string) (map[string]regFlag, error) {
 	out := map[string]regFlag{}
 	if path == "" {
-		return out
+		return nil, fmt.Errorf("no accuracy registry found at any candidate path")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return out
+		return nil, fmt.Errorf("read accuracy registry %s: %w", path, err)
 	}
 	var reg struct {
 		Rows []struct {
@@ -454,8 +474,8 @@ func registryFlagsFrom(path string) map[string]regFlag {
 			RevisionGate []string `json:"revision_gate"`
 		} `json:"rows"`
 	}
-	if json.Unmarshal(raw, &reg) != nil {
-		return out
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		return nil, fmt.Errorf("parse accuracy registry %s: %w", path, err)
 	}
 	for _, r := range reg.Rows {
 		gated := len(r.RevisionGate) > 0
@@ -492,7 +512,7 @@ func registryFlagsFrom(path string) map[string]regFlag {
 		}
 		out[key] = f
 	}
-	return out
+	return out, nil
 }
 
 // ModelEmitting reports whether a model is currently cleared to emit. Unknown

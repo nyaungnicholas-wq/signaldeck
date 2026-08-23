@@ -197,11 +197,40 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	// gutted copy never rotates away a good generation or moves
 	// backup_last_ts past the last KNOWN-GOOD backup.
 	//
-	// A failed live count reads as 0, which verifyContent treats as "unknown"
-	// and skips the staleness comparison — not knowing how many rows there
-	// should be is not evidence that the backup is short.
+	// The live count is the REFERENCE the content check is measured against, so
+	// its failure has to stop the run rather than soften it.
+	//
+	// This discarded the error. A failed count reads as 0, and 0 is exactly what
+	// verifyContent treats as "unknown": it then skips three of its four checks
+	// — ledger-empty-while-live-holds-rows, ledger_anchors-has-no-rows, and the
+	// ledgerCount < live*0.5 staleness comparison that exists BECAUSE of the
+	// 2026-08-01 incident where 14 rows stood against a live 261,164 and
+	// quick_check passed. A gutted copy would then certify clean, prune() would
+	// rotate away the known-good generations, backup_last_ts would advance past
+	// them, and the offsite copy would be overwritten with the gutted file. The
+	// operator would read "backup ok, pruned 3 old" with no dq event.
+	//
+	// The old comment was right that not knowing the row count is not evidence
+	// the backup is short. The conclusion it drew was wrong: the honest response
+	// to an unknown reference is CANNOT CERTIFY, not certify. Failing here is
+	// safe by construction — it happens before prune() and before meta advances,
+	// so the previous generations and the last known-good backup_last_ts both
+	// stand. The DSN sets busy_timeout(15000), so a count that fails has waited
+	// 15 seconds and is a real failure, not fleet contention.
 	var liveLedger int64
-	_ = w.St.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM prediction_ledger`).Scan(&liveLedger)
+	if cntErr := w.St.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM prediction_ledger`).Scan(&liveLedger); cntErr != nil {
+		_ = w.St.InsertDQ(ctx, md.DQEvent{
+			Ts:   time.Now().Unix(),
+			Kind: "backup_uncertifiable",
+			Detail: fmt.Sprintf("%s was written and passed quick_check, but the live prediction_ledger "+
+				"count could not be read, so its CONTENT cannot be verified. Nothing was pruned and "+
+				"backup_last_ts was not advanced; the previous generations stand: %v",
+				filepath.Base(target), cntErr),
+		})
+		return "", fmt.Errorf("backup content unverifiable: live ledger count failed, "+
+			"no rotation and no meta advance: %w", cntErr)
+	}
 	if cerr := verifyContent(ctx, target, liveLedger); cerr != nil {
 		// Quarantine rather than delete: a backup that failed verification is
 		// the evidence for WHY it failed, and it is the only artifact of that

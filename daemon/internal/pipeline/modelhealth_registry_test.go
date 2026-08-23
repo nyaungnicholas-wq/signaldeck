@@ -21,7 +21,10 @@ func TestRetiredFromRegistryMapsFlaggedRowsToHorizons(t *testing.T) {
 	if err := os.WriteFile(path, []byte(blob), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := registryFlagsFrom(path)
+	got, err := registryFlagsFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !got["directional-ensemble-1d"].Retire {
 		t.Error("a FAILED 1d row did not retire directional-ensemble-1d")
 	}
@@ -39,19 +42,38 @@ func TestRetiredFromRegistryMapsFlaggedRowsToHorizons(t *testing.T) {
 }
 
 func TestRetiredFromRegistryFailsSafe(t *testing.T) {
-	// Missing file: the kill switch must never fire on evidence nobody can read.
-	if got := registryFlagsFrom(filepath.Join(t.TempDir(), "absent.json")); len(got) != 0 {
-		t.Errorf("missing registry retired %v", got)
-	}
-	if got := registryFlagsFrom(""); len(got) != 0 {
-		t.Errorf("empty path retired %v", got)
+	// FAILS SAFE IN BOTH DIRECTIONS. The kill switch must never fire on evidence
+	// nobody can read -- that was this test's original point and it still holds.
+	// But it must not CLEAR on that evidence either: an empty map is an
+	// affirmative "no model is retired and none is unattributable", and returning
+	// it silently let a retired model be regraded without its flag, come out
+	// healthy, and be readmitted to the prediction path.
+	//
+	// The honest answer to unreadable evidence is neither retire nor clear: it is
+	// an error, on which ModelHealthWorker.Run returns ErrDegraded and writes no
+	// verdict at all. Nothing is retired, and nothing is cleared.
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"missing file", filepath.Join(t.TempDir(), "absent.json")},
+		{"no path resolved", ""},
+	} {
+		got, err := registryFlagsFrom(tc.path)
+		if err == nil {
+			t.Errorf("%s: returned no error (flags %v) -- an unreadable kill switch must not read as all-clear", tc.name, got)
+		}
+		if got != nil {
+			t.Errorf("%s: returned a usable map alongside the error", tc.name)
+		}
 	}
 	// Malformed JSON: same posture.
 	path := filepath.Join(t.TempDir(), "broken.json")
+
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := registryFlagsFrom(path); len(got) != 0 {
-		t.Errorf("malformed registry retired %v", got)
+	if got, err := registryFlagsFrom(path); err == nil {
+		t.Errorf("malformed registry returned no error (flags %v)", got)
 	}
 }
