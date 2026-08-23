@@ -167,7 +167,16 @@ func (d Deps) portfolioRebalance(w http.ResponseWriter, r *http.Request) {
 	held := map[string]bool{}
 	var positions []rebalance.Position
 	var equity float64
-	if pos, perr := d.St.PaperPositions(ctx, strategy); perr == nil {
+	// A FAILED READ IS NOT AN EMPTY BOOK. With no else branch this produced a
+	// complete BUY/SELL plan against an invented $100k of capital and an
+	// invented empty book, byte-identical in shape to a legitimate plan --
+	// and this endpoint's output is a trade list.
+	pos, perr := d.St.PaperPositions(ctx, strategy)
+	if perr != nil {
+		httpInternal(w, fmt.Errorf("cannot read the paper book, refusing to plan a rebalance against assumed capital: %w", perr))
+		return
+	}
+	{
 		for _, p := range pos {
 			px := priceOf[p.Symbol]
 			if px == 0 {
@@ -187,6 +196,9 @@ func (d Deps) portfolioRebalance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if equity <= 0 {
+		// Reached only when the book was READ successfully and is genuinely
+		// empty -- the read failure above now returns rather than falling
+		// through to this default.
 		equity = 100_000 // empty book: plan an allocation of the default starting cash
 	}
 

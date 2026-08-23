@@ -281,7 +281,7 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
 		httpErr(w, http.StatusTooManyRequests,
 			"too many failed sign-in attempts — try again in "+
-				(time.Duration(secs) * time.Second).String())
+				(time.Duration(secs)*time.Second).String())
 		return
 	}
 
@@ -328,10 +328,25 @@ func (d Deps) startSession(w http.ResponseWriter, r *http.Request, uid int64, us
 
 // authLogout deletes the session and clears the cookie.
 func (d Deps) authLogout(w http.ResponseWriter, r *http.Request) {
+	// A FAILED DELETE IS NOT A LOGOUT. Discarding this error cleared the
+	// browser's cookie and answered ok:true while the session row kept
+	// authenticating for the rest of sessionTTL -- so anyone holding that token
+	// was still signed in, and the user had been told they were not. That is the
+	// one lie this endpoint must never tell.
+	var delErr error
 	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
-		_ = d.St.DeleteSession(r.Context(), c.Value)
+		delErr = d.St.DeleteSession(r.Context(), c.Value)
 	}
+	// The cookie is cleared either way: it costs nothing and helps if the row is
+	// already gone. The RESPONSE is what must stay honest.
 	d.setSessionCookie(w, r, "", -1)
+	if delErr != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]any{
+			"ok":    false,
+			"error": "the session could not be revoked server-side and may still be valid; the cookie was cleared in this browser",
+		})
+		return
+	}
 	writeJSON(w, map[string]any{"ok": true})
 }
 

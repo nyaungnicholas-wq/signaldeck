@@ -80,20 +80,27 @@ type PositionsSummary struct {
 	Open   int     `json:"open"`
 	PnLAbs float64 `json:"pnlAbs"`
 	PnLPct float64 `json:"pnlPct"`
+	// Unpriced counts positions marked at ENTRY because no close could be read.
+	// Each books exactly 0 P&L while contributing full basis, so they drag
+	// PnLPct toward zero; without this the summary cannot say so.
+	Unpriced int `json:"unpriced,omitempty"`
 }
 
 // Facts is everything the briefing is allowed to say.
 type Facts struct {
-	Day            string            `json:"day"`
-	BreadthPct     float64           `json:"breadthPct"`
-	Positive       int               `json:"positive"`
-	Scored         int               `json:"scored"`
-	VolPct         float64           `json:"volPct"`
-	VolLabel       string            `json:"volLabel"` // calm|normal|elevated|stressed|unknown
-	Movers         []Mover           `json:"movers"`
-	RegimeShifts   []RegimeShift     `json:"regimeShifts"`
-	TopPredictions []TopPrediction   `json:"topPredictions"`
-	Positions      *PositionsSummary `json:"positions,omitempty"`
+	Day          string        `json:"day"`
+	BreadthPct   float64       `json:"breadthPct"`
+	Positive     int           `json:"positive"`
+	Scored       int           `json:"scored"`
+	VolPct       float64       `json:"volPct"`
+	VolLabel     string        `json:"volLabel"` // calm|normal|elevated|stressed|unknown
+	Movers       []Mover       `json:"movers"`
+	RegimeShifts []RegimeShift `json:"regimeShifts"`
+	// RegimeShiftsKnown is false when the query failed, so an empty list is
+	// not rendered as "no regime changes in the last 24h".
+	RegimeShiftsKnown bool              `json:"regimeShiftsKnown"`
+	TopPredictions    []TopPrediction   `json:"topPredictions"`
+	Positions         *PositionsSummary `json:"positions,omitempty"`
 }
 
 // VolRegime computes SPY-style annualized realized vol from daily bars and
@@ -190,8 +197,12 @@ func CollectFacts(ctx context.Context, st *store.Store, now time.Time, dayKey st
 	}
 	f.Movers = movers
 
-	// Regime changes in the last 24h.
-	if changes, err := st.RecentRegimeChanges(ctx, 50); err == nil {
+	// Regime changes in the last 24h. A failed read renders as "No regime
+	// changes in the last 24h" -- a measured statement about a quiet market,
+	// produced by a query that never answered.
+	changes, rcErr := st.RecentRegimeChanges(ctx, 50)
+	f.RegimeShiftsKnown = rcErr == nil
+	if rcErr == nil {
 		cutoff := now.Add(-24 * time.Hour).Unix()
 		for _, c := range changes {
 			if c.Ts >= cutoff {
@@ -241,6 +252,12 @@ func CollectFacts(ctx context.Context, st *store.Store, now time.Time, dayKey st
 			last := p.EntryPrice
 			if bars, err := st.LastBars(ctx, p.SymbolID, md.TF1d, 1); err == nil && len(bars) == 1 {
 				last = bars[0].Close
+			} else {
+				// An unpriceable position books EXACTLY 0 P&L while still
+				// contributing its full basis, so every one of them drags the
+				// book's percentage toward zero and nothing on the surface says
+				// a price was missing. Count them so the summary can.
+				sum.Unpriced++
 			}
 			sum.PnLAbs += (last - p.EntryPrice) * p.Qty
 			basis += p.EntryPrice * p.Qty
@@ -286,8 +303,10 @@ func Compose(f Facts, now time.Time, loc *time.Location) (headline, body string)
 			parts = append(parts, fmt.Sprintf("%s %s → %s", c.Symbol, c.From, c.To))
 		}
 		b = append(b, "Regime changes in the last 24h: "+strings.Join(parts, "; ")+".")
-	} else {
+	} else if f.RegimeShiftsKnown {
 		b = append(b, "No regime changes in the last 24h.")
+	} else {
+		b = append(b, "Regime changes in the last 24h: UNKNOWN — the query could not be read.")
 	}
 	// Predictions + calibration caveat.
 	if len(f.TopPredictions) > 0 {
