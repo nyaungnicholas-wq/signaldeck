@@ -720,6 +720,15 @@ class TestXsfactorSnapshotRoundTrip(unittest.TestCase):
                 hash_records("xsfactor_inputs.csv", ent["kind"], recs), ent["sha256"])
 
 
+# The 1d high-conviction count moved from "7, 2 degenerate" to "8, 3
+# degenerate" on 2026-08-23 with the DST stamp-slack fix (A21). The VERDICT
+# did not change -- it is still INSUFFICIENT DAYS with no interval -- and no
+# other row moved at all; only the counts inside that one explanatory string
+# did, because rows whose forward bar was previously skipped across the
+# spring-forward boundary are now found. Checked before editing: every
+# other (predictor, band) pair is byte-identical, and the one that changed
+# was compared with its parenthetical counts stripped to confirm the
+# verdict text itself is unchanged.
 class TestFrozenSnapshotVerdicts(unittest.TestCase):
     """CI freeze of the prequential-only verdicts on the COMMITTED repro/ snapshot.
 
@@ -771,7 +780,7 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         # unjudgeable. DOCS_INDEX already publishes the same transition.
             "NO SKILL — indistinguishable from baseline",
         ("directional-ensemble (1d, high conviction)", "|p-0.5|>=0.15"):
-            "INSUFFICIENT DAYS (5/10 credible days of 7, 2 degenerate)"
+            "INSUFFICIENT DAYS (5/10 credible days of 8, 3 degenerate)"
             " — no interval, so no verdict",
         ("directional-ensemble (1w, high conviction)", "|p-0.5|>=0.15"):
             "FAILED — significantly worse than the naive baseline",
