@@ -17,6 +17,9 @@ Dry run is the default and writes nothing. --commit is the only way to store.
 """
 
 import argparse
+import datetime
+import hashlib
+import json
 import math
 import sqlite3
 import statistics
@@ -95,6 +98,85 @@ def open_db(path, write):
         conn.execute("PRAGMA busy_timeout = 15000")
         return conn
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+
+# --- The frozen claim must be able to refuse its own grader ----------------
+#
+# prereg.HashEntry signs ts, kind, spec_hash and note. It does NOT sign
+# spec_json, and nothing in the repo ever recomputed spec_hash from the bytes it
+# summarises, so an edited frozen claim verified intact. Worse, the numbers this
+# file grades with were hand-copied out of the record: claim and grader could
+# drift apart in silence and the chain would attest to neither.
+#
+# This does not change what is signed. Changing HashEntry would invalidate all
+# 88 existing entry hashes -- including this record's -- and the construction is
+# itself registered (kind protocol-provenance-correction). Instead the grader
+# refuses to run unless the record still hashes to what it claims AND still says
+# what this file assumes.
+REGISTRATION_KIND = "forward-test-registration"
+CHAIN_SEP = b""  # record separator, as in the prediction ledger
+
+
+def _entry_hash(prev_hash, ts, kind, spec_hash, note):
+    payload = f"ts={ts}|kind={kind}|specHash={spec_hash}|note={note}"
+    return hashlib.sha256(prev_hash.encode() + CHAIN_SEP + payload.encode()).hexdigest()
+
+
+def verify_registration(conn):
+    """Return the frozen spec, or raise SystemExit naming what no longer holds.
+
+    A hash that only covers itself proves the row was not edited. It does not
+    prove the grader still implements it, which is why the constant checks below
+    build their expected phrase FROM the constant: changing MIN_SESSIONS is what
+    turns this red.
+    """
+    rows = conn.execute(
+        "SELECT seq, ts, kind, spec_json, spec_hash, prev_hash, entry_hash, note "
+        "FROM prereg_records WHERE kind = ?", (REGISTRATION_KIND,)).fetchall()
+    if len(rows) != 1:
+        raise SystemExit(f"REFUSING to grade: expected exactly 1 {REGISTRATION_KIND} "
+                         f"record on the chain, found {len(rows)}")
+    seq, ts, kind, spec_json, spec_hash, prev_hash, entry_hash, note = rows[0]
+
+    got = hashlib.sha256(spec_json.encode()).hexdigest()
+    if got != spec_hash:
+        raise SystemExit(f"REFUSING to grade: prereg seq {seq} spec_json does not hash to its "
+                         f"spec_hash (stored {spec_hash}, recomputed {got}). The frozen claim "
+                         f"has been edited since it was filed.")
+
+    chain = _entry_hash(prev_hash, ts, kind, spec_hash, note)
+    if chain != entry_hash:
+        raise SystemExit(f"REFUSING to grade: prereg seq {seq} entry_hash does not match the "
+                         f"chain (stored {entry_hash}, recomputed {chain}).")
+
+    spec = json.loads(spec_json)
+    if spec.get("testId") != TEST_ID:
+        raise SystemExit(f"REFUSING to grade: this file grades {TEST_ID!r}, the record "
+                         f"registers {spec.get('testId')!r}")
+
+    # The window boundary belongs to the record's own UTC date. Every confluence
+    # bucket is stamped at exactly 00:00:00 UTC, so a bucket dated the same day
+    # as the filing sits BEFORE the record; comparing in local time admitted one
+    # such session once already. Derived here, never hand-copied again.
+    filed = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%d")
+    if filed != REGISTERED_START:
+        raise SystemExit(f"REFUSING to grade: REGISTERED_START is {REGISTERED_START!r} but "
+                         f"prereg seq {seq} was filed {filed} UTC. The boundary is the record's.")
+
+    for phrase, field in ((f"{MIN_SESSIONS} distinct eligible sessions", "minimumEvidence"),
+                          (f"at least {MIN_BETS_PER_SESSION} bets", "minimumEvidence"),
+                          ("Bonferroni", "decisionRule")):
+        if phrase not in (spec.get(field) or ""):
+            raise SystemExit(f"REFUSING to grade: the registered {field} does not say "
+                             f"{phrase!r}. The grader and the claim have drifted.")
+
+    # CORRECTED_Z must BE the correction the record requires, not a number that
+    # happens to sit next to the word Bonferroni.
+    want = statistics.NormalDist().inv_cdf(1 - 0.05 / FAMILY_SIZE)
+    if abs(want - CORRECTED_Z) > 0.01:
+        raise SystemExit(f"REFUSING to grade: CORRECTED_Z is {CORRECTED_Z} but one-sided 95% "
+                         f"Bonferroni at family {FAMILY_SIZE} is {want:.3f}")
+    return spec
 
 
 def compute(conn, start):
@@ -256,6 +338,62 @@ def demo():
     assert f"eligible sessions: {n_before}/" in after, (
         "a pre-registration session (2026-07-15) reached the statistic — "
         f"the backfill filter is not holding:\n{after}")
+    # (f) the grader must refuse a claim that no longer hashes to its record, and
+    # refuse itself if it has drifted from the claim. Both directions matter: the
+    # hash catches an edited row, the phrase checks catch an edited grader.
+    conn.execute("""CREATE TABLE prereg_records(
+        seq INTEGER PRIMARY KEY, ts INT, kind TEXT, spec_json TEXT,
+        spec_hash TEXT, prev_hash TEXT, entry_hash TEXT, note TEXT)""")
+    filed_ts = int(datetime.datetime(2026, 8, 23, 0, 14, 36,
+                                     tzinfo=datetime.timezone.utc).timestamp())
+    spec_json = json.dumps({
+        "kind": REGISTRATION_KIND, "testId": TEST_ID,
+        "minimumEvidence": (f"{MIN_SESSIONS} distinct eligible sessions before any verdict. "
+                            f"A session is eligible only if it carries at least "
+                            f"{MIN_BETS_PER_SESSION} bets."),
+        "decisionRule": "PASS only if the one-sided 95% lower bound, Bonferroni-corrected "
+                        "across the registered family, is greater than zero."})
+    spec_hash = hashlib.sha256(spec_json.encode()).hexdigest()
+    prev_hash = "f7736107"
+    note = "initial registration"
+    conn.execute("INSERT INTO prereg_records VALUES(87,?,?,?,?,?,?,?)",
+                 (filed_ts, REGISTRATION_KIND, spec_json, spec_hash, prev_hash,
+                  _entry_hash(prev_hash, filed_ts, REGISTRATION_KIND, spec_hash, note), note))
+
+    verify_registration(conn)  # the honest record must pass, or the rest proves nothing
+
+    def refuses(what):
+        try:
+            verify_registration(conn)
+        except SystemExit:
+            return True
+        raise AssertionError(f"verify_registration accepted {what}")
+
+    # mutation 1: edit the frozen claim, leave every hash alone
+    tampered = spec_json.replace(f"{MIN_SESSIONS} distinct", "3 distinct")
+    conn.execute("UPDATE prereg_records SET spec_json=? WHERE seq=87", (tampered,))
+    refuses("a spec_json that no longer hashes to its spec_hash")
+
+    # mutation 2: re-hash the edited claim so spec_hash agrees again. The chain
+    # hash must now disagree -- this is the step a naive verifier would pass.
+    conn.execute("UPDATE prereg_records SET spec_hash=? WHERE seq=87",
+                 (hashlib.sha256(tampered.encode()).hexdigest(),))
+    refuses("a re-hashed claim whose entry_hash no longer matches the chain")
+
+    # mutation 3: a fully re-signed row -- every hash internally consistent, and
+    # the evidence floor quietly lowered from 60 to 3. Only the constant-vs-claim
+    # check can catch this one, which is why it exists.
+    th = hashlib.sha256(tampered.encode()).hexdigest()
+    conn.execute("UPDATE prereg_records SET entry_hash=? WHERE seq=87",
+                 (_entry_hash(prev_hash, filed_ts, REGISTRATION_KIND, th, note),))
+    refuses("a re-signed claim whose evidence floor no longer matches the grader")
+
+    # restore, and confirm the check is not simply always-red
+    conn.execute("UPDATE prereg_records SET spec_json=?, spec_hash=?, entry_hash=? WHERE seq=87",
+                 (spec_json, spec_hash,
+                  _entry_hash(prev_hash, filed_ts, REGISTRATION_KIND, spec_hash, note)))
+    verify_registration(conn)
+
     print("selftest ok")
 
 
@@ -287,6 +425,7 @@ def main():
         return 2
 
     conn = open_db(a.db, a.commit)
+    verify_registration(conn)  # refuses if the frozen claim or this grader moved
     rows, skipped = compute(conn, a.start)
     for s in skipped:
         print(f"WARNING: session {s} has book rows but no benchmark — skipped, not zero-filled")
