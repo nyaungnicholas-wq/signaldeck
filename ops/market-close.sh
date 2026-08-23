@@ -85,6 +85,29 @@ if [ "$daemon_rc" -ne 0 ]; then
   echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: daemon restart FAILED (schtasks rc=$daemon_rc) — 5-minute keepalive should still recover it" >> "$SD/logs/backup-offline.log"
 fi
 
+# Grade the pre-registered forward test (prereg kind forward-test-registration,
+# testId confluence-long-liquid-2026-08). It runs AFTER the daemon is back up so
+# the write takes the same busy_timeout path as everything else, rather than
+# racing the restart for the lock.
+#
+# It grades only sessions whose forward return has already resolved, so running
+# at market close picks up yesterday's session and never half-grades today's.
+#
+# FT_START must equal the date the registration record was filed — the record
+# binds the window to "the first session STRICTLY AFTER this record's timestamp",
+# and a mismatch here would silently grade in-sample days as forward evidence,
+# which is the one failure this whole test exists to prevent.
+FT_START=2026-08-22
+
+# Deliberately cannot fail this script. A research grade is not a reason to
+# report the market-close backup as broken, and letting it mask a backup or
+# daemon failure would be strictly worse than missing one session.
+if ! "$SD/.venv/Scripts/python.exe" "$SD/tools/forward_test.py" \
+     --db "$SD/data/signaldeck.db" --start "$FT_START" --commit --verdict \
+     >> "$SD/logs/forward-test.log" 2>&1; then
+  echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: forward-test grading FAILED (non-fatal, market-close result unaffected)" >> "$SD/logs/forward-test.log"
+fi
+
 if [ "$backup_rc" -ne 0 ]; then
   echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: backup FAILED (rc=$backup_rc) — Task Scheduler result will be non-zero" >> "$SD/logs/backup-offline.log"
   exit "$backup_rc"

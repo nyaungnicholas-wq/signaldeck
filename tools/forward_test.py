@@ -125,7 +125,7 @@ def verdict(conn):
             "SELECT excess_pct, eligible FROM forward_test_daily WHERE test_id=?",
             (TEST_ID,)))
     except sqlite3.OperationalError:
-        return "no forward_test_daily table yet — nothing has been graded"
+        return "no forward_test_daily table yet - nothing has been graded"
 
     excess = [e for e, ok in stored if ok]
     excluded = sum(1 for _, ok in stored if not ok)
