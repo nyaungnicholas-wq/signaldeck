@@ -238,7 +238,14 @@ func (d Deps) requiresAuth(path string) bool {
 		// discovery wave (appended): candidate mutations are session-scoped.
 		path == "/api/candidates/add",
 		path == "/api/candidates/monitor-all",
-		path == "/api/candidates/dismiss":
+		path == "/api/candidates/dismiss",
+		// An outbound SIDE EFFECT, not a read. It fell through to the
+		// PublicReads default below, so on any deployment that deliberately
+		// opens public reads -- a supported configuration, see .env.example --
+		// an anonymous caller could drive the configured Discord/Telegram/Slack/
+		// SMTP transport at the write-tier rate limit. A read flag must not
+		// govern something that leaves the machine.
+		path == "/api/notify/test":
 		return true
 	}
 	return !d.Cfg.PublicReads

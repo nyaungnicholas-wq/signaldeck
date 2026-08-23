@@ -45,7 +45,12 @@ func (d Deps) portfolioRebalance(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	lookback := 180
 	if s := q.Get("lookback"); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v > 20 {
+		// Upper bound is load-bearing, not tidiness. store.LastBars passes n
+		// straight into a SQLite LIMIT with no clamp of its own, and an
+		// overflowed Atoi wraps to a NEGATIVE value, which SQLite reads as NO
+		// LIMIT -- materialising the whole bars table into []md.Bar, once per
+		// symbol, up to 25 times, on a multi-GB database.
+		if v, err := strconv.Atoi(s); err == nil && v > 20 && v <= maxLookbackBars {
 			lookback = v
 		}
 	}
@@ -316,7 +321,12 @@ func (d Deps) portfolioOptimize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	lookback := 180
 	if s := q.Get("lookback"); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v > 20 {
+		// Upper bound is load-bearing, not tidiness. store.LastBars passes n
+		// straight into a SQLite LIMIT with no clamp of its own, and an
+		// overflowed Atoi wraps to a NEGATIVE value, which SQLite reads as NO
+		// LIMIT -- materialising the whole bars table into []md.Bar, once per
+		// symbol, up to 25 times, on a multi-GB database.
+		if v, err := strconv.Atoi(s); err == nil && v > 20 && v <= maxLookbackBars {
 			lookback = v
 		}
 	}
@@ -704,6 +714,11 @@ func profileCacheKey(sym, model, charter, digest string) string {
 }
 
 // profileCachePrefix namespaces cached profiles in the meta table.
+// maxLookbackBars bounds the ?lookback= parameter on the two capstone handlers.
+// 2000 daily bars is roughly eight years, past any horizon these endpoints
+// serve, so the ceiling refuses abuse without refusing a legitimate request.
+const maxLookbackBars = 2000
+
 const profileCachePrefix = "capstone_profile:"
 
 // pruneStaleProfiles drops this symbol's PREVIOUS cached profiles, keeping only

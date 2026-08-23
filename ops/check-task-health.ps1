@@ -42,6 +42,7 @@ $rows = @()
 $troubled = @()
 $failed = @()
 $stale = @()
+$unreadable = @()
 $disabled = @()
 
 # Tasks that are started by something OTHER than their own trigger, and are
@@ -155,7 +156,13 @@ foreach ($task in $tasks) {
             $stale += "$($task.TaskName) (state $($task.State), last ran $($info.LastRunTime)) - no NextRunTime and not a known on-demand task: nothing will start this again"
         }
     } catch {
-        # One unreadable task must not abort the whole report.
+        # One unreadable task must not abort the whole report -- but it must not
+        # pass, either. This rendered UNREADABLE and left $bad untouched, so the
+        # gate could print "OK - no console-kill signature, and both service
+        # ports are listening" and exit 0 while it had no idea what state a task
+        # was in. Its sibling ops/check-grader-health.ps1 states the doctrine
+        # this contradicted: "Every unknown resolves to unhealthy ... the one
+        # state this check must never report is 'fine, probably'."
         $rows += [PSCustomObject]@{
             Task      = $task.TaskName
             State     = $task.State
@@ -163,6 +170,11 @@ foreach ($task in $tasks) {
             LastRun   = $null
             Result    = 'UNREADABLE'
         }
+        # Collected, not flagged here: $bad is initialised to $false further
+        # down, after this loop, so setting it in this catch would be silently
+        # overwritten and the fix would be a no-op. The verdict block below is
+        # the only place that can decide.
+        $unreadable += "$($task.TaskName): $($_.Exception.Message)"
         Write-Warning "could not read info for '$($task.TaskName)': $($_.Exception.Message)"
     }
 }
@@ -208,6 +220,12 @@ if ($disabled.Count -gt 0) {
     Write-Host ""
     Write-Host "note - disabled task(s), not judged on their last result:" -ForegroundColor Yellow
     $disabled | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
+}
+if ($unreadable.Count -gt 0) {
+    Write-Host ""
+    Write-Host "WARNING - task(s) whose state could not be read at all:" -ForegroundColor Red
+    $unreadable | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    $bad = $true
 }
 if ($stale.Count -gt 0) {
     Write-Host ""
