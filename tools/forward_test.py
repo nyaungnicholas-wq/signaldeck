@@ -26,6 +26,26 @@ TEST_ID = "confluence-long-liquid-2026-08"
 MIN_BETS_PER_SESSION = 5
 MIN_SESSIONS = 60
 
+# The UTC date of the registration record (prereg seq 87, 2026-08-23T00:14:36Z).
+# The window opens at the first session STRICTLY AFTER it.
+#
+# This lives in the code rather than in a caller's flag because --start defaulted
+# to "" and the predicate is `date(...) > ?`: every stored date is > "", so a bare
+# `--commit` would have written all 24 PRE-REGISTRATION sessions into the record
+# and counted them toward the 60-session floor forever — including 2026-07-15,
+# the session the spec itself names as contributing 290 of 791 in-sample episodes
+# at +1.5% excess. The registered rule is "No backfill, ever"; nothing enforced it.
+REGISTERED_START = "2026-08-23"
+
+# Bonferroni family size, from the record's own knownWeakness: five price buckets
+# crossed with two directions, best cell kept. The registered decision rule says
+# the lower bound is "Bonferroni-corrected across the registered family", and a
+# bare one-sided 95% z of 1.645 is not that — at family 10 the one-sided alpha is
+# 0.005 and z is 2.576, a half-width 1.57x wider. Using 1.645 would have made PASS
+# materially easier to reach than the pre-registration permits.
+FAMILY_SIZE = 10
+CORRECTED_Z = 2.576
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS forward_test_daily(
   test_id    TEXT NOT NULL,
@@ -121,9 +141,13 @@ def verdict(conn):
     """Read the stored record and report. Returns the printable text so the
     self-check can assert on exactly what a reader sees."""
     try:
+        # The date predicate is NOT optional. Without it a row written by a
+        # careless --commit would count toward the floor and the mean forever,
+        # and the registered rule is "No backfill, ever".
         stored = list(conn.execute(
-            "SELECT excess_pct, eligible FROM forward_test_daily WHERE test_id=?",
-            (TEST_ID,)))
+            "SELECT excess_pct, eligible FROM forward_test_daily "
+            "WHERE test_id=? AND session > ?",
+            (TEST_ID, REGISTERED_START)))
     except sqlite3.OperationalError:
         return "no forward_test_daily table yet - nothing has been graded"
 
@@ -146,10 +170,14 @@ def verdict(conn):
         return "\n".join(out)
 
     sd = statistics.stdev(excess) if n > 1 else 0.0
-    # z rather than t: past n=60 the difference is immaterial and the registered
-    # rule names 1.645.
-    lower = mean - 1.645 * sd / math.sqrt(n)
-    out.append(f"one-sided 95% lower bound: {lower:+.4f}%")
+    # The registered rule says the lower bound is "Bonferroni-corrected across the
+    # registered family". A bare one-sided 95% z of 1.645 is not corrected at all;
+    # at family 10 the one-sided alpha is 0.005 and z is 2.576. Using 1.645 here
+    # would have made PASS reachable on evidence the pre-registration does not
+    # accept — the correction is the price of having gone looking through ten
+    # cells for the one that looked best.
+    lower = mean - CORRECTED_Z * sd / math.sqrt(n)
+    out.append(f"lower bound (one-sided 95%, Bonferroni x{FAMILY_SIZE}, z={CORRECTED_Z}): {lower:+.4f}%")
     out.append("PASS" if (mean > 0 and lower > 0) else "REFUTED")
     return "\n".join(out)
 
@@ -165,7 +193,11 @@ def demo():
         fwd_return REAL, episode_ts INT, ungradable TEXT)""")
     conn.execute("CREATE TABLE bars(symbol_id INT, tf TEXT, ts INT, close REAL)")
 
-    d0, day = 1728000000, 86400
+    # 2026-08-25, i.e. INSIDE the registered window. The fixture dates are not
+    # arbitrary: verdict() filters on REGISTERED_START, so a fixture built before
+    # the window would be silently excluded and every assertion below would pass
+    # vacuously against an empty result.
+    d0, day = 1787616000, 86400
     # session 0: 6 bets -> eligible. session 1: 4 bets -> ineligible.
     # session 2: 6 bets but NO bars -> must be skipped entirely.
     for sess, count in ((0, 6), (1, 4), (2, 6)):
@@ -208,14 +240,31 @@ def demo():
     assert "INSUFFICIENT EVIDENCE" in text, f"expected a refusal, got:\n{text}"
     assert "PASS" not in text and "REFUTED" not in text, \
         f"stated a verdict below the evidence floor:\n{text}"
+
+    # (e) a PRE-REGISTRATION session cannot reach the statistic. The registered
+    # rule is "No backfill, ever", and the failure mode is silent: a backfilled
+    # row counts toward the mean and the 60-session floor with nothing marking it.
+    before = int(REGISTERED_START.replace("-", ""))  # sanity: sessions sort as strings
+    assert before > 0
+    n_before = len([e for e, ok in conn.execute(
+        "SELECT excess_pct, eligible FROM forward_test_daily") if ok])
+    conn.execute(
+        "INSERT INTO forward_test_daily VALUES (?,?,?,?,?,?,?)",
+        (TEST_ID, "2026-07-15", 290, 1.5, 0.0, 1.5, 1))
+    conn.commit()
+    after = verdict(conn)
+    assert f"eligible sessions: {n_before}/" in after, (
+        "a pre-registration session (2026-07-15) reached the statistic — "
+        f"the backfill filter is not holding:\n{after}")
     print("selftest ok")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", default="data/signaldeck.db")
-    ap.add_argument("--start", default="",
-                    help="grade sessions strictly after this YYYY-MM-DD")
+    ap.add_argument("--start", default=REGISTERED_START,
+                    help=f"grade sessions strictly after this YYYY-MM-DD "
+                         f"(default and only committable value: {REGISTERED_START})")
     ap.add_argument("--commit", action="store_true", help="write (default: dry run)")
     ap.add_argument("--verdict", action="store_true", help="report the standing")
     ap.add_argument("--selftest", action="store_true")
@@ -224,6 +273,18 @@ def main():
     if a.selftest:
         demo()
         return
+
+    # A dry run may look anywhere — that is how you inspect the in-sample body.
+    # A COMMIT may not. Writing a pre-registration session into the record puts
+    # it in the mean and the 60-session floor permanently, and the one that would
+    # be written first is 2026-07-15, which the spec itself names as supplying 290
+    # of 791 in-sample episodes at +1.5% excess. Refusing here is cheaper than
+    # explaining later why the record contains days the registration excluded.
+    if a.commit and a.start != REGISTERED_START:
+        print(f"REFUSING to commit with --start {a.start!r}: the registration "
+              f"(prereg seq 87) opens the window strictly after {REGISTERED_START}. "
+              f"Re-run without --start, or drop --commit to inspect.", file=sys.stderr)
+        return 2
 
     conn = open_db(a.db, a.commit)
     rows, skipped = compute(conn, a.start)

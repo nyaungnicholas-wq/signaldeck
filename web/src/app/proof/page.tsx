@@ -32,7 +32,7 @@ function pct(x: number | null | undefined, dec = 1): string {
   return x == null ? "—" : `${(x * 100).toFixed(dec)}%`;
 }
 
-function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "ok" | "muted" }) {
+function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "ok" | "warn" | "muted" }) {
   return (
     <div className="panel flex flex-col gap-1 px-4 py-4">
       <span className="text-[0.7rem] tracking-[0.12em]" style={{ color: "var(--faint)" }}>
@@ -40,7 +40,7 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
       </span>
       <span
         className="tnum text-[1.5rem] font-extrabold"
-        style={{ color: tone === "ok" ? "var(--ok)" : tone === "muted" ? "var(--dim)" : "var(--text)" }}
+        style={{ color: tone === "ok" ? "var(--ok)" : tone === "warn" ? "var(--warn)" : tone === "muted" ? "var(--dim)" : "var(--text)" }}
       >
         {value}
       </span>
@@ -265,11 +265,27 @@ export default function ProofPage() {
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-4">
+              {/* The tone is DERIVED, never hardcoded. This read "tone=ok" with no
+                  baseline rendered anywhere on the page, so a directional accuracy of
+                  45.6% against a 54.0% always-up baseline — an edge of -8.4pp — was
+                  published in success green on the one page meant to be shared. The
+                  daemon ships naiveBaseline, edgeVsNaive and an accuracyNote saying in
+                  words that a non-positive edge means no skill (trackrecord.go:312-314);
+                  this page referenced none of the three. components/home/ProofStrip.tsx
+                  already does this correctly — the logic below is its logic. */}
               <Stat
                 label="WIN RATE"
                 value={pct(tr.winRate)}
-                sub={tr.winRateCI ? `95% CI ${pct(tr.winRateCI[0])}–${pct(tr.winRateCI[1])}` : undefined}
-                tone="ok"
+                sub={
+                  tr.naiveBaseline != null
+                    ? `vs ${pct(tr.naiveBaseline)} always-up`
+                      + (tr.edgeVsNaive != null
+                          ? ` · ${tr.edgeVsNaive >= 0 ? "+" : ""}${(tr.edgeVsNaive * 100).toFixed(1)}pp`
+                            + (tr.edgeVsNaive > 0 ? "" : " — does not beat the naive guess")
+                          : "")
+                    : tr.winRateCI ? `95% CI ${pct(tr.winRateCI[0])}–${pct(tr.winRateCI[1])}` : undefined
+                }
+                tone={tr.edgeVsNaive != null && tr.edgeVsNaive > 0 ? "ok" : "warn"}
               />
               <Stat
                 label="BRIER SKILL"

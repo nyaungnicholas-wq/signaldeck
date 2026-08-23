@@ -88,13 +88,30 @@ if (Test-Path $lock) {
 # 1h, so this is well clear of a healthy run); with no sweep alive the marker is
 # repaired immediately.
 $refresh = Join-Path $root 'ops\signaldeck-refresh.sh'
-$bash    = 'C:\Program Files\Git\bin\bash.exe'
-if ((Test-Path $refresh) -and (Test-Path $bash)) {
+# Same resolution order ops\install-windows-tasks.ps1 and
+# ops\run-daemon-with-provenance.ps1 use. This was a hardcoded
+# 'C:\Program Files\Git\bin\bash.exe' inside the same Test-Path that gated the
+# block, with no else — so a 32-bit or relocated Git turned the universe
+# fail-safe into a silent no-op on every 5-minute tick, forever, printing
+# nothing. That is the exact shape of the migration bugs this repo has already
+# been bitten by twice: a guard that answers "fine" because it never ran.
+$bash = @(
+  (Join-Path $env:ProgramFiles 'Git\bin\bash.exe'),
+  (Join-Path ${env:ProgramFiles(x86)} 'Git\bin\bash.exe')
+) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if (-not $bash) { $bash = (Get-Command bash -ErrorAction SilentlyContinue).Source }
+
+# Still never fatal — a universe check must not be able to stop the daemon
+# guard — but no longer silent. Absence is reported and the guard continues.
+if (-not (Test-Path $refresh)) {
+    Write-Output "universe fail-safe SKIPPED: $refresh not found"
+} elseif (-not $bash) {
+    Write-Output 'universe fail-safe SKIPPED: no bash found (ProgramFiles, ProgramFiles(x86), PATH)'
+} else {
     $sweeping = Get-CimInstance Win32_Process -Filter "Name='bash.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -and $_.CommandLine -like '*signaldeck-refresh*' } |
         Select-Object -First 1
     $minAge = if ($sweeping) { 7200 } else { 0 }
-    # Never fatal: a universe check must not be able to stop the daemon guard.
     try {
         & $bash ($refresh -replace '\\', '/') 'prune-only' $minAge 2>&1 | ForEach-Object { Write-Output $_ }
     } catch {

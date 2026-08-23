@@ -93,27 +93,22 @@ fi
 # It grades only sessions whose forward return has already resolved, so running
 # at market close picks up yesterday's session and never half-grades today's.
 #
-# The window opens the first session STRICTLY AFTER the registration record
-# (prereg seq 87, filed 2026-08-23T00:14:36Z). The grader admits sessions whose
-# UTC date is strictly greater than FT_START, so FT_START is the record's own UTC
-# DATE, not the local date it was filed on.
+# No --start here, deliberately. The window boundary belongs to the registration
+# record (prereg seq 87, 2026-08-23T00:14:36Z) and now lives in the grader as
+# REGISTERED_START, which also refuses to --commit with any other value.
 #
-# Why that distinction is load-bearing: every confluence bucket is stamped at
-# exactly 00:00:00 UTC. A bucket dated 2026-08-23 therefore sits 14m36s BEFORE
-# the record that registered it. Setting FT_START to the local filing date
-# (2026-08-22) would admit that bucket and grade a pre-registration session as
-# forward evidence — the precise failure this test exists to prevent. Advancing
-# to the record's UTC date forgoes 2026-08-23 (a Sunday, but crypto trades every
-# day here) and buys an unambiguous boundary for it.
+# It used to be a constant in THIS file, hand-coupled to the record. That is the
+# shape that rots: every confluence bucket is stamped at exactly 00:00:00 UTC, so
+# a bucket dated 2026-08-23 sits 14m36s BEFORE the record that registered it, and
+# a FT_START naming the LOCAL filing date (2026-08-22) would have admitted it and
+# graded a pre-registration session as forward evidence. One constant in one place
+# cannot disagree with itself.
 #
-# If the record is ever re-filed, this must move to the NEW record's UTC date.
-FT_START=2026-08-23
-
 # Deliberately cannot fail this script. A research grade is not a reason to
 # report the market-close backup as broken, and letting it mask a backup or
 # daemon failure would be strictly worse than missing one session.
 if ! "$SD/.venv/Scripts/python.exe" "$SD/tools/forward_test.py" \
-     --db "$SD/data/signaldeck.db" --start "$FT_START" --commit --verdict \
+     --db "$SD/data/signaldeck.db" --commit --verdict \
      >> "$SD/logs/forward-test.log" 2>&1; then
   echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: forward-test grading FAILED (non-fatal, market-close result unaffected)" >> "$SD/logs/forward-test.log"
 fi
