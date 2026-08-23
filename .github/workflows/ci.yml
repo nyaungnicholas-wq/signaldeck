@@ -18,6 +18,20 @@ jobs:
           cache-dependency-path: daemon/go.sum
       - run: go build ./...
       - run: go vet ./...
+      # The production box is Windows, and the only code that runs there was
+      # compiled NOWHERE automatic: every job here is ubuntu, so the build-tagged
+      # *_windows.go files are excluded from compilation entirely. That includes
+      # internal/ledgeranchor/keyperm_windows.go, the DACL check that replaces the
+      # Unix permission check on the Ed25519 ledger signing key -- a security
+      # control -- and its tests. CI was green while the production platform's
+      # only source was unbuilt and untested, and the coverage floors below were
+      # measured on a tree that omits it. Cross-compiling needs no extra runner.
+      # No working-directory here: the job already defaults to daemon/, and
+      # setting it again resolves to daemon/daemon and fails.
+      - name: Build and vet for the platform this actually runs on
+        run: |
+          GOOS=windows go build ./...
+          GOOS=windows go vet ./...
       # Build the COMMIT, not the checkout. checkout@v4 gives a clean tree
       # today, but the class of defect this guards is the one that actually
       # bit: a load-bearing source file present locally, absent from git, and
@@ -413,6 +427,18 @@ jobs:
           exit $rc
       - name: Self-test the pre-push hook
         run: bash ops/test-pre-push-hook.sh
+      # These guards were written FOR the portability defect class this repo
+      # keeps producing -- bare pkill/pgrep/jq under the Git Bash that runs the
+      # scheduled tasks -- and then wired to nothing: no CI job, no scheduled
+      # task, no caller. ops/install-windows-tasks.ps1 states the principle
+      # itself: "Correct scripts that never run unattended are the same blind
+      # spot as a check that always passes." Both are static or shim-level and
+      # pass on ubuntu, so they belong in this job, which already runs the other
+      # self-tests.
+      - name: Self-test the portability guards that nothing was running
+        run: |
+          bash ops/test-no-bare-pkill.sh
+          bash ops/test-lib-portable.sh
 
   docs-gate:
     runs-on: ubuntu-latest
