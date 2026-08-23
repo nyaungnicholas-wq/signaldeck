@@ -12,8 +12,10 @@
 
  NOTE: `next start` with no -H binds the wildcard address, so the UI is reachable
  from the LAN (verified: http://192.168.4.49:8323/ -> 200), not just localhost.
- That matches the plist, which also passed no -H. Add `-H 127.0.0.1` to $argLine
- if it should be loopback-only -- that is a behaviour change, so it is not done here.
+ That matched the plist, which also passed no -H. It now binds -H 127.0.0.1 by
+ default; pass -Bind 0.0.0.0 to restore the previous wildcard behaviour. Changing
+ the default is deliberate: a UI reachable from the LAN by OMISSION is a posture
+ nobody chose, and it was relying on the daemon's 401 to stay correct forever.
 
 --------------------------------------------------------------------------------
  WHY THIS EXISTS
@@ -121,7 +123,16 @@ param(
   # Nothing is registered unless -Install is passed. Default is a report,
   # matching the convention in ops/install-windows-tasks.ps1.
   [switch]$Install,
-  [switch]$Remove
+  [switch]$Remove,
+  # Bind address for `next start`. Defaults to loopback.
+  #
+  # `next start` with no -H binds the WILDCARD, so the UI was reachable from the
+  # LAN (measured in this file's own header: http://192.168.4.49:8323/ -> 200).
+  # Defence in depth held only because the daemon 401s and signup is closed --
+  # that is exposure-in-depth, resting on a second control being right forever.
+  # Loopback is the safe default; pass -Bind 0.0.0.0 to restore LAN access
+  # deliberately rather than by omission.
+  [string]$Bind = '127.0.0.1'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -180,7 +191,7 @@ $portBusy = $null -ne (Get-NetTCPConnection -LocalPort $Port -State Listen -Erro
 # arguments are quoted -- verified with a `node --version` probe.
 $outLog  = Join-Path $logs 'web.out.log'
 $errLog  = Join-Path $logs 'web.err.log'
-$argLine = '/c ""{0}" "{1}" start -p {2} >>"{3}" 2>>"{4}""' -f $node, $nextBin, $Port, $outLog, $errLog
+$argLine = '/c ""{0}" "{1}" start -H {2} -p {3} >>"{4}" 2>>"{5}""' -f $node, $nextBin, $Bind, $Port, $outLog, $errLog
 
 $action = New-ScheduledTaskAction -Execute $env:ComSpec -Argument $argLine -WorkingDirectory $web
 

@@ -13,14 +13,15 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
-	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // minThreshold is the floor on staleness: fast workers (1m cadence) shouldn't
@@ -222,6 +223,17 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("query worker_runs: %w", err)
 	}
 	stale := StaleWorkers(w.Specs, lastOK, w.started, now)
+	// OFFSITE BACKUP FRESHNESS. ops/signaldeck-backup-offline.sh is scrupulously
+	// honest -- it detects that the configured offsite directory is on the same
+	// volume as the database and logs "NOT OFFSITE ... backup_last_offsite NOT
+	// updated" on every run -- and then nothing escalates it. No task result goes
+	// non-zero, and the DR runbook's own precondition ("check the log says
+	// offsite OK before you need this page") has never been met. Measured
+	// 2026-08-23: backup_last_offsite was 10 days behind backup_last_ts with 8
+	// consecutive NOT OFFSITE lines. Honest and unheard is still unheard.
+	if msg, ok := w.staleOffsiteBackup(ctx, now); !ok {
+		stale = append(stale, msg)
+	}
 	// The number this pass actually EXAMINED. StaleWorkers skips every
 	// Interval<=0 spec (the stream ingestors), so len(w.Specs) overstates it.
 	checked := 0
@@ -493,3 +505,38 @@ func (w *Watchdog) writeStatus(s Status) error {
 // unguarded, so after the move to Windows every watchdog alert died as
 // `exec: "osascript": executable file not found in %PATH%`. See
 // internal/notify/local.go.
+
+// offsiteMaxAge is how old the last GENUINE off-volume backup may be before the
+// watchdog calls the fleet unhealthy. Generous: the backup runs on weekdays via
+// market-close, so a long weekend plus a holiday is normal and must not cry
+// wolf. Anything past this is not a schedule gap, it is a broken offsite path.
+const offsiteMaxAge = 5 * 24 * time.Hour
+
+// staleOffsiteBackup reports whether the last off-volume backup is recent
+// enough. ok=true when it is, or when no offsite backup has ever been recorded
+// AND none is configured -- an operator who has not set one up is not lied to
+// about it, but one who HAS must hear when it silently stopped.
+func (w *Watchdog) staleOffsiteBackup(ctx context.Context, now time.Time) (string, bool) {
+	var lastStr, dir string
+	if err := w.St.DB().QueryRowContext(ctx,
+		`SELECT COALESCE((SELECT v FROM meta WHERE k='backup_last_offsite'),''),
+		        COALESCE((SELECT v FROM meta WHERE k='backup_offsite_dir'),'')`).
+		Scan(&lastStr, &dir); err != nil {
+		// An unreadable meta table is the watchdog's own problem, reported
+		// elsewhere; do not manufacture a backup verdict from it.
+		return "", true
+	}
+	if lastStr == "" {
+		return "", true // never recorded one; nothing to call stale
+	}
+	last, err := strconv.ParseInt(lastStr, 10, 64)
+	if err != nil || last <= 0 {
+		return "", true
+	}
+	age := now.Sub(time.Unix(last, 0))
+	if age <= offsiteMaxAge {
+		return "", true
+	}
+	return fmt.Sprintf("offsite backup is %.1f days old (last %s) — the local copy is not a disaster-recovery copy",
+		age.Hours()/24, time.Unix(last, 0).Format("2006-01-02")), false
+}
