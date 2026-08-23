@@ -84,7 +84,7 @@ WITH b AS (
          LEAD(close) OVER (PARTITION BY symbol_id ORDER BY ts) nxt
     FROM bars WHERE tf='1d'
 )
-SELECT d, AVG(nxt/close-1)*100 bench_pct
+SELECT d, AVG(nxt/close-1)*100 bench_pct, COUNT(*) n_names
   FROM b WHERE close >= 20 AND nxt IS NOT NULL AND d > ?
  GROUP BY d
 """
@@ -114,12 +114,45 @@ def open_db(path, write):
 # refuses to run unless the record still hashes to what it claims AND still says
 # what this file assumes.
 REGISTRATION_KIND = "forward-test-registration"
+# The breadth floor arrived as an AMENDMENT, not in the original claim, so the
+# binding runs both ways: this grader may apply the floor only while the chain
+# carries the amendment, and must apply exactly the number the amendment names.
+BENCH_FLOOR_KIND = "forward-test-benchmark-floor"
+MIN_BENCHMARK_NAMES = 100
 CHAIN_SEP = b""  # record separator, as in the prediction ledger
 
 
 def _entry_hash(prev_hash, ts, kind, spec_hash, note):
     payload = f"ts={ts}|kind={kind}|specHash={spec_hash}|note={note}"
     return hashlib.sha256(prev_hash.encode() + CHAIN_SEP + payload.encode()).hexdigest()
+
+
+def _verified_spec(conn, kind):
+    """Return the parsed spec of the one record of `kind`, or raise.
+
+    Both hashes are recomputed here rather than trusted: spec_hash from the
+    spec_json bytes actually stored, and entry_hash from the chain payload. A
+    record that fails either has been edited since it was filed.
+    """
+    rows = conn.execute(
+        "SELECT seq, ts, kind, spec_json, spec_hash, prev_hash, entry_hash, note "
+        "FROM prereg_records WHERE kind = ?", (kind,)).fetchall()
+    if len(rows) != 1:
+        raise SystemExit(f"REFUSING to grade: expected exactly 1 {kind} record on the "
+                         f"chain, found {len(rows)}")
+    seq, ts, k, spec_json, spec_hash, prev_hash, entry_hash, note = rows[0]
+
+    got = hashlib.sha256(spec_json.encode()).hexdigest()
+    if got != spec_hash:
+        raise SystemExit(f"REFUSING to grade: prereg seq {seq} ({kind}) spec_json does not "
+                         f"hash to its spec_hash (stored {spec_hash}, recomputed {got}). "
+                         f"The frozen claim has been edited since it was filed.")
+
+    chain = _entry_hash(prev_hash, ts, k, spec_hash, note)
+    if chain != entry_hash:
+        raise SystemExit(f"REFUSING to grade: prereg seq {seq} ({kind}) entry_hash does not "
+                         f"match the chain (stored {entry_hash}, recomputed {chain}).")
+    return seq, ts, json.loads(spec_json)
 
 
 def verify_registration(conn):
@@ -130,26 +163,8 @@ def verify_registration(conn):
     build their expected phrase FROM the constant: changing MIN_SESSIONS is what
     turns this red.
     """
-    rows = conn.execute(
-        "SELECT seq, ts, kind, spec_json, spec_hash, prev_hash, entry_hash, note "
-        "FROM prereg_records WHERE kind = ?", (REGISTRATION_KIND,)).fetchall()
-    if len(rows) != 1:
-        raise SystemExit(f"REFUSING to grade: expected exactly 1 {REGISTRATION_KIND} "
-                         f"record on the chain, found {len(rows)}")
-    seq, ts, kind, spec_json, spec_hash, prev_hash, entry_hash, note = rows[0]
+    seq, ts, spec = _verified_spec(conn, REGISTRATION_KIND)
 
-    got = hashlib.sha256(spec_json.encode()).hexdigest()
-    if got != spec_hash:
-        raise SystemExit(f"REFUSING to grade: prereg seq {seq} spec_json does not hash to its "
-                         f"spec_hash (stored {spec_hash}, recomputed {got}). The frozen claim "
-                         f"has been edited since it was filed.")
-
-    chain = _entry_hash(prev_hash, ts, kind, spec_hash, note)
-    if chain != entry_hash:
-        raise SystemExit(f"REFUSING to grade: prereg seq {seq} entry_hash does not match the "
-                         f"chain (stored {entry_hash}, recomputed {chain}).")
-
-    spec = json.loads(spec_json)
     if spec.get("testId") != TEST_ID:
         raise SystemExit(f"REFUSING to grade: this file grades {TEST_ID!r}, the record "
                          f"registers {spec.get('testId')!r}")
@@ -176,6 +191,16 @@ def verify_registration(conn):
     if abs(want - CORRECTED_Z) > 0.01:
         raise SystemExit(f"REFUSING to grade: CORRECTED_Z is {CORRECTED_Z} but one-sided 95% "
                          f"Bonferroni at family {FAMILY_SIZE} is {want:.3f}")
+
+    # The breadth floor is not in the registration -- it was added by amendment --
+    # so applying it without the amendment on the chain would be grading by a rule
+    # nobody registered, which is the same defect as ignoring one that was.
+    _, _, amd = _verified_spec(conn, BENCH_FLOOR_KIND)
+    phrase = f"at least {MIN_BENCHMARK_NAMES} distinct symbols"
+    if phrase not in (amd.get("change") or ""):
+        raise SystemExit(f"REFUSING to grade: this grader applies a benchmark floor of "
+                         f"{MIN_BENCHMARK_NAMES}, but the amendment on the chain does not say "
+                         f"{phrase!r}. The floor must be the one that was registered.")
     return spec
 
 
@@ -183,7 +208,7 @@ def compute(conn, start):
     """Return one row per session. Pure read: writes nothing, so a dry run and a
     commit run compute identically and can never disagree."""
     book = {d: (n, pct) for d, n, pct in conn.execute(BOOK_SQL, (start,))}
-    bench = {d: pct for d, pct in conn.execute(BENCH_SQL, (start,))}
+    bench = {d: (pct, n) for d, pct, n in conn.execute(BENCH_SQL, (start,))}
     rows, skipped = [], []
     for sess in sorted(book):
         n_bets, book_pct = book[sess]
@@ -193,14 +218,21 @@ def compute(conn, start):
             # the book with the market's whole move.
             skipped.append(sess)
             continue
-        bench_pct = bench[sess]
+        bench_pct, bench_n = bench[sess]
         rows.append({
             "session": sess,
             "n_bets": n_bets,
             "book_pct": book_pct,
             "bench_pct": bench_pct,
             "excess_pct": book_pct - bench_pct,
-            "eligible": 1 if n_bets >= MIN_BETS_PER_SESSION else 0,
+            # Two floors, both registered, both recorded the same way. A session
+            # the book under-populates and a session whose BENCHMARK is too thin
+            # to mean anything are equally ungradable, and neither is discarded --
+            # they are stored with eligible=0 so the record shows what was seen
+            # and refused, rather than silently omitting it.
+            "eligible": 1 if (n_bets >= MIN_BETS_PER_SESSION
+                              and bench_n >= MIN_BENCHMARK_NAMES) else 0,
+            "bench_n": bench_n,
         })
     return rows, skipped
 
@@ -288,24 +320,46 @@ def demo():
                 "INSERT INTO confluence_outcomes VALUES(?,?,?,?,?,?,NULL)",
                 (i, d0 + sess * day, 1, 50.0, 0.01 * (i + 1), d0 + sess * day))
     # Benchmark bars exist for sessions 0 and 1 only (session 2 has no NEXT bar).
-    for i in range(4):
+    # The benchmark carries MIN_BENCHMARK_NAMES + 20 symbols so the registered
+    # breadth floor is CLEARED here; the thin case is exercised separately below,
+    # because a fixture that fails both floors at once cannot tell them apart.
+    for i in range(MIN_BENCHMARK_NAMES + 20):
         for sess in range(3):
             conn.execute("INSERT INTO bars VALUES(?,'1d',?,?)",
                          (i, d0 + sess * day, 40.0 + sess))
 
+    # session 3: 6 bets, but only 3 symbols in its benchmark -- the shape the
+    # amendment exists to refuse. Three crypto names on a weekend is not a
+    # benchmark, and averaging against one would be worse than not grading.
+    for i in range(6):
+        conn.execute("INSERT INTO confluence_outcomes VALUES(?,?,?,?,?,?,NULL)",
+                     (i, d0 + 3 * day, 1, 50.0, 0.02, d0 + 3 * day))
+    for i in range(3):
+        for sess in (3, 4):
+            conn.execute("INSERT INTO bars VALUES(?,'1d',?,?)",
+                         (900 + i, d0 + sess * day, 40.0 + sess))
+
     rows, skipped = compute(conn, "")
     by_sess = {r["session"]: r for r in rows}
 
-    assert len(rows) == 2, f"expected 2 graded sessions, got {len(rows)}"
+    thin = by_sess[sorted(by_sess)[-1]]
+    assert thin["n_bets"] >= MIN_BETS_PER_SESSION, "the thin session should clear the BET floor"
+    assert thin["bench_n"] < MIN_BENCHMARK_NAMES, "the thin session should fail the BREADTH floor"
+    assert not thin["eligible"], (
+        "a session with enough bets but a 3-name benchmark was marked eligible -- "
+        "the registered breadth floor is not being applied")
+
+    assert len(rows) == 3, f"expected 3 graded sessions, got {len(rows)}"
     assert len(skipped) == 1, f"expected 1 skipped session, got {skipped}"
     # (d) the benchmark-less session is ABSENT, not zero-filled
     assert skipped[0] not in by_sess, "session without a benchmark was stored anyway"
 
     elig = [r for r in rows if r["eligible"]]
     inelig = [r for r in rows if not r["eligible"]]
-    # (a) the 4-bet session is recorded but not eligible
-    assert len(elig) == 1 and len(inelig) == 1, "eligibility split is wrong"
-    assert inelig[0]["n_bets"] == 4, "the 4-bet session should be the ineligible one"
+    # (a) the 4-bet session and the thin-benchmark session are both recorded and
+    # both ineligible, for two DIFFERENT registered reasons
+    assert len(elig) == 1 and len(inelig) == 2, "eligibility split is wrong"
+    assert any(r["n_bets"] == 4 for r in inelig), "the 4-bet session should be ineligible"
     # (b) excess is book minus benchmark, everywhere
     for r in rows:
         assert abs(r["excess_pct"] - (r["book_pct"] - r["bench_pct"])) < 1e-9, \
@@ -360,7 +414,22 @@ def demo():
                  (filed_ts, REGISTRATION_KIND, spec_json, spec_hash, prev_hash,
                   _entry_hash(prev_hash, filed_ts, REGISTRATION_KIND, spec_hash, note), note))
 
-    verify_registration(conn)  # the honest record must pass, or the rest proves nothing
+    # The breadth floor lives in a SEPARATE amendment record. Both must verify.
+    amd_json = json.dumps({
+        "kind": BENCH_FLOOR_KIND,
+        "change": (f"ADDS one eligibility criterion. A session counts only if its "
+                   f"benchmark carries at least {MIN_BENCHMARK_NAMES} distinct symbols, "
+                   f"IN ADDITION to the registered requirement of at least "
+                   f"{MIN_BETS_PER_SESSION} bets.")})
+    amd_hash = hashlib.sha256(amd_json.encode()).hexdigest()
+    amd_prev = "b58e6f3e"
+    amd_note = "AMENDMENT - benchmark breadth floor"
+    conn.execute("INSERT INTO prereg_records VALUES(88,?,?,?,?,?,?,?)",
+                 (filed_ts + 60, BENCH_FLOOR_KIND, amd_json, amd_hash, amd_prev,
+                  _entry_hash(amd_prev, filed_ts + 60, BENCH_FLOOR_KIND, amd_hash, amd_note),
+                  amd_note))
+
+    verify_registration(conn)  # both honest records must pass, or the rest proves nothing
 
     def refuses(what):
         try:
@@ -392,6 +461,29 @@ def demo():
     conn.execute("UPDATE prereg_records SET spec_json=?, spec_hash=?, entry_hash=? WHERE seq=87",
                  (spec_json, spec_hash,
                   _entry_hash(prev_hash, filed_ts, REGISTRATION_KIND, spec_hash, note)))
+    verify_registration(conn)
+
+    # mutation 4: the grader may not apply a floor the chain does not carry. This
+    # is the direction that would otherwise go unnoticed -- grading by a stricter
+    # rule than the one registered is still grading by an unregistered rule.
+    conn.execute("DELETE FROM prereg_records WHERE seq=88")
+    refuses("a benchmark floor with no amendment on the chain")
+
+    # mutation 5: an amendment naming a DIFFERENT floor than the grader applies
+    other = amd_json.replace(f"at least {MIN_BENCHMARK_NAMES} distinct",
+                             f"at least {MIN_BENCHMARK_NAMES * 2} distinct")
+    oh = hashlib.sha256(other.encode()).hexdigest()
+    conn.execute("INSERT INTO prereg_records VALUES(88,?,?,?,?,?,?,?)",
+                 (filed_ts + 60, BENCH_FLOOR_KIND, other, oh, amd_prev,
+                  _entry_hash(amd_prev, filed_ts + 60, BENCH_FLOOR_KIND, oh, amd_note),
+                  amd_note))
+    refuses("an amendment whose floor differs from the one the grader applies")
+
+    conn.execute("DELETE FROM prereg_records WHERE seq=88")
+    conn.execute("INSERT INTO prereg_records VALUES(88,?,?,?,?,?,?,?)",
+                 (filed_ts + 60, BENCH_FLOOR_KIND, amd_json, amd_hash, amd_prev,
+                  _entry_hash(amd_prev, filed_ts + 60, BENCH_FLOOR_KIND, amd_hash, amd_note),
+                  amd_note))
     verify_registration(conn)
 
     print("selftest ok")

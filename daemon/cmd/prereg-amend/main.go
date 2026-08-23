@@ -43,16 +43,17 @@ func main() {
 		commit = flag.Bool("commit", false, "actually append (default is dry-run)")
 		kind   = flag.String("kind", GradabilityKind,
 			"which record to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
-				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+
-				" or "+ForwardTestKind)
+				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+", "+
+				ForwardTestKind+" or "+BenchFloorKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
 		*kind != ProvenanceKind && *kind != DataIntegrityKind &&
-		*kind != DuplicateKind && *kind != ForwardTestKind {
-		die("unknown -kind %q (want %s, %s, %s, %s, %s or %s)",
+		*kind != DuplicateKind && *kind != ForwardTestKind &&
+		*kind != BenchFloorKind {
+		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
-			DataIntegrityKind, DuplicateKind, ForwardTestKind)
+			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -129,6 +130,37 @@ func main() {
 				"the existing rows in their own record.", m.ObservedRows)
 		}
 		spec, note = forwardTestSpec(m), forwardTestNote
+
+	case BenchFloorKind:
+		m, err := measureBenchFloor(ctx, db)
+		if err != nil {
+			die("measure benchmark-floor state: %v", err)
+		}
+		// This record amends a specific registration. Filing it with none on the
+		// chain would name a claim that does not exist.
+		if m.RegistrationSeq == 0 {
+			die("REFUSING to file: no %s record is on the chain. This amendment "+
+				"names a registration that does not exist.", ForwardTestKind)
+		}
+		// The amendment's entire defence is that it predates its own evidence. An
+		// eligibility rule added once sessions have graded is a selection rule,
+		// and an append-only log cannot tell the two apart after the fact.
+		if m.ObservedRows != 0 {
+			die("REFUSING to file: %d forward session(s) have already been graded. "+
+				"An eligibility criterion added after evidence accrues is a selection "+
+				"rule. File a record that says so plainly, or start a new test id.",
+				m.ObservedRows)
+		}
+		// Direction-neutrality has to be shown, not asserted: if the floor would
+		// remove a session the registered rule already admits, it is trimming
+		// evidence in hand and the claim in the spec is false.
+		if m.WouldDropNow != 0 {
+			die("REFUSING to file: the floor would drop %d in-sample session(s) that "+
+				"the registered rule already admits. The spec claims it removes "+
+				"nothing currently graded, and that is not true of this database.",
+				m.WouldDropNow)
+		}
+		spec, note = benchFloorSpec(m), benchFloorNote
 
 	case DuplicateKind:
 		d, err := measureDuplicates(ctx, db)
