@@ -94,6 +94,12 @@ func TestOutcomeResolverPerHorizonNoStarve(t *testing.T) {
 	if err := st.UpsertBars(ctx, []md.Bar{
 		{SymbolID: sym.ID, TF: md.TF1d, Ts: d0, Close: 100},
 		{SymbolID: sym.ID, TF: md.TF1d, Ts: d0 + 86400, Close: 105},
+		// The SETTLING bar. The resolver refuses to grade against a forward bar
+		// that could still be forming, and its test for that is "a later bar
+		// exists". Without this the forward bar never settles and the fixture
+		// resolves nothing — failing this test for a reason unrelated to the
+		// per-horizon starvation it exists to check.
+		{SymbolID: sym.ID, TF: md.TF1d, Ts: d0 + 2*86400, Close: 106},
 	}); err != nil {
 		t.Fatal(err)
 	}

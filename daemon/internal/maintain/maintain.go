@@ -511,6 +511,20 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 					voided++
 					continue
 				}
+				// SETTLED ONLY. The same guard the prediction resolver carries
+				// (pipeline/predict.go) and with the same measurement behind it:
+				// of 4,000 resolved 1d rows, 37.8% were frozen before their
+				// forward bar's 16:00 ET close, mislabelling about 3.7% of the
+				// record against a price that had not happened yet. This resolver
+				// runs through the session too, so a daily bar read mid-morning
+				// carries live prices. "A later bar exists" needs no knowledge of
+				// exchange hours, half-days, DST or crypto's 24h day.
+				if _, settled, serr := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, fwd.Ts+1); serr != nil {
+					return "", serr
+				} else if !settled {
+					waiting++
+					continue
+				}
 				ret := fwd.Close/base.Close - 1
 				if err := o.St.ResolveOutcome(ctx, p.SymbolID, h, p.Ts, ret); err != nil {
 					return "", err

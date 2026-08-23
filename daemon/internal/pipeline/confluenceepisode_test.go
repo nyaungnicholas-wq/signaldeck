@@ -44,6 +44,12 @@ const (
 	sunBucket = int64(1784419200) // 2026-07-19 00:00 UTC
 	monBar    = int64(1784520000) // 2026-07-20 04:00 UTC — the next real session
 	friBar    = int64(1784260800) // 2026-07-17 04:00 UTC — the last real session
+	// The SETTLING bar. The resolver refuses to grade against a forward bar that
+	// could still be forming, and the test for that is "a LATER bar exists" — so
+	// Monday's bar only settles once Tuesday's has appeared. Without this the
+	// fixture grades nothing and the assertion below fails for a reason that has
+	// nothing to do with what it is testing.
+	tueBar = int64(1784606400) // 2026-07-21 04:00 UTC — settles monBar
 )
 
 // seedRNWWW writes the two real sessions the weekend sits between: a Friday bar
@@ -58,6 +64,7 @@ func seedRNWWW(t *testing.T, st *store.Store) int64 {
 	bars := []md.Bar{
 		{SymbolID: sym.ID, TF: md.TF1d, Ts: friBar, Open: 0.0014, High: 0.0025, Low: 0.0010, Close: 0.0015, Volume: 54019},
 		{SymbolID: sym.ID, TF: md.TF1d, Ts: monBar, Open: 0.0018, High: 0.0030, Low: 0.0011, Close: 0.0029, Volume: 19558},
+		{SymbolID: sym.ID, TF: md.TF1d, Ts: tueBar, Open: 0.0029, High: 0.0031, Low: 0.0027, Close: 0.0030, Volume: 12000},
 	}
 	if err := st.UpsertBars(ctx, bars); err != nil {
 		t.Fatalf("seed bars: %v", err)

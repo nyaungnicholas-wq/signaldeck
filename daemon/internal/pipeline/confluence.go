@@ -343,6 +343,27 @@ func (w *ConfluenceResolver) Run(ctx context.Context) (string, error) {
 		if !ok || o.EntryPx <= 0 || fwd.Ts >= o.Ts+5*86400 || fwd.Close <= 0 {
 			continue
 		}
+		// THE FORWARD BAR MUST BE SETTLED. Copied from the prediction resolver
+		// (predict.go), which carries the measurement: of 4,000 resolved 1d
+		// rows, 37.8% were frozen before their forward bar's 16:00 ET close,
+		// and about 3.7% of the whole 1d record was labelled against a price
+		// that had not happened yet.
+		//
+		// This resolver runs every 15 minutes THROUGH the session, so a daily
+		// bar returned mid-morning carries live prices in Close, High and Low.
+		// exit_low and exit_high feed the constrained stop/target basis, so a
+		// partial bar also decided whether a simulated stop was hit -- and the
+		// row is stamped resolved_at and never revisited.
+		//
+		// The test is "a LATER bar exists", not a clock offset: a successor bar
+		// can only appear once the next session has begun, so it settles the
+		// previous one without this code needing to know exchange hours,
+		// half-days, DST or crypto's 24h day.
+		if _, settled, serr := w.St.BarAtOrAfter(ctx, o.SymbolID, md.TF1d, fwd.Ts+1); serr != nil {
+			return "", serr
+		} else if !settled {
+			continue
+		}
 		// SAME-BASIS ENTRY. o.EntryPx was frozen when the setup was flagged, and the
 		// bars underneath it can be REWRITTEN afterwards: a reverse split triggers a
 		// full re-backfill (pipeline/splitrepair.go) that rescales the whole series.
