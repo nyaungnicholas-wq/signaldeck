@@ -93,11 +93,21 @@ fi
 # It grades only sessions whose forward return has already resolved, so running
 # at market close picks up yesterday's session and never half-grades today's.
 #
-# FT_START must equal the date the registration record was filed — the record
-# binds the window to "the first session STRICTLY AFTER this record's timestamp",
-# and a mismatch here would silently grade in-sample days as forward evidence,
-# which is the one failure this whole test exists to prevent.
-FT_START=2026-08-22
+# The window opens the first session STRICTLY AFTER the registration record
+# (prereg seq 87, filed 2026-08-23T00:14:36Z). The grader admits sessions whose
+# UTC date is strictly greater than FT_START, so FT_START is the record's own UTC
+# DATE, not the local date it was filed on.
+#
+# Why that distinction is load-bearing: every confluence bucket is stamped at
+# exactly 00:00:00 UTC. A bucket dated 2026-08-23 therefore sits 14m36s BEFORE
+# the record that registered it. Setting FT_START to the local filing date
+# (2026-08-22) would admit that bucket and grade a pre-registration session as
+# forward evidence — the precise failure this test exists to prevent. Advancing
+# to the record's UTC date forgoes 2026-08-23 (a Sunday, but crypto trades every
+# day here) and buys an unambiguous boundary for it.
+#
+# If the record is ever re-filed, this must move to the NEW record's UTC date.
+FT_START=2026-08-23
 
 # Deliberately cannot fail this script. A research grade is not a reason to
 # report the market-close backup as broken, and letting it mask a backup or
