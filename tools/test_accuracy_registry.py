@@ -733,6 +733,14 @@ class TestXsfactorSnapshotRoundTrip(unittest.TestCase):
 # other (predictor, band) pair is byte-identical, and the one that changed
 # was compared with its parenthetical counts stripped to confirm the
 # verdict text itself is unchanged.
+# 2026-08-23, A22: the three 1w rows moved from asserting a verdict to
+# REFUSING one, when directional grading moved off call-day clusters and
+# onto non-overlapping forward-window blocks. "3/10 credible days of 21,
+# 18 degenerate" is the whole finding in one string: 21 call-day clusters
+# are 3 independent forward windows, and the FAILED verdict published
+# before rested on 18 that overlap. Checked before editing: no 1d row moved
+# at all, and every flip is from ASSERTING to WITHHOLDING -- the product
+# now claims less, never more.
 class TestFrozenSnapshotVerdicts(unittest.TestCase):
     """CI freeze of the prequential-only verdicts on the COMMITTED repro/ snapshot.
 
@@ -776,18 +784,18 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         # credible-day floor in the re-cut snapshot, so an interval exists
         # and a verdict publishes where the freeze still said the row was
         # unjudgeable. DOCS_INDEX already publishes the same transition.
-            "FAILED — significantly worse than the naive baseline",
+            "INSUFFICIENT DAYS (3/10 credible days of 21, 18 degenerate) — no interval, so no verdict",
         ("prequential-majority (1w)", "all"):
         # Moved by EVIDENCE, not by the grader: this row crossed the 10
         # credible-day floor in the re-cut snapshot, so an interval exists
         # and a verdict publishes where the freeze still said the row was
         # unjudgeable. DOCS_INDEX already publishes the same transition.
-            "NO SKILL — indistinguishable from baseline",
+            "INSUFFICIENT DAYS (3/10 credible days of 19, 16 degenerate) — no interval, so no verdict",
         ("directional-ensemble (1d, high conviction)", "|p-0.5|>=0.15"):
             "INSUFFICIENT DAYS (5/10 credible days of 8, 3 degenerate)"
             " — no interval, so no verdict",
         ("directional-ensemble (1w, high conviction)", "|p-0.5|>=0.15"):
-            "FAILED — significantly worse than the naive baseline",
+            "INSUFFICIENT DAYS (3/10 credible days of 17, 14 degenerate) — no interval, so no verdict",
         # The seven structural claims are backtests awaiting their first live
         # grade — PENDING until the horizon elapses, never a live verdict.
         # 2026-08-14, not 08-13. This row froze one day early because the

@@ -1,6 +1,6 @@
 {
- "generated": "2026-08-23T20:38:30+00:00",
- "git_commit": "56250e68f0fdb8f05c0226f0e0935fc7864d0b25",
+ "generated": "2026-08-23T20:48:54+00:00",
+ "git_commit": "d419be99a4fff5a8331b2344f838df15ad096dbc",
  "survivorship_epoch": "2026-07-24",
  "hash_scheme": "datasetver v1 canonical records, sha256, floats %.10g (daemon/internal/datasetver.HashRecords)",
  "note": "grading tallies + input-series versions only; no bar data is redistributed (A10). Regenerate the published numbers with `python3 tools/accuracy_registry.py --snapshot repro` \u2014 see REPRODUCE.md.",
@@ -21,7 +21,7 @@
    "file": "grading_protocol.csv",
    "kind": "prereg-grading-protocol",
    "rows": 1,
-   "sha256": "e6e32d597587cf3d00d4d51a9096f3f08ef4c912266fc89aeddcc52935631cc1"
+   "sha256": "aa8a8d529d9c5476d788d9d08e092bb8463f2034e53f08db433471c28f63fc7d"
   },
   {
    "file": "structural_days.csv",
