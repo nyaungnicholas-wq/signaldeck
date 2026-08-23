@@ -74,6 +74,23 @@ QUARANTINE_TABLE = "regime_outcome_quarantine"
 QUARANTINE_MANIFEST_TABLE = "regime_outcome_quarantine_manifest"
 BUILD_REV_META_KEY = "lineage_build_rev"
 HOLDOUT_PATH = "daemon/internal/researchx/discover.go"
+
+# The git pathspec for source the DAEMON BINARY actually builds from.
+#
+# daemon/ is a Go module holding 14 main packages; exactly one of them is the
+# daemon. `go list -deps ./cmd/signaldeckd` resolves to internal/** and
+# cmd/signaldeckd and nothing else, so a change to sdmaint, caldiag, prereg-amend
+# or any other command cannot alter a byte the daemon executes. Scoping the drift
+# check at "daemon/" made every such edit demand a rebuild that would fix nothing.
+#
+# If a new package is ever added that the daemon imports, it goes under internal/
+# and is covered automatically. A new standalone command is correctly ignored.
+DAEMON_BINARY_PATHS = (
+    "daemon/internal/",
+    "daemon/cmd/signaldeckd/",
+    "daemon/go.mod",
+    "daemon/go.sum",
+)
 HOLDOUT_CONST = "PreregHoldoutEra"
 
 # Tables that carry the per-row revision stamp, with the column naming the
@@ -343,12 +360,24 @@ def check_daemon_code_drift(con: sqlite3.Connection, repo: str) -> dict:
     healthy while it ran on time and failed every time. Every deployment gate
     reported ok, because none of them asked this.
 
-    The predicate is not age, it is movement: commits touching daemon/ between the
-    deployed revision and HEAD are by definition fixes that are not running.
-    Changes under tools/, docs, or research do not implicate the binary and are
-    not counted, and neither are *_test.go changes — a test-only commit does not
-    alter what the daemon executes, and this gate has a history of refusing
-    publication on a false diagnosis (audits/SIGNALDECKFIX_2026-08-12.md).
+    The predicate is not age, it is movement: commits touching the daemon BINARY's
+    own source between the deployed revision and HEAD are by definition fixes that
+    are not running. Changes under tools/, docs, or research do not implicate the
+    binary and are not counted, and neither are *_test.go changes — a test-only
+    commit does not alter what the daemon executes, and this gate has a history of
+    refusing publication on a false diagnosis (audits/SIGNALDECKFIX_2026-08-12.md).
+
+    Nor does every path under daemon/. That directory is a Go MODULE holding 14
+    separate main packages, of which exactly one — cmd/signaldeckd — is the daemon;
+    the other 13 (sdmaint, caldiag, prereg-amend, collapsecheck, …) are standalone
+    tools run on demand, and nothing imports them. `go list -deps ./cmd/signaldeckd`
+    resolves to internal/** and cmd/signaldeckd only, so editing any other command
+    cannot change a single byte the daemon executes. Scoping this check at daemon/
+    made every such edit demand a rebuild-and-restart that would fix nothing — the
+    same false diagnosis the paragraph above was written about, arriving by a
+    different door. On a gate whose entire job is catching genuinely undeployed
+    fixes, a false positive is not a harmless over-report: it is how the next real
+    one gets waved through.
     """
     try:
         rev = con.execute("SELECT v FROM meta WHERE k = ?", (BUILD_REV_META_KEY,)).fetchone()
@@ -362,9 +391,11 @@ def check_daemon_code_drift(con: sqlite3.Connection, repo: str) -> dict:
                             "daemon code it is missing cannot be computed at all",
                 "measured": {"revision": rev}}
     try:
-        files = subprocess.run(["git", "diff", "--name-only", f"{base}..HEAD", "--", "daemon/"],
+        files = subprocess.run(["git", "diff", "--name-only", f"{base}..HEAD", "--",
+                                *DAEMON_BINARY_PATHS],
                                cwd=repo, capture_output=True, text=True, check=True).stdout
-        log = subprocess.run(["git", "log", "--oneline", f"{base}..HEAD", "--", "daemon/"],
+        log = subprocess.run(["git", "log", "--oneline", f"{base}..HEAD", "--",
+                              *DAEMON_BINARY_PATHS],
                              cwd=repo, capture_output=True, text=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError) as e:
         return {"name": "daemon-code-drift", "ok": False,

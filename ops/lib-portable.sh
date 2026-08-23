@@ -239,6 +239,11 @@ sd_task_name() {
   local leaf="${1##*.}"
   case "$1" in
     com.tickstream.*) printf 'TickStream %s' "$(sd_titlecase "$leaf")" ;;
+    # ops/install-sibling-tasks.ps1 registers this one as "TraderHud Daemon",
+    # not the "StockTrader Hud" the generic rule below derives. The registered
+    # name is the truth — a mapping that disagrees with it addresses a task that
+    # does not exist, which schtasks reports and this library used to discard.
+    com.stocktrader.hud) printf 'TraderHud Daemon' ;;
     com.stocktrader.*) printf 'StockTrader %s' "$(sd_titlecase "$leaf")" ;;
     *) printf 'SignalDeck %s' "$(sd_titlecase "$leaf")" ;;
   esac
@@ -293,7 +298,21 @@ sd_svc_stop() {
   fi
   # /End stops what the task launched; it is the Scheduled Task equivalent of
   # SIGTERM to the job, and the daemon's own signal handler does the draining.
-  schtasks //End //TN "$(sd_task_name "$1")" >/dev/null 2>&1
+  #
+  # A task that does not EXIST is reported as 2, the same contract sd_svc_start
+  # already honours. Ending a task that merely is not RUNNING stays 0 — callers
+  # routinely stop services without checking first, and turning that into a
+  # failure would break all of them.
+  #
+  # The distinction is the point: a label whose name no longer matches its
+  # registration produces exactly the same observable as a service that was
+  # already stopped — nothing happens, quietly, forever. This function used to
+  # discard schtasks' status entirely, so there was no observable at all.
+  local task
+  task="$(sd_task_name "$1")"
+  schtasks //Query //TN "$task" >/dev/null 2>&1 || return 2
+  schtasks //End //TN "$task" >/dev/null 2>&1
+  return 0
 }
 
 sd_svc_restart() { sd_svc_stop "$1"; sleep 2; sd_svc_start "$1"; }

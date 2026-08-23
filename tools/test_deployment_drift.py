@@ -68,6 +68,35 @@ def head_commit():
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
+class DaemonBinaryPathsTest(unittest.TestCase):
+    """The drift check must watch what the DAEMON runs — not the whole module.
+
+    daemon/ holds 14 main packages and only cmd/signaldeckd is the daemon. When
+    this was scoped at "daemon/", editing any other command (sdmaint, caldiag,
+    prereg-amend, ...) reported the daemon as carrying undeployed fixes and told
+    the operator to rebuild and restart it, which could not have changed anything
+    those commands do. On a gate whose whole job is catching genuinely undeployed
+    fixes, a false positive is how the next real one gets waved through.
+    """
+
+    def test_watches_internal_and_the_daemon_command(self):
+        self.assertIn("daemon/internal/", dd.DAEMON_BINARY_PATHS)
+        self.assertIn("daemon/cmd/signaldeckd/", dd.DAEMON_BINARY_PATHS)
+
+    def test_does_not_watch_the_other_main_packages(self):
+        # Guards against a revert to the bare "daemon/" pathspec, which would
+        # match every sibling command again.
+        cmd_dir = os.path.join(REPO, "daemon", "cmd")
+        others = [d for d in os.listdir(cmd_dir)
+                  if os.path.isdir(os.path.join(cmd_dir, d)) and d != "signaldeckd"]
+        self.assertTrue(others, "expected sibling commands under daemon/cmd")
+        for name in others:
+            path = f"daemon/cmd/{name}/main.go"
+            self.assertFalse(
+                any(path.startswith(p) for p in dd.DAEMON_BINARY_PATHS),
+                f"{path} is a standalone command and must not trip daemon drift")
+
+
 class DeploymentDriftTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
