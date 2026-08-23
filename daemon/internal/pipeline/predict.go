@@ -613,24 +613,40 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// benign data shape -- so a contended pool on a day whose cross-section
 		// HAD collapsed published the whole day ungated, with no log and no dq
 		// event. The justifying comment below only ever covered the benign half.
-		rec, err := loadCrossSection(ctx, w.St, h)
-		if err != nil {
-			w.gateReadFailed(ctx, h, "prior cross-section unreadable", err)
+		// THE PRIOR DAY IS DERIVED, NOT READ BACK FROM THE RECORD WE JUST WROTE.
+		//
+		// This loaded the meta record and skipped when rec.Day >= today. But
+		// saveCrossSection stamps that record with TODAY at the end of every
+		// pass, and runProbs is populated even for a gated horizon, so the
+		// stamp landed on pass one and every later pass of the day short-
+		// circuited: the gate could fire ONCE per UTC day, at whatever hour the
+		// first pass ran, and the remaining ~137 passes -- the entire 09:30-16:00
+		// ET session -- published ungated. A six-day collapse withheld six
+		// passes out of roughly 830. The one gating pass logged a warning, which
+		// reads exactly like the gate working.
+		//
+		// Walking back from today finds the most recent day that actually
+		// published, so weekends and holidays are skipped by data rather than by
+		// arithmetic, and the answer no longer depends on our own write.
+		var probs []float64
+		priorDay := ""
+		for back := 1; back <= 5 && priorDay == ""; back++ {
+			cand := time.Now().UTC().AddDate(0, 0, -back).Format("2006-01-02")
+			got, perr := w.St.PublishedCrossSection(ctx, string(h), cand)
+			if perr != nil {
+				w.gateReadFailed(ctx, h, "published cross-section unreadable for "+cand, perr)
+				break
+			}
+			if len(got) > 0 {
+				priorDay, probs = cand, got
+			}
+		}
+		if priorDay == "" {
+			// Nothing published in the last five days is a cold start, not a
+			// collapse; a cold start must not be indistinguishable from one.
 			continue
 		}
-		if rec == nil || rec.Day == "" || rec.Day >= today {
-			continue
-		}
-		probs, perr := w.St.PublishedCrossSection(ctx, string(h), rec.Day)
-		if perr != nil {
-			w.gateReadFailed(ctx, h, "published cross-section unreadable for "+rec.Day, perr)
-			continue
-		}
-		if len(probs) == 0 {
-			// Nothing published that day is not evidence of a collapse; a cold
-			// start must not be indistinguishable from one.
-			continue
-		}
+		rec := &crossSectionRecord{Day: priorDay}
 		measured := ensemble.MeasureCrossSection(probs)
 		if ok, reason := measured.Usable(); !ok {
 			rec.CrossSection = measured

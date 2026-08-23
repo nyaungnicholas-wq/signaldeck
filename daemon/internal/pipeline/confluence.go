@@ -321,9 +321,26 @@ func (w *ConfluenceResolver) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		// No forward bar yet, bad entry, or too large a gap (weekend/halt beyond
-		// 3 horizons) → leave it pending rather than grade on a distant bar.
-		if !ok || o.EntryPx <= 0 || fwd.Ts-target > 3*confluenceHorizonSecs || fwd.Close <= 0 {
+		// No forward bar yet, bad entry, or too large a gap (weekend/halt) →
+		// leave it pending rather than grade on a distant bar.
+		//
+		// The gap is measured from the BUCKET, not from `target`. o.Ts is a UTC
+		// midnight bucket while a US daily bar is stamped at ET midnight, so
+		// `fwd.Ts - target` carries a 4-5h offset that does not cancel — the
+		// sibling in predict.go:1218 anchors on an actual BAR stamp, where it
+		// does. Over an ordinary weekend the slack absorbed it; over a 3-day
+		// weekend it did not. Friday 2026-09-04 bucket, Labor Day Monday: next
+		// bar is Tuesday 04:00Z, fwd.Ts-target = 273,600s against a 259,200s
+		// limit, rejected BY FOUR HOURS. Such a row is never graded and is
+		// caught by neither clause of MarkUngradableConfluenceOutcomes, so it
+		// sits pending forever, counted in Rows but in neither Resolved nor
+		// Ungradable — and the dropped days are exactly the pre-holiday setups,
+		// which is a systematically biased sample, not a random one.
+		//
+		// 5 days from the bucket covers every US 3-day weekend and matches the
+		// retirement sweep's own window in store/confluence.go, so the resolver
+		// and the sweep cannot disagree about which rows are gradable.
+		if !ok || o.EntryPx <= 0 || fwd.Ts >= o.Ts+5*86400 || fwd.Close <= 0 {
 			continue
 		}
 		// SAME-BASIS ENTRY. o.EntryPx was frozen when the setup was flagged, and the

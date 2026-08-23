@@ -489,7 +489,7 @@ UPDATE confluence_outcomes
            SELECT 1 FROM bars b
             WHERE b.symbol_id = confluence_outcomes.symbol_id AND b.tf = '1d'
               AND b.ts >= confluence_outcomes.ts + 86400
-              AND b.ts <= confluence_outcomes.ts + 4 * 86400))
+              AND b.ts < confluence_outcomes.ts + 5 * 86400))
    )`,
 		reason)
 	if err != nil {
@@ -566,11 +566,11 @@ UPDATE confluence_outcomes AS o
                        ORDER BY b.ts DESC LIMIT 1),
        exit_low    = (SELECT b.low FROM bars b
                        WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
-                         AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+                         AND b.ts >= o.ts + 86400 AND b.ts < o.ts + 5 * 86400
                        ORDER BY b.ts ASC LIMIT 1),
        exit_high   = (SELECT b.high FROM bars b
                        WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
-                         AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+                         AND b.ts >= o.ts + 86400 AND b.ts < o.ts + 5 * 86400
                        ORDER BY b.ts ASC LIMIT 1)
  WHERE o.resolved_at IS NOT NULL AND o.ungradable IS NULL AND o.entry_close IS NULL`)
 	if err != nil {
@@ -593,7 +593,7 @@ SELECT COUNT(*),
        SUM(CASE WHEN entry_close IS NOT NULL AND entry_close > 0
                  AND ABS((SELECT b.close FROM bars b
                            WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
-                             AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+                             AND b.ts >= o.ts + 86400 AND b.ts < o.ts + 5 * 86400
                            ORDER BY b.ts ASC LIMIT 1) / entry_close - 1 - fwd_return) < 1e-6
                 THEN 1 ELSE 0 END)
 FROM confluence_outcomes o
@@ -632,15 +632,15 @@ WITH lv AS (
            ORDER BY b.ts DESC LIMIT 1) AS ec,
          (SELECT b.close FROM bars b
            WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
-             AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+             AND b.ts >= o.ts + 86400 AND b.ts < o.ts + 5 * 86400
            ORDER BY b.ts ASC LIMIT 1) AS xc,
          (SELECT b.low FROM bars b
            WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
-             AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+             AND b.ts >= o.ts + 86400 AND b.ts < o.ts + 5 * 86400
            ORDER BY b.ts ASC LIMIT 1) AS xl,
          (SELECT b.high FROM bars b
            WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
-             AND b.ts >= o.ts + 86400 AND b.ts <= o.ts + 4 * 86400
+             AND b.ts >= o.ts + 86400 AND b.ts < o.ts + 5 * 86400
            ORDER BY b.ts ASC LIMIT 1) AS xh,
          (SELECT b.ts FROM bars b
            WHERE b.symbol_id = o.symbol_id AND b.tf = '1d'
