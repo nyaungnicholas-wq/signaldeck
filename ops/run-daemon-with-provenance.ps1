@@ -264,11 +264,27 @@ if (-not $git) {
     # provably cannot reach the binary is downgraded, and if git cannot answer
     # the question at all the count stays at $behind so the doubt falls toward
     # REPORTING staleness.
+    # The pathspec is the daemon BINARY's own source, and nothing else. It was
+    # 'daemon/', '*.go', 'go.mod', 'go.sum', which is broader than the binary in
+    # three separate ways: daemon/ is a Go module holding 14 main packages of
+    # which only cmd/signaldeckd is the daemon, '*.go' also matches drafts/**,
+    # and _test.go was not excluded here even though the sibling check in
+    # tools/deployment_drift.py excludes it. Measured against the deployed stamp
+    # today it counted 4 files where 1 non-test file actually reaches the binary.
+    # That is the same cry-wolf this block was written to stop, arriving through
+    # a different door -- and it fires on the guard that decides whether a
+    # genuinely stale collector is allowed to start.
+    #
+    # `go list -deps ./cmd/signaldeckd` resolves to internal/** and cmd/signaldeckd
+    # only. Still STRICTLY NARROWER, NEVER WIDER: every path that reaches the
+    # binary counts exactly as before, and git failing to answer still leaves
+    # $codeBehind at $behind so doubt falls toward REPORTING staleness.
     $codeBehind = $behind
     $codeFiles = @(Invoke-Git @('diff', '--name-only', ('{0}..HEAD' -f $stamp.Revision),
-        '--', 'daemon/', '*.go', 'go.mod', 'go.sum'))
+        '--', 'daemon/internal/', 'daemon/cmd/signaldeckd/', 'daemon/go.mod', 'daemon/go.sum'))
     if ($LASTEXITCODE -eq 0) {
-      $codeBehind = @($codeFiles | Where-Object { $_ -and $_.Trim() }).Count
+      $codeBehind = @($codeFiles |
+        Where-Object { $_ -and $_.Trim() -and -not $_.Trim().EndsWith('_test.go') }).Count
     }
   }
 }
