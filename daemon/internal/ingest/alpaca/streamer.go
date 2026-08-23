@@ -210,9 +210,11 @@ func isExpectedDisconnect(err error) bool {
 }
 
 // handleFrame processes one raw websocket frame (a JSON array of envelopes):
-// bar elements become 1m upserts, success/subscription acks are ignored, and
-// stream-level error elements are logged (the server usually follows them by
-// closing, which surfaces as a read error).
+// bar elements become 1m upserts, stream-level error elements are logged (the
+// server usually follows them by closing, which surfaces as a read error), and
+// a subscription ack RECONCILES `subscribed` against what the server actually
+// granted. That last one is why the map is a parameter: resync can only record
+// what was asked for, and the ack is the only thing that knows what was given.
 func (s *Streamer) handleFrame(ctx context.Context, data []byte, subscribed map[string]bool) error {
 	var msgs []wsEnvelope
 	if err := json.Unmarshal(data, &msgs); err != nil {

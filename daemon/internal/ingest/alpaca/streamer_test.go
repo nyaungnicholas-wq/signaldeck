@@ -198,3 +198,39 @@ func TestAuthenticated(t *testing.T) {
 		})
 	}
 }
+
+// TestSubscriptionAckIsAuthoritative pins the defect that made a refused
+// subscription invisible: resync marked a symbol live as soon as the subscribe
+// frame was WRITTEN, and the server's reply -- the only message that knows what
+// was actually granted -- had no field on wsEnvelope, so it fell through to the
+// default branch and was discarded. A symbol Alpaca refused stayed "subscribed"
+// for the life of the connection, produced no bars, and was never retried.
+func TestSubscriptionAckIsAuthoritative(t *testing.T) {
+	st := openTestStore(t)
+	s := NewStreamer(New("k", "s"), st, testResolver(map[string]int64{"AAPL": 1, "MSFT": 2}), "")
+
+	// What resync believed after its writes succeeded. ZZZZ is the refused one.
+	subscribed := map[string]bool{"AAPL": true, "MSFT": true, "ZZZZ": true}
+
+	// What the server says is actually live. Note it also adds a symbol we did
+	// not have locally, so the ack is treated as the whole truth and not as a
+	// delete-only filter.
+	frame := []byte(`[{"T":"subscription","trades":[],"quotes":[],"bars":["AAPL","MSFT","NVDA"]}]`)
+	if err := s.handleFrame(context.Background(), frame, subscribed); err != nil {
+		t.Fatalf("handleFrame on a subscription ack: %v", err)
+	}
+
+	want := map[string]bool{"AAPL": true, "MSFT": true, "NVDA": true}
+	if len(subscribed) != len(want) {
+		t.Fatalf("subscribed = %v; want exactly %v", subscribed, want)
+	}
+	for sym := range want {
+		if !subscribed[sym] {
+			t.Errorf("server granted %s but it is not marked subscribed", sym)
+		}
+	}
+	if subscribed["ZZZZ"] {
+		t.Error("ZZZZ was refused by the server but is still marked subscribed -- " +
+			"this is the bug: a refused symbol believed live forever, never retried")
+	}
+}
