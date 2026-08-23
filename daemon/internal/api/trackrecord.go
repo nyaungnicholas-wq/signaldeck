@@ -177,9 +177,25 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	// FAIL OPEN on a read error, exactly as the HTTP handler does and as the
 	// gate's own doc requires: refusing on a transient database error would wedge
 	// publication shut on something that is not evidence.
+	// TWO conditions, not one. Verified live after the first attempt shipped with
+	// only the collapse gate and changed nothing: /api/accuracy refuses at
+	// reg.RefusedSince, which fires LONG BEFORE it reaches the collapse gate, and
+	// a refused grader writes rows: [] -- so CollapsedGradingWindow reads an empty
+	// set and correctly reports collapsed=false. Gating on the collapse alone
+	// therefore cannot fire in exactly the state that matters most, and
+	// /api/track-record went on publishing a win rate while /api/accuracy
+	// answered 503.
 	var collapseReason string
 	if reg, rerr := loadRegistry(d.RegistryPath); rerr == nil {
-		if reason, collapsed, cerr := d.collapsedGradingWindow(ctx, reg, time.Now()); cerr == nil && collapsed {
+		// The grader's own refusal. If it will not stand behind its numbers,
+		// neither may a surface computed over the same graded window.
+		if reg.RefusedSince != nil && *reg.RefusedSince != "" {
+			gated = true
+			collapseReason = "the accuracy grader has REFUSED since " + *reg.RefusedSince +
+				" — figures over this graded window are withheld until it clears"
+		} else if reason, collapsed, cerr := d.collapsedGradingWindow(ctx, reg, time.Now()); cerr == nil && collapsed {
+			// Healthy grader, unusable window: the rows exist and are one
+			// market-wide call repeated per symbol.
 			gated = true
 			collapseReason = reason
 		}
