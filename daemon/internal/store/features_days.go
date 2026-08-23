@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
@@ -15,14 +16,20 @@ func (s *Store) LabeledFeaturesRecentDays(ctx context.Context, h md.Horizon, day
 
 	// First query: find distinct day buckets and their row counts for this horizon,
 	// newest day first, limited to the requested number of days.
-	dayRows, err := s.db.QueryContext(ctx, `
-		SELECT f.ts/86400 AS d, COUNT(*)
+	// dayFold, not f.ts/86400. The consumer (adaptive.Compute) counts distinct
+	// days with md.TradingDay = (ts-18000)/86400, and this folded on raw UTC
+	// midnight -- two spellings of one fold, which is how this class of defect
+	// returns. Measured over a 30-day window the two disagreed by one day
+	// (30 vs 31), so no outcome moved, but the gate and its input must be
+	// measured in the same unit by construction rather than by luck.
+	dayRows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT %s AS d, COUNT(*)
 		FROM features f
 		JOIN prediction_outcomes o
 		  ON o.symbol_id=f.symbol_id AND o.horizon=f.horizon AND o.ts=f.ts
 		WHERE f.horizon=? AND o.resolved_at IS NOT NULL
 		  AND o.up IS NOT NULL AND o.fwd_return IS NOT NULL
-		GROUP BY d ORDER BY d DESC LIMIT ?`,
+		GROUP BY d ORDER BY d DESC LIMIT ?`, dayFold("f.ts")),
 		string(h), days)
 	if err != nil {
 		return nil, false, err
@@ -70,7 +77,7 @@ func (s *Store) LabeledFeaturesRecentDays(ctx context.Context, h md.Horizon, day
 		return []LabeledFeature{}, ceilingBound, nil
 	}
 
-	cutoffTs := cutoffDay * 86400
+	cutoffTs := cutoffDay*86400 + tradingDayOffsetSecs
 
 	// Second query: fetch all labeled rows on or after the cutoff day, newest first.
 	rows, err := s.db.QueryContext(ctx, `

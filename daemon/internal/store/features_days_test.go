@@ -7,6 +7,15 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
 
+// epochBase anchors the fixtures at a realistic timestamp (2026-07-01 00:00 UTC).
+//
+// The fixtures used to start at unix 0. The store folds a day as
+// (ts - tradingDayOffsetSecs)/86400, so near-epoch timestamps make the numerator
+// NEGATIVE and integer division truncates toward zero -- collapsing several
+// distinct days onto index 0 and testing arithmetic that cannot occur on a real
+// database, where ts is ~1.7e9.
+const epochBase = int64(1782950400)
+
 func TestLabeledFeaturesRecentDays_ReturnsNewestWholeDays(t *testing.T) {
 	ctx := context.Background()
 	st := openTemp(t)
@@ -19,7 +28,7 @@ func TestLabeledFeaturesRecentDays_ReturnsNewestWholeDays(t *testing.T) {
 	// We'll insert in chronological order so day4 is newest
 	dayCounts := []int{2, 3, 1, 4, 2}
 	for dayIdx, count := range dayCounts {
-		baseTS := int64(dayIdx) * 86400
+		baseTS := epochBase + int64(dayIdx)*86400
 		for i := 0; i < count; i++ {
 			ts := baseTS + int64(i)*3600 // intra-day offsets
 			mustPredict(t, st, sym.ID, md.H1d, ts, 0.5+float64(i)*0.1, map[string]float64{"pressure_score": 0.4, "pred_raw": 0.7})
@@ -44,7 +53,7 @@ func TestLabeledFeaturesRecentDays_ReturnsNewestWholeDays(t *testing.T) {
 	// Verify only days 2,3,4 present (day = ts/86400)
 	seenDays := make(map[int64]int)
 	for _, r := range rows {
-		day := r.Ts / 86400
+		day := (r.Ts - epochBase) / 86400
 		seenDays[day]++
 	}
 	expectedDays := map[int64]int{2: 1, 3: 4, 4: 2}
@@ -70,7 +79,7 @@ func TestLabeledFeaturesRecentDays_CeilingDropsWholeDaysNotPartialOnes(t *testin
 
 	// Seed 4 days with 3 rows each = 12 rows total
 	for dayIdx := 0; dayIdx < 4; dayIdx++ {
-		baseTS := int64(dayIdx) * 86400
+		baseTS := epochBase + int64(dayIdx)*86400
 		for i := 0; i < 3; i++ {
 			ts := baseTS + int64(i)*3600
 			mustPredict(t, st, sym.ID, md.H1d, ts, 0.5+float64(i)*0.1, map[string]float64{"pressure_score": 0.4, "pred_raw": 0.7})
@@ -95,7 +104,7 @@ func TestLabeledFeaturesRecentDays_CeilingDropsWholeDaysNotPartialOnes(t *testin
 	// Verify exactly newest 2 days (day 2 and 3), each complete with 3 rows
 	seenDays := make(map[int64]int)
 	for _, r := range rows {
-		day := r.Ts / 86400
+		day := (r.Ts - epochBase) / 86400
 		seenDays[day]++
 	}
 	expectedDays := map[int64]int{2: 3, 3: 3}
@@ -121,7 +130,7 @@ func TestLabeledFeaturesRecentDays_ShortHistoryIsNotCeilingBound(t *testing.T) {
 
 	// Seed only 2 days
 	for dayIdx := 0; dayIdx < 2; dayIdx++ {
-		baseTS := int64(dayIdx) * 86400
+		baseTS := epochBase + int64(dayIdx)*86400
 		for i := 0; i < 3; i++ {
 			ts := baseTS + int64(i)*3600
 			mustPredict(t, st, sym.ID, md.H1d, ts, 0.5+float64(i)*0.1, map[string]float64{"pressure_score": 0.4, "pred_raw": 0.7})
@@ -145,7 +154,7 @@ func TestLabeledFeaturesRecentDays_ShortHistoryIsNotCeilingBound(t *testing.T) {
 
 	seenDays := make(map[int64]int)
 	for _, r := range rows {
-		day := r.Ts / 86400
+		day := (r.Ts - epochBase) / 86400
 		seenDays[day]++
 	}
 	if len(seenDays) != 2 {
@@ -162,8 +171,8 @@ func TestLabeledFeaturesRecentDays_RejectsNonPositiveArgs(t *testing.T) {
 	}
 
 	// Seed one valid row so the function has something to query
-	mustPredict(t, st, sym.ID, md.H1d, 86400, 0.5, map[string]float64{"pressure_score": 0.4, "pred_raw": 0.7})
-	if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, 86400, 0.02); err != nil {
+	mustPredict(t, st, sym.ID, md.H1d, epochBase+86400, 0.5, map[string]float64{"pressure_score": 0.4, "pred_raw": 0.7})
+	if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, epochBase+86400, 0.02); err != nil {
 		t.Fatalf("ResolvePrediction: %v", err)
 	}
 
@@ -195,7 +204,7 @@ func TestLabeledFeaturesRecentDays_ExcludesUnresolvedAndOtherHorizons(t *testing
 		t.Fatalf("UpsertSymbol: %v", err)
 	}
 
-	ts := int64(86400) // day 1
+	ts := epochBase + 86400 // day 1
 
 	// Resolved H1d row (should be returned)
 	mustPredict(t, st, sym.ID, md.H1d, ts, 0.6, map[string]float64{"pressure_score": 0.4, "pred_raw": 0.7})
