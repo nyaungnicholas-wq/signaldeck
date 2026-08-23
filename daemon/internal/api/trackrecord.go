@@ -164,6 +164,27 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	distinctDays := len(dayset)
 	gated := indepN < trackMinIndependentN || distinctDays < trackMinDistinctDays
 
+	// COLLAPSED CROSS-SECTIONS. The two floors above count evidence; they cannot
+	// see that the evidence is one market-wide call repeated per symbol. That is
+	// what CollapsedGradingWindow measures, and until now /api/accuracy was its
+	// ONLY caller — so the accuracy surface refused over a window while this one
+	// published over the very same days, and the five surfaces that read THIS
+	// payload (/proof, /lab/track-record, ProofStrip, the desk recommendation
+	// card, and the raw endpoint) showed skill numbers with nothing marking them.
+	// That is the "refused on one document, published on six" divergence this
+	// repo has already been bitten by, one endpoint out.
+	//
+	// FAIL OPEN on a read error, exactly as the HTTP handler does and as the
+	// gate's own doc requires: refusing on a transient database error would wedge
+	// publication shut on something that is not evidence.
+	var collapseReason string
+	if reg, rerr := loadRegistry(d.RegistryPath); rerr == nil {
+		if reason, collapsed, cerr := d.collapsedGradingWindow(ctx, reg, time.Now()); cerr == nil && collapsed {
+			gated = true
+			collapseReason = reason
+		}
+	}
+
 	resp := map[string]any{
 		"horizon":         h,
 		"rawN":            rawN,
@@ -229,6 +250,13 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 		if indepN >= trackMinIndependentN && distinctDays < trackMinDistinctDays {
 			note = "not yet significant — " + strconv.Itoa(distinctDays) + "/" +
 				strconv.Itoa(trackMinDistinctDays) + " distinct market days (obs on one day share one market move)"
+		}
+		// A collapse outranks the sample-size note: the sample is large enough
+		// and is still not evidence, which is a different statement and the one
+		// a reader needs. Same reason string /api/accuracy refuses with, so the
+		// two surfaces cannot describe the same window differently.
+		if collapseReason != "" {
+			note = collapseReason
 		}
 		resp["note"] = note
 		// Sample-size facts only. A gated record may say HOW MUCH evidence it
