@@ -198,8 +198,14 @@ type scanQuery struct {
 type scanResponse struct {
 	TotalCount int `json:"totalCount"`
 	Data       []struct {
-		S string    `json:"s"` // EXCHANGE:SYMBOL
-		D []float64 `json:"d"` // values, in scanColumns order
+		S string `json:"s"` // EXCHANGE:SYMBOL
+		// []*float64, NOT []float64. A null element decodes into a float64 as
+		// ZERO with a nil error, and it still satisfies a len() check, so a
+		// symbol TradingView returned null for was stored as a confident
+		// reading: RSI 0 is maximally oversold and Recommend.All 0 is an
+		// affirmative NEUTRAL. A pointer makes the absence representable, so
+		// the reader can skip it instead of inventing it.
+		D []*float64 `json:"d"` // values, in scanColumns order
 	} `json:"data"`
 }
 
@@ -244,12 +250,27 @@ func (c *Client) ScanRatings(ctx context.Context, screener string, tickers []str
 		if row.S == "" || len(row.D) < len(scanColumns) {
 			continue // malformed / partial row — skip, never fabricate
 		}
+		// A null in ANY requested column skips the row, for the same reason a
+		// short row is skipped: the doc above promises the scanner's absences
+		// are "simply absent, never guessed", and a nil here is exactly such an
+		// absence. Storing it as 0 would publish maximally-oversold RSI and an
+		// affirmative Neutral for a symbol TradingView declined to rate.
+		null := false
+		for i := range scanColumns {
+			if row.D[i] == nil {
+				null = true
+				break
+			}
+		}
+		if null {
+			continue
+		}
 		out[row.S] = Rating{
-			RecoAll:   row.D[0],
-			RecoMA:    row.D[1],
-			RecoOther: row.D[2],
-			RSI:       row.D[3],
-			Close:     row.D[4],
+			RecoAll:   *row.D[0],
+			RecoMA:    *row.D[1],
+			RecoOther: *row.D[2],
+			RSI:       *row.D[3],
+			Close:     *row.D[4],
 		}
 	}
 	return out, nil
@@ -322,7 +343,12 @@ func (c *Client) ScanRatingsByName(ctx context.Context, screener string, names [
 		f := make([]float64, len(scanColumns))
 		ok := true
 		for i := range scanColumns {
-			if json.Unmarshal(row.D[2+i], &f[i]) != nil {
+			// Reject null explicitly. Unmarshalling "null" into a float64
+			// succeeds and leaves 0, and 0 is a legal value on every column
+			// here: RSI 0 is maximally oversold and Recommend.All 0 is an
+			// affirmative NEUTRAL, so a symbol TradingView has no opinion about
+			// was stored as a confident reading rather than skipped.
+			if string(row.D[2+i]) == "null" || json.Unmarshal(row.D[2+i], &f[i]) != nil {
 				ok = false
 				break
 			}
@@ -586,6 +612,17 @@ func (c *Client) ScanDiscovery(ctx context.Context, screener, sortBy, sortOrder 
 func decodeQuote(exchange string, d []json.RawMessage) (Quote, bool) {
 	if len(d) < len(quoteColumns) {
 		return Quote{}, false
+	}
+	// null is NOT a number, and json.Unmarshal will not tell you so: unmarshalling
+	// "null" into a float64 returns nil error and leaves the destination at ZERO.
+	// TradingView sends null for close on a halted or pre-open symbol, so this
+	// stored a $0.00 price and a 0.00% change as MEASURED values. The guard the
+	// rtc field already uses six lines down is the one that was missing here,
+	// exactly where 0 is a legal value and therefore indistinguishable.
+	for i := 0; i < 3; i++ {
+		if string(d[i]) == "null" {
+			return Quote{}, false
+		}
 	}
 	var closePx, change, volume float64
 	if json.Unmarshal(d[0], &closePx) != nil ||

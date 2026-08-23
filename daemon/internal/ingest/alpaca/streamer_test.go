@@ -76,7 +76,7 @@ func TestHandleFrame(t *testing.T) {
 			st := openTestStore(t)
 			s := NewStreamer(New("k", "s"), st, testResolver(map[string]int64{"AAPL": 1, "MSFT": 2}), "")
 
-			err := s.handleFrame(context.Background(), []byte(tt.frame))
+			err := s.handleFrame(context.Background(), []byte(tt.frame), map[string]bool{})
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("want error, got nil")

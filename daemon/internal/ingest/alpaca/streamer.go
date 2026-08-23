@@ -79,16 +79,17 @@ func (s *Streamer) snapshotSymbols() []string {
 // wsEnvelope is the union wire shape of every stream element we care about.
 // Alpaca frames are JSON arrays of these; "T" discriminates.
 type wsEnvelope struct {
-	T    string  `json:"T"`
-	Msg  string  `json:"msg"`
-	Code int     `json:"code"`
-	S    string  `json:"S"` // bar symbol
-	O    float64 `json:"o"`
-	H    float64 `json:"h"`
-	L    float64 `json:"l"`
-	C    float64 `json:"c"`
-	V    float64 `json:"v"`
-	Time string  `json:"t"` // RFC3339 bar open time
+	T    string   `json:"T"`
+	Msg  string   `json:"msg"`
+	Code int      `json:"code"`
+	S    string   `json:"S"` // bar symbol
+	O    float64  `json:"o"`
+	H    float64  `json:"h"`
+	L    float64  `json:"l"`
+	C    float64  `json:"c"`
+	V    float64  `json:"v"`
+	Time string   `json:"t"`    // RFC3339 bar open time
+	Bars []string `json:"bars"` // authoritative subscription list
 }
 
 // subFrame is the subscribe/unsubscribe control message.
@@ -181,7 +182,7 @@ func (s *Streamer) Run(ctx context.Context) error {
 				}
 				return fmt.Errorf("alpaca stream: read: %w", r.err)
 			}
-			if err := s.handleFrame(ctx, r.data); err != nil {
+			if err := s.handleFrame(ctx, r.data, subscribed); err != nil {
 				return err
 			}
 		}
@@ -212,7 +213,7 @@ func isExpectedDisconnect(err error) bool {
 // bar elements become 1m upserts, success/subscription acks are ignored, and
 // stream-level error elements are logged (the server usually follows them by
 // closing, which surfaces as a read error).
-func (s *Streamer) handleFrame(ctx context.Context, data []byte) error {
+func (s *Streamer) handleFrame(ctx context.Context, data []byte, subscribed map[string]bool) error {
 	var msgs []wsEnvelope
 	if err := json.Unmarshal(data, &msgs); err != nil {
 		return fmt.Errorf("alpaca stream: decode frame: %w", err)
@@ -237,15 +238,38 @@ func (s *Streamer) handleFrame(ctx context.Context, data []byte) error {
 			}
 		case "error":
 			log.Printf("alpaca stream: server error code=%d msg=%q", m.Code, m.Msg)
+		case "subscription":
+			serverSet := make(map[string]bool, len(m.Bars))
+			for _, sym := range m.Bars {
+				serverSet[sym] = true
+			}
+			var missing []string
+			for sym := range subscribed {
+				if !serverSet[sym] {
+					missing = append(missing, sym)
+				}
+			}
+			if len(missing) > 0 {
+				sort.Strings(missing)
+				log.Printf("alpaca stream: server did not confirm %d subscription(s): %v", len(missing), missing)
+			}
+			for sym := range subscribed {
+				delete(subscribed, sym)
+			}
+			for sym := range serverSet {
+				subscribed[sym] = true
+			}
 		default:
-			// "success", "subscription", and anything future — not bar data.
+			// "success" and anything future — not bar data.
 		}
 	}
 	return nil
 }
 
 // resync brings the server-side subscription in line with the desired set.
-// subscribed is mutated to reflect what was actually acknowledged-by-send.
+// subscribed is mutated to reflect what was REQUESTED; the authoritative
+// subscription ack from the server is what makes it true, so a refused symbol
+// reappears in the next diff instead of being believed forever.
 func (s *Streamer) resync(ctx context.Context, conn *websocket.Conn, subscribed map[string]bool) error {
 	want := map[string]bool{}
 	for _, sym := range s.snapshotSymbols() {
