@@ -78,6 +78,32 @@ backup_rc=$?
 # unavailable or fails, the 5-minute keepalive still recovers it — this only
 # shortens the gap from minutes to seconds.
 release_lock
+
+# RUN THE PROVENANCE PREFLIGHT ON THIS PATH TOO.
+#
+# The stale-binary check lives in ops/daemon-guard.ps1, which only the 5-minute
+# Keepalive reaches. Every other way the daemon starts skips it: the AtLogOn
+# trigger, RestartOnFailure, sd_svc_start, and this line. Evidence it is not
+# theoretical -- "SignalDeck Daemon" last ran 2026-08-21 21:01 while the last
+# entry in logs/daemon-provenance.log was 2026-08-20 14:20, and every logged
+# entry ends in :03 seconds, the Keepalive's tick offset.
+#
+# This does NOT redirect the restart through the guard. Kicking the Keepalive
+# instead would be the fuller fix, but this exact line exists BECAUSE the 13:10
+# backup once took SignalDeck down for the rest of the day, every weekday, and
+# MultipleInstances=IgnoreNew means a kick can be swallowed. Trading a verified
+# seconds-long gap for an unverified one is not a repair.
+#
+# So: observe rather than reroute. -CheckOnly writes logs/daemon-provenance.log
+# and cannot start, stop or modify anything, and its output is captured here
+# instead of the console S4U does not have. Never fatal -- a stale binary is a
+# thing to KNOW at market close, not a reason to leave the daemon down.
+if [ -x "$(command -v powershell)" ] || command -v powershell >/dev/null 2>&1; then
+  powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$SD/ops/run-daemon-with-provenance.ps1" 2>/dev/null || echo "$SD/ops/run-daemon-with-provenance.ps1")" -CheckOnly \
+    >> "$SD/logs/daemon-provenance.log" 2>&1 \
+    || echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: provenance preflight reported a problem (non-fatal; see logs/daemon-provenance.log)" >> "$SD/logs/backup-offline.log"
+fi
+
 schtasks //Run //TN "SignalDeck Daemon" >/dev/null 2>&1
 daemon_rc=$?
 

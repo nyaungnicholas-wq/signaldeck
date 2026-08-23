@@ -335,7 +335,14 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	// predicting the observed up-rate.
 	base := upRate
 	brierRef := base * (1 - base) // Brier of the constant base-rate forecast
-	var brierSkill float64
+	// null, never 0. api/predict.go states the rule verbatim for the SAME
+	// statistic: "a zero skill score is a real verdict (exactly as good as
+	// the base rate) and must not be faked". brierRef <= 0 means the
+	// base-rate reference has zero variance -- every outcome resolved the
+	// same way -- so the skill is UNDEFINED, and shipping 0.0 published the
+	// most reassuring possible reading of a number nobody could compute.
+	// Two endpoints, one statistic, opposite behaviour.
+	var brierSkill any
 	if brierRef > 0 {
 		brierSkill = 1 - brier/brierRef
 	}
