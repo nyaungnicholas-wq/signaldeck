@@ -1215,6 +1215,12 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	return detail, nil
 }
 
+// dstStampSlackSecs absorbs the ET-midnight stamp jitter across a DST
+// transition. See the DST SLACK note in PredictionResolver.Run; the same
+// value is applied by store/gradeablepop.go and tools/accuracy_registry.py,
+// which must agree with this or the three grade different bars.
+const dstStampSlackSecs = int64(6 * 3600)
+
 // PredictionResolver grades past predictions (feeds the calibration curve).
 type PredictionResolver struct {
 	St *store.Store
@@ -1244,7 +1250,20 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 				if !okB {
 					continue
 				}
-				target := base.Ts + horizonSecs(h)
+				// DST SLACK. US daily bars are stamped at ET midnight, so ts%86400 is
+				// 14400 under EDT and 18000 under EST. Adding a fixed 604800 to an
+				// EST-stamped base lands ONE HOUR PAST the EDT-stamped bar seven
+				// days later, so BarAtOrAfter skips it and returns the NEXT
+				// session: verified on 2026-03-06, where target 2026-03-13T05:00Z
+				// misses that day's 04:00Z bar and grades Monday 03-16 instead --
+				// an 8-session return published as "1w". Every base bar in
+				// 2026-03-02..03-06 is affected, across the whole universe.
+				//
+				// 6h of slack absorbs the stamp jitter and cannot reach back into
+				// the prior session: the slackened target sits ~18h after the
+				// previous bar, so MIN(ts >= target) is unchanged in every
+				// non-DST case. The autumn transition was already safe.
+				target := base.Ts + horizonSecs(h) - dstStampSlackSecs
 				if now < target {
 					continue
 				}

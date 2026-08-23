@@ -1490,8 +1490,25 @@ SETTLEMENT_CLOSE_SECS = {"stocks": 16 * 3600, "crypto": 24 * 3600}
 _HORIZON_SECS = "(CASE WHEN po.horizon LIKE '1w%' THEN 604800 ELSE 86400 END)"
 _BASE_TS = ("(SELECT MAX(b.ts) FROM bars b WHERE b.symbol_id = po.symbol_id"
             " AND b.tf = '1d' AND b.ts <= po.ts)")
+# DST SLACK, mirroring pipeline.dstStampSlackSecs and gradeablepop's
+# dstStampSlackSQL. US daily bars are stamped at ET midnight -- ts%86400 is 14400
+# under EDT and 18000 under EST -- so adding a fixed 604800 to an EST-stamped
+# base lands ONE HOUR PAST the EDT-stamped bar seven days later, and MIN(f.ts >=
+# target) skips it for the NEXT session. Verified on 2026-03-06: target
+# 2026-03-13T05:00Z misses that day's 04:00Z bar and grades Monday 03-16, so an
+# 8-session move published as "1w". Every base bar in 2026-03-02..03-06 is
+# affected, across the whole universe, once a year.
+#
+# 6h absorbs the jitter and cannot reach the prior session: the slackened target
+# sits ~18h after the previous bar, so the answer is unchanged in every non-DST
+# case. The autumn transition was already safe (an EDT base + 7d lands BEFORE
+# the EST-stamped bar, which is then found).
+#
+# All three implementations carry this or they grade different bars.
+_DST_STAMP_SLACK_SECS = 6 * 3600
 _FWD_TS = ("(SELECT MIN(f.ts) FROM bars f WHERE f.symbol_id = po.symbol_id"
-           " AND f.tf = '1d' AND f.ts >= " + _BASE_TS + " + " + _HORIZON_SECS + ")")
+           " AND f.tf = '1d' AND f.ts >= " + _BASE_TS + " + " + _HORIZON_SECS +
+           " - " + str(_DST_STAMP_SLACK_SECS) + ")")
 _CLOSE_OFFSET = (
     "(CASE WHEN (SELECT sy.market FROM symbols sy WHERE sy.id = po.symbol_id) = 'crypto'"
     f" THEN {SETTLEMENT_CLOSE_SECS['crypto']} ELSE {SETTLEMENT_CLOSE_SECS['stocks']} END)")

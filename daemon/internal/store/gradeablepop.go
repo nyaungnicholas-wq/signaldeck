@@ -79,8 +79,14 @@ const (
 	horizonSecsSQL = "(CASE WHEN po.horizon LIKE '1w%' THEN 604800 ELSE 86400 END)"
 	baseTsSQL      = "(SELECT MAX(b.ts) FROM bars b WHERE b.symbol_id = po.symbol_id" +
 		" AND b.tf = '1d' AND b.ts <= po.ts)"
-	fwdTsSQL = "(SELECT MIN(f.ts) FROM bars f WHERE f.symbol_id = po.symbol_id" +
-		" AND f.tf = '1d' AND f.ts >= " + baseTsSQL + " + " + horizonSecsSQL + ")"
+	// dstStampSlackSQL mirrors pipeline.dstStampSlackSecs. US daily bars are
+	// stamped at ET midnight, so a fixed +604800 on an EST-stamped base lands an
+	// hour PAST the EDT-stamped bar seven days later and this SELECT skips it,
+	// grading an 8-session move as "1w". 6h cannot reach the prior session.
+	dstStampSlackSQL = "21600"
+	fwdTsSQL         = "(SELECT MIN(f.ts) FROM bars f WHERE f.symbol_id = po.symbol_id" +
+		" AND f.tf = '1d' AND f.ts >= " + baseTsSQL + " + " + horizonSecsSQL +
+		" - " + dstStampSlackSQL + ")"
 )
 
 // closeOffsetSQL branches on the instrument class, like _CLOSE_OFFSET.
