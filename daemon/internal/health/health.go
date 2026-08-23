@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -221,6 +222,14 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("query worker_runs: %w", err)
 	}
 	stale := StaleWorkers(w.Specs, lastOK, w.started, now)
+	// The number this pass actually EXAMINED. StaleWorkers skips every
+	// Interval<=0 spec (the stream ingestors), so len(w.Specs) overstates it.
+	checked := 0
+	for _, s := range w.Specs {
+		if s.Interval > 0 {
+			checked++
+		}
+	}
 
 	// A failing worker is unhealthy even when it is perfectly punctual. An error
 	// reading the streaks must not read as "nothing is failing", so it degrades
@@ -247,6 +256,7 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 	// rejected knob page an operator would be the red-by-construction mistake.
 	rejected := envcfg.Rejected()
 	ok := len(stale) == 0 && len(failing) == 0 && !envcfg.HasCritical()
+	var writeErr error
 
 	if err := w.writeStatus(Status{
 		OK:             ok,
@@ -255,6 +265,14 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		RejectedEnv:    rejected,
 		Ts:             now.Unix(),
 	}); err != nil {
+		// health.json is the artifact this worker EXISTS to produce, for
+		// launchd/cron and the dashboards. Warning and continuing meant that on
+		// a full disk or a read-only data dir the file froze at its last content
+		// -- possibly ok:true from days ago, since Ts lives inside the frozen
+		// blob -- while the watchdog filed status=ok every 10 minutes and
+		// nothing anywhere checks the file's freshness. Degrade instead: the
+		// run completed without delivering the one thing it delivers.
+		writeErr = err
 		slog.Warn("watchdog: write health.json", "err", err)
 	}
 
@@ -317,8 +335,17 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 	}
 	w.wasOK = ok
 
+	if writeErr != nil {
+		return fmt.Sprintf("could not write health.json (%v) — the fleet verdict was computed but not published", writeErr),
+			fmt.Errorf("write health.json: %w: %w", writeErr, workers.ErrDegraded)
+	}
 	if ok {
-		return fmt.Sprintf("healthy: %d workers checked", len(w.Specs)), nil
+		// COUNTS WHAT IT CHECKED, not what is registered. len(w.Specs) included
+		// workers this pass never examined: StaleWorkers skips every Interval<=0
+		// stream ingestor, and FailingWorkers iterates worker_runs rows, so a
+		// registered worker with no rows is invisible to both. apiprobe.go
+		// documents the same miscount independently.
+		return fmt.Sprintf("healthy: %d of %d workers checked", checked, len(w.Specs)), nil
 	}
 	if len(recovered) > 0 {
 		return fmt.Sprintf("UNHEALTHY: %s (cancelled overdue runs: %v)", unhealthyMsg(stale, failing), recovered), nil

@@ -550,11 +550,32 @@ func maxInt(a, b int) int {
 // envFrac reads a fraction in (0,1] from env, falling back on anything else. A
 // limit outside that range is a typo (a percent typed as 20 instead of 0.20),
 // and honoring it would silently disable the check it configures.
+// A rejection is REPORTED, not swallowed. This was the one env helper in the
+// tree that did not call envcfg.Reject -- envInt directly below it does, and so
+// do ev.envFloat, confluence.minAgree, pipeline.envInt, papertrade.envFloat,
+// universe.cap, discovery.symbolCap and maintain.envIntOr. envFrac governs eight
+// limits: max drawdown, max daily loss, position weight, sector weight, Kelly
+// fraction, min ticket, max correlation-to-book and gross exposure.
+//
+// So an operator setting SIGNALDECK_RISK_MAX_DAILY_LOSS=10, meaning 10 percent,
+// had it silently rejected and ran the 0.05 default -- HALF the intended limit
+// -- while /api/health's rejectedEnv, the one place to ask "did any override get
+// refused", stayed empty. The comment above already names that exact typo; it
+// just did not tell anyone when it caught one.
 func envFrac(key string, def float64) float64 {
-	if v := os.Getenv(key); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1 {
-			return f
-		}
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	switch {
+	case err != nil:
+		envcfg.Reject(key, v, "not a number", strconv.FormatFloat(def, 'g', -1, 64))
+	case f <= 0 || f > 1:
+		envcfg.Reject(key, v, "must be a fraction in (0,1] — a percent typed as 20 instead of 0.20 "+
+			"would disable the limit it configures", strconv.FormatFloat(def, 'g', -1, 64))
+	default:
+		return f
 	}
 	return def
 }

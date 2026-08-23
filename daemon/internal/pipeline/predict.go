@@ -608,12 +608,25 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// of the risk the one-pass record existed to avoid (a gate judging the
 		// sweep it is producing), while measuring the whole cross-section
 		// instead of a sample of it.
+		// A STORE ERROR IS NOT A CLEAN CROSS-SECTION. `continue` here means "do
+		// not gate", i.e. publish, and both reads used to fold their error into a
+		// benign data shape -- so a contended pool on a day whose cross-section
+		// HAD collapsed published the whole day ungated, with no log and no dq
+		// event. The justifying comment below only ever covered the benign half.
 		rec, err := loadCrossSection(ctx, w.St, h)
-		if err != nil || rec == nil || rec.Day == "" || rec.Day >= today {
+		if err != nil {
+			w.gateReadFailed(ctx, h, "prior cross-section unreadable", err)
+			continue
+		}
+		if rec == nil || rec.Day == "" || rec.Day >= today {
 			continue
 		}
 		probs, perr := w.St.PublishedCrossSection(ctx, string(h), rec.Day)
-		if perr != nil || len(probs) == 0 {
+		if perr != nil {
+			w.gateReadFailed(ctx, h, "published cross-section unreadable for "+rec.Day, perr)
+			continue
+		}
+		if len(probs) == 0 {
 			// Nothing published that day is not evidence of a collapse; a cold
 			// start must not be indistinguishable from one.
 			continue
@@ -1451,4 +1464,25 @@ func macroPanelFeatures(ctx context.Context, st *store.Store) map[string]float64
 		return nil
 	}
 	return macrofeat.FromSeries(hist)
+}
+
+// gateReadFailed records that the cross-section collapse gate could not read its
+// own evidence for one horizon.
+//
+// The gate's decision on a failed read is to PUBLISH -- refusing on a transient
+// database error would wedge the predictor shut on something that is not
+// evidence, which is the same fail-open contract CollapsedGradingWindow states.
+// That is defensible only if the failure is VISIBLE: an unreadable prior day is
+// then an unexamined day rather than a clean one, and nothing downstream can
+// tell the difference unless this says so. A dq event makes it countable, and
+// the sibling best-effort path thirty lines below already logs its ambiguity.
+func (w *PredictionRunner) gateReadFailed(ctx context.Context, h md.Horizon, what string, err error) {
+	slog.Warn("cross-section gate: evidence unreadable, horizon published UNGATED",
+		"horizon", string(h), "what", what, "err", err)
+	_ = w.St.InsertDQ(ctx, md.DQEvent{
+		Ts:   time.Now().Unix(),
+		Kind: "crosssection_gate_unread",
+		Detail: "horizon " + string(h) + " published without the collapse gate: " + what +
+			": " + err.Error(),
+	})
 }

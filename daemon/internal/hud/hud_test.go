@@ -61,17 +61,25 @@ func TestUnreachableHudIsDegradedThenBacksOff(t *testing.T) {
 		t.Fatalf("misses = %d after one failure, want 1", s.misses)
 	}
 
-	// Immediately inside the backoff window: no re-dial, no error, no log line.
+	// Immediately inside the backoff window: no re-dial and no log line -- but
+	// still DEGRADED, not ok.
+	//
+	// This asserted err == nil, i.e. a skip filed as status="ok". lastSuccess is
+	// `WHERE status='ok'`, so every skipped poll refreshed it and staleness could
+	// never fire: a HUD dead for a month read green in both surfaces, with the
+	// truth only in a detail string nothing aggregates. "Quiet" has to mean no
+	// re-dial and no log spam -- both still asserted below -- and cannot mean
+	// recording a run that delivered nothing as a success.
 	before := s.misses
 	detail, err := s.Run(ctx)
-	if err != nil {
-		t.Fatalf("poll inside the backoff window returned %v; it must be a quiet skip", err)
+	if !errors.Is(err, workers.ErrDegraded) {
+		t.Fatalf("poll inside the backoff window returned %v; a skip must still be degraded", err)
 	}
 	if s.misses != before {
 		t.Fatalf("misses moved from %d to %d during a skipped poll — it re-dialled", before, s.misses)
 	}
-	if !strings.Contains(detail, "down") {
-		t.Errorf("skip detail %q does not say the HUD is down", detail)
+	if !strings.Contains(err.Error(), "down") {
+		t.Errorf("skip status %q does not say the HUD is down (detail %q)", err, detail)
 	}
 }
 

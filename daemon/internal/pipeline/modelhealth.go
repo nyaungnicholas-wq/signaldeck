@@ -97,7 +97,16 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		since := time.Now().AddDate(0, 0, -recentWindowDays).Unix()
 		recent, err := w.St.DirectionalRecord(ctx, h, since)
 		if err != nil {
-			recent = store.DirectionalRecordRow{}
+			// Same accessor, same doctrine as twenty lines up: COUNT THE
+			// OUTCOME, NOT THE INTENT. An empty row means RecentN==0, which
+			// makes Grade score drift a neutral 0.5 with no reason string --
+			// so a model whose recent accuracy had decayed to 0.42 against a
+			// 0.52 record would have scored drift 0.0 and fired "recent
+			// accuracy has decayed materially", and this swallow hid exactly
+			// that and could keep the verdict at healthy/emitting.
+			failed++
+			slog.Warn("model-health: recent directional record unreadable", "horizon", h, "err", err)
+			continue
 		}
 
 		// HEAD-TO-HEAD vs the tracked prequential-majority benchmark — the
@@ -110,7 +119,12 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		// finding, now visible in the daemon's own health output every pass.
 		bench, berr := w.St.DirectionalRecord(ctx, benchmarkHorizon(h), 0)
 		if berr != nil {
-			bench = store.DirectionalRecordRow{}
+			// An empty bench leaves skillVsBenchmark nil, which publishes as
+			// "no benchmark comparison available" -- a statement about the
+			// DATA when the truth is a failed read.
+			failed++
+			slog.Warn("model-health: benchmark record unreadable", "horizon", h, "err", berr)
+			continue
 		}
 		var aligned store.DirectionalRecordRow
 		if bench.N > 0 {
@@ -282,7 +296,16 @@ func (w *ModelHealthWorker) gradeStructural(ctx context.Context) (graded, retire
 	}
 	// High-conviction slice: the tier a user would actually act on, and the one
 	// carrying the biggest claim (97%+ for trend21).
-	hi, _ := w.St.StructuralRecords(ctx, structuralHighConviction)
+	// The line above reports an unreadable FULL record as a failure so the caller
+	// degrades. This one discarded the error, and an empty hiByKind makes every
+	// structural blob publish "highConviction": {"n":0,"accuracy":0,"claimed":0}
+	// -- the 97%-conviction tier, the one a user acts on, rendered as having no
+	// record at all when the truth is that the query failed.
+	hi, hierr := w.St.StructuralRecords(ctx, structuralHighConviction)
+	if hierr != nil {
+		slog.Warn("model-health: high-conviction structural records unreadable", "err", hierr)
+		return 0, 0, 1
+	}
 	hiByKind := map[string]store.StructuralRecordRow{}
 	for _, r := range hi {
 		hiByKind[r.Kind] = r
