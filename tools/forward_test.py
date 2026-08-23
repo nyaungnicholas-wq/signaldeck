@@ -72,6 +72,7 @@ WITH ep AS (
 )
 SELECT date(o.ts,'unixepoch') d, COUNT(*) n, AVG(o.direction*o.fwd_return)*100 book_pct
   FROM ep JOIN confluence_outcomes o ON o.symbol_id=ep.symbol_id AND o.ts=ep.t
+  JOIN symbols sy ON sy.id = o.symbol_id AND sy.market = 'stocks'
  WHERE o.direction=1 AND o.entry_px >= 20 AND date(o.ts,'unixepoch') > ?
  GROUP BY d
 """
@@ -79,13 +80,23 @@ SELECT date(o.ts,'unixepoch') d, COUNT(*) n, AVG(o.direction*o.fwd_return)*100 b
 # The book must beat holding its own universe, not zero. Same session, same
 # price floor, equal weighted.
 BENCH_SQL = """
-WITH b AS (
-  SELECT symbol_id, date(ts,'unixepoch') d, close,
-         LEAD(close) OVER (PARTITION BY symbol_id ORDER BY ts) nxt
-    FROM bars WHERE tf='1d'
+WITH stale_feed AS (
+  SELECT DISTINCT symbol_id, (ts - 18000)/86400 AS sd
+    FROM dq_events WHERE kind = 'stale' AND symbol_id IS NOT NULL
+),
+b AS (
+  SELECT b.symbol_id, b.ts, date(b.ts,'unixepoch') d, b.close,
+         LEAD(b.close) OVER (PARTITION BY b.symbol_id ORDER BY b.ts) nxt
+    FROM bars b
+    JOIN symbols sy ON sy.id = b.symbol_id AND sy.market = 'stocks'
+   WHERE b.tf='1d'
 )
 SELECT d, AVG(nxt/close-1)*100 bench_pct, COUNT(*) n_names
-  FROM b WHERE close >= 20 AND nxt IS NOT NULL AND d > ?
+  FROM b
+ WHERE close >= 20 AND nxt IS NOT NULL AND d > ?
+   AND ABS(nxt/close - 1) <= 0.30
+   AND NOT EXISTS (SELECT 1 FROM stale_feed f
+                    WHERE f.symbol_id = b.symbol_id AND f.sd = (b.ts - 18000)/86400)
  GROUP BY d
 """
 
@@ -306,6 +317,14 @@ def demo():
         symbol_id INT, ts INT, direction INT, entry_px REAL,
         fwd_return REAL, episode_ts INT, ungradable TEXT)""")
     conn.execute("CREATE TABLE bars(symbol_id INT, tf TEXT, ts INT, close REAL)")
+    # The population is restricted to market='stocks' and excludes symbols the
+    # feed auditor flagged stale that day, so both tables must exist and every id
+    # the fixture touches must be present -- a missing symbols row would silently
+    # drop rows from both legs and fail the assertions for the wrong reason.
+    conn.execute("CREATE TABLE symbols(id INT PRIMARY KEY, market TEXT)")
+    conn.execute("CREATE TABLE dq_events(kind TEXT, symbol_id INT, ts INT)")
+    for i in list(range(MIN_BENCHMARK_NAMES + 40)) + [900, 901, 902]:
+        conn.execute("INSERT INTO symbols VALUES(?,'stocks')", (i,))
 
     # 2026-08-25, i.e. INSIDE the registered window. The fixture dates are not
     # arbitrary: verdict() filters on REGISTERED_START, so a fixture built before

@@ -44,16 +44,16 @@ func main() {
 		kind   = flag.String("kind", GradabilityKind,
 			"which record to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
 				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+", "+
-				ForwardTestKind+" or "+BenchFloorKind)
+				ForwardTestKind+", "+BenchFloorKind+" or "+PopFiltersKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
 		*kind != ProvenanceKind && *kind != DataIntegrityKind &&
 		*kind != DuplicateKind && *kind != ForwardTestKind &&
-		*kind != BenchFloorKind {
+		*kind != BenchFloorKind && *kind != PopFiltersKind {
 		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
-			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind)
+			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind, PopFiltersKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -130,6 +130,26 @@ func main() {
 				"the existing rows in their own record.", m.ObservedRows)
 		}
 		spec, note = forwardTestSpec(m), forwardTestNote
+
+	case PopFiltersKind:
+		m, err := measurePopFilters(ctx, db)
+		if err != nil {
+			die("measure population-filter state: %v", err)
+		}
+		// Names a registration that must exist.
+		if m.RegistrationSeq == 0 {
+			die("REFUSING to file: no %s record is on the chain. This amendment "+
+				"names a registration that does not exist.", ForwardTestKind)
+		}
+		// The whole defence is that it predates its own evidence. A population
+		// change filed once sessions have graded is a SELECTION rule, and an
+		// append-only log cannot tell the two apart afterwards.
+		if m.ObservedRows != 0 {
+			die("REFUSING to file: %d forward session(s) have already been graded. "+
+				"Narrowing the population after evidence accrues is a selection rule, "+
+				"not an amendment.", m.ObservedRows)
+		}
+		spec, note = popFiltersSpec(m), popFiltersNote
 
 	case BenchFloorKind:
 		m, err := measureBenchFloor(ctx, db)
