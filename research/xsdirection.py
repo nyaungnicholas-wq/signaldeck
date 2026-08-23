@@ -14,12 +14,42 @@ day for confidence intervals.
 import argparse
 import json
 import math
+import re
 import sqlite3
 import sys
 from collections import defaultdict
 
 import numpy as np
 
+
+# EXCLUDE FUNDS. `market='stocks'` does NOT exclude ETFs in this database.
+# Confirmed present and passing that filter: SPY, QQQ, TQQQ, SQQQ, TLT, LQD, XLY,
+# ZSL, and the leveraged inverse products SOXS (-3x), TSLZ (-2x) and MSTZ (-2x).
+#
+# research/dirfix measured this on the SAME database on 2026-08-15: funds were
+# 52.7% of long picks and 51.2% of short picks, "roughly half the apparent edge",
+# and beta flipped +0.47 -> -0.65 once removed. The filter was written there and
+# never back-applied here, and neither result document carries the caveat.
+#
+# It matters more than generic contamination for THIS model: leveraged-inverse
+# decay is a deterministic function of realized volatility, and vol21 is one of
+# the six features -- so the model can learn "high recent vol + leveraged product
+# -> decays", which is mechanically forecastable and not tradeable at 20-100%/yr
+# borrow against the 10bp/side charged here.
+#
+# Pattern copied verbatim from research/dirfix/extract.py, including its own
+# warning: it deliberately does NOT match "Trust", "Shares" or "Depositary",
+# which would catch ADRs, foreign issuers and REITs -- real companies.
+# Word boundaries on the ambiguous tokens. dirfix's pattern matches Bear/Bull/
+# Ultra as bare substrings, which drops REAL operating companies: BBAI is
+# "BigBear.ai Holdings, Inc." and was being excluded as a leveraged fund.
+# Dropping real companies biases the universe in the opposite direction to the
+# contamination this filter exists to remove, so it is tightened here.
+# "UltraShort"/"UltraPro" keep their own un-bounded alternatives, so genuine
+# ProShares names still match.
+FUND_PAT = (r"ETF|ETN|Fund|ProShares|Direxion|iShares|SPDR|Invesco|Vanguard|"
+            r"UltraShort|UltraPro|Ultra|Bear|Bull|[23]X|"
+            r"Leveraged|Select Sector|Daily Target|Index Trust")
 
 def eprint(*a, **k):
     print(*a, file=sys.stderr, flush=True, **k)
@@ -35,10 +65,19 @@ def load_symbols(db_path):
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, symbol FROM symbols WHERE market='stocks' ORDER BY id"
+        "SELECT id, symbol, COALESCE(name,'') AS name FROM symbols "
+        "WHERE market='stocks' ORDER BY id"
     ).fetchall()
     conn.close()
-    return [(r["id"], r["symbol"]) for r in rows]
+    keep, dropped = [], 0
+    for r in rows:
+        if re.search(FUND_PAT, r["name"], re.IGNORECASE):
+            dropped += 1
+            continue
+        keep.append((r["id"], r["symbol"]))
+    print("fund filter: %d -> %d symbols (%d fund/leveraged dropped)"
+          % (len(rows), len(keep), dropped))
+    return keep
 
 
 def load_bars_for_symbol(conn, symbol_id):
