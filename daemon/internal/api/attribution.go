@@ -16,6 +16,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -174,7 +175,21 @@ func (d Deps) attribution(w http.ResponseWriter, r *http.Request) {
 	// N-weighted symbol-level base rate is the weaker fallback prior.
 	var prior attribution.Evidence
 	matchedState := false
-	expRows, _ := d.St.Expectancy(ctx, s.ID, h)
+	// The only bare `_` in this file, and it manufactures a MEASUREMENT: an
+	// empty expRows produces the withhold reason "no historical analogs and 0
+	// live resolutions - this is absence of evidence, not a measured band",
+	// which is a statement about the record. A failed read is not that.
+	expRows, expErr := d.St.Expectancy(ctx, s.ID, h)
+	if expErr != nil {
+		// Logged rather than threaded into the withhold reason, which is built
+		// in a different function from `prior` alone. The reason string still
+		// cannot distinguish a failed read from a genuinely empty prior -- that
+		// needs a signature change and is recorded, not smuggled in here -- but
+		// the failure is at least observable now instead of silently becoming a
+		// measurement.
+		slog.Warn("attribution: expectancy prior unreadable, band will withhold as if there were no analogs",
+			"symbol", s.Symbol, "horizon", string(h), "err", expErr)
+	}
 	currentState := d.currentStateFor(ctx, s.ID)[h]
 	for _, e := range expRows {
 		if currentState != "" && e.StateKey == currentState {

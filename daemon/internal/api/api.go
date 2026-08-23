@@ -449,7 +449,15 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	// surfaced here so the absence is not mistaken for a healthy quiet fleet.
 	refusals := map[string][]string{}
 	if raw, err := d.St.GetMeta(r.Context(), store.SchemaContractMetaKey); err == nil && raw != "" {
-		_ = json.Unmarshal([]byte(raw), &refusals)
+		// A CORRUPT BLOB IS NOT AN EMPTY ONE. Discarding this error made
+		// /api/health report schemaContract:{} -- "no worker was refused at
+		// boot" -- from a value nobody could parse, and the whole point of the
+		// field is that a boot refusal must not be mistaken for a quiet fleet.
+		if uerr := json.Unmarshal([]byte(raw), &refusals); uerr != nil {
+			refusals = map[string][]string{
+				"(unreadable)": {"schema-contract record could not be parsed: " + uerr.Error()},
+			}
+		}
 	}
 	// Worker fleet. Without this, health was a liveness probe wearing a health
 	// probe's name: it answered 200 with {"alpaca":true,...} while crypto-live
@@ -622,7 +630,13 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		reasons = append(reasons, "store unreachable: "+err.Error())
 	} else if raw != "" {
-		_ = json.Unmarshal([]byte(raw), &refusals)
+		// Same rule as /api/health above, and it matters more here: /api/ready
+		// answers a DEPLOY SCRIPT. A corrupt record silently became "nothing was
+		// refused", so ready:true shipped while boot-refused workers went unnamed
+		// and the deploy proceeded.
+		if uerr := json.Unmarshal([]byte(raw), &refusals); uerr != nil {
+			reasons = append(reasons, "schema-contract record unreadable: "+uerr.Error())
+		}
 	}
 
 	// Workers refused at boot never ran and never will this process lifetime.

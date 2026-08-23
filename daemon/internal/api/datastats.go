@@ -24,8 +24,14 @@ func (d Deps) datastats(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
+	// ArchiveBytes is the PROOF that pruned data was archived rather than lost.
+	// A discarded DirSize error left it 0, which /quality renders as
+	// "cold archive: 0 B" -- i.e. the evidence of a catastrophe, produced by a
+	// failed directory walk. Nil means unknown; 0 means measured and empty.
 	if bytes, err := archive.DirSize(archive.Dir(d.Cfg.DBPath)); err == nil {
 		stats.ArchiveBytes = bytes
+	} else {
+		stats.ArchiveBytesUnknown = true
 	}
 	stats.Retention = &store.RetentionWindows{
 		SnapshotsHours: maintain.RetentionSnapsHours(),

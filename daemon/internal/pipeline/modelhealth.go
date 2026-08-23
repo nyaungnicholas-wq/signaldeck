@@ -542,16 +542,28 @@ func registryFlagsFrom(path string) (map[string]regFlag, error) {
 // models default to TRUE: this gate exists to switch off what the record
 // condemns, not to silence anything it has not yet judged.
 func ModelEmitting(ctx context.Context, st *store.Store, model string) (bool, string) {
+	// UNKNOWN AND UNREADABLE ARE DIFFERENT. The default of TRUE is right for a
+	// model this gate has NEVER JUDGED -- it exists to switch off what the
+	// record condemns, not to silence what it has not assessed -- and the
+	// existing comment says exactly that. It conflated that with a failed read
+	// and a corrupt blob, so a RETIRED model resumed publishing on any store
+	// hiccup, and the empty verdict it returned was indistinguishable from
+	// "never judged".
+	//
+	// raw == "" is still a genuine never-judged and still defaults true.
 	raw, err := st.GetMeta(ctx, MetaKeyPrefix+model)
-	if err != nil || raw == "" {
+	if err != nil {
+		return false, "model-health record unreadable — withholding rather than assuming this model was cleared: " + err.Error()
+	}
+	if raw == "" {
 		return true, ""
 	}
 	var v struct {
 		Emitting bool   `json:"emitting"`
 		Verdict  string `json:"verdict"`
 	}
-	if json.Unmarshal([]byte(raw), &v) != nil {
-		return true, ""
+	if uerr := json.Unmarshal([]byte(raw), &v); uerr != nil {
+		return false, "model-health record could not be parsed — withholding rather than assuming this model was cleared: " + uerr.Error()
 	}
 	return v.Emitting, v.Verdict
 }

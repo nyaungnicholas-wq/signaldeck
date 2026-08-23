@@ -280,6 +280,10 @@ func (d Deps) portfolioGet(w http.ResponseWriter, r *http.Request) {
 		LastPrice float64 `json:"lastPrice"`
 		PnLAbs    float64 `json:"pnlAbs"`
 		PnLPct    float64 `json:"pnlPct"`
+		// Unpriced marks a position marked at its ENTRY because no close could
+		// be read. Its pnlAbs/pnlPct are therefore 0 by construction, not by
+		// measurement, and a reader must be able to tell the two apart.
+		Unpriced bool `json:"unpriced,omitempty"`
 	}
 	var rows []row
 	var pfPositions []portfolio.Position
@@ -287,17 +291,26 @@ func (d Deps) portfolioGet(w http.ResponseWriter, r *http.Request) {
 		// Closed positions realize at their exit; open ones mark to the
 		// latest close.
 		lp := p.EntryPrice
+		// UNPRICEABLE IS NOT FLAT. Falling back to EntryPrice makes PositionPnL
+		// return exactly 0/0, and no field distinguished that from a position
+		// that genuinely has not moved -- so an unpriceable holding rendered as
+		// break-even AND diluted the book's TotalPnLPct toward zero. It is
+		// marked instead, so the surface can say "cannot price" rather than
+		// assert a P&L nobody computed.
+		priced := true
 		if p.ExitPrice != nil {
 			lp = *p.ExitPrice
 		} else if c, err := d.lastClose(r, p.SymbolID); err == nil && c > 0 {
 			lp = c
+		} else {
+			priced = false
 		}
 		last[p.Symbol] = lp
 		pnlAbs, pnlPct := portfolio.PositionPnL(portfolio.Position{
 			Symbol: p.Symbol, Qty: p.Qty, EntryPrice: p.EntryPrice,
 			EntryTs: p.EntryTs, Note: p.Note, ScoreAtEntry: p.ScoreAtEntry,
 		}, lp)
-		rows = append(rows, row{Position: p, LastPrice: lp, PnLAbs: pnlAbs, PnLPct: pnlPct})
+		rows = append(rows, row{Position: p, LastPrice: lp, PnLAbs: pnlAbs, PnLPct: pnlPct, Unpriced: !priced})
 		if p.Open {
 			pfPositions = append(pfPositions, portfolio.Position{
 				Symbol: p.Symbol, Qty: p.Qty, EntryPrice: p.EntryPrice,

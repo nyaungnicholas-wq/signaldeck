@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"sync/atomic"
@@ -134,7 +135,17 @@ func (d Deps) pushLatestSnap(
 	// last row is the newest; no LIMIT (0) keeps that guarantee within the
 	// tiny window.
 	snaps, err := d.St.Snaps(ctx, symbolID, now-6, now+1, 0)
-	if err != nil || len(snaps) == 0 {
+	if err != nil {
+		// A BROKEN STORE AND A QUIET MARKET ARE NOT THE SAME EVENT. Folding the
+		// error into "no new snapshot" made them pixel-identical to the client,
+		// and the 20s keepalive holds EventSource OPEN, so the browser never
+		// reconnects and never learns anything is wrong. Log it; the caller
+		// still returns lastTs so one bad read does not tear down the stream.
+		slog.Warn("sse: snapshot read failed, stream continues without new data",
+			"symbolID", symbolID, "err", err)
+		return lastTs
+	}
+	if len(snaps) == 0 {
 		return lastTs
 	}
 	latest := snaps[len(snaps)-1]
