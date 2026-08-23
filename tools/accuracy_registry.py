@@ -1303,7 +1303,20 @@ def clustered_ci(days: list[tuple[int, int]], min_clusters: int = MIN_DISTINCT_D
     return out
 
 
-def prequential_null(days: list[tuple[int, int]]) -> dict:
+# Forward span per horizon, in DAYS. Mirrors _HORIZON_DAYS in
+# tools/validate_signals.py, which is the sidecar that has been reporting
+# "ADVISORY:WITHHELD - insufficient independent units" for directional/1w while
+# this file published a numeric interval over the same rows.
+_HORIZON_FWD_DAYS = {"1d": 1, "1w": 7, "2w": 14, "1m": 30, "1q": 91}
+
+
+def _horizon_fwd_days(label: str) -> int:
+    """Forward span of a horizon label, defaulting to 1 (no overlap to fold)."""
+    base = label.split("#", 1)[0].strip()
+    return _HORIZON_FWD_DAYS.get(base, 1)
+
+
+def prequential_null(days: list[tuple[int, int, int]], horizon_days: int = 1) -> dict:
     """Out-of-sample majority null over chronological per-day (n, ups) tallies.
 
     The old null was max(base, 1-base) with base computed over the SAME window
@@ -1314,19 +1327,22 @@ def prequential_null(days: list[tuple[int, int]]) -> dict:
     guess-sequence is graded through the same clustered_ci machinery as the
     model it benchmarks.
     """
-    null_days: list[tuple[int, float]] = []
+    # (day, n, hits) so the null folds on the SAME unit as the model. Grading
+    # the null per-DAY while the model is graded per-BLOCK would make the two
+    # incomparable, which is the whole point of a matched baseline.
+    null_days: list[tuple[int, int, float]] = []
     prior_n = prior_ups = 0
-    for n, ups in days:
+    for day, n, ups in days:
         if prior_n == 0 or prior_ups * 2 == prior_n:
             hits = n / 2  # no majority to lean on yet — a coin flip
         elif prior_ups * 2 > prior_n:
             hits = float(ups)  # constant "up" guess
         else:
             hits = float(n - ups)  # constant "down" guess
-        null_days.append((n, hits))
+        null_days.append((day, n, hits))
         prior_n += n
         prior_ups += ups
-    return clustered_ci(null_days)
+    return clustered_ci_blocks(null_days, horizon_days)
 
 
 # The day fold, mirroring daemon/internal/marketdata/tradingday.go.
@@ -2142,17 +2158,40 @@ def grade_directional_days(by_h: dict[str, list[tuple]],
     """Grade directional per-day tallies from either the DB or a snapshot."""
     rows = []
 
-    def emit(name: str, band: str, days: list[tuple[int, int, int]], note: str,
+    def emit(name: str, band: str, days: list[tuple[int, int, int, int]], note: str,
              family: str = "direction", retirable: bool = True,
-             pred_days: list[tuple[int, int, int]] | None = None) -> None:
-        g = clustered_ci([(n, hits) for n, hits, _ in days])
+             pred_days: list[tuple[int, int, int]] | None = None,
+             horizon_days: int = 1) -> None:
+        # CLUSTER ON NON-OVERLAPPING FORWARD WINDOWS, NOT ON CALL DAYS.
+        #
+        # This used clustered_ci, whose unit is the call day. The 1w book is
+        # called every session, so consecutive call days share 4 of their 5
+        # forward sessions and the day unit counts one forward window up to
+        # seven times. horizon_blocks() exists to fold exactly that away and was
+        # already used by grade_structural_days 190 lines below -- the
+        # directional path simply never reached it.
+        #
+        # The consequence was not a rounding difference: it asserted a numeric
+        # interval and a VERDICT on ~21 "independent symbol-days" that are
+        # really 3 independent forward windows, inflating effective n about 4x
+        # and narrowing the interval about 2x. MIN_DISTINCT_DAYS was cleared by
+        # clusters that do not exist, and `retire` -- which the daemon's
+        # model-health worker consumes to stop a horizon publishing -- was
+        # driven by a verdict the honest unit cannot state.
+        #
+        # tools/validate_signals.py has been reporting
+        # "ADVISORY:WITHHELD - insufficient independent units: 2 < 10" for
+        # directional/1w in a sidecar table nothing in the published registry
+        # reads. The two now agree.
+        days_arg = [(d[0], d[1], d[2]) for d in days]
+        g = clustered_ci_blocks(days_arg, horizon_days)
         if not g["n"]:
             return
         # The honest null for a directional call is the best constant guess a
         # bettor WITHOUT hindsight could have made — the prequential majority,
         # not the whole window's. Beating 50% still means nothing if up-days
         # run 55%, but the null only learns that rate as the days arrive.
-        null_g = prequential_null([(n, ups) for n, _, ups in days])
+        null_g = prequential_null([(d[0], d[1], d[3]) for d in days], horizon_days)
         # The hindsight null (best constant guess over the finished sample) is
         # RETIRED. It ran for one dual-null transition cycle so any verdict
         # change would be attributable to the null definition alone, and the
@@ -2216,16 +2255,18 @@ def grade_directional_days(by_h: dict[str, list[tuple]],
             # and the ensemble's is the ensemble's deficit, measured live.
             base = horizon[:-len(BENCHMARK_SUFFIX)]
             emit(f"prequential-majority ({base})", "all",
-                 [(d[1], d[2], d[3]) for d in per_day],
+                 [(d[0], d[1], d[2], d[3]) for d in per_day],
                  "live-committed running-majority benchmark; graded under the "
                  "identical dedup/survivorship rules as the ensemble",
                  family="benchmark", retirable=False,
-                 pred_days=pred_all(per_day))
+                 pred_days=pred_all(per_day),
+                 horizon_days=_horizon_fwd_days(base))
             continue
         emit(f"directional-ensemble ({horizon})", "all",
-             [(d[1], d[2], d[3]) for d in per_day],
-             "live forward record; independent symbol-days, day-resampled interval",
-             pred_days=pred_all(per_day))
+             [(d[0], d[1], d[2], d[3]) for d in per_day],
+             "live forward record; non-overlapping forward-window blocks, block-resampled interval",
+             pred_days=pred_all(per_day),
+             horizon_days=_horizon_fwd_days(horizon))
 
     # High-conviction slice — the tier a user would actually act on. Graded PER
     # HORIZON: the same symbol on the same day appears in both the 1d and the 1w
@@ -2233,12 +2274,13 @@ def grade_directional_days(by_h: dict[str, list[tuple]],
     for horizon, per_day in sorted(by_h.items()):
         if horizon.endswith(BENCHMARK_SUFFIX):
             continue  # a constant guess has no conviction tiers
-        days = [(d[4], d[5], d[6]) for d in per_day if d[4] > 0]
+        days = [(d[0], d[4], d[5], d[6]) for d in per_day if d[4] > 0]
         if not days:
             continue
         emit(f"directional-ensemble ({horizon}, high conviction)", "|p-0.5|>=0.15",
              days, "the tier a user would actually trade",
-             pred_days=pred_hc(per_day))
+             pred_days=pred_hc(per_day),
+             horizon_days=_horizon_fwd_days(horizon))
     return rows
 
 

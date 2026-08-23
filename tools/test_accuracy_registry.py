@@ -319,7 +319,11 @@ class TestPrequentialNull(unittest.TestCase):
         and score 0, day 17 sits on a tied prior (50), days 18-20 finally
         guess up (300) — 1100/2000 = 55%.
         """
-        days = [(100, 0)] * 8 + [(100, 100)] * 12  # chronological (n, ups)
+        # chronological (day, n, ups). The day index is carried so the null can
+        # fold on the same non-overlapping-block unit as the model it benchmarks;
+        # it does not affect the walk-forward guess sequence this test measures.
+        raw = [(100, 0)] * 8 + [(100, 100)] * 12
+        days = [(d, n, ups) for d, (n, ups) in enumerate(raw)]
         hindsight = max(12 / 20, 8 / 20)  # the old, clairvoyant null: 60%
         g = prequential_null(days)
         self.assertAlmostEqual(g["acc"], 1100 / 2000, places=9)
@@ -327,13 +331,13 @@ class TestPrequentialNull(unittest.TestCase):
 
     def test_day_one_is_a_coin_flip(self):
         """With no prior days there is no majority to guess — 0.5, not 1.0."""
-        g = prequential_null([(100, 100)])
+        g = prequential_null([(0, 100, 100)])
         self.assertAlmostEqual(g["acc"], 0.5, places=9)
 
     def test_stationary_majority_is_still_credited(self):
         """When up-days really do run 100% throughout, the null must converge
         on that rate — the change removes hindsight, not the majority null."""
-        g = prequential_null([(100, 100)] * 20)
+        g = prequential_null([(d, 100, 100) for d in range(20)])
         self.assertAlmostEqual(g["acc"], (50 + 19 * 100) / 2000, places=9)
 
     def test_grade_directional_publishes_an_out_of_sample_prequential_null(self):
