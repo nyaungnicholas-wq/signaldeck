@@ -14,9 +14,30 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
-// adaptiveMaxRows caps how many labeled examples per horizon one attribution
-// pass consumes (newest first — the labeled set only grows).
-const adaptiveMaxRows = 20000
+// adaptiveLookbackDays is how many TRADING DAYS of labeled examples one
+// attribution pass reads per horizon. Days, not rows, because that is the unit
+// adaptive.Compute gates on.
+//
+// This read was capped at 20,000 ROWS per horizon. At roughly 4,300 labeled
+// rows per trading day that bought 4.6 days, so the pooled pass spanned about 8
+// distinct days against a 20-day floor and EVERY cell came back gated — the
+// learner produced no weights, adaptive.Pick returned nil for every symbol, and
+// the entire fleet blended on the static equal prior while 47 days of history
+// sat in the table unread. Raising the constant would only postpone the next
+// crossing: daily volume grows, so any row number silently becomes too small.
+// Counting in the gate's own unit cannot drift that way.
+//
+// 1.5x the floor. The margin is for the PER-LEG floor, which is checked against
+// the same MinCellDays: a leg absent on some days spans fewer than the cell
+// does, and a leg that still falls short at 30 days is genuinely sparse rather
+// than starved — which is a refusal worth keeping.
+const adaptiveLookbackDays = 3 * adaptive.MinCellDays / 2
+
+// adaptiveMaxRows is a SAFETY ceiling on one horizon's read, not the selection
+// rule. It exists so a corpus far larger than today's cannot exhaust memory
+// unnoticed; if it ever binds, capBound reports it and the remedy is to lower
+// adaptiveLookbackDays deliberately rather than to truncate a span by accident.
+const adaptiveMaxRows = 250000
 
 // adaptiveShiftThreshold is the per-leg weight move that counts as a
 // "material" change worth an insight.
@@ -40,19 +61,17 @@ func (w *AdaptiveWeightsWorker) Run(ctx context.Context) (string, error) {
 	// honesty gates sooner without changing what is measured. Pooling adds
 	// rows, not days — the gates count days, so this cannot buy a gate pass.
 	var examples []adaptive.Example
-	// capBound records that at least one horizon's read came back FULL. The day
-	// floor cannot be reached by waiting when the input to a day count is capped
-	// by rows: at ~15,700 labeled rows/day the cap buys single-digit days no
-	// matter how much history accumulates, so a cell gated for "too few days"
-	// while this is true is starved, not young. Reported, never acted on — the
-	// weights themselves are unchanged.
+	// capBound is now reported BY THE READ rather than inferred from its length.
+	// LabeledFeaturesRecentDays drops whole days when the safety ceiling binds
+	// and says so, which is the only way to tell a shortened span from a short
+	// history — the exact distinction that made the old row cap invisible.
 	capBound := false
 	for _, h := range predHorizons {
-		rows, err := w.St.LabeledFeatures(ctx, h, adaptiveMaxRows)
+		rows, ceilingBound, err := w.St.LabeledFeaturesRecentDays(ctx, h, adaptiveLookbackDays, adaptiveMaxRows)
 		if err != nil {
 			return "", fmt.Errorf("labeled features %s: %w", h, err)
 		}
-		if len(rows) >= adaptiveMaxRows {
+		if ceilingBound {
 			capBound = true
 		}
 		for _, r := range rows {
