@@ -119,7 +119,16 @@ func BuildContext(ctx context.Context, st *store.Store) (string, error) {
 // writeScoreLine appends the latest score for one horizon plus its top driver.
 func writeScoreLine(ctx context.Context, b *strings.Builder, st *store.Store, symbolID int64, h md.Horizon, label string) {
 	sc, ok, err := st.LatestScore(ctx, symbolID, h)
-	if err != nil || !ok {
+	if err != nil {
+		// NOT "insufficient data": that phrase describes the DATA, the Charter
+		// tells the model to repeat it plainly, and Persist stores the result as
+		// an insight headlined "AI analyst brief" with the model id attached,
+		// permanently. A failed read laundered through an LLM becomes a
+		// confident statement about the market. Say what actually happened.
+		fmt.Fprintf(b, "  %s score: UNAVAILABLE (read failed)\n", label)
+		return
+	}
+	if !ok {
 		fmt.Fprintf(b, "  %s score: insufficient data\n", label)
 		return
 	}
@@ -153,7 +162,16 @@ func topDriver(comps []md.ScoreComponent) *md.ScoreComponent {
 // prob, lift and nEval, and marks lift<=0 as NO EDGE inline as a hint.
 func writeForecastLine(ctx context.Context, b *strings.Builder, st *store.Store, symbolID int64) {
 	fs, err := st.Forecasts(ctx, symbolID)
-	if err != nil || len(fs) == 0 {
+	if err != nil {
+		// NOT "insufficient data": that phrase describes the DATA, the Charter
+		// tells the model to repeat it plainly, and Persist stores the result as
+		// an insight headlined "AI analyst brief" with the model id attached,
+		// permanently. A failed read laundered through an LLM becomes a
+		// confident statement about the market. Say what actually happened.
+		b.WriteString("  forecast: UNAVAILABLE (read failed)\n")
+		return
+	}
+	if len(fs) == 0 {
 		b.WriteString("  forecast: insufficient data\n")
 		return
 	}
@@ -179,7 +197,16 @@ func pickForecast(fs []store.Forecast) store.Forecast {
 // writeExpectancyLine appends the largest-sample 1d expectancy row.
 func writeExpectancyLine(ctx context.Context, b *strings.Builder, st *store.Store, symbolID int64) {
 	rows, err := st.Expectancy(ctx, symbolID, md.H1d)
-	if err != nil || len(rows) == 0 {
+	if err != nil {
+		// NOT "insufficient data": that phrase describes the DATA, the Charter
+		// tells the model to repeat it plainly, and Persist stores the result as
+		// an insight headlined "AI analyst brief" with the model id attached,
+		// permanently. A failed read laundered through an LLM becomes a
+		// confident statement about the market. Say what actually happened.
+		b.WriteString("  1d expectancy: UNAVAILABLE (read failed)\n")
+		return
+	}
+	if len(rows) == 0 {
 		b.WriteString("  1d expectancy: insufficient data\n")
 		return
 	}
@@ -196,7 +223,16 @@ func writeExpectancyLine(ctx context.Context, b *strings.Builder, st *store.Stor
 // writeDayChangeLine appends the day change from the last two 1d bars.
 func writeDayChangeLine(ctx context.Context, b *strings.Builder, st *store.Store, symbolID int64) {
 	bars, err := st.LastBars(ctx, symbolID, md.TF1d, 2)
-	if err != nil || len(bars) < 2 || bars[len(bars)-2].Close == 0 {
+	if err != nil {
+		// NOT "insufficient data": that phrase describes the DATA, the Charter
+		// tells the model to repeat it plainly, and Persist stores the result as
+		// an insight headlined "AI analyst brief" with the model id attached,
+		// permanently. A failed read laundered through an LLM becomes a
+		// confident statement about the market. Say what actually happened.
+		b.WriteString("  day change: UNAVAILABLE (read failed)\n")
+		return
+	}
+	if len(bars) < 2 || bars[len(bars)-2].Close == 0 {
 		b.WriteString("  day change: insufficient data\n")
 		return
 	}
