@@ -42,15 +42,17 @@ func main() {
 		dbPath = flag.String("db", "data/signaldeck.db", "path to signaldeck.db")
 		commit = flag.Bool("commit", false, "actually append (default is dry-run)")
 		kind   = flag.String("kind", GradabilityKind,
-			"which amendment to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
-				ProvenanceKind+", "+DataIntegrityKind+" or "+DuplicateKind)
+			"which record to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
+				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+
+				" or "+ForwardTestKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
-		*kind != ProvenanceKind && *kind != DataIntegrityKind && *kind != DuplicateKind {
-		die("unknown -kind %q (want %s, %s, %s, %s or %s)",
+		*kind != ProvenanceKind && *kind != DataIntegrityKind &&
+		*kind != DuplicateKind && *kind != ForwardTestKind {
+		die("unknown -kind %q (want %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
-			DataIntegrityKind, DuplicateKind)
+			DataIntegrityKind, DuplicateKind, ForwardTestKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -110,6 +112,23 @@ func main() {
 				"and that is not true — fix the build first, then file.", m.OnOrAfterNewEpoch)
 		}
 		spec, note = revisionEpochSpec(m), revisionEpochNote
+
+	case ForwardTestKind:
+		m, err := measureForwardTest(ctx, db)
+		if err != nil {
+			die("measure forward-test state: %v", err)
+		}
+		// This record's entire value is that it predates its own evidence. If
+		// graded forward rows already exist, the hypothesis and the rule that
+		// decides it were written with those rows visible, and no reader of an
+		// append-only log could ever tell that from a genuine registration.
+		if m.ObservedRows != 0 {
+			die("REFUSING to file: %d graded forward observation(s) already exist for "+
+				"confluence-long-liquid-2026-08. A forward test registered after its own "+
+				"results are readable is not a registration. Start a new test id, or explain "+
+				"the existing rows in their own record.", m.ObservedRows)
+		}
+		spec, note = forwardTestSpec(m), forwardTestNote
 
 	case DuplicateKind:
 		d, err := measureDuplicates(ctx, db)
