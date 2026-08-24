@@ -435,6 +435,50 @@ else
   log "WARN: offsite dir unavailable"
 fi
 
+# ── Offsite staleness (2026-08-23) ─────────────────────────────────────────
+# verify_backup.py only validates backup contents, never age.
+# The meta key backup_last_offsite went 12 days stale with no alert.
+# A check that cannot tell "quiet because healthy" from "quiet because nobody looked"
+# is not a real check, so we add this age-based guard.
+OFFSITE_STALE_SECS=$((3 * 24 * 3600))
+OFFSITE_BANNER_TS="$SD/data/.offsite-stale-banner-ts"
+
+# Read last offsite timestamp from meta table
+last_offsite=$(sd_sqlite "$DB" "SELECT v FROM meta WHERE k='backup_last_offsite';" 2>>"$LOG")
+# Treat missing or non-numeric as zero
+if [[ ! "$last_offsite" =~ ^[0-9]+$ ]]; then
+    last_offsite=0
+fi
+
+now=$(date +%s)
+age=$(( now - last_offsite ))
+
+if (( last_offsite == 0 )); then
+    log "NO OFF-MACHINE BACKUP HAS EVER BEEN RECORDED; the database exists on exactly one volume; set SIGNALDECK_OFFSITE_DIR to an external drive."
+    stale=true
+elif (( age >= OFFSITE_STALE_SECS )); then
+    days=$(( age / 86400 ))
+    threshold_days=$(( OFFSITE_STALE_SECS / 86400 ))
+    log "Last off-machine backup is $days days old (>= $threshold_days days threshold)."
+    stale=true
+else
+    days=$(( age / 86400 ))
+    log "Off-machine backup is current (age $days days)."
+    stale=false
+fi
+
+if [ "$stale" = true ]; then
+    # Read cooldown timestamp, default 0 if missing/invalid
+    prev=$(cat "$OFFSITE_BANNER_TS" 2>/dev/null || echo 0)
+    if ! [[ "$prev" =~ ^[0-9]+$ ]]; then
+        prev=0
+    fi
+    if (( now - prev >= 86400 )); then
+        sd_notify "SignalDeck: No current off-machine backup" "Losing this disk would lose the database because there is no verified off-machine copy."
+        printf '%s\n' "$now" >"$OFFSITE_BANNER_TS"
+    fi
+fi
+
 # ── H9 (hostile review, 2026-07-26): nothing pages a human ─────────────────
 # Unrelated to backups — piggybacked here on purpose. This is the one script
 # in the fleet guaranteed to run once a day (market-close.sh -> this script),
