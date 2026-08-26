@@ -294,7 +294,8 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		backupDir = filepath.Join(filepath.Dir(cfg.DBPath), "backups")
 	}
 	fleet = append(fleet, &backup.Worker{
-		St: st, Dir: backupDir, OffsiteDir: offsiteBackupDir(), Keep: 7, FirstRunDelay: 5 * time.Minute,
+		St: st, Dir: backupDir, OffsiteDir: offsiteBackupDir(), OffsiteS3: offsiteBackupS3(),
+		Keep: 7, FirstRunDelay: 5 * time.Minute,
 		Remote: remote, // H9: a failed/corrupt backup pages beyond the Mac
 	})
 	// Alerts + daily-briefing wave (constructor appended at the END of this
@@ -1706,6 +1707,29 @@ func confluenceWorkers(st *store.Store) []workers.Worker {
 // nightly offsite copy disabled, with nothing anywhere saying so. Accepting the
 // documented name as a fallback makes one setting configure both; the daemon's
 // own key still wins so an existing split configuration keeps its meaning.
+// offsiteBackupS3 reads the s3:// destination that ops/signaldeck-backup-offline.sh
+// uploads to. ONE spelling on purpose: the comment above records that two names
+// for the directory destination left the daemon's offsite copy silently
+// disabled, and a second name here would rebuild that trap.
+//
+// Only an s3:// URI is accepted. A bare bucket name or an https:// console URL
+// is far more likely to be a mistake than an instruction, and the failure it
+// would cause — the daemon standing down from a destination the shell cannot
+// upload to — is exactly the silent no-backup state this is meant to prevent.
+func offsiteBackupS3() string {
+	v := strings.TrimSpace(os.Getenv("SIGNALDECK_OFFSITE_S3"))
+	switch strings.ToLower(v) {
+	case "", "off", "none", "-":
+		return ""
+	}
+	if !strings.HasPrefix(strings.ToLower(v), "s3://") {
+		slog.Warn("SIGNALDECK_OFFSITE_S3 is not an s3:// URI — ignoring it; the daemon "+
+			"will NOT stand down and no S3 upload is configured", "value", v)
+		return ""
+	}
+	return v
+}
+
 func offsiteBackupDir() string {
 	v := strings.TrimSpace(os.Getenv("SIGNALDECK_OFFSITE_BACKUP_DIR"))
 	if v == "" {

@@ -1293,6 +1293,22 @@ func (d Deps) backupOps(ctx context.Context) map[string]any {
 	// is the one reading a human is guaranteed to take at face value. A dashboard
 	// that says "configured" when one disk failure loses everything is worse than
 	// one that says nothing.
+	// A REMOTE destination is off-machine by construction, and the volume test
+	// cannot describe it: filepath.VolumeName("s3://bucket/x") is "", so the
+	// comparison below would answer "different volume" for an accidental
+	// reason rather than the real one. Worse, it would answer the same way for
+	// a typo. Recognising the scheme explicitly means offsiteConfigured is true
+	// because the bytes leave the machine, not because a path parser shrugged.
+	//
+	// offsiteSameVolume is deliberately left UNSET here rather than set false:
+	// "not on the same volume" is a statement about two local paths, and there
+	// is no local path to compare.
+	if isRemoteOffsite(offsiteDir) {
+		out["offsiteKind"] = "remote"
+		out["offsiteConfigured"] = true
+		return out
+	}
+	out["offsiteKind"] = "directory"
 	sameVolume := any("unknown")
 	if offsiteDir != "" {
 		dbVol := filepath.VolumeName(d.St.Path())
@@ -1305,6 +1321,13 @@ func (d Deps) backupOps(ctx context.Context) map[string]any {
 	same, known := sameVolume.(bool)
 	out["offsiteConfigured"] = offsiteDir != "" && known && !same
 	return out
+}
+
+// isRemoteOffsite reports whether the recorded destination names another
+// machine. Only s3:// today; kept as one predicate so a second scheme is added
+// in one place rather than growing a second copy of this decision.
+func isRemoteOffsite(dest string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(dest)), "s3://")
 }
 
 func (d Deps) agents(w http.ResponseWriter, r *http.Request) {

@@ -48,7 +48,23 @@ type Worker struct {
 	// offsite disabled (local backup still runs; no dq event — a deliberate
 	// opt-out is not a failure).
 	OffsiteDir string
-	Keep       int // rotated copies to keep in EACH location (default 7)
+	// OffsiteS3 is an s3:// URI owned by ops/signaldeck-backup-offline.sh, NOT
+	// by this worker. When it is set this worker performs no offsite copy at
+	// all and records the URI as the destination.
+	//
+	// Two writers, one meta key. SetMeta(MetaOffsiteDir) below runs on every
+	// backup and is unconditional, so a shell script that recorded an S3
+	// destination would have it clobbered back to "" by the next db-backup run
+	// — leaving offsiteConfigured:false beside a lastOffsiteTs from minutes
+	// ago. That contradictory pair is the documented 2026-08-11 defect, and it
+	// is the exact shape a second writer reintroduces.
+	//
+	// The shell owns the upload because it takes its copy with the daemon DOWN
+	// (VACUUM INTO with no contention) and because `aws s3` already does this
+	// correctly — putting an AWS SDK in the daemon to duplicate a CLI that is
+	// already installed buys nothing.
+	OffsiteS3 string
+	Keep      int // rotated copies to keep in EACH location (default 7)
 	// FirstRunDelay defers only the first Run (the fleet runner fires every
 	// worker immediately at boot; a fresh backup at every restart is noise).
 	// 0 = no delay.
@@ -265,7 +281,7 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	// failed offsite copy never hides that the local backup DID happen.
 	_ = w.St.SetMeta(ctx, MetaLastBackupTs, fmt.Sprintf("%d", time.Now().Unix()))
 	_ = w.St.SetMeta(ctx, MetaLastBackupFile, filepath.Base(target))
-	_ = w.St.SetMeta(ctx, MetaOffsiteDir, w.OffsiteDir)
+	_ = w.St.SetMeta(ctx, MetaOffsiteDir, w.offsiteDestination())
 
 	detail += "; " + w.offsite(ctx, target)
 	return detail, nil
@@ -275,7 +291,26 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 // location. It is ALWAYS best-effort: every failure (unset/missing/unwritable
 // dir, copy error) is turned into an honest detail fragment + a dq_events
 // record, and returns without erroring so the fleet run still succeeds.
+// offsiteDestination is the single string that describes where off-machine
+// copies go, and the ONLY value written to MetaOffsiteDir. S3 wins because when
+// it is configured this worker does not copy anywhere — reporting a local
+// directory it is no longer using would describe a copy that is not being made.
+func (w *Worker) offsiteDestination() string {
+	if w.OffsiteS3 != "" {
+		return w.OffsiteS3
+	}
+	return w.OffsiteDir
+}
+
 func (w *Worker) offsite(ctx context.Context, src string) string {
+	// Stand down, and say which process is responsible. Crucially this does NOT
+	// touch MetaLastOffsiteTs: the freshness alarm must keep measuring the real
+	// S3 upload, so if the market-close script stops running the alarm fires.
+	// Stamping a timestamp here because "S3 is configured" would report a
+	// backup nobody took, which is worse than the gap it papers over.
+	if w.OffsiteS3 != "" {
+		return "offsite delegated to the market-close S3 upload (" + w.OffsiteS3 + ")"
+	}
 	if w.OffsiteDir == "" {
 		return "offsite not configured"
 	}
