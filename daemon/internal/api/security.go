@@ -215,6 +215,34 @@ func (d Deps) requiresAuth(path string) bool {
 	if path == "/api/tv-webhook" {
 		return false
 	}
+	// THE RECEIPTS. /proof is the one page whose entire purpose is to be shown
+	// to someone who has no account here, and it is built from exactly these
+	// two reads. They were not exempt, so both 401'd anonymously and the page
+	// rendered its error state to every visitor it exists for — while its own
+	// source comment claimed it "reads only the already-public GET endpoints".
+	//
+	// Exempted individually rather than by opening SIGNALDECK_PUBLIC_READS.
+	// That flag defaults CLOSED here for a measured reason (A9): daemon/.env
+	// allowlists a reserved ngrok hostname, so reachablePrivately() is false
+	// and flipping the flag would publish EVERY read endpoint the moment the
+	// tunnel starts. Publishing the two endpoints that are meant to be public
+	// is not the same decision as publishing all of them.
+	//
+	// Both are safe to serve anonymously on their own terms:
+	//   - neither is user-scoped and neither spends LLM budget;
+	//   - track-record is served from cache (~1.6ms measured) and already
+	//     carries its own gating — it withholds figures rather than inflating
+	//     them when the sample is too thin;
+	//   - ledger/verify is CPU-bound (~2.5s), and its resource-exhaustion lever
+	//     was already closed by A11: ledgerVerifyConcurrency caps concurrent
+	//     walks at 2 and ledgerVerifyTimeout bounds each at 30s.
+	//
+	// Known and accepted: verify may APPEND a signed anchor on a cadence (see
+	// maybeAnchor), so this is a public read with a bounded write side effect.
+	// The cadence gate, not the auth gate, is what limits it.
+	if path == "/api/track-record" || path == "/api/ledger/verify" {
+		return false
+	}
 	// The MCP endpoint authenticates itself, and strictly more tightly than
 	// this gate does: a signed, expiring, revocable per-client key, with
 	// anonymous access permitted only on a privately-reachable bind. Letting
