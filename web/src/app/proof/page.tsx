@@ -28,6 +28,16 @@ import {
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 
+// Two retries, not more. Each failed attempt costs the daemon's FULL 30s
+// deadline before it answers, so three attempts is already ~70s of waiting —
+// past that a visitor is better served by the error state, which names what
+// happened, than by a spinner that keeps promising.
+const LEDGER_VERIFY_RETRIES = 2;
+// Longer than a page normally waits between retries, on purpose: the cause is
+// database contention during the daemon's boot storm, and retrying instantly
+// just adds a third competitor to the thing that is already too busy.
+const LEDGER_RETRY_DELAY_MS = 5000;
+
 function pct(x: number | null | undefined, dec = 1): string {
   return x == null ? "—" : `${(x * 100).toFixed(dec)}%`;
 }
@@ -71,6 +81,10 @@ export default function ProofPage() {
   } | null>(null);
   const [lv, setLv] = useState<LedgerVerifyResponse | null>(null);
   const [lvErr, setLvErr] = useState<string | null>(null);
+  // Which retry we are on, purely so the skeleton can say so. A page that sits
+  // on an unchanging "recomputing…" for a minute is indistinguishable from one
+  // that has hung, and this read genuinely can take that long after a restart.
+  const [lvRetry, setLvRetry] = useState(0);
   // The STATUS, not just the message. ApiError carries it precisely so a caller
   // can tell "refused" from "unreachable" — its own doc cites a 451 rendered as
   // "is the daemon running?" about a daemon that had just answered. This page
@@ -85,18 +99,49 @@ export default function ProofPage() {
 
   // The ledger recompute is independent of the horizon, so it is fetched once
   // and never re-fetched when the selector moves.
+  //
+  // It IS retried, but only on the two statuses that are transient by
+  // construction, and only a bounded number of times:
+  //
+  //   503 — the verify exceeded the daemon's 30s deadline;
+  //   429 — ledgerVerifyConcurrency (2) was already saturated.
+  //
+  // Both cluster in the minutes after a daemon restart, when the whole worker
+  // fleet boots at once and contends for the database. That restart happens
+  // DAILY at market close, so without this the one page built to be shared
+  // served "verification exceeded 30s" to every visitor in that window.
+  // Measured across one such restart: 503, 503, 503, then 19.4s, then 3.1s.
+  //
+  // Deliberately NOT retried on anything else. A 401/403 is a deployment
+  // posture and a 500 is a bug; retrying either just spends the visitor's time
+  // to show the same message, and the existing hint already explains them.
   useEffect(() => {
     let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-    ledgerVerify()
-      .then((l) => alive && setLv(l))
-      .catch((e) => {
-        if (!alive) return;
-        setLvErr(msg(e));
-        setLvStatus(e instanceof ApiError ? e.status : null);
-      });
+    const attempt = (n: number) => {
+      ledgerVerify()
+        .then((l) => {
+          if (alive) setLv(l);
+        })
+        .catch((e) => {
+          if (!alive) return;
+          const status = e instanceof ApiError ? e.status : null;
+          if ((status === 503 || status === 429) && n < LEDGER_VERIFY_RETRIES) {
+            setLvRetry(n + 1);
+            timer = setTimeout(() => attempt(n + 1), LEDGER_RETRY_DELAY_MS);
+            return;
+          }
+          setLvErr(msg(e));
+          setLvStatus(status);
+        });
+    };
+    attempt(0);
     return () => {
       alive = false;
+      // Without this a pending retry fires after unmount and setState warns —
+      // the `alive` flag alone stops the write, not the timer.
+      if (timer) clearTimeout(timer);
     };
   }, []);
 
@@ -133,7 +178,14 @@ export default function ProofPage() {
       {/* ledger loading / error (independent of the track record) */}
       {!lv && !lvErr && (
         <div className="panel p-4">
-          <Skeleton lines={3} label="recomputing the ledger hash chain" />
+          <Skeleton
+            lines={3}
+            label={
+              lvRetry === 0
+                ? "recomputing the ledger hash chain"
+                : `ledger verification timed out — retrying (${lvRetry}/${LEDGER_VERIFY_RETRIES}); the daemon is busy, which is usual for a few minutes after a restart`
+            }
+          />
         </div>
       )}
       {lvErr && !lv && (
