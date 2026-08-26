@@ -133,10 +133,45 @@ fi
 # Deliberately cannot fail this script. A research grade is not a reason to
 # report the market-close backup as broken, and letting it mask a backup or
 # daemon failure would be strictly worse than missing one session.
+#
+# NOT failing this script is not the same as nobody being told. Every run is
+# stamped, and both ways this can die now raise sd_notify:
+#
+#   * the grader exits non-zero, and
+#   * the grader exits ZERO and records nothing, run after run.
+#
+# The second is the one that actually threatens the test. Nothing read this log
+# before, so the single live experiment in the repo could have sat at zero
+# sessions until November and every surface would have stayed green — the
+# silent-success shape this repo keeps rediscovering. An unstamped success line
+# also made a SKIPPED run and a zero-session run identical on disk.
+echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: forward-test grading starting" >> "$SD/logs/forward-test.log"
 if ! "$SD/.venv/Scripts/python.exe" "$SD/tools/forward_test.py" \
      --db "$SD/data/signaldeck.db" --commit --verdict \
      >> "$SD/logs/forward-test.log" 2>&1; then
   echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: forward-test grading FAILED (non-fatal, market-close result unaffected)" >> "$SD/logs/forward-test.log"
+  sd_notify "SignalDeck forward test" "Grading FAILED — prereg seq 87 recorded nothing today. See logs/forward-test.log."
+fi
+
+# Liveness, not just exit status. FT_QUIET_DAYS is a GRACE period, not the
+# cadence: a session is only gradable once its forward return resolves, which
+# measured 2-4 days behind the session itself, and the book does not produce a
+# gradable long entry every single day. Seven days is comfortably past both and
+# still far short of a lost month.
+#
+# The floor is the registration date, so the alert works before the first row
+# exists — the state this was actually in when it was written (window open since
+# 2026-08-23, forward_test_daily empty). Waiting for a first row to go stale
+# would have meant the alert could never fire on the failure that mattered most.
+FT_QUIET_DAYS=7
+ft_newest="$(sd_sqlite "$SD/data/signaldeck.db" \
+  "SELECT COALESCE(MAX(session),'2026-08-23') FROM forward_test_daily;" 2>/dev/null)"
+if [ -n "${ft_newest:-}" ]; then
+  ft_age=$(( ( $(date +%s) - $(date -d "$ft_newest" +%s 2>/dev/null || echo "$(date +%s)") ) / 86400 ))
+  if [ "$ft_age" -gt "$FT_QUIET_DAYS" ]; then
+    echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: forward-test STALE — newest recorded session $ft_newest is ${ft_age}d old" >> "$SD/logs/forward-test.log"
+    sd_notify "SignalDeck forward test" "STALE: newest graded session is $ft_newest (${ft_age}d old). prereg seq 87 is not accruing evidence."
+  fi
 fi
 
 if [ "$backup_rc" -ne 0 ]; then

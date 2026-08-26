@@ -79,9 +79,28 @@ SELECT date(o.ts,'unixepoch') d, COUNT(*) n, AVG(o.direction*o.fwd_return)*100 b
 
 # The book must beat holding its own universe, not zero. Same session, same
 # price floor, equal weighted.
+#
+# The stale-feed screen (registered at prereg seq 90) is keyed on the SESSION
+# DATE, in the same spelling on both sides. It used to compare two different
+# folds of two different clocks: the bucket came from date(b.ts,'unixepoch')
+# while the join key came from (b.ts - 18000)/86400. Daily stock bars are
+# stamped 04:00:00 UTC, so that second expression floors to the day BEFORE the
+# bucket on every single row -- verified against live data: bucket 2026-08-25
+# resolved to stale-day 2026-08-24, 606 rows, and 2026-08-24 to 2026-08-23, 619
+# rows. Every benchmark name was therefore screened against the wrong session's
+# staleness, in both directions: a name stale on the session being graded stayed
+# in, and a name stale the day before was dropped from a session it was fine on.
+#
+# dq_events carries real wall-clock timestamps, so it still needs the -18000
+# fold to land on its ET session date; bars are already stamped per session, so
+# their date IS the key. Both sides now produce the same 'YYYY-MM-DD' string and
+# the unit mismatch cannot come back silently. 18000 is the repo's canonical
+# trading-day offset (store.TradingDay); it is EST year-round and that known
+# approximation is deliberately left alone here rather than forked into a
+# second definition, which is the defect this comment exists to prevent.
 BENCH_SQL = """
 WITH stale_feed AS (
-  SELECT DISTINCT symbol_id, (ts - 18000)/86400 AS sd
+  SELECT DISTINCT symbol_id, date(ts - 18000, 'unixepoch') AS sd
     FROM dq_events WHERE kind = 'stale' AND symbol_id IS NOT NULL
 ),
 b AS (
@@ -94,9 +113,24 @@ b AS (
 SELECT d, AVG(nxt/close-1)*100 bench_pct, COUNT(*) n_names
   FROM b
  WHERE close >= 20 AND nxt IS NOT NULL AND d > ?
+   -- KNOWN ASYMMETRY, LEFT IN DELIBERATELY. This winsorises the BENCHMARK at
+   -- +/-30% and nothing winsorises the book, so a registered excess return
+   -- compares a capped leg to an uncapped one. It is not removed here because
+   -- it is REGISTERED (prereg seq 90, screensAdded.extremeMove), and because
+   -- seq 89 -- filed 76 minutes EARLIER -- considered this exact screen and
+   -- rejected it: "Their direction is therefore KNOWN, and filing them would be
+   -- selecting a benchmark with a result in view." seq 90 then filed it anyway.
+   -- That contradiction is on the chain and cannot be edited away.
+   --
+   -- Measured 2026-08-25 over the in-sample body, so the direction is known a
+   -- second time: cap ON -0.1340% mean excess, 10/19 beat; cap OFF -0.1581%,
+   -- 9/19. Removing it makes the book look WORSE, which is exactly why removing
+   -- it now would still be a benchmark change made with a result in view.
+   -- Resolving this is an AMENDMENT and a judgement about what the record may
+   -- say, not a code fix. Do not quietly delete this line.
    AND ABS(nxt/close - 1) <= 0.30
    AND NOT EXISTS (SELECT 1 FROM stale_feed f
-                    WHERE f.symbol_id = b.symbol_id AND f.sd = (b.ts - 18000)/86400)
+                    WHERE f.symbol_id = b.symbol_id AND f.sd = b.d)
  GROUP BY d
 """
 
@@ -331,6 +365,7 @@ def demo():
     # the window would be silently excluded and every assertion below would pass
     # vacuously against an empty result.
     d0, day = 1787616000, 86400
+    BAR_STAMP = 14400  # 04:00:00 UTC, where production stamps a daily stock bar
     # session 0: 6 bets -> eligible. session 1: 4 bets -> ineligible.
     # session 2: 6 bets but NO bars -> must be skipped entirely.
     for sess, count in ((0, 6), (1, 4), (2, 6)):
@@ -342,10 +377,15 @@ def demo():
     # The benchmark carries MIN_BENCHMARK_NAMES + 20 symbols so the registered
     # breadth floor is CLEARED here; the thin case is exercised separately below,
     # because a fixture that fails both floors at once cannot tell them apart.
+    # BAR_STAMP is not decoration. Production stamps daily stock bars at
+    # 04:00:00 UTC, and a fixture that stamped them at midnight could not
+    # reproduce the stale-feed fold bug: date(ts) and (ts-18000)/86400 disagreed
+    # by a day on every real row while the fixture's own rows looked fine. A
+    # fixture must be stamped the way production is or it certifies nothing.
     for i in range(MIN_BENCHMARK_NAMES + 20):
         for sess in range(3):
             conn.execute("INSERT INTO bars VALUES(?,'1d',?,?)",
-                         (i, d0 + sess * day, 40.0 + sess))
+                         (i, d0 + sess * day + BAR_STAMP, 40.0 + sess))
 
     # session 3: 6 bets, but only 3 symbols in its benchmark -- the shape the
     # amendment exists to refuse. Three crypto names on a weekend is not a
@@ -356,7 +396,7 @@ def demo():
     for i in range(3):
         for sess in (3, 4):
             conn.execute("INSERT INTO bars VALUES(?,'1d',?,?)",
-                         (900 + i, d0 + sess * day, 40.0 + sess))
+                         (900 + i, d0 + sess * day + BAR_STAMP, 40.0 + sess))
 
     rows, skipped = compute(conn, "")
     by_sess = {r["session"]: r for r in rows}
@@ -383,6 +423,48 @@ def demo():
     for r in rows:
         assert abs(r["excess_pct"] - (r["book_pct"] - r["bench_pct"])) < 1e-9, \
             f"excess is not book-minus-bench on {r['session']}"
+
+    # (g) the registered stale-feed screen must drop a name on the session it was
+    # actually stale on, and ONLY that session. Both directions, because the bug
+    # this replaces was a silent day shift rather than a missing screen: the join
+    # key floored to the day BEFORE the bucket on every row, so the screen was
+    # fully wired, fully green, and pointed one session off. Asserting only that
+    # a stale name disappears would have passed against the broken version too.
+    sess0 = sorted(by_sess)[0]
+    base_n = by_sess[sess0]["bench_n"]
+
+    def bench_n_with(*events):
+        """bench_n for session 0 given exactly these (symbol, ts) stale events.
+
+        One symbol is flagged per probe rather than several at once: the old
+        code also cut exactly ONE name here, just the wrong one, so a count over
+        a mixed fixture passes against the bug it is supposed to catch. Identity
+        has to be isolated, and with only a count available that means one
+        probe per symbol."""
+        conn.execute("DELETE FROM dq_events")
+        for sym, ts in events:
+            conn.execute("INSERT INTO dq_events VALUES('stale',?,?)", (sym, ts))
+        return {r["session"]: r for r in compute(conn, "")[0]}[sess0]["bench_n"]
+
+    # stale DURING session 0 (an ET-afternoon event) -> that name must be cut.
+    assert bench_n_with((0, d0 + 18 * 3600)) == base_n - 1, (
+        f"a name flagged stale during {sess0} stayed in its benchmark — the screen "
+        f"and the session bucket disagree on which day they mean")
+    # stale the day BEFORE session 0 -> that name must SURVIVE session 0. This is
+    # the half the old code failed: it cut exactly this name instead of the one
+    # above, which is why a name-count assertion could not tell them apart.
+    assert bench_n_with((1, d0 - day + 18 * 3600)) == base_n, (
+        f"a name flagged stale the day BEFORE {sess0} was cut from it — the screen "
+        f"is keyed one session early")
+
+    # An ET-EVENING event belongs to the session that just closed, not the next
+    # one: 2026-08-25 21:00 ET is 2026-08-26 01:00 UTC, and folding the raw UTC
+    # date would file it a day late.
+    assert bench_n_with((0, d0 + day + 1 * 3600)) == base_n - 1, (
+        "an event at 01:00 UTC (21:00 ET the previous day) did not screen the ET "
+        "session it belongs to — the -18000 fold is not being applied to dq_events")
+    assert bench_n_with() == base_n, \
+        "removing every stale event did not restore the benchmark — the screen is sticky"
 
     store(conn, rows)
     text = verdict(conn)
