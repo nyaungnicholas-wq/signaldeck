@@ -44,16 +44,18 @@ func main() {
 		kind   = flag.String("kind", GradabilityKind,
 			"which record to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
 				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+", "+
-				ForwardTestKind+", "+BenchFloorKind+" or "+PopFiltersKind)
+				ForwardTestKind+", "+BenchFloorKind+", "+PopFiltersKind+" or "+BookExtremeKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
 		*kind != ProvenanceKind && *kind != DataIntegrityKind &&
 		*kind != DuplicateKind && *kind != ForwardTestKind &&
-		*kind != BenchFloorKind && *kind != PopFiltersKind {
-		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s or %s)",
+		*kind != BenchFloorKind && *kind != PopFiltersKind &&
+		*kind != BookExtremeKind {
+		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
-			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind, PopFiltersKind)
+			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind,
+			PopFiltersKind, BookExtremeKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -150,6 +152,38 @@ func main() {
 				"not an amendment.", m.ObservedRows)
 		}
 		spec, note = popFiltersSpec(m), popFiltersNote
+
+	case BookExtremeKind:
+		m, err := measureBookExtreme(ctx, db)
+		if err != nil {
+			die("measure book extreme-guard state: %v", err)
+		}
+		if m.RegistrationSeq == 0 {
+			die("REFUSING to file: no %s record is on the chain. This amendment "+
+				"names a registration that does not exist.", ForwardTestKind)
+		}
+		if m.ObservedRows != 0 {
+			die("REFUSING to file: %d forward session(s) have already been graded. "+
+				"Screening the book after evidence accrues is a selection rule, "+
+				"not an amendment.", m.ObservedRows)
+		}
+		// THE GUARD THIS RECORD RESTS ON. Seq 89 refused the 30% trim because its
+		// direction of effect was measured and non-zero, and that objection binds
+		// this record too. It is answerable here only while the screen moves
+		// NOTHING: every extreme episode currently sits in a session the
+		// registered breadth floor already refuses. If even one sat in a gradable
+		// session, filing this would change a known quantity in a known direction
+		// — precisely what seq 89 forbids — and the honest response would be to
+		// reconsider the amendment, not to file it and explain afterwards.
+		if m.ExtremeInGradableSession != 0 {
+			die("REFUSING to file: %d extreme episode(s) fall in sessions whose "+
+				"benchmark clears the registered 100-name floor, so this screen "+
+				"WOULD move the statistic and its direction is knowable before "+
+				"filing. Seq 89 rejected exactly that: a benchmark chosen with a "+
+				"result in view. Re-measure and decide deliberately.",
+				m.ExtremeInGradableSession)
+		}
+		spec, note = bookExtremeSpec(m), bookExtremeNote
 
 	case BenchFloorKind:
 		m, err := measureBenchFloor(ctx, db)

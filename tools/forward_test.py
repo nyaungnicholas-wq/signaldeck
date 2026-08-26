@@ -73,7 +73,17 @@ WITH ep AS (
 SELECT date(o.ts,'unixepoch') d, COUNT(*) n, AVG(o.direction*o.fwd_return)*100 book_pct
   FROM ep JOIN confluence_outcomes o ON o.symbol_id=ep.symbol_id AND o.ts=ep.t
   JOIN symbols sy ON sy.id = o.symbol_id AND sy.market = 'stocks'
- WHERE o.direction=1 AND o.entry_px >= 20 AND date(o.ts,'unixepoch') > ?
+-- The book-side half of the extreme-move screen, registered at prereg seq 96.
+-- Seq 90 put this cap on the BENCHMARK and recorded that "the book side is
+-- already guarded". It was not: no extreme-move screen existed anywhere on the
+-- book path, and one graded episode moves +36.07%. So seq 90 created the
+-- asymmetry it claimed to remove, and seq 96 both adds the screen and retracts
+-- that claim. Measured at filing: 789 graded episodes, 1 above 30%, that one in
+-- session 2026-07-15 whose benchmark carries 43 names against the registered
+-- 100-name floor -- so it never reached the statistic and the mean daily excess
+-- and 10-of-19 beat count are unchanged.
+ WHERE o.direction=1 AND o.entry_px >= 20 AND ABS(o.fwd_return) <= 0.30
+   AND date(o.ts,'unixepoch') > ?
  GROUP BY d
 """
 
@@ -164,6 +174,13 @@ REGISTRATION_KIND = "forward-test-registration"
 # carries the amendment, and must apply exactly the number the amendment names.
 BENCH_FLOOR_KIND = "forward-test-benchmark-floor"
 MIN_BENCHMARK_NAMES = 100
+# The book-side extreme guard arrived as its OWN amendment (seq 96) because
+# seq 90 claimed the book was already guarded and it was not. The binding runs
+# both ways, exactly as it does for the breadth floor above: this grader may
+# apply the cap only while the chain carries that record, and must apply the
+# number the record names.
+BOOK_EXTREME_KIND = "forward-test-book-extreme-guard"
+BOOK_EXTREME_CAP = 0.30
 CHAIN_SEP = b""  # record separator, as in the prediction ledger
 
 
@@ -246,6 +263,18 @@ def verify_registration(conn):
         raise SystemExit(f"REFUSING to grade: this grader applies a benchmark floor of "
                          f"{MIN_BENCHMARK_NAMES}, but the amendment on the chain does not say "
                          f"{phrase!r}. The floor must be the one that was registered.")
+
+    # Same binding for the book-side extreme guard (seq 96). The rule is read
+    # out of the record and compared to the constant this file applies, so
+    # changing BOOK_EXTREME_CAP without filing is what turns this red.
+    _, _, bx = _verified_spec(conn, BOOK_EXTREME_KIND)
+    want = f"ABS(fwd_return) <= {BOOK_EXTREME_CAP:.2f}"
+    if (bx.get("screenAdded") or {}).get("rule") != want:
+        raise SystemExit(
+            f"REFUSING to grade: this grader caps the book at {want!r}, but the "
+            f"amendment on the chain registers "
+            f"{(bx.get('screenAdded') or {}).get('rule')!r}. The screen must be the "
+            f"one that was registered.")
     return spec
 
 
@@ -530,7 +559,22 @@ def demo():
                   _entry_hash(amd_prev, filed_ts + 60, BENCH_FLOOR_KIND, amd_hash, amd_note),
                   amd_note))
 
-    verify_registration(conn)  # both honest records must pass, or the rest proves nothing
+    # The book-side extreme guard is a THIRD record (seq 96 on the live chain).
+    # It carries the rule as a string so the grader can compare what it applies
+    # against what was registered, rather than trusting that a record with the
+    # right kind means the right number.
+    bx_json = json.dumps({
+        "kind": BOOK_EXTREME_KIND,
+        "screenAdded": {"leg": "book", "rule": f"ABS(fwd_return) <= {BOOK_EXTREME_CAP:.2f}"}})
+    bx_hash = hashlib.sha256(bx_json.encode()).hexdigest()
+    bx_prev = "9c1f0a22"
+    bx_note = "AMENDMENT - book-side extreme guard"
+    conn.execute("INSERT INTO prereg_records VALUES(96,?,?,?,?,?,?,?)",
+                 (filed_ts + 120, BOOK_EXTREME_KIND, bx_json, bx_hash, bx_prev,
+                  _entry_hash(bx_prev, filed_ts + 120, BOOK_EXTREME_KIND, bx_hash, bx_note),
+                  bx_note))
+
+    verify_registration(conn)  # all three honest records must pass, or the rest proves nothing
 
     def refuses(what):
         try:
@@ -585,6 +629,30 @@ def demo():
                  (filed_ts + 60, BENCH_FLOOR_KIND, amd_json, amd_hash, amd_prev,
                   _entry_hash(amd_prev, filed_ts + 60, BENCH_FLOOR_KIND, amd_hash, amd_note),
                   amd_note))
+    verify_registration(conn)
+
+    # mutation 6: the same binding for the book-side cap. Both directions,
+    # because the failure that matters is not a missing record but a record that
+    # says a DIFFERENT number than the code applies -- which is exactly how seq
+    # 90 came to describe a guard that did not exist.
+    conn.execute("DELETE FROM prereg_records WHERE seq=96")
+    refuses("a book-side extreme cap with no amendment on the chain")
+
+    drifted = json.dumps({
+        "kind": BOOK_EXTREME_KIND,
+        "screenAdded": {"leg": "book", "rule": "ABS(fwd_return) <= 0.50"}})
+    dh = hashlib.sha256(drifted.encode()).hexdigest()
+    conn.execute("INSERT INTO prereg_records VALUES(96,?,?,?,?,?,?,?)",
+                 (filed_ts + 120, BOOK_EXTREME_KIND, drifted, dh, bx_prev,
+                  _entry_hash(bx_prev, filed_ts + 120, BOOK_EXTREME_KIND, dh, bx_note),
+                  bx_note))
+    refuses("an amendment whose cap differs from the one the grader applies")
+
+    conn.execute("DELETE FROM prereg_records WHERE seq=96")
+    conn.execute("INSERT INTO prereg_records VALUES(96,?,?,?,?,?,?,?)",
+                 (filed_ts + 120, BOOK_EXTREME_KIND, bx_json, bx_hash, bx_prev,
+                  _entry_hash(bx_prev, filed_ts + 120, BOOK_EXTREME_KIND, bx_hash, bx_note),
+                  bx_note))
     verify_registration(conn)
 
     print("selftest ok")
