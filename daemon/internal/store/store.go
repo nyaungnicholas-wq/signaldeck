@@ -259,6 +259,22 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// structural-grading wave (2026-08-27): a reason a regime call can never be
+	// graded. Rides the same pragma-guarded ALTER path; pre-existing rows keep
+	// NULL, which reads as "still gradeable", so adding it changes no verdict.
+	// See schema.sql for the survivorship defect it closes.
+	for _, col := range []struct{ name, ddl string }{
+		{"ungradable", `ALTER TABLE regime_outcomes ADD COLUMN ungradable TEXT`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('regime_outcomes') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
 	// leg-audit wave: the blend's WEIGHTS and the tier that supplied them.
 	// predictions.components already records what each leg said; nothing
 	// recorded how much each was believed, so a retired ensemble could not be

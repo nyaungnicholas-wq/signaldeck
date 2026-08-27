@@ -1478,7 +1478,24 @@ CREATE TABLE IF NOT EXISTS regime_outcomes (
   -- the loser is marked and the dedup index goes partial. The winner is the
   -- EARLIEST call of the trading day, which is exactly the row the INSERT OR
   -- IGNORE would have kept had the fold been right from the start.
-  superseded_by       INTEGER REFERENCES regime_outcomes(id)
+  superseded_by       INTEGER REFERENCES regime_outcomes(id),
+  -- UNGRADABLE (2026-08-27), when set, names why this row can NEVER carry an
+  -- honest grade. Same contract as confluence_outcomes.ungradable: the row is
+  -- kept for audit, excluded from the due queue, and COUNTED where it is
+  -- dropped, never silently retried.
+  --
+  -- The defect it closes: a due row is skipped when its symbol lacks enough
+  -- forward bars, with `continue // retried later`. For a symbol the universe
+  -- sweep has PRUNED, "later" never comes -- an inactive symbol stops receiving
+  -- bars, so the row can never reach its horizon and is retried forever.
+  -- Measured 2026-08-27: resolution had stalled for 31 days, 2,288 rows were
+  -- due, 2,267 of them on inactive symbols, and ZERO had enough forward bars.
+  -- regime-outcome-runner reported `ok ... resolved 0` on every run throughout.
+  --
+  -- That is a SURVIVORSHIP BIAS, not just a stuck worker: left alone, the
+  -- structural record can only ever grade symbols that stayed in the universe,
+  -- and the excluded ones are invisible rather than counted.
+  ungradable          TEXT
 );
 -- PARTIAL: only rows that still count are unique on the key. Superseded rows
 -- keep their frozen bytes and sit outside the constraint.

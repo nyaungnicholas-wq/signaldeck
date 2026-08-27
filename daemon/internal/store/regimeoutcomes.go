@@ -500,7 +500,7 @@ func (s *Store) DueRegimeOutcomes(ctx context.Context, now int64, limit int) ([]
 		SELECT id, symbol_id, kind, ts, day, horizon_days, regime, conviction,
 		       historical_accuracy, rank, COALESCE(naive_label, '')
 		FROM regime_outcomes
-		WHERE resolved_at IS NULL AND superseded_by IS NULL
+		WHERE resolved_at IS NULL AND superseded_by IS NULL AND ungradable IS NULL
 		  AND ts + CAST(horizon_days * 1.45 * 86400 AS INTEGER) <= ?
 		ORDER BY ts ASC LIMIT ?`, now, limit)
 	if err != nil {
@@ -532,6 +532,29 @@ func (s *Store) ResolveRegimeOutcome(ctx context.Context, id int64, actual strin
 	_, err := s.w.ExecContext(ctx, `
 		UPDATE regime_outcomes SET resolved_at=?, actual=?, correct=?
 		WHERE id=? AND resolved_at IS NULL`, resolvedAt, actual, c, id)
+	return err
+}
+
+// MarkRegimeOutcomeUngradable records WHY a due call can never be graded, so it
+// leaves the due queue instead of being retried forever.
+//
+// This exists because "retried later" was a lie for any symbol the universe
+// sweep pruned: an inactive symbol stops receiving daily bars, so a row short of
+// its horizon can never reach it. Measured 2026-08-27, 2,267 of 2,288 due rows
+// sat on inactive symbols and NONE had enough forward bars, while the worker
+// reported ok/resolved 0 for 31 days.
+//
+// The row is KEPT with all its frozen bytes — the call, the conviction, the
+// baseline — exactly as confluence_outcomes.ungradable keeps its entry_px. An
+// excluded observation that is counted and reasoned is evidence; one that is
+// silently retried is a survivorship hole.
+//
+// Never overwrites: a row that already carries a reason, or that got graded in
+// the meantime, is left alone.
+func (s *Store) MarkRegimeOutcomeUngradable(ctx context.Context, id int64, reason string) error {
+	_, err := s.w.ExecContext(ctx, `
+		UPDATE regime_outcomes SET ungradable=?
+		WHERE id=? AND resolved_at IS NULL AND ungradable IS NULL`, reason, id)
 	return err
 }
 
