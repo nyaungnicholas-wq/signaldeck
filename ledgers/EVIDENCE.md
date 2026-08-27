@@ -654,3 +654,39 @@ as a bare `resolved 0`.
 **Revises E22.** The lane was never permanently ungradable; it was one day of
 calendar misalignment plus a silent stall. The stall is fixed and the
 misalignment ages out on its own.
+
+## E26 - the last outstanding measurement, and exactly when it can be taken
+
+The structural lane is the ONE lane I could not validate (E22/E25). Measured
+2026-08-27 03:18:
+
+| | |
+|---|---|
+| baselined rows due right now | **0** |
+| first becomes due | **2026-08-27 22:32** (19.2h out) |
+| `regime-outcome-runner` cadence | 6h (last 03:04) |
+| so first structural grades land | **~2026-08-28 03:04**, or sooner on a daemon restart |
+
+It cannot be observed inside this session. That is a measured constraint, not a
+choice, and it is the honest reason lane coverage stops at seven of eight
+validated rather than eight.
+
+### How to take the measurement when it lands
+
+Did it grade:
+
+```
+sqlite3 data/signaldeck.db "SELECT status, detail FROM worker_runs WHERE worker='regime-outcome-runner' ORDER BY started_at DESC LIMIT 1;"
+```
+
+The lane's first baseline-comparable verdict:
+
+```
+sqlite3 data/signaldeck.db "SELECT kind, COUNT(*) n, ROUND(AVG(CASE WHEN correct=1 THEN 1.0 ELSE 0 END)*100,2) acc, ROUND(AVG(CASE WHEN naive_label=actual THEN 1.0 ELSE 0 END)*100,2) naive FROM regime_outcomes WHERE correct IS NOT NULL AND naive_label IS NOT NULL GROUP BY kind;"
+```
+
+Read `acc` against `naive`, never alone. `trend21`'s ungraded 80.81% headline
+means nothing until that second column exists: if the market trends up on 80%
+of days, calling 'trend up' every day scores 80%. And day-weight before
+believing any edge - same-day rows share one market move, which is what turned
+the stock book's +0.332% into -0.435%.
