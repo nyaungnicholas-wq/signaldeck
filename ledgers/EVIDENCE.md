@@ -593,3 +593,22 @@ Tests: the stuck count appears on the FIRST pass long before anything is retirab
 | 082e6dc regime retirement | yes | **no** - grace window not yet elapsed |
 
 every one looked finished at the commit and was caught only by going and measuring the running system afterwards; a green deploy proves the binary changed but never proves the behaviour did.
+
+### Production confirmation (2026-08-27 03:04, build 5fb3cdd)
+
+The post-deploy pass, read from `worker_runs`:
+
+```
+froze 0 regime calls (0 without a naive baseline, 2 abstained on a tied null),
+resolved 0 (0 wrong, 0 high-conviction postmortems), retired 0 ungradable,
+2288 due but stuck short of forward bars
+```
+
+**2288** matches the measured due count exactly. `retired 0` remains correct
+until 2026-09-18. The 31-day silence is broken: the worker now names the hole
+on every pass instead of printing a bare `resolved 0`.
+
+This is the first of the three fixes in the table above to move a production
+number on the first check after shipping - because it was the one written
+AFTER measuring what the previous fix actually did, rather than after assuming
+it had worked.
