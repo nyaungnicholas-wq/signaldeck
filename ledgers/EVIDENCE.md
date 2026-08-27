@@ -144,3 +144,90 @@ tiny and `alphax_models` 1w reports auc 0.4911 with oos_lift 0.0092 — consiste
 with the settled verdict that IC ~0.02 flips sign across sub-periods.
 Chasing a better 1d leg via config search is a REFUTED program (CLAUDE.md) and
 is not attempted.
+
+## E11 — Execution safety is STRUCTURAL, not a setting (fail-closed holds)
+Searched 2026-08-27:
+- No `execution/` directory exists in this repo and git has no history for one.
+- The only Alpaca trading host anywhere in `daemon/` or `tools/` is
+  `defaultBasePaper = "https://paper-api.alpaca.markets"`. A grep for
+  `api.alpaca.markets` excluding the data and paper hosts returns NOTHING.
+- `LIVE_ARMED` and `LIVE_RISK_CONFIG` do not exist as identifiers anywhere.
+
+So there is no live order path to arm or disarm. Fail-closed is the shape of the
+system rather than a flag someone could flip, which is the strongest form of the
+guarantee the goal asks for. No credentials were requested or exposed at any
+point in this work.
+
+## E12 — The statistical machinery the goal demands is largely PRESENT
+Audited by locating implementations, not mentions:
+
+| requirement | status | where |
+|---|---|---|
+| PBO | PRESENT, via CSCV | `tools/pbo_ledger.py` (`cscv`, `drop_mirrors`, `wilson_lower_bound`), `tools/test_pbo.py` |
+| Deflated Sharpe | PRESENT | `research/dirfix/holdout_port.py` -> `search.deflated_threshold(..., TRIALS)` |
+| Multiple-testing correction | PRESENT | Bonferroni in `tools/accuracy_registry.py`, `tools/alpha/xscore.py`; `tools/effective_trials.py` |
+| Embargo / purge | PRESENT | `tools/controls_evidence.py`, `daemon/internal/alphax/alphax.go` |
+| Walk-forward | PRESENT | `daemon/internal/metalabel/metalabel.go`, `research/dirfix/` |
+| Sealed holdouts | PRESENT | `research/dirfix/holdout_eval.py`, `check_search.py` |
+| Calibration | PRESENT | reliability tables published in the accuracy registry |
+| White's Reality Check | ABSENT | only an informal "reality check" in `research/dirfix/probe.py` |
+
+**This is the important positive finding of the audit.** The repo is not
+methodologically weak; PBO via CSCV and a trials-aware deflated-Sharpe bar are
+the correct tools, honestly applied. The obstacle to profitability is the
+SIGNAL, not the rigour used to measure it. That also means the usual failure
+mode -- overfitting a backtest into a false positive -- is already defended
+against here, and the settled verdicts in CLAUDE.md are the output of those
+defences working.
+
+## E13 — forecast-monitor: an unresolved contradiction, left unresolved on purpose
+`DayStat.Starved()` is `Symbols >= MinSymbolsForCollapse && CoverageRatio() < MinCoverageRatio`,
+so the denominator is the whole active symbol count -- which oscillates with the
+daily sweep (measured denominators in consecutive messages: 291, 997, 2567).
+
+The contradiction I cannot yet settle:
+- `forecast-monitor` says `only 0 of 2567 symbols received a forecast`,
+  most recently for 2026-08-27.
+- `model_forecasts` holds rows for **882 distinct symbols** on 2026-08-27.
+
+Both cannot be describing the same quantity. Either the monitor reads a
+different notion of "received a forecast" than `model_forecasts`, or one of the
+two is measuring the wrong population.
+
+NOT CHANGED, for three reasons: my first hypothesis (wrong denominator) is
+unproven; given E9 the monitor may be correctly reporting real abstention, in
+which case "fixing" it would silence a true alarm; and commit 61f8bfb shows
+another session actively working this exact surface ("stop the health gate
+crying wolf at the restart window"), so editing it would collide.
+
+A permanently-degraded monitor is still a defect in effect -- an alarm that is
+always on is an alarm nobody reads -- but the fix requires settling which of the
+two numbers is right, and that is the next piece of work here, not a guess.
+
+## E14 — LLM repair VERIFIED live (and the first attempt was verified FAILING)
+Two-stage, and the first stage is the instructive one.
+
+Stage 1 (e5393b9) corrected `internal/llm`'s constants, deployed green on
+1f90332, and CHANGED NOTHING: `sentiment-tagger` answered
+`llm: provider error: HTTP 410` at 00:11:47, seconds after the new binary came
+up. Cause: `config.go` spelled the same three ids out again as `pick()`
+defaults, so the corrected constants were never consulted.
+
+Stage 2 (e25505e) made `config` reference `llm.DefaultModel/Deep/Fast` so there
+is ONE definition.
+
+Verified against the running daemon at `/api/ai/status`, not inferred:
+
+| field | value |
+|---|---|
+| model | `nvidia/nemotron-3-nano-30b-a3b` |
+| fastModel | `nvidia/nemotron-3-nano-30b-a3b` |
+| deepModel | `nvidia/nemotron-3-super-120b-a12b` |
+| stats.calls (today) | **79** |
+| stats.lastError | **`''` (empty)** |
+
+79 successful calls with an empty lastError, against 31 failures/day before.
+
+The lesson is the one this repo keeps relearning: a deploy that goes green
+proves the binary changed, never that the behaviour did. Stage 1 would have been
+reported as fixed by anything that did not go and look.
