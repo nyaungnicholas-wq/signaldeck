@@ -459,3 +459,63 @@ capped fills, not gross.
 The one genuinely soft spot is survivorship, and the platform already declares
 it rather than quietly assuming it away. That is the correct handling of a
 limitation that cannot be closed from the data on hand.
+
+## E22 — NEW DEFECT: the structural lane is silently unresolvable, and survivorship-biased
+Found by completing the instrument coverage the goal asks for. `regime_outcomes`
+is a whole instrument class (58,206 rows, 7 kinds) that I had not examined.
+
+### It cannot be graded against its own baseline
+| bucket | rows |
+|---|---|
+| resolved AND has a naive baseline (**gradeable**) | **2** |
+| resolved, no baseline | 5,421 |
+| baseline, never resolved | 42,013 |
+
+Two gradeable rows out of 58,206. This is why the accuracy registry publishes
+*"every structural kind grades NO BASELINE"* and refuses to print a figure.
+
+### The raw accuracies are exactly the trap
+Ungraded against any baseline, the lane reports: `trend21` **80.81%**,
+`liquidity21` 72.74%, `vol21` 66.83%, `trend21-crypto` 92.16%,
+`liquidity21-crypto` **100.00%** (n=51). These are the numbers someone would
+quote as proof SignalDeck works. Without a baseline they mean nothing: if the
+market trends up on 80% of days, calling "trend up" every day scores 80%.
+
+### Root cause: resolution stalled 31 days ago, silently
+Resolution stopped at **2026-07-26** while 1,100-1,900 new rows/day keep
+arriving through 2026-08-26. `regime-outcome-runner` reports **`ok`** on every
+run with `resolved 0`.
+
+Measured against the resolver's own predicate
+(`ts + horizon_days*1.45*86400 <= now`):
+
+| | count |
+|---|---|
+| rows DUE right now | **2,288** |
+| ...on INACTIVE symbols | **2,267** |
+| ...with enough forward bars to actually grade | **0** |
+
+A 21-day horizon needs ~21 forward daily bars. These rows sit on symbols the
+universe sweep PRUNED, and an inactive symbol stops receiving bars, so they can
+never reach the bar count. The resolver's
+`continue // not enough forward bars yet -- stays unresolved, retried later`
+is correct per-row and wrong in aggregate: "later" never comes. They retry
+forever and accumulate in silence.
+
+### Why this matters beyond the stall
+It is a **survivorship bias**, not just a stuck worker: the structural record can
+only ever grade symbols that STAYED in the universe. Every pruned symbol is
+excluded, uncounted, and invisible. That is precisely the leakage/survivorship
+failure this goal requires be tested for, and it was live.
+
+### The principled fix (not applied - see below)
+Mark a due row UNGRADABLE with a reason once it can no longer reach its bar
+count (symbol inactive, or past some multiple of its horizon), and REPORT the
+count. That converts a silent stall into a measured exclusion, matching patterns
+the repo already uses: `confluence_outcomes.ungradable` and the stale-feed
+quarantine, both of which say what they dropped and why.
+
+NOT implemented this pass: it changes grading semantics in a subsystem another
+session has been editing, and a wrong cutoff would silently discard gradeable
+rows -- the opposite failure. Recorded with the exact measurements so it can be
+done deliberately rather than guessed at.
