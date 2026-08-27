@@ -405,32 +405,97 @@ func (c *Client) backfillMulti(ctx context.Context, st *store.Store, symbols []s
 	return counts, nil
 }
 
-// backfillMultiBatch fetches+persists every page for a single ≤MaxBatchSymbols
+// backfillMultiBatch fetches+persists every page for a single <=MaxBatchSymbols
 // batch, accumulating per-symbol counts into counts.
+//
+// VENDOR-REJECTED SYMBOLS DO NOT KILL THE BATCH. Alpaca 400s the WHOLE
+// multi-symbol request when any one symbol is invalid, so a single delisted
+// name destroyed bars for up to MaxBatchSymbols symbols and failed the run.
+// Measured live: universe-poller failed every day on ATC.220816 (delisted
+// 2022-08-16), while poller.go's own comment claimed such names were
+// "simply absent from the backfill - never fatal". They were fatal.
+// We now drop exactly the symbol the vendor named and refetch, bounded by
+// the batch size, and say so - a dropped symbol is logged, never silent.
+func invalidSymbolFromErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	const substr = "invalid symbol: "
+	s := err.Error()
+	i := strings.Index(s, substr)
+	if i == -1 {
+		return ""
+	}
+	s = s[i+len(substr):]
+	var j int
+	for j < len(s) {
+		c := s[j]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '-' {
+			j++
+		} else {
+			break
+		}
+	}
+	symbol := s[:j]
+	if symbol == "" {
+		return ""
+	}
+	return strings.ToUpper(symbol)
+}
+
 func (c *Client) backfillMultiBatch(ctx context.Context, st *store.Store, batch []string, resolve func(sym string) (int64, bool), timeframe string, tf md.Timeframe, start time.Time, counts map[string]int) error {
+	working := make([]string, len(batch))
+	copy(working, batch)
+	drops := 0
 	pageToken := ""
 	for {
-		page, err := c.fetchMultiBarsPage(ctx, batch, timeframe, start, pageToken)
+		page, err := c.fetchMultiBarsPage(ctx, working, timeframe, start, pageToken)
 		if err != nil {
-			return err
+			bad := invalidSymbolFromErr(err)
+			if bad == "" {
+				return err
+			}
+			found := false
+			for _, sym := range working {
+				if strings.EqualFold(sym, bad) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return err
+			}
+			newWorking := make([]string, 0, len(working))
+			for _, sym := range working {
+				if !strings.EqualFold(sym, bad) {
+					newWorking = append(newWorking, sym)
+				}
+			}
+			working = newWorking
+			slog.Warn("alpaca: dropping symbol the vendor rejects", "symbol", bad, "timeframe", timeframe, "remaining", len(working))
+			if len(working) == 0 {
+				return nil
+			}
+			drops++
+			if drops > len(batch) {
+				return err
+			}
+			continue
 		}
 		var bars []md.Bar
 		for sym, rbs := range page.Bars {
 			id, ok := resolve(sym)
 			if !ok {
-				continue // universe symbol not registered in the store — skip
+				continue
 			}
 			for _, rb := range rbs {
 				ts, err := time.Parse(time.RFC3339, rb.T)
 				if err != nil {
 					return fmt.Errorf("alpaca: bad bar time %q for %s: %w", rb.T, sym, err)
 				}
-				bar := md.Bar{
-					SymbolID: id, TF: tf, Ts: ts.Unix(),
-					Open: rb.O, High: rb.H, Low: rb.L, Close: rb.C, Volume: rb.V,
-				}
+				bar := md.Bar{SymbolID: id, TF: tf, Ts: ts.Unix(), Open: rb.O, High: rb.H, Low: rb.L, Close: rb.C, Volume: rb.V}
 				if syntheticDailyPad(tf, bar) {
-					continue // vendor fill; must not be stored OR counted
+					continue
 				}
 				bars = append(bars, bar)
 				counts[sym]++
