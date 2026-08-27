@@ -54,3 +54,44 @@ honestly. Either way the answer to "is it profitable" stays **unproven**.
 ## B4 — Push is out of scope under this goal
 The goal forbids pushing. Branch `hmm-regime-and-pbo` is currently level with
 origin (`unpushed: 0`). Work under this goal will be committed locally only.
+
+## B5 — "Credible SPY outperformance" cannot be delivered from this evidence
+Status: **BLOCKED — NOT COMPLETE**, and it is not blocked on effort.
+
+Every lane this repo supports has now been independently validated:
+
+| lane | measured | significant? |
+|---|---|---|
+| stocks 1d | book SHUT by its own gates (forecast RankEdge -0.0434) | n/a - no book |
+| stocks 1w | only admitted leg (+0.0048) | not tested to significance |
+| crypto 1d | -6.89pp vs naive, t=-0.85 | no |
+| crypto 1w | -11.66pp vs naive, t=-1.41 | no |
+| paper flagship-1d | -0.65pp vs SPY, daily t=+0.22 | no |
+| paper flagship-1w | +0.24pp vs SPY, daily t=-0.25 | no |
+| paper 1d/1w-replay | dormant; -1.34pp / -1.42pp | no |
+| structural (regime) | 2 gradeable rows of 58,206 | ungradable (E22) |
+
+**Not one lane shows a significant edge.** That is a measurement, not a
+shortfall in effort, and it is consistent with the repo's own settled verdicts
+(IC ~0.02 flipping sign; 0 of 27 configs clearing the pre-set bar on a fund-free
+universe).
+
+### Why this cannot be closed by more work here
+The only routes from "no edge measured" to "SPY outperformance claimed" are
+routes this goal and CLAUDE.md both FORBID:
+- lowering `MIN_BETS_PER_SESSION` or `MinCurveN` -- weakening a gate, and it
+  would void prereg seq 87;
+- admitting a leg whose measured rank edge is negative -- inverting the honesty
+  doctrine that is the platform's main asset;
+- config search for a better arm -- explicitly REFUTED (CLAUDE.md: "manufactures
+  false positives"), and the fund-free rerun already cleared 0 of 27;
+- quoting `flagship-1d`'s +31.8% annualised daily-mean excess -- t=0.22, n=14,
+  cumulative excess of the OPPOSITE sign (E19). That number is noise and
+  quoting it would be inventing evidence.
+
+The honest position: the system is now correctly instrumented, its faults are
+repaired, every lane is measured, and the measurement says there is no edge to
+trade. Establishing one requires new signal research, which is a different
+undertaking from this repair-and-verify goal -- and the only registered
+instrument that could ever settle it (forward test, prereg seq 87) cannot
+accumulate sessions while the ensemble correctly declines to bet (E9).
