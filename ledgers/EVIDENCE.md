@@ -565,3 +565,31 @@ would have shipped a test that proves nothing. Mutate both ways.
 the 2,288 due rows at the time of writing. The retirement count will appear in
 its summary; until that row settles this is verified by test and deploy, not by
 production observation, and is recorded as such rather than claimed.
+
+## E24 - E23's fix changed nothing in production, and what that revealed
+Verified rather than claimed, and it is the THIRD "shipped fix that changed nothing" this session. The pass after deploying commit 082e6dc read: froze 0 ... resolved 0 ... retired 0 ungradable, with zero rows marked.
+
+**The fix is correct; it simply had not fired.**
+
+| Metric | Value |
+|---|---|
+| oldest due row | 2026-07-17 (40 days old) |
+| grace window, 21-day horizon at 3x | 63 days |
+| retirement therefore begins | 2026-09-18 |
+
+retired 0 was the RIGHT answer on 2026-08-27, not a failure; reporting E23 as "working in production" without checking the arithmetic would have been wrong in the flattering direction.
+
+### What it revealed: retirement was never the complaint
+E22's defect was SILENCE - the worker regime-outcome-runner printed a bare "resolved 0" for 31 days while 2,288 rows sat unresolvable. A deliberately wide grace window defers RETIREMENT and so also defers VISIBILITY by another three weeks. Commit 082e6dc fixed accumulation and left the silence in place.
+Commit 5fb3cdd makes every pass report how many due rows could not be graded for want of forward bars, whether or not they are old enough to retire. The fleet now says "2288 due but stuck short of forward bars" instead of "resolved 0". No row retires earlier, no gate is weakened, and the hole is visible today rather than on 2026-09-18.
+Tests: the stuck count appears on the FIRST pass long before anything is retirable, and reads 0 when everything grades so it cannot cry wolf. Mutation-checked - dropping the increment fails the visibility test.
+
+### The session pattern, now three for three
+
+| fix | deployed green | actually changed behaviour? |
+|---|---|---|
+| A14 track-record gate (earlier session) | yes | **no** - gated on one condition of two |
+| e5393b9 LLM models | yes | **no** - config.go held a duplicate |
+| 082e6dc regime retirement | yes | **no** - grace window not yet elapsed |
+
+every one looked finished at the commit and was caught only by going and measuring the running system afterwards; a green deploy proves the binary changed but never proves the behaviour did.
