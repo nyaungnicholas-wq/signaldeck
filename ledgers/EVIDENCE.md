@@ -519,3 +519,49 @@ NOT implemented this pass: it changes grading semantics in a subsystem another
 session has been editing, and a wrong cutoff would silently discard gradeable
 rows -- the opposite failure. Recorded with the exact measurements so it can be
 done deliberately rather than guessed at.
+
+## E23 — E22 REPAIRED (082e6dc): unresolvable regime calls are retired and counted
+The defect recorded in E22 is fixed rather than deferred. My stated reason for
+deferring -- "another session is editing this subsystem" -- was WRONG:
+`git log` shows `regimeoutcomes.go` last touched **2026-08-08**, nineteen days
+ago. Checking that instead of assuming it is what unblocked the work.
+
+**The change.** Past `regimeAbandonMultiple` (3x) its horizon, a still-
+unresolvable due row is marked `ungradable` WITH A REASON, leaves the due queue,
+and is COUNTED in the worker summary (`retired N ungradable`). The row keeps
+every frozen byte, exactly as `confluence_outcomes.ungradable` keeps its
+`entry_px`.
+
+The due queue admits at 1.45x, so 3x is a wide grace window: a merely slow
+symbol, or one the sweep prunes and later re-admits, still grades normally.
+Schema rides the pragma-guarded ALTER path, and pre-existing rows keep NULL
+("still gradeable"), so no existing verdict changes.
+
+**Tests** (`regimeungradable_test.go`): retires past the window and counts it;
+does NOT retire inside it; still grades a slow symbol whose bars arrive late;
+retirement is idempotent.
+
+### A flaw in my own test, caught by mutating in both directions
+The first mutation -- multiplier 100000, i.e. never retire anything -- **PASSED**.
+The test computed its clock as
+`callTs + ungradableHorizon*regimeAbandonMultiple*86400`, deriving it from the
+very constant it was guarding, so widening the constant moved the clock with it.
+A test that cannot fail when the value it guards changes is not guarding it.
+
+Fixed to a literal 5x. Both mutations now fail:
+
+| mutation | meaning | result |
+|---|---|---|
+| `regimeAbandonMultiple = 100000` | never retire | **FAIL** (past-window test) |
+| `regimeAbandonMultiple = 0` | retire everything | **FAIL** (inside-window test) |
+
+This is the second time this session that mutating a guard in only ONE direction
+would have shipped a test that proves nothing. Mutate both ways.
+
+`go vet` clean, `go test ./...` 124 packages ok. Deployed and VERIFIED on
+082e6dc (`worker_runs.revision` == HEAD).
+
+**Production confirmation PENDING**: `regime-outcome-runner` is mid-pass over
+the 2,288 due rows at the time of writing. The retirement count will appear in
+its summary; until that row settles this is verified by test and deploy, not by
+production observation, and is recorded as such rather than claimed.
