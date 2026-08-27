@@ -390,3 +390,49 @@ produces by chance. **It is noise. Do not quote it.**
 the fourth leads by 0.24pp on 23 days and fails every significance test. The
 honest statement about the highest proven mode is that it is running, it is
 measured, and it shows no edge.
+
+## E20 — Lane coverage: crypto validated independently. Same verdict.
+The goal asks that each supported market/horizon lane be validated on its own. I
+had only examined stocks. Crypto is a real lane, not just ingestion: 7 active
+symbols, 462,795 bars current to 2026-08-27, 31,772 predictions, 48,459 resolved
+outcomes, 56 confluence rows, 8 paper trades.
+
+Day-weighted (one observation per day, because 7 crypto names share one market
+move -- the pseudo-replication guard that turned +0.332% into -0.435% on the
+stock book):
+
+| horizon | rows | days | accuracy | naive base | edge | t |
+|---|---|---|---|---|---|---|
+| 1d | 12,967 | 36 | 42.71% | 49.60% | **-6.89pp** | -0.85 |
+| 1w | 18,030 | 43 | 46.64% | 58.30% | **-11.66pp** | -1.41 |
+
+### Checked for the identity trap before concluding
+CLAUDE.md records that the -13/-23/-28pp directional figure is an ARITHMETIC
+IDENTITY (acc = 1 - null) on a one-sided book, not anti-skill. Tested here:
+
+| horizon | calls UP | actual UP | accuracy | 1-base | gap |
+|---|---|---|---|---|---|
+| 1d | 34.2% | 43.5% | 47.1% | 56.5% | 9.38pp |
+| 1w | 25.9% | 54.4% | 52.6% | 45.6% | 7.01pp |
+
+The book is TILTED short but not one-sided, and accuracy sits 7-9pp away from
+`1 - base`, so this is not the clean identity. The deficit is real rather than
+arithmetic -- but at |t| = 0.85 and 1.41 it is **not statistically
+significant either way**.
+
+**Crypto verdict: no demonstrated edge, and no demonstrated anti-skill.**
+Identical in kind to the stock lanes. Do NOT invert it -- that is the refuted
+dircall program.
+
+### Lane coverage now complete
+| lane | verdict |
+|---|---|
+| stocks 1d | book SHUT by its own gates (E9); forecast RankEdge -0.0434 |
+| stocks 1w | only lane with an admitted leg (+0.0048); 635 symbols blending |
+| crypto 1d | below base rate, not significant (t=-0.85) |
+| crypto 1w | below base rate, not significant (t=-1.41) |
+| paper flagship-1d | -0.65pp vs SPY; daily t=+0.22 (E19) |
+| paper flagship-1w | +0.24pp vs SPY; daily t=-0.25 (E19) |
+| paper 1d/1w-replay | dormant 8 days; both negative excess |
+
+Every lane independently validated. **Not one shows a significant edge.**
