@@ -10,4 +10,4 @@ Status is one of OPEN / IN PROGRESS / FIXED / VERIFIED / WONTFIX.
 | R4 | forecast-monitor denominator oscillates 291/997/2567 with the sweep | **OPEN - NOT TOUCHED, deliberately.** See E13: my first reading (wrong denominator) is unproven, the monitor may be correctly reporting the E9 abstention, and another session is editing this file (61f8bfb). Recorded, not guessed at. |
 | R5 | OneDrive folder re-accumulating same-volume copies deleted 2026-08-23 | OPEN - 6.4GB regrown in 3 days. Bounded by compress_and_prune, so waste not corruption. Deferred behind R1. |
 | R6 | One delisted symbol 400s the whole Alpaca batch; universe-poller failed daily | **VERIFIED** 8f7c56b - drop-and-retry at the choke point, 4 tests, mutation-checked |
-| R7 | 31 LLM errors/day sat in worker_runs with nothing escalating them | OPEN - the errors were visible; no gate turned visible into noticed |
+| R7 | 31 LLM errors/day allegedly unescalated | **NOT-A-DEFECT - my error.** health.json named `failingWorkers:[sentiment-tagger]` and the offsite staleness, and a Discord transport is configured. See E15. |

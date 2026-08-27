@@ -231,3 +231,34 @@ Verified against the running daemon at `/api/ai/status`, not inferred:
 The lesson is the one this repo keeps relearning: a deploy that goes green
 proves the binary changed, never that the behaviour did. Stage 1 would have been
 reported as fixed by anything that did not go and look.
+
+## E15 — R7 was MY error: the escalation works. Correcting it.
+I recorded R7 as "31 LLM errors/day sat in worker_runs with nothing escalating
+them". That was wrong, and I only found it by reading the raw record instead of
+my own first parse (which used `failing`/`stale` and got nulls, because the
+fields are `failingWorkers`/`staleWorkers`).
+
+`data/health.json`, written 2026-08-27 00:15:
+```
+{"ok":false,
+ "staleWorkers":["offsite backup is 15.3 days old (last 2026-08-11) - the local
+                 copy is not a disaster-recovery copy"],
+ "failingWorkers":["sentiment-tagger"],
+ "ts":1787814903}
+```
+
+Both of this session's real problems were already detected and named:
+- `health.FailingWorkers` caught the LLM failure by consecutive-error streak --
+  the mechanism added after the 2026-08-11 forecast-monitor incident.
+- The offsite staleness reached the same surface, phrased for a human.
+
+Delivery is configured too: `SIGNALDECK_DISCORD_WEBHOOK` is SET, and
+`logs/notify-silence.log` confirms on 08-24, 08-25 and 08-26
+`remote notify configured - daemon alerts are pageable beyond this Mac`.
+
+So the platform detected both faults, named them accurately, and had a live
+transport to deliver them. The gap was that nobody read the alert -- a human
+process gap, not a code defect. **R7 is reclassified NOT-A-DEFECT.**
+
+I did not send a test alert: that would push to an external service, which this
+goal puts out of scope.
