@@ -251,7 +251,18 @@ if ($stale.Count -gt 0) {
 # child holding the socket), so task state cannot answer this question.
 $portsDown = @()
 foreach ($svc in @(@{n = 'daemon (API)'; p = 8322 }, @{n = 'web (UI)'; p = 8323 })) {
-    $listening = @(Get-NetTCPConnection -State Listen -LocalPort $svc.p -ErrorAction SilentlyContinue).Count -gt 0
+    # One instant sample turns the nightly fleet restart into a red that
+    # sticks until the next scheduled run: measured 2026-08-25, this gate said
+    # "nothing listening on 8322" while the port was bound and answering 401 —
+    # it had sampled inside the 18:45 restart. Re-ask across that window
+    # before declaring a service down; a genuinely dead port is dead on all
+    # four samples and still goes red, 90 seconds later.
+    $listening = $false
+    foreach ($attempt in 1..4) {
+        $listening = @(Get-NetTCPConnection -State Listen -LocalPort $svc.p -ErrorAction SilentlyContinue).Count -gt 0
+        if ($listening) { break }
+        if ($attempt -lt 4) { Start-Sleep -Seconds 30 }
+    }
     if ($listening) {
         Write-Host ("  = {0,-14} listening on {1}" -f $svc.n, $svc.p)
     }

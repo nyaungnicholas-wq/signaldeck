@@ -191,11 +191,19 @@ def render(snapshot, banner, registry_path):
         null = r.get("null_prequential")
         if null is None:
             null = r.get("null_acc")
+        # An accuracy beside an em-dash null is the /proof defect in table
+        # form: persistence-style labels grade ~70% on inertia alone, so the
+        # bare percentage reads as skill precisely when no baseline exists to
+        # say otherwise. Withhold the number, not just the verdict. n and
+        # distinct days stay — they describe the sample, not skill.
+        acc = r.get("live_acc")
+        acc_cell = "withheld — no null" if (acc is not None and null is None) \
+            else pct(acc)
         out.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (
             cell(r.get("predictor", "?")),
             cell(r.get("band", "all")),
             "{:,}".format(r.get("live_n", 0)),
-            pct(r.get("live_acc")),
+            acc_cell,
             pct(null),
             pp(r.get("skill")),
             r.get("distinct_days", 0),

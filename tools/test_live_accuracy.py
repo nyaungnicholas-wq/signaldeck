@@ -199,6 +199,33 @@ class TestGenerator(unittest.TestCase):
                              "a row with no live record must not sit in the live table")
             self.assertIn("73.1%", rest)  # the registered claim is still disclosed
 
+    def test_accuracy_is_withheld_when_the_row_has_no_null(self):
+        # 2026-08-25 audit: liquidity21/trend21/vol21 published 72-78% next to
+        # an em-dash null. Persistence labels grade ~70% on inertia alone, so
+        # a bare percentage with no baseline reads as skill — the same misread
+        # the /proof fix removed. The number itself must be withheld, not just
+        # the verdict; a row that HAS a null keeps its percentage.
+        import copy
+        fixture = copy.deepcopy(FIXTURE)
+        fixture["stale_last_registry"]["rows"].append(
+            {"predictor": "liquidity21", "family": "regime", "band": "all",
+             "live_n": 275, "live_acc": 0.785, "ci": None,
+             "distinct_days": 1, "null_prequential": None, "skill": None,
+             "verdict": "NO BASELINE — naive-persistence null not frozen",
+             "retire": False})
+        with TmpRepo() as t:
+            with open(t.registry, "w", encoding="utf-8") as f:
+                json.dump(fixture, f)
+            t.gen("--write")
+            for line in t.read(t.partial).splitlines():
+                if line.startswith("| liquidity21 "):
+                    self.assertIn("withheld — no null", line)
+                    self.assertNotIn("78.5%", line,
+                                     "accuracy published with no baseline: %r" % line)
+                if line.startswith("| directional-ensemble (1d) "):
+                    self.assertIn("46.3%", line,
+                                  "a row WITH a null must keep its accuracy: %r" % line)
+
     def test_partial_is_delimited_by_include_markers(self):
         with TmpRepo() as t:
             t.gen("--write")
