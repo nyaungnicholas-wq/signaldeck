@@ -301,10 +301,21 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 			// return index t-1 aligns to bar index t (ret i resolves at bar i+1)
 			res, rok = structregime.ResolveVol21At(barReturns2(sr.closes), t-1)
 		default:
-			continue // unknown kind (e.g. retired gapfill rows) — never guessed
+			// An unknown kind is a kind the ENGINE no longer has (retired gapfill
+			// rows). No future bar teaches it one, so this row is as permanently
+			// unresolvable as one whose symbol left the universe. Same treatment:
+			// retire it with a reason past the grace window rather than retry it
+			// forever. Still never GUESSED at.
+			abandon(o, "unknown regime kind (retired from the engine)")
+			continue
 		}
 		if !rok {
-			continue // degenerate window (tie / NaN median) — honest non-grade
+			// A degenerate window (tie / NaN median) is computed from a FIXED
+			// historical bar index, so re-running never changes the answer: this
+			// row is un-gradable permanently, not yet. Retiring it past the grace
+			// window keeps the honest non-grade AND stops the endless retry.
+			abandon(o, "degenerate resolution window (tie or NaN median)")
+			continue
 		}
 		correct := res.Actual == o.Regime
 		if err := w.St.ResolveRegimeOutcome(ctx, o.ID, res.Actual, correct, nowUnix); err != nil {
