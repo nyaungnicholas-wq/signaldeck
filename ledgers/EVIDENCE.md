@@ -690,3 +690,32 @@ means nothing until that second column exists: if the market trends up on 80%
 of days, calling 'trend up' every day scores 80%. And day-weight before
 believing any edge - same-day rows share one market move, which is what turned
 the stock book's +0.332% into -0.435%.
+
+## E27 - the offsite gap is real, but the on-machine copies provably restore
+
+The one mitigation available while B2/R1 stay blocked, checked rather than
+assumed. `ops/restore-rehearsal.sh` is not a file-exists check: it restores a
+backup to an ISOLATED temp path and verifies it end to end.
+
+Last run, 2026-08-23:
+
+```
+OK: local backup signaldeck-20260821-183254.db restores clean
+  - integrity_check ok, 15941498 bars rows, ledger chain + anchors verified
+```
+
+The 2026-08-16 run passed identically on the 08-14 backup (11/10 anchors
+recomputed, chain intact). So the backups are not merely present, they are
+PROVEN restorable, ledger chain and anchor signatures included.
+
+**What this changes.** The missing off-machine copy (E6, B2) is still the
+highest-severity open item and losing the disk still loses everything. But the
+risk profile is 'single point of failure, contents verified good' rather than
+'single point of failure, contents unknown' - materially better, and it means
+an offsite destination would be copying something known-restorable rather than
+a hopeful blob.
+
+**The residual gap, stated honestly.** The rehearsal is weekly (next 2026-08-30)
+and last exercised the 08-21 backup, so the 08-24/25/26 backups are unrehearsed.
+That is the cadence working as designed, not a defect - but it does mean 'proven
+restorable' currently refers to a copy six days old.
