@@ -239,6 +239,17 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 	// abandoned counts rows retired as UNGRADABLE this pass — see
 	// regimeAbandonMultiple below. Reported, never silent.
 	abandoned := 0
+	// stuck counts due rows that could not be graded THIS pass for want of
+	// forward bars, whether or not they are old enough to retire.
+	//
+	// Retirement alone does not fix the defect E22 recorded. The complaint was
+	// SILENCE: this worker reported a bare `resolved 0` for 31 days while 2,288
+	// rows sat unresolvable. A 3x grace window is deliberately wide, so the
+	// oldest of those rows does not retire until 2026-09-18 -- three more weeks
+	// of the same silence if the count is not surfaced until then. Reporting the
+	// stuck total every pass makes the hole visible NOW, without retiring a
+	// single row early.
+	stuck := 0
 	// abandon marks a row that is so far past its horizon that no future bar can
 	// rescue it, and counts it. Returns true when the row was retired.
 	abandon := func(o store.RegimeOutcomeRow, reason string) bool {
@@ -256,6 +267,7 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 	for _, o := range due {
 		sr := load(o.SymbolID, o.Ts-int64(volLookbackDays)*86400)
 		if sr == nil {
+			stuck++
 			abandon(o, "no bars available for the symbol")
 			continue
 		}
@@ -272,6 +284,7 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 			// reported ok/resolved 0 for 31 days. Past the grace window we
 			// retire the row WITH A REASON instead of retrying it forever —
 			// otherwise the structural record silently grades only survivors.
+			stuck++
 			abandon(o, "insufficient forward bars past the grace window (symbol likely left the universe)")
 			continue // still unresolved this pass either way
 		}
@@ -315,8 +328,8 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	summary := fmt.Sprintf("froze %d regime calls (%d without a naive baseline, %d abstained on a tied null), resolved %d (%d wrong, %d high-conviction postmortems), retired %d ungradable",
-		frozen, noNull, abstained, resolved, misses, pms, abandoned)
+	summary := fmt.Sprintf("froze %d regime calls (%d without a naive baseline, %d abstained on a tied null), resolved %d (%d wrong, %d high-conviction postmortems), retired %d ungradable, %d due but stuck short of forward bars",
+		frozen, noNull, abstained, resolved, misses, pms, abandoned, stuck)
 	// HARD REFUSAL 2 — partial coverage is not a matched null. If any call in
 	// this pass was frozen without a baseline, the benchmark denominator is a
 	// self-selected subset of the rows the model is scored on. Resolution work

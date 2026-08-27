@@ -129,3 +129,43 @@ func TestRegimeSlowSymbolStillGradesInsideGraceWindow(t *testing.T) {
 		t.Fatalf("graded row must not also be retired: %s", summary)
 	}
 }
+
+// The stuck count must be visible on the very first pass, long before anything
+// is old enough to retire. That is the half of E22 the grace window does NOT
+// fix: a wide window defers RETIREMENT, and retirement was never the complaint --
+// silence was. A pass that grades nothing because 2,288 rows lack forward bars
+// must say so, not print a bare "resolved 0".
+func TestRegimeStuckRowsAreReportedBeforeTheyAreRetirable(t *testing.T) {
+	ctx, st, _, callTs := seedShortCall(t, "stuck_visible.db")
+
+	// Due by the calendar, nowhere near the 3x retirement threshold.
+	clock := callTs + int64(ungradableHorizon*1.45*86400) + 10
+	w := &RegimeOutcomeWorker{St: st, Now: func() time.Time { return time.Unix(clock, 0) }}
+	summary, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(summary, "1 due but stuck short of forward bars") {
+		t.Fatalf("a pass that graded nothing must SAY why; summary was: %s", summary)
+	}
+	if !strings.Contains(summary, "retired 0 ungradable") {
+		t.Fatalf("nothing may be retired this early: %s", summary)
+	}
+}
+
+// A pass with nothing stuck must not cry wolf.
+func TestRegimeStuckCountIsZeroWhenEverythingGrades(t *testing.T) {
+	ctx, st, symID, callTs := seedShortCall(t, "stuck_none.db")
+	price := func(i int) (float64, float64) { return 100.0 * math.Pow(1.002, float64(i)), 1e6 }
+	seedRegimeBars(t, st, symID, 1000, 310, price)
+
+	clock := callTs + int64(ungradableHorizon*1.45*86400) + 10
+	w := &RegimeOutcomeWorker{St: st, Now: func() time.Time { return time.Unix(clock, 0) }}
+	summary, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(summary, "0 due but stuck short of forward bars") {
+		t.Fatalf("nothing was stuck; summary must say 0: %s", summary)
+	}
+}
