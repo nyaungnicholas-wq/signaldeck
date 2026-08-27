@@ -262,3 +262,25 @@ process gap, not a code defect. **R7 is reclassified NOT-A-DEFECT.**
 
 I did not send a test alert: that would push to an external service, which this
 goal puts out of scope.
+
+## E16 — Both repairs CONFIRMED in production
+Settled worker runs after the e25505e deploy, read from `worker_runs`:
+
+| worker | before | after |
+|---|---|---|
+| `sentiment-tagger` | `llm: provider error: HTTP 410` x24/day | **ok** - `tagged 60 headlines` |
+| `ai-analyst` | `llm: provider error: HTTP 410` x7/day | **ok** - `wrote analyst brief` |
+| `universe-poller` | `status 400: invalid symbol: ATC.220816` every run | **ok** - `refreshed 283/286 universe symbols (1d 1968, 1h 31668, 1m 824229 bars)` |
+
+The universe-poller line is the material one. `283/286` is the repair behaving
+exactly as designed: the vendor-rejected names were dropped and every other
+symbol was kept, where previously the whole batch died. **824,229 one-minute
+bars** were ingested on that single run -- data the platform had been silently
+failing to collect on every poll since at least 2026-08-24.
+
+Fleet-wide error scan over the following 20 minutes returns only the 00:11:47
+sentiment-tagger row, which predates the deploy and is still inside the window.
+
+Note what this does NOT do: none of it admits a leg, widens the book, or moves
+the forward test off 0 of 60. It restores data collection and two analysis
+workers. The edge question is untouched, and E9 still stands.
