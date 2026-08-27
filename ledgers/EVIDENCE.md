@@ -346,3 +346,47 @@ in the way that matters", and no account is signed in here, so it syncs nowhere.
 But that is precisely what `same_volume` already catches, and it does.
 
 **R5 -> WONTFIX (superseded by R1).** Recorded rather than silently skipped.
+
+## E19 — THE HIGHEST PROVEN MODE, MEASURED: paper trading does not beat SPY
+This is the "paper-trade, measure" step, and it is the closest thing this repo
+has to an answer on after-cost performance. Four `flagship-*` paper strategies,
+509 trades, 312 equity marks.
+
+**Two corrections applied before any number below was trusted:**
+1. `paper_epochs` holds THREE epochs, and epoch 2 (2026-07-21) is labelled
+   `backdated-fills-fixed` -- *"INTEGRITY BOUNDARY, not a strategy change"*.
+   Measuring across it is invalid. My first pass did (07-03 -> 08-26, giving
+   -1.77% / -0.15% / +0.41% / -3.88%) and those figures are DISCARDED.
+2. Both `-replay` strategies are DORMANT: last equity mark 2026-08-18, eight
+   days stale, positions still open. Their marks are not current prices.
+
+Epoch 3 only (from 2026-08-03), live strategies:
+
+| strategy | window | return | SPY | excess |
+|---|---|---|---|---|
+| flagship-1d | 08-03 -> 08-26 | +0.46% | +1.11% | **-0.65pp** |
+| flagship-1w | 08-03 -> 08-26 | +1.35% | +1.11% | **+0.24pp** |
+| flagship-1d-replay | stale to 08-18 | -0.05% | +1.29% | -1.34pp |
+| flagship-1w-replay | stale to 08-18 | -0.13% | +1.29% | -1.42pp |
+
+### The number that must NOT be quoted
+Daily excess returns, epoch 3:
+
+| lane | n | mean daily excess | annualised | t |
+|---|---|---|---|---|
+| flagship-1d | 14 | +0.1263% | **+31.8%** | **+0.22** |
+| flagship-1w | 14 | -0.0492% | -12.4% | -0.25 |
+
+`flagship-1d`'s mean daily excess annualises to **+31.8%**, within sight of this
+goal's 40-50% aspiration -- on **t = 0.22 with n = 14**, and with a CUMULATIVE
+excess of the OPPOSITE SIGN (-0.65pp). Neither lane clears |t| >= 2, let alone
+the |t| >= 2.50 a Bonferroni correction over the 4 strategies tested demands.
+
+That +31.8% is exactly the false positive this repo's methodology exists to
+prevent, and it is exactly what a search over 4 lanes on 14 observations
+produces by chance. **It is noise. Do not quote it.**
+
+**Verdict: no lane demonstrates SPY outperformance.** Three of four trail SPY;
+the fourth leads by 0.24pp on 23 days and fails every significance test. The
+honest statement about the highest proven mode is that it is running, it is
+measured, and it shows no edge.
