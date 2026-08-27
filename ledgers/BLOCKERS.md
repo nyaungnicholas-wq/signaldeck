@@ -95,3 +95,26 @@ trade. Establishing one requires new signal research, which is a different
 undertaking from this repair-and-verify goal -- and the only registered
 instrument that could ever settle it (forward test, prereg seq 87) cannot
 accumulate sessions while the ensemble correctly declines to bet (E9).
+
+### B1 update (2026-08-27): the contract now exists; the INPUTS still do not
+
+`daemon/internal/liverisk` (ef323e9) encodes exactly what this goal specifies a
+`LIVE_RISK_CONFIG` must define, and gates it fail-closed. **It arms nothing** -
+there is still no live order path anywhere in this repo.
+
+What changed is the KIND of safety. Before: nothing could trade because nobody
+had written the code - accidental. Now: the day that code is written it must
+pass `Armed()`, which requires BOTH `LIVE_ARMED=true` AND a config where all 16
+fields validate. The zero value can never arm, under any flag value, and that
+is pinned by a test and mutation-checked.
+
+Every field is required on purpose. A partially-specified risk config is more
+dangerous than none because it LOOKS configured - the same failure shape as
+`offsiteConfigured:true` over a folder on the same disk. `Validate` reports all
+16 problems at once rather than the first, so nobody fixes one field per run
+against a config that was never going to be complete.
+
+**Still BLOCKED, unchanged:** broker, account, jurisdiction, and the actual
+risk numbers are Nicholas's to supply. No credential was requested or exposed.
+The honest state is now 'the gate is built and locked, and the key does not
+exist' rather than 'there is no gate'.
