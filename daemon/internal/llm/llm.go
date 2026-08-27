@@ -154,15 +154,35 @@ func New(keys []string, baseURL, model, deepModel, fastModel string, dailyCap in
 	}
 }
 
-// Default model ids (overridable via config). qwen3.5-122b-a10b is a
-// mixture-of-experts model: 122B of knowledge with only ~10B active per token,
-// so it answers in ~4s on the NVIDIA free tier while reasoning far better than
-// an 8B dense model. The deep model is a reasoning-tuned Nemotron used only for
-// on-demand quality work (it takes ~30s and emits a hidden reasoning trace).
+// Default model ids (overridable via config).
+//
+// EVERY PREVIOUS DEFAULT IS RETIRED. Measured against
+// https://integrate.api.nvidia.com/v1 on 2026-08-27: qwen/qwen3.5-122b-a10b,
+// nvidia/llama-3.3-nemotron-super-49b-v1.5 and meta/llama-3.1-8b-instruct all
+// return HTTP 410 Gone. That is why ai-analyst and sentiment-tagger had been
+// erroring `llm: provider error: HTTP 410` on every run -- 31 failures a day --
+// and why the sentiment leg carries no measured lift: its tagger never ran.
+// The same class of breakage is already recorded in daemon/.env ("2026-07-19:
+// fixed dead AI model"), so vendor retirement is recurring, not a one-off.
+//
+// THE /models CATALOGUE IS NOT EVIDENCE. nvidia/llama-3.1-nemotron-70b-instruct
+// and nvidia/mistral-nemo-minitron-8b-8k-instruct are both LISTED there and both
+// answer HTTP 404 to an actual completion. Every id below was verified by
+// issuing a real chat completion, not by reading the list.
+//
+// Tiering follows the measurement:
+//   - nemotron-3-nano-30b-a3b answered a sentiment classification correctly in
+//     ~950ms, so it takes the high-volume default and fast tiers.
+//   - nemotron-3-super-120b-a12b is a reasoning model (it emits
+//     reasoning_content and needs a generous max_tokens or it truncates
+//     mid-thought), which is exactly the on-demand deep tier and exactly wrong
+//     for per-headline work.
+//   - nemotron-3.5-lightning-30b-a3b was rejected despite its name: 19.8s and
+//     still truncated on the same prompt.
 const (
-	DefaultModel = "qwen/qwen3.5-122b-a10b"
-	DefaultDeep  = "nvidia/llama-3.3-nemotron-super-49b-v1.5"
-	DefaultFast  = "meta/llama-3.1-8b-instruct"
+	DefaultModel = "nvidia/nemotron-3-nano-30b-a3b"
+	DefaultDeep  = "nvidia/nemotron-3-super-120b-a12b"
+	DefaultFast  = "nvidia/nemotron-3-nano-30b-a3b"
 )
 
 func (c *httpClient) Enabled() bool     { return len(c.keys) > 0 }
