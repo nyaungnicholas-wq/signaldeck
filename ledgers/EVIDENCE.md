@@ -321,3 +321,28 @@ every case the platform was right and my first reading was wrong. The
 instruments in this repo are more trustworthy than a first pass over them, and
 the fastest way to be wrong here is to believe an initial hypothesis over the
 source.
+
+## E18 — R5 (OneDrive re-accumulation): deliberately NOT changed
+Measured: `C:\Users\Nicholas_N\OneDrive\SignalDeckBackups` regrew to **6.4 GB**
+in the three days after I cleared 9.5 GB from it on 2026-08-23 (930M on 08-24,
+927M on 08-25, a 4.6G uncompressed copy on 08-26).
+
+Left alone, on the ladder:
+1. It is bounded, not unbounded -- `compress_and_prune` runs on that path, so
+   the pile is roughly one retention window, not a leak.
+2. The volume has 1.2 TB free. 6.4 GB is not pressure.
+3. The behaviour is a DELIBERATE, documented decision by another author:
+   *"The copy is KEPT -- a second copy still survives an accidental delete --
+   but it is recorded as what it is."* The `same_volume` guard already refuses
+   to miscount it as offsite, which is the part that mattered and is correct.
+4. **It resolves itself.** The moment `SIGNALDECK_OFFSITE_DIR` or
+   `SIGNALDECK_OFFSITE_S3` is set (B2/R1), `OFFSITE` resolves to that
+   destination instead and the OneDrive path stops being written at all. Fixing
+   R5 separately is work that the real fix deletes.
+
+The one fact that weakens the original rationale on THIS machine: the comment
+justifies the Windows fallback on a synced OneDrive being "genuinely off-machine
+in the way that matters", and no account is signed in here, so it syncs nowhere.
+But that is precisely what `same_volume` already catches, and it does.
+
+**R5 -> WONTFIX (superseded by R1).** Recorded rather than silently skipped.
