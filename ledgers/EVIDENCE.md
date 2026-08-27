@@ -436,3 +436,26 @@ dircall program.
 | paper 1d/1w-replay | dormant 8 days; both negative excess |
 
 Every lane independently validated. **Not one shows a significant edge.**
+
+## E21 — Cost and integrity requirements: verified, and honestly flagged where not clean
+The goal requires testing fees, spread, slippage, liquidity, partial fills,
+borrow, corporate actions, point-in-time and survivorship. Checked each:
+
+| requirement | status | evidence |
+|---|---|---|
+| Spread | MODELLED | `papertrade/execution.go`: `cost = notional * (halfSpread + impact)`, stored as `SpreadBps` per side |
+| Market impact / slippage | MODELLED | sqrt-scaling impact; sizing solves `N*(1+spread+impact(N)) = budget` as a contraction |
+| Liquidity + partial fills | MODELLED | notional CAPPED by bar volume, filling SHORT with `UnfilledNotional` rather than pretending the rest filled |
+| Fees applied in practice | YES | all **509** paper trades carry a nonzero `cost`; total **$3,560.81**, mean **$7.00**/trade |
+| Corporate actions | HANDLED | `barAdjustment = "split"` at the vendor; `split-repair` ran 2026-08-27: `scanned 322, contaminated 25, repaired 0, confirmed-real 1` |
+| Borrow | NOT APPLICABLE | **0** negative-qty paper positions -- the book is long-only, so there is no borrow exposure to model. The 245 `sell` trades are exits, not shorts |
+| Survivorship | MEASURED, NOT CLEAN, and SAID SO | 738 of 2621 inactive symbols carry no `delisted_at`; the accuracy registry publishes `survivorship_clean=false` and a bound ("at most 0.70pp") rather than hiding it |
+| Leakage / embargo / purge | PRESENT | `tools/controls_evidence.py`, `alphax.go` (E12) |
+
+This validates E19's "after-cost" claim, which I had asserted before checking --
+it holds: the paper equity curves are net of modelled spread, impact and
+capped fills, not gross.
+
+The one genuinely soft spot is survivorship, and the platform already declares
+it rather than quietly assuming it away. That is the correct handling of a
+limitation that cannot be closed from the data on hand.
