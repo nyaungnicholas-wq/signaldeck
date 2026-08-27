@@ -612,3 +612,45 @@ This is the first of the three fixes in the table above to move a production
 number on the first check after shipping - because it was the one written
 AFTER measuring what the previous fix actually did, rather than after assuming
 it had worked.
+
+## E25 - the structural lane is not broken; it grades for the first time TODAY
+
+E22 recorded 2 gradeable rows of 58,206 and I read that as a lane that could
+not be graded. The fuller measurement says otherwise, and the explanation is
+an accident of two dates one day apart:
+
+| | |
+|---|---|
+| `naive_label` introduced | **2026-07-27** |
+| resolution stalled | **2026-07-26** |
+
+Every RESOLVED row predates the baseline; every BASELINED row postdates the
+stall. The two sets barely intersect BY CONSTRUCTION, which is the whole of the
+'2 rows' figure. The 5,421 resolved rows carrying no baseline are therefore
+honest history, not a defect: the column did not exist when they were called.
+
+### The transition is now
+
+| horizon | baselined rows | earliest becomes due |
+|---|---|---|
+| 21d | **27,060** | **2026-08-27 (today)** |
+| 63d | 8,925 | 2026-10-26 |
+
+Sampling the 300 earliest 21-day baselined rows: **282 on ACTIVE symbols** and
+**285 already hold >= 21 forward bars**. They are ready to grade.
+
+So the lane produces its first baseline-comparable rows today, and ~27k over
+the coming month. Only then can `trend21`'s ungraded 80.81% headline be judged
+against anything -- which is exactly why the registry has refused to print it.
+
+### Why the repairs landed at the right time
+
+The ~5% of that cohort that is inactive or bar-short is precisely what
+082e6dc/f10646b now retire WITH A REASON instead of accumulating silently, and
+5fb3cdd makes the stuck count visible every pass. Without them this transition
+would have been mixed in with 2,288 permanently-stuck legacy rows and reported
+as a bare `resolved 0`.
+
+**Revises E22.** The lane was never permanently ungradable; it was one day of
+calendar misalignment plus a silent stall. The stall is fixed and the
+misalignment ages out on its own.
