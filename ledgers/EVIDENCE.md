@@ -284,3 +284,40 @@ sentiment-tagger row, which predates the deploy and is still inside the window.
 Note what this does NOT do: none of it admits a leg, widens the book, or moves
 the forward test off 0 of 60. It restores data collection and two analysis
 workers. The edge question is untouched, and E9 still stands.
+
+## E17 — R4 RESOLVED: forecast-monitor is correct. The contradiction was mine.
+E13 recorded an unresolved conflict between
+`only 0 of 2567 symbols received a forecast` (2026-08-27) and 882 distinct
+symbols in `model_forecasts` that day. Resolved by reading the definitions:
+
+- `store.ForecastDayStats` counts `prediction_outcomes` -- RESOLVED predictions.
+  So `Symbols` (2567) is that day's resolved cross-section, NOT the swept-wide
+  active universe. My "oscillating denominator" hypothesis was wrong.
+- `DayStat.Forecast() = Symbols - Withheld`, and `ForecastDayStatsRaw` documents
+  that Withheld is exactly the `n_used = 0` abstentions (verified in-repo across
+  the whole table: 4442 rows at `n_used=0 AND raw_prob=0.5`, zero at `n_used=0`
+  with any other raw_prob, so `n_used > 0` is an EXACT filter for "carries a
+  forecast").
+
+So `0 of 2567` means every resolved prediction that day was an abstention. That
+is **E9 measured from the outcomes side**, by an independent path, and it
+corroborates rather than contradicts it.
+
+The apparent conflict with `model_forecasts` was a category error on my part:
+`model_forecasts` holds TRAINED MODEL OUTPUTS; `Forecast()` counts predictions
+that ADMITTED a leg. A model is trained and its leg is still refused admission.
+Both numbers are right and they measure different things.
+
+**R4 reclassified NOT-A-DEFECT.** The permanent `degraded` is the honest status
+of a system abstaining on its whole cross-section. Had I "fixed" the denominator
+on my first hypothesis I would have silenced a true alarm -- which is exactly
+why E13 left it alone.
+
+### Pattern worth recording
+Three of my own findings this session inverted on inspection: R2 (gating
+"defect" -> correct abstention), R7 (escalation "missing" -> present and
+working), R4 (monitor "wrong denominator" -> correct, and corroborating). In
+every case the platform was right and my first reading was wrong. The
+instruments in this repo are more trustworthy than a first pass over them, and
+the fastest way to be wrong here is to believe an initial hypothesis over the
+source.
