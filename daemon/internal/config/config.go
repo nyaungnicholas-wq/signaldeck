@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 )
 
 // projectRoot returns the directory CONTAINING signaldeck/ — the anchor for the
@@ -195,12 +196,19 @@ func Load() Config {
 	httpAddr := envOr("SIGNALDECK_HTTP", "127.0.0.1:8322")
 	private := reachablePrivately(httpAddr, allowedHostsRaw)
 	cfg := Config{
-		LLMKey:          llmFirst,
-		LLMKeys:         llmKeys,
-		LLMBaseURL:      pick("SIGNALDECK_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-		LLMModel:        pick("SIGNALDECK_LLM_MODEL", "qwen/qwen3.5-122b-a10b"),                        // MoE: 122B knowledge / ~10B active → strong + ~4s on NVIDIA free tier
-		LLMModelDeep:    pick("SIGNALDECK_LLM_MODEL_DEEP", "nvidia/llama-3.3-nemotron-super-49b-v1.5"), // reasoning-tuned; on-demand only (~30s)
-		LLMModelFast:    pick("SIGNALDECK_LLM_MODEL_FAST", "meta/llama-3.1-8b-instruct"),               // ultra-fast for high-frequency low-stakes calls
+		LLMKey:     llmFirst,
+		LLMKeys:    llmKeys,
+		LLMBaseURL: pick("SIGNALDECK_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+		// ONE DEFINITION OF EACH MODEL ID, in internal/llm. These literals used
+		// to be spelled out here as well, and the duplicate is what made the
+		// 2026-08-27 repair fail its first verification: llm.go was corrected,
+		// this file was not, pick() returned the stale literal because no env
+		// var was set, and sentiment-tagger went on answering HTTP 410 across a
+		// daemon restart. A second copy of a value that a vendor can retire is
+		// not redundancy, it is a second thing to forget.
+		LLMModel:        pick("SIGNALDECK_LLM_MODEL", llm.DefaultModel),
+		LLMModelDeep:    pick("SIGNALDECK_LLM_MODEL_DEEP", llm.DefaultDeep),
+		LLMModelFast:    pick("SIGNALDECK_LLM_MODEL_FAST", llm.DefaultFast),
 		LLMDailyCap:     atoiOr("SIGNALDECK_LLM_DAILY_CAP", pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
 		DBPath:          envOr("SIGNALDECK_DB", filepath.Join(projectRoot(), "signaldeck", "data", "signaldeck.db")),
 		HTTPAddr:        httpAddr,
