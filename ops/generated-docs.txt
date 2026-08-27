@@ -1,0 +1,27 @@
+# Paths the nightly jobs REGENERATE (ops/accuracy-registry.sh and the doc
+# renderers it drives). ops/signaldeck-ctl.sh build_from_head ignores dirt
+# confined to EXACTLY these paths, because it cannot reach the binary: the
+# build extracts `git archive HEAD` (the commit, never the working tree) and
+# the only go:embed targets in the daemon are schema.sql and result.json.
+# Any other dirty path still refuses the deploy.
+#
+# Exact paths only — no directory prefixes. partials/INCLUDES.txt is an INPUT
+# to the renderers, not an output, and is deliberately NOT listed: a dirty
+# input means a human edit that should block a deploy until committed.
+#
+# Accepted risk, on the record: a HUMAN edit to one of these files is also
+# exempted, and the nightly job will clobber it anyway. These are machine
+# surfaces; hand-edits to them were already doomed before this file existed.
+# This file itself is NOT exempt — editing it dirties the tree and refuses
+# the deploy until committed, which is the fail-closed direction.
+README.md
+CASE_STUDY.md
+HOW_PREDICTORS_WORK.md
+INSTITUTIONAL_GAP.md
+PREDICTION_PROCESS.md
+SHIP_READINESS.md
+STRATEGY_DECK.md
+partials/live_accuracy.md
+partials/deck_facts.md
+partials/controls_evidence.md
+ops/revalidation-status.json

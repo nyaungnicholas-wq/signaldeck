@@ -102,12 +102,42 @@ stopsvc() { sd_svc_stop "$1"; }
 build_from_head() {
   cd "$REPO" || return 2
   local dirty rev tmp LDPKG
-  dirty="$(git status --porcelain | wc -l | tr -d ' ')"
-  if [ "$dirty" != "0" ]; then
-    echo "REFUSED: working tree is not clean ($dirty path(s))." >&2
-    git status --porcelain | head -20 >&2
+  # The tree must be clean EXCEPT for the nightly-regenerated docs listed in
+  # ops/generated-docs.txt. Those cannot change the binary: the build extracts
+  # `git archive HEAD` (the COMMIT, never the working tree), and no Go source
+  # embeds a doc (the only go:embed targets are schema.sql and result.json).
+  # The refusal below protects operator INTENT — "the edit I just made got
+  # deployed" — and a machine-regenerated doc carries no operator intent to
+  # protect. Everything else still refuses; a missing or unreadable allowlist
+  # exempts NOTHING; and porcelain lines the exact-match parser cannot claim
+  # (renames "R old -> new", quoted paths) fail CLOSED by never matching.
+  dirty="$(git status --porcelain | awk -v listfile="$REPO/ops/generated-docs.txt" '
+    BEGIN {
+      n = 0
+      while ((getline line < listfile) > 0) {
+        sub(/\r$/, "", line)
+        if (line ~ /^[ \t]*(#|$)/) continue
+        allow[n++] = line
+      }
+      close(listfile)
+    }
+    {
+      path = substr($0, 4)
+      for (i = 0; i < n; i++) if (allow[i] == path) next
+      print
+    }')"
+  if [ -n "$dirty" ]; then
+    echo "REFUSED: working tree is not clean." >&2
+    printf '%s\n' "$dirty" | head -20 >&2
     echo "Commit or stash first — a running daemon must be reproducible from a commit." >&2
+    echo "(nightly-generated docs from ops/generated-docs.txt are exempt and not counted above)" >&2
     return 1
+  fi
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "NOTE: proceeding past uncommitted NIGHTLY-GENERATED docs (ops/generated-docs.txt):" >&2
+    git status --porcelain | head -12 >&2
+    echo "The binary builds from git archive HEAD; none of these paths can reach it." >&2
+    echo "Commit them when convenient — a HAND-built binary still stamps +dirty and refuses to start." >&2
   fi
   if ! /bin/bash "$REPO/ops/manifest-check.sh" >&2; then
     echo "REFUSED: load-bearing paths are missing from git." >&2

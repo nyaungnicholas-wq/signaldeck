@@ -20,25 +20,33 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # says what that costs.
 #
 # It is not housekeeping. Every surface this job regenerates is TRACKED, so a
-# successful run always leaves the worktree dirty -- and both deploy paths refuse
-# a dirty tree ON PURPOSE, because a running daemon must be reproducible from a
-# commit: ops/signaldeck-ctl.sh build_from_head refuses outright, and a hand-built
-# binary gets a "+dirty" vcs stamp that cmd/signaldeckd/main.go refuses to start
-# on. Measured 2026-08-21: this job regenerated nine files at 18:33, a rebuild at
-# 19:09 stamped f5f6b0a+dirty, and the daemon stayed DOWN until they were
-# committed. The task result was 1 and nothing said why.
+# successful run always leaves the worktree dirty. Until 2026-08-26 both deploy
+# paths refused ANY dirty tree, so this job manufactured a daily deploy blocker:
+# measured 2026-08-21, it regenerated nine files at 18:33, a rebuild at 19:09
+# stamped f5f6b0a+dirty, and the daemon stayed DOWN until they were committed.
+# ops/signaldeck-ctl.sh build_from_head now exempts exactly the paths in
+# ops/generated-docs.txt (they cannot reach the binary -- it builds from
+# `git archive HEAD`); a HAND-built binary still gets a "+dirty" vcs stamp that
+# cmd/signaldeckd/main.go refuses to start on.
 #
 # The job cannot commit for the operator -- an unattended commit of published
 # numbers is its own problem -- but it can stop the next deploy being a mystery.
+# Since 2026-08-26 ops/signaldeck-ctl.sh no longer refuses on dirt confined to
+# exactly these paths (they cannot reach the binary; it builds from `git archive
+# HEAD`). The list lives in ops/generated-docs.txt -- ONE spelling, shared with
+# the deploy check, because two copies of one list is how they drift apart.
 report_uncommitted_docs() {
   local dirty
-  dirty="$(cd "$SD" && git status --porcelain --     README.md partials/ CASE_STUDY.md HOW_PREDICTORS_WORK.md INSTITUTIONAL_GAP.md     PREDICTION_PROCESS.md SHIP_READINESS.md STRATEGY_DECK.md ops/revalidation-status.json 2>/dev/null)"
+  # shellcheck disable=SC2046 -- word-splitting the pathspecs is intended; no
+  # listed path contains whitespace, and the allowlist header says exact paths.
+  dirty="$(cd "$SD" && git status --porcelain -- $(grep -Ev '^[[:space:]]*(#|$)' "$SD/ops/generated-docs.txt" 2>/dev/null) 2>/dev/null)"
   [ -n "$dirty" ] || return 0
   echo "NOTE: this run regenerated tracked documents and left them UNCOMMITTED:"
   echo "$dirty" | sed 's/^/  /'
-  echo "Commit them before the next daemon rebuild. Both deploy paths refuse a dirty"
-  echo "tree, and a hand-built binary is stamped +dirty and REFUSES TO START --"
-  echo "signaldeckd exited 1 on exactly this on 2026-08-21."
+  echo "ops/signaldeck-ctl.sh deploy/launch proceed past exactly these paths (the"
+  echo "binary builds from git archive HEAD). A HAND-built binary still stamps"
+  echo "+dirty and REFUSES TO START -- signaldeckd exited 1 on that on 2026-08-21."
+  echo "Commit them when convenient."
 }
 
 # shellcheck source=lib-portable.sh
