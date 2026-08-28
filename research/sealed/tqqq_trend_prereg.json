@@ -1,0 +1,41 @@
+{
+  "hypothesis": "Holding a 3x-levered Nasdaq ETF only while the underlying index is above its own 200-day simple moving average produces a positive excess annual return over SPY on data not used to select the rule.",
+  "id": "tqqq-trend-2026-08-27",
+  "known_limitation_stated_upfront": "E31 measured this rule over the FULL 2016-2026 window before this registration, so the holdout is not virgin to the analyst. This seal therefore tests sub-period robustness (does it survive 2022's bear market and the levered-decay regime), NOT true out-of-sample discovery. It is weaker evidence than a true holdout and must not be reported as one.",
+  "no_tuning_clause": "Exactly one grading run. No parameter may be changed after this file is committed. If the holdout fails, the result is FAILED and the rule is not adopted.",
+  "prior_full_window_result_for_the_record": {
+    "ann_pct": 40.21,
+    "max_dd_pct": -54.9,
+    "sharpe": 0.84
+  },
+  "registered_utc": "2026-08-27",
+  "split": {
+    "explore": [
+      "2016-01-04",
+      "2021-12-31"
+    ],
+    "holdout_touched_before_registration": false,
+    "sealed_holdout": [
+      "2022-01-01",
+      "2026-08-27"
+    ]
+  },
+  "strategy": {
+    "asset": "TQQQ",
+    "cost_bps_per_switch": 5.0,
+    "rebalance": "daily evaluation, position changes only on signal flips",
+    "rule": "long TQQQ on day D if close(QQQ, D-1) > SMA200(QQQ, D-1); else hold cash at 0% return",
+    "signal_lag_days": 1,
+    "signal_underlying": "QQQ",
+    "sma_window": 200
+  },
+  "success_criteria_frozen_before_grading": {
+    "primary": "holdout annualised return STRICTLY GREATER THAN SPY's annualised return over the identical holdout window",
+    "reported_not_graded": [
+      "max_drawdown",
+      "worst_rolling_12m",
+      "number_of_signal_flips"
+    ],
+    "secondary": "holdout Sharpe ratio STRICTLY GREATER THAN SPY's Sharpe over the identical holdout window"
+  }
+}
