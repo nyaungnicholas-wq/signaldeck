@@ -955,3 +955,46 @@ no-tuning clause applies - no parameter may now be changed and re-graded.
 If the return is leverage rather than skill, then simply levering SPY should do
 comparably. That comparison is a NEW test needing its own registration - running it
 against this holdout would be tuning on a sealed result, which is forbidden.
+
+## E34 - WALK-FORWARD VERDICT: the 200dma rule LOSES over 40 years. The QQQ finding was regime luck.
+
+Setup: Phase 1 and 3 of the approved plan. Long index history from yfinance, validated against the Alpaca ETF panel over 2016-2026 before use: ^GSPC vs SPY correlation 0.9933 and annualised 13.51 vs 13.49 percent; ^NDX vs QQQ correlation 0.9986 and annualised 19.42 vs 19.41 percent. Gate PASSED. 5bps per switch.
+
+### Full period
+
+| Index | years | buy-and-hold ann% | buy-and-hold maxDD% | 200dma ann% | 200dma maxDD% | excess |
+|-------|-------|-------------------|---------------------|-------------|---------------|--------|
+| Nasdaq-100 ^NDX | 1986-2025 (40) | 14.61 | -82.9 | 10.98 | -59.3 | -3.63pp |
+| S&P 500 ^GSPC | 1928-2025 (98) | 6.38 | -86.2 | 6.48 | -52.2 | +0.10pp |
+
+### It wins one year in five
+
+On ^NDX the timed rule beat buy-and-hold in only 8 of 40 years (20 percent), mean excess -4.95pp, median -5.01pp, best +26.6pp, worst -30.2pp. On ^GSPC it won 25 of 98 years (26 percent), mean excess -0.87pp, median -1.86pp. **This is an insurance payoff profile, not an edge - it loses small most years and wins big rarely, and the mean conceals that.**
+
+### Where the value lives
+
+| Event | NDX excess | SPX excess |
+|-------|------------|------------|
+| dot-com 2000-02 | +18.9pp | +7.6pp |
+| 1973-74 | not covered | +18.0pp |
+| GFC 2007-09 | -0.6pp | +5.9pp |
+| COVID 2020 | -11.5pp | -12.5pp |
+| 2022 | +14.9pp | +3.6pp |
+
+### The QQQ result was regime luck
+
+E33 reported QQQ plus 200dma beating SPY on all three dimensions in 2022-2026 with +2.69pp of excess. The identical rule on the identical index returns -3.63pp annualised across 40 out-of-sample years. A single favourable window sold it as an edge; four decades say it costs return. **The walk-forward caught what one window would have shipped.**
+
+### Three predictions, registered in the plan before this ran, all held
+
+- The rule would look worse over 40-99 years than over 2016-2026 - it did, -3.63pp against +2.69pp
+- Its value would concentrate in 1973-74, 2000-02 and 2008-09 - it did, those are the only large positive contributions
+- It would behave as insurance rather than alpha - it does, winning one year in five
+
+### What the rule actually is
+
+On the S&P 500 it buys a drawdown reduction from -86.2 percent to -52.2 percent for approximately zero cost in return (+0.10pp), which is genuinely valuable risk management. On the Nasdaq-100 it costs 3.63pp per year for a reduction from -82.9 to -59.3 percent. Neither is a route to beating SPY by 40-50 percentage points.
+
+### A bias that flatters these numbers
+
+Both the index series and the Alpaca ETF panel are PRICE returns excluding dividends. Buy-and-hold would have collected roughly 1.8 percent per year on the S&P and 0.7 percent on the Nasdaq that this simulation does not credit it with, while the timed rule sits in cash for long stretches. Correcting for it makes buy-and-hold better and the timed rule worse, so every excess figure above is optimistic. Scheduled for Phase 5.
