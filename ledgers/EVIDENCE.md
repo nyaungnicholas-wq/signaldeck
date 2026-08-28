@@ -719,3 +719,45 @@ a hopeful blob.
 and last exercised the 08-21 backup, so the 08-24/25/26 backups are unrehearsed.
 That is the cadence working as designed, not a defect - but it does mean 'proven
 restorable' currently refers to a copy six days old.
+
+## E28 - THE VERDICT: the structural lane has no skill either
+
+The measurement E26 said could not be taken until tonight. Taken 2026-08-27
+22:34 after the resolver graded 843 rows (842 with a baseline) in one pass.
+
+| kind | n | days | model | naive | edge |
+|---|---|---|---|---|---|
+| liquidity21 | 276 | 2 | 74.3% | 72.5% | +1.8pp |
+| trend21 | 277 | 2 | 77.6% | 77.6% | **+0.0pp** |
+| vol21 | 275 | 1 | 57.5% | 60.0% | **-2.5pp** |
+| trend21-crypto | 7 | 1 | 85.7% | 85.7% | +0.0pp |
+| liquidity21-crypto | 7 | 1 | 100.0% | 100.0% | +0.0pp |
+
+### trend21's headline was the base rate, exactly
+
+`trend21` scores 77.6% and its naive baseline scores **77.6%**. Not close -
+IDENTICAL. The model reproduces the naive call on every graded row. Its
+impressive-looking accuracy is entirely the base rate of trends persisting,
+which is precisely what the registry's refusal has been protecting against and
+why the ungraded 80.81% (and the 85.3% seen on pre-baseline rows earlier
+tonight) must never have been published.
+
+`vol21` is NEGATIVE against its null. `liquidity21`'s +1.8pp is the only
+positive figure and it rests on **2 days**.
+
+### The sample is 1-2 days, not 842 rows
+
+Every kind spans 1 or 2 distinct trading days. Same-day rows share one market
+move, so the effective n is 1-2, not 842. Day-weighting changes the levels
+(liquidity21 87.1% vs 86.2%, trend21 88.8% vs 88.8%) and changes no verdict.
+Nothing here can support a claim in either direction; what it CAN do is refute
+the one claim that was on the table, because a model matching its null exactly
+needs no sample size to be unimpressive.
+
+### What this closes
+
+The structural lane was the ONE lane left unvalidated (E22/E25/E26). It now
+joins the other eight: **no demonstrated skill**. This is an independent
+confirmation of E9 by a completely different route - E9 measured the ensemble
+refusing to bet, E28 measures what the bets were worth when they were made.
+Both say the same thing, and the platform said it first by refusing to publish.
