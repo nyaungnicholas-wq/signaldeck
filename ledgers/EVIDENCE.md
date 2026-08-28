@@ -761,3 +761,59 @@ joins the other eight: **no demonstrated skill**. This is an independent
 confirmation of E9 by a completely different route - E9 measured the ensemble
 refusing to bet, E28 measures what the bets were worth when they were made.
 Both say the same thing, and the platform said it first by refusing to publish.
+
+## E29 - FRONTIER STUDY: nothing tested comes near SPY, let alone beats it by 40-50pp
+
+Exploration run 2026-08-27 on 2,940 stocks / 1,924 days (2019-01-02 .. 2026-08-27),
+delisted names INCLUDED (bars stop at delisting), benchmark ETFs excluded from the
+tradeable set, >=$5 close and >=300 prior bars at formation, monthly rebalance,
+through `research/dirfix/port.py::simulate` at 10bps cost and 300bps/yr borrow.
+
+### The bar
+
+SPY buy-and-hold over the identical window: **ann 15.89%, vol 19.07%, Sharpe 0.83,
+max_dd -34.18%**. So the stated target of +40-50pp means sustaining **56-66%/yr**.
+
+### Result: 36 configurations, ZERO beat SPY
+
+| signal | best ann | t_nw | verdict |
+|---|---|---|---|
+| mom12_1 (12-1 momentum) | 2.87% | 0.90-1.56 | not significant |
+| rev1m (1-month reversal) | -1.40% | **-2.61 to -4.08** | significantly NEGATIVE |
+| lowvol | -0.38% | -0.37 to -0.68 | nothing |
+| trend_ts | 3.93% | 3.76 | **ARTIFACT, see below** |
+
+Best honest figure is mom12_1 at 2.87%/yr, which is **-13.0pp against SPY**, on a
+t_nw of 0.90. Not a shortfall against the 40-50pp target - a shortfall against
+ZERO excess.
+
+### trend_ts's significance was an artifact, and I caught it before reporting it
+
+Its score is binary (+1 above the 200dma, -1 below): measured on one formation day,
+**2 distinct values across 1,245 symbols** (819 up, 426 down). `simulate` sorts by
+`["prob","symbol_id"]`, so `head(k)` returns the k LOWEST SYMBOL_IDS that happen to
+be above their moving average. The selection is by database id, not by signal
+strength. Its Sharpe 1.47 / t_nw 3.76 measure an arbitrary subset, not an edge.
+
+Recorded because this is exactly the shape that gets published as a finding: a
+clean-looking t-stat produced by a tie-break.
+
+### One genuine lead, and it is NOT a free win
+
+`rev1m` is significantly negative at t_nw -4.08. Its inverse - 1-month MOMENTUM -
+is therefore positive on this window. That is a new hypothesis with a real
+t-statistic behind it, but inverting a losing signal and claiming the win is
+precisely the move CLAUDE.md records as refuted for dircall. It must be
+pre-registered and tested on its own, on data this run did not touch.
+
+### The arithmetic gap in the target
+
+Even taking the best honest risk-adjusted result (Sharpe ~0.5), reaching 56%/yr
+requires roughly 14x leverage, which scales max drawdown past -100% - the account
+is gone before the edge pays. **A 40-50pp excess is not reachable by sizing up
+anything measured here.** It would need an edge that does not currently exist in
+this data, not a bolder configuration of one that does.
+
+Window caveat: formation days run 2020-03-31 .. 2026-08-27 (78 months) because of
+the 300-bar warm-up, so the study starts at the COVID bottom. No multiple-testing
+correction across 36 configurations. In-sample exploration only.
