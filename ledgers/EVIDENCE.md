@@ -912,3 +912,46 @@ conditioned on prior exploration. NOT sealed, NOT pre-registered, no
 multiple-testing correction. This is the exploration half of 'explore then seal'.
 The sealed test is the next step and it is the one that decides whether any of
 this is real.
+
+## E32 - SEALED VERDICT: PARTIAL. Return survived, risk-adjusted return did not.
+
+Spec sealed at commit 658c4ea (sha256 0716f5bc...) BEFORE any holdout number was
+computed. Criteria frozen in that commit. One grading run, no tuning.
+
+| window | TQQQ+200dma ann% | SPY ann% | excess | strat sharpe | SPY sharpe | strat maxDD |
+|---|---|---|---|---|---|---|
+| EXPLORE 2016-01-04..2021-12-31 | 51.74 | 15.43 | **+36.31pp** | 1.06 | 0.87 | -54.9% |
+| **SEALED 2022-01-01..2026-08-27** | 26.56 | 11.03 | **+15.53pp** | **0.57** | **0.63** | -52.9% |
+
+- PRIMARY (holdout ann > SPY ann): **PASS**, +15.53pp
+- SECONDARY (holdout sharpe > SPY sharpe): **FAIL**, 0.57 vs 0.63 (delta -0.06)
+- **VERDICT: PARTIAL**
+
+### The excess more than halved, which is the entire point of sealing
+
++36.31pp in the window used to choose the rule became **+15.53pp** in the window
+that was not. Anyone quoting the 40%/yr headline from E31 would have been quoting a
+number inflated by selection. The seal cut the estimate by 57%.
+
+### The secondary failure is the honest verdict
+
+Sharpe 0.57 against SPY's 0.63 means the strategy earned more return by taking
+disproportionately more risk - 46.6% volatility against SPY's 17.5%, and a -52.9%
+drawdown against -25.4%. **Per unit of risk you were paid slightly WORSE than just
+holding SPY.** That is a leverage story, not a skill story: the rule is not
+demonstrating an edge, it is demonstrating that 3x leverage multiplies a positive
+drift in both directions.
+
+### What this permits and forbids
+
+PERMITTED: stating that this rule produced +15.53pp of excess annual return on data
+not used to select it, over 4.7 years containing a bear market.
+FORBIDDEN: calling it skill, quoting the 40% or the +36pp explore figures as
+expectations, or adopting it on the strength of the primary pass alone. The frozen
+no-tuning clause applies - no parameter may now be changed and re-graded.
+
+### The next question, which this result raises and does not answer
+
+If the return is leverage rather than skill, then simply levering SPY should do
+comparably. That comparison is a NEW test needing its own registration - running it
+against this holdout would be tuning on a sealed result, which is forbidden.
