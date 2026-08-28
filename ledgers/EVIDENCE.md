@@ -817,3 +817,48 @@ this data, not a bolder configuration of one that does.
 Window caveat: formation days run 2020-03-31 .. 2026-08-27 (78 months) because of
 the 300-bar warm-up, so the study starts at the COVID bottom. No multiple-testing
 correction across 36 configurations. In-sample exploration only.
+
+## E30 - IMPLEMENTED: timed index exposure. The simplest choice wins.
+
+E29 tested long-short market-neutral signals, which STRUCTURALLY cannot beat an
+index on absolute return - they are built to be uncorrelated. Beating SPY needs
+timed or concentrated exposure TO an index. That is what this tests, on 10.6
+years (2016-01-04 .. 2026-08-27), history extended from 2019 via Alpaca (free).
+Macro is lagged 5 business days to remove FRED release look-ahead. 5bps per switch.
+
+| strategy | ann% | vol% | sharpe | max_dd% | vs SPY |
+|---|---|---|---|---|---|
+| SPY buy & hold | 13.49 | 17.57 | 0.77 | -34.18 | +0.00 |
+| **QQQ buy & hold** | **19.41** | 22.28 | 0.87 | -35.62 | **+5.92** |
+| SPY, 200dma -> cash | 8.27 | 11.34 | 0.73 | -21.65 | -5.23 |
+| SPY, 200dma -> TLT | 6.49 | 14.79 | 0.44 | -43.50 | -7.00 |
+| **QQQ, 200dma -> cash** | 16.36 | 16.17 | **1.01** | **-21.99** | +2.87 |
+| QQQ, 200dma -> TLT | 14.94 | 18.53 | 0.81 | -45.30 | +1.45 |
+| SPY, 200dma AND NFCI<0 | 8.27 | 11.34 | 0.73 | -21.65 | -5.23 |
+| QQQ, 200dma AND NFCI<0 -> TLT | 14.01 | 18.38 | 0.76 | -45.30 | +0.52 |
+
+### Four findings, in order of importance
+
+1. **Buying QQQ and doing nothing beats every strategy in this repo.** +5.92pp/yr
+   over SPY, and it beats all 36 configurations from E29 and all six timing rules
+   here. The sophisticated machinery loses to a one-line decision.
+2. **200dma timing REDUCES return in every case** (SPY 13.49 -> 8.27). It is a
+   RISK tool, not a return tool: it cuts drawdown -34% -> -22%.
+3. **The best risk-adjusted result is QQQ + 200dma timing**: Sharpe 1.01 vs SPY's
+   0.77, drawdown -22% vs -34%, and still +2.87pp of return. Better return AND
+   materially less pain is a real improvement - it is simply not 40-50pp.
+4. **Rotating to TLT is actively harmful** (-45% drawdown, worse than doing
+   nothing). TLT fell with equities in 2022, so the 'safe' leg amplified the loss.
+   A hedge that is only a hedge in some regimes is not a hedge.
+
+### On the target
+
+QQQ's +5.92pp is not alpha. It is a concentrated factor bet on large-cap tech that
+happened to win over 2016-2026, taken with MORE drawdown than SPY (-35.6 vs -34.2).
+Nothing here supports +40-50pp, and the honest attainable band on this evidence is
+roughly **+3 to +6pp, with drawdown between -22% and -36% depending on whether you
+take the timing overlay.**
+
+Caveats: one 10.6-year window containing three drawdowns (2018, 2020, 2022); the
+QQQ result is in-sample in the sense that tech's dominance is known ex post; no
+multiple-testing correction across the eight rules. Exploration, not a sealed test.
