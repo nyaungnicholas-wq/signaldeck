@@ -998,3 +998,57 @@ On the S&P 500 it buys a drawdown reduction from -86.2 percent to -52.2 percent 
 ### A bias that flatters these numbers
 
 Both the index series and the Alpaca ETF panel are PRICE returns excluding dividends. Buy-and-hold would have collected roughly 1.8 percent per year on the S&P and 0.7 percent on the Nasdaq that this simulation does not credit it with, while the timed rule sits in cash for long stretches. Correcting for it makes buy-and-hold better and the timed rule worse, so every excess figure above is optimistic. Scheduled for Phase 5.
+
+## E35 - PBO 0.82: the RETURN edge is overfit. The RISK reduction is not.
+
+Phase 4. Grid swept over MA windows 50/100/150/200/250 on ^GSPC and ^NDX, then the
+FAMILY judged with the repo's own CSCV implementation (`tools/pbo_ledger.py`).
+
+### The grid, excess vs buy-and-hold (pp/yr)
+
+| index | 50 | 100 | 150 | **200** | 250 |
+|---|---|---|---|---|---|
+| ^GSPC | -0.65 | -0.37 | -0.33 | **+0.10** | -0.00 |
+| ^NDX | -4.33 | -4.24 | -4.92 | **-3.63** | -2.92 |
+
+The S&P's +0.10pp is **the single positive cell out of ten**. On the Nasdaq every
+window loses, and the best is 250 - not the 200 that E30-E33 were built on.
+
+### CSCV verdict
+
+```
+pbo                 0.8232
+n_combinations      12870
+degradation_slope  -1.0158
+```
+
+**PBO 82%** on 10,306 days x 5 configs. And the degradation slope is NEGATIVE:
+in-sample rank inversely predicts out-of-sample performance, which is the textbook
+overfitting fingerprint. Selecting the best window in-sample actively hurts.
+
+The plan registered the decision rule BEFORE this ran: *if PBO comes back high, the
+honest conclusion is that there is no reliable edge here and the correct action is
+to stop, not to search for a better window.* **That trigger has fired.**
+
+### The distinction PBO does not erase
+
+Return and risk behave differently under the sweep. On ^GSPC:
+
+| metric | buy & hold | 200dma | range across ALL 5 windows |
+|---|---|---|---|
+| ann return | 6.38% | 6.48% | 5.73 - 6.48 (straddles B&H) |
+| Sharpe | 0.34 | 0.53 | **0.50 - 0.54 (never below B&H)** |
+| max drawdown | -86.2% | -52.2% | consistently reduced |
+
+Return enhancement is knife-edge and overfit. **Risk reduction is stable under every
+parameter choice** - Sharpe roughly 0.34 -> 0.52 and drawdown -86% -> -52% whichever
+window you pick. That is a robust property of trend-following, and it is what the
+rule is actually for.
+
+### Conclusion
+- **Return edge: REFUTED.** PBO 0.82, one positive cell in ten, negative degradation
+  slope. Do not pursue, do not re-window, do not seal it as a return strategy.
+- **Risk tool: SUPPORTED.** Consistent Sharpe and drawdown improvement across the
+  whole family, on 98 years. Worth having for that reason and no other.
+- The 40-50pp target is not reachable by this route and no further search on this
+  data will change that.
