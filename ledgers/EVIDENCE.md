@@ -862,3 +862,53 @@ take the timing overlay.**
 Caveats: one 10.6-year window containing three drawdowns (2018, 2020, 2022); the
 QQQ result is in-sample in the sense that tech's dominance is known ex post; no
 multiple-testing correction across the eight rules. Exploration, not a sealed test.
+
+## E31 - THE FRONTIER, ANSWERED: +26.7pp is reachable. It costs a -55% drawdown.
+
+The 'show me' answer. Real levered ETF prices (daily-compounding decay and fees
+included, NOT a simulated 3x), 2016-01-04 .. 2026-08-27, 5bps per switch. Signal is
+QQQ above its own 200dma - the rule that produced Sharpe 1.01 in E30.
+
+| strategy | ann% | sharpe | maxDD% | worst 1y% | vs SPY |
+|---|---|---|---|---|---|
+| SPY buy & hold | 13.49 | 0.77 | -34.2 | -21.0 | +0.00 |
+| QQQ + 200dma | 16.36 | 1.01 | -22.0 | -19.2 | +2.87 |
+| QQQ buy & hold | 19.41 | 0.87 | -35.6 | -35.2 | +5.92 |
+| SSO + 200dma | 19.71 | 0.81 | -42.7 | -26.2 | +6.22 |
+| QLD + 200dma | 29.38 | 0.91 | -40.3 | -35.2 | +15.89 |
+| QLD buy & hold | 32.24 | 0.73 | -63.8 | -63.2 | +18.75 |
+| TQQQ buy & hold | 38.90 | 0.59 | **-81.8** | -81.1 | +25.41 |
+| **TQQQ + 200dma** | **40.21** | 0.84 | **-54.9** | **-48.3** | **+26.71** |
+
+### The finding that matters
+
+**Timing IMPROVES a levered asset's return, unlike an unlevered one.** TQQQ+200dma
+returns MORE than TQQQ buy-and-hold (40.21 vs 38.90) with far less drawdown (-54.9
+vs -81.8). That is not a coincidence: leverage decay is worst in choppy and falling
+markets, and the 200dma rule sits out exactly those. On unlevered SPY the same rule
+COST 5.2pp (E30). Leverage is what makes the timing rule pay for itself.
+
+### The price, stated in dollars
+
+On the $10,000 target, TQQQ+200dma historically means:
+- a drawdown to about **$4,500** at the worst point,
+- a **-48% year** at some stage,
+- and the discipline to hold the rule through both.
+Most people abandon at the bottom, which turns a paper drawdown into a realised
+loss. The strategy's return assumes you do not.
+
+### Against the stated target
+
++26.71pp is a large gap and short of the 40-50pp aspiration. Getting there would
+need roughly 4-5x daily leverage, which does not exist as a retail ETF and would
+have produced a total loss in March 2020 (QQQ fell ~28% peak-to-trough in weeks;
+a 4x product breaches -100% on a single -25% day).
+
+### What would invalidate all of this
+
+One window, 2016-2026, containing the strongest large-cap tech run in history. The
+200dma rule was selected because it worked in E30, so applying it here is
+conditioned on prior exploration. NOT sealed, NOT pre-registered, no
+multiple-testing correction. This is the exploration half of 'explore then seal'.
+The sealed test is the next step and it is the one that decides whether any of
+this is real.
