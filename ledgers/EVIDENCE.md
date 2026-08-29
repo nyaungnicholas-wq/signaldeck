@@ -1189,3 +1189,64 @@ WORSE.
 Closes the implementation gap. The findings can now be checked by re-running one
 command instead of trusting a transcript, which is the only form in which a
 negative result is worth anything.
+
+## E39 - SEC/EDGAR: tested properly this time, and it cannot be tested
+
+I twice wrote that EDGAR was 'not reachable with the data at hand' without checking.
+That was wrong: `insider_trades` holds 9,153 rows and `filings` 90,165. Correcting
+the dismissal, then measuring.
+
+### The data exists but has almost no history
+
+Open-market purchases (Form 4 code **P**, the only informative code - F is automatic
+tax withholding, A is a grant, M an option exercise) number **385**, across 112
+symbols. By filing year:
+
+| year | events |
+|---|---|
+| 2008 | 2 |
+| 2016 | 1 |
+| 2022 | 9 |
+| 2023 | 22 |
+| 2024 | 39 |
+| 2025 | 139 |
+| 2026 | 169 |
+
+**81% of all events are 2025-2026.** The edgar-fetcher only began collecting
+recently, so the apparent 2008-2026 span is an illusion created by two stray rows.
+
+### The event study, and why its output is an artifact
+
+Measured from `filed_ts` - the first moment the information was public - never from
+`tx_ts`, against an equal-weight universe baseline:
+
+| horizon | n | mean abnormal | median | naive t |
+|---|---|---|---|---|
+| 5d | 102 | +2.08% | +0.82% | 1.73 |
+| 21d | 42 | -5.06% | -6.95% | -0.90 |
+| 63d | 42 | -11.89% | -5.65% | -1.95 |
+| 126d | 43 | **-30.37%** | -27.24% | **-3.88** |
+
+A naive reading says insider buying predicts large DECLINES - the opposite of the
+documented anomaly, at t=-3.88. **It is not a finding.** The sample falls from 102
+to 42 between horizons because 2026 events have no 126-day forward window yet, so
+the long-horizon rows are one recent cohort rather than a sample. Events also
+cluster by symbol and date, which inflates the naive t.
+
+I first guessed the negative number came from buys during the GFC. **I checked and
+that was wrong** - only 2 events fall in 2008-2010, 1% of the sample.
+
+### Two data-quality defects found in passing
+
+- `tx_ts` contains 1969-12-31 on many rows, i.e. NULL stored as epoch 0. It makes
+  the mean filing lag compute as 3,897 days. Any analysis joining on `tx_ts` without
+  filtering these would silently use 1969 as a transaction date.
+- `congress_trades` exists with **0 rows**; the congress-poller reports degraded
+  because its mirrors are unavailable, so that source is empty rather than thin.
+
+### Verdict
+
+EDGAR is CLOSED as untestable on current data - not refuted, untestable. ~18 months
+of real history and 43 events at the horizon that matters cannot support a claim in
+either direction. It is the only selected direction where the honest answer is 'ask
+again in two years', and it becomes testable simply by the fetcher continuing to run.
