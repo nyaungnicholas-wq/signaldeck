@@ -13,7 +13,17 @@ import study
 LOG_PATH = "research/longhist/data/prospective_log.csv"
 ASSETS = ("SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD")
 RULES = {"ma100": 100, "ma200": 200, "ma250": 250}
-LOG_COLUMNS = ["recorded_utc", "asof_date", "asset", "rule", "in_market", "close", "ma", "pct_from_ma"]
+# Volatility targeting (E41) is the ONE approach that survived kill testing, so it
+# is the one most worth recording forward. Unlike the MA rules it produces a
+# continuous WEIGHT rather than in/out, which is why the log carries `weight`.
+# Parameters are NOT tuned: PBO 0.8365 says the ranking among them is noise, so
+# three spread settings are recorded rather than a chosen "best".
+VOL_RULES = {
+    "vt63_t15_c2": (63, 0.15, 2.0),
+    "vt21_t15_c2": (21, 0.15, 2.0),
+    "vt63_t10_c2": (63, 0.10, 2.0),
+}
+LOG_COLUMNS = ["recorded_utc", "asof_date", "asset", "rule", "in_market", "close", "ma", "pct_from_ma", "weight"]
 
 
 def compute_state(closes: pd.Series, window: int) -> dict | None:
@@ -29,6 +39,32 @@ def compute_state(closes: pd.Series, window: int) -> dict | None:
         "ma": np.float64(ma),
         "in_market": bool(in_market),
         "pct_from_ma": np.float64(pct_from_ma),
+        # an MA rule is just a binary weight; expressing it this way lets one
+        # column carry both rule families.
+        "weight": np.float64(1.0 if in_market else 0.0),
+    }
+
+
+def compute_vol_state(closes, lookback: int, target: float, cap: float):
+    """Volatility-target weight as of the last bar. Uses only PAST returns.
+
+    weight = target_vol / trailing_realised_vol, capped. There is no in/out
+    decision: `in_market` is True whenever the weight is non-zero, recorded for
+    schema compatibility with the MA rules.
+    """
+    r = closes.pct_change()
+    if r.notna().sum() < lookback + 5:
+        return None
+    rv = float(r.rolling(lookback).std(ddof=0).iloc[-1] * np.sqrt(252))
+    if not np.isfinite(rv) or rv <= 0:
+        return None
+    w = min(target / rv, cap)
+    return {
+        "close": np.float64(closes.iloc[-1]),
+        "ma": np.float64(rv * 100.0),          # realised vol %, the rule's own reference
+        "in_market": bool(w > 0),
+        "pct_from_ma": np.float64((target * 100.0) - (rv * 100.0)),
+        "weight": np.float64(w),
     }
 
 
@@ -64,13 +100,21 @@ def record(force_date: str | None = None) -> pd.DataFrame:
             continue
         asof_date = asset_closes.index[-1].strftime("%Y-%m-%d")
 
-        for rule_name, window in RULES.items():
+        # One loop over BOTH rule families. An MA rule is a binary weight and a
+        # vol-target rule is a continuous one, so they share the same log row.
+        specs = [(n, "ma", (w,)) for n, w in RULES.items()]
+        specs += [(n, "vt", p) for n, p in VOL_RULES.items()]
+
+        for rule_name, kind, params in specs:
             key = (asof_date, asset, rule_name)
             if key in existing_keys:
                 skipped += 1
                 continue
 
-            state = compute_state(asset_closes, window)
+            if kind == "ma":
+                state = compute_state(asset_closes, *params)
+            else:
+                state = compute_vol_state(asset_closes, *params)
             if state is None:
                 continue
 
@@ -83,6 +127,7 @@ def record(force_date: str | None = None) -> pd.DataFrame:
                 "close": state["close"],
                 "ma": state["ma"],
                 "pct_from_ma": state["pct_from_ma"],
+                "weight": state["weight"],
             })
 
     if not new_rows:

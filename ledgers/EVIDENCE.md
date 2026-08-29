@@ -1407,3 +1407,45 @@ What IS available, honestly:
 
 A -83% drawdown on $10,000 is $1,707. That is the real price of the largest gap
 this data supports, and it is roughly one fifth of the number the goal asked for.
+
+## E43 - The recorder now tracks the finding that survived, not just the ones that failed
+
+A gap in my own implementation: `prospective.py` recorded only the MA rules - the
+ones refuted at 21 of 21 cells - while volatility targeting, the sole approach to
+survive kill testing (E41), was not being recorded at all.
+
+Now 42 rows/day: 7 assets x (3 MA windows + 3 vol-target settings).
+
+### Schema change, done now because it is safe now
+
+Vol targeting produces a continuous WEIGHT, not an in/out decision, so the log
+gained a `weight` column - which also unifies the families, since an MA rule is just
+a binary weight. The 21 existing rows were migrated by mapping in_market to 1.0/0.0.
+That migration is safe today because the log is one day old and nothing has been
+graded; **it would not be safe later**, which is why it was done immediately rather
+than deferred.
+
+### Parameters deliberately NOT tuned
+
+Three settings recorded (vt63_t15_c2, vt21_t15_c2, vt63_t10_c2) rather than a chosen
+best, because PBO 0.8365 says the ranking among them is noise. Recording a spread
+and refusing to pick is the honest response to that number.
+
+### Verified working
+
+| check | result |
+|---|---|
+| new rows | 21 vol rows appended, 21 MA rows correctly skipped |
+| idempotent | re-run appends nothing - `42 skipped` |
+| weights sensible | QQQ at 25.4% realised vol -> weight 0.59 (de-risked); TLT at 9.6% -> 1.56 (levered) |
+
+The weights confirm the mechanism: exposure falls where volatility is high and rises
+where it is low, which is the entire content of the strategy.
+
+### Why this is the last useful thing to do here
+
+Every historical window is burned. The only remaining route to a trustworthy number
+on ANY of these rules is to accumulate evidence forward. The recorder now covers both
+the refuted family and the surviving one, so a year from now there will be a clean
+out-of-sample record of each - including, importantly, the ability to catch vol
+targeting failing, which no backtest on burned data could ever establish.
