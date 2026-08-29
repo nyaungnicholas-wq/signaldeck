@@ -1449,3 +1449,56 @@ on ANY of these rules is to accumulate evidence forward. The recorder now covers
 the refuted family and the surviving one, so a year from now there will be a clean
 out-of-sample record of each - including, importantly, the ability to catch vol
 targeting failing, which no backtest on burned data could ever establish.
+
+## E44 - CORRECTS E41: the last survivor does not survive 99 years
+
+E41 called volatility targeting 'the first thing that survives', on 33 years of SPY
+total return. I had 99 years of S&P sitting unused. Testing there kills it.
+
+### Full period still looks good - and that is the trap
+
+| spec | ann% | vol% | Sharpe | maxDD% | Sharpe gain |
+|---|---|---|---|---|---|
+| buy & hold | 6.38 | 18.9 | 0.34 | -86.2 | - |
+| vt63 tgt10% | 5.03 | 10.8 | 0.47 | -52.4 | +0.13 |
+| vt63 tgt15% | 7.13 | 16.0 | 0.45 | -69.0 | +0.11 |
+| vt21 tgt20% | **8.91** | 20.9 | 0.43 | -85.7 | +0.09 |
+
+Positive Sharpe gain in **all 9 configurations**, and at a 20% target it returns
++2.5pp MORE than buy-and-hold. On a full-sample reading this is the best result of
+the entire goal.
+
+### Decade by decade it fails 7 times out of 10
+
+| decade | gain | decade | gain |
+|---|---|---|---|
+| 1930s | -0.08 | 1980s | -0.00 |
+| 1940s | -0.01 | 1990s | +0.02 |
+| 1950s | +0.01 | 2000s | **+0.09** |
+| 1960s | **-0.20** | 2010s | -0.08 |
+| 1970s | -0.04 | 2020s | -0.03 |
+
+**Positive in 3 of 10 decades.** The full-period +0.11 is an aggregation artifact:
+you would have collected it across a century while doing WORSE in most individual
+decades. E41's 33-year window showed 2 of 4; widening to 10 decades shows the
+pattern does not hold.
+
+### Why this matters more than the other refutations
+
+Every earlier failure was visible in the full-sample number - 21 of 21 cells
+negative, PBO on a knife-edge, an effective n of 7. **This one passes every
+full-sample test and still fails.** Sharpe gain positive in 9 of 9 configs, positive
+across 6 of 7 asset classes, family floor above the benchmark - and it is still not
+something to allocate against, because in any decade you actually live through it
+is more likely to hurt than help.
+
+That is the strongest argument in this entire ledger for why full-sample statistics
+are not evidence, and it only appeared because 99 years were available to slice.
+
+### Standing correction
+
+E41's headline - '+1.3pp/yr, the one thing that survives' - is **withdrawn**. The
+honest statement is that volatility targeting shows a small full-sample Sharpe
+improvement that is not reliable over any decade-length horizon. Nothing tested in
+this goal beats SPY dependably. The recorder (E43) still logs it forward, which is
+now the only way it could ever be established either way.
