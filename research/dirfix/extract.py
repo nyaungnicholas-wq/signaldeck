@@ -1,5 +1,7 @@
 """bars(1d) -> panel.parquet. Survivorship-complete: keeps delisted symbols."""
-import sqlite3, pandas as pd
+import sqlite3, sys, pandas as pd
+from collections import Counter
+from pathlib import Path
 DB = "file:../../data/signaldeck.db?mode=ro"
 c = sqlite3.connect(DB, uri=True)
 sym = pd.read_sql("select id symbol_id, symbol, market, name, delisted_at from symbols", c)
@@ -25,13 +27,26 @@ df = df[df.market == "stocks"]
 # survivorship one. Bare "Shares"/"Trust"/"Index" are also excluded from the
 # pattern -- they match ADRs ("American Depositary Shares"), foreign issuers
 # ("Ordinary Shares") and REITs ("QTS REALTY TRUST"), which are real companies.
-FUND_PAT = (r"ETF|ETN|Fund|ProShares|Direxion|iShares|SPDR|Invesco|Vanguard|"
-            r"UltraShort|UltraPro|Ultra|Bear|Bull|[23]X|"
-            r"Leveraged|Select Sector|Daily Target|Index Trust")
+# The name regex alone LEAKED. Measured 2026-08-29 it passed 353 non-common-
+# equity instruments -- 13.1% of survivors: 254 SPAC units, 58 warrants, 12
+# rights, 18 preferred/notes, 11 closed-end muni funds. Those are option-like,
+# price-pinned or interest-rate instruments and they distort every
+# cross-sectional statistic. Extending the regex is NOT the fix -- it
+# false-positives on real companies (AARD, CORE, CYBR, AMWD, XEC) -- so
+# classification now runs on the exchange ticker-suffix convention, which is
+# deterministic rather than lexical. See research/harness/instruments.py.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "harness"))
+from instruments import instrument_class  # noqa: E402
+
 before = df.symbol_id.nunique()
-df = df[~df["name"].fillna("").str.contains(FUND_PAT, case=False, regex=True)]
-print("fund filter: %d -> %d symbols (%d fund/leveraged dropped)"
-      % (before, df.symbol_id.nunique(), before - df.symbol_id.nunique()))
+klass = [instrument_class(s, n) for s, n in zip(df["symbol"], df["name"])]
+# Count DISTINCT SYMBOLS, not rows -- klass is per-row, so counting it
+# directly reports bar counts and reads like a far bigger cull than it is.
+dropped = Counter(k for _, k in set(zip(df["symbol_id"], klass)) if k)
+df = df[[k is None for k in klass]]
+print("instrument filter: %d -> %d symbols (%d non-equity dropped: %s)"
+      % (before, df.symbol_id.nunique(), before - df.symbol_id.nunique(),
+         ", ".join("%s=%d" % kv for kv in dropped.most_common())))
 
 df = df[df.close > 0].sort_values(["symbol_id", "day"]).reset_index(drop=True)
 df.to_parquet("panel.parquet", index=False)
