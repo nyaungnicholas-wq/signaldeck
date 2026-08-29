@@ -1360,3 +1360,50 @@ Financing is NOT free. At 1.16x and fed funds plus a spread, roughly 0.16 x 5% =
 NOT a validated result. It is the best-supported hypothesis this goal produced, and
 the correct next step is to let `prospective.py` record it forward rather than to
 quote it. Adding the vol-target rules to that recorder is the honest way to find out.
+
+## E42 - THE FRONTIER: +40-50pp is not merely unfound, it is UNREACHABLE
+
+The deliverable promised when Nicholas answered the drawdown question with 'don't
+know yet - show me'. Best strategy found (vol-targeted, E41) levered 1x to 4x, with
+REAL financing from DFF plus a 1.5% broker spread charged only on borrowed capital.
+
+| asset | lev | ann% | vol% | Sharpe | maxDD% | vs SPY | $10k at the worst point |
+|---|---|---|---|---|---|---|---|
+| SPY | 1.0 | 10.22 | 16.0 | 0.64 | -40.4 | -0.66pp | $5,964 |
+| SPY | 1.5 | 12.95 | 24.0 | 0.54 | -55.9 | +2.07pp | $4,410 |
+| SPY | 2.0 | 14.68 | 32.0 | 0.46 | -68.7 | +3.80pp | $3,127 |
+| SPY | 3.0 | **15.74** | 48.0 | 0.33 | -87.7 | +4.86pp | $1,231 |
+| SPY | 4.0 | 13.70 | 63.9 | 0.21 | -96.8 | +2.83pp | $316 |
+| QQQ | 2.0 | 16.76 | 31.8 | 0.53 | -66.2 | +5.89pp | $3,380 |
+| QQQ | 3.0 | **19.65** | 47.8 | 0.41 | -82.9 | **+8.77pp** | $1,707 |
+| QQQ | 4.0 | 19.31 | 63.7 | 0.30 | -94.5 | +8.44pp | $547 |
+
+### Returns PEAK at 3x and fall after
+
+SPY 15.74% -> 13.70%. QQQ 19.65% -> 19.31%. Beyond roughly 3x, volatility drag and
+financing overwhelm the gain: **more leverage makes you poorer AND riskier**. There
+is no setting that reaches +40pp. The ceiling is **+8.77pp**, bought with an 82.9%
+drawdown that turns $10,000 into $1,707.
+
+### Sharpe falls monotonically the whole way
+
+0.64 -> 0.54 -> 0.46 -> 0.33 -> 0.21. Leverage converts risk into return one for one
+minus financing. It never creates edge. The only question leverage answers is how
+much drawdown you are willing to sit through, and past 3x it stops answering even
+that favourably.
+
+### The answer to the goal, quantified
+
+The 40-50pp target is not 'unfound on this data'. It is **unreachable at any risk
+level**, because the return/leverage curve turns over before it gets close. That is
+a stronger and more useful statement than a failed search: no amount of further
+searching changes a turning point.
+
+What IS available, honestly:
+- **~+1.3pp/yr** at comparable risk (vol targeting levered to SPY's vol, E41)
+- **~+4.9pp/yr** if an 87.7% drawdown is acceptable (SPY 3x)
+- **~+8.8pp/yr** if an 82.9% drawdown is acceptable (QQQ 3x)
+- all of it IN-SAMPLE and unvalidated, since every window is burned (E40)
+
+A -83% drawdown on $10,000 is $1,707. That is the real price of the largest gap
+this data supports, and it is roughly one fifth of the number the goal asked for.
