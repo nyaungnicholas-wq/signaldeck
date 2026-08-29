@@ -1250,3 +1250,54 @@ EDGAR is CLOSED as untestable on current data - not refuted, untestable. ~18 mon
 of real history and 43 events at the horizon that matters cannot support a claim in
 either direction. It is the only selected direction where the honest answer is 'ask
 again in two years', and it becomes testable simply by the fetcher continuing to run.
+
+## E40 - IMPLEMENTED: a prospective recorder, because every window is now burned
+
+The deepest problem this goal exposed is not that the rules fail. It is that **I
+have looked at all the data**. Explore, holdout, 99 years of index history, macro,
+EDGAR - examined. Looking is irreversible, so nothing can be cleanly validated on
+this data again, and no further search on it will produce a trustworthy number.
+
+`research/longhist/prospective.py` is the only thing that fixes that. It records
+each candidate rule's state daily, BEFORE the outcome exists, append-only.
+
+### What it does and does not claim
+
+It makes **no claim that any rule works** - E29-E39 found none that beat
+buy-and-hold, and 21 of 21 asset/window cells lose on return. Its sole job is to
+accumulate evidence nobody has peeked at, so that in a year there is a clean
+out-of-sample record instead of another exhausted window.
+
+Seven assets x three windows = 21 rules logged per day (SPY QQQ IWM EFA EEM TLT GLD
+x ma100/ma200/ma250). First record 2026-08-28.
+
+### Three guards, all tested
+
+| guard | behaviour |
+|---|---|
+| idempotent | re-running the same day appends nothing - `21 skipped` |
+| append-only | history is never rewritten; a log you can edit is not evidence |
+| refuses short records | `grade` on a 0-day span prints *"too short to grade"* and returns nothing rather than a number |
+
+That third guard matters most. The failure this whole session kept finding was a
+real-looking figure computed from too little data - E32's halved excess, E37's seven
+decisions, E39's -30% from one cohort. The tool now refuses to make that mistake
+even when asked.
+
+### A defect of my own, of exactly the shape I had already documented
+
+The drafted module called `study.fetch_total_return(..., auto_adjust=True)`, a kwarg
+that function does not accept. I fixed the call in `record()`, re-ran, and `grade()`
+failed on the identical bug at a second call site - **"one site, when it was two"**,
+which is verbatim the failure I wrote up in this session's handoff. Fixed both and
+asserted zero remaining.
+
+### How to use it
+
+```
+python research/longhist/prospective.py record    # daily; idempotent
+python research/longhist/prospective.py status    # current state of all 21 rules
+python research/longhist/prospective.py grade     # refuses until the span is real
+```
+Worth scheduling alongside the existing nightly jobs. It costs one yfinance call a
+day and is the only route left to an honest answer about these rules.
