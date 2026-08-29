@@ -207,9 +207,6 @@ No action. This is the file the forked grader copies, so it copies the fixes.
 ---
 
 ## Open, not yet audited
-
-- `stock-trader Daily Rotation` failed 2026-08-28 (`0x800704A0`). It is the only process
-  currently placing orders. Diagnose before Track A hardening.
 - Corporate-action / split-dividend adjustment in the bar store — not yet measured.
 - `SURVIVORSHIP_EPOCH` enforcement — confirmed as a constant, not yet traced to every consumer.
 
@@ -223,6 +220,8 @@ No action. This is the file the forked grader copies, so it copies the fixes.
 - F4 confirms the plan's "one shared evaluation function" requirement and corrects the stated
   reason for it.
 - F5 and F6 downgrade two plan items from defects to an observability task and a no-op.
+
+---
 
 ---
 
@@ -258,3 +257,56 @@ untouched window. Whether 250 sessions delivers >=80% power against delta = 2 bp
 separate calculation to run against the validation-set standard deviation before the split is
 hashed — if it does not, the plan says the holdout test is not run at all, and that outcome
 must be discovered now rather than at finalist time.
+
+---
+
+## F8 — `stock-trader Daily Rotation` misses trading days silently. SEVERITY: HIGH. **DIAGNOSED, NOT CHANGED.**
+
+The only process currently placing orders. Diagnosed 2026-08-29; deliberately left alone, for
+the reason in the last paragraph.
+
+First, a correction: the failing result is `0x800710E0`, not `0x800704A0` as first recorded.
+That is `ERROR_TASK_NOT_RUNNING` (Win32 4320) — the task was **stopped**, not crashed.
+
+Four independent defects compound:
+
+1. **The trigger is `MSFT_TaskWeeklyTrigger`.** A task named "Daily Rotation" is scheduled
+   WEEKLY. This is the cadence in the log, not a coincidence.
+2. **`WakeToRun = False`.** The machine does not wake for it.
+3. **`StartWhenAvailable = False`.** A run missed while the machine is off is lost **silently
+   and permanently** — no catch-up, no error, no entry anywhere.
+4. **The verifier is dead.** `stock-trader Verify Rotation Fired` has a **one-time**
+   `MSFT_TaskTimeTrigger` dated `2026-08-10T07:15`. It fired once, returned `rc=1`, and can
+   never fire again. The safety net that exists to catch exactly this has been inert for 19
+   days.
+
+Evidence from `stock-trader/data/rotation_cron.log`. Rebalances land on 07-31, 08-03, 08-06,
+08-09, 08-10, 08-13, 08-14, 08-17, 08-20, then **a seven-day gap to 08-27**, whose entry reads
+`held 7d` — the trader noticed the gap even though nothing else did. 08-21, 08-24, 08-25 and
+08-26 are absent entirely, and a run that merely skipped would have logged `skip — market
+closed` as 08-14 does. Nothing at all for 08-28. The box last booted 2026-08-28 19:14, i.e.
+long after that morning's 07:00 PT trigger. Machine timezone is Pacific, so the trigger is
+07:00 PT = 10:00 ET; there is no battery, so the battery settings are not implicated.
+
+**Why this was not fixed automatically.** The obvious remedy — set `StartWhenAvailable = True`
+so missed runs catch up — is **actively dangerous here**. A rotation that missed 07:00 would
+then fire whenever the machine next woke, which on 08-28 would have been 19:14, and it would
+rebalance a real book against stale decision prices hours after the close. Changing *when* a
+trading bot fires is not a safe unattended edit, and the correct fix (wake the machine for a
+daily trigger, and refuse to trade outside a permitted window rather than catching up blindly)
+is Nicholas's call.
+
+Remediation, for him to run and confirm:
+
+```powershell
+# daily, not weekly; wake the box; do NOT enable blind catch-up
+$t = Get-ScheduledTask -TaskName "stock-trader Daily Rotation"
+$t.Settings.WakeToRun = $true
+Set-ScheduledTask -TaskName "stock-trader Daily Rotation" -Settings $t.Settings
+# and re-arm the verifier on a RECURRING daily trigger, not a one-time one
+```
+
+The permitted-hours guard now in `execution/guards.check_calendar` is the pattern the rotation
+needs: a late run should REFUSE, not trade.
+
+---
