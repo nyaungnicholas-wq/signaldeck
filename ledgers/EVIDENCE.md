@@ -1096,3 +1096,52 @@ This is the fifth finding of mine this session overturned by better measurement
 (after R2, R4, R7, and E33's regime luck). In every case the correction moved AGAINST
 the interesting result. Anything that survives only until it is measured more
 carefully was never there.
+
+## E37 - Macro regime timing: the last untested direction, and it fails too
+
+The one data source from the approved list never tried: macro/rates, with 50 years
+of depth. Different INFORMATION rather than another way of modelling price, which
+was the whole thesis for why it might work.
+
+Four rules, all pre-specified from the literature rather than fitted, each with a
+realistic PUBLICATION LAG so the test is not fabricated (NFCI 8 days, UNRATE 10,
+market data 1). SPY total return 1993-2026, dividends credited, 5bps per switch.
+
+| rule | ann% | Sharpe | maxDD% | excess | Sharpe gain |
+|---|---|---|---|---|---|
+| curve inverted (T10Y2Y<0) | 9.41 | 0.54 | -55.2 | -1.46 | -0.05 |
+| tight credit (NFCI>0) | 10.23 | 0.64 | -49.6 | -0.65 | +0.05 |
+| unemployment rising (Sahm-like) | 10.85 | 0.74 | **-28.3** | -0.02 | **+0.16** |
+| VIX elevated | 4.36 | 0.44 | -41.9 | **-6.52** | -0.14 |
+| *buy & hold* | *10.88* | *0.59* | *-55.2* | | |
+
+Three of four lose outright. The unemployment rule looked genuinely promising:
+drawdown nearly halved for a return cost of -0.02pp, unlike the MA rule's -2.72pp.
+So I tried to kill it.
+
+### It dies on effective sample size
+
+**The entire result rests on 7 decisions** - seven times it moved to cash in 33
+years. 8,452 daily observations do not make that 8,452 independent trials.
+
+| decade | excess |
+|---|---|
+| 1990s | -1.74pp |
+| 2000s | **+5.76pp** |
+| 2010s | -0.52pp |
+| 2020s | **-7.18pp** |
+
+It wins in ONE decade of four - the 2000s, which held two recessions - and is worst
+in the most recent. Excluding 2008-09 the 'free' -0.02pp becomes -0.79pp. The
+apparent free drawdown reduction is one decade averaged over three.
+
+### Verdict
+
+Macro regime timing is refuted on this data by the same failure as everything else:
+value concentrated in two crises, negative the rest of the time, and an effective n
+in single digits. That now closes every direction selected at the start of this goal
+- SEC/EDGAR excepted, which cannot be reached with the data at hand.
+
+Sixth finding of mine overturned by harder testing this session. As before, the
+correction moved against the interesting result - and this time I went looking for
+the kill myself rather than waiting to be caught by it.
