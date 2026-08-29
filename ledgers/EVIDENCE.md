@@ -1145,3 +1145,47 @@ in single digits. That now closes every direction selected at the start of this 
 Sixth finding of mine overturned by harder testing this session. As before, the
 correction moved against the interesting result - and this time I went looking for
 the kill myself rather than waiting to be caught by it.
+
+## E38 - The study is now reproducible, and it generalises: 21 of 21 cells lose
+
+Implementation, not research. Every verdict E29-E37 lived in throwaway heredocs;
+`research/longhist/study.py` makes them re-runnable with `fetch`, `ma`, `macro`,
+`robustness` and `all` subcommands. It reproduces E36 and E37 exactly.
+
+Two defects found and fixed while wiring it up: it looked for the macro data in a
+non-existent `data/macro.db` rather than the production database, and queried
+`macro_series` on a column `name` that does not exist (it is `series`). Both would
+have failed silently as 'no macro signals available'.
+
+### The finding got STRONGER when extended past SPY and QQQ
+
+E36 tested two assets and found 6 of 6 windows negative. The module runs seven
+asset classes:
+
+| asset | win 100 | win 200 | win 250 |
+|---|---|---|---|
+| SPY | -4.58 | -2.72 | -2.66 |
+| QQQ | -4.13 | -3.27 | -2.43 |
+| IWM | -4.60 | -4.23 | -3.99 |
+| EFA | -1.26 | -0.74 | -1.66 |
+| EEM | -3.18 | -5.96 | -5.72 |
+| TLT | -2.49 | -3.89 | -2.86 |
+| GLD | -4.38 | -3.16 | -2.88 |
+
+**21 of 21 asset/window combinations lose on return** - US large cap, US small cap,
+developed international, emerging markets, long bonds and gold. Not one positive
+cell anywhere.
+
+### And the 'risk tool' consolation is weaker than E36 claimed
+
+Sharpe gain is NOT universally positive once you leave SPY and QQQ: EFA +0.16 and
+QQQ +0.11 at best, but IWM -0.09, GLD -0.15, and TLT **-0.28**. E36 said the risk
+reduction was 'robust across parameters' - true within an asset, but it does not
+hold across asset classes. On bonds and gold the rule makes risk-adjusted return
+WORSE.
+
+### Status
+
+Closes the implementation gap. The findings can now be checked by re-running one
+command instead of trusting a transcript, which is the only form in which a
+negative result is worth anything.
