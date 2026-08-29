@@ -10,8 +10,19 @@ Method: OmniRoute worker lenses on the large Go files, direct measurement agains
 corrected in place**: a worker's top-ranked cost finding (F4) and my own initial HIGH grade on
 F2. Both corrections are kept visible rather than quietly edited out.
 
-STATUS 2026-08-29: F1 **fixed**, F2 **repaired**, F3/F6 clean, F4 open (harness unification),
-F5 open (observability only), F7 informational.
+STATUS 2026-08-29
+| finding | severity | state |
+|---|---|---|
+| F1 fund / non-equity contamination | HIGH | **FIXED** |
+| F2 added_at point-in-time gate | was HIGH, actually LOW | **RETRACTED + residual repaired** |
+| F3 delisting handling | none | clean |
+| F4 three cost conventions | MEDIUM | open — harness unification |
+| F5 admitsLeg rank-before-lift | LOW | open — observability only |
+| F6 forward-test benchmark bugs | none | clean, regression-tested |
+| F7 split feasibility | informational | measured; constrains C1 |
+| F8 Daily Rotation misses days | HIGH | **diagnosed, not changed** (see why) |
+
+---
 
 ---
 
@@ -206,25 +217,6 @@ No action. This is the file the forked grader copies, so it copies the fixes.
 
 ---
 
-## Open, not yet audited
-- Corporate-action / split-dividend adjustment in the bar store — not yet measured.
-- `SURVIVORSHIP_EPOCH` enforcement — confirmed as a constant, not yet traced to every consumer.
-
----
-
-## Bearing on the plan
-
-- **F1 and F2 must be fixed before the C1 splits are frozen.** Both change what the
-  development / validation / holdout windows actually contain, and the splits are hashed into
-  the prereg record and cannot be revised afterwards.
-- F4 confirms the plan's "one shared evaluation function" requirement and corrects the stated
-  reason for it.
-- F5 and F6 downgrade two plan items from defects to an observability task and a no-op.
-
----
-
----
-
 ## F7 — Split feasibility for the C1 protocol. SEVERITY: informational (but it constrains the plan)
 
 The C1 gate battery requires a final holdout of >=250 sessions with >=80% power, and the split
@@ -308,5 +300,24 @@ Set-ScheduledTask -TaskName "stock-trader Daily Rotation" -Settings $t.Settings
 
 The permitted-hours guard now in `execution/guards.check_calendar` is the pattern the rotation
 needs: a late run should REFUSE, not trade.
+
+---
+
+## Open, not yet audited
+- Corporate-action / split-dividend adjustment in the bar store — not yet measured.
+- F4's shared evaluation function — designed in the plan, not yet built.
+- F5's per-leg admission reason — not yet emitted.
+- `SURVIVORSHIP_EPOCH` enforcement — confirmed as a constant, not yet traced to every consumer.
+
+---
+
+## Bearing on the plan
+
+- **F1 and F2 must be fixed before the C1 splits are frozen.** Both change what the
+  development / validation / holdout windows actually contain, and the splits are hashed into
+  the prereg record and cannot be revised afterwards.
+- F4 confirms the plan's "one shared evaluation function" requirement and corrects the stated
+  reason for it.
+- F5 and F6 downgrade two plan items from defects to an observability task and a no-op.
 
 ---
