@@ -1301,3 +1301,62 @@ python research/longhist/prospective.py grade     # refuses until the span is re
 ```
 Worth scheduling alongside the existing nightly jobs. It costs one yfinance call a
 day and is the only route left to an honest answer about these rules.
+
+## E41 - Volatility targeting: the FIRST thing that survives. And it is worth ~1.3pp.
+
+Everything tested so far was binary in/out TIMING. Volatility targeting is
+continuous - scale exposure by target/realised vol (Moreira & Muir, JF 2017). It is
+structurally different, and it is the only approach this session that survived kill
+testing.
+
+### It holds where nothing else did
+
+| test | MA family | vol targeting |
+|---|---|---|
+| asset classes with positive Sharpe gain | mixed; TLT -0.28, GLD -0.15 | **6 of 7** (only IWM -0.04) |
+| configs beating buy&hold Sharpe | 1 of 10 cells on return | **27 of 27** |
+| pattern | concentrated in 2-3 crises | spread across decades |
+
+SPY Sharpe 0.586 -> 0.71; QQQ 0.40 -> 0.67. Drawdown SPY -55.2% -> -40.3%,
+QQQ -83.0% -> -40.0%.
+
+### PBO 0.8365 - higher than the MA family, and it means something DIFFERENT
+
+```
+PBO                0.8365   (MA family: 0.8232)
+degradation_slope -0.9841   (MA family: -1.0158)
+buy&hold Sharpe    0.586
+family Sharpe      min 0.608  median 0.690  max 0.731
+configs above benchmark: 27 of 27
+```
+
+PBO measures whether the IN-SAMPLE BEST config stays best out of sample. Here it
+does not - the ranking is noise, so **do not tune the parameter**. But the effect
+does not depend on picking: the family FLOOR (0.608) already clears the benchmark
+(0.586). With the MA rule the effect lived in one cell of ten, so selection was
+everything and PBO correctly killed it. Here selection is irrelevant.
+
+**High PBO plus a family floor above the benchmark means 'do not tune', not
+'nothing here'.** That distinction is the whole finding.
+
+### What it is actually worth, after costs
+
+Levered to SPY's exact realised volatility (1.16x): **13.01%/yr vs 10.88%, +2.13pp**,
+at -45.4% drawdown against -55.2%.
+
+Financing is NOT free. At 1.16x and fed funds plus a spread, roughly 0.16 x 5% =
+**-0.8pp**. The honest figure is about **+1.3pp/yr**.
+
+### What would still sink it
+
+- Per-decade on SPY the Sharpe gain is +0.07, +0.13, **-0.06**, **-0.02** - positive
+  in two of four, not consistently.
+- Every window is burned (E40), so this is in-sample. It has never been tested on
+  data nobody looked at.
+- +1.3pp is real but it is not the 40-50pp target, and it never will be.
+
+### Status
+
+NOT a validated result. It is the best-supported hypothesis this goal produced, and
+the correct next step is to let `prospective.py` record it forward rather than to
+quote it. Adding the vol-target rules to that recorder is the honest way to find out.
