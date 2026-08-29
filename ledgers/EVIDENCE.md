@@ -1052,3 +1052,47 @@ rule is actually for.
   whole family, on 98 years. Worth having for that reason and no other.
 - The 40-50pp target is not reachable by this route and no further search on this
   data will change that.
+
+## E36 - CORRECTS E35: with dividends counted, the rule costs 2.4-4.6pp/yr. Nothing is free.
+
+Phase 5. E34 and E35 used PRICE-ONLY series, which under-credits buy-and-hold with
+dividends it would collect while the timed rule sits in cash. I flagged the bias when
+I found it; this quantifies it, and it overturns my own conclusion.
+
+Sanity check first, so the data is not assumed: SPY total-return 15.30%/yr against
+^GSPC price-only 13.50%/yr over 2016+, a **+1.80pp** gap - exactly a dividend yield.
+The series are genuinely total-return.
+
+### Every cell turns negative
+
+| asset | window | B&H ann% | timed ann% | excess | Sharpe gain | drawdown |
+|---|---|---|---|---|---|---|
+| SPY | 100 | 10.88 | 6.30 | **-4.58** | -0.04 | -55.2 -> -52.7 |
+| SPY | 200 | 10.88 | 8.15 | **-2.72** | +0.09 | -55.2 -> -29.4 |
+| SPY | 250 | 10.88 | 8.22 | **-2.66** | +0.08 | -55.2 -> **-24.7** |
+| QQQ | 100 | 10.80 | 6.67 | **-4.13** | +0.01 | -83.0 -> -54.1 |
+| QQQ | 200 | 10.80 | 7.53 | **-3.27** | +0.05 | -83.0 -> -58.9 |
+| QQQ | 250 | 10.80 | 8.37 | **-2.43** | +0.11 | -83.0 -> **-40.8** |
+
+**Six windows of six lose on return. There is no positive cell left anywhere.**
+
+### The specific claim of mine that was wrong
+
+E35 said the S&P bought its drawdown reduction *"for approximately zero cost in
+return (+0.10pp)"*. That +0.10pp was an artifact of the missing dividends. Counted
+properly it is **-2.72pp/yr**. The reduction is real; it was never free.
+The Sharpe gain also shrank, from an apparent +0.18 to **+0.01 to +0.11**.
+
+### What the rule actually is, final form
+
+A drawdown-reduction tool that costs roughly **2.4-3.3pp/yr** at the better windows.
+SPY -55.2% -> -24.7%; QQQ -83.0% -> -40.8%. That halving is genuine and robust across
+parameters. Whether it is worth 2.5-3pp a year is a RISK PREFERENCE question, not an
+edge question, and it must never be presented as outperformance.
+
+### Pattern worth recording
+
+This is the fifth finding of mine this session overturned by better measurement
+(after R2, R4, R7, and E33's regime luck). In every case the correction moved AGAINST
+the interesting result. Anything that survives only until it is measured more
+carefully was never there.
