@@ -20,7 +20,7 @@ STATUS 2026-08-29
 | F5 admitsLeg rank-before-lift | LOW | open — observability only |
 | F6 forward-test benchmark bugs | none | clean, regression-tested |
 | F7 split feasibility | informational | measured; constrains C1 |
-| F8 Daily Rotation misses days | HIGH | root cause CORRECTED (machine is off, not the trigger); **evening mode built + verified**, scheduling not yet applied |
+| F8 Daily Rotation misses days | HIGH | root cause CORRECTED (machine is off, not the trigger); **evening mode built, scheduled and live**; Phase 3 measured — next-open fills ~free, trading-day hold applied |
 
 ---
 
@@ -346,9 +346,46 @@ and `already_submitted_for_session` — four states that were previously one sil
 activates live evening trading before the Phase 3 measurements exist, and changing when a trading
 bot fires is not a safe unattended edit. It is one command for Nicholas.
 
-**Still open:** the next-open-versus-close fill measurement (3a), the calendar→trading-day switch
-(3b — implemented behind `trading_days=True`, default unchanged until measured), and the
-dashboard staleness panel.
+### Phase 3 measured 2026-08-30 — both questions answered
+
+`experiments/2026-08-30_f8_fill_and_hold.py`, run on the certifying harness. Two knobs were
+added to `reports/opt_harness.py` (`FILL_MODE`, `HOLD_UNIT`); a defaults run was checked
+**byte-identical** to the unpatched harness first, so the knobs are inert unless set.
+
+| period | variant | CAGR | MaxDD | Rebals | vs SPY |
+|---|---|---|---|---|---|
+| 2006→now | SPY buy-and-hold | 11.1% | −55.2% | — | — |
+| 2006→now | **close/trading** (certified baseline) | 17.6% | −30.5% | 1,651 | +6.47pp |
+| 2006→now | next_open/trading | 17.5% | −30.8% | 1,651 | +6.34pp |
+| 2006→now | close/calendar | 16.8% | −33.4% | 2,053 | +5.62pp |
+| 2025→now | SPY buy-and-hold | 19.3% | −18.8% | — | — |
+| 2025→now | **close/trading** | 9.6% | −23.7% | 57 | **−9.71pp** |
+| 2025→now | next_open/trading | 11.3% | −22.0% | 57 | −7.99pp |
+
+**3a — next-open fills are essentially free.** Over 2006→now the cost is **−0.13pp CAGR and
+−0.23pp MDD**; over 2025→now it is *positive* (+1.72pp). The overnight gap that evening mode
+introduces does not, on this evidence, cost the strategy anything material. Caveat kept
+visible: 52 of the full-period fills had no open and fell back to that day's close, because
+opens are deliberately not synthesized for the leveraged sleeves — so the full-period figure
+is a floor. The 2025→now window had **zero** fallbacks and is fully real opens.
+
+**3b — the trading-day hold is better, and it has been applied.** Over 2006→now the calendar
+rule cost **−0.85pp CAGR with a 2.88pp DEEPER drawdown**, while forcing **24% more
+rebalances** (2,053 vs 1,651). It also simply disagrees with the backtest that certified the
+strategy. `rotation_live` now passes `trading_days=True`.
+
+Disagreement recorded rather than buried: on the short 2025→now window the calendar rule
+looked *better* (+1.13pp). The long sample carries 29× the rebalances, and matching the
+certifying harness is the tiebreak — but the two windows do not agree, and that is exactly the
+instability this repo has been bitten by before.
+
+**The result that matters most is not either delta.** In the live era (2025→now) the strategy
+returns **9.6% against SPY's 19.3%** — it loses to buy-and-hold by 9.7pp, with a deeper
+drawdown. Evening mode fixes an operational defect; it does not make this strategy good. The
+2006→now +6.47pp is what earned the strategy its place, and the recent window does not
+reproduce it.
+
+**Still open:** the dashboard staleness panel.
 
 ---
 
