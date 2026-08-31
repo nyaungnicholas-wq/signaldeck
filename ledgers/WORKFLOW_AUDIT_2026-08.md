@@ -385,7 +385,16 @@ drawdown. Evening mode fixes an operational defect; it does not make this strate
 2006→now +6.47pp is what earned the strategy its place, and the recent window does not
 reproduce it.
 
-**Still open:** the dashboard staleness panel.
+**Dashboard staleness panel shipped.** `dashboard/server.py` now returns `rotation_health`:
+trading days held (the unit the strategy actually holds in) against `min_hold`, the last five
+run-ledger rows, and a state of ok / watch / stale / unknown. Replayed against the real August
+gap it turns `watch` on 08-26, two days in — a soft signal, deliberately: holding past
+min_hold is normal for a signal-driven strategy. The HARD catch is the ledger, which shows no
+rows at all for a day that never ran, and the verifier that reads it.
+
+**F8 is closed.** Root cause corrected, evening mode built, scheduled and live, both Phase 3
+questions measured, hold unit fixed, alerting resurrected, verifier rewritten, staleness
+surfaced.
 
 ---
 
