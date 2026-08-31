@@ -20,7 +20,7 @@ STATUS 2026-08-29
 | F5 admitsLeg rank-before-lift | LOW | open — observability only |
 | F6 forward-test benchmark bugs | none | clean, regression-tested |
 | F7 split feasibility | informational | measured; constrains C1 |
-| F8 Daily Rotation misses days | HIGH | **diagnosed, not changed** (see why) |
+| F8 Daily Rotation misses days | HIGH | root cause CORRECTED (machine is off, not the trigger); **evening mode built + verified**, scheduling not yet applied |
 
 ---
 
@@ -252,54 +252,103 @@ must be discovered now rather than at finalist time.
 
 ---
 
-## F8 — `stock-trader Daily Rotation` misses trading days silently. SEVERITY: HIGH. **DIAGNOSED, NOT CHANGED.**
+## F8 — Daily Rotation missed five trading days. SEVERITY: HIGH. **ROOT CAUSE CORRECTED; FIX BUILT 2026-08-30.**
 
-The only process currently placing orders. Diagnosed 2026-08-29; deliberately left alone, for
-the reason in the last paragraph.
+**Three claims in the first version of this entry were WRONG.** They are corrected here rather
+than quietly replaced, because two of them were the stated reason for not fixing this.
 
-First, a correction: the failing result is `0x800710E0`, not `0x800704A0` as first recorded.
-That is `ERROR_TASK_NOT_RUNNING` (Win32 4320) — the task was **stopped**, not crashed.
+1. ~~"A task named Daily Rotation is on a WEEKLY trigger."~~ **False.** `DaysOfWeek = 62` is
+   Mon–Fri with `WeeksInterval = 1`. Windows models a weekday schedule as a weekly trigger; the
+   schedule was correct all along.
+2. ~~"`--live` means live rotation mode, not live money."~~ **False.** `dry_run = not args.live`
+   (`main.py:296`) — `--live` genuinely submits orders. It is not real money only because
+   `alpaca_broker.py:24` hardcodes the paper endpoint.
+3. ~~"Enabling catch-up would be dangerous: it would rebalance at stale prices."~~ **False**, and
+   this was my justification for leaving it broken. `run_scheduled` checks `is_market_open()`
+   (`rotation_live.py:320`) and skips.
 
-Four independent defects compound:
+**The actual root cause: the machine is off.** Windows power events:
 
-1. **The trigger is `MSFT_TaskWeeklyTrigger`.** A task named "Daily Rotation" is scheduled
-   WEEKLY. This is the cadence in the log, not a coincidence.
-2. **`WakeToRun = False`.** The machine does not wake for it.
-3. **`StartWhenAvailable = False`.** A run missed while the machine is off is lost **silently
-   and permanently** — no catch-up, no error, no entry anywhere.
-4. **The verifier is dead.** `stock-trader Verify Rotation Fired` has a **one-time**
-   `MSFT_TaskTimeTrigger` dated `2026-08-10T07:15`. It fired once, returned `rc=1`, and can
-   never fire again. The safety net that exists to catch exactly this has been inert for 19
-   days.
+| | clean shutdown (PT) | boot (PT) |
+|---|---|---|
+| 8/26 | 00:17 | 18:33 |
+| 8/27 | 08:27 | 18:53 |
+| 8/28 | 06:27 | 19:14 |
+| 8/29 | 04:56 | *(never)* |
+| 8/30 | | 18:15 |
 
-Evidence from `stock-trader/data/rotation_cron.log`. Rebalances land on 07-31, 08-03, 08-06,
-08-09, 08-10, 08-13, 08-14, 08-17, 08-20, then **a seven-day gap to 08-27**, whose entry reads
-`held 7d` — the trader noticed the gap even though nothing else did. 08-21, 08-24, 08-25 and
-08-26 are absent entirely, and a run that merely skipped would have logged `skip — market
-closed` as 08-14 does. Nothing at all for 08-28. The box last booted 2026-08-28 19:14, i.e.
-long after that morning's 07:00 PT trigger. Machine timezone is Pacific, so the trigger is
-07:00 PT = 10:00 ET; there is no battery, so the battery settings are not implicated.
+The box is cleanly shut down (S5) through the entire trading day and boots ~18:00–19:00 PT —
+after the close. Every missed day matches: on 08-27 it was up until 08:27 PT so the 07:00
+trigger fired and the log has an entry; on 08-28 it shut down at 06:27, before the trigger, and
+there is none. `powercfg /a`: S3 unavailable, only S0 Modern Standby and Hibernate.
 
-**Why this was not fixed automatically.** The obvious remedy — set `StartWhenAvailable = True`
-so missed runs catch up — is **actively dangerous here**. A rotation that missed 07:00 would
-then fire whenever the machine next woke, which on 08-28 would have been 19:14, and it would
-rebalance a real book against stale decision prices hours after the close. Changing *when* a
-trading bot fires is not a safe unattended edit, and the correct fix (wake the machine for a
-daily trigger, and refuse to trade outside a permitted window rather than catching up blindly)
-is Nicholas's call.
+**A wake timer cannot resume an S5 machine**, so `WakeToRun = True` — the obvious fix — does
+nothing here, and moving the run to 15:40 ET (12:40 PT) would have been strictly worse.
 
-Remediation, for him to run and confirm:
+Three further defects found while tracing:
 
-```powershell
-# daily, not weekly; wake the box; do NOT enable blind catch-up
-$t = Get-ScheduledTask -TaskName "stock-trader Daily Rotation"
-$t.Settings.WakeToRun = $true
-Set-ScheduledTask -TaskName "stock-trader Daily Rotation" -Settings $t.Settings
-# and re-arm the verifier on a RECURRING daily trigger, not a one-time one
-```
+- **Every alert has been dead since the macOS→Windows port.** `_notify` shelled out to
+  `osascript` inside `except Exception: pass` (`rotation_live.py:56-68`). Not-connected,
+  risk-gate block, rebalance failure and zero-fill: all silent.
+- **The verifier could not fire twice** — a one-time trigger dated `2026-08-10T07:15`, fired
+  once, `rc=1` (an unguarded `$null` from `Get-ScheduledTaskInfo`), inert 19 days. On failure it
+  appended to a file that did not exist and exited 0 anyway.
+- **Calendar vs trading days.** `_days_since_last_rebalance` counted calendar days; the
+  certifying backtest counts trading days (`opt_harness.py:216`). Fri→Mon is 3 versus 1, so live
+  rebalanced where the backtest would not.
 
-The permitted-hours guard now in `execution/guards.check_calendar` is the pattern the rotation
-needs: a late run should REFUSE, not trade.
+### Fix built 2026-08-30 — evening mode
+
+Nicholas chose to schedule around the uptime window: run after the close, queue orders for the
+next open. Stated plainly, this is a **strategy change, not a bug fix** — the backtest fills at
+the decision day's close, and next-open fills carry overnight gap risk it never modelled.
+
+**Phase 0 verified the load-bearing assumption before anything was built on it.** One whole-share
+`market`/`day` order submitted to the paper account with the market closed: HTTP 200, status
+`accepted`, `filled_qty 0`, held queued, cancelled cleanly (204 → `canceled`). Alpaca does queue
+after-hours market orders. Acceptance and queuing are proven; the fill price at the open is not,
+because the probe was cancelled rather than left to ride.
+
+Shipped:
+
+- `trader/session.py` — ET session dates, `next_session`, `last_closed_session`,
+  `sessions_between`. Replaces `date.today()`, which is **Pacific** on this box: at 18:30 PT it
+  is 21:30 ET and past 21:00 PT the ET date has already rolled. Same class of bug as the UTC
+  session date fixed in `execution/execute.py`.
+- `trader/notify.py` — toast + webhook + run ledger, with the rule that an undeliverable alert is
+  itself an error. **A worker's first implementation used BurntToast and was silently broken**:
+  the module is not installed here, its `catch` block still exited 0, so the sink reported
+  success while displaying nothing — the module built to make silence impossible was itself
+  silent. Replaced with the native WinRT toast, which needs no module and must print a sentinel
+  as well as exit 0. Title and message travel via the environment, not interpolated into a
+  PowerShell string, because alert text carries exception messages.
+- `trader/rotation_live.py` — evening mode with the gate inverted (market must be **closed**), a
+  ledger row on **every** path, session-keyed idempotency, an extracted `_assert_fresh` staleness
+  guard, and `_notify` delegating to `notify.py` without re-raising (several call sites are inside
+  an `except` that is about to re-raise the real error; letting a delivery failure escape there
+  would mask it).
+- `verify-daily-rotation.ps1` — rewritten: try/catch throughout, **reads the ledger** rather than
+  only `LastRunTime`, exits non-zero, routes the verdict through `notify.py`.
+- `register-tasks.ps1` — idempotent registration, XML backup first, settings read back.
+
+**The defect that would have doubled a real book.** `_complete_fills` sleeps 5s and re-submits
+any shortfall "while the market is still open" (`rotation_live.py:216-229`). After hours nothing
+fills, so it computes a 100% shortfall and **re-submits the entire book**. Evening mode passes
+`complete_fills=False`; completion is reconciled by the next evening run.
+
+**Measured behaviour, 2026-08-30 evening:** reconciled 4 prior fills (+53.6bps), passed the
+Sunday-evening queue-gap gate, refused on `min_hold` (1/3). With state temporarily adjusted it
+produced a correct 4-order plan and, on a second run, refused with
+`already_submitted_for_session`. Ledger rows distinguish `min_hold_days`, `error`, `rebalance`
+and `already_submitted_for_session` — four states that were previously one silence.
+
+**Not applied, and deliberately so:** `register-tasks.ps1` has been dry-run only. Running it
+activates live evening trading before the Phase 3 measurements exist, and changing when a trading
+bot fires is not a safe unattended edit. It is one command for Nicholas.
+
+**Still open:** the next-open-versus-close fill measurement (3a), the calendar→trading-day switch
+(3b — implemented behind `trading_days=True`, default unchanged until measured), and the
+dashboard staleness panel.
 
 ---
 
