@@ -1,0 +1,48 @@
+{
+  "window": "dev",
+  "dates_used": [
+    "1993-01-29",
+    "2015-12-31"
+  ],
+  "n_days": 5772,
+  "strategy_metrics": {
+    "name": "prod_rotation",
+    "n_days": 5772,
+    "start": "1993-02-01",
+    "end": "2015-12-30",
+    "cum_return": 4.667136,
+    "cagr": 0.078676,
+    "ann_vol": 0.182872,
+    "sharpe": 0.36464,
+    "max_dd": -0.429261,
+    "es95": -0.029191,
+    "avg_gross": null,
+    "max_gross": null,
+    "turnover_ann": null,
+    "n_trades": null,
+    "beta": 0.505165
+  },
+  "benchmark_metrics": {
+    "name": "spy_bh",
+    "n_days": 5772,
+    "start": "1993-02-01",
+    "end": "2015-12-30",
+    "cum_return": 6.141817,
+    "cagr": 0.089624,
+    "ann_vol": 0.188986,
+    "sharpe": 0.412155,
+    "max_dd": -0.551894,
+    "es95": -0.028074,
+    "avg_gross": 1.0,
+    "max_gross": 1.0,
+    "turnover_ann": 0.043659,
+    "n_trades": 1,
+    "beta": 1.0
+  },
+  "excess_pp": -147.4681,
+  "gate_excess": false,
+  "gate_sharpe": false,
+  "caveats": [
+    "Strategy returns include engine's internal cost model; benchmark returns use protocol cost model (10 bps transaction + 90 bps financing spread)."
+  ]
+}

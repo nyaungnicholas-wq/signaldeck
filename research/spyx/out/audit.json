@@ -1,0 +1,135 @@
+{
+  "finalist": {
+    "name": "dt_sma150_invvol",
+    "sma": 150,
+    "weighting": "invvol",
+    "leverage": 3.29,
+    "dev": {
+      "name": "dt_sma150_invvol",
+      "n_days": 2494,
+      "start": "2006-02-06",
+      "end": "2015-12-31",
+      "cum_return": 3.255042,
+      "cagr": 0.157567,
+      "ann_vol": 0.210026,
+      "sharpe": 0.751679,
+      "max_dd": -0.274972,
+      "es95": -0.033036,
+      "avg_gross": 2.065961,
+      "max_gross": 3.29,
+      "turnover_ann": 8.853939,
+      "n_trades": 111,
+      "beta": 0.404274,
+      "excess_pp": 227.9914
+    },
+    "val": {
+      "name": "dt_sma150_invvol",
+      "n_days": 1237,
+      "start": "2016-01-04",
+      "end": "2020-11-30",
+      "cum_return": 1.427652,
+      "cagr": 0.198035,
+      "ann_vol": 0.183675,
+      "sharpe": 1.015201,
+      "max_dd": -0.226123,
+      "es95": -0.029455,
+      "avg_gross": 2.399605,
+      "max_gross": 3.29,
+      "turnover_ann": 9.41218,
+      "n_trades": 59,
+      "beta": 0.465913,
+      "excess_pp": 47.9943
+    },
+    "full": {
+      "name": "dt_sma150_invvol",
+      "n_days": 3731,
+      "start": "2006-02-06",
+      "end": "2020-11-30",
+      "cum_return": 9.32976,
+      "cagr": 0.17083,
+      "ann_vol": 0.201649,
+      "sharpe": 0.829927,
+      "max_dd": -0.274972,
+      "es95": -0.031952,
+      "avg_gross": 2.176579,
+      "max_gross": 3.29,
+      "turnover_ann": 8.918014,
+      "n_trades": 170,
+      "beta": 0.422385,
+      "excess_pp": 648.2786
+    },
+    "generated_utc": "2026-08-31T07:56:21.208261+00:00",
+    "grid_size": 8
+  },
+  "checks": [
+    {
+      "id": "A1",
+      "name": "seal_still_closed",
+      "passed": true,
+      "detail": "seal is closed and load beyond seal raises PermissionError"
+    },
+    {
+      "id": "A2",
+      "name": "causality_by_truncation",
+      "passed": true,
+      "detail": "25/25 dates matched"
+    },
+    {
+      "id": "A3",
+      "name": "perturbation_isolation",
+      "passed": "True",
+      "detail": "max diff 0.0"
+    },
+    {
+      "id": "A4",
+      "name": "accounting_identity",
+      "passed": "True",
+      "detail": "max diff 0.0"
+    },
+    {
+      "id": "A5",
+      "name": "benchmark_alignment",
+      "passed": true,
+      "detail": "net.index==bench.index==px.index: True; dev days=2494, val days=1237, total=3731"
+    },
+    {
+      "id": "A6",
+      "name": "exposure_within_frozen_limit",
+      "passed": "True",
+      "detail": "max gross=3.290000000000001, min weight=0.0"
+    },
+    {
+      "id": "A7",
+      "name": "reproduce_manifest_metrics",
+      "passed": false,
+      "detail": "val sharpe: 1.015198 vs 1.015201; dev cum_return: 3.255048 vs 3.255042; val cum_return: 1.427648 vs 1.427652; dev max_dd: -0.27497 vs -0.274972"
+    },
+    {
+      "id": "A8",
+      "name": "cost_monotonicity",
+      "passed": true,
+      "detail": "0bps: 10.781367, 10bps: 9.329759, 40bps: 5.955415, 100bps: 2.138609"
+    },
+    {
+      "id": "A9",
+      "name": "financing_monotonicity",
+      "passed": true,
+      "detail": "0bps: 11.180621, 90bps: 9.329759, 300bps: 6.031617"
+    },
+    {
+      "id": "A10",
+      "name": "not_a_single_asset",
+      "passed": "True",
+      "detail": "best single: 0.686586, full: 0.829927"
+    },
+    {
+      "id": "A11",
+      "name": "trade_count_sufficiency",
+      "passed": "True",
+      "detail": "trade days=170, rebalance months=170"
+    }
+  ],
+  "strategies_sha256": "bec0f3fb07048f9a839abf47adf36089e15c7846b6e454b81ea97eff65ce04f8",
+  "evalcore_sha256": "cdfcfaf028e2239ffdbc5826f98a55287aca670cc27acf1879faa8b5efa7c22e",
+  "generated_utc": "2026-09-01T00:01:33.037277+00:00"
+}

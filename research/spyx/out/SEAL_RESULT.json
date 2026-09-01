@@ -1,0 +1,102 @@
+{
+  "graded_utc": "2026-08-31T08:21:07.756140+00:00",
+  "finalist_name": "dt_sma150_invvol",
+  "n_days": 1420,
+  "seal_start": "2021-01-04",
+  "seal_end": "2026-08-28",
+  "cost_bps": 10.0,
+  "financing_spread_bps": 90.0,
+  "git_commit": "ada8af42f5b8abc4491bb6da05b4bdc027d1a3ee",
+  "strategy_metrics": {
+    "name": "dt_sma150_invvol",
+    "n_days": 1420,
+    "start": "2021-01-04",
+    "end": "2026-08-28",
+    "cum_return": 0.826622,
+    "cagr": 0.112842,
+    "ann_vol": 0.219168,
+    "sharpe": 0.449035,
+    "max_dd": -0.284997,
+    "es95": -0.03319,
+    "avg_gross": 2.150857,
+    "max_gross": 3.29,
+    "turnover_ann": 11.22514,
+    "n_trades": 65,
+    "beta": 0.811748
+  },
+  "benchmark_metrics": {
+    "name": "spy_bh",
+    "n_days": 1420,
+    "start": "2021-01-04",
+    "end": "2026-08-28",
+    "cum_return": 1.213858,
+    "cagr": 0.151468,
+    "ann_vol": 0.167327,
+    "sharpe": 0.731778,
+    "max_dd": -0.244964,
+    "es95": -0.024082,
+    "avg_gross": 1.0,
+    "max_gross": 1.0,
+    "turnover_ann": 0.177465,
+    "n_trades": 1,
+    "beta": 1.0
+  },
+  "independent_recomputation": {
+    "strategy": {
+      "cum_return": 0.8266217426045057,
+      "ann_vol": 0.2191678456876644,
+      "sharpe": 0.44903464817843936,
+      "max_dd": -0.28499692393285053
+    },
+    "benchmark": {
+      "cum_return": 1.2138582792307395,
+      "ann_vol": 0.16732684743630138,
+      "sharpe": 0.7317778401460049,
+      "max_dd": -0.24496392197774902
+    }
+  },
+  "digests": {
+    "strategies.py": "bec0f3fb07048f9a839abf47adf36089e15c7846b6e454b81ea97eff65ce04f8",
+    "evalcore.py": "ef5bfd309f9d9ea0e4a73b8fddb335a80d9b2abd9b8fdae25a4f164a6d16e3f5",
+    "finalist_manifest.json": "58075ea48ce0c275c92dce6d80235e580bf9129897a208e017034eec06bb424e"
+  },
+  "gates": {
+    "return": false,
+    "sharpe": false,
+    "both": false,
+    "excess": -38.7236,
+    "sharpe_val": 0.449035
+  },
+  "cost_sensitivity": [
+    {
+      "cost_bps": 5,
+      "financing_bps": 90,
+      "excess": -32.9743,
+      "sharpe": 0.474592
+    },
+    {
+      "cost_bps": 20,
+      "financing_bps": 90,
+      "excess": -49.6929,
+      "sharpe": 0.397809
+    },
+    {
+      "cost_bps": 40,
+      "financing_bps": 90,
+      "excess": -69.6561,
+      "sharpe": 0.295083
+    },
+    {
+      "cost_bps": 10,
+      "financing_bps": 150,
+      "excess": -46.19,
+      "sharpe": 0.415229
+    }
+  ],
+  "caveats": [
+    "taxes excluded",
+    "market impact beyond flat spread not modelled",
+    "universe survivorship-selected",
+    "this block was analysed in aggregate by a prior session so it is a contaminated sub-period test, not virgin out-of-sample"
+  ]
+}

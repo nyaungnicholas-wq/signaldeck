@@ -1,0 +1,151 @@
+{
+  "generated_utc": "2026-08-31T08:33:27.209545+00:00",
+  "window": [
+    "1993-01-29",
+    "2020-11-30"
+  ],
+  "note": "hindsight-optimal long-only static allocation; an upper bound, not a strategy",
+  "gate_sharpe": 1.0,
+  "results": [
+    {
+      "universe": "sleeves9",
+      "n_instruments": 9,
+      "first_date": "2006-02-06",
+      "rows": 3731,
+      "spy_sharpe": 0.498579,
+      "equal_weight_sharpe": 0.568303,
+      "ceiling_sharpe_gross": 1.23113,
+      "ceiling_sharpe_costed": 1.230046,
+      "ceiling_levered_sharpe": 1.132785,
+      "ceiling_levered_excess_pp": 2173.5965,
+      "leverage_for_vol_match": 3.181,
+      "top_weights": [
+        [
+          "IEF",
+          0.5579
+        ],
+        [
+          "QQQ",
+          0.2635
+        ],
+        [
+          "TLT",
+          0.0988
+        ],
+        [
+          "GLD",
+          0.0798
+        ],
+        [
+          "SPY",
+          0.0
+        ]
+      ]
+    },
+    {
+      "universe": "sectors",
+      "n_instruments": 10,
+      "first_date": "1998-12-22",
+      "rows": 5521,
+      "spy_sharpe": 0.357757,
+      "equal_weight_sharpe": 0.416535,
+      "ceiling_sharpe_gross": 0.488433,
+      "ceiling_sharpe_costed": 0.488163,
+      "ceiling_levered_sharpe": 0.480454,
+      "ceiling_levered_excess_pp": 314.4312,
+      "leverage_for_vol_match": 1.17,
+      "top_weights": [
+        [
+          "XLY",
+          0.2137
+        ],
+        [
+          "XLV",
+          0.209
+        ],
+        [
+          "XLU",
+          0.1744
+        ],
+        [
+          "XLP",
+          0.1673
+        ],
+        [
+          "XLB",
+          0.0988
+        ]
+      ]
+    },
+    {
+      "universe": "broad25",
+      "n_instruments": 27,
+      "first_date": "2013-07-18",
+      "rows": 1857,
+      "spy_sharpe": 0.756,
+      "equal_weight_sharpe": 0.71252,
+      "ceiling_sharpe_gross": 1.488799,
+      "ceiling_sharpe_costed": 1.48616,
+      "ceiling_levered_sharpe": 1.367456,
+      "ceiling_levered_excess_pp": 288.8726,
+      "leverage_for_vol_match": 3.268,
+      "top_weights": [
+        [
+          "SHY",
+          0.2924
+        ],
+        [
+          "IEF",
+          0.2919
+        ],
+        [
+          "QQQ",
+          0.1716
+        ],
+        [
+          "TLT",
+          0.1635
+        ],
+        [
+          "XLK",
+          0.0805
+        ]
+      ]
+    }
+  ],
+  "best": {
+    "universe": "broad25",
+    "n_instruments": 27,
+    "first_date": "2013-07-18",
+    "rows": 1857,
+    "spy_sharpe": 0.756,
+    "equal_weight_sharpe": 0.71252,
+    "ceiling_sharpe_gross": 1.488799,
+    "ceiling_sharpe_costed": 1.48616,
+    "ceiling_levered_sharpe": 1.367456,
+    "ceiling_levered_excess_pp": 288.8726,
+    "leverage_for_vol_match": 3.268,
+    "top_weights": [
+      [
+        "SHY",
+        0.2924
+      ],
+      [
+        "IEF",
+        0.2919
+      ],
+      [
+        "QQQ",
+        0.1716
+      ],
+      [
+        "TLT",
+        0.1635
+      ],
+      [
+        "XLK",
+        0.0805
+      ]
+    ]
+  }
+}
