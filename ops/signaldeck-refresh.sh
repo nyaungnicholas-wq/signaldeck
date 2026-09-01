@@ -160,7 +160,7 @@ fi
 #    the sweep itself can stall under the thrash. Defer — the trigger retries on
 #    the next wake/day. Override with `force`.
 LOAD_MAX="${SIGNALDECK_SWEEP_LOAD_MAX:-24}"
-load1=$(uptime | sed -E 's/.*averages?: ([0-9.]+).*/\1/' | cut -d. -f1)
+load1=$(command -v uptime >/dev/null 2>&1 && uptime | sed -E 's/.*averages?: ([0-9.]+).*/\1/' | cut -d. -f1 || echo 0)
 if [ "$FORCE" != "force" ] && [ "${load1:-0}" -gt "$LOAD_MAX" ]; then
   log "machine busy (1-min load ${load1} > ${LOAD_MAX}) — deferring today's sweep"; exit 0
 fi
