@@ -295,7 +295,7 @@ if [ ! -x "$SDMAINT" ]; then
 fi
 if [ -x "$SDMAINT" ]; then
   report=$(cd "$SD" && "$SDMAINT" storage-report -db "$DB" \
-    -budget-db-mb "${SIGNALDECK_BUDGET_DB_MB:-4096}" \
+    -budget-db-mb "${SIGNALDECK_BUDGET_DB_MB:-6144}" \
     -budget-wal-mb "${SIGNALDECK_BUDGET_WAL_MB:-512}" \
     -budget-backups-mb "${SIGNALDECK_BUDGET_BACKUPS_MB:-12288}" \
     -budget-sidecars-mb "${SIGNALDECK_BUDGET_SIDECARS_MB:-4096}" \
