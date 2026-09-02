@@ -193,7 +193,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 			gated = true
 			collapseReason = "the accuracy grader has REFUSED since " + *reg.RefusedSince +
 				" — figures over this graded window are withheld until it clears"
-		} else if reason, collapsed, cerr := d.collapsedGradingWindow(ctx, reg, time.Now()); cerr == nil && collapsed {
+		} else if reason, collapsed, cerr := d.collapsedGradingWindow(ctx, reg, d.now()); cerr == nil && collapsed {
 			// Healthy grader, unusable window: the rows exist and are one
 			// market-wide call repeated per symbol.
 			gated = true
@@ -709,7 +709,7 @@ const trackAccrualWindowDays = 7
 func (d Deps) trackGate(ctx context.Context, h md.Horizon, indepN int,
 	counts map[md.Horizon][2]int, countsErr error,
 ) map[string]any {
-	now := time.Now()
+	now := d.now()
 	since := now.Add(-trackAccrualWindowDays * 24 * time.Hour).Unix()
 
 	accr := map[md.Horizon]stStage2Accrual{}

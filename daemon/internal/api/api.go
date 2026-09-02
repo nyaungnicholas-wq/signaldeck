@@ -64,6 +64,21 @@ type Deps struct {
 	// webhook), surfaced read-only via GET /api/notify-status. nil is safe
 	// (tests / minimal wiring): every remote transport reads unconfigured.
 	Notifier *notify.Notifier
+	// Now is the clock the accuracy and track-record gates locate the graded
+	// window against; nil means time.Now (production). A test that seeds a
+	// window around a fixed date MUST set it: the gate looked for the window
+	// relative to the wall clock, so a fixture frozen at 2026-08-20 stopped
+	// reading as collapsed once the calendar moved on, and the document-vs-API
+	// divergence test went red by itself while a cached ok hid it (2026-09-01).
+	Now func() time.Time
+}
+
+// now returns the injected clock or the wall clock.
+func (d Deps) now() time.Time {
+	if d.Now != nil {
+		return d.Now()
+	}
+	return time.Now()
 }
 
 // Serve runs the API server until ctx is canceled.

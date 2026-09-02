@@ -196,6 +196,7 @@ func TestGate_ApiRefusalMatchesTheDocumentGate(t *testing.T) {
 
 	path := writeRegistry(t, registryFor(map[string]int{"1d": 3}))
 	d.RegistryPath = path
+	d.Now = func() time.Time { return now } // the handler must judge the same window the fixture built
 
 	_, collapsed, err := CollapsedGradingWindow(context.Background(), st, path, now)
 	if err != nil || !collapsed {

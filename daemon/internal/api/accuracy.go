@@ -126,7 +126,7 @@ type accuracyRow struct {
 
 func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	now := time.Now().UTC()
+	now := d.now().UTC()
 
 	reg, err := loadRegistry(d.RegistryPath)
 	if err != nil {
