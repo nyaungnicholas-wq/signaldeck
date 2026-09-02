@@ -179,10 +179,25 @@ func New(keys []string, baseURL, model, deepModel, fastModel string, dailyCap in
 //     for per-headline work.
 //   - nemotron-3.5-lightning-30b-a3b was rejected despite its name: 19.8s and
 //     still truncated on the same prompt.
+//
+// 2026-09-01: nemotron-3-nano-30b-a3b reached end of life at 09:00Z (HTTP 410;
+// third retirement in six weeks, after 07-19 and 08-27). The catalogue's
+// similarly named nemotron-nano-3-30b-a3b answers 404 to a real completion, as
+// do llama-3.1-nemotron-51b/70b, mistral-nemotron, mistral-nemo-12b and every
+// meta/llama id (410). Measured with the tagger's own charter and 120-token
+// budget: nemotron-3-nano-omni-30b-a3b-reasoning returned the strict JSON on
+// 3/3 headlines in 2.2-5.7s (finish=stop; its reasoning_content is not charged
+// against max_tokens), nemotron-3-super-120b-a12b answered in 1.9s (its earlier
+// 503s were "temporarily overloaded", not retirement), nemotron-3-ultra-550b-a55b
+// in 7.2s. Sending chat_template_kwargs {"enable_thinking": false} cut the nano
+// model to 0.6-0.8s with identical answers; it is a vendor-specific request field
+// and is NOT sent, so the client stays OpenAI-compatible. Retirement is now the
+// dominant failure mode of this integration: when the tagger reports HTTP 410,
+// re-probe with a real completion, not the /v1/models list.
 const (
-	DefaultModel = "nvidia/nemotron-3-nano-30b-a3b"
+	DefaultModel = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
 	DefaultDeep  = "nvidia/nemotron-3-super-120b-a12b"
-	DefaultFast  = "nvidia/nemotron-3-nano-30b-a3b"
+	DefaultFast  = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
 )
 
 func (c *httpClient) Enabled() bool     { return len(c.keys) > 0 }

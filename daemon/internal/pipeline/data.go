@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -195,6 +196,13 @@ func (w *SentimentTagger) Run(ctx context.Context) (string, error) {
 	batch := envInt("SIGNALDECK_SENTIMENT_BATCH", 60)
 	pace := time.Duration(envInt("SIGNALDECK_SENTIMENT_PACE_MS", 5000)) * time.Millisecond
 	n, err := sentiment.RunOnce(ctx, w.LLM, w.St, batch, pace)
+	if errors.Is(err, llm.ErrCapReached) {
+		// The cap is a budget, not a fault. But "tagged 0 headlines" read as
+		// "nothing to tag" whenever the FIRST call of a pass was refused (19
+		// such passes on 2026-09-01), hiding a starving tagger behind an ok
+		// status. Say what happened, the way ai-analyst already does.
+		return fmt.Sprintf("tagged %d headlines; daily LLM call cap reached — resets at the UTC day boundary", n), nil
+	}
 	if err != nil {
 		return "", err
 	}

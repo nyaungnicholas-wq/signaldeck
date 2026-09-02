@@ -293,11 +293,15 @@ if [ ! -x "$SDMAINT" ]; then
     (cd "$SD/daemon" && "$GO" build -o "$SDMAINT" ./cmd/sdmaint) >/dev/null 2>&1
   fi
 fi
+# The backups budget default MUST equal derive_budget_mb(SIGNALDECK_BUDGET_DB_MB)
+# in ops/signaldeck-backup-offline.sh (2*DB + 6*25%*DB): 6144 -> 21504. A flat
+# 12288 paged STORAGE OVER BUDGET nightly on a folder the rotation kept healthy
+# (2026-09-01). Change both or neither.
 if [ -x "$SDMAINT" ]; then
   report=$(cd "$SD" && "$SDMAINT" storage-report -db "$DB" \
     -budget-db-mb "${SIGNALDECK_BUDGET_DB_MB:-6144}" \
     -budget-wal-mb "${SIGNALDECK_BUDGET_WAL_MB:-512}" \
-    -budget-backups-mb "${SIGNALDECK_BUDGET_BACKUPS_MB:-12288}" \
+    -budget-backups-mb "${SIGNALDECK_BUDGET_BACKUPS_MB:-21504}" \
     -budget-sidecars-mb "${SIGNALDECK_BUDGET_SIDECARS_MB:-4096}" \
     -budget-archive-mb "${SIGNALDECK_BUDGET_ARCHIVE_MB:-2048}" \
     -budget-logs-mb "${SIGNALDECK_BUDGET_LOGS_MB:-512}" 2>&1)

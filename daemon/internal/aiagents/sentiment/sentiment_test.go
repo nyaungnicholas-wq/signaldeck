@@ -279,7 +279,9 @@ func (c *capClient) Complete(ctx context.Context, sys string, msgs []llm.Message
 }
 
 // TestRunOnceStopsOnCap confirms hitting the daily cap ends the run gracefully:
-// the rows rated before the cap are counted and no error is returned.
+// the rows rated before the cap are counted AND the cap error is returned, so
+// the worker can say why it stopped instead of reporting "tagged 0 headlines"
+// as if there were nothing to tag (2026-09-01).
 func TestRunOnceStopsOnCap(t *testing.T) {
 	st := openStore(t)
 	ctx := context.Background()
@@ -289,8 +291,8 @@ func TestRunOnceStopsOnCap(t *testing.T) {
 
 	cc := &capClient{capAfter: 2}
 	n, err := RunOnce(ctx, cc, st, 10, 0)
-	if err != nil {
-		t.Fatalf("RunOnce should not error on cap, got %v", err)
+	if !errors.Is(err, llm.ErrCapReached) {
+		t.Fatalf("RunOnce must surface the cap it stopped on, got %v", err)
 	}
 	if n != 2 {
 		t.Fatalf("rated = %d, want 2 (cap hit on 3rd)", n)

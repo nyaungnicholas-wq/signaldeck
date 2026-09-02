@@ -164,14 +164,16 @@ fi
 # 2026-08-23, forward_test_daily empty). Waiting for a first row to go stale
 # would have meant the alert could never fire on the failure that mattered most.
 FT_QUIET_DAYS=7
-ft_newest="$(sd_sqlite "$SD/data/signaldeck.db" \
-  "SELECT COALESCE(MAX(session),'2026-08-23') FROM forward_test_daily;" 2>/dev/null)"
-if [ -n "${ft_newest:-}" ]; then
-  ft_age=$(( ( $(date +%s) - $(date -d "$ft_newest" +%s 2>/dev/null || echo "$(date +%s)") ) / 86400 ))
-  if [ "$ft_age" -gt "$FT_QUIET_DAYS" ]; then
-    echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: forward-test STALE — newest recorded session $ft_newest is ${ft_age}d old" >> "$SD/logs/forward-test.log"
-    sd_notify "SignalDeck forward test" "STALE: newest graded session is $ft_newest (${ft_age}d old). prereg seq 87 is not accruing evidence."
-  fi
+# The wording lives in ops/lib-forward-test.sh. An EMPTY forward_test_daily used to
+# be reported as "newest recorded session 2026-08-23 is Nd old" via COALESCE -- a
+# session that was never graded (2026-09-01). Firing on an empty table is still
+# deliberate; only the sentence changed. 2026-08-23 is the registered start
+# (tools/forward_test.py REGISTERED_START).
+. "$SD/ops/lib-forward-test.sh"
+ft_msg="$(sd_ft_stale_line "$SD/data/signaldeck.db" 2026-08-23 "$FT_QUIET_DAYS")"
+if [ -n "${ft_msg:-}" ]; then
+  echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: forward-test $ft_msg" >> "$SD/logs/forward-test.log"
+  sd_notify "SignalDeck forward test" "$ft_msg. prereg seq 87 is not accruing evidence."
 fi
 
 if [ "$backup_rc" -ne 0 ]; then

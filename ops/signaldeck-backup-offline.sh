@@ -18,6 +18,11 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # which is why this script produced nothing after the 2026-07-31 move.
 # shellcheck source=lib-portable.sh
 . "$SD/ops/lib-portable.sh"
+# 2026-09-01: the scheduled task's process env carries no SIGNALDECK_OFFSITE_* and
+# nothing here sourced daemon/.env, so a destination set only in .env never reached
+# this script (21 days with no off-machine copy). Environment still wins; .env fills
+# the gaps; values are never logged. Selftest: ops/test-offsite-env.sh
+. "$SD/ops/lib-offsite-env.sh" && sd_offsite_env_from_dotenv "$SD/daemon/.env"
 
 # python3 on Windows/Git Bash is a Microsoft Store alias stub that resolves,
 # prints "Python was not found", and exits 0 — so `command -v` is not enough,
