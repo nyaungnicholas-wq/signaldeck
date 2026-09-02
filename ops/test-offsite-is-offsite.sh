@@ -81,10 +81,14 @@ if [ -n "$OFFSITE" ] && [ -e "$DB" ] && [ -d "$OFFSITE" ]; then
   fi
 fi
 
-# The script must not have regained an unconditional offsite claim: the meta
-# write has to sit behind the same-volume branch.
-GUARDED="$(awk '/^    elif same_volume /{f=1} /backup_last_offsite/{if(!f) print "UNGUARDED"}' "$SRC")"
-check "backup_last_offsite is only written after the same_volume check" \
+# The script must not have regained an unconditional offsite claim: every meta
+# write has to sit behind a guard that proves the copy left this machine: the
+# same-volume branch for a directory target, or a VERIFIED upload for the S3
+# target added 2026-08-25 (which this check flagged as unguarded for a week,
+# because comments and the S3 branch precede the elif in the file). Comment
+# lines are skipped; a write before either guard still trips it (mutation-checked).
+GUARDED="$(awk '/^ *#/{next} /if s3_upload_verified /{g=1} /^    elif same_volume /{f=1} /backup_last_offsite/{if(!f && !g) print "UNGUARDED"}' "$SRC")"
+check "backup_last_offsite is only written behind a verified S3 upload or the same_volume check" \
   "$([ -z "$GUARDED" ] && echo 1 || echo 0)"
 
 if [ "$fails" -gt 0 ]; then echo "$fails check(s) failed"; exit 1; fi
