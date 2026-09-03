@@ -21,7 +21,8 @@ async function loginAsSmokeUser(context: BrowserContext): Promise<void> {
 }
 
 const ROUTES: readonly string[] = [
-  "/",
+  "/",          // the PUBLIC landing page
+  "/dashboard", // the authenticated deck, which "/" used to be
   "/welcome",
   "/advanced",
   "/glossary",

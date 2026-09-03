@@ -109,7 +109,10 @@ test.describe("login page", () => {
 // the session is unknown a "checking session…" placeholder renders — the app
 // chrome (and its nav) never paints for an anonymous visitor.
 const HUB_ROUTES: { path: string; gated: boolean }[] = [
-  { path: "/", gated: true },
+  // "/" is the PUBLIC landing page now, not the deck -- it must NOT gate.
+  // The authenticated dashboard moved to /dashboard.
+  { path: "/", gated: false },
+  { path: "/dashboard", gated: true },
   { path: "/market/overview", gated: true },
   { path: "/market/signals", gated: true },
   { path: "/intel/filings", gated: true },
@@ -148,7 +151,7 @@ test.describe("offline banner", () => {
     // other click-driven specs already use — without it the tour dialog
     // intercepts the pointer event and the click never lands.
     await context.addInitScript(() => localStorage.setItem("sd-onboarded", "1"));
-    await page.goto("/");
+    await page.goto("/dashboard");
     // Authed: we must stay on the dashboard, not bounce to /login.
     await expect(page.locator("header nav").first()).toBeVisible();
     await expect(page).not.toHaveURL(/\/login/);
@@ -244,7 +247,7 @@ test.describe("compare page symbol changes", () => {
   });
 });
 
-// ── (6) mobile 375px: no horizontal scroll on /login and / ──
+// ── (6) mobile 375px: no horizontal scroll on the public pages or the deck ──
 
 test.describe("mobile 375px viewport", () => {
   test.use({ viewport: { width: 375, height: 812 } });
@@ -255,9 +258,24 @@ test.describe("mobile 375px viewport", () => {
     await noHorizontalScroll(page);
   });
 
-  test("/ (authed dashboard) has no horizontal scroll", async ({ page, context }) => {
+  // The PUBLIC pages, anonymously, at phone width. These are the ones a
+  // stranger actually lands on, and they were never covered: the only mobile
+  // assertions were /login and the authed dashboard.
+  //
+  // A wide table is fine here as long as it scrolls inside its own
+  // .table-wrap; what must never happen is the PAGE scrolling sideways.
+  for (const path of ["/", "/accuracy", "/proof", "/glossary"]) {
+    test(`${path} has no horizontal scroll for an anonymous visitor`, async ({ page }) => {
+      await page.goto(path);
+      await expect(page).not.toHaveURL(/\/login/);
+      await expect(page.locator("header").first()).toBeVisible();
+      await noHorizontalScroll(page);
+    });
+  }
+
+  test("/dashboard (authed) has no horizontal scroll", async ({ page, context }) => {
     await loginAsSmokeUser(context);
-    await page.goto("/");
+    await page.goto("/dashboard");
     // At 375px the desktop nav is CSS-hidden (lg:flex); the mobile chrome is
     // the header bar with a hamburger toggle controlling #mobile-nav.
     await expect(page.locator("header").first()).toBeVisible();

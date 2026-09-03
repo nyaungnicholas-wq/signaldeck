@@ -51,7 +51,7 @@ test.describe("goal changes the page", () => {
   });
 
   test("dashboard reorders and folds by goal", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/dashboard");
     await expect(page.locator("[data-goal]")).toBeVisible();
 
     await chooseGoal(page, "I'm learning");
@@ -76,7 +76,7 @@ test.describe("goal changes the page", () => {
   });
 
   test("demoted panels still exist, they are only folded", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/dashboard");
     await chooseGoal(page, "I'm learning");
 
     const details = page.locator("main details");
