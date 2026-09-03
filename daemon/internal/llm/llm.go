@@ -266,10 +266,35 @@ func (c *httpClient) record(promptTok, outputTok int, now time.Time, errMsg stri
 }
 
 type chatReq struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	MaxTokens   int       `json:"max_tokens"`
-	Temperature float64   `json:"temperature"`
+	Model       string         `json:"model"`
+	Messages    []Message      `json:"messages"`
+	MaxTokens   int            `json:"max_tokens"`
+	Temperature float64        `json:"temperature"`
+	TemplateKw  map[string]any `json:"chat_template_kwargs,omitempty"`
+}
+
+// templateKwargs turns the vendor's hidden chain-of-thought OFF for every tier
+// except the deep one.
+//
+// MEASURED 2026-09-02 against this provider with the workers' own prompts, after
+// the 09-01 retirement forced a *-reasoning model into the default and fast
+// tiers. Analyst shape (800-token brief): thinking ON took 19.3s and 1058
+// completion tokens behind 3.5k chars of hidden reasoning, and the hourly
+// ai-analyst timed out on 6 of its 8 runs; thinking OFF took 1.9s and 81 tokens
+// and produced the same brief. Tagger shape: 3.7s ON, ~0.7s OFF, same rating.
+// The pool refusal (503 ResourceExhausted, 23 of 24 tagger passes) is the
+// provider's shared worker limit, so holding a slot for 3.7s instead of 0.7s is
+// most of what we can control.
+//
+// The DEEP tier keeps its reasoning: that is the whole reason it is a separate
+// tier. Gated on the model family because the field is vendor-specific — a
+// non-nemotron model could reject an unknown request field outright, and this
+// integration has changed models three times in six weeks.
+func templateKwargs(model, deepModel string) map[string]any {
+	if model == deepModel || !strings.Contains(model, "nemotron") {
+		return nil
+	}
+	return map[string]any{"enable_thinking": false}
 }
 
 type chatResp struct {
@@ -343,7 +368,8 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 	// so we trim that one, preserving the system charter intact.
 	trimToBudget(all, maxPromptChars)
 
-	body, err := json.Marshal(chatReq{Model: model, Messages: all, MaxTokens: maxTokens, Temperature: 0.2})
+	body, err := json.Marshal(chatReq{Model: model, Messages: all, MaxTokens: maxTokens, Temperature: 0.2,
+		TemplateKw: templateKwargs(model, c.deepModel)})
 	if err != nil {
 		return "", err
 	}

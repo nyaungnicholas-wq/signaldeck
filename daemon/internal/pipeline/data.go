@@ -204,6 +204,13 @@ func (w *SentimentTagger) Run(ctx context.Context) (string, error) {
 		return fmt.Sprintf("tagged %d headlines; daily LLM call cap reached — resets at the UTC day boundary", n), nil
 	}
 	if err != nil {
+		// The count is PART of the failure. A pass that tagged 47 headlines and
+		// then met a provider 503 is a different event from one that tagged none,
+		// and worker_runs recorded them identically — on 2026-09-02, 23 of 24
+		// passes read as a bare provider error while real work had landed.
+		if n > 0 {
+			return "", fmt.Errorf("tagged %d headlines, then %w", n, err)
+		}
 		return "", err
 	}
 	return fmt.Sprintf("tagged %d headlines", n), nil
