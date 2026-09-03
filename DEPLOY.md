@@ -169,3 +169,40 @@ working correctly.
   `SIGNALDECK_RATE_BURST` exist in the daemon but I have not verified they are
   active under load.
 - No CI. Builds and tests are run locally.
+
+## Container deploys: how provenance is proved
+
+`/api/version` reports `resolvable: false` in a container and always will.
+`internal/lineage` shells out to `git`, and the image has no git binary and no
+`.git` (`.dockerignore` excludes it). That is the daemon telling the truth, and
+it must never be faked -- a platform whose claim is that its rows tie back to
+the code that produced them cannot fake exactly that.
+
+So the proof is split across the two places where each half can be established:
+
+* **Build time**, on the build host, in `ops/docker-build.sh`: the tree is
+  clean (modulo `ops/generated-docs.txt`), `git cat-file -e <rev>^{commit}`
+  proves the revision RESOLVES, and the revision is both baked in via ldflags
+  and recorded as an OCI label.
+* **Deploy time**, in `ops/oracle-verify.sh`: the checkout, the image label and
+  the running process must all report the same 40-character sha, and the
+  container must still report `resolvable:false`. If it ever claims otherwise,
+  something is asserting provenance it could not have observed, and the script
+  fails.
+
+    ops/docker-build.sh signaldeck
+    ops/oracle-verify.sh signaldeck http://127.0.0.1:8080
+
+Never run a bare `docker build`. The wrapper is what refuses a dirty tree and
+proves the revision resolves; a raw invocation stamps an image with a claim
+nobody checked.
+
+The grader runs in the container via `ops/grade.sh`, NOT
+`ops/accuracy-registry.sh` -- that script needs git, a checkout and a README to
+rewrite, none of which exist in the image. Schedule it from the host:
+
+    docker exec signaldeck /usr/local/bin/grade.sh
+
+`GraderMaxAge` is 26h, so a daily timer tolerates one missed run; two look
+identical to a broken schedule, which is why `systemctl list-timers` beats a
+cron loop inside the container.

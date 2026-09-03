@@ -60,5 +60,29 @@ if [ "${#rev}" -ne 40 ] || [ -n "${rev//[0-9a-f]/}" ]; then
   exit 1
 fi
 
+# RESOLVABILITY IS PROVED HERE, BECAUSE IT CANNOT BE PROVED LATER.
+#
+# internal/lineage.RevisionResolvable shells out to git, and the image has no
+# git binary and no .git (.dockerignore excludes it), so /api/version reports
+# resolvable:false in a container FOREVER. That is the daemon telling the
+# truth, and it must not be faked -- but it also means the native deploy
+# gate's "revision resolvable" check has no container equivalent unless the
+# proof is moved to the one place git actually exists: this script, on the
+# build host.
+#
+# `git rev-parse` above only parses a string. This asks whether that string is
+# a real commit object in this repository.
+if ! git cat-file -e "${rev}^{commit}" 2>/dev/null; then
+  echo "REFUSED: ${rev} does not resolve to a commit object in this repository." >&2
+  exit 1
+fi
+
 echo "docker build: stamping commit $rev into $tag" >&2
-docker build --build-arg GIT_REV="$rev" -t "$tag" "$@" .
+# The OCI label is what ops/oracle-verify.sh reads back. GIT_REV goes into the
+# binary via ldflags and is TRUSTED there (a container cannot check it); the
+# label is the same claim recorded where the deploy check can compare it
+# against both the source tree and the running process.
+docker build \
+  --build-arg GIT_REV="$rev" \
+  --label "org.opencontainers.image.revision=$rev" \
+  -t "$tag" "$@" .
