@@ -111,21 +111,7 @@ build_from_head() {
   # protect. Everything else still refuses; a missing or unreadable allowlist
   # exempts NOTHING; and porcelain lines the exact-match parser cannot claim
   # (renames "R old -> new", quoted paths) fail CLOSED by never matching.
-  dirty="$(git status --porcelain | awk -v listfile="$REPO/ops/generated-docs.txt" '
-    BEGIN {
-      n = 0
-      while ((getline line < listfile) > 0) {
-        sub(/\r$/, "", line)
-        if (line ~ /^[ \t]*(#|$)/) continue
-        allow[n++] = line
-      }
-      close(listfile)
-    }
-    {
-      path = substr($0, 4)
-      for (i = 0; i < n; i++) if (allow[i] == path) next
-      print
-    }')"
+  dirty="$(sd_dirty_excluding_generated "$REPO")"
   if [ -n "$dirty" ]; then
     echo "REFUSED: working tree is not clean." >&2
     printf '%s\n' "$dirty" | head -20 >&2

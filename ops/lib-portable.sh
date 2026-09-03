@@ -411,3 +411,44 @@ sd_notify() {
     printf '%s NOTIFY: %s — %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$title" "$body" >&2
   fi
 }
+
+# sd_dirty_excluding_generated — porcelain lines, minus ops/generated-docs.txt.
+#
+# ONE spelling of this rule, shared by ops/signaldeck-ctl.sh (build_from_head)
+# and ops/docker-build.sh. It used to live only in the former, so the two deploy
+# paths disagreed about what "clean" means: docker-build.sh had a blanket
+# `wc -l != 0` and refused on the nine grader-regenerated docs that the native
+# path correctly ignores. That is not a theoretical drift -- it made the
+# container path unbuildable on any day the nightly grader had run, which is
+# every day.
+#
+# The exemption exists because those paths cannot change the binary: the build
+# extracts `git archive HEAD` (the COMMIT, never the working tree), and the only
+# go:embed targets in the daemon are schema.sql and result.json. The refusal
+# protects operator INTENT -- "the edit I just made got deployed" -- and a
+# machine-regenerated doc carries no operator intent to protect.
+#
+# Fails CLOSED in every ambiguous case: a missing or unreadable allowlist
+# exempts NOTHING, and porcelain lines the exact-match parser cannot claim
+# (renames "R old -> new", quoted paths with spaces) never match an allow entry
+# and so are reported as dirty.
+#
+# Usage:  dirty="$(sd_dirty_excluding_generated "$REPO")"
+sd_dirty_excluding_generated() {
+  local repo="${1:-.}"
+  git -C "$repo" status --porcelain | awk -v listfile="$repo/ops/generated-docs.txt" '
+    BEGIN {
+      n = 0
+      while ((getline line < listfile) > 0) {
+        sub(/\r$/, "", line)
+        if (line ~ /^[ \t]*(#|$)/) continue
+        allow[n++] = line
+      }
+      close(listfile)
+    }
+    {
+      path = substr($0, 4)
+      for (i = 0; i < n; i++) if (allow[i] == path) next
+      print
+    }'
+}

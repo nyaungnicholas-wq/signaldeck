@@ -35,14 +35,22 @@ if [ "$#" -gt 0 ]; then
   shift
 fi
 
-dirty="$(git status --porcelain | wc -l | tr -d ' ')"
-if [ "$dirty" != "0" ]; then
-  echo "REFUSED: working tree is not clean ($dirty path(s))." >&2
-  git status --porcelain | head -20 >&2
+# The tree must be clean EXCEPT for the nightly-regenerated docs. This used to
+# be a blanket `wc -l != 0`, which meant this script refused on any day the
+# grader had run -- every day -- while ops/signaldeck-ctl.sh built happily from
+# the same tree. Two deploy paths disagreeing about what "clean" means is how
+# the container path came to be untestable. One spelling now, in
+# ops/lib-portable.sh, used by both.
+. "$(dirname "$0")/lib-portable.sh"
+dirty="$(sd_dirty_excluding_generated "$(pwd)")"
+if [ -n "$dirty" ]; then
+  echo "REFUSED: working tree is not clean." >&2
+  printf '%s\n' "$dirty" | head -20 >&2
   echo "" >&2
   echo "A stamped image must be reproducible from a commit. Commit or stash" >&2
-  echo "first — the container cannot see this tree, so GIT_REV would assert a" >&2
+  echo "first -- the container cannot see this tree, so GIT_REV would assert a" >&2
   echo "provenance nobody observed." >&2
+  echo "(docs listed in ops/generated-docs.txt are exempt and not counted above)" >&2
   exit 1
 fi
 
