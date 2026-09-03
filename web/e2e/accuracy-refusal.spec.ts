@@ -91,6 +91,22 @@ test("a refused registry shows the refusal and no accuracy figures", async ({ pa
   // The heart of F-1: refusing must REMOVE the numbers, not decorate them. No
   // percentage may appear anywhere on a refused page.
   await expect(page.locator("body")).not.toContainText(/\d+\.\d%/);
+
+  // ...and it must LOOK refused. This assertion exists because the two above
+  // passed for weeks while the banner rendered
+  // `class="rounded border px-4 py-3 text-sm undefined "`: the AccuracyStatus
+  // union omitted "REFUSED", so colorMap[status] and gloss[status] were both
+  // undefined. data-status was correct, the styling was absent, and a test
+  // that only reads the attribute cannot tell those apart. The one state this
+  // page exists to shout was the one state it whispered.
+  const cls = (await banner.getAttribute("class")) ?? "";
+  expect(cls, "the refusal banner rendered with no tone class").not.toContain("undefined");
+  expect(cls, "the refusal banner is not styled as a refusal").toMatch(/border-red-/);
+
+  // The gloss line must say something. An empty description under a red box
+  // tells a reader nothing about why figures are being withheld.
+  const gloss = banner.locator("div").nth(1);
+  await expect(gloss).not.toBeEmpty();
 });
 
 test("a condemned model is never downgraded to INSUFFICIENT", async ({ page }) => {

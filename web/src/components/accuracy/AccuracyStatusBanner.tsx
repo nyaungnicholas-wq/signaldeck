@@ -1,4 +1,12 @@
-export type AccuracyStatus = "OK" | "INSUFFICIENT" | "FAILED" | "RETIRED" | "REFUSED_STALE" | "NO_BASELINE" | "QUARANTINED";
+export type AccuracyStatus =
+  | "OK"
+  | "INSUFFICIENT"
+  | "FAILED"
+  | "RETIRED"
+  | "REFUSED"
+  | "REFUSED_STALE"
+  | "NO_BASELINE"
+  | "QUARANTINED";
 
 /**
  * Renders an explicit publication status for accuracy results.
@@ -22,6 +30,8 @@ export function AccuracyStatusBanner({
     INSUFFICIENT: "not enough independent evidence to publish an interval",
     FAILED: "the live record contradicts this row",
     RETIRED: "retired: the record has contradicted this model and retirement does not lapse",
+    REFUSED:
+      "refused: the publication gate will not stand behind figures over this window",
     REFUSED_STALE: "refused: the grader has not produced a fresh result",
     NO_BASELINE: "no comparable baseline; accuracy alone is not evidence",
     QUARANTINED: "quarantined: excluded from every benchmark denominator",
@@ -32,19 +42,36 @@ export function AccuracyStatusBanner({
     INSUFFICIENT: "border-amber-500/60 bg-amber-500/10 text-amber-300",
     FAILED: "border-red-500/60 bg-red-500/10 text-red-300",
     RETIRED: "border-red-500/60 bg-red-500/10 text-red-300",
+    REFUSED: "border-red-500/60 bg-red-500/10 text-red-300",
     REFUSED_STALE: "border-red-500/60 bg-red-500/10 text-red-300",
     NO_BASELINE: "border-zinc-500/60 bg-zinc-500/10 text-zinc-300",
     QUARANTINED: "border-zinc-500/60 bg-zinc-500/10 text-zinc-300",
   };
 
+  // The status arrives OFF THE WIRE, so TypeScript can never narrow it and a
+  // value the daemon emits but this union omits falls through to undefined --
+  // which is exactly what happened to "REFUSED". It rendered as
+  // `class="rounded border px-4 py-3 text-sm undefined "`: no red border, no
+  // background, and an empty description, on the one state this page exists
+  // to shout. The daemon emits REFUSED from five sites in api/accuracy.go,
+  // more than emit REFUSED_STALE.
+  //
+  // The fallbacks below are not belt-and-braces, they are the fix: an
+  // unrecognised status must read as REFUSED, because for an honesty surface
+  // "we do not know what this means" and "do not trust this" are the same
+  // answer. Fail closed, loudly.
+  const tone = colorMap[status] ?? "border-red-500/60 bg-red-500/10 text-red-300";
+  const explanation =
+    gloss[status] ?? "unrecognised publication status - treat this as refused";
+
   return (
     <div
       data-testid="accuracy-status-banner"
       data-status={status}
-      className={`rounded border px-4 py-3 text-sm ${colorMap[status]} ${className}`}
+      className={`rounded border px-4 py-3 text-sm ${tone} ${className}`}
     >
       <div className="font-bold uppercase tracking-wide">{status}</div>
-      <div className="mt-1 opacity-90">{gloss[status]}</div>
+      <div className="mt-1 opacity-90">{explanation}</div>
       {reasons.length > 0 && (
         <ul className="mt-2 list-disc pl-4">
           {reasons.map((r, i) => (

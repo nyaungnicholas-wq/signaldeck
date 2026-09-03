@@ -284,7 +284,7 @@ function CalibrationPanel({ cal }: { cal: Calibration }) {
 // table first and the refusal a moment later, which is the defect with extra
 // steps.
 async function loadPublicationStatus(): Promise<{
-  status: AccuracyStatus | "REFUSED";
+  status: AccuracyStatus;
   reason?: string;
   rows: PublishedRow[];
 } | null> {
@@ -323,7 +323,7 @@ async function loadPublicationStatus(): Promise<{
         (res.status === 401
           ? "the accuracy record is not public on this deployment — sign in to see it"
           : undefined);
-      return { status: (body?.status ?? "REFUSED") as AccuracyStatus | "REFUSED",
+      return { status: (body?.status ?? "REFUSED") as AccuracyStatus,
                reason, rows: [] };
     }
     return { status: "OK", rows: (body.rows ?? []) as PublishedRow[] };
