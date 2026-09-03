@@ -606,6 +606,92 @@ def causal_breaches(rets, fc, z, level):
     return out
 
 
+# -- the estimator-artifact control ------------------------------------------
+
+def cc_series(bars):
+    """RV^CC: the squared close-to-close log return.
+
+    THIS IS THE ARBITER, and it exists because of a specific failure mode this
+    repository has already met. HAR smooths across daily, weekly and monthly
+    aggregates; the Garman-Klass proxy it is graded on carries measurement
+    error. A model that averages away the PROXY's noise will beat a model that
+    does not, and that is estimation, not prediction. This repository has
+    written exactly that verdict before, about EWMA beating flat windows:
+    "That is exponential weighting being a better vol nowcast than a
+    rectangular one... It is estimation, not prediction."
+
+    RV^CC shares NO construction with RV^GK: it uses only the two closes, not
+    the range, not the open. It is far noisier, but it is conditionally
+    UNBIASED for the day's total variance, which under MSE is exactly the
+    property that leaves the ranking of two forecasts unchanged in expectation
+    (Patton 2011). So if HAR's advantage survives here it is forecasting; if it
+    exists only on RV^GK it is smoothing, and that outcome has its own name in
+    the pre-registration: ESTIMATOR ARTIFACT.
+
+    QLIKE is NOT used against this proxy: ln(RV) is undefined on a day the
+    close did not move, and those days are real. MSE only, with the dropped
+    count reported.
+    """
+    out = [None]
+    for i in range(1, len(bars)):
+        prev, cur = bars[i - 1][4], bars[i][4]
+        if prev <= 0 or cur <= 0:
+            out.append(None)
+            continue
+        r = math.log(cur / prev)
+        out.append(r * r)
+    return out
+
+
+def control_section(rv_cache, h):
+    """Grade the SAME forecasts against RV^CC instead of RV^GK."""
+    per_day = {}
+    zero_days = 0
+    for sid, (ts, rv, closes) in rv_cache.items():
+        bars = [(ts[i], 0, 0, 0, closes[i]) for i in range(len(ts))]
+        cc = cc_series(bars)
+        recs = walk_symbol(ts, rv, h)
+        idx = {ts[i]: i for i in range(len(ts))}
+        for r in recs:
+            t = idx.get(r["ts"])
+            if t is None:
+                continue
+            # the CC target over the SAME window the forecast covers
+            if t + h >= len(cc):
+                continue
+            window = cc[t + 1:t + 1 + h]
+            if any(v is None for v in window):
+                continue
+            actual = sum(window) / h
+            if actual <= 0:
+                zero_days += 1      # a day the close did not move; ln undefined
+                continue
+            d = day_key(r["ts"])
+            slot = per_day.setdefault(d, {"har": [], "ewma": []})
+            slot["har"].append((actual - r["har"]) ** 2)
+            slot["ewma"].append((actual - r["ewma"]) ** 2)
+
+    days = sorted(d for d, v in per_day.items() if v["har"] and v["ewma"])
+    if len(days) < 30:
+        return {"days": len(days), "note": "too few day-clusters to test"}
+    har = [statistics.fmean(per_day[d]["har"]) for d in days]
+    ew = [statistics.fmean(per_day[d]["ewma"]) for d in days]
+    diff = [a - b for a, b in zip(har, ew)]
+    r = diebold_mariano(diff, max(newey_west_lag(len(days)), h))
+    return {
+        "proxy": "RV^CC (squared close-to-close); construction-independent of RV^GK",
+        "loss": "MSE only; QLIKE is undefined where the close did not move",
+        "days": len(days),
+        "zero_return_days_dropped": zero_days,
+        "mean_mse_har": statistics.fmean(har),
+        "mean_mse_ewma": statistics.fmean(ew),
+        "dm": r,
+        "verdict_if_not_significant":
+            "ESTIMATOR ARTIFACT: the advantage on RV^GK would be HAR smoothing "
+            "the proxy's measurement error, not forecasting the market",
+    }
+
+
 # -- cross-check against the Go implementation -------------------------------
 
 def crosscheck(con, symbol):
@@ -764,6 +850,8 @@ def main():
                 print("    %d/%d" % (j + 1, len(syms)), file=sys.stderr)
         agg = aggregate(recs, h)
         if agg:
+            print("  estimator-artifact control h=%d ..." % h, file=sys.stderr)
+            agg["control_rv_cc"] = control_section(rv_cache, h)
             result["horizons"][str(h)] = agg
 
     print("  VaR coverage ...", file=sys.stderr)
