@@ -941,12 +941,31 @@ func (d Deps) bars(w http.ResponseWriter, r *http.Request) {
 // 2026-07-26 review found the copy missing entirely from the CSV exports: the
 // same licensed rows walked out through a second door with no policy on it.
 // Two copies of a legal rule drift; one cannot.
+// The loopback excuse is CONFIG-GATED, and that ordering is the whole fix.
+// requestIsLoopback answers "did this request arrive over loopback?" by reading
+// RemoteAddr and the forwarding headers. Behind a reverse proxy on the same
+// host that does not set X-Forwarded-For, RemoteAddr IS 127.0.0.1 and no header
+// revokes it — so it returns true for the entire internet, and the guard opened
+// for everyone. That is the shape DEPLOY.md documents as the local run command
+// and fly.toml recommends as "Railway, Render, a $5 VPS".
+//
+// The daemon already knows the answer from configuration, and configuration
+// cannot be forged by a caller. So a request-level test may only NARROW a
+// config-level "this deployment is private", never supply one. On a published
+// deployment ReachablePrivately() is false and the refusal is unconditional,
+// whatever headers arrive.
+//
+// requestIsLoopback itself is left alone: its asymmetric contract (a proxy
+// header may revoke loopback, never grant it) is correct and has other callers.
 func (d Deps) rawDataRefused(w http.ResponseWriter, r *http.Request) bool {
-	if !d.Cfg.AllowRawExport && !requestIsLoopback(r) && !datalicense.BarsRedistributable() {
-		httpErr(w, 451, datalicense.RawDataNotice())
-		return true
+	if d.Cfg.AllowRawExport || datalicense.BarsRedistributable() {
+		return false
 	}
-	return false
+	if d.Cfg.ReachablePrivately() && requestIsLoopback(r) {
+		return false
+	}
+	httpErr(w, 451, datalicense.RawDataNotice())
+	return true
 }
 
 func (d Deps) scoreHistory(w http.ResponseWriter, r *http.Request) {

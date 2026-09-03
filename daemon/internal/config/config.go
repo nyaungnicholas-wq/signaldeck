@@ -116,6 +116,27 @@ type Config struct {
 	OpenSignup     bool // SIGNALDECK_OPEN_SIGNUP (default true): allow POST /api/auth/register
 	AllowRawExport bool // SIGNALDECK_ALLOW_RAW_EXPORT (default false): serve raw licensed bars
 	PublicReads    bool // SIGNALDECK_PUBLIC_READS (default true): read-only endpoints work without auth (localhost compatibility)
+
+	// PublicSurface (SIGNALDECK_PUBLIC_SURFACE, default false) turns the
+	// anonymous-read rule from a DENYLIST into an ALLOWLIST.
+	//
+	// PublicReads answers "is this route one of the ones we chose to keep
+	// private?" — so every route added later is public by forgetting. That is
+	// the wrong default for a deployment strangers can reach: this daemon
+	// registers 174 routes, and among them are the personal PUSH-20 HUD,
+	// paper-trading positions and the portfolio. Publishing those would be a
+	// different product than the one being published.
+	//
+	// With PublicSurface on, api.publicRoutes is the ENTIRE anonymous surface
+	// and everything else is closed whatever PublicReads says. A route added
+	// later is private by forgetting, which is the direction that fails safe.
+	//
+	// It is deliberately NOT derived from the bind address. PublicReads and
+	// OpenSignup follow reachability because their safe answer is "closed",
+	// and reachability is a good proxy for danger. Deciding to publish is an
+	// intent, not a network fact, and inferring an intent is how fly.toml
+	// ended up publishing every read endpoint it never named.
+	PublicSurface bool
 	TrustProxy     bool // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
 	RateRPS        int  // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
 	RateBurst      int  // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
@@ -231,6 +252,9 @@ func Load() Config {
 		// anywhere reachable — so exposing it can no longer silently publish
 		// every read endpoint. An explicit env var still wins either way.
 		PublicReads: boolEnv("SIGNALDECK_PUBLIC_READS", private),
+		// Never inherits `private`. See the field comment: publishing is an
+		// intent the operator states, never a fact inferred from a bind.
+		PublicSurface: boolEnv("SIGNALDECK_PUBLIC_SURFACE", false),
 		// Asserting you hold redistribution rights for the stored price data.
 		// The flag records the operator's assertion; it does not grant a right.
 		AllowRawExport: boolEnv("SIGNALDECK_ALLOW_RAW_EXPORT", false),

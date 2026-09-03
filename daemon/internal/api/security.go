@@ -193,12 +193,89 @@ func (s *statusWriter) Flush() {
 	}
 }
 
+// publicRoutes is THE ENTIRE anonymous surface when SIGNALDECK_PUBLIC_SURFACE
+// is on. A path absent from this map is closed, whatever PublicReads says.
+//
+// Why an allowlist and not the PublicReads denylist: this daemon registers 174
+// routes. A denylist answers "did we remember to make this one private?", so
+// route 175 is public by forgetting. On a deployment strangers can reach, the
+// routes you forget include /api/hud (a personal Alpaca paper HUD),
+// /api/paper, /api/portfolio and /api/predictions. Getting that wrong once
+// publishes someone's positions. Here, forgetting closes a route instead.
+//
+// Admission requires ALL FOUR:
+//  1. not user-scoped — no watchlist, alerts, positions, candidates;
+//  2. spends no LLM budget — every /api/ai/ path is excluded, status included;
+//  3. serves no substantially-raw vendor record — see internal/datalicense;
+//  4. no execution, money, order or position path, not even read-side.
+//
+// Deliberately excluded, with reasons, because "why isn't X here" is the
+// question a future reader will have:
+//   - /api/agents, /api/fleet-health: worker names and failure detail. The
+//     health/ready handlers already withhold exactly this from anonymous
+//     callers; publishing it under a different path would undo that.
+//   - /api/source-health, /api/datastats: surface provider error strings,
+//     which is where a credential or an internal path leaks.
+//   - /api/ai/status: spends nothing, but it reports the LLM budget, and the
+//     standing decision is that no /api/ai/ path is anonymous.
+//   - every vendor read (/api/bars, /api/snaps, /api/news, /api/stocktwits,
+//     /api/tv-*, /api/chart-overlays, /api/export/*.csv): licence, not
+//     privacy. datalicense.Sources classes tvscanner and stocktwits
+//     Restricted and the Alpaca/Kraken bars Licensed.
+var publicRoutes = map[string]bool{
+	// Probes. A monitor must reach these before it holds any credential.
+	"/api/health": true, "/api/ready": true, "/api/version": true,
+
+	// The honesty machinery — this IS the published product.
+	"/api/accuracy": true, "/api/track-record": true, "/api/honesty": true,
+	"/api/calibration": true, "/api/model-health": true, "/api/canary": true,
+	"/api/postmortems": true, "/api/regime-postmortems": true,
+	"/api/self-audit": true, "/api/lineage": true, "/api/quality": true,
+	"/api/dataset-versions": true, "/api/evidence": true,
+	"/api/research-loop": true, "/api/research-ledger": true,
+
+	// The receipts. Cheap variants only: ledger/verify?full=1 and
+	// ledger/anchors?recompute=1 already self-gate on userID != 0.
+	"/api/prereg": true, "/api/ledger": true,
+	"/api/ledger/verify": true, "/api/ledger/anchors": true,
+}
+
+// alwaysOpen is orthogonal to the allowlist: these authenticate themselves or
+// must work before a credential exists. /api/auth/register is reachable here
+// but still refuses unless Cfg.OpenSignup, which is false on any published
+// deployment.
+func alwaysOpen(path string) bool {
+	return path == "/api/health" || path == "/api/ready" ||
+		strings.HasPrefix(path, "/api/auth/") ||
+		path == "/api/tv-webhook" || mcpExempt(path)
+}
+
 // requiresAuth reports whether an anonymous request to path must be rejected.
 //   - /api/health and /api/auth/* are always open (you must be able to log in);
 //   - user-scoped and spend-incurring endpoints always need identity;
 //   - the remaining read-only endpoints (shared market data) are public when
 //     SIGNALDECK_PUBLIC_READS=true (the localhost-friendly default).
 func (d Deps) requiresAuth(path string) bool {
+	// PUBLISHED DEPLOYMENT: the allowlist is the whole surface and it answers
+	// FIRST, so nothing below can widen it. Returning true here for an
+	// unlisted path is what makes a route added next month private until
+	// somebody decides otherwise.
+	//
+	// This branch is entered only on an explicit SIGNALDECK_PUBLIC_SURFACE=1.
+	// With it off, every line below behaves exactly as it did before, which is
+	// why localhost development and the existing test suite are untouched.
+	if d.Cfg.PublicSurface {
+		if alwaysOpen(path) || publicRoutes[path] {
+			return false
+		}
+		// /api/evidence/{id} — the per-claim detail behind /api/evidence.
+		// Prefix-matched because the id is in the path, and it is the only
+		// public route that is not a fixed string.
+		if strings.HasPrefix(path, "/api/evidence/") {
+			return false
+		}
+		return true
+	}
 	// /api/health and /api/ready are PROBES: a monitor, a load balancer or a
 	// deploy script has to reach them before it holds any credential, which is
 	// the whole reason they exist. /api/ready was omitted here and started
