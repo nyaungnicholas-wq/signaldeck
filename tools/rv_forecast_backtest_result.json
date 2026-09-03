@@ -243,27 +243,24 @@
     }
   },
   "var_coverage": {
-    "WITHDRAWN": true,
-    "reason": "These figures were produced by a LOOKAHEAD and are not evidence of anything. The VaR quantile was the alpha-quantile of the WHOLE residual sample, and breaches were then counted on that same sample, which forces the breach rate to equal alpha by construction. The tell was ZERO Kupiec rejections across 740 symbols: a perfectly calibrated model should still be rejected about 5%% of the time by chance. Fixed in tools/rv_forecast_backtest.py (causal_breaches); a recomputation is running. The withdrawn numbers are kept below rather than deleted, because removing a wrong published number is how it stops being findable.",
-    "withdrawn_figures": {
-      "0.05": {
-        "symbols": 740,
-        "nominal": 0.05,
-        "mean_breach_rate": 0.04878055455588572,
-        "median_breach_rate": 0.04899135446685879,
-        "kupiec_rejected_at_5pct": 0,
-        "kupiec_rejected_share": 0.0,
-        "expected_rejection_share_by_chance": 0.05
-      },
-      "0.01": {
-        "symbols": 645,
-        "nominal": 0.01,
-        "mean_breach_rate": 0.008674481893529215,
-        "median_breach_rate": 0.008645533141210375,
-        "kupiec_rejected_at_5pct": 0,
-        "kupiec_rejected_share": 0.0,
-        "expected_rejection_share_by_chance": 0.05
-      }
+    "0.05": {
+      "symbols": 740,
+      "nominal": 0.05,
+      "mean_breach_rate": 0.04945715544628646,
+      "median_breach_rate": 0.04882154882154882,
+      "kupiec_rejected_at_5pct": 30,
+      "kupiec_rejected_share": 0.04054054054054054,
+      "expected_rejection_share_by_chance": 0.05
+    },
+    "0.01": {
+      "symbols": 642,
+      "nominal": 0.01,
+      "mean_breach_rate": 0.010760111896578656,
+      "median_breach_rate": 0.010309278350515464,
+      "kupiec_rejected_at_5pct": 17,
+      "kupiec_rejected_share": 0.0264797507788162,
+      "expected_rejection_share_by_chance": 0.05
     }
-  }
+  },
+  "var_recomputed": "2026-09-03T17:06:18.272875+00:00"
 }
