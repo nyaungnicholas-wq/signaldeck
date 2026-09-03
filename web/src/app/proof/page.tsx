@@ -32,6 +32,10 @@ import ErrorState from "@/components/ErrorState";
 // deadline before it answers, so three attempts is already ~70s of waiting —
 // past that a visitor is better served by the error state, which names what
 // happened, than by a spinner that keeps promising.
+// Whether this build is serving the public internet. Controls whether
+// operator-only remediation copy is shown; see the hint below.
+const PUBLIC_MODE = process.env.NEXT_PUBLIC_SIGNALDECK_PUBLIC === "1";
+
 const LEDGER_VERIFY_RETRIES = 2;
 // Longer than a page normally waits between retries, on purpose: the cause is
 // database contention during the daemon's boot storm, and retrying instantly
@@ -191,12 +195,24 @@ export default function ProofPage() {
       {lvErr && !lv && (
         <ErrorState
           message={lvErr}
+          // /proof is a PUBLIC page: most people who see this error have no
+          // account and no server to restart. The operator instructions that
+          // used to live here ("start signaldeckd (:8322)", "open public reads
+          // with SIGNALDECK_PUBLIC_READS") are useful to exactly one person and
+          // read as a leak to everyone else, so they are shown only when this
+          // build is NOT running in public mode. The diagnosis itself stays
+          // either way -- a visitor is still told whether the service failed to
+          // answer or answered and declined.
           hint={
             lvStatus === null
-              ? "The daemon did not answer at all — start signaldeckd (:8322) and this page recovers on its own."
+              ? PUBLIC_MODE
+                ? "The service did not answer. That is on our side, and this page recovers on its own once it is back."
+                : "The daemon did not answer at all — start signaldeckd (:8322) and this page recovers on its own."
               : lvStatus === 401 || lvStatus === 403
-                ? `The daemon ANSWERED and refused this read (${lvStatus}). It is gated on this deployment, so restarting it changes nothing — sign in, or open public reads with SIGNALDECK_PUBLIC_READS.`
-                : `The daemon answered ${lvStatus} for this read, so it is running; the refusal is what needs explaining.`
+                ? PUBLIC_MODE
+                  ? `The service answered and declined this read (${lvStatus}). The ledger is not published on this deployment.`
+                  : `The daemon ANSWERED and refused this read (${lvStatus}). It is gated on this deployment, so restarting it changes nothing — sign in, or open public reads with SIGNALDECK_PUBLIC_READS.`
+                : `The service answered ${lvStatus} for this read, so it is running; the refusal is what needs explaining.`
           }
         />
       )}

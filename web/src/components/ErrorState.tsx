@@ -4,7 +4,11 @@
 export default function ErrorState({
   message,
   retry,
-  hint = "Is the daemon running? Start signaldeckd and this page recovers on its own.",
+  // The DEFAULT must be safe for a public visitor, because this component is
+  // reachable from /proof. Operator pages pass their own explicit hint and
+  // keep the remediation detail they need; the fallback no longer tells a
+  // stranger to start a server they do not have.
+  hint = "This is on our side, not yours. The page recovers on its own once the service is back.",
   className = "",
 }: {
   message: string;
