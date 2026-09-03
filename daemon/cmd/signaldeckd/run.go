@@ -601,12 +601,22 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		apiSt = clone
 	}
 	deps := api.Deps{
-		St:       apiSt,
-		Cfg:      cfg,
-		Version:  version,
-		Started:  time.Now(),
-		LLM:      llmClient,
-		Notifier: remote, // Stage 3: /api/notify-status transport visibility
+		St:      apiSt,
+		Cfg:     cfg,
+		Version: version,
+		Started: time.Now(),
+		// Where the grader's registry lands. Empty keeps the production
+		// behaviour of resolving relative to the working directory.
+		//
+		// It is set explicitly in a container: loadRegistry probes ../data and
+		// then data relative to cwd, and in the image that only works because
+		// /app/data happens to be a symlink to the volume. An accidental
+		// symlink is not a contract, and this endpoint is fail-closed -- an
+		// unreadable registry is a 503 REFUSED, which on this platform means
+		// the honesty page publishes nothing at all.
+		RegistryPath: os.Getenv("SIGNALDECK_REGISTRY"),
+		LLM:          llmClient,
+		Notifier:     remote, // Stage 3: /api/notify-status transport visibility
 		CurrentState: func(ctx context.Context, symbolID int64) (map[md.Horizon]string, error) {
 			return pipeline.CurrentState(ctx, st, symbolID)
 		},

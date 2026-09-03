@@ -29,3 +29,9 @@ audits/
 **/.env
 **/.env.*
 !**/.env.example
+
+# tools/*.py is copied into the runtime image so the grader can run there (see
+# ops/grade.sh). Those scripts are ~1 MB and stdlib-only. tools/alpha/ is the
+# research corpus and is the rest of the directory by volume -- excluded so it
+# does not ride along in the build context on every build.
+tools/alpha/

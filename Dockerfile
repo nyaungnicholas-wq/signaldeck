@@ -36,7 +36,8 @@ ARG GIT_REV=""
 RUN CGO_ENABLED=0 go build \
       -ldflags "-X github.com/nyaungnicholas-wq/signaldeck/internal/lineage.ldflagsRev=${GIT_REV}" \
       -o /out/signaldeckd ./cmd/signaldeckd \
- && CGO_ENABLED=0 go build -o /out/sdmaint ./cmd/sdmaint
+ && CGO_ENABLED=0 go build -o /out/sdmaint ./cmd/sdmaint \
+ && CGO_ENABLED=0 go build -o /out/collapsecheck ./cmd/collapsecheck
 
 # ---- stage 2: the Next.js app ---------------------------------------------
 FROM node:24-alpine AS web-build
@@ -49,15 +50,38 @@ RUN npm run build
 
 # ---- stage 3: runtime ------------------------------------------------------
 FROM node:24-alpine
-RUN apk add --no-cache ca-certificates tini
+# python3 is here so the GRADER can run in the container. Without it
+# /api/accuracy is 503 REFUSED forever (the handler is fail-closed on an
+# unreadable registry and on a stale grader heartbeat), so the honesty
+# page -- the product -- was permanently dead on every container deploy.
+# DEPLOY.md told the operator to cron ops/accuracy-registry.sh, a 680-line
+# dev-box job needing git, a checkout and a README to rewrite; none of that
+# exists here. ops/grade.sh is the container-sized replacement.
+#
+# No pip and no venv: accuracy_registry.py, selection_honesty.py,
+# grader_heartbeat.py and backfill_delistings.py import only the standard
+# library. requirements-quant.txt (numpy/pandas/scipy) is for the research
+# tools, which do not run here.
+RUN apk add --no-cache ca-certificates tini python3
 WORKDIR /app
 
 COPY --from=daemon-build /out/signaldeckd /usr/local/bin/signaldeckd
 COPY --from=daemon-build /out/sdmaint     /usr/local/bin/sdmaint
+COPY --from=daemon-build /out/collapsecheck /usr/local/bin/collapsecheck
 COPY --from=web-build /src/web/.next      ./web/.next
 COPY --from=web-build /src/web/public     ./web/public
 COPY --from=web-build /src/web/node_modules ./web/node_modules
 COPY --from=web-build /src/web/package.json ./web/package.json
+
+# The grader, and the document whose hash it checks against the chain.
+# tools/*.py only -- tools/alpha/ is the research corpus and is
+# .dockerignored. PREREGISTRATION.md sits at /app so REPO_ROOT resolves as
+# it does in a checkout, and so ops/grade.sh can compare its sha256 to the
+# newest prereg-document record before publishing anything.
+COPY tools/*.py         /app/tools/
+COPY PREREGISTRATION.md /app/PREREGISTRATION.md
+COPY ops/grade.sh       /usr/local/bin/grade.sh
+RUN chmod +x /usr/local/bin/grade.sh
 
 # The accuracy page is a server component that reads data/accuracy_registry.json
 # relative to the web app's cwd (/app/web), i.e. /app/data. Point that at the
@@ -71,6 +95,8 @@ RUN ln -s /data /app/data
 ENV SIGNALDECK_DB=/data/signaldeck.db \
     SIGNALDECK_HTTP=127.0.0.1:8322 \
     SIGNALDECK_DAEMON=http://127.0.0.1:8322 \
+    SIGNALDECK_LOG_FILE=/data/logs/signaldeckd.log \
+    SIGNALDECK_REGISTRY=/data/accuracy_registry.json \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=8080
 VOLUME ["/data"]
