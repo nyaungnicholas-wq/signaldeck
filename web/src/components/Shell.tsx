@@ -459,7 +459,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         }}
       >
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <Link href="/" className="inline-flex shrink-0 items-center">
+          <Link href="/dashboard" className="inline-flex shrink-0 items-center">
             <Brand />
             <span
               className="ml-3 hidden text-[0.75rem] tracking-wider xl:inline"

@@ -402,7 +402,7 @@ export default function SymbolPage({
         </p>
         <p className="mt-2">
           <Link
-            href="/"
+            href="/watchlist"
             className="cursor-pointer text-[var(--dim)] underline transition-colors duration-150 hover:text-[var(--text)]"
           >
             back to watchlist

@@ -384,7 +384,7 @@ export default function ProofPage() {
           back. This is the one shareable page: most people arrive here first
           and need somewhere to go. */}
       <Link
-        href="/"
+        href="/dashboard"
         className="w-fit text-[0.78rem] font-semibold tracking-wide transition-colors duration-150"
         style={{ color: "var(--accent)" }}
       >

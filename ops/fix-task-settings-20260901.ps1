@@ -23,6 +23,7 @@
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 $admin = (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
+try { "$(Get-Date -Format s)  fix-task-settings  admin=$admin  pid=$PID" | Out-File -Append -Encoding utf8 (Join-Path $env:TEMP 'claude-elevate.log') } catch {}
 if (-not $admin) {
     Start-Process powershell -Verb RunAs -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")

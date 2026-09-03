@@ -132,7 +132,7 @@ export default function WelcomePage() {
 
   function finish() {
     markOnboarded();
-    router.push("/");
+    router.push("/dashboard");
   }
 
   const showLoginNotice = needLogin || loggedIn === false;
@@ -148,7 +148,7 @@ export default function WelcomePage() {
           <h1 className="m-0 text-lg font-bold">WELCOME — 60-second setup</h1>
         </div>
         <Link
-          href="/"
+          href="/dashboard"
           onClick={markOnboarded}
           className="ml-auto inline-flex min-h-[44px] cursor-pointer items-center px-3 text-[0.75rem] underline transition-colors duration-150 hover:text-[var(--accent)]"
           style={{ color: "var(--dim)" }}

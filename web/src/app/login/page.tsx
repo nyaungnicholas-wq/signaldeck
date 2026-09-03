@@ -50,7 +50,7 @@ export default function LoginPage() {
     try {
       if (mode === "login") await api.login(username, password);
       else await api.register(username, password);
-      router.replace("/");
+      router.replace("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "request failed");
     } finally {
