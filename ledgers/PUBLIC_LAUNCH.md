@@ -36,7 +36,10 @@ Plan: `~/.claude/plans/this-is-going-to-structured-blossom.md`
 - [ ] Alpaca / NVIDIA keys placed in the box's .env by hand.
 
 ## Next
-- [ ] P4 HAR-RV + VaR/ES. PRE-REGISTER BEFORE THE DEFINITIVE RUN.
+- [x] P4a internal/harrv: estimator + fit + nulls + losses (26 tests)
+- [ ] P4b internal/harvar: FHS VaR/ES + Kupiec + Christoffersen
+- [ ] P4c tools/rv_forecast_backtest.py (independent reimplementation)
+- [ ] P4d PRE-REGISTER, then run. NOT the reverse.
       Two exploratory looks already spent (disclosed in the plan) and must be
       declared in the multiplicity divisor.
 - [ ] P1.4 licence guards on the six vendor endpoints (currently closed by the
@@ -53,4 +56,11 @@ Plan: `~/.claude/plans/this-is-going-to-structured-blossom.md`
   QLIKE HAR 0.51227 vs EWMA 0.58194 vs flat22 0.71293, DM t = -1.24 (NOT
   significant, and pooled rather than date-clustered so it is optimistic).
 - 4.05% of daily bars have H == L, where a range estimator reads zero variance.
-- Go 125 packages ok; python 376 tests ok.
+- Go 126 packages ok; python 376 tests ok.
+- harrv estimator over the live table (2,624,945 bars / 2,383 symbols with
+  >=250 sessions): 96.42% estimable, 3.44% flat H==L, 0.049% split-guarded,
+  ZERO non-positive, ZERO negative-GK (the Parkinson fallback is a
+  data-integrity path that has never fired on real bars).
+- HAR bw and bm are NOT individually identified (overlapping windows of one
+  series); their SUM is. Do not read meaning into a fitted weekly-vs-monthly
+  split on a real symbol.
