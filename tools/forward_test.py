@@ -24,6 +24,7 @@ import math
 import sqlite3
 import statistics
 import sys
+import time
 
 TEST_ID = "confluence-long-liquid-2026-08"
 MIN_BETS_PER_SESSION = 5
@@ -145,12 +146,31 @@ SELECT d, AVG(nxt/close-1)*100 bench_pct, COUNT(*) n_names
 """
 
 
+# --- Writing down what was already computed -------------------------------
+#
+# A lock timeout is not a registered threshold, and no computed session may
+# ever be lost to a lock: the run computes a session, store() raises, and the
+# process exits non-zero BEFORE --verdict, so nothing is recorded and the next
+# run recomputes from scratch. On 2026-09-02 that discarded the first eligible
+# session this test ever produced (2026-08-31, n=19, excess -0.247%). The old
+# 15s was simply shorter than the daemon's write bursts at market close, which
+# is exactly when ops/market-close.sh runs this.
+#
+# Raising it changes no registered threshold -- verify_registration() binds
+# TEST_ID, REGISTERED_START, MIN_SESSIONS, MIN_BETS_PER_SESSION, CORRECTED_Z,
+# FAMILY_SIZE, MIN_BENCHMARK_NAMES and BOOK_EXTREME_CAP, and a lock timeout is
+# none of them. Waiting longer for a lock cannot change what gets graded, only
+# whether it gets written down.
+WRITE_BUSY_TIMEOUT_MS = 120_000
+STORE_ATTEMPTS = 5
+
+
 def open_db(path, write):
     """Read-only unless writing. The daemon holds the single writer; a research
     tool that opens read-write contends for that lock for no reason."""
     if write:
         conn = sqlite3.connect(path)
-        conn.execute("PRAGMA busy_timeout = 15000")
+        conn.execute(f"PRAGMA busy_timeout = {WRITE_BUSY_TIMEOUT_MS}")
         return conn
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 
@@ -312,6 +332,40 @@ def compute(conn, start):
 
 
 def store(conn, rows):
+    """Persist computed sessions, retrying while the daemon holds the writer.
+
+    busy_timeout already covers a busy writer, but it does NOT cover
+    'database is locked' raised the instant the daemon is mid-transaction on
+    its own connection, which is what happened on 2026-09-02. The retry is
+    therefore on top of the timeout, not instead of it. Bounded, and it
+    re-raises on the last attempt -- a silent give-up here would be the same
+    lost session with a quieter symptom.
+    """
+    last = None
+    for attempt in range(1, STORE_ATTEMPTS + 1):
+        try:
+            return _store_once(conn, rows)
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e) and "busy" not in str(e):
+                raise
+            last = e
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            if attempt == STORE_ATTEMPTS:
+                break
+            delay = 2 ** attempt
+            print(f"store: {e} - attempt {attempt}/{STORE_ATTEMPTS}, "
+                  f"retrying in {delay}s", file=sys.stderr, flush=True)
+            time.sleep(delay)
+    raise SystemExit(
+        f"REFUSING to exit quietly: {len(rows)} computed session(s) could not be "
+        f"written after {STORE_ATTEMPTS} attempts ({last}). The sessions were "
+        f"graded and are being DISCARDED; re-run when the daemon is idle.")
+
+
+def _store_once(conn, rows):
     conn.execute(SCHEMA)
     conn.executemany(
         """INSERT INTO forward_test_daily

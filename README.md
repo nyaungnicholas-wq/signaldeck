@@ -113,7 +113,7 @@ Full grading methodology and per-row JSON: `tools/accuracy_registry.py`, `data/a
 ```
 tickstreamd (:8321) ──┐                       ┌── web app (Next.js, :8323)
    crypto L2/NBBO     │   signaldeckd (:8322) │   watchlist · symbol · screener
-                      ├─▶  12 in-app agents  ─┤   trends · insights · honesty
+                      ├─▶ 100+ in-app agents ─┤   trends · insights · honesty
 Alpaca IEX ws/REST ───┤   SQLite (data/*.db)  │   quality · agents · PUSH-20 HUD
 Kraken OHLC REST ─────┤                       │
 trader-hud (:8787) ───┘                       └── CSV exports / raw SQL
