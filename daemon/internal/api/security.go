@@ -238,6 +238,13 @@ var publicRoutes = map[string]bool{
 	// ledger/anchors?recompute=1 already self-gate on userID != 0.
 	"/api/prereg": true, "/api/ledger": true,
 	"/api/ledger/verify": true, "/api/ledger/anchors": true,
+
+	// The only anonymous WRITE. It takes an email and nothing else, it is
+	// behind the write-tier rate limiter and the CSRF header like every other
+	// non-GET, and it answers 200 whether or not the address was already
+	// stored -- saying "already subscribed" would let anyone test whether a
+	// given person signed up.
+	"/api/waitlist": true,
 }
 
 // alwaysOpen is orthogonal to the allowlist: these authenticate themselves or

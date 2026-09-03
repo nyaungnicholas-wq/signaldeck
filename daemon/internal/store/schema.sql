@@ -2148,3 +2148,22 @@ CREATE TABLE IF NOT EXISTS hmm_regime_state (
   sd_low    REAL    NOT NULL,
   sd_high   REAL    NOT NULL
 );
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- WAITLIST (appended block). The ONLY thing an anonymous visitor can submit.
+-- There are no user accounts on the published deployment, so this is not a
+-- lightweight signup: it is an email and nothing else.
+--
+-- email is the PRIMARY KEY and is stored already lowercased and trimmed, so
+-- INSERT OR IGNORE gives idempotent de-duplication with no read-then-write
+-- race and no second index.
+--
+-- No IP address, no user agent, no referrer. They would be the only personal
+-- data on this box beyond the address itself, they are not needed to send an
+-- email, and rate limiting already happens upstream in the API middleware
+-- without persisting anything.
+CREATE TABLE IF NOT EXISTS waitlist (
+  email      TEXT PRIMARY KEY,
+  created_ts INTEGER NOT NULL,
+  source     TEXT NOT NULL DEFAULT ''
+);
