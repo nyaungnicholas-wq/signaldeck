@@ -32,6 +32,7 @@ import argparse
 import datetime as dt
 import json
 import math
+import bisect
 import os
 import random
 import sqlite3
@@ -548,13 +549,8 @@ def var_section(con, symbol_ids, rv_cache):
         z = [r / math.sqrt(v) for r, v in zip(rets, fc) if v > 0]
         if len(z) < 400:
             continue
-        zs = sorted(z)
         for lv in VAR_LEVELS:
-            k_tail = int(math.floor(lv * len(zs)))
-            if k_tail < MIN_TAIL_OBS:
-                continue
-            q = zs[k_tail - 1]
-            breaches = [rets[i] < q * math.sqrt(fc[i]) for i in range(len(rets))]
+            breaches = causal_breaches(rets, fc, z, lv)
             k = kupiec(breaches, lv)
             if k is None:
                 continue
@@ -578,6 +574,35 @@ def var_section(con, symbol_ids, rv_cache):
             "kupiec_rejected_share": rejected / len(rs),
             "expected_rejection_share_by_chance": 0.05,
         }
+    return out
+
+
+def causal_breaches(rets, fc, z, level):
+    """Breach flags whose VaR quantile reads ONLY the past.
+
+    THE BUG THIS REPLACED. The first version sorted the WHOLE residual sample,
+    took its alpha-quantile, and then counted breaches on that same sample.
+    That forces the breach rate to equal alpha almost exactly BY CONSTRUCTION,
+    and it produced a spectacular-looking result on the full universe: 740
+    symbols, mean breach rate 4.88% against a 5% nominal, and ZERO Kupiec
+    rejections at the 5% level.
+
+    Zero rejections is what gave it away. A perfectly calibrated model should
+    still be rejected about 5% of the time by chance, so a test that never
+    rejects anything is not measuring calibration -- it is measuring its own
+    fitted quantile. The number was manufactured by lookahead.
+
+    Here the quantile used on day i is built from residuals STRICTLY BEFORE i,
+    expanding as history accrues, and days without a deep enough tail yet are
+    EXCLUDED rather than scored as passes. bisect maintains the sorted prefix
+    without re-sorting each step.
+    """
+    past, out = [], []
+    for i in range(len(z)):
+        k = int(math.floor(level * len(past)))
+        if k >= MIN_TAIL_OBS:
+            out.append(rets[i] < past[k - 1] * math.sqrt(fc[i]))
+        bisect.insort(past, z[i])
     return out
 
 
@@ -640,12 +665,28 @@ def selfcheck():
     assert abs(chisq_sf(3.84146, 1) - 0.05) < 1e-4
     assert abs(chisq_sf(5.99146, 2) - 0.05) < 1e-4
 
+    # THE VaR QUANTILE MUST NOT READ THE FUTURE. Changing residuals AFTER day
+    # i must not change whether day i was a breach. This is the assertion that
+    # would have caught the lookahead described in causal_breaches.
+    n = 600
+    rets = [-0.01 + 0.02 * math.sin(i) for i in range(n)]
+    fc = [4e-4] * n
+    zc = [r / math.sqrt(4e-4) for r in rets]
+    base = causal_breaches(rets, fc, zc, 0.05)
+    poisoned = list(zc)
+    for i in range(400, n):
+        poisoned[i] = -99.0          # a catastrophic future
+    after = causal_breaches(rets, fc, poisoned, 0.05)
+    assert len(base) == len(after), (len(base), len(after))
+    cut = 400 - (n - len(base))      # index of day 400 within the emitted list
+    assert base[:cut] == after[:cut], "the VaR quantile read the future"
+
     good = kupiec([i % 20 == 0 for i in range(1000)], 0.05)
     assert good["lr"] < 1e-9, good
     bad = kupiec([i % 4 == 0 for i in range(1000)], 0.05)
     assert bad["p"] < 1e-6, bad
 
-    print("SELFCHECK OK - 11 identities hold")
+    print("SELFCHECK OK - 12 identities hold, including VaR causality")
     return 0
 
 
@@ -659,6 +700,8 @@ def main():
                     help="operating companies only (join fundamentals)")
     ap.add_argument("--crosscheck", metavar="SYMBOL")
     ap.add_argument("--selfcheck", action="store_true")
+    ap.add_argument("--var-only", action="store_true",
+                    help="recompute ONLY the VaR section and merge it into --json")
     a = ap.parse_args()
 
     if a.selfcheck:
@@ -685,6 +728,18 @@ def main():
             excl[k] += x[k]
         if (i + 1) % 100 == 0:
             print("  rv: %d/%d" % (i + 1, len(syms)), file=sys.stderr)
+
+    if a.var_only:
+        # Recompute just the coverage section and merge it back. The horizon
+        # walk-forwards are unchanged by a VaR fix and cost most of the runtime.
+        with open(a.json, encoding="utf-8") as fh:
+            existing = json.load(fh)
+        existing["var_coverage"] = var_section(con, syms, rv_cache)
+        existing["var_recomputed"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        with open(a.json, "w", encoding="utf-8") as fh:
+            json.dump(existing, fh, indent=2)
+        print(json.dumps(existing["var_coverage"], indent=2))
+        return 0
 
     result = {
         "generated": dt.datetime.now(dt.timezone.utc).isoformat(),
