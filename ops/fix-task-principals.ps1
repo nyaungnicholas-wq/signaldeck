@@ -70,7 +70,7 @@ function Assert-Elevated {
     if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Write-Host "REFUSED: not elevated. Both operations need admin." -ForegroundColor Red
         Write-Host "Re-run from an elevated PowerShell:" -ForegroundColor Yellow
-        Write-Host "  Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile','-NoExit','-File','$PSCommandPath'"
+        Write-Host "  Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile','-NoExit','-File',('\"'+$PSCommandPath+'\"')"
         try { Stop-Transcript | Out-Null } catch { }
         exit 1
     }
