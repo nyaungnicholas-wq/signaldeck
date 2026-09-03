@@ -36,22 +36,32 @@ Plan: `~/.claude/plans/this-is-going-to-structured-blossom.md`
 - [ ] Alpaca / NVIDIA keys placed in the box's .env by hand.
 
 ## Next
-- [x] P4a internal/harrv: estimator + fit + nulls + losses (26 tests)
-- [ ] P4b internal/harvar: FHS VaR/ES + Kupiec + Christoffersen
-- [ ] P4c tools/rv_forecast_backtest.py (independent reimplementation)
-- [ ] P4d PRE-REGISTER, then run. NOT the reverse.
+- [x] P4a internal/harrv: estimator + fit + nulls + losses + horizon (29 tests)
+- [x] P4b internal/harvar: FHS VaR/ES + Kupiec + Christoffersen (18 tests)
+- [x] P4c tools/rv_forecast_backtest.py + cmd/rvcrosscheck
+- [x] P4e store tables + rv-forecast-runner + rv-outcome-runner + the record API
+- [ ] P4d PRE-REGISTER the live test. Workers are deployed and
+      CountResolvedRV() is the pre-flight: file only while it returns 0.
+- [ ] P4f the web page a non-expert reads
+- [x] P1.7 container provenance (docker-build proof + ops/oracle-verify.sh)
+- [x] P3.5 404 / error boundary / robots / sitemap / OG-less polish
+- [x] P3.6 mobile verified on all four public pages + e2e assertions
       Two exploratory looks already spent (disclosed in the plan) and must be
       declared in the multiplicity divisor.
 - [ ] P1.4 licence guards on the six vendor endpoints (currently closed by the
       allowlist; the extra layer is defence in depth, not the gate)
-- [ ] P1.7 container provenance substitute for `resolvable:true`
-- [ ] P3.5 404/error boundary, robots, sitemap, OG image, operator copy
 - [ ] P5.1 OpenTimestamps the prereg chain head (currently seq 104)
+- [ ] OG image (deferred; robots/sitemap/404/error are done)
 
 ## Measured facts worth not re-deriving
 - DB 5.46 GB; bars 1d 2,708,273 rows / 2,947 symbols / 2018-07-26 onward.
 - 1m bars cover only 22 real sessions -> intraday RV is NOT testable now.
 - 1h bars: 1,127,732 rows / 1,112 symbols since 2025-06-23 (~300 sessions).
+- Go/Python estimators CROSS-CHECKED on SPY: 1,928 values, 0 mismatches,
+  max relative difference 9.4e-16. Rerun with cmd/rvcrosscheck.
+- lineage.RevisionStamp() is "" under `go test`; the workers take an
+  injectable Rev for that reason. Production is unaffected -- the daemon
+  refuses to start from an unattributable build.
 - HAR probe (exploratory, 150 symbols): 5-session target, Jensen-corrected,
   QLIKE HAR 0.51227 vs EWMA 0.58194 vs flat22 0.71293, DM t = -1.24 (NOT
   significant, and pooled rather than date-clustered so it is optimistic).
