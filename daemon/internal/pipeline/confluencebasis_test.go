@@ -35,7 +35,7 @@ func TestConfluenceResolve_UsesTheEntryBarNotTheFrozenPrice(t *testing.T) {
 	entryDay := int64(20000) * day
 	seedDailyPx(t, st, sym.ID, [][3]float64{
 		{float64(entryDay/day) - 1, 4.90, 4.95},
-		{float64(entryDay / day), 4.95, 5.00}, // the entry bar, current basis
+		{float64(entryDay / day), 4.95, 5.00},   // the entry bar, current basis
 		{float64(entryDay/day) + 1, 5.10, 5.20}, // the exit bar: horizon is 1 day
 		{float64(entryDay/day) + 2, 5.30, 5.50},
 	})

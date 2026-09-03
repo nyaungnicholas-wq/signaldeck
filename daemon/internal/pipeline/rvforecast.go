@@ -40,6 +40,16 @@ var RVHorizons = []harrv.Horizon{1, 5}
 type RVForecastRunner struct {
 	St  *store.Store
 	Now func() time.Time // injectable clock; nil means time.Now
+	// Rev is the build stamp written onto every row; nil means
+	// lineage.RevisionStamp.
+	//
+	// Injectable for the same reason the clock is. RevisionStamp() returns ""
+	// under `go test` -- there are no ldflags on a test binary -- and the store
+	// REFUSES a row it cannot attribute to a build, so without this the worker
+	// is untestable. Production is unchanged: the daemon already refuses to
+	// start at all from an unattributable build, so the default is never empty
+	// in a running process.
+	Rev func() string
 }
 
 func (w *RVForecastRunner) Name() string            { return "rv-forecast-runner" }
@@ -52,6 +62,13 @@ func (w *RVForecastRunner) now() time.Time {
 	return time.Now()
 }
 
+func (w *RVForecastRunner) rev() string {
+	if w.Rev != nil {
+		return w.Rev()
+	}
+	return lineage.RevisionStamp()
+}
+
 func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {
@@ -59,7 +76,7 @@ func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 	}
 	now := w.now()
 	from := now.AddDate(0, 0, -rvLookbackDays).Unix()
-	rev := lineage.RevisionStamp()
+	rev := w.rev()
 
 	var wrote, thin, noFit, flat int
 	for _, s := range syms {
