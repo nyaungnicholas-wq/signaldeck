@@ -2167,3 +2167,72 @@ CREATE TABLE IF NOT EXISTS waitlist (
   created_ts INTEGER NOT NULL,
   source     TEXT NOT NULL DEFAULT ''
 );
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- HAR REALIZED-VARIANCE FORECASTS (appended block).
+--
+-- One row per (symbol, call bar, horizon). Written by rv-forecast-runner at
+-- call time and RESOLVED later by rv-outcome-runner, following the same
+-- freeze-then-resolve shape as regime_outcomes.
+--
+-- null_rw and null_ewma are NOT NULL on purpose. Both nulls are computed at
+-- CALL time and frozen beside the forecast, exactly as regime_outcomes.
+-- naive_label is, because a null reconstructed after the outcome is known is
+-- hindsight -- and this repository already had to build a quarantine manifest
+-- once because that happened. A row with no null is not gradable and the
+-- schema refuses to store one.
+--
+-- horizon is part of the key because h=1 and h=5 are different estimands and
+-- both are registered. Storing them in one column without the horizon would
+-- silently pool two questions.
+CREATE TABLE IF NOT EXISTS rv_forecasts (
+  symbol_id   INTEGER NOT NULL REFERENCES symbols(id),
+  ts          INTEGER NOT NULL,   -- the CALL bar; the forecast covers ts+1..ts+horizon
+  horizon     INTEGER NOT NULL,
+  rv_hat      REAL    NOT NULL,   -- level forecast, retransformed
+  null_rw     REAL    NOT NULL,   -- frozen at call time
+  null_ewma   REAL    NOT NULL,   -- frozen at call time
+  beta0       REAL    NOT NULL,
+  beta_d      REAL    NOT NULL,
+  beta_w      REAL    NOT NULL,
+  beta_m      REAL    NOT NULL,
+  resid_var   REAL    NOT NULL,
+  n_train     INTEGER NOT NULL,
+  revision    TEXT    NOT NULL,   -- lineage.RevisionStamp of the writing binary
+  created_ts  INTEGER NOT NULL,
+  actual      REAL,               -- realised mean RV over the window; NULL until resolved
+  resolved_ts INTEGER,
+  ungradable  TEXT,               -- a STATED reason, never a silent drop
+  PRIMARY KEY (symbol_id, ts, horizon)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_rv_forecasts_open
+  ON rv_forecasts (horizon, ts) WHERE actual IS NULL AND ungradable IS NULL;
+
+-- VaR / ES forecasts. Same shape, same reasons.
+--
+-- var_pct and es_pct are POSITIVE loss fractions: 0.023 means "a loss of about
+-- 2.3% or worse". null_hist is the historical-simulation VaR over the same
+-- window, frozen at call time; it is NULLABLE because risklens WITHHOLDS below
+-- MinVaRTailObservations, and a withheld null must be recorded as withheld
+-- rather than filled with a number nobody computed.
+CREATE TABLE IF NOT EXISTS var_forecasts (
+  symbol_id   INTEGER NOT NULL REFERENCES symbols(id),
+  ts          INTEGER NOT NULL,
+  level       REAL    NOT NULL,   -- 0.05 or 0.01
+  var_pct     REAL    NOT NULL,
+  es_pct      REAL    NOT NULL,
+  sigma2      REAL    NOT NULL,   -- the variance forecast it was scaled by
+  tail_n      INTEGER NOT NULL,   -- residuals in the tail; the precision of the quantile
+  null_hist   REAL,               -- NULL means WITHHELD, not zero
+  revision    TEXT    NOT NULL,
+  created_ts  INTEGER NOT NULL,
+  realized    REAL,               -- next-session log return; NULL until resolved
+  breach      INTEGER,            -- 1 when realized < -var_pct
+  resolved_ts INTEGER,
+  ungradable  TEXT,
+  PRIMARY KEY (symbol_id, ts, level)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_var_forecasts_open
+  ON var_forecasts (level, ts) WHERE realized IS NULL AND ungradable IS NULL;
