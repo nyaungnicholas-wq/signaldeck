@@ -74,3 +74,42 @@ Plan: `~/.claude/plans/this-is-going-to-structured-blossom.md`
 - HAR bw and bm are NOT individually identified (overlapping windows of one
   series); their SUM is. Do not read meaning into a fitted weekly-vs-monthly
   split on a real symbol.
+
+
+## HAR-RV backtest: what has been measured, and what it does NOT yet establish
+
+Full universe run, 758 operating companies, survivorship-clean (NOT screened
+on active=1), walk-forward, losses collapsed to ONE observation per DAY before
+any test.
+
+  h=1  971,151 forecasts over 1,398 day-clusters
+  h=5  967,045 forecasts over 1,394 day-clusters
+
+HEADLINE (QLIKE, HAR vs RiskMetrics EWMA(0.94); negative = HAR better):
+  h=1  mean -0.0469  DM t = -8.79   bootstrap [-0.0584, -0.0355]
+  h=5  mean -0.0431  DM t = -8.91   bootstrap [-0.0541, -0.0323]
+Both inference methods agree, unlike on the 25-symbol smoke run where they
+disagreed because of skew. Also significant against the random walk and the
+flat 22-day window, and under MSE as well as QLIKE.
+
+SUB-PERIOD STABILITY (the thing this repo's settled verdicts care most about,
+because its own IC flips sign per sub-period): HAR wins in EVERY year, both
+horizons, 2021-2026. No flip.
+  h=1  t = -3.43, -1.92, -6.41, -7.62, -4.13, -2.29
+  h=5  t = -2.17, -2.69, -4.86, -6.91, -4.67, -2.98
+
+ESTIMATOR-ARTIFACT CONTROL (RV^CC, construction-independent, MSE):
+40-symbol subset only so far -- h=1 t = -2.61, h=5 t = -4.64, both survive.
+THE FULL-UNIVERSE CONTROL HAS NOT RUN. Until it does, the headline is
+consistent with HAR smoothing the proxy's measurement error rather than
+forecasting the market, and that outcome has its own registered verdict name.
+
+WHAT THIS IS NOT:
+  - It is a BACKTEST. Zero live forecasts have resolved.
+  - It is NOT pre-registered. The pre-registration covers the LIVE test and is
+    not yet filed.
+  - Two exploratory looks were spent before the harness existed and are
+    disclosed in the plan; they must be charged to the multiplicity divisor.
+
+VaR coverage: the first run was WITHDRAWN for lookahead (see commit b86457a).
+Recomputation with causal quantiles in progress.
