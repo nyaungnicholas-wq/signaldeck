@@ -19,7 +19,12 @@ import "math"
 // spelling of a constant is a second thing to keep in step.
 const RiskMetricsLambda = 0.94
 
-// RWAt is the random-walk null: tomorrow's variance is today's.
+// RWAt is the random-walk null: the coming window's variance is today's.
+//
+// It forecasts the SAME estimand as the model it is compared against -- at
+// h > 1 that is the mean over the next h sessions, and "today's value" is the
+// naive answer to that question too. A null answering a different question
+// than the model is not a comparison.
 //
 // It is the weakest of the two and it is included because it is the honest
 // floor -- but note it is a POOR null against a noisy daily proxy. A single

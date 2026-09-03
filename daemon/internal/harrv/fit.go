@@ -4,7 +4,10 @@ import "math"
 
 // The HAR specification (Corsi 2009), in logs:
 //
-//	ln RV_{t+1} = b0 + bd*ln RV_t + bw*ln RVbar_{t-4..t} + bm*ln RVbar_{t-21..t} + e
+//	ln TARGET_{t+1..t+h} = b0 + bd*ln RV_t + bw*ln RVbar_{t-4..t} + bm*ln RVbar_{t-21..t} + e
+//
+// where TARGET is the mean realised variance over the next h sessions (see
+// Horizon). At h = 1 that is simply ln RV_{t+1}.
 //
 // Daily, weekly and monthly components. There is NO tunable hyperparameter
 // here and no grid was searched: 1/5/22 are the canonical cascade, 500 is a
@@ -34,6 +37,47 @@ const (
 	MinHistory = 530
 )
 
+// Horizon is how many sessions ahead the target averages over.
+//
+// H = 1 targets ln RV_{t+1}: a single day. Consecutive forecasts then share no
+// forward sessions, so the observations are NON-OVERLAPPING by construction --
+// which matters here, because overlapping windows are what inflated n in every
+// previous predictor this repository has retired.
+//
+// H > 1 targets the MEAN variance over the next H sessions. That is a much
+// less noisy estimand -- a single Garman-Klass estimate is mostly proxy noise --
+// but consecutive forecasts now share H-1 forward days and the errors are
+// autocorrelated by construction. Inference must use a HAC lag of at least H,
+// which DieboldMariano's caller is responsible for supplying.
+//
+// BOTH are registered. Picking whichever scores better after the fact is the
+// specification search that this platform's own settled verdicts say
+// "manufactures false positives".
+type Horizon int
+
+// TargetAt is the realised value the forecast made at bar t is graded against:
+// the mean RV over sessions t+1 .. t+h. It reads indices > t on purpose --
+// that is the OUTCOME, not a regressor -- so it must never be called from a
+// fitting path with a t at or beyond the evaluation point.
+//
+// Requires every session in the window to be estimable. Averaging over the
+// two days that happened to be measurable inside a five-day window would be a
+// silently different target on exactly the symbols with patchy data.
+func TargetAt(rv []float64, t int, h Horizon) (float64, bool) {
+	if h < 1 || t < 0 || t+int(h) >= len(rv) {
+		return 0, false
+	}
+	sum := 0.0
+	for i := t + 1; i <= t+int(h); i++ {
+		v := rv[i]
+		if math.IsNaN(v) || v <= 0 {
+			return 0, false
+		}
+		sum += v
+	}
+	return sum / float64(h), true
+}
+
 // Fit is one symbol's fitted HAR coefficients, taken at a point in time.
 //
 // ResidVar is carried because the model is fitted in LOGS and published in
@@ -43,6 +87,7 @@ type Fit struct {
 	ResidVar                   float64 // s^2 of the TRAINING residuals only
 	N                          int     // training rows behind these coefficients
 	FitIdx                     int     // the bar index the fit was taken at
+	H                          Horizon // the horizon these coefficients target
 }
 
 // features builds the HAR regressor row for index i, reading indices <= i only.
@@ -102,11 +147,13 @@ func solve4(a [4][4]float64, b [4]float64) ([4]float64, bool) {
 
 // FitAt fits the HAR coefficients using ONLY information available at bar t.
 //
-// The training rows are (features at s, target ln RV_{s+1}) for s < t, so the
-// newest target used is ln RV_t. Nothing at index > t is read, by construction
-// rather than by convention -- which is what TestTruncationInvariance pins.
-func FitAt(rv []float64, t int) (Fit, bool) {
-	if t < MinHistory || t >= len(rv) {
+// The training rows are (features at s, ln TARGET over s+1..s+h) for every s
+// with s+h <= t, so the newest outcome used ends exactly at t. Nothing at
+// index > t is read, by construction rather than by convention -- which is
+// what TestFitAndPredictDoNotReadTheFuture pins by rigging the future and
+// requiring the fit not to move by a single bit.
+func FitAt(rv []float64, t int, h Horizon) (Fit, bool) {
+	if h < 1 || t < MinHistory || t >= len(rv) {
 		return Fit{}, false
 	}
 	var xtx [4][4]float64
@@ -116,16 +163,19 @@ func FitAt(rv []float64, t int) (Fit, bool) {
 		y float64
 	}
 	rows := make([]row, 0, t)
-	for s := LagM; s < t; s++ {
+	// s+h <= t keeps every training TARGET at or before t. With h > 1 the last
+	// usable feature row sits h-1 days further back, because a target whose
+	// window runs past t would be an outcome the fit could not have seen.
+	for s := LagM; s+int(h) <= t; s++ {
 		f, ok := features(rv, s)
 		if !ok {
 			continue
 		}
-		nxt := rv[s+1]
-		if math.IsNaN(nxt) || nxt <= 0 {
+		tgt, ok := TargetAt(rv, s, h)
+		if !ok {
 			continue
 		}
-		y := math.Log(nxt)
+		y := math.Log(tgt)
 		rows = append(rows, row{f, y})
 		for i := 0; i < 4; i++ {
 			for j := 0; j < 4; j++ {
@@ -158,11 +208,15 @@ func FitAt(rv []float64, t int) (Fit, bool) {
 		ResidVar: ss / dof,
 		N:        len(rows),
 		FitIdx:   t,
+		H:        h,
 	}, true
 }
 
-// PredictAt returns the one-step-ahead VARIANCE forecast for bar t+1, in
-// levels, reading indices <= t only.
+// PredictAt returns the VARIANCE forecast in levels, reading indices <= t only.
+//
+// What it forecasts is f.H sessions of mean variance starting at t+1, matching
+// the target FitAt was trained on. The coefficients and the estimand travel
+// together in Fit so they cannot be paired up wrongly by a caller.
 //
 // THE RETRANSFORM IS NOT OPTIONAL. The model is fitted on ln RV, so
 // exp(yhat) estimates the MEDIAN of RV_{t+1}, not its mean. Publishing that as
