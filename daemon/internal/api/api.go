@@ -104,6 +104,9 @@ func Serve(ctx context.Context, d Deps) error {
 	// The only unauthenticated WRITE on a published deployment. Email only:
 	// no account, no password, no session. See internal/api/waitlist.go.
 	mux.HandleFunc("POST /api/waitlist", d.waitlistAdd)
+	// The LIVE record of the HAR volatility forecast. Reports evidence, never
+	// a verdict: only the pre-registered grader may say whether it is skill.
+	mux.HandleFunc("GET /api/vol-forecast/record", d.volForecastRecord)
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
 	d.registerQuant(mux)     // forecast, backtest, risk, correlation, portfolio
 	d.registerAI(mux)        // analyst, chat, filingmind, debate, status

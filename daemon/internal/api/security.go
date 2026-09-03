@@ -245,6 +245,10 @@ var publicRoutes = map[string]bool{
 	// stored -- saying "already subscribed" would let anyone test whether a
 	// given person signed up.
 	"/api/waitlist": true,
+
+	// Derived, not user-scoped, no vendor rows. It is the honesty surface for
+	// the new forecast and is useless if a visitor cannot read it.
+	"/api/vol-forecast/record": true,
 }
 
 // alwaysOpen is orthogonal to the allowlist: these authenticate themselves or

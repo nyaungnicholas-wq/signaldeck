@@ -211,6 +211,19 @@ var SchemaContract = map[string][]string{
 		"regime_outcome_quarantine",
 		"regime_outcome_quarantine_manifest",
 	},
+	// Both nulls are NOT NULL in the schema, so naming them here means the
+	// worker is DROPPED at boot on a database that predates them rather than
+	// running and failing every write. The revision column is what ties a row
+	// to the binary that produced it.
+	"rv-forecast-runner": {
+		"rv_forecasts.null_rw",
+		"rv_forecasts.null_ewma",
+		"rv_forecasts.revision",
+	},
+	"rv-outcome-runner": {
+		"rv_forecasts.actual",
+		"rv_forecasts.ungradable",
+	},
 	"prediction-runner":   {"prediction_ledger.revision"},
 	"prediction-resolver": {"prediction_ledger.revision"},
 }

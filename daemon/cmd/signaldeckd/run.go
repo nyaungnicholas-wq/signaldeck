@@ -280,6 +280,11 @@ func run(ctx context.Context, cfg config.Config, st *store.Store) {
 		&pipeline.BreakoutRunner{St: st},
 		&pipeline.SentimentTagger{St: st, LLM: llmClient},
 		&pipeline.SectorRotator{St: st},
+		// HAR realized-variance forecasts and their resolver. They freeze a
+		// call with BOTH nulls beside it and grade it once the window closes;
+		// neither publishes a claim. See internal/pipeline/rvforecast.go.
+		&pipeline.RVForecastRunner{St: st},
+		&pipeline.RVOutcomeWorker{St: st},
 	}
 	if alpacaClient != nil {
 		fleet = append(fleet, &pipeline.NewsFetcher{St: st, Client: news.New(cfg.AlpacaKey, cfg.AlpacaSecret)})
