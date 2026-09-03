@@ -13,6 +13,7 @@ import UxProbe from "@/components/UxProbe";
 import NextStep from "@/components/NextStep";
 import { useLabel } from "@/lib/labels";
 import { noteVisit } from "@/lib/goal";
+import { isPublicRoute } from "@/lib/publicRoutes";
 
 // Nav consolidation (2026-07-19, user decision): 9 tabs → 5 clean hubs.
 // HOME absorbs the old DASHBOARD + TODAY; WATCHLIST absorbs DECK + COMPARE;
@@ -25,7 +26,7 @@ import { noteVisit } from "@/lib/goal";
 type NavItem = { href: string; label: string; match: string[]; advanced?: true };
 
 const NAV: NavItem[] = [
-  { href: "/", label: "HOME", match: ["/", "/today"] },
+  { href: "/dashboard", label: "HOME", match: ["/dashboard", "/today"] },
   // MARKETS + SIGNALS merged into one MARKET hub. Legacy prefixes stay in
   // `match` so the hub highlights through the redirect.
   {
@@ -419,11 +420,11 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   });
 
   // Public routes render minimal chrome (brand + footer) with no nav, freshness
-  // chip, toggles or daemon dot: /login (sign-in), /proof (the shareable
-  // public track-record + ledger page) and /accuracy (the registry verdicts).
-  // A nav full of links that bounce to /login, or a "updated 0s ago" chip,
-  // would both be misleading here.
-  if (pathname === "/login" || pathname === "/proof" || pathname === "/accuracy") {
+  // chip, toggles or daemon dot. A nav full of links that bounce, or an
+  // "updated 0s ago" chip, would both be misleading to a visitor with no
+  // session. The list is shared with AuthGate via @/lib/publicRoutes -- it was
+  // spelled separately here and drifted from that one.
+  if (isPublicRoute(pathname)) {
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-3 sm:p-4">
         <SkipLink />

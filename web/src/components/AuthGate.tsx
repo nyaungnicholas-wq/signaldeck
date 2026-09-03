@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { API_BASE } from "@/lib/api";
+import { isPublicRoute } from "@/lib/publicRoutes";
 
 /**
  * Session gate for the private workspace. Every route except /login requires a
@@ -24,11 +25,12 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // the effect never needs to setState synchronously for it. Once established,
   // `ready` stays true, so navigating between protected pages never re-flashes.
   const [ready, setReady] = useState(false);
-  // Public routes render without a session: /login (the sign-in), /proof
-  // (the shareable public track-record + ledger page) and /accuracy (the
-  // registry verdicts — a FAILED grade gated behind a login is a FAILED grade
-  // hidden). Everything else gates.
-  const isPublic = pathname === "/login" || pathname === "/proof" || pathname === "/accuracy";
+  // Public routes render without a session. The list lives in one place now
+  // (@/lib/publicRoutes) because it was spelled here AND in Shell, and two
+  // copies of a security-adjacent list drift. This is only the browser's half
+  // of the decision: the daemon's own allowlist answers independently on every
+  // request, so a mistake here cannot expose data it still refuses to serve.
+  const isPublic = isPublicRoute(pathname);
   const onLogin = isPublic;
 
   useEffect(() => {
@@ -51,8 +53,15 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
         // logged-out visitor stranded on "checking session…" forever. There is
         // no client state worth preserving on the anonymous path, so a full
         // load is the cheapest thing that cannot be dropped.
+        // On a PUBLISHED deployment there is no signup and no account to
+        // reach, so bouncing an anonymous visitor to /login strands them on a
+        // form they can never pass. Send them to the front door instead;
+        // /login stays routable for the operator, it just stops being the
+        // destination for everyone who is not one.
         if (res.status === 401)
-          window.location.replace("/login"); // stay gated until /login paints — no flash
+          window.location.replace(
+            process.env.NEXT_PUBLIC_SIGNALDECK_PUBLIC === "1" ? "/" : "/login",
+          ); // stay gated until the destination paints — no flash
         else setReady(true); // signed in, or daemon error (panels surface it)
       })
       .catch(() => {

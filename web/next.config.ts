@@ -19,7 +19,7 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   // 2026-07-19 nav consolidation (9 tabs → 5): HOME absorbs TODAY, WATCHLIST
   // absorbs DECK + COMPARE, LAB absorbs DESK + LIVE. Old URLs land on the new
   // homes so bookmarks, the alerts bell and briefing links keep working.
-  { source: "/today", destination: "/" },
+  { source: "/today", destination: "/dashboard" },
   { source: "/deck", destination: "/watchlist" },
   { source: "/compare", destination: "/watchlist/compare" },
   { source: "/desk", destination: "/lab/desk" },
