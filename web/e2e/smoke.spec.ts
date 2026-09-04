@@ -264,7 +264,7 @@ test.describe("mobile 375px viewport", () => {
   //
   // A wide table is fine here as long as it scrolls inside its own
   // .table-wrap; what must never happen is the PAGE scrolling sideways.
-  for (const path of ["/", "/accuracy", "/proof", "/glossary"]) {
+  for (const path of ["/", "/accuracy", "/proof", "/glossary", "/volatility"]) {
     test(`${path} has no horizontal scroll for an anonymous visitor`, async ({ page }) => {
       await page.goto(path);
       await expect(page).not.toHaveURL(/\/login/);

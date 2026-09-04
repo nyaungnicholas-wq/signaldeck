@@ -98,10 +98,17 @@ func (d Deps) volForecastRecord(w http.ResponseWriter, r *http.Request) {
 			// resolved, which is a false statement on the one surface whose
 			// argument is that its numbers are true.
 			reason = fmt.Sprintf(
-				"%d of the %d distinct trading days required; no verdict either way. "+
-					"Days are counted, not rows: forecasts resolving on one day share a "+
-					"single market shock, so %d resolved row(s) is not %d observations.",
-				rec.DistinctDays, RVMinDistinctDays, rec.N, rec.N)
+				"%d of the %d distinct trading days required; no verdict either way.",
+				rec.DistinctDays, RVMinDistinctDays)
+			// The rows-are-not-observations clause is only worth saying once
+			// there ARE rows. At zero it reads as "0 rows is not 0
+			// observations", which is true and silly.
+			if rec.N > 0 {
+				reason += fmt.Sprintf(
+					" Days are counted, not rows: forecasts resolving on one day share a "+
+						"single market shock, so %d resolved row(s) is not %d independent "+
+						"observations.", rec.N, rec.N)
+			}
 		}
 
 		results = append(results, horizonResult{

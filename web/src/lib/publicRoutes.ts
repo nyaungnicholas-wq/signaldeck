@@ -18,6 +18,9 @@ export const PUBLIC_ROUTES = [
   "/", // the landing page — the front door
   "/accuracy", // the registry verdicts. A FAILED grade behind a login is a FAILED grade hidden.
   "/proof", // the shareable hash-chained receipts
+  // NOT "/risk": next.config.ts already redirects that to /lab/risk for old
+  // bookmarks, so a page there would be unreachable. Same trap as /deck.
+  "/volatility", // the volatility estimates and their live record
   "/glossary", // plain-English terms; static, no daemon call
   "/login",
 ] as const;
