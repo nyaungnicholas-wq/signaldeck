@@ -147,7 +147,7 @@ func TestNewsFetcher_ScopeAndSkipMigration(t *testing.T) {
 	if got := sentimentOf(t, st, hot.ID)["hot-p1"]; got != "unrated" {
 		t.Errorf("HOT pending headline = %q, want still unrated (in scope)", got)
 	}
-	pending, err := st.UnratedNews(ctx, 50)
+	pending, err := st.UnratedNews(ctx, 50, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

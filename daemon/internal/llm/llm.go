@@ -84,6 +84,13 @@ type Stats struct {
 var (
 	ErrDisabled   = fmt.Errorf("llm: no key configured")
 	ErrCapReached = fmt.Errorf("llm: daily call cap reached")
+	// ErrTransient wraps the final failure when EVERY retry attempt met a
+	// retryable condition (429 / 5xx / network / timeout). It lets a caller
+	// that already made partial progress stop cleanly and resume next pass
+	// without string-matching vendor error text -- this integration changed
+	// provider wording three times in six weeks, so matching "503" or
+	// "ResourceExhausted" would be a fix with a known expiry date.
+	ErrTransient = fmt.Errorf("llm: transient failure, retries exhausted")
 )
 
 // SpendStore persists the daily call counter so a daemon restart can't reset
@@ -403,7 +410,9 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 	if lastErr == nil {
 		lastErr = fmt.Errorf("llm: request failed")
 	}
-	return "", lastErr
+	// Reaching here means the loop exhausted maxAttempts, and every iteration
+	// that did not return early was retryable by construction.
+	return "", fmt.Errorf("%w: %w", ErrTransient, lastErr)
 }
 
 // attempt performs a single request against one key. It returns (output, retryable, error).

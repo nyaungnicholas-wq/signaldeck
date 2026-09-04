@@ -122,8 +122,8 @@ func completeFast(ctx context.Context, client llm.Client, sys string, msgs []llm
 // practical limit is burst-shaped (rapid-fire calls trip HTTP 429 around ~35
 // in a row), so a paced larger batch drains a backlog far faster than a small
 // burst without touching the burst limit. pace <= 0 means no delay.
-func RunOnce(ctx context.Context, client llm.Client, st *store.Store, batch int, pace time.Duration) (int, error) {
-	items, err := st.UnratedNews(ctx, batch)
+func RunOnce(ctx context.Context, client llm.Client, st *store.Store, batch int, pace time.Duration, minTs int64) (int, error) {
+	items, err := st.UnratedNews(ctx, batch, minTs)
 	if err != nil {
 		return 0, err
 	}
