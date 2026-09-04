@@ -26,3 +26,10 @@ partials/* -text
 # The committed answer to the questions CI cannot ask the 4 GB database
 # (grader status, PIT universe rows, delisting rate). Same reasoning.
 ops/data-integrity.json -text
+
+# OpenTimestamps anchors. The .ots proof commits to the sha256 of the head
+# file's EXACT bytes, so a CRLF checkout changes the digest and `ots verify`
+# reports a mismatch — which reads as a forged or corrupted proof rather than
+# as a line ending. The proofs themselves are binary and must never be touched.
+proofs/ots/*.txt -text
+proofs/ots/*.ots binary
