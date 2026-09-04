@@ -11,7 +11,22 @@ import Link from "next/link";
  * leak to everyone else. The operator detail stays in the daemon's JSON error
  * and in the logs; the rendered surface says what a reader can act on.
  */
-export default function Error({ reset }: { error: Error; reset: () => void }) {
+export default function Error({
+  retry,
+}: {
+  error: Error & { digest?: string };
+  // `retry`, not `reset`. Both exist in this Next version, but the reference
+  // says to prefer retry(): reset only clears the error state and re-renders
+  // the children, while retry() re-fetches the segment, which is what a reader
+  // clicking "Try again" on a failed data load actually wants
+  // (node_modules/next/dist/docs/.../file-conventions/error.md).
+  //
+  // Worth recording HOW this was nearly shipped wrong: the props are typed by
+  // hand here rather than imported, so tsc validated a contract this file
+  // invented and reported nothing. web/AGENTS.md says it plainly -- "This is
+  // NOT the Next.js you know" -- and the docs are in node_modules.
+  retry: () => void;
+}) {
   return (
     <div className="flex flex-col gap-4 pt-10">
       <div
@@ -28,7 +43,7 @@ export default function Error({ reset }: { error: Error; reset: () => void }) {
       <div className="flex flex-wrap gap-3 pt-1">
         <button
           type="button"
-          onClick={reset}
+          onClick={() => retry()}
           className="chip cursor-pointer"
           style={{ borderColor: "var(--accent)", color: "var(--accent)", padding: "0.55rem 0.9rem" }}
         >
