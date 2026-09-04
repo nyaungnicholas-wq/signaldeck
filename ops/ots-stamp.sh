@@ -13,7 +13,7 @@ set -uo pipefail
 
 # Configuration (overridable via environment)
 API="${SIGNALDECK_API:-http://127.0.0.1:8322}"
-OTS_DIR="${SIGNALDECK_OTS_DIR:-/data/ots}"
+OTS_DIR="${SIGNALDECK_OTS_DIR:-/data/ots}"   # on the box; proofs/ots/ is the tracked copy
 LOG="${SIGNALDECK_OTS_LOG:-/data/logs/ots-stamp.log}"
 TOKEN="${SIGNALDECK_API_TOKEN:-}"
 
