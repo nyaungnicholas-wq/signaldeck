@@ -98,11 +98,21 @@ horizons, 2021-2026. No flip.
   h=1  t = -3.43, -1.92, -6.41, -7.62, -4.13, -2.29
   h=5  t = -2.17, -2.69, -4.86, -6.91, -4.67, -2.98
 
-ESTIMATOR-ARTIFACT CONTROL (RV^CC, construction-independent, MSE):
-40-symbol subset only so far -- h=1 t = -2.61, h=5 t = -4.64, both survive.
-THE FULL-UNIVERSE CONTROL HAS NOT RUN. Until it does, the headline is
-consistent with HAR smoothing the proxy's measurement error rather than
-forecasting the market, and that outcome has its own registered verdict name.
+ESTIMATOR-ARTIFACT CONTROL (RV^CC, construction-independent, MSE), FULL
+UNIVERSE: h=1 t = -5.77, h=5 t = -4.47. SURVIVES. The advantage is not an
+artifact of the estimator it is scored on. 8,095 zero-return days dropped at
+h=1, 5 at h=5, reported not hidden.
+
+ADVERSARIAL CHECKS (tools/rv_adversarial.py, 60 symbols) -- ALL PASS:
+  Hansen SPA, benchmark=EWMA challenger=HAR : consistent p = 0.0000
+    (the direction that supports the claim; multiplicity of 3 nulls charged
+     by a 5,000-rep stationary bootstrap)
+  Hansen SPA, benchmark=HAR                 : consistent p = 0.5048
+    (nothing beat HAR)
+  Refit cadence 5 / 21 / 63 : t = -7.11 / -7.13 / -7.11 (h=1). FLAT, so the
+    advantage is not tracking recent noise.
+  Symbol clustering : 95% of symbols favour HAR; removing the 5 most extreme
+    names makes it STRONGER (t -8.71 -> -9.98). Not carried by outliers.
 
 WHAT THIS IS NOT:
   - It is a BACKTEST. Zero live forecasts have resolved.
@@ -111,5 +121,14 @@ WHAT THIS IS NOT:
   - Two exploratory looks were spent before the harness existed and are
     disclosed in the plan; they must be charged to the multiplicity divisor.
 
-VaR coverage: the first run was WITHDRAWN for lookahead (see commit b86457a).
-Recomputation with causal quantiles in progress.
+VaR coverage, recomputed with a CAUSAL quantile after the first run was
+withdrawn for lookahead (commit b86457a):
+  5% level: 740 symbols, breach rate 4.95%, 30 Kupiec rejections (4.05%)
+  1% level: 642 symbols, breach rate 1.08%, 17 rejections (2.65%)
+  against 5% expected by chance. The withdrawn version reported ZERO
+  rejections, which is what a lookahead looks like.
+
+STILL TRUE AND UNCHANGED BY ANY OF THIS: it is a BACKTEST, zero live
+forecasts have resolved, nothing is pre-registered, and the two exploratory
+looks spent before the harness existed must be charged to the multiplicity
+divisor.
