@@ -137,15 +137,7 @@ func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 				Beta0: fit.Beta0, BetaD: fit.BetaD, BetaW: fit.BetaW, BetaM: fit.BetaM,
 				ResidVar: fit.ResidVar, NTrain: fit.N, Revision: rev,
 			}
-			err := w.St.UpsertRVForecast(ctx, rec, now)
-			for attempt := 1; attempt < rvStoreRetries && busy(err); attempt++ {
-				select {
-				case <-ctx.Done():
-					return "", ctx.Err()
-				case <-time.After(time.Duration(attempt) * rvStoreBackoff):
-				}
-				err = w.St.UpsertRVForecast(ctx, rec, now)
-			}
+			err := retryBusy(ctx, func() error { return w.St.UpsertRVForecast(ctx, rec, now) })
 			if busy(err) {
 				// Drop THIS forecast, never the pass. The registration counts
 				// a day only when 30+ symbols resolve on it, so abandoning
@@ -196,6 +188,23 @@ func (w *RVOutcomeWorker) now() time.Time {
 // something went wrong with the data.
 const abandonAfter = 45 * 24 * time.Hour
 
+// retryBusy runs op, re-attempting while the database is locked.
+//
+// ONE helper rather than a retry loop at each call site: the policy is a single
+// decision and five spellings of it drift apart.
+func retryBusy(ctx context.Context, op func() error) error {
+	err := op()
+	for attempt := 1; attempt < rvStoreRetries && busy(err); attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt) * rvStoreBackoff):
+		}
+		err = op()
+	}
+	return err
+}
+
 func (w *RVOutcomeWorker) Run(ctx context.Context) (string, error) {
 	limit := w.Limit
 	if limit <= 0 {
@@ -203,10 +212,26 @@ func (w *RVOutcomeWorker) Run(ctx context.Context) (string, error) {
 	}
 	now := w.now()
 	var resolved, waiting, abandoned int
+	// A lock DEFERS work here, it does not destroy it: an unresolved forecast
+	// stays open, the next pass takes it, and abandonAfter is 45 days away.
+	// That is the OPPOSITE of the forecast runner, where a call bar missed
+	// today can never be made again because the registration forbids backfill.
+	// So this worker stops cleanly and reports degraded instead of skipping
+	// rows -- nothing is lost by waiting six hours.
+	deferred := false
 
+resolve:
 	for _, h := range RVHorizons {
-		open, err := w.St.OpenRVForecasts(ctx, int(h), limit)
-		if err != nil {
+		var open []store.RVForecast
+		if err := retryBusy(ctx, func() error {
+			var e error
+			open, e = w.St.OpenRVForecasts(ctx, int(h), limit)
+			return e
+		}); err != nil {
+			if busy(err) {
+				deferred = true
+				break resolve
+			}
 			return "", err
 		}
 		for _, f := range open {
@@ -215,8 +240,16 @@ func (w *RVOutcomeWorker) Run(ctx context.Context) (string, error) {
 			// a different definition is the estimator mismatch that inflated an
 			// earlier result here by 9.5pp.
 			from := time.Unix(f.Ts, 0).AddDate(0, 0, -rvLookbackDays).Unix()
-			bars, err := w.St.Bars(ctx, f.SymbolID, md.TF1d, from, now.Unix(), rvLookbackDays+90)
-			if err != nil {
+			var bars []md.Bar
+			if err := retryBusy(ctx, func() error {
+				var e error
+				bars, e = w.St.Bars(ctx, f.SymbolID, md.TF1d, from, now.Unix(), rvLookbackDays+90)
+				return e
+			}); err != nil {
+				if busy(err) {
+					deferred = true
+					break resolve
+				}
 				return "", err
 			}
 			rv, ts, _ := harrv.RVSeries(bars)
@@ -230,8 +263,14 @@ func (w *RVOutcomeWorker) Run(ctx context.Context) (string, error) {
 			}
 			if idx < 0 {
 				if now.Sub(time.Unix(f.Ts, 0)) > abandonAfter {
-					if err := w.St.MarkRVUngradable(ctx, f.SymbolID, f.Ts, f.Horizon,
-						"the call bar is no longer present in the series", now); err != nil {
+					if err := retryBusy(ctx, func() error {
+						return w.St.MarkRVUngradable(ctx, f.SymbolID, f.Ts, f.Horizon,
+							"the call bar is no longer present in the series", now)
+					}); err != nil {
+						if busy(err) {
+							deferred = true
+							break resolve
+						}
 						return "", err
 					}
 					abandoned++
@@ -243,8 +282,14 @@ func (w *RVOutcomeWorker) Run(ctx context.Context) (string, error) {
 			actual, ok := harrv.TargetAt(rv, idx, harrv.Horizon(f.Horizon))
 			if !ok {
 				if now.Sub(time.Unix(f.Ts, 0)) > abandonAfter {
-					if err := w.St.MarkRVUngradable(ctx, f.SymbolID, f.Ts, f.Horizon,
-						"the outcome window never became fully estimable", now); err != nil {
+					if err := retryBusy(ctx, func() error {
+						return w.St.MarkRVUngradable(ctx, f.SymbolID, f.Ts, f.Horizon,
+							"the outcome window never became fully estimable", now)
+					}); err != nil {
+						if busy(err) {
+							deferred = true
+							break resolve
+						}
 						return "", err
 					}
 					abandoned++
@@ -253,7 +298,13 @@ func (w *RVOutcomeWorker) Run(ctx context.Context) (string, error) {
 				}
 				continue
 			}
-			if err := w.St.ResolveRVForecast(ctx, f.SymbolID, f.Ts, f.Horizon, actual, now); err != nil {
+			if err := retryBusy(ctx, func() error {
+				return w.St.ResolveRVForecast(ctx, f.SymbolID, f.Ts, f.Horizon, actual, now)
+			}); err != nil {
+				if busy(err) {
+					deferred = true
+					break resolve
+				}
 				return "", err
 			}
 			resolved++
@@ -262,6 +313,10 @@ func (w *RVOutcomeWorker) Run(ctx context.Context) (string, error) {
 
 	detail := fmt.Sprintf("resolved %d, %d still inside their window, %d abandoned as ungradable",
 		resolved, waiting, abandoned)
+	if deferred {
+		detail += "; stopped early on a locked database, resuming next pass"
+		return detail, fmt.Errorf("%s: %w", detail, workers.ErrDegraded)
+	}
 	if resolved == 0 && waiting == 0 && abandoned == 0 {
 		return detail, fmt.Errorf("no forecasts are open yet: %w", workers.ErrDegraded)
 	}
