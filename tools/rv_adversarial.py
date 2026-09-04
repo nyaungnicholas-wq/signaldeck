@@ -307,7 +307,15 @@ def main():
             print(f"  SPA: ERROR - {spa['error']}")
         else:
             p = spa['pvalues']
-            print(f"  SPA p-values: lower={p['lower']:.4f}, consistent={p['consistent']:.4f}, upper={p['upper']:.4f}")
+            print(f"  SPA benchmark=HAR  (is HAR beaten?)      consistent p={p['consistent']:.4f}"
+                  f"   [high = nothing beat HAR]")
+            rv = spa_res.get('reversed_benchmark_ewma')
+            if rv:
+                # The direction that supports the claim. Printed because a
+                # result that only exists in a JSON file is a result nobody
+                # reads.
+                print(f"  SPA benchmark=EWMA (does HAR beat it?)   consistent p={rv['consistent']:.4f}"
+                      f"   [LOW = HAR outperforms EWMA]")
         sens = result[h]['refit_sensitivity']
         if 'error' in sens:
             print(f"  Refit sensitivity: ERROR - {sens['error']}")

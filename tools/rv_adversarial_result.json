@@ -1,0 +1,126 @@
+{
+  "1": {
+    "hansen_spa": {
+      "pvalues": {
+        "lower": 0.5048,
+        "consistent": 0.5048,
+        "upper": 1.0
+      },
+      "reversed_benchmark_ewma": {
+        "lower": 0.0,
+        "consistent": 0.0,
+        "upper": 0.0,
+        "meaning": "benchmark = EWMA, challenger = HAR. A LOW p-value means EWMA is outperformed by HAR. This is the direction that supports the headline claim."
+      },
+      "reps": 5000,
+      "interpretation": "A high p-value (above 0.05) indicates that we cannot reject the null hypothesis that HAR is not outperformed by any of the three models, after accounting for multiple comparisons. A low p-value suggests that at least one of the null models outperforms HAR."
+    },
+    "refit_sensitivity": {
+      "cadences": [
+        {
+          "refit_every": 5,
+          "days": 1398,
+          "mean": -0.03793169873213173,
+          "t": -7.112780555539669
+        },
+        {
+          "refit_every": 21,
+          "days": 1398,
+          "mean": -0.0379359457289415,
+          "t": -7.1266890557263
+        },
+        {
+          "refit_every": 63,
+          "days": 1398,
+          "mean": -0.03800762693617186,
+          "t": -7.108719683589687
+        }
+      ],
+      "interpretation": "If HAR's advantage over EWMA diminishes with infrequent refitting, the original result may be driven by overfitting to recent noise rather than a stable relationship."
+    },
+    "symbol_clustered": {
+      "n_symbols": 60,
+      "share_negative": 0.95,
+      "mean": -0.03837865334975412,
+      "median": -0.025915999129407508,
+      "t_stat": -8.711841563797314,
+      "top5_abs": [
+        55,
+        31,
+        64,
+        24,
+        29
+      ],
+      "remaining": {
+        "n_symbols": 55,
+        "share_negative": 0.9454545454545454,
+        "mean": -0.030638065570650703,
+        "median": -0.024438803217224848,
+        "t_stat": -9.979328854791785
+      },
+      "interpretation": "If dropping the 5 most extreme symbols changes the conclusion (e.g., mean becomes positive or t-stat loses significance), the original result is driven by a few symbols."
+    }
+  },
+  "5": {
+    "hansen_spa": {
+      "pvalues": {
+        "lower": 0.5026,
+        "consistent": 0.5026,
+        "upper": 1.0
+      },
+      "reversed_benchmark_ewma": {
+        "lower": 0.0,
+        "consistent": 0.0,
+        "upper": 0.0,
+        "meaning": "benchmark = EWMA, challenger = HAR. A LOW p-value means EWMA is outperformed by HAR. This is the direction that supports the headline claim."
+      },
+      "reps": 5000,
+      "interpretation": "A high p-value (above 0.05) indicates that we cannot reject the null hypothesis that HAR is not outperformed by any of the three models, after accounting for multiple comparisons. A low p-value suggests that at least one of the null models outperforms HAR."
+    },
+    "refit_sensitivity": {
+      "cadences": [
+        {
+          "refit_every": 5,
+          "days": 1394,
+          "mean": -0.035826419805368326,
+          "t": -7.202436732826026
+        },
+        {
+          "refit_every": 21,
+          "days": 1394,
+          "mean": -0.03597093591291486,
+          "t": -7.168106929149874
+        },
+        {
+          "refit_every": 63,
+          "days": 1394,
+          "mean": -0.03611768127117236,
+          "t": -7.098398233549534
+        }
+      ],
+      "interpretation": "If HAR's advantage over EWMA diminishes with infrequent refitting, the original result may be driven by overfitting to recent noise rather than a stable relationship."
+    },
+    "symbol_clustered": {
+      "n_symbols": 60,
+      "share_negative": 0.95,
+      "mean": -0.03667763530699312,
+      "median": -0.022337055414031366,
+      "t_stat": -7.584027086620264,
+      "top5_abs": [
+        31,
+        55,
+        29,
+        41,
+        64
+      ],
+      "remaining": {
+        "n_symbols": 55,
+        "share_negative": 0.9454545454545454,
+        "mean": -0.028129282128263954,
+        "median": -0.021381729149589915,
+        "t_stat": -8.740153388681442
+      },
+      "interpretation": "If dropping the 5 most extreme symbols changes the conclusion (e.g., mean becomes positive or t-stat loses significance), the original result is driven by a few symbols."
+    }
+  }
+}
