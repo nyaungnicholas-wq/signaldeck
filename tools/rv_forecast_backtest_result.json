@@ -1,5 +1,5 @@
 {
-  "generated": "2026-09-03T16:13:41.759062+00:00",
+  "generated": "2026-09-03T17:19:12.596729+00:00",
   "db": "C:\\Users\\Nicholas_N\\Desktop\\claude code\\signaldeck\\data\\signaldeck.db",
   "universe": {
     "symbols": 758,
@@ -127,6 +127,21 @@
           "t": -2.285670971793584,
           "better": "HAR"
         }
+      },
+      "control_rv_cc": {
+        "proxy": "RV^CC (squared close-to-close); construction-independent of RV^GK",
+        "loss": "MSE only; QLIKE is undefined where the close did not move",
+        "days": 1398,
+        "zero_return_days_dropped": 8095,
+        "mean_mse_har": 0.00022447777700840055,
+        "mean_mse_ewma": 0.000227030439772434,
+        "dm": {
+          "mean": -2.552662764033454e-06,
+          "t": -5.774880370469791,
+          "n": 1398,
+          "lag": 7
+        },
+        "verdict_if_not_significant": "ESTIMATOR ARTIFACT: the advantage on RV^GK would be HAR smoothing the proxy's measurement error, not forecasting the market"
       }
     },
     "5": {
@@ -239,6 +254,21 @@
           "t": -2.9807038545629867,
           "better": "HAR"
         }
+      },
+      "control_rv_cc": {
+        "proxy": "RV^CC (squared close-to-close); construction-independent of RV^GK",
+        "loss": "MSE only; QLIKE is undefined where the close did not move",
+        "days": 1394,
+        "zero_return_days_dropped": 5,
+        "mean_mse_har": 4.9705246486122046e-05,
+        "mean_mse_ewma": 5.1767102975277225e-05,
+        "dm": {
+          "mean": -2.061856489155179e-06,
+          "t": -4.467815877528616,
+          "n": 1394,
+          "lag": 7
+        },
+        "verdict_if_not_significant": "ESTIMATOR ARTIFACT: the advantage on RV^GK would be HAR smoothing the proxy's measurement error, not forecasting the market"
       }
     }
   },
@@ -261,6 +291,5 @@
       "kupiec_rejected_share": 0.0264797507788162,
       "expected_rejection_share_by_chance": 0.05
     }
-  },
-  "var_recomputed": "2026-09-03T17:06:18.272875+00:00"
+  }
 }
