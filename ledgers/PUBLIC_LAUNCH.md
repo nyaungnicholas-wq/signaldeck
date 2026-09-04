@@ -36,6 +36,19 @@ and ANCHORED, and it did not need a deploy: filing before the worker has ever
 run is strictly stronger than filing after, because zero forecasts existed to
 predate it.
 
+DEPLOYED LOCALLY 2026-09-04 06:06Z at f3bbf8f via `ops/signaldeck-ctl.sh
+deploy`, which verified the running revision against the built commit. The
+local daemon had been 50 commits behind: the Windows task execs
+bin/signaldeckd.exe and a restart never rebuilds.
+
+THE FORWARD TEST HAS STARTED. First pass froze 562 forecasts over 2 horizons
+across 282 symbols, and the first row's created_ts (1788500274) is 78 minutes
+AFTER the seq 105 record (1788495583), so the registered start rule -- the
+first forecast frozen strictly after the record -- holds by construction.
+282 symbols/day is well clear of the registered 30-symbol floor.
+
+Oracle is still what the PUBLIC deployment waits on; this is the local fleet.
+
 ## Blocked on Nicholas
 - [ ] P2.1 Oracle Cloud Always Free account + Ampere A1 instance + SSH access.
       Claude cannot create accounts or enter card details.
