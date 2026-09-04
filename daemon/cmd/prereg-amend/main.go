@@ -44,18 +44,19 @@ func main() {
 		kind   = flag.String("kind", GradabilityKind,
 			"which record to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
 				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+", "+
-				ForwardTestKind+", "+BenchFloorKind+", "+PopFiltersKind+" or "+BookExtremeKind)
+				ForwardTestKind+", "+BenchFloorKind+", "+PopFiltersKind+", "+
+				BookExtremeKind+" or "+RVForecastKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
 		*kind != ProvenanceKind && *kind != DataIntegrityKind &&
 		*kind != DuplicateKind && *kind != ForwardTestKind &&
 		*kind != BenchFloorKind && *kind != PopFiltersKind &&
-		*kind != BookExtremeKind {
-		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s or %s)",
+		*kind != BookExtremeKind && *kind != RVForecastKind {
+		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
 			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind,
-			PopFiltersKind, BookExtremeKind)
+			PopFiltersKind, BookExtremeKind, RVForecastKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -132,6 +133,23 @@ func main() {
 				"the existing rows in their own record.", m.ObservedRows)
 		}
 		spec, note = forwardTestSpec(m), forwardTestNote
+
+	case RVForecastKind:
+		m, err := measureRVForecast(ctx, db)
+		if err != nil {
+			die("measure rv-forecast state: %v", err)
+		}
+		// The registration's entire value is that it predates its own evidence.
+		// If any forecast has already resolved, the horizons, nulls, losses and
+		// decision rule were written with outcomes visible, and no reader of an
+		// append-only log could tell that from a genuine registration.
+		if m.Resolved != 0 {
+			die("REFUSING to file: %d HAR volatility forecast(s) have already "+
+				"resolved. A forward test registered after its own results are "+
+				"readable is not a registration. Start a new test id, or explain "+
+				"the existing rows in their own record.", m.Resolved)
+		}
+		spec, note = rvForecastSpec(m), rvForecastNote
 
 	case PopFiltersKind:
 		m, err := measurePopFilters(ctx, db)

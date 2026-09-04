@@ -56,3 +56,16 @@ exists to avoid.
 | date | chain seq | entry hash | calendars |
 |---|---|---|---|
 | 2026-09-04 | 104 | `788ccec5c4c99451b5827a8132736ae55ac6d894fcd42566c9f67a233f8c1f4e` | 3 of 3 |
+| 2026-09-04 | 105 | `67a515d004eb8c25498115b84a348884ac774f07d1ac01040e169831727a5f8e` | 3 of 3 |
+
+Seq 105 is the HAR realized-variance forward test (`har-rv-2026-09`). It was
+filed BEFORE the forecasting worker had ever run, against a `rv_forecasts`
+table holding zero rows, so no forecast it grades can predate it -- and the
+registrar refuses to file at all once any forecast has resolved.
+
+That is why 105 is stamped separately rather than left to the 104 anchor. The
+104 proof establishes only that the chain reached 104 by that time; seq 105's
+`prev_hash` is 104's entry hash, which orders the two but puts no upper bound
+on when 105 was written. Anchoring 105 itself is what makes "registered before
+the data existed" checkable by someone who does not trust the operator, which
+is the entire claim a forward test rests on.
