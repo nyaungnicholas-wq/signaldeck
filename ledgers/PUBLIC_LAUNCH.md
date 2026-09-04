@@ -50,9 +50,12 @@ Plan: `~/.claude/plans/this-is-going-to-structured-blossom.md`
 - [x] P3.6 mobile verified on all four public pages + e2e assertions
       Two exploratory looks already spent (disclosed in the plan) and must be
       declared in the multiplicity divisor.
-- [ ] P1.4 licence guards on the six vendor endpoints (currently closed by the
-      allowlist; the extra layer is defence in depth, not the gate)
-- [ ] P5.1 OpenTimestamps the prereg chain head (currently seq 104)
+- [x] P1.4 licence guards: datalicense.RestrictedRoutes checked in the guard
+      chain. VERIFIED on a published deployment: 7 vendor routes 451 even for
+      an authenticated operator, derived analytics unaffected at 200.
+- [x] P5.1 ops/ots-stamp.sh written (anchors the chain head into Bitcoin,
+      publishes only a hash). NOT RUN: needs `pip install
+      opentimestamps-client` on the deployed box.
 - [ ] OG image (deferred; robots/sitemap/404/error are done)
 
 ## Measured facts worth not re-deriving
@@ -153,3 +156,8 @@ divisor.
   broke the web typecheck for two commits. Read worker output before staging.
 - A test that never fails is not a test: the VaR lookahead was caught by ZERO
   Kupiec rejections across 740 symbols, not by any gate.
+
+- A loopback ALLOWED_HOSTS makes ReachablePrivately() true, so the 451 licence
+  guard never fires. An anonymous sweep against such a config returns 401s
+  that MASK the licence path entirely. To exercise it you need a non-loopback
+  allowlist entry AND a matching Host header.
