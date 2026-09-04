@@ -99,6 +99,14 @@ test("a refused registry shows the refusal and no accuracy figures", async ({ pa
   // undefined. data-status was correct, the styling was absent, and a test
   // that only reads the attribute cannot tell those apart. The one state this
   // page exists to shout was the one state it whispered.
+  // WHICH refusal state this exercises depends on the daemon it runs against.
+  // An UNREACHABLE daemon yields REFUSED_STALE; a daemon serving a registry
+  // that is marked refused yields REFUSED. Both must be styled, and this
+  // asserts whichever one appears -- so a green run here does NOT prove the
+  // REFUSED path specifically was covered. That path is held by two other
+  // things: colorMap is Record<AccuracyStatus, string>, so omitting REFUSED
+  // now fails the BUILD, and the component falls back to the red tone for any
+  // status it does not recognise.
   const cls = (await banner.getAttribute("class")) ?? "";
   expect(cls, "the refusal banner rendered with no tone class").not.toContain("undefined");
   expect(cls, "the refusal banner is not styled as a refusal").toMatch(/border-red-/);
