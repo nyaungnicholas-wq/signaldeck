@@ -26,6 +26,14 @@ Plan: `~/.claude/plans/this-is-going-to-structured-blossom.md`
 - [x] P3.2 public IA via src/lib/publicRoutes.ts (one list, both gates)
 - [x] P3.4 waitlist: table, endpoint, validation, tests
 
+## EVERYTHING NOT BLOCKED IS DONE
+
+The only work left needs the Oracle box or Nicholas's explicit go-ahead:
+  - Phase 2 deployment, all of it
+  - FILING the pre-registration (one-way chain write; needs a deploy,
+    CountResolvedRV()==0, a dry run, and his say-so)
+  - running `ots stamp` (needs `pip install opentimestamps-client` on the box)
+
 ## Blocked on Nicholas
 - [ ] P2.1 Oracle Cloud Always Free account + Ampere A1 instance + SSH access.
       Claude cannot create accounts or enter card details.
@@ -56,7 +64,8 @@ Plan: `~/.claude/plans/this-is-going-to-structured-blossom.md`
 - [x] P5.1 ops/ots-stamp.sh written (anchors the chain head into Bitcoin,
       publishes only a hash). NOT RUN: needs `pip install
       opentimestamps-client` on the deployed box.
-- [ ] OG image (deferred; robots/sitemap/404/error are done)
+- [x] OG image (opengraph-image.tsx, verified by fetching it)
+- [x] Playwright run for the first time (public pages + refusal spec)
 
 ## Measured facts worth not re-deriving
 - DB 5.46 GB; bars 1d 2,708,273 rows / 2,947 symbols / 2018-07-26 onward.
