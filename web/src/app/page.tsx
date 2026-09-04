@@ -109,6 +109,11 @@ const CHECKS = [
     body: "Recompute the hash chain in your browser. If one stored prediction had been edited, the chain breaks and the page says so.",
   },
   {
+    href: "/volatility",
+    title: "The risk estimates",
+    body: "How volatile a stock is about to get, and the live record of how that estimate has actually scored against two simple rules.",
+  },
+  {
     href: "/glossary",
     title: "The terms",
     body: "Plain-English definitions for every statistical term used here, with no assumed background.",
@@ -180,6 +185,9 @@ export default async function Landing() {
             style={{ borderColor: "var(--accent)", color: "var(--accent)", padding: "0.6rem 1rem" }}
           >
             See the grades
+          </Link>
+          <Link href="/volatility" className="chip" style={{ padding: "0.6rem 1rem" }}>
+            The risk estimates
           </Link>
           <Link href="/proof" className="chip" style={{ padding: "0.6rem 1rem" }}>
             Verify the chain
@@ -313,7 +321,7 @@ export default async function Landing() {
       </Section>
 
       <Section eyebrow="Verification" title="How you can check all of this yourself">
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {CHECKS.map((c) => (
             <Link
               key={c.href}
