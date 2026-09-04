@@ -25,6 +25,15 @@ func baseCfg() config.Config {
 		WebOrigins:  []string{"http://app.example"},
 		OpenSignup:  true,
 		PublicReads: true,
+		// A LOOPBACK, UNPUBLISHED deployment, stated rather than left to the
+		// zero value. PublicReads:true above is the localhost default, so that
+		// is already what these tests mean -- but two guards now ask
+		// Cfg.ReachablePrivately() rather than trusting request headers (the
+		// 451 raw-export guard and the licence check in secureWith), and with
+		// an empty HTTPAddr that answers "published", which is not what a unit
+		// test against a temp store is.
+		HTTPAddr:     "127.0.0.1:8322",
+		AllowedHosts: []string{"127.0.0.1:8322", "localhost:8322"},
 	}
 }
 

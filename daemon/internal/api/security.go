@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
 )
 
 // maxBodyBytes caps every request body. The largest legitimate payload is a
@@ -123,7 +125,21 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 			return
 		}
 
-		// 7. Body-size cap on every request.
+		// 7. LICENCE. Defence in depth behind publicRoutes, for the route
+		// somebody adds next month and forgets to think about. Gated on
+		// ReachablePrivately() for the same reason rawDataRefused is: the
+		// operator's own unpublished box may read its own data, and a
+		// request-level test can only narrow a config-level answer, never
+		// supply one.
+		if !d.Cfg.AllowRawExport && !d.Cfg.ReachablePrivately() {
+			if src, ok, governed := datalicense.RouteRedistributable(r.URL.Path); governed && !ok {
+				httpErr(w, 451, datalicense.RawDataNotice()+
+					" (route governed by the "+src+" licence)")
+				return
+			}
+		}
+
+		// 8. Body-size cap on every request.
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 
 		next.ServeHTTP(w, r)
