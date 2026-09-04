@@ -40,9 +40,11 @@ Plan: `~/.claude/plans/this-is-going-to-structured-blossom.md`
 - [x] P4b internal/harvar: FHS VaR/ES + Kupiec + Christoffersen (18 tests)
 - [x] P4c tools/rv_forecast_backtest.py + cmd/rvcrosscheck
 - [x] P4e store tables + rv-forecast-runner + rv-outcome-runner + the record API
-- [ ] P4d PRE-REGISTER the live test. Workers are deployed and
-      CountResolvedRV() is the pre-flight: file only while it returns 0.
-- [ ] P4f the web page a non-expert reads
+- [x] P4d pre-registration WRITTEN and digest-pinned (internal/volprereg,
+      f44e22b2...f9e8). NOT FILED: filing is a one-way chain write needing a
+      deploy, CountResolvedRV()==0, a dry run and Nicholas's go-ahead.
+- [x] P4f /volatility -- the page a non-expert reads
+- [x] P4g adversarial checks (tools/rv_adversarial.py) -- all pass
 - [x] P1.7 container provenance (docker-build proof + ops/oracle-verify.sh)
 - [x] P3.5 404 / error boundary / robots / sitemap / OG-less polish
 - [x] P3.6 mobile verified on all four public pages + e2e assertions
@@ -132,3 +134,22 @@ STILL TRUE AND UNCHANGED BY ANY OF THIS: it is a BACKTEST, zero live
 forecasts have resolved, nothing is pre-registered, and the two exploratory
 looks spent before the harness existed must be charged to the multiplicity
 divisor.
+
+
+## Traps found the hard way on this branch (do not re-learn these)
+
+- A route can be shadowed by a legacy redirect in next.config.ts. /deck and
+  /risk were BOTH already redirected; pages there were unreachable. curl the
+  route, never assume it resolved.
+- lineage.RevisionStamp() is "" under `go test`, and the store refuses a row
+  it cannot attribute to a build. The workers take an injectable Rev.
+- NEXT_PUBLIC_* is inlined at BUILD time. Passing NEXT_PUBLIC_SITE_URL to
+  `next start` silently produced a sitemap full of localhost URLs that looked
+  entirely correct.
+- This Next version's error boundary takes `retry`, not `reset`. Typing the
+  props by hand meant tsc validated a contract the file invented and reported
+  nothing. web/AGENTS.md says to read node_modules/next/dist/docs/ first.
+- `git add -A` swept 657 lines of unreviewed worker output into a commit and
+  broke the web typecheck for two commits. Read worker output before staging.
+- A test that never fails is not a test: the VaR lookahead was caught by ZERO
+  Kupiec rejections across 740 symbols, not by any gate.
