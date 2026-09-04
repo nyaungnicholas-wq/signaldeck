@@ -28,11 +28,13 @@ Plan: `~/.claude/plans/this-is-going-to-structured-blossom.md`
 
 ## EVERYTHING NOT BLOCKED IS DONE
 
-The only work left needs the Oracle box or Nicholas's explicit go-ahead:
+The only work left needs the Oracle box:
   - Phase 2 deployment, all of it
-  - FILING the pre-registration (one-way chain write; needs a deploy,
-    CountResolvedRV()==0, a dry run, and his say-so)
-  - running `ots stamp` (needs `pip install opentimestamps-client` on the box)
+
+Both non-Oracle blockers are closed. The pre-registration is FILED (seq 105)
+and ANCHORED, and it did not need a deploy: filing before the worker has ever
+run is strictly stronger than filing after, because zero forecasts existed to
+predate it.
 
 ## Blocked on Nicholas
 - [ ] P2.1 Oracle Cloud Always Free account + Ampere A1 instance + SSH access.
@@ -48,9 +50,14 @@ The only work left needs the Oracle box or Nicholas's explicit go-ahead:
 - [x] P4b internal/harvar: FHS VaR/ES + Kupiec + Christoffersen (18 tests)
 - [x] P4c tools/rv_forecast_backtest.py + cmd/rvcrosscheck
 - [x] P4e store tables + rv-forecast-runner + rv-outcome-runner + the record API
-- [x] P4d pre-registration WRITTEN and digest-pinned (internal/volprereg,
-      f44e22b2...f9e8). NOT FILED: filing is a one-way chain write needing a
-      deploy, CountResolvedRV()==0, a dry run and Nicholas's go-ahead.
+- [x] P4d pre-registration written, digest-pinned (internal/volprereg,
+      f44e22b2...f9e8) and FILED as chain seq 105, entry
+      67a515d004eb8c25498115b84a348884ac774f07d1ac01040e169831727a5f8e,
+      prev 788ccec5...1f4e. Filed against an EMPTY rv_forecasts table:
+      0 resolved, 0 frozen, recorded in the row itself. The registrar refuses
+      to file at all once any forecast has resolved. Read-back confirms the
+      embedded specDigest still equals the frozen package digest, and seq 87
+      is untouched (G2).
 - [x] P4f /volatility -- the page a non-expert reads
 - [x] P4g adversarial checks (tools/rv_adversarial.py) -- all pass
 - [x] P1.7 container provenance (docker-build proof + ops/oracle-verify.sh)
@@ -61,9 +68,15 @@ The only work left needs the Oracle box or Nicholas's explicit go-ahead:
 - [x] P1.4 licence guards: datalicense.RestrictedRoutes checked in the guard
       chain. VERIFIED on a published deployment: 7 vendor routes 451 even for
       an authenticated operator, derived analytics unaffected at 200.
-- [x] P5.1 ops/ots-stamp.sh written (anchors the chain head into Bitcoin,
-      publishes only a hash). NOT RUN: needs `pip install
-      opentimestamps-client` on the deployed box.
+- [x] P5.1 OpenTimestamps RUN, twice: seq 104 and seq 105, each to 3 of 3
+      calendars, proofs in proofs/ots/. The `ots` CLI cannot start on Windows
+      (python-bitcoinlib needs OpenSSL 1.0 symbols), so tools/ots_stamp.py
+      uses the official serializer without that dependency. Each proof was
+      verified independently: deserialised, file digest compared to sha256 of
+      the head file, attestations counted. Bitcoin attestation PENDING for
+      both; `ots upgrade` on a Linux host once it confirms.
+      seq 105 is stamped separately on purpose -- the 104 anchor bounds when
+      the chain reached 104 and says nothing about when 105 was written.
 - [x] OG image (opengraph-image.tsx, verified by fetching it)
 - [x] Playwright run for the first time (public pages + refusal spec)
 
