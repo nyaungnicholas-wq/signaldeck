@@ -69,6 +69,20 @@ func (w *RVForecastRunner) rev() string {
 	return lineage.RevisionStamp()
 }
 
+// rvStoreRetries / rvStoreBackoff ride out the daemon's write bursts.
+//
+// The store opens with busy_timeout(5000), so a SQLITE_BUSY here means five
+// seconds of contention, not a missing pragma. On the first pass after the
+// 2026-09-04 deploy one lock on AAOI aborted the WHOLE pass and discarded
+// every remaining symbol. A lock is not a registered threshold: waiting
+// longer for one cannot change what gets graded, only whether it is written
+// down. Re-attempting is safe because UpsertRVForecast never overwrites a
+// resolved row, so a retry can only complete work or do nothing.
+const (
+	rvStoreRetries = 4
+	rvStoreBackoff = 250 * time.Millisecond
+)
+
 func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {
@@ -78,7 +92,7 @@ func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 	from := now.AddDate(0, 0, -rvLookbackDays).Unix()
 	rev := w.rev()
 
-	var wrote, thin, noFit, flat int
+	var wrote, thin, noFit, flat, locked int
 	for _, s := range syms {
 		// Stocks only. The estimator is a daily RANGE estimator validated on
 		// equity sessions; crypto trades continuously, so "the overnight gap"
@@ -117,12 +131,29 @@ func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 				flat++
 				continue
 			}
-			err := w.St.UpsertRVForecast(ctx, store.RVForecast{
+			rec := store.RVForecast{
 				SymbolID: s.ID, Ts: ts[t], Horizon: int(h),
 				RVHat: rvHat, NullRW: nullRW, NullEWMA: nullEW,
 				Beta0: fit.Beta0, BetaD: fit.BetaD, BetaW: fit.BetaW, BetaM: fit.BetaM,
 				ResidVar: fit.ResidVar, NTrain: fit.N, Revision: rev,
-			}, now)
+			}
+			err := w.St.UpsertRVForecast(ctx, rec, now)
+			for attempt := 1; attempt < rvStoreRetries && busy(err); attempt++ {
+				select {
+				case <-ctx.Done():
+					return "", ctx.Err()
+				case <-time.After(time.Duration(attempt) * rvStoreBackoff):
+				}
+				err = w.St.UpsertRVForecast(ctx, rec, now)
+			}
+			if busy(err) {
+				// Drop THIS forecast, never the pass. The registration counts
+				// a day only when 30+ symbols resolve on it, so abandoning
+				// every remaining symbol over one lock is exactly how a
+				// forward test never reaches its floor and never grades.
+				locked++
+				continue
+			}
 			if err != nil {
 				return "", fmt.Errorf("store %s h=%d: %w", s.Symbol, h, err)
 			}
@@ -132,8 +163,8 @@ func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 
 	detail := fmt.Sprintf(
 		"froze %d forecast(s) over %d horizon(s); %d symbol(s) below the %d-session floor, "+
-			"%d could not fit, %d had no usable regressor row",
-		wrote, len(RVHorizons), thin, harrv.MinHistory, noFit, flat)
+			"%d could not fit, %d had no usable regressor row, %d lost to a locked database",
+		wrote, len(RVHorizons), thin, harrv.MinHistory, noFit, flat, locked)
 	if wrote == 0 {
 		// Completed without delivering. ErrDegraded is the honest status: the
 		// run worked, the fleet is fine, and there was nothing to write.
