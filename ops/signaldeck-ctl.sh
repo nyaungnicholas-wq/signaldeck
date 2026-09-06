@@ -30,6 +30,7 @@ WEB="com.signaldeck.web"
 # market-open and market-close could not drive the daemon on this machine.
 # shellcheck source=lib-portable.sh
 . "$REPO/ops/lib-portable.sh"
+. "$REPO/ops/lib-deploy.sh"
 
 # API credential for this script's own calls.
 #
@@ -167,8 +168,7 @@ build_from_head() {
     sd_is_running signaldeckd && sd_kill_hard signaldeckd
     sleep 1
   fi
-  [ -f "$REPO/bin/signaldeckd$exe" ] && mv -f "$REPO/bin/signaldeckd$exe" "$REPO/bin/signaldeckd$exe.prev"
-  install -m 755 "$tmp/signaldeckd$exe" "$REPO/bin/signaldeckd$exe" || { rm -f "$lock"; rm -rf "$tmp"; return 1; }
+  sd_install_binary "$tmp/signaldeckd$exe" "$REPO/bin/signaldeckd$exe" || { rm -f "$lock"; rm -rf "$tmp"; return 1; }
   rm -f "$lock"
   rm -rf "$tmp"
   BUILT_REV="$rev"

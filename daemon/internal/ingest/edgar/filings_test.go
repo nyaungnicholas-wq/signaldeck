@@ -264,29 +264,28 @@ func TestSubmissions_ParsesRows(t *testing.T) {
 	if subs[1].Items != "2.02,9.01" {
 		t.Errorf("row1 items = %q", subs[1].Items)
 	}
+	c.mu.Lock()
+	firstSlot := c.last
+	c.mu.Unlock()
 
 	// A second call must be paced by the shared limiter (>=1 interval apart)
 	// and carry the descriptive UA required by SEC policy.
 	if _, err := c.Submissions(context.Background(), 320193); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
+	c.mu.Lock()
+	secondSlot := c.last
+	c.mu.Unlock()
 	mu.Lock()
 	defer mu.Unlock()
 	if len(times) != 2 {
 		t.Fatalf("requests = %d, want 2", len(times))
 	}
-	// Floor is two thirds of the interval, not interval-minus-a-few-ms. The
-	// times recorded here are SERVER arrivals, but pace() stamps c.last before
-	// the request is issued — so the first call's connection setup, plus
-	// goroutine scheduling delay under a parallel `go test ./...`, both land
-	// between the stamp and the socket write and compress the observed gap.
-	// This failed CI at 23.5ms against a 25ms floor while passing 5/5 in
-	// isolation. The assertion loses no power: an unpaced path arrives
-	// sub-millisecond apart, nowhere near 20ms, so the regression this exists
-	// to catch still fails it hard.
-	const floor = 30 * time.Millisecond * 2 / 3
-	if span := times[1].Sub(times[0]); span < floor {
-		t.Errorf("requests not spaced: %v (< %v; limiter must apply to submissions too)", span, floor)
+	// Assert the actual limiter reservations. Server arrivals can bunch up
+	// after connection setup or scheduler delays, even with correctly spaced
+	// reservations. A bypassed limiter leaves last unchanged and fails here.
+	if firstSlot.IsZero() || secondSlot.Sub(firstSlot) < c.MinInterval {
+		t.Errorf("submissions bypassed limiter: slots %v apart, want >= %v", secondSlot.Sub(firstSlot), c.MinInterval)
 	}
 	if !strings.Contains(strings.ToLower(ua), "signaldeck") {
 		t.Errorf("User-Agent not descriptive: %q", ua)
