@@ -39,7 +39,7 @@ func (s *Store) UpsertRVForecast(ctx context.Context, f RVForecast, now time.Tim
 	if f.RVHat <= 0 || f.Horizon < 1 || f.Revision == "" {
 		return errors.New("rv_forecasts: refusing an incomplete forecast row")
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO rv_forecasts
 		  (symbol_id, ts, horizon, rv_hat, null_rw, null_ewma,
 		   beta0, beta_d, beta_w, beta_m, resid_var, n_train, revision, created_ts)
@@ -57,7 +57,7 @@ func (s *Store) UpsertRVForecast(ctx context.Context, f RVForecast, now time.Tim
 
 // ResolveRVForecast records the realised outcome for a frozen forecast.
 func (s *Store) ResolveRVForecast(ctx context.Context, symbolID, ts int64, horizon int, actual float64, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		UPDATE rv_forecasts SET actual=?, resolved_ts=?
 		 WHERE symbol_id=? AND ts=? AND horizon=?
 		   AND actual IS NULL AND ungradable IS NULL`,
@@ -73,7 +73,7 @@ func (s *Store) MarkRVUngradable(ctx context.Context, symbolID, ts int64, horizo
 	if reason == "" {
 		return errors.New("rv_forecasts: ungradable requires a reason")
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := s.w.ExecContext(ctx, `
 		UPDATE rv_forecasts SET ungradable=?, resolved_ts=?
 		 WHERE symbol_id=? AND ts=? AND horizon=? AND actual IS NULL AND ungradable IS NULL`,
 		reason, now.Unix(), symbolID, ts, horizon)

@@ -31,6 +31,33 @@ func sampleForecast(symbolID, ts int64) RVForecast {
 	}
 }
 
+// Forecast writes must use the shared writer even while all reader slots are
+// occupied. Otherwise they compete with ingestion for SQLite's write lock.
+func TestRVWritesDoNotNeedReaderConnection(t *testing.T) {
+	st, sid := newRVStore(t)
+	st.db.SetMaxOpenConns(1)
+	reader, err := st.db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	now := time.Now()
+	if err := st.UpsertRVForecast(ctx, sampleForecast(sid, 1000), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ResolveRVForecast(ctx, sid, 1000, 1, 0.001, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertRVForecast(ctx, sampleForecast(sid, 2000), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkRVUngradable(ctx, sid, 2000, 1, "missing bars", now); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A forecast without both nulls frozen at call time is not gradable, and the
 // write path refuses it rather than trusting a reviewer to notice. A null
 // reconstructed after the outcome is known is hindsight -- this repository

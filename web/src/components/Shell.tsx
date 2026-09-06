@@ -428,10 +428,15 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-3 sm:p-4">
         <SkipLink />
-        <header className="panel px-4 py-3 sm:px-5">
+        <header className="panel flex items-center justify-between gap-3 px-4 py-3 sm:px-5">
           <Link href="/" className="inline-flex shrink-0 items-center">
             <Brand />
           </Link>
+          {pathname !== "/login" && (
+            <Link href="/dashboard" className="chip">
+              Open workspace
+            </Link>
+          )}
         </header>
         <main id="main" className="flex flex-1 flex-col gap-4">
           {children}
