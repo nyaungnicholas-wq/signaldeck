@@ -344,7 +344,9 @@ func (d Deps) requiresAuth(path string) bool {
 	// Known and accepted: verify may APPEND a signed anchor on a cadence (see
 	// maybeAnchor), so this is a public read with a bounded write side effect.
 	// The cadence gate, not the auth gate, is what limits it.
-	if path == "/api/track-record" || path == "/api/ledger/verify" {
+	// The public /volatility page also needs its aggregate evidence record
+	// when general reads are closed. No raw prices or personal data are served.
+	if path == "/api/track-record" || path == "/api/ledger/verify" || path == "/api/vol-forecast/record" {
 		return false
 	}
 	// The MCP endpoint authenticates itself, and strictly more tightly than
