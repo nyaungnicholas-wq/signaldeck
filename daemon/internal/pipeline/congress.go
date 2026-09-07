@@ -54,6 +54,10 @@ type CongressPoller struct {
 	Client *congress.Client // nil ⇒ no-op (shouldn't happen; congress needs no key)
 	// Now is a test hook; nil = time.Now.
 	Now func() time.Time
+	// KadoaFallback enables the Kadoa daily-JSON fallback when a mirror fetch
+	// fails (kadoa.go). Opt-in so unit tests with dead fake mirrors never reach
+	// the network; run.go sets it for the live fleet. 2026-09-07.
+	KadoaFallback bool
 
 	// deadRuns counts CONSECUTIVE runs where both mirrors were unreachable. It
 	// drives the circuit breaker in NextFire; a single success resets it. It is
@@ -151,7 +155,7 @@ func (w *CongressPoller) ingestChamber(ctx context.Context, chamber string,
 	} else {
 		trades, err = w.Client.FetchHouse(ctx)
 	}
-	if err != nil { // Stock Watcher mirrors are dead (403 since 2026): fall back to Kadoa's daily JSON (kadoa.go)
+	if err != nil && w.KadoaFallback { // Stock Watcher mirrors are dead (403 since 2026): fall back to Kadoa's daily JSON (kadoa.go)
 		if kad, kerr := w.Client.FetchKadoa(ctx, chamber); kerr == nil {
 			trades, err = kad, nil
 		} else {

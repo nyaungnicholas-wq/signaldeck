@@ -1142,7 +1142,7 @@ func congressWorkers(st *store.Store) []workers.Worker {
 	if u := os.Getenv("SIGNALDECK_HOUSE_TRADES_URL"); u != "" {
 		c.HouseURL = u
 	}
-	return []workers.Worker{&pipeline.CongressPoller{St: st, Client: c}}
+	return []workers.Worker{&pipeline.CongressPoller{St: st, Client: c, KadoaFallback: true}}
 }
 
 // ─────────────────────────────────────────────────────────────────────────
