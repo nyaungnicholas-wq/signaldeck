@@ -9,12 +9,12 @@ sd_offsite_env_from_dotenv() {
     local dotenv_path="$1" name line value
     if [[ ! -f "$dotenv_path" ]]; then
         printf 'offsite-env: %s absent\n' "$dotenv_path" >&2
-        for name in SIGNALDECK_OFFSITE_S3 SIGNALDECK_OFFSITE_DIR; do
+        for name in SIGNALDECK_OFFSITE_S3 SIGNALDECK_OFFSITE_DIR SIGNALDECK_OFFSITE_GH_REPO; do
             printf 'offsite-env: %s unset\n' "$name" >&2
         done
         return 0
     fi
-    for name in SIGNALDECK_OFFSITE_S3 SIGNALDECK_OFFSITE_DIR; do
+    for name in SIGNALDECK_OFFSITE_S3 SIGNALDECK_OFFSITE_DIR SIGNALDECK_OFFSITE_GH_REPO; do
         if [[ -n "${!name:-}" ]]; then
             printf 'offsite-env: %s from env\n' "$name" >&2
             continue

@@ -483,8 +483,16 @@ if [ -n "${SIGNALDECK_OFFSITE_S3:-}" ]; then
       sd_sqlite "$DB" "INSERT INTO dq_events(ts,kind,detail) VALUES($(date +%s),'backup_offsite_s3_failed','$S3_KEY: $S3_FAIL_REASON; no trustworthy off-machine copy for this run');" 2>>"$LOG"
     fi
   fi
+elif [ -n "${SIGNALDECK_OFFSITE_GH_REPO:-}" ]; then # GitHub release asset on the private repo (lib-offsite-gh.sh, 2026-09-07); counted only after the API reports the bytes back
+  . "$SD/ops/lib-offsite-gh.sh"; GH_REPO="$SIGNALDECK_OFFSITE_GH_REPO"; GH_TAG="backup-$TS"
+  if command -v gh >/dev/null 2>&1 && gh_offsite_upload_verified "$TARGET" "$GH_REPO" "$GH_TAG" "$DIR/.gh-$TS.db.gz"; then
+    sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_offsite','$(date +%s)');" 2>>"$LOG"; sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_offsite_dir','github:$GH_REPO');" 2>>"$LOG"
+    log "offsite OK: github $GH_REPO release $GH_TAG ($GH_VERIFIED_BYTES bytes verified by the release API)"; gh_offsite_prune "$GH_REPO" "${SIGNALDECK_OFFSITE_GH_KEEP:-7}" >>"$LOG" 2>&1
+  else
+    log "WARN: off-machine upload to github $GH_REPO ($GH_TAG) did not verify (${GH_FAIL_REASON:-gh CLI missing}) — backup_last_offsite NOT updated"; sd_sqlite "$DB" "INSERT INTO dq_events(ts,kind,detail) VALUES($(date +%s),'backup_offsite_gh_failed','github $GH_REPO $GH_TAG: ${GH_FAIL_REASON:-gh CLI missing}; no trustworthy off-machine copy for this run');" 2>>"$LOG"
+  fi
 elif [ -z "$OFFSITE" ]; then
-  log "offsite SKIPPED: no destination configured (set SIGNALDECK_OFFSITE_DIR to an external volume, or SIGNALDECK_OFFSITE_S3 to an s3:// URI)"
+  log "offsite SKIPPED: no destination configured (set SIGNALDECK_OFFSITE_DIR to an external volume, SIGNALDECK_OFFSITE_S3 to an s3:// URI, or SIGNALDECK_OFFSITE_GH_REPO to a private owner/repo)"
 elif mkdir -p "$OFFSITE" 2>/dev/null; then
   if sd_nosleep cp "$TARGET" "$OFFSITE/.tmp-$TS" 2>>"$LOG" && mv "$OFFSITE/.tmp-$TS" "$OFFSITE/$(basename "$TARGET")"; then
     COPY="$OFFSITE/$(basename "$TARGET")"

@@ -18,7 +18,10 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG="$SD/logs/restore-rehearsal.log"
 ENV_FILE="$SD/daemon/.env"
 
-"$SD/ops/restore-rehearsal.sh"
+# Drill the OFF-MACHINE copy when one is configured (GitHub release asset), so the
+# weekly rehearsal proves the copy that DR would actually use, not the local dir.
+. "$SD/ops/lib-offsite-env.sh" && sd_offsite_env_from_dotenv "$ENV_FILE"
+if [ -n "${SIGNALDECK_OFFSITE_GH_REPO:-}" ]; then "$SD/ops/restore-rehearsal.sh" --from-github; else "$SD/ops/restore-rehearsal.sh"; fi
 RC=$?
 [ "$RC" -eq 0 ] && exit 0
 
