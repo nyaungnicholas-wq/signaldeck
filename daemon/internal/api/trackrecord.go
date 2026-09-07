@@ -395,13 +395,18 @@ func (d Deps) paperSummaryForTrackRecord(ctx context.Context) map[string]any {
 	for i, p := range rawCurve {
 		curve[i] = papertrade.EquityPoint{Ts: p.Ts, Cash: p.Cash, PositionsValue: p.PositionsValue, Equity: p.Equity}
 	}
-	// Reuse the SAME round-trip reconstruction + summary the /api/paper handler
-	// uses, so the numbers here are identical to the /paper page (turnover in
-	// particular). This is the Stage-7 "turnover + capacity" surfacing.
-	closed, numFills, tradedNotional := reconstructRoundTrips(all)
-	sum := papertrade.Summarize(curve, closed, numFills, tradedNotional)
+	epochs, err := d.St.PaperEpochs(ctx, strategy)
+	if err != nil {
+		return map[string]any{"available": false, "note": "paper integrity information unavailable"}
+	}
+	clean := buildCleanPerformance(epochs, curve, all)
+	if !clean.Available {
+		return map[string]any{"available": false, "note": clean.Reason}
+	}
+	sum := clean.Summary
 	return map[string]any{
-		"available":   len(rawCurve) > 0,
+		"available":   true,
+		"note":        clean.Note,
 		"strategy":    strategy,
 		"totalReturn": sum.TotalReturn,
 		"maxDrawdown": sum.MaxDrawdown,

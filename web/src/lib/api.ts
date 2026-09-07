@@ -1530,6 +1530,7 @@ export interface TrackByMarket {
 
 /** Compact costed summary of the linked simulated paper book (turnover/capacity). */
 export interface TrackPaperSummary {
+  note?: string;
   available: boolean;
   strategy?: string;
   totalReturn?: number;

@@ -152,7 +152,7 @@ export default function ProofStrip() {
             </span>
           ) : (
             <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-              no fills yet
+              {paper?.note || "Paper performance unavailable"}
             </span>
           )}
         </div>
