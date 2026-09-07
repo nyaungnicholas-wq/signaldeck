@@ -267,7 +267,8 @@ case "${1:-status}" in
     # 6. ROWS, not just the process (CLAUDE.md pre-flight): wait for a worker_runs row stamped $rev.
     py="$REPO/.venv/Scripts/python.exe"; stamped=""
     for _ in $(seq 1 90); do
-      stamped="$("$py" -c "import sqlite3;print(sqlite3.connect('file:$REPO/data/signaldeck.db?mode=ro',uri=True).execute(\"select count(*) from worker_runs where revision=? and finished_at is not null\",('$rev',)).fetchone()[0])" 2>/dev/null)"
+      # Relative URI on purpose: the repo path holds a space, which a file: URI rejects (cwd is $REPO here).
+      stamped="$("$py" -c "import sqlite3;print(sqlite3.connect('file:data/signaldeck.db?mode=ro',uri=True).execute(\"select count(*) from worker_runs where revision=? and finished_at is not null\",('$rev',)).fetchone()[0])" 2>/dev/null)"
       [ "${stamped:-0}" -gt 0 ] 2>/dev/null && break; sleep 2
     done
     [ "${stamped:-0}" -gt 0 ] 2>/dev/null || { echo "deploy UNVERIFIED: no worker_runs row stamped $rev within 180s."; exit 1; }
