@@ -94,5 +94,11 @@ Evidence: 1h score voids are time-of-day censored (1.23M voids, 67% of terminal 
 - Web: command palette finds tracked crypto pairs (`lib/cryptoSearch.ts`) and routes to /s/crypto; /volatility SSR fetch is bounded (15s); watchlist load/add errors show the daemon's reason; the 1m chart empty state explains retention instead of promising a backfill.
 - A first attempt to exclude delisted names from ListSymbols(active) was REVERTED: TestDQAuditorSkipsDelistedButNotHeldOrGraded is a spec (held/unresolved delisted symbols must keep their feed alarm). The sediment is handled at the scorer and resolver instead.
 
+## Second-pass deployment (daemon 60b7afa)
+- Deployed via `ops/signaldeck-ctl.sh deploy` (VERIFIED, 6 stamped rows); both web instances (3000, 8323) restarted onto the new build through their tasks.
+- R26 VERIFIED end to end: `SIGNALDECK_LIVE_KADOA=1 go test ./internal/pipeline -run KadoaFallbackLive` runs the real poller with dead mirror URLs against a temp store and reports "congress: senate 918 new/938 fetched, house 677 new/679 fetched". The production poller fires daily at 09:00 ET (workers.DailyAtET) so the live congress_trades table fills at the next run; until then /intel/congress still shows the stored (empty) history.
+- Playwright after redeploy: 39 passed, 1 skipped, 2 failed on the first pass; `--last-failed` rerun: 1 passed, 1 skipped - the same post-restart flake pattern seen earlier, not a regression.
+- The Kadoa fallback is opt-in (`CongressPoller.KadoaFallback`), enabled in run.go; the fake-mirror unit tests (which must see DEGRADED) never reach the network.
+
 ## Verification commands
 daemon `go test ./...` (all packages ok, 2026-09-07), `npx tsc --noEmit` (exit 0), `npx playwright test` (to be re-run after build), `ops/signaldeck-ctl.sh deploy` (verifies /api/version and worker_runs.revision)
