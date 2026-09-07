@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -37,6 +38,10 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 	strategy := r.URL.Query().Get("strategy")
 	if strategy == "" {
 		strategy = defaultPaperStrategy
+	}
+	if !slices.Contains(paperStrategies, strategy) { // live books only; replay books are research artifacts
+		httpErr(w, 404, "unknown paper strategy "+strconv.Quote(strategy)+"; choose flagship-1d or flagship-1w")
+		return
 	}
 	tradeLimit := 100
 	if q := r.URL.Query().Get("trades"); q != "" {
@@ -209,6 +214,9 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		"fillFidelity": fidelity,
 		"verified":     fidelity.Verified,
 		"moneyCaption": paperMoneyCaption,
+		// PROCESS facts (paperprocess.go): is the simulator healthy and abstaining,
+		// or stalled? A flat curve alone cannot say (audit 2026-09-07).
+		"process": d.paperProcess(r.Context(), strategy, time.Now().Unix()),
 	}
 
 	// A statistic that would span the boundary is replaced by its refusal.

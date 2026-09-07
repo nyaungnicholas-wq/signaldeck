@@ -112,6 +112,15 @@ type Config struct {
 	// Empty = the webhook is disabled (fails closed).
 	TVWebhookSecret string
 
+	// LocalProxyKey lets the loopback-bound private web launcher
+	// (ops/start-local-workspace.ps1) assert that a request is local even though
+	// it arrives through the Next.js proxy. The proxy proves it by sending this
+	// key in X-Signaldeck-Local; the daemon honours it ONLY together with a
+	// loopback RemoteAddr. Empty = the assertion is disabled (fails closed).
+	// Replaces the old scheme of deleting X-Forwarded-For, which any process
+	// could copy onto a wildcard bind and turn into a redistribution hole.
+	LocalProxyKey string
+
 	// Multi-user + exposure controls.
 	OpenSignup     bool // SIGNALDECK_OPEN_SIGNUP (default true): allow POST /api/auth/register
 	AllowRawExport bool // SIGNALDECK_ALLOW_RAW_EXPORT (default false): serve raw licensed bars
@@ -241,6 +250,7 @@ func Load() Config {
 		AllowedHosts:    splitList(allowedHostsRaw),
 		APIToken:        os.Getenv("SIGNALDECK_API_TOKEN"),
 		TVWebhookSecret: pick("SIGNALDECK_TV_WEBHOOK_SECRET", ""),
+		LocalProxyKey:   pick("SIGNALDECK_LOCAL_PROXY_KEY", ""),
 		// SAFE BY DEFAULT (2026-07-25): open registration is a localhost
 		// convenience. On a reachable deployment it lets any stranger create an
 		// account and spend the LLM budget, so it follows the bind address for

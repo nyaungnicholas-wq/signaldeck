@@ -24,7 +24,7 @@ export default function WatchlistPage() {
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refetch = useCallback(() => {
-    api.watchlist().then(setWatchlist).catch((e) => setError(String(e)));
+    api.watchlist().then(setWatchlist).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
   useEffect(() => {
@@ -73,7 +73,12 @@ export default function WatchlistPage() {
   }, [watchlist]);
 
   const removeHandler = (symbol: string, market: "crypto" | "stocks") => {
-    api.unsubscribe(symbol, market).catch(() => {});
+    // A failed removal must not stay silent while the row is already gone from
+    // the optimistic list: say so and reload, so the row visibly comes back.
+    api.unsubscribe(symbol, market).catch((e: unknown) => {
+      setError(`Could not remove ${symbol}: ${e instanceof Error ? e.message : String(e)}`);
+      refetch();
+    });
   };
 
   return (

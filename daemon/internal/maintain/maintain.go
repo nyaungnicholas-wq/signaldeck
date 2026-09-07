@@ -126,6 +126,9 @@ func (d *Downsampler) Run(ctx context.Context) (string, error) {
 	// (Daily itself is never pruned; store.PruneBars refuses tf=1d.)
 	cutoff1h := (now.Add(-keep1h).Unix() / 86400) * 86400
 	for _, s := range syms {
+		if s.Market != md.Crypto { // stocks: official daily bars are ET-midnight stamped; a UTC-bucket rollup would add a 2nd row per session
+			continue
+		}
 		n, minTs, _, err := d.St.BarCount(ctx, s.ID, md.TF1h)
 		if err != nil {
 			return "", err
@@ -454,6 +457,11 @@ func horizonSeconds(h md.Horizon) int64 {
 	}
 }
 
+// resolverDSTSlackSecs mirrors pipeline.dstStampSlackSecs for daily-bar
+// horizons: US daily bars are stamped at ET midnight, which moves by an hour
+// across a DST change, so a fixed horizon from the base stamp can overshoot.
+const resolverDSTSlackSecs = int64(6 * 3600)
+
 func horizonTF(h md.Horizon) md.Timeframe {
 	if h == md.H1h {
 		return md.TF1m
@@ -491,7 +499,14 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 				continue
 			}
 			// Anchor the window to the base bar, not to a UTC-midnight guess.
+			// Daily bars carry the same 6h DST stamp slack the prediction
+			// resolver uses (pipeline.dstStampSlackSecs): an EST-stamped base
+			// (05:00Z) plus a fixed +7d overshoots the EDT-stamped bar (04:00Z)
+			// by 1h and grades an 8-session move as one week.
 			target := base.Ts + horizonSeconds(h)
+			if tf == md.TF1d {
+				target -= resolverDSTSlackSecs
+			}
 			if now < target {
 				waiting++
 				continue
@@ -499,6 +514,18 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 			fwd, okFwd, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, target)
 			if err != nil {
 				return "", err
+			}
+			// STALE BASE (audit 2026-09-07): the score was struck against a bar
+			// whose window closed more than 3 horizons before the score itself
+			// and nothing ever printed after it. That row can never resolve;
+			// parking it 30 days let EA/MVO sediment fill the whole 1,500-row
+			// fetch and starve ~1M live rows behind it (waiting pinned at 3644).
+			if !okFwd && p.Ts-target > 3*horizonSeconds(h) {
+				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
+					return "", err
+				}
+				voided++
+				continue
 			}
 			switch {
 			case okFwd && base.Close > 0:

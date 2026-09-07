@@ -193,7 +193,7 @@ export default function TrackRecordPage() {
       {err && !current && (
         <ErrorState
           message={err}
-          hint="Is the daemon running? Start signaldeckd and this page will pick it up."
+          hint="If you were signed out, sign in again. If the daemon (:8322) is not running, start signaldeckd and this page will pick it up."
           retry={() => {
             setErr(null);
             setRetryTick((t) => t + 1);

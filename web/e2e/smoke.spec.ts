@@ -132,8 +132,11 @@ test.describe("navigation (unauthenticated)", () => {
         // Gated route → the anonymous visitor is redirected to /login.
         await page.waitForURL("**/login", { timeout: 15000 });
       }
-      await expect(page).toHaveURL(/\/login$/);
-      await expect(page.getByRole("heading", { name: "SIGN IN" })).toBeVisible();
+      // "/" is the PUBLIC landing page: it stays put and never redirects.
+      await expect(page).toHaveURL(gated || path === "/login" ? /\/login$/ : /\/$/);
+      if (gated || path === "/login") {
+        await expect(page.getByRole("heading", { name: "SIGN IN" })).toBeVisible();
+      }
       // The public login page exposes NO hub navigation — the whole point of
       // the private model is that anonymous users never see (or click) nav.
       await expect(page.locator("header nav")).toHaveCount(0);

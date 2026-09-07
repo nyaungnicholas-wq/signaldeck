@@ -47,6 +47,10 @@ try {
     if (-not (Test-Path (Split-Path -Parent $guardLog))) {
         New-Item -ItemType Directory -Force (Split-Path -Parent $guardLog) | Out-Null
     }
+    # Unbounded until 2026-09-07 (2 MB and growing every 5 min): keep the tail.
+    if ((Test-Path $guardLog) -and (Get-Item $guardLog).Length -gt 5MB) {
+        Get-Content $guardLog -Tail 2000 | Set-Content ($guardLog + '.tmp'); Move-Item -Force ($guardLog + '.tmp') $guardLog
+    }
     Start-Transcript -Path $guardLog -Append -ErrorAction Stop | Out-Null
     $transcribing = $true
 } catch {

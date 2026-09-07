@@ -967,7 +967,9 @@ func (d Deps) rawDataRefused(w http.ResponseWriter, r *http.Request) bool {
 	if d.Cfg.AllowRawExport || datalicense.BarsRedistributable() {
 		return false
 	}
-	if d.Cfg.ReachablePrivately() && requestIsLoopback(r) {
+	// localProxyAsserted (localproxy.go): the keyed private-launcher assertion,
+	// the only header-carrying request that may count as local.
+	if d.Cfg.ReachablePrivately() && (requestIsLoopback(r) || d.localProxyAsserted(r)) {
 		return false
 	}
 	httpErr(w, 451, datalicense.RawDataNotice())

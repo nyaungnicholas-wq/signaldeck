@@ -54,11 +54,14 @@ async function proxy(
     const value = req.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
-  // Set only by ops/start-local-workspace.ps1, which binds Next to 127.0.0.1.
-  // This dedicated local process is not a public forwarding hop. Keep the
-  // default proxy's forwarded identity intact on every other deployment.
-  if (process.env.SIGNALDECK_LOCAL_ONLY_PROXY === "1") {
-    headers.delete("x-forwarded-for");
+  // Private local workspace (ops/start-local-workspace.ps1, bound to 127.0.0.1):
+  // present the shared key so the daemon can grant loopback-only raw data.
+  // The daemon honours it only from a loopback socket, an unset key matches
+  // nothing, and x-signaldeck-local is NOT in REQUEST_HEADERS so a client copy
+  // never passes through. x-forwarded-for stays intact: deleting it (the old
+  // scheme) made the exception copy-pasteable onto a wildcard bind.
+  if (process.env.SIGNALDECK_LOCAL_ONLY_PROXY === "1" && process.env.SIGNALDECK_LOCAL_PROXY_KEY) {
+    headers.set("x-signaldeck-local", process.env.SIGNALDECK_LOCAL_PROXY_KEY);
   }
   // Deliberately do NOT attach SIGNALDECK_API_TOKEN here. The daemon's
   // resolveUser() checks the session cookie first and falls back to the bearer

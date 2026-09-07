@@ -733,6 +733,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	n, featErrs, staleCals, noLegs, gatedRows := 0, 0, 0, 0, 0
 	// This pass's emitted probabilities per horizon, published or withheld.
 	runProbs := map[md.Horizon][]float64{}
+	formingTrimmed, trimmed := 0, false
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
@@ -741,6 +742,10 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		daily, minute, err := loadBars(ctx, w.St, s.ID)
 		if err != nil {
 			return "", err
+		}
+		// SETTLED ONLY (settledbase.go): never build features on the forming bar.
+		if daily, trimmed = trimFormingDaily(s.Market, daily, ts); trimmed {
+			formingTrimmed++
 		}
 		states := expectancy.CurrentStateKeys(daily, minute)
 		forecasts, err := w.St.Forecasts(ctx, s.ID)
@@ -1022,17 +1027,8 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				// ONE evidence row per symbol per trading day. Consumers dedup
 				// to that unit regardless, so the rest would be pure volume —
 				// ~40,200 rows a day at 1d against a 363,355-row table.
-				day := md.TradingDay(ts)
-				if prev, seen := evidenceDay[h][s.ID]; !seen || prev < day {
-					comps, _ := json.Marshal(c)
-					if err := w.St.UpsertPrediction(ctx, store.Prediction{
-						SymbolID: s.ID, Horizon: h, Ts: ts,
-						RawProb: raw, CalProb: raw, NUsed: 0, Components: string(comps),
-						Weights: "{}", Basis: basis,
-					}); err != nil {
-						return "", err
-					}
-					evidenceDay[h][s.ID] = day
+				if err := w.writeEvidenceRow(ctx, evidenceDay, h, s.ID, ts, raw, c, basis); err != nil {
+					return "", err
 				}
 				// The 0.5 stored here is NOT calibrated and NOT a call. An empty
 				// blend returns 0.5 from WeightedProbability, and on the wire a
@@ -1079,6 +1075,11 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				// point; withholding the feature vector too would make the gate
 				// latch shut, since the trainers whose grades reopen the horizon
 				// read exactly this table.
+				// Denominator (2026-09-07): a withheld horizon still counts the symbol,
+				// otherwise the coverage monitor reported "0 of 42" for a 329-name universe.
+				if err := w.writeEvidenceRow(ctx, evidenceDay, h, s.ID, ts, raw, c, basis); err != nil {
+					return "", err
+				}
 				persistFeatures(cal)
 				gatedRows++
 				continue
@@ -1175,6 +1176,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		_ = w.St.SetMeta(ctx, "predict_universe_day", universeCursor)
 	}
 	detail := fmt.Sprintf("wrote %d predictions", n)
+	if formingTrimmed > 0 {
+		detail += fmt.Sprintf(" (%d symbol(s) scored on settled bars only — newest daily bar still forming)", formingTrimmed)
+	}
 	if featErrs > 0 {
 		detail += fmt.Sprintf(" (%d feature-vector write(s) failed — see dq)", featErrs)
 	}
@@ -1232,6 +1236,10 @@ func (w *PredictionResolver) Interval() time.Duration { return 10 * time.Minute 
 func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
 	resolved := 0
+	marketByID, err := symbolMarkets(ctx, w.St) // settled-bar rule is per market
+	if err != nil {
+		return "", err
+	}
 	for _, h := range predHorizons {
 		// The prequential-majority benchmark rows ("<horizon>#pm") resolve
 		// through the exact same path on the exact same horizon clock —
@@ -1243,7 +1251,9 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 				return "", err
 			}
 			for _, p := range pending {
-				base, okB, err := w.St.BarAtOrBefore(ctx, p.SymbolID, md.TF1d, p.Ts)
+				// settledbase.go: rows frozen after settledBaseSinceTs are graded from
+				// the newest bar that was SETTLED at decision time (2026-09-07).
+				base, okB, err := settledBase(ctx, w.St, marketByID[p.SymbolID], p.SymbolID, p.Ts)
 				if err != nil {
 					return "", err
 				}

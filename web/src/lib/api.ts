@@ -29,6 +29,12 @@ export function isLicenceRefusal(e: unknown): boolean {
   return e instanceof ApiError && e.status === 451;
 }
 
+/** 401 = no session. Test the STATUS: get()/post() replace "API 401: …" with the
+ *  daemon's own sentence, so every message-string 401 check was dead (2026-09-07). */
+export function isAuthError(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 401;
+}
+
 /** ONE user-facing wording for that refusal, shared by every chart surface.
  *  The daemon's own notice is written for an operator — it names the env var
  *  to flip — so it must not be shown to a reader; this is the reader's version.
@@ -317,7 +323,8 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   if (!res.ok) {
     if (res.status >= 500) recordFailure();
     const err = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(err?.error ?? `API ${res.status}`);
+    // ApiError, not Error: callers (login 429 countdown, auth checks) need the status.
+    throw new ApiError(res.status, err?.error ?? `API ${res.status}`);
   }
   recordSuccess();
   bustGetCache(); // a mutation just landed — force fresh reads next time
@@ -1347,6 +1354,8 @@ export interface PaperResponse {
   // The post-boundary record, rebased to an index. This is the only series that
   // may be shown as this strategy's performance.
   cleanPerformance: CleanPerformance;
+  /** PROCESS facts: is the simulator healthy-and-abstaining or stalled? (2026-09-07) */
+  process?: import("@/components/paper/SimulatorStatus").PaperProcess | null;
   integrityBoundary: {
     ts: number;
     utc: string;

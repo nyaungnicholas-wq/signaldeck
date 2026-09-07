@@ -80,11 +80,28 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 	// to do until at least one symbol has a daily bar.
 	var asof int64
 	marketByID := map[int64]md.Market{}
+	wallNow := time.Now().Unix()
 	for _, s := range syms {
 		marketByID[s.ID] = s.Market
 		ts, err := w.St.LatestBarTs(ctx, s.ID, md.TF1d)
 		if err != nil {
 			return "", err
+		}
+		// SETTLED ONLY (audit 2026-09-07). Ingestion writes the still-forming
+		// daily bar during the session, so the newest row's close is a live
+		// intraday price. Advancing the clock onto it marked equity, fired
+		// barrier exits and advanced the cursor on a "close" that had not
+		// happened yet. Fall back to the previous bar until the session settles;
+		// this also bounds a future-dated vendor bar, which can never be settled.
+		if ts > 0 && !md.DailyBarSettled(s.Market, ts, wallNow) {
+			prev, ok, err := w.St.BarAtOrBefore(ctx, s.ID, md.TF1d, ts-1)
+			if err != nil {
+				return "", err
+			}
+			ts = 0
+			if ok {
+				ts = prev.Ts
+			}
 		}
 		if ts > asof {
 			asof = ts

@@ -726,6 +726,11 @@ func (s *Store) ReaderClone(maxConns int) (*Store, error) {
 // Close closes the database. A ReaderClone closes only its own read pool — the
 // write connection belongs to the parent Store.
 func (s *Store) Close() error {
+	// Fold the WAL into the main file on a clean stop (shutdown docs promised
+	// this; until 2026-09-07 only the storage-governor checkpointed). Best-effort.
+	if !s.borrowedWriter {
+		_, _ = s.w.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	}
 	err := s.db.Close()
 	if s.borrowedWriter {
 		return err

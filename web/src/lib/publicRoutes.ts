@@ -22,6 +22,7 @@ export const PUBLIC_ROUTES = [
   // bookmarks, so a page there would be unreachable. Same trap as /deck.
   "/volatility", // the volatility estimates and their live record
   "/glossary", // plain-English terms; static, no daemon call
+  "/health", // reads the static ux-score.json + localStorage only; needs no session
   "/login",
 ] as const;
 

@@ -37,13 +37,18 @@ func (w *ForecastTrainer) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		daily, _ = trimFormingDaily(s.Market, daily, ts) // settled bars only (2026-09-07)
+		dataTs := ts                                     // row ts = data as-of, so a closed-market retrain never reads "just now"
+		if len(daily) > 0 {
+			dataTs = daily[len(daily)-1].Ts
+		}
 		for _, h := range []md.Horizon{md.H1d, md.H1w} {
 			f, ok := forecast.Run(daily, h)
 			if !ok {
 				continue // insufficient history; not an error
 			}
 			if err := w.St.UpsertForecast(ctx, store.Forecast{
-				SymbolID: s.ID, Horizon: h, Ts: ts,
+				SymbolID: s.ID, Horizon: h, Ts: dataTs,
 				Prob:     f.Prob,
 				Accuracy: f.Grade.Accuracy,
 				Brier:    f.Grade.BrierScore,

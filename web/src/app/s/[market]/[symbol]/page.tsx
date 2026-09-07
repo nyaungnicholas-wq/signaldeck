@@ -306,7 +306,7 @@ export default function SymbolPage({
       alive = false;
       stop();
     };
-  }, [symbol, market, tf, marketOk]);
+  }, [symbol, market, tf, marketOk, retryTick]);
 
   // Overlays: fetch once per symbol + a SLOW-tier background refresh. Failures
   // are silent (overlays are an enhancement; the chart renders without them).

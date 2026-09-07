@@ -17,6 +17,7 @@ import EmptyState from "@/components/EmptyState";
 import PagePurpose from "@/components/PagePurpose";
 import HelpTip from "@/components/HelpTip";
 import ProOnly from "@/components/ProOnly";
+import SimulatorStatus from "@/components/paper/SimulatorStatus";
 import { PageHero } from "@/components/ui/Kit";
 
 /** USD formatter for book values. */
@@ -354,6 +355,9 @@ export default function PaperPage() {
         <Skeleton lines={6} label="loading simulated book" />
       ) : (
         <>
+          {/* Process first: a flat curve cannot say whether the simulator is
+              abstaining (healthy) or stalled; this panel can. */}
+          <SimulatorStatus process={data.process} />
           {/* Equity curve. */}
           <section className="panel">
             <div className="panel-h">SIMULATED EQUITY CURVE</div>
@@ -362,7 +366,7 @@ export default function PaperPage() {
             ) : (
               <EmptyState
                 message="No equity marks yet."
-                detail="The book marks once per new daily bar. Give the paper-trader a few bars to act on the live predictions."
+                detail="The book marks once per new SETTLED daily bar. See SIMULATOR STATUS above: an abstaining simulator is healthy; a stalled one is not."
                 className="border-0"
               />
             )}

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { api, type Me } from "@/lib/api";
+import { api, isAuthError, type Me } from "@/lib/api";
 import FreshnessBadge from "@/components/FreshnessBadge";
 import OfflineBanner from "@/components/OfflineBanner";
 import CommandPalette, { CMDK_EVENT } from "@/components/CommandPalette";
@@ -262,7 +262,7 @@ function AuthChip() {
         if (!alive) return;
         // Only a 401 is "logged out" — a daemon outage must not flip the
         // chip into a login prompt (first load stays "unknown" instead).
-        if (e instanceof Error && e.message.startsWith("API 401")) setMe(null);
+        if (isAuthError(e)) setMe(null);
       });
     return () => {
       alive = false;

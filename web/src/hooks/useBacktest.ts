@@ -16,6 +16,7 @@ import {
   type BacktestResponse,
   type Market,
   type WatchRow,
+  isAuthError,
 } from "@/lib/api";
 
 /** A hard error is the daemon being unreachable; a soft error is a strategy the
@@ -107,7 +108,7 @@ export default function useBacktest(): BacktestState {
           const msg = e instanceof Error ? e.message : String(e);
           // Stage 5: signed out the watchlist 401s — fall back to the public
           // universe screener (top 24 by |1d score|) so the picker works.
-          if (msg.includes("401")) {
+          if (isAuthError(e)) {
             screenerRows()
               .then((all) => {
                 if (!alive) return;

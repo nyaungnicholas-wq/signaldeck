@@ -14,6 +14,7 @@ import {
   type Market,
   type ModelForecast,
   type WatchRow,
+  isAuthError,
 } from "@/lib/api";
 import { ago, fmtTs } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
@@ -115,7 +116,7 @@ export default function ForecastPage() {
         .catch((e: unknown) => {
           if (!alive) return;
           const msg = e instanceof Error ? e.message : String(e);
-          if (!msg.includes("401")) {
+          if (!isAuthError(e)) {
             setRowsErr(msg);
             return;
           }

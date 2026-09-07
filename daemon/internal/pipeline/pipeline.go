@@ -81,7 +81,7 @@ func (w *SignalRunner) Run(ctx context.Context) (string, error) {
 	// mean fresh scores, not duplicate rows).
 	doUniverse, universeCursor := universeDue(ctx, w.St, "signal_universe_day", time.Now())
 	ts := time.Now().Truncate(time.Minute).Unix()
-	scored, hotCount := 0, 0
+	scored, hotCount, staleSkipped := 0, 0, 0
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
@@ -93,6 +93,12 @@ func (w *SignalRunner) Run(ctx context.Context) (string, error) {
 		daily, minute, err := loadBars(ctx, w.St, s.ID)
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", s.Symbol, err)
+		}
+		// Dead/halted stock (newest daily bar >10d old): its scores can never
+		// resolve and head-of-line blocked the resolver (EA/MVO, 2026-09-07).
+		if s.Market != md.Crypto && (len(daily) == 0 || ts-daily[len(daily)-1].Ts > 10*86400) {
+			staleSkipped++
+			continue
 		}
 		micro := signals.MicroInputs{}
 		if s.Market == md.Crypto {
@@ -123,8 +129,12 @@ func (w *SignalRunner) Run(ctx context.Context) (string, error) {
 		// so a mid-run error simply retries next minute.
 		_ = w.St.SetMeta(ctx, "signal_universe_day", universeCursor)
 	}
-	return fmt.Sprintf("scored %d symbol-horizons (%d hot symbols%s)", scored, hotCount,
-		map[bool]string{true: " + daily universe", false: ""}[doUniverse]), nil
+	status := fmt.Sprintf("scored %d symbol-horizons (%d hot symbols%s)", scored, hotCount,
+		map[bool]string{true: " + daily universe", false: ""}[doUniverse])
+	if staleSkipped > 0 {
+		status += fmt.Sprintf("; skipped %d stock(s) with no daily bar in 10d", staleSkipped)
+	}
+	return status, nil
 }
 
 // ── ExpectancyRunner ────────────────────────────────────────────────────

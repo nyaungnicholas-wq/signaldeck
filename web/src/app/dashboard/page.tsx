@@ -47,7 +47,7 @@ import MoversMini from "@/components/home/MoversMini";
 import ProofStrip from "@/components/home/ProofStrip";
 
 export default function DashboardPage() {
-  const { dash, error, alerts, featured, refresh } = useDashboard();
+  const { dash, error, errorStatus, alerts, featured, refresh } = useDashboard();
   const goal = useGoal();
   const layout = layoutFor(goal);
 
@@ -271,7 +271,13 @@ export default function DashboardPage() {
       {dash === null && error && (
         <ErrorState
           message={error}
-          hint="The SignalDeck daemon looks offline — start signaldeckd (:8322) and this page will recover on its own. (If the daemon predates /api/dashboard, restart it on the current build.)"
+          hint={
+            errorStatus === 401
+              ? "Your session has ended — sign in again to load the deck."
+              : errorStatus >= 500 || errorStatus === 0
+                ? "The SignalDeck daemon looks offline — start signaldeckd (:8322) and this page will recover on its own."
+                : "The daemon answered but refused this request; retry, or check /lab/system for the fleet state."
+          }
           retry={refresh}
         />
       )}

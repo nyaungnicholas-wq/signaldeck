@@ -358,13 +358,22 @@ func (d Deps) freshestDataAge(ctx context.Context, now int64) (float64, bool, er
 	if err != nil {
 		return 0, false, err
 	}
-	var newest int64
+	// Per MARKET, then the stalest market wins. A cross-market max let crypto's
+	// nightly bar hide a dead stock feed for as long as any crypto symbol printed
+	// (reported 59,464s while the true stock age was 304,523s — 2026-09-07).
+	newestByMarket := map[md.Market]int64{}
 	for _, s := range syms {
 		ts, err := d.St.LatestBarTs(ctx, s.ID, md.TF1d)
 		if err != nil {
 			return 0, false, err
 		}
-		if ts > newest {
+		if ts > newestByMarket[s.Market] {
+			newestByMarket[s.Market] = ts
+		}
+	}
+	var newest int64
+	for _, ts := range newestByMarket {
+		if ts > 0 && (newest == 0 || ts < newest) {
 			newest = ts
 		}
 	}

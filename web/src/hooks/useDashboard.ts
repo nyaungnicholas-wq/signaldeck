@@ -18,12 +18,16 @@ import {
   type AlertRow,
   type DashboardResponse,
   type Market,
+  isAuthError,
+  ApiError,
 } from "@/lib/api";
 
 export interface DashboardState {
   dash: DashboardResponse | null;
   /** Last fetch error — with dash !== null it means "stale but retrying". */
   error: string | null;
+  /** HTTP status behind `error`; 401 = signed out, 0 = daemon never answered. */
+  errorStatus: number;
   /** Session-scoped unread alerts; null while loading or logged out. */
   alerts: AlertRow[] | null;
   /** Featured chart symbol — locked in once so polls never yank the chart. */
@@ -36,6 +40,9 @@ export interface DashboardState {
 export default function useDashboard(): DashboardState {
   const [dash, setDash] = useState<DashboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** HTTP status behind `error` (0 = never reached the daemon). Lets the page
+   *  tell "signed out" (401) from "daemon down" instead of guessing. */
+  const [errorStatus, setErrorStatus] = useState(0);
   const [tick, setTick] = useState(0);
   const [alerts, setAlerts] = useState<AlertRow[] | null>(null);
   const [featured, setFeatured] = useState<{ symbol: string; market: Market } | null>(null);
@@ -53,6 +60,7 @@ export default function useDashboard(): DashboardState {
         .catch((e: unknown) => {
           if (!alive) return;
           setError(e instanceof Error ? e.message : String(e));
+          setErrorStatus(e instanceof ApiError ? e.status : 0);
         });
     load();
     const stop = pollMs(load, POLL_DEFAULT);
@@ -93,7 +101,7 @@ export default function useDashboard(): DashboardState {
           if (!alive) return;
           // Only a 401 means the session is gone; transient/network errors
           // keep the last-known alerts — the freshness UI surfaces outages.
-          if (e instanceof Error && e.message.startsWith("API 401")) setAlerts(null);
+          if (isAuthError(e)) setAlerts(null);
         });
     load();
     const stop = pollMs(load, POLL_DEFAULT);
@@ -106,6 +114,7 @@ export default function useDashboard(): DashboardState {
   return {
     dash,
     error,
+    errorStatus,
     alerts,
     featured,
     loggedIn,
