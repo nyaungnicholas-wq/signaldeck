@@ -102,6 +102,13 @@ var paperEpochSchedule = []store.PaperEpoch{
 			"unreachable. Different strategy, same book: cash and open positions carried " +
 			"across this boundary unchanged.",
 	},
+	{
+		Epoch: 4, FromTs: 1788742606, Label: "causal-execution-fixed",
+		Reason: "INTEGRITY BOUNDARY: deployed 2026-09-07T00:56:46Z. Earlier open-price fills " +
+			"used the fill day's high/low for impact and its close/volume in ADV, inputs " +
+			"unavailable at the open. Corrected fills use completed prior bars. Historical " +
+			"trades remain unchanged; earlier returns are not a record of the corrected simulator.",
+	},
 }
 
 // PaperEpochSchedule exposes the schedule so `sdmaint paper-epochs` can apply

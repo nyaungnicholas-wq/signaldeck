@@ -128,6 +128,13 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 	}
 	boundary := integrityBoundary(epochRows)
 	spans := SpansIntegrityBoundary(curve, boundary)
+	// A wholly historical window is also ineligible for the corrected simulator.
+	for _, mark := range curve {
+		if boundary > 0 && mark.Ts < boundary {
+			spans = true
+			break
+		}
+	}
 	clean := buildCleanPerformance(epochRows, curve, all)
 
 	// FILL FIDELITY: re-derive every logged fill from the bar it names, on every

@@ -36,9 +36,8 @@ import (
 )
 
 // integrityEpochLabel marks the epoch whose START is a data-integrity boundary
-// rather than a strategy change. Matching on the label keeps this in one place:
-// a future integrity boundary is declared by reusing it (see
-// pipeline/paperepoch.go), not by editing this file.
+// rather than a strategy change. integrityBoundary also recognizes subsequent
+// fixes and chooses the latest timestamp, independent of input order.
 const integrityEpochLabel = "backdated-fills-fixed"
 
 // CleanIndexBase is the value the clean series is rebased to at its first mark.
@@ -50,7 +49,7 @@ const CleanIndexBase = 100.0
 // cleanPerformanceNote ships with the block.
 const cleanPerformanceNote = "CLEAN PERFORMANCE is the post-integrity-boundary window ONLY, rebased to an index of " +
 	"100 at its first mark. It is rebased rather than started from the carried-over equity because that level still " +
-	"contains the back-dated P&L this boundary exists to exclude. `equity` elsewhere in this payload is the ACCOUNTING " +
+	"contains results from earlier simulator defects. `equity` elsewhere in this payload is the ACCOUNTING " +
 	"level of the simulated book across all time, including the contaminated period: it is what the account is worth, " +
 	"not what the strategy earned."
 
@@ -90,12 +89,13 @@ type RefusedStat struct {
 // integrityBoundary returns the ts of the declared integrity boundary for a
 // strategy, or 0 when none is declared.
 func integrityBoundary(epochs []store.PaperEpoch) int64 {
+	var latest int64
 	for _, e := range epochs {
-		if e.Label == integrityEpochLabel {
-			return e.FromTs
+		if (e.Label == integrityEpochLabel || e.Label == "causal-execution-fixed") && e.FromTs > latest {
+			latest = e.FromTs
 		}
 	}
-	return 0
+	return latest
 }
 
 // SpansIntegrityBoundary reports whether a window of equity marks straddles the
@@ -125,10 +125,9 @@ func refuseAcrossBoundary(boundary int64) RefusedStat {
 		Refused:     true,
 		BoundaryTs:  boundary,
 		BoundaryUTC: time.Unix(boundary, 0).UTC().Format(time.RFC3339),
-		Reason: "this statistic would span the data-integrity boundary. Before it, 46 of 123 fills were " +
-			"back-dated by up to 22 days and booked the intervening move as one step's P&L. A return, Sharpe, " +
-			"drawdown or win rate computed across that instant is derived partly from moves that never happened, " +
-			"so it is refused rather than published with a caveat.",
+		Reason: "this statistic includes history before the latest simulator integrity fix. " +
+			"Earlier results include back-dated fills or execution costs estimated from information " +
+			"unavailable at the fill's open. They cannot establish performance of the corrected simulator.",
 		UseInstead: "cleanPerformance (post-boundary, rebased) for the strategy's record, or epochs[] for any single epoch",
 	}
 }

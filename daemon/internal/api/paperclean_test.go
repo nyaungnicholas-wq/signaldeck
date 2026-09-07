@@ -170,3 +170,11 @@ func TestPaperClean_EmptyAndMissingEpochs(t *testing.T) {
 			"clean window, it is reported separately", got.Marks)
 	}
 }
+
+func TestPaperCleanUsesLatestIntegrityFix(t *testing.T) {
+	eps := append(testEpochs(), store.PaperEpoch{Epoch: 4, FromTs: testBoundary + 100*86400, Label: "causal-execution-fixed"})
+	got := buildCleanPerformance(eps, curveAround(5, 20), nil)
+	if got.Available || got.BoundaryTs != testBoundary+100*86400 {
+		t.Fatalf("old execution history reported as clean: %+v", got)
+	}
+}
