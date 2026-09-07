@@ -39,7 +39,14 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 	if strategy == "" {
 		strategy = defaultPaperStrategy
 	}
-	if !slices.Contains(paperStrategies, strategy) { // live books only; replay books are research artifacts
+	manual := strategy == "manual" // the caller's own manual book (paperorder.go); never another user's
+	if manual {
+		if userID(r) == 0 {
+			httpErr(w, 401, "sign in to view your manual paper book")
+			return
+		}
+		strategy = manualPaperStrategy(userID(r))
+	} else if !slices.Contains(paperStrategies, strategy) { // live books only; replay books are research artifacts
 		httpErr(w, 404, "unknown paper strategy "+strconv.Quote(strategy)+"; choose flagship-1d or flagship-1w")
 		return
 	}
@@ -154,7 +161,11 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 	// `bars` is written INSERT OR REPLACE, so a provider revision rewrites the
 	// reference a past fill priced off and nothing notices. This is the check
 	// that notices.
-	fidelity := d.checkPaperFills(r.Context(), all)
+	fidelityTF := md.TF1d
+	if manual {
+		fidelityTF = md.TF1m // manual fills quote the newest 1m bar; auditable only inside 1m retention
+	}
+	fidelity := d.checkPaperFills(r.Context(), all, fidelityTF)
 
 	// MONEY SCOREBOARD: score the closed round-trips by EXPECTED PROFIT
 	// (expectancy / profit factor / payoff), the numbers that actually decide
@@ -171,7 +182,8 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 
 	payload := map[string]any{
 		"strategy":   strategy,
-		"strategies": paperStrategies,
+		"strategies": append(append([]string{}, paperStrategies...), "manual"),
+		"manual":     manual, // the caller's own market-order book (POST /api/paper/order)
 		// Honesty framing: this is a self-contained simulation, not a live account.
 		"live":       false,
 		"label":      "simulated paper trading — not live money, not advice",
@@ -253,7 +265,7 @@ const maxFidelityChecks = 500
 //
 // Only the most recent maxFidelityChecks fills are checked; the returned counts
 // describe exactly that window, never the whole log by implication.
-func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade) papertrade.Fidelity {
+func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade, tf md.Timeframe) papertrade.Fidelity {
 	from := 0
 	if len(all) > maxFidelityChecks {
 		from = len(all) - maxFidelityChecks
@@ -270,7 +282,7 @@ func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade) paper
 		// report then blamed "no stored bar at all" for what was an outage, and
 		// an operator reading it went hunting a data gap that did not exist.
 		// "We could not look" is not "we looked and found nothing".
-		bar, ok, err := d.St.BarAtOrBefore(ctx, t.SymbolID, md.TF1d, t.Ts)
+		bar, ok, err := d.St.BarAtOrBefore(ctx, t.SymbolID, tf, t.Ts)
 		switch {
 		case err != nil:
 			p.Unchecked = true

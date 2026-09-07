@@ -558,6 +558,10 @@ export const api = {
     }),
   portfolioClose: (id: number, symbol: string, market: Market) =>
     post<{ closed: number; exitPrice: number }>("/api/portfolio/close", { id, symbol, market }),
+  /** Manual simulated paper book: a market order filled against the newest 1m bar
+   *  with the same cost model as the flagship books (2026-09-07). */
+  paperOrder: (symbol: string, market: Market, side: "buy" | "sell", qty: number) =>
+    post<PaperOrderResult>("/api/paper/order", { symbol, market, side, qty }),
 
   // ── AI agents ──
   aiStatus: () => get<AIStatus>("/api/ai/status"),
@@ -1324,6 +1328,21 @@ export interface Money {
 }
 
 /** The full /api/paper payload for one simulated strategy. */
+/** POST /api/paper/order result (manual simulated book). */
+export interface PaperOrderResult {
+  ok: boolean;
+  strategy: string;
+  symbol: string;
+  market: Market;
+  // papertrade.Fill has no json tags: Go field names come through as-is.
+  fill: { Side: string; Qty: number; Px: number; Cost: number; CashDelta: number; Reason: string; Capped: boolean; UnfilledNotional: number };
+  quoteBarTs: number;
+  quoteAgeS: number;
+  cash: number;
+  equity: number;
+  label: string;
+}
+
 export interface PaperResponse {
   strategy: string;
   strategies: string[];
@@ -1356,6 +1375,8 @@ export interface PaperResponse {
   cleanPerformance: CleanPerformance;
   /** PROCESS facts: is the simulator healthy-and-abstaining or stalled? (2026-09-07) */
   process?: import("@/components/paper/SimulatorStatus").PaperProcess | null;
+  /** true when this payload is the caller's own manual market-order book. */
+  manual?: boolean;
   integrityBoundary: {
     ts: number;
     utc: string;

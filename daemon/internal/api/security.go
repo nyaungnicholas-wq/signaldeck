@@ -368,6 +368,7 @@ func (d Deps) requiresAuth(path string) bool {
 		path == "/api/subscribe",
 		path == "/api/unsubscribe",
 		strings.HasPrefix(path, "/api/portfolio"),
+		path == "/api/paper/order", // manual simulated book is per-user; never anonymous even under PublicReads
 		strings.HasPrefix(path, "/api/alerts"),
 		// discovery wave (appended): candidate mutations are session-scoped.
 		path == "/api/candidates/add",

@@ -15,67 +15,67 @@ import (
 func TestLocalProxyAssertedRequiresKeyHeaderAndLoopback(t *testing.T) {
 	key := "test-local-key"
 	tests := []struct {
-		name          string
-		cfg           config.Config
-		remoteAddr    string
-		setHeader     bool // whether to set X-Signaldeck-Local header
-		headerValue   string
-		setXFF        bool // whether to set X-Forwarded-For header
-		expected      bool
+		name        string
+		cfg         config.Config
+		remoteAddr  string
+		setHeader   bool // whether to set X-Signaldeck-Local header
+		headerValue string
+		setXFF      bool // whether to set X-Forwarded-For header
+		expected    bool
 	}{
 		{
-			name:      "key header present, loopback IPv4, X-Forwarded-For present",
-			cfg:       config.Config{LocalProxyKey: key},
-			remoteAddr: "127.0.0.1:5000",
-			setHeader:  true,
+			name:        "key header present, loopback IPv4, X-Forwarded-For present",
+			cfg:         config.Config{LocalProxyKey: key},
+			remoteAddr:  "127.0.0.1:5000",
+			setHeader:   true,
 			headerValue: key,
-			setXFF:     true,
-			expected:   true,
+			setXFF:      true,
+			expected:    true,
 		},
 		{
-			name:      "key header present, loopback IPv6",
-			cfg:       config.Config{LocalProxyKey: key},
-			remoteAddr: "[::1]:5000",
-			setHeader:  true,
+			name:        "key header present, loopback IPv6",
+			cfg:         config.Config{LocalProxyKey: key},
+			remoteAddr:  "[::1]:5000",
+			setHeader:   true,
 			headerValue: key,
-			setXFF:     false,
-			expected:   true,
+			setXFF:      false,
+			expected:    true,
 		},
 		{
-			name:      "key header present, non-loopback remote",
-			cfg:       config.Config{LocalProxyKey: key},
-			remoteAddr: "10.0.0.5:5000",
-			setHeader:  true,
+			name:        "key header present, non-loopback remote",
+			cfg:         config.Config{LocalProxyKey: key},
+			remoteAddr:  "10.0.0.5:5000",
+			setHeader:   true,
 			headerValue: key,
-			setXFF:     false,
-			expected:   false,
+			setXFF:      false,
+			expected:    false,
 		},
 		{
-			name:      "wrong header value, loopback remote",
-			cfg:       config.Config{LocalProxyKey: key},
-			remoteAddr: "127.0.0.1:5000",
-			setHeader:  true,
+			name:        "wrong header value, loopback remote",
+			cfg:         config.Config{LocalProxyKey: key},
+			remoteAddr:  "127.0.0.1:5000",
+			setHeader:   true,
 			headerValue: "nope",
-			setXFF:     false,
-			expected:   false,
+			setXFF:      false,
+			expected:    false,
 		},
 		{
-			name:      "header absent, loopback remote",
-			cfg:       config.Config{LocalProxyKey: key},
-			remoteAddr: "127.0.0.1:5000",
-			setHeader:  false,
+			name:        "header absent, loopback remote",
+			cfg:         config.Config{LocalProxyKey: key},
+			remoteAddr:  "127.0.0.1:5000",
+			setHeader:   false,
 			headerValue: "",
-			setXFF:     false,
-			expected:   false,
+			setXFF:      false,
+			expected:    false,
 		},
 		{
-			name:      "empty configured key never matches empty header",
-			cfg:       config.Config{LocalProxyKey: ""},
-			remoteAddr: "127.0.0.1:5000",
-			setHeader:  false,
+			name:        "empty configured key never matches empty header",
+			cfg:         config.Config{LocalProxyKey: ""},
+			remoteAddr:  "127.0.0.1:5000",
+			setHeader:   false,
 			headerValue: "",
-			setXFF:     false,
-			expected:   false,
+			setXFF:      false,
+			expected:    false,
 		},
 	}
 	for _, tt := range tests {

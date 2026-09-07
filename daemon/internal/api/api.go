@@ -91,6 +91,7 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
 	mux.HandleFunc("GET /api/symbol", d.symbolDetail)
 	mux.HandleFunc("GET /api/bars", d.bars)
+	mux.HandleFunc("POST /api/paper/order", d.paperOrder) // manual simulated book (paperorder.go)
 	mux.HandleFunc("GET /api/scores/history", d.scoreHistory)
 	mux.HandleFunc("GET /api/screener", d.screener) // all symbols; UI filters
 	mux.HandleFunc("GET /api/trends", d.trends)
