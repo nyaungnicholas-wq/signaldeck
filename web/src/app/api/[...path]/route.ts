@@ -54,6 +54,12 @@ async function proxy(
     const value = req.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
+  // Set only by ops/start-local-workspace.ps1, which binds Next to 127.0.0.1.
+  // This dedicated local process is not a public forwarding hop. Keep the
+  // default proxy's forwarded identity intact on every other deployment.
+  if (process.env.SIGNALDECK_LOCAL_ONLY_PROXY === "1") {
+    headers.delete("x-forwarded-for");
+  }
   // Deliberately do NOT attach SIGNALDECK_API_TOKEN here. The daemon's
   // resolveUser() checks the session cookie first and falls back to the bearer
   // token, which maps to the ADMIN user. Attaching the bearer unconditionally
