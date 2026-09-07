@@ -151,6 +151,13 @@ func (w *CongressPoller) ingestChamber(ctx context.Context, chamber string,
 	} else {
 		trades, err = w.Client.FetchHouse(ctx)
 	}
+	if err != nil { // Stock Watcher mirrors are dead (403 since 2026): fall back to Kadoa's daily JSON (kadoa.go)
+		if kad, kerr := w.Client.FetchKadoa(ctx, chamber); kerr == nil {
+			trades, err = kad, nil
+		} else {
+			err = fmt.Errorf("%v; kadoa fallback: %v", err, kerr)
+		}
+	}
 	if err != nil {
 		// The free mirrors have been dead since 2026-07 (DNS gone, S3 403) and
 		// the poller runs on a schedule that produced ~56 identical dq events a

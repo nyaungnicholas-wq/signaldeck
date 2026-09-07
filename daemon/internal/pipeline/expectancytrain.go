@@ -116,6 +116,7 @@ func (w *ExpectancyTrainer) Run(ctx context.Context) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("expectancy bars %s: %w", s.Symbol, err)
 			}
+			bars, _ = trimFormingDaily(s.Market, bars, time.Now().Unix()) // never label against a forming close (2026-09-07)
 			vals, ups := labelFromBars(tss, raw, bars, horizonSecs(h))
 			sp := symbolPairs{id: s.ID, vals: vals, ups: ups}
 			if len(vals) >= expectancyMinPairs {

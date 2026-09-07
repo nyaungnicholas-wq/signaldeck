@@ -25,22 +25,29 @@ const (
 )
 
 // loadBars fetches the standard windows for one symbol.
-func loadBars(ctx context.Context, st *store.Store, id int64) (daily, minute []md.Bar, err error) {
+// SETTLED ONLY (settledbase.go, 2026-09-07): the forming daily bar is dropped here,
+// so every scorer sharing this choke point sees the same decision-time bars.
+func loadBars(ctx context.Context, st *store.Store, id int64, market md.Market) (daily, minute []md.Bar, trimmed bool, err error) {
 	daily, err = st.LastBars(ctx, id, md.TF1d, dailyLookback)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
+	daily, trimmed = trimFormingDaily(market, daily, time.Now().Unix())
 	minute, err = st.LastBars(ctx, id, md.TF1m, minuteLookback)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	return daily, minute, nil
+	return daily, minute, trimmed, nil
 }
 
 // CurrentState returns the live expectancy state keys for a symbol — wired
 // into the API so the symbol page can highlight "you are here".
 func CurrentState(ctx context.Context, st *store.Store, symbolID int64) (map[md.Horizon]string, error) {
-	daily, minute, err := loadBars(ctx, st, symbolID)
+	sym, err := st.GetSymbolByID(ctx, symbolID)
+	if err != nil {
+		return nil, err
+	}
+	daily, minute, _, err := loadBars(ctx, st, symbolID, sym.Market)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +97,7 @@ func (w *SignalRunner) Run(ctx context.Context) (string, error) {
 		if hot {
 			hotCount++
 		}
-		daily, minute, err := loadBars(ctx, w.St, s.ID)
+		daily, minute, _, err := loadBars(ctx, w.St, s.ID, s.Market)
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", s.Symbol, err)
 		}
@@ -160,7 +167,7 @@ func (w *ExpectancyRunner) Run(ctx context.Context) (string, error) {
 	}
 	tables := 0
 	for _, s := range syms {
-		daily, minute, err := loadBars(ctx, w.St, s.ID)
+		daily, minute, _, err := loadBars(ctx, w.St, s.ID, s.Market)
 		if err != nil {
 			return "", err
 		}
@@ -227,7 +234,7 @@ func (w *InsightWriter) Run(ctx context.Context) (string, error) {
 			continue // nothing to say without at least a daily read
 		}
 
-		daily, minute, err := loadBars(ctx, w.St, s.ID)
+		daily, minute, _, err := loadBars(ctx, w.St, s.ID, s.Market)
 		if err != nil {
 			return "", err
 		}

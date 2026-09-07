@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { companiesList, type CompanyDirRow } from "@/lib/api";
+import { cryptoRows, CRYPTO_EXCHANGE } from "@/lib/cryptoSearch";
 import { usePeek } from "@/components/CompanyPeek";
 
 /** Fired by the header chip in Shell to open the palette without a keyboard. */
@@ -164,8 +165,9 @@ export default function CommandPalette() {
     if (!open || !q) return;
     let dead = false;
     const t = setTimeout(() => {
-      companiesList({ q, limit: 8 })
-        .then((r) => !dead && setSyms(r.companies ?? []))
+      // SEC directory (stocks/ETFs) + tracked crypto pairs (2026-09-07: crypto was unsearchable).
+      Promise.all([companiesList({ q, limit: 8 }), cryptoRows(q).catch(() => [] as CompanyDirRow[])])
+        .then(([r, c]) => !dead && setSyms([...c, ...(r.companies ?? [])]))
         .catch(() => !dead && setSyms([]));
     }, 200);
     return () => {
@@ -210,7 +212,7 @@ export default function CommandPalette() {
   const run = (it: Item) => {
     setOpen(false);
     if (it.type === "page") router.push(it.href);
-    else router.push(`/s/stocks/${encodeURIComponent(it.row.ticker)}`);
+    else router.push(`/s/${it.row.exchange === CRYPTO_EXCHANGE ? "crypto" : "stocks"}/${encodeURIComponent(it.row.ticker)}`);
   };
   const runPeek = (row: CompanyDirRow) => {
     setOpen(false);

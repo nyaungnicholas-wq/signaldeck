@@ -803,6 +803,10 @@ func (s *Store) GetSymbolByID(ctx context.Context, id int64) (md.Symbol, error) 
 func (s *Store) ListSymbols(ctx context.Context, activeOnly bool) ([]md.Symbol, error) {
 	q := `SELECT id, symbol, market, name, active, added_at, stream FROM symbols`
 	if activeOnly {
+		// Delisted names stay in this set on purpose: the dq-auditor must keep
+		// alarming on a delisted symbol that is still held or has unresolved
+		// outcomes (TestDQAuditorSkipsDelistedButNotHeldOrGraded). Scorers guard
+		// staleness themselves (signal-runner skips stocks with no bar in 10d).
 		q += ` WHERE active=1`
 	}
 	q += ` ORDER BY market, symbol`

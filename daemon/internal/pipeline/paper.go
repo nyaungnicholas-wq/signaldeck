@@ -394,6 +394,11 @@ func (w *PaperTrader) buildStep(
 				*stranded++
 				log.Printf("paper-trader[%s] WARNING STRANDED EXIT %s: %q fired at bar %d but could not be priced — position of %.4f held PAST its exit",
 					strategy, s.Symbol, plan.reason, plan.fillBar.Ts, pos.Qty)
+				// Durable, not just a log line: a position held past its own exit
+				// is the most serious thing the book can do (audit 2026-09-07).
+				sid := s.ID
+				_ = w.St.InsertDQ(ctx, md.DQEvent{SymbolID: &sid, Ts: asof, Kind: "paper_stranded_exit",
+					Detail: fmt.Sprintf("%s: %q fired at bar %d but could not be priced (%s); %.4f held past its exit", strategy, plan.reason, plan.fillBar.Ts, f.Reason, pos.Qty)})
 				continue
 			}
 			exitAssess := ev.Assessment{Inputs: ev.Inputs{
@@ -732,8 +737,11 @@ func (w *PaperTrader) markPositions(ctx context.Context, strategy string, apply 
 		if err != nil {
 			return 0, err
 		}
-		if !ok || bar.Close <= 0 {
-			continue // no mark available — skip (position value unknown, treated as 0)
+		if !ok || bar.Close <= 0 { // unknown is not zero: record it, so a data gap cannot masquerade as a loss
+			sid := id
+			_ = w.St.InsertDQ(ctx, md.DQEvent{SymbolID: &sid, Ts: asof, Kind: "paper_unmarked_position",
+				Detail: fmt.Sprintf("%s: no daily close at/before %d for a held position of %.4f - valued at 0 this mark", strategy, asof, qty)})
+			continue
 		}
 		total += qty * bar.Close
 	}

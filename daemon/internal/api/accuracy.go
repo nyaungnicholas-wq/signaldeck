@@ -68,12 +68,12 @@ func (d Deps) registerAccuracy(mux *http.ServeMux) {
 // directly if you need a field that is not modelled here, and widen accuracyRow
 // (not this comment) if a client ever needs one served.
 type registryFile struct {
-	GradedAt          string          `json:"graded_at"`
-	RefusedSince      *string         `json:"refused_since"`
-	GraderSHA256      string          `json:"grader_sha256"`
-	MinIndependentN   float64         `json:"min_independent_n"`
-	MinDistinctBlocks int             `json:"min_distinct_blocks"`
-	Rows              []registryRow   `json:"rows"`
+	GradedAt          string        `json:"graded_at"`
+	RefusedSince      *string       `json:"refused_since"`
+	GraderSHA256      string        `json:"grader_sha256"`
+	MinIndependentN   float64       `json:"min_independent_n"`
+	MinDistinctBlocks int           `json:"min_distinct_blocks"`
+	Rows              []registryRow `json:"rows"`
 }
 
 type registryRow struct {
@@ -467,8 +467,14 @@ func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now
 		if err != nil {
 			return "", false, err
 		}
-		if len(stats) > days {
-			stats = stats[len(stats)-days:] // the newest `days` sessions
+		// FAIL CLOSED (2026-09-07): the grader's set is the newest `days` SETTLE
+		// days, and quarantined sessions can push it back further than this
+		// call-day slice reaches. Check a SUPERSET (extra sessions of slack): a
+		// collapsed day just outside the true window then over-refuses for a few
+		// sessions, which is the right direction; it can no longer be missed.
+		const gateSlackSessions = 10
+		if keep := days + gateSlackSessions; len(stats) > keep {
+			stats = stats[len(stats)-keep:]
 		}
 		total += len(stats)
 		for _, st := range stats {

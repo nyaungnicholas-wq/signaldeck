@@ -676,7 +676,7 @@ export default function SymbolPage({
             </div>
           ) : bars.length === 0 ? (
             <div className="flex h-[420px] items-center justify-center text-[0.75rem]" style={{ color: "var(--faint)" }}>
-              no {tf} bars stored yet — backfill runs shortly after subscribing.
+              no {tf} bars stored — {tf === "1m" ? "1m bars are kept only for the retention window (SIGNALDECK_1M_RETENTION_D); older history is served at 1h and 1d." : "backfill runs shortly after subscribing."}
             </div>
           ) : (
             <CandleChart

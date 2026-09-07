@@ -48,7 +48,8 @@ type Record = {
 async function loadRecord(): Promise<Record | null> {
   const daemon = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
   try {
-    const res = await fetch(`${daemon}/api/vol-forecast/record`, { cache: "no-store" });
+    // Bounded: a hung (not refused) daemon must not pin this server render forever.
+    const res = await fetch(`${daemon}/api/vol-forecast/record`, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
     if (!res.ok) return null;
     return (await res.json()) as Record;
   } catch {

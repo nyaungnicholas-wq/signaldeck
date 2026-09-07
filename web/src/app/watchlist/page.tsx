@@ -274,8 +274,8 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
     try {
       const data = await screenerRows();
       setScreenerData(data);
-    } catch {
-      setError("Failed to load universe");
+    } catch (e: unknown) {
+      setError(`Failed to load universe: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
@@ -304,8 +304,8 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
       await api.subscribe(symbol, market);
       setQuery(""); // clearing the query empties `matches` — it is derived now
       refetch();
-    } catch {
-      setError("Failed to add symbol");
+    } catch (e: unknown) {
+      setError(`Failed to add symbol: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setPending(null);
     }

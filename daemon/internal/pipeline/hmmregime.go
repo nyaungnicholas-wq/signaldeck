@@ -94,6 +94,7 @@ func (w *HMMRegimeRunner) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		daily, _ = trimFormingDaily(s.Market, daily, time.Now().Unix()) // settled bars only: the published state was the forming bar (2026-09-07)
 		m, ok := hmmregime.Fit(daily, cfg)
 		if !ok {
 			// Too little history to fit. Staying silent is the honest answer;

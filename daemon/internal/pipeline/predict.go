@@ -733,18 +733,17 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	n, featErrs, staleCals, noLegs, gatedRows := 0, 0, 0, 0, 0
 	// This pass's emitted probabilities per horizon, published or withheld.
 	runProbs := map[md.Horizon][]float64{}
-	formingTrimmed, trimmed := 0, false
+	formingTrimmed := 0
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
 			continue // daily-only universe symbol already predicted today
 		}
-		daily, minute, err := loadBars(ctx, w.St, s.ID)
+		daily, minute, trimmed, err := loadBars(ctx, w.St, s.ID, s.Market) // settled bars only (loadBars trims)
 		if err != nil {
 			return "", err
 		}
-		// SETTLED ONLY (settledbase.go): never build features on the forming bar.
-		if daily, trimmed = trimFormingDaily(s.Market, daily, ts); trimmed {
+		if trimmed {
 			formingTrimmed++
 		}
 		states := expectancy.CurrentStateKeys(daily, minute)
@@ -1344,6 +1343,7 @@ func (w *RegimeRunner) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		daily, _ = trimFormingDaily(s.Market, daily, time.Now().Unix()) // settled bars only (2026-09-07)
 		st, ok := regime.Classify(daily)
 		if !ok {
 			continue
@@ -1382,6 +1382,7 @@ func (w *RankingRunner) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		daily, _ = trimFormingDaily(s.Market, daily, time.Now().Unix()) // settled bars only (2026-09-07)
 		m, ok := ranking.FromBars(s.Symbol, daily)
 		if !ok {
 			continue
@@ -1435,6 +1436,7 @@ func (w *BreakoutRunner) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		daily, _ = trimFormingDaily(s.Market, daily, time.Now().Unix()) // settled bars only (2026-09-07)
 		closes := make([]float64, len(daily))
 		tss := make([]int64, len(daily))
 		for i, b := range daily {
