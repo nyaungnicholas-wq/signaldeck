@@ -69,5 +69,19 @@ Evidence: directional forecasts retired/withheld; accuracy publication gate refu
 Evidence: manual portfolio lacks cash accounting or costs; flagship books model-driven only; no manual all-horizon paper book. Impact: limited manual trading realism. Remaining limitation: feature not implemented.
 ### R30
 Evidence: 1h score voids are time-of-day censored (1.23M voids, 67% of terminal 1h rows, concentrated outside RTH) and nothing records conditioning. Impact: missing insight into void causes. Remaining limitation: documented but no code change.
+## Status update after deployment (2026-09-07, commits ab715e1 / 44b8281 / 5b88097 / 2ae15b1)
+- R9 VERIFIED live: via port 3000 with the key, GET /api/bars -> 200; direct to the daemon with X-Forwarded-For and no key -> 451; wrong key -> 451; unauthenticated -> 401.
+- R11 VERIFIED live: /api/paper now carries `process` (verdict, last run age, 6 of 10,786 forecasts >= 0.60 in 30 days, 655 of 695 EV decisions DO_NOTHING); SIMULATOR STATUS panel renders on /lab/paper.
+- R12 VERIFIED live: /api/paper?strategy=flagship-1d-replay -> 404.
+- R13 VERIFIED live: outcome-resolver runs after deploy report "resolved 3088, voided 1062, waiting 350" then "resolved 3101, voided 1049, waiting 350" (was pinned at waiting 3644 with zero 1d/1w progress).
+- R15 observed live: prediction-runner reports "7 symbol(s) scored on settled bars only - newest daily bar still forming" on the holiday (the 7 crypto symbols).
+- R16 observed live: 43 symbols carry a 1d evidence row (n_used=0) within 3h of deploy where gated days previously left 0-1.
+- R18 VERIFIED in browser: the landing page shows the "Open workspace" control to a signed-out visitor; /health is public; Playwright 38/38.
+- R19 VERIFIED live: fleet-health dataAgeSeconds = 310,958 (stocks since Friday) instead of the crypto-masked 59,464.
+- R10 note: the pre-fix code had already advanced the flagship cursors onto the forming 2026-09-07 crypto bar (1788739200), so the settled clock reports asof=1788652800 < cursor and the books no-op until a newer SETTLED bar exists: the 2026-09-08 crypto bar settles at 2026-09-09T00:00Z and the 2026-09-08 stock bars at 2026-09-09T02:00Z. Epoch 4 stays empty until then; that is the first corrected observation, not a stall.
+- R24: ops/fix-web-task.ps1 (elevated) re-points the SignalDeck Web task at the loopback launcher with -Port 8323; ops/restart-web.ps1 (elevated) frees the orphaned port. Still BLOCKED on an administrator run.
+- R29 FIXED in 5b88097: manual book, 2 Go tests, e2e spec; VERIFIED only once the second deploy's e2e run passes (see below).
+- R21: first run exposed a defect in the new step itself (a file: URI cannot hold the space in the repo path) - fixed in 44b8281 (relative URI); the check then counted 55 stamped rows.
+
 ## Verification commands
 daemon `go test ./...` (all packages ok, 2026-09-07), `npx tsc --noEmit` (exit 0), `npx playwright test` (to be re-run after build), `ops/signaldeck-ctl.sh deploy` (verifies /api/version and worker_runs.revision)
