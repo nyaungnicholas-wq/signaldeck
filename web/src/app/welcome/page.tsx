@@ -407,7 +407,7 @@ export default function WelcomePage() {
               <p className="m-0 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
                 Nothing in it is a recommendation: every sentence carries its evidence, and the
                 platform grades its own predictions against what actually happened on{" "}
-                <span className="font-bold">PROOF IT WORKS</span> at the bottom of the dashboard.
+                <span className="font-bold">FORECAST TRACK RECORD</span> at the bottom of the dashboard.
               </p>
               <button
                 type="button"

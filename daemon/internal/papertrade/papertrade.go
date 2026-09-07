@@ -378,7 +378,7 @@ func envFloat(key string, def float64) float64 {
 		switch {
 		case err != nil:
 			envcfg.Reject(key, v, "not a number", strconv.FormatFloat(def, 'g', -1, 64))
-		case f <= 0:
+		case f <= 0 || math.IsNaN(f) || math.IsInf(f, 0):
 			envcfg.Reject(key, v, "must be > 0", strconv.FormatFloat(def, 'g', -1, 64))
 		default:
 			return f

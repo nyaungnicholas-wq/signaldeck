@@ -73,6 +73,21 @@ type ExecInputs struct {
 	Bar    md.Bar
 	Market md.Market
 	ADVUSD float64
+	// Live paper fills use the last completed bar for volatility. The fill
+	// bar's high/low are not known at its open. Nil retains the explicit
+	// same-bar assumption used by synthetic stress scenarios.
+	VolatilityBar *md.Bar
+}
+
+// ImpactSigma keeps the EV decision and the charged fill on the same inputs.
+func (in ExecInputs) ImpactSigma() (float64, bool) {
+	if in.VolatilityBar != nil {
+		if in.VolatilityBar.Ts >= in.Bar.Ts {
+			return 0, false
+		}
+		return parkinsonSigma(*in.VolatilityBar)
+	}
+	return parkinsonSigma(in.Bar)
 }
 
 // Fill is the result of executing one transition at a bar open. It is a pure
@@ -104,9 +119,8 @@ type Fill struct {
 }
 
 // parkinsonSigma estimates the bar's return volatility from its high/low range
-// (Parkinson 1980): sigma = ln(H/L) / (2*sqrt(ln 2)). It uses the same bar the
-// fill prices off, so the impact estimate never reaches outside the data the
-// fill is built from. ok is false for a bar whose range is unusable.
+// (Parkinson 1980): sigma = ln(H/L) / (2*sqrt(ln 2)). The caller supplies
+// the completed prior bar for live paper fills. ok is false for an unusable range.
 func parkinsonSigma(bar md.Bar) (float64, bool) {
 	if bar.High <= 0 || bar.Low <= 0 || bar.High < bar.Low {
 		return 0, false
@@ -126,7 +140,7 @@ func (in ExecInputs) validate() (refPx, sigma, spreadFrac, capNotional float64, 
 	if in.Bar.Open <= 0 || math.IsNaN(in.Bar.Open) || math.IsInf(in.Bar.Open, 0) {
 		return 0, 0, 0, 0, "the stored bar has no usable open price"
 	}
-	s, ok := parkinsonSigma(in.Bar)
+	s, ok := in.ImpactSigma()
 	if !ok {
 		return 0, 0, 0, 0, "the stored bar's high/low range is unusable, so market impact cannot be estimated"
 	}
@@ -168,7 +182,7 @@ func EnterLong(budget float64, in ExecInputs) (Fill, float64, float64, bool) {
 	if reason != "" {
 		return Fill{Side: "buy", Reason: reason}, 0, 0, false
 	}
-	if budget <= 0 {
+	if budget <= 0 || math.IsNaN(budget) || math.IsInf(budget, 0) {
 		return Fill{Side: "buy", Reason: "no cash slice to deploy"}, 0, 0, false
 	}
 
@@ -189,7 +203,7 @@ func EnterLong(budget float64, in ExecInputs) (Fill, float64, float64, bool) {
 	imp := impactFrac(notional, in.ADVUSD, sigma)
 	cost := notional * (spreadFrac + imp)
 	qty := notional / refPx
-	if qty <= 0 {
+	if qty <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) {
 		return Fill{Side: "buy", Reason: "budget too small to buy any units at this price"}, 0, 0, false
 	}
 
@@ -232,11 +246,14 @@ func ExitLong(qty float64, in ExecInputs) (Fill, bool) {
 	if reason != "" {
 		return Fill{Side: "sell", Reason: reason}, false
 	}
-	if qty <= 0 {
+	if qty <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) {
 		return Fill{Side: "sell", Reason: "no position to close"}, false
 	}
 
 	notional := qty * refPx
+	if math.IsNaN(notional) || math.IsInf(notional, 0) {
+		return Fill{Side: "sell", Reason: "position notional is not finite"}, false
+	}
 	participation := notional / in.ADVUSD
 	bars := 1
 	capped := false

@@ -195,12 +195,8 @@ func roundTripCostFrac(in papertrade.ExecInputs, notional float64) (float64, boo
 	if notional <= 0 || in.ADVUSD <= 0 || math.IsNaN(in.ADVUSD) || math.IsInf(in.ADVUSD, 0) {
 		return 0, false
 	}
-	if in.Bar.High <= 0 || in.Bar.Low <= 0 || in.Bar.High < in.Bar.Low {
-		return 0, false
-	}
-	const k = 1.6651092223153954 // 2*sqrt(ln 2) — Parkinson (1980), as in execution.go
-	sigma := math.Log(in.Bar.High/in.Bar.Low) / k
-	if sigma < 0 || math.IsNaN(sigma) || math.IsInf(sigma, 0) {
+	sigma, ok := in.ImpactSigma()
+	if !ok {
 		return 0, false
 	}
 	spread := papertrade.CostBpsFor(in.Market) / 1e4

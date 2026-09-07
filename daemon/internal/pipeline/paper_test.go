@@ -668,7 +668,9 @@ func TestAdvUSD_WindowEndsAtTheFillAndStaysFull(t *testing.T) {
 
 	// A full 21-bar window ending at day 30 is day 10 (vol 1000) plus days 11-30
 	// (vol 3000), at close 100.
-	want := 100 * (1*1000.0 + 20*3000.0) / 21
+	// At day 30's OPEN, only days 9-29 have completed: two thin days and
+	// nineteen thicker days. Day 30's close and volume are future information.
+	want := 100 * (2*1000.0 + 19*3000.0) / 21
 	if math.Abs(got-want) > 1 {
 		t.Fatalf("advUSD=%.2f want %.2f — a truncated window (the old behaviour "+
 			"kept only days 19-30 and gave %.2f), or the future leaked in", got, want, 100*3000.0)

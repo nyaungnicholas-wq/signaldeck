@@ -1552,6 +1552,8 @@ export interface TrackRecord {
   rawN: number; // raw resolved prediction_outcomes rows (minute-cadence inflated)
   independentN: number; // distinct (symbol, UTC-day) resolutions — the real N
   minIndependentN: number; // gate floor
+  distinctDays?: number;
+  minDistinctDays?: number;
   gated: boolean; // true => headline numbers withheld (too few independent obs)
   live: true; // this IS a live forward record (prob frozen at prediction time)
   trackLabel: string;

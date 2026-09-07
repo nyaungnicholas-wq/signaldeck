@@ -198,7 +198,7 @@ export default function DashboardPage() {
         proof: (
           <StorySection
             n={4}
-            title="PROOF IT WORKS"
+            title="FORECAST TRACK RECORD"
             sub="is any of this actually right? measured against real outcomes, gates and all"
           >
             <ProofStrip />

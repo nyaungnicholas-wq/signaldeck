@@ -356,7 +356,10 @@ func (w *PaperTrader) buildStep(
 			if err != nil {
 				return apply, refused, err
 			}
-			in := papertrade.ExecInputs{Bar: plan.fillBar, Market: marketByID[s.ID], ADVUSD: adv}
+			in, err := w.executionInputs(ctx, plan.fillBar, marketByID[s.ID], adv)
+			if err != nil {
+				return apply, refused, err
+			}
 
 			// Deliberately NOT gated — by the EV engine, by riskgate, or by the
 			// kill switch. All three state the same doctrine: routing a de-risking
@@ -449,13 +452,16 @@ func (w *PaperTrader) buildStep(
 		}
 
 		// Liquidity for the execution model: the name's trailing average daily
-		// DOLLAR volume, measured on bars at or before the fill (never after —
+		// DOLLAR volume, measured on completed bars before the fill (never during or after —
 		// the fill may not know how much traded on days it has not seen).
 		adv, err := w.advUSD(ctx, s.ID, fillBar.Ts)
 		if err != nil {
 			return apply, refused, err
 		}
-		in := papertrade.ExecInputs{Bar: fillBar, Market: marketByID[s.ID], ADVUSD: adv}
+		in, err := w.executionInputs(ctx, fillBar, marketByID[s.ID], adv)
+		if err != nil {
+			return apply, refused, err
+		}
 
 		// KILL SWITCH, checked before this entry is even assessed. A halted
 		// platform does no measuring it would then have to throw away, but the
@@ -629,39 +635,33 @@ func (w *PaperTrader) buildStep(
 // heavy print and short enough to track a name whose liquidity is changing.
 const advLookbackBars = 21
 
-// advUSD estimates a symbol's average daily DOLLAR volume from the bars at or
-// before ts. It is the denominator of both the market-impact and the capacity
-// calculation, so it must never look past the fill: using volume from days the
-// fill has not lived through would price the trade with information it could
-// not have had.
-//
-// It scans the most recent advLookbackBars*2 stored bars, which covers a fill
-// up to about a month behind the latest bar — far more slack than the worker
-// ever needs, since it fills on the first bar after a fresh prediction. Returns
-// 0 when that window holds no priced, non-zero-volume bar at or before ts; the
-// execution model treats that as "cannot price this fill" and the caller skips
-// the symbol rather than filling at zero impact. Failing to a skip, rather than
-// to a free fill, is the whole point.
+// executionInputs uses a completed prior bar for impact at the fill's open.
+// Missing prior data deliberately produces an unusable range, not zero cost.
+func (w *PaperTrader) executionInputs(ctx context.Context, fill md.Bar, market md.Market, adv float64) (papertrade.ExecInputs, error) {
+	prior, _, err := w.St.BarAtOrBefore(ctx, fill.SymbolID, md.TF1d, fill.Ts-1)
+	return papertrade.ExecInputs{Bar: fill, Market: market, ADVUSD: adv, VolatilityBar: &prior}, err
+}
+
 func (w *PaperTrader) advUSD(ctx context.Context, symbolID, ts int64) (float64, error) {
 	// Bounded in SQL, not after the fact. LastBars returns the NEWEST bars
 	// regardless of ts and the loop below then skipped any that postdate the
 	// fill — so when ts is not the newest bar, most of the fetched window was
 	// discarded and fewer than advLookbackBars usable bars survived, quietly
 	// shrinking the ADV estimate (or zeroing it, which refuses the fill). Asking
-	// SQL for the newest bars AT OR BEFORE ts returns a full window every time.
-	// Live this is a no-op, because there ts IS the newest bar.
-	bars, err := w.St.BarsBefore(ctx, symbolID, md.TF1d, ts+1, advLookbackBars*2)
+	// SQL now requests bars STRICTLY BEFORE the fill: its own daily volume
+	// and close are not yet known at the opening price used for execution.
+	bars, err := w.St.BarsBefore(ctx, symbolID, md.TF1d, ts, advLookbackBars*2)
 	if err != nil {
 		return 0, err
 	}
 	// Ascending by ts; walk backwards so the window is the most recent
-	// advLookbackBars bars at or before ts, not the oldest ones. The ts guard
+	// advLookbackBars bars before ts, not the oldest ones. The ts guard
 	// below is now redundant with the SQL bound and kept only as a belt.
 	var sum float64
 	var n int
 	for i := len(bars) - 1; i >= 0 && n < advLookbackBars; i-- {
 		b := bars[i]
-		if b.Ts > ts {
+		if b.Ts >= ts {
 			continue // strictly no lookahead
 		}
 		if b.Close <= 0 || b.Volume <= 0 {
