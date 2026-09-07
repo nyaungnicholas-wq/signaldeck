@@ -20,6 +20,8 @@ async function loginAsSmokeUser(context: BrowserContext): Promise<void> {
 
 test.describe("manual paper book", () => {
   test("order via API is reflected in the book and the page shows the order form", async ({ page, context }) => {
+    // The first-run tour is a modal that swallows clicks; mark it seen like the other specs do.
+    await context.addInitScript(() => localStorage.setItem("sd-onboarded", "1"));
     await loginAsSmokeUser(context);
     const res = await context.request.post("/api/paper/order", { headers: {"X-Signaldeck": "1", "Content-Type": "application/json"}, data: { symbol: "BTC/USD", market: "crypto", side: "buy", qty: 0.001 } });
     expect([200, 409], `unexpected status ${res.status()}: ${await res.text()}`).toContain(res.status());
