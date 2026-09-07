@@ -127,6 +127,12 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	boundary := integrityBoundary(epochRows)
+	boundaryLabel, boundaryReason := "", ""
+	for _, epoch := range epochRows {
+		if epoch.FromTs == boundary {
+			boundaryLabel, boundaryReason = epoch.Label, epoch.Reason
+		}
+	}
 	spans := SpansIntegrityBoundary(curve, boundary)
 	// A wholly historical window is also ineligible for the corrected simulator.
 	for _, mark := range curve {
@@ -180,8 +186,8 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 			"ts":     boundary,
 			"utc":    boundaryUTC(boundary),
 			"spans":  spans,
-			"label":  integrityEpochLabel,
-			"reason": "46 of 123 fills before this instant were back-dated by up to 22 days",
+			"label":  boundaryLabel,
+			"reason": boundaryReason,
 		},
 		// Stored-vs-live price basis audit (paper_positions.avg_px against bars a
 		// split repair may have rescaled).
