@@ -96,7 +96,7 @@ Two verified challenges from code history:
 
 ## AI-assistance disclosure (draft)
 
-AI assistance was substantial. Claude Code (Anthropic) acted as the engineering agent for much of the codebase, with additional code drafts from other large language models routed through a local gateway. The 2026-09-08 release pass — publication-contract repair, public pages, readiness fix, and documentation — was done by Claude Code under my direction. I personally designed the prediction ledger schema, the publication gate logic, the auto-retire rule, the readiness health distinction, the paper-trading cost model, and the daily grading pipeline architecture. I wrote the Go daemon's worker orchestration, the Next.js proxy and session auth layer, and the Python grading pipeline. I understand every component listed in the "What you should be able to explain and demonstrate" section below. [NICHOLAS TO CONFIRM — adjust or confirm this paragraph]
+AI assistance was substantial. Claude Code (Anthropic) acted as the engineering agent for much of the codebase, with additional code drafts from other large language models routed through a local gateway; all of it was reviewed and run before being committed. The 2026-09-08 release pass (publication-contract repair, public pages, readiness fix, documentation) was done by Claude Code under my direction. AI did not constitute the entirety of the technical development, and the parts I designed, coded and can explain myself are stated below in my own words: [NICHOLAS TO CONFIRM — write this yourself; nothing here may be filled in by an assistant].
 
 ## What you should be able to explain and demonstrate
 

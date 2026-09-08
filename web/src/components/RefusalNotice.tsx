@@ -11,7 +11,9 @@ export function summarizeRefusal(reason: string | null | undefined): { headline:
 		const [, nStr, mStr] = collapsedMatch;
 		const n = parseInt(nStr, 10);
 		const m = parseInt(mStr, 10);
-		const dateMatches = raw.match(/\d{4}-\d{2}-\d{2}/g) ?? [];
+		// Only the dates of the collapsed day-horizons ("1d 2026-07-27", "1w 2026-08-04"),
+		// never the refused-since timestamp that can precede the list.
+		const dateMatches = [...raw.matchAll(/1[dwh] (\d{4}-\d{2}-\d{2})/g)].map((m) => m[1]);
 		let betweenClause = "";
 		if (dateMatches.length) {
 			const sorted = [...dateMatches].sort();

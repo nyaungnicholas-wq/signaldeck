@@ -226,7 +226,7 @@ Independent audit re-checked: `C:\Users\Nicholas_N\Documents\Codex\2026-09-07\ca
 | `cd web && npx tsc --noEmit --incremental false` | exit 0 | |
 | `cd web && npm run lint` | clean | |
 | `cd web && npx next build` | exit 0 | served on 8323 and 3000 after task restart |
-| `cd web && npx playwright test` | 29 passed, 2 skipped, 11 failed (first run) | 7 navigation tests asserted "no header nav" and met the new public-record nav — contract updated to "no Primary nav, no workspace links"; the refusal test asserted a Tailwind `border-red-` class — now checks `data-tone="bad"`; `smoke:303` passed on rerun; `paper-manual` and `personalization:88` failed on sign-in (30 s timeout) during the post-deploy storm, see F9 — re-run pending |
+| `cd web && npx playwright test` | 29 passed, 2 skipped, 11 failed (first run) | 7 navigation tests asserted "no header nav" and met the new public-record nav — contract updated to "no Primary nav, no workspace links" (9 pass on rerun); the refusal test asserted a Tailwind `border-red-` class — now checks `data-tone="bad"` (needs the rebuilt bundle); `smoke:303` passed on rerun; `paper-manual` and `personalization:88` failed on sign-in — 30 s write timeouts during the post-deploy storm, then HTTP 429 from the daemon's write-tier limiter after repeated reruns (F9, harness) — final rerun after the rebuild and a limiter cool-down: accuracy-refusal (3), paper-manual (2), personalization:88 → 5 passed, 2 skipped (14 s) |
 | `node web/scripts/screens.mjs --out …` | 54 PNGs (27 routes × 1440/390) | captured before the changes; public pages re-inspected in the in-app browser after |
 | `bash ops/pre-publish-scan.sh` | no secret-shaped strings in tracked files or history; manifest tier 2 fails only on untracked new files until they are committed | |
 | Anonymous curl after deploy | `/api/accuracy` 503 REFUSED with reason; `/api/ready` 200; `/api/health` 200 degraded=true; `/api/vol-forecast/record` 200 in 0.07 s; `/api/version` 401 (by design) | |
@@ -237,3 +237,7 @@ Independent audit re-checked: `C:\Users\Nicholas_N\Documents\Codex\2026-09-07\ca
 - The personal-contribution, inspiration and learning statements in `docs/COMPETITION.md`.
 - Whether to body-cache the heavy endpoints (F9) before recording the demo video.
 - Observe the 2026-09-08 14:05 grading run (F7, F18) and the 09:00 ET congress poll (F11).
+
+### F19 — The SignalDeck Web task is killed by console control events
+- **Evidence.** At 2026-09-08 00:50 port 8323 refused connections; the task "SignalDeck Web" showed last result 0xC000013A (console control exit) at 23:53 while the loopback workspace on 3000 stayed up. `ops/check-task-health.ps1` has warned since 2026-09-01 that two tasks still run with an Interactive principal reachable by console control events; the Playwright web server shutdown at the end of an e2e run is the likely sender.
+- **Repair.** Not done: `ops/fix-task-principals.ps1` must run elevated. Restarting the task unelevated brings 8323 back. Status CONFIRMED · BLOCKED (elevation).
