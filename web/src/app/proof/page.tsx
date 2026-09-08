@@ -27,6 +27,7 @@ import {
 } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
+import RefusalNotice from "@/components/RefusalNotice";
 
 // Two retries, not more. Each failed attempt costs the daemon's FULL 30s
 // deadline before it answers, so three attempts is already ~70s of waiting —
@@ -323,12 +324,9 @@ export default function ProofPage() {
               <span className="text-[1.05rem] font-bold" style={{ color: "var(--dim)" }}>
                 Still accruing — no skill claimed yet.
               </span>
-              <span className="max-w-[64ch] text-[0.78rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-                {tr.note ??
-                  `Only ${tr.independentN} independent resolutions so far (need ${tr.minIndependentN}). Win rate, Brier and IC are withheld until the record is statistically real — inflating a number off a handful of outcomes is exactly what this page refuses to do.`}
-              </span>
+              <RefusalNotice compact tone="warn" title="Why no skill is claimed yet" testId="proof-withheld" reason={tr.note ?? `Only ${tr.independentN} deduplicated symbol-day resolutions so far (need ${tr.minIndependentN}) over ${tr.distinctDays} distinct days (need ${tr.minDistinctDays}). Win rate, Brier and IC are withheld until the record is statistically real.`} />
               <span className="tnum text-[0.72rem]" style={{ color: "var(--faint)" }}>
-                {tr.rawN.toLocaleString()} raw resolutions → {tr.independentN.toLocaleString()} independent (one per symbol-day)
+                {tr.rawN.toLocaleString()} raw resolutions → {tr.independentN.toLocaleString()} deduplicated symbol-day observations over {tr.distinctDays} distinct trading days (observations on one day share a market move, so they are not independent)
               </span>
             </div>
           ) : (
@@ -371,15 +369,15 @@ export default function ProofPage() {
                 }
               />
               <Stat
-                label="INDEPENDENT N"
+                label="SYMBOL-DAY OBS."
                 value={tr.independentN.toLocaleString()}
-                sub={`${tr.rawN.toLocaleString()} raw → deduped`}
+                sub={`${tr.rawN.toLocaleString()} raw → deduplicated · ${tr.distinctDays} days`}
                 tone="muted"
               />
             </div>
           )}
           <div className="border-t px-5 py-3 text-[0.72rem] leading-relaxed" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
-            Graded over INDEPENDENT (symbol, trading day) resolutions — the probability was frozen at
+            Graded over deduplicated (symbol, trading day) resolutions, with intervals corrected for same-day dependence by a measured design effect (day is the unit of resampling) — the probability was frozen at
             prediction time, the outcome filled in later, no look-ahead. Descriptive, not a
             forecast. Not financial advice.
           </div>

@@ -13,6 +13,7 @@ import { fmtPct } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import HelpTip from "@/components/HelpTip";
 import useDashboardProof from "@/hooks/useDashboardProof";
+import RefusalNotice from "@/components/RefusalNotice";
 
 export default function ProofStrip() {
   const { tr, err } = useDashboardProof();
@@ -53,7 +54,7 @@ export default function ProofStrip() {
                 <span className="tnum">
                   {tr.independentN.toLocaleString("en-US")}
                 </span>{" "}
-                independent symbol-days
+                deduplicated symbol-days
               </span>
               {tr.independentN < threshold && <div
                 className="h-1.5 w-full overflow-hidden rounded"
@@ -62,7 +63,7 @@ export default function ProofStrip() {
                 aria-valuemin={0}
                 aria-valuemax={threshold}
                 aria-valuenow={Math.min(tr.independentN, threshold)}
-                aria-label="independent resolutions toward the significance gate"
+                aria-label="deduplicated symbol-day resolutions toward the significance gate"
               >
                 <div
                   className="h-full rounded"
@@ -78,9 +79,7 @@ export default function ProofStrip() {
                   {" "}Observation minimum: {threshold}.
                 </span>
               )}
-              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                {tr.note || "The record has not cleared every evidence check. See the full track record for details."}
-              </span>
+              <RefusalNotice compact tone="warn" title="Why the grade is withheld" testId="proofstrip-refusal" reason={tr.note || "The record has not cleared every evidence check. See the full track record for details."} />
             </>
           ) : (
             (() => {
@@ -114,7 +113,7 @@ export default function ProofStrip() {
                     </span>
                   )}
                   <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                    over {tr.independentN.toLocaleString("en-US")} independent (symbol, trading day) resolutions · 1d horizon
+                    over {tr.independentN.toLocaleString("en-US")} deduplicated (symbol, trading day) resolutions · 1d horizon
                   </span>
                 </>
               );

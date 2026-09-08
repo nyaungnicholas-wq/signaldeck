@@ -6,7 +6,8 @@ export type AccuracyStatus =
   | "REFUSED"
   | "REFUSED_STALE"
   | "NO_BASELINE"
-  | "QUARANTINED";
+  | "QUARANTINED"
+  | "PRIVATE";
 
 /**
  * Renders an explicit publication status for accuracy results.
@@ -35,6 +36,7 @@ export function AccuracyStatusBanner({
     REFUSED_STALE: "refused: the grader has not produced a fresh result",
     NO_BASELINE: "no comparable baseline; accuracy alone is not evidence",
     QUARANTINED: "quarantined: excluded from every benchmark denominator",
+    PRIVATE: "private on this deployment: sign in to read the record (an access setting, not a statistical refusal)",
   };
 
   const colorMap: Record<AccuracyStatus, string> = {
@@ -46,6 +48,7 @@ export function AccuracyStatusBanner({
     REFUSED_STALE: "border-red-500/60 bg-red-500/10 text-red-300",
     NO_BASELINE: "border-zinc-500/60 bg-zinc-500/10 text-zinc-300",
     QUARANTINED: "border-zinc-500/60 bg-zinc-500/10 text-zinc-300",
+    PRIVATE: "border-amber-500/60 bg-amber-500/10 text-amber-300",
   };
 
   // The status arrives OFF THE WIRE, so TypeScript can never narrow it and a

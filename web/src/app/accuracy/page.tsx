@@ -17,8 +17,13 @@ import {
   AccuracyStatusBanner,
   type AccuracyStatus,
 } from "@/components/accuracy/AccuracyStatusBanner";
+import RefusalNotice from "@/components/RefusalNotice";
 
 export const dynamic = "force-dynamic";
+
+// Bare page name; the root layout appends the site suffix. Without it this page
+// inherited the layout default and titled its tab "Dashboard".
+export const metadata = { title: "Accuracy registry" };
 
 type RegistryRow = {
   predictor: string;
@@ -43,6 +48,9 @@ type RegistryRow = {
   // (reading 'startsWith')", taking the whole honesty surface down.
   verdict?: string | null;
   note?: string;
+  // Merged by tools/selection_honesty.py after the grader runs: whether the
+  // grader's own verdict is RESOLVED by the row's published intervals.
+  honesty?: { resolvability?: { supported?: boolean | null; reason?: string | null } | null } | null;
 };
 
 // The row's verdict, or an explicit withheld marker when the grader dropped it.
@@ -136,9 +144,23 @@ function Cell({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DirectionalRow({ r, minN }: { r: RegistryRow; minN: number }) {
-  const failed = verdictOf(r).startsWith("FAILED");
-  const tone = verdictTone(verdictOf(r));
+function statusTone(s: string): string {
+  if (s === "FAILED" || s === "RETIRED") return "var(--bad)";
+  if (s === "OK") return "var(--ok)";
+  return "var(--warn)";
+}
+
+function DirectionalRow({ r, minN, pub }: { r: RegistryRow; minN: number; pub?: PublishedRow }) {
+  // The daemon's publication verdict leads when it exists for this row; the
+  // grader's own sentence is quoted beneath it, labelled as the grader's. The
+  // sentence compares the accuracy interval to the null's POINT estimate
+  // (tools/selection_honesty.py re-tests the paired difference and can mark it
+  // unresolved), so it must never be the headline on its own.
+  const failed = pub
+    ? pub.publication_status === "FAILED" || pub.publication_status === "RETIRED"
+    : verdictOf(r).startsWith("FAILED");
+  const tone = pub ? statusTone(pub.publication_status) : verdictTone(verdictOf(r));
+  const unresolved = r.honesty?.resolvability?.supported === false ? r.honesty?.resolvability?.reason : null;
   // Conviction slices below the evidence floor get NO percentage. The early
   // high-conviction record graded WORSE than the base row — anti-calibrated —
   // and a 6-observation "33.3%" reads as a measurement it is not. The floor is
@@ -155,13 +177,30 @@ function DirectionalRow({ r, minN }: { r: RegistryRow; minN: number }) {
         <span className="chip px-2 py-[1px] text-[0.7rem]">band {r.band}</span>
       </div>
       <div className="flex flex-col gap-3 px-5 py-4">
-        {/* the verdict string, verbatim from the registry — FAILED renders primary */}
+        {/* publication verdict first (daemon), grader sentence second (labelled) */}
         <span
           className={failed ? "text-[1.35rem] font-extrabold" : "text-[1.05rem] font-bold"}
           style={{ color: tone }}
         >
-          {verdictOf(r)}
+          {pub
+            ? `${pub.publication_status}${pub.retired ? " — retired; retirement does not lapse" : ""}`
+            : verdictOf(r)}
         </span>
+        {pub && pub.reasons && pub.reasons.length > 0 ? (
+          <span className="text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            {pub.reasons.join(" · ")}
+          </span>
+        ) : null}
+        {pub ? (
+          <span className="text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
+            Grader&apos;s sentence: {verdictOf(r)}
+          </span>
+        ) : null}
+        {unresolved ? (
+          <span className="text-[0.75rem] leading-relaxed" style={{ color: "var(--warn)" }}>
+            Not resolved by this sample: {unresolved}
+          </span>
+        ) : null}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           <Cell
             label="LIVE ACC"
@@ -286,6 +325,8 @@ function CalibrationPanel({ cal }: { cal: Calibration }) {
 async function loadPublicationStatus(): Promise<{
   status: AccuracyStatus;
   reason?: string;
+  gradedAt?: string;
+  refusedSince?: string;
   rows: PublishedRow[];
 } | null> {
   const daemon = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
@@ -318,15 +359,20 @@ async function loadPublicationStatus(): Promise<{
       // "Not authorised" and "cannot be reached" are opposite problems and send
       // a reader to opposite places; conflating them is the same defect this
       // function's own comment describes, one status code over.
-      const reason =
-        body?.reason ??
-        (res.status === 401
-          ? "the accuracy record is not public on this deployment — sign in to see it"
-          : undefined);
+      if (res.status === 401 || res.status === 403) {
+        // NOT a refusal. The grader may be perfectly healthy; this deployment
+        // keeps the record behind a session. Rendering that as REFUSED told a
+        // visitor the grader had withheld the figures — the opposite claim.
+        return {
+          status: "PRIVATE",
+          reason: "the accuracy record is private on this deployment — sign in to read it",
+          rows: [],
+        };
+      }
       return { status: (body?.status ?? "REFUSED") as AccuracyStatus,
-               reason, rows: [] };
+               reason: body?.reason, gradedAt: body?.graded_at, refusedSince: body?.refused_since, rows: [] };
     }
-    return { status: "OK", rows: (body.rows ?? []) as PublishedRow[] };
+    return { status: "OK", gradedAt: body.graded_at, rows: (body.rows ?? []) as PublishedRow[] };
   } catch {
     // Unreachable daemon is not "no news". It is an unknown, and an unknown
     // about whether these numbers are current resolves to not publishing them.
@@ -355,18 +401,42 @@ export default async function AccuracyPage() {
         <header className="flex flex-col gap-2">
           <h1 className="text-[1.4rem] font-extrabold tracking-tight">Accuracy registry</h1>
         </header>
-        <AccuracyStatusBanner
-          status={(pub?.status ?? "REFUSED_STALE") as AccuracyStatus}
-          reasons={[
+        <RefusalNotice
+          status={pub?.status ?? "REFUSED_STALE"}
+          title={pub?.status === "PRIVATE" ? "Sign-in required" : "Publication refused"}
+          tone={pub?.status === "PRIVATE" ? "warn" : "bad"}
+          reason={
             pub?.reason ??
-              "the grading daemon is unreachable, so it cannot be confirmed that these numbers are current",
-          ]}
-        />
+            "the grading daemon is unreachable, so it cannot be confirmed that these numbers are current"
+          }
+          gradedAt={pub?.gradedAt}
+          refusedSince={pub?.refusedSince}
+          testId="accuracy-status-banner"
+        >
+          {pub?.status === "PRIVATE" ? (
+            <Link href="/login" className="chip w-fit">
+              Sign in
+            </Link>
+          ) : null}
+        </RefusalNotice>
         <p className="m-0 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          No accuracy figures are shown while publication is refused. This is deliberate: a
-          grading outage must be impossible to mistake for a quiet week. The numbers return on
-          their own once a fresh grade lands.
+          {pub?.status === "PRIVATE"
+            ? "Nothing statistical is being withheld: once signed in, the same daemon verdict renders here."
+            : "No accuracy figures are shown while publication is refused. This is deliberate: a grading outage must be impossible to mistake for a quiet week. The numbers return on their own once a fresh grade lands."}
         </p>
+        {pub?.status !== "PRIVATE" ? (
+          <section className="panel px-5 py-4" aria-label="historical record">
+            <div className="mono text-[0.7rem] uppercase tracking-[0.15em]" style={{ color: "var(--dim)" }}>
+              Historical record — unaffected by today&apos;s refusal
+            </div>
+            <p className="m-0 mt-2 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+              The flagship directional model was retired on {FLAGSHIP_RETIREMENT.date} by a
+              pre-registered rule, and retirement does not lapse. The dated pre-epoch grade behind
+              that decision is kept in <code className="mono">proofs/P2_LIVE_RECORD_RECONCILIATION.md</code>;
+              its figures are not reprinted while the current window is refused.
+            </p>
+          </section>
+        ) : null}
       </div>
     );
   }
@@ -375,6 +445,11 @@ export default async function AccuracyPage() {
   // because the whole failure this fixes was a condemned model reading as
   // merely absent further down the page.
   const flagged = pub.rows.filter((r) => r.publication_status !== "OK");
+  // The registry labels rows "predictor (horizon, variant)"; the daemon splits
+  // them. Rebuild the label so each registry row finds its publication verdict.
+  const labelOf = (x: PublishedRow) =>
+    x.predictor + (x.horizon ? ` (${x.horizon}${x.variant ? `, ${x.variant}` : ""})` : "");
+  const pubFor = (label: string) => pub.rows.find((x) => labelOf(x) === label);
 
   const reg = await loadRegistry();
   const rows = reg?.rows ?? [];
@@ -417,8 +492,8 @@ export default async function AccuracyPage() {
       {/* ── FLAGSHIP RETIREMENT: the disclosure that must not be buried ── */}
       <section className="panel" style={{ borderColor: "var(--bad)" }} aria-label="flagship retirement">
         <div className="panel-h">
-          <span style={{ color: "var(--bad)" }}>FLAGSHIP RETIRED {FLAGSHIP_RETIREMENT.date}</span>
-          <span className="chip px-2 py-[1px] text-[0.7rem]">no longer emitting</span>
+          <span style={{ color: "var(--bad)" }}>HISTORICAL RECORD · FLAGSHIP RETIRED {FLAGSHIP_RETIREMENT.date}</span>
+          <span className="chip px-2 py-[1px] text-[0.7rem]">dated pre-epoch grade, not the current window</span>
         </div>
         <div className="flex flex-col gap-3 px-5 py-4">
           <span className="text-[1.35rem] font-extrabold" style={{ color: "var(--bad)" }}>
@@ -477,7 +552,7 @@ export default async function AccuracyPage() {
 
       {/* ── LIVE DIRECTIONAL ROWS, FAILED FIRST ── */}
       {directional.map((r) => (
-        <DirectionalRow key={`${r.predictor}|${r.band}`} r={r} minN={reg?.min_independent_n ?? 30} />
+        <DirectionalRow key={`${r.predictor}|${r.band}`} r={r} minN={reg?.min_independent_n ?? 30} pub={pubFor(r.predictor)} />
       ))}
 
       {/* ── RELIABILITY BINS: where the probabilities are actually wrong ── */}

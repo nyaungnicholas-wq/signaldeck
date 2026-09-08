@@ -18,7 +18,7 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Volatility and loss estimates - SignalDeck",
+  title: "Volatility and loss estimates",
   description:
     "How much a stock is likely to move, and how much you could lose on a bad day - with the live record of how those estimates have actually scored.",
 };

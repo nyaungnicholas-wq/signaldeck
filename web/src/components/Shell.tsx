@@ -14,6 +14,7 @@ import NextStep from "@/components/NextStep";
 import { useLabel } from "@/lib/labels";
 import { noteVisit } from "@/lib/goal";
 import { isPublicRoute } from "@/lib/publicRoutes";
+import PublicNav from "@/components/PublicNav";
 
 // Nav consolidation (2026-07-19, user decision): 9 tabs → 5 clean hubs.
 // HOME absorbs the old DASHBOARD + TODAY; WATCHLIST absorbs DECK + COMPARE;
@@ -432,11 +433,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           <Link href="/" className="inline-flex shrink-0 items-center">
             <Brand />
           </Link>
-          {pathname !== "/login" && (
-            <Link href="/dashboard" className="chip">
-              Open workspace
-            </Link>
-          )}
+          <PublicNav pathname={pathname} />
         </header>
         <main id="main" className="flex flex-1 flex-col gap-4">
           {children}
