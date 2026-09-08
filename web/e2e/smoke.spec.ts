@@ -139,7 +139,13 @@ test.describe("navigation (unauthenticated)", () => {
       }
       // The public login page exposes NO hub navigation — the whole point of
       // the private model is that anonymous users never see (or click) nav.
-      await expect(page.locator("header nav")).toHaveCount(0);
+      // (2026-09-08) Public pages carry a small public-record nav (Grades, Risk
+      // estimates, Receipts, Glossary, Sign in). What must never appear is the
+      // HUB nav or any link into the private workspace.
+      await expect(page.locator('header nav[aria-label="Primary"]')).toHaveCount(0);
+      await expect(
+        page.locator('header a[href^="/dashboard"], header a[href^="/market"], header a[href^="/lab"], header a[href^="/intel"], header a[href^="/watchlist"]'),
+      ).toHaveCount(0);
     });
   }
 });

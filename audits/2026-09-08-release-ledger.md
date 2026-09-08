@@ -1,0 +1,239 @@
+# SignalDeck release ledger — 2026-09-08 pass
+
+Repo `C:\Users\Nicholas_N\Desktop\claude code\signaldeck`, branch `public-launch`. Baseline HEAD
+`cbec4177b072cb4c3f16c0190ffb211bdbdaf264` (the daemon was running `60b7afa`; the intervening
+commits were backup scripts, docs and a test — no daemon fix was undeployed). Release commits:
+`8d8e6ce` (daemon, tools, ops), `cdd89db` (web), `b15975d` (regenerated UX score); the daemon was
+deployed through `ops/signaldeck-ctl.sh deploy` and verified running
+`b15975d54e27a51b7897e45e0f9d91c83b75a09f` at 2026-09-08 00:00 local, with worker rows stamped.
+The documentation, tests and heartbeat-timeout changes made after that deploy are in the commit
+that carries this ledger; none of them touches the daemon binary.
+
+Status vocabulary: **CONFIRMED** (reproduced, not yet repaired) · **IMPLEMENTED — NOT YET
+VERIFIED** · **VERIFIED** (repaired and observed at runtime) · **EXPECTED LIMITATION** (intended
+behaviour or evidence that must accrue) · **BLOCKED** (needs the owner) · **NOT REPRODUCED**.
+
+Independent audit re-checked: `C:\Users\Nicholas_N\Documents\Codex\2026-09-07\ca\outputs\SignalDeck_submission_audit.md`
+(its findings 1–5 map to F1–F5 below; its operational notes map to F6, F9–F13).
+
+## Summary
+
+| ID | Area | Severity | Finding | Status |
+|---|---|---|---|---|
+| F1 | publication | HIGH | Landing page printed the refused figures under a "publication refused" banner | VERIFIED |
+| F2 | statistics | HIGH | Grader's "significantly worse" sentence shown while the honesty block says WITHHELD (null-interval overlap) | VERIFIED (presentation) · EXPECTED LIMITATION (verdict rule) |
+| F3 | access | MEDIUM | "See the grades" led to a sign-in wall rendered as a refusal; `/api/accuracy` 401 anonymously | VERIFIED |
+| F4 | docs | MEDIUM | README declared the freeze lifted and active; refusal block quoted numeric grader output; SHIP_READINESS reprinted the withheld table | VERIFIED |
+| F5 | wording | MEDIUM | `/proof` and the dashboard called deduplicated symbol-days "independent" | VERIFIED |
+| F6 | ops | MEDIUM | `/api/ready` 503 for weeks because deliberately abstaining workers counted as failures | VERIFIED |
+| F7 | ops | MEDIUM | A publication refusal was filed as a grader failure heartbeat; the health task was red every day of the window | IMPLEMENTED — NOT YET VERIFIED |
+| F8 | web | MEDIUM | `/volatility` showed "not readable" to cold visitors (25 s build vs 15 s bound) | VERIFIED |
+| F9 | performance | HIGH | Heavy reads and writes collapse under worker load (symbol page >200 s, sign-in 30 s timeouts) | CONFIRMED · EXPECTED LIMITATION (not repaired) |
+| F10 | forecasts | — | Forecast-monitor "coverage starved" on 10/12 days | NOT REPRODUCED as a defect |
+| F11 | evidence | — | Volatility 1/60 days; accuracy window refused; congress poller awaiting its next run | EXPECTED LIMITATION |
+| F12 | deploy | — | Worker rows stamped `60b7afa` while HEAD was `cbec417` | VERIFIED (resolved by the deploy) |
+| F13 | provenance | MEDIUM | Docs call the anchors repo public; GitHub says PRIVATE | CONFIRMED · BLOCKED (owner) |
+| F14 | web | LOW | `/accuracy` titled "Dashboard"; `/volatility` title suffix doubled | VERIFIED |
+| F15 | UI | MEDIUM | Overlapping onboarding surfaces, 6,000 px symbol page, eight header chips, reason wall on the dashboard | CONFIRMED · partially repaired |
+| F16 | disclosure | MEDIUM | No development-AI disclosure in the README | VERIFIED |
+| F17 | ops | LOW | Scheduled tasks ending with result 1 (Accuracy, Check-Grader-Health, Market-Close, Web) | CONFIRMED · open |
+| F18 | ops | LOW | Heartbeat and anchor jobs lose writes to "database is locked" | IMPLEMENTED — NOT YET VERIFIED |
+
+## Findings
+
+### F1 — Landing page republished the refused figures
+- **Evidence.** Browser, 2026-09-07 22:20: `/` showed the red banner, a "retired by its own rule" card
+  reading −10.3pp / 44.7% / 55.0% / 2,892 forecasts / 28 days, and a four-row table. On disk,
+  `data/accuracy_registry.json` (mtime 19:30:49) had 18 rows and no `status` field, although the
+  14:05 grading job had written a REFUSED envelope.
+- **Root cause.** `ops/anchor-publish.sh` (19:30 daily) re-ran `tools/accuracy_registry.py --json`
+  raw — no publication gate (`cmd/collapsecheck`), no envelope, no honesty blocks — and
+  `web/src/app/page.tsx` read the file directly, deciding "refused" from the missing status while
+  rendering the rows anyway. Two private interpretations of one decision.
+- **Repair.** `anchor-publish.sh` no longer regrades; it publishes the registry as the 14:05 job
+  left it. `tools/render_track_record.py` renders a REFUSED envelope as a refusal notice with no
+  figures and exits 0 instead of aborting the whole anchor publish. The landing page fetches
+  `GET /api/accuracy` and renders one of four states (ok, refused, private, unreachable); it
+  prints no figure unless the daemon says OK, and never the grader's stored sentence.
+- **Regression check.** `tools/test_live_accuracy.py` (`test_refused_registry_renders_a_refusal_and_no_figures`,
+  `test_refused_registry_with_no_stale_grade_still_renders_a_refusal`), `tools/test_render_track_record.py`
+  plus a refusal-envelope fixture check, `web/e2e/accuracy-refusal.spec.ts` (no percentage on a
+  refused page, `data-status` REFUSED, `data-tone` bad).
+- **Runtime verification.** After the deploy and web restart, and again after the 23:58 grading
+  run: `/` shows "PUBLICATION REFUSED · REFUSED", the plain-English summary ("23 of the 80 graded
+  day-horizons … collapsed cross-section between 2026-07-17 and 2026-08-06"), the full reason
+  behind a details element, and the "what is still true" list. No accuracy, n, baseline or skill
+  number appears anywhere on the page (page text captured 2026-09-08 00:00 and 00:30).
+- **Remaining limitation.** While refusal lasts, the retirement is stated as a dated fact with a
+  link to `proofs/P2_LIVE_RECORD_RECONCILIATION.md`, without figures.
+
+### F2 — Conflicting verdicts
+- **Evidence.** The directional-ensemble (1d) row carries `honesty.resolvability.supported=false`
+  with the reason that accuracy 0.4474 [0.3517, 0.5473] and null 0.5500 [0.3870, 0.7029] overlap;
+  the grader's sentence compares the accuracy interval to the null's point estimate only.
+- **Root cause.** Pages consumed `row.verdict` (the grader's sentence) and neither the daemon's
+  publication verdict (`publication.BuildVerdict`) nor the honesty block; the 19:30 regrade also
+  stripped the honesty blocks from the file.
+- **Repair.** `/accuracy` rows lead with the daemon's `publication_status` and its reasons,
+  quote the grader's sentence labelled "Grader's sentence", and add "Not resolved by this sample:
+  <reason>" when the honesty block says so. The landing page never prints the sentence.
+- **Regression check.** Type-checked; no automated fixture carries an honesty block yet.
+- **Runtime verification.** Under refusal the page shows no verdicts at all (by design); the row
+  rendering runs only when publication is OK, so it was verified by type-check and code review,
+  not in the browser.
+- **Remaining limitation.** `publication.BuildVerdict` still condemns a row whose accuracy
+  interval sits below the null's point estimate — not a paired, dependence-aware test of the
+  difference. The sha256-pinned grader was not edited (protocol rule). Proposal on record: a
+  day-blocked paired-difference test as the verdict rule, introduced through grader
+  re-registration (see memory `project-signaldeck-grader-reregistration`), never by editing the
+  pinned file. Historical retirement (2026-07-24) is distinct from this and stays.
+
+### F3 — Public access mismatch
+- **Evidence.** Anonymous `GET /api/accuracy` → 401; `/accuracy` rendered a REFUSED banner reading
+  "not public on this deployment — sign in"; "Open workspace" bounced to `/login`.
+- **Root cause.** `/api/accuracy` was missing from the daemon's always-open set (track-record,
+  ledger/verify and vol-forecast/record were in it); the page mapped 401 onto REFUSED.
+- **Repair.** `daemon/internal/api/security.go` adds `/api/accuracy` to the exemption (aggregates
+  only; fails closed with 503 on refusal); `security_test.go` extended. `/accuracy` renders a
+  distinct "Sign-in required" state on 401/403. The public header carries Grades / Risk estimates /
+  Receipts / Glossary and a Sign in link (`web/src/components/PublicNav.tsx`).
+- **Runtime verification.** Anonymous `curl 127.0.0.1:8322/api/accuracy` → HTTP 503, status
+  REFUSED, reason present, 3 ms. Browser: `/accuracy` renders the refusal with the title
+  "Accuracy registry — SignalDeck".
+
+### F4 — Contradictory documentation
+- **Evidence.** README line 5 "freeze lifted", line 27 "FROZEN — REMEDIATION IN PROGRESS", line 49
+  "lifted"; the refusal block embedded the grader's stderr including calibration bins with
+  percentages and counts; `partials/live_accuracy.md` printed the withheld table under a STALE
+  label into six documents.
+- **Repair.** README rewritten (v1.1, ACTIVE in `ops/docs-registry.json`, dated status table,
+  freeze history as one dated line, limitations, credits, AI disclosure); the refusal block no
+  longer embeds stderr; `tools/live_accuracy.py` renders a refusal-only block; `DOCS_INDEX.md`
+  regenerated.
+- **Runtime verification.** `tools/docs_gate.py check` → `docs-gate: clean`; the 23:58 grading run
+  regenerated README, `partials/live_accuracy.md` and the six included documents with the new
+  block (no figures); `tools/live_accuracy.py --scan` over the new documents finds no superseded
+  figure.
+
+### F5 — Sample-size wording
+- **Repair.** `/proof` and the dashboard strip say "deduplicated symbol-day observations over N
+  distinct trading days (observations on one day share a market move, so they are not
+  independent)"; the stat tile is "SYMBOL-DAY OBS."; the footer names the measured design effect
+  with the day as the unit of resampling. The collapse reason is summarized by `RefusalNotice`.
+- **Runtime verification.** `/proof` text, 2026-09-08 00:00: "86,556 raw resolutions → 3,644
+  deduplicated symbol-day observations over 32 distinct trading days".
+
+### F6 — Readiness counted intended abstention as failure
+- **Evidence.** `/api/ready` 503 with reasons naming congress-poller, expectancy-trainer,
+  forecast-monitor and gbm-trainer — all `degraded`, three of them by design (benched models,
+  expected coverage abstention).
+- **Repair.** The ready handler lists degraded workers under `degraded` for an authenticated
+  caller and fails only on error/timeout/orphaned; `daemon/internal/api/ready_degraded_test.go`.
+- **Runtime verification.** Anonymous `/api/ready` → HTTP 200 after the deploy.
+
+### F7 — Refusal filed as a grader failure
+- **Repair.** `tools/grader_heartbeat.py --refused` writes success=1 with error `REFUSED: <reason>`;
+  `ops/accuracy-registry.sh` chooses `--refused` unless the grader itself exited or the liveness
+  check failed. `ops/check-grader-health.ps1` needs no change: it is red only for success=0.
+- **Verification so far.** All three modes checked against a temporary database. The 23:58 run
+  printed "recorded ok (publication REFUSED)" but its write failed with "database is locked" (see
+  F18), so no row landed; the newest heartbeat is still the 14:05 failure row. The 2026-09-08
+  14:05 run is the runtime verification.
+
+### F8 — Volatility page unreadable when cold
+- **Evidence.** `/api/vol-forecast/record` 25.2 s uncached; the page's server fetch is bounded at
+  15 s; the sweep and the browser both showed "The live record is not readable right now".
+- **Repair.** Body-level stale-while-revalidate cache (10-minute TTL) on the route and a
+  cache-warmer entry.
+- **Runtime verification.** Anonymous curl 0.07 s after the deploy; the browser shows both horizon
+  cards (1 of 60 days, 301 resolved, 306 ungradable; 0 of 60, 297 ungradable).
+
+### F9 — Heavy reads and writes collapse under worker load
+- **Evidence** (authenticated curl). Under nightly trainer load, 2026-09-07 22:30: `/api/paper`
+  116.7 s (timed out), `/api/symbol?symbol=SPY` 48 s, `/api/screener` 31 s, `/api/movers` 19 s,
+  `/api/ledger/verify` 503 after its 30 s cap. Quiet, 2026-09-08 00:03: `/api/paper` 7.5 s,
+  `/api/ledger/verify` 7.9 s. Right after the deploy (every worker's first pass at once, 62 rows
+  in `running`, 28.7 CPU-seconds per 10 s): `/api/symbol` >200 s (timed out), `/api/screener`
+  49.5 s, `POST /api/auth/login` 500 after 30,456 ms (the daemon log shows the session write
+  timing out behind worker transactions: "worker journal: write failed, retrying … context
+  deadline exceeded").
+- **Root cause.** Not fully isolated. Every individual SQL behind the symbol page runs in ≤0.18 s
+  read-only from Python (bars covering index, scores primary key, expectancy index, snapshots
+  primary key; `insights` is a table scan at 0.18 s). The API has its own four-connection read
+  pool (`apiReadConns`), but one SQLite file, one writer and ~100 workers mean the slow path is
+  inside the daemon under concurrency.
+- **Repair.** Not done in this pass. Proposal: body-cache and warm `/api/symbol`, `/api/screener`
+  and `/api/paper` the way `/api/honesty` is; add an `insights(symbol_id, ts)` index; stagger the
+  post-boot first passes; measure with worker load present before claiming a fix.
+- **Consequence for the demo.** Wait 45 minutes after any daemon restart before recording; the
+  first load of a symbol page can still take tens of seconds during the nightly trainers.
+
+### F10 — Coverage starvation
+- **Status.** NOT REPRODUCED as a defect: every measured directional leg ranks backwards and is
+  dropped, never down-weighted (memory notes 2026-08-17 and 2026-08-27); the monitor files the
+  condition as degraded with its expected marker. Its effect on readiness is handled by F6.
+
+### F11 — Evidence that must accrue
+- Volatility record 1 of 60 distinct days; accuracy window refused over 23 collapsed
+  cross-sections of 80 day-horizons (2026-07-17 to 2026-08-06); congress-poller last degraded
+  2026-09-07 13:00, before the Kadoa fallback's first scheduled 09:00 ET run. No threshold, grader,
+  holdout or pre-registration was touched.
+
+### F12 — Revision drift
+- **Status.** VERIFIED as resolved: `ops/signaldeck-ctl.sh deploy` reported "deploy VERIFIED:
+  daemon is running commit b15975d… (resolvable); 3 worker run(s) already stamped with it".
+
+### F13 — The anchors repository is private
+- `gh repo list` reports `nyaungnicholas-wq/signaldeck-anchors` PRIVATE while `anchor-publish.sh`
+  and the runbooks call it the public anchors repo. README now says so;
+  `docs/PUBLIC_RELEASE_PLAN.md` lists making it public as an approval the owner must give.
+  OpenTimestamps proofs remain the external timestamp.
+
+### F14 — Page titles
+- `/accuracy` had no metadata export (inherited "Dashboard — SignalDeck"); `/volatility` carried
+  the suffix twice. Both fixed and confirmed in the browser.
+
+### F15 — Workspace UI density
+- Three overlapping onboarding surfaces on `/dashboard` (setup checklist, goal banner, "New
+  here?" popover), a 6,000-pixel symbol page, eight header chips, and the collapse reason dumped
+  on the dashboard strip. The strip now summarizes the reason (F5); the rest is recorded as
+  "Repair needed" in `docs/PRODUCT_SPEC.md` and `docs/DESIGN_DIRECTIONS.md` and was not changed.
+
+### F16 — AI disclosure
+- README "Credits and AI assistance"; `docs/COMPETITION.md` carries the submission disclosure
+  draft with `[NICHOLAS TO CONFIRM]` placeholders for personal contribution, inspiration and
+  learning. Nothing personal was invented.
+
+### F17 — Scheduled task results
+- Last result 1 for SignalDeck Accuracy (the refusal path exits non-zero), Check-Grader-Health
+  (F7), Market-Close (2026-09-04, not investigated) and SignalDeck Web (launcher exit). Only F7
+  addressed.
+
+### F18 — Lost writes to "database is locked"
+- `grader_heartbeat.py` at 23:58 and `anchor-publish.sh` at 19:30 both hit the lock. The
+  heartbeat connect timeout was raised from 30 s to 120 s; anchor-publish is unchanged. Verified
+  only by the next scheduled runs.
+
+## Verification commands
+
+| Command | Result | Note |
+|---|---|---|
+| `cd daemon && go build ./... && go vet ./internal/api/...` | OK | before and after the edits |
+| `go test ./internal/api/ ./internal/publication/ ./internal/store/ -count=1` | ok 25.9 s / 0.4 s / 47.7 s | includes `ready_degraded_test.go` |
+| `go test ./...` (inside `ops/signaldeck-ctl.sh deploy`) | passed | deploy VERIFIED at b15975d |
+| `.venv/Scripts/python.exe -m pytest tools/test_live_accuracy.py tools/test_render_track_record.py tools/test_docs_gate.py -q` | 89 passed, 24 subtests | refusal contract tests replace the old fallback tests |
+| `.venv/Scripts/python.exe tools/docs_gate.py check` | docs-gate: clean | after the README rewrite |
+| `cd web && npx tsc --noEmit --incremental false` | exit 0 | |
+| `cd web && npm run lint` | clean | |
+| `cd web && npx next build` | exit 0 | served on 8323 and 3000 after task restart |
+| `cd web && npx playwright test` | 29 passed, 2 skipped, 11 failed (first run) | 7 navigation tests asserted "no header nav" and met the new public-record nav — contract updated to "no Primary nav, no workspace links"; the refusal test asserted a Tailwind `border-red-` class — now checks `data-tone="bad"`; `smoke:303` passed on rerun; `paper-manual` and `personalization:88` failed on sign-in (30 s timeout) during the post-deploy storm, see F9 — re-run pending |
+| `node web/scripts/screens.mjs --out …` | 54 PNGs (27 routes × 1440/390) | captured before the changes; public pages re-inspected in the in-app browser after |
+| `bash ops/pre-publish-scan.sh` | no secret-shaped strings in tracked files or history; manifest tier 2 fails only on untracked new files until they are committed | |
+| Anonymous curl after deploy | `/api/accuracy` 503 REFUSED with reason; `/api/ready` 200; `/api/health` 200 degraded=true; `/api/vol-forecast/record` 200 in 0.07 s; `/api/version` 401 (by design) | |
+
+## Open items needing the owner
+- A hosted public surface and the payment method for it (`docs/PUBLIC_RELEASE_PLAN.md`, Option B).
+- Making `signaldeck-anchors` public, and creating a separate reviewed public source repository.
+- The personal-contribution, inspiration and learning statements in `docs/COMPETITION.md`.
+- Whether to body-cache the heavy endpoints (F9) before recording the demo video.
+- Observe the 2026-09-08 14:05 grading run (F7, F18) and the 09:00 ET congress poll (F11).

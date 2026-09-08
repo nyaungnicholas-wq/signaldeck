@@ -1,52 +1,36 @@
 # SignalDeck
 
 <!-- DOCUMENT CONTROL -->
-> **Owner:** Nicholas Nyaung · **Version:** 1.0 · **Last reviewed:** 2026-08-04
-> **Status:** AUTHORITATIVE — freeze lifted 2026-08-04
-> **Scope:** Repository front page and orientation.
-> **Frozen claim classes:** FC3 — set `C` defined in `proofs/P6_GOVERNANCE_CLEANUP.md` §4, statuses in `proofs/P10_FREEZE_LIFT.md` §4
-> **Authority:** `proofs/P10_FREEZE_LIFT.md` (freeze LIFTED 2026-08-04) · `proofs/P6_GOVERNANCE_CLEANUP.md` (status)
-> **Publication:** PUBLISHABLE — caveats are the frozen classes above
+> **Owner:** Nicholas Nyaung · **Version:** 1.1 · **Last reviewed:** 2026-09-08
+> **Status:** ACTIVE — repository front page and orientation
+> **Scope:** What SignalDeck is, what it publishes, how to run it, what it does not claim.
+> **Authority:** `DOCS_INDEX.md` (which documents are current), `proofs/P10_FREEZE_LIFT.md` (the 2026-08-04 P0 freeze and its lift), `docs/PRODUCT_SPEC.md` (journeys and evidence contract)
+> **Publication:** PUBLISHABLE — the live-accuracy block below is generated; every figure in it comes from the grader, and when the grader refuses there is no figure.
 
-**Data-first market intelligence.** SignalDeck records live
-market data — crypto (via [TickStream](../tickstream)) and **any US stock on
-demand** (Alpaca IEX) — into a growing SQLite database, computes a
-fully-decomposable **Pressure Score** per symbol and horizon, measures **what
-usually happened next** in comparable historical states, writes **readable
-plain-English insights**, and — the differentiator — **grades its own scores
-against realized returns** on the Honesty page.
+SignalDeck is a **market-research instrument that grades itself in public**. A Go daemon
+records US stock and crypto market data into SQLite, computes signals, freezes
+pre-registered forecasts into a hash-chained prediction ledger *before* the outcome exists,
+and later grades every forecast against realized prices. Verdicts are published either way,
+including the failures. A Next.js web app is the lens on that record.
 
-**Collection window (measured 2026-09-01):** intraday capture runs only while this
-host is powered on, and minute bars for sessions it sleeps through are not backfilled.
-The host has been off through every US session since 2026-08-24; SPY 1-minute rows per
-day since then were 123, 4, 6 and 231, and none on the days it was off. Daily bars are
-polled separately and are complete.
+Not an auto-trader. Not financial advice. A measuring instrument.
 
-Not an auto-trader. Not financial advice. A measurement instrument.
+## Status (2026-09-08)
 
-> ## ⚠ FROZEN — REMEDIATION IN PROGRESS (P0 freeze, 2026-08-04)
-> This repository's strategy documentation is under a P0 truth-stop. **Do not publish,
-> present, or quote any accuracy figure, interval, verdict, or "already built /
-> verified" status from any document in this repository. Do not attach capital.**
->
-> Frozen-class gloss (non-normative; `C` is defined once in `proofs/P6_GOVERNANCE_CLEANUP.md` §4): **live accuracy · confidence-interval verdicts · survivorship ·
-> point-in-time data · kill switch · position sizing · "already built / verified".**
->
-> Four documents are marked **NOT AUTHORITATIVE**: `CASE_STUDY.md`,
-> `INSTITUTIONAL_GAP.md`, `PREDICTION_PROCESS.md`, `HOW_PREDICTORS_WORK.md`.
->
-> The live-accuracy block below is generated and remains the single source of truth
-> for the live record. It publishes rows only when the publication gate passes: a
-> grading outage — or a graded window containing a collapsed cross-section, where
-> the whole universe received a handful of distinct probabilities and the rows
-> grade one market-wide call repeated per symbol — replaces the tables with
-> GRADING REFUSED. `/api/accuracy` applies that gate from the same code
-> (`internal/api.CollapsedGradingWindow`, run by `ops/accuracy-registry.sh` via
-> `cmd/collapsecheck`), so the served surface and this block cannot disagree.
-> Read the block itself for the current state: this notice deliberately does not
-> restate it, because a restated state goes stale and this one had.
->
-> Authority: `proofs/P0_FREEZE.md`, **lifted 2026-08-04** by `proofs/P10_FREEZE_LIFT.md`.
+| What | State | Where to check |
+|---|---|---|
+| Directional (up/down) forecasting | **Retired 2026-07-24** by a pre-registered auto-retire rule; retirement does not lapse | `/accuracy`, `proofs/P2_LIVE_RECORD_RECONCILIATION.md` |
+| Accuracy publication | **Refused** while the graded window holds collapsed cross-sections (2026-07-17 to 2026-08-06); no figure is printed anywhere until it clears | `/`, `/accuracy`, `GET /api/accuracy` |
+| Volatility forecast (HAR realized variance vs random walk and RiskMetrics EWMA) | Pre-registered 2026-09-04 (chain seq 105); accruing, 1 of 60 required trading days; no verdict | `/volatility` |
+| Prediction ledger | Hash-chained, ~477k entries, recomputed on request (`daemon/internal/store/ledgercache.go`) | `/proof` |
+| Forecast coverage | ~6–10% of symbols receive a forecast, by design: every measured leg that ranks backwards is dropped, never down-weighted | `/lab/forecasts` |
+| Paper trading | Simulation only: a manual market-order book with a cost model plus the model-driven books; no brokerage, no real money | `/lab/paper` |
+| Freeze history | A P0 documentation freeze was declared and lifted on 2026-08-04; four documents stay marked NOT AUTHORITATIVE and are historical | `proofs/P0_FREEZE.md`, `proofs/P10_FREEZE_LIFT.md`, `DOCS_INDEX.md` |
+
+One publication decision governs every surface: `GET /api/accuracy` applies the grader's
+refusal envelope, the freshness heartbeat, the collapsed-window gate and the sticky
+retirement history, and the landing page, `/accuracy`, the generated documents and the
+published registry all follow it. Refused means no numbers.
 
 <!-- LIVE-ACCURACY:BEGIN -->
 ## Live accuracy (auto-updated)
@@ -54,68 +38,47 @@ Not an auto-trader. Not financial advice. A measurement instrument.
 <!-- Generated by ops/accuracy-registry.sh from data/accuracy_registry.json — do not edit by hand. -->
 
 > **GRADING REFUSED — no accuracy numbers are published.**
-> The grader refused at 2026-09-03T14:05:55 (publication gate: the graded window contains 13 collapsed cross-section(s) of 58 day(s): 1d 2026-08-01 (6 distinct across 328 symbols), 1d 2026-08-02 (8 distinct across 328 symbols), 1d 2026-08-03 (5 distinct across 328 symbols), 1d 2026-08-04 (13 distinct across 328 symbols), 1d 2026-08-06 (33 distinct across 327 symbols), 1w 2026-07-27 (7 distinct across 326 symbols), 1w 2026-07-28 (16 distinct across 328 symbols), 1w 2026-07-29 (25 distinct across 327 symbols), 1w 2026-07-31 (33 distinct across 327 symbols), 1w 2026-08-01 (16 distinct across 328 symbols), 1w 2026-08-02 (13 distinct across 328 symbols), 1w 2026-08-03 (7 distinct across 328 symbols), 1w 2026-08-04 (7 distinct across 328 symbols). On a collapsed day the whole universe receives a handful of distinct probabilities, so these rows grade one market-wide call repeated per symbol, not independent per-symbol forecasts. Figures over this window are withheld until it clears.). The last successful grade was 2026-09-03T14:05:50 (0.0h old). The previously published tables have been REMOVED rather than reprinted, because a number graded by code that refused to run today is not a live number.
+> The grader refused at 2026-09-07T23:58:34 (publication gate: the graded window contains 23 collapsed cross-section(s) of 80 day(s): 1d 2026-07-27 (6 distinct across 330 symbols), 1d 2026-07-28 (8 distinct across 330 symbols), 1d 2026-07-29 (13 distinct across 328 symbols), 1d 2026-07-31 (6 distinct across 328 symbols), 1d 2026-08-01 (6 distinct across 328 symbols), 1d 2026-08-02 (8 distinct across 328 symbols), 1d 2026-08-03 (5 distinct across 328 symbols), 1d 2026-08-04 (13 distinct across 328 symbols), 1d 2026-08-06 (33 distinct across 327 symbols), 1w 2026-07-17 (148 distinct across 1032 symbols), 1w 2026-07-18 (100 distinct across 1032 symbols), 1w 2026-07-21 (18 distinct across 317 symbols), 1w 2026-07-22 (29 distinct across 317 symbols), 1w 2026-07-23 (3 distinct across 67 symbols), 1w 2026-07-26 (21 distinct across 326 symbols), 1w 2026-07-27 (7 distinct across 326 symbols), 1w 2026-07-28 (16 distinct across 328 symbols), 1w 2026-07-29 (25 distinct across 327 symbols), 1w 2026-07-31 (33 distinct across 327 symbols), 1w 2026-08-01 (16 distinct across 328 symbols), 1w 2026-08-02 (13 distinct across 328 symbols), 1w 2026-08-03 (7 distinct across 328 symbols), 1w 2026-08-04 (7 distinct across 328 symbols). On a collapsed day the whole universe receives a handful of distinct probabilities, so these rows grade one market-wide call repeated per symbol, not independent per-symbol forecasts. Figures over this window are withheld until it clears.). The last successful grade was 2026-09-07T23:57:52 (0.0h old). The previously published tables have been REMOVED rather than reprinted, because a number graded by code that refused to run today is not a live number.
 
-```
-row. A structural verdict is read
-against it; the frozen-claim comparison rides along as claim_verdict. Calls frozen
-before 2026-07-27 carry no baseline and grade NO BASELINE rather than a skill claim.
-Verified this run: 77.9% of graded outcomes carry a frozen baseline.
-Write-path invariant: 0 post-2026-07-27 rows with no baseline (must be 0; the store refuses such writes and this run exits non-zero otherwise).
-The hindsight null was retired after its one dual-null transition cycle; the
-switchover regrade against the committed repro snapshot recorded ZERO verdict
-changes — see audits/2026-07-27-null-transition.md.
-Auto-retire rule (pre-registered 2026-07-26, chained as 'auto-retire-rule' at chain seq 46):
-a directional row that meets both evidence floors with its effective-N Wilson
-upper bound below the prequential null grades FAILED, publishes retire=true, and
-the daemon stops publishing it. Chained digest matches the graded rule: 353450b995a52bcea9257a8520369d8841e7fa71c70295aae925dc7cf03b429f.
-  directional-ensemble (1d): n=2,862 over 27 days, design effect 7.1x -> effective n 401
-  prequential-majority (1d): n=2,533 over 25 days, design effect 21.7x -> effective n 117
-
-Reliability (predicted P(up) vs realized up-frequency, independent symbol-days):
-  1d: p in [0.1,0.2) mean 0.122 -> realized 0.000 (n=1, 1 days) <- conviction tier
-  1d: p in [0.2,0.3) mean 0.251 -> realized 0.667 (n=39, 2 days) <- conviction tier
-  1d: p in [0.3,0.4) mean 0.372 -> realized 0.632 (n=345, 10 days)
-  1d: p in [0.4,0.5) mean 0.470 -> realized 0.565 (n=1718, 25 days)
-  1d: p in [0.5,0.6) mean 0.551 -> realized 0.552 (n=397, 19 days)
-  1d: p in [0.6,0.7) mean 0.668 -> realized 0.475 (n=141, 3 days)
-  1d: p in [0.7,0.8) mean 0.780 -> realized 0.524 (n=84, 3 days) <- conviction tier
-  1d: p in [0.8,0.9) mean 0.861 -> realized 0.456 (n=79, 2 days) <- conviction tier
-  1d: p in [0.9,1.0) mean 0.923 -> realized 0.414 (n=58, 2 days) <- conviction tier
-  1w: p in [0.0,0.1) mean 0.046 -> realized 0.312 (n=32, 11 days) <- conviction tier
-  1w: p in [0.1,0.2) mean 0.168 -> realized 0.644 (n=118, 16 days) <- conviction tier
-  1w: p in [0.2,0.3) mean 0.258 -> realized 0.516 (n=153, 21 days) <- conviction tier
-  1w: p in [0.3,0.4) mean 0.363 -> realized 0.594 (n=1258, 28 days)
-  1w: p in [0.4,0.5) mean 0.449 -> realized 0.572 (n=2316, 22 days)
-  1w: p in [0.5,0.6) mean 0.544 -> realized 0.544 (n=1280, 21 days)
-  1w: p in [0.6,0.7) mean 0.635 -> realized 0.544 (n=252, 17 days)
-  1w: p in [0.7,0.8) mean 0.738 -> realized 0.317 (n=82, 15 days) <- conviction tier
-  1w: p in [0.8,0.9) mean 0.853 -> realized 0.259 (n=27, 11 days) <- conviction tier
-  1w: p in [0.9,1.0) mean 0.913 -> realized 0.500 (n=2, 2 days) <- conviction tier
-A conviction-tier bin whose realized frequency sits on the wrong side of its
-predicted probability is the anti-calibration to fix (threshold or isotonic
-recalibration) BEFORE the auto-retire gate fires on the graded slice.
-
-Universe completeness (direction): NOT CLEAN — listing status resolvable for 329/1044 graded symbols (31.5%): 715 inactive symbol(s) with no delisted_at. Rows carry survivorship_clean=false.
-Universe completeness (structure): NOT CLEAN — listing status resolvable for 285/424 graded symbols (67.2%): 139 inactive symbol(s) with no delisted_at. Rows carry survivorship_clean=false.
-Stale-feed quarantine: 2,438 graded observation(s) over 465 symbol(s) and 30 trading day(s) EXCLUDED - minted on a day this symbol's own feed was flagged stale (dq_events kind='stale'), so the inputs behind the call had already been declared unfit. Grading them would measure the outage, not the predictor.
-Survivorship bound (measured 2026-09-03T21:05:16Z, edgar:form-25): 11 symbol(s) left the tracked universe since 2026-07-24 vs 1,044 graded. If every dropped symbol
-had kept being graded and been WRONG every time, headline accuracy would fall by at most 0.54 pp.
-
-wrote C:/Users/Nicholas_N/Desktop/claude code/signaldeck/data/accuracy_registry.json
-```
+> The withheld grade stays inside `data/accuracy_registry.json` under `stale_last_registry` for the historical record and is not reprinted here; the grader's full output (which contains figures) is in `logs/accuracy-registry.log`, because a refusal notice that quotes the refused numbers is not a refusal.
 
 Full grading methodology and per-row JSON: `tools/accuracy_registry.py`, `data/accuracy_registry.json`; in-app at `/accuracy`.
 <!-- LIVE-ACCURACY:END -->
 
+## What it does
+
+- **Public record (no account):** `/` (status and what remains true), `/accuracy` (publication
+  verdict per predictor), `/proof` (hash-chain verification and the gated live track record),
+  `/volatility` (risk estimates and their live record), `/glossary`, `/health`.
+- **Private workspace (sign in):** `/dashboard` (today's read, gauges, watchlist, alerts),
+  `/market/*` (screener, movers, breadth, regimes, macro), `/watchlist`, `/s/<market>/<symbol>`
+  (price and indicators, validated structural signals with their measured accuracy per conviction
+  band, evidence for why it is moving, news, unusual activity), `/intel/*` (filings, insiders,
+  institutions, shorts, congress), `/lab/*` (backtest with next-bar fills, paper trading
+  simulation, track record, honesty, models, live pipeline health, risk and portfolio tools).
+
+The five journeys the product is built around, with their completion criteria and their
+insufficient-evidence states, are in [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md).
+
+## Architecture
+
 ```
-tickstreamd (:8321) ──┐                       ┌── web app (Next.js, :8323)
-   crypto L2/NBBO     │   signaldeckd (:8322) │   watchlist · symbol · screener
-                      ├─▶ 100+ in-app agents ─┤   trends · insights · honesty
-Alpaca IEX ws/REST ───┤   SQLite (data/*.db)  │   quality · agents · PUSH-20 HUD
-Kraken OHLC REST ─────┤                       │
-trader-hud (:8787) ───┘                       └── CSV exports / raw SQL
+tickstreamd (:8321) ──┐                       ┌── web app (Next.js, 127.0.0.1:8323)
+   crypto L2/NBBO     │   signaldeckd (:8322) │   public record · private workspace
+Alpaca IEX ws/REST ───┼─▶ ~100 in-app workers ┤   /api/* proxied server-side to :8322
+Kraken OHLC REST ─────┤   SQLite (data/*.db)  │
+FRED · EDGAR · FINRA ─┘                       └── tools/ (Python): daily grading, docs gates
 ```
+
+- **Daemon** (`daemon/`, Go 1.25+): ingestion, signal and forecast workers, outcome resolution,
+  the prediction ledger, the HTTP JSON API (host allowlist, session cookies, bearer token for
+  scripts, rate limiting, CSRF header on writes, 128 KB body cap, licence guard on raw data).
+- **Web** (`web/`, Next.js 16 / React 19 / TypeScript / Tailwind): one origin; `/api/*` is
+  proxied to the daemon by a route handler, so the daemon port is never exposed.
+- **Tools** (`tools/`, Python 3.12): the sha256-pinned grader (`accuracy_registry.py`), the
+  publication gate, document generators and gates, restore drills.
+- **Ops** (`ops/`): Windows Task Scheduler jobs (macOS launchd plists kept for reference), the
+  sanctioned deploy path, backups and the offsite copy, health checks.
 
 ## Prerequisites
 
@@ -123,220 +86,117 @@ trader-hud (:8787) ───┘                       └── CSV exports / ra
 |---|---|---|
 | Go | ≥ 1.25 (`go.mod`); tested on 1.26.5 | daemon |
 | Node.js | ≥ 20; tested on 24.18.0 | web app |
-| Python | ≥ 3.11; tested on 3.12.10 | `tools/` |
+| Python | ≥ 3.11; tested on 3.12.10 | `tools/` (`.venv/Scripts/python.exe` on Windows) |
 | SQLite | bundled | no server to install |
 
-Python tooling under `tools/` needs numpy and is not covered by a checked-in
-environment. Run it with [uv](https://docs.astral.sh/uv/):
-
-```sh
-uv run --with numpy python tools/alpha/test_labels.py
-```
-
-**Credentials.** Alpaca keys are read from `../stock-trader/.env`
-(`ALPACA_KEY`, `ALPACA_SECRET`) — a cross-project dependency, not a file inside
-this repo. Without it the daemon starts but ingests no equity data.
+**Credentials.** Alpaca keys are read from `../stock-trader/.env` (`ALPACA_KEY`,
+`ALPACA_SECRET`) — a cross-project dependency, not a file inside this repo. Without them the
+daemon starts but ingests no equity data. Every other key lives in `daemon/.env` (see
+`.env.example`); none is committed and `ops/pre-publish-scan.sh` checks the tree and the
+history before anything is published.
 
 ## Run it
 
 ```sh
-# 1. crypto feed (separate process, optional but recommended)
-cd ../tickstream && make run                      # :8321
+# 1. optional crypto feed
+cd ../tickstream && make run                         # :8321
 
-# 2. the data daemon (agents + API); Alpaca keys are read from
-#    stock-trader/.env automatically (ALPACA_KEY / ALPACA_SECRET)
-#
-#    NOTE: `go run ./cmd/signaldeckd` is REFUSED. The daemon will not start
-#    from a build it cannot attribute to a revision, because rows it writes
-#    could not then be graded. Deploy instead:
-ops/signaldeck-ctl.sh deploy                      # :8322
-#
-#    For development against a throwaway database only:
-#      SIGNALDECK_ALLOW_DIRTY_BUILD=1 SIGNALDECK_DB=/tmp/dev.db \
-#        go run ./cmd/signaldeckd
-#    Rows written by such a build are marked ungradable on purpose.
+# 2. the daemon — THE sanctioned path: builds from the commit, refuses a dirty tree,
+#    restarts, and verifies the running revision and a stamped worker row
+ops/signaldeck-ctl.sh deploy                         # :8322
 
-# 3. the app
-cd web && npm run dev -- -p 8323                  # http://localhost:8323
+#    development against a throwaway database only (rows are marked ungradable):
+#    SIGNALDECK_ALLOW_DIRTY_BUILD=1 SIGNALDECK_DB=/tmp/dev.db go run ./cmd/signaldeckd
 
-# optional: the PUSH-20 trader HUD source
-cd ../stock-trader && .venv/bin/python dashboard/server.py   # :8787
+# 3. the web app
+cd web && npm install && npm run build && npm run start -- -H 127.0.0.1 -p 8323
 ```
 
-First boot seeds BTC/USD + SPY, QQQ, AAPL, NVDA, TSLA and backfills ~2 years
-of daily bars (plus 60 days of minutes for stocks). Add any US ticker or
-Kraken pair from the watchlist header — validation, backfill, live streaming,
-scoring, and tendency tables all happen automatically within seconds.
+First boot creates the schema, seeds a small watchlist, backfills daily bars, and prints an
+admin password to stderr once. On this machine the daemon and both web instances run as
+Task Scheduler jobs (`ops/install-windows-tasks.ps1`, `ops/start-local-workspace.ps1`);
+`DEPLOY.md` covers the container and hosted options. Expect the first 30–45 minutes after a
+daemon restart to be slow: every worker runs its first pass at once.
 
-## The in-app agents (visible at /agents)
+## Verify it
 
-| Agent | Cadence | Job |
-|---|---|---|
-| crypto-live | 1 Hz stream | TickStream consolidated book → 1s microstructure snapshots |
-| stock-streamer | stream | Alpaca IEX live minute bars for active stocks |
-| backfiller | on demand | 2y daily + 60d minute history for new symbols, then primes rollups + tendencies |
-| crypto-bars | 15 m | Kraken OHLC refresh (2y/1d, 30d/1h, 12h/1m) — canonical crypto bars |
-| stock-bars | 6 h | official daily-bar top-up / gap healing |
-| downsampler | 5 m | 1m→1h rollups + retention (90d minutes, 7d snapshots) |
-| signal-runner | 1 m | Pressure Scores for every active symbol × horizon |
-| expectancy-runner | 1 h | rebuilds conditional forward-return tables |
-| outcome-resolver | 10 m | grades past scores against realized returns (Honesty) |
-| insight-writer | 15 m | plain-English symbol reads + market brief (deduplicated) |
-| hud-sync | 1 m | syncs the PUSH-20 trader HUD summary |
-| dq-auditor | 5 m | flags stale/gapped data as incidents |
-
-Every run is persisted (status + detail) — the Agents page renders exactly
-what ran, including failures.
-
-## Honesty by construction
-
-- **Scores decompose.** Every Pressure Score is stored with its component
-  table (value, normalization, weight, contribution, plain-English note) —
-  there is no black box to trust.
-- **"Prediction" = measured tendency.** The expectancy engine reports
-  *"in this state, the next day resolved higher 46% of the time (n=122,
-  median −0.4%)"* — sample sizes always attached, "not a forecast" always
-  stated.
-- **The system grades itself.** Every score seeds an outcome row at write
-  time; the resolver later records what the market actually did; the Honesty
-  page shows the score↔forward-return correlation (IC) and quintile table.
-  Nothing is backfilled or cherry-picked — a wrong call stays wrong in the
-  record.
-- **Data quality is a page, not a footnote.** Coverage spans, freshness, and
-  every incident (stale feed, gap, failed backfill) are visible at /quality.
-- **The grader gets a second opinion.** `tools/validate_signals.py` re-grades
-  the same inputs with a stationary bootstrap and Hansen's SPA test instead of
-  the Wilson + design-effect + Bonferroni path the registry publishes, and
-  writes to its own `validation_advisory` table. It is advisory *by
-  construction* — the published protocol is frozen on the pre-registration
-  chain, so a disagreement is a reason to pre-register an amendment, never a
-  reason for a script to quietly re-grade.
-
-```bash
-.venv/Scripts/python.exe tools/validate_signals.py --dry-run --reps 5000
+```sh
+cd daemon && go build ./... && go test ./...                       # daemon
+.venv/Scripts/python.exe -m pytest tools ops -q                    # grading and gates
+.venv/Scripts/python.exe tools/docs_gate.py check                  # documents vs registry
+cd web && npx tsc --noEmit && npm run lint && npm run build        # web
+cd web && npm run e2e                                              # Playwright (serves :8329)
+node web/scripts/screens.mjs --out screens                         # screenshot sweep 1440/390
 ```
 
-  Needs the local venv (`uv venv && uv pip install numpy scipy pandas
-  statsmodels arch scikit-learn`). Reads the DB read-only; `--dry-run` persists
-  nothing. Reruns append rather than overwrite, so the advisory table is a
-  track record of second opinions, not a cache of the latest one.
-- **Waiting and dead look different.** The regime-outcome worker prints
-  "resolved 0" both while a horizon is still elapsing and if it has stopped
-  grading entirely. `tools/structural_liveness.py` asks the one question that
-  separates them — is any call past BOTH resolution gates with no verdict? —
-  and runs daily at 08:30 (`ops/structural-liveness.sh`). Stdlib only, so it
-  cannot fail to start because an environment drifted.
+A fix is live only when `worker_runs.revision` equals `git rev-parse HEAD`; `deploy` checks
+this itself. Green gates are the floor, not the product: open the app in a browser before
+calling web work done.
 
-```bash
-python3 tools/structural_liveness.py
-```
+## Limitations, stated
 
-  Exit 0 = waiting or grading normally, 1 = a predictor stopped resolving,
-  2 = the check could not run. Quarantined rows and the odd degenerate window
-  are tolerated on purpose: a check that is always red is a check nobody reads.
+- **Single machine, single writer.** SQLite serialises writes; under worker load the heavy
+  read endpoints slow badly and writes (including sign-in, which creates a session row) queue
+  behind long worker transactions. Measured 2026-09-08: the symbol page API over 120 s, the
+  screener 49 s, paper book 7 s quiet vs 116 s loaded, ledger verification 8 s quiet vs a 30 s
+  timeout loaded, sign-in 30 s timeouts during the post-restart storm. The dashboard, movers,
+  honesty, calibration and the volatility record are cache-warmed; the rest are not yet.
+- **Intraday capture runs only while this host is on.** Minute bars for sessions it sleeps
+  through are not backfilled; daily bars are polled separately and are complete.
+- **Publication is refused right now** and clears only as resolved days accrue; nothing here
+  can or should hurry it.
+- **No demonstrated forecasting edge.** Every directional predictor tested has failed against
+  its own baseline; the volatility test has 1 of 60 required days. No return, Sharpe or
+  profitability figure exists in this product and none may be quoted from it.
+- **Congress trade feeds** depend on volunteer mirrors and a daily JSON fallback; the stored
+  history is served when both are down.
+- **The anchors repository is private today**, so the daily anchor push is a durable
+  off-machine copy but not yet public verification. OpenTimestamps proofs in `proofs/ots/`
+  are the external timestamp.
 
-## Flagship research artifact
+## Data sources and licensing
 
-**[PAIRS_TRADING.md](PAIRS_TRADING.md)** — the platform's one citable finding,
-a rigorous negative: trailing **correlation** rank persists out of sample
-(Spearman ρ **+0.725**, 26/26 walk-forward blocks) while **cointegration** rank
-persists **not at all** (ρ −0.004), so the persistent quantity is shared market
-beta — which a dollar-neutral spread cancels by construction. That contrast
-resolved hypothesis H018 **DO NOT SHIP** and is served in-app at `/lab/pairs`.
-The writeup is a standalone paper: methods, matched nulls, day-clustered CIs
-with design effects. The raw bar matrix the study consumes is license-classified
-and **cannot** be redistributed — `repro/.gitignore` refuses `*.npz` outright — so
-the repo versions the study's INPUTS instead of shipping them: `repro/pairs_inputs.csv`
-carries the SHA-256 of each per-symbol `(ts, close, volume)` series. REPRODUCE.md
-§"Pairs study" gives the procedure: load your own licensed bars, match those
-hashes, then rerun `tools/pairs_trading.py` (deterministic, fixed seed 12345).
+Alpaca (IEX feed) for US stocks, Kraken and TickStream for crypto, FRED for VIX, SEC EDGAR
+for filings and Form 25 delistings, FINRA for short volume, Wikimedia for attention. Raw
+vendor rows are never redistributed: anonymous requests for bars, snapshots, news, scanner
+data or CSV exports answer HTTP 451 (`internal/datalicense`). Only derived analytics are
+public. Read each provider's terms before hosting a copy.
 
-**[audits/2026-07-27-selfref-ablation.md](audits/2026-07-27-selfref-ablation.md)**
-— the self-reference ablation. Audit finding A7 removed four model-output /
-label-derived features from model-leg training; the
-`daemon/cmd/selfref-ablation` harness then retrained every leg twice on one
-frozen snapshot, with and without them. Shortcuts flattered mean GBM OOS lift
-by +0.026 but flipped **0 of 37** admission-gate decisions — the shortcut
-features were not the signal. Formal note with methodology, per-leg table, and
-raw dumps linked inside.
+## Security model
 
-## Storage
+- Anonymous visitors can read exactly the published record. With `SIGNALDECK_PUBLIC_SURFACE=1`
+  the anonymous rule becomes an allowlist (`internal/api/security.go`), so a route added later
+  is private by default. `SIGNALDECK_PUBLIC_READS` and `SIGNALDECK_OPEN_SIGNUP` default closed
+  whenever a public host is allowlisted.
+- Sessions are bcrypt-hashed, 30-day, HttpOnly cookies; scripts use a bearer token that maps
+  to the admin user and is never attached by the web proxy.
+- Two rate-limit tiers, a CSRF header on every non-GET, an origin allowlist, a login lockout
+  counter, and an access log that never records query strings.
 
-SQLite (WAL) at `data/signaldeck.db`. Retention: 1s crypto snapshots 7 days,
-1m bars 90 days, 1h/1d bars forever — the database grows deliberately.
-Exports: per-symbol bars/scores CSV and the full honesty outcomes CSV from
-the UI, or query the .db directly with any SQLite client.
+## Documentation map
 
-## Repo layout
+- [`DOCS_INDEX.md`](DOCS_INDEX.md) — which documents are current, frozen or historical.
+- [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md) — journeys, evidence display contract, design system, feature decisions.
+- [`docs/DESIGN_DIRECTIONS.md`](docs/DESIGN_DIRECTIONS.md) — the three directions weighed and the one chosen.
+- [`docs/PUBLIC_RELEASE_PLAN.md`](docs/PUBLIC_RELEASE_PLAN.md) — architecture, data boundaries, costs, rollback, approvals still needed.
+- [`docs/COMPETITION.md`](docs/COMPETITION.md) — Congressional App Challenge materials, allowed and disallowed claims, AI disclosure, FirstCommit note.
+- [`audits/2026-09-08-release-ledger.md`](audits/2026-09-08-release-ledger.md) — this release pass: findings, root causes, repairs, verification.
+- `proofs/` — dated evidence documents (freeze, lift, reconciliation, harness verification); `repro/` — pinned grading snapshot; `PREREGISTRATION.md` — the frozen grading protocol; `STORAGE.md`, `DEPLOY.md`, `ops/DR_RUNBOOK.md`, `ops/GO-LIVE.md`.
 
-```
-daemon/   Go — store (SQLite), ingest (cryptolive/alpaca/cryptohist),
-          signals, expectancy, insights, pipeline workers, maintain,
-          hud sync, JSON API (:8322)
-web/      Next.js 16 — 9 pages, typed API client, terminal design system
-```
+## Credits and AI assistance
 
-## Boundaries (stated, not hidden)
+Built by Nicholas Nyaung. Substantial parts of the codebase, the documentation and the
+2026-09-08 release pass were produced with AI assistance: Claude Code (Anthropic) as the
+engineering agent, with additional code drafts from other large language models routed
+through a local gateway, all reviewed and run before commit. The AI-assistance disclosure
+for competition submissions is kept in [`docs/COMPETITION.md`](docs/COMPETITION.md); what
+was designed and understood personally is for the author to state, not for this file to
+assume.
 
-Free IEX feed covers ~2–3% of US equity volume (fine for signals; not
-SIP-consolidated). Crypto bars come from Kraken only. Expectancy tables are
-per-symbol tendencies, not cross-sectional models. The insight writer is
-deterministic templates (no LLM). SignalDeck executes nothing: pre-registration
-seq 87 records that the book is not traded and that no execution layer is built
-for it, and the separate execution-layer repository is not wired to SignalDeck,
-by design.
+Libraries and services: Go and its SQLite driver (see `daemon/go.mod`), Next.js, React,
+Tailwind CSS, lightweight-charts, Playwright; data from Alpaca, Kraken, FRED, SEC EDGAR,
+FINRA, Wikimedia; external timestamps from OpenTimestamps calendars.
 
-## Exposing SignalDeck remotely
+## License
 
-The daemon is safe to keep on localhost by default. To expose it to the internet:
-
-1. **Set a bearer token** (for scripts / non-browser clients; maps to the admin user):
-   `SIGNALDECK_API_TOKEN=<long random string>`
-2. **Put it behind an HTTPS reverse proxy** (Caddy or nginx). Never expose :8322 directly.
-   Example Caddyfile:
-   ```
-   signaldeck.example.com {
-     reverse_proxy 127.0.0.1:8322
-   }
-   ```
-3. **Allowlist your public host and origin** (empty/missing host allowlist = deny):
-   - `SIGNALDECK_ALLOWED_HOSTS=signaldeck.example.com` (Host header allowlist; include the port if non-standard)
-   - `SIGNALDECK_WEB_ORIGINS=https://signaldeck.example.com` (CORS + CSRF origin allowlist)
-4. **Trust the proxy's client-IP headers** so rate limiting keys on real client IPs and
-   session cookies are marked `Secure`:
-   - `SIGNALDECK_TRUST_PROXY=true` (honors `X-Forwarded-For` / `X-Forwarded-Proto`)
-5. **Decide the access policy:**
-   - `SIGNALDECK_OPEN_SIGNUP=false` to close registration after your users have accounts.
-   - `SIGNALDECK_PUBLIC_READS=false` to require login for ALL endpoints (except `/api/health` and `/api/auth/*`).
-   - `SIGNALDECK_RATE_RPS` / `SIGNALDECK_RATE_BURST` to tune rate limits (defaults: reads 10 req/s burst 30; writes + AI 2 req/s burst 5, per client).
-
-Auth model: browser sessions use the `signaldeck_session` HttpOnly cookie (30-day expiry,
-bcrypt-hashed passwords; the first registered user is admin). On first boot with an existing
-database, a `local` admin user is created and its random password printed once to stderr,
-and the current watchlist/positions are migrated to it. The daily AI spend cap is persisted
-in SQLite, so restarts cannot reset it.
-
-### Remote alert delivery (beyond the Mac)
-
-By default, batched alert + watchdog notifications land only as macOS popups on the
-daemon's machine. Three optional remote transports fan the SAME messages out —
-configure any subset in `daemon/.env` (see `.env.example`):
-
-| Transport | Env var(s) | Payload |
-|-----------|-----------|---------|
-| Discord   | `SIGNALDECK_DISCORD_WEBHOOK` (channel webhook URL) | webhook JSON `{content}` |
-| Telegram  | `SIGNALDECK_TELEGRAM_BOT_TOKEN` **and** `SIGNALDECK_TELEGRAM_CHAT_ID` | Bot API `sendMessage` |
-| Generic webhook | `SIGNALDECK_WEBHOOK_URL` | `POST` JSON `{title, body, kind, ts}` |
-
-Behavior (honest by design):
-
-- The alert-runner sends **one batched message per sweep** (up to 5 alert detail lines,
-  then `+N more`), under the same shared 30-minute cooldown as the macOS popup. The
-  watchdog's healthy→unhealthy transition is delivered too (same 6h cooldown).
-- Every delivery has a **5s timeout and 1 retry**; a transport that still fails records a
-  `notify_failed` dq event and **never blocks or fails the fleet**. Webhook URLs and bot
-  tokens are **redacted** from all logs, errors, and dq details.
-- `GET /api/notify-status` (and the note on `/signals/alerts`) shows which transports are
-  configured plus last delivery / last redacted error — secrets are never echoed.
-- **No email transport**: that needs SMTP credentials or a provider account — noted as
-  future work rather than half-implemented.
+Source-available; see [`LICENSE`](LICENSE). All rights reserved by the author.

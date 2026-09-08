@@ -109,7 +109,9 @@ test("a refused registry shows the refusal and no accuracy figures", async ({ pa
   // status it does not recognise.
   const cls = (await banner.getAttribute("class")) ?? "";
   expect(cls, "the refusal banner rendered with no tone class").not.toContain("undefined");
-  expect(cls, "the refusal banner is not styled as a refusal").toMatch(/border-red-/);
+  // RefusalNotice tones through CSS variables, not Tailwind colour classes; the
+  // tone it chose is stamped as data-tone so a test can still tell red from nothing.
+  await expect(banner).toHaveAttribute("data-tone", "bad");
 
   // The gloss line must say something. An empty description under a red box
   // tells a reader nothing about why figures are being withheld.

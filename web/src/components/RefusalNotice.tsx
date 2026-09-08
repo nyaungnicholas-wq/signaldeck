@@ -84,6 +84,7 @@ export default function RefusalNotice(props: {
 			role="status"
 			data-testid={testId ?? "refusal-notice"}
 			data-status={status ?? "REFUSED"}
+			data-tone={tone}
 			className={baseCls}
 			style={style}
 		>

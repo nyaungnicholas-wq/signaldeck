@@ -85,7 +85,7 @@ def write_heartbeat(db: str, success: bool, rows: int | None, sha: str, error: s
     the grader for what is actually a database problem.
     """
     try:
-        con = sqlite3.connect(db, timeout=30)
+        con = sqlite3.connect(db, timeout=120)  # the daemon holds long write transactions; 30s lost a heartbeat on 2026-09-08
     except sqlite3.Error as e:
         print(f"grader_heartbeat: cannot open {db}: {e}", file=sys.stderr)
         return 2
