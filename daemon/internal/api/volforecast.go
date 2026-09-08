@@ -23,6 +23,12 @@ const RVRecordCaveat = "LIVE RECORD, ACCRUING. This is not a claim of skill. The
 // volForecastRecord returns the live volatility forecast record for horizons
 // 1 and 5 sessions. It reports only the accumulating evidence and never a
 // verdict of skill, because that must come from the pre-registered grader.
+// sharedVolRecordSWR fronts GET /api/vol-forecast/record. Ten minutes, not the
+// 60s respCacheTTL: the underlying rows change once per trading day, and a
+// rebuild costs ~25s of read-pool time, so a 60s TTL would spend a quarter of
+// every minute rebuilding an answer that had not changed.
+var sharedVolRecordSWR = newSWRBodyCache(10 * time.Minute)
+
 func (d Deps) volForecastRecord(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httpErr(w, http.StatusMethodNotAllowed, "method not allowed")

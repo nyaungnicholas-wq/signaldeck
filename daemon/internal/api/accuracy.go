@@ -69,7 +69,9 @@ func (d Deps) registerAccuracy(mux *http.ServeMux) {
 // (not this comment) if a client ever needs one served.
 type registryFile struct {
 	GradedAt          string        `json:"graded_at"`
+	Status            string        `json:"status"`
 	RefusedSince      *string       `json:"refused_since"`
+	RefusalReason     string        `json:"refusal_reason"`
 	GraderSHA256      string        `json:"grader_sha256"`
 	MinIndependentN   float64       `json:"min_independent_n"`
 	MinDistinctBlocks int           `json:"min_distinct_blocks"`
@@ -99,6 +101,7 @@ type accuracyResponse struct {
 	Reason       string        `json:"reason,omitempty"`
 	GeneratedAt  time.Time     `json:"generated_at"`
 	GradedAt     string        `json:"graded_at,omitempty"`
+	RefusedSince string        `json:"refused_since,omitempty"`
 	GraderSHA256 string        `json:"grader_sha256,omitempty"`
 	Rows         []accuracyRow `json:"rows,omitempty"`
 }
@@ -139,10 +142,16 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 
 	// The grader's own refusal marker outranks anything in the rows.
 	if reg.RefusedSince != nil && *reg.RefusedSince != "" {
+		// The envelope carries the gate's own sentence; a reader who cannot see
+		// WHY publication was refused cannot tell an outage from a decision.
+		reason := "grader has been refusing since " + *reg.RefusedSince
+		if reg.RefusalReason != "" {
+			reason += ": " + reg.RefusalReason
+		}
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
-			GradedAt: reg.GradedAt,
-			Reason:   "grader has been refusing since " + *reg.RefusedSince,
+			GradedAt: reg.GradedAt, RefusedSince: *reg.RefusedSince,
+			Reason: reason,
 		})
 		return
 	}

@@ -123,6 +123,10 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	warmBody("/api/calibration", "", sharedCalibrationSWR, d.calibration)
 	warmBody("/api/datastats", "datastats", sharedDatastatsSWR, d.datastats)
 	warmBody("/api/macro", "macro", sharedMacroSWR, d.macro)
+	// /api/vol-forecast/record: ~25s cold; the public /volatility page fetches
+	// it server-side under a 15s bound and rendered "not readable" to any
+	// visitor who arrived before a human had paid the build.
+	warmBody("/api/vol-forecast/record", "record", sharedVolRecordSWR, d.volForecastRecord)
 	// /api/xs-factor: recomputes the whole cross-section at read time from ~300
 	// trailing daily bars per active symbol, so a cold build must land on the
 	// warmer, never on the first visitor. Default query (21d / stocks / 50).

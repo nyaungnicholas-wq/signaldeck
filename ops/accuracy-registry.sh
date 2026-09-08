@@ -300,7 +300,8 @@ if [ -n "$refusal_reason" ]; then
   # and every other consumer went on serving the last good numbers with no way
   # to know they were stale. The rule that decided this is above, and stays
   # above: this line only reports the decision.
-  "$PY" "$SD/tools/grader_heartbeat.py" --failure --error "$refusal_reason" \
+  case "$refusal_reason" in "grader exited"*|*"liveness check failed"*) hb_mode=--failure ;; *) hb_mode=--refused ;; esac  # a gate refusal is a healthy grader saying no
+  "$PY" "$SD/tools/grader_heartbeat.py" "$hb_mode" --error "$refusal_reason" \
     >> "$LOG" 2>&1 || echo "heartbeat write failed (non-fatal)" >> "$LOG"
 
   if [ -f "$PREV_BACKUP" ]; then
@@ -371,9 +372,7 @@ lines = [
     "tables have been REMOVED rather than reprinted, because a number graded by code that "
     "refused to run today is not a live number.",
     "",
-    "```",
-    stderr_text or "(no grader output captured)",
-    "```",
+    "> The withheld grade stays inside `data/accuracy_registry.json` under `stale_last_registry` for the historical record and is not reprinted here; the grader's full output (which contains figures) is in `logs/accuracy-registry.log`, because a refusal notice that quotes the refused numbers is not a refusal.",
     "",
     "Full grading methodology and per-row JSON: `tools/accuracy_registry.py`, "
     "`data/accuracy_registry.json`; in-app at `/accuracy`.",

@@ -346,7 +346,12 @@ func (d Deps) requiresAuth(path string) bool {
 	// The cadence gate, not the auth gate, is what limits it.
 	// The public /volatility page also needs its aggregate evidence record
 	// when general reads are closed. No raw prices or personal data are served.
-	if path == "/api/track-record" || path == "/api/ledger/verify" || path == "/api/vol-forecast/record" {
+	// /api/accuracy joins them (2026-09-08): it is the publication decision the
+	// landing page and /accuracy render, it serves aggregates only (no user
+	// data, no vendor rows), and it fails closed on its own — a refusal is a
+	// 503 with a reason. A grade behind a login is a grade hidden.
+	if path == "/api/track-record" || path == "/api/ledger/verify" || path == "/api/vol-forecast/record" ||
+		path == "/api/accuracy" {
 		return false
 	}
 	// The MCP endpoint authenticates itself, and strictly more tightly than

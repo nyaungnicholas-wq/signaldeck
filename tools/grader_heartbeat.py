@@ -23,6 +23,7 @@ Usage, from ops/accuracy-registry.sh:
 
     python tools/grader_heartbeat.py --success            # after a clean grade
     python tools/grader_heartbeat.py --failure --error "grader exited 3"
+    python tools/grader_heartbeat.py --refused --error "publication gate: ..."
 """
 
 from __future__ import annotations
@@ -114,18 +115,27 @@ def main() -> int:
                       help="the runner confirmed a real grade")
     mode.add_argument("--failure", action="store_true",
                       help="the runner refused; --error says why")
+    mode.add_argument("--refused", action="store_true",
+                      help="the grader RAN and the publication gate refused to publish; recorded as a healthy heartbeat (success=1, error='REFUSED: <reason>') so the health check sees a live grader; the registry envelope, not this row, carries the refusal to /api/accuracy")
     ap.add_argument("--error", default="", help="the runner's refusal reason")
     args = ap.parse_args()
 
-    if args.failure and not args.error.strip():
-        # A failure with no reason is the state this whole file exists to
-        # abolish. Refuse to record an unexplained one.
-        ap.error("--failure requires --error explaining the refusal")
+    # A publication refusal is NOT a grader failure — the grader produced a grade and the gate declined to publish it;
+    # filing it as success=0 kept ops/check-grader-health.ps1 red for every day of a refusal window (weeks),
+    # which is a check nobody reads.
+    if (args.failure or args.refused) and not args.error.strip():
+        ap.error("--failure / --refused require --error explaining the refusal")
 
-    rc = write_heartbeat(args.db, args.success, _registry_rows(args.registry),
-                         _grader_sha256(args.grader), args.error)
-    print(f"grader_heartbeat: recorded {'ok' if args.success else 'FAILED'}"
-          + (f" ({args.error})" if args.error else ""))
+    success = args.success or args.refused
+    if args.refused:
+        error = f"REFUSED: {args.error.strip()}"
+    else:
+        error = args.error
+
+    rc = write_heartbeat(args.db, success, _registry_rows(args.registry),
+                         _grader_sha256(args.grader), error)
+    label = "ok" if args.success else ("ok (publication REFUSED)" if args.refused else "FAILED")
+    print(f"grader_heartbeat: recorded {label}" + (f" ({args.error})" if args.error else ""))
     return rc
 
 

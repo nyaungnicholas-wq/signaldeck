@@ -78,6 +78,10 @@ FIXTURE = {
 }
 
 
+# The same grade as a PUBLISHABLE registry: rows at the top level, no status.
+FIXTURE_OK = dict(FIXTURE["stale_last_registry"])
+
+
 def run(*args, cwd=None):
     return subprocess.run([sys.executable, SCRIPT, *args], cwd=cwd or REPO,
                           capture_output=True, text=True)
@@ -94,7 +98,7 @@ class TmpRepo:
         self.registry = os.path.join(root, "data", "accuracy_registry.json")
         self.partial = os.path.join(root, "partials", "live_accuracy.md")
         with open(self.registry, "w", encoding="utf-8") as f:
-            json.dump(FIXTURE, f)
+            json.dump(FIXTURE_OK, f)
         self.root = root
         return self
 
@@ -156,27 +160,28 @@ class TestGenerator(unittest.TestCase):
             self.assertNotIn("unchanged", r.stdout,
                              "content that really moved must not be reported unchanged")
 
-    def test_falls_back_to_last_successful_grade_and_says_it_is_stale(self):
+    def test_refused_registry_renders_a_refusal_and_no_figures(self):
+        # 2026-09-08: a REFUSED envelope used to fall back to the withheld grade under a
+        # STALE banner, republishing the exact figures the gate refused. Now: refusal only.
         with TmpRepo() as t:
+            with open(t.registry, "w", encoding="utf-8") as f:
+                json.dump(FIXTURE, f)
             r = t.gen("--write")
             self.assertEqual(r.returncode, 0, r.stderr)
             md = t.read(t.partial)
-            # The live rows from the last successful grade are present.
-            self.assertIn("46.3%", md)
-            self.assertIn("2,257", md)
-            self.assertIn("52.9%", md)
-            # And the staleness is stated, not hidden.
-            self.assertIn("2026-08-03T23:06:30", md)
-            low = md.lower()
-            self.assertTrue("refused" in low or "stale" in low,
-                            "a REFUSED registry must be declared stale in the partial")
-            self.assertIn("grader exited 1", md)
+            for banned in ("46.3%", "2,257", "52.9%", "### Live record", "| Predictor |"):
+                self.assertNotIn(banned, md, "a refused registry republished a figure: %r" % banned)
+            self.assertIn("GRADING REFUSED", md)
+            self.assertIn("2026-08-03T23:06:30", md)  # the withheld grade is named, not printed
+            self.assertIn("grader exited 1", md)  # and so is the reason
 
-    def test_never_publishes_an_empty_table_from_a_refused_registry(self):
+    def test_refused_registry_with_no_stale_grade_still_renders_a_refusal(self):
         with TmpRepo() as t:
-            t.gen("--write")
-            md = t.read(t.partial)
-            self.assertIn("directional-ensemble (1d)", md)
+            with open(t.registry, "w", encoding="utf-8") as f:
+                json.dump(dict(FIXTURE, stale_last_registry=None), f)
+            r = t.gen("--write")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("GRADING REFUSED", t.read(t.partial))
 
     def test_no_interval_verdict_while_intervals_are_withheld(self):
         with TmpRepo() as t:
@@ -206,8 +211,8 @@ class TestGenerator(unittest.TestCase):
         # the /proof fix removed. The number itself must be withheld, not just
         # the verdict; a row that HAS a null keeps its percentage.
         import copy
-        fixture = copy.deepcopy(FIXTURE)
-        fixture["stale_last_registry"]["rows"].append(
+        fixture = copy.deepcopy(FIXTURE_OK)
+        fixture["rows"].append(
             {"predictor": "liquidity21", "family": "regime", "band": "all",
              "live_n": 275, "live_acc": 0.785, "ci": None,
              "distinct_days": 1, "null_prequential": None, "skill": None,

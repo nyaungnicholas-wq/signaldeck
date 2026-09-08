@@ -38,7 +38,7 @@ func TestProbesStayReachableWhenReadsAreClosed(t *testing.T) {
 // prefix and quietly published the whole ledger surface.
 func TestProofReceiptsArePublicButNarrowly(t *testing.T) {
 	d := Deps{Cfg: config.Config{PublicReads: false}}
-	for _, p := range []string{"/api/track-record", "/api/ledger/verify"} {
+	for _, p := range []string{"/api/track-record", "/api/ledger/verify", "/api/accuracy"} {
 		if d.requiresAuth(p) {
 			t.Errorf("%s requires auth with PublicReads=false — /proof renders its "+
 				"error state to every anonymous visitor it exists for", p)

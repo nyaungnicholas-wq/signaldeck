@@ -107,7 +107,13 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("POST /api/waitlist", d.waitlistAdd)
 	// The LIVE record of the HAR volatility forecast. Reports evidence, never
 	// a verdict: only the pre-registered grader may say whether it is skill.
-	mux.HandleFunc("GET /api/vol-forecast/record", d.volForecastRecord)
+	// Body-cached: the record is a scan over every resolved RV forecast (~25s
+	// cold, measured 2026-09-08) and it changes once a day, so the first
+	// visitor — and the /volatility page's 15s server-side fetch — must never
+	// be the one to build it. WarmCaches keeps it hot.
+	mux.HandleFunc("GET /api/vol-forecast/record", func(w http.ResponseWriter, r *http.Request) {
+		sharedVolRecordSWR.serve("record", w, r, d.volForecastRecord)
+	})
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
 	d.registerQuant(mux)     // forecast, backtest, risk, correlation, portfolio
 	d.registerAI(mux)        // analyst, chat, filingmind, debate, status
@@ -681,6 +687,15 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 	// read, so those surfaces answer from stale data — which is exactly the
 	// "listening but answering wrong" state this endpoint exists to separate
 	// from "up". Sorted so the reason list is stable across polls.
+	// "degraded" is the status a worker files when it RAN and chose not to
+	// deliver (workers.ErrDegraded: a trainer benched by its own OOS bar, the
+	// forecast monitor reporting an expected abstention, a poller whose upstream
+	// is down but whose stored history still serves). Those surfaces answer
+	// correctly — they answer "withheld". Counting them here kept /api/ready at
+	// 503 for weeks at a time, so nothing could ever route on it. They are
+	// reported to an authenticated caller under `degraded`, and /api/health
+	// still carries degraded=true; readiness fails only on error/timeout/orphan.
+	degraded := []string{}
 	if failing, err := d.failingWorkers(r.Context()); err != nil {
 		reasons = append(reasons, "worker fleet state unreadable")
 	} else {
@@ -690,6 +705,10 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(names)
 		for _, name := range names {
+			if failing[name] == "degraded" {
+				degraded = append(degraded, name)
+				continue
+			}
 			reasons = append(reasons, "worker not delivering ("+failing[name]+"): "+name)
 		}
 	}
@@ -707,10 +726,14 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		writeJSON(w, map[string]any{"ready": false, "reasons": reasons})
+		writeJSON(w, map[string]any{"ready": false, "reasons": reasons, "degraded": degraded})
 		return
 	}
-	writeJSON(w, map[string]any{"ready": true})
+	if userID(r) == 0 {
+		writeJSON(w, map[string]any{"ready": true})
+		return
+	}
+	writeJSON(w, map[string]any{"ready": true, "degraded": degraded})
 }
 
 // watchRow is one watchlist/screener entry.

@@ -168,8 +168,7 @@ PY
   #    stub that resolves on PATH and exits non-zero, so this regeneration had
   #    NEVER run on Windows — every publish silently took the WARN branch and
   #    shipped whatever copy was already on disk.
-  "$(sd_py)" "$SD/tools/accuracy_registry.py" --json "$REG" >/dev/null 2>&1 \
-    || echo "WARN: registry regeneration failed — publishing the last good copy"
+  # No regrade here (removed 2026-09-08): the registry is published exactly as ops/accuracy-registry.sh left it, envelope and all — see git log for why.
   # tools/render_track_record.py refuses an unreadable or rows-empty registry
   # itself (exit 1, nothing on stdout), so the emptiness guard and the README
   # render are one check now instead of two spellings that could disagree.
