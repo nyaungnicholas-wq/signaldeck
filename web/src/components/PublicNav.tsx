@@ -17,7 +17,7 @@ export default function PublicNav({ pathname }: { pathname?: string }) {
     current === href || current.startsWith(href + "/");
 
   return (
-    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+    <div className="flex min-w-0 basis-full flex-wrap items-center gap-2 sm:flex-1 sm:basis-auto">
       <nav aria-label="Public record" className="flex flex-wrap items-center gap-1">
         {ITEMS.map(({ label, href }) => {
           const active = isActive(href);
