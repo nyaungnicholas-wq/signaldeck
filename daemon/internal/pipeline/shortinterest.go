@@ -66,7 +66,10 @@ func (w *ShortInterestPoller) Interval() time.Duration { return 12 * time.Hour }
 // a file is due — but it only needs to be consulted once a day, after the
 // evening publication window.
 func (w *ShortInterestPoller) NextFire(last, now time.Time) time.Time {
-	return workers.TradingDayAtET(now, 18, 45)
+	// Catch-up: the host is routinely down at 18:45 ET (measured 2026-09-09:
+	// no run since 09-03 while the source went 40 days stale), so a missed
+	// slot fires at the next tick instead of waiting for the next trading day.
+	return workers.TradingDayAtETCatchUp(last, now, 18, 45)
 }
 
 func (w *ShortInterestPoller) now() time.Time {

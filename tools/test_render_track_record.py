@@ -133,7 +133,15 @@ class TestRenderTrackRecord(unittest.TestCase):
             [sys.executable, str(SCRIPT), str(real)],
             capture_output=True, text=True, encoding="utf-8", cwd=str(ROOT),
         )
-        if not payload.get("rows"):
+        if not payload.get("rows") and payload.get("status") == "REFUSED":
+            # A REFUSED envelope is a publication decision, not an empty registry
+            # (release ledger 2026-09-08, F1/F17): it renders a refusal notice with
+            # no figures and exits 0 so the anchor publish carries the refusal.
+            self.assertEqual(out.returncode, 0, "a REFUSED envelope must render a refusal notice")
+            self.assertIn("GRADING REFUSED", out.stdout)
+            self.assertNotRegex(out.stdout, r"\d+\.\d+%", "a refusal must print no accuracy figure")
+            return
+        elif not payload.get("rows"):
             self.assertNotEqual(
                 out.returncode, 0,
                 f"registry is {payload.get('status', 'rows-empty')} and must NOT render, "

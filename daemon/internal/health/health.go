@@ -400,7 +400,12 @@ func unhealthyMsg(stale, failing []string) string {
 // lastSuccess maps worker → time of most recent successful run (read pool).
 func (w *Watchdog) lastSuccess(ctx context.Context) (map[string]time.Time, error) {
 	rows, err := w.St.DB().QueryContext(ctx,
-		`SELECT worker, MAX(started_at) FROM worker_runs WHERE status='ok' GROUP BY worker`)
+		// 'degraded' counts as a heartbeat: the worker ran on schedule and
+		// honestly reported it had nothing to deliver (the benched trainers do
+		// this every run by design). Counting only 'ok' held health.json at
+		// ok=false with two "stale" workers for weeks — an alarm that can never
+		// clear is an alarm nobody acts on. /api/ready lists them as degraded.
+		`SELECT worker, MAX(started_at) FROM worker_runs WHERE status IN ('ok','degraded') GROUP BY worker`)
 	if err != nil {
 		return nil, err
 	}

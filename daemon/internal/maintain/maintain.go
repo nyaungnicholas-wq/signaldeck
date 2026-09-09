@@ -474,6 +474,13 @@ func horizonTF(h md.Horizon) md.Timeframe {
 func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
 	resolved, voided, waiting := 0, 0, 0
+	// Delisted names never print a forward bar: void their rows at once instead of
+	// parking them 30 days at the head of the oldest-first LIMIT-1500 queue, where
+	// they starved every live row behind them (measured 2026-09-09, see DelistedSymbolIDs).
+	delisted, err := o.St.DelistedSymbolIDs(ctx)
+	if err != nil {
+		return "", err
+	}
 	for _, h := range md.Horizons {
 		tf := horizonTF(h)
 		// Only fetch rows old enough that the window COULD have closed.
@@ -514,6 +521,13 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 			fwd, okFwd, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, target)
 			if err != nil {
 				return "", err
+			}
+			if !okFwd && delisted[p.SymbolID] {
+				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
+					return "", err
+				}
+				voided++
+				continue
 			}
 			// STALE BASE (audit 2026-09-07): the score was struck against a bar
 			// whose window closed more than 3 horizons before the score itself
@@ -567,13 +581,53 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	return fmt.Sprintf("resolved %d, voided %d, waiting %d", resolved, voided, waiting), nil
+	// The prediction resolver only visits rows that HAVE a forward bar, so forecasts on
+	// delisted names were never touched: 16,648 of them on 1,894 names kept those names
+	// out of DQ silencing (measured 2026-09-09).
+	dead, err := o.St.VoidDeadPredictions(ctx, now-21*86400, now)
+	if err != nil {
+		return "", err
+	}
+	if dead > 0 {
+		if err := o.St.InsertDQ(ctx, md.DQEvent{Ts: now, Kind: "dead_predictions_voided", Detail: fmt.Sprintf("voided %d forecast outcome(s) on delisted symbols with no daily bar since the forecast", dead)}); err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("resolved %d, voided %d, waiting %d, dead predictions voided %d", resolved, voided, waiting, dead), nil
 }
 
 // ── DQAuditor ───────────────────────────────────────────────────────────
 
 // DQAuditor detects stale feeds and bar gaps per active symbol and records
 // them as dq_events (rate-limited via meta keys, one per symbol per hour).
+// dailyBarStale reports whether a daily-only symbol has gone stale: at least two
+// NYSE trading days have fully elapsed after the session its newest daily bar
+// belongs to and still no bar. A bar stamped Friday is therefore NOT stale on the
+// Tuesday after a Monday holiday (one elapsed session); the old "older than 4
+// calendar days" rule false-flagged 286 symbols for 9 hours across the 2026-09-07
+// Labor Day weekend (2,583 events). Today never counts: the 6h poller may not have
+// fetched it yet.
+func dailyBarStale(latestBarTs int64, now time.Time) bool {
+	if latestBarTs <= 0 {
+		return false
+	}
+	loc := marketcal.Loc()
+	barDay := time.Unix(latestBarTs, 0).In(loc)
+	barDay = time.Date(barDay.Year(), barDay.Month(), barDay.Day(), 0, 0, 0, 0, loc)
+	n := now.In(loc) // the host clock is Pacific: 22:00 PT is already tomorrow in New York
+	today := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, loc)
+	count := 0
+	for t := barDay.AddDate(0, 0, 1); t.Before(today); t = t.AddDate(0, 0, 1) {
+		if count >= 60 {
+			break
+		}
+		if marketcal.IsTradingDay(t) {
+			count++
+		}
+	}
+	return count >= 2
+}
+
 type DQAuditor struct {
 	St *store.Store
 }
@@ -613,6 +667,10 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	sweepOpen, _ := a.St.GetMeta(ctx, "sweep_open")
+	// During the sweep_open hour every delisted name with an unresolved outcome
+	// is active and stale, so the daily-only check is suspended for stocks that
+	// are not in the streamed hot set (crypto and the streamed set are still audited).
 	now := time.Now()
 	flagged, skipped := 0, 0
 	for _, s := range syms {
@@ -627,6 +685,10 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 		var stale bool
 		var detail string
 		age := now.Unix() - latest
+		if sweepOpen != "" && s.Market == md.Stocks && !s.Stream {
+			skipped++
+			continue
+		}
 		switch s.Market {
 		case md.Crypto:
 			stale = latest > 0 && age > 45*60 // Kraken minute refresh cadence + slack
@@ -650,10 +712,12 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 				if err != nil {
 					return "", err
 				}
-				// >4 calendar days with no daily bar spans any weekend or
-				// single holiday; longer means the 6h poller is missing it.
+				// Two fully elapsed NYSE sessions with no daily bar means the
+				// 6h poller is missing it; a weekend or holiday never counts
+				// (the old ">4 calendar days" rule false-flagged every
+				// Monday holiday, see dailyBarStale).
 				ageD := now.Unix() - latestD
-				stale = latestD > 0 && ageD > 4*86400
+				stale = dailyBarStale(latestD, now) // calendar-aware, see dailyBarStale
 				detail = fmt.Sprintf("last daily bar %dd old (daily-only universe)", ageD/86400)
 			}
 		}
@@ -676,7 +740,7 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 		}
 		flagged++
 	}
-	return fmt.Sprintf("checked %d live symbols, flagged %d (%d delisted skipped)",
+	return fmt.Sprintf("checked %d live symbols, flagged %d (%d skipped: delisted, or daily-only during a sweep)",
 		len(syms)-skipped, flagged, skipped), nil
 }
 

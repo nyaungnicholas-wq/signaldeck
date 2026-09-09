@@ -90,7 +90,9 @@ func (w *CongressPoller) NextFire(last, now time.Time) time.Time {
 	if w.deadRuns > 0 {
 		return workers.BackoffAfter(now, w.deadRuns, 12*time.Hour, congressBackoffMax)
 	}
-	return workers.DailyAtET(now, 9, 0)
+	// 09:00 ET is 06:00 PT, inside the host's daily off-window; a missed slot
+	// fires at the next tick rather than a full day later.
+	return workers.DailyAtETCatchUp(last, now, 9, 0)
 }
 
 func (w *CongressPoller) now() time.Time {

@@ -172,6 +172,8 @@ PY
   # tools/render_track_record.py refuses an unreadable or rows-empty registry
   # itself (exit 1, nothing on stdout), so the emptiness guard and the README
   # render are one check now instead of two spellings that could disagree.
+  # A REFUSED envelope is the one rows-empty shape that renders (a refusal
+  # notice, no figures, exit 0): the refusal itself is what gets published.
   # Rendered to a temp file so a mid-render failure never leaves a truncated
   # README in the public history.
   "$(sd_py)" "$SD/tools/render_track_record.py" "$REG" > "$REPO/README.md.tmp" \

@@ -71,7 +71,7 @@ const slug = (route) => {
         let pageErrors = 0;
         page.on("console", msg => { if (msg.type() === "error") consoleErrors++; });
         page.on("pageerror", () => pageErrors++);
-        await page.addInitScript(() => { try { localStorage.setItem("sd-onboarded", "1"); } catch (_) {} });
+        await page.addInitScript(() => { try { localStorage.setItem("sd-onboarded", "1"); } catch {} });
 
         let start = Date.now();
         let status = null;
@@ -83,7 +83,7 @@ const slug = (route) => {
             try {
               const resp = await page.goto(base + route, { waitUntil: "load", timeout: 45000 });
               status = resp ? resp.status() : null;
-            } catch (_) { status = null; }
+            } catch { status = null; }
           } else {
             status = null;
           }

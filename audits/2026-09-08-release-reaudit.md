@@ -18,26 +18,29 @@ Independent audit re-checked: `C:\Users\Nicholas_N\Documents\Codex\2026-09-07\ca
 
 ## Summary
 
-| ID | Area | Severity | Finding | Status |
-|---|---|---|---|---|
-| F1 | publication | HIGH | Landing page printed the refused figures under a "publication refused" banner | VERIFIED |
-| F2 | statistics | HIGH | Grader's "significantly worse" sentence shown while the honesty block says WITHHELD (null-interval overlap) | VERIFIED (presentation) · EXPECTED LIMITATION (verdict rule) |
-| F3 | access | MEDIUM | "See the grades" led to a sign-in wall rendered as a refusal; `/api/accuracy` 401 anonymously | VERIFIED |
-| F4 | docs | MEDIUM | README declared the freeze lifted and active; refusal block quoted numeric grader output; SHIP_READINESS reprinted the withheld table | VERIFIED |
-| F5 | wording | MEDIUM | `/proof` and the dashboard called deduplicated symbol-days "independent" | VERIFIED |
-| F6 | ops | MEDIUM | `/api/ready` 503 for weeks because deliberately abstaining workers counted as failures; then again on 09-08 for an `orphaned` row left by a restart | VERIFIED (degraded) · IMPLEMENTED — NOT YET VERIFIED (orphaned, second deploy) |
-| F7 | ops | MEDIUM | A publication refusal was filed as a grader failure heartbeat; the health task was red every day of the window | VERIFIED (17:45 run: success=1 "REFUSED: …", check-grader-health RESULT: ok) |
-| F8 | web | MEDIUM | `/volatility` showed "not readable" to cold visitors (25 s build vs 15 s bound) | VERIFIED |
-| F9 | performance | HIGH | Heavy reads and writes collapse under worker load (symbol page >200 s, sign-in 30 s timeouts) | PARTIALLY REPAIRED (symbol, screener, flagship paper body-cached and warmed; insights index) · sign-in write waits remain an EXPECTED LIMITATION |
-| F10 | forecasts | — | Forecast-monitor "coverage starved" on 10/12 days | NOT REPRODUCED as a defect |
-| F11 | evidence | — | Volatility 1/60 days; accuracy window refused; congress poller awaiting its next run | EXPECTED LIMITATION · congress VERIFIED ok at 06:00 (senate 918 new, house 797 new) |
-| F12 | deploy | — | Worker rows stamped `60b7afa` while HEAD was `cbec417` | VERIFIED (resolved by the deploy) |
-| F13 | provenance | MEDIUM | Docs call the anchors repo public; GitHub says PRIVATE | CONFIRMED · BLOCKED (owner) |
-| F14 | web | LOW | `/accuracy` titled "Dashboard"; `/volatility` title suffix doubled | VERIFIED |
-| F15 | UI | MEDIUM | Overlapping onboarding surfaces, 6,000 px symbol page, eight header chips, reason wall on the dashboard | REPAIRED (one onboarding surface at a time; four header chips folded into one status disclosure; experimental section collapsible; reason summarized) — IMPLEMENTED — NOT YET VERIFIED in browser |
-| F16 | disclosure | MEDIUM | No development-AI disclosure in the README | VERIFIED |
-| F17 | ops | LOW | Scheduled tasks ending with result 1 (Accuracy, Check-Grader-Health, Market-Close, Web) | REPAIRED: a recorded refusal now exits 0; grader health is ok; Market-Close was 0 on 09-08 and the 09-04 failure is not reproducible (log rotated) |
-| F18 | ops | LOW | Heartbeat and anchor jobs lose writes to "database is locked" | VERIFIED for the heartbeat (17:45 row landed with the 120 s wait); anchor-publish unchanged |
+| id | area | severity | impact | evidence (measured) | status |
+|---|---|---|---|---|---|
+| **F1** | publication | high | Landing page printed the refused figures under a "publication refused" banner | Browser, 2026-09-07 22:20: / showed the red banner, a "retired by its own rule" card reading −10.3pp / 44.7% / 55.0% / 2,892 forecasts / 28 days, and a four-row table. On disk, data/accuracy_registry.json (mtime 19:30... | fixed |
+| **F2** | statistics | high | Grader's "significantly worse" sentence shown while the honesty block says WITHHELD (null-interval overlap) | The directional-ensemble (1d) row carries honesty.resolvability.supported=false with the reason that accuracy 0.4474 [0.3517, 0.5473] and null 0.5500 [0.3870, 0.7029] overlap; the grader's sentence compares the accura... | fixed |
+| **F3** | access | medium | "See the grades" led to a sign-in wall rendered as a refusal; `/api/accuracy` 401 anonymously | Anonymous GET /api/accuracy → 401; /accuracy rendered a REFUSED banner reading "not public on this deployment — sign in"; "Open workspace" bounced to /login. - Root cause. /api/accuracy was missing from the daemon's a... | fixed |
+| **F4** | docs | medium | README declared the freeze lifted and active; refusal block quoted numeric grader output; SHIP_READINESS reprinted the withheld table | README line 5 "freeze lifted", line 27 "FROZEN — REMEDIATION IN PROGRESS", line 49 "lifted"; the refusal block embedded the grader's stderr including calibration bins with percentages and counts; partials/live_accurac... | fixed |
+| **F5** | wording | medium | `/proof` and the dashboard called deduplicated symbol-days "independent" | /proof and the dashboard strip say "deduplicated symbol-day observations over N distinct trading days (observations on one day share a market move, so they are not independent)"; the stat tile is "SYMBOL-DAY OBS."; th... (web release commit cdd89db) | fixed |
+| **F6** | ops | medium | `/api/ready` 503 for weeks because deliberately abstaining workers counted as failures; then again on 09-08 for an `orphaned` row left by a restart | /api/ready 503 with reasons naming congress-poller, expectancy-trainer, forecast-monitor and gbm-trainer — all degraded, three of them by design (benched models, expected coverage abstention). - Repair. The ready hand... | fixed |
+| **F7** | ops | medium | A publication refusal was filed as a grader failure heartbeat; the health task was red every day of the window | tools/grader_heartbeat.py --refused writes success=1 with error REFUSED: <reason>; ops/accuracy-registry.sh chooses --refused unless the grader itself exited or the liveness check failed. ops/check-grader-health.ps1 n... | fixed |
+| **F8** | web | medium | `/volatility` showed "not readable" to cold visitors (25 s build vs 15 s bound) | /api/vol-forecast/record 25.2 s uncached; the page's server fetch is bounded at 15 s; the sweep and the browser both showed "The live record is not readable right now". - Repair. Body-level stale-while-revalidate cach... | fixed |
+| **F9** | performance | high | Heavy reads and writes collapse under worker load (symbol page >200 s, sign-in 30 s timeouts) | (authenticated curl). Under nightly trainer load, 2026-09-07 22:30: /api/paper 116.7 s (timed out), /api/symbol?symbol=SPY 48 s, /api/screener 31 s, /api/movers 19 s, /api/ledger/verify 503 after its 30 s cap. Quiet, ... | accepted-risk |
+| **F10** | forecasts | low | Forecast-monitor "coverage starved" on 10/12 days | - Status. NOT REPRODUCED as a defect: every measured directional leg ranks backwards and is | refuted |
+| **F11** | evidence | low | Volatility 1/60 days; accuracy window refused; congress poller awaiting its next run | - Volatility record 1 of 60 distinct days; accuracy window refused over 23 collapsed | accepted-risk |
+| **F12** | deploy | low | Worker rows stamped `60b7afa` while HEAD was `cbec417` | - Status. VERIFIED as resolved: ops/signaldeck-ctl.sh deploy reported "deploy VERIFIED: | fixed |
+| **F13** | provenance | medium | Docs call the anchors repo public; GitHub says PRIVATE | - gh repo list reports nyaungnicholas-wq/signaldeck-anchors PRIVATE while anchor-publish.sh | open |
+| **F14** | web | low | `/accuracy` titled "Dashboard"; `/volatility` title suffix doubled | - /accuracy had no metadata export (inherited "Dashboard — SignalDeck"); /volatility carried (web release commit cdd89db) | fixed |
+| **F15** | UI | medium | Overlapping onboarding surfaces, 6,000 px symbol page, eight header chips, reason wall on the dashboard | - Three overlapping onboarding surfaces on /dashboard (setup checklist, goal banner, "New | fixed |
+| **F16** | disclosure | medium | No development-AI disclosure in the README | - README "Credits and AI assistance"; docs/COMPETITION.md carries the submission disclosure (docs commit 8859834) | fixed |
+| **F17** | ops | low | Scheduled tasks ending with result 1 (Accuracy, Check-Grader-Health, Market-Close, Web) | - Last result 1 for SignalDeck Accuracy (the refusal path exits non-zero), Check-Grader-Health | fixed |
+| **F18** | ops | low | Heartbeat and anchor jobs lose writes to "database is locked" | - grader_heartbeat.py at 23:58 and anchor-publish.sh at 19:30 both hit the lock. The | fixed |
+| **F19** | ops | medium | The SignalDeck Web task (8323) dies with 0xC000013A when a console control event reaches it; the principal fix needs elevation | At 2026-09-08 00:50 port 8323 refused connections; the task "SignalDeck Web" showed last result 0xC000013A (console control exit) at 23:53 while the loopback workspace on 3000 stayed up. ops/check-task-health.ps1 has ... | open |
+| **F20** | security | low | Public-surface mode had never been exercised end to end | bin/signaldeckd.exe (commit b15975d) started on a scratch database with SIGNALDECK_PUBLIC_SURFACE=1, SIGNALDECK_PUBLIC_READS=false, SIGNALDECK_OPEN_SIGNUP=false, a throwaway token, and the notify/LLM/offsite keys over... | fixed |
+| **F21** | ops | low | No keepalive for the web tasks after a console-control kill | - ops/web-guard.ps1 probes 8323 and 3000 every five minutes and restarts the matching task when one stops answering; registered unelevated as "SignalDeck Web Keepalive" (first run 18:38: "8323 ok, 3000 ok"). Mitigates... | fixed |
 
 ## Findings
 

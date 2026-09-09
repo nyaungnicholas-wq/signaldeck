@@ -693,3 +693,23 @@ func (s *Store) EvidenceDayBySymbol(ctx context.Context, h md.Horizon) (map[int6
 	}
 	return out, rows.Err()
 }
+
+// VoidDeadPredictions voids forecasts on delisted symbols that have printed
+// no daily bar since the forecast and are older than `before` (the caller
+// passes now minus three of the longest horizon); the resolver's own query
+// skips rows with no forward bar, so nothing else ever touches them; measured
+// 2026-09-09: 16,648 such rows over 1,894 delisted names, which also kept those
+// names out of the DQ silencing set. Voided rows keep up and fwd_return NULL,
+// exactly like the resolver's own voids.
+func (s *Store) VoidDeadPredictions(ctx context.Context, before, now int64) (int64, error) {
+	res, err := s.w.ExecContext(ctx, `
+        UPDATE prediction_outcomes SET resolved_at = ?
+        WHERE resolved_at IS NULL AND ts < ?
+          AND symbol_id IN (SELECT id FROM symbols WHERE COALESCE(delisted_at, 0) > 0)
+          AND NOT EXISTS (SELECT 1 FROM bars b WHERE b.symbol_id = prediction_outcomes.symbol_id AND b.tf = '1d' AND b.ts > prediction_outcomes.ts)
+    `, now, before)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

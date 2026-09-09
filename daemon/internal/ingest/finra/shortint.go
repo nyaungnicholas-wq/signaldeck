@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/edgar"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 )
 
 const (
@@ -233,6 +234,14 @@ func validDay(s string) bool {
 // SettlementDates returns the most recent `n` bi-monthly settlement dates
 // (the 15th and the last day of each month) that are ≤ now, newest first.
 // Pure function — the worker's publication-lag probing is built on it.
+// priorBusinessDay: nearest NYSE trading day at or before a UTC-midnight date (checked at noon UTC).
+func priorBusinessDay(d time.Time) time.Time {
+	for i := 0; i < 10 && !marketcal.IsTradingDay(d.Add(12*time.Hour)); i++ {
+		d = d.AddDate(0, 0, -1)
+	}
+	return d
+}
+
 func SettlementDates(now time.Time, n int) []time.Time {
 	if n <= 0 {
 		return nil
@@ -243,6 +252,12 @@ func SettlementDates(now time.Time, n int) []time.Time {
 		eom := time.Date(y, m+1, 0, 0, 0, 0, 0, time.UTC) // day 0 of next month = EOM
 		mid := time.Date(y, m, 15, 0, 0, 0, 0, time.UTC)
 		for _, d := range []time.Time{eom, mid} {
+			// FINRA settles on the prior business day when the 15th or the
+			// month-end falls on a weekend or holiday, and names the file by
+			// that date: shrt20260814.csv exists, shrt20260815.csv (a Saturday)
+			// is a 403 forever. Measured 2026-09-09 — the unadjusted date left
+			// the mid-August cycle "not yet published" for 25 days.
+			d = priorBusinessDay(d)
 			if len(out) < n && !d.After(now) {
 				out = append(out, d)
 			}
