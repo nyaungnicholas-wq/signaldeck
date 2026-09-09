@@ -8,6 +8,10 @@ tools 411 passed and 2 failed), and every finding below sat behind them or in li
 `dq_events` rows. Repairs are commit `e5277e3`, deployed through `ops/signaldeck-ctl.sh deploy` and
 VERIFIED running (`deploy VERIFIED: daemon is running commit e5277e3ff8a93f4e424acc2add92310ac939efc6`,
 4 worker rows stamped at 08:39 UTC, then cot-poller, finra-shortint, outcome-resolver and dq-auditor rows).
+Round two (gap-fill, anchors wording) is commit `b919737`, deployed the same way and VERIFIED (`deploy VERIFIED:
+daemon is running commit b919737367f55260b2a2398e068dbc4ce23b4b1c`, 6 worker rows stamped); first reconciler pass
+09:35 UTC: "checked 329 active symbols, re-enqueued 12 under-covered, gap-filled 6 streamed (35 streamed with a
+session gap)", health.json ok, /api/ready 200.
 
 **Status: BLOCKED - NOT COMPLETE on one item.** Twelve findings fixed and verified or refuted, including
 the A12 retention trade-off (resolved by construction: gap-fill never exceeds the retention window or the
