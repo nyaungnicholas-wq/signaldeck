@@ -253,3 +253,7 @@ Independent audit re-checked: `C:\Users\Nicholas_N\Documents\Codex\2026-09-07\ca
 - `/api/screener` 2 ms and `/api/paper?strategy=flagship-1d` 1 ms, both served warm by the cache-warmer.
 - `/api/symbol?symbol=SPY` answered 503 in 5.0 s twice: a cold miss waits at most 5 s for one of the two cold-build slots, and the warmer held both during the storm. That is the cache's admission control working (`Retry-After: 5`), replacing the >120 s hang; the message now says the daemon is busy after a restart and the view loads on retry. Once the storm settles a miss builds inline in seconds and repeat loads are served from the 60 s body cache.
 - Sign-in during the storm still waits on the single writer (unchanged).
+
+## Final state (2026-09-08 19:15 local)
+- HEAD and the running daemon are both `26e198391dc9e7ba8b339d876bb3f818fc76d984` (deploy VERIFIED three times today: b15975d, f0466d0, 26e1983); both web instances (8323, 3000) serve the build from `46ccc20`+ (no web change since). `/api/ready` 200 with `finra-shorts` reported under `degraded`; `/api/accuracy` 503 REFUSED with the envelope reason; grader health ok; web keepalive logging every five minutes.
+- Playwright after the rebuild: accuracy-refusal, paper-manual, personalization, header-tools and the smoke suite all pass once the two login helpers retry on the daemon's write-tier 429 (27 passed in the mixed run before that fix, 8 of 8 after it, 3 of 3 header-tools).
