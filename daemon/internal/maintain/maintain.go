@@ -484,7 +484,11 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	for _, h := range md.Horizons {
 		tf := horizonTF(h)
 		// Only fetch rows old enough that the window COULD have closed.
-		pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), 1500)
+		// 4000 per horizon per pass (was 1500): once the head-of-line rows were voided
+		// (2026-09-07 stale base, 2026-09-09 delisted) the window resolved ~1,300 rows
+		// per horizon per 10-minute pass against a 1.5M-row mature backlog, an 18 s
+		// run; 4000 clears it in days instead of weeks at ~50 s a pass.
+		pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), 4000)
 		if err != nil {
 			return "", err
 		}

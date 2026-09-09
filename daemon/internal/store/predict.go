@@ -236,7 +236,7 @@ func (s *Store) ResolvePrediction(ctx context.Context, symbolID int64, h md.Hori
 func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit int) (probs []float64, ups []float64, err error) {
 	rows, qerr := s.db.QueryContext(ctx, `
 		SELECT prob, up FROM prediction_outcomes
-		WHERE resolved_at IS NOT NULL AND horizon=? ORDER BY ts DESC LIMIT ?`,
+		WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND horizon=? ORDER BY ts DESC LIMIT ?`,
 		string(h), limit)
 	if qerr != nil {
 		return nil, nil, qerr

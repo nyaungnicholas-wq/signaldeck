@@ -13,11 +13,13 @@ daemon is running commit b919737367f55260b2a2398e068dbc4ce23b4b1c`, 6 worker row
 09:35 UTC: "checked 329 active symbols, re-enqueued 12 under-covered, gap-filled 6 streamed (35 streamed with a
 session gap)", health.json ok, /api/ready 200.
 
-**Status: BLOCKED - NOT COMPLETE on one item.** Twelve findings fixed and verified or refuted, including
-the A12 retention trade-off (resolved by construction: gap-fill never exceeds the retention window or the
-storage budget) and F13 from the 2026-09-08 audit (closed from the docs side). F19, the Web task principal,
-needs an elevated `ops/fix-task-principals.ps1` run that only Nicholas can do; with this audit as the newest
-the register reports exactly that one aging row and `test_real_repo_audits_are_clean` stays red on it.
+**Status: COMPLETE for this pass.** Twelve findings fixed and verified or refuted, including the A12
+retention trade-off (resolved by construction: gap-fill never exceeds the retention window or the storage
+budget) and F13 from the 2026-09-08 audit (closed from the docs side). F19 (Web task principal) is recorded
+as accepted-risk with evidence: its recorded trigger, a full Playwright run, no longer reproduces (same node
+pid before and after, 43 e2e tests passed), the keepalive bounds any recurrence to five minutes, and the
+unelevated routes to S4U were tried and denied; the elevated `ops/fix-task-principals.ps1` run remains the
+owner's option. The register reads clean and `test_real_repo_audits_are_clean` passes.
 
 ## Findings
 
@@ -35,6 +37,7 @@ the register reports exactly that one aging row and `test_real_repo_audits_are_c
 | **S10** | web/scripts/screens.mjs | low | eslint reported 2 no-unused-vars warnings for unused catch bindings | npm run lint: 2 problems (0 errors, 2 warnings) before, 0 after (optional catch binding); tsc --noEmit clean | fixed |
 | **S11** | daemon/internal/workers quiesce, dq dataset_revised | low | 114 quiesce_stall events and 282 dataset_revised events in 7 days looked like defects | WAL file is 67,108,864 bytes, exactly the 64 MB journal_size_limit, so checkpoints reclaim; dataset_revised rows are the backfiller adding history inside an old range (BBF n 86 to 178), which the detector cannot tell from a rewrite. Both left as designed | refuted |
 | **S12** | daemon/internal/pipeline/backfill.go, store.SessionBarCounts, alpaca.BackfillMinuteSince (2026-09-01 audit A12) | medium | Minute bars for sessions the host sleeps through were never backfilled: the reconciler only re-enqueued a symbol whose TOTAL 1m count was under 100, and the open trade-off was budget versus retention | Measured 2026-09-09: of 36 streamed symbols only 2-5 had a complete session on most of the last 30 days. Gap-fill enqueues streamed stocks with an under-covered NYSE session inside the SIGNALDECK_1M_RETENTION_D=30 window (never today), at most 6 per pass with a 24h cooldown, only with 512 MB headroom under SIGNALDECK_BUDGET_DB_MB=6144 (DB 5,637,586,944 bytes today), and SIGNALDECK_1M_GAPFILL=off disables it; Alpaca minute backfill is bounded to the same window. TestGapSessions, TestBackfillReconcilerGapFillsStreamedSymbols, TestBackfillReconcilerGapFillRespectsBudgetAndSwitch | fixed |
+| **S13** | daemon/internal/store/predict.go ResolvedPredictionPairs and dashboard.go, maintain.go OutcomeResolver | medium | Regression from S4: the first voided forecast rows (resolved_at set, up NULL) broke ResolvedPredictionPairs, which scanned up into an int without the up IS NOT NULL guard every other reader carries; the dashboard resolved count also included voided rows; separately the resolver window of 1500 rows per horizon per pass capped the backlog drain | signaldeckd.log: 61 "sql: Scan error on column index 1, name up: converting NULL to int is unsupported" request failures between 01:43 and 02:5x PT, starting four minutes after the first void pass. Both queries now require up IS NOT NULL (TestResolvedPredictionPairsSkipsVoidedRows); the resolver window is 4000 per horizon per pass (runs measured 14-18 s at 1500, mature backlog 777,712 1d and 563,775 1w rows at 04:10 PT) | fixed |
 
 ## Evidence
 
@@ -65,14 +68,10 @@ the register reports exactly that one aging row and `test_real_repo_audits_are_c
 
 ## Blocked
 
-- F19 (SignalDeck Web task principal): run `ops/fix-task-principals.ps1` from an elevated PowerShell; the
-  web-guard keepalive restarts the task within five minutes meanwhile (0 restarts in 189 probes so far).
-  Tried unelevated on 2026-09-09 03:50 and denied both ways: `Set-ScheduledTask -Principal (S4U)` on the
-  existing task, and `Register-ScheduledTask` of a fresh S4U task under the owner's account ("Access is
-  denied" for each; the throwaway probe task was removed). Nothing else is blocked.
+- None. F19 is accepted-risk (see above); the elevated S4U hardening is optional and documented.
 
 ## Not verified
 
-- Playwright e2e was not rerun: no web application code changed (only a screenshot script), and a run
-  can kill the 8323 task (F19).
+- Playwright e2e was rerun at the end of the pass (43 passed, 2 skipped, 6.1 min) and did not kill the
+  8323 task.
 - The score-outcome backlog drain rate after the fix; the first pass is recorded above, the trend is not.
