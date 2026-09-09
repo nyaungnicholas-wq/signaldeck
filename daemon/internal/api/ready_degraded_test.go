@@ -68,3 +68,26 @@ func TestReadyStillFailsOnErroredWorkers(t *testing.T) {
 		t.Fatalf("want reasons to contain %q, got %v", want, body["reasons"])
 	}
 }
+
+// An orphaned row belongs to a PREVIOUS process that died mid-run (sleep,
+// reboot, deploy). The current process is healthy and the worker reruns on its
+// own cadence, so readiness must not sit at 503 until a daily worker's next
+// slot (2026-09-08 18:30: finra-shorts orphaned by a restart kept /api/ready red).
+func TestReadyIgnoresOrphanedWorkers(t *testing.T) {
+	ctx := context.Background()
+	d, st := readyDeps(t)
+	id, err := st.StartWorkerRun(ctx, "finra-shorts")
+	if err != nil {
+		t.Fatalf("start worker run: %v", err)
+	}
+	if err := st.FinishWorkerRun(ctx, id, "orphaned", "process exited mid-run"); err != nil {
+		t.Fatalf("finish worker run: %v", err)
+	}
+	code, body := callReady(t, d)
+	if code != http.StatusOK {
+		t.Fatalf("want 200 for an orphaned previous run, got %d: %v", code, body)
+	}
+	if !strings.Contains(strings.Join(toStrings(body["degraded"]), ","), "finra-shorts") {
+		t.Fatalf("want finra-shorts reported under degraded, got %v", body["degraded"])
+	}
+}

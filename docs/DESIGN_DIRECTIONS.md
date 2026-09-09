@@ -24,10 +24,11 @@ RefusalNotice, a summary headline plus a `<details>` element with `data-status` 
 
 ## Not done yet
 
-- Consolidating the dashboard's setup checklist, goal banner, and "New here?" popover into one surface.
-- Folding the header's freshness, view, reading, and daemon chips into one status control.
-- Collapsing the symbol page's secondary panels by default.
-- A body-cached fast path for the heavy endpoints so pages stop showing skeletons for tens of seconds under worker load.
+Done later on 2026-09-08 (ledger F9, F15): one onboarding surface at a time on the dashboard (goal question first, checklist after a goal is chosen, no dock there); the freshness, view, reading and daemon controls sit behind one "status" disclosure with a liveness dot; the experimental directional section on the symbol page is collapsible; the symbol, screener and flagship paper endpoints are body-cached and warmed.
+
+Still open:
+- Collapsing more of the symbol page's secondary panels by default in the PRO view.
+- Sign-in still waits behind long worker write transactions right after a daemon restart.
 
 ## Rules to keep
 

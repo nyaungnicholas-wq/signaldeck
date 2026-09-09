@@ -27,6 +27,9 @@ const paperMoneyCaption = "Win rate alone does not equal profit — a high win r
 // real money — and the payload carries live:false + a label so the UI cannot
 // misrepresent it.
 
+// sharedPaperSWR body-caches the flagship books (never the manual one).
+var sharedPaperSWR = newSWRBodyCache(2 * time.Minute)
+
 // defaultPaperStrategy is what the UI lands on when no ?strategy= is given.
 const defaultPaperStrategy = "flagship-1d"
 
@@ -297,5 +300,14 @@ func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade, tf md
 
 // registerPaper wires the Stage-4 simulated paper-trading read route.
 func (d Deps) registerPaper(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/paper", d.paper)
+	// Flagship books are user-independent and slow to reconstruct (7s quiet,
+	// 116s under load on 2026-09-07), so they are body-cached (2 min SWR) and
+	// warmed. The manual book is per-user and bypasses the cache entirely.
+	mux.HandleFunc("GET /api/paper", func(w http.ResponseWriter, r *http.Request) {
+		if s := r.URL.Query().Get("strategy"); s == "manual" {
+			d.paper(w, r)
+			return
+		}
+		sharedPaperSWR.serve(d.St.CacheKey()+"|paper|"+r.URL.RawQuery, w, r, d.paper)
+	})
 }

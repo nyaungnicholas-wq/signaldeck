@@ -25,19 +25,19 @@ Independent audit re-checked: `C:\Users\Nicholas_N\Documents\Codex\2026-09-07\ca
 | F3 | access | MEDIUM | "See the grades" led to a sign-in wall rendered as a refusal; `/api/accuracy` 401 anonymously | VERIFIED |
 | F4 | docs | MEDIUM | README declared the freeze lifted and active; refusal block quoted numeric grader output; SHIP_READINESS reprinted the withheld table | VERIFIED |
 | F5 | wording | MEDIUM | `/proof` and the dashboard called deduplicated symbol-days "independent" | VERIFIED |
-| F6 | ops | MEDIUM | `/api/ready` 503 for weeks because deliberately abstaining workers counted as failures | VERIFIED |
-| F7 | ops | MEDIUM | A publication refusal was filed as a grader failure heartbeat; the health task was red every day of the window | IMPLEMENTED — NOT YET VERIFIED |
+| F6 | ops | MEDIUM | `/api/ready` 503 for weeks because deliberately abstaining workers counted as failures; then again on 09-08 for an `orphaned` row left by a restart | VERIFIED (degraded) · IMPLEMENTED — NOT YET VERIFIED (orphaned, second deploy) |
+| F7 | ops | MEDIUM | A publication refusal was filed as a grader failure heartbeat; the health task was red every day of the window | VERIFIED (17:45 run: success=1 "REFUSED: …", check-grader-health RESULT: ok) |
 | F8 | web | MEDIUM | `/volatility` showed "not readable" to cold visitors (25 s build vs 15 s bound) | VERIFIED |
-| F9 | performance | HIGH | Heavy reads and writes collapse under worker load (symbol page >200 s, sign-in 30 s timeouts) | CONFIRMED · EXPECTED LIMITATION (not repaired) |
+| F9 | performance | HIGH | Heavy reads and writes collapse under worker load (symbol page >200 s, sign-in 30 s timeouts) | PARTIALLY REPAIRED (symbol, screener, flagship paper body-cached and warmed; insights index) · sign-in write waits remain an EXPECTED LIMITATION |
 | F10 | forecasts | — | Forecast-monitor "coverage starved" on 10/12 days | NOT REPRODUCED as a defect |
-| F11 | evidence | — | Volatility 1/60 days; accuracy window refused; congress poller awaiting its next run | EXPECTED LIMITATION |
+| F11 | evidence | — | Volatility 1/60 days; accuracy window refused; congress poller awaiting its next run | EXPECTED LIMITATION · congress VERIFIED ok at 06:00 (senate 918 new, house 797 new) |
 | F12 | deploy | — | Worker rows stamped `60b7afa` while HEAD was `cbec417` | VERIFIED (resolved by the deploy) |
 | F13 | provenance | MEDIUM | Docs call the anchors repo public; GitHub says PRIVATE | CONFIRMED · BLOCKED (owner) |
 | F14 | web | LOW | `/accuracy` titled "Dashboard"; `/volatility` title suffix doubled | VERIFIED |
-| F15 | UI | MEDIUM | Overlapping onboarding surfaces, 6,000 px symbol page, eight header chips, reason wall on the dashboard | CONFIRMED · partially repaired |
+| F15 | UI | MEDIUM | Overlapping onboarding surfaces, 6,000 px symbol page, eight header chips, reason wall on the dashboard | REPAIRED (one onboarding surface at a time; four header chips folded into one status disclosure; experimental section collapsible; reason summarized) — IMPLEMENTED — NOT YET VERIFIED in browser |
 | F16 | disclosure | MEDIUM | No development-AI disclosure in the README | VERIFIED |
-| F17 | ops | LOW | Scheduled tasks ending with result 1 (Accuracy, Check-Grader-Health, Market-Close, Web) | CONFIRMED · open |
-| F18 | ops | LOW | Heartbeat and anchor jobs lose writes to "database is locked" | IMPLEMENTED — NOT YET VERIFIED |
+| F17 | ops | LOW | Scheduled tasks ending with result 1 (Accuracy, Check-Grader-Health, Market-Close, Web) | REPAIRED: a recorded refusal now exits 0; grader health is ok; Market-Close was 0 on 09-08 and the 09-04 failure is not reproducible (log rotated) |
+| F18 | ops | LOW | Heartbeat and anchor jobs lose writes to "database is locked" | VERIFIED for the heartbeat (17:45 row landed with the 120 s wait); anchor-publish unchanged |
 
 ## Findings
 
@@ -241,3 +241,10 @@ Independent audit re-checked: `C:\Users\Nicholas_N\Documents\Codex\2026-09-07\ca
 ### F19 — The SignalDeck Web task is killed by console control events
 - **Evidence.** At 2026-09-08 00:50 port 8323 refused connections; the task "SignalDeck Web" showed last result 0xC000013A (console control exit) at 23:53 while the loopback workspace on 3000 stayed up. `ops/check-task-health.ps1` has warned since 2026-09-01 that two tasks still run with an Interactive principal reachable by console control events; the Playwright web server shutdown at the end of an e2e run is the likely sender.
 - **Repair.** Not done: `ops/fix-task-principals.ps1` must run elevated. Restarting the task unelevated brings 8323 back. Status CONFIRMED · BLOCKED (elevation).
+
+### F20 — Public-surface mode verified on a throwaway instance
+- **Method (2026-09-08 18:41).** `bin/signaldeckd.exe` (commit b15975d) started on a scratch database with `SIGNALDECK_PUBLIC_SURFACE=1`, `SIGNALDECK_PUBLIC_READS=false`, `SIGNALDECK_OPEN_SIGNUP=false`, a throwaway token, and the notify/LLM/offsite keys overridden with dummies, listening on 127.0.0.1:8398; killed after the probes.
+- **Result.** Anonymous: `/api/health` 200, `/api/version` 200, `/api/track-record`, `/api/honesty`, `/api/ledger/verify`, `/api/vol-forecast/record`, `/api/evidence` 200; `/api/accuracy` 503 (no registry on a fresh database, fails closed); `/api/ready` 503 (fresh database, nothing ingested yet); `/api/dashboard`, `/api/bars`, `/api/paper`, `/api/hud`, `/api/portfolio`, `/api/watchlist`, `/api/screener`, `/api/symbol`, `/api/agents`, `/api/ai/status`, `/api/export/bars.csv` all 401; `POST /api/auth/register` 403; a foreign Host header 403. This is the contract `docs/PUBLIC_RELEASE_PLAN.md` Option B relies on. Status VERIFIED.
+
+### F21 — Web keepalive
+- `ops/web-guard.ps1` probes 8323 and 3000 every five minutes and restarts the matching task when one stops answering; registered unelevated as "SignalDeck Web Keepalive" (first run 18:38: "8323 ok, 3000 ok"). Mitigates F19 without elevation; the principal fix still needs `ops/fix-task-principals.ps1` elevated.

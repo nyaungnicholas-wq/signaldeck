@@ -89,11 +89,18 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/version", d.version) // which code is producing these numbers
 	d.registerAuth(mux)                           // register, login, logout, me
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
-	mux.HandleFunc("GET /api/symbol", d.symbolDetail)
+	// Body-cached (60s SWR): under worker load the uncached build queued behind
+	// the fleet for minutes (2026-09-08: >200s). Keyed by market|symbol; a 404
+	// body is never cached (only 200s enter the cache).
+	mux.HandleFunc("GET /api/symbol", func(w http.ResponseWriter, r *http.Request) {
+		sharedSymbolSWR.serve(d.St.CacheKey()+"|"+symbolCacheKey(r), w, r, d.symbolDetail)
+	})
 	mux.HandleFunc("GET /api/bars", d.bars)
 	mux.HandleFunc("POST /api/paper/order", d.paperOrder) // manual simulated book (paperorder.go)
 	mux.HandleFunc("GET /api/scores/history", d.scoreHistory)
-	mux.HandleFunc("GET /api/screener", d.screener) // all symbols; UI filters
+	mux.HandleFunc("GET /api/screener", func(w http.ResponseWriter, r *http.Request) { // all symbols; UI filters
+		sharedScreenerSWR.serve(d.St.CacheKey()+"|screener", w, r, d.screener)
+	})
 	mux.HandleFunc("GET /api/trends", d.trends)
 	d.registerHonestyCached(mux) // /api/honesty behind the 60s response cache
 	mux.HandleFunc("GET /api/quality", d.quality)
@@ -705,7 +712,12 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			if failing[name] == "degraded" {
+			// degraded: ran and chose not to deliver. orphaned: the PREVIOUS
+			// process died mid-run (sleep, reboot, deploy); this process is fine
+			// and the worker reruns on its own cadence. Neither is a fact about
+			// whether this daemon can answer correctly, so both are reported to
+			// an authenticated caller and neither fails the probe.
+			if s := failing[name]; s == "degraded" || s == "orphaned" {
 				degraded = append(degraded, name)
 				continue
 			}

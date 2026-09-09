@@ -287,7 +287,9 @@ export default function DashboardPage() {
           {/* Setup progress — replaces the old dismissible welcome card. It
               tracks real state and removes itself at 4/4, so there is no
               dismiss button and no stale "remembered" flag. */}
-          <SetupChecklist watchlistEmpty={watchlistEmpty} />
+          {/* One onboarding surface at a time: the goal question first, the
+              checklist only once a goal has been chosen. */}
+          {goal ? <SetupChecklist watchlistEmpty={watchlistEmpty} /> : null}
 
           {/* Who this arrangement is for, and the control that changes it. */}
           <GoalBanner />

@@ -424,7 +424,7 @@ PY
   report_uncommitted_docs
   notify_remote "SignalDeck accuracy registry — $refusal_text"
   sd_notify "SignalDeck accuracy" "Grading REFUSED — README accuracy tables removed. See the log."
-  exit 1
+  exit 0  # a recorded refusal is this job succeeding at its job; exit 1 made the task red for the whole window (F17)
 fi
 
 rm -f "$PREV_BACKUP"

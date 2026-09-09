@@ -15,6 +15,7 @@ import { useLabel } from "@/lib/labels";
 import { noteVisit } from "@/lib/goal";
 import { isPublicRoute } from "@/lib/publicRoutes";
 import PublicNav from "@/components/PublicNav";
+import HeaderTools from "@/components/HeaderTools";
 
 // Nav consolidation (2026-07-19, user decision): 9 tabs → 5 clean hubs.
 // HOME absorbs the old DASHBOARD + TODAY; WATCHLIST absorbs DECK + COMPARE;
@@ -512,12 +513,12 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             {/* Secondary controls: inline on desktop, folded into the menu panel
                 on mobile so the header row can't overflow a phone width (which
                 was pushing the menu off-canvas). */}
-            <div className="hidden items-center gap-2 lg:flex">
+            <div className="hidden lg:block"><HeaderTools label="status" dot={up == null ? "warn" : up ? "ok" : "bad"}>
               <FreshnessBadge />
               <ViewModeToggle />
               <ReadingModeToggle />
               <DaemonStatus up={up} />
-            </div>
+            </HeaderTools></div>
             {/* Mobile menu button */}
             <button
               type="button"

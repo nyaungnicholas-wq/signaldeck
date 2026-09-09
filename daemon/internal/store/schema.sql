@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS insights (
   data      TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_insights_ts ON insights (ts DESC);
+-- RecentInsights(symbol_id) walked the whole table (0.18s per symbol page, 2026-09-08).
+CREATE INDEX IF NOT EXISTS idx_insights_symbol_ts ON insights (symbol_id, ts DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS worker_runs (
   id          INTEGER PRIMARY KEY,

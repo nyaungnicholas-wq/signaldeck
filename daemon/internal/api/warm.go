@@ -127,6 +127,11 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	// it server-side under a 15s bound and rendered "not readable" to any
 	// visitor who arrived before a human had paid the build.
 	warmBody("/api/vol-forecast/record", "record", sharedVolRecordSWR, d.volForecastRecord)
+	// The screener and the two flagship paper books: the workspace's first
+	// clicks after the dashboard, and the two slowest under worker load.
+	warmBody("/api/screener", d.St.CacheKey()+"|screener", sharedScreenerSWR, d.screener)
+	warmBody("/api/paper?strategy=flagship-1d", d.St.CacheKey()+"|paper|strategy=flagship-1d", sharedPaperSWR, d.paper)
+	warmBody("/api/paper?strategy=flagship-1w", d.St.CacheKey()+"|paper|strategy=flagship-1w", sharedPaperSWR, d.paper)
 	// /api/xs-factor: recomputes the whole cross-section at read time from ~300
 	// trailing daily bars per active symbol, so a cold build must land on the
 	// warmer, never on the first visitor. Default query (21d / stocks / 50).

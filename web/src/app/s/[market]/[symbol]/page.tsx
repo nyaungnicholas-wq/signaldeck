@@ -844,6 +844,7 @@ export default function SymbolPage({
         n={4}
         title="EXPERIMENTAL · DIRECTIONAL P(UP)"
         sub="not the product — a research read with measured NEGATIVE live skill"
+        collapsible
       >
       <p
         className="m-0 border-l-2 pl-3 text-[0.75rem] leading-relaxed"

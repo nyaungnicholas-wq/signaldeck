@@ -27,6 +27,8 @@ Two processes in one container image (daemon `signaldeckd` on port 8322, Next.js
 - Risks: Judges cannot interact live; no independent verification of uptime or latency; single-machine SQLite contention visible under load.
 
 ## Option B: hosted public read-only surface
+
+**Verified 2026-09-08 (ledger F20):** a throwaway daemon started with `SIGNALDECK_PUBLIC_SURFACE=1`, `SIGNALDECK_PUBLIC_READS=false` and `SIGNALDECK_OPEN_SIGNUP=false` answered the honesty routes anonymously, 401 on every workspace, vendor-data and AI route, 403 on registration and on a foreign Host header.
 Steps:
 1. Build the Docker image with mandatory `GIT_REV` build arg (`docker build --build-arg GIT_REV=<commit> -t signaldeck .`).
 2. Provision a persistent volume (10 GB minimum) on the chosen host (Fly.io, Railway, Render, or VPS).
@@ -53,6 +55,8 @@ Never include:
 Run `ops/pre-publish-scan.sh` before any push; it scans tree and history for secrets and raw provider data.
 
 ## Backups, restore and Rollback
+
+On this machine `ops/web-guard.ps1` ("SignalDeck Web Keepalive", every 5 minutes) restarts a web task whose port stops answering; `ops/daemon-guard.ps1` does the same for the daemon.
 - Nightly: `VACUUM INTO data/backups/backup-<timestamp>.db` with sha256 sidecar; gzipped copy uploaded as release asset `backup-<timestamp>` to private GitHub repo `nyaungnicholas-wq/signaldeck` (newest 7 kept).
 - Weekly restore rehearsal: `ops/restore-rehearsal.sh --from-github` downloads newest asset, verifies sha256, restores to a test path, runs integrity checks.
 - Daemon Rollback: `ops/signaldeck-ctl.sh deploy` builds from a specific commit; redeploy the previous commit to roll back.

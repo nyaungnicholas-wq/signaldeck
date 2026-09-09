@@ -120,7 +120,9 @@ const START_HERE: Omit<Suggestion, "id"> = {
 };
 
 /** Routes where a dock would be in the way or redundant. */
-const SILENT = ["/welcome", "/login", "/health"];
+// /dashboard has its own onboarding surface (the goal banner, then the setup
+// checklist); a dock there asked the same question a second time.
+const SILENT = ["/welcome", "/login", "/health", "/dashboard"];
 
 function suggestFor(pathname: string): Omit<Suggestion, "id"> {
   const match = BY_ROUTE.filter(([prefix]) => pathname.startsWith(prefix)).sort(
