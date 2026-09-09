@@ -11,10 +11,14 @@ async function loginAsSmokeUser(context: BrowserContext): Promise<void> {
     data: { username: SMOKE_USER, password: SMOKE_PASS },
   });
   if (reg.ok()) return;
-  const login = await context.request.post("/api/auth/login", {
+  let login = await context.request.post("/api/auth/login", {
     headers,
     data: { username: SMOKE_USER, password: SMOKE_PASS },
   });
+  for (let attempt = 0; attempt < 4 && login.status() === 429; attempt++) { // 429 = the shared write-tier limiter (burst 5, refill 2/s), not a bad credential
+    await new Promise((r) => setTimeout(r, 2500));
+    login = await context.request.post("/api/auth/login", { headers, data: { username: SMOKE_USER, password: SMOKE_PASS } });
+  }
   expect(login.ok(), `login as ${SMOKE_USER} failed: ${login.status()}`).toBe(true);
 }
 
