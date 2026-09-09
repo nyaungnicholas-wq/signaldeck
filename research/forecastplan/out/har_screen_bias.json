@@ -1,0 +1,49 @@
+{
+  "by_instrument_class": {
+    "closed-end": {
+      "n_pass_companies_only": 0,
+      "n_pass_screen": 1
+    },
+    "common": {
+      "n_pass_companies_only": 748,
+      "n_pass_screen": 1213
+    },
+    "dotsuffix": {
+      "n_pass_companies_only": 0,
+      "n_pass_screen": 0
+    },
+    "fund": {
+      "n_pass_companies_only": 14,
+      "n_pass_screen": 71
+    },
+    "suffix-P": {
+      "n_pass_companies_only": 0,
+      "n_pass_screen": 0
+    },
+    "suffix-R": {
+      "n_pass_companies_only": 0,
+      "n_pass_screen": 0
+    },
+    "suffix-U": {
+      "n_pass_companies_only": 0,
+      "n_pass_screen": 0
+    },
+    "suffix-W": {
+      "n_pass_companies_only": 0,
+      "n_pass_screen": 0
+    }
+  },
+  "delisted_removed_by_companies_only": 484,
+  "instruments_import_error": null,
+  "n_delisted": 2622,
+  "n_pass_companies_only": 762,
+  "n_pass_companies_only_delisted": 526,
+  "n_pass_screen": 1285,
+  "n_pass_screen_delisted": 1010,
+  "n_stock_symbols": 2943,
+  "n_with_fundamentals": 866,
+  "n_with_fundamentals_delisted": 604,
+  "share_pass_companies_only_delisted": 0.6903,
+  "share_pass_screen_delisted": 0.786,
+  "survivors_removed_by_companies_only": 39
+}

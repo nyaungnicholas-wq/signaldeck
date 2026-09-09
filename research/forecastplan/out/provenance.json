@@ -1,0 +1,52 @@
+{
+  "constants": {
+    "HC_CUTOFF": 0.15,
+    "MAX_FLAT_SHARE": 0.01,
+    "MIN_BARS": 530,
+    "MIN_SYMBOLS_FOR_COLLAPSE": 30,
+    "SECONDS_PER_DAY": 86400,
+    "SURVIVORSHIP_EPOCH_TS": 1784851200,
+    "TRADING_DAY_OFFSET_SECS": 18000
+  },
+  "db_mtime_utc": "2026-09-09T07:25:59.892977Z",
+  "db_path": "C:\\Users\\Nicholas_N\\Desktop\\claude code\\signaldeck\\data\\signaldeck.db",
+  "db_size_bytes": 5623517184,
+  "file_sha256": {
+    "daemon/cmd/label-parity/main.go": "f753cb184e97e0efb0aacccdecced8c29219aed66e77edd75a97530f3b74dee3",
+    "daemon/internal/forecast/forecast.go": "2613d5acb374fae37ccf9ec54f0262283a88dab47daafb6bf55f155d7242004b",
+    "daemon/internal/marketdata/settled.go": "a34c43c835503788e8e1b663f1fe4a0ae636aaf1374a56749aa44b4edcebac8f",
+    "daemon/internal/pipeline/predict.go": "15f03fe49e50d488d80240683c1c20d55f8fb4aad0c9f8fa6c84390152bf2d18",
+    "daemon/internal/pipeline/regimeoutcomes.go": "abf27f6996eb3bf1e1ea109c846a5e68d709fcc7aeacb297256ac2aa35580ec0",
+    "daemon/internal/structregime/resolve.go": "1f129cb1fc11d082b8ef8e75ad2a471cf0c7b55a1b6c5b62b2e7d7d635b83298",
+    "daemon/internal/structregime/structregime.go": "a65929d2ca06c26cdfc9ab840a2aaa1f0a0a03b80ba1a4f4054bb99d62d2f53a",
+    "research/forecastplan/audit_collapse.py": "05a126efd9ec8442247871be60c901368483c86aac71edcc81a201f30d3750e8",
+    "research/forecastplan/audit_ledger.py": "cf1250cd0c1555a05691e50b7a3874e5b0692bf320da64ade62b66bdd2a504dd",
+    "research/forecastplan/audit_provenance.py": "b29fb225525b4159cab3780e09e97eefa17434b8371861c9c9f9c5f33cb6c077",
+    "research/forecastplan/auditlib.py": "64b15f03bf6a337645f2bfeb1c1634349dbc4dfa6226980be9b992fe88a41022",
+    "research/forecastplan/labels.py": "72b5605c5f4f4e818b0384451395c0481b69ccec382cb55274567524f33a628e",
+    "research/forecastplan/parity_check.py": "14d210d037ceb3a6b2fb50b1a42d4397476b5f4c8c3f3ec6a6f1e329000235e4",
+    "research/harness/instruments.py": "6c02e3ff27b6f4be7f7df6145a468c72fbfd86072ef6715660fdaede81de2b25",
+    "tools/accuracy_registry.py": "a97e3334a0e0e77d85be68785735ead604c4370b69cbb439dd05b8333142804e",
+    "tools/rv_forecast_backtest.py": "4b89914d306c11b79198b3963ef9e7b3632d05f0a67d292ce3410d86dcee617a"
+  },
+  "files_missing": [],
+  "generated_at_utc": "2026-09-09T07:26:12.707304Z",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "python": "3.12.10",
+  "repo_dirty_paths": 3,
+  "repo_head": "2508b416c9b3c6e8d788e6478cfecc34de973060",
+  "row_counts": {
+    "bars_1d_crypto": 5477,
+    "bars_1d_stocks": 2705874,
+    "companies": 10847,
+    "fundamentals": 6455,
+    "prediction_outcomes": 719871,
+    "prediction_outcomes_resolved": 677719,
+    "predictions": 540443,
+    "symbols": 2950,
+    "universe_membership": 2697299,
+    "worker_runs": 3395
+  },
+  "sqlite": "3.49.1"
+}

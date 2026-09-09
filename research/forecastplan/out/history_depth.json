@@ -1,0 +1,32 @@
+{
+  "crypto": {
+    "method": "nearest-rank",
+    "n_bars_quantiles": {
+      "p10": 781,
+      "p25": 781,
+      "p50": 781,
+      "p75": 781,
+      "p90": 781
+    },
+    "n_ge_500": 7,
+    "n_ge_530": 7,
+    "n_ge_756": 7,
+    "n_ge_756_before_2023_07_03": 0,
+    "n_symbols_with_bars": 7
+  },
+  "stocks": {
+    "method": "nearest-rank",
+    "n_bars_quantiles": {
+      "p10": 154,
+      "p25": 319,
+      "p50": 740,
+      "p75": 1529,
+      "p90": 1922
+    },
+    "n_ge_500": 1836,
+    "n_ge_530": 1774,
+    "n_ge_756": 1454,
+    "n_ge_756_before_2023_07_03": 737,
+    "n_symbols_with_bars": 2940
+  }
+}
