@@ -17,13 +17,13 @@ Round three (voided-forecast readers, resolver window) is commit `d08d3f1`, depl
 first resolver pass at 09:54 UTC read "resolved 10461, voided 942, waiting 597" in 169 s against 3,8xx in 14-18 s before,
 so the 4000-row window costs about 28% of the 10-minute cadence while the backlog drains.
 
-**Status: COMPLETE for this pass.** Twelve findings fixed and verified or refuted, including the A12
-retention trade-off (resolved by construction: gap-fill never exceeds the retention window or the storage
-budget) and F13 from the 2026-09-08 audit (closed from the docs side). F19 (Web task principal) is recorded
-as accepted-risk with evidence: its recorded trigger, a full Playwright run, no longer reproduces (same node
-pid before and after, 43 e2e tests passed), the keepalive bounds any recurrence to five minutes, and the
-unelevated routes to S4U were tried and denied; the elevated `ops/fix-task-principals.ps1` run remains the
-owner's option. The register reads clean and `test_real_repo_audits_are_clean` passes.
+**Status: COMPLETE.** Twelve findings fixed and verified or refuted, including the A12 retention trade-off
+(resolved by construction: gap-fill never exceeds the retention window or the storage budget) and F13 from the
+2026-09-08 audit (closed from the docs side). F19 (Web task principal) was first recorded as accepted-risk with
+evidence (its Playwright trigger no longer reproduced, keepalive 0 restarts, unelevated S4U routes denied) and then
+FIXED at 16:51 PT when Nicholas ran `ops/fix-task-principals.ps1` elevated: all 19 SignalDeck tasks are S4U, the
+Task Scheduler operational log is on, and 8323 and 3000 answer 200. The register reads clean and
+`test_real_repo_audits_are_clean` passes.
 
 ## Findings
 
@@ -72,7 +72,7 @@ owner's option. The register reads clean and `test_real_repo_audits_are_clean` p
 
 ## Blocked
 
-- None. F19 is accepted-risk (see above); the elevated S4U hardening is optional and documented.
+- None. F19 was fixed by the elevated run at 16:51 PT (see above).
 
 ## Not verified
 
