@@ -12,6 +12,10 @@ Round two (gap-fill, anchors wording) is commit `b919737`, deployed the same way
 daemon is running commit b919737367f55260b2a2398e068dbc4ce23b4b1c`, 6 worker rows stamped); first reconciler pass
 09:35 UTC: "checked 329 active symbols, re-enqueued 12 under-covered, gap-filled 6 streamed (35 streamed with a
 session gap)", health.json ok, /api/ready 200.
+Round three (voided-forecast readers, resolver window) is commit `d08d3f1`, deployed and VERIFIED the same way
+(6 worker rows stamped); the "converting NULL to int" request failures stopped at 69 (none on the new build), and the
+first resolver pass at 09:54 UTC read "resolved 10461, voided 942, waiting 597" in 169 s against 3,8xx in 14-18 s before,
+so the 4000-row window costs about 28% of the 10-minute cadence while the backlog drains.
 
 **Status: COMPLETE for this pass.** Twelve findings fixed and verified or refuted, including the A12
 retention trade-off (resolved by construction: gap-fill never exceeds the retention window or the storage
