@@ -248,3 +248,8 @@ Independent audit re-checked: `C:\Users\Nicholas_N\Documents\Codex\2026-09-07\ca
 
 ### F21 — Web keepalive
 - `ops/web-guard.ps1` probes 8323 and 3000 every five minutes and restarts the matching task when one stops answering; registered unelevated as "SignalDeck Web Keepalive" (first run 18:38: "8323 ok, 3000 ok"). Mitigates F19 without elevation; the principal fix still needs `ops/fix-task-principals.ps1` elevated.
+
+### F9 — post-deploy measurements (daemon f0466d0, 2026-09-08 19:0x, during the post-restart storm: 70 rows running)
+- `/api/screener` 2 ms and `/api/paper?strategy=flagship-1d` 1 ms, both served warm by the cache-warmer.
+- `/api/symbol?symbol=SPY` answered 503 in 5.0 s twice: a cold miss waits at most 5 s for one of the two cold-build slots, and the warmer held both during the storm. That is the cache's admission control working (`Retry-After: 5`), replacing the >120 s hang; the message now says the daemon is busy after a restart and the view loads on retry. Once the storm settles a miss builds inline in seconds and repeat loads are served from the 60 s body cache.
+- Sign-in during the storm still waits on the single writer (unchanged).

@@ -434,7 +434,7 @@ func (c *swrBodyCache) serve(key string, w http.ResponseWriter, r *http.Request,
 		c.mu.Unlock()
 		close(ch)
 		w.Header().Set("Retry-After", "5")
-		httpErr(w, 503, "cache build capacity exhausted; retry")
+		httpErr(w, 503, "the daemon is busy building other views right now (this happens for ~45 minutes after a restart); this view loads on retry")
 		return
 	}
 	defer releaseColdSlot() // see swrCache.get: never leak a process-wide slot
