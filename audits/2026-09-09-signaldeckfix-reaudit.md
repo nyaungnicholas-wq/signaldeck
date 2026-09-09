@@ -66,7 +66,10 @@ the register reports exactly that one aging row and `test_real_repo_audits_are_c
 ## Blocked
 
 - F19 (SignalDeck Web task principal): run `ops/fix-task-principals.ps1` from an elevated PowerShell; the
-  web-guard keepalive restarts the task within five minutes meanwhile. Nothing else is blocked.
+  web-guard keepalive restarts the task within five minutes meanwhile (0 restarts in 189 probes so far).
+  Tried unelevated on 2026-09-09 03:50 and denied both ways: `Set-ScheduledTask -Principal (S4U)` on the
+  existing task, and `Register-ScheduledTask` of a fresh S4U task under the owner's account ("Access is
+  denied" for each; the throwaway probe task was removed). Nothing else is blocked.
 
 ## Not verified
 
