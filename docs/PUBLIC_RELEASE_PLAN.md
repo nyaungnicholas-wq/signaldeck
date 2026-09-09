@@ -67,7 +67,7 @@ On this machine `ops/web-guard.ps1` ("SignalDeck Web Keepalive", every 5 minutes
 | Item | Why it needs the owner | Default if no decision |
 |------|------------------------|------------------------|
 | Paid hosting account (Fly.io/Railway/Render/VPS) | Required for Option B; no account exists, no card attached | Option A only (local demo) |
-| Make `signaldeck-anchors` repo public | Currently private; docs refer to it as "public anchors repo" | Remains private |
+| Make `signaldeck-anchors` repo public | Currently private (GitHub visibility PRIVATE, checked 2026-09-09); README, this plan and ops/anchor-publish.sh now say so | Remains private |
 | Create public source repository | Private repo holds backups and must not be flipped public | No public source repo |
 | Expose any public hostname | `SIGNALDECK_ALLOWED_HOSTS` must be set; DNS, TLS, proxy config needed | No public hostname |
 | Change notification transports (Discord/Telegram/Slack/SMTP) | Secrets required; optional but if used must be configured | Disabled (no secrets set) |

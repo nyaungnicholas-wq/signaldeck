@@ -167,7 +167,11 @@ func (c *Client) BackfillDailyFrom(ctx context.Context, st *store.Store, symbolI
 // BackfillMinute pulls ~60 days of split-adjusted minute IEX bars for symbol,
 // upserts them into st, and returns the number of bars written.
 func (c *Client) BackfillMinute(ctx context.Context, st *store.Store, symbolID int64, symbol string) (int, error) {
-	start := time.Now().UTC().AddDate(0, 0, -60)
+	return c.BackfillMinuteSince(ctx, st, symbolID, symbol, time.Now().UTC().AddDate(0, 0, -60))
+}
+
+// BackfillMinuteSince is BackfillMinute with an explicit window start, so a caller bounded by the hot 1m retention does not fetch bars the downsampler prunes the same night.
+func (c *Client) BackfillMinuteSince(ctx context.Context, st *store.Store, symbolID int64, symbol string, start time.Time) (int, error) {
 	return c.backfill(ctx, st, symbolID, symbol, "1Min", md.TF1m, start)
 }
 

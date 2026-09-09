@@ -1502,6 +1502,36 @@ func (s *Store) RecentDQ(ctx context.Context, limit int) ([]md.DQEvent, error) {
 }
 
 // BarCount returns row count + span for coverage reporting.
+// SessionBarCounts counts bars per New York session date (UTC day index of ts-18000) since `since`.
+func (s *Store) SessionBarCounts(ctx context.Context, symbolID int64, tf md.Timeframe, since int64) (map[int64]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT (ts - 18000) / 86400, COUNT(*) FROM bars WHERE symbol_id=? AND tf=? AND ts>=? GROUP BY 1`, symbolID, tf, since)
+	if err != nil {
+		return nil, err
+	}
+	//nolint:errcheck
+	defer rows.Close()
+	counts := make(map[int64]int)
+	for rows.Next() {
+		var dayIdx int64
+		var c int
+		if err := rows.Scan(&dayIdx, &c); err != nil {
+			return nil, err
+		}
+		counts[dayIdx] = c
+	}
+	return counts, rows.Err()
+}
+
+// DBSizeBytes is the main database file size as SQLite sees it (page_count x page_size), the number the storage budget in ops/ is measured against.
+func (s *Store) DBSizeBytes(ctx context.Context) (int64, error) {
+	var size int64
+	err := s.db.QueryRowContext(ctx, `SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()`).Scan(&size)
+	if err != nil {
+		return 0, err
+	}
+	return size, nil
+}
+
 func (s *Store) BarCount(ctx context.Context, symbolID int64, tf md.Timeframe) (n int64, minTs, maxTs int64, err error) {
 	var mn, mx sql.NullInt64
 	err = s.db.QueryRowContext(ctx,

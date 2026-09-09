@@ -63,7 +63,7 @@ AUTH=()
   fail=0
 
   if [ ! -d "$REPO/.git" ]; then
-    echo "FAIL: no public clone at $REPO — nothing was externally timestamped; set SIGNALDECK_ANCHOR_REPO to a clone of the public anchors repo"
+    echo "FAIL: no anchors clone at $REPO — nothing was externally timestamped; set SIGNALDECK_ANCHOR_REPO to a clone of the signaldeck-anchors repo (private today, see README)"
     exit 1
   fi
 
@@ -79,7 +79,7 @@ AUTH=()
   # Python, not jq: jq is NOT installed under the Git Bash that runs this
   # repo's scheduled tasks, so every jq line in this file was a `command not
   # found`. That is why logs/anchor-publish.log stops at 2026-07-27 and the
-  # public anchors repo — the chain head daemon/internal/pipeline/prereg.go
+  # anchors repo (private today) — the chain head daemon/internal/pipeline/prereg.go
   # names — has received nothing since. sd_py is the same interpreter shim the
   # SQLite fallback below already uses.
   line=$(curl -sf --max-time 10 -H "X-Signaldeck: 1" ${AUTH[@]+"${AUTH[@]}"} "$API/api/ledger/anchors?limit=1" \

@@ -3,12 +3,15 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/alpaca"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ingest/cryptohist"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -147,7 +150,46 @@ func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	return fmt.Sprintf("checked %d active symbols, re-enqueued %d under-covered", len(syms), requeued), nil
+	now := time.Now()
+	gapFilled := 0
+	withGaps := 0
+	note := "gap-fill off"
+	if gapFillEnabled() {
+		ok, why := r.gapFillBudgetOK(ctx)
+		if !ok {
+			note = "gap-fill paused: " + why
+		} else {
+			retention := retention1mDays()
+			for _, s := range syms {
+				if s.Market == md.Stocks && s.Stream {
+					counts, err := r.St.SessionBarCounts(ctx, s.ID, md.TF1m, now.Add(-time.Duration(retention)*24*time.Hour).Unix())
+					if err != nil {
+						return "", err
+					}
+					gaps := gapSessions(counts, now, retention)
+					if len(gaps) > 0 {
+						withGaps++
+						if gapFilled < gapFillPerPass {
+							key := gapFillMetaPrefix + strconv.FormatInt(s.ID, 10)
+							last, _ := r.St.GetMeta(ctx, key)
+							if last != "" {
+								if ts, err := strconv.ParseInt(last, 10, 64); err == nil && now.Unix()-ts < int64(gapFillCooldown/time.Second) {
+									continue
+								}
+							}
+							if err := r.BF.Enqueue(s); err != nil {
+								break
+							}
+							_ = r.St.SetMeta(ctx, key, strconv.FormatInt(now.Unix(), 10))
+							gapFilled++
+						}
+					}
+				}
+			}
+			note = fmt.Sprintf("%d streamed with a session gap", withGaps)
+		}
+	}
+	return fmt.Sprintf("checked %d active symbols, re-enqueued %d under-covered, gap-filled %d streamed (%s)", len(syms), requeued, gapFilled, note), nil
 }
 
 func (b *Backfiller) backfill(ctx context.Context, s md.Symbol) error {
@@ -160,7 +202,7 @@ func (b *Backfiller) backfill(ctx context.Context, s md.Symbol) error {
 		if err != nil {
 			return fmt.Errorf("daily: %w", err)
 		}
-		nm, err := b.Alpaca.BackfillMinute(ctx, b.St, s.ID, s.Symbol)
+		nm, err := b.Alpaca.BackfillMinuteSince(ctx, b.St, s.ID, s.Symbol, minuteBackfillStart(time.Now())) // bounded to the hot 1m retention
 		if err != nil {
 			return fmt.Errorf("minute: %w", err)
 		}
@@ -251,4 +293,80 @@ func (w *StockBars) Run(ctx context.Context) (string, error) {
 		n++
 	}
 	return fmt.Sprintf("topped up daily bars for %d streamed stocks", n), nil
+}
+
+// Gap-fill for the streamed hot set (2026-09-09, audits A12/S12)
+// The reconciler only re-enqueued a symbol whose TOTAL 1m row count was under minCoverage,
+// so a streamed name that missed a session (the host is off overnight and misses the first
+// two hours of every session; measured 2026-09-09: of 36 streamed symbols only 2-5 had a
+// complete session on most of the last 30 days) was never refilled.
+// Gap-fill enqueues a streamed stock when any NYSE session inside the hot 1m retention
+// window is under-covered. Alpaca's minute backfill is idempotent and bounded to the
+// retention window, so it never adds rows the downsampler would prune, and it is gated on
+// storage-budget headroom so it cannot push the database over the budget the 30-day
+// retention cut was made for.
+const (
+	gapFillFullDayBars    = 300 // a full 09:30-16:00 session prints ~390 1m bars
+	gapFillHalfDayBars    = 150 // half days close at 13:00 ET (~210 bars)
+	gapFillPerPass        = 6   // symbols enqueued per 20-minute pass, Alpaca-rate friendly
+	gapFillCooldown       = 24 * time.Hour
+	gapFillBudgetMarginMB = int64(512)
+	gapFillMetaPrefix     = "gapfill_last_"
+)
+
+func envIntOr(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
+}
+func retention1mDays() int {
+	return envIntOr("SIGNALDECK_1M_RETENTION_D", 60)
+}
+func gapFillEnabled() bool {
+	return os.Getenv("SIGNALDECK_1M_GAPFILL") != "off"
+}
+func minuteBackfillStart(now time.Time) time.Time {
+	d := retention1mDays()
+	if d > 60 {
+		d = 60
+	}
+	return now.UTC().AddDate(0, 0, -d)
+}
+func gapSessions(counts map[int64]int, now time.Time, retentionDays int) []time.Time {
+	if retentionDays < 2 {
+		return nil
+	}
+	loc := marketcal.Loc()
+	n := now.In(loc)
+	today := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, loc)
+	var out []time.Time
+	for d := today.AddDate(0, 0, -(retentionDays - 1)); d.Before(today); d = d.AddDate(0, 0, 1) {
+		if !marketcal.IsTradingDay(d) {
+			continue
+		}
+		key := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC).Unix() / 86400
+		floor := gapFillFullDayBars
+		if marketcal.IsHalfDay(d) {
+			floor = gapFillHalfDayBars
+		}
+		if counts[key] < floor {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+func (r *BackfillReconciler) gapFillBudgetOK(ctx context.Context) (bool, string) {
+	size, err := r.St.DBSizeBytes(ctx)
+	if err != nil {
+		return false, err.Error()
+	}
+	budget := int64(envIntOr("SIGNALDECK_BUDGET_DB_MB", 6144)) * 1024 * 1024
+	ok := size+gapFillBudgetMarginMB*1024*1024 <= budget
+	return ok, fmt.Sprintf("db %d MB of %d MB budget", size>>20, budget>>20)
 }

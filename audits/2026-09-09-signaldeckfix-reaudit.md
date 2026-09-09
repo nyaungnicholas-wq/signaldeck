@@ -9,11 +9,11 @@ tools 411 passed and 2 failed), and every finding below sat behind them or in li
 VERIFIED running (`deploy VERIFIED: daemon is running commit e5277e3ff8a93f4e424acc2add92310ac939efc6`,
 4 worker rows stamped at 08:39 UTC, then cot-poller, finra-shortint, outcome-resolver and dq-auditor rows).
 
-**Status: NOT COMPLETE.** Eleven findings fixed and verified live or refuted; one (S12) is a retention
-trade-off only Nicholas can make. F13 and F19 from the 2026-09-08 audit are carried unchanged (owner and
-elevation). With this audit as the newest, the register reports exactly those three rows (A12, F13, F19)
-as aging violations, and `test_real_repo_audits_are_clean` stays red until each gets a status Nicholas
-stands behind.
+**Status: BLOCKED - NOT COMPLETE on one item.** Twelve findings fixed and verified or refuted, including
+the A12 retention trade-off (resolved by construction: gap-fill never exceeds the retention window or the
+storage budget) and F13 from the 2026-09-08 audit (closed from the docs side). F19, the Web task principal,
+needs an elevated `ops/fix-task-principals.ps1` run that only Nicholas can do; with this audit as the newest
+the register reports exactly that one aging row and `test_real_repo_audits_are_clean` stays red on it.
 
 ## Findings
 
@@ -30,7 +30,7 @@ stands behind.
 | **S9** | audits/2026-09-01-ops-reaudit.md A2 and A17 | low | Two 2026-09-01 findings stayed open in the register although both were resolved since | A2: Get-ScheduledTask read-back 2026-09-09 shows Anchor-Publish, Revalidation and Daemon Keepalive S4U, StartWhenAvailable True, DisallowStartIfOnBatteries False; Anchor-Publish last result 0x0 at 2026-09-08 19:30. A17: repair ledger R25, first offsite upload 898,352,731 bytes verified 2026-09-07 | fixed |
 | **S10** | web/scripts/screens.mjs | low | eslint reported 2 no-unused-vars warnings for unused catch bindings | npm run lint: 2 problems (0 errors, 2 warnings) before, 0 after (optional catch binding); tsc --noEmit clean | fixed |
 | **S11** | daemon/internal/workers quiesce, dq dataset_revised | low | 114 quiesce_stall events and 282 dataset_revised events in 7 days looked like defects | WAL file is 67,108,864 bytes, exactly the 64 MB journal_size_limit, so checkpoints reclaim; dataset_revised rows are the backfiller adding history inside an old range (BBF n 86 to 178), which the detector cannot tell from a rewrite. Both left as designed | refuted |
-| **S12** | 1-minute bar backfill (2026-09-01 audit A12), ops/signaldeck-refresh.sh | medium | A12 remains open: minute bars for sessions the host sleeps through are not backfilled because the trade-off against the 30-day retention cut is Nicholas's; the register therefore still reports one aging violation | audit_register: "2026-09-01-ops-reaudit.md:A12: still unresolved ('open') in an audit dated 2026-09-01, older than the newest audit"; DB 5,625,303,040 bytes against a 6,144 MB budget. Needs a decision: accept the holes (accepted-risk), raise the budget, or backfill inside the retention window | open |
+| **S12** | daemon/internal/pipeline/backfill.go, store.SessionBarCounts, alpaca.BackfillMinuteSince (2026-09-01 audit A12) | medium | Minute bars for sessions the host sleeps through were never backfilled: the reconciler only re-enqueued a symbol whose TOTAL 1m count was under 100, and the open trade-off was budget versus retention | Measured 2026-09-09: of 36 streamed symbols only 2-5 had a complete session on most of the last 30 days. Gap-fill enqueues streamed stocks with an under-covered NYSE session inside the SIGNALDECK_1M_RETENTION_D=30 window (never today), at most 6 per pass with a 24h cooldown, only with 512 MB headroom under SIGNALDECK_BUDGET_DB_MB=6144 (DB 5,637,586,944 bytes today), and SIGNALDECK_1M_GAPFILL=off disables it; Alpaca minute backfill is bounded to the same window. TestGapSessions, TestBackfillReconcilerGapFillsStreamedSymbols, TestBackfillReconcilerGapFillRespectsBudgetAndSwitch | fixed |
 
 ## Evidence
 
@@ -61,9 +61,8 @@ stands behind.
 
 ## Blocked
 
-- S12: Nicholas's decision on the 1-minute backfill versus the 30-day retention cut (A12).
-- F13 (anchors repository visibility) and F19 (SignalDeck Web task principal needs elevation) are carried
-  from the 2026-09-08 audit unchanged.
+- F19 (SignalDeck Web task principal): run `ops/fix-task-principals.ps1` from an elevated PowerShell; the
+  web-guard keepalive restarts the task within five minutes meanwhile. Nothing else is blocked.
 
 ## Not verified
 
