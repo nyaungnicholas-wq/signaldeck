@@ -35,7 +35,7 @@ def design(rv, kind, closes=None, mkt_log_rv=None):
             raise ValueError("closes required for kind='v2'")
         closes = np.asarray(closes, dtype=float)
         for i in range(len(rv)):
-            if i == 0 or not np.isfinite(rv[i]) or not np.isfinite(closes[i]) or not np.isfinite(closes[i-1]):
+            if i == 0 or rv[i] is None or closes[i] is None or closes[i-1] is None or not np.isfinite(rv[i]) or not np.isfinite(closes[i]) or not np.isfinite(closes[i-1]):  # rv carries None holes on real data
                 col[i] = np.nan
             else:
                 dec = 1.0 if closes[i] < closes[i-1] else 0.0

@@ -56,7 +56,7 @@ def build(panel_path, feat_path, out_dir):
     fwd1, up1 = labels(close_wide, 1)
     fwd5, up5 = labels(close_wide, 5)
     df = feat_realigned.copy()
-    df['eligible'] = elig.stack()
+    df['eligible'] = elig.stack().reindex(df.index).fillna(False).astype(bool)  # a symbol-day absent from the wide frames is ineligible, not NaN
     df['fwd_1'] = fwd1.stack()
     df['up_1'] = up1.stack()
     df['fwd_5'] = fwd5.stack()
