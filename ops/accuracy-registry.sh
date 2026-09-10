@@ -185,6 +185,48 @@ if [ "$anchor_liveness_status" -ne 0 ]; then
   echo "WARN: external anchor timestamping is not current (exit $anchor_liveness_status) — see above; registry still published" >> "$LOG"
 fi
 
+# DEPLOYMENT DRIFT — is every mechanism the pre-registration chain CLAIMS
+# observable in the live database? Every other honesty gate reads the tree at
+# HEAD; this one reads the ROWS and asks whether the binary that wrote them is
+# the one the chain describes: matched-null coverage, the judgment ledger, the
+# frozen quarantine and its digest, the holdout-era constant in the deployed
+# revision, no undeployed daemon source, and the per-row revision stamp.
+#
+# Its docstring has said "runs in the publishing path before the grader" since
+# 2026-07-30. Measured 2026-09-09: nothing invoked it — not this script, not a
+# scheduled task, not CI; only its own tests. A gate that exists and never runs
+# is the A4/A13 shape again.
+#
+# BLOCKING on exit 1 — the tool's own contract, and the same failure class the
+# ENGINE LIVENESS check above refuses on: a registry graded as though a frozen
+# null or a blind era existed, when the running binary never implemented
+# either, is not a live number. Advisory would turn the stderr it prints
+# ("Publication must be refused") into a lie in a log nobody reads. It has
+# refused on a false diagnosis three times (371551a, A21 in
+# audits/2026-08-12-reaudit.md, 6f02590); each was fixed with a regression
+# test, and it measured 6/6 ok on the live database on 2026-09-01 and
+# 2026-09-09 before this block landed.
+#
+# FAILS OPEN on exit 2, like the collapse gate below: "could not run" is
+# ignorance, not evidence, and the grader refuses on the same unreadable
+# database on its own. Any other non-zero code refuses, because the tool fails
+# closed on purpose (an unresolvable null-kind map raises rather than matching
+# nothing). Guarded like the protocol check below it: an earlier refusal
+# stands. The heartbeat below files this reason as --failure, like the
+# liveness refusal, because the grader was not run and the remedy is an
+# operator deploy, not a cleared window.
+if [ -z "$refusal_reason" ]; then
+  "$PY" "$SD/tools/deployment_drift.py" --db "$SD/data/signaldeck.db" \
+    > "$STDERR_CAPTURE" 2>&1
+  drift_status=$?
+  cat "$STDERR_CAPTURE" >> "$LOG"
+  case "$drift_status" in
+    0) ;;
+    2) echo "WARN: deployment drift check undetermined (exit 2) -- publishing; the grader reads the same database and refuses on its own evidence" >> "$LOG" ;;
+    *) refusal_reason="deployment drift check failed (exit $drift_status) — a mechanism the pre-registration chain claims is not observable in the live database (see the DEPLOYMENT DRIFT lines above in this log); the grader was not run" ;;
+  esac
+fi
+
 # PROTOCOL-DOCUMENT REGISTRATION — the same fail-closed shape
 # require_registered_grader() already has, applied to the protocol DOCUMENT
 # instead of the grader. PREREGISTRATION.md §0 makes the chain authoritative over
@@ -300,7 +342,7 @@ if [ -n "$refusal_reason" ]; then
   # and every other consumer went on serving the last good numbers with no way
   # to know they were stale. The rule that decided this is above, and stays
   # above: this line only reports the decision.
-  case "$refusal_reason" in "grader exited"*|*"liveness check failed"*) hb_mode=--failure ;; *) hb_mode=--refused ;; esac  # a gate refusal is a healthy grader saying no
+  case "$refusal_reason" in "grader exited"*|*"liveness check failed"*|"deployment drift"*) hb_mode=--failure ;; *) hb_mode=--refused ;; esac  # a gate refusal is a healthy grader saying no; drift and liveness mean the grader never ran
   "$PY" "$SD/tools/grader_heartbeat.py" "$hb_mode" --error "$refusal_reason" \
     >> "$LOG" 2>&1 || echo "heartbeat write failed (non-fatal)" >> "$LOG"
 
