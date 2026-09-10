@@ -473,14 +473,23 @@ jobs:
       # is how "we'll check it locally" becomes "nobody checks it".
       - name: Documents may not contradict the repository's own measurements
         run: python3 tools/docs_gate.py check
-      # ops/REVIEW_LIFECYCLE.md promises that audit findings are "tracked to
-      # fixed/refuted — never left 'proposed' past the next audit". Nothing
-      # read that column: tools/audit_register.py has enforced the promise
-      # since 2026-08-12 and, measured 2026-09-09, was invoked by nothing but
-      # its own tests — the same "existed but never wired" class as A4 and A13
-      # named above. It reads audits/*-reaudit.md only, so it needs no database
-      # and no data-integrity snapshot: this runner can compute the answer
-      # itself. It GATES rather than warns. On the tree it first ran against it
+      # The document ops/REVIEW_LIFECYCLE.md promises that audit findings are
+      # tracked to fixed or refuted and never left "proposed" past the next
+      # audit, and the script tools/audit_register.py, added on 2026-07-30,
+      # turns that promise into a machine-checked invariant. Measured on
+      # 2026-09-09, no ops script, no scheduled task and no CI step ran that
+      # tool. The invariant itself was not unguarded: the "tools" job's unittest
+      # discovery runs test_audit_register's test_real_repo_audits_are_clean
+      # against the real audits directory, and that assertion has failed before,
+      # recorded as finding S8 in audits/2026-09-09-signaldeckfix-reaudit.md.
+      # What this new step adds is running main() the way an operator does: its
+      # own exit codes, including the "no findings tables at all" branch that no
+      # test covers, the per-audit unresolved listing it prints, and a red X on
+      # the job that owns the documents. It reads only the files
+      # audits/*-reaudit.md, so it needs no database and no data-integrity
+      # snapshot.
+      #
+      # It GATES rather than warns. On the tree it first ran against it
       # reported 164 findings across 9 audits, none unresolved, exit 0. Its own
       # docstring says a red run IS the finding: record a status inside the
       # closed vocabulary with real evidence, never widen the vocabulary to
