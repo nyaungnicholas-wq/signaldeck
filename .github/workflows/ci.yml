@@ -473,6 +473,24 @@ jobs:
       # is how "we'll check it locally" becomes "nobody checks it".
       - name: Documents may not contradict the repository's own measurements
         run: python3 tools/docs_gate.py check
+      # ops/REVIEW_LIFECYCLE.md promises that audit findings are "tracked to
+      # fixed/refuted — never left 'proposed' past the next audit". Nothing
+      # read that column: tools/audit_register.py has enforced the promise
+      # since 2026-08-12 and, measured 2026-09-09, was invoked by nothing but
+      # its own tests — the same "existed but never wired" class as A4 and A13
+      # named above. It reads audits/*-reaudit.md only, so it needs no database
+      # and no data-integrity snapshot: this runner can compute the answer
+      # itself. It GATES rather than warns. On the tree it first ran against it
+      # reported 164 findings across 9 audits, none unresolved, exit 0. Its own
+      # docstring says a red run IS the finding: record a status inside the
+      # closed vocabulary with real evidence, never widen the vocabulary to
+      # clear it. Self-test first, for the same reason the docs gate above
+      # self-tests: a gate that cannot prove it still detects a planted
+      # violation is not evidence.
+      - name: Self-test the findings register before trusting it
+        run: python3 tools/test_audit_register.py
+      - name: Audit findings are tracked to a resolved status, with evidence
+        run: python3 tools/audit_register.py
       # STRATEGY_DECK.md §8 carried this defect in one sentence: the structural
       # walk-forward validation "runs on demand only. Nothing schedules it and no
       # gate consumes its output." A validation nobody reads is indistinguishable

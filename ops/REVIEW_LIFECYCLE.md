@@ -39,4 +39,6 @@ measured number) — assertions without evidence are marked UNVERIFIED and block
 - Per-PR: Levels 1–3 as applicable above.
 - Quarterly (or after any incident): full adversarial re-audit in the style of
   `audits/2026-07-26-reaudit.md`, appended to `audits/`, findings tracked to
-  fixed/refuted — never left "proposed" past the next audit.
+  fixed/refuted — never left "proposed" past the next audit. Enforced by
+  `tools/audit_register.py`, which CI runs in the `docs-gate` job: a red run
+  is the finding, and the vocabulary is never widened to clear it.
