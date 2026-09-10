@@ -76,8 +76,18 @@ volume mean-reverts across its median. **It fails the frozen MPUI on block consi
 **Volatility (continuous).** Registered metrics untouched. Candidate study on the tool's universe: the 40-symbol
 smoke run (1,027 day clusters) shows no candidate separating from the incumbent HAR (h=1: V3 −0.0048 QLIKE, DM t
 −0.72; V1 and V2 worse; h=5: V1/V3 ≈ −0.011, |t| < 1.2; Holm 1.0) while HAR beats EWMA (t 1.98) and the random walk
-(t 7.6) as the registration's backtest stated. The full-universe run was still computing when this file was written;
-its outputs land in `out/vol_results.json` and `out/vol_summary.md` and are exploratory either way.
+(t 7.6) as the registration's backtest stated.
+
+Full-universe run (`out/vol_summary.md`, `out/vol_results.json`; 1,292 symbols, 1,242,726 matched rows at h=1,
+1,382 day clusters, refit every 5 sessions): V1 (HAR plus the cross-sectional mean log-RV term) lowers QLIKE
+against the incumbent HAR by 1.3% at h=1 (mean diff −0.0077, DM t −1.76, uncorrected p 0.079, Holm 0.47; better in
+5 of 6 calendar years, worse in 2021) and by 1.4% at h=5 (t −1.28, p 0.20). V2 (leverage term) is worse (+0.090 at
+h=1, driven by a 2021 blow-up), V3 (63-session term) is flat. HAR beats EWMA by 0.073 (t 7.1) and the random walk by
+0.72 (t 7.1). Under the registered decision rule (DM, Bonferroni/Holm over the family) no candidate clears 0.05; the
+block-bootstrap interval for V1 at h=1 (−0.0173, −0.00003) just excludes zero, the known disagreement between the
+two inferences on this loss, and the DM rule governs. V1 is a mild, directionally consistent lead that does not meet
+the manifest's MPUI (≥ 1% relative with a corrected lower bound above zero); nothing is promoted and seq 105 is
+untouched.
 
 Reviews: `out/review_interim_direction_2026-09-10.md`, `out/review_final_2026-09-10.md` (independent workers);
 both reach the same verdict. Adjudication of their objections: the market-only model winning inner selection is
@@ -116,7 +126,7 @@ promotion rule, so no shadow was created, no identifier issued, and the incumben
 | Crypto trend21 / liquidity21 | none | none | not studied (7 symbols) | n/a | n/a | INSUFFICIENT BLOCKS | cannot be studied at this universe size |
 | FilingsDrift21 | no frozen baseline by design | proposal only (§5) | not studied (no availability-timestamped history) | n/a | n/a | NO BASELINE | new kind with a frozen null, then 10 blocks |
 | Trend63 | none | none | not studied | n/a | n/a | PENDING 2026-09-25 | first resolutions |
-| HAR realized variance (seq 105) | forming and stale call bars; forecasts rewritten until resolution | settled-and-fresh call bar, freeze once (87e7f57, not deployed) | none of V1-V3 (smoke: |DM t| < 1.2) | V3 −0.005 QLIKE vs HAR at h=1 (t −0.72); HAR beats EWMA and RW | 40-symbol smoke; full run pending | INSUFFICIENT: 4 qualifying days of 60 | 56 more qualifying days (≥ 2026-11-27) |
+| HAR realized variance (seq 105) | forming and stale call bars; forecasts rewritten until resolution | settled-and-fresh call bar, freeze once (87e7f57, deployed as b84670c) | V1 = HAR + market log-RV term | −1.3% QLIKE vs HAR at h=1 (DM t −1.76, Holm 0.47; 5 of 6 years), −1.4% at h=5 (t −1.28); HAR beats EWMA and RW (t 7.1) | 1,292 symbols, 1,382 day clusters, 2021-2026 | INSUFFICIENT: 4 qualifying days of 60 (registered test) | 56 more qualifying days (≥ 2026-11-27); V1 would need its own registration to be tested prospectively |
 | Paper book / seq 87 | none (cash reconciles; count conflated replays) | none | n/a | 3 sessions, mean excess −0.24% | 3 of 60 sessions | INSUFFICIENT EVIDENCE | 57 more eligible sessions |
 
 ## 7. Files, tests, commands
