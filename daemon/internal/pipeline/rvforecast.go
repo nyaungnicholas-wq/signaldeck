@@ -20,6 +20,7 @@ import (
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/harrv"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
@@ -92,7 +93,7 @@ func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 	from := now.AddDate(0, 0, -rvLookbackDays).Unix()
 	rev := w.rev()
 
-	var wrote, thin, noFit, flat, locked int
+	var wrote, already, stale, thin, noFit, flat, locked int
 	for _, s := range syms {
 		// Stocks only. The estimator is a daily RANGE estimator validated on
 		// equity sessions; crypto trades continuously, so "the overnight gap"
@@ -111,6 +112,15 @@ func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 		}
 		rv, ts, _ := harrv.RVSeries(bars)
 		t := len(rv) - 1
+		// THE CALL BAR MUST BE THE LAST COMPLETED SESSION (2026-09-09). Measured on
+		// the live table: a pass at 09:36 ET froze 281 rows from the forming bar, and
+		// passes inside the nightly universe sweep froze 305 rows on delisted names
+		// whose last bar was years old (call bars 2024-09..2026-07), all later closed
+		// as ungradable. A forming bar is not a call bar; a stale bar is a backfill.
+		if !md.DailyBarSettled(md.Stocks, ts[t], now.Unix()) || marketcal.SessionsClosedSince(ts[t], now) > 0 {
+			stale++
+			continue
+		}
 
 		for _, h := range RVHorizons {
 			fit, ok := harrv.FitAt(rv, t, h)
@@ -137,7 +147,12 @@ func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 				Beta0: fit.Beta0, BetaD: fit.BetaD, BetaW: fit.BetaW, BetaM: fit.BetaM,
 				ResidVar: fit.ResidVar, NTrain: fit.N, Revision: rev,
 			}
-			err := retryBusy(ctx, func() error { return w.St.UpsertRVForecast(ctx, rec, now) })
+			var inserted bool
+			err := retryBusy(ctx, func() error {
+				var e error
+				inserted, e = w.St.FreezeRVForecast(ctx, rec, now)
+				return e
+			})
 			if busy(err) {
 				// Drop THIS forecast, never the pass. The registration counts
 				// a day only when 30+ symbols resolve on it, so abandoning
@@ -149,15 +164,20 @@ func (w *RVForecastRunner) Run(ctx context.Context) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("store %s h=%d: %w", s.Symbol, h, err)
 			}
-			wrote++
+			if inserted {
+				wrote++
+			} else {
+				already++ // frozen by an earlier pass; the first write is the record
+			}
 		}
 	}
 
 	detail := fmt.Sprintf(
-		"froze %d forecast(s) over %d horizon(s); %d symbol(s) below the %d-session floor, "+
-			"%d could not fit, %d had no usable regressor row, %d lost to a locked database",
-		wrote, len(RVHorizons), thin, harrv.MinHistory, noFit, flat, locked)
-	if wrote == 0 {
+		"froze %d forecast(s) over %d horizon(s) (%d already frozen by an earlier pass); %d symbol(s) skipped: "+
+			"last bar forming or stale, %d below the %d-session floor, %d could not fit, %d had no usable "+
+			"regressor row, %d lost to a locked database",
+		wrote, len(RVHorizons), already, stale, thin, harrv.MinHistory, noFit, flat, locked)
+	if wrote == 0 && already == 0 {
 		// Completed without delivering. ErrDegraded is the honest status: the
 		// run worked, the fleet is fine, and there was nothing to write.
 		return detail, fmt.Errorf("%s: %w", detail, workers.ErrDegraded)

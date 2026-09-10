@@ -17,6 +17,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/macrofeat"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/micro"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ranking"
@@ -730,7 +731,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			benchProb[h] = p
 		}
 	}
-	n, featErrs, staleCals, noLegs, gatedRows := 0, 0, 0, 0, 0
+	n, featErrs, staleCals, noLegs, gatedRows, staleFeed := 0, 0, 0, 0, 0, 0
 	// This pass's emitted probabilities per horizon, published or withheld.
 	runProbs := map[md.Horizon][]float64{}
 	formingTrimmed := 0
@@ -745,6 +746,14 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		}
 		if trimmed {
 			formingTrimmed++
+		}
+		// STALE FEED (2026-09-09): no forecast from a daily series that has missed two
+		// full sessions, the dq-auditor's own rule. The grader already EXCLUDES such
+		// rows after the fact (stale-feed quarantine: 2,464 graded observations over
+		// 465 symbols on 2026-09-09); minting them was the defect, not grading them.
+		if s.Market == md.Stocks && len(daily) > 0 && marketcal.DailyBarStale(daily[len(daily)-1].Ts, time.Now()) {
+			staleFeed++
+			continue
 		}
 		states := expectancy.CurrentStateKeys(daily, minute)
 		forecasts, err := w.St.Forecasts(ctx, s.ID)
@@ -1175,6 +1184,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		_ = w.St.SetMeta(ctx, "predict_universe_day", universeCursor)
 	}
 	detail := fmt.Sprintf("wrote %d predictions", n)
+	if staleFeed > 0 {
+		detail += fmt.Sprintf(" (%d stock(s) skipped: daily series stale by two or more sessions)", staleFeed)
+	}
 	if formingTrimmed > 0 {
 		detail += fmt.Sprintf(" (%d symbol(s) scored on settled bars only — newest daily bar still forming)", formingTrimmed)
 	}

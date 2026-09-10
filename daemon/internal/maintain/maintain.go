@@ -612,24 +612,9 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 // Labor Day weekend (2,583 events). Today never counts: the 6h poller may not have
 // fetched it yet.
 func dailyBarStale(latestBarTs int64, now time.Time) bool {
-	if latestBarTs <= 0 {
-		return false
-	}
-	loc := marketcal.Loc()
-	barDay := time.Unix(latestBarTs, 0).In(loc)
-	barDay = time.Date(barDay.Year(), barDay.Month(), barDay.Day(), 0, 0, 0, 0, loc)
-	n := now.In(loc) // the host clock is Pacific: 22:00 PT is already tomorrow in New York
-	today := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, loc)
-	count := 0
-	for t := barDay.AddDate(0, 0, 1); t.Before(today); t = t.AddDate(0, 0, 1) {
-		if count >= 60 {
-			break
-		}
-		if marketcal.IsTradingDay(t) {
-			count++
-		}
-	}
-	return count >= 2
+	// One rule, one place: the prediction runner now refuses to mint on a stale
+	// series under the same definition (marketcal.DailyBarStale, 2026-09-09).
+	return marketcal.DailyBarStale(latestBarTs, now)
 }
 
 type DQAuditor struct {

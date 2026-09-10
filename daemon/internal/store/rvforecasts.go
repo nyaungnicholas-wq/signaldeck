@@ -28,30 +28,47 @@ type RVForecast struct {
 	Revision                   string
 }
 
-// UpsertRVForecast freezes a forecast. Idempotent on (symbol, ts, horizon):
-// re-running the worker in the same session must not create a second row, and
-// must not overwrite a row that has already RESOLVED -- a resolved outcome is
-// evidence, and silently replacing it would be rewriting the record.
-func (s *Store) UpsertRVForecast(ctx context.Context, f RVForecast, now time.Time) error {
+// FreezeRVForecast freezes a forecast ONCE and reports whether this call wrote
+// the row; false means a row for (symbol, ts, horizon) already existed - open,
+// resolved or ungradable - and nothing about it was touched. Frozen means
+// frozen at FIRST write (2026-09-09). Until this change the upsert refreshed an
+// unresolved row on every pass, so a "frozen" forecast could be rewritten by
+// any later pass until it resolved: on 2026-09-08 a pass at 09:36 ET froze 281
+// rows from the session's forming bar and a pass after the close silently
+// replaced them; the record survived by luck of the later pass. The runner now
+// refuses a call bar that is not the last completed session, so the first write
+// is the settled one, and the store makes it the only one. A revised bar after
+// the freeze changes the OUTCOME the resolver computes, never the forecast that
+// was made.
+func (s *Store) FreezeRVForecast(ctx context.Context, f RVForecast, now time.Time) (bool, error) {
 	if f.NullRW <= 0 || f.NullEWMA <= 0 {
-		return ErrNullNotFrozen
+		return false, ErrNullNotFrozen
 	}
 	if f.RVHat <= 0 || f.Horizon < 1 || f.Revision == "" {
-		return errors.New("rv_forecasts: refusing an incomplete forecast row")
+		return false, errors.New("rv_forecasts: refusing an incomplete forecast row")
 	}
-	_, err := s.w.ExecContext(ctx, `
+	res, err := s.w.ExecContext(ctx, `
 		INSERT INTO rv_forecasts
 		  (symbol_id, ts, horizon, rv_hat, null_rw, null_ewma,
 		   beta0, beta_d, beta_w, beta_m, resid_var, n_train, revision, created_ts)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(symbol_id, ts, horizon) DO UPDATE SET
-		  rv_hat=excluded.rv_hat, null_rw=excluded.null_rw, null_ewma=excluded.null_ewma,
-		  beta0=excluded.beta0, beta_d=excluded.beta_d, beta_w=excluded.beta_w,
-		  beta_m=excluded.beta_m, resid_var=excluded.resid_var,
-		  n_train=excluded.n_train, revision=excluded.revision
-		WHERE rv_forecasts.actual IS NULL AND rv_forecasts.ungradable IS NULL`,
+		ON CONFLICT(symbol_id, ts, horizon) DO NOTHING`,
 		f.SymbolID, f.Ts, f.Horizon, f.RVHat, f.NullRW, f.NullEWMA,
 		f.Beta0, f.BetaD, f.BetaW, f.BetaM, f.ResidVar, f.NTrain, f.Revision, now.Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// UpsertRVForecast is FreezeRVForecast for callers that only need idempotency:
+// re-running the worker in the same session must not create a second row.
+func (s *Store) UpsertRVForecast(ctx context.Context, f RVForecast, now time.Time) error {
+	_, err := s.FreezeRVForecast(ctx, f, now)
 	return err
 }
 

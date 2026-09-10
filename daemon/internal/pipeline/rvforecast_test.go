@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/harrv"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
@@ -20,18 +21,23 @@ import (
 func rvTestBars(symbolID int64, n int, start time.Time) []md.Bar {
 	bars := make([]md.Bar, n)
 	px := 100.0
+	d := start // advanced to the next NYSE trading day per bar; stamped at NY midnight like production
 	for i := 0; i < n; i++ {
+		for !marketcal.IsTradingDay(d) {
+			d = d.AddDate(0, 0, 1)
+		}
 		px *= 1 + 0.004*math.Sin(float64(i)/11)
 		rng := px * (0.006 + 0.004*math.Abs(math.Cos(float64(i)/7)))
 		bars[i] = md.Bar{
 			SymbolID: symbolID, TF: md.TF1d,
-			Ts:     start.AddDate(0, 0, i).Unix(),
+			Ts:     d.Unix(),
 			Open:   px,
 			High:   px + rng,
 			Low:    px - rng,
 			Close:  px + 0.3*rng*math.Sin(float64(i)/3),
 			Volume: 1_000_000,
 		}
+		d = d.AddDate(0, 0, 1)
 	}
 	return bars
 }
@@ -48,11 +54,13 @@ func newRVPipelineStore(t *testing.T, market md.Market, nBars int) (*store.Store
 	if err != nil {
 		t.Fatalf("symbol: %v", err)
 	}
-	start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	if err := st.UpsertBars(ctx, rvTestBars(sym.ID, nBars, start)); err != nil {
+	start := time.Date(2020, 1, 2, 0, 0, 0, 0, marketcal.Loc())
+	bars := rvTestBars(sym.ID, nBars, start)
+	if err := st.UpsertBars(ctx, bars); err != nil {
 		t.Fatalf("bars: %v", err)
 	}
-	return st, sym, start.AddDate(0, 0, nBars)
+	// now = 22h after the last stamp: that session has settled and no later one has closed.
+	return st, sym, time.Unix(bars[len(bars)-1].Ts, 0).Add(22 * time.Hour)
 }
 
 // The whole loop: freeze with both nulls, refuse to resolve before the window
@@ -117,7 +125,7 @@ func TestRVForecastAndResolveRoundTrip(t *testing.T) {
 	}
 
 	// Extend past the longest horizon, then resolve for real.
-	start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2020, 1, 2, 0, 0, 0, 0, marketcal.Loc())
 	if err := st.UpsertBars(ctx, rvTestBars(sym.ID, nBars+30, start)); err != nil {
 		t.Fatalf("extend bars: %v", err)
 	}

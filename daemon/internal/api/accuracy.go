@@ -459,31 +459,25 @@ func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now
 
 	var bad []string
 	total := 0
+	// THE WINDOW IS THE GRADED RECORD, NOT THE NEWEST N SESSIONS (2026-09-09).
+	//
+	// This used to reproduce the grader's window as "the newest distinct_days
+	// (+10 slack) call days". The grader's population is every row with
+	// ts >= the survivorship epoch (tools/accuracy_registry.py,
+	// fetch_directional_days), and once the ensemble abstains distinct_days
+	// stops growing while sessions keep passing, so the newest-N slice slid
+	// forward PAST the collapsed days that are still inside the graded record.
+	// Measured 2026-09-09: 1d distinct_days=28, so a 38-session slice would have
+	// dropped the 2026-07-27..08-06 collapses within two more weeks and
+	// published a record built on them - the fail-open direction the previous
+	// comment named. Reading from the epoch is a superset of the graded days
+	// (the grader also drops thin, unsettled and stale-feed days), so it can
+	// only over-refuse, never under-refuse.
+	since := time.Unix(store.SurvivorshipEpoch, 0).UTC()
 	for _, h := range horizons {
-		days := depth[h]
-		// Trading days are sparser than calendar days; widen so the calendar
-		// window actually contains `days` sessions rather than stopping short.
-		//
-		// KNOWN APPROXIMATION, stated rather than papered over: the registry
-		// publishes how MANY days it graded, not WHICH ones, so this reproduces
-		// the window as "the newest `days` sessions". A collapsed day that sits
-		// inside the graded window but outside that newest-N slice is missed.
-		// The miss FAILS OPEN (publishes when it should refuse), which is the
-		// wrong direction — closing it needs the grader to emit its graded day
-		// list, not a smarter guess here.
-		since := now.AddDate(0, 0, -(days*2 + 7))
 		stats, err := d.St.ForecastDayStats(ctx, h, since)
 		if err != nil {
 			return "", false, err
-		}
-		// FAIL CLOSED (2026-09-07): the grader's set is the newest `days` SETTLE
-		// days, and quarantined sessions can push it back further than this
-		// call-day slice reaches. Check a SUPERSET (extra sessions of slack): a
-		// collapsed day just outside the true window then over-refuses for a few
-		// sessions, which is the right direction; it can no longer be missed.
-		const gateSlackSessions = 10
-		if keep := days + gateSlackSessions; len(stats) > keep {
-			stats = stats[len(stats)-keep:]
 		}
 		total += len(stats)
 		for _, st := range stats {

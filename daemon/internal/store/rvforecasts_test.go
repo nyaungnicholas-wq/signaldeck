@@ -109,7 +109,10 @@ func TestRVForecastUpsertNeverRewritesEvidence(t *testing.T) {
 	if err := st.UpsertRVForecast(ctx, f, now); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	// a re-run before resolution may refresh the row
+	// A re-run before resolution must NOT refresh the row either: the forecast
+	// is frozen at first write (2026-09-09). Before this, a pass on a forming
+	// bar was silently replaced by the next pass, so "frozen" meant "the last
+	// value written before resolution".
 	f.RVHat = 9e-4
 	if err := st.UpsertRVForecast(ctx, f, now); err != nil {
 		t.Fatalf("idempotent re-run: %v", err)
@@ -121,8 +124,8 @@ func TestRVForecastUpsertNeverRewritesEvidence(t *testing.T) {
 	if len(open) != 1 {
 		t.Fatalf("got %d open rows, want exactly 1", len(open))
 	}
-	if open[0].RVHat != 9e-4 {
-		t.Errorf("an unresolved row did not refresh: %v", open[0].RVHat)
+	if open[0].RVHat != sampleForecast(sid, 1000).RVHat {
+		t.Errorf("an unresolved row was rewritten after its freeze: %v", open[0].RVHat)
 	}
 
 	// resolve it, then try to overwrite
@@ -237,5 +240,21 @@ func TestCountResolvedRVGatesRegistration(t *testing.T) {
 	}
 	if n, _ := st.CountResolvedRV(ctx); n != 1 {
 		t.Errorf("a resolved forecast was not visible to the registration gate (n=%d)", n)
+	}
+}
+
+// FreezeRVForecast says whether it wrote: the first call for a (symbol, ts,
+// horizon) inserts, every later one is a no-op, and the runner counts only the
+// first as frozen.
+func TestFreezeRVForecastReportsInsertion(t *testing.T) {
+	st, sid := newRVStore(t)
+	ctx, now := context.Background(), time.Unix(1_700_000_000, 0)
+	ins, err := st.FreezeRVForecast(ctx, sampleForecast(sid, 1000), now)
+	if err != nil || !ins {
+		t.Fatalf("first freeze: inserted=%v err=%v", ins, err)
+	}
+	ins, err = st.FreezeRVForecast(ctx, sampleForecast(sid, 1000), now.Add(time.Hour))
+	if err != nil || ins {
+		t.Fatalf("second freeze: inserted=%v err=%v, want a no-op", ins, err)
 	}
 }
