@@ -38,7 +38,8 @@ in quarantine/ is SUPERSEDED — do not execute it.
 - TZ= is silently UTC under Git Bash — timezone-sensitive stats invert (measurement-inversion).
 - deployment_drift needs a >15-min outage to clear; a running fleet never produces its "boot".
   Since 2026-09-10 it runs in ops/accuracy-registry.sh before the grader and REFUSES publication
-  on exit 1 (exit 2 = undetermined, publishes with a WARN). A red run means DEPLOY, never backfill.
+  on ANY non-zero exit (a missing script or a renamed flag also exits 2). A red run means DEPLOY,
+  never backfill.
 - NEVER raise the Go research-loop cadence (his standing order).
 
 ## Hygiene

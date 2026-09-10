@@ -203,28 +203,39 @@ fi
 # either, is not a live number. Advisory would turn the stderr it prints
 # ("Publication must be refused") into a lie in a log nobody reads. It has
 # refused on a false diagnosis three times (371551a, A21 in
-# audits/2026-08-12-reaudit.md, 6f02590); each was fixed with a regression
-# test, and it measured 6/6 ok on the live database on 2026-09-01 and
-# 2026-09-09 before this block landed.
+# audits/2026-08-12-reaudit.md, 6f02590). Two of those fixes shipped a
+# regression test with them; the A21 fix (3318028) shipped none, so
+# tools/test_deployment_drift_wiring.py now pins the revision-boot signal that
+# commit introduced, as well as the shape of this block. It measured 6/6 ok on
+# the live database on 2026-09-01 and again on 2026-09-10, before this landed.
 #
-# FAILS OPEN on exit 2, like the collapse gate below: "could not run" is
-# ignorance, not evidence, and the grader refuses on the same unreadable
-# database on its own. Any other non-zero code refuses, because the tool fails
-# closed on purpose (an unresolvable null-kind map raises rather than matching
-# nothing). Guarded like the protocol check below it: an earlier refusal
-# stands. The heartbeat below files this reason as --failure, like the
-# liveness refusal, because the grader was not run and the remedy is an
-# operator deploy, not a cleared window.
+# ANY non-zero exit refuses, including 2. The tool's own main() returns 2 for
+# "the check could not run", and that alone would argue for failing open the
+# way the collapse gate below does — but python also exits 2 when the script
+# file is missing, and argparse exits 2 on an unknown flag, so a fail-open arm
+# would silently un-wire this gate the day the tool is renamed or its --db flag
+# changes. That is not hypothetical: ops/research-liveness.sh passed
+# --emit-dq-event, a flag research_liveness.py never implemented, argparse
+# exited 2, and the check "had never produced a verdict, on macOS either"
+# (REMEDIATION_2026-08-03.md). Refusing costs one day's publication and is
+# self-healing; failing open costs the guarantee this block exists to give.
+#
+# Guarded like the protocol check below it, so an earlier refusal stands. On a
+# pass the capture is cleared: a LATER refusal that writes no capture of its
+# own (the protocol-document gate) would otherwise publish these six passing
+# [ok] lines as its own refusal_stderr. The heartbeat below files this reason
+# as --failure, like the liveness refusal, because the grader was not run and
+# the remedy is an operator deploy, not a cleared window.
 if [ -z "$refusal_reason" ]; then
   "$PY" "$SD/tools/deployment_drift.py" --db "$SD/data/signaldeck.db" \
     > "$STDERR_CAPTURE" 2>&1
   drift_status=$?
   cat "$STDERR_CAPTURE" >> "$LOG"
-  case "$drift_status" in
-    0) ;;
-    2) echo "WARN: deployment drift check undetermined (exit 2) -- publishing; the grader reads the same database and refuses on its own evidence" >> "$LOG" ;;
-    *) refusal_reason="deployment drift check failed (exit $drift_status) — a mechanism the pre-registration chain claims is not observable in the live database (see the DEPLOYMENT DRIFT lines above in this log); the grader was not run" ;;
-  esac
+  if [ "$drift_status" -ne 0 ]; then
+    refusal_reason="deployment drift check failed (exit $drift_status) — a mechanism the pre-registration chain claims is not observable in the live database, or the check itself could not run (see the DEPLOYMENT DRIFT lines above in this log); the grader was not run"
+  else
+    : > "$STDERR_CAPTURE"
+  fi
 fi
 
 # PROTOCOL-DOCUMENT REGISTRATION — the same fail-closed shape

@@ -10,6 +10,13 @@
 # those things exist in the image (there is no .git, no checkout, no README to
 # publish). It is the DEV-BOX job.
 #
+# NOT PORTED, ON PURPOSE: the DEPLOYMENT DRIFT gate accuracy-registry.sh runs
+# before the grader (tools/deployment_drift.py, wired 2026-09-10). Two of its
+# checks shell out to git against the deployed revision and there is no .git
+# here, so it cannot produce a verdict in the image. The container therefore
+# applies one gate fewer than the dev box: a stale binary the dev-box publish
+# refuses on is still graded here. Recorded so the divergence is known, not silent.
+#
 # The consequence of nobody noticing was severe, because /api/accuracy is
 # deliberately fail-closed (internal/api/accuracy.go): an unreadable registry
 # is 503 REFUSED, and a grader heartbeat older than GraderMaxAge (26h) is 503
