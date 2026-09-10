@@ -153,7 +153,7 @@ def run_horizon(df, feats, h, a, ledger):
         for cal in ("none", "isotonic"):
             if not s["res"][cal]:
                 continue
-            skill, di = np.concatenate(s["skill"][cal]), np.concatenate(s["dint"])
+            skill, di = 100.0 * np.concatenate(s["skill"][cal]), np.concatenate(s["dint"])  # bootstrap in percentage points, the unit of skill_pp and the MPUI rule
             p, yy, bb = np.concatenate(s["p"][cal]), np.concatenate(s["y"]), np.concatenate(s["b0"])
             boot = {str(bl): M.block_bootstrap(skill, di, block_len=bl) for bl in (21, 5, 63)}
             pooled = L.evaluate(p, yy, di, bb, None)

@@ -85,7 +85,7 @@ def outer_eval(df, days_all, h, model, feature_set, transform, args):
     y_all = np.concatenate(all_y)
     p_all = np.concatenate(all_p)
     pooled = L.evaluate(p_all, y_all, dint_all, M.prequential_majority(dint_all, y_all))
-    boot = M.block_bootstrap(skill_all, dint_all, block_len=21, n_boot=2000, seed=20260909)
+    boot = M.block_bootstrap(100.0 * skill_all, dint_all, block_len=21, n_boot=2000, seed=20260909)  # percentage points
     return {
         'model': model,
         'feature_set': feature_set,
