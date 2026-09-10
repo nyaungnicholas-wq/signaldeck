@@ -132,6 +132,27 @@ if (-not (Test-Path -LiteralPath $walPath)) {
     }
 }
 
+# LEDGER REVISIONS. tools/accuracy_registry.py strips a whole family's verdict
+# when any post-epoch row cites a commit git cannot resolve. A commit reachable
+# from no ref still resolves until the first `git gc` after its reflog entry
+# expires (~30 days), so a deleted ref strips verdicts silently weeks later,
+# and ops/githooks/reference-transaction only sees ref moves, never gc or a
+# deletion made in another clone. Measured 2026-09-10: b84670c9 (252 1w rows,
+# 7 liquidity21-crypto, 7 trend21-crypto) resolves and nothing reaches it. So
+# the ledger is asked daily, here, while the commit can still be re-attached.
+# Read-only (sqlite mode=ro). Exit 1 names each revision and the families it
+# takes with it; the tool prints to stdout only, so no redirect is needed and
+# a crash traceback still reaches the task log via *>>.
+$lrr = Join-Path $repo 'tools\ledger_revision_reachability.py'
+$lrrOut = @(& python $lrr)
+if ($LASTEXITCODE -ne 0) {
+    Write-Output 'LEDGER REVISIONS: BROKEN'
+    $lrrOut | ForEach-Object { Write-Output "  $_" }
+    $failed = $true
+} else {
+    Write-Output ('LEDGER REVISIONS: ' + ($lrrOut | Select-Object -Last 1))
+}
+
 if ($failed) { Write-Output 'RESULT: unhealthy'; exit 1 }
 Write-Output 'RESULT: ok'
 exit 0
