@@ -1,0 +1,25 @@
+{
+ "days_qualifying": 4,
+ "days_qualifying_resolved": 3,
+ "days_total": 230,
+ "db_path": "data/signaldeck.db",
+ "first_day": "2024-09-16",
+ "generated_at_utc": "2026-09-10T01:18:06.933322+00:00",
+ "horizon": 1,
+ "last_day": "2026-09-09",
+ "max_symbols_per_day": 850,
+ "median_symbols_per_day": 1.0,
+ "min_symbols": 30,
+ "rows_resolved": 2001,
+ "rows_total": 3165,
+ "rows_ungradable": 306,
+ "symbols_by_market": {
+  "stocks": 1164
+ },
+ "ungradable_reasons": [
+  [
+   "the outcome window never became fully estimable",
+   306
+  ]
+ ]
+}
