@@ -153,6 +153,36 @@ if ($LASTEXITCODE -ne 0) {
     Write-Output ('LEDGER REVISIONS: ' + ($lrrOut | Select-Object -Last 1))
 }
 
+# LEDGER MANIFEST. ops/ledger-revisions.txt is all CI's provenance job can
+# enforce, and it is regenerated only when someone runs
+# `bash ops/ledger-provenance.sh --write` here, on the machine with the
+# database. It went 36 days stale, 2026-08-04 to 2026-09-09: 101 of the 108
+# ledger revisions on the remote had no CI protection the whole time, and CI
+# stayed green because the seven it did record stayed reachable. --diff
+# recomputes what --write would record and compares it with the committed
+# file. Exit 1 is a warning, printed in full and not fatal: a revision cited
+# by the ledger and on the remote for 7+ days is unrecorded (the weekly chore
+# is due), or a recorded one is no longer recordable (CI is about to fail and
+# --check's message says what to do). Exit 2 means it could not run, which on
+# the machine that holds the database is unhealthy. No stderr redirect, same
+# as the python call above: --diff writes everything to stdout. PATH's
+# bash.exe is the WSL launcher on this box, so Git's is resolved explicitly
+# the way daemon-guard.ps1 does; a missing one is reported, not failed.
+$bash = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
+    Where-Object { $_ } |
+    ForEach-Object { Join-Path $_ 'Git\bin\bash.exe' } |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Select-Object -First 1
+if (-not $bash) {
+    Write-Output 'LEDGER MANIFEST: SKIPPED (no Git bash under ProgramFiles)'
+} else {
+    $lpOut = @(& $bash ((Join-Path $repo 'ops\ledger-provenance.sh') -replace '\\', '/') --diff)
+    $lpExit = $LASTEXITCODE
+    Write-Output ('LEDGER MANIFEST: ' + ($lpOut | Select-Object -Last 1))
+    if ($lpExit -ne 0) { $lpOut | Select-Object -SkipLast 1 | ForEach-Object { Write-Output "  $_" } }
+    if ($lpExit -gt 1) { $failed = $true }
+}
+
 if ($failed) { Write-Output 'RESULT: unhealthy'; exit 1 }
 Write-Output 'RESULT: ok'
 exit 0
