@@ -11,11 +11,11 @@ SignalDeck is a self-grading market-research instrument. A Go daemon records mar
 - Anyone evaluating a forecasting claim
 
 **Problem**
-Forecast products publish win rates nobody can verify. There is no public, re-verifiable ledger that shows every prediction, every outcome, and every grade — including the failures.
+Forecast accuracy claims can be difficult for a learner to evaluate when the original predictions, evaluation methods, baselines, and unsuccessful results are not presented together. SignalDeck aims to make its own forecasting record easier to inspect and its limitations visible. This is a description of the problem it addresses, not a claim that no comparable tool exists.
 
 ## Claims you may make
 
-- Grades itself in public with a hash-chained, re-verifiable prediction ledger (about 477,000 entries)
+- Provides public-facing evaluation and hash-chain verification pages on the local deployment. A publicly reachable hosted app is not yet established; confirm the live ledger count immediately before recording rather than quoting an old count.
 - Retired its own flagship directional model by a pre-registered auto-retire rule because its live record was worse than the majority-class baseline; retirement is permanent by design
 - Refuses to publish accuracy figures when the graded window contains collapsed cross-sections (days when the model gave the whole universe a handful of distinct probabilities); the public pages say so plainly and show no figures until the window clears
 - Volatility forecast (HAR realized-variance model versus random walk and RiskMetrics EWMA) pre-registered on 2026-09-04 (chain sequence 105) and accruing a live record; needs 60 distinct trading days before any verdict; no skill is claimed
@@ -65,7 +65,7 @@ Total: ~2 minutes 15 seconds
 | 1:30–1:45 | Sign in + /dashboard | Auth flow and private workspace |
 | 1:45–2:00 | /s/stocks/SPY | Symbol research with derived analytics |
 | 2:00–2:15 | /lab/paper | Manual simulated order with cost model |
-| 2:15–2:30 | /lab/track-record | Paper-trading track record |
+| 2:15–2:30 | /lab/track-record | Prediction evaluation record; distinct from paper-trading performance |
 | 2:30–2:45 | Closing | "No profitability is claimed. All AI usage is disclosed in the submission." |
 
 ## Written answers — drafts and placeholders
@@ -80,7 +80,7 @@ A self-grading market-research instrument that records market data, freezes pre-
 [NICHOLAS TO CONFIRM]
 
 **4. Technical/coding difficulty faced and how it was addressed**  
-Two verified challenges from code history:  
+Candidate technical challenges described in the release handoff (confirm your own involvement and understanding before using either as a first-person answer):  
 - The landing page printed a "publication refused" banner above a table of the refused figures because an evening job regraded the registry file without the publication gate and the page read the file directly. Fixed by making one API endpoint the single publication authority; every page, document, and export now follows it.  
 - Readiness reported 503 for weeks because workers that deliberately abstain (benched models) were counted as failures. Fixed by distinguishing "declined to deliver" from "failed" in the health check.
 
@@ -96,7 +96,9 @@ Two verified challenges from code history:
 
 ## AI-assistance disclosure (draft)
 
-AI assistance was substantial. Claude Code (Anthropic) acted as the engineering agent for much of the codebase, with additional code drafts from other large language models routed through a local gateway; all of it was reviewed and run before being committed. The 2026-09-08 release pass (publication-contract repair, public pages, readiness fix, documentation) was done by Claude Code under my direction. AI did not constitute the entirety of the technical development, and the parts I designed, coded and can explain myself are stated below in my own words: [NICHOLAS TO CONFIRM — write this yourself; nothing here may be filled in by an assistant].
+Draft based on the engineering handoff, awaiting Nicholas's review: AI assistance was substantial. Claude Code (Anthropic) acted as the engineering agent for much of the codebase, with additional code drafts attributed in the handoff to other large language models routed through a local gateway. Claude Code performed the 2026-09-08 release pass, including publication-contract repair, public pages, readiness changes, and documentation. [NICHOLAS TO CONFIRM: which tools you actually used, what work you personally designed or coded, what you reviewed and tested yourself, and what you can explain.]
+
+Do not assert that all code was personally reviewed or tested, or that AI did not constitute the entirety of technical development, until those statements are supported by Nicholas's actual experience. His answers can be edited for clarity with his review; missing experiences must never be invented. The competition's student-contribution requirements must be assessed against those facts, not assumed satisfied by adding a disclosure.
 
 ## What you should be able to explain and demonstrate
 
