@@ -31,8 +31,11 @@ Detailed in the ledger F1-F7. Fixed and tested (87e7f57): rv call bar must be th
 frozen at first write (F1, F2); the publication gate's window starts at the survivorship epoch instead of a sliding
 newest-N slice that would have opened within two weeks (F3); the prediction runner no longer mints on stale daily
 series (F4). Refuted as defects: the diagnostic-vs-grade gap (F5), the paper book count (F6), the rv coverage
-expectation (F7). **Deployment is Nicholas's action**: `bash ops/signaldeck-ctl.sh deploy` (blocked for this session
-by the permission classifier; refuses a dirty tree). Rollback: `git revert 87e7f57` then the same command.
+expectation (F7). **Deployed 2026-09-10 03:2x UTC on Nicholas's authorisation** (`deploy VERIFIED: daemon is
+running commit b84670c9…`); the first live passes read `froze 0 ... (564 already frozen by an earlier pass);
+3 symbol(s) skipped: last bar forming or stale` and `1 stock(s) skipped: daily series stale by two or more sessions`,
+and the shared gate run against a registry with rows refuses on 18 collapsed cross-sections of 74 epoch-window days
+(pre-epoch days gone). Rollback: `git revert 87e7f57` then `bash ops/signaldeck-ctl.sh deploy`.
 
 Collapse mechanisms (from WP1 and this pass): July 2026 = the fleet calibration map folding ~280 raw values onto
 5-14; from 2026-08-06 = abstention (no admitted 1d leg), which writes evidence rows without outcome rows. Both are
@@ -91,7 +94,7 @@ promotion rule, so no shadow was created, no identifier issued, and the incumben
 
 ## 5. What requires new data, future sessions, or Nicholas
 
-- Deploy 87e7f57 (command above) so the rv record accrues cleanly from the next session.
+- Deployed; the rv record accrues under the new rules from the next session.
 - Structural verdicts need 10 non-overlapping 21-day blocks with frozen baselines: block 10 opens ~2027-02-02 and
   resolves ~2027-03-05. Trend63 first grades 2026-09-25. Seq 105 needs 60 qualifying days (not before 2026-11-27).
   Seq 87 needs 60 eligible sessions (3 so far). Calendar time is not qualifying evidence; gaps push these dates back.
@@ -125,4 +128,5 @@ marketcal session tests, the collapse-gate suite; Python selfchecks of every exp
 Reproduce: `.venv/Scripts/python.exe research/forecastplan/exp/data_direction.py`, `... data_structural.py`,
 `... run_direction.py --horizons 1,5`, `... direction_controls.py --what controls,ablations --ablation-model M1_c0.1`,
 `... run_structural.py`, `... run_vol.py`, `... ledger_summary.py`, each printing its OK token; audits as listed in
-the ledger. Not done: deploy (blocked), filingsdrift registration (decision), full volatility results (pending).
+the ledger. Not done: filingsdrift registration (decision), full volatility results (pending at write time; see §3
+addendum when present).
