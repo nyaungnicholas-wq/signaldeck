@@ -56,8 +56,7 @@ def outer_eval(df, days_all, h, model, feature_set, transform, args):
             'n_test': int(te_mask.sum()),
             'n_used': int(n_used),
             'metrics': m,
-            'skill': skill,
-            'day_int': dte
+            # per-row skill and day arrays stay in memory for the bootstrap (all_skill/all_dint) and are NOT serialised: 85 MB per JSON otherwise
         })
         all_skill.append(skill)
         all_dint.append(dte)
