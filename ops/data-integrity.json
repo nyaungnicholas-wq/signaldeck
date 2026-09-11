@@ -1,19 +1,19 @@
 {
-  "generated": "2026-08-05T03:28:32.218284Z",
+  "generated": "2026-09-11T04:11:15.238622Z",
   "source_db": "data/signaldeck.db",
   "grader": {
-    "status": "OK",
-    "graded_at": "2026-08-04T20:26:24",
-    "refused_since": null,
-    "refusal_reason": null,
-    "rows": 13
+    "status": "REFUSED",
+    "graded_at": "2026-09-10T14:05:46",
+    "refused_since": "2026-09-10T14:05:55",
+    "refusal_reason": "publication gate: the graded window contains 18 collapsed cross-section(s) of 75 day(s): 1d 2026-07-27 (6 distinct across 330 symbols), 1d 2026-07-28 (8 distinct across 330 symbols), 1d 2026-07-29 (13 distinct across 328 symbols), 1d 2026-07-31 (6 distinct across 328 symbols), 1d 2026-08-01 (6 distinct across 328 symbols), 1d 2026-08-02 (8 distinct across 328 symbols), 1d 2026-08-03 (5 distinct across 328 symbols), 1d 2026-08-04 (13 distinct across 328 symbols), 1d 2026-08-06 (33 distinct across 327 symbols), 1w 2026-07-26 (21 distinct across 326 symbols), 1w 2026-07-27 (7 distinct across 326 symbols), 1w 2026-07-28 (16 distinct across 328 symbols), 1w 2026-07-29 (25 distinct across 327 symbols), 1w 2026-07-31 (33 distinct across 327 symbols), 1w 2026-08-01 (16 distinct across 328 symbols), 1w 2026-08-02 (13 distinct across 328 symbols), 1w 2026-08-03 (7 distinct across 328 symbols), 1w 2026-08-04 (7 distinct across 328 symbols). On a collapsed day the whole universe receives a handful of distinct probabilities, so these rows grade one market-wide call repeated per symbol, not independent per-symbol forecasts. Figures over this window are withheld. The window starts at the survivorship epoch and does not roll forward, so a collapsed day stays in it: this clears when the window is re-registered, not by waiting for more grades.",
+    "rows": 0
   },
-  "universe_membership_rows": 1854289,
+  "universe_membership_rows": 2697299,
   "delisting": {
-    "stocks_total": 1774,
-    "stocks_delisted": 716,
-    "span_years": 8.027,
-    "rate_per_year": 0.0503
+    "stocks_total": 2943,
+    "stocks_delisted": 1894,
+    "span_years": 8.129,
+    "rate_per_year": 0.0792
   },
   "survivorship_fix_date": "2026-08-04"
 }

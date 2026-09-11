@@ -25,3 +25,4 @@ partials/live_accuracy.md
 partials/deck_facts.md
 partials/controls_evidence.md
 ops/revalidation-status.json
+ops/data-integrity.json

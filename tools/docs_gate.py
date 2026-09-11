@@ -194,6 +194,34 @@ def check_integrity_snapshot(repo: Path, registry: dict) -> tuple[list[dict], di
         v["file"] = rel
         v["message"] = v["message"].replace(str(snapshot_path), rel)
     violations.extend(snap_violations)
+
+    # AGE. Existence and parseability were the only things checked, so a
+    # snapshot frozen weeks earlier reported a healthy grader indefinitely:
+    # measured 2026-09-10 it was 37 days old and said grader OK while the live
+    # registry had been REFUSED since that morning, and this gate printed
+    # "docs-gate: clean" throughout. That is what UNSUPPRESSIBLE_CHECKS exists
+    # to stop, asserted silently, with no human and no allowlist entry.
+    # Age is the ONLY thing checkable here: data/ is gitignored and CI has no
+    # database, which is why write-integrity computes it where one exists.
+    fix = ("Run `python tools/docs_gate.py write-integrity` on the machine "
+           "holding the database and commit ops/data-integrity.json.")
+    gen = snapshot.get("generated") if isinstance(snapshot, dict) else None
+    try:
+        stamped = datetime.fromisoformat(str(gen).strip().replace("Z", "+00:00"))
+    except ValueError:
+        violations.append(make_violation("integrity-snapshot", rel, 0,
+            f"no usable `generated` stamp, so its age cannot be checked at all "
+            f"and whether it still describes the running system is unknowable. {fix}"))
+        return violations, snapshot
+    if stamped.tzinfo is None:          # write-integrity writes UTC
+        stamped = stamped.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - stamped).total_seconds() / 86400.0
+    bound = int(os.getenv("SIGNALDECK_INTEGRITY_MAX_AGE_DAYS") or 7)
+    if age > bound:
+        violations.append(make_violation("integrity-snapshot", rel, 0,
+            f"snapshot is {age:.1f} days old (bound {bound}). check_grader_status "
+            f"reads this file, so a stale one reports the grader OK long after it "
+            f"started refusing. {fix}"))
     return violations, snapshot
 
 def check_grader_status(repo: Path, snapshot: dict) -> list[dict]:

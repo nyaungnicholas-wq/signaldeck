@@ -4,6 +4,7 @@ import "./globals.css";
 import Shell from "@/components/Shell";
 import AuthGate from "@/components/AuthGate";
 import CompanyPeekProvider from "@/components/CompanyPeek";
+import { siteUrl } from "@/lib/site";
 
 // UI voice = Inter; data voice = JetBrains Mono (.tnum/.mono/charts keep the
 // --font-mono variable name, so CandleChart's axis font needs no change).
@@ -18,6 +19,17 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  // Absolute base for og:image, twitter:image and canonical URLs.
+  //
+  // Unset, Next falls back to its own default origin, so a shared link and a
+  // social card both pointed at localhost on every deployment - verified
+  // 2026-09-10: a request to 127.0.0.1:8323 still rendered
+  // og:image="http://localhost:8323/opengraph-image?...", i.e. NOT derived from
+  // the request, so no amount of correct hosting fixes it. Same source as
+  // robots.txt and sitemap.xml so the three cannot disagree about what this
+  // site is called; see web/src/lib/site.ts for why the fallback is localhost
+  // rather than a guessed production hostname.
+  metadataBase: new URL(siteUrl()),
   // Child route segments set a bare page name and inherit the suffix; the
   // dashboard (this segment) keeps the full default title.
   title: {

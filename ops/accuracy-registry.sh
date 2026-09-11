@@ -485,6 +485,13 @@ PY
   "$PY" "$SD/tools/live_accuracy.py" --write     || echo "WARN: partials/live_accuracy.md not regenerated on the refusal path" >> "$LOG"
   "$PY" "$SD/tools/live_accuracy.py" --inject $(cat "$SD/partials/INCLUDES.txt")     || echo "WARN: live-accuracy blocks not re-injected on the refusal path" >> "$LOG"
 
+  # The snapshot docs_gate reads. Regenerated on BOTH paths so it states what
+  # the grader actually did; left stale it asserted grader OK for 37 days while
+  # the registry was REFUSED, and docs_gate printed "clean" the whole time.
+  # Non-fatal: the age assertion in check_integrity_snapshot catches a failure
+  # here within its bound rather than wedging the grader on a snapshot write.
+  "$PY" "$SD/tools/docs_gate.py" write-integrity >> "$LOG" 2>&1     || echo "WARN: ops/data-integrity.json not regenerated on the refusal path" >> "$LOG"
+
   report_uncommitted_docs
   notify_remote "SignalDeck accuracy registry — $refusal_text"
   sd_notify "SignalDeck accuracy" "Grading REFUSED — README accuracy tables removed. See the log."
@@ -731,6 +738,11 @@ fi
 # the run reports success. That is a published number being wrong, which is the
 # same class as the REFUSAL PATH above -- and unlike the liveness probes, nothing
 # downstream can catch it (see the docs_stale comment where it is set).
+# Same snapshot, success path: docs_gate reads ops/data-integrity.json, so it
+# must record THIS grade, not one from weeks ago.
+"$PY" "$SD/tools/docs_gate.py" write-integrity >> "$LOG" 2>&1 \
+  || echo "WARN: ops/data-integrity.json not regenerated after a successful grade" >> "$LOG"
+
 report_uncommitted_docs
 
 if [ "${docs_stale:-0}" != "0" ]; then

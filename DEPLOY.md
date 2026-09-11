@@ -25,11 +25,22 @@ Suitable: Fly.io, Railway, Render, or any small VPS. Budget ~$5–15/month for
 ## Build and run locally first
 
 ```bash
-ops/docker-build.sh signaldeck:demo
+SIGNALDECK_ALLOW_LOCALHOST_SITE_URL=1 ops/docker-build.sh signaldeck:demo
 docker run --rm -p 8080:8080 \
   -v signaldeck_data:/data \
   -e ALPACA_KEY=... -e ALPACA_SECRET=... \
   signaldeck:demo
+```
+
+`NEXT_PUBLIC_SITE_URL` is inlined into the web bundle at BUILD time and cannot
+be set from the container environment afterwards. Unset, the image serves a
+`robots.txt`, a `sitemap.xml` and og:/twitter: cards all pointing at
+`http://localhost:8323` -- invisible until someone shares a link, so the build
+REFUSES without it. The `SIGNALDECK_ALLOW_LOCALHOST_SITE_URL=1` above is the
+explicit opt-out for a LOCAL image and is wrong for anything you will publish:
+
+```bash
+NEXT_PUBLIC_SITE_URL=https://<your-host> ops/docker-build.sh signaldeck
 ```
 
 Then `http://localhost:8080`.
@@ -191,7 +202,7 @@ So the proof is split across the two places where each half can be established:
   something is asserting provenance it could not have observed, and the script
   fails.
 
-    ops/docker-build.sh signaldeck
+    SIGNALDECK_ALLOW_LOCALHOST_SITE_URL=1 ops/docker-build.sh signaldeck
     ops/oracle-verify.sh signaldeck http://127.0.0.1:8080
 
 Never run a bare `docker build`. The wrapper is what refuses a dirty tree and

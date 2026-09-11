@@ -40,6 +40,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GATE = os.path.join(HERE, "docs_gate.py")
@@ -47,7 +48,9 @@ GATE = os.path.join(HERE, "docs_gate.py")
 # A snapshot with every value in its passing state. Tests mutate one key at a
 # time, so a failure names exactly one cause.
 CLEAN_INTEGRITY = {
-    "generated": "2026-08-04T17:00:00Z",
+    # Derived from now, not hardcoded: the fixture claims "every value in its
+    # passing state", and a fixed date only passed while nothing checked age.
+    "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "source_db": "data/signaldeck.db",
     "grader": {
         "status": "OK",
@@ -441,9 +444,27 @@ class GateTest(unittest.TestCase):
         self.assertClean()
         snap = json.loads(json.dumps(CLEAN_INTEGRITY))
         snap["grader"]["rows"] = 99
-        snap["generated"] = "2026-08-05T09:00:00Z"
+        # Fresh but DIFFERENT: this test is about the snapshot having MOVED,
+        # not about it being old, so it must not trip the age assertion too.
+        snap["generated"] = (datetime.now(timezone.utc) - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.fx.write_integrity(snap)
         self.assertFires("single-source-of-truth")
+
+    def test_integrity_snapshot_fires_when_the_stamp_is_stale(self):
+        """A snapshot past the age bound must refuse, not read as clean.
+
+        check_integrity_snapshot validated existence and parseability only, so a
+        snapshot frozen 37 days earlier went on asserting grader OK while the
+        live registry had been REFUSED for weeks and the gate printed
+        "docs-gate: clean" (measured 2026-09-10). Age is the only thing this
+        side can check: data/ is gitignored and CI has no database.
+        """
+        self.assertClean()
+        snap = json.loads(json.dumps(CLEAN_INTEGRITY))
+        snap["generated"] = "2026-07-01T00:00:00Z"
+        self.fx.write_integrity(snap)
+        hits = self.assertFires("integrity-snapshot")
+        self.assertTrue(any("days old" in h["message"] for h in hits))
 
     def test_build_is_deterministic(self):
         """Two builds of one input must be byte-identical, or `check` is a coin flip."""

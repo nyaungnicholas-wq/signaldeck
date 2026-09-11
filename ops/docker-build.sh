@@ -41,7 +41,16 @@ fi
 # the same tree. Two deploy paths disagreeing about what "clean" means is how
 # the container path came to be untestable. One spelling now, in
 # ops/lib-portable.sh, used by both.
-. "$(dirname "$0")/lib-portable.sh"
+# FAIL CLOSED on the library. Sourcing it used to be unchecked, and `set -e` is
+# deliberately off here, so a missing or renamed lib-portable.sh left
+# sd_dirty_excluding_generated undefined, $dirty empty, and the check below
+# silently PASSED -- the build then stamped a dirty tree with a provenance
+# nobody verified. ops/test-docker-build.sh has been red on exactly this: its
+# fixture does not copy the library, so every dirty-tree assertion failed.
+lib="$(dirname "$0")/lib-portable.sh"
+. "$lib" || { echo "REFUSED: cannot source $lib -- the dirty-tree check cannot run." >&2; exit 1; }
+command -v sd_dirty_excluding_generated >/dev/null 2>&1 \
+  || { echo "REFUSED: $lib defines no sd_dirty_excluding_generated -- refusing to skip the dirty-tree check." >&2; exit 1; }
 dirty="$(sd_dirty_excluding_generated "$(pwd)")"
 if [ -n "$dirty" ]; then
   echo "REFUSED: working tree is not clean." >&2
@@ -77,6 +86,29 @@ if ! git cat-file -e "${rev}^{commit}" 2>/dev/null; then
   exit 1
 fi
 
+# NEXT_PUBLIC_SITE_URL is inlined into the web bundle at BUILD time and cannot
+# be set later from the container environment, so it crosses here or not at all.
+# Unset, web/src/lib/site.ts falls back to http://localhost:8323 SILENTLY and
+# the image serves a robots.txt and sitemap.xml no crawler can use, plus og:
+# and twitter: cards pointing at localhost. None of that is visible until
+# someone shares a link, which is why this refuses rather than warns.
+#
+# A local image is a legitimate reason to have no hostname, so the opt-out is
+# explicit and named rather than implied by an empty variable.
+if [ -z "${NEXT_PUBLIC_SITE_URL:-}" ] && [ "${SIGNALDECK_ALLOW_LOCALHOST_SITE_URL:-}" != "1" ]; then
+  echo "docker build REFUSED: NEXT_PUBLIC_SITE_URL is unset." >&2
+  echo "  The web bundle inlines it at build time. Unset, this image serves" >&2
+  echo "  robots.txt, sitemap.xml and og: cards pointing at http://localhost:8323." >&2
+  echo "  Publishable:  NEXT_PUBLIC_SITE_URL=https://<host> $0 $*" >&2
+  echo "  Local only:   SIGNALDECK_ALLOW_LOCALHOST_SITE_URL=1 $0 $*" >&2
+  exit 1
+fi
+if [ -n "${NEXT_PUBLIC_SITE_URL:-}" ]; then
+  echo "docker build: site URL $NEXT_PUBLIC_SITE_URL" >&2
+else
+  echo "docker build: site URL unset -- localhost fallback (local image only)" >&2
+fi
+
 echo "docker build: stamping commit $rev into $tag" >&2
 # The OCI label is what ops/oracle-verify.sh reads back. GIT_REV goes into the
 # binary via ldflags and is TRUSTED there (a container cannot check it); the
@@ -84,5 +116,6 @@ echo "docker build: stamping commit $rev into $tag" >&2
 # against both the source tree and the running process.
 docker build \
   --build-arg GIT_REV="$rev" \
+  --build-arg NEXT_PUBLIC_SITE_URL="${NEXT_PUBLIC_SITE_URL:-}" \
   --label "org.opencontainers.image.revision=$rev" \
   -t "$tag" "$@" .

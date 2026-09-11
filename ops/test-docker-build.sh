@@ -23,6 +23,9 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 repo="$work/repo"; mkdir -p "$repo/ops"
 cp "$GUARD" "$repo/ops/docker-build.sh"
+# The guard sources this and now REFUSES without it; the fixture never copied
+# it, which is why every dirty-tree assertion below was red.
+cp "$(pwd)/ops/lib-portable.sh" "$repo/ops/lib-portable.sh"
 printf 'FROM scratch\n' > "$repo/Dockerfile"
 
 mkdir -p "$work/bin"
@@ -30,6 +33,11 @@ printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$ARGV_LOG"\nexit 0\n' > "$work/bin
 chmod +x "$work/bin/docker"
 export ARGV_LOG="$work/argv.txt"
 export PATH="$work/bin:$PATH"
+# These fixtures build throwaway LOCAL images with a stubbed docker, which is
+# exactly the case the site-URL guard allows explicitly. Without this every
+# test below would refuse on a missing hostname instead of exercising tags and
+# the dirty-tree rules it is actually about.
+export SIGNALDECK_ALLOW_LOCALHOST_SITE_URL=1
 
 cd "$repo" || exit 2
 git init -q
@@ -91,6 +99,20 @@ case "$(argv)" in
   *) bad "  tag and extra flags both forwarded (argv: $(argv))" ;;
 esac
 
+
+# 7. FAIL CLOSED on a missing library. Unchecked sourcing left the dirty-tree
+# check silently skipped, so the build stamped a dirty tree (audit id 21).
+mv "$repo/ops/lib-portable.sh" "$work/lib-portable.away"
+check "missing lib-portable.sh is refused" "$(run)" "1"
+check "  and docker never ran" "$(argv)" ""
+grep -qi "cannot source" "$work/out" && ok "  refusal names the library" || bad "  refusal names the library"
+mv "$work/lib-portable.away" "$repo/ops/lib-portable.sh"
+
+# 8. FAIL CLOSED on an unset site URL. The web bundle inlines it at build time,
+# so an image built without it serves localhost robots/sitemap/og forever.
+check "unset NEXT_PUBLIC_SITE_URL is refused" "$(env -u SIGNALDECK_ALLOW_LOCALHOST_SITE_URL bash ops/docker-build.sh >"$work/out" 2>&1; echo $?)" "1"
+grep -qi "NEXT_PUBLIC_SITE_URL is unset" "$work/out" && ok "  refusal names the variable" || bad "  refusal names the variable"
+check "  explicit hostname builds" "$(NEXT_PUBLIC_SITE_URL=https://x.test run)" "0"
 echo ""
 echo "docker-build self-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
