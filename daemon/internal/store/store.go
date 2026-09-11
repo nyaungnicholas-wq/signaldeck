@@ -1799,3 +1799,22 @@ func (s *Store) Vacuum(ctx context.Context) error {
 	_, err := s.w.ExecContext(ctx, `VACUUM`)
 	return err
 }
+
+// ReclaimableBytes is how much a VACUUM could actually return to the
+// filesystem: freelist_count x page_size.
+//
+// It exists because file SIZE is the wrong question. A VACUUM rewrites the
+// whole file but can only hand back FREE pages, so a large database with no
+// free pages costs a full rewrite and reclaims nothing. Both pragmas are read
+// from the header, so this stays cheap on a multi-GB file. Read pool: it takes
+// no write lock.
+func (s *Store) ReclaimableBytes(ctx context.Context) (int64, error) {
+	var freeCount, pageSize int64
+	if err := s.db.QueryRowContext(ctx, `PRAGMA freelist_count`).Scan(&freeCount); err != nil {
+		return 0, fmt.Errorf("freelist_count: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
+		return 0, fmt.Errorf("page_size: %w", err)
+	}
+	return freeCount * pageSize, nil
+}

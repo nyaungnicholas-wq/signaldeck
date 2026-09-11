@@ -215,8 +215,9 @@ function StillTrue() {
         </li>
       </ul>
       <div className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
-        Figures return on their own when a fresh grade clears the gate. Nothing has been deleted;
-        the withheld grade stays in the registry as a dated record.
+        A refusal over collapsed cross-sections does not clear by waiting: the graded window is
+        anchored to the survivorship epoch and does not roll forward, so those days stay in it.
+        Nothing has been deleted; the withheld grade stays in the registry as a dated record.
       </div>
     </div>
   );

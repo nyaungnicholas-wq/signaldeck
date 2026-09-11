@@ -62,7 +62,7 @@ fly deploy --build-arg GIT_REV=$(git rev-parse HEAD)
   that sleeps between visitors stops recording, and the honesty page would then
   grade gaps it caused itself.
 - **`grace_period = "120s"`** on the healthcheck. On a cold volume the daemon
-  creates 97 tables and backfills bars before it listens.
+  creates 105 tables and backfills bars before it listens.
 
 ---
 
@@ -70,7 +70,7 @@ fly deploy --build-arg GIT_REV=$(git rev-parse HEAD)
 
 On an empty volume the daemon will:
 
-1. Create the schema (97 tables)
+1. Create the schema (105 tables)
 2. Seed a watchlist (BTC/USD, SPY, QQQ, AAPL, NVDA, TSLA)
 3. Backfill a broad daily universe — ~800k bars, a few minutes
 4. **Print an admin password to stderr, once**
@@ -164,7 +164,8 @@ working correctly.
 - The `ops/*.plist` scheduling files are macOS launchd and several still contain
   absolute paths from the original development machine. They need porting to
   cron or systemd timers for a Linux host.
-- `ops/signaldeck-ctl.sh` line 163 still hardcodes one such path.
+- `ops/signaldeck-ctl.sh` no longer hardcodes a dev-machine path (its paths are
+  now `$REPO`-relative); this gap is closed. The `ops/*.plist` files above are not.
 - There is no reverse-proxy or rate-limit config here. `SIGNALDECK_RATE_RPS` and
   `SIGNALDECK_RATE_BURST` exist in the daemon but I have not verified they are
   active under load.

@@ -46,6 +46,16 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
+# NEXT_PUBLIC_* is INLINED AT BUILD TIME, so this has to be an ARG here — setting
+# it in the container's environment later does nothing (web/src/lib/site.ts says
+# so, and it was verified the hard way). It feeds robots.txt's Sitemap: line and
+# every URL in sitemap.xml. Left unset the build falls back to
+# http://localhost:8323, which is deliberate — a sitemap advertising a domain
+# this build is not served from looks right and gets indexed — but it means a
+# published deployment that does not pass this ships a sitemap no crawler can
+# use. ops/docker-build.sh forwards it; DEPLOY.md tells the operator to set it.
+ARG NEXT_PUBLIC_SITE_URL=""
+ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
 RUN npm run build
 
 # ---- stage 3: runtime ------------------------------------------------------

@@ -15,8 +15,18 @@ export default function robots(): MetadataRoute.Robots {
   return {
     rules: {
       userAgent: "*",
-      allow: ["/", "/accuracy", "/proof", "/glossary", "/volatility"],
-      disallow: ["/dashboard", "/lab/", "/intel/", "/market/", "/watchlist", "/hud", "/s/", "/api/", "/login"],
+      // Blanket deny with explicit allows on top - what the comment above has
+      // always specified, and what the code did NOT do. It shipped a list of
+      // private prefixes instead, so /advanced, /welcome and /signals/report/*
+      // were crawlable by forgetting: the exact defect this comment warns
+      // about. Allow is matched most-specifically-first by every major crawler,
+      // so the public pages stay indexable and everything else is denied by
+      // default, including a route added next month. The homepage allow is "/$"
+      // (end-of-URL anchor), NOT "/": a bare "/" Allow is EXACTLY as specific as
+      // the "/" Disallow, and crawlers break specificity ties toward the LEAST
+      // restrictive rule - which would have re-opened the entire site.
+      allow: ["/$", "/accuracy", "/proof", "/glossary", "/volatility"],
+      disallow: ["/"],
     },
     sitemap: `${siteUrl()}/sitemap.xml`,
   };

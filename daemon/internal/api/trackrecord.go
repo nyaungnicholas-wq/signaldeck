@@ -185,18 +185,28 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	// therefore cannot fire in exactly the state that matters most, and
 	// /api/track-record went on publishing a win rate while /api/accuracy
 	// answered 503.
+	// gateReason names WHY the record is gated so a UI does not have to infer it
+	// from prose: "sample" (too few observations), "refused" (the grader refused)
+	// or "collapsed" (degenerate window). /lab/track-record showed a hardcoded
+	// "TOO EARLY TO GRADE" for all three, which reads as "wait a bit longer" for
+	// two conditions that waiting cannot clear.
+	gateReason := "sample"
 	var collapseReason string
 	if reg, rerr := loadRegistry(d.RegistryPath); rerr == nil {
 		// The grader's own refusal. If it will not stand behind its numbers,
 		// neither may a surface computed over the same graded window.
 		if reg.RefusedSince != nil && *reg.RefusedSince != "" {
 			gated = true
+			gateReason = "refused"
 			collapseReason = "the accuracy grader has REFUSED since " + *reg.RefusedSince +
-				" — figures over this graded window are withheld until it clears"
+				" — figures over this graded window are withheld. The window is anchored to the " +
+				"survivorship epoch and does not roll forward, so this clears when the window is " +
+				"re-registered, not by waiting"
 		} else if reason, collapsed, cerr := d.collapsedGradingWindow(ctx, reg, d.now()); cerr == nil && collapsed {
 			// Healthy grader, unusable window: the rows exist and are one
 			// market-wide call repeated per symbol.
 			gated = true
+			gateReason = "collapsed"
 			collapseReason = reason
 		}
 	}
@@ -212,7 +222,8 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 			"skill unlocks only after both gates (independent obs AND distinct days), and every interval " +
 			"published here is then corrected by a MEASURED design effect with the day as the unit of " +
 			"resampling — see the 'cluster' block for the design effect, the effective N and the distinct-day count",
-		"gated": gated,
+		"gated":      gated,
+		"gateReason": gateReason,
 		// This IS a live forward record (calibrated prob frozen at prediction
 		// time, graded against realized bars) — but until it clears the gate it
 		// carries no claimable skill, so we still frame it honestly.

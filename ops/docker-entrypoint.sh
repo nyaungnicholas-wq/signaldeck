@@ -8,6 +8,31 @@
 # startup race.
 set -eu
 
+# THIS CONTAINER IS PUBLICATION, AND THE DAEMON CANNOT SEE THAT BY ITSELF.
+#
+# config.reachablePrivately() reads the DAEMON's bind address, which here is
+# deliberately 127.0.0.1:8322 (fly.toml) so the daemon port is never exposed —
+# while the web tier below binds 0.0.0.0 and Fly/Render publish it to the
+# internet. So the heuristic evaluated "private" on exactly the deployment that
+# is public: the same shape config.go's own comment says the tunnel case was
+# fixed to prevent, arriving by a different route.
+#
+# What it silently opened, all three of which nobody chose:
+#   * SIGNALDECK_OPEN_SIGNUP defaults to `private` -> registration open to the
+#     internet (api/security.go asserts it "is false on any published
+#     deployment"; on this topology it was true).
+#   * SIGNALDECK_PUBLIC_READS defaults to `private` -> anonymous reads.
+#   * ReachablePrivately() gates the datalicense 451 guard, so licensed vendor
+#     bars became redistributable — the legal exposure SHIP_READINESS.md calls
+#     "the serious one".
+#
+# ASSUME_TUNNEL is the supported, already-documented override for "serving a
+# host you cannot reach from loopback IS publication". Set BEFORE the daemon
+# starts, because config is read once at boot. An operator who genuinely wants
+# anonymous reads still says so explicitly in fly.toml; this only stops the
+# default from being decided by a bind address that describes the wrong tier.
+export SIGNALDECK_ASSUME_TUNNEL=1
+
 echo "signaldeck: starting daemon"
 signaldeckd &
 DAEMON_PID=$!

@@ -542,11 +542,82 @@ func TestStorageGovernorCheckpoints(t *testing.T) {
 	}
 }
 
+// makeFreePages leaves a large freelist behind: insert ballast, drop it, then
+// checkpoint so the freed pages land in the main file.
+//
+// A VACUUM can only return FREE pages, so a test that wants the governor to
+// actually vacuum has to create some. A freshly opened store has almost no
+// freelist and is now correctly SKIPPED — see
+// TestStorageGovernorSkipsVacuumWhenNothingToReclaim.
+func makeFreePages(t *testing.T, st *store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	db := st.DB()
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS vacuum_ballast (id INTEGER PRIMARY KEY, blob BLOB)`); err != nil {
+		t.Fatalf("create vacuum_ballast table: %v", err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO vacuum_ballast (blob) VALUES (?)`)
+	if err != nil {
+		t.Fatalf("prepare insert: %v", err)
+	}
+	blob := []byte(strings.Repeat("x", 1024))
+	for i := 0; i < 4000; i++ {
+		if _, err := stmt.ExecContext(ctx, blob); err != nil {
+			t.Fatalf("insert row %d: %v", i, err)
+		}
+	}
+	if err := stmt.Close(); err != nil {
+		t.Fatalf("close stmt: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit transaction: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE vacuum_ballast`); err != nil {
+		t.Fatalf("drop vacuum_ballast table: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatalf("wal checkpoint: %v", err)
+	}
+}
+
+// The governor rewrites a file that has almost nothing to reclaim: 5.1 GB held
+// for 32 minutes on 2026-09-10 to return 6.8 MB, because the off-hours bypass
+// was keyed on FILE SIZE. Reclaimable space is the only number that authorises
+// the stall, so a fresh store must be skipped and must say why.
+func TestStorageGovernorSkipsVacuumWhenNothingToReclaim(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t) // fresh store: essentially no freelist
+	g := &StorageGovernor{St: st, VacuumThreshold: 1, MinVacuumInterval: time.Hour}
+	msg, err := g.Run(ctx)
+	if err != nil {
+		t.Fatalf("governor run: %v", err)
+	}
+	if !contains(msg, "vacuumed=false") {
+		t.Fatalf("a rewrite that would reclaim almost nothing must be skipped, msg=%q", msg)
+	}
+	var count int
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM dq_events WHERE kind='vacuum_skip'`).Scan(&count); err != nil {
+		t.Fatalf("query dq_events: %v", err)
+	}
+	if count == 0 {
+		t.Errorf("expected a vacuum_skip dq event explaining the refusal")
+	}
+}
+
 // StorageGovernor VACUUMs when the DB exceeds the threshold, then records the
 // meta cursor so it won't re-vacuum within MinVacuumInterval.
+//
+// The fixture has to create real free pages now: reclaimable space, not file
+// size, is what authorises the rewrite.
 func TestStorageGovernorVacuumsAboveThreshold(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
+	makeFreePages(t, st)
 	g := &StorageGovernor{St: st, VacuumThreshold: 1, MinVacuumInterval: time.Hour} // 1 byte → always over
 	msg, err := g.Run(ctx)
 	if err != nil {

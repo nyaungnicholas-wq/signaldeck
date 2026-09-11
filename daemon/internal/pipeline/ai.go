@@ -10,6 +10,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/aiagents/watcher"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // AnalystWorker runs the Market Analyst agent on a cadence and persists its
@@ -46,6 +47,25 @@ func (w *AnalystWorker) Run(ctx context.Context) (string, error) {
 		// own. A REAL failure still returns an error.
 		if errors.Is(err, llm.ErrCapReached) {
 			return "skipped: daily LLM call cap reached — resets at the UTC day boundary", nil
+		}
+		// NOR IS AN EXHAUSTED PROVIDER POOL. ErrTransient means every retry met
+		// a retryable condition (429 / 5xx / network / timeout) — for the shared
+		// free-tier pool that is "ResourceExhausted: Worker local total request
+		// limit reached". That is upstream capacity, not a fault here, and the
+		// next hourly tick resumes. Filed as a hard error it was the ONLY reason
+		// /api/ready answered 503 fleet-wide on 2026-09-10; readiness asks "can
+		// this daemon serve CORRECT answers", and "no brief this hour" is a
+		// correct answer, not a wrong one.
+		//
+		// DEGRADED, not a skip. sentiment-tagger may report ErrTransient as a
+		// success because it carries the count it did land; there is no partial
+		// brief, so a skip here would let a provider that never answers again
+		// read as ok forever — the exact shape workers.ErrDegraded exists to
+		// stop. Degraded keeps it on /api/health and the Agents page without
+		// failing the probe.
+		if errors.Is(err, llm.ErrTransient) {
+			const detail = "provider pool busy, no brief this pass; resuming next tick"
+			return detail, fmt.Errorf("%s: %w", detail, workers.ErrDegraded)
 		}
 		return "", err
 	}

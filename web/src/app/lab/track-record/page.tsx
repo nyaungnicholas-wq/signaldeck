@@ -253,8 +253,17 @@ export default function TrackRecordPage() {
           >
           {gated ? (
             <section className="panel reveal-item p-5">
+              {/* "TOO EARLY TO GRADE" used to show for ALL THREE gate reasons,
+                  including a publication REFUSAL. That reads as "wait a bit
+                  longer" for two conditions waiting cannot clear - the graded
+                  window is anchored to the survivorship epoch and does not roll
+                  forward. The daemon now names the reason (gateReason). */}
               <p className="m-0 text-[1.05rem] font-extrabold tracking-wide" style={{ color: "var(--warn)" }}>
-                TOO EARLY TO GRADE
+                {current.gateReason === "refused"
+                  ? "PUBLICATION REFUSED"
+                  : current.gateReason === "collapsed"
+                    ? "GRADING WINDOW UNUSABLE"
+                    : "TOO EARLY TO GRADE"}
               </p>
               <div className="mt-1 flex flex-wrap items-baseline justify-between gap-2">
                 <p className="m-0 text-[0.85rem] font-semibold" style={{ color: "var(--warn)" }}>

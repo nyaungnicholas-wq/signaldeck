@@ -882,10 +882,43 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 	// UNLESS the file has blown to 2× the threshold, where reclaiming space
 	// outweighs the stall. This is the "schedule VACUUM off-hours" fix.
 	offHours := inETWindow(time.Now(), 2, 6)
-	emergency := dbBytes >= 2*threshold
+
+	// RECLAIMABLE SPACE, NOT FILE SIZE, IS WHAT JUSTIFIES THE STALL.
+	//
+	// `emergency` used to be `dbBytes >= 2*threshold`. A VACUUM can only return
+	// FREE pages, so that keyed the off-hours bypass on a number VACUUM cannot
+	// change: once the database had simply GROWN past 2x the threshold it was
+	// permanently in "emergency", and the 2-6am window stopped governing
+	// anything. Measured 2026-09-10 on the live 5.1 GB file: the governor began
+	// a VACUUM at 01:25 ET — outside the window — and held the single writer for
+	// 1,930s (32 min, against 105-390s for every other pass) to reclaim 6.8 MB,
+	// 0.13% of the file. With a 24h min interval it would have repeated daily,
+	// forever, and grown worse as the file grew.
+	//
+	// This guard can only ever SKIP a rewrite that had almost nothing to give
+	// back, so it cannot let a genuinely bloated file go unvacuumed — the case
+	// the threshold exists for still fires, and now fires on evidence.
+	var reclaimable int64
+	var rerr error
+	if dbBytes >= threshold {
+		reclaimable, rerr = g.St.ReclaimableBytes(ctx)
+	}
+	worthIt := rerr == nil && reclaimable*20 >= dbBytes // at least 5% free pages
+	emergency := worthIt && dbBytes >= 2*threshold
+
+	if dbBytes >= threshold && rerr == nil && !worthIt {
+		_ = g.St.InsertDQ(ctx, md.DQEvent{
+			Ts:   time.Now().Unix(),
+			Kind: "vacuum_skip",
+			Detail: fmt.Sprintf(
+				"vacuum skipped: only %.1fMB of %.1fMB is reclaimable (%.2f%%) — a full rewrite would stall the writer to return almost nothing",
+				float64(reclaimable)/(1024*1024), float64(dbBytes)/(1024*1024),
+				100*float64(reclaimable)/float64(max(dbBytes, 1))),
+		})
+	}
 
 	vacuumed := false
-	if dbBytes >= threshold && (offHours || emergency) {
+	if dbBytes >= threshold && worthIt && (offHours || emergency) {
 		last, _ := g.St.GetMeta(ctx, "storage_last_vacuum")
 		var lastTs int64
 		if last != "" {

@@ -501,7 +501,9 @@ func buildCollapseReason(bad []string, total int) string {
 		"the graded window contains %d collapsed cross-section(s) of %d day(s): %s. "+
 			"On a collapsed day the whole universe receives a handful of distinct "+
 			"probabilities, so these rows grade one market-wide call repeated per symbol, "+
-			"not independent per-symbol forecasts. Figures over this window are withheld "+
-			"until it clears.",
+			"not independent per-symbol forecasts. Figures over this window are withheld. "+
+			"The window starts at the survivorship epoch and does not roll forward, so a "+
+			"collapsed day stays in it: this clears when the window is re-registered, not "+
+			"by waiting for more grades.",
 		len(bad), total, strings.Join(bad, ", "))
 }

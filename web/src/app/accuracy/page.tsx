@@ -422,7 +422,7 @@ export default async function AccuracyPage() {
         <p className="m-0 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
           {pub?.status === "PRIVATE"
             ? "Nothing statistical is being withheld: once signed in, the same daemon verdict renders here."
-            : "No accuracy figures are shown while publication is refused. This is deliberate: a grading outage must be impossible to mistake for a quiet week. The numbers return on their own once a fresh grade lands."}
+            : "No accuracy figures are shown while publication is refused. This is deliberate: a grading outage must be impossible to mistake for a quiet week. When the refusal names collapsed cross-sections, those are historical days inside a window anchored to the survivorship epoch — the window does not roll forward, so they cannot age out and further grading alone will not clear them."}
         </p>
         {pub?.status !== "PRIVATE" ? (
           <section className="panel px-5 py-4" aria-label="historical record">

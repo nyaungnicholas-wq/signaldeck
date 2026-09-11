@@ -26,10 +26,31 @@ primary_region = "iad"
   SIGNALDECK_HTTP = "127.0.0.1:8322"
   SIGNALDECK_DAEMON = "http://127.0.0.1:8322"
   PORT = "8080"
-  # Read-only endpoints answer without a session so a visitor sees the deck
-  # instead of a login wall. Every mutating route still requires auth — this
-  # widens reads, it does not disable authentication.
-  SIGNALDECK_PUBLIC_READS = "1"
+
+  # ANONYMOUS SURFACE - an ALLOWLIST, not a denylist.
+  # This replaces a bare SIGNALDECK_PUBLIC_READS = "1", which is DENYLIST mode:
+  # it opens every read route except the ones someone remembered to name, so a
+  # route added later is public by forgetting (config.go:132-140 names exactly
+  # that outcome). PUBLIC_SURFACE instead makes api.publicRoutes the ENTIRE
+  # anonymous surface - the honesty routes and nothing else. This is what
+  # docs/PUBLIC_RELEASE_PLAN.md specifies and what ledger F20 verified on
+  # 2026-09-08: anonymous honesty routes; 401 on every workspace, vendor-data
+  # and AI route; 403 on registration and on a foreign Host header.
+  SIGNALDECK_PUBLIC_SURFACE = "1"
+
+  # Stated, not derived. The default follows reachablePrivately(), which reads
+  # the DAEMON bind address - loopback here by design - and so evaluated
+  # "private" on the one deployment that is public, defaulting registration
+  # OPEN to the internet. ops/docker-entrypoint.sh now corrects that
+  # derivation; this states the intent outright so it does not depend on it.
+  SIGNALDECK_OPEN_SIGNUP = "0"
+
+  # REQUIRED before a real public deploy, and it is not just the hostname:
+  # web/src/app/api/[...path]/route.ts does NOT forward the Host header, so the
+  # daemon always sees 127.0.0.1:8322 from the proxy. An allowlist naming ONLY
+  # the public hostname 403s every request. Set BOTH.
+  # (docs/PUBLIC_RELEASE_PLAN.md step 3 omits the loopback pair.)
+  # SIGNALDECK_ALLOWED_HOSTS = "<your-app>.fly.dev,127.0.0.1:8322,localhost:8322"
 
 [[mounts]]
   source = "signaldeck_data"

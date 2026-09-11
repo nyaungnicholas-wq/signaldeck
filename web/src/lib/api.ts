@@ -1586,6 +1586,9 @@ export interface TrackRecord {
   distinctDays?: number;
   minDistinctDays?: number;
   gated: boolean; // true => headline numbers withheld (too few independent obs)
+  // WHY it is gated: "sample" | "refused" | "collapsed". The page showed a
+  // hardcoded "TOO EARLY TO GRADE" for all three; waiting clears only "sample".
+  gateReason?: "sample" | "refused" | "collapsed";
   live: true; // this IS a live forward record (prob frozen at prediction time)
   trackLabel: string;
   note?: string; // "not yet significant — k/threshold" when gated
