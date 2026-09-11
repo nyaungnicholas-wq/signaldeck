@@ -9,7 +9,7 @@
 # Regenerate on the machine holding data/signaldeck.db:
 #   bash ops/ledger-provenance.sh --write
 #
-# recorded=109 unpushed=2 unresolvable=3 dirty-stamped=5
+# recorded=110 unpushed=1 unresolvable=3 dirty-stamped=5
 04964f9269ef57e31c1d9408e5ff9f7374e6e269
 049941691d847455c7921a879bbe0651339bcd4e
 05fcf4403f45a793742e9c2199cd36acd672e1bb
@@ -85,6 +85,7 @@ b19b952eddb5ff820dbdd3a8e1760497b26d8e78
 b21429f99891f78cc0dd454a02d735483e81db18
 b558abd182677c89dfc9c20e083288a1b5502fbc
 b6fb84a70e2bdd09e20341dc2853636d64f5831c
+b84670c9781f902253829e08f7d2cb0aea78ed59
 b875d18cb4191d0f32bd9fdcad074d7295ba98d7
 b919737367f55260b2a2398e068dbc4ce23b4b1c
 b9d8215aa44c99e6c771ba5a23d6a8fdc883f8f1

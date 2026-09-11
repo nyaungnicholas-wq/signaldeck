@@ -54,6 +54,34 @@ reachable() {
   [ -z "$(git -C "$SD" rev-list -1 "$1" --not --all 2>/dev/null)" ]
 }
 
+# published_refs_contain REV -- is REV reachable from something that exists ON
+# THE REMOTE, by branch OR by tag?
+#
+# This used to be `git branch -r --contains` alone, which is branches only. A
+# commit preserved by a pushed TAG therefore read as unpublished and was
+# excluded from the manifest -- and a keep TAG is exactly what
+# audits/2026-09-10-history-rewrite-note.md prescribes for an orphaned ledger
+# revision, so the recorder could not record the output of its own remedy.
+# Measured 2026-09-11 on b84670c9: pushed as refs/tags/keep/ledger-revision-*,
+# resolvable in a fresh clone, still filed under "not on a remote-tracking ref".
+# --check never had this gap: rev-list --not --all counts tags.
+#
+# A LOCAL-only tag must not count, and locally a fetched tag is indistinguishable
+# from a local one, so the remote tag list comes from ls-remote. --write is the
+# only caller: it already needs the database and runs on the dev box. ls-remote
+# failing (offline) leaves REMOTE_TAGS empty and this degrades to the old
+# branches-only answer, which under-records rather than over-records.
+REMOTE_TAGS=""
+published_refs_contain() {
+  [ -n "$(git -C "$SD" branch -r --contains "$1" 2>/dev/null)" ] && return 0
+  [ -n "$REMOTE_TAGS" ] || return 1
+  local t
+  for t in $(git -C "$SD" tag --contains "$1" 2>/dev/null); do
+    case " $REMOTE_TAGS " in *" $t "*) return 0 ;; esac
+  done
+  return 1
+}
+
 # classify_revisions — shared by --write and --diff.
 # Reads distinct revisions from the ledger DB, classifies each, and fills:
 #   $1 = path to temp file for recorded body (one sha per line, LC_ALL=C sorted)
@@ -91,16 +119,14 @@ classify_revisions() {
       continue
     fi
 
-    local remote_branches
-    remote_branches="$(git -C "$SD" branch -r --contains "$rev" 2>/dev/null)"
-    if [ -z "$remote_branches" ]; then
+    if ! published_refs_contain "$rev"; then
       unpushed=$((unpushed + 1))
       local orphan_check
       orphan_check="$(git -C "$SD" rev-list -1 "$rev" --not --all 2>/dev/null)"
       if [ -z "$orphan_check" ]; then
-        printf '%s  not on any remote-tracking ref; a local ref reaches it\n' "$rev" >>"$skipped_file"
+        printf '%s  not published (no remote branch or tag reaches it); a local ref does\n' "$rev" >>"$skipped_file"
       else
-        printf '%s  not on any remote-tracking ref; NO ref reaches it (orphan: the next git gc prunes it)\n' "$rev" >>"$skipped_file"
+        printf '%s  not published (no remote branch or tag reaches it); NO ref reaches it (orphan: the next git gc prunes it)\n' "$rev" >>"$skipped_file"
       fi
       continue
     fi
@@ -121,6 +147,10 @@ case "$1" in
   # shellcheck source=/dev/null
   . "$SD/ops/lib-portable.sh" 2>/dev/null || { echo "cannot source lib-portable.sh" >&2; exit 1; }
   [ -f "$DB" ] || { echo "no ledger at $DB" >&2; exit 1; }
+  # Tags that actually exist on the remote, for published_refs_contain. Best
+  # effort: offline leaves this empty and the test falls back to branches only.
+  REMOTE_TAGS="$(git -C "$SD" ls-remote --tags origin 2>/dev/null \
+    | awk "{print \$2}" | sed -e "s|^refs/tags/||" -e "s|\^{}$||" | sort -u | tr "\n" " ")"
 
   body="$(mktemp)"
   skipped="$(mktemp)"
@@ -199,6 +229,10 @@ EOF
   # All output to stdout, nothing to stderr.
   # shellcheck source=/dev/null
   . "$SD/ops/lib-portable.sh" 2>/dev/null || { echo "LEDGER MANIFEST ERROR: cannot source lib-portable.sh"; exit 2; }
+  # Tags that actually exist on the remote, for published_refs_contain. Best
+  # effort: offline leaves this empty and the test falls back to branches only.
+  REMOTE_TAGS="$(git -C "$SD" ls-remote --tags origin 2>/dev/null \
+    | awk "{print \$2}" | sed -e "s|^refs/tags/||" -e "s|\^{}$||" | sort -u | tr "\n" " ")"
   [ -f "$DB" ] || { echo "LEDGER MANIFEST ERROR: no ledger at $DB"; exit 2; }
   [ -f "$MANIFEST" ] || { echo "LEDGER MANIFEST ERROR: no manifest at $MANIFEST"; exit 2; }
 

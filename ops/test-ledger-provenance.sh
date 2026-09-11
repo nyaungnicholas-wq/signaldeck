@@ -116,8 +116,8 @@ grep -qF '# recorded=3 unpushed=2 unresolvable=1 dirty-stamped=1' ops/ledger-rev
 # Case 11: --write names every skipped revision with its reason
 L="--write names every skipped revision with its reason"
 out="$(bash ops/ledger-provenance.sh --write 2>&1)"
-printf '%s' "$out" | grep -qF -- "$LOCAL  not on any remote-tracking ref; a local ref reaches it" \
-  && printf '%s' "$out" | grep -qF -- "$ORPHAN  not on any remote-tracking ref; NO ref reaches it" \
+printf '%s' "$out" | grep -qF -- "$LOCAL  not published (no remote branch or tag reaches it); a local ref does" \
+  && printf '%s' "$out" | grep -qF -- "$ORPHAN  not published (no remote branch or tag reaches it); NO ref reaches it" \
   && printf '%s' "$out" | grep -qF -- "$FAKE  unresolvable" \
   && printf '%s' "$out" | grep -qF -- "$KEPT+dirty  +dirty stamp" \
   && ok "$L" || bad "$L"
@@ -205,6 +205,26 @@ L="--diff exits 2 when the manifest is missing"
 rm -f ops/ledger-revisions.txt
 [ "$(rc --diff)" = "2" ] && ok "$L" || bad "$L"
 
+
+# Case 21: a commit published ONLY by a pushed TAG is recorded.
+# The published test used to be `git branch -r --contains` alone, so a keep TAG
+# -- the remedy the history-rewrite note prescribes for an orphaned ledger
+# revision -- read as unpublished and was excluded from the manifest.
+L="a commit reachable only from a pushed tag is recorded"
+git init -q --bare "$REPO/../origin.git"
+git remote add origin "$REPO/../origin.git" 2>/dev/null
+git push -q origin "$MAIN" 2>/dev/null
+git checkout -q -b tagonly
+git commit -q --allow-empty -m tagonly
+TAGONLY="$(git rev-parse HEAD)"
+git tag -a keep/tagonly -m keep
+git push -q origin refs/tags/keep/tagonly 2>/dev/null
+git checkout -q "$MAIN"
+git branch -q -D tagonly
+sd_sqlite "$SIGNALDECK_DB" "INSERT INTO prediction_ledger VALUES ('$TAGONLY');" 2>/dev/null || \
+  sd_sqlite "$SIGNALDECK_DB" "INSERT INTO prediction_ledger VALUES ('$TAGONLY');"
+bash ops/ledger-provenance.sh --write >/dev/null 2>&1
+grep -qF "$TAGONLY" ops/ledger-revisions.txt && ok "$L" || bad "$L"
 cd "$SD" || exit 1
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
