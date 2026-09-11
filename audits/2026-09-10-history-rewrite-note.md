@@ -28,3 +28,34 @@ Six controls/ablations JSON files of 64-93 MB (per-row bootstrap arrays) were fi
 - Grader effect once pruned: the pinned grader (tools/accuracy_registry.py, REVISION_EPOCH 2026-08-04) strips a family when any post-epoch row cites a commit the repo cannot resolve. Rows stamped b84670c9 are post-epoch: prediction_ledger 252 rows, all 1w, predicted 2026-09-10; regime_outcomes 7 liquidity21-crypto and 7 trend21-crypto, day 2026-09-10, unresolved. So the 1w direction verdict and those two crypto kinds will be stripped permanently. The 12,761 prediction rows and 3 regime rows stamped 613bd2e5 are dated 2026-08-03, before the epoch: exempt.
 - Remedies, neither taken: (a) restore attribution with `git fetch "<_backups>/signaldeck-public-launch-pre-rewrite-2026-09-10.bundle" refs/heads/public-launch:refs/heads/keep/pre-rewrite-2026-09-10` and `git fetch "<_backups>/signaldeck-orphan-613bd2e5-2026-08-03.bundle" refs/tags/tmp-orphan-613bd2e5:refs/heads/keep/orphan-613bd2e5-2026-08-03` (the 43 KB orphan bundle was written today for this purpose; `_backups` is `Desktop/claude code/_backups`); (b) chain a revision-epoch-correction, which is what the hook prescribes after an override, but `daemon/cmd/prereg-amend` hardcodes the 2026-07-27 to 2026-08-04 move, so a new move needs its own spec and note. Nicholas's decision.
 - Gate defect found on the way: `ops/githooks/reference-transaction` let all three deletions through WITHOUT `SIGNALDECK_ALLOW_HISTORY_REWRITE`, and let a scratch loose tag be deleted too. Measured with a logging hook: git 2.55.0.windows.3 feeds `tag -d` and `branch -D` as `0000... 0000... <ref>` (no old value), and pass one read a zero old value as a creation. Fixed in this commit: a zero-to-zero line whose ref still resolves in the prepared state is treated as a deletion. Verified by feeding the hook a zero-to-zero line for an existing ref (refused, naming 613bd2e5 and b84670c) and for a missing ref (allowed). The override was used only to remove two scratch tags (at HEAD and at 613bd2e5) that the hook would now correctly refuse because of the pre-existing orphans; it was never used on the keep refs, which the hook failed to see.
+
+## Addendum, 2026-09-11: remedy (a) taken, by tag rather than bundle
+
+Created `refs/tags/keep/ledger-revision-b84670c9` (annotated) pointing at
+`b84670c978f902253829e08f7d2cb0aea78ed59`. The object was still present -
+only the reflogs were holding it - so no bundle fetch was needed.
+
+THE COST WAS MEASURED, AND IT IS NOT WHAT THE BUNDLE SIZE SUGGESTS. Only 94
+objects are unique to that commit, totalling **7.2 MB of packed objects**. The
+six 64-85 MB `direction_controls.json` files are JSON and pack to roughly that;
+the 325 MB in this note is the size of the BUNDLE FILE, not the delta a keep
+ref pins. `.git` measured 326 MB before and after. HEAD is unaffected and keeps
+the shrunk 17.2 KB versions.
+
+If repo size was the reason the keep refs were deleted, that reason was costed
+at roughly 45x its true value.
+
+Effect, measured:
+
+    tools/ledger_revision_reachability.py   exit 1 -> exit 0 ("LEDGER REVISIONS OK n=104")
+    ops/check-grader-health.ps1             RESULT: unhealthy -> RESULT: ok
+    git prune --dry-run --expire=now        no longer lists the commit
+
+The tag is LOCAL ONLY, matching the convention of the refs it replaces. That is
+enough for the stated failure mode, because the grader runs on this machine.
+It is NOT enough for a fresh clone, and `ops/ledger-provenance.sh --write`
+records only commits already on the remote, so b84670c9 stays out of the
+CI-checked manifest until the tag is pushed. Pushing it is a separate decision.
+
+613bd2e5 is deliberately NOT pinned: its 12,761 prediction rows are dated
+2026-08-03, before the 2026-08-04 revision epoch, so the grader exempts them.
