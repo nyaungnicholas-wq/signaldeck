@@ -277,7 +277,28 @@ if ($portsDown.Count -gt 0) {
     $bad = $true
 }
 
-if ($bad) { exit 1 }
+if ($bad) {
+    # ALERT, do not just exit 1. This script only ever wrote to the console, and
+    # under Task Scheduler that goes nowhere -- an unhealthy fleet became a
+    # LastTaskResult=1 in a UI nobody opens. Measured 2026-09-12: this task and
+    # Check-Grader-Health had both been red since 2026-09-10 with nothing
+    # surfacing it.
+    #
+    # The body names the affected TASKS, not just a count. "3 tasks unhealthy"
+    # sends the reader back to the console output that failed to reach them in
+    # the first place.
+    $parts = @()
+    if ($troubled.Count)   { $parts += "console-killed: $($troubled -join ', ')" }
+    if ($failed.Count)     { $parts += "last result not success: $($failed -join ', ')" }
+    if ($unreadable.Count) { $parts += "unreadable: $($unreadable -join ', ')" }
+    if ($stale.Count)      { $parts += "no next run scheduled: $($stale -join ', ')" }
+    if ($portsDown.Count)  { $parts += "port(s) not listening: $($portsDown -join ', ')" }
+    $why = ($parts -join '; ')
+    if (-not $why) { $why = 'see the run output' }
+    . (Join-Path $PSScriptRoot 'lib-notify.ps1')
+    Send-SdAlert -Title 'SignalDeck task fleet: UNHEALTHY' -Body $why -Repo (Split-Path $PSScriptRoot -Parent)
+    exit 1
+}
 
 Write-Host ""
 Write-Host "OK - no console-kill signature, and both service ports are listening" -ForegroundColor Green

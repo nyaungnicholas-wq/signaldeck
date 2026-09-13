@@ -30,6 +30,22 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $failed = $false
+# Every finding is written AND recorded through one call. The two used to be
+# separate lines at eight sites, which is how the alert body below could have
+# ended up empty: there was no variable holding what went wrong, only console
+# text nobody reads under Task Scheduler.
+$reasons = @()
+function Set-Unhealthy {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    Write-Output $Message
+    $script:reasons += $Message
+    $script:failed = $true
+}
+# Alerting. Without this the script detected faults and told nobody: under Task
+# Scheduler its console output goes nowhere, so an unhealthy run was a
+# LastTaskResult=1 in a UI no one opens. Both health tasks sat red from
+# 2026-09-10 to 2026-09-12 exactly that way.
+. (Join-Path $PSScriptRoot 'lib-notify.ps1')
 
 # The sqlite3 CLI is not installed on this machine and never has been; the repo
 # reads SQLite through Python everywhere for exactly that reason.
@@ -62,25 +78,21 @@ try {
     $dbPath = Join-Path $repo 'data\signaldeck.db'
 
     if (-not (Test-Path -LiteralPath $dbPath)) {
-        Write-Output "HEARTBEAT: database not found at $dbPath"
-        $failed = $true
+        Set-Unhealthy "HEARTBEAT: database not found at $dbPath"
     } else {
         $out = & python $tmp $dbPath 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Output "HEARTBEAT: unreadable ($out)"
-            $failed = $true
+            Set-Unhealthy "HEARTBEAT: unreadable ($out)"
         } else {
             $line = ($out | Where-Object { $_ -match '\S' } | Select-Object -Last 1)
             if ($line -eq 'NONE') {
-                Write-Output 'HEARTBEAT: none recorded'
-                $failed = $true
+                Set-Unhealthy 'HEARTBEAT: none recorded'
             } elseif ($line -match '^([^|]*)\|([^|]*)\|(.*)$') {
                 $success    = $matches[1]
                 $finishedAt = $matches[2]
                 $lastErr    = $matches[3]
                 if ($success -ne '1') {
-                    Write-Output "HEARTBEAT: last run FAILED: $lastErr"
-                    $failed = $true
+                    Set-Unhealthy "HEARTBEAT: last run FAILED: $lastErr"
                 } else {
                     # AssumeUniversal so a timestamp carrying no offset is still
                     # read as UTC; AdjustToUniversal so one that DOES carry an
@@ -92,21 +104,18 @@ try {
                         $finishedAt, [System.Globalization.CultureInfo]::InvariantCulture,
                         $styles, [ref]$finished)
                     if (-not $parsed) {
-                        Write-Output "HEARTBEAT: timestamp unparseable: $finishedAt"
-                        $failed = $true
+                        Set-Unhealthy "HEARTBEAT: timestamp unparseable: $finishedAt"
                     } else {
                         $age = ([datetime]::UtcNow - $finished).TotalMinutes
                         if ($age -gt $MaxAgeMinutes) {
-                            Write-Output ("HEARTBEAT: STALE ({0:N1} min, max {1})" -f $age, $MaxAgeMinutes)
-                            $failed = $true
+                            Set-Unhealthy ("HEARTBEAT: STALE ({0:N1} min, max {1})" -f $age, $MaxAgeMinutes)
                         } else {
                             Write-Output ("HEARTBEAT: fresh ({0:N1} min)" -f $age)
                         }
                     }
                 }
             } else {
-                Write-Output "HEARTBEAT: unexpected output: $line"
-                $failed = $true
+                Set-Unhealthy "HEARTBEAT: unexpected output: $line"
             }
         }
     }
@@ -123,8 +132,7 @@ if (-not (Test-Path -LiteralPath $walPath)) {
 } else {
     $walMB = (Get-Item -LiteralPath $walPath).Length / 1MB
     if ($walMB -gt $WalCritMB) {
-        Write-Output ("WAL: CRITICAL ({0:N1} MB)" -f $walMB)
-        $failed = $true
+        Set-Unhealthy ("WAL: CRITICAL ({0:N1} MB)" -f $walMB)
     } elseif ($walMB -gt $WalWarnMB) {
         Write-Output ("WAL: warn ({0:N1} MB)" -f $walMB)
     } else {
@@ -146,9 +154,8 @@ if (-not (Test-Path -LiteralPath $walPath)) {
 $lrr = Join-Path $repo 'tools\ledger_revision_reachability.py'
 $lrrOut = @(& python $lrr)
 if ($LASTEXITCODE -ne 0) {
-    Write-Output 'LEDGER REVISIONS: BROKEN'
+    Set-Unhealthy 'LEDGER REVISIONS: BROKEN'
     $lrrOut | ForEach-Object { Write-Output "  $_" }
-    $failed = $true
 } else {
     Write-Output ('LEDGER REVISIONS: ' + ($lrrOut | Select-Object -Last 1))
 }
@@ -180,9 +187,18 @@ if (-not $bash) {
     $lpExit = $LASTEXITCODE
     Write-Output ('LEDGER MANIFEST: ' + ($lpOut | Select-Object -Last 1))
     if ($lpExit -ne 0) { $lpOut | Select-Object -SkipLast 1 | ForEach-Object { Write-Output "  $_" } }
-    if ($lpExit -gt 1) { $failed = $true }
+    if ($lpExit -gt 1) { Set-Unhealthy ('LEDGER MANIFEST: ' + ($lpOut | Select-Object -Last 1)) }
 }
 
-if ($failed) { Write-Output 'RESULT: unhealthy'; exit 1 }
+if ($failed) {
+    Write-Output 'RESULT: unhealthy'
+    # The captured findings ARE the alert body: a page saying only "grader
+    # unhealthy" sends the reader back to the console output that started this
+    # problem. Joined onto one line so the log stays one record per event.
+    $why = ($reasons -join '; ')
+    if (-not $why) { $why = 'see the run output' }
+    Send-SdAlert -Title 'SignalDeck grader health: UNHEALTHY' -Body $why -Repo $repo
+    exit 1
+}
 Write-Output 'RESULT: ok'
 exit 0
