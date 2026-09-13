@@ -156,12 +156,41 @@ The grader runs from `ops/accuracy-registry.sh`. It is fail-closed: if it cannot
 run, it *removes* the accuracy tables from the README and publishes the refusal
 instead of reprinting stale numbers.
 
-Schedule it daily. The shipped launchd plists in `ops/` are macOS-only and carry
-paths from the machine this was developed on — on Linux use cron:
+Schedule it daily. WHICH script depends on where you are, and the two are not
+interchangeable.
+
+**On a dev box / any full checkout**, `ops/accuracy-registry.sh` is the job. The
+shipped launchd plists in `ops/` are macOS-only and carry paths from the machine
+this was developed on — on Linux use cron:
 
 ```cron
-15 6 * * * cd /app && bash ops/accuracy-registry.sh
+15 6 * * * cd /path/to/checkout && bash ops/accuracy-registry.sh
 ```
+
+**In the container, that script cannot run and never could.** It is 680 lines of
+bash that shell out to git, rewrite README.md between markers, inject the
+rendered block into eight `partials/` documents and page Telegram. The image has
+no `.git`, no checkout, no README to publish, and no bash. This file used to
+print `cd /app && bash ops/accuracy-registry.sh` here, which fails on every
+container deployment — and the failure is not loud: with no grader running,
+`/api/accuracy` stays 503 REFUSED_STALE forever (the handler is fail-closed on a
+heartbeat older than `GraderMaxAge`, 26h), which looks exactly like the honesty
+machinery working correctly. Use `ops/grade.sh`, the container-sized
+replacement, installed by the Dockerfile at `/usr/local/bin/grade.sh`:
+
+```cron
+15 6 * * * /usr/local/bin/grade.sh
+```
+
+It is POSIX sh, stdlib-only Python, and runs the same registry generation, the
+same selection-honesty merge, the same collapse gate the handler runs, and
+records the same heartbeat the handler reads.
+
+One gate fewer runs there, deliberately: the deployment-drift check
+(`tools/deployment_drift.py`) shells out to git against the deployed revision,
+which the image cannot do, so a stale binary the dev-box publish would refuse on
+is still graded in the container. `ops/grade.sh` documents this divergence at
+its head; it is known, not silent.
 
 Check it is actually running. This script was silently dead for five days
 because it had a hardcoded path to a machine it was no longer on, and the README
