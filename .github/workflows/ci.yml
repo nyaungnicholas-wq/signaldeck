@@ -190,6 +190,22 @@ jobs:
       # H7: `npm run lint` (eslint) existed but was never invoked in CI.
       - run: npm run lint
       - run: npm run build
+      # Dependency vulnerabilities. CI had NO such gate in either language, so
+      # the next@16.3.0 advisories and a moderate DoS in
+      # baseline-browser-mapping both sat in the tree until a human ran
+      # `npm audit` by hand. A gate nobody runs is not a gate.
+      #
+      # --omit=dev scopes this to what SHIPS. Dev-only advisories are real but
+      # they are a different decision, and failing the build on a lint plugin's
+      # transitive dependency is how a security gate gets switched off. They
+      # are reported below without failing.
+      #
+      # NOT `npm audit fix`: CI must report, never mutate a lockfile it is
+      # about to build from.
+      - name: Dependency audit - production tree must be clean
+        run: npm audit --omit=dev --audit-level=moderate
+      - name: Dependency audit - dev tree, reported not enforced
+        run: npm audit --audit-level=high || true
 
   tools:
     runs-on: ubuntu-latest

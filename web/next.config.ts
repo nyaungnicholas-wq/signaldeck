@@ -112,6 +112,12 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  // Next sends `X-Powered-By: Next.js` on every response by default. It is
+  // pure framework fingerprinting -- it tells a scanner which CVE list to try
+  // and tells a legitimate visitor nothing -- and this is a published surface.
+  // No functional or data exposure, so it never held the launch; it is just
+  // free to not say.
+  poweredByHeader: false,
   // Dev only. The dev server's origin is localhost, so opening the app at
   // http://127.0.0.1:8323 made Next refuse to serve dev assets to that origin:
   // React never hydrated, the page sat on the server-rendered "checking
