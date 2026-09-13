@@ -46,12 +46,50 @@ func StartingCash() float64 {
 	return envFloat("SIGNALDECK_PAPER_CASH", defaultStartingCash)
 }
 
+const (
+	defaultLongThreshold = 0.60
+	defaultFlatThreshold = 0.40
+)
+
 // Signal thresholds on the CALIBRATED probability. At/above LongThreshold we
 // target a long; at/below FlatThreshold we target flat; strictly between the two
 // we HOLD the current position (a deliberate deadband so we don't churn on noise
 // around 0.5, which would bleed the book dry on costs). Overridable via env.
-func LongThreshold() float64 { return envFloat("SIGNALDECK_PAPER_LONG", 0.60) }
-func FlatThreshold() float64 { return envFloat("SIGNALDECK_PAPER_FLAT", 0.40) }
+//
+// They are read as a PAIR because neither is meaningful alone. envFloat screens
+// each value on its own (non-numeric, <=0, NaN, Inf) and cannot see the other, so
+// an operator who inverts the two -- FLAT=0.7 with LONG=0.6 -- passed every
+// per-key check and silently deleted the deadband: 0.65 matched `cal >= long` and
+// returned GoLong, 0.5 matched `cal <= flat` and returned GoFlat, and nothing in
+// between could ever Hold. The book would then re-decide on every signal and
+// bleed out on execution cost, which is the exact failure the deadband exists to
+// prevent.
+//
+// An overlapping pair is refused WHOLE. Honouring one key would leave that
+// override in force against a default it was never chosen with -- a third
+// configuration the operator did not ask for either.
+func thresholds() (flat, long float64) {
+	const flatKey, longKey = "SIGNALDECK_PAPER_FLAT", "SIGNALDECK_PAPER_LONG"
+	flat = envFloat(flatKey, defaultFlatThreshold)
+	long = envFloat(longKey, defaultLongThreshold)
+	if flat < long {
+		return flat, long
+	}
+	// Record only the keys the operator actually set; a rejection logged against a
+	// variable nobody touched sends them hunting a typo that is not there.
+	if raw := os.Getenv(flatKey); raw != "" {
+		envcfg.Reject(flatKey, raw, "must be < "+longKey,
+			strconv.FormatFloat(defaultFlatThreshold, 'g', -1, 64))
+	}
+	if raw := os.Getenv(longKey); raw != "" {
+		envcfg.Reject(longKey, raw, "must be > "+flatKey,
+			strconv.FormatFloat(defaultLongThreshold, 'g', -1, 64))
+	}
+	return defaultFlatThreshold, defaultLongThreshold
+}
+
+func LongThreshold() float64 { _, long := thresholds(); return long }
+func FlatThreshold() float64 { flat, _ := thresholds(); return flat }
 
 // MaxPositions bounds how many symbols the book can hold at once and, with it,
 // the per-position budget: each new entry targets equity/MaxPositions dollars
@@ -114,13 +152,17 @@ const (
 //	otherwise            -> Hold (deadband)
 //
 // The thresholds are read fresh so an env override takes effect without a
-// rebuild. GoLong wins ties at exactly LongThreshold; GoFlat wins ties at
-// exactly FlatThreshold (the thresholds cannot overlap: FLAT < LONG by config).
+// rebuild. GoLong wins ties at exactly LongThreshold; GoFlat wins ties at exactly
+// FlatThreshold. The two cannot overlap because thresholds() enforces it -- this
+// comment used to assert that as a fact about the operator's config, which
+// nothing checked. One read of the pair, so a mid-call env change cannot be
+// observed as a torn long/flat combination either.
 func DecideTarget(cal float64) Target {
-	if cal >= LongThreshold() {
+	flat, long := thresholds()
+	if cal >= long {
 		return GoLong
 	}
-	if cal <= FlatThreshold() {
+	if cal <= flat {
 		return GoFlat
 	}
 	return Hold
