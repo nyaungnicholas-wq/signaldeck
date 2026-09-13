@@ -18,8 +18,12 @@ func manualPaperStrategy(uid int64) string {
 }
 
 // manualQuote builds ExecInputs for a market order using the most recent 1m bar.
-// Liquidity and volatility come from COMPLETED prior daily bars, never the forming one
-// (the same no-lookahead rule the flagship books follow).
+//
+// Liquidity (ADVUSD) uses SETTLED prior daily bars only. Volatility uses the newest
+// settled daily bar when there is one and is otherwise left nil, which makes the
+// execution model fall back to a 1-minute Parkinson sigma. That fallback is the
+// honest description: in-session this does NOT match the flagship books, which
+// always price impact off a completed daily bar.
 func manualQuote(ctx context.Context, st *store.Store, sym md.Symbol, now int64) (papertrade.ExecInputs, string, error) {
 	bars, err := st.LastBars(ctx, sym.ID, md.TF1m, 1)
 	if err != nil {
@@ -37,13 +41,27 @@ func manualQuote(ctx context.Context, st *store.Store, sym md.Symbol, now int64)
 	if err != nil {
 		return papertrade.ExecInputs{}, "", err
 	}
+	// Two skips the flagship advUSD already makes and this loop did not. BarsBefore
+	// is bounded by the 1-MINUTE quote's ts, so today's still-forming daily bar sorts
+	// before it and was averaged in at partial volume, dragging ADV down and
+	// understating impact. A halted or untraded day contributed a zero and divided
+	// the mean down again. Dividing by the bars actually summed, rather than by
+	// len(daily), is the other half: skipping a bar must not also shrink the average.
 	adv := 0.0
-	if len(daily) > 0 {
-		var sum float64
-		for _, d := range daily {
-			sum += d.Close * d.Volume
+	var sum float64
+	var n int
+	for _, d := range daily {
+		if d.Close <= 0 || d.Volume <= 0 {
+			continue
 		}
-		adv = sum / float64(len(daily))
+		if !md.DailyBarSettled(sym.Market, d.Ts, now) {
+			continue
+		}
+		sum += d.Close * d.Volume
+		n++
+	}
+	if n > 0 {
+		adv = sum / float64(n)
 	}
 	var volBar *md.Bar
 	if len(daily) > 0 {
