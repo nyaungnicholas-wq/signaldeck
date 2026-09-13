@@ -500,6 +500,7 @@ function HypRow({
                 honest state, not an error.
               </p>
             ) : (
+              <div className="table-wrap">
               <table className="v4-table">
                 <tbody>
                   {chain.map((e, i) => {
@@ -524,6 +525,7 @@ function HypRow({
                   })}
                 </tbody>
               </table>
+              </div>
             )}
           </td>
         </tr>

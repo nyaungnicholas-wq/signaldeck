@@ -203,6 +203,7 @@ export default function SignalReportPage({
                 Why This Signal Fired
               </div>
               <Reveal>
+                <div className="table-wrap">
                 <table className="w-full text-[0.75rem]">
                   <thead>
                     <tr className="text-left text-[color:var(--faint)]">
@@ -221,6 +222,7 @@ export default function SignalReportPage({
                     ))}
                   </tbody>
                 </table>
+                </div>
               </Reveal>
             </section>
           ) : null}
@@ -286,6 +288,7 @@ export default function SignalReportPage({
               )}
               <Reveal>
                 {report.history.instances?.length ? (
+                  <div className="table-wrap">
                   <table className="w-full text-[0.75rem] v4-table">
                     <thead>
                       <tr className="text-left text-[color:var(--faint)]">
@@ -317,9 +320,11 @@ export default function SignalReportPage({
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 ) : null}
 
                 {report.history.rows?.length ? (
+                  <div className="table-wrap">
                   <table className="w-full text-[0.75rem] v4-table mt-4">
                     <thead>
                       <tr className="text-left text-[color:var(--faint)]">
@@ -351,9 +356,11 @@ export default function SignalReportPage({
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 ) : null}
 
                 {(report.history.breakouts ?? report.history.anomalies)?.length ? (
+                  <div className="table-wrap">
                   <table className="w-full text-[0.75rem] v4-table mt-4">
                     <thead>
                       <tr className="text-left text-[color:var(--faint)]">
@@ -384,6 +391,7 @@ export default function SignalReportPage({
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 ) : null}
               </Reveal>
             </section>
