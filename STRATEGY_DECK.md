@@ -43,7 +43,7 @@ The live record is not typed into this deck. It is generated from `data/accuracy
 
 Generated from `data/accuracy_registry.json` (registry `REFUSED` since 2026-09-12T21:30:26) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
-> **GRADING REFUSED — no accuracy figures are published.** Reason: publication gate: the graded window contains 18 collapsed cross-section(s) of 75 day(s): 1d 2026-07-27 (6 distinct across 330 symbols), 1d 2026-07-28 (8 distinct across 330 symbols), 1d 2026-07-29 (13 distinct across 328 symbols), 1d 2026-07-31 (6 distinct across 328 symbols), 1d 2026-08-01 (6 distinct across 328 symbols), 1d 2026-08-02 (8 distinct across 328 symbols), 1d 2026-08-03 (5 distinct across 328 symbols), 1d 2026-08-04 (13 distinct across 328 symbols), 1d 2026-08-06 (33 distinct across 327 symbols), 1w 2026-07-26 (21 distinct across 326 symbols), 1w 2026-07-27 (7 distinct across 326 symbols), 1w 2026-07-28 (16 distinct across 328 symbols), 1w 2026-07-29 (25 distinct across 327 symbols), 1w 2026-07-31 (33 distinct across 327 symbols), 1w 2026-08-01 (16 distinct across 328 symbols), 1w 2026-08-02 (13 distinct across 328 symbols), 1w 2026-08-03 (7 distinct across 328 symbols), 1w 2026-08-04 (7 distinct across 328 symbols). On a collapsed day the whole universe receives a handful of distinct probabilities, so these rows grade one market-wide call repeated per symbol, not independent per-symbol forecasts. Figures over this window are withheld. The window starts at the survivorship epoch and does not roll forward, so a collapsed day stays in it: this clears when the window is re-registered, not by waiting for more grades.. The grade computed at 2026-09-12T21:28:07 (0.0h old) is withheld, not lost: it is retained inside the registry under `stale_last_registry` for the historical record and is deliberately not reprinted here, because a number the publication gate refused to stand behind is not a live number. The in-app `/accuracy` page and `/api/accuracy` apply the same gate from the same registry.
+> **GRADING REFUSED — no accuracy figures are published.** Reason: deployment drift check failed (exit 1) — a mechanism the pre-registration chain claims is not observable in the live database, or the check itself could not run (see the DEPLOYMENT DRIFT lines above in this log); the grader was not run. The grade computed at 2026-09-12T21:28:07 (16.6h old) is withheld, not lost: it is retained inside the registry under `stale_last_registry` for the historical record and is deliberately not reprinted here, because a number the publication gate refused to stand behind is not a live number. The in-app `/accuracy` page and `/api/accuracy` apply the same gate from the same registry.
 
 <!-- END GENERATED live_accuracy -->
 
@@ -166,23 +166,23 @@ These are the reasons nothing here is finished.
 
 <!-- BEGIN GENERATED deck_facts -->
 
-Measured from `data/signaldeck.db` by `tools/deck_facts.py`. Do not edit by hand — CI fails when this block no longer matches the database. The universe reaches **2026-08-05**, the last observation day it holds.
+Measured from `data/signaldeck.db` by `tools/deck_facts.py`. Do not edit by hand — CI fails when this block no longer matches the database. The universe reaches **2026-08-22**, the last observation day it holds.
 
 | Measurement | Value |
 |---|---|
-| `universe_membership` rows | 2,642,060 |
-| — observation days | 2,146 |
+| `universe_membership` rows | 2,697,299 |
+| — observation days | 2,163 |
 | — distinct symbols | 2,947 |
 | — `source` values present | `bars-1d` |
-| `symbols.delisted_at` stamps | 1,870 |
-| — delisted 2020-2022 | 622 |
-| — delisted 2023-2025 | 1,118 |
-| — recent window against earlier | **179.7%** of the 2020-2022 count |
-| Daily-bar calendar (from `QQQ`) | 1,918 sessions |
-| Stock bar coverage | 90.75% — 2,672,777 of 2,945,108 symbol-days over 2,940 symbols |
-| — still-listed names only | 99.61% over 1,070 symbols |
-| — names carrying `delisted_at` only | 79.40% over 1,870 symbols |
-| — symbols that stop printing early with no `delisted_at` | 421 |
+| `symbols.delisted_at` stamps | 1,894 |
+| — delisted 2020-2022 | 621 |
+| — delisted 2023-2025 | 1,117 |
+| — recent window against earlier | **179.9%** of the 2020-2022 count |
+| Daily-bar calendar (from `SPY`) | 1,934 sessions |
+| Stock bar coverage | 91.92% — 2,708,947 of 2,947,224 symbol-days over 2,940 symbols |
+| — still-listed names only | 98.92% over 1,046 symbols |
+| — names carrying `delisted_at` only | 83.20% over 1,894 symbols |
+| — symbols that stop printing early with no `delisted_at` | 15 |
 | Crypto bar coverage | 100.00% over 7 symbols |
 
 The membership derives entirely from the daily-bar history, so it is point-in-time only to the extent that history is complete: the stock coverage row is the bound under every point-in-time claim in this deck. **Read the two cohort rows before the blended one.** They answer different questions — the still-listed row is whether the live universe has holes, the delisted row is how densely the imported dead names were ever sampled — and while dead names are being imported the blended figure moves with the import rather than with data quality. The symbols that stop printing with no `delisted_at` are the survivorship-relevant ones: they leave the universe without being recorded as dead, which is indistinguishable from having stopped looking.
