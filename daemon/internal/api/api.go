@@ -138,12 +138,24 @@ func Serve(ctx context.Context, d Deps) error {
 		// Perf wave 2026-07-24: measured >30s (timed out); SWR-cached.
 		sharedDatastatsSWR.serve("datastats", w, r, d.datastats)
 	}) // dataset accounting (read, gated like other reads)
-	d.registerAlerts(mux)                                         // alerts wave: per-user alerts list + mark-seen
-	d.registerDiscovery(mux)                                      // discovery wave: candidates list/add/dismiss
-	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights)        // learning-flywheel wave: learned per-regime ensemble weights
-	mux.HandleFunc("GET /api/postmortems", d.postmortems)         // Research Lab: clustered failure attribution over resolved WRONG predictions
-	mux.HandleFunc("GET /api/research", d.research)               // Research Lab: hypothesis registry (shadow/promoted/rejected) + advisory feedback
-	mux.HandleFunc("GET /api/research-ledger", d.researchLedger)  // Bayesian Research Ledger: program-level hypotheses w/ prior→posterior evidence chains + meta-analysis
+	d.registerAlerts(mux)                                  // alerts wave: per-user alerts list + mark-seen
+	d.registerDiscovery(mux)                               // discovery wave: candidates list/add/dismiss
+	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights) // learning-flywheel wave: learned per-regime ensemble weights
+	mux.HandleFunc("GET /api/postmortems", d.postmortems)  // Research Lab: clustered failure attribution over resolved WRONG predictions
+	mux.HandleFunc("GET /api/research", d.research)        // Research Lab: hypothesis registry (shadow/promoted/rejected) + advisory feedback
+	// Bayesian Research Ledger: program-level hypotheses w/ prior→posterior
+	// evidence chains + meta-analysis.
+	//
+	// BODY-CACHED, unlike its neighbours here, because it is BOTH slow and
+	// ANONYMOUS: it is in publicRoutes, and measured 2026-09-13 it takes 11.2s
+	// warm on a quiet box (the finding measured 53s cold under load). Registered
+	// bare, every visitor paid that inline against a 4-connection read pool, so
+	// a handful of concurrent anonymous requests is enough to starve it -- the
+	// same shape as the screener and symbol routes, which already sit behind
+	// their own SWR body cache for exactly this reason.
+	mux.HandleFunc("GET /api/research-ledger", func(w http.ResponseWriter, r *http.Request) {
+		sharedResearchLedgerSWR.serve(d.St.CacheKey()+"|research-ledger", w, r, d.researchLedger)
+	})
 	mux.HandleFunc("GET /api/research-loop", d.researchLoop)      // autonomous research loop: every pass (incl. refusals), judged rules, append-only per-(day,rule) judgments, rejection tally by gate
 	mux.HandleFunc("GET /api/vol-regime", d.volRegime)            // the validated-edge forecast: per-stock volatility regime (elevated/calm) + MEASURED walk-forward accuracy tiers
 	mux.HandleFunc("GET /api/regimes", d.structuralRegimesCached) // 2026-07-17 alpha-loop winners: trend21/liquidity21/vol21 regimes, measured per-band tiers + caveats in-payload
