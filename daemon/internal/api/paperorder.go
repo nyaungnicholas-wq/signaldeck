@@ -154,13 +154,21 @@ func (d Deps) paperOrder(w http.ResponseWriter, r *http.Request) {
 	positionsValue := others + remaining*in.Bar.Open
 	equity := newCash + positionsValue
 
-	// The cursor must strictly advance: one step per second per book.
+	// Two different clocks, and stamping the trade with the wrong one made the book
+	// unverifiable. The CURSOR is a per-book monotonic step counter: it must strictly
+	// advance, so a second order inside the same 1m bar pushes it to LastBarTs+1. The
+	// TRADE records the bar it actually filled against. Stamping the cursor's
+	// synthetic value on the trade produced timestamps at ts%60 of 1, 2 and 3 --
+	// matching no stored 1m bar, so checkPaperFills (which requires bar.Ts == trade.Ts
+	// exactly) counted them NoBar and CheckFillFidelity reported the WHOLE book
+	// unverified. Two fills in one bar legitimately share a timestamp; store/paper.go
+	// orders trade history by id, not ts, so equal stamps disturb nothing.
 	barTs := in.Bar.Ts
 	if barTs <= cur.LastBarTs {
 		barTs = cur.LastBarTs + 1
 	}
 	trade := store.PaperTrade{
-		Strategy: strategy, SymbolID: sym.ID, Side: fill.Side, Qty: fill.Qty, Px: fill.Px, Cost: fill.Cost, Ts: barTs,
+		Strategy: strategy, SymbolID: sym.ID, Side: fill.Side, Qty: fill.Qty, Px: fill.Px, Cost: fill.Cost, Ts: in.Bar.Ts,
 		Reason: fmt.Sprintf("manual %s order (quote 1m bar %d)", side, in.Bar.Ts),
 	}
 	applied, err := d.St.ApplyPaperStep(ctx, store.PaperApply{
