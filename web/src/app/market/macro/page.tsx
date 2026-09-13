@@ -108,8 +108,16 @@ export default function MacroCombinedPage() {
             <div className="panel-h">MARKET STATE</div>
             <p className="mb-3 text-[0.75rem]" style={{ color: 'var(--dim)' }}>Current volatility regime and market breadth readings.</p>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <StatTile label="BREADTH" value={macro.breadthPct} decimals={1} suffix="%" sub={`${macro.positive} of ${macro.scored} scored positive`} delta={macro.breadthPct - 50} spark={[macro.breadthPct]} i={0} glow={macro.breadthPct > 50 ? "up" : "down"} />
-              <StatTile label="VOLATILITY" value={macro.volLabel || "—"} sub={`SPY realized-vol percentile ${macro.volPct.toFixed(0)}%`} delta={macro.volPct - 50} i={1} />
+              {/* delta is a distance from the 50 midpoint in POINTS, not a
+                  move: with breadth at 52.5 the badge read "2.49%" beside
+                  "52.5%", which parses as "up 2.49% since some earlier
+                  reading". It is neither a percentage nor a change. The spark
+                  was dropped for the same reason: it was a ONE-element array,
+                  and Spark returns an empty path below two points, so it drew
+                  a flat line that reads as a stable series where no series
+                  exists. */}
+              <StatTile label="BREADTH" value={macro.breadthPct} decimals={1} suffix="%" sub={`${macro.positive} of ${macro.scored} scored positive`} delta={macro.breadthPct - 50} deltaUnit="pp" deltaTitle="percentage points above or below the 50 midpoint — a position, not a change over time" i={0} glow={macro.breadthPct > 50 ? "up" : "down"} />
+              <StatTile label="VOLATILITY" value={macro.volLabel || "—"} sub={`SPY realized-vol percentile ${macro.volPct.toFixed(0)}%`} delta={macro.volPct - 50} deltaUnit="pp" deltaTitle="percentage points above or below the 50 midpoint — a position, not a change over time" i={1} />
               <StatTile label="REGIME MAP" value={String(states.length || "—")} sub="symbols classified" i={2} />
               <StatTile label="AS OF" value={new Date(macro.asOf * 1000).toISOString().slice(0, 10)} sub="stored data, worker cadence" i={3} />
             </div>

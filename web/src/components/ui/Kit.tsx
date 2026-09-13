@@ -126,13 +126,22 @@ export function Gauge({ value, min = 0, max = 100, label, color = "var(--accent)
   );
 }
 
-export function DeltaBadge({ value, decimals = 2, className }: { value: number; decimals?: number; className?: string }) {
-  if (value === 0) return <span className={`rounded-full border px-2 py-0.5 text-[0.75rem] tnum ${className ?? ''}`} style={{ color: 'var(--dim)', borderColor: 'var(--dim)' }}><svg width="8" height="8" viewBox="0 0 8 8"><line x1="2" y1="4" x2="6" y2="4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></span>;
+// unit is a PROP because this badge used to hardcode '%' onto whatever number
+// it was handed, and two callers were not handing it a percentage move: the
+// macro tiles pass (percentile - 50), which is a distance from the midpoint in
+// POINTS, and the news tile passed a raw headline tally. A '%' on either is a
+// unit error rendered in the house style, next to a real percentage, with an
+// up-arrow that reads as a change over time.
+//
+// title carries the sentence that makes a non-obvious unit legible on hover,
+// since "pp" alone does not say pp-from-what.
+export function DeltaBadge({ value, decimals = 2, unit = "%", title, className }: { value: number; decimals?: number; unit?: string; title?: string; className?: string }) {
+  if (value === 0) return <span title={title} className={`rounded-full border px-2 py-0.5 text-[0.75rem] tnum ${className ?? ''}`} style={{ color: 'var(--dim)', borderColor: 'var(--dim)' }}><svg width="8" height="8" viewBox="0 0 8 8"><line x1="2" y1="4" x2="6" y2="4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></span>;
   const positive = value > 0;
   const colorVar = positive ? '--bid' : '--ask';
-  return <span className={`rounded-full border px-2 py-0.5 text-[0.75rem] tnum ${className ?? ''}`} style={{ color: `var(${colorVar})`, borderColor: `var(${colorVar})`, backgroundColor: `color-mix(in srgb, var(${colorVar}) 10%, transparent)` }}>
+  return <span title={title} className={`rounded-full border px-2 py-0.5 text-[0.75rem] tnum ${className ?? ''}`} style={{ color: `var(${colorVar})`, borderColor: `var(${colorVar})`, backgroundColor: `color-mix(in srgb, var(${colorVar}) 10%, transparent)` }}>
     {positive ? <svg width="8" height="8" viewBox="0 0 8 8" className="inline mr-0.5"><polygon points="4,1 7,6 1,6" fill="currentColor"/></svg> : <svg width="8" height="8" viewBox="0 0 8 8" className="inline mr-0.5"><polygon points="4,7 7,2 1,2" fill="currentColor"/></svg>}
-    {Math.abs(value).toFixed(decimals)}%
+    {Math.abs(value).toFixed(decimals)}{unit}
   </span>;
 }
 
@@ -145,14 +154,14 @@ export function DeltaBadge({ value, decimals = 2, className }: { value: number; 
 // honesty page, whose whole purpose is not inventing forward returns. Widening
 // the type is what lets those call sites stop lying; a `?? 0` reaching this
 // component is now a bug with a fix rather than the only way to compile.
-export function StatTile({ label, value, decimals = 0, prefix = "", suffix = "", sub, delta, spark, glow, i = 0 }: { label: string; value: number | string | null | undefined; decimals?: number; prefix?: string; suffix?: string; sub?: string; delta?: number; spark?: number[]; glow?: "up" | "down" | "accent" | "hud"; i?: number }) {
+export function StatTile({ label, value, decimals = 0, prefix = "", suffix = "", sub, delta, deltaUnit, deltaTitle, spark, glow, i = 0 }: { label: string; value: number | string | null | undefined; decimals?: number; prefix?: string; suffix?: string; sub?: string; delta?: number; deltaUnit?: string; deltaTitle?: string; spark?: number[]; glow?: "up" | "down" | "accent" | "hud"; i?: number }) {
   const glowClass = glow === 'up' ? 'glow-up' : glow === 'down' ? 'glow-down' : glow === 'accent' ? 'glow-text' : glow === 'hud' ? 'glow-hud' : '';
   const hasData = value != null && value !== '';
   return (
     <div className="panel reveal-item relative p-4" style={{ "--i": i } as React.CSSProperties}>
       <div className="flex justify-between items-start mb-2">
         <span className="text-[0.75rem] uppercase tracking-wider" style={{ color: 'var(--dim)' }}>{label}</span>
-        {delta != null && <DeltaBadge value={delta} />}
+        {delta != null && <DeltaBadge value={delta} unit={deltaUnit} title={deltaTitle} />}
       </div>
       <div className="flex items-baseline gap-2">
         {/* prefix/suffix are dropped with the value: "$—" and "—%" read as a
