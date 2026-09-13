@@ -5,8 +5,10 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -466,13 +468,40 @@ func httpInternal(w http.ResponseWriter, err error) {
 }
 
 // symbolFromQuery resolves ?symbol=&market= to a stored symbol.
+// The returned error is CLIENT-SAFE: 36 handlers call this and 35 of them
+// answer `httpErr(w, 404, err.Error())`, so whatever comes back here is
+// published verbatim. It used to be store.GetSymbol's error unmodified, and
+// GetSymbol returns database/sql's own sentinels -- a request for a symbol
+// that is merely absent answered `{"error":"sql: no rows in result set"}`,
+// observed live on GET /api/ledger?symbol=BTC. That names the storage engine
+// and the access pattern to anonymous callers on the published surface, and it
+// is useless to the caller, who wanted to know the symbol is unknown.
+//
+// Translated HERE rather than at the 35 call sites: one guard in the shared
+// function is both the smaller diff and the one a route added next month
+// inherits automatically.
+//
+// A genuine lookup failure is logged and reduced to a fixed string. Its 404 is
+// wrong -- the caller is told "unknown symbol" when the database is in fact
+// unwell -- but that mapping lives in each caller, predates this change, and
+// widening the fix to restructure 35 handlers' status codes is not warranted
+// by an error-message leak. What matters here is that the internals stop
+// escaping either way.
 func (d Deps) symbolFromQuery(r *http.Request) (md.Symbol, error) {
 	sym := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
 	market := md.Market(r.URL.Query().Get("market"))
 	if sym == "" || (market != md.Crypto && market != md.Stocks) {
 		return md.Symbol{}, fmt.Errorf("need symbol= and market=crypto|stocks")
 	}
-	return d.St.GetSymbol(r.Context(), sym, market)
+	s, err := d.St.GetSymbol(r.Context(), sym, market)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return md.Symbol{}, fmt.Errorf("unknown symbol %s on market %s", sym, market)
+	case err != nil:
+		slog.Error("symbol lookup failed", "symbol", sym, "market", market, "err", err)
+		return md.Symbol{}, errors.New("symbol lookup failed")
+	}
+	return s, nil
 }
 
 // ── basic ───────────────────────────────────────────────────────────────
