@@ -21,6 +21,7 @@ import type { Horizon, WatchRow } from "@/lib/api";
 
 export default function ScreenerResults({
   rankingFailed = false,
+  regimesFailed = false,
   rows,
   err,
   filtered,
@@ -35,6 +36,7 @@ export default function ScreenerResults({
 }: {
   /** The ranking fetch FAILED. Distinct from "no rank": see useScreenerData. */
   rankingFailed?: boolean;
+  regimesFailed?: boolean;
   rows: WatchRow[] | null;
   err: string | null;
   filtered: Derived[];
@@ -164,7 +166,7 @@ export default function ScreenerResults({
       )}
 
       {effView === "table" && shown.length > 0 && (
-        <ScreenerTable filtered={shown} sortKey={sortKey} sortDir={sortDir} onSort={onSort} rankingFailed={rankingFailed} />
+        <ScreenerTable filtered={shown} sortKey={sortKey} sortDir={sortDir} onSort={onSort} rankingFailed={rankingFailed} regimesFailed={regimesFailed} />
       )}
 
       {/* Says what is hidden and undoes it in one click. Shared with the

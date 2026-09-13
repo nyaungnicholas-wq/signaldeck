@@ -48,7 +48,7 @@ const PRESETS = [
 ];
 
 export default function ScreenerPage() {
-  const { rows, err, ranking, regimes, rankingFailed, retry } = useScreenerData();
+  const { rows, err, ranking, regimes, rankingFailed, regimesFailed, retry } = useScreenerData();
   const f = useScreenerFilters(rows, ranking, regimes);
   const goal = useGoal();
   const layout = overviewLayoutFor(goal);
@@ -116,6 +116,7 @@ export default function ScreenerPage() {
         <div className="panel">
           <ScreenerResults
             rankingFailed={rankingFailed}
+            regimesFailed={regimesFailed}
             rows={rows}
             err={err}
             filtered={f.filtered}
@@ -143,7 +144,11 @@ export default function ScreenerPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile label="Total Symbols" value={rows?.length ?? "—"} i={0} glow="hud" />
-        <StatTile label="Filtered" value={f.filtered.length} i={1} glow="hud" />
+        {/* Guarded like "Total Symbols" beside it. The two tiles sat in the
+            same row with opposite honesty: one rendered an em dash until rows
+            arrived, the other a confident 0 from the empty array it derives
+            from. A loaded universe matching no filter still shows 0. */}
+        <StatTile label="Filtered" value={rows ? f.filtered.length : "—"} i={1} glow="hud" />
         {/* scores is Partial<Record<Horizon, Score>>, so `?? 0` rendered "0.00"
             — a real neutral-pressure reading — for a horizon that simply has no
             stored score. The two tiles either side of this one already use "—". */}

@@ -60,8 +60,12 @@ export default function WatchlistPage() {
   }, [undo, refetch]);
 
   const stats = useMemo(() => {
-    if (!watchlist || watchlist.length === 0)
-      return { count: 0, best: null, worst: null };
+    // count is NULL only when the list has not loaded (or the fetch failed).
+    // An empty watchlist genuinely contains 0 symbols, so that zero is true
+    // and is still reported as 0. The two cases were previously collapsed, so
+    // the tile asserted "0 tracked" during every load and every failure.
+    if (!watchlist) return { count: null, best: null, worst: null };
+    if (watchlist.length === 0) return { count: 0, best: null, worst: null };
     const sorted = [...watchlist].sort(
       (a, b) => (b.dayChangePct ?? 0) - (a.dayChangePct ?? 0)
     );

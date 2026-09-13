@@ -29,6 +29,12 @@ export function useScreenerData() {
   // the symbol. The rows path in this same hook already splits loading/error/
   // empty correctly, which is exactly why the enricher columns leaked.
   const [rankingFailed, setRankingFailed] = useState(false);
+  // The SAME defect, one enricher down. The regime fetch swallowed its error
+  // with a bare catch, so `regimes` stayed null and ScreenerTable rendered the
+  // dash under "not classified yet -- the regime worker fills this in from
+  // stored bars": a positive claim about a classifier that, on a failed
+  // request, we have no information about at all.
+  const [regimesFailed, setRegimesFailed] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -55,8 +61,14 @@ export function useScreenerData() {
         });
       api
         .regime()
-        .then((r) => alive && setRegimes(r.states ?? []))
-        .catch(() => {});
+        .then((r) => {
+          if (!alive) return;
+          setRegimes(r.states ?? []);
+          setRegimesFailed(false);
+        })
+        .catch(() => {
+          if (alive) setRegimesFailed(true);
+        });
     };
     load();
     // Screener rows move on worker cadence — the default tier is plenty.
@@ -72,5 +84,5 @@ export function useScreenerData() {
     setRetryTick((t) => t + 1);
   }, []);
 
-  return { rows, err, ranking, regimes, rankingFailed, retry };
+  return { rows, err, ranking, regimes, rankingFailed, regimesFailed, retry };
 }

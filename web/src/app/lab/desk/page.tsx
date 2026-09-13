@@ -92,12 +92,18 @@ export default function DeskOverviewPage() {
   // shownOpportunities is the PAGE SIZE, not a universe count: the fetch above
   // hardcodes limit=12 and the response carries no total, so this can never
   // exceed 12. Named and labelled for what it is.
-  const shownOpportunities = topRows.length;
+  // NULL while the fetch is in flight or after it failed, so StatTile renders
+  // its em dash instead of a confident 0. `top?.rows || []` collapses both
+  // "not loaded" and "loaded, nothing to show" onto the same empty array, and
+  // a hero tile reading 0 is a claim that the desk found no opportunities --
+  // which is a different statement from not having asked yet. A LOADED but
+  // empty response still reports 0, because that zero is true.
+  const shownOpportunities = top ? topRows.length : null;
   const bestOpportunity = topRows[0];
   // /api/recommendation/top returns best-score-first over the full set, so the
   // last row of a top-12 is the 12th BEST, not the worst in the universe.
   // Labelling it "Worst" and glowing it red inverted its meaning in a trading UI.
-  const lowestShown = topRows[shownOpportunities - 1];
+  const lowestShown = topRows[topRows.length - 1];
   // reco.asOf is unix SECONDS; RecommendationCard on this same page already
   // renders it with ago(). A bare new Date() read it as ms and showed 1970.
   const latestUpdate = updatedTs ? fmtTs(updatedTs) : "—";
