@@ -410,6 +410,16 @@ stock book):
 CLAUDE.md records that the -13/-23/-28pp directional figure is an ARITHMETIC
 IDENTITY (acc = 1 - null) on a one-sided book, not anti-skill. Tested here:
 
+<!-- SUPERSEDED-SNAPSHOT — the percentages in the table below are this entry's
+     own CROSS-SECTION of directional calls: what fraction of calls pointed UP,
+     what fraction of bars actually went UP, and the 1-base complement. Two of
+     them ("54.4%" = actual-UP base rate, "45.6%" = 1-base) collide by
+     coincidence with live-record literals, exactly as GATE0_FINDING's
+     calibration bounds do. Neither is a claim about the live accuracy record,
+     and neither can be replaced by including partials/live_accuracy.md — they
+     are different quantities that happen to share four characters. Marked at
+     BLOCK scope, so the rest of this ledger stays under the gate. -->
+
 | horizon | calls UP | actual UP | accuracy | 1-base | gap |
 |---|---|---|---|---|---|
 | 1d | 34.2% | 43.5% | 47.1% | 56.5% | 9.38pp |

@@ -446,9 +446,36 @@ def scan(path, extra_literals=(), allow_whole_file_escape=True):
         if inside:
             continue
         for lit in banned:
-            if lit in line and not _historical_block(lines, n):
+            if _asserts_literal(line, lit) and not _historical_block(lines, n):
                 hits.append((n, lit))
     return hits
+
+
+def _asserts_literal(line, lit):
+    """Is `lit` present as a standalone figure, rather than inside another one?
+
+    The scan matched a bare substring, so a literal like "52.9%" also fired on
+    "-52.9%" -- a maximum DRAWDOWN in ledgers/EVIDENCE.md's sealed-holdout
+    table, which is not a live-accuracy claim and cannot be one: an accuracy is
+    never negative. Three of the gate's five failures on this branch were that,
+    and a permanently-red honesty gate is the kind nobody reads.
+
+    This NARROWS nothing about what the gate bans. A hand-typed accuracy figure
+    is still caught wherever it is written; only a match that was never the
+    figure -- one carrying a leading minus, or glued to more digits, so the
+    document is saying a different number -- stops counting.
+    """
+    start = 0
+    while True:
+        i = line.find(lit, start)
+        if i == -1:
+            return False
+        before = line[i - 1] if i > 0 else ""
+        # "-52.9%" is a drawdown; "152.9%" and "1.52.9%" are other numbers
+        # entirely. Either way the document is not asserting `lit`.
+        if before not in ("-", "−") and not before.isdigit() and before != ".":
+            return True
+        start = i + 1
 
 
 # Source files cannot carry a whole-file history banner — a package is not a
