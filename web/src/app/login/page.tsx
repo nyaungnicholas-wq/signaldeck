@@ -37,6 +37,31 @@ export default function LoginPage() {
     };
   }, []);
 
+  // Already signed in? Go where the submit button would have sent you.
+  //
+  // PublicNav renders its "Sign in" chip on every public route and has no
+  // session to check — it cannot know. So a signed-in user who lands on /,
+  // /accuracy or /proof sees the anonymous chrome, follows the only affordance
+  // it offers, and arrives at a login form that gives no sign they are already
+  // in. Checking here rather than in the nav keeps the cost on the ONE page
+  // where a session question is already being asked: the anonymous surface is
+  // deliberately lean and must not gain a per-visitor /api/auth/me call.
+  //
+  // A 401 throws, which is the not-signed-in path and correctly leaves the form
+  // on screen. replace(), not push(), so Back does not bounce off this page.
+  useEffect(() => {
+    let live = true;
+    api
+      .me()
+      .then(() => {
+        if (live) router.replace("/dashboard");
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [router]);
+
   // On a failed submit the error box appears; move focus to it so keyboard
   // and screen-reader users land on the message.
   useEffect(() => {

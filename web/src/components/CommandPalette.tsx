@@ -24,7 +24,11 @@ export const CMDK_EVENT = "sd-cmdk";
 // Route registry — every reachable page (canonical post-redirect URLs only;
 // legacy /markets/* and /signals/* 307 into these).
 const PAGES: { label: string; href: string }[] = [
-  { label: "Home — dashboard & daily briefing", href: "/" },
+  // "/" is the PUBLIC landing page (see lib/publicRoutes), not the dashboard —
+  // this entry labelled it "dashboard & daily briefing" and was the only Home
+  // entry, so the palette had no way to reach the real dashboard at all.
+  { label: "Home — the public landing page", href: "/" },
+  { label: "Dashboard — daily briefing & your book", href: "/dashboard" },
   { label: "Watchlist — your symbols as cards", href: "/watchlist" },
   { label: "Watchlist — compare two symbols", href: "/watchlist/compare" },
   { label: "Market — overview & screener", href: "/market/overview" },

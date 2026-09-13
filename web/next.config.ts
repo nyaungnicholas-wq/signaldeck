@@ -54,11 +54,13 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   { source: "/trends", destination: "/market/trends" },
   { source: "/regime", destination: "/market/macro" },
   { source: "/macro", destination: "/market/macro" },
-  // SIGNALS
-  { source: "/predict", destination: "/signals/predictions" },
-  { source: "/forecast", destination: "/signals/forecasts" },
-  { source: "/insights", destination: "/signals/insights" },
-  { source: "/alerts", destination: "/signals/alerts" },
+  // SIGNALS (same rule as MARKETS above, which these five did not follow:
+  // they pointed at /signals/*, which are themselves redirect SOURCES a few
+  // lines up, so every one of them cost two 307s and two round trips)
+  { source: "/predict", destination: "/market/signals" },
+  { source: "/forecast", destination: "/lab/forecasts" },
+  { source: "/insights", destination: "/lab/insights" },
+  { source: "/alerts", destination: "/market/activity" },
   // INTEL
   { source: "/news", destination: "/intel/news" },
   { source: "/filings", destination: "/intel/filings" },
@@ -78,7 +80,7 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   { source: "/ai", destination: "/lab/system/ai" },
   // Hub indexes → default sub-tab
   { source: "/markets", destination: "/market/overview" },
-  { source: "/signals", destination: "/signals/predictions" },
+  { source: "/signals", destination: "/market/signals" },
   { source: "/intel", destination: "/intel/news" },
   { source: "/lab", destination: "/lab/backtest" },
   // Stage 5: /lab/system is now a real page (quality + agents + AI mounted
