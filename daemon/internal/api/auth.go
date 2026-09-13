@@ -376,3 +376,38 @@ func (d Deps) registerAuth(mux *http.ServeMux) {
 func withUser(r *http.Request, uid int64) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), userKey{}, uid))
 }
+
+// requireAdmin refuses any caller who is not the admin account, writing the
+// error response itself; a false return means the handler must return at once.
+//
+// Until now IsAdmin was decorative. It is set at signup (the first account
+// created becomes admin), stored on the users row, and handed to the browser
+// in the login and /api/auth/me payloads -- and then checked by NOTHING. No
+// handler in this daemon consulted it, and the web client only declares it as
+// a type field. Every authenticated account therefore had identical authority,
+// so "admin" described a badge rather than a permission.
+//
+// FAILS CLOSED on a database with no admin row. AdminUserID returns (0, nil)
+// in that case, and treating "nobody is admin" as "everybody passes" is how a
+// gate inverts under exactly the condition that should shut it -- a restored
+// or half-migrated database.
+//
+// 403, not 404: the caller is authenticated, so hiding the route's existence
+// buys nothing, and a plain refusal is easier to diagnose than a lie.
+func (d Deps) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	uid := userID(r)
+	if uid == 0 {
+		httpErr(w, http.StatusUnauthorized, "authentication required")
+		return false
+	}
+	admin, err := d.St.AdminUserID(r.Context())
+	if err != nil {
+		httpInternal(w, err)
+		return false
+	}
+	if admin == 0 || uid != admin {
+		httpErr(w, http.StatusForbidden, "admin only")
+		return false
+	}
+	return true
+}

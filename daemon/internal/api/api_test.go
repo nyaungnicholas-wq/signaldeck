@@ -96,6 +96,7 @@ func newTestServer(t *testing.T, mutate func(*config.Config)) (*httptest.Server,
 	mux.HandleFunc("GET /api/trends", d.trends)
 	mux.HandleFunc("GET /api/agents", d.agents)
 	mux.HandleFunc("POST /api/subscribe", d.subscribe)
+	mux.HandleFunc("GET /api/hud", d.hud) // owner-only; see hudadmin_test.go
 	srv.Config.Handler = d.secure(mux)
 	srv.Start()
 	return srv, st, d

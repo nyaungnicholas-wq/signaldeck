@@ -1417,7 +1417,23 @@ func (d Deps) agents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, runs)
 }
 
+// hud mirrors a SEPARATE project's live trading dashboard (stock-trader
+// PUSH-20), stored verbatim by internal/hud and served here untouched.
+//
+// ADMIN ONLY. The payload is not SignalDeck's own published paper book -- it
+// is a real brokerage account: account.cash, account.equity,
+// account.buying_power, account.day_pnl, the open positions list, the trade
+// history, and strategy.config/strategy.flags, which together are the complete
+// tuned parameter set of a live strategy. The daemon passes the blob through
+// without parsing it, so it cannot redact a field it does not model and the
+// exposure grows with whatever that project adds next.
+//
+// Being behind requiresAuth was never sufficient. Authentication answers "is
+// this somebody", and this route needs "is this the owner".
 func (d Deps) hud(w http.ResponseWriter, r *http.Request) {
+	if !d.requireAdmin(w, r) {
+		return
+	}
 	payload, fetchedAt, ok, err := d.St.GetHud(r.Context())
 	if err != nil {
 		httpInternal(w, err)
