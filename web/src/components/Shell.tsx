@@ -297,6 +297,13 @@ function AuthChip() {
           // app chrome to a signed-out user. (The data itself was safe — the
           // daemon 401s — but the flash-of-dashboard is the exact thing AuthGate
           // exists to prevent.) A hard load remounts the gate and re-checks.
+          //
+          // The rule below arrived with eslint-config-next 16.3 and fires on
+          // exactly the behaviour this line wants. It is right in general and
+          // wrong here: router.push/replace is a soft navigation, which is the
+          // defect described above. Disabled on this one line, with the reason,
+          // rather than left as a standing warning nobody reads.
+          // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a hard load is required to remount AuthGate after logout
           .finally(() => window.location.assign("/login"));
       }}
       title={`signed in as ${me.username} — click to log out`}

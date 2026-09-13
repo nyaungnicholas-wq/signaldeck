@@ -99,3 +99,11 @@ graphify-out/
 # uploads it as the go-coverage artifact; a committed copy would be stale the
 # moment any test changes.
 daemon/coverage.out
+
+# Compiled daemon binaries. daemon/*.exe was ignored; the extensionless macOS
+# and Linux builds were not, so two stale 2026-08-02 Mach-O artifacts totalling
+# 32.7 MB were tracked, shipped in every clone, pulled into the Docker build
+# context by `COPY daemon/ ./`, and carried the original developer absolute home
+# path inside them. Nothing references either file.
+daemon/signaldeckd
+daemon/compact_proof

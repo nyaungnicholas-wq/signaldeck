@@ -201,15 +201,25 @@ working correctly.
 
 ## Known deployment gaps
 
-- The `ops/*.plist` scheduling files are macOS launchd and several still contain
-  absolute paths from the original development machine. They need porting to
-  cron or systemd timers for a Linux host.
+- The `ops/*.plist` scheduling files are macOS launchd, and 18 of the 22 tracked
+  ones still contain absolute paths from the original development machine. They
+  are dead weight on the current host, which is Windows and runs the fleet from
+  Scheduled Tasks (`ops/install-windows-tasks.ps1`), and they would need porting
+  to cron or systemd timers for a Linux host. Nothing loads them here.
 - `ops/signaldeck-ctl.sh` no longer hardcodes a dev-machine path (its paths are
   now `$REPO`-relative); this gap is closed. The `ops/*.plist` files above are not.
 - There is no reverse-proxy or rate-limit config here. `SIGNALDECK_RATE_RPS` and
   `SIGNALDECK_RATE_BURST` exist in the daemon but I have not verified they are
   active under load.
-- No CI. Builds and tests are run locally.
+- **The quarterly second-machine DR drill in `ops/GO-LIVE.md` has never been
+  executed.** The box is unticked and no execution date is recorded anywhere. The
+  weekly `com.signaldeck.restore` rehearsal proves the *backup file* restores;
+  nothing has ever proved the *procedure* works on a machine that is not this one.
+  The runbook is also still macOS/launchd-shaped -- it says to restore "on a Mac
+  that isn't this one" and "reinstall the launchd fleet" -- so as written it could
+  not be executed against the current Windows host even if a second machine were
+  available. Treat the recovery time in `ops/DR_RUNBOOK.md` as an estimate that
+  has not been measured.
 
 ## Container deploys: how provenance is proved
 
