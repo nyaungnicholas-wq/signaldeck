@@ -1453,6 +1453,28 @@ func (s *Store) RecentWorkerRuns(ctx context.Context, limit int) ([]md.WorkerRun
 // that was actually spent, which makes the bar easier to clear the longer the
 // logs rotate — the exact opposite of the monotonicity the ledger claims.
 // Refusals and same-day skips ("skip — …") took no look and stay prunable.
+// ProvenanceWorker writes rows that OUTLIVE its own run record, so its
+// history is kept far deeper than the 20-row floor.
+//
+// The 20-row floor is a liveness floor, not a provenance one: it answers "is
+// this worker running?". For a 10-minute worker it is 3.3 hours, and measured
+// 2026-09-13 the high-cadence workers really do retain only ~3.7 hours, so a
+// forecast made yesterday could not be tied to the run that produced it.
+//
+// prediction-runner is the case that matters: every predictions row and every
+// prediction_ledger entry comes from one of its passes. The ledger's `revision`
+// column already pins WHICH CODE produced a row, which is the stronger claim
+// and is unaffected by any of this; what was missing is the operational half --
+// when the pass ran, what it reported, whether it was degraded.
+//
+// Cheap, precisely because it is narrow: at a 10-minute cadence 5000 rows is
+// about 34 days for this one worker, against a table that currently holds 3276
+// rows in total.
+const ProvenanceWorker = "prediction-runner"
+
+// ProvenanceRunsKept is the per-worker depth for ProvenanceWorker.
+const ProvenanceRunsKept = 5000
+
 func (s *Store) PruneWorkerRuns(ctx context.Context, keep int) error {
 	_, err := s.w.ExecContext(ctx, `
 		DELETE FROM worker_runs WHERE id NOT IN
@@ -1462,7 +1484,13 @@ func (s *Store) PruneWorkerRuns(ctx context.Context, keep int) error {
 		     SELECT id, ROW_NUMBER() OVER
 		       (PARTITION BY worker ORDER BY started_at DESC, id DESC) AS rn
 		     FROM worker_runs) WHERE rn <= 20)
-		AND NOT (worker='research-loop' AND detail LIKE 'searched a%')`, keep)
+		AND id NOT IN
+		  (SELECT id FROM (
+		     SELECT id, ROW_NUMBER() OVER
+		       (PARTITION BY worker ORDER BY started_at DESC, id DESC) AS rn
+		     FROM worker_runs WHERE worker = ?) WHERE rn <= ?)
+		AND NOT (worker='research-loop' AND detail LIKE 'searched a%')`,
+		keep, ProvenanceWorker, ProvenanceRunsKept)
 	return err
 }
 
