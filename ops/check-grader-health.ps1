@@ -264,6 +264,68 @@ try {
     Remove-Item -LiteralPath $tmpL -ErrorAction SilentlyContinue
 }
 
+
+# LEDGER IDENTITIES. A second entry for a (symbol, horizon, bar) is a SUPERSEDING
+# claim, not corruption: the ledger records every prediction the runner emitted,
+# and the highest seq is the operative one (see the schema banner). It is
+# counted here because it should be RARE and because it carries a real cost --
+# `features` keeps only the latest vector, so a superseded entry's feature_hash
+# can no longer be re-derived from persisted data. The chain is unaffected;
+# VerifyLedger rehashes from the stored hash.
+#
+# 335 measured 2026-09-13 (248 pre-epoch, 87 post-epoch, 15 disagreeing on
+# cal_prob), newest appended 2026-08-04 and none since. The bound catches a
+# RECURRENCE -- a re-prediction loop quietly doubling the audit trail -- rather
+# than the dormant history, which cannot be removed from a write-once table.
+$maxDupIdentities = 400   # measured 335 on 2026-09-13; ratchet DOWN, never up
+$pyDup = @'
+import sqlite3, sys
+
+conn = None
+try:
+    conn = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+    n = conn.execute(
+        "select count(*) from (select symbol_id, horizon, bar_ts "
+        "from prediction_ledger group by symbol_id, horizon, bar_ts "
+        "having count(*) > 1)").fetchone()[0]
+    conflicting = conn.execute(
+        "select count(*) from (select symbol_id, horizon, bar_ts "
+        "from prediction_ledger group by symbol_id, horizon, bar_ts "
+        "having count(distinct cal_prob) > 1)").fetchone()[0]
+    print("%d|%d" % (n, conflicting))
+except sqlite3.OperationalError as e:
+    print("SKIP:%s" % e)
+except Exception as e:
+    print("ERROR:%s" % e, file=sys.stderr)
+    sys.exit(2)
+finally:
+    if conn is not None:
+        conn.close()
+'@
+
+$tmpD = Join-Path ([System.IO.Path]::GetTempPath()) ("sd_ledgerdup_{0}.py" -f [guid]::NewGuid().ToString('N'))
+try {
+    Set-Content -LiteralPath $tmpD -Value $pyDup -Encoding ASCII
+    $dupOut = (& python $tmpD $dbPath 2>&1 | Where-Object { $_ -match '\S' } | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Output "LEDGER IDENTITIES: unreadable ($dupOut)"
+    } elseif ($dupOut -like 'SKIP:*') {
+        Write-Output "LEDGER IDENTITIES: SKIPPED ($dupOut)"
+    } elseif ($dupOut -match '^(\d+)\|(\d+)$') {
+        $dups = [int]$matches[1]
+        $conflicting = [int]$matches[2]
+        if ($dups -gt $maxDupIdentities) {
+            Set-Unhealthy ("LEDGER IDENTITIES: {0} superseded claim(s), {1} disagreeing on cal_prob (max {2})" -f $dups, $conflicting, $maxDupIdentities)
+        } else {
+            Write-Output ("LEDGER IDENTITIES: {0} superseded ({1} conflicting), max {2}" -f $dups, $conflicting, $maxDupIdentities)
+        }
+    } else {
+        Write-Output "LEDGER IDENTITIES: unexpected output ($dupOut)"
+    }
+} finally {
+    Remove-Item -LiteralPath $tmpD -ErrorAction SilentlyContinue
+}
+
 if ($failed) {
     Write-Output 'RESULT: unhealthy'
     # The captured findings ARE the alert body: a page saying only "grader

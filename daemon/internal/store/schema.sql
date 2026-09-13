@@ -413,6 +413,31 @@ CREATE INDEX IF NOT EXISTS idx_fundamentals_sym ON fundamentals (symbol_id, metr
 -- those are the mutable working state (outcomes get resolved later); this is the
 -- immutable proof of WHAT WAS CLAIMED, WHEN — the point being that it cannot be
 -- back-dated after the outcome is known.
+--
+-- MORE THAN ONE ENTRY PER (symbol_id, horizon, bar_ts) IS LEGAL, AND THE RULE
+-- FOR READING THEM IS: THE HIGHEST seq IS THE OPERATIVE CLAIM. Earlier entries
+-- for the same identity are SUPERSEDED claims, and they are kept on purpose --
+-- this table records every prediction the runner emitted, so deleting or
+-- refusing the second one would make the log assert that fewer claims were made
+-- than actually were. That is the opposite of what an audit trail is for.
+--
+-- There is deliberately NO UNIQUE constraint on the identity key. Adding one
+-- would not "clean up" anything: it cannot remove the rows already here (this
+-- table is write-once), and going forward it would silently drop the very
+-- second claim the ledger exists to record.
+--
+-- Measured 2026-09-13: 335 of ~499,600 entries are second-or-later claims for
+-- an identity (248 pre-epoch, 87 post-epoch), 15 of which disagree on cal_prob.
+-- The newest was appended 2026-08-04; none since. ops/check-grader-health.ps1
+-- counts them so a recurrence is noticed rather than accumulating quietly.
+--
+-- THE HONEST LIMIT, since the ordering rule does not remove it: `features`
+-- keys on (symbol_id, horizon, ts, version) and therefore keeps only the LATEST
+-- vector, so for a superseded entry the stored feature_hash can no longer be
+-- re-derived from persisted features. The chain itself is unaffected --
+-- VerifyLedger rehashes each row from its STORED feature_hash, so a duplicate
+-- breaks no link and intact stays true -- but an auditor re-deriving hashes
+-- from source data can only reproduce the operative entry of such a pair.
 CREATE TABLE IF NOT EXISTS prediction_ledger (
   seq           INTEGER PRIMARY KEY AUTOINCREMENT, -- monotonic append order (chain index)
   predicted_at  INTEGER NOT NULL,   -- wall-clock unix seconds when the entry was appended
