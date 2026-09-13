@@ -153,11 +153,20 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
   }
   if ($logLeaf) {
     if ($isPs) {
-      # PowerShell needs -Command for a redirect too; *>> captures every stream
-      # (5.1 supports it), which is the -File equivalent of `>> log 2>&1`.
+      # PowerShell needs -Command for a redirect too. `*>&1 | Out-File`
+      # rather than a bare `*>>`: WinPS 5.1's `*>>` is Out-File's UNICODE
+      # default, so it writes UTF-16LE with a BOM and NUL-interleaved bytes
+      # and `grep` returns 0 matches on lines that demonstrably exist.
+      # Measured 2026-09-13: logs/check-grader-health.log and
+      # logs/check-task-health.log were both UTF-16LE on disk, while every
+      # bash-launched task's log (redirected inside bash) was UTF-8. A health
+      # log the usual tools cannot read is a health log nobody reads.
+      #
+      # `*>&1` keeps the all-streams capture the bare `*>>` gave, so this is
+      # still the -File equivalent of `>> log 2>&1`; only the encoding moves.
       $logWin = Join-Path $repo ('logs\' + $logLeaf)
       $inner = "& '$scriptWin'" + $(if ($rest.Count) { ' ' + ($rest -join ' ') } else { '' }) +
-      " *>> '$logWin'"
+      " *>&1 | Out-File -FilePath '$logWin' -Append -Encoding utf8"
       $argLine = '-NoProfile -ExecutionPolicy Bypass -Command "' + $inner + '"'
     }
     else {
