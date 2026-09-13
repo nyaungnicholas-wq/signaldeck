@@ -183,7 +183,7 @@ public. Read each provider's terms before hosting a copy.
 - [`docs/DESIGN_DIRECTIONS.md`](docs/DESIGN_DIRECTIONS.md) — the three directions weighed and the one chosen.
 - [`docs/PUBLIC_RELEASE_PLAN.md`](docs/PUBLIC_RELEASE_PLAN.md) — architecture, data boundaries, costs, rollback, approvals still needed.
 - [`docs/COMPETITION.md`](docs/COMPETITION.md) — Congressional App Challenge materials, allowed and disallowed claims, AI disclosure, FirstCommit note.
-- [`audits/2026-09-08-release-ledger.md`](audits/2026-09-08-release-ledger.md) — this release pass: findings, root causes, repairs, verification.
+- [`audits/2026-09-08-release-reaudit.md`](audits/2026-09-08-release-reaudit.md) — this release pass: findings, root causes, repairs, verification.
 - `proofs/` — dated evidence documents (freeze, lift, reconciliation, harness verification); `repro/` — pinned grading snapshot; `PREREGISTRATION.md` — the frozen grading protocol; `STORAGE.md`, `DEPLOY.md`, `ops/DR_RUNBOOK.md`, `ops/GO-LIVE.md`.
 
 ## Credits and AI assistance

@@ -324,6 +324,11 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
         onChange={(e) => setQuery(e.target.value)}
         onFocus={loadScreener}
         placeholder="Add symbol..."
+        // A placeholder is NOT an accessible name: it is not exposed as one by
+        // every screen reader, and it disappears the moment the field has text,
+        // so a user who navigates back to it hears an unlabelled edit box. The
+        // sibling controls on /watchlist/compare already carry aria-label.
+        aria-label="Add symbol to watchlist"
         className="panel w-64 px-3 py-2 text-sm mono focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
         style={{ backgroundColor: "var(--bg)" }}
       />
