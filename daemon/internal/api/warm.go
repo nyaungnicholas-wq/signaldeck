@@ -136,6 +136,16 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	// trailing daily bars per active symbol, so a cold build must land on the
 	// warmer, never on the first visitor. Default query (21d / stocks / 50).
 	warmBody("/api/xs-factor", xsFactorWarmKey(d.St), sharedXSFactorSWR, d.xsFactor)
+	// /api/research-ledger goes LAST: it is the most expensive build here and
+	// the only one on the ANONYMOUS surface, so it must not delay the routes
+	// above it -- the ordering rule this file opens with.
+	//
+	// Caching it alone was not enough. Measured 2026-09-13 on a freshly
+	// deployed daemon: the first call did not return inside 120s, the second
+	// took 75s, and only the third was served from cache (1.8ms). SWR protects
+	// every visitor EXCEPT the first one after a restart, and on a published
+	// deployment that visitor is anonymous and unauthenticated.
+	warmBody("/api/research-ledger", d.St.CacheKey()+"|research-ledger", sharedResearchLedgerSWR, d.researchLedger)
 	return nil
 }
 
