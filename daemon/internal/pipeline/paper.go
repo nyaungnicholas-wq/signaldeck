@@ -369,6 +369,57 @@ func (w *PaperTrader) buildStep(
 			if !wantExit {
 				continue // still holding
 			}
+			// The fill window, which was enforced on ENTRIES only. Entries have
+			// `if fillBar.Ts <= cur.LastBarTs { continue }` above; exits had no
+			// lower bound at all. planExit's branches check only the upper one
+			// (barrier: `fillBar.Ts > asof`; the forced flatten additionally has
+			// `fb.Ts <= pos.OpenedTs`), and planExit is not even given `cur`, so
+			// no lower bound was reachable inside it. A stale LatestPrediction
+			// flip, or a barrier bar that arrives or is revised late, could
+			// therefore fill an exit against a bar the book had already stepped
+			// past -- booking P&L at a price that was not available at the time
+			// the step claims to have happened. buildStep applies with
+			// BarTs: asof, so nothing downstream caught it either. Measured on
+			// pre-epoch history: 43 flagship-1d writes more than three days
+			// behind the running max ts, worst 22 days, 25 of them sells.
+			//
+			// The exit is CLAMPED FORWARD, not dropped and not deferred. The exit
+			// decision itself is sound -- a stop fired, or the probability flipped
+			// -- and only the bar chosen to price it is out of window, so the fix
+			// is to price it at the first bar the book has not yet consumed. That
+			// is the same rule entries follow, and unlike a stale bar it is a
+			// price that was really available when the step claims to have
+			// happened.
+			//
+			// Deferring instead would not terminate: the trigger is usually a
+			// stale prediction that does not change, so the next pass would
+			// re-derive the same out-of-window bar and defer again, holding the
+			// position and writing a DQ event every pass. Only the genuinely
+			// undecidable case -- no bar at all between the cursor and asof --
+			// waits, and that one does resolve as soon as a bar arrives.
+			if plan.fillBar.Ts <= cur.LastBarTs {
+				stale := plan.fillBar.Ts
+				fb, ok, err := w.St.BarAtOrAfter(ctx, s.ID, md.TF1d, cur.LastBarTs+1)
+				if err != nil {
+					return apply, refused, err
+				}
+				if !ok || fb.Open <= 0 || fb.Ts > asof {
+					log.Printf("paper-trader[%s] WARNING BACK-DATED EXIT %s: %q wants bar %d, at or before the cursor %d, and no bar exists in (%d, %d] to reprice it — deferred, %.4f still held",
+						strategy, s.Symbol, plan.reason, stale, cur.LastBarTs, cur.LastBarTs, asof, pos.Qty)
+					sid := s.ID
+					_ = w.St.InsertDQ(ctx, md.DQEvent{SymbolID: &sid, Ts: asof, Kind: "paper_backdated_exit",
+						Detail: fmt.Sprintf("%s: %q wants fill bar %d <= cursor %d and no in-window bar exists; deferred, %.4f held",
+							strategy, plan.reason, stale, cur.LastBarTs, pos.Qty)})
+					continue
+				}
+				log.Printf("paper-trader[%s] BACK-DATED EXIT %s: %q wanted bar %d, at or before the cursor %d — repriced at %d",
+					strategy, s.Symbol, plan.reason, stale, cur.LastBarTs, fb.Ts)
+				sid := s.ID
+				_ = w.St.InsertDQ(ctx, md.DQEvent{SymbolID: &sid, Ts: asof, Kind: "paper_backdated_exit",
+					Detail: fmt.Sprintf("%s: %q wanted fill bar %d <= cursor %d; repriced at %d",
+						strategy, plan.reason, stale, cur.LastBarTs, fb.Ts)})
+				plan.fillBar = fb
+			}
 			adv, err := w.advUSD(ctx, s.ID, plan.fillBar.Ts)
 			if err != nil {
 				return apply, refused, err

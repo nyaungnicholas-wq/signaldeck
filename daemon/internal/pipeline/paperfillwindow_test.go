@@ -18,6 +18,14 @@ import (
 //	       mutation-sensitive: deleting the guard fails that test with
 //	       "BBB filled at ts=259200 ... at or behind the cursor".
 //
+//	       That guard, and that test, cover ENTRIES ONLY. This comment said
+//	       "buildStep refuses", which read as though the bound were applied to
+//	       every fill; it was applied in the entry loop. The EXIT path had no
+//	       lower bound at all until 2026-09-13 — planExit is not even passed the
+//	       cursor — and its own bound and mutation-proof now live beside it in
+//	       paperexitwindow_test.go. Unlike the upper bound below, that one IS
+//	       reachable and does have an honest fixture.
+//
 //	UPPER  fillBar.Ts > asof. Deleting this guard breaks NO test, and the
 //	       finding is that no test can break, because it is unreachable:
 //
