@@ -94,3 +94,8 @@ ops/STOP-OVERNIGHT
 daemon/*.exe
 # Graphify page-graph cache: regenerated on demand, never a build input.
 graphify-out/
+
+# Go coverage profile: a build artifact. CI regenerates it every run and
+# uploads it as the go-coverage artifact; a committed copy would be stale the
+# moment any test changes.
+daemon/coverage.out
