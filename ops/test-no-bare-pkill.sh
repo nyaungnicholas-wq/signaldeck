@@ -60,6 +60,28 @@ EOF
   fi
 done
 
+# CRLF in a tracked shell script. .gitattributes marks *.sh as -text precisely
+# so a Windows checkout cannot introduce it -- but -text preserves whatever the
+# repo already holds, so a file COMMITTED with CRLF keeps it forever and the
+# attribute's promise (a shebang never ends up with a trailing carriage return) silently does
+# not hold. Four scripts were in that state: docker-build.sh (121 lines),
+# signaldeck-ctl.sh (321), revalidate-structural.sh (81) and lib-portable.sh
+# (one mixed line). It cost ops/test-docker-build.sh 15 of 18 assertions on
+# Linux CI while passing 18/18 under Windows Git Bash, which tolerates CRLF --
+# and it is the same reason `bash ops/signaldeck-ctl.sh deploy` failed under
+# WSL. Checked against the INDEX, not the working tree, because the committed
+# bytes are what CI and the container get.
+for f in $(git -C "$OPS/.." ls-files '*.sh' 2>/dev/null); do
+  # Byte count, not a \r grep: that pattern is unreliable across the greps this
+  # repo runs under and was observed matching EVERY file. tr -dc keeps only CR
+  # bytes, so the count is unambiguous.
+  cr=$(git -C "$OPS/.." show ":$f" 2>/dev/null | tr -dc '\r' | wc -c | tr -d ' ')
+  if [ "${cr:-0}" -gt 0 ]; then
+    printf 'FAIL %s has CRLF line endings (breaks on Linux; see .gitattributes)\n' "$f"
+    FAIL=$((FAIL + 1))
+  fi
+done
+
 for sym in 'sd_kill_hard()' 'sd_is_running()'; do
   if ! grep -n -F "$sym" "$OPS/lib-portable.sh" >/dev/null 2>&1; then
     printf 'FAIL lib-portable.sh missing %s\n' "$sym"
