@@ -10,10 +10,39 @@
 #   fly launch --no-deploy --name <your-app-name>   # once, to create the app
 #   fly volumes create signaldeck_data --size 10 --region <region>
 #   fly secrets set ALPACA_KEY=... ALPACA_SECRET=...
-#   fly deploy --build-arg GIT_REV=$(git rev-parse HEAD)
+#   fly deploy --build-arg GIT_REV=$(git rev-parse HEAD) \
+#              --build-arg NEXT_PUBLIC_SITE_URL=https://<your-app>.fly.dev
 #
 # GIT_REV is not optional. The daemon refuses to start from a build it cannot
 # attribute to a commit, because rows it writes could not then be graded.
+#
+# NEXT_PUBLIC_SITE_URL is not optional either, and it FAILS QUIETLY. Next
+# inlines NEXT_PUBLIC_* at BUILD time, so it cannot be supplied as a runtime
+# [env] entry the way everything below is -- it has to be a --build-arg (the
+# Dockerfile declares the ARG at line 57 for exactly this reason). Omitted,
+# web/src/lib/site.ts falls back to http://localhost:8323 and the deployed
+# site serves robots.txt, sitemap.xml, every canonical link and every og:image
+# pointing at localhost. Nothing errors; the pages render perfectly; the
+# search engine indexes an address nobody can reach.
+#
+# The value is deliberately NOT written into this file. It is the public
+# hostname, which is a deploy-time input like SIGNALDECK_ALLOWED_HOSTS below,
+# and a hostname committed here would be wrong for every deployment but one.
+#
+# WIDER POINT: `fly deploy` builds this Dockerfile DIRECTLY and therefore never
+# runs ops/docker-build.sh, which is where this repository keeps its build
+# guards. Going this way you lose all of them at once:
+#   - the clean-working-tree refusal (an image built from uncommitted edits
+#     carries a GIT_REV that does not describe what is inside it);
+#   - the refusal when NEXT_PUBLIC_SITE_URL is unset, with its explicit
+#     SIGNALDECK_ALLOW_LOCALHOST_SITE_URL=1 opt-out for local images;
+#   - the org.opencontainers.image.revision label, which is what
+#     ops/oracle-verify.sh reads back to confirm the running image is the
+#     commit it claims to be.
+# DEPLOY.md and docs/PUBLIC_RELEASE_PLAN.md both route the operator through
+# ops/docker-build.sh for exactly this reason. Prefer building with the script
+# and deploying that image; if you do use `fly deploy`, those three checks did
+# not run and the --build-arg above is the only thing standing in for one.
 
 app = "signaldeck-demo"
 primary_region = "iad"
