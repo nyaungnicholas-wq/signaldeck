@@ -134,8 +134,28 @@ def main() -> int:
 
     rc = write_heartbeat(args.db, success, _registry_rows(args.registry),
                          _grader_sha256(args.grader), error)
-    label = "ok" if args.success else ("ok (publication REFUSED)" if args.refused else "FAILED")
-    print(f"grader_heartbeat: recorded {label}" + (f" ({args.error})" if args.error else ""))
+    # ONLY claim a recording when one happened. This print used to run
+    # unconditionally, so a failed write produced two adjacent lines in
+    # logs/accuracy-registry.log:
+    #     grader_heartbeat: write failed: database is locked     (stderr)
+    #     grader_heartbeat: recorded ok (publication REFUSED)    (stdout)
+    # Observed on 2026-09-12. The exit code was right and the caller did print
+    # "heartbeat write failed (non-fatal)", but the line directly above it said
+    # the opposite, and stdout is what a reader and a log scraper see first.
+    #
+    # It matters more than a cosmetic log bug because of what a missing
+    # heartbeat does downstream: /api/accuracy is fail-closed on a heartbeat
+    # older than GraderMaxAge, so an unwritten heartbeat turns an honest
+    # "REFUSED: <collapse-gate reason>" into "REFUSED_STALE" -- replacing the
+    # real, specific reason publication was withheld with a claim about the
+    # grader being dead, while the grader in fact ran minutes earlier.
+    if rc == 0:
+        label = "ok" if args.success else ("ok (publication REFUSED)" if args.refused else "FAILED")
+        print(f"grader_heartbeat: recorded {label}" + (f" ({args.error})" if args.error else ""))
+    else:
+        print("grader_heartbeat: NOT RECORDED -- the heartbeat write failed (see stderr above). "
+              "/api/accuracy will report REFUSED_STALE rather than the real refusal reason.",
+              file=sys.stderr)
     return rc
 
 
