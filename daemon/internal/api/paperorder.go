@@ -176,10 +176,33 @@ func (d Deps) paperOrder(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 409, "book advanced concurrently; retry")
 		return
 	}
-	writeJSON(w, map[string]any{
+	// requestedQty is echoed because a buy of N units does NOT fill N units and
+	// the response had no way to show it. EnterLong is BUDGET-denominated: this
+	// handler passes `body.Qty * bar.Open` as a budget, and EnterLong solves
+	// notional = budget / (1 + spread + impact), so execution cost comes OUT of
+	// the requested size rather than being added on top. fill.Qty was always the
+	// truthful filled amount, but nothing beside it said what was asked for, so
+	// the shortfall was invisible unless the caller remembered their own input.
+	//
+	// fill.UnfilledNotional does not cover this: it is populated ONLY when the
+	// ADV participation cap binds, not for the cost-driven shrinkage that
+	// happens on every order.
+	//
+	// Reporting it rather than changing it, deliberately. EnterLong's
+	// budget-denominated contract is shared with the automated books; making
+	// the manual path fill exactly N would give this system two different
+	// execution models, and the quieter of the two bugs is not the one that
+	// tells you less.
+	resp := map[string]any{
 		"ok": true, "strategy": strategy, "symbol": sym.Symbol, "market": sym.Market,
 		"fill": fill, "quoteBarTs": in.Bar.Ts, "quoteAgeS": now - in.Bar.Ts,
 		"cash": newCash, "equity": equity,
-		"label": "simulated manual paper book - not live money, not advice",
-	})
+		"requestedQty": body.Qty,
+		"label":        "simulated manual paper book - not live money, not advice",
+	}
+	if d := body.Qty - fill.Qty; d > 1e-9 {
+		resp["qtyShortfall"] = d
+		resp["qtyNote"] = "filled less than requested: execution cost is taken out of the order's notional, not added to it"
+	}
+	writeJSON(w, resp)
 }
