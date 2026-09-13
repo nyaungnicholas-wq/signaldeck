@@ -43,7 +43,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer db.Close()
+	defer db.Close() //nolint:errcheck
 
 	var id int64
 	if err := db.QueryRow("SELECT id FROM symbols WHERE symbol=? LIMIT 1", sym).Scan(&id); err != nil {
@@ -61,7 +61,7 @@ func main() {
 		}
 		bars = append(bars, b)
 	}
-	rows.Close()
+	rows.Close() //nolint:errcheck
 
 	rv, ts, x := harrv.RVSeries(bars)
 	goVals := map[int64]float64{}
@@ -76,7 +76,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	sc := bufio.NewScanner(f)
 	sc.Scan() // header
 	var n, mismatch int

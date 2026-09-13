@@ -30,7 +30,7 @@ func barsJSON(rows []string) string {
 func TestBackfillDaily_DropsVendorPadsAndKeepsRealBars(t *testing.T) {
 	fastPages(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, barsJSON([]string{
+		_, _ = fmt.Fprint(w, barsJSON([]string{
 			// real session
 			`{"t":"2025-04-02T04:00:00Z","o":1.19,"h":1.31,"l":1.15,"c":1.22,"v":316100}`,
 			// the genuine final trading day: violent, and it MUST survive
@@ -93,7 +93,7 @@ func TestBackfillDaily_DropsVendorPadsAndKeepsRealBars(t *testing.T) {
 func TestBackfillMinute_KeepsFlatZeroVolumeBars(t *testing.T) {
 	fastPages(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, barsJSON([]string{
+		_, _ = fmt.Fprint(w, barsJSON([]string{
 			`{"t":"2025-04-02T14:30:00Z","o":1.20,"h":1.21,"l":1.19,"c":1.20,"v":1000}`,
 			`{"t":"2025-04-02T14:31:00Z","o":1.20,"h":1.20,"l":1.20,"c":1.20,"v":0}`,
 			`{"t":"2025-04-02T14:32:00Z","o":1.20,"h":1.20,"l":1.20,"c":1.20,"v":0}`,

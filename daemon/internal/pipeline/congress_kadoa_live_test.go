@@ -36,9 +36,10 @@ func TestCongressPollerKadoaFallbackLive(t *testing.T) {
 
 	var senateCount, houseCount int
 	for _, r := range rows {
-		if r.Chamber == "senate" {
+		switch r.Chamber {
+		case "senate":
 			senateCount++
-		} else if r.Chamber == "house" {
+		case "house":
 			houseCount++
 		}
 	}

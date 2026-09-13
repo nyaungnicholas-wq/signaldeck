@@ -60,7 +60,7 @@ func TestRVForecastRunnerRefusesFormingAndStaleCallBars(t *testing.T) {
 			if err != nil {
 				t.Fatalf("open store: %v", err)
 			}
-			defer s.Close()
+			defer s.Close() //nolint:errcheck
 
 			ctx := context.Background()
 			sym, err := s.UpsertSymbol(ctx, "TEST", md.Stocks, "Test Symbol")
@@ -107,7 +107,7 @@ func TestRVForecastRunnerRefusesFormingAndStaleCallBars_settled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer s.Close() //nolint:errcheck
 
 	ctx := context.Background()
 	sym, err := s.UpsertSymbol(ctx, "TEST", md.Stocks, "Test Symbol")
@@ -158,7 +158,7 @@ func TestRVForecastRunnerFreezesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer s.Close() //nolint:errcheck
 
 	ctx := context.Background()
 	sym, err := s.UpsertSymbol(ctx, "TEST", md.Stocks, "Test Symbol")

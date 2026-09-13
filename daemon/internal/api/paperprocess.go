@@ -48,7 +48,7 @@ func (d Deps) paperProcess(ctx context.Context, strategy string, now int64) map[
 	} else {
 		out["abstention"] = abs
 	}
-	verdict, note := "unknown", ""
+	var verdict, note string // every switch arm below assigns both
 	switch {
 	case err != nil || !ok:
 		if err != nil {

@@ -40,7 +40,7 @@ func TestRVWritesDoNotNeedReaderConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	defer reader.Close() //nolint:errcheck
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	now := time.Now()

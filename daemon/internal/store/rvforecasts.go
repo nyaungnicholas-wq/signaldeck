@@ -109,7 +109,7 @@ func (s *Store) OpenRVForecasts(ctx context.Context, horizon int, limit int) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	var out []RVForecast
 	for rows.Next() {
 		var f RVForecast
