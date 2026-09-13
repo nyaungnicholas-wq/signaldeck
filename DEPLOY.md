@@ -117,7 +117,7 @@ demo people can look at and a private workspace.
 ## Restoring real data
 
 A fresh deploy starts empty and backfills ~2 years. To demo against the full
-13.4M-bar history instead, copy the database onto the volume:
+11.4M-bar history instead (2026-09-13), copy the database onto the volume:
 
 ```bash
 fly ssh console -C "mkdir -p /data"

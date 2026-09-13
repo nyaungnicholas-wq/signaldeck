@@ -433,6 +433,22 @@ def scan(path, extra_literals=(), allow_whole_file_escape=True):
     # RECORDS a superseded one; both directories are unambiguously the latter.
     if "audits" in parts or "proofs" in parts:
         return []
+    # PREREGISTRATION.md is the same category, arrived at from the other
+    # direction: it is FROZEN. Its band tables are pre-registered claims with
+    # their own registration dates, and a frozen document cannot contain a
+    # CURRENT live-record figure by construction -- any match is a coincidence
+    # between a registered band and today's grade.
+    #
+    # It also cannot be marked. ops/accuracy-registry.sh hashes this file and
+    # compares it against the prereg-document record in the chain, so adding a
+    # SUPERSEDED-SNAPSHOT banner would change the digest and the publishing path
+    # would refuse with "UNREGISTERED PROTOCOL DOCUMENT" -- a failure that reads
+    # like tampering and is really just an edit. Exempting by path is the only
+    # move that does not either break the chain or leave this gate permanently
+    # red. Observed 2026-09-13: a fresh grade moved the current literal to
+    # 62.0%, which is the registered vol21 band from 2026-08-14.
+    if os.path.basename(path) == "PREREGISTRATION.md":
+        return []
     banned = list(SUPERSEDED_LITERALS) + list(extra_literals)
     hits = []
     inside = False

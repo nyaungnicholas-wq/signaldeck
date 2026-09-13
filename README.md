@@ -22,7 +22,7 @@ Not an auto-trader. Not financial advice. A measuring instrument.
 | Directional (up/down) forecasting | **Retired 2026-07-24** by a pre-registered auto-retire rule; retirement does not lapse | `/accuracy`, `proofs/P2_LIVE_RECORD_RECONCILIATION.md` |
 | Accuracy publication | **Refused** while the graded window holds collapsed cross-sections (2026-07-17 to 2026-08-06); no figure is printed anywhere until it clears | `/`, `/accuracy`, `GET /api/accuracy` |
 | Volatility forecast (HAR realized variance vs random walk and RiskMetrics EWMA) | Pre-registered 2026-09-04 (chain seq 105); accruing, 1 of 60 required trading days; no verdict | `/volatility` |
-| Prediction ledger | Hash-chained, ~477k entries, recomputed on request (`daemon/internal/store/ledgercache.go`) | `/proof` |
+| Prediction ledger | Hash-chained, ~500k entries (2026-09-13; grows ~4k/day), recomputed on request (`daemon/internal/store/ledgercache.go`) | `/proof` |
 | Forecast coverage | ~6–10% of symbols receive a forecast, by design: every measured leg that ranks backwards is dropped, never down-weighted | `/lab/forecasts` |
 | Paper trading | Simulation only: a manual market-order book with a cost model plus the model-driven books; no brokerage, no real money | `/lab/paper` |
 | Freeze history | A P0 documentation freeze was declared and lifted on 2026-08-04; four documents stay marked NOT AUTHORITATIVE and are historical | `proofs/P0_FREEZE.md`, `proofs/P10_FREEZE_LIFT.md`, `DOCS_INDEX.md` |
@@ -161,9 +161,14 @@ calling web work done.
 
 Alpaca (IEX feed) for US stocks, Kraken and TickStream for crypto, FRED for VIX, SEC EDGAR
 for filings and Form 25 delistings, FINRA for short volume, Wikimedia for attention. Raw
-vendor rows are never redistributed: anonymous requests for bars, snapshots, news, scanner
-data or CSV exports answer HTTP 451 (`internal/datalicense`). Only derived analytics are
-public. Read each provider's terms before hosting a copy.
+vendor rows are never redistributed. Two separate gates do that, and they answer
+differently: an anonymous request for bars, snapshots, news, scanner data or a CSV export is
+refused **401** by the auth gate, which runs BEFORE the licence check and so is what an
+anonymous caller actually meets; on a published deployment the licence gate then answers
+**451** to an authenticated caller on a governed route (`internal/datalicense`). That second
+gate is deliberately skipped when the daemon is only reachable privately, so an operator can
+read their own data on their own box. Only derived analytics are public. Read each provider's
+terms before hosting a copy.
 
 ## Security model
 

@@ -39,7 +39,7 @@ Forecast accuracy claims can be difficult for a learner to evaluate when the ori
 
 1. **Landing page (/)** — Show the "publication refused" banner. Say: "This banner means the honesty machinery is working: the graded window has collapsed cross-sections, so no accuracy figures are published." ~15 seconds
 2. **/accuracy** — Show the refusal notice, the plain-English summary, and the dated historical record of the 2026-07-24 retirement (no figures). Say: "The grade was computed, but the publication gate withholds it until the evidence window clears." ~15 seconds
-3. **/proof** — Click "Verify chain" and show the re-verification result. Say: "The hash chain re-verifies end to end; about 477,000 entries." ~15 seconds
+3. **/proof** — Click "Verify chain" and show the re-verification result. Say: "The hash chain re-verifies end to end; about half a million entries." ~15 seconds
 4. **/volatility** — Show the accruing live record for the HAR model (sequence 105). Say: "Pre-registered 2026-09-04; needs 60 distinct trading days; far fewer today; no skill claimed." ~15 seconds
 5. **Sign in** — Authenticate and land on /dashboard. Say: "Session auth with CSRF guard; private workspace unlocks." ~10 seconds
 6. **/dashboard** — Show the overview widgets. Say: "Live data, watchlist shortcuts, and quick links to research and lab tools." ~15 seconds
@@ -118,7 +118,7 @@ Do not assert that all code was personally reviewed or tested, or that AI did no
 | Next.js 16 / React 19 / TypeScript / Tailwind web app with public and private routes | Public pages (/accuracy, /proof, /volatility, /glossary) readiness fix | Authorship of Next.js proxy, session auth, private workspace pages |
 | Python daily grading pipeline and documentation gates | Documentation updates and readiness fix | Authorship of grading pipeline, understanding of every component |
 | Playwright end-to-end tests | | |
-| Hash-chained prediction ledger (~477k entries) with re-verification on /proof | | |
+| Hash-chained prediction ledger (~500k entries, 2026-09-13) with re-verification on /proof | | |
 | Auto-retire rule implemented and triggered 2026-07-24 | | |
 | Volatility forecast pre-registered 2026-09-04 (sequence 105) | | |
 | Paper trading simulation with manual and model-driven books | | |

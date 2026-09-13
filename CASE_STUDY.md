@@ -55,8 +55,9 @@ A Go daemon ingests live market data (Alpaca for US equities, a separate Go
 service for consolidated crypto order books), computes a decomposable score per
 symbol and horizon, measures what usually happened next in comparable historical
 states, and **grades its own past predictions against realised returns**. A
-Next.js app serves the result. Everything lands in one SQLite database — 13.4M
-bars and ~1.5M scored predictions at the time of writing.
+Next.js app serves the result. Everything lands in one SQLite database —
+11.4M bars and ~500k scored predictions as of 2026-09-13. Both grow daily, so
+read them as a scale, not a running total.
 
 ```
 Alpaca REST + WebSocket ──┐

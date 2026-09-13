@@ -1,4 +1,10 @@
 # SignalDeck forecast quality — evidence status, 2026-09-10
+<!-- SUPERSEDED-SNAPSHOT — a DATED evidence snapshot (2026-09-10), not a live
+     claim. Every percentage here is a measurement of one window at that
+     moment, with its own stated dates; the always-up base rates in
+     particular collide by coincidence with whatever the current live record
+     happens to be. Marked at FILE scope because this document is history end
+     to end, which is the case the whole-file banner exists for. -->
 
 Three outcomes, kept apart: **(1) engineering defects repaired** (audits/2026-09-10-forecast-repair-reaudit.md,
 commit 87e7f57, tested, NOT deployed), **(2) historical research** (this file; manifest `forecastplan-exp-v1`

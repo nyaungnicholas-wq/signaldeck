@@ -33,7 +33,7 @@ SignalDeck is a self-grading market-research instrument. A Go daemon records US 
 **Intended user:** Anyone reading a published forecast or the public accuracy record.  
 **Starting question:** What was predicted, when was it frozen, how was it graded, and what is the verdict?  
 **Entry page(s):** `/accuracy`, `/proof`, `/volatility`, `/dashboard` (forecast track record strip).  
-**Required data:** Hash-chained prediction ledger (~477k entries), grader sentences, realized bars, design-effect-corrected intervals, distinct-day gates, QLIKE loss for volatility, 60-distinct-day floor.  
+**Required data:** Hash-chained prediction ledger (~500k entries as of 2026-09-13), grader sentences, realized bars, design-effect-corrected intervals, distinct-day gates, QLIKE loss for volatility, 60-distinct-day floor.  
 **Useful output:** Publication verdict per predictor with grader sentence quoted and labelled; honesty note when verdict is not resolved by intervals; dated historical retirement record (flagship directional model retired 2026-07-24 by pre-registered rule); hash-chain re-verification; live track record with day-count and deduplicated symbol-day gates; skill withheld until gates clear; volatility forecast vs random walk and RiskMetrics EWMA with QLIKE loss.  
 **Necessary explanation:** Hash-chain mechanics; design effect and distinct-day floors; why skill is withheld; what "collapsed window" means (currently refusing 2026-07-17..08-06); why forecast coverage abstains by design (~6-10% of symbols).  
 **Failure and insufficient-evidence states:** Refusal notice (summary + full grader text); "insufficient" cards on volatility (currently 1 of 60 days); withheld skill on track record; publication gate refuses figures over collapsed window.  

@@ -132,7 +132,8 @@ type Config struct {
 	// PublicReads answers "is this route one of the ones we chose to keep
 	// private?" — so every route added later is public by forgetting. That is
 	// the wrong default for a deployment strangers can reach: this daemon
-	// registers 174 routes, and among them are the personal PUSH-20 HUD,
+	// registers 164 routes (161 mux.HandleFunc patterns + 3 mux.Handle,
+	// counted 2026-09-13), and among them are the personal PUSH-20 HUD,
 	// paper-trading positions and the portfolio. Publishing those would be a
 	// different product than the one being published.
 	//
