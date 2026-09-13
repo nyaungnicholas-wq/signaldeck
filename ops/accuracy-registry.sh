@@ -485,6 +485,17 @@ PY
   "$PY" "$SD/tools/live_accuracy.py" --write     || echo "WARN: partials/live_accuracy.md not regenerated on the refusal path" >> "$LOG"
   "$PY" "$SD/tools/live_accuracy.py" --inject $(cat "$SD/partials/INCLUDES.txt")     || echo "WARN: live-accuracy blocks not re-injected on the refusal path" >> "$LOG"
 
+  # §8 of the deck is generated from the DATABASE, not from the registry, so a
+  # publication refusal says nothing about whether those figures are current --
+  # and this branch never regenerated them. deck_facts --inject lives on the
+  # success path only, below this branch's `exit 0`, so across a refusal window
+  # the deck kept publishing a three-week-old measurement while the database
+  # moved on. A refusal is exactly when that window is longest.
+  #
+  # Same WARN-not-fatal treatment as its siblings above: this reads the multi-GB
+  # database, and a slow or failed read must not wedge the grader.
+  "$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md"     || echo "WARN: STRATEGY_DECK.md §8 not re-injected on the refusal path" >> "$LOG"
+
   # The snapshot docs_gate reads. Regenerated on BOTH paths so it states what
   # the grader actually did; left stale it asserted grader OK for 37 days while
   # the registry was REFUSED, and docs_gate printed "clean" the whole time.
