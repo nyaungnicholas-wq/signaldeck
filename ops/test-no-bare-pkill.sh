@@ -33,11 +33,20 @@ for f in "$OPS"/*.sh; do
     case "$line" in
       *"command -v"*) continue ;;
     esac
+
     # Strip quoted string literals before matching. A log line that MENTIONS the
     # tool ("force-kill FAILED (no pkill, no taskkill)") is not an invocation of
     # it, and flagging the error message that documents the fix is how a guard
     # gets a `|| true` bolted onto it. Only code outside quotes can run a command.
-    code="$(printf '%s' "$line" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g')"
+    # `--jq` is gh's OWN built-in filter FLAG, not the standalone binary: gh
+    # links jq internally, so those lines run on a box with no jq installed --
+    # exactly what this guard enforces. Stripped rather than skipping the whole
+    # line, and matched as the flag spelling because the standalone binary is
+    # never invoked as `--jq`; a real `| jq` later on the same line is still
+    # caught. Three lines in lib-offsite-gh.sh (two of them continuations, with
+    # `gh` on the line above) had this check permanently red, and a guard that
+    # is always red is a guard nobody reads.
+    code="$(printf '%s' "$line" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g' -e 's/--jq//g')"
     if printf '%s' "$code" | grep -E '(^|[^[:alnum:]_])(pkill|pgrep|jq)([^[:alnum:]_]|$)' >/dev/null 2>&1; then
       printf 'FAIL %s:%s %s\n' "$base" "$num" "$line"
       FAIL=$((FAIL + 1))

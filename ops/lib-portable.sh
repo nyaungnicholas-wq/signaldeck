@@ -320,12 +320,34 @@ sd_svc_restart() { sd_svc_stop "$1"; sleep 2; sd_svc_start "$1"; }
 # sd_kill_hard NAME — last-resort SIGKILL equivalent for a process that ignored
 # the graceful stop. SQLite under WAL is crash-safe, so this is survivable; a
 # zombie daemon is not, because it holds the port the next start needs.
+#
+# SD_KILL_HARD_REASON is set on failure and is the POINT of this function's
+# contract. It used to return a bare 1 for two unrelated situations -- no kill
+# utility on PATH, and a utility that ran and was refused -- so market-close.sh
+# logged "force-kill FAILED (no pkill, no taskkill)" without having established
+# either clause. Measured 2026-09-12 on this box: taskkill IS on PATH, and the
+# real cause is permission. signaldeckd.exe runs as a SERVICE in session 0 while
+# the backup task runs unelevated in the user session, which cannot even read
+# that process's owner, let alone terminate it. The log blamed a missing tool
+# for an access-denied, which sends the reader to fix the wrong thing.
 sd_kill_hard() {
+  SD_KILL_HARD_REASON=""
+  local found=0 err=""
   if command -v pkill >/dev/null 2>&1; then
-    pkill -9 -x "$1" 2>/dev/null && return 0
+    found=1
+    err=$(pkill -9 -x "$1" 2>&1) && return 0
   fi
   if command -v taskkill >/dev/null 2>&1; then
-    taskkill //F //IM "$1.exe" >/dev/null 2>&1 && return 0
+    found=1
+    err=$(taskkill //F //IM "$1.exe" 2>&1) && return 0
+  fi
+  if [ "$found" -eq 0 ]; then
+    SD_KILL_HARD_REASON="no kill utility on PATH (neither pkill nor taskkill)"
+  else
+    # Collapse to one line; taskkill's refusal is multi-line and the log is
+    # append-only shared with every other backup message.
+    SD_KILL_HARD_REASON="kill utility ran and failed: $(printf '%s' "$err" | tr '
+' '  ' | sed 's/  */ /g')"
   fi
   return 1
 }

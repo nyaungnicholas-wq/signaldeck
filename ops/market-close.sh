@@ -48,7 +48,7 @@ if sd_is_running signaldeckd; then
   # is-daemon-alive check then refused the run: the day's backup vanished with
   # the task still exiting 0. sd_kill_hard falls back to taskkill, which exists.
   if ! sd_kill_hard signaldeckd; then
-    echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: force-kill FAILED (no pkill, no taskkill) — backup will be skipped" >> "$SD/logs/backup-offline.log"
+    echo "$(date '+%Y-%m-%dT%H:%M:%S') market-close: force-kill FAILED (${SD_KILL_HARD_REASON:-reason unavailable}) — backup will be skipped" >> "$SD/logs/backup-offline.log"
   fi
   sleep 5
 fi
