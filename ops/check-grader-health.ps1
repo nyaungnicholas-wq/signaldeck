@@ -190,6 +190,80 @@ if (-not $bash) {
     if ($lpExit -gt 1) { Set-Unhealthy ('LEDGER MANIFEST: ' + ($lpOut | Select-Object -Last 1)) }
 }
 
+
+# LEDGER COVERAGE. A served forecast that never reached the hash chain cannot be
+# proven un-backdated, and nothing measured how many there were.
+#
+# The write is four separate transactions -- UpsertPrediction, then
+# SeedBenchmarkOutcome, then AppendLedger, each with its own BeginTx -- so a
+# process killed between the first and the third leaves a served prediction with
+# no ledger entry. That window is NOT covered by the append's own error handling:
+# measured 2026-09-12, there are 0 ledger_append_error dq events in 14 days and 1
+# ever, while 30 served predictions have no ledger row. Nothing failed; the
+# process died mid-sequence and there was no error to record.
+#
+# n_used > 0 is load-bearing. internal/pipeline/predict_evidence.go writes
+# evidence-only rows with NUsed=0, documented "never graded, never served", one
+# per symbol per trading day so the coverage monitor has a full-universe
+# denominator. Those are CORRECTLY absent from the ledger, which commits served
+# forecasts. Counting them makes this read 56,778 instead of 30 -- a false crisis
+# off by three orders of magnitude, which is what the first pass at this check
+# reported before the denominator was checked.
+#
+# Reported, never back-filled. Appending an entry now for a prediction made days
+# ago would stamp a later predicted_at on an older bar, manufacturing exactly the
+# anteriority the chain exists to prove. These 30 stay uncommitted and counted.
+$maxUnledgered = 50   # measured 30 on 2026-09-12; ratchet DOWN, never up
+$pyLedger = @'
+import sqlite3, sys
+
+LEDGER_START = 1783155600  # first prediction_ledger bar_ts; nothing before it was ever ledgered
+conn = None
+try:
+    conn = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+    n = conn.execute(
+        "select count(*) from predictions p "
+        "left join prediction_ledger l on l.symbol_id=p.symbol_id "
+        "  and l.horizon=p.horizon and l.bar_ts=p.ts "
+        "where l.seq is null and p.n_used > 0 and p.ts >= ?",
+        (LEDGER_START,)).fetchone()[0]
+    total = conn.execute(
+        "select count(*) from predictions where n_used > 0 and ts >= ?",
+        (LEDGER_START,)).fetchone()[0]
+    print("%d|%d" % (n, total))
+except sqlite3.OperationalError as e:
+    print("SKIP:%s" % e)
+except Exception as e:
+    print("ERROR:%s" % e, file=sys.stderr)
+    sys.exit(2)
+finally:
+    if conn is not None:
+        conn.close()
+'@
+
+$tmpL = Join-Path ([System.IO.Path]::GetTempPath()) ("sd_ledgercov_{0}.py" -f [guid]::NewGuid().ToString('N'))
+try {
+    Set-Content -LiteralPath $tmpL -Value $pyLedger -Encoding ASCII
+    $covOut = (& python $tmpL $dbPath 2>&1 | Where-Object { $_ -match '\S' } | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Output "LEDGER COVERAGE: unreadable ($covOut)"
+    } elseif ($covOut -like 'SKIP:*') {
+        Write-Output "LEDGER COVERAGE: SKIPPED ($covOut)"
+    } elseif ($covOut -match '^(\d+)\|(\d+)$') {
+        $unledgered = [int]$matches[1]
+        $servedTot = [int]$matches[2]
+        if ($unledgered -gt $maxUnledgered) {
+            Set-Unhealthy ("LEDGER COVERAGE: {0} served prediction(s) of {1} never reached the chain (max {2})" -f $unledgered, $servedTot, $maxUnledgered)
+        } else {
+            Write-Output ("LEDGER COVERAGE: {0} unledgered of {1} served (max {2})" -f $unledgered, $servedTot, $maxUnledgered)
+        }
+    } else {
+        Write-Output "LEDGER COVERAGE: unexpected output ($covOut)"
+    }
+} finally {
+    Remove-Item -LiteralPath $tmpL -ErrorAction SilentlyContinue
+}
+
 if ($failed) {
     Write-Output 'RESULT: unhealthy'
     # The captured findings ARE the alert body: a page saying only "grader
