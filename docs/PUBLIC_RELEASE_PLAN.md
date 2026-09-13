@@ -67,6 +67,25 @@ On this machine `ops/web-guard.ps1` ("SignalDeck Web Keepalive", every 5 minutes
 - Daemon Rollback: `ops/signaldeck-ctl.sh deploy` builds from a specific commit; redeploy the previous commit to roll back.
 - Web Rollback: rebuild the Next.js image from the previous commit and redeploy the container.
 
+## Pre-release manual gate: the e2e suite
+
+`web/e2e/` holds 8 Playwright specs (smoke, accuracy refusal, manual paper
+book, lab sections, keyboard, personalization, header tools, ux audit). They
+are NOT in CI and deliberately so: they drive a real browser against a live
+DAEMON, and a GitHub runner has neither the daemon nor its ~6 GB gitignored
+database. See the note at the head of web/playwright.config.ts.
+
+Run them by hand before a release, against a running daemon:
+
+```bash
+cd web && npm run e2e
+```
+
+They register or log in a throwaway `e2e-smoke` user, so expect that account
+to exist afterwards. A failure here is a release blocker: these are the only
+checks that exercise the app the way a visitor does, which is the gap
+`npm run build` passing does not cover.
+
 ## Outstanding approvals
 
 | Item | Why it needs the owner | Default if no decision |
