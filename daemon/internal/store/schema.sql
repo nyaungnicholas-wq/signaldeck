@@ -59,6 +59,22 @@ CREATE TABLE IF NOT EXISTS score_outcomes (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_outcomes_unresolved
   ON score_outcomes (resolved_at) WHERE resolved_at IS NULL;
+-- The RESOLVED side had no index at all, so the two reads that serve the
+-- published honesty numbers -- ResolvedOutcomes and ResolvedOutcomesIndependent,
+-- both `WHERE resolved_at IS NOT NULL AND horizon=? ORDER BY ts DESC LIMIT ?` --
+-- planned as SCAN score_outcomes + USE TEMP B-TREE FOR ORDER BY, reading all
+-- 7.07M rows and sorting them to return 5,000. /api/honesty is on the daemon's
+-- publicRoutes allowlist, so that read is anonymous-reachable on a published
+-- deployment.
+--
+-- Partial and column-ordered to match the query: seek on horizon, then walk ts
+-- backwards already in order. Measured 2026-09-13 on a 5.31 GB copy of the live
+-- database (6.29M resolved rows): build 3.0s, +0.10 GB on disk, plan becomes
+-- SEARCH score_outcomes USING INDEX idx_outcomes_resolved (horizon=?) with no
+-- temp b-tree, and the 5,000-row read goes 0.45s -> 0.014s. The build cost is
+-- paid once, at the first boot after this lands.
+CREATE INDEX IF NOT EXISTS idx_outcomes_resolved
+  ON score_outcomes (horizon, ts) WHERE resolved_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS expectancy (
   symbol_id  INTEGER NOT NULL,
@@ -2236,30 +2252,19 @@ CREATE TABLE IF NOT EXISTS rv_forecasts (
 CREATE INDEX IF NOT EXISTS idx_rv_forecasts_open
   ON rv_forecasts (horizon, ts) WHERE actual IS NULL AND ungradable IS NULL;
 
--- VaR / ES forecasts. Same shape, same reasons.
+-- REMOVED 2026-09-13: var_forecasts (and idx_var_forecasts_open). It was
+-- declared with the full freeze-and-grade shape of its live sibling rv_forecasts
+-- -- frozen null_hist, realized, breach, resolved_ts, ungradable -- and had zero
+-- rows, no writer and no reader. The only references to the name in the entire
+-- tree were its own two DDL statements here.
 --
--- var_pct and es_pct are POSITIVE loss fractions: 0.023 means "a loss of about
--- 2.3% or worse". null_hist is the historical-simulation VaR over the same
--- window, frozen at call time; it is NULLABLE because risklens WITHHOLDS below
--- MinVaRTailObservations, and a withheld null must be recorded as withheld
--- rather than filled with a number nobody computed.
-CREATE TABLE IF NOT EXISTS var_forecasts (
-  symbol_id   INTEGER NOT NULL REFERENCES symbols(id),
-  ts          INTEGER NOT NULL,
-  level       REAL    NOT NULL,   -- 0.05 or 0.01
-  var_pct     REAL    NOT NULL,
-  es_pct      REAL    NOT NULL,
-  sigma2      REAL    NOT NULL,   -- the variance forecast it was scaled by
-  tail_n      INTEGER NOT NULL,   -- residuals in the tail; the precision of the quantile
-  null_hist   REAL,               -- NULL means WITHHELD, not zero
-  revision    TEXT    NOT NULL,
-  created_ts  INTEGER NOT NULL,
-  realized    REAL,               -- next-session log return; NULL until resolved
-  breach      INTEGER,            -- 1 when realized < -var_pct
-  resolved_ts INTEGER,
-  ungradable  TEXT,
-  PRIMARY KEY (symbol_id, ts, level)
-) WITHOUT ROWID;
-
-CREATE INDEX IF NOT EXISTS idx_var_forecasts_open
-  ON var_forecasts (level, ts) WHERE realized IS NULL AND ungradable IS NULL;
+-- Removed rather than kept, because schema.sql is what an auditor reads as the
+-- record of what this system grades. A fully specified VaR/ES grading table with
+-- a breach column reads as evidence of a graded VaR product; there has never
+-- been one. Declaring the table for work that was never built made the schema
+-- claim more than the daemon does.
+--
+-- Not dropped from existing databases: the table is empty, so it costs nothing,
+-- and a DROP migration would be a production DDL change for no gain. The live
+-- database therefore keeps an empty, undeclared var_forecasts. Nothing reads it.
+-- If the VaR product is ever built, re-declare it then, beside its writer.
