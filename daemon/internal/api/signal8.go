@@ -36,10 +36,27 @@ func (d Deps) stockFromQuery(r *http.Request) (md.Symbol, bool, error) {
 	return s, true, nil
 }
 
+// limitParam reads ?limit=, clamping to [1, max] and falling back to def when
+// the value is absent, unparseable or non-positive.
+//
+// OVER-MAX CLAMPS TO MAX, it does not collapse to def. It used to: `n > max`
+// returned def, so ?limit=1000 against a max of 500 handed back 50 -- fewer
+// rows than the caller could legitimately have had, and fewer than any reading
+// of "limit" suggests. Nothing reports the clamp either, so a caller who asked
+// for 1000 and received 50 has no way to tell that from "there are only 50".
+//
+// KEEP limitCacheParam IN LOCKSTEP (internal/api/cachekey.go). It normalises
+// this same parameter for the response cache key, so if the two disagree about
+// what ?limit=1000 means, two requests with different effective limits share
+// one cache entry and the second caller gets the first one's body.
+// TestLimitParam_MirrorsCacheParam pins that they agree.
 func limitParam(r *http.Request, def, max int) int {
 	n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if n <= 0 || n > max {
+	if n <= 0 {
 		return def
+	}
+	if n > max {
+		return max
 	}
 	return n
 }

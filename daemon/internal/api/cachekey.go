@@ -91,13 +91,25 @@ func enumParam(name string, allowed ...string) cacheParam {
 	}}
 }
 
-// limitCacheParam mirrors limitParam(r, def, max) exactly — n <= 0, n > max
-// and an unparseable value all fall back to def, and def itself is omitted so
-// `?limit=<default>` shares the default entry.
+// limitCacheParam mirrors limitParam(r, def, max) exactly: an unparseable or
+// non-positive value falls back to def, an over-max value CLAMPS TO MAX, and
+// whatever resolves to def is omitted so `?limit=<default>` shares the default
+// entry.
+//
+// The mirror is load-bearing, not tidiness. This decides which requests share
+// a cached body, so if it disagreed with limitParam about what ?limit=1000
+// means, two requests with different effective limits would collide on one key
+// and the second caller would receive the first one's rows.
+// TestLimitParam_MirrorsCacheParam pins the agreement.
 func limitCacheParam(def, max int) cacheParam {
 	return cacheParam{name: "limit", norm: func(raw string) string {
 		n, _ := strconv.Atoi(raw)
-		if n <= 0 || n > max || n == def {
+		if n <= 0 {
+			n = def
+		} else if n > max {
+			n = max
+		}
+		if n == def {
 			return ""
 		}
 		return strconv.Itoa(n)

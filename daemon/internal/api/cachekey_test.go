@@ -44,13 +44,20 @@ func TestCompositeTopCacheKey_NormalisesToTheHandlersResolvedValue(t *testing.T)
 	base := compositeKey("/api/composite/top")
 	// compositeTop resolves each of these to its default, so they must all
 	// SHARE the default entry rather than each paying for its own build.
-	// limitParam: n<=0 or n>max falls back to def. compositeHorizon: anything
-	// but "1w" is 1d. market: anything but crypto/stocks is the whole universe.
+	// limitParam: n<=0 or unparseable falls back to def. compositeHorizon:
+	// anything but "1w" is 1d. market: anything but crypto/stocks is the whole
+	// universe.
+	//
+	// ?limit=99999 is NOT here any more: over-max now CLAMPS to max rather than
+	// collapsing to def, so it resolves to a genuinely different payload (500
+	// rows, not 50) and must get its own entry -- sharing the default would
+	// serve 50 rows to a caller who asked for more. It still cannot fragment
+	// the cache, because every over-max spelling normalises to the SAME
+	// limit=max key; that is asserted below.
 	for _, q := range []string{
 		"/api/composite/top?limit=0",
 		"/api/composite/top?limit=-5",
 		"/api/composite/top?limit=abc",
-		"/api/composite/top?limit=99999",
 		"/api/composite/top?limit=50", // the default, spelled out
 		"/api/composite/top?horizon=nonsense",
 		"/api/composite/top?horizon=1d", // the default, spelled out
@@ -59,6 +66,30 @@ func TestCompositeTopCacheKey_NormalisesToTheHandlersResolvedValue(t *testing.T)
 	} {
 		if got := compositeKey(q); got != base {
 			t.Fatalf("%s keyed as %q but the handler resolves it to the default (%q)", q, got, base)
+		}
+	}
+}
+
+// TestOverMaxLimitsShareOneKey is the other half of the clamp change: an
+// over-max ?limit= now resolves to max rather than to the default, so it gets
+// its own cache entry -- but EVERY over-max spelling must land on that SAME
+// entry. Otherwise ?limit=501, 502, 503 ... would each mint a novel key, and
+// every novel key is a cold build on a scarce read connection, which is the
+// fragmentation this file exists to prevent.
+func TestOverMaxLimitsShareOneKey(t *testing.T) {
+	first := compositeKey("/api/composite/top?limit=99999")
+	base := compositeKey("/api/composite/top")
+	if first == base {
+		t.Fatalf("over-max shares the default entry %q; it resolves to max rows, not default rows", base)
+	}
+	for _, q := range []string{
+		"/api/composite/top?limit=501",
+		"/api/composite/top?limit=600",
+		"/api/composite/top?limit=99999",
+		"/api/composite/top?limit=2147483647",
+	} {
+		if got := compositeKey(q); got != first {
+			t.Fatalf("%s minted %q, want the single shared over-max key %q", q, got, first)
 		}
 	}
 }
@@ -108,7 +139,8 @@ func TestMoversCacheKey_UnknownParamCannotMintAKey(t *testing.T) {
 		"/api/movers?minMcap=NaN", // handler treats NaN as no filter
 		"/api/movers?limit=0",
 		"/api/movers?limit=10", // the default, spelled out
-		"/api/movers?limit=999",
+		// ?limit=999 moved out: over-max clamps to max and is a different
+		// payload, so it earns its own entry. See the over-max assertion below.
 	} {
 		if got := moversKey(q); got != base {
 			t.Fatalf("%s minted key %q; the handler resolves it to the default", q, got)
