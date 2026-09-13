@@ -108,7 +108,13 @@ type Fill struct {
 	CashDelta float64 // signed change to cash after notional + cost
 	Reason    string  // human-readable why (set by caller/worker, or the refusal)
 
-	// Execution diagnostics — the audit trail for Cost.
+	// Execution diagnostics. They explain Cost to a caller holding the Fill, and
+	// stresslab/replay.go does consume SpreadBps, ImpactBps and Capped. They are
+	// NOT persisted: paper_trades stores Cost and Reason and nothing else from a
+	// Fill, so on the stored path the only diagnostic that survives is whatever
+	// reaches Reason. That is what WithReason below is for. This group used to be
+	// labelled "the audit trail for Cost", which promised a durability it does
+	// not have.
 	RefPx            float64 // the stored bar open Px was taken from
 	SpreadBps        float64 // half-spread crossed, per side
 	ImpactBps        float64 // modelled market impact of THIS size
@@ -116,6 +122,32 @@ type Fill struct {
 	Capped           bool    // the ADV participation limit bound this fill
 	UnfilledNotional float64 // entry only: the part of the order that did not fill
 	LiquidationBars  int     // exit only: bars needed at the participation cap
+}
+
+// WithReason returns why with the fill's OWN reason appended, when it has one.
+//
+// EnterLong and ExitLong set Fill.Reason in exactly one situation: the ADV
+// participation cap bound the order. One writes the partial-fill notice, the
+// other the multi-bar liquidation notice. Every one of the three PaperTrade
+// construction sites then built its own Reason and assigned it over the top, so
+// both notices were computed and immediately discarded and a capped fill was
+// indistinguishable from an ordinary one in the trade log.
+//
+// The callers were not wrong to write their own text -- the sizing rationale is
+// part of the audit trail too. They were wrong to DROP the fill's. This keeps
+// both, on the separator the paper reasons already use.
+//
+// It does not rescue the numeric diagnostics above; those would need columns on
+// paper_trades. It preserves the one diagnostic already rendered as text.
+func (f Fill) WithReason(why string) string {
+	switch {
+	case f.Reason == "":
+		return why
+	case why == "":
+		return f.Reason
+	default:
+		return why + " · " + f.Reason
+	}
 }
 
 // parkinsonSigma estimates the bar's return volatility from its high/low range

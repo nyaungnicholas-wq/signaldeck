@@ -417,7 +417,7 @@ func (w *PaperTrader) buildStep(
 			apply.CloseSymbolIDs = append(apply.CloseSymbolIDs, s.ID)
 			apply.Trades = append(apply.Trades, store.PaperTrade{
 				Strategy: strategy, SymbolID: s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost,
-				Ts: plan.fillBar.Ts, Reason: plan.reason,
+				Ts: plan.fillBar.Ts, Reason: f.WithReason(plan.reason),
 			})
 			// The slot, the notional and the sector bucket this name occupied are now
 			// free. Phase 2 judges entries against `book`, so without this an exit
@@ -631,8 +631,8 @@ func (w *PaperTrader) buildStep(
 			Strategy: strategy, SymbolID: c.s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost, Ts: c.bar.Ts,
 			// The sizing rationale is part of the audit trail: a reader of the
 			// log should be able to see WHY this size, not just this price.
-			Reason: fmt.Sprintf("net_ev %.4f (rank %d/%d) · cal_prob %.3f >= long %.2f · %s",
-				a.NetEV, a.Rank, a.RankOf, c.pred.CalProb, papertrade.LongThreshold(), gate.Sizing),
+			Reason: f.WithReason(fmt.Sprintf("net_ev %.4f (rank %d/%d) · cal_prob %.3f >= long %.2f · %s",
+				a.NetEV, a.Rank, a.RankOf, c.pred.CalProb, papertrade.LongThreshold(), gate.Sizing)),
 		})
 	}
 

@@ -169,7 +169,7 @@ func (d Deps) paperOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	trade := store.PaperTrade{
 		Strategy: strategy, SymbolID: sym.ID, Side: fill.Side, Qty: fill.Qty, Px: fill.Px, Cost: fill.Cost, Ts: in.Bar.Ts,
-		Reason: fmt.Sprintf("manual %s order (quote 1m bar %d)", side, in.Bar.Ts),
+		Reason: fill.WithReason(fmt.Sprintf("manual %s order (quote 1m bar %d)", side, in.Bar.Ts)),
 	}
 	applied, err := d.St.ApplyPaperStep(ctx, store.PaperApply{
 		Strategy: strategy, BarTs: barTs, NewCash: newCash,
