@@ -57,6 +57,14 @@ const anchorEnvInterval = "SIGNALDECK_LEDGER_ANCHOR_INTERVAL"
 // caller size the response for us.
 const maxAnchorsPerRequest = 500
 
+// maxLedgerPerRequest bounds ?limit= on the raw ledger read. 1000 is ten times
+// the default and above anything the UI asks for -- web/src/lib/api.ts's
+// ledger() defaults to 100 and in fact has no call site at all -- while a
+// caller who genuinely wants the whole chain checked has /api/ledger/verify,
+// which walks it server-side under a concurrency cap and a deadline instead of
+// materialising every row into one response.
+const maxLedgerPerRequest = 1000
+
 // ledgerVerifyTimeout bounds one verification request end-to-end. A full
 // genesis walk of the live chain measures ~4s at 245k rows; 30s is generous
 // headroom under load while making a hung request impossible (finding A11:
@@ -359,23 +367,46 @@ func (d Deps) ledger(w http.ResponseWriter, r *http.Request) {
 	if h != md.H1d && h != md.H1w {
 		h = md.H1d
 	}
+	// ?limit= is attacker-controlled on a PUBLIC read (/api/ledger is in
+	// publicRoutes), so it must not size the response for us -- the same rule
+	// ledgerAnchors already states and enforces with maxAnchorsPerRequest.
+	// This was the only unbounded limit left in the package; every other route
+	// clamps. Measured against the live daemon, ?limit=100000 on one symbol
+	// returned its entire 2,301-entry history, and that number grows with the
+	// record forever, so the ceiling is what stops it rather than the data
+	// happening to be small today.
 	limit := 100
+	requested := 0
 	if q := r.URL.Query().Get("limit"); q != "" {
 		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			requested = n
 			limit = n
 		}
+	}
+	if limit > maxLedgerPerRequest {
+		limit = maxLedgerPerRequest
 	}
 	entries, err := d.St.LedgerFor(r.Context(), s.ID, h, limit)
 	if err != nil {
 		httpInternal(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{
+	// Say so when the clamp bit. This endpoint exists to be audited, and an
+	// auditor who asked for the whole chain and silently received a prefix
+	// would compute a head hash that disagrees with the published one and have
+	// nothing in the response explaining why.
+	out := map[string]any{
 		"symbol":  s.Symbol,
 		"horizon": h,
 		"count":   len(entries),
+		"limit":   limit,
 		"entries": entries,
-	})
+	}
+	if requested > limit {
+		out["truncated"] = true
+		out["requestedLimit"] = requested
+	}
+	writeJSON(w, out)
 }
 
 // registerLedger wires the Stage-3 prediction-ledger read routes.
