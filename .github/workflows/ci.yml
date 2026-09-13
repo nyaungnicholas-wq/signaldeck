@@ -1,7 +1,10 @@
 name: CI
 on:
   push:
-    branches: [main]
+    # public-launch is the RELEASE branch and had never been built: the trigger
+    # named main only, so every commit on it shipped unverified while the badge
+    # stayed green on a branch nobody was releasing from.
+    branches: [main, public-launch]
   pull_request:
 
 jobs:
@@ -409,7 +412,13 @@ jobs:
       # on another branch would look orphaned without this, which is exactly
       # the false positive that gets a check disabled.
       - name: Fetch every branch so reachability sees all refs
-        run: git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+        # Tags MUST come too. ops/ledger-provenance.sh records commits published by
+        # a remote branch OR a pushed keep TAG (the remedy the history-rewrite note
+        # prescribes for an orphaned ledger revision), and --check verifies
+        # reachability. --no-tags left the verifier blind to exactly the refs the
+        # recorder is allowed to count, so a tag-preserved commit in the manifest
+        # would fail CI while being perfectly reachable on the remote.
+        run: git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
       - name: Self-test the checker before trusting it
         run: bash ops/test-ledger-provenance.sh
       - name: Ledger-referenced commits are still reachable
