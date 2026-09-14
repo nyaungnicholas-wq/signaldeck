@@ -96,6 +96,79 @@ func (s *Store) UpsertPrediction(ctx context.Context, p Prediction) error {
 	return tx.Commit()
 }
 
+// UpsertPredictionAttested writes the prediction, its ledger attestation and its
+// eligibility for grading as ONE transaction. Either all three exist or none do.
+//
+// WHY THIS EXISTS. internal/pipeline/predict.go used to do the two writes
+// separately, and the ledger half was explicitly best-effort: "a ledger failure
+// logs + records a dq event but MUST NOT fail the prediction (the prediction is
+// already durably written above)". That reasoning is right about durability and
+// wrong about evidence. UpsertPrediction seeds prediction_outcomes, which the
+// comment forty lines up calls "the population every grader reads" -- so a
+// prediction whose attestation failed was still, later, graded as though it had
+// been committed to the chain before its outcome existed. The claim the whole
+// project rests on is precommitment, and that path could not support it.
+//
+// Measured 2026-09-13 on the live database: 30 served predictions of 498,523
+// since the ledger epoch have no chain entry. ops/check-grader-health.ps1 has
+// been reporting that as a bounded alarm (max 50) for some time. An alarm is
+// not a gate: nothing stopped those rows being graded.
+//
+// THE RULE IS NOW STRUCTURAL, in the same place and for the same reason the
+// n_used > 0 rule below is: enforcing it HERE rather than at the caller means no
+// code path can produce a gradable forecast that was never attested. If the
+// chain append fails, the transaction rolls back and there is no prediction, no
+// outcome row and nothing to grade. A missing forecast is honest; an unattested
+// one that is later graded as precommitted is not.
+//
+// ONE BeginTx, on the single-writer connection. AppendLedger cannot be called
+// from in here -- the writer pool is MaxOpenConns=1 and a nested BeginTx would
+// wait forever on the connection this transaction already holds -- so the chain
+// link is shared through appendLedgerTx instead of reimplemented.
+//
+// HISTORY IS NOT TOUCHED. This changes what can be written from now on. The 30
+// existing unledgered rows stay exactly as they are, classified by the coverage
+// check rather than backdated into the chain, because an entry appended today
+// claiming to attest a forecast from last month would be the precise forgery
+// this ledger exists to make detectable.
+func (s *Store) UpsertPredictionAttested(ctx context.Context, p Prediction, e LedgerEntry) (LedgerEntry, error) {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return e, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR REPLACE INTO predictions (symbol_id, horizon, ts, raw_prob, cal_prob, n_used, components, weights, basis)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		p.SymbolID, string(p.Horizon), p.Ts, p.RawProb, p.CalProb, p.NUsed, p.Components,
+		p.Weights, p.Basis); err != nil {
+		return e, err
+	}
+
+	// The attestation comes BEFORE eligibility is conferred, inside the same
+	// transaction, so the ordering holds even under a crash between statements.
+	e, err = appendLedgerTx(ctx, tx, e)
+	if err != nil {
+		return e, err
+	}
+
+	// Same n_used rule as UpsertPrediction, and for the same stated reason: a
+	// legless row is evidence, not a forecast, and must not reach the graded
+	// population by any path.
+	if p.NUsed > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob, basis_epoch)
+			VALUES (?,?,?,?,?)`, p.SymbolID, string(p.Horizon), p.Ts, p.CalProb, BasisEpoch); err != nil {
+			return e, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return e, err
+	}
+	return e, nil
+}
+
 // LatestPrediction returns the newest prediction for a symbol+horizon.
 func (s *Store) LatestPrediction(ctx context.Context, symbolID int64, h md.Horizon) (Prediction, bool, error) {
 	p := Prediction{SymbolID: symbolID, Horizon: h}

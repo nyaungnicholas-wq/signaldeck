@@ -1102,12 +1102,56 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if len(wts) == 0 {
 				wjson = []byte("{}")
 			}
-			if err := w.St.UpsertPrediction(ctx, store.Prediction{
-				SymbolID: s.ID, Horizon: h, Ts: ts,
-				RawProb: raw, CalProb: cal, NUsed: nUsed, Components: string(comps),
-				Weights: string(wjson), Basis: basis,
-			}); err != nil {
-				return "", err
+			// ATTESTATION AND ELIGIBILITY ARE ONE WRITE (2026-09-14).
+			//
+			// This used to be UpsertPrediction here and AppendLedger fifty lines
+			// down, with the ledger half explicitly best-effort: "a ledger
+			// failure logs + records a dq event but MUST NOT fail the prediction
+			// (the prediction is already durably written above)". Right about
+			// durability, wrong about evidence -- UpsertPrediction also seeds
+			// prediction_outcomes, which is the population every grader reads,
+			// so a forecast whose attestation failed was still graded later as
+			// though it had been committed to the chain before its outcome
+			// existed. Precommitment is the claim this project rests on.
+			//
+			// store.UpsertPredictionAttested writes the prediction, the chain
+			// entry and the eligibility row in one transaction on the single
+			// writer. If the chain append fails there is no prediction, no
+			// outcome row, and nothing to grade. A missing forecast is honest.
+			//
+			// feature_hash is still the sha256 of the SAME vector persisted for
+			// this row, so the committed hash stays reproducible from the stored
+			// prediction -- it is just computed before the write now rather than
+			// after it.
+			vec := persistFeatures(cal)
+			entry, lerr := w.St.UpsertPredictionAttested(ctx,
+				store.Prediction{
+					SymbolID: s.ID, Horizon: h, Ts: ts,
+					RawProb: raw, CalProb: cal, NUsed: nUsed, Components: string(comps),
+					Weights: string(wjson), Basis: basis,
+				},
+				store.LedgerEntry{
+					PredictedAt:  time.Now().Unix(),
+					SymbolID:     s.ID,
+					Horizon:      h,
+					BarTs:        ts,
+					RawProb:      raw,
+					CalProb:      cal,
+					FeatureHash:  store.HashFeatureVector(vec),
+					ModelVersion: ledgerModelVersion,
+				})
+			if lerr != nil {
+				// The whole unit rolled back. Record it as the data-quality
+				// event it is and move to the next symbol rather than failing
+				// the run: one symbol that could not be attested must not stop
+				// the ones that can.
+				slog.Warn("prediction not attested: nothing was written", "symbol", s.Symbol, "horizon", h, "err", lerr)
+				sid := s.ID
+				_ = w.St.InsertDQ(ctx, md.DQEvent{
+					SymbolID: &sid, Ts: time.Now().Unix(),
+					Kind: "ledger_append_error", Detail: fmt.Sprintf("horizon %s: %v", h, lerr),
+				})
+				continue
 			}
 			n++
 			// Benchmark row for the SAME (symbol, ts): identical universe,
@@ -1120,32 +1164,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					slog.Warn("prequential-majority benchmark: seed failed", "symbol", s.Symbol, "horizon", h, "err", err)
 				}
 			}
-			vec := persistFeatures(cal)
-			// STAGE 3 — append-only, hash-chained prediction ledger. Commit the
-			// prediction's identity to the tamper-evident chain AFTER the
-			// prediction + feature vector are persisted, and BEFORE any outcome
-			// can exist (the resolver runs on its own cadence). feature_hash is
-			// the sha256 of the SAME vector we just wrote, so the committed hash
-			// is reproducible from the persisted row. Best-effort: a ledger
-			// failure logs + records a dq event but MUST NOT fail the prediction
-			// (the prediction is already durably written above).
-			if entry, lerr := w.St.AppendLedger(ctx, store.LedgerEntry{
-				PredictedAt:  time.Now().Unix(),
-				SymbolID:     s.ID,
-				Horizon:      h,
-				BarTs:        ts,
-				RawProb:      raw,
-				CalProb:      cal,
-				FeatureHash:  store.HashFeatureVector(vec),
-				ModelVersion: ledgerModelVersion,
-			}); lerr != nil {
-				slog.Warn("prediction ledger: append failed", "symbol", s.Symbol, "horizon", h, "err", lerr)
-				sid := s.ID
-				_ = w.St.InsertDQ(ctx, md.DQEvent{
-					SymbolID: &sid, Ts: time.Now().Unix(),
-					Kind: "ledger_append_error", Detail: fmt.Sprintf("horizon %s: %v", h, lerr),
-				})
-			} else {
+			// The attestation already happened, atomically, above. What is left
+			// here is the lineage spine, which is genuinely best-effort.
+			{
 				// Lineage spine (Layers 2+8): tie the ledgered prediction to
 				// each MODEL LEG that actually contributed to its blend (nil
 				// pointer = leg absent or gated off, so no edge — an edge
