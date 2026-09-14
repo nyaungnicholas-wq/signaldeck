@@ -361,6 +361,50 @@ Measured on the live repo: `strict` exit 1, `release` exit 0, both printing
 
 ---
 
+## F-NEW-06 — pre-existing, NOT introduced by this pass — ops self-test red
+
+`ops/test-reference-transaction-hook.sh` reports **11 passed, 1 failed**:
+
+```
+FAIL  deleting the ONLY branch holding a referenced commit is BLOCKED (expected 1, got 0)
+```
+
+**Not mine.** Verified by checking out the pre-pass baseline `cf321a23` into a
+throwaway worktree and running it there: **identical 11/1**. It predates every
+commit in this pass.
+
+**Not diagnosed, and deliberately not fixed.** The assertion reads as though
+it were inverted relative to its own name — it passes when the branch is
+*deleted*, while the name says deletion should be *blocked* — but a hand-built
+sandbox showed the hook **not** blocking, which contradicts that reading. The
+test's  uses  with no , so the initial branch name
+depends on this machine's , and that may be what the
+/ fallback is actually measuring.
+
+Two readings, opposite fixes, and I could not distinguish them without more
+invasive work than the remaining value justified. **Inverting an assertion I do
+not understand is the exact weakened-check failure this pass spent the night
+removing**, so it stays red and stays reported.
+
+**Scope:** it guards local git ref operations (developer workflow), not the
+published product. No release surface depends on it. All 13 other
+  ok   budget grows with the database (7000 -> 14000)
+  ok   growth is proportional, not a step (2x for 2x data)
+  ok   DB 1000MB: steady state 2250MB fits under budget 3500MB
+  ok   DB 2000MB: steady state 4500MB fits under budget 7000MB
+  ok   DB 3348MB: steady state 7533MB fits under budget 11718MB
+  ok   DB 6000MB: steady state 13500MB fits under budget 21000MB
+  ok   the 13GB pile-up at a 2GB DB trips the budget (7000MB)
+  ok   a prune failure trips within 3 stray generations (took 2)
+  ok   a 0MB database falls back to the floor (2048MB)
+  ok   a 10MB database also uses the floor
+  ok   --explain-budget reports the derivation
+  ok   --explain-budget separates ad-hoc from managed
+all retention-budget checks passed self-tests pass, including  (22/0),
+which covers the adjacent reachability question.
+
+---
+
 ## Closing state of this pass
 
 **No finding is left in CONFIRMED → OPEN.** Of the sixteen items tracked:
