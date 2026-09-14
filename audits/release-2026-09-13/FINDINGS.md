@@ -348,13 +348,32 @@ Measured on the live repo: `strict` exit 1, `release` exit 0, both printing
 | 23 anchors, 0 failing | CONFIRMED, unchanged. |
 | `/api/accuracy` 503 REFUSED, 18 collapsed of 76 | CONFIRMED verbatim. |
 | vol-forecast h=1 n=3133/5 days/306 ungradable; h=5 n=300/1 day/297 | CONFIRMED verbatim, both INSUFFICIENT. |
-| `/api/health` degraded, 3 workers degraded | CONFIRMED. **Cause not yet determined per worker — OPEN.** |
+| `/api/health` degraded, 3 workers degraded | CONFIRMED, and **diagnosed per worker — see F-NEW-03. Not a defect:** all three ran and deliberately declined to deliver. |
 
 ## Opened during the pass, not yet closed
 
 | ID | Detail |
 | --- | --- |
 | F-NEW-02 | **CLOSED.** Both health tasks were red. **Root cause was not a code defect:** the System log shows 6006 at 2026-09-11 00:21 and 6005 at 2026-09-12 21:18 — the machine was **off for ~45 h**. `SignalDeck Accuracy` fires daily at 14:05 with `WakeToRun=False`, so it could not run on either day; `grader_heartbeats` confirms rows on 09-10 and 09-13 with nothing between. The heartbeat reached 67 h against a 26 h ceiling, `Check-Grader-Health` went red at 09:20 on 09-13, and `Check-Task-Health` went red behind it as a pure cascade (it reads the other task's stored `LastTaskResult`). The grader itself ran normally at 14:05 that day. **Both checks were correct; what they could not do was say which cause applied.** Fixed in `cff7012`: a stale heartbeat now consults uptime, forgiven only while uptime is under one window and never past a 3× ceiling, with an unreadable uptime never an excuse — 10 assertions in `ops/test-check-grader-health.ps1`. Both tasks now record `0x00000000`, verified by running them. |
-| F-NEW-03 | Per-worker cause of the three degraded workers still not determined. **OPEN.** |
+| F-NEW-03 | **CLOSED — not a defect.** The baseline asked to "determine actual cause per worker"; all three file `workers.ErrDegraded`, which `daemon/internal/api/api.go` documents as "the status a worker files when it RAN and chose not to deliver". Read from `worker_runs` rather than inferred: **gbm-trainer** — "no model leg cleared its OOS edge bar"; **expectancy-trainer** — "anti-predictive and benched fleet-wide (1d AUC 0.4581, 1w AUC 0.4548)"; **forecast-monitor** — coverage starvation of the flagship model **retired 2026-07-24**, which `forecastmon.go` itself calls out: "a RETIRED model that declines the cross-section is doing what retirement means; erroring on it every run holds the daemon red indefinitely on a condition that is not a fault". `/api/ready` correctly stays `ready: true` while `/api/health` correctly reports `degraded: true`. This is the honesty machinery working, not three broken workers. The set also moves on its own — expectancy-trainer was `running` again by 06:10Z. |
 | F-NEW-04 | `/api/vol-forecast/record?horizon=5` returns the identical payload as `?horizon=1` — the parameter appears to be ignored (both horizons are returned in a `horizons` array). Contract question, not a data defect. |
 | F-NEW-05 | **RESOLVED, not a defect.** Race detector finds **0 data races**. `internal/api`, `internal/pipeline` and `internal/store` exceed the default 10-minute per-package timeout under `-race` (they need 709–974 s). With `-timeout 45m` all three pass. Anyone running the documented command sees three FAILs and concludes there are races; there are none. Grep for `DATA RACE` before believing a race failure. |
+
+---
+
+## Closing state of this pass
+
+**No finding is left in CONFIRMED → OPEN.** Of the sixteen items tracked:
+
+- **13 CONFIRMED → FIXED**, each with a regression test, and the six that
+  guard an evidence boundary each additionally mutation-checked (the control
+  was shown to fail before the fix, for the right reason).
+- **2 NOT REPRODUCED / EXPECTED LIMITATION** — the prescribed venv runs fine
+  here, and the daemon/HEAD revision difference is release provenance rather
+  than stale daemon code (7 web files, zero daemon/ops/tools).
+- **1 CLOSED as not-a-defect** — the degraded workers above.
+
+What remains is **not defects but unexercised verification**, listed in
+`VERIFICATION.md`: no Playwright run of my own, no Docker image, no restore or
+clean-clone rehearsal, no load measurement, no dependency scan. And the daemon
+changes in this candidate are source-only until someone deploys them.
