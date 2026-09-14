@@ -26,7 +26,30 @@ cp "$GUARD" "$repo/ops/docker-build.sh"
 # The guard sources this and now REFUSES without it; the fixture never copied
 # it, which is why every dirty-tree assertion below was red.
 cp "$(pwd)/ops/lib-portable.sh" "$repo/ops/lib-portable.sh"
+# The guard emits a build manifest before it builds, and REFUSES if it cannot --
+# an image nothing can bind to its reviewed source is worse than no image. The
+# fixture therefore has to carry the tool, exactly as the real repo does.
+# Copied BEFORE the commit below, or the tree is instantly dirty and every
+# dirty-tree assertion measures the fixture instead of the guard.
+mkdir -p "$repo/tools"
+cp "$(pwd)/tools/build_manifest.py" "$repo/tools/build_manifest.py"
+# ...and the files that tool PINS. It refuses when it can hash none of them --
+# a manifest that pins nothing would verify everything, which is the fail-open
+# shape the whole gate exists to close -- so the fixture has to stand in for
+# them. Contents are irrelevant; only that each exists and hashes to something.
+for f in accuracy_registry.py selection_honesty.py publication_gate.py          grader_heartbeat.py live_accuracy.py; do
+  printf 'stub for the fixture
+' > "$repo/tools/$f"
+done
+printf '# protocol (fixture)
+' > "$repo/PREREGISTRATION.md"
 printf 'FROM scratch\n' > "$repo/Dockerfile"
+# The guard WRITES build-manifest.json into the build context, so without this
+# the fixture goes dirty on its own first build and every later case refuses on
+# a file the guard itself just created. The real repo gitignores it for exactly
+# that reason; the fixture mirrors the repo it stands in for, or it tests a
+# condition that cannot occur in practice.
+printf '/build-manifest.json\n' > "$repo/.gitignore"
 
 mkdir -p "$work/bin"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$ARGV_LOG"\nexit 0\n' > "$work/bin/docker"
@@ -122,6 +145,40 @@ check "  explicit hostname builds" "$(NEXT_PUBLIC_SITE_URL=https://x.test NEXT_P
 check "hostname without an audience is refused" "$(NEXT_PUBLIC_SITE_URL=https://x.test run)" "1"
 grep -qi "hostname but no audience" "$work/out" && ok "  refusal names the missing choice" || bad "  refusal names the missing choice"
 check "  private audience builds too" "$(NEXT_PUBLIC_SITE_URL=https://x.test NEXT_PUBLIC_SIGNALDECK_PUBLIC=0 run)" "0"
+# 10. THE BUILD MANIFEST. ops/docker-build.sh emits it on the host, where git
+# exists, so the image can be bound to its reviewed source by content hash
+# rather than by the GIT_REV label the file itself calls "TRUSTED, not checked".
+# Two halves, both worth pinning: it is actually produced on a good build, and
+# a build that cannot produce it is refused rather than shipped unbindable.
+rm -f "$repo/build-manifest.json"
+check "a good build emits the manifest" "$(run)" "0"
+if [ -s "$repo/build-manifest.json" ]; then
+  ok "  manifest lands in the build context"
+else
+  bad "  manifest lands in the build context"
+fi
+grep -q '"source_artifacts"' "$repo/build-manifest.json" 2>/dev/null \
+  && ok "  and pins the files that decide a verdict" \
+  || bad "  and pins the files that decide a verdict"
+
+# The removal is COMMITTED, not just moved. build_manifest.py is a tracked file
+# here, so moving it aside leaves the tree dirty and the dirty-tree guard --
+# which runs first -- refuses for that reason instead. The assertion would still
+# see exit 1 and pass while measuring the wrong guard entirely, which is the
+# most expensive kind of green.
+cp "$repo/tools/build_manifest.py" "$work/build_manifest.keep"
+git -c core.autocrlf=false rm -q "$repo/tools/build_manifest.py"
+git -c user.name=t -c user.email=t@t commit -qm "drop the manifest tool"
+check "missing manifest tool is refused" "$(run)" "1"
+grep -qi "build manifest" "$work/out" && ok "  refusal names the manifest" || bad "  refusal names the manifest"
+case "$(argv)" in
+  "") ok "  and docker never ran" ;;
+  *)  bad "  and docker never ran (argv: $(argv))" ;;
+esac
+cp "$work/build_manifest.keep" "$repo/tools/build_manifest.py"
+git -c core.autocrlf=false add -A
+git -c user.name=t -c user.email=t@t commit -qm "restore the manifest tool"
+
 echo ""
 echo "docker-build self-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
