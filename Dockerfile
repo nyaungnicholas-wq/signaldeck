@@ -56,6 +56,28 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # use. ops/docker-build.sh forwards it; DEPLOY.md tells the operator to set it.
 ARG NEXT_PUBLIC_SITE_URL=""
 ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
+# The SAME build-time inlining rule, and the flag it was never applied to.
+#
+# NEXT_PUBLIC_SIGNALDECK_PUBLIC is documented in .env.example and DEPLOY.md and
+# read in two places -- AuthGate.tsx, which sends an unauthenticated visitor to
+# "/" instead of "/login", and proof/page.tsx, which suppresses operator-only
+# remediation copy. Neither was ever reachable from a container build: there was
+# no ARG, so the bundle inlined `undefined` and every image shipped in PRIVATE
+# mode. Setting it in the runtime environment does nothing, for exactly the
+# reason the comment above gives about SITE_URL.
+#
+# The consequence on a published deployment is the one that matters: a stranger
+# arriving at the front door of a site whose entire argument is "check my
+# claims yourself" is bounced to a sign-in form, and the receipts page shows
+# them instructions written for the operator.
+#
+# DEFAULT IS PRIVATE, deliberately. An image that silently decided it was public
+# would open the front door on any deployment that forgot the flag, and the
+# wrong direction to be wrong in is obvious. ops/docker-build.sh refuses to
+# build a PUBLISHABLE image (one carrying a real NEXT_PUBLIC_SITE_URL) without
+# an explicit choice, so "forgot the flag" cannot quietly ship either way.
+ARG NEXT_PUBLIC_SIGNALDECK_PUBLIC="0"
+ENV NEXT_PUBLIC_SIGNALDECK_PUBLIC=${NEXT_PUBLIC_SIGNALDECK_PUBLIC}
 RUN npm run build
 
 # ---- stage 3: runtime ------------------------------------------------------

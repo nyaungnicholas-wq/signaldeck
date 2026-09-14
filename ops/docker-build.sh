@@ -109,6 +109,41 @@ else
   echo "docker build: site URL unset -- localhost fallback (local image only)" >&2
 fi
 
+# THE AUDIENCE OF THE IMAGE, chosen rather than defaulted into.
+#
+# NEXT_PUBLIC_SIGNALDECK_PUBLIC is inlined at build time exactly like the site
+# URL above, and until 2026-09-13 the Dockerfile had no ARG for it at all -- so
+# every container image ever built shipped in PRIVATE mode no matter what the
+# operator put in the environment, and DEPLOY.md's instruction to set it was
+# describing something that could not work. On a published deployment that
+# means an anonymous visitor is redirected to /login by AuthGate, and /proof
+# shows them remediation copy written for the operator.
+#
+# The Dockerfile default is private, which is the safe direction to be wrong in.
+# But a PUBLISHABLE image -- one carrying a real hostname -- almost certainly
+# wants the public profile, and silently shipping a locked front door on a site
+# whose whole argument is "check my claims yourself" is its own failure. So a
+# build with a hostname must SAY which audience it is for.
+case "${NEXT_PUBLIC_SIGNALDECK_PUBLIC:-}" in
+  0|1|"") ;;
+  *) echo "docker build REFUSED: NEXT_PUBLIC_SIGNALDECK_PUBLIC must be 0 or 1, got '$NEXT_PUBLIC_SIGNALDECK_PUBLIC'." >&2
+     exit 1 ;;
+esac
+if [ -n "${NEXT_PUBLIC_SITE_URL:-}" ] && [ -z "${NEXT_PUBLIC_SIGNALDECK_PUBLIC:-}" ]; then
+  echo "docker build REFUSED: this image carries a hostname but no audience." >&2
+  echo "  NEXT_PUBLIC_SIGNALDECK_PUBLIC is inlined at build time and defaults to 0," >&2
+  echo "  so leaving it unset ships a site that bounces every anonymous visitor to" >&2
+  echo "  /login and shows operator remediation copy on /proof." >&2
+  echo "  Public site:  NEXT_PUBLIC_SIGNALDECK_PUBLIC=1 $0 $*" >&2
+  echo "  Private host: NEXT_PUBLIC_SIGNALDECK_PUBLIC=0 $0 $*" >&2
+  exit 1
+fi
+if [ "${NEXT_PUBLIC_SIGNALDECK_PUBLIC:-0}" = "1" ]; then
+  echo "docker build: audience PUBLIC (anonymous visitors land on /)" >&2
+else
+  echo "docker build: audience PRIVATE (anonymous visitors land on /login)" >&2
+fi
+
 echo "docker build: stamping commit $rev into $tag" >&2
 # The OCI label is what ops/oracle-verify.sh reads back. GIT_REV goes into the
 # binary via ldflags and is TRUSTED there (a container cannot check it); the
@@ -117,5 +152,6 @@ echo "docker build: stamping commit $rev into $tag" >&2
 docker build \
   --build-arg GIT_REV="$rev" \
   --build-arg NEXT_PUBLIC_SITE_URL="${NEXT_PUBLIC_SITE_URL:-}" \
+  --build-arg NEXT_PUBLIC_SIGNALDECK_PUBLIC="${NEXT_PUBLIC_SIGNALDECK_PUBLIC:-0}" \
   --label "org.opencontainers.image.revision=$rev" \
   -t "$tag" "$@" .
