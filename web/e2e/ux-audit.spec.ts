@@ -1,24 +1,9 @@
-import { test, expect, type BrowserContext } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { scoreSite, JARGON, type PageMeasurement } from "../src/lib/rubric";
+import { loginAsSmokeUser } from "./smokeuser";
 
-const SMOKE_USER = "e2e-smoke";
-const SMOKE_PASS = "E2eSmoke!2026";
-
-async function loginAsSmokeUser(context: BrowserContext): Promise<void> {
-  const headers = { "X-Signaldeck": "1" };
-  const reg = await context.request.post("/api/auth/register", {
-    headers,
-    data: { username: SMOKE_USER, password: SMOKE_PASS },
-  });
-  if (reg.ok()) return;
-  const login = await context.request.post("/api/auth/login", {
-    headers,
-    data: { username: SMOKE_USER, password: SMOKE_PASS },
-  });
-  expect(login.ok(), `login as ${SMOKE_USER} failed: ${login.status()}`).toBe(true);
-}
 
 const ROUTES: readonly string[] = [
   "/",          // the PUBLIC landing page

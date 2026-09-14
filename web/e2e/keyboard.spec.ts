@@ -1,4 +1,5 @@
-import { test, expect, type BrowserContext } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import { loginAsSmokeUser } from "./smokeuser";
 
 // ─────────────────────────────────────────────────────────────────────────
 // KEYBOARD OPERABILITY
@@ -12,22 +13,6 @@ import { test, expect, type BrowserContext } from "@playwright/test";
 // The audit counts these; these tests prove the specific ones stay fixed.
 // ─────────────────────────────────────────────────────────────────────────
 
-const SMOKE_USER = "e2e-smoke";
-const SMOKE_PASS = "E2eSmoke!2026";
-
-async function loginAsSmokeUser(context: BrowserContext): Promise<void> {
-  const headers = { "X-Signaldeck": "1" };
-  const reg = await context.request.post("/api/auth/register", {
-    headers,
-    data: { username: SMOKE_USER, password: SMOKE_PASS },
-  });
-  if (reg.ok()) return;
-  const login = await context.request.post("/api/auth/login", {
-    headers,
-    data: { username: SMOKE_USER, password: SMOKE_PASS },
-  });
-  expect(login.ok(), `login as ${SMOKE_USER} failed: ${login.status()}`).toBe(true);
-}
 
 /** Every sortable header on the page must be a <th aria-sort> with a button. */
 async function sortHeadersAreOperable(

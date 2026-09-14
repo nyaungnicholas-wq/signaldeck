@@ -1,4 +1,5 @@
-import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import { loginAsSmokeUser } from "./smokeuser";
 
 // ─────────────────────────────────────────────────────────────────────────
 // SignalDeck smoke suite.
@@ -11,24 +12,6 @@ import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 //     router.replace("/login").
 // ─────────────────────────────────────────────────────────────────────────
 
-const SMOKE_USER = "e2e-smoke";
-const SMOKE_PASS = "E2eSmoke!2026";
-
-/** Log the shared context in as the throwaway user (register 409/4xx → login).
- *  Goes through the Next proxy origin so the session cookie lands on :8329. */
-async function loginAsSmokeUser(context: BrowserContext): Promise<void> {
-  const headers = { "X-Signaldeck": "1" };
-  const reg = await context.request.post("/api/auth/register", {
-    headers,
-    data: { username: SMOKE_USER, password: SMOKE_PASS },
-  });
-  if (reg.ok()) return;
-  const login = await context.request.post("/api/auth/login", {
-    headers,
-    data: { username: SMOKE_USER, password: SMOKE_PASS },
-  });
-  expect(login.ok(), `login as ${SMOKE_USER} failed: ${login.status()}`).toBe(true);
-}
 
 async function noHorizontalScroll(page: Page): Promise<void> {
   const { scrollWidth, innerWidth } = await page.evaluate(() => ({
