@@ -43,3 +43,7 @@ next-env.d.ts
 # Playwright artifacts
 /test-results/
 /playwright-report/
+
+# Isolated build used by ops/test-web-assets-check.ps1 (SIGNALDECK_DIST_DIR).
+# Next requires distDir to stay inside the project dir, so it cannot be a temp folder.
+/.next-test/

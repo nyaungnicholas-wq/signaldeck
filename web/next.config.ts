@@ -114,6 +114,24 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  // Build output directory. Defaults to .next; overridable so a build can be
+  // produced and served in ISOLATION from the one the live servers are using.
+  //
+  // This exists because of a measured outage, not for tidiness. Both local web
+  // instances (:8323 and :3000, one ops/start-local-workspace.ps1 each) run
+  // `next start` out of this single directory, and `next build` replaces it in
+  // place. `next start` indexes .next/static once at boot, and Turbopack names
+  // chunks by content hash -- so after a rebuild an already-running instance
+  // still answers for every chunk whose content was unchanged and 404s every
+  // one that was not. On 2026-09-13 that was 4 of the 14 assets the landing
+  // page references: :3000 served a 200 with no stylesheet for 24 hours while
+  // ops/web-guard.ps1 logged "3000 ok" every five minutes.
+  //
+  // Next's own docs require this path to stay inside the project directory, so
+  // an isolated build is web/.next-test, not a temp dir. ops/web-assets-check
+  // ships a negative control that builds there, deletes one chunk, and proves
+  // the release check fails on it while /login still answers 200.
+  distDir: process.env.SIGNALDECK_DIST_DIR || ".next",
   // Next sends `X-Powered-By: Next.js` on every response by default. It is
   // pure framework fingerprinting -- it tells a scanner which CVE list to try
   // and tells a legitimate visitor nothing -- and this is a published surface.
