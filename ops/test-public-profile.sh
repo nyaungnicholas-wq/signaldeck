@@ -38,7 +38,23 @@ fail=0
 ok()   { echo "  PASS  $1"; }
 bad()  { echo "  FAIL  $1"; fail=$((fail+1)); }
 
-cleanup() { rm -rf "$OUT"; }
+# Next REWRITES web/tsconfig.json when it builds against a non-default distDir:
+# it appends .next-test/types/**/*.ts include paths and reformats the file. A
+# test that leaves the worktree dirty is a test that manufactures a deploy
+# blocker -- ops/signaldeck-ctl.sh refuses a dirty tree outside the
+# generated-docs allowlist, and tsconfig.json is not on it. So the file is
+# restored exactly as found, whether this script passes, fails or is killed.
+TSCONFIG="$WEB/tsconfig.json"
+TSCONFIG_BAK="$(mktemp)"
+cp -f "$TSCONFIG" "$TSCONFIG_BAK"
+
+cleanup() {
+  rm -rf "$OUT"
+  if [ -f "$TSCONFIG_BAK" ]; then
+    cp -f "$TSCONFIG_BAK" "$TSCONFIG"
+    rm -f "$TSCONFIG_BAK"
+  fi
+}
 trap cleanup EXIT
 
 build_with() {
