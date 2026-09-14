@@ -377,9 +377,9 @@ commit in this pass.
 it were inverted relative to its own name — it passes when the branch is
 *deleted*, while the name says deletion should be *blocked* — but a hand-built
 sandbox showed the hook **not** blocking, which contradicts that reading. The
-test's  uses  with no , so the initial branch name
-depends on this machine's , and that may be what the
-/ fallback is actually measuring.
+test's `setup` uses `git init -q .` with no `-b`, so the initial branch name
+depends on this machine's `init.defaultBranch`, and that may be what the
+`master`/`main` fallback is actually measuring.
 
 Two readings, opposite fixes, and I could not distinguish them without more
 invasive work than the remaining value justified. **Inverting an assertion I do
