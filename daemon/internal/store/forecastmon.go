@@ -195,10 +195,33 @@ func (s *Store) ForecastDayStatsRaw(ctx context.Context, horizon string, since t
 	// WITHHELD ROWS ARE NOT FORECASTS, AND COUNTING THEM INVERTS THE CHECK.
 	// A prediction the ensemble declined to make is still persisted (since
 	// 906310c, "Require measured legs, and keep recording inputs on withheld
-	// rows") with n_used = 0 and raw_prob = 0.5 exactly. Verified 2026-08-11
-	// across the whole table: 4442 rows have n_used = 0 AND raw_prob = 0.5, and
-	// ZERO have n_used = 0 with any other raw_prob, so n_used > 0 is an exact
-	// filter for "carries a forecast".
+	// rows") with n_used = 0. n_used > 0 is therefore the exact filter for
+	// "carries a forecast", and that is what the SQL below keys on.
+	//
+	// THE RAW_PROB HALF OF THIS CLAIM HAS EXPIRED. It used to read: "Verified
+	// 2026-08-11 across the whole table: 4442 rows have n_used = 0 AND raw_prob
+	// = 0.5, and ZERO have n_used = 0 with any other raw_prob." Re-measured
+	// 2026-09-13, that is false: of 59,629 rows with n_used = 0, 57,176 carry
+	// raw_prob = 0.5 and 2,453 do not, spanning 1,748 distinct values, all
+	// stamped 2026-09-07 or later.
+	//
+	// The reason is that there are now TWO withholding paths and they write the
+	// same n_used. pipeline/predict.go refuses both when no leg was admitted
+	// (the blend is empty, so RawProbability is 0.5 exactly) and when the
+	// cross-section gate withholds an otherwise real blend (raw is that blend).
+	// predict_evidence.go hardcodes NUsed: 0 and passes through whichever raw
+	// the caller had.
+	//
+	// Nothing executable depended on the 0.5 half -- a repo-wide search for a
+	// raw_prob = 0.5 filter finds only comments -- so this is a decayed evidence
+	// claim, not a live defect, and the filter above is unaffected. Do NOT start
+	// reading raw_prob = 0.5 as "no leg was admitted": a real blend can land on
+	// 0.5, and storage no longer separates the two cases. If that distinction is
+	// ever needed it has to be written down explicitly, not inferred.
+	//
+	// The general lesson, since this is the second dated measurement in this file
+	// to rot: a comment that says "Verified <date>" is evidence with a shelf
+	// life, and nothing re-runs it.
 	//
 	// Those abstentions all share one value, so folding them into
 	// COUNT(DISTINCT raw_prob) makes the ratio fall as the ensemble abstains

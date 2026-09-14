@@ -243,6 +243,30 @@ var publicRoutes = map[string]bool{
 	"/api/health": true, "/api/ready": true, "/api/version": true,
 
 	// The honesty machinery — this IS the published product.
+	//
+	// SEVEN OF THESE HAVE NO IN-APP CONSUMER, and that is deliberate rather than
+	// an oversight, so it is written down here where the decision lives. Measured
+	// 2026-09-13 across web/src, ops, docs and tools: /api/model-health,
+	// /api/canary, /api/postmortems, /api/lineage, /api/dataset-versions,
+	// /api/evidence and /api/research-loop are referenced by zero files. No page
+	// renders them and no script calls them.
+	//
+	// They are the MACHINE-READABLE half of the published record. The claim this
+	// project makes is that a skeptic can check it, and a skeptic with curl is
+	// the reader they are for — a route that only exists because a React page
+	// happens to fetch it is a worse receipt, not a better one. Each is
+	// read-only, derived, not user-scoped, and carries no vendor rows.
+	//
+	// The consequence to keep in view: each one is anonymous attack surface that
+	// no in-app traffic would ever exercise, so a defect in one is invisible to
+	// ordinary use. They must stay in the contract tests for that reason. If a
+	// route here ever stops being part of the published argument, remove it from
+	// this list rather than leaving it reachable because nothing pointed at it
+	// anyway.
+	//
+	// (The other 16 unconsumed routes measured that day are authenticated
+	// operator diagnostics and are NOT on this list, so they answer 401 to the
+	// public.)
 	"/api/accuracy": true, "/api/track-record": true, "/api/honesty": true,
 	"/api/calibration": true, "/api/model-health": true, "/api/canary": true,
 	"/api/postmortems": true, "/api/regime-postmortems": true,

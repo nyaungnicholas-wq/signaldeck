@@ -71,6 +71,24 @@ var emptyDBRoutes = []string{
 	"/api/market-memory",
 	"/api/company/profile?symbol=AAPL&market=stocks",
 	"/api/portfolio/rebalance?symbols=AAPL,MSFT",
+
+	// ANONYMOUS AND UNCONSUMED. These seven are on security.go's publicRoutes
+	// allowlist -- reachable with no credential on a published deployment -- and
+	// measured 2026-09-13 they are referenced by zero files across web/src, ops,
+	// docs and tools. No page fetches them and no script calls them.
+	//
+	// That combination is exactly why they belong here. They are deliberately
+	// part of the published record (a skeptic with curl is the reader they are
+	// for), but no in-app traffic exercises them, so a handler that crashes or
+	// fabricates on an empty database would never be noticed in ordinary use.
+	// The rest of this file's routes at least get hit by a page.
+	"/api/model-health",
+	"/api/canary",
+	"/api/postmortems",
+	"/api/lineage",
+	"/api/dataset-versions",
+	"/api/evidence",
+	"/api/research-loop",
 }
 
 // confidentWords are verdict-ish tokens that must never appear in a payload
@@ -81,6 +99,28 @@ var confidentWords = []string{
 	`"status":"healthy"`,
 	`"healthy":true`,
 	`"significant":true`,
+}
+
+// confidentIfDisclosed maps a route to the disclosure its payload MUST also
+// carry for a confident token to be acceptable. Both must be present; the token
+// alone still fails.
+//
+// One entry, and it is a genuine distinction rather than an escape hatch.
+// /api/research-loop reports engineHealth.healthy, which answers "is the engine
+// MISBEHAVING?", not "has anything been established?". Those come apart exactly
+// once: a corpus below the 2,000-observation search floor. There, declining to
+// search is the refusal working -- the engine is not broken and must not be
+// reported broken, or an empty deployment pages someone on day one -- and
+// LoopEngineHealth says so in two other fields on the same object,
+// state:"corpus-below-search-floor" and a detail naming the row count and the
+// floor it sits below.
+//
+// The blunt substring scan cannot see that structure, so it read a correct
+// payload as a fabricated one. Requiring the disclosure keeps the rule strict:
+// if that state ever stops being reported, the token is no longer
+// excused and this test fails.
+var confidentIfDisclosed = map[string]string{
+	"/api/research-loop": `"state":"corpus-below-search-floor"`,
 }
 
 func newEmptyDBServer(t *testing.T) *httptest.Server {
@@ -120,6 +160,15 @@ func newEmptyDBServer(t *testing.T) *httptest.Server {
 	d.registerMarketRegimes(mux)
 	d.registerExplain(mux)
 	d.registerCapstones(mux)
+	// The anonymous-and-unconsumed seven. Four have registrars; postmortems and
+	// research-loop are registered inline in Serve, so they are wired by hand
+	// here -- which is itself the reason they were easy to leave untested.
+	d.registerModelHealth(mux)
+	d.registerHonestyGaps(mux)
+	d.registerLineage(mux)
+	d.registerEvidence(mux)
+	mux.HandleFunc("GET /api/postmortems", d.postmortems)
+	mux.HandleFunc("GET /api/research-loop", d.researchLoop)
 	srv.Config.Handler = d.secure(mux)
 	return srv
 }
@@ -165,10 +214,18 @@ func TestEmptyDatabase_ReadsDoNotFailOrFabricate(t *testing.T) {
 			if res.StatusCode == http.StatusOK {
 				flat := strings.ToLower(strings.ReplaceAll(string(body), " ", ""))
 				for _, w := range confidentWords {
-					if strings.Contains(flat, w) {
-						t.Fatalf("GET %s claimed %q with an empty database: %s",
-							route, w, truncate(string(body)))
+					if !strings.Contains(flat, w) {
+						continue
 					}
+					// A confident token is allowed ONLY where the same payload
+					// also states, in the same breath, that it has no data. The
+					// disclosure is checked too, so this can never wave through a
+					// payload that simply asserts the token and stops.
+					if req, ok := confidentIfDisclosed[route]; ok && strings.Contains(flat, req) {
+						continue
+					}
+					t.Fatalf("GET %s claimed %q with an empty database: %s",
+						route, w, truncate(string(body)))
 				}
 			}
 		})
