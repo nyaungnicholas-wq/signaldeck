@@ -235,6 +235,21 @@ const GET_NO_CACHE = ["/api/health"];
 const getCacheable = (path: string) =>
   typeof window !== "undefined" && !GET_NO_CACHE.some((p) => path.startsWith(p));
 
+// CACHING AND DEDUPING ARE DIFFERENT QUESTIONS, and conflating them cost
+// /api/health five round trips on a single page load.
+//
+// A no-cache path must never answer from a STALE result -- that is the whole
+// point of GET_NO_CACHE, because a liveness probe that replays an 8-second-old
+// "up" is worse than no probe. But two components asking the same question in
+// the SAME tick are not asking for a stale answer; they are asking for one
+// answer, and serving them from one in-flight request is exactly as fresh as
+// serving them from two. The old code gated both behaviours on getCacheable,
+// so opting out of staleness also opted out of sharing.
+//
+// Client-side only: on the server each render must own its own fetch, or two
+// concurrent requests would share a promise across users.
+const getDedupable = () => typeof window !== "undefined";
+
 /** Drop the whole GET cache after a mutation so the next read is fresh. */
 function bustGetCache(): void {
   getCache.clear();
@@ -245,6 +260,8 @@ async function get<T>(path: string): Promise<T> {
   if (getCacheable(path)) {
     const hit = getCache.get(path);
     if (hit && Date.now() - hit.ts < GET_TTL_MS) return hit.data as T;
+  }
+  if (getDedupable()) {
     const flying = inflightGet.get(path);
     if (flying) return flying as Promise<T>;
   }
@@ -291,7 +308,7 @@ async function get<T>(path: string): Promise<T> {
     if (getCacheable(path)) getCache.set(path, { ts: Date.now(), data });
     return data;
   })();
-  if (getCacheable(path)) {
+  if (getDedupable()) {
     inflightGet.set(path, fetchP as Promise<unknown>);
     // Clear the in-flight slot once settled (either outcome); the caller still
     // owns fetchP and handles any rejection itself.

@@ -22,6 +22,7 @@ import {
   levelFor,
   scoreSite,
   MIN_SESSIONS,
+  HEALTH_STALE_DAYS,
   type PageMeasurement,
   type SiteScore,
 } from "@/lib/rubric";
@@ -99,6 +100,14 @@ export default function HealthBoard(): ReactElement {
   const [crawl, setCrawl] = useState<SiteScore | null>(null);
   const [missing, setMissing] = useState(false);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  // Whole days since the crawl, or null when the file carries no usable date --
+  // which must read as "unknown" and never as "fresh".
+  //
+  // Held in STATE and stamped in the effect below, not derived during render.
+  // Date.now() in a render body is impure (react-hooks/purity caught it): the
+  // same props would produce different output on the server and the client, and
+  // a concurrent re-render could show a different age with no data change.
+  const [staleDays, setStaleDays] = useState<number | null>(null);
   const signals = useSignals();
 
   useEffect(() => {
@@ -109,6 +118,10 @@ export default function HealthBoard(): ReactElement {
         if (!live) return;
         setCrawl(json);
         setHistory(recordHistory(json.generatedAt, json.overall));
+        const ms = json.generatedAt ? Date.parse(json.generatedAt) : NaN;
+        setStaleDays(
+          Number.isFinite(ms) ? Math.floor((Date.now() - ms) / 86_400_000) : null,
+        );
       })
       .catch(() => live && setMissing(true));
     return () => {
@@ -201,6 +214,25 @@ export default function HealthBoard(): ReactElement {
           style={{ borderColor: "var(--border)", color: "var(--faint)" }}
         >
           Checked {crawl.generatedAt ? new Date(crawl.generatedAt).toLocaleString() : "—"}.{" "}
+          {/* A DATE IS NOT A FRESHNESS CLAIM. The score comes from
+              e2e/ux-audit.spec.ts, which is a manual `npm run ux:audit` that no
+              pipeline and no scheduled task invokes — so this number only moves
+              when a person remembers to move it, and it was four days old when
+              that was noticed. The date was already printed, but a reader has to
+              subtract to learn anything from it, and an unqualified "81 / 100"
+              above reads as current however old it is.
+              Said out loud past the threshold, in the same voice the rest of
+              this page uses about its own limits. */}
+          {staleDays !== null && staleDays >= HEALTH_STALE_DAYS && (
+            <>
+              <strong style={{ color: "var(--warn, var(--text))" }}>
+                That is {staleDays} days ago — this score describes the app as it was then, not
+                as it is now.
+              </strong>{" "}
+              The crawl is run by hand (<code>npm run ux:audit</code>); nothing refreshes it on a
+              schedule.{" "}
+            </>
+          )}
           {enoughSessions
             ? `Includes how ${signals.sessions} real visits actually went.`
             : `Based on the pages alone — real-visit signals join in at ${MIN_SESSIONS} sessions (currently ${signals.sessions}).`}{" "}
