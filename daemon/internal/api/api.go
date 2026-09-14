@@ -767,19 +767,29 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(reasons) > 0 {
-		w.WriteHeader(http.StatusServiceUnavailable)
+		// writeJSONStatus, NOT WriteHeader followed by writeJSON. That pairing set
+		// the status first, and Go ignores header mutations after WriteHeader — so
+		// writeJSON's Content-Type and Cache-Control were both silently dropped and
+		// the 503 went out as text/plain (content sniffing) with no Cache-Control,
+		// carrying a JSON body. On an anonymous probe route that is worth getting
+		// right: a client parsing by content type rejects a readiness answer it
+		// could have read, and a cacheable 503 is a readiness answer a proxy may
+		// serve after the daemon has recovered. The 200 paths below always used
+		// writeJSON and were never affected.
+		//
 		// The STATUS CODE is the probe's answer and it is the same either way —
 		// a load balancer acts on 503, not on the prose. The reasons name
 		// workers, schema gaps and missing credentials, so they go only to a
 		// caller who has identified themselves.
 		if userID(r) == 0 {
-			writeJSON(w, map[string]any{
+			writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{
 				"ready":  false,
 				"detail": "sign in or send the API token for the reasons",
 			})
 			return
 		}
-		writeJSON(w, map[string]any{"ready": false, "reasons": reasons, "degraded": degraded})
+		writeJSONStatus(w, http.StatusServiceUnavailable,
+			map[string]any{"ready": false, "reasons": reasons, "degraded": degraded})
 		return
 	}
 	if userID(r) == 0 {
