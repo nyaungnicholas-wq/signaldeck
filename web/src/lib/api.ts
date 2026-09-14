@@ -1246,12 +1246,56 @@ export interface LedgerEntry {
   entryHash: string; // the chain link
 }
 
-/** Chain-integrity result: intact iff every recomputed hash matches. */
+/** What the daemon proved about the chain, and how far.
+ *
+ * THIS TYPE USED TO STOP AT `intact`, and that omission was the whole of the
+ * /proof overclaim. The daemon is careful: it returns `incremental`, an
+ * `intactMeans` string that says in as many words "NOT that they were written
+ * when they claim", and a `tamperEvidence` block giving the exact seq through
+ * which anteriority is proven. None of it survived the client boundary, so the
+ * page had `intact: true` and nothing else, and filled the gap with "recomputed
+ * just now, top to bottom ... can't be edited or back-dated after the fact" —
+ * a sentence contradicted by the very response that produced it.
+ *
+ * Keep these fields optional: an older daemon omits them, and absent must read
+ * as "unknown", never as "proven".
+ */
+export interface LedgerAnchoring {
+  wrote?: boolean;
+  reason?: string;
+  minInterval?: string;
+}
+
+export interface LedgerTamperEvidence {
+  /** Edits, deletions, reorderings and insertions break the recomputation. */
+  detectsEdits?: boolean;
+  /** True only while an anchor reproduces AND none are failing. */
+  detectsOperatorRegeneration?: boolean;
+  /** Newest seq covered by a reproducing anchor. null = nothing is proven. */
+  provenAnteriorThroughSeq?: number | null;
+  provenAnteriorThroughCount?: number | null;
+  /** Unix seconds of that anchor. */
+  provenAnteriorAsOf?: number | null;
+  anchorCount?: number;
+  /** "stored" compares against stored head hashes; ?full=1 re-derives payloads. */
+  anchorCheckMode?: string;
+  /** A signed anchor that STOPS reproducing is positive evidence of a rewrite. */
+  failingAnchors?: number;
+  firstFailingSeq?: number | null;
+  anchoring?: LedgerAnchoring;
+  claim?: string;
+}
+
 export interface LedgerVerifyResponse {
   intact: boolean;
   count: number; // rows examined
   head: string; // entry_hash of the last row ("" if empty)
   brokenAtSeq?: number; // first seq whose hash/linkage disagrees (tamper)
+  /** true = only the suffix since the last checkpoint was re-hashed. */
+  incremental?: boolean;
+  /** The daemon's own scoping of what `intact` does and does not establish. */
+  intactMeans?: string;
+  tamperEvidence?: LedgerTamperEvidence;
 }
 
 /** The committed ledger entries for one symbol+horizon (newest first). */
@@ -1265,6 +1309,44 @@ export interface LedgerResponse {
 /** Recompute + verify the whole prediction-ledger hash chain. */
 export function ledgerVerify() {
   return get<LedgerVerifyResponse>("/api/ledger/verify");
+}
+
+/** One frozen claim on the pre-registration chain. */
+export interface PreregRecord {
+  seq: number;
+  kind: string;
+  /** The registered claim itself, as text. */
+  spec?: string;
+  specHash?: string;
+  entryHash?: string;
+  prevHash?: string;
+  registeredOn?: string;
+  ts?: number;
+  /** True when the claim was frozen before anything it predicts could be graded. */
+  beforeFirstGradable?: boolean;
+  note?: string;
+}
+
+/** GET /api/prereg — the registration chain, with the daemon's own explanation.
+ *
+ * It is in the PublicReads allowlist (security.go), so an anonymous visitor on a
+ * public deployment can read it. Nothing here is a number: it is what was
+ * claimed, when, and under which digest.
+ */
+export interface PreregResponse {
+  records: PreregRecord[];
+  chainVerified?: boolean;
+  brokenAtSeq?: number;
+  registeredBefore?: boolean;
+  firstGradableOn?: string;
+  whatThisIs?: string;
+  howToUseIt?: string;
+  whyChained?: string;
+  appendOnly?: string;
+}
+
+export function prereg() {
+  return get<PreregResponse>("/api/prereg");
 }
 
 /** The committed ledger entries for one symbol+horizon. */

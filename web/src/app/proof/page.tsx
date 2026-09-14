@@ -28,6 +28,7 @@ import {
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import RefusalNotice from "@/components/RefusalNotice";
+import Registrations from "@/components/proof/Registrations";
 
 // Two retries, not more. Each failed attempt costs the daemon's FULL 30s
 // deadline before it answers, so three attempts is already ~70s of waiting —
@@ -63,6 +64,102 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
         <span className="text-[0.72rem] leading-snug" style={{ color: "var(--dim)" }}>
           {sub}
         </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** What the verification actually covered, in the response's own numbers.
+ *
+ * Three DIFFERENT guarantees get collapsed into "tamper-proof" if you let them,
+ * so they are separated here and each is shown with its extent:
+ *
+ *   edit-detection   any modified, deleted, reordered or inserted row breaks
+ *                    the recomputation at that seq. Always on.
+ *   anteriority      an Ed25519 anchor signed earlier still reproduces, so the
+ *                    history up to THAT seq could not have been rebuilt since.
+ *                    It stops at provenAnteriorThroughSeq; everything appended
+ *                    after the newest anchor has none.
+ *   external proof   the anchor digest published outside this machine. The
+ *                    operator holds the signing key, so nothing on this page
+ *                    constrains him without it.
+ *
+ * Numbers come from the response. Nothing here is written as prose that could
+ * drift from what the daemon computed.
+ */
+function LedgerProvenance({ lv }: { lv: LedgerVerifyResponse }) {
+  const te = lv.tamperEvidence;
+  if (!te) return null;
+
+  const provenSeq = te.provenAnteriorThroughSeq ?? null;
+  const beyond = provenSeq === null ? lv.count : Math.max(0, lv.count - provenSeq);
+  const failing = te.failingAnchors ?? 0;
+  const asOf = te.provenAnteriorAsOf
+    ? new Date(te.provenAnteriorAsOf * 1000).toISOString().replace("T", " ").slice(0, 16) + "Z"
+    : null;
+
+  const rows: Array<[string, string, string?]> = [
+    [
+      "Verification mode",
+      lv.incremental === false
+        ? "full walk from genesis"
+        : "incremental — only the rows after the last checkpoint were re-hashed",
+      lv.incremental === false ? undefined : "?full=1 forces the complete walk",
+    ],
+    [
+      "Anchor check",
+      te.anchorCheckMode === "stored"
+        ? `${te.anchorCount ?? 0} anchor(s), compared against stored head hashes`
+        : `${te.anchorCount ?? 0} anchor(s), re-derived from payloads`,
+      te.anchorCheckMode === "stored" ? "?full=1 re-derives — the auditor's check" : undefined,
+    ],
+    [
+      "Anteriority proven through",
+      provenSeq === null
+        ? "nothing — no anchor currently reproduces"
+        : `entry #${provenSeq.toLocaleString()}${asOf ? `, signed ${asOf}` : ""}`,
+    ],
+    [
+      "Carries no anteriority proof",
+      `${beyond.toLocaleString()} entr${beyond === 1 ? "y" : "ies"} appended after the newest reproducing anchor`,
+    ],
+    [
+      "Anchors that stopped reproducing",
+      failing > 0
+        ? `${failing} — positive evidence history was rewritten after signing (first at #${te.firstFailingSeq ?? "?"})`
+        : "none",
+    ],
+  ];
+
+  return (
+    <div className="border-t px-5 py-4" style={{ borderColor: "var(--border)" }}>
+      <div className="mb-2 text-[0.7rem] uppercase tracking-[0.15em]" style={{ color: "var(--faint)" }}>
+        What this check covered
+      </div>
+      <dl className="m-0 grid gap-x-4 gap-y-2 sm:grid-cols-[minmax(0,15rem)_1fr]">
+        {rows.map(([k, v, hint]) => (
+          <div key={k} className="contents">
+            <dt className="text-[0.75rem]" style={{ color: "var(--dim)" }}>
+              {k}
+            </dt>
+            <dd className="m-0 text-[0.75rem]" style={{ color: "var(--fg)" }}>
+              {v}
+              {hint ? (
+                <span className="mono ml-2 text-[0.68rem]" style={{ color: "var(--faint)" }}>
+                  {hint}
+                </span>
+              ) : null}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {te.claim ? (
+        <p
+          className="m-0 mt-3 max-w-[80ch] text-[0.72rem] leading-relaxed"
+          style={{ color: failing > 0 ? "var(--bad)" : "var(--faint)" }}
+        >
+          {te.claim}
+        </p>
       ) : null}
     </div>
   );
@@ -254,9 +351,20 @@ export default function ProofPage() {
               <span className="text-[1.15rem] font-bold" style={{ color: lv.intact ? "var(--ok)" : "var(--bad)" }}>
                 {lv.intact ? "Chain intact" : `BROKEN at #${lv.brokenAtSeq}`}
               </span>
+              {/* THE HEADLINE IS NOT THE CLAIM. This used to read "recomputed
+                  just now, top to bottom ... A prediction can't be edited or
+                  back-dated after the fact" — and the response that produced it
+                  says `incremental: true` and, verbatim, that intact means "the
+                  stored rows are internally consistent — NOT that they were
+                  written when they claim". Two sentences, one page, opposite
+                  claims. Both halves were wrong: the fast path re-hashes only
+                  the suffix since the last checkpoint, and edit-detection is not
+                  anteriority. `intactMeans` is the daemon's own scoping, so it
+                  is shown rather than paraphrased. */}
               <span className="text-[0.78rem] leading-relaxed" style={{ color: "var(--dim)" }}>
                 {lv.intact
-                  ? "Every committed prediction links to the previous one by hash — recomputed just now, top to bottom, with no break. A prediction can't be edited or back-dated after the fact."
+                  ? (lv.intactMeans ??
+                     "Every committed prediction links to the previous one by hash, with no break. That establishes the stored rows are internally consistent — not that they were written when they claim.")
                   : "The recomputed chain disagrees with a stored hash — surfaced, never hidden."}
               </span>
             </div>
@@ -269,6 +377,12 @@ export default function ProofPage() {
               </div>
             </div>
           </div>
+
+          {/* WHAT WAS ACTUALLY CHECKED, AND HOW FAR. A reader cannot evaluate
+              "intact" without the extent, and every number here comes straight
+              out of the response rather than from prose. */}
+          <LedgerProvenance lv={lv} />
+
           {lv.head ? (
             <div className="border-t px-5 py-2 text-[0.7rem]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
               head <span className="mono">{lv.head.slice(0, 16)}…</span>
@@ -276,6 +390,11 @@ export default function ProofPage() {
           ) : null}
         </section>
       )}
+
+      {/* THE REGISTRATION ITSELF, not a promise of one. /volatility sends
+          readers here to "read that registration" and until now there was
+          nothing on this page to read. */}
+      <Registrations />
 
       {/* The horizon picker lives ABOVE the three track-record states, not
           inside the loaded one — changing horizon clears `tr`, and a control

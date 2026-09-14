@@ -431,9 +431,28 @@ export default async function AccuracyPage() {
             </div>
             <p className="m-0 mt-2 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
               The flagship directional model was retired on {FLAGSHIP_RETIREMENT.date} by a
-              pre-registered rule, and retirement does not lapse. The dated pre-epoch grade behind
-              that decision is kept in <code className="mono">proofs/P2_LIVE_RECORD_RECONCILIATION.md</code>;
-              its figures are not reprinted while the current window is refused.
+              pre-registered rule, and retirement does not lapse.
+            </p>
+            {/* A BARE REPO PATH IS NOT A RECEIPT. This used to print
+                `proofs/P2_LIVE_RECORD_RECONCILIATION.md` in a <code> tag, which
+                is only actionable for someone standing in the source tree. An
+                anonymous judge follows it, finds nothing, and reasonably
+                concludes the evidence does not exist.
+                The document is NOT served here, and that is deliberate rather
+                than an oversight: it contains the dated pre-epoch grade, and
+                publishing it would reprint exactly the figures this page is
+                currently withholding. So the link goes to what IS inspectable
+                without the repository — the rule that forced the retirement,
+                frozen on the chain before the outcome existed. */}
+            <p className="m-0 mt-2 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+              The rule that forced it was registered in advance and is readable on the{" "}
+              <Link href="/proof" style={{ color: "var(--accent)" }}>
+                receipts page
+              </Link>
+              , with its date and digest. The dated grade the rule was applied to is held as a
+              repository document and is <strong>not published here</strong>: reprinting it would
+              republish the same figures the current window is refusing. Withholding it is the
+              same decision applied consistently, not a missing page.
             </p>
           </section>
         ) : null}

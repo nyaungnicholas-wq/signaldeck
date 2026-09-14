@@ -374,8 +374,26 @@ func (d Deps) requiresAuth(path string) bool {
 	// landing page and /accuracy render, it serves aggregates only (no user
 	// data, no vendor rows), and it fails closed on its own — a refusal is a
 	// 503 with a reason. A grade behind a login is a grade hidden.
+	// /api/prereg joins them (2026-09-13), and the gap it closes is the same one
+	// this block was written for. It was already in publicRoutes, so a PUBLIC
+	// deployment served it anonymously — but not here, so on this posture the
+	// registration chain 401'd the very visitors /proof exists for. That was
+	// invisible while no page called it: /volatility told readers "you can read
+	// that registration on the receipts page", /accuracy printed a bare
+	// proofs/*.md path, and /proof rendered no registration at all. Wiring the
+	// section up without this makes the promise resolve to "not readable
+	// without a session", which for an anonymous judge is the same dead end
+	// wearing a better error message.
+	//
+	// Safe on the same terms as its neighbours: not user-scoped, no LLM budget,
+	// no prices and no vendor rows — it serves frozen claim text with its
+	// digests and chain links, which is precisely what a sceptic is supposed to
+	// be able to read. Measured 2026-09-13: 8ms, 172 KB, 116 records, served
+	// from the store with no recomputation beyond the chain check it already
+	// does. The size is the one cost worth knowing about; it is static between
+	// registrations.
 	if path == "/api/track-record" || path == "/api/ledger/verify" || path == "/api/vol-forecast/record" ||
-		path == "/api/accuracy" {
+		path == "/api/accuracy" || path == "/api/prereg" {
 		return false
 	}
 	// The MCP endpoint authenticates itself, and strictly more tightly than

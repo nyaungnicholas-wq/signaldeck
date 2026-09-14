@@ -32,7 +32,7 @@ export const dynamic = "force-dynamic";
 export const metadata = {
   title: "SignalDeck - a market instrument that grades itself in public",
   description:
-    "Volatility and loss estimates for US equities. Every claim is pre-registered before the outcome and graded in public, including the ones that failed.",
+    "A volatility forecast for US equities, pre-registered before the outcome and graded in public under the loss function it registered - including the results that failed.",
 };
 
 const DAEMON = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
@@ -124,7 +124,14 @@ const statusTone = (s: string) =>
 const REFUSALS: ReadonlyArray<readonly [string, string]> = [
   [
     "It will not tell you what to buy.",
-    "There is no order path, no portfolio, no execution and no position sizing anywhere on this site. It is a measuring instrument, not a broker and not an adviser.",
+    // THIS USED TO SAY there was "no order path, no portfolio, no execution and
+    // no position sizing anywhere on this site", and that was simply untrue:
+    // /lab/paper posts to /api/paper/order and /lab/portfolio exists. A false
+    // modesty claim on the landing page of an honesty product is worse than the
+    // thing it was denying, because it is the one page a reader uses to decide
+    // whether to trust the rest. What is actually true is narrower and still
+    // worth saying: the simulated book never reaches a broker.
+    "Nothing here is advice, and no order leaves this machine. There is a paper book under Lab that fills simulated orders against recorded prices so a strategy can be inspected end to end; it holds no money, connects to no brokerage, and its fills are a simulation, not evidence of what a real one would have cost.",
   ],
   [
     "It will not publish a number it cannot stand behind.",
@@ -132,11 +139,27 @@ const REFUSALS: ReadonlyArray<readonly [string, string]> = [
   ],
   [
     "It will not claim a forecasting edge it has not measured.",
-    "Every predictor this platform has tested for price direction has failed against its own null, and those results stay published at full size.",
+    // "Every predictor ... has FAILED against its own null" collapsed three
+    // different states into the most quotable one. Retirement on measured
+    // evidence, a result that is merely indistinguishable from chance, and a
+    // figure currently WITHHELD because its window is degenerate are not the
+    // same finding, and the third is not a finding at all. The repo's own
+    // record is explicit that the directional book is indistinguishable from
+    // chance rather than anti-predictive, so "failed" overstated even the part
+    // that was measured -- in the direction of sounding more rigorous, which is
+    // the easiest kind of overclaim to leave standing.
+    "No directional predictor here has ever cleared its own baseline. Some were retired on measured evidence, some came back indistinguishable from chance, and some are withheld right now because the window they would be graded on is degenerate. Those are three different states and this site names which one applies, rather than filing them all under failure.",
   ],
   [
     "It will not move the goalposts.",
-    "Claims are hash-chained before the outcome exists. Editing one appends a visible amendment; it cannot quietly replace the original.",
+    // The old line said an edit "cannot quietly replace the original", which is
+    // stronger than what the chain proves and stronger than what
+    // /api/ledger/verify says about itself: wholesale regeneration by the
+    // operator is NOT detectable from the chain alone, because whoever holds
+    // the signing key can re-sign a fabricated chain. Only a digest published
+    // outside this machine defeats that, so the claim is scoped to what the
+    // evidence actually supports.
+    "Claims are hash-chained before the outcome exists, so an edit, deletion or reordering breaks the recomputation at that row. That is tamper-EVIDENCE, not proof of when a row was written: the operator holds the signing key, and only the anchor digests published outside this machine constrain what could have been rewritten. The proof page says which of the two you are looking at.",
   ],
 ];
 
@@ -149,12 +172,21 @@ const CHECKS = [
   {
     href: "/proof",
     title: "The receipts",
-    body: "Recompute the hash chain in your browser. If one stored prediction had been edited, the chain breaks and the page says so.",
+    // "Recompute ... in your browser" was wrong about where the work happens:
+    // the page calls /api/ledger/verify and the daemon does it. Saying
+    // "in your browser" implied the reader was checking the operator rather
+    // than asking him, which is the opposite of the guarantee on offer.
+    body: "Ask the daemon to re-verify the hash chain and see what it checked, how far back, and which anchors reproduce. If a stored prediction had been edited, the chain breaks there and the page says so.",
   },
   {
     href: "/volatility",
-    title: "The risk estimates",
-    body: "How volatile a stock is about to get, and the live record of how that estimate has actually scored against two simple rules.",
+    title: "The volatility record",
+    // NOT "the risk estimates". This route is the graded RECORD of one
+    // volatility forecast against two baselines; it is not a per-symbol risk
+    // tool, and both horizons currently read INSUFFICIENT. Advertising a
+    // feature the page does not have is how a reader arrives expecting a number
+    // for their ticker and leaves thinking the site is broken.
+    body: "How the volatility forecast has scored against two simple baselines, day by day. Not a per-symbol risk lookup: it is the scoreboard for one pre-registered estimate, and it shows how much evidence has accrued so far.",
   },
   {
     href: "/glossary",
@@ -210,7 +242,7 @@ function StillTrue() {
         <li>
           The volatility record keeps accruing and publishes its verdict either way.{" "}
           <Link href="/volatility" style={{ color: "var(--accent)" }}>
-            The risk estimates
+            The volatility record
           </Link>
         </li>
       </ul>
@@ -402,10 +434,10 @@ export default async function Landing() {
           A market instrument that grades itself in public.
         </h1>
         <p className="m-0 max-w-[62ch] text-[1rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          SignalDeck estimates how volatile a stock is about to get, and how much you could
-          lose on a bad day. Every claim is written down <em>before</em> the outcome is known,
-          hash-chained so it cannot be edited afterwards, and then graded against what
-          actually happened.
+          SignalDeck estimates how volatile a stock is about to get. Every claim is written
+          down <em>before</em> the outcome is known, hash-chained so an edit is detectable
+          afterwards, and then graded against what actually happened, under a loss function
+          registered in advance.
         </p>
         <p className="m-0 max-w-[62ch] text-[1rem] font-semibold leading-relaxed">
           Including the claims that failed. Especially those.
@@ -419,7 +451,7 @@ export default async function Landing() {
             See the grades
           </Link>
           <Link href="/volatility" className="chip" style={{ padding: "0.6rem 1rem" }}>
-            The risk estimates
+            The volatility record
           </Link>
           <Link href="/proof" className="chip" style={{ padding: "0.6rem 1rem" }}>
             Verify the chain
@@ -464,12 +496,14 @@ export default async function Landing() {
         </div>
       </Section>
 
-      <Section eyebrow="Stay in touch" title="Get told when the risk forecasts go live">
+      <Section eyebrow="Stay in touch" title="Get told when the volatility record can be judged">
         <p className="m-0 max-w-[62ch] text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
-          Two new estimates are being pre-registered: how volatile a stock is about to get, and
-          how much you could lose on a bad day. Both will be graded in public from the day they
-          start, with the verdict published either way. One email when that record is worth
-          reading. Nothing else, ever.
+          The volatility forecast is already registered and already accruing &mdash; it is not
+          &ldquo;being&rdquo; pre-registered, and the chain it was frozen on is readable on the
+          receipts page. What it does not yet have is enough independent trading days to
+          support a verdict either way, which is why both horizons currently read INSUFFICIENT
+          rather than a score. One email when that record crosses its registered evidence
+          threshold and can actually be judged. Nothing else, ever.
         </p>
         <WaitlistForm />
       </Section>

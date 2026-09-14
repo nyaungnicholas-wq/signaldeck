@@ -38,13 +38,20 @@ func TestProbesStayReachableWhenReadsAreClosed(t *testing.T) {
 // prefix and quietly published the whole ledger surface.
 func TestProofReceiptsArePublicButNarrowly(t *testing.T) {
 	d := Deps{Cfg: config.Config{PublicReads: false}}
-	for _, p := range []string{"/api/track-record", "/api/ledger/verify", "/api/accuracy"} {
+	// /api/prereg is on this list since 2026-09-13. It was already in
+	// publicRoutes, so a PUBLIC deployment served it, but not this posture --
+	// and /proof now renders the registration chain, which three other pages
+	// send readers here to read. Without the exemption that section shows
+	// "not readable without a session" to exactly the anonymous visitor the
+	// page exists for.
+	for _, p := range []string{"/api/track-record", "/api/ledger/verify", "/api/accuracy", "/api/prereg"} {
 		if d.requiresAuth(p) {
 			t.Errorf("%s requires auth with PublicReads=false — /proof renders its "+
 				"error state to every anonymous visitor it exists for", p)
 		}
 	}
-	// The exemption is two exact paths, NOT a prefix and NOT the ledger surface.
+	// The exemption is a list of EXACT paths, NOT a prefix and NOT the ledger
+	// surface.
 	// /api/ledger/anchors is the neighbour that must not ride along: it is the
 	// signed-anchor history, and publishing it was never the decision made here.
 	for _, p := range []string{

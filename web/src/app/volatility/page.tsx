@@ -17,10 +17,22 @@ import Link from "next/link";
  */
 export const dynamic = "force-dynamic";
 
+// THE WORD "LOSS" ON THIS PAGE MEANS QLIKE, THE STATISTICAL LOSS FUNCTION the
+// forecast is scored under — forecast error, lower is better. The old metadata
+// promised "how much you could lose on a bad day", which on a finance site
+// every reader takes as a drawdown or value-at-risk estimate in their own
+// money. There is no such feature: /api/vol-forecast/record returns meanQlike,
+// vsEwma, vsRandomWalk and a verdict, and carries no quantile, VaR or drawdown
+// field anywhere. Two different meanings of one word, and the marketing one was
+// winning on the page title.
+//
+// It is also not a per-symbol tool. It is the graded record of ONE
+// pre-registered forecast against two baselines, and both horizons currently
+// read INSUFFICIENT.
 export const metadata = {
-  title: "Volatility and loss estimates",
+  title: "Volatility forecast: the live record",
   description:
-    "How much a stock is likely to move, and how much you could lose on a bad day - with the live record of how those estimates have actually scored.",
+    "How one pre-registered volatility forecast has scored against two simple baselines, under the loss function registered before any of it was measured. A record of forecast error, not a per-symbol risk estimate.",
 };
 
 type Horizon = {
