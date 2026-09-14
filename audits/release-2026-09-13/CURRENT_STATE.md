@@ -68,8 +68,8 @@ restarted.
 
 1. Baseline + reproduce frontend — **DONE**
 2. Publication fail-open repairs + atomic snapshot — **DONE**
-3. Build/lifecycle/public-mode config — **DONE**; provenance parity (F06) **OPEN**
-4. Ledger truthful proof presentation — **DONE**; write integrity (F08) **OPEN**
+3. Build/lifecycle/public-mode config — **DONE**; provenance parity (F06) **DONE**
+4. Ledger truthful proof presentation — **DONE**; write integrity (F08) **DONE**
 5. Release-contract split, copy/evidence accuracy — **DONE**
 6. Auth/data boundary tests — **DONE**; full private journeys **PARTIAL**
 7. Clean build + required tests + browser review — **DONE**; ops/restore/rollback rehearsal **NOT RUN**
@@ -86,6 +86,11 @@ restarted.
 | `6cd06a8` | behaviour-not-formatting test fix, nav relabel, audit records |
 | `de8742b` | cross-user tenant isolation tests |
 | `413b5ce` | the durable audit record |
+| `cff7012` | grader-health can tell a powered-off machine from a broken grader (red tasks) |
+| `0000059` | container build provenance bound by content hash (F06) |
+| `03d3b4a` | attestation and eligibility are one transaction (F08) |
+| `902f777` | repaired the self-test my own manifest guard broke |
+| `d656701` | one pre-existing red ops self-test, reported not hidden |
 
 ## Open, and why
 
@@ -116,11 +121,26 @@ forecasts), both **red scheduled tasks**, and the **degraded-worker diagnosis**.
 - **One broken test, mine.** Reflowing the `hb_mode` case block broke a regex
   that pinned single-line formatting. Fixed structurally, not by deleting.
 
+## Failures in the continuation, same rule
+
+- **I broke `ops/test-docker-build.sh` twice** — once with the F07 audience
+  guard, once with the F06 manifest guard — and neither commit ran it. A
+  concurrent session caught the first from CI (`bea128c`); I caught the second
+  only during the final diff review, by noticing a file in the diff I had not
+  edited. Both are the same failure: a guard that changes a contract must update
+  the file that guards it.
+- **I nearly reported a nonsense number.** The first ledger-coverage query said
+  255,055 rows were unattested. `prediction_outcomes` also holds the `#pm`
+  benchmark rows, which are never attested and correctly absent from the chain.
+  The real figure is 31. Caught because 255,055 could not possibly exceed the 30
+  the health check reported.
+
 ## Exact next command
 
-```
-Get-ScheduledTaskInfo -TaskName 'SignalDeck Check-Grader-Health'
+```bash
+ops/docker-build.sh
 ```
 
-That is the undiagnosed red task, and it is the check that would tell you when
-the grader stops — so a red health-checker is worth more attention than it looks.
+On a machine with a running docker daemon. It is the one leg of F06 that has
+never executed: the in-image `seal` step. If it fails, the build fails, which is
+the intended direction.
