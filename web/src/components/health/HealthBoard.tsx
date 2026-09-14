@@ -40,6 +40,21 @@ const MAX_HISTORY = 20;
 interface HistoryPoint {
   at: string;
   overall: number;
+  /**
+   * How many routes that crawl covered.
+   *
+   * A score is an AVERAGE OVER ROUTES, so two crawls are only comparable when
+   * they averaged the same set. Adding 16 routes to the audit moved the number
+   * 80.8 -> 79.7 with nothing about the app changed, and the trend happily
+   * rendered that as "-1 since the first check" -- a delta that measured the
+   * route list, not the product.
+   *
+   * Optional because points written before this existed carry no count. They
+   * are kept (the history is a user's own record and is not worth discarding)
+   * but they can never match a known count, so they are excluded from the
+   * delta rather than silently compared against.
+   */
+  pages?: number;
 }
 
 function readHistory(): HistoryPoint[] {
@@ -56,10 +71,21 @@ function readHistory(): HistoryPoint[] {
 }
 
 /** Append one point per distinct crawl, so reloading the page cannot pad the trend. */
-function recordHistory(at: string, overall: number): HistoryPoint[] {
+function recordHistory(at: string, overall: number, pages: number): HistoryPoint[] {
   const history = readHistory();
-  if (history.some((p) => p.at === at)) return history;
-  const next = [...history, { at, overall }].slice(-MAX_HISTORY);
+  const existing = history.findIndex((p) => p.at === at);
+  if (existing >= 0 && history[existing].pages !== undefined) return history;
+
+  // A point written before `pages` existed is UPGRADED rather than skipped.
+  // Without this, any crawl a viewer had already loaded stayed coverage-less
+  // forever: the early return fired on the matching timestamp, the point never
+  // learned how many routes it covered, and it could therefore never serve as a
+  // baseline. The score it holds is still correct, and the count we are filling
+  // in is the count of the crawl it was written from -- the same `at`.
+  const next =
+    existing >= 0
+      ? history.map((p, i) => (i === existing ? { ...p, pages } : p))
+      : [...history, { at, overall, pages }].slice(-MAX_HISTORY);
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
   } catch {
@@ -117,7 +143,7 @@ export default function HealthBoard(): ReactElement {
       .then((json: SiteScore) => {
         if (!live) return;
         setCrawl(json);
-        setHistory(recordHistory(json.generatedAt, json.overall));
+        setHistory(recordHistory(json.generatedAt, json.overall, json.pagesCrawled));
         const ms = json.generatedAt ? Date.parse(json.generatedAt) : NaN;
         setStaleDays(
           Number.isFinite(ms) ? Math.floor((Date.now() - ms) / 86_400_000) : null,
@@ -168,8 +194,17 @@ export default function HealthBoard(): ReactElement {
   const confidence = confidenceScore(signals);
   const enoughSessions = signals.sessions >= MIN_SESSIONS;
 
-  const first = history[0];
-  const delta = first && history.length > 1 ? site.overall - first.overall : null;
+  // Compare only crawls that covered the SAME routes. The baseline is the
+  // earliest point whose coverage matches this one; when there is no such
+  // point -- the first run at a new coverage, which is exactly when the number
+  // jumps for reasons that have nothing to do with the app -- there is no
+  // honest delta to show, so none is shown.
+  const comparable = history.filter((p) => p.pages === crawl.pagesCrawled);
+  const first = comparable[0];
+  const delta =
+    first && comparable.length > 1 && first.at !== crawl.generatedAt
+      ? site.overall - first.overall
+      : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -204,7 +239,7 @@ export default function HealthBoard(): ReactElement {
                 {delta.toFixed(0)}
               </div>
               <div style={{ color: "var(--faint)", fontSize: "0.75rem" }}>
-                since the first check
+                since the first check of all {crawl.pagesCrawled} pages
               </div>
             </div>
           )}
