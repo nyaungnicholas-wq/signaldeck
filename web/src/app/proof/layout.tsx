@@ -12,7 +12,7 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "The receipts",
   description:
-    "SignalDeck's live, out-of-sample record: a tamper-evident hash chain of every committed prediction, recomputed on load, graded over independent symbol-day resolutions — and withheld outright when the sample is too thin to claim skill.",
+    "SignalDeck's live, out-of-sample record: a tamper-evident hash chain of committed predictions, recomputed on load, graded over independent symbol-day resolutions — and withheld outright when the sample is too thin to claim skill.",
 };
 
 export default function ProofLayout({ children }: { children: React.ReactNode }) {

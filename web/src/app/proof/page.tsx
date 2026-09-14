@@ -168,14 +168,34 @@ export default function ProofPage() {
     <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
       <header className="flex flex-col gap-2">
         <h1 className="text-[1.4rem] font-extrabold tracking-tight">The receipts</h1>
+        {/* "commits EVERY prediction" was a guarantee this page cannot make.
+            The prediction write is four separate transactions -- UpsertPrediction,
+            SeedBenchmarkOutcome, then AppendLedger, each opening its own BeginTx --
+            and the ledger append is deliberately best-effort, because a ledger
+            failure must not cost a user their forecast. A process killed between
+            the first and the third therefore leaves a SERVED prediction with no
+            ledger entry.
+
+            Measured 2026-09-13: 30 of 496,987 served predictions since the ledger
+            began (0.0060%) have no entry, isolated singletons across five months,
+            and it is still accruing. Small, and not nothing -- and "every" is
+            exactly the kind of unqualified claim this page exists to argue
+            against making.
+
+            So the copy now describes the PROCESS, which is true, and says the gap
+            is counted rather than hidden, which is also true: ops/ledger coverage
+            reports it on every run (fd440e5). No number is written into the copy
+            on purpose -- a hand-typed count here is the defect that put five wrong
+            figures on this site already (8f959f7), and this one is still moving. */}
         <p
           data-purpose="proof"
           className="m-0 max-w-[68ch] text-[0.85rem] leading-relaxed"
           style={{ color: "var(--dim)" }}
         >
-          Most signal products claim a win rate you can&rsquo;t check. SignalDeck commits every
-          prediction to a tamper-evident hash chain and grades itself against what actually
-          happened — and withholds any skill claim until the sample is real. This page is that
+          Most signal products claim a win rate you can&rsquo;t check. SignalDeck commits each
+          prediction to a tamper-evident hash chain as it is made, counts the rare write that
+          does not land instead of rounding it away, and grades itself against what actually
+          happened — withholding any skill claim until the sample is real. This page is that
           record, recomputed live. It is descriptive, not advice.
         </p>
       </header>
