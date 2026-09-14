@@ -281,7 +281,29 @@ if [ -z "$refusal_reason" ]; then
       >> "$STDERR_CAPTURE"
   cat "$STDERR_CAPTURE" >> "$LOG"
 
-  "$PY" "$SD/tools/accuracy_registry.py" --json "$OUT" > "$STDERR_CAPTURE" 2>&1
+  # ---------------------------------------------------------------------------
+  # STAGE, CHECK, THEN PUBLISH ATOMICALLY.
+  #
+  # Every gate below used to run against $OUT itself, and $OUT is the file
+  # /api/accuracy reads -- internal/api/accuracy.go loadRegistry() does an
+  # os.ReadFile on EVERY request. So the pinned grader's raw output became the
+  # public registry the instant it was written, and stayed public for as long as
+  # the selection-honesty merge, the freshness assertion and the collapse gate
+  # took to run. A request landing in that window was served ungated rows: the
+  # exact figures the collapse gate exists to withhold, with HTTP 200 on them.
+  # selection_honesty.py --merge made it worse -- it reopens the same path "w"
+  # and rewrites it, so a reader could also catch a truncated file.
+  #
+  # The grade is now built in $STAGE, every gate runs against $STAGE, and $OUT
+  # is replaced by ONE rename at the end. A rename within a directory is atomic,
+  # so a concurrent reader sees either the previous registry or the new one and
+  # never a half-checked or half-written one. On refusal $OUT is left exactly as
+  # it was and the refusal path below rewrites it -- which is also why the
+  # refusal envelope can still read the last published rows out of $OUT.
+  STAGE="$SD/data/.accuracy_registry.staging.json"
+  rm -f "$STAGE"
+
+  "$PY" "$SD/tools/accuracy_registry.py" --json "$STAGE" > "$STDERR_CAPTURE" 2>&1
   grader_status=$?
   cat "$STDERR_CAPTURE" >> "$LOG"
 
@@ -293,17 +315,34 @@ if [ -z "$refusal_reason" ]; then
   # an accuracy is just a one-sided selection's own base rate; it changes no
   # verdict, no threshold and no retire flag.
   #
-  # Its exit code is DELIBERATELY not propagated: a refused row is a disclosure
-  # about the model, not a grading outage, and folding it into grader_status
-  # would trip the refusal path below and suppress the whole report.
+  # ITS EXIT CODE STILL DOES NOT PROPAGATE, AND STILL MUST NOT: a refused row is
+  # a disclosure about the model, not a grading outage. But `|| true` was not a
+  # decision to ignore row refusals, it was a decision to ignore EVERYTHING --
+  # main() returns `1 if refused else 0`, and an unhandled exception also exits
+  # 1. A traceback on row three and a clean run that refused row three were the
+  # same byte to this script, and the half-merged JSON published anyway.
+  #
+  # So the exit code is discarded on purpose and the ARTIFACT is inspected
+  # instead: tools/publication_gate.py asserts that every directional row with
+  # breadth tallies actually carries an honesty block from the right source with
+  # the right keys. That is a question a crash cannot answer yes to.
   if [ "$grader_status" -eq 0 ]; then
-    "$PY" "$SD/tools/selection_honesty.py" --json "$OUT" --merge >> "$LOG" 2>&1 || true
+    "$PY" "$SD/tools/selection_honesty.py" --json "$STAGE" --merge >> "$LOG" 2>&1 \
+      || echo "selection_honesty exited non-zero (row refusals OR a crash -- the gate below decides which)" >> "$LOG"
+
+    "$PY" "$SD/tools/publication_gate.py" --registry "$STAGE" > "$STDERR_CAPTURE" 2>&1
+    pubgate_status=$?
+    cat "$STDERR_CAPTURE" >> "$LOG"
+    if [ "$pubgate_status" -ne 0 ]; then
+      pubgate_detail=$(tr -d '\r' < "$STDERR_CAPTURE" | tr '\n' ' ')
+      refusal_reason="CHECK UNAVAILABLE: the graded artifact is incomplete, so it was not published -- ${pubgate_detail}. This is a post-processing failure, NOT a finding about any model"
+    fi
   fi
 
-  after_generated=$(generated_of "$OUT")
+  after_generated=$(generated_of "$STAGE")
   if [ "$grader_status" -ne 0 ]; then
     refusal_reason="grader exited $grader_status"
-  elif [ "$after_generated" = "$before_generated" ]; then
+  elif [ -z "$refusal_reason" ] && [ "$after_generated" = "$before_generated" ]; then
     # Exit 0 with an unmoved `generated` is the same outage wearing a success
     # code: nothing was graded, so nothing may be republished.
     refusal_reason="grader exited 0 but the registry's generated timestamp did not advance (still ${before_generated:-absent})"
@@ -326,21 +365,39 @@ if [ -z "$refusal_reason" ]; then
   # requires it to refuse "on the SAME evidence internal/forecastmon uses, so
   # the publication surface and the monitor cannot disagree".
   #
-  # FAILS OPEN, like the handler. Exit 2 (undetermined) publishes -- refusing on
-  # a failed read would wedge publication shut on a transient database error
-  # rather than on evidence. Only an explicit exit 1, a measured collapse,
-  # refuses. cmd/forecastmon is NOT a substitute: it takes a fixed --days
-  # lookback, and this gate exists precisely because a fixed window misses a
-  # collapse just outside it or refuses forever on one the grader never touched.
+  # EXIT 2 NOW WITHHOLDS. It used to publish, "like the handler", on the
+  # argument that refusing on a failed read would wedge publication shut on a
+  # transient database error. Both ends of that pairing have been reversed
+  # together (internal/api/accuracy.go now answers REFUSED_UNAVAILABLE on the
+  # same condition). The argument was never wrong about transient errors; it was
+  # wrong about everything else that exits 2 -- a missing binary, a renamed
+  # flag, a bad --db path -- each of which silently un-wires the gate forever.
+  # The precedent is twenty lines up: deployment_drift refuses on ANY non-zero
+  # exit for exactly this reason, citing ops/research-liveness.sh passing a flag
+  # research_liveness.py never implemented, argparse exiting 2, and the check
+  # having "never produced a verdict".
+  #
+  # The two outcomes stay APART in the text, because a check outage published as
+  # a measured collapse would invent a scientific verdict about the models.
   if [ -z "$refusal_reason" ]; then
-    collapse_out=$(go run -C "$SD/daemon" ./cmd/collapsecheck       --db "$SD/data/signaldeck.db" --registry "$OUT" 2>>"$LOG")
+    collapse_out=$(go run -C "$SD/daemon" ./cmd/collapsecheck --db "$SD/data/signaldeck.db" --registry "$STAGE" 2>>"$LOG")
     collapse_status=$?
     case "$collapse_status" in
       1) refusal_reason="publication gate: $collapse_out" ;;
       0) ;;
-      *) echo "collapse gate undetermined (exit $collapse_status) -- publishing, as /api/accuracy does" >> "$LOG" ;;
+      *) refusal_reason="CHECK UNAVAILABLE: the collapsed-cross-section gate could not be evaluated (collapsecheck exit $collapse_status), so the figures are withheld WITHOUT having been judged. This is a check outage, NOT a finding about any model. See the collapsecheck lines above in this log" ;;
     esac
   fi
+
+  # ATOMIC PUBLICATION. One rename, after every gate has passed, and only then.
+  if [ -z "$refusal_reason" ]; then
+    if mv -f "$STAGE" "$OUT"; then
+      echo "published: staged registry -> $OUT (atomic rename, all gates passed)" >> "$LOG"
+    else
+      refusal_reason="CHECK UNAVAILABLE: every gate passed but the staged registry could not be moved into place; the previously published registry is untouched"
+    fi
+  fi
+  rm -f "$STAGE"
 fi
 
 # REFUSAL PATH — the whole point of this branch is that a grading outage must be
@@ -353,7 +410,17 @@ if [ -n "$refusal_reason" ]; then
   # and every other consumer went on serving the last good numbers with no way
   # to know they were stale. The rule that decided this is above, and stays
   # above: this line only reports the decision.
-  case "$refusal_reason" in "grader exited"*|*"liveness check failed"*|"deployment drift"*) hb_mode=--failure ;; *) hb_mode=--refused ;; esac  # a gate refusal is a healthy grader saying no; drift and liveness mean the grader never ran
+  # --refused is a HEALTHY grader saying no on evidence. --failure means the
+  # grader or one of its gates never produced a verdict at all. Keeping them
+  # apart is the whole point: the first is a scientific result and belongs on
+  # the public surface as one, the second is an outage and must never be dressed
+  # as a finding about a model. "CHECK UNAVAILABLE" is the prefix every
+  # unrunnable gate in this script now uses, so it classifies with drift and
+  # liveness rather than with a measured refusal.
+  case "$refusal_reason" in
+    "grader exited"*|*"liveness check failed"*|"deployment drift"*|"CHECK UNAVAILABLE"*) hb_mode=--failure ;;
+    *) hb_mode=--refused ;;
+  esac
   "$PY" "$SD/tools/grader_heartbeat.py" "$hb_mode" --error "$refusal_reason" \
     >> "$LOG" 2>&1 || echo "heartbeat write failed (non-fatal)" >> "$LOG"
 
@@ -514,8 +581,21 @@ rm -f "$PREV_BACKUP"
 # The grade is real: the grader exited 0 AND the registry's timestamp advanced,
 # both checked above. Record it so the daemon can tell a fresh grade from a
 # stale one — /api/accuracy refuses to publish without a recent success here.
-"$PY" "$SD/tools/grader_heartbeat.py" --success \
-  >> "$LOG" 2>&1 || echo "heartbeat write failed (non-fatal)" >> "$LOG"
+# NOT "non-fatal", which is what this said until 2026-09-13. /api/accuracy
+# refuses with REFUSED_STALE when this heartbeat is older than GraderMaxAge, so
+# a failed write does not cost a log line -- it costs the publication. The
+# documents below would carry today's verdict table while the API served
+# REFUSED_STALE over the identical registry, which is the same two-surfaces
+# divergence the collapse gate was added to close, arriving by another door.
+# Announce it loudly and exit non-zero so the caller (and the scheduled task's
+# LastTaskResult) sees a failed run.
+if ! "$PY" "$SD/tools/grader_heartbeat.py" --success >> "$LOG" 2>&1; then
+  msg="HEARTBEAT WRITE FAILED: the grade succeeded and the registry was published, but /api/accuracy will report REFUSED_STALE because it cannot see a fresh success. Stopping HERE, before the documents are regenerated, is deliberate: publishing a verdict table into README.md while the API refuses the identical registry is the two-surfaces divergence the collapse gate exists to prevent, arriving by another door. Re-run this script."
+  echo "$msg" >> "$LOG"
+  echo "$msg" >&2
+  notify_remote "SignalDeck accuracy: $msg"
+  exit 1
+fi
 
 # Regenerate the "Live accuracy (auto-updated)" section of README.md from the
 # fresh registry, between the LIVE-ACCURACY markers. The point: a FAILED verdict

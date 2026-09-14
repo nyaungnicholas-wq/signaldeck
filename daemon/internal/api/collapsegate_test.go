@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,12 +248,18 @@ func TestGate_IsDeterministicAndIdempotent(t *testing.T) {
 	}
 }
 
-// TestGate_UnreadableRegistryFailsOpenOnBothSurfaces. An unreadable registry is
-// NOT evidence of a collapse, and both surfaces must treat it the same way:
-// report the error and let the caller publish. Refusing on a failed read would
-// wedge publication shut on a transient database or filesystem error — and if
-// only ONE surface did that, they would diverge again in the opposite direction.
-func TestGate_UnreadableRegistryFailsOpenOnBothSurfaces(t *testing.T) {
+// TestGate_UnreadableRegistryIsAnErrorNotAVerdict. An unreadable registry is NOT
+// evidence of a collapse, and both surfaces must treat it the same way: surface
+// the error, and never report `collapsed`.
+//
+// The ASSERTIONS here are unchanged since this test was written. Its name and
+// its closing note were not: they used to say "...FailsOpenOnBothSurfaces" and
+// "so the caller publishes", which described the caller policy of the day.
+// Since 2026-09-13 the callers WITHHOLD on this error and label it a gate
+// outage (REFUSED_UNAVAILABLE on the HTTP surface, exit 2 treated as a refusal
+// in ops/). Nothing about the function's own contract moved — a failed read is
+// still not evidence — so nothing here was weakened to accommodate it.
+func TestGate_UnreadableRegistryIsAnErrorNotAVerdict(t *testing.T) {
 	now := time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC)
 	_, st, _ := newTestServer(t, nil)
 
@@ -261,7 +268,69 @@ func TestGate_UnreadableRegistryFailsOpenOnBothSurfaces(t *testing.T) {
 		t.Fatal("an unreadable registry must surface an error, not a silent verdict")
 	}
 	if collapsed {
-		t.Fatal("an unreadable registry reported as COLLAPSED: a failed read is not evidence, and " +
-			"cmd/collapsecheck exits 2 on this so the caller publishes")
+		t.Fatal("an unreadable registry reported as COLLAPSED: a failed read is not evidence. " +
+			"cmd/collapsecheck exits 2 on this, and the caller must withhold publication " +
+			"as a gate OUTAGE — never republish it as a measured collapse")
+	}
+}
+
+// TestGate_UnavailableGateWithholdsAndSaysSo is the negative control for the
+// fail-open this file's gate used to have.
+//
+// The handler's test used to be `err == nil && collapsed`, so ANY error
+// evaluating the gate fell straight through to full publication. The gate's one
+// job is to decide whether these rows may be served; an error means it never
+// decided, and "it never decided" is the one answer that cannot be spelled the
+// same way as "yes".
+//
+// Two assertions, and the second matters as much as the first:
+//
+//   - the rows are WITHHELD (503, no rows) — the fail-open is gone;
+//   - the status is REFUSED_UNAVAILABLE and the reason does NOT allege a
+//     collapse — because reporting a check outage as a measured scientific
+//     refusal invents a verdict about the models, which is the same dishonesty
+//     as publishing, pointed the other way.
+//
+// The failure is induced by dropping the one table the gate queries
+// (prediction_outcomes, via store.ForecastDayStats). The grader heartbeat lives
+// elsewhere and stays readable, so the request reaches the collapse gate rather
+// than stopping at the staleness check above it.
+func TestGate_UnavailableGateWithholdsAndSaysSo(t *testing.T) {
+	now := time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC)
+	_, st, d := newTestServer(t, nil)
+	freshHeartbeat(t, st)
+
+	// distinct_days > 0 so the gate does real work instead of returning early.
+	d.RegistryPath = writeRegistry(t, registryFor(map[string]int{"1d": 3}))
+	d.Now = func() time.Time { return now }
+
+	if _, err := st.DB().ExecContext(t.Context(), `DROP TABLE prediction_outcomes`); err != nil {
+		t.Fatalf("could not induce the gate failure: %v", err)
+	}
+	if _, _, err := CollapsedGradingWindow(context.Background(), st, d.RegistryPath, now); err == nil {
+		t.Fatal("the induction did not work: the gate still evaluated cleanly, so this test proves nothing")
+	}
+
+	srv := restartWith(t, d)
+	code, body := getAccuracy(t, srv.URL)
+
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("HTTP %d, want 503: an unevaluated gate published the rows it exists to gate. body=%v", code, body)
+	}
+	if rows, ok := body["rows"]; ok && rows != nil {
+		if arr, isArr := rows.([]any); isArr && len(arr) > 0 {
+			t.Fatalf("withheld response carried %d row(s)", len(arr))
+		}
+	}
+	if body["status"] != "REFUSED_UNAVAILABLE" {
+		t.Fatalf("status = %v, want REFUSED_UNAVAILABLE. A gate outage reported as a plain "+
+			"REFUSED is indistinguishable from a measured collapse", body["status"])
+	}
+	reason, _ := body["reason"].(string)
+	if strings.Contains(reason, "collapsed cross-section") {
+		t.Fatalf("the outage reason alleges a measured collapse it never measured: %q", reason)
+	}
+	if !strings.Contains(reason, "not a finding about the models") {
+		t.Fatalf("the reason does not tell the reader this is a check outage: %q", reason)
 	}
 }

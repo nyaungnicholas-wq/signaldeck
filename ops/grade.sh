@@ -96,8 +96,17 @@ if [ -z "$refusal" ]; then
 fi
 
 # --- the grade -------------------------------------------------------------
+# STAGED. $OUT is the file the daemon serves -- internal/api/accuracy.go
+# loadRegistry() os.ReadFile's it on EVERY request -- so writing the grader's
+# raw output straight there published ungated rows for as long as the checks
+# below took to run, and selection_honesty.py --merge reopening the same path
+# "w" meant a reader could also catch it truncated. Build in $STAGE, check
+# $STAGE, and replace $OUT with one atomic rename at the end.
+STAGE="${OUT}.staging"
+rm -f "$STAGE"
+
 if [ -z "$refusal" ]; then
-  if ! "$PY" "$TOOLS/accuracy_registry.py" --db "$DB" --json "$OUT" >>"$LOG" 2>&1; then
+  if ! "$PY" "$TOOLS/accuracy_registry.py" --db "$DB" --json "$STAGE" >>"$LOG" 2>&1; then
     refusal="accuracy_registry.py exited non-zero; see $LOG"
   fi
 fi
@@ -106,37 +115,87 @@ fi
 # Merges its verdicts into the registry. Its exit code is deliberately NOT
 # propagated: it refuses individual ROWS, which is a finding to publish, not a
 # reason to withhold the whole registry.
+#
+# BUT A RETURN CODE CANNOT TELL THOSE APART FROM A CRASH. main() returns
+# `1 if refused else 0`, and an unhandled exception exits 1 too, so a traceback
+# on row three and a clean run that refused row three were the same byte here --
+# and the half-merged JSON was published either way. The exit code is still
+# ignored on purpose; the ARTIFACT is what gets checked, by publication_gate.py,
+# which asserts every directional row with breadth tallies actually carries an
+# honesty block from the right source with the right keys. A crash cannot answer
+# that yes.
 if [ -z "$refusal" ]; then
-  "$PY" "$TOOLS/selection_honesty.py" --json "$OUT" --db "$DB" --merge >>"$LOG" 2>&1 \
-    || log "selection_honesty merged with a non-zero exit (row-level refusals are expected)"
+  "$PY" "$TOOLS/selection_honesty.py" --json "$STAGE" --db "$DB" --merge >>"$LOG" 2>&1 \
+    || log "selection_honesty exited non-zero (row refusals OR a crash -- the gate below decides which)"
+
+  if ! pubgate_out=$("$PY" "$TOOLS/publication_gate.py" --registry "$STAGE" 2>&1); then
+    log "$pubgate_out"
+    refusal="CHECK UNAVAILABLE: the graded artifact is incomplete, so it was not published -- ${pubgate_out}. This is a post-processing failure, NOT a finding about any model"
+  else
+    log "$pubgate_out"
+  fi
 fi
 
 # --- the collapse gate ------------------------------------------------------
 # The same gate internal/api runs, so the served surface and the on-disk
-# registry cannot disagree. FAILS OPEN exactly like the handler: only an
-# explicit exit 1 refuses. Exit 2 means undetermined, and refusing on a failed
-# read would wedge publication shut on a transient DB error rather than on
-# evidence.
+# registry cannot disagree.
+#
+# EXIT 2 NOW WITHHOLDS. It used to publish, "exactly like the handler", on the
+# argument that refusing on a failed read would wedge publication shut on a
+# transient DB error. Both ends were reversed together: internal/api now answers
+# REFUSED_UNAVAILABLE on the same condition. The argument was never wrong about
+# transient errors, it was wrong about everything ELSE that exits 2 -- a missing
+# collapsecheck binary, a renamed flag, a bad --db path -- every one of which
+# silently un-wires the gate for good. In THIS file that risk is higher than on
+# the dev box, not lower: collapsecheck is a binary baked into the image, so a
+# build that ships without it would have published forever and said nothing.
+#
+# The wording keeps a check outage and a measured collapse apart, because
+# publishing the first as the second invents a scientific verdict.
 if [ -z "$refusal" ]; then
-  collapse_out=$(collapsecheck --db "$DB" --registry "$OUT" 2>>"$LOG")
+  collapse_out=$(collapsecheck --db "$DB" --registry "$STAGE" 2>>"$LOG")
   case "$?" in
     1) refusal="publication gate: $collapse_out" ;;
     0) ;;
-    *) log "collapse gate undetermined -- publishing, as /api/accuracy does" ;;
+    *) refusal="CHECK UNAVAILABLE: the collapsed-cross-section gate could not be evaluated, so the figures are withheld WITHOUT having been judged. This is a check outage, NOT a finding about any model; see $LOG" ;;
   esac
+fi
+
+# --- atomic publication -----------------------------------------------------
+# One rename, after every gate has passed and only then.
+if [ -z "$refusal" ]; then
+  if ! mv -f "$STAGE" "$OUT"; then
+    refusal="CHECK UNAVAILABLE: every gate passed but the staged registry could not be moved into place; the previously published registry is untouched"
+  fi
 fi
 
 # --- the heartbeat the daemon reads ----------------------------------------
 # Without this the handler cannot distinguish "graded cleanly" from "nothing
 # has run for a week", and GraderMaxAge turns the second into REFUSED_STALE.
 if [ -z "$refusal" ]; then
-  "$PY" "$TOOLS/grader_heartbeat.py" --success --db "$DB" --registry "$OUT" \
-    --grader "$TOOLS/accuracy_registry.py" >>"$LOG" 2>&1
+  # CHECKED, AND FATAL WHEN IT FAILS. This call used to be unchecked and was
+  # followed unconditionally by `log "grade OK"; exit 0`, so the script reported
+  # a clean grade whether or not the one record the daemon reads got written.
+  # That is not a cosmetic gap: /api/accuracy answers REFUSED_STALE when this
+  # heartbeat is older than GraderMaxAge (26h), so a silently failed write means
+  # the registry on disk carries today's verdicts while the API refuses them --
+  # and the container's own header says a permanently dead honesty page IS the
+  # failure this file was written to end.
+  if ! "$PY" "$TOOLS/grader_heartbeat.py" --success --db "$DB" --registry "$OUT" \
+      --grader "$TOOLS/accuracy_registry.py" >>"$LOG" 2>&1; then
+    log "GRADE INCOMPLETE: registry published but the success heartbeat could not be written; /api/accuracy will serve REFUSED_STALE over it"
+    exit 1
+  fi
   log "grade OK"
   exit 0
 fi
 
 log "GRADE REFUSED: $refusal"
+# Best-effort by necessity -- there is nowhere left to escalate -- but no longer
+# silent: if even the refusal cannot be recorded, say so in the log and keep the
+# non-zero exit.
 "$PY" "$TOOLS/grader_heartbeat.py" --failure --error "$refusal" --db "$DB" \
-  --registry "$OUT" --grader "$TOOLS/accuracy_registry.py" >>"$LOG" 2>&1
+  --registry "$OUT" --grader "$TOOLS/accuracy_registry.py" >>"$LOG" 2>&1 \
+  || log "and the failure heartbeat could not be written either; the daemon will fall back to REFUSED_STALE on age alone"
+rm -f "$STAGE"
 exit 1

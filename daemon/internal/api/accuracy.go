@@ -188,7 +188,34 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	// known rather than assumed. This refuses on the SAME evidence
 	// internal/forecastmon uses, so the publication surface and the monitor
 	// cannot disagree about whether a day was usable.
-	if reason, collapsed, err := d.collapsedGradingWindow(ctx, reg, now); err == nil && collapsed {
+	//
+	// AN UNREADABLE GATE IS NOT A PASSED GATE. This used to read
+	// `err == nil && collapsed`, so any error evaluating the gate fell through
+	// to full publication -- the one outcome that cannot be justified, because
+	// the gate's whole job is to decide whether these rows may be served and an
+	// error means it never decided. Twelve lines below, this same handler
+	// already refuses on an unreadable evidence ledger, for the stated reason
+	// that a failed read "must not read as 'no evidence against this model'".
+	// The collapse gate had the opposite wiring on the same kind of failure.
+	//
+	// The two outcomes are kept APART in the status, which matters more here
+	// than anywhere else in the API: REFUSED means the window was measured and
+	// found collapsed, and REFUSED_UNAVAILABLE means nobody measured it. Fusing
+	// them would publish a fabricated scientific verdict every time a database
+	// read timed out, which is the same dishonesty as publishing the rows,
+	// pointed the other way.
+	reason, collapsed, err := d.collapsedGradingWindow(ctx, reg, now)
+	if err != nil {
+		writeAccuracyRefusal(w, accuracyResponse{
+			Status: "REFUSED_UNAVAILABLE", GraderFresh: false, GeneratedAt: now,
+			GradedAt: reg.GradedAt,
+			Reason: "the collapsed-cross-section gate could not be evaluated, so these " +
+				"figures are withheld WITHOUT having been judged — this is a check " +
+				"outage, not a finding about the models: " + err.Error(),
+		})
+		return
+	}
+	if collapsed {
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
 			GradedAt: reg.GradedAt, Reason: reason,
@@ -424,10 +451,15 @@ func writeJSONStatus(w http.ResponseWriter, code int, body any) {
 //
 // The window is taken from the registry's own max distinct_days rather than a
 // fixed lookback: a fixed one would either miss a collapse just outside it or
-// refuse forever because of a collapse the grader never touched. An unreadable
-// window is NOT treated as a collapse — the caller ignores the error and
-// publishes, because refusing on a failed read would wedge the surface shut on
-// a transient database error rather than on evidence.
+// refuse forever because of a collapse the grader never touched.
+//
+// An unreadable window is NOT a collapse, and this still reports it as
+// ("", false, err) rather than inventing a verdict from a failed read. What
+// changed (2026-09-13) is what the CALLER does with that error: it withholds
+// publication and says the gate was unavailable, instead of publishing. The
+// contract here is unchanged — a failed read is not evidence — but "not
+// evidence of a collapse" was never the same thing as "evidence there was
+// none", and the caller used to treat it as though it were.
 func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now time.Time) (string, bool, error) {
 	// Per-horizon windows. This used to take ONE global max distinct_days and
 	// probe horizon "1d" only, so the 1w rows were gated by 1d evidence: a
