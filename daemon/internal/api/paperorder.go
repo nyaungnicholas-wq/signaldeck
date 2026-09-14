@@ -24,6 +24,26 @@ import (
 // (manualQuoteMaxAgeSecs), so a closed market cannot be traded against a
 // pretend price. Long-only: a sell may not exceed the held quantity. NEVER
 // contacts a broker; every number here is arithmetic over stored bars.
+//
+// REPLAY POSTURE, stated because the absence of an idempotency key is a decision
+// and not an oversight. There is no Idempotency-Key header, no client key and no
+// request hash: two identical POSTs are two orders, deliberately, because three
+// equal-size buys a second apart are a legitimate thing for a person to do and
+// nothing in the request distinguishes that from a retry.
+//
+// What actually defends against an accidental double-submit is the client:
+// components/paper/OrderForm.tsx disables its button on `busy` for the duration
+// of the request. What does NOT defend against it is the paper cursor -- the
+// 409 "book advanced concurrently; retry" only fires when the cursor moved
+// underneath the request, and this handler steps the cursor past its own bar
+// (LastBarTs+1) specifically so a second order inside one bar SUCCEEDS.
+//
+// That is acceptable here and would not be anywhere near a broker. The book is
+// per-user (strategy manual:u<uid>), simulated, 401s without a session, and is
+// absent from security.go's publicRoutes so it is closed entirely on a published
+// deployment. The worst outcome is a user holding play-money units they did not
+// mean to buy, which they can sell. If this handler ever reaches real money, an
+// idempotency key stops being optional.
 func (d Deps) paperOrder(w http.ResponseWriter, r *http.Request) {
 	uid := userID(r)
 	if uid == 0 {
