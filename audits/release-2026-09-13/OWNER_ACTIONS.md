@@ -60,17 +60,23 @@ unless it is true — the Technical Q&A section is where to start if it is not y
 
 ---
 
-## 4. Decide the two red scheduled tasks
+## 4. Nothing — the two red tasks are closed
 
-`SignalDeck Check-Grader-Health` and `SignalDeck Check-Task-Health` both report
-`LastTaskResult 1`. **Not diagnosed** — I found them and ran out of night. They
-are the checks that would tell you when the grader stops, so a red health-checker
-is worth more attention than it looks.
+Kept here so the item is not silently dropped. Both health tasks were red and
+**neither was a code defect**: the System log shows 6006 at 2026-09-11 00:21 and
+6005 at 2026-09-12 21:18, so this machine was **off for ~45 hours**.
+`SignalDeck Accuracy` fires at 14:05 with `WakeToRun=False` and could not run on
+either day; the heartbeat reached 67 h against a 26 h ceiling and the second task
+went red as a pure cascade off the first. The grader itself ran normally at 14:05
+on 09-13.
 
-```
-Get-ScheduledTaskInfo -TaskName 'SignalDeck Check-Grader-Health'
-Get-Content logs\*grader-health*.log -Tail 40
-```
+Fixed in `cff7012` so the two causes are distinguishable in future, and both
+tasks now record `0x00000000` — verified by running them, not by asserting it.
+
+**One judgement is still yours:** `WakeToRun=False` means the grader silently
+skips any day this machine is asleep at 14:05. That is a deliberate power
+setting, not a bug, and changing it is a machine-policy decision rather than an
+engineering one.
 
 ---
 
@@ -90,9 +96,16 @@ Before calling any public URL working, fetch it **anonymously from outside this
 machine**. Keep the private repository private — it has held database backup
 assets.
 
-**Open gap to close first:** F06 — the container applies one gate fewer than the
-dev box (`deployment_drift` needs a git checkout the image does not have), so a
-stale binary the dev-box publish would refuse is still graded there.
+**F06 is closed in source** (`0000059`). The image is now bound to its reviewed
+source by content hash: `ops/docker-build.sh` emits a manifest on the host where
+git exists, the Dockerfile seals the compiled binaries into it, and
+`ops/grade.sh` re-verifies before grading. A forged `GIT_REV` does not help,
+because the binding is to bytes.
+
+**But its container leg is unexercised** — no image was built here, so the `seal`
+step has never actually run. The first real `ops/docker-build.sh` on a machine
+with a running docker daemon is the test. If `seal` fails, the build fails, which
+is the intended direction.
 
 ---
 

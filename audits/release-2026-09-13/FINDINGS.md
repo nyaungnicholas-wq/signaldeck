@@ -136,22 +136,43 @@ file, `$OUT` replaced by one atomic rename. No historical verdict changed.
 
 ---
 
-## F06 — P2 — container applies one gate fewer than the dev box · CONFIRMED → OPEN
+## F06 — P2 — container applies one gate fewer than the dev box · CONFIRMED → FIXED
 
-`ops/grade.sh`'s own header documents this: `deployment_drift.py` shells out to
-git and there is no checkout in the image, so a stale binary the dev-box
-publish refuses on is still graded in the container.
+`ops/grade.sh`'s own header documents it: `tools/deployment_drift.py` shells out
+to git and `.dockerignore` excludes `.git`, so "a stale binary the dev-box
+publish refuses on is still graded here."
 
-**Not fixed tonight.** The designed remedy (a verified build manifest binding
-component revisions and image digest, verified on the build host where git
-exists and re-checked inside the container against a trust boundary
-independent of a caller-supplied label) is a larger piece than the night had
-room for after F01–F05. Recorded as OPEN rather than implied. The divergence
-is at least documented in the file itself, and the OCI
-`org.opencontainers.image.revision` label + `ops/oracle-verify.sh` already
-provide part of the binding.
+**Why the obvious patch is worthless.** `ops/docker-build.sh` passes
+`--build-arg GIT_REV="$rev"` and says in as many words that the path is
+"TRUSTED, not checked". An image that records a caller-supplied label and reads
+it back proves only that someone typed it.
 
----
+**Fix** `0000059`. What crosses the boundary is *content*. The files that decide
+a verdict are copied into the image byte-for-byte, so `tools/build_manifest.py`
+hashes them on the **host** (where git exists), a Dockerfile `RUN` **seals** the
+binaries compiled during the build, and `ops/grade.sh` **re-hashes and compares**
+before grading. Forge `GIT_REV`, ship different `tools/`, and the hashes
+disagree.
+
+**What it refuses to claim:** that the revision was *verified*. Nothing in the
+image can resolve a commit, so every run prints
+`revision <sha> RECORDED (not verifiable here: no git in this image)`.
+Inventing resolvability would be the same dishonesty as the fail-open gates,
+wearing a provenance costume.
+
+Exit codes keep the findings apart: **1** = the check ran and the bytes disagree
+(an accusation naming a file); **2** = the check could not run (an outage).
+
+**Regression** 6 new controls in `tools/test_publication_gates.py` (22 total):
+swapped grader, swapped protocol document, missing manifest reported as an
+outage *not* an accusation, a manifest pinning nothing, a forged revision that
+neither rescues tampering nor breaks an honest image, and verify never claiming
+the revision was checked. **Mutation check:** forcing `manifest_status=0` fails
+3 of 22.
+
+**NOT VERIFIED:** no image was built — docker CLI present, daemon not running —
+so `seal` has never executed inside a real build. Emit was exercised end to end
+against this repository (6 pinned, 0 missing, revision resolvable, clean tree).
 
 ## F07 — P1 — the public-mode flag was documented, read twice, and unreachable · CONFIRMED → FIXED
 
@@ -184,16 +205,49 @@ daemon is not running on this host, so ARG→ENV was never exercised end to end.
 
 ---
 
-## F08 — P2 — best-effort ledger write on the prediction path · CONFIRMED → OPEN
+## F08 — P1 — a forecast could be graded as precommitted with no attestation · CONFIRMED → FIXED
 
-The prediction runner persists prediction, benchmark/features and ledger
-through separate writes and ledger failure is best-effort. The crash-safe
-redesign (atomic transaction or transactional outbox with eligibility gated
-until attested) is genuinely invasive — it touches the single-writer
-architecture — and was not attempted overnight. Recorded OPEN. **No backdating
-or retrofitting was done**, per the standing rule.
+Raised from P2 once measured. The prediction runner wrote the prediction and its
+chain entry separately, with the ledger half explicitly best-effort. But
+`UpsertPrediction` *also* seeds `prediction_outcomes` — which `predict.go`
+itself calls "the population every grader reads" — so a forecast whose
+attestation failed was still graded later as though it had been committed to the
+chain before its outcome existed. **Precommitment is the claim the whole project
+rests on.**
 
----
+**Measured 2026-09-14T06:03Z** (full cohort discussion in `LEDGER_COVERAGE.md`):
+
+| | |
+| --- | --- |
+| cohort | model horizons only (1d/1w), `n_used > 0`, `ts >= 2026-07-04` |
+| denominator | 501,495 eligible rows |
+| **unattested** | **31** (0.0062%) |
+| **of those, already resolved** | **29** — gradable as precommitted, nothing on the chain behind them |
+| span | 2026-07-06 → 2026-09-11 |
+
+`ops/check-grader-health.ps1` was reporting this as a bounded alarm (max 50).
+**An alarm is not a gate.**
+
+**Fix** `03d3b4a`. `store.UpsertPredictionAttested` writes prediction, chain
+entry and eligibility in **one transaction** on the single writer — a failed
+append rolls back all three. That is the same argument `UpsertPrediction`
+already makes about `n_used > 0`: enforce it *here* and no code path can produce
+a gradable forecast that was never attested.
+
+**One `BeginTx`, deliberately.** The writer pool is `MaxOpenConns=1`, so calling
+`AppendLedger` from inside an open transaction would wait forever on the
+connection it already holds — the nested-transaction deadlock the instruction
+names. The chain link is *shared* via `appendLedgerTx`, not reimplemented,
+because two copies of the hashing rule drift.
+
+**Regression** 5 tests in `daemon/internal/store/attestation_test.go`. Mutation
+check: restoring best-effort fails `TestAttested_LedgerFailureLeavesNothingGradable`
+with "the append failed but the write reported success".
+
+**History untouched.** The 31 stay exactly as they are — backdating them would
+fabricate evidence in the one place the project claims cannot be fabricated;
+deleting them would break the chain linkage; re-grading to exclude them would
+change published verdicts. Classified, not repaired. No verdict was recomputed.
 
 ## F09 — P1 — /proof claimed a walk it never made · CONFIRMED → FIXED
 
@@ -300,7 +354,7 @@ Measured on the live repo: `strict` exit 1, `release` exit 0, both printing
 
 | ID | Detail |
 | --- | --- |
-| F-NEW-02 | `SignalDeck Check-Grader-Health` and `SignalDeck Check-Task-Health` scheduled tasks both report `LastTaskResult 1`. Not diagnosed. |
-| F-NEW-03 | Per-worker cause of the three degraded workers not determined. |
+| F-NEW-02 | **CLOSED.** Both health tasks were red. **Root cause was not a code defect:** the System log shows 6006 at 2026-09-11 00:21 and 6005 at 2026-09-12 21:18 — the machine was **off for ~45 h**. `SignalDeck Accuracy` fires daily at 14:05 with `WakeToRun=False`, so it could not run on either day; `grader_heartbeats` confirms rows on 09-10 and 09-13 with nothing between. The heartbeat reached 67 h against a 26 h ceiling, `Check-Grader-Health` went red at 09:20 on 09-13, and `Check-Task-Health` went red behind it as a pure cascade (it reads the other task's stored `LastTaskResult`). The grader itself ran normally at 14:05 that day. **Both checks were correct; what they could not do was say which cause applied.** Fixed in `cff7012`: a stale heartbeat now consults uptime, forgiven only while uptime is under one window and never past a 3× ceiling, with an unreadable uptime never an excuse — 10 assertions in `ops/test-check-grader-health.ps1`. Both tasks now record `0x00000000`, verified by running them. |
+| F-NEW-03 | Per-worker cause of the three degraded workers still not determined. **OPEN.** |
 | F-NEW-04 | `/api/vol-forecast/record?horizon=5` returns the identical payload as `?horizon=1` — the parameter appears to be ignored (both horizons are returned in a `horizons` array). Contract question, not a data defect. |
-| F-NEW-05 | Race detector: 0 data races, but `internal/api`, `internal/pipeline` and `internal/store` exceed the default 10-minute per-package timeout under `-race`. Re-run with 45 min in progress at time of writing. |
+| F-NEW-05 | **RESOLVED, not a defect.** Race detector finds **0 data races**. `internal/api`, `internal/pipeline` and `internal/store` exceed the default 10-minute per-package timeout under `-race` (they need 709–974 s). With `-timeout 45m` all three pass. Anyone running the documented command sees three FAILs and concludes there are races; there are none. Grep for `DATA RACE` before believing a race failure. |
