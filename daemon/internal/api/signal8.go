@@ -51,7 +51,28 @@ func (d Deps) stockFromQuery(r *http.Request) (md.Symbol, bool, error) {
 // one cache entry and the second caller gets the first one's body.
 // TestLimitParam_MirrorsCacheParam pins that they agree.
 func limitParam(r *http.Request, def, max int) int {
-	n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	return windowParam(r, "limit", def, max)
+}
+
+// windowParam reads a bounded integer query parameter, clamping to [1, max] and
+// falling back to def when the value is absent, unparseable or non-positive.
+//
+// This is limitParam's rule generalised, because three handlers had open-coded
+// the SAME shape with the bug limitParam was fixed for: `if n <= 0 || n > max {
+// n = def }`. Over-max collapsing to the default is backwards. A caller who asks
+// for more than the ceiling is asking for MORE, and handing back the default
+// gives them LESS than they could legitimately have had -- ?days=9999 against a
+// 365 ceiling returned 30. Clamping answers the nearest legal question instead.
+//
+// Nothing in these payloads reports the substitution, which is what makes the
+// distinction matter: /api/scores/history writes the bare row array, so a caller
+// who asked for 9999 days and received 30 cannot tell that from a symbol that
+// only has 30 days of history.
+//
+// Unparseable still returns def rather than clamping: a caller who typed nonsense
+// expressed no bound at all, so there is no nearest legal value to move them to.
+func windowParam(r *http.Request, key string, def, max int) int {
+	n, _ := strconv.Atoi(r.URL.Query().Get(key))
 	if n <= 0 {
 		return def
 	}

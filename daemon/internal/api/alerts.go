@@ -60,10 +60,7 @@ const alertOutcomesNote = "forward returns after alerts, not advice; n<20 withhe
 
 // alertOutcomes serves per-kind alert forward-outcome stats.
 func (d Deps) alertOutcomes(w http.ResponseWriter, r *http.Request) {
-	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
-	if days <= 0 || days > 365 {
-		days = 90
-	}
+	days := windowParam(r, "days", 90, 365)
 	sinceTs := time.Now().Unix() - int64(days)*86400
 	kinds, err := d.St.AlertKindOutcomes(r.Context(), sinceTs)
 	if err != nil {

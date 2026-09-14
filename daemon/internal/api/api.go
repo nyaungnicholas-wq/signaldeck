@@ -1059,14 +1059,22 @@ func (d Deps) scoreHistory(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, err.Error())
 		return
 	}
-	h := md.Horizon(r.URL.Query().Get("horizon"))
-	if h != md.H1h && h != md.H1d && h != md.H1w {
-		h = md.H1d
+	// An ABSENT horizon defaults to 1d. An explicitly SUPPLIED but unrecognised
+	// one is REFUSED rather than silently replaced. There is no nearest legal
+	// value to clamp to the way there is for a window, and this handler ends in
+	// writeJSON(w, scores) -- a bare row array that echoes neither the horizon nor
+	// the window -- so ?horizon=1x used to return 1d data with nothing anywhere in
+	// the response saying it had answered a different question.
+	raw := r.URL.Query().Get("horizon")
+	h := md.H1d
+	if raw != "" {
+		h = md.Horizon(raw)
+		if h != md.H1h && h != md.H1d && h != md.H1w {
+			httpErr(w, 400, fmt.Sprintf("unknown horizon %q: expected 1h, 1d or 1w", raw))
+			return
+		}
 	}
-	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
-	if days <= 0 || days > 365 {
-		days = 30
-	}
+	days := windowParam(r, "days", 30, 365)
 	now := time.Now().Unix()
 	scores, err := d.St.ScoreHistory(r.Context(), s.ID, h, now-int64(days)*86400, now+1)
 	if err != nil {
@@ -1082,10 +1090,7 @@ func (d Deps) snaps(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, err.Error())
 		return
 	}
-	secs, _ := strconv.Atoi(r.URL.Query().Get("seconds"))
-	if secs <= 0 || secs > 3600 {
-		secs = 300
-	}
+	secs := windowParam(r, "seconds", 300, 3600)
 	now := time.Now().Unix()
 	snaps, err := d.St.Snaps(r.Context(), s.ID, now-int64(secs), now+1, secs+1)
 	if err != nil {
