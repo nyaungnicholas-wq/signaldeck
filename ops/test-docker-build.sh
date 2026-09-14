@@ -112,7 +112,16 @@ mv "$work/lib-portable.away" "$repo/ops/lib-portable.sh"
 # so an image built without it serves localhost robots/sitemap/og forever.
 check "unset NEXT_PUBLIC_SITE_URL is refused" "$(env -u SIGNALDECK_ALLOW_LOCALHOST_SITE_URL bash ops/docker-build.sh >"$work/out" 2>&1; echo $?)" "1"
 grep -qi "NEXT_PUBLIC_SITE_URL is unset" "$work/out" && ok "  refusal names the variable" || bad "  refusal names the variable"
-check "  explicit hostname builds" "$(NEXT_PUBLIC_SITE_URL=https://x.test run)" "0"
+check "  explicit hostname builds" "$(NEXT_PUBLIC_SITE_URL=https://x.test NEXT_PUBLIC_SIGNALDECK_PUBLIC=1 run)" "0"
+
+# 9. A HOSTNAME WITHOUT AN AUDIENCE. The guard above it was added with the
+# NEXT_PUBLIC_SIGNALDECK_PUBLIC work and nothing here exercised it, which is how
+# it broke case 8: that case passed only the hostname, the new guard correctly
+# refused it, and the suite went red on a contract change nobody had told it
+# about. The two cases now pin both sides of the same rule.
+check "hostname without an audience is refused" "$(NEXT_PUBLIC_SITE_URL=https://x.test run)" "1"
+grep -qi "hostname but no audience" "$work/out" && ok "  refusal names the missing choice" || bad "  refusal names the missing choice"
+check "  private audience builds too" "$(NEXT_PUBLIC_SITE_URL=https://x.test NEXT_PUBLIC_SIGNALDECK_PUBLIC=0 run)" "0"
 echo ""
 echo "docker-build self-test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
