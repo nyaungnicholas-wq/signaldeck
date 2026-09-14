@@ -64,6 +64,36 @@ const ROUTES: readonly string[] = [
   "/proof",
   "/accuracy",
   "/hud",
+
+  // ADDED 2026-09-13. The list above measured 43 of the app's 59 page routes and
+  // the score was published as the app's health, so 16 routes were graded by
+  // omission. One of them, /volatility, is on the SEVEN-ROUTE PUBLIC SURFACE —
+  // an anonymous visitor could reach a page the self-grade had never looked at.
+  // The whole /lab/system family was missing too, which is the part of the app
+  // that reports on the app.
+  "/health",
+  "/volatility",
+  "/intel/company",
+  "/lab/debate",
+  "/lab/desk",
+  "/lab/evolution",
+  "/lab/graph",
+  "/lab/memory",
+  "/lab/optimizer",
+  "/lab/signal-backtest",
+  "/lab/system",
+  "/lab/system/agents",
+  "/lab/system/ai",
+  "/lab/system/quality",
+  // The two dynamic routes, with concrete params — a symbol page and its report
+  // are real destinations users reach from every table on the site.
+  "/s/stocks/AAPL",
+  "/signals/report/stocks/AAPL",
+
+  // DELIBERATELY NOT CRAWLED: /login. This suite authenticates before it
+  // crawls (loginAsSmokeUser), and /login now redirects an already-signed-in
+  // visitor to /dashboard, so including it would silently measure /dashboard a
+  // second time and report the result under the wrong route name.
 ] as const;
 
 const ADVANCED = (route: string) => route.startsWith("/lab") || route.startsWith("/intel") || route === "/advanced";
