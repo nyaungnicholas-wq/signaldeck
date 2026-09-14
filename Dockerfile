@@ -115,6 +115,24 @@ COPY PREREGISTRATION.md /app/PREREGISTRATION.md
 COPY ops/grade.sh       /usr/local/bin/grade.sh
 RUN chmod +x /usr/local/bin/grade.sh
 
+# THE BUILD MANIFEST, and the seal that completes it.
+#
+# ops/docker-build.sh emits build-manifest.json on the HOST, immediately before
+# this build, hashing the files that decide a verdict against the tree the
+# operator reviewed. That is the half git can do and this image cannot.
+#
+# This COPY is deliberately REQUIRED, not optional: a hand `docker build` with
+# no manifest present fails here rather than producing an image that cannot be
+# bound to any source. Use ops/docker-build.sh.
+#
+# `seal` then adds what the host could not know -- the hashes of binaries
+# compiled during this build -- so a binary swapped inside a running container
+# is caught too. It must come after both the tools COPY (for python) and the
+# binary COPYs above.
+COPY build-manifest.json /app/build-manifest.json
+RUN python3 /app/tools/build_manifest.py seal \
+      --manifest /app/build-manifest.json --root /
+
 # The accuracy page is a server component that reads data/accuracy_registry.json
 # relative to the web app's cwd (/app/web), i.e. /app/data. Point that at the
 # volume so whatever the grader writes is what the page renders. Without this

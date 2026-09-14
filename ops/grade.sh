@@ -85,6 +85,41 @@ elif [ "$doc_hash" != "$chain_hash" ]; then
   refusal="UNREGISTERED PROTOCOL DOCUMENT: PREREGISTRATION.md hashes $doc_hash but the newest prereg-document record pins $chain_hash"
 fi
 
+# --- build provenance -------------------------------------------------------
+# THE GATE THIS FILE'S HEADER SAYS IS MISSING, in the only form the image can
+# honestly run. tools/deployment_drift.py cannot work here -- two of its checks
+# shell out to git and there is no .git in the image -- so the container applied
+# one gate fewer than the dev box, and a stale binary the dev-box publish
+# refuses on was still graded here.
+#
+# This does not simulate that check. It answers a narrower question completely:
+# are the bytes about to decide a verdict the ones the reviewed build contained?
+# ops/docker-build.sh hashed them on the host, where git exists; this re-hashes
+# them here and compares. A forged GIT_REV does not help, because the binding is
+# to content rather than to a label.
+#
+# WHAT IT REFUSES TO CLAIM: that the revision was verified. Nothing in this image
+# can resolve a commit, so the revision is reported as RECORDED and the phrase
+# "not verifiable here" is printed on every run. Inventing resolvability would be
+# the same dishonesty as the fail-open gates removed elsewhere in this file.
+MANIFEST="${SIGNALDECK_BUILD_MANIFEST:-/app/build-manifest.json}"
+if [ -z "$refusal" ]; then
+  manifest_out=$("$PY" "$TOOLS/build_manifest.py" verify --manifest "$MANIFEST" \
+                    --root "$REPO" --bin-root / 2>&1)
+  manifest_status=$?
+  log "$manifest_out"
+  case "$manifest_status" in
+    0) ;;
+    # 1 = the check RAN and the bytes disagree. That names a file and is an
+    #     accusation about this deployment, so it is worded as one.
+    1) refusal="BUILD MANIFEST MISMATCH: the artifacts in this image are not the ones the reviewed build pinned -- ${manifest_out}. The grade was not run. This is a deployment fault, NOT a finding about any model" ;;
+    # Anything else = the check could not run at all: no manifest, an unusable
+    # one, a missing tool, a python that died. Same withholding, different
+    # sentence -- an outage published as an accusation is its own dishonesty.
+    *) refusal="CHECK UNAVAILABLE: the build manifest could not be verified (exit $manifest_status), so this image cannot be bound to any reviewed source -- ${manifest_out}. The grade was not run. This is a check outage, NOT a finding about any model" ;;
+  esac
+fi
+
 # --- survivorship bound, best effort ---------------------------------------
 # Measured before the grade so the bound published beside today's numbers was
 # computed against today's universe. It can only ever WIDEN the disclosed

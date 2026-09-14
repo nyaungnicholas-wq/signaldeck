@@ -48,6 +48,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 GRADE_SH = REPO / "ops" / "grade.sh"
 REAL_PUBGATE = REPO / "tools" / "publication_gate.py"
+REAL_BUILDMANIFEST = REPO / "tools" / "build_manifest.py"
 
 PREV_REGISTRY = {
     "generated": "2026-09-01T00:00:00",
@@ -119,11 +120,18 @@ class Sandbox:
         con.close()
 
         shutil.copy(REAL_PUBGATE, self.tools / "publication_gate.py")
+        shutil.copy(REAL_BUILDMANIFEST, self.tools / "build_manifest.py")
         self.write_tool("backfill_delistings.py", _py("import sys; sys.exit(0)\n"))
+        # Every file the manifest pins has to exist before it is emitted, or it
+        # records them as missing and refuses -- which is the behaviour tested
+        # further down, not the baseline.
+        self.write_tool("live_accuracy.py", _py("import sys; sys.exit(0)\n"))
         self.grader_writes(GOOD_ROWS, honesty=None)
         self.honesty_merges(HONESTY_OK, exit_code=0)
         self.heartbeat(exit_code=0)
         self.collapsecheck(exit_code=0)
+        self.freeze_manifest = False
+        self.emit_manifest()
 
     # -- stub factories ----------------------------------------------------
     def write_tool(self, name: str, body: str) -> None:
@@ -197,8 +205,42 @@ class Sandbox:
         )
         target.chmod(0o755)
 
+    def emit_manifest(self) -> None:
+        """Emit a manifest over the sandbox, as ops/docker-build.sh does on the host.
+
+        Re-emitted on every run() by default. The stub factories above are how a
+        scenario is CONFIGURED -- rewriting selection_honesty.py to make it crash
+        is setting up the test, not tampering with a shipped image -- and a
+        manifest frozen at construction would flag every one of them as a swapped
+        artifact, which is a true statement about the wrong thing. Deliberate
+        tampering sets freeze_manifest and keeps the stale manifest.
+        """
+        self.manifest = self.dir / "build-manifest.json"
+        subprocess.run(
+            [sys.executable, str(self.tools / "build_manifest.py"),
+             "emit", "--repo", str(self.dir), "--out", str(self.manifest)],
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+
+    def tamper(self, rel: str, text: str = "SWAPPED AFTER THE BUILD\n") -> None:
+        """Change a pinned file and KEEP the manifest that predates it."""
+        (self.dir / rel).write_text(text, encoding="utf-8")
+        self.freeze_manifest = True
+
+    def forge_revision(self, rev: str = "0" * 40) -> None:
+        self.freeze_manifest = True
+        m = json.loads(self.manifest.read_text(encoding="utf-8"))
+        m["revision"] = rev
+        self.manifest.write_text(json.dumps(m), encoding="utf-8")
+
     # -- driving grade.sh --------------------------------------------------
     def run(self):
+        # The manifest describes the artifacts as they are about to be graded,
+        # which is exactly what ops/docker-build.sh produces on the host right
+        # before a build. Frozen only where a test is deliberately simulating a
+        # deployment whose bytes drifted away from its manifest.
+        if not self.freeze_manifest and self.manifest.exists():
+            self.emit_manifest()
         env = dict(os.environ)
         env.update(
             SIGNALDECK_DB=str(self.db),
@@ -207,6 +249,7 @@ class Sandbox:
             SIGNALDECK_APP=str(self.dir),
             SIGNALDECK_PYTHON=sys.executable,
             SIGNALDECK_GRADE_LOG=str(self.log),
+            SIGNALDECK_BUILD_MANIFEST=str(self.manifest),
             PATH=str(self.bin) + os.pathsep + env.get("PATH", ""),
         )
         proc = subprocess.run(
@@ -362,6 +405,72 @@ class PublicationGateTests(unittest.TestCase):
         self.assertTrue(self.sb.still_previous())
         leftovers = list(self.sb.data.glob("*.staging*"))
         self.assertEqual(leftovers, [], f"staged artifact left behind: {leftovers}")
+
+    # -- F06: the container was applying one gate fewer than the dev box ----
+    def test_swapped_grader_is_caught_by_the_build_manifest(self):
+        """The gap this closes. tools/deployment_drift.py cannot run in the
+        image (it shells out to git; .dockerignore excludes .git), so a stale or
+        substituted binary the dev-box publish refuses on was still graded here.
+        Content hashing crosses that boundary where git cannot."""
+        self.sb.tamper("tools/accuracy_registry.py")
+        proc = self.sb.run()
+        self.assertWithheld(proc, "a grader whose bytes are not the reviewed ones")
+        log = self.sb.log.read_text(encoding="utf-8")
+        self.assertIn("BUILD MANIFEST MISMATCH", log)
+        self.assertIn("accuracy_registry.py", log)
+
+    def test_swapped_protocol_document_is_caught(self):
+        self.sb.tamper("PREREGISTRATION.md")
+        proc = self.sb.run()
+        self.assertWithheld(proc, "a protocol document that is not the reviewed one")
+
+    def test_missing_manifest_is_an_outage_not_an_accusation(self):
+        """A missing manifest means the check could not RUN. It must withhold,
+        and it must NOT be reported as a mismatch -- publishing an outage as an
+        accusation about the deployment is the same error as the reverse."""
+        self.sb.manifest.unlink()
+        proc = self.sb.run()
+        self.assertWithheld(proc, "a missing build manifest")
+        log = self.sb.log.read_text(encoding="utf-8")
+        self.assertIn("CHECK UNAVAILABLE", log)
+        self.assertNotIn("BUILD MANIFEST MISMATCH", log)
+
+    def test_manifest_that_pins_nothing_does_not_verify_everything(self):
+        """An emptied manifest would otherwise pass by checking zero artifacts --
+        the exact fail-open shape this whole gate exists to close."""
+        self.sb.freeze_manifest = True
+        self.sb.manifest.write_text(json.dumps({
+            "schema": "signaldeck/build-manifest/1",
+            "revision": "deadbeef", "source_artifacts": {}, "binary_artifacts": {},
+        }), encoding="utf-8")
+        proc = self.sb.run()
+        self.assertWithheld(proc, "a manifest pinning no artifacts")
+        self.assertIn("CHECK UNAVAILABLE", self.sb.log.read_text(encoding="utf-8"))
+
+    def test_a_forged_revision_label_neither_rescues_nor_breaks_anything(self):
+        """GIT_REV is caller-supplied and TRUSTED, which is why the binding is to
+        CONTENT. Relabelling an honest image must still publish; relabelling a
+        tampered one must still be caught."""
+        self.sb.forge_revision()
+        proc = self.sb.run()
+        self.assertEqual(proc.returncode, 0,
+                         "a relabelled but honest image was refused\n" + proc.stdout + proc.stderr)
+
+        sb2 = Sandbox()
+        self.addCleanup(sb2.cleanup)
+        sb2.forge_revision()
+        sb2.tamper("tools/selection_honesty.py")
+        proc2 = sb2.run()
+        self.assertNotEqual(proc2.returncode, 0, "a forged label rescued swapped bytes")
+        self.assertTrue(sb2.still_previous())
+
+    def test_manifest_verify_never_claims_the_revision_was_verified(self):
+        """Nothing in the image can resolve a commit. Saying otherwise would be
+        inventing resolvability, which is the failure mode this replaces."""
+        proc = self.sb.run()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        log = self.sb.log.read_text(encoding="utf-8")
+        self.assertIn("RECORDED (not verifiable here", log)
 
     # -- protocol gate still fails closed ----------------------------------
     def test_unregistered_protocol_document_withholds(self):

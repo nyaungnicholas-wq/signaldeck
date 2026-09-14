@@ -144,6 +144,51 @@ else
   echo "docker build: audience PRIVATE (anonymous visitors land on /login)" >&2
 fi
 
+# BIND THE IMAGE TO THE SOURCE, HERE, WHERE GIT EXISTS.
+#
+# GIT_REV below is TRUSTED, not checked -- this file says so fifteen lines up,
+# and an image repeating back a label the caller supplied proves only that
+# someone typed it. ops/grade.sh's header records the consequence: the container
+# applies one gate fewer than the dev box, because tools/deployment_drift.py
+# shells out to git and .dockerignore excludes .git.
+#
+# What CAN cross that boundary is content. The files that decide a verdict are
+# copied into the image byte-for-byte, so hashing them HERE -- against the tree
+# the operator is looking at, on the machine that can resolve a revision -- and
+# re-hashing them inside the container at grade time binds the running artifact
+# to the reviewed source through something no build argument can forge.
+#
+# Emitted immediately before the build so it describes THIS tree, and refused if
+# a pinned file is missing: a manifest that pins nothing verifies everything.
+# The build context is `.` at the bottom of this file, so the repo root is the
+# current directory -- the same assumption sd_dirty_excluding_generated already
+# makes above. The manifest has to land IN that context or the Dockerfile's COPY
+# cannot see it.
+manifest="./build-manifest.json"
+
+# Resolve a python that actually RUNS. `command -v python3` is not sufficient on
+# Windows: the Microsoft Store ships an app-execution-alias stub at that name
+# which resolves fine, prints "Python was not found" to stdout and exits 0.
+# ops/accuracy-registry.sh learned this the hard way; same detection here.
+bm_py=""
+for cand in python3 python py; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import sys' >/dev/null 2>&1; then
+    bm_py="$cand"; break
+  fi
+done
+if [ -z "$bm_py" ]; then
+  echo "docker build REFUSED: no working python on PATH (tried python3, python, py)." >&2
+  echo "  It is needed to emit the build manifest that binds this image to its source." >&2
+  exit 1
+fi
+
+rm -f "$manifest"
+if ! "$bm_py" ./tools/build_manifest.py emit --repo . --out "$manifest"; then
+  echo "docker build REFUSED: could not emit the build manifest (see above)." >&2
+  echo "  The image would then be unbindable to any reviewed source." >&2
+  exit 1
+fi
+
 echo "docker build: stamping commit $rev into $tag" >&2
 # The OCI label is what ops/oracle-verify.sh reads back. GIT_REV goes into the
 # binary via ldflags and is TRUSTED there (a container cannot check it); the
