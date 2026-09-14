@@ -26,7 +26,7 @@ DEPLOY needs a rollback plan, MONEY is human-owned). Root superprompts and
 | Branch | `public-launch` |
 | Baseline audit HEAD | `334152d4` — matched exactly when this pass started |
 | Moved under me at 21:25 by ANOTHER session | `cf321a23` |
-| **Final candidate** | **`de8742b`** |
+| **Final candidate** | **`f1d9236`** |
 | Web `BUILD_ID` | `AG83roTnCLnAWt5dtSGj0` |
 | Daemon **running** | revision `5483350` — daemon changes in this candidate are **source-only, not live** |
 | URL browsed | `http://127.0.0.1:8323` |
@@ -89,15 +89,19 @@ restarted.
 
 ## Open, and why
 
+**No finding is left in CONFIRMED -> OPEN.** What remains is unexercised
+verification, not unfixed defects.
+
 | Item | Reason |
 | --- | --- |
-| F06 container parity | Build-manifest design larger than the night had room for after F01–F05 |
-| F08 ledger write crash-safety | Invasive; touches the single-writer architecture. **No backdating was done.** |
-| Two red scheduled tasks | `Check-Grader-Health`, `Check-Task-Health` — found, not diagnosed |
-| Per-worker degradation cause | 3 workers degraded; cause not determined per worker |
 | Playwright e2e of my own | Suite drives the LIVE daemon and real paper books; isolated fixture not built |
-| Docker image build | docker daemon not running on this host |
+| Docker image build | docker daemon not running on this host, so the in-image `seal` step is unexercised |
 | Restore / clean-clone / load / dependency scan | Not run |
+| `ops/test-reference-transaction-hook.sh` 11/1 | **Pre-existing** (fails at `cf321a23` too), not diagnosed, deliberately not blind-fixed. See FINDINGS F-NEW-06 |
+| Daemon deploy | The daemon changes in this candidate are source-only until someone deploys them |
+
+Closed in the continuation: **F06** (container parity), **F08** (unattested
+forecasts), both **red scheduled tasks**, and the **degraded-worker diagnosis**.
 
 ## Failures during the pass, recorded rather than smoothed
 
