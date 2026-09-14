@@ -41,6 +41,27 @@ function Set-Unhealthy {
     $script:reasons += $Message
     $script:failed = $true
 }
+
+# Get-HeartbeatVerdict decides what a stale heartbeat MEANS, given how long this
+# machine has been up. Split out from the database path on purpose: the rule is
+# the part worth asserting, and ops/test-check-grader-health.ps1 drives the whole
+# matrix through it without needing a 6 GB database or a fabricated clock.
+#
+# Returns 'fresh', 'expected-downtime' or 'stale'. Only 'stale' is a fault.
+function Get-HeartbeatVerdict {
+    param(
+        [Parameter(Mandatory = $true)][double]$AgeMinutes,
+        [Parameter(Mandatory = $true)][int]$MaxAgeMinutes,
+        # Negative means the uptime could not be read. Unknown is NOT an excuse.
+        [Parameter(Mandatory = $true)][double]$UptimeMinutes
+    )
+    if ($AgeMinutes -le $MaxAgeMinutes) { return 'fresh' }
+    $ceiling = $MaxAgeMinutes * 3
+    if ($UptimeMinutes -ge 0 -and $UptimeMinutes -lt $MaxAgeMinutes -and $AgeMinutes -lt $ceiling) {
+        return 'expected-downtime'
+    }
+    return 'stale'
+}
 # Alerting. Without this the script detected faults and told nobody: under Task
 # Scheduler its console output goes nowhere, so an unhealthy run was a
 # LastTaskResult=1 in a UI no one opens. Both health tasks sat red from
@@ -108,7 +129,52 @@ try {
                     } else {
                         $age = ([datetime]::UtcNow - $finished).TotalMinutes
                         if ($age -gt $MaxAgeMinutes) {
-                            Set-Unhealthy ("HEARTBEAT: STALE ({0:N1} min, max {1})" -f $age, $MaxAgeMinutes)
+                            # A POWERED-OFF MACHINE AND A BROKEN GRADER PRODUCE THE
+                            # IDENTICAL SYMPTOM, and until 2026-09-14 this reported
+                            # both as unhealthy with the same sentence.
+                            #
+                            # Measured: this box was off from 2026-09-11 00:21 to
+                            # 2026-09-12 21:18 (System log 6006 -> 6005, ~45 h).
+                            # "SignalDeck Accuracy" fires daily at 14:05 with
+                            # WakeToRun=False, so it could not run on either day.
+                            # The heartbeat reached 67 h, this check went red at
+                            # 09:20 on 09-13, and "SignalDeck Check-Task-Health"
+                            # went red behind it, purely as a cascade. Nothing was
+                            # wrong with the grader: it ran at 14:05 the same day
+                            # and recorded a normal refusal.
+                            #
+                            # THE EXCUSE IS BOUNDED AND CANNOT FAIL OPEN. The grader
+                            # only runs while the machine is up, so uptime -- not
+                            # wall-clock -- is the window in which it had a chance.
+                            # It is forgiven ONLY while the machine has been up for
+                            # less than one full window, and NEVER past a hard
+                            # ceiling of three windows, so a box that reboots often
+                            # enough to keep uptime low cannot hide a real outage
+                            # indefinitely. Either way the line is printed: this
+                            # downgrades a page, it never suppresses a fact.
+                            $uptimeMin = -1
+                            try {
+                                $boot = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+                                $uptimeMin = ((Get-Date) - $boot).TotalMinutes
+                            } catch {
+                                $uptimeMin = -1
+                            }
+                            $ceiling = $MaxAgeMinutes * 3
+                            switch (Get-HeartbeatVerdict -AgeMinutes $age -MaxAgeMinutes $MaxAgeMinutes -UptimeMinutes $uptimeMin) {
+                                'expected-downtime' {
+                                    Write-Output ("HEARTBEAT: STALE ({0:N1} min, max {1}) BUT EXPECTED - this machine has been up only {2:N1} min, so a full grading window has not elapsed since boot. The gap is DOWNTIME, not a grader fault. It becomes unhealthy once uptime passes {1} min with no fresh heartbeat, or once age passes {3} min regardless." -f $age, $MaxAgeMinutes, $uptimeMin, $ceiling)
+                                }
+                                default {
+                                    $why = if ($uptimeMin -lt 0) {
+                                        'uptime unreadable, which is not an excuse'
+                                    } elseif ($age -ge $ceiling) {
+                                        ("age is past the {0} min ceiling, which no amount of downtime excuses" -f $ceiling)
+                                    } else {
+                                        ("this machine has been up {0:N1} min, longer than the {1} min window, so the grader had its chance" -f $uptimeMin, $MaxAgeMinutes)
+                                    }
+                                    Set-Unhealthy ("HEARTBEAT: STALE ({0:N1} min, max {1}) - {2}" -f $age, $MaxAgeMinutes, $why)
+                                }
+                            }
                         } else {
                             Write-Output ("HEARTBEAT: fresh ({0:N1} min)" -f $age)
                         }
