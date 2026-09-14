@@ -5,7 +5,13 @@ import { usePathname } from "next/navigation";
 
 const ITEMS = [
   { label: "Grades", href: "/accuracy" },
-  { label: "Risk estimates", href: "/volatility" },
+  // NOT "Risk estimates". /volatility is the graded record of ONE
+  // pre-registered volatility forecast against two baselines, both horizons
+  // currently INSUFFICIENT. It has no per-symbol risk lookup and no loss
+  // estimate in anyone's money -- the "loss" it reports is QLIKE, the function
+  // the forecast is scored under. A nav label is the first promise a visitor
+  // reads, and this one was promising a tool that does not exist.
+  { label: "Volatility record", href: "/volatility" },
   { label: "Receipts", href: "/proof" },
   { label: "Glossary", href: "/glossary" },
 ] as const;

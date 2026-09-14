@@ -11,7 +11,7 @@ swallow the exit status, and files drift refusal as a grader failure. They also 
 the newest_boot_ts function correctly identifies boot timestamps from revision changes
 and quiet gaps, ignoring unstamped rows and handling empty tables.
 """
-import os, sqlite3, sys, unittest
+import os, re, sqlite3, sys, unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import deployment_drift  # noqa: E402
 
@@ -50,8 +50,46 @@ class DeploymentDriftGateTest(unittest.TestCase):
         self.assertNotIn("|| true", self.gate)
 
     def test_drift_refusal_is_filed_as_a_grader_failure(self):
-        """Drift refusal must be logged as --failure so grader health sees failure."""
-        self.assertRegex(self.src, r'case "\$refusal_reason" in [^\n]*"deployment drift"\*[^\n]*hb_mode=--failure', msg="--refused heartbeat would leave grader health green while grader never ran")
+        """Drift refusal must be logged as --failure so grader health sees failure.
+
+        THE ASSERTION IS UNCHANGED; the regex is not. It used to require the
+        whole `case` on ONE line ([^\\n]* twice), which pinned the formatting
+        rather than the behaviour -- the block was reflowed to multiple lines on
+        2026-09-13 and this failed while the classification it guards was
+        identical. A test that breaks on a line wrap is a test someone
+        eventually deletes.
+
+        The distinction being protected is real and worth restating: --refused
+        is a HEALTHY grader saying no on evidence, --failure means it never
+        produced a verdict. Filing the second as the first leaves grader health
+        green while nothing has graded.
+        """
+        case = re.search(r'case "\$refusal_reason" in(.*?)esac', self.src, re.S)
+        self.assertIsNotNone(case, "the hb_mode classification block is gone entirely")
+        failure_arm = re.search(r'^(.*?)hb_mode=--failure', case.group(1), re.S).group(1)
+        self.assertIn('"deployment drift"*', failure_arm,
+                      msg="--refused heartbeat would leave grader health green while grader never ran")
+
+    def test_an_unrunnable_gate_is_also_a_grader_failure(self):
+        """CHECK UNAVAILABLE belongs in the same arm as drift and liveness.
+
+        Added 2026-09-13 with the prefix itself. ops/accuracy-registry.sh and
+        ops/grade.sh now write "CHECK UNAVAILABLE: ..." whenever a gate could
+        not produce a verdict -- a missing collapsecheck binary, a renamed flag,
+        a crashed selection_honesty, a staged registry that would not move into
+        place. Every one of those means the grade did not happen, which is the
+        --failure class, and tools/docs_gate.py --contract release refuses to
+        ship a build whose evidence state is one of them.
+
+        Classified as --refused instead, an outage would read as a measured
+        scientific refusal on the public surface: grader health green, a
+        refusal published as though something had been found out about a model.
+        """
+        case = re.search(r'case "\$refusal_reason" in(.*?)esac', self.src, re.S)
+        self.assertIsNotNone(case)
+        failure_arm = re.search(r'^(.*?)hb_mode=--failure', case.group(1), re.S).group(1)
+        self.assertIn('"CHECK UNAVAILABLE"*', failure_arm,
+                      msg="a gate that could not RUN would be filed as a healthy refusal")
 
 class RevisionBootSignalTest(unittest.TestCase):
     def _con(self, rows):

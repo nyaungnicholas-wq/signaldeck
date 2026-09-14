@@ -102,7 +102,7 @@ export default async function RiskPage() {
           className="mono text-[0.7rem] uppercase tracking-[0.2em]"
           style={{ color: "var(--accent)" }}
         >
-          Risk estimates
+          Volatility record
         </div>
         <h1 className="m-0 max-w-[22ch] text-[1.9rem] font-extrabold leading-tight sm:text-[2.4rem]">
           How much is this likely to move?
