@@ -160,10 +160,27 @@ func RawDataNotice() string {
 // here even though they are not price bars and BarsRedistributable does not
 // speak to them.
 var RestrictedRoutes = map[string]string{
-	"/api/bars":                "alpaca",
-	"/api/snaps":               "cryptolive",
-	"/api/news":                "news",
-	"/api/stocktwits":          "stocktwits",
+	"/api/bars":       "alpaca",
+	"/api/snaps":      "cryptolive",
+	"/api/news":       "news",
+	"/api/stocktwits": "stocktwits",
+	// /api/crypto-perp emits funding, openInterest and MARK PX -- a vendor
+	// price. By the discriminator this file already uses two paragraphs above
+	// ("No OHLC, no volume, no vendor price" is what makes a surface derived
+	// analytics), that is vendor data, not an annotation, so it belongs here.
+	//
+	// It was the only Licensed source with a serving route and no entry.
+	// stocktwits, added to the same dataexpansion.go package, was governed; this
+	// one was missed. The asymmetry that hid it: an unknown source KEY fails
+	// closed (TestUnknownSourceFailsClosed), but an ungoverned ROUTE fails OPEN
+	// -- RouteRedistributable returns redistributable=true for any path absent
+	// from this map. So a missing row is silent in the safe-looking direction.
+	//
+	// hyperliquid's own note records its commercial terms as UNESTABLISHED,
+	// which is the case the release instruction says to withhold on rather than
+	// guess. Loopback operators are unaffected: the guard also requires the
+	// daemon to be reachable beyond localhost before it refuses.
+	"/api/crypto-perp":         "hyperliquid",
 	"/api/tv-quote":            "tvscanner",
 	"/api/tv-rating":           "tvscanner",
 	"/api/tv-signals":          "tvscanner",

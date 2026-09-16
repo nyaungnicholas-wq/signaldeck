@@ -138,3 +138,58 @@ func TestUnknownSourceFailsClosed(t *testing.T) {
 			src, governed, ok)
 	}
 }
+
+// EVERY NON-REDISTRIBUTABLE SOURCE THAT HAS A SERVING ROUTE MUST BE GOVERNED.
+//
+// The bug this pins: /api/crypto-perp served Hyperliquid funding, open interest
+// and mark price -- a vendor price -- while absent from RestrictedRoutes, so
+// RouteRedistributable reported it redistributable and the 451 guard could never
+// fire. hyperliquid is class Licensed with its commercial terms recorded as
+// UNESTABLISHED, which is precisely the case to withhold on.
+//
+// It stayed invisible because the table's two failure directions are not
+// symmetric. An unknown KEY fails closed (TestUnknownSourceFailsClosed). An
+// ungoverned ROUTE fails OPEN: any path missing from the map is reported
+// redistributable. A row that is simply absent therefore reads as "allowed",
+// which is the direction that does not announce itself.
+//
+// Listing the serving route per source by hand is deliberate. It cannot be
+// derived from the map being tested without asserting that map against itself,
+// and a source with no public route at all (cryptohist reaches users only
+// through /api/bars, which IS governed) must not be forced to invent one.
+func TestEveryNonRedistributableSourceWithARouteIsGoverned(t *testing.T) {
+	servingRoute := map[string]string{
+		"alpaca":      "/api/bars",
+		"cryptolive":  "/api/snaps",
+		"news":        "/api/news",
+		"stocktwits":  "/api/stocktwits",
+		"tvscanner":   "/api/tv-rating",
+		"hyperliquid": "/api/crypto-perp",
+		// cryptohist: no route of its own. It is a PriceBarSources member and
+		// reaches users only through /api/bars, which is governed as alpaca.
+	}
+
+	for key, s := range Sources {
+		if s.Redistrib {
+			continue // public sources are meant to be servable raw
+		}
+		route, has := servingRoute[key]
+		if !has {
+			continue // no serving route; nothing to govern
+		}
+		src, ok, governed := RouteRedistributable(route)
+		if !governed {
+			t.Errorf("%s serves non-redistributable source %q but is absent from "+
+				"RestrictedRoutes, so the licence guard reports it redistributable and "+
+				"451 can never fire for it", route, key)
+			continue
+		}
+		if ok {
+			t.Errorf("%s is governed by %q yet reports redistributable", route, src)
+		}
+		if src != key {
+			t.Errorf("%s is governed by %q, want %q -- the refusal would name the wrong provider",
+				route, src, key)
+		}
+	}
+}
