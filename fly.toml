@@ -11,7 +11,8 @@
 #   fly volumes create signaldeck_data --size 10 --region <region>
 #   fly secrets set ALPACA_KEY=... ALPACA_SECRET=...
 #   fly deploy --build-arg GIT_REV=$(git rev-parse HEAD) \
-#              --build-arg NEXT_PUBLIC_SITE_URL=https://<your-app>.fly.dev
+#              --build-arg NEXT_PUBLIC_SITE_URL=https://<your-app>.fly.dev \
+#              --build-arg NEXT_PUBLIC_SIGNALDECK_PUBLIC=1
 #
 # GIT_REV is not optional. The daemon refuses to start from a build it cannot
 # attribute to a commit, because rows it writes could not then be graded.
@@ -38,7 +39,17 @@
 #     SIGNALDECK_ALLOW_LOCALHOST_SITE_URL=1 opt-out for local images;
 #   - the org.opencontainers.image.revision label, which is what
 #     ops/oracle-verify.sh reads back to confirm the running image is the
-#     commit it claims to be.
+#     commit it claims to be;
+#   - the refusal when a hostname arrives with no NEXT_PUBLIC_SIGNALDECK_PUBLIC.
+#     This one is the reason the third --build-arg above exists. The audience is
+#     inlined at build time and the Dockerfile ARG defaults to "0", so the two
+#     paths fail in OPPOSITE directions: ops/docker-build.sh refuses (measured
+#     2026-09-15, exit 1), while `fly deploy` builds happily and ships a public
+#     site that redirects every anonymous visitor to /login and shows them
+#     operator remediation copy on /proof. Nothing errors and nothing logs; you
+#     find out when someone tells you your public site asked them to sign in.
+#     This list said "all of them at once" and named three while the audience
+#     guard, added 2026-09-13, made it four.
 # DEPLOY.md and docs/PUBLIC_RELEASE_PLAN.md both route the operator through
 # ops/docker-build.sh for exactly this reason. Prefer building with the script
 # and deploying that image; if you do use `fly deploy`, those three checks did

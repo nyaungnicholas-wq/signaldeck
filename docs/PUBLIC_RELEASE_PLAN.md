@@ -32,12 +32,19 @@ Two processes in one container image (daemon `signaldeckd` on port 8322, Next.js
 Steps:
 1. Build the image with `ops/docker-build.sh`, never a bare `docker build`: the wrapper is what refuses a dirty tree, proves the revision resolves, and stamps the OCI label `ops/oracle-verify.sh` reads back. A raw invocation stamps a claim nobody checked (DEPLOY.md, "Container deploys: how provenance is proved").
    ```bash
-   NEXT_PUBLIC_SITE_URL=https://<public-hostname> ops/docker-build.sh signaldeck
+   NEXT_PUBLIC_SITE_URL=https://<public-hostname> \
+     NEXT_PUBLIC_SIGNALDECK_PUBLIC=1 ops/docker-build.sh signaldeck
    ```
+   The audience flag is not decoration. Measured 2026-09-15, this step without
+   it exits 1: `docker build REFUSED: this image carries a hostname but no
+   audience.` It is inlined at build time and defaults to `0`, so an image that
+   names a public host and omits it bounces every anonymous visitor to `/login`
+   and shows them operator remediation copy on `/proof` — a locked front door on
+   a site whose whole argument is "check my claims yourself".
 2. Provision a persistent volume (10 GB minimum) on the chosen host (Fly.io, Railway, Render, or VPS).
 3. Set secrets in the host environment: all entries from `daemon/.env` plus `SIGNALDECK_PUBLIC_SURFACE=1`, `SIGNALDECK_ALLOWED_HOSTS=<public-hostname>,127.0.0.1:8322,localhost:8322`, `SIGNALDECK_OPEN_SIGNUP=0`.
    - **The loopback pair is not optional.** `web/src/app/api/[...path]/route.ts` does not forward `Host`, so the daemon sees `127.0.0.1:8322` on every proxied request. An allowlist naming only the public hostname 403s the entire site.
-   - `NEXT_PUBLIC_SIGNALDECK_PUBLIC` and `NEXT_PUBLIC_SITE_URL` are **build-time**, not runtime: `NEXT_PUBLIC_*` is inlined into the bundle by `next build`, so setting them as host secrets does nothing. Pass them to `ops/docker-build.sh` instead, which now refuses to build without a site URL.
+   - `NEXT_PUBLIC_SIGNALDECK_PUBLIC` and `NEXT_PUBLIC_SITE_URL` are **build-time**, not runtime: `NEXT_PUBLIC_*` is inlined into the bundle by `next build`, so setting them as host secrets does nothing. Pass them to `ops/docker-build.sh` instead, which now refuses to build without a site URL, and refuses again if that site URL arrives without an audience.
 4. Seed the volume with a reviewed database backup (from `data/backups/` with matching sha256) or start empty (daemon will ingest once Alpaca keys are present).
 5. Deploy the container; verify `/api/health` (200) and `/api/ready` (200 once workers healthy).
 6. From a fresh anonymous browser: confirm `/` loads, `/accuracy` returns data, `/api/bars` returns 451, `/api/symbol` requires auth, `/api/health` shows `degraded` only under worker load, `/api/ready` is 200.
