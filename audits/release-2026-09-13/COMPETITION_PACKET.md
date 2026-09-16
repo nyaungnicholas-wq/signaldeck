@@ -211,6 +211,36 @@ disclosed**. This draft is deliberately incomplete where only you can speak.
 > directional model and the current refusal to publish accuracy figures — follow
 > from pre-registered rules, not from any judgement made by an AI assistant.
 
+### What the repository record actually shows — measured 2026-09-15
+
+These are counts from `git log` on `public-launch`, not an impression. They exist
+so the disclosure above is written against evidence rather than memory.
+
+| | |
+| --- | --- |
+| Commits on the branch | **856** |
+| Carrying an AI `Co-Authored-By` trailer | **824 (96%)** |
+| First / last such commit | 2026-07-01 / 2026-09-15 |
+
+AI-co-authored commits touching each area: `daemon` 319, `ops` 189, `web` 118,
+`tools` 118, `audits` 100, `research` 94, `proofs` 16, `docs` 10.
+
+Of the 32 commits WITHOUT the trailer, 10 are merge commits — several of them
+merging `claude/*` branches — so 96% understates rather than overstates it.
+
+**Read this before filling in the placeholders above.** The draft invites listing
+areas such as "code review, refactoring, test writing". Against this record that
+would be an inaccurate characterisation: AI wrote or co-wrote essentially all of
+the code, across every area of the repository, for the project's whole life.
+
+That is not the same as saying you contributed nothing, and I am not in a
+position to say what you contributed — which is exactly why those clauses are
+left to you. Direction, the research questions, which results to trust, what to
+build and what to refuse to claim are decisions the commit record cannot show.
+State those in your own words, and state the scale above accurately alongside
+them. A disclosure that is accurate about scale is also the stronger one here,
+because the project's entire argument is that it does not overstate what it has.
+
 **Do not sign the last line unless it is true.** If there are parts you cannot
 yet explain, the honest move is to learn them before submitting — the Q&A above
 is the place to start.

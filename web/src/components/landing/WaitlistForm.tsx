@@ -126,6 +126,22 @@ export default function WaitlistForm() {
           {message}
         </p>
       )}
+      {/* COLLECTION NOTICE. This form took an email address and said nothing
+          about what happened to it — no purpose, no retention, no way to be
+          removed. On a site whose whole argument is that it does not claim more
+          than it can show, an unexplained personal-data collection is the wrong
+          silence.
+
+          Every clause here is checked against the code rather than aspirational:
+          the `waitlist` table is (email, created_ts, source) and holds nothing
+          else, the daemon never sends mail from it, and no third party reads it.
+          If any of that changes, this copy has to change with it. */}
+      <p className="basis-full mt-2 text-xs" style={{ color: 'var(--faint)' }}>
+        Your email is stored on this server only to tell you when the record opens.
+        Nothing else is collected, it is never sold or shared, and no mail has been
+        sent from it to date. To be removed, reply to any message from us or
+        contact the operator — the entry is deleted, not flagged.
+      </p>
     </form>
   );
 }
