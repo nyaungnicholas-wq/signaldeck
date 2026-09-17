@@ -180,11 +180,21 @@ try {
     # 5 - BROWSER GATE. This is the one that fails on a page rendering its error
     # boundary, which the asset check cannot see: the boundary is served with a
     # 200 and references every asset correctly.
+    # The gate needs 8329 (playwright.config.ts webServer, reuseExistingServer
+    # false). A leftover `next start` there makes playwright exit 1 with
+    # "already used" - the SAME exit code a real test failure gives. Measured:
+    # the first run of this script reported "the candidate does not render" when
+    # the truth was an orphaned server from an earlier run. A check that cannot
+    # run must say so; publishing an outage as a finding is the thing this
+    # repository refuses everywhere else.
+    if (Get-NetTCPConnection -LocalPort 8329 -State Listen -ErrorAction SilentlyContinue) {
+        Fail 'CHECK UNAVAILABLE: the browser gate needs 127.0.0.1:8329 and something is already listening there (usually an orphaned next start from an earlier playwright run). Stop it and retry. This is NOT a statement about the candidate.'
+    }
     Write-Log 'running web/e2e/release-smoke.spec.ts against the candidate'
     Push-Location $Web
     try {
         & npx playwright test release-smoke --reporter=list
-        if ($LASTEXITCODE -ne 0) { Fail ("release-smoke exited {0}; the candidate does not render" -f $LASTEXITCODE) }
+        if ($LASTEXITCODE -ne 0) { Fail ("the browser gate FAILED (exit {0}). Read the playwright output above before concluding anything: a timeout in the harness and a page that does not render are different findings." -f $LASTEXITCODE) }
     } finally {
         Pop-Location
     }
@@ -196,6 +206,15 @@ try {
     }
 
     # 6 - PROMOTE. Stop, move aside, move in, start. Never delete.
+    #
+    # Take the maintenance lock first. ops/web-guard.ps1 runs every five minutes
+    # and, without this, can arrive between the stop and the start, find the port
+    # down or the directory half-swapped, and restart the task underneath this
+    # one - or file a suppression against a build that was never broken.
+    $Lock = Join-Path $PSScriptRoot '.maintenance'
+    Set-Content -LiteralPath $Lock -Value ("web-release {0} {1}" -f $Revision, (Get-Date).ToString('o')) -Encoding UTF8
+    Write-Log 'maintenance lock taken; the web keepalive will stand down'
+
     $LiveDist = Join-Path $Web '.next'
     $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
     $Kept = Join-Path $Web (".next-prev-" + $stamp)
@@ -248,6 +267,12 @@ try {
 finally {
     if ($StageProc -ne $null) {
         try { Stop-Process -Id $StageProc.Id -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    # Release the lock whatever happened. A release that dies holding it would
+    # leave the web tier unguarded until the guard's own 30 minute ceiling.
+    $lockPath = Join-Path $PSScriptRoot '.maintenance'
+    if (Test-Path -LiteralPath $lockPath) {
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
     }
     $env:SIGNALDECK_DIST_DIR = $PrevDist
 }

@@ -24,6 +24,18 @@ const PUBLIC_PATHS = ["/", "/accuracy", "/proof", "/volatility", "/glossary"];
 
 const BOUNDARY_HEADING = "This page could not be loaded.";
 
+// How long a page gets to change its mind after the shell paints.
+//
+// This is deliberately a fixed settle and NOT waitForLoadState("networkidle").
+// /proof's ledger panel verifies a half-million-entry hash chain, and the daemon
+// answers that with a designed 30s refusal ("ledger verification exceeded 30s"),
+// so the page legitimately never goes network-quiet: measured 2026-09-16, the
+// idle wait timed out twice on a page that was rendering perfectly and failed a
+// release. The question here is only "did the boundary replace the page once the
+// fetches resolved", and 2.5s is ample for that — the crash this guards against
+// rendered the boundary within about a second of the payload arriving.
+const SETTLE_MS = 2500;
+
 /** Collect uncaught page errors. An uncaught render error is the signal the
  *  previous gate had no way to see: React unmounts the tree and the boundary
  *  takes its place, which from the outside looks like a page. */
@@ -123,7 +135,7 @@ test.describe("release smoke", () => {
       // instant the shell paints measures the skeleton and nothing else.
       // Measured: a /proof build that crashed on real data passed that check
       // and was caught two assertions later.
-      await page.waitForLoadState("networkidle");
+      await page.waitForTimeout(SETTLE_MS);
       await expect(page.getByRole("heading", { name: BOUNDARY_HEADING })).toHaveCount(0);
       expect(crashes.join(" | ")).toBe("");
     });
@@ -165,7 +177,7 @@ test.describe("release smoke", () => {
     );
     await page.goto("/proof");
     await expect(page.locator("header").first()).toBeVisible();
-    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(SETTLE_MS);
     await expect(page.getByRole("heading", { name: BOUNDARY_HEADING })).toHaveCount(0);
     expect(crashes.join(" | ")).toBe("");
   });

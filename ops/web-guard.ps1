@@ -138,6 +138,27 @@ function Get-BuildId {
 }
 
 try {
+    # STAND DOWN DURING A RELEASE. ops/web-release.ps1 stops the task, renames
+    # web\.next and starts it again; a guard arriving in that window sees a port
+    # that is down or serving a half-swapped directory and "repairs" it by
+    # restarting the task underneath the release, or records a suppression entry
+    # against a build that was never actually broken.
+    #
+    # ops/daemon-guard.ps1 has honoured this same lock since 2026-08 and this
+    # one never did. The ceiling matters as much as the lock: a release that
+    # dies without cleaning up must not leave the web tier unguarded forever, so
+    # a stale lock is reported and ignored rather than obeyed.
+    $lock = Join-Path (Split-Path -Parent $PSScriptRoot) 'ops\.maintenance'
+    if (Test-Path -LiteralPath $lock) {
+        $ageMin = [math]::Round(((Get-Date) - (Get-Item -LiteralPath $lock).LastWriteTime).TotalMinutes, 1)
+        if ($ageMin -lt 30) {
+            Write-Log ("maintenance lock held ({0} min): standing down, not touching the web tier" -f $ageMin)
+            Write-Output "web-guard: maintenance lock held"
+            exit 0
+        }
+        Write-Log ("maintenance lock is {0} min old, past the 30 min ceiling: ignoring it" -f $ageMin)
+    }
+
     $results = @()
     $state = Get-GuardState
     foreach ($t in $Targets) {
