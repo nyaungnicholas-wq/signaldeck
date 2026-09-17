@@ -221,6 +221,30 @@ class Sandbox:
              "emit", "--repo", str(self.dir), "--out", str(self.manifest)],
             capture_output=True, text=True, check=True, timeout=60,
         )
+        # AND THEN SEAL. The real pipeline does not stop at emit: the host
+        # emits, the Dockerfile runs `seal` inside the image, and since
+        # 2026-09-16 verify refuses an unsealed manifest outright - it pins no
+        # binary, so a swapped signaldeckd would pass unnoticed. A fixture that
+        # stopped at emit modelled half a build, and every scenario below then
+        # reported CHECK UNAVAILABLE instead of the behaviour under test.
+        binroot = self.dir / "usr" / "local" / "bin"
+        binroot.mkdir(parents=True, exist_ok=True)
+        for name in ("signaldeckd", "collapsecheck"):
+            stub = binroot / name
+            if not stub.exists():
+                stub.write_text(f"ELF-ish {name}\n", encoding="utf-8")
+        subprocess.run(
+            [sys.executable, str(self.tools / "build_manifest.py"),
+             "seal", "--manifest", str(self.manifest), "--root", str(self.dir)],
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        # This sandbox is not a git checkout, so emit recorded no revision and
+        # no resolvability. A real build host records both; say so here, or the
+        # provenance check refuses every scenario for a reason that has nothing
+        # to do with the gate under test. forge_revision() overrides this.
+        m = json.loads(self.manifest.read_text(encoding="utf-8"))
+        m.update(revision="a" * 40, revision_resolvable=True, dirty=False)
+        self.manifest.write_text(json.dumps(m), encoding="utf-8")
 
     def tamper(self, rel: str, text: str = "SWAPPED AFTER THE BUILD\n") -> None:
         """Change a pinned file and KEEP the manifest that predates it."""
@@ -250,6 +274,9 @@ class Sandbox:
             SIGNALDECK_PYTHON=sys.executable,
             SIGNALDECK_GRADE_LOG=str(self.log),
             SIGNALDECK_BUILD_MANIFEST=str(self.manifest),
+            # The sandbox pins its stub binaries under its own tree, so
+            # verify must resolve them there rather than at the real /.
+            SIGNALDECK_BIN_ROOT=str(self.dir),
             PATH=str(self.bin) + os.pathsep + env.get("PATH", ""),
         )
         proc = subprocess.run(
@@ -465,12 +492,24 @@ class PublicationGateTests(unittest.TestCase):
         self.assertTrue(sb2.still_previous())
 
     def test_manifest_verify_never_claims_the_revision_was_verified(self):
-        """Nothing in the image can resolve a commit. Saying otherwise would be
-        inventing resolvability, which is the failure mode this replaces."""
+        """The manifest REPORTS the revision and must never claim to have
+        verified it: it repeats what the build host wrote into it, and a label
+        the caller supplied is not evidence. Inventing resolvability is the
+        failure mode this replaces.
+
+        The wording changed on 2026-09-16 and the reason is worth keeping. This
+        used to read "nothing in the image can resolve a commit", which was true
+        until the image began shipping this repository's commit objects so the
+        hash-pinned grader could attribute historical rows (verified in a real
+        container: a historical commit resolves, an invented sha does not). The
+        premise expired; the claim it protects did not. What the manifest binds
+        is BYTES - the commit store answers a different question.
+        """
         proc = self.sb.run()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         log = self.sb.log.read_text(encoding="utf-8")
-        self.assertIn("RECORDED (not verifiable here", log)
+        self.assertIn("RECORDED (this manifest reports it, it does not verify it)", log)
+        self.assertNotIn("revision verified", log)
 
     # -- protocol gate still fails closed ----------------------------------
     def test_unregistered_protocol_document_withholds(self):

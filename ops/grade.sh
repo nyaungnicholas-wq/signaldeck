@@ -103,9 +103,11 @@ fi
 # to content rather than to a label.
 #
 # WHAT IT REFUSES TO CLAIM: that the manifest's revision was verified. The
-# manifest binds BYTES, and it reports the revision as RECORDED with "not
-# verifiable here" on every run, because a label the build host supplied is not
-# evidence. Inventing resolvability there would be the same dishonesty as the
+# manifest binds BYTES, and it reports the revision as RECORDED -- "this
+# manifest reports it, it does not verify it" -- on every run, because a label
+# the build host supplied is not evidence. (That line used to read "not
+# verifiable here: no git in this image", which stopped being true when the
+# commit store below was added.) Inventing resolvability there would be the same dishonesty as the
 # fail-open gates removed elsewhere in this file.
 #
 # SEPARATELY, AND IT IS A DIFFERENT QUESTION: the grader's revision gate asks
@@ -118,9 +120,16 @@ fi
 # already looks in. That is evidence, not an assertion: git objects are
 # content-addressed, so a revision nobody committed still does not resolve.
 MANIFEST="${SIGNALDECK_BUILD_MANIFEST:-/app/build-manifest.json}"
+# The root the SEALED binary paths are resolved against. Defaults to / because
+# that is where /usr/local/bin/signaldeckd lives in the image; it is overridable
+# for the same reason every other path above is. It was the one hard-coded path
+# in this file, which is exactly why tools/test_publication_gates.py could not
+# exercise the binary half of the manifest: its sandbox pins binaries under its
+# own tree and `--bin-root /` sent verify to the real filesystem root.
+BINROOT="${SIGNALDECK_BIN_ROOT:-/}"
 if [ -z "$refusal" ]; then
   manifest_out=$("$PY" "$TOOLS/build_manifest.py" verify --manifest "$MANIFEST" \
-                    --root "$REPO" --bin-root / 2>&1)
+                    --root "$REPO" --bin-root "$BINROOT" 2>&1)
   manifest_status=$?
   log "$manifest_out"
   case "$manifest_status" in
