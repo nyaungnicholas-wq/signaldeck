@@ -94,7 +94,12 @@ FROM node:24-alpine
 # grader_heartbeat.py and backfill_delistings.py import only the standard
 # library. requirements-quant.txt (numpy/pandas/scipy) is for the research
 # tools, which do not run here.
-RUN apk add --no-cache ca-certificates tini python3
+# git is here for the GRADER's revision gate, not for a checkout. See the
+# commit-object store below: tools/accuracy_registry.py is pinned by hash on the
+# pre-registration chain and runs `git cat-file -e <rev>^{commit}` against every
+# revision in the database, so without git every historical row is
+# unattributable and every verdict is stripped.
+RUN apk add --no-cache ca-certificates tini python3 git
 WORKDIR /app
 
 COPY --from=daemon-build /out/signaldeckd /usr/local/bin/signaldeckd
@@ -132,6 +137,37 @@ RUN chmod +x /usr/local/bin/grade.sh
 COPY build-manifest.json /app/build-manifest.json
 RUN python3 /app/tools/build_manifest.py seal \
       --manifest /app/build-manifest.json --root /
+
+# THE COMMIT OBJECTS, so the grader's revision gate can answer honestly.
+#
+# The manifest above binds the BYTES of this image. It cannot answer the other
+# question the grader asks on every run: does the revision stamped on each
+# historical forecast row name a commit that exists? revision_resolvable() in
+# the hash-pinned grader runs `git cat-file -e <rev>^{commit}` in the repo root
+# and treats "git could not be run" as False, which is the correct doctrine —
+# an unverifiable provenance claim must block a verdict. With no git and no
+# objects it answered False for everything, so apply_revision_gate() stripped
+# the verdict from every directional and structural row and a container grade
+# published a registry with no verdicts in it.
+#
+# ops/docker-build.sh packs this repository's COMMIT objects — no trees, no
+# blobs, well under a megabyte — and this unpacks them into an object store at
+# the path the grader already looks in. Nothing here is asserted: git objects
+# are content-addressed, so an object that hashes to a sha IS that commit, and a
+# revision that was never committed still does not resolve. The store cannot be
+# talked into saying yes.
+#
+# The last line is the build's own check on that claim: this image's revision
+# must resolve in the store it ships, and an empty GIT_REV (a raw `docker build`)
+# fails here rather than producing an image whose grades silently carry no
+# verdicts.
+ARG GIT_REV=""
+COPY build-commits.pack /tmp/build-commits.pack
+RUN git init -q /app \
+ && mv /tmp/build-commits.pack /app/.git/objects/pack/build-commits.pack \
+ && git -C /app index-pack /app/.git/objects/pack/build-commits.pack \
+ && git -C /app cat-file -e "${GIT_REV}^{commit}" \
+ && echo "signaldeck: commit store holds ${GIT_REV}"
 
 # The accuracy page is a server component that reads data/accuracy_registry.json
 # relative to the web app's cwd (/app/web), i.e. /app/data. Point that at the

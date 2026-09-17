@@ -64,6 +64,53 @@ else
   echo "signaldeck: daemon is healthy but NOT ready — see /api/ready for reasons" >&2
 fi
 
+# THE GRADER'S SCHEDULE, which the image shipped without.
+#
+# ops/grade.sh was COPYed into the image and nothing ever called it. fly.toml
+# installs no schedule either, so DEPLOY.md's instruction to cron a host-side
+# `docker exec` was the only thing standing between a deployment and a
+# permanently refused honesty page — a prerequisite living outside the artifact
+# that claims to be self-contained. /api/accuracy is fail-closed on both an
+# unreadable registry and a grader heartbeat older than GraderMaxAge (26h), so
+# on a fresh volume the page never worked and on a seeded one it stopped
+# working a day later, with /api/health still answering 200 throughout.
+#
+# Six hours gives four attempts inside that 26h window, so one refusal or one
+# restart cannot expire the heartbeat on its own. grade.sh writes its own log
+# and its own success/failure heartbeat; this only decides WHEN, and prints one
+# line either way so a refusing grader and a grader nobody is running stop
+# looking the same from outside.
+#
+# SIGNALDECK_GRADE_INTERVAL_SEC=0 disables it, for a host that genuinely does
+# schedule the container from outside.
+GRADE_INTERVAL="${SIGNALDECK_GRADE_INTERVAL_SEC:-21600}"
+# A non-numeric value would make the comparison below fail under `set -e` and
+# take the whole container down over a typo in an env var, so it falls back to
+# the default and says so instead.
+case "$GRADE_INTERVAL" in
+  ''|*[!0-9]*)
+    echo "signaldeck: SIGNALDECK_GRADE_INTERVAL_SEC='${GRADE_INTERVAL}' is not a number of seconds; using 21600" >&2
+    GRADE_INTERVAL=21600
+    ;;
+esac
+if [ "$GRADE_INTERVAL" -gt 0 ]; then
+  echo "signaldeck: grading every ${GRADE_INTERVAL}s, first run now"
+  (
+    while :; do
+      if /usr/local/bin/grade.sh >/dev/null 2>&1; then
+        echo "signaldeck: grade OK"
+      else
+        # NOT an error about the model. grade.sh refuses on its own gates and
+        # records why; this line only says a run finished without publishing.
+        echo "signaldeck: grade did not publish — see /data/logs/grade.log" >&2
+      fi
+      sleep "$GRADE_INTERVAL"
+    done
+  ) &
+else
+  echo "signaldeck: in-container grading disabled (SIGNALDECK_GRADE_INTERVAL_SEC=0)" >&2
+fi
+
 cd /app/web
 echo "signaldeck: starting web on ${PORT}"
 exec npx next start -p "${PORT}" -H 0.0.0.0

@@ -12,10 +12,14 @@
 #
 # NOT PORTED, ON PURPOSE: the DEPLOYMENT DRIFT gate accuracy-registry.sh runs
 # before the grader (tools/deployment_drift.py, wired 2026-09-10). Two of its
-# checks shell out to git against the deployed revision and there is no .git
-# here, so it cannot produce a verdict in the image. The container therefore
-# applies one gate fewer than the dev box: a stale binary the dev-box publish
-# refuses on is still graded here. Recorded so the divergence is known, not silent.
+# checks shell out to git, and although the image now carries git and this
+# repository's COMMIT objects (see the build-provenance section below), it
+# carries no trees and no blobs -- so `git show <rev>:<path>` and a
+# path-filtered `git diff <base>..HEAD` still cannot run here. The container
+# therefore applies one gate fewer than the dev box: a stale binary the dev-box
+# publish refuses on is still graded here. Recorded so the divergence is known,
+# not silent. Shipping trees and blobs would close it and would also put the
+# whole source history in the image; that trade has not been made.
 #
 # The consequence of nobody noticing was severe, because /api/accuracy is
 # deliberately fail-closed (internal/api/accuracy.go): an unreadable registry
@@ -98,10 +102,21 @@ fi
 # them here and compares. A forged GIT_REV does not help, because the binding is
 # to content rather than to a label.
 #
-# WHAT IT REFUSES TO CLAIM: that the revision was verified. Nothing in this image
-# can resolve a commit, so the revision is reported as RECORDED and the phrase
-# "not verifiable here" is printed on every run. Inventing resolvability would be
-# the same dishonesty as the fail-open gates removed elsewhere in this file.
+# WHAT IT REFUSES TO CLAIM: that the manifest's revision was verified. The
+# manifest binds BYTES, and it reports the revision as RECORDED with "not
+# verifiable here" on every run, because a label the build host supplied is not
+# evidence. Inventing resolvability there would be the same dishonesty as the
+# fail-open gates removed elsewhere in this file.
+#
+# SEPARATELY, AND IT IS A DIFFERENT QUESTION: the grader's revision gate asks
+# whether each historical forecast row names a commit that exists, and it asks
+# that of every row, not of this image. It answered no to all of them here --
+# no git, no objects -- so apply_revision_gate() stripped the verdict from every
+# directional and structural row and this script published a registry with no
+# verdicts in it. ops/docker-build.sh now packs this repository's commit objects
+# and the image unpacks them into /app/.git, which is the path the pinned grader
+# already looks in. That is evidence, not an assertion: git objects are
+# content-addressed, so a revision nobody committed still does not resolve.
 MANIFEST="${SIGNALDECK_BUILD_MANIFEST:-/app/build-manifest.json}"
 if [ -z "$refusal" ]; then
   manifest_out=$("$PY" "$TOOLS/build_manifest.py" verify --manifest "$MANIFEST" \

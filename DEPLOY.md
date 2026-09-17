@@ -236,10 +236,22 @@ So the proof is split across the two places where each half can be established:
   proves the revision RESOLVES, and the revision is both baked in via ldflags
   and recorded as an OCI label.
 * **Deploy time**, in `ops/oracle-verify.sh`: the checkout, the image label and
-  the running process must all report the same 40-character sha, and the
-  container must still report `resolvable:false`. If it ever claims otherwise,
-  something is asserting provenance it could not have observed, and the script
-  fails.
+  the running process must all report the same 40-character sha.
+
+The container's own answer changed on 2026-09-16, and the reason is worth
+reading before you assume it was weakened. `tools/accuracy_registry.py` is
+pinned by hash on the pre-registration chain, so it cannot be edited to suit a
+container, and it asks `git cat-file -e <rev>^{commit}` of **every revision in
+the database**, not just the running one. With no git in the image the answer
+was false for all of them, `apply_revision_gate()` stripped the verdict from
+every directional and structural row, and a container grade published a
+registry with nothing in it. `ops/docker-build.sh` now packs this repository's
+**commit objects only** — no trees, no blobs, under a megabyte — and the image
+unpacks them into `/app/.git`. Git objects are content-addressed, so the store
+cannot affirm a commit that was never made; `oracle-verify.sh` now requires
+`resolvable:true` **and** proves the store refuses an all-zero sha. Shipping the
+evidence is not the same as asserting the conclusion, which is what the old
+`resolvable:false` assertion existed to prevent.
 
     SIGNALDECK_ALLOW_LOCALHOST_SITE_URL=1 ops/docker-build.sh signaldeck
     ops/oracle-verify.sh signaldeck http://127.0.0.1:8080
@@ -249,11 +261,20 @@ proves the revision resolves; a raw invocation stamps an image with a claim
 nobody checked.
 
 The grader runs in the container via `ops/grade.sh`, NOT
-`ops/accuracy-registry.sh` -- that script needs git, a checkout and a README to
-rewrite, none of which exist in the image. Schedule it from the host:
+`ops/accuracy-registry.sh` -- that script needs a checkout and a README to
+rewrite, neither of which exists in the image.
+
+**The image schedules it itself** (`ops/docker-entrypoint.sh`), every six hours,
+starting as soon as the daemon is healthy. It did not before: `grade.sh` was
+copied in and nothing called it, `fly.toml` installed no timer, and this section
+told the operator to arrange one from outside -- a prerequisite living outside
+the artifact that claims to be self-contained. Deploy just the image and the
+honesty page never worked on a fresh volume and went stale a day later on a
+seeded one, with `/api/health` answering 200 the whole time.
+
+`GraderMaxAge` is 26h and the interval is 6h, so four attempts fit inside the
+window and one refusal or one restart cannot expire the heartbeat. Set
+`SIGNALDECK_GRADE_INTERVAL_SEC=0` to turn the in-container schedule off if you
+genuinely do drive it from the host:
 
     docker exec signaldeck /usr/local/bin/grade.sh
-
-`GraderMaxAge` is 26h, so a daily timer tolerates one missed run; two look
-identical to a broken schedule, which is why `systemctl list-timers` beats a
-cron loop inside the container.

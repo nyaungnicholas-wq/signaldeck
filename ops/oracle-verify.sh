@@ -4,11 +4,16 @@
 # WHY THIS EXISTS
 # ---------------
 # ops/signaldeck-ctl.sh deploy ends by asking /api/version for the running
-# revision AND requiring resolvable:true. In a container the second half is
-# impossible: internal/lineage shells out to git, and the image has no git and
-# no .git, so resolvable is false forever. That is the daemon being honest, and
-# faking it would be the single worst thing to fake on a platform whose whole
-# claim is that its rows can be tied to the code that produced them.
+# revision AND requiring resolvable:true. That used to be impossible in a
+# container — internal/lineage shells out to git, and the image had no git and
+# no .git — and this script asserted the honest false rather than faking one.
+#
+# The image now carries the commit objects instead (a pack of commits only, no
+# trees or blobs), because the hash-pinned grader asks the same question of
+# every historical forecast row and was answering false for all of them. The
+# distinction this file has always defended is unchanged: shipping evidence is
+# not faking it, so the flag is now expected true AND a negative control below
+# proves the store still refuses a commit that was never made.
 #
 # So the proof is split across the two places where each half can actually be
 # established:
@@ -53,17 +58,33 @@ c="$(printf '%s' "$ver" | sed -n 's/.*"revision"[[:space:]]*:[[:space:]]*"\([0-9
 [ "$a" = "$b" ] || fail "checkout $a != image label $b (the image is not built from this tree)"
 [ "$b" = "$c" ] || fail "image label $b != running process $c (an older container is still serving)"
 
-# The daemon must ALSO say it is not resolvable. If it ever claims otherwise in
-# a container, something is faking provenance and that is worse than a failed
-# deploy.
+# RESOLVABILITY, WHICH THE IMAGE CAN NOW ANSWER FOR ITSELF.
+#
+# This used to FAIL on resolvable:true, and it was right to: with no git and no
+# objects in the image, a true could only have been asserted. The image now
+# ships this repository's commit objects (ops/docker-build.sh packs them, the
+# Dockerfile unpacks them into /app/.git) because the hash-pinned grader asks
+# the same question of every historical row and stripped every verdict when the
+# answer was always false. So the expected answer is inverted -- and the check
+# that matters is no longer the flag but whether the store can be made to lie.
 case "$ver" in
-  *'"resolvable":true'*)
-    fail "the container reports resolvable:true, which is impossible without git in the image.
-Something is asserting a provenance it cannot have observed."
-    ;;
+  *'"resolvable":true'*) ;;
+  *) fail "the container reports resolvable:false, so its commit store is missing or unreadable.
+Every row the grader reads is then unattributable and it publishes no verdicts.
+Rebuild with ops/docker-build.sh, which packs the commit objects." ;;
 esac
+
+# THE NEGATIVE CONTROL. A store that says yes to everything would satisfy the
+# check above while proving nothing, so ask it for a commit that cannot exist.
+# Git objects are content-addressed, so a real store must refuse this.
+absent="0000000000000000000000000000000000000000"
+if docker run --rm --entrypoint git "$IMAGE" -C /app cat-file -e "${absent}^{commit}" 2>/dev/null; then
+  fail "the image's commit store resolved $absent, a revision that does not exist.
+It is not a git object store; it is something answering yes, which is worse than
+no provenance at all."
+fi
 
 echo "deploy VERIFIED: running commit $a"
 echo "  checkout, image label and running process agree"
-echo "  resolvability was proved at BUILD time (ops/docker-build.sh), which is"
-echo "  the only place git exists; the container correctly reports resolvable:false"
+echo "  the image resolves its own revision against the commit objects it ships,"
+echo "  and refuses a revision that does not exist"

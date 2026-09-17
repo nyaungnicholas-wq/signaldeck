@@ -189,6 +189,40 @@ if ! "$bm_py" ./tools/build_manifest.py emit --repo . --out "$manifest"; then
   exit 1
 fi
 
+# THE COMMIT OBJECTS THE GRADER NEEDS, AND ONLY THOSE.
+#
+# tools/accuracy_registry.py is pinned by hash on the pre-registration chain and
+# refuses to run when its own bytes change, so its revision_resolvable() cannot
+# be edited to suit a container: it runs `git cat-file -e <rev>^{commit}` in the
+# repo root and, finding no git, answers False for EVERY revision. Its gate then
+# strips the verdict from every directional and structural row, so a container
+# grade produced a registry with no verdicts in it at all. The build manifest
+# above does not help -- it binds the BYTES of this image, while the gate is
+# asking whether each historical row's revision names a commit that exists.
+#
+# So ship the commits. `git rev-list --all | git pack-objects` packs exactly the
+# object names it is given -- commit objects, no trees and no blobs -- which is
+# under a megabyte for this history and is all `cat-file -e <sha>^{commit}` has
+# to read. Git objects are content-addressed: an object that hashes to a sha IS
+# that commit, so this store cannot be made to affirm a revision that never
+# existed. That is the difference between shipping evidence and forging it, and
+# it is why the answer is not a stub that returns true.
+commits="./build-commits.pack"
+rm -f "$commits"
+if ! git rev-list --all | git pack-objects --stdout > "$commits" 2>/dev/null; then
+  echo "docker build REFUSED: could not pack this repository's commit objects." >&2
+  echo "  Without them the container grader cannot attribute a single row and" >&2
+  echo "  would publish a registry with every verdict stripped." >&2
+  rm -f "$commits"
+  exit 1
+fi
+if [ ! -s "$commits" ]; then
+  echo "docker build REFUSED: the commit pack came out empty." >&2
+  rm -f "$commits"
+  exit 1
+fi
+echo "docker build: packed $(git rev-list --all | wc -l | tr -d ' ') commit objects ($(wc -c < "$commits" | tr -d ' ') bytes)" >&2
+
 echo "docker build: stamping commit $rev into $tag" >&2
 # The OCI label is what ops/oracle-verify.sh reads back. GIT_REV goes into the
 # binary via ldflags and is TRUSTED there (a container cannot check it); the
