@@ -2,6 +2,13 @@ data/
 bin/
 logs/
 .next/
+# Isolated build outputs. next.config.ts honours SIGNALDECK_DIST_DIR so a
+# candidate can be built and served without replacing the directory the running
+# instances indexed at boot, and ops/web-release.ps1 keeps the previous build as
+# .next-prev-<stamp> rather than deleting it. All of them are build output.
+.next-release-*/
+.next-prev-*/
+.next-public/
 node_modules/
 .env
 .env.*
