@@ -78,7 +78,15 @@ esac
 # check above while proving nothing, so ask it for a commit that cannot exist.
 # Git objects are content-addressed, so a real store must refuse this.
 absent="0000000000000000000000000000000000000000"
-if docker run --rm --entrypoint git "$IMAGE" -C /app cat-file -e "${absent}^{commit}" 2>/dev/null; then
+# Through `sh -c`, NOT `--entrypoint git ... -C /app`. MSYS (Git Bash, which is
+# how this script runs on the Windows build host) rewrites a bare /app argument
+# into C:/Program Files/Git/app, so the command failed for a path reason and the
+# `if` read that as "the store refused" — a negative control that could never
+# fire, which is worse than not having one. Measured 2026-09-16:
+#   fatal: cannot change to 'C:/Program Files/Git/app': No such file or directory
+# An argument that does not begin with / is not translated, so the whole command
+# travels as one string and means the same thing on every host.
+if docker run --rm --entrypoint sh "$IMAGE" -c "git -C /app cat-file -e ${absent}^{commit}" 2>/dev/null; then
   fail "the image's commit store resolved $absent, a revision that does not exist.
 It is not a git object store; it is something answering yes, which is worse than
 no provenance at all."

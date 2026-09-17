@@ -269,7 +269,16 @@ def verify(manifest: dict, root: Path, bin_root: Path) -> dict:
 def _describe(manifest: dict) -> str:
     rev = manifest.get("revision") or "(none)"
     dirty = manifest.get("dirty")
-    bits = [f"revision {rev[:12]} RECORDED (not verifiable here: no git in this image)"]
+    # "RECORDED, not verified" is still exactly right, but the REASON changed and
+    # a provenance message that misdescribes the image is the kind of small lie
+    # this file exists to prevent. The image now DOES carry git and a commit-only
+    # object store, because the pinned grader needs to resolve the revision on
+    # every historical row. What this manifest still cannot do is verify the
+    # revision, for the original reason: it reports what the build host wrote
+    # into it, and a label the caller supplied is not evidence. The commit store
+    # answers "does that commit exist"; only the hashes below answer "are these
+    # the bytes that were reviewed".
+    bits = [f"revision {rev[:12]} RECORDED (this manifest reports it, it does not verify it)"]
     if dirty:
         bits.append("built from a DIRTY tree")
     if not manifest.get("revision_resolvable", False):
@@ -477,8 +486,14 @@ def _selfcheck() -> None:
         # an unsealed manifest says so rather than implying binaries were checked
         assert "never sealed" in _describe(dict(m, sealed=False))
         # and the revision is never described as verified
-        assert "not verifiable here" in _describe(m)
-        assert "verified" not in _describe(m).replace("not verifiable", "")
+        # The revision is RECORDED and is NEVER described as verified. The exact
+        # wording is pinned because this one line is what a reader takes the
+        # image's provenance from, and it has already had to change once: it
+        # used to say "no git in this image", which stopped being true when the
+        # commit store was added for the grader's revision gate.
+        assert "RECORDED" in _describe(m)
+        assert "does not verify it" in _describe(m)
+        assert "verified" not in _describe(m)
 
 
 if __name__ == "__main__":
