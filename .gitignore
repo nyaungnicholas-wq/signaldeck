@@ -119,3 +119,14 @@ daemon/compact_proof
 # host where git exists. It binds the image to the reviewed source by content
 # hash; see tools/build_manifest.py. Never committed - it describes one build.
 /build-manifest.json
+
+# Emitted by the same script, beside the manifest: this repository's COMMIT
+# objects, packed so the container grader can resolve the revision stamped on
+# every historical forecast row (Dockerfile unpacks it into /app/.git). ~830 KB,
+# regenerated per build, describes one build exactly as the manifest does.
+#
+# It has to be ignored, not merely uncommitted: ops/docker-build.sh refuses a
+# dirty tree via sd_dirty_excluding_generated, which reads `git status
+# --porcelain` and so counts UNTRACKED files. Left visible, the first build
+# would leave this behind and the second would refuse itself.
+/build-commits.pack
