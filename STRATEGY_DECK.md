@@ -43,7 +43,7 @@ The live record is not typed into this deck. It is generated from `data/accuracy
 
 Generated from `data/accuracy_registry.json` (registry `REFUSED` since 2026-09-13T14:43:41) by `tools/live_accuracy.py`. Do not edit by hand — edit the registry or the generator.
 
-> **GRADING REFUSED — no accuracy figures are published.** Reason: publication gate: the graded window contains 18 collapsed cross-section(s) of 79 day(s): 1d 2026-07-27 (6 distinct across 330 symbols), 1d 2026-07-28 (8 distinct across 330 symbols), 1d 2026-07-29 (13 distinct across 328 symbols), 1d 2026-07-31 (6 distinct across 328 symbols), 1d 2026-08-01 (6 distinct across 328 symbols), 1d 2026-08-02 (8 distinct across 328 symbols), 1d 2026-08-03 (5 distinct across 328 symbols), 1d 2026-08-04 (13 distinct across 328 symbols), 1d 2026-08-06 (33 distinct across 327 symbols), 1w 2026-07-26 (21 distinct across 326 symbols), 1w 2026-07-27 (7 distinct across 326 symbols), 1w 2026-07-28 (16 distinct across 328 symbols), 1w 2026-07-29 (25 distinct across 327 symbols), 1w 2026-07-31 (33 distinct across 327 symbols), 1w 2026-08-01 (16 distinct across 328 symbols), 1w 2026-08-02 (13 distinct across 328 symbols), 1w 2026-08-03 (7 distinct across 328 symbols), 1w 2026-08-04 (7 distinct across 328 symbols). On a collapsed day the whole universe receives a handful of distinct probabilities, so these rows grade one market-wide call repeated per symbol, not independent per-symbol forecasts. Figures over this window are withheld. The window starts at the survivorship epoch and does not roll forward, so a collapsed day stays in it: this clears when the window is re-registered, not by waiting for more grades.. The grade computed at 2026-09-13T14:42:10 (51.4h old) is withheld, not lost: it is retained inside the registry under `stale_last_registry` for the historical record and is deliberately not reprinted here, because a number the publication gate refused to stand behind is not a live number. The in-app `/accuracy` page and `/api/accuracy` apply the same gate from the same registry.
+> **GRADING REFUSED — no accuracy figures are published.** Reason: deployment drift check failed (exit 1) — a mechanism the pre-registration chain claims is not observable in the live database, or the check itself could not run (see the DEPLOYMENT DRIFT lines above in this log); the grader was not run. The grade computed at 2026-09-13T14:42:10 (74.1h old) is withheld, not lost: it is retained inside the registry under `stale_last_registry` for the historical record and is deliberately not reprinted here, because a number the publication gate refused to stand behind is not a live number. The in-app `/accuracy` page and `/api/accuracy` apply the same gate from the same registry.
 
 <!-- END GENERATED live_accuracy -->
 
@@ -174,14 +174,14 @@ Measured from `data/signaldeck.db` by `tools/deck_facts.py`. Do not edit by hand
 | — observation days | 2,163 |
 | — distinct symbols | 2,947 |
 | — `source` values present | `bars-1d` |
-| `symbols.delisted_at` stamps | 1,898 |
-| — delisted 2020-2022 | 621 |
+| `symbols.delisted_at` stamps | 1,897 |
+| — delisted 2020-2022 | 620 |
 | — delisted 2023-2025 | 1,117 |
-| — recent window against earlier | **179.9%** of the 2020-2022 count |
-| Daily-bar calendar (from `SPY`) | 1,936 sessions |
-| Stock bar coverage | 91.92% — 2,710,484 of 2,948,833 symbol-days over 2,940 symbols |
-| — still-listed names only | 98.91% over 1,042 symbols |
-| — names carrying `delisted_at` only | 83.31% over 1,898 symbols |
+| — recent window against earlier | **180.2%** of the 2020-2022 count |
+| Daily-bar calendar (from `SPY`) | 1,937 sessions |
+| Stock bar coverage | 91.88% — 2,711,285 of 2,950,976 symbol-days over 2,940 symbols |
+| — still-listed names only | 98.83% over 1,043 symbols |
+| — names carrying `delisted_at` only | 83.30% over 1,897 symbols |
 | — symbols that stop printing early with no `delisted_at` | 11 |
 | Crypto bar coverage | 100.00% over 7 symbols |
 
