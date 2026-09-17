@@ -30,6 +30,15 @@ the same dishonesty as the fail-open gates this replaces, and the instruction
 for this work names it exactly: verify the artifact binding without inventing
 resolvability.
 
+WHAT IT NOW REFUSES, added 2026-09-16. `verify` used to check whatever keys the
+manifest carried and reject only a completely empty artifact map, so a manifest
+pinning one unrelated file, none of the required sources, no binaries, sealed
+false, dirty true and unresolvable returned ok with checked=1. It now requires
+the FULL expected source and binary sets, a manifest that was actually sealed
+inside the image, and a build whose provenance is neither dirty nor unresolvable
+-- the last waived only by SIGNALDECK_ALLOW_DIRTY_BUILD, the override the daemon
+already uses for the same question, and then said aloud in the reason.
+
 TWO SEALING POINTS
 
   emit   on the build host, before `docker build`. Hashes the source files and
@@ -151,10 +160,47 @@ def seal(manifest: dict, root: Path) -> dict:
 
 
 def verify(manifest: dict, root: Path, bin_root: Path) -> dict:
-    """Re-hash and compare. Never claims the revision was checked."""
+    """Re-hash and compare. Never claims the revision was checked.
+
+    `usable` in the result separates "the check RAN and reached a conclusion
+    about the bytes" from "the manifest was too broken to check anything". The
+    caller reports those differently and must not have to infer which it got by
+    matching words in the reason text.
+
+    WHAT THIS REFUSED TO NOTICE UNTIL 2026-09-16. It checked whatever keys the
+    manifest happened to carry, and rejected only a completely EMPTY artifact
+    map. A manifest pinning one unrelated file, none of the required sources, no
+    binaries at all, sealed false, dirty true and revision_resolvable false
+    returned ok with checked=1 — a provenance guard signing off on an image that
+    bound nothing it was supposed to bind. The contract is not "check what you
+    were given"; it is "check what you were supposed to be given".
+    """
     if manifest.get("schema") != SCHEMA:
-        return {"ok": False, "checked": 0,
+        return {"ok": False, "checked": 0, "usable": False,
                 "reason": f"manifest schema is {manifest.get('schema')!r}, expected {SCHEMA!r}"}
+
+    # The expected sets, before a single hash is taken. A file that is not
+    # pinned cannot be compared, so an absent pin is indistinguishable from a
+    # passing one unless it is refused here.
+    missing_src = [r for r in SOURCE_ARTIFACTS if r not in (manifest.get("source_artifacts") or {})]
+    if missing_src:
+        return {"ok": False, "checked": 0, "usable": False,
+                "reason": "manifest does not pin every file that decides a verdict, so it cannot "
+                          "bind them: " + ", ".join(missing_src)}
+    # Sealing before the binary set, because an unsealed manifest's empty
+    # binary map is a consequence of that and the clearer sentence to read.
+    if manifest.get("sealed") is not True:
+        return {"ok": False, "checked": 0, "usable": False,
+                "reason": "manifest was never sealed inside the image, so no compiled binary is "
+                          "pinned and a swapped one would pass unnoticed"}
+    missing_bin = [r for r in BINARY_ARTIFACTS if r not in (manifest.get("binary_artifacts") or {})]
+    if missing_bin:
+        return {"ok": False, "checked": 0, "usable": False,
+                "reason": "manifest does not pin every compiled artifact: " + ", ".join(missing_bin)}
+    if manifest.get("binary_artifacts_missing"):
+        return {"ok": False, "checked": 0, "usable": False,
+                "reason": "manifest was sealed with missing binary artifacts: "
+                          + ", ".join(manifest["binary_artifacts_missing"])}
 
     mismatches: list[str] = []
     absent: list[str] = []
@@ -180,19 +226,44 @@ def verify(manifest: dict, root: Path, bin_root: Path) -> dict:
     # maps are empty would otherwise verify perfectly by checking nothing --
     # which is the fail-open shape this whole file exists to close.
     if checked == 0:
-        return {"ok": False, "checked": 0,
+        return {"ok": False, "checked": 0, "usable": False,
                 "reason": "manifest pins no artifacts at all, so it binds nothing"}
     if manifest.get("source_artifacts_missing"):
-        return {"ok": False, "checked": checked,
+        return {"ok": False, "checked": checked, "usable": False,
                 "reason": "manifest was emitted with missing source artifacts: "
                           + ", ".join(manifest["source_artifacts_missing"])}
     if absent:
-        return {"ok": False, "checked": checked,
+        return {"ok": False, "checked": checked, "usable": True,
                 "reason": "pinned artifact(s) not present in this image: " + ", ".join(absent)}
     if mismatches:
-        return {"ok": False, "checked": checked,
+        return {"ok": False, "checked": checked, "usable": True,
                 "reason": "SHIPPED BYTES DO NOT MATCH THE REVIEWED SOURCE: " + "; ".join(mismatches)}
-    return {"ok": True, "checked": checked, "reason": ""}
+
+    # PROVENANCE, which is a statement about the build rather than about the
+    # bytes — so the check RAN (usable) and the answer is a deployment fault.
+    # A dirty tree names source that exists on no commit; a revision git could
+    # not resolve on the build HOST names source nobody can produce. Either way
+    # the grade would be tied to something unreproducible.
+    #
+    # SIGNALDECK_ALLOW_DIRTY_BUILD waives both. It is the same override the
+    # daemon already uses for the same question (cmd/signaldeckd/main.go), and
+    # reusing it keeps one knob instead of inventing a second one to forget.
+    waived = []
+    if manifest.get("dirty"):
+        waived.append("the build tree was dirty")
+    if manifest.get("revision_resolvable") is not True:
+        waived.append("git could not resolve the revision on the build host")
+    if waived:
+        if "SIGNALDECK_ALLOW_DIRTY_BUILD" not in os.environ:
+            return {"ok": False, "checked": checked, "usable": True,
+                    "reason": "BUILD PROVENANCE IS NOT ESTABLISHED: " + "; ".join(waived)
+                              + ". The bytes match the manifest, but the manifest names a build "
+                                "nobody can reproduce"}
+        return {"ok": True, "checked": checked,
+                "usable": True,
+                "reason": "PROVENANCE ACCEPTED UNDER SIGNALDECK_ALLOW_DIRTY_BUILD: "
+                          + "; ".join(waived)}
+    return {"ok": True, "checked": checked, "usable": True, "reason": ""}
 
 
 def _describe(manifest: dict) -> str:
@@ -264,9 +335,11 @@ def main(argv: list[str] | None = None) -> int:
     # emitted incomplete) means the check could not be performed -- exit 2. A
     # manifest that WAS usable and disagreed with the bytes on disk is a
     # measured mismatch -- exit 1. The caller keeps them apart.
-    unusable = (not res["ok"]) and (
-        res["checked"] == 0 or "schema" in res["reason"] or "emitted with missing" in res["reason"]
-    )
+    #
+    # It used to be a substring match on the reason text, so every failure
+    # reason added later silently joined whichever class its wording happened to
+    # match. verify() now says which it is.
+    unusable = (not res["ok"]) and not res["usable"]
     status = "OK" if res["ok"] else ("UNAVAILABLE" if unusable else "FAIL")
     line = f"BUILDMANIFEST VERIFY {status} checked={res['checked']} {_describe(manifest)}"
     if res["reason"]:
@@ -288,13 +361,32 @@ def _selfcheck() -> None:
             p = root / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(f"content of {rel}\n", encoding="utf-8")
+        for rel in BINARY_ARTIFACTS:
+            (root / rel).write_text(f"ELF-ish {rel}\n", encoding="utf-8")
+
         m = emit(root)
         assert len(m["source_artifacts"]) == len(SOURCE_ARTIFACTS), m
         assert m["source_artifacts_missing"] == [], m
 
+        # AN UNSEALED MANIFEST NO LONGER VERIFIES AT ALL. It pins no binary, so
+        # a swapped signaldeckd inside a running container would have gone
+        # unnoticed while the check reported ok.
+        r = verify(m, root, root)
+        assert not r["ok"] and not r["usable"] and "never sealed" in r["reason"], r
+
+        sealed = seal(m, root)
+        assert sealed["sealed"] and len(sealed["binary_artifacts"]) == len(BINARY_ARTIFACTS), sealed
+
+        # A real build host records a resolvable revision and a clean tree. This
+        # temp directory is not a git repository, so emit() recorded neither;
+        # state them here rather than letting the provenance check fire on every
+        # case below for a reason that has nothing to do with what is being
+        # tested. The provenance cases set them back deliberately.
+        m = dict(sealed, revision="a" * 40, revision_resolvable=True, dirty=False)
+
         # a clean image verifies
         r = verify(m, root, root)
-        assert r["ok"], r
+        assert r["ok"] and r["usable"], r
 
         # one byte changed anywhere is caught
         (root / "tools/accuracy_registry.py").write_text("tampered\n", encoding="utf-8")
@@ -324,27 +416,69 @@ def _selfcheck() -> None:
         # an empty manifest binds nothing and must NOT pass
         empty = dict(m, source_artifacts={}, binary_artifacts={})
         r = verify(empty, root, root)
-        assert not r["ok"] and "binds nothing" in r["reason"], r
+        assert not r["ok"] and not r["usable"], r
 
         # wrong schema is refused
         r = verify(dict(m, schema="something/else"), root, root)
         assert not r["ok"] and "schema" in r["reason"], r
 
-        # sealing adds the binaries, and a swapped binary is then caught
-        (root / "usr/local/bin/collapsecheck").write_text("ELF-ish\n", encoding="utf-8")
-        (root / "usr/local/bin/signaldeckd").write_text("ELF-ish daemon\n", encoding="utf-8")
-        sealed = seal(m, root)
-        assert sealed["sealed"] and len(sealed["binary_artifacts"]) == len(BINARY_ARTIFACTS), sealed
-        assert verify(sealed, root, root)["ok"]
+        # a swapped binary is caught
         (root / "usr/local/bin/collapsecheck").write_text("STALE BINARY\n", encoding="utf-8")
-        r = verify(sealed, root, root)
-        assert not r["ok"] and "collapsecheck" in r["reason"], r
+        r = verify(m, root, root)
+        assert not r["ok"] and r["usable"] and "collapsecheck" in r["reason"], r
+        (root / "usr/local/bin/collapsecheck").write_text(
+            "ELF-ish usr/local/bin/collapsecheck\n", encoding="utf-8")
+        assert verify(m, root, root)["ok"]
+
+        # THE MANIFEST THE 2026-09-15 AUDIT BUILT, verbatim in shape: correct
+        # schema, one unrelated file that really is on disk, none of the files
+        # that decide a verdict, no binaries, never sealed, dirty, unresolvable.
+        # It returned ok with checked=1 — a provenance guard signing off on an
+        # image pinning nothing it was supposed to pin.
+        (root / "tools/unrelated.py").write_text("not an artifact\n", encoding="utf-8")
+        audit = {
+            "schema": SCHEMA,
+            "revision": "",
+            "revision_resolvable": False,
+            "dirty": True,
+            "source_artifacts": {"tools/unrelated.py": sha256_file(root / "tools/unrelated.py")},
+            "source_artifacts_missing": [],
+            "binary_artifacts": {},
+            "sealed": False,
+        }
+        r = verify(audit, root, root)
+        assert not r["ok"] and not r["usable"], r
+
+        # each half of that, on its own, against an otherwise perfect manifest
+        r = verify(dict(m, sealed=False), root, root)
+        assert not r["ok"] and not r["usable"] and "never sealed" in r["reason"], r
+        short = dict(m, source_artifacts={k: v for k, v in m["source_artifacts"].items()
+                                          if k != SOURCE_ARTIFACTS[0]})
+        r = verify(short, root, root)
+        assert not r["ok"] and not r["usable"] and SOURCE_ARTIFACTS[0] in r["reason"], r
+        r = verify(dict(m, binary_artifacts={}), root, root)
+        assert not r["ok"] and not r["usable"], r
+
+        # PROVENANCE. The bytes are right and the build still is not: these are
+        # deployment faults, so the check RAN (usable) and the answer is no.
+        for bad in (dict(m, dirty=True), dict(m, revision_resolvable=False)):
+            r = verify(bad, root, root)
+            assert not r["ok"] and r["usable"] and "PROVENANCE" in r["reason"], r
+
+        # and the one override, which says so in the reason rather than passing
+        # silently. os.environ is restored whatever happens.
+        os.environ["SIGNALDECK_ALLOW_DIRTY_BUILD"] = "1"
+        try:
+            r = verify(dict(m, dirty=True), root, root)
+            assert r["ok"] and "PROVENANCE ACCEPTED" in r["reason"], r
+        finally:
+            del os.environ["SIGNALDECK_ALLOW_DIRTY_BUILD"]
 
         # an unsealed manifest says so rather than implying binaries were checked
-        assert "never sealed" in _describe(m)
+        assert "never sealed" in _describe(dict(m, sealed=False))
         # and the revision is never described as verified
-        assert "not verifiable here" in _describe(sealed)
-        assert "verified" not in _describe(sealed).replace("not verifiable", "")
+        assert "not verifiable here" in _describe(m)
+        assert "verified" not in _describe(m).replace("not verifiable", "")
 
 
 if __name__ == "__main__":
