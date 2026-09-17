@@ -32,10 +32,18 @@ Deliberately NOT here: anything that needs a browser. Hydration, client
 navigation and interaction are proven by web/e2e/release-smoke.spec.ts at
 release time, not by a task that runs every five minutes.
 
-A completeness failure that SURVIVES its restart is reported and left alone
-rather than restarted again on the next cycle. The remedy for that is a
-rebuild, and a guard that keeps bouncing a server it cannot fix turns one
+A completeness failure that SURVIVES its restart is RECORDED against the build
+identity, and further restarts for that same build are suppressed. The remedy
+is a rebuild, and a guard that keeps bouncing a server it cannot fix turns one
 broken instance into a flapping one.
+
+That paragraph used to describe an intention rather than the code. The surviving
+failure was written to the log and nothing else, so the next scheduled run
+started with no memory of it, found the same incomplete instance and stopped and
+started the task again - every five minutes, forever, against a build no restart
+could fix. The state now lives in logs\web-guard-state.json and the suppression
+lifts when the build id changes, when the instance comes back complete, or - if
+web\.next\BUILD_ID cannot be read at all - six hours after it was recorded.
 #>
 
 param([string]$LogPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'logs\web-guard.log'))
@@ -46,6 +54,10 @@ $Targets = @(
     @{ Port = 8323; Task = 'SignalDeck Web' },
     @{ Port = 3000; Task = 'SignalDeck Local Workspace' }
 )
+
+# What this guard remembers between runs, and the only thing it remembers.
+$StatePath = Join-Path (Split-Path -Parent $LogPath) 'web-guard-state.json'
+$SuppressHours = 6
 
 function Test-Web([int]$Port) {
     try {
@@ -58,7 +70,7 @@ function Test-Web([int]$Port) {
 
 # Returns 0 complete, 1 incomplete (up, but serving assets it cannot produce),
 # 2 could not run. The check itself lives in one place and is shared with the
-# release path (ops/web-release.ps1) so the gate that guards the servers and
+# release path (ops/web-release.ps1, which builds and tests a candidate in an
 # the gate that ships to them cannot drift apart.
 $AssetsCheck = Join-Path $PSScriptRoot 'web-assets-check.ps1'
 function Test-WebAssets([int]$Port) {
@@ -85,11 +97,53 @@ function Write-Log([string]$Line) {
     }
 }
 
+# The state file is a convenience, never a dependency: a guard that cannot read
+# its own memory must behave as one with none rather than throw and stop
+# checking the web tier. Every accessor below fails to an empty answer.
+function Get-GuardState {
+    try {
+        if (-not (Test-Path -LiteralPath $StatePath)) { return @{} }
+        $raw = Get-Content -LiteralPath $StatePath -Raw
+        if (-not $raw) { return @{} }
+        $state = @{}
+        foreach ($p in (ConvertFrom-Json $raw).PSObject.Properties) { $state[$p.Name] = $p.Value }
+        return $state
+    } catch {
+        return @{}
+    }
+}
+
+function Set-GuardState([hashtable]$State) {
+    try {
+        Set-Content -LiteralPath $StatePath -Value ($State | ConvertTo-Json -Depth 3) -Encoding UTF8
+    } catch {
+        Write-Log ("could not write {0}: {1}" -f $StatePath, $_.Exception.Message)
+    }
+}
+
+# The identity of the build on disk. A rebuild changes it, which is the event
+# that makes another restart worth trying. $null when it cannot be read - then
+# the suppression falls back to time, because "unknown" must not mean "retry
+# forever".
+function Get-BuildId {
+    try {
+        $p = Join-Path (Split-Path -Parent $PSScriptRoot) 'web\.next\BUILD_ID'
+        if (-not (Test-Path -LiteralPath $p)) { return $null }
+        $line = Get-Content -LiteralPath $p -TotalCount 1
+        if (-not $line) { return $null }
+        return $line.Trim()
+    } catch {
+        return $null
+    }
+}
+
 try {
     $results = @()
+    $state = Get-GuardState
     foreach ($t in $Targets) {
         $port = $t.Port
         $task = $t.Task
+        $portKey = [string]$port
 
         # --- liveness -------------------------------------------------------
         $live = Test-Web -Port $port
@@ -111,6 +165,28 @@ try {
                 continue
             }
             $why = 'INCOMPLETE (serving assets it cannot produce)'
+            # Have we already restarted this exact build and watched it come
+            # back just as incomplete? Then the build is the fault and another
+            # restart is the flapping this guard promised not to do. Only the
+            # INCOMPLETE path consults this: a DOWN server is a different
+            # failure and is always worth a restart.
+            if ($state.ContainsKey($portKey)) {
+                $buildId = Get-BuildId
+                $entry = $state[$portKey]
+                if ($buildId -and $entry.BuildId -eq $buildId) {
+                    Write-Log ("{0} STILL INCOMPLETE on the same build {1} - not restarting; rebuild is the remedy" -f $port, $buildId)
+                    $results += "{0} INCOMPLETE" -f $port
+                    continue
+                }
+                if (-not $buildId) {
+                    $lifts = ([datetime]$entry.MarkedAt).AddHours($SuppressHours)
+                    if ((Get-Date) -lt $lifts) {
+                        Write-Log ("{0} STILL INCOMPLETE and the build id is unreadable - suppressed until {1}" -f $port, $lifts.ToString('yyyy-MM-ddTHH:mm:ss'))
+                        $results += "{0} INCOMPLETE" -f $port
+                        continue
+                    }
+                }
+            }
         }
 
         Write-Log ("{0} {1} - restarting task '{2}'" -f $port, $why, $task)
@@ -142,9 +218,15 @@ try {
         if ($final -eq 0) {
             Write-Log ("{0} back and complete ({1} s)" -f $port, $elapsed)
             $results += "{0} ok" -f $port
+            # Fixed. Forget the suppression so the next real incompleteness is
+            # restarted immediately instead of inheriting this one's verdict.
+            if ($state.ContainsKey($portKey)) { $state.Remove($portKey); Set-GuardState $state }
         } elseif (-not $sawLive) {
             Write-Log ("{0} STILL DOWN after 45 s" -f $port)
             $results += "{0} DOWN" -f $port
+            # A different failure entirely, and one a restart CAN fix. Clearing
+            # it stops a stale incompleteness from muting the down path.
+            if ($state.ContainsKey($portKey)) { $state.Remove($portKey); Set-GuardState $state }
         } elseif ($final -eq 2) {
             Write-Log ("{0} back ({1} s) but completeness could not be measured" -f $port, $elapsed)
             $results += "{0} UNVERIFIED" -f $port
@@ -154,7 +236,13 @@ try {
             # restart and 45 s means the build on disk is itself bad, and
             # another restart cannot fix it -- say so and stop, rather than
             # bouncing this task again every five minutes forever.
-            Write-Log ("{0} back ({1} s) but STILL INCOMPLETE - the build on disk is bad; rebuild, do not restart" -f $port, $elapsed)
+            # RECORDED, not just logged. This is the branch whose promise the
+            # file already made and did not keep: without writing it down the
+            # next invocation five minutes from now starts over and restarts
+            # the same bad build again.
+            $state[$portKey] = @{ BuildId = Get-BuildId; MarkedAt = (Get-Date).ToString('o') }
+            Set-GuardState $state
+            Write-Log ("{0} back ({1} s) but STILL INCOMPLETE - the build on disk is bad; rebuild, do not restart. Further restarts for this build are suppressed." -f $port, $elapsed)
             $results += "{0} INCOMPLETE" -f $port
         }
     }

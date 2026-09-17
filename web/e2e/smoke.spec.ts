@@ -261,6 +261,16 @@ test.describe("mobile 375px viewport", () => {
       await page.goto(path);
       await expect(page).not.toHaveURL(/\/login/);
       await expect(page.locator("header").first()).toBeVisible();
+      // A CRASHED PAGE PASSES EVERY OTHER ASSERTION IN THIS TEST. Next's error
+      // boundary (src/app/error.tsx) renders inside the same layout: same
+      // header, same width, no redirect to /login. On 2026-09-15 /proof was
+      // serving exactly that — the ledger, the registrations and the track
+      // record all replaced by "This page could not be loaded." — and this
+      // loop was green. What the page RENDERS is covered by
+      // e2e/release-smoke.spec.ts; this is the floor under it.
+      await expect(
+        page.getByRole("heading", { name: "This page could not be loaded." }),
+      ).toHaveCount(0);
       await noHorizontalScroll(page);
     });
   }
