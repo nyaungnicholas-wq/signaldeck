@@ -12,6 +12,7 @@ import type { NextRequest } from "next/server";
 export const dynamic = "force-dynamic";
 
 const DAEMON = process.env.SIGNALDECK_DAEMON || "http://127.0.0.1:8322";
+const MAX_BODY_BYTES = 128 * 1024; // mirrors maxBodyBytes in daemon/internal/api/security.go; the two must move together
 
 // Allowlists — nothing else crosses the boundary in either direction.
 // x-forwarded-for: without it the daemon saw 127.0.0.1 for every browser
@@ -32,6 +33,31 @@ const REQUEST_HEADERS = [
 // location: fetch() runs with redirect:"manual", so an upstream 3xx must
 // carry its Location through or the browser gets an unfollowable redirect.
 const RESPONSE_HEADERS = ["content-type", "retry-after", "cache-control", "location"] as const;
+
+function cappedBody(body: ReadableStream<Uint8Array>, onOverflow: () => void): ReadableStream<Uint8Array> {
+  // A Content-Length check alone cannot do this job, because a chunked upload declares no length
+  // and a dishonest one declares the wrong one, so the only limit that holds is the one that counts
+  // the bytes as they arrive.
+  let total = 0;
+  // pipeThrough, not `new TransformStream(...).readable`: the readable side of a
+  // TransformStream nobody writes into never yields a byte and never closes, so
+  // the upstream fetch sits there until its own 60s timeout fires. Measured —
+  // the request reached the backend as nothing at all and the log said
+  // TimeoutError, which reads like a slow daemon rather than a wiring bug.
+  return body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        total += chunk.byteLength;
+        if (total > MAX_BODY_BYTES) {
+          onOverflow();
+          controller.error(new Error(`request body exceeds ${MAX_BODY_BYTES} bytes`));
+        } else {
+          controller.enqueue(chunk);
+        }
+      },
+    }),
+  );
+}
 
 async function proxy(
   req: NextRequest,
@@ -74,19 +100,55 @@ async function proxy(
   // token remains for non-browser clients that call the daemon directly.
 
   const hasBody = req.method !== "GET" && req.method !== "HEAD";
+
+  // Cheap case: a client that declares an oversized upload is refused before a byte of it is read.
+  if (hasBody) {
+    const lengthHeader = req.headers.get("content-length");
+    if (lengthHeader !== null) {
+      const length = Number.parseInt(lengthHeader, 10);
+      if (Number.isFinite(length) && length > MAX_BODY_BYTES) {
+        return Response.json({ error: "request body too large" }, { status: 413 });
+      }
+    }
+  }
+
+  // Bound the upstream wait — a hung daemon connection must not pin this route
+  // forever. 60s leaves headroom for slow AI chat/filing.
+  //
+  // Created HERE, before anything touches the body. It used to sit in the fetch
+  // object literal, which is evaluated only after `await req.arrayBuffer()`
+  // returns — so the one phase it could not bound was the upload.
+  const signal = AbortSignal.timeout(60_000);
+
+  let overflowed = false;
+  let bodyToSend: undefined | ReadableStream<Uint8Array> = undefined;
+  if (hasBody && req.body !== null) {
+    // The body is STREAMED rather than buffered, so an upload is bounded as it arrives
+    // instead of after it has already been held in memory.
+    bodyToSend = cappedBody(req.body, () => { overflowed = true; });
+  }
+
+  // duplex: "half" is the opt-in a streamed request body requires. It is not in
+  // the DOM RequestInit type, hence the intersection.
+  const init: RequestInit & { duplex?: "half" } = {
+    method: req.method,
+    headers,
+    redirect: "manual",
+    cache: "no-store",
+    signal,
+    ...(bodyToSend !== undefined ? { body: bodyToSend, duplex: "half" as const } : {}),
+  };
+
   let res: Response;
   try {
-    res = await fetch(upstream, {
-      method: req.method,
-      headers,
-      body: hasBody ? await req.arrayBuffer() : undefined,
-      redirect: "manual",
-      cache: "no-store",
-      // Bound the upstream wait — a hung daemon connection must not pin
-      // this route forever. 60s leaves headroom for slow AI chat/filing.
-      signal: AbortSignal.timeout(60_000),
-    });
+    res = await fetch(upstream, init);
   } catch (err) {
+    // A body the cap cut off aborts this fetch. Reporting that as an
+    // unreachable daemon would blame the backend for a request THIS tier
+    // refused, and would hide the refusal from anyone reading the logs.
+    if (overflowed) {
+      return Response.json({ error: "request body too large" }, { status: 413 });
+    }
     console.error(`[api-proxy] ${req.method} ${upstream} failed:`, err);
     return Response.json({ error: "daemon unreachable" }, { status: 502 });
   }
