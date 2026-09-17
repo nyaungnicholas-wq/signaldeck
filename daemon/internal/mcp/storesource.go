@@ -73,7 +73,6 @@ func (s StoreSource) Preregistration(ctx context.Context) (PreregSummary, error)
 	if err != nil {
 		return PreregSummary{}, err
 	}
-	firstGradable, _ := time.Parse("2006-01-02", prereg.FirstGradableOn)
 	sum := PreregSummary{
 		ChainVerified:    ok,
 		BrokenAtSeq:      brokenAt,
@@ -82,7 +81,11 @@ func (s StoreSource) Preregistration(ctx context.Context) (PreregSummary, error)
 	}
 	for _, rec := range recs {
 		when := time.Unix(rec.Ts, 0).UTC()
-		if !when.Before(firstGradable) {
+		// Only the records FirstGradableOn actually describes can pull this
+		// aggregate down. The machinery records below are skipped from Claims
+		// precisely because that date does not govern them, so letting one of
+		// them flip RegisteredBefore reported a lateness nobody had measured.
+		if before, comparable := prereg.RegisteredBeforeGradable(rec); comparable && !before {
 			sum.RegisteredBefore = false
 		}
 		// Only predictor claims are surfaced. The grading-protocol and

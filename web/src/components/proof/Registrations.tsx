@@ -26,6 +26,36 @@ function when(r: PreregRecord): string {
   return "—";
 }
 
+function label(key: string): string {
+  // "horizonDays" -> "horizon days". The keys are whatever the record froze, so
+  // they are formatted, never translated through a list this file would have to
+  // keep in step with six payload shapes.
+  return key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
+}
+
+// Flatten the spec payload into rows for display. The keys are read off the
+// payload rather than assumed because each registered kind froze a different
+// shape, and a field the page drops is a field the reader was told to check
+// and cannot be omitted without losing evidence.
+function specFields(spec: unknown): Array<{ key: string; label: string; value: string }> {
+  if (spec == null) return [];
+  if (typeof spec === "string") return [{ key: "spec", label: "", value: spec }];
+  if (typeof spec === "number" || typeof spec === "boolean") return [{ key: "spec", label: "", value: String(spec) }];
+  if (Array.isArray(spec)) return [{ key: "spec", label: "", value: JSON.stringify(spec) }];
+  const entries = Object.entries(spec as Record<string, unknown>);
+  const result: Array<{ key: string; label: string; value: string }> = [];
+  for (const [key, value] of entries) {
+    if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) continue;
+    let v: string;
+    if (typeof value === "string") v = value;
+    else if (typeof value === "number" || typeof value === "boolean") v = String(value);
+    else v = JSON.stringify(value);
+    if (v.length > 160) v = v.slice(0, 160) + "\u2026";
+    result.push({ key, label: label(key), value: v });
+  }
+  return result;
+}
+
 export default function Registrations() {
   const [data, setData] = useState<PreregResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -82,7 +112,11 @@ export default function Registrations() {
 
   const records = data.records ?? [];
   const shown = open ? records : records.slice(0, 8);
-  const frozenEarly = records.filter((r) => r.beforeFirstGradable).length;
+  // Only the records the date actually describes belong in this ratio. Counting
+  // the ones that report null as failures made the chain look late when nothing
+  // had been compared.
+  const timed = records.filter((r) => r.beforeFirstGradable != null);
+  const frozenEarly = timed.filter((r) => r.beforeFirstGradable).length;
 
   return (
     <section className="panel" aria-label="pre-registration chain">
@@ -110,7 +144,7 @@ export default function Registrations() {
           <span>
             frozen before anything could be graded:{" "}
             <strong style={{ color: "var(--fg)" }}>
-              {frozenEarly} of {records.length}
+              {frozenEarly} of {timed.length}
             </strong>
           </span>
           {data.firstGradableOn ? <span>first gradable {data.firstGradableOn}</span> : null}
@@ -125,37 +159,62 @@ export default function Registrations() {
                 <th className="px-2 py-1 text-left font-normal">#</th>
                 <th className="px-2 py-1 text-left font-normal">Claim</th>
                 <th className="px-2 py-1 text-left font-normal">Registered</th>
-                <th className="px-2 py-1 text-left font-normal">Before gradable</th>
+                <th className="px-2 py-1 text-left font-normal">Frozen before gradable</th>
                 <th className="px-2 py-1 text-left font-normal">Digest</th>
               </tr>
             </thead>
             <tbody>
-              {shown.map((r) => (
-                <tr key={r.seq} style={{ borderTop: "1px solid var(--border)" }}>
-                  <td className="tnum px-2 py-1" style={{ color: "var(--faint)" }}>
-                    {r.seq}
-                  </td>
-                  <td className="px-2 py-1">
-                    <span style={{ color: "var(--fg)" }}>{r.kind}</span>
-                    {r.spec ? (
-                      <div className="mt-[2px] max-w-[60ch] leading-snug" style={{ color: "var(--dim)" }}>
-                        {r.spec.length > 180 ? r.spec.slice(0, 180) + "…" : r.spec}
-                      </div>
-                    ) : null}
-                  </td>
-                  <td className="px-2 py-1 whitespace-nowrap" style={{ color: "var(--dim)" }}>
-                    {when(r)}
-                  </td>
-                  <td className="px-2 py-1">
-                    <span style={{ color: r.beforeFirstGradable ? "var(--ok)" : "var(--warn)" }}>
-                      {r.beforeFirstGradable ? "yes" : "no"}
-                    </span>
-                  </td>
-                  <td className="mono px-2 py-1" style={{ color: "var(--faint)" }}>
-                    {(r.specHash ?? "").slice(0, 12) || "—"}
-                  </td>
-                </tr>
-              ))}
+              {shown.map((r: PreregRecord) => {
+                const fields = specFields(r.spec);
+                return (
+                  <tr key={r.seq} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td className="tnum px-2 py-1" style={{ color: "var(--faint)" }}>
+                      {r.seq}
+                    </td>
+                    <td className="px-2 py-1">
+                      <span style={{ color: "var(--fg)" }}>{r.kind}</span>
+                      {fields.length === 0 ? null : (
+                        <dl className="mt-[2px] flex max-w-[60ch] flex-col gap-[2px] leading-snug">
+                          {fields.map((field) => (
+                            // One div per pair, which the HTML spec allows inside
+                            // a dl. It is not decoration: this dl is a flex
+                            // column, a flex container blockifies its children,
+                            // and bare dt/dd would have ignored `inline` and put
+                            // every label on a line of its own.
+                            <div key={field.key}>
+                              {field.label ? (
+                                <>
+                                  <dt className="inline text-[0.7rem]" style={{ color: "var(--faint)" }}>{field.label}</dt>
+                                  <dd className="m-0 inline" style={{ color: "var(--dim)" }}>{" "}{field.value}</dd>
+                                </>
+                              ) : (
+                                <dd className="m-0" style={{ color: "var(--dim)" }}>{field.value}</dd>
+                              )}
+                            </div>
+                          ))}
+                        </dl>
+                      )}
+                    </td>
+                    <td className="px-2 py-1 whitespace-nowrap" style={{ color: "var(--dim)" }}>
+                      {when(r)}
+                    </td>
+                    <td className="px-2 py-1">
+                      {r.beforeFirstGradable == null ? (
+                        <span title="This date describes the structural predictors only, so this record was not compared against it." style={{ color: "var(--faint)" }}>
+                          not evaluated
+                        </span>
+                      ) : (
+                        <span style={{ color: r.beforeFirstGradable ? "var(--ok)" : "var(--warn)" }}>
+                          {r.beforeFirstGradable ? "yes" : "no"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="mono px-2 py-1" style={{ color: "var(--faint)" }}>
+                      {(r.specHash ?? "").slice(0, 12) || "—"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

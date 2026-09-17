@@ -38,6 +38,7 @@ import (
 	"encoding/hex"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Band is one conviction band's claim: the floor conviction and the accuracy
@@ -154,6 +155,29 @@ func HashEntry(prevHash string, r Record) string {
 // verdict. Before it, every number below is a backtest claim and the platform
 // says so everywhere it displays one.
 const FirstGradableOn = "2026-08-07"
+
+// RegisteredBeforeGradable reports whether r was frozen before the first date
+// anything it predicts could be graded. comparable is false when that question
+// is not defined for r's kind.
+//
+// FirstGradableOn is the first grading date of the STRUCTURAL predictors and of
+// nothing else. The grading protocol, the retirement rule, the quarantine
+// manifest and any experiment that registered its own timetable are all on the
+// same chain, and measuring them against this date answered a question nobody
+// asked: a machinery record written in September came back "not frozen early",
+// which reads as a finding about the project rather than the non-comparison it
+// actually is. Callers must render comparable=false as NOT EVALUATED, never as
+// a late registration.
+func RegisteredBeforeGradable(r Record) (before bool, comparable bool) {
+	if _, structural := SpecFor(r.Kind); !structural {
+		return false, false
+	}
+	first, err := time.Parse("2006-01-02", FirstGradableOn)
+	if err != nil { // unreachable: the constant is a literal, checked by tests
+		return false, false
+	}
+	return time.Unix(r.Ts, 0).UTC().Before(first), true
+}
 
 func Specs() []Spec {
 	return []Spec{

@@ -38,24 +38,33 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 	// re-read of today's constants — which would defeat the purpose entirely.
 	out := make([]map[string]any, 0, len(recs))
 	registeredBefore := true
-	firstGradable, _ := time.Parse("2006-01-02", prereg.FirstGradableOn)
 	for _, rec := range recs {
-		// The grading-protocol record carries a Protocol payload, not a Spec —
-		// decode it as what it is so its frozen text renders too.
-		var spec any
-		if rec.Kind == prereg.ProtocolKind {
-			var p prereg.Protocol
-			_ = json.Unmarshal([]byte(rec.SpecJSON), &p)
-			spec = p
-		} else {
-			var s prereg.Spec
-			_ = json.Unmarshal([]byte(rec.SpecJSON), &s)
-			spec = s
+		// The stored payload goes out byte for byte. Decoding it into one of
+		// the typed shapes first threw away every field the chosen struct did
+		// not declare: an auto-retire-rule came out of prereg.Spec with an
+		// empty question, a zero horizon and null bands, which is a row of
+		// blanks where a reader was told to check the rule. There is no struct
+		// that fits all six registered kinds, and the next kind added would
+		// break the same way, so this endpoint stops guessing the shape.
+		var spec any = json.RawMessage(rec.SpecJSON)
+		if !json.Valid([]byte(rec.SpecJSON)) {
+			// Unparseable is still shown, as the string it actually is, rather
+			// than failing the whole chain over one bad row.
+			spec = rec.SpecJSON
 		}
 		when := time.Unix(rec.Ts, 0).UTC()
-		before := when.Before(firstGradable)
-		if !before {
-			registeredBefore = false
+		// FirstGradableOn is the first grading date of the STRUCTURAL
+		// predictors and of nothing else, so comparing a machinery record or a
+		// separately timetabled experiment against it produced a "no" that
+		// looked like a finding and was not a measurement. Those records now
+		// report null: not evaluated, which is what it was all along.
+		before, comparable := prereg.RegisteredBeforeGradable(rec)
+		var beforeFlag any
+		if comparable {
+			beforeFlag = before
+			if !before {
+				registeredBefore = false
+			}
 		}
 		out = append(out, map[string]any{
 			"seq": rec.Seq, "ts": rec.Ts, "kind": rec.Kind,
@@ -63,7 +72,7 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 			"prevHash": rec.PrevHash, "entryHash": rec.EntryHash,
 			"note":                rec.Note,
 			"registeredOn":        when.Format("2006-01-02"),
-			"beforeFirstGradable": before,
+			"beforeFirstGradable": beforeFlag,
 		})
 	}
 
@@ -86,6 +95,10 @@ func (d Deps) prereg(w http.ResponseWriter, r *http.Request) {
 			"frozen record is the one that counts.",
 		"appendOnly": "An amended claim is a new record, never an update — a change stays visible as a " +
 			"change. Nothing in this chain is ever edited or deleted.",
+		"beforeFirstGradableIsNull": "A record reports beforeFirstGradable null when the date it would be " +
+			"compared against does not describe it — the grading protocol, the retirement rule, the " +
+			"quarantine manifest, and any experiment that registered its own timetable. Null means not " +
+			"evaluated. It never means late.",
 	})
 }
 

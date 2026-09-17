@@ -1315,15 +1315,25 @@ export function ledgerVerify() {
 export interface PreregRecord {
   seq: number;
   kind: string;
-  /** The registered claim itself, as text. */
-  spec?: string;
+  /** The frozen payload, verbatim, in whatever shape its kind registered.
+   *
+   * Typing this as a string is what took the whole Receipts page down: the
+   * daemon sends the stored JSON object, `spec.length` on an object is
+   * undefined, and the raw object reached React as a child. Each of the six
+   * registered kinds froze a different set of keys, so there is no one shape
+   * to declare here — read the keys off the value. */
+  spec?: unknown;
   specHash?: string;
   entryHash?: string;
   prevHash?: string;
   registeredOn?: string;
   ts?: number;
-  /** True when the claim was frozen before anything it predicts could be graded. */
-  beforeFirstGradable?: boolean;
+  /** True when the claim was frozen before anything it predicts could be graded.
+   *
+   * null when the comparison is not defined for this kind — the grading
+   * protocol, the retirement rule, the quarantine manifest, an experiment on
+   * its own timetable. Null is NOT EVALUATED and must never render as "no". */
+  beforeFirstGradable?: boolean | null;
   note?: string;
 }
 
