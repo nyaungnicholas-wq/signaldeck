@@ -49,7 +49,13 @@ printf 'FROM scratch\n' > "$repo/Dockerfile"
 # a file the guard itself just created. The real repo gitignores it for exactly
 # that reason; the fixture mirrors the repo it stands in for, or it tests a
 # condition that cannot occur in practice.
-printf '/build-manifest.json\n' > "$repo/.gitignore"
+# The commit pack is the same shape of artifact and was added 2026-09-16: the
+# guard packs this repository's commit objects into the build context so the
+# container grader can resolve historical revisions. The real repo gained
+# /build-commits.pack in .gitignore for precisely the reason written above, and
+# the fixture went red on every post-first-build case until it mirrored that -
+# which is this comment's own warning arriving a second time.
+printf '/build-manifest.json\n/build-commits.pack\n' > "$repo/.gitignore"
 
 mkdir -p "$work/bin"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$ARGV_LOG"\nexit 0\n' > "$work/bin/docker"
@@ -160,6 +166,23 @@ fi
 grep -q '"source_artifacts"' "$repo/build-manifest.json" 2>/dev/null \
   && ok "  and pins the files that decide a verdict" \
   || bad "  and pins the files that decide a verdict"
+
+# The COMMIT PACK, the manifest's counterpart. The manifest binds the bytes; this
+# carries the commit objects so the pinned grader can resolve the revision on
+# every historical forecast row inside the image, where there is otherwise no
+# git. Same contract as above: it must land in the build context, and it must be
+# a real pack rather than an empty file, because an empty one would unpack to a
+# store that resolves nothing and strip every verdict silently.
+rm -f "$repo/build-commits.pack"
+check "a good build emits the commit pack" "$(run)" "0"
+if [ -s "$repo/build-commits.pack" ]; then
+  ok "  commit pack lands in the build context"
+else
+  bad "  commit pack lands in the build context"
+fi
+head -c 4 "$repo/build-commits.pack" 2>/dev/null | grep -q 'PACK' \
+  && ok "  and it is a real git pack, not an empty file" \
+  || bad "  and it is a real git pack, not an empty file"
 
 # The removal is COMMITTED, not just moved. build_manifest.py is a tracked file
 # here, so moving it aside leaves the tree dirty and the dirty-tree guard --
