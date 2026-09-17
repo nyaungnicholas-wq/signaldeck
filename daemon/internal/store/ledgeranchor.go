@@ -21,11 +21,47 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ledgeranchor"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 )
+
+// prefixCountsFor returns COUNT(*) WHERE seq<=s for every s in seqs, computed
+// in ONE ordered pass over the range instead of one full scan per seq.
+//
+// The stored-mode anchor check used to run `COUNT(*) WHERE seq<=?` per anchor,
+// and each of those is an index scan of the ENTIRE prefix — so the cost was
+// anchors x rows, on a public endpoint, growing every time either number grew.
+// Measured 2026-09-16 against the live ledger, 25 anchors over 506,934 rows:
+// 1.912s for the per-anchor loop, 0.093s for this, identical answers. That was
+// half the endpoint's runtime, and it is what put the request close enough to
+// the handler's 30s ceiling that writer contention could push it over.
+//
+// Counting the DELTAS between consecutive anchor seqs sums to a single pass:
+// count(<=s2) = count(<=s1) + count(s1<seq<=s2). Duplicate seqs resolve from
+// the map without advancing the walk.
+func (s *Store) prefixCountsFor(ctx context.Context, seqs []int64) (map[int64]int64, error) {
+	out := make(map[int64]int64, len(seqs))
+	sorted := append([]int64(nil), seqs...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	var running, prev int64
+	for _, seq := range sorted {
+		if _, done := out[seq]; done {
+			continue
+		}
+		var n int64
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM prediction_ledger WHERE seq>? AND seq<=?`, prev, seq).Scan(&n); err != nil {
+			return nil, err
+		}
+		running += n
+		out[seq] = running
+		prev = seq
+	}
+	return out, nil
+}
 
 // AnchorPolicy is the cadence at which new anchors are written. Anchoring every
 // append would be pointless work (an anchor pins a PREFIX, so a later anchor
@@ -192,12 +228,23 @@ func (s *Store) VerifyLedgerAnchors(ctx context.Context, limit int, recompute bo
 
 	// derived[seq] = (head hash, row count) the chain yields at that seq.
 	var derived map[int64]headAt
+	var prefix map[int64]int64
 	if recompute {
 		want := make(map[int64]bool, len(anchors))
 		for _, a := range anchors {
 			want[a.Record.LedgerSeq] = true
 		}
 		if derived, err = s.deriveChainHeads(ctx, want); err != nil {
+			return out, err
+		}
+	} else {
+		// One pass for every anchor's row count, rather than a full prefix
+		// scan each. See prefixCountsFor for what this cost before.
+		seqs := make([]int64, 0, len(anchors))
+		for _, a := range anchors {
+			seqs = append(seqs, a.Record.LedgerSeq)
+		}
+		if prefix, err = s.prefixCountsFor(ctx, seqs); err != nil {
 			return out, err
 		}
 	}
@@ -244,12 +291,7 @@ func (s *Store) VerifyLedgerAnchors(ctx context.Context, limit int, recompute bo
 				return out, err
 			default:
 				a.HeadMatches = stored == a.Record.HeadHash
-				var n int64
-				if err := s.db.QueryRowContext(ctx,
-					`SELECT COUNT(*) FROM prediction_ledger WHERE seq<=?`, a.Record.LedgerSeq).Scan(&n); err != nil {
-					return out, err
-				}
-				a.CountMatches = n == a.Record.LedgerCount
+				a.CountMatches = prefix[a.Record.LedgerSeq] == a.Record.LedgerCount
 			}
 		}
 
