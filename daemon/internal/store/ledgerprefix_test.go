@@ -24,7 +24,7 @@ func TestPrefixCountsForMatchesAPerSeqCountOnEveryShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query seqs: %v", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	var seqs []int64
 	for rows.Next() {
 		var s int64
@@ -49,7 +49,7 @@ func TestPrefixCountsForMatchesAPerSeqCountOnEveryShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query remaining: %v", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	var remaining []int64
 	for rows.Next() {
 		var s int64

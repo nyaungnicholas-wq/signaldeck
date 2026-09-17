@@ -23,7 +23,7 @@ Survives (recovery inputs):
 
 | artifact | where |
 |---|---|
-| Database backups (nightly `VACUUM INTO`, newest plain `.db`, older `.gz`, each with a `.sha256`) | **Off-machine (2026-09-07): GitHub release assets on the private repo named by `SIGNALDECK_OFFSITE_GH_REPO`** (`nyaungnicholas-wq/signaldeck`), one release `backup-<timestamp>` per nightly run holding `<backup>.db.gz` + `.sha256`, newest 7 kept. Fetch the newest with `gh release download <tag> --repo <repo> --pattern '*.db.gz' --pattern '*.sha256'` or rehearse a restore with `ops/restore-rehearsal.sh --from-github`. Same-volume copies: `%SIGNALDECK_OFFSITE_DIR%` if set, else `%OneDrive%\SignalDeckBackups` (NOT off-machine unless that folder actually syncs) |
+| Database backups (nightly `VACUUM INTO`, newest plain `.db`, older `.gz`, each with a `.sha256`) | **Off-machine (2026-09-07): GitHub release assets on the private repo named by `SIGNALDECK_OFFSITE_GH_REPO`** (`nyaungnicholas-wq/signaldeck-backups` since 2026-09-16 — it was `nyaungnicholas-wq/signaldeck` until that repo was made PUBLIC, which turned every backup into a public download of raw licensed vendor bars), one release `backup-<timestamp>` per nightly run holding `<backup>.db.gz` + `.sha256`, newest 7 kept. Fetch the newest with `gh release download <tag> --repo <repo> --pattern '*.db.gz' --pattern '*.sha256'` or rehearse a restore with `ops/restore-rehearsal.sh --from-github`. Same-volume copies: `%SIGNALDECK_OFFSITE_DIR%` if set, else `%OneDrive%\SignalDeckBackups` (NOT off-machine unless that folder actually syncs) |
 | Source, ops scripts, the `.plist` files the task installer reads | GitHub: `nyaungnicholas-wq/signaldeck` |
 | External anchors, prereg chain head, accuracy registry | the public anchors repo (`anchors.log`, `prereg.log`, `accuracy_registry.json` in its git history) |
 
@@ -79,7 +79,7 @@ restored the older one and said nothing.
 
 ```powershell
 cd $env:USERPROFILE\Desktop\"claude code"\signaldeck
-$repo = if ($env:SIGNALDECK_OFFSITE_GH_REPO) { $env:SIGNALDECK_OFFSITE_GH_REPO } else { 'nyaungnicholas-wq/signaldeck' }
+$repo = if ($env:SIGNALDECK_OFFSITE_GH_REPO) { $env:SIGNALDECK_OFFSITE_GH_REPO } else { 'nyaungnicholas-wq/signaldeck-backups' }
 $tag  = (gh release list --repo $repo --limit 50 |
          Select-String -Pattern 'backup-\d{8}-\d{6}' -AllMatches |
          ForEach-Object { $_.Matches.Value } | Sort-Object -Descending | Select-Object -First 1)
