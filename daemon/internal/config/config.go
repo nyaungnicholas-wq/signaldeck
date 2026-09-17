@@ -534,3 +534,30 @@ func reachablePrivately(addr, allowedHosts string) bool {
 func (c Config) ReachablePrivately() bool {
 	return reachablePrivately(c.HTTPAddr, strings.Join(c.AllowedHosts, ","))
 }
+
+// PublicOriginMissing reports a stated public deployment whose browser-origin
+// allowlist names no HTTPS origin.
+//
+// WebOrigins defaults to the four localhost spellings, which is right for a dev
+// box and wrong for every published deployment: api/security.go rejects a
+// non-GET whose Origin is not on this list, and a browser on https://<host>
+// sends exactly that Origin. So the read-only pages worked and the waitlist
+// form and the operator login answered 403 — the two things a launch is for.
+// Neither the hosted recipe nor fly.toml set the variable, so this was the
+// DEFAULT rather than a mistake someone had to make, and the symptom points at
+// the form rather than at a config file nobody edited.
+//
+// This asks about intent, not reachability: it fires only once the operator has
+// said PublicSurface. It looks for a scheme rather than a hostname because the
+// hostname is a deploy-time input this repository deliberately does not carry.
+func (c Config) PublicOriginMissing() bool {
+	if !c.PublicSurface {
+		return false
+	}
+	for _, o := range c.WebOrigins {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(o)), "https://") {
+			return false
+		}
+	}
+	return true
+}

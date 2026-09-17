@@ -42,7 +42,11 @@ Steps:
    and shows them operator remediation copy on `/proof` — a locked front door on
    a site whose whole argument is "check my claims yourself".
 2. Provision a persistent volume (10 GB minimum) on the chosen host (Fly.io, Railway, Render, or VPS).
-3. Set secrets in the host environment: all entries from `daemon/.env` plus `SIGNALDECK_PUBLIC_SURFACE=1`, `SIGNALDECK_ALLOWED_HOSTS=<public-hostname>,127.0.0.1:8322,localhost:8322`, `SIGNALDECK_OPEN_SIGNUP=0`.
+3. Set secrets in the host environment: all entries from `daemon/.env` plus `SIGNALDECK_PUBLIC_SURFACE=1`, `SIGNALDECK_ALLOWED_HOSTS=<public-hostname>,127.0.0.1:8322,localhost:8322`, `SIGNALDECK_WEB_ORIGINS=https://<public-hostname>`, `SIGNALDECK_TRUST_PROXY=1`, `SIGNALDECK_OPEN_SIGNUP=0`.
+
+   `SIGNALDECK_WEB_ORIGINS` is a **different list** from `SIGNALDECK_ALLOWED_HOSTS` and this step used to omit it. Hosts are the `Host` header the server-side proxy sends (always loopback); origins are the `Origin` header the **browser** sends, which is the public `https://` address. The CSRF guard rejects any non-GET whose Origin is not listed, so the previous recipe produced a site whose pages rendered and whose waitlist form and operator login both answered 403. The daemon now refuses to start in that state rather than serving it.
+
+   `SIGNALDECK_TRUST_PROXY=1` is what makes the rate limiter see individual visitors instead of the proxy's loopback address. Set it **only** where exactly one trusted proxy fronts the daemon and it appends the client address to `X-Forwarded-For`; the daemon reads the last hop, because the first is whatever the client sent.
    - **The loopback pair is not optional.** `web/src/app/api/[...path]/route.ts` does not forward `Host`, so the daemon sees `127.0.0.1:8322` on every proxied request. An allowlist naming only the public hostname 403s the entire site.
    - `NEXT_PUBLIC_SIGNALDECK_PUBLIC` and `NEXT_PUBLIC_SITE_URL` are **build-time**, not runtime: `NEXT_PUBLIC_*` is inlined into the bundle by `next build`, so setting them as host secrets does nothing. Pass them to `ops/docker-build.sh` instead, which now refuses to build without a site URL, and refuses again if that site URL arrives without an audience.
 4. Seed the volume with a reviewed database backup (from `data/backups/` with matching sha256) or start empty (daemon will ingest once Alpaca keys are present).

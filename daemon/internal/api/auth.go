@@ -82,10 +82,26 @@ func newSessionToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// secureCookie reports whether the request arrived over TLS (directly, or via
-// a trusted proxy's X-Forwarded-Proto).
+// secureCookie reports whether the session cookie must carry Secure.
+//
+// The X-Forwarded-Proto branch cannot fire on the deployment that needs it.
+// Browsers reach a published SignalDeck through the Next proxy, which forwards
+// a fixed header allowlist that does not include X-Forwarded-Proto and must not
+// include it: the value would then be whatever the client typed, and a client
+// that sends "http" strips Secure off its own session cookie. So the daemon
+// sees a plain loopback connection, r.TLS is nil, and on the one deployment
+// served over HTTPS the cookie went out without Secure.
+//
+// PublicSurface answers it instead. It is the operator's STATED intent to
+// publish — never derived from a bind address — and a published deployment is
+// served over TLS by contract (fly.toml sets force_https). If someone publishes
+// over plain HTTP anyway the browser drops the cookie and login visibly fails,
+// which is the direction this should fail in.
 func (d Deps) secureCookie(r *http.Request) bool {
 	if r.TLS != nil {
+		return true
+	}
+	if d.Cfg.PublicSurface {
 		return true
 	}
 	return d.Cfg.TrustProxy && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
