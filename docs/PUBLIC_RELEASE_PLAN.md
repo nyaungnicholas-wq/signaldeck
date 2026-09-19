@@ -103,9 +103,14 @@ checks that exercise the app the way a visitor does, which is the gap
 |------|------------------------|------------------------|
 | Paid hosting account (Fly.io/Railway/Render/VPS) | Required for Option B; no account exists, no card attached | Option A only (local demo) |
 | Make `signaldeck-anchors` repo public | Currently private (GitHub visibility PRIVATE, checked 2026-09-09); README, this plan and ops/anchor-publish.sh now say so | Remains private |
-| Create public source repository | Private repo holds backups and must not be flipped public | No public source repo |
 | Expose any public hostname | `SIGNALDECK_ALLOWED_HOSTS` must be set; DNS, TLS, proxy config needed | No public hostname |
 | Change notification transports (Discord/Telegram/Slack/SMTP) | Secrets required; optional but if used must be configured | Disabled (no secrets set) |
+
+### Decided: public source repository (2026-09-16)
+
+The main source repository was made public on 2026-09-16. This decision was driven by GitHub Actions billing, as public repositories receive unlimited free minutes, resolving a blocking issue with CI reruns on the free tier.
+
+The repository was made public before backups were migrated. This inadvertently published seven releases containing approximately 12.1 million rows of licensed vendor market data and the full prediction ledger, as release assets inherit repository visibility. Remediation involved downloading and sha256-verifying the three backups that existed nowhere else, deleting all seven releases, creating a new private repository `nyaungnicholas-wq/signaldeck-backups`, repointing the nightly job via `SIGNALDECK_OFFSITE_GH_REPO` in `daemon/.env`, and rehearsing a full restore from it. Nothing may be attached as a release asset to the public repository again.
 
 ## Costs
 
