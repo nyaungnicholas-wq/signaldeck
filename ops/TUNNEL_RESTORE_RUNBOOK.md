@@ -113,6 +113,38 @@ allowlist accepts it. A `404`/`421`/connection error means the tunnel is running
 but the daemon is refusing the Host — fix `SIGNALDECK_ALLOWED_HOSTS`, not the
 tunnel.
 
+## DONE - the tunnel is live (2026-09-19)
+
+Registered, authenticated and verified end to end. Kept here because two steps
+are NOT obvious and cost a round trip each.
+
+**`winget install ngrok.ngrok` gives you a version your account will refuse.**
+The winget package is pinned at 3.3.1 and `winget upgrade` reports "No available
+upgrade found", but ngrok requires agent >= 3.20.0 on a free account. The symptom
+is `ERR_NGROK_121` AFTER the authtoken is accepted, which reads like an auth
+problem and is not. Fix, and it must be run once after install:
+
+```bash
+ngrok update
+```
+
+That self-update replaces the binary behind the WinGet Links shim, so
+`ops/tasks/SignalDeck Tunnel.xml` keeps working without an edit - confirmed by
+running `version` against the exact path the task uses.
+
+**Run `ngrok config add-authtoken` UNELEVATED, as the task's own user.** It
+writes `%LOCALAPPDATA%
+grok
+grok.yml` for whichever profile invoked it; from
+an admin shell the S4U task finds no token and reproduces the original
+ERR_NGROK_105 with a perfectly valid credential.
+
+Verified 2026-09-19: task kick -> Running -> `https://spearfish-dwindle-module.ngrok-free.dev/api/health`
+returns the daemon's health JSON (not an ngrok interstitial, which is why the
+assertion is the BODY and not a 200); stop -> Ready -> 404; and
+`ops/tunnel-guard.ps1` on a Saturday reports "outside the collection window" and
+leaves it down.
+
 ## Resolved since this runbook was written (2026-09-19)
 
 The complaint that `ops/lib-portable.sh` discarded `schtasks //Run`'s exit status is
