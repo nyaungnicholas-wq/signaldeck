@@ -15,6 +15,7 @@ Plan of record: the 2026-09-08 "research before replacement" plan (memory `proje
 | `audit_ledger.py` | Eligibility ledger, membership gap, HAR screen bias, history depth | `--selfcheck`; real run prints `LEDGER OK symbols=2950 uncovered_days=18` |
 | `audit_provenance.py` | Provenance manifest and `out/summary.md` | `--selfcheck`; real run prints `PROVENANCE OK ...` |
 | `audit_collapse.py` | Collapse traces for predictions and outcomes, registry cross-check | `--selfcheck`; real run prints `COLLAPSE OK pred_days=136 outcome_days=126 flagged=22 exact=0` |
+| `audit_withheld_counterfactual.py` | What the graded record WOULD have held had the cross-section gate not withheld 2026-09-10..09-18. Replicates the Go outcome rule and PROVES it against already-graded rows before trusting it | real run prints `PARITY: ... DIRECTION mismatches` then `COUNTERFACTUAL OK` |
 
 Interpreter: `.venv/Scripts/python.exe` from the repository root.
 
