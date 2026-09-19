@@ -157,7 +157,7 @@ export default function TrackRecordPage() {
           {current && (
             <span
               className="chip tnum"
-              title={`${(current.rawN ?? 0).toLocaleString("en-US")} raw resolved rows collapse to ${(current.independentN ?? 0).toLocaleString("en-US")} independent (symbol, UTC-day) observations`}
+              title={`${(current.rawN ?? 0).toLocaleString("en-US")} raw resolved rows collapse to ${(current.independentN ?? 0).toLocaleString("en-US")} independent (symbol, trading day) observations`}
             >
               {(current.independentN ?? 0).toLocaleString("en-US")} independent
             </span>
@@ -193,7 +193,7 @@ export default function TrackRecordPage() {
       {err && !current && (
         <ErrorState
           message={err}
-          hint="Is the daemon running? Start signaldeckd and this page will pick it up."
+          hint="If you were signed out, sign in again. If the daemon (:8322) is not running, start signaldeckd and this page will pick it up."
           retry={() => {
             setErr(null);
             setRetryTick((t) => t + 1);
@@ -253,15 +253,24 @@ export default function TrackRecordPage() {
           >
           {gated ? (
             <section className="panel reveal-item p-5">
+              {/* "TOO EARLY TO GRADE" used to show for ALL THREE gate reasons,
+                  including a publication REFUSAL. That reads as "wait a bit
+                  longer" for two conditions waiting cannot clear - the graded
+                  window is anchored to the survivorship epoch and does not roll
+                  forward. The daemon now names the reason (gateReason). */}
               <p className="m-0 text-[1.05rem] font-extrabold tracking-wide" style={{ color: "var(--warn)" }}>
-                TOO EARLY TO GRADE
+                {current.gateReason === "refused"
+                  ? "PUBLICATION REFUSED"
+                  : current.gateReason === "collapsed"
+                    ? "GRADING WINDOW UNUSABLE"
+                    : "TOO EARLY TO GRADE"}
               </p>
               <div className="mt-1 flex flex-wrap items-baseline justify-between gap-2">
                 <p className="m-0 text-[0.85rem] font-semibold" style={{ color: "var(--warn)" }}>
                   <span className="tnum">
                     {current.independentN}/{current.gate?.threshold ?? current.minIndependentN}
                   </span>{" "}
-                  independent (symbol, UTC-day) resolutions
+                  independent (symbol, trading day) resolutions
                 </p>
                 <p className="m-0 text-[0.75rem] tnum" style={{ color: "var(--dim)" }}>
                   {current.gate == null
@@ -301,7 +310,7 @@ export default function TrackRecordPage() {
               </p>
               <p className="mt-1 text-[0.75rem] tnum" style={{ color: "var(--dim)" }}>
                 over {(current.independentN ?? 0).toLocaleString("en-US")} independent (symbol,
-                UTC-day) resolutions
+                trading day) resolutions
                 {current.winRateCI ? ` · 95% CI ${pct(current.winRateCI[0])}–${pct(current.winRateCI[1])}` : ""}
                 {current.baseRate != null ? ` · vs a ${pct(current.baseRate)} always-up base rate` : ""}
               </p>
@@ -361,7 +370,7 @@ export default function TrackRecordPage() {
                 against realized outcomes and withholds every skill number
                 (win-rate, Brier, IC) until there are at least{" "}
                 <span className="tnum">{current.minIndependentN}</span> independent
-                (symbol, UTC-day) resolutions. The system is young — an honest
+                (symbol, trading day) resolutions. The system is young — an honest
                 &ldquo;no live edge yet&rdquo; is the correct output. It fills in as
                 predictions mature; the bar above is the record accruing.
               </p>
@@ -665,7 +674,7 @@ export default function TrackRecordPage() {
           <section className="panel p-4 text-[0.75rem]" style={{ color: "var(--faint)" }}>
             <p>
               {current.trackLabel}. Numbers are computed over INDEPENDENT (symbol,
-              UTC-day) resolutions — the minute-cadence pipeline writes many
+              trading day) resolutions — the minute-cadence pipeline writes many
               predictions per symbol per day that resolve against the same move, so
               pooling them would overstate confidence. There is no lookahead: a
               prediction&rsquo;s calibrated probability is frozen when it&rsquo;s made and

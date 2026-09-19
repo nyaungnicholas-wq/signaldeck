@@ -17,6 +17,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/expectancy"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/macrofeat"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/micro"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/ranking"
@@ -608,16 +609,45 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		// of the risk the one-pass record existed to avoid (a gate judging the
 		// sweep it is producing), while measuring the whole cross-section
 		// instead of a sample of it.
-		rec, err := loadCrossSection(ctx, w.St, h)
-		if err != nil || rec == nil || rec.Day == "" || rec.Day >= today {
+		// A STORE ERROR IS NOT A CLEAN CROSS-SECTION. `continue` here means "do
+		// not gate", i.e. publish, and both reads used to fold their error into a
+		// benign data shape -- so a contended pool on a day whose cross-section
+		// HAD collapsed published the whole day ungated, with no log and no dq
+		// event. The justifying comment below only ever covered the benign half.
+		// THE PRIOR DAY IS DERIVED, NOT READ BACK FROM THE RECORD WE JUST WROTE.
+		//
+		// This loaded the meta record and skipped when rec.Day >= today. But
+		// saveCrossSection stamps that record with TODAY at the end of every
+		// pass, and runProbs is populated even for a gated horizon, so the
+		// stamp landed on pass one and every later pass of the day short-
+		// circuited: the gate could fire ONCE per UTC day, at whatever hour the
+		// first pass ran, and the remaining ~137 passes -- the entire 09:30-16:00
+		// ET session -- published ungated. A six-day collapse withheld six
+		// passes out of roughly 830. The one gating pass logged a warning, which
+		// reads exactly like the gate working.
+		//
+		// Walking back from today finds the most recent day that actually
+		// published, so weekends and holidays are skipped by data rather than by
+		// arithmetic, and the answer no longer depends on our own write.
+		var probs []float64
+		priorDay := ""
+		for back := 1; back <= 5 && priorDay == ""; back++ {
+			cand := time.Now().UTC().AddDate(0, 0, -back).Format("2006-01-02")
+			got, perr := w.St.PublishedCrossSection(ctx, string(h), cand)
+			if perr != nil {
+				w.gateReadFailed(ctx, h, "published cross-section unreadable for "+cand, perr)
+				break
+			}
+			if len(got) > 0 {
+				priorDay, probs = cand, got
+			}
+		}
+		if priorDay == "" {
+			// Nothing published in the last five days is a cold start, not a
+			// collapse; a cold start must not be indistinguishable from one.
 			continue
 		}
-		probs, perr := w.St.PublishedCrossSection(ctx, string(h), rec.Day)
-		if perr != nil || len(probs) == 0 {
-			// Nothing published that day is not evidence of a collapse; a cold
-			// start must not be indistinguishable from one.
-			continue
-		}
+		rec := &crossSectionRecord{Day: priorDay}
 		measured := ensemble.MeasureCrossSection(probs)
 		if ok, reason := measured.Usable(); !ok {
 			rec.CrossSection = measured
@@ -701,17 +731,29 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			benchProb[h] = p
 		}
 	}
-	n, featErrs, staleCals, noLegs, gatedRows := 0, 0, 0, 0, 0
+	n, featErrs, staleCals, noLegs, gatedRows, staleFeed := 0, 0, 0, 0, 0, 0
 	// This pass's emitted probabilities per horizon, published or withheld.
 	runProbs := map[md.Horizon][]float64{}
+	formingTrimmed := 0
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
 			continue // daily-only universe symbol already predicted today
 		}
-		daily, minute, err := loadBars(ctx, w.St, s.ID)
+		daily, minute, trimmed, err := loadBars(ctx, w.St, s.ID, s.Market) // settled bars only (loadBars trims)
 		if err != nil {
 			return "", err
+		}
+		if trimmed {
+			formingTrimmed++
+		}
+		// STALE FEED (2026-09-09): no forecast from a daily series that has missed two
+		// full sessions, the dq-auditor's own rule. The grader already EXCLUDES such
+		// rows after the fact (stale-feed quarantine: 2,464 graded observations over
+		// 465 symbols on 2026-09-09); minting them was the defect, not grading them.
+		if s.Market == md.Stocks && len(daily) > 0 && marketcal.DailyBarStale(daily[len(daily)-1].Ts, time.Now()) {
+			staleFeed++
+			continue
 		}
 		states := expectancy.CurrentStateKeys(daily, minute)
 		forecasts, err := w.St.Forecasts(ctx, s.ID)
@@ -993,17 +1035,8 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				// ONE evidence row per symbol per trading day. Consumers dedup
 				// to that unit regardless, so the rest would be pure volume —
 				// ~40,200 rows a day at 1d against a 363,355-row table.
-				day := md.TradingDay(ts)
-				if prev, seen := evidenceDay[h][s.ID]; !seen || prev < day {
-					comps, _ := json.Marshal(c)
-					if err := w.St.UpsertPrediction(ctx, store.Prediction{
-						SymbolID: s.ID, Horizon: h, Ts: ts,
-						RawProb: raw, CalProb: raw, NUsed: 0, Components: string(comps),
-						Weights: "{}", Basis: basis,
-					}); err != nil {
-						return "", err
-					}
-					evidenceDay[h][s.ID] = day
+				if err := w.writeEvidenceRow(ctx, evidenceDay, h, s.ID, ts, raw, c, basis); err != nil {
+					return "", err
 				}
 				// The 0.5 stored here is NOT calibrated and NOT a call. An empty
 				// blend returns 0.5 from WeightedProbability, and on the wire a
@@ -1050,6 +1083,11 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				// point; withholding the feature vector too would make the gate
 				// latch shut, since the trainers whose grades reopen the horizon
 				// read exactly this table.
+				// Denominator (2026-09-07): a withheld horizon still counts the symbol,
+				// otherwise the coverage monitor reported "0 of 42" for a 329-name universe.
+				if err := w.writeEvidenceRow(ctx, evidenceDay, h, s.ID, ts, raw, c, basis); err != nil {
+					return "", err
+				}
 				persistFeatures(cal)
 				gatedRows++
 				continue
@@ -1064,12 +1102,56 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if len(wts) == 0 {
 				wjson = []byte("{}")
 			}
-			if err := w.St.UpsertPrediction(ctx, store.Prediction{
-				SymbolID: s.ID, Horizon: h, Ts: ts,
-				RawProb: raw, CalProb: cal, NUsed: nUsed, Components: string(comps),
-				Weights: string(wjson), Basis: basis,
-			}); err != nil {
-				return "", err
+			// ATTESTATION AND ELIGIBILITY ARE ONE WRITE (2026-09-14).
+			//
+			// This used to be UpsertPrediction here and AppendLedger fifty lines
+			// down, with the ledger half explicitly best-effort: "a ledger
+			// failure logs + records a dq event but MUST NOT fail the prediction
+			// (the prediction is already durably written above)". Right about
+			// durability, wrong about evidence -- UpsertPrediction also seeds
+			// prediction_outcomes, which is the population every grader reads,
+			// so a forecast whose attestation failed was still graded later as
+			// though it had been committed to the chain before its outcome
+			// existed. Precommitment is the claim this project rests on.
+			//
+			// store.UpsertPredictionAttested writes the prediction, the chain
+			// entry and the eligibility row in one transaction on the single
+			// writer. If the chain append fails there is no prediction, no
+			// outcome row, and nothing to grade. A missing forecast is honest.
+			//
+			// feature_hash is still the sha256 of the SAME vector persisted for
+			// this row, so the committed hash stays reproducible from the stored
+			// prediction -- it is just computed before the write now rather than
+			// after it.
+			vec := persistFeatures(cal)
+			entry, lerr := w.St.UpsertPredictionAttested(ctx,
+				store.Prediction{
+					SymbolID: s.ID, Horizon: h, Ts: ts,
+					RawProb: raw, CalProb: cal, NUsed: nUsed, Components: string(comps),
+					Weights: string(wjson), Basis: basis,
+				},
+				store.LedgerEntry{
+					PredictedAt:  time.Now().Unix(),
+					SymbolID:     s.ID,
+					Horizon:      h,
+					BarTs:        ts,
+					RawProb:      raw,
+					CalProb:      cal,
+					FeatureHash:  store.HashFeatureVector(vec),
+					ModelVersion: ledgerModelVersion,
+				})
+			if lerr != nil {
+				// The whole unit rolled back. Record it as the data-quality
+				// event it is and move to the next symbol rather than failing
+				// the run: one symbol that could not be attested must not stop
+				// the ones that can.
+				slog.Warn("prediction not attested: nothing was written", "symbol", s.Symbol, "horizon", h, "err", lerr)
+				sid := s.ID
+				_ = w.St.InsertDQ(ctx, md.DQEvent{
+					SymbolID: &sid, Ts: time.Now().Unix(),
+					Kind: "ledger_append_error", Detail: fmt.Sprintf("horizon %s: %v", h, lerr),
+				})
+				continue
 			}
 			n++
 			// Benchmark row for the SAME (symbol, ts): identical universe,
@@ -1082,32 +1164,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 					slog.Warn("prequential-majority benchmark: seed failed", "symbol", s.Symbol, "horizon", h, "err", err)
 				}
 			}
-			vec := persistFeatures(cal)
-			// STAGE 3 — append-only, hash-chained prediction ledger. Commit the
-			// prediction's identity to the tamper-evident chain AFTER the
-			// prediction + feature vector are persisted, and BEFORE any outcome
-			// can exist (the resolver runs on its own cadence). feature_hash is
-			// the sha256 of the SAME vector we just wrote, so the committed hash
-			// is reproducible from the persisted row. Best-effort: a ledger
-			// failure logs + records a dq event but MUST NOT fail the prediction
-			// (the prediction is already durably written above).
-			if entry, lerr := w.St.AppendLedger(ctx, store.LedgerEntry{
-				PredictedAt:  time.Now().Unix(),
-				SymbolID:     s.ID,
-				Horizon:      h,
-				BarTs:        ts,
-				RawProb:      raw,
-				CalProb:      cal,
-				FeatureHash:  store.HashFeatureVector(vec),
-				ModelVersion: ledgerModelVersion,
-			}); lerr != nil {
-				slog.Warn("prediction ledger: append failed", "symbol", s.Symbol, "horizon", h, "err", lerr)
-				sid := s.ID
-				_ = w.St.InsertDQ(ctx, md.DQEvent{
-					SymbolID: &sid, Ts: time.Now().Unix(),
-					Kind: "ledger_append_error", Detail: fmt.Sprintf("horizon %s: %v", h, lerr),
-				})
-			} else {
+			// The attestation already happened, atomically, above. What is left
+			// here is the lineage spine, which is genuinely best-effort.
+			{
 				// Lineage spine (Layers 2+8): tie the ledgered prediction to
 				// each MODEL LEG that actually contributed to its blend (nil
 				// pointer = leg absent or gated off, so no edge — an edge
@@ -1146,6 +1205,12 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		_ = w.St.SetMeta(ctx, "predict_universe_day", universeCursor)
 	}
 	detail := fmt.Sprintf("wrote %d predictions", n)
+	if staleFeed > 0 {
+		detail += fmt.Sprintf(" (%d stock(s) skipped: daily series stale by two or more sessions)", staleFeed)
+	}
+	if formingTrimmed > 0 {
+		detail += fmt.Sprintf(" (%d symbol(s) scored on settled bars only — newest daily bar still forming)", formingTrimmed)
+	}
 	if featErrs > 0 {
 		detail += fmt.Sprintf(" (%d feature-vector write(s) failed — see dq)", featErrs)
 	}
@@ -1186,6 +1251,12 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	return detail, nil
 }
 
+// dstStampSlackSecs absorbs the ET-midnight stamp jitter across a DST
+// transition. See the DST SLACK note in PredictionResolver.Run; the same
+// value is applied by store/gradeablepop.go and tools/accuracy_registry.py,
+// which must agree with this or the three grade different bars.
+const dstStampSlackSecs = int64(6 * 3600)
+
 // PredictionResolver grades past predictions (feeds the calibration curve).
 type PredictionResolver struct {
 	St *store.Store
@@ -1197,6 +1268,10 @@ func (w *PredictionResolver) Interval() time.Duration { return 10 * time.Minute 
 func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
 	resolved := 0
+	marketByID, err := symbolMarkets(ctx, w.St) // settled-bar rule is per market
+	if err != nil {
+		return "", err
+	}
 	for _, h := range predHorizons {
 		// The prequential-majority benchmark rows ("<horizon>#pm") resolve
 		// through the exact same path on the exact same horizon clock —
@@ -1208,14 +1283,29 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 				return "", err
 			}
 			for _, p := range pending {
-				base, okB, err := w.St.BarAtOrBefore(ctx, p.SymbolID, md.TF1d, p.Ts)
+				// settledbase.go: rows frozen after settledBaseSinceTs are graded from
+				// the newest bar that was SETTLED at decision time (2026-09-07).
+				base, okB, err := settledBase(ctx, w.St, marketByID[p.SymbolID], p.SymbolID, p.Ts)
 				if err != nil {
 					return "", err
 				}
 				if !okB {
 					continue
 				}
-				target := base.Ts + horizonSecs(h)
+				// DST SLACK. US daily bars are stamped at ET midnight, so ts%86400 is
+				// 14400 under EDT and 18000 under EST. Adding a fixed 604800 to an
+				// EST-stamped base lands ONE HOUR PAST the EDT-stamped bar seven
+				// days later, so BarAtOrAfter skips it and returns the NEXT
+				// session: verified on 2026-03-06, where target 2026-03-13T05:00Z
+				// misses that day's 04:00Z bar and grades Monday 03-16 instead --
+				// an 8-session return published as "1w". Every base bar in
+				// 2026-03-02..03-06 is affected, across the whole universe.
+				//
+				// 6h of slack absorbs the stamp jitter and cannot reach back into
+				// the prior session: the slackened target sits ~18h after the
+				// previous bar, so MIN(ts >= target) is unchanged in every
+				// non-DST case. The autumn transition was already safe.
+				target := base.Ts + horizonSecs(h) - dstStampSlackSecs
 				if now < target {
 					continue
 				}
@@ -1286,6 +1376,7 @@ func (w *RegimeRunner) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		daily, _ = trimFormingDaily(s.Market, daily, time.Now().Unix()) // settled bars only (2026-09-07)
 		st, ok := regime.Classify(daily)
 		if !ok {
 			continue
@@ -1324,6 +1415,7 @@ func (w *RankingRunner) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		daily, _ = trimFormingDaily(s.Market, daily, time.Now().Unix()) // settled bars only (2026-09-07)
 		m, ok := ranking.FromBars(s.Symbol, daily)
 		if !ok {
 			continue
@@ -1377,6 +1469,7 @@ func (w *BreakoutRunner) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		daily, _ = trimFormingDaily(s.Market, daily, time.Now().Unix()) // settled bars only (2026-09-07)
 		closes := make([]float64, len(daily))
 		tss := make([]int64, len(daily))
 		for i, b := range daily {
@@ -1451,4 +1544,25 @@ func macroPanelFeatures(ctx context.Context, st *store.Store) map[string]float64
 		return nil
 	}
 	return macrofeat.FromSeries(hist)
+}
+
+// gateReadFailed records that the cross-section collapse gate could not read its
+// own evidence for one horizon.
+//
+// The gate's decision on a failed read is to PUBLISH -- refusing on a transient
+// database error would wedge the predictor shut on something that is not
+// evidence, which is the same fail-open contract CollapsedGradingWindow states.
+// That is defensible only if the failure is VISIBLE: an unreadable prior day is
+// then an unexamined day rather than a clean one, and nothing downstream can
+// tell the difference unless this says so. A dq event makes it countable, and
+// the sibling best-effort path thirty lines below already logs its ambiguity.
+func (w *PredictionRunner) gateReadFailed(ctx context.Context, h md.Horizon, what string, err error) {
+	slog.Warn("cross-section gate: evidence unreadable, horizon published UNGATED",
+		"horizon", string(h), "what", what, "err", err)
+	_ = w.St.InsertDQ(ctx, md.DQEvent{
+		Ts:   time.Now().Unix(),
+		Kind: "crosssection_gate_unread",
+		Detail: "horizon " + string(h) + " published without the collapse gate: " + what +
+			": " + err.Error(),
+	})
 }

@@ -327,6 +327,11 @@ func (s *Store) DQSilencedSymbols(ctx context.Context) (map[int64]bool, error) {
 	if err != nil {
 		return nil, err
 	}
+	return scanIDSet(rows)
+}
+
+// scanIDSet converts *sql.Rows of int64 IDs into a set.
+func scanIDSet(rows *sql.Rows) (map[int64]bool, error) {
 	defer rows.Close() //nolint:errcheck
 	out := map[int64]bool{}
 	for rows.Next() {
@@ -337,4 +342,17 @@ func (s *Store) DQSilencedSymbols(ctx context.Context) (map[int64]bool, error) {
 		out[id] = true
 	}
 	return out, rows.Err()
+}
+
+// DelistedSymbolIDs returns a set of symbol IDs that have a delisting stamp.
+// Every symbol carrying a delisting stamp, held or not; the outcome resolver
+// voids rows on these at once because a delisted name never prints a forward
+// bar and the 30-day grace only parked them at the head of the oldest-first
+// queue (measured 2026-09-09: 19,499 score outcomes, 1.95M rows behind them).
+func (s *Store) DelistedSymbolIDs(ctx context.Context) (map[int64]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM symbols WHERE COALESCE(delisted_at, 0) > 0`)
+	if err != nil {
+		return nil, err
+	}
+	return scanIDSet(rows)
 }

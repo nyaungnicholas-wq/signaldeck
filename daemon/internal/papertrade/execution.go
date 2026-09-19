@@ -73,6 +73,21 @@ type ExecInputs struct {
 	Bar    md.Bar
 	Market md.Market
 	ADVUSD float64
+	// Live paper fills use the last completed bar for volatility. The fill
+	// bar's high/low are not known at its open. Nil retains the explicit
+	// same-bar assumption used by synthetic stress scenarios.
+	VolatilityBar *md.Bar
+}
+
+// ImpactSigma keeps the EV decision and the charged fill on the same inputs.
+func (in ExecInputs) ImpactSigma() (float64, bool) {
+	if in.VolatilityBar != nil {
+		if in.VolatilityBar.Ts >= in.Bar.Ts {
+			return 0, false
+		}
+		return parkinsonSigma(*in.VolatilityBar)
+	}
+	return parkinsonSigma(in.Bar)
 }
 
 // Fill is the result of executing one transition at a bar open. It is a pure
@@ -93,7 +108,13 @@ type Fill struct {
 	CashDelta float64 // signed change to cash after notional + cost
 	Reason    string  // human-readable why (set by caller/worker, or the refusal)
 
-	// Execution diagnostics — the audit trail for Cost.
+	// Execution diagnostics. They explain Cost to a caller holding the Fill, and
+	// stresslab/replay.go does consume SpreadBps, ImpactBps and Capped. They are
+	// NOT persisted: paper_trades stores Cost and Reason and nothing else from a
+	// Fill, so on the stored path the only diagnostic that survives is whatever
+	// reaches Reason. That is what WithReason below is for. This group used to be
+	// labelled "the audit trail for Cost", which promised a durability it does
+	// not have.
 	RefPx            float64 // the stored bar open Px was taken from
 	SpreadBps        float64 // half-spread crossed, per side
 	ImpactBps        float64 // modelled market impact of THIS size
@@ -103,10 +124,35 @@ type Fill struct {
 	LiquidationBars  int     // exit only: bars needed at the participation cap
 }
 
+// WithReason returns why with the fill's OWN reason appended, when it has one.
+//
+// EnterLong and ExitLong set Fill.Reason in exactly one situation: the ADV
+// participation cap bound the order. One writes the partial-fill notice, the
+// other the multi-bar liquidation notice. Every one of the three PaperTrade
+// construction sites then built its own Reason and assigned it over the top, so
+// both notices were computed and immediately discarded and a capped fill was
+// indistinguishable from an ordinary one in the trade log.
+//
+// The callers were not wrong to write their own text -- the sizing rationale is
+// part of the audit trail too. They were wrong to DROP the fill's. This keeps
+// both, on the separator the paper reasons already use.
+//
+// It does not rescue the numeric diagnostics above; those would need columns on
+// paper_trades. It preserves the one diagnostic already rendered as text.
+func (f Fill) WithReason(why string) string {
+	switch {
+	case f.Reason == "":
+		return why
+	case why == "":
+		return f.Reason
+	default:
+		return why + " · " + f.Reason
+	}
+}
+
 // parkinsonSigma estimates the bar's return volatility from its high/low range
-// (Parkinson 1980): sigma = ln(H/L) / (2*sqrt(ln 2)). It uses the same bar the
-// fill prices off, so the impact estimate never reaches outside the data the
-// fill is built from. ok is false for a bar whose range is unusable.
+// (Parkinson 1980): sigma = ln(H/L) / (2*sqrt(ln 2)). The caller supplies
+// the completed prior bar for live paper fills. ok is false for an unusable range.
 func parkinsonSigma(bar md.Bar) (float64, bool) {
 	if bar.High <= 0 || bar.Low <= 0 || bar.High < bar.Low {
 		return 0, false
@@ -126,7 +172,7 @@ func (in ExecInputs) validate() (refPx, sigma, spreadFrac, capNotional float64, 
 	if in.Bar.Open <= 0 || math.IsNaN(in.Bar.Open) || math.IsInf(in.Bar.Open, 0) {
 		return 0, 0, 0, 0, "the stored bar has no usable open price"
 	}
-	s, ok := parkinsonSigma(in.Bar)
+	s, ok := in.ImpactSigma()
 	if !ok {
 		return 0, 0, 0, 0, "the stored bar's high/low range is unusable, so market impact cannot be estimated"
 	}
@@ -168,7 +214,7 @@ func EnterLong(budget float64, in ExecInputs) (Fill, float64, float64, bool) {
 	if reason != "" {
 		return Fill{Side: "buy", Reason: reason}, 0, 0, false
 	}
-	if budget <= 0 {
+	if budget <= 0 || math.IsNaN(budget) || math.IsInf(budget, 0) {
 		return Fill{Side: "buy", Reason: "no cash slice to deploy"}, 0, 0, false
 	}
 
@@ -189,7 +235,7 @@ func EnterLong(budget float64, in ExecInputs) (Fill, float64, float64, bool) {
 	imp := impactFrac(notional, in.ADVUSD, sigma)
 	cost := notional * (spreadFrac + imp)
 	qty := notional / refPx
-	if qty <= 0 {
+	if qty <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) {
 		return Fill{Side: "buy", Reason: "budget too small to buy any units at this price"}, 0, 0, false
 	}
 
@@ -232,11 +278,14 @@ func ExitLong(qty float64, in ExecInputs) (Fill, bool) {
 	if reason != "" {
 		return Fill{Side: "sell", Reason: reason}, false
 	}
-	if qty <= 0 {
+	if qty <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) {
 		return Fill{Side: "sell", Reason: "no position to close"}, false
 	}
 
 	notional := qty * refPx
+	if math.IsNaN(notional) || math.IsInf(notional, 0) {
+		return Fill{Side: "sell", Reason: "position notional is not finite"}, false
+	}
 	participation := notional / in.ADVUSD
 	bars := 1
 	capped := false

@@ -306,3 +306,26 @@ func TestReserveOutageRecoveryKeepsCap(t *testing.T) {
 func jsonDecode(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
+
+// TestTemplateKwargsDisablesThinkingOffTheDeepTier pins the 2026-09-02 decision:
+// the hidden chain-of-thought is off for the high-volume tiers and ON for the
+// deep tier, and the vendor-specific field is only sent to the model family that
+// understands it. Both directions, because a helper wired permanently on (or
+// off) would satisfy a one-sided assertion.
+func TestTemplateKwargsDisablesThinkingOffTheDeepTier(t *testing.T) {
+	deep := "nvidia/nemotron-3-super-120b-a12b"
+	fast := "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+
+	kw := templateKwargs(fast, deep)
+	if kw == nil || kw["enable_thinking"] != false {
+		t.Fatalf("fast tier must disable thinking, got %v", kw)
+	}
+	if got := templateKwargs(deep, deep); got != nil {
+		t.Fatalf("the deep tier must keep its reasoning, got %v", got)
+	}
+	// A non-nemotron default (the next retirement will bring one) must not be
+	// sent a vendor field it may reject outright.
+	if got := templateKwargs("meta/llama-4-instruct", deep); got != nil {
+		t.Fatalf("only the nemotron family takes chat_template_kwargs, got %v", got)
+	}
+}

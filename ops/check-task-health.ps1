@@ -42,6 +42,7 @@ $rows = @()
 $troubled = @()
 $failed = @()
 $stale = @()
+$unreadable = @()
 $disabled = @()
 
 # Tasks that are started by something OTHER than their own trigger, and are
@@ -155,7 +156,13 @@ foreach ($task in $tasks) {
             $stale += "$($task.TaskName) (state $($task.State), last ran $($info.LastRunTime)) - no NextRunTime and not a known on-demand task: nothing will start this again"
         }
     } catch {
-        # One unreadable task must not abort the whole report.
+        # One unreadable task must not abort the whole report -- but it must not
+        # pass, either. This rendered UNREADABLE and left $bad untouched, so the
+        # gate could print "OK - no console-kill signature, and both service
+        # ports are listening" and exit 0 while it had no idea what state a task
+        # was in. Its sibling ops/check-grader-health.ps1 states the doctrine
+        # this contradicted: "Every unknown resolves to unhealthy ... the one
+        # state this check must never report is 'fine, probably'."
         $rows += [PSCustomObject]@{
             Task      = $task.TaskName
             State     = $task.State
@@ -163,6 +170,11 @@ foreach ($task in $tasks) {
             LastRun   = $null
             Result    = 'UNREADABLE'
         }
+        # Collected, not flagged here: $bad is initialised to $false further
+        # down, after this loop, so setting it in this catch would be silently
+        # overwritten and the fix would be a no-op. The verdict block below is
+        # the only place that can decide.
+        $unreadable += "$($task.TaskName): $($_.Exception.Message)"
         Write-Warning "could not read info for '$($task.TaskName)': $($_.Exception.Message)"
     }
 }
@@ -209,6 +221,12 @@ if ($disabled.Count -gt 0) {
     Write-Host "note - disabled task(s), not judged on their last result:" -ForegroundColor Yellow
     $disabled | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
 }
+if ($unreadable.Count -gt 0) {
+    Write-Host ""
+    Write-Host "WARNING - task(s) whose state could not be read at all:" -ForegroundColor Red
+    $unreadable | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    $bad = $true
+}
 if ($stale.Count -gt 0) {
     Write-Host ""
     Write-Host "WARNING - task(s) with no scheduled next run (nothing will start them again):" -ForegroundColor Red
@@ -233,7 +251,18 @@ if ($stale.Count -gt 0) {
 # child holding the socket), so task state cannot answer this question.
 $portsDown = @()
 foreach ($svc in @(@{n = 'daemon (API)'; p = 8322 }, @{n = 'web (UI)'; p = 8323 })) {
-    $listening = @(Get-NetTCPConnection -State Listen -LocalPort $svc.p -ErrorAction SilentlyContinue).Count -gt 0
+    # One instant sample turns the nightly fleet restart into a red that
+    # sticks until the next scheduled run: measured 2026-08-25, this gate said
+    # "nothing listening on 8322" while the port was bound and answering 401 —
+    # it had sampled inside the 18:45 restart. Re-ask across that window
+    # before declaring a service down; a genuinely dead port is dead on all
+    # four samples and still goes red, 90 seconds later.
+    $listening = $false
+    foreach ($attempt in 1..4) {
+        $listening = @(Get-NetTCPConnection -State Listen -LocalPort $svc.p -ErrorAction SilentlyContinue).Count -gt 0
+        if ($listening) { break }
+        if ($attempt -lt 4) { Start-Sleep -Seconds 30 }
+    }
     if ($listening) {
         Write-Host ("  = {0,-14} listening on {1}" -f $svc.n, $svc.p)
     }
@@ -248,7 +277,28 @@ if ($portsDown.Count -gt 0) {
     $bad = $true
 }
 
-if ($bad) { exit 1 }
+if ($bad) {
+    # ALERT, do not just exit 1. This script only ever wrote to the console, and
+    # under Task Scheduler that goes nowhere -- an unhealthy fleet became a
+    # LastTaskResult=1 in a UI nobody opens. Measured 2026-09-12: this task and
+    # Check-Grader-Health had both been red since 2026-09-10 with nothing
+    # surfacing it.
+    #
+    # The body names the affected TASKS, not just a count. "3 tasks unhealthy"
+    # sends the reader back to the console output that failed to reach them in
+    # the first place.
+    $parts = @()
+    if ($troubled.Count)   { $parts += "console-killed: $($troubled -join ', ')" }
+    if ($failed.Count)     { $parts += "last result not success: $($failed -join ', ')" }
+    if ($unreadable.Count) { $parts += "unreadable: $($unreadable -join ', ')" }
+    if ($stale.Count)      { $parts += "no next run scheduled: $($stale -join ', ')" }
+    if ($portsDown.Count)  { $parts += "port(s) not listening: $($portsDown -join ', ')" }
+    $why = ($parts -join '; ')
+    if (-not $why) { $why = 'see the run output' }
+    . (Join-Path $PSScriptRoot 'lib-notify.ps1')
+    Send-SdAlert -Title 'SignalDeck task fleet: UNHEALTHY' -Body $why -Repo (Split-Path $PSScriptRoot -Parent)
+    exit 1
+}
 
 Write-Host ""
 Write-Host "OK - no console-kill signature, and both service ports are listening" -ForegroundColor Green

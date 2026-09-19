@@ -40,10 +40,17 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 	// that have not elapsed. Blaming the hourly worker for the latter — as this
 	// endpoint used to — reads as a stuck scheduler when it is just time.
 	pending := map[string]store.StructuralPendingRow{}
+	pendingKnown := true
 	if rows, err := d.St.StructuralPending(ctx); err == nil {
 		for _, p := range rows {
 			pending[p.Kind] = p
 		}
+	} else {
+		// An empty pending map steers ungradedModel into its most CONFIDENT
+		// branch -- "no unresolved forecasts on record, so this model has not
+		// emitted a call the grader could score" -- for every model at once,
+		// from a single failed read.
+		pendingKnown = false
 	}
 
 	keys := []string{"directional-ensemble-1d", "directional-ensemble-1w"}
@@ -53,11 +60,23 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 	for _, k := range keys {
 		raw, err := d.St.GetMeta(ctx, pipeline.MetaKeyPrefix+k)
 		if err != nil || raw == "" {
-			models = append(models, ungradedModel(k, pending))
+			m := ungradedModel(k, pending)
+			if !pendingKnown {
+				m["pendingUnknown"] = true
+				m["note"] = "the pending-forecast table could not be read, so why this model is ungraded is UNKNOWN — not established as 'nothing to score'"
+			}
+			models = append(models, m)
 			continue
 		}
 		var v map[string]any
-		if json.Unmarshal([]byte(raw), &v) != nil {
+		if uerr := json.Unmarshal([]byte(raw), &v); uerr != nil {
+			// A corrupt grade used to VANISH from the array entirely, so a model
+			// with an unreadable verdict was indistinguishable from one that was
+			// never registered. Surface it instead.
+			models = append(models, map[string]any{
+				"model": k, "gradeUnreadable": true,
+				"note": "this model's stored grade could not be parsed: " + uerr.Error(),
+			})
 			continue
 		}
 		v["graded"] = true

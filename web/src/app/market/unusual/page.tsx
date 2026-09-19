@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { anomalies, pollMs, POLL_DEFAULT, type AnomaliesResponse, type AnomalyRow, type Market } from "@/lib/api";
+import { anomalies, ApiError, pollMs, POLL_DEFAULT, type AnomaliesResponse, type AnomalyRow, type Market } from "@/lib/api";
 import { Reveal, StatTile, PageHero, MiniBar, DeltaBadge } from "@/components/ui/Kit";
 
 type KindFilter = AnomalyRow["kind"] | undefined;
@@ -34,7 +34,7 @@ export default function UnusualPage() {
   const [searchInput, setSearchInput] = useState("");
   const [symbolQ, setSymbolQ] = useState("");
   const [data, setData] = useState<{ key: string; resp: AnomaliesResponse; at: number } | null>(null);
-  const [err, setErr] = useState<{ key: string; msg: string } | null>(null);
+  const [err, setErr] = useState<{ key: string; msg: string; status: number } | null>(null);
   const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export default function UnusualPage() {
         })
         .catch((e: unknown) => {
           if (!alive) return;
-          setErr({ key, msg: e instanceof Error ? e.message : String(e) });
+          setErr({ key, msg: e instanceof Error ? e.message : String(e), status: e instanceof ApiError ? e.status : 0 });
         });
     load();
     const stop = pollMs(load, POLL_DEFAULT);
@@ -65,7 +65,7 @@ export default function UnusualPage() {
 
   const resp = data && data.key === queryKey ? data.resp : null;
   const errMsg = err && err.key === queryKey ? err.msg : null;
-  const unknownSymbol = symbolQ !== "" && errMsg !== null && errMsg.includes("API 404");
+  const unknownSymbol = symbolQ !== "" && err !== null && err.key === queryKey && err.status === 404;
 
   const rows: AnomalyRow[] | null = resp
     ? (resp.anomalies ?? []).filter((r) => !market || r.market === market)

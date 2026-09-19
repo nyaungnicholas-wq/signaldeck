@@ -194,20 +194,122 @@ def check_integrity_snapshot(repo: Path, registry: dict) -> tuple[list[dict], di
         v["file"] = rel
         v["message"] = v["message"].replace(str(snapshot_path), rel)
     violations.extend(snap_violations)
+
+    # AGE. Existence and parseability were the only things checked, so a
+    # snapshot frozen weeks earlier reported a healthy grader indefinitely:
+    # measured 2026-09-10 it was 37 days old and said grader OK while the live
+    # registry had been REFUSED since that morning, and this gate printed
+    # "docs-gate: clean" throughout. That is what UNSUPPRESSIBLE_CHECKS exists
+    # to stop, asserted silently, with no human and no allowlist entry.
+    # Age is the ONLY thing checkable here: data/ is gitignored and CI has no
+    # database, which is why write-integrity computes it where one exists.
+    fix = ("Run `python tools/docs_gate.py write-integrity` on the machine "
+           "holding the database and commit ops/data-integrity.json.")
+    gen = snapshot.get("generated") if isinstance(snapshot, dict) else None
+    try:
+        stamped = datetime.fromisoformat(str(gen).strip().replace("Z", "+00:00"))
+    except ValueError:
+        violations.append(make_violation("integrity-snapshot", rel, 0,
+            f"no usable `generated` stamp, so its age cannot be checked at all "
+            f"and whether it still describes the running system is unknowable. {fix}"))
+        return violations, snapshot
+    if stamped.tzinfo is None:          # write-integrity writes UTC
+        stamped = stamped.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - stamped).total_seconds() / 86400.0
+    bound = int(os.getenv("SIGNALDECK_INTEGRITY_MAX_AGE_DAYS") or 7)
+    if age > bound:
+        violations.append(make_violation("integrity-snapshot", rel, 0,
+            f"snapshot is {age:.1f} days old (bound {bound}). check_grader_status "
+            f"reads this file, so a stale one reports the grader OK long after it "
+            f"started refusing. {fix}"))
     return violations, snapshot
 
-def check_grader_status(repo: Path, snapshot: dict) -> list[dict]:
-    """Check grader status is OK (case-insensitive)."""
+# TWO CONTRACTS, ONE GATE (2026-09-13). See docs/RELEASE_CONTRACTS.md.
+#
+# STRICT answers "may this repository publish live accuracy NUMBERS?" and is
+# unchanged: the grader must say OK. Every historical report that ran this gate
+# meant exactly that, and it still does.
+#
+# RELEASE answers a different question — "does this build state the evidence it
+# actually has, correctly?" — because the product is a research demo whose whole
+# design is to show refusals openly. Under STRICT the honest REFUSED this
+# repository has carried since 2026-09-13T14:43 blocks the release gate forever,
+# which pressures someone to make the refusal go away rather than ship it. That
+# is the incentive inverted.
+#
+# RELEASE IS NOT "STRICT PLUS REFUSED IN THE SUCCESS LIST". A refusal is only an
+# acceptable release state when it is a CURRENT, MEASURED, ATTRIBUTED scientific
+# result, so three impostors are rejected explicitly:
+#
+#   REFUSED_STALE            — nobody measured recently. A stale checker must not
+#                              be able to impersonate a fresh scientific refusal.
+#   "CHECK UNAVAILABLE: ..."  — the prefix ops/accuracy-registry.sh and
+#                              ops/grade.sh now use when a GATE could not run.
+#                              The evidence state is unknown, not refused, and
+#                              rendering unknown as a finding invents a verdict.
+#   REFUSED with no reason   — unattributable; a reader cannot check it.
+#   EMPTY / blank / unknown  — zero graded rows is not a publishable state, and
+#                              a status this gate does not recognise is never a
+#                              pass (that is how "unknown" becomes "fine").
+#
+# The figure-leak checks (check_no_hardcoded_live_accuracy, check_forbidden_claims)
+# are NOT relaxed by either contract; they run identically in both, so a release
+# build still cannot carry a withheld number anywhere.
+RELEASE_OK_STATES = frozenset({"OK", "REFUSED"})
+CHECK_OUTAGE_PREFIX = "CHECK UNAVAILABLE"
+
+FIX_HINT = ("Run `python tools/docs_gate.py write-integrity` on the machine "
+            "holding the database and commit ops/data-integrity.json.")
+
+
+def check_grader_status(repo: Path, snapshot: dict,
+                        contract: str = "strict") -> list[dict]:
+    """Assert the grader's evidence state is publishable under `contract`."""
     violations = []
     grader = snapshot.get("grader", {})
-    status = str(grader.get("status", "")).strip().upper()
-    if status != "OK":
-        reason = grader.get("refusal_reason")
-        msg = f"Grader status is '{grader.get('status')}', not OK."
-        if reason:
-            msg += f" Refusal reason: {reason}"
-        msg += " Resolve the grader refusal, then run `python tools/docs_gate.py write-integrity` and commit ops/data-integrity.json."
-        violations.append(make_violation("grader-status", "ops/data-integrity.json", 0, msg))
+    raw = str(grader.get("status", "")).strip()
+    status = raw.upper()
+    reason = str(grader.get("refusal_reason") or "").strip()
+
+    if contract == "strict":
+        if status != "OK":
+            msg = f"Grader status is '{grader.get('status')}', not OK."
+            if reason:
+                msg += f" Refusal reason: {reason}"
+            msg += (" Resolve the grader refusal, then run "
+                    "`python tools/docs_gate.py write-integrity` and commit "
+                    "ops/data-integrity.json.")
+            violations.append(make_violation(
+                "grader-status", "ops/data-integrity.json", 0, msg))
+        return violations
+
+    # --- release contract ---------------------------------------------------
+    if status not in RELEASE_OK_STATES:
+        violations.append(make_violation(
+            "grader-status", "ops/data-integrity.json", 0,
+            f"Grader status is '{raw or '(blank)'}', which is not a publishable "
+            f"evidence state. The release contract accepts a grade (OK) or a "
+            f"measured refusal (REFUSED); it does not accept REFUSED_STALE, an "
+            f"empty grade, or an unrecognised status, because none of those tell "
+            f"a reader what was actually measured. {FIX_HINT}"))
+        return violations
+
+    if status == "REFUSED":
+        if not reason:
+            violations.append(make_violation(
+                "grader-status", "ops/data-integrity.json", 0,
+                "Grader status is REFUSED with no refusal_reason. A refusal a "
+                "reader cannot attribute to evidence is not a publishable "
+                f"scientific result. {FIX_HINT}"))
+        elif reason.upper().startswith(CHECK_OUTAGE_PREFIX):
+            violations.append(make_violation(
+                "grader-status", "ops/data-integrity.json", 0,
+                "Grader status is REFUSED because a GATE COULD NOT RUN, not "
+                "because anything was measured: "
+                f"{reason[:300]} — the evidence state here is UNKNOWN. Shipping "
+                "it as a refusal would present a check outage to readers as a "
+                "finding about the models. Fix the check, re-run the grader, "
+                f"then {FIX_HINT[0].lower()}{FIX_HINT[1:]}"))
     return violations
 
 def check_docs_index(repo: Path, registry: dict) -> list[dict]:
@@ -742,7 +844,7 @@ def load_registry(repo: Path) -> dict:
 # Modes
 # ──────────────────────────────────────────────────────────────────────────────
 
-def mode_check(repo: Path, as_json: bool) -> int:
+def mode_check(repo: Path, as_json: bool, contract: str = "strict") -> int:
     registry = load_registry(repo)
     violations: list[dict] = []
 
@@ -758,7 +860,7 @@ def mode_check(repo: Path, as_json: bool) -> int:
     snap_violations, snapshot = check_integrity_snapshot(repo, registry)
     violations += snap_violations
     if snapshot is not None:
-        violations += check_grader_status(repo, snapshot)
+        violations += check_grader_status(repo, snapshot, contract)
         violations += check_data_integrity(repo, registry, snapshot)
         violations += check_single_source_of_truth(repo, registry, snapshot)
 
@@ -767,11 +869,32 @@ def mode_check(repo: Path, as_json: bool) -> int:
     violations.sort(key=lambda v: (v.get("check", ""), v.get("file", ""),
                                    v.get("line", 0), v.get("message", "")))
 
+    # THE SCIENTIFIC STATE IS REPORTED SEPARATELY FROM SOFTWARE READINESS, and
+    # always, including on a clean run. Folding them into one pass/fail is how a
+    # green build starts reading as "the models work": this line says what the
+    # evidence actually is, and the violations below say whether the build
+    # represents it correctly. They are different questions with different
+    # answers, and a reader is entitled to both.
+    evidence = "UNKNOWN (no integrity snapshot)"
+    if snapshot is not None:
+        g = snapshot.get("grader", {}) or {}
+        raw = str(g.get("status", "")).strip() or "(blank)"
+        why = str(g.get("refusal_reason") or "").strip()
+        if raw.upper() == "REFUSED" and why.upper().startswith(CHECK_OUTAGE_PREFIX):
+            evidence = f"{raw} — but as a CHECK OUTAGE, not a measurement"
+        elif raw.upper() == "REFUSED":
+            evidence = f"{raw} (measured; graded_at {g.get('graded_at')})"
+        else:
+            evidence = raw
     if as_json:
-        print(json.dumps({"violations": violations}))
+        print(json.dumps({"violations": violations,
+                          "contract": contract,
+                          "evidence_state": evidence}))
     elif not violations:
-        print("docs-gate: clean")
+        print(f"docs-gate[{contract}]: clean")
+        print(f"docs-gate: scientific evidence state = {evidence}")
     else:
+        print(f"docs-gate: scientific evidence state = {evidence}")
         for v in violations:
             where = v.get("file") or "-"
             line = v.get("line") or 0
@@ -919,12 +1042,20 @@ def main(argv: list[str] | None = None) -> int:
                     help="repository root (default: parent of tools/)")
     ap.add_argument("--json", action="store_true",
                     help="check only: emit {\"violations\": [...]} on stdout")
+    ap.add_argument("--contract", choices=["strict", "release"], default="strict",
+                    help="strict (default): live accuracy NUMBERS may be published, "
+                         "so the grader must read OK — the contract every historical "
+                         "report of this gate was run under. release: this build "
+                         "states the evidence it actually has, so a CURRENT, MEASURED, "
+                         "ATTRIBUTED refusal passes while a stale one, a check outage "
+                         "and an unattributable one do not. Neither contract relaxes "
+                         "the figure-leak checks. See docs/RELEASE_CONTRACTS.md.")
     args = ap.parse_args(argv)
     repo = Path(args.repo).resolve()
 
     try:
         if args.mode == "check":
-            return mode_check(repo, args.json)
+            return mode_check(repo, args.json, args.contract)
         if args.mode == "build":
             return mode_build(repo)
         return mode_write_integrity(repo)

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/confluence"
@@ -173,13 +174,36 @@ func (d Deps) confluenceTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collapse to ONE independent observation per (symbol, UTC-day), keeping the
-	// latest (rows are ts DESC, so the first seen per key wins). Setups are
-	// already day-bucketed, so this is belt-and-suspenders — and it powers the
-	// distinct-day gate.
-	seen := map[[2]int64]bool{}
+	// THE PUBLISHED POPULATION IS EPISODES, NOT CALENDAR DAYS.
+	//
+	// One row per (symbol, UTC-day) treated a setup that persisted for a week as
+	// seven independent bets, so one sustained move entered the mean seven times.
+	// An episode is the continuous same-direction run: its return is compounded
+	// across the days it was held and its round-trip cost is charged ONCE,
+	// because one position was opened and closed once.
+	//
+	// The every-day population is still computed and published under
+	// diagnostics.repeatedRows, so the difference the collapse makes is visible
+	// rather than asserted.
+	episodes := buildConfluenceEpisodes(rows)
+
 	dayset := map[int64]bool{}
 	var all, long, short []confluenceTrade
+	for _, e := range episodes {
+		dayset[e.Day] = true
+		t := confluenceTrade{day: e.Day, ret: e.RawTrade - 2*confluenceCostPerSide}
+		all = append(all, t)
+		if e.Direction > 0 {
+			long = append(long, t)
+		} else if e.Direction < 0 {
+			short = append(short, t)
+		}
+	}
+
+	// The every-day population: exactly what this endpoint published before, kept
+	// for comparison. One cost charged per DAY here, as it was.
+	var repeated []confluenceTrade
+	seen := map[[2]int64]bool{}
 	for _, o := range rows {
 		day := md.SettleDay(o.SettleTs, o.Ts)
 		key := [2]int64{o.SymbolID, day}
@@ -187,18 +211,10 @@ func (d Deps) confluenceTrack(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seen[key] = true
-		dayset[day] = true
-		// Direction-adjusted, cost-netted trade return: a LONG profits when price
-		// rises, a SHORT when it falls; both pay the round-trip cost. This is the
-		// PROFIT of having taken the setup, not the raw price move.
-		t := confluenceTrade{day: day, ret: float64(o.Direction)*o.FwdReturn - 2*confluenceCostPerSide}
-		all = append(all, t)
-		if o.Direction > 0 {
-			long = append(long, t)
-		} else if o.Direction < 0 {
-			short = append(short, t)
-		}
+		repeated = append(repeated, confluenceTrade{
+			day: day, ret: float64(o.Direction)*o.FwdReturn - 2*confluenceCostPerSide})
 	}
+
 	independent := len(all)
 	distinctDays := len(dayset)
 
@@ -211,6 +227,16 @@ func (d Deps) confluenceTrack(w http.ResponseWriter, r *http.Request) {
 			"distinctDays":   confluenceMinDays,
 		},
 		"caveat": confluenceCaveat,
+		// Say what the headline population IS, in the payload, beside it.
+		"population": map[string]any{
+			"basis":        "episode",
+			"episodes":     len(episodes),
+			"gradedRows":   len(rows),
+			"repeatedRows": len(repeated),
+			"note": "One EPISODE is one bet: a continuous run of same-direction setups on one symbol, " +
+				"compounded across the sessions it was held and charged one round trip. repeatedRows is the " +
+				"old every-calendar-day count, published under diagnostics for comparison only.",
+		},
 	}
 
 	if independent < confluenceMinIndependent || distinctDays < confluenceMinDays {
@@ -240,10 +266,54 @@ func (d Deps) confluenceTrack(w http.ResponseWriter, r *http.Request) {
 		"refused": allBook.ExpectancyCI == nil,
 		"reason":  refusedReason,
 		"method":  confluenceExpectancyMethod,
+		"basis": "RAW: direction-adjusted, cost-netted, UNCONSTRAINED per-episode return. A normalised short is " +
+			"unbounded below, so this describes the SIGNAL, not an account. The account-level number is under `constrained`.",
 	}
 	resp["byDirection"] = map[string]any{
 		"long":  confluenceGrade(long),
 		"short": confluenceGrade(short),
+	}
+
+	// THE ACCOUNT-LEVEL BASIS, beside the raw one.
+	cons := confluence.DefaultConstraints()
+	book, results := gradeConstrained(episodes, cons)
+	longEps, shortEps := splitByDirection(episodes)
+	longBook, _ := gradeConstrained(longEps, cons)
+	shortBook, _ := gradeConstrained(shortEps, cons)
+	resp["constrained"] = map[string]any{
+		"all":          book,
+		"long":         longBook,
+		"short":        shortBook,
+		"model":        cons,
+		"note":         constrainedNote,
+		"shortability": shortabilityNote,
+	}
+
+	// DIAGNOSTICS. Never the headline: the every-day population is the defect this
+	// endpoint was repaired for, and the quantiles and concentration exist so a
+	// reader can see whether the mean is carried by one name or one day.
+	rawRets := retsOf(all)
+	symKeys := make([]string, 0, len(episodes))
+	symVals := make([]float64, 0, len(episodes))
+	epKeys := make([]string, 0, len(episodes))
+	for _, e := range episodes {
+		symKeys = append(symKeys, e.Symbol)
+		symVals = append(symVals, e.RawTrade)
+		epKeys = append(epKeys, e.Symbol+"@"+time.Unix(e.Day, 0).UTC().Format("2006-01-02"))
+	}
+	resp["diagnostics"] = map[string]any{
+		"repeatedRows": map[string]any{
+			"trades": len(repeated),
+			"money":  moneymetrics.FromReturns(retsOf(repeated)),
+			"note": "DIAGNOSIS ONLY. One row per symbol per calendar day — the population this endpoint " +
+				"published before persistent setups were collapsed into episodes. Quoting it as performance " +
+				"double-counts every sustained move.",
+		},
+		"rawQuantiles":           quantilesOf(rawRets),
+		"concentrationBySymbol":  concentrationBy(symKeys, symVals, 10),
+		"concentrationByEpisode": concentrationBy(epKeys, symVals, 10),
+		"worstTrade":             worstOf(episodes, results),
+		"note":                   "concentration is share of the total ABSOLUTE movement of the book: a mean carried by one name is not an expectancy",
 	}
 	resp["note"] = "scored by EXPECTED PROFIT (expectancy / profit factor), NOT win rate — a high win rate with large losers still loses money"
 	resp["clusterNote"] = "raw N is not a sample size: every setup flagged on one day rides the same market move, so cluster reports the " +
@@ -361,6 +431,30 @@ func notYetSignificantConfluence(independent, distinctDays int) string {
 	return "confluence track accruing — " +
 		strconv.Itoa(independent) + "/" + strconv.Itoa(confluenceMinIndependent) + " independent, " +
 		strconv.Itoa(distinctDays) + "/" + strconv.Itoa(confluenceMinDays) + " days; not yet significant"
+}
+
+// splitByDirection separates a book so long and short are graded apart. They
+// have different capital mechanics — a short posts collateral and pays borrow —
+// so one combined number describes neither.
+func splitByDirection(eps []confluenceEpisode) (long, short []confluenceEpisode) {
+	for _, e := range eps {
+		switch {
+		case e.Direction > 0:
+			long = append(long, e)
+		case e.Direction < 0:
+			short = append(short, e)
+		}
+	}
+	return long, short
+}
+
+// retsOf projects trades to their returns.
+func retsOf(ts []confluenceTrade) []float64 {
+	out := make([]float64, len(ts))
+	for i, t := range ts {
+		out[i] = t.ret
+	}
+	return out
 }
 
 // boolParam reads a truthy query flag ("1"/"true"/"yes").

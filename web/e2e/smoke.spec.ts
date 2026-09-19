@@ -1,4 +1,5 @@
-import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import { loginAsSmokeUser } from "./smokeuser";
 
 // ─────────────────────────────────────────────────────────────────────────
 // SignalDeck smoke suite.
@@ -11,24 +12,6 @@ import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 //     router.replace("/login").
 // ─────────────────────────────────────────────────────────────────────────
 
-const SMOKE_USER = "e2e-smoke";
-const SMOKE_PASS = "E2eSmoke!2026";
-
-/** Log the shared context in as the throwaway user (register 409/4xx → login).
- *  Goes through the Next proxy origin so the session cookie lands on :8329. */
-async function loginAsSmokeUser(context: BrowserContext): Promise<void> {
-  const headers = { "X-Signaldeck": "1" };
-  const reg = await context.request.post("/api/auth/register", {
-    headers,
-    data: { username: SMOKE_USER, password: SMOKE_PASS },
-  });
-  if (reg.ok()) return;
-  const login = await context.request.post("/api/auth/login", {
-    headers,
-    data: { username: SMOKE_USER, password: SMOKE_PASS },
-  });
-  expect(login.ok(), `login as ${SMOKE_USER} failed: ${login.status()}`).toBe(true);
-}
 
 async function noHorizontalScroll(page: Page): Promise<void> {
   const { scrollWidth, innerWidth } = await page.evaluate(() => ({
@@ -109,7 +92,10 @@ test.describe("login page", () => {
 // the session is unknown a "checking session…" placeholder renders — the app
 // chrome (and its nav) never paints for an anonymous visitor.
 const HUB_ROUTES: { path: string; gated: boolean }[] = [
-  { path: "/", gated: true },
+  // "/" is the PUBLIC landing page now, not the deck -- it must NOT gate.
+  // The authenticated dashboard moved to /dashboard.
+  { path: "/", gated: false },
+  { path: "/dashboard", gated: true },
   { path: "/market/overview", gated: true },
   { path: "/market/signals", gated: true },
   { path: "/intel/filings", gated: true },
@@ -129,11 +115,20 @@ test.describe("navigation (unauthenticated)", () => {
         // Gated route → the anonymous visitor is redirected to /login.
         await page.waitForURL("**/login", { timeout: 15000 });
       }
-      await expect(page).toHaveURL(/\/login$/);
-      await expect(page.getByRole("heading", { name: "SIGN IN" })).toBeVisible();
+      // "/" is the PUBLIC landing page: it stays put and never redirects.
+      await expect(page).toHaveURL(gated || path === "/login" ? /\/login$/ : /\/$/);
+      if (gated || path === "/login") {
+        await expect(page.getByRole("heading", { name: "SIGN IN" })).toBeVisible();
+      }
       // The public login page exposes NO hub navigation — the whole point of
       // the private model is that anonymous users never see (or click) nav.
-      await expect(page.locator("header nav")).toHaveCount(0);
+      // (2026-09-08) Public pages carry a small public-record nav (Grades, Risk
+      // estimates, Receipts, Glossary, Sign in). What must never appear is the
+      // HUB nav or any link into the private workspace.
+      await expect(page.locator('header nav[aria-label="Primary"]')).toHaveCount(0);
+      await expect(
+        page.locator('header a[href^="/dashboard"], header a[href^="/market"], header a[href^="/lab"], header a[href^="/intel"], header a[href^="/watchlist"]'),
+      ).toHaveCount(0);
     });
   }
 });
@@ -148,7 +143,7 @@ test.describe("offline banner", () => {
     // other click-driven specs already use — without it the tour dialog
     // intercepts the pointer event and the click never lands.
     await context.addInitScript(() => localStorage.setItem("sd-onboarded", "1"));
-    await page.goto("/");
+    await page.goto("/dashboard");
     // Authed: we must stay on the dashboard, not bounce to /login.
     await expect(page.locator("header nav").first()).toBeVisible();
     await expect(page).not.toHaveURL(/\/login/);
@@ -244,7 +239,7 @@ test.describe("compare page symbol changes", () => {
   });
 });
 
-// ── (6) mobile 375px: no horizontal scroll on /login and / ──
+// ── (6) mobile 375px: no horizontal scroll on the public pages or the deck ──
 
 test.describe("mobile 375px viewport", () => {
   test.use({ viewport: { width: 375, height: 812 } });
@@ -255,9 +250,34 @@ test.describe("mobile 375px viewport", () => {
     await noHorizontalScroll(page);
   });
 
-  test("/ (authed dashboard) has no horizontal scroll", async ({ page, context }) => {
+  // The PUBLIC pages, anonymously, at phone width. These are the ones a
+  // stranger actually lands on, and they were never covered: the only mobile
+  // assertions were /login and the authed dashboard.
+  //
+  // A wide table is fine here as long as it scrolls inside its own
+  // .table-wrap; what must never happen is the PAGE scrolling sideways.
+  for (const path of ["/", "/accuracy", "/proof", "/glossary", "/volatility"]) {
+    test(`${path} has no horizontal scroll for an anonymous visitor`, async ({ page }) => {
+      await page.goto(path);
+      await expect(page).not.toHaveURL(/\/login/);
+      await expect(page.locator("header").first()).toBeVisible();
+      // A CRASHED PAGE PASSES EVERY OTHER ASSERTION IN THIS TEST. Next's error
+      // boundary (src/app/error.tsx) renders inside the same layout: same
+      // header, same width, no redirect to /login. On 2026-09-15 /proof was
+      // serving exactly that — the ledger, the registrations and the track
+      // record all replaced by "This page could not be loaded." — and this
+      // loop was green. What the page RENDERS is covered by
+      // e2e/release-smoke.spec.ts; this is the floor under it.
+      await expect(
+        page.getByRole("heading", { name: "This page could not be loaded." }),
+      ).toHaveCount(0);
+      await noHorizontalScroll(page);
+    });
+  }
+
+  test("/dashboard (authed) has no horizontal scroll", async ({ page, context }) => {
     await loginAsSmokeUser(context);
-    await page.goto("/");
+    await page.goto("/dashboard");
     // At 375px the desktop nav is CSS-hidden (lg:flex); the mobile chrome is
     // the header bar with a hamburger toggle controlling #mobile-nav.
     await expect(page.locator("header").first()).toBeVisible();

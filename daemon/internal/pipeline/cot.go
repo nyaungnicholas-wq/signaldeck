@@ -71,7 +71,8 @@ func (w *COTPoller) Interval() time.Duration { return 24 * time.Hour }
 // cotStaleAfter is how long without a run forces a catch-up poll regardless of
 // weekday. A US federal holiday pushes the COT release from Friday to Monday,
 // and a daemon that was down over a Friday would otherwise wait a full week.
-const cotStaleAfter = 9 * 24 * time.Hour
+// (The 9-day catch-up constant that used to live here is superseded by
+// workers.WeeklyAtETCatchUp, which fires on the first tick after a missed slot.)
 
 // NextFire implements workers.ScheduledWorker: the CFTC publishes the
 // Commitments of Traders report ONCE A WEEK, Friday at 15:30 ET, for Tuesday's
@@ -83,10 +84,9 @@ const cotStaleAfter = 9 * 24 * time.Hour
 // the price of ~17 hours of staleness on data that is already three days old
 // when published.
 func (w *COTPoller) NextFire(last, now time.Time) time.Time {
-	if !last.IsZero() && now.Sub(last) > cotStaleAfter {
-		return now // missed a release (holiday shift or downtime) — catch up
-	}
-	return workers.WeeklyAtET(now, time.Saturday, 9, 0)
+	// A missed Saturday slot (the host is off at 06:00 PT: measured 2026-09-06,
+	// no run until the 9-day rule) fires at the next tick, not 9 days later.
+	return workers.WeeklyAtETCatchUp(last, now, time.Saturday, 9, 0)
 }
 
 func (w *COTPoller) now() time.Time {

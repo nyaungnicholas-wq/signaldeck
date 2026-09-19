@@ -43,6 +43,26 @@ func liquidInputs() ExecInputs {
 	}
 }
 
+func TestExecutionRejectsNonFiniteAmounts(t *testing.T) {
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if f, _, _, ok := EnterLong(v, liquidInputs()); ok {
+			t.Fatalf("accepted non-finite budget: %+v", f)
+		}
+		if f, ok := ExitLong(v, liquidInputs()); ok {
+			t.Fatalf("accepted non-finite position: %+v", f)
+		}
+	}
+}
+
+func TestPaperConfigRejectsNonFiniteValues(t *testing.T) {
+	for _, v := range []string{"NaN", "+Inf", "-Inf"} {
+		t.Setenv("SIGNALDECK_PAPER_CASH", v)
+		if got := StartingCash(); got != defaultStartingCash {
+			t.Fatalf("%s produced starting cash %v", v, got)
+		}
+	}
+}
+
 // TestEnterLong_FillPriceIsExactlyTheStoredBarOpen is the audit-trail half. A
 // paper fill whose price is not reproducible from the bar it names is not a
 // track record, it is an assertion.

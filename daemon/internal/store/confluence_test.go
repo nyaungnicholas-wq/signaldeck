@@ -104,7 +104,7 @@ func TestConfluenceOutcomes_ForwardTrackAndResolve(t *testing.T) {
 		t.Fatal("maturity cutoff leaked an immature outcome")
 	}
 
-	if err := st.ResolveConfluenceOutcome(ctx, sym.ID, 1000, "1d", 0.021, true); err != nil {
+	if err := st.ResolveConfluenceOutcome(ctx, sym.ID, 1000, "1d", 0.021, true, 1000, ConfluenceGradePrices{EntryClose: 10, ExitLow: 9.9, ExitHigh: 10.3}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if p, _ := st.UnresolvedConfluenceOutcomes(ctx, 2000, 10); len(p) != 0 {

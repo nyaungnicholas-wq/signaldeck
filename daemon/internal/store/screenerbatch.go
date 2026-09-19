@@ -59,12 +59,9 @@ func (s *Store) LastBarsBatch(ctx context.Context, symbolIDs []int64, tf md.Time
 // requested symbol, keyed symbol_id → horizon → Score. Components JSON is
 // decoded exactly as LatestScore does.
 //
-// MAX(ts) GROUP BY + self-join, NOT a ROW_NUMBER window: with the hot set
-// carrying thousands of intraday score rows per symbol, the window has to sort
-// them all (measured 2.1s warm over 321 symbols), while GROUP BY MAX(ts) seeks
-// the max per group straight off the PK (symbol_id,horizon,ts) and the join
-// fetches just those rows (0.9s — 2.5× faster). ts is unique within a group
-// (it's the PK's last column), so each group yields exactly one row.
+// Seek the newest primary-key entry for each symbol/horizon. GROUP BY MAX(ts)
+// still scanned every historical score; three bounded index seeks per symbol
+// keep the screener cost independent of the length of its score history.
 func (s *Store) LatestScoresBatch(ctx context.Context, symbolIDs []int64) (map[int64]map[md.Horizon]md.Score, error) {
 	out := make(map[int64]map[md.Horizon]md.Score, len(symbolIDs))
 	if len(symbolIDs) == 0 {
@@ -77,12 +74,13 @@ func (s *Store) LatestScoresBatch(ctx context.Context, symbolIDs []int64) (map[i
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT s.symbol_id, s.horizon, s.ts, s.score, s.components
-		FROM scores s
-		JOIN (
-			SELECT symbol_id, horizon, MAX(ts) AS mx
-			FROM scores WHERE symbol_id IN (`+ph+`)
-			GROUP BY symbol_id, horizon
-		) m ON s.symbol_id = m.symbol_id AND s.horizon = m.horizon AND s.ts = m.mx`, args...)
+		FROM symbols wanted
+		CROSS JOIN (SELECT '1h' horizon UNION ALL SELECT '1d' UNION ALL SELECT '1w') h
+		JOIN scores s ON s.symbol_id = wanted.id AND s.horizon = h.horizon
+		  AND s.ts = (SELECT ts FROM scores latest
+		              WHERE latest.symbol_id = wanted.id AND latest.horizon = h.horizon
+		              ORDER BY ts DESC LIMIT 1)
+		WHERE wanted.id IN (`+ph+`)`, args...)
 	if err != nil {
 		return nil, err
 	}

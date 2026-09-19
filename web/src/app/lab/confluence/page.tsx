@@ -173,6 +173,62 @@ function MoneyScoreboard() {
       ) : (
         <>
           <MoneyTiles m={data.money} />
+          {/* THE TILES ABOVE ARE THE RAW BASIS. An unconstrained normalised short
+              is unbounded below, so the number they show describes the SIGNAL,
+              not an account. The constrained block is the account-level answer
+              and sits beside it — never instead of it, and never hidden. */}
+          <div className="px-4 pb-3 text-[0.7rem]" style={{ color: "var(--warn)" }}>
+            Basis: RAW — direction-adjusted, cost-netted, UNCONSTRAINED per-episode return.
+            Not account performance.
+          </div>
+          {data.constrained ? (
+            <div className="px-4 pb-4">
+              <div className="text-[0.65rem] uppercase tracking-wider" style={{ color: "var(--faint)" }}>
+                constrained — account contribution
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                <span>
+                  PER TRADE{" "}
+                  <span className="tnum" style={{ color: "var(--text)" }}>
+                    {pct(data.constrained.all.meanAccountContribution)}
+                  </span>{" "}
+                  ({data.constrained.all.trades} tradable)
+                </span>
+                <span>
+                  CAPITAL AT RISK{" "}
+                  <span className="tnum" style={{ color: "var(--text)" }}>
+                    {pct(data.constrained.all.meanCapitalAtRisk)}
+                  </span>
+                </span>
+                <span>
+                  REFUSED{" "}
+                  <span className="tnum" style={{ color: "var(--text)" }}>
+                    {data.constrained.all.untradable}
+                  </span>{" "}
+                  ({pct(data.constrained.all.untradablePct)} of episodes)
+                </span>
+                <span>
+                  SHORTABILITY UNVERIFIED{" "}
+                  <span className="tnum" style={{ color: "var(--text)" }}>
+                    {pct(data.constrained.all.shortUnverifiedPct)}
+                  </span>{" "}
+                  of the short book
+                </span>
+              </div>
+              <p className="mt-2 text-[0.7rem]" style={{ color: "var(--dim)" }}>
+                {data.constrained.note}
+              </p>
+              <p className="mt-1 text-[0.7rem]" style={{ color: "var(--warn)" }}>
+                {data.constrained.shortability}
+              </p>
+            </div>
+          ) : null}
+          {data.population ? (
+            <p className="px-4 pb-3 text-[0.7rem]" style={{ color: "var(--dim)" }}>
+              {data.population.episodes} episode(s) from {data.population.gradedRows} graded row(s).{" "}
+              {data.population.note}
+            </p>
+          ) : null}
           {data.note ? (
             <p className="px-4 pb-3 text-[0.7rem]" style={{ color: "var(--dim)" }}>
               {data.note}

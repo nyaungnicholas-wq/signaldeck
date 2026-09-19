@@ -91,6 +91,32 @@ test("a refused registry shows the refusal and no accuracy figures", async ({ pa
   // The heart of F-1: refusing must REMOVE the numbers, not decorate them. No
   // percentage may appear anywhere on a refused page.
   await expect(page.locator("body")).not.toContainText(/\d+\.\d%/);
+
+  // ...and it must LOOK refused. This assertion exists because the two above
+  // passed for weeks while the banner rendered
+  // `class="rounded border px-4 py-3 text-sm undefined "`: the AccuracyStatus
+  // union omitted "REFUSED", so colorMap[status] and gloss[status] were both
+  // undefined. data-status was correct, the styling was absent, and a test
+  // that only reads the attribute cannot tell those apart. The one state this
+  // page exists to shout was the one state it whispered.
+  // WHICH refusal state this exercises depends on the daemon it runs against.
+  // An UNREACHABLE daemon yields REFUSED_STALE; a daemon serving a registry
+  // that is marked refused yields REFUSED. Both must be styled, and this
+  // asserts whichever one appears -- so a green run here does NOT prove the
+  // REFUSED path specifically was covered. That path is held by two other
+  // things: colorMap is Record<AccuracyStatus, string>, so omitting REFUSED
+  // now fails the BUILD, and the component falls back to the red tone for any
+  // status it does not recognise.
+  const cls = (await banner.getAttribute("class")) ?? "";
+  expect(cls, "the refusal banner rendered with no tone class").not.toContain("undefined");
+  // RefusalNotice tones through CSS variables, not Tailwind colour classes; the
+  // tone it chose is stamped as data-tone so a test can still tell red from nothing.
+  await expect(banner).toHaveAttribute("data-tone", "bad");
+
+  // The gloss line must say something. An empty description under a red box
+  // tells a reader nothing about why figures are being withheld.
+  const gloss = banner.locator("div").nth(1);
+  await expect(gloss).not.toBeEmpty();
 });
 
 test("a condemned model is never downgraded to INSUFFICIENT", async ({ page }) => {

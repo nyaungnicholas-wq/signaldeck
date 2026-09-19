@@ -66,9 +66,16 @@ func (s *Sync) Interval() time.Duration { return time.Minute }
 // the normal state on a machine where only SignalDeck is up. Filing it as an
 // error made the fleet permanently red and taught the reader to ignore red.
 func (s *Sync) Run(ctx context.Context) (string, error) {
+	// DEGRADED WHILE DOWN, on every tick, not just the first three. This
+	// returned nil, which workers.go files as status=ok -- so a HUD that had
+	// been dead for a month read GREEN: lastSuccess (WHERE status='ok') stayed
+	// fresh so staleness never fired, and FailingWorkers counts only 'error'.
+	// The truth lived solely in the detail text, which no surface aggregates.
+	// workers.go:512 documents this exact shape as the congress-poller lesson
+	// already paid for. Rate-limit the LOG LINE, never the status.
 	if now := time.Now(); s.misses > 0 && now.Before(s.retryAt) {
-		return fmt.Sprintf("trader-hud down since %d checks ago; next try %s",
-			s.misses, s.retryAt.Format(time.TimeOnly)), nil
+		return "", fmt.Errorf("trader-hud down since %d checks ago; next try %s: %w",
+			s.misses, s.retryAt.Format(time.TimeOnly), workers.ErrDegraded)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url, nil)
 	if err != nil {
@@ -84,8 +91,8 @@ func (s *Sync) Run(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("trader-hud not reachable (is it running on :8787?), "+
 				"backing off to %s: %w: %w", downBackoff(s.misses), err, workers.ErrDegraded)
 		}
-		return fmt.Sprintf("trader-hud still down (%d consecutive); next try in %s",
-			s.misses, downBackoff(s.misses)), nil
+		return "", fmt.Errorf("trader-hud still down (%d consecutive); next try in %s: %w",
+			s.misses, downBackoff(s.misses), workers.ErrDegraded)
 	}
 	defer res.Body.Close() //nolint:errcheck
 	if res.StatusCode != http.StatusOK {

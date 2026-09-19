@@ -45,7 +45,7 @@ func TestSkipUnratedOutside(t *testing.T) {
 	}
 
 	// Queue: only the in-scope pending row remains.
-	pending, err := st.UnratedNews(ctx, 10)
+	pending, err := st.UnratedNews(ctx, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestSkipUnratedOutside_EmptyKeep(t *testing.T) {
 	if n, err := st.SkipUnratedOutside(ctx, nil); err != nil || n != 1 {
 		t.Fatalf("empty keep: n=%d err=%v, want 1/nil", n, err)
 	}
-	pending, err := st.UnratedNews(ctx, 10)
+	pending, err := st.UnratedNews(ctx, 10, 0)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("queue after empty-keep skip = %v (err %v), want empty", pending, err)
 	}

@@ -126,6 +126,9 @@ func (d *Downsampler) Run(ctx context.Context) (string, error) {
 	// (Daily itself is never pruned; store.PruneBars refuses tf=1d.)
 	cutoff1h := (now.Add(-keep1h).Unix() / 86400) * 86400
 	for _, s := range syms {
+		if s.Market != md.Crypto { // stocks: official daily bars are ET-midnight stamped; a UTC-bucket rollup would add a 2nd row per session
+			continue
+		}
 		n, minTs, _, err := d.St.BarCount(ctx, s.ID, md.TF1h)
 		if err != nil {
 			return "", err
@@ -160,7 +163,12 @@ func (d *Downsampler) Run(ctx context.Context) (string, error) {
 	msg := fmt.Sprintf("rolled up %d symbols; archived+pruned %d 1m, %d 1h bars, %d snaps, %d anomalies",
 		len(syms), prunedMin, pruned1h, prunedSnaps, prunedAnoms)
 	if minSkipped || hourSkipped || snapSkipped || anomSkipped {
-		msg += " (SOME PRUNES SKIPPED — archive failed, data retained; see dq)"
+		// Says "see dq" rather than naming a cause. It used to assert "archive
+		// failed", which is only one of the two ways a prune is skipped — the
+		// other is an archive that SUCCEEDED and a prune that then failed. A
+		// summary that names the wrong cause sends the operator looking for the
+		// wrong evidence; the dq event written at the skip knows which it was.
+		msg += " (SOME PRUNES SKIPPED — data retained; the dq event names the cause)"
 	}
 	return msg, nil
 }
@@ -449,6 +457,11 @@ func horizonSeconds(h md.Horizon) int64 {
 	}
 }
 
+// resolverDSTSlackSecs mirrors pipeline.dstStampSlackSecs for daily-bar
+// horizons: US daily bars are stamped at ET midnight, which moves by an hour
+// across a DST change, so a fixed horizon from the base stamp can overshoot.
+const resolverDSTSlackSecs = int64(6 * 3600)
+
 func horizonTF(h md.Horizon) md.Timeframe {
 	if h == md.H1h {
 		return md.TF1m
@@ -461,10 +474,21 @@ func horizonTF(h md.Horizon) md.Timeframe {
 func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
 	resolved, voided, waiting := 0, 0, 0
+	// Delisted names never print a forward bar: void their rows at once instead of
+	// parking them 30 days at the head of the oldest-first LIMIT-1500 queue, where
+	// they starved every live row behind them (measured 2026-09-09, see DelistedSymbolIDs).
+	delisted, err := o.St.DelistedSymbolIDs(ctx)
+	if err != nil {
+		return "", err
+	}
 	for _, h := range md.Horizons {
 		tf := horizonTF(h)
 		// Only fetch rows old enough that the window COULD have closed.
-		pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), 1500)
+		// 4000 per horizon per pass (was 1500): once the head-of-line rows were voided
+		// (2026-09-07 stale base, 2026-09-09 delisted) the window resolved ~1,300 rows
+		// per horizon per 10-minute pass against a 1.5M-row mature backlog, an 18 s
+		// run; 4000 clears it in days instead of weeks at ~50 s a pass.
+		pending, err := o.St.UnresolvedOutcomesByHorizon(ctx, h, now-horizonSeconds(h), 4000)
 		if err != nil {
 			return "", err
 		}
@@ -486,7 +510,14 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 				continue
 			}
 			// Anchor the window to the base bar, not to a UTC-midnight guess.
+			// Daily bars carry the same 6h DST stamp slack the prediction
+			// resolver uses (pipeline.dstStampSlackSecs): an EST-stamped base
+			// (05:00Z) plus a fixed +7d overshoots the EDT-stamped bar (04:00Z)
+			// by 1h and grades an 8-session move as one week.
 			target := base.Ts + horizonSeconds(h)
+			if tf == md.TF1d {
+				target -= resolverDSTSlackSecs
+			}
 			if now < target {
 				waiting++
 				continue
@@ -494,6 +525,25 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 			fwd, okFwd, err := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, target)
 			if err != nil {
 				return "", err
+			}
+			if !okFwd && delisted[p.SymbolID] {
+				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
+					return "", err
+				}
+				voided++
+				continue
+			}
+			// STALE BASE (audit 2026-09-07): the score was struck against a bar
+			// whose window closed more than 3 horizons before the score itself
+			// and nothing ever printed after it. That row can never resolve;
+			// parking it 30 days let EA/MVO sediment fill the whole 1,500-row
+			// fetch and starve ~1M live rows behind it (waiting pinned at 3644).
+			if !okFwd && p.Ts-target > 3*horizonSeconds(h) {
+				if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
+					return "", err
+				}
+				voided++
+				continue
 			}
 			switch {
 			case okFwd && base.Close > 0:
@@ -504,6 +554,20 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 						return "", err
 					}
 					voided++
+					continue
+				}
+				// SETTLED ONLY. The same guard the prediction resolver carries
+				// (pipeline/predict.go) and with the same measurement behind it:
+				// of 4,000 resolved 1d rows, 37.8% were frozen before their
+				// forward bar's 16:00 ET close, mislabelling about 3.7% of the
+				// record against a price that had not happened yet. This resolver
+				// runs through the session too, so a daily bar read mid-morning
+				// carries live prices. "A later bar exists" needs no knowledge of
+				// exchange hours, half-days, DST or crypto's 24h day.
+				if _, settled, serr := o.St.BarAtOrAfter(ctx, p.SymbolID, tf, fwd.Ts+1); serr != nil {
+					return "", serr
+				} else if !settled {
+					waiting++
 					continue
 				}
 				ret := fwd.Close/base.Close - 1
@@ -521,13 +585,38 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	return fmt.Sprintf("resolved %d, voided %d, waiting %d", resolved, voided, waiting), nil
+	// The prediction resolver only visits rows that HAVE a forward bar, so forecasts on
+	// delisted names were never touched: 16,648 of them on 1,894 names kept those names
+	// out of DQ silencing (measured 2026-09-09).
+	dead, err := o.St.VoidDeadPredictions(ctx, now-21*86400, now)
+	if err != nil {
+		return "", err
+	}
+	if dead > 0 {
+		if err := o.St.InsertDQ(ctx, md.DQEvent{Ts: now, Kind: "dead_predictions_voided", Detail: fmt.Sprintf("voided %d forecast outcome(s) on delisted symbols with no daily bar since the forecast", dead)}); err != nil {
+			return "", err
+		}
+	}
+	return fmt.Sprintf("resolved %d, voided %d, waiting %d, dead predictions voided %d", resolved, voided, waiting, dead), nil
 }
 
 // ── DQAuditor ───────────────────────────────────────────────────────────
 
 // DQAuditor detects stale feeds and bar gaps per active symbol and records
 // them as dq_events (rate-limited via meta keys, one per symbol per hour).
+// dailyBarStale reports whether a daily-only symbol has gone stale: at least two
+// NYSE trading days have fully elapsed after the session its newest daily bar
+// belongs to and still no bar. A bar stamped Friday is therefore NOT stale on the
+// Tuesday after a Monday holiday (one elapsed session); the old "older than 4
+// calendar days" rule false-flagged 286 symbols for 9 hours across the 2026-09-07
+// Labor Day weekend (2,583 events). Today never counts: the 6h poller may not have
+// fetched it yet.
+func dailyBarStale(latestBarTs int64, now time.Time) bool {
+	// One rule, one place: the prediction runner now refuses to mint on a stale
+	// series under the same definition (marketcal.DailyBarStale, 2026-09-09).
+	return marketcal.DailyBarStale(latestBarTs, now)
+}
+
 type DQAuditor struct {
 	St *store.Store
 }
@@ -567,6 +656,10 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	sweepOpen, _ := a.St.GetMeta(ctx, "sweep_open")
+	// During the sweep_open hour every delisted name with an unresolved outcome
+	// is active and stale, so the daily-only check is suspended for stocks that
+	// are not in the streamed hot set (crypto and the streamed set are still audited).
 	now := time.Now()
 	flagged, skipped := 0, 0
 	for _, s := range syms {
@@ -581,6 +674,10 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 		var stale bool
 		var detail string
 		age := now.Unix() - latest
+		if sweepOpen != "" && s.Market == md.Stocks && !s.Stream {
+			skipped++
+			continue
+		}
 		switch s.Market {
 		case md.Crypto:
 			stale = latest > 0 && age > 45*60 // Kraken minute refresh cadence + slack
@@ -604,10 +701,12 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 				if err != nil {
 					return "", err
 				}
-				// >4 calendar days with no daily bar spans any weekend or
-				// single holiday; longer means the 6h poller is missing it.
+				// Two fully elapsed NYSE sessions with no daily bar means the
+				// 6h poller is missing it; a weekend or holiday never counts
+				// (the old ">4 calendar days" rule false-flagged every
+				// Monday holiday, see dailyBarStale).
 				ageD := now.Unix() - latestD
-				stale = latestD > 0 && ageD > 4*86400
+				stale = dailyBarStale(latestD, now) // calendar-aware, see dailyBarStale
 				detail = fmt.Sprintf("last daily bar %dd old (daily-only universe)", ageD/86400)
 			}
 		}
@@ -630,7 +729,7 @@ func (a *DQAuditor) Run(ctx context.Context) (string, error) {
 		}
 		flagged++
 	}
-	return fmt.Sprintf("checked %d live symbols, flagged %d (%d delisted skipped)",
+	return fmt.Sprintf("checked %d live symbols, flagged %d (%d skipped: delisted, or daily-only during a sweep)",
 		len(syms)-skipped, flagged, skipped), nil
 }
 
@@ -783,10 +882,43 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 	// UNLESS the file has blown to 2× the threshold, where reclaiming space
 	// outweighs the stall. This is the "schedule VACUUM off-hours" fix.
 	offHours := inETWindow(time.Now(), 2, 6)
-	emergency := dbBytes >= 2*threshold
+
+	// RECLAIMABLE SPACE, NOT FILE SIZE, IS WHAT JUSTIFIES THE STALL.
+	//
+	// `emergency` used to be `dbBytes >= 2*threshold`. A VACUUM can only return
+	// FREE pages, so that keyed the off-hours bypass on a number VACUUM cannot
+	// change: once the database had simply GROWN past 2x the threshold it was
+	// permanently in "emergency", and the 2-6am window stopped governing
+	// anything. Measured 2026-09-10 on the live 5.1 GB file: the governor began
+	// a VACUUM at 01:25 ET — outside the window — and held the single writer for
+	// 1,930s (32 min, against 105-390s for every other pass) to reclaim 6.8 MB,
+	// 0.13% of the file. With a 24h min interval it would have repeated daily,
+	// forever, and grown worse as the file grew.
+	//
+	// This guard can only ever SKIP a rewrite that had almost nothing to give
+	// back, so it cannot let a genuinely bloated file go unvacuumed — the case
+	// the threshold exists for still fires, and now fires on evidence.
+	var reclaimable int64
+	var rerr error
+	if dbBytes >= threshold {
+		reclaimable, rerr = g.St.ReclaimableBytes(ctx)
+	}
+	worthIt := rerr == nil && reclaimable*20 >= dbBytes // at least 5% free pages
+	emergency := worthIt && dbBytes >= 2*threshold
+
+	if dbBytes >= threshold && rerr == nil && !worthIt {
+		_ = g.St.InsertDQ(ctx, md.DQEvent{
+			Ts:   time.Now().Unix(),
+			Kind: "vacuum_skip",
+			Detail: fmt.Sprintf(
+				"vacuum skipped: only %.1fMB of %.1fMB is reclaimable (%.2f%%) — a full rewrite would stall the writer to return almost nothing",
+				float64(reclaimable)/(1024*1024), float64(dbBytes)/(1024*1024),
+				100*float64(reclaimable)/float64(max(dbBytes, 1))),
+		})
+	}
 
 	vacuumed := false
-	if dbBytes >= threshold && (offHours || emergency) {
+	if dbBytes >= threshold && worthIt && (offHours || emergency) {
 		last, _ := g.St.GetMeta(ctx, "storage_last_vacuum")
 		var lastTs int64
 		if last != "" {
@@ -1436,6 +1568,20 @@ func archivePruneDerived[T any](
 		}
 		n, err := prune(ctx, upper)
 		if err != nil {
+			// Mirrors archivePruneBars exactly, which is what this function's
+			// own doc claims it does. That sibling carries the record of this
+			// bug being FIXED once already; the generic rewrite dropped the
+			// dqSkip and discarded err again, for seven more tables — scores,
+			// score_outcomes, features, filings, insights,
+			// prediction_postmortems, research_weeks.
+			//
+			// Silently returning skipped=true makes the caller report "SOME
+			// PRUNES SKIPPED — archive failed, data retained; see dq" for a run
+			// where the ARCHIVE SUCCEEDED and only the prune failed: wrong
+			// cause, and it points the operator at a dq record that was never
+			// written. Retention then stops reclaiming while the database grows,
+			// and the same rows are re-archived on every hourly pass.
+			d.dqSkip(ctx, now, table, "prune failed after a successful archive: "+err.Error())
 			return pruned, true
 		}
 		pruned += n

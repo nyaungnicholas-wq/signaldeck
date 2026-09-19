@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/envcfg"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 )
 
 // projectRoot returns the directory CONTAINING signaldeck/ — the anchor for the
@@ -111,10 +112,41 @@ type Config struct {
 	// Empty = the webhook is disabled (fails closed).
 	TVWebhookSecret string
 
+	// LocalProxyKey lets the loopback-bound private web launcher
+	// (ops/start-local-workspace.ps1) assert that a request is local even though
+	// it arrives through the Next.js proxy. The proxy proves it by sending this
+	// key in X-Signaldeck-Local; the daemon honours it ONLY together with a
+	// loopback RemoteAddr. Empty = the assertion is disabled (fails closed).
+	// Replaces the old scheme of deleting X-Forwarded-For, which any process
+	// could copy onto a wildcard bind and turn into a redistribution hole.
+	LocalProxyKey string
+
 	// Multi-user + exposure controls.
 	OpenSignup     bool // SIGNALDECK_OPEN_SIGNUP (default true): allow POST /api/auth/register
 	AllowRawExport bool // SIGNALDECK_ALLOW_RAW_EXPORT (default false): serve raw licensed bars
 	PublicReads    bool // SIGNALDECK_PUBLIC_READS (default true): read-only endpoints work without auth (localhost compatibility)
+
+	// PublicSurface (SIGNALDECK_PUBLIC_SURFACE, default false) turns the
+	// anonymous-read rule from a DENYLIST into an ALLOWLIST.
+	//
+	// PublicReads answers "is this route one of the ones we chose to keep
+	// private?" — so every route added later is public by forgetting. That is
+	// the wrong default for a deployment strangers can reach: this daemon
+	// registers 164 routes (161 mux.HandleFunc patterns + 3 mux.Handle,
+	// counted 2026-09-13), and among them are the personal PUSH-20 HUD,
+	// paper-trading positions and the portfolio. Publishing those would be a
+	// different product than the one being published.
+	//
+	// With PublicSurface on, api.publicRoutes is the ENTIRE anonymous surface
+	// and everything else is closed whatever PublicReads says. A route added
+	// later is private by forgetting, which is the direction that fails safe.
+	//
+	// It is deliberately NOT derived from the bind address. PublicReads and
+	// OpenSignup follow reachability because their safe answer is "closed",
+	// and reachability is a good proxy for danger. Deciding to publish is an
+	// intent, not a network fact, and inferring an intent is how fly.toml
+	// ended up publishing every read endpoint it never named.
+	PublicSurface bool
 	TrustProxy     bool // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
 	RateRPS        int  // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
 	RateBurst      int  // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
@@ -195,12 +227,19 @@ func Load() Config {
 	httpAddr := envOr("SIGNALDECK_HTTP", "127.0.0.1:8322")
 	private := reachablePrivately(httpAddr, allowedHostsRaw)
 	cfg := Config{
-		LLMKey:          llmFirst,
-		LLMKeys:         llmKeys,
-		LLMBaseURL:      pick("SIGNALDECK_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-		LLMModel:        pick("SIGNALDECK_LLM_MODEL", "qwen/qwen3.5-122b-a10b"),                        // MoE: 122B knowledge / ~10B active → strong + ~4s on NVIDIA free tier
-		LLMModelDeep:    pick("SIGNALDECK_LLM_MODEL_DEEP", "nvidia/llama-3.3-nemotron-super-49b-v1.5"), // reasoning-tuned; on-demand only (~30s)
-		LLMModelFast:    pick("SIGNALDECK_LLM_MODEL_FAST", "meta/llama-3.1-8b-instruct"),               // ultra-fast for high-frequency low-stakes calls
+		LLMKey:     llmFirst,
+		LLMKeys:    llmKeys,
+		LLMBaseURL: pick("SIGNALDECK_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+		// ONE DEFINITION OF EACH MODEL ID, in internal/llm. These literals used
+		// to be spelled out here as well, and the duplicate is what made the
+		// 2026-08-27 repair fail its first verification: llm.go was corrected,
+		// this file was not, pick() returned the stale literal because no env
+		// var was set, and sentiment-tagger went on answering HTTP 410 across a
+		// daemon restart. A second copy of a value that a vendor can retire is
+		// not redundancy, it is a second thing to forget.
+		LLMModel:        pick("SIGNALDECK_LLM_MODEL", llm.DefaultModel),
+		LLMModelDeep:    pick("SIGNALDECK_LLM_MODEL_DEEP", llm.DefaultDeep),
+		LLMModelFast:    pick("SIGNALDECK_LLM_MODEL_FAST", llm.DefaultFast),
 		LLMDailyCap:     atoiOr("SIGNALDECK_LLM_DAILY_CAP", pick("SIGNALDECK_LLM_DAILY_CAP", ""), 2000),
 		DBPath:          envOr("SIGNALDECK_DB", filepath.Join(projectRoot(), "signaldeck", "data", "signaldeck.db")),
 		HTTPAddr:        httpAddr,
@@ -212,6 +251,7 @@ func Load() Config {
 		AllowedHosts:    splitList(allowedHostsRaw),
 		APIToken:        os.Getenv("SIGNALDECK_API_TOKEN"),
 		TVWebhookSecret: pick("SIGNALDECK_TV_WEBHOOK_SECRET", ""),
+		LocalProxyKey:   pick("SIGNALDECK_LOCAL_PROXY_KEY", ""),
 		// SAFE BY DEFAULT (2026-07-25): open registration is a localhost
 		// convenience. On a reachable deployment it lets any stranger create an
 		// account and spend the LLM budget, so it follows the bind address for
@@ -223,6 +263,9 @@ func Load() Config {
 		// anywhere reachable — so exposing it can no longer silently publish
 		// every read endpoint. An explicit env var still wins either way.
 		PublicReads: boolEnv("SIGNALDECK_PUBLIC_READS", private),
+		// Never inherits `private`. See the field comment: publishing is an
+		// intent the operator states, never a fact inferred from a bind.
+		PublicSurface: boolEnv("SIGNALDECK_PUBLIC_SURFACE", false),
 		// Asserting you hold redistribution rights for the stored price data.
 		// The flag records the operator's assertion; it does not grant a right.
 		AllowRawExport: boolEnv("SIGNALDECK_ALLOW_RAW_EXPORT", false),
@@ -490,4 +533,31 @@ func reachablePrivately(addr, allowedHosts string) bool {
 // hold a stale copy taken before the tunnel agent appeared.
 func (c Config) ReachablePrivately() bool {
 	return reachablePrivately(c.HTTPAddr, strings.Join(c.AllowedHosts, ","))
+}
+
+// PublicOriginMissing reports a stated public deployment whose browser-origin
+// allowlist names no HTTPS origin.
+//
+// WebOrigins defaults to the four localhost spellings, which is right for a dev
+// box and wrong for every published deployment: api/security.go rejects a
+// non-GET whose Origin is not on this list, and a browser on https://<host>
+// sends exactly that Origin. So the read-only pages worked and the waitlist
+// form and the operator login answered 403 — the two things a launch is for.
+// Neither the hosted recipe nor fly.toml set the variable, so this was the
+// DEFAULT rather than a mistake someone had to make, and the symptom points at
+// the form rather than at a config file nobody edited.
+//
+// This asks about intent, not reachability: it fires only once the operator has
+// said PublicSurface. It looks for a scheme rather than a hostname because the
+// hostname is a deploy-time input this repository deliberately does not carry.
+func (c Config) PublicOriginMissing() bool {
+	if !c.PublicSurface {
+		return false
+	}
+	for _, o := range c.WebOrigins {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(o)), "https://") {
+			return false
+		}
+	}
+	return true
 }

@@ -18,6 +18,11 @@ SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # which is why this script produced nothing after the 2026-07-31 move.
 # shellcheck source=lib-portable.sh
 . "$SD/ops/lib-portable.sh"
+# 2026-09-01: the scheduled task's process env carries no SIGNALDECK_OFFSITE_* and
+# nothing here sourced daemon/.env, so a destination set only in .env never reached
+# this script (21 days with no off-machine copy). Environment still wins; .env fills
+# the gaps; values are never logged. Selftest: ops/test-offsite-env.sh
+. "$SD/ops/lib-offsite-env.sh" && sd_offsite_env_from_dotenv "$SD/daemon/.env"
 
 # python3 on Windows/Git Bash is a Microsoft Store alias stub that resolves,
 # prints "Python was not found", and exits 0 — so `command -v` is not enough,
@@ -382,8 +387,112 @@ fi
 NOSLEEP=""
 command -v caffeinate >/dev/null 2>&1 && NOSLEEP="caffeinate -i"
 
-if [ -z "$OFFSITE" ]; then
-  log "offsite SKIPPED: no destination configured (set SIGNALDECK_OFFSITE_DIR to an external volume)"
+# s3_upload_verified SRC S3URI TMPGZ — compress, upload, and PROVE it arrived.
+# Returns 0 only when S3 itself reports the object at exactly the byte count we
+# uploaded. Sets S3_VERIFIED_BYTES on success and S3_FAIL_REASON on failure.
+#
+# A function, not an inline block, so ops/test-offsite-s3.sh can drive it with a
+# stubbed `aws` and assert BOTH directions. An upload path that has never been
+# watched failing is not a backup, it is a hope: this file already carries two
+# scars from trusting a success signal instead of the artifact — a cp that
+# reported success while writing a short file, and a same-disk copy that logged
+# "offsite OK" nightly for twelve days.
+s3_upload_verified() {
+  local src="$1" uri="$2" tmp="$3" gz_bytes remote bucket key
+  S3_VERIFIED_BYTES=0
+  S3_FAIL_REASON=""
+  # AWS_PAGER='' or the CLI can block an unattended run waiting on a pager.
+  export AWS_PAGER=''
+
+  if ! sd_nosleep gzip -c "$src" > "$tmp" 2>>"$LOG"; then
+    rm -f "$tmp"
+    S3_FAIL_REASON="could not compress the backup for upload"
+    return 1
+  fi
+  gz_bytes="$(file_size "$tmp")"
+  if [ "$gz_bytes" = "0" ]; then
+    rm -f "$tmp"
+    S3_FAIL_REASON="compressed to 0 bytes"
+    return 1
+  fi
+
+  if ! sd_nosleep aws s3 cp "$tmp" "$uri" --only-show-errors >>"$LOG" 2>&1; then
+    rm -f "$tmp"
+    S3_FAIL_REASON="aws s3 cp failed"
+    return 1
+  fi
+  rm -f "$tmp"
+
+  # THE VERIFICATION. `aws s3 cp` exiting 0 says the CLI finished, not that the
+  # object is intact and complete at the far end. --output text keeps this free
+  # of a jq dependency.
+  bucket="$(printf '%s' "$uri" | sed -e 's|^[sS]3://||' -e 's|/.*$||')"
+  key="$(printf '%s' "$uri" | sed -e 's|^[sS]3://[^/]*/||')"
+  remote="$(aws s3api head-object --bucket "$bucket" --key "$key" \
+              --query ContentLength --output text 2>>"$LOG")"
+  # A missing object, an error string, or None must never compare equal to a
+  # byte count. Anything non-numeric collapses to 0 and fails the test below.
+  case "$remote" in ''|*[!0-9]*) remote=0 ;; esac
+  if [ "$remote" != "$gz_bytes" ]; then
+    S3_FAIL_REASON="uploaded $gz_bytes bytes but S3 reports $remote"
+    return 1
+  fi
+  S3_VERIFIED_BYTES="$remote"
+  return 0
+}
+
+# ── S3: the only destination on this machine that is genuinely off-machine ──
+#
+# There is ONE volume here (C:), so every local directory fails same_volume and
+# is correctly refused above. OneDrive is not an exception: measured, it
+# resolves to /c exactly like the database.
+#
+# Uploads the GZIPPED copy, not $TARGET. The raw VACUUM INTO output is 5.3 GB
+# and compresses to ~925 MB, and this runs nightly.
+#
+# VERIFICATION IS THE POINT, and `aws s3 cp` exiting 0 is not it. The object is
+# read BACK with head-object and its ContentLength compared to the bytes we
+# actually uploaded. This file already carries two scars from trusting a
+# success signal instead of the artifact — a cp that reported success while
+# writing a short file, and a same-disk copy that logged "offsite OK" every
+# night for twelve days — and an upload that half-lands is the same defect with
+# a network in the middle. backup_last_offsite is written ONLY after the remote
+# object is confirmed present and exactly the right size.
+if [ -n "${SIGNALDECK_OFFSITE_S3:-}" ]; then
+  S3_DEST="${SIGNALDECK_OFFSITE_S3%/}"
+  case "$(printf '%s' "$S3_DEST" | tr '[:upper:]' '[:lower:]')" in
+    s3://*) ;;
+    *)
+      log "WARN: SIGNALDECK_OFFSITE_S3='$S3_DEST' is not an s3:// URI — refusing to treat it as an offsite destination"
+      S3_DEST=""
+      ;;
+  esac
+  if [ -z "$S3_DEST" ]; then
+    :
+  elif ! command -v aws >/dev/null 2>&1; then
+    log "WARN: SIGNALDECK_OFFSITE_S3 is set but the aws CLI is not on PATH — no off-machine copy was made"
+    sd_sqlite "$DB" "INSERT INTO dq_events(ts,kind,detail) VALUES($(date +%s),'backup_offsite_s3_unavailable','SIGNALDECK_OFFSITE_S3 is configured but the aws CLI is missing; no off-machine copy exists');" 2>>"$LOG"
+  else
+    S3_KEY="$S3_DEST/$(basename "$TARGET").gz"
+    if s3_upload_verified "$TARGET" "$S3_KEY" "$DIR/.s3-$TS.db.gz"; then
+      sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_offsite','$(date +%s)');" 2>>"$LOG"
+      sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_offsite_dir','$S3_DEST');" 2>>"$LOG"
+      log "offsite OK: $S3_KEY ($S3_VERIFIED_BYTES bytes verified by head-object)"
+    else
+      log "WARN: off-machine upload to $S3_KEY did not verify ($S3_FAIL_REASON) — backup_last_offsite NOT updated"
+      sd_sqlite "$DB" "INSERT INTO dq_events(ts,kind,detail) VALUES($(date +%s),'backup_offsite_s3_failed','$S3_KEY: $S3_FAIL_REASON; no trustworthy off-machine copy for this run');" 2>>"$LOG"
+    fi
+  fi
+elif [ -n "${SIGNALDECK_OFFSITE_GH_REPO:-}" ]; then # GitHub release asset on the private repo (lib-offsite-gh.sh, 2026-09-07); counted only after the API reports the bytes back
+  . "$SD/ops/lib-offsite-gh.sh"; GH_REPO="$SIGNALDECK_OFFSITE_GH_REPO"; GH_TAG="backup-$TS"
+  if command -v gh >/dev/null 2>&1 && gh_offsite_upload_verified "$TARGET" "$GH_REPO" "$GH_TAG" "$DIR/.gh-$TS.db.gz"; then
+    sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_last_offsite','$(date +%s)');" 2>>"$LOG"; sd_sqlite "$DB" "INSERT OR REPLACE INTO meta(k,v) VALUES('backup_offsite_dir','github:$GH_REPO');" 2>>"$LOG"
+    log "offsite OK: github $GH_REPO release $GH_TAG ($GH_VERIFIED_BYTES bytes verified by the release API)"; gh_offsite_prune "$GH_REPO" "${SIGNALDECK_OFFSITE_GH_KEEP:-7}" >>"$LOG" 2>&1
+  else
+    log "WARN: off-machine upload to github $GH_REPO ($GH_TAG) did not verify (${GH_FAIL_REASON:-gh CLI missing}) — backup_last_offsite NOT updated"; sd_sqlite "$DB" "INSERT INTO dq_events(ts,kind,detail) VALUES($(date +%s),'backup_offsite_gh_failed','github $GH_REPO $GH_TAG: ${GH_FAIL_REASON:-gh CLI missing}; no trustworthy off-machine copy for this run');" 2>>"$LOG"
+  fi
+elif [ -z "$OFFSITE" ]; then
+  log "offsite SKIPPED: no destination configured (set SIGNALDECK_OFFSITE_DIR to an external volume, SIGNALDECK_OFFSITE_S3 to an s3:// URI, or SIGNALDECK_OFFSITE_GH_REPO to a private owner/repo)"
 elif mkdir -p "$OFFSITE" 2>/dev/null; then
   if sd_nosleep cp "$TARGET" "$OFFSITE/.tmp-$TS" 2>>"$LOG" && mv "$OFFSITE/.tmp-$TS" "$OFFSITE/$(basename "$TARGET")"; then
     COPY="$OFFSITE/$(basename "$TARGET")"
@@ -433,6 +542,50 @@ elif mkdir -p "$OFFSITE" 2>/dev/null; then
   fi
 else
   log "WARN: offsite dir unavailable"
+fi
+
+# ── Offsite staleness (2026-08-23) ─────────────────────────────────────────
+# verify_backup.py only validates backup contents, never age.
+# The meta key backup_last_offsite went 12 days stale with no alert.
+# A check that cannot tell "quiet because healthy" from "quiet because nobody looked"
+# is not a real check, so we add this age-based guard.
+OFFSITE_STALE_SECS=$((3 * 24 * 3600))
+OFFSITE_BANNER_TS="$SD/data/.offsite-stale-banner-ts"
+
+# Read last offsite timestamp from meta table
+last_offsite=$(sd_sqlite "$DB" "SELECT v FROM meta WHERE k='backup_last_offsite';" 2>>"$LOG")
+# Treat missing or non-numeric as zero
+if [[ ! "$last_offsite" =~ ^[0-9]+$ ]]; then
+    last_offsite=0
+fi
+
+now=$(date +%s)
+age=$(( now - last_offsite ))
+
+if (( last_offsite == 0 )); then
+    log "NO OFF-MACHINE BACKUP HAS EVER BEEN RECORDED; the database exists on exactly one volume; set SIGNALDECK_OFFSITE_DIR to an external drive."
+    stale=true
+elif (( age >= OFFSITE_STALE_SECS )); then
+    days=$(( age / 86400 ))
+    threshold_days=$(( OFFSITE_STALE_SECS / 86400 ))
+    log "Last off-machine backup is $days days old (>= $threshold_days days threshold)."
+    stale=true
+else
+    days=$(( age / 86400 ))
+    log "Off-machine backup is current (age $days days)."
+    stale=false
+fi
+
+if [ "$stale" = true ]; then
+    # Read cooldown timestamp, default 0 if missing/invalid
+    prev=$(cat "$OFFSITE_BANNER_TS" 2>/dev/null || echo 0)
+    if ! [[ "$prev" =~ ^[0-9]+$ ]]; then
+        prev=0
+    fi
+    if (( now - prev >= 86400 )); then
+        sd_notify "SignalDeck: No current off-machine backup" "Losing this disk would lose the database because there is no verified off-machine copy."
+        printf '%s\n' "$now" >"$OFFSITE_BANNER_TS"
+    fi
 fi
 
 # ── H9 (hostile review, 2026-07-26): nothing pages a human ─────────────────

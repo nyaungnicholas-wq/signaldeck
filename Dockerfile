@@ -36,7 +36,8 @@ ARG GIT_REV=""
 RUN CGO_ENABLED=0 go build \
       -ldflags "-X github.com/nyaungnicholas-wq/signaldeck/internal/lineage.ldflagsRev=${GIT_REV}" \
       -o /out/signaldeckd ./cmd/signaldeckd \
- && CGO_ENABLED=0 go build -o /out/sdmaint ./cmd/sdmaint
+ && CGO_ENABLED=0 go build -o /out/sdmaint ./cmd/sdmaint \
+ && CGO_ENABLED=0 go build -o /out/collapsecheck ./cmd/collapsecheck
 
 # ---- stage 2: the Next.js app ---------------------------------------------
 FROM node:24-alpine AS web-build
@@ -45,19 +46,128 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
+# NEXT_PUBLIC_* is INLINED AT BUILD TIME, so this has to be an ARG here — setting
+# it in the container's environment later does nothing (web/src/lib/site.ts says
+# so, and it was verified the hard way). It feeds robots.txt's Sitemap: line and
+# every URL in sitemap.xml. Left unset the build falls back to
+# http://localhost:8323, which is deliberate — a sitemap advertising a domain
+# this build is not served from looks right and gets indexed — but it means a
+# published deployment that does not pass this ships a sitemap no crawler can
+# use. ops/docker-build.sh forwards it; DEPLOY.md tells the operator to set it.
+ARG NEXT_PUBLIC_SITE_URL=""
+ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
+# The SAME build-time inlining rule, and the flag it was never applied to.
+#
+# NEXT_PUBLIC_SIGNALDECK_PUBLIC is documented in .env.example and DEPLOY.md and
+# read in two places -- AuthGate.tsx, which sends an unauthenticated visitor to
+# "/" instead of "/login", and proof/page.tsx, which suppresses operator-only
+# remediation copy. Neither was ever reachable from a container build: there was
+# no ARG, so the bundle inlined `undefined` and every image shipped in PRIVATE
+# mode. Setting it in the runtime environment does nothing, for exactly the
+# reason the comment above gives about SITE_URL.
+#
+# The consequence on a published deployment is the one that matters: a stranger
+# arriving at the front door of a site whose entire argument is "check my
+# claims yourself" is bounced to a sign-in form, and the receipts page shows
+# them instructions written for the operator.
+#
+# DEFAULT IS PRIVATE, deliberately. An image that silently decided it was public
+# would open the front door on any deployment that forgot the flag, and the
+# wrong direction to be wrong in is obvious. ops/docker-build.sh refuses to
+# build a PUBLISHABLE image (one carrying a real NEXT_PUBLIC_SITE_URL) without
+# an explicit choice, so "forgot the flag" cannot quietly ship either way.
+ARG NEXT_PUBLIC_SIGNALDECK_PUBLIC="0"
+ENV NEXT_PUBLIC_SIGNALDECK_PUBLIC=${NEXT_PUBLIC_SIGNALDECK_PUBLIC}
 RUN npm run build
 
 # ---- stage 3: runtime ------------------------------------------------------
 FROM node:24-alpine
-RUN apk add --no-cache ca-certificates tini
+# python3 is here so the GRADER can run in the container. Without it
+# /api/accuracy is 503 REFUSED forever (the handler is fail-closed on an
+# unreadable registry and on a stale grader heartbeat), so the honesty
+# page -- the product -- was permanently dead on every container deploy.
+# DEPLOY.md told the operator to cron ops/accuracy-registry.sh, a 680-line
+# dev-box job needing git, a checkout and a README to rewrite; none of that
+# exists here. ops/grade.sh is the container-sized replacement.
+#
+# No pip and no venv: accuracy_registry.py, selection_honesty.py,
+# grader_heartbeat.py and backfill_delistings.py import only the standard
+# library. requirements-quant.txt (numpy/pandas/scipy) is for the research
+# tools, which do not run here.
+# git is here for the GRADER's revision gate, not for a checkout. See the
+# commit-object store below: tools/accuracy_registry.py is pinned by hash on the
+# pre-registration chain and runs `git cat-file -e <rev>^{commit}` against every
+# revision in the database, so without git every historical row is
+# unattributable and every verdict is stripped.
+RUN apk add --no-cache ca-certificates tini python3 git
 WORKDIR /app
 
 COPY --from=daemon-build /out/signaldeckd /usr/local/bin/signaldeckd
 COPY --from=daemon-build /out/sdmaint     /usr/local/bin/sdmaint
+COPY --from=daemon-build /out/collapsecheck /usr/local/bin/collapsecheck
 COPY --from=web-build /src/web/.next      ./web/.next
 COPY --from=web-build /src/web/public     ./web/public
 COPY --from=web-build /src/web/node_modules ./web/node_modules
 COPY --from=web-build /src/web/package.json ./web/package.json
+
+# The grader, and the document whose hash it checks against the chain.
+# tools/*.py only -- tools/alpha/ is the research corpus and is
+# .dockerignored. PREREGISTRATION.md sits at /app so REPO_ROOT resolves as
+# it does in a checkout, and so ops/grade.sh can compare its sha256 to the
+# newest prereg-document record before publishing anything.
+COPY tools/*.py         /app/tools/
+COPY PREREGISTRATION.md /app/PREREGISTRATION.md
+COPY ops/grade.sh       /usr/local/bin/grade.sh
+RUN chmod +x /usr/local/bin/grade.sh
+
+# THE BUILD MANIFEST, and the seal that completes it.
+#
+# ops/docker-build.sh emits build-manifest.json on the HOST, immediately before
+# this build, hashing the files that decide a verdict against the tree the
+# operator reviewed. That is the half git can do and this image cannot.
+#
+# This COPY is deliberately REQUIRED, not optional: a hand `docker build` with
+# no manifest present fails here rather than producing an image that cannot be
+# bound to any source. Use ops/docker-build.sh.
+#
+# `seal` then adds what the host could not know -- the hashes of binaries
+# compiled during this build -- so a binary swapped inside a running container
+# is caught too. It must come after both the tools COPY (for python) and the
+# binary COPYs above.
+COPY build-manifest.json /app/build-manifest.json
+RUN python3 /app/tools/build_manifest.py seal \
+      --manifest /app/build-manifest.json --root /
+
+# THE COMMIT OBJECTS, so the grader's revision gate can answer honestly.
+#
+# The manifest above binds the BYTES of this image. It cannot answer the other
+# question the grader asks on every run: does the revision stamped on each
+# historical forecast row name a commit that exists? revision_resolvable() in
+# the hash-pinned grader runs `git cat-file -e <rev>^{commit}` in the repo root
+# and treats "git could not be run" as False, which is the correct doctrine —
+# an unverifiable provenance claim must block a verdict. With no git and no
+# objects it answered False for everything, so apply_revision_gate() stripped
+# the verdict from every directional and structural row and a container grade
+# published a registry with no verdicts in it.
+#
+# ops/docker-build.sh packs this repository's COMMIT objects — no trees, no
+# blobs, well under a megabyte — and this unpacks them into an object store at
+# the path the grader already looks in. Nothing here is asserted: git objects
+# are content-addressed, so an object that hashes to a sha IS that commit, and a
+# revision that was never committed still does not resolve. The store cannot be
+# talked into saying yes.
+#
+# The last line is the build's own check on that claim: this image's revision
+# must resolve in the store it ships, and an empty GIT_REV (a raw `docker build`)
+# fails here rather than producing an image whose grades silently carry no
+# verdicts.
+ARG GIT_REV=""
+COPY build-commits.pack /tmp/build-commits.pack
+RUN git init -q /app \
+ && mv /tmp/build-commits.pack /app/.git/objects/pack/build-commits.pack \
+ && git -C /app index-pack /app/.git/objects/pack/build-commits.pack \
+ && git -C /app cat-file -e "${GIT_REV}^{commit}" \
+ && echo "signaldeck: commit store holds ${GIT_REV}"
 
 # The accuracy page is a server component that reads data/accuracy_registry.json
 # relative to the web app's cwd (/app/web), i.e. /app/data. Point that at the
@@ -71,6 +181,8 @@ RUN ln -s /data /app/data
 ENV SIGNALDECK_DB=/data/signaldeck.db \
     SIGNALDECK_HTTP=127.0.0.1:8322 \
     SIGNALDECK_DAEMON=http://127.0.0.1:8322 \
+    SIGNALDECK_LOG_FILE=/data/logs/signaldeckd.log \
+    SIGNALDECK_REGISTRY=/data/accuracy_registry.json \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=8080
 VOLUME ["/data"]

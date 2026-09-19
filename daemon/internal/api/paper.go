@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
+	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/moneymetrics"
@@ -25,6 +27,9 @@ const paperMoneyCaption = "Win rate alone does not equal profit — a high win r
 // real money — and the payload carries live:false + a label so the UI cannot
 // misrepresent it.
 
+// sharedPaperSWR body-caches the flagship books (never the manual one).
+var sharedPaperSWR = newSWRBodyCache(2 * time.Minute)
+
 // defaultPaperStrategy is what the UI lands on when no ?strategy= is given.
 const defaultPaperStrategy = "flagship-1d"
 
@@ -36,6 +41,17 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 	strategy := r.URL.Query().Get("strategy")
 	if strategy == "" {
 		strategy = defaultPaperStrategy
+	}
+	manual := strategy == "manual" // the caller's own manual book (paperorder.go); never another user's
+	if manual {
+		if userID(r) == 0 {
+			httpErr(w, 401, "sign in to view your manual paper book")
+			return
+		}
+		strategy = manualPaperStrategy(userID(r))
+	} else if !slices.Contains(paperStrategies, strategy) { // live books only; replay books are research artifacts
+		httpErr(w, 404, "unknown paper strategy "+strconv.Quote(strategy)+"; choose flagship-1d or flagship-1w")
+		return
 	}
 	tradeLimit := 100
 	if q := r.URL.Query().Get("trades"); q != "" {
@@ -108,32 +124,100 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		currentEpoch = &segments[n-1]
 	}
 
+	// THE INTEGRITY BOUNDARY IS NOT A CAPTION.
+	//
+	// `summary` and `money` were book-wide with a paragraph beside them saying so.
+	// A paragraph beside a number does not stop the number being quoted: these
+	// span 46 back-dated fills that booked up to 22 days of market move as one
+	// step's P&L, so a total return, Sharpe, drawdown or win rate over them is
+	// derived partly from moves that never happened. They are REFUSED when they
+	// would cross, and the clean record is published in their place.
+	//
+	// The equity LEVEL series stays whole and is labelled as accounting, because
+	// what the simulated account is worth is a real fact — it just is not
+	// performance.
+	epochRows, err := d.St.PaperEpochs(r.Context(), strategy)
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	boundary := integrityBoundary(epochRows)
+	boundaryLabel, boundaryReason := "", ""
+	for _, epoch := range epochRows {
+		if epoch.FromTs == boundary {
+			boundaryLabel, boundaryReason = epoch.Label, epoch.Reason
+		}
+	}
+	spans := SpansIntegrityBoundary(curve, boundary)
+	// A wholly historical window is also ineligible for the corrected simulator.
+	for _, mark := range curve {
+		if boundary > 0 && mark.Ts < boundary {
+			spans = true
+			break
+		}
+	}
+	clean := buildCleanPerformance(epochRows, curve, all)
+
 	// FILL FIDELITY: re-derive every logged fill from the bar it names, on every
 	// read. A verified-by-assumption trade log is how 21 of 44 fills sat in a
 	// "track record" while differing from their own bars by up to 90.3 bps —
 	// `bars` is written INSERT OR REPLACE, so a provider revision rewrites the
 	// reference a past fill priced off and nothing notices. This is the check
 	// that notices.
-	fidelity := d.checkPaperFills(r.Context(), all)
+	fidelityTF := md.TF1d
+	if manual {
+		fidelityTF = md.TF1m // manual fills quote the newest 1m bar; auditable only inside 1m retention
+	}
+	fidelity := d.checkPaperFills(r.Context(), all, fidelityTF)
 
 	// MONEY SCOREBOARD: score the closed round-trips by EXPECTED PROFIT
 	// (expectancy / profit factor / payoff), the numbers that actually decide
 	// whether the signal makes money. Returns are already NET of both-side costs.
 	money := moneymetrics.FromReturns(roundTripReturns(all))
 
-	writeJSON(w, map[string]any{
+	// Basis audit for the stored entry prices this book compares against live
+	// bars. Published as a measured zero rather than left as an assumption.
+	staleBasis, err := d.St.StaleBasisPositions(r.Context())
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+
+	payload := map[string]any{
 		"strategy":   strategy,
-		"strategies": paperStrategies,
+		"strategies": append(append([]string{}, paperStrategies...), "manual"),
+		"manual":     manual, // the caller's own market-order book (POST /api/paper/order)
 		// Honesty framing: this is a self-contained simulation, not a live account.
 		"live":       false,
 		"label":      "simulated paper trading — not live money, not advice",
 		"startCash":  papertrade.StartingCash(),
 		"longThresh": papertrade.LongThreshold(),
 		"flatThresh": papertrade.FlatThreshold(),
-		"equity":     curve,
-		"positions":  positions,
-		"trades":     recent,
-		"summary":    summary,
+		// ACCOUNTING level across all time, contaminated period included.
+		"equity":             curve,
+		"equityIsAccounting": true,
+		"equityNote": "accounting equity of the simulated book across all time. It carries the pre-2026-07-22 " +
+			"back-dated P&L and is NOT a performance series; use cleanPerformance.index for that.",
+		"positions": positions,
+		"trades":    recent,
+		// Post-boundary record, rebased. This is the strategy's published number.
+		"cleanPerformance": clean,
+		"integrityBoundary": map[string]any{
+			"ts":     boundary,
+			"utc":    boundaryUTC(boundary),
+			"spans":  spans,
+			"label":  boundaryLabel,
+			"reason": boundaryReason,
+		},
+		// Stored-vs-live price basis audit (paper_positions.avg_px against bars a
+		// split repair may have rescaled).
+		"priceBasisAudit": map[string]any{
+			"staleBasisPositions": staleBasis,
+			"clean":               len(staleBasis) == 0,
+			"note": "an open position whose stored entry price predates a SUCCESSFUL re-backfill of its own " +
+				"symbol sits on a dead basis. The barrier path re-reads the entry bar so both legs move together; " +
+				"this is the audit that the stored values themselves are clean.",
+		},
 		// Per-epoch record. `summary`/`money` above are BOOK-WIDE and therefore
 		// span every strategy this book has run; `epochs` is where the
 		// single-strategy numbers live, and `epoch` is the one in force now.
@@ -144,10 +228,30 @@ func (d Deps) paper(w http.ResponseWriter, r *http.Request) {
 		// reconciliation beside the summary so a reader never has to assume it.
 		"fillFidelity": fidelity,
 		"verified":     fidelity.Verified,
-		// Money scoreboard leads the display; the caption reframes win rate.
-		"money":        money,
 		"moneyCaption": paperMoneyCaption,
-	})
+		// PROCESS facts (paperprocess.go): is the simulator healthy and abstaining,
+		// or stalled? A flat curve alone cannot say (audit 2026-09-07).
+		"process": d.paperProcess(r.Context(), strategy, time.Now().Unix()),
+	}
+
+	// A statistic that would span the boundary is replaced by its refusal.
+	if spans {
+		payload["summary"] = refuseAcrossBoundary(boundary)
+		payload["money"] = nil
+		payload["moneyRefused"] = refuseAcrossBoundary(boundary)
+	} else {
+		payload["summary"] = summary
+		payload["money"] = money
+	}
+	writeJSON(w, payload)
+}
+
+// boundaryUTC renders a boundary instant, or empty when none is declared.
+func boundaryUTC(ts int64) string {
+	if ts <= 0 {
+		return ""
+	}
+	return time.Unix(ts, 0).UTC().Format(time.RFC3339)
 }
 
 // maxFidelityChecks bounds how many fills one read reconciles. The paper log is
@@ -164,7 +268,7 @@ const maxFidelityChecks = 500
 //
 // Only the most recent maxFidelityChecks fills are checked; the returned counts
 // describe exactly that window, never the whole log by implication.
-func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade) papertrade.Fidelity {
+func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade, tf md.Timeframe) papertrade.Fidelity {
 	from := 0
 	if len(all) > maxFidelityChecks {
 		from = len(all) - maxFidelityChecks
@@ -181,7 +285,7 @@ func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade) paper
 		// report then blamed "no stored bar at all" for what was an outage, and
 		// an operator reading it went hunting a data gap that did not exist.
 		// "We could not look" is not "we looked and found nothing".
-		bar, ok, err := d.St.BarAtOrBefore(ctx, t.SymbolID, md.TF1d, t.Ts)
+		bar, ok, err := d.St.BarAtOrBefore(ctx, t.SymbolID, tf, t.Ts)
 		switch {
 		case err != nil:
 			p.Unchecked = true
@@ -194,77 +298,16 @@ func (d Deps) checkPaperFills(ctx context.Context, all []store.PaperTrade) paper
 	return papertrade.CheckFillFidelity(pairs)
 }
 
-// roundTripReturns walks the ordered trade log and returns the NET fractional
-// return of each completed buy→sell round-trip PER SYMBOL: (sell proceeds − buy
-// outlay) / buy outlay, where both sides are already net of their per-side cost.
-// A high win rate over these can still lose money if the losers are large — which
-// is exactly what the money scoreboard exposes. An unmatched trailing buy is an
-// open position (no round-trip yet) and is skipped.
-func roundTripReturns(all []store.PaperTrade) []float64 {
-	outlayBySym := map[int64]float64{} // buy net outlay = px*qty + cost
-	var out []float64
-	for _, t := range all {
-		notional := t.Px * t.Qty
-		if notional < 0 {
-			notional = -notional
-		}
-		switch t.Side {
-		case "buy":
-			outlayBySym[t.SymbolID] = notional + t.Cost
-		case "sell":
-			outlay, ok := outlayBySym[t.SymbolID]
-			if !ok || outlay <= 0 {
-				continue // sell with no recorded open — skip (shouldn't happen)
-			}
-			delete(outlayBySym, t.SymbolID)
-			proceeds := notional - t.Cost
-			out = append(out, proceeds/outlay-1)
-		}
-	}
-	return out
-}
-
-// reconstructRoundTrips walks the ordered trade log and pairs each open (buy)
-// with its closing sell PER SYMBOL, producing the closed round-trips the summary
-// grades. A round-trip WON when the sell's net proceeds (px*qty - cost) exceeded
-// the buy's net outlay (px*qty + cost). It also returns the total fill count and
-// the total traded notional (abs px*qty over every fill) for turnover.
-//
-// The worker is long/flat and closes the entire position on a sell, so per
-// symbol the log alternates buy, sell, buy, sell…; this pairing is exact for
-// that pattern and degrades safely (an unmatched trailing buy is an open
-// position, not a round-trip).
-func reconstructRoundTrips(all []store.PaperTrade) ([]papertrade.Trade, int, float64) {
-	type open struct {
-		outlay float64 // buy net outlay = px*qty + cost
-	}
-	openBySym := map[int64]open{}
-	var closed []papertrade.Trade
-	var tradedNotional float64
-	numFills := len(all)
-	for _, t := range all {
-		notional := t.Px * t.Qty
-		if notional < 0 {
-			notional = -notional
-		}
-		tradedNotional += notional
-		switch t.Side {
-		case "buy":
-			openBySym[t.SymbolID] = open{outlay: notional + t.Cost}
-		case "sell":
-			o, ok := openBySym[t.SymbolID]
-			if !ok {
-				continue // sell with no recorded open — skip (shouldn't happen)
-			}
-			delete(openBySym, t.SymbolID)
-			proceeds := notional - t.Cost
-			closed = append(closed, papertrade.Trade{Won: proceeds > o.outlay, Notional: notional})
-		}
-	}
-	return closed, numFills, tradedNotional
-}
-
 // registerPaper wires the Stage-4 simulated paper-trading read route.
 func (d Deps) registerPaper(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/paper", d.paper)
+	// Flagship books are user-independent and slow to reconstruct (7s quiet,
+	// 116s under load on 2026-09-07), so they are body-cached (2 min SWR) and
+	// warmed. The manual book is per-user and bypasses the cache entirely.
+	mux.HandleFunc("GET /api/paper", func(w http.ResponseWriter, r *http.Request) {
+		if s := r.URL.Query().Get("strategy"); s == "manual" {
+			d.paper(w, r)
+			return
+		}
+		sharedPaperSWR.serve(d.St.CacheKey()+"|paper|"+r.URL.RawQuery, w, r, d.paper)
+	})
 }

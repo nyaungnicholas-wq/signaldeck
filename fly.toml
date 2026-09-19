@@ -10,10 +10,50 @@
 #   fly launch --no-deploy --name <your-app-name>   # once, to create the app
 #   fly volumes create signaldeck_data --size 10 --region <region>
 #   fly secrets set ALPACA_KEY=... ALPACA_SECRET=...
-#   fly deploy --build-arg GIT_REV=$(git rev-parse HEAD)
+#   fly deploy --build-arg GIT_REV=$(git rev-parse HEAD) \
+#              --build-arg NEXT_PUBLIC_SITE_URL=https://<your-app>.fly.dev \
+#              --build-arg NEXT_PUBLIC_SIGNALDECK_PUBLIC=1
 #
 # GIT_REV is not optional. The daemon refuses to start from a build it cannot
 # attribute to a commit, because rows it writes could not then be graded.
+#
+# NEXT_PUBLIC_SITE_URL is not optional either, and it FAILS QUIETLY. Next
+# inlines NEXT_PUBLIC_* at BUILD time, so it cannot be supplied as a runtime
+# [env] entry the way everything below is -- it has to be a --build-arg (the
+# Dockerfile declares the ARG at line 57 for exactly this reason). Omitted,
+# web/src/lib/site.ts falls back to http://localhost:8323 and the deployed
+# site serves robots.txt, sitemap.xml, every canonical link and every og:image
+# pointing at localhost. Nothing errors; the pages render perfectly; the
+# search engine indexes an address nobody can reach.
+#
+# The value is deliberately NOT written into this file. It is the public
+# hostname, which is a deploy-time input like SIGNALDECK_ALLOWED_HOSTS below,
+# and a hostname committed here would be wrong for every deployment but one.
+#
+# WIDER POINT: `fly deploy` builds this Dockerfile DIRECTLY and therefore never
+# runs ops/docker-build.sh, which is where this repository keeps its build
+# guards. Going this way you lose all of them at once:
+#   - the clean-working-tree refusal (an image built from uncommitted edits
+#     carries a GIT_REV that does not describe what is inside it);
+#   - the refusal when NEXT_PUBLIC_SITE_URL is unset, with its explicit
+#     SIGNALDECK_ALLOW_LOCALHOST_SITE_URL=1 opt-out for local images;
+#   - the org.opencontainers.image.revision label, which is what
+#     ops/oracle-verify.sh reads back to confirm the running image is the
+#     commit it claims to be;
+#   - the refusal when a hostname arrives with no NEXT_PUBLIC_SIGNALDECK_PUBLIC.
+#     This one is the reason the third --build-arg above exists. The audience is
+#     inlined at build time and the Dockerfile ARG defaults to "0", so the two
+#     paths fail in OPPOSITE directions: ops/docker-build.sh refuses (measured
+#     2026-09-15, exit 1), while `fly deploy` builds happily and ships a public
+#     site that redirects every anonymous visitor to /login and shows them
+#     operator remediation copy on /proof. Nothing errors and nothing logs; you
+#     find out when someone tells you your public site asked them to sign in.
+#     This list said "all of them at once" and named three while the audience
+#     guard, added 2026-09-13, made it four.
+# DEPLOY.md and docs/PUBLIC_RELEASE_PLAN.md both route the operator through
+# ops/docker-build.sh for exactly this reason. Prefer building with the script
+# and deploying that image; if you do use `fly deploy`, those three checks did
+# not run and the --build-arg above is the only thing standing in for one.
 
 app = "signaldeck-demo"
 primary_region = "iad"
@@ -26,10 +66,55 @@ primary_region = "iad"
   SIGNALDECK_HTTP = "127.0.0.1:8322"
   SIGNALDECK_DAEMON = "http://127.0.0.1:8322"
   PORT = "8080"
-  # Read-only endpoints answer without a session so a visitor sees the deck
-  # instead of a login wall. Every mutating route still requires auth — this
-  # widens reads, it does not disable authentication.
-  SIGNALDECK_PUBLIC_READS = "1"
+
+  # ANONYMOUS SURFACE - an ALLOWLIST, not a denylist.
+  # This replaces a bare SIGNALDECK_PUBLIC_READS = "1", which is DENYLIST mode:
+  # it opens every read route except the ones someone remembered to name, so a
+  # route added later is public by forgetting (config.go:132-140 names exactly
+  # that outcome). PUBLIC_SURFACE instead makes api.publicRoutes the ENTIRE
+  # anonymous surface - the honesty routes and nothing else. This is what
+  # docs/PUBLIC_RELEASE_PLAN.md specifies and what ledger F20 verified on
+  # 2026-09-08: anonymous honesty routes; 401 on every workspace, vendor-data
+  # and AI route; 403 on registration and on a foreign Host header.
+  SIGNALDECK_PUBLIC_SURFACE = "1"
+
+  # Stated, not derived. The default follows reachablePrivately(), which reads
+  # the DAEMON bind address - loopback here by design - and so evaluated
+  # "private" on the one deployment that is public, defaulting registration
+  # OPEN to the internet. ops/docker-entrypoint.sh now corrects that
+  # derivation; this states the intent outright so it does not depend on it.
+  SIGNALDECK_OPEN_SIGNUP = "0"
+
+  # REQUIRED before a real public deploy, and it is not just the hostname:
+  # web/src/app/api/[...path]/route.ts does NOT forward the Host header, so the
+  # daemon always sees 127.0.0.1:8322 from the proxy. An allowlist naming ONLY
+  # the public hostname 403s every request. Set BOTH.
+  # (docs/PUBLIC_RELEASE_PLAN.md step 3 omits the loopback pair.)
+  # SIGNALDECK_ALLOWED_HOSTS = "<your-app>.fly.dev,127.0.0.1:8322,localhost:8322"
+
+  # ALSO REQUIRED, and it is a DIFFERENT list from the one above. Hosts are
+  # about the Host header the proxy sends; ORIGINS are about the Origin header
+  # the BROWSER sends, which is the public https:// address and nothing else.
+  # api/security.go rejects any non-GET whose Origin is not here, so with the
+  # localhost defaults the pages render and the waitlist form and the operator
+  # login answer 403 -- a launch whose only write paths are broken.
+  # The daemon now REFUSES TO START in this state rather than serving it
+  # (cmd/signaldeckd/main.go, config.PublicOriginMissing), so an unset value is
+  # a boot error naming the fix instead of a form nobody can submit.
+  # SIGNALDECK_WEB_ORIGINS = "https://<your-app>.fly.dev"
+
+  # Believe the host's forwarded client address. Every browser request reaches
+  # the daemon over loopback from the Next proxy, so without this every
+  # anonymous visitor on earth shares the bucket keyed "ip:127.0.0.1" -- one
+  # busy client rate-limits the whole site, health probes included.
+  #
+  # Only set this where exactly ONE trusted proxy sits in front of the daemon
+  # and it APPENDS the address it saw. Fly does; force_https above means its
+  # edge is that proxy. The daemon reads the LAST X-Forwarded-For hop for this
+  # reason (api/ratelimit.go): the first hop is whatever the client typed, and
+  # keying on it let a visitor mint a fresh bucket per request. On a host whose
+  # proxy does not append, leave this unset rather than guessing.
+  SIGNALDECK_TRUST_PROXY = "1"
 
 [[mounts]]
   source = "signaldeck_data"

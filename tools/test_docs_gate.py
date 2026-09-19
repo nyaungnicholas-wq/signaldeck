@@ -33,6 +33,7 @@ repository, so this file states the contract rather than describing today's tree
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -40,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 GATE = os.path.join(HERE, "docs_gate.py")
@@ -47,7 +49,9 @@ GATE = os.path.join(HERE, "docs_gate.py")
 # A snapshot with every value in its passing state. Tests mutate one key at a
 # time, so a failure names exactly one cause.
 CLEAN_INTEGRITY = {
-    "generated": "2026-08-04T17:00:00Z",
+    # Derived from now, not hardcoded: the fixture claims "every value in its
+    # passing state", and a fixed date only passed while nothing checked age.
+    "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "source_db": "data/signaldeck.db",
     "grader": {
         "status": "OK",
@@ -441,9 +445,27 @@ class GateTest(unittest.TestCase):
         self.assertClean()
         snap = json.loads(json.dumps(CLEAN_INTEGRITY))
         snap["grader"]["rows"] = 99
-        snap["generated"] = "2026-08-05T09:00:00Z"
+        # Fresh but DIFFERENT: this test is about the snapshot having MOVED,
+        # not about it being old, so it must not trip the age assertion too.
+        snap["generated"] = (datetime.now(timezone.utc) - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.fx.write_integrity(snap)
         self.assertFires("single-source-of-truth")
+
+    def test_integrity_snapshot_fires_when_the_stamp_is_stale(self):
+        """A snapshot past the age bound must refuse, not read as clean.
+
+        check_integrity_snapshot validated existence and parseability only, so a
+        snapshot frozen 37 days earlier went on asserting grader OK while the
+        live registry had been REFUSED for weeks and the gate printed
+        "docs-gate: clean" (measured 2026-09-10). Age is the only thing this
+        side can check: data/ is gitignored and CI has no database.
+        """
+        self.assertClean()
+        snap = json.loads(json.dumps(CLEAN_INTEGRITY))
+        snap["generated"] = "2026-07-01T00:00:00Z"
+        self.fx.write_integrity(snap)
+        hits = self.assertFires("integrity-snapshot")
+        self.assertTrue(any("days old" in h["message"] for h in hits))
 
     def test_build_is_deterministic(self):
         """Two builds of one input must be byte-identical, or `check` is a coin flip."""
@@ -770,6 +792,138 @@ class GraderStatusTest(unittest.TestCase):
         self.assertEqual(
             self.status({"graded_at": "2026-08-04", "refused_since": None,
                          "rows": []}), "EMPTY")
+
+
+class ReleaseContractTest(unittest.TestCase):
+    """The two publication contracts, and the three impostors release rejects.
+
+    STRICT asks "may this repository publish live accuracy NUMBERS?" and is the
+    contract every historical report of this gate was run under. It is unchanged.
+
+    RELEASE asks "does this build state the evidence it actually has?" — because
+    the product is a research demo designed to show refusals openly, and under
+    STRICT an honest REFUSED blocks the release gate forever, which pressures
+    someone into making the refusal disappear rather than shipping it.
+
+    RELEASE IS NOT STRICT WITH REFUSED ADDED TO A SUCCESS LIST. A refusal passes
+    only when it is a CURRENT, MEASURED, ATTRIBUTED scientific result. The three
+    tests that matter most here are the impostors:
+
+      * REFUSED_STALE                — nobody measured recently
+      * REFUSED "CHECK UNAVAILABLE"  — a GATE could not run; the evidence state
+                                       is UNKNOWN, and rendering unknown as a
+                                       finding invents a verdict about a model
+      * REFUSED with no reason       — unattributable
+
+    If any of those ever starts passing under release, the gate has stopped
+    meaning what this class says it means.
+    """
+
+    def setUp(self) -> None:
+        self.fx = GateFixture()
+        self.addCleanup(self.fx.cleanup)
+
+    def _grader(self, **fields):
+        snap = copy.deepcopy(CLEAN_INTEGRITY)
+        snap["generated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        snap["grader"].update(fields)
+        self.fx.write_integrity(snap)
+        # Regenerate the partials, because the generated live-record partial is
+        # DERIVED from this status. Skipping it leaves every test below tripping
+        # `single-source-of-truth` instead of the check it means to exercise --
+        # which is the parity check doing its job, and is what a real repository
+        # does too (write-integrity, then build, then commit both). Neither
+        # contract relaxes it: a release build whose prose disagrees with its
+        # snapshot still fails, and test_release_still_blocks_a_leaked_figure
+        # proves the figure checks survive this rebuild as well.
+        built = self.fx.run("build")
+        assert built.returncode == 0, f"fixture rebuild failed:\n{built.stdout}\n{built.stderr}"
+
+    def _run(self, contract):
+        if contract == "strict":
+            return self.fx.run("check")
+        return self.fx.run("check", "--contract", contract)
+
+    # -- the contracts diverge, and only here ------------------------------
+    def test_measured_refusal_fails_strict_but_passes_release(self):
+        self._grader(status="REFUSED", refused_since="2026-09-13T14:43:41",
+                     refusal_reason="publication gate: the graded window contains 18 "
+                                    "collapsed cross-section(s) of 76 day(s)", rows=0)
+        strict = self._run("strict")
+        self.assertNotEqual(strict.returncode, 0,
+            "STRICT must still refuse to publish NUMBERS while the grader refuses.\n"
+            + strict.stdout)
+        rel = self._run("release")
+        self.assertEqual(rel.returncode, 0,
+            "a current, measured, attributed refusal is exactly what this product "
+            "is designed to show; release must let it ship.\n" + rel.stdout)
+
+    def test_ok_passes_both(self):
+        self.assertEqual(self._run("strict").returncode, 0)
+        self.assertEqual(self._run("release").returncode, 0)
+
+    # -- impostor 1: stale ---------------------------------------------------
+    def test_stale_refusal_fails_release(self):
+        self._grader(status="REFUSED_STALE", refusal_reason="grader heartbeat is 40h old")
+        out = self._run("release")
+        self.assertNotEqual(out.returncode, 0,
+            "REFUSED_STALE passed release: a stale checker impersonated a fresh "
+            "scientific refusal.\n" + out.stdout)
+
+    # -- impostor 2: a check outage dressed as science -----------------------
+    def test_check_outage_fails_release(self):
+        self._grader(status="REFUSED",
+                     refusal_reason="CHECK UNAVAILABLE: the collapsed-cross-section gate "
+                                    "could not be evaluated (collapsecheck exit 2), so the "
+                                    "figures are withheld WITHOUT having been judged")
+        out = self._run("release")
+        self.assertNotEqual(out.returncode, 0,
+            "a gate that could not RUN passed release as though it had measured "
+            "something. That publishes an outage to readers as a finding about "
+            "the models.\n" + out.stdout)
+        self.assertIn("UNKNOWN", out.stdout)
+
+    # -- impostor 3: unattributable -----------------------------------------
+    def test_refusal_without_a_reason_fails_release(self):
+        self._grader(status="REFUSED", refusal_reason=None)
+        out = self._run("release")
+        self.assertNotEqual(out.returncode, 0,
+            "a refusal with no stated evidence passed release; a reader cannot "
+            "check it.\n" + out.stdout)
+
+    def test_empty_grade_fails_release(self):
+        self._grader(status="EMPTY", refusal_reason=None, rows=0)
+        self.assertNotEqual(self._run("release").returncode, 0)
+
+    def test_unrecognised_status_fails_release(self):
+        """Unknown is never a pass -- that is how 'unknown' becomes 'fine'."""
+        self._grader(status="PROBABLY FINE", refusal_reason=None)
+        self.assertNotEqual(self._run("release").returncode, 0)
+
+    # -- what release does NOT relax ----------------------------------------
+    def test_release_still_blocks_a_leaked_figure(self):
+        """The figure-leak checks are identical under both contracts. A release
+        build must not be able to carry a withheld accuracy number anywhere."""
+        self._grader(status="REFUSED", refused_since="2026-09-13T14:43:41",
+                     refusal_reason="publication gate: collapsed cross-sections")
+        self.fx.add_strategy_doc(
+            "LEAK.md",
+            "# Leak\n\nOur live directional accuracy is 61.5% over the graded window.\n")
+        out = self._run("release")
+        self.assertNotEqual(out.returncode, 0,
+            "release let a hardcoded live-accuracy figure through.\n" + out.stdout)
+
+    # -- the scientific state stays visible on a GREEN run ------------------
+    def test_release_reports_the_evidence_state_even_when_clean(self):
+        """A green release build must not read as 'the models work'. The gate
+        prints the scientific state separately from software readiness, always."""
+        self._grader(status="REFUSED", refused_since="2026-09-13T14:43:41",
+                     refusal_reason="publication gate: collapsed cross-sections")
+        out = self._run("release")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assertIn("scientific evidence state", out.stdout)
+        self.assertIn("REFUSED", out.stdout)
+        self.assertIn("measured", out.stdout)
 
 
 if __name__ == "__main__":

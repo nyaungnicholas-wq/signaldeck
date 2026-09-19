@@ -18,8 +18,42 @@ cd "$REPO" || exit 2
 OUT="$REPO/ops/revalidation-status.json"
 TMP="$OUT.tmp"
 
+# THIS SCRIPT OWNS ITS OWN SCHEDULE AND ITS OWN LOG, because its task carries
+# neither.
+#
+# ops/com.signaldeck.revalidation.plist declares Day=1 (MONTHLY) plus
+# StandardOutPath/StandardErrorPath. The LIVE task predates both: it has a DAILY
+# trigger and a bare bash action with no -lc redirect, so logs/revalidation.out.log
+# has never existed and a monthly gate's refusals -- "REVALIDATION FAILED",
+# "produced an unusable snapshot" -- printed to a console that does not exist
+# under S4U.
+#
+# Re-registering the task needs elevation (Set-ScheduledTask and schtasks /Change
+# both return Access is denied; both were tried). Neither of these does.
+# ops/fix-task-logging.ps1 still ships for an operator who wants the registration
+# itself corrected; until then the daily trigger is harmless and the output lands
+# in a file.
+#
+# -force runs it regardless of the day, for an operator invoking it deliberately.
+LOG="$REPO/logs/revalidation.out.log"
+mkdir -p "$REPO/logs"
+exec >> "$LOG" 2>&1
+
+if [ "${1:-}" != "-force" ] && [ "$(date -u +%d)" != "01" ]; then
+  echo "=== revalidation SKIPPED $(date -u +%Y-%m-%dT%H:%M:%SZ): monthly job, today is not the 1st ==="
+  echo "    (the live task fires daily; the plist declares Day=1. Pass -force to run now.)"
+  exit 0
+fi
+
 PY="${SIGNALDECK_PYTHON:-python}"
-command -v "$PY" >/dev/null 2>&1 || PY=python3
+# `command -v` alone matches the Microsoft Store alias stub, which resolves and
+# then prints "Python was not found" -- the trap ops/accuracy-registry.sh and
+# ops/signaldeck-backup-offline.sh both document. Probe by RUNNING it.
+for cand in "$PY" python3 python py; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import sys' >/dev/null 2>&1; then
+    PY="$cand"; break
+  fi
+done
 
 echo "=== structural revalidation $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 

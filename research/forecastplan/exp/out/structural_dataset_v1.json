@@ -1,0 +1,80 @@
+{
+ "days": 1667,
+ "duration_s": 367.7,
+ "eligible_rows": 1089731,
+ "first_origin": "2020-01-10",
+ "generated_at_utc": "2026-09-10T02:38:21.963384+00:00",
+ "kinds": {
+  "liquidity21@all": {
+   "classes": {
+    "active": 931583,
+    "quiet": 850706
+   },
+   "incumbent_accuracy": 0.7221,
+   "incumbent_persistence_agreement": 1.0,
+   "n_resolved": 1782289,
+   "none_share": 0.0306,
+   "persistence_accuracy": 0.7229
+  },
+  "liquidity21@eligible": {
+   "classes": {
+    "active": 618695,
+    "quiet": 451403
+   },
+   "incumbent_accuracy": 0.6924,
+   "incumbent_persistence_agreement": 1.0,
+   "n_resolved": 1070098,
+   "none_share": 0.018,
+   "persistence_accuracy": 0.6933
+  },
+  "trend21@all": {
+   "classes": {
+    "downtrend": 920926,
+    "uptrend": 874720
+   },
+   "incumbent_accuracy": 0.8296,
+   "incumbent_persistence_agreement": 1.0,
+   "n_resolved": 1795646,
+   "none_share": 0.0234,
+   "persistence_accuracy": 0.8332
+  },
+  "trend21@eligible": {
+   "classes": {
+    "downtrend": 451960,
+    "uptrend": 618450
+   },
+   "incumbent_accuracy": 0.8225,
+   "incumbent_persistence_agreement": 1.0,
+   "n_resolved": 1070410,
+   "none_share": 0.0177,
+   "persistence_accuracy": 0.8232
+  },
+  "vol21@all": {
+   "classes": {
+    "calm": 886269,
+    "elevated": 909379
+   },
+   "incumbent_accuracy": 0.6176,
+   "incumbent_persistence_agreement": 0.8678,
+   "n_resolved": 1795648,
+   "none_share": 0.0234,
+   "persistence_accuracy": 0.6118
+  },
+  "vol21@eligible": {
+   "classes": {
+    "calm": 530281,
+    "elevated": 540129
+   },
+   "incumbent_accuracy": 0.6224,
+   "incumbent_persistence_agreement": 0.869,
+   "n_resolved": 1070410,
+   "none_share": 0.0177,
+   "persistence_accuracy": 0.6154
+  }
+ },
+ "last_origin": "2026-08-28",
+ "manifest_id": "forecastplan-exp-v1",
+ "panel_sha256": "7e7d1a7af3d0af2aad863c50f772c68545b7ddc0c5159d32607e566f3989aae2",
+ "rows": 1838635,
+ "symbols": 2047
+}

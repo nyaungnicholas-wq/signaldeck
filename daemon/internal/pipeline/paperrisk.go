@@ -205,3 +205,55 @@ func toFillRecords(trades []store.PaperTrade) []papertrade.FillRecord {
 	}
 	return out
 }
+
+// releasePosition removes a name the step has just SOLD from the risk book,
+// mirroring exactly how riskBook accumulated it.
+//
+// Without this, an exit frees CASH but not HEADROOM. riskBook is measured once,
+// before Phase 1 runs, from the STORED positions; Phase 1 then sells into
+// apply.CloseSymbolIDs and refreshes only book.Cash. The sold name keeps its
+// slot in OpenPositions, its notional in GrossExposure and its bucket in
+// ExposureBySector, so Phase 2 judges entries against exposure that no longer
+// exists: at a binding cap every candidate is refused and ledgered
+// risk-gate-refused while the book is in fact flat. buildStep runs once per new
+// daily bar, so that costs a full trading day, not an hour.
+//
+// The arithmetic must MATCH riskBook or the book drifts: the same
+// BarAtOrBefore(asof) mark, the same riskSector label, and the same treatment of
+// an unmarkable name (counted as a position, contributing no exposure).
+// GrossKnown is deliberately NOT recomputed — releasing one unmarked name tells
+// us nothing about whether the others could be marked.
+func (w *PaperTrader) releasePosition(
+	ctx context.Context,
+	b *riskgate.Book,
+	symbolID int64,
+	qty float64,
+	symByID map[int64]string,
+	asof int64,
+) error {
+	if qty <= 0 {
+		return nil
+	}
+	if b.OpenPositions > 0 {
+		b.OpenPositions--
+	}
+	bar, ok, err := w.St.BarAtOrBefore(ctx, symbolID, md.TF1d, asof)
+	if err != nil {
+		return err
+	}
+	if !ok || bar.Close <= 0 {
+		return nil // never contributed exposure; riskBook already cleared GrossKnown
+	}
+	notional := qty * bar.Close
+	b.GrossExposure -= notional
+	if b.GrossExposure < 0 {
+		b.GrossExposure = 0 // float drift only; a negative gross is meaningless
+	}
+	if sec := riskSector(symByID[symbolID]); sec != "" {
+		b.ExposureBySector[sec] -= notional
+		if b.ExposureBySector[sec] <= 0 {
+			delete(b.ExposureBySector, sec)
+		}
+	}
+	return nil
+}

@@ -20,6 +20,7 @@ import {
   type StrategyFleetAgg,
   type StrategyResultRow,
   type WatchRow,
+  isAuthError,
 } from "@/lib/api";
 import { fmtPct } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
@@ -179,7 +180,7 @@ export default function StrategiesPage() {
         .catch((e: unknown) => {
           if (!alive) return;
           const msg = e instanceof Error ? e.message : String(e);
-          if (!msg.includes("401")) {
+          if (!isAuthError(e)) {
             setRowsErr(msg);
             return;
           }

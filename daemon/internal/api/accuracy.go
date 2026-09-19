@@ -51,16 +51,31 @@ func (d Deps) registerAccuracy(mux *http.ServeMux) {
 }
 
 // registryFile is the on-disk shape this handler reads. Only the fields the
-// verdict needs are modelled; the rest of the registry is passed through
-// untouched so the API can never silently drop a field the grader published.
+// verdict needs are modelled.
+//
+// THIS HANDLER DOES NOT PASS THE REST THROUGH, and the comment here used to say
+// it did. The response is the closed accuracyRow struct below, built field by
+// field, so every other registry key — honesty, breadth, design_effect, null_ci,
+// claimed, the survivorship_* and settlement_* blocks, and the grader's own
+// verdict string and CI — is dropped from /api/accuracy. That matters most for
+// honesty and breadth, which the grader publishes specifically to QUALIFY a
+// verdict: an API client gets "FAILED" without the two fields that say how far
+// that verdict reaches.
+//
+// Nothing renders those fields today — web/src/app/accuracy/page.tsx reads
+// data/accuracy_registry.json from disk and uses this endpoint only as the
+// publication gate — so no displayed number is wrong. Read the registry file
+// directly if you need a field that is not modelled here, and widen accuracyRow
+// (not this comment) if a client ever needs one served.
 type registryFile struct {
-	GradedAt          string          `json:"graded_at"`
-	RefusedSince      *string         `json:"refused_since"`
-	GraderSHA256      string          `json:"grader_sha256"`
-	MinIndependentN   float64         `json:"min_independent_n"`
-	MinDistinctBlocks int             `json:"min_distinct_blocks"`
-	Rows              []registryRow   `json:"rows"`
-	Raw               json.RawMessage `json:"-"`
+	GradedAt          string        `json:"graded_at"`
+	Status            string        `json:"status"`
+	RefusedSince      *string       `json:"refused_since"`
+	RefusalReason     string        `json:"refusal_reason"`
+	GraderSHA256      string        `json:"grader_sha256"`
+	MinIndependentN   float64       `json:"min_independent_n"`
+	MinDistinctBlocks int           `json:"min_distinct_blocks"`
+	Rows              []registryRow `json:"rows"`
 }
 
 type registryRow struct {
@@ -86,6 +101,7 @@ type accuracyResponse struct {
 	Reason       string        `json:"reason,omitempty"`
 	GeneratedAt  time.Time     `json:"generated_at"`
 	GradedAt     string        `json:"graded_at,omitempty"`
+	RefusedSince string        `json:"refused_since,omitempty"`
 	GraderSHA256 string        `json:"grader_sha256,omitempty"`
 	Rows         []accuracyRow `json:"rows,omitempty"`
 }
@@ -113,7 +129,7 @@ type accuracyRow struct {
 
 func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	now := time.Now().UTC()
+	now := d.now().UTC()
 
 	reg, err := loadRegistry(d.RegistryPath)
 	if err != nil {
@@ -126,10 +142,16 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 
 	// The grader's own refusal marker outranks anything in the rows.
 	if reg.RefusedSince != nil && *reg.RefusedSince != "" {
+		// The envelope carries the gate's own sentence; a reader who cannot see
+		// WHY publication was refused cannot tell an outage from a decision.
+		reason := "grader has been refusing since " + *reg.RefusedSince
+		if reg.RefusalReason != "" {
+			reason += ": " + reg.RefusalReason
+		}
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
-			GradedAt: reg.GradedAt,
-			Reason:   "grader has been refusing since " + *reg.RefusedSince,
+			GradedAt: reg.GradedAt, RefusedSince: *reg.RefusedSince,
+			Reason: reason,
 		})
 		return
 	}
@@ -166,7 +188,34 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	// known rather than assumed. This refuses on the SAME evidence
 	// internal/forecastmon uses, so the publication surface and the monitor
 	// cannot disagree about whether a day was usable.
-	if reason, collapsed, err := d.collapsedGradingWindow(ctx, reg, now); err == nil && collapsed {
+	//
+	// AN UNREADABLE GATE IS NOT A PASSED GATE. This used to read
+	// `err == nil && collapsed`, so any error evaluating the gate fell through
+	// to full publication -- the one outcome that cannot be justified, because
+	// the gate's whole job is to decide whether these rows may be served and an
+	// error means it never decided. Twelve lines below, this same handler
+	// already refuses on an unreadable evidence ledger, for the stated reason
+	// that a failed read "must not read as 'no evidence against this model'".
+	// The collapse gate had the opposite wiring on the same kind of failure.
+	//
+	// The two outcomes are kept APART in the status, which matters more here
+	// than anywhere else in the API: REFUSED means the window was measured and
+	// found collapsed, and REFUSED_UNAVAILABLE means nobody measured it. Fusing
+	// them would publish a fabricated scientific verdict every time a database
+	// read timed out, which is the same dishonesty as publishing the rows,
+	// pointed the other way.
+	reason, collapsed, err := d.collapsedGradingWindow(ctx, reg, now)
+	if err != nil {
+		writeAccuracyRefusal(w, accuracyResponse{
+			Status: "REFUSED_UNAVAILABLE", GraderFresh: false, GeneratedAt: now,
+			GradedAt: reg.GradedAt,
+			Reason: "the collapsed-cross-section gate could not be evaluated, so these " +
+				"figures are withheld WITHOUT having been judged — this is a check " +
+				"outage, not a finding about the models: " + err.Error(),
+		})
+		return
+	}
+	if collapsed {
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
 			GradedAt: reg.GradedAt, Reason: reason,
@@ -381,7 +430,6 @@ func loadRegistry(override string) (*registryFile, error) {
 		if err := json.Unmarshal(b, &reg); err != nil {
 			return nil, err
 		}
-		reg.Raw = b
 		return &reg, nil
 	}
 	return nil, lastErr
@@ -403,10 +451,15 @@ func writeJSONStatus(w http.ResponseWriter, code int, body any) {
 //
 // The window is taken from the registry's own max distinct_days rather than a
 // fixed lookback: a fixed one would either miss a collapse just outside it or
-// refuse forever because of a collapse the grader never touched. An unreadable
-// window is NOT treated as a collapse — the caller ignores the error and
-// publishes, because refusing on a failed read would wedge the surface shut on
-// a transient database error rather than on evidence.
+// refuse forever because of a collapse the grader never touched.
+//
+// An unreadable window is NOT a collapse, and this still reports it as
+// ("", false, err) rather than inventing a verdict from a failed read. What
+// changed (2026-09-13) is what the CALLER does with that error: it withholds
+// publication and says the gate was unavailable, instead of publishing. The
+// contract here is unchanged — a failed read is not evidence — but "not
+// evidence of a collapse" was never the same thing as "evidence there was
+// none", and the caller used to treat it as though it were.
 func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now time.Time) (string, bool, error) {
 	// Per-horizon windows. This used to take ONE global max distinct_days and
 	// probe horizon "1d" only, so the 1w rows were gated by 1d evidence: a
@@ -438,25 +491,25 @@ func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now
 
 	var bad []string
 	total := 0
+	// THE WINDOW IS THE GRADED RECORD, NOT THE NEWEST N SESSIONS (2026-09-09).
+	//
+	// This used to reproduce the grader's window as "the newest distinct_days
+	// (+10 slack) call days". The grader's population is every row with
+	// ts >= the survivorship epoch (tools/accuracy_registry.py,
+	// fetch_directional_days), and once the ensemble abstains distinct_days
+	// stops growing while sessions keep passing, so the newest-N slice slid
+	// forward PAST the collapsed days that are still inside the graded record.
+	// Measured 2026-09-09: 1d distinct_days=28, so a 38-session slice would have
+	// dropped the 2026-07-27..08-06 collapses within two more weeks and
+	// published a record built on them - the fail-open direction the previous
+	// comment named. Reading from the epoch is a superset of the graded days
+	// (the grader also drops thin, unsettled and stale-feed days), so it can
+	// only over-refuse, never under-refuse.
+	since := time.Unix(store.SurvivorshipEpoch, 0).UTC()
 	for _, h := range horizons {
-		days := depth[h]
-		// Trading days are sparser than calendar days; widen so the calendar
-		// window actually contains `days` sessions rather than stopping short.
-		//
-		// KNOWN APPROXIMATION, stated rather than papered over: the registry
-		// publishes how MANY days it graded, not WHICH ones, so this reproduces
-		// the window as "the newest `days` sessions". A collapsed day that sits
-		// inside the graded window but outside that newest-N slice is missed.
-		// The miss FAILS OPEN (publishes when it should refuse), which is the
-		// wrong direction — closing it needs the grader to emit its graded day
-		// list, not a smarter guess here.
-		since := now.AddDate(0, 0, -(days*2 + 7))
 		stats, err := d.St.ForecastDayStats(ctx, h, since)
 		if err != nil {
 			return "", false, err
-		}
-		if len(stats) > days {
-			stats = stats[len(stats)-days:] // the newest `days` sessions
 		}
 		total += len(stats)
 		for _, st := range stats {
@@ -480,7 +533,9 @@ func buildCollapseReason(bad []string, total int) string {
 		"the graded window contains %d collapsed cross-section(s) of %d day(s): %s. "+
 			"On a collapsed day the whole universe receives a handful of distinct "+
 			"probabilities, so these rows grade one market-wide call repeated per symbol, "+
-			"not independent per-symbol forecasts. Figures over this window are withheld "+
-			"until it clears.",
+			"not independent per-symbol forecasts. Figures over this window are withheld. "+
+			"The window starts at the survivorship epoch and does not roll forward, so a "+
+			"collapsed day stays in it: this clears when the window is re-registered, not "+
+			"by waiting for more grades.",
 		len(bad), total, strings.Join(bad, ", "))
 }

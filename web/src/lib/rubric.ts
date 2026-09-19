@@ -527,6 +527,23 @@ export interface SiteScore {
  * must not be able to move the grade.
  */
 export const MIN_SESSIONS = 5;
+
+/**
+ * How old the crawl may be before the page says so out loud.
+ *
+ * The score is produced by `npm run ux:audit` (e2e/ux-audit.spec.ts) and NOTHING
+ * runs that on a schedule — no CI job, no scheduled task. So the number only
+ * moves when a person remembers to move it, and a reader has no way to tell a
+ * score measured this morning from one measured last month; both render as a
+ * bare "81 / 100".
+ *
+ * Three days, because the audit is cheap and because two working days is a
+ * normal gap that should not cry wolf. This bounds the DISCLOSURE, not the
+ * score: a stale score is still shown, still dated, and still the best estimate
+ * available — it just stops presenting itself as current.
+ */
+export const HEALTH_STALE_DAYS = 3;
+
 const SIGNAL_WEIGHT = 0.5;
 
 export function scoreSite(

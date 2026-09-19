@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
 )
 
 // maxBodyBytes caps every request body. The largest legitimate payload is a
@@ -123,7 +125,21 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 			return
 		}
 
-		// 7. Body-size cap on every request.
+		// 7. LICENCE. Defence in depth behind publicRoutes, for the route
+		// somebody adds next month and forgets to think about. Gated on
+		// ReachablePrivately() for the same reason rawDataRefused is: the
+		// operator's own unpublished box may read its own data, and a
+		// request-level test can only narrow a config-level answer, never
+		// supply one.
+		if !d.Cfg.AllowRawExport && !d.Cfg.ReachablePrivately() {
+			if src, ok, governed := datalicense.RouteRedistributable(r.URL.Path); governed && !ok {
+				httpErr(w, 451, datalicense.RawDataNotice()+
+					" (route governed by the "+src+" licence)")
+				return
+			}
+		}
+
+		// 8. Body-size cap on every request.
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 
 		next.ServeHTTP(w, r)
@@ -193,12 +209,124 @@ func (s *statusWriter) Flush() {
 	}
 }
 
+// publicRoutes is THE ENTIRE anonymous surface when SIGNALDECK_PUBLIC_SURFACE
+// is on. A path absent from this map is closed, whatever PublicReads says.
+//
+// Why an allowlist and not the PublicReads denylist: this daemon registers 174
+// routes. A denylist answers "did we remember to make this one private?", so
+// route 175 is public by forgetting. On a deployment strangers can reach, the
+// routes you forget include /api/hud (a personal Alpaca paper HUD),
+// /api/paper, /api/portfolio and /api/predictions. Getting that wrong once
+// publishes someone's positions. Here, forgetting closes a route instead.
+//
+// Admission requires ALL FOUR:
+//  1. not user-scoped — no watchlist, alerts, positions, candidates;
+//  2. spends no LLM budget — every /api/ai/ path is excluded, status included;
+//  3. serves no substantially-raw vendor record — see internal/datalicense;
+//  4. no execution, money, order or position path, not even read-side.
+//
+// Deliberately excluded, with reasons, because "why isn't X here" is the
+// question a future reader will have:
+//   - /api/agents, /api/fleet-health: worker names and failure detail. The
+//     health/ready handlers already withhold exactly this from anonymous
+//     callers; publishing it under a different path would undo that.
+//   - /api/source-health, /api/datastats: surface provider error strings,
+//     which is where a credential or an internal path leaks.
+//   - /api/ai/status: spends nothing, but it reports the LLM budget, and the
+//     standing decision is that no /api/ai/ path is anonymous.
+//   - every vendor read (/api/bars, /api/snaps, /api/news, /api/stocktwits,
+//     /api/tv-*, /api/chart-overlays, /api/export/*.csv): licence, not
+//     privacy. datalicense.Sources classes tvscanner and stocktwits
+//     Restricted and the Alpaca/Kraken bars Licensed.
+var publicRoutes = map[string]bool{
+	// Probes. A monitor must reach these before it holds any credential.
+	"/api/health": true, "/api/ready": true, "/api/version": true,
+
+	// The honesty machinery — this IS the published product.
+	//
+	// SEVEN OF THESE HAVE NO IN-APP CONSUMER, and that is deliberate rather than
+	// an oversight, so it is written down here where the decision lives. Measured
+	// 2026-09-13 across web/src, ops, docs and tools: /api/model-health,
+	// /api/canary, /api/postmortems, /api/lineage, /api/dataset-versions,
+	// /api/evidence and /api/research-loop are referenced by zero files. No page
+	// renders them and no script calls them.
+	//
+	// They are the MACHINE-READABLE half of the published record. The claim this
+	// project makes is that a skeptic can check it, and a skeptic with curl is
+	// the reader they are for — a route that only exists because a React page
+	// happens to fetch it is a worse receipt, not a better one. Each is
+	// read-only, derived, not user-scoped, and carries no vendor rows.
+	//
+	// The consequence to keep in view: each one is anonymous attack surface that
+	// no in-app traffic would ever exercise, so a defect in one is invisible to
+	// ordinary use. They must stay in the contract tests for that reason. If a
+	// route here ever stops being part of the published argument, remove it from
+	// this list rather than leaving it reachable because nothing pointed at it
+	// anyway.
+	//
+	// (The other 16 unconsumed routes measured that day are authenticated
+	// operator diagnostics and are NOT on this list, so they answer 401 to the
+	// public.)
+	"/api/accuracy": true, "/api/track-record": true, "/api/honesty": true,
+	"/api/calibration": true, "/api/model-health": true, "/api/canary": true,
+	"/api/postmortems": true, "/api/regime-postmortems": true,
+	"/api/self-audit": true, "/api/lineage": true, "/api/quality": true,
+	"/api/dataset-versions": true, "/api/evidence": true,
+	"/api/research-loop": true, "/api/research-ledger": true,
+
+	// The receipts. Cheap variants only: ledger/verify?full=1 and
+	// ledger/anchors?recompute=1 already self-gate on userID != 0.
+	"/api/prereg": true, "/api/ledger": true,
+	"/api/ledger/verify": true, "/api/ledger/anchors": true,
+
+	// The only anonymous WRITE. It takes an email and nothing else, it is
+	// behind the write-tier rate limiter and the CSRF header like every other
+	// non-GET, and it answers 200 whether or not the address was already
+	// stored -- saying "already subscribed" would let anyone test whether a
+	// given person signed up.
+	"/api/waitlist": true,
+
+	// Derived, not user-scoped, no vendor rows. It is the honesty surface for
+	// the new forecast and is useless if a visitor cannot read it.
+	"/api/vol-forecast/record": true,
+}
+
+// alwaysOpen is orthogonal to the allowlist: these authenticate themselves or
+// must work before a credential exists. /api/auth/register is reachable here
+// but still refuses unless Cfg.OpenSignup, which is false on any published
+// deployment.
+func alwaysOpen(path string) bool {
+	return path == "/api/health" || path == "/api/ready" ||
+		strings.HasPrefix(path, "/api/auth/") ||
+		path == "/api/tv-webhook" || mcpExempt(path)
+}
+
 // requiresAuth reports whether an anonymous request to path must be rejected.
 //   - /api/health and /api/auth/* are always open (you must be able to log in);
 //   - user-scoped and spend-incurring endpoints always need identity;
 //   - the remaining read-only endpoints (shared market data) are public when
 //     SIGNALDECK_PUBLIC_READS=true (the localhost-friendly default).
 func (d Deps) requiresAuth(path string) bool {
+	// PUBLISHED DEPLOYMENT: the allowlist is the whole surface and it answers
+	// FIRST, so nothing below can widen it. Returning true here for an
+	// unlisted path is what makes a route added next month private until
+	// somebody decides otherwise.
+	//
+	// This branch is entered only on an explicit SIGNALDECK_PUBLIC_SURFACE=1.
+	// With it off, every line below behaves exactly as it did before, which is
+	// why localhost development and the existing test suite are untouched.
+	if d.Cfg.PublicSurface {
+		if alwaysOpen(path) || publicRoutes[path] {
+			return false
+		}
+		// /api/evidence/{id} — the per-claim detail behind /api/evidence.
+		// Prefix-matched because the id is in the path, and it is the only
+		// public route that is not a fixed string.
+		if strings.HasPrefix(path, "/api/evidence/") {
+			return false
+		}
+		return true
+	}
 	// /api/health and /api/ready are PROBES: a monitor, a load balancer or a
 	// deploy script has to reach them before it holds any credential, which is
 	// the whole reason they exist. /api/ready was omitted here and started
@@ -213,6 +341,59 @@ func (d Deps) requiresAuth(path string) bool {
 	// The TradingView webhook is authenticated by its own shared secret, not by
 	// a session — it must stay reachable even when SIGNALDECK_PUBLIC_READS=false.
 	if path == "/api/tv-webhook" {
+		return false
+	}
+	// THE RECEIPTS. /proof is the one page whose entire purpose is to be shown
+	// to someone who has no account here, and it is built from exactly these
+	// two reads. They were not exempt, so both 401'd anonymously and the page
+	// rendered its error state to every visitor it exists for — while its own
+	// source comment claimed it "reads only the already-public GET endpoints".
+	//
+	// Exempted individually rather than by opening SIGNALDECK_PUBLIC_READS.
+	// That flag defaults CLOSED here for a measured reason (A9): daemon/.env
+	// allowlists a reserved ngrok hostname, so reachablePrivately() is false
+	// and flipping the flag would publish EVERY read endpoint the moment the
+	// tunnel starts. Publishing the two endpoints that are meant to be public
+	// is not the same decision as publishing all of them.
+	//
+	// Both are safe to serve anonymously on their own terms:
+	//   - neither is user-scoped and neither spends LLM budget;
+	//   - track-record is served from cache (~1.6ms measured) and already
+	//     carries its own gating — it withholds figures rather than inflating
+	//     them when the sample is too thin;
+	//   - ledger/verify is CPU-bound (~2.5s), and its resource-exhaustion lever
+	//     was already closed by A11: ledgerVerifyConcurrency caps concurrent
+	//     walks at 2 and ledgerVerifyTimeout bounds each at 30s.
+	//
+	// Known and accepted: verify may APPEND a signed anchor on a cadence (see
+	// maybeAnchor), so this is a public read with a bounded write side effect.
+	// The cadence gate, not the auth gate, is what limits it.
+	// The public /volatility page also needs its aggregate evidence record
+	// when general reads are closed. No raw prices or personal data are served.
+	// /api/accuracy joins them (2026-09-08): it is the publication decision the
+	// landing page and /accuracy render, it serves aggregates only (no user
+	// data, no vendor rows), and it fails closed on its own — a refusal is a
+	// 503 with a reason. A grade behind a login is a grade hidden.
+	// /api/prereg joins them (2026-09-13), and the gap it closes is the same one
+	// this block was written for. It was already in publicRoutes, so a PUBLIC
+	// deployment served it anonymously — but not here, so on this posture the
+	// registration chain 401'd the very visitors /proof exists for. That was
+	// invisible while no page called it: /volatility told readers "you can read
+	// that registration on the receipts page", /accuracy printed a bare
+	// proofs/*.md path, and /proof rendered no registration at all. Wiring the
+	// section up without this makes the promise resolve to "not readable
+	// without a session", which for an anonymous judge is the same dead end
+	// wearing a better error message.
+	//
+	// Safe on the same terms as its neighbours: not user-scoped, no LLM budget,
+	// no prices and no vendor rows — it serves frozen claim text with its
+	// digests and chain links, which is precisely what a sceptic is supposed to
+	// be able to read. Measured 2026-09-13: 8ms, 172 KB, 116 records, served
+	// from the store with no recomputation beyond the chain check it already
+	// does. The size is the one cost worth knowing about; it is static between
+	// registrations.
+	if path == "/api/track-record" || path == "/api/ledger/verify" || path == "/api/vol-forecast/record" ||
+		path == "/api/accuracy" || path == "/api/prereg" {
 		return false
 	}
 	// The MCP endpoint authenticates itself, and strictly more tightly than
@@ -234,11 +415,19 @@ func (d Deps) requiresAuth(path string) bool {
 		path == "/api/subscribe",
 		path == "/api/unsubscribe",
 		strings.HasPrefix(path, "/api/portfolio"),
+		path == "/api/paper/order", // manual simulated book is per-user; never anonymous even under PublicReads
 		strings.HasPrefix(path, "/api/alerts"),
 		// discovery wave (appended): candidate mutations are session-scoped.
 		path == "/api/candidates/add",
 		path == "/api/candidates/monitor-all",
-		path == "/api/candidates/dismiss":
+		path == "/api/candidates/dismiss",
+		// An outbound SIDE EFFECT, not a read. It fell through to the
+		// PublicReads default below, so on any deployment that deliberately
+		// opens public reads -- a supported configuration, see .env.example --
+		// an anonymous caller could drive the configured Discord/Telegram/Slack/
+		// SMTP transport at the write-tier rate limit. A read flag must not
+		// govern something that leaves the machine.
+		path == "/api/notify/test":
 		return true
 	}
 	return !d.Cfg.PublicReads

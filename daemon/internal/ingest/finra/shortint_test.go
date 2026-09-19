@@ -53,7 +53,10 @@ func TestSettlementDates(t *testing.T) {
 	// 2026-07-10: most recent settlements are Jun 30, Jun 15, May 31, May 15…
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	got := SettlementDates(now, 4)
-	want := []string{"2026-06-30", "2026-06-15", "2026-05-31", "2026-05-15"}
+	// 2026-05-31 is a Sunday: FINRA settles (and names the file) on the prior
+	// business day, Friday 2026-05-29. Measured 2026-09-09 on the live CDN:
+	// shrt20260814.csv is 200 and shrt20260815.csv (Saturday) is a 403.
+	want := []string{"2026-06-30", "2026-06-15", "2026-05-29", "2026-05-15"}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d", len(got), len(want))
 	}

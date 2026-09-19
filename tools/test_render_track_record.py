@@ -109,13 +109,44 @@ class TestRenderTrackRecord(unittest.TestCase):
         self.assertNotEqual(out.returncode, 0, "an empty registry must not render")
 
     def test_runs_against_the_real_registry(self):
+        # The contract is "renders IFF there are rows", and both halves are
+        # asserted here against whatever state the live registry is actually in.
+        #
+        # This asserted exit 0 unconditionally, which put it in direct conflict
+        # with test_empty_registry_is_refused_rather_than_published above. The
+        # publication gate in tools/accuracy_registry.py writes
+        # {"status": "REFUSED", "rows": []} ON PURPOSE when the graded window is
+        # statistically unusable, and that state persists for WEEKS while the
+        # offending window ages out — so one of the two tests had to be red the
+        # whole time. A suite that is red by design is a suite whose next real
+        # failure nobody investigates.
+        #
+        # ops/anchor-publish.sh uses the renderer's non-zero exit AS its emptiness
+        # guard and aborts the publish on it, so exiting 0 on an empty registry
+        # would silently ship an empty public track record. That is why the
+        # refused branch asserts failure rather than skipping.
         real = ROOT / "data" / "accuracy_registry.json"
         if not real.exists():
             self.skipTest("data/accuracy_registry.json not present")
+        payload = json.loads(real.read_text(encoding="utf-8"))
         out = subprocess.run(
             [sys.executable, str(SCRIPT), str(real)],
             capture_output=True, text=True, encoding="utf-8", cwd=str(ROOT),
         )
+        if not payload.get("rows") and payload.get("status") == "REFUSED":
+            # A REFUSED envelope is a publication decision, not an empty registry
+            # (release ledger 2026-09-08, F1/F17): it renders a refusal notice with
+            # no figures and exits 0 so the anchor publish carries the refusal.
+            self.assertEqual(out.returncode, 0, "a REFUSED envelope must render a refusal notice")
+            self.assertIn("GRADING REFUSED", out.stdout)
+            self.assertNotRegex(out.stdout, r"\d+\.\d+%", "a refusal must print no accuracy figure")
+            return
+        elif not payload.get("rows"):
+            self.assertNotEqual(
+                out.returncode, 0,
+                f"registry is {payload.get('status', 'rows-empty')} and must NOT render, "
+                f"but the renderer exited 0")
+            return
         self.assertEqual(out.returncode, 0, f"exit {out.returncode}: {out.stderr}")
         rows = [ln for ln in out.stdout.splitlines() if ln.startswith("| ") and "---" not in ln]
         self.assertGreater(len(rows), 1, "the real registry rendered no data rows")

@@ -168,5 +168,19 @@ func (s *Store) saveLedgerCkpt(ctx context.Context, res LedgerVerification) erro
 	if err != nil {
 		return err
 	}
+	// NOTHING CHANGED, SO WRITE NOTHING. SetMeta goes through the SINGLE WORKER
+	// connection, and the fleet keeps it busy: measured 2026-09-16, three
+	// consecutive BEGIN IMMEDIATE attempts on the live database waited 0.33s,
+	// 17.16s and 4.54s, and during post-restart catch-up the log recorded
+	// "fleet quiesced ... blocked=43 fleet=103 drainTimedOut=true".
+	//
+	// A verification that found no new rows was still queueing behind that to
+	// rewrite a byte-identical row, so a PUBLIC READ-ONLY endpoint took the
+	// writer lock and the handler's 30s deadline expired while it waited:
+	// /api/ledger/verify answered 503 "exceeded 30s" on a chain whose
+	// checkpoint was already current and whose suffix walk was empty.
+	if cur, err := s.GetMeta(ctx, metaLedgerVerifyCkpt); err == nil && cur == string(b) {
+		return nil
+	}
 	return s.SetMeta(ctx, metaLedgerVerifyCkpt, string(b))
 }

@@ -123,10 +123,29 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	warmBody("/api/calibration", "", sharedCalibrationSWR, d.calibration)
 	warmBody("/api/datastats", "datastats", sharedDatastatsSWR, d.datastats)
 	warmBody("/api/macro", "macro", sharedMacroSWR, d.macro)
+	// /api/vol-forecast/record: ~25s cold; the public /volatility page fetches
+	// it server-side under a 15s bound and rendered "not readable" to any
+	// visitor who arrived before a human had paid the build.
+	warmBody("/api/vol-forecast/record", "record", sharedVolRecordSWR, d.volForecastRecord)
+	// The screener and the two flagship paper books: the workspace's first
+	// clicks after the dashboard, and the two slowest under worker load.
+	warmBody("/api/screener", d.St.CacheKey()+"|screener", sharedScreenerSWR, d.screener)
+	warmBody("/api/paper?strategy=flagship-1d", d.St.CacheKey()+"|paper|strategy=flagship-1d", sharedPaperSWR, d.paper)
+	warmBody("/api/paper?strategy=flagship-1w", d.St.CacheKey()+"|paper|strategy=flagship-1w", sharedPaperSWR, d.paper)
 	// /api/xs-factor: recomputes the whole cross-section at read time from ~300
 	// trailing daily bars per active symbol, so a cold build must land on the
 	// warmer, never on the first visitor. Default query (21d / stocks / 50).
 	warmBody("/api/xs-factor", xsFactorWarmKey(d.St), sharedXSFactorSWR, d.xsFactor)
+	// /api/research-ledger goes LAST: it is the most expensive build here and
+	// the only one on the ANONYMOUS surface, so it must not delay the routes
+	// above it -- the ordering rule this file opens with.
+	//
+	// Caching it alone was not enough. Measured 2026-09-13 on a freshly
+	// deployed daemon: the first call did not return inside 120s, the second
+	// took 75s, and only the third was served from cache (1.8ms). SWR protects
+	// every visitor EXCEPT the first one after a restart, and on a published
+	// deployment that visitor is anonymous and unauthenticated.
+	warmBody("/api/research-ledger", d.St.CacheKey()+"|research-ledger", sharedResearchLedgerSWR, d.researchLedger)
 	return nil
 }
 

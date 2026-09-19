@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { companiesList, type CompanyDirRow } from "@/lib/api";
+import { cryptoRows, CRYPTO_EXCHANGE } from "@/lib/cryptoSearch";
 import { usePeek } from "@/components/CompanyPeek";
 
 /** Fired by the header chip in Shell to open the palette without a keyboard. */
@@ -23,7 +24,11 @@ export const CMDK_EVENT = "sd-cmdk";
 // Route registry — every reachable page (canonical post-redirect URLs only;
 // legacy /markets/* and /signals/* 307 into these).
 const PAGES: { label: string; href: string }[] = [
-  { label: "Home — dashboard & daily briefing", href: "/" },
+  // "/" is the PUBLIC landing page (see lib/publicRoutes), not the dashboard —
+  // this entry labelled it "dashboard & daily briefing" and was the only Home
+  // entry, so the palette had no way to reach the real dashboard at all.
+  { label: "Home — the public landing page", href: "/" },
+  { label: "Dashboard — daily briefing & your book", href: "/dashboard" },
   { label: "Watchlist — your symbols as cards", href: "/watchlist" },
   { label: "Watchlist — compare two symbols", href: "/watchlist/compare" },
   { label: "Market — overview & screener", href: "/market/overview" },
@@ -164,8 +169,9 @@ export default function CommandPalette() {
     if (!open || !q) return;
     let dead = false;
     const t = setTimeout(() => {
-      companiesList({ q, limit: 8 })
-        .then((r) => !dead && setSyms(r.companies ?? []))
+      // SEC directory (stocks/ETFs) + tracked crypto pairs (2026-09-07: crypto was unsearchable).
+      Promise.all([companiesList({ q, limit: 8 }), cryptoRows(q).catch(() => [] as CompanyDirRow[])])
+        .then(([r, c]) => !dead && setSyms([...c, ...(r.companies ?? [])]))
         .catch(() => !dead && setSyms([]));
     }, 200);
     return () => {
@@ -210,7 +216,7 @@ export default function CommandPalette() {
   const run = (it: Item) => {
     setOpen(false);
     if (it.type === "page") router.push(it.href);
-    else router.push(`/s/stocks/${encodeURIComponent(it.row.ticker)}`);
+    else router.push(`/s/${it.row.exchange === CRYPTO_EXCHANGE ? "crypto" : "stocks"}/${encodeURIComponent(it.row.ticker)}`);
   };
   const runPeek = (row: CompanyDirRow) => {
     setOpen(false);

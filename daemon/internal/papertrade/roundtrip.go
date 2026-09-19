@@ -106,6 +106,9 @@ func MatchRoundTrips(fills []FillRecord) MatchResult {
 
 	ordered := make([]FillRecord, len(fills))
 	copy(ordered, fills)
+	// Ts alone is not a total order (fills in one pass carry their own bar's
+	// ts), so the tie-break is the CALLER's order: stable sort over a slice the
+	// store returns ORDER BY id keeps equal-ts fills in write order.
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Ts < ordered[j].Ts })
 
 	open := map[int64][]lot{}

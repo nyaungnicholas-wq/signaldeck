@@ -306,13 +306,50 @@ func (w *DigestWorker) Run(ctx context.Context) (string, error) {
 
 	detail := "composed weekly digest for week of " + weekKey
 	if w.Notifier.Enabled() {
+		// DELIVERED IS MEASURED, NOT ASSUMED. Notifier.Send returns nothing, and
+		// this stamped MetaDigestSentAt unconditionally and then named the
+		// transports from ConfiguredNames() -- a pure CONFIG read. Revoke the
+		// Slack webhook and reject SMTP auth and the worker still filed
+		// status=ok with detail "delivered to slack,smtp", and /api/digest
+		// returned a non-zero sentAt, which that file documents as meaning
+		// delivered. Nobody received the only weekly push the platform makes.
+		//
+		// Send does record per-transport outcomes (notify.attempt updates
+		// LastOK/LastError), so the outcome is readable -- it just was not read.
+		// Comparing LastOK across the call rather than against a wall-clock
+		// stamp keeps this correct under any clock skew between the two.
+		before := map[string]int64{}
+		for _, t := range w.Notifier.Status() {
+			before[t.Name] = t.LastOK
+		}
 		w.Notifier.Send(ctx, notify.Message{
 			Title: "SignalDeck weekly digest", Body: text, Kind: "digest", Ts: now.Unix(),
 		})
-		if err := w.St.SetMeta(ctx, MetaDigestSentAt, strconv.FormatInt(now.Unix(), 10)); err != nil {
-			return "", err
+		var delivered, failed []string
+		for _, t := range w.Notifier.Status() {
+			if !t.Configured {
+				continue
+			}
+			if t.LastOK > before[t.Name] {
+				delivered = append(delivered, t.Name)
+			} else {
+				failed = append(failed, t.Name)
+			}
 		}
-		detail += " — delivered to " + strings.Join(w.Notifier.ConfiguredNames(), ",")
+		if len(delivered) > 0 {
+			// Stamped only when at least one transport actually took it. A
+			// sentAt that no delivery backs is worse than no sentAt: it is the
+			// field a reader trusts to mean the push went out.
+			if err := w.St.SetMeta(ctx, MetaDigestSentAt, strconv.FormatInt(now.Unix(), 10)); err != nil {
+				return "", err
+			}
+			detail += " — delivered to " + strings.Join(delivered, ",")
+		} else {
+			detail += " — NOT DELIVERED: no transport accepted it"
+		}
+		if len(failed) > 0 {
+			detail += " (failed: " + strings.Join(failed, ",") + ")"
+		}
 	} else {
 		detail += " — digest skipped: no transport"
 	}

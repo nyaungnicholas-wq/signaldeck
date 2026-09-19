@@ -1,0 +1,236 @@
+{
+  "flagged": [
+    {
+      "day": "2026-07-27",
+      "exact_match": false,
+      "horizon": "1d",
+      "near_match": true,
+      "registry_distinct": 6,
+      "registry_n": 330,
+      "trace_distinct": 8,
+      "trace_n": 330
+    },
+    {
+      "day": "2026-07-28",
+      "exact_match": false,
+      "horizon": "1d",
+      "near_match": false,
+      "registry_distinct": 8,
+      "registry_n": 330,
+      "trace_distinct": 14,
+      "trace_n": 328
+    },
+    {
+      "day": "2026-07-29",
+      "exact_match": false,
+      "horizon": "1d",
+      "near_match": false,
+      "registry_distinct": 13,
+      "registry_n": 328,
+      "trace_distinct": null,
+      "trace_n": null
+    },
+    {
+      "day": "2026-07-31",
+      "exact_match": false,
+      "horizon": "1d",
+      "near_match": false,
+      "registry_distinct": 6,
+      "registry_n": 328,
+      "trace_distinct": 1,
+      "trace_n": 7
+    },
+    {
+      "day": "2026-08-01",
+      "exact_match": false,
+      "horizon": "1d",
+      "near_match": false,
+      "registry_distinct": 6,
+      "registry_n": 328,
+      "trace_distinct": 2,
+      "trace_n": 7
+    },
+    {
+      "day": "2026-08-02",
+      "exact_match": false,
+      "horizon": "1d",
+      "near_match": true,
+      "registry_distinct": 8,
+      "registry_n": 328,
+      "trace_distinct": 9,
+      "trace_n": 328
+    },
+    {
+      "day": "2026-08-03",
+      "exact_match": false,
+      "horizon": "1d",
+      "near_match": false,
+      "registry_distinct": 5,
+      "registry_n": 328,
+      "trace_distinct": 19,
+      "trace_n": 330
+    },
+    {
+      "day": "2026-08-04",
+      "exact_match": false,
+      "horizon": "1d",
+      "near_match": false,
+      "registry_distinct": 13,
+      "registry_n": 328,
+      "trace_distinct": 324,
+      "trace_n": 327
+    },
+    {
+      "day": "2026-08-06",
+      "exact_match": false,
+      "horizon": "1d",
+      "near_match": false,
+      "registry_distinct": 33,
+      "registry_n": 327,
+      "trace_distinct": 43,
+      "trace_n": 43
+    },
+    {
+      "day": "2026-07-18",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 100,
+      "registry_n": 1032,
+      "trace_distinct": null,
+      "trace_n": null
+    },
+    {
+      "day": "2026-07-21",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 18,
+      "registry_n": 317,
+      "trace_distinct": null,
+      "trace_n": null
+    },
+    {
+      "day": "2026-07-22",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 29,
+      "registry_n": 317,
+      "trace_distinct": null,
+      "trace_n": null
+    },
+    {
+      "day": "2026-07-23",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 3,
+      "registry_n": 67,
+      "trace_distinct": 10,
+      "trace_n": 326
+    },
+    {
+      "day": "2026-07-26",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 21,
+      "registry_n": 326,
+      "trace_distinct": 7,
+      "trace_n": 326
+    },
+    {
+      "day": "2026-07-27",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 7,
+      "registry_n": 326,
+      "trace_distinct": 16,
+      "trace_n": 328
+    },
+    {
+      "day": "2026-07-28",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 16,
+      "registry_n": 328,
+      "trace_distinct": 25,
+      "trace_n": 327
+    },
+    {
+      "day": "2026-07-29",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 25,
+      "registry_n": 327,
+      "trace_distinct": null,
+      "trace_n": null
+    },
+    {
+      "day": "2026-07-31",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 33,
+      "registry_n": 327,
+      "trace_distinct": 2,
+      "trace_n": 7
+    },
+    {
+      "day": "2026-08-01",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 16,
+      "registry_n": 328,
+      "trace_distinct": 2,
+      "trace_n": 7
+    },
+    {
+      "day": "2026-08-02",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": true,
+      "registry_distinct": 13,
+      "registry_n": 328,
+      "trace_distinct": 10,
+      "trace_n": 328
+    },
+    {
+      "day": "2026-08-03",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 7,
+      "registry_n": 328,
+      "trace_distinct": 375,
+      "trace_n": 717
+    },
+    {
+      "day": "2026-08-04",
+      "exact_match": false,
+      "horizon": "1w",
+      "near_match": false,
+      "registry_distinct": 7,
+      "registry_n": 328,
+      "trace_distinct": 326,
+      "trace_n": 327
+    }
+  ],
+  "n_exact": 0,
+  "n_flagged": 22,
+  "n_missing_in_trace": 5,
+  "n_near": 3,
+  "n_trace_days_collapsed_flag": {
+    "1d": 7,
+    "1d#pm": 18,
+    "1w": 6,
+    "1w#pm": 24
+  },
+  "registry_refused_since": "2026-09-08T17:45:18",
+  "registry_status": "REFUSED"
+}

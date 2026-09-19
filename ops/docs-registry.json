@@ -147,9 +147,9 @@
     },
     "README.md": {
       "owner": "Nicholas Nyaung",
-      "version": "0.2.0",
-      "data_as_of": "2026-08-03",
-      "status": "FROZEN",
+      "version": "1.1.0",
+      "data_as_of": "2026-09-08",
+      "status": "ACTIVE",
       "backtest_data": "none"
     },
     "RISK_POLICY.md": {

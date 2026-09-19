@@ -33,11 +33,20 @@ for f in "$OPS"/*.sh; do
     case "$line" in
       *"command -v"*) continue ;;
     esac
+
     # Strip quoted string literals before matching. A log line that MENTIONS the
     # tool ("force-kill FAILED (no pkill, no taskkill)") is not an invocation of
     # it, and flagging the error message that documents the fix is how a guard
     # gets a `|| true` bolted onto it. Only code outside quotes can run a command.
-    code="$(printf '%s' "$line" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g')"
+    # `--jq` is gh's OWN built-in filter FLAG, not the standalone binary: gh
+    # links jq internally, so those lines run on a box with no jq installed --
+    # exactly what this guard enforces. Stripped rather than skipping the whole
+    # line, and matched as the flag spelling because the standalone binary is
+    # never invoked as `--jq`; a real `| jq` later on the same line is still
+    # caught. Three lines in lib-offsite-gh.sh (two of them continuations, with
+    # `gh` on the line above) had this check permanently red, and a guard that
+    # is always red is a guard nobody reads.
+    code="$(printf '%s' "$line" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g' -e 's/--jq//g')"
     if printf '%s' "$code" | grep -E '(^|[^[:alnum:]_])(pkill|pgrep|jq)([^[:alnum:]_]|$)' >/dev/null 2>&1; then
       printf 'FAIL %s:%s %s\n' "$base" "$num" "$line"
       FAIL=$((FAIL + 1))
@@ -48,6 +57,28 @@ $(grep -n -E '(pkill|pgrep|jq)' "$f")
 EOF
   if [ "$clean" = 1 ]; then
     printf '  ok   %s\n' "$base"
+  fi
+done
+
+# CRLF in a tracked shell script. .gitattributes marks *.sh as -text precisely
+# so a Windows checkout cannot introduce it -- but -text preserves whatever the
+# repo already holds, so a file COMMITTED with CRLF keeps it forever and the
+# attribute's promise (a shebang never ends up with a trailing carriage return) silently does
+# not hold. Four scripts were in that state: docker-build.sh (121 lines),
+# signaldeck-ctl.sh (321), revalidate-structural.sh (81) and lib-portable.sh
+# (one mixed line). It cost ops/test-docker-build.sh 15 of 18 assertions on
+# Linux CI while passing 18/18 under Windows Git Bash, which tolerates CRLF --
+# and it is the same reason `bash ops/signaldeck-ctl.sh deploy` failed under
+# WSL. Checked against the INDEX, not the working tree, because the committed
+# bytes are what CI and the container get.
+for f in $(git -C "$OPS/.." ls-files '*.sh' 2>/dev/null); do
+  # Byte count, not a \r grep: that pattern is unreliable across the greps this
+  # repo runs under and was observed matching EVERY file. tr -dc keeps only CR
+  # bytes, so the count is unambiguous.
+  cr=$(git -C "$OPS/.." show ":$f" 2>/dev/null | tr -dc '\r' | wc -c | tr -d ' ')
+  if [ "${cr:-0}" -gt 0 ]; then
+    printf 'FAIL %s has CRLF line endings (breaks on Linux; see .gitattributes)\n' "$f"
+    FAIL=$((FAIL + 1))
   fi
 done
 

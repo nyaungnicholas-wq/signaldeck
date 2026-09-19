@@ -101,8 +101,14 @@ pick_newest() {
   ls -t "$1"/signaldeck-*.db "$1"/signaldeck-*.db.zst "$1"/signaldeck-*.db.gz 2>/dev/null | head -n1
 }
 
-SRC="$(pick_newest "$LOCAL_DIR")"
-SRC_LABEL="local"
+SRC=""; SRC_LABEL="local"
+if [ "${1:-}" = "--from-github" ]; then # rehearse from the OFF-MACHINE copy (GitHub release asset), not the local dir (2026-09-07)
+  . "$SD/ops/lib-offsite-env.sh" && sd_offsite_env_from_dotenv "$SD/daemon/.env"; . "$SD/ops/lib-offsite-gh.sh"
+  GHDL="$(mktemp -d "${TMPDIR:-/tmp}/signaldeck-ghdl-XXXXXX")"; trap 'rm -rf "$GHDL"' EXIT
+  SRC="$(gh_offsite_download_newest "${SIGNALDECK_OFFSITE_GH_REPO:-}" "$GHDL")" || { log "FAIL: could not download the newest GitHub backup release"; exit 1; }
+  SRC_LABEL="github"; log "restore rehearsal: downloaded and checksum-verified $(basename "$SRC") from github ${SIGNALDECK_OFFSITE_GH_REPO:-}"
+fi
+[ -z "$SRC" ] && SRC="$(pick_newest "$LOCAL_DIR")"
 if [ -z "$SRC" ]; then
   SRC="$(pick_newest "$OFFSITE_DIR")"
   SRC_LABEL="offsite"
@@ -118,7 +124,7 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
 fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/signaldeck-restore-XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP" "${GHDL:-}"' EXIT # GHDL: the --from-github download dir (empty when unused)
 TARGET="$TMP/$(basename "$SRC")"
 TARGET="${TARGET%.zst}"; TARGET="${TARGET%.gz}"
 

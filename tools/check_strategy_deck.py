@@ -3,7 +3,14 @@
 The check that matters is the number allowlist: a grep cannot catch a fabricated
 statistic, but an allowlist of every numeric token I supplied can.
 """
-import re, sys, pathlib
+import re, sys, pathlib, datetime
+
+# GRACE_DAYS: how long past the stated date this stays a warning. Non-zero so a
+# missed deadline surfaces before it blocks, and small enough that "overdue" is
+# still a real state rather than a permanent one.
+GRACE_DAYS = 14
+# WARN_DAYS: how far ahead of the date the check starts mentioning it.
+WARN_DAYS = 14
 
 DECK = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "STRATEGY_DECK.md")
 raw = DECK.read_text(encoding="utf-8")
@@ -145,6 +152,16 @@ ALLOWED = {
 # — the HEADINGS check above still reads the deck's real headings.
 nums_src = re.sub(r"§\s*\d+(?:\.\d+)*", "", t)
 nums_src = re.sub(r"(?m)^(#+\s*)\d+(?:\.\d+)*", r"\1", nums_src)
+# The header dates are METADATA, not measurements, and the number scan read
+# their components as unsourced facts. ALLOWED already carried "09" with the
+# comment '"09" is the month in the header's Revalidate by' -- a calendar
+# hand-added to a facts list. The cost only became visible once the expiry
+# check above started telling the author to move that date: every
+# day-of-month not already listed failed the deck ("numbers not in the
+# supplied facts: 18"), so the document was un-revalidatable on most days of
+# the month. Stripped for the NUMBER scan only -- the expiry check still
+# reads the real date.
+nums_src = re.sub(r"(?:Last reviewed|Revalidate by):\D{0,4}\d{4}-\d{2}-\d{2}", "", nums_src)
 
 bad = set()
 for tok in re.findall(r"[0-9a-f]{16,}|\d+(?:[.,]\d+)*", nums_src):
@@ -183,6 +200,36 @@ for line in t.split("\n"):
     for name in re.findall(r"`?proofs/([A-Za-z0-9_.-]+\.(?:md|txt|json))`?", line):
         if (proofs / name).exists():
             fail.append(f"claims proofs/{name} is missing, but it exists: {line.strip()[:100]}")
+
+# EXPIRY. The header commits to a revalidation date and nothing compared it to
+# today: the only other mention of the string anywhere in tools/, ops/ or CI was
+# a comment in this file's ALLOWED set, so the deck ran a week past its own
+# stated deadline with every check green. A date a document sets for itself and
+# no one enforces is decoration -- and this is the document a reader is pointed
+# at to decide whether the work is current.
+#
+# Graded in three bands rather than one cliff, so the deadline arrives as a
+# warning before it arrives as a failure: a hard fail on the day itself lands on
+# whoever happens to push, with no notice.
+m = re.search(r"Revalidate by:\D{0,4}(\d{4}-\d{2}-\d{2})", t)
+if not m:
+    fail.append("header has no **Revalidate by:** YYYY-MM-DD date")
+else:
+    due = datetime.date.fromisoformat(m.group(1))
+    # UTC, to match every other date this repo records; reading local midnight
+    # moves the deadline by a day depending on who runs the check.
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    over = (today - due).days
+    if over > GRACE_DAYS:
+        fail.append(
+            f"revalidation is {over} days overdue (due {due}, today {today} UTC). "
+            f"Re-read the deck, then move **Revalidate by:** forward and update "
+            f"**Last reviewed:**. Do not move the date without re-reading it.")
+    elif over > 0:
+        print(f"WARNING: revalidation is {over} day(s) past {due}; "
+              f"{GRACE_DAYS - over} day(s) of grace left")
+    elif over > -WARN_DAYS:
+        print(f"NOTE: revalidation due {due} ({-over} day(s) away)")
 
 if fail:
     print("FAIL")

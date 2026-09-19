@@ -103,9 +103,24 @@ func (d Deps) clientKey(r *http.Request, uid int64) string {
 		return "tok"
 	}
 	if d.Cfg.TrustProxy {
+		// THE LAST HOP, NOT THE FIRST. X-Forwarded-For is append-only: each
+		// proxy adds the address it saw, so the rightmost entry is the one
+		// added by the proxy nearest this daemon and every entry left of it is
+		// a value some earlier hop was handed. The first entry is therefore
+		// whatever the CLIENT chose to send — a visitor who sets
+		// "X-Forwarded-For: <anything>" minted a fresh rate-limit bucket per
+		// request and the limiter stopped existing for them.
+		//
+		// The topology this assumes is the one the image ships: exactly one
+		// trusted proxy in front of the daemon (the host's TLS terminator),
+		// with web/src/app/api/[...path]/route.ts forwarding the header
+		// unchanged rather than appending to it. Put a second proxy in front
+		// and this needs to skip one more hop from the right.
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			first, _, _ := strings.Cut(xff, ",")
-			if ip := strings.TrimSpace(first); ip != "" {
+			if i := strings.LastIndex(xff, ","); i >= 0 {
+				xff = xff[i+1:]
+			}
+			if ip := strings.TrimSpace(xff); ip != "" {
 				return "ip:" + ip
 			}
 		}

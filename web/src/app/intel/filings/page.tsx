@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { filings, pollMs, POLL_SLOW, type Filing } from "@/lib/api";
-import { ago } from "@/lib/format";
+import { ago, fmtDate } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
@@ -74,10 +74,16 @@ export default function FilingsPage() {
 
   const stats = useMemo(() => {
     if (!list.length) return { count: 0, latest: "", forms: 0, symbols: 0 };
-    // filedTs is unix SECONDS — ago() at line 193 divides Date.now() by 1000 to
-    // compare against it. Feeding it raw to new Date() read it as milliseconds,
-    // so the LATEST tile showed 1970-01-21 next to rows correctly saying "2h ago".
-    const latest = new Date(Math.max(...list.map(f => f.filedTs * 1000))).toISOString().split('T')[0];
+    // filedTs is unix SECONDS — ago() below divides Date.now() by 1000 to compare
+    // against it. Feeding it raw to new Date() read it as milliseconds, so the
+    // LATEST tile once showed 1970-01-21 next to rows correctly saying "2h ago".
+    //
+    // The date itself then went out in UTC, because toISOString() always does.
+    // Any filing at or after 20:00 ET rendered TOMORROW's date, beside an ago()
+    // string and a row list both computed in local time — the tile disagreed with
+    // the rows under it for four hours every evening. fmtDate is the formatter the
+    // rest of the app already uses, so this is now one timezone throughout.
+    const latest = fmtDate(Math.max(...list.map(f => f.filedTs)));
     const forms = new Set(list.map(f => f.form)).size;
     const symbols = new Set(list.map(f => f.symbolId)).size;
     return { count: list.length, latest, forms, symbols };

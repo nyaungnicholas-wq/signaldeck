@@ -32,11 +32,21 @@ func (s *Store) InsertNews(ctx context.Context, n NewsItem) error {
 // UnratedNews returns headlines awaiting sentiment tagging. Only
 // sentiment='unrated' rows qualify — 'skipped' rows (deliberately not rated;
 // symbol outside the news scope) are terminal and never re-enter the queue.
-func (s *Store) UnratedNews(ctx context.Context, limit int) ([]NewsItem, error) {
+//
+// minTs bounds the queue by headline age (unix seconds). 0 means unbounded,
+// which needs no conditional because every real ts is positive. The bound
+// exists because an unbounded queue is DEAD WORK: sentiment-aggregator only
+// ever recomputes today and yesterday, nothing backfills older days, and both
+// readers of news.sentiment take the newest N rows. On 2026-09-04 that left
+// 353,671 unrated rows reaching back to 2012 (81% of the table) consuming the
+// entire 2,000-call daily LLM budget to write tags nothing could ever read,
+// while fresh news was already fully tagged: 1 unrated headline in the
+// trailing 7 days out of 822 that arrived.
+func (s *Store) UnratedNews(ctx context.Context, limit int, minTs int64) ([]NewsItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.id, n.symbol_id, sym.symbol, n.ts, n.headline
 		FROM news n JOIN symbols sym ON sym.id=n.symbol_id
-		WHERE n.sentiment='unrated' ORDER BY n.ts DESC LIMIT ?`, limit)
+		WHERE n.sentiment='unrated' AND n.ts >= ? ORDER BY n.ts DESC LIMIT ?`, minTs, limit)
 	if err != nil {
 		return nil, err
 	}

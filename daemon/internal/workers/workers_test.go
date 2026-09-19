@@ -64,11 +64,25 @@ func TestRunOnce_RecordsFinishAfterRunContextExpired(t *testing.T) {
 	st := openTemp(t)
 	r := NewRunner(st)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	// The run context is expired from INSIDE the worker, not by a wall-clock
+	// deadline. This used to be context.WithTimeout(..., 20ms), which made the
+	// test a race against its own setup: runOnce calls journal().open(ctx)
+	// BEFORE it runs the worker, open returns 0 ("unrecorded") if that ctx is
+	// already dead, and runOnce then skips the close -- so under load the row
+	// was never opened and the assertion below failed for a reason that has
+	// nothing to do with what this test is about.
+	//
+	// Cancelling from within the worker guarantees the ordering the test means:
+	// open() ran against a LIVE context, and the context is dead by the time the
+	// worker returns, which is the condition under test. runOnce classifies on
+	// `ctx.Err() != nil` and not on the error's type, so Canceled reaches the
+	// same "stopped (shutdown)" branch DeadlineExceeded did.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	w := fakeWorker{name: "slow-worker", fn: func(ctx context.Context) (string, error) {
-		<-ctx.Done() // simulate a run that consumes its entire deadline
-		return "", ctx.Err()
+	w := fakeWorker{name: "slow-worker", fn: func(runCtx context.Context) (string, error) {
+		cancel()        // expire the run context now that the row is open
+		<-runCtx.Done() // simulate a run that consumes its entire deadline
+		return "", runCtx.Err()
 	}}
 	r.runOnce(ctx, w)
 

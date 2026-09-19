@@ -14,12 +14,42 @@ and must be reported as one.
 import argparse
 import json
 import math
+import re
 import sqlite3
 import sys
 from collections import defaultdict
 
 import numpy as np
 
+
+# EXCLUDE FUNDS. `market='stocks'` does NOT exclude ETFs in this database.
+# Confirmed present and passing that filter: SPY, QQQ, TQQQ, SQQQ, TLT, LQD, XLY,
+# ZSL, and the leveraged inverse products SOXS (-3x), TSLZ (-2x) and MSTZ (-2x).
+#
+# research/dirfix measured this on the SAME database on 2026-08-15: funds were
+# 52.7% of long picks and 51.2% of short picks, "roughly half the apparent edge",
+# and beta flipped +0.47 -> -0.65 once removed. The filter was written there and
+# never back-applied here, and neither result document carries the caveat.
+#
+# It matters more than generic contamination for THIS model: leveraged-inverse
+# decay is a deterministic function of realized volatility, and vol21 is one of
+# the six features -- so the model can learn "high recent vol + leveraged product
+# -> decays", which is mechanically forecastable and not tradeable at 20-100%/yr
+# borrow against the 10bp/side charged here.
+#
+# Pattern copied verbatim from research/dirfix/extract.py, including its own
+# warning: it deliberately does NOT match "Trust", "Shares" or "Depositary",
+# which would catch ADRs, foreign issuers and REITs -- real companies.
+# Word boundaries on the ambiguous tokens. dirfix's pattern matches Bear/Bull/
+# Ultra as bare substrings, which drops REAL operating companies: BBAI is
+# "BigBear.ai Holdings, Inc." and was being excluded as a leveraged fund.
+# Dropping real companies biases the universe in the opposite direction to the
+# contamination this filter exists to remove, so it is tightened here.
+# "UltraShort"/"UltraPro" keep their own un-bounded alternatives, so genuine
+# ProShares names still match.
+FUND_PAT = (r"ETF|ETN|Fund|ProShares|Direxion|iShares|SPDR|Invesco|Vanguard|"
+            r"UltraShort|UltraPro|Ultra|Bear|Bull|[23]X|"
+            r"Leveraged|Select Sector|Daily Target|Index Trust")
 
 def eprint(*a, **k):
     print(*a, file=sys.stderr, flush=True, **k)
@@ -35,10 +65,19 @@ def load_symbols(db_path):
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, symbol FROM symbols WHERE market='stocks' ORDER BY id"
+        "SELECT id, symbol, COALESCE(name,'') AS name FROM symbols "
+        "WHERE market='stocks' ORDER BY id"
     ).fetchall()
     conn.close()
-    return [(r["id"], r["symbol"]) for r in rows]
+    keep, dropped = [], 0
+    for r in rows:
+        if re.search(FUND_PAT, r["name"], re.IGNORECASE):
+            dropped += 1
+            continue
+        keep.append((r["id"], r["symbol"]))
+    print("fund filter: %d -> %d symbols (%d fund/leveraged dropped)"
+          % (len(rows), len(keep), dropped))
+    return keep
 
 
 def load_bars_for_symbol(conn, symbol_id):
@@ -473,9 +512,23 @@ def walk_forward_evaluate(X, y, fwd, days, sorted_day_keys, hold=1, winsor=0.0):
                 top_chg = 1.0 - len(top_set & prev_top) / len(top_set) if len(top_set) > 0 else 0.0
                 bot_chg = 1.0 - len(bot_set & prev_bot) / len(bot_set) if len(bot_set) > 0 else 0.0
                 turnover = (top_chg + bot_chg) / 2.0
-                # With hold>1, positions are held N days; turnover divided by N
-                # to reflect the slower book.
-                turnover = turnover / hold
+                # NOT divided by hold. `turnover` is decile churn against the
+                # PREVIOUS DAY, and dividing by hold made it a per-DAY rate --
+                # which was then subtracted from `spread_bp`, a per-HOLDING-PERIOD
+                # return (fwd_ret = close[i+hold]/close[i] - 1). Charging a daily
+                # cost against a period return understates the drag by exactly
+                # `hold`x, always in the flattering direction.
+                #
+                # Reproduced from the published table before changing it: hold=1
+                # cells were correct (A: +18.75 gross, +5.39 net@10bp), hold=5
+                # cells understated ~5x (B: -34.97 published vs -42.26
+                # units-consistent; D: -2.80 vs -8.25). No published CONCLUSION
+                # moves -- all four cells fail either way and the document says
+                # so -- but the bias points straight at the next hypothesis that
+                # document proposes, a SLOWER construction, whose costs are
+                # exactly the ones this shrank. At hold=21 a book paying ~10bp
+                # would have been charged 0.48bp, and a losing slow book could
+                # have printed a positive net spread.
                 fold_turnovers.append(turnover)
                 per_day.append((dk, ic, spread_bp, turnover))
             else:

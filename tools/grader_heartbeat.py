@@ -23,6 +23,7 @@ Usage, from ops/accuracy-registry.sh:
 
     python tools/grader_heartbeat.py --success            # after a clean grade
     python tools/grader_heartbeat.py --failure --error "grader exited 3"
+    python tools/grader_heartbeat.py --refused --error "publication gate: ..."
 """
 
 from __future__ import annotations
@@ -84,7 +85,7 @@ def write_heartbeat(db: str, success: bool, rows: int | None, sha: str, error: s
     the grader for what is actually a database problem.
     """
     try:
-        con = sqlite3.connect(db, timeout=30)
+        con = sqlite3.connect(db, timeout=120)  # the daemon holds long write transactions; 30s lost a heartbeat on 2026-09-08
     except sqlite3.Error as e:
         print(f"grader_heartbeat: cannot open {db}: {e}", file=sys.stderr)
         return 2
@@ -114,18 +115,47 @@ def main() -> int:
                       help="the runner confirmed a real grade")
     mode.add_argument("--failure", action="store_true",
                       help="the runner refused; --error says why")
+    mode.add_argument("--refused", action="store_true",
+                      help="the grader RAN and the publication gate refused to publish; recorded as a healthy heartbeat (success=1, error='REFUSED: <reason>') so the health check sees a live grader; the registry envelope, not this row, carries the refusal to /api/accuracy")
     ap.add_argument("--error", default="", help="the runner's refusal reason")
     args = ap.parse_args()
 
-    if args.failure and not args.error.strip():
-        # A failure with no reason is the state this whole file exists to
-        # abolish. Refuse to record an unexplained one.
-        ap.error("--failure requires --error explaining the refusal")
+    # A publication refusal is NOT a grader failure — the grader produced a grade and the gate declined to publish it;
+    # filing it as success=0 kept ops/check-grader-health.ps1 red for every day of a refusal window (weeks),
+    # which is a check nobody reads.
+    if (args.failure or args.refused) and not args.error.strip():
+        ap.error("--failure / --refused require --error explaining the refusal")
 
-    rc = write_heartbeat(args.db, args.success, _registry_rows(args.registry),
-                         _grader_sha256(args.grader), args.error)
-    print(f"grader_heartbeat: recorded {'ok' if args.success else 'FAILED'}"
-          + (f" ({args.error})" if args.error else ""))
+    success = args.success or args.refused
+    if args.refused:
+        error = f"REFUSED: {args.error.strip()}"
+    else:
+        error = args.error
+
+    rc = write_heartbeat(args.db, success, _registry_rows(args.registry),
+                         _grader_sha256(args.grader), error)
+    # ONLY claim a recording when one happened. This print used to run
+    # unconditionally, so a failed write produced two adjacent lines in
+    # logs/accuracy-registry.log:
+    #     grader_heartbeat: write failed: database is locked     (stderr)
+    #     grader_heartbeat: recorded ok (publication REFUSED)    (stdout)
+    # Observed on 2026-09-12. The exit code was right and the caller did print
+    # "heartbeat write failed (non-fatal)", but the line directly above it said
+    # the opposite, and stdout is what a reader and a log scraper see first.
+    #
+    # It matters more than a cosmetic log bug because of what a missing
+    # heartbeat does downstream: /api/accuracy is fail-closed on a heartbeat
+    # older than GraderMaxAge, so an unwritten heartbeat turns an honest
+    # "REFUSED: <collapse-gate reason>" into "REFUSED_STALE" -- replacing the
+    # real, specific reason publication was withheld with a claim about the
+    # grader being dead, while the grader in fact ran minutes earlier.
+    if rc == 0:
+        label = "ok" if args.success else ("ok (publication REFUSED)" if args.refused else "FAILED")
+        print(f"grader_heartbeat: recorded {label}" + (f" ({args.error})" if args.error else ""))
+    else:
+        print("grader_heartbeat: NOT RECORDED -- the heartbeat write failed (see stderr above). "
+              "/api/accuracy will report REFUSED_STALE rather than the real refusal reason.",
+              file=sys.stderr)
     return rc
 
 

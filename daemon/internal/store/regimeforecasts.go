@@ -55,6 +55,7 @@ func (s *Store) RegimeForecastsForSymbol(ctx context.Context, symbolID int64) ([
 			return nil, err
 		}
 		v.Kind = structregime.Kind(kind)
+		hydrateForecastCaveats(&v)
 		out = append(out, v)
 	}
 	return out, rows.Err()
@@ -81,7 +82,40 @@ func (s *Store) RegimeForecasts(ctx context.Context) ([]RegimeForecast, error) {
 			return nil, err
 		}
 		v.Kind = structregime.Kind(kind)
+		hydrateForecastCaveats(&v)
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// hydrateForecastCaveats repopulates the honesty fields the table does not store.
+//
+// structregime.Forecast declares Evidence, FirstGradableOn, EvidenceCaveat and
+// Tradeability, and the INSERT persists ten columns that do not include any of
+// them, so every read returned them ZERO. None has omitempty, so
+// /api/signal-report served `"evidence":"", "firstGradableOn":"",
+// "evidenceCaveat":""` beside `"historicalAccuracy":0.972` and
+// `"tier":"very-high conviction"`.
+//
+// An empty Evidence is worse than an absent one: the only two legal values are
+// "backtest" and "live", so any consumer branching on evidence=="backtest" to
+// attach a warning attached nothing. The five-line BACKTEST CLAIM caveat and the
+// Tradeability line -- which says the top band is the most accurate and the
+// LEAST profitable -- both vanished at the SQL boundary.
+//
+// They are derived, not per-row: the values come from package accessors, so
+// repopulating on read is correct and needs no migration.
+func hydrateForecastCaveats(v *RegimeForecast) {
+	if v.Evidence == "" {
+		v.Evidence = "backtest"
+	}
+	if v.FirstGradableOn == "" {
+		v.FirstGradableOn = structregime.FirstGradableOnDate()
+	}
+	if v.EvidenceCaveat == "" {
+		v.EvidenceCaveat = structregime.EvidenceCaveatText()
+	}
+	if v.Tradeability == "" {
+		v.Tradeability = structregime.TradeabilityFor(v.Kind, v.Conviction)
+	}
 }

@@ -48,7 +48,23 @@ type Worker struct {
 	// offsite disabled (local backup still runs; no dq event — a deliberate
 	// opt-out is not a failure).
 	OffsiteDir string
-	Keep       int // rotated copies to keep in EACH location (default 7)
+	// OffsiteS3 is an s3:// URI owned by ops/signaldeck-backup-offline.sh, NOT
+	// by this worker. When it is set this worker performs no offsite copy at
+	// all and records the URI as the destination.
+	//
+	// Two writers, one meta key. SetMeta(MetaOffsiteDir) below runs on every
+	// backup and is unconditional, so a shell script that recorded an S3
+	// destination would have it clobbered back to "" by the next db-backup run
+	// — leaving offsiteConfigured:false beside a lastOffsiteTs from minutes
+	// ago. That contradictory pair is the documented 2026-08-11 defect, and it
+	// is the exact shape a second writer reintroduces.
+	//
+	// The shell owns the upload because it takes its copy with the daemon DOWN
+	// (VACUUM INTO with no contention) and because `aws s3` already does this
+	// correctly — putting an AWS SDK in the daemon to duplicate a CLI that is
+	// already installed buys nothing.
+	OffsiteS3 string
+	Keep      int // rotated copies to keep in EACH location (default 7)
 	// FirstRunDelay defers only the first Run (the fleet runner fires every
 	// worker immediately at boot; a fresh backup at every restart is noise).
 	// 0 = no delay.
@@ -197,11 +213,40 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	// gutted copy never rotates away a good generation or moves
 	// backup_last_ts past the last KNOWN-GOOD backup.
 	//
-	// A failed live count reads as 0, which verifyContent treats as "unknown"
-	// and skips the staleness comparison — not knowing how many rows there
-	// should be is not evidence that the backup is short.
+	// The live count is the REFERENCE the content check is measured against, so
+	// its failure has to stop the run rather than soften it.
+	//
+	// This discarded the error. A failed count reads as 0, and 0 is exactly what
+	// verifyContent treats as "unknown": it then skips three of its four checks
+	// — ledger-empty-while-live-holds-rows, ledger_anchors-has-no-rows, and the
+	// ledgerCount < live*0.5 staleness comparison that exists BECAUSE of the
+	// 2026-08-01 incident where 14 rows stood against a live 261,164 and
+	// quick_check passed. A gutted copy would then certify clean, prune() would
+	// rotate away the known-good generations, backup_last_ts would advance past
+	// them, and the offsite copy would be overwritten with the gutted file. The
+	// operator would read "backup ok, pruned 3 old" with no dq event.
+	//
+	// The old comment was right that not knowing the row count is not evidence
+	// the backup is short. The conclusion it drew was wrong: the honest response
+	// to an unknown reference is CANNOT CERTIFY, not certify. Failing here is
+	// safe by construction — it happens before prune() and before meta advances,
+	// so the previous generations and the last known-good backup_last_ts both
+	// stand. The DSN sets busy_timeout(15000), so a count that fails has waited
+	// 15 seconds and is a real failure, not fleet contention.
 	var liveLedger int64
-	_ = w.St.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM prediction_ledger`).Scan(&liveLedger)
+	if cntErr := w.St.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM prediction_ledger`).Scan(&liveLedger); cntErr != nil {
+		_ = w.St.InsertDQ(ctx, md.DQEvent{
+			Ts:   time.Now().Unix(),
+			Kind: "backup_uncertifiable",
+			Detail: fmt.Sprintf("%s was written and passed quick_check, but the live prediction_ledger "+
+				"count could not be read, so its CONTENT cannot be verified. Nothing was pruned and "+
+				"backup_last_ts was not advanced; the previous generations stand: %v",
+				filepath.Base(target), cntErr),
+		})
+		return "", fmt.Errorf("backup content unverifiable: live ledger count failed, "+
+			"no rotation and no meta advance: %w", cntErr)
+	}
 	if cerr := verifyContent(ctx, target, liveLedger); cerr != nil {
 		// Quarantine rather than delete: a backup that failed verification is
 		// the evidence for WHY it failed, and it is the only artifact of that
@@ -236,7 +281,7 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 	// failed offsite copy never hides that the local backup DID happen.
 	_ = w.St.SetMeta(ctx, MetaLastBackupTs, fmt.Sprintf("%d", time.Now().Unix()))
 	_ = w.St.SetMeta(ctx, MetaLastBackupFile, filepath.Base(target))
-	_ = w.St.SetMeta(ctx, MetaOffsiteDir, w.OffsiteDir)
+	_ = w.St.SetMeta(ctx, MetaOffsiteDir, w.offsiteDestination())
 
 	detail += "; " + w.offsite(ctx, target)
 	return detail, nil
@@ -246,7 +291,26 @@ func (w *Worker) Run(ctx context.Context) (string, error) {
 // location. It is ALWAYS best-effort: every failure (unset/missing/unwritable
 // dir, copy error) is turned into an honest detail fragment + a dq_events
 // record, and returns without erroring so the fleet run still succeeds.
+// offsiteDestination is the single string that describes where off-machine
+// copies go, and the ONLY value written to MetaOffsiteDir. S3 wins because when
+// it is configured this worker does not copy anywhere — reporting a local
+// directory it is no longer using would describe a copy that is not being made.
+func (w *Worker) offsiteDestination() string {
+	if w.OffsiteS3 != "" {
+		return w.OffsiteS3
+	}
+	return w.OffsiteDir
+}
+
 func (w *Worker) offsite(ctx context.Context, src string) string {
+	// Stand down, and say which process is responsible. Crucially this does NOT
+	// touch MetaLastOffsiteTs: the freshness alarm must keep measuring the real
+	// S3 upload, so if the market-close script stops running the alarm fires.
+	// Stamping a timestamp here because "S3 is configured" would report a
+	// backup nobody took, which is worse than the gap it papers over.
+	if w.OffsiteS3 != "" {
+		return "offsite delegated to the market-close S3 upload (" + w.OffsiteS3 + ")"
+	}
 	if w.OffsiteDir == "" {
 		return "offsite not configured"
 	}

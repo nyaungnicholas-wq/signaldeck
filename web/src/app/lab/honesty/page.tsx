@@ -45,6 +45,27 @@ export default function HonestyPage() {
   }, [horizon, retryTick]);
 
   const current = data && data.horizon === horizon ? data : null;
+
+  // Best/worst bucket by MEASURED forward return, not by position.
+  //
+  // These tiles used to read buckets[4] and buckets[0]. That array is ordered by
+  // SCORE bucket, so those indices assume the score-ordered quintiles are
+  // monotone in forward return - which is the exact hypothesis this page exists
+  // to test, and which the live data refutes (the ordering is currently
+  // inverted). Hard-coding it asserted the conclusion instead of showing it.
+  // Labelling each tile with the bucket it actually came from makes an
+  // inversion visible rather than silently relabelling it "Best".
+  const gradedBuckets = (current?.buckets ?? []).filter(
+    (b) => (b?.n ?? 0) > 0 && Number.isFinite(b?.meanFwd),
+  );
+  const bestBucket = gradedBuckets.reduce<(typeof gradedBuckets)[number] | null>(
+    (acc, b) => (acc == null || b.meanFwd > acc.meanFwd ? b : acc),
+    null,
+  );
+  const worstBucket = gradedBuckets.reduce<(typeof gradedBuckets)[number] | null>(
+    (acc, b) => (acc == null || b.meanFwd < acc.meanFwd ? b : acc),
+    null,
+  );
   const loading = !current && !err;
 
   return (
@@ -79,8 +100,8 @@ export default function HonestyPage() {
                 <HelpTip label="What counts as independent?">
                   {(current.rawN ?? current.independentN ?? current.n) !==
                   (current.independentN ?? current.n)
-                    ? `${(current.rawN ?? 0).toLocaleString("en-US")} raw minute-cadence rows collapse to ${(current.independentN ?? current.n).toLocaleString("en-US")} independent (symbol, UTC-day) resolutions — pooling rows that resolve against the same move would overstate confidence.`
-                    : "One observation per (symbol, UTC-day) resolution — pooling rows that resolve against the same move would overstate confidence."}
+                    ? `${(current.rawN ?? 0).toLocaleString("en-US")} raw minute-cadence rows collapse to ${(current.independentN ?? current.n).toLocaleString("en-US")} independent (symbol, trading day) resolutions — pooling rows that resolve against the same move would overstate confidence.`
+                    : "One observation per (symbol, trading day) resolution — pooling rows that resolve against the same move would overstate confidence."}
                 </HelpTip>
               </span>
             )}
@@ -155,19 +176,24 @@ export default function HonestyPage() {
               i={1}
             />
             <StatTile
-              label="Best Quintile"
-              // A short or empty buckets array rendered "0.00%" — a fabricated
+              label={bestBucket ? `Best bucket - ${bestBucket.label}` : "Best bucket"}
+              // A short or empty buckets array rendered "0.00%" - a fabricated
               // forward return, on the page whose entire purpose is not
               // fabricating them.
-              value={current.buckets?.[4]?.meanFwd}
+              //
+              // x100: meanFwd is a 0-1 FRACTION here and StatTile's suffix does
+              // no conversion, so the raw value rendered "0.01%" while
+              // QuintileTable rendered the SAME number as "+1.31%" a few hundred
+              // pixels below. Same convention as QuintileTable and HeroStats.
+              value={bestBucket ? bestBucket.meanFwd * 100 : undefined}
               decimals={2}
               suffix="%"
               glow="up"
               i={2}
             />
             <StatTile
-              label="Worst Quintile"
-              value={current.buckets?.[0]?.meanFwd}
+              label={worstBucket ? `Worst bucket - ${worstBucket.label}` : "Worst bucket"}
+              value={worstBucket ? worstBucket.meanFwd * 100 : undefined}
               decimals={2}
               suffix="%"
               glow="down"

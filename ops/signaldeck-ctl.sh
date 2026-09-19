@@ -30,6 +30,7 @@ WEB="com.signaldeck.web"
 # market-open and market-close could not drive the daemon on this machine.
 # shellcheck source=lib-portable.sh
 . "$REPO/ops/lib-portable.sh"
+. "$REPO/ops/lib-deploy.sh"
 
 # API credential for this script's own calls.
 #
@@ -102,12 +103,28 @@ stopsvc() { sd_svc_stop "$1"; }
 build_from_head() {
   cd "$REPO" || return 2
   local dirty rev tmp LDPKG
-  dirty="$(git status --porcelain | wc -l | tr -d ' ')"
-  if [ "$dirty" != "0" ]; then
-    echo "REFUSED: working tree is not clean ($dirty path(s))." >&2
-    git status --porcelain | head -20 >&2
+  # The tree must be clean EXCEPT for the nightly-regenerated docs listed in
+  # ops/generated-docs.txt. Those cannot change the binary: the build extracts
+  # `git archive HEAD` (the COMMIT, never the working tree), and no Go source
+  # embeds a doc (the only go:embed targets are schema.sql and result.json).
+  # The refusal below protects operator INTENT — "the edit I just made got
+  # deployed" — and a machine-regenerated doc carries no operator intent to
+  # protect. Everything else still refuses; a missing or unreadable allowlist
+  # exempts NOTHING; and porcelain lines the exact-match parser cannot claim
+  # (renames "R old -> new", quoted paths) fail CLOSED by never matching.
+  dirty="$(sd_dirty_excluding_generated "$REPO")"
+  if [ -n "$dirty" ]; then
+    echo "REFUSED: working tree is not clean." >&2
+    printf '%s\n' "$dirty" | head -20 >&2
     echo "Commit or stash first — a running daemon must be reproducible from a commit." >&2
+    echo "(nightly-generated docs from ops/generated-docs.txt are exempt and not counted above)" >&2
     return 1
+  fi
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "NOTE: proceeding past uncommitted NIGHTLY-GENERATED docs (ops/generated-docs.txt):" >&2
+    git status --porcelain | head -12 >&2
+    echo "The binary builds from git archive HEAD; none of these paths can reach it." >&2
+    echo "Commit them when convenient — a HAND-built binary still stamps +dirty and refuses to start." >&2
   fi
   if ! /bin/bash "$REPO/ops/manifest-check.sh" >&2; then
     echo "REFUSED: load-bearing paths are missing from git." >&2
@@ -151,8 +168,7 @@ build_from_head() {
     sd_is_running signaldeckd && sd_kill_hard signaldeckd
     sleep 1
   fi
-  [ -f "$REPO/bin/signaldeckd$exe" ] && mv -f "$REPO/bin/signaldeckd$exe" "$REPO/bin/signaldeckd$exe.prev"
-  install -m 755 "$tmp/signaldeckd$exe" "$REPO/bin/signaldeckd$exe" || { rm -f "$lock"; rm -rf "$tmp"; return 1; }
+  sd_install_binary "$tmp/signaldeckd$exe" "$REPO/bin/signaldeckd$exe" || { rm -f "$lock"; rm -rf "$tmp"; return 1; }
   rm -f "$lock"
   rm -rf "$tmp"
   BUILT_REV="$rev"
@@ -248,7 +264,15 @@ case "${1:-status}" in
       echo "$ver"
       exit 1
     fi
-    echo "deploy VERIFIED: daemon is running commit $rev (resolvable)."
+    # 6. ROWS, not just the process (CLAUDE.md pre-flight): wait for a worker_runs row stamped $rev.
+    py="$REPO/.venv/Scripts/python.exe"; stamped=""
+    for _ in $(seq 1 90); do
+      # Relative URI on purpose: the repo path holds a space, which a file: URI rejects (cwd is $REPO here).
+      stamped="$("$py" -c "import sqlite3;print(sqlite3.connect('file:data/signaldeck.db?mode=ro',uri=True).execute(\"select count(*) from worker_runs where revision=? and finished_at is not null\",('$rev',)).fetchone()[0])" 2>/dev/null)"
+      [ "${stamped:-0}" -gt 0 ] 2>/dev/null && break; sleep 2
+    done
+    [ "${stamped:-0}" -gt 0 ] 2>/dev/null || { echo "deploy UNVERIFIED: no worker_runs row stamped $rev within 180s."; exit 1; }
+    echo "deploy VERIFIED: daemon is running commit $rev (resolvable); $stamped worker run(s) already stamped with it."
     ;;
   launch)
     # THE launchd program for com.signaldeck.daemon. launchd used to exec

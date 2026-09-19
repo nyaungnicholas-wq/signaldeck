@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/notify"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // minThreshold is the floor on staleness: fast workers (1m cadence) shouldn't
@@ -221,6 +223,25 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("query worker_runs: %w", err)
 	}
 	stale := StaleWorkers(w.Specs, lastOK, w.started, now)
+	// OFFSITE BACKUP FRESHNESS. ops/signaldeck-backup-offline.sh is scrupulously
+	// honest -- it detects that the configured offsite directory is on the same
+	// volume as the database and logs "NOT OFFSITE ... backup_last_offsite NOT
+	// updated" on every run -- and then nothing escalates it. No task result goes
+	// non-zero, and the DR runbook's own precondition ("check the log says
+	// offsite OK before you need this page") has never been met. Measured
+	// 2026-08-23: backup_last_offsite was 10 days behind backup_last_ts with 8
+	// consecutive NOT OFFSITE lines. Honest and unheard is still unheard.
+	if msg, ok := w.staleOffsiteBackup(ctx, now); !ok {
+		stale = append(stale, msg)
+	}
+	// The number this pass actually EXAMINED. StaleWorkers skips every
+	// Interval<=0 spec (the stream ingestors), so len(w.Specs) overstates it.
+	checked := 0
+	for _, s := range w.Specs {
+		if s.Interval > 0 {
+			checked++
+		}
+	}
 
 	// A failing worker is unhealthy even when it is perfectly punctual. An error
 	// reading the streaks must not read as "nothing is failing", so it degrades
@@ -247,6 +268,7 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 	// rejected knob page an operator would be the red-by-construction mistake.
 	rejected := envcfg.Rejected()
 	ok := len(stale) == 0 && len(failing) == 0 && !envcfg.HasCritical()
+	var writeErr error
 
 	if err := w.writeStatus(Status{
 		OK:             ok,
@@ -255,6 +277,14 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 		RejectedEnv:    rejected,
 		Ts:             now.Unix(),
 	}); err != nil {
+		// health.json is the artifact this worker EXISTS to produce, for
+		// launchd/cron and the dashboards. Warning and continuing meant that on
+		// a full disk or a read-only data dir the file froze at its last content
+		// -- possibly ok:true from days ago, since Ts lives inside the frozen
+		// blob -- while the watchdog filed status=ok every 10 minutes and
+		// nothing anywhere checks the file's freshness. Degrade instead: the
+		// run completed without delivering the one thing it delivers.
+		writeErr = err
 		slog.Warn("watchdog: write health.json", "err", err)
 	}
 
@@ -317,8 +347,17 @@ func (w *Watchdog) Run(ctx context.Context) (string, error) {
 	}
 	w.wasOK = ok
 
+	if writeErr != nil {
+		return fmt.Sprintf("could not write health.json (%v) — the fleet verdict was computed but not published", writeErr),
+			fmt.Errorf("write health.json: %w: %w", writeErr, workers.ErrDegraded)
+	}
 	if ok {
-		return fmt.Sprintf("healthy: %d workers checked", len(w.Specs)), nil
+		// COUNTS WHAT IT CHECKED, not what is registered. len(w.Specs) included
+		// workers this pass never examined: StaleWorkers skips every Interval<=0
+		// stream ingestor, and FailingWorkers iterates worker_runs rows, so a
+		// registered worker with no rows is invisible to both. apiprobe.go
+		// documents the same miscount independently.
+		return fmt.Sprintf("healthy: %d of %d workers checked", checked, len(w.Specs)), nil
 	}
 	if len(recovered) > 0 {
 		return fmt.Sprintf("UNHEALTHY: %s (cancelled overdue runs: %v)", unhealthyMsg(stale, failing), recovered), nil
@@ -361,7 +400,12 @@ func unhealthyMsg(stale, failing []string) string {
 // lastSuccess maps worker → time of most recent successful run (read pool).
 func (w *Watchdog) lastSuccess(ctx context.Context) (map[string]time.Time, error) {
 	rows, err := w.St.DB().QueryContext(ctx,
-		`SELECT worker, MAX(started_at) FROM worker_runs WHERE status='ok' GROUP BY worker`)
+		// 'degraded' counts as a heartbeat: the worker ran on schedule and
+		// honestly reported it had nothing to deliver (the benched trainers do
+		// this every run by design). Counting only 'ok' held health.json at
+		// ok=false with two "stale" workers for weeks — an alarm that can never
+		// clear is an alarm nobody acts on. /api/ready lists them as degraded.
+		`SELECT worker, MAX(started_at) FROM worker_runs WHERE status IN ('ok','degraded') GROUP BY worker`)
 	if err != nil {
 		return nil, err
 	}
@@ -466,3 +510,38 @@ func (w *Watchdog) writeStatus(s Status) error {
 // unguarded, so after the move to Windows every watchdog alert died as
 // `exec: "osascript": executable file not found in %PATH%`. See
 // internal/notify/local.go.
+
+// offsiteMaxAge is how old the last GENUINE off-volume backup may be before the
+// watchdog calls the fleet unhealthy. Generous: the backup runs on weekdays via
+// market-close, so a long weekend plus a holiday is normal and must not cry
+// wolf. Anything past this is not a schedule gap, it is a broken offsite path.
+const offsiteMaxAge = 5 * 24 * time.Hour
+
+// staleOffsiteBackup reports whether the last off-volume backup is recent
+// enough. ok=true when it is, or when no offsite backup has ever been recorded
+// AND none is configured -- an operator who has not set one up is not lied to
+// about it, but one who HAS must hear when it silently stopped.
+func (w *Watchdog) staleOffsiteBackup(ctx context.Context, now time.Time) (string, bool) {
+	var lastStr, dir string
+	if err := w.St.DB().QueryRowContext(ctx,
+		`SELECT COALESCE((SELECT v FROM meta WHERE k='backup_last_offsite'),''),
+		        COALESCE((SELECT v FROM meta WHERE k='backup_offsite_dir'),'')`).
+		Scan(&lastStr, &dir); err != nil {
+		// An unreadable meta table is the watchdog's own problem, reported
+		// elsewhere; do not manufacture a backup verdict from it.
+		return "", true
+	}
+	if lastStr == "" {
+		return "", true // never recorded one; nothing to call stale
+	}
+	last, err := strconv.ParseInt(lastStr, 10, 64)
+	if err != nil || last <= 0 {
+		return "", true
+	}
+	age := now.Sub(time.Unix(last, 0))
+	if age <= offsiteMaxAge {
+		return "", true
+	}
+	return fmt.Sprintf("offsite backup is %.1f days old (last %s) — the local copy is not a disaster-recovery copy",
+		age.Hours()/24, time.Unix(last, 0).Format("2006-01-02")), false
+}

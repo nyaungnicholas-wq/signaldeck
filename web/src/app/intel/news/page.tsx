@@ -208,7 +208,11 @@ export default function NewsPage() {
         <StatTile label="Headlines" value={stats.count} i={0} />
         <StatTile label="Bullish" value={stats.bullish} glow="up" i={1} />
         <StatTile label="Bearish" value={stats.bearish} glow="down" i={2} />
-        <StatTile label="Net Tone" value={stats.net} delta={stats.net} i={3} />
+        {/* delta removed rather than relabelled. stats.net is bullish minus
+            bearish -- a headline COUNT -- so the badge rendered e.g. "7.00%"
+            for seven headlines, and it was the same number the tile already
+            shows. There is nothing for a delta to mean here. */}
+        <StatTile label="Net Tone" value={stats.net} i={3} />
       </div>
 
       <div className="panel hud-panel">

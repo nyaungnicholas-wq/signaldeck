@@ -1,0 +1,295 @@
+{
+  "generated": "2026-09-03T17:19:12.596729+00:00",
+  "db": "C:\\Users\\Nicholas_N\\Desktop\\claude code\\signaldeck\\data\\signaldeck.db",
+  "universe": {
+    "symbols": 758,
+    "min_bars": 530,
+    "max_flat_share": 0.01,
+    "companies_only": true,
+    "survivorship": "NOT screened on active=1"
+  },
+  "exclusions": {
+    "flat_range": 224,
+    "overnight": 129,
+    "non_pos": 0,
+    "gk_negative": 0,
+    "floored": 3,
+    "no_prev": 758
+  },
+  "horizons": {
+    "1": {
+      "horizon": 1,
+      "forecasts": 971151,
+      "day_clusters": 1398,
+      "hac_lag": 7,
+      "mean_qlike": {
+        "har": 0.4828655128317876,
+        "rw": 1.0558809293379414,
+        "ewma": 0.5297954409590724,
+        "flat22": 0.5654081344831742
+      },
+      "mean_mse": {
+        "har": 5.7596113922551956e-05,
+        "ewma": 5.980818804149219e-05
+      },
+      "dm": [
+        {
+          "mean": -0.04692992812728483,
+          "t": -8.788668725985934,
+          "n": 1398,
+          "lag": 7,
+          "label": "QLIKE: HAR vs EWMA(0.94)   [HEADLINE]",
+          "ci": {
+            "lo": -0.05835457121578414,
+            "hi": -0.03551762041728146,
+            "iters": 2000,
+            "block": 21
+          },
+          "better": "model"
+        },
+        {
+          "mean": -0.573015416506154,
+          "t": -5.318279543843198,
+          "n": 1398,
+          "lag": 7,
+          "label": "QLIKE: HAR vs random walk",
+          "ci": {
+            "lo": -0.8190427039297027,
+            "hi": -0.40565666820954716,
+            "iters": 2000,
+            "block": 21
+          },
+          "better": "model"
+        },
+        {
+          "mean": -0.08254262165138655,
+          "t": -11.038813879099813,
+          "n": 1398,
+          "lag": 7,
+          "label": "QLIKE: HAR vs flat 22d",
+          "ci": {
+            "lo": -0.0989640997080531,
+            "hi": -0.06723327218177069,
+            "iters": 2000,
+            "block": 21
+          },
+          "better": "model"
+        },
+        {
+          "mean": -2.2120741189402323e-06,
+          "t": -5.973691556166883,
+          "n": 1398,
+          "lag": 7,
+          "label": "MSE:   HAR vs EWMA(0.94)",
+          "ci": {
+            "lo": -3.184762197460655e-06,
+            "hi": -1.3644884427356848e-06,
+            "iters": 2000,
+            "block": 21
+          },
+          "better": "model"
+        }
+      ],
+      "by_year": {
+        "2021": {
+          "days": 227,
+          "mean_loss_diff": -0.04163063484047982,
+          "t": -3.433789749068002,
+          "better": "HAR"
+        },
+        "2022": {
+          "days": 251,
+          "mean_loss_diff": -0.01688518935258671,
+          "t": -1.9166486262996354,
+          "better": "HAR"
+        },
+        "2023": {
+          "days": 250,
+          "mean_loss_diff": -0.0466711896847123,
+          "t": -6.4107342586731955,
+          "better": "HAR"
+        },
+        "2024": {
+          "days": 252,
+          "mean_loss_diff": -0.06380571605550626,
+          "t": -7.619763969705346,
+          "better": "HAR"
+        },
+        "2025": {
+          "days": 250,
+          "mean_loss_diff": -0.05950048316808805,
+          "t": -4.133565819385941,
+          "better": "HAR"
+        },
+        "2026": {
+          "days": 168,
+          "mean_loss_diff": -0.05534371563374011,
+          "t": -2.285670971793584,
+          "better": "HAR"
+        }
+      },
+      "control_rv_cc": {
+        "proxy": "RV^CC (squared close-to-close); construction-independent of RV^GK",
+        "loss": "MSE only; QLIKE is undefined where the close did not move",
+        "days": 1398,
+        "zero_return_days_dropped": 8095,
+        "mean_mse_har": 0.00022447777700840055,
+        "mean_mse_ewma": 0.000227030439772434,
+        "dm": {
+          "mean": -2.552662764033454e-06,
+          "t": -5.774880370469791,
+          "n": 1398,
+          "lag": 7
+        },
+        "verdict_if_not_significant": "ESTIMATOR ARTIFACT: the advantage on RV^GK would be HAR smoothing the proxy's measurement error, not forecasting the market"
+      }
+    },
+    "5": {
+      "horizon": 5,
+      "forecasts": 967045,
+      "day_clusters": 1394,
+      "hac_lag": 7,
+      "mean_qlike": {
+        "har": 0.30289698416787364,
+        "rw": 1.0822169361313452,
+        "ewma": 0.34604274864268036,
+        "flat22": 0.38359385875886753
+      },
+      "mean_mse": {
+        "har": 1.634874236906782e-05,
+        "ewma": 1.792523666688676e-05
+      },
+      "dm": [
+        {
+          "mean": -0.04314576447480676,
+          "t": -8.914911807787833,
+          "n": 1394,
+          "lag": 7,
+          "label": "QLIKE: HAR vs EWMA(0.94)   [HEADLINE]",
+          "ci": {
+            "lo": -0.05406834617710397,
+            "hi": -0.03230728044162306,
+            "iters": 2000,
+            "block": 21
+          },
+          "better": "model"
+        },
+        {
+          "mean": -0.7793199519634716,
+          "t": -5.281314751290803,
+          "n": 1394,
+          "lag": 7,
+          "label": "QLIKE: HAR vs random walk",
+          "ci": {
+            "lo": -1.1229052787262062,
+            "hi": -0.5550286121262056,
+            "iters": 2000,
+            "block": 21
+          },
+          "better": "model"
+        },
+        {
+          "mean": -0.08069687459099392,
+          "t": -11.708825383918505,
+          "n": 1394,
+          "lag": 7,
+          "label": "QLIKE: HAR vs flat 22d",
+          "ci": {
+            "lo": -0.09660063127361208,
+            "hi": -0.06578823822365268,
+            "iters": 2000,
+            "block": 21
+          },
+          "better": "model"
+        },
+        {
+          "mean": -1.5764942978189443e-06,
+          "t": -4.138601005074505,
+          "n": 1394,
+          "lag": 7,
+          "label": "MSE:   HAR vs EWMA(0.94)",
+          "ci": {
+            "lo": -2.5151963623692583e-06,
+            "hi": -7.573772320883573e-07,
+            "iters": 2000,
+            "block": 21
+          },
+          "better": "model"
+        }
+      ],
+      "by_year": {
+        "2021": {
+          "days": 227,
+          "mean_loss_diff": -0.028507512623695497,
+          "t": -2.1659350895529967,
+          "better": "HAR"
+        },
+        "2022": {
+          "days": 251,
+          "mean_loss_diff": -0.01999447882245319,
+          "t": -2.689431109960334,
+          "better": "HAR"
+        },
+        "2023": {
+          "days": 250,
+          "mean_loss_diff": -0.04135614124999276,
+          "t": -4.862271533067591,
+          "better": "HAR"
+        },
+        "2024": {
+          "days": 252,
+          "mean_loss_diff": -0.06842236215445191,
+          "t": -6.912322098324633,
+          "better": "HAR"
+        },
+        "2025": {
+          "days": 250,
+          "mean_loss_diff": -0.05405595441226159,
+          "t": -4.6711241899135505,
+          "better": "HAR"
+        },
+        "2026": {
+          "days": 164,
+          "mean_loss_diff": -0.046097054569393454,
+          "t": -2.9807038545629867,
+          "better": "HAR"
+        }
+      },
+      "control_rv_cc": {
+        "proxy": "RV^CC (squared close-to-close); construction-independent of RV^GK",
+        "loss": "MSE only; QLIKE is undefined where the close did not move",
+        "days": 1394,
+        "zero_return_days_dropped": 5,
+        "mean_mse_har": 4.9705246486122046e-05,
+        "mean_mse_ewma": 5.1767102975277225e-05,
+        "dm": {
+          "mean": -2.061856489155179e-06,
+          "t": -4.467815877528616,
+          "n": 1394,
+          "lag": 7
+        },
+        "verdict_if_not_significant": "ESTIMATOR ARTIFACT: the advantage on RV^GK would be HAR smoothing the proxy's measurement error, not forecasting the market"
+      }
+    }
+  },
+  "var_coverage": {
+    "0.05": {
+      "symbols": 740,
+      "nominal": 0.05,
+      "mean_breach_rate": 0.04945715544628646,
+      "median_breach_rate": 0.04882154882154882,
+      "kupiec_rejected_at_5pct": 30,
+      "kupiec_rejected_share": 0.04054054054054054,
+      "expected_rejection_share_by_chance": 0.05
+    },
+    "0.01": {
+      "symbols": 642,
+      "nominal": 0.01,
+      "mean_breach_rate": 0.010760111896578656,
+      "median_breach_rate": 0.010309278350515464,
+      "kupiec_rejected_at_5pct": 17,
+      "kupiec_rejected_share": 0.0264797507788162,
+      "expected_rejection_share_by_chance": 0.05
+    }
+  }
+}

@@ -23,7 +23,7 @@ Survives (recovery inputs):
 
 | artifact | where |
 |---|---|
-| Database backups (nightly `VACUUM INTO`, newest plain `.db`, older `.gz`, each with a `.sha256`) | `%SIGNALDECK_OFFSITE_DIR%` if set; otherwise `%OneDrive%\SignalDeckBackups` |
+| Database backups (nightly `VACUUM INTO`, newest plain `.db`, older `.gz`, each with a `.sha256`) | **Off-machine (2026-09-07): GitHub release assets on the private repo named by `SIGNALDECK_OFFSITE_GH_REPO`** (`nyaungnicholas-wq/signaldeck-backups` since 2026-09-16 — it was `nyaungnicholas-wq/signaldeck` until that repo was made PUBLIC, which turned every backup into a public download of raw licensed vendor bars), one release `backup-<timestamp>` per nightly run holding `<backup>.db.gz` + `.sha256`, newest 7 kept. Fetch the newest with `gh release download <tag> --repo <repo> --pattern '*.db.gz' --pattern '*.sha256'` or rehearse a restore with `ops/restore-rehearsal.sh --from-github`. Same-volume copies: `%SIGNALDECK_OFFSITE_DIR%` if set, else `%OneDrive%\SignalDeckBackups` (NOT off-machine unless that folder actually syncs) |
 | Source, ops scripts, the `.plist` files the task installer reads | GitHub: `nyaungnicholas-wq/signaldeck` |
 | External anchors, prereg chain head, accuracy registry | the public anchors repo (`anchors.log`, `prereg.log`, `accuracy_registry.json` in its git history) |
 
@@ -65,15 +65,52 @@ leaves the task pointing at nothing.
 
 ## 2. Restore the database, and verify it before trusting it
 
+**Fetch from GitHub, not from the local folder.** The table above already says
+which copy is off-machine, and this section used to contradict it: it read only
+`%SIGNALDECK_OFFSITE_DIR%`, defaulting to `%OneDrive%\SignalDeckBackups`, which
+lives on the SAME VOLUME as the database it is meant to replace. In the disk
+loss this runbook exists for, that folder is gone with everything else, and the
+block would `throw "no backup found"` at the worst possible moment.
+
+It is also silently behind even when the disk is fine. Measured 2026-09-12: the
+local folder's newest file was `signaldeck-20260907-131007.db` while the GitHub
+release `backup-20260910-131009` was three days newer. Following the old block
+restored the older one and said nothing.
+
 ```powershell
 cd $env:USERPROFILE\Desktop\"claude code"\signaldeck
+$repo = if ($env:SIGNALDECK_OFFSITE_GH_REPO) { $env:SIGNALDECK_OFFSITE_GH_REPO } else { 'nyaungnicholas-wq/signaldeck-backups' }
+$tag  = (gh release list --repo $repo --limit 50 |
+         Select-String -Pattern 'backup-\d{8}-\d{6}' -AllMatches |
+         ForEach-Object { $_.Matches.Value } | Sort-Object -Descending | Select-Object -First 1)
+if (-not $tag) { throw "no backup-* release found in $repo -- is gh authenticated? (gh auth status)" }
+New-Item -ItemType Directory -Force restore-dl | Out-Null
+gh release download $tag --repo $repo --pattern '*.db.gz' --pattern '*.sha256' --dir restore-dl --clobber
+$src = Get-ChildItem restore-dl -Filter '*.db.gz' | Select-Object -First 1
+if (-not $src) { throw "release $tag carried no .db.gz asset" }
+$offsite = $src.DirectoryName
+"restoring from $tag / $($src.Name) ($([math]::Round($src.Length/1GB,2)) GB)"
+```
+
+FALLBACK, and only when you have checked it is not stale: if GitHub is
+unreachable and the volume survived, the local folder is a faster path to a
+possibly-older database. Compare its newest file against the newest
+`backup-*` tag before trusting it, and expect to lose whatever fell between.
+
+```powershell
 $offsite = if ($env:SIGNALDECK_OFFSITE_DIR) { $env:SIGNALDECK_OFFSITE_DIR } else { "$env:OneDrive\SignalDeckBackups" }
 $src = Get-ChildItem $offsite -Filter 'signaldeck-*.db*' |
        Where-Object { $_.Name -notlike '*.sha256' } |
        Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (-not $src) { throw "no backup found in $offsite" }
-"restoring from $($src.Name) ($([math]::Round($src.Length/1GB,2)) GB)"
+if (-not $src) { throw "no backup found in $offsite (expected -- this folder does not survive disk loss)" }
+"restoring from $($src.Name) ($([math]::Round($src.Length/1GB,2)) GB), taken $($src.LastWriteTime)"
+"CHECK THIS DATE against the newest backup-* release before continuing."
+```
 
+Either path leaves `$src` and `$offsite` set, so the decompress-and-verify
+steps below are shared:
+
+```powershell
 New-Item -ItemType Directory -Force data | Out-Null
 if ($src.Extension -eq '.gz') {
     $in = [IO.File]::OpenRead($src.FullName); $out = [IO.File]::Create('data\signaldeck.db')
@@ -88,19 +125,32 @@ Verify the checksum recorded when the backup was taken, then the file itself.
 A backup that fails either check is not a backup — go back one generation:
 
 ```powershell
-$sidecar = Join-Path $offsite ($src.BaseName + '.sha256')
-if (Test-Path $sidecar) {
-    $want = (Get-Content $sidecar -Raw).Split()[0].Trim()
+# TWO sidecar conventions, and they hash DIFFERENT FILES. The GitHub uploader
+# (ops/lib-offsite-gh.sh:67) runs sha256sum over the COMPRESSED asset and names
+# it "<file>.db.gz.sha256"; the local nightly records the UNCOMPRESSED .db as
+# written by VACUUM INTO, as "<file>.db.sha256". Checking only the second --
+# which this block used to do -- prints "integrity is unverified" for every
+# GitHub restore, i.e. on the one copy that survives a disk loss.
+$gzSidecar = Join-Path $offsite ($src.Name + '.sha256')      # hashes the archive
+$dbSidecar = Join-Path $offsite ($src.BaseName + '.sha256')  # hashes the restored db
+if (Test-Path $gzSidecar) {
+    $want = (Get-Content $gzSidecar -Raw).Split()[0].Trim()
+    $got  = (Get-FileHash $src.FullName -Algorithm SHA256).Hash.ToLower()
+    if ($want -ne $got) { throw "SHA256 MISMATCH on the archive: recorded $want, got $got" }
+    'sha256 OK (compressed asset)'
+} elseif (Test-Path $dbSidecar) {
+    $want = (Get-Content $dbSidecar -Raw).Split()[0].Trim()
     $got  = (Get-FileHash 'data\signaldeck.db' -Algorithm SHA256).Hash.ToLower()
     if ($want -ne $got) { throw "SHA256 MISMATCH: recorded $want, restored $got" }
-    'sha256 OK'
-} else { 'WARNING: no .sha256 sidecar — integrity is unverified' }
+    'sha256 OK (restored database)'
+} else { 'WARNING: no .sha256 sidecar - integrity is unverified' }
 sqlite3 data\signaldeck.db "PRAGMA quick_check;"
 sqlite3 data\signaldeck.db "SELECT COUNT(*) FROM bars;"
 ```
 
-The `.sha256` sidecar covers the UNCOMPRESSED `.db` as written by
-`VACUUM INTO`, which is why it is checked after decompression, not before.
+Neither check is optional. `PRAGMA quick_check` catches a corrupt page; the
+sha256 catches a truncated or swapped file, which quick_check will happily
+pass on a structurally valid prefix.
 
 ## 3. Recreate secrets, keys, and the anchor repo
 

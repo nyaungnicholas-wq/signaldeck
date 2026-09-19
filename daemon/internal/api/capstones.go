@@ -45,7 +45,12 @@ func (d Deps) portfolioRebalance(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	lookback := 180
 	if s := q.Get("lookback"); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v > 20 {
+		// Upper bound is load-bearing, not tidiness. store.LastBars passes n
+		// straight into a SQLite LIMIT with no clamp of its own, and an
+		// overflowed Atoi wraps to a NEGATIVE value, which SQLite reads as NO
+		// LIMIT -- materialising the whole bars table into []md.Bar, once per
+		// symbol, up to 25 times, on a multi-GB database.
+		if v, err := strconv.Atoi(s); err == nil && v > 20 && v <= maxLookbackBars {
 			lookback = v
 		}
 	}
@@ -162,7 +167,16 @@ func (d Deps) portfolioRebalance(w http.ResponseWriter, r *http.Request) {
 	held := map[string]bool{}
 	var positions []rebalance.Position
 	var equity float64
-	if pos, perr := d.St.PaperPositions(ctx, strategy); perr == nil {
+	// A FAILED READ IS NOT AN EMPTY BOOK. With no else branch this produced a
+	// complete BUY/SELL plan against an invented $100k of capital and an
+	// invented empty book, byte-identical in shape to a legitimate plan --
+	// and this endpoint's output is a trade list.
+	pos, perr := d.St.PaperPositions(ctx, strategy)
+	if perr != nil {
+		httpInternal(w, fmt.Errorf("cannot read the paper book, refusing to plan a rebalance against assumed capital: %w", perr))
+		return
+	}
+	{
 		for _, p := range pos {
 			px := priceOf[p.Symbol]
 			if px == 0 {
@@ -182,6 +196,9 @@ func (d Deps) portfolioRebalance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if equity <= 0 {
+		// Reached only when the book was READ successfully and is genuinely
+		// empty -- the read failure above now returns rather than falling
+		// through to this default.
 		equity = 100_000 // empty book: plan an allocation of the default starting cash
 	}
 
@@ -316,7 +333,12 @@ func (d Deps) portfolioOptimize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	lookback := 180
 	if s := q.Get("lookback"); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v > 20 {
+		// Upper bound is load-bearing, not tidiness. store.LastBars passes n
+		// straight into a SQLite LIMIT with no clamp of its own, and an
+		// overflowed Atoi wraps to a NEGATIVE value, which SQLite reads as NO
+		// LIMIT -- materialising the whole bars table into []md.Bar, once per
+		// symbol, up to 25 times, on a multi-GB database.
+		if v, err := strconv.Atoi(s); err == nil && v > 20 && v <= maxLookbackBars {
 			lookback = v
 		}
 	}
@@ -704,6 +726,11 @@ func profileCacheKey(sym, model, charter, digest string) string {
 }
 
 // profileCachePrefix namespaces cached profiles in the meta table.
+// maxLookbackBars bounds the ?lookback= parameter on the two capstone handlers.
+// 2000 daily bars is roughly eight years, past any horizon these endpoints
+// serve, so the ceiling refuses abuse without refusing a legitimate request.
+const maxLookbackBars = 2000
+
 const profileCachePrefix = "capstone_profile:"
 
 // pruneStaleProfiles drops this symbol's PREVIOUS cached profiles, keeping only

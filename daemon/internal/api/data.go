@@ -87,17 +87,32 @@ func (d Deps) macro(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Breadth: fraction of tracked symbols with a positive 1d score.
-	pos, scored := 0, 0
+	// readErrs is counted, not folded. `err != nil` and "no score yet" shared one
+	// branch, so `scored` counted only what read CLEANLY: partial failure
+	// computed breadth over a silently shrunk universe, and total failure gave
+	// breadthPct 0, rendered as "BREADTH 0.0%, 0 of 0 scored positive", delta
+	// -50, glow "down" -- and added to the risk-OFF list. A fabricated market
+	// read, from a 5.9s endpoint sharing a 4-connection pool.
+	pos, scored, readErrs := 0, 0, 0
 	for _, s := range syms {
-		if sc, ok, err := d.St.LatestScore(ctx, s.ID, md.H1d); err == nil && ok {
+		sc, ok, err := d.St.LatestScore(ctx, s.ID, md.H1d)
+		switch {
+		case err != nil:
+			readErrs++
+		case ok:
 			scored++
 			if sc.Score > 0 {
 				pos++
 			}
 		}
 	}
+	// breadthKnown gates the number rather than substituting one. A breadth
+	// computed while a meaningful share of the universe failed to read is not a
+	// measurement of the market, and 0.0 is the single most alarming value this
+	// field can take.
 	breadth := 0.0
-	if scored > 0 {
+	breadthKnown := scored > 0 && readErrs*4 <= scored
+	if breadthKnown {
 		breadth = float64(pos) / float64(scored)
 	}
 	// Volatility regime from SPY daily realized vol (proxy for "fear").
@@ -117,16 +132,18 @@ func (d Deps) macro(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{
-		"breadthPct":  breadth * 100,
-		"positive":    pos,
-		"scored":      scored,
-		"volPct":      volPct,
-		"volLabel":    volLabel,
-		"push20Macro": hudMacro,
+		"breadthPct":        breadthValue(breadth, breadthKnown),
+		"breadthKnown":      breadthKnown,
+		"breadthReadErrors": readErrs,
+		"positive":          pos,
+		"scored":            scored,
+		"volPct":            volPct,
+		"volLabel":          volLabel,
+		"push20Macro":       hudMacro,
 		// F-2 shape: hud is a synced snapshot — publish ITS age, not asOf's.
 		"push20MacroFetchedAt": hudFetchedAt,
-		"note":        "Breadth + volatility are computed from your stored bars. Full per-symbol fundamentals and an economic-event calendar require a paid data feed (not wired). PUSH-20 macro comes from your stock-trader monitor.",
-		"asOf":        time.Now().Unix(),
+		"note":                 "Breadth + volatility are computed from your stored bars. Full per-symbol fundamentals and an economic-event calendar require a paid data feed (not wired). PUSH-20 macro comes from your stock-trader monitor.",
+		"asOf":                 time.Now().Unix(),
 	})
 }
 
@@ -177,4 +194,15 @@ func (d Deps) registerData(mux *http.ServeMux) {
 		// Perf wave 2026-07-24: measured 5.9s per request; SWR-cached.
 		sharedMacroSWR.serve("macro", w, r, d.macro)
 	})
+}
+
+// breadthValue returns nil rather than a number when too much of the universe
+// failed to read. A percentage assembled from a partial scan is not a breadth
+// reading, and 0.0 is the most alarming value the field can take -- so the
+// honest answer to "we could not measure it" is no number at all.
+func breadthValue(breadth float64, known bool) any {
+	if !known {
+		return nil
+	}
+	return breadth * 100
 }

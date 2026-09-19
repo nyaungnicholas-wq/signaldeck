@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/confluence"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
@@ -34,6 +35,39 @@ const confluenceHorizon = "1d"
 // confluenceHorizonSecs is the forward window a setup needs before it can be
 // graded (matches the "1d" horizon; daily bars).
 const confluenceHorizonSecs = int64(86400)
+
+// IsConfluenceBettableDay reports whether a bet may be OPENED at this instant,
+// for a symbol in this market.
+//
+// THE CALENDAR IS PER-MARKET, and getting that wrong is what this signature
+// exists to prevent. Crypto trades every day: BTC/USD and its peers print a
+// daily bar on all 25 weekend days of a 90-day window, and the record already
+// holds 11 weekend crypto setups, 9 of them graded. Gating those on the NYSE
+// calendar would silently stop a 24/7 book two days in seven.
+//
+// For stocks the session calendar is the whole point. The scorer runs every 30
+// minutes including weekends, so a bucket on a day the exchange never opened has
+// no bar of its own; its entry leg then comes from the previous session and the
+// same move is published once per calendar day. That is the pseudo-replication
+// this wave removed — RNWWW's identical +93.33% on three consecutive buckets.
+//
+// This is belt to the braces of the bar-existence check at the call site
+// (entryTs >= dayStart), which is market-agnostic and catches most of the same
+// cases. Both are kept because neither alone is enough: the bar check would
+// still admit a stock whose weekend bucket happened to carry a vendor pad, and
+// this one would still admit a stock on a session whose bar has not arrived yet.
+//
+// It is exported and takes a bare unix second so the rule can be exercised
+// directly. The alternative — asserting it through ConfluenceScorer.Run — would
+// need all five independent signal families stood up before the calendar branch
+// is even reached, and a test that expensive to write is a test that stops being
+// written.
+func IsConfluenceBettableDay(unix int64, market md.Market) bool {
+	if market == md.Crypto {
+		return true
+	}
+	return marketcal.IsTradingDay(time.Unix(unix, 0).In(marketcal.Loc()))
+}
 
 // ── ConfluenceScorer ─────────────────────────────────────────────────────────
 
@@ -67,6 +101,24 @@ func (w *ConfluenceScorer) Run(ctx context.Context) (string, error) {
 	setupTs := now.Truncate(time.Minute).Unix()
 	dayStart := (nowUnix / 86400) * 86400 // outcome ts bucket: one independent bet per symbol/day
 	dayBucket := now.UTC().Format("2006-01-02")
+
+	// A BET CANNOT BE PLACED ON A DAY THE MARKET IS SHUT.
+	//
+	// The bucket above is a UTC calendar day, and the scorer runs every 30
+	// minutes including weekends. A setup that persisted over a weekend
+	// therefore opened three outcomes — Friday, Saturday, Sunday — and the
+	// resolver graded all three against the SAME pair of bars, because both its
+	// entry and its forward read fall back to the nearest bar in each direction
+	// and there is no bar between Friday and Monday. RNWWW booked the identical
+	// +93.33% move on 2026-07-17, 07-18 and 07-19; NXGLW and AXTI did the same.
+	// One price observation was entering the published mean up to three times as
+	// three "independent bets".
+	//
+	// Refusing to open an outcome on a non-trading day removes the duplicates at
+	// the source. The ASSESSMENT still runs and is still stored for every symbol
+	// — a reader looking at the weekend sees the current confluence state; it
+	// simply does not become a graded bet.
+	// The calendar gate is evaluated PER SYMBOL below: it depends on the market.
 
 	scored, setups, events, readErrs, writeErrs := 0, 0, 0, 0, 0
 
@@ -150,16 +202,35 @@ func (w *ConfluenceScorer) Run(ctx context.Context) (string, error) {
 
 		// FORWARD-TRACK the flagged setup: freeze entry_px at the latest close and
 		// store one outcome per (symbol, day, horizon) — the day-bucket ts makes
-		// the PK enforce independence (one bet per symbol per day).
-		entryPx, okPx, err := w.latestClose(ctx, s.ID, nowUnix)
-		if err != nil {
-			writeErrs++
-		} else if okPx {
-			if err := w.St.InsertConfluenceOutcome(ctx, store.ConfluenceOutcome{
-				SymbolID: s.ID, Ts: dayStart, Horizon: confluenceHorizon,
-				Direction: setup.Direction, Agree: setup.Agree, EntryPx: entryPx,
-			}); err != nil {
+		// the PK enforce independence (one bet per symbol per day). The store
+		// assigns episode_ts in the same statement, so a setup that persists
+		// across consecutive days stays ONE episode rather than becoming one new
+		// bet per day.
+		// AND THE BUCKET'S OWN SESSION MUST HAVE PRINTED.
+		//
+		// The bucket is a UTC day and US daily bars are stamped 04:00/05:00 UTC,
+		// so between 00:00 and the session's bar there is a window in which the
+		// bucket exists and its bar does not. A setup scored there would freeze
+		// the PREVIOUS day's close as its entry, and the resolver — which now
+		// requires the entry bar to be inside the bucket — could never grade it.
+		// Measured on the first pass after this shipped: 59 of 61 rows opened on
+		// 2026-08-21 were dead on arrival for exactly this reason, and because
+		// the insert is INSERT OR IGNORE on (symbol, ts, horizon) they would also
+		// have BLOCKED the real setup once the session opened.
+		//
+		// So the bet is simply not opened until the day it belongs to has a bar.
+		if IsConfluenceBettableDay(nowUnix, s.Market) {
+			entryPx, entryTs, okPx, err := w.latestClose(ctx, s.ID, nowUnix)
+			if err != nil {
 				writeErrs++
+			} else if okPx && entryTs >= dayStart {
+				if err := w.St.InsertConfluenceOutcome(ctx, store.ConfluenceOutcome{
+					SymbolID: s.ID, Ts: dayStart, Horizon: confluenceHorizon,
+					Direction: setup.Direction, Agree: setup.Agree,
+					EntryPx: entryPx, EntryTs: entryTs,
+				}); err != nil {
+					writeErrs++
+				}
 			}
 		}
 
@@ -198,14 +269,14 @@ func (w *ConfluenceScorer) Run(ctx context.Context) (string, error) {
 }
 
 // latestClose returns the symbol's most recent daily close at/before now (the
-// entry reference frozen into a forward-tracked outcome). ok=false when the
-// symbol has no daily bar yet.
-func (w *ConfluenceScorer) latestClose(ctx context.Context, symbolID, now int64) (float64, bool, error) {
+// entry reference frozen into a forward-tracked outcome) together with the ts of
+// the bar it came from. ok=false when the symbol has no daily bar yet.
+func (w *ConfluenceScorer) latestClose(ctx context.Context, symbolID, now int64) (float64, int64, bool, error) {
 	bar, ok, err := w.St.BarAtOrBefore(ctx, symbolID, md.TF1d, now)
 	if err != nil || !ok || bar.Close <= 0 {
-		return 0, false, err
+		return 0, 0, false, err
 	}
-	return bar.Close, true, nil
+	return bar.Close, bar.Ts, true, nil
 }
 
 // confluenceDetail builds the event line: "SYM: N-signal LONG/SHORT confluence
@@ -250,14 +321,98 @@ func (w *ConfluenceResolver) Run(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		// No forward bar yet, bad entry, or too large a gap (weekend/halt beyond
-		// 3 horizons) → leave it pending rather than grade on a distant bar.
-		if !ok || o.EntryPx <= 0 || fwd.Ts-target > 3*confluenceHorizonSecs || fwd.Close <= 0 {
+		// No forward bar yet, bad entry, or too large a gap (weekend/halt) →
+		// leave it pending rather than grade on a distant bar.
+		//
+		// The gap is measured from the BUCKET, not from `target`. o.Ts is a UTC
+		// midnight bucket while a US daily bar is stamped at ET midnight, so
+		// `fwd.Ts - target` carries a 4-5h offset that does not cancel — the
+		// sibling in predict.go:1218 anchors on an actual BAR stamp, where it
+		// does. Over an ordinary weekend the slack absorbed it; over a 3-day
+		// weekend it did not. Friday 2026-09-04 bucket, Labor Day Monday: next
+		// bar is Tuesday 04:00Z, fwd.Ts-target = 273,600s against a 259,200s
+		// limit, rejected BY FOUR HOURS. Such a row is never graded and is
+		// caught by neither clause of MarkUngradableConfluenceOutcomes, so it
+		// sits pending forever, counted in Rows but in neither Resolved nor
+		// Ungradable — and the dropped days are exactly the pre-holiday setups,
+		// which is a systematically biased sample, not a random one.
+		//
+		// 5 days from the bucket covers every US 3-day weekend and matches the
+		// retirement sweep's own window in store/confluence.go, so the resolver
+		// and the sweep cannot disagree about which rows are gradable.
+		if !ok || o.EntryPx <= 0 || fwd.Ts >= o.Ts+5*86400 || fwd.Close <= 0 {
 			continue
 		}
-		fwdReturn := fwd.Close/o.EntryPx - 1
+		// THE FORWARD BAR MUST BE SETTLED. Copied from the prediction resolver
+		// (predict.go), which carries the measurement: of 4,000 resolved 1d
+		// rows, 37.8% were frozen before their forward bar's 16:00 ET close,
+		// and about 3.7% of the whole 1d record was labelled against a price
+		// that had not happened yet.
+		//
+		// This resolver runs every 15 minutes THROUGH the session, so a daily
+		// bar returned mid-morning carries live prices in Close, High and Low.
+		// exit_low and exit_high feed the constrained stop/target basis, so a
+		// partial bar also decided whether a simulated stop was hit -- and the
+		// row is stamped resolved_at and never revisited.
+		//
+		// The test is "a LATER bar exists", not a clock offset: a successor bar
+		// can only appear once the next session has begun, so it settles the
+		// previous one without this code needing to know exchange hours,
+		// half-days, DST or crypto's 24h day.
+		if _, settled, serr := w.St.BarAtOrAfter(ctx, o.SymbolID, md.TF1d, fwd.Ts+1); serr != nil {
+			return "", serr
+		} else if !settled {
+			continue
+		}
+		// SAME-BASIS ENTRY. o.EntryPx was frozen when the setup was flagged, and the
+		// bars underneath it can be REWRITTEN afterwards: a reverse split triggers a
+		// full re-backfill (pipeline/splitrepair.go) that rescales the whole series.
+		// Dividing a live exit close by a frozen PRE-rescale entry does not cancel —
+		// the rescale factor lands whole in the return. DFNS was flagged at 0.0493,
+		// graded against a rescaled exit, and reported +8541% on an entry price no
+		// bar of that symbol has ever carried (its minimum close is 3.90).
+		//
+		// predict.go resolves with fwd.Close/base.Close-1, BOTH legs read live, and
+		// is immune for exactly that reason. Re-read the entry bar here so the two
+		// legs always share one basis. EntryPx stays stored as the audit record of
+		// what the price looked like when the call was made; it is no longer the
+		// denominator.
+		//
+		// o.Ts is the UTC day bucket and US daily bars are stamped 04:00/05:00, so
+		// +86399 selects that day's bar. Measured on the live table this reproduces
+		// the frozen price for 5,258 of 5,304 resolved rows — the 46 it does not are
+		// precisely the rescaled ones this exists to fix.
+		entry, okEntry, err := w.St.BarAtOrBefore(ctx, o.SymbolID, md.TF1d, o.Ts+86399)
+		if err != nil {
+			return "", err
+		}
+		if !okEntry || entry.Close <= 0 {
+			continue // entry bar gone (purged or quarantined) — leave it pending
+		}
+		// THE ENTRY BAR MUST BE INSIDE THE BUCKET DAY.
+		//
+		// BarAtOrBefore has no lower bound, so a symbol that did not trade on its
+		// own bucket day was graded from whatever bar came last — days or weeks
+		// earlier. Combined with the forward read, which reaches FORWARD from the
+		// same bucket, several buckets could resolve to one identical (entry,
+		// exit) pair and each was published as a separate independent bet.
+		//
+		// A bet whose entry price is not from the day it was placed is not a bet
+		// this system can honestly grade, so it stays pending rather than being
+		// graded on a stale leg. Non-trading-day buckets no longer arise at all
+		// (see the scorer), so what remains here is the historical residue and
+		// the genuine case of a symbol that simply did not print that day.
+		if entry.Ts < o.Ts {
+			continue
+		}
+		fwdReturn := fwd.Close/entry.Close - 1
 		win := (o.Direction > 0 && fwdReturn > 0) || (o.Direction < 0 && fwdReturn < 0)
-		if err := w.St.ResolveConfluenceOutcome(ctx, o.SymbolID, o.Ts, o.Horizon, fwdReturn, win); err != nil {
+		// Stamp the price LEVELS the constrained basis reads. The exit bar's
+		// extremes stand in for the intra-window excursion: the horizon is one
+		// day and the gap guard above keeps the exit within three of them, so
+		// that bar is where a stop would have been hit.
+		if err := w.St.ResolveConfluenceOutcome(ctx, o.SymbolID, o.Ts, o.Horizon, fwdReturn, win, entry.Ts,
+			store.ConfluenceGradePrices{EntryClose: entry.Close, ExitLow: fwd.Low, ExitHigh: fwd.High}); err != nil {
 			return "", err
 		}
 		resolved++

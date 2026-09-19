@@ -95,7 +95,21 @@ check "deleting a branch is allowed while another ref still holds the commit" "0
 setup; ledger "$TIP"
 git checkout -q -b other "$BASE" 2>/dev/null
 git branch -D master >/dev/null 2>&1 || git branch -D main >/dev/null 2>&1
-check "deleting the ONLY branch holding a referenced commit is BLOCKED" "1" \
+# Expected 0, NOT 1. The value is `grep -q`'s exit: 0 = the branch is STILL
+# THERE (the hook refused the delete), 1 = it is gone (the delete went through).
+# This asked for 1 — it passed only if the protection had FAILED, and would have
+# gone green the day someone broke the hook. Backwards, not merely red.
+#
+# Measured in a throwaway repo seeded by the same ledger() above:
+#   REFUSING THIS REF CHANGE: it orphans commit(s) the evidence ledger references
+#   fatal: in 'prepared' phase, update aborted by the reference-transaction hook
+#   exit=128, refs/heads/main survives, grep exit 0.
+#
+# A hand-built sandbox that shows the hook NOT blocking has an under-specified
+# ledger: the hook reads prediction_ledger(predicted_at, revision), so a table
+# with only `revision` matches nothing and the delete is correctly allowed. That
+# false negative is what made this look unexplainable and kept it red.
+check "deleting the ONLY branch holding a referenced commit is BLOCKED" "0" \
       "$(git for-each-ref --format='%(refname)' | grep -qE 'refs/heads/(master|main)$'; echo $?; )"
 
 # ── unprovable and irrelevant cases must never block ──────────────────────────

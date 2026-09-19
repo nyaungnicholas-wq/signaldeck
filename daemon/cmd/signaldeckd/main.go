@@ -119,6 +119,25 @@ func main() {
 			"revision", lineage.BuildRevision())
 	}
 
+	// REFUSE a published deployment that cannot accept a browser POST.
+	//
+	// SIGNALDECK_WEB_ORIGINS defaults to the four localhost spellings. The
+	// CSRF guard in api/security.go rejects any non-GET whose Origin is not on
+	// that list, and a visitor on https://<host> sends exactly that Origin — so
+	// with the shipped defaults the read-only pages served perfectly while the
+	// waitlist form and the operator login answered 403. Nothing logs a
+	// misconfiguration; the operator sees a form that does not work.
+	//
+	// There is no override. The fix is one environment variable and the
+	// alternative is a launch whose only write paths are broken.
+	if cfg.PublicOriginMissing() {
+		slog.Error("refusing to start: this deployment is published but no HTTPS browser origin is allowed — "+
+			"every form POST and the operator login would answer 403 while the read-only pages worked",
+			"web_origins", cfg.WebOrigins,
+			"fix", "SIGNALDECK_WEB_ORIGINS=https://<your-public-host> (add the loopback pair too if you drive it locally)")
+		os.Exit(1)
+	}
+
 	// Manual one-shot: SIC bulk sync (Stage 4). Runs the sic-bulk-sync worker
 	// once with the gate forced, prints its honest detail line, and exits —
 	// the fleet is never started.

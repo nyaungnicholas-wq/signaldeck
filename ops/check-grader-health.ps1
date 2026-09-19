@@ -30,6 +30,43 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $failed = $false
+# Every finding is written AND recorded through one call. The two used to be
+# separate lines at eight sites, which is how the alert body below could have
+# ended up empty: there was no variable holding what went wrong, only console
+# text nobody reads under Task Scheduler.
+$reasons = @()
+function Set-Unhealthy {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    Write-Output $Message
+    $script:reasons += $Message
+    $script:failed = $true
+}
+
+# Get-HeartbeatVerdict decides what a stale heartbeat MEANS, given how long this
+# machine has been up. Split out from the database path on purpose: the rule is
+# the part worth asserting, and ops/test-check-grader-health.ps1 drives the whole
+# matrix through it without needing a 6 GB database or a fabricated clock.
+#
+# Returns 'fresh', 'expected-downtime' or 'stale'. Only 'stale' is a fault.
+function Get-HeartbeatVerdict {
+    param(
+        [Parameter(Mandatory = $true)][double]$AgeMinutes,
+        [Parameter(Mandatory = $true)][int]$MaxAgeMinutes,
+        # Negative means the uptime could not be read. Unknown is NOT an excuse.
+        [Parameter(Mandatory = $true)][double]$UptimeMinutes
+    )
+    if ($AgeMinutes -le $MaxAgeMinutes) { return 'fresh' }
+    $ceiling = $MaxAgeMinutes * 3
+    if ($UptimeMinutes -ge 0 -and $UptimeMinutes -lt $MaxAgeMinutes -and $AgeMinutes -lt $ceiling) {
+        return 'expected-downtime'
+    }
+    return 'stale'
+}
+# Alerting. Without this the script detected faults and told nobody: under Task
+# Scheduler its console output goes nowhere, so an unhealthy run was a
+# LastTaskResult=1 in a UI no one opens. Both health tasks sat red from
+# 2026-09-10 to 2026-09-12 exactly that way.
+. (Join-Path $PSScriptRoot 'lib-notify.ps1')
 
 # The sqlite3 CLI is not installed on this machine and never has been; the repo
 # reads SQLite through Python everywhere for exactly that reason.
@@ -62,25 +99,21 @@ try {
     $dbPath = Join-Path $repo 'data\signaldeck.db'
 
     if (-not (Test-Path -LiteralPath $dbPath)) {
-        Write-Output "HEARTBEAT: database not found at $dbPath"
-        $failed = $true
+        Set-Unhealthy "HEARTBEAT: database not found at $dbPath"
     } else {
         $out = & python $tmp $dbPath 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Output "HEARTBEAT: unreadable ($out)"
-            $failed = $true
+            Set-Unhealthy "HEARTBEAT: unreadable ($out)"
         } else {
             $line = ($out | Where-Object { $_ -match '\S' } | Select-Object -Last 1)
             if ($line -eq 'NONE') {
-                Write-Output 'HEARTBEAT: none recorded'
-                $failed = $true
+                Set-Unhealthy 'HEARTBEAT: none recorded'
             } elseif ($line -match '^([^|]*)\|([^|]*)\|(.*)$') {
                 $success    = $matches[1]
                 $finishedAt = $matches[2]
                 $lastErr    = $matches[3]
                 if ($success -ne '1') {
-                    Write-Output "HEARTBEAT: last run FAILED: $lastErr"
-                    $failed = $true
+                    Set-Unhealthy "HEARTBEAT: last run FAILED: $lastErr"
                 } else {
                     # AssumeUniversal so a timestamp carrying no offset is still
                     # read as UTC; AdjustToUniversal so one that DOES carry an
@@ -92,21 +125,63 @@ try {
                         $finishedAt, [System.Globalization.CultureInfo]::InvariantCulture,
                         $styles, [ref]$finished)
                     if (-not $parsed) {
-                        Write-Output "HEARTBEAT: timestamp unparseable: $finishedAt"
-                        $failed = $true
+                        Set-Unhealthy "HEARTBEAT: timestamp unparseable: $finishedAt"
                     } else {
                         $age = ([datetime]::UtcNow - $finished).TotalMinutes
                         if ($age -gt $MaxAgeMinutes) {
-                            Write-Output ("HEARTBEAT: STALE ({0:N1} min, max {1})" -f $age, $MaxAgeMinutes)
-                            $failed = $true
+                            # A POWERED-OFF MACHINE AND A BROKEN GRADER PRODUCE THE
+                            # IDENTICAL SYMPTOM, and until 2026-09-14 this reported
+                            # both as unhealthy with the same sentence.
+                            #
+                            # Measured: this box was off from 2026-09-11 00:21 to
+                            # 2026-09-12 21:18 (System log 6006 -> 6005, ~45 h).
+                            # "SignalDeck Accuracy" fires daily at 14:05 with
+                            # WakeToRun=False, so it could not run on either day.
+                            # The heartbeat reached 67 h, this check went red at
+                            # 09:20 on 09-13, and "SignalDeck Check-Task-Health"
+                            # went red behind it, purely as a cascade. Nothing was
+                            # wrong with the grader: it ran at 14:05 the same day
+                            # and recorded a normal refusal.
+                            #
+                            # THE EXCUSE IS BOUNDED AND CANNOT FAIL OPEN. The grader
+                            # only runs while the machine is up, so uptime -- not
+                            # wall-clock -- is the window in which it had a chance.
+                            # It is forgiven ONLY while the machine has been up for
+                            # less than one full window, and NEVER past a hard
+                            # ceiling of three windows, so a box that reboots often
+                            # enough to keep uptime low cannot hide a real outage
+                            # indefinitely. Either way the line is printed: this
+                            # downgrades a page, it never suppresses a fact.
+                            $uptimeMin = -1
+                            try {
+                                $boot = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+                                $uptimeMin = ((Get-Date) - $boot).TotalMinutes
+                            } catch {
+                                $uptimeMin = -1
+                            }
+                            $ceiling = $MaxAgeMinutes * 3
+                            switch (Get-HeartbeatVerdict -AgeMinutes $age -MaxAgeMinutes $MaxAgeMinutes -UptimeMinutes $uptimeMin) {
+                                'expected-downtime' {
+                                    Write-Output ("HEARTBEAT: STALE ({0:N1} min, max {1}) BUT EXPECTED - this machine has been up only {2:N1} min, so a full grading window has not elapsed since boot. The gap is DOWNTIME, not a grader fault. It becomes unhealthy once uptime passes {1} min with no fresh heartbeat, or once age passes {3} min regardless." -f $age, $MaxAgeMinutes, $uptimeMin, $ceiling)
+                                }
+                                default {
+                                    $why = if ($uptimeMin -lt 0) {
+                                        'uptime unreadable, which is not an excuse'
+                                    } elseif ($age -ge $ceiling) {
+                                        ("age is past the {0} min ceiling, which no amount of downtime excuses" -f $ceiling)
+                                    } else {
+                                        ("this machine has been up {0:N1} min, longer than the {1} min window, so the grader had its chance" -f $uptimeMin, $MaxAgeMinutes)
+                                    }
+                                    Set-Unhealthy ("HEARTBEAT: STALE ({0:N1} min, max {1}) - {2}" -f $age, $MaxAgeMinutes, $why)
+                                }
+                            }
                         } else {
                             Write-Output ("HEARTBEAT: fresh ({0:N1} min)" -f $age)
                         }
                     }
                 }
             } else {
-                Write-Output "HEARTBEAT: unexpected output: $line"
-                $failed = $true
+                Set-Unhealthy "HEARTBEAT: unexpected output: $line"
             }
         }
     }
@@ -123,8 +198,7 @@ if (-not (Test-Path -LiteralPath $walPath)) {
 } else {
     $walMB = (Get-Item -LiteralPath $walPath).Length / 1MB
     if ($walMB -gt $WalCritMB) {
-        Write-Output ("WAL: CRITICAL ({0:N1} MB)" -f $walMB)
-        $failed = $true
+        Set-Unhealthy ("WAL: CRITICAL ({0:N1} MB)" -f $walMB)
     } elseif ($walMB -gt $WalWarnMB) {
         Write-Output ("WAL: warn ({0:N1} MB)" -f $walMB)
     } else {
@@ -132,6 +206,201 @@ if (-not (Test-Path -LiteralPath $walPath)) {
     }
 }
 
-if ($failed) { Write-Output 'RESULT: unhealthy'; exit 1 }
+# LEDGER REVISIONS. tools/accuracy_registry.py strips a whole family's verdict
+# when any post-epoch row cites a commit git cannot resolve. A commit reachable
+# from no ref still resolves until the first `git gc` after its reflog entry
+# expires (~30 days), so a deleted ref strips verdicts silently weeks later,
+# and ops/githooks/reference-transaction only sees ref moves, never gc or a
+# deletion made in another clone. Measured 2026-09-10: b84670c9 (252 1w rows,
+# 7 liquidity21-crypto, 7 trend21-crypto) resolves and nothing reaches it. So
+# the ledger is asked daily, here, while the commit can still be re-attached.
+# Read-only (sqlite mode=ro). Exit 1 names each revision and the families it
+# takes with it; the tool prints to stdout only, so no redirect is needed and
+# a crash traceback still reaches the task log via *>>.
+$lrr = Join-Path $repo 'tools\ledger_revision_reachability.py'
+$lrrOut = @(& python $lrr)
+if ($LASTEXITCODE -ne 0) {
+    Set-Unhealthy 'LEDGER REVISIONS: BROKEN'
+    $lrrOut | ForEach-Object { Write-Output "  $_" }
+} else {
+    Write-Output ('LEDGER REVISIONS: ' + ($lrrOut | Select-Object -Last 1))
+}
+
+# LEDGER MANIFEST. ops/ledger-revisions.txt is all CI's provenance job can
+# enforce, and it is regenerated only when someone runs
+# `bash ops/ledger-provenance.sh --write` here, on the machine with the
+# database. It went 36 days stale, 2026-08-04 to 2026-09-09: 101 of the 108
+# ledger revisions on the remote had no CI protection the whole time, and CI
+# stayed green because the seven it did record stayed reachable. --diff
+# recomputes what --write would record and compares it with the committed
+# file. Exit 1 is a warning, printed in full and not fatal: a revision cited
+# by the ledger and on the remote for 7+ days is unrecorded (the weekly chore
+# is due), or a recorded one is no longer recordable (CI is about to fail and
+# --check's message says what to do). Exit 2 means it could not run, which on
+# the machine that holds the database is unhealthy. No stderr redirect, same
+# as the python call above: --diff writes everything to stdout. PATH's
+# bash.exe is the WSL launcher on this box, so Git's is resolved explicitly
+# the way daemon-guard.ps1 does; a missing one is reported, not failed.
+$bash = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
+    Where-Object { $_ } |
+    ForEach-Object { Join-Path $_ 'Git\bin\bash.exe' } |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Select-Object -First 1
+if (-not $bash) {
+    Write-Output 'LEDGER MANIFEST: SKIPPED (no Git bash under ProgramFiles)'
+} else {
+    $lpOut = @(& $bash ((Join-Path $repo 'ops\ledger-provenance.sh') -replace '\\', '/') --diff)
+    $lpExit = $LASTEXITCODE
+    Write-Output ('LEDGER MANIFEST: ' + ($lpOut | Select-Object -Last 1))
+    if ($lpExit -ne 0) { $lpOut | Select-Object -SkipLast 1 | ForEach-Object { Write-Output "  $_" } }
+    if ($lpExit -gt 1) { Set-Unhealthy ('LEDGER MANIFEST: ' + ($lpOut | Select-Object -Last 1)) }
+}
+
+
+# LEDGER COVERAGE. A served forecast that never reached the hash chain cannot be
+# proven un-backdated, and nothing measured how many there were.
+#
+# The write is four separate transactions -- UpsertPrediction, then
+# SeedBenchmarkOutcome, then AppendLedger, each with its own BeginTx -- so a
+# process killed between the first and the third leaves a served prediction with
+# no ledger entry. That window is NOT covered by the append's own error handling:
+# measured 2026-09-12, there are 0 ledger_append_error dq events in 14 days and 1
+# ever, while 30 served predictions have no ledger row. Nothing failed; the
+# process died mid-sequence and there was no error to record.
+#
+# n_used > 0 is load-bearing. internal/pipeline/predict_evidence.go writes
+# evidence-only rows with NUsed=0, documented "never graded, never served", one
+# per symbol per trading day so the coverage monitor has a full-universe
+# denominator. Those are CORRECTLY absent from the ledger, which commits served
+# forecasts. Counting them makes this read 56,778 instead of 30 -- a false crisis
+# off by three orders of magnitude, which is what the first pass at this check
+# reported before the denominator was checked.
+#
+# Reported, never back-filled. Appending an entry now for a prediction made days
+# ago would stamp a later predicted_at on an older bar, manufacturing exactly the
+# anteriority the chain exists to prove. These 30 stay uncommitted and counted.
+$maxUnledgered = 50   # measured 30 on 2026-09-12; ratchet DOWN, never up
+$pyLedger = @'
+import sqlite3, sys
+
+LEDGER_START = 1783155600  # first prediction_ledger bar_ts; nothing before it was ever ledgered
+conn = None
+try:
+    conn = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+    n = conn.execute(
+        "select count(*) from predictions p "
+        "left join prediction_ledger l on l.symbol_id=p.symbol_id "
+        "  and l.horizon=p.horizon and l.bar_ts=p.ts "
+        "where l.seq is null and p.n_used > 0 and p.ts >= ?",
+        (LEDGER_START,)).fetchone()[0]
+    total = conn.execute(
+        "select count(*) from predictions where n_used > 0 and ts >= ?",
+        (LEDGER_START,)).fetchone()[0]
+    print("%d|%d" % (n, total))
+except sqlite3.OperationalError as e:
+    print("SKIP:%s" % e)
+except Exception as e:
+    print("ERROR:%s" % e, file=sys.stderr)
+    sys.exit(2)
+finally:
+    if conn is not None:
+        conn.close()
+'@
+
+$tmpL = Join-Path ([System.IO.Path]::GetTempPath()) ("sd_ledgercov_{0}.py" -f [guid]::NewGuid().ToString('N'))
+try {
+    Set-Content -LiteralPath $tmpL -Value $pyLedger -Encoding ASCII
+    $covOut = (& python $tmpL $dbPath 2>&1 | Where-Object { $_ -match '\S' } | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Output "LEDGER COVERAGE: unreadable ($covOut)"
+    } elseif ($covOut -like 'SKIP:*') {
+        Write-Output "LEDGER COVERAGE: SKIPPED ($covOut)"
+    } elseif ($covOut -match '^(\d+)\|(\d+)$') {
+        $unledgered = [int]$matches[1]
+        $servedTot = [int]$matches[2]
+        if ($unledgered -gt $maxUnledgered) {
+            Set-Unhealthy ("LEDGER COVERAGE: {0} served prediction(s) of {1} never reached the chain (max {2})" -f $unledgered, $servedTot, $maxUnledgered)
+        } else {
+            Write-Output ("LEDGER COVERAGE: {0} unledgered of {1} served (max {2})" -f $unledgered, $servedTot, $maxUnledgered)
+        }
+    } else {
+        Write-Output "LEDGER COVERAGE: unexpected output ($covOut)"
+    }
+} finally {
+    Remove-Item -LiteralPath $tmpL -ErrorAction SilentlyContinue
+}
+
+
+# LEDGER IDENTITIES. A second entry for a (symbol, horizon, bar) is a SUPERSEDING
+# claim, not corruption: the ledger records every prediction the runner emitted,
+# and the highest seq is the operative one (see the schema banner). It is
+# counted here because it should be RARE and because it carries a real cost --
+# `features` keeps only the latest vector, so a superseded entry's feature_hash
+# can no longer be re-derived from persisted data. The chain is unaffected;
+# VerifyLedger rehashes from the stored hash.
+#
+# 335 measured 2026-09-13 (248 pre-epoch, 87 post-epoch, 15 disagreeing on
+# cal_prob), newest appended 2026-08-04 and none since. The bound catches a
+# RECURRENCE -- a re-prediction loop quietly doubling the audit trail -- rather
+# than the dormant history, which cannot be removed from a write-once table.
+$maxDupIdentities = 400   # measured 335 on 2026-09-13; ratchet DOWN, never up
+$pyDup = @'
+import sqlite3, sys
+
+conn = None
+try:
+    conn = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+    n = conn.execute(
+        "select count(*) from (select symbol_id, horizon, bar_ts "
+        "from prediction_ledger group by symbol_id, horizon, bar_ts "
+        "having count(*) > 1)").fetchone()[0]
+    conflicting = conn.execute(
+        "select count(*) from (select symbol_id, horizon, bar_ts "
+        "from prediction_ledger group by symbol_id, horizon, bar_ts "
+        "having count(distinct cal_prob) > 1)").fetchone()[0]
+    print("%d|%d" % (n, conflicting))
+except sqlite3.OperationalError as e:
+    print("SKIP:%s" % e)
+except Exception as e:
+    print("ERROR:%s" % e, file=sys.stderr)
+    sys.exit(2)
+finally:
+    if conn is not None:
+        conn.close()
+'@
+
+$tmpD = Join-Path ([System.IO.Path]::GetTempPath()) ("sd_ledgerdup_{0}.py" -f [guid]::NewGuid().ToString('N'))
+try {
+    Set-Content -LiteralPath $tmpD -Value $pyDup -Encoding ASCII
+    $dupOut = (& python $tmpD $dbPath 2>&1 | Where-Object { $_ -match '\S' } | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Output "LEDGER IDENTITIES: unreadable ($dupOut)"
+    } elseif ($dupOut -like 'SKIP:*') {
+        Write-Output "LEDGER IDENTITIES: SKIPPED ($dupOut)"
+    } elseif ($dupOut -match '^(\d+)\|(\d+)$') {
+        $dups = [int]$matches[1]
+        $conflicting = [int]$matches[2]
+        if ($dups -gt $maxDupIdentities) {
+            Set-Unhealthy ("LEDGER IDENTITIES: {0} superseded claim(s), {1} disagreeing on cal_prob (max {2})" -f $dups, $conflicting, $maxDupIdentities)
+        } else {
+            Write-Output ("LEDGER IDENTITIES: {0} superseded ({1} conflicting), max {2}" -f $dups, $conflicting, $maxDupIdentities)
+        }
+    } else {
+        Write-Output "LEDGER IDENTITIES: unexpected output ($dupOut)"
+    }
+} finally {
+    Remove-Item -LiteralPath $tmpD -ErrorAction SilentlyContinue
+}
+
+if ($failed) {
+    Write-Output 'RESULT: unhealthy'
+    # The captured findings ARE the alert body: a page saying only "grader
+    # unhealthy" sends the reader back to the console output that started this
+    # problem. Joined onto one line so the log stays one record per event.
+    $why = ($reasons -join '; ')
+    if (-not $why) { $why = 'see the run output' }
+    Send-SdAlert -Title 'SignalDeck grader health: UNHEALTHY' -Body $why -Repo $repo
+    exit 1
+}
 Write-Output 'RESULT: ok'
 exit 0

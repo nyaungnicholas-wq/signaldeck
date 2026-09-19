@@ -84,6 +84,13 @@ type Stats struct {
 var (
 	ErrDisabled   = fmt.Errorf("llm: no key configured")
 	ErrCapReached = fmt.Errorf("llm: daily call cap reached")
+	// ErrTransient wraps the final failure when EVERY retry attempt met a
+	// retryable condition (429 / 5xx / network / timeout). It lets a caller
+	// that already made partial progress stop cleanly and resume next pass
+	// without string-matching vendor error text -- this integration changed
+	// provider wording three times in six weeks, so matching "503" or
+	// "ResourceExhausted" would be a fix with a known expiry date.
+	ErrTransient = fmt.Errorf("llm: transient failure, retries exhausted")
 )
 
 // SpendStore persists the daily call counter so a daemon restart can't reset
@@ -154,15 +161,50 @@ func New(keys []string, baseURL, model, deepModel, fastModel string, dailyCap in
 	}
 }
 
-// Default model ids (overridable via config). qwen3.5-122b-a10b is a
-// mixture-of-experts model: 122B of knowledge with only ~10B active per token,
-// so it answers in ~4s on the NVIDIA free tier while reasoning far better than
-// an 8B dense model. The deep model is a reasoning-tuned Nemotron used only for
-// on-demand quality work (it takes ~30s and emits a hidden reasoning trace).
+// Default model ids (overridable via config).
+//
+// EVERY PREVIOUS DEFAULT IS RETIRED. Measured against
+// https://integrate.api.nvidia.com/v1 on 2026-08-27: qwen/qwen3.5-122b-a10b,
+// nvidia/llama-3.3-nemotron-super-49b-v1.5 and meta/llama-3.1-8b-instruct all
+// return HTTP 410 Gone. That is why ai-analyst and sentiment-tagger had been
+// erroring `llm: provider error: HTTP 410` on every run -- 31 failures a day --
+// and why the sentiment leg carries no measured lift: its tagger never ran.
+// The same class of breakage is already recorded in daemon/.env ("2026-07-19:
+// fixed dead AI model"), so vendor retirement is recurring, not a one-off.
+//
+// THE /models CATALOGUE IS NOT EVIDENCE. nvidia/llama-3.1-nemotron-70b-instruct
+// and nvidia/mistral-nemo-minitron-8b-8k-instruct are both LISTED there and both
+// answer HTTP 404 to an actual completion. Every id below was verified by
+// issuing a real chat completion, not by reading the list.
+//
+// Tiering follows the measurement:
+//   - nemotron-3-nano-30b-a3b answered a sentiment classification correctly in
+//     ~950ms, so it takes the high-volume default and fast tiers.
+//   - nemotron-3-super-120b-a12b is a reasoning model (it emits
+//     reasoning_content and needs a generous max_tokens or it truncates
+//     mid-thought), which is exactly the on-demand deep tier and exactly wrong
+//     for per-headline work.
+//   - nemotron-3.5-lightning-30b-a3b was rejected despite its name: 19.8s and
+//     still truncated on the same prompt.
+//
+// 2026-09-01: nemotron-3-nano-30b-a3b reached end of life at 09:00Z (HTTP 410;
+// third retirement in six weeks, after 07-19 and 08-27). The catalogue's
+// similarly named nemotron-nano-3-30b-a3b answers 404 to a real completion, as
+// do llama-3.1-nemotron-51b/70b, mistral-nemotron, mistral-nemo-12b and every
+// meta/llama id (410). Measured with the tagger's own charter and 120-token
+// budget: nemotron-3-nano-omni-30b-a3b-reasoning returned the strict JSON on
+// 3/3 headlines in 2.2-5.7s (finish=stop; its reasoning_content is not charged
+// against max_tokens), nemotron-3-super-120b-a12b answered in 1.9s (its earlier
+// 503s were "temporarily overloaded", not retirement), nemotron-3-ultra-550b-a55b
+// in 7.2s. Sending chat_template_kwargs {"enable_thinking": false} cut the nano
+// model to 0.6-0.8s with identical answers; it is a vendor-specific request field
+// and is NOT sent, so the client stays OpenAI-compatible. Retirement is now the
+// dominant failure mode of this integration: when the tagger reports HTTP 410,
+// re-probe with a real completion, not the /v1/models list.
 const (
-	DefaultModel = "qwen/qwen3.5-122b-a10b"
-	DefaultDeep  = "nvidia/llama-3.3-nemotron-super-49b-v1.5"
-	DefaultFast  = "meta/llama-3.1-8b-instruct"
+	DefaultModel = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+	DefaultDeep  = "nvidia/nemotron-3-super-120b-a12b"
+	DefaultFast  = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
 )
 
 func (c *httpClient) Enabled() bool     { return len(c.keys) > 0 }
@@ -231,10 +273,35 @@ func (c *httpClient) record(promptTok, outputTok int, now time.Time, errMsg stri
 }
 
 type chatReq struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	MaxTokens   int       `json:"max_tokens"`
-	Temperature float64   `json:"temperature"`
+	Model       string         `json:"model"`
+	Messages    []Message      `json:"messages"`
+	MaxTokens   int            `json:"max_tokens"`
+	Temperature float64        `json:"temperature"`
+	TemplateKw  map[string]any `json:"chat_template_kwargs,omitempty"`
+}
+
+// templateKwargs turns the vendor's hidden chain-of-thought OFF for every tier
+// except the deep one.
+//
+// MEASURED 2026-09-02 against this provider with the workers' own prompts, after
+// the 09-01 retirement forced a *-reasoning model into the default and fast
+// tiers. Analyst shape (800-token brief): thinking ON took 19.3s and 1058
+// completion tokens behind 3.5k chars of hidden reasoning, and the hourly
+// ai-analyst timed out on 6 of its 8 runs; thinking OFF took 1.9s and 81 tokens
+// and produced the same brief. Tagger shape: 3.7s ON, ~0.7s OFF, same rating.
+// The pool refusal (503 ResourceExhausted, 23 of 24 tagger passes) is the
+// provider's shared worker limit, so holding a slot for 3.7s instead of 0.7s is
+// most of what we can control.
+//
+// The DEEP tier keeps its reasoning: that is the whole reason it is a separate
+// tier. Gated on the model family because the field is vendor-specific — a
+// non-nemotron model could reject an unknown request field outright, and this
+// integration has changed models three times in six weeks.
+func templateKwargs(model, deepModel string) map[string]any {
+	if model == deepModel || !strings.Contains(model, "nemotron") {
+		return nil
+	}
+	return map[string]any{"enable_thinking": false}
 }
 
 type chatResp struct {
@@ -308,7 +375,8 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 	// so we trim that one, preserving the system charter intact.
 	trimToBudget(all, maxPromptChars)
 
-	body, err := json.Marshal(chatReq{Model: model, Messages: all, MaxTokens: maxTokens, Temperature: 0.2})
+	body, err := json.Marshal(chatReq{Model: model, Messages: all, MaxTokens: maxTokens, Temperature: 0.2,
+		TemplateKw: templateKwargs(model, c.deepModel)})
 	if err != nil {
 		return "", err
 	}
@@ -342,7 +410,9 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 	if lastErr == nil {
 		lastErr = fmt.Errorf("llm: request failed")
 	}
-	return "", lastErr
+	// Reaching here means the loop exhausted maxAttempts, and every iteration
+	// that did not return early was retryable by construction.
+	return "", fmt.Errorf("%w: %w", ErrTransient, lastErr)
 }
 
 // attempt performs a single request against one key. It returns (output, retryable, error).

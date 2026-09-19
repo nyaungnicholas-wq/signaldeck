@@ -24,7 +24,7 @@ export default function WatchlistPage() {
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refetch = useCallback(() => {
-    api.watchlist().then(setWatchlist).catch((e) => setError(String(e)));
+    api.watchlist().then(setWatchlist).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
   useEffect(() => {
@@ -60,8 +60,12 @@ export default function WatchlistPage() {
   }, [undo, refetch]);
 
   const stats = useMemo(() => {
-    if (!watchlist || watchlist.length === 0)
-      return { count: 0, best: null, worst: null };
+    // count is NULL only when the list has not loaded (or the fetch failed).
+    // An empty watchlist genuinely contains 0 symbols, so that zero is true
+    // and is still reported as 0. The two cases were previously collapsed, so
+    // the tile asserted "0 tracked" during every load and every failure.
+    if (!watchlist) return { count: null, best: null, worst: null };
+    if (watchlist.length === 0) return { count: 0, best: null, worst: null };
     const sorted = [...watchlist].sort(
       (a, b) => (b.dayChangePct ?? 0) - (a.dayChangePct ?? 0)
     );
@@ -73,7 +77,12 @@ export default function WatchlistPage() {
   }, [watchlist]);
 
   const removeHandler = (symbol: string, market: "crypto" | "stocks") => {
-    api.unsubscribe(symbol, market).catch(() => {});
+    // A failed removal must not stay silent while the row is already gone from
+    // the optimistic list: say so and reload, so the row visibly comes back.
+    api.unsubscribe(symbol, market).catch((e: unknown) => {
+      setError(`Could not remove ${symbol}: ${e instanceof Error ? e.message : String(e)}`);
+      refetch();
+    });
   };
 
   return (
@@ -269,8 +278,8 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
     try {
       const data = await screenerRows();
       setScreenerData(data);
-    } catch {
-      setError("Failed to load universe");
+    } catch (e: unknown) {
+      setError(`Failed to load universe: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
@@ -299,8 +308,8 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
       await api.subscribe(symbol, market);
       setQuery(""); // clearing the query empties `matches` — it is derived now
       refetch();
-    } catch {
-      setError("Failed to add symbol");
+    } catch (e: unknown) {
+      setError(`Failed to add symbol: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setPending(null);
     }
@@ -315,6 +324,11 @@ function AddSymbol({ refetch }: { refetch: () => void }) {
         onChange={(e) => setQuery(e.target.value)}
         onFocus={loadScreener}
         placeholder="Add symbol..."
+        // A placeholder is NOT an accessible name: it is not exposed as one by
+        // every screen reader, and it disappears the moment the field has text,
+        // so a user who navigates back to it hears an unlabelled edit box. The
+        // sibling controls on /watchlist/compare already carry aria-label.
+        aria-label="Add symbol to watchlist"
         className="panel w-64 px-3 py-2 text-sm mono focus:outline-none focus:ring-1 focus:ring-[var(--accent)]"
         style={{ backgroundColor: "var(--bg)" }}
       />

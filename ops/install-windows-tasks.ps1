@@ -153,11 +153,20 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
   }
   if ($logLeaf) {
     if ($isPs) {
-      # PowerShell needs -Command for a redirect too; *>> captures every stream
-      # (5.1 supports it), which is the -File equivalent of `>> log 2>&1`.
+      # PowerShell needs -Command for a redirect too. `*>&1 | Out-File`
+      # rather than a bare `*>>`: WinPS 5.1's `*>>` is Out-File's UNICODE
+      # default, so it writes UTF-16LE with a BOM and NUL-interleaved bytes
+      # and `grep` returns 0 matches on lines that demonstrably exist.
+      # Measured 2026-09-13: logs/check-grader-health.log and
+      # logs/check-task-health.log were both UTF-16LE on disk, while every
+      # bash-launched task's log (redirected inside bash) was UTF-8. A health
+      # log the usual tools cannot read is a health log nobody reads.
+      #
+      # `*>&1` keeps the all-streams capture the bare `*>>` gave, so this is
+      # still the -File equivalent of `>> log 2>&1`; only the encoding moves.
       $logWin = Join-Path $repo ('logs\' + $logLeaf)
       $inner = "& '$scriptWin'" + $(if ($rest.Count) { ' ' + ($rest -join ' ') } else { '' }) +
-      " *>> '$logWin'"
+      " *>&1 | Out-File -FilePath '$logWin' -Append -Encoding utf8"
       $argLine = '-NoProfile -ExecutionPolicy Bypass -Command "' + $inner + '"'
     }
     else {
@@ -269,14 +278,45 @@ foreach ($f in (Get-ChildItem (Join-Path $repo 'ops') -Filter 'com.*.plist' | So
     # the fleet from Interactive=0/S4U=14 to Interactive=11/S4U=5, and
     # check-task-health caught it immediately. Registering the principal
     # explicitly is what stops the recovery path from undoing the fix.
+    # RUNLEVEL: Limited for the fleet, Highest for the two tasks that must
+    # TERMINATE the daemon.
+    #
+    # Task Scheduler starts the daemon with an S4U token in session 0, and an
+    # S4U logon gets its own logon-session SID. Another S4U task -- even one
+    # running as the SAME user, which every task here does -- therefore cannot
+    # open the daemon's process handle: measured 2026-09-13,
+    # OpenProcess(PROCESS_TERMINATE) against signaldeckd returns win32 error 5,
+    # ACCESS_DENIED. Highest gives the token SeDebugPrivilege, which is what
+    # actually permits the kill.
+    #
+    # The consequence of leaving it Limited is not a failed kill, it is a
+    # MISSING BACKUP: market-close.sh could not stop the daemon, so
+    # signaldeck-backup-offline.sh's is-daemon-alive check refused to run and
+    # the day's off-machine copy silently did not happen, while the task still
+    # exited 0. Confirmed on 2026-09-12, with the newest GitHub backup two days
+    # stale.
+    #
+    # Exactly the two labels whose scripts call sd_kill_hard, and no others --
+    # elevation is granted where it is needed, not fleet-wide. LogonType stays
+    # S4U for every task, which is the load-bearing part above and must not
+    # change.
+    $needsKill = @('com.signaldeck.market-close', 'com.signaldeck.daily-refresh')
+    $runLevel = if ($needsKill -contains $label) { 'Highest' } else { 'Limited' }
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
-      -LogonType S4U -RunLevel Limited
+      -LogonType S4U -RunLevel $runLevel
     Register-ScheduledTask -TaskName $task -Action $action -Trigger $triggers `
       -Settings $set -Principal $principal -Force | Out-Null
     # The monthly trigger is assembled by hand from a CIM class whose property
     # shapes are not documented alongside the cmdlet, and a wrong shape can
     # register quietly as something else -- the exact failure this branch exists
     # to end. Read it back rather than trust it.
+    # Read the RunLevel back for the same reason the monthly trigger is read
+    # back: a principal that did not take is indistinguishable from one that
+    # did until the task next needs the privilege, which is at market close.
+    $gotLevel = (Get-ScheduledTask -TaskName $task).Principal.RunLevel
+    if ("$gotLevel" -ne $runLevel) {
+        Write-Output ("FAIL   {0,-34} RunLevel is {1}, expected {2}" -f $task, $gotLevel, $runLevel)
+    }
     if (($when -join ',') -like '*monthly*') {
       $kinds = @((Get-ScheduledTask -TaskName $task).Triggers.CimClass.CimClassName)
       if ($kinds -notcontains 'MSFT_TaskMonthlyTrigger') {

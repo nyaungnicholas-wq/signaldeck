@@ -63,7 +63,7 @@ AUTH=()
   fail=0
 
   if [ ! -d "$REPO/.git" ]; then
-    echo "FAIL: no public clone at $REPO — nothing was externally timestamped; set SIGNALDECK_ANCHOR_REPO to a clone of the public anchors repo"
+    echo "FAIL: no anchors clone at $REPO — nothing was externally timestamped; set SIGNALDECK_ANCHOR_REPO to a clone of the signaldeck-anchors repo (private today, see README)"
     exit 1
   fi
 
@@ -79,7 +79,7 @@ AUTH=()
   # Python, not jq: jq is NOT installed under the Git Bash that runs this
   # repo's scheduled tasks, so every jq line in this file was a `command not
   # found`. That is why logs/anchor-publish.log stops at 2026-07-27 and the
-  # public anchors repo — the chain head daemon/internal/pipeline/prereg.go
+  # anchors repo (private today) — the chain head daemon/internal/pipeline/prereg.go
   # names — has received nothing since. sd_py is the same interpreter shim the
   # SQLite fallback below already uses.
   line=$(curl -sf --max-time 10 -H "X-Signaldeck: 1" ${AUTH[@]+"${AUTH[@]}"} "$API/api/ledger/anchors?limit=1" \
@@ -168,11 +168,12 @@ PY
   #    stub that resolves on PATH and exits non-zero, so this regeneration had
   #    NEVER run on Windows — every publish silently took the WARN branch and
   #    shipped whatever copy was already on disk.
-  "$(sd_py)" "$SD/tools/accuracy_registry.py" --json "$REG" >/dev/null 2>&1 \
-    || echo "WARN: registry regeneration failed — publishing the last good copy"
+  # No regrade here (removed 2026-09-08): the registry is published exactly as ops/accuracy-registry.sh left it, envelope and all — see git log for why.
   # tools/render_track_record.py refuses an unreadable or rows-empty registry
   # itself (exit 1, nothing on stdout), so the emptiness guard and the README
   # render are one check now instead of two spellings that could disagree.
+  # A REFUSED envelope is the one rows-empty shape that renders (a refusal
+  # notice, no figures, exit 0): the refusal itself is what gets published.
   # Rendered to a temp file so a mid-render failure never leaves a truncated
   # README in the public history.
   "$(sd_py)" "$SD/tools/render_track_record.py" "$REG" > "$REPO/README.md.tmp" \

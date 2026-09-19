@@ -29,6 +29,25 @@ const (
 	defaultBasePaper = "https://paper-api.alpaca.markets"
 )
 
+// barAdjustment is the corporate-action adjustment EVERY bar request must use.
+//
+// "split" adjusts price and volume together for splits and leaves dividends
+// alone. Which convention is chosen matters far less than the fact that only ONE
+// is: the bars table holds a single series per symbol, so two ingest paths asking
+// for different modes put two price conventions in one column, and a symbol fed by
+// both gets a discontinuity at the seam that is indistinguishable from a real move.
+//
+// That had happened. tools/alpha/fetch_delisted.py requested adjustment=all (split
+// PLUS dividends) while this client requested split, so anything imported through
+// the delisted staging path followed a different convention from everything
+// backfilled live. Both now request this constant, and TestAdjustmentModesAgree
+// reads the Python file to stop them drifting apart again.
+const barAdjustment = "split"
+
+// BarAdjustment exposes the convention for callers that must REPORT which basis
+// they wrote, rather than restate a literal that could drift from it.
+func BarAdjustment() string { return barAdjustment }
+
 // pagePause spaces backfill page fetches so a long history pull stays well
 // under the free-tier rate limit (200 req/min). Tests shorten it.
 var pagePause = 300 * time.Millisecond
@@ -131,11 +150,54 @@ func (c *Client) BackfillDaily(ctx context.Context, st *store.Store, symbolID in
 	return c.backfill(ctx, st, symbolID, symbol, "1Day", md.TF1d, start)
 }
 
+// BackfillDailyFrom pulls split-adjusted daily IEX bars from an explicit start,
+// for callers that must cover a symbol's whole life rather than the rolling
+// two-year window BackfillDaily assumes.
+//
+// It exists for the delisted-cohort re-fetch, where the earliest bar can be six
+// years back and a two-year window would silently replace part of a series and
+// leave the rest on the old price basis — a seam in the middle of the repair.
+//
+// It shares backfill() with the other two, so it inherits the same adjustment
+// constant and the same vendor-pad refusal by construction, not by convention.
+func (c *Client) BackfillDailyFrom(ctx context.Context, st *store.Store, symbolID int64, symbol string, start time.Time) (int, error) {
+	return c.backfill(ctx, st, symbolID, symbol, "1Day", md.TF1d, start)
+}
+
 // BackfillMinute pulls ~60 days of split-adjusted minute IEX bars for symbol,
 // upserts them into st, and returns the number of bars written.
 func (c *Client) BackfillMinute(ctx context.Context, st *store.Store, symbolID int64, symbol string) (int, error) {
-	start := time.Now().UTC().AddDate(0, 0, -60)
+	return c.BackfillMinuteSince(ctx, st, symbolID, symbol, time.Now().UTC().AddDate(0, 0, -60))
+}
+
+// BackfillMinuteSince is BackfillMinute with an explicit window start, so a caller bounded by the hot 1m retention does not fetch bars the downsampler prunes the same night.
+func (c *Client) BackfillMinuteSince(ctx context.Context, st *store.Store, symbolID int64, symbol string, start time.Time) (int, error) {
 	return c.backfill(ctx, st, symbolID, symbol, "1Min", md.TF1m, start)
+}
+
+// syntheticDailyPad reports a vendor pad: a DAILY bar carrying no volume and no
+// range at all.
+//
+// Alpaca fabricates a session when the requested feed saw no trade, carrying a
+// price forward with volume 0 and open=high=low=close. A US-listed equity that
+// genuinely trades zero shares produces no bar from the exchange, so a daily bar
+// shaped like this is the vendor's fill rather than a market fact. Stored, it
+// reads downstream as a real session returning exactly 0.0%: SBNY accumulated 509
+// of them after Signature Bank was seized, and every one sat in the point-in-time
+// universe as a live name. 30,771 such bars were quarantined across 144 symbols
+// before this filter existed; without it they return on the next backfill.
+//
+// DAILY ONLY, and that restriction is load-bearing rather than cautious. A minute
+// with no trades is ordinary — crypto alone holds 58,980 legitimate flat
+// zero-volume 1m bars, and stocks another 248 — so widening this to other
+// timeframes would delete real data. Daily crypto has none at all.
+//
+// Dropping a bar rather than storing a fake one leaves a GAP, which is the honest
+// shape: a close-to-close return across the gap is the real move, where a padded
+// day would have reported no move at all.
+func syntheticDailyPad(tf md.Timeframe, b md.Bar) bool {
+	return tf == md.TF1d && b.Volume == 0 &&
+		b.Open == b.High && b.High == b.Low && b.Low == b.Close
 }
 
 // backfill walks the paginated /stocks/{symbol}/bars endpoint until
@@ -155,10 +217,14 @@ func (c *Client) backfill(ctx context.Context, st *store.Store, symbolID int64, 
 			if err != nil {
 				return total, fmt.Errorf("alpaca: bad bar time %q for %s: %w", rb.T, symbol, err)
 			}
-			bars = append(bars, md.Bar{
+			bar := md.Bar{
 				SymbolID: symbolID, TF: tf, Ts: ts.Unix(),
 				Open: rb.O, High: rb.H, Low: rb.L, Close: rb.C, Volume: rb.V,
-			})
+			}
+			if syntheticDailyPad(tf, bar) {
+				continue // vendor fill, not a session — see syntheticDailyPad
+			}
+			bars = append(bars, bar)
 		}
 		if err := st.UpsertBars(ctx, bars); err != nil {
 			return total, fmt.Errorf("alpaca: upsert %s bars: %w", symbol, err)
@@ -186,7 +252,7 @@ func (c *Client) fetchBarsPage(ctx context.Context, symbol, timeframe string, st
 	q.Set("timeframe", timeframe)
 	q.Set("start", start.Format(time.RFC3339))
 	q.Set("limit", "10000")
-	q.Set("adjustment", "split")
+	q.Set("adjustment", barAdjustment)
 	q.Set("feed", c.feed())
 	c.sipEndGuard(q)
 	if pageToken != "" {
@@ -343,30 +409,99 @@ func (c *Client) backfillMulti(ctx context.Context, st *store.Store, symbols []s
 	return counts, nil
 }
 
-// backfillMultiBatch fetches+persists every page for a single ≤MaxBatchSymbols
+// backfillMultiBatch fetches+persists every page for a single <=MaxBatchSymbols
 // batch, accumulating per-symbol counts into counts.
+//
+// VENDOR-REJECTED SYMBOLS DO NOT KILL THE BATCH. Alpaca 400s the WHOLE
+// multi-symbol request when any one symbol is invalid, so a single delisted
+// name destroyed bars for up to MaxBatchSymbols symbols and failed the run.
+// Measured live: universe-poller failed every day on ATC.220816 (delisted
+// 2022-08-16), while poller.go's own comment claimed such names were
+// "simply absent from the backfill - never fatal". They were fatal.
+// We now drop exactly the symbol the vendor named and refetch, bounded by
+// the batch size, and say so - a dropped symbol is logged, never silent.
+func invalidSymbolFromErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	const substr = "invalid symbol: "
+	s := err.Error()
+	i := strings.Index(s, substr)
+	if i == -1 {
+		return ""
+	}
+	s = s[i+len(substr):]
+	var j int
+	for j < len(s) {
+		c := s[j]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '-' {
+			j++
+		} else {
+			break
+		}
+	}
+	symbol := s[:j]
+	if symbol == "" {
+		return ""
+	}
+	return strings.ToUpper(symbol)
+}
+
 func (c *Client) backfillMultiBatch(ctx context.Context, st *store.Store, batch []string, resolve func(sym string) (int64, bool), timeframe string, tf md.Timeframe, start time.Time, counts map[string]int) error {
+	working := make([]string, len(batch))
+	copy(working, batch)
+	drops := 0
 	pageToken := ""
 	for {
-		page, err := c.fetchMultiBarsPage(ctx, batch, timeframe, start, pageToken)
+		page, err := c.fetchMultiBarsPage(ctx, working, timeframe, start, pageToken)
 		if err != nil {
-			return err
+			bad := invalidSymbolFromErr(err)
+			if bad == "" {
+				return err
+			}
+			found := false
+			for _, sym := range working {
+				if strings.EqualFold(sym, bad) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return err
+			}
+			newWorking := make([]string, 0, len(working))
+			for _, sym := range working {
+				if !strings.EqualFold(sym, bad) {
+					newWorking = append(newWorking, sym)
+				}
+			}
+			working = newWorking
+			slog.Warn("alpaca: dropping symbol the vendor rejects", "symbol", bad, "timeframe", timeframe, "remaining", len(working))
+			if len(working) == 0 {
+				return nil
+			}
+			drops++
+			if drops > len(batch) {
+				return err
+			}
+			continue
 		}
 		var bars []md.Bar
 		for sym, rbs := range page.Bars {
 			id, ok := resolve(sym)
 			if !ok {
-				continue // universe symbol not registered in the store — skip
+				continue
 			}
 			for _, rb := range rbs {
 				ts, err := time.Parse(time.RFC3339, rb.T)
 				if err != nil {
 					return fmt.Errorf("alpaca: bad bar time %q for %s: %w", rb.T, sym, err)
 				}
-				bars = append(bars, md.Bar{
-					SymbolID: id, TF: tf, Ts: ts.Unix(),
-					Open: rb.O, High: rb.H, Low: rb.L, Close: rb.C, Volume: rb.V,
-				})
+				bar := md.Bar{SymbolID: id, TF: tf, Ts: ts.Unix(), Open: rb.O, High: rb.H, Low: rb.L, Close: rb.C, Volume: rb.V}
+				if syntheticDailyPad(tf, bar) {
+					continue
+				}
+				bars = append(bars, bar)
 				counts[sym]++
 			}
 		}
@@ -393,7 +528,7 @@ func (c *Client) fetchMultiBarsPage(ctx context.Context, symbols []string, timef
 	q.Set("timeframe", timeframe)
 	q.Set("start", start.Format(time.RFC3339))
 	q.Set("limit", "10000")
-	q.Set("adjustment", "split")
+	q.Set("adjustment", barAdjustment)
 	q.Set("feed", c.feed())
 	c.sipEndGuard(q)
 	if pageToken != "" {

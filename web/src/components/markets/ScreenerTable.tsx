@@ -19,6 +19,7 @@ export default function ScreenerTable({
   sortDir,
   onSort,
   rankingFailed = false,
+  regimesFailed = false,
 }: {
   filtered: Derived[];
   sortKey: SortKey;
@@ -26,6 +27,7 @@ export default function ScreenerTable({
   onSort: (key: SortKey, numericDefaultDesc: boolean) => void;
   /** The ranking fetch failed, so a blank rank means UNKNOWN, not excluded. */
   rankingFailed?: boolean;
+  regimesFailed?: boolean;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -149,7 +151,18 @@ export default function ScreenerTable({
                 {/* Stage 5: current regime chip (descriptive, no lookahead) */}
                 <td className="px-3 py-2">
                   {d.regime === null ? (
-                    <span style={{ color: "var(--faint)" }} title="not classified yet — the regime worker fills this in from stored bars">
+                    // Same distinction the RANK cell above draws: "not
+                    // classified yet" says the classifier ran and has nothing
+                    // for this symbol. A failed /api/regime tells us nothing
+                    // of the kind, and every row would have carried the claim.
+                    <span
+                      style={{ color: "var(--faint)" }}
+                      title={
+                        regimesFailed
+                          ? "regime unavailable — this request failed, so the regime is UNKNOWN, not unclassified"
+                          : "not classified yet — the regime worker fills this in from stored bars"
+                      }
+                    >
                       —
                     </span>
                   ) : (

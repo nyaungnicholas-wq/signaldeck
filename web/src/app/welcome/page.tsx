@@ -132,7 +132,7 @@ export default function WelcomePage() {
 
   function finish() {
     markOnboarded();
-    router.push("/");
+    router.push("/dashboard");
   }
 
   const showLoginNotice = needLogin || loggedIn === false;
@@ -148,7 +148,7 @@ export default function WelcomePage() {
           <h1 className="m-0 text-lg font-bold">WELCOME — 60-second setup</h1>
         </div>
         <Link
-          href="/"
+          href="/dashboard"
           onClick={markOnboarded}
           className="ml-auto inline-flex min-h-[44px] cursor-pointer items-center px-3 text-[0.75rem] underline transition-colors duration-150 hover:text-[var(--accent)]"
           style={{ color: "var(--dim)" }}
@@ -407,7 +407,7 @@ export default function WelcomePage() {
               <p className="m-0 text-[0.75rem] leading-relaxed" style={{ color: "var(--dim)" }}>
                 Nothing in it is a recommendation: every sentence carries its evidence, and the
                 platform grades its own predictions against what actually happened on{" "}
-                <span className="font-bold">PROOF IT WORKS</span> at the bottom of the dashboard.
+                <span className="font-bold">FORECAST TRACK RECORD</span> at the bottom of the dashboard.
               </p>
               <button
                 type="button"

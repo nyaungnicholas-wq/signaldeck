@@ -205,7 +205,17 @@ func (d Deps) companies(w http.ResponseWriter, r *http.Request) {
 	// 6. Facets (filter options) + directory freshness — cheap single queries.
 	sectors, _ := d.St.CompanySectors(ctx, 200)
 	exchanges, _ := d.St.CompanyExchanges(ctx)
-	dirCount, _ := d.St.CompanyCount(ctx)
+	// The only bare `_` in this file, and it produced the most reassuring
+	// possible sentence from a failed read: dirCount 0 renders as "Directory not
+	// synced yet - usually within seconds of daemon start", stamped asOf now.
+	// A count that could not be taken is not a count of zero.
+	dirCount, dirCountErr := d.St.CompanyCount(ctx)
+	// nil, not 0, when the count could not be taken -- so a consumer branching
+	// on "0 means not synced yet" cannot be handed a failed read instead.
+	var directoryCount any = dirCount
+	if dirCountErr != nil {
+		directoryCount = nil
+	}
 	lastSync := int64(0)
 	if v, _ := d.St.GetMeta(ctx, "companies_sync_ts"); v != "" {
 		lastSync, _ = strconv.ParseInt(v, 10, 64)
@@ -218,7 +228,7 @@ func (d Deps) companies(w http.ResponseWriter, r *http.Request) {
 		"offset":              offset,
 		"trackedCount":        trackedCount,
 		"unknownMcapExcluded": unknownMcapExcluded, // >0 only with a mcap filter active
-		"directoryCount":      dirCount,            // 0 = companies-sync hasn't completed a run yet
+		"directoryCount":      directoryCount,      // nil = unreadable; 0 = companies-sync hasn't completed a run yet
 		"lastSyncTs":          lastSync,
 		"sectors":             sectors,
 		"exchanges":           exchanges,

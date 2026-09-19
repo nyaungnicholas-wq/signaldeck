@@ -37,11 +37,11 @@ const (
 
 // Source describes one ingest path.
 type Source struct {
-	Name        string
-	Class       Class
-	Provider    string
-	Note        string
-	Redistrib   bool // may raw records be served onward?
+	Name      string
+	Class     Class
+	Provider  string
+	Note      string
+	Redistrib bool // may raw records be served onward?
 }
 
 // Sources is the authoritative classification. Adding an ingest package without
@@ -131,4 +131,76 @@ func RawDataNotice() string {
 		"(forecasts, regimes, risk metrics) are unaffected and remain available. " +
 		"Set SIGNALDECK_ALLOW_RAW_EXPORT=true ONLY if you hold your own agreements " +
 		"permitting it — the flag records your assertion, it does not grant the right."
+}
+
+// RestrictedRoutes maps an API path to the source whose licence governs what it
+// serves.
+//
+// ONE list, beside the classification table, rather than a guard call copied
+// into each handler. The 2026-07-26 review found exactly that copy MISSING from
+// the three CSV exports: the same licensed rows walked out through a second
+// door with no policy on it. Two copies of a legal rule drift; one cannot.
+//
+// This is defence in depth and NOT the primary control. On a published
+// deployment api.publicRoutes already refuses every path below to an anonymous
+// caller. What this adds is the case the allowlist cannot cover: a route added
+// next month that serves vendor rows and that nobody remembers to think about.
+//
+// DELIBERATELY ABSENT: /api/chart-overlays. It looks like a bar endpoint and
+// its own header says "derived from bars", but it emits only annotations -- a
+// timestamp, a marker type, a label, this platform's own score and a direction
+// flag. No OHLC, no volume, no vendor price. That is exactly the "derived
+// analytics" the refusal notice says are unaffected, so governing it here
+// would refuse a legitimate surface with a 451 whose stated reason is false.
+// An over-broad licence guard is not a safe default: it publishes an untrue
+// claim about what the data is.
+//
+// tvscanner and stocktwits are class Restricted -- automated access is against
+// those providers' terms and the ratings are their IP -- so they are governed
+// here even though they are not price bars and BarsRedistributable does not
+// speak to them.
+var RestrictedRoutes = map[string]string{
+	"/api/bars":       "alpaca",
+	"/api/snaps":      "cryptolive",
+	"/api/news":       "news",
+	"/api/stocktwits": "stocktwits",
+	// /api/crypto-perp emits funding, openInterest and MARK PX -- a vendor
+	// price. By the discriminator this file already uses two paragraphs above
+	// ("No OHLC, no volume, no vendor price" is what makes a surface derived
+	// analytics), that is vendor data, not an annotation, so it belongs here.
+	//
+	// It was the only Licensed source with a serving route and no entry.
+	// stocktwits, added to the same dataexpansion.go package, was governed; this
+	// one was missed. The asymmetry that hid it: an unknown source KEY fails
+	// closed (TestUnknownSourceFailsClosed), but an ungoverned ROUTE fails OPEN
+	// -- RouteRedistributable returns redistributable=true for any path absent
+	// from this map. So a missing row is silent in the safe-looking direction.
+	//
+	// hyperliquid's own note records its commercial terms as UNESTABLISHED,
+	// which is the case the release instruction says to withhold on rather than
+	// guess. Loopback operators are unaffected: the guard also requires the
+	// daemon to be reachable beyond localhost before it refuses.
+	"/api/crypto-perp":         "hyperliquid",
+	"/api/tv-quote":            "tvscanner",
+	"/api/tv-rating":           "tvscanner",
+	"/api/tv-signals":          "tvscanner",
+	"/api/export/bars.csv":     "alpaca",
+	"/api/export/scores.csv":   "alpaca",
+	"/api/export/outcomes.csv": "alpaca",
+}
+
+// RouteRedistributable reports whether the path may be served, and the source
+// governing it. ok=true for any path this table does not govern.
+func RouteRedistributable(path string) (source string, redistributable bool, governed bool) {
+	key, ok := RestrictedRoutes[path]
+	if !ok {
+		return "", true, false
+	}
+	s, known := Sources[key]
+	if !known {
+		// An unknown key is a drift bug, and the safe reading of "we do not
+		// know what licence governs this" is that it may not be redistributed.
+		return key, false, true
+	}
+	return key, s.Redistrib, true
 }

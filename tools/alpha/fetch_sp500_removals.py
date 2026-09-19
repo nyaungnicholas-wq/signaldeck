@@ -31,9 +31,14 @@ from datetime import datetime, timezone
 ENV = r"C:\Users\Nicholas_N\Desktop\claude code\stock-trader\.env"
 WIKI = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 UA = "SignalDeck Research (dimples.n3fam@gmail.com)"
+# adjustment MUST match daemon/internal/ingest/alpaca/client.go's barAdjustment.
+# "all" is split PLUS dividends; the live backfill requests "split". Two
+# conventions in one bars column give a symbol fed by both paths a seam that
+# reads exactly like a real move. TestAdjustmentModesAgree reads every fetcher
+# in this directory, so a new one cannot drift either.
 BARS = ("https://data.alpaca.markets/v2/stocks/{sym}/bars"
         "?timeframe=1Day&start=2015-01-01&end={end}&limit=10000"
-        "&feed=iex&adjustment=all")
+        "&feed=iex&adjustment=split")
 STILL_TRADING_DAYS = 45     # last bar newer than this => index change, not death
 MIN_BARS = 60
 

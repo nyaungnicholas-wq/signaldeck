@@ -668,8 +668,19 @@ func (d Deps) lastTwoClosesCtx(ctx context.Context, symbolID int64) (last, prev 
 	}
 	n := len(bars)
 	last, ts = bars[n-1].Close, bars[n-1].Ts
-	if n > 1 {
-		prev = bars[n-2].Close
+	if n < 2 {
+		// ONE BAR IS NOT A DAY CHANGE. This returned ok=true with prev=0, and
+		// pctChange maps prev==0 to 0, so /api/tape rendered "0.00% -- unchanged
+		// on the day" with hasData:true for a symbol that has never had a second
+		// close. dashboard.go:311 already guards this for the heatmap; the tape
+		// did not. ok=false is the honest answer: no change is COMPUTABLE.
+		return last, 0, ts, false
+	}
+	prev = bars[n-2].Close
+	if prev == 0 {
+		// A zero prior close cannot produce a percentage either, and pctChange
+		// would silently return 0 rather than say so.
+		return last, 0, ts, false
 	}
 	return last, prev, ts, true
 }

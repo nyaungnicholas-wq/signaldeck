@@ -91,10 +91,18 @@ func TestAdaptiveWeightsWorker_LearnsPersistsAndRoundtrips(t *testing.T) {
 	if got.ComputedTs == 0 {
 		t.Fatal("computedTs missing after roundtrip")
 	}
+	// 40 days were seeded and exactly adaptiveLookbackDays come back, because the
+	// read is bounded by DAYS. This assertion is the A30 regression guard: the
+	// read used to be capped at 20,000 ROWS, which bought about 4.6 trading days
+	// against adaptive.MinCellDays=20, so every cell was gated for "too few days"
+	// while 47 days of history sat unread and the whole fleet blended on the
+	// static prior. seedLabeled writes one row per day, so a row-capped read
+	// would return all 40 here and this would fail.
 	for _, cell := range []string{"uptrend", adaptive.AllCell} {
 		c, ok := got.Cells[cell]
-		if !ok || c.N != 40 || c.Gated {
-			t.Fatalf("cell %q wrong after roundtrip: %+v", cell, got.Cells)
+		if !ok || c.N != adaptiveLookbackDays || c.Days != adaptiveLookbackDays || c.Gated {
+			t.Fatalf("cell %q wrong after roundtrip: want N=%d Days=%d ungated, got %+v",
+				cell, adaptiveLookbackDays, adaptiveLookbackDays, got.Cells)
 		}
 		if math.Abs(c.Weights[ensemble.LegPressure]-1.0) > 1e-9 {
 			t.Fatalf("cell %q weights: %+v", cell, c.Weights)

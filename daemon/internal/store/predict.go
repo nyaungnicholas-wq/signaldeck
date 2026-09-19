@@ -96,6 +96,79 @@ func (s *Store) UpsertPrediction(ctx context.Context, p Prediction) error {
 	return tx.Commit()
 }
 
+// UpsertPredictionAttested writes the prediction, its ledger attestation and its
+// eligibility for grading as ONE transaction. Either all three exist or none do.
+//
+// WHY THIS EXISTS. internal/pipeline/predict.go used to do the two writes
+// separately, and the ledger half was explicitly best-effort: "a ledger failure
+// logs + records a dq event but MUST NOT fail the prediction (the prediction is
+// already durably written above)". That reasoning is right about durability and
+// wrong about evidence. UpsertPrediction seeds prediction_outcomes, which the
+// comment forty lines up calls "the population every grader reads" -- so a
+// prediction whose attestation failed was still, later, graded as though it had
+// been committed to the chain before its outcome existed. The claim the whole
+// project rests on is precommitment, and that path could not support it.
+//
+// Measured 2026-09-13 on the live database: 30 served predictions of 498,523
+// since the ledger epoch have no chain entry. ops/check-grader-health.ps1 has
+// been reporting that as a bounded alarm (max 50) for some time. An alarm is
+// not a gate: nothing stopped those rows being graded.
+//
+// THE RULE IS NOW STRUCTURAL, in the same place and for the same reason the
+// n_used > 0 rule below is: enforcing it HERE rather than at the caller means no
+// code path can produce a gradable forecast that was never attested. If the
+// chain append fails, the transaction rolls back and there is no prediction, no
+// outcome row and nothing to grade. A missing forecast is honest; an unattested
+// one that is later graded as precommitted is not.
+//
+// ONE BeginTx, on the single-writer connection. AppendLedger cannot be called
+// from in here -- the writer pool is MaxOpenConns=1 and a nested BeginTx would
+// wait forever on the connection this transaction already holds -- so the chain
+// link is shared through appendLedgerTx instead of reimplemented.
+//
+// HISTORY IS NOT TOUCHED. This changes what can be written from now on. The 30
+// existing unledgered rows stay exactly as they are, classified by the coverage
+// check rather than backdated into the chain, because an entry appended today
+// claiming to attest a forecast from last month would be the precise forgery
+// this ledger exists to make detectable.
+func (s *Store) UpsertPredictionAttested(ctx context.Context, p Prediction, e LedgerEntry) (LedgerEntry, error) {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return e, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR REPLACE INTO predictions (symbol_id, horizon, ts, raw_prob, cal_prob, n_used, components, weights, basis)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		p.SymbolID, string(p.Horizon), p.Ts, p.RawProb, p.CalProb, p.NUsed, p.Components,
+		p.Weights, p.Basis); err != nil {
+		return e, err
+	}
+
+	// The attestation comes BEFORE eligibility is conferred, inside the same
+	// transaction, so the ordering holds even under a crash between statements.
+	e, err = appendLedgerTx(ctx, tx, e)
+	if err != nil {
+		return e, err
+	}
+
+	// Same n_used rule as UpsertPrediction, and for the same stated reason: a
+	// legless row is evidence, not a forecast, and must not reach the graded
+	// population by any path.
+	if p.NUsed > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO prediction_outcomes (symbol_id, horizon, ts, prob, basis_epoch)
+			VALUES (?,?,?,?,?)`, p.SymbolID, string(p.Horizon), p.Ts, p.CalProb, BasisEpoch); err != nil {
+			return e, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return e, err
+	}
+	return e, nil
+}
+
 // LatestPrediction returns the newest prediction for a symbol+horizon.
 func (s *Store) LatestPrediction(ctx context.Context, symbolID int64, h md.Horizon) (Prediction, bool, error) {
 	p := Prediction{SymbolID: symbolID, Horizon: h}
@@ -104,6 +177,39 @@ func (s *Store) LatestPrediction(ctx context.Context, symbolID int64, h md.Horiz
 		WHERE symbol_id=? AND horizon=? AND n_used > 0
 		ORDER BY ts DESC LIMIT 1`,
 		symbolID, string(h)).Scan(&p.Ts, &p.RawProb, &p.CalProb, &p.NUsed, &p.Components)
+	if err == sql.ErrNoRows {
+		return p, false, nil
+	}
+	return p, err == nil, err
+}
+
+// PredictionBefore returns the newest usable prediction stamped STRICTLY BEFORE
+// `before`, for reconstructing what the book could have known at a past bar.
+//
+// LatestPrediction is deliberately left alone: six production callers legitimately
+// want "newest", and quietly bounding it under them would change live behaviour.
+// This is the replay-only sibling.
+//
+// STRICTLY before, not at-or-before, because the caller's bar is the FILL bar. A
+// prediction stamped at or after the bar it fills on is the same-bar lookahead the
+// paper book's whole no-lookahead rule exists to forbid: the fill anchor is
+// BarAtOrAfter(pred.Ts+1), so a prediction must precede the bar it fills at.
+//
+// maxAge bounds STALENESS as well. As-of-ness alone is not enough — the newest row
+// with n_used > 0 can be weeks old during a starved stretch (that is exactly the
+// defect that back-dated 46 fills), so a replay would otherwise act on a month-old
+// signal and call it point-in-time. maxAge <= 0 disables the staleness bound.
+func (s *Store) PredictionBefore(ctx context.Context, symbolID int64, h md.Horizon, before, maxAge int64) (Prediction, bool, error) {
+	p := Prediction{SymbolID: symbolID, Horizon: h}
+	floor := int64(0)
+	if maxAge > 0 {
+		floor = before - maxAge
+	}
+	err := s.db.QueryRowContext(ctx, `
+		SELECT ts, raw_prob, cal_prob, n_used, components FROM predictions
+		WHERE symbol_id=? AND horizon=? AND n_used > 0 AND ts < ? AND ts >= ?
+		ORDER BY ts DESC LIMIT 1`,
+		symbolID, string(h), before, floor).Scan(&p.Ts, &p.RawProb, &p.CalProb, &p.NUsed, &p.Components)
 	if err == sql.ErrNoRows {
 		return p, false, nil
 	}
@@ -203,7 +309,7 @@ func (s *Store) ResolvePrediction(ctx context.Context, symbolID int64, h md.Hori
 func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit int) (probs []float64, ups []float64, err error) {
 	rows, qerr := s.db.QueryContext(ctx, `
 		SELECT prob, up FROM prediction_outcomes
-		WHERE resolved_at IS NOT NULL AND horizon=? ORDER BY ts DESC LIMIT ?`,
+		WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND horizon=? ORDER BY ts DESC LIMIT ?`,
 		string(h), limit)
 	if qerr != nil {
 		return nil, nil, qerr
@@ -659,4 +765,24 @@ func (s *Store) EvidenceDayBySymbol(ctx context.Context, h md.Horizon) (map[int6
 		out[id] = day
 	}
 	return out, rows.Err()
+}
+
+// VoidDeadPredictions voids forecasts on delisted symbols that have printed
+// no daily bar since the forecast and are older than `before` (the caller
+// passes now minus three of the longest horizon); the resolver's own query
+// skips rows with no forward bar, so nothing else ever touches them; measured
+// 2026-09-09: 16,648 such rows over 1,894 delisted names, which also kept those
+// names out of the DQ silencing set. Voided rows keep up and fwd_return NULL,
+// exactly like the resolver's own voids.
+func (s *Store) VoidDeadPredictions(ctx context.Context, before, now int64) (int64, error) {
+	res, err := s.w.ExecContext(ctx, `
+        UPDATE prediction_outcomes SET resolved_at = ?
+        WHERE resolved_at IS NULL AND ts < ?
+          AND symbol_id IN (SELECT id FROM symbols WHERE COALESCE(delisted_at, 0) > 0)
+          AND NOT EXISTS (SELECT 1 FROM bars b WHERE b.symbol_id = prediction_outcomes.symbol_id AND b.tf = '1d' AND b.ts > prediction_outcomes.ts)
+    `, now, before)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

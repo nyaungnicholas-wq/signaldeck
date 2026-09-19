@@ -19,6 +19,7 @@ import {
   dismissCandidate,
   type CandidatesResponse,
   type Market,
+  isAuthError,
 } from "@/lib/api";
 import { fmtPct, scoreColor } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
@@ -67,7 +68,7 @@ export default function DiscoverPanel() {
         .catch((e: unknown) => {
           if (!alive) return;
           const msg = e instanceof Error ? e.message : String(e);
-          if (msg.includes("401")) {
+          if (isAuthError(e)) {
             setHidden(true); // not signed in — hide, don't error
             return;
           }

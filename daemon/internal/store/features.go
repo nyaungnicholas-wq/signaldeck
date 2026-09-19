@@ -190,6 +190,12 @@ type DataStatsResult struct {
 	// Cold-archive size on disk (walked from the archive dir). Makes the
 	// "nothing is thrown away, and it's bounded" claim visible + provable.
 	ArchiveBytes int64 `json:"archiveBytes"`
+	// ArchiveBytesUnknown distinguishes a MEASURED empty archive from a
+	// directory walk that failed. Without it both rendered as
+	// "cold archive: 0 B" -- and that string is the evidence of a
+	// catastrophe, so producing it from a failed read is the worst
+	// available lie on this surface.
+	ArchiveBytesUnknown bool `json:"archiveBytesUnknown,omitempty"`
 	// Active tiered-retention windows (human-readable), so the growth panel
 	// shows exactly how long each tier stays hot before archive+prune.
 	Retention *RetentionWindows `json:"retention,omitempty"`

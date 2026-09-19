@@ -59,6 +59,10 @@ var paperStrategies = []struct {
 // PaperTrader runs the internal simulated book(s). Registered like any worker.
 type PaperTrader struct {
 	St *store.Store
+	// Replay, when set, puts the book in RECONSTRUCTION mode: every input is
+	// bounded to the bar being replayed and the output is written under its own
+	// strategy names. Nil is live. See paperreplay.go.
+	Replay *ReplayConfig
 }
 
 func (w *PaperTrader) Name() string { return "paper-trader" }
@@ -68,7 +72,7 @@ func (w *PaperTrader) Name() string { return "paper-trader" }
 func (w *PaperTrader) Interval() time.Duration { return time.Hour }
 
 func (w *PaperTrader) Run(ctx context.Context) (string, error) {
-	syms, err := w.St.ListSymbols(ctx, true)
+	syms, err := w.universeAt(ctx, w.replayAsOf())
 	if err != nil {
 		return "", err
 	}
@@ -76,15 +80,37 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 	// to do until at least one symbol has a daily bar.
 	var asof int64
 	marketByID := map[int64]md.Market{}
+	wallNow := time.Now().Unix()
 	for _, s := range syms {
 		marketByID[s.ID] = s.Market
 		ts, err := w.St.LatestBarTs(ctx, s.ID, md.TF1d)
 		if err != nil {
 			return "", err
 		}
+		// SETTLED ONLY (audit 2026-09-07). Ingestion writes the still-forming
+		// daily bar during the session, so the newest row's close is a live
+		// intraday price. Advancing the clock onto it marked equity, fired
+		// barrier exits and advanced the cursor on a "close" that had not
+		// happened yet. Fall back to the previous bar until the session settles;
+		// this also bounds a future-dated vendor bar, which can never be settled.
+		if ts > 0 && !md.DailyBarSettled(s.Market, ts, wallNow) {
+			prev, ok, err := w.St.BarAtOrBefore(ctx, s.ID, md.TF1d, ts-1)
+			if err != nil {
+				return "", err
+			}
+			ts = 0
+			if ok {
+				ts = prev.Ts
+			}
+		}
 		if ts > asof {
 			asof = ts
 		}
+	}
+	if w.replaying() {
+		// The driver supplies the bar; the newest-bar scan above only set an upper
+		// bound that a reconstruction must not use.
+		asof = w.Replay.AsOf
 	}
 	if asof == 0 {
 		return "no daily bars yet — nothing to simulate", nil
@@ -106,7 +132,7 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 	// delisted name cannot drag the as-of clock.
 	held := map[int64]bool{}
 	for _, strat := range paperStrategies {
-		positions, err := w.St.PaperPositions(ctx, strat.Name)
+		positions, err := w.St.PaperPositions(ctx, w.strategyName(strat.Name))
 		if err != nil {
 			return "", err
 		}
@@ -137,17 +163,34 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 	startCash := papertrade.StartingCash()
 	acted := 0
 	refused := 0 // entries the EV engine or the pretrade risk gate refused, across all strategies
+	// stranded counts WANTED exits the execution model could not price. Kept apart
+	// from `refused`, which means an entry a gate turned down: a stranded exit is a
+	// position carried PAST its stop, which is the opposite kind of event.
+	stranded := 0
 	for _, strat := range paperStrategies {
-		if _, err := w.St.InitPaperBook(ctx, strat.Name, startCash, asof); err != nil {
+		if _, err := w.St.InitPaperBook(ctx, w.strategyName(strat.Name), startCash, asof); err != nil {
 			return "", err
 		}
-		cur, ok, err := w.St.PaperCursor(ctx, strat.Name)
+		// EPOCH BOUNDARIES. Declared from code every pass so they exist on any
+		// database, including a fresh one, without a migration anybody has to
+		// remember. See paperepoch.go for what an epoch is and why the record splits.
+		//
+		// BEFORE the cursor guard below, not inside buildStep. It used to sit in
+		// buildStep, which the guard skips whenever no new daily bar has arrived —
+		// so on a quiet day, or any day the book had already acted on, the schedule
+		// was never written and the comment above was false. A boundary added to the
+		// code then sat unapplied until the next new bar, and had to be written by
+		// hand with `sdmaint paper-epochs -apply`.
+		if err := w.ensureEpochs(ctx, w.strategyName(strat.Name)); err != nil {
+			return "", err
+		}
+		cur, ok, err := w.St.PaperCursor(ctx, w.strategyName(strat.Name))
 		if err != nil {
 			return "", err
 		}
 		if !ok {
 			// Just initialized above; re-read defensively.
-			cur, _, err = w.St.PaperCursor(ctx, strat.Name)
+			cur, _, err = w.St.PaperCursor(ctx, w.strategyName(strat.Name))
 			if err != nil {
 				return "", err
 			}
@@ -156,7 +199,7 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 			continue // no new global bar for this strategy — idempotent no-op
 		}
 
-		apply, vetoed, err := w.buildStep(ctx, strat.Name, strat.Horizon, syms, marketByID, cur, asof)
+		apply, vetoed, err := w.buildStep(ctx, w.strategyName(strat.Name), strat.Horizon, syms, marketByID, cur, asof, &stranded)
 		if err != nil {
 			return "", err
 		}
@@ -169,10 +212,16 @@ func (w *PaperTrader) Run(ctx context.Context) (string, error) {
 			acted++
 		}
 	}
+	status := fmt.Sprintf("marked %d strateg(ies) at asof=%d", acted, asof)
 	if refused > 0 {
-		return fmt.Sprintf("marked %d strateg(ies) at asof=%d — EV/risk gates refused %d entr(ies)", acted, asof, refused), nil
+		status += fmt.Sprintf(" — EV/risk gates refused %d entr(ies)", refused)
 	}
-	return fmt.Sprintf("marked %d strateg(ies) at asof=%d", acted, asof), nil
+	if stranded > 0 {
+		// Loud, and in the status line rather than only the log, because each one is
+		// a position still open after its exit fired.
+		status += fmt.Sprintf(" — %d WANTED exit(s) could not be priced and are STRANDED past their exit", stranded)
+	}
+	return status, nil
 }
 
 // buildStep assembles the atomic PaperApply for one strategy at the as-of clock:
@@ -189,6 +238,7 @@ func (w *PaperTrader) buildStep(
 	marketByID map[int64]md.Market,
 	cur store.PaperCursor,
 	asof int64,
+	stranded *int,
 ) (store.PaperApply, int, error) {
 	cash := cur.Cash
 	apply := store.PaperApply{Strategy: strategy, BarTs: asof, EquityTs: asof}
@@ -219,12 +269,6 @@ func (w *PaperTrader) buildStep(
 	symByID := make(map[int64]string, len(syms))
 	for _, s := range syms {
 		symByID[s.ID] = s.Symbol
-	}
-	// EPOCH BOUNDARIES. Declared from code every pass so they exist on any
-	// database, including a fresh one, without a migration anybody has to
-	// remember. See paperepoch.go for what an epoch is and why the record splits.
-	if err := w.ensureEpochs(ctx, strategy); err != nil {
-		return apply, refused, err
 	}
 	// RISK-LIMIT PROVENANCE. Every limit resolves through a SIGNALDECK_RISK_*
 	// environment variable with a default behind it, and until this line nothing
@@ -284,7 +328,7 @@ func (w *PaperTrader) buildStep(
 	// doing. A risk-rejected name must not even consume an EV rank slot, because
 	// rank IS the opportunity cost: capital denied to rank 1 by an untradeable
 	// rank 8 is capital misallocated by the accounting, not by the market.
-	forecasts, err := w.returnForecastsByID(ctx, h)
+	forecasts, err := w.returnForecastsFor(ctx, h, syms, asof)
 	if err != nil {
 		return apply, refused, err
 	}
@@ -306,7 +350,7 @@ func (w *PaperTrader) buildStep(
 		if err != nil {
 			return apply, refused, err
 		}
-		pred, okP, err := w.St.LatestPrediction(ctx, s.ID, h)
+		pred, okP, err := w.predictionFor(ctx, s.ID, h, asof)
 		if err != nil {
 			return apply, refused, err
 		}
@@ -325,11 +369,65 @@ func (w *PaperTrader) buildStep(
 			if !wantExit {
 				continue // still holding
 			}
+			// The fill window, which was enforced on ENTRIES only. Entries have
+			// `if fillBar.Ts <= cur.LastBarTs { continue }` above; exits had no
+			// lower bound at all. planExit's branches check only the upper one
+			// (barrier: `fillBar.Ts > asof`; the forced flatten additionally has
+			// `fb.Ts <= pos.OpenedTs`), and planExit is not even given `cur`, so
+			// no lower bound was reachable inside it. A stale LatestPrediction
+			// flip, or a barrier bar that arrives or is revised late, could
+			// therefore fill an exit against a bar the book had already stepped
+			// past -- booking P&L at a price that was not available at the time
+			// the step claims to have happened. buildStep applies with
+			// BarTs: asof, so nothing downstream caught it either. Measured on
+			// pre-epoch history: 43 flagship-1d writes more than three days
+			// behind the running max ts, worst 22 days, 25 of them sells.
+			//
+			// The exit is CLAMPED FORWARD, not dropped and not deferred. The exit
+			// decision itself is sound -- a stop fired, or the probability flipped
+			// -- and only the bar chosen to price it is out of window, so the fix
+			// is to price it at the first bar the book has not yet consumed. That
+			// is the same rule entries follow, and unlike a stale bar it is a
+			// price that was really available when the step claims to have
+			// happened.
+			//
+			// Deferring instead would not terminate: the trigger is usually a
+			// stale prediction that does not change, so the next pass would
+			// re-derive the same out-of-window bar and defer again, holding the
+			// position and writing a DQ event every pass. Only the genuinely
+			// undecidable case -- no bar at all between the cursor and asof --
+			// waits, and that one does resolve as soon as a bar arrives.
+			if plan.fillBar.Ts <= cur.LastBarTs {
+				stale := plan.fillBar.Ts
+				fb, ok, err := w.St.BarAtOrAfter(ctx, s.ID, md.TF1d, cur.LastBarTs+1)
+				if err != nil {
+					return apply, refused, err
+				}
+				if !ok || fb.Open <= 0 || fb.Ts > asof {
+					log.Printf("paper-trader[%s] WARNING BACK-DATED EXIT %s: %q wants bar %d, at or before the cursor %d, and no bar exists in (%d, %d] to reprice it — deferred, %.4f still held",
+						strategy, s.Symbol, plan.reason, stale, cur.LastBarTs, cur.LastBarTs, asof, pos.Qty)
+					sid := s.ID
+					_ = w.St.InsertDQ(ctx, md.DQEvent{SymbolID: &sid, Ts: asof, Kind: "paper_backdated_exit",
+						Detail: fmt.Sprintf("%s: %q wants fill bar %d <= cursor %d and no in-window bar exists; deferred, %.4f held",
+							strategy, plan.reason, stale, cur.LastBarTs, pos.Qty)})
+					continue
+				}
+				log.Printf("paper-trader[%s] BACK-DATED EXIT %s: %q wanted bar %d, at or before the cursor %d — repriced at %d",
+					strategy, s.Symbol, plan.reason, stale, cur.LastBarTs, fb.Ts)
+				sid := s.ID
+				_ = w.St.InsertDQ(ctx, md.DQEvent{SymbolID: &sid, Ts: asof, Kind: "paper_backdated_exit",
+					Detail: fmt.Sprintf("%s: %q wanted fill bar %d <= cursor %d; repriced at %d",
+						strategy, plan.reason, stale, cur.LastBarTs, fb.Ts)})
+				plan.fillBar = fb
+			}
 			adv, err := w.advUSD(ctx, s.ID, plan.fillBar.Ts)
 			if err != nil {
 				return apply, refused, err
 			}
-			in := papertrade.ExecInputs{Bar: plan.fillBar, Market: marketByID[s.ID], ADVUSD: adv}
+			in, err := w.executionInputs(ctx, plan.fillBar, marketByID[s.ID], adv)
+			if err != nil {
+				return apply, refused, err
+			}
 
 			// Deliberately NOT gated — by the EV engine, by riskgate, or by the
 			// kill switch. All three state the same doctrine: routing a de-risking
@@ -339,6 +437,19 @@ func (w *PaperTrader) buildStep(
 			// transition.
 			f, ok := papertrade.ExitLong(pos.Qty, in)
 			if !ok {
+				// The exit was WANTED — a stop, a target, an expiry or a kill-switch
+				// flatten — and the execution model could not price it (no usable ADV
+				// over the 42-bar window at the fill). Dropping it silently leaves the
+				// position open past its own exit with the pass reporting a clean run,
+				// and the only trace being that the position still exists.
+				*stranded++
+				log.Printf("paper-trader[%s] WARNING STRANDED EXIT %s: %q fired at bar %d but could not be priced — position of %.4f held PAST its exit",
+					strategy, s.Symbol, plan.reason, plan.fillBar.Ts, pos.Qty)
+				// Durable, not just a log line: a position held past its own exit
+				// is the most serious thing the book can do (audit 2026-09-07).
+				sid := s.ID
+				_ = w.St.InsertDQ(ctx, md.DQEvent{SymbolID: &sid, Ts: asof, Kind: "paper_stranded_exit",
+					Detail: fmt.Sprintf("%s: %q fired at bar %d but could not be priced (%s); %.4f held past its exit", strategy, plan.reason, plan.fillBar.Ts, f.Reason, pos.Qty)})
 				continue
 			}
 			exitAssess := ev.Assessment{Inputs: ev.Inputs{
@@ -350,15 +461,21 @@ func (w *PaperTrader) buildStep(
 				// filing every exit under the signal's name.
 				exitDecision.Reason = ev.BarrierReason(string(plan.barrier.Kind))
 			}
-			if err := w.ledgerBarrierExit(ctx, strategy, s.ID, exitAssess, exitDecision, plan, asof); err != nil {
+			if err := w.ledgerBarrierExit(&apply, strategy, s.ID, exitAssess, exitDecision, plan, asof); err != nil {
 				return apply, refused, err
 			}
 			cash += f.CashDelta
 			apply.CloseSymbolIDs = append(apply.CloseSymbolIDs, s.ID)
 			apply.Trades = append(apply.Trades, store.PaperTrade{
 				Strategy: strategy, SymbolID: s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost,
-				Ts: plan.fillBar.Ts, Reason: plan.reason,
+				Ts: plan.fillBar.Ts, Reason: f.WithReason(plan.reason),
 			})
+			// The slot, the notional and the sector bucket this name occupied are now
+			// free. Phase 2 judges entries against `book`, so without this an exit
+			// hands back cash but not headroom.
+			if err := w.releasePosition(ctx, &book, s.ID, pos.Qty, symByID, asof); err != nil {
+				return apply, refused, err
+			}
 			continue
 		}
 
@@ -393,15 +510,31 @@ func (w *PaperTrader) buildStep(
 		if fillBar.Ts > asof {
 			continue
 		}
+		// ...and never fill in the PAST relative to the book's own clock. A step
+		// transacts only inside the window it advances over, (LastBarTs, asof].
+		// LatestPrediction returns the newest row with n_used > 0, which during a
+		// starved stretch can be weeks old; its next bar then sits far behind the
+		// cursor. The fill would be booked at that old open while every decision
+		// input below — the return forecast, corrToBook, the riskgate book — is
+		// measured at asof, and markPositions would immediately mark it at the
+		// asof close, booking the whole intervening move as one step's P&L.
+		// ponytail: bounded by the cursor, so a cold-start book (LastBarTs == 0)
+		// can still backfill its first step; tighten to asof only if that matters.
+		if fillBar.Ts <= cur.LastBarTs {
+			continue
+		}
 
 		// Liquidity for the execution model: the name's trailing average daily
-		// DOLLAR volume, measured on bars at or before the fill (never after —
+		// DOLLAR volume, measured on completed bars before the fill (never during or after —
 		// the fill may not know how much traded on days it has not seen).
 		adv, err := w.advUSD(ctx, s.ID, fillBar.Ts)
 		if err != nil {
 			return apply, refused, err
 		}
-		in := papertrade.ExecInputs{Bar: fillBar, Market: marketByID[s.ID], ADVUSD: adv}
+		in, err := w.executionInputs(ctx, fillBar, marketByID[s.ID], adv)
+		if err != nil {
+			return apply, refused, err
+		}
 
 		// KILL SWITCH, checked before this entry is even assessed. A halted
 		// platform does no measuring it would then have to throw away, but the
@@ -409,7 +542,7 @@ func (w *PaperTrader) buildStep(
 		// record, not an entry that silently never happened.
 		if halt.Halted {
 			refused++
-			if err := w.ledgerGateRefusal(ctx, strategy, s.ID,
+			if err := w.ledgerGateRefusal(&apply, strategy, s.ID,
 				minimalAssessment(s.Symbol, h, pred.CalProb),
 				ev.ReasonHalted, nil, &halt, asof); err != nil {
 				return apply, refused, err
@@ -439,7 +572,7 @@ func (w *PaperTrader) buildStep(
 	if admit := riskgate.Admit(book, limits); !admit.Allow {
 		for _, c := range cands {
 			refused++
-			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, c.assess,
+			if err := w.ledgerGateRefusal(&apply, strategy, c.s.ID, c.assess,
 				ev.ReasonRiskRefused, &admit, nil, asof); err != nil {
 				return apply, refused, err
 			}
@@ -458,7 +591,7 @@ func (w *PaperTrader) buildStep(
 		}, edge, limits)
 		if !gate.Allow {
 			refused++
-			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, c.assess,
+			if err := w.ledgerGateRefusal(&apply, strategy, c.s.ID, c.assess,
 				ev.ReasonRiskRefused, &gate, nil, asof); err != nil {
 				return apply, refused, err
 			}
@@ -480,7 +613,7 @@ func (w *PaperTrader) buildStep(
 	for _, a := range ev.RankByNetEV(assessments) {
 		c := byName[a.Symbol]
 		decision := ev.Decide(a, ev.EnterLong, thresholds)
-		if err := w.ledgerEVDecision(ctx, strategy, c.s.ID, a, decision, asof); err != nil {
+		if err := w.ledgerEVDecision(&apply, strategy, c.s.ID, a, decision, asof); err != nil {
 			return apply, refused, err
 		}
 		if decision.Action != ev.BUY {
@@ -493,7 +626,7 @@ func (w *PaperTrader) buildStep(
 		// stop the next fill, not the next run.
 		if h := killswitch.Check(); h.Halted {
 			refused++
-			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, a, ev.ReasonHalted, nil, &h, asof); err != nil {
+			if err := w.ledgerGateRefusal(&apply, strategy, c.s.ID, a, ev.ReasonHalted, nil, &h, asof); err != nil {
 				return apply, refused, err
 			}
 			continue
@@ -518,7 +651,7 @@ func (w *PaperTrader) buildStep(
 		}, edge, limits)
 		if !gate.Allow {
 			refused++
-			if err := w.ledgerGateRefusal(ctx, strategy, c.s.ID, a,
+			if err := w.ledgerGateRefusal(&apply, strategy, c.s.ID, a,
 				ev.ReasonRiskRefused, &gate, nil, asof); err != nil {
 				return apply, refused, err
 			}
@@ -549,8 +682,8 @@ func (w *PaperTrader) buildStep(
 			Strategy: strategy, SymbolID: c.s.ID, Side: f.Side, Qty: f.Qty, Px: f.Px, Cost: f.Cost, Ts: c.bar.Ts,
 			// The sizing rationale is part of the audit trail: a reader of the
 			// log should be able to see WHY this size, not just this price.
-			Reason: fmt.Sprintf("net_ev %.4f (rank %d/%d) · cal_prob %.3f >= long %.2f · %s",
-				a.NetEV, a.Rank, a.RankOf, c.pred.CalProb, papertrade.LongThreshold(), gate.Sizing),
+			Reason: f.WithReason(fmt.Sprintf("net_ev %.4f (rank %d/%d) · cal_prob %.3f >= long %.2f · %s",
+				a.NetEV, a.Rank, a.RankOf, c.pred.CalProb, papertrade.LongThreshold(), gate.Sizing)),
 		})
 	}
 
@@ -575,31 +708,33 @@ func (w *PaperTrader) buildStep(
 // heavy print and short enough to track a name whose liquidity is changing.
 const advLookbackBars = 21
 
-// advUSD estimates a symbol's average daily DOLLAR volume from the bars at or
-// before ts. It is the denominator of both the market-impact and the capacity
-// calculation, so it must never look past the fill: using volume from days the
-// fill has not lived through would price the trade with information it could
-// not have had.
-//
-// It scans the most recent advLookbackBars*2 stored bars, which covers a fill
-// up to about a month behind the latest bar — far more slack than the worker
-// ever needs, since it fills on the first bar after a fresh prediction. Returns
-// 0 when that window holds no priced, non-zero-volume bar at or before ts; the
-// execution model treats that as "cannot price this fill" and the caller skips
-// the symbol rather than filling at zero impact. Failing to a skip, rather than
-// to a free fill, is the whole point.
+// executionInputs uses a completed prior bar for impact at the fill's open.
+// Missing prior data deliberately produces an unusable range, not zero cost.
+func (w *PaperTrader) executionInputs(ctx context.Context, fill md.Bar, market md.Market, adv float64) (papertrade.ExecInputs, error) {
+	prior, _, err := w.St.BarAtOrBefore(ctx, fill.SymbolID, md.TF1d, fill.Ts-1)
+	return papertrade.ExecInputs{Bar: fill, Market: market, ADVUSD: adv, VolatilityBar: &prior}, err
+}
+
 func (w *PaperTrader) advUSD(ctx context.Context, symbolID, ts int64) (float64, error) {
-	bars, err := w.St.LastBars(ctx, symbolID, md.TF1d, advLookbackBars*2)
+	// Bounded in SQL, not after the fact. LastBars returns the NEWEST bars
+	// regardless of ts and the loop below then skipped any that postdate the
+	// fill — so when ts is not the newest bar, most of the fetched window was
+	// discarded and fewer than advLookbackBars usable bars survived, quietly
+	// shrinking the ADV estimate (or zeroing it, which refuses the fill). Asking
+	// SQL now requests bars STRICTLY BEFORE the fill: its own daily volume
+	// and close are not yet known at the opening price used for execution.
+	bars, err := w.St.BarsBefore(ctx, symbolID, md.TF1d, ts, advLookbackBars*2)
 	if err != nil {
 		return 0, err
 	}
-	// LastBars returns ascending by ts; walk backwards so the window is the most
-	// recent advLookbackBars bars at or before ts, not the oldest ones.
+	// Ascending by ts; walk backwards so the window is the most recent
+	// advLookbackBars bars before ts, not the oldest ones. The ts guard
+	// below is now redundant with the SQL bound and kept only as a belt.
 	var sum float64
 	var n int
 	for i := len(bars) - 1; i >= 0 && n < advLookbackBars; i-- {
 		b := bars[i]
-		if b.Ts > ts {
+		if b.Ts >= ts {
 			continue // strictly no lookahead
 		}
 		if b.Close <= 0 || b.Volume <= 0 {
@@ -653,8 +788,11 @@ func (w *PaperTrader) markPositions(ctx context.Context, strategy string, apply 
 		if err != nil {
 			return 0, err
 		}
-		if !ok || bar.Close <= 0 {
-			continue // no mark available — skip (position value unknown, treated as 0)
+		if !ok || bar.Close <= 0 { // unknown is not zero: record it, so a data gap cannot masquerade as a loss
+			sid := id
+			_ = w.St.InsertDQ(ctx, md.DQEvent{SymbolID: &sid, Ts: asof, Kind: "paper_unmarked_position",
+				Detail: fmt.Sprintf("%s: no daily close at/before %d for a held position of %.4f - valued at 0 this mark", strategy, asof, qty)})
+			continue
 		}
 		total += qty * bar.Close
 	}

@@ -239,6 +239,11 @@ sd_task_name() {
   local leaf="${1##*.}"
   case "$1" in
     com.tickstream.*) printf 'TickStream %s' "$(sd_titlecase "$leaf")" ;;
+    # ops/install-sibling-tasks.ps1 registers this one as "TraderHud Daemon",
+    # not the "StockTrader Hud" the generic rule below derives. The registered
+    # name is the truth — a mapping that disagrees with it addresses a task that
+    # does not exist, which schtasks reports and this library used to discard.
+    com.stocktrader.hud) printf 'TraderHud Daemon' ;;
     com.stocktrader.*) printf 'StockTrader %s' "$(sd_titlecase "$leaf")" ;;
     *) printf 'SignalDeck %s' "$(sd_titlecase "$leaf")" ;;
   esac
@@ -293,7 +298,21 @@ sd_svc_stop() {
   fi
   # /End stops what the task launched; it is the Scheduled Task equivalent of
   # SIGTERM to the job, and the daemon's own signal handler does the draining.
-  schtasks //End //TN "$(sd_task_name "$1")" >/dev/null 2>&1
+  #
+  # A task that does not EXIST is reported as 2, the same contract sd_svc_start
+  # already honours. Ending a task that merely is not RUNNING stays 0 — callers
+  # routinely stop services without checking first, and turning that into a
+  # failure would break all of them.
+  #
+  # The distinction is the point: a label whose name no longer matches its
+  # registration produces exactly the same observable as a service that was
+  # already stopped — nothing happens, quietly, forever. This function used to
+  # discard schtasks' status entirely, so there was no observable at all.
+  local task
+  task="$(sd_task_name "$1")"
+  schtasks //Query //TN "$task" >/dev/null 2>&1 || return 2
+  schtasks //End //TN "$task" >/dev/null 2>&1
+  return 0
 }
 
 sd_svc_restart() { sd_svc_stop "$1"; sleep 2; sd_svc_start "$1"; }
@@ -301,12 +320,34 @@ sd_svc_restart() { sd_svc_stop "$1"; sleep 2; sd_svc_start "$1"; }
 # sd_kill_hard NAME — last-resort SIGKILL equivalent for a process that ignored
 # the graceful stop. SQLite under WAL is crash-safe, so this is survivable; a
 # zombie daemon is not, because it holds the port the next start needs.
+#
+# SD_KILL_HARD_REASON is set on failure and is the POINT of this function's
+# contract. It used to return a bare 1 for two unrelated situations -- no kill
+# utility on PATH, and a utility that ran and was refused -- so market-close.sh
+# logged "force-kill FAILED (no pkill, no taskkill)" without having established
+# either clause. Measured 2026-09-12 on this box: taskkill IS on PATH, and the
+# real cause is permission. signaldeckd.exe runs as a SERVICE in session 0 while
+# the backup task runs unelevated in the user session, which cannot even read
+# that process's owner, let alone terminate it. The log blamed a missing tool
+# for an access-denied, which sends the reader to fix the wrong thing.
 sd_kill_hard() {
+  SD_KILL_HARD_REASON=""
+  local found=0 err=""
   if command -v pkill >/dev/null 2>&1; then
-    pkill -9 -x "$1" 2>/dev/null && return 0
+    found=1
+    err=$(pkill -9 -x "$1" 2>&1) && return 0
   fi
   if command -v taskkill >/dev/null 2>&1; then
-    taskkill //F //IM "$1.exe" >/dev/null 2>&1 && return 0
+    found=1
+    err=$(taskkill //F //IM "$1.exe" 2>&1) && return 0
+  fi
+  if [ "$found" -eq 0 ]; then
+    SD_KILL_HARD_REASON="no kill utility on PATH (neither pkill nor taskkill)"
+  else
+    # Collapse to one line; taskkill's refusal is multi-line and the log is
+    # append-only shared with every other backup message.
+    SD_KILL_HARD_REASON="kill utility ran and failed: $(printf '%s' "$err" | tr '
+' '  ' | sed 's/  */ /g')"
   fi
   return 1
 }
@@ -391,4 +432,45 @@ sd_notify() {
   else
     printf '%s NOTIFY: %s — %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$title" "$body" >&2
   fi
+}
+
+# sd_dirty_excluding_generated — porcelain lines, minus ops/generated-docs.txt.
+#
+# ONE spelling of this rule, shared by ops/signaldeck-ctl.sh (build_from_head)
+# and ops/docker-build.sh. It used to live only in the former, so the two deploy
+# paths disagreed about what "clean" means: docker-build.sh had a blanket
+# `wc -l != 0` and refused on the nine grader-regenerated docs that the native
+# path correctly ignores. That is not a theoretical drift -- it made the
+# container path unbuildable on any day the nightly grader had run, which is
+# every day.
+#
+# The exemption exists because those paths cannot change the binary: the build
+# extracts `git archive HEAD` (the COMMIT, never the working tree), and the only
+# go:embed targets in the daemon are schema.sql and result.json. The refusal
+# protects operator INTENT -- "the edit I just made got deployed" -- and a
+# machine-regenerated doc carries no operator intent to protect.
+#
+# Fails CLOSED in every ambiguous case: a missing or unreadable allowlist
+# exempts NOTHING, and porcelain lines the exact-match parser cannot claim
+# (renames "R old -> new", quoted paths with spaces) never match an allow entry
+# and so are reported as dirty.
+#
+# Usage:  dirty="$(sd_dirty_excluding_generated "$REPO")"
+sd_dirty_excluding_generated() {
+  local repo="${1:-.}"
+  git -C "$repo" status --porcelain | awk -v listfile="$repo/ops/generated-docs.txt" '
+    BEGIN {
+      n = 0
+      while ((getline line < listfile) > 0) {
+        sub(/\r$/, "", line)
+        if (line ~ /^[ \t]*(#|$)/) continue
+        allow[n++] = line
+      }
+      close(listfile)
+    }
+    {
+      path = substr($0, 4)
+      for (i = 0; i < n; i++) if (allow[i] == path) next
+      print
+    }'
 }

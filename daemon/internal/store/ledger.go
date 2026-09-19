@@ -145,9 +145,31 @@ func (s *Store) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry, e
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	e, err = appendLedgerTx(ctx, tx, e)
+	if err != nil {
+		return e, err
+	}
+	if err := tx.Commit(); err != nil {
+		return e, err
+	}
+	return e, nil
+}
+
+// appendLedgerTx is the chain link itself, factored out so a caller that must
+// append INSIDE a larger transaction does not get a second implementation of it.
+//
+// That mattered enough to split: UpsertPredictionAttested writes the prediction,
+// this entry and the outcome-eligibility row in ONE transaction, and it cannot
+// call AppendLedger to do it. The writer pool is MaxOpenConns=1, so beginning a
+// nested transaction from inside an open one waits forever on the single
+// connection it is already holding. Two copies of the hashing rule would drift,
+// and a chain whose link is computed two ways is not a chain.
+//
+// The caller owns the transaction: this neither begins nor commits one.
+func appendLedgerTx(ctx context.Context, tx *sql.Tx, e LedgerEntry) (LedgerEntry, error) {
 	// Current head: prev_hash is the entry_hash of the highest seq ("" if empty).
 	var prevHash string
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT entry_hash FROM prediction_ledger ORDER BY seq DESC LIMIT 1`).Scan(&prevHash)
 	if err != nil && err != sql.ErrNoRows {
 		return e, err
@@ -168,9 +190,6 @@ func (s *Store) AppendLedger(ctx context.Context, e LedgerEntry) (LedgerEntry, e
 	}
 	if seq, err := res.LastInsertId(); err == nil {
 		e.Seq = seq
-	}
-	if err := tx.Commit(); err != nil {
-		return e, err
 	}
 	return e, nil
 }

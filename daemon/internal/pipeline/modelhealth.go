@@ -67,7 +67,13 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 	// score below: a row whose whole effective-N interval sits below the
 	// prequential null is retired the grade it happens, not when the score
 	// catches up. The registry's revision gate outranks BOTH — see regFlag.
-	regFlags := w.registryFlags()
+	// A worker that cannot read the kill switch must not grade. Withholding a
+	// verdict is recoverable; publishing one computed as though nothing were
+	// retired is not.
+	regFlags, err := w.registryFlags()
+	if err != nil {
+		return "", fmt.Errorf("kill switch unreadable, no model graded: %v: %w", err, workers.ErrDegraded)
+	}
 
 	for _, h := range []md.Horizon{md.H1d, md.H1w} {
 		model := "directional-ensemble-" + string(h)
@@ -91,7 +97,16 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		since := time.Now().AddDate(0, 0, -recentWindowDays).Unix()
 		recent, err := w.St.DirectionalRecord(ctx, h, since)
 		if err != nil {
-			recent = store.DirectionalRecordRow{}
+			// Same accessor, same doctrine as twenty lines up: COUNT THE
+			// OUTCOME, NOT THE INTENT. An empty row means RecentN==0, which
+			// makes Grade score drift a neutral 0.5 with no reason string --
+			// so a model whose recent accuracy had decayed to 0.42 against a
+			// 0.52 record would have scored drift 0.0 and fired "recent
+			// accuracy has decayed materially", and this swallow hid exactly
+			// that and could keep the verdict at healthy/emitting.
+			failed++
+			slog.Warn("model-health: recent directional record unreadable", "horizon", h, "err", err)
+			continue
 		}
 
 		// HEAD-TO-HEAD vs the tracked prequential-majority benchmark — the
@@ -104,7 +119,12 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		// finding, now visible in the daemon's own health output every pass.
 		bench, berr := w.St.DirectionalRecord(ctx, benchmarkHorizon(h), 0)
 		if berr != nil {
-			bench = store.DirectionalRecordRow{}
+			// An empty bench leaves skillVsBenchmark nil, which publishes as
+			// "no benchmark comparison available" -- a statement about the
+			// DATA when the truth is a failed read.
+			failed++
+			slog.Warn("model-health: benchmark record unreadable", "horizon", h, "err", berr)
+			continue
 		}
 		var aligned store.DirectionalRecordRow
 		if bench.N > 0 {
@@ -276,7 +296,16 @@ func (w *ModelHealthWorker) gradeStructural(ctx context.Context) (graded, retire
 	}
 	// High-conviction slice: the tier a user would actually act on, and the one
 	// carrying the biggest claim (97%+ for trend21).
-	hi, _ := w.St.StructuralRecords(ctx, structuralHighConviction)
+	// The line above reports an unreadable FULL record as a failure so the caller
+	// degrades. This one discarded the error, and an empty hiByKind makes every
+	// structural blob publish "highConviction": {"n":0,"accuracy":0,"claimed":0}
+	// -- the 97%-conviction tier, the one a user acts on, rendered as having no
+	// record at all when the truth is that the query failed.
+	hi, hierr := w.St.StructuralRecords(ctx, structuralHighConviction)
+	if hierr != nil {
+		slog.Warn("model-health: high-conviction structural records unreadable", "err", hierr)
+		return 0, 0, 1
+	}
 	hiByKind := map[string]store.StructuralRecordRow{}
 	for _, r := range hi {
 		hiByKind[r.Kind] = r
@@ -388,7 +417,7 @@ func (w *ModelHealthWorker) featureDrift(ctx context.Context) *float64 {
 // registryFlags resolves the registry path and returns the kill switch state.
 // Candidates mirror PreregRegistrar.fileDigest: launchd runs the daemon from
 // <repo>/daemon, and tools run from the repo root.
-func (w *ModelHealthWorker) registryFlags() map[string]regFlag {
+func (w *ModelHealthWorker) registryFlags() (map[string]regFlag, error) {
 	path := w.RegistryPath
 	if path == "" {
 		for _, p := range []string{
@@ -437,14 +466,28 @@ type regFlag struct {
 // — sitting in the file. Reading `retire` alone therefore acts on evidence the
 // grader has formally disowned, in whichever direction the stale flag happens
 // to point. So the gate is read too, and it outranks the flag.
-func registryFlagsFrom(path string) map[string]regFlag {
+// It returns an error rather than an empty map on failure. An empty map means
+// NO model is retired and none is unattributable -- an affirmative all-clear --
+// and this returned exactly that on three silent paths: no path resolved, the
+// file could not be read, and the JSON did not parse. The daemon's working
+// directory decides whether the switch is found at all (registryFlags probes two
+// relative candidates), and the grader rewrites this file in place, so a
+// mid-rewrite read is a normal event. A retired model would then be regraded
+// without its flag, come out healthy and emitting, and the prediction path would
+// readmit it -- while /api/modelhealth published registryRetire:false as a
+// positive assertion of a check that never ran.
+//
+// featureDrift, 50 lines up, already handles this class correctly: it returns
+// nil WITH an explicit warning so Grade withholds the component. This is the
+// same rule for the switch that outranks the score.
+func registryFlagsFrom(path string) (map[string]regFlag, error) {
 	out := map[string]regFlag{}
 	if path == "" {
-		return out
+		return nil, fmt.Errorf("no accuracy registry found at any candidate path")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return out
+		return nil, fmt.Errorf("read accuracy registry %s: %w", path, err)
 	}
 	var reg struct {
 		Rows []struct {
@@ -454,8 +497,8 @@ func registryFlagsFrom(path string) map[string]regFlag {
 			RevisionGate []string `json:"revision_gate"`
 		} `json:"rows"`
 	}
-	if json.Unmarshal(raw, &reg) != nil {
-		return out
+	if err := json.Unmarshal(raw, &reg); err != nil {
+		return nil, fmt.Errorf("parse accuracy registry %s: %w", path, err)
 	}
 	for _, r := range reg.Rows {
 		gated := len(r.RevisionGate) > 0
@@ -492,23 +535,35 @@ func registryFlagsFrom(path string) map[string]regFlag {
 		}
 		out[key] = f
 	}
-	return out
+	return out, nil
 }
 
 // ModelEmitting reports whether a model is currently cleared to emit. Unknown
 // models default to TRUE: this gate exists to switch off what the record
 // condemns, not to silence anything it has not yet judged.
 func ModelEmitting(ctx context.Context, st *store.Store, model string) (bool, string) {
+	// UNKNOWN AND UNREADABLE ARE DIFFERENT. The default of TRUE is right for a
+	// model this gate has NEVER JUDGED -- it exists to switch off what the
+	// record condemns, not to silence what it has not assessed -- and the
+	// existing comment says exactly that. It conflated that with a failed read
+	// and a corrupt blob, so a RETIRED model resumed publishing on any store
+	// hiccup, and the empty verdict it returned was indistinguishable from
+	// "never judged".
+	//
+	// raw == "" is still a genuine never-judged and still defaults true.
 	raw, err := st.GetMeta(ctx, MetaKeyPrefix+model)
-	if err != nil || raw == "" {
+	if err != nil {
+		return false, "model-health record unreadable — withholding rather than assuming this model was cleared: " + err.Error()
+	}
+	if raw == "" {
 		return true, ""
 	}
 	var v struct {
 		Emitting bool   `json:"emitting"`
 		Verdict  string `json:"verdict"`
 	}
-	if json.Unmarshal([]byte(raw), &v) != nil {
-		return true, ""
+	if uerr := json.Unmarshal([]byte(raw), &v); uerr != nil {
+		return false, "model-health record could not be parsed — withholding rather than assuming this model was cleared: " + uerr.Error()
 	}
 	return v.Emitting, v.Verdict
 }

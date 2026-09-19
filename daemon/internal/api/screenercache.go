@@ -1,6 +1,8 @@
 package api
 
 import (
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,6 +25,25 @@ type screenerCache struct {
 }
 
 var screenerCacheG = &screenerCache{ttl: 45 * time.Second}
+
+// sharedScreenerSWR sits in FRONT of screenerCacheG at the route: the memo
+// above still coalesces rebuilds, but when its TTL lapses the next visitor no
+// longer waits for the rebuild inline (31-49s under load, 2026-09-08) — the
+// stale body is served and the rebuild runs in the background. WarmCaches keeps
+// the entry hot.
+var sharedScreenerSWR = newSWRBodyCache(60 * time.Second)
+
+// sharedSymbolSWR body-caches GET /api/symbol per market|symbol (LRU, 64
+// entries). The symbol page fetches it on mount, so a visitor must not be the
+// one paying a cold build under worker load.
+var sharedSymbolSWR = newSWRBodyCache(60 * time.Second)
+
+// symbolCacheKey normalises the query the handler resolves (market + symbol),
+// so ?symbol=spy and ?symbol=SPY share one entry.
+func symbolCacheKey(r *http.Request) string {
+	q := r.URL.Query()
+	return strings.ToUpper(strings.TrimSpace(q.Get("market"))) + "|" + strings.ToUpper(strings.TrimSpace(q.Get("symbol")))
+}
 
 // get returns the cached rows when fresh, otherwise rebuilds via build() while
 // holding the lock (so concurrent callers wait for and share the one rebuild).

@@ -231,7 +231,7 @@ func TestRunOnceRatesSeededRow(t *testing.T) {
 	id := seedUnrated(t, st, "ACME lands record cloud contract")
 
 	fc := &fakeClient{enabled: true, reply: `{"sentiment":"bullish","score":0.7,"rationale":"record contract"}`}
-	n, err := RunOnce(ctx, fc, st, 10, 0)
+	n, err := RunOnce(ctx, fc, st, 10, 0, 0)
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestRunOnceRatesSeededRow(t *testing.T) {
 	}
 
 	// The queue is now empty.
-	pending, err := st.UnratedNews(ctx, 10)
+	pending, err := st.UnratedNews(ctx, 10, 0)
 	if err != nil {
 		t.Fatalf("UnratedNews: %v", err)
 	}
@@ -279,7 +279,9 @@ func (c *capClient) Complete(ctx context.Context, sys string, msgs []llm.Message
 }
 
 // TestRunOnceStopsOnCap confirms hitting the daily cap ends the run gracefully:
-// the rows rated before the cap are counted and no error is returned.
+// the rows rated before the cap are counted AND the cap error is returned, so
+// the worker can say why it stopped instead of reporting "tagged 0 headlines"
+// as if there were nothing to tag (2026-09-01).
 func TestRunOnceStopsOnCap(t *testing.T) {
 	st := openStore(t)
 	ctx := context.Background()
@@ -288,15 +290,15 @@ func TestRunOnceStopsOnCap(t *testing.T) {
 	}
 
 	cc := &capClient{capAfter: 2}
-	n, err := RunOnce(ctx, cc, st, 10, 0)
-	if err != nil {
-		t.Fatalf("RunOnce should not error on cap, got %v", err)
+	n, err := RunOnce(ctx, cc, st, 10, 0, 0)
+	if !errors.Is(err, llm.ErrCapReached) {
+		t.Fatalf("RunOnce must surface the cap it stopped on, got %v", err)
 	}
 	if n != 2 {
 		t.Fatalf("rated = %d, want 2 (cap hit on 3rd)", n)
 	}
 	// One row remains unrated.
-	pending, err := st.UnratedNews(ctx, 10)
+	pending, err := st.UnratedNews(ctx, 10, 0)
 	if err != nil {
 		t.Fatalf("UnratedNews: %v", err)
 	}
@@ -314,7 +316,7 @@ func TestRunOnceRespectsContext(t *testing.T) {
 	cancel()
 
 	fc := &fakeClient{enabled: true, reply: `{"sentiment":"neutral","score":0,"rationale":"x"}`}
-	n, err := RunOnce(ctx, fc, st, 10, 0)
+	n, err := RunOnce(ctx, fc, st, 10, 0, 0)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled, got %v", err)
 	}
@@ -330,7 +332,7 @@ func TestRunOnceRespectsContext(t *testing.T) {
 func TestRunOnceEmptyQueue(t *testing.T) {
 	st := openStore(t)
 	fc := &fakeClient{enabled: true, reply: `{"sentiment":"neutral","score":0,"rationale":"x"}`}
-	n, err := RunOnce(context.Background(), fc, st, 10, 0)
+	n, err := RunOnce(context.Background(), fc, st, 10, 0, 0)
 	if err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}

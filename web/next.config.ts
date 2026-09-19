@@ -19,7 +19,7 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   // 2026-07-19 nav consolidation (9 tabs → 5): HOME absorbs TODAY, WATCHLIST
   // absorbs DECK + COMPARE, LAB absorbs DESK + LIVE. Old URLs land on the new
   // homes so bookmarks, the alerts bell and briefing links keep working.
-  { source: "/today", destination: "/" },
+  { source: "/today", destination: "/dashboard" },
   { source: "/deck", destination: "/watchlist" },
   { source: "/compare", destination: "/watchlist/compare" },
   { source: "/desk", destination: "/lab/desk" },
@@ -54,11 +54,13 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   { source: "/trends", destination: "/market/trends" },
   { source: "/regime", destination: "/market/macro" },
   { source: "/macro", destination: "/market/macro" },
-  // SIGNALS
-  { source: "/predict", destination: "/signals/predictions" },
-  { source: "/forecast", destination: "/signals/forecasts" },
-  { source: "/insights", destination: "/signals/insights" },
-  { source: "/alerts", destination: "/signals/alerts" },
+  // SIGNALS (same rule as MARKETS above, which these five did not follow:
+  // they pointed at /signals/*, which are themselves redirect SOURCES a few
+  // lines up, so every one of them cost two 307s and two round trips)
+  { source: "/predict", destination: "/market/signals" },
+  { source: "/forecast", destination: "/lab/forecasts" },
+  { source: "/insights", destination: "/lab/insights" },
+  { source: "/alerts", destination: "/market/activity" },
   // INTEL
   { source: "/news", destination: "/intel/news" },
   { source: "/filings", destination: "/intel/filings" },
@@ -78,7 +80,7 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   { source: "/ai", destination: "/lab/system/ai" },
   // Hub indexes → default sub-tab
   { source: "/markets", destination: "/market/overview" },
-  { source: "/signals", destination: "/signals/predictions" },
+  { source: "/signals", destination: "/market/signals" },
   { source: "/intel", destination: "/intel/news" },
   { source: "/lab", destination: "/lab/backtest" },
   // Stage 5: /lab/system is now a real page (quality + agents + AI mounted
@@ -112,6 +114,30 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  // Build output directory. Defaults to .next; overridable so a build can be
+  // produced and served in ISOLATION from the one the live servers are using.
+  //
+  // This exists because of a measured outage, not for tidiness. Both local web
+  // instances (:8323 and :3000, one ops/start-local-workspace.ps1 each) run
+  // `next start` out of this single directory, and `next build` replaces it in
+  // place. `next start` indexes .next/static once at boot, and Turbopack names
+  // chunks by content hash -- so after a rebuild an already-running instance
+  // still answers for every chunk whose content was unchanged and 404s every
+  // one that was not. On 2026-09-13 that was 4 of the 14 assets the landing
+  // page references: :3000 served a 200 with no stylesheet for 24 hours while
+  // ops/web-guard.ps1 logged "3000 ok" every five minutes.
+  //
+  // Next's own docs require this path to stay inside the project directory, so
+  // an isolated build is web/.next-test, not a temp dir. ops/web-assets-check
+  // ships a negative control that builds there, deletes one chunk, and proves
+  // the release check fails on it while /login still answers 200.
+  distDir: process.env.SIGNALDECK_DIST_DIR || ".next",
+  // Next sends `X-Powered-By: Next.js` on every response by default. It is
+  // pure framework fingerprinting -- it tells a scanner which CVE list to try
+  // and tells a legitimate visitor nothing -- and this is a published surface.
+  // No functional or data exposure, so it never held the launch; it is just
+  // free to not say.
+  poweredByHeader: false,
   // Dev only. The dev server's origin is localhost, so opening the app at
   // http://127.0.0.1:8323 made Next refuse to serve dev assets to that origin:
   // React never hydrated, the page sat on the server-rendered "checking

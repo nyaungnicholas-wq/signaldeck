@@ -15,6 +15,40 @@ set -uo pipefail
 # recorded on 2026-07-29 as though it were current. A stale refusal is worse
 # than a loud failure: it looks like the honesty machinery working.
 SD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# report_uncommitted_docs names the generated files this run left MODIFIED, and
+# says what that costs.
+#
+# It is not housekeeping. Every surface this job regenerates is TRACKED, so a
+# successful run always leaves the worktree dirty. Until 2026-08-26 both deploy
+# paths refused ANY dirty tree, so this job manufactured a daily deploy blocker:
+# measured 2026-08-21, it regenerated nine files at 18:33, a rebuild at 19:09
+# stamped f5f6b0a+dirty, and the daemon stayed DOWN until they were committed.
+# ops/signaldeck-ctl.sh build_from_head now exempts exactly the paths in
+# ops/generated-docs.txt (they cannot reach the binary -- it builds from
+# `git archive HEAD`); a HAND-built binary still gets a "+dirty" vcs stamp that
+# cmd/signaldeckd/main.go refuses to start on.
+#
+# The job cannot commit for the operator -- an unattended commit of published
+# numbers is its own problem -- but it can stop the next deploy being a mystery.
+# Since 2026-08-26 ops/signaldeck-ctl.sh no longer refuses on dirt confined to
+# exactly these paths (they cannot reach the binary; it builds from `git archive
+# HEAD`). The list lives in ops/generated-docs.txt -- ONE spelling, shared with
+# the deploy check, because two copies of one list is how they drift apart.
+report_uncommitted_docs() {
+  local dirty
+  # shellcheck disable=SC2046 -- word-splitting the pathspecs is intended; no
+  # listed path contains whitespace, and the allowlist header says exact paths.
+  dirty="$(cd "$SD" && git status --porcelain -- $(grep -Ev '^[[:space:]]*(#|$)' "$SD/ops/generated-docs.txt" 2>/dev/null) 2>/dev/null)"
+  [ -n "$dirty" ] || return 0
+  echo "NOTE: this run regenerated tracked documents and left them UNCOMMITTED:"
+  echo "$dirty" | sed 's/^/  /'
+  echo "ops/signaldeck-ctl.sh deploy/launch proceed past exactly these paths (the"
+  echo "binary builds from git archive HEAD). A HAND-built binary still stamps"
+  echo "+dirty and REFUSES TO START -- signaldeckd exited 1 on that on 2026-08-21."
+  echo "Commit them when convenient."
+}
+
 # shellcheck source=lib-portable.sh
 . "$SD/ops/lib-portable.sh"
 
@@ -151,6 +185,59 @@ if [ "$anchor_liveness_status" -ne 0 ]; then
   echo "WARN: external anchor timestamping is not current (exit $anchor_liveness_status) — see above; registry still published" >> "$LOG"
 fi
 
+# DEPLOYMENT DRIFT — is every mechanism the pre-registration chain CLAIMS
+# observable in the live database? Every other honesty gate reads the tree at
+# HEAD; this one reads the ROWS and asks whether the binary that wrote them is
+# the one the chain describes: matched-null coverage, the judgment ledger, the
+# frozen quarantine and its digest, the holdout-era constant in the deployed
+# revision, no undeployed daemon source, and the per-row revision stamp.
+#
+# Its docstring has said "runs in the publishing path before the grader" since
+# 2026-07-30. Measured 2026-09-09: nothing invoked it — not this script, not a
+# scheduled task, not CI; only its own tests. A gate that exists and never runs
+# is the A4/A13 shape again.
+#
+# BLOCKING on exit 1 — the tool's own contract, and the same failure class the
+# ENGINE LIVENESS check above refuses on: a registry graded as though a frozen
+# null or a blind era existed, when the running binary never implemented
+# either, is not a live number. Advisory would turn the stderr it prints
+# ("Publication must be refused") into a lie in a log nobody reads. It has
+# refused on a false diagnosis three times (371551a, A21 in
+# audits/2026-08-12-reaudit.md, 6f02590). Two of those fixes shipped a
+# regression test with them; the A21 fix (3318028) shipped none, so
+# tools/test_deployment_drift_wiring.py now pins the revision-boot signal that
+# commit introduced, as well as the shape of this block. It measured 6/6 ok on
+# the live database on 2026-09-01 and again on 2026-09-10, before this landed.
+#
+# ANY non-zero exit refuses, including 2. The tool's own main() returns 2 for
+# "the check could not run", and that alone would argue for failing open the
+# way the collapse gate below does — but python also exits 2 when the script
+# file is missing, and argparse exits 2 on an unknown flag, so a fail-open arm
+# would silently un-wire this gate the day the tool is renamed or its --db flag
+# changes. That is not hypothetical: ops/research-liveness.sh passed
+# --emit-dq-event, a flag research_liveness.py never implemented, argparse
+# exited 2, and the check "had never produced a verdict, on macOS either"
+# (REMEDIATION_2026-08-03.md). Refusing costs one day's publication and is
+# self-healing; failing open costs the guarantee this block exists to give.
+#
+# Guarded like the protocol check below it, so an earlier refusal stands. On a
+# pass the capture is cleared: a LATER refusal that writes no capture of its
+# own (the protocol-document gate) would otherwise publish these six passing
+# [ok] lines as its own refusal_stderr. The heartbeat below files this reason
+# as --failure, like the liveness refusal, because the grader was not run and
+# the remedy is an operator deploy, not a cleared window.
+if [ -z "$refusal_reason" ]; then
+  "$PY" "$SD/tools/deployment_drift.py" --db "$SD/data/signaldeck.db" \
+    > "$STDERR_CAPTURE" 2>&1
+  drift_status=$?
+  cat "$STDERR_CAPTURE" >> "$LOG"
+  if [ "$drift_status" -ne 0 ]; then
+    refusal_reason="deployment drift check failed (exit $drift_status) — a mechanism the pre-registration chain claims is not observable in the live database, or the check itself could not run (see the DEPLOYMENT DRIFT lines above in this log); the grader was not run"
+  else
+    : > "$STDERR_CAPTURE"
+  fi
+fi
+
 # PROTOCOL-DOCUMENT REGISTRATION — the same fail-closed shape
 # require_registered_grader() already has, applied to the protocol DOCUMENT
 # instead of the grader. PREREGISTRATION.md §0 makes the chain authoritative over
@@ -194,7 +281,29 @@ if [ -z "$refusal_reason" ]; then
       >> "$STDERR_CAPTURE"
   cat "$STDERR_CAPTURE" >> "$LOG"
 
-  "$PY" "$SD/tools/accuracy_registry.py" --json "$OUT" > "$STDERR_CAPTURE" 2>&1
+  # ---------------------------------------------------------------------------
+  # STAGE, CHECK, THEN PUBLISH ATOMICALLY.
+  #
+  # Every gate below used to run against $OUT itself, and $OUT is the file
+  # /api/accuracy reads -- internal/api/accuracy.go loadRegistry() does an
+  # os.ReadFile on EVERY request. So the pinned grader's raw output became the
+  # public registry the instant it was written, and stayed public for as long as
+  # the selection-honesty merge, the freshness assertion and the collapse gate
+  # took to run. A request landing in that window was served ungated rows: the
+  # exact figures the collapse gate exists to withhold, with HTTP 200 on them.
+  # selection_honesty.py --merge made it worse -- it reopens the same path "w"
+  # and rewrites it, so a reader could also catch a truncated file.
+  #
+  # The grade is now built in $STAGE, every gate runs against $STAGE, and $OUT
+  # is replaced by ONE rename at the end. A rename within a directory is atomic,
+  # so a concurrent reader sees either the previous registry or the new one and
+  # never a half-checked or half-written one. On refusal $OUT is left exactly as
+  # it was and the refusal path below rewrites it -- which is also why the
+  # refusal envelope can still read the last published rows out of $OUT.
+  STAGE="$SD/data/.accuracy_registry.staging.json"
+  rm -f "$STAGE"
+
+  "$PY" "$SD/tools/accuracy_registry.py" --json "$STAGE" > "$STDERR_CAPTURE" 2>&1
   grader_status=$?
   cat "$STDERR_CAPTURE" >> "$LOG"
 
@@ -206,21 +315,89 @@ if [ -z "$refusal_reason" ]; then
   # an accuracy is just a one-sided selection's own base rate; it changes no
   # verdict, no threshold and no retire flag.
   #
-  # Its exit code is DELIBERATELY not propagated: a refused row is a disclosure
-  # about the model, not a grading outage, and folding it into grader_status
-  # would trip the refusal path below and suppress the whole report.
+  # ITS EXIT CODE STILL DOES NOT PROPAGATE, AND STILL MUST NOT: a refused row is
+  # a disclosure about the model, not a grading outage. But `|| true` was not a
+  # decision to ignore row refusals, it was a decision to ignore EVERYTHING --
+  # main() returns `1 if refused else 0`, and an unhandled exception also exits
+  # 1. A traceback on row three and a clean run that refused row three were the
+  # same byte to this script, and the half-merged JSON published anyway.
+  #
+  # So the exit code is discarded on purpose and the ARTIFACT is inspected
+  # instead: tools/publication_gate.py asserts that every directional row with
+  # breadth tallies actually carries an honesty block from the right source with
+  # the right keys. That is a question a crash cannot answer yes to.
   if [ "$grader_status" -eq 0 ]; then
-    "$PY" "$SD/tools/selection_honesty.py" --json "$OUT" --merge >> "$LOG" 2>&1 || true
+    "$PY" "$SD/tools/selection_honesty.py" --json "$STAGE" --merge >> "$LOG" 2>&1 \
+      || echo "selection_honesty exited non-zero (row refusals OR a crash -- the gate below decides which)" >> "$LOG"
+
+    "$PY" "$SD/tools/publication_gate.py" --registry "$STAGE" > "$STDERR_CAPTURE" 2>&1
+    pubgate_status=$?
+    cat "$STDERR_CAPTURE" >> "$LOG"
+    if [ "$pubgate_status" -ne 0 ]; then
+      pubgate_detail=$(tr -d '\r' < "$STDERR_CAPTURE" | tr '\n' ' ')
+      refusal_reason="CHECK UNAVAILABLE: the graded artifact is incomplete, so it was not published -- ${pubgate_detail}. This is a post-processing failure, NOT a finding about any model"
+    fi
   fi
 
-  after_generated=$(generated_of "$OUT")
+  after_generated=$(generated_of "$STAGE")
   if [ "$grader_status" -ne 0 ]; then
     refusal_reason="grader exited $grader_status"
-  elif [ "$after_generated" = "$before_generated" ]; then
+  elif [ -z "$refusal_reason" ] && [ "$after_generated" = "$before_generated" ]; then
     # Exit 0 with an unmoved `generated` is the same outage wearing a success
     # code: nothing was graded, so nothing may be republished.
     refusal_reason="grader exited 0 but the registry's generated timestamp did not advance (still ${before_generated:-absent})"
   fi
+
+  # PUBLICATION GATE -- the same collapsed-cross-section check /api/accuracy
+  # applies before it will serve a single row.
+  #
+  # Without this the two surfaces gave opposite answers about the SAME window:
+  # the HTTP endpoint returned 503 REFUSED with zero rows, while this script
+  # published the identical rows into README.md and the eight INCLUDES
+  # documents -- and README's freeze notice asserted the block "currently reads
+  # GRADING REFUSED" when it in fact carried a full verdict table. Measured on
+  # the live registry at the time this landed: 15 collapsed cross-sections out
+  # of 35 graded days, several with 5-8 distinct probabilities across 328
+  # symbols. Those rows grade one market-wide call repeated per symbol.
+  #
+  # The gate is SHARED code (internal/api.CollapsedGradingWindow), deliberately
+  # not a second implementation in shell or python: the handler's own comment
+  # requires it to refuse "on the SAME evidence internal/forecastmon uses, so
+  # the publication surface and the monitor cannot disagree".
+  #
+  # EXIT 2 NOW WITHHOLDS. It used to publish, "like the handler", on the
+  # argument that refusing on a failed read would wedge publication shut on a
+  # transient database error. Both ends of that pairing have been reversed
+  # together (internal/api/accuracy.go now answers REFUSED_UNAVAILABLE on the
+  # same condition). The argument was never wrong about transient errors; it was
+  # wrong about everything else that exits 2 -- a missing binary, a renamed
+  # flag, a bad --db path -- each of which silently un-wires the gate forever.
+  # The precedent is twenty lines up: deployment_drift refuses on ANY non-zero
+  # exit for exactly this reason, citing ops/research-liveness.sh passing a flag
+  # research_liveness.py never implemented, argparse exiting 2, and the check
+  # having "never produced a verdict".
+  #
+  # The two outcomes stay APART in the text, because a check outage published as
+  # a measured collapse would invent a scientific verdict about the models.
+  if [ -z "$refusal_reason" ]; then
+    collapse_out=$(go run -C "$SD/daemon" ./cmd/collapsecheck --db "$SD/data/signaldeck.db" --registry "$STAGE" 2>>"$LOG")
+    collapse_status=$?
+    case "$collapse_status" in
+      1) refusal_reason="publication gate: $collapse_out" ;;
+      0) ;;
+      *) refusal_reason="CHECK UNAVAILABLE: the collapsed-cross-section gate could not be evaluated (collapsecheck exit $collapse_status), so the figures are withheld WITHOUT having been judged. This is a check outage, NOT a finding about any model. See the collapsecheck lines above in this log" ;;
+    esac
+  fi
+
+  # ATOMIC PUBLICATION. One rename, after every gate has passed, and only then.
+  if [ -z "$refusal_reason" ]; then
+    if mv -f "$STAGE" "$OUT"; then
+      echo "published: staged registry -> $OUT (atomic rename, all gates passed)" >> "$LOG"
+    else
+      refusal_reason="CHECK UNAVAILABLE: every gate passed but the staged registry could not be moved into place; the previously published registry is untouched"
+    fi
+  fi
+  rm -f "$STAGE"
 fi
 
 # REFUSAL PATH — the whole point of this branch is that a grading outage must be
@@ -233,7 +410,18 @@ if [ -n "$refusal_reason" ]; then
   # and every other consumer went on serving the last good numbers with no way
   # to know they were stale. The rule that decided this is above, and stays
   # above: this line only reports the decision.
-  "$PY" "$SD/tools/grader_heartbeat.py" --failure --error "$refusal_reason" \
+  # --refused is a HEALTHY grader saying no on evidence. --failure means the
+  # grader or one of its gates never produced a verdict at all. Keeping them
+  # apart is the whole point: the first is a scientific result and belongs on
+  # the public surface as one, the second is an outage and must never be dressed
+  # as a finding about a model. "CHECK UNAVAILABLE" is the prefix every
+  # unrunnable gate in this script now uses, so it classifies with drift and
+  # liveness rather than with a measured refusal.
+  case "$refusal_reason" in
+    "grader exited"*|*"liveness check failed"*|"deployment drift"*|"CHECK UNAVAILABLE"*) hb_mode=--failure ;;
+    *) hb_mode=--refused ;;
+  esac
+  "$PY" "$SD/tools/grader_heartbeat.py" "$hb_mode" --error "$refusal_reason" \
     >> "$LOG" 2>&1 || echo "heartbeat write failed (non-fatal)" >> "$LOG"
 
   if [ -f "$PREV_BACKUP" ]; then
@@ -298,15 +486,24 @@ lines = [
     "",
     "<!-- Generated by ops/accuracy-registry.sh from data/accuracy_registry.json — do not edit by hand. -->",
     "",
+    # The SAME freshness stamp the publish path writes, and for the same reason
+    # (2026-07-27:A8: "README's block disagrees with the registry it claims to
+    # render ... nothing detects the disagreement"). Omitting it here left
+    # tools/live_accuracy.py --check reporting "cannot be checked at all"
+    # whenever publication was refused — i.e. the staleness guard went blind in
+    # exactly the state the product ships in, so a README still showing
+    # YESTERDAY's refusal reason would not have been caught. Must stay
+    # byte-identical to envelope["generated"] above; the check compares them.
+    f"_Regenerated {now.isoformat(timespec='seconds')} · no figures are rendered while "
+    "publication is refused._",
+    "",
     "> **GRADING REFUSED — no accuracy numbers are published.**",
     f"> The grader refused at {now.isoformat(timespec='seconds')} ({reason}). The last "
     f"successful grade was {graded_at or 'never'} ({age} old). The previously published "
     "tables have been REMOVED rather than reprinted, because a number graded by code that "
     "refused to run today is not a live number.",
     "",
-    "```",
-    stderr_text or "(no grader output captured)",
-    "```",
+    "> The withheld grade stays inside `data/accuracy_registry.json` under `stale_last_registry` for the historical record and is not reprinted here; the grader's full output (which contains figures) is in `logs/accuracy-registry.log`, because a refusal notice that quotes the refused numbers is not a refusal.",
     "",
     "Full grading methodology and per-row JSON: `tools/accuracy_registry.py`, "
     "`data/accuracy_registry.json`; in-app at `/accuracy`.",
@@ -331,9 +528,52 @@ print(f"ACCURACY GRADING REFUSED ({reason}). Last successful grade {graded_at or
 PY
 )
   { echo "ACCURACY REGISTRY REFUSED:"; echo "$refusal_text"; } >> "$LOG"
+
+  # THE REFUSAL HAS TO REACH EVERY SURFACE, NOT JUST README.
+  #
+  # The block above rewrites README.md and then exits. partials/live_accuracy.md
+  # and the six documents in partials/INCLUDES.txt carry the SAME grade through a
+  # separate generated block, and the regeneration that refreshes them sits far
+  # below this exit — so on a refused cycle it never ran. Measured 2026-08-21:
+  # the registry had been REFUSED since 2026-08-20T14:06:29 with zero rows and
+  # README said "GRADING REFUSED — no accuracy numbers are published", while
+  # CASE_STUDY, HOW_PREDICTORS_WORK, INSTITUTIONAL_GAP, PREDICTION_PROCESS,
+  # SHIP_READINESS and STRATEGY_DECK each still published a full six-row verdict
+  # table stamped 2026-08-19, with nothing on it saying so.
+  #
+  # That is the divergence cmd/collapsecheck was added to end, surviving in the
+  # OTHER direction: the gate fired, and the refusal only reached one document.
+  #
+  # live_accuracy.py already renders a refused registry correctly — it falls back
+  # to stale_last_registry behind a "STALE — this is not a current grade" banner
+  # naming the refusal and its age. It simply was never called here. Failures are
+  # WARNed rather than fatal: a refused cycle already exits non-zero, and losing
+  # the notification below would trade one silent surface for another.
+  "$PY" "$SD/tools/live_accuracy.py" --write     || echo "WARN: partials/live_accuracy.md not regenerated on the refusal path" >> "$LOG"
+  "$PY" "$SD/tools/live_accuracy.py" --inject $(cat "$SD/partials/INCLUDES.txt")     || echo "WARN: live-accuracy blocks not re-injected on the refusal path" >> "$LOG"
+
+  # §8 of the deck is generated from the DATABASE, not from the registry, so a
+  # publication refusal says nothing about whether those figures are current --
+  # and this branch never regenerated them. deck_facts --inject lives on the
+  # success path only, below this branch's `exit 0`, so across a refusal window
+  # the deck kept publishing a three-week-old measurement while the database
+  # moved on. A refusal is exactly when that window is longest.
+  #
+  # Same WARN-not-fatal treatment as its siblings above: this reads the multi-GB
+  # database, and a slow or failed read must not wedge the grader.
+  "$PY" "$SD/tools/deck_facts.py" --inject "$SD/STRATEGY_DECK.md"     || echo "WARN: STRATEGY_DECK.md §8 not re-injected on the refusal path" >> "$LOG"
+
+  # The snapshot docs_gate reads. Regenerated on BOTH paths so it states what
+  # the grader actually did; left stale it asserted grader OK for 37 days while
+  # the registry was REFUSED, and docs_gate printed "clean" the whole time.
+  # Non-fatal: the age assertion in check_integrity_snapshot catches a failure
+  # here within its bound rather than wedging the grader on a snapshot write.
+  "$PY" "$SD/tools/docs_gate.py" write-integrity >> "$LOG" 2>&1     || echo "WARN: ops/data-integrity.json not regenerated on the refusal path" >> "$LOG"
+
+  report_uncommitted_docs
   notify_remote "SignalDeck accuracy registry — $refusal_text"
   sd_notify "SignalDeck accuracy" "Grading REFUSED — README accuracy tables removed. See the log."
-  exit 1
+  exit 0  # a recorded refusal is this job succeeding at its job; exit 1 made the task red for the whole window (F17)
 fi
 
 rm -f "$PREV_BACKUP"
@@ -341,8 +581,21 @@ rm -f "$PREV_BACKUP"
 # The grade is real: the grader exited 0 AND the registry's timestamp advanced,
 # both checked above. Record it so the daemon can tell a fresh grade from a
 # stale one — /api/accuracy refuses to publish without a recent success here.
-"$PY" "$SD/tools/grader_heartbeat.py" --success \
-  >> "$LOG" 2>&1 || echo "heartbeat write failed (non-fatal)" >> "$LOG"
+# NOT "non-fatal", which is what this said until 2026-09-13. /api/accuracy
+# refuses with REFUSED_STALE when this heartbeat is older than GraderMaxAge, so
+# a failed write does not cost a log line -- it costs the publication. The
+# documents below would carry today's verdict table while the API served
+# REFUSED_STALE over the identical registry, which is the same two-surfaces
+# divergence the collapse gate was added to close, arriving by another door.
+# Announce it loudly and exit non-zero so the caller (and the scheduled task's
+# LastTaskResult) sees a failed run.
+if ! "$PY" "$SD/tools/grader_heartbeat.py" --success >> "$LOG" 2>&1; then
+  msg="HEARTBEAT WRITE FAILED: the grade succeeded and the registry was published, but /api/accuracy will report REFUSED_STALE because it cannot see a fresh success. Stopping HERE, before the documents are regenerated, is deliberate: publishing a verdict table into README.md while the API refuses the identical registry is the two-surfaces divergence the collapse gate exists to prevent, arriving by another door. Re-run this script."
+  echo "$msg" >> "$LOG"
+  echo "$msg" >&2
+  notify_remote "SignalDeck accuracy: $msg"
+  exit 1
+fi
 
 # Regenerate the "Live accuracy (auto-updated)" section of README.md from the
 # fresh registry, between the LIVE-ACCURACY markers. The point: a FAILED verdict
@@ -576,6 +829,13 @@ fi
 # the run reports success. That is a published number being wrong, which is the
 # same class as the REFUSAL PATH above -- and unlike the liveness probes, nothing
 # downstream can catch it (see the docs_stale comment where it is set).
+# Same snapshot, success path: docs_gate reads ops/data-integrity.json, so it
+# must record THIS grade, not one from weeks ago.
+"$PY" "$SD/tools/docs_gate.py" write-integrity >> "$LOG" 2>&1 \
+  || echo "WARN: ops/data-integrity.json not regenerated after a successful grade" >> "$LOG"
+
+report_uncommitted_docs
+
 if [ "${docs_stale:-0}" != "0" ]; then
   echo "FAILED: the grade was computed and published, but at least one document" \
        "surface was NOT regenerated from it (see the WARN line above). The" \

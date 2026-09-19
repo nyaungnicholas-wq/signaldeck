@@ -1,0 +1,43 @@
+{
+  "generated_at_utc": "2026-09-09T05:55:27.377082+00:00",
+  "n_cases": 287,
+  "n_constructed": 31,
+  "n_real": 256,
+  "n_symbols_real": 32,
+  "go_version": "go version go1.26.5 windows/amd64",
+  "per_function": {
+    "trend": {
+      "n": 287,
+      "n_ok_both": 287,
+      "n_mismatch": 0
+    },
+    "liquidity": {
+      "n": 287,
+      "n_ok_both": 287,
+      "n_mismatch": 0
+    },
+    "vol21": {
+      "n": 287,
+      "n_ok_both": 287,
+      "n_mismatch": 0
+    },
+    "naive_trend": {
+      "n": 287,
+      "n_ok_both": 287,
+      "n_mismatch": 0
+    },
+    "naive_liquidity": {
+      "n": 287,
+      "n_ok_both": 287,
+      "n_mismatch": 0
+    },
+    "naive_vol21": {
+      "n": 287,
+      "n_ok_both": 287,
+      "n_mismatch": 0
+    }
+  },
+  "mismatches": [],
+  "labels_py_sha256": "72b5605c5f4f4e818b0384451395c0481b69ccec382cb55274567524f33a628e",
+  "go_main_sha256": "f753cb184e97e0efb0aacccdecced8c29219aed66e77edd75a97530f3b74dee3"
+}

@@ -5,8 +5,10 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -64,6 +66,21 @@ type Deps struct {
 	// webhook), surfaced read-only via GET /api/notify-status. nil is safe
 	// (tests / minimal wiring): every remote transport reads unconfigured.
 	Notifier *notify.Notifier
+	// Now is the clock the accuracy and track-record gates locate the graded
+	// window against; nil means time.Now (production). A test that seeds a
+	// window around a fixed date MUST set it: the gate looked for the window
+	// relative to the wall clock, so a fixture frozen at 2026-08-20 stopped
+	// reading as collapsed once the calendar moved on, and the document-vs-API
+	// divergence test went red by itself while a cached ok hid it (2026-09-01).
+	Now func() time.Time
+}
+
+// now returns the injected clock or the wall clock.
+func (d Deps) now() time.Time {
+	if d.Now != nil {
+		return d.Now()
+	}
+	return time.Now()
 }
 
 // Serve runs the API server until ctx is canceled.
@@ -74,10 +91,18 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/version", d.version) // which code is producing these numbers
 	d.registerAuth(mux)                           // register, login, logout, me
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
-	mux.HandleFunc("GET /api/symbol", d.symbolDetail)
+	// Body-cached (60s SWR): under worker load the uncached build queued behind
+	// the fleet for minutes (2026-09-08: >200s). Keyed by market|symbol; a 404
+	// body is never cached (only 200s enter the cache).
+	mux.HandleFunc("GET /api/symbol", func(w http.ResponseWriter, r *http.Request) {
+		sharedSymbolSWR.serve(d.St.CacheKey()+"|"+symbolCacheKey(r), w, r, d.symbolDetail)
+	})
 	mux.HandleFunc("GET /api/bars", d.bars)
+	mux.HandleFunc("POST /api/paper/order", d.paperOrder) // manual simulated book (paperorder.go)
 	mux.HandleFunc("GET /api/scores/history", d.scoreHistory)
-	mux.HandleFunc("GET /api/screener", d.screener) // all symbols; UI filters
+	mux.HandleFunc("GET /api/screener", func(w http.ResponseWriter, r *http.Request) { // all symbols; UI filters
+		sharedScreenerSWR.serve(d.St.CacheKey()+"|screener", w, r, d.screener)
+	})
 	mux.HandleFunc("GET /api/trends", d.trends)
 	d.registerHonestyCached(mux) // /api/honesty behind the 60s response cache
 	mux.HandleFunc("GET /api/quality", d.quality)
@@ -86,6 +111,18 @@ func Serve(ctx context.Context, d Deps) error {
 	mux.HandleFunc("GET /api/insights", d.insights)
 	mux.HandleFunc("GET /api/snaps", d.snaps)
 	mux.HandleFunc("POST /api/subscribe", d.subscribe)
+	// The only unauthenticated WRITE on a published deployment. Email only:
+	// no account, no password, no session. See internal/api/waitlist.go.
+	mux.HandleFunc("POST /api/waitlist", d.waitlistAdd)
+	// The LIVE record of the HAR volatility forecast. Reports evidence, never
+	// a verdict: only the pre-registered grader may say whether it is skill.
+	// Body-cached: the record is a scan over every resolved RV forecast (~25s
+	// cold, measured 2026-09-08) and it changes once a day, so the first
+	// visitor — and the /volatility page's 15s server-side fetch — must never
+	// be the one to build it. WarmCaches keeps it hot.
+	mux.HandleFunc("GET /api/vol-forecast/record", func(w http.ResponseWriter, r *http.Request) {
+		sharedVolRecordSWR.serve("record", w, r, d.volForecastRecord)
+	})
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
 	d.registerQuant(mux)     // forecast, backtest, risk, correlation, portfolio
 	d.registerAI(mux)        // analyst, chat, filingmind, debate, status
@@ -101,12 +138,24 @@ func Serve(ctx context.Context, d Deps) error {
 		// Perf wave 2026-07-24: measured >30s (timed out); SWR-cached.
 		sharedDatastatsSWR.serve("datastats", w, r, d.datastats)
 	}) // dataset accounting (read, gated like other reads)
-	d.registerAlerts(mux)                                         // alerts wave: per-user alerts list + mark-seen
-	d.registerDiscovery(mux)                                      // discovery wave: candidates list/add/dismiss
-	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights)        // learning-flywheel wave: learned per-regime ensemble weights
-	mux.HandleFunc("GET /api/postmortems", d.postmortems)         // Research Lab: clustered failure attribution over resolved WRONG predictions
-	mux.HandleFunc("GET /api/research", d.research)               // Research Lab: hypothesis registry (shadow/promoted/rejected) + advisory feedback
-	mux.HandleFunc("GET /api/research-ledger", d.researchLedger)  // Bayesian Research Ledger: program-level hypotheses w/ prior→posterior evidence chains + meta-analysis
+	d.registerAlerts(mux)                                  // alerts wave: per-user alerts list + mark-seen
+	d.registerDiscovery(mux)                               // discovery wave: candidates list/add/dismiss
+	mux.HandleFunc("GET /api/adaptive", d.adaptiveWeights) // learning-flywheel wave: learned per-regime ensemble weights
+	mux.HandleFunc("GET /api/postmortems", d.postmortems)  // Research Lab: clustered failure attribution over resolved WRONG predictions
+	mux.HandleFunc("GET /api/research", d.research)        // Research Lab: hypothesis registry (shadow/promoted/rejected) + advisory feedback
+	// Bayesian Research Ledger: program-level hypotheses w/ prior→posterior
+	// evidence chains + meta-analysis.
+	//
+	// BODY-CACHED, unlike its neighbours here, because it is BOTH slow and
+	// ANONYMOUS: it is in publicRoutes, and measured 2026-09-13 it takes 11.2s
+	// warm on a quiet box (the finding measured 53s cold under load). Registered
+	// bare, every visitor paid that inline against a 4-connection read pool, so
+	// a handful of concurrent anonymous requests is enough to starve it -- the
+	// same shape as the screener and symbol routes, which already sit behind
+	// their own SWR body cache for exactly this reason.
+	mux.HandleFunc("GET /api/research-ledger", func(w http.ResponseWriter, r *http.Request) {
+		sharedResearchLedgerSWR.serve(d.St.CacheKey()+"|research-ledger", w, r, d.researchLedger)
+	})
 	mux.HandleFunc("GET /api/research-loop", d.researchLoop)      // autonomous research loop: every pass (incl. refusals), judged rules, append-only per-(day,rule) judgments, rejection tally by gate
 	mux.HandleFunc("GET /api/vol-regime", d.volRegime)            // the validated-edge forecast: per-stock volatility regime (elevated/calm) + MEASURED walk-forward accuracy tiers
 	mux.HandleFunc("GET /api/regimes", d.structuralRegimesCached) // 2026-07-17 alpha-loop winners: trend21/liquidity21/vol21 regimes, measured per-band tiers + caveats in-payload
@@ -431,13 +480,40 @@ func httpInternal(w http.ResponseWriter, err error) {
 }
 
 // symbolFromQuery resolves ?symbol=&market= to a stored symbol.
+// The returned error is CLIENT-SAFE: 36 handlers call this and 35 of them
+// answer `httpErr(w, 404, err.Error())`, so whatever comes back here is
+// published verbatim. It used to be store.GetSymbol's error unmodified, and
+// GetSymbol returns database/sql's own sentinels -- a request for a symbol
+// that is merely absent answered `{"error":"sql: no rows in result set"}`,
+// observed live on GET /api/ledger?symbol=BTC. That names the storage engine
+// and the access pattern to anonymous callers on the published surface, and it
+// is useless to the caller, who wanted to know the symbol is unknown.
+//
+// Translated HERE rather than at the 35 call sites: one guard in the shared
+// function is both the smaller diff and the one a route added next month
+// inherits automatically.
+//
+// A genuine lookup failure is logged and reduced to a fixed string. Its 404 is
+// wrong -- the caller is told "unknown symbol" when the database is in fact
+// unwell -- but that mapping lives in each caller, predates this change, and
+// widening the fix to restructure 35 handlers' status codes is not warranted
+// by an error-message leak. What matters here is that the internals stop
+// escaping either way.
 func (d Deps) symbolFromQuery(r *http.Request) (md.Symbol, error) {
 	sym := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
 	market := md.Market(r.URL.Query().Get("market"))
 	if sym == "" || (market != md.Crypto && market != md.Stocks) {
 		return md.Symbol{}, fmt.Errorf("need symbol= and market=crypto|stocks")
 	}
-	return d.St.GetSymbol(r.Context(), sym, market)
+	s, err := d.St.GetSymbol(r.Context(), sym, market)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return md.Symbol{}, fmt.Errorf("unknown symbol %s on market %s", sym, market)
+	case err != nil:
+		slog.Error("symbol lookup failed", "symbol", sym, "market", market, "err", err)
+		return md.Symbol{}, errors.New("symbol lookup failed")
+	}
+	return s, nil
 }
 
 // ── basic ───────────────────────────────────────────────────────────────
@@ -449,7 +525,15 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	// surfaced here so the absence is not mistaken for a healthy quiet fleet.
 	refusals := map[string][]string{}
 	if raw, err := d.St.GetMeta(r.Context(), store.SchemaContractMetaKey); err == nil && raw != "" {
-		_ = json.Unmarshal([]byte(raw), &refusals)
+		// A CORRUPT BLOB IS NOT AN EMPTY ONE. Discarding this error made
+		// /api/health report schemaContract:{} -- "no worker was refused at
+		// boot" -- from a value nobody could parse, and the whole point of the
+		// field is that a boot refusal must not be mistaken for a quiet fleet.
+		if uerr := json.Unmarshal([]byte(raw), &refusals); uerr != nil {
+			refusals = map[string][]string{
+				"(unreadable)": {"schema-contract record could not be parsed: " + uerr.Error()},
+			}
+		}
 	}
 	// Worker fleet. Without this, health was a liveness probe wearing a health
 	// probe's name: it answered 200 with {"alpaca":true,...} while crypto-live
@@ -622,7 +706,13 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		reasons = append(reasons, "store unreachable: "+err.Error())
 	} else if raw != "" {
-		_ = json.Unmarshal([]byte(raw), &refusals)
+		// Same rule as /api/health above, and it matters more here: /api/ready
+		// answers a DEPLOY SCRIPT. A corrupt record silently became "nothing was
+		// refused", so ready:true shipped while boot-refused workers went unnamed
+		// and the deploy proceeded.
+		if uerr := json.Unmarshal([]byte(raw), &refusals); uerr != nil {
+			reasons = append(reasons, "schema-contract record unreadable: "+uerr.Error())
+		}
 	}
 
 	// Workers refused at boot never ran and never will this process lifetime.
@@ -645,6 +735,15 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 	// read, so those surfaces answer from stale data — which is exactly the
 	// "listening but answering wrong" state this endpoint exists to separate
 	// from "up". Sorted so the reason list is stable across polls.
+	// "degraded" is the status a worker files when it RAN and chose not to
+	// deliver (workers.ErrDegraded: a trainer benched by its own OOS bar, the
+	// forecast monitor reporting an expected abstention, a poller whose upstream
+	// is down but whose stored history still serves). Those surfaces answer
+	// correctly — they answer "withheld". Counting them here kept /api/ready at
+	// 503 for weeks at a time, so nothing could ever route on it. They are
+	// reported to an authenticated caller under `degraded`, and /api/health
+	// still carries degraded=true; readiness fails only on error/timeout/orphan.
+	degraded := []string{}
 	if failing, err := d.failingWorkers(r.Context()); err != nil {
 		reasons = append(reasons, "worker fleet state unreadable")
 	} else {
@@ -654,27 +753,50 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.Strings(names)
 		for _, name := range names {
+			// degraded: ran and chose not to deliver. orphaned: the PREVIOUS
+			// process died mid-run (sleep, reboot, deploy); this process is fine
+			// and the worker reruns on its own cadence. Neither is a fact about
+			// whether this daemon can answer correctly, so both are reported to
+			// an authenticated caller and neither fails the probe.
+			if s := failing[name]; s == "degraded" || s == "orphaned" {
+				degraded = append(degraded, name)
+				continue
+			}
 			reasons = append(reasons, "worker not delivering ("+failing[name]+"): "+name)
 		}
 	}
 
 	if len(reasons) > 0 {
-		w.WriteHeader(http.StatusServiceUnavailable)
+		// writeJSONStatus, NOT WriteHeader followed by writeJSON. That pairing set
+		// the status first, and Go ignores header mutations after WriteHeader — so
+		// writeJSON's Content-Type and Cache-Control were both silently dropped and
+		// the 503 went out as text/plain (content sniffing) with no Cache-Control,
+		// carrying a JSON body. On an anonymous probe route that is worth getting
+		// right: a client parsing by content type rejects a readiness answer it
+		// could have read, and a cacheable 503 is a readiness answer a proxy may
+		// serve after the daemon has recovered. The 200 paths below always used
+		// writeJSON and were never affected.
+		//
 		// The STATUS CODE is the probe's answer and it is the same either way —
 		// a load balancer acts on 503, not on the prose. The reasons name
 		// workers, schema gaps and missing credentials, so they go only to a
 		// caller who has identified themselves.
 		if userID(r) == 0 {
-			writeJSON(w, map[string]any{
+			writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{
 				"ready":  false,
 				"detail": "sign in or send the API token for the reasons",
 			})
 			return
 		}
-		writeJSON(w, map[string]any{"ready": false, "reasons": reasons})
+		writeJSONStatus(w, http.StatusServiceUnavailable,
+			map[string]any{"ready": false, "reasons": reasons, "degraded": degraded})
 		return
 	}
-	writeJSON(w, map[string]any{"ready": true})
+	if userID(r) == 0 {
+		writeJSON(w, map[string]any{"ready": true})
+		return
+	}
+	writeJSON(w, map[string]any{"ready": true, "degraded": degraded})
 }
 
 // watchRow is one watchlist/screener entry.
@@ -912,12 +1034,33 @@ func (d Deps) bars(w http.ResponseWriter, r *http.Request) {
 // 2026-07-26 review found the copy missing entirely from the CSV exports: the
 // same licensed rows walked out through a second door with no policy on it.
 // Two copies of a legal rule drift; one cannot.
+// The loopback excuse is CONFIG-GATED, and that ordering is the whole fix.
+// requestIsLoopback answers "did this request arrive over loopback?" by reading
+// RemoteAddr and the forwarding headers. Behind a reverse proxy on the same
+// host that does not set X-Forwarded-For, RemoteAddr IS 127.0.0.1 and no header
+// revokes it — so it returns true for the entire internet, and the guard opened
+// for everyone. That is the shape DEPLOY.md documents as the local run command
+// and fly.toml recommends as "Railway, Render, a $5 VPS".
+//
+// The daemon already knows the answer from configuration, and configuration
+// cannot be forged by a caller. So a request-level test may only NARROW a
+// config-level "this deployment is private", never supply one. On a published
+// deployment ReachablePrivately() is false and the refusal is unconditional,
+// whatever headers arrive.
+//
+// requestIsLoopback itself is left alone: its asymmetric contract (a proxy
+// header may revoke loopback, never grant it) is correct and has other callers.
 func (d Deps) rawDataRefused(w http.ResponseWriter, r *http.Request) bool {
-	if !d.Cfg.AllowRawExport && !requestIsLoopback(r) && !datalicense.BarsRedistributable() {
-		httpErr(w, 451, datalicense.RawDataNotice())
-		return true
+	if d.Cfg.AllowRawExport || datalicense.BarsRedistributable() {
+		return false
 	}
-	return false
+	// localProxyAsserted (localproxy.go): the keyed private-launcher assertion,
+	// the only header-carrying request that may count as local.
+	if d.Cfg.ReachablePrivately() && (requestIsLoopback(r) || d.localProxyAsserted(r)) {
+		return false
+	}
+	httpErr(w, 451, datalicense.RawDataNotice())
+	return true
 }
 
 func (d Deps) scoreHistory(w http.ResponseWriter, r *http.Request) {
@@ -926,14 +1069,22 @@ func (d Deps) scoreHistory(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, err.Error())
 		return
 	}
-	h := md.Horizon(r.URL.Query().Get("horizon"))
-	if h != md.H1h && h != md.H1d && h != md.H1w {
-		h = md.H1d
+	// An ABSENT horizon defaults to 1d. An explicitly SUPPLIED but unrecognised
+	// one is REFUSED rather than silently replaced. There is no nearest legal
+	// value to clamp to the way there is for a window, and this handler ends in
+	// writeJSON(w, scores) -- a bare row array that echoes neither the horizon nor
+	// the window -- so ?horizon=1x used to return 1d data with nothing anywhere in
+	// the response saying it had answered a different question.
+	raw := r.URL.Query().Get("horizon")
+	h := md.H1d
+	if raw != "" {
+		h = md.Horizon(raw)
+		if h != md.H1h && h != md.H1d && h != md.H1w {
+			httpErr(w, 400, fmt.Sprintf("unknown horizon %q: expected 1h, 1d or 1w", raw))
+			return
+		}
 	}
-	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
-	if days <= 0 || days > 365 {
-		days = 30
-	}
+	days := windowParam(r, "days", 30, 365)
 	now := time.Now().Unix()
 	scores, err := d.St.ScoreHistory(r.Context(), s.ID, h, now-int64(days)*86400, now+1)
 	if err != nil {
@@ -949,10 +1100,7 @@ func (d Deps) snaps(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, err.Error())
 		return
 	}
-	secs, _ := strconv.Atoi(r.URL.Query().Get("seconds"))
-	if secs <= 0 || secs > 3600 {
-		secs = 300
-	}
+	secs := windowParam(r, "seconds", 300, 3600)
 	now := time.Now().Unix()
 	snaps, err := d.St.Snaps(r.Context(), s.ID, now-int64(secs), now+1, secs+1)
 	if err != nil {
@@ -1279,6 +1427,22 @@ func (d Deps) backupOps(ctx context.Context) map[string]any {
 	// is the one reading a human is guaranteed to take at face value. A dashboard
 	// that says "configured" when one disk failure loses everything is worse than
 	// one that says nothing.
+	// A REMOTE destination is off-machine by construction, and the volume test
+	// cannot describe it: filepath.VolumeName("s3://bucket/x") is "", so the
+	// comparison below would answer "different volume" for an accidental
+	// reason rather than the real one. Worse, it would answer the same way for
+	// a typo. Recognising the scheme explicitly means offsiteConfigured is true
+	// because the bytes leave the machine, not because a path parser shrugged.
+	//
+	// offsiteSameVolume is deliberately left UNSET here rather than set false:
+	// "not on the same volume" is a statement about two local paths, and there
+	// is no local path to compare.
+	if isRemoteOffsite(offsiteDir) {
+		out["offsiteKind"] = "remote"
+		out["offsiteConfigured"] = true
+		return out
+	}
+	out["offsiteKind"] = "directory"
 	sameVolume := any("unknown")
 	if offsiteDir != "" {
 		dbVol := filepath.VolumeName(d.St.Path())
@@ -1293,6 +1457,13 @@ func (d Deps) backupOps(ctx context.Context) map[string]any {
 	return out
 }
 
+// isRemoteOffsite reports whether the recorded destination names another
+// machine. Only s3:// today; kept as one predicate so a second scheme is added
+// in one place rather than growing a second copy of this decision.
+func isRemoteOffsite(dest string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(dest)), "s3://")
+}
+
 func (d Deps) agents(w http.ResponseWriter, r *http.Request) {
 	runs, err := d.St.RecentWorkerRuns(r.Context(), 200)
 	if err != nil {
@@ -1302,7 +1473,23 @@ func (d Deps) agents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, runs)
 }
 
+// hud mirrors a SEPARATE project's live trading dashboard (stock-trader
+// PUSH-20), stored verbatim by internal/hud and served here untouched.
+//
+// ADMIN ONLY. The payload is not SignalDeck's own published paper book -- it
+// is a real brokerage account: account.cash, account.equity,
+// account.buying_power, account.day_pnl, the open positions list, the trade
+// history, and strategy.config/strategy.flags, which together are the complete
+// tuned parameter set of a live strategy. The daemon passes the blob through
+// without parsing it, so it cannot redact a field it does not model and the
+// exposure grows with whatever that project adds next.
+//
+// Being behind requiresAuth was never sufficient. Authentication answers "is
+// this somebody", and this route needs "is this the owner".
 func (d Deps) hud(w http.ResponseWriter, r *http.Request) {
+	if !d.requireAdmin(w, r) {
+		return
+	}
 	payload, fetchedAt, ok, err := d.St.GetHud(r.Context())
 	if err != nil {
 		httpInternal(w, err)

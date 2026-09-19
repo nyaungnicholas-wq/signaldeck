@@ -1,9 +1,9 @@
 "use client";
 
-// PROOF IT WORKS strip — extracted from the old monolithic page.tsx. The
+// Forecast track-record strip — extracted from the old monolithic page.tsx. The
 // track-record gate progress, the costed paper P&L and the ledger-integrity
 // chip, each pulled from the REAL /api/track-record payload and each keeping
-// its honest framing (gated = "too early to grade", paper = simulation upper
+// its honest framing (gated = grade withheld with its actual reason, paper = simulation upper
 // bound). The load-bearing caveats that used to hide behind hover titles are
 // click/keyboard HelpTips now. Nothing here is ever fabricated: fetch failure
 // renders an honest note.
@@ -13,6 +13,7 @@ import { fmtPct } from "@/lib/format";
 import Skeleton from "@/components/Skeleton";
 import HelpTip from "@/components/HelpTip";
 import useDashboardProof from "@/hooks/useDashboardProof";
+import RefusalNotice from "@/components/RefusalNotice";
 
 export default function ProofStrip() {
   const { tr, err } = useDashboardProof();
@@ -42,27 +43,27 @@ export default function ProofStrip() {
   const threshold = tr.gate?.threshold ?? tr.minIndependentN;
   const paper = tr.paper;
   return (
-    <section className="panel" aria-label="proof it works">
+    <section className="panel" aria-label="forecast track record">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3">
         {/* gate progress — the honest scoreboard state */}
         <div className="flex min-w-[220px] flex-1 flex-col gap-1">
           {tr.gated ? (
             <>
               <span className="text-[0.75rem] font-semibold" style={{ color: "var(--warn)" }}>
-                too early to grade —{" "}
+                Grade withheld —{" "}
                 <span className="tnum">
-                  {tr.independentN}/{threshold}
+                  {tr.independentN.toLocaleString("en-US")}
                 </span>{" "}
-                independent symbol-days
+                deduplicated symbol-days
               </span>
-              <div
+              {tr.independentN < threshold && <div
                 className="h-1.5 w-full overflow-hidden rounded"
                 style={{ background: "var(--border)" }}
                 role="progressbar"
                 aria-valuemin={0}
                 aria-valuemax={threshold}
-                aria-valuenow={tr.independentN}
-                aria-label="independent resolutions toward the significance gate"
+                aria-valuenow={Math.min(tr.independentN, threshold)}
+                aria-label="deduplicated symbol-day resolutions toward the significance gate"
               >
                 <div
                   className="h-full rounded"
@@ -71,24 +72,52 @@ export default function ProofStrip() {
                     background: "var(--warn)",
                   }}
                 />
-              </div>
-              <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                skill numbers stay withheld until the bar fills — an honest wait, not a hidden score
-              </span>
+              </div>}
+              {tr.distinctDays != null && tr.minDistinctDays != null && (
+                <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                  {tr.distinctDays} distinct market days; {tr.minDistinctDays} required.
+                  {" "}Observation minimum: {threshold}.
+                </span>
+              )}
+              <RefusalNotice compact tone="warn" title="Why the grade is withheld" testId="proofstrip-refusal" reason={tr.note || "The record has not cleared every evidence check. See the full track record for details."} />
             </>
           ) : (
-            <>
-              <span className="text-[0.75rem] font-semibold" style={{ color: "var(--ok)" }}>
-                measured: right{" "}
-                <span className="tnum">
-                  {tr.winRate != null ? `${(tr.winRate * 100).toFixed(1)}%` : "—"}
-                </span>{" "}
-                of the time
-              </span>
-              <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
-                over {tr.independentN.toLocaleString("en-US")} independent (symbol, UTC-day) resolutions · 1d horizon
-              </span>
-            </>
+            (() => {
+              const beats = tr.winRate != null && tr.naiveBaseline != null && tr.winRate > tr.naiveBaseline;
+              const winRateDisplay = tr.winRate != null ? `${(tr.winRate * 100).toFixed(1)}%` : "—";
+              const naiveBaselineDisplay = tr.naiveBaseline != null ? `${(tr.naiveBaseline * 100).toFixed(1)}%` : null;
+              const edgeDisplay = tr.edgeVsNaive != null ? `${tr.edgeVsNaive >= 0 ? "+" : ""}${(tr.edgeVsNaive * 100).toFixed(1)}pp` : null;
+              const hasPositiveEdge = tr.edgeVsNaive != null && tr.edgeVsNaive > 0;
+              return (
+                <>
+                  <span className="text-[0.75rem] font-semibold" style={{ color: beats ? "var(--ok)" : "var(--warn)" }}>
+                    measured: right{" "}
+                    <span className="tnum">
+                      {winRateDisplay}
+                    </span>{" "}
+                    of the time
+                  </span>
+                  {tr.naiveBaseline != null && (
+                    <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                      {" "}
+                      vs {naiveBaselineDisplay} for the majority-direction baseline
+                      {tr.edgeVsNaive != null && (
+                        <>
+                          {" "}
+                          <span className="tnum">
+                            {edgeDisplay}
+                          </span>
+                          {!hasPositiveEdge ? " — does not beat the naive guess" : ""}
+                        </>
+                      )}
+                    </span>
+                  )}
+                  <span className="tnum text-[0.75rem]" style={{ color: "var(--faint)" }}>
+                    over {tr.independentN.toLocaleString("en-US")} deduplicated (symbol, trading day) resolutions · 1d horizon
+                  </span>
+                </>
+              );
+            })()
           )}
         </div>
 
@@ -122,7 +151,7 @@ export default function ProofStrip() {
             </span>
           ) : (
             <span className="text-[0.75rem]" style={{ color: "var(--faint)" }}>
-              no fills yet
+              {paper?.note || "Paper performance unavailable"}
             </span>
           )}
         </div>

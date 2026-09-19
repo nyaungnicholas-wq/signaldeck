@@ -85,14 +85,26 @@ func (w *PaperTrader) assessEntry(
 		}
 	}
 
-	// One bar read serves the expectancy state key AND the tail episodes.
-	bars, err := w.St.LastBars(ctx, s.ID, md.TF1d, evEpisodeCap)
+	// One bar read serves the expectancy state key AND the tail episodes, and it
+	// is bounded to asof so BOTH consumers see only what was knowable then.
+	// LastBars takes a COUNT and no timestamp, so it returned the newest bars
+	// whatever bar was being judged. Live that is the same window; over any past
+	// bar it is the future.
+	bars, err := w.St.BarsBefore(ctx, s.ID, md.TF1d, asof+1, evEpisodeCap)
 	if err != nil {
 		return ev.Assessment{}, err
 	}
 
 	// State-conditional expectancy prior (advisory).
-	if key := expectancy.CurrentStateKeys(bars, nil)[h]; key != "" {
+	//
+	// WITHHELD IN RECONSTRUCTION. The expectancy table is keyed
+	// (symbol_id, horizon, state_key) with no ts and is overwritten in place, so
+	// the values that fed a past decision no longer exist — 99.9% of rows have
+	// been rewritten since the window a replay cares about. Reading it at a past
+	// bar would feed that bar today's answer. Because the prior is advisory and
+	// this branch already has a not-found path, a reconstruction simply decides
+	// without it: a stated, conservative deviation rather than silent lookahead.
+	if key := expectancy.CurrentStateKeys(bars, nil)[h]; key != "" && !w.replaying() {
 		rows, err := w.St.Expectancy(ctx, s.ID, h)
 		if err != nil {
 			return ev.Assessment{}, err
@@ -183,12 +195,8 @@ func roundTripCostFrac(in papertrade.ExecInputs, notional float64) (float64, boo
 	if notional <= 0 || in.ADVUSD <= 0 || math.IsNaN(in.ADVUSD) || math.IsInf(in.ADVUSD, 0) {
 		return 0, false
 	}
-	if in.Bar.High <= 0 || in.Bar.Low <= 0 || in.Bar.High < in.Bar.Low {
-		return 0, false
-	}
-	const k = 1.6651092223153954 // 2*sqrt(ln 2) — Parkinson (1980), as in execution.go
-	sigma := math.Log(in.Bar.High/in.Bar.Low) / k
-	if sigma < 0 || math.IsNaN(sigma) || math.IsInf(sigma, 0) {
+	sigma, ok := in.ImpactSigma()
+	if !ok {
 		return 0, false
 	}
 	spread := papertrade.CostBpsFor(in.Market) / 1e4
@@ -257,7 +265,12 @@ func (w *PaperTrader) corrToBook(ctx context.Context, strategy string, symbolID,
 // dailyReturnsByTs maps bar ts -> that session's close-to-close return, over
 // the trailing evCorrBars sessions at or before asof.
 func (w *PaperTrader) dailyReturnsByTs(ctx context.Context, symbolID, asof int64) (map[int64]float64, error) {
-	bars, err := w.St.LastBars(ctx, symbolID, md.TF1d, evCorrBars+1)
+	// Bounded in SQL. This read is documented as "the trailing evCorrBars
+	// sessions at or before asof", but LastBars ignores asof and returns the
+	// newest bars, leaving the ts guard in the loop below to drop them one at a
+	// time — which over a past asof discards the whole window and yields an
+	// empty map rather than the trailing sessions.
+	bars, err := w.St.BarsBefore(ctx, symbolID, md.TF1d, asof+1, evCorrBars+1)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +346,7 @@ type gateSnapshot struct {
 // stored only one of the two could not be used to check it. Anyone auditing
 // this book can assert `fillTs > barrier.triggerTs` over every row.
 func (w *PaperTrader) ledgerBarrierExit(
-	ctx context.Context,
+	apply *store.PaperApply,
 	strategy string,
 	symbolID int64,
 	a ev.Assessment,
@@ -342,17 +355,18 @@ func (w *PaperTrader) ledgerBarrierExit(
 	ts int64,
 ) error {
 	if !plan.fromBarrier {
-		return w.ledgerEVDecision(ctx, strategy, symbolID, a, d, ts)
+		return w.ledgerEVDecision(apply, strategy, symbolID, a, d, ts)
 	}
 	b := plan.barrier
 	snap, err := json.Marshal(gateSnapshot{Assessment: a, Barrier: &b, FillTs: plan.fillBar.Ts})
 	if err != nil {
 		return err
 	}
-	return w.St.InsertEVDecision(ctx, store.EVDecision{
+	apply.Decisions = append(apply.Decisions, store.EVDecision{
 		Ts: ts, Strategy: strategy, SymbolID: symbolID, Symbol: a.Symbol, Horizon: a.Horizon,
 		Decision: string(d.Action), Reason: string(d.Reason), InputsJSON: string(snap),
 	})
+	return nil
 }
 
 // ledgerGateRefusal records a DO_NOTHING that the PRETRADE RISK GATE or the
@@ -365,7 +379,7 @@ func (w *PaperTrader) ledgerBarrierExit(
 // its Breaches) is snapshotted, so "which limit fired" survives without needing
 // a schema change to hold it.
 func (w *PaperTrader) ledgerGateRefusal(
-	ctx context.Context,
+	apply *store.PaperApply,
 	strategy string,
 	symbolID int64,
 	a ev.Assessment,
@@ -394,19 +408,24 @@ func (w *PaperTrader) ledgerGateRefusal(
 		v := a.NetEV
 		row.NetEV = &v
 	}
-	return w.St.InsertEVDecision(ctx, row)
+	apply.Decisions = append(apply.Decisions, row)
+	return nil
 }
 
 // ledgerEVDecision appends one verdict to the ev_decisions ledger. The full
 // assessment (with its has-flags) is snapshotted as JSON so "what did the gate
 // know when it refused" survives the inputs' own tables moving on.
 //
-// Written directly rather than through the atomic PaperApply: decisions are
-// diagnostics, not book state, and the cursor check that precedes buildStep
-// already makes a same-bar re-run a no-op, so duplicates can only arise from a
-// crash inside the narrow window between this write and the step's apply.
+// Staged on the PaperApply and committed in the SAME transaction as the book.
+// It used to write directly, on the reasoning that decisions are diagnostics
+// rather than book state — but that left two holes. An apply that failed (or
+// merely returned an error) left the rows behind describing a step that never
+// happened; and because a failed apply leaves the cursor unadvanced, the next
+// pass re-rendered the identical bar and appended a second full set. ev_decisions
+// has no unique key, and nothing reconciles it against paper_trades, so neither
+// orphans nor duplicates were detectable after the fact.
 func (w *PaperTrader) ledgerEVDecision(
-	ctx context.Context,
+	apply *store.PaperApply,
 	strategy string,
 	symbolID int64,
 	a ev.Assessment,
@@ -433,5 +452,6 @@ func (w *PaperTrader) ledgerEVDecision(
 		v := a.NetEV
 		row.NetEV = &v
 	}
-	return w.St.InsertEVDecision(ctx, row)
+	apply.Decisions = append(apply.Decisions, row)
+	return nil
 }

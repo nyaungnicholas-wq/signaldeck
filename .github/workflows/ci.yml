@@ -1,7 +1,10 @@
 name: CI
 on:
   push:
-    branches: [main]
+    # public-launch is the RELEASE branch and had never been built: the trigger
+    # named main only, so every commit on it shipped unverified while the badge
+    # stayed green on a branch nobody was releasing from.
+    branches: [main, public-launch]
   pull_request:
 
 jobs:
@@ -18,6 +21,20 @@ jobs:
           cache-dependency-path: daemon/go.sum
       - run: go build ./...
       - run: go vet ./...
+      # The production box is Windows, and the only code that runs there was
+      # compiled NOWHERE automatic: every job here is ubuntu, so the build-tagged
+      # *_windows.go files are excluded from compilation entirely. That includes
+      # internal/ledgeranchor/keyperm_windows.go, the DACL check that replaces the
+      # Unix permission check on the Ed25519 ledger signing key -- a security
+      # control -- and its tests. CI was green while the production platform's
+      # only source was unbuilt and untested, and the coverage floors below were
+      # measured on a tree that omits it. Cross-compiling needs no extra runner.
+      # No working-directory here: the job already defaults to daemon/, and
+      # setting it again resolves to daemon/daemon and fails.
+      - name: Build and vet for the platform this actually runs on
+        run: |
+          GOOS=windows go build ./...
+          GOOS=windows go vet ./...
       # Build the COMMIT, not the checkout. checkout@v4 gives a clean tree
       # today, but the class of defect this guards is the one that actually
       # bit: a load-bearing source file present locally, absent from git, and
@@ -173,6 +190,22 @@ jobs:
       # H7: `npm run lint` (eslint) existed but was never invoked in CI.
       - run: npm run lint
       - run: npm run build
+      # Dependency vulnerabilities. CI had NO such gate in either language, so
+      # the next@16.3.0 advisories and a moderate DoS in
+      # baseline-browser-mapping both sat in the tree until a human ran
+      # `npm audit` by hand. A gate nobody runs is not a gate.
+      #
+      # --omit=dev scopes this to what SHIPS. Dev-only advisories are real but
+      # they are a different decision, and failing the build on a lint plugin's
+      # transitive dependency is how a security gate gets switched off. They
+      # are reported below without failing.
+      #
+      # NOT `npm audit fix`: CI must report, never mutate a lockfile it is
+      # about to build from.
+      - name: Dependency audit - production tree must be clean
+        run: npm audit --omit=dev --audit-level=moderate
+      - name: Dependency audit - dev tree, reported not enforced
+        run: npm audit --audit-level=high || true
 
   tools:
     runs-on: ubuntu-latest
@@ -395,7 +428,13 @@ jobs:
       # on another branch would look orphaned without this, which is exactly
       # the false positive that gets a check disabled.
       - name: Fetch every branch so reachability sees all refs
-        run: git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+        # Tags MUST come too. ops/ledger-provenance.sh records commits published by
+        # a remote branch OR a pushed keep TAG (the remedy the history-rewrite note
+        # prescribes for an orphaned ledger revision), and --check verifies
+        # reachability. --no-tags left the verifier blind to exactly the refs the
+        # recorder is allowed to count, so a tag-preserved commit in the manifest
+        # would fail CI while being perfectly reachable on the remote.
+        run: git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
       - name: Self-test the checker before trusting it
         run: bash ops/test-ledger-provenance.sh
       - name: Ledger-referenced commits are still reachable
@@ -413,6 +452,19 @@ jobs:
           exit $rc
       - name: Self-test the pre-push hook
         run: bash ops/test-pre-push-hook.sh
+      # These guards were written FOR the portability defect class this repo
+      # keeps producing -- bare pkill/pgrep/jq under the Git Bash that runs the
+      # scheduled tasks -- and then wired to nothing: no CI job, no scheduled
+      # task, no caller. ops/install-windows-tasks.ps1 states the principle
+      # itself: "Correct scripts that never run unattended are the same blind
+      # spot as a check that always passes." Both are static or shim-level and
+      # pass on ubuntu, so they belong in this job, which already runs the other
+      # self-tests.
+      - name: Self-test the portability guards that nothing was running
+        run: |
+          bash ops/test-no-bare-pkill.sh
+          bash ops/test-lib-portable.sh
+          bash ops/test-offsite-newest-tag.sh
 
   docs-gate:
     runs-on: ubuntu-latest
@@ -445,8 +497,61 @@ jobs:
       # A MISSING OR STALE SNAPSHOT IS A VIOLATION, NEVER A SKIP. That is the
       # whole reason the split is safe — it cannot degrade into silence, which
       # is how "we'll check it locally" becomes "nobody checks it".
+      # --contract release, NOT the strict default. See docs/RELEASE_CONTRACTS.md:
+      # both run the identical check set and differ in exactly one check,
+      # grader-status. strict asks "may this repository publish live accuracy
+      # NUMBERS?"; release asks "does this build state the evidence it actually
+      # has, correctly?" - the question a branch needs answered.
+      #
+      # This repository has carried an honest, measured refusal since
+      # 2026-09-13T14:43, and under strict that blocks CI for as long as it
+      # stands. RELEASE_CONTRACTS.md names the consequence: "A gate that can only
+      # go green by making an honest refusal disappear is a gate that eventually
+      # gets switched off, or worse, satisfied."
+      #
+      # release is NOT strict with REFUSED added to a success list. It rejects
+      # REFUSED_STALE, any refusal whose reason begins CHECK UNAVAILABLE (a gate
+      # could not run, so the state is UNKNOWN), an unattributed refusal, and
+      # EMPTY or any unrecognised status. Nothing guarding against publishing
+      # numbers is lost: /api/accuracy is fail-closed on the registry and the
+      # heartbeat, and tools/live_accuracy.py prints the refusal, not figures.
       - name: Documents may not contradict the repository's own measurements
-        run: python3 tools/docs_gate.py check
+        run: python3 tools/docs_gate.py check --contract release
+      # The strict question is still ASKED every run and its answer is in the
+      # log; it just no longer blocks. Dropping the question entirely is how
+      # "we'll check it locally" becomes "nobody checks it" - the failure the
+      # snapshot comment above warns about. When this step starts passing, the
+      # repository has a publishable grade again.
+      - name: Is there a publishable grade yet? (informational, never blocks)
+        continue-on-error: true
+        run: python3 tools/docs_gate.py check --contract strict
+      # The document ops/REVIEW_LIFECYCLE.md promises that audit findings are
+      # tracked to fixed or refuted and never left "proposed" past the next
+      # audit, and the script tools/audit_register.py, added on 2026-07-30,
+      # turns that promise into a machine-checked invariant. Measured on
+      # 2026-09-09, no ops script, no scheduled task and no CI step ran that
+      # tool. The invariant itself was not unguarded: the "tools" job's unittest
+      # discovery runs test_audit_register's test_real_repo_audits_are_clean
+      # against the real audits directory, and that assertion has failed before,
+      # recorded as finding S8 in audits/2026-09-09-signaldeckfix-reaudit.md.
+      # What this new step adds is running main() the way an operator does: its
+      # own exit codes, including the "no findings tables at all" branch that no
+      # test covers, the per-audit unresolved listing it prints, and a red X on
+      # the job that owns the documents. It reads only the files
+      # audits/*-reaudit.md, so it needs no database and no data-integrity
+      # snapshot.
+      #
+      # It GATES rather than warns. On the tree it first ran against it
+      # reported 164 findings across 9 audits, none unresolved, exit 0. Its own
+      # docstring says a red run IS the finding: record a status inside the
+      # closed vocabulary with real evidence, never widen the vocabulary to
+      # clear it. Self-test first, for the same reason the docs gate above
+      # self-tests: a gate that cannot prove it still detects a planted
+      # violation is not evidence.
+      - name: Self-test the findings register before trusting it
+        run: python3 tools/test_audit_register.py
+      - name: Audit findings are tracked to a resolved status, with evidence
+        run: python3 tools/audit_register.py
       # STRATEGY_DECK.md §8 carried this defect in one sentence: the structural
       # walk-forward validation "runs on demand only. Nothing schedules it and no
       # gate consumes its output." A validation nobody reads is indistinguishable

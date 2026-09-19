@@ -72,8 +72,12 @@ func (d Deps) featureHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]any{
-		"note":        featureHealthNote,
-		"generatedTs": time.Now().Unix(),
+		"note": featureHealthNote,
+		// generatedTs is when this payload was ASSEMBLED, which is all it can
+		// honestly claim. It reads as when the report was PRODUCED, so on an
+		// empty/failed horizon set it stamped a fresh timestamp over a report
+		// that was never produced. Named accordingly rather than removed.
+		"assembledTs": time.Now().Unix(),
 		"horizons":    out,
 	})
 }

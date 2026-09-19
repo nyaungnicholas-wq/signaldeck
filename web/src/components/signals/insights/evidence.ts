@@ -134,8 +134,19 @@ const DEFS: Record<string, { simple: string; fmt?: (v: number) => string }> = {
     simple: "share that rose next",
     fmt: (n) => (n >= 0 && n <= 1 ? `${(n * 100).toFixed(0)}%` : fmtPct(n, false)),
   },
-  medianFwd: { simple: "typical next move", fmt: (n) => fmtPct(n) },
-  meanFwd: { simple: "average next move", fmt: (n) => fmtPct(n) },
+  // THE UNITS IN THIS TABLE ARE MIXED, and fmtPct does no scaling -- it takes a
+  // value already in percent and appends the sign and the %. dayChangePct below
+  // arrives in percent, so it is passed straight through; medianFwd/meanFwd
+  // arrive as FRACTIONS and must be scaled, exactly as
+  // components/symbol/ExpectancyPanel.tsx:107 already does with
+  // `fmtPct(r.medianFwd * 100)` for the same field.
+  //
+  // Unscaled, a real +1.23% forward move rendered as "+0.01%". Measured
+  // 2026-09-13: 29 of 34 live insights carried medianFwd as a fraction, so
+  // nearly every evidence expander understated the move by 100x -- in the
+  // direction that makes the record look quieter than it was.
+  medianFwd: { simple: "typical next move", fmt: (n) => fmtPct(n * 100) },
+  meanFwd: { simple: "average next move", fmt: (n) => fmtPct(n * 100) },
   lastClose: { simple: "last price", fmt: fmtPrice },
   dayChangePct: { simple: "day change", fmt: (n) => fmtPct(n) },
   driver1d: { simple: "main 1-day driver" },

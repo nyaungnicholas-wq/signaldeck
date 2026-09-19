@@ -195,8 +195,66 @@ func (w *PaperTrader) findBarrier(
 	if err != nil {
 		return papertrade.BarrierExit{}, false, err
 	}
-	exit, found := papertrade.FindBarrierExit(pos.AvgPx, atr, evHoldBarsFor(h), held)
+	// BOTH LEGS ON ONE BASIS.
+	//
+	// pos.AvgPx was stored when the position opened; `held` is read now. `bars`
+	// is written INSERT OR REPLACE and a detected split re-backfills a symbol's
+	// whole series, so a stored entry and a freshly read bar can sit on different
+	// price bases — and the stop and target are placed by comparing exactly those
+	// two. The rescale factor would land whole in the barrier levels: a 100:1
+	// reverse split turns a 2xATR stop into an unreachable one, or into one the
+	// entry bar itself is already through.
+	//
+	// This is the confluence defect (entry_px divided into a live exit close,
+	// DFNS published at +8541%) in a second place. The repair is the same: prefer
+	// the ENTRY BAR, which is read live alongside the rest of the window, so both
+	// legs move together whenever the series is rewritten. held[0] IS that bar —
+	// the fill was at its open — so this costs no extra read.
+	entryPx, basis, err := w.entryPxOnCurrentBasis(ctx, s.ID, pos, held)
+	if err != nil {
+		return papertrade.BarrierExit{}, false, err
+	}
+	if basis == basisUnresolvable {
+		// The entry bar is gone AND the series has been rescaled since: there is
+		// no price on the current basis to place a level from. Zeroing the ATR
+		// disables the PRICE barriers only — the horizon stop has nothing to do
+		// with price and still applies, so the position stays exitable rather
+		// than being held forever by a data problem.
+		atr = 0
+	}
+	exit, found := papertrade.FindBarrierExit(entryPx, atr, evHoldBarsFor(h), held)
 	return exit, found, nil
+}
+
+// Basis outcomes for a position's entry price.
+const (
+	basisEntryBar     = "entry-bar"    // re-read live: both legs agree by construction
+	basisStoredClean  = "stored-clean" // stored price, no rescale since it was stored
+	basisUnresolvable = "unresolvable" // stored price is on a dead basis and the bar is gone
+)
+
+// entryPxOnCurrentBasis returns the position's entry price expressed on the SAME
+// basis as the bars it will be compared against.
+//
+// Order matters. The entry bar is preferred whenever it is present, because it
+// is read in the same query as the rest of the holding window and therefore
+// cannot disagree with it. The stored avg_px is used only when that bar is
+// missing, and only after confirming no rescale has happened since the position
+// opened — otherwise the honest answer is that no comparable price exists.
+func (w *PaperTrader) entryPxOnCurrentBasis(
+	ctx context.Context, symbolID int64, pos store.PaperPosition, held []md.Bar,
+) (float64, string, error) {
+	if len(held) > 0 && held[0].Ts == pos.OpenedTs && held[0].Open > 0 {
+		return held[0].Open, basisEntryBar, nil
+	}
+	rescaled, _, err := w.St.SeriesRescaledSince(ctx, symbolID, pos.OpenedTs)
+	if err != nil {
+		return 0, "", err
+	}
+	if rescaled {
+		return pos.AvgPx, basisUnresolvable, nil
+	}
+	return pos.AvgPx, basisStoredClean, nil
 }
 
 // barrierReason renders the sizing rationale a reader of the trade log needs:

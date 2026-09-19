@@ -23,6 +23,40 @@
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
+
+# THIS SCRIPT WRITES ITS OWN LOG, because its task cannot be made to.
+#
+# The Keepalive task was registered by hand and so never got the log redirection
+# ops\install-windows-tasks.ps1 gives every .ps1 job: its action is a bare -File
+# with no redirect, and it runs S4U in session 0 where there is no console. Every
+# 5 minutes this script printed the maintenance-lock decision, the universe
+# fail-safe's output, "failed to start SignalDeck Daemon task", and the WARNING
+# that the provenance preflight did NOT run -- a message that exists precisely so
+# "the check is missing" cannot go on looking like "the check passed" -- into
+# nothing at all.
+#
+# Fixing the TASK needs elevation (Set-ScheduledTask and schtasks /Change both
+# return Access is denied unelevated; both were tried). Fixing the SCRIPT does
+# not, and a transcript here makes the redirect unnecessary rather than merely
+# pending. ops\fix-task-logging.ps1 still ships for an operator who wants the
+# task itself corrected, and a doubled log is harmless.
+#
+# Never fatal: a guard that cannot open its log must still start the daemon.
+try {
+    $guardLog = Join-Path $root 'logs\daemon-guard.log'
+    if (-not (Test-Path (Split-Path -Parent $guardLog))) {
+        New-Item -ItemType Directory -Force (Split-Path -Parent $guardLog) | Out-Null
+    }
+    # Unbounded until 2026-09-07 (2 MB and growing every 5 min): keep the tail.
+    if ((Test-Path $guardLog) -and (Get-Item $guardLog).Length -gt 5MB) {
+        Get-Content $guardLog -Tail 2000 | Set-Content ($guardLog + '.tmp'); Move-Item -Force ($guardLog + '.tmp') $guardLog
+    }
+    Start-Transcript -Path $guardLog -Append -ErrorAction Stop | Out-Null
+    $transcribing = $true
+} catch {
+    $transcribing = $false
+}
+
 $lock = Join-Path $root 'ops\.maintenance'
 $exe  = Join-Path $root 'bin\signaldeckd.exe'
 $cwd  = Join-Path $root 'daemon'
@@ -88,13 +122,30 @@ if (Test-Path $lock) {
 # 1h, so this is well clear of a healthy run); with no sweep alive the marker is
 # repaired immediately.
 $refresh = Join-Path $root 'ops\signaldeck-refresh.sh'
-$bash    = 'C:\Program Files\Git\bin\bash.exe'
-if ((Test-Path $refresh) -and (Test-Path $bash)) {
+# Same resolution order ops\install-windows-tasks.ps1 and
+# ops\run-daemon-with-provenance.ps1 use. This was a hardcoded
+# 'C:\Program Files\Git\bin\bash.exe' inside the same Test-Path that gated the
+# block, with no else -- so a 32-bit or relocated Git turned the universe
+# fail-safe into a silent no-op on every 5-minute tick, forever, printing
+# nothing. That is the exact shape of the migration bugs this repo has already
+# been bitten by twice: a guard that answers "fine" because it never ran.
+$bash = @(
+  (Join-Path $env:ProgramFiles 'Git\bin\bash.exe'),
+  (Join-Path ${env:ProgramFiles(x86)} 'Git\bin\bash.exe')
+) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if (-not $bash) { $bash = (Get-Command bash -ErrorAction SilentlyContinue).Source }
+
+# Still never fatal -- a universe check must not be able to stop the daemon
+# guard -- but no longer silent. Absence is reported and the guard continues.
+if (-not (Test-Path $refresh)) {
+    Write-Output "universe fail-safe SKIPPED: $refresh not found"
+} elseif (-not $bash) {
+    Write-Output 'universe fail-safe SKIPPED: no bash found (ProgramFiles, ProgramFiles(x86), PATH)'
+} else {
     $sweeping = Get-CimInstance Win32_Process -Filter "Name='bash.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -and $_.CommandLine -like '*signaldeck-refresh*' } |
         Select-Object -First 1
     $minAge = if ($sweeping) { 7200 } else { 0 }
-    # Never fatal: a universe check must not be able to stop the daemon guard.
     try {
         & $bash ($refresh -replace '\\', '/') 'prune-only' $minAge 2>&1 | ForEach-Object { Write-Output $_ }
     } catch {
@@ -173,3 +224,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 Write-Output "started signaldeckd via its scheduled task"
+
+# Close the transcript on the fall-through path. The `exit` calls above leave it
+# to the process teardown, which flushes it the same way.
+if ($transcribing) { try { Stop-Transcript | Out-Null } catch { } }

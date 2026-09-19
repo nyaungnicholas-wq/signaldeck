@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"sort"
+	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -92,6 +93,9 @@ func crossSectionalFeatures(ctx context.Context, st *store.Store, syms []md.Symb
 	bars, err := st.LastBarsBatch(ctx, ids, md.TF1d, xsfactor.TrailingBars)
 	if err != nil {
 		return map[int64]xsFeatures{}
+	}
+	for id, b := range bars { // settled bars only: rev1 used the forming close as "last" (2026-09-07)
+		bars[id], _ = trimFormingDaily(byID[id].Market, b, time.Now().Unix())
 	}
 
 	inputs := make([]xsfactor.Input, 0, len(ids))

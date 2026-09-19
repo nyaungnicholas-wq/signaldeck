@@ -105,11 +105,15 @@ type WeeklyFacts struct {
 
 	// Adaptive weights: shift vs last week's snapshot. BaselineRecorded means
 	// this is the FIRST report with weights — there was nothing to diff yet.
-	WeightsPresent   bool    `json:"weightsPresent"`
-	BaselineRecorded bool    `json:"baselineRecorded"`
-	MaxWeightShift   float64 `json:"maxWeightShift"`
-	CellsLearned     int     `json:"cellsLearned"`
-	CellsTotal       int     `json:"cellsTotal"`
+	WeightsPresent bool `json:"weightsPresent"`
+	// WeightsUnreadable marks a stored weights record that could not be
+	// parsed, so a zero cell count is not read as "the learner produced
+	// nothing".
+	WeightsUnreadable bool    `json:"weightsUnreadable,omitempty"`
+	BaselineRecorded  bool    `json:"baselineRecorded"`
+	MaxWeightShift    float64 `json:"maxWeightShift"`
+	CellsLearned      int     `json:"cellsLearned"`
+	CellsTotal        int     `json:"cellsTotal"`
 
 	Paper []WeeklyPaper `json:"paper"`
 
@@ -120,6 +124,9 @@ type WeeklyFacts struct {
 	ActiveSymbols    int `json:"activeSymbols"`
 
 	Anomalies int `json:"anomalies"`
+	// AnomaliesKnown separates a measured zero from a count that failed.
+	// Without it both render as "0 anomalies this week".
+	AnomaliesKnown bool `json:"anomaliesKnown"`
 }
 
 // weeklyPaperStrategies are the simulated books the report summarizes —
@@ -158,7 +165,12 @@ func CollectWeeklyFacts(ctx context.Context, st *store.Store, now time.Time, wee
 	if curRaw != "" {
 		f.WeightsPresent = true
 		var cur adaptive.Weights
-		_ = json.Unmarshal([]byte(curRaw), &cur)
+		// A corrupt blob leaves cur zero-valued, which reports CellsTotal 0 and
+		// CellsLearned 0 -- "the learner produced nothing" -- from a value
+		// nobody could parse.
+		if err := json.Unmarshal([]byte(curRaw), &cur); err != nil {
+			f.WeightsUnreadable = true
+		}
 		f.CellsTotal = len(cur.Cells)
 		for _, c := range cur.Cells {
 			if len(c.Weights) > 0 {
@@ -169,8 +181,15 @@ func CollectWeeklyFacts(ctx context.Context, st *store.Store, now time.Time, wee
 			f.BaselineRecorded = true
 		} else {
 			var prev adaptive.Weights
-			_ = json.Unmarshal([]byte(prevRaw), &prev)
-			f.MaxWeightShift = adaptive.MaxWeightShift(prev, cur)
+			// Same rule: an unparseable PREVIOUS record makes MaxWeightShift
+			// compare against an empty baseline, which reads as a large shift or
+			// none at all depending on the data -- either way a number nobody
+			// measured.
+			if err := json.Unmarshal([]byte(prevRaw), &prev); err != nil {
+				f.WeightsUnreadable = true
+			} else {
+				f.MaxWeightShift = adaptive.MaxWeightShift(prev, cur)
+			}
 		}
 	}
 
@@ -233,9 +252,13 @@ func CollectWeeklyFacts(ctx context.Context, st *store.Store, now time.Time, wee
 		f.ActiveSymbols = len(active)
 	}
 
-	// Anomalies detected this week.
+	// Anomalies detected this week. A failed count is NOT zero anomalies: the
+	// digest renders "Anomalies detected in the last 7 days: 0", which is the
+	// most reassuring sentence available, in a document whose closing line is
+	// "This briefing is a measurement of stored data, not a forecast."
 	if n, err := st.AnomalyCountSince(ctx, since.Unix()); err == nil {
 		f.Anomalies = n
+		f.AnomaliesKnown = true
 	}
 	return f, curRaw, nil
 }
@@ -305,7 +328,11 @@ func ComposeWeekly(f WeeklyFacts, loc *time.Location) (headline, body string) {
 	// Sentiment coverage + anomalies.
 	b = append(b, fmt.Sprintf("Sentiment coverage: %d of %d active symbols had rated headlines in the last 7 days.",
 		f.SentimentSymbols, f.ActiveSymbols))
-	b = append(b, fmt.Sprintf("Anomalies detected in the last 7 days: %d.", f.Anomalies))
+	if f.AnomaliesKnown {
+		b = append(b, fmt.Sprintf("Anomalies detected in the last 7 days: %d.", f.Anomalies))
+	} else {
+		b = append(b, "Anomalies detected in the last 7 days: UNKNOWN — the count could not be read.")
+	}
 
 	b = append(b, disclaimer)
 	return headline, strings.Join(b, " ")

@@ -99,9 +99,21 @@ tracked=$(git ls-files)
 # Content scan skips exactly the self-test fixture; .env / data-file checks
 # below still see the full tracked list.
 scannable=$(printf '%s\n' "$tracked" | grep -vxF "$SELFTEST_FIXTURE")
-vendor_hits=$(printf '%s\n' "$scannable" | xargs grep -InE "$VENDOR_PATTERN" 2>/dev/null \
+# NUL-delimited and -r, not bare xargs. Two fail-open hazards, in a SECRET
+# scanner, where "found nothing" is the dangerous answer:
+#   - with empty input GNU xargs still runs grep with NO file operands, so grep
+#     reads the already-drained stdin, matches nothing, and the scan reports a
+#     clean tree without having examined a single file;
+#   - xargs word-splits, so any tracked path containing a space is passed as two
+#     nonexistent paths and skipped silently, because stderr is discarded.
+# ops/manifest-check.sh already uses xargs -0 -r for exactly this reason.
+# tr, not printf '%s\0': printf would emit the whole newline-separated list as a
+# SINGLE NUL-terminated argument, and xargs -0 would then look for one file whose
+# name contains every path in the repo. The list is newline-separated, so the
+# newlines are what must become NULs.
+vendor_hits=$(printf '%s\n' "$scannable" | tr '\n' '\0' | xargs -0 -r grep -InE "$VENDOR_PATTERN" 2>/dev/null \
   | grep -viE "$EXCLUDE_PATTERN")
-generic_hits=$(printf '%s\n' "$scannable" | xargs grep -InE "$GENERIC_PATTERN" 2>/dev/null \
+generic_hits=$(printf '%s\n' "$scannable" | tr '\n' '\0' | xargs -0 -r grep -InE "$GENERIC_PATTERN" 2>/dev/null \
   | grep -viE "$EXCLUDE_PATTERN" \
   | awk -F: '{content=$0; sub(/^[^:]*:[0-9]+:/, "", content); if (content ~ /[0-9]/) print}')
 hits=$(printf '%s\n%s\n' "$vendor_hits" "$generic_hits" | grep -v '^$' | sort -u | head -20)

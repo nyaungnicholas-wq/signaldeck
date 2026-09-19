@@ -111,7 +111,7 @@ export default function ModelRaceCard({
       <div className="panel-h">
         <span style={{ color: "var(--text)" }}>{label.toUpperCase()}</span>
         <span className="chip tnum" style={{ color: "var(--faint)" }}>
-          trained {ago(stats.ts)}
+          data as of {ago(stats.ts)}
         </span>
       </div>
 
@@ -137,7 +137,7 @@ export default function ModelRaceCard({
                 className="chip"
                 style={{ color: "var(--ok)", borderColor: "var(--ok)" }}
               >
-                beats base rate {liftText(stats.lift)} OOS
+                beats own base rate {liftText(stats.lift)} OOS — per-symbol grade, uncorrected for ~2,500-way selection and overlapping windows; not a registry-graded claim
               </span>
             ) : (
               <span

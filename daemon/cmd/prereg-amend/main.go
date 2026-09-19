@@ -42,15 +42,21 @@ func main() {
 		dbPath = flag.String("db", "data/signaldeck.db", "path to signaldeck.db")
 		commit = flag.Bool("commit", false, "actually append (default is dry-run)")
 		kind   = flag.String("kind", GradabilityKind,
-			"which amendment to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
-				ProvenanceKind+", "+DataIntegrityKind+" or "+DuplicateKind)
+			"which record to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
+				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+", "+
+				ForwardTestKind+", "+BenchFloorKind+", "+PopFiltersKind+", "+
+				BookExtremeKind+" or "+RVForecastKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
-		*kind != ProvenanceKind && *kind != DataIntegrityKind && *kind != DuplicateKind {
-		die("unknown -kind %q (want %s, %s, %s, %s or %s)",
+		*kind != ProvenanceKind && *kind != DataIntegrityKind &&
+		*kind != DuplicateKind && *kind != ForwardTestKind &&
+		*kind != BenchFloorKind && *kind != PopFiltersKind &&
+		*kind != BookExtremeKind && *kind != RVForecastKind {
+		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
-			DataIntegrityKind, DuplicateKind)
+			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind,
+			PopFiltersKind, BookExtremeKind, RVForecastKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -110,6 +116,123 @@ func main() {
 				"and that is not true — fix the build first, then file.", m.OnOrAfterNewEpoch)
 		}
 		spec, note = revisionEpochSpec(m), revisionEpochNote
+
+	case ForwardTestKind:
+		m, err := measureForwardTest(ctx, db)
+		if err != nil {
+			die("measure forward-test state: %v", err)
+		}
+		// This record's entire value is that it predates its own evidence. If
+		// graded forward rows already exist, the hypothesis and the rule that
+		// decides it were written with those rows visible, and no reader of an
+		// append-only log could ever tell that from a genuine registration.
+		if m.ObservedRows != 0 {
+			die("REFUSING to file: %d graded forward observation(s) already exist for "+
+				"confluence-long-liquid-2026-08. A forward test registered after its own "+
+				"results are readable is not a registration. Start a new test id, or explain "+
+				"the existing rows in their own record.", m.ObservedRows)
+		}
+		spec, note = forwardTestSpec(m), forwardTestNote
+
+	case RVForecastKind:
+		m, err := measureRVForecast(ctx, db)
+		if err != nil {
+			die("measure rv-forecast state: %v", err)
+		}
+		// The registration's entire value is that it predates its own evidence.
+		// If any forecast has already resolved, the horizons, nulls, losses and
+		// decision rule were written with outcomes visible, and no reader of an
+		// append-only log could tell that from a genuine registration.
+		if m.Resolved != 0 {
+			die("REFUSING to file: %d HAR volatility forecast(s) have already "+
+				"resolved. A forward test registered after its own results are "+
+				"readable is not a registration. Start a new test id, or explain "+
+				"the existing rows in their own record.", m.Resolved)
+		}
+		spec, note = rvForecastSpec(m), rvForecastNote
+
+	case PopFiltersKind:
+		m, err := measurePopFilters(ctx, db)
+		if err != nil {
+			die("measure population-filter state: %v", err)
+		}
+		// Names a registration that must exist.
+		if m.RegistrationSeq == 0 {
+			die("REFUSING to file: no %s record is on the chain. This amendment "+
+				"names a registration that does not exist.", ForwardTestKind)
+		}
+		// The whole defence is that it predates its own evidence. A population
+		// change filed once sessions have graded is a SELECTION rule, and an
+		// append-only log cannot tell the two apart afterwards.
+		if m.ObservedRows != 0 {
+			die("REFUSING to file: %d forward session(s) have already been graded. "+
+				"Narrowing the population after evidence accrues is a selection rule, "+
+				"not an amendment.", m.ObservedRows)
+		}
+		spec, note = popFiltersSpec(m), popFiltersNote
+
+	case BookExtremeKind:
+		m, err := measureBookExtreme(ctx, db)
+		if err != nil {
+			die("measure book extreme-guard state: %v", err)
+		}
+		if m.RegistrationSeq == 0 {
+			die("REFUSING to file: no %s record is on the chain. This amendment "+
+				"names a registration that does not exist.", ForwardTestKind)
+		}
+		if m.ObservedRows != 0 {
+			die("REFUSING to file: %d forward session(s) have already been graded. "+
+				"Screening the book after evidence accrues is a selection rule, "+
+				"not an amendment.", m.ObservedRows)
+		}
+		// THE GUARD THIS RECORD RESTS ON. Seq 89 refused the 30% trim because its
+		// direction of effect was measured and non-zero, and that objection binds
+		// this record too. It is answerable here only while the screen moves
+		// NOTHING: every extreme episode currently sits in a session the
+		// registered breadth floor already refuses. If even one sat in a gradable
+		// session, filing this would change a known quantity in a known direction
+		// — precisely what seq 89 forbids — and the honest response would be to
+		// reconsider the amendment, not to file it and explain afterwards.
+		if m.ExtremeInGradableSession != 0 {
+			die("REFUSING to file: %d extreme episode(s) fall in sessions whose "+
+				"benchmark clears the registered 100-name floor, so this screen "+
+				"WOULD move the statistic and its direction is knowable before "+
+				"filing. Seq 89 rejected exactly that: a benchmark chosen with a "+
+				"result in view. Re-measure and decide deliberately.",
+				m.ExtremeInGradableSession)
+		}
+		spec, note = bookExtremeSpec(m), bookExtremeNote
+
+	case BenchFloorKind:
+		m, err := measureBenchFloor(ctx, db)
+		if err != nil {
+			die("measure benchmark-floor state: %v", err)
+		}
+		// This record amends a specific registration. Filing it with none on the
+		// chain would name a claim that does not exist.
+		if m.RegistrationSeq == 0 {
+			die("REFUSING to file: no %s record is on the chain. This amendment "+
+				"names a registration that does not exist.", ForwardTestKind)
+		}
+		// The amendment's entire defence is that it predates its own evidence. An
+		// eligibility rule added once sessions have graded is a selection rule,
+		// and an append-only log cannot tell the two apart after the fact.
+		if m.ObservedRows != 0 {
+			die("REFUSING to file: %d forward session(s) have already been graded. "+
+				"An eligibility criterion added after evidence accrues is a selection "+
+				"rule. File a record that says so plainly, or start a new test id.",
+				m.ObservedRows)
+		}
+		// Direction-neutrality has to be shown, not asserted: if the floor would
+		// remove a session the registered rule already admits, it is trimming
+		// evidence in hand and the claim in the spec is false.
+		if m.WouldDropNow != 0 {
+			die("REFUSING to file: the floor would drop %d in-sample session(s) that "+
+				"the registered rule already admits. The spec claims it removes "+
+				"nothing currently graded, and that is not true of this database.",
+				m.WouldDropNow)
+		}
+		spec, note = benchFloorSpec(m), benchFloorNote
 
 	case DuplicateKind:
 		d, err := measureDuplicates(ctx, db)

@@ -70,7 +70,7 @@ function Assert-Elevated {
     if (-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Write-Host "REFUSED: not elevated. Both operations need admin." -ForegroundColor Red
         Write-Host "Re-run from an elevated PowerShell:" -ForegroundColor Yellow
-        Write-Host "  Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile','-NoExit','-File','$PSCommandPath'"
+        Write-Host "  Start-Process pwsh -Verb RunAs -ArgumentList '-NoProfile','-NoExit','-File',('\"'+$PSCommandPath+'\"')"
         try { Stop-Transcript | Out-Null } catch { }
         exit 1
     }
@@ -146,6 +146,67 @@ Get-ScheduledTask | Where-Object { $_.TaskName -match $Match } |
 
 if ($failed.Count) {
     Write-Host "FAILED tasks (restore from $backup if needed): $($failed -join ', ')" -ForegroundColor Red
+    try { Stop-Transcript | Out-Null } catch { }
+    exit 1
+}
+
+# -- 4a. RunLevel for the two tasks that must TERMINATE the daemon ----------
+#
+# Task Scheduler starts the daemon with an S4U token in session 0, and an S4U
+# logon gets its OWN logon-session SID. So another S4U task cannot open the
+# daemon's process handle even though every task in this fleet runs as the same
+# user. Measured 2026-09-13: OpenProcess(PROCESS_TERMINATE) against signaldeckd
+# returns win32 error 5, ACCESS_DENIED. RunLevel=Highest gives the token
+# SeDebugPrivilege, which is what actually permits the kill.
+#
+# This is not a theoretical permission: with it Limited, market-close.sh could
+# not stop the daemon, so signaldeck-backup-offline.sh's is-daemon-alive check
+# refused to run and the day's OFF-MACHINE backup silently did not happen while
+# the task still exited 0. Confirmed 2026-09-12, newest GitHub backup two days
+# stale.
+#
+# Only the two labels whose scripts call sd_kill_hard. Elevation goes where it
+# is needed, not across the fleet. LogonType is preserved exactly -- S4U is the
+# fix this whole script exists for and must not be traded away for the kill.
+$killTasks = @('SignalDeck Market-Close', 'SignalDeck Daily-Refresh')
+Write-Host ""
+Write-Host "RunLevel: granting Highest to the tasks that stop the daemon"
+$rlChanged = 0
+$rlFailed = @()
+foreach ($name in $killTasks) {
+    $t = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+    if (-not $t) {
+        Write-Host ("  ? {0,-34} not registered, skipping" -f $name) -ForegroundColor Yellow
+        continue
+    }
+    if ($t.Principal.RunLevel -eq 'Highest') {
+        Write-Host ("  = {0,-34} already Highest" -f $name); continue
+    }
+    try {
+        $principal = New-ScheduledTaskPrincipal `
+            -UserId    $t.Principal.UserId `
+            -LogonType $t.Principal.LogonType `
+            -RunLevel  Highest
+        Set-ScheduledTask -TaskName $name -Principal $principal | Out-Null
+
+        # Read BOTH back. A RunLevel that did not take is indistinguishable
+        # from one that did until the next market close, and silently trading
+        # S4U away here would reintroduce the console-kill this script fixes.
+        $after = (Get-ScheduledTask -TaskName $name).Principal
+        if ("$($after.RunLevel)" -ne 'Highest') { throw "RunLevel is still $($after.RunLevel)" }
+        if ("$($after.LogonType)" -ne "$($t.Principal.LogonType)") {
+            throw "LogonType changed to $($after.LogonType), expected $($t.Principal.LogonType)"
+        }
+        Write-Host ("  + {0,-34} Limited -> Highest" -f $name) -ForegroundColor Green
+        $rlChanged++
+    } catch {
+        Write-Host ("  ! {0,-34} FAILED: {1}" -f $name, $_.Exception.Message) -ForegroundColor Red
+        $rlFailed += $name
+    }
+}
+Write-Host "RunLevel: changed $rlChanged, failed $($rlFailed.Count)"
+if ($rlFailed.Count) {
+    Write-Host "FAILED RunLevel tasks: $($rlFailed -join ', ')" -ForegroundColor Red
     try { Stop-Transcript | Out-Null } catch { }
     exit 1
 }

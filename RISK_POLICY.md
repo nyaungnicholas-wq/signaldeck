@@ -456,7 +456,7 @@ does not require the halt to have been tripped.
 | Kill switch | `ops/HALT`, fail-closed | `killswitch.Check` | **IN FORCE — paper** |
 | Every refusal ledgered | — | `ev_decisions` | **IN FORCE — paper** |
 
-Sixteen rules in force, five specified only.
+Fifteen rules in force, six specified only.
 
 ---
 
@@ -465,7 +465,7 @@ Sixteen rules in force, five specified only.
 Nothing in this document is a live-trading control. The following are
 preconditions, not aspirations:
 
-1. **The five remaining SPEC ONLY rules are implemented and tested** — the
+1. **The six remaining SPEC ONLY rules are implemented and tested** — the
    1.0%-risk sizing target, net beta, the crypto cap, and the −5% / −8% / −12%
    drawdown rungs.
 2. ~~The barrier-fill hazard is resolved~~ **— closed 2026-08-04.** Barriers

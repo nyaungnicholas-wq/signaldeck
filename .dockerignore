@@ -29,3 +29,17 @@ audits/
 **/.env
 **/.env.*
 !**/.env.example
+
+# tools/*.py is copied into the runtime image so the grader can run there (see
+# ops/grade.sh). Those scripts are ~1 MB and stdlib-only. tools/alpha/ is the
+# research corpus and is the rest of the directory by volume -- excluded so it
+# does not ride along in the build context on every build.
+tools/alpha/
+
+# freeze/ (8.6 GB) and research/ (2.1 GB) are the frozen corpora and the
+# research lab. Nothing in the image comes from either: the Dockerfile COPYs
+# only daemon/, web/, tools/*.py, PREREGISTRATION.md and two ops scripts. Left
+# in, they made the build context ~10.7 GB, which the daemon sends to the
+# builder on EVERY build for nothing.
+freeze/
+research/

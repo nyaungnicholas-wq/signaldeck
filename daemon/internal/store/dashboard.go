@@ -95,7 +95,7 @@ func (s *Store) ResolvedPredictionCount(ctx context.Context, h md.Horizon) (int,
 	var n int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM prediction_outcomes
-		WHERE horizon=? AND resolved_at IS NOT NULL`, string(h)).Scan(&n)
+		WHERE horizon=? AND resolved_at IS NOT NULL AND up IS NOT NULL`, string(h)).Scan(&n)
 	return n, err
 }
 

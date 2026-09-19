@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -194,8 +195,45 @@ func (w *SentimentTagger) Run(ctx context.Context) (string, error) {
 	// daily cap still bounds total spend. Tunable via env for other providers.
 	batch := envInt("SIGNALDECK_SENTIMENT_BATCH", 60)
 	pace := time.Duration(envInt("SIGNALDECK_SENTIMENT_PACE_MS", 5000)) * time.Millisecond
-	n, err := sentiment.RunOnce(ctx, w.LLM, w.St, batch, pace)
+	// Bound the queue by age. Tagging a headline older than yesterday is
+	// provably dead work: sentiment-aggregator recomputes today and yesterday
+	// only, nothing backfills older days, and both news readers take the
+	// newest N rows. Unbounded, this worker spent the whole daily LLM budget
+	// on a 353,671-row archive reaching back to 2012 while fresh news was
+	// already fully tagged. 0 disables the bound.
+	maxAgeDays := envInt("SIGNALDECK_SENTIMENT_MAX_AGE_DAYS", 7)
+	var minTs int64
+	if maxAgeDays > 0 {
+		minTs = time.Now().UTC().AddDate(0, 0, -maxAgeDays).Unix()
+	}
+	n, err := sentiment.RunOnce(ctx, w.LLM, w.St, batch, pace, minTs)
+	if errors.Is(err, llm.ErrTransient) && n > 0 {
+		// The provider's shared free-tier pool refuses under load with HTTP
+		// 503 ResourceExhausted. That is an upstream capacity condition, not a
+		// fault here, and the next pass resumes where this one stopped.
+		// Reported as a hard error it produced 24 failing passes an hour on
+		// 2026-09-04 while real work landed in every one of them.
+		//
+		// n == 0 deliberately stays an ERROR: a pass that tagged nothing is
+		// indistinguishable from a starving tagger, which is the exact defect
+		// the cap-reached branch below was written to stop hiding.
+		return fmt.Sprintf("tagged %d headlines; provider pool busy, resuming next pass", n), nil
+	}
+	if errors.Is(err, llm.ErrCapReached) {
+		// The cap is a budget, not a fault. But "tagged 0 headlines" read as
+		// "nothing to tag" whenever the FIRST call of a pass was refused (19
+		// such passes on 2026-09-01), hiding a starving tagger behind an ok
+		// status. Say what happened, the way ai-analyst already does.
+		return fmt.Sprintf("tagged %d headlines; daily LLM call cap reached — resets at the UTC day boundary", n), nil
+	}
 	if err != nil {
+		// The count is PART of the failure. A pass that tagged 47 headlines and
+		// then met a provider 503 is a different event from one that tagged none,
+		// and worker_runs recorded them identically — on 2026-09-02, 23 of 24
+		// passes read as a bare provider error while real work had landed.
+		if n > 0 {
+			return "", fmt.Errorf("tagged %d headlines, then %w", n, err)
+		}
 		return "", err
 	}
 	return fmt.Sprintf("tagged %d headlines", n), nil

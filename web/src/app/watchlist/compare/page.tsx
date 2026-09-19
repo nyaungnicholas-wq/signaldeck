@@ -100,7 +100,7 @@ function CompareInner() {
         <div key={label} className="flex items-center gap-1">
           <span className="mono text-xs" style={{ color: "var(--faint)" }}>{label}</span>
           <input value={val} onChange={e => setVal(e.target.value)} aria-label={`symbol ${label}`} spellCheck={false} autoCapitalize="characters" className="mono w-20 rounded border bg-transparent px-2 py-1 text-sm uppercase outline-none focus:border-[var(--accent)]" style={{ borderColor: "var(--border)" }} />
-          <select value={mkt} onChange={e => setMkt(e.target.value as Market)} className="rounded border bg-transparent px-1 py-1 text-xs" style={{ borderColor: "var(--border)", color: "var(--dim)" }}>
+          <select value={mkt} onChange={e => setMkt(e.target.value as Market)} aria-label={`market ${label}`} className="rounded border bg-transparent px-1 py-1 text-xs" style={{ borderColor: "var(--border)", color: "var(--dim)" }}>
             <option value="stocks">stocks</option>
             <option value="crypto">crypto</option>
           </select>

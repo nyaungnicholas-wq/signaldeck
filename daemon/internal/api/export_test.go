@@ -38,7 +38,17 @@ func newExportDeps(t *testing.T) (Deps, md.Symbol) {
 	if err := st.UpsertBars(ctx, bars); err != nil {
 		t.Fatalf("insert bars: %v", err)
 	}
-	return Deps{St: st, Cfg: config.Config{}}, s
+	// A LOOPBACK deployment, stated in config rather than left to the zero
+	// value. The loopback excuse for serving licensed rows is now gated on
+	// Cfg.ReachablePrivately() as well as on the request, because RemoteAddr
+	// reads 127.0.0.1 for the whole internet behind a same-host reverse proxy
+	// that does not set X-Forwarded-For. These tests mean "the operator's own
+	// machine", and that is a fact about the deployment, so it belongs here.
+	cfg := config.Config{
+		HTTPAddr:     "127.0.0.1:8322",
+		AllowedHosts: []string{"127.0.0.1:8322", "localhost:8322"},
+	}
+	return Deps{St: st, Cfg: cfg}, s
 }
 
 // remoteReq is a request from somewhere that is NOT this machine — the only

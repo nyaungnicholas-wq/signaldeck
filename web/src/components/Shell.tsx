@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { api, type Me } from "@/lib/api";
+import { api, isAuthError, type Me } from "@/lib/api";
 import FreshnessBadge from "@/components/FreshnessBadge";
 import OfflineBanner from "@/components/OfflineBanner";
 import CommandPalette, { CMDK_EVENT } from "@/components/CommandPalette";
@@ -13,6 +13,9 @@ import UxProbe from "@/components/UxProbe";
 import NextStep from "@/components/NextStep";
 import { useLabel } from "@/lib/labels";
 import { noteVisit } from "@/lib/goal";
+import { isPublicRoute } from "@/lib/publicRoutes";
+import PublicNav from "@/components/PublicNav";
+import HeaderTools from "@/components/HeaderTools";
 
 // Nav consolidation (2026-07-19, user decision): 9 tabs → 5 clean hubs.
 // HOME absorbs the old DASHBOARD + TODAY; WATCHLIST absorbs DECK + COMPARE;
@@ -25,7 +28,7 @@ import { noteVisit } from "@/lib/goal";
 type NavItem = { href: string; label: string; match: string[]; advanced?: true };
 
 const NAV: NavItem[] = [
-  { href: "/", label: "HOME", match: ["/", "/today"] },
+  { href: "/dashboard", label: "HOME", match: ["/dashboard", "/today"] },
   // MARKETS + SIGNALS merged into one MARKET hub. Legacy prefixes stay in
   // `match` so the hub highlights through the redirect.
   {
@@ -261,7 +264,7 @@ function AuthChip() {
         if (!alive) return;
         // Only a 401 is "logged out" — a daemon outage must not flip the
         // chip into a login prompt (first load stays "unknown" instead).
-        if (e instanceof Error && e.message.startsWith("API 401")) setMe(null);
+        if (isAuthError(e)) setMe(null);
       });
     return () => {
       alive = false;
@@ -294,6 +297,13 @@ function AuthChip() {
           // app chrome to a signed-out user. (The data itself was safe — the
           // daemon 401s — but the flash-of-dashboard is the exact thing AuthGate
           // exists to prevent.) A hard load remounts the gate and re-checks.
+          //
+          // The rule below arrived with eslint-config-next 16.3 and fires on
+          // exactly the behaviour this line wants. It is right in general and
+          // wrong here: router.push/replace is a soft navigation, which is the
+          // defect described above. Disabled on this one line, with the reason,
+          // rather than left as a standing warning nobody reads.
+          // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a hard load is required to remount AuthGate after logout
           .finally(() => window.location.assign("/login"));
       }}
       title={`signed in as ${me.username} — click to log out`}
@@ -419,18 +429,19 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   });
 
   // Public routes render minimal chrome (brand + footer) with no nav, freshness
-  // chip, toggles or daemon dot: /login (sign-in), /proof (the shareable
-  // public track-record + ledger page) and /accuracy (the registry verdicts).
-  // A nav full of links that bounce to /login, or a "updated 0s ago" chip,
-  // would both be misleading here.
-  if (pathname === "/login" || pathname === "/proof" || pathname === "/accuracy") {
+  // chip, toggles or daemon dot. A nav full of links that bounce, or an
+  // "updated 0s ago" chip, would both be misleading to a visitor with no
+  // session. The list is shared with AuthGate via @/lib/publicRoutes -- it was
+  // spelled separately here and drifted from that one.
+  if (isPublicRoute(pathname)) {
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-4 p-3 sm:p-4">
         <SkipLink />
-        <header className="panel px-4 py-3 sm:px-5">
+        <header className="panel flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
           <Link href="/" className="inline-flex shrink-0 items-center">
             <Brand />
           </Link>
+          <PublicNav pathname={pathname} />
         </header>
         <main id="main" className="flex flex-1 flex-col gap-4">
           {children}
@@ -458,7 +469,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         }}
       >
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <Link href="/" className="inline-flex shrink-0 items-center">
+          <Link href="/dashboard" className="inline-flex shrink-0 items-center">
             <Brand />
             <span
               className="ml-3 hidden text-[0.75rem] tracking-wider xl:inline"
@@ -509,12 +520,12 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             {/* Secondary controls: inline on desktop, folded into the menu panel
                 on mobile so the header row can't overflow a phone width (which
                 was pushing the menu off-canvas). */}
-            <div className="hidden items-center gap-2 lg:flex">
+            <div className="hidden lg:block"><HeaderTools label="status" dot={up == null ? "warn" : up ? "ok" : "bad"}>
               <FreshnessBadge />
               <ViewModeToggle />
               <ReadingModeToggle />
               <DaemonStatus up={up} />
-            </div>
+            </HeaderTools></div>
             {/* Mobile menu button */}
             <button
               type="button"

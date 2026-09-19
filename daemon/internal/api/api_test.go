@@ -25,6 +25,15 @@ func baseCfg() config.Config {
 		WebOrigins:  []string{"http://app.example"},
 		OpenSignup:  true,
 		PublicReads: true,
+		// A LOOPBACK, UNPUBLISHED deployment, stated rather than left to the
+		// zero value. PublicReads:true above is the localhost default, so that
+		// is already what these tests mean -- but two guards now ask
+		// Cfg.ReachablePrivately() rather than trusting request headers (the
+		// 451 raw-export guard and the licence check in secureWith), and with
+		// an empty HTTPAddr that answers "published", which is not what a unit
+		// test against a temp store is.
+		HTTPAddr:     "127.0.0.1:8322",
+		AllowedHosts: []string{"127.0.0.1:8322", "localhost:8322"},
 	}
 }
 
@@ -87,6 +96,7 @@ func newTestServer(t *testing.T, mutate func(*config.Config)) (*httptest.Server,
 	mux.HandleFunc("GET /api/trends", d.trends)
 	mux.HandleFunc("GET /api/agents", d.agents)
 	mux.HandleFunc("POST /api/subscribe", d.subscribe)
+	mux.HandleFunc("GET /api/hud", d.hud) // owner-only; see hudadmin_test.go
 	srv.Config.Handler = d.secure(mux)
 	srv.Start()
 	return srv, st, d

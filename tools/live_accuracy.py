@@ -129,15 +129,19 @@ def load_snapshot(path):
     if rows and reg.get("status") != "REFUSED":
         return reg, None
 
+    if reg.get("status") != "REFUSED":
+        die("registry has no publishable rows and is not marked REFUSED — refusing to render")
+    # A REFUSED envelope renders a refusal and NOTHING else (2026-09-08). The
+    # withheld grade nested under stale_last_registry is kept as the snapshot so
+    # --scan still bans its figures, but render() never prints it: it is the
+    # grade the gate refused, not a "last successful" one.
     stale = reg.get("stale_last_registry") or {}
-    if not (stale.get("rows") or []):
-        die("registry has no publishable rows and no last successful grade "
-            "under stale_last_registry — refusing to render an empty table")
     banner = {
         "status": reg.get("status", "REFUSED"),
         "reason": reg.get("refusal_reason", "unstated"),
         "age": reg.get("last_successful_grade_age", "unknown"),
-        "graded_at": stale.get("graded_at") or stale.get("generated") or "unknown",
+        "graded_at": stale.get("graded_at") or stale.get("generated") or reg.get("graded_at") or "unknown",
+        "refused_since": reg.get("refused_since") or "unknown",
     }
     return stale, banner
 
@@ -175,12 +179,23 @@ def render(snapshot, banner, registry_path):
     out.append("")
 
     if banner:
-        out.append("> **STALE — this is not a current grade.** The registry is `%s` "
-                   "(%s), and the last successful grade is %s old. The numbers below "
-                   "are that last successful grade, taken at %s. Nothing here has been "
-                   "re-graded since."
-                   % (banner["status"], banner["reason"], banner["age"], banner["graded_at"]))
-        out.append("")
+        # Refusal renders a refusal. No table, no rows, no multiplicity or
+        # survivorship figures: every one of those would be a number the gate
+        # declined to stand behind, and a "STALE" label does not un-refuse it.
+        return "\n".join([
+            BEGIN, "",
+            "Generated from `%s` (registry `%s` since %s) by `tools/live_accuracy.py`. "
+            "Do not edit by hand — edit the registry or the generator."
+            % (rel, banner["status"], banner["refused_since"]),
+            "",
+            "> **GRADING REFUSED — no accuracy figures are published.** Reason: %s. "
+            "The grade computed at %s (%s old) is withheld, not lost: it is retained inside "
+            "the registry under `stale_last_registry` for the historical record and is "
+            "deliberately not reprinted here, because a number the publication gate refused "
+            "to stand behind is not a live number. The in-app `/accuracy` page and "
+            "`/api/accuracy` apply the same gate from the same registry."
+            % (banner["reason"], banner["graded_at"], banner["age"]),
+            "", END]) + "\n"
 
     live = [r for r in snapshot.get("rows", []) if is_live(r)]
     out.append("### Live record")
@@ -191,11 +206,19 @@ def render(snapshot, banner, registry_path):
         null = r.get("null_prequential")
         if null is None:
             null = r.get("null_acc")
+        # An accuracy beside an em-dash null is the /proof defect in table
+        # form: persistence-style labels grade ~70% on inertia alone, so the
+        # bare percentage reads as skill precisely when no baseline exists to
+        # say otherwise. Withhold the number, not just the verdict. n and
+        # distinct days stay — they describe the sample, not skill.
+        acc = r.get("live_acc")
+        acc_cell = "withheld — no null" if (acc is not None and null is None) \
+            else pct(acc)
         out.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (
             cell(r.get("predictor", "?")),
             cell(r.get("band", "all")),
             "{:,}".format(r.get("live_n", 0)),
-            pct(r.get("live_acc")),
+            acc_cell,
             pct(null),
             pp(r.get("skill")),
             r.get("distinct_days", 0),
@@ -410,6 +433,22 @@ def scan(path, extra_literals=(), allow_whole_file_escape=True):
     # RECORDS a superseded one; both directories are unambiguously the latter.
     if "audits" in parts or "proofs" in parts:
         return []
+    # PREREGISTRATION.md is the same category, arrived at from the other
+    # direction: it is FROZEN. Its band tables are pre-registered claims with
+    # their own registration dates, and a frozen document cannot contain a
+    # CURRENT live-record figure by construction -- any match is a coincidence
+    # between a registered band and today's grade.
+    #
+    # It also cannot be marked. ops/accuracy-registry.sh hashes this file and
+    # compares it against the prereg-document record in the chain, so adding a
+    # SUPERSEDED-SNAPSHOT banner would change the digest and the publishing path
+    # would refuse with "UNREGISTERED PROTOCOL DOCUMENT" -- a failure that reads
+    # like tampering and is really just an edit. Exempting by path is the only
+    # move that does not either break the chain or leave this gate permanently
+    # red. Observed 2026-09-13: a fresh grade moved the current literal to
+    # 62.0%, which is the registered vol21 band from 2026-08-14.
+    if os.path.basename(path) == "PREREGISTRATION.md":
+        return []
     banned = list(SUPERSEDED_LITERALS) + list(extra_literals)
     hits = []
     inside = False
@@ -423,9 +462,36 @@ def scan(path, extra_literals=(), allow_whole_file_escape=True):
         if inside:
             continue
         for lit in banned:
-            if lit in line and not _historical_block(lines, n):
+            if _asserts_literal(line, lit) and not _historical_block(lines, n):
                 hits.append((n, lit))
     return hits
+
+
+def _asserts_literal(line, lit):
+    """Is `lit` present as a standalone figure, rather than inside another one?
+
+    The scan matched a bare substring, so a literal like "52.9%" also fired on
+    "-52.9%" -- a maximum DRAWDOWN in ledgers/EVIDENCE.md's sealed-holdout
+    table, which is not a live-accuracy claim and cannot be one: an accuracy is
+    never negative. Three of the gate's five failures on this branch were that,
+    and a permanently-red honesty gate is the kind nobody reads.
+
+    This NARROWS nothing about what the gate bans. A hand-typed accuracy figure
+    is still caught wherever it is written; only a match that was never the
+    figure -- one carrying a leading minus, or glued to more digits, so the
+    document is saying a different number -- stops counting.
+    """
+    start = 0
+    while True:
+        i = line.find(lit, start)
+        if i == -1:
+            return False
+        before = line[i - 1] if i > 0 else ""
+        # "-52.9%" is a drawdown; "152.9%" and "1.52.9%" are other numbers
+        # entirely. Either way the document is not asserting `lit`.
+        if before not in ("-", "−") and not before.isdigit() and before != ".":
+            return True
+        start = i + 1
 
 
 # Source files cannot carry a whole-file history banner — a package is not a

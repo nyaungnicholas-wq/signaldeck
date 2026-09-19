@@ -319,7 +319,11 @@ class TestPrequentialNull(unittest.TestCase):
         and score 0, day 17 sits on a tied prior (50), days 18-20 finally
         guess up (300) — 1100/2000 = 55%.
         """
-        days = [(100, 0)] * 8 + [(100, 100)] * 12  # chronological (n, ups)
+        # chronological (day, n, ups). The day index is carried so the null can
+        # fold on the same non-overlapping-block unit as the model it benchmarks;
+        # it does not affect the walk-forward guess sequence this test measures.
+        raw = [(100, 0)] * 8 + [(100, 100)] * 12
+        days = [(d, n, ups) for d, (n, ups) in enumerate(raw)]
         hindsight = max(12 / 20, 8 / 20)  # the old, clairvoyant null: 60%
         g = prequential_null(days)
         self.assertAlmostEqual(g["acc"], 1100 / 2000, places=9)
@@ -327,13 +331,13 @@ class TestPrequentialNull(unittest.TestCase):
 
     def test_day_one_is_a_coin_flip(self):
         """With no prior days there is no majority to guess — 0.5, not 1.0."""
-        g = prequential_null([(100, 100)])
+        g = prequential_null([(0, 100, 100)])
         self.assertAlmostEqual(g["acc"], 0.5, places=9)
 
     def test_stationary_majority_is_still_credited(self):
         """When up-days really do run 100% throughout, the null must converge
         on that rate — the change removes hindsight, not the majority null."""
-        g = prequential_null([(100, 100)] * 20)
+        g = prequential_null([(d, 100, 100) for d in range(20)])
         self.assertAlmostEqual(g["acc"], (50 + 19 * 100) / 2000, places=9)
 
     def test_grade_directional_publishes_an_out_of_sample_prequential_null(self):
@@ -720,6 +724,23 @@ class TestXsfactorSnapshotRoundTrip(unittest.TestCase):
                 hash_records("xsfactor_inputs.csv", ent["kind"], recs), ent["sha256"])
 
 
+# The 1d high-conviction count moved from "7, 2 degenerate" to "8, 3
+# degenerate" on 2026-08-23 with the DST stamp-slack fix (A21). The VERDICT
+# did not change -- it is still INSUFFICIENT DAYS with no interval -- and no
+# other row moved at all; only the counts inside that one explanatory string
+# did, because rows whose forward bar was previously skipped across the
+# spring-forward boundary are now found. Checked before editing: every
+# other (predictor, band) pair is byte-identical, and the one that changed
+# was compared with its parenthetical counts stripped to confirm the
+# verdict text itself is unchanged.
+# 2026-08-23, A22: the three 1w rows moved from asserting a verdict to
+# REFUSING one, when directional grading moved off call-day clusters and
+# onto non-overlapping forward-window blocks. "3/10 credible days of 21,
+# 18 degenerate" is the whole finding in one string: 21 call-day clusters
+# are 3 independent forward windows, and the FAILED verdict published
+# before rested on 18 that overlap. Checked before editing: no 1d row moved
+# at all, and every flip is from ASSERTING to WITHHOLDING -- the product
+# now claims less, never more.
 class TestFrozenSnapshotVerdicts(unittest.TestCase):
     """CI freeze of the prequential-only verdicts on the COMMITTED repro/ snapshot.
 
@@ -763,18 +784,18 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
         # credible-day floor in the re-cut snapshot, so an interval exists
         # and a verdict publishes where the freeze still said the row was
         # unjudgeable. DOCS_INDEX already publishes the same transition.
-            "FAILED — significantly worse than the naive baseline",
+            "INSUFFICIENT DAYS (3/10 credible days of 21, 18 degenerate) — no interval, so no verdict",
         ("prequential-majority (1w)", "all"):
         # Moved by EVIDENCE, not by the grader: this row crossed the 10
         # credible-day floor in the re-cut snapshot, so an interval exists
         # and a verdict publishes where the freeze still said the row was
         # unjudgeable. DOCS_INDEX already publishes the same transition.
-            "NO SKILL — indistinguishable from baseline",
+            "INSUFFICIENT DAYS (3/10 credible days of 19, 16 degenerate) — no interval, so no verdict",
         ("directional-ensemble (1d, high conviction)", "|p-0.5|>=0.15"):
-            "INSUFFICIENT DAYS (5/10 credible days of 7, 2 degenerate)"
+            "INSUFFICIENT DAYS (5/10 credible days of 8, 3 degenerate)"
             " — no interval, so no verdict",
         ("directional-ensemble (1w, high conviction)", "|p-0.5|>=0.15"):
-            "FAILED — significantly worse than the naive baseline",
+            "INSUFFICIENT DAYS (3/10 credible days of 17, 14 degenerate) — no interval, so no verdict",
         # The seven structural claims are backtests awaiting their first live
         # grade — PENDING until the horizon elapses, never a live verdict.
         # 2026-08-14, not 08-13. This row froze one day early because the

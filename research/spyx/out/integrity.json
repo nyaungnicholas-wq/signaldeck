@@ -1,0 +1,74 @@
+{
+  "window": {
+    "start": "1993-01-29",
+    "end": "2020-11-30"
+  },
+  "tickers": [
+    "SPY",
+    "EFA",
+    "QQQ",
+    "IWM",
+    "TLT",
+    "IEF",
+    "GLD",
+    "DBC",
+    "VNQ"
+  ],
+  "generated_utc": "2026-08-31T07:46:44.132502+00:00",
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "INFO",
+      "ticker": "SPY",
+      "detail": "Adjusted growth: 9.92% pa, Unadjusted growth: 7.89% pa, diff: 2.02 pp"
+    },
+    {
+      "id": "C6",
+      "severity": "MED",
+      "ticker": "SPY",
+      "detail": "Count=1; three largest gaps: [('2001-09-17', 7)]"
+    },
+    {
+      "id": "C6",
+      "severity": "MED",
+      "ticker": "EFA",
+      "detail": "Count=1; three largest gaps: [('2001-09-17', 7)]"
+    },
+    {
+      "id": "C6",
+      "severity": "MED",
+      "ticker": "QQQ",
+      "detail": "Count=1; three largest gaps: [('2001-09-17', 7)]"
+    },
+    {
+      "id": "C6",
+      "severity": "MED",
+      "ticker": "IWM",
+      "detail": "Count=1; three largest gaps: [('2001-09-17', 7)]"
+    },
+    {
+      "id": "C7",
+      "severity": "INFO",
+      "ticker": "ALL",
+      "detail": "First dates: SPY=1993-01-29, EFA=2001-08-27, QQQ=1999-03-10, IWM=2000-05-26, TLT=2002-07-30, IEF=2002-07-30, GLD=2004-11-18, DBC=2006-02-06, VNQ=2004-09-29; Combined first date=2006-02-06; Joined rows=3731 vs longest single=7011"
+    },
+    {
+      "id": "C8",
+      "severity": "INFO",
+      "ticker": "ALL",
+      "detail": "Min annual rf=-0.10%, Mean=2.32%, Max=6.22%; 7 sessions with a negative yield (real: 13-week bills traded negative in Mar 2020)"
+    },
+    {
+      "id": "C9",
+      "severity": "INFO",
+      "ticker": "ALL",
+      "detail": "First dates: SPY=1993-01-29, EFA=2001-08-27, QQQ=1999-03-10, IWM=2000-05-26, TLT=2002-07-30, IEF=2002-07-30, GLD=2004-11-18, DBC=2006-02-06, VNQ=2004-09-29; These instruments were selected in the present; all still exist today; a rule tested only on surviving liquid ETFs carries a survivorship bias that cannot be removed by any computation in this file."
+    },
+    {
+      "id": "C10",
+      "severity": "INFO",
+      "ticker": "ALL",
+      "detail": "Lag0=7.64%, Lag1=8.20%, Lag2=7.61%, Lag5=8.11%. A genuine effect degrades gently as lag increases while look-ahead contamination collapses immediately, and a lag-0 figure dramatically above lag-1 is the signature of contamination."
+    }
+  ]
+}

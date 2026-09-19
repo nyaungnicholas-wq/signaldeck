@@ -59,6 +59,22 @@ CREATE TABLE IF NOT EXISTS score_outcomes (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_outcomes_unresolved
   ON score_outcomes (resolved_at) WHERE resolved_at IS NULL;
+-- The RESOLVED side had no index at all, so the two reads that serve the
+-- published honesty numbers -- ResolvedOutcomes and ResolvedOutcomesIndependent,
+-- both `WHERE resolved_at IS NOT NULL AND horizon=? ORDER BY ts DESC LIMIT ?` --
+-- planned as SCAN score_outcomes + USE TEMP B-TREE FOR ORDER BY, reading all
+-- 7.07M rows and sorting them to return 5,000. /api/honesty is on the daemon's
+-- publicRoutes allowlist, so that read is anonymous-reachable on a published
+-- deployment.
+--
+-- Partial and column-ordered to match the query: seek on horizon, then walk ts
+-- backwards already in order. Measured 2026-09-13 on a 5.31 GB copy of the live
+-- database (6.29M resolved rows): build 3.0s, +0.10 GB on disk, plan becomes
+-- SEARCH score_outcomes USING INDEX idx_outcomes_resolved (horizon=?) with no
+-- temp b-tree, and the 5,000-row read goes 0.45s -> 0.014s. The build cost is
+-- paid once, at the first boot after this lands.
+CREATE INDEX IF NOT EXISTS idx_outcomes_resolved
+  ON score_outcomes (horizon, ts) WHERE resolved_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS expectancy (
   symbol_id  INTEGER NOT NULL,
@@ -83,6 +99,8 @@ CREATE TABLE IF NOT EXISTS insights (
   data      TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_insights_ts ON insights (ts DESC);
+-- RecentInsights(symbol_id) walked the whole table (0.18s per symbol page, 2026-09-08).
+CREATE INDEX IF NOT EXISTS idx_insights_symbol_ts ON insights (symbol_id, ts DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS worker_runs (
   id          INTEGER PRIMARY KEY,
@@ -411,6 +429,31 @@ CREATE INDEX IF NOT EXISTS idx_fundamentals_sym ON fundamentals (symbol_id, metr
 -- those are the mutable working state (outcomes get resolved later); this is the
 -- immutable proof of WHAT WAS CLAIMED, WHEN — the point being that it cannot be
 -- back-dated after the outcome is known.
+--
+-- MORE THAN ONE ENTRY PER (symbol_id, horizon, bar_ts) IS LEGAL, AND THE RULE
+-- FOR READING THEM IS: THE HIGHEST seq IS THE OPERATIVE CLAIM. Earlier entries
+-- for the same identity are SUPERSEDED claims, and they are kept on purpose --
+-- this table records every prediction the runner emitted, so deleting or
+-- refusing the second one would make the log assert that fewer claims were made
+-- than actually were. That is the opposite of what an audit trail is for.
+--
+-- There is deliberately NO UNIQUE constraint on the identity key. Adding one
+-- would not "clean up" anything: it cannot remove the rows already here (this
+-- table is write-once), and going forward it would silently drop the very
+-- second claim the ledger exists to record.
+--
+-- Measured 2026-09-13: 335 of ~499,600 entries are second-or-later claims for
+-- an identity (248 pre-epoch, 87 post-epoch), 15 of which disagree on cal_prob.
+-- The newest was appended 2026-08-04; none since. ops/check-grader-health.ps1
+-- counts them so a recurrence is noticed rather than accumulating quietly.
+--
+-- THE HONEST LIMIT, since the ordering rule does not remove it: `features`
+-- keys on (symbol_id, horizon, ts, version) and therefore keeps only the LATEST
+-- vector, so for a superseded entry the stored feature_hash can no longer be
+-- re-derived from persisted features. The chain itself is unaffected --
+-- VerifyLedger rehashes each row from its STORED feature_hash, so a duplicate
+-- breaks no link and intact stays true -- but an auditor re-deriving hashes
+-- from source data can only reproduce the operative entry of such a pair.
 CREATE TABLE IF NOT EXISTS prediction_ledger (
   seq           INTEGER PRIMARY KEY AUTOINCREMENT, -- monotonic append order (chain index)
   predicted_at  INTEGER NOT NULL,   -- wall-clock unix seconds when the entry was appended
@@ -1222,8 +1265,32 @@ CREATE TABLE IF NOT EXISTS confluence_outcomes (
   fwd_return  REAL,
   win         INTEGER,
   resolved_at INTEGER,
+  -- entry_ts is the bar the entry leg was ACTUALLY read from at grade time.
+  -- entry_px stays the audit record of the price at call time; entry_ts says
+  -- which bar the published return was computed against.
+  entry_ts    INTEGER,
+  -- The three prices the CONSTRAINED basis needs, recorded at grade time so a
+  -- public read never re-derives them from bars that may since have moved.
+  -- entry_close is the graded entry leg (entry_px is the call-time audit value
+  -- and may sit on a rescaled basis); exit_low/exit_high are the exit bar's
+  -- extremes, which is where a stop would actually have been hit.
+  entry_close REAL,
+  exit_low    REAL,
+  exit_high   REAL,
+  -- episode_ts is the ts of the FIRST outcome in this continuous setup episode
+  -- (same symbol, same direction, consecutive trading days). A setup that
+  -- persists for a week is ONE bet held for a week, not five independent ones;
+  -- keying the published population on episode_ts is what stops one sustained
+  -- move entering the mean once per calendar day. NULL = not yet classified.
+  episode_ts  INTEGER,
+  -- ungradable, when set, names why this row can never carry an honest return.
+  -- The row is KEPT (it is the audit record of a bet that was placed) but is
+  -- excluded from the resolver's queue and from every published population.
+  -- A NULL here means "gradable", not "graded".
+  ungradable  TEXT,
   PRIMARY KEY(symbol_id, ts, horizon)
 );
+CREATE INDEX IF NOT EXISTS idx_confl_out_episode ON confluence_outcomes(symbol_id, direction, ts);
 
 -- confluence_events: append-only "confluence setup" detections. day_bucket (the
 -- setup's UTC day) is the dedup key so a persisting setup becomes ONE event per
@@ -1454,7 +1521,24 @@ CREATE TABLE IF NOT EXISTS regime_outcomes (
   -- the loser is marked and the dedup index goes partial. The winner is the
   -- EARLIEST call of the trading day, which is exactly the row the INSERT OR
   -- IGNORE would have kept had the fold been right from the start.
-  superseded_by       INTEGER REFERENCES regime_outcomes(id)
+  superseded_by       INTEGER REFERENCES regime_outcomes(id),
+  -- UNGRADABLE (2026-08-27), when set, names why this row can NEVER carry an
+  -- honest grade. Same contract as confluence_outcomes.ungradable: the row is
+  -- kept for audit, excluded from the due queue, and COUNTED where it is
+  -- dropped, never silently retried.
+  --
+  -- The defect it closes: a due row is skipped when its symbol lacks enough
+  -- forward bars, with `continue // retried later`. For a symbol the universe
+  -- sweep has PRUNED, "later" never comes -- an inactive symbol stops receiving
+  -- bars, so the row can never reach its horizon and is retried forever.
+  -- Measured 2026-08-27: resolution had stalled for 31 days, 2,288 rows were
+  -- due, 2,267 of them on inactive symbols, and ZERO had enough forward bars.
+  -- regime-outcome-runner reported `ok ... resolved 0` on every run throughout.
+  --
+  -- That is a SURVIVORSHIP BIAS, not just a stuck worker: left alone, the
+  -- structural record can only ever grade symbols that stayed in the universe,
+  -- and the excluded ones are invisible rather than counted.
+  ungradable          TEXT
 );
 -- PARTIAL: only rows that still count are unique on the key. Superseded rows
 -- keep their frozen bytes and sit outside the constraint.
@@ -1500,6 +1584,38 @@ CREATE TABLE IF NOT EXISTS regime_outcome_quarantine_manifest (
   n_rows    INTEGER NOT NULL,
   frozen_ts INTEGER NOT NULL
 );
+
+-- ═══ VENDOR FLAT-PAD QUARANTINE ═══════════════════════════════════════════════
+-- Alpaca emits a synthetic session (open=high=low=close, volume 0) when the
+-- requested feed saw no trade, and both ingest paths store it verbatim. The
+-- result is long constant-price runs that are indistinguishable from a real
+-- series to anything that reads bars: SBNY (Signature Bank) carries 509 sessions
+-- of 70.00/70.00/70.00/70.00 volume 0 after the bank was seized, and all 509 sit
+-- in universe_membership as a live name printing exactly 0.0% return every day.
+--
+-- Rows move HERE rather than being deleted. A run that turns out to be real is
+-- restorable, the count is auditable, and no measurement silently changes shape
+-- because a repair removed rows nobody can inspect afterwards.
+--
+-- NOT keyed on delisted_at, deliberately: it does not bound the problem in
+-- either direction. SBNY's stamp sits at the END of its pad (so a
+-- day <= delisted_at filter ADMITS the whole run), and NVDQ has no stamp at all
+-- while carrying 1,208 padded sessions before its first real trade.
+CREATE TABLE IF NOT EXISTS bars_quarantine (
+  symbol_id      INTEGER NOT NULL,
+  tf             TEXT    NOT NULL,
+  ts             INTEGER NOT NULL,
+  open           REAL    NOT NULL,
+  high           REAL    NOT NULL,
+  low            REAL    NOT NULL,
+  close          REAL    NOT NULL,
+  volume         REAL    NOT NULL,
+  run_id         TEXT    NOT NULL,  -- the quarantine run that moved it
+  reason         TEXT    NOT NULL,
+  quarantined_at INTEGER NOT NULL,
+  PRIMARY KEY (symbol_id, tf, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_bars_quarantine_run ON bars_quarantine (run_id);
 
 -- ═══ REGIME-CALL POSTMORTEMS (credibility wave) ═══════════════════════════════
 -- One deterministic plain-English postmortem per HIGH-conviction (>=0.8) regime
@@ -2075,3 +2191,80 @@ CREATE TABLE IF NOT EXISTS hmm_regime_state (
   sd_low    REAL    NOT NULL,
   sd_high   REAL    NOT NULL
 );
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- WAITLIST (appended block). The ONLY thing an anonymous visitor can submit.
+-- There are no user accounts on the published deployment, so this is not a
+-- lightweight signup: it is an email and nothing else.
+--
+-- email is the PRIMARY KEY and is stored already lowercased and trimmed, so
+-- INSERT OR IGNORE gives idempotent de-duplication with no read-then-write
+-- race and no second index.
+--
+-- No IP address, no user agent, no referrer. They would be the only personal
+-- data on this box beyond the address itself, they are not needed to send an
+-- email, and rate limiting already happens upstream in the API middleware
+-- without persisting anything.
+CREATE TABLE IF NOT EXISTS waitlist (
+  email      TEXT PRIMARY KEY,
+  created_ts INTEGER NOT NULL,
+  source     TEXT NOT NULL DEFAULT ''
+);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- HAR REALIZED-VARIANCE FORECASTS (appended block).
+--
+-- One row per (symbol, call bar, horizon). Written by rv-forecast-runner at
+-- call time and RESOLVED later by rv-outcome-runner, following the same
+-- freeze-then-resolve shape as regime_outcomes.
+--
+-- null_rw and null_ewma are NOT NULL on purpose. Both nulls are computed at
+-- CALL time and frozen beside the forecast, exactly as regime_outcomes.
+-- naive_label is, because a null reconstructed after the outcome is known is
+-- hindsight -- and this repository already had to build a quarantine manifest
+-- once because that happened. A row with no null is not gradable and the
+-- schema refuses to store one.
+--
+-- horizon is part of the key because h=1 and h=5 are different estimands and
+-- both are registered. Storing them in one column without the horizon would
+-- silently pool two questions.
+CREATE TABLE IF NOT EXISTS rv_forecasts (
+  symbol_id   INTEGER NOT NULL REFERENCES symbols(id),
+  ts          INTEGER NOT NULL,   -- the CALL bar; the forecast covers ts+1..ts+horizon
+  horizon     INTEGER NOT NULL,
+  rv_hat      REAL    NOT NULL,   -- level forecast, retransformed
+  null_rw     REAL    NOT NULL,   -- frozen at call time
+  null_ewma   REAL    NOT NULL,   -- frozen at call time
+  beta0       REAL    NOT NULL,
+  beta_d      REAL    NOT NULL,
+  beta_w      REAL    NOT NULL,
+  beta_m      REAL    NOT NULL,
+  resid_var   REAL    NOT NULL,
+  n_train     INTEGER NOT NULL,
+  revision    TEXT    NOT NULL,   -- lineage.RevisionStamp of the writing binary
+  created_ts  INTEGER NOT NULL,
+  actual      REAL,               -- realised mean RV over the window; NULL until resolved
+  resolved_ts INTEGER,
+  ungradable  TEXT,               -- a STATED reason, never a silent drop
+  PRIMARY KEY (symbol_id, ts, horizon)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_rv_forecasts_open
+  ON rv_forecasts (horizon, ts) WHERE actual IS NULL AND ungradable IS NULL;
+
+-- REMOVED 2026-09-13: var_forecasts (and idx_var_forecasts_open). It was
+-- declared with the full freeze-and-grade shape of its live sibling rv_forecasts
+-- -- frozen null_hist, realized, breach, resolved_ts, ungradable -- and had zero
+-- rows, no writer and no reader. The only references to the name in the entire
+-- tree were its own two DDL statements here.
+--
+-- Removed rather than kept, because schema.sql is what an auditor reads as the
+-- record of what this system grades. A fully specified VaR/ES grading table with
+-- a breach column reads as evidence of a graded VaR product; there has never
+-- been one. Declaring the table for work that was never built made the schema
+-- claim more than the daemon does.
+--
+-- Not dropped from existing databases: the table is empty, so it costs nothing,
+-- and a DROP migration would be a production DDL change for no gain. The live
+-- database therefore keeps an empty, undeclared var_forecasts. Nothing reads it.
+-- If the VaR product is ever built, re-declare it then, beside its writer.

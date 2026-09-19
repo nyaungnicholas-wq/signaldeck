@@ -16,6 +16,7 @@ import {
   type Composite,
   type Market,
   type WatchRow,
+  isAuthError,
 } from "@/lib/api";
 
 export type CalHorizon = "1d" | "1w";
@@ -58,7 +59,7 @@ export function usePredictionWatchlist(retryTick: number) {
         .catch((e: unknown) => {
           if (!alive) return;
           const msg = e instanceof Error ? e.message : String(e);
-          if (!msg.includes("401")) {
+          if (!isAuthError(e)) {
             setWatchErr(msg);
             return;
           }

@@ -29,6 +29,12 @@ export function isLicenceRefusal(e: unknown): boolean {
   return e instanceof ApiError && e.status === 451;
 }
 
+/** 401 = no session. Test the STATUS: get()/post() replace "API 401: …" with the
+ *  daemon's own sentence, so every message-string 401 check was dead (2026-09-07). */
+export function isAuthError(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 401;
+}
+
 /** ONE user-facing wording for that refusal, shared by every chart surface.
  *  The daemon's own notice is written for an operator — it names the env var
  *  to flip — so it must not be shown to a reader; this is the reader's version.
@@ -229,6 +235,21 @@ const GET_NO_CACHE = ["/api/health"];
 const getCacheable = (path: string) =>
   typeof window !== "undefined" && !GET_NO_CACHE.some((p) => path.startsWith(p));
 
+// CACHING AND DEDUPING ARE DIFFERENT QUESTIONS, and conflating them cost
+// /api/health five round trips on a single page load.
+//
+// A no-cache path must never answer from a STALE result -- that is the whole
+// point of GET_NO_CACHE, because a liveness probe that replays an 8-second-old
+// "up" is worse than no probe. But two components asking the same question in
+// the SAME tick are not asking for a stale answer; they are asking for one
+// answer, and serving them from one in-flight request is exactly as fresh as
+// serving them from two. The old code gated both behaviours on getCacheable,
+// so opting out of staleness also opted out of sharing.
+//
+// Client-side only: on the server each render must own its own fetch, or two
+// concurrent requests would share a promise across users.
+const getDedupable = () => typeof window !== "undefined";
+
 /** Drop the whole GET cache after a mutation so the next read is fresh. */
 function bustGetCache(): void {
   getCache.clear();
@@ -239,6 +260,8 @@ async function get<T>(path: string): Promise<T> {
   if (getCacheable(path)) {
     const hit = getCache.get(path);
     if (hit && Date.now() - hit.ts < GET_TTL_MS) return hit.data as T;
+  }
+  if (getDedupable()) {
     const flying = inflightGet.get(path);
     if (flying) return flying as Promise<T>;
   }
@@ -285,7 +308,7 @@ async function get<T>(path: string): Promise<T> {
     if (getCacheable(path)) getCache.set(path, { ts: Date.now(), data });
     return data;
   })();
-  if (getCacheable(path)) {
+  if (getDedupable()) {
     inflightGet.set(path, fetchP as Promise<unknown>);
     // Clear the in-flight slot once settled (either outcome); the caller still
     // owns fetchP and handles any rejection itself.
@@ -317,7 +340,8 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   if (!res.ok) {
     if (res.status >= 500) recordFailure();
     const err = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(err?.error ?? `API ${res.status}`);
+    // ApiError, not Error: callers (login 429 countdown, auth checks) need the status.
+    throw new ApiError(res.status, err?.error ?? `API ${res.status}`);
   }
   recordSuccess();
   bustGetCache(); // a mutation just landed — force fresh reads next time
@@ -551,6 +575,10 @@ export const api = {
     }),
   portfolioClose: (id: number, symbol: string, market: Market) =>
     post<{ closed: number; exitPrice: number }>("/api/portfolio/close", { id, symbol, market }),
+  /** Manual simulated paper book: a market order filled against the newest 1m bar
+   *  with the same cost model as the flagship books (2026-09-07). */
+  paperOrder: (symbol: string, market: Market, side: "buy" | "sell", qty: number) =>
+    post<PaperOrderResult>("/api/paper/order", { symbol, market, side, qty }),
 
   // ── AI agents ──
   aiStatus: () => get<AIStatus>("/api/ai/status"),
@@ -1218,12 +1246,56 @@ export interface LedgerEntry {
   entryHash: string; // the chain link
 }
 
-/** Chain-integrity result: intact iff every recomputed hash matches. */
+/** What the daemon proved about the chain, and how far.
+ *
+ * THIS TYPE USED TO STOP AT `intact`, and that omission was the whole of the
+ * /proof overclaim. The daemon is careful: it returns `incremental`, an
+ * `intactMeans` string that says in as many words "NOT that they were written
+ * when they claim", and a `tamperEvidence` block giving the exact seq through
+ * which anteriority is proven. None of it survived the client boundary, so the
+ * page had `intact: true` and nothing else, and filled the gap with "recomputed
+ * just now, top to bottom ... can't be edited or back-dated after the fact" —
+ * a sentence contradicted by the very response that produced it.
+ *
+ * Keep these fields optional: an older daemon omits them, and absent must read
+ * as "unknown", never as "proven".
+ */
+export interface LedgerAnchoring {
+  wrote?: boolean;
+  reason?: string;
+  minInterval?: string;
+}
+
+export interface LedgerTamperEvidence {
+  /** Edits, deletions, reorderings and insertions break the recomputation. */
+  detectsEdits?: boolean;
+  /** True only while an anchor reproduces AND none are failing. */
+  detectsOperatorRegeneration?: boolean;
+  /** Newest seq covered by a reproducing anchor. null = nothing is proven. */
+  provenAnteriorThroughSeq?: number | null;
+  provenAnteriorThroughCount?: number | null;
+  /** Unix seconds of that anchor. */
+  provenAnteriorAsOf?: number | null;
+  anchorCount?: number;
+  /** "stored" compares against stored head hashes; ?full=1 re-derives payloads. */
+  anchorCheckMode?: string;
+  /** A signed anchor that STOPS reproducing is positive evidence of a rewrite. */
+  failingAnchors?: number;
+  firstFailingSeq?: number | null;
+  anchoring?: LedgerAnchoring;
+  claim?: string;
+}
+
 export interface LedgerVerifyResponse {
   intact: boolean;
   count: number; // rows examined
   head: string; // entry_hash of the last row ("" if empty)
   brokenAtSeq?: number; // first seq whose hash/linkage disagrees (tamper)
+  /** true = only the suffix since the last checkpoint was re-hashed. */
+  incremental?: boolean;
+  /** The daemon's own scoping of what `intact` does and does not establish. */
+  intactMeans?: string;
+  tamperEvidence?: LedgerTamperEvidence;
 }
 
 /** The committed ledger entries for one symbol+horizon (newest first). */
@@ -1237,6 +1309,54 @@ export interface LedgerResponse {
 /** Recompute + verify the whole prediction-ledger hash chain. */
 export function ledgerVerify() {
   return get<LedgerVerifyResponse>("/api/ledger/verify");
+}
+
+/** One frozen claim on the pre-registration chain. */
+export interface PreregRecord {
+  seq: number;
+  kind: string;
+  /** The frozen payload, verbatim, in whatever shape its kind registered.
+   *
+   * Typing this as a string is what took the whole Receipts page down: the
+   * daemon sends the stored JSON object, `spec.length` on an object is
+   * undefined, and the raw object reached React as a child. Each of the six
+   * registered kinds froze a different set of keys, so there is no one shape
+   * to declare here — read the keys off the value. */
+  spec?: unknown;
+  specHash?: string;
+  entryHash?: string;
+  prevHash?: string;
+  registeredOn?: string;
+  ts?: number;
+  /** True when the claim was frozen before anything it predicts could be graded.
+   *
+   * null when the comparison is not defined for this kind — the grading
+   * protocol, the retirement rule, the quarantine manifest, an experiment on
+   * its own timetable. Null is NOT EVALUATED and must never render as "no". */
+  beforeFirstGradable?: boolean | null;
+  note?: string;
+}
+
+/** GET /api/prereg — the registration chain, with the daemon's own explanation.
+ *
+ * It is in the PublicReads allowlist (security.go), so an anonymous visitor on a
+ * public deployment can read it. Nothing here is a number: it is what was
+ * claimed, when, and under which digest.
+ */
+export interface PreregResponse {
+  records: PreregRecord[];
+  chainVerified?: boolean;
+  brokenAtSeq?: number;
+  registeredBefore?: boolean;
+  firstGradableOn?: string;
+  whatThisIs?: string;
+  howToUseIt?: string;
+  whyChained?: string;
+  appendOnly?: string;
+}
+
+export function prereg() {
+  return get<PreregResponse>("/api/prereg");
 }
 
 /** The committed ledger entries for one symbol+horizon. */
@@ -1317,6 +1437,21 @@ export interface Money {
 }
 
 /** The full /api/paper payload for one simulated strategy. */
+/** POST /api/paper/order result (manual simulated book). */
+export interface PaperOrderResult {
+  ok: boolean;
+  strategy: string;
+  symbol: string;
+  market: Market;
+  // papertrade.Fill has no json tags: Go field names come through as-is.
+  fill: { Side: string; Qty: number; Px: number; Cost: number; CashDelta: number; Reason: string; Capped: boolean; UnfilledNotional: number };
+  quoteBarTs: number;
+  quoteAgeS: number;
+  cash: number;
+  equity: number;
+  label: string;
+}
+
 export interface PaperResponse {
   strategy: string;
   strategies: string[];
@@ -1328,11 +1463,76 @@ export interface PaperResponse {
   equity: PaperEquityPoint[];
   positions: PaperPosition[];
   trades: PaperTrade[];
-  summary: PaperSummary;
+  // `summary` is EITHER the costed summary OR a refusal. It becomes a refusal
+  // when the equity window spans the 2026-07-22 data-integrity boundary: before
+  // that instant 46 of 123 fills were back-dated by up to 22 days, so a total
+  // return, Sharpe, drawdown or win rate computed across it is derived partly
+  // from moves that never happened. Narrow with isRefused() before reading it.
+  summary: PaperSummary | RefusedStat;
   // MONEY SCOREBOARD: closed round-trips scored by expected profit; the caption
-  // reframes the whole page (win rate ≠ profit).
-  money: Money;
+  // reframes the whole page (win rate ≠ profit). NULL when it would span the
+  // boundary; moneyRefused then carries the reason.
+  money: Money | null;
+  moneyRefused?: RefusedStat;
   moneyCaption: string;
+  // The whole-history equity level, contaminated period included. It is what the
+  // simulated account is WORTH; it is not performance.
+  equityIsAccounting: boolean;
+  equityNote: string;
+  // The post-boundary record, rebased to an index. This is the only series that
+  // may be shown as this strategy's performance.
+  cleanPerformance: CleanPerformance;
+  /** PROCESS facts: is the simulator healthy-and-abstaining or stalled? (2026-09-07) */
+  process?: import("@/components/paper/SimulatorStatus").PaperProcess | null;
+  /** true when this payload is the caller's own manual market-order book. */
+  manual?: boolean;
+  integrityBoundary: {
+    ts: number;
+    utc: string;
+    spans: boolean;
+    label: string;
+    reason: string;
+  };
+  priceBasisAudit: {
+    staleBasisPositions: {
+      strategy: string;
+      symbolId: number;
+      symbol: string;
+      openedTs: number;
+      repairedAt: number;
+    }[];
+    clean: boolean;
+    note: string;
+  };
+}
+
+/** A statistic withheld because computing it would cross an integrity boundary. */
+export interface RefusedStat {
+  refused: true;
+  reason: string;
+  boundaryTs: number;
+  boundaryUtc: string;
+  useInstead: string;
+}
+
+/** Narrows PaperResponse["summary"]. */
+export function isRefused(x: PaperSummary | RefusedStat): x is RefusedStat {
+  return (x as RefusedStat)?.refused === true;
+}
+
+/** The post-integrity-boundary record, rebased to `indexBase`. */
+export interface CleanPerformance {
+  available: boolean;
+  reason?: string;
+  boundaryTs: number;
+  boundaryUtc: string;
+  indexBase: number;
+  marks: number;
+  fills: number;
+  index: PaperEquityPoint[];
+  summary: PaperSummary;
+  money: Money;
+  note: string;
 }
 
 /** Fetch the simulated paper-trading book for a strategy (default flagship-1d). */
@@ -1469,6 +1669,7 @@ export interface TrackByMarket {
 
 /** Compact costed summary of the linked simulated paper book (turnover/capacity). */
 export interface TrackPaperSummary {
+  note?: string;
   available: boolean;
   strategy?: string;
   totalReturn?: number;
@@ -1491,7 +1692,12 @@ export interface TrackRecord {
   rawN: number; // raw resolved prediction_outcomes rows (minute-cadence inflated)
   independentN: number; // distinct (symbol, UTC-day) resolutions — the real N
   minIndependentN: number; // gate floor
+  distinctDays?: number;
+  minDistinctDays?: number;
   gated: boolean; // true => headline numbers withheld (too few independent obs)
+  // WHY it is gated: "sample" | "refused" | "collapsed". The page showed a
+  // hardcoded "TOO EARLY TO GRADE" for all three; waiting clears only "sample".
+  gateReason?: "sample" | "refused" | "collapsed";
   live: true; // this IS a live forward record (prob frozen at prediction time)
   trackLabel: string;
   note?: string; // "not yet significant — k/threshold" when gated
@@ -1499,6 +1705,9 @@ export interface TrackRecord {
   winRate: number | null;
   winRateCI?: [number, number];
   baseRate?: number;
+  naiveBaseline?: number; // majority-direction guess, the honest benchmark for winRate
+  edgeVsNaive?: number;   // winRate - naiveBaseline; negative means no measured skill
+  accuracyNote?: string;
   brier: number | null;
   brierSkill?: number; // 1 - Brier/Brier_baserate; >0 beats the base-rate constant
   ic: number | null;
@@ -3067,12 +3276,48 @@ export interface ConfluenceTopResponse {
 export interface ConfluenceTrackResponse {
   available: boolean;
   live: boolean; // true — a real forward record
-  resolved: number; // independent (symbol, day) resolutions
+  resolved: number; // independent EPISODES (see `population`)
   gate: { minIndependent: number; distinctDays: number };
+  // `money` is the RAW basis: direction-adjusted, cost-netted, UNCONSTRAINED
+  // per-episode return. A normalised short is unbounded below (CELUW, a warrant
+  // that genuinely rose 533% in a day, contributes -533%), so this describes the
+  // SIGNAL. `constrained` is the one that describes an account.
   money: Money | null; // null while gated
   byDirection: { long: Money; short: Money } | null;
+  population?: {
+    basis: string;
+    episodes: number;
+    gradedRows: number;
+    repeatedRows: number;
+    note: string;
+  };
+  constrained?: {
+    all: ConfluenceConstrained;
+    long: ConfluenceConstrained;
+    short: ConfluenceConstrained;
+    note: string;
+    shortability: string;
+  };
   note: string; // gate countdown or the expectancy-not-winrate note
   caveat: string; // render verbatim
+}
+
+/** Account-level view of one confluence book, under explicit trading constraints. */
+export interface ConfluenceConstrained {
+  trades: number;
+  meanAccountContribution: number;
+  meanCapitalAtRisk: number;
+  totalAccountReturn: number;
+  daysScaled: number;
+  untradable: number;
+  untradablePct: number;
+  untradableWhy: Record<string, number>;
+  liquidated: number;
+  gappedThrough: number;
+  noPriceLevels: number;
+  shortUnverified: number;
+  shortTotal: number;
+  shortUnverifiedPct: number;
 }
 
 /** Fetch one symbol's transparent confluence assessment. */

@@ -20,7 +20,6 @@ package sentiment
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"time"
 
@@ -111,8 +110,10 @@ func completeFast(ctx context.Context, client llm.Client, sys string, msgs []llm
 //
 // It respects ctx: cancellation ends the loop and returns the count rated so
 // far with ctx.Err(). When the llm daily cap is reached (llm.ErrCapReached) it
-// stops early and returns the count so far with a nil error, so a run that hits
-// the cap is a normal partial success rather than a failure. A disabled client
+// stops early and returns the count so far WITH that error, so the caller can
+// report the cap as the reason the pass stopped (pipeline/data.go turns it into
+// an honest ok detail; until 2026-09-01 a nil here read as "nothing to tag").
+// A disabled client
 // yields "unrated" tags, which are still written back (leaving the headline in
 // the unrated state), so RunOnce is a harmless no-op-shaped pass when no key is
 // configured.
@@ -121,8 +122,8 @@ func completeFast(ctx context.Context, client llm.Client, sys string, msgs []llm
 // practical limit is burst-shaped (rapid-fire calls trip HTTP 429 around ~35
 // in a row), so a paced larger batch drains a backlog far faster than a small
 // burst without touching the burst limit. pace <= 0 means no delay.
-func RunOnce(ctx context.Context, client llm.Client, st *store.Store, batch int, pace time.Duration) (int, error) {
-	items, err := st.UnratedNews(ctx, batch)
+func RunOnce(ctx context.Context, client llm.Client, st *store.Store, batch int, pace time.Duration, minTs int64) (int, error) {
+	items, err := st.UnratedNews(ctx, batch, minTs)
 	if err != nil {
 		return 0, err
 	}
@@ -142,9 +143,10 @@ func RunOnce(ctx context.Context, client llm.Client, st *store.Store, batch int,
 		}
 		r, err := Tag(ctx, client, it.Headline)
 		if err != nil {
-			if errors.Is(err, llm.ErrCapReached) {
-				return rated, nil
-			}
+			// The cap is a budget, not a fault, but it is the CALLER's to
+			// report: returning nil here made a pass whose very first call was
+			// refused indistinguishable from "nothing left to tag" (19 such
+			// passes read as ok on 2026-09-01). The count still comes back.
 			return rated, err
 		}
 		if err := st.RateNews(ctx, it.ID, r.Sentiment, r.Score, r.Rationale); err != nil {

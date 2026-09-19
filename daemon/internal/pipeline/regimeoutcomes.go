@@ -39,6 +39,13 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/structregime"
 )
 
+// regimeAbandonMultiple is how many times its own horizon a due call may go
+// unresolvable before it is retired as UNGRADABLE. The due queue admits a row
+// at 1.45x its horizon, so 3x leaves a wide grace window: a symbol that is
+// merely slow, or that the sweep prunes and later re-admits, has ample time to
+// print the bars. Only rows that no plausible future bar can rescue are retired.
+const regimeAbandonMultiple = 3
+
 // regimePMConvictionFloor is the conviction at or above which a wrong resolved
 // call earns a postmortem — the "high conviction" band boundary.
 const regimePMConvictionFloor = 0.8
@@ -229,9 +236,39 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 		return "", err
 	}
 	resolved, misses, pms := 0, 0, 0
+	// abandoned counts rows retired as UNGRADABLE this pass — see
+	// regimeAbandonMultiple below. Reported, never silent.
+	abandoned := 0
+	// stuck counts due rows that could not be graded THIS pass for want of
+	// forward bars, whether or not they are old enough to retire.
+	//
+	// Retirement alone does not fix the defect E22 recorded. The complaint was
+	// SILENCE: this worker reported a bare `resolved 0` for 31 days while 2,288
+	// rows sat unresolvable. A 3x grace window is deliberately wide, so the
+	// oldest of those rows does not retire until 2026-09-18 -- three more weeks
+	// of the same silence if the count is not surfaced until then. Reporting the
+	// stuck total every pass makes the hole visible NOW, without retiring a
+	// single row early.
+	stuck := 0
+	// abandon marks a row that is so far past its horizon that no future bar can
+	// rescue it, and counts it. Returns true when the row was retired.
+	abandon := func(o store.RegimeOutcomeRow, reason string) bool {
+		if o.Ts+int64(o.HorizonDays)*regimeAbandonMultiple*86400 >= nowUnix {
+			return false // still inside the grace window — genuinely retry later
+		}
+		if err := w.St.MarkRegimeOutcomeUngradable(ctx, o.ID, reason); err != nil {
+			_ = w.St.InsertDQ(ctx, md.DQEvent{Ts: nowUnix, Kind: "regime_outcome_error",
+				Detail: fmt.Sprintf("mark ungradable %d: %v", o.ID, err)})
+			return false
+		}
+		abandoned++
+		return true
+	}
 	for _, o := range due {
 		sr := load(o.SymbolID, o.Ts-int64(volLookbackDays)*86400)
 		if sr == nil {
+			stuck++
+			abandon(o, "no bars available for the symbol")
 			continue
 		}
 		// call bar = last bar at or before the frozen call ts
@@ -239,7 +276,17 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 		// require enough NEWER daily bars: the calendar-day approximation alone
 		// must never grade against a window that hasn't printed yet.
 		if t < 0 || len(sr.closes)-1-t < o.HorizonDays {
-			continue // not enough forward bars yet — stays unresolved, retried later
+			// "retried later" is TRUE only while later can still arrive. For a
+			// symbol the universe sweep pruned it cannot: an inactive symbol
+			// stops receiving daily bars, so the row is short of its horizon
+			// forever. Measured 2026-08-27: 2,267 of 2,288 due rows sat on
+			// inactive symbols, none had enough bars, and the worker had
+			// reported ok/resolved 0 for 31 days. Past the grace window we
+			// retire the row WITH A REASON instead of retrying it forever —
+			// otherwise the structural record silently grades only survivors.
+			stuck++
+			abandon(o, "insufficient forward bars past the grace window (symbol likely left the universe)")
+			continue // still unresolved this pass either way
 		}
 		var res structregime.Resolution
 		var rok bool
@@ -254,10 +301,21 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 			// return index t-1 aligns to bar index t (ret i resolves at bar i+1)
 			res, rok = structregime.ResolveVol21At(barReturns2(sr.closes), t-1)
 		default:
-			continue // unknown kind (e.g. retired gapfill rows) — never guessed
+			// An unknown kind is a kind the ENGINE no longer has (retired gapfill
+			// rows). No future bar teaches it one, so this row is as permanently
+			// unresolvable as one whose symbol left the universe. Same treatment:
+			// retire it with a reason past the grace window rather than retry it
+			// forever. Still never GUESSED at.
+			abandon(o, "unknown regime kind (retired from the engine)")
+			continue
 		}
 		if !rok {
-			continue // degenerate window (tie / NaN median) — honest non-grade
+			// A degenerate window (tie / NaN median) is computed from a FIXED
+			// historical bar index, so re-running never changes the answer: this
+			// row is un-gradable permanently, not yet. Retiring it past the grace
+			// window keeps the honest non-grade AND stops the endless retry.
+			abandon(o, "degenerate resolution window (tie or NaN median)")
+			continue
 		}
 		correct := res.Actual == o.Regime
 		if err := w.St.ResolveRegimeOutcome(ctx, o.ID, res.Actual, correct, nowUnix); err != nil {
@@ -281,8 +339,8 @@ func (w *RegimeOutcomeWorker) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
-	summary := fmt.Sprintf("froze %d regime calls (%d without a naive baseline, %d abstained on a tied null), resolved %d (%d wrong, %d high-conviction postmortems)",
-		frozen, noNull, abstained, resolved, misses, pms)
+	summary := fmt.Sprintf("froze %d regime calls (%d without a naive baseline, %d abstained on a tied null), resolved %d (%d wrong, %d high-conviction postmortems), retired %d ungradable, %d due but stuck short of forward bars",
+		frozen, noNull, abstained, resolved, misses, pms, abandoned, stuck)
 	// HARD REFUSAL 2 — partial coverage is not a matched null. If any call in
 	// this pass was frozen without a baseline, the benchmark denominator is a
 	// self-selected subset of the rows the model is scored on. Resolution work

@@ -19,7 +19,7 @@
 | [PAIRS_TRADING.md](PAIRS_TRADING.md) | Nicholas Nyaung | 0.2.0 | 2026-07-25 | FROZEN | pre-survivorship-fix |
 | [PREDICTION_PROCESS.md](PREDICTION_PROCESS.md) | Nicholas Nyaung | 0.1.0 | 2026-08-03 | NOT_AUTHORITATIVE | pre-survivorship-fix |
 | [PREREGISTRATION.md](PREREGISTRATION.md) | Nicholas Nyaung | 1.0.0 | 2026-07-27 | ACTIVE | none |
-| [README.md](README.md) | Nicholas Nyaung | 0.2.0 | 2026-08-03 | FROZEN | none |
+| [README.md](README.md) | Nicholas Nyaung | 1.1.0 | 2026-09-08 | ACTIVE | none |
 | [RISK_POLICY.md](RISK_POLICY.md) | Nicholas Nyaung | 1.0.0 | 2026-08-04 | ACTIVE | none |
 | [ROOTCAUSE_COLLAPSE_2026-08-08.md](ROOTCAUSE_COLLAPSE_2026-08-08.md) | Nicholas Nyaung | 1.0.0 | 2026-08-08 | FROZEN | none |
 | [SHIP_READINESS.md](SHIP_READINESS.md) | Nicholas Nyaung | 0.2.0 | 2026-08-03 | FROZEN | none |

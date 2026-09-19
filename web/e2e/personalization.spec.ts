@@ -1,4 +1,5 @@
-import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import { loginAsSmokeUser } from "./smokeuser";
 
 // ─────────────────────────────────────────────────────────────────────────
 // PERSONALIZATION — the goal must actually change the page.
@@ -12,22 +13,6 @@ import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 // every reader the same thing.
 // ─────────────────────────────────────────────────────────────────────────
 
-const SMOKE_USER = "e2e-smoke";
-const SMOKE_PASS = "E2eSmoke!2026";
-
-async function loginAsSmokeUser(context: BrowserContext): Promise<void> {
-  const headers = { "X-Signaldeck": "1" };
-  const reg = await context.request.post("/api/auth/register", {
-    headers,
-    data: { username: SMOKE_USER, password: SMOKE_PASS },
-  });
-  if (reg.ok()) return;
-  const login = await context.request.post("/api/auth/login", {
-    headers,
-    data: { username: SMOKE_USER, password: SMOKE_PASS },
-  });
-  expect(login.ok(), `login as ${SMOKE_USER} failed: ${login.status()}`).toBe(true);
-}
 
 /** Click the goal banner's button for this goal and let the page settle. */
 async function chooseGoal(page: Page, title: string): Promise<void> {
@@ -51,7 +36,7 @@ test.describe("goal changes the page", () => {
   });
 
   test("dashboard reorders and folds by goal", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/dashboard");
     await expect(page.locator("[data-goal]")).toBeVisible();
 
     await chooseGoal(page, "I'm learning");
@@ -76,13 +61,24 @@ test.describe("goal changes the page", () => {
   });
 
   test("demoted panels still exist, they are only folded", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/dashboard");
     await chooseGoal(page, "I'm learning");
 
-    const details = page.locator("main details");
+    // Scoped to THE FOLD by its own summary copy, not to "any <details> in
+    // main". The bare selector was a strict-mode violation the moment the
+    // dashboard grew a second <details> — the grader refusal's "Full reason
+    // from the grader" expander — and this test has been failing on that
+    // ambiguity rather than on anything it guards. Both elements are correct
+    // product; the selector was the thing that was wrong.
+    //
+    // Same shape the "How to read this feed" assertion below already uses.
+    const details = page
+      .locator("main details")
+      .filter({ has: page.locator("summary", { hasText: /Show the rest of the dashboard/ }) });
     await expect(details).toBeVisible();
-    // The heatmap block is not on screen, but it IS in the document.
-    await expect(page.locator("main details [data-block='mood']")).toHaveCount(1);
+    // The heatmap block is not on screen, but it IS in the document — and it
+    // must be inside THE FOLD, which the unscoped locator never actually checked.
+    await expect(details.locator("[data-block='mood']")).toHaveCount(1);
   });
 
   test("market overview trims the screener for a learner and not for a tester", async ({

@@ -30,7 +30,7 @@ import (
 //   - No lookahead: prob is frozen at prediction time; only resolved rows count.
 //   - Independent-N: the minute-cadence pipeline can write MANY predictions per
 //     symbol per forward period that all resolve against the SAME move. We
-//     collapse to ONE observation per (symbol, UTC-day) keeping the LATEST
+//     collapse to ONE observation per (symbol, trading day) keeping the LATEST
 //     prediction that day before computing ANY skill number, so a handful of
 //     independent bets can't masquerade as thousands.
 //   - Cluster-robust intervals: deduplicating to one row per symbol-day removes
@@ -54,7 +54,7 @@ import (
 // day-count is the binding measure of time-series evidence.
 const trackMinDistinctDays = 10
 
-// trackMinIndependentN is the floor of independent (symbol, UTC-day) resolutions
+// trackMinIndependentN is the floor of independent (symbol, trading day) resolutions
 // below which a winrate/Brier/IC is noise, so we report no number and a plain
 // "not yet significant" note instead of a figure that overstates skill.
 const trackMinIndependentN = 30
@@ -130,7 +130,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	}
 	rawN := len(rows)
 
-	// Collapse to ONE independent observation per (symbol, UTC-day), keeping the
+	// Collapse to ONE independent observation per (symbol, trading day), keeping the
 	// LATEST prediction that day (rows are ts DESC, so the first seen per key is
 	// the latest). No skill number is computed on the raw, pseudo-replicated set.
 	seen := map[[2]int64]bool{}
@@ -164,6 +164,53 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	distinctDays := len(dayset)
 	gated := indepN < trackMinIndependentN || distinctDays < trackMinDistinctDays
 
+	// COLLAPSED CROSS-SECTIONS. The two floors above count evidence; they cannot
+	// see that the evidence is one market-wide call repeated per symbol. That is
+	// what CollapsedGradingWindow measures, and until now /api/accuracy was its
+	// ONLY caller — so the accuracy surface refused over a window while this one
+	// published over the very same days, and the five surfaces that read THIS
+	// payload (/proof, /lab/track-record, ProofStrip, the desk recommendation
+	// card, and the raw endpoint) showed skill numbers with nothing marking them.
+	// That is the "refused on one document, published on six" divergence this
+	// repo has already been bitten by, one endpoint out.
+	//
+	// FAIL OPEN on a read error, exactly as the HTTP handler does and as the
+	// gate's own doc requires: refusing on a transient database error would wedge
+	// publication shut on something that is not evidence.
+	// TWO conditions, not one. Verified live after the first attempt shipped with
+	// only the collapse gate and changed nothing: /api/accuracy refuses at
+	// reg.RefusedSince, which fires LONG BEFORE it reaches the collapse gate, and
+	// a refused grader writes rows: [] -- so CollapsedGradingWindow reads an empty
+	// set and correctly reports collapsed=false. Gating on the collapse alone
+	// therefore cannot fire in exactly the state that matters most, and
+	// /api/track-record went on publishing a win rate while /api/accuracy
+	// answered 503.
+	// gateReason names WHY the record is gated so a UI does not have to infer it
+	// from prose: "sample" (too few observations), "refused" (the grader refused)
+	// or "collapsed" (degenerate window). /lab/track-record showed a hardcoded
+	// "TOO EARLY TO GRADE" for all three, which reads as "wait a bit longer" for
+	// two conditions that waiting cannot clear.
+	gateReason := "sample"
+	var collapseReason string
+	if reg, rerr := loadRegistry(d.RegistryPath); rerr == nil {
+		// The grader's own refusal. If it will not stand behind its numbers,
+		// neither may a surface computed over the same graded window.
+		if reg.RefusedSince != nil && *reg.RefusedSince != "" {
+			gated = true
+			gateReason = "refused"
+			collapseReason = "the accuracy grader has REFUSED since " + *reg.RefusedSince +
+				" — figures over this graded window are withheld. The window is anchored to the " +
+				"survivorship epoch and does not roll forward, so this clears when the window is " +
+				"re-registered, not by waiting"
+		} else if reason, collapsed, cerr := d.collapsedGradingWindow(ctx, reg, d.now()); cerr == nil && collapsed {
+			// Healthy grader, unusable window: the rows exist and are one
+			// market-wide call repeated per symbol.
+			gated = true
+			gateReason = "collapsed"
+			collapseReason = reason
+		}
+	}
+
 	resp := map[string]any{
 		"horizon":         h,
 		"rawN":            rawN,
@@ -175,7 +222,8 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 			"skill unlocks only after both gates (independent obs AND distinct days), and every interval " +
 			"published here is then corrected by a MEASURED design effect with the day as the unit of " +
 			"resampling — see the 'cluster' block for the design effect, the effective N and the distinct-day count",
-		"gated": gated,
+		"gated":      gated,
+		"gateReason": gateReason,
 		// This IS a live forward record (calibrated prob frozen at prediction
 		// time, graded against realized bars) — but until it clears the gate it
 		// carries no claimable skill, so we still frame it honestly.
@@ -229,6 +277,13 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 		if indepN >= trackMinIndependentN && distinctDays < trackMinDistinctDays {
 			note = "not yet significant — " + strconv.Itoa(distinctDays) + "/" +
 				strconv.Itoa(trackMinDistinctDays) + " distinct market days (obs on one day share one market move)"
+		}
+		// A collapse outranks the sample-size note: the sample is large enough
+		// and is still not evidence, which is a different statement and the one
+		// a reader needs. Same reason string /api/accuracy refuses with, so the
+		// two surfaces cannot describe the same window differently.
+		if collapseReason != "" {
+			note = collapseReason
 		}
 		resp["note"] = note
 		// Sample-size facts only. A gated record may say HOW MUCH evidence it
@@ -291,7 +346,14 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	// predicting the observed up-rate.
 	base := upRate
 	brierRef := base * (1 - base) // Brier of the constant base-rate forecast
-	var brierSkill float64
+	// null, never 0. api/predict.go states the rule verbatim for the SAME
+	// statistic: "a zero skill score is a real verdict (exactly as good as
+	// the base rate) and must not be faked". brierRef <= 0 means the
+	// base-rate reference has zero variance -- every outcome resolved the
+	// same way -- so the skill is UNDEFINED, and shipping 0.0 published the
+	// most reassuring possible reading of a number nobody could compute.
+	// Two endpoints, one statistic, opposite behaviour.
+	var brierSkill any
 	if brierRef > 0 {
 		brierSkill = 1 - brier/brierRef
 	}
@@ -344,13 +406,18 @@ func (d Deps) paperSummaryForTrackRecord(ctx context.Context) map[string]any {
 	for i, p := range rawCurve {
 		curve[i] = papertrade.EquityPoint{Ts: p.Ts, Cash: p.Cash, PositionsValue: p.PositionsValue, Equity: p.Equity}
 	}
-	// Reuse the SAME round-trip reconstruction + summary the /api/paper handler
-	// uses, so the numbers here are identical to the /paper page (turnover in
-	// particular). This is the Stage-7 "turnover + capacity" surfacing.
-	closed, numFills, tradedNotional := reconstructRoundTrips(all)
-	sum := papertrade.Summarize(curve, closed, numFills, tradedNotional)
+	epochs, err := d.St.PaperEpochs(ctx, strategy)
+	if err != nil {
+		return map[string]any{"available": false, "note": "paper integrity information unavailable"}
+	}
+	clean := buildCleanPerformance(epochs, curve, all)
+	if !clean.Available {
+		return map[string]any{"available": false, "note": clean.Reason}
+	}
+	sum := clean.Summary
 	return map[string]any{
-		"available":   len(rawCurve) > 0,
+		"available":   true,
+		"note":        clean.Note,
 		"strategy":    strategy,
 		"totalReturn": sum.TotalReturn,
 		"maxDrawdown": sum.MaxDrawdown,
@@ -643,7 +710,7 @@ func (d Deps) registerTrackRecord(mux *http.ServeMux) {
 //
 // The independent-N gate used to be a dead-feeling "not yet significant"
 // notice. This block makes the WAIT itself visible: how many independent
-// (symbol, UTC-day) resolutions exist, how many remain to the threshold, and a
+// (symbol, trading day) resolutions exist, how many remain to the threshold, and a
 // LABELED ESTIMATE of when the gate clears — derived only from the measured
 // accrual of the last 7 days (distinct new symbol-days per NYSE trading day).
 // When nothing accrued recently the estimate is null and the payload says why:
@@ -658,7 +725,7 @@ const trackAccrualWindowDays = 7
 func (d Deps) trackGate(ctx context.Context, h md.Horizon, indepN int,
 	counts map[md.Horizon][2]int, countsErr error,
 ) map[string]any {
-	now := time.Now()
+	now := d.now()
 	since := now.Add(-trackAccrualWindowDays * 24 * time.Hour).Unix()
 
 	accr := map[md.Horizon]stStage2Accrual{}

@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"context"
+	"math"
+	"strings"
 	"testing"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -493,5 +495,184 @@ func TestPaperTrader_NoFillBarYetWaits(t *testing.T) {
 	}
 	if _, ok, _ := st.PaperPosition(ctx, "flagship-1d", sym.ID); ok {
 		t.Fatal("must not fill when no bar exists strictly after the prediction")
+	}
+}
+
+// TestPaperTrader_NeverFillsBehindTheBooksClock: a step transacts only inside the
+// window it advances over, (cursor.LastBarTs, asof]. A prediction left behind by a
+// starved stretch must NOT fill at a bar the book has already marched past.
+//
+// LatestPrediction returns the newest row with n_used > 0. While the 1d model is
+// retired most fresh rows carry n_used = 0, so the query resolves to a weeks-old
+// prediction whose next bar sits far behind the cursor. Before the fill-window
+// bound, the entry was booked at that old open while every decision input around
+// it — the return forecast, corrToBook, the riskgate book — was measured at asof,
+// and markPositions immediately marked it at the asof close. That booked the whole
+// intervening move as one step's P&L. It happened 46 times in the live book: fills
+// 94-102 all landed on 2026-07-20 immediately after fill 93 landed on 2026-08-11,
+// and flagship-1d equity printed 99,491.93 -> 103,218.71 -> 98,745.79 on what was
+// really a small loss.
+func TestPaperTrader_NeverFillsBehindTheBooksClock(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	aaa, _ := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
+	bbb, _ := st.UpsertSymbol(ctx, "BBB", md.Stocks, "")
+
+	// Step 1 — only days 1..3 exist. AAA carries a fresh day-2 prediction, fills
+	// at day 3's open, and drags the strategy cursor up to day 3.
+	early := [][3]float64{{1, 100, 101}, {2, 102, 103}, {3, 110, 111}}
+	seedDailyPx(t, st, aaa.ID, early)
+	seedDailyPx(t, st, bbb.ID, early)
+	seedPrediction(t, st, aaa.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, aaa.ID, md.H1d, 2*86400)
+
+	w := &PaperTrader{St: st}
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	cur, _, err := st.PaperCursor(ctx, "flagship-1d")
+	if err != nil {
+		t.Fatalf("cursor: %v", err)
+	}
+	if cur.LastBarTs != 3*86400 {
+		t.Fatalf("cursor=%d want day-3 (%d) after step 1", cur.LastBarTs, 3*86400)
+	}
+
+	// BBB's ONLY prediction is of the same day-2 vintage the cursor has passed.
+	seedPrediction(t, st, bbb.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, bbb.ID, md.H1d, 2*86400)
+
+	// Step 2 — the market runs on to day 12 at a much higher level, so a
+	// back-dated day-3 fill would show up as an enormous instant gain.
+	late := make([][3]float64, 0, 9)
+	for d := 4; d <= 12; d++ {
+		late = append(late, [3]float64{float64(d), 200, 201})
+	}
+	seedDailyPx(t, st, aaa.ID, late)
+	seedDailyPx(t, st, bbb.ID, late)
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+
+	trades, err := st.PaperTrades(ctx, "flagship-1d", 50)
+	if err != nil {
+		t.Fatalf("trades: %v", err)
+	}
+	for _, tr := range trades {
+		if tr.SymbolID == bbb.ID && tr.Ts <= 3*86400 {
+			t.Fatalf("BBB filled at ts=%d (day %d), at or behind the cursor at day 3: "+
+				"a back-dated fill books the day-3 -> day-12 move as instant P&L",
+				tr.Ts, tr.Ts/86400)
+		}
+	}
+}
+
+// A WANTED exit the execution model cannot price must be REPORTED, not dropped.
+//
+// planExit can decide a position must go — a stop, a target, an expiry, a
+// kill-switch flatten — and ExitLong can still refuse, because with no average
+// daily dollar volume impact and capacity are both unknowable. The old code did
+// a bare `continue`: the position stayed open past its own exit, nothing was
+// ledgered, no counter moved, and the worker reported a clean pass. The only
+// trace that a stop had fired and been dropped was that the position still
+// existed.
+//
+// Fixture: enter on liquid bars, then have the name's volume vanish (a halt or a
+// vendor outage — the live corpus has 24,863 such all-zero windows across 127
+// symbols) so advUSD returns 0 at the exit's fill bar.
+func TestPaperTrader_StrandedExitIsReportedNotSwallowed(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	seedDailyPx(t, st, sym.ID, [][3]float64{{1, 100, 100}, {2, 100, 100}, {3, 100, 100}})
+	seedPrediction(t, st, sym.ID, md.H1d, 2*86400, 0.90)
+	seedGoodForecast(t, st, sym.ID, md.H1d, 2*86400)
+
+	w := &PaperTrader{St: st}
+	if _, err := w.Run(ctx); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if _, held, _ := st.PaperPosition(ctx, "flagship-1d", sym.ID); !held {
+		t.Fatal("fixture broken: AAA should hold after pass 1")
+	}
+
+	// The name goes dark: every bar in the ADV window now carries zero volume,
+	// including the day-4 bar the exit would fill on.
+	dark := make([]md.Bar, 0, 4)
+	for d := int64(1); d <= 4; d++ {
+		dark = append(dark, md.Bar{
+			SymbolID: sym.ID, TF: md.TF1d, Ts: d * 86400,
+			Open: 100, High: 100.1, Low: 99.9, Close: 100, Volume: 0,
+		})
+	}
+	if err := st.UpsertBars(ctx, dark); err != nil {
+		t.Fatalf("seed zero-volume bars: %v", err)
+	}
+	seedPrediction(t, st, sym.ID, md.H1d, 3*86400, 0.05) // flip flat: the book wants out
+
+	status, err := w.Run(ctx)
+	if err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	if _, stillHeld, _ := st.PaperPosition(ctx, "flagship-1d", sym.ID); !stillHeld {
+		t.Fatal("fixture broken: ExitLong priced an exit with no ADV, so nothing was stranded")
+	}
+	if !strings.Contains(status, "STRANDED") {
+		t.Fatalf("a wanted exit was dropped silently; status=%q must report it as STRANDED", status)
+	}
+}
+
+// The ADV window must be the trailing bars AT OR BEFORE the fill, and a FULL
+// window — not whatever survives filtering the newest bars after the fact.
+//
+// advUSD used to fetch the newest advLookbackBars*2 bars with LastBars, which
+// takes a count and no timestamp, then drop any that postdated the fill in Go.
+// Whenever the fill was not the newest bar, most of the fetched window was
+// discarded and the estimate was built from too few bars — shrinking ADV, which
+// shrinks capacity and can refuse the fill outright.
+func TestAdvUSD_WindowEndsAtTheFillAndStaysFull(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "AAA", md.Stocks, "")
+
+	// Day 1-10 thin, 11-30 thicker, 31-60 enormous. The fill is at day 30, so the
+	// enormous tail must not participate — and the window must still reach back
+	// far enough to include the thin days, which is what proves it is full.
+	bars := make([]md.Bar, 0, 60)
+	for d := int64(1); d <= 60; d++ {
+		vol := 1000.0
+		switch {
+		case d > 30:
+			vol = 999_999
+		case d > 10:
+			vol = 3000
+		}
+		bars = append(bars, md.Bar{
+			SymbolID: sym.ID, TF: md.TF1d, Ts: d * 86400,
+			Open: 100, High: 100.1, Low: 99.9, Close: 100, Volume: vol,
+		})
+	}
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	w := &PaperTrader{St: st}
+	got, err := w.advUSD(ctx, sym.ID, 30*86400)
+	if err != nil {
+		t.Fatalf("advUSD: %v", err)
+	}
+
+	// A full 21-bar window ending at day 30 is day 10 (vol 1000) plus days 11-30
+	// (vol 3000), at close 100.
+	// At day 30's OPEN, only days 9-29 have completed: two thin days and
+	// nineteen thicker days. Day 30's close and volume are future information.
+	want := 100 * (2*1000.0 + 19*3000.0) / 21
+	if math.Abs(got-want) > 1 {
+		t.Fatalf("advUSD=%.2f want %.2f — a truncated window (the old behaviour "+
+			"kept only days 19-30 and gave %.2f), or the future leaked in", got, want, 100*3000.0)
 	}
 }

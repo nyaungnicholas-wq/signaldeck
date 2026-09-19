@@ -259,6 +259,22 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// structural-grading wave (2026-08-27): a reason a regime call can never be
+	// graded. Rides the same pragma-guarded ALTER path; pre-existing rows keep
+	// NULL, which reads as "still gradeable", so adding it changes no verdict.
+	// See schema.sql for the survivorship defect it closes.
+	for _, col := range []struct{ name, ddl string }{
+		{"ungradable", `ALTER TABLE regime_outcomes ADD COLUMN ungradable TEXT`},
+	} {
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('regime_outcomes') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
 	// leg-audit wave: the blend's WEIGHTS and the tier that supplied them.
 	// predictions.components already records what each leg said; nothing
 	// recorded how much each was believed, so a retired ensemble could not be
@@ -338,6 +354,50 @@ func migrate(w *sql.DB) error {
 				return err
 			}
 		}
+	}
+	// confluence pseudo-replication wave (2026-08-21): two columns that make the
+	// published confluence population defensible.
+	//
+	// entry_ts records WHICH bar the graded return's entry leg came from. The
+	// resolver read the entry with BarAtOrBefore and no lower bound, so a symbol
+	// with no bar in its own bucket day was graded against a bar from days
+	// earlier — and because the forward read has the same fallback, three
+	// calendar buckets could resolve to ONE (entry, exit) pair. RNWWW booked the
+	// identical +93.33% move on 2026-07-17, 07-18 and 07-19: one price
+	// observation entering the mean three times as three "independent bets".
+	//
+	// episode_ts groups consecutive same-direction days into ONE episode. A setup
+	// that persists is one position held, not one new bet per day.
+	for _, col := range []struct{ name, ddl string }{
+		{"entry_ts", `ALTER TABLE confluence_outcomes ADD COLUMN entry_ts INTEGER`},
+		{"episode_ts", `ALTER TABLE confluence_outcomes ADD COLUMN episode_ts INTEGER`},
+		// The CONSTRAINED basis needs price LEVELS, not just the ratio: a
+		// tradable-minimum test cannot be run on a return. These are stamped by
+		// the resolver, which already holds both bars, so the public read costs
+		// no extra lookups and cannot drift if a bar is later revised.
+		{"entry_close", `ALTER TABLE confluence_outcomes ADD COLUMN entry_close REAL`},
+		{"exit_low", `ALTER TABLE confluence_outcomes ADD COLUMN exit_low REAL`},
+		{"exit_high", `ALTER TABLE confluence_outcomes ADD COLUMN exit_high REAL`},
+		// Rows that cannot be graded honestly, kept as audit and excluded from
+		// both the resolver queue and every published population. Without the
+		// queue exclusion the resolver would re-examine them on every pass and,
+		// because it selects ORDER BY ts LIMIT 1500, the oldest ungradable rows
+		// would permanently crowd out genuinely pending ones.
+		{"ungradable", `ALTER TABLE confluence_outcomes ADD COLUMN ungradable TEXT`},
+	} {
+		if err := w.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info('confluence_outcomes') WHERE name=?`, col.name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := w.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := w.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_confl_out_episode ON confluence_outcomes(symbol_id, direction, ts)`); err != nil {
+		return err
 	}
 	// multiplicity wave: the corrected divisor a loop hypothesis cleared. Live
 	// DBs already hold rows from before the loop fed PriorSearches, and those
@@ -666,6 +726,11 @@ func (s *Store) ReaderClone(maxConns int) (*Store, error) {
 // Close closes the database. A ReaderClone closes only its own read pool — the
 // write connection belongs to the parent Store.
 func (s *Store) Close() error {
+	// Fold the WAL into the main file on a clean stop (shutdown docs promised
+	// this; until 2026-09-07 only the storage-governor checkpointed). Best-effort.
+	if !s.borrowedWriter {
+		_, _ = s.w.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	}
 	err := s.db.Close()
 	if s.borrowedWriter {
 		return err
@@ -738,6 +803,10 @@ func (s *Store) GetSymbolByID(ctx context.Context, id int64) (md.Symbol, error) 
 func (s *Store) ListSymbols(ctx context.Context, activeOnly bool) ([]md.Symbol, error) {
 	q := `SELECT id, symbol, market, name, active, added_at, stream FROM symbols`
 	if activeOnly {
+		// Delisted names stay in this set on purpose: the dq-auditor must keep
+		// alarming on a delisted symbol that is still held or has unresolved
+		// outcomes (TestDQAuditorSkipsDelistedButNotHeldOrGraded). Scorers guard
+		// staleness themselves (signal-runner skips stocks with no bar in 10d).
 		q += ` WHERE active=1`
 	}
 	q += ` ORDER BY market, symbol`
@@ -1384,6 +1453,28 @@ func (s *Store) RecentWorkerRuns(ctx context.Context, limit int) ([]md.WorkerRun
 // that was actually spent, which makes the bar easier to clear the longer the
 // logs rotate — the exact opposite of the monotonicity the ledger claims.
 // Refusals and same-day skips ("skip — …") took no look and stay prunable.
+// ProvenanceWorker writes rows that OUTLIVE its own run record, so its
+// history is kept far deeper than the 20-row floor.
+//
+// The 20-row floor is a liveness floor, not a provenance one: it answers "is
+// this worker running?". For a 10-minute worker it is 3.3 hours, and measured
+// 2026-09-13 the high-cadence workers really do retain only ~3.7 hours, so a
+// forecast made yesterday could not be tied to the run that produced it.
+//
+// prediction-runner is the case that matters: every predictions row and every
+// prediction_ledger entry comes from one of its passes. The ledger's `revision`
+// column already pins WHICH CODE produced a row, which is the stronger claim
+// and is unaffected by any of this; what was missing is the operational half --
+// when the pass ran, what it reported, whether it was degraded.
+//
+// Cheap, precisely because it is narrow: at a 10-minute cadence 5000 rows is
+// about 34 days for this one worker, against a table that currently holds 3276
+// rows in total.
+const ProvenanceWorker = "prediction-runner"
+
+// ProvenanceRunsKept is the per-worker depth for ProvenanceWorker.
+const ProvenanceRunsKept = 5000
+
 func (s *Store) PruneWorkerRuns(ctx context.Context, keep int) error {
 	_, err := s.w.ExecContext(ctx, `
 		DELETE FROM worker_runs WHERE id NOT IN
@@ -1393,7 +1484,13 @@ func (s *Store) PruneWorkerRuns(ctx context.Context, keep int) error {
 		     SELECT id, ROW_NUMBER() OVER
 		       (PARTITION BY worker ORDER BY started_at DESC, id DESC) AS rn
 		     FROM worker_runs) WHERE rn <= 20)
-		AND NOT (worker='research-loop' AND detail LIKE 'searched a%')`, keep)
+		AND id NOT IN
+		  (SELECT id FROM (
+		     SELECT id, ROW_NUMBER() OVER
+		       (PARTITION BY worker ORDER BY started_at DESC, id DESC) AS rn
+		     FROM worker_runs WHERE worker = ?) WHERE rn <= ?)
+		AND NOT (worker='research-loop' AND detail LIKE 'searched a%')`,
+		keep, ProvenanceWorker, ProvenanceRunsKept)
 	return err
 }
 
@@ -1433,6 +1530,36 @@ func (s *Store) RecentDQ(ctx context.Context, limit int) ([]md.DQEvent, error) {
 }
 
 // BarCount returns row count + span for coverage reporting.
+// SessionBarCounts counts bars per New York session date (UTC day index of ts-18000) since `since`.
+func (s *Store) SessionBarCounts(ctx context.Context, symbolID int64, tf md.Timeframe, since int64) (map[int64]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT (ts - 18000) / 86400, COUNT(*) FROM bars WHERE symbol_id=? AND tf=? AND ts>=? GROUP BY 1`, symbolID, tf, since)
+	if err != nil {
+		return nil, err
+	}
+	//nolint:errcheck
+	defer rows.Close()
+	counts := make(map[int64]int)
+	for rows.Next() {
+		var dayIdx int64
+		var c int
+		if err := rows.Scan(&dayIdx, &c); err != nil {
+			return nil, err
+		}
+		counts[dayIdx] = c
+	}
+	return counts, rows.Err()
+}
+
+// DBSizeBytes is the main database file size as SQLite sees it (page_count x page_size), the number the storage budget in ops/ is measured against.
+func (s *Store) DBSizeBytes(ctx context.Context) (int64, error) {
+	var size int64
+	err := s.db.QueryRowContext(ctx, `SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()`).Scan(&size)
+	if err != nil {
+		return 0, err
+	}
+	return size, nil
+}
+
 func (s *Store) BarCount(ctx context.Context, symbolID int64, tf md.Timeframe) (n int64, minTs, maxTs int64, err error) {
 	var mn, mx sql.NullInt64
 	err = s.db.QueryRowContext(ctx,
@@ -1699,4 +1826,23 @@ func (s *Store) WALCheckpointTruncate(ctx context.Context) (WALCheckpointResult,
 func (s *Store) Vacuum(ctx context.Context) error {
 	_, err := s.w.ExecContext(ctx, `VACUUM`)
 	return err
+}
+
+// ReclaimableBytes is how much a VACUUM could actually return to the
+// filesystem: freelist_count x page_size.
+//
+// It exists because file SIZE is the wrong question. A VACUUM rewrites the
+// whole file but can only hand back FREE pages, so a large database with no
+// free pages costs a full rewrite and reclaims nothing. Both pragmas are read
+// from the header, so this stays cheap on a multi-GB file. Read pool: it takes
+// no write lock.
+func (s *Store) ReclaimableBytes(ctx context.Context) (int64, error) {
+	var freeCount, pageSize int64
+	if err := s.db.QueryRowContext(ctx, `PRAGMA freelist_count`).Scan(&freeCount); err != nil {
+		return 0, fmt.Errorf("freelist_count: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
+		return 0, fmt.Errorf("page_size: %w", err)
+	}
+	return freeCount * pageSize, nil
 }
