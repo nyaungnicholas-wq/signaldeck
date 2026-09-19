@@ -20,7 +20,6 @@ set -u
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DOMAIN="gui/$(id -u)"
-LA="$HOME/Library/LaunchAgents"
 DAEMON="com.signaldeck.daemon"
 TUNNEL="com.signaldeck.tunnel"
 WEB="com.signaldeck.web"
