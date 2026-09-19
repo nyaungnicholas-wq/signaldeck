@@ -4,12 +4,19 @@
 Says, per horizon, what the gate is judging and what it decided, so the answer
 does not depend on getting a shell one-liner's quoting right.
 """
-import json, sqlite3, sys, datetime as dt
+import json, os, sqlite3, sys, datetime as dt
 
 FLOOR = 0.05  # ensemble.MinCrossSectionSpread
 MIN_EVIDENCE_N = 30  # pipeline.xsGateMinEvidenceN
 
-con = sqlite3.connect("file:data/signaldeck.db?mode=ro", uri=True, timeout=60)
+# Resolve the database from THIS FILE's location, not the working directory:
+# the check is run from wherever the operator happens to be standing, and a
+# relative path made it fail the first time it was used from a home directory.
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB = os.path.join(REPO, "data", "signaldeck.db")
+if not os.path.exists(DB):
+    sys.exit("no database at " + DB)
+con = sqlite3.connect("file:" + DB.replace("\\", "/") + "?mode=ro", uri=True, timeout=60)
 con.execute("PRAGMA busy_timeout=60000")
 now = dt.datetime.now(dt.timezone.utc)
 today = now.strftime("%Y-%m-%d")
