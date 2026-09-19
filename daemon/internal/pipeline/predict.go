@@ -37,6 +37,54 @@ type crossSectionRecord struct {
 
 const crossSectionMetaPrefix = "crosssection:"
 
+// xsGateMinEvidenceN is the fewest emitted probabilities a stored cross-section
+// must carry before the gate will act on it. Below this the record describes a
+// thin pass rather than a cross-section, and acting on one is how the gate was
+// silently disarmed on 2026-08-08 (n=12 on a 329-symbol day, where the distinct
+// rule needed only 6). Deliberately above ensemble.MinDistinctFloor: that floor
+// decides when a cross-section is too small to be HARMFUL, this one decides when
+// it is too small to be EVIDENCE, and the second question needs the larger n.
+const xsGateMinEvidenceN = 30
+
+// xsGateDecision is the WHOLE gate decision in one place, so the tests exercise
+// what the runner runs instead of a copy of it.
+//
+// That distinction is not theoretical here. internal/pipeline/crosssectiongate_test.go
+// mirrored a "rec.Day >= today" rule and stayed GREEN long after the runner had
+// stopped using it and moved to reading the predictions table -- the tests were
+// describing a design nothing executed. A gate whose tests cannot drift from it
+// is worth more than a gate with more tests.
+//
+// The rule the day stamp used to enforce -- never judge the sweep currently being
+// written -- is preserved, but by SEQUENCING rather than by a date: the runner
+// loads this record before the symbol loop and saves the new one after it, so a
+// pass always reads the PREVIOUS pass and can never read its own. Enforcing it
+// with "must be stamped a prior day" is what made the gate able to fire only
+// once per UTC day, because saveCrossSection stamps TODAY at the end of pass one
+// and every later pass of that day then short-circuited.
+func xsGateDecision(rec *crossSectionRecord, today, yesterday string) (gate bool, reason string) {
+	if rec == nil {
+		// Cold start: nothing has measured this horizon yet, and a cold start
+		// must not be indistinguishable from a collapse.
+		return false, ""
+	}
+	if rec.Day != today && rec.Day != yesterday {
+		// Older than yesterday means the runner was down. That record describes a
+		// market that is no longer the one being forecast, so it is not evidence
+		// -- the same answer as a cold start, for the same reason.
+		return false, ""
+	}
+	if rec.N < xsGateMinEvidenceN {
+		// Too thin to describe a cross-section, so not evidence in either
+		// direction. See xsGateMinEvidenceN.
+		return false, ""
+	}
+	if ok, r := rec.Usable(); !ok {
+		return true, r
+	}
+	return false, ""
+}
+
 func loadCrossSection(ctx context.Context, st *store.Store, h md.Horizon) (*crossSectionRecord, error) {
 	raw, err := st.GetMeta(ctx, crossSectionMetaPrefix+string(h))
 	if err != nil || raw == "" {
@@ -593,67 +641,72 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// an empty table there is nothing to measure and the pass publishes: a cold
 	// start must not be indistinguishable from a collapse.
 	today := time.Now().UTC().Format("2006-01-02")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 	gated := map[md.Horizon]string{}
 	for _, h := range predHorizons {
-		// MEASURED FROM THE TABLE, NOT FROM A STORED SAMPLE.
+		// MEASURED ON THIS HORIZON'S OWN LAST PASS, NOT ON A PRIOR DAY'S TABLE.
 		//
-		// This used to read a meta record that saveCrossSection overwrote once
-		// per pass, so the gate judged a whole day from whatever the LAST pass
-		// of that day happened to emit. Measured 2026-08-08 the record read
-		// n=12 on a 329-symbol day: the distinct rule then needs only 6, and
-		// the spread cleared its floor by 0.00002. A thin pass silently
-		// disarmed the gate, and the collapses of 08-06 and 08-07 — both of
-		// which the spread rule catches on the real cross-section — published.
+		// The previous implementation walked back up to five days for the most
+		// recent day that PUBLISHED and gated today on that. Measured 2026-09-19
+		// it was doing the opposite of its job, for two compounding reasons.
 		//
-		// The prior day is COMPLETE, so reading it from the table carries none
-		// of the risk the one-pass record existed to avoid (a gate judging the
-		// sweep it is producing), while measuring the whole cross-section
-		// instead of a sample of it.
-		// A STORE ERROR IS NOT A CLEAN CROSS-SECTION. `continue` here means "do
-		// not gate", i.e. publish, and both reads used to fold their error into a
-		// benign data shape -- so a contended pool on a day whose cross-section
-		// HAD collapsed published the whole day ungated, with no log and no dq
-		// event. The justifying comment below only ever covered the benign half.
-		// THE PRIOR DAY IS DERIVED, NOT READ BACK FROM THE RECORD WE JUST WROTE.
+		// WRONG POPULATION. The cadence split (universecadence.go) means the hot
+		// set runs every pass while the broad universe runs on its own schedule,
+		// so "the last day that published" is usually the ~325-symbol hot set.
+		// That set is genuinely flat -- p95-p05 of 0.0158, ninety percent of its
+		// mass inside a 1.6pp band -- and its verdict was then applied to the
+		// ~1030-symbol broad-universe sweep, whose spread is 0.175-0.202, four
+		// times over the floor. Good cross-sections were withheld on a stale
+		// verdict about a different population.
 		//
-		// This loaded the meta record and skipped when rec.Day >= today. But
-		// saveCrossSection stamps that record with TODAY at the end of every
-		// pass, and runProbs is populated even for a gated horizon, so the
-		// stamp landed on pass one and every later pass of the day short-
-		// circuited: the gate could fire ONCE per UTC day, at whatever hour the
-		// first pass ran, and the remaining ~137 passes -- the entire 09:30-16:00
-		// ET session -- published ungated. A six-day collapse withheld six
-		// passes out of roughly 830. The one gating pass logged a warning, which
-		// reads exactly like the gate working.
+		// SELF-SEALING. Withholding writes no published rows, so the walk-back
+		// re-read the same stale day for five days; then it found nothing,
+		// treated that as a cold start and published UNGATED -- publishing
+		// precisely the flat day it should have gated. A six-day limit cycle:
+		// 09-08 published, 09-09..13 withheld, 09-14 published, 09-15..19
+		// withheld. Eight days in nine were discarded and the day that survived
+		// was the one bad day. Counterfactual in
+		// research/forecastplan/audit_withheld_counterfactual.py: ~4,098 gradeable
+		// observations over 6-7 dispersed days were destroyed to keep one flat
+		// 325-symbol day.
 		//
-		// Walking back from today finds the most recent day that actually
-		// published, so weekends and holidays are skipped by data rather than by
-		// arithmetic, and the answer no longer depends on our own write.
-		var probs []float64
-		priorDay := ""
-		for back := 1; back <= 5 && priorDay == ""; back++ {
-			cand := time.Now().UTC().AddDate(0, 0, -back).Format("2006-01-02")
-			got, perr := w.St.PublishedCrossSection(ctx, string(h), cand)
-			if perr != nil {
-				w.gateReadFailed(ctx, h, "published cross-section unreadable for "+cand, perr)
-				break
-			}
-			if len(got) > 0 {
-				priorDay, probs = cand, got
-			}
-		}
-		if priorDay == "" {
-			// Nothing published in the last five days is a cold start, not a
-			// collapse; a cold start must not be indistinguishable from one.
+		// The record saveCrossSection writes at the end of every pass is the
+		// right evidence and was already being written: it is THIS horizon's own
+		// cross-section, built from runProbs, which is appended BEFORE the gated
+		// check so a withheld pass still reports its shape. That makes the
+		// refusal self-releasing -- the first pass whose cross-section recovers
+		// reopens the horizon on the next pass, with no latch and no ungated
+		// escape -- and it compares like with like, ten minutes stale instead of
+		// five days.
+		//
+		// KNOWN CEILING, stated rather than engineered around. The record is the
+		// last pass's, and the cadence split means the population changes at the
+		// session boundary: during market hours the broad universe runs every
+		// 10-minute pass, so populations do not alternate within a session, but
+		// the first pass after open is judged on the last pass before it, which
+		// was hot-set only. That costs at most one pass per boundary and
+		// self-releases on the next one. Keying the record per population would
+		// remove it; that is not worth the extra state for one pass.
+		//
+		// The reason this moved to the table in the first place was a THIN pass
+		// silently disarming the gate (2026-08-08: n=12 on a 329-symbol day,
+		// where the distinct rule then needed only 6). That is handled here
+		// explicitly by xsGateMinEvidenceN rather than by reading a different
+		// population: a pass too thin to describe a cross-section is not evidence
+		// in either direction. At worst one degenerate pass publishes before the
+		// next pass gates it, against a ten-minute cadence.
+		rec, rerr := loadCrossSection(ctx, w.St, h)
+		if rerr != nil {
+			// A STORE ERROR IS NOT A CLEAN CROSS-SECTION. Publishing ungated on
+			// an unreadable read is exactly the fail-open this gate refuses
+			// elsewhere; say so loudly rather than folding it into a benign shape.
+			w.gateReadFailed(ctx, h, "cross-section record unreadable", rerr)
 			continue
 		}
-		rec := &crossSectionRecord{Day: priorDay}
-		measured := ensemble.MeasureCrossSection(probs)
-		if ok, reason := measured.Usable(); !ok {
-			rec.CrossSection = measured
+		if doGate, reason := xsGateDecision(rec, today, yesterday); doGate {
 			gated[h] = reason
 			slog.Warn("cross-section gate: refusing to publish this horizon",
-				"horizon", h, "priorDay", rec.Day, "reason", reason,
+				"horizon", h, "evidenceDay", rec.Day, "reason", reason,
 				"n", rec.N, "distinct", rec.Distinct, "spread", rec.Spread,
 				"agreement", rec.Agreement)
 		}

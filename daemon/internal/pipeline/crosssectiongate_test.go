@@ -44,16 +44,18 @@ func TestGateReleasesAfterTheCrossSectionRecovers(t *testing.T) {
 	today := time.Now().UTC().Format("2006-01-02")
 	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
 
-	// gatesNow mirrors the runner's decision: only a record stamped with a PRIOR
-	// day may gate.
+	// gatesNow CALLS THE RUNNER'S OWN DECISION rather than mirroring it. It used
+	// to mirror it, with a "rec.Day >= today" rule, and stayed green for weeks
+	// after the runner had stopped using that rule and moved to reading the
+	// predictions table -- these tests were describing a design nothing executed.
+	// Sharing xsGateDecision is what makes that drift impossible.
 	gatesNow := func() (bool, string) {
 		t.Helper()
 		rec, err := loadCrossSection(ctx, st, h)
-		if err != nil || rec == nil || rec.Day == "" || rec.Day >= today {
-			return false, "no prior-day record"
+		if err != nil {
+			t.Fatalf("load: %v", err)
 		}
-		ok, reason := rec.Usable()
-		return !ok, reason
+		return xsGateDecision(rec, today, yesterday)
 	}
 
 	// Nothing recorded yet: a cold start must not read as a collapse.
@@ -80,34 +82,77 @@ func TestGateReleasesAfterTheCrossSectionRecovers(t *testing.T) {
 	}
 }
 
-// A record stamped today must never gate: it describes the sweep currently being
-// written, and judging that would make the gate a function of its own output.
-func TestTodaysRecordCannotGate(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "gate.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close() //nolint:errcheck
-	ctx := context.Background()
-	h := md.Horizon("1w")
+// SUPERSEDED SPEC, kept deliberately as the explanation of why it changed.
+//
+// This used to be TestTodaysRecordCannotGate, asserting that a record stamped
+// today may never gate, "because it describes the sweep currently being written
+// and judging that would make the gate a function of its own output".
+//
+// The PROPERTY is right and is still enforced. The MECHANISM was wrong. The
+// runner loads the record before the symbol loop and saves the new one after it,
+// so a pass always reads the PREVIOUS pass and can never read its own --
+// sequencing already guarantees it. Enforcing it with the date instead is what
+// made the gate able to fire only ONCE PER UTC DAY: saveCrossSection stamps
+// TODAY at the end of pass one, so every later pass that day short-circuited and
+// roughly 137 passes per session published ungated. A six-day collapse withheld
+// six passes out of about 830 while logging a warning that read like the gate
+// working.
+//
+// So today's record MUST be able to gate, and this pins that.
+func TestTodaysRecordCanGate(t *testing.T) {
 	today := time.Now().UTC().Format("2006-01-02")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	rec := &crossSectionRecord{Day: today, CrossSection: ensemble.MeasureCrossSection(vec(300, 1, 0.47, 0.47))}
+	gate, reason := xsGateDecision(rec, today, yesterday)
+	if !gate {
+		t.Fatal("a degenerate record stamped TODAY must gate — the previous rule let it through, which is how the gate fired once per day")
+	}
+	if reason == "" {
+		t.Fatal("a refusal must carry a reason")
+	}
+}
 
-	// Maximally degenerate, stamped TODAY.
-	saveCrossSection(ctx, st, h, today, ensemble.MeasureCrossSection(vec(300, 1, 0.47, 0.47)))
-	rec, err := loadCrossSection(ctx, st, h)
-	if err != nil || rec == nil {
-		t.Fatalf("record must round-trip, got %v %v", rec, err)
+// A pass too thin to describe a cross-section is not evidence in EITHER
+// direction. Measured 2026-08-08: a record of n=12 on a 329-symbol day, where
+// the distinct rule then needed only 6, silently DISARMED the gate and the
+// collapses of 08-06 and 08-07 published. Reading a different population was the
+// wrong cure; refusing to treat a thin pass as evidence is the right one.
+func TestThinRecordIsNotEvidence(t *testing.T) {
+	today := time.Now().UTC().Format("2006-01-02")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	// Maximally degenerate but far too thin to describe a cross-section.
+	rec := &crossSectionRecord{Day: today, CrossSection: ensemble.MeasureCrossSection(vec(xsGateMinEvidenceN-1, 1, 0.47, 0.47))}
+	if gate, _ := xsGateDecision(rec, today, yesterday); gate {
+		t.Fatalf("a record of n=%d must not gate — too thin to be evidence", xsGateMinEvidenceN-1)
 	}
-	if rec.Day < today {
-		t.Fatalf("stamped %q, want today %q", rec.Day, today)
+	// One more symbol and the same shape IS evidence, so the floor is a floor and
+	// not an accidental always-off.
+	rec.CrossSection = ensemble.MeasureCrossSection(vec(xsGateMinEvidenceN, 1, 0.47, 0.47))
+	if gate, _ := xsGateDecision(rec, today, yesterday); !gate {
+		t.Fatalf("a record of n=%d must gate — otherwise the floor disables the gate entirely", xsGateMinEvidenceN)
 	}
-	if ok, _ := rec.Usable(); ok {
-		t.Fatal("fixture should be degenerate — the point is that the DAY guard, not Usable(), spares it")
+}
+
+// A record older than yesterday means the runner was DOWN. It describes a market
+// that is no longer the one being forecast, so it is not evidence -- the same
+// answer as a cold start. Without this, a stale record gates a restarted fleet
+// indefinitely, which is the latch this gate must never have.
+func TestStaleRecordIsNotEvidence(t *testing.T) {
+	today := time.Now().UTC().Format("2006-01-02")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	old := time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02")
+	rec := &crossSectionRecord{Day: old, CrossSection: ensemble.MeasureCrossSection(vec(329, 1, 0.47, 0.47))}
+	if gate, _ := xsGateDecision(rec, today, yesterday); gate {
+		t.Fatal("a record older than yesterday must not gate — the runner was down, that is not evidence")
 	}
-	// The runner's guard is rec.Day >= today, so this record cannot gate despite
-	// being unusable.
-	if rec.Day < today {
-		t.Fatal("today's record must be excluded by the day guard")
+}
+
+// Cold start must not read as a collapse.
+func TestNilRecordIsColdStart(t *testing.T) {
+	today := time.Now().UTC().Format("2006-01-02")
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	if gate, _ := xsGateDecision(nil, today, yesterday); gate {
+		t.Fatal("no record at all must not gate — a cold start is not a collapse")
 	}
 }
 
