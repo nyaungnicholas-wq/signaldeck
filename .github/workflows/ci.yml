@@ -464,6 +464,7 @@ jobs:
         run: |
           bash ops/test-no-bare-pkill.sh
           bash ops/test-lib-portable.sh
+          bash ops/test-offsite-newest-tag.sh
 
   docs-gate:
     runs-on: ubuntu-latest

@@ -108,9 +108,26 @@ gh_offsite_prune() {
 # gh_offsite_newest_tag REPO
 # Prints newest backup-* tag or nothing.
 gh_offsite_newest_tag() {
-    local repo="$1"
-    gh release list --repo "$repo" --limit 200 --json tagName,createdAt \
-        --jq '.[] | select(.tagName|startswith("backup-")) | "\(.createdAt) \(.tagName)"' 2>>"${LOG:-/dev/null}" | sort -r | head -n1 | awk '{print $2}'
+    local repo="$1" tag n
+    # Newest release that actually CARRIES a .db.gz, not simply the newest tag.
+    # A failed upload leaves the release behind with zero assets -- observed
+    # 2026-09-17, HTTP 500 from uploads.github.com after the release had already
+    # been created -- and `gh release download` on an assetless release exits 1
+    # with "no assets to download". Selecting it therefore broke every restore
+    # for a whole day while a good backup sat in the release directly below it.
+    # The skip belongs here, not in each caller: restore-rehearsal.sh and
+    # gh_offsite_download_newest both route through this one function.
+    while read -r tag; do
+        [ -z "$tag" ] && continue
+        n=$(gh release view "$tag" --repo "$repo" --json assets \
+            --jq '[.assets[].name | select(endswith(".db.gz"))] | length' 2>>"${LOG:-/dev/null}")
+        if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+            printf '%s\n' "$tag"
+            return 0
+        fi
+    done < <(gh release list --repo "$repo" --limit 200 --json tagName,createdAt \
+        --jq '.[] | select(.tagName|startswith("backup-")) | "\(.createdAt) \(.tagName)"' 2>>"${LOG:-/dev/null}" | sort -r | awk '{print $2}')
+    return 0
 }
 
 # gh_offsite_download_newest REPO DESTDIR
