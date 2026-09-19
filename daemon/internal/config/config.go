@@ -440,40 +440,26 @@ func loopbackOnly(addr string) bool {
 	return strings.HasPrefix(host, "127.")
 }
 
-// tunnelAgentPaths are the LaunchAgents that expose this daemon through a
-// reverse tunnel. Their mere PRESENCE is the signal: a launchd-managed tunnel
-// can start at any moment without the daemon being restarted or reconfigured,
-// so a default that is only correct while the tunnel happens to be down is not
-// a default, it is a race.
-// Only INSTALLED agents count, so every entry must be an absolute path to a
-// machine-specific location. "ops/com.signaldeck.tunnel.plist" used to head this
-// list: a relative path to a file committed to the repo, which os.Stat found in
-// every checkout on every machine, forever. tunnelConfigured() was therefore a
-// constant rather than a signal, and the entry below was unreachable — the loop
-// returned true before reaching it. It failed closed, so nothing was exposed,
-// but a repo file says nothing about whether THIS machine publishes the daemon.
-// An operator running a tunnel this list does not know about still has
+// tunnelConfigured reports whether this daemon is published beyond loopback.
+//
+// It used to ALSO stat $HOME/Library/LaunchAgents/com.signaldeck.tunnel.plist,
+// on the reasoning that a launchd-managed tunnel can start at any moment, so a
+// default that is only correct while the tunnel happens to be down is a race
+// rather than a default. That reasoning was right; the mechanism rotted twice.
+// First the list was headed by a RELATIVE repo path, which os.Stat found in
+// every checkout on every machine forever, making this function a constant
+// rather than a signal. Then the fix - an absolute $HOME path - became a
+// constant FALSE the day this machine moved to Windows, where that path can
+// never exist. The check was removed on 2026-09-19 along with the plists
+// themselves: it could no longer confirm anything on any machine this code
+// runs on, and a signal that cannot fire is worse than none, because the next
+// reader trusts it to mean what it says.
+//
+// What remains is the signal that needs no per-OS knowledge: serving a host you
+// cannot reach from loopback IS publication, on every platform and every tunnel
+// implementation. An operator running a tunnel this cannot see still has
 // SIGNALDECK_ASSUME_TUNNEL.
-// HOME is not a Windows environment variable, so os.ExpandEnv("$HOME/...")
-// expanded to nothing there and left a bare "/Library/LaunchAgents/..." — not
-// absolute on Windows, which is a path this machine can never hold. It also
-// meant the value differed by SHELL: git-bash exports a path-converted HOME and
-// PowerShell exports none, so the same check passed from one terminal and failed
-// from the other. os.UserHomeDir reads USERPROFILE on Windows and HOME elsewhere.
-var tunnelAgentPaths = func() []string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return nil // unknown home — no agent can be confirmed, so fail closed
-	}
-	return []string{
-		filepath.Join(home, "Library", "LaunchAgents", "com.signaldeck.tunnel.plist"),
-	}
-}()
-
-// tunnelConfigured reports whether a reverse-tunnel LaunchAgent exists on this
-// machine. Overridable by SIGNALDECK_ASSUME_TUNNEL for testing and for an
-// operator running a tunnel this list does not know about — set it to true, and
-// the defaults close.
+//
 // allowedHosts is the RESOLVED allowlist string (already through pick, so it
 // includes values set in daemon/.env — which is exactly where the ngrok
 // hostname lives; reading os.Getenv here would have missed it).
@@ -481,30 +467,13 @@ func tunnelConfigured(allowedHosts string) bool {
 	if v := strings.TrimSpace(os.Getenv("SIGNALDECK_ASSUME_TUNNEL")); v != "" {
 		return v == "1" || strings.EqualFold(v, "true")
 	}
-	// A non-loopback entry in the operator's OWN host allowlist is the signal
-	// that needs no per-OS knowledge, and it is the one that was missing.
-	//
-	// tunnelAgentPaths below can only ever confirm a macOS LaunchAgent. When
-	// this machine moved to Windows that check became a constant false — so
-	// reachablePrivately() answered "private" while daemon/.env allowlisted
-	// `spearfish-dwindle-module.ngrok-free.dev`, and PublicReads/OpenSignup
-	// both defaulted OPEN on a box one `ngrok start` away from being served to
-	// the internet. The A9 fix from the 2026-07-26 re-audit was correct and
-	// silently un-fixed itself by changing operating system.
-	//
-	// Serving a host you cannot reach from loopback IS publication, on every
-	// platform and every tunnel implementation. Deriving it from the allowlist
-	// cannot rot the way a hardcoded path does.
+	// A9 (2026-07-26 re-audit): reachablePrivately() once answered "private"
+	// while daemon/.env allowlisted `spearfish-dwindle-module.ngrok-free.dev`,
+	// so PublicReads/OpenSignup both defaulted OPEN on a box one `ngrok start`
+	// away from being served to the internet. Deriving publication from the
+	// operator's own allowlist cannot rot the way a hardcoded path does.
 	for _, h := range splitList(allowedHosts) {
 		if h != "" && !loopbackOnly(h) {
-			return true
-		}
-	}
-	for _, p := range tunnelAgentPaths {
-		if p == "" {
-			continue
-		}
-		if _, err := os.Stat(p); err == nil {
 			return true
 		}
 	}
