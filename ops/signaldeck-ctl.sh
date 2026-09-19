@@ -19,7 +19,6 @@
 set -u
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-DOMAIN="gui/$(id -u)"
 DAEMON="com.signaldeck.daemon"
 TUNNEL="com.signaldeck.tunnel"
 WEB="com.signaldeck.web"
@@ -174,12 +173,8 @@ build_from_head() {
   return 0
 }
 running() {
-  if command -v launchctl >/dev/null 2>&1; then
-    launchctl print "$DOMAIN/$1" 2>/dev/null | awk -F'= ' '/[^a-z]pid = /{print $2; exit}'
-    return
-  fi
-  # Windows: report the daemon's own pid rather than the task's, since that is
-  # what every caller here actually wants to know.
+  # Report the daemon's own pid rather than the task's, since that is what every
+  # caller here actually wants to know.
   case "$1" in
     *.daemon) sd_is_running signaldeckd && echo "up" ;;
     # The PORT, not the process name. `sd_is_running node` matched any node on
@@ -295,24 +290,17 @@ case "${1:-status}" in
     ;;
   status)
     for s in "$DAEMON" "$TUNNEL" "$WEB"; do
-      if command -v launchctl >/dev/null 2>&1; then
-        if launchctl print "$DOMAIN/$s" >/dev/null 2>&1; then
-          p="$(running "$s")"
-          [ -n "$p" ] && echo "$s: running (pid $p)" || echo "$s: loaded-idle (stopped)"
-        else
-          echo "$s: not loaded"
-        fi
-      elif schtasks //Query //TN "$(sd_task_name "$s")" >/dev/null 2>&1; then
+      if schtasks //Query //TN "$(sd_task_name "$s")" >/dev/null 2>&1; then
         [ -n "$(running "$s")" ] && echo "$s: running" || echo "$s: registered-idle (stopped)"
       elif [ "$s" = "$TUNNEL" ]; then
-        # OFF BY CHOICE (Nicholas, 2026-08-11), not a misconfiguration. The old
-        # message pointed at install-windows-tasks.ps1, which SKIPS this task by
-        # design (it requires a .sh in ProgramArguments and the plist names the
-        # ngrok binary directly), so following that advice changed nothing and
-        # made a deliberate state look broken.
-        echo "$s: not registered — OFF by choice (webhooks only; ops/TUNNEL_RESTORE_RUNBOOK.md to enable)"
+        # OFF BY CHOICE (Nicholas, 2026-08-11), not a misconfiguration - but the
+        # advice changed on 2026-09-19. install-windows-tasks.ps1 used to SKIP
+        # this task by design, so pointing at it changed nothing; the tunnel is
+        # now a managed definition in ops/tasks/, so -Install really does
+        # register it once ngrok has an authtoken.
+        echo "$s: not registered — OFF by choice (webhooks only; ngrok config add-authtoken, then ops/install-windows-tasks.ps1 -Install elevated)"
       else
-        echo "$s: no scheduled task — run ops/install-windows-tasks.ps1"
+        echo "$s: no scheduled task — run ops/install-windows-tasks.ps1 -Install (elevated)"
       fi
     done
     ;;

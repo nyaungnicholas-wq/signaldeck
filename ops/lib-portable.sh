@@ -302,15 +302,6 @@ sd_titlecase() {
 # because //Run returns 1 for both "no such task" and "task exists but refused"
 # (measured), and those are not the same problem.
 sd_svc_start() {
-  if command -v launchctl >/dev/null 2>&1; then
-    local plist="$HOME/Library/LaunchAgents/$1.plist"
-    [ -f "$plist" ] || return 2
-    launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null
-    # bootstrap fails when already loaded, which is fine; kickstart is the
-    # operation whose status actually says whether the job is running.
-    launchctl kickstart "gui/$(id -u)/$1" >/dev/null 2>&1 || return 1
-    return 0
-  fi
   local task
   task="$(sd_task_name "$1")"
   schtasks //Query //TN "$task" >/dev/null 2>&1 || return 2
@@ -319,10 +310,6 @@ sd_svc_start() {
 }
 
 sd_svc_stop() {
-  if command -v launchctl >/dev/null 2>&1; then
-    launchctl kill TERM "gui/$(id -u)/$1" 2>/dev/null
-    return 0
-  fi
   # /End stops what the task launched; it is the Scheduled Task equivalent of
   # SIGTERM to the job, and the daemon's own signal handler does the draining.
   #
