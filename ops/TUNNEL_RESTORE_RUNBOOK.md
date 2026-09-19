@@ -113,10 +113,22 @@ allowlist accepts it. A `404`/`421`/connection error means the tunnel is running
 but the daemon is refusing the Host — fix `SIGNALDECK_ALLOWED_HOSTS`, not the
 tunnel.
 
-## Still open regardless of this decision
+## Resolved since this runbook was written (2026-09-19)
 
-`ops/lib-portable.sh:188` runs `schtasks //Run` with stdout, stderr **and exit
-status** all discarded, and neither `kick()` nor the `up`/`collect` arms inspect
-the result. So every start path reports success whether or not the tunnel came
-up — which is how a missing task went unnoticed. That is a code defect fixable
-without any of the decisions above, and it is tracked in the backlog.
+The complaint that `ops/lib-portable.sh` discarded `schtasks //Run`'s exit status is
+**stale**. `sd_svc_start` (`lib-portable.sh:277-292`) now probes with `//Query` and
+returns 2 = not registered, 1 = refused, 0 = started, and `kick()`
+(`signaldeck-ctl.sh:61-63`) inspects and reports it. A tunnel that fails to start is
+visible.
+
+Option A's hand-typed `Register-ScheduledTask` one-liner is also superseded. The
+tunnel is now a managed definition at `ops/tasks/SignalDeck Tunnel.xml`, so once
+ngrok is installed and the authtoken is set, standing it up is:
+
+```powershell
+.\ops\install-windows-tasks.ps1 -Install
+```
+
+run from an ELEVATED PowerShell (registering an S4U principal returns
+"Access is denied" otherwise). Everything above about the authtoken, the reserved
+domain and the Host allowlist still applies.
