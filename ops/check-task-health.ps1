@@ -277,6 +277,42 @@ if ($portsDown.Count -gt 0) {
     $bad = $true
 }
 
+# DEFINITION DRIFT against ops\tasks\*.xml.
+#
+# Until 2026-09-19 this script reconciled the task store against ITSELF: it read
+# Get-ScheduledTask and never opened the files that are supposed to define the
+# fleet, so a task whose definition had been changed by hand looked perfectly
+# healthy. The plists it could have compared against were a retired Mac's
+# launchd files that nothing on this machine ever read.
+#
+# install-windows-tasks.ps1 in REPORT mode already does the comparison and
+# changes nothing, so this calls it rather than carrying a second copy of the
+# compare logic. Two copies of a check is how the copy that runs stops matching
+# the copy that is tested.
+$drift = @()
+try {
+    $installer = Join-Path $PSScriptRoot 'install-windows-tasks.ps1'
+    if (Test-Path $installer) {
+        $report = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer 2>&1
+        foreach ($line in $report) {
+            $text = "$line"
+            if ($text -match '^(CREATE|UPDATE|REFUSE)\s+(\S.*?)\s*$') {
+                $drift += ('{0} {1}' -f $matches[1], ($matches[2] -replace '\s{2,}.*$',''))
+            }
+            elseif ($text -match '^FATAL') { $drift += $text }
+        }
+    }
+} catch {
+    # A drift check that cannot run must say so, not pass quietly.
+    $drift += ("drift check failed to run: " + $_.Exception.Message)
+}
+if ($drift.Count) {
+    Write-Host ""
+    Write-Host "Task definitions differ from ops\tasks\*.xml:" -ForegroundColor Red
+    $drift | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    $bad = $true
+}
+
 if ($bad) {
     # ALERT, do not just exit 1. This script only ever wrote to the console, and
     # under Task Scheduler that goes nowhere -- an unhealthy fleet became a
@@ -293,6 +329,7 @@ if ($bad) {
     if ($unreadable.Count) { $parts += "unreadable: $($unreadable -join ', ')" }
     if ($stale.Count)      { $parts += "no next run scheduled: $($stale -join ', ')" }
     if ($portsDown.Count)  { $parts += "port(s) not listening: $($portsDown -join ', ')" }
+    if ($drift.Count)      { $parts += "definition drift: $($drift -join ', ')" }
     $why = ($parts -join '; ')
     if (-not $why) { $why = 'see the run output' }
     . (Join-Path $PSScriptRoot 'lib-notify.ps1')

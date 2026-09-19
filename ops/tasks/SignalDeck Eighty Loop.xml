@@ -1,0 +1,50 @@
+<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Runs ops/eighty-loop.ps1 (24h, 500 cycles). Hourly trigger + MultipleInstances=IgnoreNew restarts it only if it is not already running.</Description>
+    <URI>\SignalDeck Eighty Loop</URI>
+  </RegistrationInfo>
+  <Principals>
+    <Principal id="Author">
+      <UserId>Nicholas_Nyaung\Nicholas_N</UserId>
+      <LogonType>S4U</LogonType>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <Enabled>false</Enabled>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <RestartOnFailure>
+      <Count>3</Count>
+      <Interval>PT10M</Interval>
+    </RestartOnFailure>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <IdleSettings>
+      <Duration>PT10M</Duration>
+      <WaitTimeout>PT1H</WaitTimeout>
+      <StopOnIdleEnd>true</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
+  </Settings>
+  <Triggers>
+    <LogonTrigger>
+      <UserId>Nicholas_Nyaung\Nicholas_N</UserId>
+    </LogonTrigger>
+    <TimeTrigger>
+      <StartBoundary>2026-08-03T00:02:00-07:00</StartBoundary>
+      <Repetition>
+        <Interval>PT1H</Interval>
+        <StopAtDurationEnd>true</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>
+  </Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>powershell</Command>
+      <Arguments>-NoProfile -ExecutionPolicy Bypass -Command "&amp; 'C:\Users\Nicholas_N\Desktop\claude code\signaldeck\ops\eighty-loop.ps1' -Hours 24 -MaxCycles 500 *&gt;&gt; 'C:\Users\Nicholas_N\Desktop\claude code\signaldeck\logs\eighty-console.log'"</Arguments>
+      <WorkingDirectory>C:\Users\Nicholas_N\Desktop\claude code\signaldeck</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
