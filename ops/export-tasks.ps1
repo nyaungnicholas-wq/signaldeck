@@ -2,6 +2,7 @@ param(
     [string]$OutFile = '',
     [string]$Prefix = 'SignalDeck',
     [switch]$SelfCheck,
+    [switch]$Prune,
     [string]$XmlDir = ''
 )
 if ($XmlDir -eq '') {
@@ -158,7 +159,38 @@ else {
     try {
         $tasks = Get-ScheduledTask -TaskName "$Prefix*" | Sort-Object TaskName
         if (-not (Test-Path $XmlDir)) { New-Item -ItemType Directory -Path $XmlDir | Out-Null }
-        Get-ChildItem -Path $XmlDir -Filter *.xml -File | Remove-Item -Force
+        # DO NOT blanket-delete the definitions here.
+        #
+        # This used to wipe every *.xml before re-exporting, so that a task
+        # removed from the fleet did not leave a stale file. But a file with no
+        # LIVE task is not necessarily stale - it is also how a PENDING task is
+        # staged, which is exactly what 'SignalDeck Tunnel' and 'SignalDeck
+        # Tunnel Keepalive' are while ngrok has no authtoken. Running the export
+        # would have silently deleted both hand-authored definitions and the
+        # only symptom would be an installer that suddenly had nothing to do.
+        # -Prune restores the old behaviour when an orphan really should go.
+        if ($Prune) {
+            # A definition with no live task is NOT necessarily an orphan - it is
+            # also how a task is staged ahead of its install. Measured 2026-09-19:
+            # the first -Prune deleted 'SignalDeck Tunnel' and 'SignalDeck Tunnel
+            # Keepalive', which were waiting on an ngrok authtoken, and one of them
+            # was not yet committed. ops	asks\.pending names the deliberate ones.
+            $keep = @{}
+            foreach ($t in $tasks) { $keep[$t.TaskName] = $true }
+            $pendingFile = Join-Path $XmlDir '.pending'
+            if (Test-Path $pendingFile) {
+                foreach ($line in (Get-Content $pendingFile)) {
+                    $n = $line.Trim()
+                    if ($n -and -not $n.StartsWith('#')) { $keep[$n] = $true }
+                }
+            }
+            foreach ($f in (Get-ChildItem -Path $XmlDir -Filter *.xml -File)) {
+                if (-not $keep.ContainsKey($f.BaseName)) {
+                    Remove-Item -Force $f.FullName
+                    Write-Host "PRUNED $($f.Name) (no live task, not in .pending)"
+                }
+            }
+        }
         $lines = New-Psd1Document $tasks $Prefix
         Set-Content -Path $OutFile -Value $lines -Encoding ASCII
         foreach ($t in $tasks) {

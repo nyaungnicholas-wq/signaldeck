@@ -1,0 +1,11 @@
+# Task definitions that intentionally have no LIVE task yet.
+#
+# export-tasks.ps1 -Prune removes any .xml with no matching live task, on the
+# reasoning that it is a leftover from a task deleted out of the fleet. It
+# cannot tell that apart from a definition STAGED AHEAD of its install, and on
+# 2026-09-19 it deleted both of the lines below - one of which was not yet
+# committed and had to be rebuilt. Names listed here are skipped by -Prune.
+#
+# Remove a line once its task is registered; the live export then owns it.
+SignalDeck Tunnel
+SignalDeck Tunnel Keepalive
