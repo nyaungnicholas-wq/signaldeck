@@ -381,11 +381,12 @@ fi
 
 # Offsite copy (best-effort, atomic tmp+rename).
 #
-# `caffeinate` is macOS-only; on any other platform it is not on PATH and the
-# whole copy silently failed as "command not found". Use it only where it
-# exists, so the copy itself is portable.
-NOSLEEP=""
-command -v caffeinate >/dev/null 2>&1 && NOSLEEP="caffeinate -i"
+# Sleep inhibition lives in sd_nosleep (ops/lib-portable.sh), which the gzip and
+# the aws s3 cp below already go through. A local NOSLEEP variable used to be
+# built here from `caffeinate` and was then left ASSIGNED AND NEVER READ by the
+# refactor to sd_nosleep, so this block documented protection that no longer
+# existed at this level. Removed 2026-09-19 rather than reconnected: one shim,
+# not two.
 
 # s3_upload_verified SRC S3URI TMPGZ — compress, upload, and PROVE it arrived.
 # Returns 0 only when S3 itself reports the object at exactly the byte count we
