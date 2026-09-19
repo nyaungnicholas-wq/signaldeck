@@ -1,7 +1,7 @@
 # SignalDeck — Strategy Deck
 
 <!-- DOCUMENT CONTROL -->
-> **Owner:** Nicholas Nyaung · **Version:** 1.2 · **Last reviewed:** 2026-08-05 · **Revalidate by:** 2026-09-04
+> **Owner:** Nicholas Nyaung · **Version:** 1.2 · **Last reviewed:** 2026-09-19 · **Revalidate by:** 2026-10-19
 > **Revalidation trigger:** any re-grade, or any phase artefact filed in `proofs/`. A status document with no expiry drifts silently; §2's live record is generated so it cannot, but the prose around it can.
 > **Status:** ACTIVE — supersedes prior summary decks
 > **Scope:** The single current status document for the platform. Where it disagrees with an older document, this one wins: the others are publishable as a record of what was measured when, not as current status.
@@ -339,16 +339,16 @@ The anchoring restriction is **narrowed, not removed**. Publishing a track recor
 | FC7 | Unevidenced "already built" attestations | **SUPERSEDED by §7's generated evidence table** (`tools/controls_evidence.py`, gated in CI) — and §8.1 is a live instance of exactly this failure mode, so FC7 is a standing rule, not a closed item |
 | FC8 | Structural forecast counts | **RESOLVED** — generated per predictor, not typed |
 The prediction ledger is hash-chained and signed. Its anchors live in the same SQLite file the operator controls.
-Anchoring status is INTERNAL — UNANCHORED. `ops/anchor-publish.sh` exists, is invoked by nothing, is not scheduled, and has never succeeded; its log's last entry, dated 2026-07-27, reads `FAIL: no public clone at /nonexistent — nothing was externally timestamped`.
+Anchor publishing is BUILT AND IN FORCE: `ops/anchor-publish.sh` runs from a scheduled task and its log records a published anchor line, where it previously recorded only a refusal that no anchors clone existed. **What that does NOT establish is independent verifiability, which stays BUILT BUT NOT IN FORCE:** the anchors repository is private and the operator holds its credentials, so publishing moves the record to a second host without moving it beyond the operator's reach.
 Therefore the chain is tamper-evident against an actor without the signing key, and is NOT evidence against the operator, who holds both the key and the database.
-Offsite backup is BUILT BUT NOT IN FORCE: the backup log records `offsite SKIPPED: no destination configured`. Backups exist on one machine, on one volume.
+Offsite backup is BUILT AND IN FORCE: the nightly job uploads the compressed database to the private repository named by `SIGNALDECK_OFFSITE_GH_REPO` and counts the copy only after the release API reports the same byte size back, and `ops/restore-rehearsal.sh --from-github` has downloaded the newest copy, re-computed its checksum and run a full integrity check over the restored database, its ledger chain and its anchors. That store is a SEPARATE private repository from the source, because release assets follow repository visibility and the source repository is public.
 Single operator, single machine. There is no independent reviewer.
 
 ## 14. Next actions
 1. Close the 2023–2025 survivorship residual that `proofs/P3A_SURVIVORSHIP_BACKFILL.md` quantifies. Until then, HISTORICAL results spanning those years stay survivor-seeded and FC3 stays frozen for that window.
 2. ~~Decide the freeze explicitly.~~ **DONE 2026-08-04** — `proofs/P10_FREEZE_LIFT.md` lifts it, names the two provisions that survive the lift, records the conditions as checked rather than assumed, and narrows the anchoring restriction to the one claim anchoring actually protects.
-3. Create the public anchors repository, schedule `ops/anchor-publish.sh` daily, and treat a push failure as an alert rather than a log line.
+3. Make the anchors repository public and treat a push failure as an alert rather than a log line. The scheduling half is **DONE**; publishing to a repository the operator controls is what still falls short of independent timestamping.
 4. Add third-party timestamping over the chain head, weekly. Steps 3 and 4 differ: step 3 moves evidence to a host whose credentials the operator still holds.
-5. Configure `SIGNALDECK_OFFSITE_DIR` to a volume that is not the machine's own.
+5. ~~Configure `SIGNALDECK_OFFSITE_DIR` to a volume that is not the machine's own.~~ **DONE** — met by the GitHub release arm rather than a local volume, checked by byte count on upload and by a rehearsed restore.
 6. ~~Audit the completeness of the `bars-1d` history itself.~~ **DONE 2026-08-04** — `tools/bars_completeness.py`, `proofs/P11_BARS_COMPLETENESS.md`. The foundation is now bounded rather than assumed, and the bound is **generated into §8** rather than recorded here: the figures P11 filed on 2026-08-04 (stocks 96.49%, common stock alone 97.36%, over 1,770 symbols) are already well behind the database, because the symbol count has since grown by two-thirds and the new names carry shorter histories. That is the same staleness this line would have kept reproducing. The shortfall is sized, not repaired.
 7. ~~File the remaining phase artefacts.~~ **DONE 2026-08-04** — P1 through P11 are filed in `proofs/`. P2 and P3A, the two this line was waiting on, are among them.
