@@ -1,5 +1,5 @@
 @{
-    GeneratedUtc = '2026-09-19T23:30:43Z'
+    GeneratedUtc = '2026-09-19T23:35:33Z'
     Prefix = 'SignalDeck'
     Tasks = @(
         @{
@@ -205,6 +205,30 @@
             UserId = 'Nicholas_N'
             Enabled = $true
             Triggers = @('MSFT_TaskDailyTrigger')
+        }
+        @{
+            TaskName = 'SignalDeck Tunnel'
+            Execute = 'C:\Users\Nicholas_N\AppData\Local\Microsoft\WinGet\Links\ngrok.exe'
+            Arguments = 'http 8322 --domain=spearfish-dwindle-module.ngrok-free.dev --log="C:\Users\Nicholas_N\Desktop\claude code\signaldeck\logs\tunnel.log" --log-level=warn'
+            WorkingDirectory = 'C:\Users\Nicholas_N\Desktop\claude code\signaldeck'
+            ExecutionTimeLimit = 'PT0S'
+            LogonType = 'S4U'
+            RunLevel = 'Limited'
+            UserId = 'Nicholas_N'
+            Enabled = $true
+            Triggers = @()
+        }
+        @{
+            TaskName = 'SignalDeck Tunnel Keepalive'
+            Execute = 'powershell.exe'
+            Arguments = '-NoProfile -ExecutionPolicy Bypass -File "C:\Users\Nicholas_N\Desktop\claude code\signaldeck\ops\tunnel-guard.ps1"'
+            WorkingDirectory = 'C:\Users\Nicholas_N\Desktop\claude code\signaldeck'
+            ExecutionTimeLimit = 'PT10M'
+            LogonType = 'S4U'
+            RunLevel = 'Limited'
+            UserId = 'Nicholas_N'
+            Enabled = $true
+            Triggers = @('MSFT_TaskLogonTrigger','MSFT_TaskTimeTrigger')
         }
         @{
             TaskName = 'SignalDeck Web'

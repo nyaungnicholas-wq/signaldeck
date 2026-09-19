@@ -50,7 +50,13 @@ $disabled = @()
 # no-next-run check below. Explicit rather than inferred: "meant to be started
 # by something else" is a design fact, and guessing it from a missing trigger is
 # exactly how a trigger that got LOST would be excused.
-$onDemandStoppable = @('SignalDeck Web', 'SignalDeck Daemon')
+#   SignalDeck Tunnel - registered 2026-09-19 with NO trigger, deliberately.
+#                       market-open-guard.sh execs signaldeck-ctl.sh collect,
+#                       which kicks it by name; market-close.sh stops it; and
+#                       SignalDeck Tunnel Keepalive restarts it if it dies
+#                       INSIDE the collection window only. Giving it a trigger
+#                       would hold the public URL open around the clock.
+$onDemandStoppable = @('SignalDeck Web', 'SignalDeck Daemon', 'SignalDeck Tunnel')
 
 foreach ($task in $tasks) {
     try {

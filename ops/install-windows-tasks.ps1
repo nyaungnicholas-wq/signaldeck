@@ -127,10 +127,22 @@ foreach ($t in $tasks) {
             if ($got.Principal.LogonType -ne $expectedLogonType) {
                 throw ("LogonType is $($got.Principal.LogonType), expected $expectedLogonType")
             }
-            # RunLevel
+            # RunLevel. The Task Scheduler XML schema and the ScheduledTasks
+            # cmdlets use DIFFERENT vocabularies for the same two values:
+            #   XML <RunLevel>LeastPrivilege</RunLevel>   <-> Principal.RunLevel 'Limited'
+            #   XML <RunLevel>HighestAvailable</RunLevel> <-> Principal.RunLevel 'Highest'
+            # Only HighestAvailable was translated here, so a definition that
+            # spelled LeastPrivilege out explicitly failed its own read-back with
+            # "RunLevel is Limited, expected LeastPrivilege" AFTER registering
+            # perfectly. The 19 exported tasks hid it because Export-ScheduledTask
+            # omits the element entirely at the default level; the first two
+            # hand-authored definitions did not.
             if ($t.WantXml -match '<RunLevel>([^<]*)</RunLevel>') {
                 $expectedRunLevel = $matches[1]
-                if ($expectedRunLevel -eq 'HighestAvailable') { $expectedRunLevel = 'Highest' }
+                switch ($expectedRunLevel) {
+                    'HighestAvailable' { $expectedRunLevel = 'Highest' }
+                    'LeastPrivilege'   { $expectedRunLevel = 'Limited' }
+                }
             } else {
                 $expectedRunLevel = 'Limited'
             }

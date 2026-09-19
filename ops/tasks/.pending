@@ -7,5 +7,5 @@
 # committed and had to be rebuilt. Names listed here are skipped by -Prune.
 #
 # Remove a line once its task is registered; the live export then owns it.
-SignalDeck Tunnel
-SignalDeck Tunnel Keepalive
+# (empty) - both tunnel definitions were registered on 2026-09-19 and the live
+# export now owns them, so nothing is staged ahead of its install.
