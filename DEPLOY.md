@@ -160,8 +160,8 @@ Schedule it daily. WHICH script depends on where you are, and the two are not
 interchangeable.
 
 **On a dev box / any full checkout**, `ops/accuracy-registry.sh` is the job. The
-shipped launchd plists in `ops/` are macOS-only and carry paths from the machine
-this was developed on — on Linux use cron:
+fleet definitions in `ops/tasks/*.xml` are Windows Scheduled Task documents and
+mean nothing off Windows — on Linux use cron:
 
 ```cron
 15 6 * * * cd /path/to/checkout && bash ops/accuracy-registry.sh
@@ -201,13 +201,16 @@ working correctly.
 
 ## Known deployment gaps
 
-- The `ops/*.plist` scheduling files are macOS launchd, and 18 of the 22 tracked
-  ones still contain absolute paths from the original development machine. They
-  are dead weight on the current host, which is Windows and runs the fleet from
-  Scheduled Tasks (`ops/install-windows-tasks.ps1`), and they would need porting
-  to cron or systemd timers for a Linux host. Nothing loads them here.
+- CLOSED 2026-09-19: the `ops/com.signaldeck.*.plist` files are deleted. The fleet
+  is defined by `ops/tasks/*.xml`, one lossless `Export-ScheduledTask` document per
+  task, registered by `ops/install-windows-tasks.ps1 -Install` (elevated) and
+  reconciled by `ops/check-task-health.ps1`, which now reports definition drift
+  instead of only checking the task store against itself. `com.stocktrader.hud.plist`
+  and `com.tickstream.daemon.plist` remain: they belong to sibling projects.
+- A Linux host would still need these ported to cron or systemd timers; the XML is
+  Windows-specific by design, which is what makes it lossless here.
 - `ops/signaldeck-ctl.sh` no longer hardcodes a dev-machine path (its paths are
-  now `$REPO`-relative); this gap is closed. The `ops/*.plist` files above are not.
+  now `$REPO`-relative); this gap is closed.
 - There is no reverse-proxy or rate-limit config here. `SIGNALDECK_RATE_RPS` and
   `SIGNALDECK_RATE_BURST` exist in the daemon but I have not verified they are
   active under load.
