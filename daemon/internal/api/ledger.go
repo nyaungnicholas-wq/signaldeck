@@ -48,6 +48,25 @@ import (
 // an operator who wants anchors written only by an external caller).
 const anchorEnvDisable = "SIGNALDECK_LEDGER_ANCHOR_DISABLE"
 
+// anchorWriteBudget caps the OPTIONAL anchor write inside a public read.
+//
+// Anchoring is best-effort: maybeAnchor already reports wrote:false with a
+// reason and the verification is returned regardless. But it took the REQUEST'S
+// context, so a write that queued behind the daemon's single writer connection
+// (one writer, 103 workers) consumed the whole 30s verify deadline and the
+// handler 503'd -- taking the chain result with it.
+//
+// Measured 2026-09-19 at 531,173 ledger rows: GET /api/ledger/verify timed out
+// at 30s, while the same request with SIGNALDECK_LEDGER_ANCHOR_DISABLE=1
+// returned intact in 0.73s. The SQLite work is not the cost -- a full chain
+// walk reads in 1.61s and the anchor prefix pass in 0.36s. The receipts page,
+// whose entire argument is "check my claims yourself", could not verify its own
+// chain for any visitor.
+//
+// So the write gets its own small budget. When the writer is busy the anchor is
+// skipped with a reason and the read still answers; the next verify anchors it.
+const anchorWriteBudget = 3 * time.Second
+
 // anchorEnvInterval overrides the minimum gap between anchors (Go duration).
 const anchorEnvInterval = "SIGNALDECK_LEDGER_ANCHOR_INTERVAL"
 
@@ -130,7 +149,10 @@ func (d Deps) maybeAnchor(r *http.Request, v store.LedgerVerification) map[strin
 	p := anchorPolicy()
 	out["minInterval"] = p.MinInterval.String()
 	now := time.Now()
-	if _, due, reason, err := d.St.AnchorDue(r.Context(), v, p, now); err != nil {
+	// Bounded, and derived from the request so a client disconnect still cancels.
+	actx, acancel := context.WithTimeout(r.Context(), anchorWriteBudget)
+	defer acancel()
+	if _, due, reason, err := d.St.AnchorDue(actx, v, p, now); err != nil {
 		out["reason"] = "anchor-due check failed: " + err.Error()
 		return out
 	} else if !due {
@@ -146,8 +168,14 @@ func (d Deps) maybeAnchor(r *http.Request, v store.LedgerVerification) map[strin
 		out["reason"] = "signing key unavailable: " + anchorKeyErrClass(err)
 		return out
 	}
-	rec, wrote, reason, err := d.St.MaybeAnchorLedger(r.Context(), sg, v, p, now)
+	rec, wrote, reason, err := d.St.MaybeAnchorLedger(actx, sg, v, p, now)
 	if err != nil {
+		// A busy writer is NOT a verify failure. Say so and let the read answer:
+		// the alternative is the 503 this budget exists to end.
+		if errors.Is(err, context.DeadlineExceeded) {
+			out["reason"] = "writer busy: anchor skipped after " + anchorWriteBudget.String() + "; the next verify will anchor"
+			return out
+		}
 		out["reason"] = "anchor write failed: " + err.Error()
 		return out
 	}

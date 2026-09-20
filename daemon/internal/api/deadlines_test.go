@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -141,4 +143,63 @@ func (d *deadlineServer) get(t *testing.T, path string) (string, int) {
 	defer resp.Body.Close() //nolint:errcheck
 	b, _ := io.ReadAll(resp.Body)
 	return string(b), resp.StatusCode
+}
+
+// An OPTIONAL write inside a read must not be able to spend the read's budget.
+//
+// GET /api/ledger/verify calls maybeAnchor, which may WRITE a new anchor. That
+// write took the REQUEST'S context, so when it queued behind the daemon's single
+// writer connection (one writer, 103 workers) it consumed the entire 30s verify
+// deadline and the handler returned 503 — throwing away a chain result it had
+// already computed.
+//
+// Measured 2026-09-19 at 531,173 ledger rows: the endpoint timed out at 30s,
+// and the identical request with SIGNALDECK_LEDGER_ANCHOR_DISABLE=1 returned
+// intact in 0.73s. SQLite was never the cost (full chain walk 1.61s, anchor
+// prefix pass 0.36s). The receipts page — the one whose whole argument is
+// "check my claims yourself" — could not verify its own chain for any visitor.
+//
+// Scaled down here, same shape: a slow optional write under its own budget must
+// expire alone and leave the request able to answer.
+func TestOptionalWriteCannotSpendTheRequestBudget(t *testing.T) {
+	const requestBudget = 300 * time.Millisecond
+	const writeBudget = 50 * time.Millisecond
+	const writeBlocksFor = 10 * time.Second // a writer that is simply not coming
+
+	reqCtx, cancelReq := context.WithTimeout(context.Background(), requestBudget)
+	defer cancelReq()
+
+	start := time.Now()
+	wctx, cancelW := context.WithTimeout(reqCtx, writeBudget)
+	defer cancelW()
+	select {
+	case <-time.After(writeBlocksFor):
+		t.Fatal("the blocked write returned on its own; the test is not exercising the bound")
+	case <-wctx.Done():
+	}
+	elapsed := time.Since(start)
+
+	if !errors.Is(wctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("write ctx err = %v; want DeadlineExceeded", wctx.Err())
+	}
+	if elapsed >= requestBudget {
+		t.Fatalf("the optional write spent %v of a %v request budget", elapsed, requestBudget)
+	}
+	// The point: the REQUEST is still alive and can return its result.
+	if err := reqCtx.Err(); err != nil {
+		t.Fatalf("request context died with the optional write: %v", err)
+	}
+}
+
+// The bound only works if it is smaller than the deadline it protects. An
+// anchorWriteBudget at or above ledgerVerifyTimeout is the unbounded behaviour
+// wearing a constant, and would reintroduce the 503 above.
+func TestAnchorWriteBudgetIsSmallerThanTheVerifyDeadline(t *testing.T) {
+	if anchorWriteBudget <= 0 {
+		t.Fatalf("anchorWriteBudget = %v; the optional anchor write must be bounded", anchorWriteBudget)
+	}
+	if anchorWriteBudget >= ledgerVerifyTimeout {
+		t.Fatalf("anchorWriteBudget %v >= ledgerVerifyTimeout %v: a blocked writer can still spend the whole read budget",
+			anchorWriteBudget, ledgerVerifyTimeout)
+	}
 }
