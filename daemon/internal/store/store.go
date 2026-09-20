@@ -117,7 +117,31 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	// Read pool: WAL readers don't block each other.
-	db.SetMaxOpenConns(4)
+	//
+	// 16, raised from 4 on 2026-09-20. Four connections served a fleet of 103
+	// workers. The instrument added that day measured, in ONE prediction-runner
+	// run window, 27,579 waits on this pool totalling 35m28s -- against 14,430
+	// waits on the single WRITE connection. The read pool was the busier
+	// contention point and nobody had looked at it, because "SQLite has one
+	// writer" makes the writer the assumed bottleneck.
+	//
+	// prediction-runner's per-symbol loop is almost entirely reads (loadBars,
+	// Forecasts, ModelForecasts, and LatestScore/Expectancy/SymbolModel per
+	// horizon: ~10 queries x ~329 symbols), which fits a starved read pool
+	// better than writer contention does -- and it explains the slow pass that
+	// recorded ZERO writer waits, which the writer hypothesis could not.
+	//
+	// WAL readers genuinely do not block each other, so this costs concurrency
+	// limits, not correctness. The real risk is WAL growth: a read snapshot
+	// pins old frames, and more simultaneous readers means fewer instants with
+	// no reader active for a TRUNCATE checkpoint -- the failure that once left
+	// a 5,396 MB WAL with 0 of 22 checkpoints succeeding. That is bounded here
+	// rather than assumed away: ReadConnMaxIdleTime (1m) and
+	// ReadConnMaxLifetime (3m) reap read connections, so 16 idle readers cannot
+	// pin frames indefinitely, and journal_size_limit still caps the file.
+	// WATCH THE WAL after changing this; if it stops returning to ~64MB, this
+	// is the first thing to put back.
+	db.SetMaxOpenConns(16)
 	boundReadConns(db)
 	w, err := sql.Open("sqlite", dsn)
 	if err != nil {
