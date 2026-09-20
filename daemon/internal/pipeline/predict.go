@@ -542,6 +542,17 @@ func requireMeasuredLegs() bool {
 }
 
 func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
+	// PER-STAGE TIMING, always on. A run that blows the 30m deadline used to
+	// report only that it took 30m, which is why a capacity trend and a
+	// machine-sleep artefact were both read off it before anyone could see WHICH
+	// stage spent the budget. The clock costs a map write per stage; the runs
+	// worth diagnosing are rare and overnight, so it must not be opt-in.
+	clk := newStageClock()
+	// Writer-pool contention over this pass, from database/sql's own counters.
+	// The write pool is MaxOpenConns(1), so its WaitDuration IS SQLite writer
+	// contention. Fleet-wide and cumulative: it names the saturated resource for
+	// the window, it does not apportion the wait to this worker.
+	pool0 := w.St.PoolWaits()
 	syms, err := w.St.ListSymbols(ctx, true)
 	if err != nil {
 		return "", err
@@ -573,7 +584,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// per-symbol estimates whose standard error is near 0.1. See fleetveto.go.
 	// Best-effort: on an unreadable cross-section nothing is vetoed and the
 	// per-symbol bound stays in charge.
+	stopVeto := clk.at("fleetveto")
 	vetoed := fleetVetoes(ctx, w.St, predHorizons)
+	stopVeto()
 
 	// Fill the settled-move key on rows that predate the column, a bounded batch
 	// per pass so it converges without a migration framework and never stalls a
@@ -586,6 +599,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// the same budget: they share one derivation, so letting one lag behind would
 	// mean two surfaces disagreeing about what one observation is — the exact
 	// drift the shared md.SettleDay implementation exists to prevent.
+	stopBackfill := clk.at("backfill")
 	for _, bf := range []struct {
 		name string
 		fn   func(context.Context, int) (int64, error)
@@ -601,6 +615,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			slog.Info("settle_ts backfilled", "table", bf.name, "rows", n)
 		}
 	}
+	stopBackfill()
 	// Read once per pass, not per symbol: the mode is a deploy-time decision and
 	// re-reading it mid-sweep could split one pass across two contracts.
 	strictLegs := requireMeasuredLegs()
@@ -608,6 +623,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// legless blend is recorded once a day rather than on all ~138 passes. One
 	// query per horizon, mutated in place as this pass writes.
 	evidenceDay := map[md.Horizon]map[int64]int64{}
+	stopEvid := clk.at("evidenceday")
 	for _, h := range predHorizons {
 		m, err := w.St.EvidenceDayBySymbol(ctx, h)
 		if err != nil {
@@ -615,6 +631,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		}
 		evidenceDay[h] = m
 	}
+	stopEvid()
 	// CROSS-SECTIONAL FEATURES, computed ONCE for the whole universe (a
 	// percentile needs the cross-section, so it cannot be built inside the
 	// per-symbol loop below). These are the four factors measured to rank the
@@ -712,7 +729,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		}
 	}
 
+	stopXS := clk.at("xsfeat")
 	xsFeats := crossSectionalFeatures(ctx, w.St, syms)
+	stopXS()
 	if len(xsFeats) == 0 {
 		slog.Info("cross-sectional features unavailable this pass — universe too " +
 			"thin or the batched bar read failed; the alphax leg sees the old feature set")
@@ -756,6 +775,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// writes UNresolved rows), so hoisting is output-identical and drops one
 	// 3000-row join per symbol.
 	globalCal := map[md.Horizon]func(float64) float64{}
+	stopCal := clk.at("globalcal")
 	for _, h := range predHorizons {
 		if fn, ok, err := globalCalibration(ctx, w.St, h); err == nil && ok {
 			globalCal[h] = fn
@@ -768,7 +788,9 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// strictly before today — committed before today's outcome can exist, so
 	// the benchmark never sees the move it will be graded on. A failed read
 	// skips the benchmark this pass rather than inventing a guess.
+	stopCal()
 	benchProb := map[md.Horizon]float64{}
+	stopPM := clk.at("prequential")
 	todayUTC := md.TradingDay(time.Now().UTC().Unix())
 	for _, h := range predHorizons {
 		p, ok, err := w.St.PrequentialMajorityProb(ctx, h, todayUTC, benchmarkMajorityEpoch)
@@ -784,10 +806,13 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			benchProb[h] = p
 		}
 	}
+	stopPM()
 	n, featErrs, staleCals, noLegs, gatedRows, staleFeed := 0, 0, 0, 0, 0, 0
 	// This pass's emitted probabilities per horizon, published or withheld.
 	runProbs := map[md.Horizon][]float64{}
 	formingTrimmed := 0
+	stopLoop := clk.at("loop")
+	poolLoop0 := w.St.PoolWaits()
 	for _, s := range syms {
 		hot := s.Market == md.Crypto || s.Stream
 		if !hot && !doUniverse {
@@ -1253,6 +1278,8 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			}
 		}
 	}
+	stopLoop()
+	loopPool := w.St.PoolWaits().Since(poolLoop0)
 	if doUniverse {
 		// Only after a clean full pass, so a mid-run error retries next minute.
 		_ = w.St.SetMeta(ctx, "predict_universe_day", universeCursor)
@@ -1300,6 +1327,22 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 		sort.Strings(hs)
 		detail += fmt.Sprintf(" (%d row(s) withheld by the cross-section gate — %s)",
 			gatedRows, strings.Join(hs, "; "))
+	}
+	// WHERE THE BUDGET WENT. Appended last so the human-readable result stays at
+	// the front of the line. Stages under 100ms are omitted, so a healthy pass
+	// adds a short suffix and a pathological one says which stage to look at.
+	if st := clk.String(); st != "" {
+		detail += " [stages " + st + "]"
+	}
+	// Writer contention accrued by the WHOLE FLEET while the symbol loop ran, and
+	// again across the entire pass. If a 30-minute run shows a loop that is
+	// mostly writer wait, the bottleneck is the single write connection rather
+	// than anything this worker computes.
+	if pw := loopPool.String(); pw != "" {
+		detail += " [loop-poolwait " + pw + "]"
+	}
+	if pw := w.St.PoolWaits().Since(pool0).String(); pw != "" {
+		detail += " [run-poolwait " + pw + "]"
 	}
 	return detail, nil
 }
