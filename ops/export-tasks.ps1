@@ -59,6 +59,11 @@ function New-Psd1Document([object[]]$tasks, [string]$prefix) {
     $lines.Add('}')
     return $lines.ToArray()
 }
+# ONE tokeniser, shared with install-windows-tasks.ps1. If the side that writes
+# the placeholders and the side that expands them were separate copies, every
+# task would report false drift the moment they diverged.
+. (Join-Path $PSScriptRoot 'lib-tasks.ps1')
+
 function ConvertTo-PortableTaskXml([string]$xml, [string]$userToken) {
     # STRIP the XML declaration; do not rewrite it to UTF-8.
     #
@@ -197,6 +202,10 @@ else {
             $rawXml = Export-ScheduledTask -TaskName $t.TaskName
             $userToken = "$env:USERDOMAIN\$env:USERNAME"
             $normalizedXml = ConvertTo-PortableTaskXml -xml $rawXml -userToken $userToken
+            # Absolute paths and the account name are machine-specific: they leak
+            # the operator's username into a PUBLIC repo and are wrong on a rebuilt
+            # host. Store placeholders; install-windows-tasks.ps1 expands them.
+            $normalizedXml = ConvertTo-TaskTokens -Xml $normalizedXml -Repo (Split-Path -Parent $PSScriptRoot)
             $xmlPath = Join-Path $XmlDir ($t.TaskName + '.xml')
             [System.IO.File]::WriteAllText($xmlPath, $normalizedXml, (New-Object System.Text.UTF8Encoding($false)))
         }

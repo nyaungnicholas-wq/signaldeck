@@ -4,7 +4,7 @@
   </RegistrationInfo>
   <Principals>
     <Principal id="Author">
-      <UserId>Nicholas_Nyaung\Nicholas_N</UserId>
+      <UserId>{{USER}}</UserId>
       <LogonType>S4U</LogonType>
     </Principal>
   </Principals>
@@ -33,8 +33,8 @@
   <Actions Context="Author">
     <Exec>
       <Command>powershell.exe</Command>
-      <Arguments>-NoProfile -ExecutionPolicy Bypass -Command "&amp; 'C:\Users\Nicholas_N\Desktop\claude code\signaldeck\ops\check-task-health.ps1' *&gt;&gt; 'C:\Users\Nicholas_N\Desktop\claude code\signaldeck\logs\check-task-health.log'"</Arguments>
-      <WorkingDirectory>C:\Users\Nicholas_N\Desktop\claude code\signaldeck</WorkingDirectory>
+      <Arguments>-NoProfile -ExecutionPolicy Bypass -Command "&amp; '{{REPO}}\ops\check-task-health.ps1' *&gt;&gt; '{{REPO}}\logs\check-task-health.log'"</Arguments>
+      <WorkingDirectory>{{REPO}}</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>

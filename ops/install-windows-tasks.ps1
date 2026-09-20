@@ -18,7 +18,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
+$script:repoRoot = $repo
 $xmlDir = Join-Path $repo 'ops\tasks'
+
+# Shared with export-tasks.ps1 - one tokeniser, so the side that writes the
+# placeholders and the side that expands them cannot drift.
+. (Join-Path $PSScriptRoot 'lib-tasks.ps1')
 
 function ConvertTo-ComparableTaskXml([string]$xml, [string]$userToken) {
     # Strip XML declaration (Export-ScheduledTask emits UTF-16 string with declaration)
@@ -26,6 +31,10 @@ function ConvertTo-ComparableTaskXml([string]$xml, [string]$userToken) {
     # Replace machine-specific SID with account name for comparison
     $xml = $xml -replace '(<UserId>)S-1-[^<]*(</UserId>)', ('$1' + $userToken + '$2')
     # Normalise line endings and trim whitespace
+    # Tokenise, so a STORED file of {{REPO}} compares equal to a LIVE export of
+    # absolute paths. Both sides come through here, and tokenising is
+    # idempotent, so already-tokenised text passes through unchanged.
+    $xml = ConvertTo-TaskTokens -Xml $xml -Repo $script:repoRoot
     $xml = ($xml -replace "`r`n", "`n").Trim()
     return $xml
 }

@@ -4,7 +4,7 @@
   </RegistrationInfo>
   <Principals>
     <Principal id="Author">
-      <UserId>Nicholas_Nyaung\Nicholas_N</UserId>
+      <UserId>{{USER}}</UserId>
       <LogonType>S4U</LogonType>
     </Principal>
   </Principals>
@@ -34,7 +34,7 @@
     <Exec>
       <Command>C:\Program Files\Git\bin\bash.exe</Command>
       <Arguments>-lc "'/c/Users/Nicholas_N/Desktop/claude code/signaldeck/ops/research-liveness.sh' &gt;&gt; '/c/Users/Nicholas_N/Desktop/claude code/signaldeck/logs/research-liveness.out.log' 2&gt;&amp;1"</Arguments>
-      <WorkingDirectory>C:\Users\Nicholas_N\Desktop\claude code\signaldeck</WorkingDirectory>
+      <WorkingDirectory>{{REPO}}</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>

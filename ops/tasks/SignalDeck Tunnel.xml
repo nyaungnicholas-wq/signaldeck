@@ -5,7 +5,7 @@
   </RegistrationInfo>
   <Principals>
     <Principal id="Author">
-      <UserId>Nicholas_Nyaung\Nicholas_N</UserId>
+      <UserId>{{USER}}</UserId>
       <LogonType>S4U</LogonType>
     </Principal>
   </Principals>
@@ -23,9 +23,9 @@
   <Triggers />
   <Actions Context="Author">
     <Exec>
-      <Command>C:\Users\Nicholas_N\AppData\Local\Microsoft\WinGet\Links\ngrok.exe</Command>
-      <Arguments>http 8322 --domain=spearfish-dwindle-module.ngrok-free.dev --log="C:\Users\Nicholas_N\Desktop\claude code\signaldeck\logs\tunnel.log" --log-level=warn</Arguments>
-      <WorkingDirectory>C:\Users\Nicholas_N\Desktop\claude code\signaldeck</WorkingDirectory>
+      <Command>{{USERPROFILE}}\AppData\Local\Microsoft\WinGet\Links\ngrok.exe</Command>
+      <Arguments>http 8322 --domain=spearfish-dwindle-module.ngrok-free.dev --log="{{REPO}}\logs\tunnel.log" --log-level=warn</Arguments>
+      <WorkingDirectory>{{REPO}}</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>

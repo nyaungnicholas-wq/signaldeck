@@ -5,7 +5,7 @@
   </RegistrationInfo>
   <Principals>
     <Principal id="Author">
-      <UserId>Nicholas_Nyaung\Nicholas_N</UserId>
+      <UserId>{{USER}}</UserId>
       <LogonType>S4U</LogonType>
     </Principal>
   </Principals>
@@ -32,8 +32,8 @@
   <Actions Context="Author">
     <Exec>
       <Command>C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe</Command>
-      <Arguments>-NoProfile -WindowStyle Hidden -File "C:\Users\Nicholas_N\Desktop\claude code\signaldeck\ops\start-local-workspace.ps1" -Port 8323</Arguments>
-      <WorkingDirectory>C:\Users\Nicholas_N\Desktop\claude code\signaldeck\web</WorkingDirectory>
+      <Arguments>-NoProfile -WindowStyle Hidden -File "{{REPO}}\ops\start-local-workspace.ps1" -Port 8323</Arguments>
+      <WorkingDirectory>{{REPO}}\web</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>
