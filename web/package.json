@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "node --test \"src/**/*.test.mjs\"",
     "e2e": "playwright test",
     "ux:audit": "playwright test ux-audit"
   },

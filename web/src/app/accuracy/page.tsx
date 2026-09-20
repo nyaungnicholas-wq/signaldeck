@@ -18,6 +18,7 @@ import {
   type AccuracyStatus,
 } from "@/components/accuracy/AccuracyStatusBanner";
 import RefusalNotice from "@/components/RefusalNotice";
+import { bindingMismatch, labelOfPublished, unapprovedLabels } from "@/lib/accuracybinding";
 
 export const dynamic = "force-dynamic";
 
@@ -76,6 +77,11 @@ type Calibration = {
 
 type Registry = {
   generated: string;
+  // The binding key between this file and the daemon's publication verdict.
+  // Both are stamped by the same grade; if either disagrees with what
+  // /api/accuracy approved, the two reads saw different artifacts.
+  graded_at?: string;
+  grader_sha256?: string;
   min_independent_n: number;
   survivorship_epoch: string;
   null_policy: string;
@@ -326,6 +332,7 @@ async function loadPublicationStatus(): Promise<{
   status: AccuracyStatus;
   reason?: string;
   gradedAt?: string;
+  graderSha256?: string;
   refusedSince?: string;
   rows: PublishedRow[];
 } | null> {
@@ -372,7 +379,12 @@ async function loadPublicationStatus(): Promise<{
       return { status: (body?.status ?? "REFUSED") as AccuracyStatus,
                reason: body?.reason, gradedAt: body?.graded_at, refusedSince: body?.refused_since, rows: [] };
     }
-    return { status: "OK", gradedAt: body.graded_at, rows: (body.rows ?? []) as PublishedRow[] };
+    return {
+      status: "OK",
+      gradedAt: body.graded_at,
+      graderSha256: body.grader_sha256,
+      rows: (body.rows ?? []) as PublishedRow[],
+    };
   } catch {
     // Unreachable daemon is not "no news". It is an unknown, and an unknown
     // about whether these numbers are current resolves to not publishing them.
@@ -466,16 +478,54 @@ export default async function AccuracyPage() {
   const flagged = pub.rows.filter((r) => r.publication_status !== "OK");
   // The registry labels rows "predictor (horizon, variant)"; the daemon splits
   // them. Rebuild the label so each registry row finds its publication verdict.
-  const labelOf = (x: PublishedRow) =>
-    x.predictor + (x.horizon ? ` (${x.horizon}${x.variant ? `, ${x.variant}` : ""})` : "");
-  const pubFor = (label: string) => pub.rows.find((x) => labelOf(x) === label);
+  const pubFor = (label: string) => pub.rows.find((x) => labelOfPublished(x) === label);
 
   const reg = await loadRegistry();
+
+  // BIND THE TWO READS (audit R01). The approval above came from the daemon;
+  // the figures below come from a separate read of a file the grader rewrites.
+  // Nothing tied them together, so a grade landing between the two calls paired
+  // an old approval with new numbers. Both sides stamp graded_at and
+  // grader_sha256; if they disagree — or either is missing — this page saw two
+  // artifacts and publishes neither.
+  const mismatch = bindingMismatch(reg, pub);
+  if (mismatch) {
+    return (
+      <div className="mx-auto flex w-full max-w-[900px] flex-col gap-5">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-[1.4rem] font-extrabold tracking-tight">Accuracy registry</h1>
+        </header>
+        <RefusalNotice
+          status="REFUSED_UNVERIFIED"
+          title="Figures withheld — approval and figures did not match"
+          reason={
+            "the daemon's publication approval could not be matched to the registry these " +
+            "figures would come from: " + mismatch + ". Nothing is shown rather than pairing " +
+            "an approval with numbers it was not issued for."
+          }
+          gradedAt={pub.gradedAt}
+          testId="accuracy-status-banner"
+        />
+      </div>
+    );
+  }
+
   const rows = reg?.rows ?? [];
+  // A registry row the daemon never judged has no verdict to render. It used to
+  // fall back to the grader's own sentence from the file, which is the single
+  // verdict path this page exists to enforce, bypassed.
+  const unapproved = unapprovedLabels(
+    rows.filter((r) => r.family === "direction" || r.family === "structure"),
+    pub.rows,
+  );
+  // Only rows the daemon judged. An unapproved row is disclosed by name below
+  // rather than dropped silently — a reader must be able to tell "withheld"
+  // from "there was never such a row".
+  const approved = (r: RegistryRow) => !unapproved.includes(r.predictor);
   const directional = rows
-    .filter((r) => r.family === "direction")
+    .filter((r) => r.family === "direction" && approved(r))
     .sort((a, b) => Number(verdictOf(b).startsWith("FAILED")) - Number(verdictOf(a).startsWith("FAILED")));
-  const structural = rows.filter((r) => r.family === "structure");
+  const structural = rows.filter((r) => r.family === "structure" && approved(r));
   const pendingCount = structural.filter((r) => verdictOf(r).startsWith("PENDING")).length;
 
   return (
@@ -568,6 +618,24 @@ export default async function AccuracyPage() {
           </span>
         </section>
       )}
+
+      {/* Rows in the file that the daemon's publication path never judged.
+          Named, never rendered: the verdict path is the daemon's, and falling
+          back to the file's own sentence is what let an unapproved row publish
+          its metrics (audit R01). */}
+      {unapproved.length > 0 ? (
+        <section className="panel px-5 py-4" aria-label="unapproved rows withheld">
+          <div className="mono text-[0.7rem] uppercase tracking-[0.15em]" style={{ color: "var(--warn)" }}>
+            {unapproved.length} row(s) withheld — no publication verdict
+          </div>
+          <p className="m-0 mt-2 max-w-[68ch] text-[0.8rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            {unapproved.join(", ")} {unapproved.length === 1 ? "is" : "are"} present in the graded
+            registry but carries no verdict from the publication path, so no figure for{" "}
+            {unapproved.length === 1 ? "it" : "them"} is shown. This is a withholding, not an
+            absence.
+          </p>
+        </section>
+      ) : null}
 
       {/* ── LIVE DIRECTIONAL ROWS, FAILED FIRST ── */}
       {directional.map((r) => (

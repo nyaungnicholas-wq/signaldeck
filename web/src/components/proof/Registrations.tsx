@@ -19,41 +19,13 @@
 import { useEffect, useState } from "react";
 import { prereg, ApiError, type PreregResponse, type PreregRecord } from "@/lib/api";
 import Skeleton from "@/components/Skeleton";
+import { specFields, type SpecField } from "@/lib/specfields";
+import FullRecord from "@/components/proof/FullRecord";
 
 function when(r: PreregRecord): string {
   if (r.registeredOn) return r.registeredOn;
   if (r.ts) return new Date(r.ts * 1000).toISOString().slice(0, 10);
   return "—";
-}
-
-function label(key: string): string {
-  // "horizonDays" -> "horizon days". The keys are whatever the record froze, so
-  // they are formatted, never translated through a list this file would have to
-  // keep in step with six payload shapes.
-  return key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
-}
-
-// Flatten the spec payload into rows for display. The keys are read off the
-// payload rather than assumed because each registered kind froze a different
-// shape, and a field the page drops is a field the reader was told to check
-// and cannot be omitted without losing evidence.
-function specFields(spec: unknown): Array<{ key: string; label: string; value: string }> {
-  if (spec == null) return [];
-  if (typeof spec === "string") return [{ key: "spec", label: "", value: spec }];
-  if (typeof spec === "number" || typeof spec === "boolean") return [{ key: "spec", label: "", value: String(spec) }];
-  if (Array.isArray(spec)) return [{ key: "spec", label: "", value: JSON.stringify(spec) }];
-  const entries = Object.entries(spec as Record<string, unknown>);
-  const result: Array<{ key: string; label: string; value: string }> = [];
-  for (const [key, value] of entries) {
-    if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) continue;
-    let v: string;
-    if (typeof value === "string") v = value;
-    else if (typeof value === "number" || typeof value === "boolean") v = String(value);
-    else v = JSON.stringify(value);
-    if (v.length > 160) v = v.slice(0, 160) + "\u2026";
-    result.push({ key, label: label(key), value: v });
-  }
-  return result;
 }
 
 export default function Registrations() {
@@ -165,7 +137,7 @@ export default function Registrations() {
             </thead>
             <tbody>
               {shown.map((r: PreregRecord) => {
-                const fields = specFields(r.spec);
+                const fields: SpecField[] = specFields(r.spec, "summary");
                 return (
                   <tr key={r.seq} style={{ borderTop: "1px solid var(--border)" }}>
                     <td className="tnum px-2 py-1" style={{ color: "var(--faint)" }}>
@@ -194,6 +166,14 @@ export default function Registrations() {
                           ))}
                         </dl>
                       )}
+                      {/* THE EVIDENCE, COMPLETE. The rows above are a scannable
+                          summary and are cut at 160 characters; this is the
+                          frozen record with nothing shortened and nothing
+                          dropped. <details> is used deliberately — it is
+                          focusable, toggles on Enter and Space, and exposes
+                          expanded state to a screen reader without a line of
+                          JavaScript. */}
+                      <FullRecord record={r} />
                     </td>
                     <td className="px-2 py-1 whitespace-nowrap" style={{ color: "var(--dim)" }}>
                       {when(r)}
@@ -210,7 +190,13 @@ export default function Registrations() {
                       )}
                     </td>
                     <td className="mono px-2 py-1" style={{ color: "var(--faint)" }}>
-                      {(r.specHash ?? "").slice(0, 12) || "—"}
+                      {/* The first 12 hex characters keep the column narrow.
+                          The WHOLE digest is in the title and in the full
+                          record below, because a prefix is not the thing a
+                          reader recomputes. */}
+                      <span title={r.specHash ?? "no digest on this record"}>
+                        {(r.specHash ?? "").slice(0, 12) || "—"}
+                      </span>
                     </td>
                   </tr>
                 );

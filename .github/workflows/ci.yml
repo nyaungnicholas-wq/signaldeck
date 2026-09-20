@@ -189,6 +189,11 @@ jobs:
       - run: npm ci
       # H7: `npm run lint` (eslint) existed but was never invoked in CI.
       - run: npm run lint
+      # src/lib/*.test.mjs (node --test, TypeScript type-stripping) had the same
+      # shape as H7: the files existed, nothing ran them. plain.test.mjs sat
+      # uninvoked, and the refusal, binding and receipts regressions added
+      # 2026-09-20 would have joined it.
+      - run: npm test
       - run: npm run build
       # Dependency vulnerabilities. CI had NO such gate in either language, so
       # the next@16.3.0 advisories and a moderate DoS in
