@@ -96,14 +96,20 @@ type registryRow struct {
 }
 
 type accuracyResponse struct {
-	Status       string        `json:"status"`
-	GraderFresh  bool          `json:"grader_fresh"`
-	Reason       string        `json:"reason,omitempty"`
-	GeneratedAt  time.Time     `json:"generated_at"`
-	GradedAt     string        `json:"graded_at,omitempty"`
-	RefusedSince string        `json:"refused_since,omitempty"`
-	GraderSHA256 string        `json:"grader_sha256,omitempty"`
-	Rows         []accuracyRow `json:"rows,omitempty"`
+	Status      string `json:"status"`
+	GraderFresh bool   `json:"grader_fresh"`
+	// GraderStaleReason carries the heartbeat's own sentence when the grader is
+	// NOT fresh. It exists because `reason` is owned by the publication
+	// decision: when a refused window ALSO has a stale or missing heartbeat,
+	// both facts have to reach the reader, and overwriting one with the other
+	// is what made grader_fresh unreadable in the first place.
+	GraderStaleReason string        `json:"grader_stale_reason,omitempty"`
+	Reason            string        `json:"reason,omitempty"`
+	GeneratedAt       time.Time     `json:"generated_at"`
+	GradedAt          string        `json:"graded_at,omitempty"`
+	RefusedSince      string        `json:"refused_since,omitempty"`
+	GraderSHA256      string        `json:"grader_sha256,omitempty"`
+	Rows              []accuracyRow `json:"rows,omitempty"`
 }
 
 type accuracyRow struct {
@@ -131,11 +137,39 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := d.now().UTC()
 
+	// FRESHNESS IS NOT PUBLICATION STATUS, AND THIS IS WHERE THAT GOT CONFUSED.
+	//
+	// `grader_fresh` answers one operational question: did the grader run, and
+	// recently? Every refusal below used to hard-code it false, so a REFUSED
+	// window reported a broken grader even when the heartbeat said otherwise —
+	// on 2026-09-19 the API served grader_fresh=false while the heartbeat held
+	// success=1 at 21:10:05.873Z, inside the 26h window. That reads as an
+	// outage, and an outage is exactly what a measured scientific refusal is
+	// not. Operators chasing a dead scheduler that was never dead is the cost.
+	//
+	// So it is measured ONCE, here, before any branch, and every response below
+	// reports what was measured. The BRANCH ORDER is unchanged: the registry's
+	// own refusal marker still outranks the heartbeat, because a refusal is a
+	// decision about the figures and staleness is a fact about the process.
+	// Only the reported value moved.
+	stale, staleWhy, staleErr := d.St.GraderStale(ctx, GraderTask, GraderMaxAge, now)
+	graderFresh := staleErr == nil && !stale
+	// The heartbeat's sentence, for the paths that are refusing for a DIFFERENT
+	// reason and must still disclose this one. Empty when the grader is fresh.
+	graderStaleReason := ""
+	switch {
+	case staleErr != nil:
+		graderStaleReason = "grader heartbeat unreadable: " + staleErr.Error()
+	case stale:
+		graderStaleReason = staleWhy
+	}
+
 	reg, err := loadRegistry(d.RegistryPath)
 	if err != nil {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
-			Reason: "accuracy registry unavailable: " + err.Error(),
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
+			GraderStaleReason: graderStaleReason,
+			Reason:            "accuracy registry unavailable: " + err.Error(),
 		})
 		return
 	}
@@ -149,25 +183,27 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 			reason += ": " + reg.RefusalReason
 		}
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt, RefusedSince: *reg.RefusedSince,
-			Reason: reason,
+			GraderStaleReason: graderStaleReason,
+			Reason:            reason,
 		})
 		return
 	}
 
-	stale, why, err := d.St.GraderStale(ctx, GraderTask, GraderMaxAge, now)
-	if err != nil {
+	if staleErr != nil {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
-			Reason: "grader heartbeat unreadable: " + err.Error(),
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
+			GraderStaleReason: graderStaleReason,
+			Reason:            "grader heartbeat unreadable: " + staleErr.Error(),
 		})
 		return
 	}
 	if stale {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED_STALE", GraderFresh: false, GeneratedAt: now,
-			GradedAt: reg.GradedAt, Reason: why,
+			Status: "REFUSED_STALE", GraderFresh: graderFresh, GeneratedAt: now,
+			GradedAt: reg.GradedAt, GraderStaleReason: graderStaleReason,
+			Reason: staleWhy,
 		})
 		return
 	}
@@ -207,7 +243,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	reason, collapsed, err := d.collapsedGradingWindow(ctx, reg, now)
 	if err != nil {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED_UNAVAILABLE", GraderFresh: false, GeneratedAt: now,
+			Status: "REFUSED_UNAVAILABLE", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt,
 			Reason: "the collapsed-cross-section gate could not be evaluated, so these " +
 				"figures are withheld WITHOUT having been judged — this is a check " +
@@ -217,7 +253,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	}
 	if collapsed {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt, Reason: reason,
 		})
 		return
@@ -233,7 +269,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	claims, err := d.St.EvidenceClaims(ctx, "", "")
 	if err != nil {
 		writeAccuracyRefusal(w, accuracyResponse{
-			Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+			Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 			GradedAt: reg.GradedAt,
 			Reason:   "evidence claims unreadable: " + err.Error(),
 		})
@@ -248,7 +284,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			// An unreadable history must not read as "never retired".
 			writeAccuracyRefusal(w, accuracyResponse{
-				Status: "REFUSED", GraderFresh: false, GeneratedAt: now,
+				Status: "REFUSED", GraderFresh: graderFresh, GeneratedAt: now,
 				Reason: "retirement history unreadable: " + err.Error(),
 			})
 			return
@@ -325,7 +361,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSONStatus(w, http.StatusOK, accuracyResponse{
-		Status: "OK", GraderFresh: true, GeneratedAt: now,
+		Status: "OK", GraderFresh: graderFresh, GeneratedAt: now,
 		GradedAt: reg.GradedAt, GraderSHA256: reg.GraderSHA256, Rows: rows,
 	})
 }

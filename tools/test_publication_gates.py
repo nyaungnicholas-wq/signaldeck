@@ -74,11 +74,29 @@ GOOD_ROWS = [
     },
 ]
 
+# The block tools/selection_honesty.py really merges: verdict()'s three fields,
+# plus the `resolvability` dict and the typed `result` record skillschema.build()
+# stamps, plus calls_up and the source. It used to read
+# `"result": {"schema": "skill/1"}` -- a placeholder no version of the producer
+# has ever written. That was invisible while publication_gate.py only asked
+# whether the KEY existed (audit F01); once the gate started checking that a
+# result is the typed record it claims to be, the stand-in failed, correctly.
+# A fixture that cannot pass the real gate is not testing the real pipeline.
 HONESTY_OK = {
     "publishable": True,
     "one_sided": False,
     "reason": "",
-    "result": {"schema": "skill/1"},
+    "resolvability": {"supported": True, "reason": "",
+                      "overlap_lo": 0.501, "overlap_hi": 0.519},
+    "result": {
+        "schema_version": 1,
+        "status": "SUPPORTED",
+        "reason_code": "OK",
+        "reason": "",
+        "predictor": "directional-ensemble",
+        "metric": "accuracy",
+    },
+    "calls_up": 0.4812797032572157,
     "source": "tools/selection_honesty.py",
 }
 
@@ -339,6 +357,44 @@ class PublicationGateTests(unittest.TestCase):
         self.assertFalse(self.sb.still_previous())
         row = self.sb.published()["rows"][0]
         self.assertFalse(row["honesty"]["publishable"])
+
+    # -- F01 (2026-09-20): a SKELETON block is not a merged block ------------
+    def test_null_valued_honesty_block_withholds(self):
+        """The half-written shape the audit walked through the old gate: every
+        required key present, every one of them null. That is what a merge that
+        allocated the block and then died leaves behind, and it used to publish
+        exactly like a completed grade."""
+        self.sb.honesty_merges(
+            {"source": "tools/selection_honesty.py", "publishable": None,
+             "one_sided": None, "reason": None, "result": None},
+        )
+        proc = self.sb.run()
+        self.assertWithheld(proc, "an honesty block whose every value is null")
+
+    def test_refusal_with_no_reason_withholds(self):
+        """A refusal IS the disclosure. publishable=false with nothing saying
+        what was refused is a truncated write, not a finding."""
+        self.sb.honesty_merges({**HONESTY_OK, "publishable": False, "reason": ""},
+                               exit_code=1)
+        proc = self.sb.run()
+        self.assertWithheld(proc, "a refusal that names no reason")
+
+    def test_non_finite_agreement_withholds(self):
+        """json.load takes the bare NaN literal, and 1e400 becomes inf with no
+        literal at all. Neither is a rate, so neither may be published."""
+        for literal, what in (("NaN", "the bare NaN literal"),
+                              ("1e400", "an exponent that overflows to inf")):
+            with self.subTest(literal=literal):
+                sb = Sandbox()
+                self.addCleanup(sb.cleanup)
+                sb.grader_writes(GOOD_ROWS, raw=(
+                    '{"generated":"2026-09-13T12:00:00",'
+                    '"graded_at":"2026-09-13T12:00:00","rows":['
+                    '{"predictor":"directional-ensemble (1d)","family":"direction",'
+                    '"live_acc":0.51,"null_acc":0.50,'
+                    '"breadth":{"mean_daily_agreement":' + literal + "}}]}"))
+                sb.honesty_merges(HONESTY_OK)
+                self.assertWithheld(sb.run(), f"a registry carrying {what}")
 
     # -- F04: a crash must not read as a row refusal ------------------------
     def test_selection_honesty_crash_is_not_a_row_refusal(self):
