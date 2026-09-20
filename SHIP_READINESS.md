@@ -1,5 +1,12 @@
-# Ship readiness — honest audit (2026-07-25)
+# Ship readiness — honest audit (2026-07-25, updated 2026-09-19)
 
+> **UPDATE 2026-09-19.** Blocker 5 is partly cleared: the image builds, runs and
+> serves — see that section. Blocker 4 has NOT moved and the reason is recorded:
+> re-registering the graded window yields INSUFFICIENT DAYS (6 credible days
+> against a floor of 10), and 1w grades 46.0% against a 54.7% null, so clearing
+> the cross-section gate was never going to show good news. The decision on
+> record is to leave the gate alone. Blockers 2 and 6 remain business decisions.
+>
 > **UPDATE, same day.** Blockers 1, 2 and 3 are FIXED (LICENSE, in-code data
 > classification with a 451 guard on raw bar export, PublicReads now defaults
 > from the bind address). Blocker 4 was RE-TESTED against the survivorship-clean
@@ -87,11 +94,26 @@ to produce that proof is already built and running; it needs time, not code.
 
 ## BLOCKING — operational
 
-### 5. Never deployed
-Runs on one Mac, bound to `127.0.0.1`, stopped nightly at 13:10 PT for a
-backup. No HA, no failover, one disk. The Dockerfile and Render blueprint exist
-but have never been executed. "Works on the author's laptop" is not a
-deployment story.
+### 5. Never deployed — PARTLY CLEARED 2026-09-19
+Still one host, bound to `127.0.0.1`, stopped at 13:10 PT for a backup. No HA,
+no failover, one disk. Those remain true.
+
+What is no longer true is "the Dockerfile has never been executed". Measured
+2026-09-19 at commit `bc353f2`:
+
+- `ops/docker-build.sh` builds `signaldeck:latest` (1.21 GB) from a clean tree,
+  with the commit store baked in and verified to resolve the built revision.
+- `docker run` on a scratch volume reports **healthy in 12s** against the
+  image's own HEALTHCHECK, which probes `/api/health` THROUGH the web app, so
+  both halves have to be alive.
+- The container serves `/`, `/proof`, `/volatility`, `/accuracy` and
+  `/api/health`, all 200, and `/api/ledger/verify` returns `intact` rather than
+  a 503.
+
+So the deployment story is now "builds, runs and serves on demand"; what is
+left is choosing a host and running it there with `PUBLIC_READS=false`. Note
+there is **no `render.yaml` in the repo** — the Render blueprint this document
+referred to does not exist, and picking a host is still an open decision.
 
 ### 6. Free-tier data is not institution-grade
 Alpaca's free IEX feed is roughly 2–3% of consolidated volume. Fine for
