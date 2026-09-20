@@ -23,9 +23,19 @@ check() { if [ "$2" = "1" ]; then echo "  ok   $1"; else echo "  FAIL $1"; fails
 # back different every time. A probe that finds itself reports a leak that is
 # not there and hides one that is. Require -File (how the keeper is launched)
 # and exclude the query.
+# Kill any keeper still standing, by command line rather than by job id.
+#
+# The keeper is a NATIVE process launched with `powershell ... &`; killing the
+# bash job did not reliably reap it, and each survivor holds
+# ES_CONTINUOUS|ES_SYSTEM_REQUIRED forever. Seven had accumulated from repeated
+# runs of this very suite before it was noticed - a test that strands a system
+# wake lock is worse than no test.
+sd_kill_stray_keepers() {
+  powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { \$_.CommandLine -match '-File' -and \$_.CommandLine -match 'nosleep.keeper' -and \$_.CommandLine -notmatch 'CimInstance' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }" >/dev/null 2>&1 || true
+}
+
 sd_ps_count_keepers() {
-  powershell -NoProfile -Command "@(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { \$_.CommandLine -match '-File' -and \$_.CommandLine -match 'nosleep.keeper' -and \$_.CommandLine -notmatch 'CimInstance' }).Count" 2>/dev/null | tr -d ' 
-' || echo 0
+  powershell -NoProfile -Command "@(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { \$_.CommandLine -match '-File' -and \$_.CommandLine -match 'nosleep.keeper' -and \$_.CommandLine -notmatch 'CimInstance' }).Count" 2>/dev/null | tr -d '[:space:]' || echo 0
 }
 
 # sd_nosleep must run the command whether or not caffeinate exists.
@@ -50,6 +60,10 @@ if [ -f "$KEEPER" ] && command -v powershell >/dev/null 2>&1; then
   kout="$(powershell -NoProfile -ExecutionPolicy Bypass -File "$(sd_winpath "$KEEPER")" 2>&1 &
           kpid=$!; sleep 4; kill $kpid 2>/dev/null; wait $kpid 2>/dev/null; true)"
   check "nosleep keeper asserts a wake lock (SetThreadExecutionState accepted)"         "$(echo "$kout" | grep -q 'NOSLEEP HELD' && echo 1 || echo 0)"
+  # The launch above leaks its keeper on Windows; reap it before measuring, or
+  # the baseline drifts up by one on every run of this suite.
+  sd_kill_stray_keepers
+  sleep 1
 
   base="$(sd_ps_count_keepers)"
   sd_nosleep sleep 6 >/dev/null 2>&1 &
