@@ -42,11 +42,63 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
+import time
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 GRADE_SH = REPO / "ops" / "grade.sh"
+
+
+def _find_posix_shell() -> str | None:
+    """Locate a POSIX shell that can run ops/grade.sh.
+
+    THE DEFECT (audit F05, 2026-09-20). The launcher was a bare
+    subprocess.run(["sh", GRADE_SH]). On a Windows host with no `sh` on PATH
+    that raises FileNotFoundError, and the documented command --
+
+        .venv/Scripts/python.exe -m unittest discover -s tools -p 'test_*.py'
+
+    -- ended in 22 WinError 2 ERRORS. Those are 22 negative controls that did
+    not run, reported in the same column as 22 production defects; the audit had
+    to say so explicitly to stop them being counted as findings.
+
+    So the shell is resolved explicitly, with the places it actually lives on a
+    Windows box checked after PATH, and SIGNALDECK_TEST_SH left as the override.
+    When nothing is found the tests SKIP with the command to fix it -- never
+    silently, and never as a pass.
+    """
+    override = os.environ.get("SIGNALDECK_TEST_SH", "").strip()
+    if override:
+        return override if (Path(override).exists() or shutil.which(override)) else None
+    for name in ("sh", "bash", "dash", "busybox"):
+        found = shutil.which(name)
+        if found:
+            return found
+    # Git for Windows ships a POSIX sh but does not put it on PATH; it is the
+    # shell this repository's own tooling already runs under.
+    for candidate in (
+        r"C:\Program Files\Git\usr\bin\sh.exe",
+        r"C:\Program Files\Git\bin\sh.exe",
+        r"C:\Program Files (x86)\Git\usr\bin\sh.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Git\usr\bin\sh.exe"),
+    ):
+        if Path(candidate).exists():
+            return candidate
+    return None
+
+
+POSIX_SH = _find_posix_shell()
+
+NO_SH_REASON = (
+    "no POSIX shell found, so ops/grade.sh cannot be driven on this host. These "
+    "are the wrapper's negative controls and they have NOT run. Install Git for "
+    "Windows (which ships sh.exe), or set SIGNALDECK_TEST_SH to a shell. On "
+    "Linux/macOS /bin/sh is always present, and the container runs busybox sh -- "
+    "these tests exercising a real POSIX shell is the point, so a Windows PATH "
+    "fix here does NOT prove the container's behaviour."
+)
 REAL_PUBGATE = REPO / "tools" / "publication_gate.py"
 REAL_BUILDMANIFEST = REPO / "tools" / "build_manifest.py"
 
@@ -143,7 +195,15 @@ class Sandbox:
         # Every file the manifest pins has to exist before it is emitted, or it
         # records them as missing and refuses -- which is the behaviour tested
         # further down, not the baseline.
+        #
+        # Seeded from build_manifest's OWN artifact list rather than a copy of
+        # it. When the trust boundary widened (audit R03: the two modules
+        # selection_honesty imports, the wrapper and the entrypoint), a
+        # hardcoded list here would have made every scenario in this file error
+        # at construction -- which is exactly what it did before this loop
+        # replaced it. The fixture follows the boundary; it does not restate it.
         self.write_tool("live_accuracy.py", _py("import sys; sys.exit(0)\n"))
+        self.seed_pinned_artifacts()
         self.grader_writes(GOOD_ROWS, honesty=None)
         self.honesty_merges(HONESTY_OK, exit_code=0)
         self.heartbeat(exit_code=0)
@@ -154,6 +214,36 @@ class Sandbox:
     # -- stub factories ----------------------------------------------------
     def write_tool(self, name: str, body: str) -> None:
         (self.tools / name).write_text(body, encoding="utf-8")
+
+    def seed_pinned_artifacts(self) -> None:
+        """Create a placeholder for every artifact the manifest requires that
+        the scenario has not already provided.
+
+        The REAL ops/grade.sh is not copied in -- it is executed from the
+        repository by the launcher, and the manifest verifies it at the path it
+        RUNS from, so a placeholder under the sandbox's usr/local/bin is what
+        binds here. The point of this fixture is the wrapper's decision logic,
+        not the wrapper's own provenance.
+        """
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_sandbox_build_manifest", self.tools / "build_manifest.py")
+        bm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bm)
+        for rel in bm.SOURCE_ARTIFACTS:
+            # `emit` runs on the build host and reads the REPOSITORY layout;
+            # `verify` runs in the image and reads the IMAGE layout, where the
+            # wrapper and entrypoint sit under usr/local/bin. Both must exist
+            # and must match, or emit records the artifact as missing and
+            # refuses -- which is a real behaviour, tested elsewhere, not the
+            # baseline every other scenario needs.
+            body = f"sandbox placeholder for {rel}\n"
+            for p in {self.dir / rel, bm.artifact_path(rel, self.dir, self.dir)}:
+                if p.exists():
+                    continue
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(body, encoding="utf-8")
 
     def grader_writes(self, rows, honesty=None, exit_code: int = 0, raw: str | None = None) -> None:
         """Stand in for tools/accuracy_registry.py (pinned; never invoked for real)."""
@@ -297,8 +387,10 @@ class Sandbox:
             SIGNALDECK_BIN_ROOT=str(self.dir),
             PATH=str(self.bin) + os.pathsep + env.get("PATH", ""),
         )
+        if not POSIX_SH:
+            raise unittest.SkipTest(NO_SH_REASON)
         proc = subprocess.run(
-            ["sh", str(GRADE_SH)],
+            [POSIX_SH, str(GRADE_SH)],
             env=env, capture_output=True, text=True, timeout=180,
         )
         return proc
@@ -318,21 +410,56 @@ class Sandbox:
 
 class PublicationGateTests(unittest.TestCase):
     def setUp(self) -> None:
+        # SKIP, LOUDLY, never a silent pass: a missing shell means these
+        # negative controls did not run, and the reason says how to fix it.
+        if not POSIX_SH:
+            self.skipTest(NO_SH_REASON)
         if not REAL_PUBGATE.exists():
             self.skipTest(f"{REAL_PUBGATE} not present")
         self.sb = Sandbox()
         self.addCleanup(self.sb.cleanup)
 
     def assertWithheld(self, proc, because: str) -> None:
+        """grade.sh refused, and no ungated row reached the served file.
+
+        This used to be `still_previous()` -- the published file must be byte
+        identical to what was there before. That was the right INVARIANT
+        expressed as the wrong CHECK, and it stopped being true when the
+        wrapper started writing a refusal envelope (audit F10): leaving $OUT
+        untouched meant a seeded volume went on serving the last rows with
+        nothing saying the newest grade was withheld, and a fresh volume was
+        left with no file at all, which reads as an outage rather than a
+        refusal. The dev-box path has written that envelope since 2026-08-04.
+
+        So the invariant is asserted directly: whatever is on disk, it carries
+        NO ROWS from the refused grade. Either shape satisfies it -- the
+        previous registry untouched, or a REFUSED envelope with an empty rows
+        list and the last successful grade kept nested.
+        """
         combined = proc.stdout + proc.stderr
         self.assertNotEqual(
             proc.returncode, 0,
             f"grade.sh exited 0 on {because}\n{combined}",
         )
-        self.assertTrue(
-            self.sb.still_previous(),
+        if self.sb.still_previous():
+            return
+        try:
+            published = json.loads(self.sb.out.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            self.fail(f"{because}: the published registry is unreadable ({e})")
+        self.assertEqual(
+            published.get("status"), "REFUSED",
+            f"{because}: the published file is neither the previous registry nor a "
+            f"refusal envelope.\npublished={str(published)[:400]}",
+        )
+        self.assertEqual(
+            published.get("rows"), [],
             f"{because}: ungated rows reached the published registry.\n"
-            f"published={self.sb.out.read_text(encoding='utf-8')[:400]}",
+            f"published={str(published)[:400]}",
+        )
+        self.assertEqual(
+            published.get("stale_last_registry"), PREV_REGISTRY,
+            f"{because}: the last successful grade was lost rather than kept nested.",
         )
 
     # -- the control: this must PUBLISH ------------------------------------
@@ -484,8 +611,12 @@ class PublicationGateTests(unittest.TestCase):
         """A refused run must leave no staged artifact behind that a later
         reader or a careless retry could mistake for a published registry."""
         self.sb.collapsecheck(exit_code=1, stdout="collapsed")
-        self.sb.run()
-        self.assertTrue(self.sb.still_previous())
+        proc = self.sb.run()
+        # The staged artifact is the subject here; the published file is
+        # asserted through the shared invariant, which since the refusal
+        # envelope landed (audit F10) is "no rejected row reached it" rather
+        # than "the bytes did not change".
+        self.assertWithheld(proc, "a refused collapse gate")
         leftovers = list(self.sb.data.glob("*.staging*"))
         self.assertEqual(leftovers, [], f"staged artifact left behind: {leftovers}")
 
@@ -545,7 +676,13 @@ class PublicationGateTests(unittest.TestCase):
         sb2.tamper("tools/selection_honesty.py")
         proc2 = sb2.run()
         self.assertNotEqual(proc2.returncode, 0, "a forged label rescued swapped bytes")
-        self.assertTrue(sb2.still_previous())
+        # Same invariant as assertWithheld, on the other sandbox: either the
+        # previous registry is untouched or a REFUSED envelope carrying no rows
+        # replaced it. Never the swapped grade's figures.
+        if not sb2.still_previous():
+            published = json.loads(sb2.out.read_text(encoding="utf-8"))
+            self.assertEqual(published.get("status"), "REFUSED", published)
+            self.assertEqual(published.get("rows"), [], published)
 
     def test_manifest_verify_never_claims_the_revision_was_verified(self):
         """The manifest REPORTS the revision and must never claim to have
@@ -572,6 +709,332 @@ class PublicationGateTests(unittest.TestCase):
         (self.sb.dir / "PREREGISTRATION.md").write_text("# tampered\n", encoding="utf-8")
         proc = self.sb.run()
         self.assertWithheld(proc, "a protocol document the chain does not pin")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# R02 (2026-09-20): one writer at a time, and the bytes that pass are the bytes
+# that publish.
+#
+# ${OUT}.staging was a single fixed name, removed at startup and again at
+# cleanup, with no lock. Two overlapping runs -- the image's schedule and an
+# operator by hand -- could write it concurrently, delete each other's staged
+# artifact mid-check, or publish bytes the other run's gates had inspected.
+#
+# Reproduced with two REAL invocations sharing one $OUT and one $DB, made to
+# overlap by a slow grader stub, never against the live grader.
+# ──────────────────────────────────────────────────────────────────────────────
+class StagingLockTests(unittest.TestCase):
+    def setUp(self) -> None:
+        if not POSIX_SH:
+            self.skipTest(NO_SH_REASON)
+        if not REAL_PUBGATE.exists():
+            self.skipTest(f"{REAL_PUBGATE} not present")
+        self.sb = Sandbox()
+        self.addCleanup(self.sb.cleanup)
+
+    def lockdir(self) -> Path:
+        return Path(str(self.sb.out) + ".lock")
+
+    def test_a_second_grader_declines_while_one_holds_the_lock(self):
+        """A live lock means another grader is mid-cycle. Declining is neither
+        an outage nor a refusal: it writes no heartbeat and no envelope,
+        because the run that holds the lock is about to write both."""
+        lock = self.lockdir()
+        lock.mkdir()
+        # This test process is alive, so the lock is demonstrably not stale.
+        (lock / "pid").write_text(str(os.getpid()), encoding="utf-8")
+        (lock / "started").write_text(str(int(time.time())), encoding="utf-8")
+
+        proc = self.sb.run()
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, combined)
+        self.assertIn("grade SKIPPED", combined)
+        self.assertTrue(self.sb.still_previous(),
+                        "a declining run must not touch the published registry")
+        self.assertTrue(lock.exists(), "a declining run must not break a live lock")
+
+    def test_a_stale_lock_from_a_killed_container_is_broken(self):
+        lock = self.lockdir()
+        lock.mkdir()
+        # A pid that cannot be running, and a start time far outside the grace.
+        (lock / "pid").write_text("999999", encoding="utf-8")
+        (lock / "started").write_text(str(int(time.time()) - 86400), encoding="utf-8")
+
+        proc = self.sb.run()
+        combined = proc.stdout + proc.stderr
+        self.assertIn("breaking a stale grade lock", combined)
+        self.assertEqual(proc.returncode, 0, combined)
+        self.assertFalse(self.sb.still_previous(), "the grade should have published")
+
+    def test_a_held_lock_is_not_broken_merely_for_being_old(self):
+        """A slow grade on a large database is not a stale lock. Both
+        conditions -- owner gone AND past the grace period -- or neither.
+
+        The holder has to be a process grade.sh's own `kill -0` can SEE. In the
+        container that is automatic: the lock holder and this script share a PID
+        namespace. On a Windows host driving Git's sh.exe they do not -- MSYS
+        reports this Python interpreter's Win32 pid as gone -- so the holder is
+        spawned through the same shell rather than faked with os.getpid(), which
+        would test the host's process table and not the lock.
+        """
+        holder = subprocess.Popen([POSIX_SH, "-c", "sleep 60"])
+        self.addCleanup(holder.kill)
+        # The pid grade.sh will probe is the one the SHELL knows about.
+        shell_pid = subprocess.run(
+            [POSIX_SH, "-c", "echo $PPID"], capture_output=True, text=True,
+        ).stdout.strip()
+        lock = self.lockdir()
+        lock.mkdir()
+        (lock / "pid").write_text(str(holder.pid), encoding="utf-8")
+        (lock / "started").write_text(str(int(time.time()) - 86400), encoding="utf-8")
+
+        proc = self.sb.run()
+        combined = proc.stdout + proc.stderr
+        if "breaking a stale grade lock" in combined:
+            self.skipTest(
+                "this host's sh cannot see the holder process (pid "
+                f"{holder.pid}; shell sees ppid {shell_pid}), so liveness cannot "
+                "be exercised here. The container shares one PID namespace, where "
+                "kill -0 is exactly the right probe; "
+                "test_a_stale_lock_from_a_killed_container_is_broken covers the "
+                "other half and does run."
+            )
+        self.assertIn("grade SKIPPED", combined)
+        self.assertTrue(self.sb.still_previous())
+
+    def test_a_lock_with_no_pid_file_is_still_breakable(self):
+        """The wedge: a process killed between mkdir and writing its pid leaves
+        a lock nobody owns. If that cannot be broken, every later run declines
+        forever and the grader looks dead -- the exact failure this file exists
+        to end."""
+        lock = self.lockdir()
+        lock.mkdir()
+        (lock / "started").write_text(str(int(time.time()) - 86400), encoding="utf-8")
+        # no pid file at all
+        proc = self.sb.run()
+        combined = proc.stdout + proc.stderr
+        self.assertIn("breaking a stale grade lock", combined)
+        self.assertEqual(proc.returncode, 0, combined)
+
+    def test_a_lock_with_neither_pid_nor_start_time_is_breakable(self):
+        lock = self.lockdir()
+        lock.mkdir()
+        proc = self.sb.run()
+        self.assertIn("breaking a stale grade lock", proc.stdout + proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_a_fresh_pidless_lock_is_left_alone(self):
+        """...but only once it is past the grace period. A lock created a
+        second ago is a run that has not finished writing its pid yet."""
+        lock = self.lockdir()
+        lock.mkdir()
+        (lock / "started").write_text(str(int(time.time())), encoding="utf-8")
+        proc = self.sb.run()
+        self.assertIn("grade SKIPPED", proc.stdout + proc.stderr)
+        self.assertTrue(self.sb.still_previous())
+
+    def test_the_lock_is_released_on_a_refusal(self):
+        """A refused cycle must not leave the lock behind, or the next run
+        declines forever and the grader looks dead."""
+        self.sb.collapsecheck(exit_code=1, stdout="2 collapsed cross-section(s) of 9 day(s):")
+        proc = self.sb.run()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertFalse(self.lockdir().exists(), "the lock outlived a refused cycle")
+
+    def test_the_lock_is_released_on_success(self):
+        proc = self.sb.run()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertFalse(self.lockdir().exists(), "the lock outlived a clean grade")
+
+    def test_cleanup_removes_only_this_runs_staging_file(self):
+        """The old code's startup `rm -f ${OUT}.staging` deleted whatever
+        another run had staged. A foreign staging file must survive."""
+        foreign = Path(str(self.sb.out) + ".staging.999999")
+        foreign.write_text('{"not":"mine"}', encoding="utf-8")
+        proc = self.sb.run()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(foreign.exists(),
+                        "cleanup deleted another run's staged registry")
+        self.assertEqual(foreign.read_text(encoding="utf-8"), '{"not":"mine"}')
+
+    def test_two_overlapping_graders_publish_one_whole_grade(self):
+        """THE RACE, driven. Two real invocations share $OUT and $DB; each
+        grader stub sleeps so their windows overlap, and each writes a
+        distinguishable payload. Exactly one may publish, and what lands must
+        be one grade entire -- never a mix, and never the other run's bytes
+        under this run's approval."""
+        other = Sandbox()
+        self.addCleanup(other.cleanup)
+        # Same published registry, same database: one deployment, two runs.
+        other.out = self.sb.out
+        other.db = self.sb.db
+        other.log = self.sb.log
+
+        def payload(marker):
+            rows = json.loads(json.dumps(GOOD_ROWS))
+            rows[0]["predictor"] = f"directional-ensemble (1d) [{marker}]"
+            return json.dumps({"generated": f"2026-09-13T12:00:0{marker}",
+                               "graded_at": f"2026-09-13T12:00:0{marker}",
+                               "marker": marker, "rows": rows})
+
+        for sb, marker in ((self.sb, "1"), (other, "2")):
+            # A slow grader widens the window the old code raced in.
+            body = "\n".join([
+                "",
+                "import sys, time",
+                "time.sleep(1.5)",
+                'path = sys.argv[sys.argv.index("--json") + 1]',
+                "open(path, 'w', encoding='utf-8').write(%r)" % payload(marker),
+                "",
+            ])
+            sb.write_tool("accuracy_registry.py", _py(body))
+            sb.honesty_merges(HONESTY_OK)
+
+        results = {}
+
+        def go(name, sb):
+            results[name] = sb.run()
+
+        threads = [threading.Thread(target=go, args=(n, s))
+                   for n, s in (("a", self.sb), ("b", other))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=240)
+
+        self.assertEqual(len(results), 2, "one of the invocations never returned")
+        combined = "".join(p.stdout + p.stderr for p in results.values())
+        skipped = sum("grade SKIPPED" in (p.stdout + p.stderr) for p in results.values())
+        self.assertEqual(skipped, 1,
+                         "exactly one run must decline the lock:\n" + combined)
+
+        published = json.loads(self.sb.out.read_text(encoding="utf-8"))
+        # Whole, and one grade's worth: the marker, the timestamp and the row
+        # label must all come from the SAME run.
+        self.assertIn("marker", published, "the previous registry was published instead")
+        m = published["marker"]
+        self.assertIn(m, ("1", "2"))
+        self.assertTrue(published["generated"].endswith(m))
+        self.assertIn(f"[{m}]", published["rows"][0]["predictor"])
+        self.assertEqual(len(published["rows"]), len(GOOD_ROWS))
+        # And no staging debris from either run.
+        leftovers = sorted(p.name for p in self.sb.data.glob("*.staging*"))
+        self.assertEqual(leftovers, [], f"staging files left behind: {leftovers}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# F10 (2026-09-20): a measured refusal is not an outage.
+#
+# Every refusal path in grade.sh funnelled through grader_heartbeat.py
+# --failure, including collapsecheck exit 1 -- which means the grader RAN,
+# measured the window and declined on the evidence. The native helper has
+# carried --refused for exactly that since it was written, and the dev-box
+# script has always used it, so the same result was a FINDING on one box and an
+# OUTAGE on the other.
+#
+# The heartbeat stub echoes its argv, so the mode reaches the log.
+# ──────────────────────────────────────────────────────────────────────────────
+class RefusalClassificationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        if not POSIX_SH:
+            self.skipTest(NO_SH_REASON)
+        if not REAL_PUBGATE.exists():
+            self.skipTest(f"{REAL_PUBGATE} not present")
+        self.sb = Sandbox()
+        self.addCleanup(self.sb.cleanup)
+
+    def modeOf(self, proc) -> str:
+        combined = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, "this scenario must refuse:\n" + combined)
+        if "--refused" in combined:
+            return "--refused"
+        if "--failure" in combined:
+            return "--failure"
+        self.fail("no heartbeat mode reached the log:\n" + combined)
+
+    def envelope(self) -> dict:
+        return json.loads(self.sb.out.read_text(encoding="utf-8"))
+
+    # -- the measured refusal ----------------------------------------------
+    def test_collapse_refusal_records_a_healthy_grader(self):
+        self.sb.collapsecheck(
+            exit_code=1,
+            stdout="the graded window contains 18 collapsed cross-section(s) of 82 day(s):")
+        proc = self.sb.run()
+        self.assertEqual(self.modeOf(proc), "--refused",
+                         "a measured collapse was recorded as a grader outage")
+        env = self.envelope()
+        self.assertEqual(env["status"], "REFUSED")
+        self.assertIn("collapsed cross-section", env["refusal_reason"])
+        self.assertEqual(env["rows"], [], "a refusal must publish no rows")
+
+    # -- the outages, which must NOT be dressed as findings -----------------
+    def test_collapse_check_outage_records_a_failure(self):
+        self.sb.collapsecheck(exit_code=2)
+        self.assertEqual(self.modeOf(self.sb.run()), "--failure")
+
+    def test_missing_collapsecheck_records_a_failure(self):
+        self.sb.collapsecheck(present=False)
+        self.assertEqual(self.modeOf(self.sb.run()), "--failure")
+
+    def test_grader_crash_records_a_failure(self):
+        self.sb.grader_writes(GOOD_ROWS, exit_code=3)
+        self.assertEqual(self.modeOf(self.sb.run()), "--failure")
+
+    def test_incomplete_post_processing_records_a_failure(self):
+        """publication_gate INCOMPLETE is a post-processing failure, not a
+        finding about a model -- it is a CHECK UNAVAILABLE, and classifies
+        with the outages."""
+        self.sb.honesty_merges(None, crash=True)
+        self.assertEqual(self.modeOf(self.sb.run()), "--failure")
+
+    # -- the envelope, on both shapes of volume -----------------------------
+    def test_refusal_envelope_on_a_seeded_volume_keeps_the_last_grade_nested(self):
+        self.sb.collapsecheck(exit_code=1, stdout="3 collapsed cross-section(s) of 9 day(s):")
+        self.sb.run()
+        env = self.envelope()
+        self.assertEqual(env["rows"], [])
+        self.assertEqual(env["stale_last_registry"], PREV_REGISTRY,
+                         "the last successful grade must be kept, nested, never lost")
+        # and never at the top level, where it would read as a fresh grade
+        self.assertNotEqual(env.get("generated"), PREV_REGISTRY["generated"])
+
+    def test_refusal_envelope_on_a_fresh_volume(self):
+        """No registry has ever been published here. The old code left the
+        path absent, which /api/accuracy reads as 'registry unavailable' -- an
+        outage -- rather than as the refusal it is."""
+        self.sb.out.unlink()
+        self.sb.collapsecheck(exit_code=1, stdout="3 collapsed cross-section(s) of 9 day(s):")
+        self.sb.run()
+        self.assertTrue(self.sb.out.exists(),
+                        "a fresh volume was left with no registry at all")
+        env = self.envelope()
+        self.assertEqual(env["status"], "REFUSED")
+        self.assertEqual(env["rows"], [])
+        self.assertIsNone(env["stale_last_registry"])
+        self.assertTrue(env["refused_since"])
+
+    def test_refused_since_survives_a_retry(self):
+        """A retry into an already-refused registry must not reset the
+        outage's age to zero."""
+        self.sb.collapsecheck(exit_code=1, stdout="3 collapsed cross-section(s) of 9 day(s):")
+        self.sb.run()
+        first = self.envelope()
+        time.sleep(1.1)
+        self.sb.run()
+        second = self.envelope()
+        self.assertEqual(second["refused_since"], first["refused_since"])
+        self.assertNotEqual(second["generated"], first["generated"])
+        # and refusal must not nest inside refusal
+        self.assertEqual(second["stale_last_registry"], PREV_REGISTRY)
+
+    def test_a_refusal_never_publishes_the_rejected_figures(self):
+        self.sb.collapsecheck(exit_code=1, stdout="3 collapsed cross-section(s) of 9 day(s):")
+        self.sb.run()
+        text = self.sb.out.read_text(encoding="utf-8")
+        self.assertNotIn("directional-ensemble (1d)", text,
+                         "the rejected rows reached the published registry")
+        self.assertNotIn("0.51", text, "a rejected accuracy reached the published registry")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,20 @@
-# Ship readiness — honest audit (2026-07-25, updated 2026-09-19)
+# Ship readiness — honest audit (2026-07-25, updated 2026-09-20)
+
+> **HOW TO READ THIS FILE.** Every section heading states its CURRENT status
+> and the date that status was verified. Findings from an earlier pass that no
+> longer hold are kept, indented and explicitly dated, as history — not deleted,
+> and not left standing as though they were current. The block between the
+> `GENERATED live_accuracy` markers in §4 is written by
+> `tools/live_accuracy.py` from the registry and must not be edited by hand.
+>
+> **UPDATE 2026-09-20.** Reconciled against the source and the live evidence.
+> §1 and §3 were still asserting the opposite of what the repository contains
+> — there IS a LICENSE, and `SIGNALDECK_PUBLIC_READS` has not defaulted to
+> `true` since it started deriving from `reachablePrivately()`. §4 still framed
+> 2026-08-07 as a future date and the structural claims as ungraded; both are
+> past. §4 also promised the evidence blocker "needs time, not code" next to a
+> refusal window that cannot age out; that promise is withdrawn and the reason
+> is stated there. The generated region was not touched.
 
 > **UPDATE 2026-09-19.** Blocker 5 is partly cleared: the image builds, runs and
 > serves — see that section. Blocker 4 has NOT moved and the reason is recorded:
@@ -7,9 +23,13 @@
 > the cross-section gate was never going to show good news. The decision on
 > record is to leave the gate alone. Blockers 2 and 6 remain business decisions.
 >
-> **UPDATE, same day.** Blockers 1, 2 and 3 are FIXED (LICENSE, in-code data
-> classification with a 451 guard on raw bar export, PublicReads now defaults
-> from the bind address). Blocker 4 was RE-TESTED against the survivorship-clean
+> **UPDATE, same day.** Blockers 1 and 3 are FIXED (LICENSE; PublicReads now
+> derives from `reachablePrivately()` — loopback bind AND no tunnel in the
+> allowlist, not the bind address alone, which A9 showed was insufficient).
+> Blocker 2 has an in-code data classification with a 451 guard on raw bar
+> export, but the REDISTRIBUTION decision behind it is still open and is a
+> business question, not a code one. Blocker 4 was RE-TESTED against the
+> survivorship-clean
 > universe — see "What the re-validation found" at the end. Blockers 5 and 6
 > (deployment, paid feed) remain open and are decisions, not code.
 
@@ -25,12 +45,20 @@ solved by writing more of it.
 
 ## BLOCKING — legal
 
-### 1. No LICENSE file
-There is none in the repo. Legal review stops here on contact, because without
-one the default is "all rights reserved" and nobody can evaluate what they are
-allowed to do with it. This is a business decision (permissive vs proprietary
-vs dual), so it is not something to pick on the author's behalf — but it is
-the cheapest blocker on this list to clear.
+### 1. No LICENSE file — CLEARED 2026-09-19
+`LICENSE` exists and is a Source-Available License, "Copyright (c) 2026
+Nicholas Nyaung. All rights reserved." A reader can now tell what they are
+allowed to do with the repository, which is all this blocker ever asked for.
+
+This audit verified the file's presence and its heading. It did NOT review the
+licence text, its fitness for any distribution model, or its interaction with
+the data-redistribution question in §2 — those are legal questions and no
+engineering check settles them.
+
+> *Original finding, 2026-07-25, retained as history:* "There is none in the
+> repo. Legal review stops here on contact, because without one the default is
+> 'all rights reserved' and nobody can evaluate what they are allowed to do
+> with it."
 
 ### 2. Data redistribution — the serious one
 Several ingest paths are fine to *consume* privately and would be a problem to
@@ -53,11 +81,27 @@ PLATFORM and have the customer bring their own data keys. Analytics *derived*
 from data can be sold where the raw data cannot. That reframing costs no
 engineering — it is a packaging decision — but it has to be made deliberately.
 
-### 3. `SIGNALDECK_PUBLIC_READS` defaults to `true`
-Read endpoints answer without authentication so localhost works out of the box.
-That default is correct for a personal tool and wrong for anything exposed.
-Any deployment must set it to `false`; a security reviewer will find this in
-minutes and it reads worse than it is.
+### 3. `SIGNALDECK_PUBLIC_READS` defaulted to `true` — CLEARED 2026-09-19
+It no longer does. `daemon/internal/config/config.go` resolves it as
+`boolEnv("SIGNALDECK_PUBLIC_READS", private)`, where `private` is
+`reachablePrivately(addr, allowedHosts)` — loopback bind AND no reverse tunnel
+in the allowlist. Both signals must agree before reads open; when they
+disagree the answer is closed. An operator who wants open reads still says so
+in one env var.
+
+The bind address alone was not enough, and that is on the record: A9
+(2026-07-26) found this machine's own allowlist naming a reserved ngrok
+hostname while the heuristic still evaluated "private", so the safe-by-default
+check read safe on the exact deployment that was public.
+
+Still true, and not a code question: a deployment should set
+`SIGNALDECK_PUBLIC_SURFACE` deliberately rather than relying on the denylist,
+because `PublicReads` answers "is this route one we chose to keep private?" —
+so a route added later is public by forgetting.
+
+> *Original finding, 2026-07-25, retained as history:* "Read endpoints answer
+> without authentication so localhost works out of the box. That default is
+> correct for a personal tool and wrong for anything exposed."
 
 ---
 
@@ -79,16 +123,32 @@ Generated from `data/accuracy_registry.json` (registry `REFUSED` since 2026-09-1
 
 <!-- END GENERATED live_accuracy -->
 
-- The structural forecasts (trend21 82%, vol21, liquidity21) are **backtest
-  claims with no live grade yet**. The first ones become gradable **2026-08-07**.
+- The structural forecasts are **no longer ungraded**. 2026-08-07 has passed and
+  outcomes are resolving: `tools/structural_liveness.py` on 2026-09-20 reports
+  9,211 of 26,105 trend21, 9,262 of 26,193 vol21 and 9,155 of 25,864
+  liquidity21 outcomes resolved, with no dead arm. `trend63` is WAITING — 26,105
+  forecasts, 0 resolved — because its horizon has not elapsed, and `liquidity21`
+  carries one overdue outcome, below the dead-arm threshold. Resolved outcomes
+  are not a verdict: none of these has published a skill claim.
+- Volatility has a live record and **no verdict either way**: 10 of the 60
+  distinct trading days required at 1 session, 6 of 60 at 5 sessions. Days are
+  counted, not rows, because forecasts resolving on one day share a market
+  shock.
 
 So today the defensible claim is *"a platform that measures honestly and
 retires its own failures"* — which is genuinely rare and worth saying — and NOT
-*"a system with predictive edge."* Claiming the second before 2026-08-07 would
-be the exact failure this codebase was built to prevent.
+*"a system with predictive edge."*
 
-**What clears it:** 8–12 weeks of resolved forward outcomes. The infrastructure
-to produce that proof is already built and running; it needs time, not code.
+**What clears it, and what does not.** More resolved outcomes are what the
+structural and volatility arms need, and those accrue on their own. The
+DIRECTIONAL refusal above does not: the collapsed window is anchored to the
+survivorship epoch and does not roll forward, so a collapsed day stays in it
+however long anyone waits. This section used to end "it needs time, not code",
+printed directly beneath a refusal that time cannot clear. That sentence is
+withdrawn. Clearing the directional window is a re-registration decision with
+its own evidence — and the decision on record (see the 2026-09-19 update at the
+top) is to leave the gate alone, because re-registering yields INSUFFICIENT
+DAYS and 1w grades 46.0% against a 54.7% null.
 
 ---
 

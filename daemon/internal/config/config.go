@@ -124,7 +124,12 @@ type Config struct {
 	// Multi-user + exposure controls.
 	OpenSignup     bool // SIGNALDECK_OPEN_SIGNUP (default true): allow POST /api/auth/register
 	AllowRawExport bool // SIGNALDECK_ALLOW_RAW_EXPORT (default false): serve raw licensed bars
-	PublicReads    bool // SIGNALDECK_PUBLIC_READS (default true): read-only endpoints work without auth (localhost compatibility)
+	// PublicReads (SIGNALDECK_PUBLIC_READS): read-only endpoints answer without
+	// auth. The default is NOT true -- it is reachablePrivately(), i.e. open
+	// only when the daemon is on loopback AND no tunnel is in the allowlist.
+	// The comment here said "default true" long after that stopped being so,
+	// and SHIP_READINESS.md quoted it back as a shipping blocker (audit F11).
+	PublicReads bool
 
 	// PublicSurface (SIGNALDECK_PUBLIC_SURFACE, default false) turns the
 	// anonymous-read rule from a DENYLIST into an ALLOWLIST.
@@ -147,9 +152,9 @@ type Config struct {
 	// intent, not a network fact, and inferring an intent is how fly.toml
 	// ended up publishing every read endpoint it never named.
 	PublicSurface bool
-	TrustProxy     bool // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
-	RateRPS        int  // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
-	RateBurst      int  // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
+	TrustProxy    bool // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
+	RateRPS       int  // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
+	RateBurst     int  // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
 
 	// MCP server (internal/mcp) — advisory methodology + current regime
 	// verdicts for AI clients. OFF unless explicitly enabled, because it is
