@@ -75,3 +75,39 @@ under their own agreements. Analytics derived from data can be sold where the
 underlying records cannot. `SIGNALDECK_ALLOW_RAW_EXPORT=true` records an
 operator's assertion that they hold the necessary rights — it does not grant
 them.
+
+## What the pre-publish scan flags, and why each file is publishable
+
+The pre-publish scan flags every tracked data file by its path, not by inspecting its contents, so the "!" marker is a prompt for a human to verify rather than an automatic finding. Verified on 2026-09-20 against the file headers, none of the tracked files contain a price, quote, volume or news-body column – the categories marked non-redistributable in the table above.
+
+| file | columns | class |
+|------|---------|-------|
+| `repro/directional_days.csv` | horizon, day, n, correct, up_days + high-conviction slice | derived day tallies |
+| `repro/structural_days.csv` | kind, horizon_days, day, n, correct | derived day tallies |
+| `repro/structural_naive_days.csv` | kind, horizon_days, day, n, correct | derived day tallies |
+| `repro/structural_claims.csv` | kind, horizon_days, forecasts_recorded, claimed_accuracy, first_ts | claim metadata |
+| `repro/prereg_claims.csv` | kind, claimed_accuracy, spec_hash, registered_ts | claim metadata |
+| `repro/grading_protocol.csv` | grader hash, floors, alpha, multiplicity rule | protocol metadata |
+| `repro/pairs_inputs.csv` | symbol, timeframe, first_ts, last_ts, n, sha256 | FINGERPRINT, no series |
+| `repro/xsfactor_inputs.csv` | symbol, timeframe, active, first_day, last_day, n, sha256 | FINGERPRINT, no series |
+| `research/dirfix/ablation.csv` | h, k, weighting, sharpe, ann_ret, max_dd, t_nw, turnover | backtest summary statistics |
+| `ops/prune-20260719-181723/deactivated_symbols.csv` | id, ticker | symbol identifiers |
+
+### The fingerprint files are the ones to understand
+
+The two files named `pairs_inputs.csv` and `xsfactor_inputs.csv` look like the dangerous "inputs" files but they are the opposite: each row reduces a symbol series to its temporal bounds, its row count and the SHA-256 hash of the canonical serialisation. No price bar is exported.
+
+Someone who already possesses the licensed bars can confirm they hold the byte-identical dataset before comparing results, which makes a published number reproducible without redistributing the underlying data.
+
+The generator script `tools/make_repro_snapshot.py` states the same in its docstring ("The series themselves are NOT exported — bar data is license-classified (A10) and not redistributable"), so the intent is recorded both in code and here.
+
+### What would change this answer
+
+- a new column carrying a price, quote, volume or news body, in any of these files or a new one
+- a snapshot generator change that exports a series rather than its hash
+- a new tracked data file from a Licensed or Restricted source in the table above
+
+Any of those would turn the "!" into a genuine finding again and this section would need to be re-derived rather than simply re-read.
+
+**Not a legal review.**
+This section records what the files CONTAIN, which is an engineering question with a checkable answer. Whether publishing derived analytics from these providers is permitted under their agreements is a separate matter that no check in this repository settles, and SHIP_READINESS.md section 2 tracks it as an open business decision.
