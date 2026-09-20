@@ -76,7 +76,19 @@ if [ -f "$KEEPER" ] && command -v powershell >/dev/null 2>&1; then
   check "sd_nosleep HOLDS a keeper while the command runs (base=$base during=$during)"         "$([ "${during:-0}" -gt "${base:-0}" ] && echo 1 || echo 0)"
   check "sd_nosleep RELEASES it afterwards (after=$after)"         "$([ "${after:-1}" -le "${base:-0}" ] && echo 1 || echo 0)"
 else
-  check "nosleep keeper present" 0
+  # NOT a failure off Windows. sd_nosleep's inhibitor is caffeinate on macOS and
+  # the PowerShell keeper on Windows; on Linux there is neither and running the
+  # command bare is the correct behaviour. CI runs this job on ubuntu, where an
+  # unconditional `check ... 0` here reported "FAIL nosleep keeper present" and
+  # turned a platform that has nothing to inhibit into a red build.
+  #
+  # On Windows their ABSENCE is still a real failure, so only that case fails.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      check "nosleep keeper present on Windows (it is required there)" 0 ;;
+    *)
+      echo "  skip nosleep keeper checks - no PowerShell on $(uname -s); sd_nosleep runs bare here by design" ;;
+  esac
 fi
 
 # sd_sqlite must create and query a database with no sqlite3 CLI present.
