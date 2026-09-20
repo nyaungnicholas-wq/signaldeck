@@ -355,6 +355,60 @@ func migrate(w *sql.DB) error {
 			}
 		}
 	}
+	// THE SETTLE BACKFILL'S OWN WORK QUEUE, indexed.
+	//
+	// These live here rather than in schema.sql because settle_ts is added by
+	// the ALTERs directly above: schema.sql is applied BEFORE migrate(), so a
+	// partial index referencing settle_ts fails on a fresh database with
+	// "no such column". The store's own contract test catches that, which is
+	// how this was found.
+	//
+	// store.backfillSettleFor runs one UPDATE per pass per table with
+	// WHERE settle_ts IS NULL AND resolved_at IS NOT NULL. It is a convergence
+	// task for rows predating the column, and it HAS converged: measured on the
+	// live database 2026-09-20, zero rows match that predicate in any of the
+	// three tables, because the resolver now fills settle_ts at write time.
+	//
+	// It still paid a full scan to discover that. Measured live, the inner
+	// probe alone: prediction_outcomes 50.6ms, score_outcomes 5266.1ms,
+	// confluence_outcomes 1.2ms -- score_outcomes walked idx_outcomes_resolved
+	// across ~6.5M resolved rows testing settle_ts IS NULL on every one and
+	// found none. With the outer scan across all three, prediction-runner's
+	// stage timer measured this stage at 16.3-17.3s per pass: the LARGEST stage
+	// in a healthy 37s pass, bigger than the entire per-symbol loop, every ten
+	// minutes, to do no work.
+	//
+	// Each index IS the work queue: a row enters when it resolves without a
+	// settle_ts and leaves when the backfill fills it. Normally empty, so
+	// maintenance is near free and the probe becomes an empty index scan
+	// (measured 105.3ms -> 0.0ms on a seeded 400k-row replica).
+	//
+	// Checked before shipping that this does not make the query fast by HIDING
+	// rows: with a seeded backlog the same query still returns the full backlog
+	// through the index. A partial index that silently stopped the backfill
+	// would be far worse than the scan it replaces.
+	//
+	// The backfill is KEPT, not deleted: it is the safety net if any future
+	// path writes a resolved row without a settle_ts, and indexed it costs
+	// nothing to leave armed.
+	for _, ddl := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_predoutcomes_settle_backfill
+		   ON prediction_outcomes (symbol_id, horizon, ts)
+		   WHERE settle_ts IS NULL AND resolved_at IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_score_outcomes_settle_backfill
+		   ON score_outcomes (symbol_id, horizon, ts)
+		   WHERE settle_ts IS NULL AND resolved_at IS NOT NULL`,
+		// Key order (symbol_id, ts, horizon) is deliberate here and mirrors
+		// settle.go's keyCols for this table; do not "fix" it to match the
+		// other two.
+		`CREATE INDEX IF NOT EXISTS idx_confl_outcomes_settle_backfill
+		   ON confluence_outcomes (symbol_id, ts, horizon)
+		   WHERE settle_ts IS NULL AND resolved_at IS NOT NULL`,
+	} {
+		if _, err := w.Exec(ddl); err != nil {
+			return err
+		}
+	}
 	// confluence pseudo-replication wave (2026-08-21): two columns that make the
 	// published confluence population defensible.
 	//
