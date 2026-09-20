@@ -68,15 +68,27 @@ type ledgerVerifyBody struct {
 	Head        string `json:"head"`
 	BrokenAtSeq *int64 `json:"brokenAtSeq"`
 	Tamper      struct {
-		DetectsEdits                bool   `json:"detectsEdits"`
+		DetectsEdits bool `json:"detectsEdits"`
+		// detectsOperatorRegeneration is gated on an EXTERNAL receipt (audit
+		// F09); localAnchorsReproduce is the local-signature check the
+		// assertions below are really about.
 		DetectsOperatorRegeneration bool   `json:"detectsOperatorRegeneration"`
-		ProvenAnteriorThroughSeq    *int64 `json:"provenAnteriorThroughSeq"`
-		ProvenAnteriorThroughCount  *int64 `json:"provenAnteriorThroughCount"`
-		AnchorCount                 int64  `json:"anchorCount"`
-		FailingAnchors              int    `json:"failingAnchors"`
-		FirstFailingSeq             *int64 `json:"firstFailingSeq"`
-		Claim                       string `json:"claim"`
-		Anchoring                   struct {
+		LocalAnchorsReproduce       bool   `json:"localAnchorsReproduce"`
+		AnteriorityScope            string `json:"anteriorityScope"`
+		AnchorCheckMode             string `json:"anchorCheckMode"`
+		StoredHeadComparison        bool   `json:"storedHeadComparison"`
+		PayloadRecomputed           bool   `json:"payloadRecomputed"`
+		ExternalWitness             struct {
+			Verified bool   `json:"verified"`
+			Reason   string `json:"reason"`
+		} `json:"externalWitness"`
+		ProvenAnteriorThroughSeq   *int64 `json:"provenAnteriorThroughSeq"`
+		ProvenAnteriorThroughCount *int64 `json:"provenAnteriorThroughCount"`
+		AnchorCount                int64  `json:"anchorCount"`
+		FailingAnchors             int    `json:"failingAnchors"`
+		FirstFailingSeq            *int64 `json:"firstFailingSeq"`
+		Claim                      string `json:"claim"`
+		Anchoring                  struct {
 			Wrote   bool   `json:"wrote"`
 			Reason  string `json:"reason"`
 			Publish string `json:"publish"`
@@ -140,10 +152,10 @@ func TestLedgerVerify_AnchorsAndStatesWhatIsProven(t *testing.T) {
 	if !strings.HasPrefix(first.Tamper.Anchoring.Publish, "SIGNALDECK-LEDGER-ANCHOR") {
 		t.Errorf("publish line = %q, want the postable digest line", first.Tamper.Anchoring.Publish)
 	}
-	if !first.Tamper.DetectsOperatorRegeneration ||
+	if !first.Tamper.LocalAnchorsReproduce ||
 		first.Tamper.ProvenAnteriorThroughSeq == nil || *first.Tamper.ProvenAnteriorThroughSeq != 20 {
 		t.Fatalf("after anchoring: detects=%v provenThroughSeq=%v, want true/20",
-			first.Tamper.DetectsOperatorRegeneration, first.Tamper.ProvenAnteriorThroughSeq)
+			first.Tamper.LocalAnchorsReproduce, first.Tamper.ProvenAnteriorThroughSeq)
 	}
 
 	// Cadence: an immediate second call must not anchor again, and must say why.
@@ -172,7 +184,7 @@ func TestLedgerVerify_AnchorsAndStatesWhatIsProven(t *testing.T) {
 	if !after.Intact {
 		t.Fatal("the regenerated chain should still report intact — the chain cannot see this, which is why the anchor must")
 	}
-	if after.Tamper.DetectsOperatorRegeneration {
+	if after.Tamper.LocalAnchorsReproduce {
 		t.Fatal("payload claims operator regeneration is detected while the anchor no longer reproduces")
 	}
 	if after.Tamper.ProvenAnteriorThroughSeq != nil {
@@ -280,7 +292,7 @@ func TestLedgerVerify_AnchoringCanBeDisabled(t *testing.T) {
 	if !strings.Contains(body.Tamper.Anchoring.Reason, anchorEnvDisable) {
 		t.Errorf("reason = %q, want it to name the disabling switch", body.Tamper.Anchoring.Reason)
 	}
-	if body.Tamper.AnchorCount != 0 || body.Tamper.DetectsOperatorRegeneration ||
+	if body.Tamper.AnchorCount != 0 || body.Tamper.LocalAnchorsReproduce ||
 		body.Tamper.ProvenAnteriorThroughSeq != nil {
 		t.Errorf("with no anchors the payload must claim nothing: %+v", body.Tamper)
 	}
@@ -465,7 +477,7 @@ func TestLedgerVerify_KeyFailureDoesNotLeakThePath(t *testing.T) {
 	if strings.Contains(body.Tamper.Anchoring.Reason, keyPath) || strings.Contains(body.Tamper.Anchoring.Reason, "/") {
 		t.Errorf("reason leaks a filesystem path: %q", body.Tamper.Anchoring.Reason)
 	}
-	if body.Tamper.DetectsOperatorRegeneration || body.Tamper.ProvenAnteriorThroughSeq != nil {
+	if body.Tamper.LocalAnchorsReproduce || body.Tamper.ProvenAnteriorThroughSeq != nil {
 		t.Error("claimed anteriority with no anchor")
 	}
 }
@@ -521,7 +533,7 @@ func TestLedgerVerify_FailingOlderAnchorDominatesANewerGoodOne(t *testing.T) {
 		t.Fatalf("failingAnchors = %d — a regenerated chain read clean, so the summary is still checking only the newest anchor",
 			v.Tamper.FailingAnchors)
 	}
-	if v.Tamper.DetectsOperatorRegeneration {
+	if v.Tamper.LocalAnchorsReproduce {
 		t.Error("claimed anteriority while a previously-signed anchor no longer reproduces")
 	}
 	if !strings.Contains(v.Tamper.Claim, "TAMPER EVIDENCE") {

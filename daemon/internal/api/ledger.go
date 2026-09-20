@@ -193,14 +193,64 @@ func (d Deps) maybeAnchor(r *http.Request, v store.LedgerVerification) map[strin
 // can test rather than prose they have to trust. provenAnteriorThroughSeq is
 // null — never 0 — when no anchor reproduces: 0 would read as "proven from the
 // beginning of time", which is the opposite of the truth.
+// externalWitness reports whether an anchor digest has been matched against a
+// commitment held by somebody other than this machine.
+//
+// Nothing here can currently say yes, and saying so is the point. ledger_anchors
+// stores signature, digest and head hash — no witness reference, no receipt, no
+// third-party identifier. The only publication signal in the database is
+// meta.anchor_last_published, a unix timestamp this machine wrote about its own
+// publish script; tools/anchor_liveness.py reads it to measure a GAP and says in
+// its own docstring that local anchors carry no third-party guarantee. A
+// timestamp an operator's script wrote is a claim to check, not a receipt: an
+// operator who can rewrite the ledger can write that integer too.
+//
+// So this returns "not established" with the reason, and the caller must not
+// promote a locally reproducing anchor into anteriority against the key holder.
+// Wire a real receipt through here — a digest matched against a commitment this
+// daemon did not author — and `verified` may become true.
+func externalWitness() map[string]any {
+	return map[string]any{
+		"verified": false,
+		"receipt":  nil,
+		"reason": "no external receipt is verified by this endpoint. ledger_anchors stores " +
+			"no witness reference, and meta.anchor_last_published is a timestamp this " +
+			"machine wrote about itself — a claim to check, not a receipt. Compare a " +
+			"digest from GET /api/ledger/anchors against the third-party copy yourself.",
+	}
+}
+
 func tamperEvidence(av store.LedgerAnchorVerification, anchoring map[string]any) map[string]any {
+	// FOUR DIFFERENT THINGS, AND THIS USED TO REPORT THEM AS ONE (audit F09).
+	//
+	//   1. stored-head comparison   anchors checked against the head hashes the
+	//                               database already holds
+	//   2. payload recomputation    the chain re-derived from payloads (?full=1)
+	//   3. valid local signature     an Ed25519 anchor signed earlier still
+	//                               reproduces over the current chain
+	//   4. external witness         that digest also sits somewhere this machine
+	//                               does not control
+	//
+	// `proven` is (3), and (3) alone. It was being published as
+	// detectsOperatorRegeneration=true — a field that names the operator — in the
+	// same payload whose own prose says "an operator holding the signing key can
+	// re-sign a fabricated chain; only the externally published anchor digest
+	// defeats that". Both sentences cannot be right. The prose is the right one:
+	// an operator with the key deletes the history, re-appends a fabrication, and
+	// signs a fresh anchor over it, and every local check passes.
+	//
+	// So (3) is reported as what it is, and the operator-resistant claim is gated
+	// on (4), which nothing can currently satisfy.
 	proven := av.ProvenThroughSeq != nil && av.FailingAnchors == 0
+	witness := externalWitness()
+	witnessed, _ := witness["verified"].(bool)
 	claim := "Edits are detectable: any modified, deleted, reordered or inserted row breaks the recomputation at that seq. " +
 		"Wholesale regeneration by the operator is NOT detectable from the chain alone — deleting every row and re-appending a fabricated chain verifies intact."
 	if proven {
-		claim += " It IS detectable at or before the newest reproducing anchor: regenerating that history and still producing its signature requires the Ed25519 key held outside the database. " +
-			"Entries appended after that anchor, and any history predating the first anchor, carry no anteriority proof. " +
-			"An operator holding the signing key can re-sign a fabricated chain; only the externally published anchor digest defeats that."
+		claim += " Against an adversary WITHOUT the Ed25519 signing key it IS detectable at or before the newest reproducing anchor: regenerating that history and still producing its signature requires the key, which is held outside the database. " +
+			"Entries appended after that anchor, and any history predating the first anchor, carry no anteriority proof even against that adversary. " +
+			"Against the OPERATOR, who does hold the key, nothing here is evidence: he can re-sign a fabricated chain and every check on this page passes. " +
+			"Only an anchor digest matched against a commitment held by a third party defeats that, and this endpoint verifies no such receipt — see externalWitness."
 	} else {
 		claim += " No anchor currently reproduces, so NOTHING in this ledger has anteriority evidence — only edit-detection."
 	}
@@ -216,17 +266,35 @@ func tamperEvidence(av store.LedgerAnchorVerification, anchoring map[string]any)
 			claim
 	}
 	return map[string]any{
-		"failingAnchors":              av.FailingAnchors,
-		"firstFailingSeq":             av.FirstFailingSeq,
-		"detectsEdits":                true,
-		"detectsOperatorRegeneration": proven,
-		"provenAnteriorThroughSeq":    av.ProvenThroughSeq,
-		"provenAnteriorThroughCount":  av.ProvenThroughCount,
-		"provenAnteriorAsOf":          av.ProvenThroughTs,
-		"anchorCount":                 av.AnchorCount,
-		"anchorCheckMode":             av.Mode,
-		"anchoring":                   anchoring,
-		"claim":                       claim,
+		"failingAnchors":  av.FailingAnchors,
+		"firstFailingSeq": av.FirstFailingSeq,
+		"detectsEdits":    true,
+
+		// (4) gates the operator claim. False until a receipt is verified.
+		"detectsOperatorRegeneration": proven && witnessed,
+		"externalWitness":             witness,
+
+		// (3): a locally reproducing signature, named as such. The
+		// provenAnterior* numbers below are this same extent, and they are
+		// anteriority only against an adversary who does NOT hold the key —
+		// `anteriorityScope` says so in the payload rather than leaving it to
+		// prose a client can drop.
+		"localAnchorsReproduce":           proven,
+		"localAnchorReproducesThroughSeq": av.ProvenThroughSeq,
+		"provenAnteriorThroughSeq":        av.ProvenThroughSeq,
+		"provenAnteriorThroughCount":      av.ProvenThroughCount,
+		"provenAnteriorAsOf":              av.ProvenThroughTs,
+		"anteriorityScope": "against an adversary WITHOUT the signing key; the operator holds it, " +
+			"so this is not evidence against him",
+
+		// (1) vs (2): which check produced the above.
+		"anchorCheckMode":      av.Mode,
+		"storedHeadComparison": av.Mode == "stored",
+		"payloadRecomputed":    av.Mode == "recomputed",
+
+		"anchorCount": av.AnchorCount,
+		"anchoring":   anchoring,
+		"claim":       claim,
 	}
 }
 

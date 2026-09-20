@@ -1269,8 +1269,22 @@ export interface LedgerAnchoring {
 export interface LedgerTamperEvidence {
   /** Edits, deletions, reorderings and insertions break the recomputation. */
   detectsEdits?: boolean;
-  /** True only while an anchor reproduces AND none are failing. */
+  /**
+   * Operator-resistant anteriority, which needs an EXTERNAL receipt and is
+   * therefore false until one is verified. It used to be set from a locally
+   * reproducing anchor, which the operator passes by re-signing (audit F09).
+   */
   detectsOperatorRegeneration?: boolean;
+  /** A local Ed25519 anchor still reproduces and none are failing. */
+  localAnchorsReproduce?: boolean;
+  /** Who the provenAnterior* numbers constrain — and who they do not. */
+  anteriorityScope?: string;
+  /** Whether an anchor digest was matched against a third party's copy. */
+  externalWitness?: {
+    verified?: boolean;
+    receipt?: unknown;
+    reason?: string;
+  };
   /** Newest seq covered by a reproducing anchor. null = nothing is proven. */
   provenAnteriorThroughSeq?: number | null;
   provenAnteriorThroughCount?: number | null;
@@ -1279,6 +1293,9 @@ export interface LedgerTamperEvidence {
   anchorCount?: number;
   /** "stored" compares against stored head hashes; ?full=1 re-derives payloads. */
   anchorCheckMode?: string;
+  /** anchorCheckMode as booleans: which check produced the answer above. */
+  storedHeadComparison?: boolean;
+  payloadRecomputed?: boolean;
   /** A signed anchor that STOPS reproducing is positive evidence of a rewrite. */
   failingAnchors?: number;
   firstFailingSeq?: number | null;

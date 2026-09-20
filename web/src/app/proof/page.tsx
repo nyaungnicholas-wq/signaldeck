@@ -114,14 +114,25 @@ function LedgerProvenance({ lv }: { lv: LedgerVerifyResponse }) {
       te.anchorCheckMode === "stored" ? "?full=1 re-derives — the auditor's check" : undefined,
     ],
     [
-      "Anteriority proven through",
+      // NOT "anteriority proven through". The signature is this machine's, over
+      // a chain this machine holds, checked by this machine; it constrains
+      // anyone WITHOUT the key and nobody who has it (audit F09).
+      "Local anchor reproduces through",
       provenSeq === null
         ? "nothing — no anchor currently reproduces"
         : `entry #${provenSeq.toLocaleString()}${asOf ? `, signed ${asOf}` : ""}`,
+      provenSeq === null ? undefined : "anteriority against an adversary WITHOUT the signing key",
     ],
     [
       "Carries no anteriority proof",
       `${beyond.toLocaleString()} entr${beyond === 1 ? "y" : "ies"} appended after the newest reproducing anchor`,
+    ],
+    [
+      "Anteriority against the operator",
+      te.externalWitness?.verified
+        ? "established — an anchor digest was matched against an external receipt"
+        : "NOT established — no external receipt is verified here. The operator holds the signing key, so he can re-sign a fabricated chain and every check above passes.",
+      "compare a digest from /api/ledger/anchors against the third-party copy yourself",
     ],
     [
       "Anchors that stopped reproducing",
