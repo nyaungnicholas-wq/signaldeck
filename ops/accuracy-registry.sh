@@ -86,8 +86,69 @@ OUT="$SD/data/accuracy_registry.json"
 PREV="$SD/data/accuracy_registry.prev.json"
 
 PREV_BACKUP="$SD/data/.accuracy_registry.prev.json.bak"
+
+# --- one writer at a time --------------------------------------------------
+# Ported from ops/grade.sh (audit R02, 2026-09-20), which had the identical
+# defect: a single fixed staging filename, removed at startup and again at
+# cleanup, with no lock. That audit named only the container wrapper, so only
+# the container wrapper was fixed; this is the dev-box sibling and it carried
+# the same shape. It is scheduled AND invoked by hand -- it was invoked by hand
+# on 2026-09-20, which is exactly the overlap that makes it reachable.
+#
+# Without the lock two runs could write $STAGE concurrently, have one run's
+# startup `rm -f` delete the artifact the other had just staged and was about
+# to check, or publish bytes the other run's gates had inspected -- so the file
+# that reaches $OUT is not the file that passed. $PREV_BACKUP is a second fixed
+# path with the same exposure; the lock covers it too.
+#
+# mkdir is the POSIX atomic test-and-set. A declining run is NOT a refusal and
+# NOT an outage: it writes no heartbeat, no envelope and no document, because
+# the run holding the lock is about to write all three.
+LOCK="$OUT.lock"
+LOCK_STALE_SECONDS="${SIGNALDECK_GRADE_LOCK_STALE:-7200}"
+
+lock_holder_dead() {
+  local _now _started _pid
+  _now=$(date -u +%s)
+  _started=$(cat "$LOCK/started" 2>/dev/null || echo "")
+  _pid=$(cat "$LOCK/pid" 2>/dev/null || echo "")
+  # A live owner is never stale, whatever the clock says, and it is asked FIRST
+  # whenever there is a pid to ask.
+  if [ -n "$_pid" ]; then
+    kill -0 "$_pid" 2>/dev/null && return 1
+  fi
+  # No pid, or an owner that is gone. An unreadable start time means the holder
+  # died between mkdir and its first write, so epoch 0 makes it immediately
+  # breakable -- without that, such a lock is UNBREAKABLE and every later run
+  # declines forever, which looks exactly like a dead grader.
+  _started=${_started:-0}
+  [ "$((_now - _started))" -gt "$LOCK_STALE_SECONDS" ]
+}
+
+if ! mkdir "$LOCK" 2>/dev/null; then
+  if lock_holder_dead; then
+    echo "breaking a stale grade lock (owner $(cat "$LOCK/pid" 2>/dev/null) is gone, held >${LOCK_STALE_SECONDS}s)" | tee -a "$LOG"
+    rm -rf "$LOCK"
+    mkdir "$LOCK" 2>/dev/null || {
+      echo "accuracy-registry SKIPPED: another grader took the lock while this one was breaking it" | tee -a "$LOG"
+      exit 0
+    }
+  else
+    echo "accuracy-registry SKIPPED: another grader holds $LOCK (pid $(cat "$LOCK/pid" 2>/dev/null || echo unknown)). Not an outage and not a refusal: that run writes the heartbeat, the envelope and the documents." | tee -a "$LOG"
+    exit 0
+  fi
+fi
+echo "$$" > "$LOCK/pid"
+date -u +%s > "$LOCK/started"
+
+# Unique, and in $OUT's own directory so the publish stays a rename on one
+# filesystem and cleanup can only ever remove THIS run's file.
+STAGE="$SD/data/.accuracy_registry.staging.$$.json"
+
 STDERR_CAPTURE="$(mktemp)"
-trap 'rm -f "$STDERR_CAPTURE"' EXIT
+# Installed AFTER the lock is acquired: a run that DECLINED above must not
+# remove the holder's lock on its way out.
+trap 'rm -f "$STDERR_CAPTURE" "$STAGE"; rm -rf "$LOCK"' EXIT
 
 # notify_remote "message" — H9: fan critical registry events out beyond the Mac
 # using the same env-configured transports the daemon's internal/notify uses
@@ -300,8 +361,10 @@ if [ -z "$refusal_reason" ]; then
   # never a half-checked or half-written one. On refusal $OUT is left exactly as
   # it was and the refusal path below rewrites it -- which is also why the
   # refusal envelope can still read the last published rows out of $OUT.
-  STAGE="$SD/data/.accuracy_registry.staging.json"
-  rm -f "$STAGE"
+  #
+  # $STAGE is set once, at the top, unique per run and under the lock. It used
+  # to be assigned HERE as a fixed name and blanked with `rm -f` -- which is
+  # what let one run delete the artifact another had just staged.
 
   "$PY" "$SD/tools/accuracy_registry.py" --json "$STAGE" > "$STDERR_CAPTURE" 2>&1
   grader_status=$?

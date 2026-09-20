@@ -1037,5 +1037,112 @@ class RefusalClassificationTests(unittest.TestCase):
         self.assertNotIn("0.51", text, "a rejected accuracy reached the published registry")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# R02, ported to the DEV-BOX script (2026-09-20).
+#
+# ops/accuracy-registry.sh carried the identical defect ops/grade.sh did: one
+# fixed `.accuracy_registry.staging.json`, blanked with `rm -f` at the start of
+# the grade, and no lock. The audit named only the container wrapper, so only
+# the container wrapper was fixed. This is the sibling.
+#
+# It is driven by COPYING the real script into a sandbox tree: the script sets
+# SD from `dirname ${BASH_SOURCE[0]}/..`, so a copy at <sandbox>/ops/ resolves
+# SD to <sandbox> and can touch nothing in the repository. The lock is acquired
+# before any gate runs, so a declining run exits there and never reaches the
+# python tools -- which is what makes this cheap to test without a database.
+# ──────────────────────────────────────────────────────────────────────────────
+DEVBOX_SH = REPO / "ops" / "accuracy-registry.sh"
+
+
+class DevBoxStagingLockTests(unittest.TestCase):
+    def setUp(self) -> None:
+        if not POSIX_SH:
+            self.skipTest(NO_SH_REASON)
+        if not DEVBOX_SH.exists():
+            self.skipTest(f"{DEVBOX_SH} not present")
+        self.dir = Path(tempfile.mkdtemp(prefix="sd-devbox-"))
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        (self.dir / "ops").mkdir(parents=True)
+        (self.dir / "data").mkdir(parents=True)
+        (self.dir / "logs").mkdir(parents=True)
+        self.script = self.dir / "ops" / "accuracy-registry.sh"
+        shutil.copy(DEVBOX_SH, self.script)
+        # The script sources ops/lib-portable.sh before it reaches the lock.
+        shutil.copy(REPO / "ops" / "lib-portable.sh", self.dir / "ops" / "lib-portable.sh")
+        self.out = self.dir / "data" / "accuracy_registry.json"
+        self.out.write_text(json.dumps(PREV_REGISTRY), encoding="utf-8")
+        self.lock = Path(str(self.out) + ".lock")
+
+    def run_script(self, timeout: int = 120):
+        return subprocess.run(
+            [POSIX_SH, str(self.script)],
+            capture_output=True, text=True, timeout=timeout,
+            cwd=str(self.dir), env=dict(os.environ),
+        )
+
+    def still_previous(self) -> bool:
+        try:
+            return json.loads(self.out.read_text(encoding="utf-8")) == PREV_REGISTRY
+        except Exception:
+            return False
+
+    def test_a_second_run_declines_while_one_holds_the_lock(self):
+        """The lock is taken before any gate, so a declining run exits there --
+        it never reaches the grader, writes no heartbeat and no envelope, and
+        leaves the published registry exactly as it found it."""
+        self.lock.mkdir()
+        (self.lock / "pid").write_text(str(os.getpid()), encoding="utf-8")
+        (self.lock / "started").write_text(str(int(time.time())), encoding="utf-8")
+
+        proc = self.run_script()
+        combined = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, combined)
+        self.assertIn("accuracy-registry SKIPPED", combined)
+        self.assertTrue(self.still_previous(),
+                        "a declining run rewrote the published registry")
+        self.assertTrue(self.lock.exists(), "a declining run broke a live lock")
+        # and it must not have staged anything
+        self.assertEqual(list((self.dir / "data").glob("*.staging*")), [])
+
+    def test_a_pidless_lock_past_the_grace_is_breakable(self):
+        """The wedge: killed between mkdir and the pid write. If that cannot be
+        broken the grader declines forever and looks dead."""
+        self.lock.mkdir()
+        (self.lock / "started").write_text(str(int(time.time()) - 86400), encoding="utf-8")
+        proc = self.run_script()
+        self.assertIn("breaking a stale grade lock", proc.stdout + proc.stderr)
+
+    def test_a_fresh_pidless_lock_is_left_alone(self):
+        self.lock.mkdir()
+        (self.lock / "started").write_text(str(int(time.time())), encoding="utf-8")
+        proc = self.run_script()
+        self.assertIn("accuracy-registry SKIPPED", proc.stdout + proc.stderr)
+        self.assertTrue(self.lock.exists())
+
+    def test_the_staging_name_is_unique_per_run(self):
+        """The whole point of the port: two runs cannot name the same file.
+        Asserted on the source rather than by racing the real grader, which
+        needs a 7GB database to reach its staging step."""
+        body = DEVBOX_SH.read_text(encoding="utf-8")
+        self.assertIn('STAGE="$SD/data/.accuracy_registry.staging.$$.json"', body)
+        self.assertNotIn('.accuracy_registry.staging.json"', body,
+                         "the fixed staging name is back")
+
+    def test_both_graders_share_the_same_lock_contract(self):
+        """grade.sh and accuracy-registry.sh must not drift apart on this.
+        They are separate files with the same invariant, which is exactly the
+        shape that rots when one is fixed and the other is forgotten -- as it
+        did between 2026-09-20's audit and this port."""
+        for path in (GRADE_SH, DEVBOX_SH):
+            body = path.read_text(encoding="utf-8")
+            with self.subTest(script=path.name):
+                self.assertIn("lock_holder_dead", body)
+                self.assertIn('mkdir "$LOCK"', body)
+                self.assertIn("LOCK_STALE_SECONDS", body)
+                self.assertIn('rm -rf "$LOCK"', body)
+                # the liveness probe must be asked before age
+                self.assertIn('kill -0 "$_pid"', body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
