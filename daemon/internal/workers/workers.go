@@ -529,7 +529,9 @@ func (r *Runner) runOnce(ctx context.Context, w Worker) {
 		}
 	}
 	if runID != 0 {
-		r.finishRecord(w.Name(), runID, status, clip(detail, 500))
+		// The run ended here, not where the journal lands the row.
+		endedAt := time.Now().Unix()
+		r.finishRecord(w.Name(), runID, status, clip(detail, 500), endedAt)
 	}
 }
 
@@ -722,8 +724,12 @@ func (r *Runner) InFlight() int {
 // leaving a run stuck at 'running' and under-counting the multiplicity divisor
 // into a LOOSER Bonferroni correction. The journal retries until the write
 // lands, so submitting can block on back-pressure but can never drop.
-func (r *Runner) finishRecord(worker string, runID int64, status, detail string) {
-	r.journal().submit(journalOp{worker: worker, runID: runID, status: status, detail: detail})
+// The caller passes the instant the run returned because the journal drains
+// asynchronously over the fleet's single write connection and can be minutes
+// behind; stamping finished_at at drain time made every recorded duration
+// the run plus the backlog.
+func (r *Runner) finishRecord(worker string, runID int64, status, detail string, finishedAt int64) {
+	r.journal().submit(journalOp{worker: worker, runID: runID, status: status, detail: detail, finishedAt: finishedAt})
 }
 
 // CloseRunJournal drains outstanding bookkeeping writes at shutdown, so a clean

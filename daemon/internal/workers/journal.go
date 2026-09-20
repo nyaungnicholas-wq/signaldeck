@@ -41,7 +41,12 @@ type journalOp struct {
 	runID  int64
 	status string
 	detail string
-	reply  chan int64
+	// the wall clock at the instant the run actually returned, captured by the
+	// submitter. It is carried rather than taken at drain time because the
+	// drain can be minutes behind a busy queue and finished_at is the only
+	// duration evidence the platform keeps.
+	finishedAt int64
+	reply      chan int64
 	// barrier ops carry no write; the drain loop just closes reply, which
 	// proves every op queued ahead of it has already landed.
 	barrier bool
@@ -61,7 +66,7 @@ type runJournal struct {
 // the drain loop is testable without a database).
 type storeWriter interface {
 	StartWorkerRun(ctx context.Context, worker string) (int64, error)
-	FinishWorkerRun(ctx context.Context, id int64, status, detail string) error
+	FinishWorkerRunAt(ctx context.Context, id int64, status, detail string, finishedAt int64) error
 }
 
 func newRunJournal(st storeWriter) *runJournal {
@@ -163,7 +168,7 @@ func (j *runJournal) apply(op journalOp) {
 				return
 			}
 		} else {
-			err = j.st.FinishWorkerRun(ctx, op.runID, op.status, op.detail)
+			err = j.st.FinishWorkerRunAt(ctx, op.runID, op.status, op.detail, op.finishedAt)
 			if err == nil {
 				cancel()
 				return

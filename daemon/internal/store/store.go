@@ -1360,11 +1360,33 @@ func (s *Store) StartWorkerRun(ctx context.Context, worker string) (int64, error
 	return res.LastInsertId()
 }
 
-// FinishWorkerRun closes a run record.
+// FinishWorkerRun closes a run record, stamping the current time as its completion.
+// This is correct only when the caller closes the run at the moment it actually ended.
+// For more precise control over the completion timestamp, use FinishWorkerRunAt.
 func (s *Store) FinishWorkerRun(ctx context.Context, id int64, status, detail string) error {
+	return s.FinishWorkerRunAt(ctx, id, status, detail, time.Now().Unix())
+}
+
+// FinishWorkerRunAt closes a run record, using the provided timestamp for its completion.
+// The `finished_at` field in `worker_runs` used to be `time.Now()` evaluated wherever the UPDATE ran,
+// and the UPDATE does not run where the worker run ended. The run journal (internal/workers/journal.go)
+// hands every worker start and finish to one goroutine draining over this store's single write connection,
+// shared by the whole fleet, so a completion is stamped whenever the queue reaches it.
+// That made `(finished_at - started_at)` equal the run's duration PLUS the journal backlog,
+// with nothing recording the split. Measured on the live table 2026-09-20 across 7 days of
+// prediction-runner rows whose detail carries the worker's own in-process elapsed time:
+// inflation p50 302s, p90 2132s, max 2611s. The worst rows read as 59 to 73 minute runs;
+// each was a 30m0s run plus up to 43 minutes of queue. Two separate investigations read a
+// capacity trend and a machine-sleep artefact off that field before anyone checked it
+// against the worker's own clock. A zero or negative `finishedAt` falls back to `time.Now().Unix()`
+// rather than writing an epoch timestamp, because a nonsense duration is how this was missed the first time.
+func (s *Store) FinishWorkerRunAt(ctx context.Context, id int64, status, detail string, finishedAt int64) error {
+	if finishedAt <= 0 {
+		finishedAt = time.Now().Unix()
+	}
 	_, err := s.w.ExecContext(ctx,
 		`UPDATE worker_runs SET finished_at=?, status=?, detail=? WHERE id=?`,
-		time.Now().Unix(), status, detail, id)
+		finishedAt, status, detail, id)
 	return err
 }
 
