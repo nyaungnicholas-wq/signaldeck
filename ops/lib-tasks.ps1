@@ -61,8 +61,8 @@ if ($MyInvocation.InvocationName -ne '.' -and $args.Count -gt 0 -and $args[0] -e
         if ($tokenized -like '*CONTOSO*') { Write-Host 'e failed'; exit 1 }
         $expanded = Expand-TaskTokens -Xml $tokenized -Repo $Repo
         if ($expanded -ne $originalXml) { Write-Host 'f failed'; exit 1 }
-        $tokenized2 = ConvertTo-TaskTokens -Xml $tokenized -Repo $Repo
-        if ($tokenized2 -ne $tokenized) { Write-Host 'g failed'; exit 1 }
+        $twice = ConvertTo-TaskTokens -Xml $tokenized -Repo $Repo
+        if ($twice -ne $tokenized) { Write-Host 'g failed'; exit 1 }
         if (-not ($tokenized -like '*{{REPO}}*')) { Write-Host 'h1 failed'; exit 1 }
         if ($tokenized -like '*{{USERPROFILE}}\Desktop*') { Write-Host 'h2 failed'; exit 1 }
         $upperXml = $originalXml.ToUpperInvariant()
