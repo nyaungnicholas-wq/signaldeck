@@ -51,6 +51,13 @@ func resetFleetSkillCache(t *testing.T) {
 // opposite sides of it.
 func seedCompositeClusteredRecord(t *testing.T, st *store.Store, days, symbolsPerDay int) {
 	t.Helper()
+	seedCompositeClusteredRecordFrom(t, st, 20672, days, symbolsPerDay)
+}
+
+// seedCompositeClusteredRecordFrom is the same fixture anchored at an explicit
+// day index, so a test can place the whole record BEFORE store.GradingEpoch.
+func seedCompositeClusteredRecordFrom(t *testing.T, st *store.Store, startDay int64, days, symbolsPerDay int) {
+	t.Helper()
 	ctx := context.Background()
 	syms := make([]int64, symbolsPerDay)
 	for i := range syms {
@@ -81,7 +88,7 @@ func seedCompositeClusteredRecord(t *testing.T, st *store.Store, days, symbolsPe
 		// ResolvedPredictionOutcomes now floors on, which emptied the fixture;
 		// 20658 was the epoch's own day index; since the 2026-09-20 window
 		// re-registration the floor is store.GradingEpoch (2026-08-07, day 20672).
-		base := int64(20672+day)*86400 + 43200
+		base := (startDay+int64(day))*86400 + 43200
 		i := 0
 		for _, c := range mix {
 			n := c.per100 * symbolsPerDay / 100
