@@ -1,15 +1,16 @@
 {
- "generated": "2026-09-20T22:27:49+00:00",
- "git_commit": "12097518b719a9b1e403b4a912338255f6aecef3",
+ "generated": "2026-09-21T06:51:23+00:00",
+ "git_commit": "7a963da1f20f5cb718787fff1f1048a4a2567ff1",
  "survivorship_epoch": "2026-07-24",
+ "grading_epoch": "2026-08-07",
  "hash_scheme": "datasetver v1 canonical records, sha256, floats %.10g (daemon/internal/datasetver.HashRecords)",
  "note": "grading tallies + input-series versions only; no bar data is redistributed (A10). Regenerate the published numbers with `python3 tools/accuracy_registry.py --snapshot repro` \u2014 see REPRODUCE.md.",
  "files": [
   {
    "file": "directional_days.csv",
    "kind": "directional-day-tallies",
-   "rows": 140,
-   "sha256": "c77a206226ba5914270b6d8de89782c4bcfd6be34695603d378dfb1fa5ea4a80"
+   "rows": 104,
+   "sha256": "dd86c9794911c92649eff5fc56b4c05378fbb274eabe54da1e55695e8d257f09"
   },
   {
    "file": "prereg_claims.csv",
@@ -21,7 +22,7 @@
    "file": "grading_protocol.csv",
    "kind": "prereg-grading-protocol",
    "rows": 1,
-   "sha256": "6b2340d3513d3f763e6b8eb1da357833188d80357acb9c1e675e965f1493a6ba"
+   "sha256": "7a5adacccd23be8b06f6a4822c861217bb720c510cd691304db5e1bf121398a3"
   },
   {
    "file": "structural_days.csv",
@@ -39,7 +40,7 @@
    "file": "structural_claims.csv",
    "kind": "structural-claims",
    "rows": 7,
-   "sha256": "c910c5b028dd9e0d888b8889d65ece16da4481ad11707b24b9fe31f90e1cb582"
+   "sha256": "495c9234360ebbca87e5cfe4d975aa738baed11d5481a345a58b21df5863a017"
   },
   {
    "file": "pairs_inputs.csv",
@@ -51,7 +52,7 @@
    "file": "xsfactor_inputs.csv",
    "kind": "xsfactor-input-series-versions",
    "rows": 2939,
-   "sha256": "fed678cc4eacd71965c36e86375290844d0da7bb62575784132cb7cf261d1bb1"
+   "sha256": "13016c775144d91157946337cce4482a571786a19bf9218c75e3fb70998845ce"
   }
  ]
 }
