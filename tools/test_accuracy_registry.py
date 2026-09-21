@@ -775,53 +775,64 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
     # verdict instead of INSUFFICIENT, and filingsdrift21 (chain seq 10) joined
     # the structural set. Every string below was read off the re-cut snapshot,
     # and every one matches what the live database publishes today.
+    # Re-frozen 2026-09-21, the day the grading window was re-registered
+    # (chain seq 117) and the grader re-pinned (seq 118, commit ab846f9). This
+    # table had been asserting nothing since the 09-20 re-cut: load_snapshot
+    # refused on the stale pin and the four tests SKIPPED, exactly the failure
+    # the 08-16 note above describes. The new pin woke them. Every movement is
+    # one of two things, and neither is a grading-rule change:
+    #   WINDOW  - the directional population now starts at GRADING_EPOCH
+    #             (2026-08-07) instead of the survivorship epoch, so the
+    #             2026-07-27..08-06 collapsed days left the sample. 1d went
+    #             FAILED -> NO SKILL (603 obs / 19 days, 52.2% vs 51.5% null,
+    #             interval overlaps the null); 1w and its benchmark count 6/10
+    #             credible days of 33 instead of 3/10 of 21; 1d high conviction
+    #             fell to INSUFFICIENT (1/30) because the collapsed days held
+    #             almost all of its extreme calls.
+    #   TIME    - the structural horizons elapsed (PENDING -> INSUFFICIENT
+    #             BLOCKS 2/10), their frozen persistence nulls now publish as
+    #             '#persist' BENCHMARK rows, filingsdrift21 grades NO BASELINE
+    #             (no resolver can compute its null), and trend63 is still
+    #             PENDING to its 2026-09-25 first grade.
+    # Every string below was read off the re-cut snapshot at commit 7a963da
+    # and matches what the live database published the same hour.
     EXPECTED = {
-        ("directional-ensemble (1d)", "all"):
-            "FAILED — significantly worse than the naive baseline",
-        ("prequential-majority (1d)", "all"):
-            "NO SKILL — indistinguishable from baseline",
-        ("directional-ensemble (1w)", "all"):
-        # Moved by EVIDENCE, not by the grader: this row crossed the 10
-        # credible-day floor in the re-cut snapshot, so an interval exists
-        # and a verdict publishes where the freeze still said the row was
-        # unjudgeable. DOCS_INDEX already publishes the same transition.
-            "INSUFFICIENT DAYS (3/10 credible days of 21, 18 degenerate) — no interval, so no verdict",
-        ("prequential-majority (1w)", "all"):
-        # Moved by EVIDENCE, not by the grader: this row crossed the 10
-        # credible-day floor in the re-cut snapshot, so an interval exists
-        # and a verdict publishes where the freeze still said the row was
-        # unjudgeable. DOCS_INDEX already publishes the same transition.
-            "INSUFFICIENT DAYS (3/10 credible days of 19, 16 degenerate) — no interval, so no verdict",
-        ("directional-ensemble (1d, high conviction)", "|p-0.5|>=0.15"):
-            "INSUFFICIENT DAYS (5/10 credible days of 8, 3 degenerate)"
-            " — no interval, so no verdict",
-        ("directional-ensemble (1w, high conviction)", "|p-0.5|>=0.15"):
-            "INSUFFICIENT DAYS (3/10 credible days of 17, 14 degenerate) — no interval, so no verdict",
-        # The seven structural claims are backtests awaiting their first live
-        # grade — PENDING until the horizon elapses, never a live verdict.
-        # 2026-08-14, not 08-13. This row froze one day early because the
-        # grader dated it with dt.date.fromtimestamp(), which renders in the
-        # MACHINE's timezone: its anchor is 1784865600 = 2026-07-24 04:00 UTC,
-        # which a UTC-7 box reads as 07-23. The value was therefore whatever
-        # the operator's clock said, and CI (UTC) and a PDT laptop disagreed
-        # by a day from identical inputs. Corrected in the grader (UTC), which
-        # changed its sha256, so the chain re-registered it: seq 83 pins
-        # cae6821b at commit 6437d4a, and the snapshot was re-cut against it.
-        # The other six rows sit far from the boundary and never moved.
-        ("filingsdrift21", "all"):
-            "PENDING (first grade 2026-08-14, 0/30 resolved)",
-        ("liquidity21", "all"):
-            "PENDING (first grade 2026-08-14, 0/30 resolved)",
-        ("liquidity21-crypto", "all"):
-            "PENDING (first grade 2026-08-14, 0/30 resolved)",
-        ("trend21", "all"):
-            "PENDING (first grade 2026-08-14, 0/30 resolved)",
-        ("trend21-crypto", "all"):
-            "PENDING (first grade 2026-08-14, 0/30 resolved)",
-        ("trend63", "all"):
-            "PENDING (first grade 2026-09-25, 0/30 resolved)",
-        ("vol21", "all"):
-            "PENDING (first grade 2026-08-14, 0/30 resolved)",
+        ('directional-ensemble (1d)', 'all'):
+            'NO SKILL — indistinguishable from baseline',
+        ('directional-ensemble (1d, high conviction)', '|p-0.5|>=0.15'):
+            'INSUFFICIENT (1/30)',
+        ('directional-ensemble (1w)', 'all'):
+            'INSUFFICIENT DAYS (6/10 credible days of 33, 27 degenerate) — no interval, so no verdict',
+        ('directional-ensemble (1w, high conviction)', '|p-0.5|>=0.15'):
+            'INSUFFICIENT DAYS (6/10 credible days of 30, 24 degenerate) — no interval, so no verdict',
+        ('filingsdrift21', 'all'):
+            'NO BASELINE — naive-persistence null not frozen for these calls',
+        ('liquidity21', 'all'):
+            'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
+        ('liquidity21#persist', 'all'):
+            'BENCHMARK — the frozen naive-persistence null itself',
+        ('liquidity21-crypto', 'all'):
+            'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
+        ('liquidity21-crypto#persist', 'all'):
+            'BENCHMARK — the frozen naive-persistence null itself',
+        ('prequential-majority (1d)', 'all'):
+            'NO SKILL — indistinguishable from baseline',
+        ('prequential-majority (1w)', 'all'):
+            'INSUFFICIENT DAYS (6/10 credible days of 33, 27 degenerate) — no interval, so no verdict',
+        ('trend21', 'all'):
+            'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
+        ('trend21#persist', 'all'):
+            'BENCHMARK — the frozen naive-persistence null itself',
+        ('trend21-crypto', 'all'):
+            'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
+        ('trend21-crypto#persist', 'all'):
+            'BENCHMARK — the frozen naive-persistence null itself',
+        ('trend63', 'all'):
+            'PENDING (first grade 2026-09-25, 0/30 resolved)',
+        ('vol21', 'all'):
+            'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
+        ('vol21#persist', 'all'):
+            'BENCHMARK — the frozen naive-persistence null itself',
     }
 
     @classmethod
