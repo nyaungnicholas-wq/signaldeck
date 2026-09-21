@@ -80,7 +80,7 @@ from accuracy_registry import (  # noqa: E402
     multiplicity,
     set_multiplicity,
     MIN_INDEPENDENT_N,
-    SURVIVORSHIP_EPOCH_TS,
+    GRADING_EPOCH_TS,
     auto_retire_rule,
     auto_retire_rule_digest,
     clustered_ci,
@@ -219,19 +219,19 @@ class TestSurvivorshipBoundary(unittest.TestCase):
 
     def test_pre_epoch_directional_rows_cannot_enter_a_tally(self):
         con = self._db()
-        pre = SURVIVORSHIP_EPOCH_TS - 86400
+        pre = GRADING_EPOCH_TS - 86400
         con.execute("INSERT INTO prediction_outcomes VALUES (1,'1d',0.8,1,?,?)",
                     (pre, pre + 86400))
         self.assertEqual(grade_directional(con), [])
 
     def test_directional_tally_counts_only_post_epoch_rows(self):
         con = self._db()
-        pre = SURVIVORSHIP_EPOCH_TS - 86400
+        pre = GRADING_EPOCH_TS - 86400
         con.execute("INSERT INTO prediction_outcomes VALUES (1,'1d',0.8,1,?,?)",
                     (pre, pre + 86400))
         # Epoch day itself is INCLUDED — the boundary is "at or after".
         for i in range(3):
-            ts = SURVIVORSHIP_EPOCH_TS + i * 86400
+            ts = GRADING_EPOCH_TS + i * 86400
             con.execute("INSERT INTO prediction_outcomes VALUES (?, '1d',0.8,1,?,?)",
                         (10 + i, ts, ts + 86400))
             self._list(con, 10 + i)
@@ -244,18 +244,18 @@ class TestSurvivorshipBoundary(unittest.TestCase):
 
     def test_pre_epoch_structural_rows_cannot_enter_a_tally(self):
         con = self._db()
-        pre = SURVIVORSHIP_EPOCH_TS - 86400
+        pre = GRADING_EPOCH_TS - 86400
         con.execute("INSERT INTO regime_outcomes VALUES (1,'oversold',21,?,?,?,1,0.82)",
                     (pre // 86400, pre, pre + 86400))
         self.assertEqual(grade_structural(con), [])
 
     def test_structural_tally_counts_only_post_epoch_rows(self):
         con = self._db()
-        pre = SURVIVORSHIP_EPOCH_TS - 86400
+        pre = GRADING_EPOCH_TS - 86400
         con.execute("INSERT INTO regime_outcomes VALUES (1,'oversold',21,?,?,?,1,0.82)",
                     (pre // 86400, pre, pre + 86400))
         for i in range(2):
-            ts = SURVIVORSHIP_EPOCH_TS + i * 86400
+            ts = GRADING_EPOCH_TS + i * 86400
             con.execute("INSERT INTO regime_outcomes VALUES (?, 'oversold',21,?,?,?,1,0.82)",
                         (10 + i, ts // 86400, ts, ts + 86400))
             self._list(con, 10 + i)
@@ -269,7 +269,7 @@ class TestSurvivorshipBoundary(unittest.TestCase):
         self.assertNotIn("null_hindsight", rows[0])
 
     def _one_directional_row(self, con):
-        ts = SURVIVORSHIP_EPOCH_TS
+        ts = GRADING_EPOCH_TS
         for i in range(3):
             con.execute("INSERT INTO prediction_outcomes VALUES (?, '1d',0.8,1,?,?)",
                         (10 + i, ts + i * 86400, ts + (i + 1) * 86400))
@@ -291,7 +291,7 @@ class TestSurvivorshipBoundary(unittest.TestCase):
         con = self._db()
         self._list(con, 10)
         self._list(con, 11)
-        self._list(con, 12, active=0, delisted_at=SURVIVORSHIP_EPOCH_TS + 86400)
+        self._list(con, 12, active=0, delisted_at=GRADING_EPOCH_TS + 86400)
         self.assertTrue(self._one_directional_row(con)["survivorship_clean"])
 
     def test_symbol_missing_from_the_symbols_table_is_not_clean(self):
@@ -352,7 +352,7 @@ class TestPrequentialNull(unittest.TestCase):
         con = TestSurvivorshipBoundary._db()
         for day in range(5):
             up = 1 if day < 2 else 0
-            ts = SURVIVORSHIP_EPOCH_TS + day * 86400
+            ts = GRADING_EPOCH_TS + day * 86400
             for sym in (1, 2):
                 con.execute(
                     "INSERT INTO prediction_outcomes VALUES (?, '1d', 0.8, ?, ?, ?)",
@@ -378,7 +378,7 @@ class TestCalibrationBins(unittest.TestCase):
         # Ten symbol-days at p=0.85 (a conviction-tier bin) of which only 2 go
         # up — the anti-calibrated shape the bins exist to expose.
         for i in range(10):
-            ts = SURVIVORSHIP_EPOCH_TS + i * 86400
+            ts = GRADING_EPOCH_TS + i * 86400
             con.execute("INSERT INTO prediction_outcomes VALUES (?, '1d', 0.85, ?, ?, ?)",
                         (10 + i, 1 if i < 2 else 0, ts, ts + 86400))
         cal = fetch_calibration_bins(con)
@@ -395,7 +395,7 @@ class TestCalibrationBins(unittest.TestCase):
     def test_bins_dedupe_intraday_repeats(self):
         """Same (symbol, horizon, UTC-day) must count once, keeping the latest."""
         con = TestSurvivorshipBoundary._db()
-        ts = SURVIVORSHIP_EPOCH_TS
+        ts = GRADING_EPOCH_TS
         con.execute("INSERT INTO prediction_outcomes VALUES (1,'1d',0.72,1,?,?)",
                     (ts, ts + 86400))
         con.execute("INSERT INTO prediction_outcomes VALUES (1,'1d',0.78,1,?,?)",
@@ -406,7 +406,7 @@ class TestCalibrationBins(unittest.TestCase):
 
     def test_bins_exclude_pre_epoch_rows(self):
         con = TestSurvivorshipBoundary._db()
-        pre = SURVIVORSHIP_EPOCH_TS - 86400
+        pre = GRADING_EPOCH_TS - 86400
         con.execute("INSERT INTO prediction_outcomes VALUES (1,'1d',0.9,1,?,?)",
                     (pre, pre + 86400))
         self.assertEqual(fetch_calibration_bins(con)["horizons"], {})
@@ -414,7 +414,7 @@ class TestCalibrationBins(unittest.TestCase):
     def test_probability_one_lands_in_the_top_bin(self):
         """p=1.0 must clamp into the last bin, not fall out of range."""
         con = TestSurvivorshipBoundary._db()
-        ts = SURVIVORSHIP_EPOCH_TS
+        ts = GRADING_EPOCH_TS
         con.execute("INSERT INTO prediction_outcomes VALUES (1,'1d',1.0,1,?,?)",
                     (ts, ts + 86400))
         bins = fetch_calibration_bins(con)["horizons"]["1d"]
@@ -427,7 +427,7 @@ class TestCalibrationBins(unittest.TestCase):
         """The prequential-majority benchmark is a constant guess, not a
         probability model — it must not appear as a calibrated predictor."""
         con = TestSurvivorshipBoundary._db()
-        ts = SURVIVORSHIP_EPOCH_TS
+        ts = GRADING_EPOCH_TS
         con.execute("INSERT INTO prediction_outcomes VALUES (1,'1d',0.7,1,?,?)",
                     (ts, ts + 86400))
         con.execute("INSERT INTO prediction_outcomes VALUES (1,'1d#pm',1.0,1,?,?)",
@@ -463,7 +463,7 @@ class TestSnapshotRoundTrip(unittest.TestCase):
     def _seeded_db():
         con = TestSurvivorshipBoundary._db()
         for i in range(12):
-            ts = SURVIVORSHIP_EPOCH_TS + i * 86400
+            ts = GRADING_EPOCH_TS + i * 86400
             con.execute("INSERT INTO prediction_outcomes VALUES (?, '1d', 0.8, ?, ?, ?)",
                         (10 + i, i % 2, ts, ts + 86400))
             con.execute("INSERT INTO regime_outcomes VALUES (?, 'oversold', 21, ?, ?, ?, 1, 0.82)",
@@ -971,7 +971,7 @@ class TestAutoRetireRule(unittest.TestCase):
         # 20 days x 10 symbols, model calls up (prob .8) into an all-down tape:
         # always wrong, while the prequential bettor converges on "down".
         for day in range(20):
-            ts = SURVIVORSHIP_EPOCH_TS + day * 86400
+            ts = GRADING_EPOCH_TS + day * 86400
             for sym in range(10):
                 con.execute(
                     "INSERT INTO prediction_outcomes VALUES (?, '1d', 0.8, 0, ?, ?)",
@@ -988,7 +988,7 @@ class TestAutoRetireRule(unittest.TestCase):
         must never carry the flag, or the rule fires before its own gate."""
         con = TestSurvivorshipBoundary._db()
         for day in range(3):
-            ts = SURVIVORSHIP_EPOCH_TS + day * 86400
+            ts = GRADING_EPOCH_TS + day * 86400
             con.execute("INSERT INTO prediction_outcomes VALUES (?, '1d', 0.8, 0, ?, ?)",
                         (day + 1, ts, ts + 86400))
         row = next(r for r in grade_directional(con) if r["band"] == "all")
@@ -1000,7 +1000,7 @@ class TestAutoRetireRule(unittest.TestCase):
         kinds answer to DECAYED against their frozen claims instead."""
         con = TestSurvivorshipBoundary._db()
         for i in range(2):
-            ts = SURVIVORSHIP_EPOCH_TS + i * 86400
+            ts = GRADING_EPOCH_TS + i * 86400
             con.execute("INSERT INTO regime_outcomes VALUES (?, 'oversold', 21, ?, ?, ?, 1, 0.82)",
                         (10 + i, ts // 86400, ts, ts + 86400))
         for r in grade_structural(con):
@@ -1027,7 +1027,7 @@ class TestClaimComesFromTheChain(unittest.TestCase):
         con.execute("INSERT INTO prereg_records (ts, kind, spec_json, spec_hash, prev_hash,"
                     " entry_hash, note) VALUES (1,'oversold',?, 'hash-a','','e1','')", (spec,))
         for i in range(2):
-            ts = SURVIVORSHIP_EPOCH_TS + i * 86400
+            ts = GRADING_EPOCH_TS + i * 86400
             con.execute("INSERT INTO regime_outcomes VALUES (?, 'oversold', 21, ?, ?, ?, 1, ?)",
                         (10 + i, ts // 86400, ts, ts + 86400, db_acc))
         return con
@@ -1052,7 +1052,7 @@ class TestClaimComesFromTheChain(unittest.TestCase):
     def test_no_chain_record_is_disclosed_not_hidden(self):
         """Falling back to the DB average is allowed only if the row SAYS so."""
         con = TestSurvivorshipBoundary._db()
-        ts = SURVIVORSHIP_EPOCH_TS
+        ts = GRADING_EPOCH_TS
         con.execute("INSERT INTO regime_outcomes VALUES (1, 'oversold', 21, ?, ?, ?, 1, 0.82)",
                     (ts // 86400, ts, ts + 86400))
         row = grade_structural(con)[0]
@@ -1088,7 +1088,7 @@ class TestNaivePersistenceNull(unittest.TestCase):
         """
         sid = 0
         for d in range(days):
-            ts = SURVIVORSHIP_EPOCH_TS + d * stride * 86400
+            ts = GRADING_EPOCH_TS + d * stride * 86400
             for j in range(per_day):
                 sid += 1
                 correct = 1 if j < model_hits else 0
@@ -1188,7 +1188,7 @@ class TestChainPresenceIsRead(unittest.TestCase):
         con.execute("""CREATE TABLE prereg_records (
             seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, kind TEXT,
             spec_json TEXT, spec_hash TEXT, prev_hash TEXT, entry_hash TEXT, note TEXT)""")
-        ts = SURVIVORSHIP_EPOCH_TS
+        ts = GRADING_EPOCH_TS
         con.execute("INSERT INTO regime_outcomes VALUES (1,'oversold',21,?,?,?,1,0.82,'up')",
                     (ts // 86400, ts, ts + 86400))
         con.commit()
@@ -1925,7 +1925,7 @@ class TestGraderRefusesWithoutResearchLiveness(unittest.TestCase):
         if with_claim:
             con.execute(
                 "INSERT INTO worker_runs VALUES (1,'research-loop','ok',?,?,?)",
-                (SURVIVORSHIP_EPOCH_TS, SURVIVORSHIP_EPOCH_TS + 60,
+                (GRADING_EPOCH_TS, GRADING_EPOCH_TS + 60,
                  "searched a 48-rule grid over 166285 observations — "
                  "NOTHING survived Bonferroni correction. That is a result, not a failure"))
         return con
@@ -2043,7 +2043,7 @@ class TestStaleFeedQuarantine(unittest.TestCase):
 
     def test_a_day_flagged_stale_leaves_the_graded_population(self):
         con = self._db()
-        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
+        ts = GRADING_EPOCH_TS + 6 * 3600
         self._pred(con, 1, ts)
         self._pred(con, 2, ts)
         # Symbol 2's feed is flagged stale LATER the same trading day. The key is
@@ -2058,7 +2058,7 @@ class TestStaleFeedQuarantine(unittest.TestCase):
 
     def test_a_stale_flag_on_another_day_keeps_the_observation(self):
         con = self._db()
-        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
+        ts = GRADING_EPOCH_TS + 6 * 3600
         self._pred(con, 1, ts)
         self._dq(con, 1, ts + 86400)
         self.assertEqual(self._n(con), [1])
@@ -2069,7 +2069,7 @@ class TestStaleFeedQuarantine(unittest.TestCase):
         # row silently deletes the ENTIRE graded population; the guard is why
         # the exclusion is written as NOT EXISTS over a symbol_id-filtered set.
         con = self._db()
-        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
+        ts = GRADING_EPOCH_TS + 6 * 3600
         self._pred(con, 1, ts)
         self._dq(con, None, ts)
         self._dq(con, None, ts, kind="source_stale", detail="source=news")
@@ -2080,7 +2080,7 @@ class TestStaleFeedQuarantine(unittest.TestCase):
         # Snapshots and fixtures carry no data-quality table. The filter cannot
         # run there, and an absent filter must never read as a clean feed.
         con = self._db(with_dq=False)
-        ts = SURVIVORSHIP_EPOCH_TS + 6 * 3600
+        ts = GRADING_EPOCH_TS + 6 * 3600
         self._pred(con, 1, ts)
         self.assertEqual(self._n(con), [1])
         m = measure_stale_feed_exclusion(con)

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/pipeline"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -63,7 +64,7 @@ func TestDirectionalShadowExcludesPreSurvivorshipEpochRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	epochDay := store.SurvivorshipEpoch / 86400
+	epochDay := store.GradingEpoch / 86400
 	// 30 pre-epoch days, every call correct — the most flattering contaminated
 	// record possible, and far past the 20-day re-admission floor on its own.
 	const preDays = 30
@@ -76,7 +77,7 @@ func TestDirectionalShadowExcludesPreSurvivorshipEpochRows(t *testing.T) {
 		seedShadowDay(t, st, sym.ID, epochDay+i, 0.9, true)
 	}
 
-	rec, ok := (Deps{St: st}).directionalShadow(ctx, md.H1d)
+	rec, ok := pipeline.DirectionalShadow(ctx, st, md.H1d)
 	if !ok {
 		t.Fatal("no shadow record built")
 	}
@@ -102,5 +103,16 @@ func TestSurvivorshipEpochMatchesRegistryBoundary(t *testing.T) {
 	if store.SurvivorshipEpoch != want {
 		t.Fatalf("store.SurvivorshipEpoch = %d, want %d (tools/accuracy_registry.py SURVIVORSHIP_EPOCH)",
 			store.SurvivorshipEpoch, want)
+	}
+	// 2026-08-07T00:00:00Z — GRADING_EPOCH in tools/accuracy_registry.py, the
+	// re-registered start of the graded window (2026-09-20). It is a separate
+	// fact from the survivorship epoch and must never be folded back into it.
+	const wantGrading = int64(1786060800)
+	if store.GradingEpoch != wantGrading || store.GradingEpochTS != wantGrading {
+		t.Fatalf("store.GradingEpoch = %d / GradingEpochTS = %d, want %d (tools/accuracy_registry.py GRADING_EPOCH)",
+			store.GradingEpoch, store.GradingEpochTS, wantGrading)
+	}
+	if store.GradingEpoch <= store.SurvivorshipEpoch {
+		t.Fatal("the grading window must start after the survivorship epoch")
 	}
 }

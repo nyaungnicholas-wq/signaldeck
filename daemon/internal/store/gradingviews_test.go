@@ -196,13 +196,13 @@ func TestDirectionalRecord_IndependentDaysAndBaseline(t *testing.T) {
 	b, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "Microsoft")
 	day := int64(86400)
 	// Anchored AFTER the survivorship epoch on purpose. The gradeable
-	// population starts at SurvivorshipEpochTS (gradeablepop.go), so a fixture
+	// population starts at GradingEpochTS (gradeablepop.go), so a fixture
 	// sitting at day 100 of 1970 — as this one did — is filtered out entirely
 	// and LiveDirectionalRecord asserts nothing. The offsets below are relative
 	// to the epoch, which keeps the ORIGINAL intent (two distinct symbol-days,
 	// with the later of two same-day calls winning) while making the rows look
 	// like rows this platform could actually have written.
-	epoch := int64(SurvivorshipEpochTS)
+	epoch := int64(GradingEpochTS)
 	// A day100 correct-up; A day101 has TWO rows resolving the same move —
 	// only the latest (correct) may count; B day101 wrong-up.
 	seedResolvedPred(t, st, a.ID, md.H1d, epoch+100*day+60, 0.6, 0.6, 0.01)

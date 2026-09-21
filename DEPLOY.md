@@ -98,36 +98,12 @@ you will need to reset the user rather than recover it.
 ---
 
 ## Demo access
-
-The app gates on sign-in by default. For a public demo, `fly.toml` sets:
-
-```
-SIGNALDECK_PUBLIC_READS = "1"
-```
-
-Read-only endpoints then answer without a session, so a visitor sees the deck
-rather than a login wall. **Every mutating route still requires authentication** —
-this widens reads, it does not disable auth.
-
-Decide deliberately whether you want that on. It is the difference between a
-demo people can look at and a private workspace.
+The public surface is controlled by `SIGNALDECK_PUBLIC_SURFACE=1` (an allowlist of public read routes in `daemon/internal/api/security.go`), not `PUBLIC_READS`. `SIGNALDECK_PUBLIC_READS` must remain `false` on any public host. The web build must be done with `NEXT_PUBLIC_SIGNALDECK_PUBLIC=1` and `NEXT_PUBLIC_SITE_URL=https://<host>` at BUILD time or every anonymous visitor is redirected to `/login`. `SIGNALDECK_ASSUME_TUNNEL=1` must be set whenever the daemon binds loopback behind a tunnel, otherwise `reachablePrivately()` reads the deployment as private and opens signup, anonymous reads, and disables the 451 licence guard. `SIGNALDECK_ALLOWED_HOSTS` must include the public host AND `127.0.0.1:8322,localhost:8322` (the web proxy does not forward Host). `SIGNALDECK_WEB_ORIGINS` is a separate Origin list and the daemon refuses to boot without it.
 
 ---
 
 ## Restoring real data
-
-A fresh deploy starts empty and backfills ~2 years. To demo against the full
-11.4M-bar history instead (2026-09-13), copy the database onto the volume:
-
-```bash
-fly ssh console -C "mkdir -p /data"
-fly sftp shell
-put data/signaldeck.db /data/signaldeck.db
-```
-
-The file is ~2.5 GB, so size the volume accordingly and expect a slow transfer.
-Stop the machine first — copying a SQLite file out from under a running writer
-produces a corrupt database.
+A fresh deploy starts empty and backfills. To seed the full history copy a REVIEWED backup from `data/backups/backup-<ts>.db` with its matching `.sha256` (never the live file out from under a running writer). The file is 6.2 GB as of 2026-09-20 so size the data volume at 40 GB. Transfer with `scp`/`rsync` to the target host's `data` directory. Stop the daemon on the source first if copying the live file. Verify sha256 after transfer before starting the daemon. Then run `ops/restore-rehearsal.sh` style verification (ledger verify must report intact).
 
 ---
 

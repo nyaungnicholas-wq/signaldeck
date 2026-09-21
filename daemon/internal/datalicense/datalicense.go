@@ -180,7 +180,12 @@ var RestrictedRoutes = map[string]string{
 	// which is the case the release instruction says to withhold on rather than
 	// guess. Loopback operators are unaffected: the guard also requires the
 	// daemon to be reachable beyond localhost before it refuses.
-	"/api/crypto-perp":         "hyperliquid",
+	"/api/crypto-perp": "hyperliquid",
+	// /api/stream/snaps is /api/snaps over SSE: the same cryptolive rows on a
+	// push socket instead of a poll. Found 2026-09-20 by the route scan
+	// (TestEveryRegisteredVendorRouteIsGoverned); a second door for the same
+	// vendor rows with no policy on it, exactly the shape the CSV exports had.
+	"/api/stream/snaps":        "cryptolive",
 	"/api/tv-quote":            "tvscanner",
 	"/api/tv-rating":           "tvscanner",
 	"/api/tv-signals":          "tvscanner",

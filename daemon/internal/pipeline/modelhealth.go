@@ -177,6 +177,20 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 				"accuracy-registry retire flag: effective-N Wilson upper bound below the "+
 					"prequential null at the pre-registered evidence floors (auto-retire rule)")
 		}
+		// RE-ADMISSION, applied HERE because this worker is the only writer of
+		// the stored verdict. Until 2026-09-20 canary.Readmit ran only inside the
+		// /api/model-health handler and rewrote the response it was about to
+		// send; ModelEmitting and the forecast monitor read the STORED record,
+		// so a model that had earned its way back stayed withheld while the page
+		// said "readmitted". Applied BEFORE the cross-section gate below on
+		// purpose: a re-admitted horizon whose cross-section is flat is still
+		// withheld, and the gate must keep the last word on Emitting.
+		var readmission any
+		if score.Verdict == modelhealth.VerdictRetired {
+			if shadow, ok := DirectionalShadow(ctx, w.St, h); ok {
+				readmission = ApplyReadmission(&score, shadow)
+			}
+		}
 		// CROSS-SECTION GATE, surfaced. The prediction runner already refuses to
 		// publish a horizon whose cross-section collapsed, but it says so only in
 		// its log line. An operator watching /api/fleethealth would have seen a
@@ -207,6 +221,7 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 			"observations":           score.Observations,
 			"accuracy":               full.Accuracy,
 			"baseline":               full.BaselineAcc,
+			"readmission":            readmission,
 			"registryRetire":         regFlags[model].Retire,
 			"registryUnattributable": regFlags[model].Unattributable,
 			"registryRevisionGate":   regFlags[model].Offenders,

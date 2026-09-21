@@ -864,6 +864,18 @@ def auto_retire_rule() -> dict:
 SURVIVORSHIP_EPOCH = dt.date(2026, 7, 24)
 SURVIVORSHIP_EPOCH_TS = int(dt.datetime(2026, 7, 24, tzinfo=dt.timezone.utc).timestamp())
 
+# The start of the DIRECTIONAL GRADED WINDOW. Re-registered 2026-09-20 from the
+# survivorship epoch by the grading-window-reregistration chain record
+# (daemon/cmd/prereg-amend): the 2026-07-27..08-06 cross-section collapse is a
+# fixed defect (a34db09, 906310c) and the publication gate's own text said the
+# window "clears when re-registered, not by waiting". 2026-08-07 is the first
+# clean day on the gate's ruler (08-06 is still collapsed at 1d: 33 distinct
+# across 327 symbols; the prereg-amend guard refused 08-05 on exactly that). Two facts, two constants: SURVIVORSHIP_EPOCH
+# still bounds listing-status reconstruction; GRADING_EPOCH bounds every graded
+# population below. Mirrors store.GradingEpoch; the Go pin test holds both.
+GRADING_EPOCH = dt.date(2026, 8, 7)
+GRADING_EPOCH_TS = int(dt.datetime(2026, 8, 7, tzinfo=dt.timezone.utc).timestamp())
+
 
 def measure_universe_completeness(con: sqlite3.Connection | None,
                                   table: str) -> dict:
@@ -895,7 +907,7 @@ def measure_universe_completeness(con: sqlite3.Connection | None,
     LEFT JOIN symbols s ON s.id = g.symbol_id
     """
     try:
-        n, unknown, undated = con.execute(q, (SURVIVORSHIP_EPOCH_TS,)).fetchone()
+        n, unknown, undated = con.execute(q, (GRADING_EPOCH_TS,)).fetchone()
     except sqlite3.OperationalError as e:
         return {"clean": False, "coverage": None,
                 "reason": f"unmeasured — listing status unreadable ({e})"}
@@ -1608,7 +1620,7 @@ def measure_settlement_quarantine(con: sqlite3.Connection | None) -> dict:
     by_h: dict[str, dict] = {}
     try:
         for horizon, n, unsettled, unverifiable in con.execute(
-                census, (SURVIVORSHIP_EPOCH_TS,)):
+                census, (GRADING_EPOCH_TS,)):
             by_h[horizon] = {"considered": n,
                              "unsettled": unsettled or 0,
                              "unverifiable": unverifiable or 0,
@@ -1617,7 +1629,7 @@ def measure_settlement_quarantine(con: sqlite3.Connection | None) -> dict:
                        (graded.replace("AND po.ts >= ?",
                                        "AND po.ts >= ?\n        " + clause),
                         "graded_after")):
-            for horizon, n in con.execute(q, (SURVIVORSHIP_EPOCH_TS,)):
+            for horizon, n in con.execute(q, (GRADING_EPOCH_TS,)):
                 by_h.setdefault(horizon, {})[key] = n
     except sqlite3.OperationalError as e:
         return {"applied": False,
@@ -1767,7 +1779,7 @@ def measure_thin_day_exclusion(con: sqlite3.Connection | None) -> dict:
     by_h: dict[str, dict] = {}
     try:
         for horizon, dropped_days, kept_days, dropped_rows, all_rows in con.execute(
-                q, (SURVIVORSHIP_EPOCH_TS,)):
+                q, (GRADING_EPOCH_TS,)):
             by_h[horizon] = {"days_dropped": dropped_days or 0,
                              "days_kept": kept_days or 0,
                              "rows_dropped": dropped_rows or 0,
@@ -1814,7 +1826,7 @@ def measure_stale_feed_exclusion(con: sqlite3.Connection | None) -> dict:
     )
     SELECT COUNT(*), COUNT(DISTINCT symbol_id), COUNT(DISTINCT d) FROM excluded
     """
-    rows, syms, days = con.execute(q, (SURVIVORSHIP_EPOCH_TS,)).fetchone()
+    rows, syms, days = con.execute(q, (GRADING_EPOCH_TS,)).fetchone()
     return {"applied": True,
             "excluded_rows": rows or 0,
             "excluded_symbols": syms or 0,
@@ -1902,7 +1914,7 @@ def fetch_chain_presence(con: sqlite3.Connection) -> dict:
         total, labelled = con.execute(
             """SELECT COUNT(*), SUM(CASE WHEN naive_label IS NOT NULL THEN 1 ELSE 0 END)
                FROM regime_outcomes WHERE resolved_at IS NOT NULL AND ts >= ?""",
-            (SURVIVORSHIP_EPOCH_TS,)).fetchone()
+            (GRADING_EPOCH_TS,)).fetchone()
         if total:
             out["null_coverage"] = (labelled or 0) / total
             out["null_frozen"] = (labelled or 0) > 0
@@ -2058,7 +2070,7 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
     """
     by_h: dict[str, list] = {}
     for (horizon, day, n, hits, ups, hc_n, hc_hits, hc_ups,
-         pred_ups, hc_pred_ups) in con.execute(q, (SURVIVORSHIP_EPOCH_TS,)):
+         pred_ups, hc_pred_ups) in con.execute(q, (GRADING_EPOCH_TS,)):
         by_h.setdefault(horizon, []).append(
             (day, n, hits, ups, hc_n, hc_hits, hc_ups, pred_ups, hc_pred_ups))
     return by_h
@@ -2101,7 +2113,7 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
     GROUP BY horizon, bin ORDER BY horizon, bin
     """
     horizons: dict[str, list[dict]] = {}
-    for horizon, b, n, mean_p, ups, days in con.execute(q, (SURVIVORSHIP_EPOCH_TS,)):
+    for horizon, b, n, mean_p, ups, days in con.execute(q, (GRADING_EPOCH_TS,)):
         # The prequential-majority benchmark ("<horizon>#pm") is a constant
         # guess, not a probability model — binning it would put a fake
         # perfectly-confident predictor on the reliability diagram.
@@ -2318,9 +2330,9 @@ def fetch_structural(con: sqlite3.Connection):
     GROUP BY kind, horizon_days, day ORDER BY kind, day
     """.format(sup=superseded_clause(con))
     per_day: dict[tuple, list[tuple[int, int, int]]] = {}
-    for kind, hd, day, n, hits in con.execute(qd, (SURVIVORSHIP_EPOCH_TS,)):
+    for kind, hd, day, n, hits in con.execute(qd, (GRADING_EPOCH_TS,)):
         per_day.setdefault((kind, hd), []).append((day, n, hits or 0))
-    totals = [tuple(r) for r in con.execute(q, (SURVIVORSHIP_EPOCH_TS,))]
+    totals = [tuple(r) for r in con.execute(q, (GRADING_EPOCH_TS,))]
     # The frozen naive-persistence null, tallied per call-day so it flows
     # through the IDENTICAL clustered_ci path as the model it benchmarks.
     qn = """
@@ -2332,7 +2344,7 @@ def fetch_structural(con: sqlite3.Connection):
     """
     naive_per_day: dict[tuple, list[tuple[int, int, int]]] = {}
     try:
-        for kind, hd, day, n, hits in con.execute(qn, (SURVIVORSHIP_EPOCH_TS,)):
+        for kind, hd, day, n, hits in con.execute(qn, (GRADING_EPOCH_TS,)):
             naive_per_day.setdefault((kind, hd), []).append((day, n, hits or 0))
     except sqlite3.OperationalError:
         pass  # database predates naive_label: no baseline exists, and rows say so
@@ -2914,7 +2926,9 @@ def main() -> int:
     print(f"Independence rule: one observation per (symbol, horizon, trading-day).")
     print(f"Verdict threshold: {MIN_INDEPENDENT_N} independent observations minimum, "
           f"on at least {MIN_DISTINCT_DAYS} distinct trading days.")
-    print(f"Survivorship boundary: rows before {SURVIVORSHIP_EPOCH.isoformat()} were graded "
+    print(f"Grading window starts {GRADING_EPOCH.isoformat()} (re-registered 2026-09-20; the "
+          f"2026-07-27..08-06 collapsed cross-sections lie before it). "
+          f"Survivorship boundary: rows before {SURVIVORSHIP_EPOCH.isoformat()} were graded "
           "against a survivor-seeded universe and are excluded from every tally above.")
     if settlement.get("applied"):
         print(f"Settlement quarantine: {settlement['rows_excluded']:,} of "
@@ -3088,6 +3102,7 @@ def main() -> int:
                    "ci_z": multiplicity()["z"],
                    "multiplicity_rule": MULTIPLICITY_RULE,
                    "survivorship_epoch": SURVIVORSHIP_EPOCH.isoformat(),
+                   "grading_epoch": GRADING_EPOCH.isoformat(),
                    # Measured, per graded sample: the share of contributing
                    # symbols whose listing status is resolvable. Every row's
                    # survivorship_clean flag is read off this, never asserted.

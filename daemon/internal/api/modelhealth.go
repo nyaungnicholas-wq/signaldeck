@@ -13,11 +13,9 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -85,7 +83,7 @@ func (d Deps) modelHealth(w http.ResponseWriter, r *http.Request) {
 		// in prediction_outcomes, and the coded threshold — never a judgment
 		// call — decides whether they have earned emission back.
 		if h, isDirectional := strings.CutPrefix(k, "directional-ensemble-"); isDirectional {
-			if shadow, ok := d.directionalShadow(ctx, md.Horizon(h)); ok {
+			if shadow, ok := pipeline.DirectionalShadow(ctx, d.St, md.Horizon(h)); ok {
 				v = applyReadmission(v, shadow)
 			}
 		}
@@ -214,61 +212,6 @@ func applyReadmission(v map[string]any, shadow canary.Record) map[string]any {
 	v["verdict"] = "readmitted"
 	v["note"] = "re-admitted by the coded threshold: " + ra.Reason
 	return v
-}
-
-// directionalShadow rebuilds a retired directional model's LIVE shadow record
-// from prediction_outcomes — the rows keep accruing after retirement precisely
-// so re-admission can be a measurement. The aggregation mirrors the canary
-// runner's: one observation per (symbol, UTC day), tallied per day, with the
-// prequential null replayed in day order over the same tallies.
-func (d Deps) directionalShadow(ctx context.Context, h md.Horizon) (canary.Record, bool) {
-	// Bounded at the SURVIVORSHIP EPOCH, the same boundary the accuracy registry
-	// grades on. Re-admission compares an ABSOLUTE record against an absolute
-	// null, which is the comparison survivor-seeded rows distort; measured on the
-	// live DB (2026-07-27) the unbounded window supplied 13,065 rows over 24 days
-	// where only 21 rows over 3 days were post-epoch, so the 20-distinct-day
-	// floor was being cleared entirely by rows the grader refuses to publish.
-	rows, err := d.St.VersionedOutcomes(ctx, h, 200000, store.SurvivorshipEpoch)
-	if err != nil || len(rows) == 0 {
-		return canary.Record{}, false
-	}
-	rec := canary.Record{Version: "shadow-" + string(h), FirstTs: rows[0].Ts, LastTs: rows[0].Ts}
-	byDay := map[int64]*canary.DayTally{}
-	dayUps := map[int64]int{}
-	for _, r := range rows {
-		rec.N++
-		if r.Correct {
-			rec.Correct++
-		}
-		if r.Ts < rec.FirstTs {
-			rec.FirstTs = r.Ts
-		}
-		if r.Ts > rec.LastTs {
-			rec.LastTs = r.Ts
-		}
-		day := md.TradingDay(r.Ts)
-		t := byDay[day]
-		if t == nil {
-			t = &canary.DayTally{Day: day}
-			byDay[day] = t
-		}
-		t.N++
-		if r.Correct {
-			t.Hits++
-		}
-		if r.Up {
-			dayUps[day]++
-		}
-	}
-	tallies := make([]canary.DayTally, 0, len(byDay))
-	for _, t := range byDay {
-		tallies = append(tallies, *t)
-	}
-	sort.Slice(tallies, func(i, j int) bool { return tallies[i].Day < tallies[j].Day })
-	rec.DayTallies = tallies
-	rec.Days = len(tallies)
-	rec.BaselineAccuracy = canary.PrequentialBaseline(tallies, dayUps)
-	return rec, true
 }
 
 // ungradedModel explains WHY a model has no verdict yet, using the only

@@ -294,7 +294,7 @@ func benchmarkHorizon(h md.Horizon) md.Horizon { return h + benchmarkSuffix }
 //
 // It reads the ONE boundary rather than restating it: a second copy of the same
 // instant is a second place it can drift out of step with the registry.
-const benchmarkMajorityEpoch = store.SurvivorshipEpoch
+const benchmarkMajorityEpoch = store.GradingEpoch
 
 func horizonSecs(h md.Horizon) int64 {
 	if h == md.H1w {
@@ -504,11 +504,23 @@ func (w *PredictionRunner) Interval() time.Duration { return 10 * time.Minute }
 // A leg is vetoed only when the WHOLE interval sits at or below 0.5. One that
 // straddles chance, or has too few days to measure, falls through to the
 // per-symbol Wilson bound below and is judged there.
-func rankGate(vetoed map[string]bool, leg string, h md.Horizon, auc float64, nEval int) (float64, bool) {
-	if vetoed[leg+"|"+string(h)] {
+//
+// `edges` is the fleet's day-clustered POSITIVE verdict (see fleetVetoes) and
+// is consulted only when the per-symbol grade cannot be taken at all — too few
+// evaluations for RankEdge to bound, which for expectancy is every row. A
+// measured per-symbol bound, positive or negative, is never overridden.
+func rankGate(vetoed map[string]bool, edges map[string]float64, leg string, h md.Horizon, auc float64, nEval int) (float64, bool) {
+	key := leg + "|" + string(h)
+	if vetoed[key] {
 		return -1, true
 	}
-	return clusterstat.RankEdge(auc, nEval)
+	if e, ok := clusterstat.RankEdge(auc, nEval); ok {
+		return e, true
+	}
+	if e, ok := edges[key]; ok {
+		return e, true
+	}
+	return 0, false
 }
 
 // requireMeasuredLegs reports whether the blend runs in PRODUCTION mode, where
@@ -585,7 +597,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 	// Best-effort: on an unreadable cross-section nothing is vetoed and the
 	// per-symbol bound stays in charge.
 	stopVeto := clk.at("fleetveto")
-	vetoed := fleetVetoes(ctx, w.St, predHorizons)
+	vetoed, fleetEdges := fleetVetoes(ctx, w.St, predHorizons)
 	stopVeto()
 
 	// Fill the settled-move key on rows that predate the column, a bounded batch
@@ -923,7 +935,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			// legs, written by ExpectancyTrainer. Without it this leg is admitted
 			// on availability alone — and with pressure and alphax now benched on
 			// measured ranking, it would be the leg carrying most of the blend.
-			if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelExpectancy, ts); ok {
+			if e, ok := modelLegRankEdge(vetoed, fleetEdges, modelFcs, h, store.ModelExpectancy, ts); ok {
 				c.RankEdge[ensemble.LegExpectancy] = e
 			}
 			// Forecast prob + lift (lift gates whether it is trusted).
@@ -931,7 +943,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 				if f.Horizon == h {
 					p, l := f.Prob, f.Lift
 					c.ForecastProb, c.ForecastLift = &p, &l
-					if e, ok := rankGate(vetoed, ensemble.LegForecast, h, f.AUC, f.NEval); ok {
+					if e, ok := rankGate(vetoed, fleetEdges, ensemble.LegForecast, h, f.AUC, f.NEval); ok {
 						c.RankEdge[ensemble.LegForecast] = e
 					}
 				}
@@ -944,7 +956,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelGBM, ts); ok {
 				c.GBMProb, c.GBMLift = &p, &l
 
-				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelGBM, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, fleetEdges, modelFcs, h, store.ModelGBM, ts); ok {
 
 					c.RankEdge[ensemble.LegGBM] = e
 
@@ -953,7 +965,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelMeanRev, ts); ok {
 				c.MeanRevProb, c.MeanRevLift = &p, &l
 
-				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelMeanRev, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, fleetEdges, modelFcs, h, store.ModelMeanRev, ts); ok {
 
 					c.RankEdge[ensemble.LegMeanRev] = e
 
@@ -968,7 +980,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if p, l, ok := modelLegProbLift(modelFcs, h, store.ModelAlphaX, ts); ok {
 				c.AlphaXProb, c.AlphaXLift = &p, &l
 
-				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelAlphaX, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, fleetEdges, modelFcs, h, store.ModelAlphaX, ts); ok {
 
 					c.RankEdge[ensemble.LegAlphaX] = e
 
@@ -984,7 +996,7 @@ func (w *PredictionRunner) Run(ctx context.Context) (string, error) {
 			if _, l, ok := modelLegProbLift(modelFcs, h, store.ModelPressure, ts); ok {
 				c.PressureLift = &l
 
-				if e, ok := modelLegRankEdge(vetoed, modelFcs, h, store.ModelPressure, ts); ok {
+				if e, ok := modelLegRankEdge(vetoed, fleetEdges, modelFcs, h, store.ModelPressure, ts); ok {
 
 					c.RankEdge[ensemble.LegPressure] = e
 

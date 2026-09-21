@@ -79,8 +79,9 @@ func seedCompositeClusteredRecord(t *testing.T, st *store.Store, days, symbolsPe
 		// Mid-day UTC so ts/86400 is unambiguous. Day index 20000 (2024-10) sat
 		// BEFORE the 2026-07-24 survivorship epoch that
 		// ResolvedPredictionOutcomes now floors on, which emptied the fixture;
-		// 20658 is the epoch's own day index.
-		base := int64(20658+day)*86400 + 43200
+		// 20658 was the epoch's own day index; since the 2026-09-20 window
+		// re-registration the floor is store.GradingEpoch (2026-08-07, day 20672).
+		base := int64(20672+day)*86400 + 43200
 		i := 0
 		for _, c := range mix {
 			n := c.per100 * symbolsPerDay / 100

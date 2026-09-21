@@ -295,9 +295,7 @@ in. I would rather ship that than a number I can't defend.
   connection and not the flow. Live crypto ticks I have confirmed end to end.
 - **Reconnection is code- and unit-tested, not demonstrated** against a real
   dropped stream.
-- **Microstructure features are crypto-only.** Alpaca's IEX feed is ~2–3% of
-  consolidated volume; order-book imbalance computed from it describes one venue,
-  not the market. That is a data-licensing ceiling, not a code problem.
+- **Microstructure features are crypto-only.** Alpaca's IEX feed covers ~2–3% of consolidated volume; order-book imbalance computed from it describes one venue, not the market. Daily bars used by all graded forecasts come from full-consolidated SIP on the free tier, so the limitation is intraday-only.
 - **Recovered delistings skew to 2021–2022** and only 40 are outright collapses.
   Better than 21 delistings; not equivalent to a paid survivorship-free vendor.
 - **Verdicts currently read "withheld"** because the rows were written by builds

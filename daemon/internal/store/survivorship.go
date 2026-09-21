@@ -147,6 +147,17 @@ func (s *Store) RepairAddedAtFromBars(ctx context.Context) (int64, int64, error)
 // publish.
 const SurvivorshipEpoch int64 = 1784851200
 
+// GradingEpoch is 2026-08-07T00:00:00Z: where the DIRECTIONAL GRADED WINDOW
+// starts. Re-registered 2026-09-20 from SurvivorshipEpoch by the
+// grading-window-reregistration chain record (cmd/prereg-amend). The two are
+// different facts and must stay separate: SurvivorshipEpoch is the day
+// symbols.delisted_at began being recorded and bounds listing-status
+// reconstruction; GradingEpoch is the first day after the 2026-07-27..08-06
+// cross-section collapse (08-06 itself is collapsed at 1d: 33 distinct across 327) and bounds every population the grader, the
+// publication gate, the live benchmark and the re-admission shadow read.
+// Mirrors tools/accuracy_registry.py GRADING_EPOCH_TS; the pin test holds both.
+const GradingEpoch int64 = 1786060800
+
 // ResearchUniverse returns EVERY stock symbol ever tracked, active or not, for
 // backtests and statistical studies. Live trading paths must keep using
 // ActiveStockSymbols — this one deliberately includes the dead.

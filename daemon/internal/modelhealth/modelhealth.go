@@ -51,6 +51,12 @@ const (
 	VerdictDegraded Verdict = "degraded"
 	// VerdictRetired — STOP emitting. The live record does not support it.
 	VerdictRetired Verdict = "retired"
+	// VerdictReadmitted — a retired model whose LIVE shadow record has since
+	// cleared the coded re-admission threshold (canary.Readmit): >= 20 distinct
+	// days and a day-clustered Wilson lower bound above the prequential null.
+	// Emitting again. Written only by the model-health worker, never by a
+	// handler, so the stored record and the served one cannot disagree.
+	VerdictReadmitted Verdict = "readmitted"
 	// VerdictProvisional — not enough evidence to judge either way.
 	VerdictProvisional Verdict = "provisional"
 	// VerdictUnattributable — STOP emitting, but claim nothing about the

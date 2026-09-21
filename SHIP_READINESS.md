@@ -60,9 +60,7 @@ engineering check settles them.
 > 'all rights reserved' and nobody can evaluate what they are allowed to do
 > with it."
 
-### 2. Data redistribution — the serious one
-Several ingest paths are fine to *consume* privately and would be a problem to
-*redistribute* commercially:
+### 2. Data redistribution — CLEARED 2026-09-20 (decision recorded)
 
 | source | how it is accessed | exposure |
 |---|---|---|
@@ -71,15 +69,7 @@ Several ingest paths are fine to *consume* privately and would be a problem to
 | `alpaca` | licensed market data | redistribution is prohibited by the agreement |
 | `edgar`, `fred`, `finra`, `cftc`, `cboe` | US government / public | genuinely free to use and redistribute |
 
-`GET /api/bars` currently serves stored vendor bars. On localhost that is
-personal use. Pointed at a customer it becomes redistribution of licensed data,
-which is the single fastest way to turn a portfolio project into a legal
-problem.
-
-**The shape that works** (already identified in earlier research): ship the
-PLATFORM and have the customer bring their own data keys. Analytics *derived*
-from data can be sold where the raw data cannot. That reframing costs no
-engineering — it is a packaging decision — but it has to be made deliberately.
+SignalDeck is a bring-your-own-keys platform. The public surface serves derived analytics only (grades, the hash-chained ledger, the volatility record, calibration). No raw bar, quote, headline, or vendor rating leaves the host. The code already enforces this: every licensed raw route in `daemon/internal/datalicense/datalicense.go` `RestrictedRoutes` answers 451 on a published deployment; `BarsRedistributable()` is always false because every price feed in use is licensed; `SIGNALDECK_ALLOW_RAW_EXPORT` records an operator assertion and grants no right. This is a packaging decision, not a legal review, and `DATA_SOURCES.md` section "Not a legal review" still applies; if the platform is ever sold commercially, that paragraph is the trigger for a real one. A source-scan test (`TestEveryRegisteredVendorRouteIsGoverned`) now fails CI when a new `/api` route that looks like it serves vendor rows is not classified.
 
 ### 3. `SIGNALDECK_PUBLIC_READS` defaulted to `true` — CLEARED 2026-09-19
 It no longer does. `daemon/internal/config/config.go` resolves it as
@@ -175,11 +165,9 @@ left is choosing a host and running it there with `PUBLIC_READS=false`. Note
 there is **no `render.yaml` in the repo** — the Render blueprint this document
 referred to does not exist, and picking a host is still an open decision.
 
-### 6. Free-tier data is not institution-grade
-Alpaca's free IEX feed is roughly 2–3% of consolidated volume. Fine for
-research on daily bars; not what anyone would trade real size against. The
-measured upgrade path is roughly $130/month (Alpaca Algo Trader Plus + Tiingo),
-which flips a single feed flag.
+### 6. Free-tier data — NOT A BLOCKER, corrected 2026-09-20
+
+The daemon's default feed is already "sip" (`daemon/internal/config/config.go`, `SIGNALDECK_ALPACA_FEED`, applied in `cmd/signaldeckd/run.go`). Alpaca's free tier serves full consolidated SIP for historical queries, measured 2026-07-10 as NVDA 1-day volume 148.3M on sip versus 5.5M on iex, a 27x difference. Only the trailing 16 minutes are restricted, which the client handles with `sipEndGuard` (end = now minus 16 minutes) and a separate IEX-fed live poller whose 16-minute tail is healed to full SIP on the next deep pass. Every graded forecast uses daily bars, so nothing graded depends on the IEX tail. The 2-3% figure applies only to that live tail and to intraday microstructure features, which remain crypto-only. The paid upgrade (Algo Trader Plus, about $99/month) changes nothing in code and is deliberately NOT taken; it is a one-line runbook step if real-time full SIP is ever needed. Tiingo was never integrated and is removed from the plan.
 
 ---
 

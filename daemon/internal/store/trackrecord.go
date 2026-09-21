@@ -73,7 +73,7 @@ func (s *Store) ResolvedPredictionOutcomes(ctx context.Context, h md.Horizon, li
 		FROM prediction_outcomes po
 		JOIN symbols sym ON sym.id = po.symbol_id
 		WHERE po.resolved_at IS NOT NULL AND po.horizon = ? AND po.up IS NOT NULL
-		  AND po.ts >= `+strconv.Itoa(SurvivorshipEpochTS)+`
+		  AND po.ts >= `+strconv.Itoa(GradingEpochTS)+`
 		ORDER BY po.ts DESC
 		LIMIT ?`, string(h), limit)
 	if err != nil {

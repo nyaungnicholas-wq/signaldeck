@@ -80,8 +80,24 @@ func (c legComponents) value(leg string) (float64, bool) {
 // which carries its own Wilson lower bound. That keeps the veto one-directional:
 // a good fleet never promotes a bad symbol, only a demonstrably bad fleet
 // demotes a good one.
-func fleetVetoes(ctx context.Context, st *store.Store, horizons []md.Horizon) map[string]bool {
+//
+// The second map, edges, is the SAME daily series read in the other direction:
+// "leg|horizon" -> (lower bound - 0.5) for a leg whose whole day-clustered 95%
+// interval sits ABOVE 0.5. It exists because the per-symbol RankEdge gate needs
+// RankEdgeMinEval = 80 out-of-sample evaluations per symbol, and some legs can
+// structurally never reach it — expectancy's per-symbol NEval maxes at ~74 — so
+// their bench was arithmetic, not a measurement. dayauc.go already argues the
+// within-day AUC is the right question for a leg used to RANK symbols against
+// each other, and measured across the fleet the per-symbol floor does not apply.
+// rankGate consumes it ONLY as a fallback when the per-symbol grade is
+// unavailable (ok=false); a measured per-symbol bound is never overridden, so a
+// leg with an established per-symbol edge stays exactly where it was. An
+// estimator correction, not a threshold change: the leg still has to clear 0.5
+// with its whole interval. Absent means unmeasured or not established, never a
+// verdict.
+func fleetVetoes(ctx context.Context, st *store.Store, horizons []md.Horizon) (vetoed map[string]bool, edges map[string]float64) {
 	out := map[string]bool{}
+	edges = map[string]float64{}
 	since := time.Now().Add(-fleetVetoWindow)
 	for _, h := range horizons {
 		obs, err := st.LegDailyObservations(ctx, string(h), since)
@@ -135,10 +151,16 @@ func fleetVetoes(ctx context.Context, st *store.Store, horizons []md.Horizon) ma
 				out[leg+"|"+string(h)] = true
 				slog.Warn("fleet veto: leg benched on day-clustered cross-sectional AUC",
 					"leg", leg, "horizon", h, "meanDailyAUC", mean, "days", len(vals))
+				continue
+			}
+			if _, lo, _, ok := clusterstat.DayClusteredAUC(vals); ok && lo > 0.5 {
+				edges[leg+"|"+string(h)] = lo - 0.5
+				slog.Info("fleet edge: leg rankable on day-clustered cross-sectional AUC",
+					"leg", leg, "horizon", h, "meanDailyAUC", mean, "lowerBound", lo, "days", len(vals))
 			}
 		}
 	}
-	return out
+	return out, edges
 }
 
 // minCrossSectionForAUC is the smallest same-day cross-section worth ranking.

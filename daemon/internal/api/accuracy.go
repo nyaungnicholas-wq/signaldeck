@@ -541,7 +541,7 @@ func (d Deps) collapsedGradingWindow(ctx context.Context, reg *registryFile, now
 	// comment named. Reading from the epoch is a superset of the graded days
 	// (the grader also drops thin, unsettled and stale-feed days), so it can
 	// only over-refuse, never under-refuse.
-	since := time.Unix(store.SurvivorshipEpoch, 0).UTC()
+	since := time.Unix(store.GradingEpoch, 0).UTC()
 	for _, h := range horizons {
 		stats, err := d.St.ForecastDayStats(ctx, h, since)
 		if err != nil {

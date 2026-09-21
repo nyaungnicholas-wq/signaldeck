@@ -23,10 +23,12 @@ import (
 //
 // The fragments mirror accuracy_registry.py one-for-one; keep them in sync.
 
-// SurvivorshipEpochTS is 2026-07-24T00:00:00Z — accuracy_registry.py
-// SURVIVORSHIP_EPOCH_TS. symbols.delisted_at only exists from that wave on, so
-// everything earlier is survivor-seeded and is not gradeable evidence.
-const SurvivorshipEpochTS = 1784851200
+// GradingEpochTS is 2026-08-07T00:00:00Z — accuracy_registry.py
+// GRADING_EPOCH_TS, the same instant as GradingEpoch (survivorship.go), kept as
+// an untyped constant because it is spliced into SQL. Rows before it are either
+// survivor-seeded (before 2026-07-24) or inside the 2026-07-27..08-06 collapse;
+// neither is gradeable evidence.
+const GradingEpochTS = 1786060800 // == GradingEpoch; untyped so strconv.Itoa accepts it
 
 const (
 	// tradingDayOffsetSecs / secondsPerDay mirror the grader's trading_day():
@@ -127,7 +129,7 @@ func gradeableDedupSQL(withReconstruction bool) string {
 		" ORDER BY ts DESC) rn" +
 		" FROM prediction_outcomes po" +
 		" WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL" +
-		" AND ts >= " + strconv.Itoa(SurvivorshipEpochTS)
+		" AND ts >= " + strconv.Itoa(GradingEpochTS)
 
 	if !withReconstruction {
 		return q

@@ -165,30 +165,7 @@ pass on a structurally valid prefix.
    `%USERPROFILE%\.signaldeck\anchor-publish`.
 
 ## 4. Reinstall the Scheduled Task fleet
-
-There are no task XML files to import. `ops\install-windows-tasks.ps1` reads the
-same `ops\com.*.plist` files the Mac used and registers the Windows equivalents,
-so the two schedules cannot drift. It reports by default and changes nothing
-without `-Install`:
-
-```powershell
-cd $env:USERPROFILE\Desktop\"claude code"\signaldeck\ops
-.\install-windows-tasks.ps1              # dry run — read this before installing
-.\install-windows-tasks.ps1 -Install
-.\fix-task-principals.ps1                # S4U principals; see the console-kill note below
-schtasks /query /fo TABLE | Select-String SignalDeck
-```
-
-Tasks are named `SignalDeck <Leaf>` — `com.signaldeck.daemon` becomes
-`SignalDeck Daemon`. Start the stack the sanctioned way rather than by running
-tasks by hand:
-
-```bash
-bash ops/signaldeck-ctl.sh up
-```
-
-If tasks exit immediately with `0xC000013A`, that is a console control event
-killing an Interactive-logon task — run `fix-task-principals.ps1` **elevated**.
+Tasks are lossless XML under `ops/tasks/*.xml`, one per task, tokenised with `{{REPO}}` and `{{USER}}`. Install with an ELEVATED PowerShell: `powershell -File ops\install-windows-tasks.ps1 -Install` (dry-run without `-Install` reports drift only). The plist files were deleted 2026-09-19 and nothing reads them. After install confirm with `Get-ScheduledTask -TaskPath '\' | Where-Object TaskName -like 'SignalDeck*'` and check `ops/check-task-health.ps1` passes.
 
 ## 5. Verify the restored ledger against what was published
 

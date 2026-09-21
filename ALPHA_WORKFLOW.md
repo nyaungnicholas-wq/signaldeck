@@ -225,11 +225,13 @@ support its own model at all.
 *Implication:* **the daily tier is the workhorse.** 1,077 symbols × 7.5 years
 is a real cross-sectional dataset. Build there first; let 1h and 1m accumulate.
 
-### B5 — IEX-only microstructure (HIGH, not fixable in code)
+### B5 — IEX-only INTRADAY microstructure (MEDIUM, intraday only)
 
 Alpaca's IEX feed is roughly 2–3% of consolidated volume. Order-book imbalance
 and VPIN (spec 3 Phase 2.3) computed from it describe one venue, not the
-market's real flow. Crypto via TickStream has genuine L2 and is where those
+market's real flow. The free tier already provides full SIP for historical
+daily bars; only the trailing 16 minutes are IEX. Crypto via TickStream has
+genuine L2 and is where those
 features are valid.
 
 *Implication:* microstructure features are **crypto-only** until a

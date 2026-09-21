@@ -41,10 +41,10 @@
   - **Volatility / regime** (genuinely predictable — you *can* be honestly calibrated on "will realized vol exceed baseline?").
 - Change the headline metric everywhere from "win rate" to **edge-vs-naive-baseline** (already done) + **cost-adjusted expectancy**.
 
-### Phase 1 — Better data (COSTS ~$129/mo — your call, biggest single lever)
-- Alpaca Algo Trader Plus ($99): real-time full-market SIP (code already requests it; `SIGNALDECK_ALPACA_FEED` is wired).
-- Tiingo ($30): real fundamentals + **analyst estimate revisions** (the highest-edge free-ish feature there is).
-- You cannot squeeze edge from thin, delayed, free data. This is the ceiling-raiser.
+### Phase 1 — Better data (RE-ASSESSED 2026-09-20: $0, not a lever)
+- Historical daily bars are already full-consolidated SIP on Alpaca's free tier; the graded forecast tier runs on complete data.
+- Algo Trader Plus ($99/mo) purchases only the real-time 16-minute SIP tail, which a separate IEX poller covers and the next deep pass heals; this is deliberately not taken.
+- Tiingo was never integrated (no code, no config) and is dropped; fundamentals come from public EDGAR filings.
 
 ### Phase 2 — Real alpha features, OOS-gated (FREE, partly done)
 - Add estimate-revision + surprise, insider clusters, options put/call + unusual flow, macro/credit/vol regime conditioning as features. The gate (lift>0 walk-forward) decides if any earns a live output. Never trust one; ensemble many.

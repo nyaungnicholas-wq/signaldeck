@@ -45,18 +45,19 @@ func main() {
 			"which record to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
 				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+", "+
 				ForwardTestKind+", "+BenchFloorKind+", "+PopFiltersKind+", "+
-				BookExtremeKind+" or "+RVForecastKind)
+				BookExtremeKind+", "+RVForecastKind+" or "+GradingWindowKind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
 		*kind != ProvenanceKind && *kind != DataIntegrityKind &&
 		*kind != DuplicateKind && *kind != ForwardTestKind &&
 		*kind != BenchFloorKind && *kind != PopFiltersKind &&
-		*kind != BookExtremeKind && *kind != RVForecastKind {
-		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
+		*kind != BookExtremeKind && *kind != RVForecastKind &&
+		*kind != GradingWindowKind {
+		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
 			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind,
-			PopFiltersKind, BookExtremeKind, RVForecastKind)
+			PopFiltersKind, BookExtremeKind, RVForecastKind, GradingWindowKind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -133,6 +134,29 @@ func main() {
 				"the existing rows in their own record.", m.ObservedRows)
 		}
 		spec, note = forwardTestSpec(m), forwardTestNote
+
+	case GradingWindowKind:
+		m, err := measureGradingWindow(ctx, *dbPath)
+		if err != nil {
+			die("measure grading window: %v", err)
+		}
+		// The record's premise is that the window it opens is CLEAN on the gate's
+		// own ruler. If a collapsed cross-section sits on or after the new epoch,
+		// the boundary does not clear the defect and the record would put a false
+		// statement on the one log that cannot be corrected.
+		if n := m.collapsedOnOrAfterNew(); n != 0 {
+			die("REFUSING to file: %d collapsed cross-section(s) sit on or after the new "+
+				"epoch (2026-08-07): 1d %v, 1w %v. This record asserts the window it opens "+
+				"holds none, and that is not true of this database.",
+				n, m.CollapsedNew["1d"], m.CollapsedNew["1w"])
+		}
+		// And the premise that there was something to correct: filing this on a
+		// window with no collapse would move a boundary for no stated reason.
+		if len(m.CollapsedOld["1d"])+len(m.CollapsedOld["1w"]) == 0 {
+			die("REFUSING to file: the gate finds no collapsed cross-section from the " +
+				"old epoch, so there is no refusal for this record to clear.")
+		}
+		spec, note = gradingWindowSpec(m), gradingWindowNote
 
 	case RVForecastKind:
 		m, err := measureRVForecast(ctx, db)
