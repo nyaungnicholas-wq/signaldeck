@@ -185,8 +185,11 @@ func (w *ModelHealthWorker) Run(ctx context.Context) (string, error) {
 		// said "readmitted". Applied BEFORE the cross-section gate below on
 		// purpose: a re-admitted horizon whose cross-section is flat is still
 		// withheld, and the gate must keep the last word on Emitting.
+		// NEVER over a registry retire flag: the pre-registered auto-retire rule
+		// does not lapse, and only a registry re-grade can lift it. The shadow
+		// record answers the composite score's retirement, not the chain's.
 		var readmission any
-		if score.Verdict == modelhealth.VerdictRetired {
+		if score.Verdict == modelhealth.VerdictRetired && !regFlags[model].Retire {
 			if shadow, ok := DirectionalShadow(ctx, w.St, h); ok {
 				readmission = ApplyReadmission(&score, shadow)
 			}

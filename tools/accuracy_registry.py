@@ -877,6 +877,18 @@ GRADING_EPOCH = dt.date(2026, 8, 7)
 GRADING_EPOCH_TS = int(dt.datetime(2026, 8, 7, tzinfo=dt.timezone.utc).timestamp())
 
 
+def population_epoch_ts(table: str) -> int:
+    """The start of the graded population for a table's claim family.
+
+    DIRECTIONAL rows (prediction_outcomes) start at GRADING_EPOCH: the window
+    was re-registered 2026-09-20 past the collapsed cross-sections. STRUCTURAL
+    rows (regime_outcomes) stay at SURVIVORSHIP_EPOCH: PREREGISTRATION.md §6
+    fixes that universe as every forecast since 2026-07-24 and forbids moving
+    it, and the 2026-09-20 record amends the directional window only.
+    """
+    return SURVIVORSHIP_EPOCH_TS if table == "regime_outcomes" else GRADING_EPOCH_TS
+
+
 def measure_universe_completeness(con: sqlite3.Connection | None,
                                   table: str) -> dict:
     """Fraction of the graded symbols whose listing status is RESOLVABLE.
@@ -907,7 +919,7 @@ def measure_universe_completeness(con: sqlite3.Connection | None,
     LEFT JOIN symbols s ON s.id = g.symbol_id
     """
     try:
-        n, unknown, undated = con.execute(q, (GRADING_EPOCH_TS,)).fetchone()
+        n, unknown, undated = con.execute(q, (population_epoch_ts(table),)).fetchone()
     except sqlite3.OperationalError as e:
         return {"clean": False, "coverage": None,
                 "reason": f"unmeasured — listing status unreadable ({e})"}
@@ -1914,7 +1926,7 @@ def fetch_chain_presence(con: sqlite3.Connection) -> dict:
         total, labelled = con.execute(
             """SELECT COUNT(*), SUM(CASE WHEN naive_label IS NOT NULL THEN 1 ELSE 0 END)
                FROM regime_outcomes WHERE resolved_at IS NOT NULL AND ts >= ?""",
-            (GRADING_EPOCH_TS,)).fetchone()
+            (SURVIVORSHIP_EPOCH_TS,)).fetchone()
         if total:
             out["null_coverage"] = (labelled or 0) / total
             out["null_frozen"] = (labelled or 0) > 0
@@ -2053,7 +2065,7 @@ def fetch_directional_days(con: sqlite3.Connection) -> dict[str, list[tuple]]:
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes po
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
-        AND ts >= ?  -- survivorship boundary: pre-epoch rows are survivor-seeded
+        AND ts >= ?  -- grading window: rows before GRADING_EPOCH are survivor-seeded or collapsed
         {settlement_clause(con)}
         {stale_feed_sql(con)[1]}
     )
@@ -2099,7 +2111,7 @@ def fetch_calibration_bins(con: sqlite3.Connection) -> dict:
                                 ORDER BY ts DESC) rn
       FROM prediction_outcomes po
       WHERE resolved_at IS NOT NULL AND up IS NOT NULL AND prob IS NOT NULL
-        AND ts >= ?  -- survivorship boundary, same as the graded rows
+        AND ts >= ?  -- grading window, same as the graded rows
         {settlement_clause(con)}  -- settlement quarantine, same as the graded rows
         {stale_feed_sql(con)[1]}  -- stale-feed quarantine, same as the graded rows
     )
@@ -2330,9 +2342,9 @@ def fetch_structural(con: sqlite3.Connection):
     GROUP BY kind, horizon_days, day ORDER BY kind, day
     """.format(sup=superseded_clause(con))
     per_day: dict[tuple, list[tuple[int, int, int]]] = {}
-    for kind, hd, day, n, hits in con.execute(qd, (GRADING_EPOCH_TS,)):
+    for kind, hd, day, n, hits in con.execute(qd, (SURVIVORSHIP_EPOCH_TS,)):
         per_day.setdefault((kind, hd), []).append((day, n, hits or 0))
-    totals = [tuple(r) for r in con.execute(q, (GRADING_EPOCH_TS,))]
+    totals = [tuple(r) for r in con.execute(q, (SURVIVORSHIP_EPOCH_TS,))]
     # The frozen naive-persistence null, tallied per call-day so it flows
     # through the IDENTICAL clustered_ci path as the model it benchmarks.
     qn = """
@@ -2344,7 +2356,7 @@ def fetch_structural(con: sqlite3.Connection):
     """
     naive_per_day: dict[tuple, list[tuple[int, int, int]]] = {}
     try:
-        for kind, hd, day, n, hits in con.execute(qn, (GRADING_EPOCH_TS,)):
+        for kind, hd, day, n, hits in con.execute(qn, (SURVIVORSHIP_EPOCH_TS,)):
             naive_per_day.setdefault((kind, hd), []).append((day, n, hits or 0))
     except sqlite3.OperationalError:
         pass  # database predates naive_label: no baseline exists, and rows say so

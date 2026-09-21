@@ -308,6 +308,7 @@ def write_snapshot(con: sqlite3.Connection, out_dir: str) -> dict:
         "generated": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "git_commit": commit,
         "survivorship_epoch": reg.SURVIVORSHIP_EPOCH.isoformat(),
+        "grading_epoch": reg.GRADING_EPOCH.isoformat(),
         "hash_scheme": "datasetver v1 canonical records, sha256, floats %.10g "
                        "(daemon/internal/datasetver.HashRecords)",
         "note": "grading tallies + input-series versions only; no bar data is "

@@ -84,6 +84,7 @@ type Registry = {
   grader_sha256?: string;
   min_independent_n: number;
   survivorship_epoch: string;
+  grading_epoch?: string;
   null_policy: string;
   calibration?: Calibration | null;
   rows: RegistryRow[];
@@ -684,8 +685,10 @@ export default async function AccuracyPage() {
       {reg && (
         <p className="m-0 text-[0.72rem] leading-relaxed" style={{ color: "var(--faint)" }}>
           Regenerated {reg.generated} · minimum {reg.min_independent_n} independent observations
-          for any verdict · survivorship epoch {reg.survivorship_epoch} (earlier rows were graded
-          against a survivor-seeded universe and are excluded) · intervals resample days, not rows.
+          for any verdict · directional window starts {reg.grading_epoch ?? reg.survivorship_epoch}
+          (re-registered 2026-09-20 past the 2026-07-27..08-06 collapsed cross-sections) ·
+          survivorship epoch {reg.survivorship_epoch} (earlier rows were graded against a
+          survivor-seeded universe and are excluded) · intervals resample days, not rows.
         </p>
       )}
 

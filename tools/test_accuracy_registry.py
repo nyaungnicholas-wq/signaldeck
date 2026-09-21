@@ -81,6 +81,7 @@ from accuracy_registry import (  # noqa: E402
     set_multiplicity,
     MIN_INDEPENDENT_N,
     GRADING_EPOCH_TS,
+    SURVIVORSHIP_EPOCH_TS,
     auto_retire_rule,
     auto_retire_rule_digest,
     clustered_ci,
@@ -244,14 +245,14 @@ class TestSurvivorshipBoundary(unittest.TestCase):
 
     def test_pre_epoch_structural_rows_cannot_enter_a_tally(self):
         con = self._db()
-        pre = GRADING_EPOCH_TS - 86400
+        pre = SURVIVORSHIP_EPOCH_TS - 86400  # structural: PREREGISTRATION §6 keeps the survivorship epoch
         con.execute("INSERT INTO regime_outcomes VALUES (1,'oversold',21,?,?,?,1,0.82)",
                     (pre // 86400, pre, pre + 86400))
         self.assertEqual(grade_structural(con), [])
 
     def test_structural_tally_counts_only_post_epoch_rows(self):
         con = self._db()
-        pre = GRADING_EPOCH_TS - 86400
+        pre = SURVIVORSHIP_EPOCH_TS - 86400  # structural: PREREGISTRATION §6 keeps the survivorship epoch
         con.execute("INSERT INTO regime_outcomes VALUES (1,'oversold',21,?,?,?,1,0.82)",
                     (pre // 86400, pre, pre + 86400))
         for i in range(2):

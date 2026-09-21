@@ -464,3 +464,39 @@ resolved, so no realized structural outcome could have informed either change.
 document's `prereg-document` record, appending visible AMENDMENT entries on the
 next `prereg-registrar` pass. Until that pass runs the grader refuses to grade at
 all, exactly as section 12 describes. That refusal is the intended state.
+
+## 11. AMENDMENT 2026-09-20 — the DIRECTIONAL grading window starts 2026-08-07
+
+**What changed.** The population the directional rows are graded over now
+starts at `GRADING_EPOCH = 2026-08-07` (`tools/accuracy_registry.py`,
+`store.GradingEpoch`) instead of the survivorship epoch. The survivorship epoch
+itself (2026-07-24) does not move: it still bounds listing-status
+reconstruction and the STRUCTURAL universe in section 6, which this amendment
+does not touch.
+
+**Why, stated with the outcome in view.** The publication gate refuses the whole
+directional table while any collapsed cross-section — a day on which the whole
+universe received a handful of distinct probabilities — sits in the graded
+window, and since 2026-09-09 that window is anchored and does not roll. The
+2026-07-27..08-06 collapse is a fixed defect (a34db09, 906310c) and its days
+would otherwise stay in the window indefinitely; the gate's own refusal text
+said "this clears when the window is re-registered". At filing the registry
+had read REFUSED since 2026-09-13, the withheld grade read FAILED (1d) and
+INSUFFICIENT DAYS (1w), and the directional ensemble was already retired on its
+live record. The correction cannot flatter the model: it changes no accuracy
+figure, null, interval, evidence floor, auto-retire rule or verdict map, and
+the expected result on the rows in hand is INSUFFICIENT DAYS, not a verdict.
+
+**How the day was chosen.** By the collapse detector's own ruler, never by an
+accuracy number. `prereg-amend -kind grading-window-reregistration` measures
+every graded day from both epochs and REFUSES to file while any collapsed
+cross-section sits on or after the new one. It refused 2026-08-05 (1d
+2026-08-06: 33 distinct across 327 symbols, ratio 0.10 below the 0.15 floor)
+and files at 2026-08-07, where the window it opens holds none. The measured
+collapse table travels inside the chain record.
+
+**Chaining.** The `grading-window-reregistration` record carries the measured
+state at filing; the grader edit re-hashes the `grading-protocol` record and this
+document re-hashes `prereg-document`, appending visible AMENDMENT entries on the
+next registrar pass. Until that pass runs the grader refuses to grade, exactly as
+section 12 describes.
