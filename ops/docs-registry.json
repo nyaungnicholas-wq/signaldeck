@@ -77,9 +77,9 @@
     },
     "DATA_SOURCES.md": {
       "owner": "Nicholas Nyaung",
-      "version": "0.2.0",
-      "data_as_of": "2026-07-27",
-      "status": "FROZEN",
+      "version": "1.0",
+      "data_as_of": "2026-08-04",
+      "status": "ACTIVE",
       "backtest_data": "none"
     },
     "EDGE_PLAN.md": {

@@ -91,6 +91,18 @@ def _find_posix_shell() -> str | None:
 
 POSIX_SH = _find_posix_shell()
 
+
+def _bash_beside(sh: str | None) -> str | None:
+    """bash from the same install as the resolved POSIX shell (Git's usr/bin
+    on Windows), so a bare PATH lookup cannot pick the WSL launcher in
+    System32 and SIGNALDECK_TEST_SH still steers which install is used."""
+    if sh:
+        p = Path(sh)
+        cand = p.with_name("bash.exe" if p.suffix.lower() == ".exe" else "bash")
+        if cand.exists():
+            return str(cand)
+    return shutil.which("bash") or sh
+
 NO_SH_REASON = (
     "no POSIX shell found, so ops/grade.sh cannot be driven on this host. These "
     "are the wrapper's negative controls and they have NOT run. Install Git for "
@@ -1074,8 +1086,12 @@ class DevBoxStagingLockTests(unittest.TestCase):
         self.lock = Path(str(self.out) + ".lock")
 
     def run_script(self, timeout: int = 120):
+        # accuracy-registry.sh is the DEV-BOX script: #!/bin/bash with pipefail.
+        # POSIX_SH is for the container's grade.sh; on Linux CI it is dash, which
+        # dies on line 8 ("set: Illegal option -o pipefail") before any lock
+        # logic runs -- red on every push from 2026-09-20 until this was found.
         return subprocess.run(
-            [POSIX_SH, str(self.script)],
+            [_bash_beside(POSIX_SH), str(self.script)],
             capture_output=True, text=True, timeout=timeout,
             cwd=str(self.dir), env=dict(os.environ),
         )

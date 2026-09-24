@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { api, isAuthError, type Me } from "@/lib/api";
+import { api, ApiError, isAuthError, type Me } from "@/lib/api";
 import FreshnessBadge from "@/components/FreshnessBadge";
 import OfflineBanner from "@/components/OfflineBanner";
 import CommandPalette, { CMDK_EVENT } from "@/components/CommandPalette";
@@ -287,24 +287,37 @@ function AuthChip() {
     <button
       type="button"
       onClick={() => {
-        api
-          .logout()
-          .catch(() => {})
-          // A FULL navigation, not router.replace. AuthGate's `ready` flag is
-          // mount-scoped and deliberately latches true so protected pages never
-          // re-flash; a client-side replace does not remount it, so after a
-          // logout the gate stayed open and a back-navigation painted the whole
-          // app chrome to a signed-out user. (The data itself was safe — the
-          // daemon 401s — but the flash-of-dashboard is the exact thing AuthGate
-          // exists to prevent.) A hard load remounts the gate and re-checks.
-          //
+        // A FULL navigation, not router.replace. AuthGate's `ready` flag is
+        // mount-scoped and deliberately latches true so protected pages never
+        // re-flash; a client-side replace does not remount it, so after a
+        // logout the gate stayed open and a back-navigation painted the whole
+        // app chrome to a signed-out user. (The data itself was safe — the
+        // daemon 401s — but the flash-of-dashboard is the exact thing AuthGate
+        // exists to prevent.) A hard load remounts the gate and re-checks.
+        //
+        // Only on SUCCESS. This used to swallow a failed logout and navigate
+        // anyway, landing a user whose session was still live on /login and
+        // telling them they were signed out. Say so instead; a retry is a click.
+        api.logout().then(
           // The rule below arrived with eslint-config-next 16.3 and fires on
-          // exactly the behaviour this line wants. It is right in general and
-          // wrong here: router.push/replace is a soft navigation, which is the
-          // defect described above. Disabled on this one line, with the reason,
-          // rather than left as a standing warning nobody reads.
+          // exactly the behaviour this line wants: router.push/replace is a
+          // soft navigation, which is the defect described above.
           // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a hard load is required to remount AuthGate after logout
-          .finally(() => window.location.assign("/login"));
+          () => window.location.assign("/login"),
+          (e: unknown) => {
+            // The daemon ANSWERED (ApiError): it has already cleared this
+            // browser's cookie and says whether the server-side session
+            // survived, so relay its words and leave. No answer at all
+            // (network): nothing changed, so say so and stay.
+            if (e instanceof ApiError) {
+              window.alert(e.message);
+              // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- same hard load as above
+              window.location.assign("/login");
+            } else {
+              window.alert("Log out failed: the server could not be reached, so you are still signed in. Try again.");
+            }
+          },
+        );
       }}
       title={`signed in as ${me.username} — click to log out`}
       aria-label={`signed in as ${me.username} — log out`}

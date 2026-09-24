@@ -139,6 +139,7 @@ func pairs(db *sql.DB, h string, limit int) (raws, ups []float64, days []int64, 
 			JOIN predictions p
 			  ON p.symbol_id=o.symbol_id AND p.horizon=o.horizon AND p.ts=o.ts
 			WHERE o.resolved_at IS NOT NULL AND o.up IS NOT NULL AND o.horizon=?
+			  AND o.ts >= 1786060800 -- store.GradingEpochTS: the fit's population
 		)
 		WHERE rn=1
 		ORDER BY day DESC LIMIT ?`, h, limit)

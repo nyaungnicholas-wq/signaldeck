@@ -9,7 +9,7 @@
 | [ALPHA_WORKFLOW.md](ALPHA_WORKFLOW.md) | Nicholas Nyaung | 0.2.0 | 2026-08-03 | FROZEN | pre-survivorship-fix |
 | [ARCHITECTURE_EV.md](ARCHITECTURE_EV.md) | Nicholas Nyaung | 0.2.0 | 2026-07-26 | FROZEN | none |
 | [CASE_STUDY.md](CASE_STUDY.md) | Nicholas Nyaung | 0.1.0 | 2026-08-03 | NOT_AUTHORITATIVE | pre-survivorship-fix |
-| [DATA_SOURCES.md](DATA_SOURCES.md) | Nicholas Nyaung | 1.0 | 2026-08-04 | ACTIVE | freeze lifted 2026-08-04; redistribution decision recorded in SHIP_READINESS §2 2026-09-20 |
+| [DATA_SOURCES.md](DATA_SOURCES.md) | Nicholas Nyaung | 1.0 | 2026-08-04 | ACTIVE | none |
 | [EDGE_PLAN.md](EDGE_PLAN.md) | Nicholas Nyaung | 0.2.0 | 2026-07-27 | FROZEN | pre-survivorship-fix |
 | [EXECUTION_SPEC.md](EXECUTION_SPEC.md) | Nicholas Nyaung | 1.0.0 | 2026-08-04 | ACTIVE | none |
 | [GATE0_FINDING_2026-08-08.md](GATE0_FINDING_2026-08-08.md) | Nicholas Nyaung | 1.0.0 | 2026-08-08 | FROZEN | none |

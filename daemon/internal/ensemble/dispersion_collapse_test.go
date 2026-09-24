@@ -26,7 +26,7 @@ func TestUsableOnTheRealCollapsedDays(t *testing.T) {
 		{"2026-08-03", 329, 5, 0.0660, false, "5 distinct — the worst measured"},
 		{"2026-08-04", 329, 12, 0.3548, false, "12 distinct; wide, but 12 values is not a cross-section"},
 		{"2026-08-05", 329, 180, 0.2884, true, "the one healthy day: 180 distinct, real spread"},
-		{"2026-08-06", 329, 34, 0.0263, false, "passes the distinct rule; the SPREAD rule catches it"},
+		{"2026-08-06", 329, 34, 0.0263, false, "34/329 = 0.10 distinct, under the collapse detector's 0.15; flat too"},
 		{"2026-08-07", 329, 26, 0.0202, false, "the live collapse — spread 0.02"},
 		{"2026-08-08", 65, 25, 0.0405, false, "thin universe, still flat"},
 	} {

@@ -261,5 +261,19 @@ con.close()
   rm -f "$LOCKDB"
 fi
 
+# sd_svc_stop asks the daemon to drain through its stop file BEFORE /End (which
+# is TerminateProcess and orphans every in-flight run). Stubbed: a fake daemon
+# that "exits" once the stop file appears, and a schtasks that records /End.
+STOPTMP="$(mktemp -d)"; mkdir -p "$STOPTMP/ops" "$STOPTMP/data"
+OUT="$(
+  SD_LIB_DIR="$STOPTMP/ops"; SD_STOP_GRACE=9
+  sd_is_running() { [ ! -e "$STOPTMP/data/.stop-request" ]; }
+  schtasks() { case "$1" in //End) echo "END-AFTER-STOPFILE=$([ -e "$STOPTMP/data/.stop-request" ] && echo 1 || echo 0)" > "$STOPTMP/end" ;; esac; return 0; }
+  sd_svc_stop com.signaldeck.daemon; echo "rc=$?"; cat "$STOPTMP/end" 2>/dev/null
+)"
+check "sd_svc_stop writes the daemon stop file before falling back to /End" \
+  "$(printf '%s' "$OUT" | grep -q 'END-AFTER-STOPFILE=1' && printf '%s' "$OUT" | grep -q 'rc=0' && echo 1 || echo 0)"
+rm -rf "$STOPTMP"
+
 if [ "$fails" -gt 0 ]; then echo "$fails check(s) failed"; exit 1; fi
 echo "all portability shim checks passed"

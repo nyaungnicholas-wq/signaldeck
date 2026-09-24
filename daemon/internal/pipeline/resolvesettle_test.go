@@ -23,7 +23,9 @@ func TestResolverWaitsForTheForwardSessionToSettle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertSymbol: %v", err)
 	}
-	const d0 = int64(1780000000)
+	// 2026-08-20 (was 05-28, +12 weeks): inside the graded window the resolved-pair
+	// read is restricted to (GradingEpochTS).
+	const d0 = int64(1780000000 + 12*7*86400)
 	bar := func(ts int64, c float64) md.Bar {
 		return md.Bar{SymbolID: sym.ID, TF: md.TF1d, Ts: ts, Open: c, High: c, Low: c, Close: c, Volume: 1}
 	}

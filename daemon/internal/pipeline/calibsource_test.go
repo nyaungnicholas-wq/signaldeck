@@ -47,7 +47,9 @@ func seedCalibrationHistory(t *testing.T, st *store.Store, h md.Horizon) {
 		if raw > 0.5 {
 			fwd = 1.0
 		}
-		ts := int64(1_700_000_000 + i*86400)
+		// +143 weeks: same weekday and time of day as the original 2023 fixture, moved
+		// inside the graded window the calibration fit is restricted to (GradingEpochTS).
+		ts := int64(1_700_000_000 + 143*7*86400 + i*86400)
 		if err := st.UpsertPrediction(ctx, store.Prediction{
 			SymbolID: sym.ID, Horizon: h, Ts: ts,
 			RawProb: raw, CalProb: cal, NUsed: 4, Components: "{}",

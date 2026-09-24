@@ -39,13 +39,13 @@ func TestResolvedPairs_PublishedVsRawViews(t *testing.T) {
 	// dedup failure when the dedup was the point. Two days keeps the property
 	// this test actually guards (raw column vs published column, newest first)
 	// separable from the dedup, which TestResolvedRawPairs_OnePerSymbolDay owns.
-	const day100 = 100*86400 + 3600
-	const day101 = 101*86400 + 3600
+	const day100 = (gw+100)*86400 + 3600
+	const day101 = (gw+101)*86400 + 3600
 	seedResolvedPred(t, st, sym.ID, md.H1d, day100, 0.55, 0.62, 0.01)
 	seedResolvedPred(t, st, sym.ID, md.H1d, day101, 0.48, 0.51, -0.02)
 	// Unresolved row: excluded from both views.
 	if err := st.UpsertPrediction(ctx, Prediction{SymbolID: sym.ID, Horizon: md.H1d,
-		Ts: 102*86400 + 3600, RawProb: 0.7, CalProb: 0.75, NUsed: 10, Components: "{}"}); err != nil {
+		Ts: (gw+102)*86400 + 3600, RawProb: 0.7, CalProb: 0.75, NUsed: 10, Components: "{}"}); err != nil {
 		t.Fatalf("upsert prediction: %v", err)
 	}
 
@@ -88,13 +88,13 @@ func TestResolvedRawPairs_OnePerSymbolDay(t *testing.T) {
 	// Three re-scores of AAPL inside ONE trading day; only the newest may
 	// survive. All stamps sit in regular hours so none folds into a
 	// neighbouring day.
-	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+14*3600, 0.10, 0.11, 0.01)
-	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+16*3600, 0.20, 0.21, 0.01)
-	seedResolvedPred(t, st, a.ID, md.H1d, 200*86400+20*3600, 0.30, 0.31, 0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, (gw+200)*86400+14*3600, 0.10, 0.11, 0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, (gw+200)*86400+16*3600, 0.20, 0.21, 0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, (gw+200)*86400+20*3600, 0.30, 0.31, 0.01)
 	// A different symbol on the SAME day is an independent observation.
-	seedResolvedPred(t, st, b.ID, md.H1d, 200*86400+15*3600, 0.40, 0.41, -0.01)
+	seedResolvedPred(t, st, b.ID, md.H1d, (gw+200)*86400+15*3600, 0.40, 0.41, -0.01)
 	// The same symbol on the NEXT day is also independent.
-	seedResolvedPred(t, st, a.ID, md.H1d, 201*86400+14*3600, 0.60, 0.61, -0.01)
+	seedResolvedPred(t, st, a.ID, md.H1d, (gw+201)*86400+14*3600, 0.60, 0.61, -0.01)
 
 	raws, ups, days, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 100)
 	if err != nil {
@@ -107,8 +107,8 @@ func TestResolvedRawPairs_OnePerSymbolDay(t *testing.T) {
 		t.Fatalf("ragged result: %d raws / %d ups / %d days", len(raws), len(ups), len(days))
 	}
 	// Newest day first, and real UTC day numbers rather than ordinals.
-	if days[0] != 201 || days[1] != 200 || days[2] != 200 {
-		t.Fatalf("days = %v; want [201 200 200] (ts/86400, newest first)", days)
+	if days[0] != gw+201 || days[1] != gw+200 || days[2] != gw+200 {
+		t.Fatalf("days = %v; want [gw+201 gw+200 gw+200] (ts/86400, newest first)", days)
 	}
 	// Day 201 holds only AAPL's 0.60. Within day 200 the surviving AAPL row must
 	// be the 17:00 re-score (0.30), never the 01:00 one that the runner
@@ -551,5 +551,29 @@ func TestLatestPerpStocktwitsAndCOTReads(t *testing.T) {
 	r, ok, err := st.LatestCOTByContract(ctx, "%e-mini s&p%")
 	if err != nil || !ok || r.ReportDate != "2026-07-21" || r.NoncommLong != 110 {
 		t.Fatalf("LatestCOTByContract = %+v, %v, %v", r, ok, err)
+	}
+}
+
+// gw shifts a day-number fixture into the graded window. The calibration pairs
+// start at GradingEpochTS (predict.go), so a fixture dated 1970 now describes
+// evidence the fit correctly refuses. Whole weeks, so weekday and DST side are
+// unchanged: day 0 lands on 2026-08-13 (a Thursday, like 1970-01-01).
+const gw = 20678
+
+// The calibration fit reads the graded window only (GradingEpochTS). A resolved
+// row before the epoch is evidence the grader refuses, so it must not train the
+// map either; without the filter this returns both rows.
+func TestResolvedRawPairs_ExcludePreEpochRows(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	seedResolvedPred(t, st, sym.ID, md.H1d, (gw-30)*86400+15*3600, 0.10, 0.11, 0.01) // pre-epoch
+	seedResolvedPred(t, st, sym.ID, md.H1d, (gw+3)*86400+15*3600, 0.70, 0.71, 0.01)
+	raws, _, _, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raws) != 1 || raws[0] != 0.70 {
+		t.Fatalf("raws = %v; want only the post-epoch 0.70", raws)
 	}
 }

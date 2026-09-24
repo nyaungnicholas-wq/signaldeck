@@ -360,6 +360,19 @@ func (s *Store) ResolvedPredictionPairs(ctx context.Context, h md.Horizon, limit
 // about what one observation is. That mismatch was the whole bug: the registry
 // had already been corrected, the calibration fit had not.
 //
+// THE SAME POPULATION, IN TIME AS WELL AS IN UNITS (2026-09-23). The graded
+// window starts at GradingEpochTS (re-registered, prereg seq 117) and every
+// grading consumer was repointed to it; this fit was not, and the same mismatch
+// reopened one axis over. Measured on the live db: the 1d map was fit on 12,439
+// pairs over 53 days of which 687 (19 days) were inside the graded window. The
+// rest - the survivor-seeded July universe and the 07-27..08-06 collapse - fit a
+// near-flat map that squeezed every 1d pass into a 1.8pp band, all on one side
+// of 0.5 (agreement 1.000), which the cross-section gate then refused, every
+// pass. On the graded window alone isotonic wins the holdout, globalCalibration
+// refuses a ranking-collapsing map, and the same raws go out with their 0.23
+// spread - uncalibrated and saying so, which is the documented answer.
+// Evidence the grader declared inadmissible must not train the map either.
+//
 // The day is md.TradingDay via the trading_day() SQLite function, NOT ts/86400.
 // A US extended session closes at 20:00 ET — 00:00Z under EDT — so a UTC-midnight
 // fold splits one session in two and counts its tail as a second independent
@@ -385,10 +398,11 @@ func (s *Store) ResolvedRawPredictionPairs(ctx context.Context, h md.Horizon, li
 			JOIN predictions p
 			  ON p.symbol_id=o.symbol_id AND p.horizon=o.horizon AND p.ts=o.ts
 			WHERE o.resolved_at IS NOT NULL AND o.up IS NOT NULL AND o.horizon=?
+			  AND o.ts >= ?
 		)
 		WHERE rn=1
 		ORDER BY day DESC LIMIT ?`,
-		string(h), limit)
+		string(h), GradingEpochTS, limit)
 	if qerr != nil {
 		return nil, nil, nil, qerr
 	}

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 func nyLoc(t *testing.T) *time.Location {
@@ -212,11 +214,14 @@ func TestBackfillReconcilerGapFillRespectsBudgetAndSwitch(t *testing.T) {
 
 	t.Setenv("SIGNALDECK_BUDGET_DB_MB", "1")
 	detail, err := r.Run(ctx)
-	if err != nil {
-		t.Fatal(err)
+	// Paused WITH a streamed session missing is degraded, never ok: that pairing
+	// read green for days while 35 of 36 streamed stocks lost every session.
+	if !errors.Is(err, workers.ErrDegraded) {
+		t.Fatalf("paused with a gap outstanding must be degraded, got err=%v detail=%q", err, detail)
 	}
-	if q := drain(bf); len(q) != 0 || !strings.Contains(detail, "gap-fill paused") {
-		t.Errorf("no headroom must pause gap-fill: enqueued %v, detail %q", q, detail)
+	if q := drain(bf); len(q) != 0 || !strings.Contains(detail, "gap-fill paused") ||
+		!strings.Contains(detail, "1 streamed with a session gap") {
+		t.Errorf("no headroom must pause gap-fill and still count the gap: enqueued %v, detail %q", q, detail)
 	}
 
 	t.Setenv("SIGNALDECK_BUDGET_DB_MB", "6144")

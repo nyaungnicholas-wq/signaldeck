@@ -310,8 +310,22 @@ sd_svc_start() {
 }
 
 sd_svc_stop() {
-  # /End stops what the task launched; it is the Scheduled Task equivalent of
-  # SIGTERM to the job, and the daemon's own signal handler does the draining.
+  # /End is NOT a SIGTERM. It is TerminateProcess: the daemon's signal handler
+  # never runs, so every in-flight worker run was left 'orphaned' and swept at
+  # the next boot. Measured 2026-09-23: nine boots in three clusters, each one a
+  # Market-Close or Daily-Refresh /End, 3-35 orphaned runs per kill, and
+  # congress-poller orphaned twice in a row (53h without a good run). So the
+  # daemon is asked first through the stop file it polls (daemon/cmd/signaldeckd/
+  # stopfile.go), which cancels the same context SIGTERM would; /End below is
+  # only the fallback for a drain that has not finished in SD_STOP_GRACE seconds
+  # (150: ShutdownGrace 75s + run-journal close 30s + the WAL checkpoint).
+  if [ "$1" = com.signaldeck.daemon ] && sd_is_running signaldeckd; then
+    : > "$SD_LIB_DIR/../data/.stop-request"
+    local waited=0
+    while [ "$waited" -lt "${SD_STOP_GRACE:-150}" ] && sd_is_running signaldeckd; do
+      sleep 3; waited=$((waited + 3))
+    done
+  fi
   #
   # A task that does not EXIST is reported as 2, the same contract sd_svc_start
   # already honours. Ending a task that merely is not RUNNING stays 0 — callers

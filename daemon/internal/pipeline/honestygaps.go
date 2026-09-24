@@ -90,6 +90,9 @@ const (
 	// which is the right cadence for inputs that only move daily.
 	distSymbolsPerPass    = 60
 	datasetSymbolsPerPass = 40
+	// datasetSettleLag: bars newer than this are not versioned. Three days
+	// covers the next-morning official daily bar and a weekend.
+	datasetSettleLag = int64(3 * 24 * 3600)
 	// Rotation cursors (meta keys).
 	metaDistCursor    = "return_distribution_cursor"
 	metaDatasetCursor = "dataset_version_cursor"
@@ -497,9 +500,21 @@ func (w *DatasetVersionRunner) Run(ctx context.Context) (string, error) {
 		}
 		rows := make([]datasetver.Row, 0, len(bars))
 		for _, b := range bars {
+			// SETTLED bars only. The newest daily bar is still forming (crypto
+			// is 24/7; stock daily bars are minute-live until the provider's
+			// official bar lands the next morning), so versioning it made every
+			// later check read as "provider rewrote history": BTC/USD logged 27
+			// revisions and every sampled stored slice ended on a bar that was
+			// forming when it was hashed (measured 2026-09-23).
+			if b.Ts > now.Unix()-datasetSettleLag {
+				continue
+			}
 			rows = append(rows, datasetver.Row{
 				Ts: b.Ts, Open: b.Open, High: b.High, Low: b.Low, Close: b.Close, Volume: b.Volume,
 			})
+		}
+		if len(rows) == 0 {
+			continue // only unsettled bars so far; nothing to version yet
 		}
 		fresh := datasetver.Hash(s.Symbol, string(md.TF1d), rows)
 		checked++
@@ -511,6 +526,16 @@ func (w *DatasetVersionRunner) Run(ctx context.Context) (string, error) {
 		rec := store.DatasetVersion{
 			SymbolID: s.ID, Timeframe: string(md.TF1d), FirstTs: fresh.FirstTs,
 			LastTs: fresh.LastTs, N: fresh.N, Hash: fresh.Hash, CheckedAt: now.Unix(),
+		}
+		// A stored slice that ended inside the settle lag AT THE TIME IT WAS
+		// HASHED predates the lag and includes unsettled bars; comparing against
+		// it would report one false revision per symbol, however long after the
+		// fact the next check lands. Re-baseline it, keeping its revision count.
+		// A settled slice always ends a full lag before its own CheckedAt, so a
+		// real rewrite or truncation of settled history still compares and fires.
+		if ok && stored.LastTs > stored.CheckedAt-datasetSettleLag {
+			rec.Revisions = stored.Revisions
+			ok = false
 		}
 		if !ok {
 			// First observation of a slice can never be a revision.

@@ -14,6 +14,7 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // Backfiller pulls history for newly-subscribed symbols: 2y daily + 60d
@@ -125,6 +126,11 @@ const minCoverage = 100
 // Run re-enqueues under-covered active symbols. A persistently unbackfillable
 // symbol (delisted, bad pair) keeps surfacing here and on the quality page —
 // which is the honest outcome, not a hidden one.
+//
+// A paused gap-fill with streamed sessions still missing is reported DEGRADED,
+// not ok. Measured 2026-09-23: the database sat at its storage budget, the
+// gap-fill paused on every pass, and 35 of 36 streamed stocks went without a
+// single 1m bar since 09-18 behind an all-green health board.
 func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
 	syms, err := r.St.ListSymbols(ctx, true)
 	if err != nil {
@@ -154,42 +160,50 @@ func (r *BackfillReconciler) Run(ctx context.Context) (string, error) {
 	gapFilled := 0
 	withGaps := 0
 	note := "gap-fill off"
-	if gapFillEnabled() {
-		ok, why := r.gapFillBudgetOK(ctx)
-		if !ok {
-			note = "gap-fill paused: " + why
-		} else {
-			retention := retention1mDays()
-			for _, s := range syms {
-				if s.Market == md.Stocks && s.Stream {
-					counts, err := r.St.SessionBarCounts(ctx, s.ID, md.TF1m, now.Add(-time.Duration(retention)*24*time.Hour).Unix())
-					if err != nil {
-						return "", err
-					}
-					gaps := gapSessions(counts, now, retention)
-					if len(gaps) > 0 {
-						withGaps++
-						if gapFilled < gapFillPerPass {
-							key := gapFillMetaPrefix + strconv.FormatInt(s.ID, 10)
-							last, _ := r.St.GetMeta(ctx, key)
-							if last != "" {
-								if ts, err := strconv.ParseInt(last, 10, 64); err == nil && now.Unix()-ts < int64(gapFillCooldown/time.Second) {
-									continue
-								}
+	enabled := gapFillEnabled()
+	budgetOK, queueOpen := true, true
+	if enabled {
+		var why string
+		budgetOK, why = r.gapFillBudgetOK(ctx)
+		retention := retention1mDays()
+		for _, s := range syms {
+			if s.Market == md.Stocks && s.Stream {
+				counts, err := r.St.SessionBarCounts(ctx, s.ID, md.TF1m, now.Add(-time.Duration(retention)*24*time.Hour).Unix())
+				if err != nil {
+					return "", err
+				}
+				gaps := gapSessions(counts, now, retention)
+				if len(gaps) > 0 {
+					withGaps++
+					if budgetOK && queueOpen && gapFilled < gapFillPerPass {
+						key := gapFillMetaPrefix + strconv.FormatInt(s.ID, 10)
+						last, _ := r.St.GetMeta(ctx, key)
+						if last != "" {
+							if ts, err := strconv.ParseInt(last, 10, 64); err == nil && now.Unix()-ts < int64(gapFillCooldown/time.Second) {
+								continue
 							}
-							if err := r.BF.Enqueue(s); err != nil {
-								break
-							}
-							_ = r.St.SetMeta(ctx, key, strconv.FormatInt(now.Unix(), 10))
-							gapFilled++
 						}
+						if err := r.BF.Enqueue(s); err != nil {
+							queueOpen = false
+							continue
+						}
+						_ = r.St.SetMeta(ctx, key, strconv.FormatInt(now.Unix(), 10))
+						gapFilled++
 					}
 				}
 			}
+		}
+		if budgetOK {
 			note = fmt.Sprintf("%d streamed with a session gap", withGaps)
+		} else {
+			note = fmt.Sprintf("gap-fill paused: %s; %d streamed with a session gap", why, withGaps)
 		}
 	}
-	return fmt.Sprintf("checked %d active symbols, re-enqueued %d under-covered, gap-filled %d streamed (%s)", len(syms), requeued, gapFilled, note), nil
+	detail := fmt.Sprintf("checked %d active symbols, re-enqueued %d under-covered, gap-filled %d streamed (%s)", len(syms), requeued, gapFilled, note)
+	if enabled && !budgetOK && withGaps > 0 {
+		return detail, fmt.Errorf("%s: %w", detail, workers.ErrDegraded)
+	}
+	return detail, nil
 }
 
 func (b *Backfiller) backfill(ctx context.Context, s md.Symbol) error {
