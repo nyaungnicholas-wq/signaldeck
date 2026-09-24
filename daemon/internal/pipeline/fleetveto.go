@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/clusterstat"
@@ -130,10 +131,20 @@ func fleetVetoes(ctx context.Context, st *store.Store, horizons []md.Horizon) (v
 				e.ups = append(e.ups, float64(o.Up))
 			}
 		}
-		// One AUC per leg per day, then the clustered verdict.
+		// One AUC per leg per day, IN DATE ORDER, then the clustered verdict.
+		// Order matters: at 1w consecutive days share 4 of 5 forward sessions, so
+		// the interval below is overlap-corrected (Newey-West, lag = horizon-1),
+		// and that needs neighbours next to each other. Ranging over the map put
+		// the days in random order.
+		days := make([]string, 0, len(byDay))
+		for d := range byDay {
+			days = append(days, d)
+		}
+		sort.Strings(days) // YYYY-MM-DD
+		lag := horizonBars(h) - 1
 		daily := map[string][]float64{}
-		for _, legs := range byDay {
-			for leg, e := range legs {
+		for _, d := range days {
+			for leg, e := range byDay[d] {
 				// A day whose cross-section is too thin to rank says nothing
 				// about ranking skill; including it would just add noise.
 				if len(e.preds) < minCrossSectionForAUC {
@@ -143,7 +154,7 @@ func fleetVetoes(ctx context.Context, st *store.Store, horizons []md.Horizon) (v
 			}
 		}
 		for leg, vals := range daily {
-			veto, mean, measured := clusterstat.VetoOnDayClusteredAUC(vals)
+			veto, mean, measured := clusterstat.VetoOnDayClusteredAUCLag(vals, lag)
 			if !measured {
 				continue
 			}
@@ -153,7 +164,7 @@ func fleetVetoes(ctx context.Context, st *store.Store, horizons []md.Horizon) (v
 					"leg", leg, "horizon", h, "meanDailyAUC", mean, "days", len(vals))
 				continue
 			}
-			if _, lo, _, ok := clusterstat.DayClusteredAUC(vals); ok && lo > 0.5 {
+			if _, lo, _, ok := clusterstat.DayClusteredAUCLag(vals, lag); ok && lo > 0.5 {
 				edges[leg+"|"+string(h)] = lo - 0.5
 				slog.Info("fleet edge: leg rankable on day-clustered cross-sectional AUC",
 					"leg", leg, "horizon", h, "meanDailyAUC", mean, "lowerBound", lo, "days", len(vals))
