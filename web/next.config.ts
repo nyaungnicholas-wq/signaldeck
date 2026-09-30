@@ -96,13 +96,16 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
 // WebSocket to ANY host — an exfiltration channel the app never uses.
 const SCRIPT_SRC =
   process.env.NODE_ENV === "development"
-    ? "'self' 'unsafe-inline' 'unsafe-eval'"
-    : "'self' 'unsafe-inline'";
+    ? "'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com"
+    : "'self' 'unsafe-inline' https://challenges.cloudflare.com";
+// Cloudflare Turnstile (sign-up / password reset) loads its script from and
+// renders its widget in an iframe on challenges.cloudflare.com. Nothing else is
+// allowed to frame into the page, and the page still cannot be framed.
 const SECURITY_HEADERS = [
   {
     key: "Content-Security-Policy",
     value:
-      `default-src 'self'; script-src ${SCRIPT_SRC}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
+      `default-src 'self'; script-src ${SCRIPT_SRC}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
   },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

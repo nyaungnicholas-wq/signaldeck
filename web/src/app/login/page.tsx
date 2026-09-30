@@ -2,13 +2,14 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import PagePurpose from "@/components/PagePurpose";
 import { api } from "@/lib/api";
 
 /** Minimal login / register form in the SignalDeck terminal style. */
 export default function LoginPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode] = useState<"login" | "register">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -53,8 +54,8 @@ export default function LoginPage() {
     let live = true;
     api
       .me()
-      .then(() => {
-        if (live) router.replace("/dashboard");
+      .then((me) => {
+        if (live) router.replace(me.isAdmin ? "/dashboard" : "/account");
       })
       .catch(() => {});
     return () => {
@@ -73,9 +74,10 @@ export default function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      if (mode === "login") await api.login(username, password);
-      else await api.register(username, password);
-      router.replace("/dashboard");
+      // Members land on /account: the operator dashboard is admin-only on a
+      // published deployment (daemon accounts.go, member tier).
+      const me = mode === "login" ? await api.login(username, password) : await api.register(username, password);
+      router.replace(me.isAdmin ? "/dashboard" : "/account");
     } catch (err) {
       setError(err instanceof Error ? err.message : "request failed");
     } finally {
@@ -173,20 +175,16 @@ export default function LoginPage() {
             {busy ? "…" : mode === "login" ? "SIGN IN" : "REGISTER"}
           </button>
 
-          {openSignup && (
-            <button
-              type="button"
-              onClick={() => {
-                setMode(mode === "login" ? "register" : "login");
-                setError(null);
-              }}
-              className="mt-4 w-full cursor-pointer text-center text-xs text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]"
-            >
-              {mode === "login"
-                ? "no account? register →"
-                : "have an account? sign in →"}
-            </button>
-          )}
+          <div className="mt-4 flex items-center justify-between text-xs">
+            <Link href="/forgot" className="text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]">
+              forgot password?
+            </Link>
+            {openSignup && (
+              <Link href="/signup" className="text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]">
+                no account? sign up →
+              </Link>
+            )}
+          </div>
         </div>
       </form>
     </div>

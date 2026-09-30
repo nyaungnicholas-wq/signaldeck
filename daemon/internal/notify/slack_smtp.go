@@ -180,7 +180,26 @@ func (n *Notifier) sendSMTP(ctx context.Context, m Message) {
 // socket is the only way to interrupt net/smtp, so cancellation is wired to
 // Close via context.AfterFunc and an absolute deadline backs it up.
 func (n *Notifier) smtpDeliver(ctx context.Context, m Message) error {
-	rcpts := n.smtpTo()
+	return n.smtpDeliverTo(ctx, n.smtpTo(), m)
+}
+
+// MailReady reports whether transactional mail (account emails) can be sent:
+// a host and a From address. Unlike alerts it needs no fixed recipient list.
+func (n *Notifier) MailReady() bool {
+	return n != nil && n.SMTPHost != "" && n.SMTPFrom != ""
+}
+
+// SendEmail delivers one plain-text message to a single address — account
+// verification and password-reset links. The address must already be
+// validated (CR/LF-free); net/smtp also rejects a poisoned envelope address.
+func (n *Notifier) SendEmail(ctx context.Context, to, subject, body string) error {
+	if !n.MailReady() {
+		return errors.New("email is not configured (SIGNALDECK_SMTP_HOST / SIGNALDECK_SMTP_FROM)")
+	}
+	return n.smtpDeliverTo(ctx, []string{to}, Message{Title: subject, Body: body})
+}
+
+func (n *Notifier) smtpDeliverTo(ctx context.Context, rcpts []string, m Message) error {
 	if len(rcpts) == 0 {
 		return errors.New("no recipients configured")
 	}
@@ -245,7 +264,7 @@ func (n *Notifier) smtpDeliver(ctx context.Context, m Message) error {
 	if err != nil {
 		return err
 	}
-	if _, err := w.Write(n.smtpBody(m)); err != nil {
+	if _, err := w.Write(n.smtpBodyTo(rcpts, m)); err != nil {
 		return err
 	}
 	if err := w.Close(); err != nil {
@@ -262,14 +281,16 @@ func (n *Notifier) smtpDeliver(ctx context.Context, m Message) error {
 // upstream error strings — the same untrusted material that turned into a
 // PowerShell injection in local.go. A bare CRLF in a Subject is header
 // injection: it appends attacker-chosen headers (Bcc:) to the message.
-func (n *Notifier) smtpBody(m Message) []byte {
+func (n *Notifier) smtpBody(m Message) []byte { return n.smtpBodyTo(n.smtpTo(), m) }
+
+func (n *Notifier) smtpBodyTo(rcpts []string, m Message) []byte {
 	body := m.Body
 	if body == "" {
 		body = m.Title
 	}
 	var b strings.Builder
 	b.WriteString("From: " + headerSafe(n.SMTPFrom) + "\r\n")
-	b.WriteString("To: " + headerSafe(strings.Join(n.smtpTo(), ", ")) + "\r\n")
+	b.WriteString("To: " + headerSafe(strings.Join(rcpts, ", ")) + "\r\n")
 	b.WriteString("Subject: " + mime.QEncoding.Encode("utf-8", clip(headerSafe(m.Title), smtpSubjectMax)) + "\r\n")
 	b.WriteString("Date: " + n.now().Format(time.RFC1123Z) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")

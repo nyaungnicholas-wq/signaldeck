@@ -41,10 +41,11 @@ func (d Deps) secure(next http.Handler) http.Handler {
 // mount can share the SAME bucket instance rather than getting a second full
 // budget by arriving through a different door (see mcpmount.go).
 func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
-	allowedOrigins := d.Cfg.WebOrigins
 	allowedHosts := d.Cfg.AllowedHosts
 
 	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Per request: a quick-tunnel URL changes on every restart (accounts.go).
+		allowedOrigins := d.originsNow()
 		// 1. Host allowlist — the request's Host must be one we serve.
 		if !hostAllowed(r.Host, allowedHosts) {
 			httpErr(w, http.StatusForbidden, "forbidden host: "+r.Host+" is not in the daemon's allowed-hosts list")
@@ -122,6 +123,14 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"authentication required"}` + "\n"))
+			return
+		}
+
+		// 6b. MEMBER TIER. On a published deployment a non-admin account reaches
+		// the public surface plus memberRoutes and nothing else. Without this,
+		// open sign-up hands any stranger the operator's console (accounts.go).
+		if uid != 0 && d.published() && !memberAllowed(r.URL.Path) && !d.isAdminUID(r.Context(), uid) {
+			httpErr(w, http.StatusForbidden, "not available to member accounts")
 			return
 		}
 

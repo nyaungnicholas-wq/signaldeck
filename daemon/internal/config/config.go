@@ -152,9 +152,18 @@ type Config struct {
 	// intent, not a network fact, and inferring an intent is how fly.toml
 	// ended up publishing every read endpoint it never named.
 	PublicSurface bool
-	TrustProxy    bool // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
-	RateRPS       int  // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
-	RateBurst     int  // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
+	// Public accounts (2026-09-29). TurnstileSecret/SiteKey enable Cloudflare
+	// Turnstile on sign-up and password reset (unset = check skipped, logged).
+	// PublicURL is the absolute origin emailed links point at; when unset the
+	// daemon reads the current quick-tunnel URL out of TunnelLog, because a
+	// trycloudflare.com address changes on every restart.
+	TurnstileSecret  string // SIGNALDECK_TURNSTILE_SECRET
+	TurnstileSiteKey string // SIGNALDECK_TURNSTILE_SITE_KEY (public; served in /api/health)
+	PublicURL        string // SIGNALDECK_PUBLIC_URL, e.g. https://signaldeck.example.com
+	TunnelLog        string // SIGNALDECK_TUNNEL_LOG: cloudflared --logfile of a quick tunnel
+	TrustProxy       bool   // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
+	RateRPS          int    // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
+	RateBurst        int    // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
 
 	// MCP server (internal/mcp) — advisory methodology + current regime
 	// verdicts for AI clients. OFF unless explicitly enabled, because it is
@@ -270,7 +279,11 @@ func Load() Config {
 		PublicReads: boolEnv("SIGNALDECK_PUBLIC_READS", private),
 		// Never inherits `private`. See the field comment: publishing is an
 		// intent the operator states, never a fact inferred from a bind.
-		PublicSurface: boolEnv("SIGNALDECK_PUBLIC_SURFACE", false),
+		PublicSurface:    boolEnv("SIGNALDECK_PUBLIC_SURFACE", false),
+		TurnstileSecret:  pick("SIGNALDECK_TURNSTILE_SECRET", ""),
+		TurnstileSiteKey: pick("SIGNALDECK_TURNSTILE_SITE_KEY", ""),
+		PublicURL:        strings.TrimRight(pick("SIGNALDECK_PUBLIC_URL", ""), "/"),
+		TunnelLog:        pick("SIGNALDECK_TUNNEL_LOG", ""),
 		// Asserting you hold redistribution rights for the stored price data.
 		// The flag records the operator's assertion; it does not grant a right.
 		AllowRawExport: boolEnv("SIGNALDECK_ALLOW_RAW_EXPORT", false),

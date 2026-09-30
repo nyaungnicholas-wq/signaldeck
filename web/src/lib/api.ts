@@ -534,6 +534,14 @@ export const api = {
     post<Me>("/api/auth/register", { username, password }),
   login: (username: string, password: string) =>
     post<Me>("/api/auth/login", { username, password }),
+  // Public accounts: email-verified sign-up + password reset (daemon accounts.go).
+  signup: (username: string, email: string, password: string, turnstileToken: string, website: string) =>
+    post<{ status: string }>("/api/auth/register", { username, email, password, turnstileToken, website }),
+  verifyEmail: (token: string) => post<Me>("/api/auth/verify", { token }),
+  resendVerify: (email: string) => post<{ status: string }>("/api/auth/resend", { email }),
+  forgotPassword: (email: string, turnstileToken: string) =>
+    post<{ status: string }>("/api/auth/forgot", { email, turnstileToken }),
+  resetPassword: (token: string, password: string) => post<Me>("/api/auth/reset", { token, password }),
   logout: () => post<{ ok: boolean }>("/api/auth/logout", {}),
   me: () => get<Me>("/api/auth/me"),
 

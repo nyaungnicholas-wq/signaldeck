@@ -141,46 +141,6 @@ func (b *credsBody) validate() string {
 	return ""
 }
 
-// authRegister creates an account. The FIRST registered user becomes admin.
-func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
-	if !d.Cfg.OpenSignup {
-		httpErr(w, 403, "registration is closed")
-		return
-	}
-	var body credsBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpErr(w, 400, "bad json: "+err.Error())
-		return
-	}
-	if msg := body.validate(); msg != "" {
-		httpErr(w, 400, msg)
-		return
-	}
-	if _, exists, err := d.St.GetUserByName(r.Context(), body.Username); err != nil {
-		httpInternal(w, err)
-		return
-	} else if exists {
-		httpErr(w, 409, "username taken")
-		return
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	n, err := d.St.CountUsers(r.Context())
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	uid, err := d.St.CreateUser(r.Context(), body.Username, string(hash), n == 0)
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	d.startSession(w, r, uid, body.Username, n == 0)
-}
-
 // loginFailures throttles repeated password failures PER USERNAME.
 //
 // The request rate limiter alone did not cover this: it keys on client (user
@@ -318,6 +278,18 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loginFailures.succeed(strings.ToLower(name))
+	// A public account must confirm its email before it can sign in. Legacy
+	// accounts (created before emails existed) have no address and are exempt.
+	if _, verified, hasEmail, err := d.St.AccountEmail(r.Context(), u.ID); err != nil {
+		httpInternal(w, err)
+		return
+	} else if hasEmail && !verified {
+		writeJSONStatus(w, http.StatusForbidden, map[string]string{
+			"error": "confirm your email first — check your inbox, or request a new link",
+			"code":  "unverified",
+		})
+		return
+	}
 	d.startSession(w, r, u.ID, u.Username, u.IsAdmin)
 }
 
@@ -386,6 +358,7 @@ func (d Deps) registerAuth(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/login", d.authLogin)
 	mux.HandleFunc("POST /api/auth/logout", d.authLogout)
 	mux.HandleFunc("GET /api/auth/me", d.authMe)
+	d.registerAccounts(mux) // verify / resend / forgot / reset (accounts.go)
 }
 
 // withUser stashes the resolved user id in the request context.

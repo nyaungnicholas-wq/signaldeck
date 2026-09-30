@@ -595,7 +595,8 @@ func migrate(w *sql.DB) error {
 	if err := migrateRegimeOutcomesToSettleDay(w); err != nil {
 		return err
 	}
-	return nil
+	// Public accounts: users.email / email_verified and auth_tokens (accounts.go).
+	return migrateAccounts(w)
 }
 
 // migrateRegimeOutcomesToSettleDay re-folds regime_outcomes.day a second time,

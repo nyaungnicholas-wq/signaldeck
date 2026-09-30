@@ -575,6 +575,9 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 			// POSTing to /api/auth/register reveals the same thing.
 			"openSignup": d.Cfg.OpenSignup,
 			"detail":     "sign in or send the API token for the full breakdown",
+			// Public by design: Turnstile site keys are embedded in every page that
+			// renders the widget. Served here so no rebuild is needed to set one.
+			"turnstileSiteKey": d.Cfg.TurnstileSiteKey,
 		})
 		return
 	}
