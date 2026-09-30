@@ -564,7 +564,7 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 	// worker names map the internal architecture and the revision names the
 	// exact source a reader can go and audit for holes. `degraded` alone is
 	// enough for a monitor to alert on, and an operator who signs in sees why.
-	if userID(r) == 0 {
+	if !d.isOperator(r) {
 		writeJSON(w, map[string]any{
 			"degraded": len(failing) > 0 || len(refusals) > 0 || werr != nil || !remoteAlerts,
 			"time":     time.Now().Unix(),
@@ -784,7 +784,7 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 		// a load balancer acts on 503, not on the prose. The reasons name
 		// workers, schema gaps and missing credentials, so they go only to a
 		// caller who has identified themselves.
-		if userID(r) == 0 {
+		if !d.isOperator(r) {
 			writeJSONStatus(w, http.StatusServiceUnavailable, map[string]any{
 				"ready":  false,
 				"detail": "sign in or send the API token for the reasons",
@@ -795,7 +795,7 @@ func (d Deps) ready(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"ready": false, "reasons": reasons, "degraded": degraded})
 		return
 	}
-	if userID(r) == 0 {
+	if !d.isOperator(r) {
 		writeJSON(w, map[string]any{"ready": true})
 		return
 	}

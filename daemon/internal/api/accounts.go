@@ -23,6 +23,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -53,7 +54,8 @@ var memberRoutes = map[string]bool{
 var (
 	signupLimiter = newWindowLimiter(5, time.Hour)  // accounts created per client
 	acctIPLimiter = newWindowLimiter(20, time.Hour) // resend/forgot per client
-	mailLimiter   = newWindowLimiter(3, time.Hour)  // emails per address
+	mailLimiter   = newWindowLimiter(3, time.Hour)  // confirmation emails per address
+	resetLimiter  = newWindowLimiter(3, time.Hour)  // reset emails per address: resend spam cannot block a reset
 	adminCache    = &cachedAdmin{}
 	publicURLMemo = &memoString{ttl: 15 * time.Second}
 )
@@ -102,6 +104,12 @@ func (l *windowLimiter) allow(key string) bool {
 				delete(l.hits, k)
 			}
 		}
+		// Still over after the sweep means a live spray of fresh keys. Drop
+		// the table rather than grow without bound: briefly forgetting budgets
+		// is the lesser harm, and the other limiters still apply.
+		if len(l.hits) > 50000 {
+			l.hits = map[string][]time.Time{key: {now}}
+		}
 	}
 	return true
 }
@@ -131,7 +139,34 @@ func (d Deps) isAdminUID(ctx context.Context, uid int64) bool {
 // published is true whenever strangers can reach the daemon: an explicit public
 // surface, or a tunnel/allowlisted host (reachablePrivately false).
 func (d Deps) published() bool {
-	return d.Cfg.PublicSurface || !d.Cfg.ReachablePrivately()
+	// A configured public URL or quick-tunnel log is an explicit statement that
+	// strangers reach this daemon. Relying on ReachablePrivately() alone made
+	// the whole member tier hinge on a stale hostname left in ALLOWED_HOSTS:
+	// deleting it would have silently opened operator authority to sign-ups.
+	return d.Cfg.PublicSurface || d.Cfg.PublicURL != "" || d.Cfg.TunnelLog != "" ||
+		!d.Cfg.ReachablePrivately()
+}
+
+// isOperator is true for the admin (or API token) on a published deployment,
+// and for any signed-in user on a private one: the pre-accounts meaning of
+// "authenticated". Use it wherever a handler treated any session as the
+// operator. Members are authenticated, but they are not the operator.
+func (d Deps) isOperator(r *http.Request) bool {
+	uid := userID(r)
+	if uid == 0 {
+		return false
+	}
+	return !d.published() || d.isAdminUID(r.Context(), uid)
+}
+
+// acctKey is the limiter key for the account endpoints: the client key, with an
+// IPv6 address folded to its /64 so one allocation cannot mint unlimited buckets.
+func acctKey(key string) string {
+	ip := net.ParseIP(clientIP(key))
+	if ip == nil || ip.To4() != nil {
+		return key
+	}
+	return "ip6:" + ip.Mask(net.CIDRMask(64, 128)).String()
 }
 
 func memberAllowed(path string) bool {
@@ -148,7 +183,9 @@ type memoString struct {
 	ttl time.Duration
 }
 
-var trycloudflareRe = regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com`)
+// Only cloudflared's own banner line (|  https://x.trycloudflare.com  |),
+// never a URL that merely appears in the log, such as a requested path.
+var trycloudflareRe = regexp.MustCompile(`\|\s+(https://[a-z0-9-]+\.trycloudflare\.com)\s+\|`)
 
 // publicBase is the origin emailed links point at: SIGNALDECK_PUBLIC_URL when
 // set, else the newest quick-tunnel URL in SIGNALDECK_TUNNEL_LOG ("" = unknown).
@@ -179,11 +216,11 @@ func lastTunnelURL(path string) string {
 		_, _ = f.Seek(-tail, io.SeekEnd)
 	}
 	b, _ := io.ReadAll(f)
-	all := trycloudflareRe.FindAllString(string(b), -1)
+	all := trycloudflareRe.FindAllStringSubmatch(string(b), -1)
 	if len(all) == 0 {
 		return ""
 	}
-	return all[len(all)-1]
+	return all[len(all)-1][1]
 }
 
 // originsNow is the CORS/CSRF origin allowlist for this request: the configured
@@ -283,7 +320,7 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := d.clientKey(r, 0)
-	if !signupLimiter.allow(key) {
+	if !signupLimiter.allow(acctKey(key)) {
 		w.Header().Set("Retry-After", "3600")
 		httpErr(w, http.StatusTooManyRequests, "too many sign-ups from this network — try again later")
 		return
@@ -300,7 +337,9 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n == 0 {
-		d.registerFirstAdmin(w, r, creds)
+		// Never bootstrap the admin over the internet: on an empty or restored
+		// database the first stranger to POST would become the operator.
+		httpErr(w, 403, "no admin account exists; create it on the server itself, not through the public site")
 		return
 	}
 
@@ -318,11 +357,23 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 403, "the human check failed — reload the page and try again")
 		return
 	}
+	// Unverified sign-ups older than their link are dead weight and a squatting
+	// vector: without this, anyone could park an address forever.
+	if err := d.St.PurgeStaleUnverified(ctx, time.Now().Add(-verifyTTL)); err != nil {
+		slog.Warn("signup: stale unverified purge failed", "err", err)
+	}
 	if _, exists, err := d.St.GetUserByName(ctx, creds.Username); err != nil {
 		httpInternal(w, err)
 		return
 	} else if exists {
 		httpErr(w, 409, "that username is taken")
+		return
+	}
+	// bcrypt runs on EVERY path below, before the taken/new split, so the two
+	// answers cost the same time.
+	hash, err := bcrypt.GenerateFromPassword([]byte(creds.Password), bcrypt.DefaultCost)
+	if err != nil {
+		httpInternal(w, err)
 		return
 	}
 	if taken, err := d.St.EmailTaken(ctx, email); err != nil {
@@ -339,23 +390,22 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": verifySent})
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(creds.Password), bcrypt.DefaultCost)
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
 	uid, err := d.St.CreateUserWithEmail(ctx, creds.Username, email, string(hash))
 	if err != nil {
 		// A unique-index race on username or email; report it as taken.
 		httpErr(w, 409, "that username or email is already registered")
 		return
 	}
-	if err := d.sendVerify(ctx, uid, email, base); err != nil {
-		slog.Warn("signup: verification email failed", "uid", uid, "err", err)
-		httpErr(w, http.StatusBadGateway, "account created, but the confirmation email could not be sent — use 'Resend' in a minute")
-		return
-	}
+	// Mail after answering, exactly like the taken path, so SMTP latency cannot
+	// tell the two apart. A failed send is recovered with Resend.
 	mailLimiter.allow(email)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		if err := d.sendVerify(ctx, uid, email, base); err != nil {
+			slog.Warn("signup: verification email failed", "uid", uid, "err", err)
+		}
+	}()
 	writeJSON(w, map[string]string{"status": verifySent})
 }
 
@@ -390,21 +440,6 @@ func (d Deps) registerPrivate(w http.ResponseWriter, r *http.Request, creds cred
 		return
 	}
 	d.startSession(w, r, uid, creds.Username, n == 0)
-}
-
-// registerFirstAdmin is the pre-existing bootstrap path, unchanged in effect.
-func (d Deps) registerFirstAdmin(w http.ResponseWriter, r *http.Request, creds credsBody) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(creds.Password), bcrypt.DefaultCost)
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	uid, err := d.St.CreateUser(r.Context(), creds.Username, string(hash), true)
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	d.startSession(w, r, uid, creds.Username, true)
 }
 
 func (d Deps) sendVerify(ctx context.Context, uid int64, email, base string) error {
@@ -443,7 +478,7 @@ func (d Deps) authVerify(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "bad json")
 		return
 	}
-	if !acctIPLimiter.allow(d.clientKey(r, 0)) {
+	if !acctIPLimiter.allow(acctKey(d.clientKey(r, 0))) {
 		httpErr(w, http.StatusTooManyRequests, "too many attempts — try again later")
 		return
 	}
@@ -482,7 +517,7 @@ func (d Deps) authResend(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "bad json")
 		return
 	}
-	if !acctIPLimiter.allow(d.clientKey(r, 0)) {
+	if !acctIPLimiter.allow(acctKey(d.clientKey(r, 0))) {
 		httpErr(w, http.StatusTooManyRequests, "too many requests — try again later")
 		return
 	}
@@ -510,7 +545,7 @@ func (d Deps) authForgot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := d.clientKey(r, 0)
-	if !acctIPLimiter.allow(key) {
+	if !acctIPLimiter.allow(acctKey(key)) {
 		httpErr(w, http.StatusTooManyRequests, "too many requests — try again later")
 		return
 	}
@@ -520,8 +555,11 @@ func (d Deps) authForgot(w http.ResponseWriter, r *http.Request) {
 	}
 	email, ok := normaliseEmail(body.Email)
 	base := d.publicBase()
-	if ok && base != "" && mailReady(d) && mailLimiter.allow(email) {
-		if uid, username, verified, found, err := d.St.AccountByEmail(r.Context(), email); err == nil && found && verified {
+	// Unverified accounts may reset too: the reset link proves control of the
+	// inbox and verifies the address, which defeats a squatter who signed up
+	// with someone else's email and a password of their own choosing.
+	if ok && base != "" && mailReady(d) && resetLimiter.allow(email) {
+		if uid, username, _, found, err := d.St.AccountByEmail(r.Context(), email); err == nil && found {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 				defer cancel()
@@ -550,7 +588,7 @@ func (d Deps) authReset(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "bad json")
 		return
 	}
-	if !acctIPLimiter.allow(d.clientKey(r, 0)) {
+	if !acctIPLimiter.allow(acctKey(d.clientKey(r, 0))) {
 		httpErr(w, http.StatusTooManyRequests, "too many attempts — try again later")
 		return
 	}

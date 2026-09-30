@@ -29,6 +29,10 @@ const REQUEST_HEADERS = [
   "origin",
   "accept",
   "x-forwarded-for",
+  // So the daemon marks session cookies Secure when the browser reached us over
+  // HTTPS (the Cloudflare tunnel sets it). Believed only under TRUST_PROXY, for
+  // the same reason as x-forwarded-for above.
+  "x-forwarded-proto",
 ] as const;
 // location: fetch() runs with redirect:"manual", so an upstream 3xx must
 // carry its Location through or the browser gets an unfollowable redirect.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -69,6 +71,13 @@ func waitMail(t *testing.T, mb *mailbox, n int) {
 
 func newPublishedServer(t *testing.T) (*httptest.Server, *store.Store, *mailbox) {
 	t.Helper()
+	return newPublishedServerWith(t, nil, true)
+}
+
+// newPublishedServerWith lets a test change the posture (mutate) and choose
+// whether an admin already exists.
+func newPublishedServerWith(t *testing.T, mutate func(*config.Config), seedAdmin bool) (*httptest.Server, *store.Store, *mailbox) {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "acct.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +91,9 @@ func newPublishedServer(t *testing.T) (*httptest.Server, *store.Store, *mailbox)
 	// Raise the per-client request limiter so these tests exercise the ACCOUNT
 	// limiters, not the generic 2 writes/sec tier every POST shares.
 	cfg.RateRPS, cfg.RateBurst = 1000, 6000
+	if mutate != nil {
+		mutate(&cfg)
+	}
 	d := Deps{St: st, Cfg: cfg, Version: "test", Started: time.Now()}
 	srv := httptest.NewUnstartedServer(nil)
 	t.Cleanup(srv.Close)
@@ -90,13 +102,16 @@ func newPublishedServer(t *testing.T) (*httptest.Server, *store.Store, *mailbox)
 	d.registerAuth(mux)
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
 	mux.HandleFunc("GET /api/trends", d.trends)
+	mux.HandleFunc("POST /api/subscribe", d.subscribe)
 	srv.Config.Handler = d.secure(mux)
 	srv.Start()
 
 	// An admin already exists, so every sign-up below is a MEMBER.
-	hash, _ := bcrypt.GenerateFromPassword([]byte("adminpass123"), bcrypt.MinCost)
-	if _, err := st.CreateUser(context.Background(), "owner", string(hash), true); err != nil {
-		t.Fatal(err)
+	if seedAdmin {
+		hash, _ := bcrypt.GenerateFromPassword([]byte("adminpass123"), bcrypt.MinCost)
+		if _, err := st.CreateUser(context.Background(), "owner", string(hash), true); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	mb := &mailbox{}
@@ -297,5 +312,77 @@ func TestResetRejectsShortPassword(t *testing.T) {
 	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/reset",
 		map[string]string{"token": strings.Repeat("a", 64), "password": "short"}); code != 400 {
 		t.Fatalf("short password: %d %s, want 400", code, body)
+	}
+}
+
+// The LIVE posture: published only because a public URL / tunnel log is set,
+// PublicSurface off. Before the fix the gate hinged on a stale ALLOWED_HOSTS
+// entry; here there is none, and the member tier must still hold.
+func TestMemberGateHoldsOnTunnelPosture(t *testing.T) {
+	srv, _, mb := newPublishedServerWith(t, func(c *config.Config) { c.PublicSurface = false }, true)
+	if code, body := signup(t, newClient(t), srv.URL, "erin", "not-an-email"); code != 400 {
+		t.Fatalf("tunnel posture fell back to the private register: %d %s", code, body)
+	}
+	m := signupVerified(t, srv, mb, "frank", "frank@example.com")
+	if code, body := getAs(t, m, srv.URL+"/api/trends"); code != 403 {
+		t.Fatalf("member reached an operator route on the tunnel posture: %d %s", code, body)
+	}
+	if code, body := acctPost(t, m, srv.URL+"/api/subscribe", map[string]string{"symbol": "AAPL", "market": "stocks"}); code != 403 {
+		t.Fatalf("member started global ingestion: %d %s", code, body)
+	}
+}
+
+func TestPublishedRefusesAdminBootstrap(t *testing.T) {
+	srv, _, _ := newPublishedServerWith(t, nil, false)
+	if code, body := signup(t, newClient(t), srv.URL, "grace", "grace@example.com"); code != 403 {
+		t.Fatalf("first account over the internet: %d %s, want 403", code, body)
+	}
+}
+
+// A squatter signs up with someone else's address. The real owner must be able
+// to take it back with a reset, which also verifies the address.
+func TestUnverifiedAccountCanBeReset(t *testing.T) {
+	srv, _, mb := newPublishedServer(t)
+	if code, body := signup(t, newClient(t), srv.URL, "squatter", "owner2@example.com"); code != 200 {
+		t.Fatalf("signup: %d %s", code, body)
+	}
+	waitMail(t, mb, 1)
+	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot", map[string]string{"email": "owner2@example.com"}); code != 200 {
+		t.Fatalf("forgot: %d %s", code, body)
+	}
+	waitMail(t, mb, 2)
+	tok := mb.linkToken(t, "/reset")
+	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/reset", map[string]string{"token": tok, "password": "ownerspass9"}); code != 200 {
+		t.Fatalf("reset: %d %s", code, body)
+	}
+	if code, _ := acctPost(t, newClient(t), srv.URL+"/api/auth/login", map[string]string{"username": "squatter", "password": "correcthorse1"}); code != 401 {
+		t.Fatalf("squatter's password still works: %d", code)
+	}
+	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/login", map[string]string{"username": "squatter", "password": "ownerspass9"}); code != 200 {
+		t.Fatalf("owner cannot sign in after reset: %d %s", code, body)
+	}
+}
+
+func TestEmailRejectsAddressListSyntax(t *testing.T) {
+	for _, bad := range []string{"a>@x.com", "a,b@x.com", "a;b@x.com", `"a"@x.com`, "a@[1.2.3.4]"} {
+		if _, ok := normaliseEmail(bad); ok {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	if _, ok := normaliseEmail("real.person+tag@example.co.uk"); !ok {
+		t.Error("rejected a normal address")
+	}
+}
+
+func TestTunnelURLReadsOnlyTheBanner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tunnel.log")
+	log := `{"message":"|  https://good-one.trycloudflare.com                    |"}
+{"message":"GET /https://evil-one.trycloudflare.com/x 404"}
+`
+	if err := os.WriteFile(path, []byte(log), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastTunnelURL(path); got != "https://good-one.trycloudflare.com" {
+		t.Fatalf("lastTunnelURL = %q", got)
 	}
 }

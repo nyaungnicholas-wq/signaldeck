@@ -127,8 +127,34 @@ func (s *Store) SetPassword(ctx context.Context, uid int64, passHash string) err
 	if _, err := s.w.ExecContext(ctx, `UPDATE users SET pass_hash=? WHERE id=?`, passHash, uid); err != nil {
 		return err
 	}
+	// Every outstanding link dies with the old password: a verify link also
+	// signs its redeemer in, so leaving it live would be a 24h back door.
+	if _, err := s.w.ExecContext(ctx,
+		`UPDATE auth_tokens SET used_ts=? WHERE user_id=? AND used_ts IS NULL`, time.Now().Unix(), uid); err != nil {
+		return err
+	}
 	_, err := s.w.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, uid)
 	return err
+}
+
+// PurgeStaleUnverified deletes accounts whose email was never confirmed and
+// whose confirmation window has closed, with their tokens. Such an account
+// cannot sign in and holds nothing, so removing it frees the address.
+func (s *Store) PurgeStaleUnverified(ctx context.Context, createdBefore time.Time) error {
+	const stale = `SELECT id FROM users WHERE email IS NOT NULL AND COALESCE(email_verified,0)=0
+	               AND COALESCE(is_admin,0)=0 AND created_ts < ?`
+	cut := createdBefore.Unix()
+	for _, q := range []string{
+		`DELETE FROM auth_tokens WHERE user_id IN (` + stale + `)`,
+		`DELETE FROM sessions WHERE user_id IN (` + stale + `)`,
+		`DELETE FROM user_symbols WHERE user_id IN (` + stale + `)`,
+		`DELETE FROM users WHERE id IN (` + stale + `)`,
+	} {
+		if _, err := s.w.ExecContext(ctx, q, cut); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CreateAuthToken issues a single-use token and returns the plaintext for the

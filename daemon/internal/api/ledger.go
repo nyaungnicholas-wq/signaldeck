@@ -318,7 +318,7 @@ func (d Deps) ledgerVerify(w http.ResponseWriter, r *http.Request) {
 	// ?full=1 walks the whole chain at least twice (VerifyLedger + the anchor
 	// recompute). That is the auditor's path, not an anonymous one: on a public
 	// deployment it is a resource-exhaustion lever, so it needs identity.
-	if full && userID(r) == 0 {
+	if full && !d.isOperator(r) {
 		httpErr(w, http.StatusUnauthorized, "?full=1 re-derives the whole chain and requires authentication; the default incremental verify is public")
 		return
 	}
@@ -414,7 +414,7 @@ func (d Deps) ledgerAnchors(w http.ResponseWriter, r *http.Request) {
 	// Same guards as ledgerVerify: recompute mode re-derives the chain from
 	// genesis, so it is gated on identity, bounded in concurrency, and given a
 	// hard deadline (finding A11 applies to this route equally).
-	if recompute && userID(r) == 0 {
+	if recompute && !d.isOperator(r) {
 		httpErr(w, http.StatusUnauthorized, "?full=1 re-derives the whole chain and requires authentication; the stored-hash check is public")
 		return
 	}
