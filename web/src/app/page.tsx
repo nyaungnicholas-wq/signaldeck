@@ -2,6 +2,15 @@ import { Fragment } from "react";
 import Link from "next/link";
 import WaitlistForm from "@/components/landing/WaitlistForm";
 import RefusalNotice from "@/components/RefusalNotice";
+import HeroField from "@/components/landing/HeroField";
+import DrawnChart from "@/components/landing/DrawnChart";
+import KineticHeadline from "@/components/landing/KineticHeadline";
+import Reveal, { RevealStagger } from "@/components/landing/Reveal";
+import CountUp from "@/components/landing/CountUp";
+import HashChain from "@/components/landing/HashChain";
+import Marquee from "@/components/landing/Marquee";
+import SignupCTA from "@/components/landing/SignupCTA";
+import "@/components/landing/landing.css";
 
 /**
  * The front door.
@@ -106,6 +115,47 @@ async function loadLive(): Promise<Live> {
   }
   return { kind: "unreachable", detail: `HTTP ${res.status}` };
 }
+
+// The newest records on the pre-registration hash chain, for the animated
+// receipts strip. Real data from the public /api/prereg; on any failure the
+// strip is simply omitted rather than faked.
+type ChainRecord = { seq: number; kind: string; entryHash: string; ts: number };
+type Chain = { count: number; blocks: { seq: number; kind: string; hash: string; when: string }[] };
+
+async function loadChain(): Promise<Chain | null> {
+  try {
+    const res = await fetch(`${DAEMON}/api/prereg`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { records?: ChainRecord[] };
+    const recs = body.records ?? [];
+    if (recs.length === 0) return null;
+    return {
+      count: recs.length,
+      blocks: recs.slice(-5).map((r) => ({
+        seq: r.seq,
+        kind: r.kind,
+        hash: r.entryHash,
+        when: new Date(r.ts * 1000).toISOString().slice(0, 10),
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+const TICKER = [
+  "Every claim written before the outcome",
+  "Hash-chained — edits are detectable",
+  "Graded against what actually happened",
+  "Failures published, not buried",
+  "Retired models stay retired",
+  "No figure without an interval",
+  "Descriptive, never advice",
+];
 
 const pct = (x: number | null | undefined, dec = 1) =>
   x == null ? "—" : `${(x * 100).toFixed(dec)}%`;
@@ -419,82 +469,132 @@ function LiveRecord({ live }: { live: Live }) {
 }
 
 export default async function Landing() {
-  const live = await loadLive();
+  const [live, chain] = await Promise.all([loadLive(), loadChain()]);
+
+  // Headline figures, all computed from the same live payloads the sections
+  // below render. Nothing here is typed in by hand.
+  const rows = live.kind === "ok" ? live.rows : [];
+  const graded = new Set(rows.map((r) => r.predictor)).size;
+  const condemned = rows.filter((r) => r.retired || CONDEMNED.has(r.publication_status)).length;
+  const maxDays = rows.reduce((m, r) => Math.max(m, r.distinct_days ?? 0), 0);
+  const stats: { value: number; label: string; tone: string }[] = [
+    { value: chain?.count ?? 0, label: "claims on the hash chain", tone: "var(--accent)" },
+    { value: graded, label: "predictors graded in public", tone: "#38bdf8" },
+    { value: condemned, label: "rows failed or retired — shown, not hidden", tone: "var(--bad)" },
+    { value: maxDays, label: "days of live evidence (longest record)", tone: "var(--ok)" },
+  ].filter((s) => s.value > 0);
 
   return (
-    <div className="flex flex-col gap-12 pb-16">
-      <header className="flex flex-col gap-5 pt-6">
-        <div
-          className="mono text-[0.7rem] uppercase tracking-[0.2em]"
-          style={{ color: "var(--accent)" }}
-        >
-          Open research instrument
-        </div>
-        <h1 className="m-0 max-w-[20ch] text-[2rem] font-extrabold leading-[1.08] sm:text-[2.8rem]">
-          A market instrument that grades itself in public.
-        </h1>
-        <p className="m-0 max-w-[62ch] text-[1rem] leading-relaxed" style={{ color: "var(--dim)" }}>
-          SignalDeck estimates how volatile a stock is about to get. Every claim is written
-          down <em>before</em> the outcome is known, hash-chained so an edit is detectable
-          afterwards, and then graded against what actually happened, under a loss function
-          registered in advance.
-        </p>
-        <p className="m-0 max-w-[62ch] text-[1rem] font-semibold leading-relaxed">
-          Including the claims that failed. Especially those.
-        </p>
-        <div className="flex flex-wrap gap-3 pt-1">
-          <Link
-            href="/accuracy"
-            className="chip"
-            style={{ borderColor: "var(--accent)", color: "var(--accent)", padding: "0.6rem 1rem" }}
-          >
-            See the grades
-          </Link>
-          <Link href="/volatility" className="chip" style={{ padding: "0.6rem 1rem" }}>
-            The volatility record
-          </Link>
-          <Link href="/proof" className="chip" style={{ padding: "0.6rem 1rem" }}>
-            Verify the chain
-          </Link>
-        </div>
-      </header>
-
-      <Section eyebrow="The live record" title="What this platform has measured about itself">
-        <LiveRecord live={live} />
-      </Section>
-
-      <Section eyebrow="Constraints" title="What this refuses to do">
-        <ul className="m-0 flex list-none flex-col gap-3 p-0">
-          {REFUSALS.map(([head, body]) => (
-            <li key={head} className="panel flex flex-col gap-1 px-4 py-3">
-              <div className="font-semibold">{head}</div>
-              <div className="text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
-                {body}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </Section>
-
-      <Section eyebrow="Verification" title="How you can check all of this yourself">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {CHECKS.map((c) => (
-            <Link
-              key={c.href}
-              href={c.href}
-              className="panel flex flex-col gap-2 px-4 py-4 no-underline"
-              style={{ color: "inherit" }}
-            >
-              <div className="font-semibold" style={{ color: "var(--accent)" }}>
-                {c.title}
-              </div>
-              <div className="text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
-                {c.body}
-              </div>
+    <div className="flex flex-col gap-16 pb-16">
+      <section className="hero-stage mt-4">
+        <HeroField className="hero-field" />
+        <DrawnChart className="hero-chart" />
+        <div className="hero-scan" aria-hidden="true" />
+        <div className="hero-grain" aria-hidden="true" />
+        <div className="hero-content flex max-w-[760px] flex-col gap-6">
+          <div className="sec-eyebrow">Open research instrument</div>
+          <KineticHeadline
+            text="A market instrument that grades itself in public."
+            cycle={[
+              "every claim is written before the outcome",
+              "every record is hash-chained",
+              "every grade is published — failures first",
+              "retired models stay retired",
+            ]}
+          />
+          <p className="m-0 max-w-[58ch] text-[1.02rem] leading-relaxed" style={{ color: "var(--dim)" }}>
+            SignalDeck estimates how volatile a stock is about to get. Every claim is written
+            down <em>before</em> the outcome is known, hash-chained so an edit is detectable
+            afterwards, and graded against what actually happened under a loss function
+            registered in advance. <strong style={{ color: "var(--text)" }}>Including the claims that failed. Especially those.</strong>
+          </p>
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <Link href="/signup" className="cta-primary">
+              Create free account
             </Link>
-          ))}
+            <Link href="/accuracy" className="cta-secondary">
+              See the grades
+            </Link>
+            <Link href="/proof" className="cta-secondary">
+              Verify the chain
+            </Link>
+          </div>
         </div>
-      </Section>
+      </section>
+
+      <Marquee items={TICKER} />
+
+      {stats.length > 0 && (
+        <RevealStagger className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" variant="scale" step={110}>
+          {stats.map((s) => (
+            <div key={s.label} className="stat-tile">
+              <div className="stat-num" style={{ color: s.tone }}>
+                <CountUp value={s.value} />
+              </div>
+              <div className="stat-label">{s.label}</div>
+            </div>
+          ))}
+        </RevealStagger>
+      )}
+
+      <Reveal>
+        <Section eyebrow="The live record" title="What this platform has measured about itself">
+          <LiveRecord live={live} />
+        </Section>
+      </Reveal>
+
+      {chain && (
+        <Reveal variant="blur">
+          <Section eyebrow="The receipts" title="The newest links in the chain, recomputed as you watch">
+            <HashChain blocks={chain.blocks} />
+            <p className="m-0 max-w-[62ch] text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
+              These are the real, current records. Each one&rsquo;s hash covers the one before it, so
+              changing any past claim breaks every link after it. <Link href="/proof" style={{ color: "var(--accent)" }}>Recompute the whole chain yourself →</Link>
+            </p>
+          </Section>
+        </Reveal>
+      )}
+
+      <Reveal>
+        <Section eyebrow="Constraints" title="What this refuses to do">
+          <RevealStagger className="flex flex-col gap-3" variant="left" step={80}>
+            {REFUSALS.map(([head, body]) => (
+              <div key={head} className="panel flex flex-col gap-1 px-4 py-3">
+                <div className="font-semibold">{head}</div>
+                <div className="text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
+                  {body}
+                </div>
+              </div>
+            ))}
+          </RevealStagger>
+        </Section>
+      </Reveal>
+
+      <Reveal>
+        <Section eyebrow="Verification" title="How you can check all of this yourself">
+          <RevealStagger className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" variant="up" step={90}>
+            {CHECKS.map((c) => (
+              <Link
+                key={c.href}
+                href={c.href}
+                className="stat-tile flex flex-col gap-2 no-underline"
+                style={{ color: "inherit", padding: "18px" }}
+              >
+                <div className="font-semibold" style={{ color: "var(--accent)" }}>
+                  {c.title}
+                </div>
+                <div className="text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
+                  {c.body}
+                </div>
+              </Link>
+            ))}
+          </RevealStagger>
+        </Section>
+      </Reveal>
+
+      <Reveal variant="scale">
+        <SignupCTA />
+      </Reveal>
 
       <Section eyebrow="Stay in touch" title="Get told when the volatility record can be judged">
         <p className="m-0 max-w-[62ch] text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
