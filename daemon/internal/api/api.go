@@ -1059,7 +1059,13 @@ func (d Deps) rawDataRefused(w http.ResponseWriter, r *http.Request) bool {
 	}
 	// localProxyAsserted (localproxy.go): the keyed private-launcher assertion,
 	// the only header-carrying request that may count as local.
-	if d.Cfg.ReachablePrivately() && (requestIsLoopback(r) || d.localProxyAsserted(r)) {
+	// !published(), not ReachablePrivately(): the public quick tunnel reaches
+	// this daemon THROUGH the keyed loopback web proxy (Web task, port 8323),
+	// so on a tunnelled box every visitor arrives "local". ReachablePrivately()
+	// read false only because a stale ngrok host sat in ALLOWED_HOSTS; removing
+	// it would have served licensed bars to the internet. published() also
+	// counts PUBLIC_URL and the tunnel log (the member-tier fix, 0dfa718).
+	if !d.published() && (requestIsLoopback(r) || d.localProxyAsserted(r)) {
 		return false
 	}
 	httpErr(w, 451, datalicense.RawDataNotice())

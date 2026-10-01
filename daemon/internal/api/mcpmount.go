@@ -41,7 +41,7 @@ func (d Deps) registerMCP(mux *http.ServeMux, limiter *rateLimiter) *mcp.Server 
 	srv, err := mcp.New(mcp.Options{
 		Enabled:            true,
 		Secret:             d.Cfg.MCPSecret,
-		ReachablePrivately: d.Cfg.ReachablePrivately(),
+		ReachablePrivately: !d.published(), // a tunnelled box is public; see rawDataRefused
 		TrustProxy:         d.Cfg.TrustProxy,
 		AuditPath:          d.Cfg.MCPAuditPath,
 		DailyCallCap:       d.Cfg.MCPDailyCalls,
