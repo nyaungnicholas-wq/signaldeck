@@ -3,7 +3,9 @@ package pipeline
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/marketcal"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -129,5 +131,58 @@ func TestResolverPagesPastRowsItSkips(t *testing.T) {
 	}
 	if len(ups) != 1 {
 		t.Fatalf("resolved %d rows (%s); want the one LIVE row behind 1501 skipped ones", len(ups), msg)
+	}
+}
+
+// A HOLIDAY IS NOT A GAP. Friday 2026-09-04's next session is Tuesday 09-08
+// (Labor Day between): from the slackened target that bar is 3d6h out, past the
+// 3-horizon gap guard, so every pre-holiday Friday 1d row was skipped forever.
+// The NYSE calendar admits it. A forward bar that skips a real session
+// (Tuesday missing, next bar Wednesday) is a data gap and is still refused.
+func TestResolverGradesAcrossAHolidayNotAGap(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	const fri, day = int64(1788494400), int64(86400) // 2026-09-04 00:00 ET
+	if !marketcal.IsFullHoliday(time.Unix(fri+3*day, 0)) {
+		t.Fatal("fixture: 2026-09-07 must be an NYSE holiday")
+	}
+	hol, err := st.UpsertSymbol(ctx, "HOLIDAY", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gap, err := st.UpsertSymbol(ctx, "GAP", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bar := func(id, ts int64, c float64) md.Bar {
+		return md.Bar{SymbolID: id, TF: md.TF1d, Ts: ts, Open: c, High: c, Low: c, Close: c, Volume: 1}
+	}
+	// HOLIDAY: Fri, Tue (the next session), Wed settles Tue. 100 -> 110, up.
+	// GAP: Fri, then Wed — Tuesday's session is missing — Thu settles Wed. Down.
+	if err := st.UpsertBars(ctx, []md.Bar{
+		bar(hol.ID, fri, 100), bar(hol.ID, fri+4*day, 110), bar(hol.ID, fri+5*day, 111),
+		bar(gap.ID, fri, 100), bar(gap.ID, fri+5*day, 90), bar(gap.ID, fri+6*day, 89),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{hol.ID, gap.ID} {
+		if err := st.UpsertPrediction(ctx, store.Prediction{
+			SymbolID: id, Horizon: md.H1d, Ts: fri + 17*3600, // Friday 17:00 ET, after the close
+			RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msg, err := (&PredictionResolver{St: st}).Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	_, ups, _, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ups) != 1 || ups[0] != 1 {
+		t.Fatalf("resolved ups=%v (%s); want exactly the HOLIDAY row, labeled up", ups, msg)
 	}
 }
