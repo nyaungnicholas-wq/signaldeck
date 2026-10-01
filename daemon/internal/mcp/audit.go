@@ -98,7 +98,7 @@ func newAuditor(path string, now func() time.Time) *auditor {
 // record appends one entry. A failure to write the file is deliberately NOT
 // fatal to the request: refusing to answer because the log is unwritable turns
 // a full disk into an outage. It is, however, recorded in memory, and the
-// write error surfaces on the next operator read via lastWriteErr.
+// open, write or close error is kept in lastErr.
 func (a *auditor) record(e auditEntry) {
 	if e.At.IsZero() {
 		e.At = a.now()
@@ -118,14 +118,19 @@ func (a *auditor) record(e auditEntry) {
 		return
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err == nil {
+		// A full disk fails HERE, not at open. Discarding this error lost the
+		// entry from the append-only sink with nothing recorded anywhere.
+		_, err = f.Write(append(line, '\n'))
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
 	if err != nil {
 		a.mu.Lock()
 		a.lastErr = err
 		a.mu.Unlock()
-		return
 	}
-	_, _ = f.Write(append(line, '\n'))
-	_ = f.Close()
 }
 
 // entries returns the in-memory tail (tests, operator view).
