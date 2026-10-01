@@ -1,16 +1,16 @@
 {
- "generated": "2026-09-21T06:51:23+00:00",
- "git_commit": "7a963da1f20f5cb718787fff1f1048a4a2567ff1",
+ "generated": "2026-10-01T08:07:50+00:00",
+ "git_commit": "47f01457814917d735df02755356b96f16daecac",
  "survivorship_epoch": "2026-07-24",
- "grading_epoch": "2026-08-07",
+ "grading_epoch": "2026-09-25",
  "hash_scheme": "datasetver v1 canonical records, sha256, floats %.10g (daemon/internal/datasetver.HashRecords)",
  "note": "grading tallies + input-series versions only; no bar data is redistributed (A10). Regenerate the published numbers with `python3 tools/accuracy_registry.py --snapshot repro` \u2014 see REPRODUCE.md.",
  "files": [
   {
    "file": "directional_days.csv",
    "kind": "directional-day-tallies",
-   "rows": 104,
-   "sha256": "dd86c9794911c92649eff5fc56b4c05378fbb274eabe54da1e55695e8d257f09"
+   "rows": 4,
+   "sha256": "0b3f4a9e9e6977887d6ae55be989d4b51a825b7a7765077aa2e14bae02e39d72"
   },
   {
    "file": "prereg_claims.csv",
@@ -22,37 +22,37 @@
    "file": "grading_protocol.csv",
    "kind": "prereg-grading-protocol",
    "rows": 1,
-   "sha256": "7a5adacccd23be8b06f6a4822c861217bb720c510cd691304db5e1bf121398a3"
+   "sha256": "f7a3c9f4f8ec035c89343ab6ffdbaf0a1396de5fb90f93e083ae5337a6143553"
   },
   {
    "file": "structural_days.csv",
    "kind": "structural-day-tallies",
-   "rows": 123,
-   "sha256": "66cd52db1bf73c7ec1e82540563fe39b1c86e2d387f9342c0a11ec65585a62bc"
+   "rows": 171,
+   "sha256": "c50319e2320d4d7605b1ed7e2b9b38c7acf09f92ffa94328b04356ede8eacd54"
   },
   {
    "file": "structural_naive_days.csv",
    "kind": "structural-naive-persistence-day-tallies",
-   "rows": 96,
-   "sha256": "5d951ac203ea7cbb9fa949c90c36f798fdda5ffad00cf39ebee8ee0d99aa81ac"
+   "rows": 138,
+   "sha256": "53db782292096f5f18f7802816d4ade099aa46fda0729922891f045c19395d28"
   },
   {
    "file": "structural_claims.csv",
    "kind": "structural-claims",
    "rows": 7,
-   "sha256": "495c9234360ebbca87e5cfe4d975aa738baed11d5481a345a58b21df5863a017"
+   "sha256": "f0ca3024bc50647e0a27155b9403ca4ed80b27c9aa0a62a67f71f8f30b80ef15"
   },
   {
    "file": "pairs_inputs.csv",
    "kind": "pairs-input-series-versions",
-   "rows": 947,
-   "sha256": "0c982559d7f46678bbf69773f8de2bdd3939d4cb97f05f6ff295366577a63949"
+   "rows": 952,
+   "sha256": "caf4b617158981fb1040b7122f177f23373bf931107d4d9e38f0d160525817f3"
   },
   {
    "file": "xsfactor_inputs.csv",
    "kind": "xsfactor-input-series-versions",
    "rows": 2939,
-   "sha256": "13016c775144d91157946337cce4482a571786a19bf9218c75e3fb70998845ce"
+   "sha256": "64aad70454225d129223647193c88f41eb4064478e6b17d8e9e76f28e4f18e5d"
   }
  ]
 }
