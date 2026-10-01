@@ -88,6 +88,28 @@ func (d Deps) now() time.Time {
 
 // Serve runs the API server until ctx is canceled.
 func Serve(ctx context.Context, d Deps) error {
+	// One limiter for the HTTP middleware and the MCP mount, so a client cannot
+	// get two budgets by using two doors.
+	limiter := newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)
+	srv := d.httpServerWith(d.routes(limiter), limiter)
+	go func() {
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	}()
+	slog.Info("api listening", "url", "http://"+d.Cfg.HTTPAddr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+// routes registers every API route on a fresh mux: the production route set.
+// It is split out of Serve so a test can serve exactly this mux behind the
+// real middleware (membersurface_test.go) instead of a hand-copied subset,
+// which is how most member-reachable routes went untested.
+func (d Deps) routes(limiter *rateLimiter) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", d.health)
 	mux.HandleFunc("GET /api/ready", d.ready)     // can it serve CORRECT answers, not just answers
@@ -123,9 +145,7 @@ func Serve(ctx context.Context, d Deps) error {
 	// cold, measured 2026-09-08) and it changes once a day, so the first
 	// visitor — and the /volatility page's 15s server-side fetch — must never
 	// be the one to build it. WarmCaches keeps it hot.
-	mux.HandleFunc("GET /api/vol-forecast/record", func(w http.ResponseWriter, r *http.Request) {
-		sharedVolRecordSWR.serve("record", w, r, d.volForecastRecord)
-	})
+	mux.HandleFunc("GET /api/vol-forecast/record", d.serveVolRecord)
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
 	mux.HandleFunc("POST /api/watch", d.watch)     // member-safe: own watchlist only, no ingestion
 	mux.HandleFunc("POST /api/unwatch", d.unwatch) // member-safe: never deactivates a feed
@@ -268,21 +288,8 @@ func Serve(ctx context.Context, d Deps) error {
 	// client, behind six independently-tested defense layers. Off unless
 	// SIGNALDECK_MCP_ENABLED is set; the limiter instance is shared with the
 	// rest of the API so a client cannot get two budgets by using two doors.
-	limiter := newRateLimiter(d.Cfg.RateRPS, d.Cfg.RateBurst)
 	d.registerMCP(mux, limiter)
-
-	srv := d.httpServerWith(mux, limiter)
-	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
-	}()
-	slog.Info("api listening", "url", "http://"+d.Cfg.HTTPAddr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
-	}
-	return nil
+	return mux
 }
 
 // Connection deadlines. The 2026-07-26 review held a connection open for 60s
@@ -848,10 +855,18 @@ type memberWatchRow struct {
 func (d Deps) watchlist(w http.ResponseWriter, r *http.Request) {
 	if d.isMember(r) {
 		// A member's list lives in member_symbols, which no worker reads.
-		syms, err := d.St.ListMemberSymbols(r.Context(), userID(r))
+		all, err := d.St.ListMemberSymbols(r.Context(), userID(r))
 		if err != nil {
 			httpInternal(w, err)
 			return
+		}
+		// Crypto is not covered for members (refuseMemberCrypto); a crypto
+		// row watched before that rule is kept in the table but not served.
+		syms := all[:0]
+		for _, s := range all {
+			if s.Market != md.Crypto {
+				syms = append(syms, s)
+			}
 		}
 		rows, err := d.buildWatchRows(r.Context(), syms)
 		if err != nil {
@@ -1439,7 +1454,29 @@ func (d Deps) quality(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"symbols": out, "events": events, "ops": d.backupOps(ctx)})
+	ops := d.backupOps(ctx)
+	if d.isOperator(r) {
+		writeJSON(w, map[string]any{"symbols": out, "events": events, "ops": ops})
+		return
+	}
+	// /api/quality is in publicRoutes. A DQ detail is raw provider error text
+	// (measured: an internal URL, SEC XML bodies), and the backup file and
+	// offsite destination are paths or URLs, which is where an internal host or
+	// a query-string key leaks. Everyone but the operator gets the incident
+	// kind, symbol and time, and the backup timestamps and verdicts.
+	type publicEvent struct {
+		ID     int64  `json:"id"`
+		Symbol string `json:"symbol,omitempty"`
+		Ts     int64  `json:"ts"`
+		Kind   string `json:"kind"`
+	}
+	pub := make([]publicEvent, 0, len(events))
+	for _, ev := range events {
+		pub = append(pub, publicEvent{ID: ev.ID, Symbol: ev.Symbol, Ts: ev.Ts, Kind: ev.Kind})
+	}
+	delete(ops, "lastBackupFile")
+	delete(ops, "offsiteDir")
+	writeJSON(w, map[string]any{"symbols": out, "events": pub, "ops": ops})
 }
 
 // backupOps surfaces the off-machine backup state (from the meta keys the
@@ -1663,6 +1700,10 @@ func (d Deps) watch(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.Active {
 		httpErr(w, 422, s.Symbol+" is not currently tracked")
+		return
+	}
+	if s.Market == md.Crypto && d.isMember(r) {
+		httpErr(w, http.StatusBadRequest, cryptoNotForMembers)
 		return
 	}
 	add := d.St.AddUserSymbol

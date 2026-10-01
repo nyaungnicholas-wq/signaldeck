@@ -75,8 +75,31 @@ func newPublishedServer(t *testing.T) (*httptest.Server, *store.Store, *mailbox)
 }
 
 // newPublishedServerWith lets a test change the posture (mutate) and choose
-// whether an admin already exists.
+// whether an admin already exists. It serves only the account routes and the
+// handful of member routes these tests drive; newProductionServer
+// (membersentinel_test.go) serves the whole production mux.
 func newPublishedServerWith(t *testing.T, mutate func(*config.Config), seedAdmin bool) (*httptest.Server, *store.Store, *mailbox) {
+	t.Helper()
+	return startPublished(t, mutate, seedAdmin, func(d Deps) http.Handler {
+		mux := http.NewServeMux()
+		d.registerAuth(mux)
+		mux.HandleFunc("GET /api/watchlist", d.watchlist)
+		mux.HandleFunc("GET /api/trends", d.trends)
+		mux.HandleFunc("POST /api/subscribe", d.subscribe)
+		mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
+		mux.HandleFunc("POST /api/watch", d.watch)
+		mux.HandleFunc("POST /api/unwatch", d.unwatch)
+		mux.HandleFunc("GET /api/companies", d.companies)
+		mux.HandleFunc("GET /api/company/profile", d.companyProfile)
+		return d.secure(mux)
+	})
+}
+
+// startPublished stands up a published server (PublicSurface, open sign-up, a
+// public URL) on a fresh store, with mail and the account limiters swapped for
+// test seams. build makes the handler from the final Deps, so it sees the
+// allowed host and may set Deps fields the posture does not cover.
+func startPublished(t *testing.T, mutate func(*config.Config), seedAdmin bool, build func(Deps) http.Handler) (*httptest.Server, *store.Store, *mailbox) {
 	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "acct.db"))
 	if err != nil {
@@ -99,17 +122,7 @@ func newPublishedServerWith(t *testing.T, mutate func(*config.Config), seedAdmin
 	srv := httptest.NewUnstartedServer(nil)
 	t.Cleanup(srv.Close)
 	d.Cfg.AllowedHosts = []string{srv.Listener.Addr().String()}
-	mux := http.NewServeMux()
-	d.registerAuth(mux)
-	mux.HandleFunc("GET /api/watchlist", d.watchlist)
-	mux.HandleFunc("GET /api/trends", d.trends)
-	mux.HandleFunc("POST /api/subscribe", d.subscribe)
-	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
-	mux.HandleFunc("POST /api/watch", d.watch)
-	mux.HandleFunc("POST /api/unwatch", d.unwatch)
-	mux.HandleFunc("GET /api/companies", d.companies)
-	mux.HandleFunc("GET /api/company/profile", d.companyProfile)
-	srv.Config.Handler = d.secure(mux)
+	srv.Config.Handler = build(d)
 	srv.Start()
 
 	// An admin already exists, so every sign-up below is a MEMBER.

@@ -584,25 +584,26 @@ func (d Deps) companyProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	syms, err := d.St.ListSymbols(ctx, true)
+	// One-row lookup, not ListSymbols plus a loop over every active symbol.
+	s, found, err := d.St.ActiveSymbolByTicker(ctx, sym)
 	if err != nil {
 		httpErr(w, 500, "list symbols")
 		return
 	}
 	var symID int64
 	var name, market string
-	for _, s := range syms {
+	if found {
 		base := s.Symbol
 		if i := strings.IndexByte(base, '/'); i >= 0 {
 			base = base[:i]
 		}
-		if equalFoldASCII(s.Symbol, sym) || equalFoldASCII(base, sym) {
-			symID, name, market, sym = s.ID, s.Name, string(s.Market), strings.ToUpper(base)
-			break
-		}
+		symID, name, market, sym = s.ID, s.Name, string(s.Market), strings.ToUpper(base)
 	}
 	if symID == 0 {
 		httpErr(w, 404, "symbol not tracked: "+sym)
+		return
+	}
+	if d.refuseMemberCrypto(w, r, md.Market(market)) {
 		return
 	}
 

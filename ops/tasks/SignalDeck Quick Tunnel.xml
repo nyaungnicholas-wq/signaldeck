@@ -30,6 +30,7 @@
     <LogonTrigger>
       <UserId>{{USER}}</UserId>
     </LogonTrigger>
+    <BootTrigger />
   </Triggers>
   <Actions Context="Author">
     <Exec>

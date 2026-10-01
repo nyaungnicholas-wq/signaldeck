@@ -52,6 +52,10 @@ var Sources = map[string]Source{
 		Note:      "market data under the Alpaca agreement; redistribution prohibited",
 		Redistrib: false,
 	},
+	// Crypto forecasts built from these bars still appear in the public proof
+	// record (api.publicRoutes); members get no crypto rows on memberRoutes
+	// (api.refuseMemberCrypto). Whether Kraken's "derived works included"
+	// reaches those public forecasts is an open question for the owner.
 	"cryptohist": {
 		Name: "cryptohist", Class: Licensed, Provider: "Kraken",
 		Note:      "exchange OHLC; terms restrict redistribution, derived works included",
@@ -159,6 +163,19 @@ func RawDataNotice() string {
 // those providers' terms and the ratings are their IP -- so they are governed
 // here even though they are not price bars and BarsRedistributable does not
 // speak to them.
+//
+// THE LICENCE LINE, for every route a member or an anonymous caller reaches:
+//   - RAW is a vendor price, OHLC, volume, quote, rating, headline or message
+//     text, OR a per-row value keyed to a symbol and a time from which a vendor
+//     price or return series can be recovered by arithmetic alone (e.g. a
+//     realized forward return between two vendor closes).
+//   - DERIVED is forecasts, scores, probabilities, regime labels, indicator
+//     values such as close-vs-own-200d-mean, volatility forecasts, and
+//     aggregates over many rows.
+//
+// Members and anonymous callers get DERIVED and public-domain data only.
+// api.TestMemberResponsesCarryNoVendorSentinels holds every member-reachable
+// route to this line with seeded sentinel values.
 var RestrictedRoutes = map[string]string{
 	"/api/bars":       "alpaca",
 	"/api/snaps":      "cryptolive",

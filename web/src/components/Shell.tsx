@@ -427,10 +427,20 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         .then(() => alive && setUp(true))
         .catch(() => alive && setUp(false));
     check();
-    const t = setInterval(check, 10000);
+    // A hidden tab sends nothing: one forgotten tab polling every 10 s was
+    // 8,640 requests a day against whatever metered front the site sits behind.
+    // Coming back into view checks at once, then the 10 s cadence carries on.
+    const t = setInterval(() => {
+      if (!document.hidden) check();
+    }, 10000);
+    const onVisible = () => {
+      if (!document.hidden) check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
       clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 

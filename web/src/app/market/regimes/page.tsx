@@ -334,10 +334,19 @@ export default function RegimesPage() {
         .catch(() => undefined);
     };
     pull();
-    const t = setInterval(pull, 120_000);
+    // Same cadence as before for a visible tab; a hidden one sends nothing and
+    // pulls once when it comes back (pollMs's rule, without its failure backoff).
+    const t = setInterval(() => {
+      if (!document.hidden) pull();
+    }, 120_000);
+    const onVisible = () => {
+      if (!document.hidden) pull();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       dead = true;
       clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 

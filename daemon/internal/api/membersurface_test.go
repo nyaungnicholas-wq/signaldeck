@@ -15,31 +15,34 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
+// neverMember are routes a member must never reach: MIXED routes (the
+// 2026-09-30 audit: each is called "derived" but its payload still carries
+// closes, volumes, quotes or notes that quote them) and routes with an
+// ingestion side effect. A route leaves the list only when its payload
+// changes, never by editing a test.
+var neverMember = map[string]string{
+	"/api/dashboard":      "tape and heatmap prices, news titles, watchlist sparks",
+	"/api/screener":       "lastClose, dayChangePct and up to 30 daily closes",
+	"/api/symbol":         "insight and score notes quote the close; crypto bid/ask",
+	"/api/signal-report":  "tradeContext carries lastClose, 52-week range and SMA",
+	"/api/explain":        "close plus entry/stop/target price levels",
+	"/api/composite":      "factor evidence quotes TradingView ratings and breakout levels",
+	"/api/trend":          "trendline price endpoints",
+	"/api/chart-overlays": "breakout marker text quotes close and volume",
+	"/api/breakouts":      "detail quotes close, N-bar high/low and volume",
+	"/api/anomalies":      "detail quotes absolute volume",
+	"/api/regime":         "note quotes price and SMA",
+	"/api/alerts":         "breakout alerts quote close and volume",
+	"/api/movers":         "price, dayChangePct and mcap",
+	"/api/candidates":     "dollar volume",
+	"/api/subscribe":      "starts global ingestion for a symbol not yet tracked",
+	"/api/unsubscribe":    "deactivates a feed when its last watcher leaves",
+}
+
 // TestMemberRoutesServeNoLicensedData: the member allowlist must never name a
 // route a vendor licence governs, a MIXED route, a route with an ingestion side
-// effect, or an LLM or export route. The mixed list is the 2026-09-30 audit:
-// each of these is called "derived" but its payload still carries closes,
-// volumes, quotes or notes that quote them. A route leaves the list only when
-// its payload changes, never by editing this test.
+// effect, or an LLM or export route.
 func TestMemberRoutesServeNoLicensedData(t *testing.T) {
-	neverMember := map[string]string{
-		"/api/dashboard":      "tape and heatmap prices, news titles, watchlist sparks",
-		"/api/screener":       "lastClose, dayChangePct and up to 30 daily closes",
-		"/api/symbol":         "insight and score notes quote the close; crypto bid/ask",
-		"/api/signal-report":  "tradeContext carries lastClose, 52-week range and SMA",
-		"/api/explain":        "close plus entry/stop/target price levels",
-		"/api/composite":      "factor evidence quotes TradingView ratings and breakout levels",
-		"/api/trend":          "trendline price endpoints",
-		"/api/chart-overlays": "breakout marker text quotes close and volume",
-		"/api/breakouts":      "detail quotes close, N-bar high/low and volume",
-		"/api/anomalies":      "detail quotes absolute volume",
-		"/api/regime":         "note quotes price and SMA",
-		"/api/alerts":         "breakout alerts quote close and volume",
-		"/api/movers":         "price, dayChangePct and mcap",
-		"/api/candidates":     "dollar volume",
-		"/api/subscribe":      "starts global ingestion for a symbol not yet tracked",
-		"/api/unsubscribe":    "deactivates a feed when its last watcher leaves",
-	}
 	live := map[string]bool{}
 	for _, p := range registeredRoutes(t) {
 		live[p] = true
@@ -56,6 +59,53 @@ func TestMemberRoutesServeNoLicensedData(t *testing.T) {
 		}
 		if !live[p] {
 			t.Errorf("memberRoutes names %q, which no handler registers", p)
+		}
+	}
+}
+
+// memberPinned names, one by one, the member-reachable routes that are in
+// neither publicRoutes nor memberRoutes: the always-open paths and everything
+// memberAllowed admits by PREFIX (/api/auth/, /api/evidence/). A route added
+// under either prefix is reachable by every member the moment it is
+// registered; listing it here is the deliberate step that test demands.
+var memberPinned = map[string]string{
+	"/api/auth/register": "sign-up", "/api/auth/login": "sign-in", "/api/auth/logout": "sign-out",
+	"/api/auth/me": "the session's own identity", "/api/auth/verify": "email confirmation",
+	"/api/auth/resend": "confirmation resend", "/api/auth/forgot": "reset request",
+	"/api/auth/reset": "reset redemption", "/api/auth/google": "Google sign-in",
+	"/api/evidence/{id}": "one seeded evidence claim (the detail behind /api/evidence)",
+	"/api/tv-webhook":    "inbound TradingView alerts; shared-secret auth, serves nothing",
+	"/api/health":        "probe; anonymous summary only", "/api/ready": "probe; anonymous summary only",
+}
+
+// TestMemberSurfaceIsPinned: every route a member session can reach is listed
+// on purpose, carries no vendor licence and is not a never-member route.
+// TestMemberRoutesServeNoLicensedData checks memberRoutes alone; members also
+// reach publicRoutes and two prefixes, and those were checked by nothing.
+func TestMemberSurfaceIsPinned(t *testing.T) {
+	admitted := memberAdmittedRoutes(t)
+	if len(admitted) < 40 {
+		t.Fatalf("only %d member-reachable routes found; the route scan has rotted", len(admitted))
+	}
+	for _, p := range admitted {
+		if !publicRoutes[p] && !memberRoutes[p] && memberPinned[p] == "" {
+			t.Errorf("%s is reachable by every member but is listed nowhere: add it to publicRoutes or "+
+				"memberRoutes, or pin it in memberPinned with what it serves", p)
+		}
+		if src, _, governed := datalicense.RouteRedistributable(p); governed {
+			t.Errorf("%s is member-reachable and governed by the %s licence", p, src)
+		}
+		if why, never := neverMember[p]; never {
+			t.Errorf("%s is member-reachable: %s", p, why)
+		}
+	}
+	reachable := map[string]bool{}
+	for _, p := range admitted {
+		reachable[p] = true
+	}
+	for p := range memberPinned {
+		if !reachable[p] {
+			t.Errorf("memberPinned names %s, which a member cannot reach: stale entry", p)
 		}
 	}
 }

@@ -27,7 +27,8 @@
 //
 // A parameter that resolves to the handler's default is omitted from the key
 // entirely. That keeps the default key `""` — the exact key warm.go pre-builds
-// — so the warmer still fills the entry a first visitor reads.
+// (after the d.St.CacheKey() prefix, on the routes that add one) — so the
+// warmer still fills the entry a first visitor reads.
 //
 // The normalisers must track their handler exactly. Where a key says
 // `limit=100` the handler must be about to render 100 rows; if the two drift,

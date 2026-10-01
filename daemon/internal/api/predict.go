@@ -162,7 +162,7 @@ func (d Deps) registerPredict(mux *http.ServeMux) {
 		// C6: keyed on the WHITELISTED horizon, never on r.URL.RawQuery — a raw
 		// query string is attacker-controlled, and every novel one was a cold
 		// build holding one of the store's four read connections for ~22s.
-		sharedCalibrationSWR.serve(calibrationCacheKey(r), w, r, d.calibration)
+		sharedCalibrationSWR.serve(d.St.CacheKey()+"|"+calibrationCacheKey(r), w, r, d.calibration)
 	})
 	mux.HandleFunc("GET /api/regime", d.regimes)
 	mux.HandleFunc("GET /api/ranking", d.ranking)

@@ -68,7 +68,9 @@ export default function MemberWatchlist() {
   }, [reloadTick]);
 
   // Debounced directory search. Results are keyed by their query, so a stale
-  // answer for an older query is never shown against a newer one.
+  // answer for an older query is never shown against a newer one. The source is
+  // /api/companies, the SEC EDGAR registrant table joined to tracked STOCK
+  // symbols, and adds go in as market "stocks": crypto can never be offered here.
   const q = query.trim();
   useEffect(() => {
     if (q.length < 1) return;

@@ -20,6 +20,8 @@ import {
   trackRecord,
   ledgerVerify,
   ApiError,
+  isWarming,
+  untilWarm,
   HORIZONS,
   type Horizon,
   type TrackRecord,
@@ -205,6 +207,10 @@ export default function ProofPage() {
   // looks offline" while /api/health returned 200. null means no ApiError at
   // all, i.e. the request never got an answer.
   const [lvStatus, setLvStatus] = useState<number | null>(null);
+  // The daemon answered 503 "warming": it restarted and is still building the
+  // cached result. Shown as a waiting state, never as an error.
+  const [lvWarming, setLvWarming] = useState(false);
+  const [trWarming, setTrWarming] = useState(false);
 
   const settled = trState?.horizon === horizon ? trState : null;
   const tr = settled?.data ?? null;
@@ -233,14 +239,16 @@ export default function ProofPage() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
     const attempt = (n: number) => {
-      ledgerVerify()
+      // "warming" is waited out inside untilWarm (Retry-After, 3 min cap), so
+      // the bounded retries below are only for 429 and a non-warming 503.
+      untilWarm(ledgerVerify, () => setLvWarming(true), () => alive)
         .then((l) => {
           if (alive) setLv(l);
         })
         .catch((e) => {
           if (!alive) return;
           const status = e instanceof ApiError ? e.status : null;
-          if ((status === 503 || status === 429) && n < LEDGER_VERIFY_RETRIES) {
+          if ((status === 503 || status === 429) && !isWarming(e) && n < LEDGER_VERIFY_RETRIES) {
             setLvRetry(n + 1);
             timer = setTimeout(() => attempt(n + 1), LEDGER_RETRY_DELAY_MS);
             return;
@@ -264,9 +272,10 @@ export default function ProofPage() {
   useEffect(() => {
     let alive = true;
     const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-    trackRecord(horizon)
+    untilWarm(() => trackRecord(horizon), () => setTrWarming(true), () => alive)
       .then((t) => alive && setTrState({ horizon, data: t, err: null }))
-      .catch((e) => alive && setTrState({ horizon, data: null, err: msg(e) }));
+      .catch((e) => alive && setTrState({ horizon, data: null, err: msg(e) }))
+      .finally(() => alive && setTrWarming(false));
     return () => {
       alive = false;
     };
@@ -304,7 +313,7 @@ export default function ProofPage() {
           prediction to a tamper-evident hash chain as it is made, counts the rare write that
           does not land instead of rounding it away, and grades itself against what actually
           happened — withholding any skill claim until the sample is real. This page is that
-          record, recomputed live. It is descriptive, not advice.
+          record, recomputed every few minutes from the live ledger. It is descriptive, not advice.
         </p>
       </header>
 
@@ -314,9 +323,11 @@ export default function ProofPage() {
           <Skeleton
             lines={3}
             label={
-              lvRetry === 0
-                ? "recomputing the ledger hash chain"
-                : `ledger verification timed out — retrying (${lvRetry}/${LEDGER_VERIFY_RETRIES}); the daemon is busy, which is usual for a few minutes after a restart`
+              lvWarming
+                ? "the daemon is warming up after a restart — the ledger check appears here on its own once it is ready"
+                : lvRetry === 0
+                  ? "recomputing the ledger hash chain"
+                  : `ledger verification timed out — retrying (${lvRetry}/${LEDGER_VERIFY_RETRIES}); the daemon is busy, which is usual for a few minutes after a restart`
             }
           />
         </div>
@@ -397,6 +408,8 @@ export default function ProofPage() {
           {lv.head ? (
             <div className="border-t px-5 py-2 text-[0.7rem]" style={{ borderColor: "var(--border)", color: "var(--faint)" }}>
               head <span className="mono">{lv.head.slice(0, 16)}…</span>
+              {/* computedAt: the verify result is cached (2 min), so say when it ran. */}
+              {lv.computedAt ? ` · verified ${lv.computedAt.replace("T", " ").slice(0, 16)}Z` : null}
             </div>
           ) : null}
         </section>
@@ -440,7 +453,14 @@ export default function ProofPage() {
       {/* track-record loading / error (independent of the ledger) */}
       {!tr && !trErr && (
         <div className="panel p-4">
-          <Skeleton lines={3} label="grading the live track record" />
+          <Skeleton
+            lines={3}
+            label={
+              trWarming
+                ? "the daemon is warming up after a restart — the track record appears here on its own once it is graded"
+                : "grading the live track record"
+            }
+          />
         </div>
       )}
       {trErr && !tr && (

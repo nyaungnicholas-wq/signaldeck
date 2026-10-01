@@ -29,6 +29,15 @@ const RVRecordCaveat = "LIVE RECORD, ACCRUING. This is not a claim of skill. The
 // every minute rebuilding an answer that had not changed.
 var sharedVolRecordSWR = newSWRBodyCache(10 * time.Minute)
 
+// volRecordCacheName names the record's persisted last good body (cachepersist.go).
+const volRecordCacheName = "vol-record"
+
+// serveVolRecord is GET /api/vol-forecast/record through the shared cache; the
+// route and WarmCaches both use this entry and file.
+func (d Deps) serveVolRecord(w http.ResponseWriter, r *http.Request) {
+	sharedVolRecordSWR.serveAt(d.cacheFile(volRecordCacheName), d.St.CacheKey()+"|record", w, r, d.volForecastRecord)
+}
+
 func (d Deps) volForecastRecord(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		httpErr(w, http.StatusMethodNotAllowed, "method not allowed")

@@ -941,6 +941,33 @@ func (s *Store) ListSymbols(ctx context.Context, activeOnly bool) ([]md.Symbol, 
 	return out, rows.Err()
 }
 
+// ActiveSymbolByTicker is the first ACTIVE symbol, in ListSymbols order
+// (market, symbol), whose symbol equals ticker or whose base before the first
+// '/' does, ASCII case-insensitively ("BTC" finds "BTC/USD"). ok=false when none.
+// It returns the row the companyProfile loop over ListSymbols used to pick,
+// without materialising every active symbol per request.
+// ponytail: NOCASE cannot use the BINARY (symbol, market) index, so SQLite
+// still scans the small symbols table in-engine; a seek needs a NOCASE index.
+func (s *Store) ActiveSymbolByTicker(ctx context.Context, ticker string) (md.Symbol, bool, error) {
+	prefix := "" // a ticker holding '/' can never equal a base
+	if !strings.Contains(ticker, "/") {
+		prefix = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(ticker) + "/%"
+	}
+	var sym md.Symbol
+	var active, stream int
+	var mkt string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, symbol, market, name, active, added_at, stream FROM symbols
+		WHERE active=1 AND (symbol = ? COLLATE NOCASE OR (? != '' AND symbol LIKE ? ESCAPE '\'))
+		ORDER BY market, symbol LIMIT 1`, ticker, prefix, prefix).
+		Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt, &stream)
+	if errors.Is(err, sql.ErrNoRows) {
+		return md.Symbol{}, false, nil
+	}
+	sym.Market, sym.Active, sym.Stream = md.Market(mkt), active == 1, stream == 1
+	return sym, err == nil, err
+}
+
 // SetSymbolActive toggles the live subscription flag (history is kept).
 func (s *Store) SetSymbolActive(ctx context.Context, id int64, active bool) error {
 	v := 0

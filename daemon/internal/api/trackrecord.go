@@ -108,15 +108,22 @@ func (d Deps) trackRecordCached(w http.ResponseWriter, r *http.Request) {
 	if h != md.H1h && h != md.H1d && h != md.H1w {
 		h = md.H1d
 	}
-	resp, err := sharedTrackCache.get(r.Context(), string(h),
-		func(ctx context.Context) (map[string]any, error) {
-			return d.buildTrackRecord(ctx, h)
-		})
+	resp, err := d.cachedTrackRecord(r.Context(), h)
 	if err != nil {
-		httpInternal(w, err)
+		httpCacheErr(w, err)
 		return
 	}
 	writeJSON(w, resp)
+}
+
+// cachedTrackRecord is one horizon's payload through the shared cache, persisted
+// across restarts (cachepersist.go). The route and WarmCaches both read it here,
+// so the warmer fills exactly the entry and file a visitor is served from.
+func (d Deps) cachedTrackRecord(ctx context.Context, h md.Horizon) (map[string]any, error) {
+	return sharedTrackCache.getAt(ctx, d.cacheFile("track-record-"+string(h)), d.St.CacheKey()+"|"+string(h),
+		func(ctx context.Context) (map[string]any, error) {
+			return d.buildTrackRecord(ctx, h)
+		})
 }
 
 // buildTrackRecord computes the full track-record payload for one horizon.
@@ -212,6 +219,9 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 	}
 
 	resp := map[string]any{
+		// When this grade was computed: the route serves it from a cache, and
+		// after a restart from the last persisted copy, so a page can show its age.
+		"computedAt":      time.Now().UTC().Format(time.RFC3339),
 		"horizon":         h,
 		"rawN":            rawN,
 		"independentN":    indepN,

@@ -40,6 +40,9 @@ func (d Deps) shortInterest(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 404, err.Error())
 		return
 	}
+	if d.refuseMemberCrypto(w, r, s.Market) {
+		return
+	}
 	rows, err := d.St.ShortInterestRecent(ctx, s.ID, 8)
 	if err != nil {
 		httpInternal(w, err)

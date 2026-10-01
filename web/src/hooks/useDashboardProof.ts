@@ -6,7 +6,7 @@
 // loop (hidden-tab pause, failure backoff, freshness-retry re-fire).
 
 import { useEffect, useState } from "react";
-import { pollMs, POLL_SLOW, trackRecordWithGate, type TrackRecordWithGate } from "@/lib/api";
+import { pollMs, POLL_SLOW, trackRecordWithGate, untilWarm, type TrackRecordWithGate } from "@/lib/api";
 
 export default function useDashboardProof(): {
   tr: TrackRecordWithGate | null;
@@ -17,8 +17,11 @@ export default function useDashboardProof(): {
 
   useEffect(() => {
     let alive = true;
+    // A daemon that just restarted answers 503 "warming" until the record is
+    // built: keep the loading state (never an error) and ask again after its
+    // Retry-After, for up to 3 minutes.
     const load = () =>
-      trackRecordWithGate("1d")
+      untilWarm(() => trackRecordWithGate("1d"), undefined, () => alive)
         .then((d) => {
           if (!alive) return;
           setTr(d);

@@ -16,9 +16,43 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The daemon's raw `error` string, e.g. "warming". */
+    readonly code?: string,
+    /** Retry-After in ms, when the daemon sent one. */
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "ApiError";
+  }
+}
+
+/** 503 {"error":"warming"}: after a restart a cache this read is served from
+ *  has no value yet and the daemon is building it. The daemon answered, so this
+ *  is not an outage; ask again after Retry-After. */
+export function isWarming(e: unknown): e is ApiError {
+  return e instanceof ApiError && e.status === 503 && e.code === "warming";
+}
+
+/** Re-runs fn while the daemon says it is warming, honouring Retry-After, for at
+ *  most capMs (3 min: the slowest cold build measured is 129 s). onWarming runs
+ *  before each wait so a page can show "warming up" instead of an error; alive
+ *  stops the loop once its caller has gone. Anything else, or the cap, throws. */
+export async function untilWarm<T>(
+  fn: () => Promise<T>,
+  onWarming?: () => void,
+  alive: () => boolean = () => true,
+  capMs = 180_000,
+): Promise<T> {
+  const deadline = Date.now() + capMs;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (e) {
+      const wait = isWarming(e) ? Math.min(e.retryAfterMs ?? 30_000, deadline - Date.now()) : 0;
+      if (wait <= 0 || !alive()) throw e;
+      onWarming?.();
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
 }
 
@@ -278,9 +312,6 @@ async function get<T>(path: string): Promise<T> {
       throw e;
     }
     if (!res.ok) {
-      // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
-      // the daemon answered, just not with data.
-      if (res.status >= 500) recordFailure();
       // Use the daemon's `error` STRING, never the raw response text. Dumping
       // the body put a whole JSON object on screen wherever a component renders
       // the message — /api/bars' 451 licence notice arrived as
@@ -295,13 +326,20 @@ async function get<T>(path: string): Promise<T> {
       // A real `error` string replaces it — that sentence is written for a
       // reader and the status adds nothing to it.
       let msg = `API ${res.status}: ${body || path}`;
+      let code: string | undefined;
       try {
         const parsed = JSON.parse(body) as { error?: string };
-        if (parsed?.error) msg = parsed.error;
+        if (parsed?.error) msg = code = parsed.error;
       } catch {
         /* not JSON — the raw text is the best message available */
       }
-      throw new ApiError(res.status, msg);
+      // Only 5xx counts as a connectivity failure — a 4xx (401/403/…) means
+      // the daemon answered, just not with data. So did a "warming" 503.
+      const warming = res.status === 503 && code === "warming";
+      if (res.status >= 500 && !warming) recordFailure();
+      if (warming) msg = "the daemon is warming up after a restart; this loads on its own shortly";
+      const ra = Number.parseInt(res.headers.get("retry-after") ?? "", 10);
+      throw new ApiError(res.status, msg, code, Number.isFinite(ra) ? Math.max(1, ra) * 1000 : undefined);
     }
     recordSuccess();
     const data = (await res.json()) as T;
@@ -1339,6 +1377,8 @@ export interface LedgerVerifyResponse {
   /** The daemon's own scoping of what `intact` does and does not establish. */
   intactMeans?: string;
   tamperEvidence?: LedgerTamperEvidence;
+  /** When the daemon ran this verification (RFC 3339, UTC); the result is cached. */
+  computedAt?: string;
 }
 
 /** The committed ledger entries for one symbol+horizon (newest first). */
