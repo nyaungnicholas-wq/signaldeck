@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import Turnstile from "@/components/auth/Turnstile";
+import GoogleButton from "@/components/auth/GoogleButton";
 
 export default function SignupPage() {
   const [username, setUsername] = useState("");
@@ -41,6 +42,12 @@ export default function SignupPage() {
     setError(null);
     setResendMessage(null);
 
+    // The daemon enforces this (accounts.go); checking here saves a round trip
+    // and a rate-limit slot on the most likely mistake.
+    if (!/@(gmail|googlemail)\.com$/i.test(email.trim())) {
+      setError("sign-up takes Gmail addresses only (…@gmail.com)");
+      return;
+    }
     if (password !== confirm) {
       setError("passwords do not match");
       return;
@@ -145,6 +152,8 @@ export default function SignupPage() {
                 </div>
               )}
 
+              <GoogleButton text="signup_with" onError={setError} />
+
               <label
                 htmlFor="signup-username"
                 className="mb-1 block text-xs tracking-wider text-[var(--dim)]"
@@ -171,17 +180,21 @@ export default function SignupPage() {
                 htmlFor="signup-email"
                 className="mb-1 block text-xs tracking-wider text-[var(--dim)]"
               >
-                EMAIL
+                GMAIL ADDRESS
               </label>
               <input
                 id="signup-email"
                 type="email"
                 autoComplete="email"
-                className="mono mb-4 w-full rounded-lg border border-[var(--border)] bg-[var(--panel2)] px-3 py-2 text-sm text-[var(--text)] outline-none transition-colors duration-150 focus:border-[var(--accent)]"
+                placeholder="you@gmail.com"
+                className="mono mb-1 w-full rounded-lg border border-[var(--border)] bg-[var(--panel2)] px-3 py-2 text-sm text-[var(--text)] outline-none transition-colors duration-150 focus:border-[var(--accent)]"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
               />
+              <p className="mb-4 text-[10px] text-[var(--faint)]">
+                Gmail addresses only
+              </p>
 
               <label
                 htmlFor="signup-password"

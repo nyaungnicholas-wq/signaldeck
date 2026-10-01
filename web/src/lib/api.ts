@@ -538,6 +538,8 @@ export const api = {
   signup: (username: string, email: string, password: string, turnstileToken: string, website: string) =>
     post<{ status: string }>("/api/auth/register", { username, email, password, turnstileToken, website }),
   verifyEmail: (token: string) => post<Me>("/api/auth/verify", { token }),
+  // Sign in with Google: the ID token Google's button hands the page (daemon google.go).
+  googleSignIn: (credential: string) => post<Me>("/api/auth/google", { credential }),
   resendVerify: (email: string) => post<{ status: string }>("/api/auth/resend", { email }),
   forgotPassword: (email: string, turnstileToken: string) =>
     post<{ status: string }>("/api/auth/forgot", { email, turnstileToken }),

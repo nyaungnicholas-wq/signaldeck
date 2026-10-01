@@ -580,6 +580,9 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 			// Public by design: Turnstile site keys are embedded in every page that
 			// renders the widget. Served here so no rebuild is needed to set one.
 			"turnstileSiteKey": d.Cfg.TurnstileSiteKey,
+			// Same reasoning: Google's button embeds the client ID in the page.
+			// Empty = the sign-up and sign-in pages show no Google button.
+			"googleClientId": d.Cfg.GoogleClientID,
 		})
 		return
 	}

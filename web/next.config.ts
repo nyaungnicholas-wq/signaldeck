@@ -91,21 +91,25 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
 // runtime scripts need it); the tightening path is a nonce-based CSP via
 // middleware once those are eliminated. 'unsafe-eval' is dev-only (webpack/
 // turbopack eval sourcemaps + HMR) — production builds never eval.
-// connect-src is 'self' only: 'self' already covers same-origin ws/wss
+// connect-src is 'self' plus Google's /gsi/ path (the sign-in button's own
+// fetches): 'self' already covers same-origin ws/wss
 // upgrades (incl. dev HMR), and bare ws:/wss: scheme sources would allow a
 // WebSocket to ANY host — an exfiltration channel the app never uses.
 const SCRIPT_SRC =
   process.env.NODE_ENV === "development"
-    ? "'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com"
-    : "'self' 'unsafe-inline' https://challenges.cloudflare.com";
+    ? "'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://accounts.google.com/gsi/client"
+    : "'self' 'unsafe-inline' https://challenges.cloudflare.com https://accounts.google.com/gsi/client";
 // Cloudflare Turnstile (sign-up / password reset) loads its script from and
-// renders its widget in an iframe on challenges.cloudflare.com. Nothing else is
-// allowed to frame into the page, and the page still cannot be framed.
+// renders its widget in an iframe on challenges.cloudflare.com. Sign in with
+// Google (components/auth/GoogleButton.tsx) needs exactly the four /gsi/
+// sources Google documents: its script, its button stylesheet, and the iframe
+// and fetches behind the button. Nothing else is allowed to frame into the
+// page, and the page still cannot be framed.
 const SECURITY_HEADERS = [
   {
     key: "Content-Security-Policy",
     value:
-      `default-src 'self'; script-src ${SCRIPT_SRC}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
+      `default-src 'self'; script-src ${SCRIPT_SRC}; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://challenges.cloudflare.com https://accounts.google.com/gsi/; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
   },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

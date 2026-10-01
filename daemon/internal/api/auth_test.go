@@ -208,7 +208,7 @@ func TestLoginLockoutNotClearedByCaseVariantAccount(t *testing.T) {
 	loginFailures = &failCounter{fails: map[string]*failState{}}
 	t.Cleanup(func() { loginFailures = old })
 	srv, _, _ := newPublishedServer(t) // seeds admin "owner"
-	if code, body := signup(t, newClient(t), srv.URL, "OWNER", "variant@example.com"); code != 200 {
+	if code, body := signup(t, newClient(t), srv.URL, "OWNER", "variant@gmail.com"); code != 200 {
 		t.Fatalf("signup OWNER: %d %s", code, body)
 	}
 	login := func(user, pass string) (int, string) {

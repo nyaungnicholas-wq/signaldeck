@@ -388,6 +388,14 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "enter a valid email address")
 		return
 	}
+	// Gmail only (2026-09-30, Nicholas: "anyone with a gmail"): a Gmail address
+	// costs a bot a Google account, where a throwaway domain costs nothing.
+	// Folded to one spelling per inbox, so dots and +tags cannot multiply it.
+	email, ok = canonicalEmail(email)
+	if !ok {
+		httpErr(w, 400, "sign-up takes Gmail addresses only (…@gmail.com)")
+		return
+	}
 	base := d.publicBase()
 	if !mailReady(d) || base == "" {
 		httpErr(w, http.StatusServiceUnavailable, "sign-ups are temporarily unavailable — email is not set up yet")
@@ -586,6 +594,7 @@ func (d Deps) authResend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email, ok := normaliseEmail(body.Email)
+	email, _ = canonicalEmail(email) // the spelling sign-up stored
 	base := d.publicBase()
 	if ok && base != "" && mailReady(d) && mailLimiter.allow(email) {
 		if uid, _, verified, found, err := d.St.AccountByEmail(r.Context(), email); err == nil && found && !verified {
@@ -616,6 +625,7 @@ func (d Deps) authForgot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email, ok := normaliseEmail(body.Email)
+	email, _ = canonicalEmail(email) // the spelling sign-up stored
 	base := d.publicBase()
 	// Unverified accounts may reset too: the reset link proves control of the
 	// inbox and verifies the address, which defeats a squatter who signed up
@@ -695,4 +705,5 @@ func (d Deps) registerAccounts(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/resend", d.authResend)
 	mux.HandleFunc("POST /api/auth/forgot", d.authForgot)
 	mux.HandleFunc("POST /api/auth/reset", d.authReset)
+	mux.HandleFunc("POST /api/auth/google", d.authGoogle)
 }

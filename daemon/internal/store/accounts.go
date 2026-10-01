@@ -131,6 +131,39 @@ func (s *Store) SetPassword(ctx context.Context, uid int64, passHash string) err
 	return tx.Commit()
 }
 
+// CreateVerifiedUser makes a member whose address is already proven (Sign in
+// with Google vouched for it): verified from birth, and never an admin.
+func (s *Store) CreateVerifiedUser(ctx context.Context, username, email, passHash string) (int64, error) {
+	res, err := s.authW().ExecContext(ctx,
+		`INSERT INTO users (username, pass_hash, created_ts, is_admin, email, email_verified)
+		 VALUES (?,?,?,0,?,1)`,
+		username, passHash, time.Now().Unix(), strings.ToLower(email))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// ClaimUnverified marks an unconfirmed address verified once its owner proves
+// it through Google, and replaces the password in the same transaction. The
+// unconfirmed account may be a squatter's, registered with someone else's
+// address and a password of the squatter's choosing; the new hash locks them
+// out, and setPasswordTx also voids every link and ends every session.
+func (s *Store) ClaimUnverified(ctx context.Context, uid int64, passHash string) error {
+	tx, err := s.authW().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if err := setPasswordTx(ctx, tx, uid, passHash); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET email_verified=1 WHERE id=?`, uid); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func setPasswordTx(ctx context.Context, tx *sql.Tx, uid int64, passHash string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE users SET pass_hash=? WHERE id=?`, passHash, uid); err != nil {
 		return err
