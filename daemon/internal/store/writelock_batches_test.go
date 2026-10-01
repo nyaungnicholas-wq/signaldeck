@@ -148,3 +148,40 @@ func TestScoreOutcomesRetentionSeeksOnTs(t *testing.T) {
 		}
 	}
 }
+
+// The filings prune (the 18.6 s holder named in SD-51) must yield between its
+// batches too, and still prune exactly the rows below the cutoff.
+func TestFilingsPruneLetsAnAccountWriteIn(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "FIL", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const old, recent, cutoff = 20000, 500, 1000000
+	if _, err := st.w.ExecContext(ctx, `
+		WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < ?)
+		INSERT INTO filings (id, symbol_id, form, filed_ts)
+		SELECT 'acc-' || i, ?, '8-K', CASE WHEN i <= ? THEN i ELSE 2000000 + i END
+		FROM n`, old+recent, sym.ID, old); err != nil {
+		t.Fatal(err)
+	}
+	countOld := fmt.Sprintf(`SELECT count(*) FROM filings WHERE filed_ts < %d`, cutoff)
+	seen := midBulkWrite(t, st, old, countOld, func() error {
+		n, err := st.DeleteFilingsBefore(ctx, cutoff)
+		if err == nil && n != old {
+			err = fmt.Errorf("pruned %d filings, want %d", n, old)
+		}
+		return err
+	})
+	if seen == 0 {
+		t.Fatalf("the account write found all %d old filings already pruned: it waited out the whole prune", old)
+	}
+	var total int64
+	if err := st.db.QueryRowContext(ctx, `SELECT count(*) FROM filings`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != recent {
+		t.Fatalf("%d filings left, want the %d recent ones", total, recent)
+	}
+}
