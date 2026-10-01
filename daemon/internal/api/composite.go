@@ -32,7 +32,12 @@ import (
 // reached ~7 days, which wrongly RE-GATED the live track record to "0% / not
 // proven". 120k spans ~40 days at current volume (still >10 if the universe
 // doubles). The dedup to one obs per (symbol, UTC-day) runs over this window.
-const fleetSkillWindow = 120000
+//
+// -1 = the whole graded window (ResolvedPredictionOutcomes: the epoch bounds
+// it). The 120,000 row cap stopped being "comfortable" once 1w passed it
+// (~2026-09-29) and silently trimmed the oldest graded days off the public
+// track record.
+const fleetSkillWindow = -1
 
 // fleetSkill is the fleet-wide live-edge verdict together with the CLUSTER-
 // ROBUST evidence it rests on. The cluster grade travels with the verdict rather

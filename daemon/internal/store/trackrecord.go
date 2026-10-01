@@ -64,18 +64,29 @@ type ResolvedPredictionOutcome struct {
 // rather than merely smaller. Forward-looking: if those counts approach the
 // cap the truncation returns silently; len(result) == limit is the signal, and
 // the fix is to page, not to raise the number.
+//
+// It came back: 1w crossed 120,000 graded rows around 2026-09-29 and the cap
+// began dropping the window's first days from the public track record, ~10k
+// more rows a day. limit < 0 now reads the WHOLE graded window (the epoch is
+// the bound), and the published callers pass it. limit == 0 keeps the old
+// 20,000 default for callers that want a recent window.
 func (s *Store) ResolvedPredictionOutcomes(ctx context.Context, h md.Horizon, limit int) ([]ResolvedPredictionOutcome, error) {
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 20000
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	q := `
 		SELECT po.symbol_id, sym.symbol, sym.market, po.ts, po.prob, po.up, po.fwd_return, po.settle_ts
 		FROM prediction_outcomes po
 		JOIN symbols sym ON sym.id = po.symbol_id
 		WHERE po.resolved_at IS NOT NULL AND po.horizon = ? AND po.up IS NOT NULL
-		  AND po.ts >= `+strconv.Itoa(GradingEpochTS)+`
-		ORDER BY po.ts DESC
-		LIMIT ?`, string(h), limit)
+		  AND po.ts >= ` + strconv.Itoa(GradingEpochTS) + `
+		ORDER BY po.ts DESC`
+	args := []any{string(h)}
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
