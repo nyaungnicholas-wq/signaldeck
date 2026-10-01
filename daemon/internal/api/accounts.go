@@ -238,11 +238,18 @@ func (d Deps) originsNow() []string {
 
 // ── turnstile ──────────────────────────────────────────────────────────────
 
+var turnstileOffOnce sync.Once
+
 // turnstileOK verifies a Turnstile token. With no secret configured the check
-// is skipped (logged once per call site), so the site works before the operator
+// is skipped (logged once per process), so the site works before the operator
 // has created the widget; the honeypot and limiters still apply.
 func (d Deps) turnstileOK(ctx context.Context, token, remoteIP string) bool {
 	if d.Cfg.TurnstileSecret == "" {
+		// The comment above promised a log; until 2026-09-30 there was none,
+		// so a public daemon ran sign-up and reset with no bot check silently.
+		turnstileOffOnce.Do(func() {
+			slog.Warn("turnstile: no secret configured — sign-up and reset are guarded only by the honeypot and rate limiters")
+		})
 		return true
 	}
 	if token == "" || len(token) > 2048 {

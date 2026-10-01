@@ -71,7 +71,10 @@ export default function Turnstile({
         const data = await resp.json();
         const siteKey = data.turnstileSiteKey as string | undefined;
         if (!siteKey) {
-          if (liveRef.current) onToken("");
+          // No widget configured: the daemon skips the check when it has no
+          // secret, but the forms disable submit on an EMPTY token — so
+          // handing back "" made sign-up impossible for every visitor.
+          if (liveRef.current) onToken("turnstile-off");
           return;
         }
         await getTurnstileReady();

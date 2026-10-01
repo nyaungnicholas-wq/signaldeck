@@ -209,3 +209,20 @@ func TestRawExportRefusesOnAPublishedDeploymentDespiteLoopbackRemoteAddr(t *test
 		t.Errorf("private loopback deployment: %d, want 200 — the guard became an outage", rec.Code)
 	}
 }
+
+// The live quick-tunnel daemon is published WITHOUT PublicSurface, so the
+// public pages ride the legacy branch. Every route the anonymous landing,
+// sign-up and receipts pages call must answer there too: /api/waitlist didn't,
+// and the landing form told every visitor "That didn't go through".
+func TestPublicPagesWorkWithPublicSurfaceOff(t *testing.T) {
+	d := Deps{Cfg: config.Config{PublicSurface: false, PublicReads: false}}
+	for _, p := range []string{
+		"/api/waitlist", "/api/accuracy", "/api/prereg", "/api/track-record",
+		"/api/ledger/verify", "/api/vol-forecast/record", "/api/health",
+		"/api/auth/login", "/api/auth/register", "/api/auth/verify",
+	} {
+		if d.requiresAuth(p) {
+			t.Errorf("%q needs a session with PublicSurface off — the public page calling it is dead", p)
+		}
+	}
+}

@@ -407,6 +407,14 @@ func (d Deps) requiresAuth(path string) bool {
 		path == "/api/accuracy" || path == "/api/prereg" {
 		return false
 	}
+	// The landing page's waitlist form posts here anonymously. It was opened
+	// only in publicRoutes, so on a daemon published WITHOUT
+	// SIGNALDECK_PUBLIC_SURFACE (the live quick-tunnel posture) every visitor
+	// got 401 and "That didn't go through". Only POST is routed; see the
+	// publicRoutes note for why it is safe to leave open.
+	if path == "/api/waitlist" {
+		return false
+	}
 	// The MCP endpoint authenticates itself, and strictly more tightly than
 	// this gate does: a signed, expiring, revocable per-client key, with
 	// anonymous access permitted only on a privately-reachable bind. Letting

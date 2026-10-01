@@ -14,7 +14,17 @@ const HEX = "0123456789abcdef";
 const STEP_MS = 420; // between block starts
 const CHAR_MS = 40; // per resolved character
 
-export default function HashChain({ blocks }: { blocks: Block[] }) {
+// chainOk is the daemon's own recomputation (/api/prereg chainVerified). The
+// check line states it; the animation never decides it.
+export default function HashChain({
+  blocks,
+  chainOk,
+  brokenAt,
+}: {
+  blocks: Block[];
+  chainOk: boolean;
+  brokenAt: number;
+}) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [states, setStates] = useState<State[]>(() => blocks.map(() => "done"));
   const [shown, setShown] = useState<string[]>(() => blocks.map((b) => b.hash.slice(0, 16)));
@@ -110,9 +120,15 @@ export default function HashChain({ blocks }: { blocks: Block[] }) {
           </Fragment>
         ))}
       </div>
-      <div className="hc-verified mono mt-3 text-[0.75rem]" data-show={verified ? "true" : "false"}>
-        ✓ chain recomputed — every link matches
-      </div>
+      {chainOk ? (
+        <div className="hc-verified mono mt-3 text-[0.75rem]" data-show={verified ? "true" : "false"}>
+          ✓ chain recomputed by the daemon — every link matches
+        </div>
+      ) : (
+        <div className="mono mt-3 text-[0.75rem]" style={{ color: "var(--bad)" }} role="alert">
+          ✗ the daemon&rsquo;s recomputation found a broken link{brokenAt > 0 ? ` at #${brokenAt}` : ""}
+        </div>
+      )}
     </div>
   );
 }

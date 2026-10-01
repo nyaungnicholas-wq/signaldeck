@@ -47,7 +47,9 @@ function ResetInner() {
       } else {
         setError("An unexpected error occurred");
       }
-    } finally {
+      // Re-enable only on failure: on success the button must stay disabled
+      // through the redirect, or a second click spends the used token and
+      // paints an error over "Password updated".
       setBusy(false);
     }
   };

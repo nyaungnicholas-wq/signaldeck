@@ -67,8 +67,11 @@ export default function ForgotPage() {
           )}
         </div>
       </form>
-      <Link href="/login">
-        <a className="text-xs text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]">Back to sign in</a>
+      <Link
+        href="/login"
+        className="text-xs text-[var(--dim)] transition-colors duration-150 hover:text-[var(--accent)]"
+      >
+        Back to sign in
       </Link>
     </div>
   );

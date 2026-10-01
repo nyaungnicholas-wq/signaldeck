@@ -120,7 +120,12 @@ async function loadLive(): Promise<Live> {
 // receipts strip. Real data from the public /api/prereg; on any failure the
 // strip is simply omitted rather than faked.
 type ChainRecord = { seq: number; kind: string; entryHash: string; ts: number };
-type Chain = { count: number; blocks: { seq: number; kind: string; hash: string; when: string }[] };
+type Chain = {
+  count: number;
+  verified: boolean;
+  brokenAt: number;
+  blocks: { seq: number; kind: string; hash: string; when: string }[];
+};
 
 async function loadChain(): Promise<Chain | null> {
   try {
@@ -130,11 +135,17 @@ async function loadChain(): Promise<Chain | null> {
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return null;
-    const body = (await res.json()) as { records?: ChainRecord[] };
+    const body = (await res.json()) as {
+      records?: ChainRecord[];
+      chainVerified?: boolean;
+      brokenAtSeq?: number;
+    };
     const recs = body.records ?? [];
     if (recs.length === 0) return null;
     return {
       count: recs.length,
+      verified: body.chainVerified === true,
+      brokenAt: body.brokenAtSeq ?? 0,
       blocks: recs.slice(-5).map((r) => ({
         seq: r.seq,
         kind: r.kind,
@@ -352,7 +363,12 @@ function LiveRecord({ live }: { live: Live }) {
         Number(CONDEMNED.has(b.publication_status)) - Number(CONDEMNED.has(a.publication_status)),
     )
     .slice(0, 8);
-  const retired = live.rows.find((r) => r.retired);
+  // The panel's sentence says "worse than guessing", so show a retired row whose
+  // live skill actually is negative. live.rows.find(retired) picked the 1d row
+  // at +0.7pp and printed it in red under that sentence.
+  const retired =
+    live.rows.find((r) => r.retired && (r.skill ?? 0) < 0) ?? live.rows.find((r) => r.retired);
+  const retiredBelow = (retired?.skill ?? 0) < 0;
 
   return (
     <>
@@ -366,7 +382,10 @@ function LiveRecord({ live }: { live: Live }) {
           </div>
           <div className="text-[1.05rem] font-semibold">{rowLabel(retired)}</div>
           <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
-            <span className="tnum text-[1.9rem] font-extrabold" style={{ color: "var(--bad)" }}>
+            <span
+              className="tnum text-[1.9rem] font-extrabold"
+              style={{ color: retiredBelow ? "var(--bad)" : "var(--dim)" }}
+            >
               {pp(retired.skill)}
             </span>
             <span className="text-sm" style={{ color: "var(--dim)" }}>
@@ -377,8 +396,10 @@ function LiveRecord({ live }: { live: Live }) {
             </span>
           </div>
           <p className="m-0 max-w-[70ch] text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
-            This model predicted direction worse than guessing the majority class. A
-            pre-registered rule detected that and stopped it publishing automatically, without
+            {retiredBelow
+              ? "This model predicts direction worse than guessing the majority class."
+              : "When it was retired this model was predicting direction worse than guessing the majority class."}{" "}
+            A pre-registered rule detected that and stopped it publishing automatically, without
             anyone having to decide to be honest that day. Retirement here does not lapse, and a
             later good week does not reverse it.
           </p>
@@ -474,11 +495,15 @@ export default async function Landing() {
   // Headline figures, all computed from the same live payloads the sections
   // below render. Nothing here is typed in by hand.
   const rows = live.kind === "ok" ? live.rows : [];
-  const graded = new Set(rows.map((r) => r.predictor)).size;
+  // Benchmarks (#persist, prequential-majority) are yardsticks, not
+  // predictors, and a row with no live forecasts has not been graded yet.
+  const graded = new Set(
+    rows.filter((r) => !r.family.includes("benchmark") && r.live_n > 0).map((r) => r.predictor),
+  ).size;
   const condemned = rows.filter((r) => r.retired || CONDEMNED.has(r.publication_status)).length;
   const maxDays = rows.reduce((m, r) => Math.max(m, r.distinct_days ?? 0), 0);
   const stats: { value: number; label: string; tone: string }[] = [
-    { value: chain?.count ?? 0, label: "claims on the hash chain", tone: "var(--accent)" },
+    { value: chain?.count ?? 0, label: "records on the hash chain", tone: "var(--accent)" },
     { value: graded, label: "predictors graded in public", tone: "#38bdf8" },
     { value: condemned, label: "rows failed or retired — shown, not hidden", tone: "var(--bad)" },
     { value: maxDays, label: "days of live evidence (longest record)", tone: "var(--ok)" },
@@ -545,8 +570,8 @@ export default async function Landing() {
 
       {chain && (
         <Reveal variant="blur">
-          <Section eyebrow="The receipts" title="The newest links in the chain, recomputed as you watch">
-            <HashChain blocks={chain.blocks} />
+          <Section eyebrow="The receipts" title="The newest links in the chain, as the daemon recomputed them">
+            <HashChain blocks={chain.blocks} chainOk={chain.verified} brokenAt={chain.brokenAt} />
             <p className="m-0 max-w-[62ch] text-sm leading-relaxed" style={{ color: "var(--dim)" }}>
               These are the real, current records. Each one&rsquo;s hash covers the one before it, so
               changing any past claim breaks every link after it. <Link href="/proof" style={{ color: "var(--accent)" }}>Recompute the whole chain yourself →</Link>

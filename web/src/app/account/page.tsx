@@ -13,6 +13,7 @@ type User = {
 export default function AccountPage() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [logoutError, setLogoutError] = useState("");
   const router = useRouter();
 
   useEffect(() => {
@@ -40,8 +41,13 @@ export default function AccountPage() {
   }
 
   const handleLogout = async () => {
-    await api.logout();
-    router.replace("/");
+    try {
+      await api.logout();
+      router.replace("/");
+    } catch {
+      // The daemon reports a failed session delete; don't pretend we signed out.
+      setLogoutError("Sign-out failed — the session may still be active. Try again.");
+    }
   };
 
   return (
@@ -81,6 +87,11 @@ export default function AccountPage() {
           <button onClick={handleLogout} className="mt-6 w-full cursor-pointer rounded-lg border border-[var(--border)] bg-transparent px-3 py-2 text-sm font-bold tracking-widest text-[var(--dim)] transition-colors duration-150 hover:border-[var(--accent)] hover:text-[var(--accent)]">
             SIGN OUT
           </button>
+          {logoutError && (
+            <p role="alert" className="mt-3 text-xs text-[var(--ask)]">
+              {logoutError}
+            </p>
+          )}
         </div>
       </div>
     </div>
