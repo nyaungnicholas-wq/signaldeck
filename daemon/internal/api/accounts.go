@@ -401,13 +401,11 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 	// Mail after answering, exactly like the taken path, so SMTP latency cannot
 	// tell the two apart. A failed send is recovered with Resend.
 	mailLimiter.allow(email)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
+	mailInBackground(func(ctx context.Context) {
 		if err := d.sendVerify(ctx, uid, email, base); err != nil {
 			slog.Warn("signup: verification email failed", "uid", uid, "err", err)
 		}
-	}()
+	})
 	writeJSON(w, map[string]string{"status": verifySent})
 }
 
@@ -456,16 +454,30 @@ func (d Deps) sendVerify(ctx context.Context, uid int64, email, base string) err
 			"no account is activated without the click.")
 }
 
+// mailWG tracks the account-mail goroutines. They outlive the request by
+// design (timing must not reveal whether an account exists), so a test that
+// swaps sendAccountEmail or closes the store must Wait first.
+var mailWG sync.WaitGroup
+
+// mailInBackground runs send after the response, on its own 45s budget.
+func mailInBackground(send func(ctx context.Context)) {
+	mailWG.Add(1)
+	go func() {
+		defer mailWG.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		send(ctx)
+	}()
+}
+
 // sendAsync mails without holding the request open, for the responses whose
 // timing must not reveal whether an account exists.
 func (d Deps) sendAsync(to, subject, body string) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
+	mailInBackground(func(ctx context.Context) {
 		if err := sendAccountEmail(d, ctx, to, subject, body); err != nil {
 			slog.Warn("account email failed", "err", err)
 		}
-	}()
+	})
 }
 
 type tokenBody struct {
@@ -542,13 +554,11 @@ func (d Deps) authResend(w http.ResponseWriter, r *http.Request) {
 	base := d.publicBase()
 	if ok && base != "" && mailReady(d) && mailLimiter.allow(email) {
 		if uid, _, verified, found, err := d.St.AccountByEmail(r.Context(), email); err == nil && found && !verified {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-				defer cancel()
+			mailInBackground(func(ctx context.Context) {
 				if err := d.sendVerify(ctx, uid, email, base); err != nil {
 					slog.Warn("resend: verification email failed", "err", err)
 				}
-			}()
+			})
 		}
 	}
 	writeJSON(w, map[string]string{"status": sentIfExists})
@@ -577,9 +587,7 @@ func (d Deps) authForgot(w http.ResponseWriter, r *http.Request) {
 	// with someone else's email and a password of their own choosing.
 	if ok && base != "" && mailReady(d) && resetLimiter.allow(email) {
 		if uid, username, _, found, err := d.St.AccountByEmail(r.Context(), email); err == nil && found {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-				defer cancel()
+			mailInBackground(func(ctx context.Context) {
 				tok, err := d.St.CreateAuthToken(ctx, uid, store.TokenReset, resetTTL)
 				if err != nil {
 					slog.Warn("forgot: token failed", "err", err)
@@ -591,7 +599,7 @@ func (d Deps) authForgot(w http.ResponseWriter, r *http.Request) {
 						"your password has not changed."); err != nil {
 					slog.Warn("forgot: email failed", "err", err)
 				}
-			}()
+			})
 		}
 	}
 	writeJSON(w, map[string]string{"status": sentIfExists})
@@ -642,7 +650,7 @@ func (d Deps) authReset(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, errors.New("account vanished during reset"))
 		return
 	}
-	loginFailures.succeed(strings.ToLower(u.Username))
+	loginFailures.succeed(u.Username)
 	d.startSession(w, r, u.ID, u.Username, u.IsAdmin)
 }
 

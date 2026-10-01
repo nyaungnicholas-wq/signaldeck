@@ -618,7 +618,8 @@ func TestStorageGovernorVacuumsAboveThreshold(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
 	makeFreePages(t, st)
-	g := &StorageGovernor{St: st, VacuumThreshold: 1, MinVacuumInterval: time.Hour} // 1 byte → always over
+	g := &StorageGovernor{St: st, VacuumThreshold: 1, MinVacuumInterval: time.Hour, // 1 byte → always over
+		Now: func() time.Time { return etClock(t, 3) }} // inside the 2–6am window
 	msg, err := g.Run(ctx)
 	if err != nil {
 		t.Fatalf("governor run: %v", err)
@@ -637,6 +638,35 @@ func TestStorageGovernorVacuumsAboveThreshold(t *testing.T) {
 	if !contains(msg2, "vacuumed=false") {
 		t.Fatalf("second run within interval should skip vacuum, msg=%q", msg2)
 	}
+}
+
+// A rewrite holds the write lock for its whole run, so outside 2–6am ET it must
+// not start however large the file or its free list: on 2026-09-30 a size-keyed
+// "emergency" bypass ran one at 21:32 ET and sign-ins answered 500 after 24s.
+func TestStorageGovernorNeverVacuumsOutsideTheWindow(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	makeFreePages(t, st)
+	g := &StorageGovernor{St: st, VacuumThreshold: 1, MinVacuumInterval: time.Hour,
+		Now: func() time.Time { return etClock(t, 21) }}
+	msg, err := g.Run(ctx)
+	if err != nil {
+		t.Fatalf("governor run: %v", err)
+	}
+	if !contains(msg, "vacuumed=false") {
+		t.Fatalf("vacuumed at 21:00 ET, outside the 2–6am window: msg=%q", msg)
+	}
+}
+
+// etClock is today at hour:00 America/New_York.
+func etClock(t *testing.T, hour int) time.Time {
+	t.Helper()
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	y, m, d := time.Now().In(loc).Date()
+	return time.Date(y, m, d, hour, 0, 0, 0, loc)
 }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }

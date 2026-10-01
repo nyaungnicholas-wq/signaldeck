@@ -126,6 +126,7 @@ func newPublishedServerWith(t *testing.T, mutate func(*config.Config), seedAdmin
 	acctIPLimiter = newWindowLimiter(20, time.Hour)
 	mailLimiter = newWindowLimiter(3, time.Hour)
 	t.Cleanup(func() {
+		mailWG.Wait() // in-flight mail reads sendAccountEmail and the store
 		sendAccountEmail, mailReady = oldSend, oldReady
 		signupLimiter, acctIPLimiter, mailLimiter = oldS, oldA, oldM
 	})

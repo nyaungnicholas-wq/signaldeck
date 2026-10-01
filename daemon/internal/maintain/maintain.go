@@ -876,12 +876,17 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 		minInterval = 24 * time.Hour
 	}
 
-	// OFF-HOURS GATE: a VACUUM rewrites the whole file and briefly stalls the
-	// single writer, so restrict it to a quiet overnight window (2–6am
-	// America/New_York) instead of letting it fire mid-session under load —
-	// UNLESS the file has blown to 2× the threshold, where reclaiming space
-	// outweighs the stall. This is the "schedule VACUUM off-hours" fix.
-	offHours := inETWindow(time.Now(), 2, 6)
+	// OFF-HOURS GATE: a VACUUM rewrites the whole file and holds the write
+	// lock for the whole rewrite, so it runs ONLY in a quiet overnight window
+	// (2–6am America/New_York). There is no size-keyed bypass any more: on
+	// 2026-09-30 the "emergency" branch (file >= 2x threshold) started a
+	// rewrite of the 7.2 GB file at 21:32 ET, held the lock for 40+ minutes,
+	// and sign-ins answered 500 after two 12s busy waits.
+	// Each deploy killed it before it could record storage_last_vacuum, so
+	// every boot started it again. A big FILE is not an emergency — freed
+	// pages are reused by new rows either way; only the disk would be, and a
+	// rewrite needs 1.2x the file in free space, so it cannot relieve that.
+	offHours := inETWindow(g.now(), 2, 6)
 
 	// RECLAIMABLE SPACE, NOT FILE SIZE, IS WHAT JUSTIFIES THE STALL.
 	//
@@ -904,7 +909,6 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 		reclaimable, rerr = g.St.ReclaimableBytes(ctx)
 	}
 	worthIt := rerr == nil && reclaimable*20 >= dbBytes // at least 5% free pages
-	emergency := worthIt && dbBytes >= 2*threshold
 
 	if dbBytes >= threshold && rerr == nil && !worthIt {
 		_ = g.St.InsertDQ(ctx, md.DQEvent{
@@ -918,7 +922,7 @@ func (g *StorageGovernor) Run(ctx context.Context) (string, error) {
 	}
 
 	vacuumed := false
-	if dbBytes >= threshold && worthIt && (offHours || emergency) {
+	if dbBytes >= threshold && worthIt && offHours {
 		last, _ := g.St.GetMeta(ctx, "storage_last_vacuum")
 		var lastTs int64
 		if last != "" {

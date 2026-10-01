@@ -151,7 +151,9 @@ func (b *credsBody) validate() string {
 //
 // Keyed on the SUBMITTED username whether or not that user exists, so the
 // lockout cannot be used to enumerate accounts — an unknown name locks out
-// exactly like a real one.
+// exactly like a real one. Keyed EXACTLY as typed, because the user lookup is
+// case-sensitive: a lowercased key let an attacker register "NICK", sign in
+// to it, and clear the counter guarding "nick" after every four guesses.
 var loginFailures = &failCounter{fails: map[string]*failState{}}
 
 type failCounter struct {
@@ -223,15 +225,23 @@ func (f *failCounter) succeed(key string) {
 	delete(f.fails, key)
 }
 
-// sweep drops entries idle past the maximum backoff — they can no longer be
-// holding anyone out, so keeping them only grows the map. Called under mu.
+// sweep drops entries idle past the maximum backoff. A name that crossed the
+// lockout threshold is remembered for loginLockoutMemory instead: at the cap
+// its lock ends exactly loginLockoutMax after the last failure, so forgetting
+// it then reset n to zero and handed back four free guesses plus the whole
+// backoff ladder every ~36 minutes. Called under mu.
 func (f *failCounter) sweep(now time.Time) {
 	for k, st := range f.fails {
-		if now.Sub(st.last) > loginLockoutMax {
+		idle := now.Sub(st.last)
+		if idle > loginLockoutMemory || (st.n < loginLockoutAfter && idle > loginLockoutMax) {
 			delete(f.fails, k)
 		}
 	}
 }
+
+// loginLockoutMemory is how long a name that reached the lockout stays at the
+// cap: one guess per loginLockoutMax for a day, not a fresh ladder.
+const loginLockoutMemory = 24 * time.Hour
 
 // authLogin verifies credentials and issues a session cookie.
 func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
@@ -241,12 +251,19 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(body.Username)
+	// No account name is longer than validate() allows. Without this bound a
+	// 128 KB username became a lockout map key and a full log line, at the
+	// write-tier rate, per address.
+	if len(name) > 32 {
+		httpErr(w, 401, "invalid username or password")
+		return
+	}
 
 	// Check the lockout BEFORE bcrypt: the whole point is to stop spending a
 	// ~100ms hash on an attacker, and answering fast here is not an oracle
 	// because the lockout key exists for unknown usernames too.
 	now := time.Now()
-	if wait := loginFailures.retryAfter(strings.ToLower(name), now); wait > 0 {
+	if wait := loginFailures.retryAfter(name, now); wait > 0 {
 		// Round UP, and never below a second. Rounding to nearest produced
 		// "try again in 0s" for any sub-500ms remainder — an instruction to
 		// wait no time at all, on a request that was just refused.
@@ -272,12 +289,11 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		hash = string(dummyHash)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password)) != nil || !ok {
-		loginFailures.fail(strings.ToLower(name), now)
+		loginFailures.fail(name, now)
 		slog.Warn("login failed", "username", name)
 		httpErr(w, 401, "invalid username or password")
 		return
 	}
-	loginFailures.succeed(strings.ToLower(name))
 	// A public account must confirm its email before it can sign in. Legacy
 	// accounts (created before emails existed) have no address and are exempt.
 	if _, verified, hasEmail, err := d.St.AccountEmail(r.Context(), u.ID); err != nil {
@@ -290,6 +306,8 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// Clear the counter only for a sign-in that actually issues a session.
+	loginFailures.succeed(name)
 	d.startSession(w, r, u.ID, u.Username, u.IsAdmin)
 }
 

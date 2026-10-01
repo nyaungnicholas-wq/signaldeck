@@ -94,7 +94,9 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 		// 4. Rate limit per client key (user id / token / IP), two tiers.
 		writeTier := (r.Method != http.MethodGet && r.Method != http.MethodHead) ||
 			strings.HasPrefix(r.URL.Path, "/api/ai/")
-		if !limiter.allow(d.clientKey(r, uid), writeTier) {
+		// acctKey folds an IPv6 client to its /64: one subscriber line holds
+		// 2^64 addresses, so a per-address bucket was no limit at all there.
+		if !limiter.allow(acctKey(d.clientKey(r, uid)), writeTier) {
 			w.Header().Set("Retry-After", "1")
 			httpErr(w, http.StatusTooManyRequests, "rate limit exceeded — retry in a second")
 			return
