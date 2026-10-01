@@ -6,7 +6,7 @@
   <Principals>
     <Principal id="Author">
       <UserId>{{USER}}</UserId>
-      <LogonType>InteractiveToken</LogonType>
+      <LogonType>S4U</LogonType>
     </Principal>
   </Principals>
   <Settings>

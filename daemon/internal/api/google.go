@@ -40,6 +40,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
 var (
@@ -151,6 +153,8 @@ type googleClaims struct {
 	Sub           string `json:"sub"`
 	Email         string `json:"email"`
 	EmailVerified any    `json:"email_verified"`
+	// Hd is set only on Google Workspace accounts: the organisation's domain.
+	Hd string `json:"hd"`
 }
 
 // verifyGoogleIDToken checks raw against Google's keys and returns its claims.
@@ -304,9 +308,9 @@ func (d Deps) authGoogle(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusTooManyRequests, "too many sign-in attempts from this network — try again later")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	claims, err := verifyGoogleIDToken(ctx, body.Credential, d.Cfg.GoogleClientID, time.Now())
+	vctx, vcancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer vcancel()
+	claims, err := verifyGoogleIDToken(vctx, body.Credential, d.Cfg.GoogleClientID, time.Now())
 	if errors.Is(err, errGoogleUnavailable) {
 		slog.Warn("google sign-in: signing keys unavailable", "err", err)
 		httpErr(w, http.StatusServiceUnavailable, "Google sign-in is unavailable right now — try again in a minute")
@@ -320,8 +324,28 @@ func (d Deps) authGoogle(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "your Google account's email address can't be used here")
 		return
 	}
-	email, _ := canonicalEmail(typed)
+	email, gmail := canonicalEmail(typed)
+	// Google is AUTHORITATIVE for an address only when it is Gmail, or when hd
+	// marks a Workspace account. For any other address (a Google account made
+	// with a yahoo or company email) email_verified says the inbox was proven
+	// once, at Google sign-up, not that this person still controls it; linking
+	// it would hand a former holder of the address its account here. Google's
+	// own ID-token guidance; review 2026-09-30.
+	if !gmail && claims.Hd == "" {
+		httpErr(w, http.StatusForbidden, "this Google account doesn't use a Gmail address — sign in with a Gmail account")
+		return
+	}
 
+	// The key fetch may have spent most of the request's budget; the account
+	// writes get their own, so a slow verify cannot fail a write half-way.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Second)
+	defer cancel()
+	// Unconfirmed sign-ups past their link are dead (authRegister purges the
+	// same way). Purging first means a stale squat is deleted, not claimed, and
+	// the owner gets a fresh account under a name of their own.
+	if err := d.St.PurgeStaleUnverified(ctx, time.Now().Add(-verifyTTL)); err != nil {
+		slog.Warn("google sign-in: stale unverified purge failed", "err", err)
+	}
 	uid, username, verified, found, err := d.St.AccountByEmail(ctx, email)
 	if err != nil {
 		httpInternal(w, err)
@@ -343,10 +367,11 @@ func (d Deps) authGoogle(w http.ResponseWriter, r *http.Request) {
 				httpInternal(w, err)
 				return
 			}
-			release := d.St.Priority()
-			err = d.St.ClaimUnverified(ctx, uid, hash)
-			release()
-			if err != nil {
+			err = d.prioritized(func() error { return d.St.ClaimUnverified(ctx, uid, email, hash) })
+			if errors.Is(err, store.ErrClaimRaced) {
+				httpErr(w, http.StatusConflict, "your account changed while you were signing in — try again")
+				return
+			} else if err != nil {
 				slog.Warn("google sign-in: claiming an unconfirmed account failed", "uid", uid, "err", err)
 				httpErr(w, http.StatusServiceUnavailable, "the server is busy — try again in a minute")
 				return
@@ -385,16 +410,30 @@ func (d Deps) authGoogle(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
-	release := d.St.Priority()
-	uid, err = d.St.CreateVerifiedUser(ctx, username, email, hash)
-	release()
+	err = d.prioritized(func() (err error) {
+		uid, err = d.St.CreateVerifiedUser(ctx, username, email, hash)
+		return err
+	})
 	if err != nil {
-		// A unique-index race with a concurrent sign-up of the same name or address.
-		httpErr(w, http.StatusConflict, "that account was just created elsewhere — try again")
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			// A concurrent sign-up took the name or the address first.
+			httpErr(w, http.StatusConflict, "that account was just created — try signing in again")
+		} else {
+			slog.Warn("google sign-up: create failed", "err", err)
+			httpErr(w, http.StatusServiceUnavailable, "the server is busy — try again in a minute")
+		}
 		return
 	}
 	slog.Info("google sign-up", "uid", uid, "username", username)
 	d.googleSession(ctx, w, r, uid, username)
+}
+
+// prioritized runs one account write ahead of the worker fleet. The hold is
+// released by defer, so even a panicking write cannot leave the gate stuck
+// (a stuck hold would stall every main-writer statement by up to 3s).
+func (d Deps) prioritized(write func() error) error {
+	defer d.St.Priority()()
+	return write()
 }
 
 // googleSession signs the account in on a fresh time budget: the account

@@ -32,6 +32,12 @@ type GsiId = {
 
 // One script per page; a failed load clears the promise so a remount retries.
 let gsiPromise: Promise<void> | null = null;
+
+// Google keeps ONE callback per page, so initialize once per client ID and route
+// each token to whichever button is mounted now. None mounted = the token is
+// dropped: a popup finished after leaving the page signs nobody in.
+let initializedFor: string | null = null;
+let onCredential: ((credential: string) => void) | null = null;
 function loadGsi(): Promise<void> {
   if (gsiPromise) return gsiPromise;
   gsiPromise = new Promise((resolve, reject) => {
@@ -84,6 +90,8 @@ export default function GoogleButton({
 
   const [clientId, setClientId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A second popup while the first token is being exchanged would post twice.
+  const busyRef = useRef(false);
 
   useEffect(() => {
     let live = true;
@@ -103,30 +111,38 @@ export default function GoogleButton({
   useEffect(() => {
     if (!clientId) return;
     let live = true;
+    const handle = async (credential: string) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setBusy(true);
+      try {
+        const me = await api.googleSignIn(credential);
+        router.replace((me.member ?? !me.isAdmin) ? "/today" : "/dashboard");
+      } catch (err) {
+        busyRef.current = false;
+        setBusy(false);
+        onErrorRef.current?.(
+          err instanceof ApiError ? err.message : "Google sign-in failed — try again"
+        );
+      }
+    };
     loadGsi()
       .then(() => {
         if (!live) return;
         const el = boxRef.current;
         const id = window.google?.accounts?.id;
         if (!el || !id) return;
-        id.initialize({
-          client_id: clientId,
-          ux_mode: "popup",
-          auto_select: false,
-          cancel_on_tap_outside: true,
-          callback: async ({ credential }) => {
-            setBusy(true);
-            try {
-              const me = await api.googleSignIn(credential);
-              router.replace(me.isAdmin ? "/dashboard" : "/today");
-            } catch (err) {
-              setBusy(false);
-              onErrorRef.current?.(
-                err instanceof ApiError ? err.message : "Google sign-in failed — try again"
-              );
-            }
-          },
-        });
+        if (initializedFor !== clientId) {
+          id.initialize({
+            client_id: clientId,
+            ux_mode: "popup",
+            auto_select: false,
+            cancel_on_tap_outside: true,
+            callback: ({ credential }) => onCredential?.(credential),
+          });
+          initializedFor = clientId;
+        }
+        onCredential = handle;
         el.innerHTML = "";
         // Google draws a fixed-width button; fit it to the panel (200-400px).
         const width = Math.max(200, Math.min(400, Math.floor(el.getBoundingClientRect().width || 320)));
@@ -146,13 +162,18 @@ export default function GoogleButton({
       });
     return () => {
       live = false;
+      if (onCredential === handle) onCredential = null;
     };
   }, [clientId, text, router]);
 
   if (!clientId) return null;
   return (
     <div className="mb-2">
-      <div ref={boxRef} className="flex min-h-[44px] w-full justify-center" aria-busy={busy} />
+      <div
+        ref={boxRef}
+        className={`flex min-h-[44px] w-full justify-center${busy ? " pointer-events-none opacity-50" : ""}`}
+        aria-busy={busy}
+      />
       {busy && (
         <p role="status" className="mt-2 text-center text-xs text-[var(--dim)]">
           Signing you in…

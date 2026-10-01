@@ -140,3 +140,56 @@ func TestVerifyEmailIsAtomic(t *testing.T) {
 		t.Fatalf("second use: err=%v, want ErrTokenInvalid", err)
 	}
 }
+
+// ClaimUnverified must claim only the row it was handed: same address, still
+// unconfirmed. An owner who confirmed by email a moment before keeps the
+// password they chose, and a row whose address differs (a deleted id reused by
+// a stranger's sign-up) is left alone.
+func TestClaimUnverifiedRechecksTheRow(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "claim.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+	hashOf := func(uid int64) string {
+		var h string
+		if err := st.db.QueryRow(`SELECT pass_hash FROM users WHERE id=?`, uid).Scan(&h); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+
+	confirmed, err := st.CreateVerifiedUser(ctx, "owner", "owner@gmail.com", "owners-own-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClaimUnverified(ctx, confirmed, "owner@gmail.com", "claim-hash"); err != ErrClaimRaced {
+		t.Fatalf("claiming a confirmed account: err=%v, want ErrClaimRaced", err)
+	}
+	if h := hashOf(confirmed); h != "owners-own-hash" {
+		t.Fatalf("a confirmed owner's password was replaced (now %q)", h)
+	}
+
+	stranger, err := st.CreateUserWithEmail(ctx, "stranger", "stranger@gmail.com", "strangers-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClaimUnverified(ctx, stranger, "victim@gmail.com", "claim-hash"); err != ErrClaimRaced {
+		t.Fatalf("claiming a row with another address: err=%v, want ErrClaimRaced", err)
+	}
+	if h := hashOf(stranger); h != "strangers-hash" {
+		t.Fatalf("a row with another address was claimed (hash now %q)", h)
+	}
+
+	squat, err := st.CreateUserWithEmail(ctx, "squatter", "victim@gmail.com", "squatters-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ClaimUnverified(ctx, squat, "victim@gmail.com", "claim-hash"); err != nil {
+		t.Fatalf("claiming an unconfirmed squat: %v", err)
+	}
+	if _, _, verified, _, _ := st.AccountByEmail(ctx, "victim@gmail.com"); !verified || hashOf(squat) != "claim-hash" {
+		t.Fatalf("the squat was not claimed: verified=%v hash=%q", verified, hashOf(squat))
+	}
+}

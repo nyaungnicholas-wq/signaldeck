@@ -144,21 +144,38 @@ func (s *Store) CreateVerifiedUser(ctx context.Context, username, email, passHas
 	return res.LastInsertId()
 }
 
+// ErrClaimRaced means the account changed between the lookup and the claim:
+// its owner confirmed it, or it was deleted and its id reused (users.id is not
+// AUTOINCREMENT). Nothing was written; the caller should look it up again.
+var ErrClaimRaced = errors.New("the account changed during sign-in")
+
 // ClaimUnverified marks an unconfirmed address verified once its owner proves
 // it through Google, and replaces the password in the same transaction. The
 // unconfirmed account may be a squatter's, registered with someone else's
 // address and a password of the squatter's choosing; the new hash locks them
 // out, and setPasswordTx also voids every link and ends every session.
-func (s *Store) ClaimUnverified(ctx context.Context, uid int64, passHash string) error {
+//
+// The UPDATE re-checks the row it was given (same address, still unconfirmed)
+// before anything else is written: without it, an owner who confirmed by email
+// a moment earlier lost the password they had just chosen (review 09-30).
+func (s *Store) ClaimUnverified(ctx context.Context, uid int64, email, passHash string) error {
 	tx, err := s.authW().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck
-	if err := setPasswordTx(ctx, tx, uid, passHash); err != nil {
+	res, err := tx.ExecContext(ctx,
+		`UPDATE users SET email_verified=1
+		 WHERE id=? AND lower(email)=lower(?) AND COALESCE(email_verified,0)=0`, uid, email)
+	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE users SET email_verified=1 WHERE id=?`, uid); err != nil {
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n != 1 {
+		return ErrClaimRaced
+	}
+	if err := setPasswordTx(ctx, tx, uid, passHash); err != nil {
 		return err
 	}
 	return tx.Commit()

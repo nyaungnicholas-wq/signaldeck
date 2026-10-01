@@ -1,5 +1,5 @@
 @{
-    GeneratedUtc = '2026-09-20T00:02:53Z'
+    GeneratedUtc = '2026-10-01T06:26:45Z'
     Prefix = 'SignalDeck'
     Tasks = @(
         @{
@@ -157,6 +157,18 @@
             UserId = 'Nicholas_N'
             Enabled = $true
             Triggers = @('MSFT_TaskWeeklyTrigger','MSFT_TaskWeeklyTrigger','MSFT_TaskWeeklyTrigger','MSFT_TaskWeeklyTrigger','MSFT_TaskWeeklyTrigger')
+        }
+        @{
+            TaskName = 'SignalDeck Quick Tunnel'
+            Execute = 'powershell.exe'
+            Arguments = '-NoProfile -WindowStyle Hidden -Command "& ''C:\Program Files (x86)\cloudflared\cloudflared.exe'' tunnel --url http://127.0.0.1:8323 --no-autoupdate --logfile ''C:\Users\Nicholas_N\Desktop\claude code\signaldeck\logs\quicktunnel.log''; exit $LASTEXITCODE"'
+            WorkingDirectory = 'C:\Users\Nicholas_N\Desktop\claude code\signaldeck'
+            ExecutionTimeLimit = 'PT0S'
+            LogonType = 'S4U'
+            RunLevel = 'Limited'
+            UserId = 'Nicholas_N'
+            Enabled = $true
+            Triggers = @('MSFT_TaskLogonTrigger')
         }
         @{
             TaskName = 'SignalDeck Research-Liveness'
