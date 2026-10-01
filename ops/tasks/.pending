@@ -7,5 +7,9 @@
 # committed and had to be rebuilt. Names listed here are skipped by -Prune.
 #
 # Remove a line once its task is registered; the live export then owns it.
-# (empty) - both tunnel definitions were registered on 2026-09-19 and the live
-# export now owns them, so nothing is staged ahead of its install.
+#
+# The named Cloudflare tunnel is blocked on `cloudflared tunnel login` (an
+# owner credential; see CLOUDFLARE_TUNNEL.md). Its task is not registered;
+# the public URL comes from 'SignalDeck Quick Tunnel' meanwhile. Listed so
+# the installer reports it PENDING, not CREATE drift, and -Install skips it.
+SignalDeck Cloudflare Tunnel

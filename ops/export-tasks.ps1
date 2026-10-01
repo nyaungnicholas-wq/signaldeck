@@ -209,7 +209,7 @@ else {
             $xmlPath = Join-Path $XmlDir ($t.TaskName + '.xml')
             [System.IO.File]::WriteAllText($xmlPath, $normalizedXml, (New-Object System.Text.UTF8Encoding($false)))
         }
-        Write-Host "EXPORTED $($tasks.Count) tasks to $OutFile and $($tasks.Count) xml files to $XmlDir"
+        Write-Host "EXPORTED $(@($tasks).Count) tasks to $OutFile and $(@($tasks).Count) xml files to $XmlDir"
     }
     catch {
         Write-Error $_

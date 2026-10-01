@@ -300,6 +300,10 @@ try {
     $installer = Join-Path $PSScriptRoot 'install-windows-tasks.ps1'
     if (Test-Path $installer) {
         $report = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer 2>&1
+        # Report mode exits 0. Anything else is a probe that did not finish, and
+        # its error text matches none of the prefixes below - so without this
+        # the failure read as "no drift".
+        if ($LASTEXITCODE -ne 0) { $drift += ("drift probe exited " + $LASTEXITCODE) }
         foreach ($line in $report) {
             $text = "$line"
             if ($text -match '^(CREATE|UPDATE|REFUSE)\s+(\S.*?)\s*$') {

@@ -51,13 +51,30 @@ if ($xmlFiles.Count -eq 0) {
 }
 
 $userToken = "$env:USERDOMAIN\$env:USERNAME"
+# ops\tasks\.pending names definitions STAGED AHEAD of their install (e.g. a
+# tunnel waiting on a credential only the owner can supply). export-tasks -Prune
+# already honoured it; this script did not, so a staged definition with no live
+# task read as CREATE drift - check-task-health went red every day from
+# 2026-09-21 - and -Install would have registered a task that cannot run.
+$pending = @{}
+$pendingFile = Join-Path $xmlDir '.pending'
+if (Test-Path $pendingFile) {
+    foreach ($line in (Get-Content $pendingFile)) {
+        $n = $line.Trim()
+        if ($n -and -not $n.StartsWith('#')) { $pending[$n] = $true }
+    }
+}
 $tasks = @()
 foreach ($file in $xmlFiles) {
     $taskName = $file.BaseName
     $raw = Get-Content $file.FullName -Raw
     $want = ConvertTo-ComparableTaskXml $raw $userToken
     $live = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    if ($live -eq $null) {
+    if ($live -eq $null -and $pending.ContainsKey($taskName)) {
+        $status = 'PENDING'
+        $stateText = 'staged in ops\tasks\.pending - not installed'
+        $refused = $false
+    } elseif ($live -eq $null) {
         $status = 'CREATE'
         $stateText = ''
         $refused = $false
@@ -117,6 +134,8 @@ if (-not $Install) {
     $okCnt     = @($tasks | Where-Object {$_.Status -eq 'ok'}).Count
     $refCnt    = @($tasks | Where-Object {$_.Refused}).Count
     Write-Output ("would install: {0} new, {1} changed, {2} already correct, {3} refused" -f $newCnt,$updCnt,$okCnt,$refCnt)
+    $penCnt = @($tasks | Where-Object {$_.Status -eq 'PENDING'}).Count
+    if ($penCnt -gt 0) { Write-Output ("staged, not installed: {0} (ops\tasks\.pending)" -f $penCnt) }
     Write-Output "Nothing was changed. Re-run with -Install to apply."
     exit 0
 }
