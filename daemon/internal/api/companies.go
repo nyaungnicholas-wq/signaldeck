@@ -91,6 +91,14 @@ func (d Deps) companies(w http.ResponseWriter, r *http.Request) {
 		mcapMax = 0
 	}
 	trackedOnly := qp.Get("tracked") == "true" || qp.Get("tracked") == "1"
+	// A member gets the directory without vendor columns (see the end of this
+	// handler), and without the mcap filters too: mcap is shares x last close,
+	// so bisecting mcapMin/mcapMax against public share counts recovers a price
+	// from rows that print none.
+	member := d.isMember(r)
+	if member {
+		mcapMin, mcapMax = 0, 0
+	}
 
 	// 1. Directory rows (SQL-pushable filters; bounded by the ~10.4k-row map).
 	comps, err := d.St.ListCompanies(ctx, qp.Get("q"), qp.Get("sector"), qp.Get("exchange"))
@@ -201,6 +209,12 @@ func (d Deps) companies(w http.ResponseWriter, r *http.Request) {
 		end = total
 	}
 	page := rows[offset:end]
+	if member {
+		for i := range page {
+			page[i].Price, page[i].DayChangePct, page[i].Volume, page[i].Mcap = nil, nil, nil, nil
+			page[i].BarTs = 0
+		}
+	}
 
 	// 6. Facets (filter options) + directory freshness — cheap single queries.
 	sectors, _ := d.St.CompanySectors(ctx, 200)

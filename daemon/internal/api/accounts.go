@@ -43,10 +43,43 @@ const (
 )
 
 // memberRoutes are the only non-public routes a non-admin account may call on
-// a published deployment. Deliberately tiny: /api/watchlist is read-only and
-// user-scoped. /api/subscribe is NOT here — it starts global ingestion.
+// a published deployment. Every entry serves derived analytics or public-domain
+// filings, never a vendor price, bar, volume, quote or headline, and none spends
+// LLM budget. TestMemberRoutesServeNoLicensedData pins this against
+// datalicense.RestrictedRoutes and against the MIXED routes measured
+// 2026-09-30 (dashboard, screener, symbol, signal-report ...), whose "derived"
+// payloads still carry closes, volumes or price-quoting notes.
+//
+// Three entries are safe only because their handlers branch on isMember:
+// /api/watchlist drops closes, sparks, day change and score notes;
+// /api/companies drops price, volume and market cap, and ignores the mcap
+// filters that would let a caller bisect a price; /api/company/profile never
+// runs its LLM summary for a member.
 var memberRoutes = map[string]bool{
-	"/api/watchlist": true,
+	// The member's own list. watch/unwatch touch ONLY that list: /api/subscribe
+	// starts global ingestion and /api/unsubscribe deactivates a feed when its
+	// last watcher leaves, so neither is here.
+	"/api/watchlist": true, "/api/watch": true, "/api/unwatch": true,
+	"/api/companies": true,
+	// Validated regime and volatility forecasts, each with its measured accuracy.
+	"/api/regimes": true, "/api/vol-regime": true, "/api/market-regimes": true,
+	"/api/symbol-agent": true,
+	// Public-domain intel: SEC EDGAR filings, Form 4, 13F and XBRL fundamentals,
+	// FINRA short data, STOCK Act disclosures. FINRA's API terms allow passing
+	// its data to end users only while they are not charged for it: a paid
+	// member tier must drop /api/shorts and /api/short-interest first.
+	"/api/company/profile": true, "/api/filings": true, "/api/insiders": true,
+	"/api/institutions": true, "/api/dilution": true, "/api/fundamentals": true,
+	"/api/short-interest": true, "/api/shorts": true, "/api/congress": true,
+}
+
+// isMember is a signed-in account that is not the operator on a published
+// deployment: the caller the three branching handlers above strip fields for.
+// An anonymous caller is NOT a member; on a published deployment it never
+// reaches those handlers, and a private deployment's anonymous reads keep their
+// old shape.
+func (d Deps) isMember(r *http.Request) bool {
+	return userID(r) != 0 && !d.isOperator(r)
 }
 
 // Window limiters for the unauthenticated account writes. Package-level so all

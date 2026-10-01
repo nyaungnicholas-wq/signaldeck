@@ -438,6 +438,9 @@ func (d Deps) requiresAuth(path string) bool {
 	case path == "/api/watchlist",
 		path == "/api/subscribe",
 		path == "/api/unsubscribe",
+		// Per-user writes: anonymous, these would file rows under user 0.
+		path == "/api/watch",
+		path == "/api/unwatch",
 		strings.HasPrefix(path, "/api/portfolio"),
 		path == "/api/paper/order", // manual simulated book is per-user; never anonymous even under PublicReads
 		strings.HasPrefix(path, "/api/alerts"),

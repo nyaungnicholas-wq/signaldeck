@@ -124,6 +124,8 @@ func Serve(ctx context.Context, d Deps) error {
 		sharedVolRecordSWR.serve("record", w, r, d.volForecastRecord)
 	})
 	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
+	mux.HandleFunc("POST /api/watch", d.watch)     // member-safe: own watchlist only, no ingestion
+	mux.HandleFunc("POST /api/unwatch", d.unwatch) // member-safe: never deactivates a feed
 	d.registerQuant(mux)     // forecast, backtest, risk, correlation, portfolio
 	d.registerAI(mux)        // analyst, chat, filingmind, debate, status
 	d.registerCapstones(mux) // scenario simulation, portfolio optimizer
@@ -824,12 +826,35 @@ type watchRow struct {
 	TierThreshold int                     `json:"tierThreshold"`
 }
 
+// memberWatchRow is a MEMBER's watchlist row: identity and data freshness only.
+// watchRow carries the last close, the day change, up to 30 daily closes and
+// score components whose notes quote close/SMA/VWAP -- Alpaca rows its terms
+// forbid redistributing -- plus the retired directional ensemble's P(up).
+// Members read each symbol's validated regimes from /api/regimes instead.
+type memberWatchRow struct {
+	md.Symbol
+	LatestBarTs int64 `json:"latestBarTs"`
+}
+
 // watchlist returns the session user's watchlist rows (auth enforced by the
 // middleware, so userID is always non-zero here).
 func (d Deps) watchlist(w http.ResponseWriter, r *http.Request) {
 	syms, err := d.St.ListUserSymbols(r.Context(), userID(r))
 	if err != nil {
 		httpInternal(w, err)
+		return
+	}
+	if d.isMember(r) {
+		rows, err := d.buildWatchRows(r.Context(), syms)
+		if err != nil {
+			httpInternal(w, err)
+			return
+		}
+		out := make([]memberWatchRow, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, memberWatchRow{Symbol: row.Symbol, LatestBarTs: row.LatestBarTs})
+		}
+		writeJSON(w, out)
 		return
 	}
 	d.writeWatchRows(w, r, syms)
@@ -1611,6 +1636,57 @@ func (d Deps) unsubscribe(w http.ResponseWriter, r *http.Request) {
 		s.Active = false
 	}
 	writeJSON(w, s) // history is kept by design; only the live feed stops
+}
+
+// watch puts an already-tracked symbol on the caller's own watchlist and does
+// nothing else: the member-safe half of /api/subscribe, which also starts a
+// backfill and a live feed for a symbol it has not seen.
+func (d Deps) watch(w http.ResponseWriter, r *http.Request) {
+	s, ok := d.watchTarget(w, r)
+	if !ok {
+		return
+	}
+	if !s.Active {
+		httpErr(w, 422, s.Symbol+" is not currently tracked")
+		return
+	}
+	if err := d.St.AddUserSymbol(r.Context(), userID(r), s.ID); err != nil {
+		httpInternal(w, err)
+		return
+	}
+	writeJSON(w, s)
+}
+
+// unwatch takes a symbol off the caller's own watchlist and nothing else.
+// Unlike /api/unsubscribe it never deactivates ingestion, so a member cannot
+// switch a feed off by being its last watcher.
+func (d Deps) unwatch(w http.ResponseWriter, r *http.Request) {
+	s, ok := d.watchTarget(w, r)
+	if !ok {
+		return
+	}
+	if err := d.St.RemoveUserSymbol(r.Context(), userID(r), s.ID); err != nil {
+		httpInternal(w, err)
+		return
+	}
+	writeJSON(w, s)
+}
+
+func (d Deps) watchTarget(w http.ResponseWriter, r *http.Request) (md.Symbol, bool) {
+	var body struct {
+		Symbol string    `json:"symbol"`
+		Market md.Market `json:"market"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpErr(w, 400, "bad json: "+err.Error())
+		return md.Symbol{}, false
+	}
+	s, err := d.St.GetSymbol(r.Context(), strings.ToUpper(strings.TrimSpace(body.Symbol)), body.Market)
+	if err != nil {
+		httpErr(w, 404, "unknown symbol")
+		return md.Symbol{}, false
+	}
+	return s, true
 }
 
 // ── CSV exports ─────────────────────────────────────────────────────────

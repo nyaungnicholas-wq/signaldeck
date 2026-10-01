@@ -103,6 +103,10 @@ func newPublishedServerWith(t *testing.T, mutate func(*config.Config), seedAdmin
 	mux.HandleFunc("GET /api/watchlist", d.watchlist)
 	mux.HandleFunc("GET /api/trends", d.trends)
 	mux.HandleFunc("POST /api/subscribe", d.subscribe)
+	mux.HandleFunc("POST /api/unsubscribe", d.unsubscribe)
+	mux.HandleFunc("POST /api/watch", d.watch)
+	mux.HandleFunc("POST /api/unwatch", d.unwatch)
+	mux.HandleFunc("GET /api/companies", d.companies)
 	srv.Config.Handler = d.secure(mux)
 	srv.Start()
 
