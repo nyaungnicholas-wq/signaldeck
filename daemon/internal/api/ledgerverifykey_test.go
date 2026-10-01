@@ -54,9 +54,10 @@ func TestLedgerVerify_AResultIsFiledOnlyUnderTheKeyItsBuildRead(t *testing.T) {
 	appendLedgerRows(t, st, sym.ID, 6, 0.5)
 	getLedgerVerify(t, srv, "")
 	appendLedgerRows(t, st, sym.ID, 6, 0.5)
+	firstKey := verifyKey(t, Deps{St: st})
 	e := ageVerify(t, st, 3*time.Minute)
 	sharedLedgerVerifyCache.mu.Lock()
-	before := e.payload
+	before, born := e.payload, e.builtAt
 	sharedLedgerVerifyCache.mu.Unlock()
 	getLedgerVerify(t, srv, "")
 	waitNotRebuilding(t, e)
@@ -64,9 +65,21 @@ func TestLedgerVerify_AResultIsFiledOnlyUnderTheKeyItsBuildRead(t *testing.T) {
 	// keeps its own payload, neither evicted nor replaced by that build's.
 	sharedLedgerVerifyCache.mu.Lock()
 	kept := e.payload != nil && reflect.ValueOf(e.payload).Pointer() == reflect.ValueOf(before).Pointer()
+	at := e.builtAt
 	sharedLedgerVerifyCache.mu.Unlock()
 	if !kept {
 		t.Fatal("a refresh whose build read another key evicted or replaced the entry it was refreshing")
+	}
+	// Round 5 (F1): nor renewed its age. maxStale counts from the build that MADE
+	// the copy, so once that has passed the kept copy is not served.
+	if !at.Equal(born) {
+		t.Fatalf("a refresh that kept the copy renewed its age: builtAt %v, want the original build's %v", at, born)
+	}
+	sharedLedgerVerifyCache.mu.Lock()
+	e.builtAt = e.builtAt.Add(-(sharedLedgerVerifyCache.maxStale - 3*time.Minute) - time.Second)
+	sharedLedgerVerifyCache.mu.Unlock()
+	if _, ok := sharedLedgerVerifyCache.peek(firstKey); ok {
+		t.Fatal("the kept copy was served past maxStale from its original build")
 	}
 	t.Setenv(anchorEnvDisable, "1")
 	if v := getLedgerVerify(t, srv, ""); v.Tamper.AnchorCount != 2 || v.Tamper.FailingAnchors != 0 {
@@ -224,6 +237,82 @@ func TestLedgerVerify_AnUnreadableKeyIsAFaultNotWarming(t *testing.T) {
 	if err := d.WarmCaches(ctx); err == nil || !strings.Contains(err.Error(), "ledger-verify") {
 		t.Fatalf("WarmCaches err = %v; want the ledger-verify step counted as failed", err)
 	}
+}
+
+// Round 5 (F2): one key read that times out is load; ledgerKeyTimeoutStreak in
+// a row is not. Round 4 kept /proof on the last build and then warming for good
+// with nothing above an INFO skip. Now the 5th timeout in a row (a reader's or
+// the warmer's) logs one WARN naming the timeout, at most once a minute, and
+// while the streak holds the warmer's step FAILS (WarmCaches' note counts any
+// error but errWarming and errLedgerVerifyBusy). A reader is still served the
+// last build. A caller whose own deadline ended does not count, and one key read
+// that succeeds ends the streak.
+func TestLedgerVerify_KeyReadTimeoutsInARowWarnAndFailTheWarmer(t *testing.T) {
+	t.Setenv(ledgeranchor.EnvKeyPath, filepath.Join(t.TempDir(), "anchor.key"))
+	t.Setenv(anchorEnvDisable, "1")
+	d, st := newWave2Deps(t)
+	ctx, warmer := context.Background(), waitForBuild(context.Background())
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendLedgerRows(t, st, sym.ID, 5, 0.5)
+	built, err := d.cachedLedgerVerify(ctx) // the last build a reader is served
+	if err != nil {
+		t.Fatalf("setup: the first verify: %v", err)
+	}
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	ledgerKeyWarnedAt.Store(0)
+	warns := func() int { return strings.Count(logs.String(), "keep timing out") }
+	reader := func(when string) {
+		t.Helper()
+		if p, err := d.cachedLedgerVerify(ctx); err != nil || reflect.ValueOf(p).Pointer() != reflect.ValueOf(built).Pointer() {
+			t.Fatalf("%s: a reader got %v; want the last build", when, err)
+		}
+	}
+	failed := func(when string) {
+		t.Helper()
+		_, err := d.cachedLedgerVerify(warmer)
+		if err == nil || errors.Is(err, errWarming) || errors.Is(err, errLedgerVerifyBusy) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s: the warmer's ledger step: err %v; want the timeout, counted as a failure", when, err)
+		}
+	}
+	skipped := func(when string) {
+		t.Helper()
+		if _, err := d.cachedLedgerVerify(warmer); !errors.Is(err, errWarming) {
+			t.Fatalf("%s: the warmer's ledger step: err %v; want errWarming (skipped)", when, err)
+		}
+	}
+
+	release := starveLedgerReads(t, st)
+	ledgerKeyTimeouts.Store(0)
+	reader("timeout 1")
+	skipped("timeout 2")
+	reader("timeout 3")
+	skipped("timeout 4")
+	expired, cancel := context.WithTimeout(ctx, 0) // the caller's deadline, not the key's
+	defer cancel()
+	_, _ = d.cachedLedgerVerify(expired)
+	if n := warns(); n != 0 {
+		t.Fatalf("%d timeout WARN(s) before the 5th key timeout in a row:\n%s", n, logs.String())
+	}
+	failed("timeout 5")
+	if out := logs.String(); warns() != 1 || !strings.Contains(out, "deadline exceeded") || !strings.Contains(out, "consecutive=5") {
+		t.Fatalf("after the 5th key timeout in a row: want exactly 1 WARN naming the timeout:\n%s", out)
+	}
+	reader("timeout 6")
+	failed("timeout 7")
+	if n := warns(); n != 1 {
+		t.Fatalf("%d timeout WARNs within the minute; want 1:\n%s", n, logs.String())
+	}
+
+	release()
+	reader("a key read that succeeds")
+	starveLedgerReads(t, st)
+	skipped("the first timeout after a key read succeeded")
 }
 
 // T3 (round-3 mutant V5): a failed read of the hash stored at the newest

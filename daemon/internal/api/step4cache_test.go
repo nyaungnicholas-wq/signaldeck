@@ -505,12 +505,13 @@ func unreadableLedgerKey(t *testing.T, st *store.Store) {
 
 // starveLedgerReads holds every read connection, as a loaded daemon's pool is
 // held, so the verify key lookup runs out its bound (shortened to 100ms here)
-// with a deadline. The returned release frees them; cleanup does too.
+// with a deadline. The returned release frees them; cleanup does too, and ends
+// the key-timeout streak the test ran up, so no later test inherits it.
 func starveLedgerReads(t *testing.T, st *store.Store) (release func()) {
 	t.Helper()
 	orig := ledgerVerifyKeyTimeout
 	ledgerVerifyKeyTimeout = 100 * time.Millisecond
-	t.Cleanup(func() { ledgerVerifyKeyTimeout = orig })
+	t.Cleanup(func() { ledgerVerifyKeyTimeout = orig; ledgerKeyTimeouts.Store(0) })
 	var conns []*sql.Conn
 	release = func() {
 		for _, c := range conns {
@@ -1281,7 +1282,9 @@ func TestWarmCaches_ASlotRaceOrABusyVerifyIsSkippedNotCounted(t *testing.T) {
 
 // I (1): a verify that never ran because the semaphore was full (an anonymous
 // /api/ledger/anchors caller can fill it) proved nothing either way, so it
-// never evicts the cached proof; maxStale alone bounds that copy.
+// never evicts the cached proof; maxStale alone bounds that copy. Round 5 (F1):
+// nor does it renew the copy's age, so the copy is not served once maxStale has
+// passed since the build that MADE it.
 func TestLedgerVerify_ABusySemaphoreNeverEvictsTheProof(t *testing.T) {
 	t.Setenv(anchorEnvDisable, "1")
 	srv, st := newLedgerServer(t, nil)
@@ -1294,36 +1297,49 @@ func TestLedgerVerify_ABusySemaphoreNeverEvictsTheProof(t *testing.T) {
 		t.Fatalf("first verify: %d intact=%v", code, intact)
 	}
 	e := ageVerify(t, st, 3*time.Minute) // past the TTL, inside maxStale
+	sharedLedgerVerifyCache.mu.Lock()
+	born := e.builtAt
+	sharedLedgerVerifyCache.mu.Unlock()
+	held := true
+	free := func() {
+		if held {
+			for i := 0; i < ledgerVerifyConcurrency; i++ {
+				<-ledgerVerifySem
+			}
+			held = false
+		}
+	}
 	for i := 0; i < ledgerVerifyConcurrency; i++ {
 		ledgerVerifySem <- struct{}{}
 	}
-	if code, _ := verifyStatus(t, srv); code != http.StatusOK { // the stale read starts the refresh
-		t.Fatalf("stale read: %d, want 200", code)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		sharedLedgerVerifyCache.mu.Lock()
-		busy := e.rebuilding
-		sharedLedgerVerifyCache.mu.Unlock()
-		if !busy {
-			break
+	t.Cleanup(free)
+	// Each stale read serves the proof and starts a refresh the full semaphore
+	// refuses. Had the first refusal renewed the age, the second read would be
+	// fresh and start none.
+	for i := 0; i < 2; i++ {
+		if code, intact := verifyStatus(t, srv); code != http.StatusOK || !intact {
+			t.Fatalf("stale read %d with the semaphore full: %d intact=%v, want the kept proof", i, code, intact)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("the refresh never finished")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	for i := 0; i < ledgerVerifyConcurrency; i++ {
-		<-ledgerVerifySem
+		waitNotRebuilding(t, e)
 	}
 	sharedLedgerVerifyCache.mu.Lock()
-	kept := e.payload != nil
+	kept, at := e.payload != nil, e.builtAt
 	sharedLedgerVerifyCache.mu.Unlock()
 	if !kept {
 		t.Fatal("a refresh refused by the busy semaphore evicted the proof")
 	}
+	if !at.Equal(born) {
+		t.Fatalf("a refresh refused by the busy semaphore renewed the proof's age: builtAt %v, want the original build's %v", at, born)
+	}
+	sharedLedgerVerifyCache.mu.Lock()
+	e.builtAt = e.builtAt.Add(-(sharedLedgerVerifyCache.maxStale - 3*time.Minute) - time.Second)
+	sharedLedgerVerifyCache.mu.Unlock()
+	if code, intact := verifyStatus(t, srv); code == http.StatusOK && intact {
+		t.Fatal("the kept proof was served past maxStale from its original build")
+	}
+	free()
 	if code, intact := verifyStatus(t, srv); code != http.StatusOK || !intact {
-		t.Fatalf("after the semaphore freed: %d intact=%v, want the kept proof", code, intact)
+		t.Fatalf("after the semaphore freed: %d intact=%v, want a fresh verify", code, intact)
 	}
 }
 

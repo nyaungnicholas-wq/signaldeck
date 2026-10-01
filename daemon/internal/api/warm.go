@@ -57,7 +57,9 @@ var sharedMoversCache = newSWRBodyCache(respCacheTTL)
 // nothing and failed at nothing: it is logged at INFO as skipped and not
 // counted, or three busy passes in a row would read as a failing worker. The
 // next pass retries. A key that fails to read for any other reason
-// (errLedgerVerifyKey: a bad row, a missing table) is a real failure and counts.
+// (errLedgerVerifyKey: a bad row, a missing table) is a real failure and counts,
+// and so does a key read that times out once ledgerKeyTimeoutStreak reads in a
+// row have (cachedLedgerVerify returns that timeout, not errWarming).
 //
 // ORDER IS THE PRIORITY. /api/attribution leads, as it did before step 4 (review
 // #8): ~1s per horizon, and the one build the operator symbol page fetches ON

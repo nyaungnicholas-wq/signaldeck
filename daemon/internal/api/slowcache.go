@@ -231,12 +231,17 @@ type swrCache struct {
 	ttl time.Duration
 	// maxStale > 0 makes this a PROOF cache (the ledger verify, review #6): its
 	// payload is a claim, so how long a copy may stand in is bounded. A payload
-	// older than maxStale is never served, and a rebuild that RAN and failed
-	// evicts the payload, so the next reader gets the real error. A refresh that
-	// never ran (no cold build slot, or the verify semaphore full) keeps the copy,
-	// and so does one whose result belonged to another key (uncachedResult):
-	// maxStale alone bounds those. 0 serves the stale copy until a rebuild
-	// succeeds, as every other cache here does.
+	// is never served once maxStale has passed since its builtAt, which is the
+	// END of its build: up to maxStale plus one build time after the state the
+	// build read. Stale-while-revalidate still serves a copy up to that old to the
+	// first reader after a gap with no reads; only reads every TTL keep a served
+	// copy within one TTL plus one rebuild. A rebuild that RAN and failed evicts
+	// the payload, so the next reader gets the real error. A refresh that never
+	// ran (no cold build slot, or the verify semaphore full) keeps the copy, and
+	// so does one whose result belonged to another key (uncachedResult). Each
+	// keeps the copy's ORIGINAL builtAt, so maxStale from that build alone bounds
+	// those. 0 serves the stale copy until a rebuild succeeds, as every other
+	// cache here does.
 	maxStale time.Duration
 	ent      map[string]*swrEntry
 	created  time.Time // the boot, for the package's shared caches: see fromDiskMaxStale

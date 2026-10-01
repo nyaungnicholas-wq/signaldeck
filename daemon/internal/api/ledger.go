@@ -152,17 +152,28 @@ var ledgerVerifyKeyTimeout = 2 * time.Second
 // pool: answered 500, counted by the warmer, logged by warnLedgerVerifyKey.
 var errLedgerVerifyKey = errors.New("the ledger verify key could not be read")
 
+// ledgerKeyTimeoutStreak is how many key reads in a row may time out before
+// that stops reading as load (round 5, F2). One timeout is a busy pool; a pool
+// starved for good, or an anchor row too slow to read, would otherwise keep
+// /proof on the last build and then on warming indefinitely while the warmer
+// logged INFO skips. From the 5th in a row a WARN names the timeout (once a
+// minute) and the warmer counts its step as failed, until a key read succeeds.
+const ledgerKeyTimeoutStreak = 5
+
+// ledgerKeyTimeouts counts the default verify's key reads that timed out since
+// the last one that succeeded.
+var ledgerKeyTimeouts atomic.Int64
+
 // ledgerKeyWarnedAt is when warnLedgerVerifyKey last logged (unix nanos).
 var ledgerKeyWarnedAt atomic.Int64
 
-// warnLedgerVerifyKey logs a key fault at WARN at most once a minute: a bad row
-// fails every read the same way until someone removes it, so per-read logging
-// would only bury it.
-func warnLedgerVerifyKey(err error) {
+// warnLedgerVerifyKey logs a key fault or a timeout streak at WARN at most once
+// a minute: either fails every read the same way until it clears, so per-read
+// logging would only bury it.
+func warnLedgerVerifyKey(msg string, args ...any) {
 	now, last := time.Now().UnixNano(), ledgerKeyWarnedAt.Load()
 	if now-last >= int64(time.Minute) && ledgerKeyWarnedAt.CompareAndSwap(last, now) {
-		slog.Warn("ledger verify key unreadable: /api/ledger/verify answers 500 until it reads (logged at most once a minute)",
-			"err", err)
+		slog.Warn(msg+" (logged at most once a minute)", args...)
 	}
 }
 
@@ -189,14 +200,22 @@ var ledgerVerifyNow = time.Now
 // So a cached answer is not "the chain as it is now", and the payload does not
 // say it is: it is the verification as of computedAt at head seq headSeq (both
 // in the payload, beside the head hash; computedAt is stamped before the rows
-// are read). While the key can be read, a change after that (an append, a
+// are read). While the key can be read AND something reads it at least once a
+// TTL (the warmer does, every minute), a change after that (an append, a
 // tamper, a deletion) is reflected by the next rebuild, at most one TTL (2 min)
 // plus one rebuild later, and a new or re-signed anchor changes the key and
-// forces a fresh verify. Three paths serve a copy longer, up to maxStale (10
-// min) after it was built and never past it: a key read that times out (the
-// last build is served, see cachedLedgerVerify), a refresh that cannot run (no
-// cold build slot, or the verify semaphore full), and a refresh whose build read
-// another key (the chain moved mid-build). The last two keep the copy.
+// forces a fresh verify.
+//
+// maxStale (10 min) is counted from builtAt, the END of the build that made the
+// copy, not from its computedAt: a served copy can be up to maxStale plus that
+// build's time (at most ledgerVerifyBuildTimeout) past its computedAt, which it
+// carries. A copy that old is served to the first read after a gap with no
+// reads (stale-while-revalidate: served, then refreshed behind it), and on
+// three paths that serve it on rather than replace it: a key read that times
+// out (the last build is served, see cachedLedgerVerify), a refresh that cannot
+// run (no cold build slot, or the verify semaphore full), and a refresh whose
+// build read another key (the chain moved mid-build). The last two keep the
+// copy with its original builtAt, so none of them extends it past maxStale.
 //
 // Two indexed single-row lookups under one bound. Any error is returned: a
 // LedgerEntryHash failure never becomes the no-row key (round-3 V5). No row at
@@ -257,11 +276,26 @@ var lastLedgerVerifyKey atomic.Value
 // rebuild filed under a key nobody could read may answer for an anchor it never
 // checked. A reader gets the last BUILT answer under the cache's rules (never
 // past maxStale; a failed rebuild has already evicted it), or warming at once.
-// The warmer is told warming, so its step logs as skipped. Any OTHER key error
-// is a fault, not load: errLedgerVerifyKey, 500, counted by the warmer.
+// The warmer is told warming, so its step logs as skipped, until
+// ledgerKeyTimeoutStreak reads in a row have timed out: from then on a WARN
+// names the timeout and the warmer's step fails, until a key read succeeds.
+// Any OTHER key error is a fault, not load: errLedgerVerifyKey, 500, counted by
+// the warmer.
 func (d Deps) cachedLedgerVerify(ctx context.Context) (map[string]any, error) {
 	key, err := d.ledgerVerifyKey(ctx)
+	if err == nil {
+		ledgerKeyTimeouts.Store(0)
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() == nil { // the key's own bound ran out, not the caller's
+			if n := ledgerKeyTimeouts.Add(1); n >= ledgerKeyTimeoutStreak {
+				warnLedgerVerifyKey("ledger verify key reads keep timing out: /api/ledger/verify serves the last build (never past maxStale), then warming, until one reads",
+					"consecutive", n, "bound", ledgerVerifyKeyTimeout, "err", err)
+				if isWarmer(ctx) {
+					return nil, fmt.Errorf("%d ledger verify key reads in a row timed out: %w", n, err)
+				}
+			}
+		}
 		if k, _ := lastLedgerVerifyKey.Load().(string); !isWarmer(ctx) && strings.HasPrefix(k, d.St.CacheKey()+"|") {
 			if p, ok := sharedLedgerVerifyCache.peek(k); ok {
 				return p, nil
@@ -271,7 +305,7 @@ func (d Deps) cachedLedgerVerify(ctx context.Context) (map[string]any, error) {
 	}
 	if err != nil {
 		if ctx.Err() == nil { // a caller that left is not a fault
-			warnLedgerVerifyKey(err)
+			warnLedgerVerifyKey("ledger verify key unreadable: /api/ledger/verify answers 500 until it reads", "err", err)
 		}
 		return nil, fmt.Errorf("%w: %w", errLedgerVerifyKey, err)
 	}

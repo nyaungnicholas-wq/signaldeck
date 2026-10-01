@@ -319,7 +319,7 @@ async function get<T>(path: string, onWarming?: () => void): Promise<T> {
       const warming = res.status === 503 && code === "warming";
       if (res.status >= 500 && !warming) recordFailure();
       // In a browser a caller sees this only after get() waited out the 3 min cap.
-      if (warming) msg = "the daemon is still warming up after a restart; try again in a minute";
+      if (warming) msg = "the daemon is still preparing this result; try again in a minute";
       const ra = Number.parseInt(res.headers.get("retry-after") ?? "", 10);
       throw new ApiError(res.status, msg, code, Number.isFinite(ra) ? Math.max(1, ra) * 1000 : undefined);
     }
