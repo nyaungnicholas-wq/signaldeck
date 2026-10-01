@@ -412,6 +412,17 @@ func (d Deps) requiresAuth(path string) bool {
 		path == "/api/accuracy" || path == "/api/prereg" {
 		return false
 	}
+	// /api/ledger/range joins them (2026-09-30, Nicholas: "make the proof
+	// public"). The public anchors repo's verify.py pages it to recompute the
+	// ledger chain to each published head; measured through the live tunnel it
+	// answered 401 anonymously, which makes that check impossible for exactly the
+	// stranger it is for. Forecasts and hashes only, capped at 5000 rows a
+	// request. Deliberately ONLY this path: /api/ledger and /api/ledger/anchors
+	// stay closed on this posture (TestProofReceiptsArePublicButNarrowly), since
+	// the verifier needs neither and opening them was never decided.
+	if path == "/api/ledger/range" {
+		return false
+	}
 	// The landing page's waitlist form posts here anonymously. It was opened
 	// only in publicRoutes, so on a daemon published WITHOUT
 	// SIGNALDECK_PUBLIC_SURFACE (the live quick-tunnel posture) every visitor

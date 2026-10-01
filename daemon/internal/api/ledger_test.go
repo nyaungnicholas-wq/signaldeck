@@ -537,6 +537,13 @@ func TestLedgerRangeEndpoint(t *testing.T) {
 	if published.requiresAuth("/api/ledger/range") {
 		t.Error("/api/ledger/range must be anonymous on a published deployment: it is the verifier's input")
 	}
+	// The live quick-tunnel posture: no public surface flag, public reads closed.
+	// Measured 2026-09-30, the range read 401'd through the tunnel. Only this
+	// path opens; TestProofReceiptsArePublicButNarrowly keeps its neighbours shut.
+	tunnel := Deps{Cfg: config.Config{PublicSurface: false, PublicReads: false}}
+	if tunnel.requiresAuth("/api/ledger/range") {
+		t.Error("/api/ledger/range 401s anonymously on the tunnel posture: verify.py cannot reach it")
+	}
 }
 
 // TestLedgerVerify_KeyFailureDoesNotLeakThePath: the verify payload is a public
