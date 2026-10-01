@@ -481,6 +481,14 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	syms, err := o.St.ListSymbols(ctx, false) // inactive included: their rows still resolve
+	if err != nil {
+		return "", err
+	}
+	marketByID := make(map[int64]md.Market, len(syms))
+	for _, s := range syms {
+		marketByID[s.ID] = s.Market
+	}
 	for _, h := range md.Horizons {
 		tf := horizonTF(h)
 		// Only fetch rows old enough that the window COULD have closed.
@@ -549,7 +557,15 @@ func (o *OutcomeResolver) Run(ctx context.Context) (string, error) {
 			case okFwd && base.Close > 0:
 				// A forward bar far past the target means a data/session hole;
 				// resolving would mislabel a multi-period move as one horizon.
-				if fwd.Ts-target > 3*horizonSeconds(h) {
+				// A HOLIDAY IS NOT A HOLE (SD-55, the rule pipeline/predict.go
+				// carries): from the slackened target a pre-holiday Friday's next 1d
+				// bar is Tuesday, 3d6h out, and every such row was VOIDED for good.
+				// For stocks the NYSE calendar decides; crypto trades every day.
+				gap := fwd.Ts-target > 3*horizonSeconds(h)
+				if gap && marketByID[p.SymbolID] == md.Stocks {
+					gap = marketcal.SessionsClosedSince(target, time.Unix(fwd.Ts, 0)) > 0
+				}
+				if gap {
 					if err := o.St.ResolveOutcomeVoid(ctx, p.SymbolID, h, p.Ts); err != nil {
 						return "", err
 					}
