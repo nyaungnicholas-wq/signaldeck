@@ -609,3 +609,46 @@ func TestPredictionOutcomesForSymbol_GradedWindowOnly(t *testing.T) {
 		t.Fatalf("rows = %+v; want newest first, the latest call standing for its move", rows)
 	}
 }
+
+// The production form: once any bar exists the read runs with the stale-feed
+// WITH clause and the settlement filter, and the symbol/horizon filters are
+// appended to that SQL text. The case above seeds no bars, so it never
+// exercised this form.
+func TestPredictionOutcomesForSymbol_SettlementForm(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	aapl, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	msft, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "Microsoft")
+	day := int64(86400)
+	d0 := int64(GradingEpochTS) + 4*3600 // exchange midnight on the epoch day
+	var bars []md.Bar
+	for _, id := range []int64{aapl.ID, msft.ID} {
+		for i := int64(0); i < 4; i++ {
+			bars = append(bars, md.Bar{SymbolID: id, TF: md.TF1d, Ts: d0 + i*day, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1})
+		}
+	}
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.SettlementApplicable(ctx); err != nil || !ok {
+		t.Fatalf("SettlementApplicable = %v, %v; the fixture must take the production form", ok, err)
+	}
+	seedResolvedPred(t, st, aapl.ID, md.H1d, d0+23*3600, 0.7, 0.7, 0.01)      // right
+	seedResolvedPred(t, st, aapl.ID, md.H1d, d0+day+23*3600, 0.7, 0.7, -0.01) // wrong
+	seedResolvedPred(t, st, msft.ID, md.H1d, d0+23*3600, 0.7, 0.7, 0.01)      // another symbol
+
+	if _, correct, total, err := st.PredictionOutcomesForSymbol(ctx, aapl.ID, "1d", 50); err != nil || total != 2 || correct != 1 {
+		t.Fatalf("AAPL correct/total = %d/%d (err %v); want 1/2, MSFT's row excluded", correct, total, err)
+	}
+	// A stale feed on AAPL's second day takes that row out, and only for AAPL.
+	if _, err := st.w.ExecContext(ctx, `INSERT INTO dq_events (symbol_id, ts, kind) VALUES (?, ?, 'stale')`,
+		aapl.ID, d0+day+23*3600); err != nil {
+		t.Fatal(err)
+	}
+	if _, correct, total, err := st.PredictionOutcomesForSymbol(ctx, aapl.ID, "1d", 50); err != nil || total != 1 || correct != 1 {
+		t.Fatalf("after the stale event AAPL correct/total = %d/%d (err %v); want 1/1", correct, total, err)
+	}
+	if _, _, total, err := st.PredictionOutcomesForSymbol(ctx, msft.ID, "1d", 50); err != nil || total != 1 {
+		t.Fatalf("MSFT total = %d (err %v); want 1, untouched by AAPL's stale event", total, err)
+	}
+}
