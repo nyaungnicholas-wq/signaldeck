@@ -87,7 +87,8 @@ func TestExplicitEnvStillWins(t *testing.T) {
 // A9, third shape (2026-09-30): the live box publishes through a QUICK tunnel
 // whose log the daemon reads, while its allowlist still carried a stale ngrok
 // host. That stale host was the only thing keeping these defaults closed;
-// dropping it (as CLOUDFLARE_TUNNEL.md advises) would have opened them. The
+// dropping it (the 2026-09-20 CLOUDFLARE_TUNNEL.md said to; today's allows it
+// once the ngrok webhook tunnel is retired) would have opened them. The
 // tunnel log (or a public URL) must close them on its own.
 func TestOpenDefaultsClosedWhenATunnelLogOrPublicURLIsSet(t *testing.T) {
 	// An empty root: otherwise Load() fills the blanked vars below from the

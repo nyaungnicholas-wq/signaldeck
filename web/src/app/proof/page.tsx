@@ -21,7 +21,6 @@ import {
   ledgerVerify,
   ApiError,
   isWarming,
-  untilWarm,
   HORIZONS,
   type Horizon,
   type TrackRecord,
@@ -178,6 +177,31 @@ function LedgerProvenance({ lv }: { lv: LedgerVerifyResponse }) {
   );
 }
 
+/** The daemon was still answering "warming" when get() stopped waiting (3 min).
+ *  It is up and building, so this is a waiting state, not an error; nothing
+ *  asks again on its own from here, hence the reload. */
+function StillWarming({ what }: { what: string }) {
+  return (
+    <div
+      role="status"
+      className="panel flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-4 text-[0.75rem] leading-relaxed"
+    >
+      <span className="min-w-0 flex-1" style={{ color: "var(--dim)" }}>
+        The service restarted and is still preparing the {what}. It answered and refused nothing; reload in
+        a minute to see it.
+      </span>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="chip min-h-[40px] cursor-pointer px-4 transition-colors duration-150 hover:text-[var(--text)]"
+        style={{ color: "var(--accent)", borderColor: "var(--accent)" }}
+      >
+        Reload
+      </button>
+    </div>
+  );
+}
+
 export default function ProofPage() {
   // The horizon is the one thing a sceptic actually wants to vary here: a
   // record that only holds at one horizon is not much of a record. The API
@@ -193,6 +217,8 @@ export default function ProofPage() {
     horizon: Horizon;
     data: TrackRecord | null;
     err: string | null;
+    /** err is the daemon still answering "warming" after get()'s 3 min wait. */
+    warm?: boolean;
   } | null>(null);
   const [lv, setLv] = useState<LedgerVerifyResponse | null>(null);
   const [lvErr, setLvErr] = useState<string | null>(null);
@@ -208,7 +234,8 @@ export default function ProofPage() {
   // all, i.e. the request never got an answer.
   const [lvStatus, setLvStatus] = useState<number | null>(null);
   // The daemon answered 503 "warming": it restarted and is still building the
-  // cached result. Shown as a waiting state, never as an error.
+  // cached result. Shown as a waiting state, never as an error, including when
+  // it is still warming after get()'s 3 min wait (then with a reload button).
   const [lvWarming, setLvWarming] = useState(false);
   const [trWarming, setTrWarming] = useState(false);
 
@@ -239,15 +266,20 @@ export default function ProofPage() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
     const attempt = (n: number) => {
-      // "warming" is waited out inside untilWarm (Retry-After, 3 min cap), so
-      // the bounded retries below are only for 429 and a non-warming 503.
-      untilWarm(ledgerVerify, () => setLvWarming(true), () => alive)
+      // "warming" is waited out inside get() (Retry-After, 3 min cap), so the
+      // bounded retries below are only for 429 and a non-warming 503.
+      ledgerVerify(() => {
+        if (alive) setLvWarming(true);
+      })
         .then((l) => {
           if (alive) setLv(l);
         })
         .catch((e) => {
           if (!alive) return;
           const status = e instanceof ApiError ? e.status : null;
+          // True only when the daemon was STILL warming at the cap; any other
+          // error after a warming wait is an error, not a wait.
+          setLvWarming(isWarming(e));
           if ((status === 503 || status === 429) && !isWarming(e) && n < LEDGER_VERIFY_RETRIES) {
             setLvRetry(n + 1);
             timer = setTimeout(() => attempt(n + 1), LEDGER_RETRY_DELAY_MS);
@@ -272,9 +304,11 @@ export default function ProofPage() {
   useEffect(() => {
     let alive = true;
     const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
-    untilWarm(() => trackRecord(horizon), () => setTrWarming(true), () => alive)
+    trackRecord(horizon, () => {
+      if (alive) setTrWarming(true);
+    })
       .then((t) => alive && setTrState({ horizon, data: t, err: null }))
-      .catch((e) => alive && setTrState({ horizon, data: null, err: msg(e) }))
+      .catch((e) => alive && setTrState({ horizon, data: null, err: msg(e), warm: isWarming(e) }))
       .finally(() => alive && setTrWarming(false));
     return () => {
       alive = false;
@@ -332,7 +366,8 @@ export default function ProofPage() {
           />
         </div>
       )}
-      {lvErr && !lv && (
+      {lvErr && !lv && lvWarming && <StillWarming what="ledger check" />}
+      {lvErr && !lv && !lvWarming && (
         <ErrorState
           message={lvErr}
           // /proof is a PUBLIC page: most people who see this error have no
@@ -463,7 +498,8 @@ export default function ProofPage() {
           />
         </div>
       )}
-      {trErr && !tr && (
+      {trErr && !tr && settled?.warm && <StillWarming what="track record" />}
+      {trErr && !tr && !settled?.warm && (
         <ErrorState
           message={trErr}
           hint={

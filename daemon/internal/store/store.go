@@ -941,11 +941,12 @@ func (s *Store) ListSymbols(ctx context.Context, activeOnly bool) ([]md.Symbol, 
 	return out, rows.Err()
 }
 
-// ActiveSymbolByTicker is the first ACTIVE symbol, in ListSymbols order
-// (market, symbol), whose symbol equals ticker or whose base before the first
-// '/' does, ASCII case-insensitively ("BTC" finds "BTC/USD"). ok=false when none.
-// It returns the row the companyProfile loop over ListSymbols used to pick,
-// without materialising every active symbol per request.
+// ActiveSymbolByTicker is the first ACTIVE symbol whose symbol equals ticker
+// or whose base before the first '/' does, ASCII case-insensitively ("BTC"
+// finds "BTC/USD"), preferring any non-crypto row and otherwise in
+// ListSymbols order (market, symbol). ok=false when none. A stock "BTC" thus
+// wins over the pair "BTC/USD": crypto is not part of the member product, so
+// resolving a ticker to the crypto row would refuse a member the stock.
 // ponytail: NOCASE cannot use the BINARY (symbol, market) index, so SQLite
 // still scans the small symbols table in-engine; a seek needs a NOCASE index.
 func (s *Store) ActiveSymbolByTicker(ctx context.Context, ticker string) (md.Symbol, bool, error) {
@@ -959,7 +960,7 @@ func (s *Store) ActiveSymbolByTicker(ctx context.Context, ticker string) (md.Sym
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, symbol, market, name, active, added_at, stream FROM symbols
 		WHERE active=1 AND (symbol = ? COLLATE NOCASE OR (? != '' AND symbol LIKE ? ESCAPE '\'))
-		ORDER BY market, symbol LIMIT 1`, ticker, prefix, prefix).
+		ORDER BY (market = 'crypto'), market, symbol LIMIT 1`, ticker, prefix, prefix).
 		Scan(&sym.ID, &sym.Symbol, &mkt, &sym.Name, &active, &sym.AddedAt, &stream)
 	if errors.Is(err, sql.ErrNoRows) {
 		return md.Symbol{}, false, nil

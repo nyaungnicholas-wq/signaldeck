@@ -171,7 +171,9 @@ func RawDataNotice() string {
 //     realized forward return between two vendor closes).
 //   - DERIVED is forecasts, scores, probabilities, regime labels, indicator
 //     values such as close-vs-own-200d-mean, volatility forecasts, and
-//     aggregates over many rows.
+//     aggregates over many rows. An aggregate of realized returns counts as
+//     derived only over >= 10 rows; differencing successive snapshots is a
+//     known limit of publishing any running aggregate.
 //
 // Members and anonymous callers get DERIVED and public-domain data only.
 // api.TestMemberResponsesCarryNoVendorSentinels holds every member-reachable

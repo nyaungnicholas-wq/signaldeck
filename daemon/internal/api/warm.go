@@ -29,11 +29,12 @@ import (
 var sharedDashCache = newDashCache(dashboardTTL)
 
 // sharedMoversCache is the response cache in front of GET /api/movers, keyed
-// by the raw query so parameterized calls cache independently. The warmer
-// keeps the default-query entry ("" — what the dashboard's first paint
-// requests) hot. Perf wave 2026-07-24: moved from the synchronous respCache to
-// the SWR body cache — movers reaches the network for EDGAR mcap, and a TTL
-// lapse mid-fetch made a visitor wait ~20s for the inline rebuild.
+// by the canonical query so parameterized calls cache independently. The
+// warmer keeps the entry MoversPanel requests (limit=20) hot; the dashboard's
+// movers ride inside /api/dashboard. Perf wave 2026-07-24: moved from the
+// synchronous respCache to the SWR body cache — movers reaches the network for
+// EDGAR mcap, and a TTL lapse mid-fetch made a visitor wait ~20s for the inline
+// rebuild.
 var sharedMoversCache = newSWRBodyCache(respCacheTTL)
 
 // WarmCaches rebuilds every shared cache the way the handlers would (same
@@ -50,16 +51,25 @@ var sharedMoversCache = newSWRBodyCache(respCacheTTL)
 // below it was warmed and the first visitor paid a 129.4s /api/track-record
 // build that overran the 90s write deadline and delivered 0 bytes.
 //
-// ORDER IS THE PRIORITY. Member and /proof pages first: track-record (1d is on
-// /today's ProofStrip and /proof; 1w and 1h are /proof's horizon picker), then
-// /api/regimes (/today, /watchlist, /market/regimes, the member symbol view),
-// then /api/ledger/verify (/proof), then the volatility record (/volatility).
-// All four are also persisted, so after a restart they serve their last good
-// body at once while this pass rebuilds them. Everything else follows, in its
-// old order: attribution, then the operator dashboard and the slow pages.
+// ORDER IS THE PRIORITY. /api/attribution leads, as it did before step 4 (review
+// #8): ~1s per horizon, and the one build the operator symbol page fetches ON
+// MOUNT. Measured on a cold daemon, a pass had not reached it 11 minutes in when
+// it sat behind the dashboard, and behind the member pages after a restart the
+// persisted entries' refreshes held both cold slots and it ended "warming".
+// Then the member and /proof pages: track-record (1d is on /today's ProofStrip
+// and /proof; 1w and 1h are /proof's horizon picker), /api/regimes (/today,
+// /watchlist, /market/regimes, the member symbol view), /api/ledger/verify
+// (/proof), the volatility record (/volatility). Then the operator pages.
 //
 // The context is marked waitForBuild: the warmer waits each cold build out,
-// where a visitor would be answered "warming" after coldServeWait.
+// where a visitor would be answered "warming" after coldServeWait, and refreshes
+// a stale or persisted entry inline, so it holds at most one cold slot.
+//
+// EVERY KEY IS ONE THE WEB REQUESTS (review #12), spelled as web/src spells it,
+// because a warmed key nobody reads is a 20-40s build every TTL for nothing
+// while the key the page does read builds cold in front of a visitor. Nothing
+// in web/src requests /api/predictions/latest or /api/xs-factor, so neither is
+// warmed. TestWarmCaches_WarmsTheKeysTheWebRequests pins the list.
 func (d Deps) WarmCaches(ctx context.Context) error {
 	ctx = waitForBuild(ctx)
 	var errs []error
@@ -90,6 +100,16 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 		}
 	}
 
+	// /api/attribution: the fleet-wide live grade both horizons share.
+	for _, h := range []md.Horizon{md.H1d, md.H1w} {
+		hh := h
+		_, err := sharedAttributionLiveCache.get(ctx, attributionCacheKey(d.St, hh),
+			func(c context.Context) (map[string]any, error) {
+				return d.buildAttributionLive(c, hh)
+			})
+		note("attribution "+string(hh), err)
+	}
+
 	for _, h := range []md.Horizon{md.H1d, md.H1w, md.H1h} {
 		_, err := d.cachedTrackRecord(ctx, h)
 		step("track-record "+string(h), err)
@@ -103,51 +123,34 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	// visitor who arrived before a human had paid the build.
 	warmBody("/api/vol-forecast/record", d.cacheFile(volRecordCacheName), d.St.CacheKey()+"|record", sharedVolRecordSWR, d.volForecastRecord)
 
-	// /api/attribution: the cheapest of the slow builds (~1s per horizon, one
-	// ledger grade covers every symbol) and the one the OPERATOR symbol page
-	// fetches on mount. It led this list until the member pages above did.
-	for _, h := range []md.Horizon{md.H1d, md.H1w} {
-		hh := h
-		_, err := sharedAttributionLiveCache.get(ctx, attributionCacheKey(d.St, hh),
-			func(c context.Context) (map[string]any, error) {
-				return d.buildAttributionLive(c, hh)
-			})
-		note("attribution "+string(hh), err)
-	}
 	_, err = sharedDashCache.get(ctx, d)
 	step("dashboard", err)
-	// Movers: the default-query entry ("") the dashboard's first paint reads.
-	warmBody("/api/movers", "", "", sharedMoversCache, d.movers)
-	// /api/predictions/latest: the latest-per-symbol self-join over 240k
-	// prediction rows (~45s measured) — the SIGNALS hub's first paint.
-	for _, h := range []md.Horizon{md.H1d, md.H1w} {
-		hh := h
-		_, err := sharedPredictionsCache.get(ctx, fmt.Sprintf("%s|%s", d.St.CacheKey(), hh),
-			func(c context.Context) (map[string]any, error) {
-				return d.buildPredictionsLatest(c, hh)
-			})
-		step("predictions "+string(hh), err)
-	}
+	// Movers: /market/overview's MoversPanel, limit 20 (the dashboard's movers
+	// come inside /api/dashboard).
+	warmBody("/api/movers?limit=20", "", "limit=20", sharedMoversCache, d.movers)
 
 	// Body-cached slow pages (perf wave 2026-07-24, measured): composite/top
-	// 40s, honesty 22.7s, calibration 22.6s, datastats >30s, macro 5.9s. Warm
-	// each default-query entry through the same cache the route serves from —
+	// 40s, honesty 22.7s, calibration 22.6s, datastats >30s, macro 5.9s. Each
+	// key is the one its page sends, through the cache the route serves from —
 	// on a hot cache this costs a map lookup; when stale, the warmer is the one
 	// caller that eats the rebuild.
-	warmBody("/api/composite/top", "", "", sharedCompositeSWR, d.compositeTop)
-	warmBody("/api/honesty", "", d.St.CacheKey()+"|", sharedHonestySWR, d.honesty)
-	warmBody("/api/calibration", "", d.St.CacheKey()+"|", sharedCalibrationSWR, d.calibration)
+	//   - composite/top: CompositeLeaderboard fetches 500 rows at its default 1d.
+	//   - honesty and calibration: /lab/honesty and the predictions calibration
+	//     panel at 1d (their default, which keys as "") and 1w.
+	warmBody("/api/composite/top?limit=500", "", "limit=500", sharedCompositeSWR, d.compositeTop)
+	warmBody("/api/honesty?horizon=1d", "", d.St.CacheKey()+"|", sharedHonestySWR, d.honesty)
+	warmBody("/api/honesty?horizon=1w", "", d.St.CacheKey()+"|horizon=1w", sharedHonestySWR, d.honesty)
+	warmBody("/api/calibration?horizon=1d", "", d.St.CacheKey()+"|", sharedCalibrationSWR, d.calibration)
+	warmBody("/api/calibration?horizon=1w", "", d.St.CacheKey()+"|horizon=1w", sharedCalibrationSWR, d.calibration)
 	warmBody("/api/datastats", "", "datastats", sharedDatastatsSWR, d.datastats)
 	warmBody("/api/macro", "", "macro", sharedMacroSWR, d.macro)
 	// The screener and the two flagship paper books: the workspace's first
-	// clicks after the dashboard, and the two slowest under worker load.
+	// clicks after the dashboard, and the two slowest under worker load. The
+	// paper route keys on the raw query, and lib/api.ts paper() always sends
+	// &trades=100.
 	warmBody("/api/screener", "", d.St.CacheKey()+"|screener", sharedScreenerSWR, d.screener)
-	warmBody("/api/paper?strategy=flagship-1d", "", d.St.CacheKey()+"|paper|strategy=flagship-1d", sharedPaperSWR, d.paper)
-	warmBody("/api/paper?strategy=flagship-1w", "", d.St.CacheKey()+"|paper|strategy=flagship-1w", sharedPaperSWR, d.paper)
-	// /api/xs-factor: recomputes the whole cross-section at read time from ~300
-	// trailing daily bars per active symbol, so a cold build must land on the
-	// warmer, never on the first visitor. Default query (21d / stocks / 50).
-	warmBody("/api/xs-factor", "", xsFactorWarmKey(d.St), sharedXSFactorSWR, d.xsFactor)
+	warmBody("/api/paper?strategy=flagship-1d&trades=100", "", d.St.CacheKey()+"|paper|strategy=flagship-1d&trades=100", sharedPaperSWR, d.paper)
+	warmBody("/api/paper?strategy=flagship-1w&trades=100", "", d.St.CacheKey()+"|paper|strategy=flagship-1w&trades=100", sharedPaperSWR, d.paper)
 	// /api/research-ledger goes LAST: it is the most expensive build here, so
 	// it must not delay the routes above it.
 	//

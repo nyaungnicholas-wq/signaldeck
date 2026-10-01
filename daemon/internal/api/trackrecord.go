@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -95,6 +96,9 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 		httpInternal(w, err)
 		return
 	}
+	if !d.isOperator(r) {
+		resp = withoutThinReturnMeans(resp)
+	}
 	writeJSON(w, resp)
 }
 
@@ -113,7 +117,72 @@ func (d Deps) trackRecordCached(w http.ResponseWriter, r *http.Request) {
 		httpCacheErr(w, err)
 		return
 	}
+	if !d.isOperator(r) {
+		resp = withoutThinReturnMeans(resp)
+	}
 	writeJSON(w, resp)
+}
+
+// minPublicReturnN is the fewest rows a mean of realized returns is computed
+// over before anyone but the operator is served it (the licence line in
+// datalicense.go): a mean over one row is that row's return.
+const minPublicReturnN = 10
+
+// withoutThinReturnMeans is the non-operator view of a track-record payload:
+// every byMarket row keeps its n and rates and loses meanFwd when that mean
+// is taken over fewer than minPublicReturnN rows (absent, not zero). It
+// copies rather than edits in place, because resp is the cached payload both
+// tiers share (the same rule as withoutCryptoForecasts). A payload loaded
+// from disk after a restart is decoded JSON (rows are map[string]any, n is a
+// json.Number), so both shapes are read; a row of any other shape is dropped,
+// since its n cannot be checked.
+func withoutThinReturnMeans(resp map[string]any) map[string]any {
+	rows, ok := resp["byMarket"]
+	if !ok || rows == nil {
+		return resp
+	}
+	var in []map[string]any
+	switch rs := rows.(type) {
+	case []map[string]any:
+		in = rs
+	case []any:
+		for _, row := range rs {
+			if m, ok := row.(map[string]any); ok {
+				in = append(in, m)
+			}
+		}
+	}
+	pub := make([]map[string]any, 0, len(in))
+	for _, row := range in {
+		c := make(map[string]any, len(row))
+		for k, v := range row {
+			c[k] = v
+		}
+		if n, ok := rowCount(row["n"]); !ok || n < minPublicReturnN {
+			delete(c, "meanFwd")
+		}
+		pub = append(pub, c)
+	}
+	out := make(map[string]any, len(resp))
+	for k, v := range resp {
+		out[k] = v
+	}
+	out["byMarket"] = pub
+	return out
+}
+
+// rowCount reads a row count from a built payload (int) or a decoded one.
+func rowCount(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case float64:
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		return int(i), err == nil
+	}
+	return 0, false
 }
 
 // cachedTrackRecord is one horizon's payload through the shared cache, persisted

@@ -24,6 +24,7 @@ import { useEffect, useState } from "react";
 import { tape, type TapeItem, type TapeResponse } from "@/lib/api";
 import { onRetry, requestRetry } from "@/lib/freshness";
 import { fmtPct, fmtPrice } from "@/lib/format";
+import { visibleInterval } from "@/lib/visibleInterval";
 
 function itemHref(it: TapeItem): string {
   if (it.kind === "vix") return "/market/macro";
@@ -105,11 +106,11 @@ export default function TickerTape({
         })
         .catch(() => alive && setFailCount((n) => n + 1)); // keep last-known tape; stale chip renders below
     load();
-    const t = setInterval(load, 60_000);
+    const stopPoll = visibleInterval(load, 60_000); // nothing from a hidden tab
     const offRetry = onRetry(load); // shared Retry affordances re-fire the fetch immediately
     return () => {
       alive = false;
-      clearInterval(t);
+      stopPoll();
       offRetry();
     };
   }, [driven]);

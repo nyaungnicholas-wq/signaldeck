@@ -10,6 +10,7 @@ import {
   type SectorAgg,
 } from "@/lib/api";
 import { ago } from "@/lib/format";
+import { visibleInterval } from "@/lib/visibleInterval";
 import Skeleton from "@/components/Skeleton";
 import ErrorState from "@/components/ErrorState";
 import ProOnly from "@/components/ProOnly";
@@ -55,10 +56,10 @@ export default function MacroCombinedPage() {
       api.ranking().then((r) => !dead && setRanking(r)).catch(() => !dead && setFailed((f) => addFailed(f, "ranking")));
     };
     pull();
-    const t = setInterval(pull, 120_000);
+    const stopPoll = visibleInterval(pull, 120_000); // nothing from a hidden tab
     return () => {
       dead = true;
-      clearInterval(t);
+      stopPoll();
     };
   }, []);
 

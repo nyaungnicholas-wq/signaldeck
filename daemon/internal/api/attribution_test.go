@@ -122,23 +122,23 @@ func TestCurrentStateFor_CachesAndTolerates(t *testing.T) {
 	}}
 
 	for i := 0; i < 3; i++ {
-		if got := d.currentStateFor(ctx, 1)[md.H1d]; got != "trend|hi" {
-			t.Fatalf("call %d: got state %q, want %q", i, got, "trend|hi")
+		if got, err := d.currentStateFor(ctx, 1); err != nil || got[md.H1d] != "trend|hi" {
+			t.Fatalf("call %d: got state %q (err %v), want %q", i, got[md.H1d], err, "trend|hi")
 		}
 	}
 	if n := atomic.LoadInt32(&calls); n != 1 {
 		t.Fatalf("CurrentState was called %d times, want 1 (the cache did not hold)", n)
 	}
 	// A different symbol is a different entry, so it must build again.
-	if got := d.currentStateFor(ctx, 2)[md.H1d]; got != "trend|hi" {
-		t.Fatalf("symbol 2: got state %q", got)
+	if got, err := d.currentStateFor(ctx, 2); err != nil || got[md.H1d] != "trend|hi" {
+		t.Fatalf("symbol 2: got state %q (err %v)", got[md.H1d], err)
 	}
 	if n := atomic.LoadInt32(&calls); n != 2 {
 		t.Fatalf("CurrentState called %d times after a second symbol, want 2", n)
 	}
 
-	if got := (Deps{St: st}).currentStateFor(ctx, 1); len(got) != 0 {
-		t.Fatalf("nil CurrentState hook: got %v, want empty", got)
+	if got, err := (Deps{St: st}).currentStateFor(ctx, 1); len(got) != 0 || err != nil {
+		t.Fatalf("nil CurrentState hook: got %v (err %v), want empty", got, err)
 	}
 }
 
@@ -168,8 +168,8 @@ func TestAttribution_CachedPerStore(t *testing.T) {
 	}
 
 	dA := Deps{St: stA}
-	if got := dA.attributionLiveFor(ctx, md.H1d, aaa.ID); got.N != 3 {
-		t.Fatalf("store A: got live N=%d, want 3", got.N)
+	if got, err := dA.attributionLiveFor(ctx, md.H1d, aaa.ID); err != nil || got.N != 3 {
+		t.Fatalf("store A: got live N=%d (err %v), want 3", got.N, err)
 	}
 
 	// B's answer must be its own (empty), not A's cached three observations —

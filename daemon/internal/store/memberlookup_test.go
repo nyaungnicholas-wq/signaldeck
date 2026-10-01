@@ -1,7 +1,8 @@
 package store
 
 // Equivalence tests for the two member per-symbol lookups rewritten in step 4
-// (2026-10-01): each new query must return exactly the rows the old one did.
+// (2026-10-01): each new query must return exactly the rows the old one did,
+// except where noted.
 
 import (
 	"context"
@@ -87,15 +88,24 @@ func TestInstHoldingsBySymbolMatchesGroupByJoin(t *testing.T) {
 	}
 }
 
-// oldResolve is companyProfile's loop over ListSymbols(ctx, true), as it was.
+// oldResolve is companyProfile's loop over ListSymbols(ctx, true), as it was,
+// with one deliberate change: it walks the non-crypto rows before the crypto
+// ones. The old loop met crypto first ("crypto" sorts before "stocks"), so a
+// stock whose ticker is a tracked pair's base resolved to the pair, which a
+// member is then refused (refuseMemberCrypto).
 func oldResolve(syms []md.Symbol, ticker string) (md.Symbol, bool) {
-	for _, s := range syms {
-		base := s.Symbol
-		if i := strings.IndexByte(base, '/'); i >= 0 {
-			base = base[:i]
-		}
-		if eqASCIIFold(s.Symbol, ticker) || eqASCIIFold(base, ticker) {
-			return s, true
+	for _, crypto := range []bool{false, true} {
+		for _, s := range syms {
+			if (s.Market == md.Crypto) != crypto {
+				continue
+			}
+			base := s.Symbol
+			if i := strings.IndexByte(base, '/'); i >= 0 {
+				base = base[:i]
+			}
+			if eqASCIIFold(s.Symbol, ticker) || eqASCIIFold(base, ticker) {
+				return s, true
+			}
 		}
 	}
 	return md.Symbol{}, false
@@ -148,9 +158,12 @@ func TestActiveSymbolByTickerMatchesListSymbolsLoop(t *testing.T) {
 
 	// The fixture must reach the cases that distinguish a correct lookup.
 	for ticker, want := range map[string]string{
-		"BTC":   "BTC/USD", // crypto sorts before stocks: the loop's first match wins
-		"A_B":   "A_B",     // an unescaped LIKE would have matched AXB/USD first
-		"eth":   "ETH/USD",
+		"BTC":   "BTC", // a stock and a crypto pair's base: the stock wins
+		"btc":   "BTC",
+		"A_B":   "A_B",
+		"A%":    "",        // an unescaped LIKE would have matched AXB/USD
+		"AXB":   "AXB/USD", // crypto only: the pair still resolves
+		"ETH":   "eth",
 		"X/Y":   "", // a ticker holding '/' never matches a base
 		"INACT": "", // inactive
 	} {

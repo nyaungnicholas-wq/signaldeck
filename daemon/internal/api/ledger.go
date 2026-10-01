@@ -116,7 +116,22 @@ var ledgerVerifySem = make(chan struct{}, ledgerVerifyConcurrency)
 // A rebuild runs exactly what the handler ran, maybeAnchor included, so anchors
 // are now also written by warmer-driven rebuilds: on the same AnchorDue cadence
 // check (one per MinInterval at most) and the same signing. ?full=1 stays live.
-var sharedLedgerVerifyCache = newSWRCache(2 * time.Minute)
+//
+// It is a PROOF cache (review #6): the result is a claim, so it never outlives
+// its evidence. A failed rebuild evicts it (the next reader gets the real error,
+// as production did before this cache), a copy older than 10 minutes is never
+// served, and it is NOT persisted: after a boot /proof waits for a verification
+// this process ran, never a previous process's or a previous database's.
+var sharedLedgerVerifyCache = &swrCache{ttl: 2 * time.Minute, maxStale: 10 * time.Minute, ent: map[string]*swrEntry{}}
+
+// ledgerVerifyBuildTimeout bounds one cached default verification (review #9).
+// The request path's 30s ledgerVerifyTimeout is too tight for a build that runs
+// for every visitor at once and queues its checkpoint write behind the single
+// writer (17s waits measured), but without a bound of its own a wedged build
+// held a ledgerVerifySem slot and a cold-build slot for the 10-minute detached
+// ceiling. Expiry releases both; the failed rebuild then evicts and the next
+// reader retries. A var only so the test can shorten it.
+var ledgerVerifyBuildTimeout = 2 * time.Minute
 
 // errLedgerVerifyBusy: ledgerVerifySem was full (finding A11). Answered 429.
 var errLedgerVerifyBusy = errors.New("a ledger verification is already running — retry shortly")
@@ -129,8 +144,7 @@ var lastAnchorSeq sync.Map
 // anchor. A new anchor — written by a rebuild here, by an operator script, or
 // over a regenerated chain — must reach the next reader, not wait out a TTL
 // behind a result computed before it existed. It is one indexed row, bounded at
-// 2s; past that the last seq seen (or, straight after a boot, the persisted
-// result's own key) stands in.
+// 2s; past that the last seq seen stands in.
 func (d Deps) ledgerVerifyKey(ctx context.Context) string {
 	actx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -146,22 +160,17 @@ func (d Deps) ledgerVerifyKey(ctx context.Context) string {
 	if v, ok := lastAnchorSeq.Load(d.St.CacheKey()); ok {
 		return d.St.CacheKey() + "|ledger-verify|a" + strconv.FormatInt(v.(int64), 10)
 	}
-	if k := persistedKey(d.cacheFile(ledgerVerifyCacheName)); strings.HasPrefix(k, d.St.CacheKey()+"|ledger-verify|") {
-		return k
-	}
 	return d.St.CacheKey() + "|ledger-verify|unknown"
 }
 
-const ledgerVerifyCacheName = "ledger-verify"
-
 // cachedLedgerVerify is the default verification through the shared cache.
 func (d Deps) cachedLedgerVerify(ctx context.Context) (map[string]any, error) {
-	return sharedLedgerVerifyCache.getAt(ctx, d.cacheFile(ledgerVerifyCacheName), d.ledgerVerifyKey(ctx), d.buildLedgerVerify)
+	return sharedLedgerVerifyCache.get(ctx, d.ledgerVerifyKey(ctx), d.buildLedgerVerify)
 }
 
 // buildLedgerVerify is the default (incremental) verification the handler used
-// to run per request, unchanged: the same semaphore, the same verification, the
-// same maybeAnchor, the same anchor check.
+// to run per request: the same semaphore, the same verification, the same
+// maybeAnchor, the same anchor check, under ledgerVerifyBuildTimeout.
 func (d Deps) buildLedgerVerify(ctx context.Context) (map[string]any, error) {
 	select {
 	case ledgerVerifySem <- struct{}{}:
@@ -169,6 +178,8 @@ func (d Deps) buildLedgerVerify(ctx context.Context) (map[string]any, error) {
 	default:
 		return nil, errLedgerVerifyBusy
 	}
+	ctx, cancel := context.WithTimeout(ctx, ledgerVerifyBuildTimeout)
+	defer cancel()
 	v, fullWalk, err := d.St.VerifyLedgerCached(ctx)
 	if err != nil {
 		return nil, err
@@ -178,7 +189,14 @@ func (d Deps) buildLedgerVerify(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ledgerVerifyPayload(v, fullWalk, av, anchoring), nil
+	out := ledgerVerifyPayload(v, fullWalk, av, anchoring)
+	// The anchor just written re-keys the cache, and this result already covers
+	// it (the anchor check ran after the write): file it under that key too, or
+	// the next reader pays a second cold verify (review #10).
+	if wrote, _ := anchoring["wrote"].(bool); wrote {
+		sharedLedgerVerifyCache.put(d.ledgerVerifyKey(ctx), out)
+	}
+	return out, nil
 }
 
 // anchorPolicy resolves the cadence from the environment.

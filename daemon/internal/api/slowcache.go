@@ -151,15 +151,26 @@ var errWarming = errors.New("warming")
 type waitForBuildKey struct{}
 
 // waitForBuild marks ctx as the warmer's: a cold get under it waits for the
-// build to finish (or ctx to end) instead of giving up after coldServeWait.
+// build to finish (or ctx to end) instead of giving up after coldServeWait, and
+// a stale or persisted entry is refreshed INLINE, awaited, never in a goroutine.
+//
+// The inline refresh is the point (review #8, 2026-10-01). Fired as goroutines,
+// the warmer's refreshes of the persisted track-record entries took BOTH cold
+// slots for a whole build (129s measured) within milliseconds of a boot, the
+// warmer moved straight on, and every cold build behind them, attribution
+// included, waited coldBuildWait and ended "warming". Awaited, the warmer holds
+// at most one slot at a time and the other stays free for visitors.
 func waitForBuild(ctx context.Context) context.Context {
 	return context.WithValue(ctx, waitForBuildKey{}, true)
 }
 
+// isWarmer reports whether ctx was marked by waitForBuild.
+func isWarmer(ctx context.Context) bool { return ctx.Value(waitForBuildKey{}) != nil }
+
 // coldDeadline is what a caller of a cold build waits on: nil (never fires) for
 // the warmer, coldServeWait for a request. stop releases the timer.
 func coldDeadline(ctx context.Context) (<-chan time.Time, func() bool) {
-	if ctx.Value(waitForBuildKey{}) != nil {
+	if isWarmer(ctx) {
 		return nil, func() bool { return false }
 	}
 	t := time.NewTimer(coldServeWait)
@@ -203,7 +214,13 @@ func recoverBuild(what string, err *error) {
 type swrCache struct {
 	mu  sync.Mutex
 	ttl time.Duration
-	ent map[string]*swrEntry
+	// maxStale > 0 makes this a PROOF cache (the ledger verify, review #6): its
+	// payload is a claim that must never outlive its evidence. A payload older
+	// than maxStale is never served, and a rebuild that fails evicts the payload
+	// instead of serving it on, so the next reader gets the real error. 0 serves
+	// the stale copy until a rebuild succeeds, as every other cache here does.
+	maxStale time.Duration
+	ent      map[string]*swrEntry
 }
 
 type swrEntry struct {
@@ -283,16 +300,37 @@ func (c *swrCache) getAt(ctx context.Context, file, key string,
 	}
 	e.usedSeq = lruTick()
 
+	if e.payload != nil && c.maxStale > 0 && time.Since(e.builtAt) >= c.maxStale {
+		e.payload, e.fromDisk = nil, false // a proof this old is not served
+	}
+
 	// Warm entry: serve immediately; when stale (or loaded from disk), kick ONE
-	// detached refresh.
+	// refresh: detached for a request, inline and awaited for the warmer.
 	if e.payload != nil {
 		p := e.payload
 		if (e.fromDisk || time.Since(e.builtAt) >= c.ttl) && !e.rebuilding {
 			e.rebuilding = true
-			go c.refresh(e, file, key, build)
+			if isWarmer(ctx) {
+				c.mu.Unlock()
+				if err := c.refresh(ctx, e, file, key, build); err != nil {
+					return nil, err
+				}
+				c.mu.Lock()
+				p = e.payload
+				c.mu.Unlock()
+				return p, nil
+			}
+			go c.refresh(context.Background(), e, file, key, build) //nolint:errcheck // logged inside
 		}
 		c.mu.Unlock()
 		return p, nil
+	}
+
+	// Too old to serve while its refresh is still running: that refresh fills
+	// the entry, and a second build of the same key would only contend with it.
+	if e.rebuilding {
+		c.mu.Unlock()
+		return nil, errWarming
 	}
 
 	// Cold entry: exactly one detached build per key; every caller for the SAME
@@ -352,20 +390,23 @@ func (c *swrCache) buildCold(bctx context.Context, cancel context.CancelFunc, e 
 	p, err = build(bctx)
 }
 
-// refresh rebuilds a warm entry in the background. Background refreshes read
-// the same four connections a cold build does, so they queue behind the same
-// ceiling. Losing the slot just abandons this refresh — the stale copy keeps
-// serving and the next stale hit tries again.
-func (c *swrCache) refresh(e *swrEntry, file, key string, build func(ctx context.Context) (map[string]any, error)) {
-	if !acquireColdSlot(context.Background()) {
+// refresh rebuilds a warm entry: in the background (parent Background) for a
+// request, inline for the warmer (parent its context, so shutdown ends it).
+// Refreshes read the same connections a cold build does, so they queue behind
+// the same ceiling. Losing the slot abandons this refresh (errWarming) — the
+// stale copy keeps serving and the next stale hit tries again.
+func (c *swrCache) refresh(parent context.Context, e *swrEntry, file, key string,
+	build func(ctx context.Context) (map[string]any, error),
+) error {
+	if !acquireColdSlot(parent) {
 		c.mu.Lock()
 		e.rebuilding = false
 		c.mu.Unlock()
-		return
+		return errWarming
 	}
 	defer releaseColdSlot()
 
-	bctx, cancel := detachedCtx()
+	bctx, cancel := context.WithTimeout(parent, detachedBuildTimeout)
 	defer cancel()
 	var np map[string]any
 	err := func() (err error) {
@@ -376,9 +417,22 @@ func (c *swrCache) refresh(e *swrEntry, file, key string, build func(ctx context
 	if err != nil {
 		c.mu.Lock()
 		e.rebuilding = false
+		// A proof cache drops a claim it just failed to re-prove. A verify that
+		// never ran (its semaphore was full) proved nothing either way, and an
+		// anonymous /api/ledger/anchors caller can fill that semaphore, so it is
+		// not allowed to evict; maxStale still bounds the copy.
+		evict := c.maxStale > 0 && !errors.Is(err, errLedgerVerifyBusy)
+		if evict {
+			e.payload, e.fromDisk = nil, false
+		}
 		c.mu.Unlock()
-		noteRebuildFailure("swr:"+key, err)
-		return
+		if evict {
+			slog.Warn("proof cache rebuild failed; the cached result is dropped and the next read rebuilds",
+				"cache", "swr:"+key, "err", err)
+		} else {
+			noteRebuildFailure("swr:"+key, err)
+		}
+		return err
 	}
 	// Persisted while rebuilding is still set, so two refreshes of one key can
 	// never race their writes and leave the older payload on disk.
@@ -387,6 +441,22 @@ func (c *swrCache) refresh(e *swrEntry, file, key string, build func(ctx context
 	c.mu.Lock()
 	e.payload, e.builtAt, e.fromDisk, e.rebuilding = np, at, false, false
 	c.mu.Unlock()
+	return nil
+}
+
+// put stores p under key as freshly built, for a build that knows its result
+// also answers a key other than the one it was started for (the ledger verify
+// that wrote the anchor its own key names, review #10).
+func (c *swrCache) put(key string, p map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.ent[key]
+	if e == nil {
+		c.evictLRULocked()
+		e = &swrEntry{}
+		c.ent[key] = e
+	}
+	e.payload, e.builtAt, e.fromDisk, e.usedSeq = p, time.Now(), false, lruTick()
 }
 
 // Shared instances. TTLs sit comfortably under the cadence of the workers that
@@ -509,38 +579,16 @@ func (c *swrBodyCache) serveAt(file, key string, w http.ResponseWriter, r *http.
 		body := e.body
 		if (e.fromDisk || time.Since(e.builtAt) >= c.ttl) && !e.rebuilding {
 			e.rebuilding = true
-			// The clone carries the DETACHED-WITH-CEILING context, not a bare
-			// Background: a handler re-issued here has no client to disconnect
-			// and would otherwise have nothing at all to stop it.
-			bctx, cancel := detachedCtx()
-			bg := r.Clone(bctx)
-			go func() {
-				defer cancel()
-				// Same ceiling as a cold build: a background refresh reads the
-				// same connections. Losing the slot abandons this refresh and
-				// keeps serving the stale body.
-				if !acquireColdSlot(context.Background()) {
-					c.mu.Lock()
-					e.rebuilding = false
-					c.mu.Unlock()
-					return
-				}
-				defer releaseColdSlot()
-
-				nb := swrRender(bg, h)
-				if nb == nil {
-					c.mu.Lock()
-					e.rebuilding = false
-					c.mu.Unlock()
-					noteRebuildFailure("swrbody:"+key, bctx.Err())
-					return
-				}
-				at := time.Now() // persisted before rebuilding clears: see swrCache.refresh
-				persistBody(file, key, at, nb)
-				c.mu.Lock()
-				e.body, e.builtAt, e.fromDisk, e.rebuilding = nb, at, false, false
+			if isWarmer(r.Context()) { // inline and awaited: see waitForBuild
 				c.mu.Unlock()
-			}()
+				c.refresh(r.Context(), r, e, file, key, h)
+				c.mu.Lock()
+				body = e.body
+			} else {
+				// Cloned now, while the request is still live; the refresh gives
+				// it the detached-with-ceiling context.
+				go c.refresh(context.Background(), r.Clone(context.Background()), e, file, key, h)
+			}
 		}
 		c.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -581,6 +629,38 @@ func (c *swrBodyCache) serveAt(file, key string, w http.ResponseWriter, r *http.
 	w.Header().Set("X-Cache", "miss")
 	w.WriteHeader(b.status)
 	_, _ = w.Write(b.body)
+}
+
+// refresh re-renders a warm body: in the background (parent Background) for a
+// request, inline for the warmer. Same ceiling as a cold build: a refresh reads
+// the same connections. Losing the slot, or a render that is not a 200, keeps
+// serving the stale body. The render's context has the detached ceiling: a
+// handler re-issued here has no client to disconnect and would otherwise have
+// nothing at all to stop it.
+func (c *swrBodyCache) refresh(parent context.Context, bg *http.Request, e *swrBodyEntry, file, key string, h http.HandlerFunc) {
+	if !acquireColdSlot(parent) {
+		c.mu.Lock()
+		e.rebuilding = false
+		c.mu.Unlock()
+		return
+	}
+	defer releaseColdSlot()
+
+	bctx, cancel := context.WithTimeout(parent, detachedBuildTimeout)
+	defer cancel()
+	nb := swrRender(bg.WithContext(bctx), h)
+	if nb == nil {
+		c.mu.Lock()
+		e.rebuilding = false
+		c.mu.Unlock()
+		noteRebuildFailure("swrbody:"+key, bctx.Err())
+		return
+	}
+	at := time.Now() // persisted before rebuilding clears: see swrCache.refresh
+	persistBody(file, key, at, nb)
+	c.mu.Lock()
+	e.body, e.builtAt, e.fromDisk, e.rebuilding = nb, at, false, false
+	c.mu.Unlock()
 }
 
 // renderCold renders one cold body under the process-wide ceiling (admission

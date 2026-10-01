@@ -12,10 +12,13 @@ package api
 // STALE while the rebuild runs. The body carries its own computedAt, so a page
 // can show how old it is.
 //
-// The file records the in-memory key it was built under and is served only to
-// that same key: the key carries the store identity (CacheKey) and, for the
-// ledger verify, the newest anchor, so a file written for anything else is
-// ignored rather than served.
+// The file records the in-memory key it was built under and the BUILD that
+// wrote it, and is served only to that same key in that same build, and only
+// while it is under persistMaxAge old (review #7). The key alone could not tell
+// processes apart: CacheKey is a per-process counter that is "st2" on every boot
+// of the daemon, so a deploy that changed how a payload is graded served the
+// previous binary's body as current, indefinitely if the new build kept failing.
+// The ledger verify is not persisted at all: it is a proof claim (ledger.go).
 
 import (
 	"bytes"
@@ -23,14 +26,47 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
 )
 
 // persistedBody is the on-disk record.
 type persistedBody struct {
 	Key        string          `json:"key"`
+	Build      string          `json:"build"`
 	ComputedAt time.Time       `json:"computedAt"`
 	Body       json.RawMessage `json:"body"`
+}
+
+// persistMaxAge is the oldest persisted body a boot will serve. Past it the
+// key builds cold: a day-old answer presented as the current one is worse than
+// a "warming" while the real one builds.
+const persistMaxAge = 24 * time.Hour
+
+// persistBuild identifies the running binary. A var only so tests can play
+// another build.
+var persistBuild = buildIdentity()
+
+// buildIdentity is the VCS revision the binary was built from ("+dirty" when
+// the tree was modified). A dirty or unstamped build does not pin the code, so
+// the executable's mtime is added; "" (nothing identifies it) turns
+// persistence off.
+func buildIdentity() string {
+	id := lineage.RevisionStamp()
+	if id == "" || strings.HasSuffix(id, "+dirty") {
+		exe, err := os.Executable()
+		if err != nil {
+			return ""
+		}
+		fi, err := os.Stat(exe)
+		if err != nil {
+			return ""
+		}
+		id += "@" + fi.ModTime().UTC().Format(time.RFC3339Nano)
+	}
+	return id
 }
 
 // cacheFile is where cache `name` persists for this daemon's database: next to
@@ -46,10 +82,10 @@ func (d Deps) cacheFile(name string) string {
 // persistBody writes body atomically. A failure costs only the next boot's warm
 // start, so it is logged, never returned.
 func persistBody(file, key string, at time.Time, body []byte) {
-	if file == "" || len(body) == 0 {
+	if file == "" || len(body) == 0 || persistBuild == "" {
 		return
 	}
-	b, err := json.Marshal(persistedBody{Key: key, ComputedAt: at.UTC(), Body: body})
+	b, err := json.Marshal(persistedBody{Key: key, Build: persistBuild, ComputedAt: at.UTC(), Body: body})
 	if err == nil {
 		err = writeFileAtomic(file, b)
 	}
@@ -95,7 +131,8 @@ func writeFileAtomic(path string, b []byte) error {
 	return os.Rename(f.Name(), path)
 }
 
-// loadPersistedBody returns the body persisted for exactly this key.
+// loadPersistedBody returns the body persisted for exactly this key by exactly
+// this build, if it is younger than persistMaxAge. Anything else is a cold build.
 func loadPersistedBody(file, key string) ([]byte, time.Time, bool) {
 	if file == "" {
 		return nil, time.Time{}, false
@@ -105,26 +142,11 @@ func loadPersistedBody(file, key string) ([]byte, time.Time, bool) {
 		return nil, time.Time{}, false
 	}
 	var pb persistedBody
-	if json.Unmarshal(raw, &pb) != nil || pb.Key != key || len(pb.Body) == 0 || pb.ComputedAt.IsZero() {
+	if json.Unmarshal(raw, &pb) != nil || pb.Key != key || len(pb.Body) == 0 || pb.ComputedAt.IsZero() ||
+		pb.Build == "" || pb.Build != persistBuild || time.Since(pb.ComputedAt) > persistMaxAge {
 		return nil, time.Time{}, false
 	}
 	return pb.Body, pb.ComputedAt, true
-}
-
-// persistedKey is the key file was built under ("" when there is none).
-func persistedKey(file string) string {
-	if file == "" {
-		return ""
-	}
-	raw, err := os.ReadFile(file)
-	if err != nil {
-		return ""
-	}
-	var pb struct {
-		Key string `json:"key"`
-	}
-	_ = json.Unmarshal(raw, &pb)
-	return pb.Key
 }
 
 // loadPersistedPayload decodes the persisted body into the payload form.

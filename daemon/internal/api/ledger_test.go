@@ -158,10 +158,12 @@ func TestLedgerVerify_AnchorsAndStatesWhatIsProven(t *testing.T) {
 			first.Tamper.LocalAnchorsReproduce, first.Tamper.ProvenAnteriorThroughSeq)
 	}
 
-	// Cadence: an immediate second call must not anchor again, and must say why.
-	second := getLedgerVerify(t, srv, "")
-	if second.Tamper.Anchoring.Wrote {
-		t.Error("second verify wrote another anchor inside the cadence window")
+	// Cadence: an immediate second verification must not anchor again, and must
+	// say why. ?full=1 runs one live: a default read now is the first result,
+	// served from the cache under the key its own anchor created (review #10).
+	second := getLedgerVerify(t, srv, "?full=1")
+	if second.Tamper.Anchoring.Wrote || second.Tamper.AnchorCount != 1 {
+		t.Errorf("second verify wrote another anchor inside the cadence window (anchorCount %d)", second.Tamper.AnchorCount)
 	}
 	if second.Tamper.Anchoring.Reason == "" {
 		t.Error("declined anchor with no stated reason")
@@ -625,6 +627,16 @@ func TestLedgerVerify_FailingOlderAnchorDominatesANewerGoodOne(t *testing.T) {
 		t.Fatalf("anchor over fabricated chain: wrote=%v reason=%q err=%v", wrote, reason, err)
 	}
 
+	// This is about what a FRESH default verification reports. The first one is
+	// cached under the key its own anchor created (review #10), so start cold,
+	// as after a restart.
+	sharedLedgerVerifyCache.mu.Lock()
+	for k := range sharedLedgerVerifyCache.ent {
+		if strings.HasPrefix(k, st.CacheKey()+"|") {
+			delete(sharedLedgerVerifyCache.ent, k)
+		}
+	}
+	sharedLedgerVerifyCache.mu.Unlock()
 	v := getLedgerVerify(t, srv, "")
 	if v.Tamper.FailingAnchors < 1 {
 		t.Fatalf("failingAnchors = %d — a regenerated chain read clean, so the summary is still checking only the newest anchor",

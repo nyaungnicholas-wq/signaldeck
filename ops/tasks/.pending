@@ -8,8 +8,9 @@
 #
 # Remove a line once its task is registered; the live export then owns it.
 #
-# The named Cloudflare tunnel is blocked on `cloudflared tunnel login` (an
-# owner credential; see CLOUDFLARE_TUNNEL.md). Its task is not registered;
-# the public URL comes from 'SignalDeck Quick Tunnel' meanwhile. Listed so
+# The named Cloudflare tunnel task below is not used: CLOUDFLARE_TUNNEL.md
+# (section 2) runs the named tunnel as the `cloudflared service install <token>`
+# Windows service instead, an owner step, and does not set this task up. The
+# public URL comes from 'SignalDeck Quick Tunnel' until that cutover. Listed so
 # the installer reports it PENDING, not CREATE drift, and -Install skips it.
 SignalDeck Cloudflare Tunnel

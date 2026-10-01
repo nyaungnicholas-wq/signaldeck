@@ -167,14 +167,14 @@ func TestWarmCachesFillsSharedCaches(t *testing.T) {
 		t.Fatal("dashboard cache not built by the warmer")
 	}
 	sharedMoversCache.mu.Lock()
-	e, ok := sharedMoversCache.ent[""]
+	e, ok := sharedMoversCache.ent["limit=20"] // MoversPanel's key (warm.go)
 	sharedMoversCache.mu.Unlock()
 	if !ok || len(e.body) == 0 {
-		t.Fatal("movers default cache entry not built by the warmer")
+		t.Fatal("movers limit=20 cache entry not built by the warmer")
 	}
 	// A subsequent handler request is a cache hit with the warmed body.
 	rec := httptest.NewRecorder()
-	sharedMoversCache.serve("", rec, httptest.NewRequest("GET", "/api/movers", nil), d.movers)
+	sharedMoversCache.serve("limit=20", rec, httptest.NewRequest("GET", "/api/movers?limit=20", nil), d.movers)
 	if rec.Header().Get("X-Cache") != "hit" {
 		t.Fatal("handler request after warm must be a cache hit")
 	}
