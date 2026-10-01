@@ -170,7 +170,7 @@ export default function SignupPage() {
                 required
                 minLength={3}
                 maxLength={32}
-                pattern="^[a-zA-Z0-9._-]+$"
+                pattern="^[a-zA-Z0-9._\-]+$"
               />
               <p className="-mt-3 mb-4 text-[10px] text-[var(--faint)]">
                 3-32 letters, digits, . _ -
