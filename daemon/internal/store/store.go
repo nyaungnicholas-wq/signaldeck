@@ -1090,8 +1090,14 @@ func (s *Store) BarAtOrBefore(ctx context.Context, symbolID int64, tf md.Timefra
 // Rollup aggregates a finer timeframe into a coarser one over [from, to).
 // bucket is the coarse bar length in seconds (3600 for 1h, 86400 for 1d).
 func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	_, err := s.w.ExecContext(ctx, `
-		INSERT OR REPLACE INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
+	return s.rollup(ctx, "INSERT OR REPLACE", symbolID, src, dst, bucket, from, to)
+}
+
+// rollup computes the coarse bars on the read pool and writes them with verb
+// ("INSERT OR REPLACE" / "INSERT OR IGNORE"). As one INSERT..SELECT, the
+// per-bucket subqueries held the write lock 5-7s per call (readThenWrite).
+func (s *Store) rollup(ctx context.Context, verb string, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
+	_, err := s.readThenWrite(ctx, `
 		SELECT symbol_id, ?, (ts/?)*? AS bts,
 		  (SELECT open FROM bars b2 WHERE b2.symbol_id=b.symbol_id AND b2.tf=b.tf
 		     AND b2.ts/? = b.ts/? ORDER BY b2.ts LIMIT 1),
@@ -1102,8 +1108,9 @@ func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timefram
 		FROM bars b
 		WHERE symbol_id=? AND tf=? AND ts>=? AND ts<?
 		GROUP BY bts`,
-		string(dst), bucket, bucket, bucket, bucket, bucket, bucket,
-		symbolID, string(src), from, to)
+		[]any{string(dst), bucket, bucket, bucket, bucket, bucket, bucket,
+			symbolID, string(src), from, to},
+		8, verb+` INTO bars (symbol_id, tf, ts, open, high, low, close, volume)`, "")
 	return err
 }
 
@@ -1113,21 +1120,7 @@ func (s *Store) Rollup(ctx context.Context, symbolID int64, src, dst md.Timefram
 // the source) is authoritative and must not be replaced by an aggregate of
 // possibly-partial finer bars.
 func (s *Store) RollupMissing(ctx context.Context, symbolID int64, src, dst md.Timeframe, bucket, from, to int64) error {
-	_, err := s.w.ExecContext(ctx, `
-		INSERT OR IGNORE INTO bars (symbol_id, tf, ts, open, high, low, close, volume)
-		SELECT symbol_id, ?, (ts/?)*? AS bts,
-		  (SELECT open FROM bars b2 WHERE b2.symbol_id=b.symbol_id AND b2.tf=b.tf
-		     AND b2.ts/? = b.ts/? ORDER BY b2.ts LIMIT 1),
-		  MAX(high), MIN(low),
-		  (SELECT close FROM bars b3 WHERE b3.symbol_id=b.symbol_id AND b3.tf=b.tf
-		     AND b3.ts/? = b.ts/? ORDER BY b3.ts DESC LIMIT 1),
-		  SUM(volume)
-		FROM bars b
-		WHERE symbol_id=? AND tf=? AND ts>=? AND ts<?
-		GROUP BY bts`,
-		string(dst), bucket, bucket, bucket, bucket, bucket, bucket,
-		symbolID, string(src), from, to)
-	return err
+	return s.rollup(ctx, "INSERT OR IGNORE", symbolID, src, dst, bucket, from, to)
 }
 
 // PruneBars deletes bars of a timeframe older than cutoff (retention).
