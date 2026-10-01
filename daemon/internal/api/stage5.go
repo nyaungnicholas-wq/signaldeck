@@ -50,10 +50,13 @@ func (d Deps) buildPredictionsLatest(ctx context.Context, h md.Horizon) (map[str
 	if err != nil {
 		return nil, err
 	}
-	resolvedN, err := d.St.ResolvedPredictionCount(ctx, h)
+	// One graded read serves both: ResolvedPredictionCount IS the live record's
+	// independent N, and reading it twice cost ~0.7 s per cache rebuild.
+	liveN, liveWin, err := d.St.LiveDirectionalRecord(ctx, h)
 	if err != nil {
 		return nil, err
 	}
+	resolvedN := liveN
 	gated := resolvedN < minIndependentN
 	caption := confNote
 	if gated {
@@ -62,10 +65,6 @@ func (d Deps) buildPredictionsLatest(ctx context.Context, h md.Horizon) (map[str
 	// The live forward verdict (2026-07-17 inspection): once enough
 	// independent symbol-days have resolved, "backtested" is no longer the
 	// honest label — the LIVE record is, whatever it says.
-	liveN, liveWin, err := d.St.LiveDirectionalRecord(ctx, h)
-	if err != nil {
-		return nil, err
-	}
 	trackLabel := "backtested / in-sample — not a live track record"
 	if liveN >= minIndependentN {
 		verdict := "see /track-record before trusting any P(up)"

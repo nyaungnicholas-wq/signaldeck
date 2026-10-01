@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -128,9 +129,19 @@ func (a *auditor) record(e auditEntry) {
 	}
 	if err != nil {
 		a.mu.Lock()
+		first := a.lastErr == nil
 		a.lastErr = err
 		a.mu.Unlock()
+		// Said once per failure streak, not per request: an operator learns the
+		// append-only sink is losing entries without a log line per call.
+		if first {
+			slog.Warn("mcp audit: sink write failed; entries are kept in memory only until it recovers", "path", path, "err", err)
+		}
+		return
 	}
+	a.mu.Lock()
+	a.lastErr = nil
+	a.mu.Unlock()
 }
 
 // entries returns the in-memory tail (tests, operator view).
