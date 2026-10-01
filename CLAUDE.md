@@ -29,6 +29,12 @@ in quarantine/ is SUPERSEDED — do not execute it.
 
 ## Pre-flight checks before claiming ANYTHING works or shipped
 - A fix is not live until worker_runs.revision matches git HEAD. Check it.
+- Adding or removing a Go test in a controls package moves STRATEGY_DECK.md's controls table, and
+  CI diffs it. Before pushing: `python tools/controls_evidence.py --inject STRATEGY_DECK.md` and
+  `--write partials/controls_evidence.md`, then commit the diff. `--check` alone passes while CI
+  fails (missed twice: 86dfc68, 208ee55).
+- A re-registration or repro re-cut must re-freeze TestFrozenSnapshotVerdicts in the SAME push
+  (tools/test_accuracy_registry.py), or CI's tools job goes red (70ee393 -> cf9cdad).
 - Green gates are not a working product: 20+ real defects have shipped behind all-green gates.
   Open the web UI in a real browser before calling web work done.
 - The interpreter is .venv/Scripts/python.exe — name it explicitly in commands and -Verify.

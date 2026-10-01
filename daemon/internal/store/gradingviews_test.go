@@ -580,3 +580,75 @@ func TestResolvedRawPairs_ExcludePreEpochRows(t *testing.T) {
 		t.Fatalf("raws = %v; want only the post-epoch 0.70", raws)
 	}
 }
+
+// /api/signal-report labels this read the symbol's "LIVE forward record", so it
+// must be the grader's population: pre-epoch rows out, one observation per
+// settled move (latest call wins). The whole-ledger read it replaced showed
+// AAPL 3,059 rows at 61.8% against 5 graded observations at 40%.
+func TestPredictionOutcomesForSymbol_GradedWindowOnly(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	day, epoch := int64(86400), int64(GradingEpochTS)
+	for i := int64(1); i <= 3; i++ { // pre-epoch, all right: never graded
+		seedResolvedPred(t, st, sym.ID, md.H1d, epoch-i*day+15*3600, 0.7, 0.7, 0.01)
+	}
+	seedResolvedPred(t, st, sym.ID, md.H1d, epoch+3*day+15*3600, 0.7, 0.7, 0.01) // early call, right
+	seedResolvedPred(t, st, sym.ID, md.H1d, epoch+3*day+16*3600, 0.3, 0.3, 0.01) // same move, latest, wrong
+	seedResolvedPred(t, st, sym.ID, md.H1d, epoch+4*day+15*3600, 0.6, 0.6, 0.02) // right
+
+	rows, correct, total, err := st.PredictionOutcomesForSymbol(ctx, sym.ID, "1d", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || correct != 1 || len(rows) != 2 {
+		t.Fatalf("correct/total/rows = %d/%d/%d; want 1/2/2 (graded window, one per settled move)",
+			correct, total, len(rows))
+	}
+	if rows[0].Ts != epoch+4*day+15*3600 || rows[1].Ts != epoch+3*day+16*3600 || rows[1].Correct {
+		t.Fatalf("rows = %+v; want newest first, the latest call standing for its move", rows)
+	}
+}
+
+// The production form: once any bar exists the read runs with the stale-feed
+// WITH clause and the settlement filter, and the symbol/horizon filters are
+// appended to that SQL text. The case above seeds no bars, so it never
+// exercised this form.
+func TestPredictionOutcomesForSymbol_SettlementForm(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	aapl, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	msft, _ := st.UpsertSymbol(ctx, "MSFT", md.Stocks, "Microsoft")
+	day := int64(86400)
+	d0 := int64(GradingEpochTS) + 4*3600 // exchange midnight on the epoch day
+	var bars []md.Bar
+	for _, id := range []int64{aapl.ID, msft.ID} {
+		for i := int64(0); i < 4; i++ {
+			bars = append(bars, md.Bar{SymbolID: id, TF: md.TF1d, Ts: d0 + i*day, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1})
+		}
+	}
+	if err := st.UpsertBars(ctx, bars); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.SettlementApplicable(ctx); err != nil || !ok {
+		t.Fatalf("SettlementApplicable = %v, %v; the fixture must take the production form", ok, err)
+	}
+	seedResolvedPred(t, st, aapl.ID, md.H1d, d0+23*3600, 0.7, 0.7, 0.01)      // right
+	seedResolvedPred(t, st, aapl.ID, md.H1d, d0+day+23*3600, 0.7, 0.7, -0.01) // wrong
+	seedResolvedPred(t, st, msft.ID, md.H1d, d0+23*3600, 0.7, 0.7, 0.01)      // another symbol
+
+	if _, correct, total, err := st.PredictionOutcomesForSymbol(ctx, aapl.ID, "1d", 50); err != nil || total != 2 || correct != 1 {
+		t.Fatalf("AAPL correct/total = %d/%d (err %v); want 1/2, MSFT's row excluded", correct, total, err)
+	}
+	// A stale feed on AAPL's second day takes that row out, and only for AAPL.
+	if _, err := st.w.ExecContext(ctx, `INSERT INTO dq_events (symbol_id, ts, kind) VALUES (?, ?, 'stale')`,
+		aapl.ID, d0+day+23*3600); err != nil {
+		t.Fatal(err)
+	}
+	if _, correct, total, err := st.PredictionOutcomesForSymbol(ctx, aapl.ID, "1d", 50); err != nil || total != 1 || correct != 1 {
+		t.Fatalf("after the stale event AAPL correct/total = %d/%d (err %v); want 1/1", correct, total, err)
+	}
+	if _, _, total, err := st.PredictionOutcomesForSymbol(ctx, msft.ID, "1d", 50); err != nil || total != 1 {
+		t.Fatalf("MSFT total = %d (err %v); want 1, untouched by AAPL's stale event", total, err)
+	}
+}

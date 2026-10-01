@@ -1375,7 +1375,7 @@ func (w *PredictionResolver) Interval() time.Duration { return 10 * time.Minute 
 
 func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
-	resolved := 0
+	resolved, twins := 0, 0
 	marketByID, err := symbolMarkets(ctx, w.St) // settled-bar rule is per market
 	if err != nil {
 		return "", err
@@ -1387,9 +1387,8 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 		// benchmark as a predictor.
 		for _, hh := range []md.Horizon{h, benchmarkHorizon(h)} {
 			// THE WHOLE QUEUE, not an oldest-first batch of 1500. Rows skipped
-			// below for good (no settled base, or a forward bar over three
-			// horizons past target — every pre-holiday Friday's 1d row: Fri->Tue
-			// is 3d6h) stay pending and oldest-first, so a fixed head batch
+			// below for good (no settled base, or a forward bar past the gap
+			// guard) stay pending and oldest-first, so a fixed head batch
 			// re-read the same stuck rows every pass. From ~2026-09-10 the 1d
 			// head was 1500 such rows (08-04..09-08): 1d resolved 2-166 rows a
 			// day while 44k sat owed, freezing the graded record and its
@@ -1430,7 +1429,20 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 				if err != nil {
 					return "", err
 				}
-				if !okF || base.Close <= 0 || fwd.Ts-target > 3*horizonSecs(h) {
+				// GAP GUARD. A forward bar over three horizons past target means
+				// missing sessions; grading it would label a multi-session move as
+				// one horizon. A HOLIDAY IS NOT A GAP: from the slackened target a
+				// pre-holiday Friday's next 1d bar (Tuesday) is 3d6h out, so every
+				// such row sat ungraded forever — a silent selection in the 1d
+				// record. For stocks the NYSE calendar decides: no whole session
+				// closed between target and fwd means fwd IS the next session. This
+				// only admits rows the old rule refused (1w cannot reach it: 21 days
+				// always hold sessions); crypto trades every day and keeps the rule.
+				gap := fwd.Ts-target > 3*horizonSecs(h)
+				if gap && marketByID[p.SymbolID] == md.Stocks {
+					gap = marketcal.SessionsClosedSince(target, time.Unix(fwd.Ts, 0)) > 0
+				}
+				if !okF || base.Close <= 0 || gap {
 					continue
 				}
 				// SETTLEMENT GUARD — the forward bar must be FINISHED.
@@ -1463,14 +1475,31 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 				} else if !settled {
 					continue
 				}
-				if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, fwd.Close/base.Close-1); err != nil {
+				ret := fwd.Close/base.Close - 1
+				if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, ret); err != nil {
 					return "", err
 				}
 				resolved++
+				// The benchmark twin ("<h>#pm", same symbol, same ts) grades on the
+				// identical base and forward bar, so it resolves HERE, with its
+				// ensemble row. Left to its own pass behind the whole ensemble queue
+				// it starved whenever a restart cut a long pass short: 2026-10-01,
+				// 39k 1d#pm rows unresolved and the prequential-majority (1d) row gone
+				// from the published registry. The #pm pass still picks up any twin
+				// this misses; a twin already labelled is never rewritten.
+				if hh == h {
+					ok, err := w.St.ResolveOpenPrediction(ctx, p.SymbolID, benchmarkHorizon(h), p.Ts, ret)
+					if err != nil {
+						return "", err
+					}
+					if ok {
+						twins++
+					}
+				}
 			}
 		}
 	}
-	return fmt.Sprintf("resolved %d predictions", resolved), nil
+	return fmt.Sprintf("resolved %d predictions (+%d benchmark twins)", resolved, twins), nil
 }
 
 // ── RegimeRunner: label + change detection ──────────────────────────────

@@ -16,6 +16,7 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/sectors"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/workers"
 )
 
 // envInt reads an integer env override, falling back to def when unset or
@@ -224,17 +225,23 @@ func (w *SentimentTagger) Run(ctx context.Context) (string, error) {
 		minTs = time.Now().UTC().AddDate(0, 0, -maxAgeDays).Unix()
 	}
 	n, err := sentiment.RunOnce(ctx, w.LLM, w.St, batch, pace, minTs)
-	if errors.Is(err, llm.ErrTransient) && n > 0 {
+	if errors.Is(err, llm.ErrTransient) {
 		// The provider's shared free-tier pool refuses under load with HTTP
 		// 503 ResourceExhausted. That is an upstream capacity condition, not a
 		// fault here, and the next pass resumes where this one stopped.
 		// Reported as a hard error it produced 24 failing passes an hour on
 		// 2026-09-04 while real work landed in every one of them.
-		//
-		// n == 0 deliberately stays an ERROR: a pass that tagged nothing is
+		detail := fmt.Sprintf("tagged %d headlines; provider pool busy, resuming next pass", n)
+		if n > 0 {
+			return detail, nil
+		}
+		// n == 0 must not read as ok: a pass that tagged nothing is
 		// indistinguishable from a starving tagger, which is the exact defect
-		// the cap-reached branch below was written to stop hiding.
-		return fmt.Sprintf("tagged %d headlines; provider pool busy, resuming next pass", n), nil
+		// the cap-reached branch below was written to stop hiding. It is
+		// DEGRADED, exactly as ai-analyst files the same failure: an error
+		// fails /api/ready over upstream capacity (the 2026-09-10 fleet-wide
+		// 503), while degraded stays visible on /api/health and the Agents page.
+		return detail, fmt.Errorf("%s: %w", detail, workers.ErrDegraded)
 	}
 	if errors.Is(err, llm.ErrCapReached) {
 		// The cap is a budget, not a fault. But "tagged 0 headlines" read as

@@ -10,9 +10,10 @@ package store
 // row's prob is frozen when the prediction is made, and it becomes eligible for
 // grading only once resolved_at is set.
 //
-// These are pure reads; the caller (api/trackrecord.go) does the independent-N
-// dedup and the honesty gating. The store stays policy-free — it just returns
-// the resolved (prob, up, fwd_return, symbol, market, day) rows.
+// These are pure reads. IndependentPredictionOutcomes does the independent-N
+// collapse (one row per symbol per settle day) in SQL for the published
+// callers; the API (api/trackrecord.go, api/composite.go) does the honesty
+// gating. The store stays policy-free about publication.
 
 import (
 	"context"
@@ -68,8 +69,9 @@ type ResolvedPredictionOutcome struct {
 // It came back: 1w crossed 120,000 graded rows around 2026-09-29 and the cap
 // began dropping the window's first days from the public track record, ~10k
 // more rows a day. limit < 0 now reads the WHOLE graded window (the epoch is
-// the bound), and the published callers pass it. limit == 0 keeps the old
-// 20,000 default for callers that want a recent window.
+// the bound). limit == 0 keeps the old 20,000 default for callers that want a
+// recent window. The published callers read the whole window COLLAPSED, through
+// IndependentPredictionOutcomes below.
 func (s *Store) ResolvedPredictionOutcomes(ctx context.Context, h md.Horizon, limit int) ([]ResolvedPredictionOutcome, error) {
 	if limit == 0 {
 		limit = 20000
@@ -104,6 +106,61 @@ func (s *Store) ResolvedPredictionOutcomes(ctx context.Context, h md.Horizon, li
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// IndependentPredictionOutcomes is the WHOLE graded window of
+// ResolvedPredictionOutcomes(h, -1) collapsed in SQL to what its published
+// callers (api buildTrackRecord, fleetEdgeSkill) actually grade: ONE row per
+// (symbol, SETTLED MOVE — md.SettleDay), the newest. rawN is the graded row
+// count behind those rows (each group's COUNT(*), summed), i.e. the old
+// len(rows), from the same snapshot. No cap: the epoch is the bound.
+//
+// Both callers used to receive every graded row and drop all but the newest of
+// each group in Go. Live, read-only, 2026-10-01: 1w 128,834 rows for 9,120
+// groups, 1d 37,399 for 1,420.
+//
+// GROUP BY with a bare-column MAX(ts), NOT the ROW_NUMBER window the other
+// settle_day collapses use. SQLite takes every bare column from the row holding
+// the single max() (documented min/max special case; ts is unique per group by
+// the PK). MEASURED through this driver, process CPU, 7 interleaved runs on a
+// 1w-shaped 127,400-row window, median: old read + Go dedup 547ms; this 391ms;
+// the two-window form 891ms and one window 625ms — the windows' extra sort
+// costs more in modernc than shipping the rows did. (The native sqlite3 CLI
+// ranks the window form 2x faster than the old read; it is the wrong ruler.)
+// The read was ~70% of a whole 1w buildTrackRecord's CPU on that fixture.
+//
+// ORDER BY ts DESC, symbol_id is the order the old query produced through its
+// plan (idx_predoutcomes_resolved_hts keys (horizon, ts DESC, symbol_id)), now
+// stated rather than inherited: the callers' float sums run in row order.
+func (s *Store) IndependentPredictionOutcomes(ctx context.Context, h md.Horizon) (out []ResolvedPredictionOutcome, rawN int, err error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT g.symbol_id, sym.symbol, sym.market, g.ts, g.prob, g.up, g.fwd_return, g.settle_ts, g.grp_n FROM (
+		  SELECT po.symbol_id, MAX(po.ts) AS ts, po.prob, po.up, po.fwd_return, po.settle_ts, COUNT(*) AS grp_n
+		  FROM prediction_outcomes po
+		  WHERE po.resolved_at IS NOT NULL AND po.horizon = ? AND po.up IS NOT NULL
+		    AND po.ts >= `+strconv.Itoa(GradingEpochTS)+`
+		  GROUP BY po.symbol_id, settle_day(po.settle_ts, po.ts)
+		) g
+		JOIN symbols sym ON sym.id = g.symbol_id
+		ORDER BY g.ts DESC, g.symbol_id`, string(h))
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		o := ResolvedPredictionOutcome{Horizon: h}
+		var mkt string
+		var settle sql.NullInt64
+		var grpN int
+		if err := rows.Scan(&o.SymbolID, &o.Symbol, &mkt, &o.Ts, &o.Prob, &o.Up, &o.FwdReturn, &settle, &grpN); err != nil {
+			return nil, 0, err
+		}
+		o.SettleTs = settle.Int64 // 0 when NULL — settle_day folds it the same way
+		o.Market = md.Market(mkt)
+		out = append(out, o)
+		rawN += grpN
+	}
+	return out, rawN, rows.Err()
 }
 
 // DirectionalAccuracy is one symbol's realized directional record over its

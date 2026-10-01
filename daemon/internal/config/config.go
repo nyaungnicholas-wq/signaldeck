@@ -122,7 +122,7 @@ type Config struct {
 	LocalProxyKey string
 
 	// Multi-user + exposure controls.
-	OpenSignup     bool // SIGNALDECK_OPEN_SIGNUP (default true): allow POST /api/auth/register
+	OpenSignup     bool // SIGNALDECK_OPEN_SIGNUP (default: open only on a private, untunnelled box; see `private` in Load): allow POST /api/auth/register
 	AllowRawExport bool // SIGNALDECK_ALLOW_RAW_EXPORT (default false): serve raw licensed bars
 	// PublicReads (SIGNALDECK_PUBLIC_READS): read-only endpoints answer without
 	// auth. The default is NOT true -- it is reachablePrivately(), i.e. open

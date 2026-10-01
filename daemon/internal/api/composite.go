@@ -26,19 +26,6 @@ import (
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
-// fleetSkillWindow is how many recent resolved 1d outcomes fleetEdgeSkill scans.
-// It MUST comfortably span the trackMinDistinctDays (10) distinct market days
-// even as the monitored universe grows — at ~3k resolutions/day a 20k cap only
-// reached ~7 days, which wrongly RE-GATED the live track record to "0% / not
-// proven". 120k spans ~40 days at current volume (still >10 if the universe
-// doubles). The dedup to one obs per (symbol, UTC-day) runs over this window.
-//
-// -1 = the whole graded window (ResolvedPredictionOutcomes: the epoch bounds
-// it). The 120,000 row cap stopped being "comfortable" once 1w passed it
-// (~2026-09-29) and silently trimmed the oldest graded days off the public
-// track record.
-const fleetSkillWindow = -1
-
 // fleetSkill is the fleet-wide live-edge verdict together with the CLUSTER-
 // ROBUST evidence it rests on. The cluster grade travels with the verdict rather
 // than being recomputed by each caller, because the whole point of C4 is that no
@@ -56,7 +43,7 @@ type fleetSkill struct {
 }
 
 // fleetSkillCache memoizes the fleet-wide live-edge grade (it changes only as
-// outcomes resolve, hours apart) so the 120k-row scan fires at most once per
+// outcomes resolve, hours apart) so the graded-window read fires at most once per
 // fleetSkillTTL instead of on every composite/recommendation read.
 //
 // key scopes the entry to the store instance for the same reason
@@ -262,7 +249,7 @@ func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, winRate float64,
 // stated reason — never a fabricated pass.
 func (d Deps) fleetEdgeGrade(ctx context.Context) fleetSkill {
 	key := d.St.CacheKey()
-	// Serve from the short-TTL cache when fresh (the 120k-row scan is heavy).
+	// Serve from the short-TTL cache when fresh (the graded-window read is heavy).
 	fleetSkillCache.Lock()
 	if fleetSkillCache.valid && fleetSkillCache.key == key && time.Since(fleetSkillCache.at) < fleetSkillTTL {
 		s := fleetSkillCache.skill
@@ -291,7 +278,11 @@ func (d Deps) fleetEdgeGrade(ctx context.Context) fleetSkill {
 }
 
 func (d Deps) computeFleetEdgeSkill(ctx context.Context) (fleetSkill, bool) {
-	rows, err := d.St.ResolvedPredictionOutcomes(ctx, md.H1d, fleetSkillWindow)
+	// The WHOLE graded window, collapsed in SQL to one row per (symbol, settled
+	// move) — the dedup in gradeFleetEdge is then a no-op on these rows. A fixed
+	// row cap (once 20k, then 120k) wrongly re-gated or trimmed this record each
+	// time the universe outgrew it; the epoch is the only bound.
+	rows, _, err := d.St.IndependentPredictionOutcomes(ctx, md.H1d)
 	if err != nil {
 		// A read failure is not a measurement. Ship the cluster block already
 		// REFUSED with that reason rather than its zero value, which would

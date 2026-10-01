@@ -375,12 +375,27 @@ func gapSessions(counts map[int64]int, now time.Time, retentionDays int) []time.
 	}
 	return out
 }
+
+// DefaultBudgetDBMB is the database-file budget in MB, overridden by SIGNALDECK_BUDGET_DB_MB.
+// It is the ONE default shared by this gap-fill gate and sdmaint storage-report;
+// ops/signaldeck-refresh.sh passes the same literal (TestBudgetDBDefaultMatchesRefreshScript
+// fails if they drift). Raised 6144 -> 10240 on 2026-09-30 (audit SD-24): the post-VACUUM floor
+// (6,160 MB measured) had risen above 6144, so the gate, which needs 512 MB of headroom, stayed
+// closed for 7+ days while 35 streamed symbols aged out of the 30-day gap-fill window.
+const DefaultBudgetDBMB = 10240
+
 func (r *BackfillReconciler) gapFillBudgetOK(ctx context.Context) (bool, string) {
 	size, err := r.St.DBSizeBytes(ctx)
 	if err != nil {
 		return false, err.Error()
 	}
-	budget := int64(envIntOr("SIGNALDECK_BUDGET_DB_MB", 6144)) * 1024 * 1024
+	return gapFillHeadroom(size)
+}
+
+// gapFillHeadroom is the budget decision for a database of size bytes, split from the size
+// query so it can be tested at real (multi-GB) sizes.
+func gapFillHeadroom(size int64) (bool, string) {
+	budget := int64(envIntOr("SIGNALDECK_BUDGET_DB_MB", DefaultBudgetDBMB)) * 1024 * 1024
 	ok := size+gapFillBudgetMarginMB*1024*1024 <= budget
 	return ok, fmt.Sprintf("db %d MB of %d MB budget", size>>20, budget>>20)
 }

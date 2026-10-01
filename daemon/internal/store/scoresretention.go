@@ -272,9 +272,7 @@ func (s *Store) ResearchWeeksBefore(ctx context.Context, cutoff int64, limit int
 // DeleteResearchWeeksBefore deletes research_weeks rows with ts < cutoff
 // (retention). Callers MUST have durably archived the rows first.
 func (s *Store) DeleteResearchWeeksBefore(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `DELETE FROM research_weeks WHERE ts < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.deleteInBatches(ctx, `
+		DELETE FROM research_weeks WHERE (symbol_id, week) IN (
+		  SELECT symbol_id, week FROM research_weeks WHERE ts < ? LIMIT ?)`, cutoff)
 }

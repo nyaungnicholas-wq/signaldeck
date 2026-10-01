@@ -75,6 +75,12 @@ func TestPriorityWriteBeatsASaturatedWriter(t *testing.T) {
 // once-a-second retries locked account writes out for minutes (2026-09-30).
 // An account write behind a reader-blocked checkpoint must still land fast.
 func TestCheckpointWaitingOnAReaderDoesNotLockOutAccountWrites(t *testing.T) {
+	// The bound under test is "one checkpoint wait, then the account write",
+	// so shrink the wait to keep the test fast; the production value is pinned
+	// against the account budget in TestCheckpointBusyFitsTheAccountBudget.
+	prev := checkpointBusy
+	checkpointBusy = 300 * time.Millisecond
+	defer func() { checkpointBusy = prev }()
 	st, err := Open(filepath.Join(t.TempDir(), "ckpt.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -153,4 +159,53 @@ func TestLongWriteHoldIsLoggedWithItsCaller(t *testing.T) {
 		t.Fatalf("no named long-hold line; log was: %q", out)
 	}
 	t.Log(strings.TrimSpace(out))
+}
+
+// A TRUNCATE checkpoint must be able to outlast a reader that finishes within
+// a second or two; otherwise it never meets its reader-free instant and the WAL
+// grows without bound. 200ms (d63f47b) failed exactly this on the live box:
+// 18 governor runs, zero truncations, WAL at 1.28 GB.
+func TestTruncateOutlastsAShortReader(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "trunc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+	if _, err := st.w.ExecContext(ctx, `CREATE TABLE trunc_probe (v INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	rtx, err := st.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := rtx.QueryRowContext(ctx, `SELECT count(*) FROM trunc_probe`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		if _, err := st.w.ExecContext(ctx, `INSERT INTO trunc_probe (v) VALUES (1)`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The reader finishes 700ms into the checkpoint's wait.
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		_ = rtx.Rollback()
+	}()
+	res, err := st.WALCheckpointTruncate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Busy {
+		t.Fatalf("TRUNCATE gave up on a reader that finished after 700ms (%+v): checkpointBusy=%v is too short to ever truncate a busy WAL", res, checkpointBusy)
+	}
+}
+
+// The production wait must leave the account writer (busy_timeout 12s) room to
+// get in after one full checkpoint wait.
+func TestCheckpointBusyFitsTheAccountBudget(t *testing.T) {
+	if checkpointBusy < time.Second || checkpointBusy > 6*time.Second {
+		t.Fatalf("checkpointBusy = %v; want 1-6s: long enough to drain readers, short enough for a 12s sign-in budget", checkpointBusy)
+	}
 }

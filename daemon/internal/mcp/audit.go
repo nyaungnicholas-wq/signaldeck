@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -98,7 +99,7 @@ func newAuditor(path string, now func() time.Time) *auditor {
 // record appends one entry. A failure to write the file is deliberately NOT
 // fatal to the request: refusing to answer because the log is unwritable turns
 // a full disk into an outage. It is, however, recorded in memory, and the
-// write error surfaces on the next operator read via lastWriteErr.
+// open, write or close error is kept in lastErr.
 func (a *auditor) record(e auditEntry) {
 	if e.At.IsZero() {
 		e.At = a.now()
@@ -118,14 +119,29 @@ func (a *auditor) record(e auditEntry) {
 		return
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err == nil {
+		// A full disk fails HERE, not at open. Discarding this error lost the
+		// entry from the append-only sink with nothing recorded anywhere.
+		_, err = f.Write(append(line, '\n'))
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
 	if err != nil {
 		a.mu.Lock()
+		first := a.lastErr == nil
 		a.lastErr = err
 		a.mu.Unlock()
+		// Said once per failure streak, not per request: an operator learns the
+		// append-only sink is losing entries without a log line per call.
+		if first {
+			slog.Warn("mcp audit: sink write failed; entries are kept in memory only until it recovers", "path", path, "err", err)
+		}
 		return
 	}
-	_, _ = f.Write(append(line, '\n'))
-	_ = f.Close()
+	a.mu.Lock()
+	a.lastErr = nil
+	a.mu.Unlock()
 }
 
 // entries returns the in-memory tail (tests, operator view).

@@ -1,6 +1,12 @@
 package api
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/config"
@@ -61,6 +67,53 @@ func TestProofReceiptsArePublicButNarrowly(t *testing.T) {
 		if !d.requiresAuth(p) {
 			t.Errorf("%s became anonymously readable — the /proof exemption widened "+
 				"beyond the two endpoints it was scoped to", p)
+		}
+	}
+}
+
+// stalledClient is a client that stopped reading: every body write fails the
+// way the server's write deadline makes it fail.
+type stalledClient struct{ *httptest.ResponseRecorder }
+
+func (stalledClient) Write([]byte) (int, error) {
+	return 0, errors.New("write tcp 127.0.0.1:8322->127.0.0.1:50123: i/o timeout")
+}
+
+// writeJSON's encode error ("api: encode ... i/o timeout") was logged while the
+// access log line for the same request said status=200, so a monitor counting
+// statuses scored an undelivered response as a success.
+func TestAccessLogRecordsAFailedResponseWrite(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	h := Deps{}.withAccessLog(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]int{"n": 1})
+	}))
+	for _, c := range []struct {
+		w    http.ResponseWriter
+		want []string
+		not  string
+	}{
+		{httptest.NewRecorder(), []string{"status=200"}, "write_err"},
+		{stalledClient{httptest.NewRecorder()}, []string{"status=499", "handler_status=200", "i/o timeout"}, " status=200"},
+	} {
+		buf.Reset()
+		h.ServeHTTP(c.w, httptest.NewRequest(http.MethodGet, "/api/accesslog-probe", nil))
+		var line string
+		for _, l := range strings.Split(buf.String(), "\n") {
+			if strings.Contains(l, "msg=request") && strings.Contains(l, "/api/accesslog-probe") {
+				line = l
+			}
+		}
+		for _, w := range c.want {
+			if !strings.Contains(line, w) {
+				t.Errorf("access log %q lacks %q", line, w)
+			}
+		}
+		if strings.Contains(line, c.not) {
+			t.Errorf("access log %q contains %q", line, c.not)
 		}
 	}
 }

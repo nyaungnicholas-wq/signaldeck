@@ -57,6 +57,10 @@ $disabled = @()
 #                       INSIDE the collection window only. Giving it a trigger
 #                       would hold the public URL open around the clock.
 $onDemandStoppable = @('SignalDeck Web', 'SignalDeck Daemon', 'SignalDeck Tunnel')
+# Logon-only tasks that a guard restarts (web-guard.ps1 restarts the Quick
+# Tunnel). Named explicitly, like the list above: a logon trigger alone does not
+# mean anything will start a dead task before the next logon.
+$guardedLogon = @('SignalDeck Quick Tunnel')
 
 foreach ($task in $tasks) {
     try {
@@ -99,8 +103,8 @@ foreach ($task in $tasks) {
         if ($hex -eq '0x800710E0' -and $task.State -eq 'Running') { $benign += $hex }
         # 0x00041306 is SCHED_S_TASK_TERMINATED - "someone ended this task",
         # which is the NORMAL terminal state for the services that are stopped
-        # on purpose: signaldeck-ctl.sh stop and market-close.sh both end the
-        # Web and Daemon tasks with `schtasks /End`. Benign for those two only;
+        # on purpose: signaldeck-ctl.sh stop ends the Web and Daemon tasks with
+        # `schtasks /End` (market-close.sh the Daemon). Benign for those only;
         # on a batch job it still means something killed it mid-run.
         #
         # NOTE this is why task state cannot judge whether the web is UP: an
@@ -157,8 +161,21 @@ foreach ($task in $tasks) {
         #                       optional block. Started by signaldeck-ctl.sh up.
         #   SignalDeck Daemon - started by ops\daemon-guard.ps1 (the Keepalive
         #                       task's 5-minute tick), never by its own trigger.
+        # LOGON-TRIGGERED tasks never have a NextRunTime either: the trigger is
+        # real, it just has no clock time. 'SignalDeck Quick Tunnel' (the public
+        # URL) read here as "nothing will start this again" whenever it was
+        # down, which is false twice: the next logon starts it, and
+        # web-guard.ps1 restarts it within 5 minutes (2026-09-30). Reading a
+        # PRESENT trigger is not the guess the note above warns about - a task
+        # whose logon trigger got lost has no trigger and is flagged again. A
+        # dead one is still reported by its result: 0xC000013A while not
+        # running is the console-kill warning, any other failure is "last
+        # result not success", and a restart the guard cannot make fails
+        # SignalDeck Web Keepalive.
+        $hasLogonTrigger = $guardedLogon -contains $task.TaskName -and
+            @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }).Count -gt 0
         if (-not $info.NextRunTime -and $task.State -ne 'Running' -and $task.State -ne 'Disabled' `
-                -and $onDemandStoppable -notcontains $task.TaskName) {
+                -and $onDemandStoppable -notcontains $task.TaskName -and -not $hasLogonTrigger) {
             $stale += "$($task.TaskName) (state $($task.State), last ran $($info.LastRunTime)) - no NextRunTime and not a known on-demand task: nothing will start this again"
         }
     } catch {
@@ -306,7 +323,8 @@ try {
         if ($LASTEXITCODE -ne 0) { $drift += ("drift probe exited " + $LASTEXITCODE) }
         foreach ($line in $report) {
             $text = "$line"
-            if ($text -match '^(CREATE|UPDATE|REFUSE)\s+(\S.*?)\s*$') {
+            # ORPHAN = a live SignalDeck task with no xml at all.
+            if ($text -match '^(CREATE|UPDATE|REFUSE|ORPHAN)\s+(\S.*?)\s*$') {
                 $drift += ('{0} {1}' -f $matches[1], ($matches[2] -replace '\s{2,}.*$',''))
             }
             elseif ($text -match '^FATAL') { $drift += $text }

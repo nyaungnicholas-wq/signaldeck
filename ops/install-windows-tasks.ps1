@@ -123,6 +123,17 @@ if (-not $Install) {
         $shown = if ($t.Refused) { 'REFUSE' } else { $t.Status }
         Write-Output ("{0,-8} {1,-34} {2}" -f $shown, $t.TaskName, $state)
     }
+    # ORPHANS. The loop above walks ops\tasks\*.xml, so a live task with no xml
+    # never appeared here - 'SignalDeck Quick Tunnel' (the public URL) ran
+    # outside version control that way. Same prefix export-tasks.ps1 exports,
+    # so the remedy printed below always works. check-task-health.ps1 reports
+    # these lines as drift.
+    $defined = @{}
+    foreach ($file in $xmlFiles) { $defined[$file.BaseName] = $true }
+    $orphans = @(Get-ScheduledTask | Where-Object { $_.TaskName -like 'SignalDeck*' -and -not $defined.ContainsKey($_.TaskName) } | Sort-Object TaskName)
+    foreach ($o in $orphans) {
+        Write-Output ("{0,-8} {1,-34} {2}" -f 'ORPHAN', $o.TaskName, 'live, no ops\tasks xml - ops\export-tasks.ps1 adds it')
+    }
     # @(...) is load-bearing. In PowerShell 5.1 a Where-Object that matches a
     # single PSCustomObject returns that object, not a one-element array, and
     # $obj.Count is $null - which formats as an EMPTY STRING. Without the array

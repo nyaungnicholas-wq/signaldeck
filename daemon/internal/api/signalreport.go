@@ -119,7 +119,7 @@ func (d Deps) signalReport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h := map[string]any{"rows": rows, "correct": correct, "total": total,
-			"note": "this symbol's slice of the LIVE forward record — probabilities frozen at prediction time"}
+			"note": "this symbol's slice of the LIVE forward record, as graded: from the grading epoch, one observation per settled move — probabilities frozen at prediction time"}
 		if total > 0 {
 			h["hitRate"] = float64(correct) / float64(total)
 		}

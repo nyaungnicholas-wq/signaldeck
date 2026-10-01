@@ -100,11 +100,9 @@ func (s *Store) ScoresBefore(ctx context.Context, cutoff int64, limit int) ([]Sc
 // DeleteScoresBefore deletes scores with ts < cutoff (retention). Callers MUST
 // have durably archived the rows first (DerivedRetention fail-safe).
 func (s *Store) DeleteScoresBefore(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `DELETE FROM scores WHERE ts < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.deleteInBatches(ctx, `
+		DELETE FROM scores WHERE (symbol_id, horizon, ts) IN (
+		  SELECT symbol_id, horizon, ts FROM scores WHERE ts < ? LIMIT ?)`, cutoff)
 }
 
 // ScoreOutcomesBefore returns up to limit score_outcomes with ts < cutoff, ts
@@ -224,15 +222,13 @@ func (s *Store) ResolvedFeaturesBefore(ctx context.Context, cutoff int64, limit 
 // prediction has resolved (identical predicate to ResolvedFeaturesBefore).
 // Callers MUST have durably archived the rows first.
 func (s *Store) DeleteResolvedFeaturesBefore(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `
-		DELETE FROM features WHERE ts < ? AND EXISTS (
-		  SELECT 1 FROM prediction_outcomes po
-		  WHERE po.symbol_id = features.symbol_id AND po.horizon = features.horizon
-		    AND po.ts = features.ts AND po.resolved_at IS NOT NULL)`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.deleteInBatches(ctx, `
+		DELETE FROM features WHERE id IN (
+		  SELECT f.id FROM features f WHERE f.ts < ? AND EXISTS (
+		    SELECT 1 FROM prediction_outcomes po
+		    WHERE po.symbol_id = f.symbol_id AND po.horizon = f.horizon
+		      AND po.ts = f.ts AND po.resolved_at IS NOT NULL)
+		  LIMIT ?)`, cutoff)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -284,11 +280,9 @@ func (s *Store) FilingsBefore(ctx context.Context, cutoff int64, limit int) ([]F
 // DeleteFilingsBefore deletes filings with filed_ts < cutoff (retention).
 // Callers MUST have durably archived the rows first.
 func (s *Store) DeleteFilingsBefore(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `DELETE FROM filings WHERE filed_ts < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.deleteInBatches(ctx, `
+		DELETE FROM filings WHERE rowid IN (
+		  SELECT rowid FROM filings WHERE filed_ts < ? LIMIT ?)`, cutoff)
 }
 
 // InsightArchiveRow is one insights row for the cold archive. SymbolID is
@@ -330,11 +324,9 @@ func (s *Store) InsightsBefore(ctx context.Context, cutoff int64, limit int) ([]
 // DeleteInsightsBefore deletes insights with ts < cutoff (retention). Callers
 // MUST have durably archived the rows first.
 func (s *Store) DeleteInsightsBefore(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `DELETE FROM insights WHERE ts < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.deleteInBatches(ctx, `
+		DELETE FROM insights WHERE id IN (
+		  SELECT id FROM insights WHERE ts < ? LIMIT ?)`, cutoff)
 }
 
 // PostmortemArchiveRow is one prediction_postmortems row for the cold archive.
@@ -388,9 +380,7 @@ func (s *Store) PostmortemsBefore(ctx context.Context, cutoff int64, limit int) 
 // underlying predictions + prediction_outcomes are untouched — only the miss
 // explanations age out of the hot store.
 func (s *Store) DeletePostmortemsBefore(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `DELETE FROM prediction_postmortems WHERE ts < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
+	return s.deleteInBatches(ctx, `
+		DELETE FROM prediction_postmortems WHERE (symbol_id, horizon, ts) IN (
+		  SELECT symbol_id, horizon, ts FROM prediction_postmortems WHERE ts < ? LIMIT ?)`, cutoff)
 }

@@ -75,6 +75,17 @@ CREATE INDEX IF NOT EXISTS idx_outcomes_unresolved
 -- paid once, at the first boot after this lands.
 CREATE INDEX IF NOT EXISTS idx_outcomes_resolved
   ON score_outcomes (horizon, ts) WHERE resolved_at IS NOT NULL;
+-- Retention reads and prunes score_outcomes by ts ALONE (ScoreOutcomesBefore,
+-- DeleteScoreOutcomesBefore), and ts is the primary key's third column, so
+-- both planned as SCAN score_outcomes: the archive read sorted every row in a
+-- temp b-tree each hourly pass, and the DELETE scanned every row while holding
+-- the write lock. Logged live 2026-09-30: the 22:54 pass pruned 576 rows and
+-- the DELETE held the writer 5m19s; sign-in's account writes give up at 12s.
+-- Same remedy as idx_scores_ts and idx_snapshots_1s_ts. With it both plan as
+-- SEARCH ... USING INDEX idx_outcomes_ts (ts<?). Checked with EXPLAIN QUERY
+-- PLAN: every other score_outcomes query keeps its plan, except DataStats'
+-- COUNT/MIN/MAX(ts), which now reads this index instead of the table.
+CREATE INDEX IF NOT EXISTS idx_outcomes_ts ON score_outcomes (ts);
 
 CREATE TABLE IF NOT EXISTS expectancy (
   symbol_id  INTEGER NOT NULL,

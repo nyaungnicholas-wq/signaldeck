@@ -1001,3 +1001,15 @@ func TestStorageGovernorIntervalRespondsToPressure(t *testing.T) {
 		}
 	})
 }
+
+// SIGNALDECK_WAL_TRUNCATE_RETRY_SEC=0 must disable the retry loop, as the
+// governor's comment promises. envIntOr rejects 0 (CRITICAL, turning fleet
+// health red) and silently ran the 300s default instead (2026-10-01).
+func TestWALTruncateRetrySecAcceptsZero(t *testing.T) {
+	for v, want := range map[string]int{"": 300, "0": 0, "45": 45, "-1": 300, "x": 300} {
+		t.Setenv("SIGNALDECK_WAL_TRUNCATE_RETRY_SEC", v)
+		if got := walTruncateRetrySec(); got != want {
+			t.Errorf("SIGNALDECK_WAL_TRUNCATE_RETRY_SEC=%q -> %d, want %d", v, got, want)
+		}
+	}
+}

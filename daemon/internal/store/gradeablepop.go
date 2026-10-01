@@ -124,7 +124,7 @@ func settlementAtSQL() string {
 // takes the same position for the same reason (settlement_clause() returns ""
 // when there is nothing to reconstruct against). See SettlementApplicable.
 func gradeableDedupSQL(withReconstruction bool) string {
-	q := "SELECT symbol_id, horizon, prob, up, ts, settle_ts," +
+	q := "SELECT symbol_id, horizon, prob, up, ts, settle_ts, fwd_return," +
 		" ROW_NUMBER() OVER (PARTITION BY symbol_id, horizon, " +
 		settleDayFold("po.settle_ts", "po.ts") +
 		" ORDER BY ts DESC) rn" +

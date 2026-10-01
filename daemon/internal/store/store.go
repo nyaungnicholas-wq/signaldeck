@@ -1943,6 +1943,16 @@ type WALCheckpointResult struct {
 // Truncated reports whether the WAL was actually flushed AND truncated.
 func (r WALCheckpointResult) Truncated() bool { return !r.Busy }
 
+// checkpointBusy is how long a RESTART/TRUNCATE checkpoint may wait for
+// readers to finish. It holds the WRITE lock while it waits, so it must stay
+// well under the account writer's 12s busy_timeout (the priority gate then lets
+// a waiting sign-in in before the next attempt). And it must be long enough for
+// in-flight readers to drain, or TRUNCATE never meets its reader-free instant
+// and the WAL grows without bound. Measured both ways on 2026-09-30: 5s kept
+// the WAL at 0-64 MB for weeks; 200ms (d63f47b) did not truncate once in 18
+// runs and the WAL reached 1.28 GB within five hours.
+var checkpointBusy = 5 * time.Second
+
 // walCheckpoint runs one PRAGMA wal_checkpoint(<mode>) on the WRITE connection
 // and returns the pragma's own result row. mode is a fixed literal chosen by
 // the callers below — never user input.
@@ -1953,13 +1963,10 @@ func (s *Store) walCheckpoint(ctx context.Context, mode string) (WALCheckpointRe
 	}
 	defer conn.Close() //nolint:errcheck
 	// RESTART and TRUNCATE take the WRITE lock and then sit in the busy handler
-	// waiting for readers, blocking every writer meanwhile. With busy_timeout 5s
-	// and the governor retrying once a second for 300s, that locked email
-	// confirmations out for minutes (2026-09-30, 19:11-19:29 and 19:31-19:36).
-	// A short wait per attempt keeps each lock hold brief; the retry loop
-	// supplies the persistence.
+	// waiting for readers, blocking every writer meanwhile, so the wait is set
+	// here explicitly (checkpointBusy) rather than inherited.
 	if mode != "PASSIVE" {
-		if _, err := conn.ExecContext(ctx, `PRAGMA busy_timeout=200`); err != nil {
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA busy_timeout=%d`, checkpointBusy.Milliseconds())); err != nil {
 			return WALCheckpointResult{}, err
 		}
 		defer conn.ExecContext(context.Background(), `PRAGMA busy_timeout=5000`) //nolint:errcheck

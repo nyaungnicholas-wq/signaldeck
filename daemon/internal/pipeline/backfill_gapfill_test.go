@@ -3,7 +3,9 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -232,5 +234,42 @@ func TestBackfillReconcilerGapFillRespectsBudgetAndSwitch(t *testing.T) {
 	}
 	if q := drain(bf); len(q) != 0 || !strings.Contains(detail, "gap-fill off") {
 		t.Errorf("the switch must disable gap-fill: enqueued %v, detail %q", q, detail)
+	}
+}
+
+// SD-24: the DB budget is one Go constant, and the nightly sweep must pass the same default to
+// sdmaint (plus the backups budget derive_budget_mb in ops/signaldeck-backup-offline.sh computes
+// from it: 2 raw copies + 6 compressed at 25%). These were three hand-kept literals before.
+func TestBudgetDBDefaultMatchesRefreshScript(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "..", "ops", "signaldeck-refresh.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]int{
+		"SIGNALDECK_BUDGET_DB_MB":      DefaultBudgetDBMB,
+		"SIGNALDECK_BUDGET_BACKUPS_MB": DefaultBudgetDBMB*2 + DefaultBudgetDBMB*6*25/100,
+	} {
+		m := regexp.MustCompile(`\$\{`+name+`:-(\d+)\}`).FindAllSubmatch(src, -1)
+		if len(m) == 0 {
+			t.Errorf("ops/signaldeck-refresh.sh has no ${%s:-N} default", name)
+		}
+		for _, g := range m {
+			if string(g[1]) != strconv.Itoa(want) {
+				t.Errorf("ops/signaldeck-refresh.sh defaults %s to %s, want %d", name, g[1], want)
+			}
+		}
+	}
+}
+
+// SD-24: at 6,160 MB (the live DB after VACUUM on 2026-09-30, above the old 6144 budget) the
+// gap-fill gate stayed shut for 7+ days. Under the default budget it must open, and still shut
+// once the database is inside the 512 MB margin of that budget.
+func TestGapFillHeadroomOpensAboveOldBudget(t *testing.T) {
+	t.Setenv("SIGNALDECK_BUDGET_DB_MB", "")
+	if ok, why := gapFillHeadroom(6160 << 20); !ok {
+		t.Errorf("gap-fill gate shut at 6160 MB under the default budget: %s", why)
+	}
+	if ok, why := gapFillHeadroom(int64(DefaultBudgetDBMB-511) << 20); ok {
+		t.Errorf("gap-fill gate open inside the 512 MB margin: %s", why)
 	}
 }
