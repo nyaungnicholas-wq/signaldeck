@@ -88,8 +88,11 @@ async function loadLive(): Promise<Live> {
     res = await fetch(`${DAEMON}/api/accuracy`, {
       cache: "no-store",
       headers: { Accept: "application/json" },
-      // Bounded: a hung daemon must not pin this server render forever.
-      signal: AbortSignal.timeout(15_000),
+      // Bounded: a hung daemon must not pin this server render forever. 6s,
+      // not 15: the daemon answers in ~0.2s when healthy, and during a restart
+      // a visitor got a blank front page for the full 15s (2026-10-01); now
+      // they get the page with this panel marked unreachable.
+      signal: AbortSignal.timeout(6_000),
     });
   } catch (e) {
     return { kind: "unreachable", detail: e instanceof Error ? e.message : String(e) };
@@ -132,7 +135,7 @@ async function loadChain(): Promise<Chain | null> {
     const res = await fetch(`${DAEMON}/api/prereg`, {
       cache: "no-store",
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(6_000), // see loadLive
     });
     if (!res.ok) return null;
     const body = (await res.json()) as {
