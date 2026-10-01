@@ -95,6 +95,7 @@ func newPublishedServerWith(t *testing.T, mutate func(*config.Config), seedAdmin
 		mutate(&cfg)
 	}
 	d := Deps{St: st, Cfg: cfg, Version: "test", Started: time.Now()}
+	d.LLM = publishedLLM // nil unless a test injects one (membersurface_test.go)
 	srv := httptest.NewUnstartedServer(nil)
 	t.Cleanup(srv.Close)
 	d.Cfg.AllowedHosts = []string{srv.Listener.Addr().String()}
@@ -107,6 +108,7 @@ func newPublishedServerWith(t *testing.T, mutate func(*config.Config), seedAdmin
 	mux.HandleFunc("POST /api/watch", d.watch)
 	mux.HandleFunc("POST /api/unwatch", d.unwatch)
 	mux.HandleFunc("GET /api/companies", d.companies)
+	mux.HandleFunc("GET /api/company/profile", d.companyProfile)
 	srv.Config.Handler = d.secure(mux)
 	srv.Start()
 

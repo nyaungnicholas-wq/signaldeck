@@ -218,9 +218,35 @@ func (s *Store) SymbolWatcherCount(ctx context.Context, symbolID int64) (int, er
 
 // ListUserSymbols returns the symbols on one user's watchlist.
 func (s *Store) ListUserSymbols(ctx context.Context, userID int64) ([]md.Symbol, error) {
+	return s.listWatched(ctx, "user_symbols", userID)
+}
+
+// AddMemberSymbol, RemoveMemberSymbol and ListMemberSymbols keep a MEMBER's
+// watchlist in member_symbols, which no worker reads (see schema.sql): a
+// member's list is a bookmark, not an instruction to fetch anything.
+func (s *Store) AddMemberSymbol(ctx context.Context, userID, symbolID int64) error {
+	_, err := s.w.ExecContext(ctx,
+		`INSERT OR IGNORE INTO member_symbols (user_id, symbol_id, added_ts) VALUES (?,?,?)`,
+		userID, symbolID, time.Now().Unix())
+	return err
+}
+
+func (s *Store) RemoveMemberSymbol(ctx context.Context, userID, symbolID int64) error {
+	_, err := s.w.ExecContext(ctx,
+		`DELETE FROM member_symbols WHERE user_id=? AND symbol_id=?`, userID, symbolID)
+	return err
+}
+
+func (s *Store) ListMemberSymbols(ctx context.Context, userID int64) ([]md.Symbol, error) {
+	return s.listWatched(ctx, "member_symbols", userID)
+}
+
+// listWatched reads one user's list from user_symbols or member_symbols. The
+// table name is one of those two constants, never caller input.
+func (s *Store) listWatched(ctx context.Context, table string, userID int64) ([]md.Symbol, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT s.id, s.symbol, s.market, s.name, s.active, s.added_at
-		FROM user_symbols us JOIN symbols s ON s.id=us.symbol_id
+		FROM `+table+` us JOIN symbols s ON s.id=us.symbol_id
 		WHERE us.user_id=? ORDER BY s.market, s.symbol`, userID)
 	if err != nil {
 		return nil, err

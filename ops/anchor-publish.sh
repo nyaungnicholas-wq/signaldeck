@@ -78,13 +78,17 @@ AUTH=()
   #    anchors were 17 hours to 7 days apart). Its `intact` verdict also goes
   #    into the statement in step 5. Failure only downgrades it to "unchecked".
   intact=unchecked
+  vcount=0
   vjson=$(curl -sf --max-time 60 -H "X-Signaldeck: 1" ${AUTH[@]+"${AUTH[@]}"} "$API/api/ledger/verify") || vjson=""
   if [ -n "$vjson" ]; then
-    intact=$(printf '%s' "$vjson" | "$(sd_py)" -c 'import json, sys
+    vres=$(printf '%s' "$vjson" | "$(sd_py)" -c 'import json, sys
 try:
-    print("true" if json.load(sys.stdin).get("intact") is True else "false")
+    d = json.load(sys.stdin)
+    print("true" if d.get("intact") is True else "false", int(d.get("count") or 0))
 except Exception:
-    print("unchecked")')
+    print("unchecked 0")')
+    intact=${vres%% *}
+    vcount=${vres##* }
   fi
 
   # 1. Newest anchor digest. Append-only and idempotent: a line already in
@@ -237,6 +241,12 @@ PY
     "$REPO/verify.py" "$REPO/anchors.log" "$REPO/prereg.log" "$REPO"/tsa/*
   printf '%s\n' '# Hashed and timestamped byte-for-byte: never convert line endings.' \
     '* -text' > "$REPO/.gitattributes"
+  # Leftovers of a killed run (an unstamped statement, a .tmp token) must never
+  # ride along into a later commit: published, an orphan statement binds the
+  # wrong registry and fails verify.py forever, and deleting it later fails the
+  # never-modified check. Untracked files under stamps/ are only ever ours.
+  git -C "$REPO" clean -fq -- stamps 2>/dev/null
+  stamp_files=()
 
   headline=$("$(sd_py)" - "$DB" <<'PY'
 import sqlite3, sys
@@ -251,14 +261,22 @@ PY
     echo "FAIL: ledger head unreadable from $DB — no statement written, nothing timestamped"
     fail=1
   else
+    # `intact=true` vouches only for what the step-0 verify walked: if entries
+    # landed between that walk and this read, say "unchecked" instead.
+    hseq=$(printf '%s' "$headline" | sed -n 's/^seq=\([0-9]*\) .*/\1/p')
+    [ "$intact" = true ] && [ "$vcount" != "$hseq" ] && intact=unchecked
     docsha=none
     [ -f "$REPO/PREREGISTRATION.md" ] && docsha=$(sha256sum "$REPO/PREREGISTRATION.md" | cut -d' ' -f1)
     body=$(printf '%s\n' "ledger-head $headline intact=$intact" "anchor ${line:-none}" \
       "${pline:-prereg none}" \
       "registry-sha256 $(sha256sum "$REPO/accuracy_registry.json" | cut -d' ' -f1)" \
       "prereg-doc-sha256 $docsha")
-    prev=$(ls "$REPO"/stamps/*.txt 2>/dev/null | sort | tail -1)
-    if [ -n "$prev" ] && [ "$(tail -n +3 "$prev")" = "$body" ]; then
+    # The newest PUBLISHED statement (an orphan would have been cleaned above),
+    # and it counts as current only if something actually timestamped it: an
+    # unstamped one is re-issued, never left standing behind "unchanged".
+    prev=$(git -C "$REPO" ls-files -- 'stamps/*.txt' | sort | tail -1)
+    if [ -n "$prev" ] && [ "$(tail -n +3 "$REPO/$prev")" = "$body" ] \
+       && { compgen -G "$REPO/$prev.*.tsr" >/dev/null || [ -e "$REPO/$prev.ots" ]; }; then
       echo "statement unchanged since $(basename "$prev") — not re-stamped"
     else
       name=$(date -u '+%Y%m%dT%H%M%SZ')
@@ -297,6 +315,10 @@ PY
         echo "FAIL: statement $name was timestamped by NO third party — committed, but it proves nothing beyond git"
         fail=1
       fi
+      # Exactly this run's files go into the commit; see the clean above.
+      for f in "$stmt" "$stmt.ots" "$stmt.freetsa.tsr" "$stmt.digicert.tsr"; do
+        [ -e "$f" ] && stamp_files+=("stamps/$(basename "$f")")
+      done
     fi
   fi
 
@@ -305,14 +327,19 @@ PY
   # whole, and then NOTHING publishes, the statement included (found in the
   # 2026-09-30 dry run, with verify.py not yet in place).
   for p in anchors.log accuracy_registry.json prereg.log README.md PREREGISTRATION.md \
-           .gitattributes stamps tsa verify.py VERIFY.md; do
+           .gitattributes tsa verify.py VERIFY.md ${stamp_files[@]+"${stamp_files[@]}"}; do
     [ -e "$p" ] && git add -- "$p"
   done
   if git diff --cached --quiet; then
     echo "nothing new to publish"
     exit $fail
   fi
-  git commit -q -m "anchor + accuracy registry + statement $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  # Checked: an unchecked failure here used to fall through to the push and the
+  # "published" stamp below, reporting a publish that never happened.
+  if ! git commit -q -m "anchor + accuracy registry + statement $(date -u '+%Y-%m-%dT%H:%M:%SZ')"; then
+    echo "FAIL: git commit failed in $REPO — nothing published"
+    exit 1
+  fi
   git push -q origin HEAD || { echo "PUSH FAILED — commit exists locally only"; exit 1; }
   # RECORD THE PUSH, NOT THE COMMIT. This is the only durable evidence that
   # anything actually LEFT the machine, and it is deliberately written after

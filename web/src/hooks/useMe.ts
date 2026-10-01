@@ -19,17 +19,26 @@ export function useMe(): MeState {
   const [state, setState] = useState<MeState>({ me: undefined, known: false });
   useEffect(() => {
     let alive = true;
+    // api.get has no timeout, and a hung proxy (dead daemon) never answers.
+    // After 8s, settle as "unknown": the Shell then shows the operator chrome,
+    // as it did before this hook existed, instead of a blank page.
+    const giveUp = setTimeout(() => {
+      if (alive) setState((s) => (s.known ? s : { ...s, known: true }));
+    }, 8000);
     api.me().then(
       (m) => {
+        clearTimeout(giveUp);
         if (alive) setState({ me: m, known: true });
       },
       (e: unknown) => {
+        clearTimeout(giveUp);
         // Only a 401 means signed out; any other failure keeps the last answer.
         if (alive) setState((s) => ({ me: isAuthError(e) ? null : s.me, known: true }));
       },
     );
     return () => {
       alive = false;
+      clearTimeout(giveUp);
     };
   }, [pathname]);
   return state;

@@ -10,6 +10,7 @@ the exit status is 0 only when nothing FAILed. See VERIFY.md for what each check
 proves and, as importantly, what it does not.
 """
 import argparse
+import base64
 import bisect
 import datetime as dt
 import decimal
@@ -38,6 +39,15 @@ LINE_RES = [
 TSAS = {  # TSA -> openssl ts -verify trust arguments, paths relative to REPO
     "freetsa": ["-CAfile", "tsa/freetsa-cacert.pem", "-untrusted", "tsa/freetsa-tsa.crt"],
     "digicert": ["-CAfile", "tsa/digicert-trusted-root-g4.pem"],
+}
+# SHA-256 of each trust root's DER encoding. The repo being verified supplies
+# tsa/, so without a pin a rewritten repo could carry its own "FreeTSA" CA and
+# backdated tokens. Compare these with certificates you fetch yourself from
+# https://freetsa.org/files/ and DigiCert's published Trusted Root G4.
+PINS = {
+    "tsa/freetsa-cacert.pem": "a6379e7cecc05faa3cbf076013d745e327bbbaa38c0b9af22469d4701d18aabc",
+    "tsa/freetsa-tsa.crt": "32e841a95cc1164101ffde41298ef2fc75c1c4372ef095e88a6bbd47dfb191fc",
+    "tsa/digicert-trusted-root-g4.pem": "552f7bdcf1a7af9e6ce672017f4f12abf77240c78e761ac203d1d9d20ac89988",
 }
 HORIZON = {"1d": 86400, "1w": 604800}
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -142,6 +152,21 @@ def tsa_time(openssl, tsr):
                        int(m.group(3)), int(m.group(4)), int(m.group(5)), tzinfo=UTC)
 
 
+def cert_fingerprint(path):
+    """SHA-256 of the first PEM certificate's DER bytes, or None."""
+    try:
+        pem = open(path, encoding="ascii", errors="ignore").read()
+    except OSError:
+        return None
+    m = re.search(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", pem, re.S)
+    if not m:
+        return None
+    try:
+        return hashlib.sha256(base64.b64decode("".join(m.group(1).split()))).hexdigest()
+    except ValueError:
+        return None
+
+
 def verify_token(openssl, repo, data_path, tsr, tsa):
     trust = [os.path.join(repo, a) if a.startswith("tsa/") else a for a in TSAS[tsa]]
     code, out = run([openssl, "ts", "-verify", "-data", data_path, "-in", tsr] + trust)
@@ -162,7 +187,12 @@ def statement_adds(repo):
             commit = line[7:]
         elif "\t" in line:
             status, path = line.split("\t", 1)
-            (adds if status == "A" else bad).append((commit, status, path))
+            if status == "A":
+                adds.append((commit, status, path))
+            elif not (status == "M" and path.endswith(".ots")):
+                # An `ots upgrade` rewrites a .ots in place, adding the Bitcoin
+                # attestation; check_ots still requires it to bind its statement.
+                bad.append((commit, status, path))
     return adds, bad
 
 
@@ -178,6 +208,12 @@ def check_statements(repo, rep):
     for a, b in zip(stmts, stmts[1:]):
         if b["seq"] < a["seq"]:
             rep("FAIL", "statements: %s head seq %d is below %s's %d" % (b["name"], b["seq"], a["name"], a["seq"]))
+    first_at = {}
+    for st in stmts:
+        prior = first_at.setdefault(st["seq"], st)
+        if prior["head"] != st["head"]:
+            rep("FAIL", "statements: %s and %s commit to DIFFERENT heads at seq %d -- the ledger was rewritten "
+                        "between them" % (prior["name"], st["name"], st["seq"]))
     if not names:
         rep("WARN", "statements: none yet")
     elif stmts:
@@ -186,7 +222,16 @@ def check_statements(repo, rep):
 
 
 def check_tokens(repo, stmts, openssl, rep):
+    trusted = {}
+    for tsa, args in TSAS.items():
+        files = [a for a in args if a.startswith("tsa/")]
+        bad = [f for f in files if cert_fingerprint(os.path.join(repo, f)) != PINS[f]]
+        for f in bad:
+            rep("FAIL", "rfc3161 %s: %s is not the pinned certificate; tokens checked against it would prove nothing" % (tsa, f))
+        trusted[tsa] = not bad
     for tsa in TSAS:
+        if not trusted[tsa]:
+            continue
         have = ok = 0
         for s in stmts:
             tsr = "%s.%s.tsr" % (s["path"], tsa)
@@ -277,7 +322,10 @@ def check_chain(site, stmts, n_stmts, rep):
     base = stmts[-n_stmts] if 2 <= n_stmts <= len(stmts) else None
     lo, running = (base["seq"] + 1, base["head"]) if base else (1, "")
     hi = stmts[-1]["seq"]
-    heads = {s["seq"]: s for s in stmts if s["seq"] >= lo}
+    heads = {}
+    for st in stmts:
+        if st["seq"] >= lo:
+            heads.setdefault(st["seq"], []).append(st)
     seen, nxt, expect = [], lo, lo
     while expect <= hi:
         url = "%s/api/ledger/range?from=%d&limit=5000" % (site.rstrip("/"), nxt)
@@ -294,15 +342,18 @@ def check_chain(site, stmts, n_stmts, rep):
                 return None
             running, expect = e["entryHash"], expect + 1
             seen.append((e["seq"], e["horizon"], e["barTs"], e["predictedAt"]))
-            s = heads.get(e["seq"])
-            if s and s["head"] != running:
-                rep("FAIL", "chain: recomputed head at seq %d differs from statement %s" % (e["seq"], s["name"]))
-                return None
+            for st in heads.get(e["seq"], []):
+                if st["head"] != running:
+                    rep("FAIL", "chain: recomputed head at seq %d differs from statement %s" % (e["seq"], st["name"]))
+                    return None
         if expect <= hi and page.get("next") is None:
             rep("FAIL", "chain: the site's ledger ends at seq %d, before statement head %d" % (expect - 1, hi))
             return None
         nxt = page.get("next") or expect
-    rep("PASS", "chain: recomputed seq %d..%d (%d entries); head matches statement %s" % (lo, hi, len(seen), stmts[-1]["name"]))
+    rep("PASS", "chain: recomputed seq %d..%d (%d entries); every statement head in that range matches" % (lo, hi, len(seen)))
+    if base:
+        rep("INFO", "chain: only the ledger after %s was recomputed; run with --statements 0 to re-check every "
+                    "forecast from the first entry" % base["name"])
     return seen
 
 
@@ -349,7 +400,9 @@ def main(argv):
     ap = argparse.ArgumentParser(description="Check SignalDeck's public commitment log.")
     ap.add_argument("repo", nargs="?")
     ap.add_argument("--site")
-    ap.add_argument("--statements", type=int, default=2)
+    # 0 = recompute from the first entry: the only walk that catches an edited
+    # OLDER forecast. N >= 2 is the quick check of the last N-1 intervals.
+    ap.add_argument("--statements", type=int, default=0)
     ap.add_argument("--openssl", default=os.environ.get("SD_OPENSSL", "openssl"))
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args(argv)
@@ -453,19 +506,44 @@ def selftest():
             f.write(reg)
         with open(os.path.join(repo, "anchors.log"), "w", encoding="utf-8", newline="\n") as f:
             f.write("SIGNALDECK-LEDGER-ANCHOR v1 seq=7 count=7 ts=1 digest=%s\n" % ("b" * 64))
+        ots = good + ".ots"
+        with open(ots, "wb") as f:
+            f.write(MAGIC + b"\x01\x08" + hashlib.sha256(open(good, "rb").read()).digest())
         git("add", "-A")
         git("commit", "-q", "-m", "one")
         rep = Report(quiet=True)
         verify(repo, None, 2, openssl, rep)
         expect(rep.n["FAIL"] == 0 and rep.n["WARN"] >= 1, "clean repo: %r" % rep.n)
 
+        # Two statements that disagree about the head at one seq are a rewrite,
+        # caught with no network at all.
+        twin = os.path.join(repo, "stamps", "20261001T043130Z.txt")
+        with open(twin, "w", encoding="utf-8", newline="\n") as f:
+            f.write((STMT % ("c" * 64, "b" * 64, hashlib.sha256(reg).hexdigest())).replace(
+                "utc 2026-10-01T04:31:22Z", "utc 2026-10-01T04:31:30Z"))
+        rep = Report(quiet=True)
+        check_statements(repo, rep)
+        expect(rep.n["FAIL"] == 1, "two statements with different heads at one seq gave %d FAILs, want 1" % rep.n["FAIL"])
+        os.remove(twin)
+
+        # A tsa/ file that is not the pinned certificate disarms its TSA.
+        cert = os.path.join(repo, "tsa", "freetsa-tsa.crt")
+        shutil.copy(os.path.join(fix, "digicert-trusted-root-g4.pem"), cert)
+        rep = Report(quiet=True)
+        check_tokens(repo, [], openssl, rep)
+        expect(rep.n["FAIL"] == 1, "an unpinned FreeTSA certificate gave %d FAILs, want 1" % rep.n["FAIL"])
+        shutil.copy(os.path.join(fix, "freetsa-tsa.crt"), cert)
+
         log = os.path.join(repo, "anchors.log")
         with open(log, "a", encoding="utf-8", newline="\n") as f:
             f.write("second\n")
+        # An `ots upgrade` rewrites the proof in place; that alone is no rewrite.
+        with open(ots, "ab") as f:
+            f.write(b"\x00upgraded")
         git("commit", "-q", "-am", "append")
         rep = Report(quiet=True)
         check_history(repo, [], rep)
-        expect(rep.n["FAIL"] == 0, "an append was reported as a rewrite")
+        expect(rep.n["FAIL"] == 0, "an append and an ots upgrade were reported as a rewrite: %r" % rep.n)
         with open(log, "w", encoding="utf-8", newline="\n") as f:
             f.write("SIGNALDECK-LEDGER-ANCHOR v1 seq=7 count=7 ts=1 digest=%s\nchanged\n" % ("b" * 64))
         with open(good, "a", encoding="utf-8", newline="\n") as f:

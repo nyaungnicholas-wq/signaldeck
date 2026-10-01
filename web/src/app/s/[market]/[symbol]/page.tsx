@@ -113,7 +113,14 @@ export default function SymbolPage({
   const p = use(params);
   const { member, known } = useIsMember();
   if (!known) return null;
-  if (member && isMarket(p.market)) {
+  if (member) {
+    if (!isMarket(p.market)) {
+      return (
+        <p className="panel m-0 px-4 py-3 text-[0.85rem]" style={{ color: "var(--dim)" }}>
+          Unknown market &ldquo;{p.market}&rdquo;. Symbol pages live under /s/stocks/&hellip; and /s/crypto/&hellip;.
+        </p>
+      );
+    }
     return <MemberSymbolView symbol={decodeURIComponent(p.symbol)} market={p.market} />;
   }
   return <OperatorSymbolPage params={params} />;

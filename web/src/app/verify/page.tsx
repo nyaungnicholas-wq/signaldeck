@@ -35,7 +35,7 @@ function VerifyInner() {
       .then((data) => {
         setStatus("ok");
         setTimeout(() => {
-          router.replace(data.isAdmin ? "/dashboard" : "/today");
+          router.replace((data.member ?? !data.isAdmin) ? "/today" : "/dashboard");
         }, 1500);
       })
       .catch((err) => {

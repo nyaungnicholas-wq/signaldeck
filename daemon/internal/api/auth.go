@@ -346,7 +346,10 @@ func (d Deps) startSession(w http.ResponseWriter, r *http.Request, uid int64, us
 		return
 	}
 	d.setSessionCookie(w, r, token, int(sessionTTL.Seconds()))
-	writeJSON(w, map[string]any{"id": uid, "username": username, "isAdmin": isAdmin})
+	// member mirrors isMember for the session just issued (this request carries
+	// no session yet), so every sign-in path can land a member on /today.
+	member := d.published() && !d.isAdminUID(r.Context(), uid)
+	writeJSON(w, map[string]any{"id": uid, "username": username, "isAdmin": isAdmin, "member": member})
 }
 
 // authLogout deletes the session and clears the cookie.
