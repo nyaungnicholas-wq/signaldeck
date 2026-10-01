@@ -127,3 +127,22 @@ owner; NOT APPLICABLE = by design, with evidence.
   a collapsed cross-section (28 distinct probabilities / 324 symbols), so /api/accuracy now answers
   503 REFUSED for the whole window. That is the pre-registered gate doing its job on rows the wedge
   hid; it clears only by re-registering the window. Not reverted.
+
+## Verification, round 2 (2026-10-01)
+
+- Re-registration: prereg seq 130 (dry run first; chain INTACT before and after), deploy e311610
+  VERIFIED, registrar appended seq 131/132; /api/accuracy 503 REFUSED -> 200 OK.
+- Integration fixes-1001 (7 workflow branches cherry-picked + review fixes + SD-55/56) merged with
+  another session's 4 commits, deployed cf9cdad: `deploy VERIFIED`, /api/version unmodified.
+- Live after deploy: idx_outcomes_ts present; backfill-reconciler "gap-filled 6 streamed" (was
+  "gap-fill paused" for 7+ days); prediction-resolver reports "(+N benchmark twins)" (0 until the next
+  session settles); 1d and 1d#pm in step (33,850 resolved of 39,376 each); 0 voided 1d score outcomes
+  stamped 09-04..09-08 (watch as the outcome-resolver head passes 09-04).
+- Every new test mutation-checked (removing its fix fails it). Local ladder load artefacts, each
+  re-run clean in isolation: TestStressRunAuthAndLimits (register timed out under -race + load; 3.6 s
+  alone), internal/store -race over 30 min under load (1685 s alone), golangci-lint 21 errcheck from a
+  stale shared cache of a deleted worktree (0 issues on a fresh cache), cold-clone Git Bash segfault.
+- Regrade 02:22 PT after the #pm drain: prequential-majority (1d) restored; repro re-cut (--verify
+  identical, --verify-complete seq 131), frozen verdicts re-read (15 rows = live registry).
+- CI: 28461e2 / 70ee393 / 3b9b99c / cf9cdad red on tools (frozen verdicts, then the controls table
+  45 -> 47); 208ee55 ALL SIX JOBS GREEN (daemon incl. Linux race + coverage floors).
