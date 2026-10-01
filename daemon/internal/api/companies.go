@@ -198,6 +198,17 @@ func (d Deps) companies(w http.ResponseWriter, r *http.Request) {
 			return a.Ticker < b.Ticker
 		}
 	})
+	// A member gets tracked-then-ticker instead: ranking by shares x last close
+	// against the public share counts left in their rows is an ordinal price
+	// oracle, a weaker cousin of the mcap-filter bisect closed above.
+	if member {
+		sort.SliceStable(rows, func(i, j int) bool {
+			if rows[i].Tracked != rows[j].Tracked {
+				return rows[i].Tracked
+			}
+			return rows[i].Ticker < rows[j].Ticker
+		})
+	}
 
 	// 5. Paginate AFTER filtering so total is the real filtered count.
 	total := len(rows)

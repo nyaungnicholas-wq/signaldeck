@@ -268,6 +268,18 @@ CREATE TABLE IF NOT EXISTS user_symbols (
   PRIMARY KEY (user_id, symbol_id)
 );
 
+-- A MEMBER's watchlist (2026-09-30). Deliberately NOT user_symbols: that table
+-- is read fleet-wide -- WatchedSymbolIDs widens the news-fetch scope (news API
+-- calls + LLM sentiment tagging) and the attention scope (StockTwits,
+-- Wikimedia), the alerts runner fans out per user, and SymbolWatcherCount keeps
+-- feeds alive. A member's list must cost nothing and drive nothing.
+CREATE TABLE IF NOT EXISTS member_symbols (
+  user_id   INTEGER NOT NULL REFERENCES users(id),
+  symbol_id INTEGER NOT NULL REFERENCES symbols(id),
+  added_ts  INTEGER,
+  PRIMARY KEY (user_id, symbol_id)
+);
+
 -- ── storage-permanence wave (appended block — keep at END of file so ──────
 -- ── parallel schema edits by other agents never collide) ─────────────────
 

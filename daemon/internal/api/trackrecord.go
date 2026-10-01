@@ -202,7 +202,7 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 				" — figures over this graded window are withheld. The window is anchored to the " +
 				"survivorship epoch and does not roll forward, so this clears when the window is " +
 				"re-registered, not by waiting"
-		} else if reason, collapsed, cerr := d.collapsedGradingWindow(ctx, reg, d.now()); cerr == nil && collapsed {
+		} else if reason, collapsed, cerr := d.collapsedGradingWindowCached(ctx, reg, d.now()); cerr == nil && collapsed {
 			// Healthy grader, unusable window: the rows exist and are one
 			// market-wide call repeated per symbol.
 			gated = true

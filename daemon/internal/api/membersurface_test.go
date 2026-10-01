@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/datalicense"
+	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
@@ -95,6 +97,14 @@ func TestMemberSurfaceStripsVendorFieldsAndSideEffects(t *testing.T) {
 		map[string]string{"username": "owner", "password": "adminpass123"}); code != 200 {
 		t.Fatalf("owner login: %d %s", code, body)
 	}
+	// The web picks the member UI from this flag, so it must be the daemon's
+	// verdict: true for the member, false for the operator.
+	if code, body := getAs(t, member, srv.URL+"/api/auth/me"); code != 200 || !strings.Contains(body, `"member":true`) {
+		t.Errorf("member /api/auth/me: %d %s", code, body)
+	}
+	if code, body := getAs(t, owner, srv.URL+"/api/auth/me"); code != 200 || !strings.Contains(body, `"member":false`) {
+		t.Errorf("owner /api/auth/me: %d %s", code, body)
+	}
 	watch := func(c *http.Client, path, sym string) int {
 		t.Helper()
 		resp := postJSON(t, c, srv.URL+path, map[string]string{"symbol": sym, "market": "stocks"})
@@ -116,6 +126,22 @@ func TestMemberSurfaceStripsVendorFieldsAndSideEffects(t *testing.T) {
 		if code := watch(member, path, "ACME"); code != 403 {
 			t.Errorf("member %s: %d, want 403 (ingestion side effects are operator-only)", path, code)
 		}
+	}
+	// ...and the watch drives nothing fleet-wide. user_symbols feeds the news
+	// scope (news API + LLM tagging), the attention scope (StockTwits) and the
+	// alerts fan-out, and keeps feeds alive; a member's watch must reach none.
+	u, _, err := st.GetUserByName(ctx, "erin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if own, _ := st.ListUserSymbols(ctx, u.ID); len(own) != 0 {
+		t.Errorf("a member's watch landed in user_symbols: %v", own)
+	}
+	if ids, _ := st.WatchedSymbolIDs(ctx); len(ids) != 0 {
+		t.Errorf("a member's watch widened the fleet-wide news/attention scope: %v", ids)
+	}
+	if n, _ := st.SymbolWatcherCount(ctx, acme.ID); n != 0 {
+		t.Errorf("a member's watch counts as a feed-keeping watcher: %d", n)
 	}
 
 	// The member's watchlist: identity and freshness, no vendor numbers.
@@ -173,5 +199,51 @@ func TestMemberSurfaceStripsVendorFieldsAndSideEffects(t *testing.T) {
 	code, body = getAs(t, owner, srv.URL+"/api/companies?q=ACME")
 	if code != 200 || !strings.Contains(body, `"price":11`) {
 		t.Errorf("owner companies lost its price: %d %s", code, body)
+	}
+}
+
+// publishedLLM is injected into newPublishedServerWith's Deps (nil = no LLM).
+// No test in this package runs in parallel, so a package variable is safe.
+var publishedLLM llm.Client
+
+// countingLLM records every completion it is asked for.
+type countingLLM struct{ calls atomic.Int32 }
+
+func (c *countingLLM) Enabled() bool { return true }
+func (c *countingLLM) Complete(context.Context, string, []llm.Message, int) (string, error) {
+	c.calls.Add(1)
+	return "a grounded profile paragraph", nil
+}
+func (c *countingLLM) Model() string    { return "stub" }
+func (c *countingLLM) Stats() llm.Stats { return llm.Stats{} }
+
+// TestMemberProfileNeverSpendsLLM: /api/company/profile is a member route, and
+// ?summary=1 asks the LLM for a paragraph. A member must get the profile
+// without it; the operator still gets it (which proves the stub is wired).
+func TestMemberProfileNeverSpendsLLM(t *testing.T) {
+	stub := &countingLLM{}
+	publishedLLM = stub
+	t.Cleanup(func() { publishedLLM = nil })
+	srv, st, mb := newPublishedServer(t)
+	if _, err := st.UpsertSymbol(context.Background(), "ACME", md.Stocks, "Acme Corp"); err != nil {
+		t.Fatal(err)
+	}
+	member := signupVerified(t, srv, mb, "fay", "fay@gmail.com")
+	if code, body := getAs(t, member, srv.URL+"/api/company/profile?symbol=ACME&summary=1"); code != 200 {
+		t.Fatalf("member profile: %d %s", code, body)
+	}
+	if n := stub.calls.Load(); n != 0 {
+		t.Fatalf("a member's ?summary=1 spent %d LLM call(s)", n)
+	}
+	owner := newClient(t)
+	if code, body := acctPost(t, owner, srv.URL+"/api/auth/login",
+		map[string]string{"username": "owner", "password": "adminpass123"}); code != 200 || !strings.Contains(body, `"member":false`) {
+		t.Fatalf("owner login: %d %s", code, body)
+	}
+	if code, body := getAs(t, owner, srv.URL+"/api/company/profile?symbol=ACME&summary=1"); code != 200 {
+		t.Fatalf("owner profile: %d %s", code, body)
+	}
+	if n := stub.calls.Load(); n != 1 {
+		t.Errorf("the operator's ?summary=1 made %d LLM call(s), want 1: the stub is not wired", n)
 	}
 }

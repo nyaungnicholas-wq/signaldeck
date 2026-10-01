@@ -44,6 +44,9 @@ type Deps struct {
 	// production). Mirrors ModelHealthWorker.RegistryPath, and exists for the
 	// same reason: without it a test reads the LIVE registry.
 	RegistryPath string
+	// CollapseCache memoizes REFUSED collapse verdicts (see collapsecache.go).
+	// nil = recompute every call, which is what tests and the gate tool get.
+	CollapseCache *CollapseRefusalCache
 	LLM          llm.Client // AI provider (may be disabled when no key is set)
 	// Subscribe validates a new symbol, upserts it into the STREAMED hot set
 	// (stream=1), and kicks off backfill (async). Wired in cmd/signaldeckd.
@@ -840,14 +843,16 @@ type memberWatchRow struct {
 }
 
 // watchlist returns the session user's watchlist rows (auth enforced by the
-// middleware, so userID is always non-zero here).
+// middleware, so userID is always non-zero here). A member's rows come from
+// member_symbols and carry no vendor fields.
 func (d Deps) watchlist(w http.ResponseWriter, r *http.Request) {
-	syms, err := d.St.ListUserSymbols(r.Context(), userID(r))
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
 	if d.isMember(r) {
+		// A member's list lives in member_symbols, which no worker reads.
+		syms, err := d.St.ListMemberSymbols(r.Context(), userID(r))
+		if err != nil {
+			httpInternal(w, err)
+			return
+		}
 		rows, err := d.buildWatchRows(r.Context(), syms)
 		if err != nil {
 			httpInternal(w, err)
@@ -858,6 +863,11 @@ func (d Deps) watchlist(w http.ResponseWriter, r *http.Request) {
 			out = append(out, memberWatchRow{Symbol: row.Symbol, LatestBarTs: row.LatestBarTs})
 		}
 		writeJSON(w, out)
+		return
+	}
+	syms, err := d.St.ListUserSymbols(r.Context(), userID(r))
+	if err != nil {
+		httpInternal(w, err)
 		return
 	}
 	d.writeWatchRows(w, r, syms)
@@ -1643,7 +1653,9 @@ func (d Deps) unsubscribe(w http.ResponseWriter, r *http.Request) {
 
 // watch puts an already-tracked symbol on the caller's own watchlist and does
 // nothing else: the member-safe half of /api/subscribe, which also starts a
-// backfill and a live feed for a symbol it has not seen.
+// backfill and a live feed for a symbol it has not seen. A member's list goes
+// to member_symbols, so it never widens the news, attention or alerts scope
+// (all read user_symbols fleet-wide) or keeps a feed alive.
 func (d Deps) watch(w http.ResponseWriter, r *http.Request) {
 	s, ok := d.watchTarget(w, r)
 	if !ok {
@@ -1653,7 +1665,11 @@ func (d Deps) watch(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 422, s.Symbol+" is not currently tracked")
 		return
 	}
-	if err := d.St.AddUserSymbol(r.Context(), userID(r), s.ID); err != nil {
+	add := d.St.AddUserSymbol
+	if d.isMember(r) {
+		add = d.St.AddMemberSymbol
+	}
+	if err := add(r.Context(), userID(r), s.ID); err != nil {
 		httpInternal(w, err)
 		return
 	}
@@ -1668,7 +1684,11 @@ func (d Deps) unwatch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := d.St.RemoveUserSymbol(r.Context(), userID(r), s.ID); err != nil {
+	remove := d.St.RemoveUserSymbol
+	if d.isMember(r) {
+		remove = d.St.RemoveMemberSymbol
+	}
+	if err := remove(r.Context(), userID(r), s.ID); err != nil {
 		httpInternal(w, err)
 		return
 	}

@@ -56,7 +56,7 @@ export default function LoginPage() {
     api
       .me()
       .then((me) => {
-        if (live) router.replace(me.isAdmin ? "/dashboard" : "/account");
+        if (live) router.replace((me.member ?? !me.isAdmin) ? "/today" : "/dashboard");
       })
       .catch(() => {});
     return () => {
@@ -78,7 +78,7 @@ export default function LoginPage() {
       // Members land on /account: the operator dashboard is admin-only on a
       // published deployment (daemon accounts.go, member tier).
       const me = mode === "login" ? await api.login(username, password) : await api.register(username, password);
-      router.replace(me.isAdmin ? "/dashboard" : "/account");
+      router.replace((me.member ?? !me.isAdmin) ? "/today" : "/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "request failed");
     } finally {

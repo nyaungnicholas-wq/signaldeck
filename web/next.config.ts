@@ -19,7 +19,8 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
   // 2026-07-19 nav consolidation (9 tabs → 5): HOME absorbs TODAY, WATCHLIST
   // absorbs DECK + COMPARE, LAB absorbs DESK + LIVE. Old URLs land on the new
   // homes so bookmarks, the alerts bell and briefing links keep working.
-  { source: "/today", destination: "/dashboard" },
+  // /today is a page again (2026-09-30): the MEMBER home, built only on routes
+  // the daemon's member tier serves. The operator's home stays /dashboard.
   { source: "/deck", destination: "/watchlist" },
   { source: "/compare", destination: "/watchlist/compare" },
   { source: "/desk", destination: "/lab/desk" },
@@ -95,10 +96,16 @@ const HUB_REDIRECTS: { source: string; destination: string }[] = [
 // fetches): 'self' already covers same-origin ws/wss
 // upgrades (incl. dev HMR), and bare ws:/wss: scheme sources would allow a
 // WebSocket to ANY host — an exfiltration channel the app never uses.
+// TradingView's free chart widget (components/TradingViewChart.tsx) loads one
+// script from s3.tradingview.com and renders in a frame on its own domains. It
+// is how member pages show a price chart without SignalDeck redistributing the
+// licensed bars: TradingView carries the data licence, with its branding kept.
+const TRADINGVIEW_SCRIPT = "https://s3.tradingview.com";
+const TRADINGVIEW_FRAMES = "https://www.tradingview-widget.com https://s.tradingview.com";
 const SCRIPT_SRC =
   process.env.NODE_ENV === "development"
-    ? "'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://accounts.google.com/gsi/client"
-    : "'self' 'unsafe-inline' https://challenges.cloudflare.com https://accounts.google.com/gsi/client";
+    ? `'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://accounts.google.com/gsi/client ${TRADINGVIEW_SCRIPT}`
+    : `'self' 'unsafe-inline' https://challenges.cloudflare.com https://accounts.google.com/gsi/client ${TRADINGVIEW_SCRIPT}`;
 // Cloudflare Turnstile (sign-up / password reset) loads its script from and
 // renders its widget in an iframe on challenges.cloudflare.com. Sign in with
 // Google (components/auth/GoogleButton.tsx) needs exactly the four /gsi/
@@ -109,7 +116,7 @@ const SECURITY_HEADERS = [
   {
     key: "Content-Security-Policy",
     value:
-      `default-src 'self'; script-src ${SCRIPT_SRC}; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://challenges.cloudflare.com https://accounts.google.com/gsi/; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
+      `default-src 'self'; script-src ${SCRIPT_SRC}; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://challenges.cloudflare.com https://accounts.google.com/gsi/ ${TRADINGVIEW_FRAMES}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
   },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

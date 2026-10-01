@@ -5,8 +5,19 @@ import Link from "next/link";
 import { api, type WatchRow, screenerRows } from "@/lib/api";
 import { fmtPrice } from "@/lib/format";
 import { Reveal, Spark, StatTile, PageHero, DeltaBadge } from "@/components/ui/Kit";
+import MemberWatchlist from "@/components/MemberWatchlist";
+import { useIsMember } from "@/hooks/useMe";
 
+// A MEMBER gets MemberWatchlist: this page's cards are built from closes,
+// sparks and day change, which the member tier strips (vendor-licensed), and its
+// add flow calls /api/subscribe, which starts ingestion (operator-only).
 export default function WatchlistPage() {
+  const { member, known } = useIsMember();
+  if (!known) return null;
+  return member ? <MemberWatchlist /> : <OperatorWatchlistPage />;
+}
+
+function OperatorWatchlistPage() {
   const [watchlist, setWatchlist] = useState<WatchRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [undo, setUndo] = useState<{

@@ -240,7 +240,7 @@ func (d Deps) accuracy(w http.ResponseWriter, r *http.Request) {
 	// them would publish a fabricated scientific verdict every time a database
 	// read timed out, which is the same dishonesty as publishing the rows,
 	// pointed the other way.
-	reason, collapsed, err := d.collapsedGradingWindow(ctx, reg, now)
+	reason, collapsed, err := d.collapsedGradingWindowCached(ctx, reg, now)
 	if err != nil {
 		writeAccuracyRefusal(w, accuracyResponse{
 			Status: "REFUSED_UNAVAILABLE", GraderFresh: graderFresh, GeneratedAt: now,

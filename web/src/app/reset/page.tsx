@@ -39,7 +39,7 @@ function ResetInner() {
       const me = await api.resetPassword(token, password);
       setSuccess("Password updated. Signing you in…");
       setTimeout(() => {
-        router.replace(me.isAdmin ? "/dashboard" : "/account");
+        router.replace((me.member ?? !me.isAdmin) ? "/today" : "/dashboard");
       }, 1200);
     } catch (err) {
       if (err instanceof ApiError) {

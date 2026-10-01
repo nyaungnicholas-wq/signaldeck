@@ -35,6 +35,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 )
 
 // ScoreRow is one scores row for the cold archive (symbol join done by the
@@ -132,12 +133,59 @@ func (s *Store) ScoreOutcomesBefore(ctx context.Context, cutoff int64, limit int
 
 // DeleteScoreOutcomesBefore deletes score_outcomes with ts < cutoff (retention).
 // Callers MUST have durably archived the rows first.
+//
+// IN BATCHES FOUND BY READERS. As one DELETE it scanned all ~8.9M rows (no
+// index leads with ts) under the write lock, once per archive batch: measured
+// 2026-09-30, four runs held the lock 1-5 minutes each, and every sign-in in
+// those windows failed. Readers now find the keys (no lock) and each write
+// deletes at most 500 rows by primary key, re-checking ts < cutoff, so the
+// deleted set is still exactly "ts < cutoff"; between writes the priority
+// gate lets account writes in.
 func (s *Store) DeleteScoreOutcomesBefore(ctx context.Context, cutoff int64) (int64, error) {
-	res, err := s.w.ExecContext(ctx, `DELETE FROM score_outcomes WHERE ts < ?`, cutoff)
-	if err != nil {
-		return 0, err
+	const perWrite = 500
+	var total int64
+	for {
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT symbol_id, horizon, ts FROM score_outcomes WHERE ts < ? LIMIT 20000`, cutoff)
+		if err != nil {
+			return total, err
+		}
+		var keys []any
+		for rows.Next() {
+			var sym, ts int64
+			var h string
+			if err := rows.Scan(&sym, &h, &ts); err != nil {
+				rows.Close() //nolint:errcheck
+				return total, err
+			}
+			keys = append(keys, sym, h, ts)
+		}
+		err = rows.Err()
+		rows.Close() //nolint:errcheck
+		if err != nil {
+			return total, err
+		}
+		if len(keys) == 0 {
+			return total, nil
+		}
+		var pass int64
+		for start := 0; start < len(keys); start += perWrite * 3 {
+			batch := keys[start:min(start+perWrite*3, len(keys))]
+			res, err := s.w.ExecContext(ctx,
+				`DELETE FROM score_outcomes WHERE ts < ? AND (symbol_id, horizon, ts) IN (VALUES `+
+					strings.TrimSuffix(strings.Repeat("(?,?,?),", len(batch)/3), ",")+`)`,
+				append([]any{cutoff}, batch...)...)
+			if err != nil {
+				return total, err
+			}
+			n, _ := res.RowsAffected()
+			pass += n
+		}
+		total += pass
+		if pass == 0 {
+			return total, nil // everything the readers saw is already gone
+		}
 	}
-	return res.RowsAffected()
 }
 
 // ResolvedFeaturesBefore returns up to limit feature rows with ts < cutoff

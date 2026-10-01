@@ -346,7 +346,10 @@ func (d Deps) startSession(w http.ResponseWriter, r *http.Request, uid int64, us
 		return
 	}
 	d.setSessionCookie(w, r, token, int(sessionTTL.Seconds()))
-	writeJSON(w, map[string]any{"id": uid, "username": username, "isAdmin": isAdmin})
+	// member mirrors isMember for the session just issued (this request carries
+	// no session yet), so every sign-in path can land a member on /today.
+	member := d.published() && !d.isAdminUID(r.Context(), uid)
+	writeJSON(w, map[string]any{"id": uid, "username": username, "isAdmin": isAdmin, "member": member})
 }
 
 // authLogout deletes the session and clears the cookie.
@@ -385,7 +388,10 @@ func (d Deps) authMe(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 401, "not signed in")
 		return
 	}
-	writeJSON(w, map[string]any{"id": u.ID, "username": u.Username, "isAdmin": u.IsAdmin})
+	// member is the daemon's own verdict (isMember), not something the web could
+	// derive from isAdmin: on a private deployment every signed-in account is
+	// the operator, admin or not.
+	writeJSON(w, map[string]any{"id": u.ID, "username": u.Username, "isAdmin": u.IsAdmin, "member": d.isMember(r)})
 }
 
 func (d Deps) registerAuth(mux *http.ServeMux) {

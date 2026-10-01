@@ -117,7 +117,7 @@ export default function GoogleButton({
       setBusy(true);
       try {
         const me = await api.googleSignIn(credential);
-        router.replace(me.isAdmin ? "/dashboard" : "/account");
+        router.replace((me.member ?? !me.isAdmin) ? "/today" : "/dashboard");
       } catch (err) {
         busyRef.current = false;
         setBusy(false);

@@ -55,6 +55,8 @@ import {
   type Trendline,
 } from "@/lib/api";
 import VerdictCard from "@/components/VerdictCard";
+import MemberSymbolView from "@/components/symbol/MemberSymbolView";
+import { useIsMember } from "@/hooks/useMe";
 import { ago, fmtPct, fmtPrice, fmtScore, scoreColor, verdict } from "@/lib/format";
 import CandleChart, { type Tf } from "@/components/symbol/CandleChart";
 import IndicatorMenu from "@/components/symbol/IndicatorMenu";
@@ -100,7 +102,31 @@ function isMarket(m: string): m is Market {
   return m === "crypto" || m === "stocks";
 }
 
+// A MEMBER gets MemberSymbolView: the operator page below reads ~27 routes, most
+// of them vendor data the member tier refuses. Decided before any of the
+// operator page's hooks run, so none of its requests fire for a member.
 export default function SymbolPage({
+  params,
+}: {
+  params: Promise<{ market: string; symbol: string }>;
+}) {
+  const p = use(params);
+  const { member, known } = useIsMember();
+  if (!known) return null;
+  if (member) {
+    if (!isMarket(p.market)) {
+      return (
+        <p className="panel m-0 px-4 py-3 text-[0.85rem]" style={{ color: "var(--dim)" }}>
+          Unknown market &ldquo;{p.market}&rdquo;. Symbol pages live under /s/stocks/&hellip; and /s/crypto/&hellip;.
+        </p>
+      );
+    }
+    return <MemberSymbolView symbol={decodeURIComponent(p.symbol)} market={p.market} />;
+  }
+  return <OperatorSymbolPage params={params} />;
+}
+
+function OperatorSymbolPage({
   params,
 }: {
   params: Promise<{ market: string; symbol: string }>;
