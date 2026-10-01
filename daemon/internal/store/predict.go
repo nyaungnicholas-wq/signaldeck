@@ -232,12 +232,10 @@ func (s *Store) PredictionBefore(ctx context.Context, symbolID int64, h md.Horiz
 // that stopped printing bars is genuinely unknown, and inventing one (or
 // dropping the row) would quietly improve the measured record.
 //
-// (afterTs, afterSym) is a keyset cursor: rows strictly after it in
-// (ts, symbol_id) order. Pass 0, 0 for the head. The EXISTS check cannot see
-// every reason the resolver skips a row (no settled base; a forward bar more
-// than three horizons past target), so a caller that only ever read the head
-// re-read the same skipped rows forever — the resolver pages with this.
-func (s *Store) UnresolvedPredictions(ctx context.Context, h md.Horizon, cutoff, horizonSecs, afterTs, afterSym int64, limit int) ([]struct {
+// limit < 0 reads the whole queue (SQLite LIMIT -1). The EXISTS check cannot
+// see every reason the resolver skips a row, so a caller that only ever read
+// the head re-read the same skipped rows forever — the resolver reads it all.
+func (s *Store) UnresolvedPredictions(ctx context.Context, h md.Horizon, cutoff, horizonSecs int64, limit int) ([]struct {
 	SymbolID int64
 	Ts       int64
 	Prob     float64
@@ -246,12 +244,11 @@ func (s *Store) UnresolvedPredictions(ctx context.Context, h md.Horizon, cutoff,
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT p.symbol_id, p.ts, p.prob FROM prediction_outcomes p
 		WHERE p.resolved_at IS NULL AND p.horizon=? AND p.ts<=?
-		  AND (p.ts > ? OR (p.ts = ? AND p.symbol_id > ?))
 		  AND EXISTS (SELECT 1 FROM bars b
 		              WHERE b.symbol_id = p.symbol_id AND b.tf='1d'
 		                AND b.ts >= p.ts + ?)
-		ORDER BY p.ts, p.symbol_id LIMIT ?`,
-		string(h), cutoff, afterTs, afterTs, afterSym, horizonSecs, limit)
+		ORDER BY p.ts LIMIT ?`,
+		string(h), cutoff, horizonSecs, limit)
 	if err != nil {
 		return nil, err
 	}

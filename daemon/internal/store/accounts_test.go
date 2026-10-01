@@ -43,7 +43,7 @@ func TestPurgeStaleUnverifiedAndResetVoidsTokens(t *testing.T) {
 	if err := st.SetPassword(ctx, fresh, "y"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.ConsumeAuthToken(ctx, tok, TokenVerify); err != ErrTokenInvalid {
+	if _, err := st.VerifyEmail(ctx, tok); err != ErrTokenInvalid {
 		t.Fatalf("verify link survived a password reset: err=%v", err)
 	}
 }
@@ -104,5 +104,39 @@ func TestResetPasswordIsAtomic(t *testing.T) {
 	}
 	if _, err := st.ResetPassword(ctx, tok, "again"); err != ErrTokenInvalid {
 		t.Fatalf("second use of the link: err=%v, want ErrTokenInvalid", err)
+	}
+}
+
+// Confirming an address redeems the link and verifies in one transaction; a dead
+// link verifies nothing.
+func TestVerifyEmailIsAtomic(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "acct.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+	uid, err := st.CreateUserWithEmail(ctx, "vera", "vera@example.com", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := st.CreateAuthToken(ctx, uid, TokenVerify, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.VerifyEmail(ctx, "short"); err != ErrTokenInvalid {
+		t.Fatalf("malformed link: err=%v", err)
+	}
+	if _, verified, _, _ := st.AccountEmail(ctx, uid); verified {
+		t.Fatal("a dead link verified the address")
+	}
+	if got, err := st.VerifyEmail(ctx, tok); err != nil || got != uid {
+		t.Fatalf("VerifyEmail = %d, %v", got, err)
+	}
+	if _, verified, _, _ := st.AccountEmail(ctx, uid); !verified {
+		t.Fatal("address not verified")
+	}
+	if _, err := st.VerifyEmail(ctx, tok); err != ErrTokenInvalid {
+		t.Fatalf("second use: err=%v, want ErrTokenInvalid", err)
 	}
 }

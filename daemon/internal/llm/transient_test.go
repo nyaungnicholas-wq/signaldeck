@@ -89,3 +89,24 @@ func TestCompleteWith_PermanentAfterRetryableIsTransient(t *testing.T) {
 		t.Fatalf("err = %v, want ErrTransient for a 400 that followed a retryable failure", err)
 	}
 }
+
+// A 401 rotates to the next key, but it is not "the provider was busy": a 400
+// that follows it is the request's own fault and must stay a permanent error.
+func TestCompleteWith_PermanentAfterKeyRejectionStaysPermanent(t *testing.T) {
+	var hits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt64(&hits, 1) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"detail":"bad key"}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"max_tokens exceeds the model limit"}`))
+	}))
+	defer srv.Close()
+	c := New([]string{"k1", "k2"}, srv.URL, "m", "m", "m", 100).(*httpClient)
+	_, err := c.CompleteWith(context.Background(), "m", "sys", []Message{{Role: "user", Content: "hi"}}, 16)
+	if err == nil || errors.Is(err, ErrTransient) {
+		t.Fatalf("err = %v, want a permanent error after a key rejection", err)
+	}
+}

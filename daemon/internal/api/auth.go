@@ -157,8 +157,9 @@ func (b *credsBody) validate() string {
 var loginFailures = &failCounter{fails: map[string]*failState{}}
 
 type failCounter struct {
-	mu    sync.Mutex
-	fails map[string]*failState
+	mu        sync.Mutex
+	fails     map[string]*failState
+	lastSweep time.Time
 }
 
 type failState struct {
@@ -230,14 +231,28 @@ func (f *failCounter) succeed(key string) {
 // its lock ends exactly loginLockoutMax after the last failure, so forgetting
 // it then reset n to zero and handed back four free guesses plus the whole
 // backoff ladder every ~36 minutes. Called under mu.
+//
+// It walks the whole map under mu, so it runs at most once a minute rather than
+// on every sign-in; and past loginFailSoftCap entries (someone spraying names
+// to fill it) remembered names fall back to the 15-minute rule, so the memory
+// degrades to the old behaviour under attack instead of growing without bound.
 func (f *failCounter) sweep(now time.Time) {
+	pressure := len(f.fails) > loginFailSoftCap
+	if !pressure && now.Sub(f.lastSweep) < time.Minute {
+		return
+	}
+	f.lastSweep = now
 	for k, st := range f.fails {
 		idle := now.Sub(st.last)
-		if idle > loginLockoutMemory || (st.n < loginLockoutAfter && idle > loginLockoutMax) {
+		if idle > loginLockoutMemory || ((st.n < loginLockoutAfter || pressure) && idle > loginLockoutMax) {
 			delete(f.fails, k)
 		}
 	}
 }
+
+// loginFailSoftCap is the lockout-map size past which names stop being
+// remembered for loginLockoutMemory (see sweep).
+const loginFailSoftCap = 50000
 
 // loginLockoutMemory is how long a name that reached the lockout stays at the
 // cap: one guess per loginLockoutMax for a day, not a fresh ladder.

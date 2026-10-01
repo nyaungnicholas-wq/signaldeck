@@ -239,7 +239,12 @@ func Load() Config {
 	// the allowlist sitting next to them.
 	allowedHostsRaw := pick("SIGNALDECK_ALLOWED_HOSTS", defaultAllowedHosts)
 	httpAddr := envOr("SIGNALDECK_HTTP", "127.0.0.1:8322")
-	private := reachablePrivately(httpAddr, allowedHostsRaw)
+	// A configured public URL or quick-tunnel log says strangers arrive (through
+	// the loopback web proxy), whatever the bind and allowlist say: the same
+	// evidence api.published() weighs. Without it, dropping a stale tunnel host
+	// from ALLOWED_HOSTS flipped OpenSignup and PublicReads to open by default.
+	private := reachablePrivately(httpAddr, allowedHostsRaw) &&
+		pick("SIGNALDECK_PUBLIC_URL", "") == "" && pick("SIGNALDECK_TUNNEL_LOG", "") == ""
 	cfg := Config{
 		LLMKey:     llmFirst,
 		LLMKeys:    llmKeys,

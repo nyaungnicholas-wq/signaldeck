@@ -115,12 +115,6 @@ func (s *Store) AccountEmail(ctx context.Context, uid int64) (email string, veri
 	return e.String, v == 1, e.Valid && e.String != "", err
 }
 
-// SetEmailVerified marks an account's address as confirmed.
-func (s *Store) SetEmailVerified(ctx context.Context, uid int64) error {
-	_, err := s.authW().ExecContext(ctx, `UPDATE users SET email_verified=1 WHERE id=?`, uid)
-	return err
-}
-
 // SetPassword replaces an account's hash and ends every session it holds, so a
 // reset also evicts whoever had the old password. One transaction: as three
 // autocommits, a deadline between them left the new hash in place with the
@@ -149,6 +143,42 @@ func setPasswordTx(ctx context.Context, tx *sql.Tx, uid int64, passHash string) 
 	}
 	_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, uid)
 	return err
+}
+
+// VerifyEmail redeems a confirmation link and marks the address verified in
+// one transaction. Redeem-then-SetEmailVerified as two writes could spend the
+// link and then time out, leaving the account unverified with no link left.
+// The UPDATE is the single-use check: it only matches an unused, unexpired
+// row, so two concurrent redemptions cannot both succeed (same in
+// ResetPassword).
+func (s *Store) VerifyEmail(ctx context.Context, raw string) (int64, error) {
+	if len(raw) != 64 {
+		return 0, ErrTokenInvalid
+	}
+	h := hashAuthToken(raw)
+	now := time.Now().Unix()
+	tx, err := s.authW().BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	res, err := tx.ExecContext(ctx,
+		`UPDATE auth_tokens SET used_ts=? WHERE token_hash=? AND kind=? AND used_ts IS NULL AND expires_ts>?`,
+		now, h, TokenVerify, now)
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return 0, ErrTokenInvalid
+	}
+	var uid int64
+	if err := tx.QueryRowContext(ctx, `SELECT user_id FROM auth_tokens WHERE token_hash=?`, h).Scan(&uid); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET email_verified=1 WHERE id=?`, uid); err != nil {
+		return 0, err
+	}
+	return uid, tx.Commit()
 }
 
 // ResetPassword redeems a reset link AND sets the new password in one
@@ -230,29 +260,4 @@ func (s *Store) CreateAuthToken(ctx context.Context, uid int64, kind string, ttl
 		return "", err
 	}
 	return raw, nil
-}
-
-// ConsumeAuthToken redeems a token of the given kind exactly once. The UPDATE
-// is the check: it only matches an unused, unexpired row, so two concurrent
-// redemptions cannot both succeed.
-func (s *Store) ConsumeAuthToken(ctx context.Context, raw, kind string) (int64, error) {
-	if len(raw) != 64 {
-		return 0, ErrTokenInvalid
-	}
-	h := hashAuthToken(raw)
-	now := time.Now().Unix()
-	res, err := s.authW().ExecContext(ctx,
-		`UPDATE auth_tokens SET used_ts=? WHERE token_hash=? AND kind=? AND used_ts IS NULL AND expires_ts>?`,
-		now, h, kind, now)
-	if err != nil {
-		return 0, err
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return 0, ErrTokenInvalid
-	}
-	var uid int64
-	if err := s.authW().QueryRowContext(ctx, `SELECT user_id FROM auth_tokens WHERE token_hash=?`, h).Scan(&uid); err != nil {
-		return 0, err
-	}
-	return uid, nil
 }

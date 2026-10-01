@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -189,7 +190,7 @@ func TestLoginLockoutRemembersACappedName(t *testing.T) {
 	}
 	// A name that never reached the threshold is still forgotten promptly.
 	f.fail("carol", now)
-	f.retryAfter("x", later) // any call sweeps
+	f.retryAfter("x", later.Add(2*time.Minute)) // a call a minute after the last sweep sweeps
 	f.mu.Lock()
 	_, kept := f.fails["carol"]
 	f.mu.Unlock()
@@ -248,5 +249,22 @@ func TestLoginRejectsOverlongUsername(t *testing.T) {
 	loginFailures.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("overlong username was stored as a lockout key (%d entries)", n)
+	}
+}
+
+// Under a name-spraying flood the 24h memory gives way to the 15-minute rule, so
+// the map cannot grow without bound.
+func TestLoginLockoutMemoryYieldsUnderPressure(t *testing.T) {
+	f := &failCounter{fails: map[string]*failState{}}
+	now := time.Now()
+	for i := 0; i <= loginFailSoftCap; i++ {
+		f.fails[fmt.Sprintf("n%d", i)] = &failState{n: loginLockoutAfter, last: now}
+	}
+	f.retryAfter("probe", now.Add(loginLockoutMax+time.Second))
+	f.mu.Lock()
+	left := len(f.fails)
+	f.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d remembered names survived a full map past the soft cap", left)
 	}
 }

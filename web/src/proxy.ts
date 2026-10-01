@@ -45,10 +45,15 @@ export function proxy(req: NextRequest) {
   // The quick tunnel serves http:// as-is (no edge redirect), so a sign-in
   // there set the session cookie without Secure — the daemon keys Secure on
   // X-Forwarded-Proto. Send any plain-http edge visit to https first. Direct
-  // loopback use (no proxy, or a local host) is untouched.
-  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "";
+  // loopback use (no proxy, or a local host) is untouched. Host only, never
+  // X-Forwarded-Host: the edge passes a client's copy of that through, and the
+  // redirect must not point anywhere the client chose. no-store so no cache
+  // keeps one visitor's redirect for another.
+  const host = req.headers.get("host") ?? "";
   if (req.headers.get("x-forwarded-proto") === "http" && host && !LOOPBACK.test(host)) {
-    return NextResponse.redirect(`https://${host}${req.nextUrl.pathname}${req.nextUrl.search}`, 308);
+    const res = NextResponse.redirect(`https://${host}${req.nextUrl.pathname}${req.nextUrl.search}`, 308);
+    res.headers.set("cache-control", "no-store");
+    return res;
   }
   if (req.nextUrl.pathname === "/robots.txt") {
     return NextResponse.next();

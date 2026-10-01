@@ -101,7 +101,7 @@ func TestResolverPagesPastRowsItSkips(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for i := int64(0); i <= resolveBatch; i++ { // one more than a whole batch
+	for i := int64(0); i <= 1500; i++ { // one more than the old head batch of 1500
 		if err := st.UpsertPrediction(ctx, store.Prediction{
 			SymbolID: stuck.ID, Horizon: md.H1d, Ts: d0 + 12*3600 + i,
 			RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: `{}`,
@@ -125,6 +125,6 @@ func TestResolverPagesPastRowsItSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(ups) != 1 {
-		t.Fatalf("resolved %d rows (%s); want the one LIVE row behind %d skipped ones", len(ups), msg, resolveBatch+1)
+		t.Fatalf("resolved %d rows (%s); want the one LIVE row behind 1501 skipped ones", len(ups), msg)
 	}
 }

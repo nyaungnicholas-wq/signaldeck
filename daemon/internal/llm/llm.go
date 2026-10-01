@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -390,6 +391,7 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 	// it retries the same key after a short backoff. Permanent errors (bad
 	// request / unknown model) are not retryable and return immediately.
 	var lastErr error
+	providerFlaked := false // an earlier attempt timed out / hit 5xx / 429 / the network
 	for i := 0; i < maxAttempts; i++ {
 		if i > 0 {
 			select {
@@ -404,15 +406,19 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 		}
 		lastErr = err
 		if !retryable {
-			// A permanent-looking answer AFTER a retryable failure is the same
+			// A permanent-looking answer AFTER the provider flaked is the same
 			// request re-sent to a provider that just timed out on it (live:
 			// two 75s timeouts, then an instant 400). File it as transient so
-			// the worker resumes next pass instead of reporting an error; a
-			// 400 on the FIRST attempt is still permanent and not retried.
-			if i > 0 {
+			// the worker resumes next pass. Not after a 401/403 key rotation:
+			// that 400 is the request's own fault and must surface. A 400 on
+			// the FIRST attempt is permanent and not retried.
+			if providerFlaked {
 				return "", fmt.Errorf("%w: %w", ErrTransient, err)
 			}
 			return "", err
+		}
+		if !errors.As(err, new(keyRejected)) {
+			providerFlaked = true
 		}
 	}
 	if lastErr == nil {
@@ -464,7 +470,11 @@ func (c *httpClient) attempt(ctx context.Context, key string, body []byte, timeo
 		// another) are all worth a failover; 400/404 (bad request/model) are
 		// not. Never surface the provider's raw error verbatim.
 		retryable := res.StatusCode == 429 || res.StatusCode >= 500 || res.StatusCode == 401 || res.StatusCode == 403
-		return "", retryable, fmt.Errorf("llm: provider error: %s", sanitize(msg))
+		perr := fmt.Errorf("llm: provider error: %s", sanitize(msg))
+		if res.StatusCode == 401 || res.StatusCode == 403 {
+			return "", retryable, keyRejected{perr} // retry on another key, but not "the provider was busy"
+		}
+		return "", retryable, perr
 	}
 	c.record(cr.Usage.PromptTokens, cr.Usage.CompletionTokens, now, "")
 	if len(cr.Choices) == 0 {
@@ -549,6 +559,11 @@ func trimToBudget(msgs []Message, budget int) {
 
 // sanitize strips anything key-shaped from an error string before it can be
 // stored or returned.
+// keyRejected marks a 401/403: the key, not the provider, failed.
+type keyRejected struct{ error }
+
+func (k keyRejected) Unwrap() error { return k.error }
+
 func sanitize(s string) string {
 	for _, tok := range strings.Fields(s) {
 		if strings.HasPrefix(tok, "nvapi-") || strings.HasPrefix(tok, "sk-") || len(tok) > 40 {

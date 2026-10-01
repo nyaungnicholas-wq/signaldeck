@@ -152,10 +152,35 @@ func (w *ResearchLabWorker) Run(ctx context.Context) (string, error) {
 	// prior count, and advanced once at the end.
 	priorTests := w.labTests(ctx)
 
+	// closeDay advances the cumulative look counter by the gradings actually
+	// conducted and marks the day done. Every exit after a grading goes through
+	// it — including a STOP, the common exit now that the loops honour ctx: a
+	// stopped run has already saved streaks and shadows, so leaving the day open
+	// re-surveyed the same shadows on the same data next boot (a double streak
+	// step) and its looks never reached the Bonferroni divisor.
+	//
+	// It runs on a non-cancelled context and its error is returned: this is the
+	// write labTests says must not be skipped (a stop used to drop it silently
+	// while the run still reported "tested N hyps").
+	closeDay := func(looks int) error {
+		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if err := w.St.SetMeta(wctx, researchLabTestsKey, strconv.Itoa(priorTests+looks)); err != nil {
+			return fmt.Errorf("advance the Bonferroni look counter: %w", err)
+		}
+		if err := w.St.SetMeta(wctx, researchLabDayKey, day); err != nil {
+			return fmt.Errorf("record the lab day: %w", err)
+		}
+		return nil
+	}
+
 	// STEP A — re-evaluate existing shadows on fresh data (promotion path).
 	promoted, rejected, resurveyed := w.reEvaluateShadows(ctx, rows, keys, cfg, baseline, priorTests, nowUnix)
 	if err := ctx.Err(); err != nil {
-		return "", err // interrupted mid-survey: same as a crash (see the counter note below)
+		if cerr := closeDay(resurveyed); cerr != nil {
+			return "", cerr
+		}
+		return "", err
 	}
 
 	// STEP B — mine new hypotheses from the current failure clusters.
@@ -164,11 +189,14 @@ func (w *ResearchLabWorker) Run(ctx context.Context) (string, error) {
 	nTested := len(hyps)
 	mult := researchlab.Multiplicity{Batch: nTested, PriorTests: priorTests}
 	newShadows := 0
-	for _, h := range hyps {
+	for i, h := range hyps {
 		// Each grading is seconds of CPU and none of it read ctx, so a daemon
 		// stop waited out the whole batch: research-lab held 5 of 6 forced
 		// shutdowns (8-20 min past the 75s grace), orphaning the fleet.
 		if err := ctx.Err(); err != nil {
+			if cerr := closeDay(resurveyed + i); cerr != nil {
+				return "", cerr
+			}
 			return "", err
 		}
 		g, err := researchlab.EvaluateHypothesis(h, rows, keys, cfg)
@@ -196,21 +224,11 @@ func (w *ResearchLabWorker) Run(ctx context.Context) (string, error) {
 	w.emitFeedback(ctx, priority, promoted, nowUnix)
 
 	// Advance the cumulative look counter LAST, and by the number of gradings
-	// actually conducted. A crash before this point re-runs tonight's looks
-	// under tonight's (lower) divisor, which is the pre-existing behaviour;
-	// double-counting them would silently tighten a bar nobody paid for.
-	//
-	// This write is the one labTests says must not be skipped, so it is not
-	// discarded and not tied to the run's context: a stop arriving after the
-	// gradings finished used to drop it silently while the run still reported
-	// "tested N hyps" — and the next night's divisor under-counted the looks.
-	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	if err := w.St.SetMeta(wctx, researchLabTestsKey, strconv.Itoa(priorTests+nTested+resurveyed)); err != nil {
-		return "", fmt.Errorf("advance the Bonferroni look counter: %w", err)
-	}
-	if err := w.St.SetMeta(wctx, researchLabDayKey, day); err != nil {
-		return "", fmt.Errorf("record the lab day: %w", err)
+	// actually conducted. A crash (not a stop) before this point re-runs
+	// tonight's looks under tonight's (lower) divisor, the pre-existing
+	// behaviour; double-counting them would tighten a bar nobody paid for.
+	if err := closeDay(nTested + resurveyed); err != nil {
+		return "", err
 	}
 	return fmt.Sprintf(
 		"baseline lift %.3f (n=%d); tested %d hyps → %d new shadows; re-surveyed %d shadows → %d promoted, %d rejected "+

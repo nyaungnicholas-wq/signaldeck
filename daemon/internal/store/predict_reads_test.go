@@ -43,14 +43,14 @@ func TestLatestPredictionAndUnresolvedQueue(t *testing.T) {
 	}
 
 	// Both rows pend; the cutoff hides the newer one.
-	pend, err := st.UnresolvedPredictions(ctx, md.H1d, 1500, hs, 0, 0, 10)
+	pend, err := st.UnresolvedPredictions(ctx, md.H1d, 1500, hs, 10)
 	if err != nil || len(pend) != 1 || pend[0].Ts != 1000 || pend[0].Prob != 0.60 {
 		t.Fatalf("UnresolvedPredictions cutoff = %+v, %v", pend, err)
 	}
 	if err := st.ResolvePrediction(ctx, sym.ID, md.H1d, 1000, 0.01); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	pend, err = st.UnresolvedPredictions(ctx, md.H1d, 5000, hs, 0, 0, 10)
+	pend, err = st.UnresolvedPredictions(ctx, md.H1d, 5000, hs, 10)
 	if err != nil || len(pend) != 1 || pend[0].Ts != 2000 {
 		t.Fatalf("resolved row still pending: %+v, %v", pend, err)
 	}
@@ -87,7 +87,7 @@ func TestUnresolvedPredictionsSkipsSymbolsWithNoForwardBar(t *testing.T) {
 		t.Fatalf("upsert bars: %v", err)
 	}
 
-	pend, err := st.UnresolvedPredictions(ctx, md.H1d, 9000, hs, 0, 0, 10)
+	pend, err := st.UnresolvedPredictions(ctx, md.H1d, 9000, hs, 10)
 	if err != nil {
 		t.Fatalf("UnresolvedPredictions: %v", err)
 	}
