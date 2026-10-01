@@ -1,6 +1,6 @@
 {
- "generated": "2026-10-01T08:07:50+00:00",
- "git_commit": "47f01457814917d735df02755356b96f16daecac",
+ "generated": "2026-10-01T09:22:21+00:00",
+ "git_commit": "cf9cdad603f749099b3eb092f553fb13b5725141",
  "survivorship_epoch": "2026-07-24",
  "grading_epoch": "2026-09-25",
  "hash_scheme": "datasetver v1 canonical records, sha256, floats %.10g (daemon/internal/datasetver.HashRecords)",
@@ -9,8 +9,8 @@
   {
    "file": "directional_days.csv",
    "kind": "directional-day-tallies",
-   "rows": 4,
-   "sha256": "0b3f4a9e9e6977887d6ae55be989d4b51a825b7a7765077aa2e14bae02e39d72"
+   "rows": 10,
+   "sha256": "6357c21f7d0fa28450ae32314d90933130fa52980cf98aee75265312229d6a42"
   },
   {
    "file": "prereg_claims.csv",

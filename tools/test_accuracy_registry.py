@@ -811,13 +811,17 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
     #             cut every pass short. Fixed in 4de23b9 (twins resolve with their
     #             ensemble row); the row returns with the next re-cut, which must
     #             re-freeze this table again.
-    # Every string below was read off that snapshot, and the same 14 rows match
-    # data/accuracy_registry.json's grade of 2026-10-01 00:34 exactly.
+    # Re-cut and re-frozen again the same day (02:22 PT grade, deploy cf9cdad)
+    # once the 39,232 1d#pm twins had resolved: prequential-majority (1d)
+    # is back (INSUFFICIENT DAYS 5/10), 1d counts its 5th day, and high
+    # conviction now reads its day floor (2/10) instead of its row floor.
+    # Every string below was read off that snapshot, and the same 15 rows match
+    # data/accuracy_registry.json's grade of 2026-10-01 02:22 exactly.
     EXPECTED = {
         ('directional-ensemble (1d)', 'all'):
-            'INSUFFICIENT DAYS (4/10 credible days of 4) — no interval, so no verdict',
+            'INSUFFICIENT DAYS (5/10 credible days of 5) — no interval, so no verdict',
         ('directional-ensemble (1d, high conviction)', '|p-0.5|>=0.15'):
-            'INSUFFICIENT (27/30)',
+            'INSUFFICIENT DAYS (2/10 credible days of 2) — no interval, so no verdict',
         ('filingsdrift21', 'all'):
             'NO BASELINE — naive-persistence null not frozen for these calls',
         ('liquidity21', 'all'):
@@ -828,6 +832,8 @@ class TestFrozenSnapshotVerdicts(unittest.TestCase):
             'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
         ('liquidity21-crypto#persist', 'all'):
             'BENCHMARK — the frozen naive-persistence null itself',
+        ('prequential-majority (1d)', 'all'):
+            'INSUFFICIENT DAYS (5/10 credible days of 5) — no interval, so no verdict',
         ('trend21', 'all'):
             'INSUFFICIENT BLOCKS (2/10 non-overlapping horizon blocks) — no interval, so no verdict',
         ('trend21#persist', 'all'):

@@ -1,12 +1,12 @@
 {
-  "generated": "2026-10-01T07:34:48.975937Z",
+  "generated": "2026-10-01T09:21:58.252408Z",
   "source_db": "data/signaldeck.db",
   "grader": {
     "status": "OK",
-    "graded_at": "2026-10-01T00:34:37",
+    "graded_at": "2026-10-01T02:20:59",
     "refused_since": null,
     "refusal_reason": null,
-    "rows": 14
+    "rows": 15
   },
   "universe_membership_rows": 2697299,
   "delisting": {
