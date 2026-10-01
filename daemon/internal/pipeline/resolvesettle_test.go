@@ -70,3 +70,61 @@ func TestResolverWaitsForTheForwardSessionToSettle(t *testing.T) {
 		t.Fatalf("100 -> 110 must label up, got %v", ups[0])
 	}
 }
+
+// Head-of-line blocking, the second time. The resolver read ONE oldest-first
+// batch of 1500 and skipped, for good, rows whose forward bar sits more than
+// three horizons past target (every pre-holiday Friday's 1d row) — so once
+// 1500 such rows led the queue, nothing behind them was ever offered. Live
+// from ~2026-09-10: the 1d head was 1500 stuck rows and 44k owed rows waited.
+func TestResolverPagesPastRowsItSkips(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	const d0 = int64(1780000000 + 12*7*86400) // inside the graded window
+	stuck, err := st.UpsertSymbol(ctx, "STUCK", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := st.UpsertSymbol(ctx, "LIVE", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bar := func(id, ts int64, c float64) md.Bar {
+		return md.Bar{SymbolID: id, TF: md.TF1d, Ts: ts, Open: c, High: c, Low: c, Close: c, Volume: 1}
+	}
+	// STUCK's next bar is 5 days on: past the 3-horizon gap guard, so every
+	// one of its rows is skipped on every pass — yet a forward bar exists, so
+	// the store still offers them, oldest first.
+	// LIVE is an ordinary resolvable row: base D0, forward D1, settled by D2.
+	if err := st.UpsertBars(ctx, []md.Bar{
+		bar(stuck.ID, d0, 100), bar(stuck.ID, d0+5*86400, 100),
+		bar(live.ID, d0, 100), bar(live.ID, d0+86400, 110), bar(live.ID, d0+2*86400, 111),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := int64(0); i <= resolveBatch; i++ { // one more than a whole batch
+		if err := st.UpsertPrediction(ctx, store.Prediction{
+			SymbolID: stuck.ID, Horizon: md.H1d, Ts: d0 + 12*3600 + i,
+			RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.UpsertPrediction(ctx, store.Prediction{
+		SymbolID: live.ID, Horizon: md.H1d, Ts: d0 + 13*3600, // newer than every stuck row
+		RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := (&PredictionResolver{St: st}).Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	_, ups, _, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ups) != 1 {
+		t.Fatalf("resolved %d rows (%s); want the one LIVE row behind %d skipped ones", len(ups), msg, resolveBatch+1)
+	}
+}

@@ -1386,83 +1386,101 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 		// identical grading rules is the entire point of tracking the
 		// benchmark as a predictor.
 		for _, hh := range []md.Horizon{h, benchmarkHorizon(h)} {
-			pending, err := w.St.UnresolvedPredictions(ctx, hh, now-horizonSecs(h), horizonSecs(h), 1500)
-			if err != nil {
-				return "", err
-			}
-			for _, p := range pending {
-				// settledbase.go: rows frozen after settledBaseSinceTs are graded from
-				// the newest bar that was SETTLED at decision time (2026-09-07).
-				base, okB, err := settledBase(ctx, w.St, marketByID[p.SymbolID], p.SymbolID, p.Ts)
+			// PAGE THROUGH THE WHOLE QUEUE. Rows skipped below for good (no
+			// settled base, or a forward bar over three horizons past target —
+			// every pre-holiday Friday's 1d row: Fri->Tue is 3d6h) stay pending
+			// and oldest-first, so a single head batch of 1500 re-read the same
+			// stuck rows every pass. From ~2026-09-10 the 1d head was 1500 such
+			// rows (08-04..09-08): 1d resolved 2-166 rows a day while 44k sat
+			// owed, freezing the graded record and its distinct-day count.
+			var afterTs, afterSym int64
+			for {
+				pending, err := w.St.UnresolvedPredictions(ctx, hh, now-horizonSecs(h), horizonSecs(h), afterTs, afterSym, resolveBatch)
 				if err != nil {
 					return "", err
 				}
-				if !okB {
-					continue
+				for _, p := range pending {
+					// settledbase.go: rows frozen after settledBaseSinceTs are graded from
+					// the newest bar that was SETTLED at decision time (2026-09-07).
+					base, okB, err := settledBase(ctx, w.St, marketByID[p.SymbolID], p.SymbolID, p.Ts)
+					if err != nil {
+						return "", err
+					}
+					if !okB {
+						continue
+					}
+					// DST SLACK. US daily bars are stamped at ET midnight, so ts%86400 is
+					// 14400 under EDT and 18000 under EST. Adding a fixed 604800 to an
+					// EST-stamped base lands ONE HOUR PAST the EDT-stamped bar seven
+					// days later, so BarAtOrAfter skips it and returns the NEXT
+					// session: verified on 2026-03-06, where target 2026-03-13T05:00Z
+					// misses that day's 04:00Z bar and grades Monday 03-16 instead --
+					// an 8-session return published as "1w". Every base bar in
+					// 2026-03-02..03-06 is affected, across the whole universe.
+					//
+					// 6h of slack absorbs the stamp jitter and cannot reach back into
+					// the prior session: the slackened target sits ~18h after the
+					// previous bar, so MIN(ts >= target) is unchanged in every
+					// non-DST case. The autumn transition was already safe.
+					target := base.Ts + horizonSecs(h) - dstStampSlackSecs
+					if now < target {
+						continue
+					}
+					fwd, okF, err := w.St.BarAtOrAfter(ctx, p.SymbolID, md.TF1d, target)
+					if err != nil {
+						return "", err
+					}
+					if !okF || base.Close <= 0 || fwd.Ts-target > 3*horizonSecs(h) {
+						continue
+					}
+					// SETTLEMENT GUARD — the forward bar must be FINISHED.
+					//
+					// `now < target` was the only time check, and target is the next
+					// session's bar STAMP (ET midnight). Ingest creates that bar at
+					// the open, so any resolver pass during the session found a bar
+					// whose Close was the live price, froze it as a close-to-close
+					// label, and never revisited it.
+					//
+					// Measured on 4,000 resolved 1d stock rows: 37.8% were frozen
+					// before their forward bar's 16:00 ET close, and those disagree
+					// with the FINAL close 9.7% of the time against 2.9% for rows
+					// frozen afterwards — about 3.7% of the whole 1d record labeled
+					// against a price that had not happened yet. 1w freezes
+					// mid-session only 0.9% of the time, which is exactly why it
+					// agrees with a recomputation 99.8% of the time and 1d only 94.2%.
+					//
+					// The test is "a LATER bar exists", not a clock offset: a
+					// successor bar can only appear once the next session has begun,
+					// so it settles the previous one without this code needing to
+					// know exchange hours, half-days, DST or crypto's 24h day.
+					//
+					// Cost: a label lands one session later, and the final bar of a
+					// symbol that stops printing never resolves — the same answer
+					// UnresolvedPredictions already gives for dead symbols, and an
+					// unknown outcome is better than a confident wrong one.
+					if _, settled, err := w.St.BarAtOrAfter(ctx, p.SymbolID, md.TF1d, fwd.Ts+1); err != nil {
+						return "", err
+					} else if !settled {
+						continue
+					}
+					if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, fwd.Close/base.Close-1); err != nil {
+						return "", err
+					}
+					resolved++
 				}
-				// DST SLACK. US daily bars are stamped at ET midnight, so ts%86400 is
-				// 14400 under EDT and 18000 under EST. Adding a fixed 604800 to an
-				// EST-stamped base lands ONE HOUR PAST the EDT-stamped bar seven
-				// days later, so BarAtOrAfter skips it and returns the NEXT
-				// session: verified on 2026-03-06, where target 2026-03-13T05:00Z
-				// misses that day's 04:00Z bar and grades Monday 03-16 instead --
-				// an 8-session return published as "1w". Every base bar in
-				// 2026-03-02..03-06 is affected, across the whole universe.
-				//
-				// 6h of slack absorbs the stamp jitter and cannot reach back into
-				// the prior session: the slackened target sits ~18h after the
-				// previous bar, so MIN(ts >= target) is unchanged in every
-				// non-DST case. The autumn transition was already safe.
-				target := base.Ts + horizonSecs(h) - dstStampSlackSecs
-				if now < target {
-					continue
+				if len(pending) < resolveBatch {
+					break
 				}
-				fwd, okF, err := w.St.BarAtOrAfter(ctx, p.SymbolID, md.TF1d, target)
-				if err != nil {
-					return "", err
-				}
-				if !okF || base.Close <= 0 || fwd.Ts-target > 3*horizonSecs(h) {
-					continue
-				}
-				// SETTLEMENT GUARD — the forward bar must be FINISHED.
-				//
-				// `now < target` was the only time check, and target is the next
-				// session's bar STAMP (ET midnight). Ingest creates that bar at
-				// the open, so any resolver pass during the session found a bar
-				// whose Close was the live price, froze it as a close-to-close
-				// label, and never revisited it.
-				//
-				// Measured on 4,000 resolved 1d stock rows: 37.8% were frozen
-				// before their forward bar's 16:00 ET close, and those disagree
-				// with the FINAL close 9.7% of the time against 2.9% for rows
-				// frozen afterwards — about 3.7% of the whole 1d record labeled
-				// against a price that had not happened yet. 1w freezes
-				// mid-session only 0.9% of the time, which is exactly why it
-				// agrees with a recomputation 99.8% of the time and 1d only 94.2%.
-				//
-				// The test is "a LATER bar exists", not a clock offset: a
-				// successor bar can only appear once the next session has begun,
-				// so it settles the previous one without this code needing to
-				// know exchange hours, half-days, DST or crypto's 24h day.
-				//
-				// Cost: a label lands one session later, and the final bar of a
-				// symbol that stops printing never resolves — the same answer
-				// UnresolvedPredictions already gives for dead symbols, and an
-				// unknown outcome is better than a confident wrong one.
-				if _, settled, err := w.St.BarAtOrAfter(ctx, p.SymbolID, md.TF1d, fwd.Ts+1); err != nil {
-					return "", err
-				} else if !settled {
-					continue
-				}
-				if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, fwd.Close/base.Close-1); err != nil {
-					return "", err
-				}
-				resolved++
+				last := pending[len(pending)-1]
+				afterTs, afterSym = last.Ts, last.SymbolID
 			}
 		}
 	}
 	return fmt.Sprintf("resolved %d predictions", resolved), nil
 }
+
+// resolveBatch is the resolver's page size.
+const resolveBatch = 1500
 
 // ── RegimeRunner: label + change detection ──────────────────────────────
 
