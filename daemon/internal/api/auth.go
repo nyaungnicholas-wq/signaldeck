@@ -294,6 +294,8 @@ func (d Deps) authLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d Deps) startSession(w http.ResponseWriter, r *http.Request, uid int64, username string, isAdmin bool) {
+	// Sign-in is a write a person waits on; let it ahead of the worker fleet.
+	defer d.St.Priority()()
 	// Prune on every session creation, not just login: it also deletes the
 	// pre-digest rows that stored a cookie value verbatim (see
 	// store.PruneSessions). Those rows stopped authenticating the moment the

@@ -390,6 +390,8 @@ func (d Deps) authRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": verifySent})
 		return
 	}
+	release := d.St.Priority() // a person is waiting: go ahead of the worker fleet
+	defer release()
 	uid, err := d.St.CreateUserWithEmail(ctx, creds.Username, email, string(hash))
 	if err != nil {
 		// A unique-index race on username or email; report it as taken.
@@ -485,6 +487,8 @@ func (d Deps) authVerify(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	r = r.WithContext(ctx)
+	release := d.St.Priority()
+	defer release()
 	uid, err := d.St.ConsumeAuthToken(ctx, strings.TrimSpace(body.Token), store.TokenVerify)
 	if errors.Is(err, store.ErrTokenInvalid) {
 		httpErr(w, 400, err.Error()+" — sign up again or request a new link")
@@ -605,6 +609,8 @@ func (d Deps) authReset(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	r = r.WithContext(ctx)
+	release := d.St.Priority()
+	defer release()
 	uid, err := d.St.ConsumeAuthToken(ctx, strings.TrimSpace(body.Token), store.TokenReset)
 	if errors.Is(err, store.ErrTokenInvalid) {
 		httpErr(w, 400, err.Error()+" — request a new reset link")

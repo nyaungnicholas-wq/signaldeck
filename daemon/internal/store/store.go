@@ -39,7 +39,9 @@ type Store struct {
 	// measured 2026-09-30, an email confirmation sat >90s in that queue and the
 	// page never answered. SQLite still serialises the actual writes (WAL, one
 	// writer at a time, busy_timeout 5s); this only skips Go's pool queue.
-	aw   *sql.DB
+	aw *sql.DB
+	// gate gives aw priority over w at w's transaction boundaries (prioritygate.go).
+	gate *priorityGate
 	path string // database file path (for size accounting in DataStats)
 	dsn  string // connection string (so a reader clone opens identically)
 	// borrowedWriter marks a ReaderClone: it shares the parent's write
@@ -151,11 +153,10 @@ func Open(path string) (*Store, error) {
 	// is the first thing to put back.
 	db.SetMaxOpenConns(16)
 	boundReadConns(db)
-	w, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		db.Close() //nolint:errcheck
-		return nil, err
-	}
+	// The main writer goes through the priority gate so account writes on aw
+	// can win the SQLite lock at w's next transaction boundary.
+	gate := &priorityGate{}
+	w := openGated(db.Driver(), dsn, gate)
 	// SQLite allows exactly one writer — serialize writes on one connection.
 	w.SetMaxOpenConns(1)
 	if _, err := w.Exec(schemaSQL); err != nil {
@@ -191,7 +192,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	aw.SetMaxOpenConns(1)
-	st := &Store{db: db, w: w, aw: aw, path: path, dsn: dsn, id: storeSeq.Add(1)}
+	st := &Store{db: db, w: w, aw: aw, gate: gate, path: path, dsn: dsn, id: storeSeq.Add(1)}
 	// A worker whose only product is an audit record must not be allowed to
 	// start when it has nowhere to write that record (see AuditRecordWorkers).
 	// verifySchema catches divergence from the DECLARATION; this catches the
@@ -819,7 +820,7 @@ func (s *Store) ReaderClone(maxConns int) (*Store, error) {
 	}
 	db.SetMaxOpenConns(maxConns)
 	boundReadConns(db)
-	return &Store{db: db, w: s.w, aw: s.aw, path: s.path, dsn: s.dsn, borrowedWriter: true, id: storeSeq.Add(1)}, nil
+	return &Store{db: db, w: s.w, aw: s.aw, gate: s.gate, path: s.path, dsn: s.dsn, borrowedWriter: true, id: storeSeq.Add(1)}, nil
 }
 
 // Close closes the database. A ReaderClone closes only its own read pool — the
