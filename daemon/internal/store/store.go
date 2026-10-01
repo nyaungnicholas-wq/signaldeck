@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -179,7 +180,11 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	// Account writer: opened AFTER schema + migrate so it never races them.
-	aw, err := sql.Open("sqlite", dsn)
+	// busy_timeout 12s (the main writer uses 5s): some worker transactions hold
+	// the SQLite write lock past 5s, and a person waiting on a confirmation is
+	// better served by a longer wait than an error. Still under the 15s bound
+	// the account handlers put on each request.
+	aw, err := sql.Open("sqlite", strings.Replace(dsn, "busy_timeout(5000)", "busy_timeout(12000)", 1))
 	if err != nil {
 		db.Close() //nolint:errcheck
 		w.Close()  //nolint:errcheck

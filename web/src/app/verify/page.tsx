@@ -18,7 +18,20 @@ function VerifyInner() {
 
     if (!token) return;
 
-    api.verifyEmail(token)
+    // A 503 means the server was busy and the link was NOT spent, so try again
+    // quietly a few times before showing anything.
+    const attempt = async (left: number): Promise<Awaited<ReturnType<typeof api.verifyEmail>>> => {
+      try {
+        return await api.verifyEmail(token);
+      } catch (err) {
+        if (left > 0 && err instanceof ApiError && err.status === 503) {
+          await new Promise((r) => setTimeout(r, 2500));
+          return attempt(left - 1);
+        }
+        throw err;
+      }
+    };
+    attempt(4)
       .then((data) => {
         setStatus("ok");
         setTimeout(() => {
