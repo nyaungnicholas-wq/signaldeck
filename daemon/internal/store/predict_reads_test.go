@@ -309,3 +309,34 @@ func TestRegimeForecastSurfacesAndDelete(t *testing.T) {
 		t.Fatalf("delete removed the wrong row: %+v", mine)
 	}
 }
+
+// ResolveOpenPrediction writes a label once. A second call, even with a
+// different return, must not rewrite it: a frozen label is evidence.
+func TestResolveOpenPredictionNeverRewritesAFrozenLabel(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	const ts = int64(GradingEpochTS) + 3600
+	if err := st.UpsertPrediction(ctx, Prediction{SymbolID: sym.ID, Horizon: md.H1d, Ts: ts,
+		RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.ResolveOpenPrediction(ctx, sym.ID, md.H1d, ts, 0.02); err != nil || !ok {
+		t.Fatalf("open row: ok=%v err=%v; want resolved", ok, err)
+	}
+	if ok, err := st.ResolveOpenPrediction(ctx, sym.ID, md.H1d, ts, -0.05); err != nil || ok {
+		t.Fatalf("labelled row: ok=%v err=%v; want untouched", ok, err)
+	}
+	if ok, err := st.ResolveOpenPrediction(ctx, sym.ID, md.H1d, ts+1, 0.01); err != nil || ok {
+		t.Fatalf("missing row: ok=%v err=%v; want false", ok, err)
+	}
+	var fwd float64
+	var up int
+	if err := st.DB().QueryRowContext(ctx, `SELECT fwd_return, up FROM prediction_outcomes
+		WHERE symbol_id=? AND horizon='1d' AND ts=?`, sym.ID, ts).Scan(&fwd, &up); err != nil {
+		t.Fatal(err)
+	}
+	if fwd != 0.02 || up != 1 {
+		t.Fatalf("label = (%v, %d); want the first write (0.02, 1)", fwd, up)
+	}
+}

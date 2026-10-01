@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -207,5 +208,47 @@ func TestResolverGradesAcrossAHolidayNotAGap(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != [2]int64{hol.ID, 1} {
 		t.Fatalf("resolved (symbol, up) = %v (%s); want exactly the HOLIDAY row (%d), labeled up", got, msg, hol.ID)
+	}
+}
+
+// The benchmark twin ("1d#pm", same symbol and ts) resolves in the SAME step as
+// its ensemble row, not in a later pass behind the whole ensemble queue: that
+// pass starved whenever a restart cut a long run short (2026-10-01, 39k 1d#pm
+// rows unresolved, the prequential-majority (1d) row gone from the registry).
+func TestResolverResolvesTheBenchmarkTwinWithItsRow(t *testing.T) {
+	ctx := context.Background()
+	st := openStore(t)
+	sym, err := st.UpsertSymbol(ctx, "TWIN", md.Stocks, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const d0 = int64(store.GradingEpochTS) + 4*3600 // exchange midnight
+	bar := func(ts int64, c float64) md.Bar {
+		return md.Bar{SymbolID: sym.ID, TF: md.TF1d, Ts: ts, Open: c, High: c, Low: c, Close: c, Volume: 1}
+	}
+	if err := st.UpsertBars(ctx, []md.Bar{bar(d0, 100), bar(d0+86400, 110), bar(d0+2*86400, 111)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []md.Horizon{md.H1d, benchmarkHorizon(md.H1d)} {
+		if err := st.UpsertPrediction(ctx, store.Prediction{
+			SymbolID: sym.ID, Horizon: h, Ts: d0 + 23*3600, RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	msg, err := (&PredictionResolver{St: st}).Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(msg, "(+1 benchmark twins)") {
+		t.Fatalf("Run = %q; the 1d#pm twin must resolve with its ensemble row, not in its own later pass", msg)
+	}
+	var n int
+	if err := st.DB().QueryRowContext(ctx, `SELECT COUNT(DISTINCT fwd_return) FROM prediction_outcomes
+		WHERE symbol_id=? AND horizon IN ('1d','1d#pm') AND resolved_at IS NOT NULL`, sym.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("%d distinct labels across the ensemble row and its twin; want 1 (identical bars)", n)
 	}
 }

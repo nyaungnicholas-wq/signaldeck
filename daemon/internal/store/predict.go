@@ -285,20 +285,37 @@ func (s *Store) UnresolvedPredictions(ctx context.Context, h md.Horizon, cutoff,
 // or before the prediction — so the two agree by construction; if no such bar
 // exists it stays NULL and the fold degrades honestly.
 func (s *Store) ResolvePrediction(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) error {
+	_, err := s.resolvePrediction(ctx, symbolID, h, ts, fwdReturn, "")
+	return err
+}
+
+// ResolveOpenPrediction is ResolvePrediction for a row that may already carry a
+// label: it writes only while resolved_at is NULL, so a frozen label is never
+// rewritten. It reports whether a row was resolved (false: no such row, or
+// already resolved).
+func (s *Store) ResolveOpenPrediction(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64) (bool, error) {
+	return s.resolvePrediction(ctx, symbolID, h, ts, fwdReturn, " AND resolved_at IS NULL")
+}
+
+func (s *Store) resolvePrediction(ctx context.Context, symbolID int64, h md.Horizon, ts int64, fwdReturn float64, guard string) (bool, error) {
 	up := 0
 	if fwdReturn > 0 {
 		up = 1
 	}
-	_, err := s.w.ExecContext(ctx, `
+	res, err := s.w.ExecContext(ctx, `
 		UPDATE prediction_outcomes SET up=?, fwd_return=?, resolved_at=?,
 		  settle_ts = (
 		    SELECT MAX(b.ts) FROM bars b
 		    WHERE b.symbol_id = prediction_outcomes.symbol_id
 		      AND b.tf = '1d' AND b.ts <= prediction_outcomes.ts
 		  )
-		WHERE symbol_id=? AND horizon=? AND ts=?`,
+		WHERE symbol_id=? AND horizon=? AND ts=?`+guard,
 		up, fwdReturn, time.Now().Unix(), symbolID, string(h), ts)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // ResolvedPredictionPairs returns (PUBLISHED prob, up) pairs — the calibrated

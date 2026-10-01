@@ -1375,7 +1375,7 @@ func (w *PredictionResolver) Interval() time.Duration { return 10 * time.Minute 
 
 func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 	now := time.Now().Unix()
-	resolved := 0
+	resolved, twins := 0, 0
 	marketByID, err := symbolMarkets(ctx, w.St) // settled-bar rule is per market
 	if err != nil {
 		return "", err
@@ -1475,14 +1475,31 @@ func (w *PredictionResolver) Run(ctx context.Context) (string, error) {
 				} else if !settled {
 					continue
 				}
-				if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, fwd.Close/base.Close-1); err != nil {
+				ret := fwd.Close/base.Close - 1
+				if err := w.St.ResolvePrediction(ctx, p.SymbolID, hh, p.Ts, ret); err != nil {
 					return "", err
 				}
 				resolved++
+				// The benchmark twin ("<h>#pm", same symbol, same ts) grades on the
+				// identical base and forward bar, so it resolves HERE, with its
+				// ensemble row. Left to its own pass behind the whole ensemble queue
+				// it starved whenever a restart cut a long pass short: 2026-10-01,
+				// 39k 1d#pm rows unresolved and the prequential-majority (1d) row gone
+				// from the published registry. The #pm pass still picks up any twin
+				// this misses; a twin already labelled is never rewritten.
+				if hh == h {
+					ok, err := w.St.ResolveOpenPrediction(ctx, p.SymbolID, benchmarkHorizon(h), p.Ts, ret)
+					if err != nil {
+						return "", err
+					}
+					if ok {
+						twins++
+					}
+				}
 			}
 		}
 	}
-	return fmt.Sprintf("resolved %d predictions", resolved), nil
+	return fmt.Sprintf("resolved %d predictions (+%d benchmark twins)", resolved, twins), nil
 }
 
 // ── RegimeRunner: label + change detection ──────────────────────────────
