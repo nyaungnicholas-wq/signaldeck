@@ -20,6 +20,9 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"log/slog"
+	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -104,8 +107,37 @@ func (c gatedConnector) Driver() driver.Driver {
 // gatedConn wraps a driver.Conn to enforce the priority gate.
 type gatedConn struct {
 	driver.Conn
-	g    *priorityGate
-	inTx bool
+	g       *priorityGate
+	inTx    bool
+	txStart time.Time
+	txFrom  string
+}
+
+// longHold is the write-lock hold worth naming in the log. Account writes wait
+// 12s at most, so anything near that locks people out of signing in.
+var longHold = 3 * time.Second
+
+// writeCaller names the code that asked for this write: the first frames
+// outside database/sql, the runtime and this file.
+func writeCaller() string {
+	pcs := make([]uintptr, 24)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(3, pcs)])
+	var out []string
+	for f, more := frames.Next(); more && len(out) < 3; f, more = frames.Next() {
+		fn := f.Function
+		if strings.HasPrefix(fn, "database/sql") || strings.HasPrefix(fn, "runtime.") || strings.Contains(fn, "store.(*gated") {
+			continue
+		}
+		out = append(out, fn[strings.LastIndex(fn, "/")+1:])
+	}
+	return strings.Join(out, " <- ")
+}
+
+// noteHold logs a write that held the connection past longHold.
+func noteHold(kind, from string, start time.Time) {
+	if d := time.Since(start); d > longHold {
+		slog.Warn("long write-lock hold", "kind", kind, "held", d.Round(time.Millisecond), "from", from)
+	}
 }
 
 // wait delays if not inside a transaction.
@@ -130,6 +162,7 @@ func (c *gatedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.
 		return nil, err
 	}
 	c.inTx = true
+	c.txStart, c.txFrom = time.Now(), writeCaller()
 	return &gatedTx{Tx: tx, c: c}, nil
 }
 
@@ -146,7 +179,15 @@ func (c *gatedConn) PrepareContext(ctx context.Context, query string) (driver.St
 func (c *gatedConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	if ex, ok := c.Conn.(driver.ExecerContext); ok {
 		c.wait(ctx)
-		return ex.ExecContext(ctx, query, args)
+		if c.inTx {
+			return ex.ExecContext(ctx, query, args)
+		}
+		start := time.Now()
+		res, err := ex.ExecContext(ctx, query, args)
+		if time.Since(start) > longHold {
+			noteHold("statement", writeCaller(), start)
+		}
+		return res, err
 	}
 	return nil, driver.ErrSkip
 }
@@ -201,11 +242,15 @@ type gatedTx struct {
 // Commit marks the transaction as not in flight and commits.
 func (t *gatedTx) Commit() error {
 	t.c.inTx = false
-	return t.Tx.Commit()
+	err := t.Tx.Commit()
+	noteHold("transaction", t.c.txFrom, t.c.txStart)
+	return err
 }
 
 // Rollback marks the transaction as not in flight and rolls back.
 func (t *gatedTx) Rollback() error {
 	t.c.inTx = false
-	return t.Tx.Rollback()
+	err := t.Tx.Rollback()
+	noteHold("transaction", t.c.txFrom, t.c.txStart)
+	return err
 }

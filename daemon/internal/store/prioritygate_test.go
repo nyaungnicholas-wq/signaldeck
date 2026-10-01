@@ -1,7 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -121,4 +124,33 @@ func TestCheckpointWaitingOnAReaderDoesNotLockOutAccountWrites(t *testing.T) {
 	if err := st.w.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&bt); err != nil || bt != 5000 {
 		t.Fatalf("main writer busy_timeout = %d (%v), want 5000 restored", bt, err)
 	}
+}
+
+// A write transaction held past longHold is logged with the code that opened
+// it, so the job locking people out of sign-in can be named from the log.
+func TestLongWriteHoldIsLoggedWithItsCaller(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "hold.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	var buf bytes.Buffer
+	prev, prevHold := slog.Default(), longHold
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	longHold = 20 * time.Millisecond
+	defer func() { slog.SetDefault(prev); longHold = prevHold }()
+
+	tx, err := st.w.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "long write-lock hold") || !strings.Contains(out, "TestLongWriteHoldIsLoggedWithItsCaller") {
+		t.Fatalf("no named long-hold line; log was: %q", out)
+	}
+	t.Log(strings.TrimSpace(out))
 }
