@@ -195,8 +195,16 @@ try {
     $r = Invoke-Guard 'Running' @($cf) $null
     Check 'a running quick tunnel is left alone, and the run is green' ($r.Started.Count -eq 0 -and $r.Log -match 'quicktunnel ok' -and $r.Code -eq 0) ("exit " + $r.Code + "`n" + $r.Text + $r.Log)
 
-    $r = Invoke-Guard 'Ready' @($cfHidden) $null
-    Check 'a cloudflared whose command line is unreadable counts as running (no second instance)' ($r.Started.Count -eq 0) ($r.Text + $r.Log)
+    # From the guard's S4U/Limited token a SYSTEM process's command line reads
+    # empty, so an unreadable cloudflared may be the named-tunnel SERVICE. With the
+    # task not running it is not the quick tunnel: start the task once.
+    $r = Invoke-Guard 'Ready' @($cfHidden) @($cfHidden, $cf)
+    Check 'an unreadable cloudflared (e.g. the SYSTEM named-tunnel service) is not the quick tunnel (started once)' ($r.Started.Count -eq 1 -and $r.Started[0] -eq $qtName) ("started: " + ($r.Started -join ',') + "`n" + $r.Text + $r.Log)
+
+    # A RUNNING task is the tunnel itself (its action waits on cloudflared), even
+    # when no command line is readable: never start a second instance.
+    $r = Invoke-Guard 'Running' @($cfHidden) $null
+    Check 'a running task is a live quick tunnel even with no readable command line (no second instance)' ($r.Started.Count -eq 0 -and $r.Code -eq 0) ("exit " + $r.Code + "`n" + $r.Text + $r.Log)
 
     # The NAMED tunnel (staged in .pending) also runs cloudflared. Only the quick
     # tunnel's command line counts, so with just the named one alive the quick
