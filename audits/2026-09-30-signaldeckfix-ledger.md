@@ -16,7 +16,7 @@ owner; NOT APPLICABLE = by design, with evidence.
 | SD-01 | web deps | CI `web` red: next 16.3.4 has critical RCE GHSA-vcvr-r3jv-pc5j in next/og ImageResponse; `src/app/opengraph-image.tsx` uses it; site is public | next + eslint-config-next 16.3.8 (lock: 12 entries, version only). `npm audit --omit=dev`: 0. lint/tsc/42 tests/build green | critical | FIXED f0bfd07 |
 | SD-02 | daemon lint | CI `daemon` red since 09-29: S1012/QF1008 prioritygate.go, unused smtpBody | fixed; golangci-lint 0 issues | med | FIXED f0bfd07 |
 | SD-03 | process | 3 pushes deployed+pushed red; deploy gate ran only `go test` | `signaldeck-ctl.sh deploy` now runs go vet + golangci-lint first (refuses on failure) | med | FIXED f0bfd07 |
-| SD-04 | auth / storage governor | LIVE: `POST /api/auth/login` 500 after 24.2s at 19:56 and 20:03 PT. Lock holder: governor's size-keyed "emergency" VACUUM of the 7.2 GB file outside 2-6am ET (freelist crossed 5%); etilqs temp 6.4 GB; each deploy killed it before `storage_last_vacuum` was stamped, so every boot restarted it (runs 18:32 orphaned 2093s, 19:10/19:31 stopped) | VACUUM only in the 2-6am ET window, read via injectable clock. Test fails on old code ("vacuumed=true" at 21:00 ET). The live VACUUM was left to finish (20:33:57, vacuumed=true) — not restarted; 4 sign-ins failed during it (19:56, 20:03, 20:17, 20:32); last SQLITE_BUSY 20:32:13, none after | high | FIXED fea1a19 |
+| SD-04 | auth / storage governor | LIVE: `POST /api/auth/login` 500 after 24.2s at 19:56 and 20:03 PT. Lock holder: governor's size-keyed "emergency" VACUUM of the 7.2 GB file outside 2-6am ET (freelist crossed 5%); etilqs temp 6.4 GB; each deploy killed it before `storage_last_vacuum` was stamped, so every boot restarted it (runs 18:32 orphaned 2093s, 19:10/19:31 stopped) | VACUUM only in the 2-6am ET window, read via injectable clock. Test fails on old code ("vacuumed=true" at 21:00 ET). The live VACUUM was left to finish (20:33:57, vacuumed=true) — not restarted; 4 sign-ins failed during it (19:56, 20:03, 20:17, 20:32). CORRECTION (post-deploy review): a 5th failed at 21:08:48 with no VACUUM running — see SD-51 | high | FIXED fea1a19 (VACUUM cause only) |
 | SD-05 | auth lockout | lockout key lowercased but lookup exact-case + counter cleared before verified check: register "OWNER", sign in, resets "owner"'s counter every 4 guesses; sweep forgot a capped name the instant its lock ended; unbounded username = map key + log line; IPv6 /64 = unlimited buckets | exact-name key; clear only when a session is issued; capped names remembered 24h; >32-byte names refused; limiter folds IPv6 /64 | high | FIXED fea1a19 (3 tests mutation-checked) |
 | SD-06 | accounts | `go test -race`: DATA RACE in TestSignupRateLimited (mail goroutines outlive the request; test swaps globals) — masked in CI by the lint step | one tracked `mailInBackground` helper; test cleanup waits | med | FIXED fea1a19 |
 | SD-07 | public site | `/api/waitlist` 401 for every visitor (open only in publicRoutes; live daemon published without PublicSurface) | legacy branch opens it (POST-only route); test covers every public-page route in that posture | high | FIXED 7d377e6 |
@@ -63,6 +63,10 @@ owner; NOT APPLICABLE = by design, with evidence.
 | SD-48 | review: fleetSkillWindow -1 | whole graded window loads every SWR rebuild; grows ~10k rows/day (1w) | accepted for correctness now; upgrade path = per-(symbol, settle day) collapse in SQL | low | NOT APPLICABLE (watch) |
 | SD-49 | review: session trim | DELETE scans sessions (no user_id index) | table bounded by the cap itself (20/account) | low | NOT APPLICABLE |
 | SD-50 | concurrency | another session ("Signal Deck readiness") committed 7d0c058 (long write-lock hold logging) on this branch at 21:13; my cross-session note expired unapproved | its files untouched; my commits stage explicit paths only | — | NOTED |
+| SD-51 | sign-in vs long writes | post-deploy review: POST /api/auth/login 500 at 21:08:48 (SQLITE_BUSY, 24.2s) 35 min after the VACUUM; the long-hold log (7d0c058) shows non-VACUUM writer holds over sign-in's 2x12s budget since deploy: DeleteScoreOutcomesBefore 142.9s, UpsertBars (alpaca backfill) 107.9s, UpsertPredictionAttested 92.5s, StartWorkerRun 50s (CPU-starved host inflates them) | being worked by the concurrent "Signal Deck readiness" session (1fa2fe5 batched the heavy INSERT..SELECTs); not edited here to avoid concurrent edits to the same store paths | high | OPEN (other session) |
+| SD-52 | secret hygiene | the token recipe in this run's verification brief (`set -a; . daemon/.env`) fails on unquoted values at .env lines 53/60; bash printed a 4-char fragment of SIGNALDECK_SMTP_PASS into local agent transcripts | owner: quote both values in daemon/.env; consider rotating the Gmail app password; extract the token with grep, never source the file | med | BLOCKED (owner secret) |
+| SD-53 | public tunnel | Quick Tunnel cloudflared exited 22:25:58 ('signal terminated', task 0xC000013A = SD-26 failure mode); public URL 530 for ~12 min | restarted the "SignalDeck Quick Tunnel" task 22:37:59; new trycloudflare URL registered 22:39 (old links dead); permanent fix is SD-26 | high | RESTORED (SD-26 still BLOCKED) |
+| SD-54 | concurrency | while this run verified, another session deployed 1fa2fe5 (21:49), 73652be (22:19) and 44acb40 (22:30), merged members-and-proof into public-launch locally (unpushed; diverged from origin), and its 181ee74 widened memberRoutes to /api/shorts, /api/short-interest (the code comment cites FINRA terms) | not mine to change; flagged to the owner | med | NOTED |
 
 ### Deferred with reason (not fixed this run)
 - `ResolvedPredictionCount` (confidence gate, operator-only) is a raw COUNT(*) (208k) not the
@@ -77,4 +81,33 @@ owner; NOT APPLICABLE = by design, with evidence.
   (operator-only) labels a whole-ledger hit rate "LIVE forward record". Low.
 
 ## Verification (final HEAD)
-(filled in below by the final ladder run)
+
+- Final local ladder at 792f6f8 (scratch worktree): daemon build/vet/linux cross-build/archive build/
+  manifest/golangci-lint 0/tree clean/coverage 70.7% (store 70.3, forecast 93.8, canary 81.2); web
+  npm ci/lint/tsc/42 tests/build/prod audit 0 vulns; tools unittest + script-style + includes +
+  scan md + scan code + controls + deck + repro; pre-publish scan; ledger provenance; docs gates.
+  Two load artefacts, both re-run clean: TestPublicReadsFalseGatesTrends timed out at 43s while
+  After Effects held ~16 of 32 cores (5/5 isolated passes; full internal/api -race re-run ok 705s);
+  cold-clone check segfaulted in Git Bash under load (standalone at 792f6f8: COLD-CLONE OK).
+- Missed by the local ladder, caught by CI: STRATEGY_DECK/partials controls table (maintain 44 -> 45
+  tests) -> 86dfc68. CI on 86dfc68: ALL SIX JOBS GREEN (daemon incl. Linux race + coverage floors,
+  web, tools, docs-gate, pre-publish-scan, ledger-provenance) — first fully green run since 09-25.
+- Deploy: the concurrent session's ctl deploy put 1fa2fe5 live at 21:49 (all fixes), later
+  73652be / 44acb40. Web: npm ci 22:01 (next 16.3.8 runtime live, RCE closed); web-release
+  candidate .next-release-1fa2fe5 (built pre-merge, asset gate PASSED 22:02; browser gate FAILED
+  22:03 on /accuracy while the daemon was CPU-starved — the old build failed identically) re-gated
+  22:29 PASSED 7/7, promoted 22:31 with the script's swap + launcher restart (build
+  IKKXuka3kFg3ZpPVUSVM5, 8323 asset check 28/28; :3000 healed by web-guard 22:37, 28/28). Not
+  rebuilt from the live tree because it held another session's unpushed /proof copy saying the
+  anchors repo is public (gh api: it is private).
+- Live through the restored tunnel: / 200 with the new copy; http:// -> 308 https (path+query kept,
+  no-store); GPTBot 403; POST /api/waitlist bad body -> 400 (was 401); register bad body -> 400;
+  forged Origin -> 403; anonymous raw export -> 401, operator -> 451.
+- Independent post-deploy workflow (4 read-only lenses + completeness critic): LIVE-VERIFIED SD-01,
+  05 (overlong name refused pre-log; exact-name lockout 429 on the 6th), 07, 09, 11, 13, 18, 45;
+  TEST-ONLY (no live trigger tonight) SD-02/03/06/08/10/12/14/15/16/19/20/21/22/23/41-44/46/47;
+  NOT-YET-LIVE SD-17 (next grader run); CONTRADICTED SD-04 -> SD-51.
+- Consequence of SD-11 (owner decision): unblocking 1d resolution graded 1,217 rows from 2026-09-14,
+  a collapsed cross-section (28 distinct probabilities / 324 symbols), so /api/accuracy now answers
+  503 REFUSED for the whole window. That is the pre-registered gate doing its job on rows the wedge
+  hid; it clears only by re-registering the window. Not reverted.
