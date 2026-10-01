@@ -89,7 +89,7 @@ func TestMemberSurfaceStripsVendorFieldsAndSideEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	member := signupVerified(t, srv, mb, "erin", "erin@example.com")
+	member := signupVerified(t, srv, mb, "erin", "erin@gmail.com")
 	owner := newClient(t)
 	if code, body := acctPost(t, owner, srv.URL+"/api/auth/login",
 		map[string]string{"username": "owner", "password": "adminpass123"}); code != 200 {

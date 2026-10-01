@@ -170,12 +170,12 @@ func signupVerified(t *testing.T, srv *httptest.Server, mb *mailbox, user, email
 
 func TestSignupRequiresEmailVerification(t *testing.T) {
 	srv, _, mb := newPublishedServer(t)
-	code, body := signup(t, newClient(t), srv.URL, "alice", "alice@example.com")
+	code, body := signup(t, newClient(t), srv.URL, "alice", "alice@gmail.com")
 	if code != 200 || !strings.Contains(body, verifySent) {
 		t.Fatalf("signup: %d %s", code, body)
 	}
 	waitMail(t, mb, 1)
-	if m := mb.last(); m.to != "alice@example.com" || !strings.Contains(m.body, "https://sd.example/verify?token=") {
+	if m := mb.last(); m.to != "alice@gmail.com" || !strings.Contains(m.body, "https://sd.example/verify?token=") {
 		t.Fatalf("verification mail wrong: %+v", m)
 	}
 	creds := map[string]string{"username": "alice", "password": "correcthorse1"}
@@ -201,7 +201,7 @@ func TestSignupRequiresEmailVerification(t *testing.T) {
 func TestSignupHoneypotCreatesNothing(t *testing.T) {
 	srv, _, mb := newPublishedServer(t)
 	code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/register", map[string]string{
-		"username": "botty", "email": "bot@example.com", "password": "correcthorse1",
+		"username": "botty", "email": "bot@gmail.com", "password": "correcthorse1",
 		"website": "http://spam.example",
 	})
 	if code != 200 || !strings.Contains(body, verifySent) {
@@ -226,11 +226,11 @@ func TestSignupRequiresValidEmail(t *testing.T) {
 
 func TestTakenEmailLooksLikeSuccess(t *testing.T) {
 	srv, _, mb := newPublishedServer(t)
-	if code, body := signup(t, newClient(t), srv.URL, "bob", "bob@example.com"); code != 200 {
+	if code, body := signup(t, newClient(t), srv.URL, "bob", "bob@gmail.com"); code != 200 {
 		t.Fatalf("first signup: %d %s", code, body)
 	}
 	waitMail(t, mb, 1)
-	code, body := signup(t, newClient(t), srv.URL, "bob2", "BOB@example.com")
+	code, body := signup(t, newClient(t), srv.URL, "bob2", "BOB@gmail.com")
 	if code != 200 || !strings.Contains(body, verifySent) {
 		t.Fatalf("taken email must answer like success: %d %s", code, body)
 	}
@@ -244,18 +244,18 @@ func TestSignupRateLimited(t *testing.T) {
 	srv, _, _ := newPublishedServer(t)
 	for i := 0; i < 5; i++ {
 		u := "user" + string(rune('0'+i))
-		if code, body := signup(t, newClient(t), srv.URL, u, u+"@example.com"); code != 200 {
+		if code, body := signup(t, newClient(t), srv.URL, u, u+"@gmail.com"); code != 200 {
 			t.Fatalf("signup %d: %d %s", i, code, body)
 		}
 	}
-	if code, body := signup(t, newClient(t), srv.URL, "user9", "user9@example.com"); code != 429 {
+	if code, body := signup(t, newClient(t), srv.URL, "user9", "user9@gmail.com"); code != 429 {
 		t.Fatalf("6th signup: %d %s, want 429", code, body)
 	}
 }
 
 func TestMemberCannotReachOperatorRoutes(t *testing.T) {
 	srv, _, mb := newPublishedServer(t)
-	carol := signupVerified(t, srv, mb, "carol", "carol@example.com")
+	carol := signupVerified(t, srv, mb, "carol", "carol@gmail.com")
 	if code, body := getAs(t, carol, srv.URL+"/api/trends"); code != 403 || !strings.Contains(body, "member") {
 		t.Fatalf("member reached an operator route: %d %s", code, body)
 	}
@@ -274,10 +274,10 @@ func TestMemberCannotReachOperatorRoutes(t *testing.T) {
 
 func TestForgotAndResetPassword(t *testing.T) {
 	srv, _, mb := newPublishedServer(t)
-	signupVerified(t, srv, mb, "dave", "dave@example.com")
+	signupVerified(t, srv, mb, "dave", "dave@gmail.com")
 	before := mb.count()
 	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot",
-		map[string]string{"email": "dave@example.com"}); code != 200 || !strings.Contains(body, sentIfExists) {
+		map[string]string{"email": "dave@gmail.com"}); code != 200 || !strings.Contains(body, sentIfExists) {
 		t.Fatalf("forgot: %d %s", code, body)
 	}
 	waitMail(t, mb, before+1)
@@ -302,7 +302,7 @@ func TestForgotAndResetPassword(t *testing.T) {
 
 func TestForgotUnknownEmailLooksIdentical(t *testing.T) {
 	srv, _, mb := newPublishedServer(t)
-	code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot", map[string]string{"email": "nobody@example.com"})
+	code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot", map[string]string{"email": "nobody@gmail.com"})
 	if code != 200 || !strings.Contains(body, sentIfExists) {
 		t.Fatalf("unknown email: %d %s", code, body)
 	}
@@ -328,7 +328,7 @@ func TestMemberGateHoldsOnTunnelPosture(t *testing.T) {
 	if code, body := signup(t, newClient(t), srv.URL, "erin", "not-an-email"); code != 400 {
 		t.Fatalf("tunnel posture fell back to the private register: %d %s", code, body)
 	}
-	m := signupVerified(t, srv, mb, "frank", "frank@example.com")
+	m := signupVerified(t, srv, mb, "frank", "frank@gmail.com")
 	if code, body := getAs(t, m, srv.URL+"/api/trends"); code != 403 {
 		t.Fatalf("member reached an operator route on the tunnel posture: %d %s", code, body)
 	}
@@ -339,7 +339,7 @@ func TestMemberGateHoldsOnTunnelPosture(t *testing.T) {
 
 func TestPublishedRefusesAdminBootstrap(t *testing.T) {
 	srv, _, _ := newPublishedServerWith(t, nil, false)
-	if code, body := signup(t, newClient(t), srv.URL, "grace", "grace@example.com"); code != 403 {
+	if code, body := signup(t, newClient(t), srv.URL, "grace", "grace@gmail.com"); code != 403 {
 		t.Fatalf("first account over the internet: %d %s, want 403", code, body)
 	}
 }
@@ -348,11 +348,11 @@ func TestPublishedRefusesAdminBootstrap(t *testing.T) {
 // to take it back with a reset, which also verifies the address.
 func TestUnverifiedAccountCanBeReset(t *testing.T) {
 	srv, _, mb := newPublishedServer(t)
-	if code, body := signup(t, newClient(t), srv.URL, "squatter", "owner2@example.com"); code != 200 {
+	if code, body := signup(t, newClient(t), srv.URL, "squatter", "owner2@gmail.com"); code != 200 {
 		t.Fatalf("signup: %d %s", code, body)
 	}
 	waitMail(t, mb, 1)
-	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot", map[string]string{"email": "owner2@example.com"}); code != 200 {
+	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/forgot", map[string]string{"email": "owner2@gmail.com"}); code != 200 {
 		t.Fatalf("forgot: %d %s", code, body)
 	}
 	waitMail(t, mb, 2)

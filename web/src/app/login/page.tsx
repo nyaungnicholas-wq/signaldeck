@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import PagePurpose from "@/components/PagePurpose";
+import GoogleButton from "@/components/auth/GoogleButton";
 import { api } from "@/lib/api";
 
 /** Minimal login / register form in the SignalDeck terminal style. */
@@ -110,6 +111,8 @@ export default function LoginPage() {
           <h1 className="mb-6 text-lg font-bold tracking-widest text-[var(--text)]">
             {mode === "login" ? "SIGN IN" : "CREATE ACCOUNT"}
           </h1>
+
+          <GoogleButton text="signin_with" onError={setError} />
 
           <label
             htmlFor="login-username"

@@ -159,11 +159,15 @@ type Config struct {
 	// trycloudflare.com address changes on every restart.
 	TurnstileSecret  string // SIGNALDECK_TURNSTILE_SECRET
 	TurnstileSiteKey string // SIGNALDECK_TURNSTILE_SITE_KEY (public; served in /api/health)
-	PublicURL        string // SIGNALDECK_PUBLIC_URL, e.g. https://signaldeck.example.com
-	TunnelLog        string // SIGNALDECK_TUNNEL_LOG: cloudflared --logfile of a quick tunnel
-	TrustProxy       bool   // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
-	RateRPS          int    // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
-	RateBurst        int    // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
+	// GoogleClientID turns on Sign in with Google (an OAuth "Web application"
+	// client ID from Google Cloud). Public by design: Google's button embeds it
+	// in every page, so it is served in /api/health. Unset = no Google button.
+	GoogleClientID string // SIGNALDECK_GOOGLE_CLIENT_ID
+	PublicURL      string // SIGNALDECK_PUBLIC_URL, e.g. https://signaldeck.example.com
+	TunnelLog      string // SIGNALDECK_TUNNEL_LOG: cloudflared --logfile of a quick tunnel
+	TrustProxy     bool   // SIGNALDECK_TRUST_PROXY (default false): honor X-Forwarded-For / X-Forwarded-Proto
+	RateRPS        int    // SIGNALDECK_RATE_RPS: override read-tier requests/sec (0 = default 10)
+	RateBurst      int    // SIGNALDECK_RATE_BURST: override read-tier burst (0 = default 30)
 
 	// MCP server (internal/mcp) — advisory methodology + current regime
 	// verdicts for AI clients. OFF unless explicitly enabled, because it is
@@ -287,6 +291,7 @@ func Load() Config {
 		PublicSurface:    boolEnv("SIGNALDECK_PUBLIC_SURFACE", false),
 		TurnstileSecret:  pick("SIGNALDECK_TURNSTILE_SECRET", ""),
 		TurnstileSiteKey: pick("SIGNALDECK_TURNSTILE_SITE_KEY", ""),
+		GoogleClientID:   strings.TrimSpace(pick("SIGNALDECK_GOOGLE_CLIENT_ID", "")),
 		PublicURL:        strings.TrimRight(pick("SIGNALDECK_PUBLIC_URL", ""), "/"),
 		TunnelLog:        pick("SIGNALDECK_TUNNEL_LOG", ""),
 		// Asserting you hold redistribution rights for the stored price data.
