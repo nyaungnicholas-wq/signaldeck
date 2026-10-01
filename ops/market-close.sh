@@ -1,5 +1,5 @@
 #!/bin/bash
-# Market-close sequence (13:10 PT weekdays): stop the stack, then take the
+# Market-close sequence (13:10 PT weekdays): stop the daemon, then take the
 # daily backup OFFLINE — with the daemon down the 2GB+ VACUUM INTO has zero
 # contention with the app (see ops/signaldeck-backup-offline.sh header).
 set -u
@@ -26,7 +26,18 @@ release_lock() { rm -f "$LOCK"; }
 trap release_lock EXIT INT TERM
 : > "$LOCK"
 
-/bin/bash "$SD/ops/signaldeck-ctl.sh" stop
+# Daemon and ngrok tunnel only, NOT `signaldeck-ctl.sh stop`: that also stopped
+# the web, which never opens the database (no SQLite anywhere in web/), so the
+# backup gains nothing from it, and since the public launch the web is the
+# public site. web-guard.ps1 restarts it after the lock drops anyway, so the
+# stop bought only an outage. SD-38, measured 2026-09-30: this task's boot-time
+# catch-up (StartWhenAvailable) at 18:03 took the public site down ~4.5 min.
+# Catch-up runs still stop the daemon: the backup refuses a live one, and 5 of
+# the last 10 backups (09-21, 09-22, 09-23, 09-29, 09-30) were catch-ups -
+# skipping them would have left 09-18 -> 09-24 with no offline backup.
+sd_svc_stop com.signaldeck.tunnel
+sd_svc_stop com.signaldeck.daemon
+echo "market-close: daemon and tunnel stopped, web left up"
 # Graceful daemon shutdown (worker drain + WAL checkpoint) can take a minute —
 # a fixed 8s sleep made the backup's is-daemon-alive safety check skip the run
 # (seen live 2026-07-24). Wait for the process to actually exit, capped at 3m.
