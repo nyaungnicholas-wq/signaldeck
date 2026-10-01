@@ -289,6 +289,11 @@ var publicRoutes = map[string]bool{
 	// ledger/anchors?recompute=1 already self-gate on userID != 0.
 	"/api/prereg": true, "/api/ledger": true,
 	"/api/ledger/verify": true, "/api/ledger/anchors": true,
+	// The whole chain by seq range, so tools/verify_public_record.py can
+	// recompute it against the heads published in the public anchors repo.
+	// The same entries /api/ledger already serves per symbol: forecasts, no
+	// vendor rows. Paged and capped by maxLedgerRangePerRequest.
+	"/api/ledger/range": true,
 
 	// The only anonymous WRITE. It takes an email and nothing else, it is
 	// behind the write-tier rate limiter and the CSRF header like every other

@@ -289,6 +289,35 @@ func (s *Store) LedgerFor(ctx context.Context, symbolID int64, h md.Horizon, lim
 	if err != nil {
 		return nil, err
 	}
+	return scanLedgerRows(rows)
+}
+
+// LedgerRange returns up to limit entries with seq >= fromSeq, ascending: the
+// chain in the order it was written. A per-symbol slice (LedgerFor) cannot be
+// linked to an anchor's head, because every link points at the previous entry
+// of ANY symbol; contiguous ranges are what let an outsider recompute each
+// link and the head a published statement commits to. seq is the primary key,
+// so this is a bounded index range scan. Read-only.
+func (s *Store) LedgerRange(ctx context.Context, fromSeq int64, limit int) ([]LedgerEntry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if fromSeq < 1 {
+		fromSeq = 1
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT seq, predicted_at, symbol_id, horizon, bar_ts, raw_prob, cal_prob,
+		       feature_hash, model_version, prev_hash, entry_hash
+		FROM prediction_ledger
+		WHERE seq >= ?
+		ORDER BY seq ASC LIMIT ?`, fromSeq, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanLedgerRows(rows)
+}
+
+func scanLedgerRows(rows *sql.Rows) ([]LedgerEntry, error) {
 	defer rows.Close() //nolint:errcheck
 	var out []LedgerEntry
 	for rows.Next() {

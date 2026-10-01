@@ -449,6 +449,96 @@ func TestLedgerListEndpoint(t *testing.T) {
 	}
 }
 
+// TestLedgerRangeEndpoint: /api/ledger/range pages the WHOLE chain in seq order
+// (every symbol, every horizon) so an outsider can recompute each link; it is
+// anonymous on a published deployment, clamps ?limit=, and rejects a bad ?from=.
+func TestLedgerRangeEndpoint(t *testing.T) {
+	srv, st := newLedgerServer(t, nil)
+	ctx := context.Background()
+	aapl, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsla, err := st.UpsertSymbol(ctx, "TSLA", md.Stocks, "Tesla")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		sym, h := aapl.ID, md.H1d
+		if i%2 == 1 {
+			sym, h = tsla.ID, md.H1w // interleaved: a per-symbol slice could not link these
+		}
+		if _, err := st.AppendLedger(ctx, store.LedgerEntry{
+			PredictedAt: int64(100 + i), SymbolID: sym, Horizon: h, BarTs: int64(100 + i),
+			RawProb: 0.5, CalProb: 0.5, FeatureHash: "fh", ModelVersion: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type page struct {
+		From    int64               `json:"from"`
+		Limit   int                 `json:"limit"`
+		Count   int                 `json:"count"`
+		Entries []store.LedgerEntry `json:"entries"`
+		Next    *int64              `json:"next"`
+	}
+	get := func(q string) (int, page) {
+		t.Helper()
+		res, err := newClient(t).Get(srv.URL + "/api/ledger/range" + q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close() //nolint:errcheck
+		var p page
+		if res.StatusCode == 200 {
+			if err := json.NewDecoder(res.Body).Decode(&p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return res.StatusCode, p
+	}
+
+	code, p := get("?from=2&limit=2")
+	if code != 200 || p.Count != 2 || p.Entries[0].Seq != 2 || p.Entries[1].Seq != 3 {
+		t.Fatalf("from=2 limit=2: status %d, %+v", code, p)
+	}
+	if p.Next == nil || *p.Next != 4 {
+		t.Fatalf("a full page must point at the next seq, got %v", p.Next)
+	}
+	if p.Entries[1].PrevHash != p.Entries[0].EntryHash {
+		t.Error("consecutive range entries must link (prevHash == previous entryHash)")
+	}
+
+	code, p = get("?from=4&limit=10")
+	if code != 200 || p.Count != 2 || p.Entries[0].Seq != 4 || p.Next != nil {
+		t.Fatalf("short last page must end the walk: status %d, %+v", code, p)
+	}
+	head, ok, err := st.LedgerHead(ctx)
+	if err != nil || !ok {
+		t.Fatalf("head: %v %v", ok, err)
+	}
+	if p.Entries[1].EntryHash != head.EntryHash {
+		t.Error("the last entry served must be the chain head")
+	}
+
+	if _, p = get("?limit=999999"); p.Limit != maxLedgerRangePerRequest {
+		t.Errorf("limit not clamped: %d", p.Limit)
+	}
+	for _, bad := range []string{"?from=0", "?from=-3", "?from=x", "?limit=0", "?limit=y"} {
+		if code, _ := get(bad); code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", bad, code)
+		}
+	}
+	if code, p = get("?from=99"); code != 200 || p.Count != 0 || p.Entries == nil || p.Next != nil {
+		t.Errorf("past the head: status %d, %+v (want an empty list, not null)", code, p)
+	}
+
+	published := Deps{Cfg: config.Config{PublicSurface: true}}
+	if published.requiresAuth("/api/ledger/range") {
+		t.Error("/api/ledger/range must be anonymous on a published deployment: it is the verifier's input")
+	}
+}
+
 // TestLedgerVerify_KeyFailureDoesNotLeakThePath: the verify payload is a public
 // read, and the key-loading errors embed the key's absolute path (which carries
 // the operator's home directory). A failure must be stated — silence would read

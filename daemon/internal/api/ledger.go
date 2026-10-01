@@ -84,6 +84,12 @@ const maxAnchorsPerRequest = 500
 // materialising every row into one response.
 const maxLedgerPerRequest = 1000
 
+// maxLedgerRangePerRequest bounds one page of the public /api/ledger/range. At
+// ~11k entries a day, 5000 rows is under half a day of chain (~1.6 MB of JSON);
+// a verifier pages through the history once, and a larger page would only let
+// an anonymous caller size a response for us.
+const maxLedgerRangePerRequest = 5000
+
 // ledgerVerifyTimeout bounds one verification request end-to-end. A full
 // genesis walk of the live chain measures ~4s at 245k rows; 30s is generous
 // headroom under load while making a hung request impossible (finding A11:
@@ -505,9 +511,55 @@ func (d Deps) ledger(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// ledgerRange serves the chain by sequence number, ascending: ?from= (default
+// 1) and ?limit= (default 1000, at most maxLedgerRangePerRequest). It exists so
+// an outsider can recompute every link between two heads published in the
+// public anchors repo without trusting this server's own verify answer —
+// /api/ledger's per-symbol slices cannot be linked to a head. `next` is the seq
+// to request next, or null once a page came back short (the head was reached).
+func (d Deps) ledgerRange(w http.ResponseWriter, r *http.Request) {
+	from := int64(1)
+	if q := r.URL.Query().Get("from"); q != "" {
+		n, err := strconv.ParseInt(q, 10, 64)
+		if err != nil || n < 1 {
+			httpErr(w, http.StatusBadRequest, "from must be a positive sequence number")
+			return
+		}
+		from = n
+	}
+	limit := 1000
+	if q := r.URL.Query().Get("limit"); q != "" {
+		n, err := strconv.Atoi(q)
+		if err != nil || n < 1 {
+			httpErr(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = n
+	}
+	if limit > maxLedgerRangePerRequest {
+		limit = maxLedgerRangePerRequest
+	}
+	entries, err := d.St.LedgerRange(r.Context(), from, limit)
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
+	if entries == nil {
+		entries = []store.LedgerEntry{}
+	}
+	var next any
+	if len(entries) == limit {
+		next = entries[len(entries)-1].Seq + 1
+	}
+	writeJSON(w, map[string]any{
+		"from": from, "limit": limit, "count": len(entries), "entries": entries, "next": next,
+	})
+}
+
 // registerLedger wires the Stage-3 prediction-ledger read routes.
 func (d Deps) registerLedger(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/ledger/verify", d.ledgerVerify)
 	mux.HandleFunc("GET /api/ledger/anchors", d.ledgerAnchors)
+	mux.HandleFunc("GET /api/ledger/range", d.ledgerRange)
 	mux.HandleFunc("GET /api/ledger", d.ledger)
 }

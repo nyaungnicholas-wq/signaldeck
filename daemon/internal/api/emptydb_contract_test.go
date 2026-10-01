@@ -89,6 +89,8 @@ var emptyDBRoutes = []string{
 	"/api/dataset-versions",
 	"/api/evidence",
 	"/api/research-loop",
+	// Anonymous too, and consumed only by tools/verify_public_record.py.
+	"/api/ledger/range",
 }
 
 // confidentWords are verdict-ish tokens that must never appear in a payload
@@ -169,6 +171,7 @@ func newEmptyDBServer(t *testing.T) *httptest.Server {
 	d.registerEvidence(mux)
 	mux.HandleFunc("GET /api/postmortems", d.postmortems)
 	mux.HandleFunc("GET /api/research-loop", d.researchLoop)
+	d.registerLedger(mux) // for /api/ledger/range; only that path is probed
 	srv.Config.Handler = d.secure(mux)
 	return srv
 }
