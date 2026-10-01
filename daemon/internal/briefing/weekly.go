@@ -62,7 +62,10 @@ func ShouldRunWeekly(now time.Time, lastKey string, loc *time.Location, hour int
 	sunday := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc).
 		AddDate(0, 0, -daysBack)
 	key := sunday.Format("2006-01-02")
-	if local.Before(sunday.Add(time.Duration(hour) * time.Hour)) {
+	// Wall-clock hour, not midnight + N hours: on the spring-forward Sunday
+	// midnight+17h is 18:00 EDT, so the 17:00 scheduled fire was refused and
+	// that week's report was lost (next due 2027-03-14).
+	if local.Before(time.Date(sunday.Year(), sunday.Month(), sunday.Day(), hour, 0, 0, 0, loc)) {
 		return false, key
 	}
 	return key != lastKey, key

@@ -207,3 +207,19 @@ func TestWeeklyReportHoldsBeforeSundayHour(t *testing.T) {
 		t.Fatalf("report written before the Sunday gate hour: %d", len(ins))
 	}
 }
+
+// On the spring-forward Sunday, midnight + 17h is 18:00 EDT. The gate must open
+// at the WALL-CLOCK hour the scheduler fires at, or that week is skipped.
+func TestShouldRunWeeklyOpensAtWallClockHourAcrossDST(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2027, 3, 14, 17, 0, 0, 0, loc) // spring-forward Sunday, 17:00 EDT
+	if ok, key := ShouldRunWeekly(at, "", loc, 17); !ok || key != "2027-03-14" {
+		t.Fatalf("17:00 EDT on 2027-03-14: ok=%v key=%s, want true — the fire is refused and the week lost", ok, key)
+	}
+	if ok, _ := ShouldRunWeekly(at.Add(-time.Minute), "", loc, 17); ok {
+		t.Fatal("16:59 EDT opened the gate early")
+	}
+}

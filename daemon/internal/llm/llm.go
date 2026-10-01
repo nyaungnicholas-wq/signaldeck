@@ -404,6 +404,14 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 		}
 		lastErr = err
 		if !retryable {
+			// A permanent-looking answer AFTER a retryable failure is the same
+			// request re-sent to a provider that just timed out on it (live:
+			// two 75s timeouts, then an instant 400). File it as transient so
+			// the worker resumes next pass instead of reporting an error; a
+			// 400 on the FIRST attempt is still permanent and not retried.
+			if i > 0 {
+				return "", fmt.Errorf("%w: %w", ErrTransient, err)
+			}
 			return "", err
 		}
 	}
@@ -445,6 +453,11 @@ func (c *httpClient) attempt(ctx context.Context, key string, body []byte, timeo
 		msg := fmt.Sprintf("HTTP %d", res.StatusCode)
 		if cr.Error != nil {
 			msg = cr.Error.Message
+		} else if body := strings.TrimSpace(string(raw)); body != "" {
+			// Not the OpenAI {"error":{...}} shape (NVIDIA answers {"detail":..}).
+			// Without the body a 400 said only "HTTP 400" and its cause was
+			// unknowable; sanitize below still redacts keys and clips it.
+			msg += ": " + body
 		}
 		c.record(0, 0, now, sanitize(msg))
 		// 429 (rate limit), 5xx (server), 401/403 (this key may be bad — try

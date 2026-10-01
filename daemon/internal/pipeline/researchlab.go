@@ -154,6 +154,9 @@ func (w *ResearchLabWorker) Run(ctx context.Context) (string, error) {
 
 	// STEP A — re-evaluate existing shadows on fresh data (promotion path).
 	promoted, rejected, resurveyed := w.reEvaluateShadows(ctx, rows, keys, cfg, baseline, priorTests, nowUnix)
+	if err := ctx.Err(); err != nil {
+		return "", err // interrupted mid-survey: same as a crash (see the counter note below)
+	}
 
 	// STEP B — mine new hypotheses from the current failure clusters.
 	priority := w.clusterPriority(ctx, nowUnix)
@@ -162,6 +165,12 @@ func (w *ResearchLabWorker) Run(ctx context.Context) (string, error) {
 	mult := researchlab.Multiplicity{Batch: nTested, PriorTests: priorTests}
 	newShadows := 0
 	for _, h := range hyps {
+		// Each grading is seconds of CPU and none of it read ctx, so a daemon
+		// stop waited out the whole batch: research-lab held 5 of 6 forced
+		// shutdowns (8-20 min past the 75s grace), orphaning the fleet.
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		g, err := researchlab.EvaluateHypothesis(h, rows, keys, cfg)
 		if err != nil {
 			continue // insufficient data for this variant ⇒ silently skip (honest)
@@ -190,9 +199,19 @@ func (w *ResearchLabWorker) Run(ctx context.Context) (string, error) {
 	// actually conducted. A crash before this point re-runs tonight's looks
 	// under tonight's (lower) divisor, which is the pre-existing behaviour;
 	// double-counting them would silently tighten a bar nobody paid for.
-	_ = w.St.SetMeta(ctx, researchLabTestsKey, strconv.Itoa(priorTests+nTested+resurveyed))
-
-	_ = w.St.SetMeta(ctx, researchLabDayKey, day)
+	//
+	// This write is the one labTests says must not be skipped, so it is not
+	// discarded and not tied to the run's context: a stop arriving after the
+	// gradings finished used to drop it silently while the run still reported
+	// "tested N hyps" — and the next night's divisor under-counted the looks.
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := w.St.SetMeta(wctx, researchLabTestsKey, strconv.Itoa(priorTests+nTested+resurveyed)); err != nil {
+		return "", fmt.Errorf("advance the Bonferroni look counter: %w", err)
+	}
+	if err := w.St.SetMeta(wctx, researchLabDayKey, day); err != nil {
+		return "", fmt.Errorf("record the lab day: %w", err)
+	}
 	return fmt.Sprintf(
 		"baseline lift %.3f (n=%d); tested %d hyps → %d new shadows; re-surveyed %d shadows → %d promoted, %d rejected "+
 			"(Bonferroni divisor %d = tonight's batch + %d prior looks)",
@@ -216,6 +235,9 @@ func (w *ResearchLabWorker) reEvaluateShadows(ctx context.Context, rows []resear
 	}
 	mult := researchlab.Multiplicity{Batch: len(shadows), PriorTests: priorTests}
 	for _, row := range shadows {
+		if ctx.Err() != nil {
+			return promoted, rejected, surveyed // Run checks ctx and stops
+		}
 		var h researchlab.Hypothesis
 		if err := json.Unmarshal([]byte(row.Spec), &h); err != nil {
 			continue

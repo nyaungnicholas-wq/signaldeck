@@ -628,12 +628,19 @@ func (d Deps) authReset(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "password must be 8-72 characters")
 		return
 	}
+	// Hash before taking priority: bcrypt is CPU, not a write anyone waits on.
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
+	if err != nil {
+		httpInternal(w, err)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	r = r.WithContext(ctx)
 	release := d.St.Priority()
 	defer release()
-	uid, err := d.St.ConsumeAuthToken(ctx, strings.TrimSpace(body.Token), store.TokenReset)
+	// Redeem + new password + verified in ONE transaction, so a busy database
+	// rolls everything back and the "it still works" below is true.
+	uid, err := d.St.ResetPassword(ctx, strings.TrimSpace(body.Token), string(hash))
 	if errors.Is(err, store.ErrTokenInvalid) {
 		httpErr(w, 400, err.Error()+" — request a new reset link")
 		return
@@ -642,16 +649,10 @@ func (d Deps) authReset(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusServiceUnavailable, "the server is busy — open the link again in a minute; it still works")
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)
-	if err != nil {
-		httpInternal(w, err)
-		return
-	}
-	if err := d.St.SetPassword(r.Context(), uid, string(hash)); err != nil {
-		httpInternal(w, err)
-		return
-	}
-	_ = d.St.SetEmailVerified(r.Context(), uid) // the link proved control of the inbox
+	// The password has changed from here on; signing in gets a fresh budget.
+	sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer scancel()
+	r = r.WithContext(sctx)
 	u, ok, err := d.St.GetUserByID(r.Context(), uid)
 	if err != nil || !ok {
 		httpInternal(w, errors.New("account vanished during reset"))

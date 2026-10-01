@@ -39,7 +39,17 @@ const AI_BOTS = [
   "mistralai-user",
 ];
 
+const LOOPBACK = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+
 export function proxy(req: NextRequest) {
+  // The quick tunnel serves http:// as-is (no edge redirect), so a sign-in
+  // there set the session cookie without Secure — the daemon keys Secure on
+  // X-Forwarded-Proto. Send any plain-http edge visit to https first. Direct
+  // loopback use (no proxy, or a local host) is untouched.
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "";
+  if (req.headers.get("x-forwarded-proto") === "http" && host && !LOOPBACK.test(host)) {
+    return NextResponse.redirect(`https://${host}${req.nextUrl.pathname}${req.nextUrl.search}`, 308);
+  }
   if (req.nextUrl.pathname === "/robots.txt") {
     return NextResponse.next();
   }

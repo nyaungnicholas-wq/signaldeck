@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -51,4 +52,40 @@ func TestCompleteWith_PermanentErrorIsNotTransient(t *testing.T) {
 		t.Fatalf("server saw %d request(s), want exactly 1 (a permanent error must not be retried)", n)
 	}
 	// this is the guard that stops ErrTransient from swallowing real bugs - without it, every permanent failure would be reported as "provider busy, resuming next pass" and the worker would look healthy forever.
+}
+
+// A 400 used to read only "HTTP 400" when the body was not OpenAI-shaped, so
+// the live ai-analyst failures had no knowable cause.
+func TestCompleteWith_PermanentErrorCarriesTheBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"max_tokens exceeds the model limit"}`))
+	}))
+	defer srv.Close()
+	c := New([]string{"testkey"}, srv.URL, "m", "m", "m", 100).(*httpClient)
+	_, err := c.CompleteWith(context.Background(), "m", "sys", []Message{{Role: "user", Content: "hi"}}, 16)
+	if err == nil || !strings.Contains(err.Error(), "max_tokens exceeds") {
+		t.Fatalf("err = %v, want it to carry the provider's reason", err)
+	}
+}
+
+// A 400 that answers the RE-SENT request after a retryable failure is filed as
+// transient (the worker resumes next pass), not as a permanent error.
+func TestCompleteWith_PermanentAfterRetryableIsTransient(t *testing.T) {
+	var hits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt64(&hits, 1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"detail":"busy"}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"detail":"bad request"}`))
+	}))
+	defer srv.Close()
+	c := New([]string{"testkey"}, srv.URL, "m", "m", "m", 100).(*httpClient)
+	_, err := c.CompleteWith(context.Background(), "m", "sys", []Message{{Role: "user", Content: "hi"}}, 16)
+	if !errors.Is(err, ErrTransient) {
+		t.Fatalf("err = %v, want ErrTransient for a 400 that followed a retryable failure", err)
+	}
 }

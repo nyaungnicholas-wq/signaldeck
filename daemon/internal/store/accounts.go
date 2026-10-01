@@ -122,19 +122,71 @@ func (s *Store) SetEmailVerified(ctx context.Context, uid int64) error {
 }
 
 // SetPassword replaces an account's hash and ends every session it holds, so a
-// reset also evicts whoever had the old password.
+// reset also evicts whoever had the old password. One transaction: as three
+// autocommits, a deadline between them left the new hash in place with the
+// old sessions still signed in.
 func (s *Store) SetPassword(ctx context.Context, uid int64, passHash string) error {
-	if _, err := s.authW().ExecContext(ctx, `UPDATE users SET pass_hash=? WHERE id=?`, passHash, uid); err != nil {
+	tx, err := s.authW().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if err := setPasswordTx(ctx, tx, uid, passHash); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func setPasswordTx(ctx context.Context, tx *sql.Tx, uid int64, passHash string) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET pass_hash=? WHERE id=?`, passHash, uid); err != nil {
 		return err
 	}
 	// Every outstanding link dies with the old password: a verify link also
 	// signs its redeemer in, so leaving it live would be a 24h back door.
-	if _, err := s.authW().ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE auth_tokens SET used_ts=? WHERE user_id=? AND used_ts IS NULL`, time.Now().Unix(), uid); err != nil {
 		return err
 	}
-	_, err := s.authW().ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, uid)
+	_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, uid)
 	return err
+}
+
+// ResetPassword redeems a reset link AND sets the new password in one
+// transaction, marking the address verified (the link proved the inbox).
+// Redeeming first and calling SetPassword after could spend the link and then
+// time out, leaving the old password in place and no link left to change it.
+// Any failure rolls the whole thing back, so the link still works.
+func (s *Store) ResetPassword(ctx context.Context, raw, passHash string) (int64, error) {
+	if len(raw) != 64 {
+		return 0, ErrTokenInvalid
+	}
+	h := hashAuthToken(raw)
+	now := time.Now().Unix()
+	tx, err := s.authW().BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	res, err := tx.ExecContext(ctx,
+		`UPDATE auth_tokens SET used_ts=? WHERE token_hash=? AND kind=? AND used_ts IS NULL AND expires_ts>?`,
+		now, h, TokenReset, now)
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return 0, ErrTokenInvalid
+	}
+	var uid int64
+	if err := tx.QueryRowContext(ctx, `SELECT user_id FROM auth_tokens WHERE token_hash=?`, h).Scan(&uid); err != nil {
+		return 0, err
+	}
+	if err := setPasswordTx(ctx, tx, uid, passHash); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET email_verified=1 WHERE id=?`, uid); err != nil {
+		return 0, err
+	}
+	return uid, tx.Commit()
 }
 
 // PurgeStaleUnverified deletes accounts whose email was never confirmed and
