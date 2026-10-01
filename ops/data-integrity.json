@@ -1,9 +1,9 @@
 {
-  "generated": "2026-09-30T02:01:57.688283Z",
+  "generated": "2026-10-01T01:04:44.585530Z",
   "source_db": "data/signaldeck.db",
   "grader": {
     "status": "OK",
-    "graded_at": "2026-09-29T19:01:04",
+    "graded_at": "2026-09-30T18:04:11",
     "refused_since": null,
     "refusal_reason": null,
     "rows": 18
@@ -12,8 +12,8 @@
   "delisting": {
     "stocks_total": 2943,
     "stocks_delisted": 1901,
-    "span_years": 8.18,
-    "rate_per_year": 0.079
+    "span_years": 8.183,
+    "rate_per_year": 0.0789
   },
   "survivorship_fix_date": "2026-08-04"
 }
