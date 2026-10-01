@@ -57,6 +57,10 @@ $disabled = @()
 #                       INSIDE the collection window only. Giving it a trigger
 #                       would hold the public URL open around the clock.
 $onDemandStoppable = @('SignalDeck Web', 'SignalDeck Daemon', 'SignalDeck Tunnel')
+# Logon-only tasks that a guard restarts (web-guard.ps1 restarts the Quick
+# Tunnel). Named explicitly, like the list above: a logon trigger alone does not
+# mean anything will start a dead task before the next logon.
+$guardedLogon = @('SignalDeck Quick Tunnel')
 
 foreach ($task in $tasks) {
     try {
@@ -168,7 +172,8 @@ foreach ($task in $tasks) {
         # running is the console-kill warning, any other failure is "last
         # result not success", and a restart the guard cannot make fails
         # SignalDeck Web Keepalive.
-        $hasLogonTrigger = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }).Count -gt 0
+        $hasLogonTrigger = $guardedLogon -contains $task.TaskName -and
+            @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }).Count -gt 0
         if (-not $info.NextRunTime -and $task.State -ne 'Running' -and $task.State -ne 'Disabled' `
                 -and $onDemandStoppable -notcontains $task.TaskName -and -not $hasLogonTrigger) {
             $stale += "$($task.TaskName) (state $($task.State), last ran $($info.LastRunTime)) - no NextRunTime and not a known on-demand task: nothing will start this again"

@@ -198,6 +198,13 @@ try {
     $r = Invoke-Guard 'Ready' @($cfHidden) $null
     Check 'a cloudflared whose command line is unreadable counts as running (no second instance)' ($r.Started.Count -eq 0) ($r.Text + $r.Log)
 
+    # The NAMED tunnel (staged in .pending) also runs cloudflared. Only the quick
+    # tunnel's command line counts, so with just the named one alive the quick
+    # tunnel is still down and must be started.
+    $cfNamed = [pscustomobject]@{ Name = 'cloudflared.exe'; ProcessId = 4244; CommandLine = '"C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --logfile "C:\x\logs\cloudflared.log" --loglevel warn run signaldeck' }
+    $r = Invoke-Guard 'Ready' @($cfNamed) @($cfNamed, $cf)
+    Check 'the named tunnel''s cloudflared is not mistaken for the quick tunnel (started once)' ($r.Started.Count -eq 1 -and $r.Started[0] -eq $qtName) ("started: " + ($r.Started -join ',') + "`n" + $r.Text + $r.Log)
+
     $r = Invoke-Guard 'Disabled' @() $null
     Check 'a DISABLED task is not started (the deliberate off switch)' ($r.Started.Count -eq 0) ($r.Text + $r.Log)
 

@@ -9,7 +9,7 @@
 # machine, and its absence is reported as a note rather than an error. See
 # ops/TUNNEL_RESTORE_RUNBOOK.md to turn it back on. Any service that IS
 # registered and fails to start makes `up`/`collect` exit non-zero.
-#   signaldeck-ctl.sh stop     stop everything — market-close trigger uses this
+#   signaldeck-ctl.sh stop     stop everything (market-close.sh no longer does: it stops only the daemon and ngrok, SD-38)
 #   signaldeck-ctl.sh status   show what is running
 #   signaldeck-ctl.sh deploy   THE ONLY sanctioned source->running path (see ops/GO-LIVE.md)
 #   signaldeck-ctl.sh launch   launchd's program for com.signaldeck.daemon: same preflight, then exec
