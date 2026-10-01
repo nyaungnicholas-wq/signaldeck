@@ -90,6 +90,9 @@ func TestExplicitEnvStillWins(t *testing.T) {
 // dropping it (as CLOUDFLARE_TUNNEL.md advises) would have opened them. The
 // tunnel log (or a public URL) must close them on its own.
 func TestOpenDefaultsClosedWhenATunnelLogOrPublicURLIsSet(t *testing.T) {
+	// An empty root: otherwise Load() fills the blanked vars below from the
+	// live daemon/.env, whose tunnel log closes the "plain dev box" case.
+	t.Setenv("SIGNALDECK_ROOT", t.TempDir())
 	t.Setenv("SIGNALDECK_ASSUME_TUNNEL", "0")
 	t.Setenv("SIGNALDECK_HTTP", "127.0.0.1:8322")
 	t.Setenv("SIGNALDECK_ALLOWED_HOSTS", "127.0.0.1:8322,localhost:8322")
