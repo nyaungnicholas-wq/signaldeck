@@ -357,6 +357,10 @@ async function loadPublicationStatus(): Promise<{
     const res = await fetch(`${daemon}/api/accuracy`, {
       cache: "no-store",
       headers: cookie ? { cookie } : undefined,
+      // Unbounded until 2026-10-01: a daemon slowed by a restart held this
+      // page open for as long as it took. A timeout lands in the catch below,
+      // which renders the outage path.
+      signal: AbortSignal.timeout(8_000),
     });
     const body = await res.json();
     if (!res.ok || body?.status !== "OK") {
