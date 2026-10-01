@@ -149,12 +149,19 @@ function Get-BuildId {
 
 $QuickTunnelTask = 'SignalDeck Quick Tunnel'
 
-# True when a cloudflared serving the quick tunnel is running. One whose command
-# line this session cannot read (the ordinary case under S4U, measured in
-# start-local-workspace.ps1) counts as ours: never start a second instance.
-function Test-QuickTunnel {
+# True when the quick tunnel is up. The task's action wraps cloudflared and waits
+# on it, so a RUNNING task is a live tunnel. That is the primary test, because under
+# S4U this session usually cannot read a process's command line (measured in
+# start-local-workspace.ps1), so a process match alone would start a second
+# instance every run. Otherwise only a cloudflared whose command line NAMES the
+# quick tunnel counts. An unreadable one used to count as well, but from this
+# S4U/Limited token every SYSTEM process reads empty: the named-tunnel service
+# ('cloudflared service install' runs as SYSTEM) would have passed for the quick
+# tunnel, and a dead quick tunnel would never have been restarted.
+function Test-QuickTunnel($Task) {
+    if ($Task -and $Task.State -eq 'Running') { return $true }
     $procs = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction Stop)
-    return @($procs | Where-Object { -not $_.CommandLine -or $_.CommandLine -match 'quicktunnel|127\.0\.0\.1:8323' }).Count -gt 0
+    return @($procs | Where-Object { $_.CommandLine -match 'quicktunnel|tunnel --url|127\.0\.0\.1:8323' }).Count -gt 0
 }
 
 try {
@@ -189,15 +196,18 @@ try {
             Write-Log ("quicktunnel: '{0}' is not registered here - not checked" -f $QuickTunnelTask)
         } elseif ($qt.State -eq 'Disabled') {
             Write-Log "quicktunnel: task disabled - left down on purpose"
-        } elseif (Test-QuickTunnel) {
+        } elseif (Test-QuickTunnel $qt) {
             Write-Log "quicktunnel ok"
             $results += 'quicktunnel ok'
         } else {
-            Write-Log ("quicktunnel DOWN (no cloudflared) - starting task '{0}'" -f $QuickTunnelTask)
+            Write-Log ("quicktunnel DOWN (task not running, no quick-tunnel cloudflared) - starting task '{0}'" -f $QuickTunnelTask)
             Start-ScheduledTask -TaskName $QuickTunnelTask
             $up = $false
             # 10 s, not the web's 45: this task has a 3-minute limit to share.
-            for ($i = 0; $i -lt 5 -and -not $up; $i++) { Start-Sleep -Seconds 2; $up = Test-QuickTunnel }
+            for ($i = 0; $i -lt 5 -and -not $up; $i++) {
+                Start-Sleep -Seconds 2
+                $up = Test-QuickTunnel (Get-ScheduledTask -TaskName $QuickTunnelTask -ErrorAction SilentlyContinue)
+            }
             if ($up) {
                 Write-Log "quicktunnel back - the public URL changed, see logs\quicktunnel.log"
                 $results += 'quicktunnel ok'
