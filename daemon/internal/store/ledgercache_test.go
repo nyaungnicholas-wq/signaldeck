@@ -50,8 +50,9 @@ func TestVerifyLedgerCachedIncrementalEqualsFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("full: %v", err)
 	}
-	if res1.Intact != want.Intact || res1.Count != want.Count || res1.HeadHash != want.HeadHash {
-		t.Fatalf("cached %+v != full %+v", res1, want)
+	if res1.Intact != want.Intact || res1.Count != want.Count || res1.HeadHash != want.HeadHash ||
+		res1.HeadSeq != 10 || want.HeadSeq != 10 {
+		t.Fatalf("cached %+v != full %+v (want head seq 10)", res1, want)
 	}
 
 	// Grow the chain; the second cached verify must be a suffix walk with the
@@ -71,8 +72,8 @@ func TestVerifyLedgerCachedIncrementalEqualsFull(t *testing.T) {
 	if res2.Intact != want2.Intact || res2.Count != want2.Count || res2.HeadHash != want2.HeadHash {
 		t.Fatalf("incremental %+v != full %+v", res2, want2)
 	}
-	if res2.Count != 17 {
-		t.Fatalf("count = %d, want 17", res2.Count)
+	if res2.Count != 17 || res2.HeadSeq != 17 {
+		t.Fatalf("count/headSeq = %d/%d, want 17/17", res2.Count, res2.HeadSeq)
 	}
 
 	// No growth: still incremental, still identical.
@@ -80,7 +81,7 @@ func TestVerifyLedgerCachedIncrementalEqualsFull(t *testing.T) {
 	if err != nil || full3 {
 		t.Fatalf("verify3 full=%v err=%v — an unchanged chain must stay on the fast path", full3, err)
 	}
-	if res3.Count != 17 || !res3.Intact {
+	if res3.Count != 17 || res3.HeadSeq != 17 || !res3.Intact {
 		t.Fatalf("verify3 = %+v", res3)
 	}
 }
@@ -188,7 +189,7 @@ func TestVerifyLedgerCachedSuffixBreakDetected(t *testing.T) {
 	if fullWalk {
 		t.Fatal("suffix tamper is caught on the incremental path")
 	}
-	if res.Intact || res.BrokenAtSeq == nil || *res.BrokenAtSeq != 8 {
-		t.Fatalf("want broken at seq 8, got %+v", res)
+	if res.Intact || res.BrokenAtSeq == nil || *res.BrokenAtSeq != 8 || res.HeadSeq != 8 {
+		t.Fatalf("want broken at seq 8 (and head seq 8, the last row examined), got %+v", res)
 	}
 }

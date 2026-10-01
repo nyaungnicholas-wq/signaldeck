@@ -20,15 +20,32 @@ export interface UntilWarmOptions {
   onWarming?: () => void;
   /** False once the caller has gone: no further request is sent for it. */
   alive?: () => boolean;
-  /** Total wait, default 3 min: the slowest cold build measured is 129 s. */
+  /** Total wait, default 3 min: the slowest cold build measured is 129 s. A
+   *  hidden tab may wait past it, then makes one last try once visible. */
   capMs?: number;
   /** Injected by tests; defaults to setTimeout. */
   sleep?: (ms: number) => Promise<void>;
 }
 
+const tabHidden = () => typeof document !== "undefined" && document.hidden === true;
+
+/** Resolves once the tab is visible again. */
+function untilVisible(): Promise<void> {
+  return new Promise((resolve) => {
+    const onChange = () => {
+      if (document.hidden) return;
+      document.removeEventListener("visibilitychange", onChange);
+      resolve();
+    };
+    document.addEventListener("visibilitychange", onChange);
+  });
+}
+
 /** Re-runs fn while the daemon says it is warming, honouring Retry-After, for at
- *  most capMs. Anything else, the cap, or a caller that has gone throws the
- *  last error. */
+ *  most capMs. A hidden tab sends nothing (as visibleInterval): after the wait it
+ *  holds until the tab is visible again, and if the cap passed meanwhile the one
+ *  try it then makes is the last. Anything else, the cap, or a caller that has
+ *  gone throws the last error. */
 export async function untilWarm<T>(fn: () => Promise<T>, opts: UntilWarmOptions = {}): Promise<T> {
   const {
     onWarming,
@@ -45,7 +62,9 @@ export async function untilWarm<T>(fn: () => Promise<T>, opts: UntilWarmOptions 
       if (wait <= 0 || !alive()) throw e;
       onWarming?.();
       await sleep(wait);
-      // The caller may have gone during the sleep: send nothing more for it.
+      // If the cap has passed, the next try's wait is <= 0, so it is the last one.
+      if (tabHidden()) await untilVisible();
+      // The caller may have gone during the wait: send nothing more for it.
       if (!alive()) throw e;
     }
   }

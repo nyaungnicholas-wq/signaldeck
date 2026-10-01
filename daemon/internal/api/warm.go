@@ -51,6 +51,14 @@ var sharedMoversCache = newSWRBodyCache(respCacheTTL)
 // below it was warmed and the first visitor paid a 129.4s /api/track-record
 // build that overran the 90s write deadline and delivered 0 bytes.
 //
+// A step that only lost the race for a build slot (errWarming), found a ledger
+// verification already running (errLedgerVerifyBusy) or timed out reading the
+// ledger verify key (errWarming: cachedLedgerVerify starts no verify then) built
+// nothing and failed at nothing: it is logged at INFO as skipped and not
+// counted, or three busy passes in a row would read as a failing worker. The
+// next pass retries. A key that fails to read for any other reason
+// (errLedgerVerifyKey: a bad row, a missing table) is a real failure and counts.
+//
 // ORDER IS THE PRIORITY. /api/attribution leads, as it did before step 4 (review
 // #8): ~1s per horizon, and the one build the operator symbol page fetches ON
 // MOUNT. Measured on a cold daemon, a pass had not reached it 11 minutes in when
@@ -63,7 +71,9 @@ var sharedMoversCache = newSWRBodyCache(respCacheTTL)
 //
 // The context is marked waitForBuild: the warmer waits each cold build out,
 // where a visitor would be answered "warming" after coldServeWait, and refreshes
-// a stale or persisted entry inline, so it holds at most one cold slot.
+// an entry loaded from disk inline, so after a boot it holds at most one cold
+// slot. A stale entry this process built is served and refreshed detached, as
+// for any visitor.
 //
 // EVERY KEY IS ONE THE WEB REQUESTS (review #12), spelled as web/src spells it,
 // because a warmed key nobody reads is a 20-40s build every TTL for nothing
@@ -75,6 +85,11 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	var errs []error
 	note := func(what string, err error) bool {
 		if err == nil || ctx.Err() != nil { // a shutdown is not a failed step
+			return false
+		}
+		if errors.Is(err, errWarming) || errors.Is(err, errLedgerVerifyBusy) {
+			slog.Info("cache warm step skipped: no build slot, a verification already running, or a ledger key read that timed out; the next pass retries",
+				"cache", what, "err", err)
 			return false
 		}
 		slog.Warn("cache warm step failed; the pass continues", "cache", what, "err", err)
@@ -95,7 +110,11 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 		}
 		rec := &discardResponseWriter{header: http.Header{}}
 		c.serveAt(file, key, rec, req, h)
-		if rec.status != 0 && rec.status != http.StatusOK {
+		switch rec.status {
+		case 0, http.StatusOK:
+		case http.StatusServiceUnavailable: // writeWarming: no slot for the render
+			note(path, errWarming)
+		default:
 			note(path, fmt.Errorf("status %d", rec.status))
 		}
 	}
@@ -121,7 +140,7 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	// /api/vol-forecast/record: ~25s cold; the public /volatility page fetches
 	// it server-side under a 15s bound and rendered "not readable" to any
 	// visitor who arrived before a human had paid the build.
-	warmBody("/api/vol-forecast/record", d.cacheFile(volRecordCacheName), d.St.CacheKey()+"|record", sharedVolRecordSWR, d.volForecastRecord)
+	warmBody("/api/vol-forecast/record", d.cacheFile(volRecordCacheName, volRecordPersistFormat), d.St.CacheKey()+"|record", sharedVolRecordSWR, d.volForecastRecord)
 
 	_, err = sharedDashCache.get(ctx, d)
 	step("dashboard", err)
@@ -135,11 +154,13 @@ func (d Deps) WarmCaches(ctx context.Context) error {
 	// on a hot cache this costs a map lookup; when stale, the warmer is the one
 	// caller that eats the rebuild.
 	//   - composite/top: CompositeLeaderboard fetches 500 rows at its default 1d.
-	//   - honesty and calibration: /lab/honesty and the predictions calibration
-	//     panel at 1d (their default, which keys as "") and 1w.
+	//   - honesty: /lab/honesty at 1d (its default, which keys as ""), 1w and
+	//     1h (the page's HORIZONS picker offers all three).
+	//   - calibration: the predictions calibration panel at 1d ("") and 1w.
 	warmBody("/api/composite/top?limit=500", "", "limit=500", sharedCompositeSWR, d.compositeTop)
 	warmBody("/api/honesty?horizon=1d", "", d.St.CacheKey()+"|", sharedHonestySWR, d.honesty)
 	warmBody("/api/honesty?horizon=1w", "", d.St.CacheKey()+"|horizon=1w", sharedHonestySWR, d.honesty)
+	warmBody("/api/honesty?horizon=1h", "", d.St.CacheKey()+"|horizon=1h", sharedHonestySWR, d.honesty)
 	warmBody("/api/calibration?horizon=1d", "", d.St.CacheKey()+"|", sharedCalibrationSWR, d.calibration)
 	warmBody("/api/calibration?horizon=1w", "", d.St.CacheKey()+"|horizon=1w", sharedCalibrationSWR, d.calibration)
 	warmBody("/api/datastats", "", "datastats", sharedDatastatsSWR, d.datastats)

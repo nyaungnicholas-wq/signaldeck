@@ -78,7 +78,7 @@ func (s *Store) VerifyLedgerCached(ctx context.Context) (LedgerVerification, boo
 	}
 
 	// Suffix walk: rows after the checkpoint, chained from the anchored hash.
-	res := LedgerVerification{Intact: true, Count: ck.Count, HeadHash: ck.Hash}
+	res := LedgerVerification{Intact: true, Count: ck.Count, HeadSeq: ck.Seq, HeadHash: ck.Hash}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT seq, predicted_at, symbol_id, horizon, bar_ts, raw_prob, cal_prob,
 		       feature_hash, model_version, prev_hash, entry_hash
@@ -105,12 +105,12 @@ func (s *Store) VerifyLedgerCached(ctx context.Context) (LedgerVerification, boo
 			res.Intact = false
 			res.BrokenAtSeq = &seq
 			res.Count++
-			res.HeadHash = e.EntryHash
+			res.HeadSeq, res.HeadHash = e.Seq, e.EntryHash
 			return res, false, rows.Err() // broken suffix: no checkpoint advance
 		}
 		running = e.EntryHash
 		res.Count++
-		res.HeadHash = e.EntryHash
+		res.HeadSeq, res.HeadHash = e.Seq, e.EntryHash
 	}
 	if err := rows.Err(); err != nil {
 		return LedgerVerification{}, false, err

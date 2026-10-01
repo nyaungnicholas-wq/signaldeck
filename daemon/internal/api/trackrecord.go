@@ -189,14 +189,21 @@ func rowCount(v any) (int, bool) {
 // across restarts (cachepersist.go). The route and WarmCaches both read it here,
 // so the warmer fills exactly the entry and file a visitor is served from.
 func (d Deps) cachedTrackRecord(ctx context.Context, h md.Horizon) (map[string]any, error) {
-	return sharedTrackCache.getAt(ctx, d.cacheFile("track-record-"+string(h)), d.St.CacheKey()+"|"+string(h),
+	return sharedTrackCache.getAt(ctx, d.cacheFile("track-record-"+string(h), trackRecordPersistFormat), d.St.CacheKey()+"|"+string(h),
 		func(ctx context.Context) (map[string]any, error) {
 			return d.buildTrackRecord(ctx, h)
 		})
 }
 
+// trackRecordPersistFormat is the shape of the payload buildTrackRecord returns,
+// as persisted across restarts (cachepersist.go). BUMP IT whenever that shape
+// changes (a field added, renamed or re-typed), or the first reads after the
+// deploy serve the previous build's shape.
+const trackRecordPersistFormat = 1
+
 // buildTrackRecord computes the full track-record payload for one horizon.
 // Pure build — no HTTP — so the response cache can rebuild it off-request.
+// Its shape is trackRecordPersistFormat: bump that when you change it.
 func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]any, error) {
 	// The whole graded window (the same one fleetEdgeSkill reads), already
 	// collapsed IN SQL to ONE independent observation per (symbol, settled move),

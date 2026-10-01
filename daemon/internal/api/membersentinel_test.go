@@ -76,12 +76,14 @@ func newProductionServer(t *testing.T, mutate func(*config.Config), registry str
 // Sentinel vendor values: numbers no handler produces by accident. Each is
 // chosen so its common roundings keep three significant digits: the day
 // change C2/C1-1 is +12.38% ("12.4" at 1dp), the volumes humanise to "91.4M"
-// and "92.4M", and the market cap to "87.3B".
+// and "92.4M", the market cap to "87.3B", and the forward returns are
+// "+14.4%" and "23.9%" at the house 1dp (insights.Pct) and 1438 and 2391 in
+// basis points.
 const (
 	sntO1, sntH1, sntL1, sntC1 = 7769.13731, 7779.13731, 7759.13731, 7771.13731
 	sntO2, sntH2, sntL2, sntC2 = 8721.13731, 8741.13731, 8717.13731, 8733.37731
 	sntV1, sntV2               = 91377731.0, 92377731.0
-	sntFwd1, sntFwd2           = 0.0137731, 0.0291357 // realized forward returns between vendor closes
+	sntFwd1, sntFwd2           = 0.1437731, 0.2391357 // realized forward returns between vendor closes
 	sntShares                  = 1e7                  // EDGAR share count (public), for the mcap leak
 	sntTVClose, sntTVRSI       = 6661.17731, 61.17731
 	sntTVPrice, sntTVDelayed   = 6662.27731, 6663.37731
@@ -128,8 +130,9 @@ func vendorSentinels() []sentinel {
 }
 
 // numberSpellings is every way a handler could print v: exact (what
-// encoding/json writes) and rounded to 0-6 places, for v and for v*100 (a
-// percent); each with thousands grouped by commas ("9,137,731"); and, from a
+// encoding/json writes) and rounded to 0-6 places, for v, for v*100 (a
+// percent) and for v*10000 (basis points); each with thousands grouped by
+// commas ("9,137,731"); and, from a
 // thousand up, humanised to K, M, B or T at 0-2 places ("9.1M", "$7.8B"). A
 // spelling with fewer than three significant digits is dropped: "0.01" or
 // "9M" would match by accident.
@@ -142,7 +145,7 @@ func numberSpellings(v float64) []string {
 			out = append(out, s)
 		}
 	}
-	for _, x := range []float64{v, v * 100} {
+	for _, x := range []float64{v, v * 100, v * 10000} {
 		for _, prec := range []int{-1, 0, 1, 2, 3, 4, 5, 6} {
 			s := strconv.FormatFloat(x, 'f', prec, 64)
 			add(s)
@@ -185,7 +188,9 @@ func groupThousands(s string) string {
 }
 
 // leaks lists every sentinel found in body. A number counts only standing on
-// its own, never as digits inside a longer number (a timestamp, say).
+// its own: never as digits inside a longer number (a timestamp, say) and never
+// inside a run of letters and digits (a hex sig, digest or head hash, which
+// change on every run and held "7771" or "172" in about 5% of runs).
 func leaks(body string, sents []sentinel) []string {
 	var found []string
 	for _, s := range sents {
@@ -204,6 +209,8 @@ func containsToken(body, tok string) bool {
 		return strings.Contains(body, tok)
 	}
 	digit := func(c byte) bool { return c >= '0' && c <= '9' }
+	letter := func(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
+	alnum := func(c byte) bool { return digit(c) || letter(c) }
 	for i := 0; ; {
 		j := strings.Index(body[i:], tok)
 		if j < 0 {
@@ -211,10 +218,20 @@ func containsToken(body, tok string) bool {
 		}
 		j += i
 		end := j + len(tok)
-		// "8733" stands alone in "closed at 8733." but not in "8733.5".
-		moreDigits := end < len(body) && (digit(body[end]) ||
+		// A unit the handlers glue on ("+14.4pp", "1438bps", "1.5x") still ends
+		// the number. None of them can occur in lowercase hex.
+		u := end
+		for u < len(body) && letter(body[u]) {
+			u++
+		}
+		if unit := body[end:u]; unit == "pp" || unit == "bp" || unit == "bps" || unit == "x" {
+			end = u
+		}
+		// "8733" stands alone in "closed at 8733." and "+8733" or "$8733", but not
+		// in "8733.5", "0.8733" or "e8733f".
+		moreAfter := end < len(body) && (alnum(body[end]) ||
 			body[end] == '.' && end+1 < len(body) && digit(body[end+1]))
-		if (j == 0 || !(digit(body[j-1]) || body[j-1] == '.')) && !moreDigits {
+		if (j == 0 || !(alnum(body[j-1]) || body[j-1] == '.')) && !moreAfter {
 			return true
 		}
 		i = j + 1
@@ -572,19 +589,27 @@ func TestMemberResponsesCarryNoVendorSentinels(t *testing.T) {
 	// closes, grouped volumes), and must not fire on a body without them.
 	for _, b := range []string{`{"note":"up +12.4% today"}`, `{"note":"closed at 8733.4"}`,
 		`{"note":"closed at 8733.377"}`, `{"note":"closed at 8733"}`, `{"vol":"91.4M"}`, `{"vol":"91,377,731"}`,
-		`{"mcap":"$87.3B"}`, `{"chg":0.124}`, `{"fwd":"1.38%"}`} {
+		`{"mcap":"$87.3B"}`, `{"chg":0.124}`, `{"fwd":"14.38%"}`, `{"fwd":"+14.4%"}`, `{"fwd":"-23.9%"}`,
+		`{"fwdBp":1438}`, `{"fwdBp":"2,391"}`, `{"fwd":0.239}`, `{"dayBp":1238}`, `{"note":"edge +14.4pp"}`,
+		`{"gap":"max 1438bps"}`} {
 		if len(leaks(b, vendorSentinels())) == 0 {
 			t.Errorf("the scanner is blind to %s", b)
 		}
 	}
-	if l := leaks(`{"n":12,"pct":61.5,"ts":1790812800,"vol":"9.1M","close":8733.5}`, vendorSentinels()); len(l) > 0 {
-		t.Errorf("the scanner fires on a body with no sentinel: %v", l)
+	// Nor may it fire on a sentinel's digits inside a longer run of letters and
+	// digits: the per-run hex sig, digest and head of the ledger routes.
+	for _, b := range []string{`{"n":12,"pct":61.5,"ts":1790812800,"vol":"9.1M","close":8733.5}`,
+		`{"sig":"e76e7f7771be9b","digest":"4e1238","head":"8733ab","pubKey":"aa172"}`,
+		`{"sig":"7771bd","head":"8733x2","n":"14.4ppm"}`} {
+		if l := leaks(b, vendorSentinels()); len(l) > 0 {
+			t.Errorf("the scanner fires on a body with no sentinel: %v", l)
+		}
 	}
 	// The track-record strip on a payload as the disk cache hands it back
 	// after a restart (decoded JSON, json.Number counts), and without touching
 	// the shared payload the operator is served next.
 	var cached map[string]any
-	dec := json.NewDecoder(strings.NewReader(`{"byMarket":[{"market":"crypto","n":1,"meanFwd":0.0291357},` +
+	dec := json.NewDecoder(strings.NewReader(`{"byMarket":[{"market":"crypto","n":1,"meanFwd":0.2391357},` +
 		`{"market":"stocks","n":12,"meanFwd":0.0012}]}`))
 	dec.UseNumber()
 	if err := dec.Decode(&cached); err != nil {
@@ -593,7 +618,7 @@ func TestMemberResponsesCarryNoVendorSentinels(t *testing.T) {
 	pub, _ := json.Marshal(withoutThinReturnMeans(cached))
 	op, _ := json.Marshal(cached)
 	if want := `{"byMarket":[{"market":"crypto","n":1},{"market":"stocks","meanFwd":0.0012,"n":12}]}`; string(pub) != want ||
-		!strings.Contains(string(op), "0.0291357") {
+		!strings.Contains(string(op), "0.2391357") {
 		t.Errorf("withoutThinReturnMeans on a decoded payload: public %s, want %s; shared payload now %s", pub, want, op)
 	}
 	for i, posture := range []struct {
@@ -611,6 +636,12 @@ func scanMemberSurface(t *testing.T, posture string, mutate func(*config.Config)
 	ctx := context.Background()
 	srv, st, mb, d := newProductionServer(t, mutate, writeRegistry(t, thinWindowRegistry))
 	freshHeartbeat(t, st)
+	// The dashboard's global sections are ONE process-wide entry, not keyed by
+	// store: a warm pass from an earlier test (or an earlier -count iteration)
+	// would answer this store's /api/dashboard with another store's sections.
+	sharedDashCache.mu.Lock()
+	sharedDashCache.global = nil
+	sharedDashCache.mu.Unlock()
 	fx := seedSentinels(t, st, variant)
 	sents := vendorSentinels()
 

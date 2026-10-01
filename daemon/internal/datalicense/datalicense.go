@@ -171,9 +171,15 @@ func RawDataNotice() string {
 //     realized forward return between two vendor closes).
 //   - DERIVED is forecasts, scores, probabilities, regime labels, indicator
 //     values such as close-vs-own-200d-mean, volatility forecasts, and
-//     aggregates over many rows. An aggregate of realized returns counts as
-//     derived only over >= 10 rows; differencing successive snapshots is a
-//     known limit of publishing any running aggregate.
+//     aggregates over many rows. An aggregate of realized returns KEYED to a
+//     symbol, or to a group a caller can narrow (a market, a postmortem
+//     cluster, a symbol), counts as derived only over >= 10 rows. The score-
+//     bucket means on /api/honesty (buckets[].meanFwd) are exempt for the
+//     reason its points[] are: neither carries a symbol, and a point's ts is
+//     the scoring pass's minute, which every symbol scored in that pass
+//     shares, so nothing joins back to one symbol's closes (see
+//     stripHonestyPoints in the api tests). Differencing successive snapshots
+//     is a known limit of publishing any running aggregate.
 //
 // Members and anonymous callers get DERIVED and public-domain data only.
 // api.TestMemberResponsesCarryNoVendorSentinels holds every member-reachable

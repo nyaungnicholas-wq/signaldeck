@@ -331,7 +331,12 @@ async function get<T>(path: string, onWarming?: () => void): Promise<T> {
   // A 503 "warming" is waited out HERE (Retry-After, 3 min cap), so every page
   // gets it rather than the few that remembered to. The in-flight slot covers
   // the whole wait, so a poll tick or a second component joins it instead of
-  // starting a second loop. Browser only: a server render must not hang.
+  // starting a second loop. Browser only: a server render must not hang. A hidden
+  // tab's wait sends nothing until the tab is seen again (untilWarm).
+  // ponytail: the shared wait cannot tell when its callers unmount, so once all
+  // have gone it still asks once per Retry-After (the daemon says 30 s) until warm
+  // or the 3 min cap, plus the one try a tab hidden past the cap makes once
+  // visible. Stopping it needs an AbortSignal through every wrapper.
   const warm = new Set<() => void>(onWarming ? [onWarming] : []);
   const fetchP = getDedupable()
     ? untilWarm(once, { onWarming: () => warm.forEach((f) => f()) })
@@ -1732,7 +1737,8 @@ export interface TrackByMarket {
   market: Market;
   n: number;
   upRate: number; // realized fraction of up moves in this market
-  meanFwd: number; // mean realized forward return
+  // Mean realized forward return. Absent for non-operators when n < 10 (withheld).
+  meanFwd?: number;
   dirHitRate: number; // fraction of directional bets (prob>0.5 == up) that were right
 }
 

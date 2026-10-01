@@ -7,18 +7,26 @@ package api
 // every cache here lived only in memory, so each boot made the next visitor pay
 // a cold build: /api/track-record measured 129.4s, /api/ledger/verify 2-36s.
 // Each successful build of a persisted cache is now also written to
-// <data dir>/apicache/<db>.<name>.json (temp file + rename, so a reader never
-// sees half a file), and the first read of that key after a boot serves it as
-// STALE while the rebuild runs. The body carries its own computedAt, so a page
+// <data dir>/apicache/<db>.<name>.f<format>.json (temp file + rename, so a
+// reader never sees half a file), and the first read of that key after a boot
+// serves it as STALE while the rebuild runs. The body carries its own computedAt, so a page
 // can show how old it is.
 //
-// The file records the in-memory key it was built under and the BUILD that
-// wrote it, and is served only to that same key in that same build, and only
-// while it is under persistMaxAge old (review #7). The key alone could not tell
-// processes apart: CacheKey is a per-process counter that is "st2" on every boot
-// of the daemon, so a deploy that changed how a payload is graded served the
-// previous binary's body as current, indefinitely if the new build kept failing.
-// The ledger verify is not persisted at all: it is a proof claim (ledger.go).
+// The file records the in-memory key it was built under, and its NAME carries
+// the payload's persist format (cacheFile): a body is served only to that same
+// key, only by a build whose format constant for that cache is the same, and
+// only while it is under persistMaxAge old. The format is per cache, declared
+// next to each builder, and bumped when that payload's shape changes. The
+// BUILD is deliberately not part of it: every deploy is a restart, and keying on
+// the build cold-started track-record, regimes and the volatility record on
+// exactly the restart this file exists for. That is safe for the licence line
+// because no member or anonymous strip is baked into a persisted payload: the
+// regimes crypto filter (withoutCryptoForecasts) and the track-record thin-mean
+// strip (withoutThinReturnMeans) run on every READ, on the typed build and on
+// the decoded JSON a persisted payload comes back as, and the volatility record
+// is one body for every caller. A body from a previous process is also only
+// ever served for a bounded time (fromDiskMaxStale, slowcache.go), and the
+// ledger verify is not persisted at all: it is a proof claim (ledger.go).
 
 import (
 	"bytes"
@@ -26,16 +34,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"time"
-
-	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
 )
 
 // persistedBody is the on-disk record.
 type persistedBody struct {
 	Key        string          `json:"key"`
-	Build      string          `json:"build"`
 	ComputedAt time.Time       `json:"computedAt"`
 	Body       json.RawMessage `json:"body"`
 }
@@ -45,47 +50,26 @@ type persistedBody struct {
 // a "warming" while the real one builds.
 const persistMaxAge = 24 * time.Hour
 
-// persistBuild identifies the running binary. A var only so tests can play
-// another build.
-var persistBuild = buildIdentity()
-
-// buildIdentity is the VCS revision the binary was built from ("+dirty" when
-// the tree was modified). A dirty or unstamped build does not pin the code, so
-// the executable's mtime is added; "" (nothing identifies it) turns
-// persistence off.
-func buildIdentity() string {
-	id := lineage.RevisionStamp()
-	if id == "" || strings.HasSuffix(id, "+dirty") {
-		exe, err := os.Executable()
-		if err != nil {
-			return ""
-		}
-		fi, err := os.Stat(exe)
-		if err != nil {
-			return ""
-		}
-		id += "@" + fi.ModTime().UTC().Format(time.RFC3339Nano)
-	}
-	return id
-}
-
 // cacheFile is where cache `name` persists for this daemon's database: next to
-// it, the way backups/ and health.json are. "" (no DBPath, as in most tests)
-// keeps the cache in memory only.
-func (d Deps) cacheFile(name string) string {
+// it, the way backups/ and health.json are, as <db>.<name>.f<format>.json. A
+// build with another format for that cache reads another file, so a payload of
+// a shape it does not know is never served to it. "" (no DBPath, as in most
+// tests) keeps the cache in memory only.
+func (d Deps) cacheFile(name string, format int) string {
 	if d.Cfg.DBPath == "" {
 		return ""
 	}
-	return filepath.Join(filepath.Dir(d.Cfg.DBPath), "apicache", filepath.Base(d.Cfg.DBPath)+"."+name+".json")
+	return filepath.Join(filepath.Dir(d.Cfg.DBPath), "apicache",
+		filepath.Base(d.Cfg.DBPath)+"."+name+".f"+strconv.Itoa(format)+".json")
 }
 
 // persistBody writes body atomically. A failure costs only the next boot's warm
 // start, so it is logged, never returned.
 func persistBody(file, key string, at time.Time, body []byte) {
-	if file == "" || len(body) == 0 || persistBuild == "" {
+	if file == "" || len(body) == 0 {
 		return
 	}
-	b, err := json.Marshal(persistedBody{Key: key, Build: persistBuild, ComputedAt: at.UTC(), Body: body})
+	b, err := json.Marshal(persistedBody{Key: key, ComputedAt: at.UTC(), Body: body})
 	if err == nil {
 		err = writeFileAtomic(file, b)
 	}
@@ -131,8 +115,8 @@ func writeFileAtomic(path string, b []byte) error {
 	return os.Rename(f.Name(), path)
 }
 
-// loadPersistedBody returns the body persisted for exactly this key by exactly
-// this build, if it is younger than persistMaxAge. Anything else is a cold build.
+// loadPersistedBody returns the body persisted for exactly this key, if it is
+// younger than persistMaxAge. Anything else is a cold build.
 func loadPersistedBody(file, key string) ([]byte, time.Time, bool) {
 	if file == "" {
 		return nil, time.Time{}, false
@@ -143,7 +127,7 @@ func loadPersistedBody(file, key string) ([]byte, time.Time, bool) {
 	}
 	var pb persistedBody
 	if json.Unmarshal(raw, &pb) != nil || pb.Key != key || len(pb.Body) == 0 || pb.ComputedAt.IsZero() ||
-		pb.Build == "" || pb.Build != persistBuild || time.Since(pb.ComputedAt) > persistMaxAge {
+		time.Since(pb.ComputedAt) > persistMaxAge {
 		return nil, time.Time{}, false
 	}
 	return pb.Body, pb.ComputedAt, true

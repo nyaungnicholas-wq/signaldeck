@@ -198,6 +198,7 @@ func appendLedgerTx(ctx context.Context, tx *sql.Tx, e LedgerEntry) (LedgerEntry
 type LedgerVerification struct {
 	Intact      bool   `json:"intact"`                // true iff every recomputed hash matches
 	Count       int64  `json:"count"`                 // rows examined
+	HeadSeq     int64  `json:"headSeq"`               // seq of the last row examined (0 if empty)
 	HeadHash    string `json:"headHash"`              // entry_hash of the last row ("" if empty)
 	BrokenAtSeq *int64 `json:"brokenAtSeq,omitempty"` // first seq whose stored/linkage hash disagrees
 }
@@ -241,12 +242,12 @@ func (s *Store) VerifyLedger(ctx context.Context) (LedgerVerification, error) {
 			// Stop at the first break: everything after it is untrustworthy.
 			// Still report count of rows examined up to and including the break.
 			res.Count++
-			res.HeadHash = e.EntryHash
+			res.HeadSeq, res.HeadHash = e.Seq, e.EntryHash
 			return res, rows.Err()
 		}
 		running = e.EntryHash
 		res.Count++
-		res.HeadHash = e.EntryHash
+		res.HeadSeq, res.HeadHash = e.Seq, e.EntryHash
 	}
 	return res, rows.Err()
 }
@@ -272,6 +273,17 @@ func (s *Store) LedgerHead(ctx context.Context) (LedgerEntry, bool, error) {
 	e.SymbolID = symID.Int64
 	e.Horizon = md.Horizon(hz)
 	return e, true, nil
+}
+
+// LedgerEntryHash returns the entry_hash stored at seq. ok=false when no row
+// has that seq. One primary-key row, one column.
+func (s *Store) LedgerEntryHash(ctx context.Context, seq int64) (string, bool, error) {
+	var h string
+	err := s.db.QueryRowContext(ctx, `SELECT entry_hash FROM prediction_ledger WHERE seq=?`, seq).Scan(&h)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return h, err == nil, err
 }
 
 // LedgerFor returns the most recent ledger entries for one symbol+horizon,

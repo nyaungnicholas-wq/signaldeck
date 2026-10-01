@@ -89,6 +89,10 @@ type LedgerAnchorCheck struct {
 	OK           bool                `json:"ok"`
 	Reason       string              `json:"reason,omitempty"` // why OK is false
 	Publish      string              `json:"publish"`          // the short line to post externally
+	// StoredHead is the entry_hash this check read at LedgerSeq ("" when no row
+	// was there): stored mode only. The api's verify cache compares it with the
+	// key it was asked for, so a result is filed only under the state it checked.
+	StoredHead string `json:"-"`
 }
 
 // LedgerAnchorVerification is the anchor-level answer: what the signatures
@@ -290,6 +294,7 @@ func (s *Store) VerifyLedgerAnchors(ctx context.Context, limit int, recompute bo
 			case err != nil:
 				return out, err
 			default:
+				a.StoredHead = stored
 				a.HeadMatches = stored == a.Record.HeadHash
 				a.CountMatches = prefix[a.Record.LedgerSeq] == a.Record.LedgerCount
 			}

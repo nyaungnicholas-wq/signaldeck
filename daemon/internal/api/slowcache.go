@@ -148,11 +148,20 @@ var coldServeWait = 20 * time.Second
 // writeWarming.
 var errWarming = errors.New("warming")
 
+// uncachedResult is a build's answer for the callers of THIS build only: a build
+// returns it, as its error, when its result does not belong under the key it was
+// started for (the ledger verify whose chain moved off that key mid-build). A
+// cold build hands the payload to its waiters and stores nothing; a refresh
+// keeps the entry's previous payload.
+type uncachedResult struct{ payload map[string]any }
+
+func (uncachedResult) Error() string { return "a result for its own callers, not for the cache" }
+
 type waitForBuildKey struct{}
 
 // waitForBuild marks ctx as the warmer's: a cold get under it waits for the
 // build to finish (or ctx to end) instead of giving up after coldServeWait, and
-// a stale or persisted entry is refreshed INLINE, awaited, never in a goroutine.
+// an entry loaded from disk is refreshed INLINE, awaited, never in a goroutine.
 //
 // The inline refresh is the point (review #8, 2026-10-01). Fired as goroutines,
 // the warmer's refreshes of the persisted track-record entries took BOTH cold
@@ -160,6 +169,12 @@ type waitForBuildKey struct{}
 // warmer moved straight on, and every cold build behind them, attribution
 // included, waited coldBuildWait and ended "warming". Awaited, the warmer holds
 // at most one slot at a time and the other stays free for visitors.
+//
+// ONLY disk-loaded entries, which exist once per boot. An entry this process
+// built and that has merely gone stale keeps the stale-while-revalidate
+// contract for the warmer too: served at once, refreshed detached. Awaiting
+// every stale key serially (2m TTLs make nearly every key stale each pass) put
+// a pass at minutes against the worker's 15-minute run deadline.
 func waitForBuild(ctx context.Context) context.Context {
 	return context.WithValue(ctx, waitForBuildKey{}, true)
 }
@@ -215,13 +230,25 @@ type swrCache struct {
 	mu  sync.Mutex
 	ttl time.Duration
 	// maxStale > 0 makes this a PROOF cache (the ledger verify, review #6): its
-	// payload is a claim that must never outlive its evidence. A payload older
-	// than maxStale is never served, and a rebuild that fails evicts the payload
-	// instead of serving it on, so the next reader gets the real error. 0 serves
-	// the stale copy until a rebuild succeeds, as every other cache here does.
+	// payload is a claim, so how long a copy may stand in is bounded. A payload
+	// older than maxStale is never served, and a rebuild that RAN and failed
+	// evicts the payload, so the next reader gets the real error. A refresh that
+	// never ran (no cold build slot, or the verify semaphore full) keeps the copy,
+	// and so does one whose result belonged to another key (uncachedResult):
+	// maxStale alone bounds those. 0 serves the stale copy until a rebuild
+	// succeeds, as every other cache here does.
 	maxStale time.Duration
 	ent      map[string]*swrEntry
+	created  time.Time // the boot, for the package's shared caches: see fromDiskMaxStale
 }
+
+// fromDiskMaxStale bounds how long a payload persisted by a PREVIOUS process
+// stands in for this one's (review #7): only until its first refresh lands, and
+// never past this long after the cache was created, which for every persisted
+// cache (package vars) is the boot. A key whose refreshes keep failing past it
+// answers warming or the build's error, never the previous process's answer.
+// That bounds a same-build database restore to the same window.
+const fromDiskMaxStale = 10 * time.Minute
 
 type swrEntry struct {
 	builtAt    time.Time
@@ -269,7 +296,7 @@ func (c *swrCache) evictLRULocked() {
 }
 
 func newSWRCache(ttl time.Duration) *swrCache {
-	return &swrCache{ttl: ttl, ent: map[string]*swrEntry{}}
+	return &swrCache{ttl: ttl, ent: map[string]*swrEntry{}, created: time.Now()}
 }
 
 // get returns the cached payload for key, building it via build when cold and
@@ -303,14 +330,18 @@ func (c *swrCache) getAt(ctx context.Context, file, key string,
 	if e.payload != nil && c.maxStale > 0 && time.Since(e.builtAt) >= c.maxStale {
 		e.payload, e.fromDisk = nil, false // a proof this old is not served
 	}
+	if e.fromDisk && time.Since(c.created) >= fromDiskMaxStale {
+		e.payload, e.fromDisk = nil, false // nor is a previous process's, past its window
+	}
 
 	// Warm entry: serve immediately; when stale (or loaded from disk), kick ONE
-	// refresh: detached for a request, inline and awaited for the warmer.
+	// refresh: detached, except the warmer's of a disk-loaded entry, which is
+	// inline and awaited (see waitForBuild).
 	if e.payload != nil {
 		p := e.payload
 		if (e.fromDisk || time.Since(e.builtAt) >= c.ttl) && !e.rebuilding {
 			e.rebuilding = true
-			if isWarmer(ctx) {
+			if isWarmer(ctx) && e.fromDisk {
 				c.mu.Unlock()
 				if err := c.refresh(ctx, e, file, key, build); err != nil {
 					return nil, err
@@ -365,16 +396,21 @@ func (c *swrCache) buildCold(bctx context.Context, cancel context.CancelFunc, e 
 	defer cancel()
 	p, err := map[string]any(nil), errWarming
 	defer func() {
+		var u uncachedResult
+		keep := !errors.As(err, &u)
+		if !keep {
+			p, err = u.payload, nil // this build's callers get it; the entry does not
+		}
 		c.mu.Lock()
 		e.building = nil
-		if err == nil {
+		if err == nil && keep {
 			e.payload, e.builtAt, e.fromDisk = p, time.Now(), false
 		}
 		at := e.builtAt
 		c.mu.Unlock()
-		if err == nil {
+		if err == nil && keep {
 			persistPayload(file, key, at, p)
-		} else if !errors.Is(err, errWarming) {
+		} else if err != nil && !errors.Is(err, errWarming) {
 			noteRebuildFailure("swr:"+key, err)
 		}
 		b.payload, b.err = p, err
@@ -414,6 +450,12 @@ func (c *swrCache) refresh(parent context.Context, e *swrEntry, file, key string
 		np, err = build(bctx)
 		return err
 	}()
+	if errors.As(err, new(uncachedResult)) { // answers no one here; the entry stands
+		c.mu.Lock()
+		e.rebuilding = false
+		c.mu.Unlock()
+		return nil
+	}
 	if err != nil {
 		c.mu.Lock()
 		e.rebuilding = false
@@ -459,6 +501,19 @@ func (c *swrCache) put(key string, p map[string]any) {
 	e.payload, e.builtAt, e.fromDisk, e.usedSeq = p, time.Now(), false, lruTick()
 }
 
+// peek returns key's payload while maxStale still allows serving it, and never
+// builds or refreshes anything: for a caller that must not start a build (the
+// ledger verify whose key read timed out; that cache is never persisted).
+func (c *swrCache) peek(key string) (map[string]any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.ent[key]
+	if e == nil || e.payload == nil || (c.maxStale > 0 && time.Since(e.builtAt) >= c.maxStale) {
+		return nil, false
+	}
+	return e.payload, true
+}
+
 // Shared instances. TTLs sit comfortably under the cadence of the workers that
 // change the underlying rows, so staleness is bounded by design:
 //   - track-record: outcome resolver runs every 10m → 2m TTL.
@@ -482,9 +537,10 @@ var (
 // and the rebuild happens behind them.
 
 type swrBodyCache struct {
-	mu  sync.Mutex
-	ttl time.Duration
-	ent map[string]*swrBodyEntry
+	mu      sync.Mutex
+	ttl     time.Duration
+	ent     map[string]*swrBodyEntry
+	created time.Time // see swrCache.created
 }
 
 type swrBodyEntry struct {
@@ -531,7 +587,7 @@ func (c *swrBodyCache) evictLRULocked() {
 }
 
 func newSWRBodyCache(ttl time.Duration) *swrBodyCache {
-	return &swrBodyCache{ttl: ttl, ent: map[string]*swrBodyEntry{}}
+	return &swrBodyCache{ttl: ttl, ent: map[string]*swrBodyEntry{}, created: time.Now()}
 }
 
 // render runs the handler against a throwaway recorder and returns the body,
@@ -574,12 +630,15 @@ func (c *swrBodyCache) serveAt(file, key string, w http.ResponseWriter, r *http.
 		c.ent[key] = e
 	}
 	e.usedSeq = lruTick()
+	if e.fromDisk && time.Since(c.created) >= fromDiskMaxStale {
+		e.body, e.fromDisk = nil, false // a previous process's body, past its window
+	}
 
 	if e.body != nil {
 		body := e.body
 		if (e.fromDisk || time.Since(e.builtAt) >= c.ttl) && !e.rebuilding {
 			e.rebuilding = true
-			if isWarmer(r.Context()) { // inline and awaited: see waitForBuild
+			if isWarmer(r.Context()) && e.fromDisk { // inline and awaited: see waitForBuild
 				c.mu.Unlock()
 				c.refresh(r.Context(), r, e, file, key, h)
 				c.mu.Lock()
@@ -594,6 +653,15 @@ func (c *swrBodyCache) serveAt(file, key string, w http.ResponseWriter, r *http.
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("X-Cache", "hit")
 		_, _ = w.Write(body)
+		return
+	}
+
+	// No body to serve while a refresh is still running (its disk body just
+	// aged out): that refresh fills the entry, and a second render of the same
+	// key would only contend with it.
+	if e.rebuilding {
+		c.mu.Unlock()
+		writeWarming(w)
 		return
 	}
 

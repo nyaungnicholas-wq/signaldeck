@@ -627,16 +627,6 @@ func TestLedgerVerify_FailingOlderAnchorDominatesANewerGoodOne(t *testing.T) {
 		t.Fatalf("anchor over fabricated chain: wrote=%v reason=%q err=%v", wrote, reason, err)
 	}
 
-	// This is about what a FRESH default verification reports. The first one is
-	// cached under the key its own anchor created (review #10), so start cold,
-	// as after a restart.
-	sharedLedgerVerifyCache.mu.Lock()
-	for k := range sharedLedgerVerifyCache.ent {
-		if strings.HasPrefix(k, st.CacheKey()+"|") {
-			delete(sharedLedgerVerifyCache.ent, k)
-		}
-	}
-	sharedLedgerVerifyCache.mu.Unlock()
 	v := getLedgerVerify(t, srv, "")
 	if v.Tamper.FailingAnchors < 1 {
 		t.Fatalf("failingAnchors = %d — a regenerated chain read clean, so the summary is still checking only the newest anchor",
@@ -647,6 +637,81 @@ func TestLedgerVerify_FailingOlderAnchorDominatesANewerGoodOne(t *testing.T) {
 	}
 	if !strings.Contains(v.Tamper.Claim, "TAMPER EVIDENCE") {
 		t.Errorf("claim does not lead with the tamper signal: %q", v.Tamper.Claim)
+	}
+}
+
+// TestLedgerVerify_ARegeneratedChainReSignedAtTheSameAnchorSeqReadsAsTamper is
+// review G's collision, exactly. The chain is regenerated at the SAME length,
+// and the newest anchor is deleted and re-signed over the fabricated head, so
+// the new one lands at the SAME anchor row seq. Keyed on that row seq alone,
+// the next default read was the result the anchoring read had filed for the
+// honest chain: clean. The honest OLDER anchor still in the table must make it
+// read as tamper, on the very next read.
+func TestLedgerVerify_ARegeneratedChainReSignedAtTheSameAnchorSeqReadsAsTamper(t *testing.T) {
+	t.Setenv(anchorEnvInterval, "0s") // the operator only has to wait out the cadence
+	srv, st := newLedgerServer(t, nil)
+	ctx := context.Background()
+	sym, err := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Two honest anchors, both written by default builds: at 6 rows and at 12.
+	// An append does not re-key the cache, so the second build is the refresh
+	// one TTL on; its result is then cached under the 12-row anchor's key, which
+	// is the honest answer a weaker key would serve after the regeneration.
+	appendLedgerRows(t, st, sym.ID, 6, 0.5)
+	if v := getLedgerVerify(t, srv, ""); !v.Tamper.Anchoring.Wrote {
+		t.Fatalf("setup: the first read did not anchor (%q)", v.Tamper.Anchoring.Reason)
+	}
+	appendLedgerRows(t, st, sym.ID, 6, 0.5)
+	e := ageVerify(t, st, 3*time.Minute)
+	getLedgerVerify(t, srv, "") // stale; the refresh behind it anchors the 12-row head
+	waitNotRebuilding(t, e)
+	if v := getLedgerVerify(t, srv, ""); !v.Tamper.Anchoring.Wrote || v.Tamper.FailingAnchors != 0 || v.Tamper.AnchorCount != 2 {
+		t.Fatalf("setup: the honest 12-row read: wrote=%v failing=%d anchors=%d (%q)",
+			v.Tamper.Anchoring.Wrote, v.Tamper.FailingAnchors, v.Tamper.AnchorCount, v.Tamper.Anchoring.Reason)
+	}
+	honest, ok, err := st.LatestLedgerAnchor(ctx)
+	if err != nil || !ok {
+		t.Fatalf("setup: newest anchor: ok=%v err=%v", ok, err)
+	}
+
+	// Regenerate 12 fabricated rows, drop the newest anchor and roll its
+	// sequence back, then re-sign the fabricated head with the same key.
+	for _, q := range []string{
+		`DELETE FROM prediction_ledger`,
+		`DELETE FROM meta WHERE k='ledger_verify_checkpoint'`,
+		`DELETE FROM sqlite_sequence WHERE name='prediction_ledger'`,
+		`DELETE FROM ledger_anchors WHERE seq=(SELECT MAX(seq) FROM ledger_anchors)`,
+		`UPDATE sqlite_sequence SET seq=seq-1 WHERE name='ledger_anchors'`,
+	} {
+		if _, err := st.DB().ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	appendLedgerRows(t, st, sym.ID, 12, 0.77)
+	ver, err := st.VerifyLedger(ctx)
+	if err != nil || ver.Count != 12 {
+		t.Fatalf("verify fabricated chain: count=%d err=%v", ver.Count, err)
+	}
+	sg, err := ledgeranchor.LoadOrCreateSigner(ledgeranchor.DefaultKeyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, wrote, reason, err := st.MaybeAnchorLedger(ctx, sg, ver, store.AnchorPolicy{}, time.Now()); err != nil || !wrote {
+		t.Fatalf("re-sign the fabricated head: wrote=%v reason=%q err=%v", wrote, reason, err)
+	}
+	forged, _, err := st.LatestLedgerAnchor(ctx)
+	if err != nil || forged.RowSeq != honest.RowSeq || forged.Record.Sig == honest.Record.Sig {
+		t.Fatalf("setup: the re-signed anchor is row %d (honest %d), err %v: not the same-seq collision",
+			forged.RowSeq, honest.RowSeq, err)
+	}
+
+	v := getLedgerVerify(t, srv, "")
+	if v.Tamper.FailingAnchors < 1 || v.Tamper.LocalAnchorsReproduce || !strings.Contains(v.Tamper.Claim, "TAMPER EVIDENCE") {
+		t.Fatalf("next default read after the regeneration: failingAnchors=%d localAnchorsReproduce=%v claim=%q — "+
+			"the result cached for the honest chain was served", v.Tamper.FailingAnchors, v.Tamper.LocalAnchorsReproduce, v.Tamper.Claim)
 	}
 }
 

@@ -24,7 +24,7 @@ import {
   type RegimePostmortems,
   type TrackRecordWithGate,
 } from "@/lib/api";
-import { ago, fmtDate, fmtPct } from "@/lib/format";
+import { ago, fmtDate, fmtPct, signColor } from "@/lib/format";
 import { metricLabel, readMetric, type MetricKey, type PlainCtx } from "@/lib/plain";
 import Plain, { useViewMode } from "@/components/Plain";
 import GradeMeter from "@/components/viz/GradeMeter";
@@ -566,9 +566,10 @@ export default function TrackRecordPage() {
                         </td>
                         <td
                           className="px-4 py-2 text-right tnum"
-                          style={{ color: m.meanFwd >= 0 ? "var(--bid)" : "var(--ask)" }}
+                          style={{ color: signColor(m.meanFwd) }}
+                          title={m.meanFwd == null ? "withheld: fewer than 10 resolved rows" : undefined}
                         >
-                          {fmtPct(m.meanFwd * 100)}
+                          {m.meanFwd == null ? "—" : fmtPct(m.meanFwd * 100)}
                         </td>
                       </tr>
                     ))}

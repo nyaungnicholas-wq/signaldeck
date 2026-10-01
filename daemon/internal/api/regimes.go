@@ -63,7 +63,7 @@ func (d Deps) structuralRegimesCached(w http.ResponseWriter, r *http.Request) {
 // cachedRegimes is the regimes payload through the shared cache, persisted
 // across restarts (cachepersist.go); the route and WarmCaches both read it here.
 func (d Deps) cachedRegimes(ctx context.Context) (map[string]any, error) {
-	return sharedRegimesCache.getAt(ctx, d.cacheFile("regimes"), d.St.CacheKey()+"|regimes", d.buildStructuralRegimes)
+	return sharedRegimesCache.getAt(ctx, d.cacheFile("regimes", regimesPersistFormat), d.St.CacheKey()+"|regimes", d.buildStructuralRegimes)
 }
 
 // withoutCryptoForecasts is the member view of a regimes payload: every
@@ -113,8 +113,14 @@ func withoutCryptoForecasts(resp map[string]any) map[string]any {
 	return out
 }
 
+// regimesPersistFormat is the shape of the payload buildStructuralRegimes
+// returns, as persisted across restarts (cachepersist.go). BUMP IT whenever that
+// shape changes, or the first reads after the deploy serve the previous shape.
+const regimesPersistFormat = 1
+
 // buildStructuralRegimes computes the full regimes payload. Pure build — no
-// HTTP — so the response cache can rebuild it off-request.
+// HTTP — so the response cache can rebuild it off-request. Its shape is
+// regimesPersistFormat: bump that when you change it.
 func (d Deps) buildStructuralRegimes(ctx context.Context) (map[string]any, error) {
 	fcs, err := d.St.RegimeForecasts(ctx)
 	if err != nil {
