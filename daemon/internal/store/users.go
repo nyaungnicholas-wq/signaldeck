@@ -26,7 +26,7 @@ func (s *Store) CreateUser(ctx context.Context, username, passHash string, isAdm
 	if isAdmin {
 		admin = 1
 	}
-	res, err := s.w.ExecContext(ctx,
+	res, err := s.authW().ExecContext(ctx,
 		`INSERT INTO users (username, pass_hash, created_ts, is_admin) VALUES (?,?,?,?)`,
 		username, passHash, time.Now().Unix(), admin)
 	if err != nil {
@@ -113,7 +113,7 @@ func hashSessionToken(token string) string {
 // CreateSession stores a browser session. Only the token's digest is written —
 // the caller keeps the plaintext for the Set-Cookie header.
 func (s *Store) CreateSession(ctx context.Context, token string, userID int64, expiresTs int64) error {
-	_, err := s.w.ExecContext(ctx,
+	_, err := s.authW().ExecContext(ctx,
 		`INSERT INTO sessions (token, user_id, created_ts, expires_ts) VALUES (?,?,?,?)`,
 		hashSessionToken(token), userID, time.Now().Unix(), expiresTs)
 	return err
@@ -150,7 +150,7 @@ func (s *Store) SessionUser(ctx context.Context, token string) (int64, bool, err
 
 // DeleteSession removes one session (logout), given the plaintext cookie value.
 func (s *Store) DeleteSession(ctx context.Context, token string) error {
-	_, err := s.w.ExecContext(ctx, `DELETE FROM sessions WHERE token=?`, hashSessionToken(token))
+	_, err := s.authW().ExecContext(ctx, `DELETE FROM sessions WHERE token=?`, hashSessionToken(token))
 	return err
 }
 

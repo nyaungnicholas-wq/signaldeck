@@ -30,10 +30,17 @@ var schemaSQL string
 // go through w, a single-connection handle, so concurrent writers queue in Go
 // instead of racing for the SQLite write lock (no SQLITE_BUSY under load).
 type Store struct {
-	db   *sql.DB // read pool
-	w    *sql.DB // dedicated single-connection write path
-	path string  // database file path (for size accounting in DataStats)
-	dsn  string  // connection string (so a reader clone opens identically)
+	db *sql.DB // read pool
+	w  *sql.DB // dedicated single-connection write path
+	// aw is a SECOND single-connection writer used only for account writes
+	// (sign-up, email confirmation, sessions, password reset). Those are tiny
+	// and a person is waiting on them, but on w they queue behind 103 workers:
+	// measured 2026-09-30, an email confirmation sat >90s in that queue and the
+	// page never answered. SQLite still serialises the actual writes (WAL, one
+	// writer at a time, busy_timeout 5s); this only skips Go's pool queue.
+	aw   *sql.DB
+	path string // database file path (for size accounting in DataStats)
+	dsn  string // connection string (so a reader clone opens identically)
 	// borrowedWriter marks a ReaderClone: it shares the parent's write
 	// connection, so Close must not close the writer out from under the parent.
 	borrowedWriter bool
@@ -171,7 +178,15 @@ func Open(path string) (*Store, error) {
 		w.Close()  //nolint:errcheck
 		return nil, err
 	}
-	st := &Store{db: db, w: w, path: path, dsn: dsn, id: storeSeq.Add(1)}
+	// Account writer: opened AFTER schema + migrate so it never races them.
+	aw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		db.Close() //nolint:errcheck
+		w.Close()  //nolint:errcheck
+		return nil, err
+	}
+	aw.SetMaxOpenConns(1)
+	st := &Store{db: db, w: w, aw: aw, path: path, dsn: dsn, id: storeSeq.Add(1)}
 	// A worker whose only product is an audit record must not be allowed to
 	// start when it has nowhere to write that record (see AuditRecordWorkers).
 	// verifySchema catches divergence from the DECLARATION; this catches the
@@ -799,7 +814,7 @@ func (s *Store) ReaderClone(maxConns int) (*Store, error) {
 	}
 	db.SetMaxOpenConns(maxConns)
 	boundReadConns(db)
-	return &Store{db: db, w: s.w, path: s.path, dsn: s.dsn, borrowedWriter: true, id: storeSeq.Add(1)}, nil
+	return &Store{db: db, w: s.w, aw: s.aw, path: s.path, dsn: s.dsn, borrowedWriter: true, id: storeSeq.Add(1)}, nil
 }
 
 // Close closes the database. A ReaderClone closes only its own read pool — the
@@ -814,10 +829,22 @@ func (s *Store) Close() error {
 	if s.borrowedWriter {
 		return err
 	}
+	if s.aw != nil {
+		_ = s.aw.Close()
+	}
 	if werr := s.w.Close(); err == nil {
 		err = werr
 	}
 	return err
+}
+
+// authW is the writer for account writes (see Store.aw); it falls back to the
+// main writer for any Store built without one.
+func (s *Store) authW() *sql.DB {
+	if s.aw != nil {
+		return s.aw
+	}
+	return s.w
 }
 
 // DB exposes the raw handle for read-only ad-hoc queries (export endpoints).

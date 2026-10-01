@@ -482,12 +482,18 @@ func (d Deps) authVerify(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusTooManyRequests, "too many attempts — try again later")
 		return
 	}
-	uid, err := d.St.ConsumeAuthToken(r.Context(), strings.TrimSpace(body.Token), store.TokenVerify)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
+	uid, err := d.St.ConsumeAuthToken(ctx, strings.TrimSpace(body.Token), store.TokenVerify)
 	if errors.Is(err, store.ErrTokenInvalid) {
 		httpErr(w, 400, err.Error()+" — sign up again or request a new link")
 		return
 	} else if err != nil {
-		httpInternal(w, err)
+		// The token is only spent when the UPDATE commits, so a busy database
+		// leaves the link usable: say so instead of a bare 500.
+		slog.Warn("verify: token redeem failed", "err", err)
+		httpErr(w, http.StatusServiceUnavailable, "the server is busy — open the link again in a minute; it still works")
 		return
 	}
 	if err := d.St.SetEmailVerified(r.Context(), uid); err != nil {
@@ -596,12 +602,16 @@ func (d Deps) authReset(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, "password must be 8-72 characters")
 		return
 	}
-	uid, err := d.St.ConsumeAuthToken(r.Context(), strings.TrimSpace(body.Token), store.TokenReset)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	r = r.WithContext(ctx)
+	uid, err := d.St.ConsumeAuthToken(ctx, strings.TrimSpace(body.Token), store.TokenReset)
 	if errors.Is(err, store.ErrTokenInvalid) {
 		httpErr(w, 400, err.Error()+" — request a new reset link")
 		return
 	} else if err != nil {
-		httpInternal(w, err)
+		slog.Warn("reset: token redeem failed", "err", err)
+		httpErr(w, http.StatusServiceUnavailable, "the server is busy — open the link again in a minute; it still works")
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)

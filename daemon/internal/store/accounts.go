@@ -72,7 +72,7 @@ func hashAuthToken(raw string) string {
 
 // CreateUserWithEmail inserts a non-admin, unverified public account.
 func (s *Store) CreateUserWithEmail(ctx context.Context, username, email, passHash string) (int64, error) {
-	res, err := s.w.ExecContext(ctx,
+	res, err := s.authW().ExecContext(ctx,
 		`INSERT INTO users (username, pass_hash, created_ts, is_admin, email, email_verified)
 		 VALUES (?,?,?,0,?,0)`,
 		username, passHash, time.Now().Unix(), strings.ToLower(email))
@@ -117,23 +117,23 @@ func (s *Store) AccountEmail(ctx context.Context, uid int64) (email string, veri
 
 // SetEmailVerified marks an account's address as confirmed.
 func (s *Store) SetEmailVerified(ctx context.Context, uid int64) error {
-	_, err := s.w.ExecContext(ctx, `UPDATE users SET email_verified=1 WHERE id=?`, uid)
+	_, err := s.authW().ExecContext(ctx, `UPDATE users SET email_verified=1 WHERE id=?`, uid)
 	return err
 }
 
 // SetPassword replaces an account's hash and ends every session it holds, so a
 // reset also evicts whoever had the old password.
 func (s *Store) SetPassword(ctx context.Context, uid int64, passHash string) error {
-	if _, err := s.w.ExecContext(ctx, `UPDATE users SET pass_hash=? WHERE id=?`, passHash, uid); err != nil {
+	if _, err := s.authW().ExecContext(ctx, `UPDATE users SET pass_hash=? WHERE id=?`, passHash, uid); err != nil {
 		return err
 	}
 	// Every outstanding link dies with the old password: a verify link also
 	// signs its redeemer in, so leaving it live would be a 24h back door.
-	if _, err := s.w.ExecContext(ctx,
+	if _, err := s.authW().ExecContext(ctx,
 		`UPDATE auth_tokens SET used_ts=? WHERE user_id=? AND used_ts IS NULL`, time.Now().Unix(), uid); err != nil {
 		return err
 	}
-	_, err := s.w.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, uid)
+	_, err := s.authW().ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, uid)
 	return err
 }
 
@@ -150,7 +150,7 @@ func (s *Store) PurgeStaleUnverified(ctx context.Context, createdBefore time.Tim
 		`DELETE FROM user_symbols WHERE user_id IN (` + stale + `)`,
 		`DELETE FROM users WHERE id IN (` + stale + `)`,
 	} {
-		if _, err := s.w.ExecContext(ctx, q, cut); err != nil {
+		if _, err := s.authW().ExecContext(ctx, q, cut); err != nil {
 			return err
 		}
 	}
@@ -167,12 +167,12 @@ func (s *Store) CreateAuthToken(ctx context.Context, uid int64, kind string, ttl
 	}
 	raw := hex.EncodeToString(b[:])
 	now := time.Now().Unix()
-	if _, err := s.w.ExecContext(ctx,
+	if _, err := s.authW().ExecContext(ctx,
 		`UPDATE auth_tokens SET used_ts=? WHERE user_id=? AND kind=? AND used_ts IS NULL`,
 		now, uid, kind); err != nil {
 		return "", err
 	}
-	if _, err := s.w.ExecContext(ctx,
+	if _, err := s.authW().ExecContext(ctx,
 		`INSERT INTO auth_tokens (token_hash, user_id, kind, created_ts, expires_ts) VALUES (?,?,?,?,?)`,
 		hashAuthToken(raw), uid, kind, now, now+int64(ttl.Seconds())); err != nil {
 		return "", err
@@ -189,7 +189,7 @@ func (s *Store) ConsumeAuthToken(ctx context.Context, raw, kind string) (int64, 
 	}
 	h := hashAuthToken(raw)
 	now := time.Now().Unix()
-	res, err := s.w.ExecContext(ctx,
+	res, err := s.authW().ExecContext(ctx,
 		`UPDATE auth_tokens SET used_ts=? WHERE token_hash=? AND kind=? AND used_ts IS NULL AND expires_ts>?`,
 		now, h, kind, now)
 	if err != nil {
@@ -199,7 +199,7 @@ func (s *Store) ConsumeAuthToken(ctx context.Context, raw, kind string) (int64, 
 		return 0, ErrTokenInvalid
 	}
 	var uid int64
-	if err := s.w.QueryRowContext(ctx, `SELECT user_id FROM auth_tokens WHERE token_hash=?`, h).Scan(&uid); err != nil {
+	if err := s.authW().QueryRowContext(ctx, `SELECT user_id FROM auth_tokens WHERE token_hash=?`, h).Scan(&uid); err != nil {
 		return 0, err
 	}
 	return uid, nil
