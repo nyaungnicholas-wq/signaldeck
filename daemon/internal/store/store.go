@@ -1900,8 +1900,25 @@ func (r WALCheckpointResult) Truncated() bool { return !r.Busy }
 // and returns the pragma's own result row. mode is a fixed literal chosen by
 // the callers below — never user input.
 func (s *Store) walCheckpoint(ctx context.Context, mode string) (WALCheckpointResult, error) {
+	conn, err := s.w.Conn(ctx)
+	if err != nil {
+		return WALCheckpointResult{}, err
+	}
+	defer conn.Close() //nolint:errcheck
+	// RESTART and TRUNCATE take the WRITE lock and then sit in the busy handler
+	// waiting for readers, blocking every writer meanwhile. With busy_timeout 5s
+	// and the governor retrying once a second for 300s, that locked email
+	// confirmations out for minutes (2026-09-30, 19:11-19:29 and 19:31-19:36).
+	// A short wait per attempt keeps each lock hold brief; the retry loop
+	// supplies the persistence.
+	if mode != "PASSIVE" {
+		if _, err := conn.ExecContext(ctx, `PRAGMA busy_timeout=200`); err != nil {
+			return WALCheckpointResult{}, err
+		}
+		defer conn.ExecContext(context.Background(), `PRAGMA busy_timeout=5000`) //nolint:errcheck
+	}
 	var busy, logFrames, ckpt int
-	err := s.w.QueryRowContext(ctx, `PRAGMA wal_checkpoint(`+mode+`)`).Scan(&busy, &logFrames, &ckpt)
+	err = conn.QueryRowContext(ctx, `PRAGMA wal_checkpoint(`+mode+`)`).Scan(&busy, &logFrames, &ckpt)
 	if err == sql.ErrNoRows {
 		return WALCheckpointResult{}, nil
 	}

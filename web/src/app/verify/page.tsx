@@ -41,7 +41,11 @@ function VerifyInner() {
       .catch((err) => {
         if (err instanceof ApiError) {
           setStatus("error");
-          setMessage(err.message);
+          // A link opened twice (two tabs, a second click) is spent by the
+          // first — and that first one confirmed the account.
+          setMessage(err.status === 400
+            ? "This link was already used or has expired. If you clicked it before, your email is confirmed. Just sign in."
+            : err.message);
         } else {
           setStatus("error");
           setMessage("Request failed");

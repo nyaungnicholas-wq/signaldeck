@@ -66,3 +66,59 @@ func TestPriorityWriteBeatsASaturatedWriter(t *testing.T) {
 		t.Fatalf("the worker loop barely ran (%d commits); the test did not saturate anything", commits.Load())
 	}
 }
+
+// A TRUNCATE checkpoint that is waiting for a reader holds the WRITE lock the
+// whole time it waits. With the store's 5s busy_timeout, the governor's
+// once-a-second retries locked account writes out for minutes (2026-09-30).
+// An account write behind a reader-blocked checkpoint must still land fast.
+func TestCheckpointWaitingOnAReaderDoesNotLockOutAccountWrites(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "ckpt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	ctx := context.Background()
+	if _, err := st.w.ExecContext(ctx, `CREATE TABLE ckpt_probe (v INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	// A reader pinned to an old snapshot, then newer frames it has not seen:
+	// TRUNCATE cannot finish until that reader goes away.
+	rtx, err := st.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rtx.Rollback() }()
+	var n int
+	if err := rtx.QueryRowContext(ctx, `SELECT count(*) FROM ckpt_probe`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		if _, err := st.w.ExecContext(ctx, `INSERT INTO ckpt_probe (v) VALUES (1)`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan WALCheckpointResult, 1)
+	go func() {
+		r, _ := st.WALCheckpointTruncate(ctx)
+		done <- r
+	}()
+	time.Sleep(50 * time.Millisecond) // let the checkpoint take the write lock
+	t0 := time.Now()
+	release := st.Priority()
+	_, err = st.authW().ExecContext(ctx, `INSERT INTO ckpt_probe (v) VALUES (2)`)
+	release()
+	if err != nil {
+		t.Fatalf("account write behind a checkpoint failed: %v", err)
+	}
+	if el := time.Since(t0); el > 1500*time.Millisecond {
+		t.Fatalf("account write took %v behind a reader-blocked checkpoint; want well under 1.5s", el)
+	}
+	if r := <-done; !r.Busy {
+		t.Fatalf("the checkpoint was not blocked by the reader (%+v); the test exercised nothing", r)
+	}
+	// The connection must be back on the store's normal busy_timeout afterwards.
+	var bt int
+	if err := st.w.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&bt); err != nil || bt != 5000 {
+		t.Fatalf("main writer busy_timeout = %d (%v), want 5000 restored", bt, err)
+	}
+}

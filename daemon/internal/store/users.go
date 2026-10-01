@@ -160,7 +160,9 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 // is what stops a stale bearer credential sitting in the DB file (and in every
 // backup and iCloud copy of it) for the rest of its 30-day TTL.
 func (s *Store) PruneSessions(ctx context.Context) error {
-	_, err := s.w.ExecContext(ctx,
+	// authW, not w: this runs inside sign-in while the caller holds Priority,
+	// so on w the gate would hold this very statement off for its full 3s.
+	_, err := s.authW().ExecContext(ctx,
 		`DELETE FROM sessions WHERE expires_ts<=? OR token NOT LIKE ?`,
 		time.Now().Unix(), sessionTokenScheme+"%")
 	return err

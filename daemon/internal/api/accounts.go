@@ -500,6 +500,13 @@ func (d Deps) authVerify(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusServiceUnavailable, "the server is busy — open the link again in a minute; it still works")
 		return
 	}
+	// The link is spent from here on, so marking the account verified and
+	// signing in get a fresh budget, not what the redeem left of the first: a
+	// timeout here would spend the link without confirming the account, or show
+	// an error for one that IS confirmed (2026-09-30).
+	sctx, scancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer scancel()
+	r = r.WithContext(sctx)
 	if err := d.St.SetEmailVerified(r.Context(), uid); err != nil {
 		httpInternal(w, err)
 		return
