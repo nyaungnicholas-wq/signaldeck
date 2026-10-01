@@ -41,11 +41,11 @@ import (
 //   - make the handler publish on a collapsed window →
 //     TestGate_ApiRefusalMatchesTheDocumentGate fails with HTTP 200.
 
-// gateNow sits 3 days 18 hours into the graded window: the fixtures seed at
-// most 3 days back, so every seeded day is inside store.GradingEpoch whatever
+// gateNow sits 4 days 18 hours into the graded window: the fixtures (here and
+// in collapsecache_test.go) seed at most 4 days back, so every seeded day is inside store.GradingEpoch whatever
 // date the window is registered from. It must stay in the PAST: freshHeartbeat
 // stamps the real clock, and a gateNow ahead of it reads the heartbeat as stale.
-var gateNow = time.Unix(store.GradingEpoch, 0).UTC().Add(3*24*time.Hour + 18*time.Hour)
+var gateNow = time.Unix(store.GradingEpoch, 0).UTC().Add(4*24*time.Hour + 18*time.Hour)
 
 // seedResolvedForecasts writes `symbols` resolved outcomes on one day with
 // `distinct` distinct probabilities — the exact shape forecastmon grades. A low

@@ -11,7 +11,7 @@ import (
 // The cache may only ever make the gate refuse MORE: a pass is recomputed every
 // call (so a new collapse refuses at once), a refusal is reused until its TTL.
 func TestCollapseCacheNeverCachesAPass(t *testing.T) {
-	now := time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC)
+	now := gateNow // inside the graded window, whatever date it opens on
 	_, st, d := newTestServer(t, nil)
 	path := writeRegistry(t, registryFor(map[string]int{"1d": 3}))
 	d.RegistryPath = path
