@@ -327,3 +327,59 @@ func TestGmailSpellingsShareOneAccount(t *testing.T) {
 		t.Fatalf("taken-address notice: to=%q body=%q", m.to, m.body)
 	}
 }
+
+// Google vouches for an address only when it is Gmail or a Workspace account
+// (hd set). A Google account made with any other email proves that inbox only
+// once, at Google sign-up, so it must not sign into the account here that
+// carries the same address.
+func TestGoogleRefusesAddressesGoogleDoesNotVouchFor(t *testing.T) {
+	srv, st, _ := newGoogleServer(t, nil)
+	ctx := context.Background()
+	if _, err := st.CreateVerifiedUser(ctx, "pat", "pat@company.com", "x"); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := st.CountUsers(ctx)
+	tok := func(hd string) string {
+		c := goodClaims("pat@company.com")
+		if hd != "" {
+			c["hd"] = hd
+		}
+		return mintGoogle(t, testGoogleKey(), goodHeader(), c)
+	}
+	c := newClient(t)
+	if code, body := acctPost(t, c, srv.URL+"/api/auth/google", map[string]string{"credential": tok("")}); code != 403 {
+		t.Fatalf("non-Gmail, non-Workspace Google account: %d %s, want 403", code, body)
+	}
+	if resp, err := c.Get(srv.URL + "/api/auth/me"); err != nil || resp.StatusCode == 200 {
+		t.Fatal("a Google account Google does not vouch for got a session")
+	}
+	if after, _ := st.CountUsers(ctx); after != before {
+		t.Fatal("a Google account Google does not vouch for created an account")
+	}
+	// A Workspace account (hd set) is Google's to vouch for.
+	if code, body := acctPost(t, newClient(t), srv.URL+"/api/auth/google", map[string]string{"credential": tok("company.com")}); code != 200 || !strings.Contains(body, `"username":"pat"`) {
+		t.Fatalf("Workspace account: %d %s, want signed in as pat", code, body)
+	}
+}
+
+// A squat past its 24h link is dead: Google sign-in deletes it and gives the
+// owner a fresh account under a name derived from their own address, instead
+// of claiming the squatter's.
+func TestGoogleReplacesAStaleSquatInsteadOfClaimingIt(t *testing.T) {
+	srv, st, _ := newGoogleServer(t, nil)
+	ctx := context.Background()
+	squat, err := st.CreateUserWithEmail(ctx, "impersonator", "victim@gmail.com", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().Exec(`UPDATE users SET created_ts=? WHERE id=?`, time.Now().Add(-48*time.Hour).Unix(), squat); err != nil {
+		t.Fatal(err)
+	}
+	code, body := googleSignIn(t, newClient(t), srv.URL, "victim@gmail.com")
+	if code != 200 || !strings.Contains(body, `"username":"victim"`) {
+		t.Fatalf("owner after a stale squat: %d %s, want a fresh account named victim", code, body)
+	}
+	if _, found, _ := st.GetUserByName(ctx, "impersonator"); found {
+		t.Fatal("the stale squat survived")
+	}
+}
