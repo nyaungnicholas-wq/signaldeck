@@ -953,8 +953,26 @@ func (s *Store) SetSymbolActive(ctx context.Context, id int64, active bool) erro
 
 // ── bars ────────────────────────────────────────────────────────────────
 
-// UpsertBars writes bars idempotently (REPLACE on the composite key).
+// upsertBarsChunk caps the bars one UpsertBars transaction writes.
+const upsertBarsChunk = 1000
+
+// UpsertBars writes bars idempotently (REPLACE on the composite key), at most
+// upsertBarsChunk per transaction. One transaction per call held the write
+// lock for up to 2 minutes on a large backfill (2026-09-30: 11 holds over 12s
+// in two hours), failing every sign-in meanwhile; between chunks the priority
+// gate lets account writes in. Chunks commit independently, so a failure
+// part-way leaves earlier chunks written, which an idempotent upsert's caller
+// simply repeats.
 func (s *Store) UpsertBars(ctx context.Context, bars []md.Bar) error {
+	for start := 0; start < len(bars); start += upsertBarsChunk {
+		if err := s.upsertBarsTx(ctx, bars[start:min(start+upsertBarsChunk, len(bars))]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) upsertBarsTx(ctx context.Context, bars []md.Bar) error {
 	if len(bars) == 0 {
 		return nil
 	}
