@@ -32,21 +32,19 @@ type SentimentDay struct {
 // both carry a default 0 score that would silently dilute the mean.
 // Returns the number of symbol-day rows written.
 func (s *Store) UpsertSentimentDaily(ctx context.Context, day string) (int, error) {
-	res, err := s.w.ExecContext(ctx, `
-		INSERT INTO sentiment_daily (symbol_id, day, n, mean_score, pos, neg, neu)
+	// Aggregated on the read pool: as one INSERT..SELECT this full scan of news
+	// held the write lock 11.3s (readThenWrite).
+	n, err := s.readThenWrite(ctx, `
 		SELECT symbol_id, ?, COUNT(*), AVG(score),
 		       SUM(sentiment='bullish'), SUM(sentiment='bearish'), SUM(sentiment='neutral')
 		FROM news
 		WHERE sentiment NOT IN ('unrated','skipped') AND date(ts, 'unixepoch') = ?
-		GROUP BY symbol_id
-		ON CONFLICT(symbol_id, day) DO UPDATE SET
+		GROUP BY symbol_id`,
+		[]any{day, day}, 7,
+		`INSERT INTO sentiment_daily (symbol_id, day, n, mean_score, pos, neg, neu)`,
+		`ON CONFLICT(symbol_id, day) DO UPDATE SET
 		  n=excluded.n, mean_score=excluded.mean_score,
-		  pos=excluded.pos, neg=excluded.neg, neu=excluded.neu`,
-		day, day)
-	if err != nil {
-		return 0, err
-	}
-	n, err := res.RowsAffected()
+		  pos=excluded.pos, neg=excluded.neg, neu=excluded.neu`)
 	return int(n), err
 }
 
