@@ -565,6 +565,12 @@ export const api = {
     post<SymbolInfo>("/api/subscribe", { symbol, market }),
   unsubscribe: (symbol: string, market: Market) =>
     post<SymbolInfo>("/api/unsubscribe", { symbol, market }),
+  // Member-safe watchlist edits: the caller's own list only, already-tracked
+  // symbols only, never starting or stopping ingestion (subscribe/unsubscribe
+  // do both and are operator-only).
+  memberWatchlist: () => get<MemberWatchRow[]>("/api/watchlist"),
+  watch: (symbol: string, market: Market) => post<SymbolInfo>("/api/watch", { symbol, market }),
+  unwatch: (symbol: string, market: Market) => post<SymbolInfo>("/api/unwatch", { symbol, market }),
   exportUrl: (kind: "bars" | "scores" | "outcomes", params: string) =>
     `${API_BASE}/api/export/${kind}.csv?${params}`,
 
@@ -653,6 +659,16 @@ export interface Me {
   id: number;
   username: string;
   isAdmin: boolean;
+  /** The daemon's verdict (api.isMember): a signed-in account that is not the
+   *  operator on a published deployment. Member pages key on THIS, never on
+   *  !isAdmin — on a private deployment every account is the operator. */
+  member?: boolean;
+}
+
+/** A MEMBER's watchlist row: identity and data freshness only. The daemon
+ *  strips closes, sparks, day change and scores for members (vendor-licensed). */
+export interface MemberWatchRow extends SymbolInfo {
+  latestBarTs: number;
 }
 
 export interface NewsItem {

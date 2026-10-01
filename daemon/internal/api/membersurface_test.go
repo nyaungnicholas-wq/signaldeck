@@ -95,6 +95,14 @@ func TestMemberSurfaceStripsVendorFieldsAndSideEffects(t *testing.T) {
 		map[string]string{"username": "owner", "password": "adminpass123"}); code != 200 {
 		t.Fatalf("owner login: %d %s", code, body)
 	}
+	// The web picks the member UI from this flag, so it must be the daemon's
+	// verdict: true for the member, false for the operator.
+	if code, body := getAs(t, member, srv.URL+"/api/auth/me"); code != 200 || !strings.Contains(body, `"member":true`) {
+		t.Errorf("member /api/auth/me: %d %s", code, body)
+	}
+	if code, body := getAs(t, owner, srv.URL+"/api/auth/me"); code != 200 || !strings.Contains(body, `"member":false`) {
+		t.Errorf("owner /api/auth/me: %d %s", code, body)
+	}
 	watch := func(c *http.Client, path, sym string) int {
 		t.Helper()
 		resp := postJSON(t, c, srv.URL+path, map[string]string{"symbol": sym, "market": "stocks"})

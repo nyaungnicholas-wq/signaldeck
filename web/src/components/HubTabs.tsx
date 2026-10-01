@@ -21,6 +21,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 import { useLabel } from "@/lib/labels";
+import { useIsMember } from "@/hooks/useMe";
+import { memberMayVisit } from "@/lib/memberPages";
 
 export interface HubTab {
   href: string;
@@ -45,7 +47,7 @@ export interface HubTab {
 const MAX_VISIBLE = 7;
 
 export default function HubTabs({
-  tabs,
+  tabs: allTabs,
   ariaLabel,
   compact = false,
   maxVisible = MAX_VISIBLE,
@@ -60,6 +62,10 @@ export default function HubTabs({
   maxVisible?: number;
 }) {
   const pathname = usePathname();
+  // A member sees only the tabs that lead to member pages (lib/memberPages);
+  // the rest would bounce them home.
+  const { member } = useIsMember();
+  const tabs = member ? allTabs.filter((t) => memberMayVisit(t.href)) : allTabs;
   // SIMPLE view speaks English here too — a strip that reads CONFLUENCE ·
   // EVOLUTION · HONESTY is a wall, whatever the tooltips say.
   const label = useLabel();

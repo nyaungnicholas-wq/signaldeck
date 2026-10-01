@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api, ApiError, isAuthError, type Me } from "@/lib/api";
+import { useIsMember } from "@/hooks/useMe";
+import { memberMayVisit } from "@/lib/memberPages";
 import FreshnessBadge from "@/components/FreshnessBadge";
 import OfflineBanner from "@/components/OfflineBanner";
 import CommandPalette, { CMDK_EVENT } from "@/components/CommandPalette";
@@ -94,6 +96,18 @@ const ADVANCED_DOOR: NavItem = {
   label: "ADVANCED",
   match: ["/advanced", ...NAV.filter((n) => n.advanced).flatMap((n) => n.match)],
 };
+
+// MEMBERS (signed in, not the operator, on a published deployment) see only
+// what the daemon's member tier serves: validated regimes, public-domain intel,
+// their own watchlist and the public record. Every other page would render a
+// wall of 403s, so the Shell sends members home from it (lib/memberPages)
+// before its children mount.
+const MEMBER_NAV: NavItem[] = [
+  { href: "/today", label: "TODAY", match: ["/today"] },
+  { href: "/market/regimes", label: "REGIMES", match: ["/market/regimes", "/market/breadth"] },
+  { href: "/watchlist", label: "WATCHLIST", match: ["/watchlist", "/s"] },
+  { href: "/accuracy", label: "RECORD", match: ["/accuracy", "/proof", "/volatility"] },
+];
 
 const READING_KEY = "sd-reading-mode";
 const VIEW_KEY = "sd-view-mode";
@@ -384,10 +398,19 @@ function Brand() {
 /** App chrome: brand bar + nav + daemon connectivity dot. */
 export default function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [up, setUp] = useState<boolean | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const pro = useSyncExternalStore(subscribeViewMode, getViewModePro, getServerFalse);
   const label = useLabel();
+  const { member, known } = useIsMember();
+  const offLimits = member && !memberMayVisit(pathname);
+  // Operator widgets (alerts, palette, freshness, tour) wait for the answer too:
+  // rendered while it is pending, the alerts bell fired /api/alerts and took a 403.
+  const operatorChrome = known && !member;
+  useEffect(() => {
+    if (offLimits) router.replace("/today");
+  }, [offLimits, router]);
 
   // Setup-checklist milestones are recorded here, from the one place every
   // navigation already passes through — cheaper and harder to forget than
@@ -419,8 +442,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     if (menuOpen) setMenuOpen(false);
   }
 
-  // SIMPLE shows three hubs plus the Advanced door; PRO shows all five.
-  const hubs = pro ? NAV : [...NAV.filter((n) => !n.advanced), ADVANCED_DOOR];
+  // SIMPLE shows three hubs plus the Advanced door; PRO shows all five. Members
+  // get their own four; nothing renders until we know which, so a member never
+  // sees the operator's hubs flash past.
+  const hubs = !known ? [] : member ? MEMBER_NAV : pro ? NAV : [...NAV.filter((n) => !n.advanced), ADVANCED_DOOR];
 
   const navLinks = hubs.map((n) => {
     const active =
@@ -482,7 +507,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         }}
       >
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <Link href="/dashboard" className="inline-flex shrink-0 items-center">
+          <Link href={member ? "/today" : "/dashboard"} className="inline-flex shrink-0 items-center">
             <Brand />
             <span
               className="ml-3 hidden text-[0.75rem] tracking-wider xl:inline"
@@ -502,6 +527,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 text-[0.75rem]"
             style={{ color: "var(--dim)" }}
           >
+            {/* Members get none of the operator widgets below: the command
+                palette, tour, help, alerts and freshness all read operator
+                routes and would answer them with 403s. */}
+            {operatorChrome && (<>
             {/* Command palette trigger — the keyboard-free way in; ⌘K/Ctrl+K
                 fires the same event listener inside CommandPalette. */}
             <button
@@ -529,16 +558,17 @@ export default function Shell({ children }: { children: React.ReactNode }) {
               <span className="hidden sm:inline">help</span>
             </button>
             <AlertsBell />
+            </>)}
             <AuthChip />
             {/* Secondary controls: inline on desktop, folded into the menu panel
                 on mobile so the header row can't overflow a phone width (which
                 was pushing the menu off-canvas). */}
-            <div className="hidden lg:block"><HeaderTools label="status" dot={up == null ? "warn" : up ? "ok" : "bad"}>
+            {operatorChrome && <div className="hidden lg:block"><HeaderTools label="status" dot={up == null ? "warn" : up ? "ok" : "bad"}>
               <FreshnessBadge />
               <ViewModeToggle />
               <ReadingModeToggle />
               <DaemonStatus up={up} />
-            </HeaderTools></div>
+            </HeaderTools></div>}
             {/* Mobile menu button */}
             <button
               type="button"
@@ -561,7 +591,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
             >
               {navLinks}
             </nav>
-            <div
+            {operatorChrome && <div
               className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-3 text-[0.75rem]"
               style={{ borderColor: "var(--border)", color: "var(--dim)" }}
             >
@@ -569,17 +599,31 @@ export default function Shell({ children }: { children: React.ReactNode }) {
               <ViewModeToggle />
               <ReadingModeToggle />
               <DaemonStatus up={up} />
-            </div>
+            </div>}
           </div>
         )}
       </header>
-      <CommandPalette />
-      <FirstRunTour />
-      <HelpPanel />
-      <UxProbe />
-      <NextStep />
+      {operatorChrome && (
+        <>
+          <CommandPalette />
+          <FirstRunTour />
+          <HelpPanel />
+          <UxProbe />
+          <NextStep />
+        </>
+      )}
       <main id="main" className="flex flex-1 flex-col gap-4">
-        {children}
+        {/* An off-limits page never mounts for a member: its effects would fire
+            operator requests before the redirect lands. Nothing mounts until we
+            know who is signed in, either -- measured on a direct visit to
+            /dashboard, the page mounted in that gap and sent /api/dashboard. */}
+        {!known ? null : offLimits ? (
+          <p className="panel px-4 py-3 text-sm" style={{ color: "var(--dim)" }}>
+            That page is part of the operator console. Taking you to Today…
+          </p>
+        ) : (
+          children
+        )}
       </main>
       <footer
         className="mt-2 border-t px-2 pt-3 pb-2 text-[0.75rem] leading-relaxed"

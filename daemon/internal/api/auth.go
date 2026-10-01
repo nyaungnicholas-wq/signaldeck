@@ -385,7 +385,10 @@ func (d Deps) authMe(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 401, "not signed in")
 		return
 	}
-	writeJSON(w, map[string]any{"id": u.ID, "username": u.Username, "isAdmin": u.IsAdmin})
+	// member is the daemon's own verdict (isMember), not something the web could
+	// derive from isAdmin: on a private deployment every signed-in account is
+	// the operator, admin or not.
+	writeJSON(w, map[string]any{"id": u.ID, "username": u.Username, "isAdmin": u.IsAdmin, "member": d.isMember(r)})
 }
 
 func (d Deps) registerAuth(mux *http.ServeMux) {
