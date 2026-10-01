@@ -132,7 +132,7 @@ function LedgerProvenance({ lv }: { lv: LedgerVerifyResponse }) {
       te.externalWitness?.verified
         ? "established — an anchor digest was matched against an external receipt"
         : "NOT established — no external receipt is verified here. The operator holds the signing key, so he can re-sign a fabricated chain and every check above passes.",
-      "compare a digest from /api/ledger/anchors against the third-party copy yourself",
+      "the third-party copy is public: github.com/nyaungnicholas-wq/signaldeck-anchors, where verify.py checks each timestamped statement offline",
     ],
     [
       "Anchors that stopped reproducing",
