@@ -5,9 +5,9 @@
 // the watchlist and per-symbol theses.
 //
 // It is strictly read-only over the store and only ever CALLS the llm client;
-// the sole write it performs is InsertInsight (scope "market") via Persist. It
-// never mutates positions, symbols, bars, scores, expectancy or forecasts, and
-// never runs arbitrary SQL.
+// the writes it performs are InsertInsight (scope "market") via Persist and its
+// own coverage cursor in meta (see BuildContext). It never mutates positions,
+// symbols, bars, scores, expectancy or forecasts, and never runs arbitrary SQL.
 //
 // Honesty is enforced structurally: the Charter (the system prompt) forbids the
 // model from inventing numbers, requires it to ground every claim in the passed
@@ -20,6 +20,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,39 +83,73 @@ type Brief struct {
 	Disabled  bool              `json:"disabled"`  // true when the llm client had no key
 }
 
+// cursorKey is the meta key holding the index of the symbol the next digest
+// starts at; Run advances it once the model has answered.
+const cursorKey = "ai_analyst_cursor"
+
+// digestBudget is the most digest that reaches the model whole: the llm client
+// trims the last message to MaxPromptChars minus the system Charter, and the
+// user message is a short framing line (well under the slack) plus the digest.
+const digestBudget = llm.MaxPromptChars - len(Charter) - 512
+
 // BuildContext gathers a compact TEXT digest of the current active watchlist for
 // the model. Per symbol it emits, when available, the 1d and 1w Pressure Scores
 // with the top-contributing component's note, the forecast probability/lift/nEval,
 // the largest 1d expectancy row (n, mean, hit rate), and the day change. It reads
 // only; it never writes. The digest is a few lines per symbol.
+//
+// COVERAGE ROTATES. The digest starts at the stored cursor and stops at the last
+// symbol that fits digestBudget. It used to start at the alphabetical top every
+// run and let the llm budget cut the tail: the hourly brief covered the same
+// 46-50 of 329 symbols (worker_runs, 2026-10-01) and never the rest.
 func BuildContext(ctx context.Context, st *store.Store) (string, error) {
+	digest, _, err := buildContext(ctx, st)
+	return digest, err
+}
+
+// buildContext is BuildContext plus the cursor value for the run after this one.
+func buildContext(ctx context.Context, st *store.Store) (digest string, next int, err error) {
 	syms, err := st.ListSymbols(ctx, true)
 	if err != nil {
-		return "", fmt.Errorf("analyst: list symbols: %w", err)
+		return "", 0, fmt.Errorf("analyst: list symbols: %w", err)
 	}
 	if len(syms) == 0 {
-		return "No symbols are currently tracked. insufficient data.", nil
+		return "No symbols are currently tracked. insufficient data.", 0, nil
+	}
+	// Absent, unreadable or out of range (the watchlist shrank): start at the top.
+	cur, _ := st.GetMeta(ctx, cursorKey)
+	start, _ := strconv.Atoi(cur)
+	if start < 0 || start >= len(syms) {
+		start = 0
 	}
 
 	var b strings.Builder
 	b.WriteString("DATA DIGEST (all figures below are the only numbers you may use):\n")
-	for _, sym := range syms {
-		fmt.Fprintf(&b, "\n%s (%s)\n", sym.Symbol, sym.Market)
+	n := 0
+	for ; n < len(syms); n++ {
+		sym := syms[(start+n)%len(syms)]
+		var s strings.Builder
+		fmt.Fprintf(&s, "\n%s (%s)\n", sym.Symbol, sym.Market)
 
 		// 1d and 1w scores + top driver note.
-		writeScoreLine(ctx, &b, st, sym.ID, md.H1d, "1d")
-		writeScoreLine(ctx, &b, st, sym.ID, md.H1w, "1w")
+		writeScoreLine(ctx, &s, st, sym.ID, md.H1d, "1d")
+		writeScoreLine(ctx, &s, st, sym.ID, md.H1w, "1w")
 
 		// Forecast (1d preferred) prob + lift + nEval.
-		writeForecastLine(ctx, &b, st, sym.ID)
+		writeForecastLine(ctx, &s, st, sym.ID)
 
 		// 1d expectancy: the largest-sample row.
-		writeExpectancyLine(ctx, &b, st, sym.ID)
+		writeExpectancyLine(ctx, &s, st, sym.ID)
 
 		// Day change from the last two 1d bars.
-		writeDayChangeLine(ctx, &b, st, sym.ID)
+		writeDayChangeLine(ctx, &s, st, sym.ID)
+
+		if n > 0 && b.Len()+s.Len() > digestBudget {
+			break
+		}
+		b.WriteString(s.String())
 	}
-	return b.String(), nil
+	return b.String(), (start + n) % len(syms), nil
 }
 
 // writeScoreLine appends the latest score for one horizon plus its top driver.
@@ -250,7 +286,7 @@ func Run(ctx context.Context, client llm.Client, st *store.Store) (Brief, error)
 	if client == nil || !client.Enabled() {
 		return Brief{Disabled: true, PerSymbol: map[string]string{}}, nil
 	}
-	digest, err := BuildContext(ctx, st)
+	digest, next, err := buildContext(ctx, st)
 	if err != nil {
 		return Brief{Model: client.Model(), PerSymbol: map[string]string{}}, err
 	}
@@ -266,6 +302,11 @@ func Run(ctx context.Context, client llm.Client, st *store.Store) (Brief, error)
 	out, err := client.Complete(ctx, Charter, msgs, 800)
 	if err != nil {
 		return Brief{Model: client.Model(), PerSymbol: map[string]string{}}, err
+	}
+	// Advanced only once the model has answered: a failed call retries this
+	// window next run instead of skipping it.
+	if err := st.SetMeta(ctx, cursorKey, strconv.Itoa(next)); err != nil {
+		slog.Warn("analyst: coverage cursor not advanced; next run repeats this window", "err", err)
 	}
 	b := parseBrief(out)
 	b.Model = client.Model()

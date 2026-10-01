@@ -374,7 +374,7 @@ func (c *httpClient) CompleteWith(ctx context.Context, model, sys string, msgs [
 	// Bound the prompt so the model stays fast + reliable no matter how much
 	// the watchlist grows. Agents put their (large) data in the last message,
 	// so we trim that one, preserving the system charter intact.
-	trimToBudget(all, maxPromptChars)
+	trimToBudget(all, MaxPromptChars)
 
 	body, err := json.Marshal(chatReq{Model: model, Messages: all, MaxTokens: maxTokens, Temperature: 0.2,
 		TemplateKw: templateKwargs(model, c.deepModel)})
@@ -522,7 +522,9 @@ func extractAnswer(content, reasoning string) string {
 // tier can produce a full report while the fast tier stays tight per its own
 // requested maxTokens. Retry/timeout policy:
 const (
-	maxPromptChars  = 24000
+	// MaxPromptChars is exported so an agent can size its digest to land whole
+	// (analyst.BuildContext) instead of having its tail cut mid-record.
+	MaxPromptChars  = 24000
 	maxOutputTokens = 2000
 	maxAttempts     = 3
 	// defaultTimeout: 45s produced a steady trickle of "context deadline

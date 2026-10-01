@@ -2,6 +2,7 @@ package analyst
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -275,5 +276,49 @@ func TestPersistDisabledIsNoOp(t *testing.T) {
 	}
 	if len(ins) != 0 {
 		t.Fatalf("expected no insights written, got %d", len(ins))
+	}
+}
+
+// Two consecutive runs must brief different symbols. The digest used to start
+// at the alphabetical top every run and the llm budget cut its tail, so the
+// hourly brief covered the same 46-50 of 329 symbols and never the rest.
+func TestRunRotatesCoverageAcrossRuns(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	const total = 200 // ~150 digest chars each with no data: well past the budget
+	for i := 0; i < total; i++ {
+		if _, err := st.UpsertSymbol(ctx, fmt.Sprintf("S%03d", i), md.Stocks, "x"); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+	}
+	fc := &fakeClient{enabled: true, model: "m", reply: "MARKET: flat."}
+	run := func() (user, first string, set map[string]bool) {
+		if _, err := Run(ctx, fc, st); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		user, set = fc.gotMsgs[0].Content, map[string]bool{}
+		for _, l := range strings.Split(user, "\n") {
+			if s, ok := strings.CutSuffix(l, " (stocks)"); ok {
+				if first == "" {
+					first = s
+				}
+				set[s] = true
+			}
+		}
+		return user, first, set
+	}
+	user1, _, one := run()
+	_, first2, two := run()
+
+	if one[first2] {
+		t.Fatalf("run 2 starts at %s, already briefed by run 1: coverage does not rotate", first2)
+	}
+	if len(one) == 0 || len(two) == 0 || len(one) == total {
+		t.Fatalf("briefed %d then %d of %d symbols; want budget-bounded windows", len(one), len(two), total)
+	}
+	// What was briefed must be what the model sees: the client cuts the tail
+	// past MaxPromptChars, and the cursor would then skip unseen symbols.
+	if n := len(Charter) + len(user1); n > llm.MaxPromptChars {
+		t.Fatalf("prompt %d chars exceeds the llm budget %d", n, llm.MaxPromptChars)
 	}
 }

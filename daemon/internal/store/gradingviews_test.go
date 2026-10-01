@@ -580,3 +580,32 @@ func TestResolvedRawPairs_ExcludePreEpochRows(t *testing.T) {
 		t.Fatalf("raws = %v; want only the post-epoch 0.70", raws)
 	}
 }
+
+// /api/signal-report labels this read the symbol's "LIVE forward record", so it
+// must be the grader's population: pre-epoch rows out, one observation per
+// settled move (latest call wins). The whole-ledger read it replaced showed
+// AAPL 3,059 rows at 61.8% against 5 graded observations at 40%.
+func TestPredictionOutcomesForSymbol_GradedWindowOnly(t *testing.T) {
+	st := openTemp(t)
+	ctx := context.Background()
+	sym, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
+	day, epoch := int64(86400), int64(GradingEpochTS)
+	for i := int64(1); i <= 3; i++ { // pre-epoch, all right: never graded
+		seedResolvedPred(t, st, sym.ID, md.H1d, epoch-i*day+15*3600, 0.7, 0.7, 0.01)
+	}
+	seedResolvedPred(t, st, sym.ID, md.H1d, epoch+3*day+15*3600, 0.7, 0.7, 0.01) // early call, right
+	seedResolvedPred(t, st, sym.ID, md.H1d, epoch+3*day+16*3600, 0.3, 0.3, 0.01) // same move, latest, wrong
+	seedResolvedPred(t, st, sym.ID, md.H1d, epoch+4*day+15*3600, 0.6, 0.6, 0.02) // right
+
+	rows, correct, total, err := st.PredictionOutcomesForSymbol(ctx, sym.ID, "1d", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || correct != 1 || len(rows) != 2 {
+		t.Fatalf("correct/total/rows = %d/%d/%d; want 1/2/2 (graded window, one per settled move)",
+			correct, total, len(rows))
+	}
+	if rows[0].Ts != epoch+4*day+15*3600 || rows[1].Ts != epoch+3*day+16*3600 || rows[1].Correct {
+		t.Fatalf("rows = %+v; want newest first, the latest call standing for its move", rows)
+	}
+}

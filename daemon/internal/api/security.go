@@ -138,11 +138,12 @@ func (d Deps) secureWith(next http.Handler, limiter *rateLimiter) http.Handler {
 
 		// 7. LICENCE. Defence in depth behind publicRoutes, for the route
 		// somebody adds next month and forgets to think about. Gated on
-		// ReachablePrivately() for the same reason rawDataRefused is: the
-		// operator's own unpublished box may read its own data, and a
-		// request-level test can only narrow a config-level answer, never
-		// supply one.
-		if !d.Cfg.AllowRawExport && d.published() { // published(), see rawDataRefused
+		// published() for the same reason rawDataRefused is: the operator's own
+		// unpublished box may read its own data, while a tunnelled box's
+		// visitors arrive through the loopback web proxy looking local, so
+		// ReachablePrivately() alone cannot tell the two apart. A request-level
+		// test can only narrow a config-level answer, never supply one.
+		if !d.Cfg.AllowRawExport && d.published() {
 			if src, ok, governed := datalicense.RouteRedistributable(r.URL.Path); governed && !ok {
 				httpErr(w, 451, datalicense.RawDataNotice()+
 					" (route governed by the "+src+" licence)")
@@ -180,12 +181,21 @@ func (d Deps) withAccessLog(next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		slog.Info("request",
+		// A failed body write (responseWriteTimeout firing on a client that
+		// stopped reading: "write tcp ...: i/o timeout") means the response never
+		// arrived, whatever status line went out first. Logged as the handler's
+		// 200, a status-counting monitor scored it a success. 499 is nginx's
+		// client-closed-request code; the handler's own status rides alongside.
+		status, failed := sw.code, []any(nil)
+		if sw.writeErr != nil {
+			status, failed = 499, []any{"handler_status", sw.code, "write_err", sw.writeErr.Error()}
+		}
+		slog.Info("request", append([]any{
 			"method", r.Method,
 			"path", r.URL.Path,
-			"status", sw.code,
+			"status", status,
 			"uid", sw.uid,
-			"ms", time.Since(start).Milliseconds())
+			"ms", time.Since(start).Milliseconds()}, failed...)...)
 	})
 }
 
@@ -194,9 +204,10 @@ func (d Deps) withAccessLog(next http.Handler) http.Handler {
 // the first Write), which is why code is seeded to 200 rather than 0.
 type statusWriter struct {
 	http.ResponseWriter
-	code    int
-	written bool
-	uid     int64 // filled by the guard chain once identity is resolved
+	code     int
+	written  bool
+	writeErr error // first failed body write: the client did not get the response
+	uid      int64 // filled by the guard chain once identity is resolved
 }
 
 func (s *statusWriter) WriteHeader(code int) {
@@ -208,7 +219,11 @@ func (s *statusWriter) WriteHeader(code int) {
 
 func (s *statusWriter) Write(b []byte) (int, error) {
 	s.written = true
-	return s.ResponseWriter.Write(b)
+	n, err := s.ResponseWriter.Write(b)
+	if err != nil && s.writeErr == nil {
+		s.writeErr = err
+	}
+	return n, err
 }
 
 // Flush keeps streaming handlers (SSE) working through the wrapper — without
@@ -308,9 +323,12 @@ var publicRoutes = map[string]bool{
 }
 
 // alwaysOpen is orthogonal to the allowlist: these authenticate themselves or
-// must work before a credential exists. /api/auth/register is reachable here
-// but still refuses unless Cfg.OpenSignup, which is false on any published
-// deployment.
+// must work before a credential exists. /api/auth/register (and Google
+// sign-up) is reachable here but still refuses unless Cfg.OpenSignup. That
+// only DEFAULTS to false on a published deployment (config.go): an explicit
+// SIGNALDECK_OPEN_SIGNUP=true opens it there, and a stranger's sign-up then
+// gets a member account confined by the member tier (step 6b of secureWith).
+// It never bootstraps the admin over the public site (authRegister).
 func alwaysOpen(path string) bool {
 	return path == "/api/health" || path == "/api/ready" ||
 		strings.HasPrefix(path, "/api/auth/") ||
