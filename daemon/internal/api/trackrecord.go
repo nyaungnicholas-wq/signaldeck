@@ -99,7 +99,7 @@ func (d Deps) trackRecord(w http.ResponseWriter, r *http.Request) {
 }
 
 // trackRecordCached serves the same payload through the SWR cache. Perf wave
-// 2026-07-24: the full grade over the 120k-row window costs ~22s per request
+// 2026-07-24: the full grade over the then 120k-row window cost ~22s per request
 // in the pure-Go driver and is identical for every user; the 2m TTL sits well
 // under the 10m resolver cadence that changes the underlying rows, so
 // staleness is bounded by design and nobody waits behind a rebuild.

@@ -87,6 +87,12 @@ type Brief struct {
 // starts at; Run advances it once the model has answered.
 const cursorKey = "ai_analyst_cursor"
 
+// cursorWriteBudget bounds the cursor write. Run also serves the on-demand
+// GET /api/ai/analyst, and the single store writer can be held for minutes:
+// an unbounded write there would hold a brief the model already produced past
+// the response deadline. Losing the write only repeats this window next run.
+const cursorWriteBudget = 3 * time.Second
+
 // digestBudget is the most digest that reaches the model whole: the llm client
 // trims the last message to MaxPromptChars minus the system Charter, and the
 // user message is a short framing line (well under the slack) plus the digest.
@@ -305,7 +311,9 @@ func Run(ctx context.Context, client llm.Client, st *store.Store) (Brief, error)
 	}
 	// Advanced only once the model has answered: a failed call retries this
 	// window next run instead of skipping it.
-	if err := st.SetMeta(ctx, cursorKey, strconv.Itoa(next)); err != nil {
+	wctx, cancel := context.WithTimeout(ctx, cursorWriteBudget)
+	defer cancel()
+	if err := st.SetMeta(wctx, cursorKey, strconv.Itoa(next)); err != nil {
 		slog.Warn("analyst: coverage cursor not advanced; next run repeats this window", "err", err)
 	}
 	b := parseBrief(out)

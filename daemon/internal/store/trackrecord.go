@@ -10,9 +10,10 @@ package store
 // row's prob is frozen when the prediction is made, and it becomes eligible for
 // grading only once resolved_at is set.
 //
-// These are pure reads; the caller (api/trackrecord.go) does the independent-N
-// dedup and the honesty gating. The store stays policy-free — it just returns
-// the resolved (prob, up, fwd_return, symbol, market, day) rows.
+// These are pure reads. IndependentPredictionOutcomes does the independent-N
+// collapse (one row per symbol per settle day) in SQL for the published
+// callers; the API (api/trackrecord.go, api/composite.go) does the honesty
+// gating. The store stays policy-free about publication.
 
 import (
 	"context"

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nyaungnicholas-wq/signaldeck/internal/llm"
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
@@ -320,5 +321,13 @@ func TestRunRotatesCoverageAcrossRuns(t *testing.T) {
 	// past MaxPromptChars, and the cursor would then skip unseen symbols.
 	if n := len(Charter) + len(user1); n > llm.MaxPromptChars {
 		t.Fatalf("prompt %d chars exceeds the llm budget %d", n, llm.MaxPromptChars)
+	}
+}
+
+// The cursor write runs inside the on-demand GET /api/ai/analyst; it must stay
+// far below the API's 90s response deadline however long the writer is held.
+func TestCursorWriteIsBounded(t *testing.T) {
+	if cursorWriteBudget <= 0 || cursorWriteBudget > 10*time.Second {
+		t.Fatalf("cursorWriteBudget = %v; want (0, 10s] so a held writer cannot cost the brief", cursorWriteBudget)
 	}
 }

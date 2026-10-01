@@ -43,7 +43,7 @@ type fleetSkill struct {
 }
 
 // fleetSkillCache memoizes the fleet-wide live-edge grade (it changes only as
-// outcomes resolve, hours apart) so the 120k-row scan fires at most once per
+// outcomes resolve, hours apart) so the graded-window read fires at most once per
 // fleetSkillTTL instead of on every composite/recommendation read.
 //
 // key scopes the entry to the store instance for the same reason
@@ -249,7 +249,7 @@ func (d Deps) fleetEdgeSkill(ctx context.Context) (proven bool, winRate float64,
 // stated reason — never a fabricated pass.
 func (d Deps) fleetEdgeGrade(ctx context.Context) fleetSkill {
 	key := d.St.CacheKey()
-	// Serve from the short-TTL cache when fresh (the 120k-row scan is heavy).
+	// Serve from the short-TTL cache when fresh (the graded-window read is heavy).
 	fleetSkillCache.Lock()
 	if fleetSkillCache.valid && fleetSkillCache.key == key && time.Since(fleetSkillCache.at) < fleetSkillTTL {
 		s := fleetSkillCache.skill

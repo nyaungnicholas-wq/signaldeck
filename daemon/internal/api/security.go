@@ -325,8 +325,9 @@ var publicRoutes = map[string]bool{
 // alwaysOpen is orthogonal to the allowlist: these authenticate themselves or
 // must work before a credential exists. /api/auth/register (and Google
 // sign-up) is reachable here but still refuses unless Cfg.OpenSignup. That
-// only DEFAULTS to false on a published deployment (config.go): an explicit
-// SIGNALDECK_OPEN_SIGNUP=true opens it there, and a stranger's sign-up then
+// defaults to false when the daemon is tunnelled, has a PUBLIC_URL, or
+// allowlists a non-loopback host (config.go `private`); an explicit
+// SIGNALDECK_OPEN_SIGNUP=true opens it anyway, and a stranger's sign-up then
 // gets a member account confined by the member tier (step 6b of secureWith).
 // It never bootstraps the admin over the public site (authRegister).
 func alwaysOpen(path string) bool {

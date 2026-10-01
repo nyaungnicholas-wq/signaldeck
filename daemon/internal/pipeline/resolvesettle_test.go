@@ -154,6 +154,12 @@ func TestResolverGradesAcrossAHolidayNotAGap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Crypto trades every day, so it has no holidays: the same Fri/Tue bars are a
+	// 4-day hole there and must stay refused.
+	coin, err := st.UpsertSymbol(ctx, "HOLICOIN", md.Crypto, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	bar := func(id, ts int64, c float64) md.Bar {
 		return md.Bar{SymbolID: id, TF: md.TF1d, Ts: ts, Open: c, High: c, Low: c, Close: c, Volume: 1}
 	}
@@ -162,10 +168,11 @@ func TestResolverGradesAcrossAHolidayNotAGap(t *testing.T) {
 	if err := st.UpsertBars(ctx, []md.Bar{
 		bar(hol.ID, fri, 100), bar(hol.ID, fri+4*day, 110), bar(hol.ID, fri+5*day, 111),
 		bar(gap.ID, fri, 100), bar(gap.ID, fri+5*day, 90), bar(gap.ID, fri+6*day, 89),
+		bar(coin.ID, fri, 100), bar(coin.ID, fri+4*day, 110), bar(coin.ID, fri+5*day, 111),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []int64{hol.ID, gap.ID} {
+	for _, id := range []int64{hol.ID, gap.ID, coin.ID} {
 		if err := st.UpsertPrediction(ctx, store.Prediction{
 			SymbolID: id, Horizon: md.H1d, Ts: fri + 17*3600, // Friday 17:00 ET, after the close
 			RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: `{}`,
@@ -178,11 +185,27 @@ func TestResolverGradesAcrossAHolidayNotAGap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	_, ups, _, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 10)
+	// Read the resolver's own output, not the graded view: the only NYSE holiday
+	// a past-dated fixture can use (Labor Day) predates store.GradingEpoch, which
+	// the grader's reads floor on. Resolution is what is under test here.
+	rows, err := st.DB().QueryContext(ctx, `SELECT symbol_id, up FROM prediction_outcomes
+		WHERE horizon = '1d' AND resolved_at IS NOT NULL ORDER BY symbol_id`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ups) != 1 || ups[0] != 1 {
-		t.Fatalf("resolved ups=%v (%s); want exactly the HOLIDAY row, labeled up", ups, msg)
+	defer rows.Close() //nolint:errcheck
+	var got [][2]int64
+	for rows.Next() {
+		var id, up int64
+		if err := rows.Scan(&id, &up); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, [2]int64{id, up})
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != [2]int64{hol.ID, 1} {
+		t.Fatalf("resolved (symbol, up) = %v (%s); want exactly the HOLIDAY row (%d), labeled up", got, msg, hol.ID)
 	}
 }
