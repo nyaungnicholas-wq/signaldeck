@@ -35,7 +35,8 @@ func TestSelfAuditorGatesAndDrift(t *testing.T) {
 
 	// 35 independent resolved 1d predictions (distinct symbols): prob 0.55, 20
 	// up / 15 down — clears n>=30, bias small ("ok"), reliability ~0.49.
-	predTs := time.Now().Add(-10 * 24 * time.Hour).Unix()
+	// Ten days back, but never before the graded window the audit reads.
+	predTs := max(time.Now().Add(-10*24*time.Hour).Unix(), int64(store.GradingEpochTS)+3600)
 	for i := 0; i < 35; i++ {
 		sym, err := st.UpsertSymbol(ctx, fmt.Sprintf("SYM%d", i), md.Stocks, "")
 		if err != nil {

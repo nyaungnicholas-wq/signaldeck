@@ -45,7 +45,7 @@ func main() {
 			"which record to file: "+GradabilityKind+", "+RevisionEpochKind+", "+
 				ProvenanceKind+", "+DataIntegrityKind+", "+DuplicateKind+", "+
 				ForwardTestKind+", "+BenchFloorKind+", "+PopFiltersKind+", "+
-				BookExtremeKind+", "+RVForecastKind+" or "+GradingWindowKind)
+				BookExtremeKind+", "+RVForecastKind+", "+GradingWindowKind+" or "+GradingWindow2Kind)
 	)
 	flag.Parse()
 	if *kind != GradabilityKind && *kind != RevisionEpochKind &&
@@ -53,11 +53,11 @@ func main() {
 		*kind != DuplicateKind && *kind != ForwardTestKind &&
 		*kind != BenchFloorKind && *kind != PopFiltersKind &&
 		*kind != BookExtremeKind && *kind != RVForecastKind &&
-		*kind != GradingWindowKind {
-		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
+		*kind != GradingWindowKind && *kind != GradingWindow2Kind {
+		die("unknown -kind %q (want %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s or %s)",
 			*kind, GradabilityKind, RevisionEpochKind, ProvenanceKind,
 			DataIntegrityKind, DuplicateKind, ForwardTestKind, BenchFloorKind,
-			PopFiltersKind, BookExtremeKind, RVForecastKind, GradingWindowKind)
+			PopFiltersKind, BookExtremeKind, RVForecastKind, GradingWindowKind, GradingWindow2Kind)
 	}
 
 	db, err := sql.Open("sqlite", "file:"+*dbPath+
@@ -136,7 +136,7 @@ func main() {
 		spec, note = forwardTestSpec(m), forwardTestNote
 
 	case GradingWindowKind:
-		m, err := measureGradingWindow(ctx, *dbPath)
+		m, err := measureGradingWindow(ctx, *dbPath, oldGradingEpochTS, newGradingEpochTS)
 		if err != nil {
 			die("measure grading window: %v", err)
 		}
@@ -157,6 +157,26 @@ func main() {
 				"old epoch, so there is no refusal for this record to clear.")
 		}
 		spec, note = gradingWindowSpec(m), gradingWindowNote
+
+	case GradingWindow2Kind:
+		m, err := measureGradingWindow(ctx, *dbPath, window2OldEpochTS, window2NewEpochTS)
+		if err != nil {
+			die("measure grading window: %v", err)
+		}
+		// Same two premises as the first re-registration, on the new boundary:
+		// the window opened must be clean on the gate's own ruler, and there
+		// must be a collapse in the old window for this record to clear.
+		if n := m.collapsedOnOrAfterNew(); n != 0 {
+			die("REFUSING to file: %d collapsed cross-section(s) sit on or after the new "+
+				"epoch (2026-09-25): 1d %v, 1w %v. This record asserts the window it opens "+
+				"holds none, and that is not true of this database.",
+				n, m.CollapsedNew["1d"], m.CollapsedNew["1w"])
+		}
+		if len(m.CollapsedOld["1d"])+len(m.CollapsedOld["1w"]) == 0 {
+			die("REFUSING to file: the gate finds no collapsed cross-section from 2026-08-07, " +
+				"so there is no refusal for this record to clear.")
+		}
+		spec, note = gradingWindow2Spec(m), gradingWindow2Note
 
 	case RVForecastKind:
 		m, err := measureRVForecast(ctx, db)

@@ -567,8 +567,11 @@ func TestResolvedRawPairs_ExcludePreEpochRows(t *testing.T) {
 	st := openTemp(t)
 	ctx := context.Background()
 	sym, _ := st.UpsertSymbol(ctx, "AAPL", md.Stocks, "Apple")
-	seedResolvedPred(t, st, sym.ID, md.H1d, (gw-30)*86400+15*3600, 0.10, 0.11, 0.01) // pre-epoch
-	seedResolvedPred(t, st, sym.ID, md.H1d, (gw+3)*86400+15*3600, 0.70, 0.71, 0.01)
+	// Anchored on the epoch itself, so a re-registration cannot strand both rows
+	// on one side of it.
+	const epochDay = GradingEpochTS / 86400
+	seedResolvedPred(t, st, sym.ID, md.H1d, (epochDay-30)*86400+15*3600, 0.10, 0.11, 0.01) // pre-epoch
+	seedResolvedPred(t, st, sym.ID, md.H1d, (epochDay+3)*86400+15*3600, 0.70, 0.71, 0.01)
 	raws, _, _, err := st.ResolvedRawPredictionPairs(ctx, md.H1d, 100)
 	if err != nil {
 		t.Fatal(err)

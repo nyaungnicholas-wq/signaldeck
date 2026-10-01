@@ -23,9 +23,12 @@ func TestResolverWaitsForTheForwardSessionToSettle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertSymbol: %v", err)
 	}
-	// 2026-08-20 (was 05-28, +12 weeks): inside the graded window the resolved-pair
-	// read is restricted to (GradingEpochTS).
-	const d0 = int64(1780000000 + 12*7*86400)
+	// D0 is the exchange-local midnight (04:00Z, EDT) of the day the graded window
+	// opens, so every stamp below is inside the window the resolved-pair read is
+	// restricted to (GradingEpochTS) and in the past, which the resolver requires.
+	// Predictions are stamped 23h into D0: after D0 settles (22h,
+	// md.DailyBarSettled), which settledBase requires of rows since 2026-09-08.
+	const d0 = int64(store.GradingEpochTS) + 4*3600
 	bar := func(ts int64, c float64) md.Bar {
 		return md.Bar{SymbolID: sym.ID, TF: md.TF1d, Ts: ts, Open: c, High: c, Low: c, Close: c, Volume: 1}
 	}
@@ -36,7 +39,7 @@ func TestResolverWaitsForTheForwardSessionToSettle(t *testing.T) {
 		t.Fatalf("UpsertBars: %v", err)
 	}
 	if err := st.UpsertPrediction(ctx, store.Prediction{
-		SymbolID: sym.ID, Horizon: md.H1d, Ts: d0 + 12*3600,
+		SymbolID: sym.ID, Horizon: md.H1d, Ts: d0 + 23*3600,
 		RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: `{}`,
 	}); err != nil {
 		t.Fatalf("UpsertPrediction: %v", err)
@@ -79,7 +82,7 @@ func TestResolverWaitsForTheForwardSessionToSettle(t *testing.T) {
 func TestResolverPagesPastRowsItSkips(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
-	const d0 = int64(1780000000 + 12*7*86400) // inside the graded window
+	const d0 = int64(store.GradingEpochTS) + 4*3600 // exchange midnight; see TestResolverWaitsForTheForwardSessionToSettle
 	stuck, err := st.UpsertSymbol(ctx, "STUCK", md.Stocks, "")
 	if err != nil {
 		t.Fatal(err)
@@ -103,14 +106,14 @@ func TestResolverPagesPastRowsItSkips(t *testing.T) {
 	}
 	for i := int64(0); i <= 1500; i++ { // one more than the old head batch of 1500
 		if err := st.UpsertPrediction(ctx, store.Prediction{
-			SymbolID: stuck.ID, Horizon: md.H1d, Ts: d0 + 12*3600 + i,
+			SymbolID: stuck.ID, Horizon: md.H1d, Ts: d0 + 23*3600 + i, // D0 settled; still before D1
 			RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: `{}`,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := st.UpsertPrediction(ctx, store.Prediction{
-		SymbolID: live.ID, Horizon: md.H1d, Ts: d0 + 13*3600, // newer than every stuck row
+		SymbolID: live.ID, Horizon: md.H1d, Ts: d0 + 23*3600 + 1800, // newer than every stuck row
 		RawProb: 0.6, CalProb: 0.6, NUsed: 2, Components: `{}`,
 	}); err != nil {
 		t.Fatal(err)

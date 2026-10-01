@@ -35,7 +35,10 @@ const GradingWindowKind = "grading-window-reregistration"
 
 const (
 	oldGradingEpochTS = store.SurvivorshipEpoch // 2026-07-24T00:00:00Z
-	newGradingEpochTS = store.GradingEpoch      // 2026-08-07T00:00:00Z
+	// Pinned to the boundary seq 117 FILED. It used to read store.GradingEpoch,
+	// which the second re-registration moved; a spec that follows the constant
+	// would describe a different record from the one on the chain.
+	newGradingEpochTS int64 = 1786060800 // 2026-08-07T00:00:00Z
 )
 
 const gradingWindowNote = "AMENDMENT — the directional grading window's start moves from the survivorship " +
@@ -80,7 +83,7 @@ func (m gradingWindowMeasured) collapsedOnOrAfterNew() int {
 // collapse root-cause work recorded that counting distinct probabilities over
 // unfolded intraday rows gives 3,725 where the gate says 33; the only number
 // that means anything here is the one the gate computes.
-func measureGradingWindow(ctx context.Context, dbPath string) (gradingWindowMeasured, error) {
+func measureGradingWindow(ctx context.Context, dbPath string, oldTS, newTS int64) (gradingWindowMeasured, error) {
 	m := gradingWindowMeasured{
 		CollapsedOld: map[string][]string{},
 		CollapsedNew: map[string][]string{},
@@ -92,8 +95,8 @@ func measureGradingWindow(ctx context.Context, dbPath string) (gradingWindowMeas
 	}
 	defer st.Close() //nolint:errcheck
 
-	oldSince := time.Unix(oldGradingEpochTS, 0).UTC()
-	newSince := time.Unix(newGradingEpochTS, 0).UTC()
+	oldSince := time.Unix(oldTS, 0).UTC()
+	newSince := time.Unix(newTS, 0).UTC()
 	for _, h := range []string{"1d", "1w"} {
 		stats, err := st.ForecastDayStats(ctx, h, oldSince)
 		if err != nil {

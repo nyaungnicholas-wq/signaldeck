@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
-	"time"
 
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
@@ -24,7 +23,7 @@ func seedClusteredRecord(t *testing.T, st *store.Store, days, symsPerDay int) {
 	ctx := context.Background()
 	// AFTER the 2026-07-24 survivorship epoch — ResolvedPredictionOutcomes
 	// floors on it, so the old 2026-05-04 anchor graded to an empty set.
-	base := time.Date(2026, 8, 8, 14, 0, 0, 0, time.UTC).Unix() // after store.GradingEpoch (2026-08-07)
+	base := store.GradingEpoch + 86400 + 14*3600 // day after the graded window opens, 14:00 UTC
 	for s := 0; s < symsPerDay; s++ {
 		sym, err := st.UpsertSymbol(ctx, fmt.Sprintf("CL%03d", s), md.Stocks, "")
 		if err != nil {

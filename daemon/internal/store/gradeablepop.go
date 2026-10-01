@@ -23,12 +23,13 @@ import (
 //
 // The fragments mirror accuracy_registry.py one-for-one; keep them in sync.
 
-// GradingEpochTS is 2026-08-07T00:00:00Z — accuracy_registry.py
+// GradingEpochTS is 2026-09-25T00:00:00Z — accuracy_registry.py
 // GRADING_EPOCH_TS, the same instant as GradingEpoch (survivorship.go), kept as
-// an untyped constant because it is spliced into SQL. Rows before it are either
-// survivor-seeded (before 2026-07-24) or inside the 2026-07-27..08-06 collapse;
-// neither is gradeable evidence.
-const GradingEpochTS = 1786060800 // == GradingEpoch; untyped so strconv.Itoa accepts it
+// an untyped constant because it is spliced into SQL. Rows before it are
+// survivor-seeded (before 2026-07-24), inside the 2026-07-27..08-06 collapse, or
+// from the squeezed-calibration period ended 2026-09-25 (see GradingEpoch);
+// none is gradeable evidence.
+const GradingEpochTS = 1790294400 // == GradingEpoch; untyped so strconv.Itoa accepts it
 
 const (
 	// tradingDayOffsetSecs / secondsPerDay mirror the grader's trading_day():

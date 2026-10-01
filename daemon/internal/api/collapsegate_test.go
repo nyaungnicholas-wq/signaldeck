@@ -41,6 +41,12 @@ import (
 //   - make the handler publish on a collapsed window →
 //     TestGate_ApiRefusalMatchesTheDocumentGate fails with HTTP 200.
 
+// gateNow sits 3 days 18 hours into the graded window: the fixtures seed at
+// most 3 days back, so every seeded day is inside store.GradingEpoch whatever
+// date the window is registered from. It must stay in the PAST: freshHeartbeat
+// stamps the real clock, and a gateNow ahead of it reads the heartbeat as stale.
+var gateNow = time.Unix(store.GradingEpoch, 0).UTC().Add(3*24*time.Hour + 18*time.Hour)
+
 // seedResolvedForecasts writes `symbols` resolved outcomes on one day with
 // `distinct` distinct probabilities — the exact shape forecastmon grades. A low
 // distinct/symbols ratio is a collapsed cross-section: every name got
@@ -99,7 +105,7 @@ func registryFor(horizonDays map[string]int) string {
 // generator reaches through cmd/collapsecheck) and the handler's own method over
 // the same fixtures, and requires identical verdicts AND identical reasons.
 func TestGate_BothSurfacesAgree(t *testing.T) {
-	now := time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC)
+	now := gateNow
 
 	for _, tc := range []struct {
 		name          string
@@ -188,7 +194,7 @@ func TestGate_BothSurfacesAgree(t *testing.T) {
 // it must refuse with ZERO rows. A 200 carrying rows plus a caveat is what the
 // documents were doing.
 func TestGate_ApiRefusalMatchesTheDocumentGate(t *testing.T) {
-	now := time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC)
+	now := gateNow
 	_, st, d := newTestServer(t, nil)
 	freshHeartbeat(t, st)
 	seedResolvedForecasts(t, st, md.H1d, now.AddDate(0, 0, -1), 300, 170)
@@ -225,7 +231,7 @@ func TestGate_ApiRefusalMatchesTheDocumentGate(t *testing.T) {
 // wobbles between runs makes every regenerated document a spurious diff, and
 // makes "the documents changed" useless as a signal.
 func TestGate_IsDeterministicAndIdempotent(t *testing.T) {
-	now := time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC)
+	now := gateNow
 	_, st, _ := newTestServer(t, nil)
 	// Two horizons, both collapsed, so the reason string has to order its parts.
 	seedResolvedForecasts(t, st, md.H1d, now.AddDate(0, 0, -1), 300, 4)
@@ -260,7 +266,7 @@ func TestGate_IsDeterministicAndIdempotent(t *testing.T) {
 // in ops/). Nothing about the function's own contract moved — a failed read is
 // still not evidence — so nothing here was weakened to accommodate it.
 func TestGate_UnreadableRegistryIsAnErrorNotAVerdict(t *testing.T) {
-	now := time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC)
+	now := gateNow
 	_, st, _ := newTestServer(t, nil)
 
 	_, collapsed, err := CollapsedGradingWindow(context.Background(), st, "/nonexistent/registry.json", now)
@@ -296,7 +302,7 @@ func TestGate_UnreadableRegistryIsAnErrorNotAVerdict(t *testing.T) {
 // elsewhere and stays readable, so the request reaches the collapse gate rather
 // than stopping at the staleness check above it.
 func TestGate_UnavailableGateWithholdsAndSaysSo(t *testing.T) {
-	now := time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC)
+	now := gateNow
 	_, st, d := newTestServer(t, nil)
 	freshHeartbeat(t, st)
 

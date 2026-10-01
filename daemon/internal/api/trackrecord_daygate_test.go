@@ -26,7 +26,7 @@ func TestTrackRecord_DayClusterGate(t *testing.T) {
 
 	// 60 symbols all resolving on the SAME 2 days: indepN=120 >= 30, days=2 < 10.
 	// AFTER the 2026-07-24 survivorship epoch (see ResolvedPredictionOutcomes).
-	day1 := time.Date(2026, 8, 8, 14, 0, 0, 0, time.UTC).Unix() // after store.GradingEpoch (2026-08-07)
+	day1 := store.GradingEpoch + 86400 + 14*3600 // day after the graded window opens, 14:00 UTC
 	day2 := day1 + 86400
 	for i := 0; i < 60; i++ {
 		sym, err := st.UpsertSymbol(ctx, "S"+time.Unix(int64(i)+1e6, 0).Format("040506"), md.Stocks, "")

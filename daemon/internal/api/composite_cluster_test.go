@@ -51,7 +51,7 @@ func resetFleetSkillCache(t *testing.T) {
 // opposite sides of it.
 func seedCompositeClusteredRecord(t *testing.T, st *store.Store, days, symbolsPerDay int) {
 	t.Helper()
-	seedCompositeClusteredRecordFrom(t, st, 20672, days, symbolsPerDay)
+	seedCompositeClusteredRecordFrom(t, st, store.GradingEpoch/86400, days, symbolsPerDay)
 }
 
 // seedCompositeClusteredRecordFrom is the same fixture anchored at an explicit
@@ -87,7 +87,8 @@ func seedCompositeClusteredRecordFrom(t *testing.T, st *store.Store, startDay in
 		// BEFORE the 2026-07-24 survivorship epoch that
 		// ResolvedPredictionOutcomes now floors on, which emptied the fixture;
 		// 20658 was the epoch's own day index; since the 2026-09-20 window
-		// re-registration the floor is store.GradingEpoch (2026-08-07, day 20672).
+		// re-registration the floor is store.GradingEpoch, so the default fixture now
+		// starts ON the epoch's day and follows it through any re-registration.
 		base := (startDay+int64(day))*86400 + 43200
 		i := 0
 		for _, c := range mix {

@@ -873,8 +873,8 @@ SURVIVORSHIP_EPOCH_TS = int(dt.datetime(2026, 7, 24, tzinfo=dt.timezone.utc).tim
 # across 327 symbols; the prereg-amend guard refused 08-05 on exactly that). Two facts, two constants: SURVIVORSHIP_EPOCH
 # still bounds listing-status reconstruction; GRADING_EPOCH bounds every graded
 # population below. Mirrors store.GradingEpoch; the Go pin test holds both.
-GRADING_EPOCH = dt.date(2026, 8, 7)
-GRADING_EPOCH_TS = int(dt.datetime(2026, 8, 7, tzinfo=dt.timezone.utc).timestamp())
+GRADING_EPOCH = dt.date(2026, 9, 25)
+GRADING_EPOCH_TS = int(dt.datetime(2026, 9, 25, tzinfo=dt.timezone.utc).timestamp())
 
 
 def population_epoch_ts(table: str) -> int:

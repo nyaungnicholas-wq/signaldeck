@@ -86,7 +86,7 @@ def verdict(acc, null_acc, agreement, calls_up):
 # The graded window's first day, as accuracy_registry.GRADING_EPOCH_TS (not
 # imported: that grader is hash-pinned and refuses to run when touched).
 # test_selection_honesty_epoch.py holds the two equal.
-GRADING_EPOCH_TS = 1786060800  # 2026-08-07T00:00Z
+GRADING_EPOCH_TS = 1790294400  # 2026-09-25T00:00Z
 
 
 def calls_up_by_horizon(db_path):
