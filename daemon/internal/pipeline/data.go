@@ -57,6 +57,12 @@ const metaNewsScopeSkip = "news_scope_skip_v1"
 type NewsFetcher struct {
 	St     *store.Store
 	Client *news.Client // nil when no Alpaca key
+	// resume is where the next pass starts in the in-scope list. A pass
+	// still stops at the first error (a 429 means stop calling), but it used
+	// to restart from the alphabetical top every time, so when the rate
+	// budget ran out at the same point each pass the symbols after it never
+	// got news at all.
+	resume int
 }
 
 func (w *NewsFetcher) Name() string            { return "news-fetcher" }
@@ -78,18 +84,29 @@ func (w *NewsFetcher) Run(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("backlog cleanup: %w", err)
 	}
-	got, covered := 0, 0
+	var todo []md.Symbol
 	for _, s := range syms {
-		if s.Market != md.Stocks || !scope[s.ID] {
-			continue
+		if s.Market == md.Stocks && scope[s.ID] {
+			todo = append(todo, s)
 		}
+	}
+	got, covered := 0, 0
+	start := 0
+	if len(todo) > 0 {
+		start = w.resume % len(todo)
+	}
+	for i := range todo {
+		k := (start + i) % len(todo)
+		s := todo[k]
 		n, err := w.Client.Ingest(ctx, w.St, s.ID, s.Symbol)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", s.Symbol, err)
+			w.resume = k + 1 // next pass begins after the symbol that failed
+			return "", fmt.Errorf("%s (%d of %d in-scope fetched this pass): %w", s.Symbol, covered, len(todo), err)
 		}
 		got += n
 		covered++
 	}
+	w.resume = 0
 	detail := fmt.Sprintf("ingested %d headlines across %d in-scope symbols", got, covered)
 	if cleaned > 0 {
 		detail += fmt.Sprintf(" (one-time cleanup: %d out-of-scope headlines marked skipped)", cleaned)

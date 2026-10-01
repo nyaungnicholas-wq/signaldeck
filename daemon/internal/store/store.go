@@ -1527,7 +1527,8 @@ func (s *Store) ReconcileOrphanRuns(ctx context.Context, bootUnix int64) (int, e
 	return int(n), err
 }
 
-// LastWorkerRunAt returns when the named worker last STARTED a run, or the zero
+// LastWorkerRunAt returns when the named worker last STARTED a run that was not
+// interrupted (see the query), or the zero
 // time if it never has (or the row has been pruned). It is what lets a calendar
 // worker's NextFire survive a daemon restart: without it, every restart looks
 // like a first boot and a weekly job would re-fire on each one.
@@ -1538,7 +1539,15 @@ func (s *Store) ReconcileOrphanRuns(ctx context.Context, bootUnix int64) (int, e
 func (s *Store) LastWorkerRunAt(ctx context.Context, worker string) (time.Time, error) {
 	var started sql.NullInt64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT MAX(started_at) FROM worker_runs WHERE worker = ?`, worker).Scan(&started)
+		// A run that did not finish its work is not a served slot: one swept
+		// 'orphaned' at boot, still 'running' from a dead process, or stopped by
+		// a shutdown. Counting them pushed a calendar worker's next fire a whole
+		// period out (finra-shorts +33h, congress-poller +19h after kills; a
+		// killed Sunday weekly-report waited a week). Errors still count, so a
+		// failing worker keeps its period instead of retrying every boot.
+		`SELECT MAX(started_at) FROM worker_runs WHERE worker = ?
+		   AND status NOT IN ('orphaned', 'running')
+		   AND NOT (status = 'ok' AND detail LIKE 'stopped (shutdown)%')`, worker).Scan(&started)
 	if err != nil || !started.Valid {
 		if errors.Is(err, sql.ErrNoRows) {
 			err = nil
