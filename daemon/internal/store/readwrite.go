@@ -59,3 +59,36 @@ func (s *Store) readThenWrite(ctx context.Context, query string, args []any, nco
 	}
 	return total, nil
 }
+
+// deleteInBatches runs del, a DELETE whose rows are picked by a
+// "key IN (SELECT key ... LIMIT ?)" subquery (args fill every placeholder
+// before that LIMIT), as repeated short autocommit statements until one
+// deletes fewer than a full batch. The SQLite write lock is free between
+// batches, which is where the priority gate lets account writes in.
+//
+// Why: each retention prune was ONE statement however many rows it matched.
+// Logged live 2026-09-30: DeleteFilingsBefore held the writer 18.6s on one
+// pass and 10.0s on the next (39,796 filings in one statement); sign-in's
+// account writes give up after 12s.
+//
+// Batches commit separately. Every caller archives before it prunes, so a
+// failure part-way leaves archived rows in place for the next pass to archive
+// and prune again: duplicated in the cold archive, never lost.
+func (s *Store) deleteInBatches(ctx context.Context, del string, args ...any) (int64, error) {
+	const batchRows = 1000
+	var total int64
+	for {
+		res, err := s.w.ExecContext(ctx, del, append(args, batchRows)...)
+		if err != nil {
+			return total, err
+		}
+		k, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += k
+		if k < batchRows {
+			return total, nil
+		}
+	}
+}
