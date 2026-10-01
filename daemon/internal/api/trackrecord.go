@@ -122,25 +122,19 @@ func (d Deps) trackRecordCached(w http.ResponseWriter, r *http.Request) {
 // buildTrackRecord computes the full track-record payload for one horizon.
 // Pure build — no HTTP — so the response cache can rebuild it off-request.
 func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]any, error) {
-	// Same wide window as fleetEdgeSkill: at ~3k resolutions/day a 20k cap spans
-	// only ~7 days and wrongly RE-GATES the record now that the universe is large.
-	rows, err := d.St.ResolvedPredictionOutcomes(ctx, h, fleetSkillWindow)
+	// The whole graded window (the same one fleetEdgeSkill reads), already
+	// collapsed IN SQL to ONE independent observation per (symbol, settled move),
+	// the LATEST of each, ts DESC; rawN is the graded row count behind them. No
+	// skill number is computed on the raw, pseudo-replicated set — and since
+	// SD-48 that set no longer crosses into Go at all (1w: 128,834 rows to keep
+	// 9,120).
+	rows, rawN, err := d.St.IndependentPredictionOutcomes(ctx, h)
 	if err != nil {
 		return nil, err
 	}
-	rawN := len(rows)
 
-	// Collapse to ONE independent observation per (symbol, trading day), keeping the
-	// LATEST prediction that day (rows are ts DESC, so the first seen per key is
-	// the latest). No skill number is computed on the raw, pseudo-replicated set.
-	seen := map[[2]int64]bool{}
 	var pts []trackPt
 	for _, o := range rows {
-		key := [2]int64{o.SymbolID, md.SettleDay(o.SettleTs, o.Ts)}
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		pts = append(pts, trackPt{
 			symbolID: o.SymbolID,
 			prob:     o.Prob,
