@@ -110,13 +110,35 @@ func hashSessionToken(token string) string {
 	return sessionTokenScheme + hex.EncodeToString(sum[:])
 }
 
+// maxSessionsPerUser bounds one account's live sessions. Every sign-in adds a
+// row that lives its full TTL, so an account looping logins (2/s under the
+// write-tier limiter) grew the table ~170k rows a day, and PruneSessions —
+// run inside every sign-in — scans the whole table. Beyond the cap the
+// account's OLDEST sessions end; twenty is far more devices than anyone signs
+// in from at once.
+const maxSessionsPerUser = 20
+
 // CreateSession stores a browser session. Only the token's digest is written —
 // the caller keeps the plaintext for the Set-Cookie header.
 func (s *Store) CreateSession(ctx context.Context, token string, userID int64, expiresTs int64) error {
-	_, err := s.authW().ExecContext(ctx,
+	tx, err := s.authW().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO sessions (token, user_id, created_ts, expires_ts) VALUES (?,?,?,?)`,
-		hashSessionToken(token), userID, time.Now().Unix(), expiresTs)
-	return err
+		hashSessionToken(token), userID, time.Now().Unix(), expiresTs); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM sessions WHERE token IN (
+		  SELECT token FROM sessions WHERE user_id = ?
+		  ORDER BY created_ts DESC, token LIMIT -1 OFFSET ?)`,
+		userID, maxSessionsPerUser); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SessionUser resolves a presented cookie value to its (unexpired) user id
