@@ -273,7 +273,7 @@ func (n *Notifier) smtpDeliverTo(ctx context.Context, rcpts []string, m Message)
 	return c.Quit()
 }
 
-// smtpBody renders the RFC 5322 message. c.Data() returns a textproto
+// smtpBodyTo renders the RFC 5322 message. c.Data() returns a textproto
 // DotWriter, so dot-stuffing and line endings in the BODY are the stdlib's
 // problem; the HEADERS are ours.
 //
@@ -281,8 +281,6 @@ func (n *Notifier) smtpDeliverTo(ctx context.Context, rcpts []string, m Message)
 // upstream error strings — the same untrusted material that turned into a
 // PowerShell injection in local.go. A bare CRLF in a Subject is header
 // injection: it appends attacker-chosen headers (Bcc:) to the message.
-func (n *Notifier) smtpBody(m Message) []byte { return n.smtpBodyTo(n.smtpTo(), m) }
-
 func (n *Notifier) smtpBodyTo(rcpts []string, m Message) []byte {
 	body := m.Body
 	if body == "" {

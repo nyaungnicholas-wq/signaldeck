@@ -231,7 +231,23 @@ case "${1:-status}" in
     # reported after step 5 agrees.
     cd "$REPO" || exit 2
     rev="$(git rev-parse HEAD)"
-    echo "deploy: HEAD=$rev — running daemon tests"
+    # vet + golangci-lint first: CI's daemon job runs both, and on 2026-09-29/30
+    # three commits were deployed and pushed with lint findings that kept CI red
+    # — the same masking that hid a broken test for five days in August.
+    echo "deploy: HEAD=$rev — vet + lint (the checks CI's daemon job runs)"
+    if ! (cd "$REPO/daemon" && PATH="$PATH:$HOME/.local/go-sdk/go/bin" go vet ./...); then
+      echo "deploy REFUSED: go vet failed."
+      exit 1
+    fi
+    if PATH="$PATH:$HOME/go/bin" command -v golangci-lint >/dev/null 2>&1; then
+      if ! (cd "$REPO/daemon" && PATH="$PATH:$HOME/go/bin:$HOME/.local/go-sdk/go/bin" golangci-lint run ./...); then
+        echo "deploy REFUSED: golangci-lint failed — CI's daemon job would go red."
+        exit 1
+      fi
+    else
+      echo "deploy WARNING: golangci-lint not installed — CI's lint step was NOT checked."
+    fi
+    echo "deploy: running daemon tests"
     if ! (cd "$REPO/daemon" && PATH="$PATH:$HOME/.local/go-sdk/go/bin" go test ./...); then
       echo "deploy REFUSED: daemon tests failed."
       exit 1

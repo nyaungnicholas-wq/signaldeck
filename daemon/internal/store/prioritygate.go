@@ -38,7 +38,7 @@ func (g *priorityGate) hold(ctx context.Context) {
 		return
 	}
 	start := time.Now()
-	for g.waiters.Load() > 0 && time.Now().Sub(start) < priorityMaxWait {
+	for g.waiters.Load() > 0 && time.Since(start) < priorityMaxWait {
 		select {
 		case <-ctx.Done():
 			return
@@ -139,7 +139,7 @@ func (c *gatedConn) PrepareContext(ctx context.Context, query string) (driver.St
 	if pc, ok := c.Conn.(driver.ConnPrepareContext); ok {
 		return pc.PrepareContext(ctx, query)
 	}
-	return c.Conn.Prepare(query)
+	return c.Prepare(query)
 }
 
 // ExecContext executes a statement, applying the gate if needed.
