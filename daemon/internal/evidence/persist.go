@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/nyaungnicholas-wq/signaldeck/internal/lineage"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
 
@@ -20,7 +21,28 @@ func Put(ctx context.Context, st *store.Store, c Claim) error {
 	if err != nil {
 		return err
 	}
-	return st.PutEvidenceClaim(ctx, row)
+	if err := st.PutEvidenceClaim(ctx, row); err != nil {
+		return err
+	}
+	linkFeatureKeys(ctx, st, c)
+	return nil
+}
+
+// linkFeatureKeys writes the lineage spine (Layers 2+8) for a claim: feature
+// --evidenced_by--> claim per Lineage.FeatureKeys entry, the same direction as
+// the ledger's hypothesis --evidenced_by--> evidence row. Lineage.Models is NOT
+// linked: its names ("structural-regime") are not model nodes
+// ("<model>:<horizon>"), and a guessed endpoint would answer traces
+// confidently and wrongly. Idempotent and best-effort: the claim is already
+// written, and a lineage failure must not fail it.
+func linkFeatureKeys(ctx context.Context, st *store.Store, c Claim) {
+	for _, k := range c.Lineage.FeatureKeys {
+		_ = lineage.Link(ctx, st, lineage.Edge{
+			SrcKind: lineage.KindFeature, SrcID: k,
+			DstKind: lineage.KindClaim, DstID: c.ID,
+			EdgeKind: lineage.EdgeEvidencedBy, MetaJSON: lineage.RevMeta(),
+		})
+	}
 }
 
 // Get returns one claim by id.
