@@ -106,7 +106,7 @@ export default function MemberSymbolView({ symbol, market }: { symbol: string; m
 
       <TradingViewChart symbol={symbol} market={market} />
       <ValidatedSignalsPanel symbol={symbol} market={market} memberView />
-      <SymbolAgentPanel symbol={symbol} market={market} />
+      <SymbolAgentPanel symbol={symbol} market={market} memberView />
       {market === "stocks" && (
         <>
           <CongressChip symbol={symbol} />

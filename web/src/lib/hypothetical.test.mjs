@@ -62,6 +62,12 @@ test("members never see the symbol model called an agent", () => {
   assert.ok(c.includes("{SYMBOL_MODEL_LABEL.toUpperCase()}"));
 });
 
+test("H-4: members never see the per-signal hit-rate bars (no sample floor, no base rate)", () => {
+  const c = src("../components/symbol/SymbolAgentPanel.tsx");
+  assert.ok(c.includes("{memberView ? null : (data.skill ?? []).length > 0 ? ("), "skill bars must be gated on memberView");
+  assert.ok(src("../components/symbol/MemberSymbolView.tsx").includes("<SymbolAgentPanel symbol={symbol} market={market} memberView />"));
+});
+
 test("/account mounts the alerts panel with the digest copy and Telegram code instruction", () => {
   assert.ok(src("../app/account/page.tsx").includes("<AlertsPanel />"));
   const c = src("../components/account/AlertsPanel.tsx");
