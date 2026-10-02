@@ -35,9 +35,10 @@
 //     suitable for posting somewhere that timestamps it independently, and a
 //     posted digest cannot be retracted from a third party's record. This
 //     package publishes nothing itself — that is an operator action.
-//   - Key rotation is legitimate, so a new public key is not by itself proof of
-//     fraud; it is a fact the verification surfaces and a reader must weigh
-//     against whatever pubkey/digests were published externally.
+//   - Key rotation is legitimate, but only through the pinned set (trusted.go):
+//     an anchor under any key that is neither pinned nor the current signer
+//     fails verification, because a key in the same row as its signature
+//     vouches for nothing.
 package ledgeranchor
 
 import (

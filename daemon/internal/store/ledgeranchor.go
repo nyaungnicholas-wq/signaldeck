@@ -84,6 +84,7 @@ type LedgerAnchorCheck struct {
 	RowSeq       int64               `json:"rowSeq"` // ledger_anchors.seq
 	Record       ledgeranchor.Record `json:"record"`
 	SignatureOK  bool                `json:"signatureOK"`  // signed by the holder of PubKey
+	PinnedKey    bool                `json:"pinnedKey"`    // PubKey is in the trusted set
 	HeadMatches  bool                `json:"headMatches"`  // chain still yields this head at LedgerSeq
 	CountMatches bool                `json:"countMatches"` // prefix row count still matches
 	OK           bool                `json:"ok"`
@@ -210,7 +211,13 @@ func (s *Store) LatestLedgerAnchor(ctx context.Context) (LedgerAnchorRow, bool, 
 // count (two indexed lookups per anchor). It is the cheap summary path; on a
 // chain that VerifyLedger reports intact the two modes agree, and the mode is
 // reported so a reader is never guessing which ran.
-func (s *Store) VerifyLedgerAnchors(ctx context.Context, limit int, recompute bool) (LedgerAnchorVerification, error) {
+//
+// trusted is the set of keys allowed to vouch for the chain (production:
+// ledgeranchor.TrustedKeys()). A valid signature under any other key FAILS:
+// the public key sits in the same row as the signature, so a writer without
+// the signing key could otherwise regenerate the chain and sign it with a key
+// of their own. An empty set trusts nothing.
+func (s *Store) VerifyLedgerAnchors(ctx context.Context, limit int, recompute bool, trusted ledgeranchor.KeySet) (LedgerAnchorVerification, error) {
 	out := LedgerAnchorVerification{Mode: "stored", Anchors: []LedgerAnchorCheck{}, DistinctPubKeys: []string{}}
 	if recompute {
 		out.Mode = "recomputed"
@@ -272,6 +279,7 @@ func (s *Store) VerifyLedgerAnchors(ctx context.Context, limit int, recompute bo
 		a := LedgerAnchorCheck{RowSeq: row.RowSeq, Record: row.Record}
 		a.Publish = a.Record.PublishLine()
 		a.SignatureOK = a.Record.Verify()
+		a.PinnedKey = trusted.Has(a.Record.PubKey)
 
 		if recompute {
 			h, ok := derived[a.Record.LedgerSeq]
@@ -295,11 +303,13 @@ func (s *Store) VerifyLedgerAnchors(ctx context.Context, limit int, recompute bo
 			}
 		}
 
-		a.OK = a.SignatureOK && a.HeadMatches && a.CountMatches
+		a.OK = a.SignatureOK && a.PinnedKey && a.HeadMatches && a.CountMatches
 		if !a.OK && a.Reason == "" {
 			switch {
 			case !a.SignatureOK:
 				a.Reason = "signature does not verify under the recorded public key"
+			case !a.PinnedKey:
+				a.Reason = "signed by an unpinned key — a valid signature under a key the daemon does not trust proves nothing; pin it (internal/ledgeranchor/pinned_pubkeys.txt) only if it is a legitimate rotation"
 			case !a.HeadMatches:
 				a.Reason = "the chain no longer reproduces the signed head at this seq — history was rewritten after it was anchored"
 			default:
