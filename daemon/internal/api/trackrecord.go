@@ -295,6 +295,15 @@ func (d Deps) buildTrackRecord(ctx context.Context, h md.Horizon) (map[string]an
 			gateReason = "collapsed"
 			collapseReason = reason
 		}
+	} else {
+		// An unreadable registry is not a passed gate either: neither the grader's
+		// refusal marker nor the window can be checked. /api/accuracy refuses on
+		// the same read ("accuracy registry unavailable"); this used to skip every
+		// gate above and publish.
+		gated = true
+		gateReason = "refused"
+		collapseReason = "accuracy registry unavailable, so neither the grader's refusal nor the " +
+			"graded window can be checked and these figures are withheld: " + rerr.Error()
 	}
 	// SD-30: a label mostly realised at issue is not evidence however many days
 	// it spans. Outside the registry block on purpose: an unreadable registry

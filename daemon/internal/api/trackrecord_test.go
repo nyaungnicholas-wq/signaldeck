@@ -2,10 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +16,14 @@ import (
 	md "github.com/nyaungnicholas-wq/signaldeck/internal/marketdata"
 	"github.com/nyaungnicholas-wq/signaldeck/internal/store"
 )
+
+// healthyRegistry is a readable registry with no refusal and no gated horizon:
+// the healthy-grader premise these tests are written against. Without one the
+// route refuses, because an unreadable registry is not a passed gate.
+func healthyRegistry(t *testing.T) string {
+	t.Helper()
+	return writeRegistry(t, `{"graded_at": "2026-10-01T14:05:18", "refused_since": null, "rows": []}`)
+}
 
 // newTrackRecordServer stands up a temp store behind the real secure() middleware
 // with only the track-record route wired.
@@ -25,10 +36,11 @@ func newTrackRecordServer(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	d := Deps{
-		St:      st,
-		Cfg:     config.Config{WebOrigins: []string{"http://app.example"}, PublicReads: true},
-		Version: "test",
-		Started: time.Now(),
+		St:           st,
+		Cfg:          config.Config{WebOrigins: []string{"http://app.example"}, PublicReads: true},
+		Version:      "test",
+		Started:      time.Now(),
+		RegistryPath: healthyRegistry(t),
 	}
 	srv := httptest.NewUnstartedServer(nil)
 	t.Cleanup(srv.Close)
@@ -336,5 +348,63 @@ func TestChartOverlays_ScoreExtremeCrossingDedup(t *testing.T) {
 	}
 	if nBreakout != 1 {
 		t.Fatalf("expected 1 breakout marker, got %d", nBreakout)
+	}
+}
+
+// An unreadable registry is not a passed gate: neither the grader's refusal
+// marker nor the graded window can be checked, and /api/accuracy refuses on the
+// same read. The route used to skip every gate and publish its win rate.
+func TestTrackRecordRefusesOnAnUnreadableRegistry(t *testing.T) {
+	sd30Off(t) // with SD-30 on, 1d is withheld whatever the registry says
+	st, err := store.Open(filepath.Join(t.TempDir(), "noreg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	sym, err := st.UpsertSymbol(context.Background(), "REG", md.Stocks, "")
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	base := int64(store.GradingEpochTS)
+	for di := int64(0); di < 40; di++ {
+		prob, fwd := 0.8, 0.02
+		if di%2 == 1 {
+			prob, fwd = 0.2, -0.02
+		}
+		seedResolvedPrediction(t, st, sym.ID, md.H1d, base+di*86400, prob, fwd)
+	}
+	get := func(registryPath string) map[string]any {
+		t.Helper()
+		rr := httptest.NewRecorder()
+		Deps{St: st, RegistryPath: registryPath}.trackRecord(rr, httptest.NewRequest("GET", "/api/track-record?horizon=1d", nil))
+		var resp map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("status %d, bad json: %v", rr.Code, err)
+		}
+		return resp
+	}
+	// Control: with a healthy registry the same record publishes, so each
+	// refusal below is the registry read's doing and nothing else's.
+	if resp := get(healthyRegistry(t)); resp["gated"] != false || resp["winRate"] == nil {
+		t.Fatalf("control: record should publish (gated=%v winRate=%v note=%v)", resp["gated"], resp["winRate"], resp["note"])
+	}
+	malformed := filepath.Join(t.TempDir(), "accuracy_registry.json")
+	if err := os.WriteFile(malformed, []byte(`{"rows": [`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{
+		"missing":   filepath.Join(t.TempDir(), "absent.json"),
+		"malformed": malformed,
+	} {
+		resp := get(path)
+		if resp["gated"] != true || resp["winRate"] != nil || resp["brier"] != nil || resp["ic"] != nil {
+			t.Errorf("%s registry: FAIL-OPEN, track record published (gated=%v winRate=%v)", name, resp["gated"], resp["winRate"])
+		}
+		if resp["gateReason"] != "refused" {
+			t.Errorf("%s registry: gateReason=%v, want refused", name, resp["gateReason"])
+		}
+		if note, _ := resp["note"].(string); !strings.Contains(note, "accuracy registry unavailable") {
+			t.Errorf("%s registry: the refusal must say the registry could not be read, got note %q", name, note)
+		}
 	}
 }

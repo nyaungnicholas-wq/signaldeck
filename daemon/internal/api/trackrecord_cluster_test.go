@@ -81,7 +81,7 @@ func TestTrackRecord_ClusterCorrectedInterval(t *testing.T) {
 	const days, symsPerDay = 15, 40
 	seedClusteredRecord(t, st, days, symsPerDay)
 
-	d := Deps{St: st}
+	d := Deps{St: st, RegistryPath: healthyRegistry(t)}
 	rr := httptest.NewRecorder()
 	d.trackRecord(rr, httptest.NewRequest("GET", "/api/track-record?horizon=1d", nil))
 	var resp map[string]any
@@ -180,7 +180,7 @@ func TestTrackRecord_ClusterRefusesRatherThanNarrows(t *testing.T) {
 	// floor is what decides, and its refusal must reach the payload.
 	seedClusteredRecord(t, st, trackMinDistinctDays, 40)
 
-	d := Deps{St: st}
+	d := Deps{St: st, RegistryPath: healthyRegistry(t)}
 	rr := httptest.NewRecorder()
 	d.trackRecord(rr, httptest.NewRequest("GET", "/api/track-record?horizon=1d", nil))
 	var resp map[string]any
