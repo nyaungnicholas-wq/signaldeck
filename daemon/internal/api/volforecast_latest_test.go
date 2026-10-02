@@ -116,11 +116,14 @@ func TestVolForecastLatestIsGatedOnTheVerdict(t *testing.T) {
 			strings.Contains(body, "AAA") {
 			t.Errorf("verdict %q: %d %s, want available:false and no forecast", v, rec.Code, body)
 		}
-		// The route is cached (store-keyed SWR): a second read is a hit.
+		// The refusal is decided per request and never cached (H-10): a cached
+		// refusal outlived a verdict change by the cache's ten minutes. The
+		// forecast body is what the cache holds (TestVolForecastLatestGateIsPerRequest).
 		rec = httptest.NewRecorder()
 		d.serveVolLatest(rec, httptest.NewRequest("GET", "/api/vol-forecast/latest", nil))
-		if rec.Header().Get("X-Cache") != "hit" {
-			t.Errorf("second read of /api/vol-forecast/latest was not a cache hit: %q", rec.Header().Get("X-Cache"))
+		if rec.Header().Get("X-Cache") != "" || !strings.Contains(rec.Body.String(), `"available":false`) {
+			t.Errorf("verdict %q: second read X-Cache %q, body %s: the refusal must not come from the cache",
+				v, rec.Header().Get("X-Cache"), rec.Body.String())
 		}
 	}
 }

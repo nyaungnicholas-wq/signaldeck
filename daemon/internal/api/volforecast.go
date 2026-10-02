@@ -87,17 +87,47 @@ const volPassVerdict = "BEATS THE NULLS"
 // record it is gated on.
 var sharedVolLatestSWR = newSWRBodyCache(10 * time.Minute)
 
+// serveVolLatest decides the verdict gate on EVERY request, before the cache,
+// so neither answer of the gate is ever cached as the route's body. It used to
+// be decided only when the body was built: a warming record produced a 200
+// {"available":false} that was cached for ten minutes and could replace a good
+// body, and a verdict that left the pass kept serving the cached forecasts
+// until the entry expired. The record itself is cached, so the check is a
+// cache read.
 func (d Deps) serveVolLatest(w http.ResponseWriter, r *http.Request) {
+	v, ok := d.headlineVerdict(r)
+	if !ok {
+		writeWarming(w) // a 503 the client waits out; nothing is cached
+		return
+	}
+	if v != volPassVerdict {
+		writeVolUnavailable(w, v)
+		return
+	}
 	sharedVolLatestSWR.serve(d.St.CacheKey()+"|latest", w, r, d.volForecastLatest)
 }
 
+// writeVolUnavailable is the gate's refusal: no forecast, the verdict, and why.
+func writeVolUnavailable(w http.ResponseWriter, v string) {
+	if v == "" {
+		v = "unavailable"
+	}
+	writeJSON(w, map[string]any{
+		"available": false,
+		"verdict":   v,
+		"reason": "Per-symbol volatility forecasts are published only once the live record's " +
+			"pre-registered verdict for the next-day forecast is " + volPassVerdict + "; it is " + v + ".",
+	})
+}
+
 // headlineVerdict is the record's horizon-1 verdict, read through the record's
-// own cache rather than recomputed ("" when the record cannot be read).
-func (d Deps) headlineVerdict(r *http.Request) string {
+// own cache rather than recomputed. ok is false when the record did not answer
+// 200 (warming or failed): no verdict was read, which is not a verdict.
+func (d Deps) headlineVerdict(r *http.Request) (verdict string, ok bool) {
 	rec := &bodyRecorder{ResponseWriter: &discardResponseWriter{header: http.Header{}}}
 	sharedVolRecordSWR.serveAt(d.cacheFile(volRecordCacheName, volRecordPersistFormat), d.St.CacheKey()+"|record", rec, r, volRecordSource(d))
 	if rec.status != 0 && rec.status != http.StatusOK {
-		return ""
+		return "", false
 	}
 	var body struct {
 		Horizons []struct {
@@ -106,14 +136,14 @@ func (d Deps) headlineVerdict(r *http.Request) string {
 		} `json:"horizons"`
 	}
 	if json.Unmarshal(rec.buf, &body) != nil {
-		return ""
+		return "", true
 	}
 	for _, h := range body.Horizons {
 		if h.Horizon == 1 {
-			return h.Verdict
+			return h.Verdict, true
 		}
 	}
-	return ""
+	return "", true
 }
 
 // volForecastRecord renders the record (see its comment above). The body's
@@ -357,20 +387,16 @@ func (d Deps) gradeRVHorizon(ctx context.Context, h int, start rvStart) (rvgrade
 // member reads the same bytes.
 //
 // GATED ON THE SERVER (plan step 9): per-symbol forecasts are served only while
-// the record's horizon-1 verdict is exactly the registered pass; otherwise the
-// answer is {"available": false, "reason": ...} with no forecast in it, so no
-// client can show an unvalidated number by skipping the web's gate.
+// the record's horizon-1 verdict is exactly the registered pass; otherwise
+// serveVolLatest answers {"available": false, "reason": ...} with no forecast
+// in it, so no client can show an unvalidated number by skipping the web's gate.
 func (d Deps) volForecastLatest(w http.ResponseWriter, r *http.Request) {
-	if v := d.headlineVerdict(r); v != volPassVerdict {
-		if v == "" {
-			v = "unavailable"
-		}
-		writeJSON(w, map[string]any{
-			"available": false,
-			"verdict":   v,
-			"reason": "Per-symbol volatility forecasts are published only once the live record's " +
-				"pre-registered verdict for the next-day forecast is " + volPassVerdict + "; it is " + v + ".",
-		})
+	// serveVolLatest gates every request. This re-check covers a body rendered
+	// after the verdict left the pass (a background refresh): a 503 is never
+	// cached, so the refresh keeps the previous body, which the per-request
+	// gate then refuses to serve.
+	if v, ok := d.headlineVerdict(r); !ok || v != volPassVerdict {
+		writeWarming(w)
 		return
 	}
 	rows, err := d.St.LatestRVForecasts(r.Context())
