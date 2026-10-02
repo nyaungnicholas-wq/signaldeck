@@ -476,7 +476,16 @@ func memberProbes(fx sentinelFixture) map[string]memberProbe {
 	return map[string]memberProbe{
 		// RETIRED only because EnsureSeeds put a refuted claim in this store;
 		// the registry alone reads INSUFFICIENT (accuracy_test.go).
-		"/api/accuracy":         get("/api/accuracy", `"publication_status":"RETIRED"`),
+		"/api/accuracy": get("/api/accuracy", `"publication_status":"RETIRED"`),
+		// Alert switches (plan step 5): the member's own settings, never data.
+		"/api/alert-prefs": get("/api/alert-prefs", `"emailVerified":true`),
+		"/api/alert-prefs/telegram-link": {method: "POST", url: "/api/alert-prefs/telegram-link", body: map[string]string{},
+			marker: "telegram", status: http.StatusServiceUnavailable,
+			why: "the fixture configures no bot token; the refusal is the whole answer (alertprefs_test.go drives the 200)"},
+		"/api/alert-prefs/telegram-unlink": {method: "POST", url: "/api/alert-prefs/telegram-unlink", body: map[string]string{},
+			marker: `"telegramLinked":false`},
+		"/api/alerts/unsubscribe": {method: "GET", url: "/api/alerts/unsubscribe?token=probe", marker: "invalid",
+			status: http.StatusBadRequest, why: "no real token in a probe; the body is one fixed sentence (alertprefs_test.go drives the 200)"},
 		"/api/auth/me":          get("/api/auth/me", `"username":"mira"`),
 		"/api/calibration":      get("/api/calibration", fmt.Sprintf(`"N":%d`, n)),
 		"/api/canary":           get("/api/canary", "SNTL_CANARY_MODEL"),

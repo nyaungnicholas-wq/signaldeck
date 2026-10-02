@@ -95,8 +95,24 @@ func TestSensitiveRoutesAreNeverAnonymous(t *testing.T) {
 		// operational detail that health/ready deliberately withhold
 		"/api/agents", "/api/fleet-health", "/api/source-health", "/api/datastats",
 	}
+	// Exact paths under a forbidden prefix that are anonymous on purpose, each
+	// authenticated some other way. Never a prefix: one path, one reason.
+	exempt := map[string]string{
+		// The digest email's one-click unsubscribe (plan step 5): the emailed
+		// token is the credential, it can only turn that user's email OFF, and
+		// it serves one fixed sentence (alertprefs.go).
+		"/api/alerts/unsubscribe": "tokened off-switch",
+	}
 	d := Deps{Cfg: config.Config{PublicSurface: true, PublicReads: true}}
+	for p := range exempt {
+		if !publicRoutes[p] || d.requiresAuth(p) {
+			t.Errorf("exempt %q is not anonymous any more: drop the exemption", p)
+		}
+	}
 	for _, p := range registeredRoutes(t) {
+		if _, ok := exempt[p]; ok {
+			continue
+		}
 		for _, bad := range forbidden {
 			if !strings.HasPrefix(p, bad) {
 				continue

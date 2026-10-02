@@ -316,6 +316,10 @@ var publicRoutes = map[string]bool{
 	// stored -- saying "already subscribed" would let anyone test whether a
 	// given person signed up.
 	"/api/waitlist": true,
+	// One-click unsubscribe from a digest email (plan step 5). The mail client
+	// has no session, so the emailed token is the authority, and all it can do
+	// is turn that one user's email digest OFF. Serves a fixed sentence.
+	"/api/alerts/unsubscribe": true,
 
 	// Derived, not user-scoped, no vendor rows. It is the honesty surface for
 	// the new forecast and is useless if a visitor cannot read it.
@@ -445,6 +449,11 @@ func (d Deps) requiresAuth(path string) bool {
 	if path == "/api/ledger/range" {
 		return false
 	}
+	// The digest email's one-click unsubscribe: tokened, off-switch only (see
+	// publicRoutes). Exact path, BEFORE the /api/alerts prefix below closes it.
+	if path == "/api/alerts/unsubscribe" {
+		return false
+	}
 	// The landing page's waitlist form posts here anonymously. It was opened
 	// only in publicRoutes, so on a daemon published WITHOUT
 	// SIGNALDECK_PUBLIC_SURFACE (the live quick-tunnel posture) every visitor
@@ -477,6 +486,7 @@ func (d Deps) requiresAuth(path string) bool {
 		strings.HasPrefix(path, "/api/portfolio"),
 		path == "/api/paper/order", // manual simulated book is per-user; never anonymous even under PublicReads
 		strings.HasPrefix(path, "/api/alerts"),
+		strings.HasPrefix(path, "/api/alert-prefs"),
 		// discovery wave (appended): candidate mutations are session-scoped.
 		path == "/api/candidates/add",
 		path == "/api/candidates/monitor-all",
